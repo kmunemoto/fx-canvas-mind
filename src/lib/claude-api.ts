@@ -97,12 +97,19 @@ ${candleTable}
 export async function analyzeWithClaude(
   data: TechnicalData,
   settings: AppSettings,
-  interval: TimeInterval
+  interval: string
 ): Promise<AnalysisResult> {
-  if (!settings.anthropicApiKey) throw new Error("Anthropic APIキーが設定されていません");
+  const apiKey = settings.anthropicApiKey.trim();
+
+  if (!apiKey.startsWith("sk-ant-")) {
+    throw new Error("APIキーの形式が正しくありません。sk-ant-で始まるキーを入力してください。");
+  }
 
   const userMessage = buildUserMessage(data, settings, interval);
-  const apiKey = settings.anthropicApiKey.trim();
+
+  console.log("Calling Claude API...");
+  console.log("API Key prefix:", apiKey.substring(0, 12));
+  console.log("Model: claude-sonnet-4-20250514");
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -110,25 +117,32 @@ export async function analyzeWithClaude(
       "content-type": "application/json",
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-dangerous-direct-browser-access": "true"
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+      messages: [{ role: "user", content: userMessage }]
+    })
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    console.error("Claude API error:", response.status, errorBody);
-    throw new Error(`Claude API error: ${response.status} - ${errorBody}`);
+    const errorText = await response.text();
+    console.error("Claude API Error Status:", response.status);
+    console.error("Claude API Error Body:", errorText);
+
+    if (response.status === 401) {
+      throw new Error("認証エラー: APIキーが無効です。Anthropic Consoleで新しいキーを発行してください。詳細: " + errorText);
+    }
+    throw new Error(`Claude API エラー (${response.status}): ${errorText}`);
   }
 
-  const resData = await response.json();
-  const textContent = resData.content
+  const result = await response.json();
+  console.log("Claude API raw response:", JSON.stringify(result).substring(0, 500));
+
+  const textContent = result.content
     .filter((block: any) => block.type === "text")
     .map((block: any) => block.text)
     .join("");
@@ -136,10 +150,9 @@ export async function analyzeWithClaude(
   const cleaned = textContent.replace(/```json\n?|```\n?/g, "").trim();
 
   try {
-    return JSON.parse(cleaned) as AnalysisResult;
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]) as AnalysisResult;
-    throw new Error("分析結果のJSONパースに失敗しました。もう一度お試しください。");
+    return JSON.parse(cleaned);
+  } catch (parseErr) {
+    console.error("JSON parse error. Raw text:", textContent);
+    throw new Error("分析結果のパースに失敗しました。再度お試しください。");
   }
 }
