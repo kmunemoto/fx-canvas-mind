@@ -2,12 +2,33 @@ import type { TechnicalData, CandleData, TimeInterval } from "./types";
 
 const BASE = "https://api.twelvedata.com";
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 60000;
+
 async function fetchJson(url: string) {
   const res = await fetch(url);
+  if (res.status === 429) {
+    const err: any = new Error("Too Many Requests (429)");
+    err.status = 429;
+    throw err;
+  }
   if (!res.ok) throw new Error(`Twelve Data API error: ${res.status}`);
   const data = await res.json();
   if (data.status === "error") throw new Error(data.message || "Twelve Data API error");
   return data;
+}
+
+async function fetchWithRetry(url: string, retries = 0): Promise<any> {
+  try {
+    return await fetchJson(url);
+  } catch (err: any) {
+    if (err.status === 429 && retries < MAX_RETRIES) {
+      console.warn(`Rate limit hit. Retrying in ${RETRY_DELAY / 1000}s... (${retries + 1}/${MAX_RETRIES})`);
+      await new Promise((r) => setTimeout(r, RETRY_DELAY));
+      return fetchWithRetry(url, retries + 1);
+    }
+    throw err;
+  }
 }
 
 function delay(ms: number) {
@@ -15,7 +36,7 @@ function delay(ms: number) {
 }
 
 export async function fetchPrice(symbol: string, apiKey: string): Promise<string> {
-  const data = await fetchJson(`${BASE}/price?symbol=${symbol}&apikey=${apiKey}`);
+  const data = await fetchWithRetry(`${BASE}/price?symbol=${symbol}&apikey=${apiKey}`);
   return data.price;
 }
 
@@ -25,12 +46,32 @@ export async function fetchTechnicalData(
   apiKey: string,
   onStage?: (stage: string) => void
 ): Promise<TechnicalData> {
-  onStage?.("fetching_price");
+  // Batch 1 (8 requests): price, time_series, rsi, macd, bbands, sma20, ichimoku, atr
+  onStage?.("fetching_batch1");
 
-  // Batch 1: price + time_series (2 requests)
-  const [priceData, tsData] = await Promise.all([
-    fetchJson(`${BASE}/price?symbol=${symbol}&apikey=${apiKey}`),
-    fetchJson(`${BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=100&apikey=${apiKey}`),
+  const [priceData, tsData, rsiData, macdData, bbandsData, sma20Data, ichimokuData, atrData] =
+    await Promise.all([
+      fetchWithRetry(`${BASE}/price?symbol=${symbol}&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=100&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/rsi?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/macd?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/bbands?symbol=${symbol}&interval=${interval}&time_period=20&sd=2&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=20&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/ichimoku?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
+      fetchWithRetry(`${BASE}/atr?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
+    ]);
+
+  // Wait 1.1s to respect rate limit
+  await delay(1100);
+
+  // Batch 2 (4 requests): sma50, sma200, stoch, adx
+  onStage?.("fetching_batch2");
+
+  const [sma50Data, sma200Data, stochData, adxData] = await Promise.all([
+    fetchWithRetry(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=50&apikey=${apiKey}`),
+    fetchWithRetry(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=200&apikey=${apiKey}`),
+    fetchWithRetry(`${BASE}/stoch?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
+    fetchWithRetry(`${BASE}/adx?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
   ]);
 
   const price = priceData.price;
@@ -41,33 +82,6 @@ export async function fetchTechnicalData(
     low: v.low,
     close: v.close,
   }));
-
-  onStage?.("fetching_indicators");
-
-  // Wait to respect rate limit (8 req/min)
-  await delay(1200);
-
-  // Batch 2: RSI, MACD, BBands, SMA20, SMA50, SMA200, Ichimoku, ATR (8 requests)
-  const [rsiData, macdData, bbandsData, sma20Data, sma50Data, sma200Data, ichimokuData, atrData] =
-    await Promise.all([
-      fetchJson(`${BASE}/rsi?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
-      fetchJson(`${BASE}/macd?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
-      fetchJson(`${BASE}/bbands?symbol=${symbol}&interval=${interval}&time_period=20&sd=2&apikey=${apiKey}`),
-      fetchJson(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=20&apikey=${apiKey}`),
-      fetchJson(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=50&apikey=${apiKey}`),
-      fetchJson(`${BASE}/sma?symbol=${symbol}&interval=${interval}&time_period=200&apikey=${apiKey}`),
-      fetchJson(`${BASE}/ichimoku?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
-      fetchJson(`${BASE}/atr?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
-    ]);
-
-  // Wait again for rate limit
-  await delay(1200);
-
-  // Batch 3: Stochastic, ADX (2 requests)
-  const [stochData, adxData] = await Promise.all([
-    fetchJson(`${BASE}/stoch?symbol=${symbol}&interval=${interval}&apikey=${apiKey}`),
-    fetchJson(`${BASE}/adx?symbol=${symbol}&interval=${interval}&time_period=14&apikey=${apiKey}`),
-  ]);
 
   const safeVal = (data: any, ...keys: string[]) => {
     try {

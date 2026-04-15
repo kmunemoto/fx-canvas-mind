@@ -64,7 +64,7 @@ const Index = () => {
     }
 
     setLoading(true);
-    setLoadingStage("fetching_price");
+    setLoadingStage("fetching_batch1");
     setResult(null);
 
     try {
