@@ -6,7 +6,7 @@ import AnalysisResultView from "@/components/AnalysisResultView";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import SettingsDrawer from "@/components/SettingsDrawer";
-import { fetchPrice, fetchTechnicalData } from "@/lib/twelve-data";
+import { fetchTechnicalData } from "@/lib/twelve-data";
 import { analyzeWithClaude } from "@/lib/claude-api";
 import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
@@ -43,19 +43,6 @@ const Index = () => {
     localStorage.setItem("fx-settings-v2", JSON.stringify(settings));
   }, [settings]);
 
-  // Live rate polling
-  useEffect(() => {
-    if (!settings.twelveDataApiKey) return;
-    const fetchLive = () => {
-      fetchPrice(settings.currencyPair, settings.twelveDataApiKey)
-        .then(setLiveRate)
-        .catch(() => {});
-    };
-    fetchLive();
-    const id = window.setInterval(fetchLive, 60000);
-    return () => window.clearInterval(id);
-  }, [settings.twelveDataApiKey, settings.currencyPair]);
-
   const handleAnalyze = useCallback(async () => {
     if (!settings.twelveDataApiKey || !settings.anthropicApiKey) {
       setSettingsOpen(true);
@@ -66,13 +53,15 @@ const Index = () => {
     setLoading(true);
     setLoadingStage("fetching_batch1");
     setResult(null);
+    setLiveRate(null);
 
     try {
       const data = await fetchTechnicalData(
         settings.currencyPair,
         interval,
         settings.twelveDataApiKey,
-        (stage) => setLoadingStage(stage as LoadingStage)
+        (stage) => setLoadingStage(stage as LoadingStage),
+        (price) => setLiveRate(price)
       );
       setTechData(data);
       setLiveRate(data.price);
