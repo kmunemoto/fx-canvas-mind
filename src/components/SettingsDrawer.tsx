@@ -36,7 +36,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <input
               type="password"
               value={settings.twelveDataApiKey}
-              onChange={(e) => onSettingsChange({ ...settings, twelveDataApiKey: e.target.value })}
+              onChange={(e) => updateSettings({ ...settings, twelveDataApiKey: e.target.value })}
               placeholder="APIキーを入力..."
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
@@ -50,7 +50,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <input
               type="password"
               value={settings.anthropicApiKey}
-              onChange={(e) => onSettingsChange({ ...settings, anthropicApiKey: e.target.value })}
+              onChange={(e) => updateSettings({ ...settings, anthropicApiKey: e.target.value })}
               placeholder="sk-ant-..."
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
@@ -63,7 +63,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <label className="text-sm text-muted-foreground">取引通貨ペア</label>
             <select
               value={settings.currencyPair}
-              onChange={(e) => onSettingsChange({ ...settings, currencyPair: e.target.value })}
+              onChange={(e) => updateSettings({ ...settings, currencyPair: e.target.value })}
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             >
               {PAIRS.map((p) => (
@@ -78,7 +78,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               <input
                 type="number"
                 value={settings.defaultStopLossPips}
-                onChange={(e) => onSettingsChange({ ...settings, defaultStopLossPips: +e.target.value })}
+                onChange={(e) => updateSettings({ ...settings, defaultStopLossPips: +e.target.value })}
                 className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -87,7 +87,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               <input
                 type="number"
                 value={settings.defaultTakeProfitPips}
-                onChange={(e) => onSettingsChange({ ...settings, defaultTakeProfitPips: +e.target.value })}
+                onChange={(e) => updateSettings({ ...settings, defaultTakeProfitPips: +e.target.value })}
                 className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
