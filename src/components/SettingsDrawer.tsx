@@ -14,6 +14,11 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
   if (!open) return null;
 
+  const updateSettings = (newSettings: AppSettings) => {
+    onSettingsChange(newSettings);
+    toast.success("設定を保存しました");
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
