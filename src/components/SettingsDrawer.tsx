@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { toast } from "sonner";
 import type { AppSettings } from "@/lib/types";
 
 interface Props {
