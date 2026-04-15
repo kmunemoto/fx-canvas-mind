@@ -16,13 +16,13 @@ const loadSettings = (): AppSettings => {
     const stored = localStorage.getItem("fx-settings-v2");
     if (stored) return JSON.parse(stored);
   } catch {}
-  // Fallback: read API keys from URL hash
-  const hashParams = new URLSearchParams(window.location.hash.substring(1));
-  const twelveKey = hashParams.get("twelveDataApiKey") || "";
-  const anthropicKey = hashParams.get("anthropicApiKey") || "";
+  try {
+    const stored = sessionStorage.getItem("fx-settings-v2");
+    if (stored) return JSON.parse(stored);
+  } catch {}
   return {
-    twelveDataApiKey: twelveKey,
-    anthropicApiKey: anthropicKey,
+    twelveDataApiKey: "",
+    anthropicApiKey: "",
     defaultStopLossPips: 30,
     defaultTakeProfitPips: 60,
     currencyPair: "USD/JPY",
@@ -30,7 +30,9 @@ const loadSettings = (): AppSettings => {
 };
 
 const saveSettings = (s: AppSettings) => {
-  try { localStorage.setItem("fx-settings-v2", JSON.stringify(s)); } catch {}
+  const json = JSON.stringify(s);
+  try { localStorage.setItem("fx-settings-v2", json); } catch {}
+  try { sessionStorage.setItem("fx-settings-v2", json); } catch {}
 };
 
 const Index = () => {
