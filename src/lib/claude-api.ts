@@ -140,19 +140,70 @@ export async function analyzeWithClaude(
   }
 
   const result = await response.json();
-  console.log("Claude API raw response:", JSON.stringify(result).substring(0, 500));
 
-  const textContent = result.content
-    .filter((block: any) => block.type === "text")
-    .map((block: any) => block.text)
-    .join("");
+  console.log("Claude API response content types:", result.content.map((b: any) => b.type));
 
-  const cleaned = textContent.replace(/```json\n?|```\n?/g, "").trim();
+  let finalText = "";
+
+  if (result.stop_reason === "end_turn") {
+    finalText = result.content
+      .filter((block: any) => block.type === "text")
+      .map((block: any) => block.text)
+      .join("");
+  } else if (result.stop_reason === "tool_use") {
+    console.log("Tool use detected, retrying without tools...");
+
+    const retryResponse = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userMessage + "\n\n注意: ウェブ検索は使わず、提供されたデータのみで分析してJSON形式で回答してください。" }]
+      })
+    });
+
+    if (!retryResponse.ok) {
+      const errText = await retryResponse.text();
+      throw new Error(`Claude API リトライエラー (${retryResponse.status}): ${errText}`);
+    }
+
+    const retryResult = await retryResponse.json();
+    finalText = retryResult.content
+      .filter((block: any) => block.type === "text")
+      .map((block: any) => block.text)
+      .join("");
+  }
+
+  console.log("Final text (first 300 chars):", finalText.substring(0, 300));
+
+  const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
 
   try {
-    return JSON.parse(cleaned);
-  } catch (parseErr) {
-    console.error("JSON parse error. Raw text:", textContent);
-    throw new Error("分析結果のパースに失敗しました。再度お試しください。");
+    return JSON.parse(cleaned) as AnalysisResult;
+  } catch {}
+
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(cleaned.substring(firstBrace, lastBrace + 1)) as AnalysisResult;
+    } catch {}
   }
+
+  const jsonMatch = cleaned.match(/\{[\s\S]*"signal"[\s\S]*"confidence"[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]) as AnalysisResult;
+    } catch {}
+  }
+
+  console.error("All JSON parse attempts failed. Full text:", finalText);
+  throw new Error("分析結果のパースに失敗しました。再度お試しください。");
 }
