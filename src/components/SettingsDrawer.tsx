@@ -26,16 +26,30 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
 
         <div className="space-y-4">
           <div>
+            <label className="text-sm text-muted-foreground">Twelve Data APIキー</label>
+            <input
+              type="password"
+              value={settings.twelveDataApiKey}
+              onChange={(e) => onSettingsChange({ ...settings, twelveDataApiKey: e.target.value })}
+              placeholder="APIキーを入力..."
+              className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              twelvedata.com で無料取得（800回/日）
+            </p>
+          </div>
+
+          <div>
             <label className="text-sm text-muted-foreground">Anthropic APIキー</label>
             <input
               type="password"
-              value={settings.apiKey}
-              onChange={(e) => onSettingsChange({ ...settings, apiKey: e.target.value })}
+              value={settings.anthropicApiKey}
+              onChange={(e) => onSettingsChange({ ...settings, anthropicApiKey: e.target.value })}
               placeholder="sk-ant-..."
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              console.anthropic.com で取得できます
+              console.anthropic.com で取得
             </p>
           </div>
 
