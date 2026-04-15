@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { Settings } from "lucide-react";
+import { Settings, Wifi, WifiOff } from "lucide-react";
 
 interface HeaderProps {
   onOpenSettings: () => void;
+  liveRate: string | null;
+  currencyPair: string;
+  apiConnected: boolean;
 }
 
-const Header = ({ onOpenSettings }: HeaderProps) => {
+const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: HeaderProps) => {
   const [time, setTime] = useState("");
 
   useEffect(() => {
@@ -28,15 +31,32 @@ const Header = ({ onOpenSettings }: HeaderProps) => {
   }, []);
 
   return (
-    <header className="glass border-b border-border px-6 py-4 flex items-center justify-between">
+    <header className="glass border-b border-border px-4 py-3 flex items-center justify-between">
       <div className="flex items-center gap-3">
         <div className="h-8 w-1 rounded-full bg-primary" />
-        <h1 className="text-xl font-bold tracking-tight text-foreground">
+        <h1 className="text-lg font-bold tracking-tight text-foreground">
           FX Tactical Analyzer
         </h1>
       </div>
+
       <div className="flex items-center gap-4">
-        <span className="font-mono text-sm text-muted-foreground">{time} JST</span>
+        {liveRate && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">{currencyPair}</span>
+            <span className="font-mono text-base font-bold text-primary text-glow">{liveRate}</span>
+          </div>
+        )}
+
+        <span className="font-mono text-xs text-muted-foreground hidden sm:inline">{time} JST</span>
+
+        <div className="flex items-center gap-1" title={apiConnected ? "API接続OK" : "APIキー未設定"}>
+          {apiConnected ? (
+            <Wifi className="h-4 w-4 text-success" />
+          ) : (
+            <WifiOff className="h-4 w-4 text-destructive" />
+          )}
+        </div>
+
         <button
           onClick={onOpenSettings}
           className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
