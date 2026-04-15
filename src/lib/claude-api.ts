@@ -102,27 +102,29 @@ export async function analyzeWithClaude(
   if (!settings.anthropicApiKey) throw new Error("Anthropic APIキーが設定されていません");
 
   const userMessage = buildUserMessage(data, settings, interval);
+  const apiKey = settings.anthropicApiKey.trim();
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "x-api-key": settings.anthropicApiKey,
+      "content-type": "application/json",
+      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 16000,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+      max_tokens: 4096,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage }],
     }),
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Claude API Error (${response.status}): ${err}`);
+    const errorBody = await response.text();
+    console.error("Claude API error:", response.status, errorBody);
+    throw new Error(`Claude API error: ${response.status} - ${errorBody}`);
   }
 
   const resData = await response.json();
