@@ -109,7 +109,7 @@ export async function analyzeWithClaude(
 
   console.log("Calling Claude API...");
   console.log("API Key prefix:", apiKey.substring(0, 12));
-  console.log("Model: claude-sonnet-4-20250514");
+  console.log("Model: claude-sonnet-4-6");
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -120,7 +120,7 @@ export async function analyzeWithClaude(
       "anthropic-dangerous-direct-browser-access": "true"
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       system: SYSTEM_PROMPT,
