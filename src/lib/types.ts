@@ -68,7 +68,7 @@ export interface HistoryEntry {
 
 export type LoadingStage =
   | "idle"
-  | "fetching_price"
-  | "fetching_indicators"
+  | "fetching_batch1"
+  | "fetching_batch2"
   | "analyzing_fundamental"
   | "generating_judgment";

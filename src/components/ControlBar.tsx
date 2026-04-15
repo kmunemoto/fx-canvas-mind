@@ -18,8 +18,8 @@ const INTERVALS: { value: TimeInterval; label: string }[] = [
 
 const STAGE_LABELS: Record<LoadingStage, string> = {
   idle: "",
-  fetching_price: "価格データ取得中...",
-  fetching_indicators: "テクニカル指標計算中...",
+  fetching_batch1: "データ取得中 (1/2)...",
+  fetching_batch2: "データ取得中 (2/2)...",
   analyzing_fundamental: "ファンダメンタル分析中...",
   generating_judgment: "総合判断中...",
 };
