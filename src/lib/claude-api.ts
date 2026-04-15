@@ -1,4 +1,4 @@
-import type { AnalysisResult, TechnicalData, AppSettings, TimeInterval } from "./types";
+import type { AnalysisResult, TechnicalData, AppSettings } from "./types";
 
 const SYSTEM_PROMPT = `あなたはプロのFXアナリストです。提供されたUSD/JPYのテクニカルデータとウェブ検索による最新情報を総合的に分析し、トレード判断を支援します。
 

@@ -48,7 +48,7 @@ const Index = () => {
   const apiConnected = !!(settings.twelveDataApiKey && settings.anthropicApiKey);
 
   useEffect(() => {
-    localStorage.setItem("fx-settings-v2", JSON.stringify(settings));
+    saveSettings(settings);
   }, [settings]);
 
   const handleAnalyze = useCallback(async () => {
