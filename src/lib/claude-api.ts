@@ -59,7 +59,7 @@ const SYSTEM_PROMPT = `あなたはプロのFXアナリストです。提供さ�
 - MACDとシグナルのクロスは重要なシグナル
 - 一目均衡表の雲のねじれは転換シグナル`;
 
-function buildUserMessage(data: TechnicalData, settings: AppSettings, interval: TimeInterval): string {
+function buildUserMessage(data: TechnicalData, settings: AppSettings, interval: string): string {
   const candleTable = data.timeSeries
     .map((c) => `| ${c.datetime} | ${c.open} | ${c.high} | ${c.low} | ${c.close} |`)
     .join("\n");
