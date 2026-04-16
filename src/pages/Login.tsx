@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
 
@@ -136,6 +137,12 @@ const Login = () => {
             </button>
           </p>
         </form>
+
+        {isSignUp && (
+          <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
+            アカウント作成により、<Link to="/terms" className="text-primary hover:underline">利用規約</Link>と<Link to="/privacy" className="text-primary hover:underline">プライバシーポリシー</Link>に同意したものとみなされます。
+          </p>
+        )}
 
         <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
           本アプリの分析結果はAIによる参考情報であり、投資助言ではありません。
