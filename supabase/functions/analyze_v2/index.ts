@@ -1,3 +1,4 @@
+// analyze_v2 — deployed with admin bypass
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const getCorsHeaders = (origin: string | null) => ({
