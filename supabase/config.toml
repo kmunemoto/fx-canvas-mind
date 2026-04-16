@@ -1,5 +1,8 @@
 [functions.analyze]
 verify_jwt = false
 
+[functions.analyze_v2]
+verify_jwt = false
+
 [functions.create-checkout]
 verify_jwt = false
