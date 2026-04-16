@@ -16,6 +16,7 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
   const [showTwelve, setShowTwelve] = useState(false);
   const [showAnthropic, setShowAnthropic] = useState(false);
+  const { profile } = useAuth();
 
   if (!open) return null;
 
