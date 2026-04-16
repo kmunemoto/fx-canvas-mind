@@ -44,6 +44,8 @@ const Login = () => {
       setError(result.error);
     } else if (isSignUp) {
       setSuccessMsg("確認メールを送信しました。メールを確認してください。");
+    } else {
+      navigate("/");
     }
     setLoading(false);
   };
