@@ -69,7 +69,7 @@ const Index = () => {
 
       setLoadingStage("analyzing");
 
-      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze_v2", {
+      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -141,7 +141,7 @@ const Index = () => {
     } catch (err: any) {
       const isNetworkError = err instanceof TypeError && ["Failed to fetch", "Load failed"].includes(err.message);
       const description = isNetworkError
-        ? "analyze_v2 に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。"
+        ? "analyze に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。"
         : err.message;
 
       console.error("Analysis request failed:", err);
