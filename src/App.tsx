@@ -8,6 +8,10 @@ import Index from "./pages/Index.tsx";
 import Login from "./pages/Login.tsx";
 import Pricing from "./pages/Pricing.tsx";
 import Landing from "./pages/Landing.tsx";
+import Terms from "./pages/Terms.tsx";
+import Privacy from "./pages/Privacy.tsx";
+import Legal from "./pages/Legal.tsx";
+import Contact from "./pages/Contact.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { Loader2 } from "lucide-react";
 
@@ -29,6 +33,10 @@ const AppRoutes = () => {
       <Route path="/" element={user ? <Index /> : <Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/terms" element={<Terms />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/legal" element={<Legal />} />
+      <Route path="/contact" element={<Contact />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
