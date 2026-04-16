@@ -1,11 +1,10 @@
-// analyze_v2 — v3 force redeploy
+// analyze_v2 — v4 explicit wildcard cors
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const getCorsHeaders = (origin: string | null) => ({
-  "Access-Control-Allow-Origin": origin ?? "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  Vary: "Origin",
 });
 
 const json = (req: Request, body: unknown, status = 200) =>
@@ -23,7 +22,10 @@ Deno.serve(async (req: Request) => {
   const start = Date.now();
 
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: getCorsHeaders(req.headers.get("origin")) });
+    return new Response(null, {
+      status: 204,
+      headers: getCorsHeaders(req.headers.get("origin")),
+    });
   }
 
   try {
