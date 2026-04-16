@@ -73,12 +73,19 @@ const Index = () => {
         headers: {
           "Content-Type": "application/json",
           "Authorization": "Bearer " + session.access_token,
+          "apikey": "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I",
         },
         body: JSON.stringify({
           currencyPair: settings.currencyPair,
           interval: interval,
         }),
       });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("Edge function error:", response.status, errText);
+        throw new Error(`サーバーエラー (${response.status}): ${errText}`);
+      }
 
       const resData = await response.json();
 
