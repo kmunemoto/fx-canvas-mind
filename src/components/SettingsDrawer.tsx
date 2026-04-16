@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { X, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { Badge } from "@/components/ui/badge";
 import type { AppSettings } from "@/lib/types";
-
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -15,6 +16,7 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
   const [showTwelve, setShowTwelve] = useState(false);
   const [showAnthropic, setShowAnthropic] = useState(false);
+  const { profile } = useAuth();
 
   if (!open) return null;
 
@@ -128,6 +130,21 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
                 className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
+          </div>
+
+          {/* プラン情報 */}
+          <div className="pt-4 border-t border-border space-y-2">
+            <label className="text-sm text-muted-foreground">プラン情報</label>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">現在のプラン</span>
+              <Badge variant="secondary">{profile?.plan || "Free"}</Badge>
+            </div>
+            {profile?.plan_renewal_date && (
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-foreground">次回更新日</span>
+                <span className="text-xs text-muted-foreground">{profile.plan_renewal_date}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
