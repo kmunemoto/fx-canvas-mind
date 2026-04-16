@@ -1,34 +1,41 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+const getCorsHeaders = (origin: string | null) => ({
+  "Access-Control-Allow-Origin": origin ?? "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  Vary: "Origin",
+});
 
-const json = (body: unknown, status = 200) =>
+const json = (req: Request, body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: {
+      ...getCorsHeaders(req.headers.get("origin")),
+      "Content-Type": "application/json",
+    },
   });
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
 
 Deno.serve(async (req: Request) => {
+  const start = Date.now();
+
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: getCorsHeaders(req.headers.get("origin")) });
   }
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return json({ error: "認証が必要です" }, 401);
+      return json(req, { ok: false, error: "認証が必要です", diagnostics: { error_stage: "missing_auth" } }, 401);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      return json({ error: "サーバー設定エラー: Supabase credentials not configured" }, 500);
+      return json(req, { ok: false, error: "サーバー設定エラー: Supabase credentials not configured", diagnostics: { error_stage: "missing_supabase_credentials" } }, 500);
     }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -41,10 +48,27 @@ Deno.serve(async (req: Request) => {
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return json({ error: "認証に失敗しました" }, 401);
+      return json(req, { ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
     }
 
-    const { currencyPair, interval } = await req.json();
+    let requestBody: unknown;
+
+    try {
+      requestBody = await req.json();
+    } catch {
+      return json(req, { ok: false, error: "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_json" } }, 400);
+    }
+
+    const currencyPair = typeof (requestBody as { currencyPair?: unknown })?.currencyPair === "string"
+      ? (requestBody as { currencyPair: string }).currencyPair.trim()
+      : "";
+    const interval = typeof (requestBody as { interval?: unknown })?.interval === "string"
+      ? (requestBody as { interval: string }).interval.trim()
+      : "";
+
+    if (!currencyPair || !interval) {
+      return json(req, { ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
+    }
 
     const { data: profile } = await supabase
       .from("profiles")
@@ -68,12 +92,12 @@ Deno.serve(async (req: Request) => {
     let count = lastDate === today ? (profile?.daily_analysis_count || 0) : 0;
 
     if (!isAdmin && count >= dailyLimit) {
-      return json({ error: `本日の上限(${dailyLimit}回)に達しました` }, 400);
+      return json(req, { ok: false, error: `本日の上限(${dailyLimit}回)に達しました`, diagnostics: { error_stage: "daily_limit_reached" } }, 400);
     }
 
     const twelveDataKey = Deno.env.get("TWELVE_DATA_API_KEY");
     if (!twelveDataKey) {
-      return json({ error: "サーバー設定エラー: Market data API key not configured" }, 500);
+      return json(req, { ok: false, error: "サーバー設定エラー: Market data API key not configured", diagnostics: { error_stage: "missing_market_data_key" } }, 500);
     }
 
     const pair = currencyPair.replace("/", "");
@@ -82,12 +106,12 @@ Deno.serve(async (req: Request) => {
     const tdData = await tdRes.json();
 
     if (tdData.status === "error") {
-      return json({ error: `市場データ取得エラー: ${tdData.message}` }, 400);
+      return json(req, { ok: false, error: `市場データ取得エラー: ${tdData.message}`, diagnostics: { error_stage: "market_data_failed" } }, 400);
     }
 
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
     if (!anthropicKey) {
-      return json({ error: "サーバー設定エラー: AI API key not configured" }, 500);
+      return json(req, { ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key" } }, 500);
     }
 
     const candles = tdData.values?.slice(0, 30) || [];
@@ -125,19 +149,34 @@ JSONのみ返してください。`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 4096,
         messages: [{ role: "user", content: userMessage }],
       }),
     });
 
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      console.error("Claude API error:", claudeRes.status, errText);
-      return json({ error: `AI分析エラー (${claudeRes.status})` }, 400);
+    const claudeText = await claudeRes.text();
+    let claudeData: any = {};
+
+    try {
+      claudeData = claudeText ? JSON.parse(claudeText) : {};
+    } catch {
+      claudeData = {};
     }
 
-    const claudeData = await claudeRes.json();
+    if (!claudeRes.ok) {
+      const apiError = claudeData?.error?.message || claudeData?.error || claudeText || `AI分析エラー (${claudeRes.status})`;
+      console.error("Claude API error:", claudeRes.status, claudeText);
+      return json(req, {
+        ok: false,
+        error: apiError,
+        diagnostics: {
+          error_stage: "anthropic_request_failed",
+          processing_time_ms: Date.now() - start,
+        },
+      }, 400);
+    }
+
     const finalText =
       claudeData.content
         ?.filter((block: any) => block.type === "text")
@@ -156,7 +195,14 @@ JSONのみ返してください。`;
       if (first !== -1 && last > first) {
         analysis = JSON.parse(cleaned.substring(first, last + 1));
       } else {
-        throw new Error("Failed to parse analysis JSON");
+        return json(req, {
+          ok: false,
+          error: "AI分析結果の解析に失敗しました",
+          diagnostics: {
+            error_stage: "analysis_parse_failed",
+            processing_time_ms: Date.now() - start,
+          },
+        }, 500);
       }
     }
 
@@ -171,18 +217,28 @@ JSONのみ返してください。`;
         .eq("id", user.id);
     }
 
-    return json({
-      analysis,
-      remaining: isAdmin ? null : dailyLimit - count,
-      plan,
-      technicalData: {
-        candles: candles.slice(0, 10),
-        pair: currencyPair,
-        interval,
+    return json(req, {
+      ok: true,
+      data: {
+        analysis,
+        remaining: isAdmin ? null : dailyLimit - count,
+        plan,
+        technicalData: {
+          candles: candles.slice(0, 10),
+          pair: currencyPair,
+          interval,
+        },
       },
     });
   } catch (err) {
     console.error("Edge function error:", err);
-    return json({ error: err instanceof Error ? err.message : "サーバーエラーが発生しました" }, 500);
+    return json(req, {
+      ok: false,
+      error: err instanceof Error ? err.message : "サーバーエラーが発生しました",
+      diagnostics: {
+        error_stage: "unhandled_exception",
+        processing_time_ms: Date.now() - start,
+      },
+    }, 500);
   }
 });
