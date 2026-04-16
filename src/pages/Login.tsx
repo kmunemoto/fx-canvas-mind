@@ -5,6 +5,7 @@ import { Zap, Loader2, AlertCircle } from "lucide-react";
 
 const Login = () => {
   const { signIn, signUp } = useAuth();
+  const navigate = useNavigate();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
