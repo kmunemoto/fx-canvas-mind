@@ -131,6 +131,21 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               />
             </div>
           </div>
+
+          {/* プラン情報 */}
+          <div className="pt-4 border-t border-border space-y-2">
+            <label className="text-sm text-muted-foreground">プラン情報</label>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">現在のプラン</span>
+              <Badge variant="secondary">{profile?.plan || "Free"}</Badge>
+            </div>
+            {profile?.plan_renewal_date && (
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-foreground">次回更新日</span>
+                <span className="text-xs text-muted-foreground">{profile.plan_renewal_date}</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
