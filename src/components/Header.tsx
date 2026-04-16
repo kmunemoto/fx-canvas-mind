@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { Settings, Wifi, WifiOff } from "lucide-react";
+import { Settings, Wifi, WifiOff, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { Badge } from "@/components/ui/badge";
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -9,6 +11,7 @@ interface HeaderProps {
 }
 
 const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: HeaderProps) => {
+  const { user, profile, signOut } = useAuth();
   const [time, setTime] = useState("");
 
   useEffect(() => {
@@ -29,6 +32,14 @@ const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: Header
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
   }, []);
+
+  const shortEmail = user?.email
+    ? user.email.length > 16
+      ? user.email.substring(0, 14) + "…"
+      : user.email
+    : "";
+
+  const planName = profile?.plan || "Free";
 
   return (
     <header className="glass border-b border-border px-4 py-3 flex items-center justify-between">
@@ -57,12 +68,32 @@ const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: Header
           )}
         </div>
 
+        {/* User info */}
+        {user && (
+          <div className="hidden sm:flex items-center gap-2">
+            <span className="text-xs text-muted-foreground truncate max-w-[120px]">{shortEmail}</span>
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+              {planName}
+            </Badge>
+          </div>
+        )}
+
         <button
           onClick={onOpenSettings}
           className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
         >
           <Settings className="h-5 w-5" />
         </button>
+
+        {user && (
+          <button
+            onClick={signOut}
+            title="ログアウト"
+            className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </header>
   );

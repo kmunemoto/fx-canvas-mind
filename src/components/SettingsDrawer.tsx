@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { X, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { Badge } from "@/components/ui/badge";
 import type { AppSettings } from "@/lib/types";
-
 interface Props {
   open: boolean;
   onClose: () => void;
