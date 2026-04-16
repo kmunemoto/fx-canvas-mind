@@ -17,8 +17,6 @@ export interface AnalysisResult {
 }
 
 export interface AppSettings {
-  twelveDataApiKey: string;
-  anthropicApiKey: string;
   defaultStopLossPips: number;
   defaultTakeProfitPips: number;
   currencyPair: string;
@@ -68,7 +66,6 @@ export interface HistoryEntry {
 
 export type LoadingStage =
   | "idle"
-  | "fetching_batch1"
-  | "fetching_batch2"
-  | "analyzing_fundamental"
+  | "fetching"
+  | "analyzing"
   | "generating_judgment";

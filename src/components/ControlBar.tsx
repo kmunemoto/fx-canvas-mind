@@ -8,6 +8,7 @@ interface Props {
   onAnalyze: () => void;
   loading: boolean;
   loadingStage: LoadingStage;
+  remaining: number | null;
 }
 
 const INTERVALS: { value: TimeInterval; label: string }[] = [
@@ -18,15 +19,13 @@ const INTERVALS: { value: TimeInterval; label: string }[] = [
 
 const STAGE_LABELS: Record<LoadingStage, string> = {
   idle: "",
-  fetching_batch1: "データ取得中 (1/2)...",
-  fetching_batch2: "データ取得中 (2/2)...",
-  analyzing_fundamental: "ファンダメンタル分析中...",
+  fetching: "データ取得中...",
+  analyzing: "AI分析中...",
   generating_judgment: "総合判断中...",
 };
 
-const ControlBar = ({ interval, onIntervalChange, onAnalyze, loading, loadingStage }: Props) => (
+const ControlBar = ({ interval, onIntervalChange, onAnalyze, loading, loadingStage, remaining }: Props) => (
   <div className="glass rounded-xl border border-border p-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-    {/* Interval selector */}
     <div className="flex items-center gap-1 bg-secondary rounded-lg p-1">
       {INTERVALS.map((opt) => (
         <button
@@ -43,7 +42,6 @@ const ControlBar = ({ interval, onIntervalChange, onAnalyze, loading, loadingSta
       ))}
     </div>
 
-    {/* Analyze button */}
     <button
       onClick={onAnalyze}
       disabled={loading}
@@ -61,6 +59,12 @@ const ControlBar = ({ interval, onIntervalChange, onAnalyze, loading, loadingSta
         </>
       )}
     </button>
+
+    {remaining !== null && (
+      <span className="text-xs text-muted-foreground flex items-center gap-1">
+        本日の残り: <span className="font-mono font-semibold text-foreground">{remaining}回</span>
+      </span>
+    )}
   </div>
 );
 

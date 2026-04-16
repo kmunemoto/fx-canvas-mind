@@ -1,18 +1,19 @@
 import { useEffect, useState } from "react";
-import { Settings, Wifi, WifiOff, LogOut } from "lucide-react";
+import { Settings, LogOut, Crown } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
 
 interface HeaderProps {
   onOpenSettings: () => void;
   liveRate: string | null;
   currencyPair: string;
-  apiConnected: boolean;
 }
 
-const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: HeaderProps) => {
+const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
   const [time, setTime] = useState("");
   const { user, profile, signOut } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const update = () => {
@@ -34,6 +35,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: Header
   }, []);
 
   const planName = profile?.plan || "Free";
+  const isFree = !profile?.plan || profile.plan === "Free";
   const shortEmail = user?.email
     ? user.email.length > 16
       ? user.email.substring(0, 14) + "…"
@@ -49,7 +51,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: Header
         </h1>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         {liveRate && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{currencyPair}</span>
@@ -59,15 +61,24 @@ const Header = ({ onOpenSettings, liveRate, currencyPair, apiConnected }: Header
 
         <span className="font-mono text-xs text-muted-foreground hidden sm:inline">{time} JST</span>
 
-        <div className="flex items-center gap-1" title={apiConnected ? "API接続OK" : "APIキー未設定"}>
-          {apiConnected ? (
-            <Wifi className="h-4 w-4 text-success" />
-          ) : (
-            <WifiOff className="h-4 w-4 text-destructive" />
-          )}
-        </div>
+        {/* Plan link / Upgrade button */}
+        {isFree ? (
+          <button
+            onClick={() => navigate("/pricing")}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity"
+          >
+            <Crown className="h-3.5 w-3.5" />
+            アップグレード
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate("/pricing")}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            プラン
+          </button>
+        )}
 
-        {/* User info */}
         {user && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground hidden sm:inline">{shortEmail}</span>

@@ -6,10 +6,10 @@ import AnalysisResultView from "@/components/AnalysisResultView";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import SettingsDrawer from "@/components/SettingsDrawer";
-import { fetchTechnicalData } from "@/lib/twelve-data";
-import { analyzeWithClaude } from "@/lib/claude-api";
+import { supabase } from "@/lib/supabase";
 import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
+import { useNavigate } from "react-router-dom";
 
 const loadSettings = (): AppSettings => {
   try {
@@ -21,8 +21,6 @@ const loadSettings = (): AppSettings => {
     if (stored) return JSON.parse(stored);
   } catch {}
   return {
-    twelveDataApiKey: "",
-    anthropicApiKey: "",
     defaultStopLossPips: 30,
     defaultTakeProfitPips: 60,
     currencyPair: "USD/JPY",
@@ -45,49 +43,73 @@ const Index = () => {
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("idle");
   const [liveRate, setLiveRate] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
   const { toast } = useToast();
-
-  const apiConnected = !!(settings.twelveDataApiKey && settings.anthropicApiKey);
+  const navigate = useNavigate();
 
   useEffect(() => {
     saveSettings(settings);
   }, [settings]);
 
   const handleAnalyze = useCallback(async () => {
-    if (!settings.twelveDataApiKey || !settings.anthropicApiKey) {
-      setSettingsOpen(true);
-      toast({ title: "APIキーを設定してください", variant: "destructive" });
-      return;
-    }
-
     setLoading(true);
-    setLoadingStage("fetching_batch1");
+    setLoadingStage("fetching");
     setResult(null);
     setLiveRate(null);
+    setLimitReached(false);
 
     try {
-      const data = await fetchTechnicalData(
-        settings.currencyPair,
-        interval,
-        settings.twelveDataApiKey,
-        (stage) => setLoadingStage(stage as LoadingStage),
-        (price) => setLiveRate(price)
-      );
-      setTechData(data);
-      setLiveRate(data.price);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "ログインが必要です", variant: "destructive" });
+        return;
+      }
 
-      setLoadingStage("analyzing_fundamental");
-      await new Promise((r) => setTimeout(r, 500));
+      setLoadingStage("analyzing");
+
+      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + session.access_token,
+        },
+        body: JSON.stringify({
+          currencyPair: settings.currencyPair,
+          interval: interval,
+        }),
+      });
+
+      const resData = await response.json();
+
+      if (resData.error) {
+        if (resData.error.includes("上限") || resData.error.includes("limit")) {
+          setLimitReached(true);
+          toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
+          return;
+        }
+        throw new Error(resData.error);
+      }
 
       setLoadingStage("generating_judgment");
-      const res = await analyzeWithClaude(data, settings, interval);
-      setResult(res);
+
+      const analysisResult: AnalysisResult = resData.analysis;
+      setResult(analysisResult);
+      setRemaining(resData.remaining ?? null);
+
+      if (resData.analysis?.entry_point) {
+        setLiveRate(resData.analysis.entry_point);
+      }
+
+      if (resData.technicalData) {
+        setTechData(resData.technicalData);
+      }
 
       setHistory((prev) => [
         {
           timestamp: new Date().toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo" }),
-          signal: res.signal,
-          confidence: res.confidence,
+          signal: analysisResult.signal,
+          confidence: analysisResult.confidence,
           pair: settings.currencyPair,
           interval,
         },
@@ -107,7 +129,6 @@ const Index = () => {
         onOpenSettings={() => setSettingsOpen(true)}
         liveRate={liveRate}
         currencyPair={settings.currencyPair}
-        apiConnected={apiConnected}
       />
 
       <main className="flex-1 container max-w-6xl mx-auto px-4 py-4 space-y-4">
@@ -117,10 +138,23 @@ const Index = () => {
           onAnalyze={handleAnalyze}
           loading={loading}
           loadingStage={loadingStage}
+          remaining={remaining}
         />
 
+        {limitReached && (
+          <div className="glass rounded-xl border border-destructive p-6 flex flex-col items-center text-center space-y-3">
+            <p className="text-destructive font-semibold">本日の分析上限に達しました</p>
+            <p className="text-sm text-muted-foreground">より多くの分析を行うにはプランをアップグレードしてください</p>
+            <button
+              onClick={() => navigate("/pricing")}
+              className="px-6 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:opacity-90 transition-opacity"
+            >
+              プランをアップグレード
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Left column */}
           <div className="space-y-4">
             {result ? (
               <AnalysisResultView result={result} />
@@ -134,19 +168,10 @@ const Index = () => {
                   <br />
                   自動でデータ取得＋AI分析を行います
                 </p>
-                {!apiConnected && (
-                  <button
-                    onClick={() => setSettingsOpen(true)}
-                    className="mt-4 text-xs text-primary underline"
-                  >
-                    まずAPIキーを設定する →
-                  </button>
-                )}
               </div>
             )}
           </div>
 
-          {/* Right column */}
           <div className="space-y-4">
             {techData && <TechnicalDataCard data={techData} />}
             <AnalysisHistory history={history} />
