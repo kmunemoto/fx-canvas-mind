@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Index from "./pages/Index.tsx";
 import Login from "./pages/Login.tsx";
+import Pricing from "./pages/Pricing.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { Loader2 } from "lucide-react";
 
@@ -27,6 +28,7 @@ const AuthGate = () => {
   return (
     <Routes>
       <Route path="/" element={<Index />} />
+      <Route path="/pricing" element={<Pricing />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
