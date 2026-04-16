@@ -92,10 +92,11 @@ const Index = () => {
         resData = { error: rawText };
       }
 
-      const errorMessage = resData?.error || `サーバーエラー (${response.status})`;
-      const isLimitError = errorMessage.includes("上限") || errorMessage.includes("limit");
+      const payload = resData?.data ?? resData;
+      const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
+      const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));
 
-      if (!response.ok) {
+      if (!response.ok || resData?.ok === false) {
         if (!adminUser && isLimitError) {
           setLimitReached(true);
           toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
@@ -107,32 +108,24 @@ const Index = () => {
           return;
         }
 
-        console.error("Edge function error:", response.status, rawText);
+        console.error("Edge function error:", response.status, resData?.diagnostics ?? rawText);
         throw new Error(errorMessage);
-      }
-
-      if (resData.error) {
-        if (!adminUser && isLimitError) {
-          setLimitReached(true);
-          toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
-          return;
-        }
-
-        throw new Error(resData.error);
       }
 
       setLoadingStage("generating_judgment");
 
-      const analysisResult: AnalysisResult = resData.analysis;
-      setResult(analysisResult);
-      setRemaining(resData.remaining ?? null);
+      const analysisResult: AnalysisResult | undefined = payload?.analysis;
+      if (!analysisResult) throw new Error("分析結果の取得に失敗しました");
 
-      if (resData.analysis?.entry_point) {
-        setLiveRate(resData.analysis.entry_point);
+      setResult(analysisResult);
+      setRemaining(payload?.remaining ?? null);
+
+      if (payload?.analysis?.entry_point) {
+        setLiveRate(payload.analysis.entry_point);
       }
 
-      if (resData.technicalData) {
-        setTechData(resData.technicalData);
+      if (payload?.technicalData) {
+        setTechData(payload.technicalData);
       }
 
       setHistory((prev) => [
@@ -146,7 +139,13 @@ const Index = () => {
         ...prev,
       ].slice(0, 5));
     } catch (err: any) {
-      toast({ title: "エラー", description: err.message, variant: "destructive" });
+      const isNetworkError = err instanceof TypeError && ["Failed to fetch", "Load failed"].includes(err.message);
+      const description = isNetworkError
+        ? "analyze_v2 に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。"
+        : err.message;
+
+      console.error("Analysis request failed:", err);
+      toast({ title: "エラー", description, variant: "destructive" });
     } finally {
       setLoading(false);
       setLoadingStage("idle");
