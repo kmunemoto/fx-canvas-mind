@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
 
 const Login = () => {
   const { signIn, signUp } = useAuth();
+  const navigate = useNavigate();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,6 +44,8 @@ const Login = () => {
       setError(result.error);
     } else if (isSignUp) {
       setSuccessMsg("確認メールを送信しました。メールを確認してください。");
+    } else {
+      navigate("/");
     }
     setLoading(false);
   };
