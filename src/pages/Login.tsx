@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
 
 const Login = () => {
   const { signIn, signUp } = useAuth();
-  const navigate = useNavigate();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,18 +35,34 @@ const Login = () => {
     }
 
     setLoading(true);
-    const result = isSignUp
-      ? await signUp(email, password)
-      : await signIn(email, password);
 
-    if (result.error) {
-      setError(result.error);
-    } else if (isSignUp) {
-      setSuccessMsg("確認メールを送信しました。メールを確認してください。");
-    } else {
-      navigate("/");
+    try {
+      if (isSignUp) {
+        const result = await signUp(email, password);
+
+        if (result.error) {
+          setError(result.error);
+          return;
+        }
+
+        setSuccessMsg("アカウントを作成しました。リダイレクトしています...");
+        window.location.href = "/";
+        return;
+      }
+
+      const result = await signIn(email, password);
+
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      window.location.href = "/";
+    } catch (err: any) {
+      setError(err?.message || "エラーが発生しました");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
