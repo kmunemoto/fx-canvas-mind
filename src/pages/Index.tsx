@@ -10,30 +10,7 @@ import { fetchTechnicalData } from "@/lib/twelve-data";
 import { analyzeWithClaude } from "@/lib/claude-api";
 import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-
-const loadSettings = (): AppSettings => {
-  try {
-    const stored = localStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
-  } catch {}
-  try {
-    const stored = sessionStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
-  } catch {}
-  return {
-    twelveDataApiKey: "",
-    anthropicApiKey: "",
-    defaultStopLossPips: 30,
-    defaultTakeProfitPips: 60,
-    currencyPair: "USD/JPY",
-  };
-};
-
-const saveSettings = (s: AppSettings) => {
-  const json = JSON.stringify(s);
-  try { localStorage.setItem("fx-settings-v2", json); } catch {}
-  try { sessionStorage.setItem("fx-settings-v2", json); } catch {}
-};
+import { loadSettings, saveSettings } from "@/lib/settings-storage";
 
 const Index = () => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
