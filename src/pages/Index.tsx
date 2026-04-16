@@ -7,6 +7,7 @@ import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
+import { isAdminEmail } from "@/lib/admin";
 import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
@@ -90,12 +91,13 @@ const Index = () => {
       const resData = await response.json();
 
       if (resData.error) {
-        if (resData.error.includes("上限") || resData.error.includes("limit")) {
+        const adminUser = isAdminEmail(session.user?.email);
+        if (!adminUser && (resData.error.includes("上限") || resData.error.includes("limit"))) {
           setLimitReached(true);
           toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
           return;
         }
-        throw new Error(resData.error);
+        if (!adminUser) throw new Error(resData.error);
       }
 
       setLoadingStage("generating_judgment");
