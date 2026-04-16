@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Settings, LogOut, Crown } from "lucide-react";
+import { Settings, LogOut, Crown, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
+import { isAdminEmail } from "@/lib/admin";
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -34,8 +35,9 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
     return () => clearInterval(id);
   }, []);
 
-  const planName = profile?.plan || "Free";
-  const isFree = !profile?.plan || profile.plan === "Free";
+  const isAdmin = isAdminEmail(user?.email);
+  const planName = isAdmin ? "Pro" : (profile?.plan || "Free");
+  const isFree = !isAdmin && (!profile?.plan || profile.plan === "Free");
   const shortEmail = user?.email
     ? user.email.length > 16
       ? user.email.substring(0, 14) + "…"
@@ -81,6 +83,12 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
 
         {user && (
           <div className="flex items-center gap-2">
+            {isAdmin && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-primary text-primary gap-1">
+                <ShieldCheck className="h-3 w-3" />
+                Admin
+              </Badge>
+            )}
             <span className="text-xs text-muted-foreground hidden sm:inline">{shortEmail}</span>
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {planName}

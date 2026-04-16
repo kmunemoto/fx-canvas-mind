@@ -46,6 +46,10 @@ Deno.serve(async (req) => {
 
     const plan = profile?.plan || "free";
 
+    // Admin bypass — unlimited usage
+    const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
+    const isAdmin = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
+
     // Check daily limits
     const limits: Record<string, number> = {
       free: 3,
@@ -59,7 +63,7 @@ Deno.serve(async (req) => {
     const lastDate = profile?.last_analysis_date?.split("T")[0];
     let count = lastDate === today ? (profile?.daily_analysis_count || 0) : 0;
 
-    if (count >= dailyLimit) {
+    if (count >= dailyLimit && !isAdmin) {
       return new Response(
         JSON.stringify({ error: "本日の分析上限に達しました。プランをアップグレードしてください。" }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
