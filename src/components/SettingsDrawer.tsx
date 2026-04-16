@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
 import type { AppSettings } from "@/lib/types";
 
 interface Props {
@@ -15,6 +16,7 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
   const [showTwelve, setShowTwelve] = useState(false);
   const [showAnthropic, setShowAnthropic] = useState(false);
+  const { profile } = useAuth();
 
   if (!open) return null;
 
@@ -32,6 +34,9 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
       <span className="text-xs text-destructive">未設定</span>
     );
 
+  const planName = profile?.plan || "Free";
+  const nextBilling = profile?.next_billing_date || "—";
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
@@ -41,6 +46,19 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
           <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground">
             <X className="h-5 w-5" />
           </button>
+        </div>
+
+        {/* Plan info */}
+        <div className="p-4 rounded-lg bg-secondary border border-border space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">プラン情報</h3>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">現在のプラン</span>
+            <span className="text-sm font-semibold text-primary">{planName}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">次回更新日</span>
+            <span className="text-sm text-foreground">{nextBilling}</span>
+          </div>
         </div>
 
         <div className="space-y-4">
