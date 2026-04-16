@@ -7,12 +7,13 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Index from "./pages/Index.tsx";
 import Login from "./pages/Login.tsx";
 import Pricing from "./pages/Pricing.tsx";
+import Landing from "./pages/Landing.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
 
-const AuthGate = () => {
+const AppRoutes = () => {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -23,11 +24,10 @@ const AuthGate = () => {
     );
   }
 
-  if (!user) return <Login />;
-
   return (
     <Routes>
-      <Route path="/" element={<Index />} />
+      <Route path="/" element={user ? <Index /> : <Landing />} />
+      <Route path="/login" element={<Login />} />
       <Route path="/pricing" element={<Pricing />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
@@ -41,7 +41,7 @@ const App = () => (
       <Sonner />
       <AuthProvider>
         <BrowserRouter>
-          <AuthGate />
+          <AppRoutes />
         </BrowserRouter>
       </AuthProvider>
     </TooltipProvider>
