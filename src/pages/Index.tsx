@@ -82,22 +82,43 @@ const Index = () => {
         }),
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("Edge function error:", response.status, errText);
-        throw new Error(`サーバーエラー (${response.status}): ${errText}`);
+      const adminUser = isAdminEmail(session.user?.email);
+      const rawText = await response.text();
+      let resData: any = {};
+
+      try {
+        resData = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        resData = { error: rawText };
       }
 
-      const resData = await response.json();
+      const errorMessage = resData?.error || `サーバーエラー (${response.status})`;
+      const isLimitError = errorMessage.includes("上限") || errorMessage.includes("limit");
 
-      if (resData.error) {
-        const adminUser = isAdminEmail(session.user?.email);
-        if (!adminUser && (resData.error.includes("上限") || resData.error.includes("limit"))) {
+      if (!response.ok) {
+        if (!adminUser && isLimitError) {
           setLimitReached(true);
           toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
           return;
         }
-        if (!adminUser) throw new Error(resData.error);
+
+        if (adminUser && isLimitError) {
+          toast({ title: "Admin Mode未反映", description: "analyze Edge Function を再デプロイすると管理者バイパスが有効になります", variant: "destructive" });
+          return;
+        }
+
+        console.error("Edge function error:", response.status, rawText);
+        throw new Error(errorMessage);
+      }
+
+      if (resData.error) {
+        if (!adminUser && isLimitError) {
+          setLimitReached(true);
+          toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
+          return;
+        }
+
+        throw new Error(resData.error);
       }
 
       setLoadingStage("generating_judgment");
