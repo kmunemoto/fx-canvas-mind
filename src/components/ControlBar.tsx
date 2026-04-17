@@ -15,6 +15,7 @@ const INTERVALS: { value: TimeInterval; label: string }[] = [
   { value: "15min", label: "15分足" },
   { value: "1h", label: "1時間足" },
   { value: "4h", label: "4時間足" },
+  { value: "1day", label: "日足" },
 ];
 
 const STAGE_LABELS: Record<LoadingStage, string> = {
