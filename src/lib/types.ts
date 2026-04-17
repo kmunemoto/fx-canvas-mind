@@ -22,7 +22,7 @@ export interface AppSettings {
   currencyPair: string;
 }
 
-export type TimeInterval = "15min" | "1h" | "4h";
+export type TimeInterval = "15min" | "1h" | "4h" | "1day";
 
 export interface TechnicalData {
   price: string;
