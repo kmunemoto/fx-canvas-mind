@@ -77,20 +77,22 @@ serve(async (req) => {
       }
     }
 
-    // Mark cancellation pending in profile (plan stays active until period end; webhook should set to free)
-    await supabase
-      .from("profiles")
-      .update({
-        cancel_at_period_end: true,
-        next_billing_date: periodEnd ? new Date(periodEnd * 1000).toISOString().split("T")[0] : null,
-      })
-      .eq("id", user.id);
+    const cancelDateIso = periodEnd ? new Date(periodEnd * 1000).toISOString().split("T")[0] : null;
+    const cancelDateFormatted = periodEnd
+      ? new Date(periodEnd * 1000).toLocaleDateString("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : null;
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: "解約を受け付けました。期間終了日まで現在のプランをご利用いただけます。",
-        period_end: periodEnd ? new Date(periodEnd * 1000).toISOString().split("T")[0] : null,
+        message: "解約手続きが完了しました",
+        cancel_date: cancelDateIso,
+        cancel_date_formatted: cancelDateFormatted,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

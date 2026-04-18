@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { loadCancellation, saveCancellation, type CancellationInfo } from "@/lib/cancellation";
 import type { AppSettings } from "@/lib/types";
 
 interface Props {
@@ -26,10 +27,15 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const PAID_PLANS = ["light", "standard", "pro"];
 
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const [cancellation, setCancellation] = useState<CancellationInfo | null>(null);
+
+  useEffect(() => {
+    if (open) setCancellation(loadCancellation(user?.id));
+  }, [open, user?.id]);
 
   if (!open) return null;
 
@@ -44,16 +50,13 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
     ? profile.plan.charAt(0).toUpperCase() + profile.plan.slice(1).toLowerCase()
     : "Free";
   const nextBilling = profile?.next_billing_date || "—";
-  const cancelPending = (profile as any)?.cancel_at_period_end === true;
+  const isCancelPending = !!cancellation;
 
-  const handleCancelSubscription = async () => {
-    setCancelling(true);
+  const handleCancel = async () => {
+    setCanceling(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error("ログインが必要です");
-        return;
-      }
+      if (!session) throw new Error("ログインが必要です");
 
       const res = await fetch(
         "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/cancel-subscription",
@@ -68,13 +71,25 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "解約に失敗しました");
 
-      toast.success(data.message || "解約を受け付けました");
+      const info: CancellationInfo = {
+        userId: session.user.id,
+        canceledAt: new Date().toISOString(),
+        cancelDate: data.cancel_date ?? null,
+        cancelDateFormatted: data.cancel_date_formatted ?? null,
+      };
+      saveCancellation(info);
+      setCancellation(info);
+
+      toast.success("解約手続きが完了しました", {
+        description: data.cancel_date_formatted
+          ? `${data.cancel_date_formatted} までご利用いただけます`
+          : undefined,
+      });
       setConfirmOpen(false);
-      onClose();
     } catch (err: any) {
-      toast.error(err.message || "解約に失敗しました");
+      toast.error("エラー", { description: err.message });
     } finally {
-      setCancelling(false);
+      setCanceling(false);
     }
   };
 
@@ -98,25 +113,30 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
-              {cancelPending ? "解約予定日" : "次回更新日"}
+              {isCancelPending ? "解約予定日" : "次回更新日"}
             </span>
-            <span className="text-sm text-foreground">{nextBilling}</span>
+            <span className="text-sm text-foreground">
+              {isCancelPending ? cancellation?.cancelDateFormatted ?? nextBilling : nextBilling}
+            </span>
           </div>
 
-          {cancelPending && isPaid && (
-            <p className="text-xs text-muted-foreground border-t border-border pt-2">
-              解約予約済み。期間終了日まで現在のプランをご利用いただけます。
-            </p>
+          {isCancelPending && (
+            <div className="flex items-start gap-2 text-xs text-muted-foreground border-t border-border pt-2">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+              <span>
+                解約予定（{cancellation?.cancelDateFormatted ?? nextBilling} まで利用可能）
+              </span>
+            </div>
           )}
 
-          <div className="pt-2">
+          <div className="pt-1">
             {isPaid ? (
               <button
                 onClick={() => setConfirmOpen(true)}
-                disabled={cancelPending}
-                className="w-full px-4 py-2 rounded-lg border border-destructive/50 text-destructive text-sm font-medium hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isCancelPending}
+                className="w-full px-4 py-2 rounded-lg border border-border bg-transparent text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {cancelPending ? "解約手続き済み" : "プランを解約する"}
+                {isCancelPending ? "解約手続き済み" : "プランを解約する"}
               </button>
             ) : (
               <button
@@ -169,33 +189,34 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
         </div>
       </div>
 
-      <Dialog open={confirmOpen} onOpenChange={(v) => !cancelling && setConfirmOpen(v)}>
-        <DialogContent>
+      <Dialog open={confirmOpen} onOpenChange={(v) => !canceling && setConfirmOpen(v)}>
+        <DialogContent className="bg-card border-border">
           <DialogHeader>
-            <DialogTitle>プランを解約しますか？</DialogTitle>
-            <DialogDescription className="space-y-2 pt-2">
+            <DialogTitle className="text-foreground">プランを解約しますか？</DialogTitle>
+            <DialogDescription className="text-muted-foreground pt-2 space-y-2">
               <span className="block">
-                {planName}プランを解約します。期間終了日（{nextBilling}）までは現在のプランを引き続きご利用いただけます。
+                {planName}プランを解約します。期間終了日までは現在のプランを引き続きご利用いただけます。
               </span>
               <span className="block text-destructive">
                 期間終了後は自動的にFreeプランへ切り替わります。
               </span>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 sm:gap-2">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => setConfirmOpen(false)}
-              disabled={cancelling}
+              disabled={canceling}
+              className="text-muted-foreground hover:text-foreground"
             >
               キャンセル
             </Button>
             <Button
               variant="destructive"
-              onClick={handleCancelSubscription}
-              disabled={cancelling}
+              onClick={handleCancel}
+              disabled={canceling}
             >
-              {cancelling ? (
+              {canceling ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   処理中...
