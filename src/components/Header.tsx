@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import { isAdminEmail } from "@/lib/admin";
+import { loadCancellation } from "@/lib/cancellation";
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -38,6 +39,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
   const isAdmin = isAdminEmail(user?.email);
   const planName = isAdmin ? "Pro" : (profile?.plan || "Free");
   const isFree = !isAdmin && (!profile?.plan || profile.plan === "Free");
+  const cancelPending = !!loadCancellation(user?.id);
   const shortEmail = user?.email
     ? user.email.length > 16
       ? user.email.substring(0, 14) + "…"
@@ -93,6 +95,11 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {planName}
             </Badge>
+            {cancelPending && (
+              <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                (解約予定)
+              </span>
+            )}
           </div>
         )}
 
