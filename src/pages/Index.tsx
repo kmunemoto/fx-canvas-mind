@@ -38,6 +38,8 @@ const Index = () => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [interval, setInterval_] = useState<TimeInterval>("1h");
+  const [includeFundamental, setIncludeFundamental] = useState(true);
+  const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [techData, setTechData] = useState<TechnicalData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -57,6 +59,7 @@ const Index = () => {
     setLoading(true);
     setLoadingStage("fetching");
     setResult(null);
+    setAnalysisMode(null);
     setLiveRate(null);
     setLimitReached(false);
 
@@ -79,6 +82,7 @@ const Index = () => {
         body: JSON.stringify({
           currencyPair: settings.currencyPair,
           interval: interval,
+          includeFundamental: includeFundamental,
         }),
       });
 
@@ -119,6 +123,8 @@ const Index = () => {
 
       setResult(analysisResult);
       setRemaining(payload?.remaining ?? null);
+      const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
+      setAnalysisMode(mode);
 
       if (payload?.analysis?.entry_point) {
         setLiveRate(payload.analysis.entry_point);
@@ -150,7 +156,7 @@ const Index = () => {
       setLoading(false);
       setLoadingStage("idle");
     }
-  }, [settings, interval, toast]);
+  }, [settings, interval, includeFundamental, toast]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -168,6 +174,8 @@ const Index = () => {
           loading={loading}
           loadingStage={loadingStage}
           remaining={remaining}
+          includeFundamental={includeFundamental}
+          onIncludeFundamentalChange={setIncludeFundamental}
         />
 
         {limitReached && (
@@ -186,7 +194,19 @@ const Index = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="space-y-4">
             {result ? (
-              <AnalysisResultView result={result} />
+              <>
+                {analysisMode && (
+                  <div className="text-[11px] text-muted-foreground px-1">
+                    分析モード:{" "}
+                    <span className="text-foreground font-medium">
+                      {analysisMode === "full"
+                        ? "フル分析（テクニカル+ファンダメンタル）"
+                        : "テクニカル分析のみ"}
+                    </span>
+                  </div>
+                )}
+                <AnalysisResultView result={result} />
+              </>
             ) : (
               <div className="glass rounded-xl border border-border p-12 flex flex-col items-center justify-center text-center min-h-[400px]">
                 <div className="w-16 h-16 rounded-full border-2 border-dashed border-border flex items-center justify-center mb-4">
