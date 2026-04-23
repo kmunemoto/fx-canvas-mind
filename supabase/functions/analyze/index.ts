@@ -1,57 +1,103 @@
-// analyze v2 — safe content parsing
+// analyze v3 — hardened parsing and request validation
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
+const extractAnthropicText = (claudeData: any) => {
+  const content = claudeData?.content;
+
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+
+  const textParts: string[] = [];
+
+  for (const block of content) {
+    if (typeof block === "string") {
+      textParts.push(block);
+      continue;
+    }
+
+    if (block?.type === "text" && typeof block?.text === "string") {
+      textParts.push(block.text);
+    }
+  }
+
+  return textParts.join("").trim();
 };
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "認証が必要です" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: "認証が必要です", diagnostics: { error_stage: "missing_auth" } }, 401);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return json({ ok: false, error: "サーバー設定エラー: Supabase credentials not configured", diagnostics: { error_stage: "missing_supabase_credentials" } }, 500);
+    }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
     if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: "認証に失敗しました" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
     }
 
-    const { currencyPair, interval } = await req.json();
+    let requestBody: unknown;
+    try {
+      requestBody = await req.json();
+    } catch {
+      return json({ ok: false, error: "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_json" } }, 400);
+    }
 
-    // Get user profile for plan limits
+    const currencyPair = typeof (requestBody as { currencyPair?: unknown })?.currencyPair === "string"
+      ? (requestBody as { currencyPair: string }).currencyPair.trim()
+      : "";
+    const interval = typeof (requestBody as { interval?: unknown })?.interval === "string"
+      ? (requestBody as { interval: string }).interval.trim()
+      : "";
+    const includeFundamental = typeof (requestBody as { includeFundamental?: unknown })?.includeFundamental === "boolean"
+      ? (requestBody as { includeFundamental: boolean }).includeFundamental
+      : true;
+
+    if (!currencyPair || !interval) {
+      return json({ ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
+    }
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", user.id)
       .single();
 
-    const plan = profile?.plan || "free";
-
-    // Admin bypass — unlimited usage
-    const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
     const isAdmin = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
+    const plan = isAdmin ? "pro" : profile?.plan || "free";
 
-    // Check daily limits
     const limits: Record<string, number> = {
       free: 3,
       light: 10,
@@ -64,20 +110,13 @@ Deno.serve(async (req: Request) => {
     const lastDate = profile?.last_analysis_date?.split("T")[0];
     let count = lastDate === today ? (profile?.daily_analysis_count || 0) : 0;
 
-    if (count >= dailyLimit && !isAdmin) {
-      return new Response(
-        JSON.stringify({ error: "本日の分析上限に達しました。プランをアップグレードしてください。" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (!isAdmin && count >= dailyLimit) {
+      return json({ ok: false, error: "本日の分析上限に達しました。プランをアップグレードしてください。", diagnostics: { error_stage: "daily_limit_reached" } }, 400);
     }
 
-    // Fetch market data from Twelve Data
     const twelveDataKey = Deno.env.get("TWELVE_DATA_API_KEY");
     if (!twelveDataKey) {
-      return new Response(
-        JSON.stringify({ error: "サーバー設定エラー: Market data API key not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: "サーバー設定エラー: Market data API key not configured", diagnostics: { error_stage: "missing_market_data_key" } }, 500);
     }
 
     const pair = currencyPair.replace("/", "");
@@ -85,26 +124,29 @@ Deno.serve(async (req: Request) => {
     const tdRes = await fetch(tdUrl);
     const tdData = await tdRes.json();
 
-    if (tdData.status === "error") {
-      return new Response(
-        JSON.stringify({ error: `市場データ取得エラー: ${tdData.message}` }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (tdData?.status === "error") {
+      return json({ ok: false, error: `市場データ取得エラー: ${tdData?.message ?? "unknown error"}`, diagnostics: { error_stage: "market_data_failed" } }, 400);
     }
 
-    // Call Claude API for analysis
+    const candles = Array.isArray(tdData?.values) ? tdData.values.slice(0, 30) : [];
+    if (candles.length === 0) {
+      return json({ ok: false, error: "市場データが取得できませんでした", diagnostics: { error_stage: "empty_market_data" } }, 400);
+    }
+
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
     if (!anthropicKey) {
-      return new Response(
-        JSON.stringify({ error: "サーバー設定エラー: AI API key not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key" } }, 500);
     }
 
-    const candles = tdData.values?.slice(0, 30) || [];
+    const analysisScope = includeFundamental
+      ? "テクニカル分析に加えて、経済ニュース・経済指標・市場センチメントも考慮して総合判断してください。"
+      : "テクニカル分析のみに限定して判断してください。経済ニュースやファンダメンタル要因は考慮しないでください。";
+
     const userMessage = `
 通貨ペア: ${currencyPair}
 時間足: ${interval}
+分析モード: ${includeFundamental ? "full" : "technical_only"}
+指示: ${analysisScope}
 直近のローソク足データ (最新から):
 ${JSON.stringify(candles, null, 2)}
 
@@ -136,7 +178,7 @@ JSONのみ返してください。`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 4096,
         messages: [{ role: "user", content: userMessage }],
       }),
@@ -144,78 +186,79 @@ JSONのみ返してください。`;
 
     const claudeRaw = await claudeRes.text();
     let claudeData: any = {};
+
     try {
       claudeData = claudeRaw ? JSON.parse(claudeRaw) : {};
     } catch {
-      claudeData = {};
+      claudeData = { raw: claudeRaw };
     }
 
     if (!claudeRes.ok || claudeData?.type === "error") {
-      const msg = claudeData?.error?.message || claudeRaw || `status ${claudeRes.status}`;
+      const msg = claudeData?.error?.message || claudeData?.error || claudeRaw || `status ${claudeRes.status}`;
       console.error("Claude API error:", claudeRes.status, msg);
-      return new Response(
-        JSON.stringify({ error: `AI分析エラー: ${msg}` }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ ok: false, error: `AI分析エラー: ${msg}`, diagnostics: { error_stage: "anthropic_request_failed", status: claudeRes.status } }, 400);
     }
 
-    const contentBlocks = Array.isArray(claudeData?.content) ? claudeData.content : [];
-    let finalText = contentBlocks
-      .filter((b: any) => b?.type === "text")
-      .map((b: any) => b?.text ?? "")
-      .join("");
+    const finalText = extractAnthropicText(claudeData);
 
     if (!finalText) {
-      console.error("Empty Claude response:", JSON.stringify(claudeData).slice(0, 500));
-      return new Response(
-        JSON.stringify({ error: "AI分析エラー: 空のレスポンス" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      console.error("Unexpected Claude response shape:", JSON.stringify({
+        type: claudeData?.type,
+        hasContentArray: Array.isArray(claudeData?.content),
+        contentType: typeof claudeData?.content,
+        preview: JSON.stringify(claudeData).slice(0, 500),
+      }));
+
+      return json({ ok: false, error: "AI分析エラー: レスポンス形式が不正です", diagnostics: { error_stage: "unexpected_anthropic_response" } }, 400);
     }
 
-    // Parse JSON from response
     const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
-    let analysis;
+    let analysis: any;
+
     try {
       analysis = JSON.parse(cleaned);
     } catch {
       const first = cleaned.indexOf("{");
       const last = cleaned.lastIndexOf("}");
+
       if (first !== -1 && last > first) {
         analysis = JSON.parse(cleaned.substring(first, last + 1));
       } else {
-        throw new Error("Failed to parse analysis JSON");
+        return json({ ok: false, error: "AI分析結果の解析に失敗しました", diagnostics: { error_stage: "analysis_parse_failed" } }, 400);
       }
     }
 
-    // Update usage count
-    count += 1;
-    await supabase
-      .from("profiles")
-      .update({
-        daily_analysis_count: count,
-        last_analysis_date: new Date().toISOString(),
-      })
-      .eq("id", user.id);
+    if (!isAdmin) {
+      count += 1;
+      await supabase
+        .from("profiles")
+        .update({
+          daily_analysis_count: count,
+          last_analysis_date: new Date().toISOString(),
+        })
+        .eq("id", user.id);
+    }
 
-    return new Response(
-      JSON.stringify({
+    return json({
+      ok: true,
+      data: {
         analysis,
-        remaining: dailyLimit - count,
+        remaining: isAdmin ? null : dailyLimit - count,
         plan,
+        mode: includeFundamental ? "full" : "technical_only",
         technicalData: {
           candles: candles.slice(0, 10),
           pair: currencyPair,
           interval,
         },
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+      },
+    });
   } catch (err) {
     console.error("Edge function error:", err);
-    return new Response(
-      JSON.stringify({ error: err.message || "サーバーエラーが発生しました" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({
+      ok: false,
+      error: err instanceof Error ? err.message : "サーバーエラーが発生しました",
+      diagnostics: { error_stage: "unhandled_exception" },
+    }, 500);
   }
 });
