@@ -1,4 +1,5 @@
-// analyze v3 — hardened parsing and request validation
+// analyze v4 — force redeploy: removed all unsafe .filter() usage, hardened Anthropic response parsing
+// Build timestamp: 2026-04-23T15:20:00Z
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
