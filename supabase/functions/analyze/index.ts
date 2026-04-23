@@ -135,26 +135,42 @@ JSONのみ返してください。`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-4-5",
         max_tokens: 4096,
         messages: [{ role: "user", content: userMessage }],
       }),
     });
 
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      console.error("Claude API error:", claudeRes.status, errText);
+    const claudeRaw = await claudeRes.text();
+    let claudeData: any = {};
+    try {
+      claudeData = claudeRaw ? JSON.parse(claudeRaw) : {};
+    } catch {
+      claudeData = {};
+    }
+
+    if (!claudeRes.ok || claudeData?.type === "error") {
+      const msg = claudeData?.error?.message || claudeRaw || `status ${claudeRes.status}`;
+      console.error("Claude API error:", claudeRes.status, msg);
       return new Response(
-        JSON.stringify({ error: `AI分析エラー (${claudeRes.status})` }),
+        JSON.stringify({ error: `AI分析エラー: ${msg}` }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const claudeData = await claudeRes.json();
-    let finalText = claudeData.content
-      ?.filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("") || "";
+    const contentBlocks = Array.isArray(claudeData?.content) ? claudeData.content : [];
+    let finalText = contentBlocks
+      .filter((b: any) => b?.type === "text")
+      .map((b: any) => b?.text ?? "")
+      .join("");
+
+    if (!finalText) {
+      console.error("Empty Claude response:", JSON.stringify(claudeData).slice(0, 500));
+      return new Response(
+        JSON.stringify({ error: "AI分析エラー: 空のレスポンス" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Parse JSON from response
     const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
