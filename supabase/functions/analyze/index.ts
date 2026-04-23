@@ -1,3 +1,4 @@
+// analyze v2 — safe content parsing
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
