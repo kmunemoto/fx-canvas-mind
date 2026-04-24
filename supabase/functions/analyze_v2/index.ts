@@ -1,5 +1,27 @@
-// analyze_v2 — v4 explicit wildcard cors
+// analyze_v2 — v5 hardened Anthropic response parsing
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+
+const extractAnthropicText = (claudeData: any) => {
+  const content = claudeData?.content;
+
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+
+  const textParts: string[] = [];
+
+  for (const block of content) {
+    if (typeof block === "string") {
+      textParts.push(block);
+      continue;
+    }
+
+    if (block?.type === "text" && typeof block?.text === "string") {
+      textParts.push(block.text);
+    }
+  }
+
+  return textParts.join("").trim();
+};
 
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": "*",
@@ -180,11 +202,18 @@ JSONのみ返してください。`;
       }, 400);
     }
 
-    const finalText =
-      claudeData.content
-        ?.filter((block: any) => block.type === "text")
-        .map((block: any) => block.text)
-        .join("") || "";
+    const finalText = extractAnthropicText(claudeData);
+
+    if (!finalText) {
+      return json(req, {
+        ok: false,
+        error: "AI分析エラー: レスポンス形式が不正です",
+        diagnostics: {
+          error_stage: "unexpected_anthropic_response",
+          processing_time_ms: Date.now() - start,
+        },
+      }, 400);
+    }
 
     const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
     let analysis;
