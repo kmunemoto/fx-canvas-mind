@@ -1,5 +1,5 @@
-// analyze v4 — force redeploy: removed all unsafe .filter() usage, hardened Anthropic response parsing
-// Build timestamp: 2026-04-23T15:20:00Z
+// analyze v5 — redeploy marker after eliminating stale filter paths
+// Build timestamp: 2026-04-24T12:08:00Z
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
