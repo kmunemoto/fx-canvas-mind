@@ -12,6 +12,63 @@ import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingS
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
+const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
+  if (!value || typeof value !== "object") return null;
+
+  const source = value as Partial<AnalysisResult> & Record<string, unknown>;
+
+  return {
+    signal: source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT" ? source.signal : "WAIT",
+    confidence: typeof source.confidence === "number" ? source.confidence : 0,
+    technical_score: typeof source.technical_score === "number" ? source.technical_score : 0,
+    fundamental_score: typeof source.fundamental_score === "number" ? source.fundamental_score : 0,
+    risk_level: source.risk_level === "LOW" || source.risk_level === "MEDIUM" || source.risk_level === "HIGH" ? source.risk_level : "MEDIUM",
+    sentiment: source.sentiment === "BULLISH" || source.sentiment === "NEUTRAL" || source.sentiment === "BEARISH" ? source.sentiment : "NEUTRAL",
+    entry_point: typeof source.entry_point === "string" ? source.entry_point : "—",
+    stop_loss: typeof source.stop_loss === "string" ? source.stop_loss : "—",
+    take_profit_1: typeof source.take_profit_1 === "string" ? source.take_profit_1 : "—",
+    take_profit_2: typeof source.take_profit_2 === "string" ? source.take_profit_2 : "—",
+    risk_reward_ratio: typeof source.risk_reward_ratio === "string" ? source.risk_reward_ratio : "—",
+    analysis: typeof source.analysis === "string" ? source.analysis : "",
+    key_factors: Array.isArray(source.key_factors) ? source.key_factors.filter((item): item is string => typeof item === "string") : [],
+    warnings: Array.isArray(source.warnings) ? source.warnings.filter((item): item is string => typeof item === "string") : [],
+    support_levels: Array.isArray(source.support_levels) ? source.support_levels.filter((item): item is string => typeof item === "string") : [],
+    resistance_levels: Array.isArray(source.resistance_levels) ? source.resistance_levels.filter((item): item is string => typeof item === "string") : [],
+    market_context: typeof source.market_context === "string" ? source.market_context : "",
+  };
+};
+
+const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
+  if (!value || typeof value !== "object") return null;
+
+  const source = value as Partial<TechnicalData> & Record<string, unknown>;
+  const readString = (field: keyof TechnicalData) => typeof source[field] === "string" ? String(source[field]) : "—";
+
+  return {
+    price: readString("price"),
+    datetime: readString("datetime"),
+    timeSeries: Array.isArray(source.timeSeries) ? source.timeSeries.filter((item): item is TechnicalData["timeSeries"][number] => !!item && typeof item === "object") : [],
+    rsi: readString("rsi"),
+    macd: readString("macd"),
+    macdSignal: readString("macdSignal"),
+    macdHist: readString("macdHist"),
+    bbUpper: readString("bbUpper"),
+    bbMiddle: readString("bbMiddle"),
+    bbLower: readString("bbLower"),
+    sma20: readString("sma20"),
+    sma50: readString("sma50"),
+    sma200: readString("sma200"),
+    tenkan: readString("tenkan"),
+    kijun: readString("kijun"),
+    spanA: readString("spanA"),
+    spanB: readString("spanB"),
+    atr: readString("atr"),
+    slowK: readString("slowK"),
+    slowD: readString("slowD"),
+    adx: readString("adx"),
+  };
+};
+
 const loadSettings = (): AppSettings => {
   try {
     const stored = localStorage.getItem("fx-settings-v2");
@@ -105,9 +162,9 @@ const Index = () => {
       const payload = typeof resData?.data === "object" && resData.data !== null
         ? resData.data
         : resData;
-      const analysisResult: AnalysisResult | undefined = payload?.analysis ?? resData?.analysis;
+      const analysisResult = normalizeAnalysisResult(payload?.analysis ?? resData?.analysis);
       const remaining = payload?.remaining ?? resData?.remaining ?? null;
-      const technicalData = payload?.technicalData ?? resData?.technicalData ?? null;
+      const technicalData = normalizeTechnicalData(payload?.technicalData ?? resData?.technicalData);
       const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
       const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
       const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));

@@ -13,6 +13,8 @@ export interface AnalysisResult {
   analysis: string;
   key_factors: string[];
   warnings: string[];
+  support_levels: string[];
+  resistance_levels: string[];
   market_context: string;
 }
 

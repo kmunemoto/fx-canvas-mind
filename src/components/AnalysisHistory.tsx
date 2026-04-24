@@ -9,7 +9,9 @@ const signalColor = (s: string) =>
   s === "BUY" ? "text-success" : s === "SELL" ? "text-destructive" : "text-warning";
 
 const AnalysisHistory = ({ history }: Props) => {
-  if (history.length === 0) return null;
+  const safeHistory = Array.isArray(history) ? history : [];
+
+  if (safeHistory.length === 0) return null;
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-3">
@@ -18,7 +20,7 @@ const AnalysisHistory = ({ history }: Props) => {
         <h3 className="text-sm font-semibold">分析履歴</h3>
       </div>
       <div className="space-y-2">
-        {history.map((entry, i) => (
+        {safeHistory.map((entry, i) => (
           <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/50 last:border-0">
             <span className="font-mono text-muted-foreground">{entry.timestamp}</span>
             <span className="text-muted-foreground">{entry.pair} {entry.interval}</span>
