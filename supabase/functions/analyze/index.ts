@@ -110,7 +110,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
     }
 
-    const userId = user.id;
+    const userId: string = user.id;
 
     stage = "parse_request";
     let requestBody: unknown;
