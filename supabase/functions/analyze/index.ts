@@ -1,7 +1,5 @@
-// analyze v5 — redeploy marker after eliminating stale filter paths
-// Build timestamp: 2026-04-24T12:08:00Z
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
+// analyze v6 — direct REST auth/profile access to avoid edge runtime SDK drift
+// Build timestamp: 2026-04-24T12:24:00Z
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -15,6 +13,43 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+
+const parseJsonResponse = (rawText: string) => {
+  if (!rawText) return null;
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+};
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  const normalized: string[] = [];
+
+  for (const item of value) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) normalized.push(trimmed);
+    }
+  }
+
+  return normalized;
+};
+
+const normalizeAnalysis = (value: unknown) => {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    ...source,
+    key_factors: toStringArray(source.key_factors),
+    warnings: toStringArray(source.warnings),
+    support_levels: toStringArray(source.support_levels),
+    resistance_levels: toStringArray(source.resistance_levels),
+  };
+};
 
 const extractAnthropicText = (claudeData: any) => {
   const content = claudeData?.content;
@@ -43,12 +78,16 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
+  let stage = "init";
+
   try {
+    stage = "read_auth_header";
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return json({ ok: false, error: "認証が必要です", diagnostics: { error_stage: "missing_auth" } }, 401);
     }
 
+    stage = "load_env";
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
 
@@ -56,19 +95,27 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "サーバー設定エラー: Supabase credentials not configured", diagnostics: { error_stage: "missing_supabase_credentials" } }, 500);
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
+    stage = "fetch_user";
+    const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: {
+        Authorization: authHeader,
+        apikey: supabaseAnonKey,
+      },
     });
+    const userRaw = await userRes.text();
+    const userData = parseJsonResponse(userRaw) as { id?: string; email?: string | null } | null;
+    const user = userRes.ok && userData?.id ? userData : null;
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    if (!user) {
       return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
     }
 
+    const userId = user.id;
+    if (!userId) {
+      return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed_missing_id" } }, 401);
+    }
+
+    stage = "parse_request";
     let requestBody: unknown;
     try {
       requestBody = await req.json();
@@ -90,11 +137,22 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
     }
 
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
+    stage = "fetch_profile";
+    const profileRes = await fetch(
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=*`,
+      {
+        headers: {
+          Authorization: authHeader,
+          apikey: supabaseAnonKey,
+          Accept: "application/vnd.pgrst.object+json",
+          "accept-profile": "public",
+        },
+      },
+    );
+    const profileRaw = await profileRes.text();
+    const profile = profileRes.ok
+      ? parseJsonResponse(profileRaw) as { plan?: string; last_analysis_date?: string; daily_analysis_count?: number } | null
+      : null;
 
     const isAdmin = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
     const plan = isAdmin ? "pro" : profile?.plan || "free";
@@ -120,6 +178,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "サーバー設定エラー: Market data API key not configured", diagnostics: { error_stage: "missing_market_data_key" } }, 500);
     }
 
+    stage = "fetch_market_data";
     const pair = currencyPair.replace("/", "");
     const tdUrl = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=${interval}&outputsize=50&apikey=${twelveDataKey}`;
     const tdRes = await fetch(tdUrl);
@@ -139,6 +198,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key" } }, 500);
     }
 
+    stage = "build_prompt";
     const analysisScope = includeFundamental
       ? "テクニカル分析に加えて、経済ニュース・経済指標・市場センチメントも考慮して総合判断してください。"
       : "テクニカル分析のみに限定して判断してください。経済ニュースやファンダメンタル要因は考慮しないでください。";
@@ -166,11 +226,14 @@ ${JSON.stringify(candles, null, 2)}
   "risk_reward_ratio": "比率",
   "market_context": "市場環境の説明",
   "key_factors": ["要因1", "要因2", ...],
+  "support_levels": ["価格1", "価格2", ...],
+  "resistance_levels": ["価格1", "価格2", ...],
   "analysis": "詳細分析テキスト",
   "warnings": ["注意事項1", ...]
 }
 JSONのみ返してください。`;
 
+    stage = "request_ai";
     const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -200,6 +263,7 @@ JSONのみ返してください。`;
       return json({ ok: false, error: `AI分析エラー: ${msg}`, diagnostics: { error_stage: "anthropic_request_failed", status: claudeRes.status } }, 400);
     }
 
+    stage = "extract_ai_text";
     const finalText = extractAnthropicText(claudeData);
 
     if (!finalText) {
@@ -214,9 +278,10 @@ JSONのみ返してください。`;
     }
 
     const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
-    let analysis: any;
+    let analysis: unknown;
 
     try {
+      stage = "parse_ai_json";
       analysis = JSON.parse(cleaned);
     } catch {
       const first = cleaned.indexOf("{");
@@ -229,21 +294,42 @@ JSONのみ返してください。`;
       }
     }
 
+    const normalizedAnalysis = normalizeAnalysis(analysis);
+
     if (!isAdmin) {
       count += 1;
-      await supabase
-        .from("profiles")
-        .update({
-          daily_analysis_count: count,
-          last_analysis_date: new Date().toISOString(),
-        })
-        .eq("id", user.id);
+      stage = "update_profile";
+      const updateRes = await fetch(
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: authHeader,
+            apikey: supabaseAnonKey,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+            "content-profile": "public",
+          },
+          body: JSON.stringify({
+            daily_analysis_count: count,
+            last_analysis_date: new Date().toISOString(),
+          }),
+        },
+      );
+
+      if (!updateRes.ok) {
+        const updateRaw = await updateRes.text();
+        console.warn("Profile update failed:", updateRes.status, updateRaw);
+      } else {
+        await updateRes.text();
+      }
     }
 
+    stage = "response";
     return json({
       ok: true,
       data: {
-        analysis,
+        analysis: normalizedAnalysis,
         remaining: isAdmin ? null : dailyLimit - count,
         plan,
         mode: includeFundamental ? "full" : "technical_only",
@@ -259,7 +345,7 @@ JSONのみ返してください。`;
     return json({
       ok: false,
       error: err instanceof Error ? err.message : "サーバーエラーが発生しました",
-      diagnostics: { error_stage: "unhandled_exception" },
+      diagnostics: { error_stage: "unhandled_exception", stage },
     }, 500);
   }
 });
