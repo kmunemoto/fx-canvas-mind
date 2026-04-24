@@ -90,6 +90,9 @@ Deno.serve(async (req: Request) => {
     const interval = typeof (requestBody as { interval?: unknown })?.interval === "string"
       ? (requestBody as { interval: string }).interval.trim()
       : "";
+    const includeFundamental = typeof (requestBody as { includeFundamental?: unknown })?.includeFundamental === "boolean"
+      ? (requestBody as { includeFundamental: boolean }).includeFundamental
+      : true;
 
     if (!currencyPair || !interval) {
       return json(req, { ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
@@ -139,10 +142,19 @@ Deno.serve(async (req: Request) => {
       return json(req, { ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key" } }, 500);
     }
 
-    const candles = tdData.values?.slice(0, 30) || [];
+    const candles = Array.isArray(tdData?.values) ? tdData.values.slice(0, 30) : [];
+    if (candles.length === 0) {
+      return json(req, { ok: false, error: "市場データが取得できませんでした", diagnostics: { error_stage: "empty_market_data" } }, 400);
+    }
+
+    const analysisScope = includeFundamental
+      ? "テクニカル分析に加えて、経済ニュース・経済指標・市場センチメントも考慮して総合判断してください。"
+      : "テクニカル分析のみに限定して判断してください。経済ニュースやファンダメンタル要因は考慮しないでください。";
     const userMessage = `
 通貨ペア: ${currencyPair}
 時間足: ${interval}
+分析モード: ${includeFundamental ? "full" : "technical_only"}
+指示: ${analysisScope}
 直近のローソク足データ (最新から):
 ${JSON.stringify(candles, null, 2)}
 
@@ -255,6 +267,7 @@ JSONのみ返してください。`;
         analysis,
         remaining: isAdmin ? null : dailyLimit - count,
         plan,
+        mode: includeFundamental ? "full" : "technical_only",
         technicalData: {
           candles: candles.slice(0, 10),
           pair: currencyPair,
