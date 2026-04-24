@@ -110,6 +110,8 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
     }
 
+    const userId = user.id;
+
     stage = "parse_request";
     let requestBody: unknown;
     try {
@@ -134,7 +136,7 @@ Deno.serve(async (req: Request) => {
 
     stage = "fetch_profile";
     const profileRes = await fetch(
-      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=*`,
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=*`,
       {
         headers: {
           Authorization: authHeader,
@@ -295,7 +297,7 @@ JSONのみ返してください。`;
       count += 1;
       stage = "update_profile";
       const updateRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}`,
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
         {
           method: "PATCH",
           headers: {
