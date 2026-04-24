@@ -144,7 +144,10 @@ const extractAnthropicText = (value: unknown) => {
   return textParts.join("").trim();
 };
 
-const parseRequestBody = async (req: Request) => {
+const parseRequestBody = async (req: Request): Promise<
+  | { data: ParsedRequestBody; error?: undefined }
+  | { data?: undefined; error: string }
+> => {
   let requestBody: unknown;
 
   try {
@@ -261,7 +264,8 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: parsedRequest.error, diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const { currencyPair, interval, includeFundamental } = parsedRequest.data;
+    const requestData = parsedRequest.data;
+    const { currencyPair, interval, includeFundamental } = requestData;
 
     stage = "fetch_profile";
     const profileRes = await fetch(
