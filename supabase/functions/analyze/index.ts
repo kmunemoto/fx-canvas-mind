@@ -263,6 +263,9 @@ Deno.serve(async (req: Request) => {
     if (parsedRequest.error) {
       return json({ ok: false, error: parsedRequest.error, diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
+    if (!parsedRequest.data) {
+      return json({ ok: false, error: "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
+    }
 
     const requestData = parsedRequest.data;
     const { currencyPair, interval, includeFundamental } = requestData;
