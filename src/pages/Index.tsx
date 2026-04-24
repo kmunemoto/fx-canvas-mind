@@ -72,7 +72,7 @@ const Index = () => {
 
       setLoadingStage("analyzing");
 
-      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze", {
+      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze_v2", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
