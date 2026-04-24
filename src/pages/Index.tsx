@@ -81,8 +81,8 @@ const Index = () => {
         },
         body: JSON.stringify({
           currencyPair: settings.currencyPair,
-          interval: interval,
-          includeFundamental: includeFundamental,
+          interval,
+          includeFundamental,
         }),
       });
 
@@ -96,11 +96,23 @@ const Index = () => {
         resData = { error: rawText };
       }
 
-      const payload = resData?.data ?? resData;
+      console.log("Analyze API Response:", {
+        status: response.status,
+        ok: response.ok,
+        body: resData,
+      });
+
+      const payload = typeof resData?.data === "object" && resData.data !== null
+        ? resData.data
+        : resData;
+      const analysisResult: AnalysisResult | undefined = payload?.analysis ?? resData?.analysis;
+      const remaining = payload?.remaining ?? resData?.remaining ?? null;
+      const technicalData = payload?.technicalData ?? resData?.technicalData ?? null;
+      const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
       const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
       const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));
 
-      if (!response.ok || resData?.ok === false) {
+      if (!response.ok || resData?.ok === false || payload?.ok === false) {
         if (!adminUser && isLimitError) {
           setLimitReached(true);
           toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
@@ -112,27 +124,20 @@ const Index = () => {
           return;
         }
 
-        console.error("Edge function error:", response.status, resData?.diagnostics ?? rawText);
+        console.error("Edge function error:", response.status, resData?.diagnostics ?? payload?.diagnostics ?? rawText);
         throw new Error(errorMessage);
       }
 
+      if (!analysisResult) {
+        throw new Error("分析結果が取得できませんでした。もう一度お試しください。");
+      }
+
       setLoadingStage("generating_judgment");
-
-      const analysisResult: AnalysisResult | undefined = payload?.analysis;
-      if (!analysisResult) throw new Error("分析結果の取得に失敗しました");
-
       setResult(analysisResult);
-      setRemaining(payload?.remaining ?? null);
-      const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
+      setRemaining(remaining);
       setAnalysisMode(mode);
-
-      if (payload?.analysis?.entry_point) {
-        setLiveRate(payload.analysis.entry_point);
-      }
-
-      if (payload?.technicalData) {
-        setTechData(payload.technicalData);
-      }
+      setLiveRate(analysisResult.entry_point ?? null);
+      setTechData(technicalData);
 
       setHistory((prev) => [
         {
@@ -148,7 +153,7 @@ const Index = () => {
       const isNetworkError = err instanceof TypeError && ["Failed to fetch", "Load failed"].includes(err.message);
       const description = isNetworkError
         ? "analyze に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。"
-        : err.message;
+        : err.message || "分析処理でエラーが発生しました";
 
       console.error("Analysis request failed:", err);
       toast({ title: "エラー", description, variant: "destructive" });
