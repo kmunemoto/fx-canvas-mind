@@ -1,20 +1,54 @@
-// analyze v6 — direct REST auth/profile access to avoid edge runtime SDK drift
-// Build timestamp: 2026-04-24T12:24:00Z
+const FUNCTION_VERSION = "analyze-v7-2026-04-24T16:20:00Z";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
 
+type JsonRecord = Record<string, unknown>;
+
+type AuthUser = {
+  id: string;
+  email: string | null;
+};
+
+type ProfileRecord = {
+  plan?: string;
+  last_analysis_date?: string;
+  daily_analysis_count?: number;
+};
+
+type ParsedRequestBody = {
+  currencyPair: string;
+  interval: string;
+  includeFundamental: boolean;
+};
+
+const isRecord = (value: unknown): value is JsonRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const withVersion = (body: unknown) => {
+  if (isRecord(body)) {
+    return { version: FUNCTION_VERSION, ...body };
+  }
+
+  return { version: FUNCTION_VERSION, data: body };
+};
+
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
+  new Response(JSON.stringify(withVersion(body)), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      "X-Function-Version": FUNCTION_VERSION,
+    },
   });
 
-const parseJsonResponse = (rawText: string) => {
+const parseJsonResponse = (rawText: string): unknown => {
   if (!rawText) return null;
 
   try {
@@ -22,6 +56,21 @@ const parseJsonResponse = (rawText: string) => {
   } catch {
     return null;
   }
+};
+
+const asTrimmedString = (value: unknown, fallback = "") => {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+};
+
+const asNumber = (value: unknown, fallback = 0) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
 };
 
 const toStringArray = (value: unknown): string[] => {
@@ -40,10 +89,31 @@ const toStringArray = (value: unknown): string[] => {
 };
 
 const normalizeAnalysis = (value: unknown) => {
-  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const source = isRecord(value) ? value : {};
+  const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
+    ? source.signal
+    : "WAIT";
+  const riskLevel = source.risk_level === "LOW" || source.risk_level === "MEDIUM" || source.risk_level === "HIGH"
+    ? source.risk_level
+    : "MEDIUM";
+  const sentiment = source.sentiment === "BULLISH" || source.sentiment === "NEUTRAL" || source.sentiment === "BEARISH"
+    ? source.sentiment
+    : "NEUTRAL";
 
   return {
-    ...source,
+    signal,
+    confidence: asNumber(source.confidence, 0),
+    technical_score: asNumber(source.technical_score, 0),
+    fundamental_score: asNumber(source.fundamental_score, 0),
+    risk_level: riskLevel,
+    sentiment,
+    entry_point: asTrimmedString(source.entry_point, "—"),
+    stop_loss: asTrimmedString(source.stop_loss, "—"),
+    take_profit_1: asTrimmedString(source.take_profit_1, "—"),
+    take_profit_2: asTrimmedString(source.take_profit_2, "—"),
+    risk_reward_ratio: asTrimmedString(source.risk_reward_ratio, "—"),
+    market_context: asTrimmedString(source.market_context, ""),
+    analysis: asTrimmedString(source.analysis, ""),
     key_factors: toStringArray(source.key_factors),
     warnings: toStringArray(source.warnings),
     support_levels: toStringArray(source.support_levels),
@@ -51,9 +121,10 @@ const normalizeAnalysis = (value: unknown) => {
   };
 };
 
-const extractAnthropicText = (claudeData: any) => {
-  const content = claudeData?.content;
+const extractAnthropicText = (value: unknown) => {
+  if (!isRecord(value)) return "";
 
+  const content = value.content;
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
 
@@ -65,7 +136,7 @@ const extractAnthropicText = (claudeData: any) => {
       continue;
     }
 
-    if (block?.type === "text" && typeof block?.text === "string") {
+    if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
       textParts.push(block.text);
     }
   }
@@ -73,9 +144,70 @@ const extractAnthropicText = (claudeData: any) => {
   return textParts.join("").trim();
 };
 
+const parseRequestBody = async (req: Request) => {
+  let requestBody: unknown;
+
+  try {
+    requestBody = await req.json();
+  } catch {
+    return { error: "リクエスト形式が不正です" };
+  }
+
+  const body = isRecord(requestBody) ? requestBody : {};
+  const currencyPair = asTrimmedString(body.currencyPair);
+  const interval = asTrimmedString(body.interval);
+  const includeFundamental = typeof body.includeFundamental === "boolean"
+    ? body.includeFundamental
+    : true;
+
+  if (!currencyPair || !interval) {
+    return { error: "通貨ペアまたは時間足が不正です" };
+  }
+
+  return {
+    data: {
+      currencyPair,
+      interval,
+      includeFundamental,
+    } satisfies ParsedRequestBody,
+  };
+};
+
+const readProfile = (value: unknown): ProfileRecord | null => {
+  if (isRecord(value)) {
+    return {
+      plan: typeof value.plan === "string" ? value.plan : undefined,
+      last_analysis_date: typeof value.last_analysis_date === "string" ? value.last_analysis_date : undefined,
+      daily_analysis_count: asNumber(value.daily_analysis_count, 0),
+    };
+  }
+
+  if (Array.isArray(value) && value.length > 0 && isRecord(value[0])) {
+    const first = value[0];
+    return {
+      plan: typeof first.plan === "string" ? first.plan : undefined,
+      last_analysis_date: typeof first.last_analysis_date === "string" ? first.last_analysis_date : undefined,
+      daily_analysis_count: asNumber(first.daily_analysis_count, 0),
+    };
+  }
+
+  return null;
+};
+
+const readAuthUser = (value: unknown): AuthUser | null => {
+  if (!isRecord(value)) return null;
+  const id = asTrimmedString(value.id);
+  if (!id) return null;
+
+  return {
+    id,
+    email: typeof value.email === "string" ? value.email : null,
+  };
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response("ok", { headers: corsHeaders });
   }
 
   let stage = "init";
@@ -84,15 +216,25 @@ Deno.serve(async (req: Request) => {
     stage = "read_auth_header";
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return json({ ok: false, error: "認証が必要です", diagnostics: { error_stage: "missing_auth" } }, 401);
+      return json({ ok: false, error: "認証が必要です", diagnostics: { error_stage: "missing_auth", stage } }, 401);
     }
 
     stage = "load_env";
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    const twelveDataKey = Deno.env.get("TWELVE_DATA_API_KEY");
+    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      return json({ ok: false, error: "サーバー設定エラー: Supabase credentials not configured", diagnostics: { error_stage: "missing_supabase_credentials" } }, 500);
+      return json({ ok: false, error: "サーバー設定エラー: Supabase credentials not configured", diagnostics: { error_stage: "missing_supabase_credentials", stage } }, 500);
+    }
+
+    if (!twelveDataKey) {
+      return json({ ok: false, error: "サーバー設定エラー: Market data API key not configured", diagnostics: { error_stage: "missing_market_data_key", stage } }, 500);
+    }
+
+    if (!anthropicKey) {
+      return json({ ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key", stage } }, 500);
     }
 
     stage = "fetch_user";
@@ -103,43 +245,27 @@ Deno.serve(async (req: Request) => {
       },
     });
     const userRaw = await userRes.text();
-    const userData = parseJsonResponse(userRaw) as { id?: string; email?: string | null } | null;
-    const user = userRes.ok && userData?.id ? userData : null;
+    const user = userRes.ok ? readAuthUser(parseJsonResponse(userRaw)) : null;
 
     if (!user) {
-      return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed" } }, 401);
-    }
-
-    const userId = user.id;
-    if (!userId) {
-      return json({ ok: false, error: "認証に失敗しました", diagnostics: { error_stage: "auth_failed_missing_id" } }, 401);
+      return json({
+        ok: false,
+        error: "認証に失敗しました",
+        diagnostics: { error_stage: "auth_failed", stage, status: userRes.status, preview: userRaw.slice(0, 200) },
+      }, 401);
     }
 
     stage = "parse_request";
-    let requestBody: unknown;
-    try {
-      requestBody = await req.json();
-    } catch {
-      return json({ ok: false, error: "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_json" } }, 400);
+    const parsedRequest = await parseRequestBody(req);
+    if (parsedRequest.error) {
+      return json({ ok: false, error: parsedRequest.error, diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const currencyPair = typeof (requestBody as { currencyPair?: unknown })?.currencyPair === "string"
-      ? (requestBody as { currencyPair: string }).currencyPair.trim()
-      : "";
-    const interval = typeof (requestBody as { interval?: unknown })?.interval === "string"
-      ? (requestBody as { interval: string }).interval.trim()
-      : "";
-    const includeFundamental = typeof (requestBody as { includeFundamental?: unknown })?.includeFundamental === "boolean"
-      ? (requestBody as { includeFundamental: boolean }).includeFundamental
-      : true;
-
-    if (!currencyPair || !interval) {
-      return json({ ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
-    }
+    const { currencyPair, interval, includeFundamental } = parsedRequest.data;
 
     stage = "fetch_profile";
     const profileRes = await fetch(
-      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=*`,
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=*`,
       {
         headers: {
           Authorization: authHeader,
@@ -150,13 +276,10 @@ Deno.serve(async (req: Request) => {
       },
     );
     const profileRaw = await profileRes.text();
-    const profile = profileRes.ok
-      ? parseJsonResponse(profileRaw) as { plan?: string; last_analysis_date?: string; daily_analysis_count?: number } | null
-      : null;
+    const profile = profileRes.ok ? readProfile(parseJsonResponse(profileRaw)) : null;
 
-    const isAdmin = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
-    const plan = isAdmin ? "pro" : profile?.plan || "free";
-
+    const isAdmin = ADMIN_EMAILS.includes((user.email || "").toLowerCase());
+    const plan = isAdmin ? "pro" : (profile?.plan || "free");
     const limits: Record<string, number> = {
       free: 3,
       light: 10,
@@ -164,38 +287,55 @@ Deno.serve(async (req: Request) => {
       pro: 9999,
     };
     const dailyLimit = limits[plan] || 3;
-
     const today = new Date().toISOString().split("T")[0];
-    const lastDate = profile?.last_analysis_date?.split("T")[0];
-    let count = lastDate === today ? (profile?.daily_analysis_count || 0) : 0;
+    const lastDateRaw = typeof profile?.last_analysis_date === "string"
+      ? profile.last_analysis_date.split("T")[0]
+      : "";
+    let count = lastDateRaw === today ? asNumber(profile?.daily_analysis_count, 0) : 0;
 
     if (!isAdmin && count >= dailyLimit) {
-      return json({ ok: false, error: "本日の分析上限に達しました。プランをアップグレードしてください。", diagnostics: { error_stage: "daily_limit_reached" } }, 400);
-    }
-
-    const twelveDataKey = Deno.env.get("TWELVE_DATA_API_KEY");
-    if (!twelveDataKey) {
-      return json({ ok: false, error: "サーバー設定エラー: Market data API key not configured", diagnostics: { error_stage: "missing_market_data_key" } }, 500);
+      return json({
+        ok: false,
+        error: "本日の分析上限に達しました。プランをアップグレードしてください。",
+        diagnostics: { error_stage: "daily_limit_reached", stage, dailyLimit, count },
+      }, 400);
     }
 
     stage = "fetch_market_data";
     const pair = currencyPair.replace("/", "");
     const tdUrl = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=${interval}&outputsize=50&apikey=${twelveDataKey}`;
     const tdRes = await fetch(tdUrl);
-    const tdData = await tdRes.json();
+    const tdRaw = await tdRes.text();
+    const tdJson = parseJsonResponse(tdRaw);
 
-    if (tdData?.status === "error") {
-      return json({ ok: false, error: `市場データ取得エラー: ${tdData?.message ?? "unknown error"}`, diagnostics: { error_stage: "market_data_failed" } }, 400);
+    if (!tdRes.ok || !isRecord(tdJson)) {
+      return json({
+        ok: false,
+        error: "市場データが取得できませんでした",
+        diagnostics: { error_stage: "market_data_failed", stage, status: tdRes.status, preview: tdRaw.slice(0, 300) },
+      }, 400);
     }
 
-    const candles = Array.isArray(tdData?.values) ? tdData.values.slice(0, 30) : [];
+    if (tdJson.status === "error") {
+      return json({
+        ok: false,
+        error: `市場データ取得エラー: ${asTrimmedString(tdJson.message, "unknown error")}`,
+        diagnostics: { error_stage: "market_data_failed", stage },
+      }, 400);
+    }
+
+    const rawValues = Array.isArray(tdJson.values) ? tdJson.values : [];
+    const candles: JsonRecord[] = [];
+
+    for (const item of rawValues) {
+      if (isRecord(item)) {
+        candles.push(item);
+      }
+      if (candles.length >= 30) break;
+    }
+
     if (candles.length === 0) {
-      return json({ ok: false, error: "市場データが取得できませんでした", diagnostics: { error_stage: "empty_market_data" } }, 400);
-    }
-
-    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!anthropicKey) {
-      return json({ ok: false, error: "サーバー設定エラー: AI API key not configured", diagnostics: { error_stage: "missing_ai_key" } }, 500);
+      return json({ ok: false, error: "市場データが取得できませんでした", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
 
     stage = "build_prompt";
@@ -249,58 +389,65 @@ JSONのみ返してください。`;
     });
 
     const claudeRaw = await claudeRes.text();
-    let claudeData: any = {};
+    const claudeJson = parseJsonResponse(claudeRaw);
 
-    try {
-      claudeData = claudeRaw ? JSON.parse(claudeRaw) : {};
-    } catch {
-      claudeData = { raw: claudeRaw };
-    }
+    if (!claudeRes.ok) {
+      const errorMessage = isRecord(claudeJson) && isRecord(claudeJson.error)
+        ? asTrimmedString(claudeJson.error.message, "AI分析エラー")
+        : isRecord(claudeJson)
+        ? asTrimmedString(claudeJson.error, "AI分析エラー")
+        : "AI分析エラー";
 
-    if (!claudeRes.ok || claudeData?.type === "error") {
-      const msg = claudeData?.error?.message || claudeData?.error || claudeRaw || `status ${claudeRes.status}`;
-      console.error("Claude API error:", claudeRes.status, msg);
-      return json({ ok: false, error: `AI分析エラー: ${msg}`, diagnostics: { error_stage: "anthropic_request_failed", status: claudeRes.status } }, 400);
+      return json({
+        ok: false,
+        error: errorMessage,
+        diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, preview: claudeRaw.slice(0, 300) },
+      }, 400);
     }
 
     stage = "extract_ai_text";
-    const finalText = extractAnthropicText(claudeData);
-
+    const finalText = extractAnthropicText(claudeJson);
     if (!finalText) {
-      console.error("Unexpected Claude response shape:", JSON.stringify({
-        type: claudeData?.type,
-        hasContentArray: Array.isArray(claudeData?.content),
-        contentType: typeof claudeData?.content,
-        preview: JSON.stringify(claudeData).slice(0, 500),
-      }));
-
-      return json({ ok: false, error: "AI分析エラー: レスポンス形式が不正です", diagnostics: { error_stage: "unexpected_anthropic_response" } }, 400);
+      return json({
+        ok: false,
+        error: "AI分析エラー: レスポンス形式が不正です",
+        diagnostics: { error_stage: "unexpected_anthropic_response", stage, preview: claudeRaw.slice(0, 300) },
+      }, 400);
     }
 
+    stage = "parse_ai_json";
     const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
-    let analysis: unknown;
+    let parsedAnalysis: unknown = null;
+    let parsed = false;
 
     try {
-      stage = "parse_ai_json";
-      analysis = JSON.parse(cleaned);
+      parsedAnalysis = JSON.parse(cleaned);
+      parsed = true;
     } catch {
       const first = cleaned.indexOf("{");
       const last = cleaned.lastIndexOf("}");
 
       if (first !== -1 && last > first) {
-        analysis = JSON.parse(cleaned.substring(first, last + 1));
-      } else {
-        return json({ ok: false, error: "AI分析結果の解析に失敗しました", diagnostics: { error_stage: "analysis_parse_failed" } }, 400);
+        parsedAnalysis = JSON.parse(cleaned.slice(first, last + 1));
+        parsed = true;
       }
     }
 
-    const normalizedAnalysis = normalizeAnalysis(analysis);
+    if (!parsed) {
+      return json({
+        ok: false,
+        error: "AI分析結果の解析に失敗しました",
+        diagnostics: { error_stage: "analysis_parse_failed", stage, preview: cleaned.slice(0, 300) },
+      }, 400);
+    }
+
+    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis);
 
     if (!isAdmin) {
       count += 1;
       stage = "update_profile";
       const updateRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}`,
         {
           method: "PATCH",
           headers: {
@@ -316,13 +463,7 @@ JSONのみ返してください。`;
           }),
         },
       );
-
-      if (!updateRes.ok) {
-        const updateRaw = await updateRes.text();
-        console.warn("Profile update failed:", updateRes.status, updateRaw);
-      } else {
-        await updateRes.text();
-      }
+      await updateRes.text();
     }
 
     stage = "response";
@@ -339,12 +480,14 @@ JSONのみ返してください。`;
           interval,
         },
       },
+      diagnostics: { stage },
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : "サーバーエラーが発生しました";
     console.error("Edge function error:", err);
     return json({
       ok: false,
-      error: err instanceof Error ? err.message : "サーバーエラーが発生しました",
+      error: message,
       diagnostics: { error_stage: "unhandled_exception", stage },
     }, 500);
   }
