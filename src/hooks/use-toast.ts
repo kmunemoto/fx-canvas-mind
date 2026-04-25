@@ -69,17 +69,19 @@ const addToRemoveQueue = (toastId: string) => {
 };
 
 export const reducer = (state: State, action: Action): State => {
+  const currentToasts = Array.isArray(state.toasts) ? state.toasts : [];
+
   switch (action.type) {
     case "ADD_TOAST":
       return {
         ...state,
-        toasts: [action.toast, ...state.toasts].slice(0, TOAST_LIMIT),
+        toasts: [action.toast, ...currentToasts].slice(0, TOAST_LIMIT),
       };
 
     case "UPDATE_TOAST":
       return {
         ...state,
-        toasts: state.toasts.map((t) => (t.id === action.toast.id ? { ...t, ...action.toast } : t)),
+        toasts: currentToasts.map((t) => (t.id === action.toast.id ? { ...t, ...action.toast } : t)),
       };
 
     case "DISMISS_TOAST": {
@@ -90,14 +92,14 @@ export const reducer = (state: State, action: Action): State => {
       if (toastId) {
         addToRemoveQueue(toastId);
       } else {
-        state.toasts.forEach((toast) => {
+        currentToasts.forEach((toast) => {
           addToRemoveQueue(toast.id);
         });
       }
 
       return {
         ...state,
-        toasts: state.toasts.map((t) =>
+        toasts: currentToasts.map((t) =>
           t.id === toastId || toastId === undefined
             ? {
                 ...t,
@@ -116,7 +118,10 @@ export const reducer = (state: State, action: Action): State => {
       }
       return {
         ...state,
-        toasts: state.toasts.filter((t) => t.id !== action.toastId),
+        toasts: currentToasts.reduce<ToasterToast[]>((next, t) => {
+          if (t.id !== action.toastId) next.push(t);
+          return next;
+        }, []),
       };
   }
 };

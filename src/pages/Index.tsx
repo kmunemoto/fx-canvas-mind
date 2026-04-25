@@ -12,6 +12,26 @@ import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingS
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
+const EXPECTED_ANALYZE_VERSION = "analyze-v7-2026-04-24T16:20:00Z";
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  const items: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") items.push(item);
+  }
+  return items;
+};
+
+const toRecordArray = <T extends object>(value: unknown): T[] => {
+  if (!Array.isArray(value)) return [];
+  const items: T[] = [];
+  for (const item of value) {
+    if (item && typeof item === "object") items.push(item as T);
+  }
+  return items;
+};
+
 const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
   if (!value || typeof value !== "object") return null;
 
@@ -30,10 +50,10 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
     take_profit_2: typeof source.take_profit_2 === "string" ? source.take_profit_2 : "—",
     risk_reward_ratio: typeof source.risk_reward_ratio === "string" ? source.risk_reward_ratio : "—",
     analysis: typeof source.analysis === "string" ? source.analysis : "",
-    key_factors: Array.isArray(source.key_factors) ? source.key_factors.filter((item): item is string => typeof item === "string") : [],
-    warnings: Array.isArray(source.warnings) ? source.warnings.filter((item): item is string => typeof item === "string") : [],
-    support_levels: Array.isArray(source.support_levels) ? source.support_levels.filter((item): item is string => typeof item === "string") : [],
-    resistance_levels: Array.isArray(source.resistance_levels) ? source.resistance_levels.filter((item): item is string => typeof item === "string") : [],
+    key_factors: toStringArray(source.key_factors),
+    warnings: toStringArray(source.warnings),
+    support_levels: toStringArray(source.support_levels),
+    resistance_levels: toStringArray(source.resistance_levels),
     market_context: typeof source.market_context === "string" ? source.market_context : "",
   };
 };
@@ -47,7 +67,7 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
   return {
     price: readString("price"),
     datetime: readString("datetime"),
-    timeSeries: Array.isArray(source.timeSeries) ? source.timeSeries.filter((item): item is TechnicalData["timeSeries"][number] => !!item && typeof item === "object") : [],
+    timeSeries: toRecordArray<TechnicalData["timeSeries"][number]>(source.timeSeries),
     rsi: readString("rsi"),
     macd: readString("macd"),
     macdSignal: readString("macdSignal"),
@@ -162,14 +182,25 @@ const Index = () => {
       const payload = typeof resData?.data === "object" && resData.data !== null
         ? resData.data
         : resData;
+      const deployedVersion = response.headers.get("X-Function-Version") || (typeof resData?.version === "string" ? resData.version : null);
       const analysisResult = normalizeAnalysisResult(payload?.analysis ?? resData?.analysis);
       const remaining = payload?.remaining ?? resData?.remaining ?? null;
       const technicalData = normalizeTechnicalData(payload?.technicalData ?? resData?.technicalData);
       const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
       const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
       const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));
+      const isFilterRuntimeError = typeof errorMessage === "string" && errorMessage.includes("Cannot read properties of undefined (reading 'filter')");
 
       if (!response.ok || resData?.ok === false || payload?.ok === false) {
+        if (isFilterRuntimeError && deployedVersion !== EXPECTED_ANALYZE_VERSION) {
+          console.error("Stale analyze Edge Function deployment detected:", {
+            expectedVersion: EXPECTED_ANALYZE_VERSION,
+            deployedVersion: deployedVersion ?? "missing",
+            responseBody: resData,
+          });
+          throw new Error("古い analyze Edge Function が動作しています。最新の analyze を再デプロイしてください。");
+        }
+
         if (!adminUser && isLimitError) {
           setLimitReached(true);
           toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
