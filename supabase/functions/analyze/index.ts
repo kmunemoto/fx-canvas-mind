@@ -309,7 +309,7 @@ Deno.serve(async (req: Request) => {
     }
 
     stage = "fetch_market_data";
-    const pair = currencyPair.replace("/", "");
+    const pair = currencyPair;
     const tdUrl = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=${interval}&outputsize=50&apikey=${twelveDataKey}`;
     const tdRes = await fetch(tdUrl);
     const tdRaw = await tdRes.text();
@@ -389,7 +389,7 @@ JSONのみ返してください。`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-3-5-sonnet-20241022",
+        model: "claude-sonnet-4-6",
         max_tokens: 4096,
         messages: [{ role: "user", content: userMessage }],
       }),
