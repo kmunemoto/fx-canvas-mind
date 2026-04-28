@@ -150,6 +150,10 @@ const Index = () => {
 
   const showUpgradeBanner = isFreeUser && !bannerDismissed;
 
+  useEffect(() => {
+    saveSettings(settings);
+  }, [settings]);
+
   const handleAnalyze = useCallback(async () => {
     setLoading(true);
     setLoadingStage("fetching");
