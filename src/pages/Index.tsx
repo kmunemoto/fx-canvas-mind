@@ -282,6 +282,35 @@ const Index = () => {
       />
 
       <main className="flex-1 container max-w-6xl mx-auto px-4 py-4 space-y-4">
+        {showUpgradeBanner && (
+          <div
+            className="rounded-xl border border-primary/40 p-4 flex items-center gap-3 shadow-md"
+            style={{ background: "linear-gradient(135deg, rgba(0,212,255,0.15), rgba(0,153,204,0.08))" }}
+          >
+            <div className="h-9 w-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}>
+              <Crown className="h-4 w-4 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">全機能を使うにはプランをアップグレード</p>
+              <p className="text-xs text-muted-foreground">分析回数の上限解放・全テクニカル指標・優先サポートが利用できます</p>
+            </div>
+            <button
+              onClick={() => navigate("/pricing")}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white shrink-0 hover:opacity-90 transition-opacity"
+              style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}
+            >
+              アップグレード
+            </button>
+            <button
+              onClick={dismissBanner}
+              aria-label="閉じる"
+              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         <ControlBar
           interval={interval}
           onIntervalChange={setInterval_}
