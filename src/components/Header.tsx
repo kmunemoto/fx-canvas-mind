@@ -38,7 +38,10 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
 
   const isAdmin = isAdminEmail(user?.email);
   const planName = isAdmin ? "Pro" : (profile?.plan || "Free");
-  const isFree = !isAdmin && (!profile?.plan || profile.plan === "Free");
+  const planLower = planName.toLowerCase();
+  const isFree = !isAdmin && (!profile?.plan || planLower === "free");
+  const isPro = isAdmin || planLower === "pro";
+  const isPaidNonPro = !isAdmin && (planLower === "light" || planLower === "standard");
   const cancelPending = !!loadCancellation(user?.id);
   const shortEmail = user?.email
     ? user.email.length > 16
