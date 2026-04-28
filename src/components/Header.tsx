@@ -38,7 +38,10 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
 
   const isAdmin = isAdminEmail(user?.email);
   const planName = isAdmin ? "Pro" : (profile?.plan || "Free");
-  const isFree = !isAdmin && (!profile?.plan || profile.plan === "Free");
+  const planLower = planName.toLowerCase();
+  const isFree = !isAdmin && (!profile?.plan || planLower === "free");
+  const isPro = isAdmin || planLower === "pro";
+  const isPaidNonPro = !isAdmin && (planLower === "light" || planLower === "standard");
   const cancelPending = !!loadCancellation(user?.id);
   const shortEmail = user?.email
     ? user.email.length > 16
@@ -66,20 +69,22 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
         <span className="font-mono text-xs text-muted-foreground hidden sm:inline">{time} JST</span>
 
         {/* Plan link / Upgrade button */}
-        {isFree ? (
+        {isFree && (
           <button
             onClick={() => navigate("/pricing")}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity"
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white shadow-md hover:opacity-90 transition-opacity"
+            style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}
           >
             <Crown className="h-3.5 w-3.5" />
-            アップグレード
+            プランをアップグレード
           </button>
-        ) : (
+        )}
+        {isPaidNonPro && (
           <button
             onClick={() => navigate("/pricing")}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="px-2.5 py-1 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
-            プラン
+            プランを変更
           </button>
         )}
 
