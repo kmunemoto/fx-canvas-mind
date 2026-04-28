@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Zap } from "lucide-react";
+import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
 import AnalysisResultView from "@/components/AnalysisResultView";
@@ -8,11 +8,13 @@ import AnalysisHistory from "@/components/AnalysisHistory";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
+import { useAuth } from "@/contexts/AuthContext";
 import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
 const EXPECTED_ANALYZE_VERSION = "analyze-v7-2026-04-24T16:20:00Z";
+const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
