@@ -129,10 +129,26 @@ const Index = () => {
   const [limitReached, setLimitReached] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { user, profile } = useAuth();
 
-  useEffect(() => {
-    saveSettings(settings);
-  }, [settings]);
+  const isAdmin = isAdminEmail(user?.email);
+  const planLower = (profile?.plan || "Free").toLowerCase();
+  const isFreeUser = !isAdmin && (!profile?.plan || planLower === "free");
+
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(UPGRADE_BANNER_DISMISS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissBanner = () => {
+    setBannerDismissed(true);
+    try { localStorage.setItem(UPGRADE_BANNER_DISMISS_KEY, "1"); } catch {}
+  };
+
+  const showUpgradeBanner = isFreeUser && !bannerDismissed;
 
   const handleAnalyze = useCallback(async () => {
     setLoading(true);
