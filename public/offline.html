@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>オフライン | FX Tactical Analyzer</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #0a0a0f;
+        color: #e6f7ff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      }
+      .wrap {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        text-align: center;
+      }
+      h1 { color: #00d4ff; font-size: 24px; margin: 0 0 12px; }
+      p { color: #a8c5d6; margin: 0 0 20px; line-height: 1.6; }
+      button {
+        background: linear-gradient(135deg, #00d4ff, #0099cc);
+        color: #0a0a0f;
+        border: 0;
+        padding: 12px 24px;
+        border-radius: 10px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>オフラインです</h1>
+      <p>インターネット接続を確認してから、もう一度お試しください。</p>
+      <button onclick="location.reload()">再読み込み</button>
+    </div>
+  </body>
+</html>
