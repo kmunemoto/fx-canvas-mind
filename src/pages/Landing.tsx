@@ -2,8 +2,10 @@ import { useNavigate, Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Zap, BarChart3, Clock, Brain, Download, Sparkles,
-  ChevronRight, Check, Star, ArrowRight,
+  ChevronRight, Check, Star, ArrowRight, Share2, Link as LinkIcon, MessageCircle, Check as CheckIcon,
 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
@@ -61,6 +63,79 @@ const FAQS = [
     a: "はい、マイページからいつでも解約可能です。解約後も契約期間終了まではご利用いただけます。",
   },
 ];
+
+const SHARE_URL = "https://fx-tactical.jp";
+const SHARE_TEXT = "AIがFXを自動分析するツールを見つけました。11種のテクニカル指標+ファンダメンタル分析で売買判断をサポート。 #FX #AI分析 #トレード";
+
+const ShareSection = () => {
+  const [copied, setCopied] = useState(false);
+
+  const onTwitter = () => {
+    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(SHARE_TEXT)}&url=${encodeURIComponent(SHARE_URL)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const onLine = () => {
+    const url = `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(SHARE_URL)}&text=${encodeURIComponent(SHARE_TEXT)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(SHARE_URL);
+      setCopied(true);
+      toast.success("リンクをコピーしました");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("コピーに失敗しました");
+    }
+  };
+
+  const baseBtn =
+    "inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm transition-all";
+
+  return (
+    <section aria-label="SNSシェア" className="py-16 md:py-20">
+      <div className="container max-w-3xl mx-auto px-4 text-center">
+        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-[#00d4ff]/10 mb-4">
+          <Share2 className="h-6 w-6 text-[#00d4ff]" aria-hidden="true" />
+        </div>
+        <h2 className="text-2xl md:text-3xl font-bold mb-3">FX Tactical Analyzerを広める</h2>
+        <p className="text-sm text-muted-foreground mb-8">
+          このツールを友人やフォロワーにシェアして、賢いトレードを広めましょう
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={onTwitter}
+            aria-label="Xでシェア"
+            className={`${baseBtn} bg-gradient-to-r from-[#00d4ff] to-[#0088ff] text-[#0a0e17] hover:opacity-90 shadow-[0_0_20px_rgba(0,212,255,0.25)]`}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            Xでシェア
+          </button>
+          <button
+            onClick={onLine}
+            aria-label="LINEでシェア"
+            className={`${baseBtn} border border-[#00d4ff]/40 bg-[#00d4ff]/10 text-[#00d4ff] hover:bg-[#00d4ff]/20`}
+          >
+            <MessageCircle className="h-4 w-4" aria-hidden="true" />
+            LINEで共有
+          </button>
+          <button
+            onClick={onCopy}
+            aria-label="リンクをコピー"
+            className={`${baseBtn} border border-white/10 bg-white/5 text-foreground hover:border-[#00d4ff]/40 hover:text-[#00d4ff]`}
+          >
+            {copied ? <CheckIcon className="h-4 w-4" aria-hidden="true" /> : <LinkIcon className="h-4 w-4" aria-hidden="true" />}
+            {copied ? "コピー済み" : "リンクをコピー"}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+};
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -279,6 +354,9 @@ const Landing = () => {
             </motion.div>
           </motion.div>
         </section>
+
+        {/* Social Share */}
+        <ShareSection />
       </main>
 
       {/* Footer */}
