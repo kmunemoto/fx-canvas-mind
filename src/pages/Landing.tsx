@@ -155,6 +155,7 @@ const Landing = () => {
             <a href="#features" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">機能</a>
             <a href="#pricing" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">料金</a>
             <a href="#faq" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">よくある質問</a>
+            <Link to="/blog" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">ブログ</Link>
             <button onClick={goLogin} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               ログイン
             </button>
@@ -369,6 +370,7 @@ const Landing = () => {
               <span className="text-xs text-muted-foreground ml-2">© 2026</span>
             </div>
             <nav aria-label="フッターナビゲーション" className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+              <Link to="/blog" className="hover:text-foreground transition-colors">ブログ</Link>
               <Link to="/terms" className="hover:text-foreground transition-colors">利用規約</Link>
               <Link to="/privacy" className="hover:text-foreground transition-colors">プライバシーポリシー</Link>
               <Link to="/legal" className="hover:text-foreground transition-colors">特定商取引法に基づく表記</Link>

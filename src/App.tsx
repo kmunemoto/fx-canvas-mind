@@ -14,6 +14,8 @@ import Privacy from "./pages/Privacy.tsx";
 import Legal from "./pages/Legal.tsx";
 import Tokushoho from "./pages/Tokushoho.tsx";
 import Contact from "./pages/Contact.tsx";
+import Blog from "./pages/Blog.tsx";
+import BlogPost from "./pages/BlogPost.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { Loader2 } from "lucide-react";
 
@@ -35,6 +37,8 @@ const AppRoutes = () => {
       <Route path="/" element={user ? <Index /> : <Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/blog" element={<Blog />} />
+      <Route path="/blog/:slug" element={<BlogPost />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/legal" element={<Legal />} />
