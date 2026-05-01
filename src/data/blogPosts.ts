@@ -1,6 +1,10 @@
 import thumbBasics from "@/assets/blog-technical-basics.jpg";
 import thumbRsi from "@/assets/blog-rsi.jpg";
 import thumbMacd from "@/assets/blog-macd.jpg";
+import thumbBollinger from "@/assets/blog-bollinger.jpg";
+import thumbEntryPoint from "@/assets/blog-entry-point.jpg";
+import thumbIchimoku from "@/assets/blog-ichimoku.jpg";
+import thumbFundamental from "@/assets/blog-fundamental.jpg";
 
 export type BlogCategory = "テクニカル分析" | "ファンダメンタル" | "初心者向け" | "ツール活用";
 
