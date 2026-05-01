@@ -288,7 +288,7 @@ Deno.serve(async (req: Request) => {
     const isAdmin = ADMIN_EMAILS.includes((user.email || "").toLowerCase());
     const plan = isAdmin ? "pro" : (profile?.plan || "free");
     const limits: Record<string, number> = {
-      free: 3,
+      free: 2,
       light: 10,
       standard: 30,
       pro: 9999,
