@@ -195,7 +195,7 @@ const Landing = () => {
               >
                 無料で始める <ArrowRight className="inline h-5 w-5 ml-1" aria-hidden="true" />
               </button>
-              <span className="text-sm text-muted-foreground">クレジットカード登録なしで3回まで無料体験</span>
+              <span className="text-sm text-muted-foreground">クレジットカード登録なしで2回まで無料体験</span>
             </motion.div>
           </motion.div>
         </section>
