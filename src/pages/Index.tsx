@@ -3,17 +3,28 @@ import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
 import AnalysisResultView from "@/components/AnalysisResultView";
+import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { useAuth } from "@/contexts/AuthContext";
-import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingStage, HistoryEntry } from "@/lib/types";
+import type {
+  AnalysisRecord,
+  AnalysisResult,
+  AppSettings,
+  LoadingStage,
+  NumericCandle,
+  TechnicalData,
+  TimeInterval,
+} from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
-const EXPECTED_ANALYZE_VERSION = "analyze-v8-2026-08-25T16:00:00Z";
+const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
+const EXPECTED_ANALYZE_VERSION = "analyze-v9-2026-08-25T18:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -21,6 +32,7 @@ const toStringArray = (value: unknown): string[] => {
   const items: string[] = [];
   for (const item of value) {
     if (typeof item === "string") items.push(item);
+    else if (typeof item === "number" && Number.isFinite(item)) items.push(String(item));
   }
   return items;
 };
@@ -39,8 +51,13 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
 
   const source = value as Partial<AnalysisResult> & Record<string, unknown>;
 
+  const detail = source.market_context_detail && typeof source.market_context_detail === "object"
+    ? source.market_context_detail as AnalysisResult["market_context_detail"]
+    : null;
+
   return {
     signal: source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT" ? source.signal : "WAIT",
+    thesis: typeof source.thesis === "string" ? source.thesis : undefined,
     confidence: typeof source.confidence === "number" ? source.confidence : 0,
     technical_score: typeof source.technical_score === "number" ? source.technical_score : 0,
     fundamental_score: typeof source.fundamental_score === "number" ? source.fundamental_score : 0,
@@ -50,6 +67,7 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
     stop_loss: typeof source.stop_loss === "string" ? source.stop_loss : "—",
     take_profit_1: typeof source.take_profit_1 === "string" ? source.take_profit_1 : "—",
     take_profit_2: typeof source.take_profit_2 === "string" ? source.take_profit_2 : "—",
+    take_profit_3: typeof source.take_profit_3 === "string" ? source.take_profit_3 : undefined,
     risk_reward_ratio: typeof source.risk_reward_ratio === "string" ? source.risk_reward_ratio : "—",
     analysis: typeof source.analysis === "string" ? source.analysis : "",
     key_factors: toStringArray(source.key_factors),
@@ -57,7 +75,29 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
     support_levels: toStringArray(source.support_levels),
     resistance_levels: toStringArray(source.resistance_levels),
     market_context: typeof source.market_context === "string" ? source.market_context : "",
+    market_context_detail: detail,
+    stop_hunt_zone: typeof source.stop_hunt_zone === "string" ? source.stop_hunt_zone : undefined,
+    timeframe_alignment: toRecordArray(source.timeframe_alignment),
   };
+};
+
+const normalizeCandles = (value: unknown): NumericCandle[] => {
+  if (!Array.isArray(value)) return [];
+  const out: NumericCandle[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const c = item as Record<string, unknown>;
+    const open = Number(c.open);
+    const high = Number(c.high);
+    const low = Number(c.low);
+    const close = Number(c.close);
+    if (![open, high, low, close].every(Number.isFinite)) continue;
+    out.push({
+      datetime: typeof c.datetime === "string" ? c.datetime : "",
+      open, high, low, close,
+    });
+  }
+  return out;
 };
 
 const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
@@ -88,6 +128,7 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     slowK: readString("slowK"),
     slowD: readString("slowD"),
     adx: readString("adx"),
+    candles: normalizeCandles(source.candles),
   };
 };
 
@@ -120,11 +161,12 @@ const Index = () => {
   const [includeFundamental, setIncludeFundamental] = useState(true);
   const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("idle");
   const [liveRate, setLiveRate] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { toast } = useToast();
@@ -154,6 +196,52 @@ const Index = () => {
     saveSettings(settings);
   }, [settings]);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("analyses")
+        .select("id,pair,interval,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,outcome,outcome_price,created_at,closed_at")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (!error && Array.isArray(data)) {
+        setHistory(data as AnalysisRecord[]);
+      }
+    } catch {
+      // History is best-effort; the analysis flow must not depend on it
+    }
+  }, []);
+
+  // On login: settle any open signals against price data, then show history
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    const run = async () => {
+      await loadHistory();
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session || cancelled) return;
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/track-outcomes`, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + session.access_token,
+            "apikey": SUPABASE_ANON_KEY,
+          },
+        });
+        const data = await res.json().catch(() => null);
+        if (!cancelled && data && typeof data.updated === "number" && data.updated > 0) {
+          await loadHistory();
+        }
+      } catch {
+        // Outcome tracking is best-effort
+      }
+    };
+
+    void run();
+    return () => { cancelled = true; };
+  }, [userId, loadHistory]);
+
   const handleAnalyze = useCallback(async () => {
     setLoading(true);
     setLoadingStage("fetching");
@@ -171,12 +259,12 @@ const Index = () => {
 
       setLoadingStage("analyzing");
 
-      const response = await fetch("https://endcqzewujdvimdlazhj.supabase.co/functions/v1/analyze", {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": "Bearer " + session.access_token,
-          "apikey": "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I",
+          "apikey": SUPABASE_ANON_KEY,
         },
         body: JSON.stringify({
           currencyPair: settings.currencyPair,
@@ -195,32 +283,23 @@ const Index = () => {
         resData = { error: rawText };
       }
 
-      console.log("Analyze API Response:", {
-        status: response.status,
-        ok: response.ok,
-        body: resData,
-      });
-
       const payload = typeof resData?.data === "object" && resData.data !== null
         ? resData.data
         : resData;
       const deployedVersion = response.headers.get("X-Function-Version") || (typeof resData?.version === "string" ? resData.version : null);
       const analysisResult = normalizeAnalysisResult(payload?.analysis ?? resData?.analysis);
-      const remaining = payload?.remaining ?? resData?.remaining ?? null;
+      const remainingCount = payload?.remaining ?? resData?.remaining ?? null;
       const technicalData = normalizeTechnicalData(payload?.technicalData ?? resData?.technicalData);
       const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
       const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
       const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));
-      const isFilterRuntimeError = typeof errorMessage === "string" && errorMessage.includes("Cannot read properties of undefined (reading 'filter')");
 
       if (!response.ok || resData?.ok === false || payload?.ok === false) {
-        if (isFilterRuntimeError && deployedVersion !== EXPECTED_ANALYZE_VERSION) {
-          console.error("Stale analyze Edge Function deployment detected:", {
-            expectedVersion: EXPECTED_ANALYZE_VERSION,
-            deployedVersion: deployedVersion ?? "missing",
-            responseBody: resData,
+        if (deployedVersion && deployedVersion !== EXPECTED_ANALYZE_VERSION) {
+          console.warn("analyze Edge Function version mismatch:", {
+            expected: EXPECTED_ANALYZE_VERSION,
+            deployed: deployedVersion,
           });
-          throw new Error("古い analyze Edge Function が動作しています。最新の analyze を再デプロイしてください。");
         }
 
         if (!adminUser && isLimitError) {
@@ -244,21 +323,13 @@ const Index = () => {
 
       setLoadingStage("generating_judgment");
       setResult(analysisResult);
-      setRemaining(remaining);
+      setResultMeta({ pair: settings.currencyPair, interval });
+      setRemaining(remainingCount);
       setAnalysisMode(mode);
-      setLiveRate(analysisResult.entry_point ?? null);
+      setLiveRate(technicalData?.price ?? analysisResult.entry_point ?? null);
       setTechData(technicalData);
 
-      setHistory((prev) => [
-        {
-          timestamp: new Date().toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo" }),
-          signal: analysisResult.signal,
-          confidence: analysisResult.confidence,
-          pair: settings.currencyPair,
-          interval,
-        },
-        ...prev,
-      ].slice(0, 5));
+      void loadHistory();
     } catch (err: any) {
       const isNetworkError = err instanceof TypeError && ["Failed to fetch", "Load failed"].includes(err.message);
       const description = isNetworkError
@@ -271,7 +342,7 @@ const Index = () => {
       setLoading(false);
       setLoadingStage("idle");
     }
-  }, [settings, interval, includeFundamental, toast]);
+  }, [settings, interval, includeFundamental, toast, loadHistory]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -337,7 +408,9 @@ const Index = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="space-y-4">
-            {result ? (
+            {loading ? (
+              <AnalysisStages active={loading} />
+            ) : result ? (
               <>
                 {analysisMode && (
                   <div className="text-[11px] text-muted-foreground px-1">
@@ -349,7 +422,12 @@ const Index = () => {
                     </span>
                   </div>
                 )}
-                <AnalysisResultView result={result} />
+                <AnalysisResultView
+                  result={result}
+                  techData={techData}
+                  pair={resultMeta.pair}
+                  interval={resultMeta.interval}
+                />
               </>
             ) : (
               <div className="glass rounded-xl border border-border p-12 flex flex-col items-center justify-center text-center min-h-[400px]">
@@ -359,15 +437,15 @@ const Index = () => {
                 <p className="text-muted-foreground text-sm">
                   「分析開始」をクリックすると
                   <br />
-                  自動でデータ取得＋AI分析を行います
+                  マルチタイムフレームのデータ取得＋AI分析を行います
                 </p>
               </div>
             )}
           </div>
 
           <div className="space-y-4">
-            {techData && <TechnicalDataCard data={techData} />}
-            <AnalysisHistory history={history} />
+            {techData && !loading && <TechnicalDataCard data={techData} />}
+            <AnalysisHistory records={history} />
           </div>
         </div>
       </main>

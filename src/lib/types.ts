@@ -1,5 +1,24 @@
+export interface MarketContextDetail {
+  mode: string;
+  structure: string;
+  smart_money: string;
+  strength: string;
+  session: string;
+  direction: string;
+  continuity: string;
+}
+
+export interface TimeframeBias {
+  timeframe: string;
+  bias: "BULLISH" | "NEUTRAL" | "BEARISH";
+  note: string;
+}
+
 export interface AnalysisResult {
   signal: "BUY" | "SELL" | "WAIT";
+  // One-line trade thesis shown under the direction, e.g.
+  // "Liquidity sweep before upside expansion" (v9+; absent on old responses)
+  thesis?: string;
   confidence: number;
   technical_score: number;
   fundamental_score: number;
@@ -9,6 +28,7 @@ export interface AnalysisResult {
   stop_loss: string;
   take_profit_1: string;
   take_profit_2: string;
+  take_profit_3?: string;
   risk_reward_ratio: string;
   analysis: string;
   key_factors: string[];
@@ -16,6 +36,9 @@ export interface AnalysisResult {
   support_levels: string[];
   resistance_levels: string[];
   market_context: string;
+  market_context_detail?: MarketContextDetail | null;
+  stop_hunt_zone?: string;
+  timeframe_alignment?: TimeframeBias[];
 }
 
 export interface AppSettings {
@@ -48,6 +71,8 @@ export interface TechnicalData {
   slowK: string;
   slowD: string;
   adx: string;
+  // v9+: oldest-first numeric candles of the entry timeframe, for the chart
+  candles?: NumericCandle[];
 }
 
 export interface CandleData {
@@ -56,6 +81,33 @@ export interface CandleData {
   high: string;
   low: string;
   close: string;
+}
+
+export interface NumericCandle {
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export type TradeOutcome = "pending" | "win" | "loss" | "expired" | "skipped";
+
+// Row shape of public.analyses as read by the client
+export interface AnalysisRecord {
+  id: string;
+  pair: string;
+  interval: string;
+  signal: "BUY" | "SELL" | "WAIT";
+  confidence: number | null;
+  thesis: string | null;
+  entry_point: number | null;
+  stop_loss: number | null;
+  take_profit_1: number | null;
+  outcome: TradeOutcome;
+  outcome_price: number | null;
+  created_at: string;
+  closed_at: string | null;
 }
 
 export interface HistoryEntry {
