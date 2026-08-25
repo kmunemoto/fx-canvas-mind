@@ -13,7 +13,7 @@ import type { AnalysisResult, AppSettings, TechnicalData, TimeInterval, LoadingS
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
-const EXPECTED_ANALYZE_VERSION = "analyze-v7-2026-04-24T16:20:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v8-2026-08-25T16:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
