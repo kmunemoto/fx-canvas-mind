@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { isAdminEmail, resolvePlanName } from "@/lib/admin";
 import { loadCancellation, saveCancellation, type CancellationInfo } from "@/lib/cancellation";
 import type { AppSettings } from "@/lib/types";
 
@@ -44,11 +45,11 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
     toast.success("設定を保存しました");
   };
 
+  const isAdmin = isAdminEmail(user?.email);
   const planRaw = (profile?.plan || "free").toLowerCase();
+  // Reflects the real Stripe subscription: admins get Pro for free, so they have nothing to cancel
   const isPaid = PAID_PLANS.includes(planRaw);
-  const planName = profile?.plan
-    ? profile.plan.charAt(0).toUpperCase() + profile.plan.slice(1).toLowerCase()
-    : "Free";
+  const planName = resolvePlanName(user?.email, profile?.plan);
   const nextBilling = profile?.next_billing_date || "—";
   const isCancelPending = !!cancellation;
 
@@ -111,6 +112,11 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <span className="text-sm text-muted-foreground">現在のプラン</span>
             <span className="text-sm font-semibold text-primary">{planName}</span>
           </div>
+          {isAdmin && (
+            <p className="text-xs text-muted-foreground">
+              管理者アカウントのため、サブスクリプションなしで全機能を無制限にご利用いただけます。
+            </p>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
               {isCancelPending ? "解約予定日" : "次回更新日"}

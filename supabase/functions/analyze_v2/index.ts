@@ -38,7 +38,7 @@ const json = (req: Request, body: unknown, status = 200) =>
     },
   });
 
-const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
+const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 Deno.serve(async (req: Request) => {
   const start = Date.now();

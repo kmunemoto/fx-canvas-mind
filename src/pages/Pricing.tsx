@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, Star, ArrowLeft, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import { isAdminEmail, resolvePlanName } from "@/lib/admin";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 
@@ -49,13 +50,22 @@ const PLANS = [
 
 const Pricing = () => {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const currentPlan = profile?.plan || "Free";
+  const isAdmin = isAdminEmail(user?.email);
+  const currentPlan = resolvePlanName(user?.email, profile?.plan);
 
   const handleSubscribe = async (planId: string) => {
+    if (isAdmin) {
+      toast({
+        title: "管理者アカウントです",
+        description: "サブスクリプションなしで全機能をご利用いただけます",
+      });
+      return;
+    }
+
     setLoadingPlan(planId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -107,6 +117,11 @@ const Pricing = () => {
           {currentPlan !== "Free" && (
             <p className="text-sm text-primary mt-2">現在のプラン: {currentPlan}</p>
           )}
+          {isAdmin && (
+            <p className="text-sm text-muted-foreground mt-1">
+              管理者アカウントのため、お申し込みなしで全機能を無制限にご利用いただけます
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -143,7 +158,7 @@ const Pricing = () => {
 
               <button
                 onClick={() => handleSubscribe(plan.id)}
-                disabled={loadingPlan !== null}
+                disabled={loadingPlan !== null || isAdmin}
                 className={`w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-opacity disabled:opacity-50 ${
                   plan.recommended
                     ? "bg-primary text-primary-foreground hover:opacity-90"
@@ -152,6 +167,8 @@ const Pricing = () => {
               >
                 {loadingPlan === plan.id ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
+                ) : isAdmin ? (
+                  "ご利用中"
                 ) : (
                   "申し込む"
                 )}
