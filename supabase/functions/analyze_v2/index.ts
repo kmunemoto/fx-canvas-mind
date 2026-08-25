@@ -38,7 +38,7 @@ const json = (req: Request, body: unknown, status = 200) =>
     },
   });
 
-const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
+const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 Deno.serve(async (req: Request) => {
   const start = Date.now();
@@ -66,6 +66,16 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
+
+    // Profile reads and usage-counter writes go through the service role: with
+    // the caller's own token a user could reset their daily_analysis_count and
+    // analyze without limit. Falls back to the caller's client if unset.
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const db = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : supabase;
+
+    if (!serviceRoleKey) {
+      console.warn("SUPABASE_SERVICE_ROLE_KEY is not configured; usage counters are not enforceable");
+    }
 
     const {
       data: { user },
@@ -98,7 +108,7 @@ Deno.serve(async (req: Request) => {
       return json(req, { ok: false, error: "通貨ペアまたは時間足が不正です", diagnostics: { error_stage: "invalid_input" } }, 400);
     }
 
-    const { data: profile } = await supabase
+    const { data: profile } = await db
       .from("profiles")
       .select("*")
       .eq("id", user.id)
@@ -252,13 +262,18 @@ JSONのみ返してください。`;
 
     if (!isAdmin) {
       count += 1;
-      await supabase
+      const { error: usageError } = await db
         .from("profiles")
-        .update({
+        .upsert({
+          id: user.id,
+          ...(user.email ? { email: user.email } : {}),
           daily_analysis_count: count,
-          last_analysis_date: new Date().toISOString(),
-        })
-        .eq("id", user.id);
+          last_analysis_date: new Date().toISOString().split("T")[0],
+        });
+
+      if (usageError) {
+        console.error("Failed to persist usage count:", usageError.message);
+      }
     }
 
     return json(req, {

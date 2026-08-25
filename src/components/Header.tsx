@@ -3,7 +3,7 @@ import { Settings, LogOut, Crown, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
-import { isAdminEmail } from "@/lib/admin";
+import { isAdminEmail, resolvePlanName } from "@/lib/admin";
 import { loadCancellation } from "@/lib/cancellation";
 
 interface HeaderProps {
@@ -37,7 +37,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
   }, []);
 
   const isAdmin = isAdminEmail(user?.email);
-  const planName = isAdmin ? "Pro" : (profile?.plan || "Free");
+  const planName = resolvePlanName(user?.email, profile?.plan);
   const planLower = planName.toLowerCase();
   const isFree = !isAdmin && (!profile?.plan || planLower === "free");
   const isPro = isAdmin || planLower === "pro";

@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v7-2026-04-24T16:20:00Z";
+const FUNCTION_VERSION = "analyze-v8-2026-08-25T16:00:00Z";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,7 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com"];
+const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 type JsonRecord = Record<string, unknown>;
 
@@ -225,6 +225,7 @@ Deno.serve(async (req: Request) => {
     stage = "load_env";
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const twelveDataKey = Deno.env.get("TWELVE_DATA_API_KEY");
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
 
@@ -270,13 +271,25 @@ Deno.serve(async (req: Request) => {
     const requestData = parsedRequest.data;
     const { currencyPair, interval, includeFundamental } = requestData;
 
+    // The usage counters are read and written with the service role: with the
+    // caller's own token a user could PATCH their own daily_analysis_count back
+    // to zero and analyze without limit. Fall back to the caller's token only if
+    // the key is missing, which keeps the function working but unenforced.
+    const usesServiceRole = !!serviceRoleKey;
+    const dbApiKey = serviceRoleKey || supabaseAnonKey;
+    const dbAuthorization = serviceRoleKey ? `Bearer ${serviceRoleKey}` : authHeader;
+
+    if (!usesServiceRole) {
+      console.warn("SUPABASE_SERVICE_ROLE_KEY is not configured; usage counters are not enforceable");
+    }
+
     stage = "fetch_profile";
     const profileRes = await fetch(
       `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=*`,
       {
         headers: {
-          Authorization: authHeader,
-          apikey: supabaseAnonKey,
+          Authorization: dbAuthorization,
+          apikey: dbApiKey,
           Accept: "application/vnd.pgrst.object+json",
           "accept-profile": "public",
         },
@@ -454,23 +467,30 @@ JSONのみ返してください。`;
       count += 1;
       stage = "update_profile";
       const updateRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}`,
+        `${supabaseUrl}/rest/v1/profiles`,
         {
-          method: "PATCH",
+          method: "POST",
           headers: {
-            Authorization: authHeader,
-            apikey: supabaseAnonKey,
+            Authorization: dbAuthorization,
+            apikey: dbApiKey,
             "Content-Type": "application/json",
-            Prefer: "return=minimal",
+            Prefer: "return=minimal,resolution=merge-duplicates",
             "content-profile": "public",
           },
           body: JSON.stringify({
+            id: user.id,
+            ...(user.email ? { email: user.email } : {}),
             daily_analysis_count: count,
-            last_analysis_date: new Date().toISOString(),
+            last_analysis_date: new Date().toISOString().split("T")[0],
           }),
         },
       );
-      await updateRes.text();
+
+      if (!updateRes.ok) {
+        console.error("Failed to persist usage count:", updateRes.status, (await updateRes.text()).slice(0, 300));
+      } else {
+        await updateRes.text();
+      }
     }
 
     stage = "response";
