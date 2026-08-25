@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
+import { translateSignUpError } from "@/lib/password";
 import type { User, Session } from "@supabase/supabase-js";
 
 interface Profile {
@@ -88,12 +89,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signUp = async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) {
-      const msg = error.message.includes("already registered")
-        ? "このメールアドレスは既に登録されています"
-        : error.message.includes("least 6")
-        ? "パスワードは6文字以上で入力してください"
-        : `登録エラー: ${error.message}`;
-      return { error: msg };
+      return { error: translateSignUpError(error.message) };
     }
     return { error: null };
   };
