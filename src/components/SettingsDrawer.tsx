@@ -47,8 +47,9 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
 
   const isAdmin = isAdminEmail(user?.email);
   const planRaw = (profile?.plan || "free").toLowerCase();
-  // Reflects the real Stripe subscription: admins get Pro for free, so they have nothing to cancel
-  const isPaid = PAID_PLANS.includes(planRaw);
+  // The cancel flow needs a real Stripe customer, so a plan granted without a
+  // subscription (an admin account) has nothing to cancel
+  const isPaid = PAID_PLANS.includes(planRaw) && !!profile?.stripe_customer_id;
   const planName = resolvePlanName(user?.email, profile?.plan);
   const nextBilling = profile?.next_billing_date || "—";
   const isCancelPending = !!cancellation;
