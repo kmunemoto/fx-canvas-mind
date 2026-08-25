@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { MIN_PASSWORD_LENGTH } from "@/lib/password";
+import { MIN_PASSWORD_LENGTH, validatePassword } from "@/lib/password";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
 
 const Login = () => {
@@ -25,8 +25,9 @@ const Login = () => {
     }
 
     if (isSignUp) {
-      if (password.length < MIN_PASSWORD_LENGTH) {
-        setError(`パスワードは${MIN_PASSWORD_LENGTH}文字以上で入力してください`);
+      const passwordError = validatePassword(password);
+      if (passwordError) {
+        setError(passwordError);
         return;
       }
       if (password !== confirmPassword) {
@@ -114,7 +115,7 @@ const Login = () => {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={`${MIN_PASSWORD_LENGTH}文字以上`}
+              placeholder={`${MIN_PASSWORD_LENGTH}文字以上・英字と数字を含む`}
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>

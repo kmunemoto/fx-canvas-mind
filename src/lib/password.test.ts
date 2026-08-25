@@ -1,9 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { MIN_PASSWORD_LENGTH, translateSignUpError } from "./password";
+import { MIN_PASSWORD_LENGTH, translateSignUpError, validatePassword } from "./password";
 
 describe("MIN_PASSWORD_LENGTH", () => {
   it("matches the configured Supabase minimum", () => {
     expect(MIN_PASSWORD_LENGTH).toBe(9);
+  });
+});
+
+describe("validatePassword", () => {
+  it("accepts a password meeting both rules", () => {
+    expect(validatePassword("munekan29x")).toBeNull();
+  });
+
+  it("rejects a password that is too short", () => {
+    expect(validatePassword("abc12")).toContain(`${MIN_PASSWORD_LENGTH}文字以上`);
+  });
+
+  it("rejects a long password with no digit", () => {
+    expect(validatePassword("abcdefghij")).toBe("パスワードには英字と数字を両方含めてください");
+  });
+
+  it("rejects a long password with no letter", () => {
+    expect(validatePassword("1234567890")).toBe("パスワードには英字と数字を両方含めてください");
   });
 });
 

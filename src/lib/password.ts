@@ -5,6 +5,20 @@
 // length.
 export const MIN_PASSWORD_LENGTH = 9;
 
+// Mirrors "Password requirements: Letters and digits" in the same Auth setting.
+// Validating here only saves a round trip — the server rejects it either way.
+export const validatePassword = (password: string): string | null => {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `パスワードは${MIN_PASSWORD_LENGTH}文字以上で入力してください`;
+  }
+
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+    return "パスワードには英字と数字を両方含めてください";
+  }
+
+  return null;
+};
+
 // Supabase returns sign-up errors in English, and the password rules live in
 // the server-side Auth settings, so read the required length out of the
 // message rather than hardcoding it here.
