@@ -7,7 +7,8 @@
 -- 実際にはトリガー専用関数（戻り値 trigger）のため RPC から呼んでも Postgres が
 -- 拒否するが、公開自体を止めておく。トリガーの EXECUTE 権限はトリガー作成時に
 -- 検査されるもので発火のたびには検査されないため、新規登録時のプロフィール
--- 作成は従来どおり動作する。
+-- 作成は従来どおり動作する（本DBで検証済み: 剥奪後に auth.users へ INSERT して
+-- profiles 行が作られることを確認、いずれもロールバック済み）。
 --
 -- 万一新規登録が壊れた場合の切り戻しは以下の1行:
 --   grant execute on function public.handle_new_user() to public;
