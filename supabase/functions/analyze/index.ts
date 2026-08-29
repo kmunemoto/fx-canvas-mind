@@ -1,4 +1,11 @@
-const FUNCTION_VERSION = "analyze-v8-2026-08-25T16:00:00Z";
+const FUNCTION_VERSION = "analyze-v9-2026-08-25T18:00:00Z";
+
+import {
+  computeSnapshot,
+  parseCandles,
+  type Candle,
+  type IndicatorSnapshot,
+} from "./indicators.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,6 +14,24 @@ const corsHeaders = {
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+
+// Server-side allowlist mirroring the pairs the UI offers. Without it any
+// authenticated caller could aim the analyzer (and the paid market-data +
+// Anthropic calls behind it) at arbitrary Twelve Data symbols, and put an
+// arbitrary string into the model prompt.
+const ALLOWED_PAIRS = new Set([
+  "USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY",
+  "GBP/JPY", "AUD/USD", "AUD/JPY",
+]);
+
+// Higher timeframes analyzed alongside the one the user picked. The entry
+// timeframe comes first and is the one prices are planned on.
+const TF_CHAIN: Record<string, string[]> = {
+  "15min": ["15min", "1h", "4h"],
+  "1h": ["1h", "4h", "1day"],
+  "4h": ["4h", "1day", "1week"],
+  "1day": ["1day", "1week", "1month"],
+};
 
 type JsonRecord = Record<string, unknown>;
 
@@ -17,8 +42,6 @@ type AuthUser = {
 
 type ProfileRecord = {
   plan?: string;
-  last_analysis_date?: string;
-  daily_analysis_count?: number;
 };
 
 type ParsedRequestBody = {
@@ -48,6 +71,14 @@ const json = (body: unknown, status = 200) =>
     },
   });
 
+// Deno's fetch puts the full request URL into network-failure messages, and
+// the market-data key travels in that URL as a query parameter — so every
+// error string that reaches the client goes through here first.
+const redactSecrets = (message: string): string =>
+  message
+    .replace(/apikey=[^&\s)"']+/gi, "apikey=***")
+    .replace(/x-api-key["\s:]+[^\s,"']+/gi, "x-api-key ***");
+
 const parseJsonResponse = (rawText: string): unknown => {
   if (!rawText) return null;
 
@@ -64,13 +95,19 @@ const asTrimmedString = (value: unknown, fallback = "") => {
   return trimmed || fallback;
 };
 
-const asNumber = (value: unknown, fallback = 0) => {
+const asFiniteNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
-  return fallback;
+  return null;
+};
+
+const clampInt = (value: unknown, min: number, max: number, fallback: number) => {
+  const n = asFiniteNumber(value);
+  if (n === null) return fallback;
+  return Math.round(Math.min(max, Math.max(min, n)));
 };
 
 const toStringArray = (value: unknown): string[] => {
@@ -82,44 +119,130 @@ const toStringArray = (value: unknown): string[] => {
     if (typeof item === "string") {
       const trimmed = item.trim();
       if (trimmed) normalized.push(trimmed);
+    } else if (typeof item === "number" && Number.isFinite(item)) {
+      normalized.push(String(item));
     }
   }
 
   return normalized;
 };
 
-const normalizeAnalysis = (value: unknown) => {
-  const source = isRecord(value) ? value : {};
-  const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
-    ? source.signal
-    : "WAIT";
-  const riskLevel = source.risk_level === "LOW" || source.risk_level === "MEDIUM" || source.risk_level === "HIGH"
-    ? source.risk_level
-    : "MEDIUM";
-  const sentiment = source.sentiment === "BULLISH" || source.sentiment === "NEUTRAL" || source.sentiment === "BEARISH"
-    ? source.sentiment
-    : "NEUTRAL";
+// JPY-quoted pairs trade in 3 decimals, everything else in 5
+const pairDecimals = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5);
 
-  return {
-    signal,
-    confidence: asNumber(source.confidence, 0),
-    technical_score: asNumber(source.technical_score, 0),
-    fundamental_score: asNumber(source.fundamental_score, 0),
-    risk_level: riskLevel,
-    sentiment,
-    entry_point: asTrimmedString(source.entry_point, "—"),
-    stop_loss: asTrimmedString(source.stop_loss, "—"),
-    take_profit_1: asTrimmedString(source.take_profit_1, "—"),
-    take_profit_2: asTrimmedString(source.take_profit_2, "—"),
-    risk_reward_ratio: asTrimmedString(source.risk_reward_ratio, "—"),
-    market_context: asTrimmedString(source.market_context, ""),
-    analysis: asTrimmedString(source.analysis, ""),
-    key_factors: toStringArray(source.key_factors),
-    warnings: toStringArray(source.warnings),
-    support_levels: toStringArray(source.support_levels),
-    resistance_levels: toStringArray(source.resistance_levels),
-  };
+const fmt = (value: number | null | undefined, decimals: number, fallback = "—") =>
+  value === null || value === undefined || !Number.isFinite(value)
+    ? fallback
+    : value.toFixed(decimals);
+
+// ---------------------------------------------------------------------------
+// Prompt assembly
+// ---------------------------------------------------------------------------
+
+const candleLines = (candles: Candle[], count: number) =>
+  candles
+    .slice(-count)
+    .map((c) => `${c.datetime},${c.open},${c.high},${c.low},${c.close}`)
+    .join("\n");
+
+const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
+  const p = (v: number | null) => fmt(v, decimals, "n/a");
+  const x = (v: number | null, d = 2) => fmt(v, d, "n/a");
+  return [
+    `現在値: ${p(s.price)} (${s.datetime}) 前足比 ${x(s.changePct)}%`,
+    `RSI14: ${x(s.rsi)} | Stoch %K/%D: ${x(s.slowK)}/${x(s.slowD)} | ADX14: ${x(s.adx)}`,
+    `MACD: ${x(s.macd, 5)} Signal: ${x(s.macdSignal, 5)} Hist: ${x(s.macdHist, 5)}`,
+    `SMA20/50/200: ${p(s.sma20)} / ${p(s.sma50)} / ${p(s.sma200)}`,
+    `BB(20,2): 上 ${p(s.bbUpper)} 中 ${p(s.bbMiddle)} 下 ${p(s.bbLower)}`,
+    `一目: 転換 ${p(s.tenkan)} 基準 ${p(s.kijun)} 先行A ${p(s.spanA)} 先行B ${p(s.spanB)}`,
+    `ATR14: ${p(s.atr)} (${x(s.atrPct)}% of price)`,
+    `直近スイング高値: ${s.swingHighs.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
+    `直近スイング安値: ${s.swingLows.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
+  ].join("\n");
 };
+
+const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナリストです。マルチタイムフレームの価格データと計算済みテクニカル指標に基づき、規律あるトレードプランを構築します。
+
+必ず次の手順で分析してください:
+1. STRUCTURE — 各時間足の市場構造を判定する（高値切り上げ/切り下げ、レンジ、ブレイク後の戻し）。
+2. LEVELS — スイング高安・移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。直近スイングのすぐ外側にストップが溜まる「ストップハントゾーン」があれば特定する。
+3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
+4. PRICES — エントリー・損切り・利確1/2/3を決める。損切りは直近スイング±ATRに根拠を置き、利確1はリスクリワード1.5倍以上を基本とする。エントリーは現在値から乖離しすぎないこと。
+5. PLAN — 全てを統合して最終判断を下す。
+
+ルール:
+- 確信度が60未満の場合、signal は必ず "WAIT"。
+- 時間足の方向が矛盾する場合は確信度を下げる。
+- すべての価格は分析対象ペアの実際の価格スケールで出力する。
+- analysis・thesis・key_factors・warnings などの文章は日本語で書く（market_context_detail の値は英語の定型語でよい）。
+- warnings には必ず「この分析は参考情報です。投資判断は自己責任で行ってください」を含める。
+- ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
+- RSI・Stoch の過熱と価格構造が矛盾する場合（ダイバージェンス）は必ず言及する。`;
+
+const RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    signal: { type: "string", enum: ["BUY", "SELL", "WAIT"] },
+    thesis: { type: "string", description: "一行のトレードテーゼ（日本語、30字以内）" },
+    confidence: { type: "integer", description: "0-100" },
+    technical_score: { type: "integer", description: "0-100" },
+    fundamental_score: { type: "integer", description: "0-100。ファンダ情報なしの場合は50" },
+    risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
+    sentiment: { type: "string", enum: ["BULLISH", "NEUTRAL", "BEARISH"] },
+    entry_point: { type: "number" },
+    stop_loss: { type: "number" },
+    take_profit_1: { type: "number" },
+    take_profit_2: { type: "number" },
+    take_profit_3: { type: "number" },
+    risk_reward_ratio: { type: "string", description: "例 1:2.1（TP1基準）" },
+    market_context: { type: "string", description: "市場環境の説明（日本語）" },
+    market_context_detail: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["Trend Day", "Range Day", "Breakout", "Reversal", "Choppy"] },
+        structure: { type: "string", description: "例 Higher Highs & Higher Lows" },
+        smart_money: { type: "string", enum: ["Accumulation", "Distribution", "Neutral"] },
+        strength: { type: "string", enum: ["Weak", "Moderate", "Strong"] },
+        session: { type: "string", enum: ["Tokyo", "London", "New York", "Overlap", "Off Hours"] },
+        direction: { type: "string", enum: ["Up", "Down", "Sideways"] },
+        continuity: { type: "string", enum: ["Sustained", "Fading", "Choppy"] },
+      },
+      required: ["mode", "structure", "smart_money", "strength", "session", "direction", "continuity"],
+      additionalProperties: false,
+    },
+    stop_hunt_zone: { type: "string", description: "価格帯 または Not detected" },
+    timeframe_alignment: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          timeframe: { type: "string" },
+          bias: { type: "string", enum: ["BULLISH", "NEUTRAL", "BEARISH"] },
+          note: { type: "string", description: "10字程度の根拠（日本語）" },
+        },
+        required: ["timeframe", "bias", "note"],
+        additionalProperties: false,
+      },
+    },
+    key_factors: { type: "array", items: { type: "string" } },
+    support_levels: { type: "array", items: { type: "number" } },
+    resistance_levels: { type: "array", items: { type: "number" } },
+    analysis: { type: "string", description: "詳細分析（日本語、手順1-5に沿って）" },
+    warnings: { type: "array", items: { type: "string" } },
+  },
+  required: [
+    "signal", "thesis", "confidence", "technical_score", "fundamental_score",
+    "risk_level", "sentiment", "entry_point", "stop_loss", "take_profit_1",
+    "take_profit_2", "take_profit_3", "risk_reward_ratio", "market_context",
+    "market_context_detail", "stop_hunt_zone", "timeframe_alignment",
+    "key_factors", "support_levels", "resistance_levels", "analysis", "warnings",
+  ],
+  additionalProperties: false,
+};
+
+// ---------------------------------------------------------------------------
+// Anthropic response handling
+// ---------------------------------------------------------------------------
 
 const extractAnthropicText = (value: unknown) => {
   if (!isRecord(value)) return "";
@@ -142,6 +265,148 @@ const extractAnthropicText = (value: unknown) => {
   }
 
   return textParts.join("").trim();
+};
+
+const parseAnalysisJson = (finalText: string): unknown => {
+  const tagMatch = finalText.match(/<json>([\s\S]*?)<\/json>/);
+  const source = tagMatch ? tagMatch[1] : finalText;
+  const cleaned = source.replace(/```json\n?|```\n?/g, "").trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    if (first !== -1 && last > first) {
+      try {
+        return JSON.parse(cleaned.slice(first, last + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+};
+
+interface NormalizedAnalysis {
+  signal: "BUY" | "SELL" | "WAIT";
+  thesis: string;
+  confidence: number;
+  technical_score: number;
+  fundamental_score: number;
+  risk_level: string;
+  sentiment: string;
+  entry_point: string;
+  stop_loss: string;
+  take_profit_1: string;
+  take_profit_2: string;
+  take_profit_3: string;
+  risk_reward_ratio: string;
+  market_context: string;
+  market_context_detail: JsonRecord | null;
+  stop_hunt_zone: string;
+  timeframe_alignment: { timeframe: string; bias: string; note: string }[];
+  analysis: string;
+  key_factors: string[];
+  warnings: string[];
+  support_levels: string[];
+  resistance_levels: string[];
+  // raw numbers kept for the analyses table / outcome tracking
+  entry_point_num: number | null;
+  stop_loss_num: number | null;
+  take_profit_1_num: number | null;
+  take_profit_2_num: number | null;
+  take_profit_3_num: number | null;
+}
+
+const DISCLAIMER = "この分析は参考情報です。投資判断は自己責任で行ってください";
+
+// The system prompt asks for it, but the disclaimer is a compliance
+// requirement — do not leave it to the model (or to search results that may
+// try to talk it out of one).
+const withDisclaimer = (warnings: string[]): string[] =>
+  warnings.some((w) => w.includes("自己責任")) ? warnings : [...warnings, DISCLAIMER];
+
+const normalizeAnalysis = (value: unknown, decimals: number): NormalizedAnalysis => {
+  const source = isRecord(value) ? value : {};
+  const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
+    ? source.signal
+    : "WAIT";
+  const riskLevel = source.risk_level === "LOW" || source.risk_level === "MEDIUM" || source.risk_level === "HIGH"
+    ? source.risk_level
+    : "MEDIUM";
+  const sentiment = source.sentiment === "BULLISH" || source.sentiment === "NEUTRAL" || source.sentiment === "BEARISH"
+    ? source.sentiment
+    : "NEUTRAL";
+
+  const priceField = (v: unknown) => {
+    const n = asFiniteNumber(v);
+    return { num: n, text: n === null ? asTrimmedString(v, "—") : n.toFixed(decimals) };
+  };
+
+  const entry = priceField(source.entry_point);
+  const sl = priceField(source.stop_loss);
+  const tp1 = priceField(source.take_profit_1);
+  const tp2 = priceField(source.take_profit_2);
+  const tp3 = priceField(source.take_profit_3);
+
+  const levelList = (v: unknown) => {
+    if (!Array.isArray(v)) return [];
+    const out: string[] = [];
+    for (const item of v) {
+      const n = asFiniteNumber(item);
+      if (n !== null) out.push(n.toFixed(decimals));
+      else if (typeof item === "string" && item.trim()) out.push(item.trim());
+    }
+    return out;
+  };
+
+  const detail = isRecord(source.market_context_detail) ? source.market_context_detail : null;
+
+  const alignment: { timeframe: string; bias: string; note: string }[] = [];
+  if (Array.isArray(source.timeframe_alignment)) {
+    for (const item of source.timeframe_alignment) {
+      if (!isRecord(item)) continue;
+      const bias = item.bias === "BULLISH" || item.bias === "BEARISH" || item.bias === "NEUTRAL"
+        ? item.bias
+        : "NEUTRAL";
+      alignment.push({
+        timeframe: asTrimmedString(item.timeframe, "?"),
+        bias,
+        note: asTrimmedString(item.note, ""),
+      });
+    }
+  }
+
+  return {
+    signal,
+    thesis: asTrimmedString(source.thesis, ""),
+    confidence: clampInt(source.confidence, 0, 100, 0),
+    technical_score: clampInt(source.technical_score, 0, 100, 0),
+    fundamental_score: clampInt(source.fundamental_score, 0, 100, 50),
+    risk_level: riskLevel,
+    sentiment,
+    entry_point: entry.text,
+    stop_loss: sl.text,
+    take_profit_1: tp1.text,
+    take_profit_2: tp2.text,
+    take_profit_3: tp3.text,
+    risk_reward_ratio: asTrimmedString(source.risk_reward_ratio, "—"),
+    market_context: asTrimmedString(source.market_context, ""),
+    market_context_detail: detail,
+    stop_hunt_zone: asTrimmedString(source.stop_hunt_zone, "Not detected"),
+    timeframe_alignment: alignment,
+    analysis: asTrimmedString(source.analysis, ""),
+    key_factors: toStringArray(source.key_factors),
+    warnings: withDisclaimer(toStringArray(source.warnings)),
+    support_levels: levelList(source.support_levels),
+    resistance_levels: levelList(source.resistance_levels),
+    entry_point_num: entry.num,
+    stop_loss_num: sl.num,
+    take_profit_1_num: tp1.num,
+    take_profit_2_num: tp2.num,
+    take_profit_3_num: tp3.num,
+  };
 };
 
 const parseRequestBody = async (req: Request): Promise<
@@ -167,6 +432,14 @@ const parseRequestBody = async (req: Request): Promise<
     return { error: "通貨ペアまたは時間足が不正です" };
   }
 
+  if (!TF_CHAIN[interval]) {
+    return { error: `未対応の時間足です: ${interval}` };
+  }
+
+  if (!ALLOWED_PAIRS.has(currencyPair.toUpperCase())) {
+    return { error: `未対応の通貨ペアです: ${currencyPair}` };
+  }
+
   return {
     data: {
       currencyPair,
@@ -178,20 +451,11 @@ const parseRequestBody = async (req: Request): Promise<
 
 const readProfile = (value: unknown): ProfileRecord | null => {
   if (isRecord(value)) {
-    return {
-      plan: typeof value.plan === "string" ? value.plan : undefined,
-      last_analysis_date: typeof value.last_analysis_date === "string" ? value.last_analysis_date : undefined,
-      daily_analysis_count: asNumber(value.daily_analysis_count, 0),
-    };
+    return { plan: typeof value.plan === "string" ? value.plan : undefined };
   }
 
   if (Array.isArray(value) && value.length > 0 && isRecord(value[0])) {
-    const first = value[0];
-    return {
-      plan: typeof first.plan === "string" ? first.plan : undefined,
-      last_analysis_date: typeof first.last_analysis_date === "string" ? first.last_analysis_date : undefined,
-      daily_analysis_count: asNumber(first.daily_analysis_count, 0),
-    };
+    return readProfile(value[0]);
   }
 
   return null;
@@ -261,31 +525,26 @@ Deno.serve(async (req: Request) => {
 
     stage = "parse_request";
     const parsedRequest = await parseRequestBody(req);
-    if (parsedRequest.error) {
-      return json({ ok: false, error: parsedRequest.error, diagnostics: { error_stage: "invalid_input", stage } }, 400);
-    }
-    if (!parsedRequest.data) {
-      return json({ ok: false, error: "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
+    if (parsedRequest.error || !parsedRequest.data) {
+      return json({ ok: false, error: parsedRequest.error ?? "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const requestData = parsedRequest.data;
-    const { currencyPair, interval, includeFundamental } = requestData;
+    const { currencyPair, interval, includeFundamental } = parsedRequest.data;
+    const decimals = pairDecimals(currencyPair);
 
     // The usage counters are read and written with the service role: with the
-    // caller's own token a user could PATCH their own daily_analysis_count back
-    // to zero and analyze without limit. Fall back to the caller's token only if
-    // the key is missing, which keeps the function working but unenforced.
-    const usesServiceRole = !!serviceRoleKey;
+    // caller's own token a user could reset their own count and analyze without
+    // limit. Fall back to the caller's token only if the key is missing.
     const dbApiKey = serviceRoleKey || supabaseAnonKey;
     const dbAuthorization = serviceRoleKey ? `Bearer ${serviceRoleKey}` : authHeader;
 
-    if (!usesServiceRole) {
+    if (!serviceRoleKey) {
       console.warn("SUPABASE_SERVICE_ROLE_KEY is not configured; usage counters are not enforceable");
     }
 
     stage = "fetch_profile";
     const profileRes = await fetch(
-      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=*`,
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=plan`,
       {
         headers: {
           Authorization: dbAuthorization,
@@ -307,210 +566,301 @@ Deno.serve(async (req: Request) => {
       pro: 9999,
     };
     const dailyLimit = limits[plan] || 3;
-    const today = new Date().toISOString().split("T")[0];
-    const lastDateRaw = typeof profile?.last_analysis_date === "string"
-      ? profile.last_analysis_date.split("T")[0]
-      : "";
-    let count = lastDateRaw === today ? asNumber(profile?.daily_analysis_count, 0) : 0;
 
-    if (!isAdmin && count >= dailyLimit) {
-      return json({
-        ok: false,
-        error: "本日の分析上限に達しました。プランをアップグレードしてください。",
-        diagnostics: { error_stage: "daily_limit_reached", stage, dailyLimit, count },
-      }, 400);
+    // Check-and-increment in one statement, before any paid work. Reading the
+    // count, testing it, then writing it back lets concurrent requests all
+    // pass the same check and bill K analyses against one credit.
+    let count = 0;
+    if (!isAdmin) {
+      stage = "consume_quota";
+      const quotaRes = await fetch(`${supabaseUrl}/rest/v1/rpc/consume_analysis_quota`, {
+        method: "POST",
+        headers: {
+          Authorization: dbAuthorization,
+          apikey: dbApiKey,
+          "Content-Type": "application/json",
+          "content-profile": "public",
+        },
+        body: JSON.stringify({ p_user_id: user.id, p_limit: dailyLimit }),
+      });
+      const quotaRaw = await quotaRes.text();
+
+      if (!quotaRes.ok) {
+        console.error("Quota RPC failed:", quotaRes.status, quotaRaw.slice(0, 300));
+        return json({
+          ok: false,
+          error: "利用状況の確認に失敗しました。時間をおいて再試行してください。",
+          diagnostics: { error_stage: "quota_rpc_failed", stage, status: quotaRes.status },
+        }, 500);
+      }
+
+      const consumed = asFiniteNumber(parseJsonResponse(quotaRaw));
+      if (consumed === null) {
+        return json({
+          ok: false,
+          error: "本日の分析上限に達しました。プランをアップグレードしてください。",
+          diagnostics: { error_stage: "daily_limit_reached", stage, dailyLimit },
+        }, 400);
+      }
+      count = consumed;
     }
 
     stage = "fetch_market_data";
-    const pair = currencyPair;
-    const tdUrl = `https://api.twelvedata.com/time_series?symbol=${pair}&interval=${interval}&outputsize=50&apikey=${twelveDataKey}`;
-    const tdRes = await fetch(tdUrl);
-    const tdRaw = await tdRes.text();
-    const tdJson = parseJsonResponse(tdRaw);
+    const timeframes = TF_CHAIN[interval];
+    const fetchSeries = async (tf: string, outputsize: number) => {
+      const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(currencyPair)}&interval=${encodeURIComponent(tf)}&outputsize=${outputsize}&apikey=${twelveDataKey}`;
+      const res = await fetch(url);
+      const raw = await res.text();
+      const parsed = parseJsonResponse(raw);
+      if (!res.ok || !isRecord(parsed) || parsed.status === "error") {
+        const message = isRecord(parsed) ? asTrimmedString(parsed.message, "") : "";
+        throw new Error(message || `市場データ取得エラー (${tf}, HTTP ${res.status})`);
+      }
+      return parseCandles(parsed.values);
+    };
 
-    if (!tdRes.ok || !isRecord(tdJson)) {
+    let seriesByTf: Candle[][];
+    try {
+      seriesByTf = await Promise.all(
+        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
+      );
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : "";
+      const message = redactSecrets(raw || "市場データが取得できませんでした");
+      const isRateLimit = /credits|run out|limit/i.test(message);
+      // A thrown fetch (DNS/TLS/connection) carries the request URL; report it
+      // generically rather than forwarding the transport's own text.
+      const isTransport = /error sending request|error trying to connect|dns|tcp/i.test(raw);
+      console.error("Market data fetch failed:", message);
       return json({
         ok: false,
-        error: "市場データが取得できませんでした",
-        diagnostics: { error_stage: "market_data_failed", stage, status: tdRes.status, preview: tdRaw.slice(0, 300) },
-      }, 400);
-    }
-
-    if (tdJson.status === "error") {
-      return json({
-        ok: false,
-        error: `市場データ取得エラー: ${asTrimmedString(tdJson.message, "unknown error")}`,
+        error: isRateLimit
+          ? "市場データAPIの制限に達しました。1分ほど待って再試行してください。"
+          : isTransport
+            ? "市場データの取得に失敗しました。時間をおいて再試行してください。"
+            : `市場データ取得エラー: ${message}`,
         diagnostics: { error_stage: "market_data_failed", stage },
       }, 400);
     }
 
-    const rawValues = Array.isArray(tdJson.values) ? tdJson.values : [];
-    const candles: JsonRecord[] = [];
-
-    for (const item of rawValues) {
-      if (isRecord(item)) {
-        candles.push(item);
-      }
-      if (candles.length >= 30) break;
+    const entryCandles = seriesByTf[0];
+    if (entryCandles.length < 60) {
+      return json({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
 
-    if (candles.length === 0) {
-      return json({ ok: false, error: "市場データが取得できませんでした", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
+    stage = "compute_indicators";
+    const snapshots = seriesByTf.map((candles) => computeSnapshot(candles));
+    const entrySnapshot = snapshots[0];
+    if (!entrySnapshot) {
+      return json({ ok: false, error: "指標計算に失敗しました", diagnostics: { error_stage: "indicator_failed", stage } }, 500);
     }
 
     stage = "build_prompt";
-    const analysisScope = includeFundamental
-      ? "テクニカル分析に加えて、経済ニュース・経済指標・市場センチメントも考慮して総合判断してください。"
-      : "テクニカル分析のみに限定して判断してください。経済ニュースやファンダメンタル要因は考慮しないでください。";
+    const tfSections = timeframes.map((tf, i) => {
+      const snapshot = snapshots[i];
+      const candles = seriesByTf[i];
+      const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
+      const lines = candleLines(candles, i === 0 ? 40 : 20);
+      return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime,open,high,low,close / 古い順):\n${lines}`;
+    }).join("\n\n");
 
-    const userMessage = `
-通貨ペア: ${currencyPair}
-時間足: ${interval}
-分析モード: ${includeFundamental ? "full" : "technical_only"}
-指示: ${analysisScope}
-直近のローソク足データ (最新から):
-${JSON.stringify(candles, null, 2)}
+    const nowUtc = new Date().toISOString();
+    const fundamentalNote = includeFundamental
+      ? "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は3回まで。"
+      : "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
 
-上記データを分析して、以下のJSON形式で回答してください:
-{
-  "signal": "BUY" | "SELL" | "WAIT",
-  "confidence": 0-100の数値,
-  "technical_score": 0-100の数値,
-  "fundamental_score": 0-100の数値,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH",
-  "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH",
-  "entry_point": "価格",
-  "stop_loss": "価格",
-  "take_profit_1": "価格",
-  "take_profit_2": "価格",
-  "risk_reward_ratio": "比率",
-  "market_context": "市場環境の説明",
-  "key_factors": ["要因1", "要因2", ...],
-  "support_levels": ["価格1", "価格2", ...],
-  "resistance_levels": ["価格1", "価格2", ...],
-  "analysis": "詳細分析テキスト",
-  "warnings": ["注意事項1", ...]
-}
-JSONのみ返してください。`;
+    const userMessage = `通貨ペア: ${currencyPair}
+現在時刻(UTC): ${nowUtc}
+${fundamentalNote}
+
+${tfSections}
+
+上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${includeFundamental ? "\n最終回答は<json>タグ内に、指定スキーマに従ったJSONのみを出力してください。" : ""}`;
 
     stage = "request_ai";
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
+    const anthropicHeaders = {
+      "content-type": "application/json",
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+    };
 
-    const claudeRaw = await claudeRes.text();
-    const claudeJson = parseJsonResponse(claudeRaw);
+    const baseRequest: JsonRecord = {
+      model: "claude-opus-5",
+      max_tokens: 16000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    };
 
-    if (!claudeRes.ok) {
-      const errorMessage = isRecord(claudeJson) && isRecord(claudeJson.error)
-        ? asTrimmedString(claudeJson.error.message, "AI分析エラー")
-        : isRecord(claudeJson)
-        ? asTrimmedString(claudeJson.error, "AI分析エラー")
-        : "AI分析エラー";
-
-      return json({
-        ok: false,
-        error: errorMessage,
-        diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, preview: claudeRaw.slice(0, 300) },
-      }, 400);
+    if (includeFundamental) {
+      // Web search responses carry citations, which are incompatible with
+      // output_config.format — so full mode parses JSON out of the text.
+      // Search results enter the model's context, and this model's output is a
+      // trade signal — so restrict the tool to sources whose pages we are
+      // willing to let influence it.
+      baseRequest.tools = [{
+        type: "web_search_20260209",
+        name: "web_search",
+        max_uses: 3,
+        allowed_domains: [
+          "reuters.com", "bloomberg.com", "cnbc.com", "marketwatch.com",
+          "investing.com", "fxstreet.com", "dailyfx.com", "forexfactory.com",
+          "tradingeconomics.com", "nikkei.com", "boj.or.jp",
+          "federalreserve.gov", "ecb.europa.eu", "mof.go.jp",
+        ],
+      }];
+    } else {
+      baseRequest.output_config = { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
     }
 
-    stage = "extract_ai_text";
-    const finalText = extractAnthropicText(claudeJson);
-    if (!finalText) {
+    // Server tools may pause long turns (stop_reason "pause_turn"); continue
+    // the same turn by echoing the assistant content back. Bounded loop.
+    const messages = [...(baseRequest.messages as JsonRecord[])];
+    let claudeData: JsonRecord | null = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: anthropicHeaders,
+        body: JSON.stringify({ ...baseRequest, messages }),
+      });
+
+      const claudeRaw = await claudeRes.text();
+      const parsed = parseJsonResponse(claudeRaw);
+
+      if (!claudeRes.ok) {
+        const errorMessage = isRecord(parsed) && isRecord(parsed.error)
+          ? asTrimmedString(parsed.error.message, "AI分析エラー")
+          : "AI分析エラー";
+        console.error("Claude API error:", claudeRes.status, claudeRaw.slice(0, 500));
+        return json({
+          ok: false,
+          error: errorMessage,
+          diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, preview: claudeRaw.slice(0, 300) },
+        }, 400);
+      }
+
+      if (!isRecord(parsed)) {
+        return json({
+          ok: false,
+          error: "AI分析エラー: レスポンス形式が不正です",
+          diagnostics: { error_stage: "unexpected_anthropic_response", stage },
+        }, 400);
+      }
+
+      if (parsed.stop_reason === "pause_turn" && Array.isArray(parsed.content)) {
+        messages.push({ role: "assistant", content: parsed.content });
+        continue;
+      }
+
+      claudeData = parsed;
+      break;
+    }
+
+    if (!claudeData) {
       return json({
         ok: false,
-        error: "AI分析エラー: レスポンス形式が不正です",
-        diagnostics: { error_stage: "unexpected_anthropic_response", stage, preview: claudeRaw.slice(0, 300) },
+        error: "AI分析が完了しませんでした。もう一度お試しください。",
+        diagnostics: { error_stage: "anthropic_pause_loop", stage },
       }, 400);
     }
 
     stage = "parse_ai_json";
-    const cleaned = finalText.replace(/```json\n?|```\n?/g, "").trim();
-    let parsedAnalysis: unknown = null;
-    let parsed = false;
+    const finalText = extractAnthropicText(claudeData);
+    const parsedAnalysis = parseAnalysisJson(finalText);
 
-    try {
-      parsedAnalysis = JSON.parse(cleaned);
-      parsed = true;
-    } catch {
-      const first = cleaned.indexOf("{");
-      const last = cleaned.lastIndexOf("}");
-
-      if (first !== -1 && last > first) {
-        parsedAnalysis = JSON.parse(cleaned.slice(first, last + 1));
-        parsed = true;
-      }
-    }
-
-    if (!parsed) {
+    if (!isRecord(parsedAnalysis)) {
       return json({
         ok: false,
         error: "AI分析結果の解析に失敗しました",
-        diagnostics: { error_stage: "analysis_parse_failed", stage, preview: cleaned.slice(0, 300) },
+        diagnostics: { error_stage: "analysis_parse_failed", stage, preview: finalText.slice(0, 300) },
       }, 400);
     }
 
-    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis);
+    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals);
 
-    if (!isAdmin) {
-      count += 1;
-      stage = "update_profile";
-      const updateRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: dbAuthorization,
-            apikey: dbApiKey,
-            "Content-Type": "application/json",
-            Prefer: "return=minimal,resolution=merge-duplicates",
-            "content-profile": "public",
-          },
-          body: JSON.stringify({
-            id: user.id,
-            ...(user.email ? { email: user.email } : {}),
-            daily_analysis_count: count,
-            last_analysis_date: new Date().toISOString().split("T")[0],
-          }),
+    // History row for the win/loss tracker. Only BUY/SELL plans with prices
+    // can be evaluated later; WAIT rows are stored for the record as skipped.
+    stage = "save_history";
+    if (serviceRoleKey) {
+      const trackable = normalizedAnalysis.signal !== "WAIT" &&
+        normalizedAnalysis.entry_point_num !== null &&
+        normalizedAnalysis.stop_loss_num !== null &&
+        normalizedAnalysis.take_profit_1_num !== null;
+      const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses`, {
+        method: "POST",
+        headers: {
+          Authorization: dbAuthorization,
+          apikey: dbApiKey,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+          "content-profile": "public",
         },
-      );
-
-      if (!updateRes.ok) {
-        console.error("Failed to persist usage count:", updateRes.status, (await updateRes.text()).slice(0, 300));
+        body: JSON.stringify({
+          user_id: user.id,
+          pair: currencyPair,
+          interval,
+          mode: includeFundamental ? "full" : "technical_only",
+          signal: normalizedAnalysis.signal,
+          confidence: normalizedAnalysis.confidence,
+          thesis: normalizedAnalysis.thesis || null,
+          entry_point: normalizedAnalysis.entry_point_num,
+          stop_loss: normalizedAnalysis.stop_loss_num,
+          take_profit_1: normalizedAnalysis.take_profit_1_num,
+          take_profit_2: normalizedAnalysis.take_profit_2_num,
+          take_profit_3: normalizedAnalysis.take_profit_3_num,
+          risk_reward: normalizedAnalysis.risk_reward_ratio,
+          result: normalizedAnalysis,
+          outcome: trackable ? "pending" : "skipped",
+        }),
+      });
+      if (!historyRes.ok) {
+        console.error("Failed to save analysis history:", historyRes.status, (await historyRes.text()).slice(0, 300));
       } else {
-        await updateRes.text();
+        await historyRes.text();
       }
     }
 
     stage = "response";
+    const p = (v: number | null) => fmt(v, decimals);
+    const x = (v: number | null, d = 2) => fmt(v, d);
+    const { entry_point_num: _e, stop_loss_num: _s, take_profit_1_num: _t1, take_profit_2_num: _t2, take_profit_3_num: _t3, ...clientAnalysis } = normalizedAnalysis;
+
     return json({
       ok: true,
       data: {
-        analysis: normalizedAnalysis,
+        analysis: clientAnalysis,
         remaining: isAdmin ? null : dailyLimit - count,
         plan,
         mode: includeFundamental ? "full" : "technical_only",
         technicalData: {
-          candles: candles.slice(0, 10),
-          pair: currencyPair,
-          interval,
+          price: p(entrySnapshot.price),
+          datetime: entrySnapshot.datetime,
+          timeSeries: [],
+          rsi: x(entrySnapshot.rsi),
+          macd: x(entrySnapshot.macd, 5),
+          macdSignal: x(entrySnapshot.macdSignal, 5),
+          macdHist: x(entrySnapshot.macdHist, 5),
+          bbUpper: p(entrySnapshot.bbUpper),
+          bbMiddle: p(entrySnapshot.bbMiddle),
+          bbLower: p(entrySnapshot.bbLower),
+          sma20: p(entrySnapshot.sma20),
+          sma50: p(entrySnapshot.sma50),
+          sma200: p(entrySnapshot.sma200),
+          tenkan: p(entrySnapshot.tenkan),
+          kijun: p(entrySnapshot.kijun),
+          spanA: p(entrySnapshot.spanA),
+          spanB: p(entrySnapshot.spanB),
+          atr: p(entrySnapshot.atr),
+          slowK: x(entrySnapshot.slowK),
+          slowD: x(entrySnapshot.slowD),
+          adx: x(entrySnapshot.adx),
+          candles: entryCandles.slice(-60),
         },
       },
       diagnostics: { stage },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "サーバーエラーが発生しました";
+    const message = redactSecrets(err instanceof Error ? err.message : "サーバーエラーが発生しました");
     console.error("Edge function error:", err);
     return json({
       ok: false,
