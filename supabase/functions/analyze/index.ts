@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v9-2026-08-25T18:00:00Z";
+const FUNCTION_VERSION = "analyze-v10-2026-08-29T06:00:00Z";
 
 import {
   computeSnapshot,
@@ -478,6 +478,18 @@ Deno.serve(async (req: Request) => {
   }
 
   let stage = "init";
+  // A credit is spent before the billable work starts (that is what closes the
+  // TOCTOU race), so every failure past that point has to hand it back.
+  let quotaConsumed = false;
+  let releaseQuota: () => Promise<void> = async () => {};
+  let remainingToday: () => number | null = () => null;
+
+  const fail = async (payload: JsonRecord, status: number) => {
+    const refunded = quotaConsumed;
+    await releaseQuota();
+    // Let the client resync its "remaining today" counter after a refund
+    return json(refunded ? { ...payload, remaining: remainingToday() } : payload, status);
+  };
 
   try {
     stage = "read_auth_header";
@@ -542,6 +554,31 @@ Deno.serve(async (req: Request) => {
       console.warn("SUPABASE_SERVICE_ROLE_KEY is not configured; usage counters are not enforceable");
     }
 
+    releaseQuota = async () => {
+      if (!quotaConsumed) return;
+      quotaConsumed = false; // never refund the same credit twice
+      try {
+        const res = await fetch(`${supabaseUrl}/rest/v1/rpc/release_analysis_quota`, {
+          method: "POST",
+          headers: {
+            Authorization: dbAuthorization,
+            apikey: dbApiKey,
+            "Content-Type": "application/json",
+            "content-profile": "public",
+          },
+          body: JSON.stringify({ p_user_id: user.id }),
+        });
+        if (!res.ok) {
+          console.error("Quota release failed:", res.status, (await res.text()).slice(0, 300));
+        } else {
+          await res.text();
+          count = Math.max(count - 1, 0);
+        }
+      } catch (err) {
+        console.error("Quota release threw:", err);
+      }
+    };
+
     stage = "fetch_profile";
     const profileRes = await fetch(
       `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=plan`,
@@ -566,6 +603,7 @@ Deno.serve(async (req: Request) => {
       pro: 9999,
     };
     const dailyLimit = limits[plan] || 3;
+    remainingToday = () => (isAdmin ? null : Math.max(dailyLimit - count, 0));
 
     // Check-and-increment in one statement, before any paid work. Reading the
     // count, testing it, then writing it back lets concurrent requests all
@@ -603,6 +641,7 @@ Deno.serve(async (req: Request) => {
         }, 400);
       }
       count = consumed;
+      quotaConsumed = true;
     }
 
     stage = "fetch_market_data";
@@ -632,7 +671,7 @@ Deno.serve(async (req: Request) => {
       // generically rather than forwarding the transport's own text.
       const isTransport = /error sending request|error trying to connect|dns|tcp/i.test(raw);
       console.error("Market data fetch failed:", message);
-      return json({
+      return await fail({
         ok: false,
         error: isRateLimit
           ? "市場データAPIの制限に達しました。1分ほど待って再試行してください。"
@@ -645,14 +684,14 @@ Deno.serve(async (req: Request) => {
 
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
-      return json({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
+      return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
 
     stage = "compute_indicators";
     const snapshots = seriesByTf.map((candles) => computeSnapshot(candles));
     const entrySnapshot = snapshots[0];
     if (!entrySnapshot) {
-      return json({ ok: false, error: "指標計算に失敗しました", diagnostics: { error_stage: "indicator_failed", stage } }, 500);
+      return await fail({ ok: false, error: "指標計算に失敗しました", diagnostics: { error_stage: "indicator_failed", stage } }, 500);
     }
 
     stage = "build_prompt";
@@ -669,13 +708,23 @@ Deno.serve(async (req: Request) => {
       ? "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は3回まで。"
       : "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
 
+    // Structured outputs cannot be combined with web search, so full mode has
+    // to carry the same field contract in the prompt instead. Reusing the one
+    // RESPONSE_SCHEMA keeps both modes on a single definition.
+    const schemaInstruction = includeFundamental
+      ? `
+
+最終回答は<json>タグ内に、次のJSON Schemaに厳密に従ったJSONのみを出力してください。キー名とenum値は英語のまま一字一句一致させ、required のフィールドは全て含めること。スキーマ外のキーは出力しないこと。
+${JSON.stringify(RESPONSE_SCHEMA)}`
+      : "";
+
     const userMessage = `通貨ペア: ${currencyPair}
 現在時刻(UTC): ${nowUtc}
 ${fundamentalNote}
 
 ${tfSections}
 
-上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${includeFundamental ? "\n最終回答は<json>タグ内に、指定スキーマに従ったJSONのみを出力してください。" : ""}`;
+上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schemaInstruction}`;
 
     stage = "request_ai";
     const anthropicHeaders = {
@@ -732,7 +781,7 @@ ${tfSections}
           ? asTrimmedString(parsed.error.message, "AI分析エラー")
           : "AI分析エラー";
         console.error("Claude API error:", claudeRes.status, claudeRaw.slice(0, 500));
-        return json({
+        return await fail({
           ok: false,
           error: errorMessage,
           diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, preview: claudeRaw.slice(0, 300) },
@@ -740,7 +789,7 @@ ${tfSections}
       }
 
       if (!isRecord(parsed)) {
-        return json({
+        return await fail({
           ok: false,
           error: "AI分析エラー: レスポンス形式が不正です",
           diagnostics: { error_stage: "unexpected_anthropic_response", stage },
@@ -757,7 +806,7 @@ ${tfSections}
     }
 
     if (!claudeData) {
-      return json({
+      return await fail({
         ok: false,
         error: "AI分析が完了しませんでした。もう一度お試しください。",
         diagnostics: { error_stage: "anthropic_pause_loop", stage },
@@ -769,7 +818,7 @@ ${tfSections}
     const parsedAnalysis = parseAnalysisJson(finalText);
 
     if (!isRecord(parsedAnalysis)) {
-      return json({
+      return await fail({
         ok: false,
         error: "AI分析結果の解析に失敗しました",
         diagnostics: { error_stage: "analysis_parse_failed", stage, preview: finalText.slice(0, 300) },
@@ -862,7 +911,7 @@ ${tfSections}
   } catch (err) {
     const message = redactSecrets(err instanceof Error ? err.message : "サーバーエラーが発生しました");
     console.error("Edge function error:", err);
-    return json({
+    return await fail({
       ok: false,
       error: message,
       diagnostics: { error_stage: "unhandled_exception", stage },

@@ -214,3 +214,20 @@ describe("PriceChart level pills", () => {
     expect(screen.getByText(/^\d+%$/)).toBeInTheDocument();
   });
 });
+
+describe("score cards", () => {
+  // Regression: volatility replaced sentiment via a ternary on ATR, so on every
+  // normal run (ATR always present) the model's sentiment was never displayed.
+  it("shows sentiment and volatility together when indicators are present", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByText("センチメント")).toBeInTheDocument();
+    expect(screen.getByText("強気")).toBeInTheDocument();
+    expect(screen.getByText("ボラティリティ")).toBeInTheDocument();
+  });
+
+  it("still shows sentiment when there are no indicators", () => {
+    render(<AnalysisResultView result={fullResult} techData={null} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByText("センチメント")).toBeInTheDocument();
+    expect(screen.queryByText("ボラティリティ")).not.toBeInTheDocument();
+  });
+});
