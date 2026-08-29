@@ -33,11 +33,22 @@ export const EXPIRY_DAYS: Record<string, number> = {
 
 export type Verdict = { outcome: "win" | "loss"; price: number; at: string } | null;
 
+// Twelve Data returns "YYYY-MM-DD HH:mm:ss" for intraday bars and a bare
+// "YYYY-MM-DD" for daily and above, neither carrying a zone marker; both are
+// UTC. Build a full ISO string rather than relying on the engine's tolerance
+// for non-standard forms.
+export const parseCandleTime = (datetime: string): number => {
+  if (!datetime) return NaN;
+  if (datetime.includes("T")) return Date.parse(datetime);
+  const [date, time] = datetime.split(" ");
+  return Date.parse(`${date}T${time || "00:00:00"}Z`);
+};
+
 export const evaluatePlan = (row: OpenRow, candles: Candle[]): Verdict => {
   const created = Date.parse(row.created_at);
 
   for (const c of candles) {
-    const t = Date.parse(c.datetime.includes("T") ? c.datetime : `${c.datetime.replace(" ", "T")}Z`);
+    const t = parseCandleTime(c.datetime);
     if (!Number.isFinite(t) || t < created) continue;
 
     const hitsTp = row.signal === "BUY" ? c.high >= row.take_profit_1 : c.low <= row.take_profit_1;
