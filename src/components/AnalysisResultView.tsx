@@ -98,14 +98,16 @@ const AnalysisResultView = ({ result, techData, pair, interval }: Props) => {
           value={riskLabel(result.risk_level)}
           color={riskColor(result.risk_level) as any}
         />
-        {vol ? (
+        {/* Sentiment is always shown: making it conditional on ATR being a
+            number meant the model's sentiment was discarded on every normal
+            run, and the card slot changed meaning between runs. */}
+        <ScoreCard
+          title="センチメント"
+          value={sentimentLabel(result.sentiment)}
+          color={sentimentColor(result.sentiment) as any}
+        />
+        {vol && (
           <ScoreCard title="ボラティリティ" value={vol.label} subtitle={`ATR ${vol.pct}% / price`} color="primary" />
-        ) : (
-          <ScoreCard
-            title="センチメント"
-            value={sentimentLabel(result.sentiment)}
-            color={sentimentColor(result.sentiment) as any}
-          />
         )}
       </div>
 

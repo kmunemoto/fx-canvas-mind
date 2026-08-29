@@ -56,7 +56,7 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
           </div>
         </div>
         <div className="shrink-0 scale-[0.72] origin-right -my-6">
-          <ConfidenceGauge signal={result.signal} confidence={result.confidence} />
+          <ConfidenceGauge signal={result.signal} confidence={result.confidence} showSignalLabel={false} />
         </div>
       </div>
     </div>

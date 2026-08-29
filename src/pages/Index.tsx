@@ -24,7 +24,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v9-2026-08-25T18:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v10-2026-08-29T06:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -248,6 +248,9 @@ const Index = () => {
     setResult(null);
     setAnalysisMode(null);
     setLiveRate(null);
+    // Clear the indicators too: on a failed run they would otherwise keep
+    // showing the previous pair's numbers next to an error toast
+    setTechData(null);
     setLimitReached(false);
 
     try {
@@ -292,9 +295,19 @@ const Index = () => {
       const technicalData = normalizeTechnicalData(payload?.technicalData ?? resData?.technicalData);
       const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
       const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
-      const isLimitError = typeof errorMessage === "string" && (errorMessage.includes("上限") || errorMessage.toLowerCase().includes("limit"));
+      // Match on the server's own stage, not on the words in the message: an
+      // upstream "rate limit" error used to be reported as the daily cap and
+      // pushed the user at the pricing page for no reason.
+      const errorStage = resData?.diagnostics?.error_stage ?? payload?.diagnostics?.error_stage;
+      const isLimitError = errorStage === "daily_limit_reached";
 
       if (!response.ok || resData?.ok === false || payload?.ok === false) {
+        // A failure after the quota was spent refunds it and reports the
+        // corrected count; without this the UI keeps an inflated "remaining"
+        if (typeof remainingCount === "number") {
+          setRemaining(remainingCount);
+        }
+
         if (deployedVersion && deployedVersion !== EXPECTED_ANALYZE_VERSION) {
           console.warn("analyze Edge Function version mismatch:", {
             expected: EXPECTED_ANALYZE_VERSION,
