@@ -20,8 +20,13 @@ const H = 300;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 22;
 const PAD_LEFT = 8;
-// Right margin reserved for the level pills so they never cover candles
-const PAD_RIGHT = 86;
+// Two separate right-hand lanes: the price axis, then the level pills. They
+// used to share one lane, so a level near a gridline covered its label.
+const AXIS_W = 44;
+const PILL_W = 84;
+const PAD_RIGHT = AXIS_W + PILL_W;
+const AXIS_X = W - PAD_RIGHT + 4;
+const PILL_X = W - PILL_W + 2;
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -72,7 +77,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
       min = Math.min(min, l.value);
       max = Math.max(max, l.value);
     }
-    const pad = (max - min) * 0.06 || max * 0.001 || 1;
+    const pad = (max - min) * 0.06 || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
 
@@ -83,8 +88,28 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
     const x = (i: number) => PAD_LEFT + slot * i + slot / 2;
 
-    return { min, max, y, x, slot, bodyW, plotW, plotH };
+    return { min, max, y, x, slot, bodyW };
   }, [candles, levels]);
+
+  // Pills are anchored to their price, then pushed apart just enough that two
+  // nearby levels stay readable instead of stacking on top of each other.
+  const pillRows = useMemo(() => {
+    if (!geometry) return [];
+    const PILL_H = 15;
+    const rows = levels
+      .map((l) => ({ level: l, y: geometry.y(l.value) }))
+      .sort((a, b) => a.y - b.y);
+
+    for (let i = 1; i < rows.length; i++) {
+      const minY = rows[i - 1].y + PILL_H;
+      if (rows[i].y < minY) rows[i].y = minY;
+    }
+    const overflow = rows.length > 0 ? rows[rows.length - 1].y - (H - PAD_BOTTOM) : 0;
+    if (overflow > 0) {
+      for (const r of rows) r.y -= overflow;
+    }
+    return rows;
+  }, [geometry, levels]);
 
   if (!geometry || candles.length === 0) return null;
 
@@ -95,8 +120,6 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
   const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) =>
     geometry.min + ((geometry.max - geometry.min) * i) / gridLines,
   );
-
-  const levelColor = (kind: Level["kind"]) => COLORS[kind];
 
   const handleMove = (evt: React.MouseEvent<SVGSVGElement>) => {
     const rect = evt.currentTarget.getBoundingClientRect();
@@ -123,7 +146,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
       >
-        {/* recessive grid */}
+        {/* recessive grid + price axis */}
         {gridPrices.map((p, i) => (
           <g key={i}>
             <line
@@ -132,7 +155,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
               stroke={COLORS.grid} strokeWidth="0.5" opacity="0.5"
             />
             <text
-              x={W - PAD_RIGHT + 4} y={y(p) + 3}
+              x={AXIS_X} y={y(p) + 3}
               fontSize="9" fill={COLORS.text} fontFamily="monospace"
             >
               {p.toFixed(decimals)}
@@ -167,28 +190,34 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
           );
         })}
 
-        {/* trade levels: dashed line + right-side pill with text identity */}
-        {levels.map((l) => {
-          const ly = y(l.value);
-          const color = levelColor(l.kind);
+        {/* trade levels: line at the true price, pill in its own lane */}
+        {pillRows.map(({ level, y: pillY }) => {
+          const trueY = y(level.value);
+          const color = COLORS[level.kind];
           return (
-            <g key={`${l.label}-${l.value}`}>
+            <g key={`${level.label}-${level.value}`}>
               <line
                 x1={PAD_LEFT} x2={W - PAD_RIGHT}
-                y1={ly} y2={ly}
+                y1={trueY} y2={trueY}
                 stroke={color} strokeWidth="1.2" strokeDasharray="5 3" opacity="0.9"
               />
+              {/* connector when the pill had to be nudged off its price */}
+              <line
+                x1={W - PAD_RIGHT} x2={PILL_X}
+                y1={trueY} y2={pillY}
+                stroke={color} strokeWidth="0.75" opacity="0.55"
+              />
               <rect
-                x={W - PAD_RIGHT + 2} y={ly - 8}
-                width={PAD_RIGHT - 6} height={16} rx="4"
+                x={PILL_X} y={pillY - 7.5}
+                width={PILL_W - 4} height={15} rx="4"
                 fill={color} opacity="0.92"
               />
               <text
-                x={W - PAD_RIGHT + 6} y={ly + 3}
+                x={PILL_X + 4} y={pillY + 3}
                 fontSize="8.5" fontWeight="700" fontFamily="monospace"
                 fill="hsl(var(--background))"
               >
-                {l.label} {l.value.toFixed(decimals)}
+                {level.label} {level.value.toFixed(decimals)}
               </text>
             </g>
           );

@@ -150,3 +150,67 @@ describe("AnalysisStages", () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe("PriceChart level pills", () => {
+  // Regression: the price axis and the level pills used to share one right-hand
+  // lane, so a level near a gridline was drawn under its axis label.
+  const tightResult: AnalysisResult = {
+    ...fullResult,
+    entry_point: "149.600",
+    stop_loss: "149.580",
+    take_profit_1: "149.620",
+    take_profit_2: "149.640",
+    take_profit_3: "149.660",
+  };
+
+  const readPills = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("text"))
+      .filter((t) => /^(ENTRY|SL|TP\d) /.test(t.textContent ?? ""))
+      .map((t) => ({ label: t.textContent!, y: Number(t.getAttribute("y")) }));
+
+  it("keeps every pill legible when all five levels are nearly identical", () => {
+    const { container } = render(
+      <AnalysisResultView result={tightResult} techData={techData} pair="USD/JPY" interval="1h" />,
+    );
+
+    const pills = readPills(container).sort((a, b) => a.y - b.y);
+    expect(pills).toHaveLength(5);
+
+    // no two pills overlap vertically (15px tall)
+    for (let i = 1; i < pills.length; i++) {
+      expect(pills[i].y - pills[i - 1].y).toBeGreaterThanOrEqual(15);
+    }
+    // and none of them are pushed outside the plot
+    for (const p of pills) {
+      expect(p.y).toBeGreaterThan(0);
+      expect(p.y).toBeLessThan(300);
+    }
+  });
+
+  it("draws pills clear of the price-axis labels", () => {
+    const { container } = render(
+      <AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />,
+    );
+
+    const xOf = (t: Element) => Number(t.getAttribute("x"));
+    const texts = Array.from(container.querySelectorAll("text"));
+    const pillX = texts.filter((t) => /^(ENTRY|SL|TP\d) /.test(t.textContent ?? "")).map(xOf);
+    const axisX = texts.filter((t) => /^\d+\.\d+$/.test(t.textContent ?? "")).map(xOf);
+
+    expect(pillX.length).toBeGreaterThan(0);
+    expect(axisX.length).toBeGreaterThan(0);
+    // every pill starts to the right of every axis label
+    expect(Math.min(...pillX)).toBeGreaterThan(Math.max(...axisX));
+  });
+
+  it("shows the direction once — the gauge inside the hero is score-only", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    // getByText throws when there is more than one match, so this asserts
+    // exactly one direction label and no second vocabulary for it
+    expect(screen.getByText("LONG")).toBeInTheDocument();
+    expect(screen.queryAllByText("BUY")).toHaveLength(0);
+    // the gauge animates from 0, so assert the readout exists rather than its
+    // instantaneous value
+    expect(screen.getByText(/^\d+%$/)).toBeInTheDocument();
+  });
+});

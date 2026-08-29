@@ -3,9 +3,12 @@ import { useEffect, useState } from "react";
 interface Props {
   signal: "BUY" | "SELL" | "WAIT";
   confidence: number;
+  // DirectionHero already names the direction; inside it the gauge shows the
+  // score alone so LONG/BUY are not both on screen for the same thing.
+  showSignalLabel?: boolean;
 }
 
-const ConfidenceGauge = ({ signal, confidence }: Props) => {
+const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) => {
   const [animatedConfidence, setAnimatedConfidence] = useState(0);
 
   useEffect(() => {
@@ -49,13 +52,17 @@ const ConfidenceGauge = ({ signal, confidence }: Props) => {
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
+          {showSignalLabel && (
+            <span
+              className="text-3xl font-bold font-mono tracking-wider"
+              style={{ color: signalColor }}
+            >
+              {signalLabel}
+            </span>
+          )}
           <span
-            className="text-3xl font-bold font-mono tracking-wider"
-            style={{ color: signalColor }}
+            className={`font-mono font-semibold text-foreground ${showSignalLabel ? "text-2xl mt-1" : "text-4xl"}`}
           >
-            {signalLabel}
-          </span>
-          <span className="text-2xl font-mono font-semibold text-foreground mt-1">
             {animatedConfidence}%
           </span>
         </div>
