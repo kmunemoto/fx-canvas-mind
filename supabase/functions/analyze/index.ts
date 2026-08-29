@@ -603,12 +603,12 @@ Deno.serve(async (req: Request) => {
       pro: 9999,
     };
     const dailyLimit = limits[plan] || 3;
-    remainingToday = () => (isAdmin ? null : Math.max(dailyLimit - count, 0));
 
     // Check-and-increment in one statement, before any paid work. Reading the
     // count, testing it, then writing it back lets concurrent requests all
     // pass the same check and bill K analyses against one credit.
     let count = 0;
+    remainingToday = () => (isAdmin ? null : Math.max(dailyLimit - count, 0));
     if (!isAdmin) {
       stage = "consume_quota";
       const quotaRes = await fetch(`${supabaseUrl}/rest/v1/rpc/consume_analysis_quota`, {
