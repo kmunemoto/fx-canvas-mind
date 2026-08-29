@@ -64,6 +64,30 @@ Deno.serve(async (req: Request) => {
       "Content-Type": "application/json",
     };
 
+    // Per-user cooldown. Each call can trigger several market-data fetches
+    // against a shared API key, so a loop from one account would starve
+    // everyone else's analyses.
+    const COOLDOWN_MS = 5 * 60 * 1000;
+    const trackedRes = await fetch(
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=last_tracked_at`,
+      { headers: { ...serviceHeaders, Accept: "application/vnd.pgrst.object+json" } },
+    );
+    if (trackedRes.ok) {
+      const trackedRaw = await trackedRes.json().catch(() => null);
+      const lastTracked = isRecord(trackedRaw) && typeof trackedRaw.last_tracked_at === "string"
+        ? Date.parse(trackedRaw.last_tracked_at)
+        : NaN;
+      if (Number.isFinite(lastTracked) && Date.now() - lastTracked < COOLDOWN_MS) {
+        return json({ ok: true, updated: 0, skipped: "cooldown" });
+      }
+    }
+
+    await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      headers: { ...serviceHeaders, Prefer: "return=minimal" },
+      body: JSON.stringify({ last_tracked_at: new Date().toISOString() }),
+    }).then((r) => r.text()).catch(() => {});
+
     // Open plans, oldest first, ignoring anything analyzed in the last 5
     // minutes (its first candle may not even have closed yet)
     const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();

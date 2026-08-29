@@ -15,6 +15,15 @@ const corsHeaders = {
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
+// Server-side allowlist mirroring the pairs the UI offers. Without it any
+// authenticated caller could aim the analyzer (and the paid market-data +
+// Anthropic calls behind it) at arbitrary Twelve Data symbols, and put an
+// arbitrary string into the model prompt.
+const ALLOWED_PAIRS = new Set([
+  "USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY",
+  "GBP/JPY", "AUD/USD", "AUD/JPY",
+]);
+
 // Higher timeframes analyzed alongside the one the user picked. The entry
 // timeframe comes first and is the one prices are planned on.
 const TF_CHAIN: Record<string, string[]> = {
@@ -33,8 +42,6 @@ type AuthUser = {
 
 type ProfileRecord = {
   plan?: string;
-  last_analysis_date?: string;
-  daily_analysis_count?: number;
 };
 
 type ParsedRequestBody = {
@@ -64,6 +71,14 @@ const json = (body: unknown, status = 200) =>
     },
   });
 
+// Deno's fetch puts the full request URL into network-failure messages, and
+// the market-data key travels in that URL as a query parameter — so every
+// error string that reaches the client goes through here first.
+const redactSecrets = (message: string): string =>
+  message
+    .replace(/apikey=[^&\s)"']+/gi, "apikey=***")
+    .replace(/x-api-key["\s:]+[^\s,"']+/gi, "x-api-key ***");
+
 const parseJsonResponse = (rawText: string): unknown => {
   if (!rawText) return null;
 
@@ -78,15 +93,6 @@ const asTrimmedString = (value: unknown, fallback = "") => {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed || fallback;
-};
-
-const asNumber = (value: unknown, fallback = 0) => {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
 };
 
 const asFiniteNumber = (value: unknown): number | null => {
@@ -313,6 +319,14 @@ interface NormalizedAnalysis {
   take_profit_3_num: number | null;
 }
 
+const DISCLAIMER = "この分析は参考情報です。投資判断は自己責任で行ってください";
+
+// The system prompt asks for it, but the disclaimer is a compliance
+// requirement — do not leave it to the model (or to search results that may
+// try to talk it out of one).
+const withDisclaimer = (warnings: string[]): string[] =>
+  warnings.some((w) => w.includes("自己責任")) ? warnings : [...warnings, DISCLAIMER];
+
 const normalizeAnalysis = (value: unknown, decimals: number): NormalizedAnalysis => {
   const source = isRecord(value) ? value : {};
   const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
@@ -384,7 +398,7 @@ const normalizeAnalysis = (value: unknown, decimals: number): NormalizedAnalysis
     timeframe_alignment: alignment,
     analysis: asTrimmedString(source.analysis, ""),
     key_factors: toStringArray(source.key_factors),
-    warnings: toStringArray(source.warnings),
+    warnings: withDisclaimer(toStringArray(source.warnings)),
     support_levels: levelList(source.support_levels),
     resistance_levels: levelList(source.resistance_levels),
     entry_point_num: entry.num,
@@ -422,6 +436,10 @@ const parseRequestBody = async (req: Request): Promise<
     return { error: `未対応の時間足です: ${interval}` };
   }
 
+  if (!ALLOWED_PAIRS.has(currencyPair.toUpperCase())) {
+    return { error: `未対応の通貨ペアです: ${currencyPair}` };
+  }
+
   return {
     data: {
       currencyPair,
@@ -433,11 +451,7 @@ const parseRequestBody = async (req: Request): Promise<
 
 const readProfile = (value: unknown): ProfileRecord | null => {
   if (isRecord(value)) {
-    return {
-      plan: typeof value.plan === "string" ? value.plan : undefined,
-      last_analysis_date: typeof value.last_analysis_date === "string" ? value.last_analysis_date : undefined,
-      daily_analysis_count: asNumber(value.daily_analysis_count, 0),
-    };
+    return { plan: typeof value.plan === "string" ? value.plan : undefined };
   }
 
   if (Array.isArray(value) && value.length > 0 && isRecord(value[0])) {
@@ -530,7 +544,7 @@ Deno.serve(async (req: Request) => {
 
     stage = "fetch_profile";
     const profileRes = await fetch(
-      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=*`,
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=plan`,
       {
         headers: {
           Authorization: dbAuthorization,
@@ -552,18 +566,43 @@ Deno.serve(async (req: Request) => {
       pro: 9999,
     };
     const dailyLimit = limits[plan] || 3;
-    const today = new Date().toISOString().split("T")[0];
-    const lastDateRaw = typeof profile?.last_analysis_date === "string"
-      ? profile.last_analysis_date.split("T")[0]
-      : "";
-    let count = lastDateRaw === today ? asNumber(profile?.daily_analysis_count, 0) : 0;
 
-    if (!isAdmin && count >= dailyLimit) {
-      return json({
-        ok: false,
-        error: "本日の分析上限に達しました。プランをアップグレードしてください。",
-        diagnostics: { error_stage: "daily_limit_reached", stage, dailyLimit, count },
-      }, 400);
+    // Check-and-increment in one statement, before any paid work. Reading the
+    // count, testing it, then writing it back lets concurrent requests all
+    // pass the same check and bill K analyses against one credit.
+    let count = 0;
+    if (!isAdmin) {
+      stage = "consume_quota";
+      const quotaRes = await fetch(`${supabaseUrl}/rest/v1/rpc/consume_analysis_quota`, {
+        method: "POST",
+        headers: {
+          Authorization: dbAuthorization,
+          apikey: dbApiKey,
+          "Content-Type": "application/json",
+          "content-profile": "public",
+        },
+        body: JSON.stringify({ p_user_id: user.id, p_limit: dailyLimit }),
+      });
+      const quotaRaw = await quotaRes.text();
+
+      if (!quotaRes.ok) {
+        console.error("Quota RPC failed:", quotaRes.status, quotaRaw.slice(0, 300));
+        return json({
+          ok: false,
+          error: "利用状況の確認に失敗しました。時間をおいて再試行してください。",
+          diagnostics: { error_stage: "quota_rpc_failed", stage, status: quotaRes.status },
+        }, 500);
+      }
+
+      const consumed = asFiniteNumber(parseJsonResponse(quotaRaw));
+      if (consumed === null) {
+        return json({
+          ok: false,
+          error: "本日の分析上限に達しました。プランをアップグレードしてください。",
+          diagnostics: { error_stage: "daily_limit_reached", stage, dailyLimit },
+        }, 400);
+      }
+      count = consumed;
     }
 
     stage = "fetch_market_data";
@@ -586,13 +625,20 @@ Deno.serve(async (req: Request) => {
         timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : "市場データが取得できませんでした";
+      const raw = err instanceof Error ? err.message : "";
+      const message = redactSecrets(raw || "市場データが取得できませんでした");
       const isRateLimit = /credits|run out|limit/i.test(message);
+      // A thrown fetch (DNS/TLS/connection) carries the request URL; report it
+      // generically rather than forwarding the transport's own text.
+      const isTransport = /error sending request|error trying to connect|dns|tcp/i.test(raw);
+      console.error("Market data fetch failed:", message);
       return json({
         ok: false,
         error: isRateLimit
           ? "市場データAPIの制限に達しました。1分ほど待って再試行してください。"
-          : `市場データ取得エラー: ${message}`,
+          : isTransport
+            ? "市場データの取得に失敗しました。時間をおいて再試行してください。"
+            : `市場データ取得エラー: ${message}`,
         diagnostics: { error_stage: "market_data_failed", stage },
       }, 400);
     }
@@ -648,7 +694,20 @@ ${tfSections}
     if (includeFundamental) {
       // Web search responses carry citations, which are incompatible with
       // output_config.format — so full mode parses JSON out of the text.
-      baseRequest.tools = [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }];
+      // Search results enter the model's context, and this model's output is a
+      // trade signal — so restrict the tool to sources whose pages we are
+      // willing to let influence it.
+      baseRequest.tools = [{
+        type: "web_search_20260209",
+        name: "web_search",
+        max_uses: 3,
+        allowed_domains: [
+          "reuters.com", "bloomberg.com", "cnbc.com", "marketwatch.com",
+          "investing.com", "fxstreet.com", "dailyfx.com", "forexfactory.com",
+          "tradingeconomics.com", "nikkei.com", "boj.or.jp",
+          "federalreserve.gov", "ecb.europa.eu", "mof.go.jp",
+        ],
+      }];
     } else {
       baseRequest.output_config = { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
     }
@@ -718,36 +777,6 @@ ${tfSections}
     }
 
     const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals);
-
-    if (!isAdmin) {
-      count += 1;
-      stage = "update_profile";
-      const updateRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: dbAuthorization,
-            apikey: dbApiKey,
-            "Content-Type": "application/json",
-            Prefer: "return=minimal,resolution=merge-duplicates",
-            "content-profile": "public",
-          },
-          body: JSON.stringify({
-            id: user.id,
-            ...(user.email ? { email: user.email } : {}),
-            daily_analysis_count: count,
-            last_analysis_date: new Date().toISOString().split("T")[0],
-          }),
-        },
-      );
-
-      if (!updateRes.ok) {
-        console.error("Failed to persist usage count:", updateRes.status, (await updateRes.text()).slice(0, 300));
-      } else {
-        await updateRes.text();
-      }
-    }
 
     // History row for the win/loss tracker. Only BUY/SELL plans with prices
     // can be evaluated later; WAIT rows are stored for the record as skipped.
@@ -831,7 +860,7 @@ ${tfSections}
       diagnostics: { stage },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "サーバーエラーが発生しました";
+    const message = redactSecrets(err instanceof Error ? err.message : "サーバーエラーが発生しました");
     console.error("Edge function error:", err);
     return json({
       ok: false,
