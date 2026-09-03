@@ -138,18 +138,29 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
     const add = (label: string, c: Counterfactual | null | undefined) => {
       const v = cfLabel(c);
       if (v === null) return;
+      // A variant that "wins" but the gate would refuse is not a remedy;
+      // its risk/reward is shown so the reader can see why
+      const parts = [v];
+      if (typeof c?.rr === "number" && Number.isFinite(c.rr)) parts.push(pm.cfRr(c.rr));
+      if (c?.viable === false && c?.resolution === "win") parts.push(pm.cfNotViable);
       counterfactuals.push({
         label,
-        value: v,
-        cls: c?.resolution === "win" ? "text-success" : c?.resolution === "loss" ? "text-destructive" : "text-muted-foreground",
+        value: parts.join(" · "),
+        cls: c?.resolution === "win" && c?.viable !== false
+          ? "text-success"
+          : c?.resolution === "loss" ? "text-destructive" : "text-muted-foreground",
       });
     };
     add(pm.cfMarket, facts.counterfactual?.market_entry);
+    add(pm.cfMarketSameRisk, facts.counterfactual?.market_entry_same_risk);
+    add(pm.cfPullback, facts.counterfactual?.limit_pullback);
     add(pm.cfStop15, facts.counterfactual?.stop_x1_5);
     add(pm.cfStop2, facts.counterfactual?.stop_x2);
     add(pm.cfTpHalf, facts.counterfactual?.tp_half);
   }
   const postTitle = record.outcome === "win" ? pm.titleWin : pm.title;
+  const thin = post?.status === "done" && post.thin === true;
+  const revised = post?.status === "done" && typeof post.revisions === "number" && post.revisions > 0;
 
   return (
     <div className="mt-2 rounded-lg border border-border/60 bg-background/40 p-3 space-y-3 text-xs" data-testid="outcome-detail">
@@ -258,7 +269,20 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
                   {typeof facts?.after?.beyond_sl_r === "number" && facts.after.beyond_sl_r >= 1 && (
                     <p className="text-muted-foreground">{pm.beyondSl(facts.after.beyond_sl_r)}</p>
                   )}
+                  {typeof facts?.early_adverse_r === "number" && facts.early_adverse_r >= 0.5 && (
+                    <p className="text-muted-foreground">{pm.earlyAdverse(facts.early_adverse_r)}</p>
+                  )}
+                  {facts?.abnormal_bar?.event && (
+                    <p className="text-muted-foreground">
+                      {pm.eventBar(facts.abnormal_bar.event.country, facts.abnormal_bar.event.title)}
+                    </p>
+                  )}
                 </div>
+              )}
+              {(post.rule_blamed || post.rule_credited) && (
+                <p className="text-[10px] text-muted-foreground font-mono">
+                  {post.rule_blamed ? pm.ruleBlamed(post.rule_blamed) : pm.ruleCredited(post.rule_credited as string)}
+                </p>
               )}
               {pick(post.lesson) && (
                 <p className="rounded bg-primary/10 border border-primary/30 px-2 py-1 text-foreground">
@@ -268,6 +292,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
               )}
               <p className="text-[10px] text-muted-foreground">
                 {post.avoidable ? pm.avoidable : pm.unavoidable}
+                {thin && !revised ? ` · ${pm.thinNote}` : thin && revised ? ` · ${pm.thinFinalNote}` : revised ? ` · ${pm.revisedNote}` : ""}
               </p>
             </>
           ) : (

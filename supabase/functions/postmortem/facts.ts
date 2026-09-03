@@ -15,8 +15,18 @@
 // directly.
 
 import type { Candle } from "../analyze/indicators.ts";
-import { isMomentumMode, normalizeMode } from "../analyze/entry.ts";
+import { eventInBar, type EconEvent } from "../econ-calendar/events.ts";
 import {
+  MAX_LIMIT_ATR,
+  MIN_RISK_REWARD,
+  MIN_STOP_ATR,
+  entryScale,
+  inferEntryType,
+  isMomentumMode,
+  normalizeMode,
+} from "../analyze/entry.ts";
+import {
+  FILL_TOLERANCE,
   INTERVAL_MS,
   MAX_REFINE_ATTEMPTS,
   emptyEvaluation,
@@ -35,6 +45,9 @@ export type Cause =
   | "stop_too_tight"
   // right direction, but the entry waited for a pullback that never came
   | "entry_too_far"
+  // right direction, but chased at the market into an immediate retrace that
+  // took the stop; a pullback entry would have paid
+  | "entry_too_early"
   // filled and moved the right way, but the target was out of reach
   | "target_too_far"
   // a range traded as a trend, or the reverse
@@ -54,6 +67,7 @@ export const CAUSES: readonly Cause[] = [
   "direction_wrong",
   "stop_too_tight",
   "entry_too_far",
+  "entry_too_early",
   "target_too_far",
   "regime_misread",
   "news_shock",
@@ -96,6 +110,12 @@ export const ABNORMAL_RANGE_RATIO = 3;
 export const LUCKY_MAE_R = 0.8;
 // A move of at least this many R without a fill is a missed trade
 export const MISSED_MOVE_R = 1;
+// The pullback the "entered later" counterfactual waits for, in R
+export const PULLBACK_R = 0.5;
+// An adverse move of this much inside the first bars after a market fill
+// says the entry chased an exhausted move
+export const EARLY_ADVERSE_R = 0.5;
+export const EARLY_BARS = 3;
 
 export interface PostmortemRow extends OpenRow {
   outcome: string;
@@ -121,10 +141,27 @@ export interface CfResult {
   reason: string | null;
   mfe_r: number | null;
   mae_r: number | null;
+  // Reward-to-risk of the variant itself (TP1 against its own stop), and
+  // whether the entry gate would have let it through. A counterfactual that
+  // "wins" with a 0.6 risk/reward is not a plan the analyzer may publish, so
+  // it is not evidence for "should have entered at the market".
+  rr: number | null;
+  viable: boolean;
+  // Which of the gate's tests the variant fails, when it is not viable: the
+  // reward for the risk, the stop's width, a limit's distance from the
+  // market, or a limit in a regime where the gate turns limits into
+  // market entries
+  gate: "ok" | "poor_rr" | "stop_too_tight" | "too_far" | "should_be_market";
+}
+
+export interface GateContext {
+  atr: number | null;
+  // The no-pullback rule was in force for the plan (entry_check.momentum)
+  momentum: boolean;
 }
 
 export interface PostmortemFacts {
-  version: 1;
+  version: 2;
   eval_interval: string;
   bars_after_settlement: number;
   risk: number;
@@ -147,12 +184,26 @@ export interface PostmortemFacts {
     beyond_sl_r: number | null;
     returned_to_entry: boolean | null;
   };
-  abnormal_bar: { at: string; range_ratio: number } | null;
+  // A bar far outside the others during the plan, and the scheduled release
+  // it can be attributed to — "news" as a fact rather than an inference from
+  // the shape of a candle
+  abnormal_bar: { at: string; range_ratio: number; event: { at: string; country: string; impact: string; title: string } | null } | null;
+  // Largest adverse move in the first bars after the fill, in R: a chase
+  // into a retrace shows up here before it shows up anywhere else
+  early_adverse_r: number | null;
   counterfactual: {
+    // Unfilled plans: the same stop and target entered at the market
     market_entry: CfResult | null;
+    // Unfilled plans: entered at the market with the stop moved so the risk
+    // width is what the plan had (the target stays), which is what a market
+    // version of the plan would actually have looked like
+    market_entry_same_risk: CfResult | null;
     stop_x1_5: CfResult | null;
     stop_x2: CfResult | null;
     tp_half: CfResult | null;
+    // Filled plans: entered on a pullback of PULLBACK_R against the signal,
+    // with the stop moved the same way (same risk width, better price)
+    limit_pullback: CfResult | null;
   };
   // The declared regime against the ADX at signal time, when known
   regime: { declared: string | null; adx: number | null; conflict: boolean } | null;
@@ -202,7 +253,9 @@ const simulate = async (
   candles: Candle[],
   evalInterval: string,
   nowMs: number,
+  gateCtx: GateContext,
 ): Promise<CfResult> => {
+  const { atr, momentum } = gateCtx;
   const base: OpenRow = {
     id: `${row.id}:cf`,
     pair: row.pair,
@@ -220,18 +273,61 @@ const simulate = async (
   };
   const prior: Evaluation = { ...emptyEvaluation(base, evalInterval, nowMs), refine_attempts: MAX_REFINE_ATTEMPTS - 1 };
   const j = await judgePlan({ ...base, evaluation: prior }, candles, evalInterval, nowMs, async () => null);
+  const vRisk = Math.abs(base.entry_point - base.stop_loss);
+  const vReward = Math.abs(base.take_profit_1 - base.entry_point);
+  const rr = vRisk > 0 ? round2(vReward / vRisk) : null;
+  // The gate's own tests (entry.ts), on the variant: enough reward for the
+  // risk, and a stop outside the noise when the ATR is known
+  const stopOk = atr === null || !Number.isFinite(atr) || atr <= 0 || vRisk / atr >= MIN_STOP_ATR;
+  const rrOk = rr !== null && rr >= MIN_RISK_REWARD;
+  let gate: CfResult["gate"] = !rrOk ? "poor_rr" : !stopOk ? "stop_too_tight" : "ok";
+  // The gate's distance and regime tests, on a limit variant: the same
+  // rules entry.ts applies to the model's own plans
+  const ref = base.price_at_signal;
+  if (gate === "ok" && ref !== null && Number.isFinite(ref) && ref > 0) {
+    const scale = entryScale(ref, atr);
+    if (inferEntryType(base.signal, base.entry_point, ref, scale) === "limit") {
+      if (Math.abs(base.entry_point - ref) / scale > MAX_LIMIT_ATR) gate = "too_far";
+      else if (momentum) gate = "should_be_market";
+    }
+  }
   return {
     resolution: j.resolution,
     reason: j.evaluation.reason,
     mfe_r: j.evaluation.mfe_r,
     mae_r: j.evaluation.mae_r,
+    rr,
+    viable: gate === "ok",
+    gate,
   };
+};
+
+// Why a variant would not be published, for the notes
+const gateReason = (r: CfResult | null, atr: number | null): string => {
+  if (!r) return "n/a";
+  switch (r.gate) {
+    case "poor_rr":
+      return `rr ${r.rr ?? "?"} below ${MIN_RISK_REWARD}`;
+    case "stop_too_tight":
+      return `stop under ${MIN_STOP_ATR} ATR${atr !== null ? ` (ATR ${atr})` : ""}`;
+    case "too_far":
+      return `limit more than ${MAX_LIMIT_ATR} ATR from the market`;
+    case "should_be_market":
+      return "a limit in a trend regime, which the gate turns into a market entry";
+    default:
+      return "passes";
+  }
 };
 
 export interface FactsContext {
   // What the model declared and what the indicators said at signal time
   declaredMode?: string | null;
   adx?: number | null;
+  atr?: number | null;
+  // Whether the gate's no-pullback rule applied to the plan
+  momentum?: boolean | null;
+  // The calendar around the plan's life, for attributing an abnormal bar
+  events?: EconEvent[];
 }
 
 export const computeFacts = async (
@@ -301,28 +397,94 @@ export const computeFacts = async (
   const med = median(ranges);
   let abnormal: PostmortemFacts["abnormal_bar"] = null;
   if (med !== null && med > 0) {
-    let best = { at: "", ratio: 0 };
+    let best = { at: "", ratio: 0, t: 0 };
     during.forEach((x, i) => {
       const ratio = ranges[i] / med;
-      if (ratio > best.ratio) best = { at: toIso(x.t), ratio };
+      if (ratio > best.ratio) best = { at: toIso(x.t), ratio, t: x.t };
     });
-    if (best.ratio >= ABNORMAL_RANGE_RATIO) abnormal = { at: best.at, range_ratio: round2(best.ratio) };
+    if (best.ratio >= ABNORMAL_RANGE_RATIO) {
+      const barMs = INTERVAL_MS[evalInterval] ?? HOUR;
+      const scheduled = eventInBar(ctx.events ?? [], row.pair, best.t, best.t + barMs);
+      abnormal = {
+        at: best.at,
+        range_ratio: round2(best.ratio),
+        event: scheduled
+          ? { at: scheduled.event_at, country: scheduled.country, impact: scheduled.impact, title: scheduled.title }
+          : null,
+      };
+    }
+  }
+
+  // The first bars in the trade: did price turn on the entry at once? Only
+  // the bars before the one that settled it (a stop-out bar always shows a
+  // full risk of adverse move, which says nothing about a chase), and not
+  // for stop entries, whose fill bar is mostly the approach to the entry
+  // rather than a move against it.
+  const filledMs = typeof ev?.filled_at === "string" ? Date.parse(ev.filled_at) : NaN;
+  const orderType = ev?.order_type ?? "unknown";
+  let earlyAdverseR: number | null = null;
+  let earlyAdverse = 0;
+  if (Number.isFinite(filledMs) && risk > 0 && (orderType === "market" || orderType === "limit")) {
+    const barMs = INTERVAL_MS[evalInterval] ?? HOUR;
+    const early = post
+      .filter((x) => x.t + barMs > filledMs && (!Number.isFinite(resolvedMs) || x.t < resolvedMs))
+      .slice(0, EARLY_BARS);
+    if (early.length > 0) {
+      for (const { c } of early) {
+        earlyAdverse = Math.max(earlyAdverse, signal === "BUY" ? row.entry_point - c.low : c.high - row.entry_point);
+      }
+      earlyAdverseR = round2(earlyAdverse / risk);
+    }
   }
 
   // Counterfactuals
+  const atr = typeof ctx.atr === "number" && Number.isFinite(ctx.atr) && ctx.atr > 0 ? ctx.atr : null;
+  const gateCtx: GateContext = { atr, momentum: ctx.momentum === true };
   const filled = ev?.filled_at !== null && ev?.filled_at !== undefined;
-  const coherentAt = (entry: number) =>
-    signal === "BUY" ? row.stop_loss < entry && row.take_profit_1 > entry : row.stop_loss > entry && row.take_profit_1 < entry;
-  const cf: PostmortemFacts["counterfactual"] = { market_entry: null, stop_x1_5: null, stop_x2: null, tp_half: null };
+  const coherentAt = (entry: number, stop = row.stop_loss, tp = row.take_profit_1) =>
+    signal === "BUY" ? stop < entry && tp > entry : stop > entry && tp < entry;
+  const cf: PostmortemFacts["counterfactual"] = {
+    market_entry: null, market_entry_same_risk: null, stop_x1_5: null, stop_x2: null, tp_half: null, limit_pullback: null,
+  };
+  // Away from the target: a BUY's pullback and stop sit lower
+  const against = (from: number, r: number) => (signal === "BUY" ? from - risk * r : from + risk * r);
   if (reference !== null && !filled && coherentAt(reference)) {
-    cf.market_entry = await simulate(row, { entry_point: reference, price_at_signal: reference }, candles, evalInterval, nowMs);
+    cf.market_entry = await simulate(row, { entry_point: reference, price_at_signal: reference }, candles, evalInterval, nowMs, gateCtx);
+  }
+  if (reference !== null && !filled && risk > 0 && coherentAt(reference, against(reference, 1))) {
+    cf.market_entry_same_risk = await simulate(
+      row,
+      { entry_point: reference, stop_loss: against(reference, 1), price_at_signal: reference },
+      candles,
+      evalInterval,
+      nowMs,
+      gateCtx,
+    );
   }
   if (filled && risk > 0) {
-    const widen = (k: number) => (signal === "BUY" ? row.entry_point - risk * k : row.entry_point + risk * k);
-    cf.stop_x1_5 = await simulate(row, { stop_loss: widen(1.5) }, candles, evalInterval, nowMs);
-    cf.stop_x2 = await simulate(row, { stop_loss: widen(2) }, candles, evalInterval, nowMs);
+    cf.stop_x1_5 = await simulate(row, { stop_loss: against(row.entry_point, 1.5) }, candles, evalInterval, nowMs, gateCtx);
+    cf.stop_x2 = await simulate(row, { stop_loss: against(row.entry_point, 2) }, candles, evalInterval, nowMs, gateCtx);
     const half = signal === "BUY" ? row.entry_point + reward / 2 : row.entry_point - reward / 2;
-    cf.tp_half = await simulate(row, { take_profit_1: half, take_profit_2: null, take_profit_3: null }, candles, evalInterval, nowMs);
+    cf.tp_half = await simulate(row, { take_profit_1: half, take_profit_2: null, take_profit_3: null }, candles, evalInterval, nowMs, gateCtx);
+    // Waited for a pullback instead: a limit PULLBACK_R away from the entry
+    // with the stop moved along (same risk width), judged against the
+    // market price so the judge sees it as the limit it is. Only when that
+    // level really is a limit from where the market was — for a stop entry
+    // the pullback can land on the market side, which would be judged as a
+    // market order, not a wait.
+    const pullback = against(row.entry_point, PULLBACK_R);
+    const ref = reference ?? row.entry_point;
+    const isLimit = (signal === "BUY" ? pullback < ref : pullback > ref) && Math.abs(pullback - ref) / ref > FILL_TOLERANCE;
+    if (isLimit) {
+      cf.limit_pullback = await simulate(
+        row,
+        { entry_point: pullback, stop_loss: against(pullback, 1), price_at_signal: ref },
+        candles,
+        evalInterval,
+        nowMs,
+        gateCtx,
+      );
+    }
   }
 
   // Regime: what was declared against what the ADX said
@@ -345,20 +507,49 @@ export const computeFacts = async (
   const maxAdvR = toR(maxAdv);
   const beyondSlR = after.length > 0 ? toR(beyondSl) : null;
   const won = (r: CfResult | null) => r?.resolution === "win";
+  // A counterfactual only counts as a remedy when the gate would publish it
+  const wonViable = (r: CfResult | null) => won(r) && r?.viable === true;
+  const marketOrder = (ev?.order_type ?? "unknown") === "market";
 
   switch (ev?.resolution ?? row.outcome) {
-    case "loss":
+    case "loss": {
+      // Chased: a market entry that turned against it at once — by at least
+      // half the risk, and by a real move (half an ATR) rather than the
+      // bar-to-bar noise a narrow stop sits in — while a pullback limit with
+      // the same risk width would have paid. The same path also reads as a
+      // stop inside the noise, so that hint follows; the chase comes first
+      // because widening the stop past the procedure's bounds is not a
+      // remedy the analyzer may apply, and not chasing is.
+      const pays = (r: CfResult | null) => r !== null && won(r) && r.gate !== "poor_rr" && r.gate !== "stop_too_tight";
+      const chased = marketOrder && earlyAdverseR !== null && earlyAdverseR >= EARLY_ADVERSE_R &&
+        (atr === null || earlyAdverse >= 0.5 * atr) && pays(cf.limit_pullback);
+      if (chased) push("entry_too_early");
+      // The stop and target variants say what went wrong even when the
+      // variant itself would not pass the gate (the model is told which);
+      // the entry variants are gated because they are the ones that turn
+      // straight into "enter at the market" rules
       if (tp1Touch !== null || won(cf.stop_x1_5) || won(cf.stop_x2)) push("stop_too_tight");
       if ((ev?.mfe_r ?? 0) >= 0.5 && won(cf.tp_half)) push("target_too_far");
       if (beyondSlR !== null && beyondSlR >= 1 && tp1Touch === null) push("direction_wrong");
       if (abnormal !== null) push("news_shock");
       if (hints.length === 0) push(after.length === 0 ? "inconclusive" : "direction_wrong");
       break;
+    }
     case "untriggered":
       if (ev?.reason === "invalidated") push("direction_wrong");
-      else if (won(cf.market_entry) || (maxFavR !== null && maxFavR >= MISSED_MOVE_R)) push("entry_too_far");
-      else if (cf.market_entry?.resolution === "loss") push("direction_wrong");
-      else push("inconclusive");
+      else if (wonViable(cf.market_entry) || wonViable(cf.market_entry_same_risk)) push("entry_too_far");
+      else if (won(cf.market_entry) || won(cf.market_entry_same_risk)) {
+        // The move was there, but no market version of this plan passes the
+        // gate: the remedy is a different stop or a skip, not "go market"
+        push("inconclusive");
+        notes.push(
+          `a market entry would have reached TP1 but no market version of the plan pays (market: ${gateReason(cf.market_entry, atr)}; same-risk: ${gateReason(cf.market_entry_same_risk, atr)}); the lesson must change the stop or the target, or skip the trade, not switch to a market order`,
+        );
+      } else if (cf.market_entry?.resolution === "loss" || cf.market_entry_same_risk?.resolution === "loss") push("direction_wrong");
+      else if (maxFavR !== null && maxFavR >= MISSED_MOVE_R) {
+        push("inconclusive");
+        notes.push(`price moved ${maxFavR}R in the signal's direction from the reference, but no market version of the plan reached TP1 first`);
+      } else push("inconclusive");
       break;
     case "expired":
       if ((ev?.mfe_r ?? 0) >= 0.5 || won(cf.tp_half)) push("target_too_far");
@@ -366,6 +557,15 @@ export const computeFacts = async (
       break;
     case "win":
       push((ev?.mae_r ?? 0) >= LUCKY_MAE_R ? "lucky_win" : "good_call");
+      if (won(cf.limit_pullback) && cf.limit_pullback?.rr !== null && rr !== null && (cf.limit_pullback?.rr ?? 0) > rr) {
+        notes.push(
+          cf.limit_pullback?.viable
+            ? `a limit ${PULLBACK_R}R back would also have filled and paid ${cf.limit_pullback?.rr}:1 instead of ${rr}:1`
+            : `a limit ${PULLBACK_R}R back would also have filled and paid ${cf.limit_pullback?.rr}:1, but the gate would not publish it (${gateReason(cf.limit_pullback, atr)})`,
+        );
+      } else if (cf.limit_pullback?.resolution === "untriggered") {
+        notes.push(`a limit ${PULLBACK_R}R back would not have filled: entering at once was right`);
+      }
       break;
     case "ambiguous":
       push(ev?.reason === "incoherent" ? "plan_incoherent" : "inconclusive");
@@ -376,7 +576,7 @@ export const computeFacts = async (
   if (regime?.conflict) push("regime_misread");
 
   return {
-    version: 1,
+    version: 2,
     eval_interval: evalInterval,
     bars_after_settlement: after.length,
     risk: round2(risk * 1000) / 1000,
@@ -395,6 +595,7 @@ export const computeFacts = async (
       returned_to_entry: after.length > 0 ? returnedToEntry : null,
     },
     abnormal_bar: abnormal,
+    early_adverse_r: earlyAdverseR,
     counterfactual: cf,
     regime,
     hints,

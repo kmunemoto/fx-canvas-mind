@@ -23,3 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 scripts/.env.x
+
+# Generated deploy artifact, not source. `postmortem` imports across four
+# function directories and its raw sources exceed what the deploy API accepts
+# in one call, so it ships as a bundle built by `npm run bundle:postmortem`.
+# The .ts files stay the single source of truth; this is rebuilt on demand.
+supabase/functions/postmortem/bundle.js

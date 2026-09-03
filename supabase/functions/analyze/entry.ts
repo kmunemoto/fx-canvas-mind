@@ -16,8 +16,9 @@
 //
 // The regime the rules key on is taken from two places: what the model
 // declared (market_context_detail.mode) and what the indicators say (ADX and
-// the moving-average stack). Either one calling it a trend in the signal's
-// direction is enough to forbid waiting for a pullback.
+// the moving-average stack). The indicators calling it a trend in the
+// signal's direction is enough to forbid waiting for a pullback; the model
+// calling it one is enough only while the indicators do not call it a range.
 //
 // Deno-free on purpose: src/test/entry.test.ts imports this file directly.
 
@@ -262,9 +263,14 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
     };
   }
 
+  // The indicators calling it a trend in the signal's direction is enough;
+  // the model calling it one counts only while the indicators do not say
+  // range. A "Trend Day" declared on an ADX under 20 is a range being
+  // chased, and forcing a market entry there is the mistake this rule was
+  // meant to prevent, not a cure for it.
   const momentum =
-    (isMomentumMode(plan.mode) && alignedWithTrend(signal, plan.direction)) ||
-    (derived.regime === "trend" && alignedWithTrend(signal, derived.direction));
+    (derived.regime === "trend" && alignedWithTrend(signal, derived.direction)) ||
+    (derived.regime !== "range" && isMomentumMode(plan.mode) && alignedWithTrend(signal, plan.direction));
 
   if (
     entry === null || stopLoss === null || takeProfit1 === null ||

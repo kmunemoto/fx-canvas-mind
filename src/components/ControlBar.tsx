@@ -1,6 +1,6 @@
 import type { TimeInterval } from "@/lib/types";
 import type { LoadingStage } from "@/lib/types";
-import { Loader2, Zap, Info } from "lucide-react";
+import { Loader2, Zap, Info, Lock } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -15,6 +15,10 @@ interface Props {
   remaining: number | null;
   includeFundamental: boolean;
   onIncludeFundamentalChange: (v: boolean) => void;
+  // Analysis is a paid feature: without a subscription the button becomes the
+  // way to get one rather than a control that fails on the server
+  locked?: boolean;
+  onSubscribe?: () => void;
 }
 
 const INTERVALS: TimeInterval[] = ["15min", "1h", "4h", "1day"];
@@ -28,6 +32,8 @@ const ControlBar = ({
   remaining,
   includeFundamental,
   onIncludeFundamentalChange,
+  locked = false,
+  onSubscribe,
 }: Props) => {
   const t = useT();
   return (
@@ -54,11 +60,16 @@ const ControlBar = ({
       </div>
 
       <button
-        onClick={onAnalyze}
+        onClick={locked ? onSubscribe : onAnalyze}
         disabled={loading}
         className="flex-1 sm:flex-none px-8 py-3 rounded-xl bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
       >
-        {loading ? (
+        {locked ? (
+          <>
+            <Lock className="h-4 w-4" />
+            {t.control.subscribeToAnalyze}
+          </>
+        ) : loading ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
             {t.control.stages[loadingStage] || t.control.analyzing}
@@ -71,7 +82,13 @@ const ControlBar = ({
         )}
       </button>
 
-      {remaining !== null && (
+      {locked && (
+        <span className="text-xs text-muted-foreground flex items-center gap-1">
+          {t.control.paidFeature}
+        </span>
+      )}
+
+      {!locked && remaining !== null && (
         <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
           {t.control.remainingToday(remaining)}
         </span>

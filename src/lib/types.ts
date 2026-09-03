@@ -42,8 +42,11 @@ export interface AnalysisResult {
 }
 
 export interface AppSettings {
-  defaultStopLossPips: number;
-  defaultTakeProfitPips: number;
+  // The stop and target widths are the analyzer's to decide (ATR and
+  // structure, inside the entry gate's bounds). What belongs to the trader is
+  // the size: the balance and the share of it risked on one trade.
+  accountBalance: number;
+  riskPercent: number;
   currencyPair: string;
 }
 
@@ -119,6 +122,11 @@ export interface OutcomePathPoint {
 export interface OutcomeEvaluation {
   version: number;
   eval_interval: string;
+  // Whether the plan was judged on a mid price or on both sides of the book
+  price_basis?: "mid" | "quotes";
+  // The spread the trade actually paid, when it was judged on quotes
+  spread_at_fill?: number | null;
+  spread_at_exit?: number | null;
   order_type: OrderType;
   price_at_signal: number | null;
   // The bar around the signal reached the entry but the timing is unknown
@@ -174,6 +182,7 @@ export type PostmortemCause =
   | "direction_wrong"
   | "stop_too_tight"
   | "entry_too_far"
+  | "entry_too_early"
   | "target_too_far"
   | "regime_misread"
   | "news_shock"
@@ -187,9 +196,15 @@ export interface Counterfactual {
   reason: string | null;
   mfe_r: number | null;
   mae_r: number | null;
+  // v2 facts: the variant's own reward-to-risk, and whether the entry gate
+  // would have published it
+  rr?: number | null;
+  viable?: boolean;
+  gate?: "ok" | "poor_rr" | "stop_too_tight";
 }
 
 export interface PostmortemFacts {
+  version?: number;
   bars_after_settlement: number;
   hours_to_fill: number | null;
   hours_to_settle: number | null;
@@ -201,15 +216,19 @@ export interface PostmortemFacts {
     beyond_sl_r: number | null;
     returned_to_entry: boolean | null;
   };
-  abnormal_bar: { at: string; range_ratio: number } | null;
+  abnormal_bar: { at: string; range_ratio: number; event?: { at: string; country: string; impact: string; title: string } | null } | null;
+  early_adverse_r?: number | null;
   counterfactual: {
     market_entry: Counterfactual | null;
+    market_entry_same_risk?: Counterfactual | null;
     stop_x1_5: Counterfactual | null;
     stop_x2: Counterfactual | null;
     tp_half: Counterfactual | null;
+    limit_pullback?: Counterfactual | null;
   };
   regime: { declared: string | null; adx: number | null; conflict: boolean } | null;
   hints: PostmortemCause[];
+  notes?: string[];
 }
 
 export interface Postmortem {
@@ -227,6 +246,12 @@ export interface Postmortem {
   created_at?: string;
   error?: string;
   attempts?: number;
+  // Diagnosed on little aftermath; revisited once the full window exists
+  thin?: boolean;
+  revisions?: number;
+  rule_blamed?: string | null;
+  rule_credited?: string | null;
+  rulebook_version?: number | null;
 }
 
 // One consolidated rule the analyzer is given (public.rulebook)
@@ -235,9 +260,12 @@ export interface RulebookRule {
   text_ja: string;
   text_en: string;
   cause: string;
+  // Independent clusters of diagnosed plans behind it (server-computed)
   support: number;
   scope: string | null;
   since: string | null;
+  kind?: "constraint" | "heuristic";
+  supported_by?: string[];
 }
 
 export interface Rulebook {
@@ -245,6 +273,23 @@ export interface Rulebook {
   rules: RulebookRule[];
   summary: { ja: string; en: string } | null;
   updated_at: string | null;
+}
+
+// What public.loop_health() returns: whether the review loop is running
+export interface LoopHealth {
+  tracker_last_run_at: string | null;
+  postmortem_last_run_at: string | null;
+  postmortem_last_diagnosed: number | null;
+  postmortem_version?: string | null;
+  open_plans: number;
+  awaiting_review: number;
+  reviewed: number;
+  lessons: number;
+  rulebook_version: number | null;
+  rulebook_updated_at: string | null;
+  lessons_since_rulebook: number;
+  jobs: Array<{ name: string; schedule: string; active: boolean }>;
+  now: string;
 }
 
 // Row shape of public.analyses as read by the client

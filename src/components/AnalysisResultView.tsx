@@ -1,10 +1,11 @@
-import type { AnalysisResult, TechnicalData } from "@/lib/types";
+import type { AnalysisResult, TechnicalData, AppSettings } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
 import PriceChart from "./PriceChart";
 import MarketContextCard from "./MarketContextCard";
 import ScoreCard from "./ScoreCard";
 import { AlertTriangle, Target, TrendingUp } from "lucide-react";
 import { useT } from "@/lib/i18n";
+import { canSizeInYen, positionSize } from "@/lib/position";
 import type { Dict } from "@/lib/i18n/locales";
 
 interface Props {
@@ -12,7 +13,17 @@ interface Props {
   techData?: TechnicalData | null;
   pair: string;
   interval: string;
+  // Balance and risk appetite, for turning the plan's stop distance into a
+  // size. Absent for a WAIT call, which has no levels to size against.
+  settings?: AppSettings;
 }
+
+// The plan's own numbers arrive as display strings
+const num = (v: string | undefined): number | null => {
+  if (typeof v !== "string") return null;
+  const n = Number(v.replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 const riskColor = (r: string) =>
   r === "LOW" ? "success" : r === "MEDIUM" ? "warning" : "destructive";
@@ -31,8 +42,17 @@ const volatilityText = (tech?: TechnicalData | null) => {
   return { pct: pct.toFixed(2), level };
 };
 
-const AnalysisResultView = ({ result, techData, pair, interval }: Props) => {
+const AnalysisResultView = ({ result, techData, pair, interval, settings }: Props) => {
   const t = useT();
+  // Size the trade off the plan's own stop distance, when there is a plan and
+  // the pair's risk is denominated in the balance's currency
+  const size = (() => {
+    if (!settings || result.signal === "WAIT" || !canSizeInYen(pair)) return null;
+    const entry = num(result.entry_point);
+    const stop = num(result.stop_loss);
+    if (entry === null || stop === null) return null;
+    return positionSize({ balance: settings.accountBalance, riskPercent: settings.riskPercent, entry, stop, pair });
+  })();
   const keyFactors = Array.isArray(result?.key_factors) ? result.key_factors : [];
   const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
   const vol = volatilityText(techData);
@@ -87,6 +107,26 @@ const AnalysisResultView = ({ result, techData, pair, interval }: Props) => {
             <p className="text-success font-semibold">{result.take_profit_3 ?? "—"}</p>
           </div>
         </div>
+
+        {/* The market set the distance; this is the half the trader sets. */}
+        {size !== null && (
+          <div className="pt-2 border-t border-border/60" data-testid="position-size">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="text-[11px] text-muted-foreground">{t.result.positionSize}</span>
+              <span className="font-mono font-semibold text-foreground">
+                {t.result.lots(size.lots, size.units)}
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {t.result.riskLine(size.stopPips, size.riskAmount)}
+            </p>
+          </div>
+        )}
+        {size === null && settings && !canSizeInYen(pair) && (
+          <p className="text-[10px] text-muted-foreground pt-2 border-t border-border/60">
+            {t.result.noSizing(pair)}
+          </p>
+        )}
       </div>
 
       {/* Score cards */}

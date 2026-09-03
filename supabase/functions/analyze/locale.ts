@@ -33,6 +33,14 @@ interface LocaleStrings {
   // not appended twice when the model followed the instruction.
   disclaimerMarker: string;
   fallbackWarning: string;
+  // Shown when an account without a subscription asks for an analysis
+  subscriptionRequired: string;
+  // Put in the prompt when the calendar WAS consulted and had nothing inside
+  // the plan's horizon. Without it, "checked and clear" and "never checked"
+  // reach the model as the same empty space.
+  calendarClear: (hours: number) => string;
+  // Put in the prompt when the calendar could not be read at all
+  calendarUnavailable: string;
   // Shown when a plan was downgraded to WAIT because the market would never
   // have reached its entry (see entry.ts)
   entryRejected: (parts: {
@@ -50,6 +58,12 @@ interface LocaleStrings {
   // Shown when an entry inside the "at market" band was pulled onto the
   // market price so that it is entered, and judged, as a market order
   entrySnapped: (parts: { originalEntry: string; entry: string }) => string;
+  // Shown when that pull was declined because the plan breaks at the market
+  // price: the entry stays a few pips off and may not be reached
+  entrySnapDeclined: (parts: { entry: string; price: string; reason: string }) => string;
+  // Shown when the same direction on the same pair is already open from an
+  // earlier plan: another one is the same bet, not a new one
+  openSameDirection: (parts: { count: number; signal: string; hours: number }) => string;
 }
 
 const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
@@ -69,6 +83,11 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimer: "この分析は参考情報です。投資判断は自己責任で行ってください",
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
+    subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
+    calendarClear: (hours) =>
+      `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
+    calendarUnavailable:
+      "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
@@ -94,6 +113,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `AIは ${originalEntry} への戻りを待つ ${signal} を提案しましたが、トレンド継続中に戻りを待つと約定しないため、エントリーを現在値 ${entry} の成行に修正しました（損切り・利確はそのまま）`,
     entrySnapped: ({ originalEntry, entry }) =>
       `エントリー ${originalEntry} は現在値とほぼ同じ水準のため、成行として現在値 ${entry} に揃えました（数pipsの待ちで約定を逃さないため）`,
+    entrySnapDeclined: ({ entry, price, reason }) =>
+      `エントリー ${entry} は現在値 ${price} とほぼ同水準ですが、現在値に揃えると${reason === "stop_too_tight" ? "損切りが近すぎる" : reason === "poor_rr" ? "リスクリワードが崩れる" : "プランが成立しない"}ため指値のまま公開します。数pipsの差で未約定になる可能性があります`,
+    openSameDirection: ({ count, signal, hours }) =>
+      `直近${hours}時間以内に同じ方向（${signal}）のプランが${count}件進行中です。同じ局面への重複エントリーはリスクが積み上がるため、既存ポジションの扱いを決めてから判断してください`,
   },
   en: {
     languageRule:
@@ -111,6 +134,11 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimer: "This analysis is reference information. Trading decisions are your own responsibility.",
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
+    subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
+    calendarClear: (hours) =>
+      `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
+    calendarUnavailable:
+      "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
@@ -136,6 +164,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `The model proposed a ${signal} on a pullback to ${originalEntry}; a pullback does not come in a running trend, so the entry was moved to the market at ${entry} (stop and targets unchanged).`,
     entrySnapped: ({ originalEntry, entry }) =>
       `The entry at ${originalEntry} was effectively at the market, so it was aligned to the market price ${entry} rather than waiting a few pips for a fill.`,
+    entrySnapDeclined: ({ entry, price, reason }) =>
+      `The entry at ${entry} is effectively at the market (${price}), but moving it there would ${reason === "stop_too_tight" ? "leave the stop too close" : reason === "poor_rr" ? "break the risk/reward" : "break the plan"}, so it stays as a limit and may not be reached by a few pips.`,
+    openSameDirection: ({ count, signal, hours }) =>
+      `${count} ${signal} plan${count === 1 ? "" : "s"} on this pair from the last ${hours} hours ${count === 1 ? "is" : "are"} still open. Another entry in the same direction stacks the same bet; decide what to do with the open position first.`,
   },
 };
 

@@ -7,6 +7,7 @@ import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import LearnedRules from "@/components/LearnedRules";
+import LoopHealth from "@/components/LoopHealth";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
@@ -20,6 +21,7 @@ import type {
   NumericCandle,
   TechnicalData,
   TimeInterval,
+  LoopHealth as LoopHealthData,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
@@ -27,7 +29,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v19-2026-09-03T15:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v23-2026-09-03T23:40:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -135,20 +137,35 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
   };
 };
 
+const DEFAULT_SETTINGS: AppSettings = {
+  accountBalance: 1_000_000,
+  riskPercent: 1,
+  currencyPair: "USD/JPY",
+};
+
+// Settings saved before the pips fields were removed are still in the
+// browser; keep the pair and fill in the rest rather than resetting it
+const withDefaults = (stored: unknown): AppSettings => {
+  const s = stored && typeof stored === "object" ? stored as Partial<AppSettings> : {};
+  const num = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
+  return {
+    accountBalance: num(s.accountBalance, DEFAULT_SETTINGS.accountBalance),
+    riskPercent: num(s.riskPercent, DEFAULT_SETTINGS.riskPercent),
+    currencyPair: typeof s.currencyPair === "string" && s.currencyPair ? s.currencyPair : DEFAULT_SETTINGS.currencyPair,
+  };
+};
+
 const loadSettings = (): AppSettings => {
   try {
     const stored = localStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
+    if (stored) return withDefaults(JSON.parse(stored));
   } catch {}
   try {
     const stored = sessionStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
+    if (stored) return withDefaults(JSON.parse(stored));
   } catch {}
-  return {
-    defaultStopLossPips: 30,
-    defaultTakeProfitPips: 60,
-    currencyPair: "USD/JPY",
-  };
+  return DEFAULT_SETTINGS;
 };
 
 const saveSettings = (s: AppSettings) => {
@@ -171,6 +188,7 @@ const Index = () => {
   const [liveRate, setLiveRate] = useState<string | null>(null);
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [rulebook, setRulebook] = useState<Rulebook | null>(null);
+  const [loopHealth, setLoopHealth] = useState<LoopHealthData | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -229,6 +247,15 @@ const Index = () => {
       // The learned rules are a display of what the analyzer knows, nothing
       // else depends on them
     }
+    try {
+      // Whether the review loop is actually running, shown rather than assumed
+      const { data, error } = await supabase.rpc("loop_health");
+      if (!error && data && typeof data === "object") {
+        setLoopHealth(data as LoopHealthData);
+      }
+    } catch {
+      // Best effort, like the rest of the panel
+    }
   }, []);
 
   // On login: settle any open signals against price data, then show history
@@ -263,6 +290,12 @@ const Index = () => {
   }, [userId, loadHistory]);
 
   const handleAnalyze = useCallback(async () => {
+    // The server refuses this anyway (analyze checks the plan before doing any
+    // paid work); this just avoids a pointless round trip and a raw error
+    if (isFreeUser) {
+      navigate("/pricing");
+      return;
+    }
     setLoading(true);
     setLoadingStage("fetching");
     setResult(null);
@@ -381,7 +414,7 @@ const Index = () => {
       setLoading(false);
       setLoadingStage("idle");
     }
-  }, [settings, interval, includeFundamental, locale, t, toast, loadHistory]);
+  }, [settings, interval, includeFundamental, locale, t, toast, loadHistory, isFreeUser, navigate]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -435,6 +468,8 @@ const Index = () => {
           remaining={remaining}
           includeFundamental={includeFundamental}
           onIncludeFundamentalChange={setIncludeFundamental}
+          locked={isFreeUser}
+          onSubscribe={() => navigate("/pricing")}
         />
 
         {limitReached && (
@@ -469,6 +504,7 @@ const Index = () => {
                   techData={techData}
                   pair={resultMeta.pair}
                   interval={resultMeta.interval}
+                  settings={settings}
                 />
               </>
             ) : (
@@ -487,6 +523,7 @@ const Index = () => {
 
           <div className="space-y-4">
             {techData && !loading && <TechnicalDataCard data={techData} />}
+            <LoopHealth health={loopHealth} />
             <LearnedRules rulebook={rulebook} />
             <AnalysisHistory records={history} />
           </div>

@@ -139,6 +139,22 @@ describe("evaluateEntry — the defect this exists for", () => {
     expect(v.momentum).toBe(false);
   });
 
+  it("does not force a market entry on a declared trend that the indicators call a range", () => {
+    // The model says "Trend Day", the ADX says 15: a pullback limit stands
+    const v = evaluateEntry({
+      ...base,
+      entry: 157.3,
+      stopLoss: 157.9,
+      takeProfit1: 156.4,
+      indicators: { adx: 15, sma20: 157.2, sma50: 157.1 },
+    });
+    expect(v.momentum).toBe(false);
+    expect(v.regime).toBe("range");
+    expect(v.ok).toBe(true);
+    expect(v.rejection).toBeNull();
+    expect(v.entryType).toBe("limit");
+  });
+
   it("accepts the same plan when the signal fights the trend (a real reversal)", () => {
     const v = evaluateEntry({
       ...base,

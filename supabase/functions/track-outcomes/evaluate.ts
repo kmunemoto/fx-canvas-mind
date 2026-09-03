@@ -15,6 +15,7 @@
 // bar that proved it may have been still forming at the time.
 
 import type { Candle } from "../analyze/indicators.ts";
+import { exitSide, fillSide, isMarketClosed, sideOf, type QuoteCandle } from "./quotes.ts";
 
 export type Signal = "BUY" | "SELL";
 export type Resolution = "win" | "loss" | "untriggered" | "ambiguous" | "expired";
@@ -33,6 +34,14 @@ export interface PathPoint {
 export interface Evaluation {
   version: 3;
   eval_interval: string;
+  // Where the bars came from: "mid" is a single mid price (Twelve Data),
+  // "quotes" is bid and ask, so the fill and the exit were judged on the
+  // side of the book each actually happens on
+  price_basis?: "mid" | "quotes";
+  // The spread at the fill and at the settlement, in price units — what the
+  // mid-price judgement was silently leaving out
+  spread_at_fill?: number | null;
+  spread_at_exit?: number | null;
   order_type: OrderType;
   price_at_signal: number | null;
   // The bar around the signal reached the entry, but whether that happened
@@ -307,10 +316,19 @@ interface Ctx {
   // filled one expires
   entryWindowMs: number;
   expiryMs: number;
+  // What a market order actually pays: the fill side's price around the
+  // signal when quotes are available, the plan's own number otherwise
+  marketFillPrice: number;
 }
 
 interface Timed {
+  // The side of the book the entry is filled on: the ask for a BUY, the bid
+  // for a SELL. On mid data both sides are the same candle.
   c: Candle;
+  // The side the position is closed on — the other one. A BUY's stop and
+  // target are both reached on the bid, which sits below the mid, so judging
+  // them on the mid reaches the stop late and the target early.
+  x: Candle;
   t: number;
   ms: number; // bar duration
   mt: number; // market time elapsed since the signal before this bar
@@ -332,11 +350,13 @@ const withExcursion = (state: State, row: OpenRow, c: Candle, sides: "both" | "a
     : Math.max(state.mae ?? 0, adverseMove(row.signal, row.entry_point, c), 0),
 });
 
-const filledAt = (row: OpenRow, at: string): State => ({
+// A limit or stop order gets the price it named; a market order gets what
+// the book was showing on its side, which is not the number on the plan.
+const filledAt = (row: OpenRow, at: string, price: number): State => ({
   ...EMPTY_STATE,
   filled: true,
   filled_at: at,
-  fill_price: row.entry_point,
+  fill_price: price,
 });
 
 // One bar of the plan's life. The fill bar also gets a resolution check: a
@@ -345,7 +365,9 @@ const filledAt = (row: OpenRow, at: string): State => ({
 // have done so before filling (unknown); a stop entry is the mirror.
 const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event } => {
   const { row, orderType } = ctx;
+  // The entry is reached on one side of the book, the exits on the other
   const c = bar.c;
+  const x = bar.x;
   const at = toIso(bar.t);
 
   if (!state.filled && bar.mt >= ctx.entryWindowMs) {
@@ -356,11 +378,11 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
       : { state, event: { kind: "untriggered", reason: "no_fill", at } };
   }
   if (state.filled && bar.mt >= ctx.expiryMs) {
-    return { state, event: { kind: "expired", at, price: c.open } };
+    return { state, event: { kind: "expired", at, price: x.open } };
   }
 
-  const tp = hitsTp(row.signal, c, row.take_profit_1);
-  const sl = hitsSl(row.signal, c, row.stop_loss);
+  const tp = hitsTp(row.signal, x, row.take_profit_1);
+  const sl = hitsSl(row.signal, x, row.stop_loss);
 
   if (!state.filled) {
     if (!touches(c, row.entry_point)) {
@@ -375,7 +397,7 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
     // Price came from the market side, so on the fill bar only the far side
     // of the entry was traversed as a position
     const sides = orderType === "limit" ? "adverse" : orderType === "stop" ? "favorable" : "both";
-    const filled = withExcursion(filledAt(row, at), row, c, sides);
+    const filled = withExcursion(filledAt(row, at, row.entry_point), row, x, sides);
     if (tp && sl) return { state: filled, event: { kind: "ambiguous", at, refinable: true } };
     if (tp) {
       return orderType === "limit" || orderType === "unknown"
@@ -390,18 +412,41 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
     return { state: filled, event: { kind: "filled" } };
   }
 
-  const next = withExcursion(state, row, c);
+  const next = withExcursion(state, row, x);
   if (tp && sl) return { state: next, event: { kind: "ambiguous", at, refinable: true } };
   if (tp) return { state: next, event: { kind: "win", at } };
   if (sl) return { state: next, event: { kind: "loss", at } };
   return { state: next, event: { kind: "none" } };
 };
 
+// The mid-price feed does not publish bars for a market that was shut, and
+// market time is measured off the bars that exist, so this path is left
+// exactly as it was.
 const timeline = (candles: Candle[], nowMs: number, ms: number): Timed[] =>
   candles
-    .map((c) => ({ c, t: parseCandleTime(c.datetime), ms, mt: 0 }))
-    .filter((x) => Number.isFinite(x.t) && x.t <= nowMs + FUTURE_SLACK_MS)
+    .map((c) => {
+      const t = parseCandleTime(c.datetime);
+      return { c, x: c, t, ms, mt: 0 };
+    })
+    .filter((b) => Number.isFinite(b.t) && b.t <= nowMs + FUTURE_SLACK_MS)
     .sort((a, b) => a.t - b.t);
+
+// The same, from two-sided quotes: the plan's own direction decides which
+// side fills it and which side closes it. Unlike the mid feed, this
+// provider's behaviour across the weekend break is not established, so a bar
+// stamped inside the closed session is dropped — a level "touched" while
+// nobody could trade was never really reached.
+const quoteTimeline = (quotes: QuoteCandle[], signal: Signal, nowMs: number, ms: number): Timed[] => {
+  const fill = fillSide(signal);
+  const exit = exitSide(signal);
+  return quotes
+    .map((q) => {
+      const t = parseCandleTime(q.datetime);
+      return { c: sideOf(q, fill), x: sideOf(q, exit), t, ms, mt: 0 };
+    })
+    .filter((b) => Number.isFinite(b.t) && b.t <= nowMs + FUTURE_SLACK_MS && !isMarketClosed(b.t))
+    .sort((a, b) => a.t - b.t);
+};
 
 // Market time before each bar = the durations of the bars that came before
 // it; gaps between bars (weekends, holidays) are not counted
@@ -439,11 +484,12 @@ const targetsReached = (ctx: Ctx, bars: Timed[], state: State): { tps: number[];
   if (extra.length === 0) return { tps, state };
 
   for (let i = 0; i < bars.length; i++) {
-    const c = bars[i].c;
-    if (i > 0 && adverseMove(row.signal, row.entry_point, c) >= 0) break;
-    state = withExcursion(state, row, c);
+    // A runner is closed on the exit side too
+    const x = bars[i].x;
+    if (i > 0 && adverseMove(row.signal, row.entry_point, x) >= 0) break;
+    state = withExcursion(state, row, x);
     for (const [n, tp] of extra) {
-      if (!tps.includes(n) && hitsTp(row.signal, c, tp)) tps.push(n);
+      if (!tps.includes(n) && hitsTp(row.signal, x, tp)) tps.push(n);
     }
   }
   return { tps: tps.sort(), state };
@@ -464,16 +510,18 @@ const assessSignalBar = (
   const { row, orderType } = ctx;
   let state = EMPTY_STATE;
   if (orderType === "market") {
-    state = filledAt(row, toIso(createdMs));
+    // A market order does not get the number written on the plan; it gets
+    // whatever its own side of the book was showing
+    state = filledAt(row, toIso(createdMs), ctx.marketFillPrice);
   } else if (
     signalBar !== null && orderType !== "unknown" && reference !== null &&
     touches(signalBar.c, row.entry_point)
   ) {
     const crossed = (reference - row.entry_point) * (signalBar.c.close - row.entry_point) <= 0;
-    state = crossed ? filledAt(row, toIso(createdMs)) : { ...state, possibleFill: true };
+    state = crossed ? filledAt(row, toIso(createdMs), row.entry_point) : { ...state, possibleFill: true };
   }
   if (state.filled && signalBar !== null &&
-    (hitsTp(row.signal, signalBar.c, row.take_profit_1) || hitsSl(row.signal, signalBar.c, row.stop_loss))) {
+    (hitsTp(row.signal, signalBar.x, row.take_profit_1) || hitsSl(row.signal, signalBar.x, row.stop_loss))) {
     return { state, event: { kind: "ambiguous", at: toIso(createdMs), refinable: true } };
   }
   return { state, event: null };
@@ -485,6 +533,10 @@ export const judgePlan = async (
   evalInterval: string,
   nowMs: number,
   fetchFine?: FineFetcher,
+  // Two-sided bars for the plan's pair. When present the plan is judged the
+  // way it would have been executed — filled on one side of the book, closed
+  // on the other — instead of on a mid price nobody trades at.
+  quotes?: QuoteCandle[],
 ): Promise<Judgement> => {
   const createdMs = Date.parse(row.created_at);
   const evalMs = INTERVAL_MS[evalInterval] ?? HOUR;
@@ -494,8 +546,11 @@ export const judgePlan = async (
   const ageMs = nowMs - createdMs;
   const entryWindowMs = ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR;
   const expiryMs = (EXPIRY_DAYS[row.interval] ?? 30) * DAY;
+  const twoSided = Array.isArray(quotes) && quotes.length > 0;
 
-  let series = timeline(candles, nowMs, evalMs);
+  let series = twoSided
+    ? quoteTimeline(quotes as QuoteCandle[], row.signal, nowMs, evalMs)
+    : timeline(candles, nowMs, evalMs);
   const windowCoversSignal = series.length > 0 && series[0].t <= createdMs + evalMs;
 
   // Locate the bar containing the signal and the bars after it
@@ -511,6 +566,12 @@ export const judgePlan = async (
 
   const reference = row.price_at_signal ?? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : null);
   const orderType = classifyOrder(row, reference);
+  // What a market order really costs: on two-sided data, the fill side's
+  // price around the signal. On mid data there is nothing better than the
+  // plan's own number, which is what every judgement used before.
+  const marketFillPrice = twoSided
+    ? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : row.entry_point)
+    : row.entry_point;
   const ctx: Ctx = {
     row,
     orderType,
@@ -518,6 +579,7 @@ export const judgePlan = async (
     invalidatedArmed: reference === null || (row.signal === "BUY" ? row.stop_loss < reference : row.stop_loss > reference),
     entryWindowMs,
     expiryMs,
+    marketFillPrice,
   };
 
   // A fill an earlier run established stands: the bar that proved it may
@@ -719,9 +781,23 @@ export const judgePlan = async (
     : series.length;
   const path = downsamplePath(series.slice(contextStart, contextEnd).map((x) => x.c), PATH_POINTS);
 
+  // The spread the plan actually paid, at the two moments it mattered
+  const spreadAtBar = (atMs: number | null): number | null => {
+    if (!twoSided || atMs === null || !Number.isFinite(atMs)) return null;
+    const bar = series.filter((b) => b.t <= atMs).pop() ?? series[0];
+    if (!bar) return null;
+    const s = Math.abs(bar.x.close - bar.c.close);
+    return Number.isFinite(s) ? Number(s.toFixed(5)) : null;
+  };
+  const filledMs = state.filled_at ? Date.parse(state.filled_at) : null;
+  const settledMs = resolvedAt ? Date.parse(resolvedAt) : null;
+
   const evaluation: Evaluation = {
     version: 3,
     eval_interval: evalInterval,
+    price_basis: twoSided ? "quotes" : "mid",
+    spread_at_fill: spreadAtBar(filledMs),
+    spread_at_exit: spreadAtBar(settledMs),
     order_type: orderType,
     price_at_signal: row.price_at_signal,
     possible_fill: state.possibleFill,

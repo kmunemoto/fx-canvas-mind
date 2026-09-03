@@ -1,4 +1,6 @@
-const FUNCTION_VERSION = "analyze-v19-2026-09-03T15:00:00Z";
+const FUNCTION_VERSION = "analyze-v23-2026-09-03T23:40:00Z";
+// Open plans in the same direction inside this window are the same bet
+const OPEN_PLAN_WINDOW_HOURS = 24;
 
 import {
   computeSnapshot,
@@ -34,7 +36,8 @@ import {
   type EntryVerdict,
 } from "./entry.ts";
 
-import { parseRules, renderLearnedRules } from "./rules.ts";
+import { parseRules, selectPromptRules } from "./rules.ts";
+import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,6 +46,10 @@ const corsHeaders = {
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+
+// Plans that may run an analysis at all. Anything else — "free", an expired
+// subscription, a missing profile row — is refused before any paid work.
+const PAID_PLANS = new Set(["light", "standard", "pro"]);
 
 // Server-side allowlist mirroring the pairs the UI offers. Without it any
 // authenticated caller could aim the analyzer (and the paid market-data +
@@ -216,6 +223,7 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 - ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
 - RSI・Stoch の過熱と価格構造が矛盾する場合（ダイバージェンス）は必ず言及する。
 
+{{EVENTS}}
 {{LEARNED_RULES}}`;
 
 const RESPONSE_SCHEMA = {
@@ -640,13 +648,28 @@ Deno.serve(async (req: Request) => {
 
     const isAdmin = ADMIN_EMAILS.includes((user.email || "").toLowerCase());
     const plan = isAdmin ? "pro" : (profile?.plan || "free");
+
+    // Analysis is a paid feature. Every call costs a model turn and several
+    // market-data requests, so an account without a subscription is turned
+    // away here — before any of that is spent, and before a quota row is
+    // touched. The client hides the button, but the client is not the guard.
+    stage = "check_subscription";
+    if (!isAdmin && !PAID_PLANS.has(plan)) {
+      return json({
+        ok: false,
+        error: L.subscriptionRequired,
+        diagnostics: { error_stage: "subscription_required", stage, plan },
+        subscription_required: true,
+        plan,
+      }, 402);
+    }
+
     const limits: Record<string, number> = {
-      free: 2,
       light: 10,
       standard: 30,
       pro: 9999,
     };
-    const dailyLimit = limits[plan] || 3;
+    const dailyLimit = limits[plan] || 10;
 
     // Check-and-increment in one statement, before any paid work. Reading the
     // count, testing it, then writing it back lets concurrent requests all
@@ -693,6 +716,8 @@ Deno.serve(async (req: Request) => {
     stage = "load_rulebook";
     let rulebookVersion: number | null = null;
     let learnedRules = "";
+    // The rules that fit in the prompt — what the model actually saw
+    let rulesShown: string[] = [];
     try {
       const rulebookRes = await fetch(`${supabaseUrl}/rest/v1/rulebook?id=eq.1&select=version,rules`, {
         headers: {
@@ -707,10 +732,57 @@ Deno.serve(async (req: Request) => {
       if (isRecord(rulebook)) {
         const v = asFiniteNumber(rulebook.version);
         rulebookVersion = v === null ? null : Math.round(v);
-        learnedRules = renderLearnedRules(parseRules(rulebook.rules));
+        const shown = selectPromptRules(parseRules(rulebook.rules), locale);
+        learnedRules = shown.text;
+        rulesShown = shown.ids;
       }
     } catch (err) {
       console.warn("Rulebook unavailable:", err instanceof Error ? err.message : String(err));
+    }
+
+    // Scheduled releases the plan has to live through. Free, cached hourly by
+    // the econ-calendar function; a plan written an hour before Non-Farm
+    // Payrolls with no mention of it is not a plan.
+    stage = "load_events";
+    let eventBlock = "";
+    let eventsAhead: Array<{ at: string; country: string; impact: string; title: string }> = [];
+    // "The calendar was read and the horizon is clear" and "the calendar could
+    // not be read" are different facts, and an empty block said neither. A
+    // plan written 17 hours before Non-Farm Payrolls on a 1h timeframe sees an
+    // empty horizon quite legitimately — but it must know that is what it is
+    // looking at, or it will treat silence as an all-clear it never got.
+    let calendarOk = false;
+    try {
+      const horizon = HORIZON_MS[interval] ?? 12 * 60 * 60 * 1000;
+      const currencies = [...currenciesOf(currencyPair), "All"];
+      const until = new Date(Date.now() + horizon).toISOString();
+      const eventsRes = await fetch(
+        `${supabaseUrl}/rest/v1/econ_events?select=id,event_at,country,title,impact,forecast,previous,all_day,source` +
+          `&event_at=gte.${encodeURIComponent(new Date(Date.now() - 60 * 60 * 1000).toISOString())}` +
+          `&event_at=lte.${encodeURIComponent(until)}` +
+          `&country=in.(${currencies.map(encodeURIComponent).join(",")})` +
+          `&impact=in.(High,Medium)&order=event_at.asc&limit=25`,
+        { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
+      );
+      const rows = eventsRes.ok ? parseJsonResponse(await eventsRes.text()) : null;
+      if (Array.isArray(rows)) {
+        const events = rows.filter(isRecord) as unknown as EconEvent[];
+        const upcoming = upcomingFor(events, currencyPair, Date.now(), horizon);
+        eventBlock = renderEventBlock(upcoming, Date.now(), locale);
+        eventsAhead = upcoming.slice(0, 8).map((e) => ({
+          at: e.event_at, country: e.country, impact: e.impact, title: e.title,
+        }));
+        calendarOk = true;
+      }
+    } catch (err) {
+      console.warn("Calendar unavailable:", err instanceof Error ? err.message : String(err));
+    }
+    // renderEventBlock returns "" for an empty horizon, so say which of the
+    // two silences this is
+    if (eventBlock === "") {
+      eventBlock = calendarOk
+        ? L.calendarClear(Math.round((HORIZON_MS[interval] ?? 12 * 60 * 60 * 1000) / (60 * 60 * 1000)))
+        : L.calendarUnavailable;
     }
 
     stage = "fetch_market_data";
@@ -823,6 +895,7 @@ Deno.serve(async (req: Request) => {
       max_tokens: 8000,
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
+        .replace("{{EVENTS}}", eventBlock)
         .replace("{{LEARNED_RULES}}", learnedRules)
         .trimEnd(),
       messages: [{
@@ -1059,7 +1132,9 @@ Deno.serve(async (req: Request) => {
       // more than ~3 pips from the market as a limit that has to be touched,
       // so publish the price the checker actually approved.
       const originalEntry = normalizedAnalysis.entry_point;
-      normalizedAnalysis.entry_point_num = entryVerdict.entry;
+      // Stored at the displayed precision, so the price the tracker judges
+      // is the price the user was shown
+      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
       normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
       normalizedAnalysis.entry_type = "market";
       if (entryVerdict.riskReward !== null) {
@@ -1075,7 +1150,9 @@ Deno.serve(async (req: Request) => {
       // The pullback would not have come; the same plan entered now still
       // pays, so that is what gets published — and said.
       const originalEntry = normalizedAnalysis.entry_point;
-      normalizedAnalysis.entry_point_num = entryVerdict.entry;
+      // Stored at the displayed precision, so the price the tracker judges
+      // is the price the user was shown
+      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
       normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
       normalizedAnalysis.entry_type = "market";
       if (entryVerdict.riskReward !== null) {
@@ -1125,6 +1202,17 @@ Deno.serve(async (req: Request) => {
       // The user asked for a plan and the gate took it away; that is not a
       // credit spent
       await releaseQuota();
+    } else if (entryVerdict.ok && entryVerdict.snapDeclined) {
+      // Inside the market band but left as written: say so, because the
+      // tracker will treat it as a limit that has to be touched
+      normalizedAnalysis.warnings = [
+        L.entrySnapDeclined({
+          entry: normalizedAnalysis.entry_point,
+          price: entrySnapshot.price.toFixed(decimals),
+          reason: entryVerdict.snapDeclined,
+        }),
+        ...normalizedAnalysis.warnings,
+      ];
     }
 
     const entryCheck = {
@@ -1150,6 +1238,31 @@ Deno.serve(async (req: Request) => {
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
       price: entrySnapshot.price,
     };
+
+    // The same direction on the same pair already open from an earlier plan:
+    // another one is the same bet again, not a new one, and the record would
+    // count it as an independent sample. Said on the plan, and kept with it.
+    stage = "check_open_plans";
+    let openSameDirection = 0;
+    if (serviceRoleKey && (normalizedAnalysis.signal === "BUY" || normalizedAnalysis.signal === "SELL")) {
+      try {
+        const sinceIso = new Date(Date.now() - OPEN_PLAN_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+        const openRes = await fetch(
+          `${supabaseUrl}/rest/v1/analyses?select=id&user_id=eq.${encodeURIComponent(user.id)}&pair=eq.${encodeURIComponent(currencyPair)}&signal=eq.${normalizedAnalysis.signal}&outcome=eq.pending&shadow=is.false&created_at=gte.${encodeURIComponent(sinceIso)}&limit=10`,
+          { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
+        );
+        const openRows = openRes.ok ? parseJsonResponse(await openRes.text()) : null;
+        openSameDirection = Array.isArray(openRows) ? openRows.length : 0;
+        if (openSameDirection > 0) {
+          normalizedAnalysis.warnings = [
+            L.openSameDirection({ count: openSameDirection, signal: normalizedAnalysis.signal, hours: OPEN_PLAN_WINDOW_HOURS }),
+            ...normalizedAnalysis.warnings,
+          ];
+        }
+      } catch (err) {
+        console.warn("Open plan check unavailable:", err instanceof Error ? err.message : String(err));
+      }
+    }
 
     // What the model was looking at, kept with the plan so a post-mortem can
     // tell a misread market from a wrong call
@@ -1182,6 +1295,9 @@ Deno.serve(async (req: Request) => {
           swing_lows: s.swingLows.map((v) => roundTo(v, decimals)),
         };
     const context = {
+      open_same_direction: openSameDirection,
+      rules_shown: rulesShown,
+      events_ahead: eventsAhead,
       timeframes,
       entry: compactSnapshot(timeframes[0], snapshots[0]),
       higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byConfidence, byMode, byTimeframe, confidenceBandKey, tally } from "../lib/outcomeStats";
+import { byConfidence, byMode, byRulebookVersion, byTimeframe, confidenceBandKey, realizedR, tally } from "../lib/outcomeStats";
 import type { AnalysisRecord } from "../lib/types";
 
 const rec = (over: Partial<AnalysisRecord>): AnalysisRecord => ({
@@ -99,5 +99,50 @@ describe("groupings", () => {
     expect(confidenceBandKey(null)).toBe("unknown");
     expect(byConfidence(records).map((g) => g.key)).toEqual(["0-59", "60-69", "70-79", "80+"]);
     expect(byConfidence([...records, rec({ confidence: null, outcome: "win" })]).map((g) => g.key)).toEqual(["0-59", "60-69", "70-79", "80+", "unknown"]);
+  });
+});
+
+describe("the honest record", () => {
+  const sell = { signal: "SELL" as const, entry_point: 150, stop_loss: 151, take_profit_1: 148 };
+
+  it("scores settled plans in R and says what the rate rests on", () => {
+    const t = tally("all", [
+      rec({ outcome: "win", created_at: "2026-09-03T04:00:00Z" }), // BUY 150 / 149 / 152: +2R
+      rec({ outcome: "loss", ...sell, created_at: "2026-09-03T04:00:00Z" }),
+      // the same situation an hour later: one cluster with the loss above
+      rec({ outcome: "loss", ...sell, created_at: "2026-09-03T05:00:00Z" }),
+      rec({ outcome: "expired", outcome_price: 150.5, created_at: "2026-09-05T04:00:00Z" }), // +0.5R
+      rec({ outcome: "untriggered" }),
+    ]);
+    expect(t.wins).toBe(1);
+    expect(t.losses).toBe(2);
+    expect(t.winRate).toBe(33);
+    expect(t.winRateCi).toEqual([6, 79]);
+    expect(t.clusters).toBe(2);
+    expect(t.sumR).toBe(0.5);
+    expect(t.expectancy).toBe(0.13);
+  });
+
+  it("splits the record by rulebook version, before-rules first", () => {
+    const groups = byRulebookVersion([
+      rec({ outcome: "win", rulebook_version: 3 }),
+      rec({ outcome: "loss", rulebook_version: null }),
+      // the seeded, empty rulebook: no rules in force either
+      rec({ outcome: "loss", rulebook_version: 0 }),
+      rec({ outcome: "loss", rulebook_version: 2 }),
+      rec({ outcome: "pending", rulebook_version: 10 }),
+    ]);
+    expect(groups.map((g) => g.key)).toEqual(["none", "v2", "v3", "v10"]);
+    expect(groups[0]).toMatchObject({ losses: 2, sumR: -2 });
+    expect(groups[2]).toMatchObject({ wins: 1, sumR: 2 });
+  });
+
+  it("prices a settled plan in multiples of its risk", () => {
+    expect(realizedR(rec({ outcome: "win" }))).toBe(2);
+    expect(realizedR(rec({ outcome: "loss" }))).toBe(-1);
+    expect(realizedR(rec({ outcome: "expired", outcome_price: 149.5 }))).toBe(-0.5);
+    expect(realizedR(rec({ outcome: "expired", ...sell, outcome_price: 149.5 }))).toBe(0.5);
+    expect(realizedR(rec({ outcome: "pending" }))).toBeNull();
+    expect(realizedR(rec({ outcome: "untriggered" }))).toBeNull();
   });
 });

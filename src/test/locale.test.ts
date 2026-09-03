@@ -90,3 +90,25 @@ describe("prompt strings", () => {
     expect(stringsFor("en").languageRule).toContain("English");
   });
 });
+
+describe("the calendar's two silences", () => {
+  it("distinguishes a clear horizon from a calendar it could not read", () => {
+    for (const loc of ["ja", "en"] as const) {
+      const L = stringsFor(loc);
+      const clear = L.calendarClear(12);
+      const broken = L.calendarUnavailable;
+      // Both must actually say something: an empty block let the model read
+      // "never checked" as "nothing scheduled"
+      expect(clear.length).toBeGreaterThan(20);
+      expect(broken.length).toBeGreaterThan(20);
+      expect(clear).not.toBe(broken);
+      expect(clear).toContain("12");
+    }
+    // The clear message must not be mistakable for an all-clear beyond the
+    // published week
+    expect(stringsFor("ja").calendarClear(12)).toContain("今週分");
+    expect(stringsFor("en").calendarClear(12)).toContain("current week");
+    expect(stringsFor("en").calendarClear(12)).not.toMatch(/[\u3040-\u30ff\u4e00-\u9faf]/);
+    expect(stringsFor("en").calendarUnavailable).not.toMatch(/[\u3040-\u30ff\u4e00-\u9faf]/);
+  });
+});

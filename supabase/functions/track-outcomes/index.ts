@@ -25,8 +25,9 @@ import {
   type FineFetcher,
   type OpenRow,
 } from "./evaluate.ts";
+import { fetchQuotes, supportsQuotes, type QuoteCandle } from "./quotes.ts";
 
-const TRACKER_VERSION = "track-outcomes-v4-2026-09-03T11:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v6-2026-09-03T23:10:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -34,6 +35,14 @@ const MAX_ROWS = 60;
 // shared key allows 8 per minute; the rest is left for analyses running at
 // the same moment. Anything beyond the budget waits for the next tick.
 const MAX_REQUESTS = 5;
+
+// Quotes come from a different provider (GMO Coin's public FX endpoint:
+// keyless, no account, bid and ask served separately), so they do not spend
+// the Twelve Data budget above. Two requests per calendar day per group, so
+// the lookback is capped: a plan whose window is longer than this is judged
+// on the mid feed, and says so in `price_basis`.
+const MAX_QUOTE_REQUESTS = 12;
+const MAX_QUOTE_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 const TWELVE_DATA = "https://api.twelvedata.com/time_series";
 
 const corsHeaders = {
@@ -259,6 +268,45 @@ Deno.serve(async (req: Request) => {
     const errors: string[] = [];
     const resolved: Array<{ id: string; outcome: string }> = [];
 
+    // Bid and ask for a group, when the window is short enough to be worth
+    // the requests. A failure here is never fatal: the plan is judged on the
+    // mid feed exactly as it was before.
+    let quoteRequests = 0;
+    let quoteGroups = 0;
+    let quoteEmptyKeys = 0;
+    const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null> => {
+      if (!supportsQuotes(pair, evalInterval)) return null;
+      if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
+      if (nowMs - fromMs > MAX_QUOTE_LOOKBACK_MS) return null;
+      try {
+        const res = await fetchQuotes(pair, evalInterval, fromMs, nowMs, nowMs, async (url) => {
+          if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
+          quoteRequests++;
+          const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (!r.ok) return null;
+          return await r.json().catch(() => null);
+        });
+        if (!res || res.bars.length === 0) return null;
+        // A gap in the two-sided series would be judged as "price never got
+        // there"; fall back rather than invent a verdict from partial data.
+        // `missing` now measures the hole in open market rather than counting
+        // date keys that came back empty — the provider's newest trading day
+        // has no file until the New York roll, and treating that as a failure
+        // silently sent every judgement back to the mid feed.
+        if (res.missing.length > 0) {
+          errors.push(`${pair}|${evalInterval}: quotes incomplete (${res.missing.join(",")})`);
+          return null;
+        }
+        if (res.empty.length > 0) quoteEmptyKeys += res.empty.length;
+        quoteGroups++;
+        return res.bars;
+      } catch (err) {
+        errors.push(`${pair}|${evalInterval}: quotes ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    };
+
+
     const writeRow = async (row: OpenRow, patch: JsonRecord): Promise<boolean> => {
       const n = await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}&outcome=eq.pending`, patch);
       if (n === 0) errors.push(`${row.id}: not updated`);
@@ -298,8 +346,18 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // Two-sided bars for the whole group, when they can cover every plan in
+      // it. A partial window would read as "price never got there", so the
+      // oldest plan decides: if it reaches back too far, the group is judged
+      // on the mid feed as before.
+      const oldestMs = groupRows.reduce((min, r) => {
+        const t = Date.parse(r.created_at);
+        return Number.isFinite(t) ? Math.min(min, t) : min;
+      }, nowMs);
+      const quotes = await fetchQuotesFor(pair, evalInterval, oldestMs);
+
       for (const row of groupRows) {
-        const judgement = await judgePlan(row, candles, evalInterval, nowMs, fetchFine);
+        const judgement = await judgePlan(row, candles, evalInterval, nowMs, fetchFine, quotes ?? undefined);
         const patch: JsonRecord = judgement.resolution
           ? {
             outcome: judgement.resolution,
@@ -326,6 +384,9 @@ Deno.serve(async (req: Request) => {
       due: due.length,
       groups: groupCount,
       requests,
+      quote_requests: quoteRequests,
+      quote_groups: quoteGroups,
+      quote_empty_keys: quoteEmptyKeys,
       refinements,
       checked,
       updated,
