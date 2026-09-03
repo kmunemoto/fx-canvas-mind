@@ -1,0 +1,328 @@
+// Japanese is the source of truth for the dictionary shape: `Dict = typeof ja`,
+// and every other locale is typed as `Dict`, so adding a key here turns every
+// untranslated locale into a compile error rather than a silent fallback.
+// That matters more than usual here — a missing string in a trading UI is a
+// blank where a price or a direction should be.
+
+export const ja = {
+  localeName: "日本語",
+  // Used for Intl date/number formatting, and sent to the analyze function so
+  // the model writes its analysis in the same language the UI is in.
+  intlLocale: "ja-JP",
+
+  common: {
+    appName: "FX Tactical Analyzer",
+    cancel: "キャンセル",
+    close: "閉じる",
+    processing: "処理中...",
+    error: "エラー",
+    language: "言語",
+    dash: "—",
+  },
+
+  header: {
+    upgrade: "プランをアップグレード",
+    changePlan: "プランを変更",
+    cancelPending: "(解約予定)",
+    signOut: "ログアウト",
+    settings: "設定",
+  },
+
+  control: {
+    intervals: { "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
+    analyze: "分析開始",
+    analyzing: "分析中...",
+    stages: {
+      idle: "",
+      fetching: "データ取得中...",
+      analyzing: "AI分析中...",
+      generating_judgment: "総合判断中...",
+    },
+    remainingToday: (n: number) => `本日の残り: ${n}回`,
+    includeFundamental: "経済ニュース・指標も考慮する",
+    fundamentalHelp: "詳細",
+    fundamentalOn: "ONで最新ニュース・経済指標を統合分析（精度向上・時間増）",
+    fundamentalOff: "OFFでテクニカル指標のみで判断（高速・シンプル）",
+    tooltipOn: "ON: 最新ニュース・経済指標を統合分析（精度向上・時間増）",
+    tooltipOff: "OFF: テクニカル指標のみで判断（高速・シンプル）",
+  },
+
+  stages: {
+    banner: "SIGNAL ANALYSIS IN PROGRESS",
+    caption: "マルチタイムフレームの構造・レベル・トレンドを解析しています…",
+  },
+
+  // The big English word is the trader idiom and stays; the gloss beside it is
+  // what stops a reader taking SHORT for a buy.
+  direction: {
+    label: "DIRECTION",
+    BUY: { word: "LONG", gloss: "買い" },
+    SELL: { word: "SHORT", gloss: "売り" },
+    WAIT: { word: "WAIT", gloss: "様子見" },
+    confidence: "確信度スコア",
+  },
+
+  result: {
+    tradePlan: "トレードプラン",
+    entry: "エントリー",
+    stopLoss: "損切り",
+    riskReward: "R:R比",
+    tp1: "利確 TP1",
+    tp2: "利確 TP2",
+    tp3: "利確 TP3",
+    technical: "テクニカル",
+    fundamental: "ファンダメンタル",
+    risk: "リスク評価",
+    sentiment: "センチメント",
+    volatility: "ボラティリティ",
+    keyFactors: "判断の主要因",
+    detail: "詳細分析",
+    warnings: "注意事項",
+    riskLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
+    sentiments: { BULLISH: "強気", NEUTRAL: "中立", BEARISH: "弱気" },
+    volatilityLevels: { Low: "低", Medium: "中", High: "高" },
+  },
+
+  chart: {
+    title: "プライスチャート",
+    recentBars: (pair: string, n: number) => `${pair} 直近${n}本`,
+    ariaLabel: (pair: string) => `${pair} のローソク足チャートとトレードプラン水準`,
+  },
+
+  technical: {
+    title: "取得データサマリー",
+    currentRate: "現在レート",
+    overbought: " (買われすぎ)",
+    oversold: " (売られすぎ)",
+    tenkan: "一目 転換線",
+    kijun: "一目 基準線",
+    spanA: "一目 先行A",
+    spanB: "一目 先行B",
+  },
+
+  history: {
+    title: "シグナル履歴",
+    winRate: "勝率",
+    outcomes: { win: "WIN", loss: "LOSS", pending: "進行中", expired: "期限切れ", skipped: "—" },
+  },
+
+  analysisMode: {
+    label: "分析モード:",
+    full: "フル分析（テクニカル+ファンダメンタル）",
+    technical_only: "テクニカル分析のみ",
+    technical_fallback: "テクニカルのみ（ニュース検索が利用できませんでした）",
+  },
+
+  index: {
+    emptyLine1: "「分析開始」をクリックすると",
+    emptyLine2: "マルチタイムフレームのデータ取得＋AI分析を行います",
+    upgradeTitle: "全機能を使うにはプランをアップグレード",
+    upgradeBody: "分析回数の上限解放・全テクニカル指標・優先サポートが利用できます",
+    upgradeCta: "アップグレード",
+    limitTitle: "本日の分析上限に達しました",
+    limitBody: "より多くの分析を行うにはプランをアップグレードしてください",
+    disclaimer:
+      "本アプリの分析結果はAIによる参考情報であり、投資助言ではありません。FX取引にはリスクが伴い、投資元本を超える損失が発生する可能性があります。取引の最終判断は必ずご自身の責任で行ってください。",
+  },
+
+  errors: {
+    loginRequired: "ログインが必要です",
+    limitReached: "本日の分析上限に達しました",
+    limitReachedBody: "プランをアップグレードしてください",
+    adminNotDeployed: "Admin Mode未反映",
+    adminNotDeployedBody: "analyze Edge Function を再デプロイすると管理者バイパスが有効になります",
+    noResult: "分析結果が取得できませんでした。もう一度お試しください。",
+    network: "analyze に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。",
+    generic: "分析処理でエラーが発生しました",
+    wallClock: "分析に時間がかかりすぎて中断されました。「経済ニュース・指標も考慮する」をOFFにすると速くなります。",
+    server: (status: number) => `サーバーエラー (${status})`,
+    render: "表示エラーが発生しました",
+    renderBody: "ページを再読み込みして、もう一度お試しください。",
+    signIn: "メールアドレスまたはパスワードが正しくありません",
+    signInOther: (m: string) => `ログインエラー: ${m}`,
+  },
+
+  password: {
+    tooShort: (n: number) => `パスワードは${n}文字以上で入力してください`,
+    needsBoth: "パスワードには英字と数字を両方含めてください",
+    alreadyRegistered: "このメールアドレスは既に登録されています",
+    leaked: "このパスワードは過去に漏洩したものとして知られています。別のパスワードを設定してください",
+    weak: "パスワードに英字と数字（設定によっては記号）を混ぜてください",
+    signUpOther: (m: string) => `登録エラー: ${m}`,
+  },
+
+  login: {
+    createAccount: "アカウントを作成",
+    signInToStart: "ログインして開始",
+    email: "メールアドレス",
+    password: "パスワード",
+    passwordPlaceholder: (n: number) => `${n}文字以上・英字と数字を含む`,
+    confirmPassword: "パスワード確認",
+    confirmPlaceholder: "もう一度入力",
+    submitSignUp: "アカウント作成",
+    submitSignIn: "ログイン",
+    haveAccount: "既にアカウントをお持ちですか？",
+    noAccount: "アカウントをお持ちでないですか？",
+    bothRequired: "メールアドレスとパスワードを入力してください",
+    mismatch: "パスワードが一致しません",
+    created: "アカウントを作成しました。リダイレクトしています...",
+    genericError: "エラーが発生しました",
+    consentBefore: "アカウント作成により、",
+    consentMiddle: "と",
+    consentAfter: "に同意したものとみなされます。",
+    disclaimer: "本アプリの分析結果はAIによる参考情報であり、投資助言ではありません。",
+  },
+
+  settings: {
+    title: "設定",
+    saved: "設定を保存しました",
+    planSection: "プラン情報",
+    currentPlan: "現在のプラン",
+    adminNote: "管理者アカウントのため、サブスクリプションなしで全機能を無制限にご利用いただけます。",
+    nextBilling: "次回更新日",
+    cancelDate: "解約予定日",
+    cancelPendingUntil: (d: string) => `解約予定（${d} まで利用可能）`,
+    cancelDone: "解約手続き済み",
+    cancelPlan: "プランを解約する",
+    upgrade: "プランをアップグレード",
+    pair: "取引通貨ペア",
+    stopLossPips: "損切り幅 (pips)",
+    takeProfitPips: "利確幅 (pips)",
+    cancelTitle: "プランを解約しますか？",
+    cancelBody: (plan: string) => `${plan}プランを解約します。期間終了日までは現在のプランを引き続きご利用いただけます。`,
+    cancelBody2: "期間終了後は自動的にFreeプランへ切り替わります。",
+    cancelConfirm: "解約する",
+    cancelFailed: "解約に失敗しました",
+    cancelSucceeded: "解約手続きが完了しました",
+    cancelUsableUntil: (d: string) => `${d} までご利用いただけます`,
+  },
+
+  pricing: {
+    back: "ダッシュボードに戻る",
+    title: "料金プラン",
+    subtitle: "あなたのトレードスタイルに合ったプランをお選びください",
+    current: (p: string) => `現在のプラン: ${p}`,
+    adminNote: "管理者アカウントのため、お申し込みなしで全機能を無制限にご利用いただけます",
+    recommended: "おすすめ",
+    inUse: "ご利用中",
+    subscribe: "申し込む",
+    perMonth: "/月",
+    adminToastTitle: "管理者アカウントです",
+    adminToastBody: "サブスクリプションなしで全機能をご利用いただけます",
+    features: {
+      light: ["10回/日の分析", "USD/JPYのみ", "1時間足のみ"],
+      standard: ["30回/日の分析", "全通貨ペア対応", "全時間足対応", "ファンダメンタル分析", "分析履歴保存"],
+      pro: ["無制限の分析", "全機能", "アラート通知（予定）", "優先サポート"],
+    },
+  },
+
+  lp: {
+    nav: { features: "機能", pricing: "料金", faq: "よくある質問" },
+    // The headline wraps a highlighted phrase, so it is stored as the pieces
+    // around it rather than as one string containing markup.
+    heroBefore: "AIが",
+    heroHighlight: "FXを自動分析",
+    heroAfter: "。",
+    heroLine2: "最適な売買タイミングを逃さない。",
+    subtitleBefore: "RSI・MACD・ボリンジャーバンドなど",
+    subtitleCount: "11種",
+    subtitleAfter: "のテクニカル指標とファンダメンタル分析をAIが統合。USD/JPY等の通貨ペアをマルチタイムフレームで分析し、BUY/SELL/WAITの明確な判断と確信度スコアをリアルタイムで提供します。",
+    noCard: "クレジットカード登録なしで2回まで無料体験",
+    painTitle: "こんな悩み、ありませんか？",
+    pains: ["複数の指標を見るのが大変", "エントリーのタイミングに迷う", "感情でトレードしてしまう"],
+    featuresTitle: "FX Tactical Analyzerでできること",
+    features: [
+      { title: "全自動データ取得", desc: "USD/JPYのリアルタイム価格、RSI、MACD、ボリンジャーバンド、一目均衡表など11種の指標を自動取得" },
+      { title: "AI総合判断", desc: "Claude AIがテクニカル分析とファンダメンタル情報を統合し、買い/売り/様子見を確信度スコア付きで提示" },
+      { title: "即座にエントリー判断", desc: "ボタン1つで10秒以内に分析完了。エントリーポイント、損切り、利確目標まで自動表示" },
+    ],
+    stepsTitle: "3ステップで使える",
+    steps: [
+      { title: "アカウント作成", sub: "30秒で完了" },
+      { title: "プラン選択", sub: "無料体験あり" },
+      { title: "「分析開始」を押すだけ", sub: "即座に結果表示" },
+    ],
+    pricingTitle: "シンプルな料金プラン",
+    pricingDetails: "料金詳細を見る",
+    demoTitle: "実際の分析画面",
+    demoPlaceholder: "ダッシュボードスクリーンショット（準備中）",
+    faqTitle: "よくある質問",
+    faqs: [
+      { q: "FX Tactical Analyzerとは何ですか？", a: "FX Tactical AnalyzerはAIを搭載したFXテクニカル分析ツールです。RSI、MACD、ボリンジャーバンドなど11種のテクニカル指標とファンダメンタル分析を統合し、BUY/SELL/WAITの売買判断と確信度スコアをリアルタイムで提供します。" },
+      { q: "どの通貨ペアに対応していますか？", a: "USD/JPY、EUR/USD、GBP/JPY、EUR/JPYなど主要な通貨ペアに対応しています。Lightプランはドル円のみ、Standard/Proプランは全通貨ペアに対応しています。" },
+      { q: "無料で使えますか？", a: "無料体験プランをご用意しています。有料プランはLight（月額2,980円）、Standard（月額5,980円）、Pro（月額12,800円）の3つのプランからお選びいただけます。" },
+      { q: "分析にはどのくらい時間がかかりますか？", a: "テクニカル分析のみの場合は約10〜15秒、ファンダメンタル分析を含めた場合は約20〜30秒で結果が表示されます。" },
+      { q: "どのようなテクニカル指標を使用していますか？", a: "RSI、MACD、ボリンジャーバンド、SMA（移動平均線）、一目均衡表、ATR、ストキャスティクス、ADXなど11種のテクニカル指標を使用し、マルチタイムフレーム分析（15分足/1時間足/4時間足/日足）を行います。" },
+      { q: "解約はいつでもできますか？", a: "はい、マイページからいつでも解約可能です。解約後も契約期間終了まではご利用いただけます。" },
+    ],
+    ctaTitle: "今すぐ始めましょう",
+    ctaBody: "アカウント作成は30秒で完了します",
+    shareTitle: "FX Tactical Analyzerを広める",
+    shareBody: "このツールを友人やフォロワーにシェアして、賢いトレードを広めましょう",
+    shareText: "AIがFXを自動分析するツールを見つけました。11種のテクニカル指標+ファンダメンタル分析で売買判断をサポート。 #FX #AI分析 #トレード",
+    aria: { nav: "メインナビゲーション", hero: "ヒーロー", pain: "ユーザーの悩み", features: "機能紹介", steps: "利用ステップ", pricing: "料金プラン", demo: "デモ画面", faq: "よくある質問", cta: "登録CTA", share: "SNSシェア", footerNav: "フッターナビゲーション" },
+  },
+  landing: {
+    blog: "ブログ",
+    login: "ログイン",
+    startFree: "無料で始める",
+    terms: "利用規約",
+    privacy: "プライバシーポリシー",
+    tokushoho: "特定商取引法に基づく表記",
+    contact: "お問い合わせ",
+    footerNote: "本サービスは投資助言ではありません。FX取引にはリスクが伴います。",
+  },
+
+  blog: {
+    title: "ブログ",
+    subtitle: "FXテクニカル分析・ファンダメンタル・AI活用についての解説記事",
+    all: "全て",
+    none: "該当する記事がありません。",
+    readMore: "続きを読む",
+    home: "ホーム",
+    readingTime: (n: number) => `約${n}分`,
+    toc: "目次",
+    share: "この記事をシェア",
+    shareX: "Xでシェア",
+    shareLine: "LINEで共有",
+    copyLink: "リンクをコピー",
+    copied: "コピー済み",
+    copiedToast: "リンクをコピーしました",
+    copyFailed: "コピーに失敗しました",
+    related: "関連記事",
+    ctaTitle: "FX Tactical Analyzerを無料で試す",
+    ctaBody: "11種のテクニカル指標とファンダメンタル分析をAIが統合。BUY/SELL/WAITの判断と確信度をリアルタイムで提供します。",
+    // Article bodies are long-form Japanese content, not UI strings, so they
+    // are not translated; say so rather than showing Japanese with no warning.
+    japaneseOnly: "記事本文は日本語のみです。",
+  },
+
+  contact: {
+    title: "お問い合わせ",
+    intro: "ご質問、ご要望、不具合の報告などがございましたら、以下のフォームよりお気軽にお問い合わせください。3営業日以内にご返信いたします。",
+    mail: "メール: support@fx-tactical-analyzer.com",
+    name: "お名前",
+    namePlaceholder: "山田 太郎",
+    email: "メールアドレス",
+    subject: "件名",
+    subjectPlaceholder: "お問い合わせ内容の件名",
+    message: "お問い合わせ内容",
+    messagePlaceholder: "お問い合わせ内容を入力してください",
+    send: "送信する",
+    sending: "送信中...",
+    sentTitle: "送信完了",
+    sentBody: "お問い合わせを受け付けました。3営業日以内にご返信いたします。",
+  },
+
+  // Terms / Privacy / 特定商取引法 are Japanese legal documents. A machine
+  // translation presented as the operative text would be a liability, so the
+  // Japanese stands and non-Japanese readers get told why.
+  legal: {
+    japaneseAuthoritative: "",
+  },
+};
+
+// Deliberately NOT `as const`: the literal types it produces would force every
+// other locale to repeat the Japanese strings verbatim. Widened strings still
+// require every KEY, which is the guarantee we actually want.
+export type Dict = typeof ja;

@@ -20,11 +20,12 @@ import type {
   TimeInterval,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
+import { useLocale } from "@/lib/i18n";
 import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v13-2026-09-03T05:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v14-2026-09-03T05:30:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -169,6 +170,7 @@ const Index = () => {
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
+  const { t, locale } = useLocale();
   const { toast } = useToast();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -256,7 +258,7 @@ const Index = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        toast({ title: "ログインが必要です", variant: "destructive" });
+        toast({ title: t.errors.loginRequired, variant: "destructive" });
         return;
       }
 
@@ -273,6 +275,7 @@ const Index = () => {
           currencyPair: settings.currencyPair,
           interval,
           includeFundamental,
+          locale,
         }),
       });
 
@@ -298,8 +301,8 @@ const Index = () => {
         // 546 is Supabase killing the worker at its wall-clock limit. There is
         // no response body in that case, so name the cause ourselves.
         (response.status === 546
-          ? "分析に時間がかかりすぎて中断されました。「経済ニュース・指標も考慮する」をOFFにすると速くなります。"
-          : `サーバーエラー (${response.status})`);
+          ? t.errors.wallClock
+          : t.errors.server(response.status));
       // Match on the server's own stage, not on the words in the message: an
       // upstream "rate limit" error used to be reported as the daily cap and
       // pushed the user at the pricing page for no reason.
@@ -322,12 +325,12 @@ const Index = () => {
 
         if (!adminUser && isLimitError) {
           setLimitReached(true);
-          toast({ title: "本日の分析上限に達しました", description: "プランをアップグレードしてください", variant: "destructive" });
+          toast({ title: t.errors.limitReached, description: t.errors.limitReachedBody, variant: "destructive" });
           return;
         }
 
         if (adminUser && isLimitError) {
-          toast({ title: "Admin Mode未反映", description: "analyze Edge Function を再デプロイすると管理者バイパスが有効になります", variant: "destructive" });
+          toast({ title: t.errors.adminNotDeployed, description: t.errors.adminNotDeployedBody, variant: "destructive" });
           return;
         }
 
@@ -336,7 +339,7 @@ const Index = () => {
       }
 
       if (!analysisResult) {
-        throw new Error("分析結果が取得できませんでした。もう一度お試しください。");
+        throw new Error(t.errors.noResult);
       }
 
       setLoadingStage("generating_judgment");
@@ -351,16 +354,16 @@ const Index = () => {
     } catch (err: any) {
       const isNetworkError = err instanceof TypeError && ["Failed to fetch", "Load failed"].includes(err.message);
       const description = isNetworkError
-        ? "analyze に接続できませんでした。関数のデプロイ状態またはCORS設定を確認してください。"
-        : err.message || "分析処理でエラーが発生しました";
+        ? t.errors.network
+        : err.message || t.errors.generic;
 
       console.error("Analysis request failed:", err);
-      toast({ title: "エラー", description, variant: "destructive" });
+      toast({ title: t.common.error, description, variant: "destructive" });
     } finally {
       setLoading(false);
       setLoadingStage("idle");
     }
-  }, [settings, interval, includeFundamental, toast, loadHistory]);
+  }, [settings, interval, includeFundamental, locale, t, toast, loadHistory]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -380,19 +383,19 @@ const Index = () => {
               <Crown className="h-4 w-4 text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-foreground">全機能を使うにはプランをアップグレード</p>
-              <p className="text-xs text-muted-foreground">分析回数の上限解放・全テクニカル指標・優先サポートが利用できます</p>
+              <p className="text-sm font-semibold text-foreground">{t.index.upgradeTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.index.upgradeBody}</p>
             </div>
             <button
               onClick={() => navigate("/pricing")}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white shrink-0 hover:opacity-90 transition-opacity"
               style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}
             >
-              アップグレード
+              {t.index.upgradeCta}
             </button>
             <button
               onClick={dismissBanner}
-              aria-label="閉じる"
+              aria-label={t.common.close}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
             >
               <X className="h-4 w-4" />
@@ -413,13 +416,13 @@ const Index = () => {
 
         {limitReached && (
           <div className="glass rounded-xl border border-destructive p-6 flex flex-col items-center text-center space-y-3">
-            <p className="text-destructive font-semibold">本日の分析上限に達しました</p>
-            <p className="text-sm text-muted-foreground">より多くの分析を行うにはプランをアップグレードしてください</p>
+            <p className="text-destructive font-semibold">{t.index.limitTitle}</p>
+            <p className="text-sm text-muted-foreground">{t.index.limitBody}</p>
             <button
               onClick={() => navigate("/pricing")}
               className="px-6 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:opacity-90 transition-opacity"
             >
-              プランをアップグレード
+              {t.header.upgrade}
             </button>
           </div>
         )}
@@ -432,13 +435,9 @@ const Index = () => {
               <>
                 {analysisMode && (
                   <div className="text-[11px] text-muted-foreground px-1">
-                    分析モード:{" "}
+                    {t.analysisMode.label}{" "}
                     <span className={analysisMode === "technical_fallback" ? "text-warning font-medium" : "text-foreground font-medium"}>
-                      {analysisMode === "full"
-                        ? "フル分析（テクニカル+ファンダメンタル）"
-                        : analysisMode === "technical_fallback"
-                          ? "テクニカルのみ（ニュース検索が利用できませんでした）"
-                          : "テクニカル分析のみ"}
+                      {t.analysisMode[analysisMode]}
                     </span>
                   </div>
                 )}
@@ -455,9 +454,9 @@ const Index = () => {
                   <Zap className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <p className="text-muted-foreground text-sm">
-                  「分析開始」をクリックすると
+                  {t.index.emptyLine1}
                   <br />
-                  マルチタイムフレームのデータ取得＋AI分析を行います
+                  {t.index.emptyLine2}
                 </p>
               </div>
             )}
@@ -472,7 +471,7 @@ const Index = () => {
 
       <footer className="border-t border-border py-3 px-4">
         <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-          本アプリの分析結果はAIによる参考情報であり、投資助言ではありません。FX取引にはリスクが伴い、投資元本を超える損失が発生する可能性があります。取引の最終判断は必ずご自身の責任で行ってください。
+          {t.index.disclaimer}
         </p>
       </footer>
 

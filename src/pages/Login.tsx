@@ -3,8 +3,10 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { MIN_PASSWORD_LENGTH, validatePassword } from "@/lib/password";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
+import { useT } from "@/lib/i18n";
 
 const Login = () => {
+  const t = useT();
   const { signIn, signUp } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
@@ -20,18 +22,18 @@ const Login = () => {
     setSuccessMsg("");
 
     if (!email || !password) {
-      setError("メールアドレスとパスワードを入力してください");
+      setError(t.login.bothRequired);
       return;
     }
 
     if (isSignUp) {
-      const passwordError = validatePassword(password);
+      const passwordError = validatePassword(password, t.password);
       if (passwordError) {
         setError(passwordError);
         return;
       }
       if (password !== confirmPassword) {
-        setError("パスワードが一致しません");
+        setError(t.login.mismatch);
         return;
       }
     }
@@ -47,7 +49,7 @@ const Login = () => {
           return;
         }
 
-        setSuccessMsg("アカウントを作成しました。リダイレクトしています...");
+        setSuccessMsg(t.login.created);
         window.location.href = "/";
         return;
       }
@@ -61,7 +63,7 @@ const Login = () => {
 
       window.location.href = "/";
     } catch (err: any) {
-      setError(err?.message || "エラーが発生しました");
+      setError(err?.message || t.login.genericError);
     } finally {
       setLoading(false);
     }
@@ -79,7 +81,7 @@ const Login = () => {
             FX Tactical Analyzer
           </h1>
           <p className="text-sm text-muted-foreground">
-            {isSignUp ? "アカウントを作成" : "ログインして開始"}
+            {isSignUp ? t.login.createAccount : t.login.signInToStart}
           </p>
         </div>
 
@@ -99,7 +101,7 @@ const Login = () => {
           )}
 
           <div>
-            <label className="text-sm text-muted-foreground">メールアドレス</label>
+            <label className="text-sm text-muted-foreground">{t.login.email}</label>
             <input
               type="email"
               value={email}
@@ -110,24 +112,24 @@ const Login = () => {
           </div>
 
           <div>
-            <label className="text-sm text-muted-foreground">パスワード</label>
+            <label className="text-sm text-muted-foreground">{t.login.password}</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={`${MIN_PASSWORD_LENGTH}文字以上・英字と数字を含む`}
+              placeholder={t.login.passwordPlaceholder(MIN_PASSWORD_LENGTH)}
               className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
 
           {isSignUp && (
             <div>
-              <label className="text-sm text-muted-foreground">パスワード確認</label>
+              <label className="text-sm text-muted-foreground">{t.login.confirmPassword}</label>
               <input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="もう一度入力"
+                placeholder={t.login.confirmPlaceholder}
                 className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -139,11 +141,11 @@ const Login = () => {
             className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isSignUp ? "アカウント作成" : "ログイン"}
+            {isSignUp ? t.login.submitSignUp : t.login.submitSignIn}
           </button>
 
           <p className="text-center text-sm text-muted-foreground">
-            {isSignUp ? "既にアカウントをお持ちですか？" : "アカウントをお持ちでないですか？"}
+            {isSignUp ? t.login.haveAccount : t.login.noAccount}
             <button
               type="button"
               onClick={() => {
@@ -153,19 +155,19 @@ const Login = () => {
               }}
               className="ml-1 text-primary hover:underline"
             >
-              {isSignUp ? "ログイン" : "アカウント作成"}
+              {isSignUp ? t.login.submitSignIn : t.login.submitSignUp}
             </button>
           </p>
         </form>
 
         {isSignUp && (
           <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-            アカウント作成により、<Link to="/terms" className="text-primary hover:underline">利用規約</Link>と<Link to="/privacy" className="text-primary hover:underline">プライバシーポリシー</Link>に同意したものとみなされます。
+            {t.login.consentBefore}<Link to="/terms" className="text-primary hover:underline">{t.landing.terms}</Link>{t.login.consentMiddle}<Link to="/privacy" className="text-primary hover:underline">{t.landing.privacy}</Link>{t.login.consentAfter}
           </p>
         )}
 
         <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-          本アプリの分析結果はAIによる参考情報であり、投資助言ではありません。
+          {t.login.disclaimer}
         </p>
       </div>
     </div>

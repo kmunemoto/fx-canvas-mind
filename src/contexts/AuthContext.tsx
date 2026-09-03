@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 import { translateSignUpError } from "@/lib/password";
+import { useT } from "@/lib/i18n";
 import type { User, Session } from "@supabase/supabase-js";
 
 interface Profile {
@@ -45,6 +46,7 @@ const fetchProfile = async (userId: string): Promise<Profile | null> => {
 };
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const t = useT();
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,7 +91,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signUp = async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) {
-      return { error: translateSignUpError(error.message) };
+      return { error: translateSignUpError(error.message, t.password) };
     }
     return { error: null };
   };
@@ -98,8 +100,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       const msg = error.message.includes("Invalid login")
-        ? "メールアドレスまたはパスワードが正しくありません"
-        : `ログインエラー: ${error.message}`;
+        ? t.errors.signIn
+        : t.errors.signInOther(error.message);
       return { error: msg };
     }
     return { error: null };

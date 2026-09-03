@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   signal: "BUY" | "SELL" | "WAIT";
@@ -9,6 +10,7 @@ interface Props {
 }
 
 const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) => {
+  const t = useT();
   const [animatedConfidence, setAnimatedConfidence] = useState(0);
 
   useEffect(() => {
@@ -26,8 +28,9 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
         ? "hsl(var(--destructive))"
         : "hsl(var(--warning))";
 
-  const signalLabel =
-    signal === "BUY" ? "BUY" : signal === "SELL" ? "SELL" : "WAIT";
+  // The gauge shows the same LONG/SHORT wording as the hero, never BUY/SELL,
+  // so one direction never appears under two different names.
+  const direction = t.direction[signal] ?? t.direction.WAIT;
 
   return (
     <div className="flex flex-col items-center">
@@ -53,12 +56,17 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           {showSignalLabel && (
-            <span
-              className="text-3xl font-bold font-mono tracking-wider"
-              style={{ color: signalColor }}
-            >
-              {signalLabel}
-            </span>
+            <>
+              <span
+                className="text-3xl font-bold font-mono tracking-wider"
+                style={{ color: signalColor }}
+              >
+                {direction.word}
+              </span>
+              <span className="text-xs font-semibold" style={{ color: signalColor }}>
+                {direction.gloss}
+              </span>
+            </>
           )}
           <span
             className={`font-mono font-semibold text-foreground ${showSignalLabel ? "text-2xl mt-1" : "text-4xl"}`}
@@ -67,7 +75,7 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
           </span>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground mt-2">確信度スコア</p>
+      <p className="text-xs text-muted-foreground mt-2">{t.direction.confidence}</p>
     </div>
   );
 };

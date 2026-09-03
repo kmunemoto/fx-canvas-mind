@@ -4,6 +4,7 @@ import { Loader2, Zap, Info } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   interval: TimeInterval;
@@ -16,19 +17,7 @@ interface Props {
   onIncludeFundamentalChange: (v: boolean) => void;
 }
 
-const INTERVALS: { value: TimeInterval; label: string }[] = [
-  { value: "15min", label: "15分足" },
-  { value: "1h", label: "1時間足" },
-  { value: "4h", label: "4時間足" },
-  { value: "1day", label: "日足" },
-];
-
-const STAGE_LABELS: Record<LoadingStage, string> = {
-  idle: "",
-  fetching: "データ取得中...",
-  analyzing: "AI分析中...",
-  generating_judgment: "総合判断中...",
-};
+const INTERVALS: TimeInterval[] = ["15min", "1h", "4h", "1day"];
 
 const ControlBar = ({
   interval,
@@ -39,21 +28,23 @@ const ControlBar = ({
   remaining,
   includeFundamental,
   onIncludeFundamentalChange,
-}: Props) => (
+}: Props) => {
+  const t = useT();
+  return (
   <div className="glass rounded-xl border border-border p-4 space-y-4">
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
       <div className="flex items-center gap-1 bg-secondary rounded-lg p-1 overflow-x-auto">
-        {INTERVALS.map((opt) => (
+        {INTERVALS.map((value) => (
           <button
-            key={opt.value}
-            onClick={() => onIntervalChange(opt.value)}
+            key={value}
+            onClick={() => onIntervalChange(value)}
             className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
-              interval === opt.value
+              interval === value
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {opt.label}
+            {t.control.intervals[value]}
           </button>
         ))}
       </div>
@@ -66,19 +57,19 @@ const ControlBar = ({
         {loading ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
-            {STAGE_LABELS[loadingStage] || "分析中..."}
+            {t.control.stages[loadingStage] || t.control.analyzing}
           </>
         ) : (
           <>
             <Zap className="h-4 w-4" />
-            分析開始
+            {t.control.analyze}
           </>
         )}
       </button>
 
       {remaining !== null && (
-        <span className="text-xs text-muted-foreground flex items-center gap-1">
-          本日の残り: <span className="font-mono font-semibold text-foreground">{remaining}回</span>
+        <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
+          {t.control.remainingToday(remaining)}
         </span>
       )}
     </div>
@@ -90,7 +81,7 @@ const ControlBar = ({
             htmlFor="include-fundamental"
             className="text-sm font-medium cursor-pointer"
           >
-            経済ニュース・指標も考慮する
+            {t.control.includeFundamental}
           </Label>
           <TooltipProvider delayDuration={200}>
             <Tooltip>
@@ -98,22 +89,20 @@ const ControlBar = ({
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label="詳細"
+                  aria-label={t.control.fundamentalHelp}
                 >
                   <Info className="h-3.5 w-3.5" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs">
-                <p className="text-xs">ON: 最新ニュース・経済指標を統合分析（精度向上・時間増）</p>
-                <p className="text-xs mt-1">OFF: テクニカル指標のみで判断（高速・シンプル）</p>
+                <p className="text-xs">{t.control.tooltipOn}</p>
+                <p className="text-xs mt-1">{t.control.tooltipOff}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
         <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-          {includeFundamental
-            ? "ONで最新ニュース・経済指標を統合分析（精度向上・時間増）"
-            : "OFFでテクニカル指標のみで判断（高速・シンプル）"}
+          {includeFundamental ? t.control.fundamentalOn : t.control.fundamentalOff}
         </p>
       </div>
       <Switch
@@ -124,6 +113,7 @@ const ControlBar = ({
       />
     </div>
   </div>
-);
+  );
+};
 
 export default ControlBar;

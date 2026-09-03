@@ -5,50 +5,18 @@ import { useAuth } from "@/contexts/AuthContext";
 import { isAdminEmail, resolvePlanName } from "@/lib/admin";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { useT } from "@/lib/i18n";
 
+// Prices and ids stay here; the feature copy and the "/month" suffix come from
+// the dictionary so they translate with everything else.
 const PLANS = [
-  {
-    id: "light",
-    name: "Light",
-    price: "¥2,980",
-    period: "/月",
-    features: [
-      "10回/日の分析",
-      "USD/JPYのみ",
-      "1時間足のみ",
-    ],
-    recommended: false,
-  },
-  {
-    id: "standard",
-    name: "Standard",
-    price: "¥5,980",
-    period: "/月",
-    features: [
-      "30回/日の分析",
-      "全通貨ペア対応",
-      "全時間足対応",
-      "ファンダメンタル分析",
-      "分析履歴保存",
-    ],
-    recommended: true,
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: "¥12,800",
-    period: "/月",
-    features: [
-      "無制限の分析",
-      "全機能",
-      "アラート通知（予定）",
-      "優先サポート",
-    ],
-    recommended: false,
-  },
-];
+  { id: "light", name: "Light", price: "¥2,980", recommended: false },
+  { id: "standard", name: "Standard", price: "¥5,980", recommended: true },
+  { id: "pro", name: "Pro", price: "¥12,800", recommended: false },
+] as const;
 
 const Pricing = () => {
+  const t = useT();
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const { user, profile } = useAuth();
   const navigate = useNavigate();
@@ -60,8 +28,8 @@ const Pricing = () => {
   const handleSubscribe = async (planId: string) => {
     if (isAdmin) {
       toast({
-        title: "管理者アカウントです",
-        description: "サブスクリプションなしで全機能をご利用いただけます",
+        title: t.pricing.adminToastTitle,
+        description: t.pricing.adminToastBody,
       });
       return;
     }
@@ -70,7 +38,7 @@ const Pricing = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        toast({ title: "ログインが必要です", variant: "destructive" });
+        toast({ title: t.errors.loginRequired, variant: "destructive" });
         return;
       }
 
@@ -94,7 +62,7 @@ const Pricing = () => {
         window.location.href = data.url;
       }
     } catch (err: any) {
-      toast({ title: "エラー", description: err.message, variant: "destructive" });
+      toast({ title: t.common.error, description: err.message, variant: "destructive" });
     } finally {
       setLoadingPlan(null);
     }
@@ -108,18 +76,18 @@ const Pricing = () => {
           className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-8"
         >
           <ArrowLeft className="h-4 w-4" />
-          ダッシュボードに戻る
+          {t.pricing.back}
         </button>
 
         <div className="text-center mb-12">
-          <h1 className="text-3xl font-bold text-foreground mb-3">料金プラン</h1>
-          <p className="text-muted-foreground">あなたのトレードスタイルに合ったプランをお選びください</p>
+          <h1 className="text-3xl font-bold text-foreground mb-3">{t.pricing.title}</h1>
+          <p className="text-muted-foreground">{t.pricing.subtitle}</p>
           {currentPlan !== "Free" && (
-            <p className="text-sm text-primary mt-2">現在のプラン: {currentPlan}</p>
+            <p className="text-sm text-primary mt-2">{t.pricing.current(currentPlan)}</p>
           )}
           {isAdmin && (
             <p className="text-sm text-muted-foreground mt-1">
-              管理者アカウントのため、お申し込みなしで全機能を無制限にご利用いただけます
+              {t.pricing.adminNote}
             </p>
           )}
         </div>
@@ -137,18 +105,18 @@ const Pricing = () => {
               {plan.recommended && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1 rounded-full bg-primary text-primary-foreground text-xs font-semibold">
                   <Star className="h-3 w-3" />
-                  おすすめ
+                  {t.pricing.recommended}
                 </div>
               )}
 
               <h2 className="text-xl font-bold text-foreground mb-1">{plan.name}</h2>
               <div className="flex items-baseline gap-1 mb-6">
                 <span className="text-3xl font-bold text-foreground">{plan.price}</span>
-                <span className="text-sm text-muted-foreground">{plan.period}</span>
+                <span className="text-sm text-muted-foreground">{t.pricing.perMonth}</span>
               </div>
 
               <ul className="space-y-3 mb-8 flex-1">
-                {plan.features.map((f) => (
+                {t.pricing.features[plan.id].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm text-foreground">
                     <Check className="h-4 w-4 text-primary mt-0.5 shrink-0" />
                     {f}
@@ -168,9 +136,9 @@ const Pricing = () => {
                 {loadingPlan === plan.id ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : isAdmin ? (
-                  "ご利用中"
+                  t.pricing.inUse
                 ) : (
-                  "申し込む"
+                  t.pricing.subscribe
                 )}
               </button>
             </div>

@@ -1,7 +1,7 @@
 import LegalPageLayout from "@/components/LegalPageLayout";
 
 const Privacy = () => (
-  <LegalPageLayout title="プライバシーポリシー">
+  <LegalPageLayout title="プライバシーポリシー" japaneseOnly>
     <p>
       宗本寛太（以下「運営者」）は、本サービス「FX Tactical Analyzer」における、ユーザーの個人情報の取扱いについて、以下のとおりプライバシーポリシーを定めます。
     </p>

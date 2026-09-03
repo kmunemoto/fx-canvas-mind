@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen, type RenderResult } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { LocaleProvider } from "../lib/i18n";
 import AnalysisResultView from "../components/AnalysisResultView";
 import AnalysisHistory from "../components/AnalysisHistory";
 import AnalysisStages from "../components/AnalysisStages";
 import type { AnalysisRecord, AnalysisResult, TechnicalData } from "../lib/types";
+
+// Everything user-facing reads the dictionary now, so the provider is part of
+// rendering these components at all. Tests default to Japanese, which is what
+// a viewer with no stored preference and a ja browser gets.
+const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult =>
+  rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
 
 const fullResult: AnalysisResult = {
   signal: "BUY",
@@ -229,5 +237,47 @@ describe("score cards", () => {
     render(<AnalysisResultView result={fullResult} techData={null} pair="USD/JPY" interval="1h" />);
     expect(screen.getByText("センチメント")).toBeInTheDocument();
     expect(screen.queryByText("ボラティリティ")).not.toBeInTheDocument();
+  });
+});
+
+describe("localisation", () => {
+  it("renders the same result in English", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />, "en");
+
+    expect(screen.getByText("Trade plan")).toBeInTheDocument();
+    expect(screen.getByText("Take profit 3")).toBeInTheDocument();
+    expect(screen.getByText("Sentiment")).toBeInTheDocument();
+    expect(screen.getByText("Bullish")).toBeInTheDocument();
+    // and no Japanese chrome leaks through
+    expect(screen.queryByText("トレードプラン")).not.toBeInTheDocument();
+    expect(screen.queryByText("センチメント")).not.toBeInTheDocument();
+  });
+
+  it("shows the direction word and its plain-language gloss in both locales", () => {
+    // Regression: the hero showed only "SHORT", which a reader took for a buy.
+    const { unmount } = render(
+      <AnalysisResultView result={{ ...fullResult, signal: "SELL" }} techData={techData} pair="USD/JPY" interval="1h" />,
+    );
+    expect(screen.getByText("SHORT")).toBeInTheDocument();
+    expect(screen.getByText("売り")).toBeInTheDocument();
+    unmount();
+
+    render(
+      <AnalysisResultView result={{ ...fullResult, signal: "SELL" }} techData={techData} pair="USD/JPY" interval="1h" />,
+      "en",
+    );
+    expect(screen.getByText("SHORT")).toBeInTheDocument();
+    expect(screen.getByText("Sell")).toBeInTheDocument();
+  });
+
+  it("never shows a BUY signal worded as SHORT, or vice versa", () => {
+    const { unmount } = render(
+      <AnalysisResultView result={{ ...fullResult, signal: "BUY" }} techData={techData} pair="USD/JPY" interval="1h" />,
+    );
+    expect(screen.getByText("LONG")).toBeInTheDocument();
+    expect(screen.getByText("買い")).toBeInTheDocument();
+    expect(screen.queryByText("SHORT")).not.toBeInTheDocument();
+    expect(screen.queryByText("売り")).not.toBeInTheDocument();
+    unmount();
   });
 });

@@ -44,7 +44,7 @@ const sections: { title: string; body: string }[] = [
 ];
 
 const Terms = () => (
-  <LegalPageLayout title="利用規約">
+  <LegalPageLayout title="利用規約" japaneseOnly>
     {sections.map((s) => (
       <section key={s.title}>
         <h2>{s.title}</h2>
