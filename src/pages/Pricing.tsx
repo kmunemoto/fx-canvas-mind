@@ -3,7 +3,7 @@ import { Check, Star, ArrowLeft, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { isAdminEmail, resolvePlanName } from "@/lib/admin";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { useT } from "@/lib/i18n";
 
@@ -20,6 +20,12 @@ const Pricing = () => {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const { user, profile } = useAuth();
   const navigate = useNavigate();
+  // The landing page's plan cards link here as /pricing?plan=standard, and a
+  // fresh signup is redirected here carrying the plan it chose. Reading it
+  // keeps that choice visible; without this the parameter would be one more
+  // control that looks like it does something and does not.
+  const [params] = useSearchParams();
+  const chosen = params.get("plan");
   const { toast } = useToast();
 
   const isAdmin = isAdminEmail(user?.email);
@@ -97,10 +103,13 @@ const Pricing = () => {
             <div
               key={plan.id}
               className={`relative glass rounded-2xl border p-6 flex flex-col ${
-                plan.recommended
-                  ? "border-primary ring-2 ring-primary/20"
-                  : "border-border"
+                chosen === plan.id
+                  ? "border-primary ring-2 ring-primary"
+                  : plan.recommended
+                    ? "border-primary ring-2 ring-primary/20"
+                    : "border-border"
               }`}
+              data-testid={chosen === plan.id ? "chosen-plan" : undefined}
             >
               {plan.recommended && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1 rounded-full bg-primary text-primary-foreground text-xs font-semibold">

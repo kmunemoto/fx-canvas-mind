@@ -14,6 +14,7 @@ vi.mock("@/contexts/AuthContext", () => ({
 
 import Landing from "../pages/Landing";
 import Login from "../pages/Login";
+import Pricing from "../pages/Pricing";
 
 const render = (ui: ReactElement, path = "/", locale: "ja" | "en" = "ja") =>
   rtlRender(
@@ -101,5 +102,15 @@ describe("signup entry points", () => {
   it("still defaults to signing in for a bare /login", () => {
     render(<Login />, "/login");
     expect(screen.queryByLabelText(ja.login.confirmPassword)).toBeNull();
+  });
+
+  it("carries the plan picked on the landing page through to pricing", () => {
+    render(<Pricing />, "/pricing?plan=standard");
+    expect(screen.getByTestId("chosen-plan").textContent).toContain("Standard");
+  });
+
+  it("marks nothing when no plan was picked", () => {
+    render(<Pricing />, "/pricing");
+    expect(screen.queryByTestId("chosen-plan")).toBeNull();
   });
 });
