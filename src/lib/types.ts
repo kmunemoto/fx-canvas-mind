@@ -119,6 +119,11 @@ export interface OutcomePathPoint {
 export interface OutcomeEvaluation {
   version: number;
   eval_interval: string;
+  // Whether the plan was judged on a mid price or on both sides of the book
+  price_basis?: "mid" | "quotes";
+  // The spread the trade actually paid, when it was judged on quotes
+  spread_at_fill?: number | null;
+  spread_at_exit?: number | null;
   order_type: OrderType;
   price_at_signal: number | null;
   // The bar around the signal reached the entry but the timing is unknown
@@ -208,7 +213,7 @@ export interface PostmortemFacts {
     beyond_sl_r: number | null;
     returned_to_entry: boolean | null;
   };
-  abnormal_bar: { at: string; range_ratio: number } | null;
+  abnormal_bar: { at: string; range_ratio: number; event?: { at: string; country: string; impact: string; title: string } | null } | null;
   early_adverse_r?: number | null;
   counterfactual: {
     market_entry: Counterfactual | null;

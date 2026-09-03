@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v20-2026-09-03T18:00:00Z";
+const FUNCTION_VERSION = "analyze-v21-2026-09-03T19:30:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -37,6 +37,7 @@ import {
 } from "./entry.ts";
 
 import { parseRules, selectPromptRules } from "./rules.ts";
+import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -218,6 +219,7 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 - ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
 - RSI・Stoch の過熱と価格構造が矛盾する場合（ダイバージェンス）は必ず言及する。
 
+{{EVENTS}}
 {{LEARNED_RULES}}`;
 
 const RESPONSE_SCHEMA = {
@@ -719,6 +721,37 @@ Deno.serve(async (req: Request) => {
       console.warn("Rulebook unavailable:", err instanceof Error ? err.message : String(err));
     }
 
+    // Scheduled releases the plan has to live through. Free, cached hourly by
+    // the econ-calendar function; a plan written an hour before Non-Farm
+    // Payrolls with no mention of it is not a plan.
+    stage = "load_events";
+    let eventBlock = "";
+    let eventsAhead: Array<{ at: string; country: string; impact: string; title: string }> = [];
+    try {
+      const horizon = HORIZON_MS[interval] ?? 12 * 60 * 60 * 1000;
+      const currencies = [...currenciesOf(currencyPair), "All"];
+      const until = new Date(Date.now() + horizon).toISOString();
+      const eventsRes = await fetch(
+        `${supabaseUrl}/rest/v1/econ_events?select=id,event_at,country,title,impact,forecast,previous,all_day,source` +
+          `&event_at=gte.${encodeURIComponent(new Date(Date.now() - 60 * 60 * 1000).toISOString())}` +
+          `&event_at=lte.${encodeURIComponent(until)}` +
+          `&country=in.(${currencies.map(encodeURIComponent).join(",")})` +
+          `&impact=in.(High,Medium)&order=event_at.asc&limit=25`,
+        { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
+      );
+      const rows = eventsRes.ok ? parseJsonResponse(await eventsRes.text()) : null;
+      if (Array.isArray(rows)) {
+        const events = rows.filter(isRecord) as unknown as EconEvent[];
+        const upcoming = upcomingFor(events, currencyPair, Date.now(), horizon);
+        eventBlock = renderEventBlock(upcoming, Date.now(), locale);
+        eventsAhead = upcoming.slice(0, 8).map((e) => ({
+          at: e.event_at, country: e.country, impact: e.impact, title: e.title,
+        }));
+      }
+    } catch (err) {
+      console.warn("Calendar unavailable:", err instanceof Error ? err.message : String(err));
+    }
+
     stage = "fetch_market_data";
     const timeframes = TF_CHAIN[interval];
     const fetchSeries = async (tf: string, outputsize: number) => {
@@ -829,6 +862,7 @@ Deno.serve(async (req: Request) => {
       max_tokens: 8000,
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
+        .replace("{{EVENTS}}", eventBlock)
         .replace("{{LEARNED_RULES}}", learnedRules)
         .trimEnd(),
       messages: [{
@@ -1230,6 +1264,7 @@ Deno.serve(async (req: Request) => {
     const context = {
       open_same_direction: openSameDirection,
       rules_shown: rulesShown,
+      events_ahead: eventsAhead,
       timeframes,
       entry: compactSnapshot(timeframes[0], snapshots[0]),
       higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),

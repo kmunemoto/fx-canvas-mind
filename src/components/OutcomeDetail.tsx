@@ -272,6 +272,11 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
                   {typeof facts?.early_adverse_r === "number" && facts.early_adverse_r >= 0.5 && (
                     <p className="text-muted-foreground">{pm.earlyAdverse(facts.early_adverse_r)}</p>
                   )}
+                  {facts?.abnormal_bar?.event && (
+                    <p className="text-muted-foreground">
+                      {pm.eventBar(facts.abnormal_bar.event.country, facts.abnormal_bar.event.title)}
+                    </p>
+                  )}
                 </div>
               )}
               {(post.rule_blamed || post.rule_credited) && (

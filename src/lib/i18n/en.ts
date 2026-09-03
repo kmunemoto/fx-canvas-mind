@@ -198,6 +198,7 @@ export const en: Dict = {
       revisedNote: "Reviewed again after the full window",
       ruleBlamed: (id: string) => `Rule at fault: ${id}`,
       ruleCredited: (id: string) => `Rule that helped: ${id}`,
+      eventBar: (country: string, title: string) => `The abnormal bar carried a ${country} release: ${title}`,
       causeBreakdown: "Why plans missed",
     },
     detail: {

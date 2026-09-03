@@ -398,7 +398,7 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - entry_too_early: 方向は合っていたが成行で追いかけて即座の逆行で損切り。early_adverse_r が大きく、limit_pullback が win（rr と損切り幅は成立）。
 - target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想が win、mfe_r が大きい。
 - regime_misread: トレンド/レンジの読み違い。facts.regime.conflict、レンジ相場でのトレンドフォロー等。
-- news_shock: 指標・イベントの異常な値幅でプランが無効化された。
+- news_shock: 指標・イベントの異常な値幅でプランが無効化された。facts.abnormal_bar.event があれば、その足で実際に発表された経済指標なので、推測ではなく事実として名指ししてよい。event が null の異常足は「原因不明の急変動」であって、指標のせいだと断定しない。
 - plan_incoherent: 水準の矛盾で判定不能。
 - good_call: 想定通りに勝った。
 - lucky_win: 勝ったがプロセスに問題があった。

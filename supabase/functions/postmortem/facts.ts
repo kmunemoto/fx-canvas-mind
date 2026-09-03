@@ -15,6 +15,7 @@
 // directly.
 
 import type { Candle } from "../analyze/indicators.ts";
+import { eventInBar, type EconEvent } from "../econ-calendar/events.ts";
 import {
   MAX_LIMIT_ATR,
   MIN_RISK_REWARD,
@@ -183,7 +184,10 @@ export interface PostmortemFacts {
     beyond_sl_r: number | null;
     returned_to_entry: boolean | null;
   };
-  abnormal_bar: { at: string; range_ratio: number } | null;
+  // A bar far outside the others during the plan, and the scheduled release
+  // it can be attributed to — "news" as a fact rather than an inference from
+  // the shape of a candle
+  abnormal_bar: { at: string; range_ratio: number; event: { at: string; country: string; impact: string; title: string } | null } | null;
   // Largest adverse move in the first bars after the fill, in R: a chase
   // into a retrace shows up here before it shows up anywhere else
   early_adverse_r: number | null;
@@ -322,6 +326,8 @@ export interface FactsContext {
   atr?: number | null;
   // Whether the gate's no-pullback rule applied to the plan
   momentum?: boolean | null;
+  // The calendar around the plan's life, for attributing an abnormal bar
+  events?: EconEvent[];
 }
 
 export const computeFacts = async (
@@ -391,12 +397,22 @@ export const computeFacts = async (
   const med = median(ranges);
   let abnormal: PostmortemFacts["abnormal_bar"] = null;
   if (med !== null && med > 0) {
-    let best = { at: "", ratio: 0 };
+    let best = { at: "", ratio: 0, t: 0 };
     during.forEach((x, i) => {
       const ratio = ranges[i] / med;
-      if (ratio > best.ratio) best = { at: toIso(x.t), ratio };
+      if (ratio > best.ratio) best = { at: toIso(x.t), ratio, t: x.t };
     });
-    if (best.ratio >= ABNORMAL_RANGE_RATIO) abnormal = { at: best.at, range_ratio: round2(best.ratio) };
+    if (best.ratio >= ABNORMAL_RANGE_RATIO) {
+      const barMs = INTERVAL_MS[evalInterval] ?? HOUR;
+      const scheduled = eventInBar(ctx.events ?? [], row.pair, best.t, best.t + barMs);
+      abnormal = {
+        at: best.at,
+        range_ratio: round2(best.ratio),
+        event: scheduled
+          ? { at: scheduled.event_at, country: scheduled.country, impact: scheduled.impact, title: scheduled.title }
+          : null,
+      };
+    }
   }
 
   // The first bars in the trade: did price turn on the entry at once? Only

@@ -17,6 +17,7 @@
 // admin with their JWT (to run it by hand, with `force` to skip the waits).
 
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
+import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
 import { EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
 import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
@@ -319,6 +320,26 @@ Deno.serve(async (req: Request) => {
     }
     const due = rows.slice(0, options.limit);
 
+    // ---- the calendar over the window under review -----------------------
+    // One read for the whole run: an abnormal bar is then attributable to a
+    // scheduled release instead of being guessed at from its shape
+    let calendar: EconEvent[] = [];
+    if (due.length > 0) {
+      const oldest = due.reduce((min, d) => {
+        const t = Date.parse(d.row.created_at);
+        return Number.isFinite(t) ? Math.min(min, t) : min;
+      }, nowMs);
+      const pairs = new Set(due.flatMap((d) => currenciesOf(d.row.pair)));
+      const countries = [...pairs, "All"];
+      const rows = await readRows(
+        `econ_events?select=id,event_at,country,title,impact,forecast,previous,all_day,source` +
+        `&event_at=gte.${encodeURIComponent(new Date(oldest - 6 * HOUR).toISOString())}` +
+        `&event_at=lte.${encodeURIComponent(nowIso)}` +
+        `&country=in.(${countries.map(encodeURIComponent).join(",")})&order=event_at.asc&limit=200`,
+      );
+      calendar = rows as unknown as EconEvent[];
+    }
+
     // ---- model ---------------------------------------------------------
     const anthropicHeaders = {
       "content-type": "application/json",
@@ -442,6 +463,7 @@ Deno.serve(async (req: Request) => {
           adx: contextEntry ? numberOrNull(contextEntry.adx) : null,
           atr: (contextEntry ? numberOrNull(contextEntry.atr) : null) ?? (entryCheck ? numberOrNull(entryCheck.atr) : null),
           momentum: entryCheck ? entryCheck.momentum === true : null,
+          events: calendar,
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);

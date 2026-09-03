@@ -207,6 +207,7 @@ export const ja = {
       revisedNote: "値動きが揃った後に再診断済み",
       ruleBlamed: (id: string) => `結果を招いたルール: ${id}`,
       ruleCredited: (id: string) => `貢献したルール: ${id}`,
+      eventBar: (country: string, title: string) => `急変動した足で ${country} の指標発表: ${title}`,
       causeBreakdown: "外れた原因の内訳",
     },
     detail: {
