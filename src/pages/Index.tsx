@@ -24,7 +24,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v12-2026-09-03T04:20:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v13-2026-09-03T05:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -294,7 +294,12 @@ const Index = () => {
       const remainingCount = payload?.remaining ?? resData?.remaining ?? null;
       const technicalData = normalizeTechnicalData(payload?.technicalData ?? resData?.technicalData);
       const mode = payload?.mode ?? resData?.mode ?? (includeFundamental ? "full" : "technical_only");
-      const errorMessage = resData?.error || payload?.error || `サーバーエラー (${response.status})`;
+      const errorMessage = resData?.error || payload?.error ||
+        // 546 is Supabase killing the worker at its wall-clock limit. There is
+        // no response body in that case, so name the cause ourselves.
+        (response.status === 546
+          ? "分析に時間がかかりすぎて中断されました。「経済ニュース・指標も考慮する」をOFFにすると速くなります。"
+          : `サーバーエラー (${response.status})`);
       // Match on the server's own stage, not on the words in the message: an
       // upstream "rate limit" error used to be reported as the daily cap and
       // pushed the user at the pricing page for no reason.
