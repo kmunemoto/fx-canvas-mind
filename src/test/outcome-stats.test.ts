@@ -46,6 +46,28 @@ describe("tally", () => {
 
   it("has no rate before anything settles", () => {
     expect(tally("all", [rec({ outcome: "pending" })]).winRate).toBeNull();
+    expect(tally("all", [rec({ outcome: "pending" })]).fillRate).toBeNull();
+  });
+
+  it("measures how often the entry was actually reached", () => {
+    // 2 filled (win, loss) + 1 expired counts as filled; 3 never triggered
+    const t = tally("all", [
+      rec({ outcome: "win" }),
+      rec({ outcome: "loss" }),
+      rec({ outcome: "expired" }),
+      rec({ outcome: "untriggered" }),
+      rec({ outcome: "untriggered" }),
+      rec({ outcome: "untriggered" }),
+      rec({ outcome: "pending" }),
+      rec({ outcome: "ambiguous" }),
+    ]);
+    expect(t.fillRate).toBe(50);
+    // The record as it stood before the entry fix: 1 filled, 5 never reached
+    const before = tally("all", [
+      rec({ outcome: "loss" }),
+      ...Array.from({ length: 5 }, () => rec({ outcome: "untriggered" })),
+    ]);
+    expect(before.fillRate).toBe(17);
   });
 });
 

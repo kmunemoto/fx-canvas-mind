@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
 import AnalysisResultView from "../components/AnalysisResultView";
 import AnalysisHistory from "../components/AnalysisHistory";
+import LearnedRules from "../components/LearnedRules";
 import AnalysisStages from "../components/AnalysisStages";
 import type { AnalysisRecord, AnalysisResult, OutcomeEvaluation, TechnicalData } from "../lib/types";
 
@@ -209,6 +210,126 @@ describe("AnalysisHistory (DB records)", () => {
     expect(screen.getByText("WAIT（トレードプランなし）のため判定対象外")).toBeInTheDocument();
     expect(screen.queryByText(/次回の自動判定/)).toBeNull();
     expect(screen.queryByText("エントリー")).toBeNull();
+  });
+
+  it("shows the post-mortem on a settled row, and says one is coming on a row without it", () => {
+    const diagnosed: AnalysisRecord = {
+      ...records[1],
+      id: "pm",
+      postmortem: {
+        schema: 1, status: "done", cause: "stop_too_tight", secondary_causes: ["news_shock"], avoidable: true, confidence: 80,
+        verdict: { ja: "方向は合っていたが損切りが近すぎた", en: "Right direction, stop too tight" },
+        evidence: { ja: ["損切り後4本でTP1到達"], en: ["TP1 reached 4 bars after the stop"] },
+        lesson: { ja: "4h の成行では損切りを ATR×1.0 以上に置く", en: "On 4h market entries keep the stop at least 1 ATR away" },
+        scope: "4h",
+        facts: {
+          bars_after_settlement: 12, hours_to_fill: 0, hours_to_settle: 8,
+          from_signal: { max_favorable_r: 2.5, max_adverse_r: 1 },
+          after: { first_touch: "tp1", reached_tp1: { at: "2026-08-22T12:00:00Z", bars: 4 }, reached_sl: null, beyond_sl_r: 0.2, returned_to_entry: true },
+          abnormal_bar: null,
+          counterfactual: {
+            market_entry: null,
+            stop_x1_5: { resolution: "win", reason: null, mfe_r: 2, mae_r: 1.1 },
+            stop_x2: { resolution: "win", reason: null, mfe_r: 2, mae_r: 1.1 },
+            tp_half: { resolution: "loss", reason: null, mfe_r: 0.4, mae_r: 1 },
+          },
+          regime: null,
+          hints: ["stop_too_tight"],
+        },
+        created_at: "2026-08-23T00:00:00Z",
+      },
+    };
+    render(<AnalysisHistory records={[...records, diagnosed]} />);
+    // the cause is on the row and in the breakdown before the row is opened
+    expect(screen.getByTestId("cause-breakdown")).toHaveTextContent("損切りが近すぎた ×1");
+
+    fireEvent.click(screen.getAllByRole("button", { name: /EUR\/USD 4h.*SELL 65%/ })[1]);
+    const pm = screen.getByTestId("postmortem");
+    expect(pm).toHaveTextContent("なぜ外れたか（AIの検証）");
+    expect(pm).toHaveTextContent("損切りが近すぎた");
+    expect(pm).toHaveTextContent("指標・イベントの急変動");
+    expect(pm).toHaveTextContent("方向は合っていたが損切りが近すぎた");
+    expect(pm).toHaveTextContent("損切り後4本でTP1到達");
+    expect(pm).toHaveTextContent("教訓:4h の成行では損切りを ATR×1.0 以上に置く");
+    expect(pm).toHaveTextContent("損切りを2倍に広げていたらWIN");
+    expect(pm).toHaveTextContent("利確を半分にしていたらLOSS");
+    expect(pm).toHaveTextContent("損切りの 4 本後に TP1 へ到達");
+    expect(pm).toHaveTextContent("分析時点の情報で回避できた");
+    expect(pm).toHaveTextContent("診断の確度 80%");
+
+    // the other settled loss has no diagnosis yet
+    fireEvent.click(screen.getAllByRole("button", { name: /EUR\/USD 4h.*SELL 65%/ })[0]);
+    expect(screen.getAllByTestId("postmortem")[0]).toHaveTextContent("原因分析は決着から数時間後に自動で行われます");
+  });
+
+  it("shows a refused plan under its WAIT row, with what the shadow copy then did", () => {
+    const refused: AnalysisRecord = {
+      ...records[2],
+      id: "gate",
+      confidence: 66,
+      entry_check: {
+        proposed_signal: "SELL", proposed_entry: 157.9, proposed_stop: 158.45, proposed_tp1: 157.05,
+        entry_type: "limit", distance_atr: 0.31, stop_atr: 1.22, risk_reward: 1.55,
+        rejection: "should_be_market", repair_rejection: "poor_rr", repaired: false, atr: 0.45,
+      },
+    };
+    const shadow: AnalysisRecord = {
+      ...records[3],
+      id: "gate-shadow",
+      shadow: true,
+      shadow_of: "gate",
+      outcome: "untriggered",
+      evaluation: { ...evaluation, filled_at: null, resolution: "untriggered", reason: "missed" },
+    };
+    render(<AnalysisHistory records={[...records, refused, shadow]} />);
+    // the shadow is not a row of its own, and the record counts the refusal
+    expect(screen.getAllByRole("button", { name: /SELL 66%/ })).toHaveLength(1);
+    expect(screen.getByTestId("gate-note")).toHaveTextContent("AIの提案 1件は「約定しない・割に合わない」としてサーバー側で却下");
+    expect(screen.getByTestId("gate-note")).toHaveTextContent("未約定 1 / WIN 0 / LOSS 0 / 進行中 0");
+    expect(screen.getByText("却下")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /WAIT 66%/ }));
+    const gate = screen.getByTestId("gate-detail");
+    expect(gate).toHaveTextContent("サーバー側で却下したプラン");
+    expect(gate).toHaveTextContent("トレンド継続中に戻りを待つ指値（約定しない）");
+    expect(gate).toHaveTextContent("157.900");
+    expect(gate).toHaveTextContent("0.31 ATR");
+    expect(gate).toHaveTextContent("1:1.55");
+    expect(gate).toHaveTextContent("却下は正しかった");
+    expect(screen.getByText("AIの提案はサーバー側で却下され、WAITとして公開されました")).toBeInTheDocument();
+  });
+});
+
+describe("LearnedRules", () => {
+  it("says so when nothing has been learned yet", () => {
+    render(<LearnedRules rulebook={null} />);
+    expect(screen.getByTestId("learned-rules")).toHaveTextContent("まだ学習したルールはありません");
+    render(<LearnedRules rulebook={{ version: 0, rules: [], summary: null, updated_at: null }} />);
+    expect(screen.getAllByText(/まだ学習したルールはありません/)).toHaveLength(2);
+  });
+
+  it("lists the rules with their evidence in the viewer's language, and folds the long tail", () => {
+    const rules = Array.from({ length: 7 }, (_, i) => ({
+      id: `r${i + 1}`,
+      text_ja: `ルール${i + 1}`,
+      text_en: `Rule ${i + 1}`,
+      cause: "stop_too_tight",
+      support: 7 - i,
+      scope: i === 0 ? "1h" : null,
+      since: null,
+    }));
+    const rulebook = { version: 3, rules, summary: { ja: "損切りが近すぎる負けが多い", en: "Most losses come from tight stops" }, updated_at: "2026-09-03T09:00:00Z" };
+    render(<LearnedRules rulebook={rulebook} />, "en");
+    const panel = screen.getByTestId("learned-rules");
+    expect(panel).toHaveTextContent("What the AI has learned");
+    expect(panel).toHaveTextContent("v3");
+    expect(panel).toHaveTextContent("Most losses come from tight stops");
+    expect(panel).toHaveTextContent("[1h]Rule 1");
+    expect(panel).toHaveTextContent("7 cases");
+    expect(screen.queryByText("Rule 7")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all \(7\)/ }));
+    expect(screen.getByText("Rule 7")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("1 case");
   });
 
   it("renders nothing with no records", () => {

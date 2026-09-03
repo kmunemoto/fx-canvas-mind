@@ -146,6 +146,107 @@ export interface OutcomeEvaluation {
   path: OutcomePathPoint[];
 }
 
+// Why the entry gate in analyze refused (or repaired) a plan — mirror of
+// entry_check written by supabase/functions/analyze/index.ts
+export type EntryRejection = "too_far" | "should_be_market" | "stop_too_tight" | "poor_rr" | "incoherent";
+
+export interface EntryCheck {
+  proposed_signal: "BUY" | "SELL" | "WAIT";
+  proposed_entry: number | null;
+  proposed_stop: number | null;
+  proposed_tp1: number | null;
+  declared_type?: string | null;
+  entry_type: string | null;
+  regime?: string | null;
+  momentum?: boolean;
+  distance_atr: number | null;
+  stop_atr?: number | null;
+  risk_reward: number | null;
+  rejection: EntryRejection | null;
+  repair_rejection?: EntryRejection | null;
+  repaired?: boolean;
+  atr: number | null;
+}
+
+// Why a settled plan went the way it did — mirror of the postmortem
+// document written by supabase/functions/postmortem/index.ts
+export type PostmortemCause =
+  | "direction_wrong"
+  | "stop_too_tight"
+  | "entry_too_far"
+  | "target_too_far"
+  | "regime_misread"
+  | "news_shock"
+  | "plan_incoherent"
+  | "good_call"
+  | "lucky_win"
+  | "inconclusive";
+
+export interface Counterfactual {
+  resolution: string | null;
+  reason: string | null;
+  mfe_r: number | null;
+  mae_r: number | null;
+}
+
+export interface PostmortemFacts {
+  bars_after_settlement: number;
+  hours_to_fill: number | null;
+  hours_to_settle: number | null;
+  from_signal: { max_favorable_r: number | null; max_adverse_r: number | null };
+  after: {
+    first_touch: "tp1" | "sl" | "both" | null;
+    reached_tp1: { at: string; bars: number } | null;
+    reached_sl: { at: string; bars: number } | null;
+    beyond_sl_r: number | null;
+    returned_to_entry: boolean | null;
+  };
+  abnormal_bar: { at: string; range_ratio: number } | null;
+  counterfactual: {
+    market_entry: Counterfactual | null;
+    stop_x1_5: Counterfactual | null;
+    stop_x2: Counterfactual | null;
+    tp_half: Counterfactual | null;
+  };
+  regime: { declared: string | null; adx: number | null; conflict: boolean } | null;
+  hints: PostmortemCause[];
+}
+
+export interface Postmortem {
+  schema: number;
+  status: "done" | "failed";
+  cause?: PostmortemCause;
+  secondary_causes?: PostmortemCause[];
+  avoidable?: boolean;
+  confidence?: number;
+  verdict?: { ja: string; en: string };
+  evidence?: { ja: string[]; en: string[] };
+  lesson?: { ja: string; en: string };
+  scope?: string | null;
+  facts?: PostmortemFacts | null;
+  created_at?: string;
+  error?: string;
+  attempts?: number;
+}
+
+// One consolidated rule the analyzer is given (public.rulebook)
+export interface RulebookRule {
+  id: string;
+  text_ja: string;
+  text_en: string;
+  cause: string;
+  support: number;
+  scope: string | null;
+  since: string | null;
+}
+
+export interface Rulebook {
+  version: number;
+  rules: RulebookRule[];
+  summary: { ja: string; en: string } | null;
+  updated_at: string | null;
+}
+
 // Row shape of public.analyses as read by the client
 export interface AnalysisRecord {
   id: string;
@@ -166,6 +267,13 @@ export interface AnalysisRecord {
   created_at: string;
   closed_at: string | null;
   evaluation: OutcomeEvaluation | null;
+  // v19+: the entry gate's verdict, the post-mortem, and shadow tracking of
+  // refused plans (absent on rows written by earlier versions)
+  entry_check?: EntryCheck | null;
+  postmortem?: Postmortem | null;
+  shadow?: boolean;
+  shadow_of?: string | null;
+  rulebook_version?: number | null;
 }
 
 export interface HistoryEntry {

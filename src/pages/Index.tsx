@@ -6,12 +6,14 @@ import AnalysisResultView from "@/components/AnalysisResultView";
 import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
+import LearnedRules from "@/components/LearnedRules";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { useAuth } from "@/contexts/AuthContext";
 import type {
   AnalysisRecord,
+  Rulebook,
   AnalysisResult,
   AppSettings,
   LoadingStage,
@@ -25,7 +27,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v17-2026-09-03T10:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v19-2026-09-03T15:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -168,6 +170,7 @@ const Index = () => {
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("idle");
   const [liveRate, setLiveRate] = useState<string | null>(null);
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
+  const [rulebook, setRulebook] = useState<Rulebook | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -200,16 +203,31 @@ const Index = () => {
 
   const loadHistory = useCallback(async () => {
     try {
+      // Shadow rows (refused plans, tracked anyway) come along and are
+      // folded under their WAIT row by the history view
       const { data, error } = await supabase
         .from("analyses")
-        .select("id,pair,interval,mode,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,price_at_signal,outcome,outcome_price,created_at,closed_at,evaluation")
+        .select("id,pair,interval,mode,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,price_at_signal,outcome,outcome_price,created_at,closed_at,evaluation,entry_check,postmortem,shadow,shadow_of,rulebook_version")
         .order("created_at", { ascending: false })
-        .limit(30);
+        .limit(40);
       if (!error && Array.isArray(data)) {
         setHistory(data as AnalysisRecord[]);
       }
     } catch {
       // History is best-effort; the analysis flow must not depend on it
+    }
+    try {
+      const { data, error } = await supabase
+        .from("rulebook")
+        .select("version,rules,summary,updated_at")
+        .eq("id", 1)
+        .maybeSingle();
+      if (!error && data) {
+        setRulebook(data as Rulebook);
+      }
+    } catch {
+      // The learned rules are a display of what the analyzer knows, nothing
+      // else depends on them
     }
   }, []);
 
@@ -464,6 +482,7 @@ const Index = () => {
 
           <div className="space-y-4">
             {techData && !loading && <TechnicalDataCard data={techData} />}
+            <LearnedRules rulebook={rulebook} />
             <AnalysisHistory records={history} />
           </div>
         </div>

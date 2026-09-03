@@ -18,3 +18,8 @@ verify_jwt = false
 # token from the pg_cron job (see migrations/20260903090000_*.sql).
 [functions.track-outcomes]
 verify_jwt = false
+
+# Authenticates in the function body: the sweep token from pg_cron, or an
+# admin's JWT for a manual run.
+[functions.postmortem]
+verify_jwt = false

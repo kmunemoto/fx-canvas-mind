@@ -33,6 +33,23 @@ interface LocaleStrings {
   // not appended twice when the model followed the instruction.
   disclaimerMarker: string;
   fallbackWarning: string;
+  // Shown when a plan was downgraded to WAIT because the market would never
+  // have reached its entry (see entry.ts)
+  entryRejected: (parts: {
+    rejection: string;
+    signal: string;
+    distanceAtr: number | null;
+    stopAtr: number | null;
+    riskReward: number | null;
+    // Why moving the entry to the market did not save the plan either
+    repairRejection: string | null;
+  }) => string;
+  // Shown when the entry was moved to the market price because the model's
+  // pullback entry would not have been filled
+  entryRepaired: (parts: { signal: string; originalEntry: string; entry: string }) => string;
+  // Shown when an entry inside the "at market" band was pulled onto the
+  // market price so that it is entered, and judged, as a market order
+  entrySnapped: (parts: { originalEntry: string; entry: string }) => string;
 }
 
 const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
@@ -48,10 +65,35 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     schemaInstruction: (schema) =>
       `\n\n最終回答は<json>タグ内に、次のJSON Schemaに厳密に従ったJSONのみを出力してください。キー名とenum値は英語のまま一字一句一致させ、required のフィールドは全て含めること。スキーマ外のキーは出力しないこと。\n${schema}`,
     userMessage: ({ pair, nowUtc, note, sections, schema }) =>
-      `通貨ペア: ${pair}\n現在時刻(UTC): ${nowUtc}\n${note}\n\n${sections}\n\n上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schema}`,
+      `通貨ペア: ${pair}\n現在時刻(UTC): ${nowUtc}\n${note}\n\n${sections}\n\n上記のマルチタイムフレームデータを手順1-6に沿って分析し、トレードプランを出力してください。${schema}`,
     disclaimer: "この分析は参考情報です。投資判断は自己責任で行ってください",
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
+      const head = `AIの判断は ${signal} でしたが、`;
+      const tail = "ため見送り（WAIT）に変更しました";
+      const repair = repairRejection === "poor_rr"
+        ? "。現在値で入り直してもリスクリワードが成立しません"
+        : repairRejection === "stop_too_tight"
+          ? "。現在値で入り直すと損切りが近すぎます"
+          : "";
+      switch (rejection) {
+        case "too_far":
+          return `${head}エントリー価格が現在値から離れすぎており（ATRの${distanceAtr ?? "?"}倍）、約定しない可能性が高い${tail}${repair}`;
+        case "should_be_market":
+          return `${head}トレンドが継続している場面で「戻りを待つ指値」になっており、約定しない可能性が高い${tail}${repair}`;
+        case "stop_too_tight":
+          return `${head}損切りが現在値に近すぎ（ATRの${stopAtr ?? "?"}倍）、ノイズで刈られる可能性が高い${tail}`;
+        case "poor_rr":
+          return `${head}このエントリーではリスクリワードが${riskReward ?? "?"}しかなく、割に合わない${tail}`;
+        default:
+          return `${head}エントリー・損切り・利確の水準に矛盾がある${tail}`;
+      }
+    },
+    entryRepaired: ({ signal, originalEntry, entry }) =>
+      `AIは ${originalEntry} への戻りを待つ ${signal} を提案しましたが、トレンド継続中に戻りを待つと約定しないため、エントリーを現在値 ${entry} の成行に修正しました（損切り・利確はそのまま）`,
+    entrySnapped: ({ originalEntry, entry }) =>
+      `エントリー ${originalEntry} は現在値とほぼ同じ水準のため、成行として現在値 ${entry} に揃えました（数pipsの待ちで約定を逃さないため）`,
   },
   en: {
     languageRule:
@@ -65,10 +107,35 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     schemaInstruction: (schema) =>
       `\n\nReturn your final answer inside <json> tags as JSON only, strictly following this JSON Schema. Keep key names and enum values exactly as written, include every required field, and output no keys outside the schema.\n${schema}`,
     userMessage: ({ pair, nowUtc, note, sections, schema }) =>
-      `Currency pair: ${pair}\nCurrent time (UTC): ${nowUtc}\n${note}\n\n${sections}\n\nAnalyse the multi-timeframe data above following steps 1-5 and output the trade plan.${schema}`,
+      `Currency pair: ${pair}\nCurrent time (UTC): ${nowUtc}\n${note}\n\n${sections}\n\nAnalyse the multi-timeframe data above following steps 1-6 and output the trade plan.${schema}`,
     disclaimer: "This analysis is reference information. Trading decisions are your own responsibility.",
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
+      const head = `The model called ${signal}, but `;
+      const tail = ", so this was downgraded to WAIT.";
+      const repair = repairRejection === "poor_rr"
+        ? " Entering at the market instead would not pay either."
+        : repairRejection === "stop_too_tight"
+          ? " Entering at the market instead would leave the stop too close."
+          : "";
+      switch (rejection) {
+        case "too_far":
+          return `${head}the entry sits too far from the market (${distanceAtr ?? "?"}× ATR) to be filled${tail}${repair}`;
+        case "should_be_market":
+          return `${head}it waits for a pullback while the trend is still running, which would not have filled${tail}${repair}`;
+        case "stop_too_tight":
+          return `${head}the stop sits inside the noise (${stopAtr ?? "?"}× ATR from the entry) and would be hit by it${tail}`;
+        case "poor_rr":
+          return `${head}at that entry the risk/reward is only ${riskReward ?? "?"}, which does not pay${tail}`;
+        default:
+          return `${head}the entry, stop and target contradict each other${tail}`;
+      }
+    },
+    entryRepaired: ({ signal, originalEntry, entry }) =>
+      `The model proposed a ${signal} on a pullback to ${originalEntry}; a pullback does not come in a running trend, so the entry was moved to the market at ${entry} (stop and targets unchanged).`,
+    entrySnapped: ({ originalEntry, entry }) =>
+      `The entry at ${originalEntry} was effectively at the market, so it was aligned to the market price ${entry} rather than waiting a few pips for a fill.`,
   },
 };
 
