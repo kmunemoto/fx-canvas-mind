@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v10-2026-08-29T06:00:00Z";
+const FUNCTION_VERSION = "analyze-v11-2026-09-03T04:00:00Z";
 
 import {
   computeSnapshot,
@@ -6,6 +6,13 @@ import {
   type Candle,
   type IndicatorSnapshot,
 } from "./indicators.ts";
+
+import {
+  NEWS_DOMAINS,
+  isInaccessibleDomainError,
+  parseInaccessibleDomains,
+  planDomainRecovery,
+} from "./websearch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -704,27 +711,25 @@ Deno.serve(async (req: Request) => {
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
-    const fundamentalNote = includeFundamental
-      ? "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は3回まで。"
-      : "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
+    const SEARCH_NOTE = "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は3回まで。";
+    const TECHNICAL_NOTE = "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
+    const FALLBACK_NOTE = "分析モード: technical_fallback — ニュース検索が利用できないため、テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
 
-    // Structured outputs cannot be combined with web search, so full mode has
-    // to carry the same field contract in the prompt instead. Reusing the one
-    // RESPONSE_SCHEMA keeps both modes on a single definition.
-    const schemaInstruction = includeFundamental
-      ? `
+    // Structured outputs cannot be combined with web search, so the search path
+    // has to carry the same field contract in the prompt instead. Reusing the
+    // one RESPONSE_SCHEMA keeps both paths on a single definition.
+    const SCHEMA_INSTRUCTION = `
 
 最終回答は<json>タグ内に、次のJSON Schemaに厳密に従ったJSONのみを出力してください。キー名とenum値は英語のまま一字一句一致させ、required のフィールドは全て含めること。スキーマ外のキーは出力しないこと。
-${JSON.stringify(RESPONSE_SCHEMA)}`
-      : "";
+${JSON.stringify(RESPONSE_SCHEMA)}`;
 
-    const userMessage = `通貨ペア: ${currencyPair}
+    const buildUserMessage = (note: string, schemaInPrompt: boolean) => `通貨ペア: ${currencyPair}
 現在時刻(UTC): ${nowUtc}
-${fundamentalNote}
+${note}
 
 ${tfSections}
 
-上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schemaInstruction}`;
+上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schemaInPrompt ? SCHEMA_INSTRUCTION : ""}`;
 
     stage = "request_ai";
     const anthropicHeaders = {
@@ -737,36 +742,53 @@ ${tfSections}
       model: "claude-opus-5",
       max_tokens: 16000,
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
+      messages: [{
+        role: "user",
+        content: includeFundamental
+          ? buildUserMessage(SEARCH_NOTE, true)
+          : buildUserMessage(TECHNICAL_NOTE, false),
+      }],
     };
 
-    if (includeFundamental) {
-      // Web search responses carry citations, which are incompatible with
-      // output_config.format — so full mode parses JSON out of the text.
-      // Search results enter the model's context, and this model's output is a
-      // trade signal — so restrict the tool to sources whose pages we are
-      // willing to let influence it.
-      baseRequest.tools = [{
-        type: "web_search_20260209",
-        name: "web_search",
-        max_uses: 3,
-        allowed_domains: [
-          "reuters.com", "bloomberg.com", "cnbc.com", "marketwatch.com",
-          "investing.com", "fxstreet.com", "dailyfx.com", "forexfactory.com",
-          "tradingeconomics.com", "nikkei.com", "boj.or.jp",
-          "federalreserve.gov", "ecb.europa.eu", "mof.go.jp",
-        ],
-      }];
-    } else {
-      baseRequest.output_config = { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
+    // Web search responses carry citations, which are incompatible with
+    // output_config.format — so the search path parses JSON out of the text
+    // while the technical path uses structured outputs.
+    let searchDomains = includeFundamental ? [...NEWS_DOMAINS] : [];
+    let searchEnabled = includeFundamental && searchDomains.length > 0;
+    // Set when search was requested but had to be given up; the client shows a
+    // different badge for it rather than silently passing off a technical-only
+    // read as the full analysis the user asked for.
+    let searchDroppedReason: string | null = null;
+    let pruneRetries = 0;
+
+    const applyRequestShape = () => {
+      if (searchEnabled) {
+        baseRequest.tools = [{
+          type: "web_search_20260209",
+          name: "web_search",
+          max_uses: 3,
+          allowed_domains: searchDomains,
+        }];
+        delete baseRequest.output_config;
+      } else {
+        delete baseRequest.tools;
+        baseRequest.output_config = { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
+      }
+    };
+    applyRequestShape();
+
+    if (includeFundamental && !searchEnabled) {
+      searchDroppedReason = "no_allowed_domains";
     }
 
     // Server tools may pause long turns (stop_reason "pause_turn"); continue
-    // the same turn by echoing the assistant content back. Bounded loop.
-    const messages = [...(baseRequest.messages as JsonRecord[])];
+    // the same turn by echoing the assistant content back. The same bounded
+    // loop also re-runs the request after pruning an uncrawlable domain, so
+    // the ceiling covers both kinds of continuation.
+    let messages = [...(baseRequest.messages as JsonRecord[])];
     let claudeData: JsonRecord | null = null;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: anthropicHeaders,
@@ -781,10 +803,36 @@ ${tfSections}
           ? asTrimmedString(parsed.error.message, "AI分析エラー")
           : "AI分析エラー";
         console.error("Claude API error:", claudeRes.status, claudeRaw.slice(0, 500));
+
+        // The API validates allowed_domains up front and rejects the whole
+        // request when a listed site blocks Anthropic's crawler — which sites
+        // do that changes without notice. Drop the ones it named and retry;
+        // give up search entirely rather than fail the analysis.
+        if (searchEnabled && isInaccessibleDomainError(errorMessage)) {
+          const blocked = parseInaccessibleDomains(errorMessage);
+          console.warn("Web search domains rejected as uncrawlable:", blocked.join(", "));
+
+          const plan = planDomainRecovery(searchDomains, blocked, pruneRetries);
+          if (plan.action === "retry") {
+            searchDomains = plan.domains;
+            pruneRetries++;
+          } else {
+            searchEnabled = false;
+            searchDroppedReason = "uncrawlable_domains";
+            // The paused assistant turn, if any, carries web_search blocks that
+            // are invalid once the tool is gone — start the turn over.
+            messages = [{ role: "user", content: buildUserMessage(FALLBACK_NOTE, false) }];
+          }
+          applyRequestShape();
+          continue;
+        }
+
         return await fail({
           ok: false,
-          error: errorMessage,
-          diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, preview: claudeRaw.slice(0, 300) },
+          // Anthropic's own text is English and written for developers; keep it
+          // in diagnostics and show the user something actionable instead.
+          error: "AI分析エラーが発生しました。時間をおいて再試行してください。",
+          diagnostics: { error_stage: "anthropic_request_failed", stage, status: claudeRes.status, detail: errorMessage.slice(0, 300), preview: claudeRaw.slice(0, 300) },
         }, 400);
       }
 
@@ -827,6 +875,21 @@ ${tfSections}
 
     const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals);
 
+    // The user asked for news to be factored in and it could not be; say so in
+    // the result rather than passing a technical-only read off as full analysis.
+    const resolvedMode = !includeFundamental
+      ? "technical_only"
+      : searchDroppedReason
+        ? "technical_fallback"
+        : "full";
+
+    if (resolvedMode === "technical_fallback") {
+      normalizedAnalysis.warnings = [
+        "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
+        ...normalizedAnalysis.warnings,
+      ];
+    }
+
     // History row for the win/loss tracker. Only BUY/SELL plans with prices
     // can be evaluated later; WAIT rows are stored for the record as skipped.
     stage = "save_history";
@@ -848,7 +911,7 @@ ${tfSections}
           user_id: user.id,
           pair: currencyPair,
           interval,
-          mode: includeFundamental ? "full" : "technical_only",
+          mode: resolvedMode,
           signal: normalizedAnalysis.signal,
           confidence: normalizedAnalysis.confidence,
           thesis: normalizedAnalysis.thesis || null,
@@ -880,7 +943,7 @@ ${tfSections}
         analysis: clientAnalysis,
         remaining: isAdmin ? null : dailyLimit - count,
         plan,
-        mode: includeFundamental ? "full" : "technical_only",
+        mode: resolvedMode,
         technicalData: {
           price: p(entrySnapshot.price),
           datetime: entrySnapshot.datetime,
