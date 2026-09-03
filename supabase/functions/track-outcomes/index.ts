@@ -27,7 +27,7 @@ import {
 } from "./evaluate.ts";
 import { fetchQuotes, supportsQuotes, type QuoteCandle } from "./quotes.ts";
 
-const TRACKER_VERSION = "track-outcomes-v5-2026-09-03T19:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v6-2026-09-03T23:10:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -273,6 +273,7 @@ Deno.serve(async (req: Request) => {
     // mid feed exactly as it was before.
     let quoteRequests = 0;
     let quoteGroups = 0;
+    let quoteEmptyKeys = 0;
     const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null> => {
       if (!supportsQuotes(pair, evalInterval)) return null;
       if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
@@ -287,11 +288,16 @@ Deno.serve(async (req: Request) => {
         });
         if (!res || res.bars.length === 0) return null;
         // A gap in the two-sided series would be judged as "price never got
-        // there"; fall back rather than invent a verdict from partial data
+        // there"; fall back rather than invent a verdict from partial data.
+        // `missing` now measures the hole in open market rather than counting
+        // date keys that came back empty — the provider's newest trading day
+        // has no file until the New York roll, and treating that as a failure
+        // silently sent every judgement back to the mid feed.
         if (res.missing.length > 0) {
           errors.push(`${pair}|${evalInterval}: quotes incomplete (${res.missing.join(",")})`);
           return null;
         }
+        if (res.empty.length > 0) quoteEmptyKeys += res.empty.length;
         quoteGroups++;
         return res.bars;
       } catch (err) {
@@ -380,6 +386,7 @@ Deno.serve(async (req: Request) => {
       requests,
       quote_requests: quoteRequests,
       quote_groups: quoteGroups,
+      quote_empty_keys: quoteEmptyKeys,
       refinements,
       checked,
       updated,

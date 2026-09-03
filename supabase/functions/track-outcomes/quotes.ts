@@ -73,8 +73,18 @@ export const sideOf = (q: QuoteCandle, side: "bid" | "ask"): Candle => (side ===
 // The spread at a bar's close, in price units
 export const spreadAt = (q: QuoteCandle): number => q.ask.close - q.bid.close;
 
-// "YYYYMMDD" of the JST calendar day a UTC instant falls in — GMO's own day
-// key, which is not the UTC day
+// "YYYYMMDD" of the JST calendar day a UTC instant falls in.
+//
+// NOTE this is NOT the day GMO files a bar under. Their trading day begins at
+// the New York 17:00 roll — 06:00 JST under US summer time, 07:00 JST under
+// winter time — so between JST midnight and that roll, the calendar day names
+// a file that does not exist yet and the API answers 404. Measured against
+// the live host on 2026-09-04 03:49 JST: `date=20260904` returned 404 while
+// `date=20260903` returned 22 bars running 06:00 JST 09-03 to 03:00 JST 09-04.
+//
+// Rather than encode the daylight-saving rule and get it wrong twice a year,
+// callers pad the key range (see dateKeys) and take correctness from the
+// timestamps on the bars that come back. A key is only a fetching bucket.
 export const jstDayKey = (ms: number): string => new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, "");
 
 export const jstYearKey = (ms: number): string => String(new Date(ms + JST_OFFSET_MS).getUTCFullYear());
@@ -87,16 +97,26 @@ export const dateKeys = (fromMs: number, toMs: number, key: "day" | "year"): str
   const seen = new Set<string>();
   const step = key === "day" ? DAY : 365 * DAY;
   const keyOf = key === "day" ? jstDayKey : jstYearKey;
+  // Padded by one bucket at each end because the provider's day does not
+  // start at JST midnight (see jstDayKey). A bar just inside the window can
+  // be filed under the neighbouring key, and fetching a key that turns out to
+  // hold nothing costs one request; missing the bar costs the judgement.
+  // Padded by a day, not by a bucket: the boundary that moves is the trading
+  // day's, and a year key only needs the neighbour when the window sits
+  // within a day of New Year. Padding a year each way would burn four
+  // requests per call for nothing.
+  const from = fromMs - DAY;
+  const to = toMs + DAY;
   // Walk the window; the final key is added explicitly so a window shorter
   // than the step still covers its end
-  for (let t = fromMs; t <= toMs; t += step) {
+  for (let t = from; t <= to; t += step) {
     const k = keyOf(t);
     if (!seen.has(k)) {
       seen.add(k);
       out.push(k);
     }
   }
-  const last = keyOf(toMs);
+  const last = keyOf(to);
   if (!seen.has(last)) out.push(last);
   return out;
 };
@@ -156,11 +176,16 @@ export const mergeSides = (
 ): QuoteCandle[] => {
   const asks = new Map(ask.map((x) => [x.t, x.c]));
   const out: QuoteCandle[] = [];
+  // Adjacent date keys are fetched deliberately (see dateKeys), so the same
+  // bar can arrive twice. One timestamp is one bar.
+  const emitted = new Set<number>();
   for (const b of bid) {
+    if (emitted.has(b.t)) continue;
     const a = asks.get(b.t);
     if (!a) continue;
     // An ask below the bid is a bad row, not a negative spread
     if (a.close < b.c.close) continue;
+    emitted.add(b.t);
     out.push({ datetime: b.c.datetime, bid: b.c, ask: a });
   }
   return out;
@@ -181,15 +206,64 @@ export const usableBars = (bars: QuoteCandle[], _intervalMs: number, nowMs: numb
     return !isMarketClosed(t);
   });
 
+// Whether the feed actually answered for the window asked about.
+//
+// The old test was "did every date key we guessed return rows?", which made
+// correctness depend on guessing the provider's calendar right. It did not:
+// the current trading day 404s until the New York roll, so every judgement
+// between JST midnight and 06:00 silently fell back to the mid feed. In
+// production every settled plan carried price_basis "mid" and nothing said
+// why.
+//
+// This asks the honest question instead — is there a stretch of OPEN market
+// inside the window with no bar in it? Buckets that come back empty are then
+// merely uninteresting, and a real outage is still caught.
+
+// Open-market milliseconds between two instants, sampled at the interval
+const openSpan = (fromMs: number, toMs: number, intervalMs: number): number => {
+  if (!(toMs > fromMs) || intervalMs <= 0) return 0;
+  let open = 0;
+  for (let t = fromMs; t < toMs; t += intervalMs) if (!isMarketClosed(t)) open += intervalMs;
+  return open;
+};
+
+// The longest run of open market the bars do not cover, in milliseconds
+export const largestGap = (
+  bars: QuoteCandle[],
+  fromMs: number,
+  toMs: number,
+  intervalMs: number,
+): number => {
+  const ts = bars
+    .map((b) => Date.parse(b.datetime))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (ts.length === 0) return openSpan(fromMs, toMs, intervalMs);
+  let worst = openSpan(fromMs, ts[0], intervalMs);
+  for (let i = 1; i < ts.length; i++) {
+    worst = Math.max(worst, openSpan(ts[i - 1] + intervalMs, ts[i], intervalMs));
+  }
+  return Math.max(worst, openSpan(ts[ts.length - 1] + intervalMs, toMs, intervalMs));
+};
+
+// How much of a hole is tolerable before the quote feed is not to be trusted
+// for this window. One bar can legitimately be absent (a provider hiccup, a
+// thin holiday session); three in a row is an outage.
+export const MAX_GAP_INTERVALS = 3;
+
 export const klineUrl = (symbol: string, side: "bid" | "ask", interval: string, dateKey: string): string =>
   `${GMO_HOST}/klines?symbol=${encodeURIComponent(symbol)}&priceType=${side.toUpperCase()}&interval=${encodeURIComponent(interval)}&date=${dateKey}`;
 
 export interface QuoteFetchResult {
   bars: QuoteCandle[];
-  // Requests that failed or returned nothing, so the caller can tell "the
-  // market was quiet" from "we could not look"
+  // Non-empty when the bars leave a hole in the open market too big to judge
+  // across, so the caller can tell "the market was quiet" from "we could not
+  // look"
   missing: string[];
   requests: number;
+  // Date keys that held nothing. Padding and the pre-roll trading day make
+  // these routine, so they are reported rather than treated as failures.
+  empty: string[];
 }
 
 export type Fetcher = (url: string) => Promise<unknown | null>;
@@ -212,7 +286,7 @@ export const fetchQuotes = async (
   const keys = dateKeys(fromMs, Math.min(toMs, nowMs), interval.key);
   const bid: Array<{ t: number; c: Candle }> = [];
   const ask: Array<{ t: number; c: Candle }> = [];
-  const missing: string[] = [];
+  const empty: string[] = [];
   let requests = 0;
 
   for (const key of keys) {
@@ -223,8 +297,10 @@ export const fetchQuotes = async (
     requests += 2;
     const bRows = parseKlines(b);
     const aRows = parseKlines(a);
+    // An empty bucket is not a gap: the range is padded, and the newest
+    // trading day does not exist until the roll. Only note it for the log.
     if (bRows.length === 0 || aRows.length === 0) {
-      missing.push(key);
+      empty.push(key);
       continue;
     }
     bid.push(...bRows);
@@ -237,7 +313,14 @@ export const fetchQuotes = async (
       const t = Date.parse(q.datetime);
       return t >= fromMs - intervalMs && t <= toMs;
     });
-  return { bars: merged, missing, requests };
+
+  // Coverage decides, not the buckets
+  const until = Math.min(toMs, nowMs);
+  const gap = largestGap(merged, fromMs, until, intervalMs);
+  const missing = gap > MAX_GAP_INTERVALS * intervalMs
+    ? [`gap ${Math.round(gap / intervalMs)}x${evalInterval}`]
+    : [];
+  return { bars: merged, missing, requests, empty };
 };
 
 // Kept local so this module has no import cycle with evaluate.ts

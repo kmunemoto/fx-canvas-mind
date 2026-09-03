@@ -55,16 +55,27 @@ describe("GMO's date keys", () => {
     expect(jstDayKey(Date.parse("2026-09-02T14:59:00Z"))).toBe("20260902");
   });
 
-  it("covers both JST days a UTC window straddles", () => {
+  it("covers both JST days a UTC window straddles, plus a day either side", () => {
     const keys = dateKeys(Date.parse("2026-09-02T13:00:00Z"), Date.parse("2026-09-02T16:00:00Z"), "day");
-    expect(keys).toEqual(["20260902", "20260903"]);
+    // The two days the window itself touches must be there...
+    expect(keys).toContain("20260902");
+    expect(keys).toContain("20260903");
+    // ...and the neighbours, because GMO files a bar under its trading day
+    // (which starts at the New York roll), not under the JST calendar day.
+    // Measured: at 03:49 JST the calendar day 404s and the previous key holds
+    // the bars. Padding costs one request per side and removes the guess.
+    expect(keys).toEqual(["20260901", "20260902", "20260903", "20260904"]);
   });
 
   it("asks for a whole year at a time on the coarse intervals", () => {
+    // Away from New Year the day-wide padding adds nothing: one key, two
+    // requests. Padding a whole year each way would burn four for nothing.
     expect(dateKeys(Date.parse("2026-03-01T00:00:00Z"), Date.parse("2026-09-01T00:00:00Z"), "year")).toEqual(["2026"]);
     // 2025-12-31 10:00 UTC is still 2025 in Tokyo; 20:00 UTC is already 2026
     expect(dateKeys(Date.parse("2025-12-31T10:00:00Z"), Date.parse("2026-01-02T00:00:00Z"), "year")).toEqual(["2025", "2026"]);
-    expect(dateKeys(Date.parse("2025-12-31T20:00:00Z"), Date.parse("2026-01-02T00:00:00Z"), "year")).toEqual(["2026"]);
+    // Within a day of the boundary the neighbour is fetched too: a bar at
+    // 2026-01-01 03:00 JST belongs to the trading day that opened in 2025
+    expect(dateKeys(Date.parse("2025-12-31T20:00:00Z"), Date.parse("2026-01-02T00:00:00Z"), "year")).toEqual(["2025", "2026"]);
   });
 
   it("builds the documented URL", () => {
@@ -158,20 +169,38 @@ describe("fetching a window", () => {
       return rows(T, side);
     });
     expect(res).not.toBeNull();
-    expect(seen).toHaveLength(2); // one JST day, two sides
-    expect(seen.every((u) => u.includes("interval=1hour&date=20260903"))).toBe(true);
-    expect(res?.requests).toBe(2);
+    // The window's own day plus one either side, both sides of the book
+    expect(seen).toHaveLength(6);
+    expect(seen.some((u) => u.includes("interval=1hour&date=20260903"))).toBe(true);
+    expect(res?.requests).toBe(6);
     expect(res?.missing).toEqual([]);
+    // This fixture answers every key with the same two bars; one timestamp is
+    // still one bar, so padding cannot inflate the series
     expect(res?.bars).toHaveLength(2);
     expect(spreadAt(res!.bars[0])).toBeCloseTo(0.01, 6);
   });
 
-  it("reports a date key it could not read instead of returning a shorter series silently", async () => {
+  it("treats an empty date key as ordinary, because the newest one has no file yet", async () => {
+    // This is the production failure that hid for a whole release: between
+    // JST midnight and the New York roll, the calendar day 404s. Judged by
+    // buckets, every window that touched "today" was declared incomplete and
+    // silently fell back to the mid feed.
     const now = Date.parse("2026-09-03T12:00:00Z");
-    const res = await fetchQuotes("USD/JPY", "1h", Date.parse("2026-09-02T13:00:00Z"), T, now, async (url) =>
-      url.includes("date=20260902") ? null : rows(T, url.includes("ASK") ? 0.01 : 0));
-    expect(res?.missing).toEqual(["20260902"]);
-    expect(res?.bars.length).toBeGreaterThan(0);
+    const res = await fetchQuotes("USD/JPY", "1h", T, T + 2 * HOUR, now, async (url) =>
+      url.includes("date=20260904") ? null : rows(T, url.includes("ASK") ? 0.01 : 0));
+    expect(res?.empty).toContain("20260904");
+    expect(res?.missing).toEqual([]);
+    expect(res?.bars).toHaveLength(2);
+  });
+
+  it("still refuses when the bars leave a real hole in an open market", async () => {
+    // Nothing at all comes back for a two-day window the market was open for
+    const from = Date.parse("2026-09-01T00:00:00Z"); // a Tuesday
+    const now = Date.parse("2026-09-03T00:00:00Z");
+    const res = await fetchQuotes("USD/JPY", "1h", from, now, now, async () => null);
+    expect(res?.bars).toHaveLength(0);
+    expect(res?.missing).toHaveLength(1);
+    expect(res?.missing[0]).toMatch(/^gap \d+x1h$/);
   });
 
   it("declines a pair it does not carry", async () => {
