@@ -10,12 +10,16 @@
 
 import { parseEvents, type EconEvent } from "./events.ts";
 
-const FUNCTION_VERSION = "econ-calendar-v1-2026-09-03T19:00:00Z";
+const FUNCTION_VERSION = "econ-calendar-v2-2026-09-03T20:00:00Z";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
+// Only the current week is published. `ff_calendar_nextweek.json`,
+// `_thismonth` and `_tomorrow` were all checked against the live host on
+// 2026-09-03 and every one returns 404, so the calendar can see to the end of
+// this week and no further. Plans with a horizon past that are told as much
+// rather than being allowed to read an empty list as "nothing scheduled".
 const FEEDS: Record<string, string> = {
   this_week: "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-  next_week: "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
 };
 // The publisher asks for a real client string and rate-limits hard; hourly is
 // far inside it, but a failed fetch must never be retried in a tight loop
@@ -112,7 +116,7 @@ Deno.serve(async (req: Request) => {
       mode = "admin";
     }
 
-    const weeks = body.weeks === "this" ? ["this_week"] : Object.keys(FEEDS);
+    const weeks = Object.keys(FEEDS);
 
     // ---- fetch -----------------------------------------------------------
     const events: EconEvent[] = [];
