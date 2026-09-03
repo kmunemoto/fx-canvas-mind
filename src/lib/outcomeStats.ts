@@ -87,8 +87,11 @@ export const confidenceBandKey = (confidence: number | null): string => {
   return "0-59";
 };
 
+// Version 0 is the seeded, empty rulebook: no rules were in force either
 export const rulebookKey = (r: AnalysisRecord): string =>
-  typeof r.rulebook_version === "number" && Number.isFinite(r.rulebook_version) ? `v${r.rulebook_version}` : NO_RULEBOOK;
+  typeof r.rulebook_version === "number" && Number.isFinite(r.rulebook_version) && r.rulebook_version > 0
+    ? `v${r.rulebook_version}`
+    : NO_RULEBOOK;
 
 const round2 = (v: number) => Number(v.toFixed(2));
 

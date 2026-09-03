@@ -19,8 +19,18 @@ where postmortem is not null
 alter table public.lessons add column if not exists rule_blamed text;
 alter table public.lessons add column if not exists rule_credited text;
 
--- 3. The consolidation reads settled plans by rulebook version to score each
---    version (and each rule) on what its plans then did.
+-- 3. Lessons are grouped into "one situation" clusters by when the PLAN was
+--    made, not by when the review ran (reviews run in batches hours later,
+--    which would merge unrelated plans and split related ones). Keep the
+--    plan's time on the lesson; backfill it from the plan.
+alter table public.lessons add column if not exists analysis_created_at timestamptz;
+update public.lessons l
+set analysis_created_at = a.created_at
+from public.analyses a
+where a.id = l.analysis_id and l.analysis_created_at is null;
+
+-- 4. The consolidation reads settled plans by rulebook version to score each
+--    version on what its plans then did.
 create index if not exists analyses_rulebook_version_idx
   on public.analyses (rulebook_version, outcome)
   where rulebook_version is not null and shadow = false;

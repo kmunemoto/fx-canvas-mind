@@ -9,10 +9,11 @@
 // The consolidation is where a learning loop goes wrong quietly, so the
 // numbers it is given and the numbers it may write back are both kept
 // honest here: statistics below a sample floor are handed over as null, a
-// rule's support is computed from the lessons it cites rather than taken
-// from the model, plans made in the same market situation count once, and
-// a revision may add or drop only a couple of rules so that any version of
-// the rulebook lives long enough to be measured.
+// rule's support is computed from the lessons it cites (and a citation
+// only counts when the lesson is actually about the rule's failure), plans
+// made in the same market situation count once, and a revision may add or
+// drop only a couple of rules so that any version of the rulebook lives
+// long enough to be measured.
 //
 // Deno-free on purpose: src/test/postmortem.test.ts imports this file
 // directly.
@@ -26,15 +27,15 @@ export const MAX_LESSON_CHARS = 160;
 export const MAX_RULE_CHARS = 160;
 // Below this many settled trades a win rate is not a statistic
 export const MIN_STAT_N = 20;
-// A rule's own record needs this many settled plans before it counts
-// against the rule
-export const MIN_RULE_EVAL_N = 5;
 // Rules a single revision may add / drop
 export const MAX_RULES_ADDED = 2;
 export const MAX_RULES_REMOVED = 2;
-// Plans on the same pair in the same direction inside this window were one
-// decision about one situation: they count once
+// Plans on the same pair in the same direction this close together were one
+// decision about one situation: they count once...
 export const CLUSTER_WINDOW_MS = 24 * 60 * 60 * 1000;
+// ...unless the earlier plan had already settled this long before the next
+// one was made, in which case the market had moved on
+export const CLUSTER_REOPEN_MS = 4 * 60 * 60 * 1000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -62,27 +63,38 @@ export interface Clusterable {
   pair: string;
   signal: string;
   created_at: string;
+  // When the plan settled, if known: a plan made well after the previous
+  // one closed is a new decision even inside the window
+  closed_at?: string | null;
+  user_id?: string | null;
 }
 
-// Cluster ids for a set of plans: same pair, same direction, opened within
-// CLUSTER_WINDOW_MS of the cluster's first plan. Returned in input order.
+// Cluster ids for a set of plans, in input order. A plan joins the cluster
+// of the previous plan on the same pair, direction (and user) when it was
+// made within CLUSTER_WINDOW_MS of it, unless that plan had settled more
+// than CLUSTER_REOPEN_MS earlier.
 export const clusterIds = (items: Clusterable[]): string[] => {
   const order = items
     .map((item, i) => ({ i, t: Date.parse(item.created_at) }))
     .sort((a, b) => (Number.isFinite(a.t) ? a.t : 0) - (Number.isFinite(b.t) ? b.t : 0));
-  const starts = new Map<string, { id: string; t: number }>();
+  const last = new Map<string, { id: string; t: number; closed: number }>();
   const out = new Array<string>(items.length);
   for (const { i, t } of order) {
     const item = items[i];
-    const key = `${item.pair}|${item.signal}`;
-    const current = starts.get(key);
-    if (current && Number.isFinite(t) && t - current.t < CLUSTER_WINDOW_MS) {
-      out[i] = current.id;
+    const key = `${item.user_id ?? ""}|${item.pair}|${item.signal}`;
+    const prev = last.get(key);
+    const closed = item.closed_at ? Date.parse(item.closed_at) : NaN;
+    const joins = prev !== undefined && Number.isFinite(t) &&
+      t - prev.t < CLUSTER_WINDOW_MS &&
+      !(Number.isFinite(prev.closed) && t > prev.closed + CLUSTER_REOPEN_MS);
+    if (joins && prev) {
+      out[i] = prev.id;
+      last.set(key, { id: prev.id, t, closed: Number.isFinite(closed) ? Math.max(closed, prev.closed || 0) : prev.closed });
       continue;
     }
     const startIso = Number.isFinite(t) ? new Date(t).toISOString().slice(0, 13) : "unknown";
     const id = `${key}|${startIso}`;
-    starts.set(key, { id, t: Number.isFinite(t) ? t : 0 });
+    last.set(key, { id, t: Number.isFinite(t) ? t : 0, closed: Number.isFinite(closed) ? closed : NaN });
     out[i] = id;
   }
   return out;
@@ -101,9 +113,11 @@ export const wilson = (successes: number, n: number, z = 1.96): [number, number]
 
 export interface RecordRow {
   id?: string;
+  user_id?: string | null;
   pair: string;
   signal: string;
   created_at: string;
+  closed_at?: string | null;
   outcome: string;
   shadow: boolean;
   rejection: string | null;
@@ -154,6 +168,18 @@ const addToBucket = (b: Bucket, row: RecordRow) => {
   if (r !== null) b.sum_r = round2(b.sum_r + r);
 };
 
+// Plans made under the seeded empty rulebook (version 0) had no rules in
+// force either
+export const versionKey = (v: number | null): string => (typeof v === "number" && Number.isFinite(v) && v > 0 ? String(v) : "none");
+
+export interface LessonSummary {
+  cause: string;
+  cluster?: string | null;
+  shadow?: boolean;
+  rule_blamed?: string | null;
+  rule_credited?: string | null;
+}
+
 export interface RecordStats {
   total: number;
   wins: number;
@@ -172,31 +198,31 @@ export interface RecordStats {
   // Settled trades counted once per market situation
   independent_clusters: number;
   min_stat_n: number;
+  // Lessons of live plans by cause (shadow plans apart)
   by_cause: Record<string, number>;
   // The same, counting each cluster once
   by_cause_clusters: Record<string, number>;
+  shadow_by_cause: Record<string, number>;
+  // The record of every plan made under each rulebook version — the
+  // before/after comparison. It is the version's record, not any one rule's.
   by_rulebook_version: Record<string, Bucket>;
-  // What became of the plans made while each rule was in force
-  rule_record: Record<string, Bucket>;
+  // How often a diagnosis named a rule as the cause of, or a help to, a
+  // result — the one per-rule signal there is
+  rule_feedback: Record<string, { blamed: number; credited: number }>;
   // Plans the entry gate refused, and how many of them the market then
   // filled anyway
   rejected: number;
   shadow: { total: number; untriggered: number; wins: number; losses: number; open: number };
 }
 
-// The record as numbers, from the rows the consolidation is given.
-// ruleVersions maps a rulebook version to the ids of the rules it held.
-export const summarizeRecord = (
-  rows: RecordRow[],
-  lessons: Array<{ cause: string; cluster?: string | null }>,
-  ruleVersions: Record<string, string[]> = {},
-): RecordStats => {
+// The record as numbers, from the rows the consolidation is given
+export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): RecordStats => {
   const s: RecordStats = {
     total: 0, wins: 0, losses: 0, untriggered: 0, expired: 0, ambiguous: 0, open: 0,
     settled: 0, win_rate: null, win_rate_ci95: null, fill_rate: null,
     realized_r: { n: 0, sum: 0, mean: null },
     independent_clusters: 0, min_stat_n: MIN_STAT_N,
-    by_cause: {}, by_cause_clusters: {}, by_rulebook_version: {}, rule_record: {},
+    by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, by_rulebook_version: {}, rule_feedback: {},
     rejected: 0,
     shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0 },
   };
@@ -236,11 +262,7 @@ export const summarizeRecord = (
       s.realized_r.n++;
       s.realized_r.sum = round2(s.realized_r.sum + rr);
     }
-    const version = r.rulebook_version === null ? "none" : String(r.rulebook_version);
-    addToBucket(s.by_rulebook_version[version] ??= emptyBucket(), r);
-    for (const ruleId of ruleVersions[version] ?? []) {
-      addToBucket(s.rule_record[ruleId] ??= emptyBucket(), r);
-    }
+    addToBucket(s.by_rulebook_version[versionKey(r.rulebook_version)] ??= emptyBucket(), r);
   });
   s.settled = s.wins + s.losses;
   s.win_rate = s.settled >= MIN_STAT_N ? Math.round((s.wins / s.settled) * 100) : null;
@@ -250,10 +272,16 @@ export const summarizeRecord = (
   s.independent_clusters = settledClusters.size;
   const causeClusters = new Map<string, Set<string>>();
   lessons.forEach((l, i) => {
+    if (l.shadow) {
+      s.shadow_by_cause[l.cause] = (s.shadow_by_cause[l.cause] ?? 0) + 1;
+      return;
+    }
     s.by_cause[l.cause] = (s.by_cause[l.cause] ?? 0) + 1;
     const set = causeClusters.get(l.cause) ?? new Set<string>();
     set.add(l.cluster ?? `lesson-${i}`);
     causeClusters.set(l.cause, set);
+    if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
+    if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
   });
   for (const [cause, set] of causeClusters) s.by_cause_clusters[cause] = set.size;
   return s;
@@ -294,8 +322,8 @@ export interface PlanSummary {
   context: JsonRecord | null;
   // A plan the entry gate refused, tracked to check the refusal
   shadow: boolean;
-  // The rules the plan was made under, so the diagnosis can say whether one
-  // of them caused the miss
+  // The rules the plan was actually shown, so the diagnosis can say whether
+  // one of them caused the miss
   rules_in_force?: Array<{ id: string; text_ja: string }>;
 }
 
@@ -346,12 +374,12 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 原則:
 - 根拠にしてよいのは facts と plan に書かれていることだけ。事実に無い出来事（ニュース等）を推測で作らない。ニュース要因（news_shock）は、plan の warnings/key_factors に指標やイベントへの言及があり、かつ facts.abnormal_bar が観測された場合に限る。
 - 次の順に検討する: (1) 方向は合っていたか (2) エントリーは約定したか、しなかったなら値幅を逃したか、したなら入るのが早すぎなかったか (3) 損切り幅は適切だったか (4) 利確は届く距離だったか (5) 相場環境（トレンド/レンジ）の読みは正しかったか。
-- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（${PULLBACK_R}R の押し目・戻りを待つ指値にしていたら。損切り幅は同じ）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲート（RR ${MIN_RISK_REWARD} 以上・損切り幅 ATR${MIN_STOP_ATR}倍以上）を通る案かどうか。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」等の教訓を書かない。
+- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（${PULLBACK_R}R の押し目・戻りを待つ指値にしていたら。損切り幅は同じ）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback の gate が should_be_market / too_far のときは、押し目待ちは公開できないので、lesson は「その条件では見送る（WAIT）」か「成行で追いかけない条件」の形にする。
 - facts.hints は決定論的な事前分類で、通常はその中から選ぶ。覆す場合は evidence で理由を示す。facts.notes には判定の補足がある。
-- facts.early_adverse_r は約定直後 3 本以内の最大逆行（R）。成行で入って即座に逆行した場合、追いかけ（entry_too_early）を疑う。
+- facts.early_adverse_r は約定直後 3 本以内の最大逆行（R、取引中のみ）。成行で入って即座に逆行した場合、追いかけ（entry_too_early）を疑う。
 - lesson は「条件 → 行動」の形で、次回以降のプラン作成に直接使える一般則にする。個別の価格・日付・その日固有の出来事は書かない。同じ状況が来たときに何を変えるかを書く。
 - lesson の「条件」は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）で書く。アナリスト自身の自己申告（confidence の高さ、mode の宣言）を条件にしない。
-- lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。また ADX ${TREND_ADX} 以上で SMA が方向に並ぶトレンド局面では、現在値から ATR${MARKET_TOLERANCE_ATR}倍を超える指値はサーバーが成行に修正するか却下するので、トレンド局面で「浅い指値」を勧めない（成行か見送り）。
+- lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。また ADX ${TREND_ADX} 以上で SMA が方向に並ぶトレンド局面では、現在値から ATR${MARKET_TOLERANCE_ATR}倍を超える指値はサーバーが成行に修正するか却下するので、トレンド局面で「浅い指値」を勧めない（成行か見送り）。基本手順（成行にする場面、損切りの幅、RR の下限）は lesson で上書きできない。その範囲内で書く。
 - 勝ちでも、最大逆行が損切り近くまで達した（mae_r ≥ 0.8）等プロセスに危うさがあれば lucky_win とし、教訓を書く。
 - plan.rules_in_force があれば、そのプランがどのルールの影響下で作られたかを踏まえ、結果を招いた／貢献したルールがあれば rule_blamed / rule_credited に id を書く。無ければ null。
 - confidence は診断の確からしさ。決着後の足が無い、反実仮想が ambiguous 等、事実が少ないときは下げる。
@@ -361,7 +389,7 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - direction_wrong: 方向そのものが逆。約定後に損切りまでほぼ一直線／損切り後も逆行が続いた（after.beyond_sl_r が大きい）／約定前に損切り側へ到達（reason=invalidated）。
 - stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想が win。広げた案が viable でない（RR 不足）場合、lesson は「損切りを広げる」だけでなく利確の置き方も併せて書く。
 - entry_too_far: 方向は合っていたがエントリーが約定しなかった。成行の反実仮想（market_entry または market_entry_same_risk）が viable かつ win。
-- entry_too_early: 方向は合っていたが成行で追いかけて即座の逆行で損切り。early_adverse_r が大きく、limit_pullback が viable かつ win。
+- entry_too_early: 方向は合っていたが成行で追いかけて即座の逆行で損切り。early_adverse_r が大きく、limit_pullback が win（rr と損切り幅は成立）。
 - target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想が win、mfe_r が大きい。
 - regime_misread: トレンド/レンジの読み違い。facts.regime.conflict、レンジ相場でのトレンドフォロー等。
 - news_shock: 指標・イベントの異常な値幅でプランが無効化された。
@@ -431,6 +459,7 @@ export const parseDiagnosis = (raw: unknown, hints: Cause[], ruleIds: string[] =
 
 export interface LessonRow {
   analysis_id: string;
+  user_id?: string | null;
   pair: string;
   cause: string;
   outcome: string;
@@ -444,7 +473,11 @@ export interface LessonRow {
   avoidable: boolean | null;
   shadow: boolean;
   scope: string | null;
+  // When the review ran
   created_at: string;
+  // When the plan was made (what clustering is about)
+  plan_created_at: string | null;
+  plan_closed_at?: string | null;
   rule_blamed: string | null;
   rule_credited: string | null;
   // Filled in by withClusters
@@ -452,7 +485,13 @@ export interface LessonRow {
 }
 
 export const withClusters = (lessons: LessonRow[]): LessonRow[] => {
-  const ids = clusterIds(lessons);
+  const ids = clusterIds(lessons.map((l) => ({
+    pair: l.pair,
+    signal: l.signal,
+    created_at: l.plan_created_at ?? l.created_at,
+    closed_at: l.plan_closed_at ?? null,
+    user_id: l.user_id ?? null,
+  })));
   return lessons.map((l, i) => ({ ...l, cluster: ids[i] }));
 };
 
@@ -470,7 +509,7 @@ export const CONSOLIDATION_SCHEMA = {
           cause: { type: "string", enum: [...CAUSES, "general"] },
           kind: { type: "string", enum: ["constraint", "heuristic"], description: "constraint: 見送る・リスクを絞る歯止め。heuristic: こう取るという指針" },
           scope: { type: ["string", "null"], description: "適用範囲を短く。無ければ null" },
-          supported_by: { type: "array", items: { type: "string" }, description: "このルールの根拠となる lessons の analysis_id" },
+          supported_by: { type: "array", items: { type: "string" }, description: "このルールの根拠となる lessons の analysis_id（そのルールの cause と同じ原因の lesson に限る）" },
         },
         required: ["id", "text_ja", "text_en", "cause", "kind", "scope", "supported_by"],
         additionalProperties: false,
@@ -483,14 +522,14 @@ export const CONSOLIDATION_SCHEMA = {
   additionalProperties: false,
 };
 
-export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトにそのまま入ります。
+export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトに、基本手順とリスク規定の後ろに「補助的な指針」として入ります。基本手順（トレンド局面での成行、損切り幅、RR の下限）を上書きすることはできないので、その範囲内で書きます。
 
 証拠の数え方:
-- 証拠の単位は「独立クラスタ」。同じ通貨ペア・同じ方向で24時間以内に作られたプランは同じ局面についての同じ判断であり、lessons が何件あっても証拠としては1件。各 lesson には cluster が付いている。stats.by_cause_clusters が原因別のクラスタ数。
-- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。実績件数（support）はサーバーが supported_by の独立クラスタ数から計算する。根拠の無いルールは作らない。
+- 証拠の単位は「独立クラスタ」。同じ通貨ペア・同じ方向で近い時間に作られたプランは同じ局面についての同じ判断であり、lessons が何件あっても証拠としては1件。各 lesson には cluster が付いている。stats.by_cause_clusters が原因別のクラスタ数。
+- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、inconclusive / plan_incoherent / good_call 以外のどの原因でも可。constraint のルールは lucky_win / direction_wrong / regime_misread / news_shock / entry_too_early も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
 - stats.win_rate / fill_rate は決着数が ${MIN_STAT_N} 未満のとき null。null や小さい n の統計を根拠にルールを強めない。stats.win_rate_ci95 は勝率の95%信頼区間。
-- 対称性: stats.rule_record には、そのルールを含む版のもとで作られたプランの実績（決着数・勝敗・実現R合計 sum_r）がある。決着数が ${MIN_RULE_EVAL_N} 以上で sum_r が負なら、そのルールを弱めるか削除する。untriggered は「そのルールが約定を妨げた」証拠、loss は「そのルールが損を招いた」証拠。片方だけを見ない。lessons の rule_blamed / rule_credited も同じ目的で使う。
-- 反実仮想の「成行なら勝っていた」は viable=true の案だけが根拠になる（lesson 側で考慮済み）。
+- stats.by_rulebook_version は「その版のもとで作られたプラン全体」の実績（決着数・勝敗・実現R合計 sum_r）。版の比較（ルールを足す前と後）には使えるが、版の中のどのルールのせいかは区別できない。個別ルールの証拠は stats.rule_feedback（診断がそのルールを結果の原因 blamed / 貢献 credited と名指しした回数）と、lessons の rule_blamed / rule_credited。blamed が credited を上回るルールは弱めるか削除する。
+- 対称性: untriggered の lesson は「約定を妨げた」側、loss の lesson は「損を招いた」側の証拠。片方だけを見ない。反実仮想の「成行なら勝っていた」は viable=true の案だけが根拠になる（lesson 側で考慮済み）。
 
 ルールの書き方:
 - kind: "constraint" は「見送る・リスクを絞る」側の歯止め、"heuristic" は「こう取る」側の指針。執行を促すルールが増えるほど、歯止めのルールも必要になる。
@@ -499,7 +538,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - アナリストが実際に出力できる形式に限る。プランはエントリー1つ・損切り1つ・利確3つで、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。
 - ゲートとの整合: ADX ${TREND_ADX} 以上で SMA が方向に並ぶトレンド局面では、現在値から ATR${MARKET_TOLERANCE_ATR}倍を超える指値はサーバーが成行に修正または却下する。トレンド局面で「浅い指値」を勧めるルールは書かない（成行か見送り）。
 - 同じ趣旨のルールは1つに統合する。
-- id は既存ルールを引き継ぐ場合そのまま、新規は "r" + 通し番号（既存と重複しない）。
+- id は既存ルールを引き継ぐ場合そのまま、新規は "r" + 通し番号（既存と重複しない）。既存ルールを別の id で書き直さない。
 
 改訂の制限:
 - 1回の改訂で追加は最大${MAX_RULES_ADDED}本、削除は最大${MAX_RULES_REMOVED}本（サーバー側でも強制される）。既存ルールの文言変更は、新しい lessons の裏付けがあるときだけ。
@@ -518,7 +557,7 @@ export const buildConsolidationPrompt = (
     lessons: lessons.map((l) => ({
       analysis_id: l.analysis_id,
       cluster: l.cluster ?? null,
-      created_at: l.created_at,
+      plan_created_at: l.plan_created_at ?? l.created_at,
       pair: l.pair,
       interval: l.interval,
       signal: l.signal,
@@ -551,28 +590,54 @@ export interface Consolidation {
   changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[] };
 }
 
+export interface CitableLesson {
+  analysis_id: string;
+  cluster?: string | null;
+  cause?: string;
+  shadow?: boolean;
+}
+
+// Causes that a "don't trade / cut the risk" rule may draw on beyond its own
+const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wrong", "regime_misread", "news_shock", "entry_too_early"];
+// Lessons that are about nothing in particular are evidence for nothing
+const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call"];
+
+// Whether a lesson is evidence for a rule: same failure, or a general rule
+// (any real failure), or a constraint drawing on the risk causes. Never a
+// shadow plan's lesson — those are about the gate, not the analyzer.
+export const citationAllowed = (rule: { cause: string; kind: RuleKind }, lesson: CitableLesson): boolean => {
+  if (lesson.shadow) return false;
+  const cause = lesson.cause ?? "";
+  if (!cause || UNCITABLE_CAUSES.includes(cause)) return false;
+  if (rule.cause === cause) return true;
+  if (rule.cause === "general") return true;
+  if (rule.kind === "constraint" && CONSTRAINT_CAUSES.includes(cause)) return true;
+  return false;
+};
+
 // The model's rewrite, checked against what it was given: every cited
-// lesson must exist, support is counted from those citations by cluster,
-// and a revision may not add or drop more than a couple of rules — the
-// surplus additions are dropped and the surplus removals put back, weakest
-// rules going first.
+// lesson must exist and be about the rule's failure, support is counted from
+// those citations by cluster, a rule left with no evidence is dropped, and
+// a revision may not add or drop more than a couple of rules — the surplus
+// additions are dropped and the surplus removals put back (with their
+// support recounted the same way), weakest rules going first.
 export const parseConsolidation = (
   raw: unknown,
   previous: Rule[],
   nowIso: string,
-  lessons: Array<{ analysis_id: string; cluster?: string | null }> = [],
+  lessons: CitableLesson[] = [],
 ): Consolidation | null => {
   if (!isRecord(raw) || !Array.isArray(raw.rules)) return null;
   const prior = new Map(previous.map((r) => [r.id, r]));
-  const clusterOf = new Map(lessons.map((l) => [l.analysis_id, l.cluster ?? l.analysis_id]));
-  // A continuing rule keeps the evidence it already had, even when those
-  // lessons are older than the window the consolidation was given: each
-  // such citation stands as its own cluster
-  for (const rule of previous) {
-    for (const id of rule.supported_by) {
-      if (!clusterOf.has(id)) clusterOf.set(id, `prior:${id}`);
-    }
-  }
+  const byId = new Map(lessons.map((l) => [l.analysis_id, l]));
+  const evidence = (rule: { cause: string; kind: RuleKind }, ids: string[]): { cited: string[]; support: number } => {
+    const cited = [...new Set(ids.filter((id) => {
+      const lesson = byId.get(id);
+      return lesson !== undefined && citationAllowed(rule, lesson);
+    }))];
+    const clusters = new Set(cited.map((id) => byId.get(id)?.cluster ?? id));
+    return { cited, support: clusters.size };
+  };
   const seen = new Set<string>();
   const rules: Rule[] = [];
   const added: string[] = [];
@@ -594,20 +659,24 @@ export const parseConsolidation = (
       dropped.push(id);
       continue;
     }
+    const cause = typeof item.cause === "string" && (isCause(item.cause) || item.cause === "general") ? item.cause : "general";
+    const kind: RuleKind = isRuleKind(item.kind) ? item.kind : prior.get(id)?.kind ?? "heuristic";
+    const citedIds = Array.isArray(item.supported_by) ? item.supported_by.filter((v): v is string => typeof v === "string") : [];
+    const { cited, support } = evidence({ cause, kind }, citedIds);
+    if (support === 0) {
+      // No evidence, no rule: a continuing rule that lost its evidence goes
+      // through the removal accounting below like any other omission
+      dropped.push(id);
+      continue;
+    }
     seen.add(id);
     if (isNew) added.push(id);
-    const cause = typeof item.cause === "string" && (isCause(item.cause) || item.cause === "general") ? item.cause : "general";
-    const cited = Array.isArray(item.supported_by)
-      ? [...new Set(item.supported_by.filter((v): v is string => typeof v === "string" && clusterOf.has(v)))]
-      : [];
-    const clusters = new Set(cited.map((v) => clusterOf.get(v) as string));
-    const kind: RuleKind = isRuleKind(item.kind) ? item.kind : prior.get(id)?.kind ?? "heuristic";
     rules.push({
       id,
       text_ja: textJa || textEn,
       text_en: textEn || textJa,
       cause,
-      support: Math.max(1, clusters.size),
+      support,
       scope: str(item.scope, 60) || null,
       since: prior.get(id)?.since ?? nowIso,
       kind,
@@ -615,17 +684,24 @@ export const parseConsolidation = (
     });
     if (rules.length >= MAX_RULES) break;
   }
-  if (rules.length === 0) return null;
 
-  // Removals beyond the allowance come back, strongest first
+  // Omitted (or evidence-less) prior rules: the allowance is spent on the
+  // weakest; the rest come back with their evidence recounted, and those
+  // whose evidence no longer holds up go too
   const missing = previous.filter((p) => !seen.has(p.id)).sort((a, b) => a.support - b.support);
   const removed = missing.slice(0, MAX_RULES_REMOVED).map((r) => r.id);
   const restored: string[] = [];
   for (const rule of missing.slice(MAX_RULES_REMOVED).sort((a, b) => b.support - a.support)) {
     if (rules.length >= MAX_RULES) break;
-    rules.push({ ...rule });
+    const { cited, support } = evidence(rule, rule.supported_by);
+    if (support === 0) {
+      removed.push(rule.id);
+      continue;
+    }
+    rules.push({ ...rule, support, supported_by: cited });
     restored.push(rule.id);
   }
+  if (rules.length === 0) return null;
 
   return {
     rules: orderRules(rules),

@@ -43,7 +43,9 @@ const LoopHealth = ({ health }: Props) => {
         <span className="font-semibold text-foreground">{label}</span>
         <span className="text-muted-foreground">{s.every15}</span>
         <span className="font-mono text-muted-foreground">
-          {lastIso ? `${s.last(formatJst(lastIso, t.intlLocale))}${ago !== null ? `（${s.ago(ago)}）` : ""}` : s.never}
+          {lastIso
+            ? ago !== null ? s.lastLine(formatJst(lastIso, t.intlLocale), s.ago(ago)) : s.last(formatJst(lastIso, t.intlLocale))
+            : s.never}
         </span>
         {!active && <span className="text-warning">{s.inactive}</span>}
         {active && stalled && <span className="text-warning">{s.stalled}</span>}

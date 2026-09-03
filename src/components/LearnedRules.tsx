@@ -68,7 +68,7 @@ const LearnedRules = ({ rulebook }: Props) => {
                   }`}
                   title={s.supportNote}
                 >
-                  {r.support <= VERIFYING ? `${s.verifying}・${s.support(r.support)}` : s.support(r.support)}
+                  {r.support <= VERIFYING ? s.verifyingSupport(r.support) : s.support(r.support)}
                 </span>
               </li>
             ))}

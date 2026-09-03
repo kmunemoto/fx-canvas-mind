@@ -172,15 +172,18 @@ Deno.serve(async (req: Request) => {
       if (!res.ok) console.error("patch failed:", path.split("?")[0], res.status, (await res.text().catch(() => "")).slice(0, 200));
       return Array.isArray(rows) ? rows.length : 0;
     };
-    const readRows = async (path: string): Promise<JsonRecord[]> => {
+    // null when the read itself failed, as opposed to nothing being there —
+    // the difference between "no rulebook yet" and "could not reach it"
+    const readRowsOrNull = async (path: string): Promise<JsonRecord[] | null> => {
       const res = await rest(path);
       if (!res.ok) {
         console.error("read failed:", path.split("?")[0], res.status, (await res.text().catch(() => "")).slice(0, 200));
-        return [];
+        return null;
       }
       const rows = await res.json().catch(() => null);
       return Array.isArray(rows) ? rows.filter(isRecord) : [];
     };
+    const readRows = async (path: string): Promise<JsonRecord[]> => (await readRowsOrNull(path)) ?? [];
 
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
@@ -235,7 +238,11 @@ Deno.serve(async (req: Request) => {
     // rules and the kept history say which rules that version held, so the
     // diagnosis can name the rule at fault and the consolidation can score
     // each rule on what its plans then did
-    const [current] = await readRows("rulebook?id=eq.1&select=version,rules,history,updated_at");
+    const rulebookRows = await readRowsOrNull("rulebook?id=eq.1&select=version,rules,history,updated_at");
+    // A rulebook that could not be read is not an empty one: never rewrite
+    // it from nothing on the strength of a failed request
+    const rulebookUnavailable = rulebookRows === null;
+    const current = rulebookRows?.[0];
     const rulesByVersion = new Map<number, Rule[]>();
     if (current) {
       rulesByVersion.set(numberOrNull(current.version) ?? 0, parseRules(current.rules));
@@ -245,15 +252,7 @@ Deno.serve(async (req: Request) => {
         if (hv !== null && !rulesByVersion.has(hv)) rulesByVersion.set(hv, parseRules(h.rules));
       }
     }
-    // A version's plans count toward a rule only when that version held the
-    // same rule (same id, same birth date): an id the model reused for a new
-    // rule must not inherit a dead rule's record
     const currentRules = current ? parseRules(current.rules) : [];
-    const identity = new Map(currentRules.map((r) => [r.id, r.since]));
-    const ruleVersions: Record<string, string[]> = {};
-    for (const [v, rules] of rulesByVersion) {
-      ruleVersions[String(v)] = rules.filter((r) => identity.has(r.id) && identity.get(r.id) === r.since).map((r) => r.id);
-    }
 
     // ---- settled plans without a diagnosis --------------------------------
     const select = [
@@ -266,11 +265,14 @@ Deno.serve(async (req: Request) => {
     // aftermath (thin) and not yet revisited; or diagnosed by a version that
     // did not record whether it was thin (the first one), which would
     // otherwise never be looked at again
+    // A revisit that failed (no data, model down) is retried a few times and
+    // then left alone, without touching the diagnosis it was revisiting
+    const revisitRetryable = `or(postmortem->>revisit_attempts.is.null,postmortem->>revisit_attempts.lt.${MAX_ATTEMPTS})`;
     const retryFilter = [
       "or=(postmortem.is.null",
       `and(postmortem->>status.eq.failed,postmortem->>attempts.lt.${MAX_ATTEMPTS})`,
-      `and(postmortem->>status.eq.done,postmortem->>thin.eq.true,postmortem->>revisions.lt.${MAX_REVISIONS})`,
-      "and(postmortem->>status.eq.done,postmortem->>thin.is.null))",
+      `and(postmortem->>status.eq.done,postmortem->>thin.eq.true,postmortem->>revisions.lt.${MAX_REVISIONS},${revisitRetryable})`,
+      `and(postmortem->>status.eq.done,postmortem->>thin.is.null,${revisitRetryable}))`,
     ].join(",");
     // Named rows are re-diagnosed whatever their state: that is what naming
     // them is for
@@ -398,10 +400,20 @@ Deno.serve(async (req: Request) => {
     let newLessons = 0;
 
     const markFailed = async (row: PostmortemRow, raw: JsonRecord, error: string) => {
-      const prev = isRecord(raw.postmortem) ? numberOrNull(raw.postmortem.attempts) ?? 0 : 0;
-      await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, {
-        postmortem: { schema: SCHEMA_VERSION, version: POSTMORTEM_VERSION, status: "failed", error, attempts: prev + 1, checked_at: nowIso },
-      });
+      const prior = isRecord(raw.postmortem) ? raw.postmortem : null;
+      if (prior?.status === "done") {
+        // A revisit that failed: the diagnosis it was going to refine stays
+        // as it is; only the failed attempt is noted on it
+        const attempts = (numberOrNull(prior.revisit_attempts) ?? 0) + 1;
+        await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, {
+          postmortem: { ...prior, revisit_attempts: attempts, revisit: { status: "failed", error, checked_at: nowIso } },
+        });
+      } else {
+        const prev = prior ? numberOrNull(prior.attempts) ?? 0 : 0;
+        await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, {
+          postmortem: { schema: SCHEMA_VERSION, version: POSTMORTEM_VERSION, status: "failed", error, attempts: prev + 1, checked_at: nowIso },
+        });
+      }
       errors.push(`${row.id}: ${error}`);
     };
 
@@ -429,6 +441,7 @@ Deno.serve(async (req: Request) => {
           declaredMode: mcd && typeof mcd.mode === "string" ? mcd.mode : null,
           adx: contextEntry ? numberOrNull(contextEntry.adx) : null,
           atr: (contextEntry ? numberOrNull(contextEntry.atr) : null) ?? (entryCheck ? numberOrNull(entryCheck.atr) : null),
+          momentum: entryCheck ? entryCheck.momentum === true : null,
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);
@@ -437,7 +450,13 @@ Deno.serve(async (req: Request) => {
 
       const ev = row.evaluation;
       const planVersion = numberOrNull(raw.rulebook_version);
-      const rulesInForce = planVersion === null ? [] : rulesByVersion.get(planVersion) ?? [];
+      // The rules the plan was actually shown (the prompt has a character
+      // budget); older plans without that record get the whole version
+      const versionRules = planVersion === null ? [] : rulesByVersion.get(planVersion) ?? [];
+      const shownIds = context && Array.isArray(context.rules_shown)
+        ? new Set(context.rules_shown.filter((v): v is string => typeof v === "string"))
+        : null;
+      const rulesInForce = shownIds ? versionRules.filter((r) => shownIds.has(r.id)) : versionRules;
       const plan: PlanSummary = {
         id: row.id,
         pair: row.pair,
@@ -493,7 +512,9 @@ Deno.serve(async (req: Request) => {
         model: MODEL,
         // Few bars after the settlement: revisit once the window fills out
         thin: facts.bars_after_settlement < MIN_AFTER_BARS,
-        revisions: (numberOrNull(priorDoc?.revisions) ?? 0) + (priorDoc?.status === "done" ? 1 : 0),
+        // Only the automatic revisit spends the one revision a thin
+        // diagnosis gets; a hand-run by id does not
+        revisions: (numberOrNull(priorDoc?.revisions) ?? 0) + (priorDoc?.status === "done" && options.ids.length === 0 ? 1 : 0),
         cause: diagnosis.cause,
         secondary_causes: diagnosis.secondary_causes,
         avoidable: diagnosis.avoidable,
@@ -536,6 +557,8 @@ Deno.serve(async (req: Request) => {
           shadow: raw.shadow === true,
           rule_blamed: diagnosis.rule_blamed,
           rule_credited: diagnosis.rule_credited,
+          // When the plan was made: what "same situation" is judged on
+          analysis_created_at: row.created_at,
         }),
       });
       if (!lessonRes.ok) {
@@ -553,22 +576,28 @@ Deno.serve(async (req: Request) => {
     // stays in force long enough for the plans made under it to settle and
     // be scored against it. A hand-run with `consolidate` skips the wait.
     let rulebook: JsonRecord | null = null;
-    if ((newLessons > 0 || options.consolidate) && elapsed() < START_CONSOLIDATION_BEFORE_MS) {
-      const lessonSelect = "analysis_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,rule_blamed,rule_credited";
-      const lessonRows = await readRows(`lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS}`);
+    if (rulebookUnavailable && (newLessons > 0 || options.consolidate)) {
+      errors.push("rulebook: unavailable, not revised");
+    } else if ((newLessons > 0 || options.consolidate) && elapsed() < START_CONSOLIDATION_BEFORE_MS) {
+      const lessonSelect = "analysis_id,user_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,rule_blamed,rule_credited";
+      const lessonRows = (await readRowsOrNull(`lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS}`)) ?? [];
       // The lessons the current rules cite stay in evidence even once they
       // are older than the recent window, so a rule's support cannot decay
-      // just because time passed
+      // just because time passed. If they cannot be read this run, the
+      // rulebook is left alone rather than rewritten on partial evidence.
       const recentIds = new Set(lessonRows.map((l) => String(l.analysis_id ?? "")));
       const citedOlder = [...new Set(currentRules.flatMap((r) => r.supported_by))].filter((id) => id && !recentIds.has(id));
+      let evidenceComplete = true;
       if (citedOlder.length > 0) {
-        const older = await readRows(
+        const older = await readRowsOrNull(
           `lessons?select=${lessonSelect}&analysis_id=in.(${citedOlder.map(encodeURIComponent).join(",")})&limit=${RECENT_LESSONS}`,
         );
-        lessonRows.push(...older);
+        if (older === null) evidenceComplete = false;
+        else lessonRows.push(...older);
       }
       const lessons: LessonRow[] = withClusters(lessonRows.map((l) => ({
         analysis_id: String(l.analysis_id ?? ""),
+        user_id: strOrNull(l.user_id),
         pair: String(l.pair ?? ""),
         cause: String(l.cause ?? "inconclusive"),
         outcome: String(l.outcome ?? ""),
@@ -583,6 +612,7 @@ Deno.serve(async (req: Request) => {
         shadow: l.shadow === true,
         scope: isRecord(l.scope) ? strOrNull(l.scope.text) : null,
         created_at: String(l.created_at ?? ""),
+        plan_created_at: strOrNull(l.analysis_created_at),
         rule_blamed: strOrNull(l.rule_blamed),
         rule_credited: strOrNull(l.rule_credited),
       })));
@@ -599,6 +629,9 @@ Deno.serve(async (req: Request) => {
 
       if (lessons.length === 0) {
         rulebook = { version: previousVersion, revised: false, reason: "no_lessons" };
+      } else if (!evidenceComplete) {
+        errors.push("rulebook: cited lessons unavailable, not revised");
+        rulebook = { version: previousVersion, revised: false, reason: "evidence_unavailable" };
       } else if (!due) {
         rulebook = {
           version: previousVersion,
@@ -609,13 +642,15 @@ Deno.serve(async (req: Request) => {
         };
       } else {
         const recordRows = await readRows(
-          `analyses?select=id,pair,signal,created_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
         );
         const record: RecordRow[] = recordRows.map((r) => ({
           id: strOrNull(r.id) ?? undefined,
+          user_id: strOrNull(r.user_id),
           pair: String(r.pair ?? ""),
           signal: String(r.signal ?? ""),
           created_at: String(r.created_at ?? ""),
+          closed_at: strOrNull(r.closed_at),
           outcome: String(r.outcome ?? ""),
           shadow: r.shadow === true,
           rejection: strOrNull(r.rejection),
@@ -626,7 +661,7 @@ Deno.serve(async (req: Request) => {
           outcome_price: numberOrNull(r.outcome_price),
           rulebook_version: numberOrNull(r.rulebook_version),
         }));
-        const stats = summarizeRecord(record, lessons, ruleVersions);
+        const stats = summarizeRecord(record, lessons);
 
         const prompt = buildConsolidationPrompt(previousRules, lessons, stats);
         let answer: unknown = null;
@@ -643,18 +678,22 @@ Deno.serve(async (req: Request) => {
           const nextHistory = previousRules.length > 0
             ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
             : history;
-          const n = await patchRows("rulebook?id=eq.1", {
+          // Stamped now, after this run's lessons were written, so they are
+          // not counted as new again by the next run; and written only over
+          // the version that was read, so a concurrent rewrite is not lost
+          const stampIso = new Date().toISOString();
+          const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
             version: previousVersion + 1,
             rules: consolidated.rules,
             summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
             stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
             history: nextHistory,
-            updated_at: nowIso,
+            updated_at: stampIso,
           });
           if (n > 0) {
             rulebook = { version: previousVersion + 1, revised: true, rules: consolidated.rules.length, changes: consolidated.changes };
             console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
-          } else errors.push("rulebook: not written");
+          } else errors.push("rulebook: not written (version changed underneath, or write failed)");
         }
       }
     }

@@ -36,7 +36,7 @@ import {
   type EntryVerdict,
 } from "./entry.ts";
 
-import { parseRules, renderLearnedRules } from "./rules.ts";
+import { parseRules, selectPromptRules } from "./rules.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -695,6 +695,8 @@ Deno.serve(async (req: Request) => {
     stage = "load_rulebook";
     let rulebookVersion: number | null = null;
     let learnedRules = "";
+    // The rules that fit in the prompt — what the model actually saw
+    let rulesShown: string[] = [];
     try {
       const rulebookRes = await fetch(`${supabaseUrl}/rest/v1/rulebook?id=eq.1&select=version,rules`, {
         headers: {
@@ -709,7 +711,9 @@ Deno.serve(async (req: Request) => {
       if (isRecord(rulebook)) {
         const v = asFiniteNumber(rulebook.version);
         rulebookVersion = v === null ? null : Math.round(v);
-        learnedRules = renderLearnedRules(parseRules(rulebook.rules), locale);
+        const shown = selectPromptRules(parseRules(rulebook.rules), locale);
+        learnedRules = shown.text;
+        rulesShown = shown.ids;
       }
     } catch (err) {
       console.warn("Rulebook unavailable:", err instanceof Error ? err.message : String(err));
@@ -1225,6 +1229,7 @@ Deno.serve(async (req: Request) => {
         };
     const context = {
       open_same_direction: openSameDirection,
+      rules_shown: rulesShown,
       timeframes,
       entry: compactSnapshot(timeframes[0], snapshots[0]),
       higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),

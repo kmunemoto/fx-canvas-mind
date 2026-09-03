@@ -287,7 +287,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
               )}
               <p className="text-[10px] text-muted-foreground">
                 {post.avoidable ? pm.avoidable : pm.unavoidable}
-                {thin ? ` · ${pm.thinNote}` : revised ? ` · ${pm.revisedNote}` : ""}
+                {thin && !revised ? ` · ${pm.thinNote}` : thin && revised ? ` · ${pm.thinFinalNote}` : revised ? ` · ${pm.revisedNote}` : ""}
               </p>
             </>
           ) : (

@@ -3,8 +3,9 @@
 // The postmortem function diagnoses every settled plan and consolidates the
 // lessons into a short list of rules (public.rulebook). analyze puts those
 // rules in front of the model on every call and records the rulebook version
-// on the plan, so the effect of a rule can be read off the outcomes that
-// followed it instead of assumed.
+// — and which rules actually fit in the prompt — on the plan, so the effect
+// of a rule can be read off the outcomes that followed it instead of
+// assumed.
 //
 // A rule's "support" is not what the model claims for it: it is the number of
 // independent clusters of diagnosed plans behind it, computed by the
@@ -94,8 +95,8 @@ export const orderRules = (rules: Rule[]): Rule[] =>
   });
 
 const HEADERS: Record<RuleLocale, string> = {
-  ja: "過去の判定から学んだルール（実際の値動きで検証済み。上の手順とリスク規定が優先で、これらは同じ条件下での補助的な指針。「検証中」は根拠がまだ少ない）:",
-  en: "Rules learned from past outcomes (verified against actual prices; the procedure and risk limits above take precedence, these are supplementary guidance under the same conditions; \"under review\" means the evidence is still thin):",
+  ja: "過去の判定から学んだルール（実際の値動きの検証から作成。上の手順とリスク規定が優先で、これらは同じ条件下での補助的な指針。「検証中」は根拠がまだ少ない）:",
+  en: "Rules learned from past outcomes (drawn from reviews against actual prices; the procedure and risk limits above take precedence, these are supplementary guidance under the same conditions; \"under review\" means the evidence is still thin):",
 };
 
 const evidence = (rule: Rule, locale: RuleLocale): string => {
@@ -106,17 +107,26 @@ const evidence = (rule: Rule, locale: RuleLocale): string => {
   return rule.support <= VERIFYING_SUPPORT ? ` (under review, ${cases})` : ` (${cases})`;
 };
 
+export interface PromptRules {
+  // The block for the system prompt; empty when nothing has been learned
+  text: string;
+  // The rules that made it into the block, in the order shown — what the
+  // model actually saw, which is what the plan is later judged against
+  ids: string[];
+}
+
 // The block that goes into the system prompt. Constraints first, then the
 // rules with the most evidence; stops adding when the character budget is
 // spent. Empty when there is nothing learned yet, so the prompt carries no
 // empty heading.
-export const renderLearnedRules = (
+export const selectPromptRules = (
   rules: Rule[],
   locale: RuleLocale = "ja",
   maxRules = MAX_PROMPT_RULES,
   maxChars = MAX_PROMPT_CHARS,
-): string => {
+): PromptRules => {
   const lines: string[] = [];
+  const ids: string[] = [];
   // The heading is part of the budget
   let chars = HEADERS[locale].length + 1;
   for (const rule of orderRules(rules)) {
@@ -128,8 +138,16 @@ export const renderLearnedRules = (
     const line = `- ${scope}${text}${evidence(rule, locale)}`;
     if (chars + line.length > maxChars) break;
     lines.push(line);
+    ids.push(rule.id);
     chars += line.length;
   }
-  if (lines.length === 0) return "";
-  return [HEADERS[locale], ...lines].join("\n");
+  if (lines.length === 0) return { text: "", ids: [] };
+  return { text: [HEADERS[locale], ...lines].join("\n"), ids };
 };
+
+export const renderLearnedRules = (
+  rules: Rule[],
+  locale: RuleLocale = "ja",
+  maxRules = MAX_PROMPT_RULES,
+  maxChars = MAX_PROMPT_CHARS,
+): string => selectPromptRules(rules, locale, maxRules, maxChars).text;

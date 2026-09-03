@@ -132,10 +132,11 @@ const AnalysisHistory = ({ records }: Props) => {
       {/* what the win rate rests on: a rate off two trades is not a rate */}
       {closed > 0 && (
         <p className="text-[10px] text-muted-foreground font-mono" data-testid="record-strip">
-          {overall.clusters < TARGET_CLUSTERS ? `${t.history.stats.measuring(closed, TARGET_CLUSTERS)} · ` : ""}
-          {overall.winRateCi ? `${t.history.stats.ci(overall.winRateCi[0], overall.winRateCi[1])} · ` : ""}
-          {t.history.stats.clusters(overall.clusters)}
-          {overall.expectancy !== null ? ` · ${t.history.stats.expectancy} ${signedR(overall.expectancy)}（${t.history.stats.sumR} ${signedR(overall.sumR)}）` : ""}
+          {overall.clusters < TARGET_CLUSTERS
+            ? t.history.stats.measuring(overall.clusters, TARGET_CLUSTERS)
+            : t.history.stats.clusters(overall.clusters)}
+          {overall.winRateCi ? ` · ${t.history.stats.ci(overall.winRateCi[0], overall.winRateCi[1])}` : ""}
+          {overall.expectancy !== null ? ` · ${t.history.stats.expectancyLine(signedR(overall.expectancy), signedR(overall.sumR))}` : ""}
         </p>
       )}
 

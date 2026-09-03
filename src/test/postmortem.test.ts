@@ -10,6 +10,7 @@ import {
   MAX_RULES,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
+  citationAllowed,
   clusterIds,
   parseConsolidation,
   parseDiagnosis,
@@ -245,12 +246,14 @@ describe("facts — remedies the gate would refuse, and chased entries", () => {
       ...quiet(7, 30, 152.0, 151.5),
     ];
     const f = await computeFacts(row, candles, "1h", NOW, { atr: 0.5 });
-    expect(f.early_adverse_r).toBeCloseTo(1.1, 5);
+    // 0.7R against the entry in the two bars before the stop-out bar
+    expect(f.early_adverse_r).toBeCloseTo(0.7, 5);
     // A limit 0.5R back (149.50, stop 148.50) fills on the first bar and
-    // pays 2.5:1 instead of 2:1
-    expect(f.counterfactual.limit_pullback).toMatchObject({ resolution: "win", viable: true, rr: 2.5 });
-    expect(f.hints[0]).toBe("entry_too_early");
-    expect(f.hints).toContain("stop_too_tight");
+    // pays 2.5:1 instead of 2:1 — but sits a full ATR from the market, so
+    // the gate would not publish it as a limit; the lesson has to be "do
+    // not chase here", not "place a limit"
+    expect(f.counterfactual.limit_pullback).toMatchObject({ resolution: "win", rr: 2.5, viable: false, gate: "too_far" });
+    expect(f.hints).toEqual(["entry_too_early", "stop_too_tight"]);
   });
 
   it("measures the early adverse move only while the trade was open, and not for stop entries", async () => {
@@ -265,7 +268,7 @@ describe("facts — remedies the gate would refuse, and chased entries", () => {
       ...quiet(3, 30, 147.0, 146.5),
     ];
     const f = await computeFacts(won, crash, "1h", NOW, { atr: 0.5 });
-    expect(f.early_adverse_r).toBeCloseTo(0.1, 5);
+    expect(f.early_adverse_r).toBeNull();
 
     // A stop entry: the fill bar's low is the approach to the entry
     const stopRow = evaluated({ ...buyMarket, id: "4", entry_point: 150.5, stop_loss: 149.5, take_profit_1: 152.5, price_at_signal: 150.0 }, {
@@ -407,30 +410,69 @@ describe("diagnosis contract", () => {
 
 describe("rulebook consolidation", () => {
   const previous: Rule[] = [
-    { id: "r1", text_ja: "旧ルール", text_en: "old rule", cause: "entry_too_far", support: 3, scope: null, since: "2026-08-01T00:00:00Z", kind: "heuristic", supported_by: [] },
-    { id: "r2", text_ja: "歯止め", text_en: "guard", cause: "direction_wrong", support: 2, scope: null, since: "2026-08-02T00:00:00Z", kind: "constraint", supported_by: [] },
-    { id: "r3", text_ja: "弱い", text_en: "weak", cause: "general", support: 1, scope: null, since: "2026-08-03T00:00:00Z", kind: "heuristic", supported_by: [] },
-    { id: "r4", text_ja: "最弱", text_en: "weakest", cause: "general", support: 1, scope: null, since: "2026-08-04T00:00:00Z", kind: "heuristic", supported_by: [] },
+    { id: "r1", text_ja: "旧ルール", text_en: "old rule", cause: "entry_too_far", support: 3, scope: null, since: "2026-08-01T00:00:00Z", kind: "heuristic", supported_by: ["a"] },
+    { id: "r2", text_ja: "歯止め", text_en: "guard", cause: "direction_wrong", support: 2, scope: null, since: "2026-08-02T00:00:00Z", kind: "constraint", supported_by: ["c"] },
+    { id: "r3", text_ja: "弱い", text_en: "weak", cause: "general", support: 1, scope: null, since: "2026-08-03T00:00:00Z", kind: "heuristic", supported_by: ["b"] },
+    { id: "r4", text_ja: "最弱", text_en: "weakest", cause: "general", support: 1, scope: null, since: "2026-08-04T00:00:00Z", kind: "heuristic", supported_by: ["b"] },
   ];
+  // a and b: the same situation, both "entry too far"; c: a wrong call
   const lessons = [
-    { analysis_id: "a", cluster: "c1" },
-    { analysis_id: "b", cluster: "c1" },
-    { analysis_id: "c", cluster: "c2" },
+    { analysis_id: "a", cluster: "c1", cause: "entry_too_far" },
+    { analysis_id: "b", cluster: "c1", cause: "entry_too_far" },
+    { analysis_id: "c", cluster: "c2", cause: "direction_wrong" },
   ];
   const rule = (id: string, over: Record<string, unknown> = {}) => ({
     id, text_ja: `ルール${id}`, text_en: `rule ${id}`, cause: "general", scope: null, supported_by: [], ...over,
   });
 
-  it("counts support from the cited lessons by cluster, never from the model", () => {
-    const raw = { rules: [rule("r1", { supported_by: ["a", "b", "c", "zzz"], support: 99 }), rule("r2"), rule("r3"), rule("r4")], summary_ja: "s", summary_en: "s-en" };
+  it("counts support from the cited lessons by cluster, never from the model, and drops a rule with no evidence", () => {
+    const raw = {
+      rules: [rule("r1", { supported_by: ["a", "b", "c", "zzz"], support: 99 }), rule("r2", { supported_by: ["c"] }), rule("r3"), rule("r4", { supported_by: ["a"] })],
+      summary_ja: "s", summary_en: "s-en",
+    };
     const c = parseConsolidation(raw, previous, "2026-09-03T00:00:00Z", lessons);
+    expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r4"]);
     expect(c?.rules.find((r) => r.id === "r1")).toMatchObject({ support: 2, supported_by: ["a", "b", "c"], since: "2026-08-01T00:00:00Z" });
-    expect(c?.rules.find((r) => r.id === "r3")).toMatchObject({ support: 1, supported_by: [], since: "2026-08-03T00:00:00Z" });
+    expect(c?.rules.find((r) => r.id === "r4")).toMatchObject({ support: 1, supported_by: ["a"] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"] });
     expect(c?.summary_en).toBe("s-en");
   });
 
+  it("only counts a citation that is about the rule's own failure, and never a refused plan's lesson", () => {
+    const mixed = [
+      ...lessons,
+      { analysis_id: "s", cluster: "c9", cause: "entry_too_far", shadow: true },
+      { analysis_id: "g", cluster: "c8", cause: "good_call" },
+      { analysis_id: "n", cluster: "c7", cause: "news_shock" },
+    ];
+    expect(citationAllowed({ cause: "stop_too_tight", kind: "heuristic" }, mixed[0])).toBe(false);
+    expect(citationAllowed({ cause: "entry_too_far", kind: "heuristic" }, mixed[0])).toBe(true);
+    expect(citationAllowed({ cause: "general", kind: "heuristic" }, mixed[2])).toBe(true);
+    expect(citationAllowed({ cause: "general", kind: "heuristic" }, mixed[3])).toBe(false);
+    expect(citationAllowed({ cause: "general", kind: "heuristic" }, mixed[4])).toBe(false);
+    expect(citationAllowed({ cause: "stop_too_tight", kind: "constraint" }, mixed[5])).toBe(true);
+    expect(citationAllowed({ cause: "stop_too_tight", kind: "heuristic" }, mixed[5])).toBe(false);
+    const raw = {
+      rules: [
+        rule("r1", { supported_by: ["a", "s", "g"] }),
+        rule("r9", { cause: "stop_too_tight", supported_by: ["a", "b", "c"] }),
+      ],
+      summary_ja: "s", summary_en: "s",
+    };
+    const c = parseConsolidation(raw, previous, T0, mixed);
+    expect(c?.rules.find((r) => r.id === "r1")).toMatchObject({ support: 1, supported_by: ["a"] });
+    expect(c?.rules.some((r) => r.id === "r9")).toBe(false);
+    expect(c?.changes.dropped).toEqual(["r9"]);
+  });
+
   it("keeps constraints first, inherits a continuing rule's kind, and caps additions at two", () => {
-    const raw = { rules: [rule("r9"), rule("r10"), rule("r11"), rule("r1", { supported_by: ["a", "c"] }), rule("r2")], summary_ja: "s", summary_en: "s-en" };
+    const raw = {
+      rules: [
+        rule("r9", { supported_by: ["a"] }), rule("r10", { supported_by: ["b"] }), rule("r11", { supported_by: ["c"] }),
+        rule("r1", { supported_by: ["a", "c"] }), rule("r2", { supported_by: ["c"] }),
+      ],
+      summary_ja: "s", summary_en: "s-en",
+    };
     const c = parseConsolidation(raw, previous, "2026-09-03T00:00:00Z", lessons);
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r9", "r10"]);
     expect(c?.rules[0].kind).toBe("constraint");
@@ -438,29 +480,41 @@ describe("rulebook consolidation", () => {
     expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"] });
   });
 
-  it("keeps a continuing rule's older citations in evidence and never lets a blank id take over a rule", () => {
+  it("puts back rules dropped beyond the removal allowance, weakest ones going first, with their evidence recounted", () => {
+    const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "s", summary_en: "s-en" }, previous, "2026-09-03T00:00:00Z", lessons);
+    expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1"]);
+    expect(c?.rules[0]).toMatchObject({ support: 1, supported_by: ["c"] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [] });
+    // A rule the model omitted whose evidence no longer holds up is not
+    // put back, whatever the allowance
+    const stale: Rule[] = [...previous, { ...previous[1], id: "r5", supported_by: ["gone"] }];
+    const d = parseConsolidation({ rules: [rule("r1", { supported_by: ["a"] }), rule("r2", { supported_by: ["c"] }), rule("r3", { supported_by: ["b"] }), rule("r4", { supported_by: ["b"] })], summary_ja: "s", summary_en: "s" }, stale, T0, lessons);
+    expect(d?.rules.some((r) => r.id === "r5")).toBe(false);
+    expect(d?.changes.removed).toEqual(["r5"]);
+  });
+
+  it("keeps a continuing rule's older citations in evidence when they are handed back, and never lets a blank id take over a rule", () => {
     const old: Rule[] = [{ ...previous[0], support: 3, supported_by: ["x1", "x2", "x3"] }];
-    // The consolidation was handed only recent lessons, none of which x1-x3 are
-    const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["x1", "x2", "x3"] })], summary_ja: "s", summary_en: "s" }, old, T0, lessons);
+    const older = [
+      ...lessons,
+      { analysis_id: "x1", cluster: "cx1", cause: "entry_too_far" },
+      { analysis_id: "x2", cluster: "cx2", cause: "entry_too_far" },
+      { analysis_id: "x3", cluster: "cx3", cause: "entry_too_far" },
+    ];
+    const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["x1", "x2", "x3"] })], summary_ja: "s", summary_en: "s" }, old, T0, older);
     expect(c?.rules[0]).toMatchObject({ id: "r1", support: 3, supported_by: ["x1", "x2", "x3"] });
 
     // A blank id gets a fresh one rather than r1's identity: r1 is recorded
     // as removed (within the allowance), the newcomer as added with its own
     // birth date
-    const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic" })], summary_ja: "s", summary_en: "s" }, old, T0, lessons);
+    const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" }, old, T0, older);
     expect(blank?.rules.map((r) => r.id)).toEqual(["r1_"]);
     expect(blank?.rules[0].since).toBe(T0);
     expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [] });
   });
 
-  it("puts back rules dropped beyond the removal allowance, weakest ones going first", () => {
-    const c = parseConsolidation({ rules: [rule("r1")], summary_ja: "s", summary_en: "s-en" }, previous, "2026-09-03T00:00:00Z", lessons);
-    expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1"]);
-    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [] });
-  });
-
   it("lets the first rulebook be written whole, up to the cap, and de-duplicates ids", () => {
-    const rules = Array.from({ length: MAX_RULES + 3 }, (_, i) => rule(i === 1 ? "r1" : `r${i + 1}`, { kind: i % 2 ? "constraint" : "heuristic" }));
+    const rules = Array.from({ length: MAX_RULES + 3 }, (_, i) => rule(i === 1 ? "r1" : `r${i + 1}`, { kind: i % 2 ? "constraint" : "heuristic", supported_by: ["a"] }));
     const c = parseConsolidation({ rules, summary_ja: "s", summary_en: "s-en" }, [], "2026-09-03T00:00:00Z", lessons);
     expect(c?.rules).toHaveLength(MAX_RULES);
     expect(c?.rules.some((r) => r.id === "r1_")).toBe(true);
@@ -473,13 +527,13 @@ describe("rulebook consolidation", () => {
     expect(parseConsolidation(null, previous, T0)).toBeNull();
   });
 
-  it("summarises the record with its sample size, its independent situations and its realized R", () => {
+  it("summarises the record with its sample size, its independent situations, its realized R and the per-rule feedback", () => {
     const row = (over: Partial<RecordRow>): RecordRow => ({
       pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:00:00Z", outcome: "pending", shadow: false,
       rejection: null, filled: false, entry: 150, stop: 151, tp1: 148, outcome_price: null, rulebook_version: 2, ...over,
     });
     const rows = [
-      row({ outcome: "win", signal: "BUY", entry: 150, stop: 149, tp1: 152, filled: true, rulebook_version: null }),
+      row({ outcome: "win", signal: "BUY", entry: 150, stop: 149, tp1: 152, filled: true, rulebook_version: 0 }),
       row({ outcome: "loss", filled: true }),
       // the same situation an hour later: one cluster with the loss above
       row({ outcome: "loss", filled: true, created_at: "2026-09-03T05:00:00Z" }),
@@ -491,48 +545,64 @@ describe("rulebook consolidation", () => {
       row({ outcome: "untriggered", shadow: true, rejection: "should_be_market" }),
       row({ outcome: "win", shadow: true, rejection: "too_far", filled: true }),
     ];
-    const s = summarizeRecord(
-      rows,
-      [{ cause: "stop_too_tight", cluster: "x" }, { cause: "stop_too_tight", cluster: "x" }, { cause: "entry_too_far", cluster: "y" }],
-      { "2": ["r1", "r2"] },
-    );
+    const s = summarizeRecord(rows, [
+      { cause: "stop_too_tight", cluster: "x", rule_blamed: "r1" },
+      { cause: "stop_too_tight", cluster: "x" },
+      { cause: "entry_too_far", cluster: "y", rule_credited: "r2" },
+      { cause: "entry_too_far", cluster: "z", shadow: true },
+    ]);
     expect(s).toMatchObject({
       total: 6, wins: 1, losses: 2, untriggered: 1, ambiguous: 1, open: 1, settled: 3,
       win_rate: null, fill_rate: null, rejected: 1, independent_clusters: 2,
     });
     expect(s.win_rate_ci95).toEqual([6, 79]);
     expect(s.realized_r).toEqual({ n: 3, sum: 0, mean: 0 });
+    // The seeded, empty rulebook (version 0) is "no rules" too
     expect(s.by_rulebook_version.none).toMatchObject({ plans: 1, wins: 1, sum_r: 2 });
     expect(s.by_rulebook_version["2"]).toMatchObject({ plans: 5, losses: 2, untriggered: 1, open: 1, sum_r: -2 });
-    expect(s.rule_record.r1).toMatchObject({ plans: 5, losses: 2, sum_r: -2 });
-    expect(s.rule_record.r2).toEqual(s.rule_record.r1);
+    expect(s.rule_feedback).toEqual({ r1: { blamed: 1, credited: 0 }, r2: { blamed: 0, credited: 1 } });
     expect(s.shadow).toEqual({ total: 2, untriggered: 1, wins: 1, losses: 0, open: 0 });
     expect(s.by_cause).toEqual({ stop_too_tight: 2, entry_too_far: 1 });
     expect(s.by_cause_clusters).toEqual({ stop_too_tight: 1, entry_too_far: 1 });
+    expect(s.shadow_by_cause).toEqual({ entry_too_far: 1 });
     const p = buildConsolidationPrompt(previous, [], s);
     expect(p.user).toContain('"rejected":1');
-    expect(p.user).toContain('"rule_record"');
+    expect(p.user).toContain('"rule_feedback"');
     expect(p.system).toContain(String(MAX_RULES));
     expect(p.system).toContain("独立クラスタ");
+    expect(p.system).toContain("基本手順");
   });
 });
 
 describe("evidence bookkeeping", () => {
-  it("groups plans on the same pair and direction inside a day into one cluster", () => {
+  it("groups plans on the same pair and direction close together into one cluster, unless the earlier one had long settled", () => {
     const ids = clusterIds([
-      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z" },
-      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T12:35:00Z" },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: "2026-09-03T06:45:00Z" },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T12:35:00Z", closed_at: "2026-09-03T13:00:00Z" },
+      // the next day, long after the previous one closed: a new decision
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-04T05:00:00Z" },
       { pair: "USD/JPY", signal: "BUY", created_at: "2026-09-03T05:00:00Z" },
       { pair: "EUR/USD", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
+      // another user's identical plan is their decision, not this one's
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T05:00:00Z", user_id: "u2" },
     ]);
-    expect(ids[0]).toBe(ids[1]);
-    expect(ids[2]).not.toBe(ids[0]);
-    expect(new Set(ids).size).toBe(4);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[1]);
+    expect(new Set(ids).size).toBe(6);
+    // still open when the next one was made: the same bet again
+    const open = clusterIds([
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: null },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T12:35:00Z", closed_at: null },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-04T03:00:00Z" },
+    ]);
+    expect(new Set(open).size).toBe(1);
+    // Clustered by when the PLAN was made, not when the review ran
     const rows = withClusters([
-      { analysis_id: "a", pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", cause: "entry_too_far", outcome: "untriggered", interval: "1h", mode: null, order_type: "limit", lesson_ja: "x", lesson_en: "x", confidence: 80, avoidable: true, shadow: false, scope: null, rule_blamed: null, rule_credited: null },
+      { analysis_id: "a", pair: "USD/JPY", signal: "SELL", created_at: "2026-09-05T00:00:00Z", plan_created_at: "2026-09-03T04:49:00Z", cause: "entry_too_far", outcome: "untriggered", interval: "1h", mode: null, order_type: "limit", lesson_ja: "x", lesson_en: "x", confidence: 80, avoidable: true, shadow: false, scope: null, rule_blamed: null, rule_credited: null },
+      { analysis_id: "b", pair: "USD/JPY", signal: "SELL", created_at: "2026-09-05T00:00:00Z", plan_created_at: "2026-09-01T04:49:00Z", cause: "entry_too_far", outcome: "untriggered", interval: "1h", mode: null, order_type: "limit", lesson_ja: "x", lesson_en: "x", confidence: 80, avoidable: true, shadow: false, scope: null, rule_blamed: null, rule_credited: null },
     ]);
-    expect(rows[0].cluster).toBe(ids[0]);
+    expect(rows[0].cluster).not.toBe(rows[1].cluster);
+    expect(rows[0].cluster).toContain("2026-09-03");
   });
 
   it("gives a small sample a wide interval", () => {

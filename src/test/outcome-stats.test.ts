@@ -127,11 +127,13 @@ describe("the honest record", () => {
     const groups = byRulebookVersion([
       rec({ outcome: "win", rulebook_version: 3 }),
       rec({ outcome: "loss", rulebook_version: null }),
+      // the seeded, empty rulebook: no rules in force either
+      rec({ outcome: "loss", rulebook_version: 0 }),
       rec({ outcome: "loss", rulebook_version: 2 }),
       rec({ outcome: "pending", rulebook_version: 10 }),
     ]);
     expect(groups.map((g) => g.key)).toEqual(["none", "v2", "v3", "v10"]);
-    expect(groups[0]).toMatchObject({ losses: 1, sumR: -1 });
+    expect(groups[0]).toMatchObject({ losses: 2, sumR: -2 });
     expect(groups[2]).toMatchObject({ wins: 1, sumR: 2 });
   });
 
