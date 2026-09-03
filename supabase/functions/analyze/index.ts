@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v22-2026-09-03T21:00:00Z";
+const FUNCTION_VERSION = "analyze-v23-2026-09-03T23:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -746,6 +746,12 @@ Deno.serve(async (req: Request) => {
     stage = "load_events";
     let eventBlock = "";
     let eventsAhead: Array<{ at: string; country: string; impact: string; title: string }> = [];
+    // "The calendar was read and the horizon is clear" and "the calendar could
+    // not be read" are different facts, and an empty block said neither. A
+    // plan written 17 hours before Non-Farm Payrolls on a 1h timeframe sees an
+    // empty horizon quite legitimately — but it must know that is what it is
+    // looking at, or it will treat silence as an all-clear it never got.
+    let calendarOk = false;
     try {
       const horizon = HORIZON_MS[interval] ?? 12 * 60 * 60 * 1000;
       const currencies = [...currenciesOf(currencyPair), "All"];
@@ -766,9 +772,17 @@ Deno.serve(async (req: Request) => {
         eventsAhead = upcoming.slice(0, 8).map((e) => ({
           at: e.event_at, country: e.country, impact: e.impact, title: e.title,
         }));
+        calendarOk = true;
       }
     } catch (err) {
       console.warn("Calendar unavailable:", err instanceof Error ? err.message : String(err));
+    }
+    // renderEventBlock returns "" for an empty horizon, so say which of the
+    // two silences this is
+    if (eventBlock === "") {
+      eventBlock = calendarOk
+        ? L.calendarClear(Math.round((HORIZON_MS[interval] ?? 12 * 60 * 60 * 1000) / (60 * 60 * 1000)))
+        : L.calendarUnavailable;
     }
 
     stage = "fetch_market_data";

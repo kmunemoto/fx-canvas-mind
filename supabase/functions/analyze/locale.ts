@@ -35,6 +35,12 @@ interface LocaleStrings {
   fallbackWarning: string;
   // Shown when an account without a subscription asks for an analysis
   subscriptionRequired: string;
+  // Put in the prompt when the calendar WAS consulted and had nothing inside
+  // the plan's horizon. Without it, "checked and clear" and "never checked"
+  // reach the model as the same empty space.
+  calendarClear: (hours: number) => string;
+  // Put in the prompt when the calendar could not be read at all
+  calendarUnavailable: string;
   // Shown when a plan was downgraded to WAIT because the market would never
   // have reached its entry (see entry.ts)
   entryRejected: (parts: {
@@ -78,6 +84,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
     subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
+    calendarClear: (hours) =>
+      `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
+    calendarUnavailable:
+      "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
@@ -125,6 +135,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
     subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
+    calendarClear: (hours) =>
+      `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
+    calendarUnavailable:
+      "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
