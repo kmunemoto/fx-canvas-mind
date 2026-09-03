@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "check:functions": "deno check supabase/functions/analyze/index.ts supabase/functions/track-outcomes/index.ts supabase/functions/postmortem/index.ts supabase/functions/econ-calendar/index.ts",
+    "bundle:postmortem": "esbuild supabase/functions/postmortem/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --outfile=supabase/functions/postmortem/bundle.js",
     "test:watch": "vitest"
   },
   "dependencies": {

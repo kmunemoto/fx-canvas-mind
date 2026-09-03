@@ -13,6 +13,13 @@
 //   4. when there are new lessons, has the model rewrite the rulebook
 //      (public.rulebook) that analyze puts in front of every new plan.
 //
+// DEPLOYING THIS FUNCTION: run `npm run bundle:postmortem` first and upload
+// the resulting bundle.js as the entrypoint. It imports across four function
+// directories (analyze, econ-calendar, track-outcomes and its own), and those
+// ten files together are larger than the deploy API accepts in a single call
+// — every attempt to send them raw fails part-way. The .ts files here remain
+// the source of truth; the bundle is generated and gitignored.
+//
 // Callers: pg_cron every 15 minutes with the shared sweep token, and an
 // admin with their JWT (to run it by hand, with `force` to skip the waits).
 
