@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v14-2026-09-03T05:30:00Z";
+const FUNCTION_VERSION = "analyze-v15-2026-09-03T06:00:00Z";
 
 import {
   computeSnapshot,
@@ -20,6 +20,8 @@ import {
   withDisclaimer,
   type AnalysisLocale,
 } from "./locale.ts";
+
+import { WALL_CLOCK_BUDGET_MS, canRetryWithoutSearch, planAttempt } from "./budget.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -700,6 +702,8 @@ Deno.serve(async (req: Request) => {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
 
+    console.log("Market data fetched", { elapsedMs: Date.now() - startedAt });
+
     stage = "compute_indicators";
     const snapshots = seriesByTf.map((candles) => computeSnapshot(candles));
     const entrySnapshot = snapshots[0];
@@ -740,14 +744,15 @@ Deno.serve(async (req: Request) => {
     // the client just sees a bare 546 and the spent credit is never refunded.
     // Stop a few seconds short of that so a slow turn returns a real error and
     // hands the credit back.
-    const WALL_CLOCK_BUDGET_MS = 135_000;
-    const deadlineAt = startedAt + WALL_CLOCK_BUDGET_MS;
-    const msLeft = () => deadlineAt - Date.now();
+    const elapsed = () => Date.now() - startedAt;
+    const msLeft = () => WALL_CLOCK_BUDGET_MS - elapsed();
 
     // Opus 5 runs adaptive thinking at effort "high" by default, which is the
-    // dominant cost in a turn that also makes web searches. "medium" keeps the
-    // analysis within the worker's lifetime.
-    const EFFORT = "medium";
+    // dominant cost in a turn. The technical path is fast and can afford
+    // "medium"; the searching path also pays for page fetches, so it runs at
+    // "low" to leave room for them.
+    const EFFORT_TECHNICAL = "medium";
+    const EFFORT_SEARCH = "low";
 
     const anthropicHeaders = {
       "content-type": "application/json",
@@ -787,17 +792,17 @@ Deno.serve(async (req: Request) => {
         baseRequest.tools = [{
           type: "web_search_20260209",
           name: "web_search",
-          max_uses: 2,
+          max_uses: 1,
           allowed_domains: searchDomains,
         }];
         // Only `format` is incompatible with web search (citations); `effort`
         // applies to both shapes.
-        if (effortEnabled) baseRequest.output_config = { effort: EFFORT };
+        if (effortEnabled) baseRequest.output_config = { effort: EFFORT_SEARCH };
         else delete baseRequest.output_config;
       } else {
         delete baseRequest.tools;
         baseRequest.output_config = effortEnabled
-          ? { format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT }
+          ? { format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT_TECHNICAL }
           : { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
       }
     };
@@ -823,8 +828,27 @@ Deno.serve(async (req: Request) => {
       }, 504);
     };
 
+    // Abandoning web search when it runs long, then answering on the technicals
+    // alone. Same end state as an uncrawlable allowlist, so it reuses that path
+    // and is reported to the user the same way.
+    const giveUpSearch = (reason: string) => {
+      console.warn("Dropping web search to stay inside the budget", {
+        reason,
+        elapsedMs: Date.now() - startedAt,
+      });
+      searchEnabled = false;
+      searchDroppedReason = reason;
+      messages = [{ role: "user", content: buildUserMessage(FALLBACK_NOTE, false) }];
+      applyRequestShape();
+    };
+
     for (let attempt = 0; attempt < 5; attempt++) {
       if (msLeft() <= 0) return await outOfTime();
+
+      const plan = planAttempt(elapsed(), searchEnabled);
+      if (plan.action === "out_of_time") return await outOfTime();
+      // Searching has run past its share of the budget; answer without it.
+      if (plan.action === "drop_search") giveUpSearch("search_too_slow");
 
       let claudeRes: Response;
       try {
@@ -832,12 +856,19 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: anthropicHeaders,
           body: JSON.stringify({ ...baseRequest, messages }),
-          signal: AbortSignal.timeout(msLeft()),
+          signal: AbortSignal.timeout(plan.timeoutMs),
         });
       } catch (err) {
         // AbortSignal.timeout rejects with TimeoutError; anything else is a
         // transport failure and is reported the same way to the client.
-        if (msLeft() <= 0 || (err instanceof DOMException && err.name === "TimeoutError")) {
+        const timedOut = err instanceof DOMException && err.name === "TimeoutError";
+        if (timedOut && canRetryWithoutSearch(elapsed(), searchEnabled)) {
+          // The searching turn ran long but there is still time to answer on
+          // the technicals — do that rather than returning nothing.
+          giveUpSearch("search_too_slow");
+          continue;
+        }
+        if (timedOut || msLeft() <= 0) {
           return await outOfTime();
         }
         throw err;
@@ -860,18 +891,14 @@ Deno.serve(async (req: Request) => {
           const blocked = parseInaccessibleDomains(errorMessage);
           console.warn("Web search domains rejected as uncrawlable:", blocked.join(", "));
 
-          const plan = planDomainRecovery(searchDomains, blocked, pruneRetries);
-          if (plan.action === "retry") {
-            searchDomains = plan.domains;
+          const recovery = planDomainRecovery(searchDomains, blocked, pruneRetries);
+          if (recovery.action === "retry") {
+            searchDomains = recovery.domains;
             pruneRetries++;
+            applyRequestShape();
           } else {
-            searchEnabled = false;
-            searchDroppedReason = "uncrawlable_domains";
-            // The paused assistant turn, if any, carries web_search blocks that
-            // are invalid once the tool is gone — start the turn over.
-            messages = [{ role: "user", content: buildUserMessage(FALLBACK_NOTE, false) }];
+            giveUpSearch("uncrawlable_domains");
           }
-          applyRequestShape();
           continue;
         }
 
@@ -915,6 +942,12 @@ Deno.serve(async (req: Request) => {
         diagnostics: { error_stage: "anthropic_pause_loop", stage },
       }, 400);
     }
+
+    console.log("Model turn complete", {
+      elapsedMs: Date.now() - startedAt,
+      searchDroppedReason,
+      pruneRetries,
+    });
 
     stage = "parse_ai_json";
     const finalText = extractAnthropicText(claudeData);
