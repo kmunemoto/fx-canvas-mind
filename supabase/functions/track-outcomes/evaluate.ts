@@ -8,9 +8,11 @@
 // 'ambiguous' rather than guessed. Plans whose entry is never reached are
 // 'untriggered'. Everything the judge saw is kept as evidence.
 //
-// Time is always candle time: the entry window and the expiry are applied to
+// Time is market time: the entry window and the expiry are measured in bars
+// actually traded (a weekend close does not run them down) and applied to
 // the bar that crosses them, so a judgement does not depend on when the
-// sweep happened to run.
+// sweep happened to run. A fill established by an earlier run is kept: the
+// bar that proved it may have been still forming at the time.
 
 import type { Candle } from "../analyze/indicators.ts";
 
@@ -44,7 +46,7 @@ export interface Evaluation {
   // Finer bars were used for a decision
   refined: boolean;
   // Finer bars were needed but could not be fetched this run; the plan stays
-  // open and is retried, up to MAX_REFINE_ATTEMPTS times
+  // open and is retried, up to MAX_REFINE_ATTEMPTS provider failures
   refine_pending: boolean;
   refine_attempts: number;
   // Largest move in the trade's favour / against it after the fill, in price
@@ -85,11 +87,13 @@ export interface Judgement {
   evaluation: Evaluation;
 }
 
-// Finer bars for [fromMs, toMs). `null` means the data could not be fetched
-// right now (budget, provider error); an empty array means the provider had
-// none. Both leave the plan open for another try.
+// Finer bars for [fromMs, toMs). `null` means the provider could not supply
+// them (error, or nothing in the range) and counts as one failed attempt;
+// "deferred" means the caller chose not to ask this run (request budget) and
+// costs nothing. Both leave the plan open for another try.
+export type FineResult = Candle[] | null | "deferred";
 export interface FineFetcher {
-  (pair: string, fromMs: number, toMs: number): Promise<Candle[] | null>;
+  (pair: string, fromMs: number, toMs: number): Promise<FineResult>;
 }
 
 const MIN = 60_000;
@@ -124,7 +128,8 @@ export const REFINE_INTERVAL = "15min";
 export const REFINE_MS = 15 * MIN;
 export const MAX_REFINE_ATTEMPTS = 3;
 
-// Days after which a filled plan without a decision is closed as expired
+// Market days after which a filled plan without a decision is closed as
+// expired
 export const EXPIRY_DAYS: Record<string, number> = {
   "15min": 5,
   "1h": 20,
@@ -132,7 +137,7 @@ export const EXPIRY_DAYS: Record<string, number> = {
   "1day": 180,
 };
 
-// How long an unfilled entry stays valid
+// How long (market time) an unfilled entry stays valid
 export const ENTRY_WINDOW_MS: Record<string, number> = {
   "15min": 12 * HOUR,
   "1h": 48 * HOUR,
@@ -298,14 +303,17 @@ interface Ctx {
   // entry is "touched" by the very first bar
   missedArmed: boolean;
   invalidatedArmed: boolean;
-  entryDeadline: number;
-  expiryDeadline: number;
+  // Market time since the signal after which an unfilled plan lapses / a
+  // filled one expires
+  entryWindowMs: number;
+  expiryMs: number;
 }
 
 interface Timed {
   c: Candle;
   t: number;
   ms: number; // bar duration
+  mt: number; // market time elapsed since the signal before this bar
 }
 
 const hitsTp = (signal: Signal, c: Candle, tp: number) => (signal === "BUY" ? c.high >= tp : c.low <= tp);
@@ -340,10 +348,14 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
   const c = bar.c;
   const at = toIso(bar.t);
 
-  if (!state.filled && bar.t >= ctx.entryDeadline) {
-    return { state, event: { kind: "untriggered", reason: "no_fill", at } };
+  if (!state.filled && bar.mt >= ctx.entryWindowMs) {
+    // The order lapsed; unless the signal bar may already have filled it, in
+    // which case nothing can be said
+    return state.possibleFill
+      ? { state, event: { kind: "ambiguous", at, refinable: false } }
+      : { state, event: { kind: "untriggered", reason: "no_fill", at } };
   }
-  if (state.filled && bar.t >= ctx.expiryDeadline) {
+  if (state.filled && bar.mt >= ctx.expiryMs) {
     return { state, event: { kind: "expired", at, price: c.open } };
   }
 
@@ -387,9 +399,20 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
 
 const timeline = (candles: Candle[], nowMs: number, ms: number): Timed[] =>
   candles
-    .map((c) => ({ c, t: parseCandleTime(c.datetime), ms }))
+    .map((c) => ({ c, t: parseCandleTime(c.datetime), ms, mt: 0 }))
     .filter((x) => Number.isFinite(x.t) && x.t <= nowMs + FUTURE_SLACK_MS)
     .sort((a, b) => a.t - b.t);
+
+// Market time before each bar = the durations of the bars that came before
+// it; gaps between bars (weekends, holidays) are not counted
+const withMarketTime = (bars: Timed[], startMt = 0): Timed[] => {
+  let acc = startMt;
+  return bars.map((x) => {
+    const y = { ...x, mt: acc };
+    acc += x.ms;
+    return y;
+  });
+};
 
 const isTerminal = (e: Event): e is Terminal => e.kind !== "none" && e.kind !== "filled";
 
@@ -481,7 +504,7 @@ export const judgePlan = async (
     const signalIdx = firstIdx > 0 ? firstIdx - 1 : firstIdx === -1 ? series.length - 1 : -1;
     const candidate = signalIdx >= 0 ? series[signalIdx] : null;
     const signalBar = candidate !== null && candidate.t <= createdMs && candidate.t + candidate.ms > createdMs ? candidate : null;
-    const post = firstIdx >= 0 ? series.slice(firstIdx) : [];
+    const post = firstIdx >= 0 ? withMarketTime(series.slice(firstIdx)) : [];
     return { firstIdx, signalIdx, signalBar, post };
   };
   let { firstIdx, signalIdx, signalBar, post } = locate();
@@ -493,9 +516,26 @@ export const judgePlan = async (
     orderType,
     missedArmed: reference === null || (row.signal === "BUY" ? row.take_profit_1 > reference : row.take_profit_1 < reference),
     invalidatedArmed: reference === null || (row.signal === "BUY" ? row.stop_loss < reference : row.stop_loss > reference),
-    entryDeadline: createdMs + entryWindowMs,
-    expiryDeadline: createdMs + expiryMs,
+    entryWindowMs,
+    expiryMs,
   };
+
+  // A fill an earlier run established stands: the bar that proved it may
+  // have been still forming then, and its final shape can look different
+  const prevFillMs = typeof prev?.filled_at === "string" ? Date.parse(prev.filled_at) : NaN;
+  const prevFill = Number.isFinite(prevFillMs) && prev !== null
+    ? {
+      at: prevFillMs,
+      state: {
+        filled: true,
+        filled_at: prev.filled_at,
+        fill_price: prev.fill_price ?? row.entry_point,
+        possibleFill: false,
+        mfe: prev.mfe,
+        mae: prev.mae,
+      } satisfies State,
+    }
+    : null;
 
   let state: State = EMPTY_STATE;
   let terminal: Terminal | null = null;
@@ -509,17 +549,22 @@ export const judgePlan = async (
   let afterWin: Timed[] = [];
   let judged = true;
 
-  const fetchRange = async (fromMs: number, toMs: number): Promise<Timed[] | null> => {
-    if (!fetchFine) return null;
-    const fine = await fetchFine(row.pair, fromMs, toMs);
+  // Finer bars for one coarse bar, carrying its market-time offset
+  const fetchRange = async (bar: Timed): Promise<Timed[] | null | "deferred"> => {
+    if (!fetchFine) return "deferred";
+    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms);
+    if (fine === "deferred") return "deferred";
     if (fine === null) return null;
-    const bars = timeline(fine, nowMs, REFINE_MS).filter((x) => x.t >= fromMs && x.t < toMs);
+    const bars = timeline(fine, nowMs, REFINE_MS)
+      .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms)
+      .map((x) => ({ ...x, mt: bar.mt + (x.t - bar.t) }));
     return bars.length > 0 ? bars : null;
   };
-  // Finer data was needed and not obtained: try again next time, a bounded
-  // number of times
-  const deferRefinement = () => {
-    refineAttempts++;
+  // Finer data was needed and not obtained: try again next time. Provider
+  // failures are counted so a bar nobody can supply does not stall the plan
+  // forever; a caller that merely ran out of budget costs nothing.
+  const deferRefinement = (outcome: null | "deferred") => {
+    if (outcome === null) refineAttempts++;
     if (refineAttempts >= MAX_REFINE_ATTEMPTS) {
       terminal = { kind: "ambiguous", at: checkedAt, refinable: false };
       note = "no_data";
@@ -531,7 +576,10 @@ export const judgePlan = async (
 
   if (!isCoherentPlan(row)) {
     terminal = { kind: "ambiguous", at: checkedAt, refinable: false };
-  } else if (!windowCoversSignal && !prev?.filled_at) {
+  } else if (prevFill !== null) {
+    state = prevFill.state;
+    post = post.filter((x) => x.t >= prevFill.at);
+  } else if (!windowCoversSignal) {
     // The fetched bars start after the signal: whatever happened in between
     // is unknown, so this snapshot cannot say anything about the plan
     judged = false;
@@ -541,24 +589,14 @@ export const judgePlan = async (
     } else {
       note = "window_short";
     }
-  } else if (!windowCoversSignal && prev?.filled_at) {
-    // Filled in an earlier, complete run: carry that and judge the rest
-    state = {
-      filled: true,
-      filled_at: prev.filled_at,
-      fill_price: prev.fill_price,
-      possibleFill: false,
-      mfe: prev.mfe,
-      mae: prev.mae,
-    };
   } else {
     let sig = assessSignalBar(ctx, reference, signalBar, createdMs);
     // A coarse signal bar that leaves the fill or the first touches
     // untimed: replace it with finer bars and look again
     if (signalBar !== null && signalBar.ms > REFINE_MS && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
-      const fine = await fetchRange(signalBar.t, signalBar.t + signalBar.ms);
-      if (fine === null) {
-        deferRefinement();
+      const fine = await fetchRange({ ...signalBar, mt: -signalBar.ms });
+      if (fine === null || fine === "deferred") {
+        deferRefinement(fine === null ? null : "deferred");
       } else {
         refined = true;
         series = [...series.slice(0, signalIdx), ...fine, ...series.slice(signalIdx + 1)];
@@ -583,15 +621,18 @@ export const judgePlan = async (
         break;
       }
       if (r.event.kind === "ambiguous" && r.event.refinable && post[idx].ms > REFINE_MS && fetchFine) {
-        const fine = await fetchRange(post[idx].t, post[idx].t + post[idx].ms);
-        if (fine === null) {
-          deferRefinement();
+        // Whatever the bars before the ambiguous one established (a fill,
+        // excursions) is kept even if this run cannot finish
+        const stateBefore = idx === i ? before : runUntilEvent(ctx, before, post.slice(i, idx)).state;
+        const fine = await fetchRange(post[idx]);
+        if (fine === null || fine === "deferred") {
+          state = stateBefore;
+          deferRefinement(fine === null ? null : "deferred");
           break;
         }
         refined = true;
         // Resume from the state before the ambiguous bar; the fine bars
         // replace it
-        const stateBefore = idx === i ? before : runUntilEvent(ctx, before, post.slice(i, idx)).state;
         const fr = runUntilEvent(ctx, stateBefore, fine);
         if (fr.event !== null) {
           terminal = fr.event;
@@ -650,22 +691,32 @@ export const judgePlan = async (
       reason = !isCoherentPlan(row) ? "incoherent" : note === "no_data" ? "no_data" : null;
     }
   } else if (judged && post.length > 0) {
-    // The window has elapsed but no bar has crossed it yet (data lag)
+    // No bar has crossed the window yet, but the market has been open long
+    // enough that one should have: the data lags (the current bar counts for
+    // at most a bar or two)
+    const last = post[post.length - 1];
+    const marketElapsed = last.mt + last.ms + Math.max(0, Math.min(nowMs - (last.t + last.ms), 2 * last.ms));
     if (!state.filled) {
-      if (windowCoversSignal && ageMs > entryWindowMs) {
-        resolution = "untriggered";
-        reason = "no_fill";
+      if (marketElapsed > entryWindowMs) {
+        if (state.possibleFill) {
+          resolution = "ambiguous";
+        } else {
+          resolution = "untriggered";
+          reason = "no_fill";
+        }
         resolvedAt = checkedAt;
       }
-    } else if (ageMs > expiryMs) {
+    } else if (marketElapsed > expiryMs) {
       resolution = "expired";
       resolvedAt = checkedAt;
-      outcomePrice = post[post.length - 1].c.close;
+      outcomePrice = last.c.close;
     }
   }
 
   const contextStart = firstIdx >= 0 ? Math.max(0, firstIdx - PRE_SIGNAL_CONTEXT) : Math.max(0, series.length - PRE_SIGNAL_CONTEXT);
-  const contextEnd = terminalIdx >= 0 ? Math.min(series.length, firstIdx + terminalIdx + 4) : series.length;
+  const contextEnd = terminalIdx >= 0
+    ? Math.min(series.length, series.findIndex((x) => x.t === post[terminalIdx].t) + 4)
+    : series.length;
   const path = downsamplePath(series.slice(contextStart, contextEnd).map((x) => x.c), PATH_POINTS);
 
   const evaluation: Evaluation = {

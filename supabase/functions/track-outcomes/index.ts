@@ -26,7 +26,7 @@ import {
   type OpenRow,
 } from "./evaluate.ts";
 
-const TRACKER_VERSION = "track-outcomes-v3-2026-09-03T10:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v4-2026-09-03T11:00:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -241,7 +241,7 @@ Deno.serve(async (req: Request) => {
 
     let refinements = 0;
     const fetchFine: FineFetcher = async (pair, fromMs, toMs) => {
-      if (requests >= MAX_REQUESTS) return null; // deferred to a later tick
+      if (requests >= MAX_REQUESTS) return "deferred"; // a later tick, at no cost to the plan
       refinements++;
       return await fetchSeries({
         symbol: pair,
