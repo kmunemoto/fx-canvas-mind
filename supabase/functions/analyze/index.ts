@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v12-2026-09-03T04:20:00Z";
+const FUNCTION_VERSION = "analyze-v13-2026-09-03T05:00:00Z";
 
 import {
   computeSnapshot,
@@ -484,6 +484,7 @@ Deno.serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  const startedAt = Date.now();
   let stage = "init";
   // A credit is spent before the billable work starts (that is what closes the
   // TOCTOU race), so every failure past that point has to hand it back.
@@ -667,8 +668,10 @@ Deno.serve(async (req: Request) => {
 
     let seriesByTf: Candle[][];
     try {
+      // The entry timeframe needs at least 200 closes or sma(closes, 200)
+      // silently returns null and SMA200 vanishes from the prompt.
       seriesByTf = await Promise.all(
-        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 150 : 80)),
+        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
       );
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
@@ -706,12 +709,12 @@ Deno.serve(async (req: Request) => {
       const snapshot = snapshots[i];
       const candles = seriesByTf[i];
       const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
-      const lines = candleLines(candles, i === 0 ? 30 : 15);
+      const lines = candleLines(candles, i === 0 ? 40 : 20);
       return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime,open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
-    const SEARCH_NOTE = "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は3回まで。";
+    const SEARCH_NOTE = "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は2回まで。";
     const TECHNICAL_NOTE = "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
     const FALLBACK_NOTE = "分析モード: technical_fallback — ニュース検索が利用できないため、テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
 
@@ -732,6 +735,19 @@ ${tfSections}
 上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schemaInPrompt ? SCHEMA_INSTRUCTION : ""}`;
 
     stage = "request_ai";
+    // Supabase kills the worker at 150s wall clock with no chance to respond —
+    // the client just sees a bare 546 and the spent credit is never refunded.
+    // Stop a few seconds short of that so a slow turn returns a real error and
+    // hands the credit back.
+    const WALL_CLOCK_BUDGET_MS = 135_000;
+    const deadlineAt = startedAt + WALL_CLOCK_BUDGET_MS;
+    const msLeft = () => deadlineAt - Date.now();
+
+    // Opus 5 runs adaptive thinking at effort "high" by default, which is the
+    // dominant cost in a turn that also makes web searches. "medium" keeps the
+    // analysis within the worker's lifetime.
+    const EFFORT = "medium";
+
     const anthropicHeaders = {
       "content-type": "application/json",
       "x-api-key": anthropicKey,
@@ -760,6 +776,10 @@ ${tfSections}
     // read as the full analysis the user asked for.
     let searchDroppedReason: string | null = null;
     let pruneRetries = 0;
+    // `effort` is a plain request option, but this deployment cannot verify
+    // that against the live API before shipping. If it is ever rejected, drop
+    // it and retry rather than failing the analysis over a latency hint.
+    let effortEnabled = true;
 
     const applyRequestShape = () => {
       if (searchEnabled) {
@@ -769,10 +789,15 @@ ${tfSections}
           max_uses: 2,
           allowed_domains: searchDomains,
         }];
-        delete baseRequest.output_config;
+        // Only `format` is incompatible with web search (citations); `effort`
+        // applies to both shapes.
+        if (effortEnabled) baseRequest.output_config = { effort: EFFORT };
+        else delete baseRequest.output_config;
       } else {
         delete baseRequest.tools;
-        baseRequest.output_config = { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
+        baseRequest.output_config = effortEnabled
+          ? { format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT }
+          : { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
       }
     };
     applyRequestShape();
@@ -788,12 +813,34 @@ ${tfSections}
     let messages = [...(baseRequest.messages as JsonRecord[])];
     let claudeData: JsonRecord | null = null;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: anthropicHeaders,
-        body: JSON.stringify({ ...baseRequest, messages }),
-      });
+    const outOfTime = async () => {
+      console.error("Analysis exceeded the wall-clock budget", { elapsedMs: Date.now() - startedAt });
+      return await fail({
+        ok: false,
+        error: "分析に時間がかかりすぎたため中断しました。「経済ニュース・指標も考慮する」をOFFにするか、時間をおいて再試行してください。",
+        diagnostics: { error_stage: "wall_clock_exceeded", stage, elapsedMs: Date.now() - startedAt },
+      }, 504);
+    };
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (msLeft() <= 0) return await outOfTime();
+
+      let claudeRes: Response;
+      try {
+        claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: anthropicHeaders,
+          body: JSON.stringify({ ...baseRequest, messages }),
+          signal: AbortSignal.timeout(msLeft()),
+        });
+      } catch (err) {
+        // AbortSignal.timeout rejects with TimeoutError; anything else is a
+        // transport failure and is reported the same way to the client.
+        if (msLeft() <= 0 || (err instanceof DOMException && err.name === "TimeoutError")) {
+          return await outOfTime();
+        }
+        throw err;
+      }
 
       const claudeRaw = await claudeRes.text();
       const parsed = parseJsonResponse(claudeRaw);
@@ -823,6 +870,13 @@ ${tfSections}
             // are invalid once the tool is gone — start the turn over.
             messages = [{ role: "user", content: buildUserMessage(FALLBACK_NOTE, false) }];
           }
+          applyRequestShape();
+          continue;
+        }
+
+        if (effortEnabled && /output_config|effort/i.test(errorMessage)) {
+          console.warn("output_config.effort rejected; retrying without it:", errorMessage.slice(0, 200));
+          effortEnabled = false;
           applyRequestShape();
           continue;
         }
@@ -966,7 +1020,7 @@ ${tfSections}
           slowK: x(entrySnapshot.slowK),
           slowD: x(entrySnapshot.slowD),
           adx: x(entrySnapshot.adx),
-          candles: entryCandles.slice(-50),
+          candles: entryCandles.slice(-60),
         },
       },
       diagnostics: { stage },

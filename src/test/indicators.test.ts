@@ -190,3 +190,29 @@ describe("computeSnapshot", () => {
     expect(snap.adx).toBeNull();
   });
 });
+
+describe("candle budget the edge function must fetch", () => {
+  // Regression: an attempt to cut the function's runtime lowered the entry
+  // timeframe from 250 candles to 150. Wall clock was unaffected (the fetch
+  // is one HTTP call either way) but sma(closes, 200) silently returned null,
+  // so SMA200 disappeared from the model's prompt with no error anywhere.
+  const synth = (n: number): Candle[] =>
+    Array.from({ length: n }, (_, i) => ({
+      datetime: `2026-09-03 ${String(i % 24).padStart(2, "0")}:00:00`,
+      open: 150 + Math.sin(i / 8),
+      high: 150.2 + Math.sin(i / 8),
+      low: 149.8 + Math.sin(i / 8),
+      close: 150.1 + Math.sin(i / 8),
+    }));
+
+  it("produces SMA200 at 250 candles and loses it at 150", () => {
+    const closes = (n: number) => synth(n).map((c) => c.close);
+    expect(sma(closes(250), 200)).not.toBeNull();
+    expect(sma(closes(150), 200)).toBeNull();
+  });
+
+  it("computeSnapshot reports sma200 only when the series is long enough", () => {
+    expect(computeSnapshot(synth(250))?.sma200).not.toBeNull();
+    expect(computeSnapshot(synth(150))?.sma200).toBeNull();
+  });
+});
