@@ -1,11 +1,20 @@
 import { useMemo, useState } from "react";
 import type { NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
+import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
 
 interface Level {
   label: string;
   value: number;
   kind: "entry" | "sl" | "tp";
+}
+
+// A moment on the chart worth pointing at: when the plan was made, when the
+// entry filled, when it was settled
+export interface ChartMarker {
+  time: string; // ISO
+  kind: "signal" | "fill" | "win" | "loss" | "end";
+  label: string;
 }
 
 interface Props {
@@ -14,6 +23,9 @@ interface Props {
   stopLoss?: string;
   takeProfits?: (string | undefined)[];
   pair: string;
+  markers?: ChartMarker[];
+  heading?: string;
+  subtitle?: string;
 }
 
 const W = 660;
@@ -39,6 +51,14 @@ const COLORS = {
   text: "hsl(var(--muted-foreground))",
 };
 
+const MARKER_COLORS: Record<ChartMarker["kind"], string> = {
+  signal: "hsl(var(--primary))",
+  fill: "hsl(var(--warning))",
+  win: "hsl(var(--success))",
+  loss: "hsl(var(--destructive))",
+  end: "hsl(var(--muted-foreground))",
+};
+
 const parseLevel = (v: string | undefined): number | null => {
   if (!v) return null;
   const n = Number(v);
@@ -47,7 +67,7 @@ const parseLevel = (v: string | undefined): number | null => {
 
 // Entry/SL/TP drawn as labeled horizontal lines over the candles, the way a
 // trader would mark up the chart (labels carry identity, color is secondary)
-const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props) => {
+const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle }: Props) => {
   const t = useT();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -113,6 +133,21 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
     return rows;
   }, [geometry, levels]);
 
+  // Each marker sits on the last candle that opened at or before its time
+  const markerCols = useMemo(() => {
+    if (markers.length === 0 || candles.length === 0) return [];
+    const opens = candles.map((c) => parseUtcCandleTime(c.datetime));
+    return markers.flatMap((m, row) => {
+      const ms = Date.parse(m.time);
+      if (!Number.isFinite(ms)) return [];
+      let idx = 0;
+      for (let i = 0; i < opens.length; i++) {
+        if (Number.isFinite(opens[i]) && opens[i] <= ms) idx = i;
+      }
+      return [{ ...m, idx, row }];
+    });
+  }, [markers, candles]);
+
   if (!geometry || candles.length === 0) return null;
 
   const { y, x, slot, bodyW } = geometry;
@@ -133,11 +168,11 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
   return (
     <div className="glass rounded-xl border border-border p-3 border-glow">
       <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-xs font-semibold text-foreground">{t.chart.title}</span>
+        <span className="text-xs font-semibold text-foreground">{heading ?? t.chart.title}</span>
         <span className="text-[10px] text-muted-foreground font-mono">
           {hovered
             ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
-            : t.chart.recentBars(pair, candles.length)}
+            : subtitle ?? t.chart.recentBars(pair, candles.length)}
         </span>
       </div>
       <svg
@@ -192,6 +227,28 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
           );
         })}
 
+        {/* event markers: vertical rule + label, labels alternate rows */}
+        {markerCols.map((m) => {
+          const color = MARKER_COLORS[m.kind];
+          const mx = x(m.idx);
+          const labelY = PAD_TOP + 9 + (m.row % 2) * 11;
+          return (
+            <g key={`${m.kind}-${m.time}`} data-testid={`chart-marker-${m.kind}`}>
+              <line
+                x1={mx} x2={mx}
+                y1={PAD_TOP} y2={H - PAD_BOTTOM}
+                stroke={color} strokeWidth="1" strokeDasharray="3 2" opacity="0.85"
+              />
+              <text
+                x={mx + 3} y={labelY}
+                fontSize="8.5" fontWeight="700" fontFamily="monospace" fill={color}
+              >
+                {m.label}
+              </text>
+            </g>
+          );
+        })}
+
         {/* trade levels: line at the true price, pill in its own lane */}
         {pillRows.map(({ level, y: pillY }) => {
           const trueY = y(level.value);
@@ -225,14 +282,14 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
           );
         })}
 
-        {/* time axis: first / middle / last labels only */}
+        {/* time axis (JST): first / middle / last labels only */}
         {[0, Math.floor(candles.length / 2), candles.length - 1].map((i) => (
           <text
             key={i}
             x={x(i)} y={H - 8}
             fontSize="8.5" fill={COLORS.text} fontFamily="monospace" textAnchor="middle"
           >
-            {candles[i].datetime.slice(5, 16)}
+            {formatCandleLabel(candles[i].datetime, t.intlLocale)}
           </text>
         ))}
       </svg>

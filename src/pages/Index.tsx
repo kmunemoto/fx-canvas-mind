@@ -25,7 +25,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v15-2026-09-03T06:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v16-2026-09-03T09:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -202,9 +202,9 @@ const Index = () => {
     try {
       const { data, error } = await supabase
         .from("analyses")
-        .select("id,pair,interval,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,outcome,outcome_price,created_at,closed_at")
+        .select("id,pair,interval,mode,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,price_at_signal,outcome,outcome_price,created_at,closed_at,evaluation")
         .order("created_at", { ascending: false })
-        .limit(10);
+        .limit(30);
       if (!error && Array.isArray(data)) {
         setHistory(data as AnalysisRecord[]);
       }

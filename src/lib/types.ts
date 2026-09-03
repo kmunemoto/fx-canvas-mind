@@ -91,23 +91,75 @@ export interface NumericCandle {
   close: number;
 }
 
-export type TradeOutcome = "pending" | "win" | "loss" | "expired" | "skipped";
+// 'untriggered': the entry price was never reached, so no trade happened.
+// 'ambiguous': SL and TP1 were touched inside one bar and the order could
+// not be determined. Neither counts toward the win rate.
+export type TradeOutcome =
+  | "pending"
+  | "win"
+  | "loss"
+  | "expired"
+  | "skipped"
+  | "untriggered"
+  | "ambiguous";
+
+export type OutcomeReason = "missed" | "invalidated" | "no_fill" | "incoherent";
+export type OrderType = "market" | "limit" | "stop" | "unknown";
+
+export interface OutcomePathPoint {
+  t: string; // ISO UTC of the bar open
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+// Mirror of Evaluation in supabase/functions/track-outcomes/evaluate.ts —
+// the evidence the tracker stores with each judgement
+export interface OutcomeEvaluation {
+  version: number;
+  eval_interval: string;
+  order_type: OrderType;
+  price_at_signal: number | null;
+  filled_at: string | null;
+  fill_price: number | null;
+  resolution: "win" | "loss" | "untriggered" | "ambiguous" | "expired" | null;
+  reason: OutcomeReason | null;
+  resolved_at: string | null;
+  refined: boolean;
+  mfe: number | null;
+  mae: number | null;
+  mfe_r: number | null;
+  mae_r: number | null;
+  tps_hit: number[];
+  bars_after_signal: number;
+  window_covers_signal: boolean;
+  first_candle_at: string | null;
+  last_candle_at: string | null;
+  checked_at: string;
+  path: OutcomePathPoint[];
+}
 
 // Row shape of public.analyses as read by the client
 export interface AnalysisRecord {
   id: string;
   pair: string;
   interval: string;
+  mode: string | null;
   signal: "BUY" | "SELL" | "WAIT";
   confidence: number | null;
   thesis: string | null;
   entry_point: number | null;
   stop_loss: number | null;
   take_profit_1: number | null;
+  take_profit_2: number | null;
+  take_profit_3: number | null;
+  price_at_signal: number | null;
   outcome: TradeOutcome;
   outcome_price: number | null;
   created_at: string;
   closed_at: string | null;
+  evaluation: OutcomeEvaluation | null;
 }
 
 export interface HistoryEntry {

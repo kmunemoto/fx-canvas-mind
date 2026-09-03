@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v15-2026-09-03T06:00:00Z";
+const FUNCTION_VERSION = "analyze-v16-2026-09-03T09:00:00Z";
 
 import {
   computeSnapshot,
@@ -660,7 +660,9 @@ Deno.serve(async (req: Request) => {
     stage = "fetch_market_data";
     const timeframes = TF_CHAIN[interval];
     const fetchSeries = async (tf: string, outputsize: number) => {
-      const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(currencyPair)}&interval=${encodeURIComponent(tf)}&outputsize=${outputsize}&apikey=${twelveDataKey}`;
+      // timezone=UTC: the tracker and the chart both read these timestamps as
+      // UTC, and the provider's default zone is not.
+      const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(currencyPair)}&interval=${encodeURIComponent(tf)}&outputsize=${outputsize}&timezone=UTC&apikey=${twelveDataKey}`;
       const res = await fetch(url);
       const raw = await res.text();
       const parsed = parseJsonResponse(raw);
@@ -1007,6 +1009,9 @@ Deno.serve(async (req: Request) => {
           take_profit_3: normalizedAnalysis.take_profit_3_num,
           risk_reward: normalizedAnalysis.risk_reward_ratio,
           result: normalizedAnalysis,
+          // Market price at the time of the plan: tells the tracker whether
+          // the entry was a market, limit or stop order
+          price_at_signal: Number.isFinite(entrySnapshot.price) ? entrySnapshot.price : null,
           outcome: trackable ? "pending" : "skipped",
         }),
       });
