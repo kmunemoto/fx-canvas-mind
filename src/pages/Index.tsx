@@ -137,20 +137,35 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
   };
 };
 
+const DEFAULT_SETTINGS: AppSettings = {
+  accountBalance: 1_000_000,
+  riskPercent: 1,
+  currencyPair: "USD/JPY",
+};
+
+// Settings saved before the pips fields were removed are still in the
+// browser; keep the pair and fill in the rest rather than resetting it
+const withDefaults = (stored: unknown): AppSettings => {
+  const s = stored && typeof stored === "object" ? stored as Partial<AppSettings> : {};
+  const num = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
+  return {
+    accountBalance: num(s.accountBalance, DEFAULT_SETTINGS.accountBalance),
+    riskPercent: num(s.riskPercent, DEFAULT_SETTINGS.riskPercent),
+    currencyPair: typeof s.currencyPair === "string" && s.currencyPair ? s.currencyPair : DEFAULT_SETTINGS.currencyPair,
+  };
+};
+
 const loadSettings = (): AppSettings => {
   try {
     const stored = localStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
+    if (stored) return withDefaults(JSON.parse(stored));
   } catch {}
   try {
     const stored = sessionStorage.getItem("fx-settings-v2");
-    if (stored) return JSON.parse(stored);
+    if (stored) return withDefaults(JSON.parse(stored));
   } catch {}
-  return {
-    defaultStopLossPips: 30,
-    defaultTakeProfitPips: 60,
-    currencyPair: "USD/JPY",
-  };
+  return DEFAULT_SETTINGS;
 };
 
 const saveSettings = (s: AppSettings) => {
@@ -275,6 +290,12 @@ const Index = () => {
   }, [userId, loadHistory]);
 
   const handleAnalyze = useCallback(async () => {
+    // The server refuses this anyway (analyze checks the plan before doing any
+    // paid work); this just avoids a pointless round trip and a raw error
+    if (isFreeUser) {
+      navigate("/pricing");
+      return;
+    }
     setLoading(true);
     setLoadingStage("fetching");
     setResult(null);
@@ -393,7 +414,7 @@ const Index = () => {
       setLoading(false);
       setLoadingStage("idle");
     }
-  }, [settings, interval, includeFundamental, locale, t, toast, loadHistory]);
+  }, [settings, interval, includeFundamental, locale, t, toast, loadHistory, isFreeUser, navigate]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -447,6 +468,8 @@ const Index = () => {
           remaining={remaining}
           includeFundamental={includeFundamental}
           onIncludeFundamentalChange={setIncludeFundamental}
+          locked={isFreeUser}
+          onSubscribe={() => navigate("/pricing")}
         />
 
         {limitReached && (
@@ -481,6 +504,7 @@ const Index = () => {
                   techData={techData}
                   pair={resultMeta.pair}
                   interval={resultMeta.interval}
+                  settings={settings}
                 />
               </>
             ) : (

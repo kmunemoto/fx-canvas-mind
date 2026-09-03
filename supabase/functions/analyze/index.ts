@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v21-2026-09-03T19:30:00Z";
+const FUNCTION_VERSION = "analyze-v22-2026-09-03T21:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -46,6 +46,10 @@ const corsHeaders = {
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+
+// Plans that may run an analysis at all. Anything else — "free", an expired
+// subscription, a missing profile row — is refused before any paid work.
+const PAID_PLANS = new Set(["light", "standard", "pro"]);
 
 // Server-side allowlist mirroring the pairs the UI offers. Without it any
 // authenticated caller could aim the analyzer (and the paid market-data +
@@ -644,13 +648,28 @@ Deno.serve(async (req: Request) => {
 
     const isAdmin = ADMIN_EMAILS.includes((user.email || "").toLowerCase());
     const plan = isAdmin ? "pro" : (profile?.plan || "free");
+
+    // Analysis is a paid feature. Every call costs a model turn and several
+    // market-data requests, so an account without a subscription is turned
+    // away here — before any of that is spent, and before a quota row is
+    // touched. The client hides the button, but the client is not the guard.
+    stage = "check_subscription";
+    if (!isAdmin && !PAID_PLANS.has(plan)) {
+      return json({
+        ok: false,
+        error: L.subscriptionRequired,
+        diagnostics: { error_stage: "subscription_required", stage, plan },
+        subscription_required: true,
+        plan,
+      }, 402);
+    }
+
     const limits: Record<string, number> = {
-      free: 2,
       light: 10,
       standard: 30,
       pro: 9999,
     };
-    const dailyLimit = limits[plan] || 3;
+    const dailyLimit = limits[plan] || 10;
 
     // Check-and-increment in one statement, before any paid work. Reading the
     // count, testing it, then writing it back lets concurrent requests all

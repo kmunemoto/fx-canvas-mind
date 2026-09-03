@@ -33,6 +33,8 @@ interface LocaleStrings {
   // not appended twice when the model followed the instruction.
   disclaimerMarker: string;
   fallbackWarning: string;
+  // Shown when an account without a subscription asks for an analysis
+  subscriptionRequired: string;
   // Shown when a plan was downgraded to WAIT because the market would never
   // have reached its entry (see entry.ts)
   entryRejected: (parts: {
@@ -75,6 +77,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimer: "この分析は参考情報です。投資判断は自己責任で行ってください",
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
+    subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
@@ -121,6 +124,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimer: "This analysis is reference information. Trading decisions are your own responsibility.",
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
+    subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
     entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";

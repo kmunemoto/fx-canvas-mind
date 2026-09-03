@@ -42,8 +42,11 @@ export interface AnalysisResult {
 }
 
 export interface AppSettings {
-  defaultStopLossPips: number;
-  defaultTakeProfitPips: number;
+  // The stop and target widths are the analyzer's to decide (ATR and
+  // structure, inside the entry gate's bounds). What belongs to the trader is
+  // the size: the balance and the share of it risked on one trade.
+  accountBalance: number;
+  riskPercent: number;
   currencyPair: string;
 }
 
