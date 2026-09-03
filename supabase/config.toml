@@ -7,6 +7,13 @@ verify_jwt = false
 [functions.create-checkout]
 verify_jwt = false
 
+# Stripe calls this with its own signature, not a Supabase JWT
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.cancel-subscription]
+verify_jwt = false
+
 # Authenticates in the function body: a user JWT from the app, or the sweep
 # token from the pg_cron job (see migrations/20260903090000_*.sql).
 [functions.track-outcomes]

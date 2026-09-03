@@ -118,13 +118,14 @@ describe("AnalysisHistory (DB records)", () => {
     price_at_signal: null, evaluation: null,
   };
   const evaluation: OutcomeEvaluation = {
-    version: 2, eval_interval: "15min", order_type: "limit", price_at_signal: 150.4,
+    version: 3, eval_interval: "15min", order_type: "limit", price_at_signal: 150.4, possible_fill: false,
     filled_at: "2026-08-20T02:00:00Z", fill_price: 150,
-    resolution: "win", reason: null, resolved_at: "2026-08-20T05:00:00Z", refined: false,
+    resolution: "win", reason: null, resolved_at: "2026-08-20T05:00:00Z",
+    refined: false, refine_pending: false, refine_attempts: 0,
     mfe: 2.1, mae: 0.3, mfe_r: 2.1, mae_r: 0.3, tps_hit: [1, 2],
     bars_after_signal: 20, window_covers_signal: true,
     first_candle_at: "2026-08-20T00:00:00Z", last_candle_at: "2026-08-20T05:00:00Z",
-    checked_at: "2026-08-20T06:00:00Z",
+    checked_at: "2026-08-20T06:00:00Z", note: null,
     path: [
       { t: "2026-08-19T23:00:00Z", o: 150.4, h: 150.6, l: 150.3, c: 150.5 },
       { t: "2026-08-20T02:00:00Z", o: 150.3, h: 150.4, l: 149.9, c: 150.2 },
@@ -167,14 +168,15 @@ describe("AnalysisHistory (DB records)", () => {
 
   it("breaks the record down by timeframe, mode and confidence", () => {
     render(<AnalysisHistory records={records} />);
-    expect(screen.getByRole("tab", { name: "時間足" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "時間足" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("4h")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "モード" }));
+    fireEvent.click(screen.getByRole("button", { name: "モード" }));
+    expect(screen.getByRole("button", { name: "モード" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("ニュース込み")).toBeInTheDocument();
     expect(screen.getByText("テクニカル")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "確信度" }));
+    fireEvent.click(screen.getByRole("button", { name: "確信度" }));
     expect(screen.getByText("70–79%")).toBeInTheDocument();
   });
 
@@ -199,6 +201,14 @@ describe("AnalysisHistory (DB records)", () => {
     fireEvent.click(screen.getByRole("button", { name: /SELL 66%/ }));
     expect(screen.getByText("約定前に損切り水準へ到達（シナリオ崩れ）")).toBeInTheDocument();
     expect(screen.getByText("未約定", { selector: "span.font-mono" })).toBeInTheDocument();
+  });
+
+  it("does not promise a judgement for a WAIT row", () => {
+    render(<AnalysisHistory records={records} />);
+    fireEvent.click(screen.getByRole("button", { name: /WAIT 40%/ }));
+    expect(screen.getByText("WAIT（トレードプランなし）のため判定対象外")).toBeInTheDocument();
+    expect(screen.queryByText(/次回の自動判定/)).toBeNull();
+    expect(screen.queryByText("エントリー")).toBeNull();
   });
 
   it("renders nothing with no records", () => {

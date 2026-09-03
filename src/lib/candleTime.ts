@@ -20,7 +20,9 @@ export const formatJst = (
     timeZone: "Asia/Tokyo",
     month: "2-digit",
     day: "2-digit",
-    ...(withTime ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}),
+    // h23, not hour12:false — the latter has rendered midnight as "24:00" in
+    // some engines
+    ...(withTime ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" as const } : {}),
   });
 };
 

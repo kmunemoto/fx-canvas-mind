@@ -27,8 +27,11 @@ export const CONFIDENCE_BANDS: Array<[number, number | null]> = [
   [80, null],
 ];
 
+export const UNKNOWN_BAND = "unknown";
+
 export const confidenceBandKey = (confidence: number | null): string => {
-  const c = typeof confidence === "number" && Number.isFinite(confidence) ? confidence : 0;
+  if (typeof confidence !== "number" || !Number.isFinite(confidence)) return UNKNOWN_BAND;
+  const c = confidence;
   for (const [lo, hi] of CONFIDENCE_BANDS) {
     if (hi === null || c <= hi) return hi === null ? `${lo}+` : `${lo}-${hi}`;
   }
@@ -78,5 +81,5 @@ export const byConfidence = (records: AnalysisRecord[]): OutcomeTally[] =>
   groupBy(
     records,
     (r) => confidenceBandKey(r.confidence),
-    CONFIDENCE_BANDS.map(([lo, hi]) => (hi === null ? `${lo}+` : `${lo}-${hi}`)),
+    [...CONFIDENCE_BANDS.map(([lo, hi]) => (hi === null ? `${lo}+` : `${lo}-${hi}`)), UNKNOWN_BAND],
   );

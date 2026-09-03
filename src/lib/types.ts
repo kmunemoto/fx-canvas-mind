@@ -103,7 +103,7 @@ export type TradeOutcome =
   | "untriggered"
   | "ambiguous";
 
-export type OutcomeReason = "missed" | "invalidated" | "no_fill" | "incoherent";
+export type OutcomeReason = "missed" | "invalidated" | "no_fill" | "incoherent" | "no_data";
 export type OrderType = "market" | "limit" | "stop" | "unknown";
 
 export interface OutcomePathPoint {
@@ -121,12 +121,17 @@ export interface OutcomeEvaluation {
   eval_interval: string;
   order_type: OrderType;
   price_at_signal: number | null;
+  // The bar around the signal reached the entry but the timing is unknown
+  possible_fill: boolean;
   filled_at: string | null;
   fill_price: number | null;
   resolution: "win" | "loss" | "untriggered" | "ambiguous" | "expired" | null;
   reason: OutcomeReason | null;
   resolved_at: string | null;
   refined: boolean;
+  // Finer bars were needed but not available on the last check
+  refine_pending: boolean;
+  refine_attempts: number;
   mfe: number | null;
   mae: number | null;
   mfe_r: number | null;
@@ -137,6 +142,7 @@ export interface OutcomeEvaluation {
   first_candle_at: string | null;
   last_candle_at: string | null;
   checked_at: string;
+  note: string | null;
   path: OutcomePathPoint[];
 }
 

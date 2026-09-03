@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v16-2026-09-03T09:00:00Z";
+const FUNCTION_VERSION = "analyze-v17-2026-09-03T10:00:00Z";
 
 import {
   computeSnapshot,
@@ -166,7 +166,7 @@ const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
   const p = (v: number | null) => fmt(v, decimals, "n/a");
   const x = (v: number | null, d = 2) => fmt(v, d, "n/a");
   return [
-    `現在値: ${p(s.price)} (${s.datetime}) 前足比 ${x(s.changePct)}%`,
+    `現在値: ${p(s.price)} (${s.datetime} UTC) 前足比 ${x(s.changePct)}%`,
     `RSI14: ${x(s.rsi)} | Stoch %K/%D: ${x(s.slowK)}/${x(s.slowD)} | ADX14: ${x(s.adx)}`,
     `MACD: ${x(s.macd, 5)} Signal: ${x(s.macdSignal, 5)} Hist: ${x(s.macdHist, 5)}`,
     `SMA20/50/200: ${p(s.sma20)} / ${p(s.sma50)} / ${p(s.sma200)}`,
@@ -191,6 +191,7 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 - 確信度が60未満の場合、signal は必ず "WAIT"。
 - 時間足の方向が矛盾する場合は確信度を下げる。
 - すべての価格は分析対象ペアの実際の価格スケールで出力する。
+- 入力データの時刻はすべて UTC。文章で時刻に触れるときは日本時間（JST = UTC+9）に換算し、「JST」を添える。
 {{LANGUAGE_RULE}}
 - warnings には必ず「この分析は参考情報です。投資判断は自己責任で行ってください」を含める。
 - ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
@@ -719,7 +720,7 @@ Deno.serve(async (req: Request) => {
       const candles = seriesByTf[i];
       const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
-      return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime,open,high,low,close / 古い順):\n${lines}`;
+      return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();

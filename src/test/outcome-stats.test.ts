@@ -74,7 +74,8 @@ describe("groupings", () => {
     expect(confidenceBandKey(65)).toBe("60-69");
     expect(confidenceBandKey(72)).toBe("70-79");
     expect(confidenceBandKey(81)).toBe("80+");
-    expect(confidenceBandKey(null)).toBe("0-59");
+    expect(confidenceBandKey(null)).toBe("unknown");
     expect(byConfidence(records).map((g) => g.key)).toEqual(["0-59", "60-69", "70-79", "80+"]);
+    expect(byConfidence([...records, rec({ confidence: null, outcome: "win" })]).map((g) => g.key)).toEqual(["0-59", "60-69", "70-79", "80+", "unknown"]);
   });
 });

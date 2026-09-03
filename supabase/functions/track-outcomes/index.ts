@@ -20,19 +20,20 @@ import {
   hasFutureCandles,
   isDue,
   judgePlan,
+  stampOnly,
   type Evaluation,
   type FineFetcher,
   type OpenRow,
 } from "./evaluate.ts";
 
-const TRACKER_VERSION = "track-outcomes-v2-2026-09-03T09:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v3-2026-09-03T10:00:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
-// Market-data requests per run: one per pair+interval group plus a few
-// refinements, kept inside the shared API key's per-minute budget
-const MAX_GROUPS = 4;
-const MAX_REFINEMENTS = 4;
+// Market-data requests per run (series fetches + refinements together). The
+// shared key allows 8 per minute; the rest is left for analyses running at
+// the same moment. Anything beyond the budget waits for the next tick.
+const MAX_REQUESTS = 5;
 const TWELVE_DATA = "https://api.twelvedata.com/time_series";
 
 const corsHeaders = {
@@ -68,6 +69,10 @@ const constantTimeEqual = (a: string, b: string): boolean => {
 // "YYYY-MM-DD HH:mm:ss" in UTC, the form Twelve Data's date filters take
 const tdDate = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
+// Percent-encoded query string (a space becomes %20, not the form-style "+")
+const query = (params: Record<string, string>) =>
+  Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+
 type Scope = { kind: "sweep" } | { kind: "user"; userId: string };
 
 Deno.serve(async (req: Request) => {
@@ -95,6 +100,18 @@ Deno.serve(async (req: Request) => {
         ...init,
         headers: { ...serviceHeaders, ...(init.headers ?? {}) },
       });
+    // PATCH that reports whether it matched anything, so a cooldown can be
+    // claimed atomically and an outcome counted only when it was written
+    const patchRows = async (path: string, body: JsonRecord): Promise<number> => {
+      const res = await rest(path, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      const rows = res.ok ? await res.json().catch(() => null) : null;
+      if (!res.ok) await res.text().catch(() => {});
+      return Array.isArray(rows) ? rows.length : 0;
+    };
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
 
@@ -108,21 +125,16 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, error: "認証に失敗しました" }, 401);
       }
 
-      const stateRes = await rest("tracker_state?id=eq.1&select=last_sweep_at", {
-        headers: { Accept: "application/vnd.pgrst.object+json" },
-      });
-      const stateRaw = stateRes.ok ? await stateRes.json().catch(() => null) : null;
-      const lastSweep = isRecord(stateRaw) && typeof stateRaw.last_sweep_at === "string"
-        ? Date.parse(stateRaw.last_sweep_at)
-        : NaN;
-      if (Number.isFinite(lastSweep) && nowMs - lastSweep < SWEEP_COOLDOWN_MS) {
+      // Claim the global cooldown in one conditional update: two ticks
+      // arriving together cannot both pass
+      const cutoff = encodeURIComponent(new Date(nowMs - SWEEP_COOLDOWN_MS).toISOString());
+      const claimed = await patchRows(
+        `tracker_state?id=eq.1&or=(last_sweep_at.is.null,last_sweep_at.lt.${cutoff})`,
+        { last_sweep_at: nowIso },
+      );
+      if (claimed === 0) {
         return json({ ok: true, mode: "sweep", updated: 0, skipped: "cooldown", version: TRACKER_VERSION });
       }
-      await rest("tracker_state?id=eq.1", {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({ last_sweep_at: nowIso }),
-      }).then((r) => r.text()).catch(() => {});
       scope = { kind: "sweep" };
     } else {
       const authHeader = req.headers.get("Authorization");
@@ -141,36 +153,29 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, error: "認証に失敗しました" }, 401);
       }
 
-      // Per-user cooldown: each call can trigger several market-data fetches
-      // against a shared API key
-      const trackedRes = await rest(
-        `profiles?id=eq.${encodeURIComponent(userId)}&select=last_tracked_at`,
-        { headers: { Accept: "application/vnd.pgrst.object+json" } },
+      // Per-user cooldown, claimed the same way: each call can trigger
+      // several market-data fetches against a shared API key
+      const cutoff = encodeURIComponent(new Date(nowMs - USER_COOLDOWN_MS).toISOString());
+      const claimed = await patchRows(
+        `profiles?id=eq.${encodeURIComponent(userId)}&or=(last_tracked_at.is.null,last_tracked_at.lt.${cutoff})`,
+        { last_tracked_at: nowIso },
       );
-      if (trackedRes.ok) {
-        const trackedRaw = await trackedRes.json().catch(() => null);
-        const lastTracked = isRecord(trackedRaw) && typeof trackedRaw.last_tracked_at === "string"
-          ? Date.parse(trackedRaw.last_tracked_at)
-          : NaN;
-        if (Number.isFinite(lastTracked) && nowMs - lastTracked < USER_COOLDOWN_MS) {
-          return json({ ok: true, mode: "user", updated: 0, skipped: "cooldown", version: TRACKER_VERSION });
-        }
+      if (claimed === 0) {
+        return json({ ok: true, mode: "user", updated: 0, skipped: "cooldown", version: TRACKER_VERSION });
       }
-      await rest(`profiles?id=eq.${encodeURIComponent(userId)}`, {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({ last_tracked_at: nowIso }),
-      }).then((r) => r.text()).catch(() => {});
       scope = { kind: "user", userId };
     }
 
     // ---- open plans that are due a look ----------------------------------
+    // Stalest first (never-checked rows ahead of everything), so a backlog
+    // larger than one page still gets through over successive ticks
     const select = "id,pair,interval,signal,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,created_at,price_at_signal,evaluation";
     const ownerFilter = scope.kind === "user" ? `user_id=eq.${encodeURIComponent(scope.userId)}&` : "";
     const listRes = await rest(
-      `analyses?${ownerFilter}outcome=eq.pending&select=${select}&order=created_at.asc&limit=${MAX_ROWS}`,
+      `analyses?${ownerFilter}outcome=eq.pending&select=${select}&order=evaluation->>checked_at.asc.nullsfirst,created_at.asc&limit=${MAX_ROWS}`,
     );
     if (!listRes.ok) {
+      await listRes.text().catch(() => {});
       return json({ ok: false, error: "履歴の取得に失敗しました" }, 500);
     }
 
@@ -215,10 +220,13 @@ Deno.serve(async (req: Request) => {
       groups.set(key, list);
     }
 
+    let requests = 0;
     const fetchSeries = async (params: Record<string, string>): Promise<Candle[] | null> => {
-      const qs = new URLSearchParams({ ...params, timezone: "UTC", apikey: twelveDataKey });
+      if (requests >= MAX_REQUESTS) return null;
+      requests++;
+      const qs = query({ ...params, timezone: "UTC", apikey: twelveDataKey });
       try {
-        const res = await fetch(`${TWELVE_DATA}?${qs.toString()}`);
+        const res = await fetch(`${TWELVE_DATA}?${qs}`);
         const parsed = await res.json().catch(() => null);
         if (!res.ok || !isRecord(parsed) || parsed.status === "error") {
           console.error("market data error:", res.status, isRecord(parsed) ? String(parsed.message ?? "").slice(0, 200) : "");
@@ -233,7 +241,7 @@ Deno.serve(async (req: Request) => {
 
     let refinements = 0;
     const fetchFine: FineFetcher = async (pair, fromMs, toMs) => {
-      if (refinements >= MAX_REFINEMENTS) return null;
+      if (requests >= MAX_REQUESTS) return null; // deferred to a later tick
       refinements++;
       return await fetchSeries({
         symbol: pair,
@@ -246,12 +254,23 @@ Deno.serve(async (req: Request) => {
 
     let checked = 0;
     let updated = 0;
+    let deferred = 0;
     let groupCount = 0;
     const errors: string[] = [];
     const resolved: Array<{ id: string; outcome: string }> = [];
 
+    const writeRow = async (row: OpenRow, patch: JsonRecord): Promise<boolean> => {
+      const n = await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}&outcome=eq.pending`, patch);
+      if (n === 0) errors.push(`${row.id}: not updated`);
+      return n > 0;
+    };
+
     for (const [key, groupRows] of groups) {
-      if (groupCount >= MAX_GROUPS) break;
+      if (requests >= MAX_REQUESTS) {
+        deferred += groupRows.length;
+        errors.push(`${key}: deferred (request budget)`);
+        continue;
+      }
       groupCount++;
 
       const [pair, evalInterval] = key.split("|");
@@ -260,15 +279,22 @@ Deno.serve(async (req: Request) => {
         interval: evalInterval,
         outputsize: String(EVAL_OUTPUTSIZE[evalInterval] ?? 1500),
       });
+
+      let refusal: string | null = null;
       if (!candles || candles.length === 0) {
-        errors.push(`${key}: no data`);
-        continue;
-      }
-      if (hasFutureCandles(candles, nowMs)) {
+        refusal = "no_data";
+      } else if (hasFutureCandles(candles, nowMs)) {
         // Judging against mis-dated bars is how the first tracker went wrong;
         // leave the rows alone and say so
         console.error("market data dated in the future, refusing to judge:", key, candles[candles.length - 1].datetime);
-        errors.push(`${key}: candles dated in the future`);
+        refusal = "future_candles";
+      }
+      if (refusal !== null || !candles) {
+        errors.push(`${key}: ${refusal ?? "no_data"}`);
+        // Stamp the rows so the same group is not re-fetched every tick
+        for (const row of groupRows) {
+          await writeRow(row, { evaluation: stampOnly(row, evalInterval, nowMs, refusal ?? "no_data") });
+        }
         continue;
       }
 
@@ -283,16 +309,9 @@ Deno.serve(async (req: Request) => {
           }
           : { evaluation: judgement.evaluation };
 
-        const updateRes = await rest(
-          `analyses?id=eq.${encodeURIComponent(row.id)}&outcome=eq.pending`,
-          { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(patch) },
-        );
-        await updateRes.text();
-        if (!updateRes.ok) {
-          errors.push(`${row.id}: update failed (${updateRes.status})`);
-          continue;
-        }
+        if (!(await writeRow(row, patch))) continue;
         checked++;
+        if (judgement.evaluation.refine_pending) deferred++;
         if (judgement.resolution) {
           updated++;
           resolved.push({ id: row.id, outcome: judgement.resolution });
@@ -306,20 +325,18 @@ Deno.serve(async (req: Request) => {
       open: rows.length,
       due: due.length,
       groups: groupCount,
+      requests,
       refinements,
       checked,
       updated,
+      deferred,
       resolved,
       errors,
       version: TRACKER_VERSION,
     };
 
     if (scope.kind === "sweep") {
-      await rest("tracker_state?id=eq.1", {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({ last_sweep_result: { ...summary, at: nowIso } }),
-      }).then((r) => r.text()).catch(() => {});
+      await patchRows("tracker_state?id=eq.1", { last_sweep_result: { ...summary, at: nowIso } });
     }
 
     return json(summary);

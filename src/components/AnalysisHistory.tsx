@@ -50,6 +50,7 @@ const AnalysisHistory = ({ records }: Props) => {
   const groupLabel = (key: string) => {
     if (breakdown === "timeframe") return key;
     if (breakdown === "mode") return t.history.modes[key as keyof typeof t.history.modes] ?? key;
+    if (key === "unknown") return t.history.stats.unknownBand;
     const [lo, hi] = parseBand(key);
     return t.history.stats.confidenceBand(lo, hi);
   };
@@ -59,17 +60,19 @@ const AnalysisHistory = ({ records }: Props) => {
     { id: "mode", label: t.history.stats.byMode },
     { id: "confidence", label: t.history.stats.byConfidence },
   ];
+  const activeLabel = breakdowns.find((b) => b.id === breakdown)?.label ?? "";
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-primary">
-          <Clock className="h-4 w-4" />
+          <Clock className="h-4 w-4" aria-hidden="true" />
           <h3 className="text-sm font-semibold">{t.history.title}</h3>
+          <span className="text-[10px] text-muted-foreground">{t.history.scope(safe.length)}</span>
         </div>
         {overall.winRate !== null && (
           <div className="flex items-center gap-1.5 text-xs">
-            <TrendingUp className="h-3.5 w-3.5 text-primary" />
+            <TrendingUp className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
             <span className="text-muted-foreground">{t.history.winRate}</span>
             <span className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}>
               {overall.winRate}%
@@ -86,13 +89,12 @@ const AnalysisHistory = ({ records }: Props) => {
         <div className="rounded-lg border border-border/60 bg-background/30 p-2 space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">{t.history.stats.title}</span>
-            <div className="flex gap-1" role="tablist">
+            <div className="flex gap-1">
               {breakdowns.map((b) => (
                 <button
                   key={b.id}
                   type="button"
-                  role="tab"
-                  aria-selected={breakdown === b.id}
+                  aria-pressed={breakdown === b.id}
                   onClick={() => setBreakdown(b.id)}
                   className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
                     breakdown === b.id
@@ -111,10 +113,11 @@ const AnalysisHistory = ({ records }: Props) => {
             <table className="w-full text-[11px] font-mono">
               <thead>
                 <tr className="text-muted-foreground text-[10px]">
-                  <th className="text-left font-normal py-0.5">{t.history.stats.title}</th>
+                  <th className="text-left font-normal py-0.5">{activeLabel}</th>
                   <th className="text-right font-normal">{t.history.stats.record}</th>
                   <th className="text-right font-normal">{t.history.winRate}</th>
                   <th className="text-right font-normal">{t.history.stats.untriggered}</th>
+                  <th className="text-right font-normal">{t.history.stats.other}</th>
                   <th className="text-right font-normal">{t.history.stats.open}</th>
                 </tr>
               </thead>
@@ -131,6 +134,7 @@ const AnalysisHistory = ({ records }: Props) => {
                       {g.winRate === null ? "—" : `${g.winRate}%`}
                     </td>
                     <td className="text-right text-warning">{g.untriggered}</td>
+                    <td className="text-right text-muted-foreground">{g.ambiguous + g.expired}</td>
                     <td className="text-right text-muted-foreground">{g.open}</td>
                   </tr>
                 ))}
@@ -146,11 +150,13 @@ const AnalysisHistory = ({ records }: Props) => {
           const badgeCls = OUTCOME_CLASS[r.outcome] ?? OUTCOME_CLASS.pending;
           const badgeLabel = t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
           const isOpen = expanded === r.id;
+          const panelId = `outcome-${r.id}`;
           return (
             <div key={r.id} className="border-b border-border/50 last:border-0">
               <button
                 type="button"
                 aria-expanded={isOpen}
+                aria-controls={panelId}
                 onClick={() => setExpanded(isOpen ? null : r.id)}
                 className="w-full flex items-center gap-2 text-xs py-1.5 text-left hover:bg-secondary/40 rounded px-1 -mx-1 transition-colors"
               >
@@ -163,10 +169,15 @@ const AnalysisHistory = ({ records }: Props) => {
                   {badgeLabel}
                 </span>
                 {isOpen
-                  ? <ChevronUp className="h-3 w-3 text-muted-foreground shrink-0" aria-label={t.history.detail.collapse} />
-                  : <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" aria-label={t.history.detail.expand} />}
+                  ? <ChevronUp className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden="true" />
+                  : <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden="true" />}
+                <span className="sr-only">{isOpen ? t.history.detail.collapse : t.history.detail.expand}</span>
               </button>
-              {isOpen && <OutcomeDetail record={r} />}
+              {isOpen && (
+                <div id={panelId}>
+                  <OutcomeDetail record={r} />
+                </div>
+              )}
             </div>
           );
         })}

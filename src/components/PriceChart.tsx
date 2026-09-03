@@ -133,13 +133,15 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
     return rows;
   }, [geometry, levels]);
 
-  // Each marker sits on the last candle that opened at or before its time
+  // Each marker sits on the last candle that opened at or before its time;
+  // one dated before the first candle is not drawn rather than pinned to it
   const markerCols = useMemo(() => {
     if (markers.length === 0 || candles.length === 0) return [];
     const opens = candles.map((c) => parseUtcCandleTime(c.datetime));
+    const firstOpen = opens.find((o) => Number.isFinite(o));
     return markers.flatMap((m, row) => {
       const ms = Date.parse(m.time);
-      if (!Number.isFinite(ms)) return [];
+      if (!Number.isFinite(ms) || firstOpen === undefined || ms < firstOpen) return [];
       let idx = 0;
       for (let i = 0; i < opens.length; i++) {
         if (Number.isFinite(opens[i]) && opens[i] <= ms) idx = i;
