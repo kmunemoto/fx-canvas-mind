@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { render as rtlRender, screen, type RenderResult } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
 import AnalysisResultView from "../components/AnalysisResultView";
 import AnalysisHistory from "../components/AnalysisHistory";
 import AnalysisStages from "../components/AnalysisStages";
-import type { AnalysisRecord, AnalysisResult, TechnicalData } from "../lib/types";
+import type { AnalysisRecord, AnalysisResult, OutcomeEvaluation, TechnicalData } from "../lib/types";
 
 // Everything user-facing reads the dictionary now, so the provider is part of
 // rendering these components at all. Tests default to Japanese, which is what
@@ -113,30 +113,102 @@ describe("AnalysisResultView (v9 payload)", () => {
 });
 
 describe("AnalysisHistory (DB records)", () => {
+  const base = {
+    mode: "full", thesis: null, take_profit_2: null, take_profit_3: null,
+    price_at_signal: null, evaluation: null,
+  };
+  const evaluation: OutcomeEvaluation = {
+    version: 3, eval_interval: "15min", order_type: "limit", price_at_signal: 150.4, possible_fill: false,
+    filled_at: "2026-08-20T02:00:00Z", fill_price: 150,
+    resolution: "win", reason: null, resolved_at: "2026-08-20T05:00:00Z",
+    refined: false, refine_pending: false, refine_attempts: 0,
+    mfe: 2.1, mae: 0.3, mfe_r: 2.1, mae_r: 0.3, tps_hit: [1, 2],
+    bars_after_signal: 20, window_covers_signal: true,
+    first_candle_at: "2026-08-20T00:00:00Z", last_candle_at: "2026-08-20T05:00:00Z",
+    checked_at: "2026-08-20T06:00:00Z", note: null,
+    path: [
+      { t: "2026-08-19T23:00:00Z", o: 150.4, h: 150.6, l: 150.3, c: 150.5 },
+      { t: "2026-08-20T02:00:00Z", o: 150.3, h: 150.4, l: 149.9, c: 150.2 },
+      { t: "2026-08-20T05:00:00Z", o: 150.8, h: 152.3, l: 150.7, c: 152.0 },
+    ],
+  };
   const records: AnalysisRecord[] = [
     {
-      id: "a", pair: "USD/JPY", interval: "1h", signal: "BUY", confidence: 72,
-      thesis: null, entry_point: 150, stop_loss: 149, take_profit_1: 152,
-      outcome: "win", outcome_price: 152, created_at: "2026-08-20T00:00:00Z", closed_at: "2026-08-21T00:00:00Z",
+      ...base, id: "a", pair: "USD/JPY", interval: "1h", signal: "BUY", confidence: 72,
+      entry_point: 150, stop_loss: 149, take_profit_1: 152, take_profit_2: 153, price_at_signal: 150.4,
+      outcome: "win", outcome_price: 152, created_at: "2026-08-20T00:00:00Z", closed_at: "2026-08-20T05:00:00Z",
+      evaluation,
     },
     {
-      id: "b", pair: "EUR/USD", interval: "4h", signal: "SELL", confidence: 65,
-      thesis: null, entry_point: 1.1, stop_loss: 1.11, take_profit_1: 1.08,
+      ...base, id: "b", pair: "EUR/USD", interval: "4h", mode: "technical_only", signal: "SELL", confidence: 65,
+      entry_point: 1.1, stop_loss: 1.11, take_profit_1: 1.08,
       outcome: "loss", outcome_price: 1.11, created_at: "2026-08-22T00:00:00Z", closed_at: null,
     },
     {
-      id: "c", pair: "USD/JPY", interval: "15min", signal: "WAIT", confidence: 40,
-      thesis: null, entry_point: null, stop_loss: null, take_profit_1: null,
+      ...base, id: "c", pair: "USD/JPY", interval: "15min", signal: "WAIT", confidence: 40,
+      entry_point: null, stop_loss: null, take_profit_1: null,
       outcome: "skipped", outcome_price: null, created_at: "2026-08-23T00:00:00Z", closed_at: null,
+    },
+    {
+      ...base, id: "d", pair: "USD/JPY", interval: "1h", signal: "SELL", confidence: 66,
+      entry_point: 157.9, stop_loss: 158.45, take_profit_1: 157.05, price_at_signal: 158.3,
+      outcome: "untriggered", outcome_price: null, created_at: "2026-09-03T04:49:00Z", closed_at: "2026-09-03T06:00:00Z",
+      evaluation: { ...evaluation, order_type: "stop", filled_at: null, fill_price: null, resolution: "untriggered", reason: "invalidated", resolved_at: "2026-09-03T06:00:00Z", mfe: null, mae: null, mfe_r: null, mae_r: null, tps_hit: [] },
     },
   ];
 
-  it("shows win rate over closed trades and outcome badges", () => {
+  it("shows the win rate over WIN/LOSS only, with a badge per outcome", () => {
     render(<AnalysisHistory records={records} />);
-    expect(screen.getByText("勝率")).toBeInTheDocument();
-    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(screen.getAllByText("勝率").length).toBeGreaterThan(0);
+    expect(screen.getByText("50%")).toBeInTheDocument(); // 1 win / 1 loss; the no-fill row is excluded
     expect(screen.getByText("WIN")).toBeInTheDocument();
     expect(screen.getByText("LOSS")).toBeInTheDocument();
+    expect(screen.getAllByText("未約定").length).toBeGreaterThan(0);
+  });
+
+  it("breaks the record down by timeframe, mode and confidence", () => {
+    render(<AnalysisHistory records={records} />);
+    expect(screen.getByRole("button", { name: "時間足" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("4h")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "モード" }));
+    expect(screen.getByRole("button", { name: "モード" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("ニュース込み")).toBeInTheDocument();
+    expect(screen.getByText("テクニカル")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "確信度" }));
+    expect(screen.getByText("70–79%")).toBeInTheDocument();
+  });
+
+  it("opens a row into the plan-vs-actual evidence with fill and TP1 marked on the chart", () => {
+    render(<AnalysisHistory records={records} />);
+    expect(screen.queryByTestId("outcome-detail")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /USD\/JPY 1h.*BUY 72%/ }));
+    const detail = screen.getByTestId("outcome-detail");
+    expect(detail).toBeInTheDocument();
+    expect(screen.getByText("AIの予想")).toBeInTheDocument();
+    expect(screen.getByText("TP1 152.000 に到達")).toBeInTheDocument();
+    expect(screen.getByText("TP1 / TP2")).toBeInTheDocument();
+    expect(screen.getByText("210 pips (2.1R)")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-marker-signal")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-marker-fill")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-marker-win")).toBeInTheDocument();
+  });
+
+  it("explains why an untriggered plan never became a trade", () => {
+    render(<AnalysisHistory records={records} />);
+    fireEvent.click(screen.getByRole("button", { name: /SELL 66%/ }));
+    expect(screen.getByText("約定前に損切り水準へ到達（シナリオ崩れ）")).toBeInTheDocument();
+    expect(screen.getByText("未約定", { selector: "span.font-mono" })).toBeInTheDocument();
+  });
+
+  it("does not promise a judgement for a WAIT row", () => {
+    render(<AnalysisHistory records={records} />);
+    fireEvent.click(screen.getByRole("button", { name: /WAIT 40%/ }));
+    expect(screen.getByText("WAIT（トレードプランなし）のため判定対象外")).toBeInTheDocument();
+    expect(screen.queryByText(/次回の自動判定/)).toBeNull();
+    expect(screen.queryByText("エントリー")).toBeNull();
   });
 
   it("renders nothing with no records", () => {
