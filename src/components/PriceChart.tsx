@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { NumericCandle } from "@/lib/types";
+import { useT } from "@/lib/i18n";
 
 interface Level {
   label: string;
@@ -47,6 +48,7 @@ const parseLevel = (v: string | undefined): number | null => {
 // Entry/SL/TP drawn as labeled horizontal lines over the candles, the way a
 // trader would mark up the chart (labels carry identity, color is secondary)
 const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props) => {
+  const t = useT();
   const [hover, setHover] = useState<number | null>(null);
 
   const decimals = pair.toUpperCase().includes("JPY") ? 3 : 5;
@@ -131,18 +133,18 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair }: Props)
   return (
     <div className="glass rounded-xl border border-border p-3 border-glow">
       <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-xs font-semibold text-foreground">プライスチャート</span>
+        <span className="text-xs font-semibold text-foreground">{t.chart.title}</span>
         <span className="text-[10px] text-muted-foreground font-mono">
           {hovered
             ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
-            : `${pair} 直近${candles.length}本`}
+            : t.chart.recentBars(pair, candles.length)}
         </span>
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full h-auto"
         role="img"
-        aria-label={`${pair} のローソク足チャートとトレードプラン水準`}
+        aria-label={t.chart.ariaLabel(pair)}
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
       >

@@ -3,6 +3,7 @@ import { Link, useParams, Navigate } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { toast } from "sonner";
 import { Calendar, Clock, ArrowRight, Share2, Link as LinkIcon, MessageCircle, Check } from "lucide-react";
+import { useT } from "@/lib/i18n";
 import LandingHeader from "@/components/LandingHeader";
 import LandingFooter from "@/components/LandingFooter";
 import { getPostBySlug, getRelatedPosts, estimateReadingTime } from "@/data/blogPosts";
@@ -28,6 +29,7 @@ function extractToc(html: string): TocItem[] {
 }
 
 const BlogPost = () => {
+  const t = useT();
   const { slug } = useParams<{ slug: string }>();
   const post = slug ? getPostBySlug(slug) : undefined;
   const [copied, setCopied] = useState(false);
@@ -50,10 +52,10 @@ const BlogPost = () => {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
-      toast.success("リンクをコピーしました");
+      toast.success(t.blog.copiedToast);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error("コピーに失敗しました");
+      toast.error(t.blog.copyFailed);
     }
   };
 
@@ -98,9 +100,9 @@ const BlogPost = () => {
       <main className="container max-w-4xl mx-auto px-4 py-10 md:py-16">
         {/* Breadcrumb */}
         <nav className="text-xs text-muted-foreground mb-6">
-          <Link to="/" className="hover:text-foreground">ホーム</Link>
+          <Link to="/" className="hover:text-foreground">{t.blog.home}</Link>
           <span className="mx-2">/</span>
-          <Link to="/blog" className="hover:text-foreground">ブログ</Link>
+          <Link to="/blog" className="hover:text-foreground">{t.blog.title}</Link>
           <span className="mx-2">/</span>
           <span className="text-foreground">{post.category}</span>
         </nav>
@@ -114,7 +116,7 @@ const BlogPost = () => {
               <Calendar className="h-3 w-3" /> {post.publishedAt}
             </span>
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock className="h-3 w-3" /> 約{readingTime}分
+              <Clock className="h-3 w-3" /> {t.blog.readingTime(readingTime)}
             </span>
           </div>
           <h1 className="text-2xl md:text-4xl font-bold leading-tight mb-4">{post.title}</h1>
@@ -134,7 +136,7 @@ const BlogPost = () => {
         {/* Table of contents */}
         {toc.length > 0 && (
           <aside className="mb-10 p-5 rounded-xl border border-white/10 bg-[#0f1320]">
-            <h2 className="text-sm font-bold text-[#00d4ff] mb-3">目次</h2>
+            <h2 className="text-sm font-bold text-[#00d4ff] mb-3">{t.blog.toc}</h2>
             <ol className="space-y-1.5 text-sm">
               {toc.map((item) => (
                 <li key={item.id} className={item.level === 3 ? "ml-4" : ""}>
@@ -156,7 +158,7 @@ const BlogPost = () => {
         {/* Share */}
         <section className="mt-12 p-6 rounded-2xl border border-white/10 bg-[#0f1320]">
           <h2 className="flex items-center gap-2 text-sm font-bold mb-4">
-            <Share2 className="h-4 w-4 text-[#00d4ff]" /> この記事をシェア
+            <Share2 className="h-4 w-4 text-[#00d4ff]" /> {t.blog.share}
           </h2>
           <div className="flex flex-wrap gap-3">
             <a
@@ -164,21 +166,21 @@ const BlogPost = () => {
               target="_blank" rel="noopener noreferrer"
               className="px-4 py-2 rounded-lg bg-[#00d4ff]/10 border border-[#00d4ff]/30 text-[#00d4ff] text-sm font-semibold hover:bg-[#00d4ff]/20 transition-colors"
             >
-              Xでシェア
+              {t.blog.shareX}
             </a>
             <a
               href={`https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(url)}`}
               target="_blank" rel="noopener noreferrer"
               className="px-4 py-2 rounded-lg bg-[#00d4ff]/10 border border-[#00d4ff]/30 text-[#00d4ff] text-sm font-semibold hover:bg-[#00d4ff]/20 transition-colors flex items-center gap-1.5"
             >
-              <MessageCircle className="h-4 w-4" /> LINEで共有
+              <MessageCircle className="h-4 w-4" /> {t.blog.shareLine}
             </a>
             <button
               onClick={onCopy}
               className="px-4 py-2 rounded-lg bg-[#00d4ff]/10 border border-[#00d4ff]/30 text-[#00d4ff] text-sm font-semibold hover:bg-[#00d4ff]/20 transition-colors flex items-center gap-1.5"
             >
               {copied ? <Check className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" />}
-              {copied ? "コピー済み" : "リンクをコピー"}
+              {copied ? t.blog.copied : t.blog.copyLink}
             </button>
           </div>
         </section>
@@ -186,7 +188,7 @@ const BlogPost = () => {
         {/* Related */}
         {related.length > 0 && (
           <section className="mt-12">
-            <h2 className="text-xl font-bold mb-6">関連記事</h2>
+            <h2 className="text-xl font-bold mb-6">{t.blog.related}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               {related.map((p) => (
                 <Link
@@ -213,15 +215,15 @@ const BlogPost = () => {
 
         {/* Bottom CTA */}
         <section className="mt-12 p-8 rounded-2xl text-center border border-[#00d4ff]/30 bg-gradient-to-br from-[#00d4ff]/15 via-[#00d4ff]/5 to-transparent">
-          <h2 className="text-xl md:text-2xl font-bold mb-3">FX Tactical Analyzerを無料で試す</h2>
+          <h2 className="text-xl md:text-2xl font-bold mb-3">{t.blog.ctaTitle}</h2>
           <p className="text-sm text-muted-foreground mb-6 max-w-xl mx-auto">
-            11種のテクニカル指標とファンダメンタル分析をAIが統合。BUY/SELL/WAITの判断と確信度をリアルタイムで提供します。
+            {t.blog.ctaBody}
           </p>
           <Link
             to="/login?tab=signup"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-[#00d4ff] text-[#0a0a0f] font-bold hover:opacity-90 transition-opacity"
           >
-            無料で始める <ArrowRight className="h-4 w-4" />
+            {t.landing.startFree} <ArrowRight className="h-4 w-4" />
           </Link>
         </section>
       </main>

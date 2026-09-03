@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   active: boolean;
@@ -12,6 +13,7 @@ const STAGES = ["STRUCTURE", "LEVELS", "TREND", "PRICES", "PLAN"];
 const STAGE_AT = [0, 5, 11, 18, 26];
 
 const AnalysisStages = ({ active }: Props) => {
+  const t = useT();
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -32,7 +34,7 @@ const AnalysisStages = ({ active }: Props) => {
       <div className="flex items-center justify-center gap-2">
         <Lock className="h-3.5 w-3.5 text-primary animate-pulse" />
         <span className="text-xs font-mono tracking-widest text-primary">
-          SIGNAL ANALYSIS IN PROGRESS
+          {t.stages.banner}
         </span>
       </div>
 
@@ -66,7 +68,7 @@ const AnalysisStages = ({ active }: Props) => {
       </div>
 
       <p className="text-center text-xs text-muted-foreground">
-        マルチタイムフレームの構造・レベル・トレンドを解析しています…
+        {t.stages.caption}
         <span className="font-mono ml-1">{elapsed}s</span>
       </p>
     </div>

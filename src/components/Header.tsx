@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import { isAdminEmail, resolvePlanName } from "@/lib/admin";
 import { loadCancellation } from "@/lib/cancellation";
+import { useLocale } from "@/lib/i18n";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -15,12 +17,15 @@ interface HeaderProps {
 const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
   const [time, setTime] = useState("");
   const { user, profile, signOut } = useAuth();
+  const { t, locale } = useLocale();
   const navigate = useNavigate();
 
   useEffect(() => {
     const update = () => {
       setTime(
-        new Date().toLocaleString("ja-JP", {
+        // JST regardless of locale: the market data and the analysis are both
+        // timestamped in it, so a viewer's local clock would not line up.
+        new Date().toLocaleString(t.intlLocale, {
           timeZone: "Asia/Tokyo",
           year: "numeric",
           month: "2-digit",
@@ -34,7 +39,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [t.intlLocale, locale]);
 
   const isAdmin = isAdminEmail(user?.email);
   const planName = resolvePlanName(user?.email, profile?.plan);
@@ -76,7 +81,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
             style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}
           >
             <Crown className="h-3.5 w-3.5" />
-            プランをアップグレード
+            {t.header.upgrade}
           </button>
         )}
         {isPaidNonPro && (
@@ -84,7 +89,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
             onClick={() => navigate("/pricing")}
             className="px-2.5 py-1 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
-            プランを変更
+            {t.header.changePlan}
           </button>
         )}
 
@@ -102,14 +107,17 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
             </Badge>
             {cancelPending && (
               <span className="text-[10px] text-muted-foreground hidden sm:inline">
-                (解約予定)
+                {t.header.cancelPending}
               </span>
             )}
           </div>
         )}
 
+        <LanguageSwitcher compact />
+
         <button
           onClick={onOpenSettings}
+          title={t.header.settings}
           className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
         >
           <Settings className="h-5 w-5" />
@@ -118,7 +126,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
         {user && (
           <button
             onClick={signOut}
-            title="ログアウト"
+            title={t.header.signOut}
             className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
           >
             <LogOut className="h-4 w-4" />

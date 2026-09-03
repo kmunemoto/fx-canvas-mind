@@ -1,5 +1,6 @@
 import type { TechnicalData } from "@/lib/types";
 import { BarChart3 } from "lucide-react";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   data: TechnicalData;
@@ -15,20 +16,27 @@ const Indicator = ({ label, value, warn }: { label: string; value: string; warn?
 );
 
 const TechnicalDataCard = ({ data }: Props) => {
+  const t = useT();
   const rsiNum = parseFloat(data.rsi);
   const rsiWarn = !isNaN(rsiNum) && (rsiNum > 70 || rsiNum < 30);
-  const rsiNote = !isNaN(rsiNum) ? (rsiNum > 70 ? " (買われすぎ)" : rsiNum < 30 ? " (売られすぎ)" : "") : "";
+  const rsiNote = !isNaN(rsiNum)
+    ? rsiNum > 70
+      ? t.technical.overbought
+      : rsiNum < 30
+        ? t.technical.oversold
+        : ""
+    : "";
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-3 border-glow">
       <div className="flex items-center gap-2 text-primary">
         <BarChart3 className="h-4 w-4" />
-        <h3 className="text-sm font-semibold">取得データサマリー</h3>
+        <h3 className="text-sm font-semibold">{t.technical.title}</h3>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div className="text-center">
-          <p className="text-[10px] text-muted-foreground">現在レート</p>
+          <p className="text-[10px] text-muted-foreground">{t.technical.currentRate}</p>
           <p className="text-sm font-mono font-bold text-foreground">{data.price}</p>
         </div>
         <div className="text-center">
@@ -51,10 +59,10 @@ const TechnicalDataCard = ({ data }: Props) => {
         <Indicator label="BB Lower" value={data.bbLower} />
         <Indicator label="SMA50" value={data.sma50} />
         <Indicator label="SMA200" value={data.sma200} />
-        <Indicator label="一目 転換線" value={data.tenkan} />
-        <Indicator label="一目 基準線" value={data.kijun} />
-        <Indicator label="一目 先行A" value={data.spanA} />
-        <Indicator label="一目 先行B" value={data.spanB} />
+        <Indicator label={t.technical.tenkan} value={data.tenkan} />
+        <Indicator label={t.technical.kijun} value={data.kijun} />
+        <Indicator label={t.technical.spanA} value={data.spanA} />
+        <Indicator label={t.technical.spanB} value={data.spanB} />
         <Indicator label="Stoch %K" value={data.slowK} />
         <Indicator label="Stoch %D" value={data.slowD} />
         <Indicator label="ADX(14)" value={data.adx} />

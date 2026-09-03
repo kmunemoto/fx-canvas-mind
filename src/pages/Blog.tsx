@@ -5,8 +5,10 @@ import { Calendar, ArrowRight } from "lucide-react";
 import LandingHeader from "@/components/LandingHeader";
 import LandingFooter from "@/components/LandingFooter";
 import { blogPosts, BLOG_CATEGORIES, type BlogCategory } from "@/data/blogPosts";
+import { useLocale } from "@/lib/i18n";
 
 const Blog = () => {
+  const { t, locale } = useLocale();
   const [activeCategory, setActiveCategory] = useState<"全て" | BlogCategory>("全て");
 
   const filtered = useMemo(() => {
@@ -34,11 +36,15 @@ const Blog = () => {
 
       <main className="container max-w-6xl mx-auto px-4 py-12 md:py-20">
         <div className="mb-10 text-center">
-          <h1 className="text-3xl md:text-4xl font-bold mb-3">ブログ</h1>
+          <h1 className="text-3xl md:text-4xl font-bold mb-3">{t.blog.title}</h1>
           <p className="text-muted-foreground text-sm md:text-base">
-            FXテクニカル分析・ファンダメンタル・AI活用についての解説記事
+            {t.blog.subtitle}
           </p>
         </div>
+
+        {locale !== "ja" && (
+          <p className="text-center text-xs text-muted-foreground mb-8">{t.blog.japaneseOnly}</p>
+        )}
 
         {/* Category filter */}
         <div className="flex flex-wrap justify-center gap-2 mb-10">
@@ -54,7 +60,9 @@ const Blog = () => {
                     : "border-white/10 text-muted-foreground hover:border-[#00d4ff]/50 hover:text-foreground"
                 }`}
               >
-                {cat}
+                {/* Category names label Japanese articles, so only the
+                    "all" pill is translated. */}
+                {cat === "全て" ? t.blog.all : cat}
               </button>
             );
           })}
@@ -62,7 +70,7 @@ const Blog = () => {
 
         {/* Posts grid */}
         {filtered.length === 0 ? (
-          <p className="text-center text-muted-foreground py-20">該当する記事がありません。</p>
+          <p className="text-center text-muted-foreground py-20">{t.blog.none}</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {filtered.map((post) => (
@@ -96,7 +104,7 @@ const Blog = () => {
                   </h2>
                   <p className="text-xs text-muted-foreground line-clamp-3">{post.description}</p>
                   <div className="mt-4 flex items-center gap-1 text-xs text-[#00d4ff] font-semibold">
-                    続きを読む <ArrowRight className="h-3 w-3" />
+                    {t.blog.readMore} <ArrowRight className="h-3 w-3" />
                   </div>
                 </div>
               </Link>

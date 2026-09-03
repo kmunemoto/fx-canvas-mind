@@ -1,7 +1,7 @@
 import LegalPageLayout from "@/components/LegalPageLayout";
 
 const Legal = () => (
-  <LegalPageLayout title="特定商取引法に基づく表記">
+  <LegalPageLayout title="特定商取引法に基づく表記" japaneseOnly>
     <div className="space-y-6">
       {[
         ["販売事業者", "FX Tactical Analyzer 運営事務局"],

@@ -26,7 +26,7 @@ const rows: [string, string][] = [
 ];
 
 const Tokushoho = () => (
-  <LegalPageLayout title="特定商取引法に基づく表記">
+  <LegalPageLayout title="特定商取引法に基づく表記" japaneseOnly>
     <div className="space-y-0">
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-col sm:flex-row gap-1 sm:gap-4 py-4 border-b border-white/5">

@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v13-2026-09-03T05:00:00Z";
+const FUNCTION_VERSION = "analyze-v14-2026-09-03T05:30:00Z";
 
 import {
   computeSnapshot,
@@ -13,6 +13,13 @@ import {
   parseInaccessibleDomains,
   planDomainRecovery,
 } from "./websearch.ts";
+
+import {
+  resolveAnalysisLocale,
+  stringsFor,
+  withDisclaimer,
+  type AnalysisLocale,
+} from "./locale.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -55,6 +62,7 @@ type ParsedRequestBody = {
   currencyPair: string;
   interval: string;
   includeFundamental: boolean;
+  locale: AnalysisLocale;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -181,7 +189,7 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 - 確信度が60未満の場合、signal は必ず "WAIT"。
 - 時間足の方向が矛盾する場合は確信度を下げる。
 - すべての価格は分析対象ペアの実際の価格スケールで出力する。
-- analysis・thesis・key_factors・warnings などの文章は日本語で書く（market_context_detail の値は英語の定型語でよい）。
+{{LANGUAGE_RULE}}
 - warnings には必ず「この分析は参考情報です。投資判断は自己責任で行ってください」を含める。
 - ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
 - RSI・Stoch の過熱と価格構造が矛盾する場合（ダイバージェンス）は必ず言及する。`;
@@ -326,15 +334,7 @@ interface NormalizedAnalysis {
   take_profit_3_num: number | null;
 }
 
-const DISCLAIMER = "この分析は参考情報です。投資判断は自己責任で行ってください";
-
-// The system prompt asks for it, but the disclaimer is a compliance
-// requirement — do not leave it to the model (or to search results that may
-// try to talk it out of one).
-const withDisclaimer = (warnings: string[]): string[] =>
-  warnings.some((w) => w.includes("自己責任")) ? warnings : [...warnings, DISCLAIMER];
-
-const normalizeAnalysis = (value: unknown, decimals: number): NormalizedAnalysis => {
+const normalizeAnalysis = (value: unknown, decimals: number, locale: AnalysisLocale): NormalizedAnalysis => {
   const source = isRecord(value) ? value : {};
   const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
     ? source.signal
@@ -405,7 +405,7 @@ const normalizeAnalysis = (value: unknown, decimals: number): NormalizedAnalysis
     timeframe_alignment: alignment,
     analysis: asTrimmedString(source.analysis, ""),
     key_factors: toStringArray(source.key_factors),
-    warnings: withDisclaimer(toStringArray(source.warnings)),
+    warnings: withDisclaimer(toStringArray(source.warnings), locale),
     support_levels: levelList(source.support_levels),
     resistance_levels: levelList(source.resistance_levels),
     entry_point_num: entry.num,
@@ -452,6 +452,8 @@ const parseRequestBody = async (req: Request): Promise<
       currencyPair,
       interval,
       includeFundamental,
+      // Unknown or missing values fall back to Japanese rather than failing.
+      locale: resolveAnalysisLocale(body.locale),
     } satisfies ParsedRequestBody,
   };
 };
@@ -549,7 +551,8 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: parsedRequest.error ?? "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const { currencyPair, interval, includeFundamental } = parsedRequest.data;
+    const { currencyPair, interval, includeFundamental, locale } = parsedRequest.data;
+    const L = stringsFor(locale);
     const decimals = pairDecimals(currencyPair);
 
     // The usage counters are read and written with the service role: with the
@@ -714,25 +717,23 @@ Deno.serve(async (req: Request) => {
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
-    const SEARCH_NOTE = "分析モード: full — まずweb検索で本日の経済指標・金融政策・当該通貨の材料を確認し、fundamental_score とファンダ要因を分析に統合してください。検索は2回まで。";
-    const TECHNICAL_NOTE = "分析モード: technical_only — テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
-    const FALLBACK_NOTE = "分析モード: technical_fallback — ニュース検索が利用できないため、テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。";
+    const SEARCH_NOTE = L.searchNote;
+    const TECHNICAL_NOTE = L.technicalNote;
+    const FALLBACK_NOTE = L.fallbackNote;
 
     // Structured outputs cannot be combined with web search, so the search path
     // has to carry the same field contract in the prompt instead. Reusing the
     // one RESPONSE_SCHEMA keeps both paths on a single definition.
-    const SCHEMA_INSTRUCTION = `
+    const SCHEMA_INSTRUCTION = L.schemaInstruction(JSON.stringify(RESPONSE_SCHEMA));
 
-最終回答は<json>タグ内に、次のJSON Schemaに厳密に従ったJSONのみを出力してください。キー名とenum値は英語のまま一字一句一致させ、required のフィールドは全て含めること。スキーマ外のキーは出力しないこと。
-${JSON.stringify(RESPONSE_SCHEMA)}`;
-
-    const buildUserMessage = (note: string, schemaInPrompt: boolean) => `通貨ペア: ${currencyPair}
-現在時刻(UTC): ${nowUtc}
-${note}
-
-${tfSections}
-
-上記のマルチタイムフレームデータを手順1-5に沿って分析し、トレードプランを出力してください。${schemaInPrompt ? SCHEMA_INSTRUCTION : ""}`;
+    const buildUserMessage = (note: string, schemaInPrompt: boolean) =>
+      L.userMessage({
+        pair: currencyPair,
+        nowUtc,
+        note,
+        sections: tfSections,
+        schema: schemaInPrompt ? SCHEMA_INSTRUCTION : "",
+      });
 
     stage = "request_ai";
     // Supabase kills the worker at 150s wall clock with no chance to respond —
@@ -757,7 +758,7 @@ ${tfSections}
     const baseRequest: JsonRecord = {
       model: "claude-opus-5",
       max_tokens: 8000,
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT.replace("{{LANGUAGE_RULE}}", L.languageRule),
       messages: [{
         role: "user",
         content: includeFundamental
@@ -927,7 +928,7 @@ ${tfSections}
       }, 400);
     }
 
-    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals);
+    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals, locale);
 
     // The user asked for news to be factored in and it could not be; say so in
     // the result rather than passing a technical-only read off as full analysis.
@@ -938,10 +939,7 @@ ${tfSections}
         : "full";
 
     if (resolvedMode === "technical_fallback") {
-      normalizedAnalysis.warnings = [
-        "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
-        ...normalizedAnalysis.warnings,
-      ];
+      normalizedAnalysis.warnings = [L.fallbackWarning, ...normalizedAnalysis.warnings];
     }
 
     // History row for the win/loss tracker. Only BUY/SELL plans with prices

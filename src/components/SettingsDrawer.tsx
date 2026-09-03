@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { X, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "@/lib/i18n";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
@@ -28,6 +30,7 @@ const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD",
 const PAID_PLANS = ["light", "standard", "pro"];
 
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {
+  const t = useT();
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -42,7 +45,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
 
   const updateSettings = (newSettings: AppSettings) => {
     onSettingsChange(newSettings);
-    toast.success("設定を保存しました");
+    toast.success(t.settings.saved);
   };
 
   const isAdmin = isAdminEmail(user?.email);
@@ -58,7 +61,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
     setCanceling(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("ログインが必要です");
+      if (!session) throw new Error(t.errors.loginRequired);
 
       const res = await fetch(
         "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/cancel-subscription",
@@ -71,7 +74,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
         },
       );
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "解約に失敗しました");
+      if (!res.ok || data.error) throw new Error(data.error || t.settings.cancelFailed);
 
       const info: CancellationInfo = {
         userId: session.user.id,
@@ -82,14 +85,14 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
       saveCancellation(info);
       setCancellation(info);
 
-      toast.success("解約手続きが完了しました", {
+      toast.success(t.settings.cancelSucceeded, {
         description: data.cancel_date_formatted
-          ? `${data.cancel_date_formatted} までご利用いただけます`
+          ? t.settings.cancelUsableUntil(data.cancel_date_formatted)
           : undefined,
       });
       setConfirmOpen(false);
     } catch (err: any) {
-      toast.error("エラー", { description: err.message });
+      toast.error(t.common.error, { description: err.message });
     } finally {
       setCanceling(false);
     }
@@ -100,7 +103,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
       <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-sm glass border-l border-border p-6 space-y-6 overflow-y-auto">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">設定</h2>
+          <h2 className="text-lg font-semibold text-foreground">{t.settings.title}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground">
             <X className="h-5 w-5" />
           </button>
@@ -108,19 +111,19 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
 
         {/* Plan info */}
         <div className="p-4 rounded-lg bg-secondary border border-border space-y-3">
-          <h3 className="text-sm font-semibold text-foreground">プラン情報</h3>
+          <h3 className="text-sm font-semibold text-foreground">{t.settings.planSection}</h3>
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">現在のプラン</span>
+            <span className="text-sm text-muted-foreground">{t.settings.currentPlan}</span>
             <span className="text-sm font-semibold text-primary">{planName}</span>
           </div>
           {isAdmin && (
             <p className="text-xs text-muted-foreground">
-              管理者アカウントのため、サブスクリプションなしで全機能を無制限にご利用いただけます。
+              {t.settings.adminNote}
             </p>
           )}
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
-              {isCancelPending ? "解約予定日" : "次回更新日"}
+              {isCancelPending ? t.settings.cancelDate : t.settings.nextBilling}
             </span>
             <span className="text-sm text-foreground">
               {isCancelPending ? cancellation?.cancelDateFormatted ?? nextBilling : nextBilling}
@@ -131,7 +134,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <div className="flex items-start gap-2 text-xs text-muted-foreground border-t border-border pt-2">
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
               <span>
-                解約予定（{cancellation?.cancelDateFormatted ?? nextBilling} まで利用可能）
+                {t.settings.cancelPendingUntil(cancellation?.cancelDateFormatted ?? nextBilling)}
               </span>
             </div>
           )}
@@ -143,7 +146,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
                 disabled={isCancelPending}
                 className="w-full px-4 py-2 rounded-lg border border-border bg-transparent text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isCancelPending ? "解約手続き済み" : "プランを解約する"}
+                {isCancelPending ? t.settings.cancelDone : t.settings.cancelPlan}
               </button>
             ) : (
               <button
@@ -153,15 +156,20 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
                 }}
                 className="w-full px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
               >
-                プランをアップグレード
+                {t.settings.upgrade}
               </button>
             )}
           </div>
         </div>
 
         <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <label className="text-sm text-muted-foreground">{t.common.language}</label>
+            <LanguageSwitcher />
+          </div>
+
           <div>
-            <label className="text-sm text-muted-foreground">取引通貨ペア</label>
+            <label className="text-sm text-muted-foreground">{t.settings.pair}</label>
             <select
               value={settings.currencyPair}
               onChange={(e) => updateSettings({ ...settings, currencyPair: e.target.value })}
@@ -175,7 +183,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm text-muted-foreground">損切り幅 (pips)</label>
+              <label className="text-sm text-muted-foreground">{t.settings.stopLossPips}</label>
               <input
                 type="number"
                 value={settings.defaultStopLossPips}
@@ -184,7 +192,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               />
             </div>
             <div>
-              <label className="text-sm text-muted-foreground">利確幅 (pips)</label>
+              <label className="text-sm text-muted-foreground">{t.settings.takeProfitPips}</label>
               <input
                 type="number"
                 value={settings.defaultTakeProfitPips}
@@ -199,13 +207,13 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
       <Dialog open={confirmOpen} onOpenChange={(v) => !canceling && setConfirmOpen(v)}>
         <DialogContent className="bg-card border-border">
           <DialogHeader>
-            <DialogTitle className="text-foreground">プランを解約しますか？</DialogTitle>
+            <DialogTitle className="text-foreground">{t.settings.cancelTitle}</DialogTitle>
             <DialogDescription className="text-muted-foreground pt-2 space-y-2">
               <span className="block">
-                {planName}プランを解約します。期間終了日までは現在のプランを引き続きご利用いただけます。
+                {t.settings.cancelBody(planName)}
               </span>
               <span className="block text-destructive">
-                期間終了後は自動的にFreeプランへ切り替わります。
+                {t.settings.cancelBody2}
               </span>
             </DialogDescription>
           </DialogHeader>
@@ -216,7 +224,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               disabled={canceling}
               className="text-muted-foreground hover:text-foreground"
             >
-              キャンセル
+              {t.common.cancel}
             </Button>
             <Button
               variant="destructive"
@@ -226,10 +234,10 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               {canceling ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  処理中...
+                  {t.common.processing}
                 </>
               ) : (
-                "解約する"
+                t.settings.cancelConfirm
               )}
             </Button>
           </DialogFooter>
