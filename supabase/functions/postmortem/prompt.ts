@@ -359,7 +359,7 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 
 原因の定義:
 - direction_wrong: 方向そのものが逆。約定後に損切りまでほぼ一直線／損切り後も逆行が続いた（after.beyond_sl_r が大きい）／約定前に損切り側へ到達（reason=invalidated）。
-- stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想が viable かつ win。
+- stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想が win。広げた案が viable でない（RR 不足）場合、lesson は「損切りを広げる」だけでなく利確の置き方も併せて書く。
 - entry_too_far: 方向は合っていたがエントリーが約定しなかった。成行の反実仮想（market_entry または market_entry_same_risk）が viable かつ win。
 - entry_too_early: 方向は合っていたが成行で追いかけて即座の逆行で損切り。early_adverse_r が大きく、limit_pullback が viable かつ win。
 - target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想が win、mfe_r が大きい。
@@ -565,6 +565,14 @@ export const parseConsolidation = (
   if (!isRecord(raw) || !Array.isArray(raw.rules)) return null;
   const prior = new Map(previous.map((r) => [r.id, r]));
   const clusterOf = new Map(lessons.map((l) => [l.analysis_id, l.cluster ?? l.analysis_id]));
+  // A continuing rule keeps the evidence it already had, even when those
+  // lessons are older than the window the consolidation was given: each
+  // such citation stands as its own cluster
+  for (const rule of previous) {
+    for (const id of rule.supported_by) {
+      if (!clusterOf.has(id)) clusterOf.set(id, `prior:${id}`);
+    }
+  }
   const seen = new Set<string>();
   const rules: Rule[] = [];
   const added: string[] = [];
@@ -574,7 +582,12 @@ export const parseConsolidation = (
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
     const textEn = str(item.text_en, MAX_RULE_CHARS);
     if (!textJa && !textEn) continue;
-    let id = str(item.id, 20) || `r${rules.length + 1}`;
+    let id = str(item.id, 20);
+    if (!id) {
+      // A made-up id must not land on an existing rule and take it over
+      id = `r${rules.length + 1}`;
+      while (prior.has(id) || seen.has(id)) id = `${id}_`;
+    }
     while (seen.has(id)) id = `${id}_`;
     const isNew = !prior.has(id);
     if (isNew && previous.length > 0 && added.length >= MAX_RULES_ADDED) {

@@ -192,6 +192,7 @@ export interface Counterfactual {
   // would have published it
   rr?: number | null;
   viable?: boolean;
+  gate?: "ok" | "poor_rr" | "stop_too_tight";
 }
 
 export interface PostmortemFacts {

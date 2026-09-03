@@ -253,6 +253,38 @@ describe("facts — remedies the gate would refuse, and chased entries", () => {
     expect(f.hints).toContain("stop_too_tight");
   });
 
+  it("measures the early adverse move only while the trade was open, and not for stop entries", async () => {
+    // TP1 on the fill bar, then a crash: nothing of the crash was in the trade
+    const won = evaluated(buyMarket, {
+      filled_at: iso(0), resolved_at: iso(0), resolution: "win", mfe_r: 2, mae_r: 0.1,
+    }, "win", iso(0));
+    const crash = [
+      candle(stamp(0), 152.1, 149.9),
+      candle(stamp(1), 149.5, 148.0),
+      candle(stamp(2), 148.0, 146.0),
+      ...quiet(3, 30, 147.0, 146.5),
+    ];
+    const f = await computeFacts(won, crash, "1h", NOW, { atr: 0.5 });
+    expect(f.early_adverse_r).toBeCloseTo(0.1, 5);
+
+    // A stop entry: the fill bar's low is the approach to the entry
+    const stopRow = evaluated({ ...buyMarket, id: "4", entry_point: 150.5, stop_loss: 149.5, take_profit_1: 152.5, price_at_signal: 150.0 }, {
+      order_type: "stop", filled_at: iso(0), resolved_at: iso(3), resolution: "win", mfe_r: 2, mae_r: 0,
+    }, "win", iso(3));
+    const approach = [
+      candle(stamp(0), 150.6, 149.6, 149.6, 150.55),
+      candle(stamp(1), 151.0, 150.5),
+      candle(stamp(2), 151.4, 150.9),
+      candle(stamp(3), 152.6, 151.3),
+      ...quiet(4, 30, 152.0, 151.5),
+    ];
+    const g = await computeFacts(stopRow, approach, "1h", NOW, { atr: 0.5 });
+    expect(g.early_adverse_r).toBeNull();
+    // ...and a "pullback" 0.5R below a stop entry sits at the market, which
+    // is no wait at all, so there is no such counterfactual
+    expect(g.counterfactual.limit_pullback).toBeNull();
+  });
+
   it("notes on a win whether waiting for a pullback would have paid more", async () => {
     const row = evaluated(buyMarket, {
       filled_at: iso(0), resolved_at: iso(3), resolution: "win", mfe_r: 2, mae_r: 0.6,
@@ -404,6 +436,21 @@ describe("rulebook consolidation", () => {
     expect(c?.rules[0].kind).toBe("constraint");
     expect(c?.rules[2].since).toBe("2026-09-03T00:00:00Z");
     expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"] });
+  });
+
+  it("keeps a continuing rule's older citations in evidence and never lets a blank id take over a rule", () => {
+    const old: Rule[] = [{ ...previous[0], support: 3, supported_by: ["x1", "x2", "x3"] }];
+    // The consolidation was handed only recent lessons, none of which x1-x3 are
+    const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["x1", "x2", "x3"] })], summary_ja: "s", summary_en: "s" }, old, T0, lessons);
+    expect(c?.rules[0]).toMatchObject({ id: "r1", support: 3, supported_by: ["x1", "x2", "x3"] });
+
+    // A blank id gets a fresh one rather than r1's identity: r1 is recorded
+    // as removed (within the allowance), the newcomer as added with its own
+    // birth date
+    const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic" })], summary_ja: "s", summary_en: "s" }, old, T0, lessons);
+    expect(blank?.rules.map((r) => r.id)).toEqual(["r1_"]);
+    expect(blank?.rules[0].since).toBe(T0);
+    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [] });
   });
 
   it("puts back rules dropped beyond the removal allowance, weakest ones going first", () => {

@@ -17,6 +17,7 @@
 import type { Candle } from "../analyze/indicators.ts";
 import { MIN_RISK_REWARD, MIN_STOP_ATR, isMomentumMode, normalizeMode } from "../analyze/entry.ts";
 import {
+  FILL_TOLERANCE,
   INTERVAL_MS,
   MAX_REFINE_ATTEMPTS,
   emptyEvaluation,
@@ -137,6 +138,8 @@ export interface CfResult {
   // it is not evidence for "should have entered at the market".
   rr: number | null;
   viable: boolean;
+  // Which of the gate's tests the variant fails, when it is not viable
+  gate: "ok" | "poor_rr" | "stop_too_tight";
 }
 
 export interface PostmortemFacts {
@@ -254,14 +257,24 @@ const simulate = async (
   // The gate's own tests (entry.ts), on the variant: enough reward for the
   // risk, and a stop outside the noise when the ATR is known
   const stopOk = atr === null || !Number.isFinite(atr) || atr <= 0 || vRisk / atr >= MIN_STOP_ATR;
+  const rrOk = rr !== null && rr >= MIN_RISK_REWARD;
   return {
     resolution: j.resolution,
     reason: j.evaluation.reason,
     mfe_r: j.evaluation.mfe_r,
     mae_r: j.evaluation.mae_r,
     rr,
-    viable: rr !== null && rr >= MIN_RISK_REWARD && stopOk,
+    viable: rrOk && stopOk,
+    gate: !rrOk ? "poor_rr" : !stopOk ? "stop_too_tight" : "ok",
   };
+};
+
+// Why a variant would not be published, for the notes
+const gateReason = (r: CfResult | null, atr: number | null): string => {
+  if (!r) return "n/a";
+  if (r.gate === "poor_rr") return `rr ${r.rr ?? "?"} below ${MIN_RISK_REWARD}`;
+  if (r.gate === "stop_too_tight") return `stop under ${MIN_STOP_ATR} ATR${atr !== null ? ` (ATR ${atr})` : ""}`;
+  return "passes";
 };
 
 export interface FactsContext {
@@ -346,11 +359,17 @@ export const computeFacts = async (
     if (best.ratio >= ABNORMAL_RANGE_RATIO) abnormal = { at: best.at, range_ratio: round2(best.ratio) };
   }
 
-  // The first bars in the trade: did price turn on the entry at once?
+  // The first bars in the trade: did price turn on the entry at once? Only
+  // while the trade was open, and not for stop entries, whose fill bar is
+  // mostly the approach to the entry rather than a move against it.
   const filledMs = typeof ev?.filled_at === "string" ? Date.parse(ev.filled_at) : NaN;
+  const orderType = ev?.order_type ?? "unknown";
   let earlyAdverseR: number | null = null;
-  if (Number.isFinite(filledMs) && risk > 0) {
-    const early = post.filter((x) => x.t + (INTERVAL_MS[evalInterval] ?? HOUR) > filledMs).slice(0, EARLY_BARS);
+  if (Number.isFinite(filledMs) && risk > 0 && (orderType === "market" || orderType === "limit")) {
+    const barMs = INTERVAL_MS[evalInterval] ?? HOUR;
+    const early = post
+      .filter((x) => x.t + barMs > filledMs && (!Number.isFinite(resolvedMs) || x.t <= resolvedMs))
+      .slice(0, EARLY_BARS);
     if (early.length > 0) {
       let adverse = 0;
       for (const { c } of early) {
@@ -390,16 +409,23 @@ export const computeFacts = async (
     cf.tp_half = await simulate(row, { take_profit_1: half, take_profit_2: null, take_profit_3: null }, candles, evalInterval, nowMs, atr);
     // Waited for a pullback instead: a limit PULLBACK_R away from the entry
     // with the stop moved along (same risk width), judged against the
-    // market price so the judge sees it as the limit it is
+    // market price so the judge sees it as the limit it is. Only when that
+    // level really is a limit from where the market was — for a stop entry
+    // the pullback can land on the market side, which would be judged as a
+    // market order, not a wait.
     const pullback = against(row.entry_point, PULLBACK_R);
-    cf.limit_pullback = await simulate(
-      row,
-      { entry_point: pullback, stop_loss: against(pullback, 1), price_at_signal: reference ?? row.entry_point },
-      candles,
-      evalInterval,
-      nowMs,
-      atr,
-    );
+    const ref = reference ?? row.entry_point;
+    const isLimit = (signal === "BUY" ? pullback < ref : pullback > ref) && Math.abs(pullback - ref) / ref > FILL_TOLERANCE;
+    if (isLimit) {
+      cf.limit_pullback = await simulate(
+        row,
+        { entry_point: pullback, stop_loss: against(pullback, 1), price_at_signal: ref },
+        candles,
+        evalInterval,
+        nowMs,
+        atr,
+      );
+    }
   }
 
   // Regime: what was declared against what the ADX said
@@ -455,7 +481,7 @@ export const computeFacts = async (
         // gate: the remedy is a different stop or a skip, not "go market"
         push("inconclusive");
         notes.push(
-          `a market entry would have reached TP1 but no market version of the plan pays (rr ${cf.market_entry?.rr ?? "?"} / same-risk ${cf.market_entry_same_risk?.rr ?? "?"}, minimum ${MIN_RISK_REWARD}); the lesson must change the stop or skip the trade, not switch to a market order`,
+          `a market entry would have reached TP1 but no market version of the plan pays (market: ${gateReason(cf.market_entry, atr)}; same-risk: ${gateReason(cf.market_entry_same_risk, atr)}); the lesson must change the stop or the target, or skip the trade, not switch to a market order`,
         );
       } else if (cf.market_entry?.resolution === "loss" || cf.market_entry_same_risk?.resolution === "loss") push("direction_wrong");
       else if (maxFavR !== null && maxFavR >= MISSED_MOVE_R) {

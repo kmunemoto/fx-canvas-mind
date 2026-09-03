@@ -245,8 +245,15 @@ Deno.serve(async (req: Request) => {
         if (hv !== null && !rulesByVersion.has(hv)) rulesByVersion.set(hv, parseRules(h.rules));
       }
     }
+    // A version's plans count toward a rule only when that version held the
+    // same rule (same id, same birth date): an id the model reused for a new
+    // rule must not inherit a dead rule's record
+    const currentRules = current ? parseRules(current.rules) : [];
+    const identity = new Map(currentRules.map((r) => [r.id, r.since]));
     const ruleVersions: Record<string, string[]> = {};
-    for (const [v, rules] of rulesByVersion) ruleVersions[String(v)] = rules.map((r) => r.id);
+    for (const [v, rules] of rulesByVersion) {
+      ruleVersions[String(v)] = rules.filter((r) => identity.has(r.id) && identity.get(r.id) === r.since).map((r) => r.id);
+    }
 
     // ---- settled plans without a diagnosis --------------------------------
     const select = [
@@ -547,9 +554,19 @@ Deno.serve(async (req: Request) => {
     // be scored against it. A hand-run with `consolidate` skips the wait.
     let rulebook: JsonRecord | null = null;
     if ((newLessons > 0 || options.consolidate) && elapsed() < START_CONSOLIDATION_BEFORE_MS) {
-      const lessonRows = await readRows(
-        `lessons?select=analysis_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,rule_blamed,rule_credited&order=created_at.desc&limit=${RECENT_LESSONS}`,
-      );
+      const lessonSelect = "analysis_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,rule_blamed,rule_credited";
+      const lessonRows = await readRows(`lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS}`);
+      // The lessons the current rules cite stay in evidence even once they
+      // are older than the recent window, so a rule's support cannot decay
+      // just because time passed
+      const recentIds = new Set(lessonRows.map((l) => String(l.analysis_id ?? "")));
+      const citedOlder = [...new Set(currentRules.flatMap((r) => r.supported_by))].filter((id) => id && !recentIds.has(id));
+      if (citedOlder.length > 0) {
+        const older = await readRows(
+          `lessons?select=${lessonSelect}&analysis_id=in.(${citedOlder.map(encodeURIComponent).join(",")})&limit=${RECENT_LESSONS}`,
+        );
+        lessonRows.push(...older);
+      }
       const lessons: LessonRow[] = withClusters(lessonRows.map((l) => ({
         analysis_id: String(l.analysis_id ?? ""),
         pair: String(l.pair ?? ""),
