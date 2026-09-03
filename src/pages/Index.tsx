@@ -24,7 +24,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v10-2026-08-29T06:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v11-2026-09-03T04:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -159,7 +159,7 @@ const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [interval, setInterval_] = useState<TimeInterval>("1h");
   const [includeFundamental, setIncludeFundamental] = useState(true);
-  const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | null>(null);
+  const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | "technical_fallback" | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
@@ -428,10 +428,12 @@ const Index = () => {
                 {analysisMode && (
                   <div className="text-[11px] text-muted-foreground px-1">
                     分析モード:{" "}
-                    <span className="text-foreground font-medium">
+                    <span className={analysisMode === "technical_fallback" ? "text-warning font-medium" : "text-foreground font-medium"}>
                       {analysisMode === "full"
                         ? "フル分析（テクニカル+ファンダメンタル）"
-                        : "テクニカル分析のみ"}
+                        : analysisMode === "technical_fallback"
+                          ? "テクニカルのみ（ニュース検索が利用できませんでした）"
+                          : "テクニカル分析のみ"}
                     </span>
                   </div>
                 )}
