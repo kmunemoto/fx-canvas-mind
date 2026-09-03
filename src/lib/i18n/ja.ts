@@ -103,6 +103,7 @@ export const ja = {
   history: {
     title: "シグナル履歴",
     winRate: "勝率",
+    fillRate: "約定率",
     outcomes: {
       win: "WIN",
       loss: "LOSS",
@@ -111,10 +112,11 @@ export const ja = {
       skipped: "—",
       untriggered: "未約定",
       ambiguous: "判定不能",
+      rejected: "却下",
     },
     scope: (n: number) => `直近${n}件`,
     autoNote: "結果は実際の値動きで15分ごとに自動判定（TP1到達=WIN / SL到達=LOSS）",
-    winRateNote: "勝率はWIN/LOSSのみで計算（未約定・判定不能・期限切れは除外）",
+    winRateNote: "勝率はWIN/LOSSのみで計算（未約定・判定不能・期限切れは除外）。約定率はエントリー価格に実際に到達した割合",
     stats: {
       title: "内訳",
       byTimeframe: "時間足",
@@ -130,6 +132,63 @@ export const ja = {
       confidenceBand: (lo: number, hi: number | null) => (hi === null ? `${lo}%以上` : `${lo}–${hi}%`),
     },
     modes: { full: "ニュース込み", technical_only: "テクニカル", technical_fallback: "テクニカル(検索不可)" },
+    // The entry gate: plans analyze refused because the market would not
+    // have reached them, and what became of them in the shadows
+    gate: {
+      note: (n: number) => `AIの提案 ${n}件は「約定しない・割に合わない」としてサーバー側で却下し、WAITに変更しました。`,
+      shadowNote: (s: { untriggered: number; wins: number; losses: number; open: number }) =>
+        `却下したプランをそのまま追跡した結果: 未約定 ${s.untriggered} / WIN ${s.wins} / LOSS ${s.losses} / 進行中 ${s.open}`,
+      rejectedTitle: "サーバー側で却下したプラン",
+      rejectedSummary: "AIの提案はサーバー側で却下され、WAITとして公開されました",
+      reasons: {
+        too_far: "エントリーが現在値から離れすぎ（約定しない）",
+        should_be_market: "トレンド継続中に戻りを待つ指値（約定しない）",
+        stop_too_tight: "損切りが近すぎる（ノイズで刈られる）",
+        poor_rr: "リスクリワードが割に合わない",
+        incoherent: "エントリー・損切り・利確の水準が矛盾",
+      },
+      proposed: "AIの提案",
+      distance: "現在値との距離",
+      riskReward: "リスクリワード",
+      shadowResult: "却下プランの追跡結果",
+      gateRight: "→ 却下は正しかった（エントリー価格に届かなかった）",
+      gateWrong: "→ 却下は誤りだった（約定して利確に到達）",
+      gateSaved: "→ 約定していれば損切りになっていた",
+      gateOpen: "→ 追跡中",
+      repaired: "AIの指値エントリーはトレンド継続中のため、現在値の成行に修正して公開しました",
+    },
+    // Why a settled plan went the way it did
+    postmortem: {
+      title: "なぜ外れたか（AIの検証）",
+      titleWin: "なぜ当たったか（AIの検証）",
+      pending: "原因分析は決着から数時間後に自動で行われます",
+      failed: "原因分析を実行できませんでした。次回の自動実行で再試行します",
+      causes: {
+        direction_wrong: "方向が逆だった",
+        stop_too_tight: "損切りが近すぎた",
+        entry_too_far: "エントリーが約定しなかった",
+        target_too_far: "利確が遠すぎた",
+        regime_misread: "相場環境の読み違い",
+        news_shock: "指標・イベントの急変動",
+        plan_incoherent: "プランの水準が矛盾",
+        good_call: "想定通り",
+        lucky_win: "勝ったが危うかった",
+        inconclusive: "判断材料が不足",
+      },
+      lesson: "教訓",
+      avoidable: "分析時点の情報で回避できた",
+      unavoidable: "分析時点では回避が難しかった",
+      confidence: (c: number) => `診断の確度 ${c}%`,
+      counterfactual: "もし…だったら",
+      cfMarket: "成行で入っていたら",
+      cfStop15: "損切りを1.5倍に広げていたら",
+      cfStop2: "損切りを2倍に広げていたら",
+      cfTpHalf: "利確を半分にしていたら",
+      cfResult: { win: "WIN", loss: "LOSS", untriggered: "未約定", expired: "期限切れ", ambiguous: "判定不能", open: "未決着" },
+      afterTp1: (bars: number) => `損切りの ${bars} 本後に TP1 へ到達`,
+      beyondSl: (r: number) => `損切り後さらに ${r}R 逆行`,
+      causeBreakdown: "外れた原因の内訳",
+    },
     detail: {
       expand: "予想と実際を見る",
       collapse: "閉じる",
@@ -181,6 +240,18 @@ export const ja = {
       chartSubtitleCompressed: (interval: string, n: number) => `判定足 ${interval}（${n}点に圧縮表示）`,
       markers: { signal: "分析", fill: "約定", win: "TP1", loss: "SL", end: "終了" },
     },
+  },
+
+  // What the analyzer has learned from its own record (public.rulebook)
+  rules: {
+    title: "AIが学習したルール",
+    version: (v: number) => `v${v}`,
+    updated: (d: string) => `更新 ${d}`,
+    empty: "まだ学習したルールはありません。シグナルの決着と原因分析が進むと自動で追加されます。",
+    support: (n: number) => `実績${n}件`,
+    showAll: (n: number) => `すべて表示（${n}件）`,
+    showLess: "折りたたむ",
+    note: "実際の値動きに基づく検証から自動生成され、次回以降の分析プロンプトに組み込まれます",
   },
 
   analysisMode: {

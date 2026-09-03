@@ -2,7 +2,17 @@ import { useState } from "react";
 import type { AnalysisRecord } from "@/lib/types";
 import { ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
-import { byConfidence, byMode, byTimeframe, tally, type OutcomeTally } from "@/lib/outcomeStats";
+import {
+  byConfidence,
+  byMode,
+  byTimeframe,
+  causeCounts,
+  isRejected,
+  isShadow,
+  shadowTally,
+  tally,
+  type OutcomeTally,
+} from "@/lib/outcomeStats";
 import { formatJst } from "@/lib/candleTime";
 import OutcomeDetail from "./OutcomeDetail";
 
@@ -21,6 +31,7 @@ const OUTCOME_CLASS: Record<string, string> = {
   skipped: "bg-secondary text-muted-foreground border-border",
   untriggered: "bg-warning/15 text-warning border-warning/40",
   ambiguous: "bg-secondary text-muted-foreground border-border",
+  rejected: "bg-warning/15 text-warning border-warning/40",
 };
 
 type Breakdown = "timeframe" | "mode" | "confidence";
@@ -33,17 +44,27 @@ const parseBand = (key: string): [number, number | null] => {
 
 // Signal history backed by the analyses table. Wins and losses are judged
 // server-side against actual price data, not self-reported; each row opens
-// into the plan-vs-actual evidence behind its badge.
+// into the plan-vs-actual evidence behind its badge and, once settled, the
+// post-mortem. Plans the entry gate refused are tracked in the shadows and
+// shown under the WAIT row they became, not as rows of their own.
 const AnalysisHistory = ({ records }: Props) => {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown>("timeframe");
 
-  const safe = Array.isArray(records) ? records : [];
+  const all = Array.isArray(records) ? records : [];
+  const safe = all.filter((r) => !isShadow(r));
   if (safe.length === 0) return null;
+
+  const shadows = new Map<string, AnalysisRecord>();
+  for (const r of all) {
+    if (isShadow(r) && typeof r.shadow_of === "string") shadows.set(r.shadow_of, r);
+  }
 
   const overall = tally("all", safe);
   const closed = overall.wins + overall.losses;
+  const gate = shadowTally(all);
+  const causes = causeCounts(safe);
   const groups: OutcomeTally[] =
     breakdown === "timeframe" ? byTimeframe(safe) : breakdown === "mode" ? byMode(safe) : byConfidence(safe);
 
@@ -61,6 +82,7 @@ const AnalysisHistory = ({ records }: Props) => {
     { id: "confidence", label: t.history.stats.byConfidence },
   ];
   const activeLabel = breakdowns.find((b) => b.id === breakdown)?.label ?? "";
+  const causeLabel = (c: string) => (c in t.history.postmortem.causes ? t.history.postmortem.causes[c as keyof typeof t.history.postmortem.causes] : c);
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-3">
@@ -70,19 +92,37 @@ const AnalysisHistory = ({ records }: Props) => {
           <h3 className="text-sm font-semibold">{t.history.title}</h3>
           <span className="text-[10px] text-muted-foreground">{t.history.scope(safe.length)}</span>
         </div>
-        {overall.winRate !== null && (
-          <div className="flex items-center gap-1.5 text-xs">
-            <TrendingUp className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-            <span className="text-muted-foreground">{t.history.winRate}</span>
-            <span className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}>
-              {overall.winRate}%
-            </span>
-            <span className="text-muted-foreground font-mono">({overall.wins}/{closed})</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3 text-xs">
+          {overall.fillRate !== null && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">{t.history.fillRate}</span>
+              <span className={`font-mono font-bold ${overall.fillRate >= 50 ? "text-foreground" : "text-warning"}`}>
+                {overall.fillRate}%
+              </span>
+            </div>
+          )}
+          {overall.winRate !== null && (
+            <div className="flex items-center gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+              <span className="text-muted-foreground">{t.history.winRate}</span>
+              <span className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}>
+                {overall.winRate}%
+              </span>
+              <span className="text-muted-foreground font-mono">({overall.wins}/{closed})</span>
+            </div>
+          )}
+        </div>
       </div>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {/* the gate's own record */}
+      {overall.rejected > 0 && (
+        <p className="text-[10px] text-muted-foreground" data-testid="gate-note">
+          {t.history.gate.note(overall.rejected)}
+          {gate.total > 0 ? ` ${t.history.gate.shadowNote(gate)}` : ""}
+        </p>
+      )}
 
       {/* breakdown of the record by timeframe / mode / confidence */}
       {overall.total > 0 && (
@@ -141,14 +181,25 @@ const AnalysisHistory = ({ records }: Props) => {
               </tbody>
             </table>
           )}
+          {causes.length > 0 && (
+            <p className="text-[10px] text-muted-foreground" data-testid="cause-breakdown">
+              <span className="font-semibold">{t.history.postmortem.causeBreakdown}: </span>
+              {causes.map((c) => `${causeLabel(c.cause)} ×${c.count}`).join(" · ")}
+            </p>
+          )}
           <p className="text-[10px] text-muted-foreground">{t.history.winRateNote}</p>
         </div>
       )}
 
       <div className="space-y-1">
         {safe.map((r) => {
-          const badgeCls = OUTCOME_CLASS[r.outcome] ?? OUTCOME_CLASS.pending;
-          const badgeLabel = t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
+          const rejected = isRejected(r);
+          const badgeKey = rejected ? "rejected" : r.outcome;
+          const badgeCls = OUTCOME_CLASS[badgeKey] ?? OUTCOME_CLASS.pending;
+          const badgeLabel = rejected
+            ? t.history.outcomes.rejected
+            : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
+          const diagnosed = r.postmortem?.status === "done";
           const isOpen = expanded === r.id;
           const panelId = `outcome-${r.id}`;
           return (
@@ -165,6 +216,11 @@ const AnalysisHistory = ({ records }: Props) => {
                 <span className={`font-bold font-mono ml-auto shrink-0 ${signalColor(r.signal)}`}>
                   {r.signal}{r.confidence !== null ? ` ${r.confidence}%` : ""}
                 </span>
+                {diagnosed && r.postmortem?.cause && (
+                  <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground truncate max-w-[10rem]">
+                    {causeLabel(r.postmortem.cause)}
+                  </span>
+                )}
                 <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${badgeCls}`}>
                   {badgeLabel}
                 </span>
@@ -175,7 +231,7 @@ const AnalysisHistory = ({ records }: Props) => {
               </button>
               {isOpen && (
                 <div id={panelId}>
-                  <OutcomeDetail record={r} />
+                  <OutcomeDetail record={r} shadow={shadows.get(r.id) ?? null} />
                 </div>
               )}
             </div>

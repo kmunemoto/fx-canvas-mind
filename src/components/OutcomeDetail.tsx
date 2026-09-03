@@ -1,10 +1,13 @@
-import type { AnalysisRecord, NumericCandle } from "@/lib/types";
+import type { AnalysisRecord, Counterfactual, NumericCandle } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
+import { isRejected } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 
 interface Props {
   record: AnalysisRecord;
+  // The refused plan tracked in the shadows, when this row is a refusal
+  shadow?: AnalysisRecord | null;
 }
 
 const Row = ({ label, value, className = "", mono = true }: { label: string; value: string; className?: string; mono?: boolean }) => (
@@ -14,15 +17,24 @@ const Row = ({ label, value, className = "", mono = true }: { label: string; val
   </div>
 );
 
+const Heading = ({ children }: { children: string }) => (
+  <h4 className="text-[10px] font-semibold tracking-wider text-primary uppercase mb-1">{children}</h4>
+);
+
 // "Plan vs. actual" for one history row: the levels the AI called, what price
-// then did, and the bars it was judged on with the fill and settlement marked
-const OutcomeDetail = ({ record }: Props) => {
-  const { t } = useLocale();
+// then did, the bars it was judged on with the fill and settlement marked —
+// and, once the post-mortem has run, why it went the way it did
+const OutcomeDetail = ({ record, shadow = null }: Props) => {
+  const { t, locale } = useLocale();
   const d = t.history.detail;
+  const g = t.history.gate;
+  const pm = t.history.postmortem;
   const ev = record.evaluation;
   const decimals = priceDecimals(record.pair);
   // A WAIT call carries no trade plan, so there is nothing to judge
   const tracked = record.signal !== "WAIT" && record.outcome !== "skipped";
+  const rejected = isRejected(record);
+  const settled = tracked && record.outcome !== "pending";
 
   const price = (v: number | null | undefined) =>
     typeof v === "number" && Number.isFinite(v) ? v.toFixed(decimals) : "—";
@@ -61,7 +73,7 @@ const OutcomeDetail = ({ record }: Props) => {
       case "untriggered":
         return ev?.reason && ev.reason in d.reasons ? d.reasons[ev.reason] : t.history.outcomes.untriggered;
       case "skipped":
-        return d.summary.skipped;
+        return rejected ? g.rejectedSummary : d.summary.skipped;
       default:
         return d.summary.pending;
     }
@@ -89,13 +101,63 @@ const OutcomeDetail = ({ record }: Props) => {
     v !== null && v !== undefined ? String(v) : undefined
   );
 
+  // --- the gate: a refused plan and what became of it in the shadows ------
+  const check = record.entry_check ?? null;
+  const rejectionLabel = check?.rejection && check.rejection in g.reasons ? g.reasons[check.rejection] : null;
+  const shadowVerdict = (() => {
+    if (!shadow) return null;
+    switch (shadow.outcome) {
+      case "untriggered":
+        return { text: g.gateRight, cls: "text-success" };
+      case "win":
+        return { text: g.gateWrong, cls: "text-destructive" };
+      case "loss":
+        return { text: g.gateSaved, cls: "text-success" };
+      case "pending":
+        return { text: g.gateOpen, cls: "text-muted-foreground" };
+      default:
+        return { text: t.history.outcomes[shadow.outcome] ?? shadow.outcome, cls: "text-muted-foreground" };
+    }
+  })();
+
+  // --- the post-mortem ----------------------------------------------------
+  const post = record.postmortem ?? null;
+  const diagnosed = post?.status === "done" && typeof post.cause === "string";
+  const pick = (v: { ja: string; en: string } | undefined) => (v ? (locale === "ja" ? v.ja || v.en : v.en || v.ja) : "");
+  const pickList = (v: { ja: string[]; en: string[] } | undefined) =>
+    v ? (locale === "ja" ? (v.ja.length > 0 ? v.ja : v.en) : v.en.length > 0 ? v.en : v.ja) : [];
+  const causeLabel = (c: string | undefined) => (c && c in pm.causes ? pm.causes[c as keyof typeof pm.causes] : c ?? "");
+  const facts = diagnosed ? post?.facts ?? null : null;
+  const cfLabel = (c: Counterfactual | null | undefined) => {
+    if (!c) return null;
+    const key = c.resolution ?? "open";
+    return key in pm.cfResult ? pm.cfResult[key as keyof typeof pm.cfResult] : key;
+  };
+  const counterfactuals: Array<{ label: string; value: string; cls: string }> = [];
+  if (facts) {
+    const add = (label: string, c: Counterfactual | null | undefined) => {
+      const v = cfLabel(c);
+      if (v === null) return;
+      counterfactuals.push({
+        label,
+        value: v,
+        cls: c?.resolution === "win" ? "text-success" : c?.resolution === "loss" ? "text-destructive" : "text-muted-foreground",
+      });
+    };
+    add(pm.cfMarket, facts.counterfactual?.market_entry);
+    add(pm.cfStop15, facts.counterfactual?.stop_x1_5);
+    add(pm.cfStop2, facts.counterfactual?.stop_x2);
+    add(pm.cfTpHalf, facts.counterfactual?.tp_half);
+  }
+  const postTitle = record.outcome === "win" ? pm.titleWin : pm.title;
+
   return (
     <div className="mt-2 rounded-lg border border-border/60 bg-background/40 p-3 space-y-3 text-xs" data-testid="outcome-detail">
       {record.thesis && <p className="text-muted-foreground">{record.thesis}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
         <section>
-          <h4 className="text-[10px] font-semibold tracking-wider text-primary uppercase mb-1">{d.plan}</h4>
+          <Heading>{d.plan}</Heading>
           <Row label={t.direction.label} value={`${dir.word} (${dir.gloss})`} className={`font-bold ${dirClass}`} />
           {tracked && (
             <>
@@ -104,12 +166,13 @@ const OutcomeDetail = ({ record }: Props) => {
               <Row label={d.takeProfit1} value={price(record.take_profit_1)} className="text-success" />
               <Row label={d.priceAtSignal} value={price(record.price_at_signal ?? ev?.price_at_signal)} />
               {ev && <Row label={d.orderTypeLabel} value={d.orderType[orderType]} className="text-muted-foreground" mono={false} />}
+              {check?.repaired && <p className="text-muted-foreground mt-1">{g.repaired}</p>}
             </>
           )}
         </section>
 
         <section>
-          <h4 className="text-[10px] font-semibold tracking-wider text-primary uppercase mb-1">{d.actual}</h4>
+          <Heading>{d.actual}</Heading>
           <p className={`font-semibold mb-1 ${outcomeClass}`}>{summary}</p>
           {tracked && (
             <>
@@ -128,6 +191,90 @@ const OutcomeDetail = ({ record }: Props) => {
           )}
         </section>
       </div>
+
+      {/* a plan the gate refused: what was proposed, why it was refused,
+          and what the market then did with it */}
+      {rejected && check && (
+        <section className="rounded-md border border-warning/40 bg-warning/5 p-2 space-y-1" data-testid="gate-detail">
+          <Heading>{g.rejectedTitle}</Heading>
+          {rejectionLabel && <p className="text-warning font-semibold">{rejectionLabel}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+            <div>
+              <Row label={g.proposed} value={check.proposed_signal} className={check.proposed_signal === "BUY" ? "text-success" : "text-destructive"} />
+              <Row label={d.entry} value={price(check.proposed_entry)} />
+              <Row label={d.stopLoss} value={price(check.proposed_stop)} className="text-destructive" />
+              <Row label={d.takeProfit1} value={price(check.proposed_tp1)} className="text-success" />
+            </div>
+            <div>
+              {typeof check.distance_atr === "number" && <Row label={g.distance} value={`${check.distance_atr} ATR`} />}
+              {typeof check.risk_reward === "number" && <Row label={g.riskReward} value={`1:${check.risk_reward}`} />}
+              {shadow && shadowVerdict && (
+                <>
+                  <Row label={g.shadowResult} value={t.history.outcomes[shadow.outcome] ?? shadow.outcome} mono={false} />
+                  <p className={`font-semibold ${shadowVerdict.cls}`}>{shadowVerdict.text}</p>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* why it went the way it did */}
+      {settled && (
+        <section className="rounded-md border border-border/60 bg-background/60 p-2 space-y-1" data-testid="postmortem">
+          <Heading>{postTitle}</Heading>
+          {diagnosed && post ? (
+            <>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${
+                  post.cause === "good_call" ? "bg-success/15 text-success border-success/40" : "bg-warning/15 text-warning border-warning/40"
+                }`}>
+                  {causeLabel(post.cause)}
+                </span>
+                {(post.secondary_causes ?? []).map((c) => (
+                  <span key={c} className="px-1.5 py-0.5 rounded border border-border text-[10px] text-muted-foreground">
+                    {causeLabel(c)}
+                  </span>
+                ))}
+                {typeof post.confidence === "number" && (
+                  <span className="text-[10px] text-muted-foreground font-mono">{pm.confidence(post.confidence)}</span>
+                )}
+              </div>
+              <p className="text-foreground">{pick(post.verdict)}</p>
+              {pickList(post.evidence).length > 0 && (
+                <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                  {pickList(post.evidence).map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              )}
+              {counterfactuals.length > 0 && (
+                <div className="pt-1">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{pm.counterfactual}</p>
+                  {counterfactuals.map((c) => (
+                    <Row key={c.label} label={c.label} value={c.value} className={`font-semibold ${c.cls}`} />
+                  ))}
+                  {facts?.after?.reached_tp1 && (
+                    <p className="text-muted-foreground">{pm.afterTp1(facts.after.reached_tp1.bars)}</p>
+                  )}
+                  {typeof facts?.after?.beyond_sl_r === "number" && facts.after.beyond_sl_r >= 1 && (
+                    <p className="text-muted-foreground">{pm.beyondSl(facts.after.beyond_sl_r)}</p>
+                  )}
+                </div>
+              )}
+              {pick(post.lesson) && (
+                <p className="rounded bg-primary/10 border border-primary/30 px-2 py-1 text-foreground">
+                  <span className="text-primary font-semibold mr-1">{pm.lesson}:</span>
+                  {pick(post.lesson)}
+                </p>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                {post.avoidable ? pm.avoidable : pm.unavoidable}
+              </p>
+            </>
+          ) : (
+            <p className="text-muted-foreground">{post?.status === "failed" ? pm.failed : pm.pending}</p>
+          )}
+        </section>
+      )}
 
       {tracked && (candles.length > 0 ? (
         <PriceChart
