@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v11-2026-09-03T04:00:00Z";
+const FUNCTION_VERSION = "analyze-v12-2026-09-03T04:20:00Z";
 
 import {
   computeSnapshot,
@@ -668,7 +668,7 @@ Deno.serve(async (req: Request) => {
     let seriesByTf: Candle[][];
     try {
       seriesByTf = await Promise.all(
-        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
+        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 150 : 80)),
       );
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
@@ -706,7 +706,7 @@ Deno.serve(async (req: Request) => {
       const snapshot = snapshots[i];
       const candles = seriesByTf[i];
       const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
-      const lines = candleLines(candles, i === 0 ? 40 : 20);
+      const lines = candleLines(candles, i === 0 ? 30 : 15);
       return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime,open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
@@ -740,7 +740,7 @@ ${tfSections}
 
     const baseRequest: JsonRecord = {
       model: "claude-opus-5",
-      max_tokens: 16000,
+      max_tokens: 8000,
       system: SYSTEM_PROMPT,
       messages: [{
         role: "user",
@@ -766,7 +766,7 @@ ${tfSections}
         baseRequest.tools = [{
           type: "web_search_20260209",
           name: "web_search",
-          max_uses: 3,
+          max_uses: 2,
           allowed_domains: searchDomains,
         }];
         delete baseRequest.output_config;
@@ -788,7 +788,7 @@ ${tfSections}
     let messages = [...(baseRequest.messages as JsonRecord[])];
     let claudeData: JsonRecord | null = null;
 
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: anthropicHeaders,
@@ -966,7 +966,7 @@ ${tfSections}
           slowK: x(entrySnapshot.slowK),
           slowD: x(entrySnapshot.slowD),
           adx: x(entrySnapshot.adx),
-          candles: entryCandles.slice(-60),
+          candles: entryCandles.slice(-50),
         },
       },
       diagnostics: { stage },
