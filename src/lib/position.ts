@@ -37,7 +37,7 @@ export interface PositionSize {
 export const pipSize = (pair: string): number => (pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001);
 
 export const quoteCurrency = (pair: string): string => {
-  const parts = pair.toUpperCase().split(/[\/_]/);
+  const parts = pair.toUpperCase().split(/[/_]/);
   return parts.length === 2 ? parts[1] : "";
 };
 
