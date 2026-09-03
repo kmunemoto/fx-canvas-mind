@@ -1,10 +1,12 @@
 import { useNavigate, Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  Zap, BarChart3, Clock, Brain, Download, Sparkles,
+  Zap, BarChart3, Clock, Brain, Download, Sparkles, Scale,
   ChevronRight, Check, Star, ArrowRight, Share2, Link as LinkIcon, MessageCircle, Check as CheckIcon,
+  ClipboardCheck, Search, RefreshCw, ShieldQuestion,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -101,6 +103,98 @@ const ShareSection = () => {
   );
 };
 
+// Proof for a visitor who cannot sign in and try it.
+//
+// Analysis is now paid-only, so the landing page is the only place a stranger
+// can see that the learning loop is real. The rulebook's version and its
+// last-changed time are the honest evidence: only the post-mortem
+// consolidation moves them, so they cannot be staged from here. The RPC
+// returns counts and nothing else — no rule text, no per-user row, and no
+// win rate, which the sample is nowhere near large enough to support.
+interface TrackRecord {
+  rulebook_version: number;
+  rules: number;
+  updated_at: string | null;
+}
+
+const LoopSection = () => {
+  const t = useT();
+  const [record, setRecord] = useState<TrackRecord | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    supabase.rpc("public_track_record").then(({ data, error }) => {
+      if (!live || error || !data) return;
+      const r = data as TrackRecord;
+      // A rulebook that has never been revised proves nothing, so the badge
+      // stays hidden rather than announcing "v0"
+      if (typeof r.rulebook_version === "number" && r.rulebook_version > 0) setRecord(r);
+    });
+    return () => { live = false; };
+  }, []);
+
+  const updated = record?.updated_at
+    ? new Date(record.updated_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+    : "";
+
+  return (
+    <Section ariaLabel={t.lp.aria.loop}>
+      <SectionTitle>{t.lp.loopTitle}</SectionTitle>
+      <motion.p
+        variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
+        className="text-center text-muted-foreground max-w-2xl mx-auto -mt-6 mb-12"
+      >
+        {t.lp.loopBody}
+      </motion.p>
+
+      <motion.div
+        className="grid grid-cols-1 md:grid-cols-3 gap-6"
+        variants={stagger} initial="hidden" whileInView="visible" viewport={{ once: true }}
+      >
+        {[ClipboardCheck, Search, RefreshCw].map((Icon, i) => {
+          const { title, desc } = t.lp.loopSteps[i];
+          return (
+            <motion.article key={title} variants={fadeUp} className="glass rounded-2xl p-8 border border-white/5">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-[#00d4ff]/10 mb-4">
+                <Icon className="h-6 w-6 text-[#00d4ff]" aria-hidden="true" />
+              </div>
+              <h3 className="text-lg font-bold mb-2">{title}</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
+            </motion.article>
+          );
+        })}
+      </motion.div>
+
+      {record && (
+        <motion.div
+          variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
+          className="mt-8 text-center"
+          data-testid="rulebook-live"
+        >
+          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#00d4ff]/30 bg-[#00d4ff]/5 font-mono-data text-sm text-[#00d4ff]">
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            {t.lp.loopLive(record.rulebook_version, record.rules, updated)}
+          </span>
+          <p className="text-xs text-muted-foreground mt-3">{t.lp.loopLiveNote}</p>
+        </motion.div>
+      )}
+
+      <motion.aside
+        variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
+        className="glass rounded-2xl border border-white/5 p-8 mt-12 max-w-3xl mx-auto"
+      >
+        <div className="flex items-start gap-4">
+          <ShieldQuestion className="h-6 w-6 text-[#00d4ff] shrink-0 mt-0.5" aria-hidden="true" />
+          <div>
+            <h3 className="text-lg font-bold mb-2">{t.lp.honestTitle}</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">{t.lp.honestBody}</p>
+          </div>
+        </div>
+      </motion.aside>
+    </Section>
+  );
+};
+
 const Landing = () => {
   const t = useT();
   const navigate = useNavigate();
@@ -188,7 +282,7 @@ const Landing = () => {
         <Section id="features" ariaLabel={t.lp.aria.features}>
           <SectionTitle>{t.lp.featuresTitle}</SectionTitle>
           <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-6" variants={stagger} initial="hidden" whileInView="visible" viewport={{ once: true }}>
-            {[Download, Sparkles, Zap].map((Icon, i) => {
+            {[Download, Sparkles, Scale].map((Icon, i) => {
               const { title, desc } = t.lp.features[i];
               return (
               <motion.article key={title} variants={fadeUp} className="glass rounded-2xl p-8 border border-white/5">
@@ -249,6 +343,16 @@ const Landing = () => {
                     </li>
                   ))}
                 </ul>
+                <button
+                  onClick={() => navigate(`/login?tab=signup&plan=${plan.id}`)}
+                  className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${
+                    plan.recommended
+                      ? "bg-gradient-to-r from-[#00d4ff] to-[#0088ff] text-[#0a0e17] hover:opacity-90"
+                      : "border border-[#00d4ff]/40 bg-[#00d4ff]/10 text-[#00d4ff] hover:bg-[#00d4ff]/20"
+                  }`}
+                >
+                  {t.lp.choosePlan}
+                </button>
               </motion.div>
             ))}
           </motion.div>
@@ -262,19 +366,8 @@ const Landing = () => {
           </div>
         </Section>
 
-        {/* Demo */}
-        <Section ariaLabel={t.lp.aria.demo}>
-          <SectionTitle>{t.lp.demoTitle}</SectionTitle>
-          <motion.div
-            variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
-            className="glass rounded-2xl border border-white/5 overflow-hidden aspect-video flex items-center justify-center"
-          >
-            <div className="text-center text-muted-foreground">
-              <BarChart3 className="h-16 w-16 mx-auto mb-4 opacity-30" aria-hidden="true" />
-              <p className="text-sm">{t.lp.demoPlaceholder}</p>
-            </div>
-          </motion.div>
-        </Section>
+        {/* How the loop works */}
+        <LoopSection />
 
         {/* FAQ */}
         <Section id="faq" ariaLabel={t.lp.aria.faq}>

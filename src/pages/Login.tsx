@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { MIN_PASSWORD_LENGTH, validatePassword } from "@/lib/password";
 import { Zap, Loader2, AlertCircle } from "lucide-react";
@@ -8,7 +8,11 @@ import { useT } from "@/lib/i18n";
 const Login = () => {
   const t = useT();
   const { signIn, signUp } = useAuth();
-  const [isSignUp, setIsSignUp] = useState(false);
+  // Every call to action on the landing page links here with ?tab=signup.
+  // Until this read it, a first-time visitor pressing the big blue button was
+  // shown the sign-IN form and asked for a password they had never set.
+  const [params] = useSearchParams();
+  const [isSignUp, setIsSignUp] = useState(params.get("tab") === "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -50,7 +54,11 @@ const Login = () => {
         }
 
         setSuccessMsg(t.login.created);
-        window.location.href = "/";
+        // Analysis is paid-only, so the dashboard has nothing a new account can
+        // do yet. Send them to the plans instead, keeping the one they picked
+        // on the landing page.
+        const plan = params.get("plan");
+        window.location.href = plan ? `/pricing?plan=${encodeURIComponent(plan)}` : "/pricing";
         return;
       }
 
@@ -101,8 +109,9 @@ const Login = () => {
           )}
 
           <div>
-            <label className="text-sm text-muted-foreground">{t.login.email}</label>
+            <label htmlFor="login-email" className="text-sm text-muted-foreground">{t.login.email}</label>
             <input
+              id="login-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -112,8 +121,9 @@ const Login = () => {
           </div>
 
           <div>
-            <label className="text-sm text-muted-foreground">{t.login.password}</label>
+            <label htmlFor="login-password" className="text-sm text-muted-foreground">{t.login.password}</label>
             <input
+              id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -124,8 +134,9 @@ const Login = () => {
 
           {isSignUp && (
             <div>
-              <label className="text-sm text-muted-foreground">{t.login.confirmPassword}</label>
+              <label htmlFor="login-confirm" className="text-sm text-muted-foreground">{t.login.confirmPassword}</label>
               <input
+                id="login-confirm"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
