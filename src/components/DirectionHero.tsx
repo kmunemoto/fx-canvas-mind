@@ -26,8 +26,8 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
   const alignment = Array.isArray(result.timeframe_alignment) ? result.timeframe_alignment : [];
 
   return (
-    <div className="glass rounded-xl border border-border p-5 border-glow">
-      <div className="flex items-center justify-between gap-4">
+    <div className="glass rounded-xl border border-border p-4 sm:p-5 border-glow">
+      <div className="flex items-center justify-between gap-3 sm:gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] text-muted-foreground uppercase tracking-widest">{t.direction.label}</p>
           {/* SHORT and LONG are the trader idiom and stay, but the plain-language
@@ -35,12 +35,12 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
               mistake on this screen that costs real money. */}
           <div className="flex items-baseline gap-2 flex-wrap">
             <p
-              className="text-4xl font-black font-mono tracking-tight leading-tight"
+              className="text-3xl sm:text-4xl font-black font-mono tracking-tight leading-tight"
               style={{ color, textShadow: `0 0 24px ${color}` }}
             >
               {dir.word}
             </p>
-            <p className="text-xl font-bold leading-tight" style={{ color }}>
+            <p className="text-lg sm:text-xl font-bold leading-tight" style={{ color }}>
               {dir.gloss}
             </p>
           </div>
@@ -66,7 +66,7 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
             ))}
           </div>
         </div>
-        <div className="shrink-0 scale-[0.72] origin-right -my-6">
+        <div className="shrink-0">
           <ConfidenceGauge signal={result.signal} confidence={result.confidence} showSignalLabel={false} />
         </div>
       </div>

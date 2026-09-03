@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
@@ -28,18 +28,23 @@ interface Props {
   subtitle?: string;
 }
 
-const W = 660;
-const H = 300;
+// The SVG is drawn at one unit per CSS pixel, measured from its own
+// container. Drawing at a fixed 660 and letting the browser scale it down
+// shrank every label with it: on a 390px phone the price axis rendered at
+// about 4.8px, which is not readable. Falling back to 660 keeps server-side
+// and jsdom rendering (no ResizeObserver) exactly as it was.
+const FALLBACK_W = 660;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 22;
 const PAD_LEFT = 8;
 // Two separate right-hand lanes: the price axis, then the level pills. They
 // used to share one lane, so a level near a gridline covered its label.
+// Narrow screens get narrower lanes so the candles keep some room.
 const AXIS_W = 44;
 const PILL_W = 84;
-const PAD_RIGHT = AXIS_W + PILL_W;
-const AXIS_X = W - PAD_RIGHT + 4;
-const PILL_X = W - PILL_W + 2;
+const NARROW_AXIS_W = 38;
+const NARROW_PILL_W = 70;
+const NARROW = 480;
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -70,6 +75,32 @@ const parseLevel = (v: string | undefined): number | null => {
 const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle }: Props) => {
   const t = useT();
   const [hover, setHover] = useState<number | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const next = Math.round(entries[0]?.contentRect.width ?? 0);
+      if (next > 0) setMeasured(next);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const W = measured && measured > 0 ? measured : FALLBACK_W;
+  const narrow = W < NARROW;
+  // Squarer on a phone, wider on a desktop, so neither wastes the space it
+  // has: the ratio is what keeps the candles readable at both ends.
+  const H = Math.round(Math.min(300, Math.max(200, W * (narrow ? 0.72 : 0.45))));
+  const axisW = narrow ? NARROW_AXIS_W : AXIS_W;
+  const pillW = narrow ? NARROW_PILL_W : PILL_W;
+  const PAD_RIGHT = axisW + pillW;
+  const AXIS_X = W - PAD_RIGHT + 4;
+  const PILL_X = W - pillW + 2;
+  const labelSize = narrow ? 8 : 9;
+  const pillSize = narrow ? 7.5 : 8.5;
 
   const decimals = pair.toUpperCase().includes("JPY") ? 3 : 5;
 
@@ -111,7 +142,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
     const x = (i: number) => PAD_LEFT + slot * i + slot / 2;
 
     return { min, max, y, x, slot, bodyW };
-  }, [candles, levels]);
+  }, [candles, levels, W, H, PAD_RIGHT]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -131,7 +162,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
       for (const r of rows) r.y -= overflow;
     }
     return rows;
-  }, [geometry, levels]);
+  }, [geometry, levels, H]);
 
   // Each marker sits on the last candle that opened at or before its time;
   // one dated before the first candle is not drawn rather than pinned to it
@@ -168,10 +199,10 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
   };
 
   return (
-    <div className="glass rounded-xl border border-border p-3 border-glow">
-      <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-xs font-semibold text-foreground">{heading ?? t.chart.title}</span>
-        <span className="text-[10px] text-muted-foreground font-mono">
+    <div ref={boxRef} className="glass rounded-xl border border-border p-3 border-glow">
+      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+        <span className="text-xs font-semibold text-foreground shrink-0">{heading ?? t.chart.title}</span>
+        <span className="text-[10px] text-muted-foreground font-mono truncate text-right">
           {hovered
             ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
             : subtitle ?? t.chart.recentBars(pair, candles.length)}
@@ -195,7 +226,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
             />
             <text
               x={AXIS_X} y={y(p) + 3}
-              fontSize="9" fill={COLORS.text} fontFamily="monospace"
+              fontSize={labelSize} fill={COLORS.text} fontFamily="monospace"
             >
               {p.toFixed(decimals)}
             </text>
@@ -243,7 +274,7 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
               />
               <text
                 x={mx + 3} y={labelY}
-                fontSize="8.5" fontWeight="700" fontFamily="monospace" fill={color}
+                fontSize={pillSize} fontWeight="700" fontFamily="monospace" fill={color}
               >
                 {m.label}
               </text>
@@ -270,12 +301,12 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
               />
               <rect
                 x={PILL_X} y={pillY - 7.5}
-                width={PILL_W - 4} height={15} rx="4"
+                width={pillW - 4} height={15} rx="4"
                 fill={color} opacity="0.92"
               />
               <text
                 x={PILL_X + 4} y={pillY + 3}
-                fontSize="8.5" fontWeight="700" fontFamily="monospace"
+                fontSize={pillSize} fontWeight="700" fontFamily="monospace"
                 fill="hsl(var(--background))"
               >
                 {level.label} {level.value.toFixed(decimals)}
@@ -284,16 +315,22 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
           );
         })}
 
-        {/* time axis (JST): first / middle / last labels only */}
-        {[0, Math.floor(candles.length / 2), candles.length - 1].map((i) => (
-          <text
-            key={i}
-            x={x(i)} y={H - 8}
-            fontSize="8.5" fill={COLORS.text} fontFamily="monospace" textAnchor="middle"
-          >
-            {formatCandleLabel(candles[i].datetime, t.intlLocale)}
-          </text>
-        ))}
+        {/* time axis (JST): first / middle / last labels only. The outer two
+            are anchored to the plot edges rather than centred on their
+            candle, which would hang half the label off the canvas. */}
+        {[0, Math.floor(candles.length / 2), candles.length - 1].map((i, n) => {
+          const anchor = n === 0 ? "start" : n === 2 ? "end" : "middle";
+          const tx = n === 0 ? PAD_LEFT : n === 2 ? W - PAD_RIGHT : x(i);
+          return (
+            <text
+              key={i}
+              x={tx} y={H - 8}
+              fontSize={labelSize} fill={COLORS.text} fontFamily="monospace" textAnchor={anchor}
+            >
+              {formatCandleLabel(candles[i].datetime, t.intlLocale)}
+            </text>
+          );
+        })}
       </svg>
     </div>
   );

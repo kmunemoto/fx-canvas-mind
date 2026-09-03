@@ -55,70 +55,82 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
     : "";
 
   return (
-    <header className="glass border-b border-border px-4 py-3 flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <div className="h-8 w-1 rounded-full bg-primary" />
-        <h1 className="text-lg font-bold tracking-tight text-foreground">
+    // The bar has to survive a 320px phone: the title is the only elastic
+    // part, everything on the right keeps its size and drops its label
+    // instead. Without min-w-0 the title refuses to shrink and pushes the
+    // whole page into a horizontal scroll.
+    <header className="glass border-b border-border px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        <div className="h-7 sm:h-8 w-1 rounded-full bg-primary shrink-0" />
+        <h1 className="text-base sm:text-lg font-bold tracking-tight text-foreground truncate">
           FX Tactical Analyzer
         </h1>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         {liveRate && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">{currencyPair}</span>
-            <span className="font-mono text-base font-bold text-primary text-glow">{liveRate}</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-xs text-muted-foreground hidden sm:inline">{currencyPair}</span>
+            <span className="font-mono text-sm sm:text-base font-bold text-primary text-glow">{liveRate}</span>
           </div>
         )}
 
-        <span className="font-mono text-xs text-muted-foreground hidden sm:inline">{time} JST</span>
+        <span className="font-mono text-xs text-muted-foreground hidden lg:inline">{time} JST</span>
 
         {/* Plan link / Upgrade button */}
         {isFree && (
           <button
             onClick={() => navigate("/pricing")}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white shadow-md hover:opacity-90 transition-opacity"
+            aria-label={t.header.upgrade}
+            className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold text-white shadow-md shrink-0 hover:opacity-90 transition-opacity"
             style={{ background: "linear-gradient(135deg, #00d4ff, #0099cc)" }}
           >
-            <Crown className="h-3.5 w-3.5" />
-            {t.header.upgrade}
+            <Crown className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">{t.header.upgrade}</span>
           </button>
         )}
         {isPaidNonPro && (
           <button
             onClick={() => navigate("/pricing")}
-            className="px-2.5 py-1 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            className="hidden sm:inline-flex px-2.5 py-1 rounded-md border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             {t.header.changePlan}
           </button>
         )}
 
+        {/* Plan identity is a desktop nicety; on a phone it lives in the
+            settings drawer, which shows the same plan and its billing date. */}
         {user && (
-          <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2">
             {isAdmin && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-primary text-primary gap-1">
                 <ShieldCheck className="h-3 w-3" />
                 Admin
               </Badge>
             )}
-            <span className="text-xs text-muted-foreground hidden sm:inline">{shortEmail}</span>
+            <span className="text-xs text-muted-foreground hidden md:inline">{shortEmail}</span>
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {planName}
             </Badge>
             {cancelPending && (
-              <span className="text-[10px] text-muted-foreground hidden sm:inline">
+              <span className="text-[10px] text-muted-foreground hidden lg:inline">
                 {t.header.cancelPending}
               </span>
             )}
           </div>
         )}
 
-        <LanguageSwitcher compact />
+        {/* The settings drawer carries the same switcher, so the phone header
+            does not need to spend 78px on it. */}
+        <span className="hidden sm:inline-flex">
+          <LanguageSwitcher compact />
+        </span>
 
         <button
           onClick={onOpenSettings}
           title={t.header.settings}
-          className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+          aria-label={t.header.settings}
+          className="p-1.5 sm:p-2 rounded-lg shrink-0 hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
         >
           <Settings className="h-5 w-5" />
         </button>
@@ -127,7 +139,8 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
           <button
             onClick={signOut}
             title={t.header.signOut}
-            className="p-2 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+            aria-label={t.header.signOut}
+            className="p-1.5 sm:p-2 rounded-lg shrink-0 hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
           >
             <LogOut className="h-4 w-4" />
           </button>

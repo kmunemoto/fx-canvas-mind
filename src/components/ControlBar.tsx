@@ -33,12 +33,16 @@ const ControlBar = ({
   return (
   <div className="glass rounded-xl border border-border p-4 space-y-4">
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-      <div className="flex items-center gap-1 bg-secondary rounded-lg p-1 overflow-x-auto">
+      {/* A segmented control, not a scrolling strip: on a 320px phone the four
+          Japanese labels overflowed the row and the selected one was clipped
+          off the right edge, which reads as broken rather than scrollable. */}
+      <div className="grid grid-cols-4 gap-1 bg-secondary rounded-lg p-1 sm:flex sm:items-center">
         {INTERVALS.map((value) => (
           <button
             key={value}
             onClick={() => onIntervalChange(value)}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
+            aria-pressed={interval === value}
+            className={`px-1.5 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
               interval === value
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"

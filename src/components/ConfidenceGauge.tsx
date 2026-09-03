@@ -34,7 +34,10 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
 
   return (
     <div className="flex flex-col items-center">
-      <div className="relative w-48 h-48">
+      {/* A fixed 192px ring left a 390px phone with ~150px for the direction
+          and the thesis beside it, so both wrapped to a column of scraps.
+          The ring shrinks with the viewport instead. */}
+      <div className="relative w-28 h-28 sm:w-32 sm:h-32 md:w-36 md:h-36">
         <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
           <circle
             cx="50" cy="50" r="45"
@@ -69,13 +72,15 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
             </>
           )}
           <span
-            className={`font-mono font-semibold text-foreground ${showSignalLabel ? "text-2xl mt-1" : "text-4xl"}`}
+            className={`font-mono font-semibold text-foreground ${
+              showSignalLabel ? "text-xl sm:text-2xl mt-1" : "text-2xl sm:text-3xl md:text-4xl"
+            }`}
           >
             {animatedConfidence}%
           </span>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground mt-2">{t.direction.confidence}</p>
+      <p className="text-[10px] sm:text-xs text-muted-foreground mt-1.5 sm:mt-2">{t.direction.confidence}</p>
     </div>
   );
 };
