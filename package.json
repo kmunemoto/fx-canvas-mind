@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "check:functions": "deno check supabase/functions/analyze/index.ts supabase/functions/track-outcomes/index.ts supabase/functions/postmortem/index.ts",
+    "check:functions": "deno check supabase/functions/analyze/index.ts supabase/functions/track-outcomes/index.ts supabase/functions/postmortem/index.ts supabase/functions/econ-calendar/index.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

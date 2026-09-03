@@ -20,3 +20,8 @@ verify_jwt = false
 # admin's JWT for a manual run.
 [functions.postmortem]
 verify_jwt = false
+
+# Authenticates in the function body: the sweep token from pg_cron, or an
+# admin's JWT for a manual refresh.
+[functions.econ-calendar]
+verify_jwt = false

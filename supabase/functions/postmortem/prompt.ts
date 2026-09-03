@@ -125,6 +125,8 @@ export interface RecordRow {
   entry: number | null;
   stop: number | null;
   tp1: number | null;
+  // What the judge saw the plan fill at, when it recorded one
+  fill_price?: number | null;
   outcome_price: number | null;
   rulebook_version: number | null;
 }
@@ -132,8 +134,12 @@ export interface RecordRow {
 // What the plan made or lost, in multiples of its planned risk. A win is
 // paid at TP1, a loss costs 1R, an expiry is marked where it closed.
 // Frictionless: no spread or slippage is charged.
-export const realizedR = (row: Pick<RecordRow, "signal" | "outcome" | "entry" | "stop" | "tp1" | "outcome_price">): number | null => {
-  const { entry, stop, tp1 } = row;
+export const realizedR = (
+  row: Pick<RecordRow, "signal" | "outcome" | "entry" | "stop" | "tp1" | "outcome_price" | "fill_price">,
+): number | null => {
+  const { stop, tp1 } = row;
+  // The price the trade actually opened at, when the judge recorded one
+  const entry = typeof row.fill_price === "number" && Number.isFinite(row.fill_price) ? row.fill_price : row.entry;
   if (entry === null || stop === null || tp1 === null || ![entry, stop, tp1].every(Number.isFinite)) return null;
   const risk = Math.abs(entry - stop);
   if (risk <= 0) return null;

@@ -108,7 +108,11 @@ export const wilson = (successes: number, n: number, z = 1.96): [number, number]
 
 // What a settled plan made or lost, in R (see the header)
 export const realizedR = (r: AnalysisRecord): number | null => {
-  const { entry_point: entry, stop_loss: stop, take_profit_1: tp1 } = r;
+  const { stop_loss: stop, take_profit_1: tp1 } = r;
+  // What the trade actually opened at, which for a market order is the price
+  // on its own side of the book rather than the number written on the plan
+  const filled = r.evaluation?.fill_price;
+  const entry = typeof filled === "number" && Number.isFinite(filled) ? filled : r.entry_point;
   if (entry === null || stop === null || tp1 === null || ![entry, stop, tp1].every(Number.isFinite)) return null;
   const risk = Math.abs(entry - stop);
   if (risk <= 0) return null;

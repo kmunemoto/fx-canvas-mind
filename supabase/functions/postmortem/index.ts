@@ -642,7 +642,7 @@ Deno.serve(async (req: Request) => {
         };
       } else {
         const recordRows = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
         );
         const record: RecordRow[] = recordRows.map((r) => ({
           id: strOrNull(r.id) ?? undefined,
@@ -658,6 +658,7 @@ Deno.serve(async (req: Request) => {
           entry: numberOrNull(r.entry_point),
           stop: numberOrNull(r.stop_loss),
           tp1: numberOrNull(r.take_profit_1),
+          fill_price: numberOrNull(r.fill_price),
           outcome_price: numberOrNull(r.outcome_price),
           rulebook_version: numberOrNull(r.rulebook_version),
         }));
