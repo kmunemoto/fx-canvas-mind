@@ -1,4 +1,6 @@
-const FUNCTION_VERSION = "analyze-v19-2026-09-03T15:00:00Z";
+const FUNCTION_VERSION = "analyze-v20-2026-09-03T18:00:00Z";
+// Open plans in the same direction inside this window are the same bet
+const OPEN_PLAN_WINDOW_HOURS = 24;
 
 import {
   computeSnapshot,
@@ -707,7 +709,7 @@ Deno.serve(async (req: Request) => {
       if (isRecord(rulebook)) {
         const v = asFiniteNumber(rulebook.version);
         rulebookVersion = v === null ? null : Math.round(v);
-        learnedRules = renderLearnedRules(parseRules(rulebook.rules));
+        learnedRules = renderLearnedRules(parseRules(rulebook.rules), locale);
       }
     } catch (err) {
       console.warn("Rulebook unavailable:", err instanceof Error ? err.message : String(err));
@@ -1059,7 +1061,9 @@ Deno.serve(async (req: Request) => {
       // more than ~3 pips from the market as a limit that has to be touched,
       // so publish the price the checker actually approved.
       const originalEntry = normalizedAnalysis.entry_point;
-      normalizedAnalysis.entry_point_num = entryVerdict.entry;
+      // Stored at the displayed precision, so the price the tracker judges
+      // is the price the user was shown
+      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
       normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
       normalizedAnalysis.entry_type = "market";
       if (entryVerdict.riskReward !== null) {
@@ -1075,7 +1079,9 @@ Deno.serve(async (req: Request) => {
       // The pullback would not have come; the same plan entered now still
       // pays, so that is what gets published — and said.
       const originalEntry = normalizedAnalysis.entry_point;
-      normalizedAnalysis.entry_point_num = entryVerdict.entry;
+      // Stored at the displayed precision, so the price the tracker judges
+      // is the price the user was shown
+      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
       normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
       normalizedAnalysis.entry_type = "market";
       if (entryVerdict.riskReward !== null) {
@@ -1125,6 +1131,17 @@ Deno.serve(async (req: Request) => {
       // The user asked for a plan and the gate took it away; that is not a
       // credit spent
       await releaseQuota();
+    } else if (entryVerdict.ok && entryVerdict.snapDeclined) {
+      // Inside the market band but left as written: say so, because the
+      // tracker will treat it as a limit that has to be touched
+      normalizedAnalysis.warnings = [
+        L.entrySnapDeclined({
+          entry: normalizedAnalysis.entry_point,
+          price: entrySnapshot.price.toFixed(decimals),
+          reason: entryVerdict.snapDeclined,
+        }),
+        ...normalizedAnalysis.warnings,
+      ];
     }
 
     const entryCheck = {
@@ -1150,6 +1167,31 @@ Deno.serve(async (req: Request) => {
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
       price: entrySnapshot.price,
     };
+
+    // The same direction on the same pair already open from an earlier plan:
+    // another one is the same bet again, not a new one, and the record would
+    // count it as an independent sample. Said on the plan, and kept with it.
+    stage = "check_open_plans";
+    let openSameDirection = 0;
+    if (serviceRoleKey && (normalizedAnalysis.signal === "BUY" || normalizedAnalysis.signal === "SELL")) {
+      try {
+        const sinceIso = new Date(Date.now() - OPEN_PLAN_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+        const openRes = await fetch(
+          `${supabaseUrl}/rest/v1/analyses?select=id&user_id=eq.${encodeURIComponent(user.id)}&pair=eq.${encodeURIComponent(currencyPair)}&signal=eq.${normalizedAnalysis.signal}&outcome=eq.pending&shadow=is.false&created_at=gte.${encodeURIComponent(sinceIso)}&limit=10`,
+          { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
+        );
+        const openRows = openRes.ok ? parseJsonResponse(await openRes.text()) : null;
+        openSameDirection = Array.isArray(openRows) ? openRows.length : 0;
+        if (openSameDirection > 0) {
+          normalizedAnalysis.warnings = [
+            L.openSameDirection({ count: openSameDirection, signal: normalizedAnalysis.signal, hours: OPEN_PLAN_WINDOW_HOURS }),
+            ...normalizedAnalysis.warnings,
+          ];
+        }
+      } catch (err) {
+        console.warn("Open plan check unavailable:", err instanceof Error ? err.message : String(err));
+      }
+    }
 
     // What the model was looking at, kept with the plan so a post-mortem can
     // tell a misread market from a wrong call
@@ -1182,6 +1224,7 @@ Deno.serve(async (req: Request) => {
           swing_lows: s.swingLows.map((v) => roundTo(v, decimals)),
         };
     const context = {
+      open_same_direction: openSameDirection,
       timeframes,
       entry: compactSnapshot(timeframes[0], snapshots[0]),
       higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),

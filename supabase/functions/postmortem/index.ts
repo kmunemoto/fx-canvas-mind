@@ -23,17 +23,21 @@ import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Post
 import {
   CONSOLIDATION_SCHEMA,
   DIAGNOSIS_SCHEMA,
+  MIN_NEW_LESSONS,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
   parseConsolidation,
   parseDiagnosis,
+  revisionDue,
   summarizeRecord,
+  withClusters,
   type LessonRow,
   type PlanSummary,
+  type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v1-2026-09-03T15:00:00Z";
-const SCHEMA_VERSION = 1;
+const POSTMORTEM_VERSION = "postmortem-v3-2026-09-03T18:00:00Z";
+const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
@@ -226,21 +230,48 @@ Deno.serve(async (req: Request) => {
     const limit = numberOrNull(body.limit);
     if (limit !== null) options.limit = Math.max(1, Math.min(MAX_PLANS_ADMIN, Math.round(limit)));
 
+    // ---- the rulebook, by version -------------------------------------------
+    // Every plan records the rulebook version it was made under; the current
+    // rules and the kept history say which rules that version held, so the
+    // diagnosis can name the rule at fault and the consolidation can score
+    // each rule on what its plans then did
+    const [current] = await readRows("rulebook?id=eq.1&select=version,rules,history,updated_at");
+    const rulesByVersion = new Map<number, Rule[]>();
+    if (current) {
+      rulesByVersion.set(numberOrNull(current.version) ?? 0, parseRules(current.rules));
+      for (const h of Array.isArray(current.history) ? current.history : []) {
+        if (!isRecord(h)) continue;
+        const hv = numberOrNull(h.version);
+        if (hv !== null && !rulesByVersion.has(hv)) rulesByVersion.set(hv, parseRules(h.rules));
+      }
+    }
+    const ruleVersions: Record<string, string[]> = {};
+    for (const [v, rules] of rulesByVersion) ruleVersions[String(v)] = rules.map((r) => r.id);
+
     // ---- settled plans without a diagnosis --------------------------------
     const select = [
       "id", "user_id", "pair", "interval", "mode", "signal", "confidence", "thesis",
       "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
       "price_at_signal", "created_at", "closed_at", "outcome", "evaluation",
-      "entry_check", "context", "shadow", "result",
+      "entry_check", "context", "shadow", "result", "postmortem", "rulebook_version",
     ].join(",");
-    const idFilter = options.ids.length > 0 ? `&id=in.(${options.ids.map(encodeURIComponent).join(",")})` : "";
+    // Never diagnosed; failed and still retryable; diagnosed on too little
+    // aftermath (thin) and not yet revisited; or diagnosed by a version that
+    // did not record whether it was thin (the first one), which would
+    // otherwise never be looked at again
     const retryFilter = [
       "or=(postmortem.is.null",
       `and(postmortem->>status.eq.failed,postmortem->>attempts.lt.${MAX_ATTEMPTS})`,
-      `and(postmortem->>status.eq.done,postmortem->>thin.eq.true,postmortem->>revisions.lt.${MAX_REVISIONS}))`,
+      `and(postmortem->>status.eq.done,postmortem->>thin.eq.true,postmortem->>revisions.lt.${MAX_REVISIONS})`,
+      "and(postmortem->>status.eq.done,postmortem->>thin.is.null))",
     ].join(",");
+    // Named rows are re-diagnosed whatever their state: that is what naming
+    // them is for
+    const rowFilter = options.ids.length > 0
+      ? `id=in.(${options.ids.map(encodeURIComponent).join(",")})`
+      : retryFilter;
     const candidates = await readRows(
-      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${retryFilter}${idFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
+      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
 
     const rows: Array<{ row: PostmortemRow; raw: JsonRecord }> = [];
@@ -268,7 +299,7 @@ Deno.serve(async (req: Request) => {
       };
       const prior = isRecord(r.postmortem) ? r.postmortem : null;
       const isRevision = prior?.status === "done";
-      if (!options.force) {
+      if (!options.force && options.ids.length === 0) {
         if (!isPostmortemDue(row, nowMs)) continue;
         // A revision waits for the whole after-window, not just the first
         // couple of bars that made the original diagnosis thin
@@ -390,6 +421,7 @@ Deno.serve(async (req: Request) => {
         facts = await computeFacts(row, candles, evalInterval, nowMs, {
           declaredMode: mcd && typeof mcd.mode === "string" ? mcd.mode : null,
           adx: contextEntry ? numberOrNull(contextEntry.adx) : null,
+          atr: (contextEntry ? numberOrNull(contextEntry.atr) : null) ?? (entryCheck ? numberOrNull(entryCheck.atr) : null),
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);
@@ -397,6 +429,8 @@ Deno.serve(async (req: Request) => {
       }
 
       const ev = row.evaluation;
+      const planVersion = numberOrNull(raw.rulebook_version);
+      const rulesInForce = planVersion === null ? [] : rulesByVersion.get(planVersion) ?? [];
       const plan: PlanSummary = {
         id: row.id,
         pair: row.pair,
@@ -427,6 +461,7 @@ Deno.serve(async (req: Request) => {
         entry_check: entryCheck,
         context,
         shadow: raw.shadow === true,
+        rules_in_force: rulesInForce.map((r) => ({ id: r.id, text_ja: r.text_ja })),
       };
 
       const prompt = buildDiagnosisPrompt(plan, facts);
@@ -437,7 +472,7 @@ Deno.serve(async (req: Request) => {
         await markFailed(row, raw, `model: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
-      const diagnosis = parseDiagnosis(answer, facts.hints);
+      const diagnosis = parseDiagnosis(answer, facts.hints, rulesInForce.map((r) => r.id));
       if (!diagnosis) {
         await markFailed(row, raw, "no_diagnosis");
         continue;
@@ -460,6 +495,9 @@ Deno.serve(async (req: Request) => {
         evidence: { ja: diagnosis.evidence_ja, en: diagnosis.evidence_en },
         lesson: { ja: diagnosis.lesson_ja, en: diagnosis.lesson_en },
         scope: diagnosis.scope,
+        rule_blamed: diagnosis.rule_blamed,
+        rule_credited: diagnosis.rule_credited,
+        rulebook_version: planVersion,
         facts,
         created_at: nowIso,
       };
@@ -489,6 +527,8 @@ Deno.serve(async (req: Request) => {
           lesson_en: diagnosis.lesson_en,
           scope: diagnosis.scope ? { text: diagnosis.scope } : null,
           shadow: raw.shadow === true,
+          rule_blamed: diagnosis.rule_blamed,
+          rule_credited: diagnosis.rule_credited,
         }),
       });
       if (!lessonRes.ok) {
@@ -501,12 +541,18 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---- rulebook ----------------------------------------------------------
-    let rulebook: { version: number; rules: number } | null = null;
+    // Rewritten only when enough new lessons have gathered since the current
+    // version (or a day has passed with at least one), so that each version
+    // stays in force long enough for the plans made under it to settle and
+    // be scored against it. A hand-run with `consolidate` skips the wait.
+    let rulebook: JsonRecord | null = null;
     if ((newLessons > 0 || options.consolidate) && elapsed() < START_CONSOLIDATION_BEFORE_MS) {
       const lessonRows = await readRows(
-        `lessons?select=cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,created_at&order=created_at.desc&limit=${RECENT_LESSONS}`,
+        `lessons?select=analysis_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,rule_blamed,rule_credited&order=created_at.desc&limit=${RECENT_LESSONS}`,
       );
-      const lessons: LessonRow[] = lessonRows.map((l) => ({
+      const lessons: LessonRow[] = withClusters(lessonRows.map((l) => ({
+        analysis_id: String(l.analysis_id ?? ""),
+        pair: String(l.pair ?? ""),
         cause: String(l.cause ?? "inconclusive"),
         outcome: String(l.outcome ?? ""),
         interval: String(l.interval ?? ""),
@@ -518,27 +564,53 @@ Deno.serve(async (req: Request) => {
         confidence: numberOrNull(l.confidence),
         avoidable: typeof l.avoidable === "boolean" ? l.avoidable : null,
         shadow: l.shadow === true,
+        scope: isRecord(l.scope) ? strOrNull(l.scope.text) : null,
         created_at: String(l.created_at ?? ""),
-      }));
-      const recordRows = await readRows(
-        `analyses?select=outcome,signal,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at&order=created_at.desc&limit=${RECENT_ROWS}`,
-      );
-      const stats = summarizeRecord(
-        recordRows.map((r) => ({
-          outcome: String(r.outcome ?? ""),
+        rule_blamed: strOrNull(l.rule_blamed),
+        rule_credited: strOrNull(l.rule_credited),
+      })));
+
+      const previousRules: Rule[] = current ? parseRules(current.rules) : [];
+      const previousVersion = current ? numberOrNull(current.version) ?? 0 : 0;
+      const updatedAt = current ? strOrNull(current.updated_at) : null;
+      const updatedMs = updatedAt ? Date.parse(updatedAt) : NaN;
+      const sinceVersion = lessons.filter((l) => {
+        const t = Date.parse(l.created_at);
+        return !Number.isFinite(updatedMs) || (Number.isFinite(t) && t > updatedMs);
+      }).length;
+      const due = options.consolidate || revisionDue(sinceVersion, updatedAt, nowMs);
+
+      if (lessons.length === 0) {
+        rulebook = { version: previousVersion, revised: false, reason: "no_lessons" };
+      } else if (!due) {
+        rulebook = {
+          version: previousVersion,
+          revised: false,
+          reason: "waiting",
+          lessons_since_version: sinceVersion,
+          lessons_needed: Math.max(0, MIN_NEW_LESSONS - sinceVersion),
+        };
+      } else {
+        const recordRows = await readRows(
+          `analyses?select=id,pair,signal,created_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
+        );
+        const record: RecordRow[] = recordRows.map((r) => ({
+          id: strOrNull(r.id) ?? undefined,
+          pair: String(r.pair ?? ""),
           signal: String(r.signal ?? ""),
+          created_at: String(r.created_at ?? ""),
+          outcome: String(r.outcome ?? ""),
           shadow: r.shadow === true,
           rejection: strOrNull(r.rejection),
           filled: typeof r.filled_at === "string" && r.filled_at.length > 0,
-        })),
-        lessons,
-      );
+          entry: numberOrNull(r.entry_point),
+          stop: numberOrNull(r.stop_loss),
+          tp1: numberOrNull(r.take_profit_1),
+          outcome_price: numberOrNull(r.outcome_price),
+          rulebook_version: numberOrNull(r.rulebook_version),
+        }));
+        const stats = summarizeRecord(record, lessons, ruleVersions);
 
-      const [current] = await readRows("rulebook?id=eq.1&select=version,rules,history,updated_at");
-      const previousRules: Rule[] = current ? parseRules(current.rules) : [];
-      const previousVersion = current ? numberOrNull(current.version) ?? 0 : 0;
-
-      if (lessons.length > 0) {
         const prompt = buildConsolidationPrompt(previousRules, lessons, stats);
         let answer: unknown = null;
         try {
@@ -546,24 +618,26 @@ Deno.serve(async (req: Request) => {
         } catch (err) {
           errors.push(`rulebook: model ${err instanceof Error ? err.message : String(err)}`);
         }
-        const consolidated = parseConsolidation(answer, previousRules, nowIso);
+        const consolidated = parseConsolidation(answer, previousRules, nowIso, lessons);
         if (!consolidated) {
           errors.push("rulebook: no usable answer");
         } else {
           const history = Array.isArray(current?.history) ? current.history : [];
           const nextHistory = previousRules.length > 0
-            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: current?.updated_at ?? null }]
+            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
             : history;
           const n = await patchRows("rulebook?id=eq.1", {
             version: previousVersion + 1,
             rules: consolidated.rules,
             summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
-            stats,
+            stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
             history: nextHistory,
             updated_at: nowIso,
           });
-          if (n > 0) rulebook = { version: previousVersion + 1, rules: consolidated.rules.length };
-          else errors.push("rulebook: not written");
+          if (n > 0) {
+            rulebook = { version: previousVersion + 1, revised: true, rules: consolidated.rules.length, changes: consolidated.changes };
+            console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
+          } else errors.push("rulebook: not written");
         }
       }
     }

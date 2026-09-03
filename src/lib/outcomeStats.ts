@@ -4,6 +4,14 @@ import type { AnalysisRecord, PostmortemCause } from "./types";
 // rate: an entry that never filled or a bar that touched both levels says
 // nothing about whether the call was right.
 //
+// The rate alone is not the record, though. A handful of settled trades can
+// show any rate at all, plans opened on the same pair in the same direction
+// on the same day are one decision rather than several, and a 40% win rate
+// at 2:1 beats a 60% one at 1:2. So every tally also carries how many
+// trades it rests on, a confidence interval for the rate, the count of
+// independent situations behind it, and what the plans made or lost in
+// multiples of their risk.
+//
 // Shadow rows — plans the entry gate refused but still tracks — are not
 // part of the record; they are counted apart (shadowTally) to show whether
 // the gate is right.
@@ -20,10 +28,20 @@ export interface OutcomeTally {
   // WAIT rows that were the gate's doing, not the model's
   rejected: number;
   winRate: number | null;
+  // Wilson 95% interval for the win rate, in percent
+  winRateCi: [number, number] | null;
+  // Settled trades counted once per market situation (same pair, same
+  // direction, within a day of each other)
+  clusters: number;
   // Share of settled plans that actually became a trade. A signal whose entry
   // the market never reaches teaches nothing, so this is tracked next to the
   // win rate rather than buried in the outcome counts.
   fillRate: number | null;
+  // What the settled plans made or lost, in multiples of their planned risk
+  // (a win pays TP1, a loss costs 1R, an expiry is marked where it closed;
+  // no spread or slippage is charged)
+  sumR: number | null;
+  expectancy: number | null;
 }
 
 export interface ShadowTally {
@@ -37,6 +55,14 @@ export interface ShadowTally {
 
 export const TIMEFRAME_ORDER = ["15min", "1h", "4h", "1day"];
 export const MODE_ORDER = ["full", "technical_only", "technical_fallback"];
+export const NO_RULEBOOK = "none";
+
+// Independent settled trades before a win rate is worth arguing about: the
+// point where a 95% interval on a real edge stops including break-even
+export const TARGET_CLUSTERS = 50;
+// Plans on the same pair in the same direction inside this window are one
+// decision about one situation
+export const CLUSTER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // [lower bound, upper bound or null for open-ended]
 export const CONFIDENCE_BANDS: Array<[number, number | null]> = [
@@ -61,6 +87,61 @@ export const confidenceBandKey = (confidence: number | null): string => {
   return "0-59";
 };
 
+export const rulebookKey = (r: AnalysisRecord): string =>
+  typeof r.rulebook_version === "number" && Number.isFinite(r.rulebook_version) ? `v${r.rulebook_version}` : NO_RULEBOOK;
+
+const round2 = (v: number) => Number(v.toFixed(2));
+
+// Wilson score interval for a proportion, in percent
+export const wilson = (successes: number, n: number, z = 1.96): [number, number] | null => {
+  if (n <= 0) return null;
+  const p = successes / n;
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const centre = (p + z2 / (2 * n)) / denom;
+  const half = (z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / denom;
+  return [Math.round(Math.max(0, centre - half) * 100), Math.round(Math.min(1, centre + half) * 100)];
+};
+
+// What a settled plan made or lost, in R (see the header)
+export const realizedR = (r: AnalysisRecord): number | null => {
+  const { entry_point: entry, stop_loss: stop, take_profit_1: tp1 } = r;
+  if (entry === null || stop === null || tp1 === null || ![entry, stop, tp1].every(Number.isFinite)) return null;
+  const risk = Math.abs(entry - stop);
+  if (risk <= 0) return null;
+  const sign = r.signal === "BUY" ? 1 : r.signal === "SELL" ? -1 : 0;
+  if (sign === 0) return null;
+  if (r.outcome === "win") return round2(Math.abs(tp1 - entry) / risk);
+  if (r.outcome === "loss") return -1;
+  if (r.outcome === "expired" && typeof r.outcome_price === "number" && Number.isFinite(r.outcome_price)) {
+    return round2((sign * (r.outcome_price - entry)) / risk);
+  }
+  return null;
+};
+
+// Cluster ids, in input order: same pair, same direction, opened within
+// CLUSTER_WINDOW_MS of the cluster's first plan
+export const clusterIds = (items: Array<Pick<AnalysisRecord, "pair" | "signal" | "created_at">>): string[] => {
+  const order = items
+    .map((item, i) => ({ i, t: Date.parse(item.created_at) }))
+    .sort((a, b) => (Number.isFinite(a.t) ? a.t : 0) - (Number.isFinite(b.t) ? b.t : 0));
+  const starts = new Map<string, { id: string; t: number }>();
+  const out = new Array<string>(items.length);
+  for (const { i, t } of order) {
+    const item = items[i];
+    const key = `${item.pair}|${item.signal}`;
+    const current = starts.get(key);
+    if (current && Number.isFinite(t) && t - current.t < CLUSTER_WINDOW_MS) {
+      out[i] = current.id;
+      continue;
+    }
+    const id = `${key}|${Number.isFinite(t) ? new Date(t).toISOString().slice(0, 13) : "unknown"}`;
+    starts.set(key, { id, t: Number.isFinite(t) ? t : 0 });
+    out[i] = id;
+  }
+  return out;
+};
+
 // A trade happened if the tracker saw the entry reached; an ambiguous row
 // with a fill still counts as one
 const wasFilled = (r: AnalysisRecord): boolean =>
@@ -68,13 +149,20 @@ const wasFilled = (r: AnalysisRecord): boolean =>
   (r.outcome === "ambiguous" && typeof r.evaluation?.filled_at === "string" && r.evaluation.filled_at.length > 0);
 
 export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
-  const t: OutcomeTally = { key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0, total: 0, rejected: 0, winRate: null, fillRate: null };
+  const t: OutcomeTally = {
+    key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0, total: 0, rejected: 0,
+    winRate: null, winRateCi: null, clusters: 0, fillRate: null, sumR: null, expectancy: null,
+  };
   let filled = 0;
   let settled = 0;
-  for (const r of records) {
-    if (isShadow(r)) continue;
+  let sumR = 0;
+  let withR = 0;
+  const clusters = clusterIds(records);
+  const settledClusters = new Set<string>();
+  records.forEach((r, i) => {
+    if (isShadow(r)) return;
     if (isRejected(r)) t.rejected++;
-    if (r.signal === "WAIT" || r.outcome === "skipped") continue;
+    if (r.signal === "WAIT" || r.outcome === "skipped") return;
     t.total++;
     if (r.outcome === "win") t.wins++;
     else if (r.outcome === "loss") t.losses++;
@@ -88,12 +176,22 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
     } else if (r.outcome === "untriggered") {
       settled++;
     }
-  }
+    if (r.outcome === "win" || r.outcome === "loss") settledClusters.add(clusters[i]);
+    const rr = realizedR(r);
+    if (rr !== null) {
+      sumR += rr;
+      withR++;
+    }
+  });
   const closed = t.wins + t.losses;
   t.winRate = closed > 0 ? Math.round((t.wins / closed) * 100) : null;
+  t.winRateCi = wilson(t.wins, closed);
+  t.clusters = settledClusters.size;
   // 'ambiguous' without a fill is left out of both sides: it is precisely
   // the case where we could not establish whether the trade happened
   t.fillRate = settled > 0 ? Math.round((filled / settled) * 100) : null;
+  t.sumR = withR > 0 ? round2(sumR) : null;
+  t.expectancy = withR > 0 ? round2(sumR / withR) : null;
   return t;
 };
 
@@ -131,6 +229,7 @@ const groupBy = (
   records: AnalysisRecord[],
   keyOf: (r: AnalysisRecord) => string,
   order: string[],
+  sortRest: (a: string, b: string) => number = () => 0,
 ): OutcomeTally[] => {
   const buckets = new Map<string, AnalysisRecord[]>();
   for (const r of records) {
@@ -140,7 +239,8 @@ const groupBy = (
     list.push(r);
     buckets.set(k, list);
   }
-  const keys = [...order.filter((k) => buckets.has(k)), ...[...buckets.keys()].filter((k) => !order.includes(k))];
+  const rest = [...buckets.keys()].filter((k) => !order.includes(k)).sort(sortRest);
+  const keys = [...order.filter((k) => buckets.has(k)), ...rest];
   return keys.map((k) => tally(k, buckets.get(k) ?? [])).filter((t) => t.total > 0);
 };
 
@@ -156,3 +256,9 @@ export const byConfidence = (records: AnalysisRecord[]): OutcomeTally[] =>
     (r) => confidenceBandKey(r.confidence),
     [...CONFIDENCE_BANDS.map(([lo, hi]) => (hi === null ? `${lo}+` : `${lo}-${hi}`)), UNKNOWN_BAND],
   );
+
+// The record split by the rulebook version the plans were made under:
+// before any rules first, then each version in order — the before/after
+// comparison that says whether a revision helped
+export const byRulebookVersion = (records: AnalysisRecord[]): OutcomeTally[] =>
+  groupBy(records, rulebookKey, [NO_RULEBOOK], (a, b) => Number(a.slice(1)) - Number(b.slice(1)));

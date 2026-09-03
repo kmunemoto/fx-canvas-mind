@@ -3,8 +3,11 @@ import type { AnalysisRecord } from "@/lib/types";
 import { ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import {
+  NO_RULEBOOK,
+  TARGET_CLUSTERS,
   byConfidence,
   byMode,
+  byRulebookVersion,
   byTimeframe,
   causeCounts,
   isRejected,
@@ -34,7 +37,9 @@ const OUTCOME_CLASS: Record<string, string> = {
   rejected: "bg-warning/15 text-warning border-warning/40",
 };
 
-type Breakdown = "timeframe" | "mode" | "confidence";
+type Breakdown = "timeframe" | "mode" | "confidence" | "rulebook";
+
+const signedR = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}R`);
 
 const parseBand = (key: string): [number, number | null] => {
   if (key.endsWith("+")) return [Number(key.slice(0, -1)), null];
@@ -66,11 +71,18 @@ const AnalysisHistory = ({ records }: Props) => {
   const gate = shadowTally(all);
   const causes = causeCounts(safe);
   const groups: OutcomeTally[] =
-    breakdown === "timeframe" ? byTimeframe(safe) : breakdown === "mode" ? byMode(safe) : byConfidence(safe);
+    breakdown === "timeframe"
+      ? byTimeframe(safe)
+      : breakdown === "mode"
+        ? byMode(safe)
+        : breakdown === "rulebook"
+          ? byRulebookVersion(safe)
+          : byConfidence(safe);
 
   const groupLabel = (key: string) => {
     if (breakdown === "timeframe") return key;
     if (breakdown === "mode") return t.history.modes[key as keyof typeof t.history.modes] ?? key;
+    if (breakdown === "rulebook") return key === NO_RULEBOOK ? t.history.stats.rulebookNone : key;
     if (key === "unknown") return t.history.stats.unknownBand;
     const [lo, hi] = parseBand(key);
     return t.history.stats.confidenceBand(lo, hi);
@@ -80,6 +92,7 @@ const AnalysisHistory = ({ records }: Props) => {
     { id: "timeframe", label: t.history.stats.byTimeframe },
     { id: "mode", label: t.history.stats.byMode },
     { id: "confidence", label: t.history.stats.byConfidence },
+    { id: "rulebook", label: t.history.stats.byRulebook },
   ];
   const activeLabel = breakdowns.find((b) => b.id === breakdown)?.label ?? "";
   const causeLabel = (c: string) => (c in t.history.postmortem.causes ? t.history.postmortem.causes[c as keyof typeof t.history.postmortem.causes] : c);
@@ -115,6 +128,16 @@ const AnalysisHistory = ({ records }: Props) => {
       </div>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {/* what the win rate rests on: a rate off two trades is not a rate */}
+      {closed > 0 && (
+        <p className="text-[10px] text-muted-foreground font-mono" data-testid="record-strip">
+          {overall.clusters < TARGET_CLUSTERS ? `${t.history.stats.measuring(closed, TARGET_CLUSTERS)} · ` : ""}
+          {overall.winRateCi ? `${t.history.stats.ci(overall.winRateCi[0], overall.winRateCi[1])} · ` : ""}
+          {t.history.stats.clusters(overall.clusters)}
+          {overall.expectancy !== null ? ` · ${t.history.stats.expectancy} ${signedR(overall.expectancy)}（${t.history.stats.sumR} ${signedR(overall.sumR)}）` : ""}
+        </p>
+      )}
 
       {/* the gate's own record */}
       {overall.rejected > 0 && (
@@ -159,6 +182,7 @@ const AnalysisHistory = ({ records }: Props) => {
                   <th className="text-right font-normal">{t.history.stats.untriggered}</th>
                   <th className="text-right font-normal">{t.history.stats.other}</th>
                   <th className="text-right font-normal">{t.history.stats.open}</th>
+                  <th className="text-right font-normal">{t.history.stats.rColumn}</th>
                 </tr>
               </thead>
               <tbody>
@@ -176,6 +200,9 @@ const AnalysisHistory = ({ records }: Props) => {
                     <td className="text-right text-warning">{g.untriggered}</td>
                     <td className="text-right text-muted-foreground">{g.ambiguous + g.expired}</td>
                     <td className="text-right text-muted-foreground">{g.open}</td>
+                    <td className={`text-right ${g.sumR === null ? "text-muted-foreground" : g.sumR >= 0 ? "text-success" : "text-destructive"}`}>
+                      {signedR(g.sumR)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -187,7 +214,7 @@ const AnalysisHistory = ({ records }: Props) => {
               {causes.map((c) => `${causeLabel(c.cause)} ×${c.count}`).join(" · ")}
             </p>
           )}
-          <p className="text-[10px] text-muted-foreground">{t.history.winRateNote}</p>
+          <p className="text-[10px] text-muted-foreground">{t.history.winRateNote} · {t.history.stats.frictionNote}</p>
         </div>
       )}
 

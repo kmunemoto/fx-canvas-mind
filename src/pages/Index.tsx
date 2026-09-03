@@ -7,6 +7,7 @@ import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import LearnedRules from "@/components/LearnedRules";
+import LoopHealth from "@/components/LoopHealth";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
@@ -20,6 +21,7 @@ import type {
   NumericCandle,
   TechnicalData,
   TimeInterval,
+  LoopHealth as LoopHealthData,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
@@ -27,7 +29,7 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v19-2026-09-03T15:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v20-2026-09-03T18:00:00Z";
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -171,6 +173,7 @@ const Index = () => {
   const [liveRate, setLiveRate] = useState<string | null>(null);
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [rulebook, setRulebook] = useState<Rulebook | null>(null);
+  const [loopHealth, setLoopHealth] = useState<LoopHealthData | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -228,6 +231,15 @@ const Index = () => {
     } catch {
       // The learned rules are a display of what the analyzer knows, nothing
       // else depends on them
+    }
+    try {
+      // Whether the review loop is actually running, shown rather than assumed
+      const { data, error } = await supabase.rpc("loop_health");
+      if (!error && data && typeof data === "object") {
+        setLoopHealth(data as LoopHealthData);
+      }
+    } catch {
+      // Best effort, like the rest of the panel
     }
   }, []);
 
@@ -487,6 +499,7 @@ const Index = () => {
 
           <div className="space-y-4">
             {techData && !loading && <TechnicalDataCard data={techData} />}
+            <LoopHealth health={loopHealth} />
             <LearnedRules rulebook={rulebook} />
             <AnalysisHistory records={history} />
           </div>

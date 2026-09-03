@@ -9,6 +9,9 @@ interface Props {
 }
 
 const PREVIEW = 5;
+// A rule with this much evidence or less is shown as under review, as it is
+// in the prompt (see supabase/functions/analyze/rules.ts)
+const VERIFYING = 2;
 
 // The rules the analyzer has learned from its own record: written by the
 // post-mortem of every settled plan, consolidated, and put in front of the
@@ -49,11 +52,23 @@ const LearnedRules = ({ rulebook }: Props) => {
               <li key={r.id} className="flex items-start gap-2 text-xs">
                 <span className="font-mono text-muted-foreground shrink-0 w-5 text-right">{i + 1}.</span>
                 <span className="flex-1 text-foreground">
+                  {r.kind && (
+                    <span className={`mr-1 px-1 py-px rounded text-[10px] font-semibold ${
+                      r.kind === "constraint" ? "bg-warning/15 text-warning" : "bg-primary/10 text-primary"
+                    }`}>
+                      {s.kind[r.kind]}
+                    </span>
+                  )}
                   {r.scope && <span className="text-muted-foreground mr-1">[{r.scope}]</span>}
                   {text(r)}
                 </span>
-                <span className="shrink-0 px-1.5 py-0.5 rounded border border-border text-[10px] text-muted-foreground font-mono">
-                  {s.support(r.support)}
+                <span
+                  className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-mono ${
+                    r.support <= VERIFYING ? "border-warning/40 text-warning" : "border-border text-muted-foreground"
+                  }`}
+                  title={s.supportNote}
+                >
+                  {r.support <= VERIFYING ? `${s.verifying}・${s.support(r.support)}` : s.support(r.support)}
                 </span>
               </li>
             ))}
@@ -69,6 +84,7 @@ const LearnedRules = ({ rulebook }: Props) => {
             </button>
           )}
           <p className="text-[10px] text-muted-foreground">{s.note}</p>
+          <p className="text-[10px] text-muted-foreground">{s.supportNote} {s.cadence}</p>
         </>
       )}
     </div>
