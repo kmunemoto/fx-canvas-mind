@@ -103,6 +103,17 @@ describe("the prompt block", () => {
   it("says nothing when nothing is scheduled", () => {
     expect(renderEventBlock([], NOW)).toBe("");
   });
+
+  it("admits the calendar only reaches the end of this week", () => {
+    // A 4-hour plan looks 48 hours ahead and a daily one five days, which
+    // routinely runs past what the feed publishes. Without this line the
+    // model would read a short list as "the coast is clear".
+    const events = upcomingFor(parseEvents(FEED), "USD/JPY", NOW, 48 * HOUR);
+    expect(renderEventBlock(events, NOW, "ja")).toContain("今週分までしか公開されていない");
+    const en = renderEventBlock(events, NOW, "en");
+    expect(en).toContain("only publishes the current week");
+    expect(en).not.toMatch(/[ぁ-んァ-ヶ一-龠]/);
+  });
 });
 
 describe("blocking an entry around a release", () => {

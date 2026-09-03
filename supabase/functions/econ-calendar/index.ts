@@ -10,7 +10,7 @@
 
 import { parseEvents, type EconEvent } from "./events.ts";
 
-const FUNCTION_VERSION = "econ-calendar-v2-2026-09-03T20:00:00Z";
+const FUNCTION_VERSION = "econ-calendar-v3-2026-09-03T22:30:00Z";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 // Only the current week is published. `ff_calendar_nextweek.json`,

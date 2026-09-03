@@ -102,7 +102,7 @@ export const parseEvents = (body: unknown, source = "forexfactory"): EconEvent[]
 
 // The currencies a pair is exposed to. "All" is exposure for everyone.
 export const currenciesOf = (pair: string): string[] => {
-  const parts = pair.toUpperCase().split(/[\/_]/).map((p) => p.trim()).filter(Boolean);
+  const parts = pair.toUpperCase().split(/[/_]/).map((p) => p.trim()).filter(Boolean);
   return parts.length === 2 ? parts : [];
 };
 
@@ -149,7 +149,13 @@ export const renderEventBlock = (events: EconEvent[], nowMs: number, locale: "ja
     const ahead = e.all_day ? "" : ` [${inHours}h]`;
     return `- ${when} ${e.country} ${e.impact} — ${e.title}${consensus ? ` (${consensus})` : ""}${ahead}`;
   });
-  return [head, ...lines].join("\n");
+  // Without this, an empty tail reads as "nothing else is scheduled", which
+  // the feed cannot support: only the current week is published, so a 4-hour
+  // or daily plan routinely looks past the end of what is known.
+  const coverage = locale === "ja"
+    ? "（カレンダーは今週分までしか公開されていない。ここに無い＝予定が無い、ではない）"
+    : "(The calendar only publishes the current week, so an empty tail does not mean nothing is scheduled.)";
+  return [head, ...lines, coverage].join("\n");
 };
 
 // Is a fill at this moment inside the blackout around a high-impact release?
