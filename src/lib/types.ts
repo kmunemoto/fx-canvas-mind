@@ -173,6 +173,14 @@ export interface EntryCheck {
   regime?: string | null;
   momentum?: boolean;
   distance_atr: number | null;
+  // Which contract the plan was made under, and the geometry the gate saw.
+  // Recorded so a drift in how the model places stops and targets is visible
+  // before it becomes a change in the win rate.
+  contract?: string;
+  stop_atr?: number | null;
+  tp1_atr?: number | null;
+  atr?: number | null;
+  priced_at?: string;
   stop_atr?: number | null;
   risk_reward: number | null;
   rejection: EntryRejection | null;

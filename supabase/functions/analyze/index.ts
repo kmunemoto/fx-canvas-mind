@@ -1204,6 +1204,22 @@ Deno.serve(async (req: Request) => {
       // Under market_v1 the model declares no order type — the server sets
       // the entry — so what is worth recording is the contract itself.
       contract: "market_v1",
+      // The plan's geometry, recorded on every row so the floors can be
+      // calibrated from what actually happened rather than guessed.
+      //
+      // Measured over the first eight plans: the stop sat between 0.72 and
+      // 1.03 ATR (mean 0.86) while the median plan resolved in about six
+      // bars — over which price wanders roughly sqrt(6) ~ 2.4 ATR. So the
+      // stop was at about a third of the distance price was expected to
+      // travel before the trade ended. That is a strong argument for a floor
+      // scaled to the HOLDING PERIOD rather than to one bar, and it is
+      // deliberately NOT imposed yet: eight plans is not enough to move a
+      // threshold on, and swinging from too permissive to nothing-passes
+      // would be the same overfitting in the other direction. Recorded now,
+      // decided when there is something to decide it with.
+      tp1_atr: entrySnapshot.atr && proposed.tp1 !== null
+        ? Number((Math.abs(proposed.tp1 - marketEntry) / entrySnapshot.atr).toFixed(2))
+        : null,
       declared_mode: detail && typeof detail.mode === "string" ? detail.mode : null,
       declared_direction: detail && typeof detail.direction === "string" ? detail.direction : null,
       priced_at: pricedAtIso,

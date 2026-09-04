@@ -109,6 +109,8 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}損切りが現在値に近すぎ（ATRの${stopAtr ?? "?"}倍）、ノイズで刈られる可能性が高い${tail}`;
         case "poor_rr":
           return `${head}このエントリーではリスクリワードが${riskReward ?? "?"}しかなく、割に合わない${tail}`;
+        case "target_out_of_reach":
+          return `${head}利確がリスクの${riskReward ?? "?"}倍と遠すぎ、期限内に届かず期限切れで終わる可能性が高い${tail}`;
         default:
           return `${head}エントリー・損切り・利確の水準に矛盾がある${tail}`;
       }
@@ -161,6 +163,8 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}the stop sits inside the noise (${stopAtr ?? "?"}× ATR from the entry) and would be hit by it${tail}`;
         case "poor_rr":
           return `${head}at that entry the risk/reward is only ${riskReward ?? "?"}, which does not pay${tail}`;
+        case "target_out_of_reach":
+          return `${head}the target sits ${riskReward ?? "?"}x the risk away — far enough that the plan is likelier to expire than to resolve${tail}`;
         default:
           return `${head}the entry, stop and target contradict each other${tail}`;
       }
