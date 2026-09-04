@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
 import { LOCALES, DEFAULT_LOCALE, dictionaryFor, isLocale, resolveLocale } from "../lib/i18n/locales";
+import { CAUSES } from "../../supabase/functions/postmortem/facts.ts";
 
 // Walks both dictionaries together. TypeScript already requires every key, but
 // it cannot catch a value left as the Japanese original, or an array that has
@@ -84,5 +85,26 @@ describe("resolveLocale", () => {
     expect(isLocale("fr")).toBe(false);
     expect(isLocale(42)).toBe(false);
     expect(LOCALES).toContain(DEFAULT_LOCALE);
+  });
+});
+
+// A cause added on the server and forgotten on the client renders as a raw
+// enum string in the UI with no error anywhere — both causeLabel implementations
+// fall back to the key. This is the only thing that catches it.
+describe("the cause taxonomy is fully labelled on both sides", () => {
+  it("has a ja and en label for every cause the server can write", () => {
+    for (const cause of CAUSES) {
+      expect(ja.history.postmortem.causes, `ja is missing ${cause}`).toHaveProperty(cause);
+      expect(en.history.postmortem.causes, `en is missing ${cause}`).toHaveProperty(cause);
+    }
+  });
+
+  it("labels no cause the server cannot write", () => {
+    for (const key of Object.keys(ja.history.postmortem.causes)) {
+      expect(CAUSES, `ja labels unknown cause ${key}`).toContain(key);
+    }
+    for (const key of Object.keys(en.history.postmortem.causes)) {
+      expect(CAUSES, `en labels unknown cause ${key}`).toContain(key);
+    }
   });
 });

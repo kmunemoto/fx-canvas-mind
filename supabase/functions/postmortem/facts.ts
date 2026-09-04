@@ -43,11 +43,22 @@ export type Cause =
   | "direction_wrong"
   // right direction, but the stop sat inside the noise and was hit first
   | "stop_too_tight"
-  // right direction, but the entry waited for a pullback that never came
+  // entry_chosen_v1 only: the model picked an entry the market never reached,
+  // so the call was never scored. Under market_v1 the server enters at the
+  // market price and no plan can go unfilled. Kept because old rows, old
+  // lessons and old rulebook rules carry it, and because dropping it from
+  // CAUSES would make isCause reject an old rule's cause and
+  // parseConsolidation widen it to "general".
   | "entry_too_far"
-  // right direction, but chased at the market into an immediate retrace that
-  // took the stop; a pullback entry would have paid
+  // entry_chosen_v1 vocabulary for what is now chased_move. No longer
+  // produced by anything; kept so stored rows and rules stay legible.
+  // canonicalCause folds it into chased_move at every comparison.
   | "entry_too_early"
+  // filled into an immediate retrace that took the stop, in a market extended
+  // enough that the same plan filled PULLBACK_R better would have paid. The
+  // move was already extended when the plan was made; the only lever this
+  // touches is whether to take the trade at all.
+  | "chased_move"
   // filled and moved the right way, but the target was out of reach
   | "target_too_far"
   // a range traded as a trend, or the reverse
@@ -68,6 +79,7 @@ export const CAUSES: readonly Cause[] = [
   "stop_too_tight",
   "entry_too_far",
   "entry_too_early",
+  "chased_move",
   "target_too_far",
   "regime_misread",
   "news_shock",
@@ -76,6 +88,24 @@ export const CAUSES: readonly Cause[] = [
   "lucky_win",
   "inconclusive",
 ];
+
+export const MARKET_CONTRACT = "market_v1";
+
+// entry_chosen_v1 vocabulary. Never produced again; still accepted and still
+// counted. Sole reader: causesFor.
+export const LEGACY_CAUSES: readonly string[] = ["entry_too_far", "entry_too_early"];
+
+// Folds the old spelling into the new one wherever two cause strings are
+// compared or counted. Readers: citationAllowed (both operands),
+// parseConsolidation's cause coercion, parseDiagnosis's pick, and
+// summarizeRecord's three histograms and its cluster map. NOT the UI label
+// lookup — a stored row renders the wording of its own era.
+export const canonicalCause = (c: string): string => (c === "entry_too_early" ? "chased_move" : c);
+
+// The causes a plan made under this contract can be diagnosed with. Readers:
+// diagnosisSchema() and parseDiagnosis().
+export const causesFor = (contract?: string | null): readonly Cause[] =>
+  contract === MARKET_CONTRACT ? CAUSES.filter((c) => !LEGACY_CAUSES.includes(c)) : CAUSES;
 
 export const isCause = (v: unknown): v is Cause =>
   typeof v === "string" && (CAUSES as readonly string[]).includes(v);
@@ -311,9 +341,9 @@ const gateReason = (r: CfResult | null, atr: number | null): string => {
     case "stop_too_tight":
       return `stop under ${MIN_STOP_ATR} ATR${atr !== null ? ` (ATR ${atr})` : ""}`;
     case "too_far":
-      return `limit more than ${MAX_LIMIT_ATR} ATR from the market`;
+      return `more than ${MAX_LIMIT_ATR} ATR from the market`;
     case "should_be_market":
-      return "a limit in a trend regime, which the gate turns into a market entry";
+      return "away from the market in a trend regime, where the gate enters at the market instead";
     default:
       return "passes";
   }
@@ -328,6 +358,10 @@ export interface FactsContext {
   momentum?: boolean | null;
   // The calendar around the plan's life, for attributing an abnormal bar
   events?: EconEvent[];
+  // Which entry contract the plan was made under. One reader: the untriggered
+  // branch of the hints switch, which must not file a market_v1 plan under a
+  // cause only the old contract could produce.
+  contract?: string | null;
 }
 
 export const computeFacts = async (
@@ -510,20 +544,26 @@ export const computeFacts = async (
   // A counterfactual only counts as a remedy when the gate would publish it
   const wonViable = (r: CfResult | null) => won(r) && r?.viable === true;
   const marketOrder = (ev?.order_type ?? "unknown") === "market";
+  const marketV1 = ctx.contract === MARKET_CONTRACT;
 
   switch (ev?.resolution ?? row.outcome) {
     case "loss": {
-      // Chased: a market entry that turned against it at once — by at least
-      // half the risk, and by a real move (half an ATR) rather than the
-      // bar-to-bar noise a narrow stop sits in — while a pullback limit with
-      // the same risk width would have paid. The same path also reads as a
-      // stop inside the noise, so that hint follows; the chase comes first
-      // because widening the stop past the procedure's bounds is not a
-      // remedy the analyzer may apply, and not chasing is.
+      // Chased: an entry that turned against it at once — by at least half the
+      // risk, and by a real move (half an ATR) rather than the bar-to-bar
+      // noise a narrow stop sits in — while the same plan filled PULLBACK_R
+      // better, at the same risk width, would have paid. The same path also
+      // reads as a stop inside the noise, so that hint follows; the chase
+      // comes first because declining the trade is a remedy the analyzer may
+      // apply under either contract, and widening the stop past MIN_STOP_ATR
+      // is not. All four conditions discriminate: earlyAdverseR is null when
+      // the fill time is unparseable or the entry was a stop order, and the
+      // ATR test separates a real move from noise. pays(cf.limit_pullback) is
+      // the one that carries the "a better price was there" claim — stop
+      // computing that counterfactual and this cause silently stops firing.
       const pays = (r: CfResult | null) => r !== null && won(r) && r.gate !== "poor_rr" && r.gate !== "stop_too_tight";
       const chased = marketOrder && earlyAdverseR !== null && earlyAdverseR >= EARLY_ADVERSE_R &&
         (atr === null || earlyAdverse >= 0.5 * atr) && pays(cf.limit_pullback);
-      if (chased) push("entry_too_early");
+      if (chased) push("chased_move");
       // The stop and target variants say what went wrong even when the
       // variant itself would not pass the gate (the model is told which);
       // the entry variants are gated because they are the ones that turn
@@ -536,6 +576,19 @@ export const computeFacts = async (
       break;
     }
     case "untriggered":
+      if (marketV1) {
+        // Under market_v1 entry === price_at_signal, classifyOrder returns
+        // "market" and the judge fills on the signal bar, so an untriggered
+        // verdict is not a plan the market never reached — it is a fill that
+        // could not be established from the data. Filing it under a legacy
+        // cause would put a fabricated entry_too_far into by_cause and into
+        // citation.
+        push("inconclusive");
+        notes.push(
+          "market_v1: every plan is entered at the market price on the signal bar, so an untriggered verdict means the fill could not be established from the data (price_at_signal missing, or the signal bar unavailable), not that the entry was never reached",
+        );
+        break;
+      }
       if (ev?.reason === "invalidated") push("direction_wrong");
       else if (wonViable(cf.market_entry) || wonViable(cf.market_entry_same_risk)) push("entry_too_far");
       else if (won(cf.market_entry) || won(cf.market_entry_same_risk)) {
@@ -560,11 +613,11 @@ export const computeFacts = async (
       if (won(cf.limit_pullback) && cf.limit_pullback?.rr !== null && rr !== null && (cf.limit_pullback?.rr ?? 0) > rr) {
         notes.push(
           cf.limit_pullback?.viable
-            ? `a limit ${PULLBACK_R}R back would also have filled and paid ${cf.limit_pullback?.rr}:1 instead of ${rr}:1`
-            : `a limit ${PULLBACK_R}R back would also have filled and paid ${cf.limit_pullback?.rr}:1, but the gate would not publish it (${gateReason(cf.limit_pullback, atr)})`,
+            ? `a fill ${PULLBACK_R}R better would also have paid ${cf.limit_pullback?.rr}:1 instead of ${rr}:1`
+            : `a fill ${PULLBACK_R}R better would also have paid ${cf.limit_pullback?.rr}:1, but a plan entered there does not pass the gate (${gateReason(cf.limit_pullback, atr)})`,
         );
       } else if (cf.limit_pullback?.resolution === "untriggered") {
-        notes.push(`a limit ${PULLBACK_R}R back would not have filled: entering at once was right`);
+        notes.push(`price never came back ${PULLBACK_R}R while the trade was open: this entry was not late`);
       }
       break;
     case "ambiguous":

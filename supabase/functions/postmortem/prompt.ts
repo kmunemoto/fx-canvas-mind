@@ -18,7 +18,15 @@
 // Deno-free on purpose: src/test/postmortem.test.ts imports this file
 // directly.
 
-import { CAUSES, PULLBACK_R, isCause, type Cause, type PostmortemFacts } from "./facts.ts";
+import {
+  CAUSES,
+  PULLBACK_R,
+  canonicalCause,
+  causesFor,
+  isCause,
+  type Cause,
+  type PostmortemFacts,
+} from "./facts.ts";
 import { MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
 import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rules.ts";
 import { LEGACY_PLAN_CONTRACT } from "../_shared/contract.ts";
@@ -264,6 +272,9 @@ export const versionKey = (v: number | null): string => (typeof v === "number" &
 export interface LessonSummary {
   cause: string;
   cluster?: string | null;
+  // The entry contract the plan was made under, so the editor can tell a
+  // lesson whose remedy still exists from one whose remedy does not
+  contract?: string | null;
   shadow?: boolean;
   rule_blamed?: string | null;
   rule_credited?: string | null;
@@ -307,6 +318,9 @@ export interface RecordStats {
   // The same, counting each cluster once
   by_cause_clusters: Record<string, number>;
   shadow_by_cause: Record<string, number>;
+  // How many lessons came from each entry contract. The causes above pool the
+  // eras; this is what says in what proportion.
+  lessons_by_contract: Record<string, number>;
   // The record of every plan made under each rulebook version — the
   // before/after comparison. It is the version's record, not any one rule's.
   by_rulebook_version: Record<string, Bucket>;
@@ -328,7 +342,8 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     win_rate: null, win_rate_ci95: null, fill_rate: null,
     realized_r: { n: 0, sum: 0, mean: null },
     independent_clusters: 0, min_stat_n: MIN_STAT_N,
-    by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, by_rulebook_version: {}, rule_feedback: {},
+    by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, lessons_by_contract: {},
+    by_rulebook_version: {}, rule_feedback: {},
     rejected: 0,
     shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0 },
   };
@@ -397,14 +412,19 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
   s.independent_clusters = settledClusters.size;
   const causeClusters = new Map<string, Set<string>>();
   lessons.forEach((l, i) => {
+    // Counted under the live spelling, so a rename does not split one concept
+    // across two buckets in a histogram this small.
+    const cause = canonicalCause(l.cause);
+    s.lessons_by_contract[l.contract ?? LEGACY_CONTRACT] =
+      (s.lessons_by_contract[l.contract ?? LEGACY_CONTRACT] ?? 0) + 1;
     if (l.shadow) {
-      s.shadow_by_cause[l.cause] = (s.shadow_by_cause[l.cause] ?? 0) + 1;
+      s.shadow_by_cause[cause] = (s.shadow_by_cause[cause] ?? 0) + 1;
       return;
     }
-    s.by_cause[l.cause] = (s.by_cause[l.cause] ?? 0) + 1;
-    const set = causeClusters.get(l.cause) ?? new Set<string>();
+    s.by_cause[cause] = (s.by_cause[cause] ?? 0) + 1;
+    const set = causeClusters.get(cause) ?? new Set<string>();
     set.add(l.cluster ?? `lesson-${i}`);
-    causeClusters.set(l.cause, set);
+    causeClusters.set(cause, set);
     if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
     if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
   });
@@ -472,11 +492,11 @@ export interface Diagnosis {
   rule_credited: string | null;
 }
 
-export const DIAGNOSIS_SCHEMA = {
+export const diagnosisSchema = (contract?: string | null) => ({
   type: "object",
   properties: {
-    cause: { type: "string", enum: [...CAUSES] },
-    secondary_causes: { type: "array", items: { type: "string", enum: [...CAUSES] } },
+    cause: { type: "string", enum: [...causesFor(contract)] },
+    secondary_causes: { type: "array", items: { type: "string", enum: [...causesFor(contract)] } },
     avoidable: { type: "boolean", description: "分析時点の情報だけで回避できたか" },
     confidence: { type: "integer", description: "診断の確からしさ 0-100" },
     verdict_ja: { type: "string", description: "何が起きたかの結論。日本語、120字以内" },
@@ -495,21 +515,24 @@ export const DIAGNOSIS_SCHEMA = {
     "lesson_ja", "lesson_en", "scope", "rule_blamed", "rule_credited",
   ],
   additionalProperties: false,
-};
+});
+
+// The legacy-era shape, kept as the name the tests and older callers use.
+export const DIAGNOSIS_SCHEMA = diagnosisSchema();
 
 export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担当（ポストモーテム）です。AIアナリストが出したトレードプランと、その後の実際の値動きから計算した事実（facts）を突き合わせ、なぜその予想が外れた（または当たった）のかを厳密に診断します。
 
 原則:
 - 根拠にしてよいのは facts と plan に書かれていることだけ。事実に無い出来事（ニュース等）を推測で作らない。ニュース要因（news_shock）は、plan の warnings/key_factors に指標やイベントへの言及があり、かつ facts.abnormal_bar が観測された場合に限る。
-- 次の順に検討する: (1) 方向は合っていたか (2) エントリーは約定したか、しなかったなら値幅を逃したか、したなら入るのが早すぎなかったか (3) 損切り幅は適切だったか (4) 利確は届く距離だったか (5) 相場環境（トレンド/レンジ）の読みは正しかったか。
-- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（${PULLBACK_R}R の押し目・戻りを待つ指値にしていたら。損切り幅は同じ）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback の gate が should_be_market / too_far のときは、押し目待ちは公開できないので、lesson は「その条件では見送る（WAIT）」か「成行で追いかけない条件」の形にする。
+- 次の順に検討する: (1) 方向は合っていたか (2) その場面で入ったこと自体が妥当だったか（伸びきった動きに飛び乗っていないか。旧契約 entry_chosen_v1 のプランでは、約定したか・逃したかも見る） (3) 損切り幅は適切だったか (4) 利確は届く距離だったか (5) 相場環境（トレンド/レンジ）の読みは正しかったか。
+- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（同じプランを ${PULLBACK_R}R 有利な値で約定していたら。損切り幅は同じ。現行契約では出せる注文ではなく、「伸びきったところを掴んだ」ことの尺度）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback が win なら「その値位置で入るには遅すぎた」という事実であって、指値・押し目待ちの推奨ではない。ここから書ける lesson は「その条件では見送る（WAIT）」の形だけ。gate はその案が当時のゲートを通るかを示すだけで、「指値にすべきだった」の根拠にはならない。
 - facts.hints は決定論的な事前分類で、通常はその中から選ぶ。覆す場合は evidence で理由を示す。facts.notes には判定の補足がある。
-- facts.early_adverse_r は約定直後 3 本以内の最大逆行（R、取引中のみ）。成行で入って即座に逆行した場合、追いかけ（entry_too_early）を疑う。
+- facts.early_adverse_r は約定直後 3 本以内の最大逆行（R、取引中のみ）。即座に逆行した場合、伸びきった動きに乗った（chased_move）を疑う。
 - lesson は「条件 → 行動」の形で、次回以降のプラン作成に直接使える一般則にする。個別の価格・日付・その日固有の出来事は書かない。同じ状況が来たときに何を変えるかを書く。
 - lesson の「条件」は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）で書く。アナリスト自身の自己申告（confidence の高さ、mode の宣言）を条件にしない。
 - lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。基本手順（損切りの幅、RR の下限）は lesson で上書きできない。その範囲内で書く。
 - plan.contract が "market_v1" のプランでは、エントリー価格はアナリストが選んでいない。分析した瞬間の現在値がそのまま成行の約定価格になったものであり、「もっと引きつけて入るべきだった」「押し目を待つべきだった」は実行できない指示なので lesson にしない。動かせるのは方向・損切り幅・利確幅・そもそも入るか（WAIT）の4つだけで、lesson はそのいずれかを動かす形にする。反実仮想の limit_pullback も、この契約のプランでは「その状況では入らない（WAIT）」の根拠としてのみ読む。
-- plan.contract が "entry_chosen_v1"（または未記載）の古いプランは、アナリストがエントリー価格を選んでいた時代のもの。当時の事実として検証してよいが、そこから引く lesson は上の4つの範囲に翻訳して書く。
+- plan.contract が "entry_chosen_v1"（または未記載）の古いプランは、アナリストがエントリー価格を選んでいた時代のもの。当時の事実として検証してよいが、そこから引く lesson は上の4つの範囲に翻訳して書く。entry_too_far / entry_too_early はこの契約でのみ起こりうる原因で、market_v1 のプランでは選べない（スキーマの enum からも除いてある）。
 - 勝ちでも、最大逆行が損切り近くまで達した（mae_r ≥ 0.8）等プロセスに危うさがあれば lucky_win とし、教訓を書く。
 - plan.rules_in_force があれば、そのプランがどのルールの影響下で作られたかを踏まえ、結果を招いた／貢献したルールがあれば rule_blamed / rule_credited に id を書く。無ければ null。
 - confidence は診断の確からしさ。決着後の足が無い、反実仮想が ambiguous 等、事実が少ないときは下げる。
@@ -518,8 +541,8 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 原因の定義:
 - direction_wrong: 方向そのものが逆。約定後に損切りまでほぼ一直線／損切り後も逆行が続いた（after.beyond_sl_r が大きい）／約定前に損切り側へ到達（reason=invalidated）。
 - stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想が win。広げた案が viable でない（RR 不足）場合、lesson は「損切りを広げる」だけでなく利確の置き方も併せて書く。
-- entry_too_far: 方向は合っていたがエントリーが約定しなかった。成行の反実仮想（market_entry または market_entry_same_risk）が viable かつ win。
-- entry_too_early: 方向は合っていたが成行で追いかけて即座の逆行で損切り。early_adverse_r が大きく、limit_pullback が win（rr と損切り幅は成立）。
+- entry_too_far:（entry_chosen_v1 の旧プランのみ）方向は合っていたがエントリーが約定しなかった。成行の反実仮想（market_entry または market_entry_same_risk）が viable かつ win。market_v1 のプランでは起こりえない。
+- chased_move: 伸びきった動きに乗ってしまい、約定直後の逆行で損切り。early_adverse_r が大きく、limit_pullback（${PULLBACK_R}R 有利な約定）が win。同じ方向・同じ損切り幅でも、より良い値なら勝っていたということ。remedy は「その場面では入らない（WAIT）」であって、押し目を待つことではない。旧プランでは entry_too_early と呼んでいた同じ事象。
 - target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想が win、mfe_r が大きい。
 - regime_misread: トレンド/レンジの読み違い。facts.regime.conflict、レンジ相場でのトレンドフォロー等。
 - news_shock: 指標・イベントの異常な値幅でプランが無効化された。facts.abnormal_bar.event があれば、その足で実際に発表された経済指標なので、推測ではなく事実として名指ししてよい。event が null の異常足は「原因不明の急変動」であって、指標のせいだと断定しない。
@@ -531,7 +554,10 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 const compactAnalysis = (text: string, max = 1400): string =>
   text.length <= max ? text : `${text.slice(0, max)}…（以下省略）`;
 
-export const buildDiagnosisPrompt = (plan: PlanSummary, facts: PostmortemFacts): { system: string; user: string } => {
+export const buildDiagnosisPrompt = (
+  plan: PlanSummary,
+  facts: PostmortemFacts,
+): { system: string; user: string; schema: ReturnType<typeof diagnosisSchema> } => {
   const payload = {
     plan: {
       ...plan,
@@ -545,12 +571,17 @@ export const buildDiagnosisPrompt = (plan: PlanSummary, facts: PostmortemFacts):
     "",
     JSON.stringify(payload),
   ].join("\n");
-  return { system: DIAGNOSIS_SYSTEM_PROMPT, user };
+  return { system: DIAGNOSIS_SYSTEM_PROMPT, user, schema: diagnosisSchema(plan.contract) };
 };
 
 // A malformed answer is not stored. The cause must be one of ours; when the
 // model's pick is not, the deterministic hint stands.
-export const parseDiagnosis = (raw: unknown, hints: Cause[], ruleIds: string[] = []): Diagnosis | null => {
+export const parseDiagnosis = (
+  raw: unknown,
+  hints: Cause[],
+  ruleIds: string[] = [],
+  contract?: string | null,
+): Diagnosis | null => {
   if (!isRecord(raw)) return null;
   const lessonJa = str(raw.lesson_ja, MAX_LESSON_CHARS);
   const lessonEn = str(raw.lesson_en, MAX_LESSON_CHARS);
@@ -558,9 +589,18 @@ export const parseDiagnosis = (raw: unknown, hints: Cause[], ruleIds: string[] =
   const verdictEn = str(raw.verdict_en);
   if (!lessonJa && !lessonEn) return null;
   if (!verdictJa && !verdictEn) return null;
-  const cause: Cause = isCause(raw.cause) ? raw.cause : hints[0] ?? "inconclusive";
+  // Canonicalised in both eras, so no new row ever stores the dead spelling;
+  // a cause the row's own contract cannot produce falls through to the
+  // deterministic hint, which is contract-correct by construction.
+  const allowed = causesFor(contract);
+  const pick = (v: unknown): Cause | null => {
+    if (!isCause(v)) return null;
+    const k = canonicalCause(v);
+    return isCause(k) && allowed.includes(k) ? k : null;
+  };
+  const cause: Cause = pick(raw.cause) ?? hints[0] ?? "inconclusive";
   const secondary = Array.isArray(raw.secondary_causes)
-    ? raw.secondary_causes.filter((c): c is Cause => isCause(c) && c !== cause).slice(0, 3)
+    ? [...new Set(raw.secondary_causes.map(pick).filter((c): c is Cause => c !== null && c !== cause))].slice(0, 3)
     : [];
   const ruleRef = (v: unknown): string | null => {
     const id = str(v, 20);
@@ -592,6 +632,7 @@ export interface LessonRow {
   user_id?: string | null;
   pair: string;
   cause: string;
+  contract: string | null;
   outcome: string;
   interval: string;
   signal: string;
@@ -651,15 +692,27 @@ export const CONSOLIDATION_SCHEMA = {
   additionalProperties: false,
 };
 
+// Causes that a "don't trade / cut the risk" rule may draw on beyond its own.
+// Canonical spellings only — citationAllowed canonicalises both operands
+// before testing, so "entry_too_early" is covered by "chased_move".
+// Declared ABOVE CONSOLIDATION_SYSTEM_PROMPT because that template
+// interpolates both lists and is evaluated at module load: moving either back
+// below it is a ReferenceError that takes down the whole function.
+export const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wrong", "regime_misread", "news_shock", "chased_move"];
+// Lessons that are about nothing in particular are evidence for nothing
+export const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call"];
+
 export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトに、基本手順とリスク規定の後ろに「補助的な指針」として入ります。基本手順（トレンド局面での成行、損切り幅、RR の下限）を上書きすることはできないので、その範囲内で書きます。
 
 証拠の数え方:
 - 証拠の単位は「独立クラスタ」。同じ通貨ペア・同じ方向で近い時間に作られたプランは同じ局面についての同じ判断であり、lessons が何件あっても証拠としては1件。各 lesson には cluster が付いている。stats.by_cause_clusters が原因別のクラスタ数。
-- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、inconclusive / plan_incoherent / good_call 以外のどの原因でも可。constraint のルールは lucky_win / direction_wrong / regime_misread / news_shock / entry_too_early も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
+- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、${UNCITABLE_CAUSES.join(" / ")} 以外のどの原因でも可。constraint のルールは ${CONSTRAINT_CAUSES.join(" / ")} も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
 - stats.win_rate / fill_rate は決着数が ${MIN_STAT_N} 未満のとき null。null や小さい n の統計を根拠にルールを強めない。stats.win_rate_ci95 は勝率の95%信頼区間。
 - stats は stats.contract のエントリー契約で作られたプランだけを集計している。別の契約のプランは stats.other_contract_rows として件数だけ数え、勝率にも件数にも入れていない。契約をまたいだ比較はできない。
 - 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
 - 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
+- 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
+- entry_too_far / entry_too_early は旧契約の語彙。entry_too_early は chased_move として集計されている。
 - stats.by_rulebook_version は「その版のもとで作られたプラン全体」の実績（決着数・勝敗・実現R合計 sum_r）。版の比較（ルールを足す前と後）には使えるが、版の中のどのルールのせいかは区別できない。個別ルールの証拠は stats.rule_feedback（診断がそのルールを結果の原因 blamed / 貢献 credited と名指しした回数）と、lessons の rule_blamed / rule_credited。blamed が credited を上回るルールは弱めるか削除する。
 - 対称性: untriggered の lesson は「約定を妨げた」側、loss の lesson は「損を招いた」側の証拠。片方だけを見ない。反実仮想の「成行なら勝っていた」は viable=true の案だけが根拠になる（lesson 側で考慮済み）。
 
@@ -696,6 +749,7 @@ export const buildConsolidationPrompt = (
       order_type: l.order_type,
       outcome: l.outcome,
       cause: l.cause,
+      contract: l.contract,
       shadow: l.shadow,
       confidence: l.confidence,
       avoidable: l.avoidable,
@@ -729,19 +783,14 @@ export interface CitableLesson {
   shadow?: boolean;
 }
 
-// Causes that a "don't trade / cut the risk" rule may draw on beyond its own
-const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wrong", "regime_misread", "news_shock", "entry_too_early"];
-// Lessons that are about nothing in particular are evidence for nothing
-const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call"];
-
 // Whether a lesson is evidence for a rule: same failure, or a general rule
 // (any real failure), or a constraint drawing on the risk causes. Never a
 // shadow plan's lesson — those are about the gate, not the analyzer.
 export const citationAllowed = (rule: { cause: string; kind: RuleKind }, lesson: CitableLesson): boolean => {
   if (lesson.shadow) return false;
-  const cause = lesson.cause ?? "";
+  const cause = canonicalCause(lesson.cause ?? "");
   if (!cause || UNCITABLE_CAUSES.includes(cause)) return false;
-  if (rule.cause === cause) return true;
+  if (canonicalCause(rule.cause) === cause) return true;
   if (rule.cause === "general") return true;
   if (rule.kind === "constraint" && CONSTRAINT_CAUSES.includes(cause)) return true;
   return false;
@@ -798,7 +847,9 @@ export const parseConsolidation = (
       dropped.push(id);
       continue;
     }
-    const cause = typeof item.cause === "string" && (isCause(item.cause) || item.cause === "general") ? item.cause : "general";
+    const cause = typeof item.cause === "string" && (isCause(item.cause) || item.cause === "general")
+      ? canonicalCause(item.cause)
+      : "general";
     const kind: RuleKind = isRuleKind(item.kind) ? item.kind : prior.get(id)?.kind ?? "heuristic";
     const citedIds = Array.isArray(item.supported_by) ? item.supported_by.filter((v): v is string => typeof v === "string") : [];
     const { cited, support } = evidence({ cause, kind }, citedIds);
