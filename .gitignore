@@ -29,6 +29,12 @@ scripts/.env.x
 # means getting that whole graph right by hand on every deploy — a bundle is
 # one file that either builds or does not. Rebuild with `npm run
 # bundle:functions`; the .ts files stay the single source of truth.
+#
+# Minified because the deploy path carries the file by hand, so its size is
+# paid on every upload (100KB -> 60KB for postmortem). The cost is that a
+# stack trace from production names mangled identifiers; the explicit error
+# strings survive, `deno check` still reads the real sources, and a readable
+# build is one flag away when something needs tracing.
 supabase/functions/analyze/bundle.js
 supabase/functions/track-outcomes/bundle.js
 supabase/functions/postmortem/bundle.js

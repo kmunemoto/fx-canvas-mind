@@ -11,9 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "check:functions": "deno check supabase/functions/analyze/index.ts supabase/functions/track-outcomes/index.ts supabase/functions/postmortem/index.ts supabase/functions/econ-calendar/index.ts",
-    "bundle:postmortem": "esbuild supabase/functions/postmortem/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --outfile=supabase/functions/postmortem/bundle.js",
-    "bundle:analyze": "esbuild supabase/functions/analyze/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --outfile=supabase/functions/analyze/bundle.js",
-    "bundle:track-outcomes": "esbuild supabase/functions/track-outcomes/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --outfile=supabase/functions/track-outcomes/bundle.js",
+    "bundle:postmortem": "esbuild supabase/functions/postmortem/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --minify --outfile=supabase/functions/postmortem/bundle.js",
+    "bundle:analyze": "esbuild supabase/functions/analyze/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --minify --outfile=supabase/functions/analyze/bundle.js",
+    "bundle:track-outcomes": "esbuild supabase/functions/track-outcomes/index.ts --bundle --format=esm --platform=neutral --target=esnext --charset=utf8 --minify --outfile=supabase/functions/track-outcomes/bundle.js",
     "bundle:functions": "npm run bundle:analyze && npm run bundle:track-outcomes && npm run bundle:postmortem",
     "test:watch": "vitest"
   },
