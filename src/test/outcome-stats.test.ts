@@ -253,6 +253,43 @@ describe("the honest record", () => {
   });
 });
 
+describe("standing aside is scored too", () => {
+  const wait = (verdict: string | null) =>
+    rec({
+      signal: "WAIT",
+      outcome: "skipped",
+      wait_check: verdict === null
+        ? null
+        : {
+            verdict: verdict as "missed" | "correct" | "pending" | "unknown",
+            direction: "BUY", r: 1.2, at: "2026-09-03T09:00:00Z",
+            price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
+            bars_examined: 40, horizon_ms: 48 * 3_600_000,
+            checked_at: "2026-09-03T12:00:00Z",
+          },
+    });
+
+  it("counts only the WAITs a verdict was actually reached on", () => {
+    // 'pending' has not been looked at yet and 'unknown' never can be. Putting
+    // either in the denominator would make over-caution look rarer the slower
+    // the tracker runs.
+    const t = tally("all", [
+      wait("missed"), wait("missed"), wait("correct"), wait("correct"),
+      wait("pending"), wait("unknown"), wait(null),
+    ]);
+    expect(t.waits).toBe(7);
+    expect(t.waitsJudged).toBe(4);
+    expect(t.waitsMissed).toBe(2);
+    expect(t.waitMissRate).toBe(50);
+  });
+
+  it("has no miss rate before anything has been judged", () => {
+    const t = tally("all", [wait("pending"), wait(null)]);
+    expect(t.waitsJudged).toBe(0);
+    expect(t.waitMissRate).toBeNull();
+  });
+});
+
 describe("two entry contracts are never pooled", () => {
   it("treats a row with no contract as the legacy one", () => {
     expect(contractKey(rec({}))).toBe("entry_chosen_v1");

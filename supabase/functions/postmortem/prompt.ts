@@ -19,7 +19,7 @@
 // directly.
 
 import { CAUSES, PULLBACK_R, isCause, type Cause, type PostmortemFacts } from "./facts.ts";
-import { MARKET_TOLERANCE_ATR, MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
+import { MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
 import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rules.ts";
 
 export const MAX_RULES = 10;
@@ -129,6 +129,16 @@ export interface RecordRow {
   fill_price?: number | null;
   outcome_price: number | null;
   rulebook_version: number | null;
+  // Which entry contract the plan was made under. Rows from any contract but
+  // the live one are counted apart rather than pooled: under entry_chosen_v1
+  // the model picked the entry price and a plan the market never reached was
+  // never scored at all, which cannot happen under market_v1. A rate taken
+  // over both describes a population that never existed.
+  contract?: string | null;
+  // The verdict on a call that declined to trade, once the tracker has
+  // reached one. 'missed' means the market then offered a trade this app
+  // would itself have allowed, and it won.
+  wait_verdict?: string | null;
 }
 
 // What the plan made or lost, in multiples of its planned risk. A win is
@@ -174,6 +184,30 @@ const addToBucket = (b: Bucket, row: RecordRow) => {
   if (r !== null) b.sum_r = round2(b.sum_r + r);
 };
 
+// Rows written before the plan_contract column existed are legacy by
+// definition: the contract only ever moved forwards.
+export const LEGACY_CONTRACT = "entry_chosen_v1";
+
+export const rowContract = (row: Pick<RecordRow, "contract">): string =>
+  typeof row.contract === "string" && row.contract.length > 0 ? row.contract : LEGACY_CONTRACT;
+
+// Which contract the record is about: the one the most recent plan was made
+// under. Derived rather than named by a constant so that the next change of
+// contract needs no edit here — the day the first plan under a new contract
+// is written, the old record stops being pooled into the new one on its own.
+export const liveContract = (rows: RecordRow[]): string => {
+  let contract = LEGACY_CONTRACT;
+  let newest = -Infinity;
+  for (const r of rows) {
+    if (r.shadow) continue;
+    const t = Date.parse(r.created_at);
+    if (!Number.isFinite(t) || t <= newest) continue;
+    newest = t;
+    contract = rowContract(r);
+  }
+  return contract;
+};
+
 // Plans made under the seeded empty rulebook (version 0) had no rules in
 // force either
 export const versionKey = (v: number | null): string => (typeof v === "number" && Number.isFinite(v) && v > 0 ? String(v) : "none");
@@ -187,6 +221,10 @@ export interface LessonSummary {
 }
 
 export interface RecordStats {
+  // Which entry contract every number below is about, and how many rows were
+  // left out because they were made under a different one
+  contract: string;
+  other_contract_rows: number;
   total: number;
   wins: number;
   losses: number;
@@ -194,9 +232,20 @@ export interface RecordStats {
   expired: number;
   ambiguous: number;
   open: number;
-  // wins + losses
+  // wins + losses: trades that reached one of their own levels
   settled: number;
-  // null until MIN_STAT_N settled trades exist
+  // wins + losses + expired — the win-rate denominator. An expiry is a call
+  // that did not work out, and leaving it out let a target placed beyond
+  // reach sit out the number entirely.
+  decided: number;
+  // Calls that declined to trade, and how they scored. A WAIT that is never
+  // counted can never be wrong, which is the one escape hatch that costs
+  // nothing to use; 'missed' is the record's only evidence of over-caution.
+  waits: number;
+  waits_judged: number;
+  waits_missed: number;
+  wait_miss_rate: number | null;
+  // null until MIN_STAT_N decided trades exist
   win_rate: number | null;
   win_rate_ci95: [number, number] | null;
   fill_rate: number | null;
@@ -224,8 +273,10 @@ export interface RecordStats {
 // The record as numbers, from the rows the consolidation is given
 export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): RecordStats => {
   const s: RecordStats = {
+    contract: liveContract(rows), other_contract_rows: 0,
     total: 0, wins: 0, losses: 0, untriggered: 0, expired: 0, ambiguous: 0, open: 0,
-    settled: 0, win_rate: null, win_rate_ci95: null, fill_rate: null,
+    settled: 0, decided: 0, waits: 0, waits_judged: 0, waits_missed: 0, wait_miss_rate: null,
+    win_rate: null, win_rate_ci95: null, fill_rate: null,
     realized_r: { n: 0, sum: 0, mean: null },
     independent_clusters: 0, min_stat_n: MIN_STAT_N,
     by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, by_rulebook_version: {}, rule_feedback: {},
@@ -237,6 +288,13 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
   const clusters = clusterIds(rows);
   const settledClusters = new Set<string>();
   rows.forEach((r, i) => {
+    // Before anything else: a plan made under another contract is not part of
+    // this record. Counted, so that a record that suddenly shrinks is legible
+    // as a contract change rather than as plans going missing.
+    if (rowContract(r) !== s.contract) {
+      s.other_contract_rows++;
+      return;
+    }
     if (r.shadow) {
       s.shadow.total++;
       if (r.outcome === "untriggered") s.shadow.untriggered++;
@@ -247,6 +305,14 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     }
     if (r.signal === "WAIT") {
       if (r.rejection) s.rejected++;
+      s.waits++;
+      // 'pending' and 'unknown' are not verdicts, so they stay out of both
+      // sides of the rate: the first has not been judged yet, the second
+      // never can be.
+      if (r.wait_verdict === "missed" || r.wait_verdict === "correct") {
+        s.waits_judged++;
+        if (r.wait_verdict === "missed") s.waits_missed++;
+      }
       return;
     }
     s.total++;
@@ -271,9 +337,13 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     addToBucket(s.by_rulebook_version[versionKey(r.rulebook_version)] ??= emptyBucket(), r);
   });
   s.settled = s.wins + s.losses;
-  s.win_rate = s.settled >= MIN_STAT_N ? Math.round((s.wins / s.settled) * 100) : null;
-  s.win_rate_ci95 = wilson(s.wins, s.settled);
+  s.decided = s.settled + s.expired;
+  s.win_rate = s.decided >= MIN_STAT_N ? Math.round((s.wins / s.decided) * 100) : null;
+  s.win_rate_ci95 = wilson(s.wins, s.decided);
   s.fill_rate = settledOrLapsed >= MIN_STAT_N ? Math.round((filled / settledOrLapsed) * 100) : null;
+  s.wait_miss_rate = s.waits_judged >= MIN_STAT_N
+    ? Math.round((s.waits_missed / s.waits_judged) * 100)
+    : null;
   s.realized_r.mean = s.realized_r.n > 0 ? round2(s.realized_r.sum / s.realized_r.n) : null;
   s.independent_clusters = settledClusters.size;
   const causeClusters = new Map<string, Set<string>>();
@@ -326,6 +396,9 @@ export interface PlanSummary {
   timeframe_alignment: unknown[];
   entry_check: JsonRecord | null;
   context: JsonRecord | null;
+  // Which entry contract the plan was made under. Old plans chose their own
+  // entry price; new ones cannot, so the levers a lesson may move differ.
+  contract?: string | null;
   // A plan the entry gate refused, tracked to check the refusal
   shadow: boolean;
   // The rules the plan was actually shown, so the diagnosis can say whether
@@ -385,7 +458,9 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - facts.early_adverse_r は約定直後 3 本以内の最大逆行（R、取引中のみ）。成行で入って即座に逆行した場合、追いかけ（entry_too_early）を疑う。
 - lesson は「条件 → 行動」の形で、次回以降のプラン作成に直接使える一般則にする。個別の価格・日付・その日固有の出来事は書かない。同じ状況が来たときに何を変えるかを書く。
 - lesson の「条件」は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）で書く。アナリスト自身の自己申告（confidence の高さ、mode の宣言）を条件にしない。
-- lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。また ADX ${TREND_ADX} 以上で SMA が方向に並ぶトレンド局面では、現在値から ATR${MARKET_TOLERANCE_ATR}倍を超える指値はサーバーが成行に修正するか却下するので、トレンド局面で「浅い指値」を勧めない（成行か見送り）。基本手順（成行にする場面、損切りの幅、RR の下限）は lesson で上書きできない。その範囲内で書く。
+- lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。基本手順（損切りの幅、RR の下限）は lesson で上書きできない。その範囲内で書く。
+- plan.contract が "market_v1" のプランでは、エントリー価格はアナリストが選んでいない。分析した瞬間の現在値がそのまま成行の約定価格になったものであり、「もっと引きつけて入るべきだった」「押し目を待つべきだった」は実行できない指示なので lesson にしない。動かせるのは方向・損切り幅・利確幅・そもそも入るか（WAIT）の4つだけで、lesson はそのいずれかを動かす形にする。反実仮想の limit_pullback も、この契約のプランでは「その状況では入らない（WAIT）」の根拠としてのみ読む。
+- plan.contract が "entry_chosen_v1"（または未記載）の古いプランは、アナリストがエントリー価格を選んでいた時代のもの。当時の事実として検証してよいが、そこから引く lesson は上の4つの範囲に翻訳して書く。
 - 勝ちでも、最大逆行が損切り近くまで達した（mae_r ≥ 0.8）等プロセスに危うさがあれば lucky_win とし、教訓を書く。
 - plan.rules_in_force があれば、そのプランがどのルールの影響下で作られたかを踏まえ、結果を招いた／貢献したルールがあれば rule_blamed / rule_credited に id を書く。無ければ null。
 - confidence は診断の確からしさ。決着後の足が無い、反実仮想が ambiguous 等、事実が少ないときは下げる。
@@ -534,6 +609,9 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - 証拠の単位は「独立クラスタ」。同じ通貨ペア・同じ方向で近い時間に作られたプランは同じ局面についての同じ判断であり、lessons が何件あっても証拠としては1件。各 lesson には cluster が付いている。stats.by_cause_clusters が原因別のクラスタ数。
 - 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、inconclusive / plan_incoherent / good_call 以外のどの原因でも可。constraint のルールは lucky_win / direction_wrong / regime_misread / news_shock / entry_too_early も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
 - stats.win_rate / fill_rate は決着数が ${MIN_STAT_N} 未満のとき null。null や小さい n の統計を根拠にルールを強めない。stats.win_rate_ci95 は勝率の95%信頼区間。
+- stats は stats.contract のエントリー契約で作られたプランだけを集計している。別の契約のプランは stats.other_contract_rows として件数だけ数え、勝率にも件数にも入れていない。契約をまたいだ比較はできない。
+- 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
+- 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
 - stats.by_rulebook_version は「その版のもとで作られたプラン全体」の実績（決着数・勝敗・実現R合計 sum_r）。版の比較（ルールを足す前と後）には使えるが、版の中のどのルールのせいかは区別できない。個別ルールの証拠は stats.rule_feedback（診断がそのルールを結果の原因 blamed / 貢献 credited と名指しした回数）と、lessons の rule_blamed / rule_credited。blamed が credited を上回るルールは弱めるか削除する。
 - 対称性: untriggered の lesson は「約定を妨げた」側、loss の lesson は「損を招いた」側の証拠。片方だけを見ない。反実仮想の「成行なら勝っていた」は viable=true の案だけが根拠になる（lesson 側で考慮済み）。
 
@@ -542,7 +620,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - 条件は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）に限る。アナリスト自身の自己申告値（confidence、mode の宣言、direction）を条件にしない。
 - 「条件 → 行動」の形、100字以内。個別の価格・日付・銘柄固有の出来事は書かない。
 - アナリストが実際に出力できる形式に限る。プランはエントリー1つ・損切り1つ・利確3つで、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。
-- ゲートとの整合: ADX ${TREND_ADX} 以上で SMA が方向に並ぶトレンド局面では、現在値から ATR${MARKET_TOLERANCE_ATR}倍を超える指値はサーバーが成行に修正または却下する。トレンド局面で「浅い指値」を勧めるルールは書かない（成行か見送り）。
+- ゲートとの整合: 現行契約（market_v1）では、エントリー価格はアナリストが選ばない。分析した瞬間の現在値がそのまま成行の約定価格になる。したがって「押し目を待つ」「浅い指値で入る」「エントリーを引きつける」形のルールは実行できないので書かない。アナリストが決められるのは方向・損切り幅・利確幅と、そもそも入るかどうか（WAIT）の4つだけであり、ルールもその4つのいずれかを動かす形にする。損切り幅は ATR${MIN_STOP_ATR}倍以上、RR は ${MIN_RISK_REWARD} 以上をサーバーが強制する。トレンド局面（ADX ${TREND_ADX} 以上で SMA が方向に並ぶ）の判定は、入るか見送るかの条件としてのみ使う。
 - 同じ趣旨のルールは1つに統合する。
 - id は既存ルールを引き継ぐ場合そのまま、新規は "r" + 通し番号（既存と重複しない）。既存ルールを別の id で書き直さない。
 

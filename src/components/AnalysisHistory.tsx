@@ -168,6 +168,17 @@ const AnalysisHistory = ({ records }: Props) => {
         </p>
       )}
 
+      {/* Standing aside is the one call that costs nothing to make, so the
+          share of them the market went on to refute is published next to the
+          verdict rate rather than left in the row detail. */}
+      {overall.waitsJudged > 0 && (
+        <p className="text-[10px] font-mono" data-testid="wait-strip">
+          <span className={overall.waitsMissed > 0 ? "text-warning" : "text-muted-foreground"}>
+            {t.history.wait.summary(overall.waitsJudged, overall.waitsMissed, overall.waitMissRate ?? 0)}
+          </span>
+        </p>
+      )}
+
       {/* what the win rate rests on: a rate off two trades is not a rate */}
       {closed > 0 && (
         <p className="text-[10px] text-muted-foreground font-mono" data-testid="record-strip">
@@ -267,6 +278,7 @@ const AnalysisHistory = ({ records }: Props) => {
             ? t.history.outcomes.rejected
             : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
           const diagnosed = r.postmortem?.status === "done";
+          const waitMissed = r.wait_check?.verdict === "missed";
           const isOpen = expanded === r.id;
           const panelId = `outcome-${r.id}`;
           return (
@@ -286,6 +298,11 @@ const AnalysisHistory = ({ records }: Props) => {
                 {diagnosed && r.postmortem?.cause && (
                   <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground truncate max-w-[10rem]">
                     {causeLabel(r.postmortem.cause)}
+                  </span>
+                )}
+                {waitMissed && (
+                  <span className="shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold bg-warning/15 text-warning border-warning/40">
+                    {t.history.wait.badge}
                   </span>
                 )}
                 <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${badgeCls}`}>

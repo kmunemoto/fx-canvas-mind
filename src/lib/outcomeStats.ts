@@ -40,6 +40,14 @@ export interface OutcomeTally {
   incoherent: number;
   // Calls that declined to trade at all
   waits: number;
+  // Of those, the ones the tracker has reached a verdict on, and the ones
+  // where the market then offered a trade this app would itself have taken
+  // and it won. This is the record's only evidence of over-caution: every
+  // other number here punishes being too bold, so without it the loop can
+  // only ever push one way — toward trading less, until the analyst answers
+  // WAIT to everything and is never wrong again.
+  waitsJudged: number;
+  waitsMissed: number;
   // Non-WAIT plans (what `total` has always meant)
   total: number;
   // EVERY call, WAIT included. The denominator for the bucket rates below.
@@ -76,6 +84,8 @@ export interface OutcomeTally {
   ambiguousRate: number | null;
   incoherentRate: number | null;
   openRate: number | null;
+  // Share of judged WAITs that were missed trades
+  waitMissRate: number | null;
 }
 
 export interface ShadowTally {
@@ -207,10 +217,11 @@ const isIncoherent = (r: AnalysisRecord): boolean =>
 export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const t: OutcomeTally = {
     key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0,
-    incoherent: 0, waits: 0, total: 0, calls: 0, rejected: 0, contracts: [],
+    incoherent: 0, waits: 0, waitsJudged: 0, waitsMissed: 0, total: 0, calls: 0,
+    rejected: 0, contracts: [],
     winRate: null, winRateCi: null, clusters: 0, fillRate: null, sumR: null, expectancy: null,
     verdictRate: null, waitRate: null, expiredRate: null, untriggeredRate: null,
-    ambiguousRate: null, incoherentRate: null, openRate: null,
+    ambiguousRate: null, incoherentRate: null, openRate: null, waitMissRate: null,
   };
   let filled = 0;
   let settled = 0;
@@ -228,6 +239,13 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
     t.calls++;
     if (r.signal === "WAIT" || r.outcome === "skipped") {
       t.waits++;
+      // 'pending' has not been judged yet and 'unknown' never can be, so
+      // neither belongs on either side of the rate.
+      const verdict = r.wait_check?.verdict;
+      if (verdict === "missed" || verdict === "correct") {
+        t.waitsJudged++;
+        if (verdict === "missed") t.waitsMissed++;
+      }
       return;
     }
     t.total++;
@@ -281,6 +299,10 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   t.ambiguousRate = share(t.ambiguous);
   t.incoherentRate = share(t.incoherent);
   t.openRate = share(t.open);
+  // Taken over judged WAITs, not over all calls: the others sit in waitRate
+  // already, and mixing "not looked at yet" into the denominator would make
+  // over-caution look rarer the slower the tracker runs.
+  t.waitMissRate = t.waitsJudged > 0 ? Math.round((t.waitsMissed / t.waitsJudged) * 100) : null;
   return t;
 };
 

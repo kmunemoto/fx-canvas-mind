@@ -172,6 +172,26 @@ export const en: Dict = {
       gateOpen: "→ Still tracking",
       repaired: "The model's limit entry was moved to the market price because the trend was still running",
     },
+    wait: {
+      title: "Standing aside, reviewed",
+      badge: "trade missed",
+      summary: (judged: number, missed: number, rate: number) =>
+        `Standing aside: of ${judged} judged calls, ${missed} (${rate}%) would have won on the smallest trade this app itself allows`,
+      verdicts: {
+        missed: "Standing aside was wrong — even the smallest allowed trade would have won",
+        correct: "Standing aside cost nothing — neither direction paid",
+        pending: "The review window has not closed yet",
+        unknown: "The data needed to judge this call is missing",
+      },
+      direction: (dir: string) => `Direction that paid: ${dir}`,
+      basis: "Trade tested",
+      basisNote: (risk: string, reward: string) =>
+        `Stop ${risk} / target ${reward} — the tightest stop the gate allows and the nearest target that still clears the risk/reward floor`,
+      reachedAt: "Target reached",
+      barsExamined: (n: number) => `${n} bars examined`,
+      horizon: (hours: number) => `${hours}h window, measured in open-market time`,
+      note: "A call that declines to trade is scored too: leave it unscored and standing aside becomes the answer that is never wrong",
+    },
     postmortem: {
       title: "Why it missed (AI review)",
       titleWin: "Why it worked (AI review)",

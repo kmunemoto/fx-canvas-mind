@@ -29,6 +29,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   const d = t.history.detail;
   const g = t.history.gate;
   const pm = t.history.postmortem;
+  const w = t.history.wait;
   const ev = record.evaluation;
   const decimals = priceDecimals(record.pair);
   // A WAIT call carries no trade plan, so there is nothing to judge
@@ -119,6 +120,16 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
         return { text: t.history.outcomes[shadow.outcome] ?? shadow.outcome, cls: "text-muted-foreground" };
     }
   })();
+
+  // --- standing aside, reviewed -------------------------------------------
+  // A WAIT carries no plan, so nothing above this line has anything to judge.
+  // What is judged instead is the smallest trade the entry gate would itself
+  // have allowed from the price at the moment of the call.
+  const wait = !tracked ? record.wait_check ?? null : null;
+  const waitVerdictClass = wait?.verdict === "missed"
+    ? "text-warning"
+    : wait?.verdict === "correct" ? "text-success" : "text-muted-foreground";
+  const waitDecided = wait?.verdict === "missed" || wait?.verdict === "correct";
 
   // --- the post-mortem ----------------------------------------------------
   const post = record.postmortem ?? null;
@@ -227,6 +238,38 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
               )}
             </div>
           </div>
+        </section>
+      )}
+
+      {/* the call that declined to trade, and what the market then did */}
+      {wait && (
+        <section
+          className={`rounded-md border p-2 space-y-1 ${
+            wait.verdict === "missed" ? "border-warning/40 bg-warning/5" : "border-border/60 bg-background/60"
+          }`}
+          data-testid="wait-detail"
+        >
+          <Heading>{w.title}</Heading>
+          <p className={`font-semibold ${waitVerdictClass}`}>{w.verdicts[wait.verdict] ?? wait.verdict}</p>
+          {waitDecided && (
+            <>
+              {wait.direction && (
+                <p className="text-muted-foreground">{w.direction(t.direction[wait.direction].word)}</p>
+              )}
+              <Row label={d.priceAtSignal} value={price(wait.price ?? record.price_at_signal)} />
+              {typeof wait.risk === "number" && typeof wait.reward === "number" && (
+                <p className="text-muted-foreground">
+                  <span className="font-semibold">{w.basis}: </span>
+                  {w.basisNote(pips(wait.risk, null), pips(wait.reward, null))}
+                </p>
+              )}
+              {wait.at && <Row label={w.reachedAt} value={when(wait.at)} />}
+              <p className="text-[10px] text-muted-foreground font-mono">
+                {w.barsExamined(wait.bars_examined)} · {w.horizon(Math.round(wait.horizon_ms / 3_600_000))}
+              </p>
+            </>
+          )}
+          <p className="text-[10px] text-muted-foreground">{w.note}</p>
         </section>
       )}
 

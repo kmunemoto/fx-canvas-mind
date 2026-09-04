@@ -180,6 +180,28 @@ export const ja = {
       gateOpen: "→ 追跡中",
       repaired: "AIの指値エントリーはトレンド継続中のため、現在値の成行に修正して公開しました",
     },
+    // 見送り（WAIT）の検証。見送りは「間違えようのない答え」になりがちなので、
+    // 見送った後に相場が何をしたかを必ず突き合わせる
+    wait: {
+      title: "見送りの検証",
+      badge: "取れていた",
+      summary: (judged: number, missed: number, rate: number) =>
+        `見送りの検証: 判定済み ${judged}件のうち ${missed}件（${rate}%）は、このアプリ自身が許す最小のトレードなら勝てていました`,
+      verdicts: {
+        missed: "見送るべきではなかった（最小のトレードでも勝てていた）",
+        correct: "見送りは妥当だった（どちらに入っても取れていない）",
+        pending: "検証期間が終わっていません",
+        unknown: "検証に必要なデータがありません",
+      },
+      direction: (dir: string) => `取れていた方向: ${dir}`,
+      basis: "検証したトレード",
+      basisNote: (risk: string, reward: string) =>
+        `損切り幅 ${risk} / 利確幅 ${reward}（ゲートが許す最小の損切りと、リスクリワード下限を満たす最も近い利確）`,
+      reachedAt: "利確到達",
+      barsExamined: (n: number) => `検証した足 ${n}本`,
+      horizon: (hours: number) => `検証期間 ${hours}時間（市場が開いている時間で計測）`,
+      note: "見送りは採点されないと「常に見送る」が最善手になってしまうため、見送った後の値動きも同じ基準で検証しています",
+    },
     // Why a settled plan went the way it did
     postmortem: {
       title: "なぜ外れたか（AIの検証）",

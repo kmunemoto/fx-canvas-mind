@@ -314,6 +314,30 @@ export interface LoopHealth {
   now: string;
 }
 
+// Was standing aside the right call? Mirror of the WaitCheck written by
+// supabase/functions/track-outcomes/waits.ts.
+//
+// A WAIT is a prediction too, and the one prediction that costs nothing to
+// make: answer WAIT to everything and the win rate never moves. So it is
+// scored against the smallest trade the app's own entry gate would have
+// allowed from the price at the moment of the call — 'missed' means that
+// trade existed and won.
+export type WaitVerdict = "missed" | "correct" | "pending" | "unknown";
+
+export interface WaitCheck {
+  verdict: WaitVerdict;
+  direction: "BUY" | "SELL" | null;
+  r: number | null;
+  at: string | null;
+  price: number | null;
+  atr: number | null;
+  risk: number | null;
+  reward: number | null;
+  bars_examined: number;
+  horizon_ms: number;
+  checked_at: string;
+}
+
 // Row shape of public.analyses as read by the client
 export type PlanContract = "entry_chosen_v1" | "market_v1";
 
@@ -348,6 +372,9 @@ export interface AnalysisRecord {
   // refused plans (absent on rows written by earlier versions)
   entry_check?: EntryCheck | null;
   postmortem?: Postmortem | null;
+  // The verdict on a call that declined to trade (v24+; null until the
+  // tracker has looked, absent on rows written before it existed)
+  wait_check?: WaitCheck | null;
   shadow?: boolean;
   shadow_of?: string | null;
   rulebook_version?: number | null;

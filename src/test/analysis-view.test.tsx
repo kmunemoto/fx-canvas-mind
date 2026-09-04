@@ -517,4 +517,60 @@ describe("AnalysisHistory across two entry contracts", () => {
     fireEvent.click(screen.getByRole("button", { name: "ルール版" }));
     expect(screen.getByText("v5（旧契約）")).toBeInTheDocument();
   });
+
+  // A verdict computed every fifteen minutes and shown to nobody is not a
+  // verdict. WAIT is the one call that costs nothing to make, so the record
+  // has to say out loud how often the market went on to refute it.
+  const waitRow = (verdict: "missed" | "correct", over: Partial<AnalysisRecord> = {}) =>
+    row({
+      signal: "WAIT", outcome: "skipped", entry_point: null, stop_loss: null,
+      take_profit_1: null, outcome_price: null, price_at_signal: 150,
+      wait_check: {
+        verdict, direction: "BUY", r: 1.2, at: "2026-09-01T09:00:00Z",
+        price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
+        bars_examined: 40, horizon_ms: 48 * 3_600_000,
+        checked_at: "2026-09-01T12:00:00Z",
+      },
+      ...over,
+    });
+
+  it("publishes how often standing aside was the wrong call", () => {
+    render(<AnalysisHistory records={[
+      waitRow("missed"), waitRow("correct"), waitRow("correct"), waitRow("correct"),
+    ]} />);
+    const strip = screen.getByTestId("wait-strip");
+    expect(strip.textContent).toContain("判定済み 4件");
+    expect(strip.textContent).toContain("1件（25%）");
+  });
+
+  it("says nothing about standing aside before anything has been judged", () => {
+    render(<AnalysisHistory records={[row({ signal: "WAIT", outcome: "skipped" })]} />);
+    expect(screen.queryByTestId("wait-strip")).toBeNull();
+  });
+
+  it("marks the row the market refuted and shows the trade it was judged on", () => {
+    render(<AnalysisHistory records={[waitRow("missed")]} />);
+    expect(screen.getByText("取れていた")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /WAIT/ }));
+    const detail = screen.getByTestId("wait-detail");
+    expect(detail.textContent).toContain("見送るべきではなかった");
+    // the levels are shown so the judgement can be checked by hand
+    expect(detail.textContent).toContain("検証したトレード");
+    expect(detail.textContent).toContain("検証した足 40本");
+  });
+
+  it("does not claim a verdict on a WAIT the tracker has not reached one on", () => {
+    render(<AnalysisHistory records={[waitRow("correct", {
+      wait_check: {
+        verdict: "pending", direction: null, r: null, at: null, price: 150, atr: 0.2,
+        risk: null, reward: null, bars_examined: 4, horizon_ms: 48 * 3_600_000,
+        checked_at: "2026-09-01T12:00:00Z",
+      },
+    })]} />);
+    expect(screen.queryByText("取れていた")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /WAIT/ }));
+    const detail = screen.getByTestId("wait-detail");
+    expect(detail.textContent).toContain("検証期間が終わっていません");
+    expect(detail.textContent).not.toContain("検証したトレード");
+  });
 });
