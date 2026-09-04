@@ -14,6 +14,8 @@
 
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import {
+  parseCandleTime,
+  ENTRY_WINDOW_MS,
   EVAL_INTERVAL,
   EVAL_OUTPUTSIZE,
   REFINE_INTERVAL,
@@ -26,11 +28,15 @@ import {
   type OpenRow,
 } from "./evaluate.ts";
 import { fetchQuotes, supportsQuotes, type QuoteCandle } from "./quotes.ts";
+import { judgeWait, type WaitBar } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v6-2026-09-03T23:10:00Z";
+const TRACKER_VERSION = "track-outcomes-v7-2026-09-04T02:40:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
+// WAIT rows judged per sweep. Lower than MAX_ROWS: an open position needs
+// looking at now, a call that declined to trade can wait a tick.
+const MAX_WAIT_ROWS = 20;
 // Market-data requests per run (series fetches + refinements together). The
 // shared key allows 8 per minute; the rest is left for analyses running at
 // the same moment. Anything beyond the budget waits for the next tick.
@@ -377,6 +383,77 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- and the calls that declined to trade ----------------------------
+    //
+    // A WAIT is a prediction too, and it used to be the only one never
+    // checked. Scored here against the smallest trade the entry gate would
+    // itself have allowed, so no threshold is invented for the purpose. This
+    // runs after the trades and only on whatever request budget is left: a
+    // WAIT keeps until the next tick, an open position does not.
+    let waitsChecked = 0;
+    let waitsMissed = 0;
+    if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
+      const waitRes = await rest(
+        "analyses?outcome=eq.skipped&or=(wait_check.is.null,wait_check->>verdict.eq.pending)" +
+          `&select=id,pair,interval,created_at,price_at_signal,context&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
+      );
+      const waitRaw = waitRes.ok ? await waitRes.json().catch(() => null) : null;
+      const waitRows = Array.isArray(waitRaw) ? waitRaw.filter(isRecord) : [];
+      // One price fetch per pair+interval, same as the trade path
+      const waitGroups = new Map<string, JsonRecord[]>();
+      for (const row of waitRows) {
+        const pair = typeof row.pair === "string" ? row.pair : "";
+        const interval = typeof row.interval === "string" ? row.interval : "";
+        if (!pair || !interval) continue;
+        const key = `${pair}|${EVAL_INTERVAL[interval] ?? interval}`;
+        const list = waitGroups.get(key);
+        if (list) list.push(row);
+        else waitGroups.set(key, [row]);
+      }
+      for (const [key, groupRows] of waitGroups) {
+        if (requests >= MAX_REQUESTS) {
+          errors.push(`${key}: waits deferred (request budget)`);
+          break;
+        }
+        const [pair, evalInterval] = key.split("|");
+        const candles = await fetchSeries({
+          symbol: pair,
+          interval: evalInterval,
+          outputsize: String(EVAL_OUTPUTSIZE[evalInterval] ?? 1500),
+        });
+        if (!candles || candles.length === 0 || hasFutureCandles(candles, nowMs)) {
+          errors.push(`${key}: waits no_data`);
+          continue;
+        }
+        const bars: WaitBar[] = candles
+          .map((c) => ({ t: parseCandleTime(c.datetime), high: c.high, low: c.low }))
+          .filter((b) => Number.isFinite(b.t));
+        for (const row of groupRows) {
+          const signalMs = Date.parse(String(row.created_at ?? ""));
+          if (!Number.isFinite(signalMs)) continue;
+          const entrySnap = isRecord(row.context) && isRecord(row.context.entry) ? row.context.entry : null;
+          const check = judgeWait(
+            {
+              price: numberOrNull(row.price_at_signal) ?? (entrySnap ? numberOrNull(entrySnap.price) : null),
+              atr: entrySnap ? numberOrNull(entrySnap.atr) : null,
+              signalMs,
+              horizonMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
+            },
+            bars,
+            nowMs,
+          );
+          const n = await patchRows(
+            `analyses?id=eq.${encodeURIComponent(String(row.id))}&outcome=eq.skipped`,
+            { wait_check: check },
+          );
+          if (n > 0) {
+            waitsChecked++;
+            if (check.verdict === "missed") waitsMissed++;
+          }
+        }
+      }
+    }
+
     const summary = {
       ok: true,
       mode: scope.kind,
@@ -392,6 +469,8 @@ Deno.serve(async (req: Request) => {
       updated,
       deferred,
       resolved,
+      waits_checked: waitsChecked,
+      waits_missed: waitsMissed,
       errors,
       version: TRACKER_VERSION,
     };
