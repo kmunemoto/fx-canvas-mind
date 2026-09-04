@@ -31,7 +31,6 @@ import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Post
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   CONSOLIDATION_SCHEMA,
-  DIAGNOSIS_SCHEMA,
   MIN_NEW_LESSONS,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
@@ -46,7 +45,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v6-2026-09-04T11:55:00Z";
+const POSTMORTEM_VERSION = "postmortem-v7-2026-09-04T12:35:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -506,6 +505,7 @@ Deno.serve(async (req: Request) => {
           atr: (contextEntry ? numberOrNull(contextEntry.atr) : null) ?? (entryCheck ? numberOrNull(entryCheck.atr) : null),
           momentum: entryCheck ? entryCheck.momentum === true : null,
           events: calendar,
+          contract: strOrNull(raw.plan_contract),
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);
@@ -558,12 +558,12 @@ Deno.serve(async (req: Request) => {
       const prompt = buildDiagnosisPrompt(plan, facts);
       let answer: unknown = null;
       try {
-        answer = await askModel(prompt.system, prompt.user, DIAGNOSIS_SCHEMA, 2500);
+        answer = await askModel(prompt.system, prompt.user, prompt.schema, 2500);
       } catch (err) {
         await markFailed(row, raw, `model: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
-      const diagnosis = parseDiagnosis(answer, facts.hints, rulesInForce.map((r) => r.id));
+      const diagnosis = parseDiagnosis(answer, facts.hints, rulesInForce.map((r) => r.id), strOrNull(raw.plan_contract));
       if (!diagnosis) {
         await markFailed(row, raw, "no_diagnosis");
         continue;
@@ -606,6 +606,7 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify({
           analysis_id: row.id,
           user_id: strOrNull(raw.user_id),
+          plan_contract: strOrNull(raw.plan_contract),
           pair: row.pair,
           interval: row.interval,
           signal: row.signal,
@@ -674,7 +675,7 @@ Deno.serve(async (req: Request) => {
       };
       errors.push(`rulebook: deferred (time budget, ${elapsed()}ms elapsed)`);
     } else {
-      const lessonSelect = "analysis_id,user_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,rule_blamed,rule_credited";
+      const lessonSelect = "analysis_id,user_id,plan_contract,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,rule_blamed,rule_credited";
       // Over-fetched so the round-robin has something to choose from: taking
       // the newest RECENT_LESSONS and only then sharing them out would already
       // have thrown away every account the busiest one outran.
@@ -700,6 +701,7 @@ Deno.serve(async (req: Request) => {
       const lessons: LessonRow[] = withClusters(lessonRows.map((l) => ({
         analysis_id: String(l.analysis_id ?? ""),
         user_id: strOrNull(l.user_id),
+        contract: strOrNull(l.plan_contract),
         pair: String(l.pair ?? ""),
         cause: String(l.cause ?? "inconclusive"),
         outcome: String(l.outcome ?? ""),

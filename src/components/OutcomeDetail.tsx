@@ -1,7 +1,7 @@
 import type { AnalysisRecord, Counterfactual, NumericCandle } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
-import { isRejected } from "@/lib/outcomeStats";
+import { CURRENT_CONTRACT, contractKey, isRejected } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 
 interface Props {
@@ -146,7 +146,11 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   };
   const counterfactuals: Array<{ label: string; value: string; cls: string }> = [];
   if (facts) {
-    const add = (label: string, c: Counterfactual | null | undefined) => {
+    // Under market_v1 the analyst never chose the entry, so a better price
+    // that was on offer is a measurement of how extended the entry was, not a
+    // move that could have been made. The green is what makes the row read as
+    // advice, so it is withheld — the number still shows.
+    const add = (label: string, c: Counterfactual | null | undefined, neverRemedy = false) => {
       const v = cfLabel(c);
       if (v === null) return;
       // A variant that "wins" but the gate would refuse is not a remedy;
@@ -157,14 +161,14 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
       counterfactuals.push({
         label,
         value: parts.join(" · "),
-        cls: c?.resolution === "win" && c?.viable !== false
+        cls: c?.resolution === "win" && c?.viable !== false && !neverRemedy
           ? "text-success"
           : c?.resolution === "loss" ? "text-destructive" : "text-muted-foreground",
       });
     };
     add(pm.cfMarket, facts.counterfactual?.market_entry);
     add(pm.cfMarketSameRisk, facts.counterfactual?.market_entry_same_risk);
-    add(pm.cfPullback, facts.counterfactual?.limit_pullback);
+    add(pm.cfPullback, facts.counterfactual?.limit_pullback, contractKey(record) === CURRENT_CONTRACT);
     add(pm.cfStop15, facts.counterfactual?.stop_x1_5);
     add(pm.cfStop2, facts.counterfactual?.stop_x2);
     add(pm.cfTpHalf, facts.counterfactual?.tp_half);

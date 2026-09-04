@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
   AFTER_WAIT_MS,
+  CAUSES,
+  causesFor,
   computeFacts,
+  isCause,
   isPostmortemDue,
   type PostmortemRow,
 } from "../../supabase/functions/postmortem/facts.ts";
 import {
+  CONSOLIDATION_SCHEMA,
   DIAGNOSIS_SCHEMA,
+  diagnosisSchema,
   MAX_RULES,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
@@ -250,12 +255,18 @@ describe("facts — remedies the gate would refuse, and chased entries", () => {
     const f = await computeFacts(row, candles, "1h", NOW, { atr: 0.5 });
     // 0.7R against the entry in the two bars before the stop-out bar
     expect(f.early_adverse_r).toBeCloseTo(0.7, 5);
-    // A limit 0.5R back (149.50, stop 148.50) fills on the first bar and
-    // pays 2.5:1 instead of 2:1 — but sits a full ATR from the market, so
-    // the gate would not publish it as a limit; the lesson has to be "do
-    // not chase here", not "place a limit"
+    // A fill 0.5R better (149.50, stop 148.50) happens on the first bar and
+    // pays 2.5:1 instead of 2:1 — but that price sits a full ATR from the
+    // market, so a plan entered there would not pass the gate. The reading is
+    // "the move was already extended, do not take this one", not "place a
+    // limit" — which under market_v1 is not an order anyone can send.
     expect(f.counterfactual.limit_pullback).toMatchObject({ resolution: "win", rr: 2.5, viable: false, gate: "too_far" });
-    expect(f.hints).toEqual(["entry_too_early", "stop_too_tight"]);
+    expect(f.hints).toEqual(["chased_move", "stop_too_tight"]);
+    // The order matters: hints[0] is what gets stored when the model's answer
+    // is unparseable, and declining the trade is a remedy that exists under
+    // both contracts while widening the stop past MIN_STOP_ATR is not.
+    const underMarketV1 = await computeFacts(row, candles, "1h", NOW, { atr: 0.5, contract: "market_v1" });
+    expect(underMarketV1.hints).toEqual(["chased_move", "stop_too_tight"]);
   });
 
   it("measures the early adverse move only while the trade was open, and not for stop entries", async () => {
@@ -315,7 +326,14 @@ describe("facts — remedies the gate would refuse, and chased entries", () => {
     ];
     const g = await computeFacts(row, straight, "1h", NOW, { atr: 0.5 });
     expect(g.counterfactual.limit_pullback?.resolution).toBe("untriggered");
-    expect(g.notes.some((n) => n.includes("entering at once was right"))).toBe(true);
+    expect(g.notes.some((n) => n.includes("this entry was not late"))).toBe(true);
+
+    // These notes are serialized verbatim into the model's payload, so they
+    // must not name an order the current contract cannot place. gateReason
+    // feeds the not-viable branch, which is the one this fixture takes.
+    for (const n of [...f.notes, ...g.notes]) {
+      expect(n).not.toMatch(/limit|指値|押し目/);
+    }
   });
 });
 
@@ -814,5 +832,111 @@ describe("rules in the analyze prompt", () => {
       { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: 3, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
       { id: "r2", text_ja: "only english", text_en: "only english", cause: "unknown", support: 1, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
     ]);
+  });
+});
+
+// The taxonomy has two eras. entry_too_far and entry_too_early stay valid
+// INPUTS forever — stored rows, stored lessons and stored rulebook rules carry
+// them — but nothing produces them again. The danger of a half-done rename is
+// that it is silent: parseDiagnosis swallows an unknown cause and substitutes
+// hints[0], so a name changed in one place and not another yields plausible
+// diagnoses with no error at any layer.
+describe("the cause taxonomy across the two entry contracts", () => {
+  it("keeps the legacy names accepted, so no stored rule loses its cause", () => {
+    // Dropping either from CAUSES would make parseConsolidation coerce an old
+    // rule's cause to "general" and silently widen its evidence.
+    expect(CAUSES).toContain("chased_move");
+    expect(CAUSES).toContain("entry_too_far");
+    expect(CAUSES).toContain("entry_too_early");
+    expect(CAUSES).toHaveLength(12);
+    for (const c of ["chased_move", "entry_too_far", "entry_too_early"]) expect(isCause(c)).toBe(true);
+  });
+
+  it("offers the model only the causes its own contract can produce", () => {
+    const live = causesFor("market_v1");
+    expect(live).toContain("chased_move");
+    expect(live).not.toContain("entry_too_far");
+    expect(live).not.toContain("entry_too_early");
+    for (const c of [...causesFor("entry_chosen_v1"), ...live]) expect(CAUSES).toContain(c);
+    expect(causesFor("entry_chosen_v1")).toHaveLength(12);
+    expect(causesFor(null)).toHaveLength(12);
+
+    expect(diagnosisSchema("market_v1").properties.cause.enum).not.toContain("entry_too_far");
+    expect(diagnosisSchema("entry_chosen_v1").properties.cause.enum).toContain("entry_too_far");
+    // The consolidation schema must NOT be narrowed: an existing rule whose
+    // cause is entry_too_far has to be re-emittable under its own cause
+    // rather than coerced to "general".
+    expect(CONSOLIDATION_SCHEMA.properties.rules.items.properties.cause.enum).toContain("entry_too_far");
+  });
+
+  it("never stores the dead spelling, whatever the model answers", () => {
+    const ok = {
+      cause: "entry_too_early", secondary_causes: [], avoidable: true, confidence: 70,
+      verdict_ja: "v", verdict_en: "v", evidence_ja: [], evidence_en: [],
+      lesson_ja: "l", lesson_en: "l", scope: null, rule_blamed: null, rule_credited: null,
+    };
+    expect(parseDiagnosis(ok, ["inconclusive"], [], "market_v1")?.cause).toBe("chased_move");
+    expect(parseDiagnosis(ok, ["inconclusive"], [], "entry_chosen_v1")?.cause).toBe("chased_move");
+    // A cause this row's contract cannot produce falls to the deterministic
+    // hint, which is contract-correct by construction.
+    const legacy = { ...ok, cause: "entry_too_far" };
+    expect(parseDiagnosis(legacy, ["stop_too_tight"], [], "market_v1")?.cause).toBe("stop_too_tight");
+    expect(parseDiagnosis(legacy, ["stop_too_tight"], [], "entry_chosen_v1")?.cause).toBe("entry_too_far");
+  });
+
+  it("cites across the rename in both directions", () => {
+    const lesson = (cause: string) => ({ analysis_id: "a", cause, shadow: false });
+    expect(citationAllowed({ cause: "entry_too_early", kind: "heuristic" }, lesson("chased_move"))).toBe(true);
+    expect(citationAllowed({ cause: "chased_move", kind: "heuristic" }, lesson("entry_too_early"))).toBe(true);
+    // A constraint rule of another cause reaches it through CONSTRAINT_CAUSES
+    expect(citationAllowed({ cause: "direction_wrong", kind: "constraint" }, lesson("entry_too_early"))).toBe(true);
+    // The legacy cause that was NOT renamed keeps its own bucket
+    expect(citationAllowed({ cause: "entry_too_far", kind: "heuristic" }, lesson("entry_too_far"))).toBe(true);
+  });
+
+  it("merges the two spellings into one bucket, and counts each era", () => {
+    const l = (cause: string, contract: string | null, cluster: string) =>
+      ({ cause, contract, cluster, shadow: false });
+    const s = summarizeRecord([], [
+      l("entry_too_early", "entry_chosen_v1", "c1"),
+      l("chased_move", "market_v1", "c2"),
+      l("entry_too_far", "entry_chosen_v1", "c3"),
+    ]);
+    expect(s.by_cause.chased_move).toBe(2);
+    expect(s.by_cause.entry_too_early).toBeUndefined();
+    expect(s.by_cause_clusters.chased_move).toBe(2);
+    // entry_too_far names something only the old contract could do, so it is
+    // never aliased — it keeps its own bucket.
+    expect(s.by_cause.entry_too_far).toBe(1);
+    expect(s.lessons_by_contract).toEqual({ entry_chosen_v1: 2, market_v1: 1 });
+  });
+
+  it("does not let a market_v1 plan be filed under a legacy cause", async () => {
+    // Under market_v1 entry === price_at_signal and the judge fills on the
+    // signal bar, so an untriggered verdict means the fill could not be
+    // established — not that the entry was never reached.
+    const row = {
+      id: "u1", pair: "USD/JPY", interval: "1h", signal: "BUY" as const,
+      entry_point: 150, stop_loss: 149, take_profit_1: 152,
+      take_profit_2: null, take_profit_3: null,
+      created_at: new Date(NOW - 40 * 60 * 60 * 1000).toISOString(),
+      price_at_signal: 150,
+      evaluation: { resolution: "untriggered", reason: "no_fill", order_type: "limit" } as never,
+      outcome: "untriggered", closed_at: new Date(NOW - 20 * 60 * 60 * 1000).toISOString(),
+    };
+    const candles = [
+      candle(stamp(0), 150.2, 149.9), candle(stamp(1), 150.6, 150.1),
+      candle(stamp(2), 151.4, 150.5), ...quiet(3, 30, 152.4, 151.6),
+    ];
+    const legacy = await computeFacts(row, candles, "1h", NOW, { atr: 0.5 });
+    const live = await computeFacts(row, candles, "1h", NOW, { atr: 0.5, contract: "market_v1" });
+    expect(live.hints).toEqual(["inconclusive"]);
+    expect(live.hints).not.toContain("entry_too_far");
+    expect(live.notes.some((n) => n.includes("market_v1") && n.includes("could not be established from the data"))).toBe(true);
+    // The old era still reads the same fixture the old way
+    expect(legacy.hints.some((h) => h === "entry_too_far" || h === "inconclusive")).toBe(true);
+    // Whatever the era, no market_v1 row may carry a cause only the old
+    // contract could produce — the half-done-rename detector.
+    for (const h of live.hints) expect(["entry_too_far", "entry_too_early"]).not.toContain(h);
   });
 });

@@ -326,12 +326,18 @@ export const shadowTally = (records: AnalysisRecord[]): ShadowTally => {
 };
 
 // How often each cause came up in the post-mortems of the visible record
+// The server renamed entry_too_early to chased_move and keeps counting them
+// as one; the breakdown has to agree, or the same failure shows as two bars.
+export const canonicalCause = (c: PostmortemCause): PostmortemCause =>
+  c === "entry_too_early" ? "chased_move" : c;
+
 export const causeCounts = (records: AnalysisRecord[]): Array<{ cause: PostmortemCause; count: number }> => {
   const counts = new Map<PostmortemCause, number>();
   for (const r of records) {
     if (isShadow(r)) continue;
-    const cause = r.postmortem?.status === "done" ? r.postmortem.cause : undefined;
-    if (!cause) continue;
+    const raw = r.postmortem?.status === "done" ? r.postmortem.cause : undefined;
+    if (!raw) continue;
+    const cause = canonicalCause(raw);
     counts.set(cause, (counts.get(cause) ?? 0) + 1);
   }
   return [...counts.entries()]

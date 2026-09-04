@@ -203,8 +203,14 @@ export interface EntryCheck {
 export type PostmortemCause =
   | "direction_wrong"
   | "stop_too_tight"
+  // entry_chosen_v1 only, never newly written: under market_v1 the server
+  // fills at the market, so no plan can go unfilled and no entry was chosen
+  // late. Kept because stored rows still carry them.
   | "entry_too_far"
   | "entry_too_early"
+  // What entry_too_early is called now: filled into an immediate retrace, in
+  // a move that was already extended when the plan was made.
+  | "chased_move"
   | "target_too_far"
   | "regime_misread"
   | "news_shock"
@@ -222,7 +228,7 @@ export interface Counterfactual {
   // would have published it
   rr?: number | null;
   viable?: boolean;
-  gate?: "ok" | "poor_rr" | "stop_too_tight";
+  gate?: "ok" | "poor_rr" | "stop_too_tight" | "too_far" | "should_be_market";
 }
 
 export interface PostmortemFacts {
