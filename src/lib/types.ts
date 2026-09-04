@@ -154,8 +154,13 @@ export interface OutcomeEvaluation {
   path: OutcomePathPoint[];
 }
 
-// Why the entry gate in analyze refused (or repaired) a plan — mirror of
-// entry_check written by supabase/functions/analyze/index.ts
+// Why the entry gate in analyze refused a plan — mirror of entry_check
+// written by supabase/functions/analyze/index.ts.
+//
+// `repaired` / `snapped` / `snap_declined` only ever appear on rows from the
+// entry_chosen_v1 contract, where the model picked the entry price and the
+// server sometimes moved it. Under market_v1 the server sets the entry, so
+// there is nothing to move and the fields are absent.
 export type EntryRejection = "too_far" | "should_be_market" | "stop_too_tight" | "poor_rr" | "incoherent";
 
 export interface EntryCheck {

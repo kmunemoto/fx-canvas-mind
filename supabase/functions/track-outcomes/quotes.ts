@@ -21,6 +21,7 @@
 // Deno-free on purpose: src/test/quotes.test.ts imports this file directly.
 
 import type { Candle } from "../analyze/indicators.ts";
+import { isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
 
 export const GMO_HOST = "https://forex-api.coin.z.com/public/v1";
 
@@ -149,49 +150,10 @@ export const parseKlines = (body: unknown): Array<{ t: number; c: Candle }> => {
   return out;
 };
 
-// The forex week: closed from Friday evening to Sunday 21:00 UTC — the hour
-// the rest of this codebase already treats as the open (see the weekend test
-// in src/test/track-outcomes.test.ts, whose bars resume at Sunday 21:00).
-//
-// The exact Friday close moves with US daylight saving, so only the hours
-// that are shut under every rule are excluded: all of Saturday, Sunday
-// before the open, and Friday from 22:00 (the latest possible close). An
-// hour of genuinely closed market left in costs nothing; discarding an hour
-// of real trading would corrupt a judgement.
-export const isMarketClosed = (ms: number): boolean => {
-  const d = new Date(ms);
-  const day = d.getUTCDay();
-  const hour = d.getUTCHours();
-  if (day === 6) return true; // Saturday
-  if (day === 5 && hour >= 22) return true; // Friday, past the latest close
-  if (day === 0 && hour < 21) return true; // Sunday, before the earliest open
-  return false;
-};
-
-// The same week, asked the other way round.
-//
-// isMarketClosed answers "may I throw this bar away?", so it names only the
-// hours that are shut under every daylight-saving rule — being wrong there
-// destroys real data. Coverage asks the opposite question: "is this absence
-// evidence that the feed failed?", and there the conservative answer is the
-// widest possible closure, because an hour that MIGHT have been shut is not
-// evidence of anything.
-//
-// One predicate cannot do both. Using the narrow one for coverage counted the
-// summer band between the real 21:00Z Friday close and the notional 22:00Z as
-// open market with no bars in it: 60 minutes, four missing 15min intervals,
-// past the three-interval tolerance. Every 15min window spanning a weekend was
-// therefore judged incomplete and sent back to the mid feed — silently, and
-// every weekend.
-export const isPossiblyClosed = (ms: number): boolean => {
-  const d = new Date(ms);
-  const day = d.getUTCDay();
-  const hour = d.getUTCHours();
-  if (day === 6) return true; // Saturday
-  if (day === 5 && hour >= 21) return true; // Friday, from the earliest close
-  if (day === 0 && hour < 22) return true; // Sunday, until the latest open
-  return false;
-};
+// The week itself lives in _shared/market-hours.ts, where analyze can reach
+// it too: "enter now at the market" is not an available action when the
+// market is shut, and that judgement must be the same on both sides.
+export { isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
 
 // Pair the two sides by timestamp. A bar present on only one side is dropped:
 // judging a level against half a book is worse than not judging it.

@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v23-2026-09-03T23:40:00Z";
+const FUNCTION_VERSION = "analyze-v24-2026-09-04T04:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -38,6 +38,7 @@ import {
 
 import { parseRules, selectPromptRules } from "./rules.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
+import { isMarketClosed } from "../_shared/market-hours.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -204,17 +205,15 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 1. STRUCTURE — 各時間足の市場構造を判定する（高値切り上げ/切り下げ、レンジ、ブレイク後の戻し）。
 2. LEVELS — スイング高安・移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。直近スイングのすぐ外側にストップが溜まる「ストップハントゾーン」があれば特定する。
 3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
-4. TARGETS — 損切りと利確1/2/3を決める。損切りは直近スイング±ATRに根拠を置く。ただし entry_type が "market" になる場面（手順5参照）では、損切りを大きなスイング高安まで引かず、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
-5. ENTRY — エントリー価格と entry_type を決める。ここが最重要:
-   - market_context_detail.mode が "Trend Day" または "Breakout" で signal の方向が direction と一致する場合、あるいは ADX が ${TREND_ADX} 以上で価格・SMA20・SMA50 が signal の方向に並んでいる場合、押し目・戻りを待ってはいけない。entry_type を "market"、entry_point を現在値そのものにする。トレンド中に深い戻りは来ない。待つプランは約定しないまま値幅を丸ごと逃す（サーバー側で現在値の成行に修正されるか、却下される）。
-   - "Reversal"（逆張り）や "Range Day"（レンジ）のときだけ entry_type を "limit" とし、現在値から離れたエントリーを置いてよい。ただし |entry_point − 現在値| はエントリー時間足の ATR の${MAX_LIMIT_ATR}倍以内。
-   - ブレイクに乗る場合は entry_type を "stop"（BUYなら現在値より上、SELLなら現在値より下）。現在値から ATR の${MAX_STOP_ATR}倍以内に置く。
-   - 決めたエントリーでのリスクリワード（TP1基準）は1.5倍以上を基本とし、${MIN_RISK_REWARD}を下回るプランは出さない。まず損切りを近い水準に寄せられないか検討し、それでも成立しないなら signal を "WAIT" にする。
+4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
+5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
+   - 「押し目を待って買う」「戻りを待って売る」は出力できない。今この価格で入るか、入らないかの二択である。待つべき局面なら signal を "WAIT" にする。
+   - 現在値でのリスクリワード（TP1基準）が ${MIN_RISK_REWARD} を下回るプランは出さない。損切りを妥当な範囲で近づけて成立しないなら、それは「今は入るところではない」ということなので "WAIT" にする。無理に利確を伸ばして帳尻を合わせない。
+   - WAIT は逃げではなく判断である。ただし WAIT もあとで検証される（その後の値動きで、取れたはずのトレードがあったかを機械的に採点する）ので、迷ったら WAIT ということはしない。
 6. PLAN — 全てを統合して最終判断を下す。
 
 ルール:
 - 確信度が60未満の場合、signal は必ず "WAIT"。
-- 約定しないエントリーは、外れた予想よりも価値がない。現在値から離すのは明確な根拠があるときだけにする。
 - 時間足の方向が矛盾する場合は確信度を下げる。
 - すべての価格は分析対象ペアの実際の価格スケールで出力する。
 - 入力データの時刻はすべて UTC。文章で時刻に触れるときは日本時間（JST = UTC+9）に換算し、「JST」を添える。
@@ -236,12 +235,6 @@ const RESPONSE_SCHEMA = {
     fundamental_score: { type: "integer", description: "0-100。ファンダ情報なしの場合は50" },
     risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
     sentiment: { type: "string", enum: ["BULLISH", "NEUTRAL", "BEARISH"] },
-    entry_point: { type: "number" },
-    entry_type: {
-      type: "string",
-      enum: ["market", "limit", "stop"],
-      description: "market=現在値で即エントリー / limit=押し目・戻りを待つ / stop=ブレイクに乗る",
-    },
     stop_loss: { type: "number" },
     take_profit_1: { type: "number" },
     take_profit_2: { type: "number" },
@@ -284,7 +277,7 @@ const RESPONSE_SCHEMA = {
   },
   required: [
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",
-    "risk_level", "sentiment", "entry_point", "entry_type", "stop_loss", "take_profit_1",
+    "risk_level", "sentiment", "stop_loss", "take_profit_1",
     "take_profit_2", "take_profit_3", "risk_reward_ratio", "market_context",
     "market_context_detail", "stop_hunt_zone", "timeframe_alignment",
     "key_factors", "support_levels", "resistance_levels", "analysis", "warnings",
@@ -389,7 +382,9 @@ const normalizeAnalysis = (value: unknown, decimals: number, locale: AnalysisLoc
     return { num: n, text: n === null ? asTrimmedString(v, "—") : n.toFixed(decimals) };
   };
 
-  const entry = priceField(source.entry_point);
+  // The entry is no longer read from the model — the server writes it from the
+  // market price. Parsed as a blank so the shape is unchanged for callers.
+  const entry = priceField(undefined);
   const sl = priceField(source.stop_loss);
   const tp1 = priceField(source.take_profit_1);
   const tp2 = priceField(source.take_profit_2);
@@ -436,9 +431,8 @@ const normalizeAnalysis = (value: unknown, decimals: number, locale: AnalysisLoc
     take_profit_1: tp1.text,
     take_profit_2: tp2.text,
     take_profit_3: tp3.text,
-    entry_type: source.entry_type === "market" || source.entry_type === "limit" || source.entry_type === "stop"
-      ? source.entry_type
-      : "market",
+    // Every plan is entered at the market by construction
+    entry_type: "market" as const,
     risk_reward_ratio: asTrimmedString(source.risk_reward_ratio, "—"),
     market_context: asTrimmedString(source.market_context, ""),
     market_context_detail: detail,
@@ -786,6 +780,12 @@ Deno.serve(async (req: Request) => {
     }
 
     stage = "fetch_market_data";
+    // Stamped when the fetch resolves. Deliberately NOT the newest candle's
+    // datetime: that is the OPEN of a still-forming bar, so on a daily plan it
+    // would back-date the fill up to 24 hours into price action that is
+    // already known — and its bare "YYYY-MM-DD HH:mm:ss" form is read as
+    // local time by V8, which is the reason parseCandleTime exists.
+    let pricedAtIso = new Date().toISOString();
     const timeframes = TF_CHAIN[interval];
     const fetchSeries = async (tf: string, outputsize: number) => {
       // timezone=UTC: the tracker and the chart both read these timestamps as
@@ -808,6 +808,7 @@ Deno.serve(async (req: Request) => {
       seriesByTf = await Promise.all(
         timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
       );
+    pricedAtIso = new Date().toISOString();
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
       const message = redactSecrets(raw || "市場データが取得できませんでした");
@@ -1104,11 +1105,29 @@ Deno.serve(async (req: Request) => {
     stage = "check_entry";
     const detail = normalizedAnalysis.market_context_detail;
     const proposedSignal = normalizedAnalysis.signal;
-    const declaredType = normalizedAnalysis.entry_type;
-    const declaredMode = detail && typeof detail.mode === "string" ? detail.mode : null;
-    const declaredDirection = detail && typeof detail.direction === "string" ? detail.direction : null;
+
+    // THE ENTRY IS THE MARKET PRICE, and it is rounded ONCE, here, before
+    // anything reads it.
+    //
+    // The gate used to be handed the unrounded float while the row stored the
+    // rounded one, so a plan could be certified at RR 1.2006 and judged at
+    // 1.1975 — and the post-mortem's replay of the gate would then report that
+    // the gate would not publish a plan the gate had published. One constant,
+    // five readers: the gate, the prompt, entry_point, price_at_signal and
+    // entry_check.price.
+    //
+    // Mid, not bid or ask. Every level the model reasoned with — the SMAs, the
+    // bands, the ATR, the swings, all forty candles — is a mid. Quoting the
+    // entry on the ask while the stop stays mid-derived would measure risk and
+    // reward on two different rulers, and those two numbers are the whole gate
+    // now. The spread is charged exactly once, at judgement.
+    const marketEntry = Number(entrySnapshot.price.toFixed(decimals));
+    normalizedAnalysis.entry_point_num = marketEntry;
+    normalizedAnalysis.entry_point = marketEntry.toFixed(decimals);
+    normalizedAnalysis.entry_type = "market";
+
     const proposed = {
-      entry: normalizedAnalysis.entry_point_num,
+      entry: marketEntry,
       stop: normalizedAnalysis.stop_loss_num,
       tp1: normalizedAnalysis.take_profit_1_num,
       tp2: normalizedAnalysis.take_profit_2_num,
@@ -1116,67 +1135,36 @@ Deno.serve(async (req: Request) => {
     };
     const entryVerdict: EntryVerdict = evaluateEntry({
       signal: proposedSignal,
-      entry: proposed.entry,
+      entry: marketEntry,
       stopLoss: proposed.stop,
       takeProfit1: proposed.tp1,
-      price: entrySnapshot.price,
+      price: marketEntry,
       atr: entrySnapshot.atr,
-      mode: declaredMode,
-      direction: declaredDirection,
+      mode: detail && typeof detail.mode === "string" ? detail.mode : null,
+      direction: detail && typeof detail.direction === "string" ? detail.direction : null,
       indicators: { adx: entrySnapshot.adx, sma20: entrySnapshot.sma20, sma50: entrySnapshot.sma50 },
     });
 
+    // "Enter now at the market" is not an available action when the market is
+    // shut. Without this a plan written on a Friday evening is judged by
+    // filling at the Sunday reopen, across the weekend gap — which can be
+    // written up as a large win that nobody could have taken.
+    const marketShut = isMarketClosed(Date.now());
+
     let entryRejected = false;
-    if (entryVerdict.snapped && !entryVerdict.repaired && entryVerdict.entry !== null) {
-      // Inside the market band but not on it. The tracker treats anything
-      // more than ~3 pips from the market as a limit that has to be touched,
-      // so publish the price the checker actually approved.
-      const originalEntry = normalizedAnalysis.entry_point;
-      // Stored at the displayed precision, so the price the tracker judges
-      // is the price the user was shown
-      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
-      normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
-      normalizedAnalysis.entry_type = "market";
-      if (entryVerdict.riskReward !== null) {
-        normalizedAnalysis.risk_reward_ratio = `1:${entryVerdict.riskReward}`;
-      }
-      if (originalEntry !== normalizedAnalysis.entry_point) {
-        normalizedAnalysis.warnings = [
-          L.entrySnapped({ originalEntry, entry: normalizedAnalysis.entry_point }),
-          ...normalizedAnalysis.warnings,
-        ];
-      }
-    } else if (entryVerdict.repaired && entryVerdict.entry !== null) {
-      // The pullback would not have come; the same plan entered now still
-      // pays, so that is what gets published — and said.
-      const originalEntry = normalizedAnalysis.entry_point;
-      // Stored at the displayed precision, so the price the tracker judges
-      // is the price the user was shown
-      normalizedAnalysis.entry_point_num = Number(entryVerdict.entry.toFixed(decimals));
-      normalizedAnalysis.entry_point = entryVerdict.entry.toFixed(decimals);
-      normalizedAnalysis.entry_type = "market";
-      if (entryVerdict.riskReward !== null) {
-        normalizedAnalysis.risk_reward_ratio = `1:${entryVerdict.riskReward}`;
-      }
-      normalizedAnalysis.warnings = [
-        L.entryRepaired({ signal: proposedSignal, originalEntry, entry: normalizedAnalysis.entry_point }),
-        ...normalizedAnalysis.warnings,
-      ];
-      console.log("Entry repaired", { proposedSignal, originalEntry, entry: normalizedAnalysis.entry_point, riskReward: entryVerdict.riskReward });
-    } else if (!entryVerdict.ok && entryVerdict.rejection) {
+    if (marketShut || (!entryVerdict.ok && entryVerdict.rejection)) {
       entryRejected = true;
+      const rejection: string = marketShut ? "market_closed" : (entryVerdict.rejection ?? "unknown");
       console.warn("Entry rejected", {
-        rejection: entryVerdict.rejection,
-        repairRejection: entryVerdict.repairRejection,
+        rejection,
         proposedSignal,
-        distanceAtr: entryVerdict.distanceAtr,
         stopAtr: entryVerdict.stopAtr,
         riskReward: entryVerdict.riskReward,
         regime: entryVerdict.regime,
       });
       normalizedAnalysis.warnings = [
-        L.entryRejected({
-          rejection: entryVerdict.rejection,
+        marketShut ? L.marketClosed : L.entryRejected({
+          rejection,
           signal: proposedSignal,
           distanceAtr: entryVerdict.distanceAtr,
           stopAtr: entryVerdict.stopAtr,
@@ -1202,17 +1190,10 @@ Deno.serve(async (req: Request) => {
       // The user asked for a plan and the gate took it away; that is not a
       // credit spent
       await releaseQuota();
-    } else if (entryVerdict.ok && entryVerdict.snapDeclined) {
-      // Inside the market band but left as written: say so, because the
-      // tracker will treat it as a limit that has to be touched
-      normalizedAnalysis.warnings = [
-        L.entrySnapDeclined({
-          entry: normalizedAnalysis.entry_point,
-          price: entrySnapshot.price.toFixed(decimals),
-          reason: entryVerdict.snapDeclined,
-        }),
-        ...normalizedAnalysis.warnings,
-      ];
+    } else if (entryVerdict.riskReward !== null) {
+      // The published ratio is the one measured at the price that will be
+      // filled, not whatever the model wrote in prose
+      normalizedAnalysis.risk_reward_ratio = `1:${entryVerdict.riskReward}`;
     }
 
     const entryCheck = {
@@ -1220,9 +1201,12 @@ Deno.serve(async (req: Request) => {
       proposed_entry: proposed.entry,
       proposed_stop: proposed.stop,
       proposed_tp1: proposed.tp1,
-      declared_type: declaredType,
-      declared_mode: declaredMode,
-      declared_direction: declaredDirection,
+      // Under market_v1 the model declares no order type — the server sets
+      // the entry — so what is worth recording is the contract itself.
+      contract: "market_v1",
+      declared_mode: detail && typeof detail.mode === "string" ? detail.mode : null,
+      declared_direction: detail && typeof detail.direction === "string" ? detail.direction : null,
+      priced_at: pricedAtIso,
       entry_type: entryVerdict.entryType,
       regime: entryVerdict.regime,
       regime_direction: entryVerdict.regimeDirection,
@@ -1232,9 +1216,6 @@ Deno.serve(async (req: Request) => {
       risk_reward: entryVerdict.riskReward,
       rejection: entryVerdict.rejection,
       repair_rejection: entryVerdict.repairRejection,
-      repaired: entryVerdict.repaired,
-      snapped: entryVerdict.snapped,
-      snap_declined: entryVerdict.snapDeclined,
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
       price: entrySnapshot.price,
     };
@@ -1329,7 +1310,10 @@ Deno.serve(async (req: Request) => {
         "Content-Type": "application/json",
         "content-profile": "public",
       };
-      const priceAtSignal = Number.isFinite(entrySnapshot.price) ? entrySnapshot.price : null;
+      // The same rounded constant the gate approved and the row stores as the
+      // entry. Storing the raw float here and the rounded one there is what
+      // let a plan be certified at one risk/reward and judged at another.
+      const priceAtSignal = Number.isFinite(marketEntry) ? marketEntry : null;
       const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses?select=id`, {
         method: "POST",
         headers: { ...historyHeaders, Prefer: "return=representation" },
@@ -1356,6 +1340,11 @@ Deno.serve(async (req: Request) => {
           entry_check: entryCheck,
           context,
           rulebook_version: rulebookVersion,
+          // Which contract this plan was made under. Never inferred: a reader
+          // that has to guess will guess the legacy value and the two eras
+          // will pool silently.
+          plan_contract: "market_v1",
+          priced_at: pricedAtIso,
           outcome: trackable ? "pending" : "skipped",
         }),
       });
@@ -1403,6 +1392,8 @@ Deno.serve(async (req: Request) => {
             entry_check: entryCheck,
             context,
             rulebook_version: rulebookVersion,
+            plan_contract: "market_v1",
+            priced_at: pricedAtIso,
             outcome: "pending",
             shadow: true,
             shadow_of: savedId,
