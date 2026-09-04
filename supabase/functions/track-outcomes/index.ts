@@ -221,10 +221,11 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // No early return when nothing is due. The WAIT pass further down is the
+    // only thing that scores a call which declined to trade, and returning
+    // here would have skipped it on every tick with no open position ready
+    // for a look — which is most of them.
     const due = rows.filter((row) => isDue(row, nowMs));
-    if (due.length === 0) {
-      return json({ ok: true, mode: scope.kind, open: rows.length, due: 0, checked: 0, updated: 0, version: TRACKER_VERSION });
-    }
 
     // One price fetch per pair+evaluation interval
     const groups = new Map<string, OpenRow[]>();

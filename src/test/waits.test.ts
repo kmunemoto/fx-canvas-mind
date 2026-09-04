@@ -116,3 +116,20 @@ describe("scoring a WAIT", () => {
     expect(w.horizon_ms).toBe(48 * HOUR);
   });
 });
+
+// The judge above is only worth anything if the sweep actually reaches it.
+// The first wiring put the WAIT pass after an early return taken whenever no
+// trade was due — so on most ticks it ran on nothing at all, reporting success.
+describe("the sweep reaches the WAIT pass", () => {
+  it("has no early return between reading the rows and scoring the waits", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("supabase/functions/track-outcomes/index.ts", "utf8"));
+    const dueAt = src.indexOf("const due = rows.filter");
+    const waitAt = src.indexOf("and the calls that declined to trade");
+    expect(dueAt).toBeGreaterThan(0);
+    expect(waitAt).toBeGreaterThan(dueAt);
+    const between = src.slice(dueAt, waitAt);
+    // A bare `return json({...})` here skips WAIT scoring entirely
+    expect(between).not.toMatch(/\n\s{4}return json\(/);
+  });
+});
