@@ -33,16 +33,35 @@ export interface Rule {
   scope: string | null;
   since: string | null;
   kind: RuleKind;
-  // Which entry contract the rule was written for. A rule is an instruction
-  // to the analyst, and the analyst's available moves are set by the contract:
-  // under entry_chosen_v1 it picked an entry price, under market_v1 it cannot.
-  // So a rule learned under one contract can be literally unfollowable under
-  // the next, and showing it spends prompt budget teaching a move that does
-  // not exist. null means "written before this was recorded" — legacy.
+  // Which entry contract the analyst can actually CARRY THIS INSTRUCTION OUT
+  // under. A rule is an instruction, and the analyst's available moves are set
+  // by the contract: under entry_chosen_v1 it picked an entry price, under
+  // market_v1 it cannot. So a rule about where to enter is unfollowable here
+  // whichever way it points, and showing it spends prompt budget teaching a
+  // move that does not exist.
+  //
+  // Derived by postmortem/prompt.ts `stampFor` from the rule's own cause and
+  // its own text, on every path, every time. NEVER from when the rule was
+  // written and never inherited from the stored book — a stamp that can be
+  // inherited records which build was deployed when the editor last ran, which
+  // is exactly the defect this field once had: four rules learned entirely
+  // from entry_chosen_v1 evidence were stamped market_v1 because market_v1 was
+  // current when the editor happened to run, and one of them taught the
+  // analyst where to enter under a contract that fills at the market.
+  //
+  // null means no era endorses it. The rule stays in the book with its
+  // evidence and its history; it is only held back from every prompt.
   //
   // This is the same refusal the statistics make: two contracts are two
   // populations, and a rulebook is a statistic about the analyst's mistakes.
   contract: string | null;
+  // The entry contracts of the lessons this rule actually cites, deduped and
+  // sorted. Observational: it never decides whether a rule reaches the prompt
+  // (that is `contract`), only how the rule is LABELLED there. A rule whose
+  // evidence all predates the current contract is still followable if its
+  // cause and its text are — the evidence is just weaker, and the analyst is
+  // told so rather than the fact being buried in jsonb.
+  evidence_contracts: string[];
   // analysis ids of the lessons the rule was written from
   supported_by: string[];
 }
@@ -89,6 +108,15 @@ export const parseRules = (value: unknown): Rule[] => {
       scope: str(item.scope) || null,
       since: str(item.since) || null,
       contract: str(item.contract) || null,
+      // Absent on rules written before the field existed -> [] -> no marker.
+      // This is what lets a new analyze build read an un-backfilled book
+      // without inventing an era it cannot know.
+      evidence_contracts: Array.isArray(item.evidence_contracts)
+        ? [...new Set(
+          item.evidence_contracts.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+            .map((v) => v.trim()),
+        )].sort()
+        : [],
       kind: isRuleKind(item.kind) ? item.kind : "heuristic",
       supported_by: Array.isArray(item.supported_by)
         ? item.supported_by.filter((v): v is string => typeof v === "string" && v.length > 0)
@@ -110,12 +138,23 @@ const HEADERS: Record<RuleLocale, string> = {
   en: "Rules learned from past outcomes (drawn from reviews against actual prices; the procedure and risk limits above take precedence, these are supplementary guidance under the same conditions; \"under review\" means the evidence is still thin):",
 };
 
-const evidence = (rule: Rule, locale: RuleLocale): string => {
+const evidence = (rule: Rule, locale: RuleLocale, contract: string | null): string => {
+  // ANY citation from another era earns the marker, not only a rule with no
+  // in-era citations at all: the analyst is being told the record behind this
+  // rule is partly from a game with different moves, and "partly" is the
+  // honest word. It follows that the marker is sticky — it clears only when a
+  // rule's citation list holds nothing from another era, which for a
+  // support=1 rule means its single citation was replaced.
+  const mixed = contract !== null && rule.evidence_contracts.some((c) => c !== contract);
   if (locale === "ja") {
-    return rule.support <= VERIFYING_SUPPORT ? `（検証中・実績${rule.support}件）` : `（実績${rule.support}件）`;
+    const era = mixed ? "・旧契約含む" : "";
+    return rule.support <= VERIFYING_SUPPORT
+      ? `（検証中・実績${rule.support}件${era}）`
+      : `（実績${rule.support}件${era}）`;
   }
   const cases = `${rule.support} case${rule.support === 1 ? "" : "s"}`;
-  return rule.support <= VERIFYING_SUPPORT ? ` (under review, ${cases})` : ` (${cases})`;
+  const era = mixed ? ", incl. prior contract" : "";
+  return rule.support <= VERIFYING_SUPPORT ? ` (under review, ${cases}${era})` : ` (${cases}${era})`;
 };
 
 export interface PromptRules {
@@ -168,7 +207,7 @@ export const selectPromptRules = (
     const text = raw.replace(/\s+/g, " ").trim();
     if (!text) continue;
     const scope = rule.scope ? (locale === "ja" ? `［${rule.scope}］` : `[${rule.scope}] `) : "";
-    const line = `- ${scope}${text}${evidence(rule, locale)}`;
+    const line = `- ${scope}${text}${evidence(rule, locale, contract)}`;
     if (chars + line.length > maxChars) break;
     lines.push(line);
     ids.push(rule.id);

@@ -314,7 +314,10 @@ export const en: Dict = {
     supportNote: "Cases = independent situations behind the rule (plans on the same day in the same direction count once). Two or fewer is \"under review\"",
     cadence: "Revised only after 5 new lessons or 24 hours since the last revision, adding or dropping at most 2 rules at a time, so each version's results can be compared",
     sharedNote: "These rules are learned from every account's results pooled together, so a rule's evidence count includes plans you will not find in your own history",
-    heldBack: (n: number) => `${n} rule${n === 1 ? "" : "s"} learned under the previous entry contract ${n === 1 ? "is" : "are"} held back — they are about where to place a limit entry, which the analyst can no longer choose. They are not in the prompt.`,
+    heldBack: (n: number) =>
+      `${n} rule${n === 1 ? " is" : "s are"} held back: ${n === 1 ? "its cause or its wording names" : "their causes or wordings name"} a move the current entry contract does not have — the analyst no longer chooses where to enter. They keep their evidence and return if they are rewritten in terms of direction, stop, target, or waiting.`,
+    priorEvidence: "incl. prior contract",
+    priorEvidenceNote: "Some of the plans behind this rule were made under the previous entry contract, where the analyst chose the entry price.",
     noneInForce: "No rule is in force under the current contract yet. Rules return here as new plans settle and are reviewed.",
   },
 

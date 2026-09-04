@@ -81,6 +81,15 @@ const LearnedRules = ({ rulebook }: Props) => {
                   {r.scope && <span className="text-muted-foreground mr-1">[{r.scope}]</span>}
                   {text(r)}
                 </span>
+                {r.evidence_contracts?.some((c) => c !== CURRENT_CONTRACT) && (
+                  <span
+                    className="shrink-0 px-1.5 py-0.5 rounded border border-warning/30 text-warning text-[10px]"
+                    title={s.priorEvidenceNote}
+                    data-testid="prior-evidence"
+                  >
+                    {s.priorEvidence}
+                  </span>
+                )}
                 <span
                   className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-mono ${
                     r.support <= VERIFYING ? "border-warning/40 text-warning" : "border-border text-muted-foreground"

@@ -351,6 +351,32 @@ describe("LearnedRules", () => {
     expect(screen.queryByTestId("rules-held-back")).toBeNull();
   });
 
+  it("marks a rule whose evidence predates the current contract, without holding it back", () => {
+    // The two questions the panel must not conflate. A rule is SHOWN when the
+    // analyst can carry it out (`contract`); it is MARKED when the record
+    // behind it was gathered under a contract with different moves
+    // (`evidence_contracts`). The live book is exactly this case: three rules
+    // that are followable now, resting entirely on entry_chosen_v1 evidence.
+    const rulebook = {
+      version: 7,
+      rules: [
+        { id: "old", text_ja: "旧証拠", text_en: "Old evidence", cause: "direction_wrong", support: 2, scope: null, since: null, contract: CURRENT_CONTRACT, evidence_contracts: ["entry_chosen_v1"] },
+        { id: "new", text_ja: "新証拠", text_en: "New evidence", cause: "direction_wrong", support: 2, scope: null, since: null, contract: CURRENT_CONTRACT, evidence_contracts: [CURRENT_CONTRACT] },
+        { id: "none", text_ja: "証拠不明", text_en: "No era recorded", cause: "direction_wrong", support: 2, scope: null, since: null, contract: CURRENT_CONTRACT, evidence_contracts: [] },
+      ],
+      summary: null,
+      updated_at: null,
+    };
+    render(<LearnedRules rulebook={rulebook} />, "en");
+    // All three reach the list: the marker labels, it does not suppress
+    expect(screen.getByText("Old evidence")).toBeInTheDocument();
+    expect(screen.getByText("New evidence")).toBeInTheDocument();
+    expect(screen.queryByTestId("rules-held-back")).toBeNull();
+    // ...and only the mixed-era one is marked
+    expect(screen.getAllByTestId("prior-evidence")).toHaveLength(1);
+    expect(screen.getByTestId("learned-rules")).toHaveTextContent("incl. prior contract");
+  });
+
   it("holds back a rule written for a previous contract, and says how many", () => {
     // The prompt applies the same test (analyze/rules.ts inForce). Listing a
     // held-back rule beside the live ones would claim an influence it has not

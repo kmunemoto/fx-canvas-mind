@@ -45,7 +45,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v7-2026-09-04T12:35:00Z";
+const POSTMORTEM_VERSION = "postmortem-v8-2026-09-04T16:20:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -783,10 +783,12 @@ Deno.serve(async (req: Request) => {
         } catch (err) {
           errors.push(`rulebook: model ${err instanceof Error ? err.message : String(err)}`);
         }
-        // Stamped with the contract the editor was writing for: a rule it
-        // emits under this prompt is a rule it says the analyst can follow
-        // now. Rules it did not emit keep their old contract and stay out of
-        // the prompt (analyze/rules.ts inForce).
+        // The contract the emitted rules are TESTED against, not the stamp they
+        // receive. parseConsolidation derives each rule's stamp with stampFor
+        // from that rule's own cause and its own text, on both the emit and the
+        // restore path; a rule the analyst cannot carry out here comes back
+        // with contract null and stays out of every prompt
+        // (analyze/rules.ts inForce) however enthusiastically it was re-emitted.
         const consolidated = parseConsolidation(answer, previousRules, nowIso, lessons, PLAN_CONTRACT);
         if (!consolidated) {
           errors.push("rulebook: no usable answer");

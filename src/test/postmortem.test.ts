@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   AFTER_WAIT_MS,
   CAUSES,
+  MARKET_CONTRACT,
+  causeOutsideContract,
   causesFor,
   computeFacts,
   isCause,
@@ -21,7 +23,9 @@ import {
   parseConsolidation,
   parseDiagnosis,
   revisionDue,
+  stampFor,
   summarizeRecord,
+  unfollowableUnder,
   wilson,
   withClusters,
   type PlanSummary,
@@ -454,7 +458,7 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r4"]);
     expect(c?.rules.find((r) => r.id === "r1")).toMatchObject({ support: 2, supported_by: ["a", "b", "c"], since: "2026-08-01T00:00:00Z" });
     expect(c?.rules.find((r) => r.id === "r4")).toMatchObject({ support: 1, supported_by: ["a"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"], held_back: [] });
     expect(c?.summary_en).toBe("s-en");
   });
 
@@ -497,14 +501,14 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r9", "r10"]);
     expect(c?.rules[0].kind).toBe("constraint");
     expect(c?.rules[2].since).toBe("2026-09-03T00:00:00Z");
-    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"] });
+    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"], held_back: [] });
   });
 
   it("puts back rules dropped beyond the removal allowance, weakest ones going first, with their evidence recounted", () => {
     const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "s", summary_en: "s-en" }, previous, "2026-09-03T00:00:00Z", lessons);
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1"]);
     expect(c?.rules[0]).toMatchObject({ support: 1, supported_by: ["c"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [], held_back: [] });
     // A rule the model omitted whose evidence no longer holds up is not
     // put back, whatever the allowance
     const stale: Rule[] = [...previous, { ...previous[1], id: "r5", supported_by: ["gone"] }];
@@ -530,7 +534,7 @@ describe("rulebook consolidation", () => {
     const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" }, old, T0, older);
     expect(blank?.rules.map((r) => r.id)).toEqual(["r1_"]);
     expect(blank?.rules[0].since).toBe(T0);
-    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [] });
+    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [], held_back: [] });
   });
 
   it("lets the first rulebook be written whole, up to the cap, and de-duplicates ids", () => {
@@ -784,30 +788,51 @@ describe("rules in the analyze prompt", () => {
     expect(fairShare(heavy, (x) => x.u, 0)).toEqual([]);
   });
 
-  it("stamps the contract the editor was writing for, and leaves restored rules on theirs", () => {
-    // Emitting a rule under this revision's prompt IS the statement that the
-    // analyst can follow it now. A rule the editor never looked at — restored
-    // below to fill the book back up — must not be revived by that silence.
-    // Four previous rules and one re-emitted: two of the other three are
-    // dropped by MAX_RULES_REMOVED and the third is restored untouched, which
-    // is the case this test is about.
+  it("derives the stamp from what a rule can do, not from when it was written", () => {
+    // The defect this replaced: the stamp was simply the running build's
+    // PLAN_CONTRACT, so it recorded which era was current when the editor ran.
+    // In production that put contract "market_v1" on four rules whose evidence
+    // was entirely entry_chosen_v1, one of them (cause entry_too_far) telling
+    // the analyst where to enter under a contract that fills at the market.
+    //
+    // Now every rule's stamp is recomputed from its own cause and its own text
+    // on BOTH paths — re-emitted and restored — so a stamp can never be
+    // inherited, and "in force" can never mean "the old build wrote it".
     const legacy = (id: string, support: number): Rule => ({
       id, text_ja: "旧", text_en: `old ${id}`, cause: "entry_too_far", support,
       scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1",
-      kind: "heuristic", supported_by: ["L1"],
+      evidence_contracts: [], kind: "heuristic", supported_by: ["L1"],
     });
     const previous: Rule[] = [
       legacy("old1", 1),
       legacy("old2", 2),
-      legacy("old3", 9),
-      { id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", support: 2, scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1", kind: "constraint", supported_by: ["L2"] },
+      // Present so that old3 survives MAX_RULES_REMOVED and reaches the
+      // restore path, which is the half of the derivation this test is about
+      legacy("old4", 3),
+      // Restored, and followable: direction_wrong is in the market_v1 taxonomy
+      // and the text names no entry lever, so the restore path stamps it for
+      // the live contract even though it was stored as legacy.
+      { id: "old3", text_ja: "上位足と方向が食い違うときは見送る", text_en: "Skip when the higher timeframe disagrees", cause: "direction_wrong", support: 9, scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1", evidence_contracts: [], kind: "constraint", supported_by: ["L3"] },
+      { id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", support: 2, scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1", evidence_contracts: [], kind: "constraint", supported_by: ["L2"] },
     ];
     const lessons = [
-      { analysis_id: "L1", cluster: "c1", cause: "entry_too_far" },
-      { analysis_id: "L2", cluster: "c2", cause: "stop_too_tight" },
+      { analysis_id: "L1", cluster: "c1", cause: "entry_too_far", contract: "entry_chosen_v1" },
+      { analysis_id: "L2", cluster: "c2", cause: "stop_too_tight", contract: "entry_chosen_v1" },
+      { analysis_id: "L3", cluster: "c3", cause: "direction_wrong", contract: "entry_chosen_v1" },
     ];
     const out = parseConsolidation(
-      { rules: [{ id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", kind: "constraint", scope: null, supported_by: ["L2"] }], summary_ja: "s", summary_en: "s" },
+      {
+        rules: [
+          // Followable: cause is in the live taxonomy, text names no entry
+          // lever. Kept even though its only evidence is from the old era.
+          { id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", kind: "constraint", scope: null, supported_by: ["L2"] },
+          // Re-emitted with a dead cause: the editor cannot bring it back by
+          // emitting it under a live prompt.
+          { id: "old1", text_ja: "旧", text_en: "old old1", cause: "entry_too_far", kind: "heuristic", scope: null, supported_by: ["L1"] },
+        ],
+        summary_ja: "s",
+        summary_en: "s",
+      },
       previous,
       T0,
       lessons,
@@ -815,22 +840,181 @@ describe("rules in the analyze prompt", () => {
     );
     const byId = new Map((out?.rules ?? []).map((r) => [r.id, r]));
     expect(byId.get("keep")?.contract).toBe("market_v1");
-    // old3 was not re-emitted; it comes back only as a restore, so it keeps
-    // the contract it was written for and stays out of the prompt
-    expect(byId.get("old3")?.contract).toBe("entry_chosen_v1");
-    expect(inForce(out?.rules ?? [], "market_v1").map((r) => r.id)).toEqual(["keep"]);
+    // Evidence era is recorded beside the stamp, and does not suppress it
+    expect(byId.get("keep")?.evidence_contracts).toEqual(["entry_chosen_v1"]);
+    // Re-emitting a dead-cause rule does not launder it
+    expect(byId.get("old1")?.contract).toBeNull();
+    // The restore path derives too: stored legacy, followable, so in force
+    expect(byId.get("old3")?.contract).toBe("market_v1");
+    expect(inForce(out?.rules ?? [], "market_v1").map((r) => r.id).sort()).toEqual(["keep", "old3"]);
+    // A refused stamp is recorded rather than being a silent disappearance
+    expect(out?.changes.held_back).toEqual(["old1"]);
+  });
+
+  it("refuses the stamp for a rule that names a lever the contract does not have, however it is labelled", () => {
+    // The escape a cause-only check leaves open, and the reason the text veto
+    // exists: the consolidation schema offers "general", and the system prompt
+    // tells the editor a general rule may cite any non-uncitable cause. So the
+    // live rule r1's exact text, relabelled "general" and citing a
+    // direction_wrong lesson, passes every cause test.
+    const R1_TEXT = "上位足が同方向でADXが高い強トレンド（かつ過伸張でない）局面では、戻りを待たず現値の成行で執行する。";
+    const out = parseConsolidation(
+      {
+        rules: [{ id: "r1", text_ja: R1_TEXT, text_en: "In a strong aligned trend, do not wait for a pullback: enter at market.", cause: "general", kind: "heuristic", scope: null, supported_by: ["L1"] }],
+        summary_ja: "s",
+        summary_en: "s",
+      },
+      [],
+      T0,
+      [{ analysis_id: "L1", cluster: "c1", cause: "direction_wrong", contract: "market_v1" }],
+      "market_v1",
+    );
+    expect(out?.rules[0].contract).toBeNull();
+    // Refuse the stamp, not the rule: it keeps its place, its evidence and its
+    // history, and is only held back from the prompt.
+    expect(out?.rules[0].id).toBe("r1");
+    expect(out?.rules[0].support).toBe(1);
+    expect(out?.rules[0].supported_by).toEqual(["L1"]);
+    expect(out?.changes.held_back).toEqual(["r1"]);
+  });
+
+  it("keeps house vocabulary followable: naming the entry price is required, choosing it is what does not exist", () => {
+    // The converse invariant. analyze's own market_v1 prompt says 「損切りと
+    // 利確1/2/3を、与えられたエントリー価格の周りに決める」 — under this
+    // contract the entry price is the reference every stop and target is
+    // measured from. A veto that matched the NOUN would hold back the most
+    // followable rules the editor can write, so it matches the verb instead.
+    // One rule per lever the analyst actually has.
+    const levers = [
+      { id: "dir", cause: "direction_wrong", ja: "上位足のADXが20未満なら方向根拠が不十分として見送る。", en: "Skip when the higher timeframe ADX is under 20." },
+      { id: "stop", cause: "stop_too_tight", ja: "ATRが平均より大きい局面では、損切りをエントリー価格から ATR×0.8 以上離す。", en: "When ATR is above average, place the stop at least 0.8xATR from the entry price." },
+      { id: "tp", cause: "target_too_far", ja: "伸び切った局面では利確1をATR1倍前後に置く。", en: "In an extended move, set the first target near 1xATR." },
+      { id: "wait", cause: "chased_move", ja: "価格がSMA50を大きく越えて伸び切っているなら見送る。", en: "Skip the trade when price has already retraced past SMA50." },
+    ];
+    const out = parseConsolidation(
+      {
+        rules: levers.map((l) => ({ id: l.id, text_ja: l.ja, text_en: l.en, cause: l.cause, kind: "heuristic", scope: null, supported_by: [`L-${l.id}`] })),
+        summary_ja: "s",
+        summary_en: "s",
+      },
+      [],
+      T0,
+      levers.map((l) => ({ analysis_id: `L-${l.id}`, cluster: `c-${l.id}`, cause: l.cause, contract: "market_v1" })),
+      "market_v1",
+    );
+    expect(out?.rules.map((r) => r.contract)).toEqual([MARKET_CONTRACT, MARKET_CONTRACT, MARKET_CONTRACT, MARKET_CONTRACT]);
+    expect(out?.changes.held_back).toEqual([]);
+  });
+
+  it("holds the invariant across every cause and both kinds", () => {
+    // The consolidation-side twin of the half-done-rename detector: whatever
+    // the editor sends, a rule that comes back stamped for the live contract
+    // must satisfy both vetoes. This is what keeps the phrase list from
+    // silently eroding as rules are added.
+    const texts = [
+      { ja: "上位足のADXが20未満なら見送る。", en: "Skip when higher timeframe ADX is under 20." },
+      { ja: "押し目を待ってから入る。", en: "Wait for a pullback before entering." },
+      { ja: "指値で入るのをやめ、成行で執行する。", en: "Stop using a limit entry; enter at market." },
+    ];
+    const rules: unknown[] = [];
+    const lessons: Array<{ analysis_id: string; cluster: string; cause: string; contract: string }> = [];
+    let n = 0;
+    for (const cause of [...CAUSES, "general"]) {
+      for (const kind of ["constraint", "heuristic"]) {
+        for (const t of texts) {
+          const id = `x${n++}`;
+          rules.push({ id, text_ja: t.ja, text_en: t.en, cause, kind, scope: null, supported_by: [`L${id}`] });
+          // Cite a lesson the gate always accepts for this rule, so support
+          // never reaches 0 and every rule gets as far as the stamp
+          lessons.push({ analysis_id: `L${id}`, cluster: `c${id}`, cause: cause === "general" ? "direction_wrong" : cause, contract: "market_v1" });
+        }
+      }
+    }
+    const out = parseConsolidation({ rules, summary_ja: "s", summary_en: "s" }, [], T0, lessons, "market_v1");
+    expect(out).not.toBeNull();
+    for (const r of out?.rules ?? []) {
+      if (r.contract !== MARKET_CONTRACT) continue;
+      expect(causeOutsideContract(r.cause, MARKET_CONTRACT)).toBe(false);
+      expect(unfollowableUnder(r.text_ja, MARKET_CONTRACT)).toBe(false);
+      expect(unfollowableUnder(r.text_en, MARKET_CONTRACT)).toBe(false);
+    }
+  });
+
+  it("asks no question when no contract is named", () => {
+    // Back-compat for every call site that omits the argument.
+    const out = parseConsolidation(
+      { rules: [{ id: "r1", text_ja: "a", text_en: "a", cause: "direction_wrong", kind: "heuristic", scope: null, supported_by: ["L1"] }], summary_ja: "s", summary_en: "s" },
+      [],
+      T0,
+      [{ analysis_id: "L1", cluster: "c1", cause: "direction_wrong", contract: "market_v1" }],
+    );
+    expect(out?.rules[0].contract).toBeNull();
+    expect(out?.changes.held_back).toEqual([]);
+  });
+
+  it("records the eras of the citations that actually counted", () => {
+    // A lesson the citation gate rejected must not leak its era into the
+    // label, or a rule would be marked as resting on evidence it is not
+    // allowed to rest on. A lesson with no recorded contract is legacy.
+    const out = parseConsolidation(
+      { rules: [{ id: "r1", text_ja: "a", text_en: "a", cause: "direction_wrong", kind: "heuristic", scope: null, supported_by: ["A", "B", "C", "D"] }], summary_ja: "s", summary_en: "s" },
+      [],
+      T0,
+      [
+        { analysis_id: "A", cluster: "c1", cause: "direction_wrong", contract: "market_v1" },
+        { analysis_id: "B", cluster: "c2", cause: "direction_wrong", contract: null },
+        { analysis_id: "C", cluster: "c3", cause: "direction_wrong", contract: "market_v1" },
+        // Uncitable: its era must not appear
+        { analysis_id: "D", cluster: "c4", cause: "inconclusive", contract: "some_other_era" },
+      ],
+      "market_v1",
+    );
+    expect(out?.rules[0].evidence_contracts).toEqual(["entry_chosen_v1", "market_v1"]);
+    expect(out?.rules[0].supported_by).toEqual(["A", "B", "C"]);
+  });
+
+  it("truth table: a cause outside the contract's taxonomy", () => {
+    for (const c of CAUSES) {
+      // Nothing is outside the legacy taxonomy, which is the whole list
+      expect(causeOutsideContract(c, "entry_chosen_v1")).toBe(false);
+      expect(causeOutsideContract(c, null)).toBe(false);
+    }
+    expect(causeOutsideContract("entry_too_far", "market_v1")).toBe(true);
+    // Folded to chased_move, which market_v1 does produce
+    expect(causeOutsideContract("entry_too_early", "market_v1")).toBe(false);
+    expect(causeOutsideContract("direction_wrong", "market_v1")).toBe(false);
+    // "general" names no failure of any era; the text veto covers it
+    expect(causeOutsideContract("general", "market_v1")).toBe(false);
+    // A cause that is not in the taxonomy at all cannot prove followability
+    expect(causeOutsideContract("unknown", "market_v1")).toBe(true);
+  });
+
+  it("truth table: text that names a move the contract does not have", () => {
+    const R1 = "上位足が同方向でADXが高い強トレンド（かつ過伸張でない）局面では、戻りを待たず現値の成行で執行する。";
+    expect(unfollowableUnder(R1, MARKET_CONTRACT)).toBe(true);
+    // Only market_v1 took the lever away
+    expect(unfollowableUnder(R1, "entry_chosen_v1")).toBe(false);
+    expect(unfollowableUnder(R1, null)).toBe(false);
+    expect(unfollowableUnder("ADXが20未満なら見送る", MARKET_CONTRACT)).toBe(false);
+    expect(unfollowableUnder("損切りをエントリー価格から ATR×0.8 離す", MARKET_CONTRACT)).toBe(false);
+    expect(unfollowableUnder("Wait for a pullback before entering", MARKET_CONTRACT)).toBe(true);
+    // English phrases are matched case-insensitively
+    expect(unfollowableUnder("WAIT FOR A PULLBACK", MARKET_CONTRACT)).toBe(true);
+    expect(unfollowableUnder("Place the stop 0.8xATR from the entry price", MARKET_CONTRACT)).toBe(false);
   });
 
   it("reads stored rows defensively", () => {
     const parsed = parseRules([
-      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: "3", scope: "", since: null },
-      { text_en: "only english", support: -2 },
+      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: "3", scope: "", since: null, evidence_contracts: ["market_v1", "entry_chosen_v1", "market_v1", 7, "  "] },
+      { text_en: "only english", support: -2, evidence_contracts: "not an array" },
       { id: "r3" },
       "junk",
     ]);
     expect(parsed).toEqual([
-      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: 3, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
-      { id: "r2", text_ja: "only english", text_en: "only english", cause: "unknown", support: 1, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
+      // Deduped and sorted; non-strings and blanks dropped
+      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: 3, scope: null, since: null, contract: null, evidence_contracts: ["entry_chosen_v1", "market_v1"], kind: "heuristic", supported_by: [] },
+      // Absent or malformed -> [] -> no era marker invented
+      { id: "r2", text_ja: "only english", text_en: "only english", cause: "unknown", support: 1, scope: null, since: null, contract: null, evidence_contracts: [], kind: "heuristic", supported_by: [] },
     ]);
   });
 });

@@ -304,11 +304,17 @@ export interface RulebookRule {
   scope: string | null;
   since: string | null;
   kind?: "constraint" | "heuristic";
-  // Which entry contract the rule was written for. A rule from another
-  // contract is held back from the analyst's prompt — the moves it describes
-  // may not exist any more — so the panel must not present it as in force.
-  // Absent on rules written before this was recorded: treat as legacy.
+  // Which entry contract the analyst can actually CARRY THIS RULE OUT under.
+  // Derived server-side from the rule's own cause and its own text, never from
+  // when it was written. A rule stamped for another contract is held back from
+  // the analyst's prompt — the move it describes may not exist any more — so
+  // the panel must not present it as in force. Absent on rules written before
+  // this was recorded: treat as legacy.
   contract?: string | null;
+  // The entry contracts of the lessons this rule cites. Observational only: it
+  // labels the rule's evidence as partly pre-dating the current contract, and
+  // never decides whether the rule is shown.
+  evidence_contracts?: string[];
   supported_by?: string[];
 }
 
