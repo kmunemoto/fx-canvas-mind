@@ -137,6 +137,10 @@ export const en: Dict = {
       expectancyLine: (expectancy: string, sum: string) => `Expectancy ${expectancy} (total ${sum})`,
       rColumn: "P&L (R)",
       byRulebook: "Rulebook",
+      verdictRate: "Calls with a verdict",
+      leakLine: (wait: number, untriggered: number, expired: number) =>
+        `stood aside ${wait}%, never filled ${untriggered}%, expired ${expired}%`,
+      incoherentLine: (n: number) => `${n} with contradictory levels`,
       rulebookNone: "Before rules",
       frictionNote: "R is profit or loss in multiples of the planned risk (WIN = TP1 reached, LOSS = −1R). Frictionless: no spread or slippage is charged",
     },

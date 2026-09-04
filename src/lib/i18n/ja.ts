@@ -143,6 +143,10 @@ export const ja = {
       expectancyLine: (expectancy: string, sum: string) => `期待値 ${expectancy}（合計 ${sum}）`,
       rColumn: "損益(R)",
       byRulebook: "ルール版",
+      verdictRate: "採点できた割合",
+      leakLine: (wait: number, untriggered: number, expired: number) =>
+        `見送り ${wait}%・未約定 ${untriggered}%・期限切れ ${expired}%`,
+      incoherentLine: (n: number) => `水準の矛盾 ${n}件`,
       rulebookNone: "ルール導入前",
       frictionNote: "R は計画リスク幅を1とした損益（WIN=TP1到達、LOSS=−1R）。スプレッド・スリッページは含まない理論値",
     },

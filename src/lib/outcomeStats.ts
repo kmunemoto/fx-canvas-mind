@@ -1,8 +1,18 @@
 import type { AnalysisRecord, PostmortemCause } from "./types";
 
-// Win/loss bookkeeping over history rows. Only WIN and LOSS count toward the
-// rate: an entry that never filled or a bar that touched both levels says
-// nothing about whether the call was right.
+// Win/loss bookkeeping over history rows.
+//
+// THE INVARIANT THIS FILE EXISTS TO PROTECT: every call the analyst makes
+// lands in exactly one bucket, and the share that produced an actual verdict
+// (verdictRate) is published. Closing one way for a call to escape a verdict
+// only moves the pressure somewhere else — an unreachable target expires, a
+// plan the market never reaches goes untriggered, a WAIT is never wrong at
+// all. Rather than trying to predict which hatch opens next, every non-verdict
+// bucket carries its own rate and they sum with verdictRate to 1. A drop in
+// verdictRate is the symptom to watch, whatever the cause turns out to be.
+//
+// An expired plan IS counted against the win rate. It was a call that did not
+// work out; leaving it out let a target placed out of reach dodge the number.
 //
 // The rate alone is not the record, though. A handful of settled trades can
 // show any rate at all, plans opened on the same pair in the same direction
@@ -24,7 +34,16 @@ export interface OutcomeTally {
   untriggered: number;
   ambiguous: number;
   expired: number;
+  // Plans whose levels contradicted each other, so nothing could be judged.
+  // Not a neutral outcome — a malformed plan is a defect, and its rate should
+  // be zero.
+  incoherent: number;
+  // Calls that declined to trade at all
+  waits: number;
+  // Non-WAIT plans (what `total` has always meant)
   total: number;
+  // EVERY call, WAIT included. The denominator for the bucket rates below.
+  calls: number;
   // WAIT rows that were the gate's doing, not the model's
   rejected: number;
   winRate: number | null;
@@ -42,6 +61,17 @@ export interface OutcomeTally {
   // no spread or slippage is charged)
   sumR: number | null;
   expectancy: number | null;
+  // Share of ALL calls that ended in a win or a loss. The headline honesty
+  // number: if it falls, calls are escaping judgement somewhere.
+  verdictRate: number | null;
+  // Where the rest went. These and verdictRate partition every call, so they
+  // sum to 100 (bar rounding).
+  waitRate: number | null;
+  expiredRate: number | null;
+  untriggeredRate: number | null;
+  ambiguousRate: number | null;
+  incoherentRate: number | null;
+  openRate: number | null;
 }
 
 export interface ShadowTally {
@@ -155,10 +185,20 @@ const wasFilled = (r: AnalysisRecord): boolean =>
   r.outcome === "win" || r.outcome === "loss" || r.outcome === "expired" ||
   (r.outcome === "ambiguous" && typeof r.evaluation?.filled_at === "string" && r.evaluation.filled_at.length > 0);
 
+// A plan whose own levels contradict each other. The tracker records this as
+// 'ambiguous' with reason 'incoherent'; it is separated out here because the
+// two mean different things — one is "we could not tell", the other is
+// "the plan was malformed".
+const isIncoherent = (r: AnalysisRecord): boolean =>
+  r.outcome === "ambiguous" && r.evaluation?.reason === "incoherent";
+
 export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const t: OutcomeTally = {
-    key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0, total: 0, rejected: 0,
+    key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0,
+    incoherent: 0, waits: 0, total: 0, calls: 0, rejected: 0,
     winRate: null, winRateCi: null, clusters: 0, fillRate: null, sumR: null, expectancy: null,
+    verdictRate: null, waitRate: null, expiredRate: null, untriggeredRate: null,
+    ambiguousRate: null, incoherentRate: null, openRate: null,
   };
   let filled = 0;
   let settled = 0;
@@ -169,14 +209,22 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   records.forEach((r, i) => {
     if (isShadow(r)) return;
     if (isRejected(r)) t.rejected++;
-    if (r.signal === "WAIT" || r.outcome === "skipped") return;
+    // Every call counts, WAIT included: a call that declines to trade is
+    // still a call, and one that is never counted can never be wrong.
+    t.calls++;
+    if (r.signal === "WAIT" || r.outcome === "skipped") {
+      t.waits++;
+      return;
+    }
     t.total++;
     if (r.outcome === "win") t.wins++;
     else if (r.outcome === "loss") t.losses++;
     else if (r.outcome === "pending") t.open++;
     else if (r.outcome === "untriggered") t.untriggered++;
-    else if (r.outcome === "ambiguous") t.ambiguous++;
-    else if (r.outcome === "expired") t.expired++;
+    else if (r.outcome === "ambiguous") {
+      if (isIncoherent(r)) t.incoherent++;
+      else t.ambiguous++;
+    } else if (r.outcome === "expired") t.expired++;
     if (wasFilled(r)) {
       filled++;
       settled++;
@@ -190,15 +238,26 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
       withR++;
     }
   });
-  const closed = t.wins + t.losses;
-  t.winRate = closed > 0 ? Math.round((t.wins / closed) * 100) : null;
-  t.winRateCi = wilson(t.wins, closed);
+  // An expiry is a call that did not work out, so it belongs in the
+  // denominator. Excluding it let a target placed beyond reach sit out the
+  // win rate entirely.
+  const decided = t.wins + t.losses + t.expired;
+  t.winRate = decided > 0 ? Math.round((t.wins / decided) * 100) : null;
+  t.winRateCi = wilson(t.wins, decided);
   t.clusters = settledClusters.size;
   // 'ambiguous' without a fill is left out of both sides: it is precisely
   // the case where we could not establish whether the trade happened
   t.fillRate = settled > 0 ? Math.round((filled / settled) * 100) : null;
   t.sumR = withR > 0 ? round2(sumR) : null;
   t.expectancy = withR > 0 ? round2(sumR / withR) : null;
+  const share = (n: number) => (t.calls > 0 ? Math.round((n / t.calls) * 100) : null);
+  t.verdictRate = share(t.wins + t.losses);
+  t.waitRate = share(t.waits);
+  t.expiredRate = share(t.expired);
+  t.untriggeredRate = share(t.untriggered);
+  t.ambiguousRate = share(t.ambiguous);
+  t.incoherentRate = share(t.incoherent);
+  t.openRate = share(t.open);
   return t;
 };
 

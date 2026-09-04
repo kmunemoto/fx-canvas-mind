@@ -1,6 +1,34 @@
 import { describe, it, expect } from "vitest";
 import { byConfidence, byMode, byRulebookVersion, byTimeframe, confidenceBandKey, realizedR, tally } from "../lib/outcomeStats";
-import type { AnalysisRecord } from "../lib/types";
+import type { AnalysisRecord, OutcomeEvaluation } from "../lib/types";
+
+const baseEvaluation: OutcomeEvaluation = {
+  version: 5,
+  eval_interval: "1h",
+  order_type: "market",
+  price_at_signal: 150.2,
+  possible_fill: false,
+  filled_at: null,
+  fill_price: null,
+  resolution: "ambiguous",
+  reason: null,
+  resolved_at: null,
+  refined: false,
+  refine_pending: false,
+  refine_attempts: 0,
+  mfe: null,
+  mae: null,
+  mfe_r: null,
+  mae_r: null,
+  tps_hit: [],
+  bars_after_signal: 0,
+  window_covers_signal: true,
+  first_candle_at: null,
+  last_candle_at: null,
+  checked_at: "2026-09-03T00:00:00Z",
+  note: null,
+  path: [],
+};
 
 const rec = (over: Partial<AnalysisRecord>): AnalysisRecord => ({
   id: Math.random().toString(36).slice(2),
@@ -25,7 +53,7 @@ const rec = (over: Partial<AnalysisRecord>): AnalysisRecord => ({
 });
 
 describe("tally", () => {
-  it("counts only WIN and LOSS toward the rate and ignores WAIT rows", () => {
+  it("keeps WAIT out of the win rate but never out of the call count", () => {
     const t = tally("all", [
       rec({ outcome: "win" }),
       rec({ outcome: "win" }),
@@ -36,12 +64,17 @@ describe("tally", () => {
       rec({ signal: "WAIT", outcome: "skipped" }),
     ]);
     expect(t.total).toBe(6);
+    // The WAIT is not a trade, so it is not in `total`, but it IS a call
+    expect(t.calls).toBe(7);
+    expect(t.waits).toBe(1);
     expect(t.wins).toBe(2);
     expect(t.losses).toBe(1);
     expect(t.untriggered).toBe(1);
     expect(t.ambiguous).toBe(1);
     expect(t.open).toBe(1);
     expect(t.winRate).toBe(67);
+    // 3 verdicts out of 7 calls
+    expect(t.verdictRate).toBe(43);
   });
 
   it("has no rate before anything settles", () => {
@@ -116,11 +149,77 @@ describe("the honest record", () => {
     ]);
     expect(t.wins).toBe(1);
     expect(t.losses).toBe(2);
-    expect(t.winRate).toBe(33);
-    expect(t.winRateCi).toEqual([6, 79]);
+    // An expiry counts against the rate: 1 win out of win+loss+expired = 4.
+    // Leaving it out let a target placed beyond reach sit out the number
+    // entirely, which is the whole reason a plan would be written that way.
+    expect(t.expired).toBe(1);
+    expect(t.winRate).toBe(25);
+    expect(t.winRateCi).toEqual([5, 70]);
     expect(t.clusters).toBe(2);
     expect(t.sumR).toBe(0.5);
     expect(t.expectancy).toBe(0.13);
+  });
+
+  it("partitions every call, so a new way to dodge a verdict shows up as a falling rate", () => {
+    const t = tally("all", [
+      rec({ outcome: "win" }),
+      rec({ outcome: "loss", ...sell }),
+      rec({ outcome: "expired", outcome_price: 150.5 }),
+      rec({ outcome: "untriggered" }),
+      rec({ outcome: "pending" }),
+      rec({ signal: "WAIT", outcome: "skipped" }),
+      rec({ signal: "WAIT", outcome: "skipped" }),
+      rec({
+        outcome: "ambiguous",
+        evaluation: { ...baseEvaluation, reason: "incoherent" },
+      }),
+    ]);
+    expect(t.calls).toBe(8);
+    // A WAIT is still a call. Excluding it from the denominator is exactly how
+    // "never trade, never be wrong" would hide.
+    expect(t.waits).toBe(2);
+    expect(t.incoherent).toBe(1);
+    // 2 of 8 calls produced a verdict
+    expect(t.verdictRate).toBe(25);
+    expect(t.waitRate).toBe(25);
+    // Every call lands in exactly ONE bucket. Asserted on the counts, which is
+    // where the invariant actually lives: the percentages are each rounded on
+    // their own and so can sum to a couple either side of 100.
+    const counted = t.wins + t.losses + t.expired + t.untriggered +
+      t.ambiguous + t.incoherent + t.open + t.waits;
+    expect(counted).toBe(t.calls);
+    const buckets = [
+      t.verdictRate, t.waitRate, t.expiredRate, t.untriggeredRate,
+      t.ambiguousRate, t.incoherentRate, t.openRate,
+    ];
+    expect(buckets.every((b) => b !== null)).toBe(true);
+    expect(buckets.reduce((a, b) => (a ?? 0) + (b ?? 0), 0)).toBeGreaterThan(95);
+    expect(buckets.reduce((a, b) => (a ?? 0) + (b ?? 0), 0)).toBeLessThan(105);
+  });
+
+  it("accounts for every call on the real production mix", () => {
+    // The record as it actually stood: 1 win, 7 losses, 7 untriggered,
+    // 3 WAIT, 1 open. Only 8 of 19 calls ever produced a verdict.
+    const t = tally("all", [
+      rec({ outcome: "win" }),
+      ...Array.from({ length: 7 }, () => rec({ outcome: "loss" })),
+      ...Array.from({ length: 7 }, () => rec({ outcome: "untriggered" })),
+      ...Array.from({ length: 3 }, () => rec({ signal: "WAIT", outcome: "skipped" })),
+      rec({ outcome: "pending" }),
+    ]);
+    expect(t.calls).toBe(19);
+    expect(t.verdictRate).toBe(42);
+    expect(t.untriggeredRate).toBe(37);
+    expect(t.waitRate).toBe(16);
+  });
+
+  it("counts a malformed plan as a defect, not as an ordinary unknown", () => {
+    const t = tally("all", [
+      rec({ outcome: "ambiguous", evaluation: { ...baseEvaluation, reason: "incoherent" } }),
+      rec({ outcome: "ambiguous", evaluation: { ...baseEvaluation, reason: null } }),
+    ]);
+    expect(t.incoherent).toBe(1);
+    expect(t.ambiguous).toBe(1);
   });
 
   it("splits the record by rulebook version, before-rules first", () => {

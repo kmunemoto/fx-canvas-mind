@@ -158,13 +158,26 @@ describe("AnalysisHistory (DB records)", () => {
     },
   ];
 
-  it("shows the win rate over WIN/LOSS only, with a badge per outcome", () => {
+  it("takes the win rate over win/loss/expired, with a badge per outcome", () => {
     render(<AnalysisHistory records={records} />);
     expect(screen.getAllByText("勝率").length).toBeGreaterThan(0);
-    expect(screen.getByText("50%")).toBeInTheDocument(); // 1 win / 1 loss; the no-fill row is excluded
+    // 1 win, 1 loss, no expiry; the row that never filled is not a verdict
+    expect(screen.getByTestId("win-rate")).toHaveTextContent("50%");
     expect(screen.getByText("WIN")).toBeInTheDocument();
     expect(screen.getByText("LOSS")).toBeInTheDocument();
     expect(screen.getAllByText("未約定").length).toBeGreaterThan(0);
+  });
+
+  it("publishes what share of calls ever produced a verdict", () => {
+    render(<AnalysisHistory records={records} />);
+    const strip = screen.getByTestId("verdict-strip");
+    // 4 calls: a win, a loss, a WAIT and one that never filled. Only 2 of them
+    // ever produced a verdict, and the WAIT is in the denominator — leaving it
+    // out is exactly how "never trade, never be wrong" would hide.
+    expect(strip).toHaveTextContent("50%");
+    expect(strip).toHaveTextContent("(2/4)");
+    expect(strip).toHaveTextContent("見送り 25%");
+    expect(strip).toHaveTextContent("未約定 25%");
   });
 
   it("breaks the record down by timeframe, mode and confidence", () => {

@@ -67,7 +67,9 @@ const AnalysisHistory = ({ records }: Props) => {
   }
 
   const overall = tally("all", safe);
-  const closed = overall.wins + overall.losses;
+  // What the win rate is now taken over: an expiry is a call that did not
+  // work out, not a call that never happened
+  const closed = overall.wins + overall.losses + overall.expired;
   const gate = shadowTally(all);
   const causes = causeCounts(safe);
   const groups: OutcomeTally[] =
@@ -118,7 +120,10 @@ const AnalysisHistory = ({ records }: Props) => {
             <div className="flex items-center gap-1.5">
               <TrendingUp className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
               <span className="text-muted-foreground">{t.history.winRate}</span>
-              <span className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}>
+              <span
+                data-testid="win-rate"
+                className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}
+              >
                 {overall.winRate}%
               </span>
               <span className="text-muted-foreground font-mono">({overall.wins}/{closed})</span>
@@ -128,6 +133,27 @@ const AnalysisHistory = ({ records }: Props) => {
       </div>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {/* Where every call went. Closing one way to avoid a verdict just moves
+          the pressure elsewhere, so the share that produced one is published
+          rather than any single escape hatch being watched. */}
+      {overall.calls > 0 && overall.verdictRate !== null && (
+        <p className="text-[10px] font-mono" data-testid="verdict-strip">
+          <span className="text-muted-foreground">{t.history.stats.verdictRate}</span>{" "}
+          <span className={overall.verdictRate >= 70 ? "text-foreground" : "text-warning"}>
+            {overall.verdictRate}%
+          </span>
+          <span className="text-muted-foreground">
+            {" "}({overall.wins + overall.losses}/{overall.calls})
+            {" · "}{t.history.stats.leakLine(
+              overall.waitRate ?? 0,
+              overall.untriggeredRate ?? 0,
+              overall.expiredRate ?? 0,
+            )}
+            {overall.incoherent > 0 ? ` · ${t.history.stats.incoherentLine(overall.incoherent)}` : ""}
+          </span>
+        </p>
+      )}
 
       {/* what the win rate rests on: a rate off two trades is not a rate */}
       {closed > 0 && (
