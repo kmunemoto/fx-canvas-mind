@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v25-2026-09-04T11:10:00Z";
+const FUNCTION_VERSION = "analyze-v26-2026-09-04T13:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -23,7 +23,7 @@ import {
   type AnalysisLocale,
 } from "./locale.ts";
 
-import { WALL_CLOCK_BUDGET_MS, canRetryWithoutSearch, planAttempt } from "./budget.ts";
+import { PRICE_OVERLAY_BUDGET_MS, WALL_CLOCK_BUDGET_MS, canRetryWithoutSearch, planAttempt } from "./budget.ts";
 
 import {
   MAX_LIMIT_ATR,
@@ -40,6 +40,12 @@ import { parseRules, selectPromptRules } from "./rules.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
+import {
+  GMO_ANALYSIS_TIMEFRAMES,
+  acceptOverlay,
+  fetchRecentQuotes,
+  midCandle,
+} from "./price-source.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -812,7 +818,10 @@ Deno.serve(async (req: Request) => {
       // timezone=UTC: the tracker and the chart both read these timestamps as
       // UTC, and the provider's default zone is not.
       const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(currencyPair)}&interval=${encodeURIComponent(tf)}&outputsize=${outputsize}&timezone=UTC&apikey=${twelveDataKey}`;
-      const res = await fetch(url);
+      // Without a signal a hung provider burns the whole wall clock and the
+      // worker is killed at 150s with no chance to refund the quota. Share the
+      // one budget the rest of the function already lives by.
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(1_000, WALL_CLOCK_BUDGET_MS - (Date.now() - startedAt))) });
       const raw = await res.text();
       const parsed = parseJsonResponse(raw);
       if (!res.ok || !isRecord(parsed) || parsed.status === "error") {
@@ -822,13 +831,40 @@ Deno.serve(async (req: Request) => {
       return parseCandles(parsed.values);
     };
 
+    // The plan is priced here and filled by the tracker days later. Those two
+    // read different books — every 1h plan settled since the trading-day fix
+    // carries price_basis "quotes" — so entry_point came from Twelve Data while
+    // the fill came from GMO. Pricing the entry timeframe from the same feed
+    // that fills it closes that seam.
+    //
+    // Deliberately an OVERLAY on an unchanged Twelve Data fetch: that one
+    // already-paid request set is the fallback, so a GMO outage costs a label,
+    // never an analysis. The two run concurrently, so the marginal cost is only
+    // what GMO takes beyond Twelve Data.
+    const overlayDeadline = Date.now() + PRICE_OVERLAY_BUDGET_MS;
+    const overlayWanted = GMO_ANALYSIS_TIMEFRAMES.has(interval);
+    const gmoAttempt = overlayWanted
+      ? fetchRecentQuotes(currencyPair, interval, 250, Date.now(), overlayDeadline, async (url) => {
+        const left = overlayDeadline - Date.now();
+        if (left <= 0) return null;
+        const r = await fetch(url, { signal: AbortSignal.timeout(left) });
+        return r.ok ? await r.json().catch(() => null) : null;
+        // The GMO arm may never reject: it shares a Promise.all with the fetch
+        // whose rejection is the real market_data_failed path.
+      }).catch(() => null)
+      : Promise.resolve(null);
+
     let seriesByTf: Candle[][];
+    let gmoRaw: Awaited<typeof gmoAttempt> = null;
     try {
       // The entry timeframe needs at least 200 closes or sma(closes, 200)
       // silently returns null and SMA200 vanishes from the prompt.
-      seriesByTf = await Promise.all(
-        timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130)),
-      );
+      const [td, gmo] = await Promise.all([
+        Promise.all(timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130))),
+        gmoAttempt,
+      ]);
+      seriesByTf = td;
+      gmoRaw = gmo;
     pricedAtIso = new Date().toISOString();
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
@@ -849,12 +885,50 @@ Deno.serve(async (req: Request) => {
       }, 400);
     }
 
+    // Swapped BEFORE entryCandles binds, on purpose. entryCandles is read again
+    // ~600 lines later for the chart the client draws; swapping after it binds
+    // would leave the chart on Twelve Data bars while every indicator, the entry
+    // marker and entry_point moved to GMO, with nothing raised.
+    let priceFeed: "twelve_data" | "gmo" = "twelve_data";
+    let feedDeltaAtr: number | null = null;
+    let overlayReason: string | null = overlayWanted ? (gmoRaw === null ? "unavailable" : null) : "not_attempted";
+    if (gmoRaw) {
+      // A snapshot of the Twelve Data series purely to supply the reference the
+      // overlay is checked against; the real snapshots are computed below from
+      // whichever series wins.
+      const reference = computeSnapshot(seriesByTf[0]);
+      if (!reference) {
+        overlayReason = "no_reference";
+      } else {
+        const check = acceptOverlay({
+          quotes: gmoRaw.bars,
+          refPrice: reference.price,
+          atr: reference.atr,
+          nowMs: Date.now(),
+          intervalMs: 60 * 60 * 1000,
+        });
+        feedDeltaAtr = check.deltaAtr;
+        overlayReason = check.reason;
+        if (check.ok) {
+          seriesByTf = [gmoRaw.bars.map(midCandle), ...seriesByTf.slice(1)];
+          priceFeed = "gmo";
+        }
+      }
+    }
+
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
 
-    console.log("Market data fetched", { elapsedMs: Date.now() - startedAt });
+    console.log("Market data fetched", {
+      elapsedMs: Date.now() - startedAt,
+      priceFeed,
+      overlayReason,
+      feedDeltaAtr,
+      gmoRequests: gmoRaw?.requests ?? 0,
+      gmoKeys: gmoRaw?.keys ?? 0,
+    });
 
     stage = "compute_indicators";
     const snapshots = seriesByTf.map((candles) => computeSnapshot(candles));
@@ -869,7 +943,8 @@ Deno.serve(async (req: Request) => {
       const candles = seriesByTf[i];
       const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
-      return `### ${tf}${i === 0 ? "（エントリー時間足）" : "（上位足）"}\n${body}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
+      const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
+      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
@@ -1267,7 +1342,14 @@ Deno.serve(async (req: Request) => {
       rejection: entryRejected ? rejectionReason : entryVerdict.rejection,
       repair_rejection: entryVerdict.repairRejection,
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
-      price: entrySnapshot.price,
+      // marketEntry, not entrySnapshot.price: entry_point, price_at_signal
+      // and the gate all use the rounded constant, and this field is read
+      // beside them.
+      price: marketEntry,
+      // Which book priced this plan, and how far outside that book's newest
+      // bar our reference sat. Read by the post-mortem record stats.
+      price_feed: priceFeed,
+      feed_delta_atr: feedDeltaAtr,
     };
 
     // The same direction on the same pair already open from an earlier plan:

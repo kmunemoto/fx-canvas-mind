@@ -196,6 +196,17 @@ export interface EntryCheck {
   repair_rejection?: EntryRejection | null;
   repaired?: boolean;
   atr: number | null;
+  // Written by analyze since the first version, never declared until now.
+  price?: number | null;
+  // Which book priced this plan. Twelve Data mid unless the GMO overlay was
+  // accepted for the entry timeframe, in which case the plan is priced from the
+  // same feed the tracker fills it on. Absent on rows written before the
+  // overlay existed, which were all Twelve Data.
+  price_feed?: "twelve_data" | "gmo";
+  // How far outside GMO's newest bar the Twelve Data reference sat, in ATR.
+  // Zero means the two feeds agreed exactly, which is what every measured
+  // production row did. Null when there was no ATR to scale by.
+  feed_delta_atr?: number | null;
 }
 
 // Why a settled plan went the way it did — mirror of the postmortem

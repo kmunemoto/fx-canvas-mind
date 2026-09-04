@@ -192,6 +192,13 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
               <Row label={d.takeProfit1} value={price(record.take_profit_1)} className="text-success" />
               <Row label={d.priceAtSignal} value={price(record.price_at_signal ?? ev?.price_at_signal)} />
               {ev && <Row label={d.orderTypeLabel} value={d.orderType[orderType]} className="text-muted-foreground" mono={false} />}
+              {/* Which book priced the plan, and which one scored it. These were
+                  written and read by nothing until now, so a plan priced on one
+                  feed and filled on another looked identical to one where both
+                  agreed. */}
+              {check?.price_feed && (
+                <Row label={d.priceFeedLabel} value={d.priceFeed[check.price_feed]} className="text-muted-foreground" mono={false} />
+              )}
               {check?.repaired && <p className="text-muted-foreground mt-1">{g.repaired}</p>}
             </>
           )}
@@ -202,6 +209,9 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
           <p className={`font-semibold mb-1 ${outcomeClass}`}>{summary}</p>
           {tracked && (
             <>
+              {ev?.price_basis && (
+                <Row label={d.priceBasisLabel} value={d.priceBasis[ev.price_basis]} className="text-muted-foreground" mono={false} />
+              )}
               {record.outcome === "pending" && ev?.refine_pending && (
                 <p className="text-muted-foreground mb-1">{d.refinePending}</p>
               )}

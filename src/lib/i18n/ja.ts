@@ -263,6 +263,16 @@ export const ja = {
         stop: "逆指値（ブレイクを待つ）",
         unknown: "—",
       },
+      priceFeedLabel: "値付けした板",
+      priceFeed: {
+        twelve_data: "Twelve Data 仲値",
+        gmo: "GMO Coin 仲値（採点と同じ板）",
+      },
+      priceBasisLabel: "採点に使った板",
+      priceBasis: {
+        mid: "仲値（Bid/Askが取れず）",
+        quotes: "GMO Coin の Bid/Ask",
+      },
       filledAt: "約定",
       notFilled: "未約定",
       resolvedAt: "決着",
