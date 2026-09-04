@@ -252,6 +252,16 @@ export const en: Dict = {
         stop: "Stop (waits for a breakout)",
         unknown: "—",
       },
+      priceFeedLabel: "Priced from",
+      priceFeed: {
+        twelve_data: "Twelve Data mid",
+        gmo: "GMO Coin mid (same book it is scored on)",
+      },
+      priceBasisLabel: "Scored on",
+      priceBasis: {
+        mid: "Mid (no bid/ask available)",
+        quotes: "GMO Coin bid/ask",
+      },
       filledAt: "Filled",
       notFilled: "Not filled",
       resolvedAt: "Settled",
