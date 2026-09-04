@@ -5,6 +5,9 @@ import {
   fetchQuotes,
   fillSide,
   isMarketClosed,
+  isPossiblyClosed,
+  largestGap,
+  MAX_GAP_INTERVALS,
   jstDayKey,
   klineUrl,
   mergeSides,
@@ -300,5 +303,44 @@ describe("judging a plan on bid and ask instead of the mid", () => {
     expect(j.evaluation.price_basis).toBe("mid");
     expect(j.evaluation.spread_at_fill).toBeNull();
     expect(j.evaluation.fill_price).toBe(150.0);
+  });
+});
+
+describe("a weekend is not a hole in the data", () => {
+  const MIN = 60_000;
+  const q = (iso: string): QuoteCandle => ({
+    datetime: iso,
+    bid: { datetime: iso, open: 1, high: 1, low: 1, close: 1 },
+    ask: { datetime: iso, open: 1, high: 1, low: 1, close: 1 },
+  });
+
+  it("asks the week two different questions and gets two different answers", () => {
+    // The summer band between the real Friday close (21:00Z) and the latest
+    // possible one (22:00Z). Keeping a bar here is right — it may be real.
+    // Alleging a GAP here is wrong — the market may have been shut.
+    const band = Date.parse("2026-09-04T21:30:00Z");
+    expect(isMarketClosed(band)).toBe(false);
+    expect(isPossiblyClosed(band)).toBe(true);
+    // Deep in the weekend both agree
+    expect(isMarketClosed(Date.parse("2026-09-05T12:00:00Z"))).toBe(true);
+    expect(isPossiblyClosed(Date.parse("2026-09-05T12:00:00Z"))).toBe(true);
+  });
+
+  it("does not call a 15min series incomplete just because a weekend went past", () => {
+    // This shipped, and then quietly sent every weekend-spanning 15min window
+    // back to the mid feed: 60 minutes of phantom gap against a 45-minute
+    // tolerance, every weekend.
+    const friLast = Date.parse("2026-09-04T20:45:00Z");
+    const sunFirst = Date.parse("2026-09-06T21:00:00Z");
+    const gap = largestGap([q(new Date(friLast).toISOString()), q(new Date(sunFirst).toISOString())], friLast, sunFirst, 15 * MIN);
+    expect(gap).toBeLessThanOrEqual(MAX_GAP_INTERVALS * 15 * MIN);
+  });
+
+  it("still catches a real hole in the middle of a trading day", () => {
+    const from = Date.parse("2026-09-01T09:00:00Z"); // a Tuesday
+    const to = Date.parse("2026-09-01T15:00:00Z");
+    // one bar at each end, six hours of open market with nothing between
+    const gap = largestGap([q(new Date(from).toISOString()), q(new Date(to).toISOString())], from, to, 15 * MIN);
+    expect(gap).toBeGreaterThan(MAX_GAP_INTERVALS * 15 * MIN);
   });
 });

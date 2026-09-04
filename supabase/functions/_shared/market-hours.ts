@@ -1,0 +1,40 @@
+// When the forex market is shut.
+//
+// Two predicates, because two different questions are asked of the same week
+// and the safe answer differs.
+//
+// Deno-free on purpose: the vitest suite imports this directly.
+
+// May I throw this bar away? / Is "enter now" an available action?
+//
+// Names only the hours that are shut under every daylight-saving rule. Being
+// wrong here destroys real data, or refuses a plan the user could have taken,
+// so it is deliberately narrow: all of Saturday, Friday from the latest
+// possible close, and Sunday before the earliest possible open.
+export const isMarketClosed = (ms: number): boolean => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  const hour = d.getUTCHours();
+  if (day === 6) return true; // Saturday
+  if (day === 5 && hour >= 22) return true; // Friday, past the latest close
+  if (day === 0 && hour < 21) return true; // Sunday, before the earliest open
+  return false;
+};
+
+// Is this absence evidence that the feed failed?
+//
+// The opposite safe answer: the WIDEST possible closure, because an hour that
+// might have been shut is not evidence of anything. Using the narrow predicate
+// for coverage counted the summer band between the real 21:00Z Friday close
+// and the notional 22:00Z as open market with no bars in it — four missing
+// 15min intervals, past the tolerance — so every 15min window spanning a
+// weekend was judged incomplete and silently sent back to the mid feed.
+export const isPossiblyClosed = (ms: number): boolean => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  const hour = d.getUTCHours();
+  if (day === 6) return true; // Saturday
+  if (day === 5 && hour >= 21) return true; // Friday, from the earliest close
+  if (day === 0 && hour < 22) return true; // Sunday, until the latest open
+  return false;
+};

@@ -143,6 +143,12 @@ export const ja = {
       expectancyLine: (expectancy: string, sum: string) => `期待値 ${expectancy}（合計 ${sum}）`,
       rColumn: "損益(R)",
       byRulebook: "ルール版",
+      verdictRate: "採点できた割合",
+      leakLine: (wait: number, untriggered: number, expired: number) =>
+        `見送り ${wait}%・未約定 ${untriggered}%・期限切れ ${expired}%`,
+      incoherentLine: (n: number) => `水準の矛盾 ${n}件`,
+      legacyContract: (v: string) => `${v}（旧契約）`,
+      mixedContracts: "エントリー契約が異なるプランが混在しているため、割合は表示しません。旧契約では約定しないまま採点されないプランがあり、新契約ではそれが起こりません。内訳の「ルール版」で分けて見てください。",
       rulebookNone: "ルール導入前",
       frictionNote: "R は計画リスク幅を1とした損益（WIN=TP1到達、LOSS=−1R）。スプレッド・スリッページは含まない理論値",
     },
@@ -160,6 +166,8 @@ export const ja = {
         should_be_market: "トレンド継続中に戻りを待つ指値（約定しない）",
         stop_too_tight: "損切りが近すぎる（ノイズで刈られる）",
         poor_rr: "リスクリワードが割に合わない",
+        target_out_of_reach: "利確が遠すぎて期限内に届かない",
+        market_closed: "市場が閉まっていた（成行で入れない）",
         incoherent: "エントリー・損切り・利確の水準が矛盾",
       },
       proposed: "AIの提案",
@@ -171,6 +179,28 @@ export const ja = {
       gateSaved: "→ 約定していれば損切りになっていた",
       gateOpen: "→ 追跡中",
       repaired: "AIの指値エントリーはトレンド継続中のため、現在値の成行に修正して公開しました",
+    },
+    // 見送り（WAIT）の検証。見送りは「間違えようのない答え」になりがちなので、
+    // 見送った後に相場が何をしたかを必ず突き合わせる
+    wait: {
+      title: "見送りの検証",
+      badge: "取れていた",
+      summary: (judged: number, missed: number, rate: number) =>
+        `見送りの検証: 判定済み ${judged}件のうち ${missed}件（${rate}%）は、このアプリ自身が許す最小のトレードなら勝てていました`,
+      verdicts: {
+        missed: "見送るべきではなかった（最小のトレードでも勝てていた）",
+        correct: "見送りは妥当だった（どちらに入っても取れていない）",
+        pending: "検証期間が終わっていません",
+        unknown: "検証に必要なデータがありません",
+      },
+      direction: (dir: string) => `取れていた方向: ${dir}`,
+      basis: "検証したトレード",
+      basisNote: (risk: string, reward: string) =>
+        `損切り幅 ${risk} / 利確幅 ${reward}（ゲートが許す最小の損切りと、リスクリワード下限を満たす最も近い利確）`,
+      reachedAt: "利確到達",
+      barsExamined: (n: number) => `検証した足 ${n}本`,
+      horizon: (hours: number) => `検証期間 ${hours}時間（市場が開いている時間で計測）`,
+      note: "見送りは採点されないと「常に見送る」が最善手になってしまうため、見送った後の値動きも同じ基準で検証しています",
     },
     // Why a settled plan went the way it did
     postmortem: {

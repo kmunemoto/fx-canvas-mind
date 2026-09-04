@@ -8,6 +8,7 @@ import {
   byConfidence,
   byMode,
   byRulebookVersion,
+  LEGACY_CONTRACT,
   byTimeframe,
   causeCounts,
   isRejected,
@@ -67,7 +68,9 @@ const AnalysisHistory = ({ records }: Props) => {
   }
 
   const overall = tally("all", safe);
-  const closed = overall.wins + overall.losses;
+  // What the win rate is now taken over: an expiry is a call that did not
+  // work out, not a call that never happened
+  const closed = overall.wins + overall.losses + overall.expired;
   const gate = shadowTally(all);
   const causes = causeCounts(safe);
   const groups: OutcomeTally[] =
@@ -82,7 +85,13 @@ const AnalysisHistory = ({ records }: Props) => {
   const groupLabel = (key: string) => {
     if (breakdown === "timeframe") return key;
     if (breakdown === "mode") return t.history.modes[key as keyof typeof t.history.modes] ?? key;
-    if (breakdown === "rulebook") return key === NO_RULEBOOK ? t.history.stats.rulebookNone : key;
+    if (breakdown === "rulebook") {
+      // Composite key: "<contract>|<version>". The legacy contract is labelled
+      // so the two eras are never read as one series of rulebook versions.
+      const [contract, version] = key.split("|");
+      const label = version === NO_RULEBOOK ? t.history.stats.rulebookNone : version;
+      return contract === LEGACY_CONTRACT ? t.history.stats.legacyContract(label) : label;
+    }
     if (key === "unknown") return t.history.stats.unknownBand;
     const [lo, hi] = parseBand(key);
     return t.history.stats.confidenceBand(lo, hi);
@@ -118,7 +127,10 @@ const AnalysisHistory = ({ records }: Props) => {
             <div className="flex items-center gap-1.5">
               <TrendingUp className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
               <span className="text-muted-foreground">{t.history.winRate}</span>
-              <span className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}>
+              <span
+                data-testid="win-rate"
+                className={`font-mono font-bold ${overall.winRate >= 50 ? "text-success" : "text-destructive"}`}
+              >
                 {overall.winRate}%
               </span>
               <span className="text-muted-foreground font-mono">({overall.wins}/{closed})</span>
@@ -128,6 +140,44 @@ const AnalysisHistory = ({ records }: Props) => {
       </div>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {overall.contracts.length > 1 && (
+        <p className="text-[10px] text-warning" data-testid="mixed-contracts">
+          {t.history.stats.mixedContracts}
+        </p>
+      )}
+
+      {/* Where every call went. Closing one way to avoid a verdict just moves
+          the pressure elsewhere, so the share that produced one is published
+          rather than any single escape hatch being watched. */}
+      {overall.calls > 0 && overall.verdictRate !== null && (
+        <p className="text-[10px] font-mono" data-testid="verdict-strip">
+          <span className="text-muted-foreground">{t.history.stats.verdictRate}</span>{" "}
+          <span className={overall.verdictRate >= 70 ? "text-foreground" : "text-warning"}>
+            {overall.verdictRate}%
+          </span>
+          <span className="text-muted-foreground">
+            {" "}({overall.wins + overall.losses}/{overall.calls})
+            {" · "}{t.history.stats.leakLine(
+              overall.waitRate ?? 0,
+              overall.untriggeredRate ?? 0,
+              overall.expiredRate ?? 0,
+            )}
+            {overall.incoherent > 0 ? ` · ${t.history.stats.incoherentLine(overall.incoherent)}` : ""}
+          </span>
+        </p>
+      )}
+
+      {/* Standing aside is the one call that costs nothing to make, so the
+          share of them the market went on to refute is published next to the
+          verdict rate rather than left in the row detail. */}
+      {overall.waitsJudged > 0 && (
+        <p className="text-[10px] font-mono" data-testid="wait-strip">
+          <span className={overall.waitsMissed > 0 ? "text-warning" : "text-muted-foreground"}>
+            {t.history.wait.summary(overall.waitsJudged, overall.waitsMissed, overall.waitMissRate ?? 0)}
+          </span>
+        </p>
+      )}
 
       {/* what the win rate rests on: a rate off two trades is not a rate */}
       {closed > 0 && (
@@ -228,6 +278,7 @@ const AnalysisHistory = ({ records }: Props) => {
             ? t.history.outcomes.rejected
             : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
           const diagnosed = r.postmortem?.status === "done";
+          const waitMissed = r.wait_check?.verdict === "missed";
           const isOpen = expanded === r.id;
           const panelId = `outcome-${r.id}`;
           return (
@@ -247,6 +298,11 @@ const AnalysisHistory = ({ records }: Props) => {
                 {diagnosed && r.postmortem?.cause && (
                   <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground truncate max-w-[10rem]">
                     {causeLabel(r.postmortem.cause)}
+                  </span>
+                )}
+                {waitMissed && (
+                  <span className="shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold bg-warning/15 text-warning border-warning/40">
+                    {t.history.wait.badge}
                   </span>
                 )}
                 <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${badgeCls}`}>

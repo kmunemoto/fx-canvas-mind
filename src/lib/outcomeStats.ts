@@ -1,8 +1,18 @@
-import type { AnalysisRecord, PostmortemCause } from "./types";
+import type { AnalysisRecord, PlanContract, PostmortemCause } from "./types";
 
-// Win/loss bookkeeping over history rows. Only WIN and LOSS count toward the
-// rate: an entry that never filled or a bar that touched both levels says
-// nothing about whether the call was right.
+// Win/loss bookkeeping over history rows.
+//
+// THE INVARIANT THIS FILE EXISTS TO PROTECT: every call the analyst makes
+// lands in exactly one bucket, and the share that produced an actual verdict
+// (verdictRate) is published. Closing one way for a call to escape a verdict
+// only moves the pressure somewhere else — an unreachable target expires, a
+// plan the market never reaches goes untriggered, a WAIT is never wrong at
+// all. Rather than trying to predict which hatch opens next, every non-verdict
+// bucket carries its own rate and they sum with verdictRate to 1. A drop in
+// verdictRate is the symptom to watch, whatever the cause turns out to be.
+//
+// An expired plan IS counted against the win rate. It was a call that did not
+// work out; leaving it out let a target placed out of reach dodge the number.
 //
 // The rate alone is not the record, though. A handful of settled trades can
 // show any rate at all, plans opened on the same pair in the same direction
@@ -24,7 +34,24 @@ export interface OutcomeTally {
   untriggered: number;
   ambiguous: number;
   expired: number;
+  // Plans whose levels contradicted each other, so nothing could be judged.
+  // Not a neutral outcome — a malformed plan is a defect, and its rate should
+  // be zero.
+  incoherent: number;
+  // Calls that declined to trade at all
+  waits: number;
+  // Of those, the ones the tracker has reached a verdict on, and the ones
+  // where the market then offered a trade this app would itself have taken
+  // and it won. This is the record's only evidence of over-caution: every
+  // other number here punishes being too bold, so without it the loop can
+  // only ever push one way — toward trading less, until the analyst answers
+  // WAIT to everything and is never wrong again.
+  waitsJudged: number;
+  waitsMissed: number;
+  // Non-WAIT plans (what `total` has always meant)
   total: number;
+  // EVERY call, WAIT included. The denominator for the bucket rates below.
+  calls: number;
   // WAIT rows that were the gate's doing, not the model's
   rejected: number;
   winRate: number | null;
@@ -42,6 +69,23 @@ export interface OutcomeTally {
   // no spread or slippage is charged)
   sumR: number | null;
   expectancy: number | null;
+  // Which entry contracts the rows in this tally were made under. More than
+  // one and every rate is null: the contracts are not comparable, so a pooled
+  // number would describe a population that never existed.
+  contracts: PlanContract[];
+  // Share of ALL calls that ended in a win or a loss. The headline honesty
+  // number: if it falls, calls are escaping judgement somewhere.
+  verdictRate: number | null;
+  // Where the rest went. These and verdictRate partition every call, so they
+  // sum to 100 (bar rounding).
+  waitRate: number | null;
+  expiredRate: number | null;
+  untriggeredRate: number | null;
+  ambiguousRate: number | null;
+  incoherentRate: number | null;
+  openRate: number | null;
+  // Share of judged WAITs that were missed trades
+  waitMissRate: number | null;
 }
 
 export interface ShadowTally {
@@ -88,10 +132,18 @@ export const confidenceBandKey = (confidence: number | null): string => {
 };
 
 // Version 0 is the seeded, empty rulebook: no rules were in force either
+// Rows written before the column existed, and rows read by an older client,
+// are legacy by definition — the contract only ever moved forwards.
+export const LEGACY_CONTRACT: PlanContract = "entry_chosen_v1";
+export const contractKey = (r: AnalysisRecord): PlanContract => r.plan_contract ?? LEGACY_CONTRACT;
+
+// Keyed by contract AND rulebook version. Pooling the two would let a change
+// of entry contract masquerade as a change of rulebook, which is precisely the
+// question the before/after table exists to answer.
 export const rulebookKey = (r: AnalysisRecord): string =>
   typeof r.rulebook_version === "number" && Number.isFinite(r.rulebook_version) && r.rulebook_version > 0
-    ? `v${r.rulebook_version}`
-    : NO_RULEBOOK;
+    ? `${contractKey(r)}|v${r.rulebook_version}`
+    : `${contractKey(r)}|${NO_RULEBOOK}`;
 
 const round2 = (v: number) => Number(v.toFixed(2));
 
@@ -155,10 +207,21 @@ const wasFilled = (r: AnalysisRecord): boolean =>
   r.outcome === "win" || r.outcome === "loss" || r.outcome === "expired" ||
   (r.outcome === "ambiguous" && typeof r.evaluation?.filled_at === "string" && r.evaluation.filled_at.length > 0);
 
+// A plan whose own levels contradict each other. The tracker records this as
+// 'ambiguous' with reason 'incoherent'; it is separated out here because the
+// two mean different things — one is "we could not tell", the other is
+// "the plan was malformed".
+const isIncoherent = (r: AnalysisRecord): boolean =>
+  r.outcome === "ambiguous" && r.evaluation?.reason === "incoherent";
+
 export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const t: OutcomeTally = {
-    key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0, total: 0, rejected: 0,
+    key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0,
+    incoherent: 0, waits: 0, waitsJudged: 0, waitsMissed: 0, total: 0, calls: 0,
+    rejected: 0, contracts: [],
     winRate: null, winRateCi: null, clusters: 0, fillRate: null, sumR: null, expectancy: null,
+    verdictRate: null, waitRate: null, expiredRate: null, untriggeredRate: null,
+    ambiguousRate: null, incoherentRate: null, openRate: null, waitMissRate: null,
   };
   let filled = 0;
   let settled = 0;
@@ -166,17 +229,34 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   let withR = 0;
   const clusters = clusterIds(records);
   const settledClusters = new Set<string>();
+  const seenContracts = new Set<PlanContract>();
   records.forEach((r, i) => {
     if (isShadow(r)) return;
+    seenContracts.add(contractKey(r));
     if (isRejected(r)) t.rejected++;
-    if (r.signal === "WAIT" || r.outcome === "skipped") return;
+    // Every call counts, WAIT included: a call that declines to trade is
+    // still a call, and one that is never counted can never be wrong.
+    t.calls++;
+    if (r.signal === "WAIT" || r.outcome === "skipped") {
+      t.waits++;
+      // 'pending' has not been judged yet and 'unknown' never can be, so
+      // neither belongs on either side of the rate.
+      const verdict = r.wait_check?.verdict;
+      if (verdict === "missed" || verdict === "correct") {
+        t.waitsJudged++;
+        if (verdict === "missed") t.waitsMissed++;
+      }
+      return;
+    }
     t.total++;
     if (r.outcome === "win") t.wins++;
     else if (r.outcome === "loss") t.losses++;
     else if (r.outcome === "pending") t.open++;
     else if (r.outcome === "untriggered") t.untriggered++;
-    else if (r.outcome === "ambiguous") t.ambiguous++;
-    else if (r.outcome === "expired") t.expired++;
+    else if (r.outcome === "ambiguous") {
+      if (isIncoherent(r)) t.incoherent++;
+      else t.ambiguous++;
+    } else if (r.outcome === "expired") t.expired++;
     if (wasFilled(r)) {
       filled++;
       settled++;
@@ -190,15 +270,39 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
       withR++;
     }
   });
-  const closed = t.wins + t.losses;
-  t.winRate = closed > 0 ? Math.round((t.wins / closed) * 100) : null;
-  t.winRateCi = wilson(t.wins, closed);
+  t.contracts = [...seenContracts].sort();
+  // An expiry is a call that did not work out, so it belongs in the
+  // denominator. Excluding it let a target placed beyond reach sit out the
+  // win rate entirely.
+  const mixed = t.contracts.length > 1;
+  const decided = t.wins + t.losses + t.expired;
+  t.winRate = !mixed && decided > 0 ? Math.round((t.wins / decided) * 100) : null;
+  t.winRateCi = mixed ? null : wilson(t.wins, decided);
   t.clusters = settledClusters.size;
   // 'ambiguous' without a fill is left out of both sides: it is precisely
   // the case where we could not establish whether the trade happened
-  t.fillRate = settled > 0 ? Math.round((filled / settled) * 100) : null;
-  t.sumR = withR > 0 ? round2(sumR) : null;
-  t.expectancy = withR > 0 ? round2(sumR / withR) : null;
+  t.fillRate = !mixed && settled > 0 ? Math.round((filled / settled) * 100) : null;
+  t.sumR = !mixed && withR > 0 ? round2(sumR) : null;
+  t.expectancy = !mixed && withR > 0 ? round2(sumR / withR) : null;
+  // Mixing contracts silently is the failure this column exists to prevent.
+  // Under the old one a call could go unfilled and never be scored at all;
+  // under the new one that is impossible. A rate over both answers a question
+  // nobody asked — and an `untriggeredRate` of 37% rendered under a regime
+  // where untriggered cannot happen is a lie in its own right, so the refusal
+  // covers every rate, not just the win rate.
+  if (t.contracts.length > 1) return t;
+  const share = (n: number) => (t.calls > 0 ? Math.round((n / t.calls) * 100) : null);
+  t.verdictRate = share(t.wins + t.losses);
+  t.waitRate = share(t.waits);
+  t.expiredRate = share(t.expired);
+  t.untriggeredRate = share(t.untriggered);
+  t.ambiguousRate = share(t.ambiguous);
+  t.incoherentRate = share(t.incoherent);
+  t.openRate = share(t.open);
+  // Taken over judged WAITs, not over all calls: the others sit in waitRate
+  // already, and mixing "not looked at yet" into the denominator would make
+  // over-caution look rarer the slower the tracker runs.
+  t.waitMissRate = t.waitsJudged > 0 ? Math.round((t.waitsMissed / t.waitsJudged) * 100) : null;
   return t;
 };
 
@@ -248,7 +352,10 @@ const groupBy = (
   }
   const rest = [...buckets.keys()].filter((k) => !order.includes(k)).sort(sortRest);
   const keys = [...order.filter((k) => buckets.has(k)), ...rest];
-  return keys.map((k) => tally(k, buckets.get(k) ?? [])).filter((t) => t.total > 0);
+  // `calls`, not `total`: a bucket that is entirely WAIT has no trades but is
+  // still something the analyst did, and dropping it hides exactly the
+  // behaviour the WAIT rate exists to show.
+  return keys.map((k) => tally(k, buckets.get(k) ?? [])).filter((t) => t.calls > 0);
 };
 
 export const byTimeframe = (records: AnalysisRecord[]): OutcomeTally[] =>
@@ -267,5 +374,22 @@ export const byConfidence = (records: AnalysisRecord[]): OutcomeTally[] =>
 // The record split by the rulebook version the plans were made under:
 // before any rules first, then each version in order — the before/after
 // comparison that says whether a revision helped
+// The old comparator was Number(key.slice(1)), which on a composite key is
+// NaN — leaving the before/after table in whatever order the Map happened to
+// iterate. Parse the tuple and sort on it.
+const rulebookOrder = (key: string): [string, number] => {
+  const [contract, version] = key.split("|");
+  return [contract, version === NO_RULEBOOK ? 0 : Number(version.slice(1)) || 0];
+};
+
 export const byRulebookVersion = (records: AnalysisRecord[]): OutcomeTally[] =>
-  groupBy(records, rulebookKey, [NO_RULEBOOK], (a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+  groupBy(records, rulebookKey, [], (a, b) => {
+    const [ca, va] = rulebookOrder(a);
+    const [cb, vb] = rulebookOrder(b);
+    // Legacy contract first, then by version inside each contract
+    if (ca !== cb) return ca === LEGACY_CONTRACT ? -1 : cb === LEGACY_CONTRACT ? 1 : ca.localeCompare(cb);
+    return va - vb;
+  });
+
+export const byContract = (records: AnalysisRecord[]): OutcomeTally[] =>
+  groupBy(records, contractKey, [LEGACY_CONTRACT]);

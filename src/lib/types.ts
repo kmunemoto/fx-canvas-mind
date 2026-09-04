@@ -154,9 +154,25 @@ export interface OutcomeEvaluation {
   path: OutcomePathPoint[];
 }
 
-// Why the entry gate in analyze refused (or repaired) a plan — mirror of
-// entry_check written by supabase/functions/analyze/index.ts
-export type EntryRejection = "too_far" | "should_be_market" | "stop_too_tight" | "poor_rr" | "incoherent";
+// Why the entry gate in analyze refused a plan — mirror of entry_check
+// written by supabase/functions/analyze/index.ts.
+//
+// `repaired` / `snapped` / `snap_declined` only ever appear on rows from the
+// entry_chosen_v1 contract, where the model picked the entry price and the
+// server sometimes moved it. Under market_v1 the server sets the entry, so
+// there is nothing to move and the fields are absent.
+export type EntryRejection =
+  | "too_far"
+  | "should_be_market"
+  | "stop_too_tight"
+  | "poor_rr"
+  // The target was so far out that the ratio stopped meaning anything
+  | "target_out_of_reach"
+  // The server refused because the market was shut: "enter now" was not an
+  // available action. Recorded apart from a model WAIT — one is the analyst
+  // declining, the other is the server declining for it.
+  | "market_closed"
+  | "incoherent";
 
 export interface EntryCheck {
   proposed_signal: "BUY" | "SELL" | "WAIT";
@@ -168,6 +184,12 @@ export interface EntryCheck {
   regime?: string | null;
   momentum?: boolean;
   distance_atr: number | null;
+  // Which contract the plan was made under, and the geometry the gate saw.
+  // Recorded so a drift in how the model places stops and targets is visible
+  // before it becomes a change in the win rate.
+  contract?: string;
+  tp1_atr?: number | null;
+  priced_at?: string;
   stop_atr?: number | null;
   risk_reward: number | null;
   rejection: EntryRejection | null;
@@ -292,7 +314,33 @@ export interface LoopHealth {
   now: string;
 }
 
+// Was standing aside the right call? Mirror of the WaitCheck written by
+// supabase/functions/track-outcomes/waits.ts.
+//
+// A WAIT is a prediction too, and the one prediction that costs nothing to
+// make: answer WAIT to everything and the win rate never moves. So it is
+// scored against the smallest trade the app's own entry gate would have
+// allowed from the price at the moment of the call — 'missed' means that
+// trade existed and won.
+export type WaitVerdict = "missed" | "correct" | "pending" | "unknown";
+
+export interface WaitCheck {
+  verdict: WaitVerdict;
+  direction: "BUY" | "SELL" | null;
+  r: number | null;
+  at: string | null;
+  price: number | null;
+  atr: number | null;
+  risk: number | null;
+  reward: number | null;
+  bars_examined: number;
+  horizon_ms: number;
+  checked_at: string;
+}
+
 // Row shape of public.analyses as read by the client
+export type PlanContract = "entry_chosen_v1" | "market_v1";
+
 export interface AnalysisRecord {
   id: string;
   pair: string;
@@ -312,10 +360,21 @@ export interface AnalysisRecord {
   created_at: string;
   closed_at: string | null;
   evaluation: OutcomeEvaluation | null;
+  // Which entry contract the plan was made under. Absent on rows read by an
+  // older client; treat that as the legacy contract (see contractKey).
+  //   entry_chosen_v1 — the model picked the entry price, and a plan the market
+  //                     never reached was never scored at all
+  //   market_v1       — the server sets the entry to the market price at
+  //                     analysis, so every non-WAIT call gets a verdict
+  // Not derivable from rulebook_version: the same rulebook spans both.
+  plan_contract?: PlanContract;
   // v19+: the entry gate's verdict, the post-mortem, and shadow tracking of
   // refused plans (absent on rows written by earlier versions)
   entry_check?: EntryCheck | null;
   postmortem?: Postmortem | null;
+  // The verdict on a call that declined to trade (v24+; null until the
+  // tracker has looked, absent on rows written before it existed)
+  wait_check?: WaitCheck | null;
   shadow?: boolean;
   shadow_of?: string | null;
   rulebook_version?: number | null;

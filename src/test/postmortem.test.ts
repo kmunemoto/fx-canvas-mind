@@ -572,6 +572,83 @@ describe("rulebook consolidation", () => {
     expect(p.system).toContain("独立クラスタ");
     expect(p.system).toContain("基本手順");
   });
+
+  const contractRow = (over: Partial<RecordRow>): RecordRow => ({
+    pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:00:00Z", outcome: "pending",
+    shadow: false, rejection: null, filled: false, entry: 150, stop: 151, tp1: 148,
+    outcome_price: null, rulebook_version: 2, contract: "entry_chosen_v1", ...over,
+  });
+
+  it("counts one entry contract at a time, and says how many rows that left out", () => {
+    // Under the old contract a plan the market never reached was never scored
+    // at all; under the new one that cannot happen. A rate over both would
+    // describe a population that never existed, so the old rows are counted
+    // and set aside rather than pooled.
+    const rows = [
+      contractRow({ outcome: "win", filled: true }),
+      contractRow({ outcome: "loss", filled: true }),
+      contractRow({ outcome: "untriggered" }),
+      contractRow({
+        outcome: "loss", filled: true, contract: "market_v1",
+        created_at: "2026-09-04T04:00:00Z",
+      }),
+    ];
+    const s = summarizeRecord(rows, []);
+    // The newest row names the contract the record is about
+    expect(s.contract).toBe("market_v1");
+    expect(s).toMatchObject({ total: 1, losses: 1, wins: 0, untriggered: 0, other_contract_rows: 3 });
+  });
+
+  it("treats a row with no contract as the legacy one", () => {
+    const rows = [
+      contractRow({ outcome: "win", filled: true, contract: null }),
+      contractRow({ outcome: "loss", filled: true }),
+    ];
+    const s = summarizeRecord(rows, []);
+    expect(s.contract).toBe("entry_chosen_v1");
+    expect(s).toMatchObject({ total: 2, wins: 1, losses: 1, other_contract_rows: 0 });
+  });
+
+  it("counts an expiry against the win rate", () => {
+    // A target placed beyond reach expires. Leaving expiries out of the
+    // denominator made that the cheapest way to avoid ever being wrong.
+    const rows = [
+      ...Array.from({ length: 10 }, () => contractRow({ outcome: "win", filled: true })),
+      ...Array.from({ length: 5 }, () => contractRow({ outcome: "loss", filled: true })),
+      ...Array.from({ length: 5 }, () => contractRow({ outcome: "expired", filled: true, outcome_price: 150 })),
+    ];
+    const s = summarizeRecord(rows, []);
+    expect(s.settled).toBe(15);
+    expect(s.decided).toBe(20);
+    // 10/20, not 10/15
+    expect(s.win_rate).toBe(50);
+  });
+
+  it("scores the calls that declined to trade", () => {
+    const wait = (verdict: string | null) =>
+      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict });
+    const s = summarizeRecord(
+      [wait("missed"), wait("correct"), wait("correct"), wait("pending"), wait("unknown"), wait(null)],
+      [],
+    );
+    expect(s).toMatchObject({ waits: 6, waits_judged: 3, waits_missed: 1 });
+    // Below the sample floor the rate is withheld, like every other rate here
+    expect(s.wait_miss_rate).toBeNull();
+    const many = Array.from({ length: 30 }, (_, i) => wait(i < 6 ? "missed" : "correct"));
+    expect(summarizeRecord(many, []).wait_miss_rate).toBe(20);
+  });
+
+  it("tells the editor what it may and may not write under the current contract", () => {
+    const s = summarizeRecord([contractRow({ outcome: "win", filled: true })], []);
+    const p = buildConsolidationPrompt(previous, [], s);
+    // The analyst no longer picks an entry price, so a rule about where to
+    // enter is a rule nobody can follow
+    expect(p.system).toContain("エントリー価格はアナリストが選ばない");
+    expect(p.system).toContain("stats.decided");
+    expect(p.system).toContain("stats.waits_missed");
+    expect(p.system).toContain("stats.other_contract_rows");
+    expect(p.user).toContain('"contract":"entry_chosen_v1"');
+  });
 });
 
 describe("evidence bookkeeping", () => {

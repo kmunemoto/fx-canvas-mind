@@ -24,8 +24,11 @@ dist-ssr
 *.sw?
 scripts/.env.x
 
-# Generated deploy artifact, not source. `postmortem` imports across four
-# function directories and its raw sources exceed what the deploy API accepts
-# in one call, so it ships as a bundle built by `npm run bundle:postmortem`.
-# The .ts files stay the single source of truth; this is rebuilt on demand.
+# Generated deploy artifacts, not source. Every one of these functions reaches
+# across function directories for its imports, and shipping the raw .ts files
+# means getting that whole graph right by hand on every deploy — a bundle is
+# one file that either builds or does not. Rebuild with `npm run
+# bundle:functions`; the .ts files stay the single source of truth.
+supabase/functions/analyze/bundle.js
+supabase/functions/track-outcomes/bundle.js
 supabase/functions/postmortem/bundle.js

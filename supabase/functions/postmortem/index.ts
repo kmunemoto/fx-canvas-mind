@@ -44,7 +44,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v3-2026-09-03T18:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v4-2026-09-04T07:30:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -268,6 +268,10 @@ Deno.serve(async (req: Request) => {
       "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
       "price_at_signal", "created_at", "closed_at", "outcome", "evaluation",
       "entry_check", "context", "shadow", "result", "postmortem", "rulebook_version",
+      // Which levers the diagnosis may recommend moving depends on it: under
+      // market_v1 the analyst never chose the entry price, so a lesson about
+      // where to enter is a lesson nobody can follow.
+      "plan_contract",
     ].join(",");
     // Never diagnosed; failed and still retryable; diagnosed on too little
     // aftermath (thin) and not yet revisited; or diagnosed by a version that
@@ -515,6 +519,7 @@ Deno.serve(async (req: Request) => {
         timeframe_alignment: Array.isArray(result.timeframe_alignment) ? result.timeframe_alignment : [],
         entry_check: entryCheck,
         context,
+        contract: strOrNull(raw.plan_contract),
         shadow: raw.shadow === true,
         rules_in_force: rulesInForce.map((r) => ({ id: r.id, text_ja: r.text_ja })),
       };
@@ -670,8 +675,12 @@ Deno.serve(async (req: Request) => {
           lessons_needed: Math.max(0, MIN_NEW_LESSONS - sinceVersion),
         };
       } else {
+        // plan_contract and the WAIT verdict are read here for the same
+        // reason: without the first the two entry eras pool into one win
+        // rate, and without the second the only call that can never be wrong
+        // is also the only call nobody counts.
         const recordRows = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version&order=created_at.desc&limit=${RECENT_ROWS}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict&order=created_at.desc&limit=${RECENT_ROWS}`,
         );
         const record: RecordRow[] = recordRows.map((r) => ({
           id: strOrNull(r.id) ?? undefined,
@@ -690,6 +699,8 @@ Deno.serve(async (req: Request) => {
           fill_price: numberOrNull(r.fill_price),
           outcome_price: numberOrNull(r.outcome_price),
           rulebook_version: numberOrNull(r.rulebook_version),
+          contract: strOrNull(r.plan_contract),
+          wait_verdict: strOrNull(r.wait_verdict),
         }));
         const stats = summarizeRecord(record, lessons);
 

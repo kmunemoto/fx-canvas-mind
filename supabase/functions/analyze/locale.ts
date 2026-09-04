@@ -35,6 +35,9 @@ interface LocaleStrings {
   fallbackWarning: string;
   // Shown when an account without a subscription asks for an analysis
   subscriptionRequired: string;
+  // Shown when the plan would have been "enter now" but the market is shut,
+  // so there is no "now" to enter at
+  marketClosed: string;
   // Put in the prompt when the calendar WAS consulted and had nothing inside
   // the plan's horizon. Without it, "checked and clear" and "never checked"
   // reach the model as the same empty space.
@@ -84,6 +87,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
     subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
+    marketClosed: "為替市場が閉まっているため、見送り（WAIT）にしました。このアプリのプランは「今の値段で入る」前提なので、開いていない時間に出すと、週明けの窓を含んだ架空の成績になります。",
     calendarClear: (hours) =>
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
@@ -105,6 +109,8 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}損切りが現在値に近すぎ（ATRの${stopAtr ?? "?"}倍）、ノイズで刈られる可能性が高い${tail}`;
         case "poor_rr":
           return `${head}このエントリーではリスクリワードが${riskReward ?? "?"}しかなく、割に合わない${tail}`;
+        case "target_out_of_reach":
+          return `${head}利確がリスクの${riskReward ?? "?"}倍と遠すぎ、期限内に届かず期限切れで終わる可能性が高い${tail}`;
         default:
           return `${head}エントリー・損切り・利確の水準に矛盾がある${tail}`;
       }
@@ -135,6 +141,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
     subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
+    marketClosed: "The market is shut, so this is a WAIT. Every plan here is entered at the price on screen, and one written while the market is closed would be judged by filling at the Monday reopen — across the gap, as a trade nobody could have taken.",
     calendarClear: (hours) =>
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:
@@ -156,6 +163,8 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}the stop sits inside the noise (${stopAtr ?? "?"}× ATR from the entry) and would be hit by it${tail}`;
         case "poor_rr":
           return `${head}at that entry the risk/reward is only ${riskReward ?? "?"}, which does not pay${tail}`;
+        case "target_out_of_reach":
+          return `${head}the target sits ${riskReward ?? "?"}x the risk away — far enough that the plan is likelier to expire than to resolve${tail}`;
         default:
           return `${head}the entry, stop and target contradict each other${tail}`;
       }

@@ -43,6 +43,15 @@ export const MARKET_TOLERANCE_ATR = 0.15;
 export const MIN_STOP_ATR = 0.4;
 // Below this, the trade actually available is not worth taking
 export const MIN_RISK_REWARD = 1.2;
+// And above THIS it is not a plan, it is a lottery ticket.
+//
+// A floor with no ceiling is an instruction to reverse-engineer the target:
+// measured over the first eight plans every single risk/reward landed between
+// 1.48 and 1.69, just above the floor, while the stop sat between 0.72 and
+// 1.03 ATR — the model was not asking where the idea would be wrong, it was
+// asking what passes. A ceiling closes the other end, so a target cannot be
+// pushed out of reach to make the ratio work.
+export const MAX_RISK_REWARD = 6;
 // Used when the entry timeframe produced no ATR (too few candles)
 export const FALLBACK_ATR_RATIO = 0.0015;
 // ADX above which the indicators call it a trend; below which a range
@@ -77,6 +86,10 @@ export type Rejection =
   | "stop_too_tight"
   // reachable entry, but the reward does not pay for the risk
   | "poor_rr"
+  // the reward is so far out that the ratio stopped meaning anything: a
+  // target placed where it will not be reached inside the plan's life, so
+  // the trade expires instead of resolving
+  | "target_out_of_reach"
   // stop loss or target on the wrong side of the entry
   | "incoherent";
 
@@ -230,6 +243,13 @@ const check = (
 
   if (rr === null || rr < MIN_RISK_REWARD) {
     return { ...out, rejection: "poor_rr" };
+  }
+
+  // A target far enough out to make any stop look good is not a target. This
+  // fires on the same side as poor_rr and is reported apart from it, because
+  // the two say opposite things about the plan.
+  if (rr > MAX_RISK_REWARD) {
+    return { ...out, rejection: "target_out_of_reach" };
   }
 
   return out;

@@ -12,6 +12,7 @@ import {
   isMomentumMode,
   normalizeMode,
   type EntryPlan,
+  MAX_RISK_REWARD,
 } from "../../supabase/functions/analyze/entry.ts";
 
 // A 1h USD/JPY plan: market 157.08, ATR 0.45 (45 pips). SELL at the market,
@@ -412,5 +413,47 @@ describe("evaluateEntry — replaying the plans that were actually published", (
     expect(v.snapped).toBe(false);
     expect(v.snapDeclined).toBe("stop_too_tight");
     expect(v.entry).toBe(159.85);
+  });
+});
+
+describe("a floor with no ceiling is an instruction to reverse-engineer the target", () => {
+  it("refuses a target placed far enough out to make any stop look good", () => {
+    // Measured over the first eight plans: every risk/reward landed between
+    // 1.48 and 1.69, just above the floor, while stops sat at 0.72-1.03 ATR.
+    // The model was solving "what passes", not "where is this idea wrong".
+    // Closing the other end stops the target being pushed out of reach.
+    const v = evaluateEntry({
+      signal: "BUY",
+      entry: 150,
+      stopLoss: 149.5,      // risk 0.5
+      takeProfit1: 155,     // reward 5.0 -> RR 10
+      price: 150,
+      atr: 1,
+      mode: null,
+      direction: null,
+      indicators: { adx: 30, sma20: 149, sma50: 148 },
+    });
+    expect(v.ok).toBe(false);
+    expect(v.rejection).toBe("target_out_of_reach");
+  });
+
+  it("still allows an ordinary ratio", () => {
+    const v = evaluateEntry({
+      signal: "BUY",
+      entry: 150,
+      stopLoss: 149.5,
+      takeProfit1: 151,   // RR 2
+      price: 150,
+      atr: 1,
+      mode: null,
+      direction: null,
+      indicators: { adx: 30, sma20: 149, sma50: 148 },
+    });
+    expect(v.ok).toBe(true);
+    expect(v.riskReward).toBe(2);
+  });
+
+  it("brackets the ratio from both ends", () => {
+    expect(MAX_RISK_REWARD).toBeGreaterThan(MIN_RISK_REWARD);
   });
 });

@@ -137,6 +137,12 @@ export const en: Dict = {
       expectancyLine: (expectancy: string, sum: string) => `Expectancy ${expectancy} (total ${sum})`,
       rColumn: "P&L (R)",
       byRulebook: "Rulebook",
+      verdictRate: "Calls with a verdict",
+      leakLine: (wait: number, untriggered: number, expired: number) =>
+        `stood aside ${wait}%, never filled ${untriggered}%, expired ${expired}%`,
+      incoherentLine: (n: number) => `${n} with contradictory levels`,
+      legacyContract: (v: string) => `${v} (old contract)`,
+      mixedContracts: "These plans span two entry contracts, so no rate is shown. Under the old one a plan could go unfilled and unscored; under the new one it cannot. Split them with the rulebook breakdown to compare.",
       rulebookNone: "Before rules",
       frictionNote: "R is profit or loss in multiples of the planned risk (WIN = TP1 reached, LOSS = −1R). Frictionless: no spread or slippage is charged",
     },
@@ -152,6 +158,8 @@ export const en: Dict = {
         should_be_market: "Waits for a pullback in a running trend (would not fill)",
         stop_too_tight: "Stop inside the noise (would be hit by it)",
         poor_rr: "Risk/reward does not pay",
+        target_out_of_reach: "target too far to be reached in time",
+        market_closed: "the market was shut, so there was no price to enter at",
         incoherent: "Entry, stop and target contradict each other",
       },
       proposed: "Model's call",
@@ -163,6 +171,26 @@ export const en: Dict = {
       gateSaved: "→ It would have filled and been stopped out",
       gateOpen: "→ Still tracking",
       repaired: "The model's limit entry was moved to the market price because the trend was still running",
+    },
+    wait: {
+      title: "Standing aside, reviewed",
+      badge: "trade missed",
+      summary: (judged: number, missed: number, rate: number) =>
+        `Standing aside: of ${judged} judged calls, ${missed} (${rate}%) would have won on the smallest trade this app itself allows`,
+      verdicts: {
+        missed: "Standing aside was wrong — even the smallest allowed trade would have won",
+        correct: "Standing aside cost nothing — neither direction paid",
+        pending: "The review window has not closed yet",
+        unknown: "The data needed to judge this call is missing",
+      },
+      direction: (dir: string) => `Direction that paid: ${dir}`,
+      basis: "Trade tested",
+      basisNote: (risk: string, reward: string) =>
+        `Stop ${risk} / target ${reward} — the tightest stop the gate allows and the nearest target that still clears the risk/reward floor`,
+      reachedAt: "Target reached",
+      barsExamined: (n: number) => `${n} bars examined`,
+      horizon: (hours: number) => `${hours}h window, measured in open-market time`,
+      note: "A call that declines to trade is scored too: leave it unscored and standing aside becomes the answer that is never wrong",
     },
     postmortem: {
       title: "Why it missed (AI review)",

@@ -7,6 +7,7 @@ import {
   INTERVAL_MS,
   classifyOrder,
   downsamplePath,
+  finerRung,
   hasFutureCandles,
   isCoherentPlan,
   isDue,
@@ -734,5 +735,53 @@ describe("parseCandleTime", () => {
 
   it("is NaN for empty input", () => {
     expect(Number.isNaN(parseCandleTime(""))).toBe(true);
+  });
+});
+
+describe("the refinement ladder", () => {
+  it("has a rung below 15min, because 15min and 1h plans are judged on 15min bars", () => {
+    // EVAL_INTERVAL puts both on 15min, so `bar.ms > REFINE_MS` was false and
+    // their signal bar could never be split. Under a contract where every plan
+    // fills at bar zero, that turns a graze into a terminal, unscored result.
+    expect(finerRung(HOUR)).toEqual({ interval: "15min", ms: 15 * 60_000 });
+    expect(finerRung(15 * 60_000)).toEqual({ interval: "5min", ms: 5 * 60_000 });
+    // and it stops rather than asking for a rung the same size as the bar
+    expect(finerRung(5 * 60_000)).toBeNull();
+  });
+
+  it("does not let price from before the plan existed resolve it", async () => {
+    // The signal lands half way through its bar. The first half of that hour
+    // dipped through the stop — but the plan did not exist yet, so it cannot
+    // have been stopped there.
+    const created = at(0) + 30 * 60_000;
+    const row: OpenRow = {
+      ...buyLimit,
+      created_at: new Date(created).toISOString(),
+      entry_point: 150, stop_loss: 149.5, take_profit_1: 151,
+      take_profit_2: null, take_profit_3: null,
+      price_at_signal: 150, // a market order
+    };
+    const asked: string[] = [];
+    const fetchFine = async (_p: string, from: number, _to: number, interval: string) => {
+      asked.push(interval);
+      const t = (m: number) => new Date(from + m * 60_000).toISOString().slice(0, 19).replace("T", " ");
+      return [
+        candle(t(0), 150.0, 149.0),   // before the signal: through the stop
+        candle(t(15), 150.1, 149.6),  // still before
+        candle(t(30), 151.2, 150.0),  // the signal bar onwards: to the target
+        candle(t(45), 151.3, 151.0),
+      ];
+    };
+    const j = await judge(row, [
+      candle(stamp(0), 151.2, 149.0),
+      candle(stamp(1), 151.4, 151.0),
+    ], 5, "1h", fetchFine);
+    expect(asked[0]).toBe("15min");
+    // the pre-signal dip is discarded, so this is not a loss
+    expect(j.resolution).not.toBe("loss");
+    // and the sub-bar straddling the signal goes with it: its low is the
+    // pre-signal extreme, and keeping it would re-admit exactly what the
+    // filter exists to exclude
+    expect(j.evaluation.first_candle_at === null || Date.parse(j.evaluation.first_candle_at) >= created).toBe(true);
   });
 });

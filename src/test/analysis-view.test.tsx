@@ -158,13 +158,26 @@ describe("AnalysisHistory (DB records)", () => {
     },
   ];
 
-  it("shows the win rate over WIN/LOSS only, with a badge per outcome", () => {
+  it("takes the win rate over win/loss/expired, with a badge per outcome", () => {
     render(<AnalysisHistory records={records} />);
     expect(screen.getAllByText("勝率").length).toBeGreaterThan(0);
-    expect(screen.getByText("50%")).toBeInTheDocument(); // 1 win / 1 loss; the no-fill row is excluded
+    // 1 win, 1 loss, no expiry; the row that never filled is not a verdict
+    expect(screen.getByTestId("win-rate")).toHaveTextContent("50%");
     expect(screen.getByText("WIN")).toBeInTheDocument();
     expect(screen.getByText("LOSS")).toBeInTheDocument();
     expect(screen.getAllByText("未約定").length).toBeGreaterThan(0);
+  });
+
+  it("publishes what share of calls ever produced a verdict", () => {
+    render(<AnalysisHistory records={records} />);
+    const strip = screen.getByTestId("verdict-strip");
+    // 4 calls: a win, a loss, a WAIT and one that never filled. Only 2 of them
+    // ever produced a verdict, and the WAIT is in the denominator — leaving it
+    // out is exactly how "never trade, never be wrong" would hide.
+    expect(strip).toHaveTextContent("50%");
+    expect(strip).toHaveTextContent("(2/4)");
+    expect(strip).toHaveTextContent("見送り 25%");
+    expect(strip).toHaveTextContent("未約定 25%");
   });
 
   it("breaks the record down by timeframe, mode and confidence", () => {
@@ -472,5 +485,92 @@ describe("localisation", () => {
     expect(screen.queryByText("SHORT")).not.toBeInTheDocument();
     expect(screen.queryByText("売り")).not.toBeInTheDocument();
     unmount();
+  });
+});
+
+describe("AnalysisHistory across two entry contracts", () => {
+  const base = {
+    mode: "full", thesis: null, take_profit_2: null, take_profit_3: null,
+    price_at_signal: null, evaluation: null,
+  };
+  const row = (over: Partial<AnalysisRecord>): AnalysisRecord => ({
+    ...base, id: Math.random().toString(36).slice(2), pair: "USD/JPY", interval: "1h",
+    signal: "BUY", confidence: 70, entry_point: 150, stop_loss: 149, take_profit_1: 152,
+    outcome: "win", outcome_price: 152, created_at: "2026-09-01T00:00:00Z", closed_at: null,
+    ...over,
+  } as AnalysisRecord);
+
+  it("says why no rate is shown instead of rendering blanks", () => {
+    render(<AnalysisHistory records={[
+      row({ outcome: "win" }),
+      row({ outcome: "loss", plan_contract: "market_v1" }),
+    ]} />);
+    expect(screen.getByTestId("mixed-contracts")).toBeInTheDocument();
+    // and no win rate is claimed over the pooled rows
+    expect(screen.queryByTestId("win-rate")).toBeNull();
+  });
+
+  it("labels the old contract in the rulebook breakdown", () => {
+    render(<AnalysisHistory records={[
+      row({ outcome: "win", rulebook_version: 5 }),
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "ルール版" }));
+    expect(screen.getByText("v5（旧契約）")).toBeInTheDocument();
+  });
+
+  // A verdict computed every fifteen minutes and shown to nobody is not a
+  // verdict. WAIT is the one call that costs nothing to make, so the record
+  // has to say out loud how often the market went on to refute it.
+  const waitRow = (verdict: "missed" | "correct", over: Partial<AnalysisRecord> = {}) =>
+    row({
+      signal: "WAIT", outcome: "skipped", entry_point: null, stop_loss: null,
+      take_profit_1: null, outcome_price: null, price_at_signal: 150,
+      wait_check: {
+        verdict, direction: "BUY", r: 1.2, at: "2026-09-01T09:00:00Z",
+        price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
+        bars_examined: 40, horizon_ms: 48 * 3_600_000,
+        checked_at: "2026-09-01T12:00:00Z",
+      },
+      ...over,
+    });
+
+  it("publishes how often standing aside was the wrong call", () => {
+    render(<AnalysisHistory records={[
+      waitRow("missed"), waitRow("correct"), waitRow("correct"), waitRow("correct"),
+    ]} />);
+    const strip = screen.getByTestId("wait-strip");
+    expect(strip.textContent).toContain("判定済み 4件");
+    expect(strip.textContent).toContain("1件（25%）");
+  });
+
+  it("says nothing about standing aside before anything has been judged", () => {
+    render(<AnalysisHistory records={[row({ signal: "WAIT", outcome: "skipped" })]} />);
+    expect(screen.queryByTestId("wait-strip")).toBeNull();
+  });
+
+  it("marks the row the market refuted and shows the trade it was judged on", () => {
+    render(<AnalysisHistory records={[waitRow("missed")]} />);
+    expect(screen.getByText("取れていた")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /WAIT/ }));
+    const detail = screen.getByTestId("wait-detail");
+    expect(detail.textContent).toContain("見送るべきではなかった");
+    // the levels are shown so the judgement can be checked by hand
+    expect(detail.textContent).toContain("検証したトレード");
+    expect(detail.textContent).toContain("検証した足 40本");
+  });
+
+  it("does not claim a verdict on a WAIT the tracker has not reached one on", () => {
+    render(<AnalysisHistory records={[waitRow("correct", {
+      wait_check: {
+        verdict: "pending", direction: null, r: null, at: null, price: 150, atr: 0.2,
+        risk: null, reward: null, bars_examined: 4, horizon_ms: 48 * 3_600_000,
+        checked_at: "2026-09-01T12:00:00Z",
+      },
+    })]} />);
+    expect(screen.queryByText("取れていた")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /WAIT/ }));
+    const detail = screen.getByTestId("wait-detail");
+    expect(detail.textContent).toContain("検証期間が終わっていません");
+    expect(detail.textContent).not.toContain("検証したトレード");
   });
 });
