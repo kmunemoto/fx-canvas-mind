@@ -168,6 +168,31 @@ export const isMarketClosed = (ms: number): boolean => {
   return false;
 };
 
+// The same week, asked the other way round.
+//
+// isMarketClosed answers "may I throw this bar away?", so it names only the
+// hours that are shut under every daylight-saving rule — being wrong there
+// destroys real data. Coverage asks the opposite question: "is this absence
+// evidence that the feed failed?", and there the conservative answer is the
+// widest possible closure, because an hour that MIGHT have been shut is not
+// evidence of anything.
+//
+// One predicate cannot do both. Using the narrow one for coverage counted the
+// summer band between the real 21:00Z Friday close and the notional 22:00Z as
+// open market with no bars in it: 60 minutes, four missing 15min intervals,
+// past the three-interval tolerance. Every 15min window spanning a weekend was
+// therefore judged incomplete and sent back to the mid feed — silently, and
+// every weekend.
+export const isPossiblyClosed = (ms: number): boolean => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  const hour = d.getUTCHours();
+  if (day === 6) return true; // Saturday
+  if (day === 5 && hour >= 21) return true; // Friday, from the earliest close
+  if (day === 0 && hour < 22) return true; // Sunday, until the latest open
+  return false;
+};
+
 // Pair the two sides by timestamp. A bar present on only one side is dropped:
 // judging a level against half a book is worse than not judging it.
 export const mergeSides = (
@@ -219,11 +244,13 @@ export const usableBars = (bars: QuoteCandle[], _intervalMs: number, nowMs: numb
 // inside the window with no bar in it? Buckets that come back empty are then
 // merely uninteresting, and a real outage is still caught.
 
-// Open-market milliseconds between two instants, sampled at the interval
+// Milliseconds in which the market was CERTAINLY open, sampled at the
+// interval. Uses the widest closure (isPossiblyClosed) on purpose: a gap is
+// only alleged over time the market cannot have been shut.
 const openSpan = (fromMs: number, toMs: number, intervalMs: number): number => {
   if (!(toMs > fromMs) || intervalMs <= 0) return 0;
   let open = 0;
-  for (let t = fromMs; t < toMs; t += intervalMs) if (!isMarketClosed(t)) open += intervalMs;
+  for (let t = fromMs; t < toMs; t += intervalMs) if (!isPossiblyClosed(t)) open += intervalMs;
   return open;
 };
 
