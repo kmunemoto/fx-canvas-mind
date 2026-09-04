@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v24-2026-09-04T04:00:00Z";
+const FUNCTION_VERSION = "analyze-v25-2026-09-04T11:10:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -39,6 +39,7 @@ import {
 import { parseRules, selectPromptRules } from "./rules.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
+import { PLAN_CONTRACT } from "../_shared/contract.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -744,7 +745,9 @@ Deno.serve(async (req: Request) => {
       if (isRecord(rulebook)) {
         const v = asFiniteNumber(rulebook.version);
         rulebookVersion = v === null ? null : Math.round(v);
-        const shown = selectPromptRules(parseRules(rulebook.rules), locale);
+        // Only the rules the analyst can still act on. A rule written for the
+        // previous contract stays in the book but never reaches the prompt.
+        const shown = selectPromptRules(parseRules(rulebook.rules), locale, PLAN_CONTRACT);
         learnedRules = shown.text;
         rulesShown = shown.ids;
       }
@@ -1229,7 +1232,7 @@ Deno.serve(async (req: Request) => {
       proposed_tp1: proposed.tp1,
       // Under market_v1 the model declares no order type — the server sets
       // the entry — so what is worth recording is the contract itself.
-      contract: "market_v1",
+      contract: PLAN_CONTRACT,
       // The plan's geometry, recorded on every row so the floors can be
       // calibrated from what actually happened rather than guessed.
       //
@@ -1390,7 +1393,7 @@ Deno.serve(async (req: Request) => {
           // Which contract this plan was made under. Never inferred: a reader
           // that has to guess will guess the legacy value and the two eras
           // will pool silently.
-          plan_contract: "market_v1",
+          plan_contract: PLAN_CONTRACT,
           priced_at: pricedAtIso,
           outcome: trackable ? "pending" : "skipped",
         }),
@@ -1439,7 +1442,7 @@ Deno.serve(async (req: Request) => {
             entry_check: entryCheck,
             context,
             rulebook_version: rulebookVersion,
-            plan_contract: "market_v1",
+            plan_contract: PLAN_CONTRACT,
             priced_at: pricedAtIso,
             outcome: "pending",
             shadow: true,

@@ -135,6 +135,9 @@ export const confidenceBandKey = (confidence: number | null): string => {
 // Rows written before the column existed, and rows read by an older client,
 // are legacy by definition — the contract only ever moved forwards.
 export const LEGACY_CONTRACT: PlanContract = "entry_chosen_v1";
+// The contract plans are written under now. Mirrors PLAN_CONTRACT in
+// supabase/functions/_shared/contract.ts; the parity test pins them together.
+export const CURRENT_CONTRACT: PlanContract = "market_v1";
 export const contractKey = (r: AnalysisRecord): PlanContract => r.plan_contract ?? LEGACY_CONTRACT;
 
 // Keyed by contract AND rulebook version. Pooling the two would let a change

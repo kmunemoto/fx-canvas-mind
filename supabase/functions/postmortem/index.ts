@@ -28,6 +28,7 @@ import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
 import { EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
 import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
+import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   CONSOLIDATION_SCHEMA,
   DIAGNOSIS_SCHEMA,
@@ -38,13 +39,14 @@ import {
   parseDiagnosis,
   revisionDue,
   summarizeRecord,
+  fairShare,
   withClusters,
   type LessonRow,
   type PlanSummary,
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v4-2026-09-04T07:30:00Z";
+const POSTMORTEM_VERSION = "postmortem-v6-2026-09-04T11:55:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -62,10 +64,22 @@ const MAX_REVISIONS = 1;
 // Supabase kills the worker at 150s; leave room to write results
 const WALL_CLOCK_BUDGET_MS = 130_000;
 const START_DIAGNOSIS_BEFORE_MS = 75_000;
-const START_CONSOLIDATION_BEFORE_MS = 95_000;
+// Sized for one plan: a diagnosis reads a single set of bars and answers
+// about a single trade.
 const LLM_TIMEOUT_MS = 45_000;
+// A consolidation turn reads sixty lessons, three hundred plans and the
+// whole rulebook, and rewrites the book. Sharing the diagnosis timeout made
+// it time out on every single run: the loop was trying and never finishing,
+// which reads exactly like the freeze it was supposed to end.
+const MIN_CONSOLIDATION_MS = 45_000;
+const MAX_CONSOLIDATION_MS = 110_000;
+// Held back so a revision that did finish is still written down
+const WRITE_RESERVE_MS = 10_000;
 const RECENT_LESSONS = 60;
 const RECENT_ROWS = 300;
+// Rows fetched per row kept, so the round-robin across accounts has a pool
+// deeper than the busiest account's recent output
+const FAIR_FETCH_MULTIPLE = 3;
 const HISTORY_KEEP = 20;
 // Bars fetched ahead of the signal so the judge's window covers it
 const PRE_SIGNAL_MS = 6 * HOUR;
@@ -148,6 +162,11 @@ Deno.serve(async (req: Request) => {
 
   const startedAt = Date.now();
   const elapsed = () => Date.now() - startedAt;
+  // What a consolidation turn may spend: everything left of the wall clock,
+  // less the reserve for writing the result, and never more than one turn
+  // can usefully use.
+  const consolidationBudget = () =>
+    Math.min(MAX_CONSOLIDATION_MS, WALL_CLOCK_BUDGET_MS - elapsed() - WRITE_RESERVE_MS);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -358,8 +377,20 @@ Deno.serve(async (req: Request) => {
       "anthropic-version": "2023-06-01",
     };
     let effortEnabled = true;
-    const askModel = async (system: string, user: string, schema: unknown, maxTokens: number): Promise<unknown> => {
+    const askModel = async (
+      system: string,
+      user: string,
+      schema: unknown,
+      maxTokens: number,
+      timeoutMs = LLM_TIMEOUT_MS,
+    ): Promise<unknown> => {
+      // A deadline for the whole call, not a fresh timeout per attempt: the
+      // retry below must not be able to spend the budget twice and outlive
+      // the worker.
+      const deadline = Date.now() + timeoutMs;
       for (let attempt = 0; attempt < 2; attempt++) {
+        const left = deadline - Date.now();
+        if (left <= 0) throw new Error("ran out of time before the retry");
         const request: JsonRecord = {
           model: MODEL,
           max_tokens: maxTokens,
@@ -373,7 +404,7 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: anthropicHeaders,
           body: JSON.stringify(request),
-          signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+          signal: AbortSignal.timeout(left),
         });
         const raw = await res.text();
         const parsed = (() => {
@@ -609,12 +640,49 @@ Deno.serve(async (req: Request) => {
     // version (or a day has passed with at least one), so that each version
     // stays in force long enough for the plans made under it to settle and
     // be scored against it. A hand-run with `consolidate` skips the wait.
+    //
+    // Whether this run happened to write a lesson is NOT part of that
+    // decision, though it used to be, and that is how the rulebook froze:
+    // this branch was gated on `newLessons > 0`, so once the diagnosis
+    // backlog cleared, every tick had nothing new to write and skipped the
+    // revision — while lessons that had already accumulated sat unconsolidated
+    // indefinitely. Measured: seventeen hours and seven lessons past due,
+    // across roughly seventy ticks, none of which even looked. `revisionDue`
+    // below already asks the only question that matters — how much has
+    // gathered since the version in force — so ask it every time.
     let rulebook: JsonRecord | null = null;
-    if (rulebookUnavailable && (newLessons > 0 || options.consolidate)) {
+    // How many accounts the shared rulebook is actually being learned from.
+    // Reported because "one" and "many" are different systems, and the
+    // difference is invisible in the rules themselves.
+    let lessonContributors = 0;
+    let recordContributors = 0;
+    if (rulebookUnavailable) {
       errors.push("rulebook: unavailable, not revised");
-    } else if ((newLessons > 0 || options.consolidate) && elapsed() < START_CONSOLIDATION_BEFORE_MS) {
+    } else if (consolidationBudget() < MIN_CONSOLIDATION_MS) {
+      // The other half of the freeze: running out of clock here was silent,
+      // and it got likelier the more there was to learn from, because each
+      // diagnosis ahead of it costs a model call. Say so, so a rulebook that
+      // is not moving can be told from one that has nothing to do. The gate
+      // is the budget itself, so it defers exactly when what is left is too
+      // little to finish in rather than at a threshold guessed separately.
+      rulebook = {
+        version: current ? numberOrNull(current.version) ?? 0 : 0,
+        revised: false,
+        reason: "deferred_time_budget",
+        elapsed_ms: elapsed(),
+        budget_ms: consolidationBudget(),
+      };
+      errors.push(`rulebook: deferred (time budget, ${elapsed()}ms elapsed)`);
+    } else {
       const lessonSelect = "analysis_id,user_id,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,rule_blamed,rule_credited";
-      const lessonRows = (await readRowsOrNull(`lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS}`)) ?? [];
+      // Over-fetched so the round-robin has something to choose from: taking
+      // the newest RECENT_LESSONS and only then sharing them out would already
+      // have thrown away every account the busiest one outran.
+      const lessonPool = (await readRowsOrNull(
+        `lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS * FAIR_FETCH_MULTIPLE}`,
+      )) ?? [];
+      const lessonRows = fairShare(lessonPool, (l) => strOrNull(l.user_id) ?? "", RECENT_LESSONS);
+      lessonContributors = new Set(lessonPool.map((l) => strOrNull(l.user_id) ?? "")).size;
       // The lessons the current rules cite stay in evidence even once they
       // are older than the recent window, so a rule's support cannot decay
       // just because time passed. If they cannot be read this run, the
@@ -679,9 +747,11 @@ Deno.serve(async (req: Request) => {
         // reason: without the first the two entry eras pool into one win
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
-        const recordRows = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict&order=created_at.desc&limit=${RECENT_ROWS}`,
+        const recordPool = await readRows(
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
+        const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
+        recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;
         const record: RecordRow[] = recordRows.map((r) => ({
           id: strOrNull(r.id) ?? undefined,
           user_id: strOrNull(r.user_id),
@@ -707,11 +777,15 @@ Deno.serve(async (req: Request) => {
         const prompt = buildConsolidationPrompt(previousRules, lessons, stats);
         let answer: unknown = null;
         try {
-          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 4000);
+          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 4000, consolidationBudget());
         } catch (err) {
           errors.push(`rulebook: model ${err instanceof Error ? err.message : String(err)}`);
         }
-        const consolidated = parseConsolidation(answer, previousRules, nowIso, lessons);
+        // Stamped with the contract the editor was writing for: a rule it
+        // emits under this prompt is a rule it says the analyst can follow
+        // now. Rules it did not emit keep their old contract and stay out of
+        // the prompt (analyze/rules.ts inForce).
+        const consolidated = parseConsolidation(answer, previousRules, nowIso, lessons, PLAN_CONTRACT);
         if (!consolidated) {
           errors.push("rulebook: no usable answer");
         } else {
@@ -746,6 +820,8 @@ Deno.serve(async (req: Request) => {
       due: rows.length,
       diagnosed: diagnosed.length,
       lessons: newLessons,
+      lesson_contributors: lessonContributors,
+      record_contributors: recordContributors,
       rulebook,
       results: diagnosed,
       errors,

@@ -252,13 +252,13 @@ const Index = () => {
       // History is best-effort; the analysis flow must not depend on it
     }
     try {
-      const { data, error } = await supabase
-        .from("rulebook")
-        .select("version,rules,summary,updated_at")
-        .eq("id", 1)
-        .maybeSingle();
+      // Through the function, not the table: the stored row also carries the
+      // analysis ids each rule was written from — other accounts' plans, which
+      // this reader cannot open anyway — plus the pooled statistics and every
+      // previous version. The panel draws none of it.
+      const { data, error } = await supabase.rpc("rulebook_for_client");
       if (!error && data) {
-        setRulebook(data as Rulebook);
+        setRulebook(data as unknown as Rulebook);
       }
     } catch {
       // The learned rules are a display of what the analyzer knows, nothing

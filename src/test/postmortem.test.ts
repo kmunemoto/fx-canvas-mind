@@ -12,6 +12,7 @@ import {
   buildDiagnosisPrompt,
   citationAllowed,
   clusterIds,
+  fairShare,
   parseConsolidation,
   parseDiagnosis,
   revisionDue,
@@ -23,6 +24,7 @@ import {
 } from "../../supabase/functions/postmortem/prompt.ts";
 import {
   MAX_PROMPT_CHARS,
+  inForce,
   parseRules,
   renderLearnedRules,
   type Rule,
@@ -660,12 +662,16 @@ describe("evidence bookkeeping", () => {
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-04T05:00:00Z" },
       { pair: "USD/JPY", signal: "BUY", created_at: "2026-09-03T05:00:00Z" },
       { pair: "EUR/USD", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
-      // another user's identical plan is their decision, not this one's
-      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T05:00:00Z", user_id: "u2" },
+      // Another account's identical plan is the SAME market situation. The
+      // rulebook is shared, so this is one decision by one analyst delivered
+      // to two people — one piece of evidence about it, not two. Keying the
+      // cluster by user made a rule's support grow with the subscriber count.
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
     ]);
     expect(ids[0]).not.toBe(ids[1]);
     expect(ids[2]).not.toBe(ids[1]);
-    expect(new Set(ids).size).toBe(6);
+    expect(ids[5]).toBe(ids[0]);
+    expect(new Set(ids).size).toBe(5);
     // still open when the next one was made: the same bet again
     const open = clusterIds([
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: null },
@@ -744,6 +750,59 @@ describe("rules in the analyze prompt", () => {
     expect(text.split("\n").length - 1).toBeLessThanOrEqual(12);
   });
 
+  it("takes the newest from each account in turn, not the newest overall", () => {
+    // One shared rulebook, many accounts. Read newest-first with a fixed
+    // limit, a single busy account fills the whole window and the rulebook
+    // quietly becomes that person's — their pairs, their timeframes, their
+    // read of the market — while everyone else never enters it.
+    const heavy = Array.from({ length: 10 }, (_, i) => ({ u: "busy", n: i }));
+    const quiet = [{ u: "quiet", n: 100 }, { u: "quiet", n: 101 }];
+    const picked = fairShare([...heavy, ...quiet], (x) => x.u, 4);
+    expect(picked.map((x) => x.u)).toEqual(["busy", "quiet", "busy", "quiet"]);
+    // With one contributor it is plain newest-first, unchanged
+    expect(fairShare(heavy, (x) => x.u, 3).map((x) => x.n)).toEqual([0, 1, 2]);
+    // Never invents rows, and never drops one it could have taken
+    expect(fairShare(quiet, (x) => x.u, 99)).toHaveLength(2);
+    expect(fairShare(heavy, (x) => x.u, 0)).toEqual([]);
+  });
+
+  it("stamps the contract the editor was writing for, and leaves restored rules on theirs", () => {
+    // Emitting a rule under this revision's prompt IS the statement that the
+    // analyst can follow it now. A rule the editor never looked at — restored
+    // below to fill the book back up — must not be revived by that silence.
+    // Four previous rules and one re-emitted: two of the other three are
+    // dropped by MAX_RULES_REMOVED and the third is restored untouched, which
+    // is the case this test is about.
+    const legacy = (id: string, support: number): Rule => ({
+      id, text_ja: "旧", text_en: `old ${id}`, cause: "entry_too_far", support,
+      scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1",
+      kind: "heuristic", supported_by: ["L1"],
+    });
+    const previous: Rule[] = [
+      legacy("old1", 1),
+      legacy("old2", 2),
+      legacy("old3", 9),
+      { id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", support: 2, scope: null, since: "2026-09-01T00:00:00Z", contract: "entry_chosen_v1", kind: "constraint", supported_by: ["L2"] },
+    ];
+    const lessons = [
+      { analysis_id: "L1", cluster: "c1", cause: "entry_too_far" },
+      { analysis_id: "L2", cluster: "c2", cause: "stop_too_tight" },
+    ];
+    const out = parseConsolidation(
+      { rules: [{ id: "keep", text_ja: "残", text_en: "keep", cause: "stop_too_tight", kind: "constraint", scope: null, supported_by: ["L2"] }], summary_ja: "s", summary_en: "s" },
+      previous,
+      T0,
+      lessons,
+      "market_v1",
+    );
+    const byId = new Map((out?.rules ?? []).map((r) => [r.id, r]));
+    expect(byId.get("keep")?.contract).toBe("market_v1");
+    // old3 was not re-emitted; it comes back only as a restore, so it keeps
+    // the contract it was written for and stays out of the prompt
+    expect(byId.get("old3")?.contract).toBe("entry_chosen_v1");
+    expect(inForce(out?.rules ?? [], "market_v1").map((r) => r.id)).toEqual(["keep"]);
+  });
+
   it("reads stored rows defensively", () => {
     const parsed = parseRules([
       { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: "3", scope: "", since: null },
@@ -752,8 +811,8 @@ describe("rules in the analyze prompt", () => {
       "junk",
     ]);
     expect(parsed).toEqual([
-      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: 3, scope: null, since: null, kind: "heuristic", supported_by: [] },
-      { id: "r2", text_ja: "only english", text_en: "only english", cause: "unknown", support: 1, scope: null, since: null, kind: "heuristic", supported_by: [] },
+      { id: "r1", text_ja: "a", text_en: "b", cause: "x", support: 3, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
+      { id: "r2", text_ja: "only english", text_en: "only english", cause: "unknown", support: 1, scope: null, since: null, contract: null, kind: "heuristic", supported_by: [] },
     ]);
   });
 });

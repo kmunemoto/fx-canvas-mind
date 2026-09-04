@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { isMarketClosed, isPossiblyClosed } from "../../supabase/functions/_shared/market-hours";
+import { PLAN_CONTRACT } from "../../supabase/functions/_shared/contract";
 
 const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
 
@@ -57,8 +58,20 @@ describe("the model can no longer choose an entry price", () => {
   it("stamps the contract on every row it writes", () => {
     // Two inserts: the published plan and the shadow row. A writer that omits
     // it joins the legacy bucket silently, because the column defaults.
-    const writes = analyze.match(/plan_contract: "market_v1"/g) ?? [];
+    const writes = analyze.match(/plan_contract: PLAN_CONTRACT,/g) ?? [];
     expect(writes).toHaveLength(2);
+    // The string itself lives in one place now, because three things agree on
+    // it: what analyze writes, which rules the prompt may show, and which
+    // rows the statistics may pool.
+    expect(PLAN_CONTRACT).toBe("market_v1");
+    expect(analyze).not.toMatch(/"market_v1"/);
+  });
+
+  it("shows the analyst only the rules its own contract allows it to follow", () => {
+    // Seven of the nine rules in the live book were about placing a limit
+    // entry when this shipped — a move that no longer exists — and all nine
+    // were being rendered into the prompt.
+    expect(analyze).toContain("selectPromptRules(parseRules(rulebook.rules), locale, PLAN_CONTRACT)");
   });
 
   it("prices from the wall clock, never from the forming bar's own stamp", () => {
