@@ -30,6 +30,23 @@ import { useNavigate } from "react-router-dom";
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 const EXPECTED_ANALYZE_VERSION = "analyze-v24-2026-09-04T04:00:00Z";
+// Every column the history view and the statistics actually read.
+//
+// PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
+// newer fields optional, so a column left out of this string arrives as
+// undefined and every reader quietly falls back to its default. That is how
+// `plan_contract` shipped inert: the guard that refuses to pool two entry
+// contracts saw `undefined ?? "entry_chosen_v1"` on every row and concluded
+// the population was uniform. src/test/history-columns.test.ts pins this list
+// against the fields the statistics read.
+export const HISTORY_COLUMNS = [
+  "id", "pair", "interval", "mode", "signal", "confidence", "thesis",
+  "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
+  "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
+  "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
+  "rulebook_version", "plan_contract", "wait_check",
+].join(",");
+
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
 
 const toStringArray = (value: unknown): string[] => {
@@ -225,7 +242,7 @@ const Index = () => {
       // folded under their WAIT row by the history view
       const { data, error } = await supabase
         .from("analyses")
-        .select("id,pair,interval,mode,signal,confidence,thesis,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,price_at_signal,outcome,outcome_price,created_at,closed_at,evaluation,entry_check,postmortem,shadow,shadow_of,rulebook_version")
+        .select(HISTORY_COLUMNS)
         .order("created_at", { ascending: false })
         .limit(40);
       if (!error && Array.isArray(data)) {

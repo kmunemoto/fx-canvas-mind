@@ -161,7 +161,18 @@ export interface OutcomeEvaluation {
 // entry_chosen_v1 contract, where the model picked the entry price and the
 // server sometimes moved it. Under market_v1 the server sets the entry, so
 // there is nothing to move and the fields are absent.
-export type EntryRejection = "too_far" | "should_be_market" | "stop_too_tight" | "poor_rr" | "incoherent";
+export type EntryRejection =
+  | "too_far"
+  | "should_be_market"
+  | "stop_too_tight"
+  | "poor_rr"
+  // The target was so far out that the ratio stopped meaning anything
+  | "target_out_of_reach"
+  // The server refused because the market was shut: "enter now" was not an
+  // available action. Recorded apart from a model WAIT — one is the analyst
+  // declining, the other is the server declining for it.
+  | "market_closed"
+  | "incoherent";
 
 export interface EntryCheck {
   proposed_signal: "BUY" | "SELL" | "WAIT";
@@ -177,9 +188,7 @@ export interface EntryCheck {
   // Recorded so a drift in how the model places stops and targets is visible
   // before it becomes a change in the win rate.
   contract?: string;
-  stop_atr?: number | null;
   tp1_atr?: number | null;
-  atr?: number | null;
   priced_at?: string;
   stop_atr?: number | null;
   risk_reward: number | null;

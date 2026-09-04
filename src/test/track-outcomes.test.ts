@@ -779,5 +779,9 @@ describe("the refinement ladder", () => {
     expect(asked[0]).toBe("15min");
     // the pre-signal dip is discarded, so this is not a loss
     expect(j.resolution).not.toBe("loss");
+    // and the sub-bar straddling the signal goes with it: its low is the
+    // pre-signal extreme, and keeping it would re-admit exactly what the
+    // filter exists to exclude
+    expect(j.evaluation.first_candle_at === null || Date.parse(j.evaluation.first_candle_at) >= created).toBe(true);
   });
 });

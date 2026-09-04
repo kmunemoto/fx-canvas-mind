@@ -58,6 +58,23 @@ export interface WaitCheck {
   checked_at: string;
 }
 
+// Where a horizon of `horizonMs` of OPEN market ends, starting from `fromMs`.
+// Walked at a coarse step because the answer only has to be right to within an
+// hour: the alternative is grading a Friday WAIT against a weekend.
+const HORIZON_STEP_MS = 30 * 60_000;
+export const marketHorizonEnd = (fromMs: number, horizonMs: number): number => {
+  let open = 0;
+  let t = fromMs;
+  // A hard stop so a pathological input cannot spin: at worst this walks four
+  // weeks of wall clock to bank the requested open time.
+  const limit = fromMs + horizonMs + 28 * 24 * 60 * 60_000;
+  while (open < horizonMs && t < limit) {
+    if (!isMarketClosed(t)) open += HORIZON_STEP_MS;
+    t += HORIZON_STEP_MS;
+  }
+  return t;
+};
+
 // The tightest stop the gate would allow, and the nearest target that still
 // clears the risk/reward floor. Both come from the app's own constants: a
 // WAIT is judged against the least the app would have demanded of a trade,
@@ -132,7 +149,16 @@ export const judgeWait = (
   const { risk, reward } = minimalTrade(atr);
   const withLevels = { ...base, risk, reward };
 
-  const until = input.signalMs + input.horizonMs;
+  // The horizon is MARKET time, not wall clock.
+  //
+  // Measured in wall clock, a WAIT issued on a Friday spends most of its
+  // 48-hour window on a shut market: almost no bars survive the weekend
+  // filter, neither direction is stopped, the window runs out, and the call is
+  // graded "correct" on no evidence at all. Since the whole point is to detect
+  // over-caution, a WAIT that grades itself correct for free is the failure
+  // mode to avoid. Walk forward one interval at a time and only count the
+  // hours the market was open.
+  const until = marketHorizonEnd(input.signalMs, input.horizonMs);
   const usable = bars
     .filter((b) => b.t > input.signalMs && b.t <= Math.min(until, nowMs))
     .filter((b) => !isMarketClosed(b.t))

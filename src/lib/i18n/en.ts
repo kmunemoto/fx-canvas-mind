@@ -158,6 +158,8 @@ export const en: Dict = {
         should_be_market: "Waits for a pullback in a running trend (would not fill)",
         stop_too_tight: "Stop inside the noise (would be hit by it)",
         poor_rr: "Risk/reward does not pay",
+        target_out_of_reach: "target too far to be reached in time",
+        market_closed: "the market was shut, so there was no price to enter at",
         incoherent: "Entry, stop and target contradict each other",
       },
       proposed: "Model's call",

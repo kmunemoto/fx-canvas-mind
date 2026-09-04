@@ -644,7 +644,15 @@ export const judgePlan = async (
       // the plan existed. Price that had already traded cannot resolve a plan
       // that was not yet written, so those sub-bars are dropped rather than
       // allowed to stop out a trade retroactively.
-      .filter((x) => sinceMs === undefined || x.t + rung.ms > sinceMs)
+      //
+      // The sub-bar CONTAINING the signal goes too. Its high and low span both
+      // sides of the moment the plan was written, so keeping it re-admits the
+      // pre-signal extreme through the back door — and under market_v1, where
+      // the trade is open from the first instant, that extreme resolves it.
+      // Losing at most one fine bar of genuinely post-signal range is the
+      // cheaper error: the next bar is along in five minutes, and the trade
+      // cannot be decided by something that had already happened.
+      .filter((x) => sinceMs === undefined || x.t >= sinceMs)
       .map((x) => ({ ...x, mt: bar.mt + (x.t - bar.t) }));
     return bars.length > 0 ? bars : null;
   };

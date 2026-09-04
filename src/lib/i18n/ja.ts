@@ -166,6 +166,8 @@ export const ja = {
         should_be_market: "トレンド継続中に戻りを待つ指値（約定しない）",
         stop_too_tight: "損切りが近すぎる（ノイズで刈られる）",
         poor_rr: "リスクリワードが割に合わない",
+        target_out_of_reach: "利確が遠すぎて期限内に届かない",
+        market_closed: "市場が閉まっていた（成行で入れない）",
         incoherent: "エントリー・損切り・利確の水準が矛盾",
       },
       proposed: "AIの提案",

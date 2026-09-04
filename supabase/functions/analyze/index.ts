@@ -38,7 +38,7 @@ import {
 
 import { parseRules, selectPromptRules } from "./rules.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
-import { isMarketClosed } from "../_shared/market-hours.ts";
+import { isPossiblyClosed } from "../_shared/market-hours.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -658,6 +658,24 @@ Deno.serve(async (req: Request) => {
       }, 402);
     }
 
+    // Refuse before spending anything.
+    //
+    // Every plan is now entered at the price on screen, so with the market
+    // shut there is no price to enter at and nothing worth analysing. The
+    // late check at check_entry stays — the market can close during the 20-40
+    // seconds the model takes — but catching it here means the user is not
+    // charged for a model call whose only possible answer is "not now", and
+    // it is refused in a second rather than a minute.
+    stage = "check_market_hours";
+    if (isPossiblyClosed(Date.now())) {
+      return json({
+        ok: false,
+        error: L.marketClosed,
+        diagnostics: { error_stage: "market_closed", stage },
+        market_closed: true,
+      }, 409);
+    }
+
     const limits: Record<string, number> = {
       light: 10,
       standard: 30,
@@ -1149,14 +1167,22 @@ Deno.serve(async (req: Request) => {
     // shut. Without this a plan written on a Friday evening is judged by
     // filling at the Sunday reopen, across the weekend gap — which can be
     // written up as a large win that nobody could have taken.
-    const marketShut = isMarketClosed(Date.now());
+    // The WIDE predicate, deliberately. isMarketClosed names only the hours
+    // that are shut under every daylight-saving rule — right for deciding
+    // whether to discard a bar, wrong here. Refusing to publish is the
+    // conservative act: if the market MIGHT be shut there is no reliable "now"
+    // to enter at, and publishing anyway is what lets a weekend gap be written
+    // up as a trade nobody could have taken. The narrow one left a one-hour
+    // hole every week.
+    const marketShut = isPossiblyClosed(Date.now());
 
     let entryRejected = false;
+    let rejectionReason: string | null = null;
     if (marketShut || (!entryVerdict.ok && entryVerdict.rejection)) {
       entryRejected = true;
-      const rejection: string = marketShut ? "market_closed" : (entryVerdict.rejection ?? "unknown");
+      rejectionReason = marketShut ? "market_closed" : (entryVerdict.rejection ?? "unknown");
       console.warn("Entry rejected", {
-        rejection,
+        rejection: rejectionReason,
         proposedSignal,
         stopAtr: entryVerdict.stopAtr,
         riskReward: entryVerdict.riskReward,
@@ -1164,7 +1190,7 @@ Deno.serve(async (req: Request) => {
       });
       normalizedAnalysis.warnings = [
         marketShut ? L.marketClosed : L.entryRejected({
-          rejection,
+          rejection: rejectionReason,
           signal: proposedSignal,
           distanceAtr: entryVerdict.distanceAtr,
           stopAtr: entryVerdict.stopAtr,
@@ -1230,7 +1256,12 @@ Deno.serve(async (req: Request) => {
       distance_atr: entryVerdict.distanceAtr,
       stop_atr: entryVerdict.stopAtr,
       risk_reward: entryVerdict.riskReward,
-      rejection: entryVerdict.rejection,
+      // The reason actually acted on, not just the shape gate's opinion. A
+      // market_closed refusal used to be logged and dropped, leaving the row
+      // identical to a plan the model itself declined — so the server's own
+      // refusals were invisible, and the WAIT scorer graded them as the
+      // analyst's judgement.
+      rejection: entryRejected ? rejectionReason : entryVerdict.rejection,
       repair_rejection: entryVerdict.repairRejection,
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
       price: entrySnapshot.price,

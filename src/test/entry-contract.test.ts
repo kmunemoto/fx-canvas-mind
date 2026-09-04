@@ -70,8 +70,31 @@ describe("the model can no longer choose an entry price", () => {
   });
 
   it("refuses to publish an 'enter now' plan while the market is shut", () => {
-    expect(analyze).toContain("const marketShut = isMarketClosed(Date.now());");
+    // The WIDE predicate. isMarketClosed names only the hours shut under every
+    // daylight-saving rule, which is right for deciding whether to discard a
+    // bar and wrong for deciding whether to publish: it left a one-hour window
+    // each week in which an "enter now" plan went out into a market that may
+    // already have closed, and the weekend gap then reads as a trade.
+    expect(analyze).toContain("const marketShut = isPossiblyClosed(Date.now());");
     expect(analyze).toContain("marketShut ? L.marketClosed");
+    expect(analyze).not.toContain("isMarketClosed(Date.now())");
+  });
+
+  it("refuses before spending a model call, not after", () => {
+    // The late check alone meant every shut-market request paid for a model
+    // turn and was then refunded — free analyses all weekend, and a minute of
+    // waiting for an answer that was never available.
+    const early = analyze.indexOf('stage = "check_market_hours"');
+    const model = analyze.indexOf("https://api.anthropic.com/v1/messages");
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBeLessThan(model);
+  });
+
+  it("records WHY the server refused, not just that the gate was happy", () => {
+    // A market_closed refusal used to be logged and dropped, leaving the row
+    // indistinguishable from a plan the model itself declined — so the WAIT
+    // scorer graded the server's refusal as the analyst's judgement.
+    expect(analyze).toContain("rejection: entryRejected ? rejectionReason : entryVerdict.rejection");
   });
 });
 

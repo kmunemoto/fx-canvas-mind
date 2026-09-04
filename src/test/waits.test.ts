@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { judgeWait, minimalTrade, type WaitBar } from "../../supabase/functions/track-outcomes/waits";
+import { judgeWait, marketHorizonEnd, minimalTrade, type WaitBar } from "../../supabase/functions/track-outcomes/waits";
 import { MIN_RISK_REWARD, MIN_STOP_ATR } from "../../supabase/functions/analyze/entry";
 
 const HOUR = 60 * 60 * 1000;
@@ -95,7 +95,29 @@ describe("scoring a WAIT", () => {
       sat + 72 * HOUR,
     );
     expect(w.bars_examined).toBe(0);
-    expect(w.verdict).toBe("correct");
+    // and it does NOT call the WAIT correct on that: no bars is no evidence
+    expect(w.verdict).toBe("pending");
+  });
+
+  it("counts the horizon in market time, so a weekend cannot grade a WAIT for free", () => {
+    // Measured in wall clock, a Friday WAIT spends its 48 hours mostly on a
+    // shut market: no bars survive the filter, nothing is stopped, the window
+    // expires and the call is graded "correct" having seen nothing. Since the
+    // whole point is to catch over-caution, that is the one verdict a WAIT
+    // must not be able to award itself.
+    const friEvening = Date.parse("2026-09-04T20:00:00Z");
+    const end = marketHorizonEnd(friEvening, 48 * HOUR);
+    // 48 hours of OPEN market from Friday evening runs past the weekend and
+    // well into the following week
+    expect(end).toBeGreaterThan(friEvening + 48 * HOUR);
+    expect(end).toBeGreaterThan(Date.parse("2026-09-08T00:00:00Z"));
+
+    const w = judgeWait(
+      { price: PRICE, atr: ATR, signalMs: friEvening, horizonMs: 48 * HOUR },
+      [],
+      friEvening + 50 * HOUR, // Sunday evening in wall clock
+    );
+    expect(w.verdict).toBe("pending");
   });
 
   it("says it cannot judge, rather than guessing, when the call predates the data", () => {
