@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byConfidence, byMode, byRulebookVersion, byTimeframe, confidenceBandKey, realizedR, tally } from "../lib/outcomeStats";
+import { byConfidence, byContract, byMode, byRulebookVersion, byTimeframe, confidenceBandKey, contractKey, realizedR, tally } from "../lib/outcomeStats";
 import type { AnalysisRecord, OutcomeEvaluation } from "../lib/types";
 
 const baseEvaluation: OutcomeEvaluation = {
@@ -231,7 +231,14 @@ describe("the honest record", () => {
       rec({ outcome: "loss", rulebook_version: 2 }),
       rec({ outcome: "pending", rulebook_version: 10 }),
     ]);
-    expect(groups.map((g) => g.key)).toEqual(["none", "v2", "v3", "v10"]);
+    // Keys carry the contract as well as the version: a change of entry
+    // contract must never be readable as a change of rulebook.
+    expect(groups.map((g) => g.key)).toEqual([
+      "entry_chosen_v1|none",
+      "entry_chosen_v1|v2",
+      "entry_chosen_v1|v3",
+      "entry_chosen_v1|v10",
+    ]);
     expect(groups[0]).toMatchObject({ losses: 2, sumR: -2 });
     expect(groups[2]).toMatchObject({ wins: 1, sumR: 2 });
   });
@@ -243,5 +250,83 @@ describe("the honest record", () => {
     expect(realizedR(rec({ outcome: "expired", ...sell, outcome_price: 149.5 }))).toBe(0.5);
     expect(realizedR(rec({ outcome: "pending" }))).toBeNull();
     expect(realizedR(rec({ outcome: "untriggered" }))).toBeNull();
+  });
+});
+
+describe("two entry contracts are never pooled", () => {
+  it("treats a row with no contract as the legacy one", () => {
+    expect(contractKey(rec({}))).toBe("entry_chosen_v1");
+    expect(contractKey(rec({ plan_contract: "market_v1" }))).toBe("market_v1");
+  });
+
+  it("refuses EVERY rate when the rows span both contracts", () => {
+    const t = tally("all", [
+      rec({ outcome: "win", plan_contract: "entry_chosen_v1" }),
+      rec({ outcome: "loss", plan_contract: "market_v1" }),
+      rec({ outcome: "untriggered", plan_contract: "entry_chosen_v1" }),
+    ]);
+    expect(t.contracts).toEqual(["entry_chosen_v1", "market_v1"]);
+    // Counts are still true — it is the RATES that would describe a population
+    // that never existed. An untriggeredRate rendered under a contract where
+    // untriggered cannot happen is a lie of its own.
+    expect(t.wins).toBe(1);
+    expect(t.calls).toBe(3);
+    expect(t.winRate).toBeNull();
+    expect(t.winRateCi).toBeNull();
+    expect(t.verdictRate).toBeNull();
+    expect(t.untriggeredRate).toBeNull();
+    expect(t.waitRate).toBeNull();
+    expect(t.fillRate).toBeNull();
+    expect(t.expectancy).toBeNull();
+    expect(t.sumR).toBeNull();
+  });
+
+  it("computes normally once the rows are one contract", () => {
+    const t = tally("m", [
+      rec({ outcome: "win", plan_contract: "market_v1" }),
+      rec({ outcome: "loss", plan_contract: "market_v1" }),
+    ]);
+    expect(t.contracts).toEqual(["market_v1"]);
+    expect(t.winRate).toBe(50);
+    expect(t.verdictRate).toBe(100);
+  });
+
+  it("splits the record by contract so both can be read side by side", () => {
+    const groups = byContract([
+      rec({ outcome: "win", plan_contract: "market_v1" }),
+      rec({ outcome: "loss" }),
+      rec({ outcome: "untriggered" }),
+    ]);
+    expect(groups.map((g) => g.key)).toEqual(["entry_chosen_v1", "market_v1"]);
+    expect(groups[0]).toMatchObject({ losses: 1, untriggered: 1 });
+    expect(groups[1]).toMatchObject({ wins: 1 });
+  });
+
+  it("orders the rulebook table by contract then version, not by NaN", () => {
+    // The old comparator did Number(key.slice(1)) on what is now a composite
+    // key, so every comparison was NaN and the table came out in Map order.
+    const groups = byRulebookVersion([
+      rec({ outcome: "win", rulebook_version: 5, plan_contract: "market_v1" }),
+      rec({ outcome: "loss", rulebook_version: 2 }),
+      rec({ outcome: "loss", rulebook_version: 10 }),
+      rec({ outcome: "loss", rulebook_version: 1, plan_contract: "market_v1" }),
+    ]);
+    expect(groups.map((g) => g.key)).toEqual([
+      "entry_chosen_v1|v2",
+      "entry_chosen_v1|v10",
+      "market_v1|v1",
+      "market_v1|v5",
+    ]);
+  });
+
+  it("keeps an all-WAIT bucket in the breakdown instead of dropping it", () => {
+    // Filtering on `total` hid exactly the behaviour the WAIT rate exists to
+    // show: a confidence band the analyst never traded from.
+    const groups = byConfidence([
+      rec({ confidence: 40, signal: "WAIT", outcome: "skipped" }),
+      rec({ confidence: 75, outcome: "win" }),
+    ]);
+    expect(groups.map((g) => g.key)).toContain("0-59");
+    expect(groups.find((g) => g.key === "0-59")).toMatchObject({ waits: 1, total: 0, calls: 1 });
   });
 });

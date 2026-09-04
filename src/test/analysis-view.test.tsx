@@ -487,3 +487,34 @@ describe("localisation", () => {
     unmount();
   });
 });
+
+describe("AnalysisHistory across two entry contracts", () => {
+  const base = {
+    mode: "full", thesis: null, take_profit_2: null, take_profit_3: null,
+    price_at_signal: null, evaluation: null,
+  };
+  const row = (over: Partial<AnalysisRecord>): AnalysisRecord => ({
+    ...base, id: Math.random().toString(36).slice(2), pair: "USD/JPY", interval: "1h",
+    signal: "BUY", confidence: 70, entry_point: 150, stop_loss: 149, take_profit_1: 152,
+    outcome: "win", outcome_price: 152, created_at: "2026-09-01T00:00:00Z", closed_at: null,
+    ...over,
+  } as AnalysisRecord);
+
+  it("says why no rate is shown instead of rendering blanks", () => {
+    render(<AnalysisHistory records={[
+      row({ outcome: "win" }),
+      row({ outcome: "loss", plan_contract: "market_v1" }),
+    ]} />);
+    expect(screen.getByTestId("mixed-contracts")).toBeInTheDocument();
+    // and no win rate is claimed over the pooled rows
+    expect(screen.queryByTestId("win-rate")).toBeNull();
+  });
+
+  it("labels the old contract in the rulebook breakdown", () => {
+    render(<AnalysisHistory records={[
+      row({ outcome: "win", rulebook_version: 5 }),
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "ルール版" }));
+    expect(screen.getByText("v5（旧契約）")).toBeInTheDocument();
+  });
+});

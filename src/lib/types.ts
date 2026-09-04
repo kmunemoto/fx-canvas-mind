@@ -293,6 +293,8 @@ export interface LoopHealth {
 }
 
 // Row shape of public.analyses as read by the client
+export type PlanContract = "entry_chosen_v1" | "market_v1";
+
 export interface AnalysisRecord {
   id: string;
   pair: string;
@@ -312,6 +314,14 @@ export interface AnalysisRecord {
   created_at: string;
   closed_at: string | null;
   evaluation: OutcomeEvaluation | null;
+  // Which entry contract the plan was made under. Absent on rows read by an
+  // older client; treat that as the legacy contract (see contractKey).
+  //   entry_chosen_v1 — the model picked the entry price, and a plan the market
+  //                     never reached was never scored at all
+  //   market_v1       — the server sets the entry to the market price at
+  //                     analysis, so every non-WAIT call gets a verdict
+  // Not derivable from rulebook_version: the same rulebook spans both.
+  plan_contract?: PlanContract;
   // v19+: the entry gate's verdict, the post-mortem, and shadow tracking of
   // refused plans (absent on rows written by earlier versions)
   entry_check?: EntryCheck | null;

@@ -147,6 +147,8 @@ export const ja = {
       leakLine: (wait: number, untriggered: number, expired: number) =>
         `見送り ${wait}%・未約定 ${untriggered}%・期限切れ ${expired}%`,
       incoherentLine: (n: number) => `水準の矛盾 ${n}件`,
+      legacyContract: (v: string) => `${v}（旧契約）`,
+      mixedContracts: "エントリー契約が異なるプランが混在しているため、割合は表示しません。旧契約では約定しないまま採点されないプランがあり、新契約ではそれが起こりません。内訳の「ルール版」で分けて見てください。",
       rulebookNone: "ルール導入前",
       frictionNote: "R は計画リスク幅を1とした損益（WIN=TP1到達、LOSS=−1R）。スプレッド・スリッページは含まない理論値",
     },

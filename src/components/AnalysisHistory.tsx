@@ -8,6 +8,7 @@ import {
   byConfidence,
   byMode,
   byRulebookVersion,
+  LEGACY_CONTRACT,
   byTimeframe,
   causeCounts,
   isRejected,
@@ -84,7 +85,13 @@ const AnalysisHistory = ({ records }: Props) => {
   const groupLabel = (key: string) => {
     if (breakdown === "timeframe") return key;
     if (breakdown === "mode") return t.history.modes[key as keyof typeof t.history.modes] ?? key;
-    if (breakdown === "rulebook") return key === NO_RULEBOOK ? t.history.stats.rulebookNone : key;
+    if (breakdown === "rulebook") {
+      // Composite key: "<contract>|<version>". The legacy contract is labelled
+      // so the two eras are never read as one series of rulebook versions.
+      const [contract, version] = key.split("|");
+      const label = version === NO_RULEBOOK ? t.history.stats.rulebookNone : version;
+      return contract === LEGACY_CONTRACT ? t.history.stats.legacyContract(label) : label;
+    }
     if (key === "unknown") return t.history.stats.unknownBand;
     const [lo, hi] = parseBand(key);
     return t.history.stats.confidenceBand(lo, hi);
@@ -133,6 +140,12 @@ const AnalysisHistory = ({ records }: Props) => {
       </div>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {overall.contracts.length > 1 && (
+        <p className="text-[10px] text-warning" data-testid="mixed-contracts">
+          {t.history.stats.mixedContracts}
+        </p>
+      )}
 
       {/* Where every call went. Closing one way to avoid a verdict just moves
           the pressure elsewhere, so the share that produced one is published

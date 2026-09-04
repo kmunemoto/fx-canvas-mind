@@ -141,6 +141,8 @@ export const en: Dict = {
       leakLine: (wait: number, untriggered: number, expired: number) =>
         `stood aside ${wait}%, never filled ${untriggered}%, expired ${expired}%`,
       incoherentLine: (n: number) => `${n} with contradictory levels`,
+      legacyContract: (v: string) => `${v} (old contract)`,
+      mixedContracts: "These plans span two entry contracts, so no rate is shown. Under the old one a plan could go unfilled and unscored; under the new one it cannot. Split them with the rulebook breakdown to compare.",
       rulebookNone: "Before rules",
       frictionNote: "R is profit or loss in multiples of the planned risk (WIN = TP1 reached, LOSS = −1R). Frictionless: no spread or slippage is charged",
     },
