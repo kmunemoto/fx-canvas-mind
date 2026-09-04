@@ -61,3 +61,38 @@ describe("the client and the functions agree on which contract is live", () => {
     expect(LEGACY_CONTRACT).toBe(LEGACY_PLAN_CONTRACT);
   });
 });
+
+// The gate coming off exposed the layer underneath: consolidation now ran on
+// every tick and timed out on every tick, because it borrowed the timeout
+// sized for diagnosing ONE plan. A run that always tries and never finishes
+// looks, from the rulebook, exactly like the freeze that was just fixed.
+describe("consolidation is given enough clock to finish", () => {
+  it("does not reuse the single-plan diagnosis timeout", () => {
+    const call = index.slice(index.indexOf("buildConsolidationPrompt"), index.indexOf("parseConsolidation("));
+    expect(call).toMatch(/askModel\([^)]*CONSOLIDATION_SCHEMA[^)]*consolidationBudget\(\)\)/);
+    // The diagnosis call keeps the short one — it reads one trade.
+    const diagnosis = index.slice(index.indexOf("DIAGNOSIS_SCHEMA, 2500"), index.indexOf("DIAGNOSIS_SCHEMA, 2500") + 40);
+    expect(diagnosis).not.toContain("consolidationBudget");
+  });
+
+  it("spends only what is left of the wall clock, keeping the write reserve", () => {
+    expect(index).toContain(
+      "Math.min(MAX_CONSOLIDATION_MS, WALL_CLOCK_BUDGET_MS - elapsed() - WRITE_RESERVE_MS)",
+    );
+    // Defers on the budget itself, not on a threshold guessed alongside it:
+    // a separate constant can drift out of step with the budget and either
+    // start a call that cannot finish or refuse one that could.
+    expect(index).toContain("consolidationBudget() < MIN_CONSOLIDATION_MS");
+    expect(index).not.toContain("START_CONSOLIDATION_BEFORE_MS");
+  });
+
+  it("caps the whole call, so the retry cannot spend the budget twice", () => {
+    // askModel retries once when the API rejects output_config.effort. With a
+    // per-attempt timeout that retry can outlive the worker, and the worker
+    // dying takes the diagnoses written after it down too.
+    const ask = index.slice(index.indexOf("const askModel = async"), index.indexOf("// ---- market data"));
+    expect(ask).toContain("const deadline = Date.now() + timeoutMs;");
+    expect(ask).toContain("AbortSignal.timeout(left)");
+    expect(ask).not.toContain("AbortSignal.timeout(LLM_TIMEOUT_MS)");
+  });
+});

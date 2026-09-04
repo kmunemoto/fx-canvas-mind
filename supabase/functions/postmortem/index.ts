@@ -46,7 +46,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v5-2026-09-04T11:10:00Z";
+const POSTMORTEM_VERSION = "postmortem-v6-2026-09-04T11:55:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -64,8 +64,17 @@ const MAX_REVISIONS = 1;
 // Supabase kills the worker at 150s; leave room to write results
 const WALL_CLOCK_BUDGET_MS = 130_000;
 const START_DIAGNOSIS_BEFORE_MS = 75_000;
-const START_CONSOLIDATION_BEFORE_MS = 95_000;
+// Sized for one plan: a diagnosis reads a single set of bars and answers
+// about a single trade.
 const LLM_TIMEOUT_MS = 45_000;
+// A consolidation turn reads sixty lessons, three hundred plans and the
+// whole rulebook, and rewrites the book. Sharing the diagnosis timeout made
+// it time out on every single run: the loop was trying and never finishing,
+// which reads exactly like the freeze it was supposed to end.
+const MIN_CONSOLIDATION_MS = 45_000;
+const MAX_CONSOLIDATION_MS = 110_000;
+// Held back so a revision that did finish is still written down
+const WRITE_RESERVE_MS = 10_000;
 const RECENT_LESSONS = 60;
 const RECENT_ROWS = 300;
 // Rows fetched per row kept, so the round-robin across accounts has a pool
@@ -153,6 +162,11 @@ Deno.serve(async (req: Request) => {
 
   const startedAt = Date.now();
   const elapsed = () => Date.now() - startedAt;
+  // What a consolidation turn may spend: everything left of the wall clock,
+  // less the reserve for writing the result, and never more than one turn
+  // can usefully use.
+  const consolidationBudget = () =>
+    Math.min(MAX_CONSOLIDATION_MS, WALL_CLOCK_BUDGET_MS - elapsed() - WRITE_RESERVE_MS);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -363,8 +377,20 @@ Deno.serve(async (req: Request) => {
       "anthropic-version": "2023-06-01",
     };
     let effortEnabled = true;
-    const askModel = async (system: string, user: string, schema: unknown, maxTokens: number): Promise<unknown> => {
+    const askModel = async (
+      system: string,
+      user: string,
+      schema: unknown,
+      maxTokens: number,
+      timeoutMs = LLM_TIMEOUT_MS,
+    ): Promise<unknown> => {
+      // A deadline for the whole call, not a fresh timeout per attempt: the
+      // retry below must not be able to spend the budget twice and outlive
+      // the worker.
+      const deadline = Date.now() + timeoutMs;
       for (let attempt = 0; attempt < 2; attempt++) {
+        const left = deadline - Date.now();
+        if (left <= 0) throw new Error("ran out of time before the retry");
         const request: JsonRecord = {
           model: MODEL,
           max_tokens: maxTokens,
@@ -378,7 +404,7 @@ Deno.serve(async (req: Request) => {
           method: "POST",
           headers: anthropicHeaders,
           body: JSON.stringify(request),
-          signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+          signal: AbortSignal.timeout(left),
         });
         const raw = await res.text();
         const parsed = (() => {
@@ -632,16 +658,19 @@ Deno.serve(async (req: Request) => {
     let recordContributors = 0;
     if (rulebookUnavailable) {
       errors.push("rulebook: unavailable, not revised");
-    } else if (elapsed() >= START_CONSOLIDATION_BEFORE_MS) {
+    } else if (consolidationBudget() < MIN_CONSOLIDATION_MS) {
       // The other half of the freeze: running out of clock here was silent,
       // and it got likelier the more there was to learn from, because each
       // diagnosis ahead of it costs a model call. Say so, so a rulebook that
-      // is not moving can be told from one that has nothing to do.
+      // is not moving can be told from one that has nothing to do. The gate
+      // is the budget itself, so it defers exactly when what is left is too
+      // little to finish in rather than at a threshold guessed separately.
       rulebook = {
         version: current ? numberOrNull(current.version) ?? 0 : 0,
         revised: false,
         reason: "deferred_time_budget",
         elapsed_ms: elapsed(),
+        budget_ms: consolidationBudget(),
       };
       errors.push(`rulebook: deferred (time budget, ${elapsed()}ms elapsed)`);
     } else {
@@ -748,7 +777,7 @@ Deno.serve(async (req: Request) => {
         const prompt = buildConsolidationPrompt(previousRules, lessons, stats);
         let answer: unknown = null;
         try {
-          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 4000);
+          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 4000, consolidationBudget());
         } catch (err) {
           errors.push(`rulebook: model ${err instanceof Error ? err.message : String(err)}`);
         }
