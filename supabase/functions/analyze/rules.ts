@@ -33,6 +33,16 @@ export interface Rule {
   scope: string | null;
   since: string | null;
   kind: RuleKind;
+  // Which entry contract the rule was written for. A rule is an instruction
+  // to the analyst, and the analyst's available moves are set by the contract:
+  // under entry_chosen_v1 it picked an entry price, under market_v1 it cannot.
+  // So a rule learned under one contract can be literally unfollowable under
+  // the next, and showing it spends prompt budget teaching a move that does
+  // not exist. null means "written before this was recorded" — legacy.
+  //
+  // This is the same refusal the statistics make: two contracts are two
+  // populations, and a rulebook is a statistic about the analyst's mistakes.
+  contract: string | null;
   // analysis ids of the lessons the rule was written from
   supported_by: string[];
 }
@@ -78,6 +88,7 @@ export const parseRules = (value: unknown): Rule[] => {
       support: Number.isFinite(support) && support > 0 ? Math.round(support) : 1,
       scope: str(item.scope) || null,
       since: str(item.since) || null,
+      contract: str(item.contract) || null,
       kind: isRuleKind(item.kind) ? item.kind : "heuristic",
       supported_by: Array.isArray(item.supported_by)
         ? item.supported_by.filter((v): v is string => typeof v === "string" && v.length > 0)
@@ -115,6 +126,25 @@ export interface PromptRules {
   ids: string[];
 }
 
+// Rules the analyst can actually act on under `contract`. A rule written for
+// another contract is held back, not deleted: it stays in the rulebook, keeps
+// its evidence and its history, and returns the moment the editor re-emits it
+// for the contract in force.
+//
+// This was not hypothetical. On the day the entry contract changed, seven of
+// the nine rules in the live book were about where to place a limit entry — a
+// move the analyst no longer has — and all nine were rendered into every
+// prompt (732 of 1600 characters, nothing truncated). One of them taught a
+// "roughly 20% fill rate", a number that cannot occur under a contract where
+// the server fills at the market. The revision machinery could not clear them
+// either: it may drop two rules per revision, so the book would have carried
+// them for weeks.
+//
+// It is the same refusal the statistics make. Two contracts are two
+// populations, and a rulebook is a statistic about the analyst's mistakes.
+export const inForce = (rules: Rule[], contract: string | null): Rule[] =>
+  contract === null ? rules : rules.filter((r) => r.contract === contract);
+
 // The block that goes into the system prompt. Constraints first, then the
 // rules with the most evidence; stops adding when the character budget is
 // spent. Empty when there is nothing learned yet, so the prompt carries no
@@ -122,6 +152,9 @@ export interface PromptRules {
 export const selectPromptRules = (
   rules: Rule[],
   locale: RuleLocale = "ja",
+  // The contract the plans being made right now are written under. null shows
+  // every rule — what a caller with no contract to compare against should get.
+  contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
   maxChars = MAX_PROMPT_CHARS,
 ): PromptRules => {
@@ -129,7 +162,7 @@ export const selectPromptRules = (
   const ids: string[] = [];
   // The heading is part of the budget
   let chars = HEADERS[locale].length + 1;
-  for (const rule of orderRules(rules)) {
+  for (const rule of orderRules(inForce(rules, contract))) {
     if (lines.length >= maxRules) break;
     const raw = locale === "ja" ? rule.text_ja || rule.text_en : rule.text_en || rule.text_ja;
     const text = raw.replace(/\s+/g, " ").trim();
@@ -148,6 +181,7 @@ export const selectPromptRules = (
 export const renderLearnedRules = (
   rules: Rule[],
   locale: RuleLocale = "ja",
+  contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
   maxChars = MAX_PROMPT_CHARS,
-): string => selectPromptRules(rules, locale, maxRules, maxChars).text;
+): string => selectPromptRules(rules, locale, contract, maxRules, maxChars).text;

@@ -21,6 +21,7 @@
 import { CAUSES, PULLBACK_R, isCause, type Cause, type PostmortemFacts } from "./facts.ts";
 import { MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
 import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rules.ts";
+import { LEGACY_PLAN_CONTRACT } from "../_shared/contract.ts";
 
 export const MAX_RULES = 10;
 export const MAX_LESSON_CHARS = 160;
@@ -66,13 +67,21 @@ export interface Clusterable {
   // When the plan settled, if known: a plan made well after the previous
   // one closed is a new decision even inside the window
   closed_at?: string | null;
-  user_id?: string | null;
 }
 
-// Cluster ids for a set of plans, in input order. A plan joins the cluster
-// of the previous plan on the same pair, direction (and user) when it was
-// made within CLUSTER_WINDOW_MS of it, unless that plan had settled more
-// than CLUSTER_REOPEN_MS earlier.
+// Cluster ids for a set of plans, in input order. A plan joins the cluster of
+// the previous plan on the same pair and direction when it was made within
+// CLUSTER_WINDOW_MS of it, unless that plan had settled more than
+// CLUSTER_REOPEN_MS earlier.
+//
+// Deliberately NOT keyed by user. A cluster is one market situation, and the
+// rulebook is shared by every account, so two people analysing USD/JPY long
+// within the window received two copies of ONE decision by one analyst — one
+// piece of evidence about it, not two. Keying by user made a rule's support
+// grow with the number of subscribers, and support is the number the prompt
+// prints ("28 cases") and the number that decides whether a rule survives a
+// revision. The client's own clusterIds (src/lib/outcomeStats.ts) never keyed
+// by user either; only this side did.
 export const clusterIds = (items: Clusterable[]): string[] => {
   const order = items
     .map((item, i) => ({ i, t: Date.parse(item.created_at) }))
@@ -81,7 +90,7 @@ export const clusterIds = (items: Clusterable[]): string[] => {
   const out = new Array<string>(items.length);
   for (const { i, t } of order) {
     const item = items[i];
-    const key = `${item.user_id ?? ""}|${item.pair}|${item.signal}`;
+    const key = `${item.pair}|${item.signal}`;
     const prev = last.get(key);
     const closed = item.closed_at ? Date.parse(item.closed_at) : NaN;
     const joins = prev !== undefined && Number.isFinite(t) &&
@@ -96,6 +105,46 @@ export const clusterIds = (items: Clusterable[]): string[] => {
     const id = `${key}|${startIso}`;
     last.set(key, { id, t: Number.isFinite(t) ? t : 0, closed: Number.isFinite(closed) ? closed : NaN });
     out[i] = id;
+  }
+  return out;
+};
+
+// One shared rulebook, many accounts: take the newest from each contributor
+// in turn rather than the newest overall.
+//
+// The record and the lessons are read newest-first with a fixed limit. With
+// one account that is simply "the recent past". With several it is "whoever
+// analysed most", and the rulebook quietly becomes that person's — their
+// pairs, their timeframes, their read of the market — while everyone else's
+// results never enter the window at all.
+//
+// Round-robin needs no threshold and no notion of a fair share: it degenerates
+// to plain newest-first when one account contributed, and it never lets a
+// heavy account take a second row before every other account has taken a
+// first. What it cannot fix is an account whose volume exceeds the fetch
+// window entirely — hence the over-fetch at the call site and the contributor
+// counts in the run summary, so crowding is visible rather than assumed away.
+export const fairShare = <T>(items: T[], userOf: (x: T) => string, limit: number): T[] => {
+  if (limit <= 0) return [];
+  const byUser = new Map<string, T[]>();
+  for (const item of items) {
+    const key = userOf(item);
+    const list = byUser.get(key);
+    if (list) list.push(item);
+    else byUser.set(key, [item]);
+  }
+  const queues = [...byUser.values()];
+  if (queues.length <= 1) return items.slice(0, limit);
+  const out: T[] = [];
+  for (let round = 0; out.length < limit; round++) {
+    let took = false;
+    for (const queue of queues) {
+      if (queue.length <= round) continue;
+      out.push(queue[round]);
+      took = true;
+      if (out.length >= limit) break;
+    }
+    if (!took) break;
   }
   return out;
 };
@@ -186,7 +235,7 @@ const addToBucket = (b: Bucket, row: RecordRow) => {
 
 // Rows written before the plan_contract column existed are legacy by
 // definition: the contract only ever moved forwards.
-export const LEGACY_CONTRACT = "entry_chosen_v1";
+export const LEGACY_CONTRACT = LEGACY_PLAN_CONTRACT;
 
 export const rowContract = (row: Pick<RecordRow, "contract">): string =>
   typeof row.contract === "string" && row.contract.length > 0 ? row.contract : LEGACY_CONTRACT;
@@ -571,7 +620,6 @@ export const withClusters = (lessons: LessonRow[]): LessonRow[] => {
     signal: l.signal,
     created_at: l.plan_created_at ?? l.created_at,
     closed_at: l.plan_closed_at ?? null,
-    user_id: l.user_id ?? null,
   })));
   return lessons.map((l, i) => ({ ...l, cluster: ids[i] }));
 };
@@ -710,6 +758,13 @@ export const parseConsolidation = (
   previous: Rule[],
   nowIso: string,
   lessons: CitableLesson[] = [],
+  // The contract the editor was writing for. Every rule it emits is stamped
+  // with it, because emitting a rule under this revision's prompt IS the
+  // endorsement that the rule is followable now. Rules the editor did not
+  // emit — the ones restored below to fill the book back up — keep whatever
+  // contract they already had, so a rule from a dead era stays held back
+  // rather than being quietly revived by an editor that never looked at it.
+  contract: string | null = null,
 ): Consolidation | null => {
   if (!isRecord(raw) || !Array.isArray(raw.rules)) return null;
   const prior = new Map(previous.map((r) => [r.id, r]));
@@ -763,6 +818,7 @@ export const parseConsolidation = (
       support,
       scope: str(item.scope, 60) || null,
       since: prior.get(id)?.since ?? nowIso,
+      contract,
       kind,
       supported_by: cited,
     });

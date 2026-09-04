@@ -287,6 +287,11 @@ export interface RulebookRule {
   scope: string | null;
   since: string | null;
   kind?: "constraint" | "heuristic";
+  // Which entry contract the rule was written for. A rule from another
+  // contract is held back from the analyst's prompt — the moves it describes
+  // may not exist any more — so the panel must not present it as in force.
+  // Absent on rules written before this was recorded: treat as legacy.
+  contract?: string | null;
   supported_by?: string[];
 }
 

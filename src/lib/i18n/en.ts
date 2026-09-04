@@ -302,6 +302,9 @@ export const en: Dict = {
     note: "Generated automatically from reviews against actual prices, and put in front of the model on every new analysis",
     supportNote: "Cases = independent situations behind the rule (plans on the same day in the same direction count once). Two or fewer is \"under review\"",
     cadence: "Revised only after 5 new lessons or 24 hours since the last revision, adding or dropping at most 2 rules at a time, so each version's results can be compared",
+    sharedNote: "These rules are learned from every account's results pooled together, so a rule's evidence count includes plans you will not find in your own history",
+    heldBack: (n: number) => `${n} rule${n === 1 ? "" : "s"} learned under the previous entry contract ${n === 1 ? "is" : "are"} held back — they are about where to place a limit entry, which the analyst can no longer choose. They are not in the prompt.`,
+    noneInForce: "No rule is in force under the current contract yet. Rules return here as new plans settle and are reviewed.",
   },
 
   loop: {

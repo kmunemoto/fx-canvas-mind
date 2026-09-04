@@ -7,6 +7,7 @@ import AnalysisHistory from "../components/AnalysisHistory";
 import LearnedRules from "../components/LearnedRules";
 import AnalysisStages from "../components/AnalysisStages";
 import type { AnalysisRecord, AnalysisResult, OutcomeEvaluation, TechnicalData } from "../lib/types";
+import { CURRENT_CONTRACT } from "../lib/outcomeStats";
 
 // Everything user-facing reads the dictionary now, so the provider is part of
 // rendering these components at all. Tests default to Japanese, which is what
@@ -330,6 +331,7 @@ describe("LearnedRules", () => {
       support: 7 - i,
       scope: i === 0 ? "1h" : null,
       since: null,
+      contract: CURRENT_CONTRACT,
     }));
     const rulebook = { version: 3, rules, summary: { ja: "損切りが近すぎる負けが多い", en: "Most losses come from tight stops" }, updated_at: "2026-09-03T09:00:00Z" };
     render(<LearnedRules rulebook={rulebook} />, "en");
@@ -343,6 +345,45 @@ describe("LearnedRules", () => {
     fireEvent.click(screen.getByRole("button", { name: /Show all \(7\)/ }));
     expect(screen.getByText("Rule 7")).toBeInTheDocument();
     expect(panel).toHaveTextContent("1 case");
+    // The evidence count is every account's, and the panel has to say so:
+    // the reader will not find those plans in their own history.
+    expect(panel).toHaveTextContent(/learned from every account/i);
+    expect(screen.queryByTestId("rules-held-back")).toBeNull();
+  });
+
+  it("holds back a rule written for a previous contract, and says how many", () => {
+    // The prompt applies the same test (analyze/rules.ts inForce). Listing a
+    // held-back rule beside the live ones would claim an influence it has not
+    // had since the contract changed.
+    const rulebook = {
+      version: 5,
+      rules: [
+        { id: "r1", text_ja: "旧", text_en: "Old limit rule", cause: "entry_too_far", support: 28, scope: null, since: null, contract: "entry_chosen_v1" },
+        { id: "r2", text_ja: "新", text_en: "Live rule", cause: "stop_too_tight", support: 4, scope: null, since: null, contract: CURRENT_CONTRACT },
+      ],
+      summary: null,
+      updated_at: null,
+    };
+    render(<LearnedRules rulebook={rulebook} />, "en");
+    const panel = screen.getByTestId("learned-rules");
+    expect(panel).toHaveTextContent("Live rule");
+    expect(panel).not.toHaveTextContent("Old limit rule");
+    expect(screen.getByTestId("rules-held-back").textContent).toContain("1 rule");
+  });
+
+  it("says the book is empty for this contract rather than showing dead rules", () => {
+    const rulebook = {
+      version: 5,
+      rules: [
+        { id: "r1", text_ja: "旧", text_en: "Old limit rule", cause: "entry_too_far", support: 28, scope: null, since: null, contract: null },
+      ],
+      summary: null,
+      updated_at: null,
+    };
+    render(<LearnedRules rulebook={rulebook} />, "en");
+    const panel = screen.getByTestId("learned-rules");
+    expect(panel).not.toHaveTextContent("Old limit rule");
+    expect(panel).toHaveTextContent(/No rule is in force under the current contract/i);
   });
 
   it("renders nothing with no records", () => {
