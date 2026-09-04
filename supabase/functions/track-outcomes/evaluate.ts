@@ -102,7 +102,7 @@ export interface Judgement {
 // costs nothing. Both leave the plan open for another try.
 export type FineResult = Candle[] | null | "deferred";
 export interface FineFetcher {
-  (pair: string, fromMs: number, toMs: number): Promise<FineResult>;
+  (pair: string, fromMs: number, toMs: number, interval: string): Promise<FineResult>;
 }
 
 const MIN = 60_000;
@@ -135,7 +135,26 @@ export const EVAL_OUTPUTSIZE: Record<string, number> = {
 
 export const REFINE_INTERVAL = "15min";
 export const REFINE_MS = 15 * MIN;
+// A second, finer rung.
+//
+// The ladder used to stop at 15min, and EVAL_INTERVAL puts both 15min and 1h
+// plans on 15min bars — so for those the signal bar was ALREADY at the finest
+// rung and `signalBar.ms > REFINE_MS` was false. Nothing could be refined.
+// That was survivable while most plans were limits and the signal bar rarely
+// filled; once every plan fills at bar zero, any signal bar that so much as
+// grazes a level becomes a terminal, unscored `ambiguous`. One more rung
+// keeps that rare instead of routine.
+export const FINE_INTERVAL = "5min";
+export const FINE_MS = 5 * MIN;
 export const MAX_REFINE_ATTEMPTS = 3;
+
+// The rung to ask for when splitting a bar of this length: one step finer,
+// never the same size (which would return the bar itself and refine nothing).
+export const finerRung = (barMs: number): { interval: string; ms: number } | null => {
+  if (barMs > REFINE_MS) return { interval: REFINE_INTERVAL, ms: REFINE_MS };
+  if (barMs > FINE_MS) return { interval: FINE_INTERVAL, ms: FINE_MS };
+  return null;
+};
 
 // Market days after which a filled plan without a decision is closed as
 // expired
@@ -612,13 +631,20 @@ export const judgePlan = async (
   let judged = true;
 
   // Finer bars for one coarse bar, carrying its market-time offset
-  const fetchRange = async (bar: Timed): Promise<Timed[] | null | "deferred"> => {
+  const fetchRange = async (bar: Timed, sinceMs?: number): Promise<Timed[] | null | "deferred"> => {
     if (!fetchFine) return "deferred";
-    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms);
+    const rung = finerRung(bar.ms);
+    if (rung === null) return null;
+    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval);
     if (fine === "deferred") return "deferred";
     if (fine === null) return null;
-    const bars = timeline(fine, nowMs, REFINE_MS)
+    const bars = timeline(fine, nowMs, rung.ms)
       .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms)
+      // Splitting the SIGNAL bar exposes the part of it that happened BEFORE
+      // the plan existed. Price that had already traded cannot resolve a plan
+      // that was not yet written, so those sub-bars are dropped rather than
+      // allowed to stop out a trade retroactively.
+      .filter((x) => sinceMs === undefined || x.t + rung.ms > sinceMs)
       .map((x) => ({ ...x, mt: bar.mt + (x.t - bar.t) }));
     return bars.length > 0 ? bars : null;
   };
@@ -655,8 +681,8 @@ export const judgePlan = async (
     let sig = assessSignalBar(ctx, reference, signalBar, createdMs);
     // A coarse signal bar that leaves the fill or the first touches
     // untimed: replace it with finer bars and look again
-    if (signalBar !== null && signalBar.ms > REFINE_MS && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
-      const fine = await fetchRange({ ...signalBar, mt: -signalBar.ms });
+    if (signalBar !== null && finerRung(signalBar.ms) !== null && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
+      const fine = await fetchRange({ ...signalBar, mt: -signalBar.ms }, createdMs);
       if (fine === null || fine === "deferred") {
         deferRefinement(fine === null ? null : "deferred");
       } else {
@@ -682,7 +708,7 @@ export const judgePlan = async (
         state = r.state;
         break;
       }
-      if (r.event.kind === "ambiguous" && r.event.refinable && post[idx].ms > REFINE_MS && fetchFine) {
+      if (r.event.kind === "ambiguous" && r.event.refinable && finerRung(post[idx].ms) !== null && fetchFine) {
         // Whatever the bars before the ambiguous one established (a fill,
         // excursions) is kept even if this run cannot finish
         const stateBefore = idx === i ? before : runUntilEvent(ctx, before, post.slice(i, idx)).state;

@@ -256,12 +256,12 @@ Deno.serve(async (req: Request) => {
     };
 
     let refinements = 0;
-    const fetchFine: FineFetcher = async (pair, fromMs, toMs) => {
+    const fetchFine: FineFetcher = async (pair, fromMs, toMs, interval) => {
       if (requests >= MAX_REQUESTS) return "deferred"; // a later tick, at no cost to the plan
       refinements++;
       return await fetchSeries({
         symbol: pair,
-        interval: REFINE_INTERVAL,
+        interval,
         start_date: tdDate(fromMs),
         end_date: tdDate(toMs),
         outputsize: "200",
