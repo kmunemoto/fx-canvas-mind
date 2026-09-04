@@ -20,8 +20,10 @@
 
 import {
   CAUSES,
+  MARKET_CONTRACT,
   PULLBACK_R,
   canonicalCause,
+  causeOutsideContract,
   causesFor,
   isCause,
   type Cause,
@@ -702,6 +704,92 @@ export const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wro
 // Lessons that are about nothing in particular are evidence for nothing
 export const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call"];
 
+// Vocabulary that names WHERE or WHEN to enter.
+//
+// Under market_v1 the server fills at the price of the moment; the analyst
+// chooses direction, stop width, target width, and whether to trade at all.
+// A rule whose text is ABOUT the entry price is unfollowable there whichever
+// way it points — "wait for a pullback" and "do not wait for a pullback" are
+// both instructions about a lever that does not exist, and the live rule r1
+// was the second kind. So the test is topical, not directional: naming the
+// lever is the defect.
+//
+// Matched on the VERB, never on the noun. An earlier draft listed
+// 「エントリー価格」/"entry price", which reads as decisive until you notice
+// that analyze's own market_v1 prompt says 「損切りと利確1/2/3を、与えられた
+// エントリー価格の周りに決める」: under this contract the entry price is the
+// house term for the GIVEN fill, the reference point every stop and target is
+// measured from. A rule saying "place the stop at least 0.8xATR from the entry
+// price" moves a lever the analyst really does have, and vetoing it would hold
+// back the most followable rule the editor can write. Naming the price is
+// required; choosing it is what does not exist.
+//
+// A floor, not a ceiling: it catches the vocabulary, not every paraphrase.
+// The ceiling is one model call per REVISION (not per plan) asking of each
+// emitted rule whether it moves one of the four levers. Until that exists this
+// list is the floor, and the invariant test in src/test/postmortem.test.ts is
+// what keeps the floor from eroding.
+const ENTRY_LEVER_PHRASES: readonly string[] = [
+  // ja — each names the act of choosing or timing the entry, not the price it
+  // is measured from
+  "押し目を待",
+  "押し目まで待",
+  "戻りを待",
+  "戻りまで待",
+  "戻り待ち",
+  "指値で入",
+  "指値でエントリー",
+  "エントリーを引きつけ",
+  "エントリーを引き付け",
+  "引きつけて入",
+  "引き付けて入",
+  "成行で執行",
+  "現値で執行",
+  "どこで入る",
+  // en — matched lower-cased
+  "wait for a pullback",
+  "wait for the pullback",
+  "wait for a retrace",
+  "wait for the retrace",
+  "limit entry",
+  "limit order",
+  "where to enter",
+  "enter at market",
+  "market entry",
+];
+
+// Does this rule's text instruct a move the contract does not have?
+export const unfollowableUnder = (text: string, contract: string | null): boolean => {
+  if (contract !== MARKET_CONTRACT) return false;
+  const hay = text.toLowerCase();
+  return ENTRY_LEVER_PHRASES.some((phrase) => hay.includes(phrase));
+};
+
+// The only writer of Rule.contract.
+//
+// It answers the single question its only reader asks (analyze/rules.ts
+// `inForce`): can an analyst working under `writingContract` carry this
+// instruction out? Not "when was it written", not "where did the evidence come
+// from". The two vetoes can only REFUSE a stamp, never grant one, and nothing
+// is ever inherited — a rule's stamp is recomputed from its own cause and its
+// own text on every parse, by both the emit path and the restore path.
+//
+// That is the whole fix: the field used to be handed the running build's
+// PLAN_CONTRACT, so it recorded which era was current when the editor happened
+// to run. Four rules learned entirely from entry_chosen_v1 evidence were
+// stamped market_v1 that way, and one of them taught the analyst where to
+// enter under a contract that fills at the market.
+export const stampFor = (
+  rule: { cause: string; text_ja: string; text_en: string },
+  writingContract: string | null,
+): string | null => {
+  if (writingContract === null) return null;
+  if (causeOutsideContract(rule.cause, writingContract)) return null;
+  if (unfollowableUnder(rule.text_ja, writingContract)) return null;
+  if (unfollowableUnder(rule.text_en, writingContract)) return null;
+  return writingContract;
+};
+
 export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトに、基本手順とリスク規定の後ろに「補助的な指針」として入ります。基本手順（トレンド局面での成行、損切り幅、RR の下限）を上書きすることはできないので、その範囲内で書きます。
 
 証拠の数え方:
@@ -713,6 +801,8 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
 - 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
 - entry_too_far / entry_too_early は旧契約の語彙。entry_too_early は chased_move として集計されている。
+- current_rules の各ルールには contract（実行できる契約）・evidence_contracts（根拠 lesson の契約）・in_force（現行契約 ${MARKET_CONTRACT} のプロンプトに実際に入っているか）が付いている。in_force が false のルールはアナリストのプロンプトに入っていない。原因が現行契約では起こりえないか、文言が「押し目を待つ・指値で入る・どこで入るか」というアナリストが動かせない対象を指しているためで、同じ文言のまま出し直しても false のままになる。残す価値があるなら方向・損切り幅・利確幅・見送りの4つのどれかを動かす形に書き直し、書き直せないなら出力から外す。
+- evidence_contracts が現行契約以外だけのルールは、根拠が旧契約の記録しかない。使ってよいが、プロンプトには「旧契約含む」と表示され、証拠としては弱い。
 - stats.by_rulebook_version は「その版のもとで作られたプラン全体」の実績（決着数・勝敗・実現R合計 sum_r）。版の比較（ルールを足す前と後）には使えるが、版の中のどのルールのせいかは区別できない。個別ルールの証拠は stats.rule_feedback（診断がそのルールを結果の原因 blamed / 貢献 credited と名指しした回数）と、lessons の rule_blamed / rule_credited。blamed が credited を上回るルールは弱めるか削除する。
 - 対称性: untriggered の lesson は「約定を妨げた」側、loss の lesson は「損を招いた」側の証拠。片方だけを見ない。反実仮想の「成行なら勝っていた」は viable=true の案だけが根拠になる（lesson 側で考慮済み）。
 
@@ -735,9 +825,15 @@ export const buildConsolidationPrompt = (
   stats: RecordStats,
 ): { system: string; user: string } => {
   const payload = {
+    // contract / evidence_contracts / in_force are shown because without them
+    // the editor cannot tell a suppressed rule from a live one, and re-emitting
+    // a held-back rule verbatim forever is its path of least resistance.
     current_rules: rules.map((r) => ({
       id: r.id, kind: r.kind, text_ja: r.text_ja, text_en: r.text_en, cause: r.cause,
       support: r.support, supported_by: r.supported_by, scope: r.scope, since: r.since,
+      contract: r.contract,
+      evidence_contracts: r.evidence_contracts,
+      in_force: r.contract === MARKET_CONTRACT,
     })),
     lessons: lessons.map((l) => ({
       analysis_id: l.analysis_id,
@@ -773,7 +869,11 @@ export interface Consolidation {
   rules: Rule[];
   summary_ja: string;
   summary_en: string;
-  changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[] };
+  // held_back: rules that ARE in the book but which stampFor refused a stamp,
+  // so no prompt will show them. Recorded because a rule that silently never
+  // reaches the analyst is the failure mode this whole field exists to make
+  // visible.
+  changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[]; held_back: string[] };
 }
 
 export interface CitableLesson {
@@ -781,6 +881,11 @@ export interface CitableLesson {
   cluster?: string | null;
   cause?: string;
   shadow?: boolean;
+  // The era of the plan this lesson came from. NOT a citation gate: a failure
+  // observed under the old contract is still evidence that the same situation
+  // recurs. Read only to fill Rule.evidence_contracts, which labels a rule
+  // rather than suppressing it.
+  contract?: string | null;
 }
 
 // Whether a lesson is evidence for a rule: same failure, or a general rule
@@ -813,18 +918,31 @@ export const parseConsolidation = (
   // emit — the ones restored below to fill the book back up — keep whatever
   // contract they already had, so a rule from a dead era stays held back
   // rather than being quietly revived by an editor that never looked at it.
-  contract: string | null = null,
+  // The contract the emitted rules are TESTED against — the question, not the
+  // answer. Whether any given rule receives it is decided by stampFor, from
+  // that rule's own cause and its own text. Passing PLAN_CONTRACT here no
+  // longer means "stamp everything with today's build".
+  writingContract: string | null = null,
 ): Consolidation | null => {
   if (!isRecord(raw) || !Array.isArray(raw.rules)) return null;
   const prior = new Map(previous.map((r) => [r.id, r]));
   const byId = new Map(lessons.map((l) => [l.analysis_id, l]));
-  const evidence = (rule: { cause: string; kind: RuleKind }, ids: string[]): { cited: string[]; support: number } => {
+  const evidence = (
+    rule: { cause: string; kind: RuleKind },
+    ids: string[],
+  ): { cited: string[]; support: number; eras: string[] } => {
     const cited = [...new Set(ids.filter((id) => {
       const lesson = byId.get(id);
       return lesson !== undefined && citationAllowed(rule, lesson);
     }))];
     const clusters = new Set(cited.map((id) => byId.get(id)?.cluster ?? id));
-    return { cited, support: clusters.size };
+    // Eras of the citations that actually COUNTED. A lesson the gate rejected
+    // must not leak its era into the label, or a rule would be marked as
+    // resting on evidence it is not allowed to rest on. A lesson with no
+    // recorded contract predates the column and is legacy by definition, the
+    // same convention summarizeRecord uses.
+    const eras = [...new Set(cited.map((id) => byId.get(id)?.contract || LEGACY_PLAN_CONTRACT))].sort();
+    return { cited, support: clusters.size, eras };
   };
   const seen = new Set<string>();
   const rules: Rule[] = [];
@@ -852,28 +970,37 @@ export const parseConsolidation = (
       : "general";
     const kind: RuleKind = isRuleKind(item.kind) ? item.kind : prior.get(id)?.kind ?? "heuristic";
     const citedIds = Array.isArray(item.supported_by) ? item.supported_by.filter((v): v is string => typeof v === "string") : [];
-    const { cited, support } = evidence({ cause, kind }, citedIds);
+    const { cited, support, eras } = evidence({ cause, kind }, citedIds);
     if (support === 0) {
       // No evidence, no rule: a continuing rule that lost its evidence goes
       // through the removal accounting below like any other omission
       dropped.push(id);
       continue;
     }
+    // The book is full. Recorded as dropped rather than breaking out of the
+    // loop, so a rule squeezed out of the book leaves a trace instead of
+    // vanishing from `changes` entirely.
+    if (rules.length >= MAX_RULES) {
+      dropped.push(id);
+      continue;
+    }
     seen.add(id);
     if (isNew) added.push(id);
+    const textJaFinal = textJa || textEn;
+    const textEnFinal = textEn || textJa;
     rules.push({
       id,
-      text_ja: textJa || textEn,
-      text_en: textEn || textJa,
+      text_ja: textJaFinal,
+      text_en: textEnFinal,
       cause,
       support,
       scope: str(item.scope, 60) || null,
       since: prior.get(id)?.since ?? nowIso,
-      contract,
+      contract: stampFor({ cause, text_ja: textJaFinal, text_en: textEnFinal }, writingContract),
+      evidence_contracts: eras,
       kind,
       supported_by: cited,
     });
-    if (rules.length >= MAX_RULES) break;
   }
 
   // Omitted (or evidence-less) prior rules: the allowance is spent on the
@@ -883,22 +1010,40 @@ export const parseConsolidation = (
   const removed = missing.slice(0, MAX_RULES_REMOVED).map((r) => r.id);
   const restored: string[] = [];
   for (const rule of missing.slice(MAX_RULES_REMOVED).sort((a, b) => b.support - a.support)) {
-    if (rules.length >= MAX_RULES) break;
-    const { cited, support } = evidence(rule, rule.supported_by);
+    if (rules.length >= MAX_RULES) {
+      // No room left: it leaves the book, and says so.
+      removed.push(rule.id);
+      continue;
+    }
+    const { cited, support, eras } = evidence(rule, rule.supported_by);
     if (support === 0) {
       removed.push(rule.id);
       continue;
     }
-    rules.push({ ...rule, support, supported_by: cited });
+    // The stamp is re-derived here too, from the STORED rule's own cause and
+    // text. A restored rule must not carry a stamp forward: inheriting it is
+    // what let a rule keep an endorsement that only ever existed because a
+    // defective build wrote it.
+    rules.push({
+      ...rule,
+      support,
+      supported_by: cited,
+      evidence_contracts: eras,
+      contract: stampFor(rule, writingContract),
+    });
     restored.push(rule.id);
   }
   if (rules.length === 0) return null;
+
+  // With writingContract null every stamp is null and this is empty, which is
+  // the right answer: a caller that named no contract asked no question.
+  const held_back = writingContract === null ? [] : rules.filter((r) => r.contract !== writingContract).map((r) => r.id);
 
   return {
     rules: orderRules(rules),
     summary_ja: str(raw.summary_ja, 600),
     summary_en: str(raw.summary_en, 600),
-    changes: { added, removed, restored, dropped },
+    changes: { added, removed, restored, dropped, held_back },
   };
 };
 

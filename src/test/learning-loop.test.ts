@@ -15,6 +15,8 @@ import { LEGACY_PLAN_CONTRACT } from "../../supabase/functions/_shared/contract"
 // was never in the logic that the unit tests cover — it was in the condition
 // that decides whether that logic is reached at all.
 const index = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
+const promptSrc = readFileSync("supabase/functions/postmortem/prompt.ts", "utf8");
+const analyzeSrc = readFileSync("supabase/functions/analyze/index.ts", "utf8");
 
 describe("the rulebook can actually be revised", () => {
   it("does not require this run to have written a lesson", () => {
@@ -94,5 +96,44 @@ describe("consolidation is given enough clock to finish", () => {
     expect(ask).toContain("const deadline = Date.now() + timeoutMs;");
     expect(ask).toContain("AbortSignal.timeout(left)");
     expect(ask).not.toContain("AbortSignal.timeout(LLM_TIMEOUT_MS)");
+  });
+});
+
+// A rule's contract used to be whatever PLAN_CONTRACT the running build held,
+// so the field recorded which era was current when the editor happened to run.
+// Production proved it: rulebook v7 stamped four rules market_v1 while all 21
+// analyses and all 17 lessons were entry_chosen_v1, and one of those rules told
+// the analyst where to enter under a contract that fills at the market.
+//
+// Source pins, because the failure is a single word in an object literal and
+// no unit test can see it come back.
+describe("a rule's contract says what the rule can do, not when it was written", () => {
+  it("derives every stamp through stampFor", () => {
+    expect(promptSrc).toContain("export const stampFor = (");
+    // Both paths: the re-emitted rule and the restored one. A restore that
+    // inherits its stamp is how a dead build's endorsement survives forever.
+    const derived = promptSrc.match(/contract: stampFor\(/g) ?? [];
+    expect(derived).toHaveLength(2);
+  });
+
+  it("never assigns the writing contract straight onto a rule", () => {
+    // The exact defect: `contract,` as shorthand for the function argument in
+    // the emit-loop object literal.
+    expect(promptSrc).not.toMatch(/^\s{6}contract,$/m);
+    // ...and the restore path must not spread a stored stamp forward either
+    expect(promptSrc).not.toMatch(/rules\.push\(\{ \.\.\.rule, support, supported_by: cited \}\)/);
+  });
+
+  it("still asks the question with the live contract", () => {
+    expect(index).toContain("parseConsolidation(answer, previousRules, nowIso, lessons, PLAN_CONTRACT)");
+    // The old comment claimed emitting a rule WAS the endorsement. It is not:
+    // the parser decides, from the rule itself.
+    expect(index).not.toContain("Stamped with the contract the editor was writing for");
+  });
+
+  it("does not file a plan under a rulebook version whose rules it never saw", () => {
+    const writes = analyzeSrc.match(/rulebook_version: rulebookVersion === null \? null : \(rulesShown\.length > 0 \? rulebookVersion : 0\),/g) ?? [];
+    expect(writes).toHaveLength(2);
+    expect(analyzeSrc).toContain("rulebook_version_read: rulebookVersion,");
   });
 });

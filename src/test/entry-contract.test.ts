@@ -2,8 +2,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { isMarketClosed, isPossiblyClosed } from "../../supabase/functions/_shared/market-hours";
 import { PLAN_CONTRACT } from "../../supabase/functions/_shared/contract";
+import { CAUSES, causeOutsideContract } from "../../supabase/functions/postmortem/facts";
 
 const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+const repairSql = readFileSync("supabase/migrations/20260904150000_rule_contract_repair.sql", "utf8");
+const trackRecordSql = readFileSync("supabase/migrations/20260904150100_public_track_record_in_force.sql", "utf8");
 
 // These assert the CONTRACT, not the implementation detail. Each one is a
 // specific way the change could half-land and still compile — which is how
@@ -123,5 +126,61 @@ describe("the shared market week", () => {
     const band = Date.parse("2026-09-04T21:30:00Z");
     expect(isMarketClosed(band)).toBe(false);
     expect(isPossiblyClosed(band)).toBe(true);
+  });
+});
+
+// The one-time repair of rulebook v7 re-implements half of stampFor in SQL,
+// because the rules it must fix are already stored and the parser only runs at
+// the next revision. Two implementations of one predicate drift silently, and
+// the drift is invisible: the migration would simply fix fewer rules than the
+// parser holds back, and the difference would sit in production prompts.
+describe("the rulebook repair agrees with the code that replaced it", () => {
+  it("unstamps exactly the causes the live contract cannot produce", () => {
+    const list = repairSql.match(/e->>'cause' in \(([^)]*)\)/);
+    expect(list).not.toBeNull();
+    const causes = (list?.[1] ?? "").split(",").map((c) => c.trim().replace(/^'|'$/g, "")).filter(Boolean);
+    // Behavioural parity, not a literal copy: for every cause the taxonomy
+    // has, the SQL's answer must equal the function's.
+    for (const c of CAUSES) {
+      expect([c, causes.includes(c)]).toEqual([c, causeOutsideContract(c, PLAN_CONTRACT)]);
+    }
+    // The migration only ever touches rows stamped for the live contract
+    expect(repairSql).toContain(`e->>'contract' = '${PLAN_CONTRACT}'`);
+  });
+
+  it("does not bump the version or move the revision clock", () => {
+    // A repair is not a revision. Bumping invents a cohort in
+    // by_rulebook_version that no plan was made under; touching updated_at
+    // postpones the next real revision, which is what fixes this properly.
+    expect(repairSql).not.toMatch(/set[\s\S]*\bversion\s*=/);
+    expect(repairSql).not.toMatch(/updated_at\s*=/);
+  });
+
+  it("cannot write NULL into rulebook.rules on a fresh replay", () => {
+    // jsonb_agg over zero rows returns SQL NULL and rules is NOT NULL, so on
+    // any environment where the seed row still holds '[]' — a db reset, a new
+    // local DB, a staging project — an unguarded aggregate aborts the file and
+    // takes the repair above with it.
+    const updates = repairSql.split(/update public\.rulebook/).slice(1);
+    expect(updates).toHaveLength(2);
+    for (const u of updates) {
+      expect(u).toMatch(/jsonb_typeof\(r\.rules\) = 'array'/);
+    }
+    // The backfill has no cause predicate to narrow it, so it needs both the
+    // outer coalesce and the non-empty guard.
+    expect(updates[1]).toContain("'[]'::jsonb)");
+    expect(updates[1]).toContain("jsonb_array_length(r.rules) > 0");
+  });
+
+  it("counts rules in force on the public badge, not rules stored", () => {
+    expect(trackRecordSql).toContain(`e->>'contract' = '${PLAN_CONTRACT}'`);
+    // One contract literal only: a second would mean the badge and the prompt
+    // could disagree about which era is live.
+    const literals = trackRecordSql.match(/'(market_v1|entry_chosen_v1)'/g) ?? [];
+    expect(new Set(literals)).toEqual(new Set([`'${PLAN_CONTRACT}'`]));
+    // Asserted on the statements only: the comment above them names the old
+    // expression in order to explain what changed.
+    const body = trackRecordSql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    expect(body).not.toContain("jsonb_array_length(rules)");
   });
 });

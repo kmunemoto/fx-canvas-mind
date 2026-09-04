@@ -103,9 +103,30 @@ export const LEGACY_CAUSES: readonly string[] = ["entry_too_far", "entry_too_ear
 export const canonicalCause = (c: string): string => (c === "entry_too_early" ? "chased_move" : c);
 
 // The causes a plan made under this contract can be diagnosed with. Readers:
-// diagnosisSchema() and parseDiagnosis().
+// diagnosisSchema(), parseDiagnosis() and causeOutsideContract().
 export const causesFor = (contract?: string | null): readonly Cause[] =>
   contract === MARKET_CONTRACT ? CAUSES.filter((c) => !LEGACY_CAUSES.includes(c)) : CAUSES;
+
+// A cause the given contract's taxonomy cannot produce, canonical spellings
+// folded first — so a rule filed under the dead spelling "entry_too_early" is
+// tested as the live cause "chased_move", which market_v1 does produce.
+//
+// "general" names no failure of any era and is exempt: it is the label the
+// consolidation schema offers for a rule that addresses no single cause, so
+// refusing it here would hold back every such rule. The text veto in
+// postmortem/prompt.ts is what covers "general".
+//
+// An unrecognised cause returns true: a rule whose cause string is not in the
+// taxonomy cannot prove it is followable, and the stamp is only ever granted
+// on proof.
+//
+// Readers: stampFor (postmortem/prompt.ts) and the v7 repair migration, whose
+// SQL cause list is pinned to this function by src/test/entry-contract.test.ts.
+export const causeOutsideContract = (cause: string, contract?: string | null): boolean => {
+  const c = canonicalCause(cause);
+  if (c === "general") return false;
+  return !(causesFor(contract) as readonly string[]).includes(c);
+};
 
 export const isCause = (v: unknown): v is Cause =>
   typeof v === "string" && (CAUSES as readonly string[]).includes(v);

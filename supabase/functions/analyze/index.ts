@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v26-2026-09-04T13:40:00Z";
+const FUNCTION_VERSION = "analyze-v27-2026-09-04T16:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -756,6 +756,15 @@ Deno.serve(async (req: Request) => {
         const shown = selectPromptRules(parseRules(rulebook.rules), locale, PLAN_CONTRACT);
         learnedRules = shown.text;
         rulesShown = shown.ids;
+        // Three distinct states, kept distinct the way the calendar already
+        // separates "read and clear" from "could not be read":
+        //   null -> the rulebook could not be read at all
+        //   0    -> it was read, and nothing in it was in force under this
+        //           contract, so the plan saw no rules
+        //   n>0  -> version n, and at least one of its rules reached the prompt
+        // Recorded on the row below. Without this a plan that saw an empty
+        // rulebook lands in version n's cohort and dilutes the very statistic
+        // used to judge whether version n helped.
       }
     } catch (err) {
       console.warn("Rulebook unavailable:", err instanceof Error ? err.message : String(err));
@@ -1410,6 +1419,10 @@ Deno.serve(async (req: Request) => {
     const context = {
       open_same_direction: openSameDirection,
       rules_shown: rulesShown,
+      // The version that was READ, kept beside the version that was USED, so
+      // "the book was there and empty for me" stays distinguishable from "the
+      // book could not be read" after the fact.
+      rulebook_version_read: rulebookVersion,
       events_ahead: eventsAhead,
       timeframes,
       entry: compactSnapshot(timeframes[0], snapshots[0]),
@@ -1471,7 +1484,7 @@ Deno.serve(async (req: Request) => {
           // entries can be tracked over time
           entry_check: entryCheck,
           context,
-          rulebook_version: rulebookVersion,
+          rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
           // Which contract this plan was made under. Never inferred: a reader
           // that has to guess will guess the legacy value and the two eras
           // will pool silently.
@@ -1523,7 +1536,7 @@ Deno.serve(async (req: Request) => {
             price_at_signal: priceAtSignal,
             entry_check: entryCheck,
             context,
-            rulebook_version: rulebookVersion,
+            rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
             plan_contract: PLAN_CONTRACT,
             priced_at: pricedAtIso,
             outcome: "pending",
