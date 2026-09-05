@@ -44,7 +44,7 @@ export const HISTORY_COLUMNS = [
   "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
-  "rulebook_version", "plan_contract", "wait_check",
+  "rulebook_version", "plan_contract", "wait_check", "wait_plan",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";

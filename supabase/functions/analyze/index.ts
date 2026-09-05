@@ -33,8 +33,10 @@ import {
   MIN_STOP_ATR,
   TREND_ADX,
   evaluateEntry,
+  waitPlanFor,
   type EntryType,
   type EntryVerdict,
+  type WaitPlan,
 } from "./entry.ts";
 
 import { parseRules, selectPromptRules } from "./rules.ts";
@@ -1560,6 +1562,27 @@ Deno.serve(async (req: Request) => {
       feed_delta_atr: feedDeltaAtr,
     };
 
+    // What the row is standing aside FROM, decided here rather than
+    // reconstructed later from what the market did. Every input is on this
+    // page and none of them can see forward: the model's own signal, the
+    // direction it declared while declining to trade, the regime the
+    // indicators read, the entry the gate approved, and the ATR that sized
+    // it. Built for BUY and SELL too — a plan the server refuses becomes a
+    // WAIT below, and the refused direction is exactly what a WAIT of that
+    // kind should be graded against.
+    const waitPlan: WaitPlan = waitPlanFor({
+      proposedSignal,
+      declaredDirection: detail && typeof detail.direction === "string" ? detail.direction : null,
+      regime: entryVerdict.regime,
+      regimeDirection: entryVerdict.regimeDirection,
+      entry: marketEntry,
+      atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
+      quote: decisionQuote,
+      decimals,
+      contract: PLAN_CONTRACT,
+      decidedAt: pricedAtIso,
+    });
+
     // The same direction on the same pair already open from an earlier plan:
     // another one is the same bet again, not a new one, and the record would
     // count it as an independent sample. Said on the plan, and kept with it.
@@ -1710,6 +1733,10 @@ Deno.serve(async (req: Request) => {
           // Why a plan was or was not publishable, so the rate of unfillable
           // entries can be tracked over time
           entry_check: entryCheck,
+          // Only on a row that stood aside: on a published trade the plan
+          // itself is the prediction, and a second one beside it would be a
+          // second thing to keep in step.
+          wait_plan: normalizedAnalysis.signal === "WAIT" ? waitPlan : null,
           context,
           rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
           // Which contract this plan was made under. Never inferred: a reader

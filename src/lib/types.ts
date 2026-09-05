@@ -394,20 +394,52 @@ export interface LoopHealth {
 // scored against the smallest trade the app's own entry gate would have
 // allowed from the price at the moment of the call — 'missed' means that
 // trade existed and won.
-export type WaitVerdict = "missed" | "correct" | "pending" | "unknown";
+//
+// WHICH trade is decided at the call and stored in wait_plan, never chosen
+// afterwards from what paid. Where nothing at the time named a side there is
+// no prediction to score: 'no_call', counted on neither side of the rate.
+export type WaitVerdict = "missed" | "correct" | "pending" | "unknown" | "no_call";
+
+// The trade the WAIT stood aside from, fixed at the moment of the call.
+// Mirror of the WaitPlan written by supabase/functions/analyze/entry.ts.
+export interface WaitPlan {
+  direction: "BUY" | "SELL" | null;
+  direction_source: "proposed_signal" | "declared_direction" | "regime" | "none";
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  risk: number | null;
+  reward: number | null;
+  atr: number | null;
+  spread: number | null;
+  contract: string;
+  decided_at: string;
+  scorer: number;
+}
 
 export interface WaitCheck {
   verdict: WaitVerdict;
   direction: "BUY" | "SELL" | null;
+  // The same direction, named for what it is: the one fixed at the call.
+  // `direction` used to mean "the way the missed trade went", chosen from the
+  // outcome — a reader who assumes the old meaning reads a fact that is no
+  // longer in the data.
+  plan_direction?: "BUY" | "SELL" | null;
+  direction_source?: string | null;
   r: number | null;
   at: string | null;
   price: number | null;
   atr: number | null;
   risk: number | null;
   reward: number | null;
+  stop?: number | null;
+  target?: number | null;
   bars_examined: number;
   horizon_ms: number;
   checked_at: string;
+  // Which scoring rule produced this verdict. 2 is the decision-time scorer;
+  // absent means the two-sided one that chose the winning side afterwards.
+  scorer?: number;
 }
 
 // Row shape of public.analyses as read by the client
@@ -447,6 +479,7 @@ export interface AnalysisRecord {
   // The verdict on a call that declined to trade (v24+; null until the
   // tracker has looked, absent on rows written before it existed)
   wait_check?: WaitCheck | null;
+  wait_plan?: WaitPlan | null;
   shadow?: boolean;
   shadow_of?: string | null;
   rulebook_version?: number | null;

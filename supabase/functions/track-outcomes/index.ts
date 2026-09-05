@@ -28,7 +28,7 @@ import {
   type OpenRow,
 } from "./evaluate.ts";
 import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
-import { judgeWait, type WaitBar } from "./waits.ts";
+import { judgeWait, type WaitBar, type WaitPlan } from "./waits.ts";
 
 const TRACKER_VERSION = "track-outcomes-v12-2026-09-05T05:30:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
@@ -498,7 +498,7 @@ Deno.serve(async (req: Request) => {
     if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
       const waitRes = await rest(
         "analyses?outcome=eq.skipped&or=(wait_check.is.null,wait_check->>verdict.eq.pending)" +
-          `&select=id,pair,interval,created_at,price_at_signal,context&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
+          `&select=id,pair,interval,created_at,price_at_signal,context,wait_plan&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
       );
       const waitRaw = waitRes.ok ? await waitRes.json().catch(() => null) : null;
       const waitRows = Array.isArray(waitRaw) ? waitRaw.filter(isRecord) : [];
@@ -542,6 +542,10 @@ Deno.serve(async (req: Request) => {
               signalMs,
               horizonMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
             },
+            // The trade fixed at the moment of the call. A row without one
+            // grades no_call rather than being scored against whichever side
+            // happened to pay.
+            isRecord(row.wait_plan) ? (row.wait_plan as unknown as WaitPlan) : null,
             bars,
             nowMs,
           );

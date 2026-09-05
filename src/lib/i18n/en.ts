@@ -178,12 +178,21 @@ export const en: Dict = {
       summary: (judged: number, missed: number, rate: number) =>
         `Standing aside: of ${judged} judged calls, ${missed} (${rate}%) would have won on the smallest trade this app itself allows`,
       verdicts: {
-        missed: "Standing aside was wrong — even the smallest allowed trade would have won",
-        correct: "Standing aside cost nothing — neither direction paid",
+        missed: "Standing aside was wrong — the trade named at the call would have won",
+        correct: "Standing aside cost nothing — that trade was stopped out, or never paid in time",
         pending: "The review window has not closed yet",
         unknown: "The data needed to judge this call is missing",
+        no_call: "Nothing at the moment of the call named a side, so this one is not scored",
       },
-      direction: (dir: string) => `Direction that paid: ${dir}`,
+      direction: (dir: string, source: string) => `Direction fixed at the call: ${dir} (${source})`,
+      directionSources: {
+        proposed_signal: "the model asked for this trade and the server refused it",
+        declared_direction: "the direction the model declared while declining to trade",
+        regime: "the trend the indicators read",
+        none: "none",
+      },
+      planNote: "This direction, stop and target were fixed and stored at the moment of the call — not chosen afterwards from what the market did",
+      noCallNote: "Nothing at the time named a side, so this call counts on neither side of the miss rate",
       basis: "Trade tested",
       basisNote: (risk: string, reward: string) =>
         `Stop ${risk} / target ${reward} — the tightest stop the gate allows and the nearest target that still clears the risk/reward floor`,

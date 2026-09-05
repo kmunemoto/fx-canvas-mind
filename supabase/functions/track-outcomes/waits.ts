@@ -16,10 +16,27 @@
 // target that still clears its risk/reward floor — would have won from the
 // price at the moment of the call.
 //
+// WHICH SIDE that trade is on has to be decided at the call, and it is: the
+// plan is built and stored by analyze (`waitPlanFor`) and only resolved here.
+// The first version of this file walked a long AND a short and called the
+// WAIT a miss if either paid. Nothing at the moment of the call chose the
+// side — the outcome did — so a market that wandered 0.48 ATR the wrong way
+// and then 0.4 ATR the right way scored as a missed trade, and a market that
+// did the reverse scored as one too. Over enough bars almost every market
+// does one or the other. It was measuring the market's range and reporting it
+// as the analyst's over-caution, in the one number that exists to detect
+// over-caution.
+//
+// A row with no stored plan, or a plan whose direction nothing at the time
+// named, is not scored at all: `no_call`. An unmeasurable call is a smaller
+// loss than a fabricated verdict.
+//
 // Deno-free on purpose: src/test/waits.test.ts imports this file directly.
 
-import { MIN_RISK_REWARD, MIN_STOP_ATR } from "../analyze/entry.ts";
+import { MIN_RISK_REWARD, MIN_STOP_ATR, WAIT_SCORER, type WaitPlan } from "../analyze/entry.ts";
 import { isMarketClosed } from "./quotes.ts";
+
+export type { WaitPlan };
 
 export interface WaitBar {
   // Bar open, epoch ms
@@ -29,22 +46,27 @@ export interface WaitBar {
 }
 
 export type WaitVerdict =
-  // The market offered a trade this app would have allowed, and it won
+  // The trade named at the call was there, and it won
   | "missed"
-  // Neither direction paid: standing aside cost nothing
+  // That trade was stopped out, or never paid inside the window
   | "correct"
   // Not enough market time has passed to say yet
   | "pending"
   // The call predates the data needed to judge it (no ATR or no signal price)
-  | "unknown";
+  | "unknown"
+  // Nothing at the moment of the call named a side, so there is no prediction
+  // to score. Terminal, and deliberately not counted either way.
+  | "no_call";
 
 export interface WaitCheck {
   verdict: WaitVerdict;
-  // Which way the missed trade would have gone
+  // The direction fixed AT THE CALL, echoed here so a reader of this object
+  // alone can see what was graded. Never chosen from the outcome.
   direction: "BUY" | "SELL" | null;
-  // What that minimal trade would have paid, in multiples of its own risk.
-  // It is MIN_RISK_REWARD by construction when it won — recorded so the
-  // number is visible rather than implied.
+  plan_direction: "BUY" | "SELL" | null;
+  direction_source: string | null;
+  // What that minimal trade paid, in multiples of its own risk: the stored
+  // plan's own reward/risk when it won, −1 when it was stopped.
   r: number | null;
   // When the target was reached
   at: string | null;
@@ -53,9 +75,14 @@ export interface WaitCheck {
   atr: number | null;
   risk: number | null;
   reward: number | null;
+  stop: number | null;
+  target: number | null;
   bars_examined: number;
   horizon_ms: number;
   checked_at: string;
+  // Which scoring rule produced this verdict. Verdicts from different rules
+  // are different measurements and must not be pooled into one miss rate.
+  scorer: number;
 }
 
 // Where a horizon of `horizonMs` of OPEN market ends, starting from `fromMs`.
@@ -79,6 +106,11 @@ export const marketHorizonEnd = (fromMs: number, horizonMs: number): number => {
 // clears the risk/reward floor. Both come from the app's own constants: a
 // WAIT is judged against the least the app would have demanded of a trade,
 // not against a threshold invented for the purpose.
+//
+// Kept exported for the tests and for anyone reconstructing an old verdict by
+// hand; the scorer itself now reads the levels off the stored plan, because
+// the plan was sized by these same constants at the moment of the call and a
+// later change to them must not silently re-grade calls already made.
 export const minimalTrade = (atr: number): { risk: number; reward: number } => {
   const risk = MIN_STOP_ATR * atr;
   return { risk, reward: MIN_RISK_REWARD * risk };
@@ -90,7 +122,7 @@ interface SideState {
   at: number | null;
 }
 
-// One side of the hypothetical trade walked through one bar.
+// The hypothetical trade walked through one bar.
 //
 // A bar that reaches both levels is treated as a stop-out, not a win. The
 // order within the bar is unknowable at this resolution, and a WAIT should
@@ -110,8 +142,14 @@ const walk = (
   return state;
 };
 
+const finite = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v);
+
 /**
  * Score a WAIT against the bars that followed it.
+ *
+ * `plan` is the trade fixed at the moment of the call (analyze's
+ * `waitPlanFor`). Without one — or without a direction on it — there is no
+ * prediction to grade and the verdict is `no_call`.
  *
  * `bars` must start at or after the signal and be ordered oldest first.
  * Bars stamped inside the weekend break are skipped: a level "reached" while
@@ -124,40 +162,53 @@ export const judgeWait = (
     signalMs: number;
     horizonMs: number;
   },
+  plan: WaitPlan | null,
   bars: WaitBar[],
   nowMs: number,
 ): WaitCheck => {
   const checked_at = new Date(nowMs).toISOString();
   const base: WaitCheck = {
     verdict: "unknown",
-    direction: null,
+    direction: plan?.direction ?? null,
+    plan_direction: plan?.direction ?? null,
+    direction_source: plan?.direction_source ?? null,
     r: null,
     at: null,
-    price: input.price,
-    atr: input.atr,
-    risk: null,
-    reward: null,
+    // The stored plan's own numbers when it has them: those are what was
+    // graded. The row's columns are the fallback for a plan that got as far
+    // as being written but not sized.
+    price: plan && finite(plan.entry) ? plan.entry : input.price,
+    atr: plan && finite(plan.atr) ? plan.atr : input.atr,
+    risk: plan && finite(plan.risk) ? plan.risk : null,
+    reward: plan && finite(plan.reward) ? plan.reward : null,
+    stop: plan && finite(plan.stop) ? plan.stop : null,
+    target: plan && finite(plan.target) ? plan.target : null,
     bars_examined: 0,
     horizon_ms: input.horizonMs,
     checked_at,
+    scorer: WAIT_SCORER,
   };
-  const { price, atr } = input;
-  if (price === null || atr === null || !Number.isFinite(price) || !Number.isFinite(atr) || atr <= 0) {
+
+  // No plan, or a plan nothing at the time gave a side to: unmeasurable, and
+  // said so. Terminal — re-running the sweep will not conjure a direction the
+  // row never carried, and the alternative (picking the side that paid) is
+  // the bias this whole module was rewritten to remove.
+  if (!plan || plan.direction === null) return { ...base, verdict: "no_call" };
+  if (!finite(plan.entry) || !finite(plan.stop) || !finite(plan.target) || !finite(plan.risk) || !finite(plan.reward)) {
     return base;
   }
 
-  const { risk, reward } = minimalTrade(atr);
-  const withLevels = { ...base, risk, reward };
+  const direction = plan.direction;
 
   // The horizon is MARKET time, not wall clock.
   //
   // Measured in wall clock, a WAIT issued on a Friday spends most of its
   // 48-hour window on a shut market: almost no bars survive the weekend
-  // filter, neither direction is stopped, the window runs out, and the call is
-  // graded "correct" on no evidence at all. Since the whole point is to detect
-  // over-caution, a WAIT that grades itself correct for free is the failure
-  // mode to avoid. Walk forward one interval at a time and only count the
-  // hours the market was open.
+  // filter, the trade is neither stopped nor paid, the window runs out, and
+  // the call is graded "correct" on no evidence at all. Since the whole point
+  // is to detect over-caution, a WAIT that grades itself correct for free is
+  // the failure mode to avoid. Walk forward one interval at a time and only
+  // count the hours the market was open.
   const until = marketHorizonEnd(input.signalMs, input.horizonMs);
   const usable = bars
     .filter((b) => b.t > input.signalMs && b.t <= Math.min(until, nowMs))
@@ -165,37 +216,34 @@ export const judgeWait = (
     .filter((b) => Number.isFinite(b.high) && Number.isFinite(b.low))
     .sort((a, b) => a.t - b.t);
 
-  let long: SideState = { stopped: false, won: false, at: null };
-  let short: SideState = { stopped: false, won: false, at: null };
-
+  let side: SideState = { stopped: false, won: false, at: null };
   for (const bar of usable) {
-    long = walk(long, bar, price - risk, price + reward, "BUY");
-    short = walk(short, bar, price + risk, price - reward, "SELL");
-    if (long.won || short.won) break;
+    side = walk(side, bar, plan.stop, plan.target, direction);
+    if (side.stopped || side.won) break;
   }
 
-  const examined = { ...withLevels, bars_examined: usable.length };
+  const examined = { ...base, bars_examined: usable.length };
 
-  // Whichever side got paid first is the trade that was there to be taken.
-  // Both cannot win: the first to reach its target ends the walk.
-  const winner = long.won ? "BUY" : short.won ? "SELL" : null;
-  if (winner) {
-    const at = long.won ? long.at : short.at;
+  // The trade named at the call was there and it paid. THIS is the miss, and
+  // it is the app's only evidence of over-caution.
+  if (side.won) {
     return {
       ...examined,
       verdict: "missed",
-      direction: winner,
-      r: MIN_RISK_REWARD,
-      at: at === null ? null : new Date(at).toISOString(),
+      r: Number((plan.reward / plan.risk).toFixed(2)),
+      at: side.at === null ? null : new Date(side.at).toISOString(),
     };
   }
 
-  // Both directions were stopped out, so there was nothing to take. Standing
-  // aside was right, and that is settled even if the horizon has not run out.
-  if (long.stopped && short.stopped) return { ...examined, verdict: "correct", direction: null };
+  // Stopped out: the trade declined was a losing one, and that is settled
+  // even if the horizon has not run out.
+  if (side.stopped) return { ...examined, verdict: "correct", r: -1 };
 
-  // Still inside the window with one side alive: no verdict yet.
-  if (nowMs < until) return { ...examined, verdict: "pending", direction: null };
+  // Still inside the window and still alive: no verdict yet.
+  if (nowMs < until) return { ...examined, verdict: "pending" };
 
-  return { ...examined, verdict: "correct", direction: null };
+  // The window ran out with the trade neither paid nor stopped. Standing
+  // aside cost nothing, and it saved nothing either: r stays null rather
+  // than claiming a loss that never happened.
+  return { ...examined, verdict: "correct" };
 };

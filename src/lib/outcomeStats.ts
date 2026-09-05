@@ -242,8 +242,11 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
     t.calls++;
     if (r.signal === "WAIT" || r.outcome === "skipped") {
       t.waits++;
-      // 'pending' has not been judged yet and 'unknown' never can be, so
-      // neither belongs on either side of the rate.
+      // 'pending' has not been judged yet, 'unknown' never can be, and
+      // 'no_call' means nothing at the time named a side to grade — so none
+      // of the three belongs on either side of the rate. Named here rather
+      // than left to fall through the switch: a reader counting 0 of 3 judged
+      // should be able to see it is by construction, not a stalled sweep.
       const verdict = r.wait_check?.verdict;
       if (verdict === "missed" || verdict === "correct") {
         t.waitsJudged++;

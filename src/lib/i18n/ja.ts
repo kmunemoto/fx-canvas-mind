@@ -188,12 +188,21 @@ export const ja = {
       summary: (judged: number, missed: number, rate: number) =>
         `見送りの検証: 判定済み ${judged}件のうち ${missed}件（${rate}%）は、このアプリ自身が許す最小のトレードなら勝てていました`,
       verdicts: {
-        missed: "見送るべきではなかった（最小のトレードでも勝てていた）",
-        correct: "見送りは妥当だった（どちらに入っても取れていない）",
+        missed: "見送るべきではなかった（判断時点で想定した方向のトレードが勝っていた）",
+        correct: "見送りは妥当だった（そのトレードは損切りに掛かったか、期間内に届かなかった）",
         pending: "検証期間が終わっていません",
         unknown: "検証に必要なデータがありません",
+        no_call: "判断時点で方向が決まっていないため、採点していません",
       },
-      direction: (dir: string) => `取れていた方向: ${dir}`,
+      direction: (dir: string, source: string) => `判断時点で想定した方向: ${dir}（${source}）`,
+      directionSources: {
+        proposed_signal: "AIが出したシグナルをサーバが却下",
+        declared_direction: "AIが宣言した相場の方向",
+        regime: "指標が示したトレンドの向き",
+        none: "なし",
+      },
+      planNote: "この方向・損切り・利確は判断した時点で確定して保存したものです。値動きを見てから選んだものではありません",
+      noCallNote: "判断時点で方向を示す材料がなかったため、この見送りは「当たり・外れ」のどちらにも数えていません",
       basis: "検証したトレード",
       basisNote: (risk: string, reward: string) =>
         `損切り幅 ${risk} / 利確幅 ${reward}（ゲートが許す最小の損切りと、リスクリワード下限を満たす最も近い利確）`,
