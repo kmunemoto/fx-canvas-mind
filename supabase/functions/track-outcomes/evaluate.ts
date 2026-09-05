@@ -1047,9 +1047,12 @@ export const judgePlan = async (
     // a bar the clock says is still forming; a bar no later bar follows on
     // the tape, for less than a bar of OPEN market since its end (a feed
     // serving a bar part-formed does so for minutes; the bound is open
-    // market, so a plan made in the hour before Friday's close waits until
-    // Sunday's open — at its own cadence, since isDue does not hurry a plan
-    // while the market is shut, and with no extra fetches); no bar around
+    // market, counted by the NARROW predicate, so an ordinary Friday plan is
+    // done with that same night — 21:00-22:00Z still counts as open and banks
+    // the bar. Only a signal bar ending at 22:00Z waits for Sunday's open, and
+    // analyze writes no plan that late; a plan that does wait waits at its own
+    // cadence, since isDue does not hurry a plan while the market is shut, and
+    // with no extra fetches); no bar around
     // the signal at all yet (the feed has not emitted it, and the market
     // fill was priced off the plan's own number). Each sends the plan back
     // through this branch next sweep.
