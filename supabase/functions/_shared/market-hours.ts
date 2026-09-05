@@ -5,12 +5,12 @@
 //
 // Deno-free on purpose: the vitest suite imports this directly.
 
-// May I throw this bar away? / Is "enter now" an available action?
+// May I throw this bar away? / How much market time has passed?
 //
 // Names only the hours that are shut under every daylight-saving rule. Being
-// wrong here destroys real data, or refuses a plan the user could have taken,
-// so it is deliberately narrow: all of Saturday, Friday from the latest
-// possible close, and Sunday before the earliest possible open.
+// wrong here destroys real data, or stops the clock on a plan while the market
+// was trading, so it is deliberately narrow: all of Saturday, Friday from the
+// latest possible close, and Sunday before the earliest possible open.
 export const isMarketClosed = (ms: number): boolean => {
   const d = new Date(ms);
   const day = d.getUTCDay();
@@ -21,10 +21,13 @@ export const isMarketClosed = (ms: number): boolean => {
   return false;
 };
 
-// Is this absence evidence that the feed failed?
+// Is this absence evidence that the feed failed? / Is "enter now" an
+// available action?
 //
 // The opposite safe answer: the WIDEST possible closure, because an hour that
-// might have been shut is not evidence of anything. Using the narrow predicate
+// might have been shut is not evidence of anything — and has no reliable "now"
+// to enter at, which is why analyze refuses on this predicate, not the narrow
+// one (a narrow refusal left a one-hour hole every week). Using the narrow predicate
 // for coverage counted the summer band between the real 21:00Z Friday close
 // and the notional 22:00Z as open market with no bars in it — four missing
 // 15min intervals, past the tolerance — so every 15min window spanning a

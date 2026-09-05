@@ -1047,9 +1047,12 @@ export const judgePlan = async (
     // a bar the clock says is still forming; a bar no later bar follows on
     // the tape, for less than a bar of OPEN market since its end (a feed
     // serving a bar part-formed does so for minutes; the bound is open
-    // market, so a plan made in the hour before Friday's close waits until
-    // Sunday's open — at its own cadence, since isDue does not hurry a plan
-    // while the market is shut, and with no extra fetches); no bar around
+    // market, counted by the NARROW predicate, so an ordinary Friday plan is
+    // done with that same night — 21:00-22:00Z still counts as open and banks
+    // the bar. Only a signal bar ending at 22:00Z waits for Sunday's open, and
+    // analyze writes no plan that late; a plan that does wait waits at its own
+    // cadence, since isDue does not hurry a plan while the market is shut, and
+    // with no extra fetches); no bar around
     // the signal at all yet (the feed has not emitted it, and the market
     // fill was priced off the plan's own number). Each sends the plan back
     // through this branch next sweep.
@@ -1123,8 +1126,10 @@ export const judgePlan = async (
         // finding (a fill, or a possible one) stands: quiet sub-bars neither
         // confirm nor refute a touch that lived in the dropped one.
         //
-        // Known limits, all on the legacy contract (analyze has issued only
-        // market orders since market_v1, and no legacy row is pending): a
+        // Known limits, all on the legacy contract, and all needing a limit
+        // or stop order (analyze has issued only market orders since
+        // market_v1; the one legacy row still pending is itself classified
+        // `market`, its entry within FILL_TOLERANCE of the signal price): a
         // gap across the entry between two later sub-bars dates the fill to
         // the signal instant, so the near-side sub-bars before the gap are
         // walked as in the trade; a level reached between the signal and the
