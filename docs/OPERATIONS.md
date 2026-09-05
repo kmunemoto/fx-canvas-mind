@@ -349,7 +349,10 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 - バンドルは一度モデルの出力を経由するので写し間違いが起こり得る（このプロジェクトで実際に複数回起きた）。検証を省かない。
   postmortem（約 71 KB）だけでなく analyze（約 54 KB）のバンドルも Read の 1 ページに収まらない。バンドルを持つ 3 つ（analyze / track-outcomes / postmortem）はどれも必ずワークフロー経由。
   econ-calendar は `./events.ts` しか読まないのでバンドルを作らず、この手順の対象外。
-- 長い関数（postmortem）を差し替える間は cron を止めてよい: `cron.alter_job(4, active := false)` → デプロイ → `true`。
+- 長い関数（postmortem）を差し替える間は cron を止める: `cron.alter_job(4, active := false)` → デプロイ → `true`。
+  止めずにデプロイすると、切り替えの瞬間に飛んだ tick は応答を受け取れない。2026-09-05 11:08Z の実測では pg_net が 150 秒待ち切って
+  `Timeout of 150000 ms reached` を記録し、本文は空だった。関数は起動しておらずクールダウンも取っていないので次の tick は普通に走る（1 回分の記録が消えるだけ）。
+  検証付きデプロイは 3 回まで試すので、止めるべき窓は数分ではなく十数分ある。
   判定側（track-outcomes）は 1 回の走行が短い（LLM 呼び出しが無く、cron の timeout も 90 s）ので通常は不要。10 分クールダウンは両関数に同じ値で入っており、止める・止めないの理由にはならない。
 - 本番での確認: 次の sweep の返り値（`net._http_response`）の `version` が新しいこと。analyze は認証なしで叩くと 401 と一緒に `version` と `diagnostics` を返す。
 
