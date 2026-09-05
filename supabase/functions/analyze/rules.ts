@@ -77,7 +77,16 @@ export type RuleLocale = "ja" | "en";
 // Prompt real estate is not free: enough rules to matter, few enough to be
 // read
 export const MAX_PROMPT_RULES = 12;
+// The character budget, per language. A character is not a fixed amount of
+// prompt: Japanese runs about a token per character where English runs about
+// four characters to the token, so the same twelve rules cost far less in
+// English. Charging both languages 1600 characters therefore does not buy
+// fairness — it silently shows the English analyst fewer rules for a smaller
+// bill. The English budget is doubled and still the cheaper of the two.
 export const MAX_PROMPT_CHARS = 1600;
+export const MAX_PROMPT_CHARS_EN = 3200;
+export const promptCharBudget = (locale: RuleLocale): number =>
+  locale === "en" ? MAX_PROMPT_CHARS_EN : MAX_PROMPT_CHARS;
 // A rule with this much support or less is shown as under review
 export const VERIFYING_SUPPORT = 2;
 
@@ -195,7 +204,7 @@ export const selectPromptRules = (
   // every rule — what a caller with no contract to compare against should get.
   contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
-  maxChars = MAX_PROMPT_CHARS,
+  maxChars = promptCharBudget(locale),
 ): PromptRules => {
   const lines: string[] = [];
   const ids: string[] = [];
@@ -222,5 +231,5 @@ export const renderLearnedRules = (
   locale: RuleLocale = "ja",
   contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
-  maxChars = MAX_PROMPT_CHARS,
+  maxChars = promptCharBudget(locale),
 ): string => selectPromptRules(rules, locale, contract, maxRules, maxChars).text;
