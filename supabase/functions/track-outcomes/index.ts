@@ -30,7 +30,7 @@ import {
 import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
 import { judgeWait, type WaitBar } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v10-2026-09-05T03:30:00Z";
+const TRACKER_VERSION = "track-outcomes-v11-2026-09-05T05:00:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -355,7 +355,7 @@ Deno.serve(async (req: Request) => {
     // mid feed exactly as it was before.
     let quoteGroups = 0;
     let quoteEmptyKeys = 0;
-    const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null> => {
+    const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null | "deferred"> => {
       if (!supportsQuotes(pair, evalInterval)) return null;
       if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
       if (nowMs - fromMs > MAX_QUOTE_LOOKBACK_MS) return null;
@@ -366,11 +366,14 @@ Deno.serve(async (req: Request) => {
         // refuses the NEWEST keys — the current trading day — and a series
         // short of its last three bars still passes the coverage check
         // (MAX_GAP_INTERVALS). Judged on it, a touch in those bars waits a
-        // tick and a plan made in them has no signal bar. Fall back to the
-        // mid feed for this group instead, as for any incomplete series.
+        // tick and a plan made in them has no signal bar. Nor is the group
+        // judged on the mid feed instead: a market fill is re-derived on
+        // every sweep that revisits its signal bar, and on the mid feed that
+        // writes the plan's own number over the ask the quotes had given. The
+        // group waits a tick; its rows keep their checked_at and go first.
         if (quoteStarved) {
           errors.push(`${pair}|${evalInterval}: quotes deferred (request budget)`);
-          return null;
+          return "deferred";
         }
         if (!res || res.bars.length === 0) return null;
         // A gap in the two-sided series would be judged as "price never got
@@ -442,6 +445,10 @@ Deno.serve(async (req: Request) => {
         return Number.isFinite(t) ? Math.min(min, t) : min;
       }, nowMs);
       const quotes = await fetchQuotesFor(pair, evalInterval, oldestMs);
+      if (quotes === "deferred") {
+        deferred += groupRows.length;
+        continue;
+      }
 
       for (const row of groupRows) {
         const judgement = await judgePlan(row, candles, evalInterval, nowMs, fetchFine, quotes ?? undefined);

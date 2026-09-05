@@ -335,7 +335,9 @@ export const isDue = (row: Pick<OpenRow, "interval" | "evaluation">, nowMs: numb
   const ev = row.evaluation;
   const waiting = ev?.refine_pending === true || ev?.signal_bar_pending === true;
   const bar = INTERVAL_MS[ev?.eval_interval ?? ""] ?? cadence;
-  const every = waiting ? Math.min(cadence, bar) : cadence;
+  // Nothing a waiting plan waits for happens while the market is shut, so
+  // the weekend is checked at the plan's own cadence, not every bar
+  const every = waiting && !isMarketClosed(nowMs) ? Math.min(cadence, bar) : cadence;
   // Slack so a cron tick a few seconds early still counts
   return nowMs - checked >= every - MIN;
 };
@@ -749,7 +751,10 @@ const assessSignalBar = (
   prior?: State,
 ): { state: State; event: (Terminal & { kind: "ambiguous" }) | null } => {
   const { row, orderType } = ctx;
-  let state = prior?.filled ? prior : EMPTY_STATE;
+  // A prior that is only a possible fill is kept too: the touch it records
+  // lived in the coarse bar, or in the dropped sub-bar around the signal, and
+  // quiet sub-bars after the signal neither confirm nor refute it
+  let state = prior ?? EMPTY_STATE;
   if (state.filled) {
     // established already
   } else if (orderType === "market") {
@@ -814,7 +819,17 @@ export const judgePlan = async (
   // bar when none does (a fill inside a gap)
   const endOfBarHolding = (ms: number): number => {
     const holder = series.find((b) => b.t <= ms && ms < b.t + b.ms);
-    return holder ? holder.t + holder.ms : ms + evalMs;
+    if (holder) return holder.t + holder.ms;
+    // A hole at the fill bar: the fill was proved by that bar's close, which
+    // ends no later than the next bar's open
+    const next = series.find((b) => b.t > ms);
+    return Math.min(ms + evalMs, next?.t ?? Infinity);
+  };
+  // Milliseconds of open market between two instants, sampled by the minute
+  const openMsSince = (fromMs: number, toMs: number): number => {
+    let open = 0;
+    for (let t = fromMs; t < toMs; t += MIN) if (!isMarketClosed(t)) open += MIN;
+    return open;
   };
   const windowCoversSignal = series.length > 0 && series[0].t <= createdMs + evalMs;
 
@@ -833,14 +848,17 @@ export const judgePlan = async (
   const orderType = classifyOrder(row, reference);
   // What a market order really costs: on two-sided data, the fill side's
   // price around the signal. On mid data there is nothing better than the
-  // plan's own number, which is what every judgement used before. Read off
-  // the signal bar as this sweep holds it — the live close while it forms,
-  // the close once it has closed — and re-derived by every sweep that goes
-  // back through the signal bar, so the record settles on the closed bar's.
+  // plan's own number, which is what every judgement used before. The
+  // coarse bar's close is the first estimate; once the signal bar is split,
+  // the fill is re-priced off the open of the first sub-bar after the signal
+  // (see the splice), which is minutes from the instant rather than up to an
+  // hour, and does not depend on how far formed the coarse bar was when this
+  // sweep read it. Re-derived by every sweep that goes back through the
+  // signal bar, so the record ends up the same whichever tick first saw it.
   const marketFillPrice = twoSided
     ? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : row.entry_point)
     : row.entry_point;
-  const ctx: Ctx = {
+  let ctx: Ctx = {
     row,
     orderType,
     missedArmed: reference === null || (row.signal === "BUY" ? row.take_profit_1 > reference : row.take_profit_1 < reference),
@@ -991,6 +1009,11 @@ export const judgePlan = async (
     // window_short branch below and lose a fill an earlier sweep had already
     // established. The flag self-terminates: a deferred graze within
     // MAX_REFINE_ATTEMPTS sweeps, a forming bar as soon as it has closed.
+    // When the window no longer covers the signal, a pending graze is
+    // dropped along with the branch — accepted, because index.ts cannot
+    // produce it: the quotes series is fetched from the oldest open plan's
+    // created_at, the mid series is thousands of bars deep, and the flag
+    // lives at most three sweeps.
   } else if (prevFill !== null && (prev?.signal_bar_pending !== true || !windowCoversSignal)) {
     state = prevFill.state;
     post = post.filter((x) => x.t >= prevFill.at);
@@ -1016,14 +1039,18 @@ export const judgePlan = async (
     // Whether the signal bar can be considered done with, judged on the
     // series as fetched, before any splice moves `signalBar`. Not done with:
     // a bar the clock says is still forming; a bar no later bar follows on
-    // the tape (the feed may still serve it part-formed after its end); no
-    // bar around the signal at all yet (the feed has not emitted it, and the
-    // market fill was priced off the plan's own number). Each sends the plan
-    // back through this branch next sweep.
+    // the tape, for less than a bar of open market since its end (the feed
+    // may still serve it part-formed — for minutes, not for the two days of
+    // a weekend close, over which holding the plan pending re-fetched its
+    // group every waiting tick for nothing); no bar around the signal at all
+    // yet (the feed has not emitted it, and the market fill was priced off
+    // the plan's own number). Each sends the plan back through this branch
+    // next sweep.
     const sb = signalBar;
     const signalBarForming = sb === null
       ? post.length === 0
-      : sb.t + sb.ms > nowMs || !series.some((b) => b.t >= sb.t + sb.ms);
+      : sb.t + sb.ms > nowMs ||
+        (!series.some((b) => b.t >= sb.t + sb.ms) && openMsSince(sb.t + sb.ms, nowMs) < evalMs);
     // A coarse signal bar that leaves the fill or the first touches
     // untimed: replace it with finer bars and look again
     if (signalBar !== null && finerRung(signalBar.ms) !== null && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
@@ -1066,13 +1093,43 @@ export const judgePlan = async (
         refinedInterval = signalRung;
         series = [...series.slice(0, signalIdx), ...fine, ...series.slice(signalIdx + 1)];
         ({ firstIdx, signalIdx, signalBar, post } = locate());
-        // Once split, the sub-bars after the signal can date a limit or stop
-        // fill themselves: if any reaches the entry the walk re-derives the
-        // fill there, and a level touched before it is a miss, not a trade.
-        // Only when none does was the crossing inside the dropped sub-bar
-        // around the signal, and the earlier sweep's fill stands.
-        const reDerived = prior !== undefined && fine.some((x) => touches(x.c, row.entry_point));
-        sig = assessSignalBar(ctx, reference, signalBar, createdMs, reDerived ? undefined : prior);
+        // What the sub-bars can and cannot say about the entry.
+        //
+        // A market order: filled at the signal instant, now re-priced off
+        // the open of the first sub-bar after it — minutes from the fill
+        // instead of the coarse bar's close up to an hour later, and
+        // independent of how far formed that coarse bar was when read.
+        //
+        // A limit or stop: the coarse bar dated its fill only to "somewhere
+        // in the bar". If a sub-bar after the signal reaches the entry, and
+        // no earlier sub-bar sat wholly on the far side of it, the walk
+        // re-derives the fill at that sub-bar, and a level touched before it
+        // is a miss, not a trade. A sub-bar wholly beyond the entry proves
+        // the crossing happened before it — inside the dropped sub-bar
+        // around the signal — so the fill stands from the signal instant,
+        // certain from that sub-bar's open, and a level it reaches is a
+        // trade. When no sub-bar reaches the entry at all, the coarse bar's
+        // finding (a fill, or a possible one) stands: quiet sub-bars neither
+        // confirm nor refute a touch that lived in the dropped one. Known
+        // limit: a gap across the entry between two later sub-bars dates the
+        // fill to the signal instant too, so the near-side sub-bars before
+        // the gap are walked as in the trade.
+        if (orderType === "market") {
+          ctx = { ...ctx, marketFillPrice: fine[0].c.open };
+          sig = assessSignalBar(ctx, reference, signalBar, createdMs);
+        } else {
+          const side = reference === null ? 0 : reference - row.entry_point;
+          const beyond = (c: Candle) => side !== 0 && side * (c.high - row.entry_point) < 0 && side * (c.low - row.entry_point) < 0;
+          const firstTouch = fine.findIndex((x) => touches(x.c, row.entry_point));
+          const firstBeyond = fine.findIndex((x) => beyond(x.c));
+          const provedEarlier = firstBeyond >= 0 && (firstTouch < 0 || firstBeyond < firstTouch);
+          const reDerived = firstTouch >= 0 && !provedEarlier;
+          let carried = reDerived ? undefined : (prior ?? sig.state);
+          if (provedEarlier && carried !== undefined && !carried.filled) {
+            carried = filledAt(row, toIso(createdMs), row.entry_point, fine[firstBeyond].t);
+          }
+          sig = assessSignalBar(ctx, reference, signalBar, createdMs, carried);
+        }
       }
     }
     // The fill assessSignalBar established stands whatever became of the
@@ -1257,9 +1314,10 @@ export const judgePlan = async (
     price_basis: basis,
     // A fill inside a gap was priced off the first bar after it
     spread_at_fill: spreadAtBar(filledMs, (bars) => bars.find((b) => filledMs !== null && b.t >= filledMs)),
-    // An expiry stamped at the sweep itself was priced off the last bar; a
-    // sweep-stamped settlement without a price had no exit to read
-    spread_at_exit: spreadAtBar(settledMs, (bars) => (settledMs === nowMs && outcomePrice !== null ? bars[bars.length - 1] : undefined)),
+    // A settlement nothing priced — a lapse, a terminal unknown — had no
+    // exit to read a spread at, whichever bar it was stamped with. An expiry
+    // stamped at the sweep itself was priced off the last bar.
+    spread_at_exit: outcomePrice === null ? null : spreadAtBar(settledMs, (bars) => (settledMs === nowMs ? bars[bars.length - 1] : undefined)),
     order_type: orderType,
     price_at_signal: row.price_at_signal,
     possible_fill: state.possibleFill,
