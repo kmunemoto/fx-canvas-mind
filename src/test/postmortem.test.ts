@@ -701,7 +701,7 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r4"]);
     expect(c?.rules.find((r) => r.id === "r1")).toMatchObject({ support: 2, supported_by: ["a", "b", "c"], since: "2026-08-01T00:00:00Z" });
     expect(c?.rules.find((r) => r.id === "r4")).toMatchObject({ support: 1, supported_by: ["a"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"], held_back: [] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"], held_back: [], reworded: ["r1", "r2", "r4"] });
     expect(c?.summary_en).toBe("s-en");
   });
 
@@ -744,14 +744,14 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r9", "r10"]);
     expect(c?.rules[0].kind).toBe("constraint");
     expect(c?.rules[2].since).toBe("2026-09-03T00:00:00Z");
-    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"], held_back: [] });
+    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"], held_back: [], reworded: ["r1", "r2"] });
   });
 
   it("puts back rules dropped beyond the removal allowance, weakest ones going first, with their evidence recounted", () => {
     const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "s", summary_en: "s-en" }, previous, "2026-09-03T00:00:00Z", lessons);
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1"]);
     expect(c?.rules[0]).toMatchObject({ support: 1, supported_by: ["c"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [], held_back: [] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [], held_back: [], reworded: ["r1"] });
     // A rule the model omitted whose evidence no longer holds up is not
     // put back, whatever the allowance
     const stale: Rule[] = [...previous, { ...previous[1], id: "r5", supported_by: ["gone"] }];
@@ -777,7 +777,58 @@ describe("rulebook consolidation", () => {
     const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" }, old, T0, older);
     expect(blank?.rules.map((r) => r.id)).toEqual(["r1_"]);
     expect(blank?.rules[0].since).toBe(T0);
-    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [], held_back: [] });
+    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [], held_back: [], reworded: [] });
+  });
+
+  it("records a rule the editor rewrote under its own id, which is neither an addition nor a removal", () => {
+    // The editor may keep an id and replace the sentence behind it. That is a
+    // continuation — the rule keeps its `since` and does not spend the
+    // addition allowance — so before `reworded` the revision's diff was
+    // completely empty while the instruction the analyst follows had changed.
+    const rewritten = parseConsolidation(
+      { rules: [rule("r1", { text_ja: "別のこと", text_en: "something else", cause: "entry_too_far", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" },
+      [previous[0]],
+      T0,
+      lessons,
+    );
+    expect(rewritten?.rules[0]).toMatchObject({ id: "r1", text_ja: "別のこと", since: "2026-08-01T00:00:00Z" });
+    expect(rewritten?.changes).toEqual({ added: [], removed: [], restored: [], dropped: [], held_back: [], reworded: ["r1"] });
+
+    // Handed back unchanged, it is not a rewording
+    const same = parseConsolidation(
+      { rules: [rule("r1", { text_ja: "旧ルール", text_en: "old rule", cause: "entry_too_far", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" },
+      [previous[0]],
+      T0,
+      lessons,
+    );
+    expect(same?.changes.reworded).toEqual([]);
+
+    // Moving the cause counts too: it decides which lessons may cite the rule
+    const recaused = parseConsolidation(
+      { rules: [rule("r1", { text_ja: "旧ルール", text_en: "old rule", cause: "direction_wrong", supported_by: ["c"] })], summary_ja: "s", summary_en: "s" },
+      [previous[0]],
+      T0,
+      lessons,
+    );
+    expect(recaused?.changes.reworded).toEqual(["r1"]);
+
+    // A rule that never made it into the book is reported as dropped, not
+    // reworded, however different its text
+    const evidenceless = parseConsolidation(
+      {
+        rules: [
+          rule("r1", { text_ja: "別のこと", text_en: "something else", supported_by: ["nope"] }),
+          rule("r2", { text_ja: "歯止め", text_en: "guard", cause: "direction_wrong", kind: "constraint", supported_by: ["c"] }),
+        ],
+        summary_ja: "s",
+        summary_en: "s",
+      },
+      [previous[0], previous[1]],
+      T0,
+      lessons,
+    );
+    expect(evidenceless?.changes.reworded).toEqual([]);
+    expect(evidenceless?.changes.dropped).toEqual(["r1"]);
   });
 
   it("lets the first rulebook be written whole, up to the cap, and de-duplicates ids", () => {

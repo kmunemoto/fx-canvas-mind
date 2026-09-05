@@ -881,7 +881,13 @@ export interface Consolidation {
   // so no prompt will show them. Recorded because a rule that silently never
   // reaches the analyst is the failure mode this whole field exists to make
   // visible.
-  changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[]; held_back: string[] };
+  //
+  // reworded: rules kept under their own id whose text or cause the editor
+  // changed. Not an addition and not a removal, so before this field a
+  // rewrite left `changes` completely empty — a version bump whose diff said
+  // nothing, while the sentence the analyst follows had been replaced and its
+  // `since` still claimed the older date.
+  changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[]; held_back: string[]; reworded: string[] };
 }
 
 export interface CitableLesson {
@@ -956,6 +962,7 @@ export const parseConsolidation = (
   const rules: Rule[] = [];
   const added: string[] = [];
   const dropped: string[] = [];
+  const reworded: string[] = [];
   for (const item of raw.rules) {
     if (!isRecord(item)) continue;
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
@@ -996,6 +1003,16 @@ export const parseConsolidation = (
     if (isNew) added.push(id);
     const textJaFinal = textJa || textEn;
     const textEnFinal = textEn || textJa;
+    // A rule kept under an existing id is a continuation: it keeps its `since`
+    // and does not spend the addition allowance. That is right for a rule the
+    // editor refined, and it is also what happens when the editor rewrites the
+    // sentence into something else entirely, so the change is recorded rather
+    // than inferred from a diff nobody stores. The cause counts too: it decides
+    // which lessons may cite the rule, so moving it moves the rule's evidence.
+    const before = prior.get(id);
+    if (before && (before.text_ja !== textJaFinal || before.text_en !== textEnFinal || before.cause !== cause)) {
+      reworded.push(id);
+    }
     rules.push({
       id,
       text_ja: textJaFinal,
@@ -1051,7 +1068,7 @@ export const parseConsolidation = (
     rules: orderRules(rules),
     summary_ja: str(raw.summary_ja, 600),
     summary_en: str(raw.summary_en, 600),
-    changes: { added, removed, restored, dropped, held_back },
+    changes: { added, removed, restored, dropped, held_back, reworded },
   };
 };
 
