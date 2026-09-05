@@ -440,6 +440,188 @@ describe("judgePlan — fill candle that also touches a level", () => {
   });
 });
 
+// A bar that reaches both SL and TP1 cannot normally be ordered, and the
+// judge asks for finer bars. But if the position was ALREADY open when that
+// bar began, and the bar OPENS at or beyond one of the levels, the order is
+// not in doubt: the open is the bar's first traded price, and no finer
+// resolution can revise it. That is the only new resolution here, and it is
+// definitional rather than a guess.
+//
+// The rest of this block pins the three ways the first cut of it was wrong.
+// None of them was caught by the 434 tests that existed before.
+describe("judgePlan — open-through", () => {
+  // BUY entered at the market, so the position is open from the signal instant
+  const buyMarket: OpenRow = { ...buyLimit, entry_point: 150, price_at_signal: 150 };
+
+  it("resolves a gap that opens through the stop, without asking for finer bars", async () => {
+    const bars = [
+      candle(stamp(1), 150.2, 149.9, 150.0, 150.1),
+      // Opens BELOW the SL, then trades all the way up through TP1
+      candle(stamp(2), 152.5, 148.4, 148.5, 152.0),
+    ];
+    let asked = 0;
+    const j = await judge(buyMarket, bars, 48, "1h", async () => { asked++; return null; });
+    expect(j.resolution).toBe("loss");
+    expect(j.evaluation.refine_attempts).toBe(0);
+    expect(j.evaluation.refined).toBe(false);
+    expect(asked).toBe(0);
+  });
+
+  it("resolves the mirror: opening through TP1 while the bar also spans the stop", async () => {
+    const bars = [
+      candle(stamp(1), 150.2, 149.9, 150.0, 150.1),
+      candle(stamp(2), 152.6, 148.5, 152.3, 152.0),
+    ];
+    const j = await judge(buyMarket, bars, 48, "1h", async () => null);
+    expect(j.resolution).toBe("win");
+    expect(j.evaluation.refine_attempts).toBe(0);
+  });
+
+  it("resolves a SELL that opens through its stop", async () => {
+    const sellMarket: OpenRow = { ...sellLimit, entry_point: 150, price_at_signal: 150 };
+    const bars = [
+      candle(stamp(1), 150.1, 149.8, 150.0, 149.9),
+      // SELL stop is 151, TP1 148: opens ABOVE the stop
+      candle(stamp(2), 151.6, 147.5, 151.4, 148.0),
+    ];
+    const j = await judge(sellMarket, bars, 48, "1h", async () => null);
+    expect(j.resolution).toBe("loss");
+  });
+
+  it("does not charge the open bar's later range to the trade's excursion", async () => {
+    // The position left at the open. Everything after it in that bar is
+    // post-exit price action, and mae_r is the ONLY input to the
+    // lucky_win / good_call split in postmortem/facts.ts - so folding the
+    // whole bar in would file a clean win as lucky_win, which (unlike
+    // good_call) is citable evidence for a "do not trade" rule.
+    const bars = [
+      candle(stamp(1), 150.2, 149.9, 150.0, 150.1),
+      // Opens through TP1, then dives almost to the stop before closing
+      candle(stamp(2), 152.6, 148.6, 152.3, 149.2),
+      ...quietHours(3, 6, 152.2, 151.8),
+    ];
+    const j = await judge(buyMarket, bars, 48, "1h", async () => null);
+    expect(j.resolution).toBe("win");
+    // risk is 1.00, so an unfixed mae would read ~1.4R and trip LUCKY_MAE_R (0.8)
+    expect(j.evaluation.mae_r ?? 0).toBeLessThan(0.8);
+  });
+
+  it("does not fire on the bar that filled the order", async () => {
+    // The fill happened somewhere inside this bar, so its open predates the
+    // position and cannot order anything.
+    const bars = [candle(stamp(1), 152.5, 148.4, 148.5, 150.2)];
+    const j = await judge(buyLimit, bars, 48, "1h", async () => null);
+    expect(j.resolution).not.toBe("loss");
+  });
+
+  it("does not fire on the signal bar", async () => {
+    // The signal must fall INSIDE a bar for that bar to be the signal bar:
+    // a plan stamped exactly at a bar's open has no signal bar at all, and
+    // that bar is its first post bar.
+    const midBar: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:30:00Z" };
+    const bars = [
+      // Signal bar: opens through the SL and also spans TP1
+      candle(stamp(0), 152.5, 148.4, 148.5, 150.2),
+      ...quietHours(1, 4),
+    ];
+    const j = await judge(midBar, bars, 48, "1h", async () => null);
+    // Its open predates the plan, so it can order nothing: this must go to
+    // the refinement path, not to a verdict.
+    expect(j.resolution).toBeNull();
+    expect(j.evaluation.refine_pending).toBe(true);
+  });
+
+  it("does not apply to sub-bars of a limit fill an earlier sweep recorded", async () => {
+    // filled_at is only bar-granular. On a re-sweep the recorded fill bar is
+    // re-admitted with filled=true, and without the fillCertainFrom guard a
+    // stop touch that PRECEDED the real limit fill convicts the trade.
+    const bars = [
+      candle(stamp(1), 150.3, 149.9, 150.2, 150.0),
+      candle(stamp(2), 152.5, 148.4, 148.5, 152.0),
+    ];
+    const first = await judge(buyLimit, bars, 48, "1h", async () => null);
+    expect(first.evaluation.filled_at).toBe(iso(1));
+    // Re-sweep carrying that fill forward
+    const again = await judge(
+      { ...buyLimit, evaluation: { ...first.evaluation, order_type: "limit", filled_at: iso(2) } },
+      bars,
+      48,
+      "1h",
+      async () => null,
+    );
+    expect(again.resolution).not.toBe("loss");
+  });
+});
+
+// When the signal falls inside the LAST fine sub-bar of its signal bar, every
+// sub-bar the provider returns predates the signal and the sinceMs filter
+// empties the list. The feed is healthy, so charging three provider failures
+// for it was wrong. But the graze lives in exactly that last sub-bar, and
+// EVAL_INTERVAL puts 15min and 1h plans on 15min bars - so the sub-bar is
+// already 5min and finerRung(5min) is null. Nothing can ever date it.
+//
+// Dropping the graze and judging from the later bars is therefore not an
+// option: it decides the plan as if the signal bar had been clean, and the
+// error follows the market. A one-minute change in created_at flipped the
+// SAME price data from "cannot say" to "win".
+describe("judgePlan — a signal inside the last fine sub-bar", () => {
+  const buyMarket: OpenRow = { ...buyLimit, entry_point: 150, price_at_signal: 150 };
+  // Signal bar 00:00-01:00 grazes the SL; the next bar cleanly reaches TP1
+  const bars = [
+    candle(stamp(0), 150.2, 148.9, 150.0, 150.1),
+    candle(stamp(1), 152.3, 150.0, 150.1, 152.1),
+    ...quietHours(2, 5, 152.2, 151.9),
+  ];
+  // A healthy 15min feed for the signal hour, all of it before 00:50
+  const healthyFine = async () => [
+    candle("2026-08-20 00:00:00", 150.2, 150.0),
+    candle("2026-08-20 00:15:00", 150.2, 150.0),
+    candle("2026-08-20 00:30:00", 150.2, 148.9),
+  ];
+
+  it("settles as unknown instead of judging the plan off the later bars", async () => {
+    const late: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:50:00Z" };
+    const j = await judge(late, bars, 48, "1h", healthyFine);
+    expect(j.resolution).toBe("ambiguous");
+    expect(j.evaluation.reason).toBe("no_data");
+    // and emphatically not the win the later bars would suggest
+    expect(j.resolution).not.toBe("win");
+  });
+
+  it("does not charge a healthy feed three provider failures for it", async () => {
+    const late: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:50:00Z" };
+    let asked = 0;
+    const j = await judge(late, bars, 48, "1h", async () => { asked++; return healthyFine(); });
+    expect(asked).toBe(1);
+    expect(j.evaluation.refine_attempts).toBe(0);
+    expect(j.evaluation.refined).toBe(true);
+  });
+
+  it("keeps the fill it established, so the row is not outside both sides of the fill rate", async () => {
+    const late: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:50:00Z" };
+    const j = await judge(late, bars, 48, "1h", healthyFine);
+    expect(j.evaluation.filled_at).toBe("2026-08-20T00:50:00.000Z");
+  });
+
+  it("still resolves normally when the signal is early enough for the graze to be dated", async () => {
+    // Same prices, signal in the FIRST sub-bar: the 00:30 graze is after it,
+    // so the stop is genuinely hit and the plan is a loss.
+    const early: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:05:00Z" };
+    const j = await judge(early, bars, 48, "1h", healthyFine);
+    expect(j.resolution).toBe("loss");
+  });
+
+  it("still treats a real provider failure as one", async () => {
+    const late: OpenRow = { ...buyMarket, created_at: "2026-08-20T00:50:00Z" };
+    const j = await judge(late, bars, 48, "1h", async () => null);
+    expect(j.resolution).toBeNull();
+    expect(j.evaluation.refine_attempts).toBe(1);
+    expect(j.evaluation.signal_bar_pending).toBe(true);
+    // and the fill survives the deferral
+    expect(j.evaluation.filled_at).toBe("2026-08-20T00:50:00.000Z");
+  });
+});
+
 describe("judgePlan — ambiguity and refinement", () => {
   const filledThenSpans = [
     candle(stamp(1), 150.3, 149.9), // fills
