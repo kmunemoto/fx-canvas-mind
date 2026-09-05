@@ -61,8 +61,19 @@ Return the tool result JSON (id, version, ezbr_sha256, status) verbatim, or the 
 2. Write that content VERBATIM to /tmp/deployed-${slug}.js with the Write tool (overwrite; do not abbreviate).
 3. Run: sha256sum /tmp/deployed-${slug}.js ${LOCAL}; wc -c /tmp/deployed-${slug}.js ${LOCAL}; diff <(fold -w 200 /tmp/deployed-${slug}.js) <(fold -w 200 ${LOCAL}) | head -20; grep -o '${slug}-v[0-9]*-[0-9T:.Z-]*' /tmp/deployed-${slug}.js | head -1
 4. Report the two sha256 sums, byte counts, whether identical, the diff head if not, the version string found, and the function "version" number from the tool result. Do not modify any file under /home/user/fx-canvas-mind.`, { label: `verify#${attempts}`, phase: 'Verify', effort: 'medium', schema: VERDICT })
-  log(`verify: identical=${verdict?.identical} deployed=${verdict?.deployed_bytes}B local=${verdict?.local_bytes}B fn v${verdict?.function_version}`)
-  if (verdict && verdict.identical && verdict.version_string === version) break
+  // The version string is half of what "verified" means: identical bytes to a
+  // stale local bundle would pass a sha256 check while the deployed function
+  // is the old one. Both halves are logged, because a run that ends without
+  // saying which half failed reads as a success.
+  const versionOk = verdict?.version_string === version
+  log(`verify: identical=${verdict?.identical} version=${versionOk ? 'ok' : `${JSON.stringify(verdict?.version_string)} != ${JSON.stringify(version)}`} deployed=${verdict?.deployed_bytes}B local=${verdict?.local_bytes}B fn v${verdict?.function_version}`)
+  if (verdict && verdict.identical && versionOk) break
 }
-if (!verdict || !verdict.identical) log(`${slug}: NOT verified after ${attempts} attempts — do not treat as live`)
-return { slug, attempts, verdict }
+const verified = Boolean(verdict && verdict.identical && verdict.version_string === version)
+if (!verified) {
+  const why = !verdict || !verdict.identical
+    ? 'the deployed bytes differ from the local bundle'
+    : `the bytes match but the deployed version string is ${JSON.stringify(verdict.version_string)}, not ${JSON.stringify(version)} — the local bundle is probably stale (rebuild it)`
+  log(`${slug}: NOT verified after ${attempts} attempts — ${why}. Do not treat as live.`)
+}
+return { slug, attempts, verified, verdict }
