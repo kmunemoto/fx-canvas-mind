@@ -263,3 +263,48 @@ describe("a rule's contract says what the rule can do, not when it was written",
     expect(analyzeSrc).toContain("rulebook_version_read: rulebookVersion,");
   });
 });
+
+// A WAIT was filtered out of the review queue twice over — outcome skipped,
+// signal WAIT — so the one prediction that costs nothing to make was also the
+// one never reviewed, while every diagnosed row pushed the rules toward
+// trading less.
+describe("standing aside is reviewed like anything else", () => {
+  const postmortemSrc = index;
+
+  it("asks for the calls that declined to trade, and only the settled ones", () => {
+    expect(postmortemSrc).toContain("analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null");
+    // 'pending' has not been measured and 'unknown' / 'no_call' never can be:
+    // diagnosing one would be the model filling in what the data lacks
+    expect(postmortemSrc).toContain('if (verdict !== "missed" && verdict !== "correct") continue;');
+  });
+
+  it("diagnoses the trade that was declined, and says it was never taken", () => {
+    expect(postmortemSrc).toContain("buildWaitDiagnosisPrompt(");
+    expect(promptSrc).toContain("WAIT_DIAGNOSIS_SYSTEM_PROMPT");
+    expect(promptSrc).toContain("このトレードは実行されていません");
+  });
+
+  it("files the lesson under what the row is, not under the hypothetical trade", () => {
+    // `row` carries the declined trade's direction and outcome so the facts
+    // machinery can measure it. Filing the lesson under those would put a win
+    // in the record for a trade nobody took.
+    expect(postmortemSrc).toContain('wait ? { ...row, signal: "WAIT", outcome: "skipped" } : row,');
+    expect(postmortemSrc).toContain('outcome: wait ? "skipped" : row.outcome,');
+    expect(postmortemSrc).toContain('subject: wait ? "wait" : "trade",');
+  });
+
+  it("keeps the over-caution evidence citable and the confirmation not", () => {
+    // wait_missed_trade is the only cause in the taxonomy that pushes toward
+    // trading MORE. If it could not support a rule, the loop could still only
+    // push one way.
+    expect(promptSrc).toContain('"good_call", "good_wait"');
+    expect(promptSrc).not.toMatch(/UNCITABLE_CAUSES[^;]*wait_missed_trade/);
+  });
+
+  it("never falls back to a trade cause on a call that never entered", () => {
+    // parseDiagnosis uses the deterministic hint when the model's cause is
+    // not one of ours, and facts.hints are built from the trade taxonomy
+    expect(postmortemSrc).toContain("wait ? [waitHint] : facts.hints");
+    expect(postmortemSrc).toContain('wait ? "WAIT" : row.signal,');
+  });
+});

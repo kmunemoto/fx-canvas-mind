@@ -229,6 +229,8 @@ export const ja = {
         plan_incoherent: "プランの水準が矛盾",
         good_call: "想定通り",
         lucky_win: "勝ったが危うかった",
+        wait_missed_trade: "見送ったが取れていた",
+        good_wait: "見送りは妥当だった",
         inconclusive: "判断材料が不足",
       },
       lesson: "教訓",

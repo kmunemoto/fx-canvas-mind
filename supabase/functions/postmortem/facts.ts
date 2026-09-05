@@ -72,6 +72,15 @@ export type Cause =
   | "good_call"
   // won, but the process was unsafe (deep adverse excursion, wrong reasons)
   | "lucky_win"
+  // WAIT only: the trade named at the call was there and it paid, so standing
+  // aside cost a win. The one cause in the taxonomy that pushes toward
+  // trading MORE — every other one punishes being too bold, and a loop that
+  // can only push one way ends at "always WAIT", never wrong and worth
+  // nothing.
+  | "wait_missed_trade"
+  // WAIT only: that trade was stopped out or never paid. Standing aside was
+  // right, and like good_call there is no lever to move.
+  | "good_wait"
   // not enough evidence to say
   | "inconclusive";
 
@@ -87,8 +96,25 @@ export const CAUSES: readonly Cause[] = [
   "plan_incoherent",
   "good_call",
   "lucky_win",
+  "wait_missed_trade",
+  "good_wait",
   "inconclusive",
 ];
+
+// The vocabulary for a call that declined to trade. A WAIT has no fill, no
+// stop and no target of its own, so the trade causes describe nothing that
+// happened; and a trade must never be diagnosed "good_wait".
+export const WAIT_CAUSES: readonly Cause[] = [
+  "wait_missed_trade",
+  "good_wait",
+  "regime_misread",
+  "news_shock",
+  "inconclusive",
+];
+
+// The two a settled trade can never be. The other three above describe the
+// market, not the decision, and belong to both vocabularies.
+export const WAIT_ONLY_CAUSES: readonly string[] = ["wait_missed_trade", "good_wait"];
 
 export const MARKET_CONTRACT = "market_v1";
 
@@ -103,10 +129,19 @@ export const LEGACY_CAUSES: readonly string[] = ["entry_too_far", "entry_too_ear
 // lookup — a stored row renders the wording of its own era.
 export const canonicalCause = (c: string): string => (c === "entry_too_early" ? "chased_move" : c);
 
-// The causes a plan made under this contract can be diagnosed with. Readers:
-// diagnosisSchema(), parseDiagnosis() and causeOutsideContract().
+// Every cause valid under this contract, trades and WAITs together. Readers:
+// causesForSignal() and causeOutsideContract() — the latter must see the WAIT
+// causes, or a rule learned from over-caution would be held back from every
+// prompt for naming a cause its own contract "cannot produce".
 export const causesFor = (contract?: string | null): readonly Cause[] =>
   contract === MARKET_CONTRACT ? CAUSES.filter((c) => !LEGACY_CAUSES.includes(c)) : CAUSES;
+
+// What a single row may be diagnosed with. Readers: diagnosisSchema() and
+// parseDiagnosis(). Offering "good_wait" to a settled trade, or
+// "stop_too_tight" to a call that never entered, is offering a verdict about
+// something that did not happen.
+export const causesForSignal = (contract?: string | null, signal?: string | null): readonly Cause[] =>
+  signal === "WAIT" ? WAIT_CAUSES : causesFor(contract).filter((c) => !WAIT_ONLY_CAUSES.includes(c));
 
 // A cause the given contract's taxonomy cannot produce, canonical spellings
 // folded first — so a rule filed under the dead spelling "entry_too_early" is

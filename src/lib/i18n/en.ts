@@ -218,6 +218,8 @@ export const en: Dict = {
         plan_incoherent: "Incoherent plan",
         good_call: "As planned",
         lucky_win: "Won, but unsafely",
+        wait_missed_trade: "Stood aside from a trade that paid",
+        good_wait: "Standing aside was right",
         inconclusive: "Not enough evidence",
       },
       lesson: "Lesson",

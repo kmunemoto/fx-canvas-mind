@@ -27,13 +27,14 @@ import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
 import { EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
-import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
+import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Cause, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   CONSOLIDATION_SCHEMA,
   MIN_NEW_LESSONS,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
+  buildWaitDiagnosisPrompt,
   parseConsolidation,
   parseDiagnosis,
   revisionDue,
@@ -45,7 +46,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v13-2026-09-05T15:40:00Z";
+const POSTMORTEM_VERSION = "postmortem-v14-2026-09-05T17:10:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -373,7 +374,11 @@ Deno.serve(async (req: Request) => {
       `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
 
-    const rows: Array<{ row: PostmortemRow; raw: JsonRecord }> = [];
+    // `wait` is set only on a call that declined to trade: `row` then holds
+    // the hypothetical trade stored at the call, so the facts machinery can
+    // measure it, while `raw` still holds the real row (signal WAIT, outcome
+    // skipped) that the lesson is filed under.
+    const rows: Array<{ row: PostmortemRow; raw: JsonRecord; wait: { plan: JsonRecord; check: JsonRecord } | null }> = [];
     for (const r of candidates) {
       if (r.signal !== "BUY" && r.signal !== "SELL") continue;
       const entry = numberOrNull(r.entry_point);
@@ -405,8 +410,70 @@ Deno.serve(async (req: Request) => {
         const closed = row.closed_at ? Date.parse(row.closed_at) : NaN;
         if (isRevision && (!Number.isFinite(closed) || nowMs - closed < afterWindowMs(row.interval))) continue;
       }
-      rows.push({ row, raw: r });
+      rows.push({ row, raw: r, wait: null });
     }
+
+    // ---- calls that declined to trade --------------------------------------
+    // A WAIT never appeared in the query above: it is filtered out twice over
+    // (outcome skipped, signal WAIT), and the null-level guard would have
+    // dropped it anyway. So the one prediction that costs nothing to make was
+    // also the one prediction never reviewed — while every diagnosed row
+    // pushed the rules toward trading less.
+    //
+    // What is diagnosed is the trade the call declined: fixed at the moment
+    // of the call, stored in wait_plan, and already resolved by the tracker.
+    // Appended AFTER the trades so the run's limit spends itself on settled
+    // positions first; at 3 plans a run and 96 runs a day the queue drains
+    // either way.
+    const waitCandidates = await readRows(
+      `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false&${rowFilter}` +
+        `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
+    );
+    for (const r of waitCandidates) {
+      const plan = isRecord(r.wait_plan) ? r.wait_plan : null;
+      const check = isRecord(r.wait_check) ? r.wait_check : null;
+      if (!plan || !check) continue;
+      // Only a settled verdict is worth a diagnosis. 'pending' has not been
+      // measured, and 'unknown' / 'no_call' never can be — a diagnosis of an
+      // unmeasurable call would be the model filling in what the data does
+      // not contain.
+      const verdict = strOrNull(check.verdict);
+      if (verdict !== "missed" && verdict !== "correct") continue;
+      const direction = strOrNull(plan.direction);
+      if (direction !== "BUY" && direction !== "SELL") continue;
+      const entry = numberOrNull(plan.entry);
+      const stop = numberOrNull(plan.stop);
+      const target = numberOrNull(plan.target);
+      if (entry === null || stop === null || target === null) continue;
+      // The hypothetical trade, in the shape the facts machinery reads. Its
+      // outcome is what the tracker already decided about it — not a claim
+      // that any position was held.
+      const row: PostmortemRow = {
+        id: String(r.id),
+        pair: String(r.pair),
+        interval: String(r.interval),
+        signal: direction,
+        entry_point: entry,
+        stop_loss: stop,
+        take_profit_1: target,
+        take_profit_2: null,
+        take_profit_3: null,
+        created_at: String(r.created_at),
+        price_at_signal: entry,
+        evaluation: null,
+        outcome: verdict === "missed" ? "win" : "loss",
+        closed_at: strOrNull(check.at) ?? strOrNull(check.checked_at),
+      };
+      const prior = isRecord(r.postmortem) ? r.postmortem : null;
+      const isRevision = prior?.status === "done";
+      if (!options.force && options.ids.length === 0) {
+        if (!isPostmortemDue(row, nowMs)) continue;
+        const closed = row.closed_at ? Date.parse(row.closed_at) : NaN;
+        if (isRevision && (!Number.isFinite(closed) || nowMs - closed < afterWindowMs(row.interval))) continue;
+      }
+      rows.push({ row, raw: r, wait: { plan, check } });
+    }
+
     const due = rows.slice(0, options.limit);
 
     // ---- the calendar over the window under review -----------------------
@@ -539,7 +606,7 @@ Deno.serve(async (req: Request) => {
       errors.push(`${row.id}: ${error}`);
     };
 
-    for (const { row, raw } of due) {
+    for (const { row, raw, wait } of due) {
       if (elapsed() > START_DIAGNOSIS_BEFORE_MS) {
         errors.push(`${row.id}: deferred (time budget)`);
         continue;
@@ -615,7 +682,15 @@ Deno.serve(async (req: Request) => {
         rules_in_force: rulesInForce.map((r) => ({ id: r.id, text_ja: r.text_ja })),
       };
 
-      const prompt = buildDiagnosisPrompt(plan, facts);
+      // A WAIT is graded on one question — was declining right? — and its
+      // facts describe a trade that was never taken, so the prompt has to say
+      // so or the lessons come out as position management.
+      const waitHint: Cause = wait
+        ? (strOrNull(wait.check.verdict) === "missed" ? "wait_missed_trade" : "good_wait")
+        : "inconclusive";
+      const prompt = wait
+        ? buildWaitDiagnosisPrompt({ ...plan, signal: "WAIT", wait_plan: wait.plan, wait_check: wait.check }, facts)
+        : buildDiagnosisPrompt(plan, facts);
       let answer: unknown = null;
       try {
         answer = await askModel(prompt.system, prompt.user, prompt.schema, 2500);
@@ -623,7 +698,17 @@ Deno.serve(async (req: Request) => {
         await markFailed(row, raw, `model: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
-      const diagnosis = parseDiagnosis(answer, facts.hints, rulesInForce.map((r) => r.id), strOrNull(raw.plan_contract));
+      // The deterministic hint stands when the model's cause is not one of
+      // ours — so on a WAIT it has to be a WAIT cause. facts.hints are built
+      // from the trade taxonomy and would otherwise file "direction_wrong"
+      // against a call that never entered.
+      const diagnosis = parseDiagnosis(
+        answer,
+        wait ? [waitHint] : facts.hints,
+        rulesInForce.map((r) => r.id),
+        strOrNull(raw.plan_contract),
+        wait ? "WAIT" : row.signal,
+      );
       if (!diagnosis) {
         await markFailed(row, raw, "no_diagnosis");
         continue;
@@ -651,6 +736,11 @@ Deno.serve(async (req: Request) => {
         rule_blamed: diagnosis.rule_blamed,
         rule_credited: diagnosis.rule_credited,
         rulebook_version: planVersion,
+        // What was diagnosed. On a WAIT the facts below measure a trade that
+        // was never taken, and a reader who assumes otherwise reads a
+        // position that never existed.
+        subject: wait ? "wait" : "trade",
+        wait_plan: wait ? wait.plan : undefined,
         facts,
         created_at: nowIso,
       };
@@ -661,7 +751,16 @@ Deno.serve(async (req: Request) => {
       // experience never reached the rules again. The reverse order is safe —
       // a lesson without the done marker is re-diagnosed next run and the
       // insert is idempotent on analysis_id.
-      const lessonOk = await writeLesson(row.id, raw, stored, row);
+      // Filed under what the row actually is: signal WAIT, outcome skipped.
+      // `row` above carries the hypothetical trade's direction and outcome,
+      // and filing a lesson under those would put a win in the record for a
+      // trade nobody took.
+      const lessonOk = await writeLesson(
+        row.id,
+        raw,
+        stored,
+        wait ? { ...row, signal: "WAIT", outcome: "skipped" } : row,
+      );
       if (lessonOk) newLessons++;
       else errors.push(`${row.id}: lesson not written, left for the repair pass`);
 
@@ -678,7 +777,12 @@ Deno.serve(async (req: Request) => {
         errors.push(`${row.id}: not written`);
         continue;
       }
-      diagnosed.push({ id: row.id, cause: diagnosis.cause, outcome: row.outcome, shadow: raw.shadow === true });
+      diagnosed.push({
+        id: row.id,
+        cause: diagnosis.cause,
+        outcome: wait ? "skipped" : row.outcome,
+        shadow: raw.shadow === true,
+      });
     }
 
     // ---- repair: diagnoses whose lesson never landed ------------------------

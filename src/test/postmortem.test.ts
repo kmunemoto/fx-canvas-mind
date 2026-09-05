@@ -3,6 +3,7 @@ import {
   AFTER_WAIT_MS,
   CAUSES,
   MARKET_CONTRACT,
+  WAIT_CAUSES,
   causeOutsideContract,
   causesFor,
   computeFacts,
@@ -1461,7 +1462,10 @@ describe("the cause taxonomy across the two entry contracts", () => {
     expect(CAUSES).toContain("chased_move");
     expect(CAUSES).toContain("entry_too_far");
     expect(CAUSES).toContain("entry_too_early");
-    expect(CAUSES).toHaveLength(12);
+    // 12 trade causes plus the two a WAIT can be diagnosed with
+    expect(CAUSES).toHaveLength(14);
+    expect(CAUSES).toContain("wait_missed_trade");
+    expect(CAUSES).toContain("good_wait");
     for (const c of ["chased_move", "entry_too_far", "entry_too_early"]) expect(isCause(c)).toBe(true);
   });
 
@@ -1471,11 +1475,25 @@ describe("the cause taxonomy across the two entry contracts", () => {
     expect(live).not.toContain("entry_too_far");
     expect(live).not.toContain("entry_too_early");
     for (const c of [...causesFor("entry_chosen_v1"), ...live]) expect(CAUSES).toContain(c);
-    expect(causesFor("entry_chosen_v1")).toHaveLength(12);
-    expect(causesFor(null)).toHaveLength(12);
+    expect(causesFor("entry_chosen_v1")).toHaveLength(14);
+    expect(causesFor(null)).toHaveLength(14);
 
     expect(diagnosisSchema("market_v1").properties.cause.enum).not.toContain("entry_too_far");
     expect(diagnosisSchema("entry_chosen_v1").properties.cause.enum).toContain("entry_too_far");
+
+    // A settled trade is never offered the two WAIT verdicts, and a call that
+    // declined to trade is never offered the five that describe a position.
+    const trade = diagnosisSchema("market_v1", "BUY").properties.cause.enum;
+    expect(trade).not.toContain("good_wait");
+    expect(trade).not.toContain("wait_missed_trade");
+    const wait = diagnosisSchema("market_v1", "WAIT").properties.cause.enum;
+    expect(wait).toEqual([...WAIT_CAUSES]);
+    expect(wait).not.toContain("stop_too_tight");
+    expect(wait).not.toContain("target_too_far");
+    // But the stamp check must still see them, or a rule learned from
+    // over-caution is held back from every prompt for naming a cause its own
+    // contract "cannot produce"
+    expect(causeOutsideContract("wait_missed_trade", "market_v1")).toBe(false);
     // The consolidation schema must NOT be narrowed: an existing rule whose
     // cause is entry_too_far has to be re-emittable under its own cause
     // rather than coerced to "general".
