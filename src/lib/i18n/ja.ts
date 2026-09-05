@@ -121,6 +121,12 @@ export const ja = {
       rejected: "却下",
     },
     scope: (n: number) => `直近${n}件`,
+    // The statistics and the row list are two different populations on one
+    // screen, so each says which it is.
+    statsScope: (n: number) => `成績: 全期間 ${n}件の判断`,
+    statsScopeContract: (n: number, contract: string) => `成績: 全期間 ${n}件の判断（${contract} の記録）`,
+    statsFallback: (n: number) => `成績: 直近 ${n}件のみで集計（サーバ集計を取得できませんでした）`,
+    otherContractRows: (n: number) => `別の契約で作られた ${n}件は、この集計に含めていません`,
     autoNote: "結果は実際の値動きで15分ごとに自動判定（TP1到達=WIN / SL到達=LOSS）",
     winRateNote: "勝率はWIN/LOSS/期限切れで計算（未約定・判定不能は除外）。期限切れは「届かない利確を置いた」結果なので、勝率から外れる逃げ道にはしません。約定率はエントリー価格に実際に到達した割合",
     stats: {

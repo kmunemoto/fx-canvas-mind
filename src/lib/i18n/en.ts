@@ -116,6 +116,10 @@ export const en: Dict = {
       rejected: "REFUSED",
     },
     scope: (n: number) => `last ${n}`,
+    statsScope: (n: number) => `Record: ${n} calls, all time`,
+    statsScopeContract: (n: number, contract: string) => `Record: ${n} calls, all time (${contract})`,
+    statsFallback: (n: number) => `Record: from the last ${n} rows only — the server totals could not be fetched`,
+    otherContractRows: (n: number) => `${n} calls made under a different entry contract are not counted here`,
     autoNote: "Judged automatically every 15 minutes against actual prices (TP1 reached = WIN, SL reached = LOSS)",
     winRateNote: "Win rate counts WIN, LOSS and expired (no-fill and unclear are excluded). An expiry is what a target too far away looks like, so it is not an exit from the win rate. Fill rate is how often the market actually reached the entry",
     stats: {

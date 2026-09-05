@@ -1,4 +1,4 @@
-import type { AnalysisRecord, PlanContract, PostmortemCause } from "./types";
+import type { AnalysisRecord, PerformanceGroup, PerformanceStats, PlanContract, PostmortemCause } from "./types";
 
 // Win/loss bookkeeping over history rows.
 //
@@ -216,6 +216,62 @@ const wasFilled = (r: AnalysisRecord): boolean =>
 // "the plan was malformed".
 const isIncoherent = (r: AnalysisRecord): boolean =>
   r.outcome === "ambiguous" && r.evaluation?.reason === "incoherent";
+
+// The same tally, read off the server's answer instead of computed from the
+// rows the client happened to fetch.
+//
+// Shaped as an OutcomeTally on purpose: every render site already knows how to
+// draw one, so the whole panel switches source without a second set of
+// branches to keep in step. tally() stays as the offline fallback — an RPC
+// outage should show fewer, honestly-labelled numbers rather than none.
+export const serverTally = (key: string, g: PerformanceGroup): OutcomeTally => ({
+  key,
+  wins: g.wins,
+  losses: g.losses,
+  open: g.open,
+  untriggered: g.untriggered,
+  ambiguous: g.ambiguous,
+  expired: g.expired,
+  incoherent: g.incoherent,
+  waits: g.waits,
+  waitsJudged: g.waits_judged,
+  waitsMissed: g.waits_missed,
+  total: g.total,
+  calls: g.calls,
+  rejected: g.rejected,
+  winRate: g.win_rate,
+  winRateCi: g.win_rate_ci95,
+  clusters: g.clusters,
+  fillRate: g.fill_rate,
+  sumR: g.sum_r,
+  expectancy: g.expectancy,
+  contracts: (Array.isArray(g.contracts) ? g.contracts : []) as PlanContract[],
+  verdictRate: g.verdict_rate,
+  waitRate: g.wait_rate,
+  expiredRate: g.expired_rate,
+  untriggeredRate: g.untriggered_rate,
+  ambiguousRate: g.ambiguous_rate,
+  incoherentRate: g.incoherent_rate,
+  openRate: g.open_rate,
+  waitMissRate: g.wait_miss_rate,
+});
+
+// Which population the panel should draw.
+//
+// Normally the live contract, all time. But every plan can predate the
+// current contract — production is exactly that today — and filtering the
+// record away because of it would show the owner nothing at all. So when the
+// live contract has no calls and exactly one older contract does, that one is
+// shown instead, and the caller is told which, so the label can say so.
+export const headlineScope = (
+  stats: PerformanceStats,
+): { group: PerformanceGroup; contract: string | null } | null => {
+  const live = stats.scopes?.all_time;
+  if (live && live.calls > 0) return { group: live, contract: null };
+  const others = Object.entries(stats.by_contract ?? {}).filter(([, g]) => g.calls > 0);
+  if (others.length === 1) return { group: others[0][1], contract: others[0][0] };
+  return live ? { group: live, contract: null } : null;
+};
 
 export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const t: OutcomeTally = {

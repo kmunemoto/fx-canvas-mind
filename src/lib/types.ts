@@ -395,6 +395,68 @@ export interface LoopHealth {
   now: string;
 }
 
+// What public.performance_stats() returns: the record over EVERY row, not
+// over the page the client happened to fetch.
+//
+// No group here ever carries a bare win rate. `decided`, `sum_r`,
+// `trades_per_call` and `wait_rate` travel with it, because a rulebook that
+// raises the win rate by standing aside more and one that is right more often
+// look identical in the rate alone and completely different in those four.
+export interface PerformanceGroup {
+  calls: number;
+  waits: number;
+  rejected: number;
+  waits_judged: number;
+  waits_missed: number;
+  total: number;
+  wins: number;
+  losses: number;
+  expired: number;
+  open: number;
+  untriggered: number;
+  ambiguous: number;
+  incoherent: number;
+  filled: number;
+  settled: number;
+  decided: number;
+  with_r: number;
+  clusters: number;
+  contracts: string[];
+  win_rate: number | null;
+  win_rate_ci95: [number, number] | null;
+  fill_rate: number | null;
+  sum_r: number | null;
+  expectancy: number | null;
+  trades_per_call: number | null;
+  verdict_rate: number | null;
+  wait_rate: number | null;
+  expired_rate: number | null;
+  untriggered_rate: number | null;
+  ambiguous_rate: number | null;
+  incoherent_rate: number | null;
+  open_rate: number | null;
+  wait_miss_rate: number | null;
+  // The rate is real, but its interval spans most of the range. Reported
+  // rather than withheld — an interval says more than a blank.
+  below_min_n: boolean;
+}
+
+export interface PerformanceStats {
+  generated_at: string;
+  live_contract: string;
+  scopes: Record<string, PerformanceGroup>;
+  by_rulebook_version: Record<string, PerformanceGroup>;
+  by_confidence: Record<string, PerformanceGroup>;
+  by_timeframe: Record<string, PerformanceGroup>;
+  by_mode: Record<string, PerformanceGroup>;
+  // Each entry contract's own record, kept apart rather than pooled. Where
+  // the record still is when every plan predates the current contract.
+  by_contract: Record<string, PerformanceGroup>;
+  other_contract_rows: number;
+  other_contracts: string[];
+  shadow: { total: number; untriggered: number; wins: number; losses: number; open: number; other: number };
+}
+
 // Was standing aside the right call? Mirror of the WaitCheck written by
 // supabase/functions/track-outcomes/waits.ts.
 //
