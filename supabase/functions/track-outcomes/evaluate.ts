@@ -100,10 +100,20 @@ export interface Evaluation {
   eval_interval: string;
   // Where the bars came from: "mid" is a single mid price (Twelve Data),
   // "quotes" is bid and ask, so the fill and the exit were judged on the
-  // side of the book each actually happens on
-  price_basis?: "mid" | "quotes";
-  // The spread at the fill and at the settlement, in price units — what the
-  // mid-price judgement was silently leaving out
+  // side of the book each actually happens on. Covers every bar THIS SWEEP
+  // judged on, the finer bars that split an ambiguous one included:
+  // fetchRange refuses sub-bars of the other basis, so nothing this sweep
+  // decided was decided on a mid sub-bar under a bid/ask series. A fill
+  // carried over from an earlier sweep (prevFill) keeps whatever basis that
+  // sweep had, which this field does not record.
+  price_basis?: PriceBasis;
+  // The ask-minus-bid at the close of the bar CONTAINING the fill and the
+  // settlement, in price units — the finest such bar this sweep held (a fine
+  // bar when refinement supplied one, the coarse bar otherwise; for a market
+  // fill whose signal bar was split, the coarse signal bar, because the
+  // sub-bar around the signal instant is dropped and the fill was priced off
+  // the coarse bar's close). Not the spread at the exact tick, which no bar
+  // feed carries. Null on the mid feed, which was silently leaving it out.
   spread_at_fill?: number | null;
   spread_at_exit?: number | null;
   order_type: OrderType;
@@ -171,13 +181,29 @@ export interface Judgement {
   evaluation: Evaluation;
 }
 
-// Finer bars for [fromMs, toMs). `null` means the provider could not supply
-// them (error, or nothing in the range) and counts as one failed attempt;
-// "deferred" means the caller chose not to ask this run (request budget) and
-// costs nothing. Both leave the plan open for another try.
-export type FineResult = Candle[] | null | "deferred";
+// Which feed a bar came from: a single mid price, or bid and ask
+export type PriceBasis = "mid" | "quotes";
+
+// Finer bars for [fromMs, toMs), tagged with the feed they came from. `null`
+// means the provider could not supply them (error, or nothing in the range)
+// and counts as one failed attempt; "deferred" means the caller chose not to
+// ask this run (request budget) and costs nothing. Both leave the plan open
+// for another try.
+//
+// `basis` is the basis of the coarse series the plan is being judged on, so
+// the caller can route to the matching provider. Within one judgement the
+// fine bars must have the SAME basis as the coarse series: a stop grazed on
+// the bid by less than the spread is invisible on the mid, so mid sub-bars
+// under a bid/ask series show no touch where the bid made one, and the
+// mirror. fetchRange treats a result of the other basis as a failed attempt
+// rather than deciding the plan on it.
+export type FineResult =
+  | { basis: "mid"; bars: Candle[] }
+  | { basis: "quotes"; bars: QuoteCandle[] }
+  | null
+  | "deferred";
 export interface FineFetcher {
-  (pair: string, fromMs: number, toMs: number, interval: string): Promise<FineResult>;
+  (pair: string, fromMs: number, toMs: number, interval: string, basis: PriceBasis): Promise<FineResult>;
 }
 
 const MIN = 60_000;
@@ -746,10 +772,15 @@ export const judgePlan = async (
   const entryWindowMs = ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR;
   const expiryMs = (EXPIRY_DAYS[row.interval] ?? 30) * DAY;
   const twoSided = Array.isArray(quotes) && quotes.length > 0;
+  const basis: PriceBasis = twoSided ? "quotes" : "mid";
 
   let series = twoSided
     ? quoteTimeline(quotes as QuoteCandle[], row.signal, nowMs, evalMs)
     : timeline(candles, nowMs, evalMs);
+  // The series as fetched, before the signal-bar splice replaces one coarse
+  // bar with its sub-bars: spreadAtBar falls back to it for an instant no
+  // surviving bar contains
+  const coarseSeries = series;
   const windowCoversSignal = series.length > 0 && series[0].t <= createdMs + evalMs;
 
   // Locate the bar containing the signal and the bars after it
@@ -820,17 +851,41 @@ export const judgePlan = async (
   // win came from refinement)
   let afterWin: Timed[] = [];
   let judged = true;
+  // Every fine bar the post-bar site adopted, so the spread recorded for an
+  // instant decided on one is that bar's and not the coarse bar's it
+  // replaced. The signal-bar site needs no entry here: it splices its
+  // sub-bars into `series`, where spreadAtBar finds them; and when those
+  // sub-bars are themselves split at the post-bar site (a 4h or 1day plan on
+  // 1h bars: signal bar to 15min, one of them to 5min), an entry from the
+  // signal site would be the coarser bar containing the same instant.
+  const fineUsed: Timed[] = [];
 
-  // Finer bars for one coarse bar, carrying its market-time offset
+  // Finer bars for one coarse bar, carrying its market-time offset. Asked for
+  // on the coarse series' own basis and refused on any other: a bid/ask
+  // series split with mid sub-bars would miss the touches it was adopted to
+  // see (see FineResult).
   const fetchRange = async (bar: Timed, sinceMs?: number): Promise<Timed[] | null | "deferred" | "empty"> => {
     if (!fetchFine) return "deferred";
     const rung = finerRung(bar.ms);
     if (rung === null) return null;
-    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval);
+    // A bar still forming cannot be split yet: its sub-bars are not all
+    // there, and a split that finds neither touch in the ones that are would
+    // be filed as feed_conflict — terminal, and wrong, when the touch simply
+    // sits in the sub-bar not yet published. The coarse bar's own high and
+    // low already show what has happened, so a single touch decides without
+    // this; only the ORDER of two touches waits, at most one bar, and at no
+    // cost to the plan.
+    if (bar.t + bar.ms > nowMs) return "deferred";
+    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval, basis);
     if (fine === "deferred") return "deferred";
     if (fine === null) return null;
-    const inRange = timeline(fine, nowMs, rung.ms)
-      .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms);
+    // The caller answered on the other feed. That is a contract violation
+    // on its side; it costs one attempt here and never decides the plan.
+    if (fine.basis !== basis) return null;
+    const subBars = fine.basis === "quotes"
+      ? quoteTimeline(fine.bars, row.signal, nowMs, rung.ms)
+      : timeline(fine.bars, nowMs, rung.ms);
+    const inRange = subBars.filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms);
     // Nothing inside the bar at all: the provider answered about some other
     // window, which is a failure like any other.
     if (inRange.length === 0) return null;
@@ -987,6 +1042,7 @@ export const judgePlan = async (
         }
         refined = true;
         refinedInterval = finerRung(post[idx].ms)?.interval ?? null;
+        fineUsed.push(...fine);
         // Resume from the state before the ambiguous bar; the fine bars
         // replace it
         const fr = runUntilEvent(ctx, stateBefore, fine);
@@ -1089,10 +1145,20 @@ export const judgePlan = async (
     : series.length;
   const path = downsamplePath(series.slice(contextStart, contextEnd).map((x) => x.c), PATH_POINTS);
 
-  // The spread the plan actually paid, at the two moments it mattered
+  // The spread at the two moments it mattered, read at the close of the
+  // finest bar CONTAINING that instant. Post-bar fine bars first — a
+  // settlement decided during refinement was decided on one — then the
+  // series as judged (which holds the signal bar's sub-bars after a splice),
+  // then the series as fetched: a market fill's instant lies in the sub-bar
+  // the splice drops, and only the coarse signal bar it was priced off still
+  // contains it. Containment, not "the last bar starting before", which after
+  // a splice named the bar BEFORE the signal bar. Before fineUsed existed a
+  // post-bar refinement left `series` without its fine bars, so the recorded
+  // "spread at exit" was the coarse bar's, up to an hour away from the exit.
   const spreadAtBar = (atMs: number | null): number | null => {
     if (!twoSided || atMs === null || !Number.isFinite(atMs)) return null;
-    const bar = series.filter((b) => b.t <= atMs).pop() ?? series[0];
+    const containing = (bars: Timed[]) => bars.find((b) => b.t <= atMs && atMs < b.t + b.ms);
+    const bar = containing(fineUsed) ?? containing(series) ?? containing(coarseSeries);
     if (!bar) return null;
     const s = Math.abs(bar.x.close - bar.c.close);
     return Number.isFinite(s) ? Number(s.toFixed(5)) : null;
@@ -1103,7 +1169,7 @@ export const judgePlan = async (
   const evaluation: Evaluation = {
     version: 3,
     eval_interval: evalInterval,
-    price_basis: twoSided ? "quotes" : "mid",
+    price_basis: basis,
     spread_at_fill: spreadAtBar(filledMs),
     spread_at_exit: spreadAtBar(settledMs),
     order_type: orderType,

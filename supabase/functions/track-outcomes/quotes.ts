@@ -40,9 +40,22 @@ export const GMO_SYMBOLS: Record<string, string> = {
   "NZD/USD": "NZD_USD",
 };
 
-// Our evaluation intervals, in GMO's spelling. The ones keyed by a calendar
-// day return one JST day per request; 4hour and coarser take a year.
+// Our intervals, in GMO's spelling. The ones keyed by a calendar day return
+// one JST day per request; 4hour and coarser take a year.
+//
+// 5min and 1min are the refinement rungs (evaluate.ts finerRung), never a
+// coarse evaluation interval: EVAL_INTERVAL maps every plan to 15min or 1h,
+// and analyze asks this feed only for the timeframes in its
+// GMO_ANALYSIS_TIMEFRAMES (1h today), so the rungs are never requested there.
+// They are here so the sub-bars that split an ambiguous bar can come from the
+// same bid/ask feed as the bar itself (fetchQuoteWindow). Verified on the
+// live host 2026-09-05: `klines?symbol=USD_JPY&priceType=BID&interval=5min&
+// date=20260904` answered the same shape as 15min — `{status:0,data:[{
+// openTime:"1788469200000",open:"155.762",...}]}`, first bar 06:00 JST
+// 09-04 — keyed by YYYYMMDD like the other sub-day intervals.
 export const GMO_INTERVALS: Record<string, { name: string; key: "day" | "year" }> = {
+  "1min": { name: "1min", key: "day" },
+  "5min": { name: "5min", key: "day" },
   "15min": { name: "15min", key: "day" },
   "1h": { name: "1hour", key: "day" },
   "4h": { name: "4hour", key: "year" },
@@ -76,16 +89,23 @@ export const spreadAt = (q: QuoteCandle): number => q.ask.close - q.bid.close;
 
 // "YYYYMMDD" of the JST calendar day a UTC instant falls in.
 //
-// NOTE this is NOT the day GMO files a bar under. Their trading day begins at
-// the New York 17:00 roll — 06:00 JST under US summer time, 07:00 JST under
-// winter time — so between JST midnight and that roll, the calendar day names
-// a file that does not exist yet and the API answers 404. Measured against
-// the live host on 2026-09-04 03:49 JST: `date=20260904` returned 404 while
-// `date=20260903` returned 22 bars running 06:00 JST 09-03 to 03:00 JST 09-04.
+// NOTE this is NOT the day GMO files a bar under. Their documentation says
+// the trading day starts at 06:00 JST. Every measurement so far is consistent
+// with that — and equally consistent with a New York 17:00 roll, which is
+// 06:00 JST only under US summer time and 07:00 JST in winter:
+//   * 2026-09-04 03:49 JST: `date=20260904` returned 404 while
+//     `date=20260903` returned bars running 06:00 JST 09-03 to 03:00 JST
+//     09-04;
+//   * 2026-09-05: 5min `date=20260904` began at 06:00 JST 09-04.
+// Both were taken under US summer time. Winter has not been measured, so
+// which rule GMO actually follows is not known here and is not asserted.
 //
-// Rather than encode the daylight-saving rule and get it wrong twice a year,
-// callers pad the key range (see dateKeys) and take correctness from the
-// timestamps on the bars that come back. A key is only a fetching bucket.
+// Either way, between JST midnight and the roll the calendar day names a
+// file that does not exist yet and the API answers 404. Rather than encode
+// one of the two rules and be wrong under the other, callers pad the key
+// range (dateKeys) or walk it nearest-first (fetchQuoteWindow) and take
+// correctness from the timestamps on the bars that come back. A key is only
+// a fetching bucket.
 export const jstDayKey = (ms: number): string => new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, "");
 
 export const jstYearKey = (ms: number): string => String(new Date(ms + JST_OFFSET_MS).getUTCFullYear());
@@ -197,10 +217,10 @@ export const usableBars = (bars: QuoteCandle[], _intervalMs: number, nowMs: numb
 //
 // The old test was "did every date key we guessed return rows?", which made
 // correctness depend on guessing the provider's calendar right. It did not:
-// the current trading day 404s until the New York roll, so every judgement
-// between JST midnight and 06:00 silently fell back to the mid feed. In
-// production every settled plan carried price_basis "mid" and nothing said
-// why.
+// the current trading day 404s until the trading-day roll (see jstDayKey),
+// so every judgement between JST midnight and the roll silently fell back to
+// the mid feed. In production every settled plan carried price_basis "mid"
+// and nothing said why.
 //
 // This asks the honest question instead — is there a stretch of OPEN market
 // inside the window with no bar in it? Buckets that come back empty are then
@@ -312,8 +332,124 @@ export const fetchQuotes = async (
   return { bars: merged, missing, requests, empty };
 };
 
+// Bid and ask sub-bars for ONE coarse bar, [fromMs, toMs), fetched as cheaply
+// as the provider's calendar allows.
+//
+// This exists because a judgement must not change feeds half way through.
+// The coarse series a plan is judged on is bid/ask; splitting an ambiguous
+// bar with mid-price sub-bars from another provider hides exactly the
+// touches the two-sided series was adopted to see — a stop grazed on the
+// bid by less than the spread (0.5 pip median, 3 pips at p95, see the
+// header) is invisible on the mid, so the sub-bars show no touch and the
+// judge records feed_conflict where the true answer is "the bid touched the
+// stop in that bar". The mirror error exists too.
+//
+// Why it is not fetchQuotes. dateKeys pads a day each side, and fetchQuotes
+// walks every key: for a 15-minute window that is three keys, six requests,
+// four of them for nothing. Here the keys are walked NEAREST-FIRST — the JST
+// calendar day of fromMs, then the previous key, then the next — and the walk
+// STOPS as soon as the window is covered. The common case (a window inside a
+// trading day) therefore costs two requests. A window before the roll costs
+// four: the calendar key has no file yet, the previous key holds the bars. A
+// bar that straddles the roll costs four as well: the calendar key covers the
+// part after the roll, the gap sends the walk to the previous key for the
+// rest. The nearest-first order is kept, rather than a computed key, for the
+// reason given at jstDayKey: two candidate roll rules fit the measurements
+// and the code takes correctness from bar timestamps, not from either rule.
+//
+// Why coverage is strict. fetchQuotes tolerates a hole of MAX_GAP_INTERVALS
+// because over a multi-day series one absent bar is a hiccup. Inside one
+// coarse bar a missing sub-bar BEFORE the first touch can hide the level that
+// was reached first, which turns an unknown into a wrong verdict. So the
+// window is covered only when no whole sub-bar of open market is absent
+// (largestGap < the rung), and anything less is reported in `missing` for
+// the caller to refuse. The plan then waits for another attempt; it is not
+// decided on partial data.
+//
+// Why the nearest key is always asked. Coverage is measured against the
+// WIDEST closure (isPossiblyClosed), which cannot vouch for Sunday 21:00-22:00Z
+// or Friday 21:00-22:00Z because the week's edge moves with US daylight time.
+// Over a window inside that hour the initial gap is therefore zero, and a
+// walk that stopped on "covered" before its first request returned no bars
+// for the first hour of every trading week — an hour GMO does serve (its
+// Monday file opens 06:00 JST, which is Sunday 21:00Z in summer), an hour
+// the coarse series keeps (quoteTimeline uses the narrow closure), and the
+// hour most likely to span both levels. Measured on a probe: 0 requests,
+// bars [], missing [], and the plan filed as terminal no_data three sweeps
+// later without the feed ever being asked. So the first key is fetched
+// unconditionally and coverage only decides whether to go on.
+export const fetchQuoteWindow = async (
+  pair: string,
+  interval: string,
+  fromMs: number,
+  toMs: number,
+  nowMs: number,
+  fetcher: Fetcher,
+): Promise<QuoteFetchResult | null> => {
+  const symbol = GMO_SYMBOLS[pair];
+  const spec = GMO_INTERVALS[interval];
+  const rungMs = INTERVAL_MS[interval];
+  if (!symbol || !spec || !rungMs) return null;
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
+
+  // Coverage is only demanded up to now: the part of a still-forming coarse
+  // bar that has not happened yet cannot be missing
+  const until = Math.min(toMs, nowMs);
+  const keyOf = spec.key === "day" ? jstDayKey : jstYearKey;
+  const nearest = keyOf(fromMs);
+  const ordered = dateKeys(fromMs, toMs, spec.key);
+  const origin = Math.max(0, ordered.indexOf(nearest));
+  // Nearest first; at equal distance the earlier key, because the file a
+  // pre-roll bar lives in is always the PREVIOUS one
+  const keys = ordered
+    .map((k, i) => ({ k, d: i - origin }))
+    .sort((a, b) => Math.abs(a.d) - Math.abs(b.d) || a.d - b.d)
+    .map((x) => x.k);
+
+  const bid: Array<{ t: number; c: Candle }> = [];
+  const ask: Array<{ t: number; c: Candle }> = [];
+  const empty: string[] = [];
+  let requests = 0;
+  let merged: QuoteCandle[] = [];
+  let gap = largestGap([], fromMs, until, rungMs);
+
+  for (const key of keys) {
+    if (requests > 0 && gap < rungMs) break;
+    const [b, a] = await Promise.all([
+      fetcher(klineUrl(symbol, "bid", spec.name, key)),
+      fetcher(klineUrl(symbol, "ask", spec.name, key)),
+    ]);
+    requests += 2;
+    const bRows = parseKlines(b);
+    const aRows = parseKlines(a);
+    if (bRows.length === 0 || aRows.length === 0) {
+      empty.push(key);
+    } else {
+      bid.push(...bRows);
+      ask.push(...aRows);
+    }
+    // Only the sub-bars that start inside the coarse bar; the rest of the
+    // day file is fetched because the provider serves whole days, not
+    // because it is wanted. Sorted, because the walk is nearest-first and
+    // mergeSides keeps arrival order: a bar across the roll would otherwise
+    // come back with its later file's sub-bars ahead of the earlier one's.
+    merged = usableBars(mergeSides(bid, ask), rungMs, nowMs)
+      .filter((q) => {
+        const t = Date.parse(q.datetime);
+        return t >= fromMs && t < toMs;
+      })
+      .sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
+    gap = largestGap(merged, fromMs, until, rungMs);
+  }
+
+  const missing = gap >= rungMs ? [`gap ${Math.round(gap / rungMs)}x${interval}`] : [];
+  return { bars: merged, missing, requests, empty };
+};
+
 // Kept local so this module has no import cycle with evaluate.ts
 const INTERVAL_MS: Record<string, number> = {
+  "1min": MIN,
+  "5min": 5 * MIN,
   "15min": 15 * MIN,
   "1h": HOUR,
   "4h": 4 * HOUR,

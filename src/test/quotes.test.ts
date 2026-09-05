@@ -3,7 +3,9 @@ import {
   dateKeys,
   exitSide,
   fetchQuotes,
+  fetchQuoteWindow,
   fillSide,
+  GMO_INTERVALS,
   isMarketClosed,
   isPossiblyClosed,
   largestGap,
@@ -47,7 +49,17 @@ describe("which side of the book a plan touches", () => {
     expect(supportsQuotes("USD/JPY", "1h")).toBe(true);
     expect(supportsQuotes("EUR/JPY", "4h")).toBe(true);
     expect(supportsQuotes("USD/CHF", "1h")).toBe(false);
-    expect(supportsQuotes("USD/JPY", "5min")).toBe(false);
+    expect(supportsQuotes("USD/JPY", "1week")).toBe(false);
+  });
+
+  it("carries the refinement rungs, keyed by day like the other sub-day intervals", () => {
+    // 5min and 1min are never a coarse evaluation interval (EVAL_INTERVAL
+    // maps every plan to 15min or 1h); they are here so an ambiguous bar can
+    // be split on the same bid/ask feed it was judged on. Verified live on
+    // 2026-09-05: interval=5min&date=20260904 answered the 15min shape.
+    expect(GMO_INTERVALS["5min"]).toEqual({ name: "5min", key: "day" });
+    expect(GMO_INTERVALS["1min"]).toEqual({ name: "1min", key: "day" });
+    expect(supportsQuotes("USD/JPY", "5min")).toBe(true);
   });
 });
 
@@ -208,6 +220,131 @@ describe("fetching a window", () => {
 
   it("declines a pair it does not carry", async () => {
     expect(await fetchQuotes("USD/CHF", "1h", T, T + HOUR, T + 2 * HOUR, async () => null)).toBeNull();
+  });
+});
+
+// --- one coarse bar's worth of sub-bars, from the same feed -----------------
+// The sub-bars that split an ambiguous bar must come from the feed the bar
+// itself came from, and the provider serves whole trading days keyed by a
+// calendar date whose roll is not JST midnight. What is checked here is the
+// cost of getting them and the refusal to judge on a window with a hole.
+
+describe("fetching one coarse bar's sub-bars", () => {
+  const MIN = 60_000;
+  const JST = 9 * HOUR;
+  // A UTC instant from a JST wall-clock time
+  const jst = (iso: string) => Date.parse(`${iso}Z`) - JST;
+  const dayOf = (key: string) => `${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}`;
+
+  // A provider whose trading day runs 06:00 JST to 06:00 JST the next day —
+  // the rule every measurement so far is consistent with — serving 5min
+  // bars. `absent` leaves a sub-bar out of every file, `missingKeys` answer
+  // 404 (a day that has no file yet).
+  const provider = (opts: { absent?: number[]; missingKeys?: string[] } = {}) => {
+    const seen: string[] = [];
+    const fetcher = async (url: string) => {
+      seen.push(url);
+      const key = url.match(/date=(\d{8})/)?.[1] ?? "";
+      if (opts.missingKeys?.includes(key)) return null;
+      const side = url.includes("priceType=ASK") ? 0.01 : 0;
+      const open = jst(`${dayOf(key)}T06:00:00`);
+      const rows: unknown[] = [];
+      for (let t = open; t < open + 24 * HOUR; t += 5 * MIN) {
+        if (opts.absent?.includes(t)) continue;
+        rows.push(kline(t, 158.6 + side, 158.7 + side, 158.5 + side, 158.65 + side));
+      }
+      return body(rows);
+    };
+    return { seen, fetcher, keysAsked: () => seen.map((u) => u.match(/date=(\d{8})/)?.[1]) };
+  };
+
+  it("costs two requests when the calendar key covers the window, and asks no other key", async () => {
+    // A 15min bar at 10:00 JST on a Wednesday, well inside the trading day
+    const from = jst("2026-09-02T10:00:00");
+    const p = provider();
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 2 * HOUR, p.fetcher);
+    expect(res?.requests).toBe(2);
+    expect(p.keysAsked()).toEqual(["20260902", "20260902"]);
+    expect(res?.missing).toEqual([]);
+    expect(res?.empty).toEqual([]);
+    expect(res?.bars.map((b) => b.datetime)).toEqual([
+      new Date(from).toISOString(),
+      new Date(from + 5 * MIN).toISOString(),
+      new Date(from + 10 * MIN).toISOString(),
+    ]);
+    expect(spreadAt(res!.bars[0])).toBeCloseTo(0.01, 6);
+  });
+
+  it("costs four before the roll: the calendar key has no file yet, the previous key holds the bars", async () => {
+    // 03:00 JST, judged at 03:49 JST — the measured production case, where
+    // date=20260902 answers 404 and date=20260901 runs to the small hours
+    const from = jst("2026-09-02T03:00:00");
+    const p = provider({ missingKeys: ["20260902"] });
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, jst("2026-09-02T03:49:00"), p.fetcher);
+    expect(res?.requests).toBe(4);
+    expect(p.keysAsked()).toEqual(["20260902", "20260902", "20260901", "20260901"]);
+    expect(res?.empty).toEqual(["20260902"]);
+    expect(res?.missing).toEqual([]);
+    expect(res?.bars).toHaveLength(3);
+  });
+
+  it("stitches a bar that straddles the roll from both files, nearest key first", async () => {
+    // 05:50 to 06:05 JST: the first two sub-bars are filed under the day
+    // that is ending, the last under the day that is starting
+    const from = jst("2026-09-02T05:50:00");
+    const p = provider();
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 2 * HOUR, p.fetcher);
+    expect(res?.requests).toBe(4);
+    // The calendar day of the window's start is asked first, then — its file
+    // starting at 06:00 leaves a hole at 05:50 — the previous day; never the
+    // next one, which nothing needed
+    expect(p.keysAsked()).toEqual(["20260902", "20260902", "20260901", "20260901"]);
+    expect(res?.missing).toEqual([]);
+    expect(res?.bars.map((b) => b.datetime)).toEqual([
+      new Date(from).toISOString(),
+      new Date(from + 5 * MIN).toISOString(),
+      new Date(from + 10 * MIN).toISOString(),
+    ]);
+  });
+
+  it("refuses partial coverage, because a missing sub-bar can hide the level reached first", async () => {
+    const from = jst("2026-09-02T10:00:00");
+    const p = provider({ absent: [from + 5 * MIN] });
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 2 * HOUR, p.fetcher);
+    // Every candidate key was tried before giving up
+    expect(res?.requests).toBe(6);
+    expect(res?.bars).toHaveLength(2);
+    expect(res?.missing).toEqual(["gap 1x5min"]);
+  });
+
+  it("does not allege a gap over the part of a forming bar that has not happened yet", async () => {
+    // Judged at 10:07 JST: only the 10:00 and 10:05 sub-bars can exist
+    const from = jst("2026-09-02T10:00:00");
+    const p = provider();
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 7 * MIN, p.fetcher);
+    expect(res?.missing).toEqual([]);
+    expect(res?.requests).toBe(2);
+  });
+
+  it("asks the nearest key even inside the hour the widest closure cannot vouch for", async () => {
+    // Sunday 21:00Z is Monday 06:00 JST under US summer time: the first hour
+    // of GMO's week, and inside the band isPossiblyClosed marks as maybe
+    // shut. A walk that trusted "covered" before its first request returned
+    // nothing here, while the coarse series does hold these bars.
+    const from = Date.parse("2026-09-06T21:00:00Z");
+    const p = provider();
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 2 * HOUR, p.fetcher);
+    expect(res?.requests).toBe(2);
+    expect(p.keysAsked()).toEqual(["20260907", "20260907"]);
+    expect(res?.missing).toEqual([]);
+    expect(res?.bars).toHaveLength(3);
+  });
+
+  it("declines what it cannot fetch", async () => {
+    const from = jst("2026-09-02T10:00:00");
+    expect(await fetchQuoteWindow("USD/CHF", "5min", from, from + 15 * MIN, from + HOUR, async () => null)).toBeNull();
+    expect(await fetchQuoteWindow("USD/JPY", "3min", from, from + 15 * MIN, from + HOUR, async () => null)).toBeNull();
+    expect(await fetchQuoteWindow("USD/JPY", "5min", from, from, from + HOUR, async () => null)).toBeNull();
   });
 });
 

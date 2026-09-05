@@ -27,10 +27,10 @@ import {
   type FineFetcher,
   type OpenRow,
 } from "./evaluate.ts";
-import { fetchQuotes, supportsQuotes, type QuoteCandle } from "./quotes.ts";
+import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
 import { judgeWait, type WaitBar } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v9-2026-09-05T03:05:00Z";
+const TRACKER_VERSION = "track-outcomes-v10-2026-09-05T03:30:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -44,10 +44,24 @@ const MAX_REQUESTS = 5;
 
 // Quotes come from a different provider (GMO Coin's public FX endpoint:
 // keyless, no account, bid and ask served separately), so they do not spend
-// the Twelve Data budget above. Two requests per calendar day per group, so
+// the Twelve Data budget above. Two requests per date key per group, so
 // the lookback is capped: a plan whose window is longer than this is judged
 // on the mid feed, and says so in `price_basis`.
-const MAX_QUOTE_REQUESTS = 12;
+//
+// The budget is shared between the coarse series and the refinements that
+// split its ambiguous bars (fetchQuoteWindow), which must come from the same
+// feed — until v10 refinements went to the mid feed and cost nothing here.
+// The arithmetic, measured with dateKeys: the padded walk over a 48h
+// lookback is 5 day keys = 10 requests, and over the 3-day cap 6 keys = 12.
+// The old budget of 12 was sized for the coarse series alone; keeping it
+// would leave a 48h group 2 requests (one refinement in the common case,
+// none if it straddled the roll) and a group at the cap nothing, so its
+// ambiguous bars would wait a tick each. At 20 a 48h group leaves 10 (five
+// two-request refinements, or two four-request ones across a roll) and a
+// capped group leaves 8. The endpoint is keyless and public and the sweep
+// runs four times an hour, so the extra eight requests are not a quota
+// concern.
+const MAX_QUOTE_REQUESTS = 20;
 const MAX_QUOTE_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 const TWELVE_DATA = "https://api.twelvedata.com/time_series";
 
@@ -255,19 +269,6 @@ Deno.serve(async (req: Request) => {
       }
     };
 
-    let refinements = 0;
-    const fetchFine: FineFetcher = async (pair, fromMs, toMs, interval) => {
-      if (requests >= MAX_REQUESTS) return "deferred"; // a later tick, at no cost to the plan
-      refinements++;
-      return await fetchSeries({
-        symbol: pair,
-        interval,
-        start_date: tdDate(fromMs),
-        end_date: tdDate(toMs),
-        outputsize: "200",
-      });
-    };
-
     let checked = 0;
     let updated = 0;
     let deferred = 0;
@@ -275,10 +276,77 @@ Deno.serve(async (req: Request) => {
     const errors: string[] = [];
     const resolved: Array<{ id: string; outcome: string }> = [];
 
+    // One URL of the quote feed, on the quote budget. Shared by the coarse
+    // series and the refinements so the two draw on the same count. A
+    // refusal for budget is recorded so a walk cut short by it can be told
+    // from a provider that answered with nothing.
+    let quoteRequests = 0;
+    let quoteStarved = false;
+    const quoteFetcher: Fetcher = async (url) => {
+      if (quoteRequests >= MAX_QUOTE_REQUESTS) {
+        quoteStarved = true;
+        return null;
+      }
+      quoteRequests++;
+      const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return null;
+      return await r.json().catch(() => null);
+    };
+
+    // Finer bars for one ambiguous coarse bar, from the SAME feed the coarse
+    // series came from — `basis` is that feed. Bid/ask sub-bars for a bid/ask
+    // series, mid sub-bars for a mid series, never mixed: a stop grazed on
+    // the bid by less than the spread is invisible on the mid, so mid
+    // sub-bars under a quotes series show no touch where the bid made one
+    // and the judge writes feed_conflict for a bar the bid really did decide.
+    // If the same-basis fetch fails the plan waits for another attempt; it is
+    // not decided on the other feed.
+    let refinements = 0;
+    let quoteRefinements = 0;
+    const fetchFine: FineFetcher = async (pair, fromMs, toMs, interval, basis) => {
+      if (basis === "quotes") {
+        // The cheapest window is two requests; with less than that left the
+        // walk cannot even start, so wait a tick at no cost to the plan
+        if (MAX_QUOTE_REQUESTS - quoteRequests < 2) return "deferred";
+        quoteStarved = false;
+        try {
+          const res = await fetchQuoteWindow(pair, interval, fromMs, toMs, nowMs, quoteFetcher);
+          // The walk needed a further key (a bar before or across the roll)
+          // and the budget refused it: the feed did not fail, this run did
+          if (quoteStarved && (!res || res.missing.length > 0)) return "deferred";
+          // Counted once the feed has answered: a walk the budget cut short
+          // is reported under `deferred`, not here
+          quoteRefinements++;
+          if (!res || res.bars.length === 0) {
+            errors.push(`${pair}|${interval}: quotes fine no_data`);
+            return null;
+          }
+          if (res.missing.length > 0) {
+            errors.push(`${pair}|${interval}: quotes fine incomplete (${res.missing.join(",")})`);
+            return null;
+          }
+          return { basis: "quotes", bars: res.bars };
+        } catch (err) {
+          quoteRefinements++;
+          errors.push(`${pair}|${interval}: quotes fine ${err instanceof Error ? err.message : String(err)}`);
+          return null;
+        }
+      }
+      if (requests >= MAX_REQUESTS) return "deferred"; // a later tick, at no cost to the plan
+      refinements++;
+      const bars = await fetchSeries({
+        symbol: pair,
+        interval,
+        start_date: tdDate(fromMs),
+        end_date: tdDate(toMs),
+        outputsize: "200",
+      });
+      return bars === null ? null : { basis: "mid", bars };
+    };
+
     // Bid and ask for a group, when the window is short enough to be worth
     // the requests. A failure here is never fatal: the plan is judged on the
     // mid feed exactly as it was before.
-    let quoteRequests = 0;
     let quoteGroups = 0;
     let quoteEmptyKeys = 0;
     const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null> => {
@@ -286,20 +354,15 @@ Deno.serve(async (req: Request) => {
       if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
       if (nowMs - fromMs > MAX_QUOTE_LOOKBACK_MS) return null;
       try {
-        const res = await fetchQuotes(pair, evalInterval, fromMs, nowMs, nowMs, async (url) => {
-          if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
-          quoteRequests++;
-          const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-          if (!r.ok) return null;
-          return await r.json().catch(() => null);
-        });
+        const res = await fetchQuotes(pair, evalInterval, fromMs, nowMs, nowMs, quoteFetcher);
         if (!res || res.bars.length === 0) return null;
         // A gap in the two-sided series would be judged as "price never got
         // there"; fall back rather than invent a verdict from partial data.
         // `missing` now measures the hole in open market rather than counting
         // date keys that came back empty — the provider's newest trading day
-        // has no file until the New York roll, and treating that as a failure
-        // silently sent every judgement back to the mid feed.
+        // has no file until the trading-day roll (see jstDayKey in quotes.ts),
+        // and treating that as a failure silently sent every judgement back to
+        // the mid feed.
         if (res.missing.length > 0) {
           errors.push(`${pair}|${evalInterval}: quotes incomplete (${res.missing.join(",")})`);
           return null;
@@ -466,6 +529,7 @@ Deno.serve(async (req: Request) => {
       quote_groups: quoteGroups,
       quote_empty_keys: quoteEmptyKeys,
       refinements,
+      quote_refinements: quoteRefinements,
       checked,
       updated,
       deferred,
