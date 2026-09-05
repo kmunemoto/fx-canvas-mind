@@ -100,10 +100,24 @@ export interface Evaluation {
   eval_interval: string;
   // Where the bars came from: "mid" is a single mid price (Twelve Data),
   // "quotes" is bid and ask, so the fill and the exit were judged on the
-  // side of the book each actually happens on
-  price_basis?: "mid" | "quotes";
-  // The spread at the fill and at the settlement, in price units — what the
-  // mid-price judgement was silently leaving out
+  // side of the book each actually happens on. Covers every bar THIS SWEEP
+  // judged on, the finer bars that split an ambiguous one included:
+  // fetchRange refuses sub-bars of the other basis, so nothing this sweep
+  // decided was decided on a mid sub-bar under a bid/ask series. A fill
+  // carried over from an earlier sweep (prevFill) keeps whatever basis that
+  // sweep had, which this field does not record.
+  price_basis?: PriceBasis;
+  // The ask-minus-bid at the close of the bar CONTAINING the fill and the
+  // settlement, in price units — the finest such bar this sweep held (a fine
+  // bar when refinement supplied one, the coarse bar otherwise; for a market
+  // fill whose signal bar was split, the first sub-bar after the signal,
+  // which is where its price came from). An instant no bar contains falls back to the
+  // bar the price came from: a fill made inside a gap, to the first bar
+  // after it (marketFillPrice is that bar's open); an expiry stamped at the
+  // sweep itself, to the last bar the sweep held, whose close priced it. A
+  // settlement nothing priced — a lapse, a terminal unknown — records no
+  // exit spread. Not the spread at the exact tick, which no bar feed
+  // carries. Null on the mid feed, which was silently leaving it out.
   spread_at_fill?: number | null;
   spread_at_exit?: number | null;
   order_type: OrderType;
@@ -171,13 +185,29 @@ export interface Judgement {
   evaluation: Evaluation;
 }
 
-// Finer bars for [fromMs, toMs). `null` means the provider could not supply
-// them (error, or nothing in the range) and counts as one failed attempt;
-// "deferred" means the caller chose not to ask this run (request budget) and
-// costs nothing. Both leave the plan open for another try.
-export type FineResult = Candle[] | null | "deferred";
+// Which feed a bar came from: a single mid price, or bid and ask
+export type PriceBasis = "mid" | "quotes";
+
+// Finer bars for [fromMs, toMs), tagged with the feed they came from. `null`
+// means the provider could not supply them (error, or nothing in the range)
+// and counts as one failed attempt; "deferred" means the caller chose not to
+// ask this run (request budget) and costs nothing. Both leave the plan open
+// for another try.
+//
+// `basis` is the basis of the coarse series the plan is being judged on, so
+// the caller can route to the matching provider. Within one judgement the
+// fine bars must have the SAME basis as the coarse series: a stop grazed on
+// the bid by less than the spread is invisible on the mid, so mid sub-bars
+// under a bid/ask series show no touch where the bid made one, and the
+// mirror. fetchRange treats a result of the other basis as a failed attempt
+// rather than deciding the plan on it.
+export type FineResult =
+  | { basis: "mid"; bars: Candle[] }
+  | { basis: "quotes"; bars: QuoteCandle[] }
+  | null
+  | "deferred";
 export interface FineFetcher {
-  (pair: string, fromMs: number, toMs: number, interval: string): Promise<FineResult>;
+  (pair: string, fromMs: number, toMs: number, interval: string, basis: PriceBasis): Promise<FineResult>;
 }
 
 const MIN = 60_000;
@@ -288,7 +318,25 @@ export const isDue = (row: Pick<OpenRow, "interval" | "evaluation">, nowMs: numb
   const checkedAt = row.evaluation?.checked_at;
   const checked = typeof checkedAt === "string" ? Date.parse(checkedAt) : NaN;
   if (!Number.isFinite(checked)) return true;
-  const every = CHECK_EVERY_MS[row.interval] ?? HOUR;
+  const cadence = CHECK_EVERY_MS[row.interval] ?? HOUR;
+  // A plan waiting on a bar to close — a refinement deferred, or a signal
+  // bar that was still forming — comes back after one evaluation bar, by
+  // which time the bar has certainly closed, instead of a whole cadence
+  // later. The cadence is four hours for 4h and 1day plans, which would hold
+  // an order of touches already on the tape for three bars longer than
+  // necessary. The extra looks cost the group's coarse fetch each time and
+  // nothing in attempts. What it moves: waiting rows sort ahead of the
+  // frequently checked 15min and 1h plans (older checked_at), so with three
+  // waiting groups a sweep's budgets can be spent before those plans' groups
+  // are reached — a one-tick deferral for them, once an hour instead of once
+  // per four, never indefinite (a deferred group is not stamped and goes
+  // first next tick).
+  const ev = row.evaluation;
+  const waiting = ev?.refine_pending === true || ev?.signal_bar_pending === true;
+  const bar = INTERVAL_MS[ev?.eval_interval ?? ""] ?? cadence;
+  // Nothing a waiting plan waits for happens while the market is shut, so
+  // the weekend is checked at the plan's own cadence, not every bar
+  const every = waiting && !isMarketClosed(nowMs) ? Math.min(cadence, bar) : cadence;
   // Slack so a cron tick a few seconds early still counts
   return nowMs - checked >= every - MIN;
 };
@@ -689,15 +737,26 @@ const targetsReached = (
 // market was, price crossed the entry after the plan was made and the order
 // filled; if the bar only reached the entry, the touch may predate the plan.
 // A filled plan whose signal bar also reached SL or TP1 cannot be timed.
+//
+// `prior` is the fill an earlier sweep established, when this runs again
+// because the signal bar had not closed then. It stands: the completed bar's
+// close can sit back on the market side of a limit the live close had
+// crossed, and re-deriving the fill from the closed bar would drop it.
 const assessSignalBar = (
   ctx: Ctx,
   reference: number | null,
   signalBar: Timed | null,
   createdMs: number,
+  prior?: State,
 ): { state: State; event: (Terminal & { kind: "ambiguous" }) | null } => {
   const { row, orderType } = ctx;
-  let state = EMPTY_STATE;
-  if (orderType === "market") {
+  // A prior that is only a possible fill is kept too: the touch it records
+  // lived in the coarse bar, or in the dropped sub-bar around the signal, and
+  // quiet sub-bars after the signal neither confirm nor refute it
+  let state = prior ?? EMPTY_STATE;
+  if (state.filled) {
+    // established already
+  } else if (orderType === "market") {
     // A market order does not get the number written on the plan; it gets
     // whatever its own side of the book was showing
     state = filledAt(row, toIso(createdMs), ctx.marketFillPrice, createdMs);
@@ -746,10 +805,31 @@ export const judgePlan = async (
   const entryWindowMs = ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR;
   const expiryMs = (EXPIRY_DAYS[row.interval] ?? 30) * DAY;
   const twoSided = Array.isArray(quotes) && quotes.length > 0;
+  const basis: PriceBasis = twoSided ? "quotes" : "mid";
 
   let series = twoSided
     ? quoteTimeline(quotes as QuoteCandle[], row.signal, nowMs, evalMs)
     : timeline(candles, nowMs, evalMs);
+  // The series as fetched, before the signal-bar splice replaces one coarse
+  // bar with its sub-bars: spreadAtBar falls back to it for an instant no
+  // surviving bar contains
+  const coarseSeries = series;
+  // The end of the coarse bar containing an instant; the instant plus one
+  // bar when none does (a fill inside a gap)
+  const endOfBarHolding = (ms: number): number => {
+    const holder = series.find((b) => b.t <= ms && ms < b.t + b.ms);
+    if (holder) return holder.t + holder.ms;
+    // A hole at the fill bar: the fill was proved by that bar's close, which
+    // ends no later than the next bar's open
+    const next = series.find((b) => b.t > ms);
+    return Math.min(ms + evalMs, next?.t ?? Infinity);
+  };
+  // Milliseconds of open market between two instants, sampled by the minute
+  const openMsSince = (fromMs: number, toMs: number): number => {
+    let open = 0;
+    for (let t = fromMs; t < toMs; t += MIN) if (!isMarketClosed(t)) open += MIN;
+    return open;
+  };
   const windowCoversSignal = series.length > 0 && series[0].t <= createdMs + evalMs;
 
   // Locate the bar containing the signal and the bars after it
@@ -767,11 +847,17 @@ export const judgePlan = async (
   const orderType = classifyOrder(row, reference);
   // What a market order really costs: on two-sided data, the fill side's
   // price around the signal. On mid data there is nothing better than the
-  // plan's own number, which is what every judgement used before.
+  // plan's own number, which is what every judgement used before. The
+  // coarse bar's close is the first estimate; once the signal bar is split,
+  // the fill is re-priced off the open of the first sub-bar after the signal
+  // (see the splice), which is minutes from the instant rather than up to an
+  // hour, and does not depend on how far formed the coarse bar was when this
+  // sweep read it. Re-derived by every sweep that goes back through the
+  // signal bar, so the record ends up the same whichever tick first saw it.
   const marketFillPrice = twoSided
     ? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : row.entry_point)
     : row.entry_point;
-  const ctx: Ctx = {
+  let ctx: Ctx = {
     row,
     orderType,
     missedArmed: reference === null || (row.signal === "BUY" ? row.take_profit_1 > reference : row.take_profit_1 < reference),
@@ -798,8 +884,11 @@ export const judgePlan = async (
         // of that bar stays off-limits to the open-through rule. Without this,
         // a re-sweep re-admits the fill bar with filled=true, the fine walk
         // sees sub-bars that precede the real limit fill, and a pre-entry stop
-        // touch convicts the trade as a loss.
-        fillCertainFrom: prev.order_type === "market" ? prevFillMs : prevFillMs + evalMs,
+        // touch convicts the trade as a loss. That bar's END, not the instant
+        // plus a bar: filled_at is the signal instant, mid-bar, and adding a
+        // bar to it reached into the bar after, whose open-through a single
+        // sweep applies and a re-judge then did not.
+        fillCertainFrom: prev.order_type === "market" ? prevFillMs : endOfBarHolding(prevFillMs),
         possibleFill: false,
         mfe: prev.mfe,
         mae: prev.mae,
@@ -816,21 +905,53 @@ export const judgePlan = async (
   let refineAttempts = prev?.refine_attempts ?? 0;
   let note: string | null = null;
   let signalBarPending = false;
+  // Whether this sweep split the signal bar to completion, and the sub-bar
+  // a split market fill was priced off (its spread is read there too)
+  let splitDone = false;
+  let fillPricedFrom: Timed | null = null;
   // Bars from the TP1 bar onwards, for the runner view (fine bars when the
   // win came from refinement)
   let afterWin: Timed[] = [];
   let judged = true;
+  // Every fine bar the post-bar site adopted, so the spread recorded for an
+  // instant decided on one is that bar's and not the coarse bar's it
+  // replaced. The signal-bar site needs no entry here: it splices its
+  // sub-bars into `series`, where spreadAtBar finds them; and when those
+  // sub-bars are themselves split at the post-bar site (a 4h or 1day plan on
+  // 1h bars: signal bar to 15min, one of them to 5min), an entry from the
+  // signal site would be the coarser bar containing the same instant.
+  const fineUsed: Timed[] = [];
 
-  // Finer bars for one coarse bar, carrying its market-time offset
+  // Finer bars for one coarse bar, carrying its market-time offset. Asked for
+  // on the coarse series' own basis and refused on any other: a bid/ask
+  // series split with mid sub-bars would miss the touches it was adopted to
+  // see (see FineResult).
   const fetchRange = async (bar: Timed, sinceMs?: number): Promise<Timed[] | null | "deferred" | "empty"> => {
     if (!fetchFine) return "deferred";
     const rung = finerRung(bar.ms);
     if (rung === null) return null;
-    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval);
+    // A bar still forming is not split: its sub-bars are not all there, and
+    // a split that finds no touch in the ones that are would be filed as
+    // feed_conflict — terminal, and wrong, when the touch simply sits in the
+    // sub-bar not yet published. On a user-triggered run seconds after the
+    // analysis the old path did worse: every sub-bar predated the signal, so
+    // the graze was filed as terminal no_data at once. Whatever brought the
+    // split about — a graze in the signal bar, a fill and a level in one
+    // bar, both levels in one bar — waits until the bar has closed, at no
+    // cost in attempts or requests, and the plan is looked at again on its
+    // next due sweep: isDue brings a waiting plan back after one evaluation
+    // bar rather than a whole check cadence.
+    if (bar.t + bar.ms > nowMs) return "deferred";
+    const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval, basis);
     if (fine === "deferred") return "deferred";
     if (fine === null) return null;
-    const inRange = timeline(fine, nowMs, rung.ms)
-      .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms);
+    // The caller answered on the other feed. That is a contract violation
+    // on its side; it costs one attempt here and never decides the plan.
+    if (fine.basis !== basis) return null;
+    const subBars = fine.basis === "quotes"
+      ? quoteTimeline(fine.bars, row.signal, nowMs, rung.ms)
+      : timeline(fine.bars, nowMs, rung.ms);
+    const inRange = subBars.filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms);
     // Nothing inside the bar at all: the provider answered about some other
     // window, which is a failure like any other.
     if (inRange.length === 0) return null;
@@ -882,12 +1003,23 @@ export const judgePlan = async (
 
   if (!isCoherentPlan(row)) {
     terminal = { kind: "ambiguous", at: checkedAt, refinable: false, why: ambiguityAt("incoherent", row, null, null) };
-    // signal_bar_pending sends the plan back through assessSignalBar so the
-    // undated graze is looked at again. `|| !windowCoversSignal` is the guard
-    // on that: once the fetched window no longer reaches the signal, going
-    // back would drop into the window_short branch below and lose a fill an
-    // earlier sweep had already established. The flag self-terminates within
-    // MAX_REFINE_ATTEMPTS sweeps either way.
+    // signal_bar_pending sends the plan back through assessSignalBar: so an
+    // undated graze is looked at again, or — for a signal bar that had not
+    // closed at the last sweep — so its later part is looked at at all. The
+    // fill that sweep established is handed back in as `prior`.
+    // `|| !windowCoversSignal` is the guard on that: once the fetched window
+    // no longer reaches the signal, going back would drop into the
+    // window_short branch below and lose a fill an earlier sweep had already
+    // established. The flag self-terminates: a deferred graze once its
+    // refinement has succeeded or failed MAX_REFINE_ATTEMPTS times (a budget
+    // deferral costs nothing and does not count, so a starved feed can hold
+    // it longer), a forming bar once a bar of open market has passed since
+    // it closed.
+    // When the window no longer covers the signal, a pending graze is
+    // dropped along with the branch — accepted, because index.ts cannot
+    // produce it: the quotes series is fetched from the oldest open plan's
+    // created_at, the mid series is thousands of bars deep, and the flag
+    // lives at most three sweeps.
   } else if (prevFill !== null && (prev?.signal_bar_pending !== true || !windowCoversSignal)) {
     state = prevFill.state;
     post = post.filter((x) => x.t >= prevFill.at);
@@ -902,7 +1034,30 @@ export const judgePlan = async (
       note = "window_short";
     }
   } else {
-    let sig = assessSignalBar(ctx, reference, signalBar, createdMs);
+    // The fill an earlier sweep established, handed back in only where this
+    // sweep cannot re-derive it: a limit or stop whose crossing the live
+    // close proved and the closed bar no longer shows. A market order is
+    // re-derived every time — its fill is the signal instant by definition —
+    // so the record ends up what a single sweep at this time would write,
+    // whichever tick first saw the bar.
+    const prior = orderType === "market" ? undefined : prevFill?.state;
+    let sig = assessSignalBar(ctx, reference, signalBar, createdMs, prior);
+    // Whether the signal bar can be considered done with, judged on the
+    // series as fetched, before any splice moves `signalBar`. Not done with:
+    // a bar the clock says is still forming; a bar no later bar follows on
+    // the tape, for less than a bar of OPEN market since its end (a feed
+    // serving a bar part-formed does so for minutes; the bound is open
+    // market, so a plan made in the hour before Friday's close waits until
+    // Sunday's open — at its own cadence, since isDue does not hurry a plan
+    // while the market is shut, and with no extra fetches); no bar around
+    // the signal at all yet (the feed has not emitted it, and the market
+    // fill was priced off the plan's own number). Each sends the plan back
+    // through this branch next sweep.
+    const sb = signalBar;
+    const signalBarForming = sb === null
+      ? post.length === 0
+      : sb.t + sb.ms > nowMs ||
+        (!series.some((b) => b.t >= sb.t + sb.ms) && openMsSince(sb.t + sb.ms, nowMs) < evalMs);
     // A coarse signal bar that leaves the fill or the first touches
     // untimed: replace it with finer bars and look again
     if (signalBar !== null && finerRung(signalBar.ms) !== null && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
@@ -945,7 +1100,58 @@ export const judgePlan = async (
         refinedInterval = signalRung;
         series = [...series.slice(0, signalIdx), ...fine, ...series.slice(signalIdx + 1)];
         ({ firstIdx, signalIdx, signalBar, post } = locate());
-        sig = assessSignalBar(ctx, reference, signalBar, createdMs);
+        // What the sub-bars can and cannot say about the entry.
+        //
+        // A market order: filled at the signal instant; on two-sided data,
+        // re-priced off the open of the first sub-bar after it — minutes
+        // from the fill instead of the coarse bar's close up to an hour
+        // later, and independent of how far formed that coarse bar was when
+        // read. On the mid feed the plan's own number stays: nothing on that
+        // feed is a better fill price, split or not.
+        //
+        // A limit or stop: the coarse bar dated its fill only to "somewhere
+        // in the bar". If a sub-bar after the signal reaches the entry, and
+        // no earlier sub-bar sat wholly on the far side of it, the walk
+        // re-derives the fill at that sub-bar, and a level touched before it
+        // is a miss, not a trade. A sub-bar wholly beyond the entry proves
+        // the crossing happened before it — inside the dropped sub-bar
+        // around the signal — so the fill stands from the signal instant
+        // (certain from that sub-bar's open when this is what establishes
+        // it; a fill an earlier sweep proved keeps its own bound), and a
+        // level it reaches is a trade. When no sub-bar reaches the entry at
+        // all, the coarse bar's
+        // finding (a fill, or a possible one) stands: quiet sub-bars neither
+        // confirm nor refute a touch that lived in the dropped one.
+        //
+        // Known limits, all on the legacy contract (analyze has issued only
+        // market orders since market_v1, and no legacy row is pending): a
+        // gap across the entry between two later sub-bars dates the fill to
+        // the signal instant, so the near-side sub-bars before the gap are
+        // walked as in the trade; a level reached between the signal and the
+        // first surviving touch is a miss even when the dropped sub-bar could
+        // have filled the order; a possible fill whose touch a pre-signal
+        // sub-bar explains is still carried. Each needs a limit or stop order
+        // and a level inside the signal bar.
+        splitDone = true;
+        if (orderType === "market") {
+          if (twoSided) {
+            ctx = { ...ctx, marketFillPrice: fine[0].c.open };
+            fillPricedFrom = fine[0];
+          }
+          sig = assessSignalBar(ctx, reference, signalBar, createdMs);
+        } else {
+          const side = reference === null ? 0 : reference - row.entry_point;
+          const beyond = (c: Candle) => side !== 0 && side * (c.high - row.entry_point) < 0 && side * (c.low - row.entry_point) < 0;
+          const firstTouch = fine.findIndex((x) => touches(x.c, row.entry_point));
+          const firstBeyond = fine.findIndex((x) => beyond(x.c));
+          const provedEarlier = firstBeyond >= 0 && (firstTouch < 0 || firstBeyond < firstTouch);
+          const reDerived = firstTouch >= 0 && !provedEarlier;
+          let carried = reDerived ? undefined : (prior ?? sig.state);
+          if (provedEarlier && carried !== undefined && !carried.filled) {
+            carried = filledAt(row, toIso(createdMs), row.entry_point, fine[firstBeyond].t);
+          }
+          sig = assessSignalBar(ctx, reference, signalBar, createdMs, carried);
+        }
       }
     }
     // The fill assessSignalBar established stands whatever became of the
@@ -959,7 +1165,20 @@ export const judgePlan = async (
     // sweep. Without this flag the `prevFill` short-circuit above would drop
     // the signal bar from the evidence for good and score the plan off the
     // post bars as though it had been clean — silently, and win-ward.
-    signalBarPending = !judged && sig.event !== null;
+    // Sent back through this branch next sweep: a graze whose refinement was
+    // deferred, or a signal bar that had not closed. The second matters even
+    // when the bar was quiet — under market_v1 the trade is open from the
+    // signal instant, and a stop reached later in that same bar is a loss
+    // the prevFill short-circuit would never look at: it starts the walk at
+    // the bars AFTER the fill, and the signal bar is not one of them, so the
+    // plan was scored off the next bar's target instead. With the cron at
+    // :03/:18/:33/:48 a 1h signal bar is still forming at the first sweep
+    // for about four plans in five.
+    // ...but not when this sweep already split the closed bar to
+    // completion: fetchQuoteWindow demanded coverage up to the bar's end, so
+    // nothing a re-visit could fetch differs, and a provider failure on such
+    // a re-visit would count toward the terminal cap for nothing.
+    signalBarPending = (!judged && sig.event !== null) || (signalBarForming && !splitDone);
   }
 
   if (judged && terminal === null) {
@@ -987,6 +1206,7 @@ export const judgePlan = async (
         }
         refined = true;
         refinedInterval = finerRung(post[idx].ms)?.interval ?? null;
+        fineUsed.push(...fine);
         // Resume from the state before the ambiguous bar; the fine bars
         // replace it
         const fr = runUntilEvent(ctx, stateBefore, fine);
@@ -1079,7 +1299,9 @@ export const judgePlan = async (
     } else if (marketElapsed > expiryMs) {
       resolution = "expired";
       resolvedAt = checkedAt;
-      outcomePrice = last.c.close;
+      // Priced on the exit side, like every other exit: `c` is the side the
+      // plan was filled on, and an expiry is a close, not a fill
+      outcomePrice = last.x.close;
     }
   }
 
@@ -1089,23 +1311,49 @@ export const judgePlan = async (
     : series.length;
   const path = downsamplePath(series.slice(contextStart, contextEnd).map((x) => x.c), PATH_POINTS);
 
-  // The spread the plan actually paid, at the two moments it mattered
-  const spreadAtBar = (atMs: number | null): number | null => {
-    if (!twoSided || atMs === null || !Number.isFinite(atMs)) return null;
-    const bar = series.filter((b) => b.t <= atMs).pop() ?? series[0];
-    if (!bar) return null;
+  // The spread at the two moments it mattered, read at the close of the
+  // finest bar CONTAINING that instant. Post-bar fine bars first — a
+  // settlement decided during refinement was decided on one — then the
+  // series as judged (which holds the signal bar's sub-bars after a splice),
+  // then the series as fetched: a market fill's instant lies in the sub-bar
+  // the splice drops, and only the coarse signal bar it was priced off still
+  // contains it. Containment, not "the last bar starting before", which after
+  // a splice named the bar BEFORE the signal bar. Before fineUsed existed a
+  // post-bar refinement left `series` without its fine bars, so the recorded
+  // "spread at exit" was the coarse bar's, up to an hour away from the exit.
+  // `orElse` names the bar to read when none contains the instant — the one
+  // the price itself came from (see the field comment).
+  const spreadOf = (bar: Timed): number | null => {
+    if (!twoSided) return null;
     const s = Math.abs(bar.x.close - bar.c.close);
     return Number.isFinite(s) ? Number(s.toFixed(5)) : null;
   };
+  const spreadAtBar = (atMs: number | null, orElse: (bars: Timed[]) => Timed | undefined): number | null => {
+    if (!twoSided || atMs === null || !Number.isFinite(atMs)) return null;
+    const containing = (bars: Timed[]) => bars.find((b) => b.t <= atMs && atMs < b.t + b.ms);
+    const bar = containing(fineUsed) ?? containing(series) ?? containing(coarseSeries) ?? orElse(coarseSeries);
+    return bar ? spreadOf(bar) : null;
+  };
+  // A resolved row is never looked at again; a pending flag on it would
+  // only contradict the record
+  if (resolution !== null) signalBarPending = false;
   const filledMs = state.filled_at ? Date.parse(state.filled_at) : null;
   const settledMs = resolvedAt ? Date.parse(resolvedAt) : null;
 
   const evaluation: Evaluation = {
     version: 3,
     eval_interval: evalInterval,
-    price_basis: twoSided ? "quotes" : "mid",
-    spread_at_fill: spreadAtBar(filledMs),
-    spread_at_exit: spreadAtBar(settledMs),
+    price_basis: basis,
+    // A split market fill was priced off the first sub-bar after the
+    // signal, so its spread is read there; a fill inside a gap was priced
+    // off the first bar after it
+    spread_at_fill: fillPricedFrom !== null
+      ? spreadOf(fillPricedFrom)
+      : spreadAtBar(filledMs, (bars) => bars.find((b) => filledMs !== null && b.t >= filledMs)),
+    // A settlement nothing priced — a lapse, a terminal unknown — had no
+    // exit to read a spread at, whichever bar it was stamped with. An expiry
+    // stamped at the sweep itself was priced off the last bar.
+    spread_at_exit: outcomePrice === null ? null : spreadAtBar(settledMs, (bars) => (settledMs === nowMs ? bars[bars.length - 1] : undefined)),
     order_type: orderType,
     price_at_signal: row.price_at_signal,
     possible_fill: state.possibleFill,
