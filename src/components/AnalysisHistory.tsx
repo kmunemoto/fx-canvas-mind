@@ -34,7 +34,8 @@ const OUTCOME_CLASS: Record<string, string> = {
   expired: "bg-secondary text-muted-foreground border-border",
   skipped: "bg-secondary text-muted-foreground border-border",
   untriggered: "bg-warning/15 text-warning border-warning/40",
-  ambiguous: "bg-secondary text-muted-foreground border-border",
+  // Not styled like expired/skipped: an unread record is not a decided one
+  ambiguous: "bg-warning/15 text-warning border-warning/40",
   rejected: "bg-warning/15 text-warning border-warning/40",
 };
 
@@ -231,6 +232,7 @@ const AnalysisHistory = ({ records }: Props) => {
                   <th className="text-right font-normal">{t.history.stats.record}</th>
                   <th className="text-right font-normal">{t.history.winRate}</th>
                   <th className="text-right font-normal">{t.history.stats.untriggered}</th>
+                  <th className="text-right font-normal">{t.history.outcomes.ambiguous}</th>
                   <th className="text-right font-normal">{t.history.stats.other}</th>
                   <th className="text-right font-normal">{t.history.stats.open}</th>
                   <th className="text-right font-normal">{t.history.stats.rColumn}</th>
@@ -249,7 +251,8 @@ const AnalysisHistory = ({ records }: Props) => {
                       {g.winRate === null ? "—" : `${g.winRate}%`}
                     </td>
                     <td className="text-right text-warning">{g.untriggered}</td>
-                    <td className="text-right text-muted-foreground">{g.ambiguous + g.expired}</td>
+                    <td className="text-right text-warning">{g.ambiguous}</td>
+                    <td className="text-right text-muted-foreground">{g.expired}</td>
                     <td className="text-right text-muted-foreground">{g.open}</td>
                     <td className={`text-right ${g.sumR === null ? "text-muted-foreground" : g.sumR >= 0 ? "text-success" : "text-destructive"}`}>
                       {signedR(g.sumR)}

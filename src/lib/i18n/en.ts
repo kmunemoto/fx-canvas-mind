@@ -117,7 +117,7 @@ export const en: Dict = {
     },
     scope: (n: number) => `last ${n}`,
     autoNote: "Judged automatically every 15 minutes against actual prices (TP1 reached = WIN, SL reached = LOSS)",
-    winRateNote: "Win rate counts WIN/LOSS only (no-fill, unclear and expired are excluded). Fill rate is how often the market actually reached the entry",
+    winRateNote: "Win rate counts WIN, LOSS and expired (no-fill and unclear are excluded). An expiry is what a target too far away looks like, so it is not an exit from the win rate. Fill rate is how often the market actually reached the entry",
     stats: {
       title: "Breakdown",
       byTimeframe: "Timeframe",
@@ -272,9 +272,9 @@ export const en: Dict = {
       pips: "pips",
       checkedAt: "Last check",
       evalInterval: "Judged on",
-      refined: "refined with 15min bars",
+      refined: (interval: string | null) => (interval ? `refined with ${interval} bars` : "refined with finer bars"),
       noEvidence: "No judgement data yet. The next automatic check runs within 15 minutes.",
-      refinePending: "The 15min bars needed for a decision could not be fetched; the next automatic check will retry",
+      refinePending: "The finer bars needed for a decision could not be fetched; the next automatic check will retry",
       possibleFill: "The bar around the signal reached the entry, but whether that was before or after the analysis cannot be told",
       reasons: {
         missed: "TP1 was reached before the entry filled (missed the move)",
@@ -287,9 +287,23 @@ export const en: Dict = {
         win: (tp: string) => `Reached TP1 at ${tp}`,
         loss: (sl: string) => `Reached SL at ${sl}`,
         expired: (price: string) => `Expired (last price ${price})`,
-        ambiguous: "SL and TP1 were both touched inside one bar; the order cannot be determined",
+        // Rows whose site is known render ambiguitySite instead. This generic
+        // line asserts BOTH levels were touched, which under the current
+        // contract is usually false: one level, often before the plan existed.
+        ambiguous: "The order of events could not be determined",
         pending: "Awaiting settlement",
         skipped: "Not judged: a WAIT call carries no trade plan",
+      },
+      // Why it could not be judged. Names what happened, not a category.
+      ambiguitySite: {
+        incoherent: "The plan's stop and target contradict each other",
+        window_short: "Price history reaching back to the signal could not be fetched",
+        no_finer_data: "Finer bars could not be fetched after repeated tries, so the order is unknown",
+        signal_bar: "The bar being analysed had already reached the stop or the target, and whether that happened before or after the plan was written cannot be established",
+        pre_fill: "The entry window ran out while a fill was still possible",
+        fill_bar: "The bar that filled the order also reached the stop or the target, so the order is unknown",
+        in_trade: "One bar touched both the stop and the target while the position was open",
+        feed_conflict: "The finer bars did not show the move the coarse bar did",
       },
       legacyNoEvidence: "Judged by an earlier version; no price path was recorded",
       chartHeading: "Actual price path",

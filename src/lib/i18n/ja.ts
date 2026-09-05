@@ -122,7 +122,7 @@ export const ja = {
     },
     scope: (n: number) => `直近${n}件`,
     autoNote: "結果は実際の値動きで15分ごとに自動判定（TP1到達=WIN / SL到達=LOSS）",
-    winRateNote: "勝率はWIN/LOSSのみで計算（未約定・判定不能・期限切れは除外）。約定率はエントリー価格に実際に到達した割合",
+    winRateNote: "勝率はWIN/LOSS/期限切れで計算（未約定・判定不能は除外）。期限切れは「届かない利確を置いた」結果なので、勝率から外れる逃げ道にはしません。約定率はエントリー価格に実際に到達した割合",
     stats: {
       title: "内訳",
       byTimeframe: "時間足",
@@ -283,9 +283,9 @@ export const ja = {
       pips: "pips",
       checkedAt: "最終判定",
       evalInterval: "判定足",
-      refined: "15分足で精査済み",
+      refined: (interval: string | null) => (interval ? `${interval}足で精査済み` : "細かい足で精査済み"),
       noEvidence: "まだ判定データがありません。次回の自動判定（15分以内）をお待ちください。",
-      refinePending: "判定に必要な15分足を取得できなかったため、次回の自動判定で再試行します",
+      refinePending: "判定に必要な細かい足を取得できなかったため、次回の自動判定で再試行します",
       possibleFill: "分析直後の足がエントリー価格に触れていますが、分析の前後どちらかは特定できません",
       reasons: {
         missed: "約定前にTP1へ到達（エントリーできず）",
@@ -298,9 +298,23 @@ export const ja = {
         win: (tp: string) => `TP1 ${tp} に到達`,
         loss: (sl: string) => `SL ${sl} に到達`,
         expired: (price: string) => `期限切れ（最終価格 ${price}）`,
-        ambiguous: "同じ足でSLとTP1の両方に到達し、順序を判定できません",
+        // 発生源が分かっている行では ambiguitySite の側を出す。この総称は
+        // 「両方に到達」と断言してしまうが、現行契約で最も多いのは片方だけ
+        // 触れた行なので、事実と食い違う。
+        ambiguous: "値動きの順序を判定できませんでした",
         pending: "決着待ち",
         skipped: "WAIT（トレードプランなし）のため判定対象外",
+      },
+      // なぜ判定できなかったか。総称ではなく、実際に起きたことを言う
+      ambiguitySite: {
+        incoherent: "プランの損切りと利確の水準が矛盾しています",
+        window_short: "シグナル時点までさかのぼる値動きを取得できませんでした",
+        no_finer_data: "細かい足を繰り返し取得できず、順序を確かめられませんでした",
+        signal_bar: "分析した足がすでに損切りか利確の水準に触れており、それがプラン作成の前か後かを特定できません",
+        pre_fill: "約定していた可能性があるまま、エントリー期限が過ぎました",
+        fill_bar: "約定した足が損切りか利確の水準にも触れており、順序を特定できません",
+        in_trade: "保有中の同じ足で損切りと利確の両方に触れ、順序を特定できません",
+        feed_conflict: "細かい足が、粗い足に見えていた値動きを示しませんでした",
       },
       legacyNoEvidence: "旧バージョンの判定のため、値動きの記録はありません",
       chartHeading: "実際の値動き",

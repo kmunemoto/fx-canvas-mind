@@ -67,10 +67,16 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
         return d.summary.loss(price(record.stop_loss));
       case "expired":
         return d.summary.expired(price(record.outcome_price));
-      case "ambiguous":
+      case "ambiguous": {
+        // The recorded site says what actually happened; `reason` can only
+        // ever be incoherent / no_data / null, which collapses four different
+        // situations into one sentence.
+        const site = ev?.ambiguity?.site;
+        if (site && site in d.ambiguitySite) return d.ambiguitySite[site as keyof typeof d.ambiguitySite];
         if (ev?.reason === "incoherent") return d.reasons.incoherent;
         if (ev?.reason === "no_data") return d.reasons.no_data;
         return ev?.possible_fill ? d.possibleFill : d.summary.ambiguous;
+      }
       case "untriggered":
         return ev?.reason && ev.reason in d.reasons ? d.reasons[ev.reason] : t.history.outcomes.untriggered;
       case "skipped":
@@ -378,7 +384,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
       {tracked && ev && (
         <p className="text-[10px] text-muted-foreground font-mono">
           {d.checkedAt} {when(ev.checked_at)} · {d.evalInterval} {evalInterval}
-          {ev.refined ? ` · ${d.refined}` : ""}
+          {ev.refined ? ` · ${d.refined(ev.ambiguity?.at_interval ?? null)}` : ""}
         </p>
       )}
     </div>
