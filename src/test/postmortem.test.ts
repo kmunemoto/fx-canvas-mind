@@ -16,6 +16,8 @@ import {
   diagnosisSchema,
   MAX_LESSON_CHARS,
   MAX_LESSON_CHARS_EN,
+  MAX_SUMMARY_CHARS,
+  MAX_SUMMARY_CHARS_EN,
   MAX_RULE_CHARS,
   MAX_RULE_CHARS_EN,
   MAX_RULES,
@@ -869,6 +871,20 @@ describe("rulebook consolidation", () => {
     );
     expect(shifted?.rules[0].text_en).toBe(longEn.slice(0, 159));
     expect(shifted?.changes.reworded).toEqual([]);
+  });
+
+  it("keeps the revision note's English whole too", () => {
+    // v8 stored 567 English characters against the shared 600 while its
+    // Japanese ran 304 — the same shape, one step from cutting.
+    const longEn = "x".repeat(MAX_SUMMARY_CHARS + 120);
+    const c = parseConsolidation(
+      { rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "短い", summary_en: longEn },
+      [],
+      T0,
+      lessons,
+    );
+    expect(c?.summary_en).toBe(longEn);
+    expect(c?.summary_en.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS_EN);
   });
 
   it("keeps a lesson's English whole for the same reason", () => {

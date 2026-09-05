@@ -52,6 +52,11 @@ export const MAX_LESSON_CHARS = 160;
 export const MAX_LESSON_CHARS_EN = 320;
 export const MAX_RULE_CHARS = 160;
 export const MAX_RULE_CHARS_EN = 320;
+// The revision note has the same shape of problem one step behind: v8 stored
+// 567 English characters against a shared 600 while its Japanese ran 304, so
+// the next one cuts. Display-only, but displayed in the reader's language.
+export const MAX_SUMMARY_CHARS = 600;
+export const MAX_SUMMARY_CHARS_EN = 1200;
 // Below this many settled trades a win rate is not a statistic
 export const MIN_STAT_N = 20;
 // Rules a single revision may add / drop
@@ -709,7 +714,7 @@ export const CONSOLIDATION_SCHEMA = {
       },
     },
     summary_ja: { type: "string", description: "実績から見た現状の弱点と、今回の改訂内容。日本語、200字以内" },
-    summary_en: { type: "string", description: "The same summary in English" },
+    summary_en: { type: "string", description: "The same summary in English, 480 characters or fewer" },
   },
   required: ["rules", "summary_ja", "summary_en"],
   additionalProperties: false,
@@ -1076,8 +1081,8 @@ export const parseConsolidation = (
 
   return {
     rules: orderRules(rules),
-    summary_ja: str(raw.summary_ja, 600),
-    summary_en: str(raw.summary_en, 600),
+    summary_ja: str(raw.summary_ja, MAX_SUMMARY_CHARS),
+    summary_en: str(raw.summary_en, MAX_SUMMARY_CHARS_EN),
     changes: { added, removed, restored, dropped, held_back, reworded },
   };
 };

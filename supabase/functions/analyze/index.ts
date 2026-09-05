@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v27-2026-09-04T16:20:00Z";
+const FUNCTION_VERSION = "analyze-v28-2026-09-05T13:15:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
