@@ -1126,8 +1126,10 @@ export const judgePlan = async (
         // finding (a fill, or a possible one) stands: quiet sub-bars neither
         // confirm nor refute a touch that lived in the dropped one.
         //
-        // Known limits, all on the legacy contract (analyze has issued only
-        // market orders since market_v1, and no legacy row is pending): a
+        // Known limits, all on the legacy contract, and all needing a limit
+        // or stop order (analyze has issued only market orders since
+        // market_v1; the one legacy row still pending is itself classified
+        // `market`, its entry within FILL_TOLERANCE of the signal price): a
         // gap across the entry between two later sub-bars dates the fill to
         // the signal instant, so the near-side sub-bars before the gap are
         // walked as in the trade; a level reached between the signal and the
