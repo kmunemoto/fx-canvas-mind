@@ -492,8 +492,102 @@ describe("judgePlan — where an unjudgeable plan became unjudgeable", () => {
       async () => null,
     );
     expect(third.resolution).toBe("ambiguous");
-    expect(third.evaluation.ambiguity?.site).toBe("no_finer_data");
+    // Starvation does not overwrite the site: the coarse bar still touched
+    // both levels while the trade was on, and that is what the row says.
+    // The starvation is in reason / refine_attempts, not in the site.
+    expect(third.evaluation.ambiguity?.site).toBe("in_trade");
+    expect(third.evaluation.ambiguity?.touched).toBe("both");
     expect(third.evaluation.ambiguity?.at_interval).toBe("1h");
+    expect(third.evaluation.reason).toBe("no_data");
+    expect(third.evaluation.refine_attempts).toBe(3);
+  });
+
+  it("names a starved provider only when no bar could be labelled", async () => {
+    // A legacy limit whose signal bar touched the entry without crossing it:
+    // possibleFill, no level reached, so the refinement was about the fill
+    // alone and there is no labelled bar for the site to keep.
+    const late: OpenRow = { ...buyLimit, created_at: "2026-08-20T00:50:00Z" };
+    const bars = [
+      candle(stamp(0), 150.6, 149.95, 150.5, 150.4),
+      ...quietHours(1, 4),
+    ];
+    const first = await judge(late, bars, 48, "1h", async () => null);
+    const third = await judge(
+      { ...late, evaluation: { ...first.evaluation, refine_attempts: 2 } },
+      bars,
+      48,
+      "1h",
+      async () => null,
+    );
+    expect(third.resolution).toBe("ambiguous");
+    expect(third.evaluation.ambiguity?.site).toBe("no_finer_data");
+    expect(third.evaluation.ambiguity?.at_interval).toBeNull();
+  });
+
+  it("separates a level reached inside the window from a window that ran out", async () => {
+    // The reviewer's case: legacy limit, signal bar touches the entry without
+    // crossing (possibleFill), next bar cleanly reaches TP1 without touching
+    // the entry — ten minutes into a 48-hour window. Not a lapse.
+    const late: OpenRow = { ...buyLimit, created_at: "2026-08-20T00:50:00Z" };
+    const bars = [
+      candle(stamp(0), 150.6, 149.95, 150.5, 150.4),
+      candle(stamp(1), 152.5, 150.5, 150.6, 152.4),
+      candle(stamp(2), 152.6, 152.0),
+    ];
+    const j = await judge(late, bars, 48, "1h");
+    expect(j.resolution).toBe("ambiguous");
+    expect(j.evaluation.ambiguity?.site).toBe("unfilled_touch");
+    expect(j.evaluation.ambiguity?.touched).toBe("tp1");
+    expect(j.evaluation.ambiguity?.bar_range).toBeCloseTo(2, 5);
+
+    // ...and the genuine lapse: same undated fill, quiet bars, window run out
+    const lapsed = await judge(late, [bars[0], ...quietHours(1, 52)], 60, "1h");
+    expect(lapsed.resolution).toBe("ambiguous");
+    expect(lapsed.evaluation.ambiguity?.site).toBe("pre_fill");
+    expect(lapsed.evaluation.ambiguity?.touched).toBeNull();
+    expect(lapsed.evaluation.ambiguity?.bar_range).toBeNull();
+  });
+
+  it("names the fill bar that also reached a level", async () => {
+    // Legacy limit: the bar that reaches the entry also reaches TP1, and a
+    // limit fill cannot say which came first.
+    const bars = [candle(stamp(1), 152.5, 149.9, 150.4, 152.2), candle(stamp(2), 152.6, 152.0)];
+    const j = await judge(buyLimit, bars, 48, "1h", async () => [candle("2026-08-20 01:00:00", 152.5, 149.9)]);
+    expect(j.resolution).toBe("ambiguous");
+    expect(j.evaluation.ambiguity?.site).toBe("fill_bar");
+    expect(j.evaluation.ambiguity?.touched).toBe("tp1");
+  });
+
+  it("records what the coarse bar showed when the finer bars disagree, and which rung disagreed", async () => {
+    const bars = [
+      candle(stamp(1), 150.3, 149.9),
+      candle(stamp(2), 152.5, 148.5), // both, on the coarse bar
+      ...quietHours(3, 5),
+    ];
+    // Fine bars that reach neither level
+    const j = await judge(buyLimit, bars, 48, "1h", async () => [
+      candle("2026-08-20 02:00:00", 150.6, 150.0),
+      candle("2026-08-20 02:30:00", 151.0, 149.5),
+    ]);
+    expect(j.resolution).toBe("ambiguous");
+    expect(j.evaluation.ambiguity?.site).toBe("feed_conflict");
+    expect(j.evaluation.ambiguity?.touched).toBe("both");
+    expect(j.evaluation.ambiguity?.at_interval).toBe("1h");
+    expect(j.evaluation.refined_interval).toBe("15min");
+  });
+
+  it("records the rung a judged plan was refined at, and none when it was not", async () => {
+    const bars = [candle(stamp(1), 150.3, 149.9), candle(stamp(2), 152.5, 148.5)];
+    const refined = await judge(buyLimit, bars, 48, "1h", async () => [
+      candle("2026-08-20 02:00:00", 150.6, 150.0),
+      candle("2026-08-20 02:15:00", 152.1, 150.5),
+      candle("2026-08-20 02:30:00", 151.0, 148.5),
+    ]);
+    expect(refined.resolution).toBe("win");
+    expect(refined.evaluation.refined_interval).toBe("15min");
+    expect(refined.evaluation.ambiguity).toBeNull();
+    const plain = await judge(buyLimit, [candle(stamp(1), 150.3, 149.9), candle(stamp(2), 152.3, 150.1)], 48, "1h");
+    expect(plain.evaluation.refined_interval).toBeNull();
   });
 
   it("names a signal bar, and records that it reached only ONE level", async () => {

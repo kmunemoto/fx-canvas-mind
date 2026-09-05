@@ -140,6 +140,8 @@ export interface OutcomeEvaluation {
   // Finer bars were needed but not available on the last check
   refine_pending: boolean;
   refine_attempts: number;
+  // The rung the finer bars were at ("15min" / "5min"); null when none fetched
+  refined_interval: string | null;
   // The signal bar reached a level and finer bars have not yet said whether
   // that happened before or after the plan was written. Keeps the next sweep
   // from taking the established-fill short-circuit and forgetting the graze.

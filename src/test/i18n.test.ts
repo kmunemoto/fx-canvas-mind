@@ -132,7 +132,7 @@ describe("what the dictionary says matches what the code does", () => {
   it("labels every ambiguity site on both sides", () => {
     const sites = [
       "incoherent", "window_short", "no_finer_data", "signal_bar",
-      "pre_fill", "fill_bar", "in_trade", "feed_conflict",
+      "pre_fill", "unfilled_touch", "fill_bar", "in_trade", "feed_conflict",
     ];
     for (const site of sites) {
       expect(Object.keys(ja.history.detail.ambiguitySite)).toContain(site);

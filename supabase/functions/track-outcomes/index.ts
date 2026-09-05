@@ -30,7 +30,7 @@ import {
 import { fetchQuotes, supportsQuotes, type QuoteCandle } from "./quotes.ts";
 import { judgeWait, type WaitBar } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v8-2026-09-05T01:10:00Z";
+const TRACKER_VERSION = "track-outcomes-v9-2026-09-05T03:05:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;

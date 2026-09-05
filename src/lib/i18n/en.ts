@@ -301,6 +301,7 @@ export const en: Dict = {
         no_finer_data: "Finer bars could not be fetched after repeated tries, so the order is unknown",
         signal_bar: "The bar being analysed had already reached the stop or the target, and whether that happened before or after the plan was written cannot be established",
         pre_fill: "The entry window ran out while a fill was still possible",
+        unfilled_touch: "The stop or the target was reached while it was still unknown whether the entry had filled",
         fill_bar: "The bar that filled the order also reached the stop or the target, so the order is unknown",
         in_trade: "One bar touched both the stop and the target while the position was open",
         feed_conflict: "The finer bars did not show the move the coarse bar did",

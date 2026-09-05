@@ -26,23 +26,42 @@ export type Resolution = "win" | "loss" | "untriggered" | "ambiguous" | "expired
 // provider from a feed disagreement. Without that distinction nobody can say
 // whether a scoring convention for the residue is needed at all — which is
 // exactly the question task #41 tried to answer without measuring first.
+//
+// Four of these are entry_chosen_v1-only. Under market_v1 analyze writes
+// entry_point and price_at_signal from the same rounded constant, so
+// classifyOrder returns "market", assessSignalBar fills at the signal instant,
+// possibleFill is never set and step() is never entered unfilled. A zero in
+// those buckets is a fact about the contract, not a measurement; they stay for
+// the legacy rows still pending and for any contract that lets an entry go
+// unfilled. (postmortem/facts.ts annotates the legacy causes the same way.)
 export type AmbiguitySite =
-  // The plan's own levels contradict each other
+  // The plan's own levels contradict each other. Legacy-only: analyze/entry.ts
+  // refuses such a plan before it is written.
   | "incoherent"
   // The fetched window starts after the signal, so the gap is unknown
   | "window_short"
-  // MAX_REFINE_ATTEMPTS provider failures in a row
+  // MAX_REFINE_ATTEMPTS provider failures before any bar could be labelled.
+  // When a labelled bar exists the starvation does NOT replace its site: the
+  // row keeps signal_bar / in_trade / fill_bar and says no_data in `reason`
+  // with refine_attempts at the cap.
   | "no_finer_data"
   // The signal bar reached a level; whether that was before or after the plan
   // was written cannot be dated (the dominant market_v1 case)
   | "signal_bar"
-  // The entry window lapsed on a plan the signal bar may already have filled
+  // The entry window lapsed on a plan the signal bar may already have filled.
+  // Legacy-only. No single deciding bar, so bar_range / at_interval are null.
   | "pre_fill"
-  // The bar that filled the order also reached a level
+  // A later bar reached SL or TP1 while the signal bar's fill was still
+  // undated — INSIDE the entry window. Whether the position existed cannot be
+  // told. Legacy-only. Not a lapse: that is pre_fill.
+  | "unfilled_touch"
+  // The bar that filled the order also reached a level. Legacy-only.
   | "fill_bar"
   // Both levels inside one bar while the position was open
   | "in_trade"
-  // The finer bars do not show what the coarse bar did
+  // The finer bars do not show what the coarse bar did. bar_range / touched
+  // describe the COARSE bar — the reading the finer bars failed to reproduce;
+  // evaluation.refined_interval says which rung was checked against it.
   | "feed_conflict";
 
 export interface Ambiguity {
@@ -51,7 +70,10 @@ export interface Ambiguity {
   // claim that under market_v1 the commonest ambiguous row touched ONE level,
   // not both — the premise task #41 got wrong.
   touched: "tp1" | "sl" | "both" | null;
-  // The finest bar length actually examined, e.g. "15min"
+  // The length of the DECIDING bar — the one bar_range is measured on. Where
+  // the ambiguity survived a refinement attempt this is still the coarse bar,
+  // because bar_range / span is only readable against the bar that could not
+  // be ordered. The rung actually fetched is evaluation.refined_interval.
   at_interval: string | null;
   // The deciding bar's high-low, and the distance the plan put between its
   // levels. bar_range / span is the falsification test: near 1.0 means the
@@ -96,6 +118,10 @@ export interface Evaluation {
   resolved_at: string | null;
   // Finer bars were used for a decision
   refined: boolean;
+  // The rung those finer bars were at ("15min" / "5min"); null when nothing
+  // finer was fetched. What the UI names as the refinement rung — never
+  // ambiguity.at_interval, which is the coarse deciding bar.
+  refined_interval: string | null;
   // Finer bars were needed but could not be fetched this run; the plan stays
   // open and is retried, up to MAX_REFINE_ATTEMPTS provider failures
   refine_pending: boolean;
@@ -331,6 +357,7 @@ export const emptyEvaluation = (row: OpenRow, evalInterval: string, nowMs: numbe
   reason: null,
   resolved_at: null,
   refined: false,
+  refined_interval: null,
   refine_pending: false,
   refine_attempts: 0,
   signal_bar_pending: false,
@@ -497,7 +524,10 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
     // The order lapsed; unless the signal bar may already have filled it, in
     // which case nothing can be said
     return state.possibleFill
-      ? { state, event: { kind: "ambiguous", at, refinable: false, why: ambiguityAt("pre_fill", row, bar, null) } }
+      // No single deciding bar: the ambiguity belongs to the signal bar, not to
+      // whichever later bar happened to cross the window. Same shape as the
+      // lapse recorded in judgePlan, so the two paths of one situation agree.
+      ? { state, event: { kind: "ambiguous", at, refinable: false, why: ambiguityAt("pre_fill", row, null, null) } }
       : { state, event: { kind: "untriggered", reason: "no_fill", at } };
   }
   if (state.filled && bar.mt >= ctx.expiryMs) {
@@ -510,9 +540,11 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
   if (!state.filled) {
     if (!touches(c, row.entry_point)) {
       if (tp || sl) {
-        // Maybe in the trade, maybe not: the signal bar could not tell
+        // Maybe in the trade, maybe not: the signal bar could not tell. This
+        // is NOT a lapse — the window is still open (the lapse check above
+        // returns first) — so it is not pre_fill.
         if (state.possibleFill) {
-          return { state, event: { kind: "ambiguous", at, refinable: false, why: ambiguityAt("pre_fill", row, bar, touchedBy(tp, sl)) } };
+          return { state, event: { kind: "ambiguous", at, refinable: false, why: ambiguityAt("unfilled_touch", row, bar, touchedBy(tp, sl)) } };
         }
         if (tp && ctx.missedArmed) return { state, event: { kind: "untriggered", reason: "missed", at } };
         if (sl && ctx.invalidatedArmed) return { state, event: { kind: "untriggered", reason: "invalidated", at } };
@@ -779,6 +811,7 @@ export const judgePlan = async (
   let terminal: Terminal | null = null;
   let terminalIdx = -1; // index into post; -1 = decided on the signal bar
   let refined = false;
+  let refinedInterval: string | null = null;
   let refinePending = false;
   let refineAttempts = prev?.refine_attempts ?? 0;
   let note: string | null = null;
@@ -826,10 +859,20 @@ export const judgePlan = async (
   // Finer data was needed and not obtained: try again next time. Provider
   // failures are counted so a bar nobody can supply does not stall the plan
   // forever; a caller that merely ran out of budget costs nothing.
-  const deferRefinement = (outcome: null | "deferred", bar: Timed | null = null) => {
+  // `why` is the ambiguity that was being refined. When the provider starves
+  // it, that site SURVIVES: the bar still grazed, and `touched` is still what
+  // it reached. Starvation is already on the row as reason "no_data" with
+  // refine_attempts at the cap, so `site` does not need to spend itself on
+  // it. no_finer_data is only for the case with no labelled bar at all.
+  const deferRefinement = (outcome: null | "deferred", why: Ambiguity | null = null) => {
     if (outcome === null) refineAttempts++;
     if (refineAttempts >= MAX_REFINE_ATTEMPTS) {
-      terminal = { kind: "ambiguous", at: checkedAt, refinable: false, why: ambiguityAt("no_finer_data", row, bar, null) };
+      terminal = {
+        kind: "ambiguous",
+        at: checkedAt,
+        refinable: false,
+        why: why ?? ambiguityAt("no_finer_data", row, null, null),
+      };
       note = "no_data";
     } else {
       refinePending = true;
@@ -863,6 +906,7 @@ export const judgePlan = async (
     // A coarse signal bar that leaves the fill or the first touches
     // untimed: replace it with finer bars and look again
     if (signalBar !== null && finerRung(signalBar.ms) !== null && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
+      const signalRung = finerRung(signalBar.ms)?.interval ?? null;
       const fine = await fetchRange({ ...signalBar, mt: -signalBar.ms }, createdMs);
       if (fine === "empty") {
         // Every sub-bar the provider returned predates the signal, which
@@ -887,6 +931,7 @@ export const judgePlan = async (
         // So settle it as terminally unknown: keep the fill assessSignalBar
         // established, keep the graze as the reason, and stop asking.
         refined = true;
+        refinedInterval = signalRung;
         if (sig.event !== null) {
           // assessSignalBar only ever raises an ambiguous event, and it is now
           // terminal: no finer rung exists to date the graze.
@@ -894,9 +939,10 @@ export const judgePlan = async (
           note = "no_data";
         }
       } else if (fine === null || fine === "deferred") {
-        deferRefinement(fine === null ? null : "deferred", signalBar);
+        deferRefinement(fine === null ? null : "deferred", sig.event?.why ?? null);
       } else {
         refined = true;
+        refinedInterval = signalRung;
         series = [...series.slice(0, signalIdx), ...fine, ...series.slice(signalIdx + 1)];
         ({ firstIdx, signalIdx, signalBar, post } = locate());
         sig = assessSignalBar(ctx, reference, signalBar, createdMs);
@@ -936,10 +982,11 @@ export const judgePlan = async (
         // union stays exhaustive rather than relying on that staying true.
         if (fine === null || fine === "deferred" || fine === "empty") {
           state = stateBefore;
-          deferRefinement(fine === "deferred" ? "deferred" : null, post[idx]);
+          deferRefinement(fine === "deferred" ? "deferred" : null, r.event.why);
           break;
         }
         refined = true;
+        refinedInterval = finerRung(post[idx].ms)?.interval ?? null;
         // Resume from the state before the ambiguous bar; the fine bars
         // replace it
         const fr = runUntilEvent(ctx, stateBefore, fine);
@@ -957,7 +1004,10 @@ export const judgePlan = async (
             kind: "ambiguous",
             at: toIso(post[idx].t),
             refinable: false,
-            why: ambiguityAt("feed_conflict", row, post[idx], null),
+            // The coarse bar's own finding: it reached both levels, which is
+            // the only reason refinement ran. The finer rung that disagreed is
+            // in refined_interval.
+            why: ambiguityAt("feed_conflict", row, post[idx], r.event.why.touched),
           };
           terminalIdx = idx;
           state = fr.state;
@@ -1065,6 +1115,7 @@ export const judgePlan = async (
     reason,
     resolved_at: resolvedAt,
     refined,
+    refined_interval: refinedInterval,
     refine_pending: refinePending,
     refine_attempts: refineAttempts,
     signal_bar_pending: signalBarPending,

@@ -384,7 +384,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
       {tracked && ev && (
         <p className="text-[10px] text-muted-foreground font-mono">
           {d.checkedAt} {when(ev.checked_at)} · {d.evalInterval} {evalInterval}
-          {ev.refined ? ` · ${d.refined(ev.ambiguity?.at_interval ?? null)}` : ""}
+          {ev.refined ? ` · ${d.refined(ev.refined_interval ?? null)}` : ""}
         </p>
       )}
     </div>
