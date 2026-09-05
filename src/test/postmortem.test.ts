@@ -14,6 +14,12 @@ import {
   CONSOLIDATION_SCHEMA,
   DIAGNOSIS_SCHEMA,
   diagnosisSchema,
+  MAX_LESSON_CHARS,
+  MAX_LESSON_CHARS_EN,
+  MAX_SUMMARY_CHARS,
+  MAX_SUMMARY_CHARS_EN,
+  MAX_RULE_CHARS,
+  MAX_RULE_CHARS_EN,
   MAX_RULES,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
@@ -33,6 +39,7 @@ import {
 } from "../../supabase/functions/postmortem/prompt.ts";
 import {
   MAX_PROMPT_CHARS,
+  MAX_PROMPT_CHARS_EN,
   inForce,
   parseRules,
   renderLearnedRules,
@@ -831,6 +838,69 @@ describe("rulebook consolidation", () => {
     expect(evidenceless?.changes.dropped).toEqual(["r1"]);
   });
 
+  it("gives English room to say the same thing, and does not call a shifted cut a rewording", () => {
+    // Measured on the live book (2026-09-05): two of three rules and fifteen
+    // of seventeen lessons had their English cut at 160 — one of them
+    // mid-word — while the longest Japanese ran 106. The schema asks for
+    // 90-100 characters of Japanese and "the same rule in English", which is
+    // simply longer.
+    const longEn = "If entering an over-extended trend with RSI at an extreme and price outside the Bollinger band, set the first target near one ATR and the stop at 0.6 to 0.7 ATR so the reward-to-risk stays above 1.2, and skip the trade when both cannot hold.";
+    expect(longEn.length).toBeGreaterThan(MAX_RULE_CHARS);
+    const c = parseConsolidation(
+      { rules: [rule("r1", { text_ja: "短い日本語", text_en: longEn, cause: "entry_too_far", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" },
+      [],
+      T0,
+      lessons,
+    );
+    expect(c?.rules[0].text_en).toBe(longEn);
+    expect(c?.rules[0].text_en.length).toBeLessThanOrEqual(MAX_RULE_CHARS_EN);
+
+    // The cut that did happen must not read as a change. A stored rule whose
+    // English ends one character earlier — the shape that made the first live
+    // `reworded` a false positive — is the same rule.
+    const stored: Rule[] = [{
+      id: "r1", text_ja: "短い日本語", text_en: longEn.slice(0, 159), cause: "entry_too_far",
+      support: 1, scope: null, since: "2026-08-01T00:00:00Z", kind: "heuristic", supported_by: ["a"],
+      contract: null, evidence_contracts: [],
+    }];
+    const shifted = parseConsolidation(
+      { rules: [rule("r1", { text_ja: "短い日本語", text_en: `${longEn.slice(0, 159)} `, cause: "entry_too_far", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" },
+      stored,
+      T0,
+      lessons,
+    );
+    expect(shifted?.rules[0].text_en).toBe(longEn.slice(0, 159));
+    expect(shifted?.changes.reworded).toEqual([]);
+  });
+
+  it("keeps the revision note's English whole too", () => {
+    // v8 stored 567 English characters against the shared 600 while its
+    // Japanese ran 304 — the same shape, one step from cutting.
+    const longEn = "x".repeat(MAX_SUMMARY_CHARS + 120);
+    const c = parseConsolidation(
+      { rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "短い", summary_en: longEn },
+      [],
+      T0,
+      lessons,
+    );
+    expect(c?.summary_en).toBe(longEn);
+    expect(c?.summary_en.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS_EN);
+  });
+
+  it("keeps a lesson's English whole for the same reason", () => {
+    const longEn = "When the higher timeframe disagrees with the lower one and ADX sits below twenty, the direction has no backing, so stand aside rather than taking the lower timeframe's word for it and paying the stop to find out.";
+    expect(longEn.length).toBeGreaterThan(MAX_LESSON_CHARS);
+    const d = parseDiagnosis({
+      cause: "direction_wrong", secondary_causes: [], avoidable: true, confidence: 0.7,
+      verdict_ja: "上位足と食い違った", verdict_en: "the higher timeframe disagreed",
+      evidence_ja: ["a"], evidence_en: ["a"],
+      lesson_ja: "上位足と食い違うときは見送る", lesson_en: longEn,
+      scope: null, rule_blamed: null, rule_credited: null,
+    }, ["direction_wrong"]);
+    expect(d?.lesson_en).toBe(longEn);
+    expect(d?.lesson_en.length).toBeLessThanOrEqual(MAX_LESSON_CHARS_EN);
+  });
+
   it("lets the first rulebook be written whole, up to the cap, and de-duplicates ids", () => {
     const rules = Array.from({ length: MAX_RULES + 3 }, (_, i) => rule(i === 1 ? "r1" : `r${i + 1}`, { kind: i % 2 ? "constraint" : "heuristic", supported_by: ["a"] }));
     const c = parseConsolidation({ rules, summary_ja: "s", summary_en: "s-en" }, [], "2026-09-03T00:00:00Z", lessons);
@@ -1064,6 +1134,26 @@ describe("rules in the analyze prompt", () => {
     const text = renderLearnedRules(many);
     expect(text.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS);
     expect(text.split("\n").length - 1).toBeLessThanOrEqual(12);
+  });
+
+  it("gives English its own budget, so the same rules reach either analyst", () => {
+    // A character is not a fixed amount of prompt: the English rendering of a
+    // rule runs about twice the characters and about a quarter of the tokens
+    // per character. On a shared budget the English analyst simply saw fewer
+    // rules.
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      ...rules[1],
+      id: `r${i}`,
+      text_ja: "あ".repeat(100),
+      text_en: "x".repeat(220),
+      support: 40 - i,
+    }));
+    const ja = renderLearnedRules(many, "ja");
+    const en = renderLearnedRules(many, "en");
+    expect(ja.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS);
+    expect(en.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS_EN);
+    // The point of the separate budget: the same rules, not fewer
+    expect(en.split("\n").length).toBe(ja.split("\n").length);
   });
 
   it("takes the newest from each account in turn, not the newest overall", () => {

@@ -41,8 +41,22 @@ import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rul
 import { LEGACY_PLAN_CONTRACT } from "../_shared/contract.ts";
 
 export const MAX_RULES = 10;
+// Storage caps, per language, because one number cannot serve both. The
+// schema asks for 90-100 characters of Japanese and the same sentence in
+// English; English renders that in roughly two to two and a half times the
+// characters, so a shared 160 cut two rules in three and fifteen lessons in
+// seventeen mid-word (measured 2026-09-05), while the Japanese never came
+// within fifty characters of the cap. Each cap sits well above what its
+// language is asked for, the way 160 sat above 100 for Japanese alone.
 export const MAX_LESSON_CHARS = 160;
+export const MAX_LESSON_CHARS_EN = 320;
 export const MAX_RULE_CHARS = 160;
+export const MAX_RULE_CHARS_EN = 320;
+// The revision note has the same shape of problem one step behind: v8 stored
+// 567 English characters against a shared 600 while its Japanese ran 304, so
+// the next one cuts. Display-only, but displayed in the reader's language.
+export const MAX_SUMMARY_CHARS = 600;
+export const MAX_SUMMARY_CHARS_EN = 1200;
 // Below this many settled trades a win rate is not a statistic
 export const MIN_STAT_N = 20;
 // Rules a single revision may add / drop
@@ -60,7 +74,11 @@ type JsonRecord = Record<string, unknown>;
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const str = (v: unknown, max = 400): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+// Trimmed on both sides of the cut: trimming only before it lets the cut
+// itself leave a trailing space, and then the same sentence stored twice
+// differs by that one character. That is not a hypothetical — it made the
+// first live `reworded` a false positive (rulebook v8, rule r11).
+const str = (v: unknown, max = 400): string => (typeof v === "string" ? v.trim().slice(0, max).trim() : "");
 
 const strList = (v: unknown, max = 6, each = 300): string[] =>
   Array.isArray(v) ? v.map((x) => str(x, each)).filter(Boolean).slice(0, max) : [];
@@ -513,7 +531,7 @@ export const diagnosisSchema = (contract?: string | null) => ({
     evidence_ja: { type: "array", items: { type: "string" }, description: "根拠 2-4 点。facts の数値を引用する。日本語" },
     evidence_en: { type: "array", items: { type: "string" }, description: "The same evidence in English" },
     lesson_ja: { type: "string", description: "次回に使う一般則。「条件 → 行動」の形、90字以内、日本語。個別の価格・日付を含めない" },
-    lesson_en: { type: "string", description: "The same lesson in English" },
+    lesson_en: { type: "string", description: "The same lesson in English, 220 characters or fewer" },
     scope: { type: ["string", "null"], description: "ルールが当てはまる範囲を短く（例: '1h/4h の戻り売り', 'レンジ相場'）。無ければ null" },
     rule_blamed: { type: ["string", "null"], description: "plan.rules_in_force のうち、この結果を招いたルールの id。無ければ null" },
     rule_credited: { type: ["string", "null"], description: "plan.rules_in_force のうち、この結果に貢献したルールの id。無ければ null" },
@@ -594,7 +612,7 @@ export const parseDiagnosis = (
 ): Diagnosis | null => {
   if (!isRecord(raw)) return null;
   const lessonJa = str(raw.lesson_ja, MAX_LESSON_CHARS);
-  const lessonEn = str(raw.lesson_en, MAX_LESSON_CHARS);
+  const lessonEn = str(raw.lesson_en, MAX_LESSON_CHARS_EN);
   const verdictJa = str(raw.verdict_ja);
   const verdictEn = str(raw.verdict_en);
   if (!lessonJa && !lessonEn) return null;
@@ -685,7 +703,7 @@ export const CONSOLIDATION_SCHEMA = {
         properties: {
           id: { type: "string", description: "既存ルールを引き継ぐ場合はその id、新規は r + 番号（既存と重複しない）" },
           text_ja: { type: "string", description: "「条件 → 行動」の一般則。100字以内、日本語。個別の価格・日付を含めない" },
-          text_en: { type: "string", description: "The same rule in English" },
+          text_en: { type: "string", description: "The same rule in English, 240 characters or fewer" },
           cause: { type: "string", enum: [...CAUSES, "general"] },
           kind: { type: "string", enum: ["constraint", "heuristic"], description: "constraint: 見送る・リスクを絞る歯止め。heuristic: こう取るという指針" },
           scope: { type: ["string", "null"], description: "適用範囲を短く。無ければ null" },
@@ -696,7 +714,7 @@ export const CONSOLIDATION_SCHEMA = {
       },
     },
     summary_ja: { type: "string", description: "実績から見た現状の弱点と、今回の改訂内容。日本語、200字以内" },
-    summary_en: { type: "string", description: "The same summary in English" },
+    summary_en: { type: "string", description: "The same summary in English, 480 characters or fewer" },
   },
   required: ["rules", "summary_ja", "summary_en"],
   additionalProperties: false,
@@ -926,12 +944,6 @@ export const parseConsolidation = (
   previous: Rule[],
   nowIso: string,
   lessons: CitableLesson[] = [],
-  // The contract the editor was writing for. Every rule it emits is stamped
-  // with it, because emitting a rule under this revision's prompt IS the
-  // endorsement that the rule is followable now. Rules the editor did not
-  // emit — the ones restored below to fill the book back up — keep whatever
-  // contract they already had, so a rule from a dead era stays held back
-  // rather than being quietly revived by an editor that never looked at it.
   // The contract the emitted rules are TESTED against — the question, not the
   // answer. Whether any given rule receives it is decided by stampFor, from
   // that rule's own cause and its own text. Passing PLAN_CONTRACT here no
@@ -966,7 +978,7 @@ export const parseConsolidation = (
   for (const item of raw.rules) {
     if (!isRecord(item)) continue;
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
-    const textEn = str(item.text_en, MAX_RULE_CHARS);
+    const textEn = str(item.text_en, MAX_RULE_CHARS_EN);
     if (!textJa && !textEn) continue;
     let id = str(item.id, 20);
     if (!id) {
@@ -1009,8 +1021,11 @@ export const parseConsolidation = (
     // sentence into something else entirely, so the change is recorded rather
     // than inferred from a diff nobody stores. The cause counts too: it decides
     // which lessons may cite the rule, so moving it moves the rule's evidence.
+    // Compared trimmed on both sides: a rule stored before str() trimmed after
+    // the cut can carry a trailing space that no reader would call a change.
     const before = prior.get(id);
-    if (before && (before.text_ja !== textJaFinal || before.text_en !== textEnFinal || before.cause !== cause)) {
+    const same = (a: string, b: string) => a.trim() === b.trim();
+    if (before && (!same(before.text_ja, textJaFinal) || !same(before.text_en, textEnFinal) || before.cause !== cause)) {
       reworded.push(id);
     }
     rules.push({
@@ -1066,8 +1081,8 @@ export const parseConsolidation = (
 
   return {
     rules: orderRules(rules),
-    summary_ja: str(raw.summary_ja, 600),
-    summary_en: str(raw.summary_en, 600),
+    summary_ja: str(raw.summary_ja, MAX_SUMMARY_CHARS),
+    summary_en: str(raw.summary_en, MAX_SUMMARY_CHARS_EN),
     changes: { added, removed, restored, dropped, held_back, reworded },
   };
 };
