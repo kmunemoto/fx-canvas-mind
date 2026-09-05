@@ -271,9 +271,78 @@ describe("AnalysisHistory (DB records)", () => {
     expect(pm).toHaveTextContent("分析時点の情報で回避できた");
     expect(pm).toHaveTextContent("診断の確度 80%");
 
+    // a document written before the danger block existed renders no danger line
+    expect(screen.queryByTestId("postmortem-danger")).toBeNull();
+
     // the other settled loss has no diagnosis yet
     fireEvent.click(screen.getAllByRole("button", { name: /EUR\/USD 4h.*SELL 65%/ })[0]);
     expect(screen.getAllByTestId("postmortem")[0]).toHaveTextContent("原因分析は決着から数時間後に自動で行われます");
+  });
+
+  it("says, one measurement per flag, what made a win an unsafe one", () => {
+    const lucky: AnalysisRecord = {
+      ...records[0],
+      id: "lucky",
+      postmortem: {
+        schema: 2, status: "done", cause: "lucky_win", secondary_causes: [], avoidable: true, confidence: 70,
+        verdict: { ja: "勝ったが損切り直前まで逆行した", en: "Won, but came within a hair of the stop" },
+        evidence: { ja: [], en: [] },
+        lesson: { ja: "ADX 20 未満では損切りを ATR×1.5 以上に置く", en: "Below ADX 20 keep the stop at least 1.5 ATR away" },
+        scope: null,
+        facts: {
+          bars_after_settlement: 24, hours_to_fill: 0, hours_to_settle: 15,
+          from_signal: { max_favorable_r: 3.1, max_adverse_r: 0.98 },
+          after: { first_touch: null, reached_tp1: null, reached_sl: null, beyond_sl_r: null, returned_to_entry: false },
+          abnormal_bar: null,
+          counterfactual: { market_entry: null, stop_x1_5: null, stop_x2: null, tp_half: null },
+          regime: null,
+          danger: {
+            bars_in_trade: 15, underwater_bars: 9, underwater_ratio: 0.6, longest_underwater_bars: 4, entry_crossings: 5,
+            closest_to_stop_r: 0.02, target_bar_close_r: -0.6, reversed_after_r: 1.4, life_used_ratio: 0.8,
+            flags: ["deep_mae", "mostly_underwater", "chop", "spike_target", "late_win"],
+          },
+          hints: ["lucky_win"],
+        },
+        created_at: "2026-08-23T00:00:00Z",
+      },
+    };
+    render(<AnalysisHistory records={[...records, lucky]} />);
+    fireEvent.click(screen.getAllByRole("button", { name: /USD\/JPY 1h.*BUY 72%/ })[1]);
+    const danger = screen.getByTestId("postmortem-danger");
+    expect(danger).toHaveTextContent("損切りまで残り 0.02R まで逆行");
+    expect(danger).toHaveTextContent("保有 15 本のうち 9 本が含み損");
+    expect(danger).toHaveTextContent("エントリー価格を 5 回またいだ");
+    expect(danger).toHaveTextContent("利確はヒゲだけで、その後 1.4R 戻した");
+    expect(danger).toHaveTextContent("期限の 80% を使って到達");
+  });
+
+  it("renders no danger line for a win the block measured and found nothing on", () => {
+    const clean: AnalysisRecord = {
+      ...records[0],
+      id: "clean",
+      postmortem: {
+        schema: 2, status: "done", cause: "good_call", secondary_causes: [], avoidable: false, confidence: 80,
+        verdict: { ja: "想定通りに伸びた", en: "Went as planned" },
+        evidence: { ja: [], en: [] },
+        lesson: { ja: "この形は再現性がある", en: "This shape repeats" },
+        scope: null,
+        facts: {
+          bars_after_settlement: 24, hours_to_fill: 0, hours_to_settle: 3,
+          from_signal: { max_favorable_r: 2.1, max_adverse_r: 0.2 },
+          after: { first_touch: null, reached_tp1: null, reached_sl: null, beyond_sl_r: null, returned_to_entry: false },
+          abnormal_bar: null,
+          counterfactual: { market_entry: null, stop_x1_5: null, stop_x2: null, tp_half: null },
+          regime: null,
+          danger: null,
+          hints: ["good_call"],
+        },
+        created_at: "2026-08-23T00:00:00Z",
+      },
+    };
+    render(<AnalysisHistory records={[...records, clean]} />);
+    fireEvent.click(screen.getAllByRole("button", { name: /USD\/JPY 1h.*BUY 72%/ })[1]);
+    expect(screen.getByTestId("postmortem")).toHaveTextContent("想定通り");
+    expect(screen.queryByTestId("postmortem-danger")).toBeNull();
   });
 
   it("shows a refused plan under its WAIT row, with what the shadow copy then did", () => {

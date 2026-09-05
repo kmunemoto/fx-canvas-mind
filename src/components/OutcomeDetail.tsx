@@ -179,6 +179,24 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
     add(pm.cfStop2, facts.counterfactual?.stop_x2);
     add(pm.cfTpHalf, facts.counterfactual?.tp_half);
   }
+  // What made a win an unsafe one, one measurement per raised flag. Only
+  // documents written since the danger block was measured carry it, and only
+  // a win raises flags, so most rows render nothing here.
+  const dangerLines: string[] = [];
+  const dz = facts?.danger ?? null;
+  if (dz && Array.isArray(dz.flags)) {
+    const num = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    for (const flag of dz.flags) {
+      const closest = num(dz.closest_to_stop_r);
+      const reversed = num(dz.reversed_after_r);
+      const life = num(dz.life_used_ratio);
+      if (flag === "deep_mae" && closest !== null) dangerLines.push(pm.danger.deep_mae(closest));
+      else if (flag === "mostly_underwater") dangerLines.push(pm.danger.mostly_underwater(dz.underwater_bars, dz.bars_in_trade));
+      else if (flag === "chop") dangerLines.push(pm.danger.chop(dz.entry_crossings));
+      else if (flag === "spike_target" && reversed !== null) dangerLines.push(pm.danger.spike_target(reversed));
+      else if (flag === "late_win" && life !== null) dangerLines.push(pm.danger.late_win(Math.round(life * 100)));
+    }
+  }
   const postTitle = record.outcome === "win" ? pm.titleWin : pm.title;
   const thin = post?.status === "done" && post.thin === true;
   const revised = post?.status === "done" && typeof post.revisions === "number" && post.revisions > 0;
@@ -319,6 +337,13 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
                 <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                   {pickList(post.evidence).map((e, i) => <li key={i}>{e}</li>)}
                 </ul>
+              )}
+              {dangerLines.length > 0 && (
+                <div data-testid="postmortem-danger">
+                  {dangerLines.map((line) => (
+                    <p key={line} className="text-warning">{line}</p>
+                  ))}
+                </div>
               )}
               {counterfactuals.length > 0 && (
                 <div className="pt-1">

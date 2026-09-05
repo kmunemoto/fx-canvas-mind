@@ -228,6 +228,13 @@ export const en: Dict = {
       afterTp1: (bars: number) => `TP1 was reached ${bars} bars after the stop`,
       beyondSl: (r: number) => `Price ran a further ${r}R past the stop`,
       earlyAdverse: (r: number) => `Turned ${r}R against the entry right after the fill`,
+      danger: {
+        deep_mae: (closestR: number) => `Came within ${closestR}R of the stop`,
+        mostly_underwater: (underwater: number, bars: number) => `Underwater for ${underwater} of ${bars} bars`,
+        chop: (crossings: number) => `Crossed the entry ${crossings} times`,
+        spike_target: (reversedR: number) => `Target hit by a wick, then gave back ${reversedR}R`,
+        late_win: (percent: number) => `Reached the target with ${percent}% of its life used`,
+      },
       thinNote: "Provisional: little price action has followed the settlement yet. It will be reviewed again automatically once the window fills",
       thinFinalNote: "Still provisional after the second look: little price action followed the settlement, and no further automatic review is scheduled",
       revisedNote: "Reviewed again after the full window",

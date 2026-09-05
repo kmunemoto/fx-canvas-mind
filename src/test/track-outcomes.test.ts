@@ -696,9 +696,9 @@ describe("judgePlan — open-through", () => {
 
   it("does not charge the open bar's later range to the trade's excursion", async () => {
     // The position left at the open. Everything after it in that bar is
-    // post-exit price action, and mae_r is the ONLY input to the
-    // lucky_win / good_call split in postmortem/facts.ts - so folding the
-    // whole bar in would file a clean win as lucky_win, which (unlike
+    // post-exit price action, and mae_r is the input to the deep_mae flag
+    // of the lucky_win / good_call split in postmortem/facts.ts - so folding
+    // the whole bar in would file a clean win as lucky_win, which (unlike
     // good_call) is citable evidence for a "do not trade" rule.
     const bars = [
       candle(stamp(1), 150.2, 149.9, 150.0, 150.1),
