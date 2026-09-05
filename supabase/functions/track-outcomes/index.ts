@@ -30,7 +30,7 @@ import {
 import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
 import { judgeWait, type WaitBar } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v11-2026-09-05T05:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v12-2026-09-05T05:30:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -45,8 +45,8 @@ const MAX_REQUESTS = 5;
 // Quotes come from a different provider (GMO Coin's public FX endpoint:
 // keyless, no account, bid and ask served separately), so they do not spend
 // the Twelve Data budget above. Two requests per date key per group, so
-// the lookback is capped: a plan whose window is longer than this is judged
-// on the mid feed, and says so in `price_basis`.
+// the lookback is capped: a plan older than this is judged on the mid feed,
+// and says so in `price_basis`.
 //
 // The budget is shared between the coarse series and the refinements that
 // split its ambiguous bars (fetchQuoteWindow), which must come from the same
@@ -357,8 +357,13 @@ Deno.serve(async (req: Request) => {
     let quoteEmptyKeys = 0;
     const fetchQuotesFor = async (pair: string, evalInterval: string, fromMs: number): Promise<QuoteCandle[] | null | "deferred"> => {
       if (!supportsQuotes(pair, evalInterval)) return null;
-      if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
-      if (nowMs - fromMs > MAX_QUOTE_LOOKBACK_MS) return null;
+      // A budget already spent is the same shortfall as one spent mid-walk:
+      // the walk's minimum is two requests, and every walk costs an even
+      // number, so "exactly drained" is the normal state after refinements
+      if (MAX_QUOTE_REQUESTS - quoteRequests < 2) {
+        errors.push(`${pair}|${evalInterval}: quotes deferred (request budget)`);
+        return "deferred";
+      }
       try {
         quoteStarved = false;
         const res = await fetchQuotes(pair, evalInterval, fromMs, nowMs, nowMs, quoteFetcher);
@@ -444,14 +449,24 @@ Deno.serve(async (req: Request) => {
         const t = Date.parse(r.created_at);
         return Number.isFinite(t) ? Math.min(min, t) : min;
       }, nowMs);
-      const quotes = await fetchQuotesFor(pair, evalInterval, oldestMs);
+      // The quote window is capped at MAX_QUOTE_LOOKBACK_MS. One old sibling
+      // used to send the whole group to the mid feed, flipping every younger
+      // plan's basis tick by tick. Now the window starts at the cap and a
+      // row is handed the quotes only when they reach back to its own
+      // signal; an older plan is judged on the mid feed, whose window is
+      // long enough to expire it, as before. No row inside the cap: no walk.
+      const quotesFromMs = Math.max(oldestMs, nowMs - MAX_QUOTE_LOOKBACK_MS);
+      const anyInside = groupRows.some((r) => Date.parse(r.created_at) >= quotesFromMs);
+      const quotes = anyInside ? await fetchQuotesFor(pair, evalInterval, quotesFromMs) : null;
       if (quotes === "deferred") {
         deferred += groupRows.length;
         continue;
       }
 
       for (const row of groupRows) {
-        const judgement = await judgePlan(row, candles, evalInterval, nowMs, fetchFine, quotes ?? undefined);
+        const created = Date.parse(row.created_at);
+        const onQuotes = quotes !== null && Number.isFinite(created) && created >= quotesFromMs;
+        const judgement = await judgePlan(row, candles, evalInterval, nowMs, fetchFine, onQuotes ? quotes : undefined);
         const patch: JsonRecord = judgement.resolution
           ? {
             outcome: judgement.resolution,
