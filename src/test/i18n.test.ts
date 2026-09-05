@@ -108,3 +108,44 @@ describe("the cause taxonomy is fully labelled on both sides", () => {
     }
   });
 });
+
+// Three strings drifted away from the code they describe. A dictionary that
+// contradicts the arithmetic is worse than a missing one: the reader trusts it.
+describe("what the dictionary says matches what the code does", () => {
+  it("does not claim expired is excluded from the win rate", () => {
+    // outcomeStats.ts puts expired in `decided`, deliberately: an expiry is
+    // what a target too far away looks like, and calling it 'not a loss'
+    // would be an exit from the win rate.
+    for (const d of [ja, en]) {
+      expect(d.history.winRateNote).toMatch(/期限切れ|expired/);
+      expect(d.history.winRateNote).not.toMatch(/判定不能・期限切れは除外|unclear and expired are excluded/);
+    }
+  });
+
+  it("does not assert both levels were touched, which is usually false", () => {
+    // Under market_v1 the commonest ambiguous row touched ONE level, possibly
+    // before the plan existed. The per-site strings say what happened instead.
+    expect(ja.history.detail.summary.ambiguous).not.toMatch(/両方/);
+    expect(en.history.detail.summary.ambiguous).not.toMatch(/both/i);
+  });
+
+  it("labels every ambiguity site on both sides", () => {
+    const sites = [
+      "incoherent", "window_short", "no_finer_data", "signal_bar",
+      "pre_fill", "unfilled_touch", "fill_bar", "in_trade", "feed_conflict",
+    ];
+    for (const site of sites) {
+      expect(Object.keys(ja.history.detail.ambiguitySite)).toContain(site);
+      expect(Object.keys(en.history.detail.ambiguitySite)).toContain(site);
+    }
+    // and nothing beyond them, so a removed site cannot leave a dead string
+    expect(Object.keys(ja.history.detail.ambiguitySite).sort()).toEqual([...sites].sort());
+  });
+
+  it("does not hard-code the refinement rung", () => {
+    // The 5min rung has existed since FINE_INTERVAL shipped.
+    expect(ja.history.detail.refined("5min")).toContain("5min");
+    expect(en.history.detail.refined("5min")).toContain("5min");
+    expect(ja.history.detail.refined(null)).not.toMatch(/15min|5min/);
+  });
+});

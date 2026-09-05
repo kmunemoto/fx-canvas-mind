@@ -140,10 +140,21 @@ export interface OutcomeEvaluation {
   // Finer bars were needed but not available on the last check
   refine_pending: boolean;
   refine_attempts: number;
+  // The rung the finer bars were at ("15min" / "5min"); null when none fetched
+  refined_interval: string | null;
   // The signal bar reached a level and finer bars have not yet said whether
   // that happened before or after the plan was written. Keeps the next sweep
   // from taking the established-fill short-circuit and forgetting the graze.
   signal_bar_pending: boolean;
+  // Why an unjudgeable plan could not be judged (see AmbiguitySite in
+  // track-outcomes/evaluate.ts). Null on every other resolution.
+  ambiguity: {
+    site: string;
+    touched: "tp1" | "sl" | "both" | null;
+    at_interval: string | null;
+    bar_range: number | null;
+    span: number | null;
+  } | null;
   mfe: number | null;
   mae: number | null;
   mfe_r: number | null;
