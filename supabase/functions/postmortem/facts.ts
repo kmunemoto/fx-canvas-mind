@@ -72,6 +72,15 @@ export type Cause =
   | "good_call"
   // won, but the process was unsafe (deep adverse excursion, wrong reasons)
   | "lucky_win"
+  // WAIT only: the trade named at the call was there and it paid, so standing
+  // aside cost a win. The one cause in the taxonomy that pushes toward
+  // trading MORE — every other one punishes being too bold, and a loop that
+  // can only push one way ends at "always WAIT", never wrong and worth
+  // nothing.
+  | "wait_missed_trade"
+  // WAIT only: that trade was stopped out or never paid. Standing aside was
+  // right, and like good_call there is no lever to move.
+  | "good_wait"
   // not enough evidence to say
   | "inconclusive";
 
@@ -87,8 +96,25 @@ export const CAUSES: readonly Cause[] = [
   "plan_incoherent",
   "good_call",
   "lucky_win",
+  "wait_missed_trade",
+  "good_wait",
   "inconclusive",
 ];
+
+// The vocabulary for a call that declined to trade. A WAIT has no fill, no
+// stop and no target of its own, so the trade causes describe nothing that
+// happened; and a trade must never be diagnosed "good_wait".
+export const WAIT_CAUSES: readonly Cause[] = [
+  "wait_missed_trade",
+  "good_wait",
+  "regime_misread",
+  "news_shock",
+  "inconclusive",
+];
+
+// The two a settled trade can never be. The other three above describe the
+// market, not the decision, and belong to both vocabularies.
+export const WAIT_ONLY_CAUSES: readonly string[] = ["wait_missed_trade", "good_wait"];
 
 export const MARKET_CONTRACT = "market_v1";
 
@@ -103,10 +129,19 @@ export const LEGACY_CAUSES: readonly string[] = ["entry_too_far", "entry_too_ear
 // lookup — a stored row renders the wording of its own era.
 export const canonicalCause = (c: string): string => (c === "entry_too_early" ? "chased_move" : c);
 
-// The causes a plan made under this contract can be diagnosed with. Readers:
-// diagnosisSchema(), parseDiagnosis() and causeOutsideContract().
+// Every cause valid under this contract, trades and WAITs together. Readers:
+// causesForSignal() and causeOutsideContract() — the latter must see the WAIT
+// causes, or a rule learned from over-caution would be held back from every
+// prompt for naming a cause its own contract "cannot produce".
 export const causesFor = (contract?: string | null): readonly Cause[] =>
   contract === MARKET_CONTRACT ? CAUSES.filter((c) => !LEGACY_CAUSES.includes(c)) : CAUSES;
+
+// What a single row may be diagnosed with. Readers: diagnosisSchema() and
+// parseDiagnosis(). Offering "good_wait" to a settled trade, or
+// "stop_too_tight" to a call that never entered, is offering a verdict about
+// something that did not happen.
+export const causesForSignal = (contract?: string | null, signal?: string | null): readonly Cause[] =>
+  signal === "WAIT" ? WAIT_CAUSES : causesFor(contract).filter((c) => !WAIT_ONLY_CAUSES.includes(c));
 
 // A cause the given contract's taxonomy cannot produce, canonical spellings
 // folded first — so a rule filed under the dead spelling "entry_too_early" is
@@ -510,6 +545,24 @@ export interface FactsContext {
   // branch of the hints switch, which must not file a market_v1 plan under a
   // cause only the old contract could produce.
   contract?: string | null;
+  // A call that declined to trade, measured over the window the tracker
+  // actually graded and no further.
+  //
+  // Without this the WAIT would be handed the trade windows: the 24-bar
+  // after-window past settlement, a life horizon running the same distance,
+  // and counterfactuals simulated over EXPIRY_DAYS. Every one of those can
+  // report that the declined trade reached its target AFTER the window the
+  // verdict was decided in — which is precisely the hindsight this phase
+  // exists to remove, arriving through the back door as "facts". The
+  // diagnosis would then contradict the verdict on the same row, and
+  // wait_missed_trade can support a rulebook rule.
+  //
+  // `waitUntilMs` is the end of that graded window (marketHorizonEnd of the
+  // WAIT's own horizon). `waitHint` replaces the deterministic
+  // pre-classification, which is built from the trade taxonomy and would
+  // otherwise hand the model "good_call" on a call the tracker scored as a
+  // missed trade.
+  wait?: { untilMs: number; hint: Cause } | null;
 }
 
 export const computeFacts = async (
@@ -538,8 +591,12 @@ export const computeFacts = async (
   const reference = row.price_at_signal ?? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : null);
 
   // Life of the plan plus the after-window, for the "what did the market do"
-  // measures
-  const horizonMs = Number.isFinite(resolvedMs) ? resolvedMs + windowMs : Infinity;
+  // measures. A WAIT stops at the end of the window its verdict was decided
+  // in: anything past it is a fact about a different question.
+  const wait = ctx.wait ?? null;
+  const horizonMs = wait
+    ? wait.untilMs
+    : Number.isFinite(resolvedMs) ? resolvedMs + windowMs : Infinity;
   const life = post.filter((x) => x.t < horizonMs);
 
   let maxFav: number | null = null;
@@ -553,8 +610,12 @@ export const computeFacts = async (
     }
   }
 
-  // After the settlement
-  const after = Number.isFinite(resolvedMs) ? post.filter((x) => x.t > resolvedMs && x.t < resolvedMs + windowMs) : [];
+  // After the settlement. Empty for a WAIT: "what happened once it was over"
+  // is exactly the evidence that must not reach a judgement about whether
+  // declining was right at the time.
+  const after = !wait && Number.isFinite(resolvedMs)
+    ? post.filter((x) => x.t > resolvedMs && x.t < resolvedMs + windowMs)
+    : [];
   let reachedTp1: Touch | null = null;
   let reachedSl: Touch | null = null;
   let beyondSl = 0;
@@ -704,10 +765,14 @@ export const computeFacts = async (
   };
   // Away from the target: a BUY's pullback and stop sit lower
   const against = (from: number, r: number) => (signal === "BUY" ? from - risk * r : from + risk * r);
-  if (reference !== null && !filled && coherentAt(reference)) {
+  // A WAIT gets none of these. cf.market_entry is the identical trade the
+  // tracker already graded, re-judged over EXPIRY_DAYS instead of the WAIT's
+  // own horizon — so it can report "win" on a row whose verdict is "correct",
+  // and the two would sit in the same payload contradicting each other.
+  if (!wait && reference !== null && !filled && coherentAt(reference)) {
     cf.market_entry = await simulate(row, { entry_point: reference, price_at_signal: reference }, candles, evalInterval, nowMs, gateCtx);
   }
-  if (reference !== null && !filled && risk > 0 && coherentAt(reference, against(reference, 1))) {
+  if (!wait && reference !== null && !filled && risk > 0 && coherentAt(reference, against(reference, 1))) {
     cf.market_entry_same_risk = await simulate(
       row,
       { entry_point: reference, stop_loss: against(reference, 1), price_at_signal: reference },
@@ -754,10 +819,18 @@ export const computeFacts = async (
     regime = { declared, adx, conflict };
   }
 
-  // Deterministic reading, for the model to confirm or overrule with reasons
-  const hints: Cause[] = [];
+  // Deterministic reading, for the model to confirm or overrule with reasons.
+  //
+  // A WAIT's is decided by the verdict alone and short-circuits the whole
+  // switch below: that switch reads the synthesised trade's outcome, so it
+  // would file "good_call" on a call the tracker scored as a missed trade,
+  // and "stop_too_tight" — a hint about a stop on a position nobody opened —
+  // on one it scored as correct. Neither is even in the WAIT vocabulary, so
+  // the model would be handed a pre-classification its own schema forbids.
+  const hints: Cause[] = wait ? [wait.hint] : [];
   const push = (c: Cause) => {
-    if (!hints.includes(c)) hints.push(c);
+    if (wait || hints.includes(c)) return;
+    hints.push(c);
   };
   const maxFavR = toR(maxFav);
   const maxAdvR = toR(maxAdv);

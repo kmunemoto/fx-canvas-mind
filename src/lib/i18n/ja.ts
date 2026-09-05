@@ -121,6 +121,12 @@ export const ja = {
       rejected: "却下",
     },
     scope: (n: number) => `直近${n}件`,
+    // The statistics and the row list are two different populations on one
+    // screen, so each says which it is.
+    statsScope: (n: number) => `成績: 全期間 ${n}件の判断`,
+    statsScopeContract: (n: number, contract: string) => `成績: 全期間 ${n}件の判断（${contract} の記録）`,
+    statsFallback: (n: number) => `成績: 直近 ${n}件のみで集計（サーバ集計を取得できませんでした）`,
+    otherContractRows: (n: number) => `別の契約で作られた ${n}件は、この集計に含めていません`,
     autoNote: "結果は実際の値動きで15分ごとに自動判定（TP1到達=WIN / SL到達=LOSS）",
     winRateNote: "勝率はWIN/LOSS/期限切れで計算（未約定・判定不能は除外）。期限切れは「届かない利確を置いた」結果なので、勝率から外れる逃げ道にはしません。約定率はエントリー価格に実際に到達した割合",
     stats: {
@@ -188,12 +194,21 @@ export const ja = {
       summary: (judged: number, missed: number, rate: number) =>
         `見送りの検証: 判定済み ${judged}件のうち ${missed}件（${rate}%）は、このアプリ自身が許す最小のトレードなら勝てていました`,
       verdicts: {
-        missed: "見送るべきではなかった（最小のトレードでも勝てていた）",
-        correct: "見送りは妥当だった（どちらに入っても取れていない）",
+        missed: "見送るべきではなかった（判断時点で想定した方向のトレードが勝っていた）",
+        correct: "見送りは妥当だった（そのトレードは損切りに掛かったか、期間内に届かなかった）",
         pending: "検証期間が終わっていません",
         unknown: "検証に必要なデータがありません",
+        no_call: "判断時点で方向が決まっていないため、採点していません",
       },
-      direction: (dir: string) => `取れていた方向: ${dir}`,
+      direction: (dir: string, source: string) => `判断時点で想定した方向: ${dir}（${source}）`,
+      directionSources: {
+        proposed_signal: "AIが出したシグナルをサーバが却下",
+        declared_direction: "AIが宣言した相場の方向",
+        regime: "指標が示したトレンドの向き",
+        none: "なし",
+      },
+      planNote: "この方向・損切り・利確は判断した時点で確定して保存したものです。値動きを見てから選んだものではありません",
+      noCallNote: "判断時点で方向を示す材料がなかったため、この見送りは「当たり・外れ」のどちらにも数えていません",
       basis: "検証したトレード",
       basisNote: (risk: string, reward: string) =>
         `損切り幅 ${risk} / 利確幅 ${reward}（ゲートが許す最小の損切りと、リスクリワード下限を満たす最も近い利確）`,
@@ -220,6 +235,8 @@ export const ja = {
         plan_incoherent: "プランの水準が矛盾",
         good_call: "想定通り",
         lucky_win: "勝ったが危うかった",
+        wait_missed_trade: "見送ったが取れていた",
+        good_wait: "見送りは妥当だった",
         inconclusive: "判断材料が不足",
       },
       lesson: "教訓",
@@ -377,6 +394,8 @@ export const ja = {
     rulebook: (v: number) => `ルールブック v${v}`,
     lessons: (n: number) => `教訓 ${n}件`,
     nextRevision: (n: number) => (n > 0 ? `次回改訂まで教訓あと${n}件（または前回改訂から24時間で）` : "次の原因分析で改訂"),
+    candidateHeld: (decided: number, needed: number) =>
+      `改訂案は作成済みです。現行版で決着した取引が${decided}/${needed}件になった時点で、成績を比べてから適用します`,
     waits: "原因分析は決着の1時間後（15分足）・2時間後（1時間足）・4時間後（4時間足）・8時間後（日足）に自動実行し、決着後の値動きが少ない場合は後で再診断します",
   },
 

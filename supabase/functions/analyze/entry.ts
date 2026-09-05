@@ -343,3 +343,119 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
 
   return { ...base, ok: false, entry, momentum, ...first };
 };
+
+// The trade a WAIT is standing aside from — fixed HERE, at the moment of the
+// call, and stored on the row.
+//
+// The first scorer walked a long AND a short from the decision price and
+// called the WAIT a miss if either paid. Nothing at the moment of the call
+// chose the side; the outcome did. A market that wanders half an ATR in both
+// directions — which is most markets, over enough bars — scores as a missed
+// trade no matter what was actually knowable, and that verdict is the app's
+// only evidence of over-caution. So it was measuring the market's range and
+// reporting it as the analyst's fault.
+//
+// One direction, decided now, on information that exists now. Where the
+// direction cannot be read from what was said at the time, there is nothing
+// to score, and the honest answer is that no call was recorded — not a
+// coin-flip dressed as a verdict.
+export type WaitDirectionSource =
+  // the model asked for this trade and the server refused it
+  | "proposed_signal"
+  // the model called the market's direction while declining to trade it
+  | "declared_direction"
+  // neither, but the indicators had it in a trend
+  | "regime"
+  // nothing at the time named a side
+  | "none";
+
+export interface WaitPlan {
+  direction: "BUY" | "SELL" | null;
+  direction_source: WaitDirectionSource;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  risk: number | null;
+  reward: number | null;
+  atr: number | null;
+  // The two-sided quote behind the mid, when the feed gave one. The scorer
+  // does not charge it yet; recorded so it can be charged without asking the
+  // past for data it never stored.
+  spread: number | null;
+  contract: string;
+  decided_at: string;
+  // Which scoring rule this plan was built for. A verdict from one rule and a
+  // verdict from another are not the same measurement and must not be
+  // averaged into one miss rate.
+  scorer: number;
+}
+
+export const WAIT_SCORER = 2;
+
+const directionOf = (input: {
+  proposedSignal: Signal;
+  declaredDirection: string | null;
+  regime: Regime;
+  regimeDirection: TrendDirection | null;
+}): { direction: "BUY" | "SELL" | null; source: WaitDirectionSource } => {
+  if (input.proposedSignal === "BUY" || input.proposedSignal === "SELL") {
+    return { direction: input.proposedSignal, source: "proposed_signal" };
+  }
+  const declared = (input.declaredDirection ?? "").trim().toLowerCase();
+  if (declared === "up") return { direction: "BUY", source: "declared_direction" };
+  if (declared === "down") return { direction: "SELL", source: "declared_direction" };
+  if (input.regime === "trend" && input.regimeDirection !== null) {
+    return { direction: input.regimeDirection === "Up" ? "BUY" : "SELL", source: "regime" };
+  }
+  return { direction: null, source: "none" };
+};
+
+export const waitPlanFor = (input: {
+  proposedSignal: Signal;
+  declaredDirection: string | null;
+  regime: Regime;
+  regimeDirection: TrendDirection | null;
+  entry: number | null;
+  atr: number | null;
+  quote: { bid: number; ask: number } | null;
+  decimals: number;
+  contract: string;
+  decidedAt: string;
+}): WaitPlan => {
+  const { direction, source } = directionOf(input);
+  const spread = input.quote && Number.isFinite(input.quote.ask) && Number.isFinite(input.quote.bid)
+    ? Number((input.quote.ask - input.quote.bid).toFixed(input.decimals))
+    : null;
+  const base: WaitPlan = {
+    direction,
+    direction_source: source,
+    entry: null,
+    stop: null,
+    target: null,
+    risk: null,
+    reward: null,
+    atr: isFinitePositive(input.atr) ? input.atr : null,
+    spread,
+    contract: input.contract,
+    decided_at: input.decidedAt,
+    scorer: WAIT_SCORER,
+  };
+  if (direction === null || !isFinitePositive(input.entry) || !isFinitePositive(input.atr)) return base;
+
+  // The same floors the gate itself applies: the tightest stop it permits and
+  // the nearest target that still clears its risk/reward floor. A WAIT is
+  // measured against the least the app would have demanded of a trade, not
+  // against a threshold invented for the purpose.
+  const risk = MIN_STOP_ATR * input.atr;
+  const reward = MIN_RISK_REWARD * risk;
+  const sign = direction === "BUY" ? 1 : -1;
+  const r = (v: number) => Number(v.toFixed(input.decimals));
+  return {
+    ...base,
+    entry: r(input.entry),
+    stop: r(input.entry - sign * risk),
+    target: r(input.entry + sign * reward),
+    risk: r(risk),
+    reward: r(reward),
+  };
+};

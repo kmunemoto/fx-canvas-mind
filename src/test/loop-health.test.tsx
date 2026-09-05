@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
@@ -55,5 +56,30 @@ describe("LoopHealth", () => {
   it("renders nothing without data", () => {
     const { container } = render(<LoopHealth health={null} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// The RPC and the panel are two halves of one contract, and the SQL cannot be
+// unit-tested from here — so what the SQL must contain is pinned to the text
+// of the migration that defines it.
+describe("the panel's two counters are taken over the same queue", () => {
+  const sql = readFileSync("supabase/migrations/20260905190000_loop_health_counts_the_wait_queue.sql", "utf8");
+
+  it("counts a reviewable WAIT as awaiting review", () => {
+    // `reviewed` has never had a signal filter, so a diagnosed WAIT landed
+    // there while awaiting_review, scoped to BUY/SELL, still read 0. The
+    // panel renders the two side by side and exists to make a backlog visible.
+    const awaiting = sql.slice(sql.indexOf("'awaiting_review'"), sql.indexOf("'reviewed'"));
+    expect(awaiting).toContain("signal = 'WAIT'");
+    expect(awaiting).toContain("wait_plan is not null");
+    // On exactly the terms the post-mortem uses: a verdict the tracker
+    // actually reached. A queue of rows that can never be graded would never
+    // drain, which is a worse lie than the one it replaces.
+    expect(awaiting).toContain("wait_check->>'verdict' in ('missed', 'correct')");
+  });
+
+  it("still returns the clock and the schedules the panel reads", () => {
+    expect(sql).toContain("'now', now()");
+    expect(sql).toContain("'jobs',");
   });
 });

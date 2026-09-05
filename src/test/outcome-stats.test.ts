@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { byConfidence, byContract, byMode, byRulebookVersion, byTimeframe, confidenceBandKey, contractKey, realizedR, tally } from "../lib/outcomeStats";
+import {
+  byConfidence, byContract, byMode, byRulebookVersion, byTimeframe,
+  confidenceBandKey, contractKey, headlineScope, realizedR, serverTally, tally,
+} from "../lib/outcomeStats";
 import type { AnalysisRecord, OutcomeEvaluation } from "../lib/types";
 
 const baseEvaluation: OutcomeEvaluation = {
@@ -266,6 +269,7 @@ describe("standing aside is scored too", () => {
             price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
             bars_examined: 40, horizon_ms: 48 * 3_600_000,
             checked_at: "2026-09-03T12:00:00Z",
+            scorer: 2,
           },
     });
 
@@ -365,5 +369,77 @@ describe("two entry contracts are never pooled", () => {
     ]);
     expect(groups.map((g) => g.key)).toContain("0-59");
     expect(groups.find((g) => g.key === "0-59")).toMatchObject({ waits: 1, total: 0, calls: 1 });
+  });
+});
+
+// The statistics moved to the server because they were being computed from
+// the forty rows the client happened to fetch. The adapter below is what lets
+// the panel switch source without a second set of render branches, so its
+// field mapping is the whole contract.
+describe("the record comes from the server, not from the page", () => {
+  const group = {
+    calls: 21, waits: 3, rejected: 0, waits_judged: 0, waits_missed: 0,
+    total: 18, wins: 2, losses: 8, expired: 0, open: 1, untriggered: 7,
+    ambiguous: 0, incoherent: 0, filled: 10, settled: 17, decided: 10,
+    with_r: 10, clusters: 3, contracts: ["market_v1"],
+    win_rate: 20, win_rate_ci95: [6, 51] as [number, number], fill_rate: 59,
+    sum_r: -4.74, expectancy: -0.47, trades_per_call: 0.86, verdict_rate: 48,
+    wait_rate: 14, expired_rate: 0, untriggered_rate: 33, ambiguous_rate: 0,
+    incoherent_rate: 0, open_rate: 5, wait_miss_rate: null, below_min_n: true,
+  };
+
+  it("maps every field the panel draws", () => {
+    const t = serverTally("all", group);
+    expect(t.calls).toBe(21);
+    expect(t.wins).toBe(2);
+    expect(t.losses).toBe(8);
+    expect(t.winRate).toBe(20);
+    expect(t.winRateCi).toEqual([6, 51]);
+    // The three that make a rate readable: how many trades it rests on, what
+    // they paid, and how many independent situations they came from
+    expect(t.expectancy).toBe(-0.47);
+    expect(t.sumR).toBe(-4.74);
+    expect(t.clusters).toBe(3);
+    expect(t.fillRate).toBe(59);
+    expect(t.waitRate).toBe(14);
+  });
+
+  it("falls back to an older contract's record rather than showing nothing", () => {
+    // Every plan can predate the current contract — production is exactly
+    // that today — and filtering the record away because of it would leave
+    // the owner with an empty panel instead of a labelled one.
+    const empty = { ...group, calls: 0, total: 0, wins: 0, losses: 0, decided: 0 };
+    const stats = {
+      generated_at: "2026-09-05T18:00:00Z",
+      live_contract: "market_v1",
+      scopes: { all_time: empty },
+      by_rulebook_version: {}, by_confidence: {}, by_timeframe: {}, by_mode: {},
+      by_contract: { entry_chosen_v1: group },
+      other_contract_rows: 21, other_contracts: ["entry_chosen_v1"],
+      shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0, other: 0 },
+    };
+    const picked = headlineScope(stats);
+    expect(picked?.contract).toBe("entry_chosen_v1");
+    expect(picked?.group.calls).toBe(21);
+
+    // And once the live contract has calls of its own, that is the record
+    const live = { ...stats, scopes: { all_time: group } };
+    expect(headlineScope(live)?.contract).toBeNull();
+  });
+
+  it("does not pool two contracts to fill the panel", () => {
+    const stats = {
+      generated_at: "2026-09-05T18:00:00Z",
+      live_contract: "market_v1",
+      scopes: { all_time: { ...group, calls: 0, total: 0, wins: 0, losses: 0, decided: 0 } },
+      by_rulebook_version: {}, by_confidence: {}, by_timeframe: {}, by_mode: {},
+      by_contract: { entry_chosen_v1: group, some_other_v1: group },
+      other_contract_rows: 42, other_contracts: ["entry_chosen_v1", "some_other_v1"],
+      shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0, other: 0 },
+    };
+    // Two candidates and no live rows: show the empty live scope rather than
+    // pick one arbitrarily or add them together
+    expect(headlineScope(stats)?.contract).toBeNull();
+    expect(headlineScope(stats)?.group.calls).toBe(0);
   });
 });

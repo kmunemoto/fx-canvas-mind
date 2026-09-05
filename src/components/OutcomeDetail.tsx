@@ -35,7 +35,13 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   // A WAIT call carries no trade plan, so there is nothing to judge
   const tracked = record.signal !== "WAIT" && record.outcome !== "skipped";
   const rejected = isRejected(record);
-  const settled = tracked && record.outcome !== "pending";
+  // Whether there is a diagnosis to show. A WAIT is now reviewed too — the
+  // trade it declined is diagnosed — and gating this on `tracked` meant every
+  // model call spent on a WAIT produced a lesson, a verdict and evidence that
+  // had no rendering path at all, while its cause chip still showed in the
+  // list above.
+  const settled = (tracked && record.outcome !== "pending") ||
+    (!tracked && record.postmortem?.status === "done");
 
   const price = (v: number | null | undefined) =>
     typeof v === "number" && Number.isFinite(v) ? v.toFixed(decimals) : "—";
@@ -130,8 +136,10 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   // --- standing aside, reviewed -------------------------------------------
   // A WAIT carries no plan, so nothing above this line has anything to judge.
   // What is judged instead is the smallest trade the entry gate would itself
-  // have allowed from the price at the moment of the call.
+  // have allowed from the price at the moment of the call — in the direction
+  // that was named THEN, and stored on the row before any of this happened.
   const wait = !tracked ? record.wait_check ?? null : null;
+  const waitPlan = !tracked ? record.wait_plan ?? null : null;
   const waitVerdictClass = wait?.verdict === "missed"
     ? "text-warning"
     : wait?.verdict === "correct" ? "text-success" : "text-muted-foreground";
@@ -292,9 +300,22 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
           {waitDecided && (
             <>
               {wait.direction && (
-                <p className="text-muted-foreground">{w.direction(t.direction[wait.direction].word)}</p>
+                <p className="text-muted-foreground">
+                  {w.direction(
+                    t.direction[wait.direction].word,
+                    w.directionSources[
+                      (wait.direction_source ?? waitPlan?.direction_source ?? "none") as keyof typeof w.directionSources
+                    ] ?? (wait.direction_source ?? ""),
+                  )}
+                </p>
               )}
               <Row label={d.priceAtSignal} value={price(wait.price ?? record.price_at_signal)} />
+              {typeof wait.stop === "number" && typeof wait.target === "number" && (
+                <>
+                  <Row label={d.stopLoss} value={price(wait.stop)} />
+                  <Row label={d.takeProfit1} value={price(wait.target)} />
+                </>
+              )}
               {typeof wait.risk === "number" && typeof wait.reward === "number" && (
                 <p className="text-muted-foreground">
                   <span className="font-semibold">{w.basis}: </span>
@@ -307,6 +328,10 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
               </p>
             </>
           )}
+          {wait.verdict === "no_call" && (
+            <p className="text-[10px] text-muted-foreground">{w.noCallNote}</p>
+          )}
+          {waitDecided && <p className="text-[10px] text-muted-foreground">{w.planNote}</p>}
           <p className="text-[10px] text-muted-foreground">{w.note}</p>
         </section>
       )}

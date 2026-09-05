@@ -12,6 +12,10 @@ const STALL_MINUTES = 60;
 // Lessons that must gather before the rulebook is rewritten (see
 // supabase/functions/postmortem/prompt.ts MIN_NEW_LESSONS)
 const MIN_NEW_LESSONS = 5;
+// Trades that must settle under the live version before a written revision
+// replaces it (see supabase/functions/postmortem/index.ts
+// MIN_DECIDED_PER_VERSION)
+const MIN_DECIDED_PER_VERSION = 10;
 
 const minutesAgo = (iso: string | null, nowIso: string): number | null => {
   if (!iso) return null;
@@ -54,6 +58,10 @@ const LoopHealth = ({ health }: Props) => {
   };
 
   const untilRevision = Math.max(0, MIN_NEW_LESSONS - (health.lessons_since_rulebook ?? 0));
+  // A revision already written says something different from one still being
+  // gathered: it is waiting on trades, not on lessons, and the lesson count
+  // stops meaning anything until it is promoted.
+  const held = health.candidate_waiting === true;
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-2" data-testid="loop-health">
@@ -67,7 +75,9 @@ const LoopHealth = ({ health }: Props) => {
         {s.openPlans(health.open_plans ?? 0)} · {s.awaiting(health.awaiting_review ?? 0)} · {s.reviewed(health.reviewed ?? 0)} · {s.lessons(health.lessons ?? 0)}
         {typeof health.rulebook_version === "number" ? ` · ${s.rulebook(health.rulebook_version)}` : ""}
       </p>
-      <p className="text-[10px] text-muted-foreground">{s.nextRevision(untilRevision)}</p>
+      <p className="text-[10px] text-muted-foreground">
+        {held ? s.candidateHeld(health.decided_under_version ?? 0, MIN_DECIDED_PER_VERSION) : s.nextRevision(untilRevision)}
+      </p>
       <p className="text-[10px] text-muted-foreground">{s.waits}</p>
     </div>
   );

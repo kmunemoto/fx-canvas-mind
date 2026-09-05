@@ -28,9 +28,9 @@ import {
   type OpenRow,
 } from "./evaluate.ts";
 import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
-import { judgeWait, type WaitBar } from "./waits.ts";
+import { judgeWait, type WaitBar, type WaitPlan } from "./waits.ts";
 
-const TRACKER_VERSION = "track-outcomes-v12-2026-09-05T05:30:00Z";
+const TRACKER_VERSION = "track-outcomes-v14-2026-09-05T18:10:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -498,7 +498,7 @@ Deno.serve(async (req: Request) => {
     if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
       const waitRes = await rest(
         "analyses?outcome=eq.skipped&or=(wait_check.is.null,wait_check->>verdict.eq.pending)" +
-          `&select=id,pair,interval,created_at,price_at_signal,context&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
+          `&select=id,pair,interval,created_at,price_at_signal,context,wait_plan&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
       );
       const waitRaw = waitRes.ok ? await waitRes.json().catch(() => null) : null;
       const waitRows = Array.isArray(waitRaw) ? waitRaw.filter(isRecord) : [];
@@ -532,7 +532,16 @@ Deno.serve(async (req: Request) => {
           .map((c) => ({ t: parseCandleTime(c.datetime), high: c.high, low: c.low }))
           .filter((b) => Number.isFinite(b.t));
         for (const row of groupRows) {
-          const signalMs = Date.parse(String(row.created_at ?? ""));
+          const plan = isRecord(row.wait_plan) ? row.wait_plan : null;
+          // The instant the plan was priced, not the instant the row was
+          // inserted. created_at is stamped after the model turn, the gate,
+          // the open-plan query and the history write — 30 to 120 seconds
+          // later — and judgeWait admits only bars that OPEN after it. On a
+          // 15-minute eval bar that silently drops the whole first bar of the
+          // trade being graded, against a stop only 0.4 ATR away.
+          const decidedMs = Date.parse(String(plan?.decided_at ?? ""));
+          const insertedMs = Date.parse(String(row.created_at ?? ""));
+          const signalMs = Number.isFinite(decidedMs) ? decidedMs : insertedMs;
           if (!Number.isFinite(signalMs)) continue;
           const entrySnap = isRecord(row.context) && isRecord(row.context.entry) ? row.context.entry : null;
           const check = judgeWait(
@@ -542,6 +551,10 @@ Deno.serve(async (req: Request) => {
               signalMs,
               horizonMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
             },
+            // The trade fixed at the moment of the call. A row without one
+            // grades no_call rather than being scored against whichever side
+            // happened to pay.
+            plan as unknown as WaitPlan | null,
             bars,
             nowMs,
           );

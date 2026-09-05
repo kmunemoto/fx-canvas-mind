@@ -665,7 +665,7 @@ describe("AnalysisHistory across two entry contracts", () => {
         verdict, direction: "BUY", r: 1.2, at: "2026-09-01T09:00:00Z",
         price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
         bars_examined: 40, horizon_ms: 48 * 3_600_000,
-        checked_at: "2026-09-01T12:00:00Z",
+        checked_at: "2026-09-01T12:00:00Z", scorer: 2,
       },
       ...over,
     });
@@ -700,7 +700,7 @@ describe("AnalysisHistory across two entry contracts", () => {
       wait_check: {
         verdict: "pending", direction: null, r: null, at: null, price: 150, atr: 0.2,
         risk: null, reward: null, bars_examined: 4, horizon_ms: 48 * 3_600_000,
-        checked_at: "2026-09-01T12:00:00Z",
+        checked_at: "2026-09-01T12:00:00Z", scorer: 2,
       },
     })]} />);
     expect(screen.queryByText("取れていた")).toBeNull();
@@ -708,5 +708,60 @@ describe("AnalysisHistory across two entry contracts", () => {
     const detail = screen.getByTestId("wait-detail");
     expect(detail.textContent).toContain("検証期間が終わっていません");
     expect(detail.textContent).not.toContain("検証したトレード");
+  });
+});
+
+// Two populations on one screen: the statistics are the whole record, the
+// list is the last 40 rows. Before this they were the same forty rows, which
+// is why `clusters` could never reach its target of 50 and the P&L total
+// could fall after a winning trade.
+describe("AnalysisHistory draws the record from the server when it has one", () => {
+  const one = (): AnalysisRecord => ({
+    id: "srv-1", pair: "USD/JPY", interval: "1h", mode: "full",
+    signal: "BUY", confidence: 70, entry_point: 150, stop_loss: 149,
+    take_profit_1: 152, take_profit_2: null, take_profit_3: null,
+    outcome: "win", outcome_price: 152, price_at_signal: 150,
+    created_at: "2026-09-01T00:00:00Z", closed_at: "2026-09-01T06:00:00Z",
+    plan_contract: "market_v1",
+  } as AnalysisRecord);
+  const group = {
+    calls: 21, waits: 3, rejected: 0, waits_judged: 0, waits_missed: 0,
+    total: 18, wins: 2, losses: 8, expired: 0, open: 1, untriggered: 7,
+    ambiguous: 0, incoherent: 0, filled: 10, settled: 17, decided: 10,
+    with_r: 10, clusters: 3, contracts: ["market_v1"],
+    win_rate: 20, win_rate_ci95: [6, 51] as [number, number], fill_rate: 59,
+    sum_r: -4.74, expectancy: -0.47, trades_per_call: 0.86, verdict_rate: 48,
+    wait_rate: 14, expired_rate: 0, untriggered_rate: 33, ambiguous_rate: 0,
+    incoherent_rate: 0, open_rate: 5, wait_miss_rate: null, below_min_n: true,
+  };
+  const stats = {
+    generated_at: "2026-09-05T18:00:00Z",
+    live_contract: "market_v1",
+    scopes: { all_time: group },
+    by_rulebook_version: {}, by_confidence: {}, by_timeframe: {}, by_mode: {},
+    by_contract: { market_v1: group },
+    other_contract_rows: 0, other_contracts: [],
+    shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0, other: 0 },
+  };
+
+  it("shows the whole record, not the rows it happens to hold", () => {
+    render(<AnalysisHistory records={[one()]} stats={stats} />);
+    // one row on screen, twenty-one calls in the record
+    expect(screen.getByTestId("win-rate").textContent).toBe("20%");
+    expect(screen.getByTestId("record-strip").textContent).toContain("3");
+    expect(screen.getByTestId("stats-scope").textContent).toContain("21");
+  });
+
+  it("says which population each half of the panel is", () => {
+    render(<AnalysisHistory records={[one()]} stats={stats} />);
+    const scopeLabel = screen.getByTestId("stats-scope").textContent ?? "";
+    expect(scopeLabel).toContain("全期間");
+    // and the list keeps its own, different label
+    expect(screen.getByText(/直近/)).toBeInTheDocument();
+  });
+
+  it("falls back to the rows on screen when the server did not answer", () => {
+    render(<AnalysisHistory records={[one()]} />);
+    expect(screen.getByTestId("stats-scope").textContent).toContain("直近");
   });
 });

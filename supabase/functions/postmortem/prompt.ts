@@ -18,6 +18,7 @@
 // Deno-free on purpose: src/test/postmortem.test.ts imports this file
 // directly.
 
+import { WAIT_SCORER } from "../analyze/entry.ts";
 import {
   CAUSES,
   CHOP_CROSSINGS,
@@ -32,6 +33,7 @@ import {
   canonicalCause,
   causeOutsideContract,
   causesFor,
+  causesForSignal,
   isCause,
   type Cause,
   type PostmortemFacts,
@@ -223,6 +225,7 @@ export interface RecordRow {
   // reached one. 'missed' means the market then offered a trade this app
   // would itself have allowed, and it won.
   wait_verdict?: string | null;
+  wait_scorer?: number | null;
 }
 
 // What the plan made or lost, in multiples of its planned risk. A win is
@@ -399,8 +402,13 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
       s.waits++;
       // 'pending' and 'unknown' are not verdicts, so they stay out of both
       // sides of the rate: the first has not been judged yet, the second
-      // never can be.
-      if (r.wait_verdict === "missed" || r.wait_verdict === "correct") {
+      // never can be. Nor is 'no_call' — nothing at the time named a side.
+      //
+      // And only the current scorer's verdicts count. The first scorer chose
+      // the direction from whichever side paid, so its miss rate measured the
+      // market's range; averaging the two rules into one number would carry
+      // that in forever, invisibly.
+      if ((r.wait_scorer ?? 0) >= WAIT_SCORER && (r.wait_verdict === "missed" || r.wait_verdict === "correct")) {
         s.waits_judged++;
         if (r.wait_verdict === "missed") s.waits_missed++;
       }
@@ -452,8 +460,16 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     const set = causeClusters.get(cause) ?? new Set<string>();
     set.add(l.cluster ?? `lesson-${i}`);
     causeClusters.set(cause, set);
-    if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
-    if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
+    // A cause that cannot support a rule cannot vote on one either.
+    // rule_feedback is the per-rule signal the consolidation prompt tells the
+    // editor to act on, and good_wait was declared evidence for nothing —
+    // yet ten WAITs correctly declined under a rule would have credited it
+    // ten times, outvoting the trades it actually lost. Same reasoning for
+    // good_call, inconclusive and plan_incoherent, which reached it before.
+    if (!UNCITABLE_CAUSES.includes(cause)) {
+      if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
+      if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
+    }
   });
   for (const [cause, set] of causeClusters) s.by_cause_clusters[cause] = set.size;
   return s;
@@ -519,11 +535,11 @@ export interface Diagnosis {
   rule_credited: string | null;
 }
 
-export const diagnosisSchema = (contract?: string | null) => ({
+export const diagnosisSchema = (contract?: string | null, signal?: string | null) => ({
   type: "object",
   properties: {
-    cause: { type: "string", enum: [...causesFor(contract)] },
-    secondary_causes: { type: "array", items: { type: "string", enum: [...causesFor(contract)] } },
+    cause: { type: "string", enum: [...causesForSignal(contract, signal)] },
+    secondary_causes: { type: "array", items: { type: "string", enum: [...causesForSignal(contract, signal)] } },
     avoidable: { type: "boolean", description: "分析時点の情報だけで回避できたか" },
     confidence: { type: "integer", description: "診断の確からしさ 0-100" },
     verdict_ja: { type: "string", description: "何が起きたかの結論。日本語、120字以内" },
@@ -599,7 +615,56 @@ export const buildDiagnosisPrompt = (
     "",
     JSON.stringify(payload),
   ].join("\n");
-  return { system: DIAGNOSIS_SYSTEM_PROMPT, user, schema: diagnosisSchema(plan.contract) };
+  return { system: DIAGNOSIS_SYSTEM_PROMPT, user, schema: diagnosisSchema(plan.contract, plan.signal) };
+};
+
+// Diagnosing a call that declined to trade.
+//
+// A WAIT has no fill, no stop and no target of its own, so the trade prompt's
+// five questions ("was the stop too tight", "did the target come") describe
+// nothing that happened. What it does have is the trade it declined — fixed
+// at the moment of the call and stored on the row — and what the market then
+// did to that trade. So the question narrows to one: was declining right?
+//
+// The facts handed over are the ones computed for that hypothetical trade, so
+// the prompt must be explicit that it never existed. A diagnosis that reads
+// as though the trade was taken would produce lessons about managing a
+// position nobody held.
+export const WAIT_DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担当（ポストモーテム）です。今回検証するのは「見送った（WAIT）」という判断です。
+
+前提:
+- plan.wait_plan は、見送った時点で確定して保存された「もし入っていたらこのトレードだった」という想定です。方向・エントリー・損切り・利確はすべて判断した時点の情報だけで決めてあり、その後の値動きを見て選んだものではありません。
+- facts は、その想定トレードを実際の値動きに当てはめて計算した事実です。**このトレードは実行されていません。** 建玉があったかのような書き方をしないでください。
+- plan.wait_check.verdict は採点結果です。missed = 想定したトレードは利確に届いていた（見送りが機会損失になった）。correct = 損切りに掛かったか、期間内に届かなかった（見送りは妥当だった）。
+
+原則:
+- 根拠にしてよいのは facts と plan に書かれていることだけ。事実に無い出来事（ニュース等）を推測で作らない。news_shock は plan の warnings/key_factors に指標やイベントへの言及があり、かつ facts.abnormal_bar が観測された場合に限る。
+- cause は次から選ぶ: wait_missed_trade（見送ったが取れていた）、good_wait（見送りは妥当だった）、regime_misread（相場環境の読み違いが見送りの理由になっていた）、news_shock（イベントが値動きを支配した）、inconclusive（判断材料が足りない）。
+- 見送りが妥当だった回に無理やり教訓を作らない。good_wait のときの lesson は「この条件では見送ってよい」という確認で足り、行動を変える指示は書かない。
+- 「見送るべきではなかった」と書けるのは、想定トレードが利確に届いており、かつ判断時点の指標からその方向が読めた場合だけです。値動きを見てから「あの方向だった」と言わないでください。
+- lesson は「条件 → 行動」の形で、次回以降のプラン作成に直接使える一般則にする。個別の価格・日付・その日固有の出来事は書かない。
+- lesson の「条件」は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）で書く。アナリスト自身の自己申告（confidence の高さ、mode の宣言）を条件にしない。
+- 動かせるレバーは4つだけです: 方向、損切りの幅、利確の距離、そもそも取引するかどうか。エントリー価格は選べません（サーバーが分析時点の現在値で入ります）。
+- 見送りの検証は、放っておくと「常に見送る」が最善手になってしまうことへの唯一の歯止めです。ただし歯止めを効かせたいあまり、根拠のない「取れていた」を書かないでください。
+
+出力は JSON スキーマに従ってください。`;
+
+export const buildWaitDiagnosisPrompt = (
+  plan: PlanSummary & { wait_plan: JsonRecord | null; wait_check: JsonRecord | null },
+  facts: PostmortemFacts,
+): { system: string; user: string; schema: ReturnType<typeof diagnosisSchema> } => {
+  const payload = {
+    plan: { ...plan, analysis: compactAnalysis(plan.analysis) },
+    facts,
+  };
+  const user = [
+    "次の「見送り（WAIT）」の判断を検証してください。plan は AI が出した判断（と、その時点で見ていた指標 context、適用されていたルール rules_in_force、見送った時点で確定した想定トレード wait_plan、その採点結果 wait_check）、facts はその想定トレードを実際の値動きに当てはめて計算した事実です。",
+    "このトレードは実行されていません。facts の数値はすべて「もし入っていたら」の話です。",
+    "数値の単位: *_r は想定トレードのリスク幅（エントリー〜損切り）を 1 とした倍率。時刻は UTC。",
+    "",
+    JSON.stringify(payload),
+  ].join("\n");
+  return { system: WAIT_DIAGNOSIS_SYSTEM_PROMPT, user, schema: diagnosisSchema(plan.contract, "WAIT") };
 };
 
 // A malformed answer is not stored. The cause must be one of ours; when the
@@ -609,6 +674,7 @@ export const parseDiagnosis = (
   hints: Cause[],
   ruleIds: string[] = [],
   contract?: string | null,
+  signal?: string | null,
 ): Diagnosis | null => {
   if (!isRecord(raw)) return null;
   const lessonJa = str(raw.lesson_ja, MAX_LESSON_CHARS);
@@ -620,7 +686,7 @@ export const parseDiagnosis = (
   // Canonicalised in both eras, so no new row ever stores the dead spelling;
   // a cause the row's own contract cannot produce falls through to the
   // deterministic hint, which is contract-correct by construction.
-  const allowed = causesFor(contract);
+  const allowed = causesForSignal(contract, signal);
   const pick = (v: unknown): Cause | null => {
     if (!isCause(v)) return null;
     const k = canonicalCause(v);
@@ -728,7 +794,12 @@ export const CONSOLIDATION_SCHEMA = {
 // below it is a ReferenceError that takes down the whole function.
 export const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wrong", "regime_misread", "news_shock", "chased_move"];
 // Lessons that are about nothing in particular are evidence for nothing
-export const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call"];
+// A cause that names no lever to move cannot support a rule. good_wait is
+// good_call's mirror: "standing aside was right" tells the next plan nothing
+// it can act on. wait_missed_trade is deliberately NOT here — it is the only
+// evidence of over-caution the system has, and a rule is exactly what should
+// come of it.
+export const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call", "good_wait"];
 
 // Vocabulary that names WHERE or WHEN to enter.
 //

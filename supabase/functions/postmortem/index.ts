@@ -26,14 +26,16 @@
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
-import { EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
-import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
+import { ENTRY_WINDOW_MS, EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
+import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Cause, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
+import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   CONSOLIDATION_SCHEMA,
   MIN_NEW_LESSONS,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
+  buildWaitDiagnosisPrompt,
   parseConsolidation,
   parseDiagnosis,
   revisionDue,
@@ -45,7 +47,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v12-2026-09-05T14:10:00Z";
+const POSTMORTEM_VERSION = "postmortem-v15-2026-09-05T18:10:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -60,6 +62,10 @@ const MAX_ATTEMPTS = 3;
 // A diagnosis made on almost no aftermath is revisited once the full window
 // of bars exists; this caps how often that happens.
 const MAX_REVISIONS = 1;
+// Decided trades the live rulebook must have accumulated before a revision
+// replaces it. Below this the version was never measured, so swapping it out
+// throws away the only evidence that could ever say whether it helped.
+const MIN_DECIDED_PER_VERSION = 10;
 // Supabase kills the worker at 150s; leave room to write results
 const WALL_CLOCK_BUDGET_MS = 130_000;
 const START_DIAGNOSIS_BEFORE_MS = 75_000;
@@ -75,6 +81,11 @@ const MAX_CONSOLIDATION_MS = 110_000;
 // Held back so a revision that did finish is still written down
 const WRITE_RESERVE_MS = 10_000;
 const RECENT_LESSONS = 60;
+// The repair scan: how many recent done rows to check for a missing lesson,
+// and how many to rebuild in one run. Rebuilding costs one insert each and no
+// model call, so the cap is about keeping the run short, not about spend.
+const REPAIR_SCAN = 200;
+const REPAIR_PER_RUN = 20;
 const RECENT_ROWS = 300;
 // Rows fetched per row kept, so the round-robin across accounts has a pool
 // deeper than the busiest account's recent output
@@ -188,6 +199,55 @@ Deno.serve(async (req: Request) => {
         ...init,
         headers: { ...serviceHeaders, ...(init.headers ?? {}) },
       });
+    // One place that turns a stored diagnosis into a lessons row, so the
+    // repair path below writes exactly what the diagnosis path writes. Every
+    // field comes from the diagnosis document or the analyses row, which is
+    // why a lesson lost to a failed insert can be recovered later without
+    // asking the model anything a second time.
+    const writeLesson = async (
+      id: string,
+      raw: JsonRecord,
+      doc: JsonRecord,
+      row: { pair: string; interval: string; signal: string; outcome: string; created_at: string },
+    ): Promise<boolean> => {
+      const lesson = isRecord(doc.lesson) ? doc.lesson : {};
+      const scope = strOrNull(doc.scope);
+      const ev = isRecord(raw.evaluation) ? raw.evaluation : null;
+      const res = await rest("lessons?on_conflict=analysis_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({
+          analysis_id: id,
+          user_id: strOrNull(raw.user_id),
+          plan_contract: strOrNull(raw.plan_contract),
+          pair: row.pair,
+          interval: row.interval,
+          signal: row.signal,
+          mode: strOrNull(raw.mode),
+          order_type: strOrNull(ev?.order_type),
+          outcome: row.outcome,
+          cause: strOrNull(doc.cause),
+          secondary_causes: Array.isArray(doc.secondary_causes) ? doc.secondary_causes : [],
+          avoidable: doc.avoidable === true,
+          confidence: numberOrNull(doc.confidence),
+          lesson_ja: strOrNull(lesson.ja) ?? "",
+          lesson_en: strOrNull(lesson.en) ?? "",
+          scope: scope ? { text: scope } : null,
+          shadow: raw.shadow === true,
+          rule_blamed: strOrNull(doc.rule_blamed),
+          rule_credited: strOrNull(doc.rule_credited),
+          // When the plan was made: what "same situation" is judged on
+          analysis_created_at: row.created_at,
+        }),
+      });
+      if (!res.ok) {
+        console.error("lesson insert failed:", id, res.status, (await res.text().catch(() => "")).slice(0, 200));
+        return false;
+      }
+      await res.text().catch(() => {});
+      return true;
+    };
+
     const patchRows = async (path: string, body: JsonRecord): Promise<number> => {
       const res = await rest(path, {
         method: "PATCH",
@@ -252,9 +312,11 @@ Deno.serve(async (req: Request) => {
 
     // Options for a hand-run (either caller is trusted): run on specific
     // rows, skip the after-settlement wait, force a rulebook rewrite
-    const options = { force: false, ids: [] as string[], consolidate: false, limit: MAX_PLANS_PER_RUN };
+    const options = { force: false, ids: [] as string[], consolidate: false, promote: false, limit: MAX_PLANS_PER_RUN };
     options.force = body.force === true;
     options.consolidate = body.consolidate === true;
+    // Escape hatch: promote a revision the decided-trade gate is holding.
+    options.promote = body.promote === true;
     options.ids = strList(body.ids).slice(0, MAX_PLANS_ADMIN);
     const limit = numberOrNull(body.limit);
     if (limit !== null) options.limit = Math.max(1, Math.min(MAX_PLANS_ADMIN, Math.round(limit)));
@@ -264,7 +326,7 @@ Deno.serve(async (req: Request) => {
     // rules and the kept history say which rules that version held, so the
     // diagnosis can name the rule at fault and the consolidation can score
     // each rule on what its plans then did
-    const rulebookRows = await readRowsOrNull("rulebook?id=eq.1&select=version,rules,history,updated_at");
+    const rulebookRows = await readRowsOrNull("rulebook?id=eq.1&select=version,rules,history,updated_at,candidate");
     // A rulebook that could not be read is not an empty one: never rewrite
     // it from nothing on the strength of a failed request
     const rulebookUnavailable = rulebookRows === null;
@@ -313,7 +375,15 @@ Deno.serve(async (req: Request) => {
       `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
 
-    const rows: Array<{ row: PostmortemRow; raw: JsonRecord }> = [];
+    // `wait` is set only on a call that declined to trade: `row` then holds
+    // the hypothetical trade stored at the call, so the facts machinery can
+    // measure it, while `raw` still holds the real row (signal WAIT, outcome
+    // skipped) that the lesson is filed under.
+    const rows: Array<{
+      row: PostmortemRow;
+      raw: JsonRecord;
+      wait: { plan: JsonRecord; check: JsonRecord; untilMs: number; hint: Cause } | null;
+    }> = [];
     for (const r of candidates) {
       if (r.signal !== "BUY" && r.signal !== "SELL") continue;
       const entry = numberOrNull(r.entry_point);
@@ -345,8 +415,104 @@ Deno.serve(async (req: Request) => {
         const closed = row.closed_at ? Date.parse(row.closed_at) : NaN;
         if (isRevision && (!Number.isFinite(closed) || nowMs - closed < afterWindowMs(row.interval))) continue;
       }
-      rows.push({ row, raw: r });
+      rows.push({ row, raw: r, wait: null });
     }
+
+    // ---- calls that declined to trade --------------------------------------
+    // A WAIT never appeared in the query above: it is filtered out twice over
+    // (outcome skipped, signal WAIT), and the null-level guard would have
+    // dropped it anyway. So the one prediction that costs nothing to make was
+    // also the one prediction never reviewed — while every diagnosed row
+    // pushed the rules toward trading less.
+    //
+    // What is diagnosed is the trade the call declined: fixed at the moment
+    // of the call, stored in wait_plan, and already resolved by the tracker.
+    // Appended AFTER the trades so the run's limit spends itself on settled
+    // positions first; at 3 plans a run and 96 runs a day the queue drains
+    // either way.
+    // The verdict filter belongs in SQL. 'no_call' and 'unknown' are terminal
+    // by construction — the tracker never revisits them — so such a row is
+    // never diagnosed, never gets a postmortem document, and therefore
+    // matches this query forever. Ordered oldest first, forty of them would
+    // fill the page permanently and every gradeable WAIT behind them,
+    // including every 'missed', would never be seen again.
+    // Which WAIT rows already have a shadow of the refused plan being
+    // diagnosed in their place.
+    const shadowRows = await readRows(
+      `analyses?shadow=is.true&shadow_of=not.is.null&select=shadow_of&limit=500`,
+    );
+    const shadowParents = new Set(
+      shadowRows.map((x) => strOrNull(x.shadow_of)).filter((v): v is string => v !== null),
+    );
+
+    const waitCandidates = await readRows(
+      `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false` +
+        `&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
+        `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
+    );
+    for (const r of waitCandidates) {
+      const plan = isRecord(r.wait_plan) ? r.wait_plan : null;
+      const check = isRecord(r.wait_check) ? r.wait_check : null;
+      if (!plan || !check) continue;
+      // Only a settled verdict is worth a diagnosis. 'pending' has not been
+      // measured, and 'unknown' / 'no_call' never can be — a diagnosis of an
+      // unmeasurable call would be the model filling in what the data does
+      // not contain.
+      const verdict = strOrNull(check.verdict);
+      if (verdict !== "missed" && verdict !== "correct") continue;
+      const direction = strOrNull(plan.direction);
+      if (direction !== "BUY" && direction !== "SELL") continue;
+      // A plan the gate refused for fillability is already tracked as a
+      // shadow row and diagnosed as a trade. Diagnosing the WAIT parent too
+      // would draw two lessons from one market situation, and the revision
+      // cadence counts raw lessons — so three refusals in a day would trip a
+      // rulebook rewrite that the same three would not have tripped before.
+      if (shadowParents.has(String(r.id))) continue;
+      const entry = numberOrNull(plan.entry);
+      const stop = numberOrNull(plan.stop);
+      const target = numberOrNull(plan.target);
+      if (entry === null || stop === null || target === null) continue;
+      // The hypothetical trade, in the shape the facts machinery reads. Its
+      // outcome is what the tracker already decided about it — not a claim
+      // that any position was held.
+      const row: PostmortemRow = {
+        id: String(r.id),
+        pair: String(r.pair),
+        interval: String(r.interval),
+        signal: direction,
+        entry_point: entry,
+        stop_loss: stop,
+        take_profit_1: target,
+        take_profit_2: null,
+        take_profit_3: null,
+        created_at: String(r.created_at),
+        price_at_signal: entry,
+        evaluation: null,
+        outcome: verdict === "missed" ? "win" : "loss",
+        closed_at: strOrNull(check.at) ?? strOrNull(check.checked_at),
+      };
+      const prior = isRecord(r.postmortem) ? r.postmortem : null;
+      const isRevision = prior?.status === "done";
+      if (!options.force && options.ids.length === 0) {
+        if (!isPostmortemDue(row, nowMs)) continue;
+        const closed = row.closed_at ? Date.parse(row.closed_at) : NaN;
+        if (isRevision && (!Number.isFinite(closed) || nowMs - closed < afterWindowMs(row.interval))) continue;
+      }
+      // The end of the window the verdict was actually decided in — the same
+      // market-time horizon judgeWait walked. Everything the diagnosis is
+      // allowed to see stops here.
+      const decidedMs = Date.parse(strOrNull(plan.decided_at) ?? String(r.created_at));
+      const untilMs = marketHorizonEnd(
+        Number.isFinite(decidedMs) ? decidedMs : Date.parse(String(r.created_at)),
+        ENTRY_WINDOW_MS[String(r.interval)] ?? 48 * 60 * 60 * 1000,
+      );
+      rows.push({
+        row,
+        raw: r,
+        wait: { plan, check, untilMs, hint: verdict === "missed" ? "wait_missed_trade" : "good_wait" },
+      });
+    }
+
     const due = rows.slice(0, options.limit);
 
     // ---- the calendar over the window under review -----------------------
@@ -479,7 +645,7 @@ Deno.serve(async (req: Request) => {
       errors.push(`${row.id}: ${error}`);
     };
 
-    for (const { row, raw } of due) {
+    for (const { row, raw, wait } of due) {
       if (elapsed() > START_DIAGNOSIS_BEFORE_MS) {
         errors.push(`${row.id}: deferred (time budget)`);
         continue;
@@ -506,6 +672,7 @@ Deno.serve(async (req: Request) => {
           momentum: entryCheck ? entryCheck.momentum === true : null,
           events: calendar,
           contract: strOrNull(raw.plan_contract),
+          wait: wait ? { untilMs: wait.untilMs, hint: wait.hint } : null,
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);
@@ -555,7 +722,12 @@ Deno.serve(async (req: Request) => {
         rules_in_force: rulesInForce.map((r) => ({ id: r.id, text_ja: r.text_ja })),
       };
 
-      const prompt = buildDiagnosisPrompt(plan, facts);
+      // A WAIT is graded on one question — was declining right? — and its
+      // facts describe a trade that was never taken, so the prompt has to say
+      // so or the lessons come out as position management.
+      const prompt = wait
+        ? buildWaitDiagnosisPrompt({ ...plan, signal: "WAIT", wait_plan: wait.plan, wait_check: wait.check }, facts)
+        : buildDiagnosisPrompt(plan, facts);
       let answer: unknown = null;
       try {
         answer = await askModel(prompt.system, prompt.user, prompt.schema, 2500);
@@ -563,7 +735,17 @@ Deno.serve(async (req: Request) => {
         await markFailed(row, raw, `model: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
-      const diagnosis = parseDiagnosis(answer, facts.hints, rulesInForce.map((r) => r.id), strOrNull(raw.plan_contract));
+      // The deterministic hint stands when the model's cause is not one of
+      // ours — so on a WAIT it has to be a WAIT cause. facts.hints are built
+      // from the trade taxonomy and would otherwise file "direction_wrong"
+      // against a call that never entered.
+      const diagnosis = parseDiagnosis(
+        answer,
+        wait ? [wait.hint] : facts.hints,
+        rulesInForce.map((r) => r.id),
+        strOrNull(raw.plan_contract),
+        wait ? "WAIT" : row.signal,
+      );
       if (!diagnosis) {
         await markFailed(row, raw, "no_diagnosis");
         continue;
@@ -591,49 +773,118 @@ Deno.serve(async (req: Request) => {
         rule_blamed: diagnosis.rule_blamed,
         rule_credited: diagnosis.rule_credited,
         rulebook_version: planVersion,
+        // What was diagnosed. On a WAIT the facts below measure a trade that
+        // was never taken, and a reader who assumes otherwise reads a
+        // position that never existed.
+        subject: wait ? "wait" : "trade",
+        wait_plan: wait ? wait.plan : undefined,
         facts,
         created_at: nowIso,
       };
+      // The lesson goes in FIRST. Marking the diagnosis done and then failing
+      // to write the lesson stranded the row for good: a done row with
+      // thin:false matches no branch of retryFilter, and the consolidation
+      // that rewrites the rulebook reads the lessons table, so that plan's
+      // experience never reached the rules again. The reverse order is safe —
+      // a lesson without the done marker is re-diagnosed next run and the
+      // insert is idempotent on analysis_id.
+      // Filed under what the row actually is: signal WAIT, outcome skipped.
+      // `row` above carries the hypothetical trade's direction and outcome,
+      // and filing a lesson under those would put a win in the record for a
+      // trade nobody took.
+      const lessonOk = await writeLesson(
+        row.id,
+        raw,
+        stored,
+        wait ? { ...row, signal: "WAIT", outcome: "skipped" } : row,
+      );
+      if (lessonOk) newLessons++;
+      else errors.push(`${row.id}: lesson not written, left for the repair pass`);
+
+      // The diagnosis is stored either way. Skipping the done marker on a
+      // failed insert put the row straight back at the head of the queue —
+      // it is ordered by closed_at and nothing incremented attempts — so the
+      // same plan would be re-diagnosed, at the price of a model call, on
+      // every sweep forever, starving every plan behind it. The repair pass
+      // below rebuilds the lesson from this stored document with no model
+      // call, which is the cheap half of the work and the only half that
+      // failed.
       const written = await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, { postmortem: stored });
       if (written === 0) {
         errors.push(`${row.id}: not written`);
         continue;
       }
-
-      const lessonRes = await rest("lessons?on_conflict=analysis_id", {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({
-          analysis_id: row.id,
-          user_id: strOrNull(raw.user_id),
-          plan_contract: strOrNull(raw.plan_contract),
-          pair: row.pair,
-          interval: row.interval,
-          signal: row.signal,
-          mode: strOrNull(raw.mode),
-          order_type: ev?.order_type ?? null,
-          outcome: row.outcome,
-          cause: diagnosis.cause,
-          secondary_causes: diagnosis.secondary_causes,
-          avoidable: diagnosis.avoidable,
-          confidence: diagnosis.confidence,
-          lesson_ja: diagnosis.lesson_ja,
-          lesson_en: diagnosis.lesson_en,
-          scope: diagnosis.scope ? { text: diagnosis.scope } : null,
-          shadow: raw.shadow === true,
-          rule_blamed: diagnosis.rule_blamed,
-          rule_credited: diagnosis.rule_credited,
-          // When the plan was made: what "same situation" is judged on
-          analysis_created_at: row.created_at,
-        }),
+      diagnosed.push({
+        id: row.id,
+        cause: diagnosis.cause,
+        outcome: wait ? "skipped" : row.outcome,
+        shadow: raw.shadow === true,
       });
-      if (!lessonRes.ok) {
-        errors.push(`${row.id}: lesson not written (${lessonRes.status}: ${(await lessonRes.text().catch(() => "")).slice(0, 120)})`);
-      } else {
-        await lessonRes.text().catch(() => {});
-        newLessons++;
+    }
+
+    // ---- repair: diagnoses whose lesson never landed ------------------------
+    // Before the ordering was fixed, a failed lesson insert left a row marked
+    // done with no lesson, and retryFilter cannot see such a row again
+    // (thin:false matches none of its branches). The diagnosis itself is on
+    // the row, so the lesson can be rebuilt from it with no model call — this
+    // recovers the rows already stranded, and covers any future insert that
+    // fails after the diagnosis has been stored.
+    let repaired = 0;
+    try {
+      // Ids first. The documents are 8-10 KB apiece (the whole facts object,
+      // plus a 60-point path on the evaluation), and in the common case none
+      // of them is needed at all — fetching 200 of those every sweep to
+      // compute a set difference is megabytes of JSON thrown away 96 times a
+      // day.
+      const doneIdRows = (await readRowsOrNull(
+        // Ordered by created_at, not closed_at: a WAIT row's closed_at is
+        // always NULL (its settlement time lives inside wait_check), so
+        // nullslast sorted every WAIT behind every diagnosed trade and a
+        // stranded WAIT lesson could never be repaired.
+        `analyses?select=id&postmortem->>status=eq.done&order=created_at.desc&limit=${REPAIR_SCAN}`,
+      )) ?? [];
+      const ids = doneIdRows.map((r) => String(r.id ?? "")).filter(Boolean);
+      if (ids.length > 0) {
+        const haveLessons = await readRowsOrNull(
+          `lessons?select=analysis_id&analysis_id=in.(${ids.map(encodeURIComponent).join(",")})`,
+        );
+        // A read that failed is not proof that no lesson exists. Treating it
+        // as an empty set would upsert over rows that are already there and
+        // report them as recoveries.
+        if (haveLessons === null) {
+          errors.push("repair: lessons unavailable, skipped");
+          throw new Error("skip repair");
+        }
+        const have = new Set(haveLessons.map((l) => String(l.analysis_id ?? "")));
+        const missingIds = ids.filter((id) => !have.has(id));
+        const missing = missingIds.length === 0 ? [] : (await readRowsOrNull(
+          `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,evaluation,postmortem` +
+            `&id=in.(${missingIds.slice(0, REPAIR_PER_RUN).map(encodeURIComponent).join(",")})`,
+        )) ?? [];
+        for (const raw of missing.slice(0, REPAIR_PER_RUN)) {
+          const doc = isRecord(raw.postmortem) ? raw.postmortem : null;
+          const id = strOrNull(raw.id);
+          // A diagnosis with no lesson text is nothing to rebuild from
+          const lesson = doc && isRecord(doc.lesson) ? doc.lesson : null;
+          if (!id || !doc || !lesson || (!strOrNull(lesson.ja) && !strOrNull(lesson.en))) continue;
+          const ok = await writeLesson(id, raw, doc, {
+            pair: String(raw.pair ?? ""),
+            interval: String(raw.interval ?? ""),
+            signal: String(raw.signal ?? ""),
+            outcome: String(raw.outcome ?? ""),
+            created_at: String(raw.created_at ?? nowIso),
+          });
+          if (ok) {
+            repaired++;
+            newLessons++;
+          } else {
+            errors.push(`${id}: lesson repair failed`);
+          }
+        }
       }
-      diagnosed.push({ id: row.id, cause: diagnosis.cause, outcome: row.outcome, shadow: raw.shadow === true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "skip repair") errors.push(`repair: ${message}`);
     }
 
     // ---- rulebook ----------------------------------------------------------
@@ -652,6 +903,9 @@ Deno.serve(async (req: Request) => {
     // below already asks the only question that matters — how much has
     // gathered since the version in force — so ask it every time.
     let rulebook: JsonRecord | null = null;
+    // Set when a candidate that had been waiting is promoted; reported even
+    // when no new revision is written this run, so a promotion is never silent.
+    let promotedCandidate: JsonRecord | null = null;
     // How many accounts the shared rulebook is actually being learned from.
     // Reported because "one" and "many" are different systems, and the
     // difference is invisible in the rules themselves.
@@ -724,12 +978,83 @@ Deno.serve(async (req: Request) => {
       const previousRules: Rule[] = current ? parseRules(current.rules) : [];
       const previousVersion = current ? numberOrNull(current.version) ?? 0 : 0;
       const updatedAt = current ? strOrNull(current.updated_at) : null;
-      const updatedMs = updatedAt ? Date.parse(updatedAt) : NaN;
+      const priorCandidate = current && isRecord(current.candidate) ? current.candidate : null;
+      // Paced against the last revision WRITTEN, promoted or not. Pacing
+      // against updated_at instead would leave a blocked promotion asking the
+      // model for a fresh candidate on every sweep, and would never let the
+      // "new lessons since" counter reset.
+      const lastRevisionAt = strOrNull(priorCandidate?.created_at) ?? updatedAt;
+
+      // How much evidence the live version has actually gathered. Read once
+      // and shared by both the promotion of a stored candidate and the gate on
+      // a freshly written one.
+      //
+      // A read that fails is NOT zero decided trades: coercing it to zero
+      // demotes a revision that had earned promotion and reports the coercion
+      // as a measured fact.
+      const decidedRows = previousVersion > 0
+        ? await readRowsOrNull(
+          `analyses?select=id&rulebook_version=eq.${previousVersion}` +
+            `&outcome=in.(win,loss,expired)&shadow=is.false&limit=100`,
+        )
+        : [];
+      const decidedUnderVersion = decidedRows === null ? null : decidedRows.length;
+      if (decidedUnderVersion === null) errors.push("rulebook: decided count unavailable");
+      // Version 0 is an empty book: it has no rules to measure and no cohort
+      // that could ever exist, because no plan can be made under rules that do
+      // not exist. Holding the first revision back holds it forever.
+      const measured = previousVersion === 0 ||
+        (decidedUnderVersion !== null && decidedUnderVersion >= MIN_DECIDED_PER_VERSION);
+
+      // A candidate that has been waiting is promoted as its own act, with no
+      // model call and without waiting for the next revision to be due. Left
+      // inside the revision branch it was unreachable: writing a candidate
+      // resets the lessons-since counter, so `due` is false on the very next
+      // run and the stored candidate could never be read again.
+      if (priorCandidate && (measured || options.promote) && !rulebookUnavailable) {
+        const candidateRules = parseRules(priorCandidate.rules);
+        if (candidateRules.length === 0) {
+          errors.push("rulebook: stored candidate has no usable rules");
+        } else {
+          const history = Array.isArray(current?.history) ? current.history : [];
+          const nextHistory = previousRules.length > 0
+            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
+            : history;
+          const summary = isRecord(priorCandidate.summary) ? priorCandidate.summary : {};
+          const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+            version: previousVersion + 1,
+            rules: candidateRules,
+            summary,
+            stats: {
+              ...(isRecord(current?.stats) ? current.stats : {}),
+              changes: isRecord(priorCandidate.changes) ? priorCandidate.changes : {},
+              lessons_considered: numberOrNull(priorCandidate.lessons_considered) ?? 0,
+              promoted_from_candidate: true,
+            },
+            history: nextHistory,
+            updated_at: new Date().toISOString(),
+            candidate: null,
+          });
+          if (n > 0) {
+            promotedCandidate = {
+              version: previousVersion + 1,
+              revised: true,
+              promoted: true,
+              from_candidate: true,
+              rules: candidateRules.length,
+              decided_under_previous: decidedUnderVersion,
+              forced: options.promote && !measured,
+            };
+            console.log("rulebook candidate promoted", { version: previousVersion + 1 });
+          } else errors.push("rulebook: candidate not promoted (version changed underneath)");
+        }
+      }
+      const lastRevisionMs = lastRevisionAt ? Date.parse(lastRevisionAt) : NaN;
       const sinceVersion = lessons.filter((l) => {
         const t = Date.parse(l.created_at);
-        return !Number.isFinite(updatedMs) || (Number.isFinite(t) && t > updatedMs);
+        return !Number.isFinite(lastRevisionMs) || (Number.isFinite(t) && t > lastRevisionMs);
       }).length;
-      const due = options.consolidate || revisionDue(sinceVersion, updatedAt, nowMs);
+      const due = options.consolidate || revisionDue(sinceVersion, lastRevisionAt, nowMs);
 
       if (lessons.length === 0) {
         rulebook = { version: previousVersion, revised: false, reason: "no_lessons" };
@@ -750,7 +1075,7 @@ Deno.serve(async (req: Request) => {
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;
@@ -773,6 +1098,7 @@ Deno.serve(async (req: Request) => {
           rulebook_version: numberOrNull(r.rulebook_version),
           contract: strOrNull(r.plan_contract),
           wait_verdict: strOrNull(r.wait_verdict),
+          wait_scorer: numberOrNull(r.wait_scorer),
         }));
         const stats = summarizeRecord(record, lessons);
 
@@ -801,18 +1127,73 @@ Deno.serve(async (req: Request) => {
           // not counted as new again by the next run; and written only over
           // the version that was read, so a concurrent rewrite is not lost
           const stampIso = new Date().toISOString();
-          const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
-            version: previousVersion + 1,
-            rules: consolidated.rules,
-            summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
-            stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
-            history: nextHistory,
-            updated_at: stampIso,
-          });
-          if (n > 0) {
-            rulebook = { version: previousVersion + 1, revised: true, rules: consolidated.rules.length, changes: consolidated.changes };
-            console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
-          } else errors.push("rulebook: not written (version changed underneath, or write failed)");
+          // Writing a revision and putting it in front of the analyst are two
+          // different acts. Versions 6, 7 and 8 were each replaced before a
+          // single trade under them closed, so no version was ever measured
+          // and no comparison between two of them was possible. The revision
+          // is still written every time experience calls for one; it waits in
+          // `candidate` until the live version has enough decided trades to
+          // have been worth measuring.
+          // A candidate promoted moments ago already moved the version out
+          // from under the optimistic guard below, so this run writes nothing
+          // more; the fresh revision becomes next run's candidate.
+          const promote = (measured || options.promote) && promotedCandidate === null;
+          if (promote) {
+            const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+              version: previousVersion + 1,
+              rules: consolidated.rules,
+              summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
+              stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
+              history: nextHistory,
+              updated_at: stampIso,
+              candidate: null,
+            });
+            if (n > 0) {
+              rulebook = {
+                version: previousVersion + 1,
+                revised: true,
+                promoted: true,
+                rules: consolidated.rules.length,
+                changes: consolidated.changes,
+                decided_under_previous: decidedUnderVersion,
+                forced: options.promote && !measured,
+              };
+              console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
+            } else errors.push("rulebook: not written (version changed underneath, or write failed)");
+          } else {
+            // Held back. The candidate is replaced each time rather than
+            // queued, so what is waiting is always the freshest reading of
+            // the evidence.
+            const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+              candidate: {
+                base_version: previousVersion,
+                rules: consolidated.rules,
+                summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
+                changes: consolidated.changes,
+                lessons_considered: lessons.length,
+                created_at: stampIso,
+              },
+            });
+            if (n > 0) {
+              rulebook = {
+                version: previousVersion,
+                revised: false,
+                promoted: false,
+                reason: "candidate_held",
+                candidate_rules: consolidated.rules.length,
+                changes: consolidated.changes,
+                decided_under_version: decidedUnderVersion,
+                decided_needed: decidedUnderVersion === null
+                  ? null
+                  : Math.max(0, MIN_DECIDED_PER_VERSION - decidedUnderVersion),
+              };
+              console.log("rulebook candidate held", {
+                base: previousVersion,
+                decided: decidedUnderVersion,
+                needed: MIN_DECIDED_PER_VERSION,
+              });
+            } else errors.push("rulebook: candidate not written (version changed underneath, or write failed)");
+          }
         }
       }
     }
@@ -820,13 +1201,20 @@ Deno.serve(async (req: Request) => {
     const summary = {
       ok: true,
       mode: scope.kind,
-      candidates: candidates.length,
+      // Two queries feed one queue now, so one number cannot describe both:
+      // `candidates` counted only the settled trades, and a run that
+      // diagnosed three WAITs reported finding nothing to work on.
+      candidates: candidates.length + waitCandidates.length,
+      trade_candidates: candidates.length,
+      wait_candidates: waitCandidates.length,
       due: rows.length,
       diagnosed: diagnosed.length,
       lessons: newLessons,
+      lessons_repaired: repaired,
       lesson_contributors: lessonContributors,
       record_contributors: recordContributors,
-      rulebook,
+      rulebook: rulebook ?? promotedCandidate,
+      promoted: promotedCandidate,
       results: diagnosed,
       errors,
       elapsedMs: elapsed(),

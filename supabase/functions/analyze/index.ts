@@ -1,10 +1,11 @@
-const FUNCTION_VERSION = "analyze-v28-2026-09-05T13:15:00Z";
+const FUNCTION_VERSION = "analyze-v30-2026-09-05T17:10:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
 import {
   computeSnapshot,
   parseCandles,
+  seriesHealth,
   type Candle,
   type IndicatorSnapshot,
 } from "./indicators.ts";
@@ -32,8 +33,10 @@ import {
   MIN_STOP_ATR,
   TREND_ADX,
   evaluateEntry,
+  waitPlanFor,
   type EntryType,
   type EntryVerdict,
+  type WaitPlan,
 } from "./entry.ts";
 
 import { parseRules, selectPromptRules } from "./rules.ts";
@@ -54,6 +57,10 @@ const corsHeaders = {
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+// Writing the history row is retried before the analysis is called a failure:
+// a PostgREST hiccup should not cost the user a credit and a plan.
+const SAVE_ATTEMPTS = 3;
+const SAVE_RETRY_MS = 400;
 
 // Plans that may run an analysis at all. Anything else — "free", an expired
 // subscription, a missing profile row — is refused before any paid work.
@@ -70,6 +77,28 @@ const ALLOWED_PAIRS = new Set([
 
 // Higher timeframes analyzed alongside the one the user picked. The entry
 // timeframe comes first and is the one prices are planned on.
+// Bars per timeframe. The higher timeframes used to ask for 130, which is
+// below the 200 SMA200 needs, so the long-term trend the chain exists to
+// supply was structurally absent from every higher-timeframe block and
+// rendered as "n/a" on every run.
+// The floor the system prompt states and the server now enforces. Below it the
+// model's own answer is "I am not confident", and WAIT is the honest form of
+// that answer.
+const MIN_CONFIDENCE = 60;
+const ENTRY_BARS = 250;
+const HIGHER_BARS = 250;
+
+// Length of one bar, for deciding whether the newest one has closed and how
+// stale a series is allowed to be.
+const INTERVAL_MS: Record<string, number> = {
+  "15min": 15 * 60 * 1000,
+  "1h": 60 * 60 * 1000,
+  "4h": 4 * 60 * 60 * 1000,
+  "1day": 24 * 60 * 60 * 1000,
+  "1week": 7 * 24 * 60 * 60 * 1000,
+  "1month": 30 * 24 * 60 * 60 * 1000,
+};
+
 const TF_CHAIN: Record<string, string[]> = {
   "15min": ["15min", "1h", "4h"],
   "1h": ["1h", "4h", "1day"],
@@ -194,12 +223,26 @@ const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
   const p = (v: number | null) => fmt(v, decimals, "n/a");
   const x = (v: number | null, d = 2) => fmt(v, d, "n/a");
   return [
-    `現在値: ${p(s.price)} (${s.datetime} UTC) 前足比 ${x(s.changePct)}%`,
+    `現在値: ${p(s.price)} (${s.datetime} UTC 始値の足${
+      s.barClosed === false ? "・この足はまだ形成中" : s.barClosed === true ? "・確定済み" : ""
+    }) 前足比 ${x(s.changePct)}%`,
     `RSI14: ${x(s.rsi)} | Stoch %K/%D: ${x(s.slowK)}/${x(s.slowD)} | ADX14: ${x(s.adx)}`,
     `MACD: ${x(s.macd, 5)} Signal: ${x(s.macdSignal, 5)} Hist: ${x(s.macdHist, 5)}`,
-    `SMA20/50/200: ${p(s.sma20)} / ${p(s.sma50)} / ${p(s.sma200)}`,
+    `SMA20/50/200: ${p(s.sma20)} / ${p(s.sma50)} / ${
+      s.sma200 === null ? `算出不能(足${s.barsUsed}本、200本必要)` : p(s.sma200)
+    }`,
     `BB(20,2): 上 ${p(s.bbUpper)} 中 ${p(s.bbMiddle)} 下 ${p(s.bbLower)}`,
-    `一目: 転換 ${p(s.tenkan)} 基準 ${p(s.kijun)} 先行A ${p(s.spanA)} 先行B ${p(s.spanB)}`,
+    // Two clouds, named apart. The pair this window computes is drawn 26 bars
+    // AHEAD; the cloud standing at the current price was computed 26 bars ago.
+    // Handing over one pair labelled 先行A/先行B invited reading the future
+    // cloud as the one price is trading against.
+    `一目 転換/基準: ${p(s.tenkan)} / ${p(s.kijun)}`,
+    `現在価格の雲(26本前に算出・いま価格が接している雲): 上 ${p(s.cloudNow?.top ?? null)} 下 ${p(s.cloudNow?.bottom ?? null)} → 価格は${
+      s.cloudSide === "above" ? "雲の上" : s.cloudSide === "below" ? "雲の下" : s.cloudSide === "inside" ? "雲の中" : "判定不能"
+    }`,
+    `先行する雲(26本先に描かれる・まだ価格は到達していない): 上 ${p(s.cloudAhead?.top ?? null)} 下 ${p(s.cloudAhead?.bottom ?? null)}${
+      s.cloudAheadTwisted === true ? " ※ねじれ(現在の雲と上下が逆)" : ""
+    }`,
     `ATR14: ${p(s.atr)} (${x(s.atrPct)}% of price)`,
     `直近スイング高値: ${s.swingHighs.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
     `直近スイング安値: ${s.swingLows.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
@@ -823,6 +866,10 @@ Deno.serve(async (req: Request) => {
     // local time by V8, which is the reason parseCandleTime exists.
     let pricedAtIso = new Date().toISOString();
     const timeframes = TF_CHAIN[interval];
+    // How many rows each timeframe's payload carried before parsing, so
+    // seriesHealth can tell "the provider sent little" from "we threw a lot
+    // away".
+    const rawCounts: number[] = [];
     const fetchSeries = async (tf: string, outputsize: number) => {
       // timezone=UTC: the tracker and the chart both read these timestamps as
       // UTC, and the provider's default zone is not.
@@ -837,6 +884,7 @@ Deno.serve(async (req: Request) => {
         const message = isRecord(parsed) ? asTrimmedString(parsed.message, "") : "";
         throw new Error(message || `市場データ取得エラー (${tf}, HTTP ${res.status})`);
       }
+      rawCounts.push(Array.isArray(parsed.values) ? parsed.values.length : 0);
       return parseCandles(parsed.values);
     };
 
@@ -869,7 +917,7 @@ Deno.serve(async (req: Request) => {
       // The entry timeframe needs at least 200 closes or sma(closes, 200)
       // silently returns null and SMA200 vanishes from the prompt.
       const [td, gmo] = await Promise.all([
-        Promise.all(timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? 250 : 130))),
+        Promise.all(timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? ENTRY_BARS : HIGHER_BARS))),
         gmoAttempt,
       ]);
       seriesByTf = td;
@@ -925,10 +973,62 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // The two-sided quote behind the mid the plan is written on. Taken from
+    // the newest bar of the same GMO series the overlay uses, so it is the
+    // same instant the user is looking at; null when that feed was not
+    // consulted or had nothing, in which case only the mid is on record.
+    // ...from the series the overlay ACCEPTED. When acceptOverlay rejects
+    // (stale, gap, too short, or the two feeds disagreeing by more than
+    // MARKET_TOLERANCE_ATR) the plan is priced off Twelve Data, and recording
+    // GMO's bid/ask beside a Twelve Data mid would produce a "quote" that need
+    // not even bracket the price it claims to explain.
+    const newestQuote = priceFeed === "gmo" && gmoRaw && gmoRaw.bars.length > 0
+      ? gmoRaw.bars[gmoRaw.bars.length - 1]
+      : null;
+    const decisionQuote = newestQuote
+      ? {
+        bid: newestQuote.bid.close,
+        ask: newestQuote.ask.close,
+        at: newestQuote.datetime,
+        source: "gmo",
+      }
+      : null;
+
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
     }
+
+    // Whether the series are fit to analyse. parseCandles now drops a bar it
+    // cannot believe — a null priced at zero, a high under its own low — but
+    // dropping is only half the job: a series full of holes must not be
+    // analysed at all, because every indicator downstream would be computed on
+    // fiction and the plan resting on it would enter the record as a real
+    // trade.
+    const health = seriesByTf.map((candles, i) =>
+      seriesHealth(
+        candles,
+        rawCounts[i] ?? candles.length,
+        i === 0 ? 60 : 2,
+        INTERVAL_MS[timeframes[i]] ?? 0,
+        Date.now(),
+      )
+    );
+    if (!health[0].ok) {
+      console.error("Entry series unfit", { pair: currencyPair, tf: timeframes[0], issues: health[0].issues });
+      return await fail({
+        ok: false,
+        error: "市場データが不正です。しばらくしてからお試しください",
+        diagnostics: { error_stage: "market_data_unhealthy", stage, issues: health[0].issues },
+      }, 502);
+    }
+    // A higher timeframe in poor shape is not fatal — the entry timeframe is
+    // what the plan is written on — but it is said out loud rather than
+    // quietly analysed.
+    const degraded = health.slice(1)
+      .map((h, i) => (h.ok ? null : `${timeframes[i + 1]}:${h.issues.join("/")}`))
+      .filter((v): v is string => v !== null);
+    if (degraded.length > 0) console.warn("Higher timeframe series degraded", { pair: currencyPair, degraded });
 
     console.log("Market data fetched", {
       elapsedMs: Date.now() - startedAt,
@@ -940,7 +1040,19 @@ Deno.serve(async (req: Request) => {
     });
 
     stage = "compute_indicators";
-    const snapshots = seriesByTf.map((candles) => computeSnapshot(candles));
+    const snapshotNow = Date.now();
+    const snapshots = seriesByTf.map((candles, i) =>
+      computeSnapshot(candles, INTERVAL_MS[timeframes[i]] ?? 0, snapshotNow)
+    );
+    // The same reading with the newest bar removed. A higher-timeframe
+    // breakout that is true mid-bar can be gone by the close, so the plan has
+    // to be able to say which of the two it is looking at — and the record has
+    // to keep both, or the judgement cannot be reproduced afterwards.
+    const closedSnapshots = seriesByTf.map((candles, i) => {
+      const s = snapshots[i];
+      if (!s || s.barClosed !== false) return null;
+      return computeSnapshot(candles.slice(0, -1), INTERVAL_MS[timeframes[i]] ?? 0, snapshotNow);
+    });
     const entrySnapshot = snapshots[0];
     if (!entrySnapshot) {
       return await fail({ ok: false, error: "指標計算に失敗しました", diagnostics: { error_stage: "indicator_failed", stage } }, 500);
@@ -950,10 +1062,17 @@ Deno.serve(async (req: Request) => {
     const tfSections = timeframes.map((tf, i) => {
       const snapshot = snapshots[i];
       const candles = seriesByTf[i];
+      const closed = closedSnapshots[i];
       const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
+      // When the newest bar is still forming, the same reading without it is
+      // given alongside, so "the trend on closed bars" and "what is happening
+      // right now" are two labelled things rather than one blurred one.
+      const closedBody = closed
+        ? `\n[確定足のみ(形成中の足を除く)]\n${snapshotLines(closed, decimals)}`
+        : "";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
-      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
+      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
@@ -996,6 +1115,10 @@ Deno.serve(async (req: Request) => {
       "anthropic-version": "2023-06-01",
     };
 
+    const userMessageText = includeFundamental
+      ? buildUserMessage(SEARCH_NOTE, true)
+      : buildUserMessage(TECHNICAL_NOTE, false);
+
     const baseRequest: JsonRecord = {
       model: "claude-opus-5",
       max_tokens: 8000,
@@ -1004,12 +1127,7 @@ Deno.serve(async (req: Request) => {
         .replace("{{EVENTS}}", eventBlock)
         .replace("{{LEARNED_RULES}}", learnedRules)
         .trimEnd(),
-      messages: [{
-        role: "user",
-        content: includeFundamental
-          ? buildUserMessage(SEARCH_NOTE, true)
-          : buildUserMessage(TECHNICAL_NOTE, false),
-      }],
+      messages: [{ role: "user", content: userMessageText }],
     };
 
     // Web search responses carry citations, which are incompatible with
@@ -1231,6 +1349,59 @@ Deno.serve(async (req: Request) => {
     normalizedAnalysis.entry_point = marketEntry.toFixed(decimals);
     normalizedAnalysis.entry_type = "market";
 
+    // The second and third targets were parsed, stored, drawn on the chart and
+    // shown to the user in profit-green without anything ever checking which
+    // side of the entry they were on. A BUY at 150.000 could be published with
+    // targets at 149.500 and 149.000 — two prices reachable only by the trade
+    // losing. The judge ignores them (targetsReached filters anything not
+    // beyond TP1), so this was purely a lie told to the reader.
+    //
+    // Dropped rather than fatal: the leg that decides win or loss is
+    // entry/stop/TP1, and that IS checked. A plan sound on that leg is still a
+    // plan; the extra targets are garnish, and garnish that points the wrong
+    // way is removed and recorded rather than allowed to sink the dish.
+    const ladderDropped: string[] = [];
+    {
+      const dir = proposedSignal === "BUY" ? 1 : -1;
+      let bound = normalizedAnalysis.take_profit_1_num;
+      const rungs = [
+        {
+          name: "take_profit_2",
+          value: normalizedAnalysis.take_profit_2_num,
+          clear: () => {
+            normalizedAnalysis.take_profit_2_num = null;
+            normalizedAnalysis.take_profit_2 = "—";
+          },
+        },
+        {
+          name: "take_profit_3",
+          value: normalizedAnalysis.take_profit_3_num,
+          clear: () => {
+            normalizedAnalysis.take_profit_3_num = null;
+            normalizedAnalysis.take_profit_3 = "—";
+          },
+        },
+      ];
+      for (const rung of rungs) {
+        if (rung.value === null) continue;
+        const beyondEntry = (rung.value - marketEntry) * dir > 0;
+        const beyondPrevious = bound === null || (rung.value - bound) * dir > 0;
+        if (beyondEntry && beyondPrevious) {
+          bound = rung.value;
+          continue;
+        }
+        ladderDropped.push(rung.name);
+        rung.clear();
+      }
+      if (ladderDropped.length > 0) {
+        console.warn("Take-profit ladder out of order", {
+          signal: proposedSignal,
+          entry: marketEntry,
+          dropped: ladderDropped,
+        });
+      }
+    }
+
     const proposed = {
       entry: marketEntry,
       stop: normalizedAnalysis.stop_loss_num,
@@ -1263,11 +1434,23 @@ Deno.serve(async (req: Request) => {
     // hole every week.
     const marketShut = isPossiblyClosed(Date.now());
 
+    // The prompt has always said "below 60 confidence the answer is WAIT", and
+    // nothing enforced it: a BUY the model itself rated 10/100 was published
+    // exactly like one it rated 95, and entered the record as a settled trade
+    // rather than as the WAIT the stated policy calls for. Enforced here, on
+    // the same path as the other refusals, so the plan becomes a WAIT row that
+    // the wait scorer grades and the credit is handed back.
+    const lowConfidence = normalizedAnalysis.confidence < MIN_CONFIDENCE;
+
     let entryRejected = false;
     let rejectionReason: string | null = null;
-    if (marketShut || (!entryVerdict.ok && entryVerdict.rejection)) {
+    if (marketShut || lowConfidence || (!entryVerdict.ok && entryVerdict.rejection)) {
       entryRejected = true;
-      rejectionReason = marketShut ? "market_closed" : (entryVerdict.rejection ?? "unknown");
+      rejectionReason = marketShut
+        ? "market_closed"
+        : lowConfidence
+        ? "low_confidence"
+        : (entryVerdict.rejection ?? "unknown");
       console.warn("Entry rejected", {
         rejection: rejectionReason,
         proposedSignal,
@@ -1314,6 +1497,24 @@ Deno.serve(async (req: Request) => {
       proposed_entry: proposed.entry,
       proposed_stop: proposed.stop,
       proposed_tp1: proposed.tp1,
+      // The model's own confidence, and whether the floor is what refused the
+      // plan. Recorded on the row so the rate of low-confidence calls is
+      // measurable rather than inferred from a rejection string.
+      confidence: normalizedAnalysis.confidence,
+      confidence_floor: MIN_CONFIDENCE,
+      // Targets removed for pointing the wrong way. Empty on a sound plan; a
+      // rising count is evidence the model's output is degrading, which is
+      // exactly the kind of thing that otherwise goes unnoticed.
+      tp_ladder_dropped: ladderDropped,
+      // Which bar each timeframe's reading came from, and whether it had
+      // closed. Two runs a minute apart can see different trends off the same
+      // unclosed bar; without this the difference is invisible afterwards.
+      bars: timeframes.map((tf, i) => ({
+        tf,
+        bars: seriesByTf[i]?.length ?? 0,
+        newest: snapshots[i]?.datetime ?? null,
+        closed: snapshots[i]?.barClosed ?? null,
+      })),
       // Under market_v1 the model declares no order type — the server sets
       // the entry — so what is worth recording is the contract itself.
       contract: PLAN_CONTRACT,
@@ -1360,6 +1561,27 @@ Deno.serve(async (req: Request) => {
       price_feed: priceFeed,
       feed_delta_atr: feedDeltaAtr,
     };
+
+    // What the row is standing aside FROM, decided here rather than
+    // reconstructed later from what the market did. Every input is on this
+    // page and none of them can see forward: the model's own signal, the
+    // direction it declared while declining to trade, the regime the
+    // indicators read, the entry the gate approved, and the ATR that sized
+    // it. Built for BUY and SELL too — a plan the server refuses becomes a
+    // WAIT below, and the refused direction is exactly what a WAIT of that
+    // kind should be graded against.
+    const waitPlan: WaitPlan = waitPlanFor({
+      proposedSignal,
+      declaredDirection: detail && typeof detail.direction === "string" ? detail.direction : null,
+      regime: entryVerdict.regime,
+      regimeDirection: entryVerdict.regimeDirection,
+      entry: marketEntry,
+      atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
+      quote: decisionQuote,
+      decimals,
+      contract: PLAN_CONTRACT,
+      decidedAt: pricedAtIso,
+    });
 
     // The same direction on the same pair already open from an earlier plan:
     // another one is the same bet again, not a new one, and the record would
@@ -1459,10 +1681,38 @@ Deno.serve(async (req: Request) => {
       // entry. Storing the raw float here and the rounded one there is what
       // let a plan be certified at one risk/reward and judged at another.
       const priceAtSignal = Number.isFinite(marketEntry) ? marketEntry : null;
-      const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses?select=id`, {
-        method: "POST",
-        headers: { ...historyHeaders, Prefer: "return=representation" },
-        body: JSON.stringify({
+      // What was actually sent to the model. The prompt's market content is
+      // mostly candle blocks, and the event block's forecast/previous are
+      // overwritten in econ_events as the week runs, so neither can be rebuilt
+      // from parts later. A plan that cannot be replayed cannot be compared
+      // against a different rulebook on its own snapshot.
+      // Read back from `messages`, not from the string first built:
+      // giveUpSearch() replaces the user turn wholesale when search is
+      // abandoned, so a row whose mode is technical_fallback would otherwise
+      // carry the full-search prompt and replay a different turn than the one
+      // that produced the plan.
+      const sentTurn = messages[0];
+      const sentUserText = isRecord(sentTurn) && typeof sentTurn.content === "string"
+        ? sentTurn.content
+        : userMessageText;
+      const promptRecord = {
+        system: typeof baseRequest.system === "string" ? baseRequest.system : null,
+        user: sentUserText,
+        model: typeof baseRequest.model === "string" ? baseRequest.model : null,
+        at: pricedAtIso,
+      };
+      // The two-sided quote behind the mid the user was shown. Execution is
+      // one-sided, so an honest fill starts here, not at price_at_signal.
+      const quoteAtSignal = decisionQuote;
+      // The retry below re-POSTs this body, and a timeout or a dropped socket
+      // can lose the response after the INSERT has committed. Owning the id
+      // makes attempt N+1 land on the row attempt N wrote instead of creating
+      // a second, independent plan — which the tracker would settle twice, the
+      // post-mortem would draw two lessons from, and the record would count
+      // twice.
+      const analysisId = crypto.randomUUID();
+      const historyBody = JSON.stringify({
+          id: analysisId,
           user_id: user.id,
           pair: currencyPair,
           interval,
@@ -1483,6 +1733,10 @@ Deno.serve(async (req: Request) => {
           // Why a plan was or was not publishable, so the rate of unfillable
           // entries can be tracked over time
           entry_check: entryCheck,
+          // Only on a row that stood aside: on a published trade the plan
+          // itself is the prediction, and a second one beside it would be a
+          // second thing to keep in step.
+          wait_plan: normalizedAnalysis.signal === "WAIT" ? waitPlan : null,
           context,
           rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
           // Which contract this plan was made under. Never inferred: a reader
@@ -1490,16 +1744,47 @@ Deno.serve(async (req: Request) => {
           // will pool silently.
           plan_contract: PLAN_CONTRACT,
           priced_at: pricedAtIso,
+          quote_at_signal: quoteAtSignal,
           outcome: trackable ? "pending" : "skipped",
-        }),
       });
+      // The row IS the plan. Nothing else persists it: unsaved, it never
+      // reaches the user's history, the tracker never settles it, the
+      // post-mortem never sees it and it never becomes a lesson. This used to
+      // be a console.error under an ok:true response — the user was charged a
+      // credit for an analysis that left no trace. Retry the write, and if it
+      // still will not land, say so and hand the credit back.
       let savedId: string | null = null;
-      if (!historyRes.ok) {
-        console.error("Failed to save analysis history:", historyRes.status, (await historyRes.text()).slice(0, 300));
-      } else {
-        const saved = parseJsonResponse(await historyRes.text());
-        const first = Array.isArray(saved) ? saved[0] : saved;
-        savedId = isRecord(first) && typeof first.id === "string" ? first.id : null;
+      let saveError = "";
+      for (let attempt = 1; attempt <= SAVE_ATTEMPTS && savedId === null; attempt++) {
+        try {
+          // Upsert on the primary key: a repeat rewrites the identical body
+          // onto the row the previous attempt created rather than inserting
+          // another. Success is the status, not the shape of the body — a 2xx
+          // whose representation could not be parsed used to send the loop
+          // round again over a row that had already landed.
+          const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses`, {
+            method: "POST",
+            headers: { ...historyHeaders, Prefer: "return=minimal,resolution=merge-duplicates" },
+            body: historyBody,
+          });
+          const historyText = await historyRes.text().catch(() => "");
+          if (historyRes.ok) savedId = analysisId;
+          else saveError = `${historyRes.status}: ${historyText.slice(0, 200)}`;
+        } catch (err) {
+          saveError = err instanceof Error ? err.message : String(err);
+        }
+        if (savedId === null && attempt < SAVE_ATTEMPTS) {
+          console.error(`Failed to save analysis history (attempt ${attempt}):`, saveError);
+          await new Promise((resolve) => setTimeout(resolve, SAVE_RETRY_MS * attempt));
+        }
+      }
+      if (savedId === null) {
+        console.error("Failed to save analysis history, giving up:", saveError);
+        return await fail({
+          ok: false,
+          error: "分析は完了しましたが保存できませんでした。回数は戻しました。もう一度お試しください",
+          diagnostics: { error_stage: "history_not_saved", stage, detail: redactSecrets(saveError).slice(0, 200) },
+        }, 503);
       }
 
       // The refused plan is tracked too, out of sight: if the market goes on
@@ -1510,7 +1795,33 @@ Deno.serve(async (req: Request) => {
       // poor_rr or stop_too_tight refusal is a judgement about the plan's
       // shape, and a filled shadow of it would read as "the gate was wrong"
       // when it was not.
-      const shadowable = entryRejected &&
+      // The replay inputs go to their own table: nothing in the app reads
+      // them, and the system prompt has never been client-readable, while
+      // analyses carries a table-level select grant to authenticated. A
+      // failure here costs the ability to replay this one plan and nothing
+      // else, so it is logged rather than fatal.
+      try {
+        const promptRes = await fetch(`${supabaseUrl}/rest/v1/analysis_prompts?on_conflict=analysis_id`, {
+          method: "POST",
+          headers: { ...historyHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            analysis_id: savedId,
+            system: promptRecord.system,
+            user: promptRecord.user,
+            model: promptRecord.model,
+            sent_at: promptRecord.at,
+          }),
+        });
+        if (!promptRes.ok) {
+          console.error("Failed to save the replay prompt:", promptRes.status, (await promptRes.text().catch(() => "")).slice(0, 200));
+        } else await promptRes.text().catch(() => {});
+      } catch (err) {
+        console.error("Replay prompt insert threw:", err instanceof Error ? err.message : String(err));
+      }
+
+      // Never parentless: a shadow whose shadow_of is null cannot be folded
+      // back into the row it is the shadow of, and reads as a plan of its own.
+      const shadowable = savedId !== null && entryRejected &&
         (entryVerdict.rejection === "too_far" || entryVerdict.rejection === "should_be_market") &&
         (proposedSignal === "BUY" || proposedSignal === "SELL") &&
         proposed.entry !== null && proposed.stop !== null && proposed.tp1 !== null;

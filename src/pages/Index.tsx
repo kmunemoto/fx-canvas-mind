@@ -22,6 +22,7 @@ import type {
   TechnicalData,
   TimeInterval,
   LoopHealth as LoopHealthData,
+  PerformanceStats,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
@@ -44,7 +45,7 @@ export const HISTORY_COLUMNS = [
   "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
-  "rulebook_version", "plan_contract", "wait_check",
+  "rulebook_version", "plan_contract", "wait_check", "wait_plan",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
@@ -206,6 +207,7 @@ const Index = () => {
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
   const [rulebook, setRulebook] = useState<Rulebook | null>(null);
   const [loopHealth, setLoopHealth] = useState<LoopHealthData | null>(null);
+  const [stats, setStats] = useState<PerformanceStats | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -263,6 +265,18 @@ const Index = () => {
     } catch {
       // The learned rules are a display of what the analyzer knows, nothing
       // else depends on them
+    }
+    try {
+      // The record itself, over EVERY row rather than over the forty above.
+      // The list is a list; the statistics are a different question and were
+      // being answered from whatever the list happened to contain.
+      const { data, error } = await supabase.rpc("performance_stats");
+      if (!error && data && typeof data === "object") {
+        setStats(data as unknown as PerformanceStats);
+      }
+    } catch {
+      // Best effort: without it the panel falls back to computing what it can
+      // from the rows it has, labelled as such
     }
     try {
       // Whether the review loop is actually running, shown rather than assumed
@@ -542,7 +556,7 @@ const Index = () => {
             {techData && !loading && <TechnicalDataCard data={techData} />}
             <LoopHealth health={loopHealth} />
             <LearnedRules rulebook={rulebook} />
-            <AnalysisHistory records={history} />
+            <AnalysisHistory records={history} stats={stats} />
           </div>
         </div>
       </main>

@@ -243,6 +243,10 @@ export type PostmortemCause =
   | "plan_incoherent"
   | "good_call"
   | "lucky_win"
+  // WAIT only: the trade named at the call was there and it paid, or it was
+  // not. wait_missed_trade is the one cause that pushes toward trading more.
+  | "wait_missed_trade"
+  | "good_wait"
   | "inconclusive";
 
 export interface Counterfactual {
@@ -330,6 +334,11 @@ export interface Postmortem {
   rule_blamed?: string | null;
   rule_credited?: string | null;
   rulebook_version?: number | null;
+  // What was diagnosed. On a WAIT the facts measure a trade that was never
+  // taken, and a reader who assumes otherwise reads a position that never
+  // existed.
+  subject?: "trade" | "wait";
+  wait_plan?: WaitPlan | null;
 }
 
 // One consolidated rule the analyzer is given (public.rulebook)
@@ -377,8 +386,75 @@ export interface LoopHealth {
   rulebook_version: number | null;
   rulebook_updated_at: string | null;
   lessons_since_rulebook: number;
+  // A revision the loop has written but not yet promoted: it is held until
+  // the live version has enough decided trades to be measured against.
+  candidate_waiting?: boolean;
+  candidate_created_at?: string | null;
+  decided_under_version?: number;
   jobs: Array<{ name: string; schedule: string; active: boolean }>;
   now: string;
+}
+
+// What public.performance_stats() returns: the record over EVERY row, not
+// over the page the client happened to fetch.
+//
+// No group here ever carries a bare win rate. `decided`, `sum_r`,
+// `trades_per_call` and `wait_rate` travel with it, because a rulebook that
+// raises the win rate by standing aside more and one that is right more often
+// look identical in the rate alone and completely different in those four.
+export interface PerformanceGroup {
+  calls: number;
+  waits: number;
+  rejected: number;
+  waits_judged: number;
+  waits_missed: number;
+  total: number;
+  wins: number;
+  losses: number;
+  expired: number;
+  open: number;
+  untriggered: number;
+  ambiguous: number;
+  incoherent: number;
+  filled: number;
+  settled: number;
+  decided: number;
+  with_r: number;
+  clusters: number;
+  contracts: string[];
+  win_rate: number | null;
+  win_rate_ci95: [number, number] | null;
+  fill_rate: number | null;
+  sum_r: number | null;
+  expectancy: number | null;
+  trades_per_call: number | null;
+  verdict_rate: number | null;
+  wait_rate: number | null;
+  expired_rate: number | null;
+  untriggered_rate: number | null;
+  ambiguous_rate: number | null;
+  incoherent_rate: number | null;
+  open_rate: number | null;
+  wait_miss_rate: number | null;
+  // The rate is real, but its interval spans most of the range. Reported
+  // rather than withheld — an interval says more than a blank.
+  below_min_n: boolean;
+}
+
+export interface PerformanceStats {
+  generated_at: string;
+  live_contract: string;
+  scopes: Record<string, PerformanceGroup>;
+  by_rulebook_version: Record<string, PerformanceGroup>;
+  by_confidence: Record<string, PerformanceGroup>;
+  by_timeframe: Record<string, PerformanceGroup>;
+  by_mode: Record<string, PerformanceGroup>;
+  // Each entry contract's own record, kept apart rather than pooled. Where
+  // the record still is when every plan predates the current contract.
+  by_contract: Record<string, PerformanceGroup>;
+  other_contract_rows: number;
+  other_contracts: string[];
+  shadow: { total: number; untriggered: number; wins: number; losses: number; open: number; other: number };
 }
 
 // Was standing aside the right call? Mirror of the WaitCheck written by
@@ -389,20 +465,52 @@ export interface LoopHealth {
 // scored against the smallest trade the app's own entry gate would have
 // allowed from the price at the moment of the call — 'missed' means that
 // trade existed and won.
-export type WaitVerdict = "missed" | "correct" | "pending" | "unknown";
+//
+// WHICH trade is decided at the call and stored in wait_plan, never chosen
+// afterwards from what paid. Where nothing at the time named a side there is
+// no prediction to score: 'no_call', counted on neither side of the rate.
+export type WaitVerdict = "missed" | "correct" | "pending" | "unknown" | "no_call";
+
+// The trade the WAIT stood aside from, fixed at the moment of the call.
+// Mirror of the WaitPlan written by supabase/functions/analyze/entry.ts.
+export interface WaitPlan {
+  direction: "BUY" | "SELL" | null;
+  direction_source: "proposed_signal" | "declared_direction" | "regime" | "none";
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  risk: number | null;
+  reward: number | null;
+  atr: number | null;
+  spread: number | null;
+  contract: string;
+  decided_at: string;
+  scorer: number;
+}
 
 export interface WaitCheck {
   verdict: WaitVerdict;
   direction: "BUY" | "SELL" | null;
+  // The same direction, named for what it is: the one fixed at the call.
+  // `direction` used to mean "the way the missed trade went", chosen from the
+  // outcome — a reader who assumes the old meaning reads a fact that is no
+  // longer in the data.
+  plan_direction?: "BUY" | "SELL" | null;
+  direction_source?: string | null;
   r: number | null;
   at: string | null;
   price: number | null;
   atr: number | null;
   risk: number | null;
   reward: number | null;
+  stop?: number | null;
+  target?: number | null;
   bars_examined: number;
   horizon_ms: number;
   checked_at: string;
+  // Which scoring rule produced this verdict. 2 is the decision-time scorer;
+  // absent means the two-sided one that chose the winning side afterwards.
+  scorer?: number;
 }
 
 // Row shape of public.analyses as read by the client
@@ -442,6 +550,7 @@ export interface AnalysisRecord {
   // The verdict on a call that declined to trade (v24+; null until the
   // tracker has looked, absent on rows written before it existed)
   wait_check?: WaitCheck | null;
+  wait_plan?: WaitPlan | null;
   shadow?: boolean;
   shadow_of?: string | null;
   rulebook_version?: number | null;

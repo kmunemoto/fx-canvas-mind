@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AnalysisRecord } from "@/lib/types";
+import type { AnalysisRecord, PerformanceGroup, PerformanceStats } from "@/lib/types";
 import { ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -16,12 +16,18 @@ import {
   shadowTally,
   tally,
   type OutcomeTally,
+  headlineScope,
+  serverTally,
 } from "@/lib/outcomeStats";
 import { formatJst } from "@/lib/candleTime";
 import OutcomeDetail from "./OutcomeDetail";
 
 interface Props {
   records: AnalysisRecord[];
+  // The record over every row, from public.performance_stats(). Optional: an
+  // RPC outage falls back to what can be computed from the rows on screen,
+  // and the scope label says which of the two is being shown.
+  stats?: PerformanceStats | null;
 }
 
 const signalColor = (s: string) =>
@@ -54,7 +60,7 @@ const parseBand = (key: string): [number, number | null] => {
 // into the plan-vs-actual evidence behind its badge and, once settled, the
 // post-mortem. Plans the entry gate refused are tracked in the shadows and
 // shown under the WAIT row they became, not as rows of their own.
-const AnalysisHistory = ({ records }: Props) => {
+const AnalysisHistory = ({ records, stats = null }: Props) => {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown>("timeframe");
@@ -68,14 +74,33 @@ const AnalysisHistory = ({ records }: Props) => {
     if (isShadow(r) && typeof r.shadow_of === "string") shadows.set(r.shadow_of, r);
   }
 
-  const overall = tally("all", safe);
+  // Two populations, and they must never be confused: the statistics are the
+  // whole record, the list below is the last 40 rows. Before this the two were
+  // the same forty rows, which is why `clusters` could never reach its target
+  // of 50 and the P&L total could FALL after a winning trade.
+  const scope = stats ? headlineScope(stats) : null;
+  const overall = scope ? serverTally("all", scope.group) : tally("all", safe);
+  const serverGroups = (map: Record<string, PerformanceGroup> | undefined): OutcomeTally[] =>
+    Object.entries(map ?? {}).map(([k, g]) => serverTally(k, g));
   // What the win rate is now taken over: an expiry is a call that did not
   // work out, not a call that never happened
   const closed = overall.wins + overall.losses + overall.expired;
-  const gate = shadowTally(all);
+  const gate = stats?.shadow ?? shadowTally(all);
   const causes = causeCounts(safe);
-  const groups: OutcomeTally[] =
-    breakdown === "timeframe"
+  // The same four breakdowns, over the whole record when the server answered.
+  // Splitting forty rows four ways gave cells of two or three and coloured
+  // their win rates with full confidence.
+  const groups: OutcomeTally[] = stats
+    ? serverGroups(
+        breakdown === "timeframe"
+          ? stats.by_timeframe
+          : breakdown === "mode"
+            ? stats.by_mode
+            : breakdown === "rulebook"
+              ? stats.by_rulebook_version
+              : stats.by_confidence,
+      )
+    : breakdown === "timeframe"
       ? byTimeframe(safe)
       : breakdown === "mode"
         ? byMode(safe)
@@ -139,6 +164,20 @@ const AnalysisHistory = ({ records }: Props) => {
           )}
         </div>
       </div>
+
+      {/* Which population the numbers above are taken over. The list below is
+          the last 40 rows and says so separately; one label covering both
+          would be a new lie replacing the old one. */}
+      <p className="text-[10px] text-muted-foreground" data-testid="stats-scope">
+        {scope
+          ? scope.contract
+            ? t.history.statsScopeContract(overall.calls, scope.contract)
+            : t.history.statsScope(overall.calls)
+          : t.history.statsFallback(safe.length)}
+        {stats && stats.other_contract_rows > 0 && !scope?.contract
+          ? ` · ${t.history.otherContractRows(stats.other_contract_rows)}`
+          : ""}
+      </p>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
 

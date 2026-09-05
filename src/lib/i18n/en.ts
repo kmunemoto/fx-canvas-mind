@@ -116,6 +116,10 @@ export const en: Dict = {
       rejected: "REFUSED",
     },
     scope: (n: number) => `last ${n}`,
+    statsScope: (n: number) => `Record: ${n} calls, all time`,
+    statsScopeContract: (n: number, contract: string) => `Record: ${n} calls, all time (${contract})`,
+    statsFallback: (n: number) => `Record: from the last ${n} rows only — the server totals could not be fetched`,
+    otherContractRows: (n: number) => `${n} calls made under a different entry contract are not counted here`,
     autoNote: "Judged automatically every 15 minutes against actual prices (TP1 reached = WIN, SL reached = LOSS)",
     winRateNote: "Win rate counts WIN, LOSS and expired (no-fill and unclear are excluded). An expiry is what a target too far away looks like, so it is not an exit from the win rate. Fill rate is how often the market actually reached the entry",
     stats: {
@@ -178,12 +182,21 @@ export const en: Dict = {
       summary: (judged: number, missed: number, rate: number) =>
         `Standing aside: of ${judged} judged calls, ${missed} (${rate}%) would have won on the smallest trade this app itself allows`,
       verdicts: {
-        missed: "Standing aside was wrong — even the smallest allowed trade would have won",
-        correct: "Standing aside cost nothing — neither direction paid",
+        missed: "Standing aside was wrong — the trade named at the call would have won",
+        correct: "Standing aside cost nothing — that trade was stopped out, or never paid in time",
         pending: "The review window has not closed yet",
         unknown: "The data needed to judge this call is missing",
+        no_call: "Nothing at the moment of the call named a side, so this one is not scored",
       },
-      direction: (dir: string) => `Direction that paid: ${dir}`,
+      direction: (dir: string, source: string) => `Direction fixed at the call: ${dir} (${source})`,
+      directionSources: {
+        proposed_signal: "the model asked for this trade and the server refused it",
+        declared_direction: "the direction the model declared while declining to trade",
+        regime: "the trend the indicators read",
+        none: "none",
+      },
+      planNote: "This direction, stop and target were fixed and stored at the moment of the call — not chosen afterwards from what the market did",
+      noCallNote: "Nothing at the time named a side, so this call counts on neither side of the miss rate",
       basis: "Trade tested",
       basisNote: (risk: string, reward: string) =>
         `Stop ${risk} / target ${reward} — the tightest stop the gate allows and the nearest target that still clears the risk/reward floor`,
@@ -209,6 +222,8 @@ export const en: Dict = {
         plan_incoherent: "Incoherent plan",
         good_call: "As planned",
         lucky_win: "Won, but unsafely",
+        wait_missed_trade: "Stood aside from a trade that paid",
+        good_wait: "Standing aside was right",
         inconclusive: "Not enough evidence",
       },
       lesson: "Lesson",
@@ -360,6 +375,8 @@ export const en: Dict = {
     rulebook: (v: number) => `Rulebook v${v}`,
     lessons: (n: number) => `${n} lesson${n === 1 ? "" : "s"}`,
     nextRevision: (n: number) => (n > 0 ? `${n} more lesson${n === 1 ? "" : "s"} until the next revision (or 24 h after the last)` : "revised on the next review"),
+    candidateHeld: (decided: number, needed: number) =>
+      `A revision is written and held. It goes live once the current version has ${decided}/${needed} settled trades to compare it against`,
     waits: "Post-mortems run automatically 1 h (15min plans), 2 h (1h), 4 h (4h) or 8 h (1day) after settlement, and are reviewed again later when little price action has followed",
   },
 
