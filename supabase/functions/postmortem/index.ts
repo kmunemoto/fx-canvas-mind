@@ -45,7 +45,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v12-2026-09-05T14:10:00Z";
+const POSTMORTEM_VERSION = "postmortem-v13-2026-09-05T15:40:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -662,12 +662,17 @@ Deno.serve(async (req: Request) => {
       // a lesson without the done marker is re-diagnosed next run and the
       // insert is idempotent on analysis_id.
       const lessonOk = await writeLesson(row.id, raw, stored, row);
-      if (!lessonOk) {
-        errors.push(`${row.id}: lesson not written, diagnosis not marked done`);
-        continue;
-      }
-      newLessons++;
+      if (lessonOk) newLessons++;
+      else errors.push(`${row.id}: lesson not written, left for the repair pass`);
 
+      // The diagnosis is stored either way. Skipping the done marker on a
+      // failed insert put the row straight back at the head of the queue —
+      // it is ordered by closed_at and nothing incremented attempts — so the
+      // same plan would be re-diagnosed, at the price of a model call, on
+      // every sweep forever, starving every plan behind it. The repair pass
+      // below rebuilds the lesson from this stored document with no model
+      // call, which is the cheap half of the work and the only half that
+      // failed.
       const written = await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, { postmortem: stored });
       if (written === 0) {
         errors.push(`${row.id}: not written`);
@@ -685,17 +690,32 @@ Deno.serve(async (req: Request) => {
     // fails after the diagnosis has been stored.
     let repaired = 0;
     try {
-      const doneRows = (await readRowsOrNull(
-        `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,evaluation,postmortem` +
-          `&postmortem->>status=eq.done&order=closed_at.desc&limit=${REPAIR_SCAN}`,
+      // Ids first. The documents are 8-10 KB apiece (the whole facts object,
+      // plus a 60-point path on the evaluation), and in the common case none
+      // of them is needed at all — fetching 200 of those every sweep to
+      // compute a set difference is megabytes of JSON thrown away 96 times a
+      // day.
+      const doneIdRows = (await readRowsOrNull(
+        `analyses?select=id&postmortem->>status=eq.done&order=closed_at.desc.nullslast&limit=${REPAIR_SCAN}`,
       )) ?? [];
-      if (doneRows.length > 0) {
-        const ids = doneRows.map((r) => String(r.id ?? "")).filter(Boolean);
-        const haveLessons = (await readRowsOrNull(
+      const ids = doneIdRows.map((r) => String(r.id ?? "")).filter(Boolean);
+      if (ids.length > 0) {
+        const haveLessons = await readRowsOrNull(
           `lessons?select=analysis_id&analysis_id=in.(${ids.map(encodeURIComponent).join(",")})`,
-        )) ?? [];
+        );
+        // A read that failed is not proof that no lesson exists. Treating it
+        // as an empty set would upsert over rows that are already there and
+        // report them as recoveries.
+        if (haveLessons === null) {
+          errors.push("repair: lessons unavailable, skipped");
+          throw new Error("skip repair");
+        }
         const have = new Set(haveLessons.map((l) => String(l.analysis_id ?? "")));
-        const missing = doneRows.filter((r) => !have.has(String(r.id ?? "")));
+        const missingIds = ids.filter((id) => !have.has(id));
+        const missing = missingIds.length === 0 ? [] : (await readRowsOrNull(
+          `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,evaluation,postmortem` +
+            `&id=in.(${missingIds.slice(0, REPAIR_PER_RUN).map(encodeURIComponent).join(",")})`,
+        )) ?? [];
         for (const raw of missing.slice(0, REPAIR_PER_RUN)) {
           const doc = isRecord(raw.postmortem) ? raw.postmortem : null;
           const id = strOrNull(raw.id);
@@ -718,7 +738,8 @@ Deno.serve(async (req: Request) => {
         }
       }
     } catch (err) {
-      errors.push(`repair: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "skip repair") errors.push(`repair: ${message}`);
     }
 
     // ---- rulebook ----------------------------------------------------------
@@ -737,6 +758,9 @@ Deno.serve(async (req: Request) => {
     // below already asks the only question that matters — how much has
     // gathered since the version in force — so ask it every time.
     let rulebook: JsonRecord | null = null;
+    // Set when a candidate that had been waiting is promoted; reported even
+    // when no new revision is written this run, so a promotion is never silent.
+    let promotedCandidate: JsonRecord | null = null;
     // How many accounts the shared rulebook is actually being learned from.
     // Reported because "one" and "many" are different systems, and the
     // difference is invisible in the rules themselves.
@@ -815,6 +839,71 @@ Deno.serve(async (req: Request) => {
       // model for a fresh candidate on every sweep, and would never let the
       // "new lessons since" counter reset.
       const lastRevisionAt = strOrNull(priorCandidate?.created_at) ?? updatedAt;
+
+      // How much evidence the live version has actually gathered. Read once
+      // and shared by both the promotion of a stored candidate and the gate on
+      // a freshly written one.
+      //
+      // A read that fails is NOT zero decided trades: coercing it to zero
+      // demotes a revision that had earned promotion and reports the coercion
+      // as a measured fact.
+      const decidedRows = previousVersion > 0
+        ? await readRowsOrNull(
+          `analyses?select=id&rulebook_version=eq.${previousVersion}` +
+            `&outcome=in.(win,loss,expired)&shadow=is.false&limit=100`,
+        )
+        : [];
+      const decidedUnderVersion = decidedRows === null ? null : decidedRows.length;
+      if (decidedUnderVersion === null) errors.push("rulebook: decided count unavailable");
+      // Version 0 is an empty book: it has no rules to measure and no cohort
+      // that could ever exist, because no plan can be made under rules that do
+      // not exist. Holding the first revision back holds it forever.
+      const measured = previousVersion === 0 ||
+        (decidedUnderVersion !== null && decidedUnderVersion >= MIN_DECIDED_PER_VERSION);
+
+      // A candidate that has been waiting is promoted as its own act, with no
+      // model call and without waiting for the next revision to be due. Left
+      // inside the revision branch it was unreachable: writing a candidate
+      // resets the lessons-since counter, so `due` is false on the very next
+      // run and the stored candidate could never be read again.
+      if (priorCandidate && (measured || options.promote) && !rulebookUnavailable) {
+        const candidateRules = parseRules(priorCandidate.rules);
+        if (candidateRules.length === 0) {
+          errors.push("rulebook: stored candidate has no usable rules");
+        } else {
+          const history = Array.isArray(current?.history) ? current.history : [];
+          const nextHistory = previousRules.length > 0
+            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
+            : history;
+          const summary = isRecord(priorCandidate.summary) ? priorCandidate.summary : {};
+          const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+            version: previousVersion + 1,
+            rules: candidateRules,
+            summary,
+            stats: {
+              ...(isRecord(current?.stats) ? current.stats : {}),
+              changes: isRecord(priorCandidate.changes) ? priorCandidate.changes : {},
+              lessons_considered: numberOrNull(priorCandidate.lessons_considered) ?? 0,
+              promoted_from_candidate: true,
+            },
+            history: nextHistory,
+            updated_at: new Date().toISOString(),
+            candidate: null,
+          });
+          if (n > 0) {
+            promotedCandidate = {
+              version: previousVersion + 1,
+              revised: true,
+              promoted: true,
+              from_candidate: true,
+              rules: candidateRules.length,
+              decided_under_previous: decidedUnderVersion,
+              forced: options.promote && !measured,
+            };
+            console.log("rulebook candidate promoted", { version: previousVersion + 1 });
+          } else errors.push("rulebook: candidate not promoted (version changed underneath)");
+        }
+      }
       const lastRevisionMs = lastRevisionAt ? Date.parse(lastRevisionAt) : NaN;
       const sinceVersion = lessons.filter((l) => {
         const t = Date.parse(l.created_at);
@@ -899,14 +988,10 @@ Deno.serve(async (req: Request) => {
           // is still written every time experience calls for one; it waits in
           // `candidate` until the live version has enough decided trades to
           // have been worth measuring.
-          const decidedUnderVersion = previousVersion > 0
-            ? ((await readRowsOrNull(
-              `analyses?select=id&rulebook_version=eq.${previousVersion}` +
-                `&outcome=in.(win,loss,expired)&shadow=is.false&limit=100`,
-            )) ?? []).length
-            : 0;
-          const measured = decidedUnderVersion >= MIN_DECIDED_PER_VERSION;
-          const promote = measured || options.promote;
+          // A candidate promoted moments ago already moved the version out
+          // from under the optimistic guard below, so this run writes nothing
+          // more; the fresh revision becomes next run's candidate.
+          const promote = (measured || options.promote) && promotedCandidate === null;
           if (promote) {
             const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
               version: previousVersion + 1,
@@ -952,7 +1037,9 @@ Deno.serve(async (req: Request) => {
                 candidate_rules: consolidated.rules.length,
                 changes: consolidated.changes,
                 decided_under_version: decidedUnderVersion,
-                decided_needed: Math.max(0, MIN_DECIDED_PER_VERSION - decidedUnderVersion),
+                decided_needed: decidedUnderVersion === null
+                  ? null
+                  : Math.max(0, MIN_DECIDED_PER_VERSION - decidedUnderVersion),
               };
               console.log("rulebook candidate held", {
                 base: previousVersion,
@@ -975,7 +1062,8 @@ Deno.serve(async (req: Request) => {
       lessons_repaired: repaired,
       lesson_contributors: lessonContributors,
       record_contributors: recordContributors,
-      rulebook,
+      rulebook: rulebook ?? promotedCandidate,
+      promoted: promotedCandidate,
       results: diagnosed,
       errors,
       elapsedMs: elapsed(),

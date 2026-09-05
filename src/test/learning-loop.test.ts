@@ -39,11 +39,20 @@ describe("a plan that was shown is a plan that was kept", () => {
     // The prompt's market content is mostly candle blocks, and the event
     // block's forecast/previous are overwritten in econ_events as the week
     // runs: neither can be rebuilt from parts afterwards.
-    expect(analyzeSrc).toContain("prompt: promptRecord");
+    // It goes to its own service-role-only table: analyses carries a
+    // table-level select grant to authenticated, and the system prompt has
+    // never been client-readable.
+    expect(analyzeSrc).toContain("/rest/v1/analysis_prompts?on_conflict=analysis_id");
+    expect(analyzeSrc).toContain("analysis_id: savedId,");
+    expect(analyzeSrc).not.toContain("prompt: promptRecord");
     expect(analyzeSrc).toContain("quote_at_signal: quoteAtSignal");
-    expect(analyzeSrc).toContain("user: userMessageText");
-    // the stored user string is the one the request carries, not a rebuild
-    expect(analyzeSrc).toContain("messages: [{ role: \"user\", content: userMessageText }]");
+    // Read back from the request, not from the string first built:
+    // giveUpSearch() replaces the user turn when search is abandoned, so a
+    // technical_fallback row would otherwise store a prompt never sent.
+    expect(analyzeSrc).toContain("const sentTurn = messages[0];");
+    expect(analyzeSrc).toContain("user: sentUserText,");
+    // and the quote is only recorded when that feed actually priced the plan
+    expect(analyzeSrc).toContain('const newestQuote = priceFeed === "gmo"');
   });
 });
 
@@ -72,8 +81,12 @@ describe("the rulebook can actually be revised", () => {
     expect(lessonWrite).toBeGreaterThan(-1);
     expect(markDone).toBeGreaterThan(-1);
     expect(lessonWrite).toBeLessThan(markDone);
-    // and a failed lesson leaves the row a candidate rather than marking it
-    expect(index).toContain("diagnosis not marked done");
+    // A failed insert does NOT hold back the done marker: leaving the row
+    // undiagnosed put it straight back at the head of a queue ordered by
+    // closed_at, with nothing incrementing attempts, so the same plan burned a
+    // model call every sweep and starved everything behind it. The repair pass
+    // rebuilds the lesson from the stored diagnosis instead.
+    expect(index).toContain("left for the repair pass");
   });
 
   it("rebuilds a lesson that never landed, without asking the model again", () => {
@@ -99,6 +112,46 @@ describe("the rulebook can actually be revised", () => {
     const held = index.slice(index.indexOf('reason: "candidate_held"') - 2000, index.indexOf('reason: "candidate_held"'));
     expect(held).toContain("candidate: {");
     expect(held).toContain("base_version: previousVersion");
+  });
+
+  it("mints the row id so a retried save cannot write the plan twice", () => {
+    // The retry re-POSTs one fixed body, and a dropped response after a
+    // committed INSERT would otherwise create a second, independent plan that
+    // the tracker settles twice and the record counts twice.
+    expect(analyzeSrc).toContain("const analysisId = crypto.randomUUID();");
+    expect(analyzeSrc).toContain("id: analysisId,");
+    expect(analyzeSrc).toContain("resolution=merge-duplicates");
+    // success is the status, not the shape of the body
+    expect(analyzeSrc).toContain("if (historyRes.ok) savedId = analysisId;");
+    expect(analyzeSrc).not.toContain('saveError = "no id returned"');
+  });
+
+  it("can actually promote a candidate it held", () => {
+    // Writing a candidate resets the lessons-since counter, so the revision
+    // branch is not due on the next run — a promotion evaluated only inside
+    // that branch could never be reached, and the column was write-only.
+    expect(index).toContain("if (priorCandidate && (measured || options.promote) && !rulebookUnavailable)");
+    expect(index).toContain("promoted_from_candidate: true");
+    expect(index).toContain("promotedCandidate");
+  });
+
+  it("does not hold the first rulebook back forever", () => {
+    // Version 0 is an empty book: no rules to measure, and no cohort that
+    // could ever exist, because no plan can be made under rules that do not
+    // exist.
+    expect(index).toContain("const measured = previousVersion === 0 ||");
+  });
+
+  it("does not read a failed count as zero decided trades", () => {
+    expect(index).toContain("const decidedUnderVersion = decidedRows === null ? null : decidedRows.length;");
+    expect(index).toContain('errors.push("rulebook: decided count unavailable")');
+  });
+
+  it("does not read a failed lessons lookup as no lessons", () => {
+    expect(index).toContain('errors.push("repair: lessons unavailable, skipped")');
+    // and fetches the heavy documents only for the rows that need rebuilding
+    expect(index).toContain("analyses?select=id&postmortem->>status=eq.done");
+    expect(index).toContain("const missingIds = ids.filter((id) => !have.has(id));");
   });
 
   it("records the run that ran out of clock instead of skipping in silence", () => {

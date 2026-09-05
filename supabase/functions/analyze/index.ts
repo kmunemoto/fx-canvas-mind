@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v28-2026-09-05T13:15:00Z";
+const FUNCTION_VERSION = "analyze-v29-2026-09-05T15:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -975,7 +975,14 @@ Deno.serve(async (req: Request) => {
     // the newest bar of the same GMO series the overlay uses, so it is the
     // same instant the user is looking at; null when that feed was not
     // consulted or had nothing, in which case only the mid is on record.
-    const newestQuote = gmoRaw && gmoRaw.bars.length > 0 ? gmoRaw.bars[gmoRaw.bars.length - 1] : null;
+    // ...from the series the overlay ACCEPTED. When acceptOverlay rejects
+    // (stale, gap, too short, or the two feeds disagreeing by more than
+    // MARKET_TOLERANCE_ATR) the plan is priced off Twelve Data, and recording
+    // GMO's bid/ask beside a Twelve Data mid would produce a "quote" that need
+    // not even bracket the price it claims to explain.
+    const newestQuote = priceFeed === "gmo" && gmoRaw && gmoRaw.bars.length > 0
+      ? gmoRaw.bars[gmoRaw.bars.length - 1]
+      : null;
     const decisionQuote = newestQuote
       ? {
         bid: newestQuote.bid.close,
@@ -1656,16 +1663,33 @@ Deno.serve(async (req: Request) => {
       // overwritten in econ_events as the week runs, so neither can be rebuilt
       // from parts later. A plan that cannot be replayed cannot be compared
       // against a different rulebook on its own snapshot.
+      // Read back from `messages`, not from the string first built:
+      // giveUpSearch() replaces the user turn wholesale when search is
+      // abandoned, so a row whose mode is technical_fallback would otherwise
+      // carry the full-search prompt and replay a different turn than the one
+      // that produced the plan.
+      const sentTurn = messages[0];
+      const sentUserText = isRecord(sentTurn) && typeof sentTurn.content === "string"
+        ? sentTurn.content
+        : userMessageText;
       const promptRecord = {
         system: typeof baseRequest.system === "string" ? baseRequest.system : null,
-        user: userMessageText,
+        user: sentUserText,
         model: typeof baseRequest.model === "string" ? baseRequest.model : null,
         at: pricedAtIso,
       };
       // The two-sided quote behind the mid the user was shown. Execution is
       // one-sided, so an honest fill starts here, not at price_at_signal.
       const quoteAtSignal = decisionQuote;
+      // The retry below re-POSTs this body, and a timeout or a dropped socket
+      // can lose the response after the INSERT has committed. Owning the id
+      // makes attempt N+1 land on the row attempt N wrote instead of creating
+      // a second, independent plan — which the tracker would settle twice, the
+      // post-mortem would draw two lessons from, and the record would count
+      // twice.
+      const analysisId = crypto.randomUUID();
       const historyBody = JSON.stringify({
+          id: analysisId,
           user_id: user.id,
           pair: currencyPair,
           interval,
@@ -1693,7 +1717,6 @@ Deno.serve(async (req: Request) => {
           // will pool silently.
           plan_contract: PLAN_CONTRACT,
           priced_at: pricedAtIso,
-          prompt: promptRecord,
           quote_at_signal: quoteAtSignal,
           outcome: trackable ? "pending" : "skipped",
       });
@@ -1707,19 +1730,19 @@ Deno.serve(async (req: Request) => {
       let saveError = "";
       for (let attempt = 1; attempt <= SAVE_ATTEMPTS && savedId === null; attempt++) {
         try {
-          const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses?select=id`, {
+          // Upsert on the primary key: a repeat rewrites the identical body
+          // onto the row the previous attempt created rather than inserting
+          // another. Success is the status, not the shape of the body — a 2xx
+          // whose representation could not be parsed used to send the loop
+          // round again over a row that had already landed.
+          const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses`, {
             method: "POST",
-            headers: { ...historyHeaders, Prefer: "return=representation" },
+            headers: { ...historyHeaders, Prefer: "return=minimal,resolution=merge-duplicates" },
             body: historyBody,
           });
-          if (historyRes.ok) {
-            const saved = parseJsonResponse(await historyRes.text());
-            const first = Array.isArray(saved) ? saved[0] : saved;
-            savedId = isRecord(first) && typeof first.id === "string" ? first.id : null;
-            if (savedId === null) saveError = "no id returned";
-          } else {
-            saveError = `${historyRes.status}: ${(await historyRes.text().catch(() => "")).slice(0, 200)}`;
-          }
+          const historyText = await historyRes.text().catch(() => "");
+          if (historyRes.ok) savedId = analysisId;
+          else saveError = `${historyRes.status}: ${historyText.slice(0, 200)}`;
         } catch (err) {
           saveError = err instanceof Error ? err.message : String(err);
         }
@@ -1745,6 +1768,30 @@ Deno.serve(async (req: Request) => {
       // poor_rr or stop_too_tight refusal is a judgement about the plan's
       // shape, and a filled shadow of it would read as "the gate was wrong"
       // when it was not.
+      // The replay inputs go to their own table: nothing in the app reads
+      // them, and the system prompt has never been client-readable, while
+      // analyses carries a table-level select grant to authenticated. A
+      // failure here costs the ability to replay this one plan and nothing
+      // else, so it is logged rather than fatal.
+      try {
+        const promptRes = await fetch(`${supabaseUrl}/rest/v1/analysis_prompts?on_conflict=analysis_id`, {
+          method: "POST",
+          headers: { ...historyHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            analysis_id: savedId,
+            system: promptRecord.system,
+            user: promptRecord.user,
+            model: promptRecord.model,
+            sent_at: promptRecord.at,
+          }),
+        });
+        if (!promptRes.ok) {
+          console.error("Failed to save the replay prompt:", promptRes.status, (await promptRes.text().catch(() => "")).slice(0, 200));
+        } else await promptRes.text().catch(() => {});
+      } catch (err) {
+        console.error("Replay prompt insert threw:", err instanceof Error ? err.message : String(err));
+      }
+
       // Never parentless: a shadow whose shadow_of is null cannot be folded
       // back into the row it is the shadow of, and reads as a plan of its own.
       const shadowable = savedId !== null && entryRejected &&
