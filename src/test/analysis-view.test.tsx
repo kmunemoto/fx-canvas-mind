@@ -665,7 +665,7 @@ describe("AnalysisHistory across two entry contracts", () => {
         verdict, direction: "BUY", r: 1.2, at: "2026-09-01T09:00:00Z",
         price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
         bars_examined: 40, horizon_ms: 48 * 3_600_000,
-        checked_at: "2026-09-01T12:00:00Z",
+        checked_at: "2026-09-01T12:00:00Z", scorer: 2,
       },
       ...over,
     });
@@ -700,7 +700,7 @@ describe("AnalysisHistory across two entry contracts", () => {
       wait_check: {
         verdict: "pending", direction: null, r: null, at: null, price: 150, atr: 0.2,
         risk: null, reward: null, bars_examined: 4, horizon_ms: 48 * 3_600_000,
-        checked_at: "2026-09-01T12:00:00Z",
+        checked_at: "2026-09-01T12:00:00Z", scorer: 2,
       },
     })]} />);
     expect(screen.queryByText("取れていた")).toBeNull();

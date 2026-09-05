@@ -248,7 +248,12 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
       // than left to fall through the switch: a reader counting 0 of 3 judged
       // should be able to see it is by construction, not a stalled sweep.
       const verdict = r.wait_check?.verdict;
-      if (verdict === "missed" || verdict === "correct") {
+      // And only the current scorer's verdicts. The first one chose the
+      // direction from whichever side paid, so its miss rate measured the
+      // market's range; pooling the two rules would carry that in invisibly
+      // and permanently — a verdict is never re-scored.
+      const scored = (r.wait_check?.scorer ?? 0) >= 2;
+      if (scored && (verdict === "missed" || verdict === "correct")) {
         t.waitsJudged++;
         if (verdict === "missed") t.waitsMissed++;
       }
@@ -338,6 +343,11 @@ export const causeCounts = (records: AnalysisRecord[]): Array<{ cause: Postmorte
   const counts = new Map<PostmortemCause, number>();
   for (const r of records) {
     if (isShadow(r)) continue;
+    // Settled plans only. This histogram is rendered under "why plans
+    // missed", and a WAIT diagnosis answers a different question — listing
+    // "standing aside was right" as a cause of plans missing is a category
+    // error, not a small mislabel. The WAIT verdicts have their own strip.
+    if (r.signal === "WAIT" || r.outcome === "skipped" || r.postmortem?.subject === "wait") continue;
     const raw = r.postmortem?.status === "done" ? r.postmortem.cause : undefined;
     if (!raw) continue;
     const cause = canonicalCause(raw);

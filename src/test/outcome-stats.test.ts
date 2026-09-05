@@ -266,6 +266,7 @@ describe("standing aside is scored too", () => {
             price: 150, atr: 0.2, risk: 0.08, reward: 0.096,
             bars_examined: 40, horizon_ms: 48 * 3_600_000,
             checked_at: "2026-09-03T12:00:00Z",
+            scorer: 2,
           },
     });
 

@@ -18,6 +18,7 @@
 // Deno-free on purpose: src/test/postmortem.test.ts imports this file
 // directly.
 
+import { WAIT_SCORER } from "../analyze/entry.ts";
 import {
   CAUSES,
   CHOP_CROSSINGS,
@@ -224,6 +225,7 @@ export interface RecordRow {
   // reached one. 'missed' means the market then offered a trade this app
   // would itself have allowed, and it won.
   wait_verdict?: string | null;
+  wait_scorer?: number | null;
 }
 
 // What the plan made or lost, in multiples of its planned risk. A win is
@@ -400,8 +402,13 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
       s.waits++;
       // 'pending' and 'unknown' are not verdicts, so they stay out of both
       // sides of the rate: the first has not been judged yet, the second
-      // never can be.
-      if (r.wait_verdict === "missed" || r.wait_verdict === "correct") {
+      // never can be. Nor is 'no_call' — nothing at the time named a side.
+      //
+      // And only the current scorer's verdicts count. The first scorer chose
+      // the direction from whichever side paid, so its miss rate measured the
+      // market's range; averaging the two rules into one number would carry
+      // that in forever, invisibly.
+      if ((r.wait_scorer ?? 0) >= WAIT_SCORER && (r.wait_verdict === "missed" || r.wait_verdict === "correct")) {
         s.waits_judged++;
         if (r.wait_verdict === "missed") s.waits_missed++;
       }
@@ -453,8 +460,16 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     const set = causeClusters.get(cause) ?? new Set<string>();
     set.add(l.cluster ?? `lesson-${i}`);
     causeClusters.set(cause, set);
-    if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
-    if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
+    // A cause that cannot support a rule cannot vote on one either.
+    // rule_feedback is the per-rule signal the consolidation prompt tells the
+    // editor to act on, and good_wait was declared evidence for nothing —
+    // yet ten WAITs correctly declined under a rule would have credited it
+    // ten times, outvoting the trades it actually lost. Same reasoning for
+    // good_call, inconclusive and plan_incoherent, which reached it before.
+    if (!UNCITABLE_CAUSES.includes(cause)) {
+      if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
+      if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
+    }
   });
   for (const [cause, set] of causeClusters) s.by_cause_clusters[cause] = set.size;
   return s;

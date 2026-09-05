@@ -545,6 +545,24 @@ export interface FactsContext {
   // branch of the hints switch, which must not file a market_v1 plan under a
   // cause only the old contract could produce.
   contract?: string | null;
+  // A call that declined to trade, measured over the window the tracker
+  // actually graded and no further.
+  //
+  // Without this the WAIT would be handed the trade windows: the 24-bar
+  // after-window past settlement, a life horizon running the same distance,
+  // and counterfactuals simulated over EXPIRY_DAYS. Every one of those can
+  // report that the declined trade reached its target AFTER the window the
+  // verdict was decided in — which is precisely the hindsight this phase
+  // exists to remove, arriving through the back door as "facts". The
+  // diagnosis would then contradict the verdict on the same row, and
+  // wait_missed_trade can support a rulebook rule.
+  //
+  // `waitUntilMs` is the end of that graded window (marketHorizonEnd of the
+  // WAIT's own horizon). `waitHint` replaces the deterministic
+  // pre-classification, which is built from the trade taxonomy and would
+  // otherwise hand the model "good_call" on a call the tracker scored as a
+  // missed trade.
+  wait?: { untilMs: number; hint: Cause } | null;
 }
 
 export const computeFacts = async (
@@ -573,8 +591,12 @@ export const computeFacts = async (
   const reference = row.price_at_signal ?? signalBar?.c.close ?? (post.length > 0 ? post[0].c.open : null);
 
   // Life of the plan plus the after-window, for the "what did the market do"
-  // measures
-  const horizonMs = Number.isFinite(resolvedMs) ? resolvedMs + windowMs : Infinity;
+  // measures. A WAIT stops at the end of the window its verdict was decided
+  // in: anything past it is a fact about a different question.
+  const wait = ctx.wait ?? null;
+  const horizonMs = wait
+    ? wait.untilMs
+    : Number.isFinite(resolvedMs) ? resolvedMs + windowMs : Infinity;
   const life = post.filter((x) => x.t < horizonMs);
 
   let maxFav: number | null = null;
@@ -588,8 +610,12 @@ export const computeFacts = async (
     }
   }
 
-  // After the settlement
-  const after = Number.isFinite(resolvedMs) ? post.filter((x) => x.t > resolvedMs && x.t < resolvedMs + windowMs) : [];
+  // After the settlement. Empty for a WAIT: "what happened once it was over"
+  // is exactly the evidence that must not reach a judgement about whether
+  // declining was right at the time.
+  const after = !wait && Number.isFinite(resolvedMs)
+    ? post.filter((x) => x.t > resolvedMs && x.t < resolvedMs + windowMs)
+    : [];
   let reachedTp1: Touch | null = null;
   let reachedSl: Touch | null = null;
   let beyondSl = 0;
@@ -739,10 +765,14 @@ export const computeFacts = async (
   };
   // Away from the target: a BUY's pullback and stop sit lower
   const against = (from: number, r: number) => (signal === "BUY" ? from - risk * r : from + risk * r);
-  if (reference !== null && !filled && coherentAt(reference)) {
+  // A WAIT gets none of these. cf.market_entry is the identical trade the
+  // tracker already graded, re-judged over EXPIRY_DAYS instead of the WAIT's
+  // own horizon — so it can report "win" on a row whose verdict is "correct",
+  // and the two would sit in the same payload contradicting each other.
+  if (!wait && reference !== null && !filled && coherentAt(reference)) {
     cf.market_entry = await simulate(row, { entry_point: reference, price_at_signal: reference }, candles, evalInterval, nowMs, gateCtx);
   }
-  if (reference !== null && !filled && risk > 0 && coherentAt(reference, against(reference, 1))) {
+  if (!wait && reference !== null && !filled && risk > 0 && coherentAt(reference, against(reference, 1))) {
     cf.market_entry_same_risk = await simulate(
       row,
       { entry_point: reference, stop_loss: against(reference, 1), price_at_signal: reference },
@@ -789,10 +819,18 @@ export const computeFacts = async (
     regime = { declared, adx, conflict };
   }
 
-  // Deterministic reading, for the model to confirm or overrule with reasons
-  const hints: Cause[] = [];
+  // Deterministic reading, for the model to confirm or overrule with reasons.
+  //
+  // A WAIT's is decided by the verdict alone and short-circuits the whole
+  // switch below: that switch reads the synthesised trade's outcome, so it
+  // would file "good_call" on a call the tracker scored as a missed trade,
+  // and "stop_too_tight" — a hint about a stop on a position nobody opened —
+  // on one it scored as correct. Neither is even in the WAIT vocabulary, so
+  // the model would be handed a pre-classification its own schema forbids.
+  const hints: Cause[] = wait ? [wait.hint] : [];
   const push = (c: Cause) => {
-    if (!hints.includes(c)) hints.push(c);
+    if (wait || hints.includes(c)) return;
+    hints.push(c);
   };
   const maxFavR = toR(maxFav);
   const maxAdvR = toR(maxAdv);

@@ -26,8 +26,9 @@
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
-import { EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
+import { ENTRY_WINDOW_MS, EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
 import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Cause, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
+import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   CONSOLIDATION_SCHEMA,
@@ -46,7 +47,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v14-2026-09-05T17:10:00Z";
+const POSTMORTEM_VERSION = "postmortem-v15-2026-09-05T18:10:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -378,7 +379,11 @@ Deno.serve(async (req: Request) => {
     // the hypothetical trade stored at the call, so the facts machinery can
     // measure it, while `raw` still holds the real row (signal WAIT, outcome
     // skipped) that the lesson is filed under.
-    const rows: Array<{ row: PostmortemRow; raw: JsonRecord; wait: { plan: JsonRecord; check: JsonRecord } | null }> = [];
+    const rows: Array<{
+      row: PostmortemRow;
+      raw: JsonRecord;
+      wait: { plan: JsonRecord; check: JsonRecord; untilMs: number; hint: Cause } | null;
+    }> = [];
     for (const r of candidates) {
       if (r.signal !== "BUY" && r.signal !== "SELL") continue;
       const entry = numberOrNull(r.entry_point);
@@ -425,8 +430,24 @@ Deno.serve(async (req: Request) => {
     // Appended AFTER the trades so the run's limit spends itself on settled
     // positions first; at 3 plans a run and 96 runs a day the queue drains
     // either way.
+    // The verdict filter belongs in SQL. 'no_call' and 'unknown' are terminal
+    // by construction — the tracker never revisits them — so such a row is
+    // never diagnosed, never gets a postmortem document, and therefore
+    // matches this query forever. Ordered oldest first, forty of them would
+    // fill the page permanently and every gradeable WAIT behind them,
+    // including every 'missed', would never be seen again.
+    // Which WAIT rows already have a shadow of the refused plan being
+    // diagnosed in their place.
+    const shadowRows = await readRows(
+      `analyses?shadow=is.true&shadow_of=not.is.null&select=shadow_of&limit=500`,
+    );
+    const shadowParents = new Set(
+      shadowRows.map((x) => strOrNull(x.shadow_of)).filter((v): v is string => v !== null),
+    );
+
     const waitCandidates = await readRows(
-      `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false&${rowFilter}` +
+      `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false` +
+        `&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
         `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
     );
     for (const r of waitCandidates) {
@@ -441,6 +462,12 @@ Deno.serve(async (req: Request) => {
       if (verdict !== "missed" && verdict !== "correct") continue;
       const direction = strOrNull(plan.direction);
       if (direction !== "BUY" && direction !== "SELL") continue;
+      // A plan the gate refused for fillability is already tracked as a
+      // shadow row and diagnosed as a trade. Diagnosing the WAIT parent too
+      // would draw two lessons from one market situation, and the revision
+      // cadence counts raw lessons — so three refusals in a day would trip a
+      // rulebook rewrite that the same three would not have tripped before.
+      if (shadowParents.has(String(r.id))) continue;
       const entry = numberOrNull(plan.entry);
       const stop = numberOrNull(plan.stop);
       const target = numberOrNull(plan.target);
@@ -471,7 +498,19 @@ Deno.serve(async (req: Request) => {
         const closed = row.closed_at ? Date.parse(row.closed_at) : NaN;
         if (isRevision && (!Number.isFinite(closed) || nowMs - closed < afterWindowMs(row.interval))) continue;
       }
-      rows.push({ row, raw: r, wait: { plan, check } });
+      // The end of the window the verdict was actually decided in — the same
+      // market-time horizon judgeWait walked. Everything the diagnosis is
+      // allowed to see stops here.
+      const decidedMs = Date.parse(strOrNull(plan.decided_at) ?? String(r.created_at));
+      const untilMs = marketHorizonEnd(
+        Number.isFinite(decidedMs) ? decidedMs : Date.parse(String(r.created_at)),
+        ENTRY_WINDOW_MS[String(r.interval)] ?? 48 * 60 * 60 * 1000,
+      );
+      rows.push({
+        row,
+        raw: r,
+        wait: { plan, check, untilMs, hint: verdict === "missed" ? "wait_missed_trade" : "good_wait" },
+      });
     }
 
     const due = rows.slice(0, options.limit);
@@ -633,6 +672,7 @@ Deno.serve(async (req: Request) => {
           momentum: entryCheck ? entryCheck.momentum === true : null,
           events: calendar,
           contract: strOrNull(raw.plan_contract),
+          wait: wait ? { untilMs: wait.untilMs, hint: wait.hint } : null,
         });
       } catch (err) {
         await markFailed(row, raw, `facts: ${err instanceof Error ? err.message : String(err)}`);
@@ -685,9 +725,6 @@ Deno.serve(async (req: Request) => {
       // A WAIT is graded on one question — was declining right? — and its
       // facts describe a trade that was never taken, so the prompt has to say
       // so or the lessons come out as position management.
-      const waitHint: Cause = wait
-        ? (strOrNull(wait.check.verdict) === "missed" ? "wait_missed_trade" : "good_wait")
-        : "inconclusive";
       const prompt = wait
         ? buildWaitDiagnosisPrompt({ ...plan, signal: "WAIT", wait_plan: wait.plan, wait_check: wait.check }, facts)
         : buildDiagnosisPrompt(plan, facts);
@@ -704,7 +741,7 @@ Deno.serve(async (req: Request) => {
       // against a call that never entered.
       const diagnosis = parseDiagnosis(
         answer,
-        wait ? [waitHint] : facts.hints,
+        wait ? [wait.hint] : facts.hints,
         rulesInForce.map((r) => r.id),
         strOrNull(raw.plan_contract),
         wait ? "WAIT" : row.signal,
@@ -800,7 +837,11 @@ Deno.serve(async (req: Request) => {
       // compute a set difference is megabytes of JSON thrown away 96 times a
       // day.
       const doneIdRows = (await readRowsOrNull(
-        `analyses?select=id&postmortem->>status=eq.done&order=closed_at.desc.nullslast&limit=${REPAIR_SCAN}`,
+        // Ordered by created_at, not closed_at: a WAIT row's closed_at is
+        // always NULL (its settlement time lives inside wait_check), so
+        // nullslast sorted every WAIT behind every diagnosed trade and a
+        // stranded WAIT lesson could never be repaired.
+        `analyses?select=id&postmortem->>status=eq.done&order=created_at.desc&limit=${REPAIR_SCAN}`,
       )) ?? [];
       const ids = doneIdRows.map((r) => String(r.id ?? "")).filter(Boolean);
       if (ids.length > 0) {
@@ -1034,7 +1075,7 @@ Deno.serve(async (req: Request) => {
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;
@@ -1057,6 +1098,7 @@ Deno.serve(async (req: Request) => {
           rulebook_version: numberOrNull(r.rulebook_version),
           contract: strOrNull(r.plan_contract),
           wait_verdict: strOrNull(r.wait_verdict),
+          wait_scorer: numberOrNull(r.wait_scorer),
         }));
         const stats = summarizeRecord(record, lessons);
 
@@ -1159,7 +1201,12 @@ Deno.serve(async (req: Request) => {
     const summary = {
       ok: true,
       mode: scope.kind,
-      candidates: candidates.length,
+      // Two queries feed one queue now, so one number cannot describe both:
+      // `candidates` counted only the settled trades, and a run that
+      // diagnosed three WAITs reported finding nothing to work on.
+      candidates: candidates.length + waitCandidates.length,
+      trade_candidates: candidates.length,
+      wait_candidates: waitCandidates.length,
       due: rows.length,
       diagnosed: diagnosed.length,
       lessons: newLessons,

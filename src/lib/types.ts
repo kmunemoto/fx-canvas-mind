@@ -243,6 +243,10 @@ export type PostmortemCause =
   | "plan_incoherent"
   | "good_call"
   | "lucky_win"
+  // WAIT only: the trade named at the call was there and it paid, or it was
+  // not. wait_missed_trade is the one cause that pushes toward trading more.
+  | "wait_missed_trade"
+  | "good_wait"
   | "inconclusive";
 
 export interface Counterfactual {
@@ -330,6 +334,11 @@ export interface Postmortem {
   rule_blamed?: string | null;
   rule_credited?: string | null;
   rulebook_version?: number | null;
+  // What was diagnosed. On a WAIT the facts measure a trade that was never
+  // taken, and a reader who assumes otherwise reads a position that never
+  // existed.
+  subject?: "trade" | "wait";
+  wait_plan?: WaitPlan | null;
 }
 
 // One consolidated rule the analyzer is given (public.rulebook)

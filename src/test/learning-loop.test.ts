@@ -304,7 +304,66 @@ describe("standing aside is reviewed like anything else", () => {
   it("never falls back to a trade cause on a call that never entered", () => {
     // parseDiagnosis uses the deterministic hint when the model's cause is
     // not one of ours, and facts.hints are built from the trade taxonomy
-    expect(postmortemSrc).toContain("wait ? [waitHint] : facts.hints");
+    expect(postmortemSrc).toContain("wait ? [wait.hint] : facts.hints");
     expect(postmortemSrc).toContain('wait ? "WAIT" : row.signal,');
+  });
+});
+
+// The first pass at the WAIT diagnosis handed the model trade-shaped facts:
+// windows that run past the graded horizon, counterfactuals re-judged over
+// twenty days, and a deterministic hint from the trade taxonomy. All three
+// can assert that the declined trade won, for a window the tracker never
+// graded — the hindsight this phase removed, arriving back as "facts".
+describe("a WAIT diagnosis sees only the window its verdict was decided in", () => {
+  const factsSrc = readFileSync("supabase/functions/postmortem/facts.ts", "utf8");
+
+  it("stops the life horizon at the end of the graded window", () => {
+    expect(factsSrc).toContain("const wait = ctx.wait ?? null;");
+    expect(factsSrc).toContain("? wait.untilMs");
+    expect(index).toContain("marketHorizonEnd(");
+  });
+
+  it("computes no after-window and no counterfactuals for a WAIT", () => {
+    expect(factsSrc).toContain("const after = !wait && Number.isFinite(resolvedMs)");
+    expect(factsSrc).toContain("if (!wait && reference !== null && !filled && coherentAt(reference))");
+  });
+
+  it("never hands it a hint from the trade taxonomy", () => {
+    expect(factsSrc).toContain("const hints: Cause[] = wait ? [wait.hint] : [];");
+    expect(factsSrc).toContain("if (wait || hints.includes(c)) return;");
+  });
+
+  it("walks from the instant the plan was priced, not the insert", () => {
+    const tracker = readFileSync("supabase/functions/track-outcomes/index.ts", "utf8");
+    expect(tracker).toContain('const decidedMs = Date.parse(String(plan?.decided_at ?? ""));');
+    expect(tracker).toContain("Number.isFinite(decidedMs) ? decidedMs : insertedMs");
+  });
+});
+
+// Ungradeable rows are permanent: the tracker never revisits no_call or
+// unknown, so such a row never gets a diagnosis and matches the candidate
+// query forever. Forty of them, ordered oldest first, would fill the page and
+// hide every gradeable WAIT behind them.
+describe("the WAIT queue cannot be blocked by rows that can never be graded", () => {
+  it("filters the verdict in SQL, before the page is taken", () => {
+    expect(index).toContain("&wait_check->>verdict=in.(missed,correct)&");
+  });
+
+  it("does not draw two lessons from one refusal", () => {
+    // The refused plan is already tracked as a shadow and diagnosed as a
+    // trade; diagnosing the WAIT parent too would double the revision clock
+    expect(index).toContain("if (shadowParents.has(String(r.id))) continue;");
+  });
+
+  it("repairs a stranded WAIT lesson too", () => {
+    // closed_at is always NULL on a WAIT, so nullslast sorted every one of
+    // them behind every diagnosed trade
+    expect(index).toContain("&order=created_at.desc&limit=${REPAIR_SCAN}");
+    expect(index).not.toContain("closed_at.desc.nullslast");
+  });
+
+  it("reports both queues, so a WAIT-only run does not read as empty", () => {
+    expect(index).toContain("candidates: candidates.length + waitCandidates.length,");
+    expect(index).toContain("wait_candidates: waitCandidates.length,");
   });
 });

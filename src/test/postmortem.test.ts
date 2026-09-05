@@ -1060,7 +1060,7 @@ describe("rulebook consolidation", () => {
 
   it("scores the calls that declined to trade", () => {
     const wait = (verdict: string | null) =>
-      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict });
+      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict, wait_scorer: 2 });
     const s = summarizeRecord(
       [wait("missed"), wait("correct"), wait("correct"), wait("pending"), wait("unknown"), wait(null)],
       [],
@@ -1070,6 +1070,16 @@ describe("rulebook consolidation", () => {
     expect(s.wait_miss_rate).toBeNull();
     const many = Array.from({ length: 30 }, (_, i) => wait(i < 6 ? "missed" : "correct"));
     expect(summarizeRecord(many, []).wait_miss_rate).toBe(20);
+
+    // A verdict from the two-sided scorer counts on neither side. It chose
+    // the direction from whichever side paid, so pooling it with the
+    // decision-time verdicts would carry that bias in permanently — a
+    // verdict is never re-scored.
+    const old = contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: "missed" });
+    const mixed = summarizeRecord([...many, old, old], []);
+    expect(mixed.waits).toBe(32);
+    expect(mixed.waits_judged).toBe(30);
+    expect(mixed.wait_miss_rate).toBe(20);
   });
 
   it("tells the editor what it may and may not write under the current contract", () => {

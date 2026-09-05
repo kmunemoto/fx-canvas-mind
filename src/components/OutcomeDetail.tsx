@@ -35,7 +35,13 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   // A WAIT call carries no trade plan, so there is nothing to judge
   const tracked = record.signal !== "WAIT" && record.outcome !== "skipped";
   const rejected = isRejected(record);
-  const settled = tracked && record.outcome !== "pending";
+  // Whether there is a diagnosis to show. A WAIT is now reviewed too — the
+  // trade it declined is diagnosed — and gating this on `tracked` meant every
+  // model call spent on a WAIT produced a lesson, a verdict and evidence that
+  // had no rendering path at all, while its cause chip still showed in the
+  // list above.
+  const settled = (tracked && record.outcome !== "pending") ||
+    (!tracked && record.postmortem?.status === "done");
 
   const price = (v: number | null | undefined) =>
     typeof v === "number" && Number.isFinite(v) ? v.toFixed(decimals) : "—";
