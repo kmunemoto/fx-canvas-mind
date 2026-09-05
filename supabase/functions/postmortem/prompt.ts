@@ -891,6 +891,21 @@ export const buildConsolidationPrompt = (
   return { system: CONSOLIDATION_SYSTEM_PROMPT, user };
 };
 
+// Why a rule the editor named is not in the new book.
+//   add_cap      — a new rule beyond MAX_RULES_ADDED for one revision
+//   no_evidence  — none of its citations counted (missing, shadow, wrong cause)
+//   book_full    — MAX_RULES already filled by better-supported rules
+//   omitted      — the editor left it out and the removal allowance covered it
+//   evidence_gone — omitted, and its stored citations no longer count either
+//   no_room      — omitted, would have been restored, but the book was full
+export type DropReason =
+  | "add_cap"
+  | "no_evidence"
+  | "book_full"
+  | "omitted"
+  | "evidence_gone"
+  | "no_room";
+
 export interface Consolidation {
   rules: Rule[];
   summary_ja: string;
@@ -905,7 +920,22 @@ export interface Consolidation {
   // rewrite left `changes` completely empty — a version bump whose diff said
   // nothing, while the sentence the analyst follows had been replaced and its
   // `since` still claimed the older date.
-  changes: { added: string[]; removed: string[]; restored: string[]; dropped: string[]; held_back: string[]; reworded: string[] };
+  //
+  // reasons: why each id in `dropped` or `removed` left, keyed by id. The
+  // lists alone say a rule did not make it and stop there, which is enough to
+  // notice a rule failing twice and not enough to say why — the editor
+  // proposed the same new rule r12 at v7 and at v8 and it was dropped both
+  // times, and nothing on record could tell "its citations did not count"
+  // from "the book was full".
+  changes: {
+    added: string[];
+    removed: string[];
+    restored: string[];
+    dropped: string[];
+    held_back: string[];
+    reworded: string[];
+    reasons: Record<string, DropReason>;
+  };
 }
 
 export interface CitableLesson {
@@ -975,6 +1005,7 @@ export const parseConsolidation = (
   const added: string[] = [];
   const dropped: string[] = [];
   const reworded: string[] = [];
+  const reasons: Record<string, DropReason> = {};
   for (const item of raw.rules) {
     if (!isRecord(item)) continue;
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
@@ -990,6 +1021,7 @@ export const parseConsolidation = (
     const isNew = !prior.has(id);
     if (isNew && previous.length > 0 && added.length >= MAX_RULES_ADDED) {
       dropped.push(id);
+      reasons[id] = "add_cap";
       continue;
     }
     const cause = typeof item.cause === "string" && (isCause(item.cause) || item.cause === "general")
@@ -1002,6 +1034,7 @@ export const parseConsolidation = (
       // No evidence, no rule: a continuing rule that lost its evidence goes
       // through the removal accounting below like any other omission
       dropped.push(id);
+      reasons[id] = "no_evidence";
       continue;
     }
     // The book is full. Recorded as dropped rather than breaking out of the
@@ -1009,6 +1042,7 @@ export const parseConsolidation = (
     // vanishing from `changes` entirely.
     if (rules.length >= MAX_RULES) {
       dropped.push(id);
+      reasons[id] = "book_full";
       continue;
     }
     seen.add(id);
@@ -1048,16 +1082,19 @@ export const parseConsolidation = (
   // whose evidence no longer holds up go too
   const missing = previous.filter((p) => !seen.has(p.id)).sort((a, b) => a.support - b.support);
   const removed = missing.slice(0, MAX_RULES_REMOVED).map((r) => r.id);
+  for (const id of removed) reasons[id] = reasons[id] ?? "omitted";
   const restored: string[] = [];
   for (const rule of missing.slice(MAX_RULES_REMOVED).sort((a, b) => b.support - a.support)) {
     if (rules.length >= MAX_RULES) {
       // No room left: it leaves the book, and says so.
       removed.push(rule.id);
+      reasons[rule.id] = "no_room";
       continue;
     }
     const { cited, support, eras } = evidence(rule, rule.supported_by);
     if (support === 0) {
       removed.push(rule.id);
+      reasons[rule.id] = "evidence_gone";
       continue;
     }
     // The stamp is re-derived here too, from the STORED rule's own cause and
@@ -1083,7 +1120,7 @@ export const parseConsolidation = (
     rules: orderRules(rules),
     summary_ja: str(raw.summary_ja, MAX_SUMMARY_CHARS),
     summary_en: str(raw.summary_en, MAX_SUMMARY_CHARS_EN),
-    changes: { added, removed, restored, dropped, held_back, reworded },
+    changes: { added, removed, restored, dropped, held_back, reworded, reasons },
   };
 };
 
