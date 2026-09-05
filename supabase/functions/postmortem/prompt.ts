@@ -20,8 +20,15 @@
 
 import {
   CAUSES,
+  CHOP_CROSSINGS,
+  LATE_LIFE_RATIO,
+  LUCKY_MAE_R,
   MARKET_CONTRACT,
+  MIN_DANGER_BARS,
   PULLBACK_R,
+  SPIKE_CLOSE_R,
+  SPIKE_REVERSAL_R,
+  UNDERWATER_RATIO,
   canonicalCause,
   causeOutsideContract,
   causesFor,
@@ -535,7 +542,8 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - lesson は、アナリストが実際に出力できる範囲の指示にする。プランは1つのエントリー価格・1つの損切り・3つの利確で構成され、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。「一部を成行、残りを指値」のような分割指示は書かない。基本手順（損切りの幅、RR の下限）は lesson で上書きできない。その範囲内で書く。
 - plan.contract が "market_v1" のプランでは、エントリー価格はアナリストが選んでいない。分析した瞬間の現在値がそのまま成行の約定価格になったものであり、「もっと引きつけて入るべきだった」「押し目を待つべきだった」は実行できない指示なので lesson にしない。動かせるのは方向・損切り幅・利確幅・そもそも入るか（WAIT）の4つだけで、lesson はそのいずれかを動かす形にする。反実仮想の limit_pullback も、この契約のプランでは「その状況では入らない（WAIT）」の根拠としてのみ読む。
 - plan.contract が "entry_chosen_v1"（または未記載）の古いプランは、アナリストがエントリー価格を選んでいた時代のもの。当時の事実として検証してよいが、そこから引く lesson は上の4つの範囲に翻訳して書く。entry_too_far / entry_too_early はこの契約でのみ起こりうる原因で、market_v1 のプランでは選べない（スキーマの enum からも除いてある）。
-- 勝ちでも、最大逆行が損切り近くまで達した（mae_r ≥ 0.8）等プロセスに危うさがあれば lucky_win とし、教訓を書く。
+- facts.danger は約定したプランの「危うさ」を約定から決着までの足で測ったもの。bars_in_trade（保有した足の本数）、underwater_bars / underwater_ratio（終値がエントリーより不利な側にあった足の本数と割合）、longest_underwater_bars（含み損が続いた最長の本数）、entry_crossings（終値がエントリー価格をまたいだ回数）、closest_to_stop_r（損切りまで最も近づいたときの残り R = 1 − mae_r）、target_bar_close_r（勝ちのみ。TP1 に届いた足の終値と TP1 の差を R で表したもの。負なら終値は TP1 に届いていない）、reversed_after_r（勝ちのみ。決着後の足で TP1 からどれだけ戻したか、R）、life_used_ratio（決着までに使った時間を、その時間足の期限に対する割合で表したもの）。flags は勝ちのときだけ立ち、各フラグの意味は: deep_mae（mae_r ≥ ${LUCKY_MAE_R}。損切り直前まで逆行した）、mostly_underwater（underwater_ratio ≥ ${UNDERWATER_RATIO} かつ ${MIN_DANGER_BARS} 本以上保有。保有期間の大半が含み損だった）、chop（entry_crossings ≥ ${CHOP_CROSSINGS}。エントリー価格を何度もまたいだ）、spike_target（target_bar_close_r ≤ −${SPIKE_CLOSE_R} かつ reversed_after_r ≥ ${SPIKE_REVERSAL_R}。利確はヒゲだけで、その後 ${SPIKE_REVERSAL_R}R 以上戻した）、late_win（life_used_ratio ≥ ${LATE_LIFE_RATIO}。期限の大半を使ってようやく届いた）。
+- lucky_win は facts.danger.flags に実際に立っているフラグで根拠づける（evidence でそのフラグ名と数値を挙げる）。立っていないフラグを理由にしない。フラグが一つも無い勝ちは、plan や facts の他の項目に問題が見えない限り good_call とする。
 - plan.rules_in_force があれば、そのプランがどのルールの影響下で作られたかを踏まえ、結果を招いた／貢献したルールがあれば rule_blamed / rule_credited に id を書く。無ければ null。
 - confidence は診断の確からしさ。決着後の足が無い、反実仮想が ambiguous 等、事実が少ないときは下げる。
 - shadow=true のプランは、サーバー側のエントリーゲートが「約定しない」等の理由で却下したものを検証用に追跡した結果である。却下が正しかったか（未約定なら正しい、勝っていたなら誤り）を verdict に含める。

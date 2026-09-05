@@ -239,6 +239,15 @@ export const ja = {
       afterTp1: (bars: number) => `損切りの ${bars} 本後に TP1 へ到達`,
       beyondSl: (r: number) => `損切り後さらに ${r}R 逆行`,
       earlyAdverse: (r: number) => `約定直後の逆行 ${r}R`,
+      // One line per raised danger flag, each a measurement of the winning
+      // trade rather than a verdict on it
+      danger: {
+        deep_mae: (closestR: number) => `損切りまで残り ${closestR}R まで逆行`,
+        mostly_underwater: (underwater: number, bars: number) => `保有 ${bars} 本のうち ${underwater} 本が含み損`,
+        chop: (crossings: number) => `エントリー価格を ${crossings} 回またいだ`,
+        spike_target: (reversedR: number) => `利確はヒゲだけで、その後 ${reversedR}R 戻した`,
+        late_win: (percent: number) => `期限の ${percent}% を使って到達`,
+      },
       thinNote: "決着後の値動きがまだ少ないため暫定診断です。値動きが揃い次第、自動で再診断します",
       thinFinalNote: "再診断でも決着後の値動きが少なく、暫定のままです（これ以上の自動再診断はありません）",
       revisedNote: "値動きが揃った後に再診断済み",

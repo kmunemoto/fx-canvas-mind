@@ -281,8 +281,32 @@ export interface PostmortemFacts {
     limit_pullback?: Counterfactual | null;
   };
   regime: { declared: string | null; adx: number | null; conflict: boolean } | null;
+  // How unsafe the trade was, mirror of postmortem/facts.ts Danger. Absent
+  // on documents written before it was measured; null when the plan never
+  // filled. Its flags are what filed a win as lucky_win.
+  danger?: PostmortemDanger | null;
   hints: PostmortemCause[];
   notes?: string[];
+}
+
+export type PostmortemDangerFlag = "deep_mae" | "mostly_underwater" | "chop" | "spike_target" | "late_win";
+
+export interface PostmortemDanger {
+  bars_in_trade: number;
+  underwater_bars: number;
+  underwater_ratio: number | null;
+  longest_underwater_bars: number;
+  entry_crossings: number;
+  // 1 - mae_r: the risk still unspent at the worst point
+  closest_to_stop_r: number | null;
+  // Wins only: where the TP1 bar closed relative to TP1, in R; negative
+  // means short of the target
+  target_bar_close_r: number | null;
+  // Wins only: the largest move back from TP1 in the after-window, in R
+  reversed_after_r: number | null;
+  // Time to settlement over the timeframe's expiry allowance
+  life_used_ratio: number | null;
+  flags: PostmortemDangerFlag[];
 }
 
 export interface Postmortem {

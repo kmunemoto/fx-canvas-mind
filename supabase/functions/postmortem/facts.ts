@@ -26,6 +26,7 @@ import {
   normalizeMode,
 } from "../analyze/entry.ts";
 import {
+  EXPIRY_DAYS,
   FILL_TOLERANCE,
   INTERVAL_MS,
   MAX_REFINE_ATTEMPTS,
@@ -157,7 +158,7 @@ export const MIN_AFTER_BARS = 8;
 
 // A bar this many times the median range is an event, not a move
 export const ABNORMAL_RANGE_RATIO = 3;
-// MAE this close to the stop makes a win a lucky one
+// MAE this close to the stop makes a win a lucky one (the deep_mae flag)
 export const LUCKY_MAE_R = 0.8;
 // A move of at least this many R without a fill is a missed trade
 export const MISSED_MOVE_R = 1;
@@ -167,6 +168,37 @@ export const PULLBACK_R = 0.5;
 // says the entry chased an exhausted move
 export const EARLY_ADVERSE_R = 0.5;
 export const EARLY_BARS = 3;
+
+// How unsafe a win was, beyond its MAE. Each threshold below raises one
+// DangerFlag on a settled win (computeDanger); the flags together are what
+// files a win as lucky_win instead of good_call. They are defaults chosen
+// WITHOUT a calibration sample: at the time of writing two wins exist in
+// production (mae_r 0.98 over 15 bars, and mae_r 0.21 over 5 bars), which is
+// enough to show the gap the block fills and not enough to place a boundary
+// on. A future calibration reads the danger block of settled wins in
+// analyses.postmortem.facts and asks, flag by flag, whether the wins it
+// raised on went on to be cited in rules that held up.
+//
+// At least this share of the bars in the trade closed on the adverse side
+// of the entry: the trade spent most of its life losing before it won
+export const UNDERWATER_RATIO = 0.5;
+// The underwater share means nothing on a trade this short (2 of 3 bars is
+// one bar of noise), so mostly_underwater needs at least this many bars
+export const MIN_DANGER_BARS = 4;
+// This many changes of side around the entry is a range being traded as a
+// move, not a move
+export const CHOP_CROSSINGS = 4;
+// The bar that reached TP1 closed at least this far short of it, in R: the
+// target was touched by a wick, not by the close
+export const SPIKE_CLOSE_R = 0.5;
+// ...and price then gave back at least this many R from TP1 inside the
+// after-window. Both together make a spike_target; a wick that held is a
+// win that was simply early
+export const SPIKE_REVERSAL_R = 1;
+// The trade used at least this share of its allowed life before the target
+// was reached: a call that needed nearly the whole expiry window to pay is
+// a slow call, whatever its mae_r says
+export const LATE_LIFE_RATIO = 0.75;
 
 export interface PostmortemRow extends OpenRow {
   outcome: string;
@@ -209,6 +241,59 @@ export interface GateContext {
   atr: number | null;
   // The no-pullback rule was in force for the plan (entry_check.momentum)
   momentum: boolean;
+}
+
+// What made a win an unsafe one. Raised only on a win; the numbers behind
+// them are measured for every filled plan.
+export type DangerFlag =
+  // mae_r reached LUCKY_MAE_R: the stop was nearly hit
+  | "deep_mae"
+  // underwater_ratio reached UNDERWATER_RATIO over at least MIN_DANGER_BARS
+  | "mostly_underwater"
+  // entry_crossings reached CHOP_CROSSINGS
+  | "chop"
+  // the TP1 bar closed SPIKE_CLOSE_R or more short of the target, and the
+  // after-window gave back SPIKE_REVERSAL_R or more from it
+  | "spike_target"
+  // life_used_ratio reached LATE_LIFE_RATIO
+  | "late_win";
+
+export const DANGER_FLAGS: readonly DangerFlag[] = ["deep_mae", "mostly_underwater", "chop", "spike_target", "late_win"];
+
+// How unsafe a filled trade was, measured on the evaluation bars from the
+// fill to the settlement and on the after-window. mae_r alone cannot tell a
+// win that spent nine of fifteen bars underwater from one that never looked
+// back; these can.
+export interface Danger {
+  // Bars from the fill bar to the settlement bar inclusive
+  bars_in_trade: number;
+  // Bars in trade whose close sat strictly on the adverse side of the entry
+  underwater_bars: number;
+  // underwater_bars / bars_in_trade; null when there were no bars in trade
+  underwater_ratio: number | null;
+  // Longest run of consecutive underwater bars
+  longest_underwater_bars: number;
+  // Closes that changed side of the entry versus the previous close. A
+  // close exactly on the entry keeps the previous side.
+  entry_crossings: number;
+  // 1 - mae_r: how much of the risk was still unspent at the worst point;
+  // null when the judge recorded no mae_r
+  closest_to_stop_r: number | null;
+  // Wins only: where the bar that reached TP1 closed, relative to TP1, in
+  // R. Negative means it closed short of the target (mirrored for SELL, so
+  // negative still means short of it). Null otherwise.
+  target_bar_close_r: number | null;
+  // Wins only: the largest move against the signal from TP1 inside the
+  // after-window, in R (never below 0). Null when there is no aftermath.
+  reversed_after_r: number | null;
+  // hours_to_settle over the expiry allowance (EXPIRY_DAYS of the plan's own
+  // timeframe, in hours). Wall-clock hours over calendar days: the judge
+  // itself counts market time, so a trade that held over a weekend shows a
+  // higher ratio here than the judge would have measured. Null when the
+  // settlement time is unknown.
+  life_used_ratio: number | null;
+  // In DANGER_FLAGS order. Empty on anything but a win.
+  flags: DangerFlag[];
 }
 
 export interface PostmortemFacts {
@@ -258,6 +343,9 @@ export interface PostmortemFacts {
   };
   // The declared regime against the ADX at signal time, when known
   regime: { declared: string | null; adx: number | null; conflict: boolean } | null;
+  // How unsafe the trade was, for every filled plan; null when the plan
+  // never filled. Its flags are what turn a win into lucky_win.
+  danger: Danger | null;
   // Deterministic pre-classification; the model picks among these first
   hints: Cause[];
   notes: string[];
@@ -367,6 +455,45 @@ const gateReason = (r: CfResult | null, atr: number | null): string => {
       return "away from the market in a trend regime, where the gate enters at the market instead";
     default:
       return "passes";
+  }
+};
+
+// The flags a win's danger block raises, in DANGER_FLAGS order. Wins only:
+// on a loss every number is still measured, but a loss is diagnosed by what
+// went wrong, not by how close it came to going wrong, so its flags stay
+// empty and the loss hints are untouched by this block. deep_mae is the rule
+// that filed lucky_win before the block existed, unchanged: a missing mae_r
+// reads as 0, as it always did.
+export const dangerFlags = (d: Danger, maeR: number | null): DangerFlag[] => {
+  const raised: Record<DangerFlag, boolean> = {
+    deep_mae: (maeR ?? 0) >= LUCKY_MAE_R,
+    // The raw share, not the rounded one the block shows: 61 bars of 123
+    // rounds to 0.50 and is not most of them
+    mostly_underwater: d.bars_in_trade >= MIN_DANGER_BARS && d.underwater_bars / d.bars_in_trade >= UNDERWATER_RATIO,
+    chop: d.entry_crossings >= CHOP_CROSSINGS,
+    spike_target: d.target_bar_close_r !== null && d.target_bar_close_r <= -SPIKE_CLOSE_R &&
+      d.reversed_after_r !== null && d.reversed_after_r >= SPIKE_REVERSAL_R,
+    late_win: d.life_used_ratio !== null && d.life_used_ratio >= LATE_LIFE_RATIO,
+  };
+  // The order is the constant's, so the two lists cannot drift apart
+  return DANGER_FLAGS.filter((f) => raised[f]);
+};
+
+// One raised flag in words, with the number behind it, for the notes: the
+// model reads facts.notes as well as facts.danger, and the reason a win was
+// filed as lucky should be legible in both
+const describeFlag = (flag: DangerFlag, d: Danger | null, maeR: number | null): string => {
+  switch (flag) {
+    case "deep_mae":
+      return `deep_mae (mae_r ${maeR ?? 0})`;
+    case "mostly_underwater":
+      return `mostly_underwater (${d?.underwater_bars ?? 0}/${d?.bars_in_trade ?? 0} bars)`;
+    case "chop":
+      return `chop (${d?.entry_crossings ?? 0} crossings)`;
+    case "spike_target":
+      return `spike_target (TP1 bar closed ${Math.abs(d?.target_bar_close_r ?? 0)}R short, gave back ${d?.reversed_after_r ?? 0}R after)`;
+    case "late_win":
+      return `late_win (${Math.round((d?.life_used_ratio ?? 0) * 100)}% of life)`;
   }
 };
 
@@ -490,6 +617,80 @@ export const computeFacts = async (
       }
       earlyAdverseR = round2(earlyAdverse / risk);
     }
+  }
+
+  // How unsafe the trade was, bar by bar. The bars in trade run from the one
+  // containing the fill to the one containing the settlement, inclusive: the
+  // fill bar counts because a market fill's own bar is the first the trade
+  // lived through, and the settlement bar counts because the settlement is
+  // usually what its close shows. Measured for every filled plan; the flags
+  // are raised in the win branch below, so nothing about a loss changes.
+  const isWin = (ev?.resolution ?? row.outcome) === "win";
+  let danger: Danger | null = null;
+  if (Number.isFinite(filledMs)) {
+    const barMs = INTERVAL_MS[evalInterval] ?? HOUR;
+    // From `series`, not `post`: post starts at the first bar AT OR AFTER
+    // the signal, and a market fill is mid-bar, so the bar holding the fill
+    // — the only bar of a win settled inside it, which is what a wick that
+    // touched the target and reversed looks like — would otherwise be missed
+    const inTrade = series.filter((x) => x.t + barMs > filledMs && (!Number.isFinite(resolvedMs) || x.t <= resolvedMs));
+    const adverse = (close: number) => (signal === "BUY" ? close < row.entry_point : close > row.entry_point);
+    let underwater = 0;
+    let run = 0;
+    let longestRun = 0;
+    let crossings = 0;
+    // Which side of the entry the previous close sat on; a close on the
+    // entry itself keeps it, so a bar that touched the line is not a
+    // crossing twice over
+    type Side = "for" | "against" | null;
+    let side: Side = null;
+    for (const { c } of inTrade) {
+      if (adverse(c.close)) {
+        underwater++;
+        run++;
+        longestRun = Math.max(longestRun, run);
+      } else run = 0;
+      const now: Side = c.close === row.entry_point ? side : adverse(c.close) ? "against" : "for";
+      if (side !== null && now !== side) crossings++;
+      side = now;
+    }
+    // Wins only: was the target reached by a close or by a wick, and did
+    // the move hold. The TP1 bar is the first bar in trade that touched TP1,
+    // which for a win is normally the bar the judge settled on.
+    let targetBarCloseR: number | null = null;
+    let reversedAfterR: number | null = null;
+    if (isWin && risk > 0) {
+      const tpBar = inTrade.find((x) => hitsTp(signal, x.c, row.take_profit_1)) ?? null;
+      if (tpBar) {
+        const short = signal === "BUY" ? tpBar.c.close - row.take_profit_1 : row.take_profit_1 - tpBar.c.close;
+        targetBarCloseR = round2(short / risk);
+      }
+      if (after.length > 0) {
+        let reversed = 0;
+        for (const { c } of after) {
+          reversed = Math.max(reversed, signal === "BUY" ? row.take_profit_1 - c.low : c.high - row.take_profit_1);
+        }
+        reversedAfterR = round2(reversed / risk);
+      }
+    }
+    const maeR = typeof ev?.mae_r === "number" && Number.isFinite(ev.mae_r) ? ev.mae_r : null;
+    danger = {
+      bars_in_trade: inTrade.length,
+      underwater_bars: underwater,
+      underwater_ratio: inTrade.length > 0 ? round2(underwater / inTrade.length) : null,
+      longest_underwater_bars: longestRun,
+      entry_crossings: crossings,
+      closest_to_stop_r: maeR === null ? null : round2(1 - maeR),
+      target_bar_close_r: targetBarCloseR,
+      reversed_after_r: reversedAfterR,
+      // Measured in bar time, as the judge measures the expiry: the bars the
+      // trade lived through times the bar length, over the allowance. Wall
+      // clock would count a weekend as two days of life and file a Friday
+      // plan that paid on Tuesday as late. The same fallback as the judge's
+      // for an interval with no allowance; an expiry can reach 1 or more.
+      life_used_ratio: inTrade.length === 0 ? null : round2((inTrade.length * barMs) / HOUR / ((EXPIRY_DAYS[row.interval] ?? 30) * 24)),
+      flags: [],
+    };
   }
 
   // Counterfactuals
@@ -629,8 +830,22 @@ export const computeFacts = async (
       if ((ev?.mfe_r ?? 0) >= 0.5 || won(cf.tp_half)) push("target_too_far");
       else push("inconclusive");
       break;
-    case "win":
-      push((ev?.mae_r ?? 0) >= LUCKY_MAE_R ? "lucky_win" : "good_call");
+    case "win": {
+      // A win is lucky when any of the danger flags is up — the deep MAE
+      // that always made one, or a trade that spent most of its bars
+      // underwater, chopped around its entry, took the target on a wick
+      // that reversed, or needed most of its allowed life. A win with no
+      // flags is a good call as far as the bars can tell; the model may
+      // still overrule that from the plan.
+      const maeR = typeof ev?.mae_r === "number" && Number.isFinite(ev.mae_r) ? ev.mae_r : null;
+      const dz = danger;
+      if (dz) dz.flags = dangerFlags(dz, maeR);
+      // A win whose fill instant is not on record (an early version wrote
+      // filled_at null) has no bars to walk, but its MAE is on record and
+      // the rule that read it never needed the walk
+      const flags: DangerFlag[] = dz ? dz.flags : (maeR ?? 0) >= LUCKY_MAE_R ? ["deep_mae"] : [];
+      push(flags.length > 0 ? "lucky_win" : "good_call");
+      if (flags.length > 0) notes.push(`danger: ${flags.map((f) => describeFlag(f, dz, maeR)).join(", ")}`);
       if (won(cf.limit_pullback) && cf.limit_pullback?.rr !== null && rr !== null && (cf.limit_pullback?.rr ?? 0) > rr) {
         notes.push(
           cf.limit_pullback?.viable
@@ -641,6 +856,7 @@ export const computeFacts = async (
         notes.push(`price never came back ${PULLBACK_R}R while the trade was open: this entry was not late`);
       }
       break;
+    }
     case "ambiguous":
       push(ev?.reason === "incoherent" ? "plan_incoherent" : "inconclusive");
       break;
@@ -672,6 +888,7 @@ export const computeFacts = async (
     early_adverse_r: earlyAdverseR,
     counterfactual: cf,
     regime,
+    danger,
     hints,
     notes,
   };

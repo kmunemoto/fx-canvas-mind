@@ -379,6 +379,249 @@ describe("facts — wins and the regime", () => {
   });
 });
 
+describe("facts — how unsafe a win was", () => {
+  // A bar whose close is `close`, with a small body around it that reaches
+  // neither level
+  const tight = (h: number, close: number): Candle => candle(stamp(h), close + 0.1, close - 0.1, close, close);
+  const cleanWin = [
+    candle(stamp(0), 150.2, 149.9),
+    candle(stamp(1), 150.4, 149.1),
+    candle(stamp(2), 151.4, 150.3),
+    candle(stamp(3), 152.4, 151.2),
+    ...quiet(4, 30, 152.5, 152.0),
+  ];
+  const win = (over: Partial<Evaluation>, settledAt = 3) =>
+    evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(settledAt), resolution: "win", mfe_r: 2, mae_r: 0.2, ...over }, "win", iso(settledAt));
+
+  it("counts the bars underwater and the crossings of the entry, on a BUY and on its SELL mirror", async () => {
+    // Eight bars in trade. The third close sits exactly on the entry and
+    // keeps the previous side: counted as above, the crossings would be six.
+    const closes = [150.2, 149.8, 150.0, 149.8, 150.2, 149.8, 150.2];
+    const buyBars = [
+      ...closes.map((c, h) => tight(h, c)),
+      candle(stamp(7), 152.2, 151.0, 150.2, 152.1), // TP1
+      ...quiet(8, 30, 152.3, 151.9),
+    ];
+    const f = await computeFacts(win({}, 7), buyBars, "1h", NOW);
+    expect(f.danger).toMatchObject({
+      bars_in_trade: 8,
+      underwater_bars: 3,
+      underwater_ratio: 0.38,
+      longest_underwater_bars: 1,
+      entry_crossings: 4,
+      closest_to_stop_r: 0.8,
+      target_bar_close_r: 0.1,
+      reversed_after_r: 0.1,
+      // eight hourly bars of a 480-hour allowance
+      life_used_ratio: 0.02,
+    });
+    // four crossings is the chop line: lucky, and the note says why
+    expect(f.danger?.flags).toEqual(["chop"]);
+    expect(f.hints).toEqual(["lucky_win"]);
+    expect(f.notes).toContain("danger: chop (4 crossings)");
+
+    const sellRow: PostmortemRow = {
+      ...buyMarket, id: "s", signal: "SELL", stop_loss: 151, take_profit_1: 148, take_profit_2: 147, take_profit_3: 146,
+    };
+    const sellBars = [
+      ...closes.map((c, h) => tight(h, 300 - c)),
+      candle(stamp(7), 149.0, 147.8, 149.8, 147.9), // TP1
+      ...quiet(8, 30, 148.1, 147.7),
+    ];
+    const sell = evaluated(sellRow, { filled_at: iso(0), resolved_at: iso(7), resolution: "win", mfe_r: 2, mae_r: 0.2 }, "win", iso(7));
+    const g = await computeFacts(sell, sellBars, "1h", NOW);
+    expect(g.danger).toMatchObject({
+      bars_in_trade: 8, underwater_bars: 3, longest_underwater_bars: 1, entry_crossings: 4,
+      target_bar_close_r: 0.1, reversed_after_r: 0.1,
+    });
+    expect(g.danger?.flags).toEqual(["chop"]);
+    expect(g.hints).toEqual(["lucky_win"]);
+  });
+
+  it("calls a target taken by a wick that then gave back a full R a spike", async () => {
+    // The TP1 bar's high touches 152 and its close sits 0.6R short of it
+    const inTrade = [
+      candle(stamp(0), 150.3, 149.9, 150.0, 150.2),
+      candle(stamp(1), 151.0, 150.1, 150.2, 150.8),
+      candle(stamp(2), 152.1, 150.9, 151.0, 151.4),
+    ];
+    const gaveBack = [...inTrade, ...quiet(3, 30, 151.6, 150.8)]; // low 150.8: 1.2R back from TP1
+    const f = await computeFacts(win({}, 2), gaveBack, "1h", NOW);
+    expect(f.danger?.target_bar_close_r).toBe(-0.6);
+    expect(f.danger?.reversed_after_r).toBe(1.2);
+    expect(f.danger?.flags).toEqual(["spike_target"]);
+    expect(f.hints).toEqual(["lucky_win"]);
+    expect(f.notes).toContain("danger: spike_target (TP1 bar closed 0.6R short, gave back 1.2R after)");
+
+    const held = [...inTrade, ...quiet(3, 30, 151.8, 151.5)]; // 0.5R back: the move held
+    const g = await computeFacts(win({}, 2), held, "1h", NOW);
+    expect(g.danger?.target_bar_close_r).toBe(-0.6);
+    expect(g.danger?.reversed_after_r).toBe(0.5);
+    expect(g.danger?.flags).toEqual([]);
+    expect(g.hints).toEqual(["good_call"]);
+  });
+
+  it("calls a win that used most of its allowed life late", async () => {
+    // 1h plans expire after 20 market days, 480 hours: 384 hours is 80%
+    const slow = (settledAt: number) => [
+      ...quiet(0, settledAt, 150.6, 149.8),
+      candle(stamp(settledAt), 152.2, 151.0, 150.2, 152.1),
+      ...quiet(settledAt + 1, settledAt + 30, 152.3, 151.9),
+    ];
+    const f = await computeFacts(win({}, 384), slow(384), "1h", at(420));
+    expect(f.danger?.life_used_ratio).toBe(0.8);
+    expect(f.danger?.flags).toEqual(["late_win"]);
+    expect(f.hints).toEqual(["lucky_win"]);
+    expect(f.notes).toContain("danger: late_win (80% of life)");
+
+    const g = await computeFacts(win({}, 336), slow(336), "1h", at(420));
+    expect(g.danger?.life_used_ratio).toBe(0.7);
+    expect(g.danger?.flags).toEqual([]);
+    expect(g.hints).toEqual(["good_call"]);
+  });
+
+  it("counts the bar holding a mid-bar fill, so a win settled inside its own bar is measured", async () => {
+    // A 1h plan on 15min bars, signalled seven minutes into the 00:00 bar:
+    // the bar's wick reaches the target and its close falls 1.1R short, and
+    // the aftermath gives 1.8R back. Bars in trade start at the bar AFTER
+    // the signal only if the fill bar is dropped — and then there is no bar
+    // at all, no target bar, and no spike to see.
+    const MIN_MS = 60_000;
+    const st15 = (i: number) => new Date(at(0) + i * 15 * MIN_MS).toISOString().slice(0, 19).replace("T", " ");
+    const created = new Date(at(0) + 7 * MIN_MS).toISOString();
+    const settled = new Date(at(0) + 10 * MIN_MS).toISOString();
+    const row: PostmortemRow = evaluated(
+      { ...buyMarket, created_at: created },
+      { filled_at: created, resolved_at: settled, resolution: "win", mfe_r: 2.3, mae_r: 0.1 },
+      "win",
+      settled,
+    );
+    const bars: Candle[] = [candle(st15(0), 152.3, 149.9, 150.0, 150.9)];
+    for (let i = 1; i <= 24; i++) bars.push(candle(st15(i), 151.0, 150.2));
+    const f = await computeFacts(row, bars, "15min", NOW);
+    expect(f.danger).toMatchObject({ bars_in_trade: 1, target_bar_close_r: -1.1, reversed_after_r: 1.8 });
+    expect(f.danger?.flags).toEqual(["spike_target"]);
+    expect(f.hints).toEqual(["lucky_win"]);
+  });
+
+  it("still files a deep adverse excursion as lucky when the fill instant is not on record", async () => {
+    // An early tracker version wrote filled_at null on judged rows; the
+    // MAE rule never needed the fill bar and must not depend on it now
+    const f = await computeFacts(
+      evaluated(buyMarket, { filled_at: null, resolved_at: iso(3), resolution: "win", mfe_r: 2, mae_r: 0.8 }, "win", iso(3)),
+      cleanWin,
+      "1h",
+      NOW,
+    );
+    expect(f.danger).toBeNull();
+    expect(f.hints).toEqual(["lucky_win"]);
+    expect(f.notes).toContain("danger: deep_mae (mae_r 0.8)");
+  });
+
+  it("measures the life used in bar time, so a weekend in the middle of a trade is not life", async () => {
+    // A 15min plan (five market days, 120 hours) signalled Friday noon and
+    // paid Tuesday 06:00: 90 wall-clock hours, 40 of them open market
+    const MIN_MS = 60_000;
+    const fri = Date.parse("2026-08-21T12:00:00Z");
+    const mon = Date.parse("2026-08-24T00:00:00Z");
+    const tue = Date.parse("2026-08-25T06:00:00Z");
+    const st = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+    const bars: Candle[] = [];
+    for (let t = fri; t < Date.parse("2026-08-21T22:00:00Z"); t += 15 * MIN_MS) bars.push(candle(st(t), 150.4, 149.8));
+    for (let t = mon; t < tue; t += 15 * MIN_MS) bars.push(candle(st(t), 150.4, 149.8));
+    bars.push(candle(st(tue), 152.2, 151.0, 150.2, 152.1));
+    for (let t = tue + 15 * MIN_MS; t <= tue + 24 * 15 * MIN_MS; t += 15 * MIN_MS) bars.push(candle(st(t), 152.3, 151.9));
+    const row: PostmortemRow = evaluated(
+      { ...buyMarket, interval: "15min", created_at: new Date(fri).toISOString() },
+      { filled_at: new Date(fri).toISOString(), resolved_at: new Date(tue).toISOString(), resolution: "win", mfe_r: 2, mae_r: 0.2 },
+      "win",
+      new Date(tue).toISOString(),
+    );
+    const f = await computeFacts(row, bars, "15min", tue + 48 * 60 * MIN_MS);
+    expect(f.hours_to_settle).toBe(90);
+    expect(f.danger?.life_used_ratio).toBeLessThan(0.5);
+    expect(f.danger?.flags).toEqual([]);
+    expect(f.hints).toEqual(["good_call"]);
+  });
+
+  it("measures a loss without flagging it, and measures nothing on a plan that never filled", async () => {
+    const loss = evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.1, mae_r: 1 }, "loss", iso(2));
+    const lossBars = [
+      candle(stamp(0), 150.1, 149.7),
+      candle(stamp(1), 149.9, 149.3),
+      candle(stamp(2), 149.4, 148.8), // SL
+      candle(stamp(3), 148.9, 148.2),
+      candle(stamp(4), 148.3, 147.4),
+      candle(stamp(5), 147.5, 146.9),
+      ...quiet(6, 30, 147.2, 146.8),
+    ];
+    const f = await computeFacts(loss, lossBars, "1h", NOW);
+    expect(f.danger).toMatchObject({
+      bars_in_trade: 3, underwater_bars: 3, underwater_ratio: 1, longest_underwater_bars: 3, entry_crossings: 0,
+      closest_to_stop_r: 0, target_bar_close_r: null, reversed_after_r: null, flags: [],
+    });
+    expect(f.hints).toEqual(["direction_wrong"]);
+    expect(f.notes.some((n) => n.startsWith("danger:"))).toBe(false);
+
+    const sellLimit: PostmortemRow = {
+      ...buyMarket, id: "2", signal: "SELL", stop_loss: 151, take_profit_1: 148, take_profit_2: 147, take_profit_3: 146, price_at_signal: 149.5,
+    };
+    const missed = evaluated(sellLimit, { order_type: "limit", resolved_at: iso(3), resolution: "untriggered", reason: "missed" }, "untriggered", iso(3));
+    const missedBars = [
+      candle(stamp(0), 149.7, 149.2),
+      candle(stamp(1), 149.4, 148.8),
+      candle(stamp(2), 149.0, 148.3),
+      candle(stamp(3), 148.4, 147.8),
+      ...quiet(4, 30, 148.2, 147.6),
+    ];
+    const g = await computeFacts(missed, missedBars, "1h", NOW);
+    expect(g.danger).toBeNull();
+    expect(g.hints).toEqual(["entry_too_far"]);
+  });
+
+  it("keeps the MAE boundary where it was, and files a win with no flags as a good call", async () => {
+    const clean = await computeFacts(win({ mae_r: 0.2 }), cleanWin, "1h", NOW);
+    expect(clean.danger?.flags).toEqual([]);
+    expect(clean.hints).toEqual(["good_call"]);
+    expect(clean.notes.some((n) => n.startsWith("danger:"))).toBe(false);
+
+    const atLine = await computeFacts(win({ mae_r: 0.8 }), cleanWin, "1h", NOW);
+    expect(atLine.danger?.closest_to_stop_r).toBe(0.2);
+    expect(atLine.danger?.flags).toEqual(["deep_mae"]);
+    expect(atLine.hints).toEqual(["lucky_win"]);
+    expect(atLine.notes).toContain("danger: deep_mae (mae_r 0.8)");
+
+    const under = await computeFacts(win({ mae_r: 0.79 }), cleanWin, "1h", NOW);
+    expect(under.danger?.flags).toEqual([]);
+    expect(under.hints).toEqual(["good_call"]);
+  });
+
+  it("raises mostly_underwater only past the minimum bar count, and lists several flags in order", async () => {
+    // Nine of fifteen bars closed below the entry, then a deep dip before
+    // the target: deep_mae and mostly_underwater together, deep_mae first
+    const closes = [149.8, 149.7, 150.2, 149.8, 149.9, 150.1, 149.7, 149.8, 150.2, 149.6, 149.8, 150.3, 149.9, 150.4];
+    const bars = [
+      ...closes.map((c, h) => tight(h, c)),
+      candle(stamp(14), 152.2, 151.0, 150.4, 152.1), // TP1
+      ...quiet(15, 40, 152.3, 151.9),
+    ];
+    const f = await computeFacts(win({ mae_r: 0.98 }, 14), bars, "1h", at(60));
+    expect(f.danger?.bars_in_trade).toBe(15);
+    expect(f.danger?.underwater_bars).toBe(9);
+    expect(f.danger?.underwater_ratio).toBe(0.6);
+    expect(f.danger?.closest_to_stop_r).toBe(0.02);
+    expect(f.danger?.flags).toEqual(["deep_mae", "mostly_underwater", "chop"]);
+    expect(f.notes).toContain("danger: deep_mae (mae_r 0.98), mostly_underwater (9/15 bars), chop (9 crossings)");
+
+    // Two of three bars underwater is one bar of noise, not a pattern
+    const short = [tight(0, 149.9), tight(1, 149.8), candle(stamp(2), 152.2, 151.0, 150.2, 152.1), ...quiet(3, 30, 152.3, 151.9)];
+    const g = await computeFacts(win({}, 2), short, "1h", NOW);
+    expect(g.danger?.underwater_ratio).toBe(0.67);
+    expect(g.danger?.flags).toEqual([]);
+    expect(g.hints).toEqual(["good_call"]);
+  });
+});
+
 describe("scheduling", () => {
   it("waits after a settlement for the aftermath to exist", () => {
     const closed = iso(0);
