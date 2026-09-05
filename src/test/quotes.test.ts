@@ -240,14 +240,14 @@ describe("fetching one coarse bar's sub-bars", () => {
   // the rule every measurement so far is consistent with — serving 5min
   // bars. `absent` leaves a sub-bar out of every file, `missingKeys` answer
   // 404 (a day that has no file yet).
-  const provider = (opts: { absent?: number[]; missingKeys?: string[] } = {}) => {
+  const provider = (opts: { absent?: number[]; missingKeys?: string[]; roll?: string } = {}) => {
     const seen: string[] = [];
     const fetcher = async (url: string) => {
       seen.push(url);
       const key = url.match(/date=(\d{8})/)?.[1] ?? "";
       if (opts.missingKeys?.includes(key)) return null;
       const side = url.includes("priceType=ASK") ? 0.01 : 0;
-      const open = jst(`${dayOf(key)}T06:00:00`);
+      const open = jst(`${dayOf(key)}T${opts.roll ?? "06:00:00"}`);
       const rows: unknown[] = [];
       for (let t = open; t < open + 24 * HOUR; t += 5 * MIN) {
         if (opts.absent?.includes(t)) continue;
@@ -327,15 +327,33 @@ describe("fetching one coarse bar's sub-bars", () => {
   });
 
   it("asks the nearest key even inside the hour the widest closure cannot vouch for", async () => {
-    // Sunday 21:00Z is Monday 06:00 JST under US summer time: the first hour
-    // of GMO's week, and inside the band isPossiblyClosed marks as maybe
-    // shut. A walk that trusted "covered" before its first request returned
-    // nothing here, while the coarse series does hold these bars.
+    // Sunday 21:00Z is Monday 06:00 JST; under US summer time that is the
+    // first hour of GMO's week, and it sits inside the band isPossiblyClosed
+    // marks as maybe shut. A walk that trusted "covered" before its first
+    // request returned nothing here, while the coarse series does hold these
+    // bars.
     const from = Date.parse("2026-09-06T21:00:00Z");
     const p = provider();
     const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 2 * HOUR, p.fetcher);
     expect(res?.requests).toBe(2);
     expect(p.keysAsked()).toEqual(["20260907", "20260907"]);
+    expect(res?.missing).toEqual([]);
+    expect(res?.bars).toHaveLength(3);
+  });
+
+  it("goes on to the previous key when the nearest one is empty inside that band", async () => {
+    // Friday 21:00-22:00Z in winter is open market (the close is 22:00Z),
+    // still inside the maybe-shut band, and under a New York 17:00 roll —
+    // 07:00 JST then — it is filed under the PREVIOUS key: the Saturday key
+    // opens at 22:00Z and holds nothing of it. The gap is zero after that
+    // empty key too, so the walk must not take "covered" from it.
+    const from = Date.parse("2026-01-09T21:00:00Z");
+    const p = provider({ roll: "07:00:00" });
+    const res = await fetchQuoteWindow("USD/JPY", "5min", from, from + 15 * MIN, from + 3 * HOUR, p.fetcher);
+    expect(res?.requests).toBe(4);
+    expect(p.keysAsked()).toEqual(["20260110", "20260110", "20260109", "20260109"]);
+    // the Saturday file exists — it just holds nothing of this hour
+    expect(res?.empty).toEqual([]);
     expect(res?.missing).toEqual([]);
     expect(res?.bars).toHaveLength(3);
   });

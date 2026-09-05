@@ -21,7 +21,7 @@ import {
   type Reason,
 } from "../../supabase/functions/track-outcomes/evaluate.ts";
 import { parseCandles, type Candle } from "../../supabase/functions/analyze/indicators.ts";
-import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes.ts";
+import { isMarketClosed, type QuoteCandle } from "../../supabase/functions/track-outcomes/quotes.ts";
 import type { OutcomeEvaluation, OutcomeReason } from "../lib/types";
 
 const candle = (datetime: string, high: number, low: number, open?: number, close?: number): Candle => ({
@@ -1107,6 +1107,20 @@ describe("isDue", () => {
     expect(isDue({ interval: "1day", evaluation: evaluated(3 * HOUR, now) }, now)).toBe(false);
     expect(isDue({ interval: "1day", evaluation: evaluated(4 * HOUR, now) }, now)).toBe(true);
   });
+
+  it("brings a plan waiting on a bar to close back after one evaluation bar, not a whole cadence", () => {
+    const now = at(5);
+    const waiting = (checkedAgoMs: number, flags: Partial<Evaluation>, evalInterval = "1h"): Evaluation =>
+      ({ ...evaluated(checkedAgoMs, now), eval_interval: evalInterval, ...flags }) as Evaluation;
+    expect(isDue({ interval: "1day", evaluation: waiting(59.5 * 60_000, { refine_pending: true }) }, now)).toBe(true);
+    expect(isDue({ interval: "1day", evaluation: waiting(30 * 60_000, { refine_pending: true }) }, now)).toBe(false);
+    expect(isDue({ interval: "4h", evaluation: waiting(59.5 * 60_000, { signal_bar_pending: true }) }, now)).toBe(true);
+    expect(isDue({ interval: "1h", evaluation: waiting(14.5 * 60_000, { signal_bar_pending: true }, "15min") }, now)).toBe(true);
+    // a plan that is not waiting keeps its cadence
+    expect(isDue({ interval: "1day", evaluation: waiting(59.5 * 60_000, {}) }, now)).toBe(false);
+    // and never waits longer than the cadence itself
+    expect(isDue({ interval: "15min", evaluation: waiting(14.5 * 60_000, { refine_pending: true }) }, now)).toBe(true);
+  });
 });
 
 describe("parseCandleTime", () => {
@@ -1350,5 +1364,99 @@ describe("judgePlan — refinement on the coarse series' own basis", () => {
     expect(j.evaluation.resolved_at).toBe(new Date(at(0) + 30 * MIN).toISOString());
     expect(j.evaluation.spread_at_fill).toBeCloseTo(0.04, 6);
     expect(j.evaluation.spread_at_exit).toBeCloseTo(0.06, 6);
+  });
+
+  // --- the signal bar was still forming at the first sweep --------------
+  // Under market_v1 the trade is open from the signal instant, and with the
+  // cron at :03/:18/:33/:48 a 1h signal bar has not closed at the first sweep
+  // for about four plans in five.
+  const marketBuy: OpenRow = { ...buyLimit, interval: "4h", entry_point: 150.5, created_at: new Date(at(2) + 10 * MIN).toISOString() };
+  const quietHours: QuoteCandle[] = [quoted(at(0), 150.7, 150.3, 150.5), quoted(at(1), 150.7, 150.3, 150.5)];
+  // The signal hour as the tape showed it at 02:18 (quiet), at 02:33 (the
+  // stop already reached), and as it closed; then the hour that reaches the
+  // target
+  const signalQuiet = quoted(at(2), 150.8, 149.9, 150.4);
+  const signalGrazing = quoted(at(2), 150.8, 148.9, 149.4);
+  const signalClosed = quoted(at(2), 150.8, 148.9, 150.2);
+  const nextHour = quoted(at(3), 152.4, 150.2, 152.3);
+  const subBars: QuoteCandle[] = [
+    quoted(at(2), 150.8, 150.2, 150.5),
+    quoted(at(2) + 15 * MIN, 150.6, 150.0, 150.3),
+    quoted(at(2) + 30 * MIN, 150.4, 148.9, 149.4), // the stop
+    quoted(at(2) + 45 * MIN, 150.3, 149.6, 150.2),
+  ];
+
+  it("does not split a forming signal bar; once it has closed the next sweep reaches the single-sweep verdict", async () => {
+    let calls = 0;
+    const fetchFine: FineFetcher = async () => {
+      calls++;
+      return quotes(subBars);
+    };
+    const first = await judgePlan(marketBuy, [], "1h", at(2) + 33 * MIN, fetchFine, [...quietHours, signalGrazing]);
+    expect(calls).toBe(0);
+    expect(first.resolution).toBeNull();
+    expect(first.evaluation.refine_pending).toBe(true);
+    expect(first.evaluation.refine_attempts).toBe(0);
+    expect(first.evaluation.signal_bar_pending).toBe(true);
+    expect(first.evaluation.filled_at).toBe(new Date(at(2) + 10 * MIN).toISOString());
+
+    const closed = [...quietHours, signalClosed, nextHour];
+    const second = await judgePlan({ ...marketBuy, evaluation: first.evaluation }, [], "1h", at(3) + 3 * MIN, fetchFine, closed);
+    const single = await judgePlan(marketBuy, [], "1h", at(3) + 3 * MIN, fetchFine, closed);
+    expect(second.resolution).toBe("loss");
+    expect(second.evaluation.resolved_at).toBe(new Date(at(2) + 30 * MIN).toISOString());
+    expect(second.evaluation.resolved_at).toBe(single.evaluation.resolved_at);
+    expect(second.evaluation.filled_at).toBe(single.evaluation.filled_at);
+  });
+
+  it("looks at a signal bar that was still forming again once it has closed, even when it was quiet", async () => {
+    // Sweep one, eight minutes after the signal: nothing has happened yet.
+    // The stop is reached at 02:40. A second sweep that started at the bars
+    // AFTER the fill never saw it and scored the target at 03:00 instead.
+    const fetchFine: FineFetcher = async () => quotes(subBars);
+    const first = await judgePlan(marketBuy, [], "1h", at(2) + 18 * MIN, fetchFine, [...quietHours, signalQuiet]);
+    expect(first.resolution).toBeNull();
+    expect(first.evaluation.refine_pending).toBe(false);
+    expect(first.evaluation.signal_bar_pending).toBe(true);
+    expect(first.evaluation.filled_at).toBe(new Date(at(2) + 10 * MIN).toISOString());
+
+    const second = await judgePlan({ ...marketBuy, evaluation: first.evaluation }, [], "1h", at(3) + 3 * MIN, fetchFine, [...quietHours, signalClosed, nextHour]);
+    expect(second.resolution).toBe("loss");
+    expect(second.evaluation.resolved_at).toBe(new Date(at(2) + 30 * MIN).toISOString());
+    expect(second.evaluation.filled_at).toBe(new Date(at(2) + 10 * MIN).toISOString());
+  });
+
+  // --- instants no bar contains ------------------------------------------
+
+  it("prices an expiry's spread off the last bar the sweep held, the bar whose close priced the exit", async () => {
+    // A 15min plan lives five market days (480 bars). 479 quiet bars fall
+    // one short of that on bar time, and the sweep runs an hour after the
+    // last one closed: the wall time since then carries the plan over the
+    // line, so the expiry is stamped with the sweep's own time, which no bar
+    // contains.
+    const bars: QuoteCandle[] = [];
+    for (let t = at(0); bars.length < 479; t += 15 * MIN) {
+      if (!isMarketClosed(t)) bars.push(quoted(t, 150.7, 150.3, 150.5));
+    }
+    const last = Date.parse(bars[bars.length - 1].datetime);
+    const plan: OpenRow = { ...buyLimit, interval: "15min", entry_point: 150.5 };
+    const j = await judgePlan(plan, [], "15min", last + 15 * MIN + HOUR, async () => null, bars);
+    expect(j.resolution).toBe("expired");
+    expect(j.evaluation.resolved_at).toBe(j.evaluation.checked_at);
+    // closed on the bid, the side a BUY leaves on
+    expect(j.outcome_price).toBeCloseTo(150.5 - 0.005, 6);
+    expect(j.evaluation.spread_at_exit).toBeCloseTo(0.01, 6);
+  });
+
+  it("prices a fill made inside a gap off the first bar after it", async () => {
+    // No bar contains the signal instant; the market order was priced off
+    // the first bar's open
+    const created = at(0) + 5 * MIN;
+    const plan: OpenRow = { ...buyLimit, entry_point: 150.5, created_at: new Date(created).toISOString() };
+    const bars: QuoteCandle[] = [quoted(at(1), 150.7, 150.3, 150.5, 0.02), quoted(at(2), 152.4, 150.4, 152.0, 0.005)];
+    const j = await judgePlan(plan, [], "1h", at(3), async () => null, bars);
+    expect(j.evaluation.filled_at).toBe(new Date(created).toISOString());
+    expect(j.resolution).toBe("win");
+    expect(j.evaluation.spread_at_fill).toBeCloseTo(0.04, 6);
   });
 });

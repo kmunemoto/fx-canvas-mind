@@ -327,6 +327,10 @@ Deno.serve(async (req: Request) => {
           }
           return { basis: "quotes", bars: res.bars };
         } catch (err) {
+          // The throw may have landed on the last request the budget allowed
+          // while the next was refused: still this run's shortfall, not the
+          // feed's
+          if (quoteStarved) return "deferred";
           quoteRefinements++;
           errors.push(`${pair}|${interval}: quotes fine ${err instanceof Error ? err.message : String(err)}`);
           return null;

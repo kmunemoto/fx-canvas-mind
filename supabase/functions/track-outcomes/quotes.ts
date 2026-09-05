@@ -377,7 +377,14 @@ export const fetchQuotes = async (
 // hour most likely to span both levels. Measured on a probe: 0 requests,
 // bars [], missing [], and the plan filed as terminal no_data three sweeps
 // later without the feed ever being asked. So the first key is fetched
-// unconditionally and coverage only decides whether to go on.
+// unconditionally — and the walk does not stop on coverage while it has
+// found NOTHING, because inside that hour the gap is zero after an empty
+// key too. Under the other roll rule (07:00 JST in winter) the Friday
+// 21:00-22:00Z hour, open market, lives in the PREVIOUS key, and a walk
+// satisfied by an empty nearest key never reached it: measured, 2 requests,
+// bars [], missing [] — the same terminal no_data moved to the other half of
+// the year. A window the coarse series holds exists in one of the three
+// padded keys, so the only cost is six requests for a window no file holds.
 export const fetchQuoteWindow = async (
   pair: string,
   interval: string,
@@ -392,8 +399,9 @@ export const fetchQuoteWindow = async (
   if (!symbol || !spec || !rungMs) return null;
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
 
-  // Coverage is only demanded up to now: the part of a still-forming coarse
-  // bar that has not happened yet cannot be missing
+  // Coverage is only demanded up to now. The judge never asks about a bar
+  // still forming (fetchRange defers it), so this is for other callers: the
+  // part of a window that has not happened yet cannot be missing
   const until = Math.min(toMs, nowMs);
   const keyOf = spec.key === "day" ? jstDayKey : jstYearKey;
   const nearest = keyOf(fromMs);
@@ -414,7 +422,7 @@ export const fetchQuoteWindow = async (
   let gap = largestGap([], fromMs, until, rungMs);
 
   for (const key of keys) {
-    if (requests > 0 && gap < rungMs) break;
+    if (requests > 0 && merged.length > 0 && gap < rungMs) break;
     const [b, a] = await Promise.all([
       fetcher(klineUrl(symbol, "bid", spec.name, key)),
       fetcher(klineUrl(symbol, "ask", spec.name, key)),
