@@ -383,8 +383,9 @@ export const fetchQuotes = async (
 // 21:00-22:00Z hour, open market, lives in the PREVIOUS key, and a walk
 // satisfied by an empty nearest key never reached it: measured, 2 requests,
 // bars [], missing [] — the same terminal no_data moved to the other half of
-// the year. A window the coarse series holds exists in one of the three
-// padded keys, so the only cost is six requests for a window no file holds.
+// the year. A window the coarse series holds exists in one of the padded
+// keys — three, four when the window crosses JST midnight — so the only cost
+// is six to eight requests for a window no file holds.
 export const fetchQuoteWindow = async (
   pair: string,
   interval: string,

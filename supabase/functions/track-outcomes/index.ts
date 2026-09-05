@@ -312,8 +312,10 @@ Deno.serve(async (req: Request) => {
         try {
           const res = await fetchQuoteWindow(pair, interval, fromMs, toMs, nowMs, quoteFetcher);
           // The walk needed a further key (a bar before or across the roll)
-          // and the budget refused it: the feed did not fail, this run did
-          if (quoteStarved && (!res || res.missing.length > 0)) return "deferred";
+          // and the budget refused it: the feed did not fail, this run did.
+          // Inside the maybe-shut hour the gap is zero whatever was found, so
+          // there an empty result is the tell.
+          if (quoteStarved && (!res || res.missing.length > 0 || res.bars.length === 0)) return "deferred";
           // Counted once the feed has answered: a walk the budget cut short
           // is reported under `deferred`, not here
           quoteRefinements++;
@@ -358,7 +360,18 @@ Deno.serve(async (req: Request) => {
       if (quoteRequests >= MAX_QUOTE_REQUESTS) return null;
       if (nowMs - fromMs > MAX_QUOTE_LOOKBACK_MS) return null;
       try {
+        quoteStarved = false;
         const res = await fetchQuotes(pair, evalInterval, fromMs, nowMs, nowMs, quoteFetcher);
+        // The walk goes oldest key first, so a budget that runs out mid-walk
+        // refuses the NEWEST keys — the current trading day — and a series
+        // short of its last three bars still passes the coverage check
+        // (MAX_GAP_INTERVALS). Judged on it, a touch in those bars waits a
+        // tick and a plan made in them has no signal bar. Fall back to the
+        // mid feed for this group instead, as for any incomplete series.
+        if (quoteStarved) {
+          errors.push(`${pair}|${evalInterval}: quotes deferred (request budget)`);
+          return null;
+        }
         if (!res || res.bars.length === 0) return null;
         // A gap in the two-sided series would be judged as "price never got
         // there"; fall back rather than invent a verdict from partial data.
