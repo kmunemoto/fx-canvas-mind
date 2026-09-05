@@ -360,6 +360,8 @@ export const en: Dict = {
     rulebook: (v: number) => `Rulebook v${v}`,
     lessons: (n: number) => `${n} lesson${n === 1 ? "" : "s"}`,
     nextRevision: (n: number) => (n > 0 ? `${n} more lesson${n === 1 ? "" : "s"} until the next revision (or 24 h after the last)` : "revised on the next review"),
+    candidateHeld: (decided: number, needed: number) =>
+      `A revision is written and held. It goes live once the current version has ${decided}/${needed} settled trades to compare it against`,
     waits: "Post-mortems run automatically 1 h (15min plans), 2 h (1h), 4 h (4h) or 8 h (1day) after settlement, and are reviewed again later when little price action has followed",
   },
 

@@ -377,6 +377,11 @@ export interface LoopHealth {
   rulebook_version: number | null;
   rulebook_updated_at: string | null;
   lessons_since_rulebook: number;
+  // A revision the loop has written but not yet promoted: it is held until
+  // the live version has enough decided trades to be measured against.
+  candidate_waiting?: boolean;
+  candidate_created_at?: string | null;
+  decided_under_version?: number;
   jobs: Array<{ name: string; schedule: string; active: boolean }>;
   now: string;
 }

@@ -377,6 +377,8 @@ export const ja = {
     rulebook: (v: number) => `ルールブック v${v}`,
     lessons: (n: number) => `教訓 ${n}件`,
     nextRevision: (n: number) => (n > 0 ? `次回改訂まで教訓あと${n}件（または前回改訂から24時間で）` : "次の原因分析で改訂"),
+    candidateHeld: (decided: number, needed: number) =>
+      `改訂案は作成済みです。現行版で決着した取引が${decided}/${needed}件になった時点で、成績を比べてから適用します`,
     waits: "原因分析は決着の1時間後（15分足）・2時間後（1時間足）・4時間後（4時間足）・8時間後（日足）に自動実行し、決着後の値動きが少ない場合は後で再診断します",
   },
 
