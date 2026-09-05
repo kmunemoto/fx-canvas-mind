@@ -708,7 +708,7 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r4"]);
     expect(c?.rules.find((r) => r.id === "r1")).toMatchObject({ support: 2, supported_by: ["a", "b", "c"], since: "2026-08-01T00:00:00Z" });
     expect(c?.rules.find((r) => r.id === "r4")).toMatchObject({ support: 1, supported_by: ["a"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"], held_back: [], reworded: ["r1", "r2", "r4"] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3"], restored: [], dropped: ["r3"], held_back: [], reworded: ["r1", "r2", "r4"], reasons: { r3: "no_evidence" } });
     expect(c?.summary_en).toBe("s-en");
   });
 
@@ -751,14 +751,14 @@ describe("rulebook consolidation", () => {
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1", "r9", "r10"]);
     expect(c?.rules[0].kind).toBe("constraint");
     expect(c?.rules[2].since).toBe("2026-09-03T00:00:00Z");
-    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"], held_back: [], reworded: ["r1", "r2"] });
+    expect(c?.changes).toEqual({ added: ["r9", "r10"], removed: ["r3", "r4"], restored: [], dropped: ["r11"], held_back: [], reworded: ["r1", "r2"], reasons: { r11: "add_cap", r3: "omitted", r4: "omitted" } });
   });
 
   it("puts back rules dropped beyond the removal allowance, weakest ones going first, with their evidence recounted", () => {
     const c = parseConsolidation({ rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "s", summary_en: "s-en" }, previous, "2026-09-03T00:00:00Z", lessons);
     expect(c?.rules.map((r) => r.id)).toEqual(["r2", "r1"]);
     expect(c?.rules[0]).toMatchObject({ support: 1, supported_by: ["c"] });
-    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [], held_back: [], reworded: ["r1"] });
+    expect(c?.changes).toEqual({ added: [], removed: ["r3", "r4"], restored: ["r2"], dropped: [], held_back: [], reworded: ["r1"], reasons: { r3: "omitted", r4: "omitted" } });
     // A rule the model omitted whose evidence no longer holds up is not
     // put back, whatever the allowance
     const stale: Rule[] = [...previous, { ...previous[1], id: "r5", supported_by: ["gone"] }];
@@ -784,7 +784,7 @@ describe("rulebook consolidation", () => {
     const blank = parseConsolidation({ rules: [rule("", { kind: "heuristic", supported_by: ["a"] })], summary_ja: "s", summary_en: "s" }, old, T0, older);
     expect(blank?.rules.map((r) => r.id)).toEqual(["r1_"]);
     expect(blank?.rules[0].since).toBe(T0);
-    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [], held_back: [], reworded: [] });
+    expect(blank?.changes).toEqual({ added: ["r1_"], removed: ["r1"], restored: [], dropped: [], held_back: [], reworded: [], reasons: { r1: "omitted" } });
   });
 
   it("records a rule the editor rewrote under its own id, which is neither an addition nor a removal", () => {
@@ -799,7 +799,7 @@ describe("rulebook consolidation", () => {
       lessons,
     );
     expect(rewritten?.rules[0]).toMatchObject({ id: "r1", text_ja: "別のこと", since: "2026-08-01T00:00:00Z" });
-    expect(rewritten?.changes).toEqual({ added: [], removed: [], restored: [], dropped: [], held_back: [], reworded: ["r1"] });
+    expect(rewritten?.changes).toEqual({ added: [], removed: [], restored: [], dropped: [], held_back: [], reworded: ["r1"], reasons: {} });
 
     // Handed back unchanged, it is not a rewording
     const same = parseConsolidation(
@@ -836,6 +836,51 @@ describe("rulebook consolidation", () => {
     );
     expect(evidenceless?.changes.reworded).toEqual([]);
     expect(evidenceless?.changes.dropped).toEqual(["r1"]);
+  });
+
+  it("says why each rule that did not make the book was left out", () => {
+    // The editor proposed the same new rule at v7 and again at v8 and it was
+    // dropped both times; `dropped` alone could not say whether its citations
+    // failed or the book was simply full.
+    const noEvidence = parseConsolidation(
+      { rules: [rule("r1", { supported_by: ["a"] }), rule("rX", { supported_by: ["nope"] })], summary_ja: "s", summary_en: "s" },
+      [previous[0]],
+      T0,
+      lessons,
+    );
+    expect(noEvidence?.changes.dropped).toEqual(["rX"]);
+    expect(noEvidence?.changes.reasons.rX).toBe("no_evidence");
+
+    // Beyond the two-per-revision addition allowance
+    const capped = parseConsolidation(
+      {
+        rules: [rule("r9", { supported_by: ["a"] }), rule("r10", { supported_by: ["b"] }), rule("r11", { supported_by: ["c"] })],
+        summary_ja: "s", summary_en: "s",
+      },
+      previous,
+      T0,
+      lessons,
+    );
+    expect(capped?.changes.reasons.r11).toBe("add_cap");
+    // and the rules the editor left out say so as well
+    expect(capped?.changes.reasons.r3).toBe("omitted");
+
+    // A stored rule whose own citations no longer count is not restored, and
+    // says that rather than looking like an ordinary omission
+    // Four rules omitted at once: the two weakest spend the allowance and say
+    // "omitted"; of the two that reach the evidence recount, r2's citations
+    // still count and it is restored, r5's do not and it says why.
+    const stale: Rule[] = [...previous, { ...previous[1], id: "r5", supported_by: ["gone"] }];
+    const gone = parseConsolidation(
+      { rules: [rule("r1", { supported_by: ["a"] })], summary_ja: "s", summary_en: "s" },
+      stale,
+      T0,
+      lessons,
+    );
+    expect(gone?.changes.restored).toEqual(["r2"]);
+    expect(gone?.changes.removed).toContain("r5");
+    expect(gone?.changes.reasons.r5).toBe("evidence_gone");
+    expect(gone?.changes.reasons.r3).toBe("omitted");
   });
 
   it("gives English room to say the same thing, and does not call a shifted cut a rewording", () => {

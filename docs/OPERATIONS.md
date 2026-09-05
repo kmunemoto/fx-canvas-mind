@@ -222,6 +222,9 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 - 改訂は 1 回の run につき最大 1 回（統合の分岐が 1 つあるだけで、回数を決める定数はない。`MAX_REVISIONS` は thin の再診断回数、§4.1）。
 - 既存の id のまま本文や cause が書き換わったルールは `changes.reworded` に出る。追加でも削除でもないので `since` は据え置きだが、
   記録が無いと「版だけ上がって差分が空」なのに分析者が従う文章は入れ替わっている、という読めない改訂になる。
+- 書に入らなかったルールの理由は `changes.reasons`（id → 理由）に残る。`dropped` は `add_cap`（1 回の追加上限）/ `no_evidence`（引用が 1 つも数えられない）/ `book_full`（`MAX_RULES` が埋まっている）、
+  `removed` は `omitted`（編集者が外し、削除枠に収まった）/ `evidence_gone`（数え直しても support 0）/ `no_room`（復元したかったが席が無い）。
+  一覧だけでは「2 回続けて落ちた」までしか分からず、原因が引けなかった（v7・v8 で `r12` が連続で落ちた）。
 - 改訂のモデル呼び出しは診断の 45 秒とは別予算: 壁時計の残り − `WRITE_RESERVE_MS = 10 秒` を `MAX_CONSOLIDATION_MS = 110 秒` まで。
   それが `MIN_CONSOLIDATION_MS = 45 秒` 未満なら改訂せず `rulebook.reason = deferred_time_budget` を返す。起きるのは run の経過が 75 秒を超えたときだけで、実測は診断 1 件で約 24 秒・残予算 96 秒（`net._http_response` id 556）。
   この単価なら 3 件でも 45 秒は割らないので、`deferred_time_budget` が常態化していたら診断が想定より遅いということ。
@@ -264,7 +267,7 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 ## 5. cron の時刻と冪等性
 
 `cron.job`（Supabase の pg_cron）。ジョブはマイグレーションの `cron.schedule`（`20260903090000` / `20260903100000` / `20260903100500` / `20260903150000` / `20260903190000`）で作られている。
-ただし時刻の変更はマイグレーションを足さず `cron.alter_job` か `cron.job` の直接更新で行う（§9）ので、時刻の正はデータベース。
+ただし時刻の変更はマイグレーションを足さず `cron.alter_job` か `cron.job` の直接更新で行う（§10）ので、時刻の正はデータベース。
 
 | jobid | 名前 | schedule (UTC) | 呼び先 | timeout |
 |---|---|---|---|---|
@@ -418,7 +421,127 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 
 ---
 
-## 9. 変更するときのチェックリスト
+## 9. 次の実データで確かめること
+
+現行契約（`market_v1`）の行はまだ 1 件も無く、今動いているものの多くはコード上でしか確認できていない（§8）。
+最初の平日データが入ったときに、何を・どのクエリで・何と照らして見るかをここに置く。下の SQL はすべて本番で実行を確認済み。
+
+**A. 契約と約定の形** — 現行契約の行が書かれたか、成行として約定したか
+
+```sql
+select plan_contract, count(*) as n,
+       count(*) filter (where entry_point = price_at_signal) as entry_eq_signal,
+       count(*) filter (where evaluation->>'order_type' = 'market') as market_orders,
+       count(*) filter (where evaluation->>'price_basis' = 'quotes') as on_quotes,
+       count(*) filter (where evaluation->>'spread_at_fill' is not null) as have_spread
+from public.analyses
+where signal in ('BUY','SELL') and shadow = false
+group by 1 order by 1;
+```
+
+期待: `market_v1` の行が現れ、その行は `entry_eq_signal` = `n`、`market_orders` = `n`。
+`on_quotes` と `have_spread` は 3 日以内なら `n` に一致するはず。`on_quotes` が伸びないなら §3.2 の「仲値に落ちる条件」を疑う。
+
+**B. 判定不能の発生源** — `ambiguous` が出たとき、梯子が足りないのか本当の急変か
+
+```sql
+select evaluation->'ambiguity'->>'site' as site, count(*) as n,
+       round(avg((evaluation->'ambiguity'->>'bar_range')::numeric), 2) as avg_bar_range,
+       round(avg((evaluation->'ambiguity'->>'span')::numeric), 2) as avg_span
+from public.analyses
+where evaluation->'ambiguity'->>'site' is not null
+group by 1 order by n desc;
+```
+
+現在 0 件。`signal_bar` が最多になる見込み（§8）。`bar_range / span` が 1 前後ならデータで直せる、3 以上なら本当の急変。1 件ずつではなく分布で読む。
+
+**C. sweep の予算と精査** — Bid/Ask の精査が実際に走っているか
+
+```sql
+select created,
+       content::jsonb->>'quote_requests'   as q_req,
+       content::jsonb->>'quote_refinements' as q_refine,
+       content::jsonb->>'refinements'       as mid_refine,
+       content::jsonb->>'checked'  as checked,
+       content::jsonb->>'deferred' as deferred,
+       content::jsonb->>'waits_checked' as waits,
+       content::jsonb->>'errors'   as errors
+from net._http_response
+where status_code = 200 and content like '%track-outcomes-v%'
+      and created > now() - interval '24 hours'
+order by id desc limit 20;
+```
+
+期待: 開いている市場で `checked > 0` の tick に `q_req > 0`。`q_refine > 0` は掠りがあったときだけなので、0 が続くのは異常ではない。
+`deferred` が毎 tick 立つなら予算不足（§3.5）。`errors` は常に空であるべき。
+
+**D. 英語の本文が全文で保存されているか**（2026-09-05 の修正の効果確認）
+
+```sql
+select 'rules' as what, count(*) as n,
+       count(*) filter (where length(r->>'text_en') between 159 and 161) as at_old_cap,
+       max(length(r->>'text_en')) as max_en
+from public.rulebook, jsonb_array_elements(rules) r where id = 1
+union all
+select 'lessons', count(*),
+       count(*) filter (where length(lesson_en) between 159 and 161),
+       max(length(lesson_en))
+from public.lessons
+union all
+select 'lessons(修正後)', count(*),
+       count(*) filter (where length(lesson_en) between 159 and 161),
+       max(length(lesson_en))
+from public.lessons where created_at > '2026-09-05T13:15:00Z';
+```
+
+修正前の 17 件中 15 件、ルール 3 件中 2 件は 160 に張り付いたまま（復元不能）。
+**見るのは 3 行目だけ**: 修正後に書かれた教訓が 160 に張り付いていたら、上限ではなくモデルの書き方の問題。
+
+**E. WAIT の採点**
+
+```sql
+select wait_check->>'verdict' as verdict, count(*) as n,
+       count(*) filter (where entry_check->>'rejection' is not null) as server_rejected
+from public.analyses where signal = 'WAIT' group by 1 order by n desc;
+```
+
+現在は 3 件すべて `unknown`（`price_at_signal` が無かった時代の行なので採点材料が無い）。
+新しい WAIT は `pending` → `correct` / `missed` に落ちるはず。新しい行まで `unknown` なら §3.6 の入力（ATR・価格）を疑う。
+
+**F. 勝ちの危うさ（danger）**
+
+```sql
+select outcome, count(*) as n,
+       count(*) filter (where postmortem->'facts'->'danger' is not null) as have_danger,
+       count(*) filter (where jsonb_array_length(coalesce(postmortem->'facts'->'danger'->'flags','[]'::jsonb)) > 0) as flagged
+from public.analyses
+where outcome in ('win','loss','expired','ambiguous') and shadow = false and postmortem->>'status' = 'done'
+group by outcome order by outcome;
+```
+
+既存 10 件は `have_danger` = 0。v9 より前に診断された行で、再診断もされないため（§4.1）。**v9 以降に診断された行だけを見る**。
+`danger` は約定した全プランに入り、旗が立つのは勝ちだけ（§4.2）。勝ちの大半に旗が立つなら閾値が緩すぎる。
+
+**G. ルールブック改訂の差分**
+
+```sql
+select version, updated_at,
+       stats->'changes'->>'added'     as added,
+       stats->'changes'->>'removed'   as removed,
+       stats->'changes'->>'restored'  as restored,
+       stats->'changes'->>'dropped'   as dropped,
+       stats->'changes'->>'held_back' as held_back,
+       stats->'changes'->>'reworded'  as reworded,
+       stats->'changes'->>'reasons'   as reasons
+from public.rulebook where id = 1;
+```
+
+`reasons` は v8 では null（記録前）。v9 以降は `dropped` と `removed` の各 id に理由が付く（§4.3）。
+見るべきもの:
+- **同じ id が毎回 `dropped` に出るか**。v7・v8 は `r12` が 2 回続けて落ちた。`reasons` がその理由を言うので、`no_evidence` が続くならプロンプト側で引用条件を伝える改善に進む。`book_full` や `add_cap` なら正常な混雑。
+- `reworded` が鳴ったら、本当に本文が変わったか history と突き合わせる（v8 の初回は切り詰めの空白差による誤検知だった）。
+
+## 10. 変更するときのチェックリスト
 
 - [ ] 契約を変えるなら `_shared/contract.ts` を起点に、同じ値を持つ `postmortem/facts.ts`（`MARKET_CONTRACT`）・`src/lib/outcomeStats.ts`（`CURRENT_CONTRACT` / `LEGACY_CONTRACT`）・`src/lib/types.ts`（`PlanContract`）と、
   `postmortem/prompt.ts`（診断・改訂のシステムプロンプトが契約名を本文に直書きしている。定数を参照しないのでテストにも型検査にもかからない）、
