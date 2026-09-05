@@ -18,6 +18,35 @@ const index = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 const promptSrc = readFileSync("supabase/functions/postmortem/prompt.ts", "utf8");
 const analyzeSrc = readFileSync("supabase/functions/analyze/index.ts", "utf8");
 
+describe("a plan that was shown is a plan that was kept", () => {
+  it("does not report success when the history row did not land", () => {
+    // The row IS the plan: unsaved, it never reaches the history, the tracker
+    // never settles it, and it never becomes a lesson — while the user was
+    // charged a credit for it.
+    expect(analyzeSrc).toContain("SAVE_ATTEMPTS");
+    expect(analyzeSrc).toContain('error_stage: "history_not_saved"');
+    // the failure path goes through fail(), which is the only thing that
+    // hands the credit back
+    const save = analyzeSrc.slice(analyzeSrc.indexOf("Failed to save analysis history, giving up"), analyzeSrc.indexOf("const shadowable"));
+    expect(save).toContain("return await fail(");
+  });
+
+  it("never writes a shadow row without the parent it shadows", () => {
+    expect(analyzeSrc).toContain("const shadowable = savedId !== null && entryRejected");
+  });
+
+  it("keeps what was sent to the model, so the plan can be replayed", () => {
+    // The prompt's market content is mostly candle blocks, and the event
+    // block's forecast/previous are overwritten in econ_events as the week
+    // runs: neither can be rebuilt from parts afterwards.
+    expect(analyzeSrc).toContain("prompt: promptRecord");
+    expect(analyzeSrc).toContain("quote_at_signal: quoteAtSignal");
+    expect(analyzeSrc).toContain("user: userMessageText");
+    // the stored user string is the one the request carries, not a rebuild
+    expect(analyzeSrc).toContain("messages: [{ role: \"user\", content: userMessageText }]");
+  });
+});
+
 describe("the rulebook can actually be revised", () => {
   it("does not require this run to have written a lesson", () => {
     // revisionDue() already asks the only question that matters — how much has
@@ -25,7 +54,51 @@ describe("the rulebook can actually be revised", () => {
     // second, weaker gate that can close forever.
     const gate = index.slice(index.indexOf("let rulebook: JsonRecord | null = null;"), index.indexOf("const lessonSelect"));
     expect(gate).not.toMatch(/newLessons > 0/);
-    expect(index).toContain("revisionDue(sinceVersion, updatedAt, nowMs)");
+    expect(index).toContain("revisionDue(sinceVersion, lastRevisionAt, nowMs)");
+    // ...and the clock it is paced against is the last revision WRITTEN, not
+    // the last one promoted. Pacing on updated_at once promotion can be held
+    // back would ask the model for a fresh candidate on every sweep and never
+    // let the "since" counter reset.
+    expect(index).toContain('const lastRevisionAt = strOrNull(priorCandidate?.created_at) ?? updatedAt;');
+  });
+
+  it("writes the lesson before calling the diagnosis done", () => {
+    // The reverse order stranded the plan for good: a done row with
+    // thin:false matches no branch of retryFilter, and the consolidation that
+    // rewrites the rules reads the lessons table, so that plan's experience
+    // never reached the rules again.
+    const lessonWrite = index.indexOf("const lessonOk = await writeLesson(");
+    const markDone = index.indexOf("{ postmortem: stored }");
+    expect(lessonWrite).toBeGreaterThan(-1);
+    expect(markDone).toBeGreaterThan(-1);
+    expect(lessonWrite).toBeLessThan(markDone);
+    // and a failed lesson leaves the row a candidate rather than marking it
+    expect(index).toContain("diagnosis not marked done");
+  });
+
+  it("rebuilds a lesson that never landed, without asking the model again", () => {
+    // Everything a lessons row needs is in the stored diagnosis and the
+    // analyses row, so the rows already stranded can be recovered for the
+    // price of an insert.
+    expect(index).toContain("postmortem->>status=eq.done");
+    expect(index).toContain("lessons?select=analysis_id&analysis_id=in.");
+    expect(index).toContain("lessons_repaired");
+    const repair = index.slice(index.indexOf("---- repair:"), index.indexOf("---- rulebook"));
+    expect(repair).not.toMatch(/askModel/);
+  });
+
+  it("does not put a revision in front of the analyst until the live one was measured", () => {
+    // Versions 6, 7 and 8 were each replaced before a single trade under them
+    // closed. Experience still flows into a candidate on the old cadence;
+    // only the swap waits.
+    expect(index).toContain("MIN_DECIDED_PER_VERSION");
+    expect(index).toContain("outcome=in.(win,loss,expired)&shadow=is.false");
+    expect(index).toContain('reason: "candidate_held"');
+    expect(index).toContain("decided_needed");
+    // the held revision is stored, not thrown away
+    const held = index.slice(index.indexOf('reason: "candidate_held"') - 2000, index.indexOf('reason: "candidate_held"'));
+    expect(held).toContain("candidate: {");
+    expect(held).toContain("base_version: previousVersion");
   });
 
   it("records the run that ran out of clock instead of skipping in silence", () => {

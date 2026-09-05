@@ -60,6 +60,10 @@ const MAX_ATTEMPTS = 3;
 // A diagnosis made on almost no aftermath is revisited once the full window
 // of bars exists; this caps how often that happens.
 const MAX_REVISIONS = 1;
+// Decided trades the live rulebook must have accumulated before a revision
+// replaces it. Below this the version was never measured, so swapping it out
+// throws away the only evidence that could ever say whether it helped.
+const MIN_DECIDED_PER_VERSION = 10;
 // Supabase kills the worker at 150s; leave room to write results
 const WALL_CLOCK_BUDGET_MS = 130_000;
 const START_DIAGNOSIS_BEFORE_MS = 75_000;
@@ -75,6 +79,11 @@ const MAX_CONSOLIDATION_MS = 110_000;
 // Held back so a revision that did finish is still written down
 const WRITE_RESERVE_MS = 10_000;
 const RECENT_LESSONS = 60;
+// The repair scan: how many recent done rows to check for a missing lesson,
+// and how many to rebuild in one run. Rebuilding costs one insert each and no
+// model call, so the cap is about keeping the run short, not about spend.
+const REPAIR_SCAN = 200;
+const REPAIR_PER_RUN = 20;
 const RECENT_ROWS = 300;
 // Rows fetched per row kept, so the round-robin across accounts has a pool
 // deeper than the busiest account's recent output
@@ -188,6 +197,55 @@ Deno.serve(async (req: Request) => {
         ...init,
         headers: { ...serviceHeaders, ...(init.headers ?? {}) },
       });
+    // One place that turns a stored diagnosis into a lessons row, so the
+    // repair path below writes exactly what the diagnosis path writes. Every
+    // field comes from the diagnosis document or the analyses row, which is
+    // why a lesson lost to a failed insert can be recovered later without
+    // asking the model anything a second time.
+    const writeLesson = async (
+      id: string,
+      raw: JsonRecord,
+      doc: JsonRecord,
+      row: { pair: string; interval: string; signal: string; outcome: string; created_at: string },
+    ): Promise<boolean> => {
+      const lesson = isRecord(doc.lesson) ? doc.lesson : {};
+      const scope = strOrNull(doc.scope);
+      const ev = isRecord(raw.evaluation) ? raw.evaluation : null;
+      const res = await rest("lessons?on_conflict=analysis_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({
+          analysis_id: id,
+          user_id: strOrNull(raw.user_id),
+          plan_contract: strOrNull(raw.plan_contract),
+          pair: row.pair,
+          interval: row.interval,
+          signal: row.signal,
+          mode: strOrNull(raw.mode),
+          order_type: strOrNull(ev?.order_type),
+          outcome: row.outcome,
+          cause: strOrNull(doc.cause),
+          secondary_causes: Array.isArray(doc.secondary_causes) ? doc.secondary_causes : [],
+          avoidable: doc.avoidable === true,
+          confidence: numberOrNull(doc.confidence),
+          lesson_ja: strOrNull(lesson.ja) ?? "",
+          lesson_en: strOrNull(lesson.en) ?? "",
+          scope: scope ? { text: scope } : null,
+          shadow: raw.shadow === true,
+          rule_blamed: strOrNull(doc.rule_blamed),
+          rule_credited: strOrNull(doc.rule_credited),
+          // When the plan was made: what "same situation" is judged on
+          analysis_created_at: row.created_at,
+        }),
+      });
+      if (!res.ok) {
+        console.error("lesson insert failed:", id, res.status, (await res.text().catch(() => "")).slice(0, 200));
+        return false;
+      }
+      await res.text().catch(() => {});
+      return true;
+    };
+
     const patchRows = async (path: string, body: JsonRecord): Promise<number> => {
       const res = await rest(path, {
         method: "PATCH",
@@ -252,9 +310,11 @@ Deno.serve(async (req: Request) => {
 
     // Options for a hand-run (either caller is trusted): run on specific
     // rows, skip the after-settlement wait, force a rulebook rewrite
-    const options = { force: false, ids: [] as string[], consolidate: false, limit: MAX_PLANS_PER_RUN };
+    const options = { force: false, ids: [] as string[], consolidate: false, promote: false, limit: MAX_PLANS_PER_RUN };
     options.force = body.force === true;
     options.consolidate = body.consolidate === true;
+    // Escape hatch: promote a revision the decided-trade gate is holding.
+    options.promote = body.promote === true;
     options.ids = strList(body.ids).slice(0, MAX_PLANS_ADMIN);
     const limit = numberOrNull(body.limit);
     if (limit !== null) options.limit = Math.max(1, Math.min(MAX_PLANS_ADMIN, Math.round(limit)));
@@ -264,7 +324,7 @@ Deno.serve(async (req: Request) => {
     // rules and the kept history say which rules that version held, so the
     // diagnosis can name the rule at fault and the consolidation can score
     // each rule on what its plans then did
-    const rulebookRows = await readRowsOrNull("rulebook?id=eq.1&select=version,rules,history,updated_at");
+    const rulebookRows = await readRowsOrNull("rulebook?id=eq.1&select=version,rules,history,updated_at,candidate");
     // A rulebook that could not be read is not an empty one: never rewrite
     // it from nothing on the strength of a failed request
     const rulebookUnavailable = rulebookRows === null;
@@ -594,46 +654,71 @@ Deno.serve(async (req: Request) => {
         facts,
         created_at: nowIso,
       };
+      // The lesson goes in FIRST. Marking the diagnosis done and then failing
+      // to write the lesson stranded the row for good: a done row with
+      // thin:false matches no branch of retryFilter, and the consolidation
+      // that rewrites the rulebook reads the lessons table, so that plan's
+      // experience never reached the rules again. The reverse order is safe —
+      // a lesson without the done marker is re-diagnosed next run and the
+      // insert is idempotent on analysis_id.
+      const lessonOk = await writeLesson(row.id, raw, stored, row);
+      if (!lessonOk) {
+        errors.push(`${row.id}: lesson not written, diagnosis not marked done`);
+        continue;
+      }
+      newLessons++;
+
       const written = await patchRows(`analyses?id=eq.${encodeURIComponent(row.id)}`, { postmortem: stored });
       if (written === 0) {
         errors.push(`${row.id}: not written`);
         continue;
       }
-
-      const lessonRes = await rest("lessons?on_conflict=analysis_id", {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({
-          analysis_id: row.id,
-          user_id: strOrNull(raw.user_id),
-          plan_contract: strOrNull(raw.plan_contract),
-          pair: row.pair,
-          interval: row.interval,
-          signal: row.signal,
-          mode: strOrNull(raw.mode),
-          order_type: ev?.order_type ?? null,
-          outcome: row.outcome,
-          cause: diagnosis.cause,
-          secondary_causes: diagnosis.secondary_causes,
-          avoidable: diagnosis.avoidable,
-          confidence: diagnosis.confidence,
-          lesson_ja: diagnosis.lesson_ja,
-          lesson_en: diagnosis.lesson_en,
-          scope: diagnosis.scope ? { text: diagnosis.scope } : null,
-          shadow: raw.shadow === true,
-          rule_blamed: diagnosis.rule_blamed,
-          rule_credited: diagnosis.rule_credited,
-          // When the plan was made: what "same situation" is judged on
-          analysis_created_at: row.created_at,
-        }),
-      });
-      if (!lessonRes.ok) {
-        errors.push(`${row.id}: lesson not written (${lessonRes.status}: ${(await lessonRes.text().catch(() => "")).slice(0, 120)})`);
-      } else {
-        await lessonRes.text().catch(() => {});
-        newLessons++;
-      }
       diagnosed.push({ id: row.id, cause: diagnosis.cause, outcome: row.outcome, shadow: raw.shadow === true });
+    }
+
+    // ---- repair: diagnoses whose lesson never landed ------------------------
+    // Before the ordering was fixed, a failed lesson insert left a row marked
+    // done with no lesson, and retryFilter cannot see such a row again
+    // (thin:false matches none of its branches). The diagnosis itself is on
+    // the row, so the lesson can be rebuilt from it with no model call — this
+    // recovers the rows already stranded, and covers any future insert that
+    // fails after the diagnosis has been stored.
+    let repaired = 0;
+    try {
+      const doneRows = (await readRowsOrNull(
+        `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,evaluation,postmortem` +
+          `&postmortem->>status=eq.done&order=closed_at.desc&limit=${REPAIR_SCAN}`,
+      )) ?? [];
+      if (doneRows.length > 0) {
+        const ids = doneRows.map((r) => String(r.id ?? "")).filter(Boolean);
+        const haveLessons = (await readRowsOrNull(
+          `lessons?select=analysis_id&analysis_id=in.(${ids.map(encodeURIComponent).join(",")})`,
+        )) ?? [];
+        const have = new Set(haveLessons.map((l) => String(l.analysis_id ?? "")));
+        const missing = doneRows.filter((r) => !have.has(String(r.id ?? "")));
+        for (const raw of missing.slice(0, REPAIR_PER_RUN)) {
+          const doc = isRecord(raw.postmortem) ? raw.postmortem : null;
+          const id = strOrNull(raw.id);
+          // A diagnosis with no lesson text is nothing to rebuild from
+          const lesson = doc && isRecord(doc.lesson) ? doc.lesson : null;
+          if (!id || !doc || !lesson || (!strOrNull(lesson.ja) && !strOrNull(lesson.en))) continue;
+          const ok = await writeLesson(id, raw, doc, {
+            pair: String(raw.pair ?? ""),
+            interval: String(raw.interval ?? ""),
+            signal: String(raw.signal ?? ""),
+            outcome: String(raw.outcome ?? ""),
+            created_at: String(raw.created_at ?? nowIso),
+          });
+          if (ok) {
+            repaired++;
+            newLessons++;
+          } else {
+            errors.push(`${id}: lesson repair failed`);
+          }
+        }
+      }
+    } catch (err) {
+      errors.push(`repair: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // ---- rulebook ----------------------------------------------------------
@@ -724,12 +809,18 @@ Deno.serve(async (req: Request) => {
       const previousRules: Rule[] = current ? parseRules(current.rules) : [];
       const previousVersion = current ? numberOrNull(current.version) ?? 0 : 0;
       const updatedAt = current ? strOrNull(current.updated_at) : null;
-      const updatedMs = updatedAt ? Date.parse(updatedAt) : NaN;
+      const priorCandidate = current && isRecord(current.candidate) ? current.candidate : null;
+      // Paced against the last revision WRITTEN, promoted or not. Pacing
+      // against updated_at instead would leave a blocked promotion asking the
+      // model for a fresh candidate on every sweep, and would never let the
+      // "new lessons since" counter reset.
+      const lastRevisionAt = strOrNull(priorCandidate?.created_at) ?? updatedAt;
+      const lastRevisionMs = lastRevisionAt ? Date.parse(lastRevisionAt) : NaN;
       const sinceVersion = lessons.filter((l) => {
         const t = Date.parse(l.created_at);
-        return !Number.isFinite(updatedMs) || (Number.isFinite(t) && t > updatedMs);
+        return !Number.isFinite(lastRevisionMs) || (Number.isFinite(t) && t > lastRevisionMs);
       }).length;
-      const due = options.consolidate || revisionDue(sinceVersion, updatedAt, nowMs);
+      const due = options.consolidate || revisionDue(sinceVersion, lastRevisionAt, nowMs);
 
       if (lessons.length === 0) {
         rulebook = { version: previousVersion, revised: false, reason: "no_lessons" };
@@ -801,18 +892,75 @@ Deno.serve(async (req: Request) => {
           // not counted as new again by the next run; and written only over
           // the version that was read, so a concurrent rewrite is not lost
           const stampIso = new Date().toISOString();
-          const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
-            version: previousVersion + 1,
-            rules: consolidated.rules,
-            summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
-            stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
-            history: nextHistory,
-            updated_at: stampIso,
-          });
-          if (n > 0) {
-            rulebook = { version: previousVersion + 1, revised: true, rules: consolidated.rules.length, changes: consolidated.changes };
-            console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
-          } else errors.push("rulebook: not written (version changed underneath, or write failed)");
+          // Writing a revision and putting it in front of the analyst are two
+          // different acts. Versions 6, 7 and 8 were each replaced before a
+          // single trade under them closed, so no version was ever measured
+          // and no comparison between two of them was possible. The revision
+          // is still written every time experience calls for one; it waits in
+          // `candidate` until the live version has enough decided trades to
+          // have been worth measuring.
+          const decidedUnderVersion = previousVersion > 0
+            ? ((await readRowsOrNull(
+              `analyses?select=id&rulebook_version=eq.${previousVersion}` +
+                `&outcome=in.(win,loss,expired)&shadow=is.false&limit=100`,
+            )) ?? []).length
+            : 0;
+          const measured = decidedUnderVersion >= MIN_DECIDED_PER_VERSION;
+          const promote = measured || options.promote;
+          if (promote) {
+            const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+              version: previousVersion + 1,
+              rules: consolidated.rules,
+              summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
+              stats: { ...stats, changes: consolidated.changes, lessons_considered: lessons.length },
+              history: nextHistory,
+              updated_at: stampIso,
+              candidate: null,
+            });
+            if (n > 0) {
+              rulebook = {
+                version: previousVersion + 1,
+                revised: true,
+                promoted: true,
+                rules: consolidated.rules.length,
+                changes: consolidated.changes,
+                decided_under_previous: decidedUnderVersion,
+                forced: options.promote && !measured,
+              };
+              console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
+            } else errors.push("rulebook: not written (version changed underneath, or write failed)");
+          } else {
+            // Held back. The candidate is replaced each time rather than
+            // queued, so what is waiting is always the freshest reading of
+            // the evidence.
+            const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
+              candidate: {
+                base_version: previousVersion,
+                rules: consolidated.rules,
+                summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
+                changes: consolidated.changes,
+                lessons_considered: lessons.length,
+                created_at: stampIso,
+              },
+            });
+            if (n > 0) {
+              rulebook = {
+                version: previousVersion,
+                revised: false,
+                promoted: false,
+                reason: "candidate_held",
+                candidate_rules: consolidated.rules.length,
+                changes: consolidated.changes,
+                decided_under_version: decidedUnderVersion,
+                decided_needed: Math.max(0, MIN_DECIDED_PER_VERSION - decidedUnderVersion),
+              };
+              console.log("rulebook candidate held", {
+                base: previousVersion,
+                decided: decidedUnderVersion,
+                needed: MIN_DECIDED_PER_VERSION,
+              });
+            } else errors.push("rulebook: candidate not written (version changed underneath, or write failed)");
+          }
         }
       }
     }
@@ -824,6 +972,7 @@ Deno.serve(async (req: Request) => {
       due: rows.length,
       diagnosed: diagnosed.length,
       lessons: newLessons,
+      lessons_repaired: repaired,
       lesson_contributors: lessonContributors,
       record_contributors: recordContributors,
       rulebook,

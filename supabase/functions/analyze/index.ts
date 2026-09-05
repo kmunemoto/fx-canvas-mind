@@ -54,6 +54,10 @@ const corsHeaders = {
 };
 
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+// Writing the history row is retried before the analysis is called a failure:
+// a PostgREST hiccup should not cost the user a credit and a plan.
+const SAVE_ATTEMPTS = 3;
+const SAVE_RETRY_MS = 400;
 
 // Plans that may run an analysis at all. Anything else — "free", an expired
 // subscription, a missing profile row — is refused before any paid work.
@@ -925,6 +929,20 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // The two-sided quote behind the mid the plan is written on. Taken from
+    // the newest bar of the same GMO series the overlay uses, so it is the
+    // same instant the user is looking at; null when that feed was not
+    // consulted or had nothing, in which case only the mid is on record.
+    const newestQuote = gmoRaw && gmoRaw.bars.length > 0 ? gmoRaw.bars[gmoRaw.bars.length - 1] : null;
+    const decisionQuote = newestQuote
+      ? {
+        bid: newestQuote.bid.close,
+        ask: newestQuote.ask.close,
+        at: newestQuote.datetime,
+        source: "gmo",
+      }
+      : null;
+
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
@@ -996,6 +1014,10 @@ Deno.serve(async (req: Request) => {
       "anthropic-version": "2023-06-01",
     };
 
+    const userMessageText = includeFundamental
+      ? buildUserMessage(SEARCH_NOTE, true)
+      : buildUserMessage(TECHNICAL_NOTE, false);
+
     const baseRequest: JsonRecord = {
       model: "claude-opus-5",
       max_tokens: 8000,
@@ -1004,12 +1026,7 @@ Deno.serve(async (req: Request) => {
         .replace("{{EVENTS}}", eventBlock)
         .replace("{{LEARNED_RULES}}", learnedRules)
         .trimEnd(),
-      messages: [{
-        role: "user",
-        content: includeFundamental
-          ? buildUserMessage(SEARCH_NOTE, true)
-          : buildUserMessage(TECHNICAL_NOTE, false),
-      }],
+      messages: [{ role: "user", content: userMessageText }],
     };
 
     // Web search responses carry citations, which are incompatible with
@@ -1459,10 +1476,21 @@ Deno.serve(async (req: Request) => {
       // entry. Storing the raw float here and the rounded one there is what
       // let a plan be certified at one risk/reward and judged at another.
       const priceAtSignal = Number.isFinite(marketEntry) ? marketEntry : null;
-      const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses?select=id`, {
-        method: "POST",
-        headers: { ...historyHeaders, Prefer: "return=representation" },
-        body: JSON.stringify({
+      // What was actually sent to the model. The prompt's market content is
+      // mostly candle blocks, and the event block's forecast/previous are
+      // overwritten in econ_events as the week runs, so neither can be rebuilt
+      // from parts later. A plan that cannot be replayed cannot be compared
+      // against a different rulebook on its own snapshot.
+      const promptRecord = {
+        system: typeof baseRequest.system === "string" ? baseRequest.system : null,
+        user: userMessageText,
+        model: typeof baseRequest.model === "string" ? baseRequest.model : null,
+        at: pricedAtIso,
+      };
+      // The two-sided quote behind the mid the user was shown. Execution is
+      // one-sided, so an honest fill starts here, not at price_at_signal.
+      const quoteAtSignal = decisionQuote;
+      const historyBody = JSON.stringify({
           user_id: user.id,
           pair: currencyPair,
           interval,
@@ -1490,16 +1518,48 @@ Deno.serve(async (req: Request) => {
           // will pool silently.
           plan_contract: PLAN_CONTRACT,
           priced_at: pricedAtIso,
+          prompt: promptRecord,
+          quote_at_signal: quoteAtSignal,
           outcome: trackable ? "pending" : "skipped",
-        }),
       });
+      // The row IS the plan. Nothing else persists it: unsaved, it never
+      // reaches the user's history, the tracker never settles it, the
+      // post-mortem never sees it and it never becomes a lesson. This used to
+      // be a console.error under an ok:true response — the user was charged a
+      // credit for an analysis that left no trace. Retry the write, and if it
+      // still will not land, say so and hand the credit back.
       let savedId: string | null = null;
-      if (!historyRes.ok) {
-        console.error("Failed to save analysis history:", historyRes.status, (await historyRes.text()).slice(0, 300));
-      } else {
-        const saved = parseJsonResponse(await historyRes.text());
-        const first = Array.isArray(saved) ? saved[0] : saved;
-        savedId = isRecord(first) && typeof first.id === "string" ? first.id : null;
+      let saveError = "";
+      for (let attempt = 1; attempt <= SAVE_ATTEMPTS && savedId === null; attempt++) {
+        try {
+          const historyRes = await fetch(`${supabaseUrl}/rest/v1/analyses?select=id`, {
+            method: "POST",
+            headers: { ...historyHeaders, Prefer: "return=representation" },
+            body: historyBody,
+          });
+          if (historyRes.ok) {
+            const saved = parseJsonResponse(await historyRes.text());
+            const first = Array.isArray(saved) ? saved[0] : saved;
+            savedId = isRecord(first) && typeof first.id === "string" ? first.id : null;
+            if (savedId === null) saveError = "no id returned";
+          } else {
+            saveError = `${historyRes.status}: ${(await historyRes.text().catch(() => "")).slice(0, 200)}`;
+          }
+        } catch (err) {
+          saveError = err instanceof Error ? err.message : String(err);
+        }
+        if (savedId === null && attempt < SAVE_ATTEMPTS) {
+          console.error(`Failed to save analysis history (attempt ${attempt}):`, saveError);
+          await new Promise((resolve) => setTimeout(resolve, SAVE_RETRY_MS * attempt));
+        }
+      }
+      if (savedId === null) {
+        console.error("Failed to save analysis history, giving up:", saveError);
+        return await fail({
+          ok: false,
+          error: "分析は完了しましたが保存できませんでした。回数は戻しました。もう一度お試しください",
+          diagnostics: { error_stage: "history_not_saved", stage, detail: redactSecrets(saveError).slice(0, 200) },
+        }, 503);
       }
 
       // The refused plan is tracked too, out of sight: if the market goes on
@@ -1510,7 +1570,9 @@ Deno.serve(async (req: Request) => {
       // poor_rr or stop_too_tight refusal is a judgement about the plan's
       // shape, and a filled shadow of it would read as "the gate was wrong"
       // when it was not.
-      const shadowable = entryRejected &&
+      // Never parentless: a shadow whose shadow_of is null cannot be folded
+      // back into the row it is the shadow of, and reads as a plan of its own.
+      const shadowable = savedId !== null && entryRejected &&
         (entryVerdict.rejection === "too_far" || entryVerdict.rejection === "should_be_market") &&
         (proposedSignal === "BUY" || proposedSignal === "SELL") &&
         proposed.entry !== null && proposed.stop !== null && proposed.tp1 !== null;
