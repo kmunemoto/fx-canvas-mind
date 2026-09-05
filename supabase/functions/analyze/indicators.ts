@@ -38,31 +38,109 @@ export interface IndicatorSnapshot {
   adx: number | null;
   swingHighs: number[];
   swingLows: number[];
+  // The cloud STANDING AT the newest bar: the spans computed 26 bars earlier.
+  // spanA/spanB above are the pair this window projects 26 bars ahead, which
+  // is a different place on the chart and was being read as if it were this.
+  cloudNow: Cloud | null;
+  cloudSide: CloudSide | null;
+  // Where the projected cloud is going: its own top/bottom and whether it has
+  // flipped (spanA crossing spanB) relative to the cloud at the price now.
+  cloudAhead: Cloud | null;
+  cloudAheadTwisted: boolean | null;
+  // Whether the newest bar had closed when this was computed. A snapshot taken
+  // mid-bar and the same bar's closed reading are otherwise indistinguishable,
+  // and a breakout that is true mid-bar can be gone once the bar closes.
+  barClosed: boolean | null;
+  barsUsed: number;
 }
 
-// Twelve Data time_series values (newest-first, string fields) -> oldest-first numbers.
-// Rows with non-numeric OHLC are dropped.
+// A price, or nothing. The bare global Number() is the wrong tool here: it
+// reads null, "", "   ", [] and false as 0 and true as 1, and 0 is finite, so
+// a missing field arrived as a price of zero and every indicator computed on
+// it. Only a number, or a string that is entirely a number, counts.
+const priceOf = (v: unknown): number | null => {
+  if (typeof v === "number") return Number.isFinite(v) && v > 0 ? v : null;
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+// A bar that cannot be true is not data. A high below its own low, or below
+// the open or close it is supposed to contain, means the row is damaged or the
+// fields are transposed; either way the indicators computed from it are
+// fiction and the plan resting on them is worse than no plan.
+export const coherentBar = (c: Candle): boolean =>
+  c.high >= c.low &&
+  c.high >= c.open && c.high >= c.close &&
+  c.low <= c.open && c.low <= c.close;
+
+// Twelve Data time_series values (newest-first, string fields) -> oldest-first
+// numbers, sorted by time, deduplicated, and with every incoherent bar
+// dropped. Dropping is not silent to the caller: seriesHealth below reports
+// what a series is missing so an analysis can refuse rather than proceed on
+// holes.
 export const parseCandles = (values: unknown): Candle[] => {
   if (!Array.isArray(values)) return [];
 
-  const out: Candle[] = [];
+  const byTime = new Map<string, Candle>();
+  const undated: Candle[] = [];
   for (const row of values) {
     if (typeof row !== "object" || row === null) continue;
     const r = row as Record<string, unknown>;
-    const open = Number(r.open);
-    const high = Number(r.high);
-    const low = Number(r.low);
-    const close = Number(r.close);
-    if (![open, high, low, close].every(Number.isFinite)) continue;
-    out.push({
-      datetime: typeof r.datetime === "string" ? r.datetime : "",
-      open,
-      high,
-      low,
-      close,
-    });
+    const open = priceOf(r.open);
+    const high = priceOf(r.high);
+    const low = priceOf(r.low);
+    const close = priceOf(r.close);
+    if (open === null || high === null || low === null || close === null) continue;
+    const datetime = typeof r.datetime === "string" ? r.datetime : "";
+    const candle: Candle = { datetime, open, high, low, close };
+    if (!coherentBar(candle)) continue;
+    // Newest first on the wire, so the FIRST row for a timestamp is the
+    // freshest reading of that bar and the one to keep.
+    if (datetime === "") undated.push(candle);
+    else if (!byTime.has(datetime)) byTime.set(datetime, candle);
   }
-  return out.reverse();
+  // Sorted by time rather than merely reversed: the feed's order is a
+  // convention, and one out-of-place row silently reorders every window.
+  return [...byTime.values(), ...undated].sort((a, b) => a.datetime.localeCompare(b.datetime));
+};
+
+export interface SeriesHealth {
+  ok: boolean;
+  bars: number;
+  dropped: number;
+  // Milliseconds between the newest bar's open and now. Null when the newest
+  // bar carries no readable timestamp.
+  age_ms: number | null;
+  issues: string[];
+}
+
+// Whether a parsed series is fit to analyse. Separate from parseCandles so the
+// caller decides what to do about it: a hole in the middle of the entry
+// timeframe is a reason to stop, the same hole three timeframes up may not be.
+export const seriesHealth = (
+  candles: Candle[],
+  rawCount: number,
+  minBars: number,
+  intervalMs: number,
+  nowMs: number,
+  maxAgeIntervals = 3,
+): SeriesHealth => {
+  const issues: string[] = [];
+  const dropped = Math.max(0, rawCount - candles.length);
+  if (candles.length < minBars) issues.push(`too_few_bars:${candles.length}/${minBars}`);
+  // A handful of dropped rows is a feed hiccup; a large share of them means
+  // the payload is not what it claims to be.
+  if (rawCount > 0 && dropped / rawCount > 0.05) issues.push(`dropped:${dropped}/${rawCount}`);
+  const newest = candles.length > 0 ? candles[candles.length - 1] : null;
+  const newestMs = newest ? Date.parse(newest.datetime.includes("T") ? newest.datetime : `${newest.datetime.replace(" ", "T")}Z`) : NaN;
+  const age = Number.isFinite(newestMs) ? nowMs - newestMs : null;
+  if (age === null) issues.push("no_timestamp");
+  else if (age < 0) issues.push("future_bar");
+  else if (intervalMs > 0 && age > intervalMs * maxAgeIntervals) issues.push(`stale:${Math.round(age / 60000)}min`);
+  return { ok: issues.length === 0, bars: candles.length, dropped, age_ms: age, issues };
 };
 
 export const sma = (values: number[], period: number): number | null => {
@@ -273,7 +351,15 @@ const midOfRange = (candles: Candle[], period: number): number | null => {
   return (hh + ll) / 2;
 };
 
-// Current (unshifted) Ichimoku values — what the lines are "made of" right now.
+// Ichimoku's displacement, in bars. The spans computed from a window ending
+// at bar N are drawn at bar N + 26; the cloud standing at bar N is therefore
+// the pair computed 26 bars earlier.
+export const ICHIMOKU_SHIFT = 26;
+
+// The unshifted values: tenkan and kijun, which are drawn where they are
+// computed, plus the spans this window projects 26 bars INTO THE FUTURE.
+// Reading spanA/spanB here as "the cloud at the current price" is the mistake
+// this module used to invite — see cloudNow below.
 export const ichimoku = (
   candles: Candle[],
 ): { tenkan: number; kijun: number; spanA: number; spanB: number } | null => {
@@ -283,6 +369,35 @@ export const ichimoku = (
   if (tenkan === null || kijun === null || spanB === null) return null;
   return { tenkan, kijun, spanA: (tenkan + kijun) / 2, spanB };
 };
+
+export interface Cloud {
+  top: number;
+  bottom: number;
+  spanA: number;
+  spanB: number;
+}
+
+// The cloud standing AT a given bar: the spans computed 26 bars before it.
+// This is what "price is above/below the cloud" means, and it is a different
+// pair of numbers from the one the newest window projects.
+export const cloudAt = (candles: Candle[], index: number): Cloud | null => {
+  const from = index - ICHIMOKU_SHIFT;
+  if (from < 0) return null;
+  const window = candles.slice(0, from + 1);
+  const ich = ichimoku(window);
+  if (!ich) return null;
+  return {
+    top: Math.max(ich.spanA, ich.spanB),
+    bottom: Math.min(ich.spanA, ich.spanB),
+    spanA: ich.spanA,
+    spanB: ich.spanB,
+  };
+};
+
+export type CloudSide = "above" | "inside" | "below";
+
+export const cloudSide = (price: number, cloud: Cloud): CloudSide =>
+  price > cloud.top ? "above" : price < cloud.bottom ? "below" : "inside";
 
 // Fractal swing points (2 bars each side), newest first, deduplicated by
 // proximity so the model gets distinct levels rather than one cluster.
@@ -313,7 +428,15 @@ export const swingLevels = (
   return { highs, lows };
 };
 
-export const computeSnapshot = (candles: Candle[]): IndicatorSnapshot | null => {
+// `nowMs` and `intervalMs` are optional: without them the snapshot simply
+// reports barClosed as null rather than guessing. Passing them is how the
+// caller gets a reading it can later reproduce, because "the newest bar" means
+// something different at 10:05 and at 10:59.
+export const computeSnapshot = (
+  candles: Candle[],
+  intervalMs = 0,
+  nowMs = 0,
+): IndicatorSnapshot | null => {
   if (candles.length < 2) return null;
 
   const closes = candles.map((c) => c.close);
@@ -326,6 +449,12 @@ export const computeSnapshot = (candles: Candle[]): IndicatorSnapshot | null => 
   const ichi = ichimoku(candles);
   const atrValue = atr(candles);
   const swings = swingLevels(candles);
+  const now = cloudAt(candles, candles.length - 1);
+  const ahead = ichi
+    ? { top: Math.max(ichi.spanA, ichi.spanB), bottom: Math.min(ichi.spanA, ichi.spanB), spanA: ichi.spanA, spanB: ichi.spanB }
+    : null;
+  const openMs = Date.parse(last.datetime.includes("T") ? last.datetime : `${last.datetime.replace(" ", "T")}Z`);
+  const closed = intervalMs > 0 && nowMs > 0 && Number.isFinite(openMs) ? openMs + intervalMs <= nowMs : null;
 
   return {
     price: last.close,
@@ -352,5 +481,11 @@ export const computeSnapshot = (candles: Candle[]): IndicatorSnapshot | null => 
     adx: adx(candles),
     swingHighs: swings.highs,
     swingLows: swings.lows,
+    cloudNow: now,
+    cloudSide: now ? cloudSide(last.close, now) : null,
+    cloudAhead: ahead,
+    cloudAheadTwisted: ahead && now ? (ahead.spanA - ahead.spanB) * (now.spanA - now.spanB) < 0 : null,
+    barClosed: closed,
+    barsUsed: candles.length,
   };
 };
