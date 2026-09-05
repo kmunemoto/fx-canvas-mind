@@ -58,6 +58,10 @@ export interface Evaluation {
   // open and is retried, up to MAX_REFINE_ATTEMPTS provider failures
   refine_pending: boolean;
   refine_attempts: number;
+  // The signal bar reached a level and finer bars have not yet said whether
+  // that happened before or after the plan was written. Keeps the next sweep
+  // from taking the established-fill short-circuit and forgetting the graze.
+  signal_bar_pending: boolean;
   // Largest move in the trade's favour / against it after the fill, in price
   // units and in multiples of the planned risk (entry to SL)
   mfe: number | null;
@@ -284,6 +288,7 @@ export const emptyEvaluation = (row: OpenRow, evalInterval: string, nowMs: numbe
   refined: false,
   refine_pending: false,
   refine_attempts: 0,
+  signal_bar_pending: false,
   mfe: null,
   mae: null,
   mfe_r: null,
@@ -308,15 +313,22 @@ interface State {
   filled: boolean;
   filled_at: string | null;
   fill_price: number | null;
+  // The earliest instant at which the position is KNOWN to have been open.
+  // `filled_at` is only as precise as the bar that proved the fill; this is
+  // the end of that bar. A market order is exact, so the two are equal.
+  fillCertainFrom: number | null;
   possibleFill: boolean;
   mfe: number | null;
   mae: number | null;
 }
 
-const EMPTY_STATE: State = { filled: false, filled_at: null, fill_price: null, possibleFill: false, mfe: null, mae: null };
+const EMPTY_STATE: State = { filled: false, filled_at: null, fill_price: null, fillCertainFrom: null, possibleFill: false, mfe: null, mae: null };
 
 type Terminal =
-  | { kind: "win" | "loss"; at: string }
+  // `atOpen` marks a resolution decided by the bar's OPEN (see OPEN-THROUGH in
+  // step): the position left at the first traded price, so nothing else in
+  // that bar happened while the trade was on.
+  | { kind: "win" | "loss"; at: string; atOpen?: boolean }
   | { kind: "ambiguous"; at: string; refinable: boolean }
   | { kind: "untriggered"; reason: UntriggeredReason; at: string }
   | { kind: "expired"; at: string; price: number };
@@ -371,12 +383,21 @@ const withExcursion = (state: State, row: OpenRow, c: Candle, sides: "both" | "a
 
 // A limit or stop order gets the price it named; a market order gets what
 // the book was showing on its side, which is not the number on the plan.
-const filledAt = (row: OpenRow, at: string, price: number): State => ({
+const filledAt = (row: OpenRow, at: string, price: number, certainFrom: number): State => ({
   ...EMPTY_STATE,
   filled: true,
   filled_at: at,
   fill_price: price,
+  fillCertainFrom: certainFrom,
 });
+
+// The bar's first traded price, as a zero-range candle
+const openTick = (c: Candle): Candle => ({ ...c, high: c.open, low: c.open });
+
+// Was the position already open before this bar started? Only then can the
+// bar's own open price order the levels inside it.
+const openBefore = (state: State, bar: Timed): boolean =>
+  state.fillCertainFrom !== null && bar.t >= state.fillCertainFrom;
 
 // One bar of the plan's life. The fill bar also gets a resolution check: a
 // limit entry sits between the market and the SL, so a bar that reaches the
@@ -416,7 +437,7 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
     // Price came from the market side, so on the fill bar only the far side
     // of the entry was traversed as a position
     const sides = orderType === "limit" ? "adverse" : orderType === "stop" ? "favorable" : "both";
-    const filled = withExcursion(filledAt(row, at, row.entry_point), row, x, sides);
+    const filled = withExcursion(filledAt(row, at, row.entry_point, bar.t + bar.ms), row, x, sides);
     if (tp && sl) return { state: filled, event: { kind: "ambiguous", at, refinable: true } };
     if (tp) {
       return orderType === "limit" || orderType === "unknown"
@@ -432,7 +453,28 @@ const step = (ctx: Ctx, state: State, bar: Timed): { state: State; event: Event 
   }
 
   const next = withExcursion(state, row, x);
-  if (tp && sl) return { state: next, event: { kind: "ambiguous", at, refinable: true } };
+  if (tp && sl) {
+    // OPEN-THROUGH. The open is the bar's first traded price. If the position
+    // was already open before this bar began, and the bar OPENS at or beyond
+    // one of the levels, that level was reached before anything else in the
+    // bar could be: the order is not in doubt and no finer data can revise
+    // it. A coherent plan has SL and TP1 on opposite sides of the entry, so
+    // at most one of these can fire.
+    if (openBefore(state, bar)) {
+      const first = openTick(x);
+      // Excursion as of the OPEN, not `next`. The position closed at the
+      // open, so everything else in this bar is post-exit price action.
+      // Folding the whole bar in inflates mae, and mae_r is the ONLY input to
+      // the lucky_win / good_call split (postmortem/facts.ts): a clean win
+      // through the open would be filed as lucky_win, which — unlike
+      // good_call — is citable and is a CONSTRAINT cause, so the bar's
+      // post-exit wick would mint evidence for a "do not trade" rule.
+      const atOpen = withExcursion(state, row, first);
+      if (hitsSl(row.signal, first, row.stop_loss)) return { state: atOpen, event: { kind: "loss", at, atOpen: true } };
+      if (hitsTp(row.signal, first, row.take_profit_1)) return { state: atOpen, event: { kind: "win", at, atOpen: true } };
+    }
+    return { state: next, event: { kind: "ambiguous", at, refinable: true } };
+  }
   if (tp) return { state: next, event: { kind: "win", at } };
   if (sl) return { state: next, event: { kind: "loss", at } };
   return { state: next, event: { kind: "none" } };
@@ -492,7 +534,15 @@ const runUntilEvent = (ctx: Ctx, state: State, bars: Timed[]): { state: State; e
 // Further targets reached after TP1 while price stayed beyond the entry (a
 // runner with its stop moved to breakeven), for the "what happened next"
 // view. bars[0] is the bar that reached TP1.
-const targetsReached = (ctx: Ctx, bars: Timed[], state: State): { tps: number[]; state: State } => {
+const targetsReached = (
+  ctx: Ctx,
+  bars: Timed[],
+  state: State,
+  // The TP1 bar was decided by its own open, so none of it is in-trade range.
+  // Without this the bar folded back in here and undid the excursion fix in
+  // step(), which is what turns a clean win into `lucky_win` downstream.
+  exitedAtOpen = false,
+): { tps: number[]; state: State } => {
   const { row } = ctx;
   const tps = [1];
   const beyond = (tp: number | null) => tp !== null && Number.isFinite(tp) &&
@@ -506,7 +556,7 @@ const targetsReached = (ctx: Ctx, bars: Timed[], state: State): { tps: number[];
     // A runner is closed on the exit side too
     const x = bars[i].x;
     if (i > 0 && adverseMove(row.signal, row.entry_point, x) >= 0) break;
-    state = withExcursion(state, row, x);
+    if (!(i === 0 && exitedAtOpen)) state = withExcursion(state, row, x);
     for (const [n, tp] of extra) {
       if (!tps.includes(n) && hitsTp(row.signal, x, tp)) tps.push(n);
     }
@@ -531,13 +581,15 @@ const assessSignalBar = (
   if (orderType === "market") {
     // A market order does not get the number written on the plan; it gets
     // whatever its own side of the book was showing
-    state = filledAt(row, toIso(createdMs), ctx.marketFillPrice);
+    state = filledAt(row, toIso(createdMs), ctx.marketFillPrice, createdMs);
   } else if (
     signalBar !== null && orderType !== "unknown" && reference !== null &&
     touches(signalBar.c, row.entry_point)
   ) {
     const crossed = (reference - row.entry_point) * (signalBar.c.close - row.entry_point) <= 0;
-    state = crossed ? filledAt(row, toIso(createdMs), row.entry_point) : { ...state, possibleFill: true };
+    state = crossed
+      ? filledAt(row, toIso(createdMs), row.entry_point, signalBar.t + signalBar.ms)
+      : { ...state, possibleFill: true };
   }
   if (state.filled && signalBar !== null &&
     (hitsTp(row.signal, signalBar.x, row.take_profit_1) || hitsSl(row.signal, signalBar.x, row.stop_loss))) {
@@ -611,6 +663,15 @@ export const judgePlan = async (
         filled: true,
         filled_at: prev.filled_at,
         fill_price: prev.fill_price ?? row.entry_point,
+        // `filled_at` is only bar-granular, so it cannot be reused directly as
+        // "the position was certainly open from here". A market order is
+        // exact — that is the signal instant. Anything else was only proved by
+        // the close of the coarse bar that showed the crossing, so the whole
+        // of that bar stays off-limits to the open-through rule. Without this,
+        // a re-sweep re-admits the fill bar with filled=true, the fine walk
+        // sees sub-bars that precede the real limit fill, and a pre-entry stop
+        // touch convicts the trade as a loss.
+        fillCertainFrom: prev.order_type === "market" ? prevFillMs : prevFillMs + evalMs,
         possibleFill: false,
         mfe: prev.mfe,
         mae: prev.mae,
@@ -625,21 +686,26 @@ export const judgePlan = async (
   let refinePending = false;
   let refineAttempts = prev?.refine_attempts ?? 0;
   let note: string | null = null;
+  let signalBarPending = false;
   // Bars from the TP1 bar onwards, for the runner view (fine bars when the
   // win came from refinement)
   let afterWin: Timed[] = [];
   let judged = true;
 
   // Finer bars for one coarse bar, carrying its market-time offset
-  const fetchRange = async (bar: Timed, sinceMs?: number): Promise<Timed[] | null | "deferred"> => {
+  const fetchRange = async (bar: Timed, sinceMs?: number): Promise<Timed[] | null | "deferred" | "empty"> => {
     if (!fetchFine) return "deferred";
     const rung = finerRung(bar.ms);
     if (rung === null) return null;
     const fine = await fetchFine(row.pair, bar.t, bar.t + bar.ms, rung.interval);
     if (fine === "deferred") return "deferred";
     if (fine === null) return null;
-    const bars = timeline(fine, nowMs, rung.ms)
-      .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms)
+    const inRange = timeline(fine, nowMs, rung.ms)
+      .filter((x) => x.t >= bar.t && x.t < bar.t + bar.ms);
+    // Nothing inside the bar at all: the provider answered about some other
+    // window, which is a failure like any other.
+    if (inRange.length === 0) return null;
+    const bars = inRange
       // Splitting the SIGNAL bar exposes the part of it that happened BEFORE
       // the plan existed. Price that had already traded cannot resolve a plan
       // that was not yet written, so those sub-bars are dropped rather than
@@ -654,7 +720,12 @@ export const judgePlan = async (
       // cannot be decided by something that had already happened.
       .filter((x) => sinceMs === undefined || x.t >= sinceMs)
       .map((x) => ({ ...x, mt: bar.mt + (x.t - bar.t) }));
-    return bars.length > 0 ? bars : null;
+    // The provider is healthy and every sub-bar it returned predates the
+    // signal — the signal fell inside the last one. This coarse bar holds no
+    // post-signal price action, so it is evidence about nothing, NOT a
+    // provider failure. Counting it as one burned all three attempts on a
+    // working feed for roughly a third of all signals.
+    return bars.length > 0 ? bars : "empty";
   };
   // Finer data was needed and not obtained: try again next time. Provider
   // failures are counted so a bar nobody can supply does not stall the plan
@@ -672,7 +743,13 @@ export const judgePlan = async (
 
   if (!isCoherentPlan(row)) {
     terminal = { kind: "ambiguous", at: checkedAt, refinable: false };
-  } else if (prevFill !== null) {
+    // signal_bar_pending sends the plan back through assessSignalBar so the
+    // undated graze is looked at again. `|| !windowCoversSignal` is the guard
+    // on that: once the fetched window no longer reaches the signal, going
+    // back would drop into the window_short branch below and lose a fill an
+    // earlier sweep had already established. The flag self-terminates within
+    // MAX_REFINE_ATTEMPTS sweeps either way.
+  } else if (prevFill !== null && (prev?.signal_bar_pending !== true || !windowCoversSignal)) {
     state = prevFill.state;
     post = post.filter((x) => x.t >= prevFill.at);
   } else if (!windowCoversSignal) {
@@ -691,7 +768,36 @@ export const judgePlan = async (
     // untimed: replace it with finer bars and look again
     if (signalBar !== null && finerRung(signalBar.ms) !== null && (sig.event !== null || sig.state.possibleFill) && fetchFine) {
       const fine = await fetchRange({ ...signalBar, mt: -signalBar.ms }, createdMs);
-      if (fine === null || fine === "deferred") {
+      if (fine === "empty") {
+        // Every sub-bar the provider returned predates the signal, which
+        // means the signal fell inside the LAST one — and that is exactly the
+        // sub-bar the graze may live in. The feed is healthy, so charging
+        // this as a provider failure burned all three attempts for nothing;
+        // that half of the problem is real and is fixed here.
+        //
+        // But the graze must NOT be dropped. Doing so decides the plan off
+        // the later bars as if the signal bar had been clean, and the
+        // direction of that error follows the market: measured on a probe, a
+        // one-minute change in created_at flipped the SAME price data from
+        // `ambiguous` to `win`, and at a signal 2/3 of the way into the bar
+        // the recorded win is wrong about two times in three.
+        //
+        // Nor can it be refined away: EVAL_INTERVAL puts 15min and 1h plans
+        // on 15min bars, so this sub-bar is already 5min and finerRung(5min)
+        // is null. There is no finer rung to ask for. (For 4h/1day plans a
+        // 15min sub-bar could still go to 5min — that recursion is the
+        // deferred ladder work, and the graze rate there is near zero.)
+        //
+        // So settle it as terminally unknown: keep the fill assessSignalBar
+        // established, keep the graze as the reason, and stop asking.
+        refined = true;
+        if (sig.event !== null) {
+          // assessSignalBar only ever raises an ambiguous event, and it is now
+          // terminal: no finer rung exists to date the graze.
+          terminal = { kind: "ambiguous", at: sig.event.at, refinable: false };
+          note = "no_data";
+        }
+      } else if (fine === null || fine === "deferred") {
         deferRefinement(fine === null ? null : "deferred");
       } else {
         refined = true;
@@ -700,10 +806,18 @@ export const judgePlan = async (
         sig = assessSignalBar(ctx, reference, signalBar, createdMs);
       }
     }
-    if (judged && terminal === null) {
-      state = sig.state;
-      if (sig.event !== null) terminal = sig.event;
-    }
+    // The fill assessSignalBar established stands whatever became of the
+    // refinement. Under market_v1 it is a market order at the signal instant
+    // and no finer bar can revise it; dropping it wrote `filled_at: null`
+    // both on the deferred sweeps and on the terminal one, which took the row
+    // out of the fill rate entirely and left mfe/mae empty.
+    state = sig.state;
+    if (judged && terminal === null && sig.event !== null) terminal = sig.event;
+    // A signal bar whose graze is still unresolved must be re-examined next
+    // sweep. Without this flag the `prevFill` short-circuit above would drop
+    // the signal bar from the evidence for good and score the plan off the
+    // post bars as though it had been clean — silently, and win-ward.
+    signalBarPending = !judged && sig.event !== null;
   }
 
   if (judged && terminal === null) {
@@ -721,9 +835,12 @@ export const judgePlan = async (
         // excursions) is kept even if this run cannot finish
         const stateBefore = idx === i ? before : runUntilEvent(ctx, before, post.slice(i, idx)).state;
         const fine = await fetchRange(post[idx]);
-        if (fine === null || fine === "deferred") {
+        // "empty" is unreachable here: it only arises from the sinceMs filter,
+        // and this call passes none. Folded into the failure branch so the
+        // union stays exhaustive rather than relying on that staying true.
+        if (fine === null || fine === "deferred" || fine === "empty") {
           state = stateBefore;
-          deferRefinement(fine === null ? null : "deferred");
+          deferRefinement(fine === "deferred" ? "deferred" : null);
           break;
         }
         refined = true;
@@ -770,7 +887,7 @@ export const judgePlan = async (
     if (terminal.kind === "win") {
       resolution = "win";
       outcomePrice = row.take_profit_1;
-      const reached = targetsReached(ctx, afterWin, state);
+      const reached = targetsReached(ctx, afterWin, state, terminal.atOpen === true);
       tpsHit = reached.tps;
       state = reached.state;
     } else if (terminal.kind === "loss") {
@@ -843,6 +960,7 @@ export const judgePlan = async (
     refined,
     refine_pending: refinePending,
     refine_attempts: refineAttempts,
+    signal_bar_pending: signalBarPending,
     mfe: state.mfe,
     mae: state.mae,
     mfe_r: state.mfe !== null && risk > 0 ? Number((state.mfe / risk).toFixed(2)) : null,
