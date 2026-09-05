@@ -5,9 +5,10 @@ FX Tactical Analyzer の裏で回っている「プラン → 判定 → 検証 
 コード中のコメントが一次資料で、この文書はその索引。数値は 2026-09-05 時点のコードから写した。
 食い違いを見つけたらコードが正しい。この文書を直すこと。
 
-- 判定: `supabase/functions/track-outcomes/`（`evaluate.ts` が純粋ロジック、`quotes.ts` が Bid/Ask 取得、`index.ts` が入口）
+- 判定: `supabase/functions/track-outcomes/`（`evaluate.ts` が純粋ロジック、`quotes.ts` が Bid/Ask 取得、`waits.ts` が WAIT の採点、`index.ts` が入口）
 - 検証と学習: `supabase/functions/postmortem/`（`facts.ts` が事実の算出、`prompt.ts` が診断とルール改訂、`index.ts` が入口）
-- プラン生成: `supabase/functions/analyze/`（`entry.ts` がエントリーゲート、`rules.ts` がルールブックの選別）
+- プラン生成: `supabase/functions/analyze/`（`entry.ts` がエントリーゲート、`rules.ts` がルールブックの選別、`price-source.ts` が価格 feed、`budget.ts` が時間予算）
+- 経済指標: `supabase/functions/econ-calendar/`
 - 共有: `supabase/functions/_shared/contract.ts`（契約）、`_shared/market-hours.ts`（休場判定）
 
 ---
@@ -15,21 +16,23 @@ FX Tactical Analyzer の裏で回っている「プラン → 判定 → 検証 
 ## 1. ループの全体像
 
 ```
-analyze ──(analyses 行を書く: plan_contract, price_at_signal, entry_point, SL/TP)──▶ public.analyses
-   ▲                                                                                   │
-   │ rulebook_for_client / システムプロンプトへ注入                                       ▼
-public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed_at + 待ち時間)── track-outcomes
-                                             │                                          │
-                                             └──▶ public.lessons                        └──▶ analyses.evaluation / outcome
+analyze ──(analyses 行を書く: plan_contract, price_at_signal, entry_point, SL/TP, rulebook_version)──▶ public.analyses
+   ▲                                                                                                    │
+   │ service role で直接読み、selectPromptRules で注入                                                    ▼
+public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed_at + AFTER_WAIT_MS)── track-outcomes
+                                             │                                                          │
+                                             └──▶ public.lessons                        └──▶ analyses.evaluation / outcome / wait_check
 ```
 
-1. **analyze** がプランを書く。現行契約ではサーバが分析時点の価格で成行約定させる（§2）。
-2. **track-outcomes** が cron で 15 分ごとに走り、期限内の pending プランを実際の値動きで判定する（§3）。
+1. **analyze** がプランを書く。現行契約ではサーバが分析時点の価格を成行のエントリーとして書き、シグナルの瞬間に約定させる（§2）。
+2. **track-outcomes** が cron で 15 分ごとに走り、pending プランを実際の値動きで判定する。期限（`EXPIRY_DAYS`）を跨いだものはこの sweep が `expired` にする（§3）。
+   WAIT も採点する（§3.6）。
 3. **postmortem** が cron で 15 分ごとに走り、判定済みプランの「なぜ」を事実に基づいて診断し、`lessons` を書く。
    新しい教訓が溜まる／時間が経つとルールブックを改訂する（§4）。
-4. 改訂されたルールブックは次の analyze のプロンプトに入る。ただし **現行契約の下で得た証拠を持つルールだけ** が出る。
+4. 改訂されたルールブックは次の analyze のプロンプトに入る。ただし **現行契約の下で実行できるルール（`contract` が現行契約でスタンプされたもの）だけ** が出る。
+   根拠が旧契約の記録だけでも、原因と文言が現行契約で実行可能なら「旧契約含む」の印付きで出る（`evidence_contracts` は表示にだけ使い、出すかどうかは決めない）。
 
-すべての段階は「同じ入力なら同じ出力」を目指している。sweep が何時に走ったか、何回走ったかで結果が変わってはいけない。
+すべての段階は「同じ入力なら同じ出力」を目指している。sweep が何時に走ったか、何回走ったか、誰が呼んだかで結果が変わってはいけない。
 
 ---
 
@@ -39,20 +42,35 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 
 | 定数 | 値 | 意味 |
 |---|---|---|
-| `PLAN_CONTRACT` | `market_v1` | **現行**。サーバが分析時点の価格（`price_at_signal`）で約定させる。モデルは SL と TP だけ置くか WAIT を答える。未約定は起こらない。 |
+| `PLAN_CONTRACT` | `market_v1` | **現行**。サーバが分析時点の価格（`price_at_signal`）を成行のエントリーとして書く。モデルは SL と TP だけ置くか WAIT を答える。未約定は起こらない。 |
 | `LEGACY_PLAN_CONTRACT` | `entry_chosen_v1` | 旧契約。モデルがエントリー価格を選んでいた。届かなければ `untriggered`。列が無かった時代の行はすべてこれ。 |
 
 **不変条件**
 
 - 契約は前にしか進まない。`plan_contract` が null の行は旧契約とみなす。
 - 2 つの契約は 2 つの母集団。統計は混ぜない（`src/lib/outcomeStats.ts` の `contractKey`）。
-- ルールブックの各ルールは **証拠を得た時代の契約** でスタンプされる（`evidence_contracts` / `contract`）。改訂時の現行契約ではない。
-  analyze は現行契約のルールだけをプロンプトに出し（`analyze/rules.ts` の `inForce`）、他は `changes.held_back` に残る。
-- `market_v1` では `entry_point` と `price_at_signal` は同じ丸めた定数から書かれる。判定側の `classifyOrder` はこれを `market` と分類し、シグナルの瞬間に約定させる。
-  `FILL_TOLERANCE = 0.0002` はこの「同じ値」の許容幅で、旧契約の行にも効く。
+- ルールブックの各ルールの `contract` は **その原因と文言を現行契約で実行できるか** で決まる（`postmortem/prompt.ts` の `stampFor`: 実行できれば改訂時の現行契約、できなければ null）。
+  書かれた時期や証拠の時代からは決めない。証拠を得た時代は別フィールド `evidence_contracts`（引用 lesson の契約）に記録し、プロンプトの「旧契約含む」表示にだけ使う。
+  analyze は現行契約のスタンプを持つルールだけをプロンプトに出す（`analyze/rules.ts` の `inForce`）。他のルールも `rulebook.rules` には残り、削除はされないがプロンプトには出ない。
+  postmortem は改訂時にそうしたルールの id を `changes.held_back` に列挙し、`rulebook.stats.changes` と `postmortem_state.last_result` に記録する（`parseConsolidation`）。詳細は §4.3。
+- `market_v1` では `entry_point` と `price_at_signal` は同じ丸めた定数から書かれる。判定側では `classifyOrder` がこれを `market` と分類し、`assessSignalBar` がシグナルの瞬間（`created_at`）に約定させる。
+  判定時の約定価格（`evaluation.fill_price`）は、Bid/Ask 判定なら約定側のシグナル足終値（精査後は最初の細かい足の始値）、仲値判定なら `price_at_signal` そのもの（`evaluate.ts` の `marketFillPrice`、§3.2）。
+- `FILL_TOLERANCE = 0.0002` はこの「同じ値」の許容幅（価格差ではなく基準価格に対する比率。0.02%、USD/JPY なら約 3 pips）で、旧契約の行にも効く。
 - エントリーゲート（`analyze/entry.ts`）の閾値は ATR 比で書かれている: `MAX_STOP_ATR 1.0`、`MIN_STOP_ATR 0.4`、`MARKET_TOLERANCE_ATR 0.15`、`MAX_LIMIT_ATR 0.5`、
   `MIN_RISK_REWARD 1.2`、`MAX_RISK_REWARD 6`、`FALLBACK_ATR_RATIO 0.0015`、`TREND_ADX 25` / `RANGE_ADX 20`、`MOMENTUM_MODES = trend day / breakout`。
   ゲートが「約定可能性」を理由に拒否したプランは **shadow 行** として追跡だけ続ける（§4.4）。
+
+### 2.1 analyze 側の価格の出どころ
+
+- エントリーは **仲値** を `pairDecimals`（JPY 3 桁 / 他 5 桁）で **1 回だけ** 丸めた定数。ゲート、プロンプト、`entry_point`、`price_at_signal`、`entry_check.price` の 5 か所が同じ値を読む。
+  仲値なのは SMA・バンド・ATR・スイングがすべて仲値だから。スプレッドは判定で 1 回だけ課す（§3.2）。
+- 1h だけ（`GMO_ANALYSIS_TIMEFRAMES`）、Twelve Data と並行して GMO の Bid/Ask を取り、`acceptOverlay` を通ればエントリー足の系列を GMO 仲値に差し替える
+  （200 本以上、最新足が 2 本分より古くない、隙間が `MAX_GAP_INTERVALS` 以内、参照価格が最新足の高安の内側）。結果は `entry_check.price_feed`（twelve_data / gmo）と `feed_delta_atr`。
+  予算 `PRICE_OVERLAY_BUDGET_MS = 8 秒`。GMO の失敗は分析を失敗させない。4h / 1day は GMO に 1week / 1month が無いので差し替えない。
+- `priced_at` は市場データの fetch が解決した壁時計。`created_at − priced_at` がモデルの所要時間で、ユーザーが見た時点でのエントリー価格の古さ。
+- サーバが受け付けるのは `ALLOWED_PAIRS`（7 ペア）と `TF_CHAIN` の 4 足だけ。同一ペア・同方向の pending 行が `OPEN_PLAN_WINDOW_HOURS = 24h` 内にあれば `context.open_same_direction` に数えて warnings に出す。
+- 休場の拒否は **広い述語** `isPossiblyClosed` で 2 回: `check_market_hours`（クォータ消費の前、409）と `check_entry`（モデル応答後。20–40 秒の間に閉まることがある）。
+  後者は `entry_check.rejection = "market_closed"` として残し、シグナルを WAIT に落として返金する。狭い述語では週に 1 時間の穴が空き、週末のギャップ越しの約定が「誰も取れない大勝ち」として記録される。
 
 ---
 
@@ -62,7 +80,12 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 
 - プランは **価格がエントリーに届いてはじめてトレード** になる。その後 TP1 が SL より先なら `win`、SL が先なら `loss`。
 - 1 本の足が両方に触れたら、その解像度では順序が分からない。より細かい足を要求し（§3.3）、それでも決まらなければ **推測せず `ambiguous`**。
-- 結果は `win` / `loss` / `untriggered`（旧契約のみ）/ `expired` / `ambiguous` のいずれか。決められなかった理由は `evaluation.reason` と `evaluation.ambiguity` に残す。
+  例外は open-through（`step`）: 建玉がその足の始まる前から確実に開いていて（`fillCertainFrom` 以降）、始値がすでに SL / TP1 に達していれば、始値で決まった `loss` / `win` として `atOpen: true` を付け、細かい足は要求しない。
+  逆行幅も始値時点で止める（足の残りは決済後の値動き。丸ごと入れると `mae_r` が膨れ、綺麗な勝ちが `lucky_win` になる）。約定足そのものには適用しない。
+- シグナル足を割るとき、シグナル以前のサブ足と **シグナルを含むサブ足** は捨てる（プランが無かった時間の値動きでは決着させない）。
+  サブ足が全部シグナル以前なら `"empty"`: 失敗に数えず、掠りは残したまま終端の `ambiguous`。
+- 成行の約定は毎 sweep 再導出される（Bid/Ask なら最初のサブ足の始値で再価格付け）。指値・逆指値の約定だけ前回の `filled_at` を引き継ぐ。
+- 結果は `win` / `loss` / `untriggered`（旧契約のみ）/ `expired` / `ambiguous` のいずれか。決められなかった理由は `evaluation.reason` と `evaluation.ambiguity` に残す（語彙は §8）。
 - 判定が見たものは全部 `evaluation` に証拠として残す（`price_basis`、`refined_interval`、`spread_at_fill` / `spread_at_exit`、`mfe` / `mae`、`bars_after_signal` など）。
 
 ### 3.2 Bid/Ask で判定する
@@ -70,13 +93,18 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 - 判定の価格は **GMO コイン FX 公開 API の Bid/Ask**（`quotes.ts`、キー不要）。BUY は ask で約定し bid で決済、SELL はその鏡。
   仲値で両端を判定すると SL には遅く TP には早く届き、誤差が両端とも勝ちの側に寄る。これを避けるための切替。
 - Bid/Ask で判定した行は `evaluation.price_basis = "quotes"`。使えなかった行は Twelve Data の仲値で判定し `"mid"` と書く。
-- 使えない条件: ペアが `GMO_SYMBOLS` に無い、判定足が `GMO_INTERVALS` に無い、プランが `MAX_QUOTE_LOOKBACK_MS`（3 日）より古い、
-  `MAX_QUOTE_REQUESTS`（20 / run）の残りが 2 未満、または取得が途中で尽きた（その場合は行を触らず次の tick に回す）。
+- 仲値に落ちる条件: ペアが `GMO_SYMBOLS` に無い、判定足が `GMO_INTERVALS` に無い、プランが `MAX_QUOTE_LOOKBACK_MS`（3 日）より古い、
+  取得した Bid/Ask の足が空か市場が開いている間に `MAX_GAP_INTERVALS`（3 本）を超える穴がある（`quotes incomplete`）、または取得が例外で落ちた。
+- 次の tick に回す条件（行を触らず、仲値でも判定しない）: `MAX_QUOTE_REQUESTS`（20 / run）の残りが 2 未満で走り出せない、または走っている途中で予算が尽きた（`quotes deferred`）。
+  仲値に落とさないのは、成行の約定価格が毎 sweep 再導出されるため（§3.1）: 仲値で判定すると ask の約定価格がプランの数字で上書きされる。
 - **精査の細かい足も同じ feed から取る**（v12 以降）。粗い足が Bid/Ask なら細かい足も Bid/Ask（`fetchQuoteWindow`）。
   基準が食い違う結果は「失敗した 1 回」として扱い、その足で判定しない（`fetchRange` の basis 不一致 → null）。
   理由: スプレッド未満だけ bid に触れた SL は仲値の足では見えない。
 - GMO の取引日キー: 1min/5min/15min/1hour は `YYYYMMDD`（JST の取引日、夏時間で 06:00 JST 開始を実測。冬は未実測でコードはどちらの規則も断定しない）、4hour 以上は `YYYY`。
-  日をまたぐ窓は最大 4 キー分を近い順に歩き、粗い足 1 本分の隙間が埋まった時点で止める。
+  - 粗い系列（`fetchQuotes`）は詰めた全キーを古い順に歩き、早止まりしない（48h で 5 キー = 10 要求、3 日の上限で 6 キー = 12 要求）。
+  - 精査の窓（`fetchQuoteWindow`、粗い足 1 本分）だけは日付キーを近い順に歩く（前後 1 日ずつ詰めて 3 キー、JST の日付をまたぐ窓は 4 キー）。
+    最初のキーは必ず取り、足が 1 本でも取れて、窓の中の開いている市場に細かい足 1 本分以上の穴が無くなった時点（`gap < rungMs`）で止める。
+    穴が残れば `missing` として null（失敗 1 回）扱いにし、その足では判定しない。
 
 ### 3.3 精査の梯子（refinement ladder）
 
@@ -84,83 +112,146 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 |---|---|---|---|
 | 15min | 15min | 5min | 15 分 |
 | 1h | 15min | 5min | 1 時間 |
-| 4h | 1h | 15min → 5min | 4 時間 |
-| 1day | 1h | 15min → 5min | 4 時間 |
+| 4h | 1h | 15min（シグナル足のサブ足のみ → 5min） | 4 時間 |
+| 1day | 1h | 15min（シグナル足のサブ足のみ → 5min） | 4 時間 |
 
 - 段は「今の足より必ず細かい」: 15 分超なら 15min、5 分超なら 5min、それ以下は無し（`finerRung`）。
-- 1 プランあたり `MAX_REFINE_ATTEMPTS = 3` 回まで。失敗（null）は 1 回に数える。**予算切れによる `"deferred"` は数えない**（行は stamp されず次の tick へ）。
+- 2 段目の 5min まで降りるのは **シグナル足を割った 15min サブ足だけ**。サブ足は `series` に継ぎ足され、後続足のループが `finerRung(15min)` で割る。
+  シグナル足より後の 1h 足は 15min で 1 段止まり: そこでも順序が付かなければ `ambiguous`（`refined_interval = "15min"`）で確定する。`fetchRange` の呼び出しは 2 か所でどちらも再帰しない。
+- 1 プランあたり `MAX_REFINE_ATTEMPTS = 3` 回まで。失敗（null）は 1 回に数える。**予算切れによる `"deferred"` は数えない**
+  （`refine_attempts` はそのまま、行は `refine_pending = true` で stamp され、判定足 1 本分後に戻ってくる。§3.4）。stamp されずに次の tick の先頭へ回るのはグループ単位の予算切れ（§3.5）。
 - 精査で分かった順序は `refined` / `refined_interval` に残す。分からなければ `ambiguous` と `ambiguity` の内訳。
 
 ### 3.4 形成中の足と週末
 
 - **形成中の足は絶対に割らない。** `fetchRange` は `bar.t + bar.ms > nowMs` なら `"deferred"` を返す。
-  閉じてから割るので、同じ足を後で見直しても結果は変わらない（「再判定 = 1 回で判定したのと同じ」がテストの不変条件）。
-- シグナル足そのものが形成中なら `signal_bar_pending = true`。精査を次に回したなら `refine_pending = true`。
-  どちらかが立っている行は **判定足 1 本分**（`min(cadence, INTERVAL_MS[eval_interval])`）で戻ってくる。市場が閉まっている間は通常周期（`isDue`）。
+  閉じてから割るので、同じ足を後で見直しても結果は変わらない（「再判定 = 1 回で判定したのと同じ」が `src/test/track-outcomes.test.ts` の不変条件）。
+- シグナル足がまだ済んでいない（形成中、閉じてから判定足 1 本分の市場時間が経つまで後続の足が無い、まだ配信されていない）なら `signal_bar_pending = true`。
+  精査を次に回したなら `refine_pending = true`。シグナル足の掠りの精査を次に回した場合は両方立つ。
+  cron が :03/:18/:33/:48 なので、1h プランの多くは最初の sweep ではシグナル足が形成中。金曜クローズ前のプランは日曜のオープンまで待つ。
+- どちらかが立っている行は **判定足 1 本分**（`min(cadence, INTERVAL_MS[eval_interval])`）で戻ってくる。市場が閉まっている間は通常周期（`isDue`）。
 - 時間は **市場時間** で数える。エントリー有効期間 `ENTRY_WINDOW_MS`（15min 12h / 1h 48h / 4h 7d / 1day 30d）と
   期限 `EXPIRY_DAYS`（15min 5 / 1h 20 / 4h 60 / 1day 180）は実際に取引された足で数え、跨いだ足に適用する。週末は消費しない。
+  例外はデータの遅れ: 跨ぐ足がまだ無いのに、最後の足の閉場から壁時計で最大 2 本分を足すと期限を超えている場合だけ、`checked_at`（sweep 時刻）で打ち切る
+  （未約定なら `no_fill`、建玉中なら最後の足の終値で `expired`）。`resolved_at` が足の境界に乗らない唯一の経路。
 - 休場の述語は 2 つ（`_shared/market-hours.ts`）。安全側が逆なので混ぜない。
-  - `isMarketClosed`: 「この足を捨ててよいか / 今エントリーできるか」。**最も狭い**休場（土曜全日、金 22:00Z 以降、日 21:00Z より前）。
-  - `isPossiblyClosed`: 「足が無いのは feed の故障か」。**最も広い**休場（金 21:00Z 以降、日 22:00Z より前）。
-    金 21–22Z と日 21–22Z は「開いているかもしれない時間」で、足が無くても欠損と数えない。
-- 未来に日付が付いた足が来たらそのシリーズごと拒否する（`hasFutureCandles`、`FUTURE_SLACK_MS = 1 分`）。UTC 以外で返ってきた事故の再発防止。
+  - `isMarketClosed`: 「この足を捨ててよいか / 市場時間をどう数えるか」。**最も狭い**休場（土曜全日、金 22:00Z 以降、日 21:00Z より前）。
+  - `isPossiblyClosed`: 「足が無いのは feed の故障か / 今エントリーできるか」。**最も広い**休場（金 21:00Z 以降、日 22:00Z より前）。
+    金 21–22Z と日 21–22Z は「開いているかもしれない時間」で、足が無くても欠損と数えない。信頼できる「今の価格」も無いので、analyze の `check_market_hours` と `marketShut` もこちらで判定する（§2.1）。
+    `market-hours.ts` のコメントは `isMarketClosed` を「今エントリーできるか」と書いているが古い。
+- 未来に日付が付いた足が来たら、仲値（Twelve Data）のシリーズはまるごと拒否する（`hasFutureCandles`、`FUTURE_SLACK_MS = 1 分`。BUY/SELL 行は `future_candles` で stamp、WAIT 行はその tick を飛ばす）。
+  Bid/Ask（GMO）はシリーズごとには拒否せず、`usableBars` がその足だけ捨てる。UTC 以外で返ってきた事故の再発防止。
 
 ### 3.5 1 回の sweep の予算と順序
 
 | 定数 | 値 | 意味 |
 |---|---|---|
 | `SWEEP_COOLDOWN_MS` | 10 分 | 全体クールダウン。`tracker_state.last_sweep_at` を条件付き UPDATE で先取りする。 |
-| `USER_COOLDOWN_MS` | 5 分 | ログイン直後のユーザー呼び出し用。 |
+| `USER_COOLDOWN_MS` | 5 分 | ユーザー呼び出し用。`profiles.last_tracked_at` を同じ作りで先取りする。 |
 | `MAX_ROWS` / `MAX_WAIT_ROWS` | 60 / 20 | 1 回に見る BUY/SELL 行と WAIT 行の上限。 |
 | `MAX_REQUESTS` | 5 | Twelve Data への要求数（シリーズ + 仲値の精査）。共有キーは 8/分。 |
 | `MAX_QUOTE_REQUESTS` | 20 | GMO への要求数（粗い足 + Bid/Ask の精査）。 |
 | `MAX_QUOTE_LOOKBACK_MS` | 3 日 | これより古いプランは仲値で判定。 |
 
-- 行は `checked_at` の古い順。同じ pair × 判定足はまとめて 1 回で取る。予算が尽きたグループは stamp せず次の tick の先頭に回る。
-- 返り値の `quote_refinements` は Bid/Ask の精査に使った要求数。これと `tracker_state.last_sweep_result` が「今回何をしたか」の記録。
+- 行は `evaluation.checked_at` の古い順（一度も見ていない null の行が先頭、同値は `created_at` の古い順）。同じ pair × 判定足はまとめて 1 回で取る。
+  予算が尽きたグループは stamp せず次の tick の先頭に回る。
+- 返り値の `quote_refinements` は Bid/Ask の細かい足で精査した回数（feed が応答した分。予算で打ち切られた分は数えず `deferred` に入る）。
+  要求数は `quote_requests`（粗い足 + 精査の合計。精査 1 回は日付キーごとに bid + ask の 2 要求）。これと `tracker_state.last_sweep_result` が「今回何をしたか」の記録。
+- 呼び出し元は 2 つ: アプリがログイン直後にユーザーの JWT で叩く（`mode: user`、そのユーザーの pending 行だけ）、cron が sweep トークンで叩く（`mode: sweep`、全員）。
+  判定ロジックは同じで、誰が呼んだかで結果が変わってはいけない。ユーザーモードは WAIT の採点を走らせず、`tracker_state.last_sweep_result` も書かない。
+  `MAX_REQUESTS = 5` はユーザー呼び出しにも同じに効く。分析直後の呼び出しではシグナル足が形成中なので `deferred` で次の cron に回るのが正常。
+
+### 3.6 WAIT の採点（waits.ts）
+
+- WAIT も予測なので採点する。旧契約の `untriggered` が消えた今、これが「慎重すぎた」ことを示す **唯一の** 信号。採点しなければ学習ループは見送りを増やす方向にしか動けない。
+- 尺度は新しく作らない: `price_at_signal`（無ければ `context.entry.price`）から、ゲートが許す最小のトレード（損切り `MIN_STOP_ATR × ATR`、利確 `MIN_RISK_REWARD × 損切り幅`）を BUY/SELL 両方向に仮想する。
+  先に利確に届いた側があれば `missed`、両方向とも損切りなら `correct`、期限内で片側が生きていれば `pending`、ATR か価格が無ければ `unknown`。1 本の足が両方に触れたら損切り扱い（疑わしいものを missed にしない）。
+- 期限は `ENTRY_WINDOW_MS` を **市場時間** で数える（`marketHorizonEnd`、30 分刻み、最大 4 週で打ち切り）。壁時計だと金曜の WAIT が週末で勝手に `correct` になる。
+- 結果は `analyses.wait_check`（`evaluation` とは別の列）。対象は `outcome = skipped` かつ `wait_check` が null または `verdict = pending` の行、`created_at` の古い順に `MAX_WAIT_ROWS = 20`。
+  **sweep モードだけ**、BUY/SELL の判定が終わった後の残り予算（`MAX_REQUESTS`）でしか走らない。
+- 統計: `wait_miss_rate` は `missed + correct` が `MIN_STAT_N` 以上で初めて出る。`pending` / `unknown` は分母にも入れない。
+  サーバが却下した WAIT（`entry_check.rejection` = market_closed / too_far など）も採点され、`rejection` で区別する。
+
+### 3.7 プロバイダの癖と時刻
+
+- Twelve Data には必ず `timezone=UTC` を付けて要求する（既定は UTC ではない。最初のトラッカーはこれで壊れた）。返る `datetime` はゾーン無しなので `parseCandleTime` が `Z` を足す。
+  取得本数は判定 `EVAL_OUTPUTSIZE`（15min 2000 / 1h 3200、`EXPIRY_DAYS` まで遡れる本数）、診断は `created_at − PRE_SIGNAL_MS(6h)` から。API キーは URL に載るので、クライアントへ返すエラーは `redactSecrets` を通す。
+- GMO: 各要求 10 秒で打ち切り。`mergeSides` は片側しか無い足と ask < bid の行を捨てる。`usableBars` は形成中の足を **残す**（高安は広がるだけ。割るのは §3.4 が止める）。
+  隙間の許容は粗い系列で `MAX_GAP_INTERVALS = 3` 本、精査の窓は 1 本も欠けてはいけない。
+- プロンプト内の時刻はすべて UTC。文章中の時刻だけモデルが JST に換算する。
 
 ---
 
 ## 4. 検証と学習（postmortem）の不変条件
 
-### 4.1 いつ診断するか
+### 4.1 いつ、何件、どれだけの時間で診断するか
 
-- 判定が付いた行は `closed_at` から `AFTER_WAIT_MS`（15min 1h / 1h 2h / 4h 4h / 1day 8h）待って初めて対象になる。「その後どうなったか」が存在するため。
-- その後の窓は `AFTER_BARS`（15min 24 / 1h 24 / 4h 12 / 1day 5）本。`MIN_AFTER_BARS = 8` 本に満たない診断は thin として窓が揃ったら再診断する。
-- 1 回に診断するのは `MAX_PLANS_PER_RUN = 3`（管理者の手動実行は `MAX_PLANS_ADMIN = 6`）。失敗は `MAX_ATTEMPTS = 3` 回まで `postmortem.attempts` に積む。
-- 壁時計の予算は `WALL_CLOCK_BUDGET_MS = 130 秒`。診断は残り `START_DIAGNOSIS_BEFORE_MS = 75 秒` を切ったら始めない。LLM 呼び出しは 45 秒で切る。
+- 判定が付いた行は `closed_at` から `AFTER_WAIT_MS`（15min 1h / 1h 2h / 4h 4h / 1day 8h）待って初めて対象になる（`isPostmortemDue`）。「その後どうなったか」が存在するため。
+  手動実行で `force: true` か `ids` を指定した場合はこの待ちを飛ばす。
+- その後の窓は `AFTER_BARS`（15min 24 / 1h 24 / 4h 12 / 1day 5）本 × プランの足（`afterWindowMs`）。窓の中の足は判定足 `EVAL_INTERVAL` で数え、
+  `bars_after_settlement` が `MIN_AFTER_BARS = 8` 本に満たない診断は `thin` として、窓が丸ごと揃ってから `MAX_REVISIONS = 1` 回だけ再診断する
+  （`thin = true` かつ `revisions < 1`。再診断の失敗は `revisit_attempts` に積み `MAX_ATTEMPTS` で止め、元の診断はそのまま残す）。`thin` を記録していない旧版の診断も同じ経路で見直す。
+- `postmortem.status = done` の行はそれ以外では再診断しない。`ids` で名指しした行だけは状態を問わず再診断し、`revisions` は消費しない。`force` は待ちを飛ばすだけで、done の行を再診断はしない。
+- 1 回に診断するのは `MAX_PLANS_PER_RUN = 3`。手動実行（sweep トークン / 管理者 JWT のどちらでも）は body の `limit`（1..`MAX_PLANS_ADMIN = 6` に丸める）か `ids`（先頭 6 件）で増やせるが、省略時は同じ 3。
+  失敗は `MAX_ATTEMPTS = 3` 回まで `postmortem.attempts` に積む。
+- 管理者 JWT（`ADMIN_EMAILS`）の POST body: `force`、`ids`、`limit`、`consolidate`（`revisionDue` を待たずに改訂）。
+- 壁時計の予算は `WALL_CLOCK_BUDGET_MS = 130 秒`。診断は開始から `START_DIAGNOSIS_BEFORE_MS = 75 秒` を過ぎたら新たに始めない（以降の行は `deferred (time budget)` として次の run に回す）。
+  診断の LLM 呼び出しは `LLM_TIMEOUT_MS = 45 秒`（再試行 1 回を含めた合計の期限）。ルールブック改訂の呼び出しは別予算（§4.3）。
 - 全体クールダウン `SWEEP_COOLDOWN_MS = 10 分` は `postmortem_state.last_run_at` の条件付き UPDATE で先取りする（判定側と同じ作り）。
 
 ### 4.2 事実（facts）が先、診断はその範囲内
 
-- 診断は `facts.ts` が新しいローソク足から計算した事実に縛られる: 最大順行/逆行（`mfe_r` / `mae_r`）、決済後の値動き、
-  反実仮想（成行で入っていたら、広い SL なら、近い TP なら）、経済指標との照合、そして **危うさ（`danger`）**。
-- `danger` は勝ちトレードの「実は危なかった」を事実として測る（#36）。閾値: `UNDERWATER_RATIO 0.5`、`MIN_DANGER_BARS 4`、`CHOP_CROSSINGS 4`、
+- 診断は `facts.ts` が新しいローソク足から計算した事実に縛られる: 基準値からプランの寿命＋事後窓で測った最大順行/逆行（`from_signal.max_favorable_r` / `max_adverse_r`。判定側の `mfe_r` / `mae_r` は再計算せず `evaluation` の値を plan に添えて渡す）、
+  決済後の値動き、反実仮想（成行で入っていたら、広い SL なら、近い TP なら）、経済指標との照合（§5.1）、そして **危うさ（`danger`）**。
+- `danger` は勝ちトレードの「実は危なかった」を事実として測る（PR #22）。閾値: `UNDERWATER_RATIO 0.5`、`MIN_DANGER_BARS 4`、`CHOP_CROSSINGS 4`、
   `SPIKE_CLOSE_R 0.5`、`SPIKE_REVERSAL_R 1`、`LATE_LIFE_RATIO 0.75`、`LUCKY_MAE_R 0.8`。旗は `deep_mae` / `mostly_underwater` / `chop` / `spike_target` / `late_win`。
   `lucky_win` の診断は立った旗を引用しなければならない。
 - 建玉中の足は約定足を含む（`x.t + barMs > filledMs`）。`life_used_ratio` は市場時間の足数で数え、壁時計では数えない。
 
 ### 4.3 ルールブックの改訂
 
-- 改訂条件 `revisionDue`: **新しい教訓が 1 つ以上** かつ（`MIN_NEW_LESSONS = 5` 以上 **または** 前回 `updated_at` から `MIN_REVISION_INTERVAL_MS = 24h`）。
-- 1 回の run で改訂は `MAX_REVISIONS = 1` 回。ルールは最大 `MAX_RULES = 10`、1 回の追加/削除は各 `MAX_RULES_ADDED` / `MAX_RULES_REMOVED = 2` まで。
-- 統計は `MIN_STAT_N = 20` 件未満なら根拠にしない。support はサーバ側で実件数から算出する（モデルの申告を信じない）。
-- クラスタ: 同じ原因が `CLUSTER_WINDOW_MS = 24h` 内に重なったものは 1 つに数え、`CLUSTER_REOPEN_MS = 4h` 空けば別クラスタ。クラスタ鍵に `user_id` は含めない（全アカウント学習）。
-- 1 人のヘビーユーザーが占有しないよう `fairShare`（`RECENT_ROWS 300` × `FAIR_FETCH_MULTIPLE 3` から均等に取る）。
-- ルールの契約スタンプは証拠の時代（§2）。現行契約と違うルールは `changes.held_back` に入り、削除はされないがプロンプトにも出ない。
-- 旧版は `HISTORY_KEEP = 20` 世代保持。
+- 改訂条件 `revisionDue`: **版以降の新しい教訓が 1 つ以上** かつ（`MIN_NEW_LESSONS = 5` 以上 **または** 前回 `updated_at` から `MIN_REVISION_INTERVAL_MS = 24h`）。
+  その run が lesson を書いたかでは決めない（`newLessons > 0` で門を閉じていた頃、17 時間・7 件分が放置された）。
+- 改訂は 1 回の run につき最大 1 回（統合の分岐が 1 つあるだけで、回数を決める定数はない。`MAX_REVISIONS` は thin の再診断回数、§4.1）。
+- 改訂のモデル呼び出しは診断の 45 秒とは別予算: 壁時計の残り − `WRITE_RESERVE_MS = 10 秒` を `MAX_CONSOLIDATION_MS = 110 秒` まで。
+  それが `MIN_CONSOLIDATION_MS = 45 秒` 未満なら改訂せず `rulebook.reason = deferred_time_budget` を返す。診断を 3 件やった後は普通にこうなるので、これが続いても「凍結」ではなく予算切れ。
+- `last_result.rulebook.reason` の読み方: `no_lessons` / `evidence_unavailable` / `waiting`（`lessons_since_version`、`lessons_needed` 付き）/ `deferred_time_budget` / `revised: true`（`changes` 付き）。
+  `lesson_contributors` / `record_contributors` は何アカウントから学んでいるか。
+- ルールは最大 `MAX_RULES = 10`。1 回の追加は `MAX_RULES_ADDED = 2` まで（前版が空の初回だけは `MAX_RULES` まで一度に書ける）。
+  削除は省かれたルールのうち support の低い順に `MAX_RULES_REMOVED = 2` 本までで、残りは証拠を数え直して復元する（`changes.restored`）。数え直しで support が 0 になったものは上限に関係なく `changes.removed` に入る。
+- support はモデルに申告させない。ルールが `supported_by` に挙げた lesson のうち `citationAllowed` を通るもの（実在し、shadow でなく、ルールの cause と合う。`general` なら任意の citable cause、`constraint` なら `CONSTRAINT_CAUSES` も可）の
+  独立クラスタ数をサーバ側で数える。`inconclusive` / `plan_incoherent` / `good_call` は何の証拠にもならない。0 になったルールは落ちる（`changes.dropped`）。存在しない id や既存 id を乗っ取る新規 id は無効。
+- `MIN_STAT_N = 20` が効くのは `win_rate`（分母 `decided`）/ `fill_rate` / `wait_miss_rate`（`waits_judged`）だけで、分母が 20 件未満なら null で渡す。
+  `win_rate_ci95`（Wilson）と `realized_r.mean` は件数に関係なく渡し、小さい n を根拠にルールを強めないのはプロンプトの指示（サーバ側では検査しない）。
+- クラスタ: 同じペア × 同じ方向（鍵は `pair|signal`）のプランが直前のプランから `CLUSTER_WINDOW_MS = 24h` 以内に作られたものは 1 つに数える。
+  前のプランが決着（`closed_at`）してから `CLUSTER_REOPEN_MS = 4h` を超えて作られたものは 24h 内でも別クラスタ（前が未決着なら 24h 内は同じクラスタ）。
+  原因は鍵に含めず、原因別のクラスタ数は `by_cause_clusters` で後から数える。クラスタ鍵に `user_id` は含めない（全アカウント学習）。
+- 1 人のヘビーユーザーが占有しないよう `fairShare`（アカウントごとに新しい順をラウンドロビンで取る）。教訓は `RECENT_LESSONS 60` × `FAIR_FETCH_MULTIPLE 3` 件から 60 件、記録は `RECENT_ROWS 300` × 3 件から 300 件。
+  現行ルールが `supported_by` で引用する教訓は窓の外でも別に読んで足し、読めなければ改訂しない（`evidence_unavailable`）。ルールブックの読み取り失敗も「空」ではない（空から書き直さない）。
+- ルールの `contract` スタンプ（§2）: `stampFor` が改訂時の `PLAN_CONTRACT` を刻み、cause がその契約の原因分類に無い（`causeOutsideContract`。market_v1 では `entry_too_far`）か、
+  文言がエントリーの選び方・タイミングを指示する（`unfollowableUnder`、`ENTRY_LEVER_PHRASES`: 「押し目を待」「指値で入」「wait for a pullback」など。「エントリー価格から ATR×0.8」のように価格を基準点として名指すのは可）ときだけ null にする。
+  再出力されたルールも復元されたルールも毎回 cause と文言から再計算し、前版から継承しない（継承させたのが v7 の事故: 旧契約の証拠だけの 4 本が market_v1 とスタンプされた）。null のルールは `changes.held_back`。
+- 版と履歴: プランは `rulebook_version` を 3 状態で記録する（null = 読めなかった、0 = 読めたが現行契約で有効なルールが無かった、n>0 = 版 n の少なくとも 1 本がプロンプトに入った）。
+  `context.rules_shown` が実際に入った id（`MAX_PROMPT_RULES = 12`、`MAX_PROMPT_CHARS = 1600` で切れる）、`context.rulebook_version_read` が読めた版。
+  診断が `rule_blamed / rule_credited` に書けるのは `rules_shown` の id だけで、postmortem は `history`（`HISTORY_KEEP = 20` 世代）から版ごとのルールを復元する。`history` を消すと古い版のプランが何を見たか分からなくなる。
+- 書き込みは `rulebook?id=eq.1&version=eq.<読んだ版>` の条件付き UPDATE（楽観ロック）。0 行なら書かずにエラーに残す。`updated_at` は lessons を書いた **後** に打つ（次回に同じ lesson を新規と数えないため）。
+- **手で `rulebook` を直すときの禁則**: `version` を上げない（誰も見ていないコホートを作る）、`updated_at` を触らない（`revisionDue` の時計）、`history` を書き換えない。
+  ルールの契約を手で直すときも `causeOutsideContract` と `ENTRY_LEVER_PHRASES` の 2 条件で判定する。データを直すマイグレーションは **新しい関数をデプロイした後・cron を止めて** 流す（古い parser が先に改訂すると修正が巻き戻る）。
 
 ### 4.4 shadow 行
 
 - ゲートが「約定可能性」を理由に拒否したプランは、拒否されなかった場合の姿を `shadow = true` の別行として保存し（`shadow_of` が元）、判定と診断は普通に受ける。
-- **ユーザー向けの履歴・成績には出さない。** `outcomeStats.ts` は `isShadow` を除外して別集計（`shadowTally`）、`loop_health` も `shadow = false` で数える。
-  ゲートが正しかったかを測るための行であって、成績ではない。
+- **成績には数えず、履歴に独立した行としても出さない。** `outcomeStats.ts` は `isShadow` を除外して別集計（`shadowTally`）。
+  ただし結果は隠さない: `AnalysisHistory` が `shadow_of` で元の WAIT 行に畳み込み、その詳細に「却下プランの追跡結果」（却下が正しかったか）を表示し、集計はゲート注記に出す。
+- `loop_health` もプラン数（`open_plans` / `awaiting_review` / `reviewed`）は `shadow = false` で数える。ただし `lessons` と `lessons_since_rulebook` は shadow を除外せず、shadow 行から書かれた教訓も含む（`revisionDue` の数え方と同じ）。
+  shadow の lesson はルールの support には数えない（`citationAllowed`）。
 
 ---
 
 ## 5. cron の時刻と冪等性
 
-`cron.job`（Supabase の pg_cron）。ジョブはマイグレーションではなく直接作られているので、時刻の正はデータベース。
+`cron.job`（Supabase の pg_cron）。ジョブはマイグレーションの `cron.schedule`（`20260903090000` / `20260903100000` / `20260903100500` / `20260903150000` / `20260903190000`）で作られている。
+ただし時刻の変更はマイグレーションを足さず `cron.alter_job` か `cron.job` の直接更新で行う（§9）ので、時刻の正はデータベース。
 
 | jobid | 名前 | schedule (UTC) | 呼び先 | timeout |
 |---|---|---|---|---|
@@ -169,12 +260,14 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 | 5 | `econ-calendar-sync` | `13 * * * *` | `/functions/v1/econ-calendar` | 60 s |
 | 3 | `purge-cron-history` | `0 3 * * *` | `cron.job_run_details` の 7 日より古い行を削除 | – |
 
-- 判定と診断は 5 分ずらしてある: 判定が付いた行を同じ 15 分枠の診断が拾えるように。
+- 判定と診断は 5 分ずらしてある: 2 つの sweep が同じ分に市場データ（Twelve Data の共有キー、8/分）の割当を食い合わないようにするため。
+  判定が付いた行は `AFTER_WAIT_MS` 経ってから診断の対象になるので、同じ 15 分枠の診断が拾う設計ではない。
 - 呼び出しは `net.http_post`（pg_net）。ヘッダ `x-sweep-token` の値は **SQL の中で `vault.decrypted_secrets` から読む**。トークンの文字列はどこにも書かない（§7）。
 - 冪等性は関数側で担保する:
-  - 全体クールダウン（10 分）を `tracker_state` / `postmortem_state` の **条件付き UPDATE 1 発** で先取りする。2 tick が同時に来ても片方は `skipped: "cooldown"` で帰る。
-  - 判定は市場時間で数えるので、走る時刻に依存しない（§3.4）。同じ行を何度判定しても同じ結果。
-  - 診断は `postmortem.status = done` の行を再診断しない（thin の再診断と `force` を除く）。
+  - 全体クールダウン（10 分。econ-calendar は 30 分）を `tracker_state` / `postmortem_state` / `econ_calendar_state` の **条件付き UPDATE 1 発** で先取りする。2 tick が同時に来ても片方は `skipped: "cooldown"` で帰る。
+  - 判定は市場時間で数えるので、走る時刻に依存しない（§3.4）。同じ feed（`price_basis`）で同じ足を見る限り、同じ行を何度判定しても同じ結果。
+    ただし feed は sweep ごとにプランの壁時計の齢（3 日）と Bid/Ask 取得の成否で決まるので、quotes から mid に落ちた pending 行は判定価格が変わり、シグナル足を見直し中の成行は約定価格が `entry_point` で書き換わる（§8）。
+  - 診断は `postmortem.status = done` の行を再診断しない。例外は thin の再診断と `ids` の名指し（§4.1）。
 - 一時停止と再開:
 
 ```sql
@@ -187,8 +280,9 @@ select cron.alter_job(4, active := true);
 ```sql
 select jobid, status, return_message, start_time from cron.job_run_details order by start_time desc limit 10;
 select id, status_code, left(content, 300) from net._http_response order by id desc limit 5;
-select * from public.tracker_state;   -- last_sweep_at, last_sweep_result
-select * from public.postmortem_state; -- last_run_at, last_result
+select * from public.tracker_state;      -- last_sweep_at, last_sweep_result
+select * from public.postmortem_state;   -- last_run_at, last_result
+select * from public.econ_calendar_state;
 ```
 
 - 手動 sweep も同じ経路で打つ（トークンを手元に出さない）:
@@ -201,6 +295,14 @@ select net.http_post(
   body := '{"mode":"sweep"}'::jsonb, timeout_milliseconds := 90000);
 ```
 
+### 5.1 econ-calendar 同期
+
+- 出典は Forex Factory の週間 JSON（キー不要）。**今週分しか公開されていない**。`actual` は無いので「何が予定され、予想は何か」までで、「何が出たか」は決して言わない。
+- クールダウン 30 分を `econ_calendar_state.last_run_at` で先取り。レート制限時は HTML が返るので、JSON でなければ **保存済みを消さずに** エラーだけ積む。`KEEP_PAST_DAYS = 45` より古い行は毎回削除。管理者 JWT で手動実行可。
+- 時刻: feed の `date` は米東部オフセット付き ISO なので UTC に正規化する。終日/休日は **生文字列** の `00:00` で判定（UTC に直してから見ると 04:00 UTC の指標が終日に化ける）。
+- 読み手: analyze は `HORIZON_MS`（15min 6h / 1h 12h / 4h 48h / 1day 5d）の High/Medium をプロンプトに入れ、「読めて空」と「読めなかった」を区別して書く（`calendarOk`）。プロンプトは High の前後 `BLACKOUT_MS = 30 分` に約定するプランを禁じる。
+  postmortem は `abnormal_bar`（中央値の `ABNORMAL_RANGE_RATIO = 3` 倍以上の足）を `ATTRIBUTION_LEAD_MS = 5 分` の余裕で指標に帰属させ、`event` が null の異常足は「原因不明」であって `news_shock` の根拠にしない。
+
 ---
 
 ## 6. デプロイ手順
@@ -208,9 +310,10 @@ select net.http_post(
 ### 6.1 順序の不変条件
 
 1. **エッジ関数を先に、フロントエンドを後に。** フロントは新しい `evaluation` の形を読むので、逆にすると古い関数が書いた行を新しい UI が読めない時間ができる。
-2. 関数を変えたら **バージョン文字列を上げる**: `TRACKER_VERSION`（track-outcomes/index.ts）、`POSTMORTEM_VERSION`（postmortem/index.ts）、`FUNCTION_VERSION`（analyze/index.ts）。
-   返り値と `*_state.last_result.version` に出るので、本番で「どれが動いているか」を確かめる唯一の手がかり。
+2. 関数を変えたら **バージョン文字列を上げる**: `TRACKER_VERSION`（track-outcomes/index.ts）、`POSTMORTEM_VERSION`（postmortem/index.ts）、`FUNCTION_VERSION`（analyze/index.ts、econ-calendar/index.ts）。
+   返り値と `tracker_state.last_sweep_result.version` / `postmortem_state.last_result.version` に出る（analyze は返り値と `X-Function-Version` ヘッダ）ので、本番で「どれが動いているか」を確かめる唯一の手がかり。
 3. デプロイしたものは **読み戻して sha256 を比べる** まで「デプロイ済み」と言わない。
+4. データを直すマイグレーションは、それを解釈する関数を先にデプロイし、cron を止めてから流す（§4.3）。
 
 ### 6.2 手順
 
@@ -224,10 +327,13 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 
 - デプロイは保存済みワークフロー `.claude/workflows/deploy-edge-verified.js` で行う（`scriptPath` で起動、`args: { slug, version }`）。
   中身: `deploy_edge_function`（`entrypoint_path: "bundle.js"`, `import_map_path: "deno.json"`, `verify_jwt: false`, files = `deno.json {"imports":{}}` + `bundle.js`）→
-  `get_edge_function` で読み戻し → ローカルと sha256 比較 → 不一致なら最大 3 回まで再デプロイ。
-  バンドルは一度モデルの出力を経由するので写し間違いが起こり得る（実際に 2 度起きた）。検証を省かない。
-- postmortem のバンドルは 70 KB 超で Read の 1 ページに収まらない。必ずワークフロー経由。
-- 長い関数（postmortem）を差し替える間は cron を止めてよい: `cron.alter_job(4, active := false)` → デプロイ → `true`。判定側は 10 分クールダウンがあるので通常は不要。
+  `get_edge_function` で読み戻し → ローカルと sha256 比較。sha256 か `version` 文字列が不一致なら再デプロイ（合計 3 回まで。初回 + 再試行 2 回）。
+  最後まで一致しなくても例外は投げず、`NOT verified` をログに出して返るだけなので、ログを読む。
+  `args.version` には `POSTMORTEM_VERSION` 等の文字列全体（例 `postmortem-v9-2026-09-05T05:35:00Z`）を渡す。部分文字列だと sha256 が一致していても 3 回使い切る。
+- バンドルは一度モデルの出力を経由するので写し間違いが起こり得る（このプロジェクトで実際に複数回起きた）。検証を省かない。
+  postmortem（約 71 KB）だけでなく analyze（約 54 KB）のバンドルも Read の 1 ページに収まらない。どの関数も必ずワークフロー経由。
+- 長い関数（postmortem）を差し替える間は cron を止めてよい: `cron.alter_job(4, active := false)` → デプロイ → `true`。
+  判定側（track-outcomes）は 1 回の走行が短い（LLM 呼び出しが無く、cron の timeout も 90 s）ので通常は不要。10 分クールダウンは両関数に同じ値で入っており、止める・止めないの理由にはならない。
 - 本番での確認: 次の sweep の返り値（`net._http_response`）の `version` が新しいこと。analyze は認証なしで叩くと 401 と一緒に `version` と `diagnostics` を返す。
 
 ### 6.3 フロントエンド
@@ -239,7 +345,8 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 
 ### 6.4 コミットに入れてはいけないもの
 
-- `bundle.js`（gitignore 済み）、レビュー用の使い捨てテスト `src/test/zzprobe*.test.ts`、パスワードやトークンの文字列、モデルの識別子（コミットメッセージ・PR・コード）。
+- `bundle.js`（gitignore 済み）、レビュー用の使い捨てテスト `src/test/zzprobe*.test.ts`、パスワードやトークンの文字列。
+- アシスタントのモデル名は説明文・コメント・PR 本文に書かない。例外は所定の `Co-Authored-By` トレーラーと、API 呼び出しに必要なモデル ID（postmortem の `MODEL`、analyze の `model:`）。
 
 ---
 
@@ -248,7 +355,7 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 | 秘密 | 置き場所 | 読める者 |
 |---|---|---|
 | sweep トークン | `vault.decrypted_secrets` の `track_outcomes_sweep_token` | `public.track_outcomes_sweep_token()`（`security definer`、**`service_role` のみ実行可**）と cron の SQL |
-| `SUPABASE_SERVICE_ROLE_KEY` など | エッジ関数の環境変数 | 関数だけ |
+| `SUPABASE_SERVICE_ROLE_KEY`、Twelve Data のキーなど | エッジ関数の環境変数 | 関数だけ |
 | 管理者 | `ADMIN_EMAILS`（analyze / postmortem の定数） | `k.munemoto@kyoto-salute.com`, `munekan2989@gmail.com` が Pro 相当 |
 
 **不変条件**
@@ -256,21 +363,33 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 - トークンの値はリポジトリ、マイグレーション、チャット、ログのどこにも書かない。関数を SQL から呼ぶときは必ず `(select decrypted_secret from vault.decrypted_secrets where name = ...)` をヘッダ式に埋める。
 - 関数は受け取ったトークンを RPC 経由で取り出した値と **定数時間比較** する（`constantTimeEqual`）。空文字は不一致。
 - `consume_analysis_quota` / `release_analysis_quota` / `track_outcomes_sweep_token` は `service_role` だけが実行できる。`public`, `anon`, `authenticated` からは revoke 済み。
-- `public.rulebook` はクライアントから直接 SELECT できない（#54）。読むのは `rulebook_for_client()`（`authenticated`）だけ。他ユーザーの `analysis_id` はクライアントに返さない。
-- `loop_health()` は `authenticated`、`public_track_record()` は `anon` と `authenticated`。どちらも `security definer` で、返す数字は自分の行か全体の集計だけ。
+- `public.rulebook` はクライアントから直接 SELECT できない（PR #23）。ルール本文を返すのは `rulebook_for_client()`（`authenticated`）だけ。
+  `loop_health()`（`authenticated`）/ `public_track_record()`（`anon` + `authenticated`）も `security definer` で同じテーブルを読むが、返すのは version・現行契約で有効なルール数・更新時刻だけ。
+  他ユーザーの `analysis_id` はクライアントに返さない。
 - 上の grant を変えるときは必ず `authenticated` ロールとして RPC が動き直接 SELECT が拒否されることを SQL で確かめる。
+
+### 7.1 分析クォータ
+
+- クォータは **課金される作業の前に** 1 発の条件付き UPDATE（`consume_analysis_quota`）で消費する（読んで・比べて・書く、では並行要求が 1 クレジットで複数回通る）。
+  その後の失敗経路は必ず `release_analysis_quota` で返金する（同じクレジットを二度返さない）。ゲートが WAIT に落とした分析も返金。管理者は消費しない。
+- 順序: 認証 → プラン確認（`PAID_PLANS = light/standard/pro`、free は 402）→ 休場確認（`isPossiblyClosed` なら 409）→ クォータ消費 → ルールブック → カレンダー → 市場データ → モデル。未課金と休場はクォータの前に弾くので課金されない。
+- 上限: light 10 / standard 30 / pro 9999（1 日）。日替わりは DB の `current_date`。返金は同じ日の行だけで、日付をまたいだ返金は起こらない。
+- Supabase は 150 秒でワーカーを殺し、クライアントには返金されない 546 が返る。だから関数は自前の `WALL_CLOCK_BUDGET_MS = 135 秒` で止まり、検索付きは `SEARCH_BUDGET_MS = 85 秒` で検索を諦めて技術分析だけで答える。
 
 ---
 
 ## 8. 既知の限界
 
-- **旧契約（`entry_chosen_v1`）の再導出**: pending の旧契約行を Bid/Ask や細かい足で判定し直すとき、指値の約定は細かい足から再導出する。
+- **旧契約（`entry_chosen_v1`）の再導出**: pending の旧契約行を Bid/Ask や細かい足で判定し直すとき、指値・逆指値（`classifyOrder` が `market` 以外と分類した注文）の約定は細かい足から再導出する。
   「触れる前に反対側へ抜けた」足があれば約定を前倒しし、触れた足があれば再導出、どちらも無ければ前回の状態を引き継ぐ。
   細かい足が約定前の区間を歩けない場合は前回の判定を残す。詳細は `evaluate.ts` の "Known limits (legacy contract)" コメント。現在 pending の旧契約行は無い。
 - **GMO の取引日の境界**: 夏時間で 06:00 JST 開始を実測。冬（NY 17:00 = 07:00 JST の可能性）は未実測。`fetchQuoteWindow` は 4 キーまで歩くので実用上は問題ないが、`jstDayKey` はどちらも断定しない。
-- **仲値へのフォールバック**: 3 日より古いプラン、GMO に無いペア、予算切れが続いた行は Twelve Data の仲値で判定される。`price_basis` で見分けられる。
-- **4h / 1day プランの精査**: 判定足が 1h なので 15min → 5min の 2 段を歩けるが、`MAX_REFINE_ATTEMPTS = 3` を共有する。
-- **`ambiguous` は推測しない**: 精査を尽くしても順序が分からないプランは採点されない。件数と内訳は `evaluation.ambiguity` で計測している（#52）。発生源の分布を見てから規約を決める。
+- **仲値へのフォールバック**: 3 日（`MAX_QUOTE_LOOKBACK_MS`）より古いプラン、GMO に無いペア／判定足、Bid/Ask の取得が空・欠損あり・失敗で返った行は Twelve Data の仲値で判定される。
+  `MAX_QUOTE_REQUESTS` の予算切れは仲値に落とさず、行を触らずに次の tick の先頭へ回す（§3.2 / §3.5）。`price_basis` で見分けられる。quotes から mid に落ちた pending 行は判定価格が変わる（§5）。
+- **4h / 1day プランの精査**: シグナル足のサブ足だけが 5min まで降りる。後続の 1h 足は 15min で止まる（§3.3）。`MAX_REFINE_ATTEMPTS = 3` は全段で共有。
+- **`ambiguous` は推測しない**: 精査を尽くしても順序が分からないプランは採点されない。`evaluation.ambiguity.site` の語彙:
+  `incoherent` / `window_short` / `no_finer_data` / `signal_bar`（market_v1 で最多）/ `pre_fill` / `unfilled_touch` / `fill_bar`（この 3 つは旧契約のみ）/ `in_trade` / `feed_conflict`。
+  `bar_range / span` が 1 前後なら梯子が 1 段足りない（データで直す）、3 以上なら本当の急変（そのときだけ採点規約を再考）。行ごとではなくヒストグラムとして読む。
 - **型検査の基準線**: `npx tsc --noEmit -p tsconfig.app.json` は既存のエラー 12 件がある。増やさないことだけを見ている。
 - **未観測**: v12 の Bid/Ask 精査、`quote_refinements`、WAIT の採点、danger の閾値は本番の平日データでまだ十分に観測できていない。月曜の 1h 分析で観る。
 
@@ -278,9 +397,12 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 
 ## 9. 変更するときのチェックリスト
 
-- [ ] 契約を変えるなら `_shared/contract.ts` だけを変え、旧契約の行が統計・ルール選別・判定で別扱いになることをテストで確認する。
+- [ ] 契約を変えるなら `_shared/contract.ts` を起点に、同じ値を持つ `postmortem/facts.ts`（`MARKET_CONTRACT`）・`src/lib/outcomeStats.ts`（`CURRENT_CONTRACT` / `LEGACY_CONTRACT`）・`src/lib/types.ts`（`PlanContract`）と、
+  DB 側の check 制約 `analyses_plan_contract_check` および `public_track_record()` の SQL リテラル（どちらも新しいマイグレーションで）も同時に変える。
+  `src/test/entry-contract.test.ts` / `learning-loop.test.ts` が `PLAN_CONTRACT` との一致を検査するが、check 制約だけはテストされない。そのうえで旧契約の行が統計・ルール選別・判定で別扱いになることをテストで確認する。
 - [ ] 判定ロジックを変えるなら「再判定 = 1 回判定」と「形成中の足を割らない」のテストを通す（`src/test/track-outcomes.test.ts`）。
 - [ ] 新しい `evaluation` / `postmortem` のフィールドはフロントの型（`src/lib/types.ts`）と表示（`OutcomeDetail.tsx`）と i18n（`ja.ts` / `en.ts`、英語辞書に日本語を入れない）を同時に足す。
-- [ ] cron の時刻を変えるなら `cron.job` を直接更新し、この表も直す。
+- [ ] cron の時刻を変えるなら `cron.job` を直接更新し、§5 の表も直す。
 - [ ] 関数を変えたらバージョン文字列を上げ、関数 → フロントの順にデプロイし、sha256 と本番の `version` を確認する。
-- [ ] 秘密の文字列・モデル識別子・使い捨てテストがコミットに入っていないか `git diff --cached` で見る。
+- [ ] `rulebook` を手で直すなら `version` / `updated_at` / `history` に触らず、cron を止め、新しい関数を先にデプロイしてから流す（§4.3）。
+- [ ] 秘密の文字列・使い捨てテストがコミットに入っていないか `git diff --cached` で見る。
