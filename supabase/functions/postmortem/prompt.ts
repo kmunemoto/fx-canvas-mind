@@ -926,12 +926,6 @@ export const parseConsolidation = (
   previous: Rule[],
   nowIso: string,
   lessons: CitableLesson[] = [],
-  // The contract the editor was writing for. Every rule it emits is stamped
-  // with it, because emitting a rule under this revision's prompt IS the
-  // endorsement that the rule is followable now. Rules the editor did not
-  // emit — the ones restored below to fill the book back up — keep whatever
-  // contract they already had, so a rule from a dead era stays held back
-  // rather than being quietly revived by an editor that never looked at it.
   // The contract the emitted rules are TESTED against — the question, not the
   // answer. Whether any given rule receives it is decided by stampFor, from
   // that rule's own cause and its own text. Passing PLAN_CONTRACT here no
