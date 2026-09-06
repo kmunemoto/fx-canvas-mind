@@ -90,6 +90,14 @@ describe("the model can no longer choose an entry price", () => {
     expect(analyze).toContain("&shadow=is.false&select=id,context");
   });
 
+  it("refuses to measure a footprint it can only see part of", () => {
+    // Rules are learned across every account, so their citations point at
+    // plans the caller does not own. Under the caller's own JWT, RLS would
+    // answer with their slice and the range would look real while describing
+    // less evidence than the rule has.
+    expect(analyze).toContain("if (!serviceRoleKey) return null;");
+  });
+
   it("prices from the wall clock, never from the forming bar's own stamp", () => {
     // The candle's datetime is the OPEN of a bar still being built, so on a
     // daily plan it back-dates the fill up to 24 hours into known price action.

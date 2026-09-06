@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v35-2026-09-06T03:35:00Z";
+const FUNCTION_VERSION = "analyze-v36-2026-09-06T03:52:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -825,6 +825,14 @@ Deno.serve(async (req: Request) => {
     // and reports.
     const MAX_FOOTPRINT_IDS = 120;
     const loadFootprints = async (rules: Rule[]): Promise<Record<string, Footprint> | null> => {
+      // Rules are learned across every account, so a rule's citations point at
+      // plans this caller does not own. Without the service role the read goes
+      // out under the caller's own JWT, and RLS answers with their slice of
+      // the evidence: a NARROWER footprint that is indistinguishable from a
+      // real one, on a range whose whole job is to say what evidence exists.
+      // Refuse rather than narrow — the rules then render as they did before
+      // this check existed.
+      if (!serviceRoleKey) return null;
       const ids = [...new Set(rules.flatMap((r) => r.supported_by))]
         .filter((id) => UUID_RE.test(id))
         .slice(0, MAX_FOOTPRINT_IDS);
