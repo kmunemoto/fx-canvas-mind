@@ -412,6 +412,33 @@ export const ja = {
     waits: "原因分析は決着の1時間後（15分足）・2時間後（1時間足）・4時間後（4時間足）・8時間後（日足）に自動実行し、決着後の値動きが少ない場合は後で再診断します",
   },
 
+  // その回の分析が参照したルールと、今の相場との照合結果（サーバ実測）。
+  ruleFit: {
+    title: "この分析が参照したルール",
+    summary: (matched: number, total: number) => `${total}件を提示し、うち${matched}件が今の相場に該当。`,
+    heldBack: (n: number) => `文字数の都合で${n}件を省略（今の相場から遠いものから）。`,
+    verdicts: {
+      match: "該当",
+      off: "別局面",
+      unknown: "照合不可",
+    },
+    axes: {
+      adx: "ADX",
+      rsi: "RSI",
+      stretch: "SMA20乖離",
+      bb_pos: "BB内の位置",
+      htf_adx: "上位足ADX",
+    },
+    missed: (axes: string[]) => `外れた軸: ${axes.join("・")}`,
+    evidence: (cases: number, cited: number) =>
+      cases === cited
+        ? `根拠${cited}件すべての当時の値と比較。`
+        : `根拠${cited}件のうち${cases}件しか当時の値が残っておらず、その範囲との比較。`,
+    ruleGone: (id: string) => `（${id}：本文を取得できませんでした）`,
+    note:
+      "「該当」判定は、そのルールの根拠になった過去の局面の実測値（ADX・RSI・SMA20乖離のATR倍・BB内の位置・上位足ADX）と現在値をサーバが機械的に比べた結果です。ルール本文の主張ではありません。ルールは全アカウントの記録から学習されているため、根拠の件数にはあなたの履歴に無いものも含まれます。",
+  },
+
   analysisMode: {
     label: "分析モード:",
     full: "フル分析（テクニカル+ファンダメンタル）",

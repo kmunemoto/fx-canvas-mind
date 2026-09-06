@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v40-2026-09-06T08:15:00Z";
+const FUNCTION_VERSION = "analyze-v42-2026-09-06T09:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -59,8 +59,8 @@ import {
   situationFor,
 } from "./situation.ts";
 
-import { computeStructure, pivots, structureLines } from "./structure.ts";
-import { detectDivergence, type Divergence } from "./divergence.ts";
+import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
+import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { closedTail, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
@@ -1926,6 +1926,25 @@ Deno.serve(async (req: Request) => {
       // r4 and r10, and r10 had been measured as belonging to another market"
       // are different prompts, and only this tells them apart afterwards.
       rule_fit: ruleFitRecord,
+      // The structure the plan was written against, per timeframe.
+      //
+      // This used to reach the prompt as prose and reach no column at all, so
+      // the record could not answer the question it exists for — what was the
+      // analyst looking at — for the half of the reading that Phase 1.5 added.
+      // Two things depend on it: a situation axis that can tell "making lower
+      // highs" from "holding a range" (situation.ts has only indicators today,
+      // which is why the difference cannot be an axis), and any replay of a
+      // past decision.
+      structure: structures.map((x, i) => compactStructure(timeframes[i], x.structure, decimals)),
+      // Entry timeframe only, which is where it is computed and rendered.
+      divergence: compactDivergence(entryDivergence, decimals),
+      // The same reading with the forming bar removed. `null` where there was
+      // no separate one to take — the newest bar had already closed, so the
+      // reading above IS the closed-bar reading. The comment on
+      // `closedSnapshots` has said since it was written that "the record has
+      // to keep both, or the judgement cannot be reproduced afterwards"; until
+      // now the record kept neither.
+      closed: closedSnapshots.map((snap, i) => snap === null ? null : compactSnapshot(timeframes[i], snap)),
     };
 
     // The user asked for news to be factored in and it could not be; say so in
@@ -2178,6 +2197,15 @@ Deno.serve(async (req: Request) => {
         // the moment they are told "not now".
         preview: previewMode,
         market_opens_at: marketOpensAt,
+        // Which learned rules were put in front of the model this run, and how
+        // today's market compared with the plans each was drawn from. Sent so
+        // the reader can see WHY a rule was there, not just that it was.
+        //
+        // Rule ids, verdicts, axis names and counts only — no analysis ids.
+        // The rules are learned from every account, and whose plans they were
+        // learned from is not the client's business (docs §4.4 / the rule that
+        // keeps other users' analysis_id off the wire).
+        rule_fit: ruleFitRecord,
         technicalData: {
           price: p(entrySnapshot.price),
           datetime: entrySnapshot.datetime,
