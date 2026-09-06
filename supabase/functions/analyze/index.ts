@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v33-2026-09-06T02:40:00Z";
+const FUNCTION_VERSION = "analyze-v34-2026-09-06T03:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1964,6 +1964,24 @@ Deno.serve(async (req: Request) => {
           cloudNowTop: p(entrySnapshot.cloudNow?.top ?? null),
           cloudNowBottom: p(entrySnapshot.cloudNow?.bottom ?? null),
           cloudSide: entrySnapshot.cloudSide ?? null,
+          // The levels the judgement rests on, so the chart can draw them and
+          // a reader can check a claim against the picture instead of taking
+          // it on trust. Computed here, never model-authored — which is why
+          // the chart can draw them in a different register from anything the
+          // model cites.
+          levels: (() => {
+            const st = structures[0].structure;
+            if (!st.ok) return [];
+            const out: Array<{ label: string; value: number; kind: string }> = [];
+            for (const h of st.highs) out.push({ label: `H ${h.barsAgo}本前`, value: h.price, kind: "swing_high" });
+            for (const l of st.lows) out.push({ label: `L ${l.barsAgo}本前`, value: l.price, kind: "swing_low" });
+            const brk = [st.lastBreak.up, st.lastBreak.down].filter((b) => b !== null && b.state !== "held");
+            for (const b of brk) out.push({ label: b!.state === "reclaimed" ? "戻された" : "終値ブレイク", value: b!.level, kind: "break" });
+            return out;
+          })(),
+          cloudBand: entrySnapshot.cloudNow
+            ? { top: entrySnapshot.cloudNow.top, bottom: entrySnapshot.cloudNow.bottom }
+            : null,
           // Whether the newest bar had closed when this was read. Without it
           // a mid-bar price renders as a settled "current rate".
           barClosed: entrySnapshot.barClosed,

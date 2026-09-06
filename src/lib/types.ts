@@ -78,6 +78,11 @@ export interface TechnicalData {
   cloudSide?: "above" | "inside" | "below" | null;
   // Whether the newest bar had closed when this was read
   barClosed?: boolean | null;
+  // The levels the judgement rests on, computed server-side. Drawn on the
+  // chart in a different register from anything the model merely cited, so
+  // "price is below the cloud" and "a sweep is coming" cannot look alike.
+  levels?: Array<{ label: string; value: number; kind: string }>;
+  cloudBand?: { top: number; bottom: number } | null;
   atr: string;
   slowK: string;
   slowD: string;

@@ -90,6 +90,9 @@ export const en: Dict = {
     title: "Price chart",
     recentBars: (pair: string, n: number) => `${pair} · last ${n} bars`,
     ariaLabel: (pair: string) => `${pair} candlestick chart with trade plan levels`,
+    citedMark: "(AI)",
+    legend: "dashed = measured by the server / dotted = named by the model / band = the cloud at price",
+    hiddenLevels: (n: number) => `${n} outside the visible range`,
   },
 
   technical: {

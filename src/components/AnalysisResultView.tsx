@@ -1,6 +1,7 @@
+import { useMemo } from "react";
 import type { AnalysisResult, TechnicalData, AppSettings } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
-import PriceChart from "./PriceChart";
+import PriceChart, { type ChartOverlay } from "./PriceChart";
 import MarketContextCard from "./MarketContextCard";
 import ScoreCard from "./ScoreCard";
 import { AlertTriangle, Target, TrendingUp } from "lucide-react";
@@ -57,6 +58,33 @@ const AnalysisResultView = ({ result, techData, pair, interval, settings }: Prop
   const keyFactors = Array.isArray(result?.key_factors) ? result.key_factors : [];
   const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
   const vol = volatilityText(techData);
+
+  // The two registers, assembled here because only this component has both
+  // halves: what the server measured, and what the model named.
+  //
+  // A support level the model quoted may well be right — nothing measured it,
+  // and that is the entire difference the chart is drawing.
+  const overlays = useMemo<ChartOverlay[]>(() => {
+    const out: ChartOverlay[] = (techData?.levels ?? []).map((l) => ({
+      label: l.label,
+      value: l.value,
+      register: "computed" as const,
+    }));
+    const cited = [
+      ...(Array.isArray(result.support_levels) ? result.support_levels : []),
+      ...(Array.isArray(result.resistance_levels) ? result.resistance_levels : []),
+    ];
+    for (const c of cited) {
+      const v = Number(c);
+      if (!Number.isFinite(v)) continue;
+      // Skip one the server already measured: the same price drawn twice, in
+      // two registers, says the measurement is in doubt when it is not.
+      if (out.some((o) => o.register === "computed" && Math.abs(o.value - v) < 1e-9)) continue;
+      out.push({ label: v.toString(), value: v, register: "cited" });
+    }
+    return out;
+  }, [techData, result.support_levels, result.resistance_levels]);
+
   const candles = techData?.candles ?? [];
 
   return (
@@ -70,6 +98,10 @@ const AnalysisResultView = ({ result, techData, pair, interval, settings }: Prop
           stopLoss={result.stop_loss}
           takeProfits={[result.take_profit_1, result.take_profit_2, result.take_profit_3]}
           pair={pair}
+          overlays={overlays}
+          band={techData?.cloudBand
+            ? { top: techData.cloudBand.top, bottom: techData.cloudBand.bottom, label: "cloud" }
+            : null}
         />
       )}
 

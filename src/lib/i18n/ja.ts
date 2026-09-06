@@ -95,6 +95,10 @@ export const ja = {
     title: "プライスチャート",
     recentBars: (pair: string, n: number) => `${pair} 直近${n}本`,
     ariaLabel: (pair: string) => `${pair} のローソク足チャートとトレードプラン水準`,
+    // Marks a level the model named rather than one the server measured.
+    citedMark: "(AI)",
+    legend: "破線=サーバ計算の水準 / 点線=AIが挙げた水準 / 帯=現在価格の雲",
+    hiddenLevels: (n: number) => `表示範囲の外に ${n}件`,
   },
 
   technical: {
