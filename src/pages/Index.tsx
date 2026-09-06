@@ -147,6 +147,29 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     kijun: readString("kijun"),
     spanA: readString("spanA"),
     spanB: readString("spanB"),
+    cloudNowTop: readString("cloudNowTop"),
+    cloudNowBottom: readString("cloudNowBottom"),
+    cloudSide: source.cloudSide === "above" || source.cloudSide === "inside" || source.cloudSide === "below"
+      ? source.cloudSide
+      : null,
+    barClosed: typeof source.barClosed === "boolean" ? source.barClosed : null,
+    levels: Array.isArray(source.levels)
+      ? source.levels.flatMap((l) => {
+        if (typeof l !== "object" || l === null) return [];
+        const row = l as Record<string, unknown>;
+        const value = typeof row.value === "number" && Number.isFinite(row.value) ? row.value : null;
+        if (value === null || typeof row.label !== "string" || typeof row.kind !== "string") return [];
+        return [{ label: row.label, value, kind: row.kind }];
+      })
+      : undefined,
+    cloudBand: typeof source.cloudBand === "object" && source.cloudBand !== null &&
+        typeof (source.cloudBand as Record<string, unknown>).top === "number" &&
+        typeof (source.cloudBand as Record<string, unknown>).bottom === "number"
+      ? {
+        top: (source.cloudBand as { top: number }).top,
+        bottom: (source.cloudBand as { bottom: number }).bottom,
+      }
+      : null,
     atr: readString("atr"),
     slowK: readString("slowK"),
     slowD: readString("slowD"),

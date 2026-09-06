@@ -17,6 +17,28 @@ export interface ChartMarker {
   label: string;
 }
 
+// A level the judgement rests on, drawn so it can be checked against the
+// picture. Two registers, and the difference is the point:
+//
+//   "computed" — the server measured it from the candles on screen (a
+//   confirmed swing, a level a close settled through, the cloud). Solid-ish,
+//   labelled with its own number.
+//
+//   "cited" — the model named it. It may be right; nothing measured it. Drawn
+//   dotted and dimmer, so "price is below the cloud" and "a sweep is coming"
+//   cannot look alike on the same chart.
+export interface ChartOverlay {
+  label: string;
+  value: number;
+  register: "computed" | "cited";
+}
+
+export interface ChartBand {
+  top: number;
+  bottom: number;
+  label: string;
+}
+
 interface Props {
   candles: NumericCandle[];
   entry?: string;
@@ -26,6 +48,8 @@ interface Props {
   markers?: ChartMarker[];
   heading?: string;
   subtitle?: string;
+  overlays?: ChartOverlay[];
+  band?: ChartBand | null;
 }
 
 // The SVG is drawn at one unit per CSS pixel, measured from its own
@@ -72,7 +96,10 @@ const parseLevel = (v: string | undefined): number | null => {
 
 // Entry/SL/TP drawn as labeled horizontal lines over the candles, the way a
 // trader would mark up the chart (labels carry identity, color is secondary)
-const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle }: Props) => {
+const PriceChart = ({
+  candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
+  overlays = [], band = null,
+}: Props) => {
   const t = useT();
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -117,6 +144,10 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
     return out;
   }, [entry, stopLoss, takeProfits]);
 
+  // Deliberately NOT part of the price domain below. A confirmed swing well
+  // above the window would stretch the scale until every candle was a flat
+  // line — the overlay would have made the chart worse at the one job it
+  // already did. Levels outside the drawn range are counted, not drawn.
   const geometry = useMemo(() => {
     if (candles.length === 0) return null;
 
@@ -181,6 +212,17 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
     });
   }, [markers, candles]);
 
+  // Overlays live on the LEFT edge, never in the right-hand pill lane. The
+  // lane belongs to the plan — entry, stop, targets — and adding a dozen
+  // market levels to it pushed those labels off-canvas on a phone, which is
+  // the one thing a trader must be able to read.
+  const drawnOverlays = useMemo(() => {
+    if (!geometry) return { rows: [], hidden: 0 };
+    const inside = overlays.filter((o) =>
+      Number.isFinite(o.value) && o.value >= geometry.min && o.value <= geometry.max);
+    return { rows: inside, hidden: overlays.length - inside.length };
+  }, [overlays, geometry]);
+
   if (!geometry || candles.length === 0) return null;
 
   const { y, x, slot, bodyW } = geometry;
@@ -208,6 +250,18 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
             : subtitle ?? t.chart.recentBars(pair, candles.length)}
         </span>
       </div>
+      {/* Said once, under the chart, so the two registers can be told apart
+          without hovering anything. Only shown when there is something drawn
+          in them. */}
+      {/* Shown whenever there is anything to say, INCLUDING when every level
+          fell outside the visible range — dropping them silently would read
+          as "there were none". */}
+      {(drawnOverlays.rows.length > 0 || drawnOverlays.hidden > 0 || band) && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-legend">
+          {t.chart.legend}
+          {drawnOverlays.hidden > 0 ? ` · ${t.chart.hiddenLevels(drawnOverlays.hidden)}` : ""}
+        </p>
+      )}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full h-auto"
@@ -216,6 +270,19 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
       >
+        {/* The cloud price is actually inside, as a band rather than a line —
+            a zone drawn as a rule reads as a level, which it is not. */}
+        {band && Number.isFinite(band.top) && Number.isFinite(band.bottom) && (
+          <rect
+            x={PAD_LEFT}
+            y={Math.min(y(band.top), y(band.bottom))}
+            width={Math.max(0, W - PAD_RIGHT - PAD_LEFT)}
+            height={Math.abs(y(band.top) - y(band.bottom))}
+            fill={COLORS.text}
+            opacity="0.09"
+          />
+        )}
+
         {/* recessive grid + price axis */}
         {gridPrices.map((p, i) => (
           <g key={i}>
@@ -277,6 +344,33 @@ const PriceChart = ({ candles, entry, stopLoss, takeProfits = [], pair, markers 
                 fontSize={pillSize} fontWeight="700" fontFamily="monospace" fill={color}
               >
                 {m.label}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* The levels the judgement rests on. Two registers, and the whole
+            point is that they do not look alike: a measured swing is drawn
+            as a dashed rule with its own number, a level the model merely
+            named is dotted, dimmer, and marked. Labels sit on the LEFT so
+            they never crowd the plan's lane on the right. */}
+        {drawnOverlays.rows.map((o, i) => {
+          const oy = y(o.value);
+          const computed = o.register === "computed";
+          return (
+            <g key={`ov-${i}-${o.value}`} opacity={computed ? 0.55 : 0.34}>
+              <line
+                x1={PAD_LEFT} x2={W - PAD_RIGHT}
+                y1={oy} y2={oy}
+                stroke={COLORS.text}
+                strokeWidth="0.8"
+                strokeDasharray={computed ? "5 3" : "1.5 3"}
+              />
+              <text
+                x={PAD_LEFT + 2} y={oy - 2}
+                fontSize={labelSize - 0.5} fill={COLORS.text} fontFamily="monospace"
+              >
+                {computed ? o.label : `${o.label} ${t.chart.citedMark}`}
               </text>
             </g>
           );

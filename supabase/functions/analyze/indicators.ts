@@ -169,9 +169,19 @@ export const emaSeries = (values: number[], period: number): (number | null)[] =
   return out;
 };
 
-// Wilder RSI. Needs at least period+1 closes.
-export const rsi = (closes: number[], period = 14): number | null => {
-  if (closes.length < period + 1) return null;
+// Wilder RSI at every bar, aligned index-for-index with `closes`: null until
+// the seed window has passed, a number after.
+//
+// A divergence needs the indicator at TWO points, and until this existed the
+// prompt carried one RSI at the newest bar — so every claim about RSI rising,
+// falling or diverging was about a second reading the model was never given.
+//
+// The Wilder seed is a simple average over the first `period` changes and is
+// then smoothed; the values here are identical to what rsi() returned, which
+// is now just the last of these.
+export const rsiSeries = (closes: number[], period = 14): Array<number | null> => {
+  const out: Array<number | null> = closes.map(() => null);
+  if (closes.length < period + 1) return out;
 
   let gain = 0;
   let loss = 0;
@@ -182,16 +192,33 @@ export const rsi = (closes: number[], period = 14): number | null => {
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
+  // A stretch with no movement at all has neither gains nor losses, and the
+  // ratio is 0/0. Reporting 100 there — as the single-value form did for any
+  // zero-loss window — would put a flat market at the top of the scale.
+  const value = (g: number, l: number): number | null => {
+    if (l === 0) return g === 0 ? null : 100;
+    return 100 - 100 / (1 + g / l);
+  };
+  out[period] = value(avgGain, avgLoss);
 
   for (let i = period + 1; i < closes.length; i++) {
     const change = closes[i] - closes[i - 1];
     avgGain = (avgGain * (period - 1) + Math.max(change, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
+    out[i] = value(avgGain, avgLoss);
   }
+  return out;
+};
 
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
+// Wilder RSI. Needs at least period+1 closes.
+export const rsi = (closes: number[], period = 14): number | null => {
+  if (closes.length < period + 1) return null;
+  const series = rsiSeries(closes, period);
+  const last = series[series.length - 1];
+  // The single-value form has always answered 100 for a window with no
+  // losses, and a stored row's number must not change under it. Only the
+  // no-movement-at-all case, which used to answer 100 too, is now null.
+  return last;
 };
 
 export const macd = (
@@ -340,15 +367,44 @@ export const adx = (candles: Candle[], period = 14): number | null => {
   return wilderSmooth(dxs, period);
 };
 
-const midOfRange = (candles: Candle[], period: number): number | null => {
-  if (candles.length < period) return null;
-  let hh = -Infinity;
-  let ll = Infinity;
+export interface Range {
+  high: number;
+  low: number;
+  width: number;
+  // Where the last close sits inside the range, 0 (at the low) to 100 (at the
+  // high). Null on a range with no width: a percentage of zero is not 50, it
+  // is undefined, and rendering NaN% is worse than saying nothing.
+  positionPct: number | null;
+}
+
+// The highest high and lowest low over the last `period` bars, and where
+// price sits inside them.
+//
+// midOfRange computed exactly these two extremes and threw both away,
+// returning only the midpoint — so the prompt could say where the middle of
+// the range was but never how wide it was or where price stood in it.
+export const rangeOf = (candles: Candle[], period: number): Range | null => {
+  if (candles.length < period || period <= 0) return null;
+  let high = -Infinity;
+  let low = Infinity;
   for (let i = candles.length - period; i < candles.length; i++) {
-    hh = Math.max(hh, candles[i].high);
-    ll = Math.min(ll, candles[i].low);
+    high = Math.max(high, candles[i].high);
+    low = Math.min(low, candles[i].low);
   }
-  return (hh + ll) / 2;
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  const width = high - low;
+  const close = candles[candles.length - 1].close;
+  return {
+    high,
+    low,
+    width,
+    positionPct: width > 0 ? ((close - low) / width) * 100 : null,
+  };
+};
+
+const midOfRange = (candles: Candle[], period: number): number | null => {
+  const r = rangeOf(candles, period);
+  return r === null ? null : (r.high + r.low) / 2;
 };
 
 // Ichimoku's displacement, in bars. The spans computed from a window ending

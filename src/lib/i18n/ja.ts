@@ -78,6 +78,8 @@ export const ja = {
     sentiment: "センチメント",
     volatility: "ボラティリティ",
     keyFactors: "判断の主要因",
+    inferenceChip: "推測",
+    inferenceNote: "板情報・出来高・建玉・約定履歴は取得していません。「推測」と付いた記述は値動きからの解釈であって、観測した事実ではありません。",
     detail: "詳細分析",
     warnings: "注意事項",
     positionSize: "推奨ポジションサイズ",
@@ -93,6 +95,10 @@ export const ja = {
     title: "プライスチャート",
     recentBars: (pair: string, n: number) => `${pair} 直近${n}本`,
     ariaLabel: (pair: string) => `${pair} のローソク足チャートとトレードプラン水準`,
+    // Marks a level the model named rather than one the server measured.
+    citedMark: "(AI)",
+    legend: "破線=サーバ計算の水準 / 点線=AIが挙げた水準 / 帯=現在価格の雲",
+    hiddenLevels: (n: number) => `表示範囲の外に ${n}件`,
   },
 
   technical: {
@@ -102,8 +108,14 @@ export const ja = {
     oversold: " (売られすぎ)",
     tenkan: "一目 転換線",
     kijun: "一目 基準線",
-    spanA: "一目 先行A",
-    spanB: "一目 先行B",
+    // Named for where they are drawn. "先行A/B" alone read as the cloud
+    // price is in, which is a different pair computed 26 bars earlier — so
+    // the panel confirmed "price is below the cloud" with the wrong numbers.
+    spanA: "一目 先行A(26本先)",
+    spanB: "一目 先行B(26本先)",
+    cloudNow: "現在価格の雲(26本前算出)",
+    cloudSides: { above: "価格は雲の上", inside: "価格は雲の中", below: "価格は雲の下" },
+    forming: "この足はまだ形成中",
   },
 
   history: {

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import PriceChart from "../components/PriceChart";
 import { fireEvent, render as rtlRender, screen, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
@@ -763,5 +764,59 @@ describe("AnalysisHistory draws the record from the server when it has one", () 
   it("falls back to the rows on screen when the server did not answer", () => {
     render(<AnalysisHistory records={[one()]} />);
     expect(screen.getByTestId("stats-scope").textContent).toContain("直近");
+  });
+});
+
+
+// The chart was a trade-plan chart: entry, stop, targets and nothing else.
+// Every level the judgement rested on — the swings, the level a close settled
+// through, the cloud — existed only as prose, so a reader could not check a
+// claim against the picture.
+describe("PriceChart draws the evidence, in two registers", () => {
+  const candles = Array.from({ length: 30 }, (_, i) => ({
+    datetime: new Date(Date.parse("2026-09-01T00:00:00Z") + i * 3_600_000).toISOString(),
+    open: 150, high: 150.4, low: 149.6, close: 150.1,
+  }));
+
+  it("separates what was measured from what was merely named", () => {
+    render(
+      <PriceChart
+        candles={candles}
+        pair="USD/JPY"
+        entry="150.1"
+        stopLoss="149.7"
+        overlays={[
+          { label: "H 8本前", value: 150.35, register: "computed" },
+          { label: "150.30", value: 150.3, register: "cited" },
+        ]}
+      />,
+    );
+    const svg = document.querySelector("svg");
+    expect(svg?.textContent).toContain("H 8本前");
+    // the model-named one carries its mark; the measured one does not
+    expect(svg?.textContent).toContain("(AI)");
+    expect(screen.getByTestId("chart-legend").textContent).toContain("破線");
+  });
+
+  it("does not let a distant level flatten the candles", () => {
+    // Widening the price domain to fit an overlay would stretch the scale
+    // until every candle was a flat line — the overlay would have made the
+    // chart worse at the one job it already did.
+    render(
+      <PriceChart
+        candles={candles}
+        pair="USD/JPY"
+        overlays={[{ label: "far", value: 900, register: "computed" }]}
+      />,
+    );
+    const svg = document.querySelector("svg");
+    expect(svg?.textContent).not.toContain("far");
+    // and it says how many it could not draw rather than dropping them silently
+    expect(screen.getByTestId("chart-legend").textContent).toContain("表示範囲の外に 1件");
+  });
+
+  it("says nothing about registers when there is nothing in them", () => {
+    render(<PriceChart candles={candles} pair="USD/JPY" entry="150.1" />);
+    expect(screen.queryByTestId("chart-legend")).toBeNull();
   });
 });

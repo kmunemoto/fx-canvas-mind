@@ -160,3 +160,51 @@ describe("the analyst's own rules are enforced by the server", () => {
     expect(analyzeSrc).toContain("if (!health[0].ok)");
   });
 });
+
+// The prompt asked the analyst to find where stops are resting, from an app
+// that has never seen an order book. It also asked for a smart-money label as
+// a required enum, so every single run had to assert institutional intent:
+// 18 Distribution, 3 Accumulation, 0 Neutral across the first 21 rows,
+// tracking direction perfectly and carrying nothing direction did not.
+describe("the prompt stops asking for things the app cannot observe", () => {
+  const analyzeSrc = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+
+  it("no longer instructs the analyst to locate resting stops", () => {
+    expect(analyzeSrc).not.toContain("ストップが溜まる「ストップハントゾーン」があれば特定する");
+    // and says plainly which inputs do not exist
+    expect(analyzeSrc).toContain("板情報・出来高・建玉・約定履歴は一切取得していない");
+  });
+
+  it("does not force an institutional-intent label on every run", () => {
+    expect(analyzeSrc).toContain('required: ["mode", "structure", "strength", "session", "direction", "continuity"]');
+    expect(analyzeSrc).not.toMatch(/required: \[[^\]]*"smart_money"/);
+  });
+
+  it("hands over a computed structure instead of asking the model to count", () => {
+    expect(analyzeSrc).toContain("structureLines(structures[i].structure");
+    // The verdict is NOT handed over as settled. It compares two pivots that
+    // can sit a handful of bars apart, and on a decisively trending series it
+    // disagrees with the window it sits in about one time in eight — so
+    // instructing the analyst to adopt it would have replaced a biased guess
+    // with a protected one.
+    expect(analyzeSrc).toContain("構造の判定はあなたの仕事である");
+    expect(analyzeSrc).toContain("参照期間全体の構造ではない");
+    // the undated swing prices are gone
+    expect(analyzeSrc).not.toContain("`直近スイング高値: ${s.swingHighs");
+  });
+
+  it("computes structure on closed bars and on the same series the indicators read", () => {
+    // A forming bar's close is not a close, and a structure computed on the
+    // pre-overlay array would describe a different feed from the indicators
+    expect(analyzeSrc).toContain("snapshots[i]?.barClosed === false ? candles.slice(0, -1) : candles");
+    expect(analyzeSrc).toContain("const structures = seriesByTf.map(");
+  });
+
+  it("makes the divergence verdict the server's, not the model's", () => {
+    expect(analyzeSrc).toContain("ダイバージェンスは「ダイバージェンス(RSI14・サーバ判定)」の行が結論である");
+    expect(analyzeSrc).not.toContain("ダイバージェンス）は必ず言及する");
+    // the two shapes production actually produced, named as not divergence
+    expect(analyzeSrc).toContain("異なる2つのオシレーター");
+    expect(analyzeSrc).toContain("隠れ（ヒドゥン）ダイバージェンスは計算していない");
+  });
+});
