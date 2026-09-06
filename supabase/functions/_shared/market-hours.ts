@@ -41,3 +41,32 @@ export const isPossiblyClosed = (ms: number): boolean => {
   if (day === 0 && hour < 22) return true; // Sunday, until the latest open
   return false;
 };
+
+// When does it open again?
+//
+// Only meaningful while `isPossiblyClosed(ms)` is true — it answers the
+// question that predicate raises and nothing else. It returns the LATEST
+// possible open (Sunday 22:00 UTC, i.e. Monday 07:00 JST), matching the wide
+// predicate: telling someone the market is back at 06:00 when the analyst
+// will still refuse until 07:00 would be a worse answer than one hour late.
+//
+// The market may in fact be trading before this — the hour between the
+// earliest and latest open moves with daylight saving, and neither predicate
+// pretends to know which. So this is the time the app itself starts working
+// again, which is the thing the person asking actually wants to know.
+export const nextOpen = (ms: number): number => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  // Sunday is day 0, so from any day in the shut window the coming Sunday is
+  // this many days ahead; on Sunday itself it is today.
+  const daysAhead = day === 0 ? 0 : 7 - day;
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() + daysAhead,
+    22,
+    0,
+    0,
+    0,
+  );
+};

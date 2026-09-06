@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v36-2026-09-06T03:52:00Z";
+const FUNCTION_VERSION = "analyze-v37-2026-09-06T05:30:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -62,7 +62,7 @@ import {
 import { computeStructure, pivots, structureLines } from "./structure.ts";
 import { detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
-import { isPossiblyClosed } from "../_shared/market-hours.ts";
+import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
@@ -745,23 +745,35 @@ Deno.serve(async (req: Request) => {
       }, 402);
     }
 
-    // Refuse before spending anything.
+    // A shut market is not a failure, and it is not a plan either.
     //
-    // Every plan is now entered at the price on screen, so with the market
-    // shut there is no price to enter at and nothing worth analysing. The
-    // late check at check_entry stays — the market can close during the 20-40
-    // seconds the model takes — but catching it here means the user is not
-    // charged for a model call whose only possible answer is "not now", and
-    // it is refused in a second rather than a minute.
+    // Every plan is entered at the price on screen, so with the market closed
+    // there is no price to enter at: publishing one lets the weekend gap be
+    // written up as a trade nobody could have taken. That much stands, and the
+    // late gate at check_entry still turns a closed market into a WAIT.
+    //
+    // What it was never a reason for is refusing to LOOK. This used to return
+    // a 409 before spending anything, which put the analyst out of reach from
+    // Friday 21:00 UTC to Sunday 22:00 UTC — about 49 hours a week, and in
+    // Japan that is the whole of Saturday and Sunday, which is exactly when a
+    // person has time to study a chart. Nothing the server computes off
+    // Friday's close stops being true on a Sunday: the indicators, the
+    // structure, the divergence, the rules whose situation matches, the week's
+    // calendar. Only the entry does.
+    //
+    // The refusal also said something untrue. Its message read "I made it a
+    // WAIT" — and nothing was made: no analysis ran, no row was written, and
+    // the user was told about a decision that did not exist.
+    //
+    // So the run goes ahead as a PREVIEW: the full read, no entry, no stop, no
+    // targets, and a row that is kept out of every statistic and never scored.
+    // Deliberately decided from the arrival time and NOT reused for the late
+    // gate below — a run that began while the market was open and ended after
+    // the close was still decided at a price that existed, and that WAIT is a
+    // real one the scorer should grade.
     stage = "check_market_hours";
-    if (isPossiblyClosed(Date.now())) {
-      return json({
-        ok: false,
-        error: L.marketClosed,
-        diagnostics: { error_stage: "market_closed", stage },
-        market_closed: true,
-      }, 409);
-    }
+    const previewMode = isPossiblyClosed(Date.now());
+    const marketOpensAt = previewMode ? new Date(nextOpen(Date.now())).toISOString() : null;
 
     const limits: Record<string, number> = {
       light: 10,
@@ -1951,7 +1963,19 @@ Deno.serve(async (req: Request) => {
           // Only on a row that stood aside: on a published trade the plan
           // itself is the prediction, and a second one beside it would be a
           // second thing to keep in step.
-          wait_plan: normalizedAnalysis.signal === "WAIT" ? waitPlan : null,
+          //
+          // Never on a preview. This is not decoration — it is the whole of
+          // how a preview stays unscored: both the WAIT sweep in
+          // track-outcomes and the WAIT diagnosis in postmortem select on
+          // `outcome=eq.skipped` AND `wait_plan` being non-null, so a row
+          // without one is invisible to them. Scoring a preview would grade a
+          // Friday-close reading against Monday's reopen, across the gap,
+          // which is the exact thing the closed-market rule exists to stop.
+          wait_plan: normalizedAnalysis.signal === "WAIT" && !previewMode ? waitPlan : null,
+          // The market was shut when this was asked for, so it is a read of
+          // the last close and not a plan. Kept in the history and kept out of
+          // every statistic, every lesson and every rulebook count.
+          preview: previewMode,
           context,
           rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
           // Which contract this plan was made under. Never inferred: a reader
@@ -2036,7 +2060,12 @@ Deno.serve(async (req: Request) => {
 
       // Never parentless: a shadow whose shadow_of is null cannot be folded
       // back into the row it is the shadow of, and reads as a plan of its own.
-      const shadowable = savedId !== null && entryRejected &&
+      // Never on a preview. The shadow is a TRACKED plan (`outcome: pending`),
+      // and the shape gate's own rejection can still be "too_far" while the
+      // reason actually acted on was the closed market — so without this a
+      // weekend preview would quietly open a trade to be settled against
+      // Monday's reopen, through the one door the preview rules leave ajar.
+      const shadowable = savedId !== null && entryRejected && !previewMode &&
         (entryVerdict.rejection === "too_far" || entryVerdict.rejection === "should_be_market") &&
         (proposedSignal === "BUY" || proposedSignal === "SELL") &&
         proposed.entry !== null && proposed.stop !== null && proposed.tp1 !== null;
@@ -2092,6 +2121,13 @@ Deno.serve(async (req: Request) => {
         mode: resolvedMode,
         entry_check: entryCheck,
         rulebook_version: rulebookVersion,
+        // The market was shut when this was asked for, so this is a read of
+        // the last close rather than a plan. The client shows it as a result
+        // with the plan removed, not as an error — and says when the analyst
+        // starts publishing plans again, which is the question a person asks
+        // the moment they are told "not now".
+        preview: previewMode,
+        market_opens_at: marketOpensAt,
         technicalData: {
           price: p(entrySnapshot.price),
           datetime: entrySnapshot.datetime,

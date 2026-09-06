@@ -184,6 +184,7 @@ export const en: Dict = {
       gateOpen: "→ Still tracking",
       repaired: "The model's limit entry was moved to the market price because the trend was still running",
     },
+    preview: { badge: "preview" },
     wait: {
       title: "Standing aside, reviewed",
       badge: "trade missed",
@@ -393,6 +394,21 @@ export const en: Dict = {
     full: "Full analysis (technical + fundamental)",
     technical_only: "Technical only",
     technical_fallback: "Technical only (news search was unavailable)",
+  },
+
+  preview: {
+    title: "Preview — the market is shut",
+    body:
+      "This is a reading up to the last close. There is no price to enter at, so no entry, stop or targets were issued. " +
+      "The run is kept in your history and counts towards nothing: not the win rate, not the expectancy, not the rules.",
+    opensAt: (at: Date) =>
+      `Plans resume from ${at.toLocaleString("en-GB", {
+        month: "short",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })}.`,
   },
 
   index: {

@@ -12,6 +12,7 @@ import {
   byTimeframe,
   causeCounts,
   isRejected,
+  isPreview,
   isShadow,
   shadowTally,
   tally,
@@ -314,6 +315,11 @@ const AnalysisHistory = ({ records, stats = null }: Props) => {
       <div className="space-y-1">
         {safe.map((r) => {
           const rejected = isRejected(r);
+          // A weekend read stays in the list — the user asked to keep it — but
+          // it must never be mistaken for a call the analyst made when it
+          // could act. The badge says so on the row itself, not only in the
+          // detail nobody opens.
+          const preview = isPreview(r);
           const badgeKey = rejected ? "rejected" : r.outcome;
           const badgeCls = OUTCOME_CLASS[badgeKey] ?? OUTCOME_CLASS.pending;
           const badgeLabel = rejected
@@ -340,6 +346,14 @@ const AnalysisHistory = ({ records, stats = null }: Props) => {
                 {diagnosed && r.postmortem?.cause && (
                   <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground truncate max-w-[10rem]">
                     {causeLabel(r.postmortem.cause)}
+                  </span>
+                )}
+                {preview && (
+                  <span
+                    className="shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold bg-primary/10 text-primary border-primary/40"
+                    data-testid="preview-badge"
+                  >
+                    {t.history.preview.badge}
                   </span>
                 )}
                 {waitMissed && (

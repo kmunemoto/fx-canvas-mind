@@ -30,7 +30,12 @@ import { useNavigate } from "react-router-dom";
 
 const SUPABASE_URL = "https://endcqzewujdvimdlazhj.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
-const EXPECTED_ANALYZE_VERSION = "analyze-v24-2026-09-04T04:00:00Z";
+// Pinned against the function's own FUNCTION_VERSION by
+// src/test/weekend-preview.test.ts. It had drifted twelve deploys behind
+// (v24 against a live v36), so the mismatch warning fired on every single
+// call — which is worse than not having one, because it teaches the reader
+// to ignore the day it means something.
+const EXPECTED_ANALYZE_VERSION = "analyze-v37-2026-09-06T05:30:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -45,7 +50,7 @@ export const HISTORY_COLUMNS = [
   "entry_point", "stop_loss", "take_profit_1", "take_profit_2", "take_profit_3",
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
-  "rulebook_version", "plan_contract", "wait_check", "wait_plan",
+  "rulebook_version", "plan_contract", "wait_check", "wait_plan", "preview",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
@@ -221,6 +226,10 @@ const Index = () => {
   const [interval, setInterval_] = useState<TimeInterval>("1h");
   const [includeFundamental, setIncludeFundamental] = useState(true);
   const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | "technical_fallback" | null>(null);
+  // The market was shut when this run was asked for, so it is a read of the
+  // last close and not a plan — said above the result rather than in a toast,
+  // because it is the result's nature and not an error about it.
+  const [preview, setPreview] = useState<{ opensAt: string | null } | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
@@ -354,6 +363,7 @@ const Index = () => {
     setLoadingStage("fetching");
     setResult(null);
     setAnalysisMode(null);
+    setPreview(null);
     setLiveRate(null);
     // Clear the indicators too: on a failed run they would otherwise keep
     // showing the previous pair's numbers next to an error toast
@@ -452,6 +462,11 @@ const Index = () => {
       setResultMeta({ pair: settings.currencyPair, interval });
       setRemaining(remainingCount);
       setAnalysisMode(mode);
+      setPreview(
+        payload?.preview === true
+          ? { opensAt: typeof payload?.market_opens_at === "string" ? payload.market_opens_at : null }
+          : null,
+      );
       setLiveRate(technicalData?.price ?? analysisResult.entry_point ?? null);
       setTechData(technicalData);
 
@@ -545,6 +560,24 @@ const Index = () => {
               <AnalysisStages active={loading} />
             ) : result ? (
               <>
+                {/* Not a warning and not an error: the market being shut is a
+                    fact about the market, and this run is a genuine reading of
+                    the last close. What it is NOT is a plan, and what the
+                    reader wants next is when it becomes one. */}
+                {preview && (
+                  <div
+                    className="rounded-xl border border-primary/30 bg-primary/5 p-3 text-[12px] leading-relaxed text-foreground"
+                    data-testid="preview-banner"
+                  >
+                    <p className="font-semibold text-primary">{t.preview.title}</p>
+                    <p className="mt-1 text-muted-foreground">{t.preview.body}</p>
+                    {preview.opensAt && (
+                      <p className="mt-1 text-muted-foreground">
+                        {t.preview.opensAt(new Date(preview.opensAt))}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {analysisMode && (
                   <div className="text-[11px] text-muted-foreground px-1">
                     {t.analysisMode.label}{" "}

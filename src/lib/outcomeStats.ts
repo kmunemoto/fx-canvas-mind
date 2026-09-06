@@ -119,6 +119,13 @@ export const CONFIDENCE_BANDS: Array<[number, number | null]> = [
 export const UNKNOWN_BAND = "unknown";
 
 export const isShadow = (r: AnalysisRecord): boolean => r.shadow === true;
+// A weekend read: the market was shut when it was asked for, so it carries no
+// entry and can never be scored. It is kept in the history and excluded from
+// every tally, for the same reason a shadow is — a record is a claim about
+// what the analyst does when it can act, and a preview is what it says when
+// it cannot. Counting one as a call would move the WAIT rate and the trades-
+// per-call ratio without a single trade having been declined.
+export const isPreview = (r: AnalysisRecord): boolean => r.preview === true;
 export const isRejected = (r: AnalysisRecord): boolean =>
   r.signal === "WAIT" && typeof r.entry_check?.rejection === "string" && r.entry_check.rejection.length > 0;
 
@@ -290,7 +297,7 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const settledClusters = new Set<string>();
   const seenContracts = new Set<PlanContract>();
   records.forEach((r, i) => {
-    if (isShadow(r)) return;
+    if (isShadow(r) || isPreview(r)) return;
     seenContracts.add(contractKey(r));
     if (isRejected(r)) t.rejected++;
     // Every call counts, WAIT included: a call that declines to trade is
@@ -398,7 +405,7 @@ export const canonicalCause = (c: PostmortemCause): PostmortemCause =>
 export const causeCounts = (records: AnalysisRecord[]): Array<{ cause: PostmortemCause; count: number }> => {
   const counts = new Map<PostmortemCause, number>();
   for (const r of records) {
-    if (isShadow(r)) continue;
+    if (isShadow(r) || isPreview(r)) continue;
     // Settled plans only. This histogram is rendered under "why plans
     // missed", and a WAIT diagnosis answers a different question — listing
     // "standing aside was right" as a cause of plans missing is a category
@@ -422,7 +429,7 @@ const groupBy = (
 ): OutcomeTally[] => {
   const buckets = new Map<string, AnalysisRecord[]>();
   for (const r of records) {
-    if (isShadow(r)) continue;
+    if (isShadow(r) || isPreview(r)) continue;
     const k = keyOf(r);
     const list = buckets.get(k) ?? [];
     list.push(r);

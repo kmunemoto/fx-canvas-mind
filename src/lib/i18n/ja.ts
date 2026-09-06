@@ -200,6 +200,7 @@ export const ja = {
     },
     // 見送り（WAIT）の検証。見送りは「間違えようのない答え」になりがちなので、
     // 見送った後に相場が何をしたかを必ず突き合わせる
+    preview: { badge: "下見" },
     wait: {
       title: "見送りの検証",
       badge: "取れていた",
@@ -416,6 +417,22 @@ export const ja = {
     full: "フル分析（テクニカル+ファンダメンタル）",
     technical_only: "テクニカル分析のみ",
     technical_fallback: "テクニカルのみ（ニュース検索が利用できませんでした）",
+  },
+
+  // 為替が閉まっている間の読み。エラーではなく、結果の性質。
+  preview: {
+    title: "下見（相場は閉まっています）",
+    body:
+      "直近の終値までを読んだ結果です。入る値段が存在しないので、エントリー・損切り・利確は出していません。" +
+      "この回は履歴に残りますが、勝率・期待R・ルールの学習には一切数えません。",
+    opensAt: (at: Date) =>
+      `次に分析がプランを出せるのは ${at.toLocaleString("ja-JP", {
+        month: "numeric",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })} 以降です。`,
   },
 
   index: {
