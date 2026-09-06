@@ -150,33 +150,65 @@ describe("the client and the function agree on which build is live", () => {
 });
 
 describe("a weekend series is not a broken feed", () => {
-  // The newest 1h bar on a Sunday is Friday's close, by definition. Measured
+  // The newest bar on a Sunday is Friday's close, by definition. Measured
   // against the wall clock that is ~56 hours of staleness and `seriesHealth`
-  // rejects the entry series — so the preview would 502 on the freshness gate
-  // before computing a single indicator. This is the test that caught it.
-  const FRIDAY_20 = Date.parse("2026-09-04T20:00:00Z");
+  // rejects the entry series — so the preview 502s on the freshness gate
+  // before computing a single indicator.
+  //
+  // The first fix substituted the last close for `nowMs` wholesale and SHIPPED,
+  // which broke the other check in the same function: every bar newer than the
+  // Friday close became a `future_bar`, and the gate rejected the series for
+  // being too NEW instead of too old. Production said so in one word:
+  // `Entry series unfit { pair: "USD/JPY", tf: "1h", issues: [ "future_bar" ] }`.
+  // The two clocks answer different questions and are now separate.
   const SUNDAY_0503 = Date.parse("2026-09-06T05:03:11Z");
   const HOUR = 3_600_000;
 
-  const hourlySeriesEndingFriday = () =>
+  const seriesEndingAt = (newestMs: number) =>
     Array.from({ length: 250 }, (_, i) => {
-      const at = new Date(FRIDAY_20 - (249 - i) * HOUR);
+      const at = new Date(newestMs - (249 - i) * HOUR);
       return {
         datetime: at.toISOString().slice(0, 19).replace("T", " "),
         open: 155, high: 155.4, low: 154.8, close: 155.1,
       };
     });
 
-  it("reads as badly stale against the wall clock", () => {
-    const h = seriesHealth(hourlySeriesEndingFriday(), 250, 60, HOUR, SUNDAY_0503);
+  const health = (newestMs: number, nowMs: number, staleFromMs: number) =>
+    seriesHealth(seriesEndingAt(newestMs), 250, 60, HOUR, nowMs, 3, staleFromMs);
+
+  it("is stale against the wall clock — the failure this all started from", () => {
+    const h = health(Date.parse("2026-09-04T20:00:00Z"), SUNDAY_0503, SUNDAY_0503);
     expect(h.ok).toBe(false);
     expect(h.issues.some((i) => i.startsWith("stale:"))).toBe(true);
   });
 
-  it("reads as fresh against the last close, which is the honest clock", () => {
-    const h = seriesHealth(hourlySeriesEndingFriday(), 250, 60, HOUR, lastClose(SUNDAY_0503));
-    expect(h.ok).toBe(true);
-    expect(h.issues).toEqual([]);
+  it("accepts every bar the feed could plausibly end on, over the whole shut window", () => {
+    // Whatever Twelve Data's last bar turns out to be — Friday 20:00, the
+    // 21:00 bar, or a thin Sunday-open one — none of them may be rejected.
+    // A single fixed timestamp would have missed the `future_bar` regression;
+    // the sweep is the point.
+    for (let ms = Date.parse("2026-09-04T18:00:00Z"); ms <= SUNDAY_0503; ms += HOUR) {
+      const h = health(ms, SUNDAY_0503, lastClose(SUNDAY_0503));
+      expect(h.issues, new Date(ms).toISOString()).toEqual([]);
+      expect(h.ok, new Date(ms).toISOString()).toBe(true);
+    }
+  });
+
+  it("still calls a genuinely future bar broken, on a Sunday like any other day", () => {
+    const h = health(SUNDAY_0503 + 2 * HOUR, SUNDAY_0503, lastClose(SUNDAY_0503));
+    expect(h.issues).toContain("future_bar");
+  });
+
+  it("still calls a genuinely abandoned feed stale", () => {
+    // A series that stopped on Wednesday is not explained by the weekend.
+    const h = health(Date.parse("2026-09-02T12:00:00Z"), SUNDAY_0503, lastClose(SUNDAY_0503));
+    expect(h.issues.some((i) => i.startsWith("stale:"))).toBe(true);
+  });
+
+  it("reports the real age whichever clock staleness was measured from", () => {
+    const newest = Date.parse("2026-09-04T20:00:00Z");
+    const h = health(newest, SUNDAY_0503, lastClose(SUNDAY_0503));
+    expect(h.age_ms).toBe(SUNDAY_0503 - newest);
   });
 
   it("puts the last close at Friday 21:00 UTC from anywhere in the shut window", () => {
@@ -191,7 +223,9 @@ describe("a weekend series is not a broken feed", () => {
     }
   });
 
-  it("is the clock analyze uses, but only on a preview", () => {
-    expect(analyze).toContain("const healthNow = previewMode ? lastClose(Date.now()) : Date.now();");
+  it("is wired as a separate clock in analyze, not a substituted one", () => {
+    expect(analyze).toContain("const staleFrom = previewMode ? lastClose(Date.now()) : Date.now();");
+    // The real clock still goes in as nowMs; only staleness gets the close.
+    expect(analyze).toMatch(/Date\.now\(\),\s*\n\s*3,\s*\n\s*staleFrom,/);
   });
 });

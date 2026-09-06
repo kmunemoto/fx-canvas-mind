@@ -127,6 +127,18 @@ export const seriesHealth = (
   intervalMs: number,
   nowMs: number,
   maxAgeIntervals = 3,
+  // The moment STALENESS is measured from. Defaults to `nowMs`, and differs
+  // from it only while the market is shut, when the newest bar is Friday's
+  // close by definition and "hours behind the wall clock" is not evidence of
+  // anything (see market-hours.ts `lastClose`).
+  //
+  // Kept as a SEPARATE clock rather than substituted for `nowMs`, because the
+  // two answer different questions and swapping one for the other breaks the
+  // other one. Substituting it wholesale shipped to production and turned
+  // every bar newer than the Friday close into a `future_bar`: the freshness
+  // gate then rejected the entry series for being too NEW, and the weekend
+  // preview 502'd exactly where it used to 502 for being too old.
+  staleFromMs = nowMs,
 ): SeriesHealth => {
   const issues: string[] = [];
   const dropped = Math.max(0, rawCount - candles.length);
@@ -136,10 +148,17 @@ export const seriesHealth = (
   if (rawCount > 0 && dropped / rawCount > 0.05) issues.push(`dropped:${dropped}/${rawCount}`);
   const newest = candles.length > 0 ? candles[candles.length - 1] : null;
   const newestMs = newest ? Date.parse(newest.datetime.includes("T") ? newest.datetime : `${newest.datetime.replace(" ", "T")}Z`) : NaN;
+  // Reported as the real age, off the real clock, whatever staleness is
+  // measured against — the number on the row should not move because of how
+  // the check was configured.
   const age = Number.isFinite(newestMs) ? nowMs - newestMs : null;
-  if (age === null) issues.push("no_timestamp");
+  const staleAge = Number.isFinite(newestMs) ? staleFromMs - newestMs : null;
+  if (age === null || staleAge === null) issues.push("no_timestamp");
+  // A bar dated after now is a broken feed, and that is true on a Sunday too.
   else if (age < 0) issues.push("future_bar");
-  else if (intervalMs > 0 && age > intervalMs * maxAgeIntervals) issues.push(`stale:${Math.round(age / 60000)}min`);
+  else if (intervalMs > 0 && staleAge > intervalMs * maxAgeIntervals) {
+    issues.push(`stale:${Math.round(staleAge / 60000)}min`);
+  }
   return { ok: issues.length === 0, bars: candles.length, dropped, age_ms: age, issues };
 };
 
