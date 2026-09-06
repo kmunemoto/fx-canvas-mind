@@ -70,3 +70,33 @@ export const nextOpen = (ms: number): number => {
     0,
   );
 };
+
+// When did it last trade?
+//
+// The mirror of `nextOpen`, and it exists for one specific job: deciding how
+// stale a price series is. `seriesHealth` measures the newest bar against
+// "now" and calls anything older than a few intervals a feed failure — which
+// is right on a Tuesday and wrong every weekend, when the newest bar is
+// Friday's close by definition and there is nothing wrong with it at all.
+// Measured against the close instead, a weekend series is as fresh as it can
+// possibly be.
+//
+// Returns the EARLIEST possible close (Friday 21:00 UTC), matching the wide
+// predicate that decides the market is shut: the two have to agree, or an
+// hour exists that is "shut" while its own last close has not happened yet.
+export const lastClose = (ms: number): number => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  // Friday is day 5. Only the shut days can reach here: Sunday goes back two
+  // days, Saturday one, and Friday evening is already past its own close.
+  const daysBack = day === 0 ? 2 : day === 6 ? 1 : 0;
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() - daysBack,
+    21,
+    0,
+    0,
+    0,
+  );
+};

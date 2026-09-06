@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { isPossiblyClosed, nextOpen } from "../../supabase/functions/_shared/market-hours.ts";
+import { isPossiblyClosed, lastClose, nextOpen } from "../../supabase/functions/_shared/market-hours.ts";
+import { seriesHealth } from "../../supabase/functions/analyze/indicators.ts";
 import { byTimeframe, causeCounts, isPreview, tally } from "../lib/outcomeStats";
 import type { AnalysisRecord } from "../lib/types";
 
@@ -145,5 +146,52 @@ describe("the client and the function agree on which build is live", () => {
     const expected = indexPage.match(/const EXPECTED_ANALYZE_VERSION = "([^"]+)"/)?.[1];
     expect(deployed).toBeTruthy();
     expect(expected).toBe(deployed);
+  });
+});
+
+describe("a weekend series is not a broken feed", () => {
+  // The newest 1h bar on a Sunday is Friday's close, by definition. Measured
+  // against the wall clock that is ~56 hours of staleness and `seriesHealth`
+  // rejects the entry series — so the preview would 502 on the freshness gate
+  // before computing a single indicator. This is the test that caught it.
+  const FRIDAY_20 = Date.parse("2026-09-04T20:00:00Z");
+  const SUNDAY_0503 = Date.parse("2026-09-06T05:03:11Z");
+  const HOUR = 3_600_000;
+
+  const hourlySeriesEndingFriday = () =>
+    Array.from({ length: 250 }, (_, i) => {
+      const at = new Date(FRIDAY_20 - (249 - i) * HOUR);
+      return {
+        datetime: at.toISOString().slice(0, 19).replace("T", " "),
+        open: 155, high: 155.4, low: 154.8, close: 155.1,
+      };
+    });
+
+  it("reads as badly stale against the wall clock", () => {
+    const h = seriesHealth(hourlySeriesEndingFriday(), 250, 60, HOUR, SUNDAY_0503);
+    expect(h.ok).toBe(false);
+    expect(h.issues.some((i) => i.startsWith("stale:"))).toBe(true);
+  });
+
+  it("reads as fresh against the last close, which is the honest clock", () => {
+    const h = seriesHealth(hourlySeriesEndingFriday(), 250, 60, HOUR, lastClose(SUNDAY_0503));
+    expect(h.ok).toBe(true);
+    expect(h.issues).toEqual([]);
+  });
+
+  it("puts the last close at Friday 21:00 UTC from anywhere in the shut window", () => {
+    for (const iso of ["2026-09-04T21:00:00Z", "2026-09-05T12:00:00Z", "2026-09-06T05:03:11Z"]) {
+      expect(new Date(lastClose(Date.parse(iso))).toISOString(), iso).toBe("2026-09-04T21:00:00.000Z");
+    }
+    // It must never sit in the future of the moment being judged, or a shut
+    // hour would be measured against a close that has not happened.
+    for (let h = 0; h < 24 * 7; h++) {
+      const ms = Date.parse("2026-08-31T00:00:00Z") + h * HOUR;
+      if (isPossiblyClosed(ms)) expect(lastClose(ms)).toBeLessThanOrEqual(ms);
+    }
+  });
+
+  it("is the clock analyze uses, but only on a preview", () => {
+    expect(analyze).toContain("const healthNow = previewMode ? lastClose(Date.now()) : Date.now();");
   });
 });

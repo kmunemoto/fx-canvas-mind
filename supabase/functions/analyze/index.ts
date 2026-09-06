@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v37-2026-09-06T05:30:00Z";
+const FUNCTION_VERSION = "analyze-v38-2026-09-06T05:45:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -62,7 +62,7 @@ import {
 import { computeStructure, pivots, structureLines } from "./structure.ts";
 import { detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
-import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
+import { isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
@@ -1130,13 +1130,21 @@ Deno.serve(async (req: Request) => {
     // analysed at all, because every indicator downstream would be computed on
     // fiction and the plan resting on it would enter the record as a real
     // trade.
+    // Staleness is measured against the last time the market TRADED, not
+    // against the wall clock. On a weekend the newest bar is Friday's close by
+    // definition, which against "now" reads as a feed three thousand minutes
+    // behind — and the entry series would be rejected as unfit, so the preview
+    // this build exists to allow would 502 before computing anything. It is
+    // the same distinction market-hours.ts already draws: an absence of bars
+    // while the market is shut is not evidence that anything failed.
+    const healthNow = previewMode ? lastClose(Date.now()) : Date.now();
     const health = seriesByTf.map((candles, i) =>
       seriesHealth(
         candles,
         rawCounts[i] ?? candles.length,
         i === 0 ? 60 : 2,
         INTERVAL_MS[timeframes[i]] ?? 0,
-        Date.now(),
+        healthNow,
       )
     );
     if (!health[0].ok) {
