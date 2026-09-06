@@ -207,7 +207,18 @@ const AnalysisResultView = ({ result, techData, pair, interval, settings }: Prop
           </div>
           <ul className="space-y-1">
             {warnings.map((w, i) => (
-              <li key={i} className="text-sm text-warning/80">⚠ {w}</li>
+              <li key={i} className="text-sm text-warning/80">
+                ⚠ {w}
+                {/* This box is the app's own voice to a reader. A model
+                    speculation rendered in it — "watch for a move to hunt the
+                    stops resting above the swing high" — reads as the app
+                    warning them of something it observed. */}
+                {isInference(w) && (
+                  <span className="ml-1.5 align-middle rounded border border-warning/40 bg-warning/10 px-1 py-0.5 text-[9px] text-warning">
+                    {t.result.inferenceChip}
+                  </span>
+                )}
+              </li>
             ))}
           </ul>
         </div>

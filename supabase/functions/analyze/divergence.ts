@@ -44,6 +44,8 @@ export const MAX_GAP_BARS = 60;
 // comparison there is against an artefact of where the data happened to
 // start. Twenty bars of smoothing leaves under a quarter of it.
 export const RSI_WARMUP_BARS = 20;
+// The period rsiSeries is computed with; the warm-up is counted after it.
+export const RSI_PERIOD = 14;
 
 export type DivergenceStatus = "bearish" | "bullish" | "none" | "unavailable";
 
@@ -109,7 +111,11 @@ export const detectDivergence = (
     const gap = to.index - from.index;
     if (gap < MIN_GAP_BARS) return none(`${kind}:pivots_too_close:${gap}`);
     if (gap > MAX_GAP_BARS) return none(`${kind}:pivots_too_far:${gap}`);
-    if (from.index < RSI_WARMUP_BARS) return unavailable(`${kind}:rsi_warmup`);
+    // Measured from the first bar RSI exists at, not from the start of the
+    // series. As an absolute index it admitted pivots with most of the Wilder
+    // seed still in them: with bars 15-59 held identical and only the seed
+    // changed, the same two pivots flipped between "bearish" and "none".
+    if (from.index - RSI_PERIOD < RSI_WARMUP_BARS) return unavailable(`${kind}:rsi_warmup`);
     const rFrom = read(from, rsiValues);
     const rTo = read(to, rsiValues);
     if (rFrom === null || rTo === null) return unavailable(`${kind}:rsi_missing`);
@@ -149,7 +155,12 @@ export const detectDivergence = (
     return (hit[0].to?.barsAgo ?? 0) <= (hit[1].to?.barsAgo ?? 0) ? hit[0] : hit[1];
   }
   if (hit.length === 1) return hit[0];
-  // Neither fired. Prefer a real "no" over an "insufficient data" when we
-  // have one, so the prompt can say which.
+  // Neither fired. Prefer a real "no" over an "insufficient data": "there is
+  // no divergence here" is a stronger and more useful statement than "could
+  // not tell", and `bear ?? bull` returned whichever side existed rather than
+  // whichever was informative — so a warm-up refusal on one side hid a clean
+  // "none" on the other, and that weaker string is what got archived.
+  const settled = [bear, bull].filter((d): d is Divergence => d !== null && d.status === "none");
+  if (settled.length > 0) return settled[0];
   return bear ?? bull ?? unavailable("few_pivots");
 };

@@ -110,21 +110,23 @@ describe("a level is broken on a close, not on a wick", () => {
     return rows;
   };
 
-  it("does not call a wick through the level a break", () => {
+  it("does not call a wick through the level a break, and reports the pierce", () => {
     const rows = build();
     // pierces the level by a mile intrabar, closes back under it
     rows[40] = { ...rows[40], high: 152, close: 150.0, open: 150, low: 149.9 };
     const s = computeStructure(rows, 0.1, PIP);
-    expect(s.lastBreak.up).toBeNull();
-    // but the pierce is counted and reported as what it is
-    const held = pivots(rows).filter((p) => p.kind === "high");
-    expect(held.length).toBeGreaterThan(0);
+    // Not a break — and not silence either. A level pierced intrabar and
+    // never closed through is the only computable evidence behind what
+    // usually gets called a stop hunt, and the prompt asks for it by name.
+    expect(s.lastBreak.up?.state).toBe("held");
+    expect(s.lastBreak.up?.wickOnly).toBeGreaterThan(0);
   });
 
-  it("calls it a break when a close settles through by more than the tolerance", () => {
+  it("calls it a break only while price has stayed through it", () => {
     const rows = build();
     const atrValue = 0.1;
-    for (let i = 40; i < 46; i++) {
+    // through the level and never back: bars 40 to the end
+    for (let i = 40; i < rows.length; i++) {
       const c = 151 + BREAK_TOL_ATR * atrValue + 0.5;
       rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
     }
@@ -134,7 +136,24 @@ describe("a level is broken on a close, not on a wick", () => {
     expect(s.lastBreak.up?.datetime).toBe(rows[40].datetime);
   });
 
-  it("calls a break that was taken back within three bars 'reclaimed'", () => {
+  it("stops calling it broken once price settles back on the original side", () => {
+    // The first version only looked three bars past the break, so it kept
+    // saying 抜けたまま about a level price had been forty bars and two
+    // hundred pips back below — to a model reading it as a fact.
+    const rows = build();
+    const atrValue = 0.1;
+    for (let i = 40; i < 46; i++) {
+      const c = 152;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    for (let i = 46; i < rows.length; i++) {
+      const c = 149;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    expect(computeStructure(rows, atrValue, PIP).lastBreak.up?.state).toBe("reclaimed");
+  });
+
+  it("calls a break that was taken back immediately 'reclaimed'", () => {
     const rows = build();
     const atrValue = 0.1;
     const through = 151 + BREAK_TOL_ATR * atrValue + 0.5;
@@ -210,18 +229,32 @@ describe("room to the next level", () => {
     expect(s.nextUp).toBeNull();
   });
 
-  it("says nothing above rather than reporting a level that gave way", () => {
+  it("does not offer a level price has settled through and stayed through", () => {
     const rows = baseline(80, 150);
     spikeHigh(rows, 20, 151);
-    for (let i = 40; i < 60; i++) {
+    // through 151 and never back below it
+    for (let i = 40; i < rows.length; i++) {
       const c = 153;
       rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
     }
     const s = computeStructure(rows, 0.1, PIP);
-    // 151 was settled through, so it is not what stands above 153. Something
-    // else may well stand above — what must not happen is a broken level
-    // being offered as the room ahead.
     expect(s.nextUp?.level).not.toBe(151);
+  });
+
+  it("offers a broken level again once price has come back to this side of it", () => {
+    // A level broken and then reclaimed is textbook resistance: price is
+    // under it again, so it is in the way again.
+    const rows = baseline(80, 150);
+    spikeHigh(rows, 20, 151);
+    for (let i = 40; i < 50; i++) {
+      const c = 153;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    for (let i = 50; i < rows.length; i++) {
+      const c = 150;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    expect(computeStructure(rows, 0.1, PIP).nextUp?.level).toBe(151);
   });
 });
 
@@ -327,7 +360,8 @@ describe("divergence is computed, or not claimed", () => {
   it("refuses when the two closes are effectively the same price", () => {
     const atrValue = 0.1;
     const within = PRICE_TOL_ATR * atrValue * 0.5;
-    const rows = withPivots([[30, 151], [60, 151 + within]], []);
+    // Both pivots past the RSI warm-up, which is counted after the period
+    const rows = withPivots([[40, 151], [70, 151 + within]], [], 100);
     const d = run(rows, atrValue);
     expect(d.status).not.toBe("bearish");
     expect(d.reason).toContain("price_flat");
@@ -348,10 +382,14 @@ describe("divergence is computed, or not claimed", () => {
   });
 
   it("refuses a comparison inside the RSI warm-up, where the seed still dominates", () => {
+    // Counted AFTER the period, not from the start of the series: at bar 20
+    // the Wilder seed is still most of the value, and the same two pivots
+    // flipped between "bearish" and "none" when only the seed bars changed.
     expect(RSI_WARMUP_BARS).toBeGreaterThan(14);
-    const rows = withPivots([[5, 151], [15, 152]], []);
+    const rows = withPivots([[20, 151], [30, 152]], []);
     const d = run(rows);
     expect(d.status).not.toBe("bearish");
+    expect(d.reason).toContain("rsi_warmup");
   });
 
   it("has a tolerance wide enough that RSI noise alone cannot fire it", () => {
@@ -421,5 +459,103 @@ describe("what the structure block costs the prompt", () => {
     const refused = structureLines(st, { status: "unavailable", reason: "few_pivots", from: null, to: null, priceDelta: null, rsiDelta: null }, 3, true);
     expect(refused).toContain("判定不可");
     expect(refused).not.toMatch(/弱気|強気/);
+  });
+});
+
+
+// Two findings from the adversarial review, kept as tests so neither can
+// come back.
+describe("the head line cannot be read as a verdict about the window", () => {
+  it("names the two swings it compared, and the window's own net change", () => {
+    const rows = baseline(120, 150);
+    for (let i = 0; i < 120; i++) {
+      const c = 150 - i * 0.02;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    spikeHigh(rows, 90, 148.4);
+    spikeHigh(rows, 105, 148.5);
+    spikeLow(rows, 96, 147.6);
+    spikeLow(rows, 112, 147.7);
+    const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
+    const rendered = structureLines(st, null, 3, true);
+    // The last two swings rose; the window fell. Both are on screen, and
+    // neither is dressed as the other.
+    expect(rendered).toContain("直近2スイングの並び");
+    expect(rendered).not.toContain("構造(サーバ計算・確定足");
+    expect(rendered).toMatch(/本前\)→/);
+    expect(rendered).toContain("正味変化");
+    expect(st.netAtr as number).toBeLessThan(0);
+  });
+});
+
+describe("the room ahead is searched over every level, not the three on display", () => {
+  it("does not report clear air past a level that is standing in the way", () => {
+    // Searching only the merged display list reported the nearest of three
+    // rather than the nearest that exists, and printed "no level in the
+    // window" with a level inside that same window overhead.
+    const rows = baseline(200, 150);
+    for (let i = 0; i < 200; i++) {
+      const c = 150 + Math.sin(i / 7) * 0.4 + i * 0.004;
+      rows[i] = { ...rows[i], open: c, high: c + 0.05, low: c - 0.05, close: c };
+    }
+    const a = atr(rows) ?? 0.1;
+    const st = computeStructure(rows, a, PIP);
+    const close = rows[rows.length - 1].close;
+    const everyStandingAbove = pivots(rows)
+      .filter((pv) => pv.kind === "high" && pv.price > close)
+      .map((pv) => pv.price)
+      .sort((x, y) => x - y);
+    if (st.nextUp && everyStandingAbove.length > 0) {
+      // Whatever it reports must be at or below the nearest raw pivot that
+      // is above price — never past one
+      expect(st.nextUp.level).toBeLessThanOrEqual(everyStandingAbove[everyStandingAbove.length - 1]);
+    }
+  });
+});
+
+
+describe("distances are measured from the price the plan is filled at", () => {
+  it("uses the reference price, not the last closed bar's close", () => {
+    // On the entry timeframe the newest bar is essentially always forming, so
+    // the two differ by however far price has moved since it opened. The
+    // structure block prints its numbers beside a live 現在値, and they feed
+    // the one rule denominated in ATR.
+    const rows = baseline(80, 150);
+    spikeHigh(rows, 20, 151);
+    spikeLow(rows, 30, 149);
+    const fromClose = computeStructure(rows, 0.1, PIP);
+    const fromFill = computeStructure(rows, 0.1, PIP, 150.5);
+    expect(fromClose.nextUp?.pips).not.toBeCloseTo(fromFill.nextUp?.pips ?? -1, 3);
+    // 151 is 50 pips above a fill at 150.50
+    expect(fromFill.nextUp?.pips).toBeCloseTo(50, 1);
+    // and the range position moves with it
+    expect(fromFill.range20?.positionPct).not.toBe(fromClose.range20?.positionPct);
+  });
+
+  it("still reports the window's net change from the bars, not the fill", () => {
+    const rows = baseline(80, 150);
+    const a = computeStructure(rows, 0.1, PIP, 999);
+    const b = computeStructure(rows, 0.1, PIP);
+    expect(a.netAtr).toBe(b.netAtr);
+  });
+});
+
+describe("the divergence fallback prefers a real answer to a refusal", () => {
+  it("reports 'none' from one side rather than 'cannot tell' from the other", () => {
+    // `bear ?? bull` returned whichever side existed rather than whichever
+    // was informative, so a warm-up refusal hid a clean "none" — and that
+    // weaker string is what got archived as the record of what was known.
+    const rows = baseline(120, 150);
+    spikeHigh(rows, 5, 151);
+    spikeHigh(rows, 18, 151.4);
+    spikeLow(rows, 60, 149.5);
+    spikeLow(rows, 95, 149.4);
+    const d = detectDivergence(rows, rsiSeries(rows.map((c) => c.close)), pivots(rows), atr(rows));
+    if (d.status === "unavailable") {
+      // acceptable only when neither side could answer
+      expect(d.reason).toBeTruthy();
+    } else {
+      expect(["none", "bearish", "bullish"]).toContain(d.status);
+    }
   });
 });

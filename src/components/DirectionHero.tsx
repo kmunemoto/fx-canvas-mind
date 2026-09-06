@@ -1,6 +1,7 @@
 import type { AnalysisResult } from "@/lib/types";
 import ConfidenceGauge from "./ConfidenceGauge";
 import { useT } from "@/lib/i18n";
+import { isInference } from "@/lib/inference";
 
 interface Props {
   result: AnalysisResult;
@@ -45,7 +46,18 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
             </p>
           </div>
           {result.thesis && (
-            <p className="text-sm text-foreground mt-1 leading-snug">{result.thesis}</p>
+            <p className="text-sm text-foreground mt-1 leading-snug">
+              {result.thesis}
+              {/* The thesis is the largest prose on this screen and the only
+                  prose that follows the row into the history list, so it is
+                  the sentence most readers actually read — and it was the one
+                  the tag did not touch. */}
+              {isInference(result.thesis) && (
+                <span className="ml-1.5 align-middle rounded border border-warning/40 bg-warning/10 px-1 py-0.5 text-[9px] text-warning">
+                  {t.result.inferenceChip}
+                </span>
+              )}
+            </p>
           )}
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             <span className="px-2 py-0.5 rounded-md bg-secondary text-[11px] font-mono font-semibold text-foreground">

@@ -24,13 +24,30 @@ describe("telling a reading of price from a claim about who is trading", () => {
     expect(isInference("ADX is 18, so the trend is weak")).toBe(false);
   });
 
-  it("does not tag the app's own admission that it has no such data", () => {
-    // These sentences contain the vocabulary precisely because they are the
-    // disclosure. Tagging them as inference would be exactly backwards.
-    expect(isInference("板情報・出来高・建玉は取得していません")).toBe(false);
-    expect(isInference("出来高データは取得していないため、出来高分析は行っていない")).toBe(false);
-    expect(isInference("Order book and volume are not available to this app")).toBe(false);
+  it("exempts the app's own disclaimer, and only when that is the whole string", () => {
     expect(isInference("この分析は参考情報です。投資判断は自己責任で行ってください")).toBe(false);
+    expect(isInference("板情報・出来高・建玉・約定履歴は取得していません")).toBe(false);
+  });
+
+  it("still tags a claim that carries its own caveat", () => {
+    // THE INVERTED INCENTIVE, and the reason whole-string matching replaced
+    // the substring check. The prompt now asks the model to write inferences
+    // with the caveat attached. Under the old rule a compliant model — caveat
+    // and claim in one sentence — went UNTAGGED, while the blunt version was
+    // tagged. Obeying the instruction turned the mechanism off.
+    expect(isInference("板情報は取得していないため推測だが、157.10の上にストップが溜まっている")).toBe(true);
+    expect(isInference("出来高は取得していません。大口の売りが上値を抑えている")).toBe(true);
+    expect(isInference("Order book data is not available. Smart money is distributing into strength.")).toBe(true);
+  });
+
+  it("does not tag a computed observation that happens to share a word", () => {
+    // 買い方 matched inside 買い方向, so two facts computed by the server
+    // rendered under a chip saying they were not observed. A chip that
+    // appears on measured values stops meaning anything.
+    expect(isInference("上位足も買い方向で整合しており、SMA20はSMA50の上にある")).toBe(false);
+    expect(isInference("売り方針を継続")).toBe(false);
+    // and the plan's own action is not a claim about anyone else
+    expect(isInference("157.00割れを確認してから売り仕掛けを検討")).toBe(false);
   });
 
   it("says nothing about empty or missing text", () => {

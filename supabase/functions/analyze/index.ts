@@ -1,8 +1,9 @@
-const FUNCTION_VERSION = "analyze-v32-2026-09-06T01:05:00Z";
+const FUNCTION_VERSION = "analyze-v33-2026-09-06T02:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
 import {
+  atr,
   computeSnapshot,
   parseCandles,
   rsiSeries,
@@ -259,8 +260,9 @@ const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
 const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナリストです。マルチタイムフレームの価格データと計算済みテクニカル指標に基づき、規律あるトレードプランを構築します。
 
 必ず次の手順で分析してください:
-1. STRUCTURE — 構造は「構造(サーバ計算)」の行がすでに判定済みである。自分で数え直さず、その判定を採用する。異なる読みをするなら、どのローソク足を見てそう読んだかを必ず書く。
-   スイング高安・終値ブレイク・上下の余地・レンジ内の位置も同じ行にある。そこに無い水準を「直近高値」として引用しない。
+1. STRUCTURE — 構造の判定はあなたの仕事である。ただし材料はサーバが計算済みで、そこにある数値は数え直さず引用する（スイング高安と日付、終値ブレイク、上下の余地、レンジ内の位置、正味変化）。
+   「直近2スイングの並び」は**直近2点だけ**の比較であって、参照期間全体の構造ではない。並びと正味変化が食い違うことは普通にあるので、両方を見て自分で判断し、どちらを根拠にしたか書く。
+   引用する水準は上の一覧にあるものだけにする（一覧に無い価格を「直近高値」と呼ばない）。
 2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
    **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
 3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
@@ -1089,7 +1091,16 @@ Deno.serve(async (req: Request) => {
     // never describe two different feeds.
     const structures = seriesByTf.map((candles, i) => {
       const bars = snapshots[i]?.barClosed === false ? candles.slice(0, -1) : candles;
-      return { bars, structure: computeStructure(bars, snapshots[i]?.atr ?? null, pipSize) };
+      // ATR over the SAME bars the structure is measured on. Reading it off
+      // the untrimmed series scaled every tolerance by the true range of a
+      // bar seconds old — near zero — so a Wilder ATR14 came out about 7%
+      // low and every threshold tightened by that much, on a block that says
+      // it was computed on closed bars.
+      const closedAtr = atr(bars);
+      return {
+        bars,
+        structure: computeStructure(bars, closedAtr, pipSize, entrySnapshot.price),
+      };
     });
     // Divergence on the entry timeframe only. A disagreement between two
     // pivots three months apart on the 1day is not something a 15-minute plan
@@ -1102,7 +1113,7 @@ Deno.serve(async (req: Request) => {
         bars,
         rsiSeries(bars.map((c) => c.close)),
         pivots(bars),
-        snapshots[0]?.atr ?? null,
+        atr(bars),
       );
     })();
 

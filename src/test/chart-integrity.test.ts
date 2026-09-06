@@ -182,7 +182,13 @@ describe("the prompt stops asking for things the app cannot observe", () => {
 
   it("hands over a computed structure instead of asking the model to count", () => {
     expect(analyzeSrc).toContain("structureLines(structures[i].structure");
-    expect(analyzeSrc).toContain("構造は「構造(サーバ計算)」の行がすでに判定済み");
+    // The verdict is NOT handed over as settled. It compares two pivots that
+    // can sit a handful of bars apart, and on a decisively trending series it
+    // disagrees with the window it sits in about one time in eight — so
+    // instructing the analyst to adopt it would have replaced a biased guess
+    // with a protected one.
+    expect(analyzeSrc).toContain("構造の判定はあなたの仕事である");
+    expect(analyzeSrc).toContain("参照期間全体の構造ではない");
     // the undated swing prices are gone
     expect(analyzeSrc).not.toContain("`直近スイング高値: ${s.swingHighs");
   });

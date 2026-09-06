@@ -101,7 +101,16 @@ export interface Structure {
   reason: string | null;
   bars: number;
   atr: number | null;
+  // The last two swings on each side, compared. NOT a verdict about the
+  // window: it is a two-pivot read that can sit a handful of bars apart, and
+  // on a decisively trending series it disagrees with the direction of the
+  // window it sits in roughly one time in eight. Rendered with the bars it
+  // compared for exactly that reason.
   label: StructureLabel;
+  labelFrom: { highs: [Pivot, Pivot] | null; lows: [Pivot, Pivot] | null };
+  // What the window itself did, which is a different question from what the
+  // last two swings did. Net change over the whole series, in ATR.
+  netAtr: number | null;
   highs: Pivot[];
   lows: Pivot[];
   lastBreak: { up: LevelBreak | null; down: LevelBreak | null };
@@ -167,8 +176,12 @@ const breakOf = (candles: Candle[], p: Pivot, atrValue: number): LevelBreak | nu
       // Reclaimed: price settled back on the original side within three bars.
       // A level broken and then taken back is not a level that gave way — it
       // is one that held, and it is still resistance (or support).
+      // Reclaimed if price settled back on the original side — within three
+      // bars, OR at any point since, including where it sits now. The
+      // three-bar window alone reported "抜けたまま" (still broken) about a
+      // level price had been forty bars and two hundred pips back below.
       let state: BreakState = "broken";
-      for (let j = i + 1; j <= Math.min(i + 3, candles.length - 1); j++) {
+      for (let j = i + 1; j < candles.length; j++) {
         if (back(candles[j].close)) { state = "reclaimed"; break; }
       }
       return {
@@ -203,6 +216,11 @@ const labelOf = (highs: Pivot[], lows: Pivot[], atrValue: number): StructureLabe
   return "range";
 };
 
+// The range's extremes come from the closed bars; where price sits inside
+// them is asked about the price the plan is filled at.
+const positionAt = (r: Range | null, price: number): Range | null =>
+  r === null ? null : { ...r, positionPct: r.width > 0 ? ((price - r.low) / r.width) * 100 : null };
+
 const pressure = (candles: Candle[], period = 20): number | null => {
   const start = Math.max(0, candles.length - period);
   let sum = 0;
@@ -226,10 +244,23 @@ const pressure = (candles: Candle[], period = 20): number | null => {
  * `atrValue` is ATR14 over the same series. Without it there is no scale to
  * measure a tolerance in, and the honest answer is a refusal.
  */
+/**
+ * ...
+ *
+ * `referencePrice` is the price the plan will actually be filled at — the
+ * same constant the gate, the entry and the prompt's 現在値 all read. The
+ * distances below are measured from IT, not from the last closed bar's
+ * close. On the entry timeframe the newest bar is essentially always
+ * forming, so those two differ by however far price has moved since the bar
+ * opened; measuring the room ahead from a stale close, and printing it beside
+ * a live 現在値, put every 上値余地/下値余地 and the range position out by
+ * that amount — into the one rule that is denominated in ATR.
+ */
 export const computeStructure = (
   candles: Candle[],
   atrValue: number | null,
   pipSize: number,
+  referencePrice: number | null = null,
   maxLevels = 3,
 ): Structure => {
   const base: Structure = {
@@ -238,6 +269,8 @@ export const computeStructure = (
     bars: candles.length,
     atr: usable(atrValue) ? atrValue : null,
     label: "unknown",
+    labelFrom: { highs: null, lows: null },
+    netAtr: null,
     highs: [],
     lows: [],
     lastBreak: { up: null, down: null },
@@ -272,12 +305,18 @@ export const computeStructure = (
   const breaks = (kind: PivotKind) => {
     const list = (kind === "high" ? highs : lows)
       .map((p) => breakOf(candles, p, atrValue))
-      .filter((b): b is LevelBreak => b !== null && b.state !== "held");
-    // The most recent settled break of that side
-    return list.sort((a, b) => a.barsAgo - b.barsAgo)[0] ?? null;
+      .filter((b): b is LevelBreak => b !== null);
+    const settled = list.filter((b) => b.state !== "held");
+    // The most recent settled break of that side; failing that, the level
+    // that was pierced most often and never closed through. That second case
+    // is the only computable evidence behind a "stop hunt" — the prompt now
+    // asks for it by name, so throwing it away left the model with nothing to
+    // cite but its imagination.
+    if (settled.length > 0) return settled.sort((a, b) => a.barsAgo - b.barsAgo)[0];
+    return list.sort((a, b) => b.wickOnly - a.wickOnly)[0] ?? null;
   };
 
-  const close = candles[candles.length - 1].close;
+  const close = usable(referencePrice) ? referencePrice : candles[candles.length - 1].close;
   const nearTol = NEAR_TOL_ATR * atrValue;
   // A level counts as "next" when price has not settled through it and is not
   // already sitting on it. A level that was broken and reclaimed still counts:
@@ -286,9 +325,15 @@ export const computeStructure = (
     const b = breakOf(candles, p, atrValue);
     return b === null || b.state !== "broken";
   };
-  const above = highs.filter((p) => p.price > close + nearTol && standing(p))
+  // Searched over EVERY confirmed pivot, not the three merged levels picked
+  // for display. Searching the display list reported the nearest of three
+  // rather than the nearest that exists, which overstated the room — on one
+  // measured series it printed 21.6 ATR of clear air below with four
+  // standing lows in between — and printed "no level in the window" while a
+  // level sat 61 pips overhead inside that same window.
+  const above = rawHighs.filter((p) => p.price > close + nearTol && standing(p))
     .sort((a, b) => a.price - b.price)[0] ?? null;
-  const below = lows.filter((p) => p.price < close - nearTol && standing(p))
+  const below = rawLows.filter((p) => p.price < close - nearTol && standing(p))
     .sort((a, b) => b.price - a.price)[0] ?? null;
   const gap = (p: Pivot | null) =>
     p === null ? null : {
@@ -301,13 +346,18 @@ export const computeStructure = (
     ...base,
     ok: true,
     label: labelOf(rawHighs.slice(-2).reverse(), rawLows.slice(-2).reverse(), atrValue),
+    labelFrom: {
+      highs: rawHighs.length >= 2 ? [rawHighs[rawHighs.length - 2], rawHighs[rawHighs.length - 1]] : null,
+      lows: rawLows.length >= 2 ? [rawLows[rawLows.length - 2], rawLows[rawLows.length - 1]] : null,
+    },
+    netAtr: (candles[candles.length - 1].close - candles[0].close) / atrValue,
     highs,
     lows,
     lastBreak: { up: breaks("high"), down: breaks("low") },
     nextUp: gap(above),
     nextDown: gap(below),
-    range20: rangeOf(candles, 20),
-    range100: rangeOf(candles, Math.min(100, candles.length)),
+    range20: positionAt(rangeOf(candles, 20), close),
+    range100: positionAt(rangeOf(candles, Math.min(100, candles.length)), close),
     closePressure: pressure(candles),
   };
 };
@@ -337,8 +387,23 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
       ? `${dir}: 参照期間内に未突破の水準なし`
       : `${dir}: ${p(g.level)} (${g.pips.toFixed(1)}pips / ${g.atr.toFixed(2)}ATR)`;
 
-  const head = `構造(サーバ計算・確定足${st.bars}本): ${label} / ${gap(st.nextUp, "上値余地")} ${gap(st.nextDown, "下値余地")}`;
-  if (!full) return head;
+  // The head names the two swings it compared, and calls itself what it is.
+  //
+  // It used to read "構造(サーバ計算・確定足250本): 上昇" — a two-pivot read,
+  // sometimes a handful of bars apart, dressed as the verdict for the whole
+  // window, with the prompt telling the analyst to adopt it. On a series that
+  // fell 200 pips it said 上昇 about one time in eight. Worse, the label was
+  // computed from the raw pivots while the list printed below it is merged,
+  // so the head could assert 高値切り下げ above three ascending highs.
+  const pair = (two: [Pivot, Pivot] | null, kind: string) =>
+    two === null ? `${kind}: 2点なし` : `${kind} ${p(two[0].price)}(${two[0].barsAgo}本前)→${p(two[1].price)}(${two[1].barsAgo}本前)`;
+  const head = `直近2スイングの並び(サーバ計算): ${label} [${pair(st.labelFrom.highs, "高値")} / ${pair(st.labelFrom.lows, "安値")}]`;
+  // What the window did, which the two swings above do not answer.
+  const window = st.netAtr === null
+    ? ""
+    : ` / 参照${st.bars}本の正味変化 ${st.netAtr > 0 ? "+" : ""}${st.netAtr.toFixed(1)}ATR`;
+  const room = `${gap(st.nextUp, "上値余地")} ${gap(st.nextDown, "下値余地")}`;
+  if (!full) return `${head}${window}\n${room}`;
 
   const piv = (list: typeof st.highs, kind: string) =>
     list.length === 0
@@ -347,7 +412,12 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
 
   const brk = (b: typeof st.lastBreak.up, dir: string) => {
     if (b === null) return `${dir}: 終値で抜けた水準なし`;
-    const state = b.state === "reclaimed" ? "3本以内に戻された(=水準は生きている)" : "抜けたまま";
+    if (b.state === "held") {
+      // Pierced intrabar, never closed through. The honest, computable core
+      // of what usually gets called a stop hunt.
+      return `${dir}: ${p(b.level)}(${b.datetime.slice(5, 16)}Z・${b.barsAgo}本前) は終値では抜けていない・ヒゲのみの突破${b.wickOnly}回`;
+    }
+    const state = b.state === "reclaimed" ? "その後の終値で戻された(=水準は生きている)" : "抜けたまま";
     return `${dir}: ${p(b.level)} を ${b.datetime.slice(5, 16)}Z(${b.barsAgo}本前) の終値${p(b.close)}で突破・${state}${
       b.wickOnly > 0 ? `・それ以前にヒゲのみの突破${b.wickOnly}回` : ""
     }`;
@@ -371,7 +441,8 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
   })();
 
   return [
-    head,
+    head + window,
+    room,
     piv(st.highs, "確定スイング高値(新しい順)"),
     piv(st.lows, "確定スイング安値(新しい順)"),
     brk(st.lastBreak.up, "終値ブレイク(上)"),
