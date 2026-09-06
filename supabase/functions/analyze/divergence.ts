@@ -164,3 +164,29 @@ export const detectDivergence = (
   if (settled.length > 0) return settled[0];
   return bear ?? bull ?? unavailable("few_pivots");
 };
+
+// The divergence, in the shape it is stored on the plan.
+//
+// `reason` is kept on every path including "none": the record should say why
+// there was no divergence, not merely that there was none, or a later reader
+// cannot tell "looked and found nothing" from "could not look".
+export const compactDivergence = (d: Divergence | null, decimals: number) => {
+  if (d === null) return null;
+  const round = (v: number | null, places: number): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Number(v.toFixed(places)) : null;
+  const side = (s: Divergence["from"]) =>
+    s === null ? null : {
+      datetime: s.datetime,
+      barsAgo: s.barsAgo,
+      close: round(s.close, decimals),
+      rsi: round(s.rsi, 1),
+    };
+  return {
+    status: d.status,
+    reason: d.reason,
+    from: side(d.from),
+    to: side(d.to),
+    price_delta: round(d.priceDelta, decimals),
+    rsi_delta: round(d.rsiDelta, 1),
+  };
+};

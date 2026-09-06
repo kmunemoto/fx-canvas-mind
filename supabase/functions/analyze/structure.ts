@@ -458,3 +458,82 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
     div,
   ].filter((l) => l !== "").join("\n");
 };
+
+// The structure, in the shape it is stored on the plan.
+//
+// Everything computed here reached the prompt as prose and nothing reached a
+// column, which left the record unable to answer the one question it exists
+// for: what was the analyst looking at? `index` is dropped — it is a position
+// in an array that no longer exists once the series is gone — and `barsAgo`
+// and `datetime` are kept, because those still mean something afterwards.
+//
+// Prices are rounded to the pair's own decimals and multiples of ATR to two
+// places, matching `compactSnapshot`, so a reader never has to ask which
+// numbers on the row were rounded and which were not.
+const r = (v: number | null | undefined, d: number): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? Number(v.toFixed(d)) : null;
+
+const compactPivot = (p: Pivot, decimals: number) => ({
+  barsAgo: p.barsAgo,
+  datetime: p.datetime,
+  price: r(p.price, decimals),
+  close: r(p.close, decimals),
+  kind: p.kind,
+});
+
+const compactBreak = (b: LevelBreak | null, decimals: number) =>
+  b === null ? null : {
+    level: r(b.level, decimals),
+    kind: b.kind,
+    datetime: b.datetime,
+    barsAgo: b.barsAgo,
+    close: r(b.close, decimals),
+    state: b.state,
+    wickOnly: b.wickOnly,
+  };
+
+const compactRange = (g: Range | null, decimals: number) =>
+  g === null ? null : {
+    high: r(g.high, decimals),
+    low: r(g.low, decimals),
+    width: r(g.width, decimals),
+    position_pct: r(g.positionPct, 1),
+  };
+
+export const compactStructure = (tf: string, s: Structure, decimals: number) => {
+  // An unusable structure keeps its reason and nothing else: storing empty
+  // pivot lists beside `ok: false` invites a reader to treat them as a
+  // measurement of "no pivots" rather than as "not measured".
+  if (!s.ok) return { tf, ok: false, reason: s.reason, bars: s.bars };
+  return {
+    tf,
+    ok: true,
+    reason: s.reason,
+    bars: s.bars,
+    atr: r(s.atr, decimals),
+    label: s.label,
+    // The two bars the label was read off. The label is a two-pivot
+    // comparison, not a verdict about the window, and without these the
+    // difference is invisible on the row exactly as it was in the prompt.
+    label_from: {
+      highs: s.labelFrom.highs ? s.labelFrom.highs.map((p) => compactPivot(p, decimals)) : null,
+      lows: s.labelFrom.lows ? s.labelFrom.lows.map((p) => compactPivot(p, decimals)) : null,
+    },
+    net_atr: r(s.netAtr, 2),
+    highs: s.highs.map((p) => compactPivot(p, decimals)),
+    lows: s.lows.map((p) => compactPivot(p, decimals)),
+    last_break: {
+      up: compactBreak(s.lastBreak.up, decimals),
+      down: compactBreak(s.lastBreak.down, decimals),
+    },
+    next_up: s.nextUp === null
+      ? null
+      : { level: r(s.nextUp.level, decimals), pips: r(s.nextUp.pips, 1), atr: r(s.nextUp.atr, 2) },
+    next_down: s.nextDown === null
+      ? null
+      : { level: r(s.nextDown.level, decimals), pips: r(s.nextDown.pips, 1), atr: r(s.nextDown.atr, 2) },
+    range20: compactRange(s.range20, decimals),
+    range100: compactRange(s.range100, decimals),
+    close_pressure: r(s.closePressure, 3),
+  };
+};
