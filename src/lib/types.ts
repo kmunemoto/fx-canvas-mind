@@ -379,6 +379,32 @@ export interface RulebookRule {
   supported_by?: string[];
 }
 
+// How today's market compared with the plans each learned rule was drawn
+// from, as the server measured it (supabase/functions/analyze/situation.ts).
+//   match    every axis that could be compared puts today inside or beside
+//            the rule's evidence
+//   off      at least one comparable axis puts today outside it
+//   unknown  fewer than two axes could be compared at all — too thin, too
+//            wide, or the cited plans predate the stored snapshot
+export type RuleFitVerdict = "match" | "off" | "unknown";
+
+export interface RuleFitEntry {
+  fit: RuleFitVerdict;
+  // Axes that counted towards the verdict, and the ones that came out outside
+  comparable: string[];
+  missed: string[];
+  // Cited plans whose snapshot could be read, out of the number cited. The gap
+  // is the part of a rule's evidence the comparison could not see.
+  cases: number;
+  cited: number;
+}
+
+export interface RuleFit {
+  shown: string[];
+  held_back: number;
+  rules: Record<string, RuleFitEntry>;
+}
+
 export interface Rulebook {
   version: number;
   rules: RulebookRule[];

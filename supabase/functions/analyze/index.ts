@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v41-2026-09-06T09:00:00Z";
+const FUNCTION_VERSION = "analyze-v42-2026-09-06T09:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -2197,6 +2197,15 @@ Deno.serve(async (req: Request) => {
         // the moment they are told "not now".
         preview: previewMode,
         market_opens_at: marketOpensAt,
+        // Which learned rules were put in front of the model this run, and how
+        // today's market compared with the plans each was drawn from. Sent so
+        // the reader can see WHY a rule was there, not just that it was.
+        //
+        // Rule ids, verdicts, axis names and counts only — no analysis ids.
+        // The rules are learned from every account, and whose plans they were
+        // learned from is not the client's business (docs §4.4 / the rule that
+        // keeps other users' analysis_id off the wire).
+        rule_fit: ruleFitRecord,
         technicalData: {
           price: p(entrySnapshot.price),
           datetime: entrySnapshot.datetime,

@@ -389,6 +389,33 @@ export const en: Dict = {
     waits: "Post-mortems run automatically 1 h (15min plans), 2 h (1h), 4 h (4h) or 8 h (1day) after settlement, and are reviewed again later when little price action has followed",
   },
 
+  ruleFit: {
+    title: "Rules this analysis was given",
+    summary: (matched: number, total: number) =>
+      `${total} shown, ${matched} of which fit today's market.`,
+    heldBack: (n: number) => `${n} more were left out for length, furthest from today's market first.`,
+    verdicts: {
+      match: "fits",
+      off: "different situation",
+      unknown: "cannot compare",
+    },
+    axes: {
+      adx: "ADX",
+      rsi: "RSI",
+      stretch: "distance from SMA20",
+      bb_pos: "position in the band",
+      htf_adx: "higher-timeframe ADX",
+    },
+    missed: (axes: string[]) => `Outside on: ${axes.join(", ")}`,
+    evidence: (cases: number, cited: number) =>
+      cases === cited
+        ? `Compared against all ${cited} plans it was drawn from.`
+        : `Only ${cases} of the ${cited} plans it cites still carry the reading of the day; compared against those.`,
+    ruleGone: (id: string) => `(${id}: text unavailable)`,
+    note:
+      "The \"fits\" verdict is a mechanical comparison the server made between today's readings and those measured on the past plans each rule was drawn from (ADX, RSI, distance from SMA20 in ATR, position in the Bollinger band, higher-timeframe ADX). It is not a claim made by the rule's own text. The rules are learned from every account's record, so the evidence counts include plans that are not in your own history.",
+  },
+
   analysisMode: {
     label: "Mode:",
     full: "Full analysis (technical + fundamental)",

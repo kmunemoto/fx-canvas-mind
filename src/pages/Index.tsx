@@ -3,6 +3,7 @@ import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
 import AnalysisResultView from "@/components/AnalysisResultView";
+import RuleFitPanel from "@/components/RuleFitPanel";
 import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
@@ -23,6 +24,7 @@ import type {
   TimeInterval,
   LoopHealth as LoopHealthData,
   PerformanceStats,
+  RuleFit,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
@@ -35,7 +37,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v41-2026-09-06T09:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v42-2026-09-06T09:20:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -230,6 +232,10 @@ const Index = () => {
   // last close and not a plan — said above the result rather than in a toast,
   // because it is the result's nature and not an error about it.
   const [preview, setPreview] = useState<{ opensAt: string | null } | null>(null);
+  // Which learned rules this run was given, and how the server measured them
+  // against today's market. Shown beside the result so a rule quoted under an
+  // answer cannot be mistaken for a rule that applied to it.
+  const [ruleFit, setRuleFit] = useState<RuleFit | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
@@ -364,6 +370,7 @@ const Index = () => {
     setResult(null);
     setAnalysisMode(null);
     setPreview(null);
+    setRuleFit(null);
     setLiveRate(null);
     // Clear the indicators too: on a failed run they would otherwise keep
     // showing the previous pair's numbers next to an error toast
@@ -462,6 +469,11 @@ const Index = () => {
       setResultMeta({ pair: settings.currencyPair, interval });
       setRemaining(remainingCount);
       setAnalysisMode(mode);
+      setRuleFit(
+        payload?.rule_fit && typeof payload.rule_fit === "object"
+          ? (payload.rule_fit as RuleFit)
+          : null,
+      );
       setPreview(
         payload?.preview === true
           ? { opensAt: typeof payload?.market_opens_at === "string" ? payload.market_opens_at : null }
@@ -586,6 +598,7 @@ const Index = () => {
                     </span>
                   </div>
                 )}
+                <RuleFitPanel ruleFit={ruleFit} rulebook={rulebook} />
                 <AnalysisResultView
                   result={result}
                   techData={techData}
