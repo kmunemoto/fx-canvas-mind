@@ -87,7 +87,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
     subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
-    marketClosed: "為替市場が閉まっているため、見送り（WAIT）にしました。このアプリのプランは「今の値段で入る」前提なので、開いていない時間に出すと、週明けの窓を含んだ架空の成績になります。",
+    marketClosed: "為替市場が閉まっているため、見送り（WAIT）にしました。プランは「今の値段で入る」前提で、その値段が存在しないので、エントリー・損切り・利確は出していません。直近の終値までの読みは通常どおり出しています。この回は下見として履歴に残りますが、成績にもルールの学習にも数えません。",
     calendarClear: (hours) =>
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
@@ -141,7 +141,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
     subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
-    marketClosed: "The market is shut, so this is a WAIT. Every plan here is entered at the price on screen, and one written while the market is closed would be judged by filling at the Monday reopen — across the gap, as a trade nobody could have taken.",
+    marketClosed: "The market is shut, so this is a WAIT. Every plan here is entered at the price on screen and that price does not exist right now, so no entry, stop or targets were issued — the reading up to the last close is unchanged. The run is kept in your history as a preview and counts towards neither the record nor the rules.",
     calendarClear: (hours) =>
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:

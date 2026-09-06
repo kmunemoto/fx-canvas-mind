@@ -103,8 +103,25 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   TP1 < TP2 < TP3 の順序が壊れた段は落として `entry_check.tp_ladder_dropped` に理由を残す。`entry_check` には `confidence` / `confidence_floor` / `bars`（足ごとの本数）も入れる。
 - 履歴の保存は **冪等**: 行の id をサーバ側で先に発番し（`crypto.randomUUID()`）、`Prefer: resolution=merge-duplicates` で最大 `SAVE_ATTEMPTS = 3` 回まで再試行する。
   再試行で同じプランが 2 行になると成績が二重に数えられる。3 回とも失敗したら分析を返さず `fail()`（`error_stage = "history_not_saved"`）でクレジットを返す。判定も診断も走らない結果を課金したまま返さない。
-- 休場の拒否は **広い述語** `isPossiblyClosed` で 2 回: `check_market_hours`（クォータ消費の前、409）と `check_entry`（モデル応答後。20–40 秒の間に閉まることがある）。
-  後者は `entry_check.rejection = "market_closed"` として残し、シグナルを WAIT に落として返金する。狭い述語では週に 1 時間の穴が空き、週末のギャップ越しの約定が「誰も取れない大勝ち」として記録される。
+- 休場の判定は **広い述語** `isPossiblyClosed` で 2 回、ただし **役割が違う**（§2.2）。`check_market_hours`（到着時刻。下見にするかを決める）と `check_entry`（モデル応答後。20–40 秒の間に閉まることがある）。
+  後者は `entry_check.rejection = "market_closed"` として残し、シグナルを WAIT に落とす。狭い述語では週に 1 時間の穴が空き、週末のギャップ越しの約定が「誰も取れない大勝ち」として記録される。
+
+### 2.2 下見（市場が閉まっている間）
+
+- **閉まっているのは断る理由ではなく、プランを出さない理由**。以前は `check_market_hours` が 409 を返し、モデル呼び出しもクォータ消費も行の書き込みもせずに終わっていた。
+  金曜 21:00 UTC 〜 日曜 22:00 UTC の **週 49 時間**（`market-hours.test` で毎時走査して固定）で、日本時間だと土 06:00 〜 月 07:00、つまり土日がまるごと入る。
+  金曜終値までの指標・構造・ダイバージェンス・当てはまるルール・来週の指標は、日曜でもそのまま正しい。存在しないのはエントリーだけ。
+- しかも文言が嘘だった。「見送り（WAIT）にしました」と言うが WAIT は作られていない。分析は 1 行も走らず、行も書かれていない。
+- 現在は **下見（preview）** として実行する。既存の `check_entry` ゲートがそのまま使える: `marketShut` でシグナルを WAIT に落とし、`entry_point` / `stop_loss` / TP をすべて `—` にする。新しく足したのは行の印だけ。
+- **到着時刻で決め、ゲートの時計を流用しない**（`previewMode` と `marketShut` は別変数）。開いている間に始まって閉場後に終わった回は、存在した値段で決めた本物の WAIT なので採点してよい。
+- **採点されない仕組み**: 下見は `wait_plan` を書かない。track-outcomes の WAIT sweep も postmortem の WAIT 診断も `outcome=eq.skipped` **かつ `wait_plan` が非 null** で拾うので、書かなければ両方が素通りする。
+  shadow 行も作らない（shadow は `outcome: pending` の追跡プランで、形状ゲート側の rejection が `too_far` のままになりうるため、ここを塞がないと週末のギャップで決済されるプランが 1 本開く）。
+- **統計から外す**: `analyses.preview` 列。`performance_stats` は `mine` CTE で `preview = false` にするので、全スコープ・全次元・クラスタ・全比率が一度に外れる。`loop_health` は 3 つのカウントに明示的に足した（`wait_plan` 経由で偶然外れてはいたが、副作用で保たれる不変条件は壊れても誰も気づかない）。
+  クライアント側は `outcomeStats.ts` の `isPreview` を `isShadow` と同じ 3 か所で見る。
+- **数は隠さない**: `performance_stats().preview` に `total` と `last_at` を出す。除外したものが記録から消えるのは、黙って落とすのと同じ。
+- **履歴には残す**（ユーザーの決定）。一覧に「下見」バッジを出す。**クォータは通常どおり消費する**（モデル呼び出しのコストは同じ）。
+- 応答は `preview: true` と `market_opens_at`（`nextOpen`＝日曜 22:00 UTC＝月曜 07:00 JST）を返す。`nextOpen` は **遅い方**の開場を返す: 06:00 と言っておいて 07:00 まで analyze が断るより、1 時間遅く言う方がまし。
+- 画面はこれをエラーではなく結果として出す（赤いトーストではなく結果の上のバナー）。以前はフロントに `market_closed` の分岐が 1 つも無く、409 が汎用エラー経路に落ちていた。
 
 ---
 
@@ -567,6 +584,7 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 - **ペアを軸にも門にもしていない**: 軸はすべて無次元なので、USD/JPY で学んだルールが EUR/USD の同じ形に当たりうる。本番の証拠が全部 USD/JPY なので今は差が出ないが、意図的な選択であって検査漏れではない。ルールは「伸び切ったトレンドを追うな」のような一般則として書かれている。
 - **軸は指標だけで、構造と時間帯を持たない**: `situation.ts` は `compactSnapshot` にある値しか使えない。`computeStructure` / `detectDivergence` の結果も `closedSnapshots` も行に残っていないので、
   「上値を切り下げている最中」「ロンドン時間」といった局面の違いは軸にできない。構造を軸にしたければ先に構造を行へ保存する必要がある（今はプロンプト文字列にしか出ていない）。
+- **下見はまだ 1 件も無い**: 2026-09-06 に入れたばかりで、本番の `preview` 行は 0 件。除外が効いていることは `performance_stats()` の数字が入れる前後で一致すること（21 コール / 18 トレード / 10 決着 / 勝率 20% / 3 クラスタ / 採点率 59%）でしか確かめていない。実際の下見が 1 件入ったところで同じ数字が動かないことを見る。
 - **未観測**: v12 の Bid/Ask 精査、`quote_refinements`、WAIT の採点、danger の閾値は本番の平日データでまだ十分に観測できていない。月曜の 1h 分析で観る。
 
 ---

@@ -566,6 +566,9 @@ export interface AnalysisRecord {
   wait_plan?: WaitPlan | null;
   shadow?: boolean;
   shadow_of?: string | null;
+  // The market was shut when this was requested, so it is a read of the last
+  // close with no entry, stop or targets. Kept in the history, counted nowhere.
+  preview?: boolean;
   rulebook_version?: number | null;
 }
 

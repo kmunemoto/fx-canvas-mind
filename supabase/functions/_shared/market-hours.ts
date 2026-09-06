@@ -41,3 +41,62 @@ export const isPossiblyClosed = (ms: number): boolean => {
   if (day === 0 && hour < 22) return true; // Sunday, until the latest open
   return false;
 };
+
+// When does it open again?
+//
+// Only meaningful while `isPossiblyClosed(ms)` is true — it answers the
+// question that predicate raises and nothing else. It returns the LATEST
+// possible open (Sunday 22:00 UTC, i.e. Monday 07:00 JST), matching the wide
+// predicate: telling someone the market is back at 06:00 when the analyst
+// will still refuse until 07:00 would be a worse answer than one hour late.
+//
+// The market may in fact be trading before this — the hour between the
+// earliest and latest open moves with daylight saving, and neither predicate
+// pretends to know which. So this is the time the app itself starts working
+// again, which is the thing the person asking actually wants to know.
+export const nextOpen = (ms: number): number => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  // Sunday is day 0, so from any day in the shut window the coming Sunday is
+  // this many days ahead; on Sunday itself it is today.
+  const daysAhead = day === 0 ? 0 : 7 - day;
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() + daysAhead,
+    22,
+    0,
+    0,
+    0,
+  );
+};
+
+// When did it last trade?
+//
+// The mirror of `nextOpen`, and it exists for one specific job: deciding how
+// stale a price series is. `seriesHealth` measures the newest bar against
+// "now" and calls anything older than a few intervals a feed failure — which
+// is right on a Tuesday and wrong every weekend, when the newest bar is
+// Friday's close by definition and there is nothing wrong with it at all.
+// Measured against the close instead, a weekend series is as fresh as it can
+// possibly be.
+//
+// Returns the EARLIEST possible close (Friday 21:00 UTC), matching the wide
+// predicate that decides the market is shut: the two have to agree, or an
+// hour exists that is "shut" while its own last close has not happened yet.
+export const lastClose = (ms: number): number => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  // Friday is day 5. Only the shut days can reach here: Sunday goes back two
+  // days, Saturday one, and Friday evening is already past its own close.
+  const daysBack = day === 0 ? 2 : day === 6 ? 1 : 0;
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() - daysBack,
+    21,
+    0,
+    0,
+    0,
+  );
+};
