@@ -100,3 +100,28 @@ export const lastClose = (ms: number): number => {
     0,
   );
 };
+
+// How many bars at the END of an ascending series the market was shut for.
+//
+// Providers keep emitting bars while the market is closed and they are flat:
+// a weekend 1h series came back with the ATR at a tenth of Friday's, a
+// Bollinger band two pips wide, and price, both SMAs and both ichimoku lines
+// collapsed onto one number. Nothing is wrong with the feed — those hours
+// simply had no trading in them.
+//
+// Uses the NARROW predicate, which is the one that answers "may I throw this
+// bar away?" and is deliberately conservative about saying yes; the same
+// predicate already drops the same bars in the tracker.
+//
+// Counts only the tail, so a caller slicing by it never opens a gap in the
+// middle of a series. A non-finite timestamp stops the count rather than
+// being assumed shut — an unreadable bar is not evidence of a closed market.
+export const closedTail = (times: number[]): number => {
+  let n = 0;
+  for (let i = times.length - 1; i >= 0; i -= 1) {
+    const t = times[i];
+    if (!Number.isFinite(t) || !isMarketClosed(t)) break;
+    n += 1;
+  }
+  return n;
+};
