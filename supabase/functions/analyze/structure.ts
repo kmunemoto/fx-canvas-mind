@@ -28,6 +28,7 @@
 // Deno-free on purpose: src/test/structure.test.ts imports this directly.
 
 import { rangeOf, type Candle, type Range } from "./indicators.ts";
+import type { Divergence } from "./divergence.ts";
 
 // Confirmation window each side of a pivot. The same 2 bars the existing
 // swingLevels uses, so the two never disagree about what a swing is.
@@ -309,4 +310,80 @@ export const computeStructure = (
     range100: rangeOf(candles, Math.min(100, candles.length)),
     closePressure: pressure(candles),
   };
+};
+
+// The structure, rendered.
+//
+// Full detail on the ENTRY timeframe only. The higher timeframes get one
+// line each: the schema asks them for a bias and a note, not for a break
+// history, and three full blocks would spend two thirds of the added budget
+// on the two timeframes the plan is not built at.
+export const structureLines = (st: Structure, dv: Divergence | null, decimals: number, full: boolean): string => {
+  const p = (v: number | null | undefined) =>
+    typeof v === "number" && Number.isFinite(v) ? v.toFixed(decimals) : "n/a";
+  const label = ({
+    uptrend: "上昇(高値切り上げ・安値切り上げ)",
+    downtrend: "下降(高値切り下げ・安値切り下げ)",
+    range: "レンジ(高安がほぼ同値)",
+    expanding: "拡大(高値切り上げ・安値切り下げ)",
+    contracting: "収縮(高値切り下げ・安値切り上げ)",
+    unknown: "判定不能",
+  })[st.label];
+
+  if (!st.ok) return `構造(サーバ計算): 判定保留 (${st.reason ?? "不明"}・足${st.bars}本)`;
+
+  const gap = (g: { level: number; pips: number; atr: number } | null, dir: string) =>
+    g === null
+      ? `${dir}: 参照期間内に未突破の水準なし`
+      : `${dir}: ${p(g.level)} (${g.pips.toFixed(1)}pips / ${g.atr.toFixed(2)}ATR)`;
+
+  const head = `構造(サーバ計算・確定足${st.bars}本): ${label} / ${gap(st.nextUp, "上値余地")} ${gap(st.nextDown, "下値余地")}`;
+  if (!full) return head;
+
+  const piv = (list: typeof st.highs, kind: string) =>
+    list.length === 0
+      ? `${kind}: なし`
+      : `${kind}: ${list.map((h) => `${p(h.price)}(${h.datetime.slice(5, 16)}Z・${h.barsAgo}本前)`).join(" ← ")}`;
+
+  const brk = (b: typeof st.lastBreak.up, dir: string) => {
+    if (b === null) return `${dir}: 終値で抜けた水準なし`;
+    const state = b.state === "reclaimed" ? "3本以内に戻された(=水準は生きている)" : "抜けたまま";
+    return `${dir}: ${p(b.level)} を ${b.datetime.slice(5, 16)}Z(${b.barsAgo}本前) の終値${p(b.close)}で突破・${state}${
+      b.wickOnly > 0 ? `・それ以前にヒゲのみの突破${b.wickOnly}回` : ""
+    }`;
+  };
+
+  const rng = (r: typeof st.range20, n: number) =>
+    r === null
+      ? `直近${n}本レンジ: 算出不能`
+      : `直近${n}本レンジ: 高${p(r.high)} 安${p(r.low)} 幅${p(r.width)}${
+        r.positionPct === null ? "" : ` / 現在値は下から${r.positionPct.toFixed(0)}%`
+      }`;
+
+  const div = (() => {
+    if (dv === null) return "";
+    if (dv.status === "unavailable") return `\nダイバージェンス(RSI14・サーバ判定): 判定不可(${dv.reason})`;
+    if (dv.status === "none") return `\nダイバージェンス(RSI14・サーバ判定): なし(${dv.reason})`;
+    const f = dv.from!, t = dv.to!;
+    return `\nダイバージェンス(RSI14・サーバ判定): ${dv.status === "bearish" ? "弱気" : "強気"}。` +
+      `${f.datetime.slice(5, 16)}Z 終値${p(f.close)} RSI${f.rsi.toFixed(1)} → ${t.datetime.slice(5, 16)}Z 終値${p(t.close)} RSI${t.rsi.toFixed(1)}` +
+      ` (価格${dv.priceDelta! > 0 ? "+" : ""}${p(dv.priceDelta)} / RSI${dv.rsiDelta! > 0 ? "+" : ""}${dv.rsiDelta!.toFixed(1)})`;
+  })();
+
+  return [
+    head,
+    piv(st.highs, "確定スイング高値(新しい順)"),
+    piv(st.lows, "確定スイング安値(新しい順)"),
+    brk(st.lastBreak.up, "終値ブレイク(上)"),
+    brk(st.lastBreak.down, "終値ブレイク(下)"),
+    rng(st.range20, 20),
+    st.closePressure === null
+      ? ""
+      : `終値の位置(直近20本平均・OHLCからの計算値): ${(st.closePressure * 100).toFixed(0)}% (高値寄り100/安値寄り0)`,
+    // Said once, because the alternative is the model reading the edge of the
+    // window as a property of the market — which is what produced "空白地帯"
+    // and "8月来のもみ合い" in the first twenty-one analyses.
+    "※スイングは前後2本で確定するため、直近2本は構造判定に入らない。上記は参照期間内の事実で、期間外は不明。",
+    div,
+  ].filter((l) => l !== "").join("\n");
 };

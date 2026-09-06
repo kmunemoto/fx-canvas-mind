@@ -5,6 +5,7 @@ import {
   computeStructure,
   mergeLevels,
   pivots,
+  structureLines,
 } from "../../supabase/functions/analyze/structure";
 import { atr, rangeOf, rsiSeries, type Candle } from "../../supabase/functions/analyze/indicators";
 import {
@@ -356,5 +357,69 @@ describe("divergence is computed, or not claimed", () => {
   it("has a tolerance wide enough that RSI noise alone cannot fire it", () => {
     expect(RSI_TOL).toBeGreaterThanOrEqual(2);
     expect(PRICE_TOL_ATR).toBeGreaterThan(0);
+  });
+});
+
+
+// The block has to earn its place in a prompt with a character budget: the
+// rulebook and the candles are already in there, and an addition that pushes
+// either out has made the analysis worse, not better. So the cost is
+// MEASURED here rather than asserted in a comment.
+describe("what the structure block costs the prompt", () => {
+  const built = () => {
+    const rows = baseline(120, 150);
+    for (let i = 0; i < 60; i++) {
+      const c = 150 + i * 0.05;
+      rows[i] = { ...rows[i], open: c, high: c + 0.06, low: c - 0.06, close: c };
+    }
+    spikeHigh(rows, 30, 151.9);
+    spikeHigh(rows, 70, 153.4);
+    spikeLow(rows, 45, 151.2);
+    spikeLow(rows, 90, 152.4);
+    return rows;
+  };
+
+  it("costs under 900 characters on the entry timeframe, with everything populated", () => {
+    const rows = built();
+    const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
+    const dv = detectDivergence(rows, rsiSeries(rows.map((c) => c.close)), pivots(rows), atr(rows));
+    const rendered = structureLines(st, dv, 3, true);
+    expect(rendered.length).toBeGreaterThan(200);
+    expect(rendered.length).toBeLessThan(900);
+  });
+
+  it("costs under 200 characters on a higher timeframe", () => {
+    // The schema asks a higher timeframe for a bias and a note, not for a
+    // break history — three full blocks would spend two thirds of the added
+    // budget on the timeframes the plan is not built at
+    const rows = built();
+    const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
+    expect(structureLines(st, null, 3, false).length).toBeLessThan(200);
+  });
+
+  it("still says something useful when it cannot compute anything", () => {
+    const rendered = structureLines(computeStructure(baseline(60), null, PIP), null, 3, true);
+    expect(rendered).toContain("判定保留");
+    expect(rendered).toContain("no_atr");
+    // and it is short: a refusal should not cost what an answer costs
+    expect(rendered.length).toBeLessThan(120);
+  });
+
+  it("dates every level it names, and says the window is the limit", () => {
+    const rows = built();
+    const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
+    const rendered = structureLines(st, null, 3, true);
+    // no bare price without a date beside it
+    expect(rendered).toMatch(/確定スイング高値.*\d{2}-\d{2}T\d{2}:\d{2}Z/);
+    expect(rendered).toContain("期間外は不明");
+    expect(rendered).toContain("直近2本は構造判定に入らない");
+  });
+
+  it("never prints the word divergence when it did not compute one", () => {
+    const rows = built();
+    const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
+    const refused = structureLines(st, { status: "unavailable", reason: "few_pivots", from: null, to: null, priceDelta: null, rsiDelta: null }, 3, true);
+    expect(refused).toContain("判定不可");
+    expect(refused).not.toMatch(/弱気|強気/);
   });
 });

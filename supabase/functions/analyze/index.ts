@@ -1,10 +1,11 @@
-const FUNCTION_VERSION = "analyze-v30-2026-09-05T17:10:00Z";
+const FUNCTION_VERSION = "analyze-v31-2026-09-06T00:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
 import {
   computeSnapshot,
   parseCandles,
+  rsiSeries,
   seriesHealth,
   type Candle,
   type IndicatorSnapshot,
@@ -40,6 +41,9 @@ import {
 } from "./entry.ts";
 
 import { parseRules, selectPromptRules } from "./rules.ts";
+
+import { computeStructure, pivots, structureLines } from "./structure.ts";
+import { detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
@@ -244,16 +248,21 @@ const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
       s.cloudAheadTwisted === true ? " ※ねじれ(現在の雲と上下が逆)" : ""
     }`,
     `ATR14: ${p(s.atr)} (${x(s.atrPct)}% of price)`,
-    `直近スイング高値: ${s.swingHighs.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
-    `直近スイング安値: ${s.swingLows.map((v) => v.toFixed(decimals)).join(", ") || "n/a"}`,
+    // The two swing lines that used to sit here are gone. They carried four
+    // bare prices with no date, no order and no distance — 156.884 preceded
+    // 157.081 only because the scan ran newest-first, and nothing said so.
+    // The structure block below carries the same levels with the bar they
+    // printed on and how far away they are.
   ].join("\n");
 };
 
 const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナリストです。マルチタイムフレームの価格データと計算済みテクニカル指標に基づき、規律あるトレードプランを構築します。
 
 必ず次の手順で分析してください:
-1. STRUCTURE — 各時間足の市場構造を判定する（高値切り上げ/切り下げ、レンジ、ブレイク後の戻し）。
-2. LEVELS — スイング高安・移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。直近スイングのすぐ外側にストップが溜まる「ストップハントゾーン」があれば特定する。
+1. STRUCTURE — 構造は「構造(サーバ計算)」の行がすでに判定済みである。自分で数え直さず、その判定を採用する。異なる読みをするなら、どのローソク足を見てそう読んだかを必ず書く。
+   スイング高安・終値ブレイク・上下の余地・レンジ内の位置も同じ行にある。そこに無い水準を「直近高値」として引用しない。
+2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
+   **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
 3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
 4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
 5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
@@ -270,7 +279,8 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 {{LANGUAGE_RULE}}
 - warnings には必ず「この分析は参考情報です。投資判断は自己責任で行ってください」を含める。
 - ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
-- RSI・Stoch の過熱と価格構造が矛盾する場合（ダイバージェンス）は必ず言及する。
+- ダイバージェンスは「ダイバージェンス(RSI14・サーバ判定)」の行が結論である。その行が「なし」「判定不可」なら、ダイバージェンスがあるとは書かない。
+  異なる2つのオシレーター（RSIとStoch）を同じ時点で比べたものや、同じ指標を別の時間足で比べたものはダイバージェンスではない。隠れ（ヒドゥン）ダイバージェンスは計算していないので主張しない。
 
 {{EVENTS}}
 {{LEARNED_RULES}}`;
@@ -302,10 +312,19 @@ const RESPONSE_SCHEMA = {
         direction: { type: "string", enum: ["Up", "Down", "Sideways"] },
         continuity: { type: "string", enum: ["Sustained", "Fading", "Choppy"] },
       },
-      required: ["mode", "structure", "smart_money", "strength", "session", "direction", "continuity"],
+      // smart_money is deliberately NOT required. As an enum of
+      // Accumulation/Distribution/Neutral it forced a claim about
+      // institutional intent on every run — 18 Distribution, 3 Accumulation,
+      // 0 Neutral across the first 21, tracking direction perfectly and
+      // carrying nothing direction did not. The app has no order flow, so
+      // there is nothing to observe it from.
+      required: ["mode", "structure", "strength", "session", "direction", "continuity"],
       additionalProperties: false,
     },
-    stop_hunt_zone: { type: "string", description: "価格帯 または Not detected" },
+    stop_hunt_zone: {
+      type: "string",
+      description: "板情報は取得していないため推測。ヒゲのみで抜けた水準など、値動きの根拠があるときだけ価格帯を書き、無ければ Not detected",
+    },
     timeframe_alignment: {
       type: "array",
       items: {
@@ -329,7 +348,7 @@ const RESPONSE_SCHEMA = {
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",
     "risk_level", "sentiment", "stop_loss", "take_profit_1",
     "take_profit_2", "take_profit_3", "risk_reward_ratio", "market_context",
-    "market_context_detail", "stop_hunt_zone", "timeframe_alignment",
+    "market_context_detail", "timeframe_alignment",
     "key_factors", "support_levels", "resistance_levels", "analysis", "warnings",
   ],
   additionalProperties: false,
@@ -1059,6 +1078,34 @@ Deno.serve(async (req: Request) => {
     }
 
     stage = "build_prompt";
+    // A pip, for expressing distances in the unit the plan is read in. The
+    // other half of every distance is the ATR, because that is the unit the
+    // stop rules are written in.
+    const pipSize = decimals === 3 ? 0.01 : 0.0001;
+    // Structure is computed on CLOSED bars only: a forming bar's close is not
+    // a close, and every break here is decided on a close. Computed on
+    // seriesByTf, which is the series AFTER the GMO overlay swap — the same
+    // array the indicators read, so the structure and the indicators can
+    // never describe two different feeds.
+    const structures = seriesByTf.map((candles, i) => {
+      const bars = snapshots[i]?.barClosed === false ? candles.slice(0, -1) : candles;
+      return { bars, structure: computeStructure(bars, snapshots[i]?.atr ?? null, pipSize) };
+    });
+    // Divergence on the entry timeframe only. A disagreement between two
+    // pivots three months apart on the 1day is not something a 15-minute plan
+    // acts on, and rendering it on every timeframe would pay three times to
+    // say one thing.
+    const entryDivergence: Divergence | null = (() => {
+      const { bars } = structures[0];
+      if (bars.length < 40) return null;
+      return detectDivergence(
+        bars,
+        rsiSeries(bars.map((c) => c.close)),
+        pivots(bars),
+        snapshots[0]?.atr ?? null,
+      );
+    })();
+
     const tfSections = timeframes.map((tf, i) => {
       const snapshot = snapshots[i];
       const candles = seriesByTf[i];
@@ -1072,7 +1119,8 @@ Deno.serve(async (req: Request) => {
         : "";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
-      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
+      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}`;
+      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();
