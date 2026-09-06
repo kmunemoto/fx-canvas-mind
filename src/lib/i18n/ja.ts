@@ -501,6 +501,13 @@ export const ja = {
   },
 
   login: {
+    // ソーシャルログイン
+    orContinueWith: "または",
+    withGoogle: "Google で続ける",
+    withApple: "Apple で続ける",
+    providerOff: "この方法でのログインは現在ご利用いただけません。メールアドレスとパスワードでお試しください。",
+    providerFailed: (detail: string) => `ログインを開始できませんでした: ${detail}`,
+    socialNote: "既存のアカウントと同じメールアドレスなら、同じアカウントにログインします。",
     createAccount: "アカウントを作成",
     signInToStart: "ログインして開始",
     email: "メールアドレス",

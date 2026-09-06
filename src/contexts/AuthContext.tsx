@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 import { translateSignUpError } from "@/lib/password";
+import { oauthRedirectTo, type OAuthProvider } from "@/lib/oauth";
 import { useT } from "@/lib/i18n";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -17,6 +18,10 @@ interface AuthContextType {
   loading: boolean;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  // Hands the browser to the provider. On success this function does not
+  // return in any useful sense — the page navigates away — so callers should
+  // leave their loading state on and only handle the error path.
+  signInWithProvider: (provider: OAuthProvider, plan: string | null) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -107,6 +112,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return { error: null };
   };
 
+  // Social sign-in. Supabase redirects to the provider, the provider redirects
+  // back to `redirectTo`, and supabase-js picks the session out of the URL —
+  // which the existing onAuthStateChange subscription above already handles,
+  // so there is no separate callback route to maintain.
+  const signInWithProvider = async (provider: OAuthProvider, plan: string | null) => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: oauthRedirectTo(window.location.origin, plan) },
+    });
+    if (error) {
+      // The two failures worth telling apart: the provider is not switched on
+      // in Supabase at all, and everything else. The first is a configuration
+      // mistake the user can do nothing about, and saying "try again" to it
+      // would send them round a loop that cannot succeed.
+      const disabled = /provider is not enabled|Unsupported provider/i.test(error.message);
+      return { error: disabled ? t.login.providerOff : t.login.providerFailed(error.message) };
+    }
+    return { error: null };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -114,7 +139,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, signInWithProvider, signOut }}>
       {children}
     </AuthContext.Provider>
   );

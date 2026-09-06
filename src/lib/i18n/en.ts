@@ -477,6 +477,12 @@ export const en: Dict = {
   },
 
   login: {
+    orContinueWith: "or",
+    withGoogle: "Continue with Google",
+    withApple: "Continue with Apple",
+    providerOff: "This sign-in method is not available right now. Please use your email and password.",
+    providerFailed: (detail: string) => `Could not start sign-in: ${detail}`,
+    socialNote: "If the address matches an account you already have, you will be signed into that same account.",
     createAccount: "Create an account",
     signInToStart: "Sign in to get started",
     email: "Email address",
