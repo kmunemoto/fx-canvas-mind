@@ -74,7 +74,20 @@ describe("the model can no longer choose an entry price", () => {
     // Seven of the nine rules in the live book were about placing a limit
     // entry when this shipped — a move that no longer exists — and all nine
     // were being rendered into the prompt.
-    expect(analyze).toContain("selectPromptRules(parseRules(rulebook.rules), locale, PLAN_CONTRACT)");
+    //
+    // The filter now runs where the book is read, and the rendering waits for
+    // the indicators so each rule can be compared against the market it was
+    // learned in. Both halves are pinned: a rendering that read the whole book
+    // instead of the in-force list would restore the original defect.
+    expect(analyze).toContain("inForceRules = inForce(parseRules(rulebook.rules), PLAN_CONTRACT)");
+    expect(analyze).toContain("selectPromptRules(\n      inForceRules,");
+  });
+
+  it("keeps shadow rows out of the evidence a rule's situation is measured from", () => {
+    // A shadow row is the plan the other contract would have produced. It is
+    // excluded from the statistics and from a rule's support; reading its
+    // snapshot here would let it back in through the situation check.
+    expect(analyze).toContain("&shadow=is.false&select=id,context");
   });
 
   it("prices from the wall clock, never from the forming bar's own stamp", () => {
