@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { isPossiblyClosed, lastClose, nextOpen } from "../../supabase/functions/_shared/market-hours.ts";
+import { closedTail, isPossiblyClosed, lastClose, nextOpen } from "../../supabase/functions/_shared/market-hours.ts";
 import { seriesHealth } from "../../supabase/functions/analyze/indicators.ts";
 import { byTimeframe, causeCounts, isPreview, tally } from "../lib/outcomeStats";
 import type { AnalysisRecord } from "../lib/types";
@@ -227,5 +227,58 @@ describe("a weekend series is not a broken feed", () => {
     expect(analyze).toContain("const staleFrom = previewMode ? lastClose(Date.now()) : Date.now();");
     // The real clock still goes in as nowMs; only staleness gets the close.
     expect(analyze).toMatch(/Date\.now\(\),\s*\n\s*3,\s*\n\s*staleFrom,/);
+  });
+});
+
+describe("the preview reads Friday's market, not the weekend's filler", () => {
+  const HOUR = 3_600_000;
+  const at = (iso: string) => Date.parse(iso);
+
+  it("counts the bars the market was shut for, from the end", () => {
+    // A 1h series running to Sunday 07:00, the shape the first live preview
+    // actually came back with. Everything from the Friday 22:00 bar on is
+    // closed-market filler under the narrow predicate.
+    const times: number[] = [];
+    for (let t = at("2026-09-04T12:00:00Z"); t <= at("2026-09-06T07:00:00Z"); t += HOUR) times.push(t);
+    const dropped = closedTail(times);
+    const lastKept = times[times.length - 1 - dropped];
+    // Friday 21:00 survives: the narrow predicate only calls Friday shut from
+    // 22:00, and being wrong about that destroys an hour of real trading.
+    expect(new Date(lastKept).toISOString()).toBe("2026-09-04T21:00:00.000Z");
+    // Friday 22:00-23:00 (2) + all Saturday (24) + Sunday 00:00-07:00 (8).
+    expect(dropped).toBe(34);
+  });
+
+  it("drops nothing mid-week", () => {
+    const times: number[] = [];
+    for (let t = at("2026-09-01T00:00:00Z"); t <= at("2026-09-02T12:00:00Z"); t += HOUR) times.push(t);
+    expect(closedTail(times)).toBe(0);
+  });
+
+  it("counts only the tail, so slicing by it never opens a gap", () => {
+    // A series spanning an OLD weekend and ending mid-week: the weekend bars
+    // are in the middle, and this must not touch them. That contamination is
+    // real and predates the preview; it is not fixed by a trailing trim and
+    // must not be silently half-fixed by one.
+    const times: number[] = [];
+    for (let t = at("2026-08-28T00:00:00Z"); t <= at("2026-09-02T00:00:00Z"); t += HOUR) times.push(t);
+    expect(closedTail(times)).toBe(0);
+    expect(times.some((t) => closedTail([t]) === 1)).toBe(true);
+  });
+
+  it("stops at a bar it cannot read rather than assuming the market was shut", () => {
+    expect(closedTail([at("2026-09-05T12:00:00Z"), Number.NaN, at("2026-09-05T14:00:00Z")])).toBe(1);
+  });
+
+  it("is empty for an empty series", () => {
+    expect(closedTail([])).toBe(0);
+  });
+
+  it("is wired into analyze on the preview path only", () => {
+    expect(analyze).toContain("if (previewMode) {");
+    expect(analyze).toContain("const dropped = closedTail(candles.map((c) =>");
+    // The raw count comes down with it, or the deliberate drop trips the
+    // check that exists to catch a broken feed.
+    expect(analyze).toContain("rawCounts[i] = Math.max(0, (rawCounts[i] ?? candles.length) - dropped);");
   });
 });

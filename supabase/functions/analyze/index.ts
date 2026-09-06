@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v39-2026-09-06T06:15:00Z";
+const FUNCTION_VERSION = "analyze-v40-2026-09-06T08:15:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -62,7 +62,7 @@ import {
 import { computeStructure, pivots, structureLines } from "./structure.ts";
 import { detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
-import { isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
+import { closedTail, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
@@ -1122,6 +1122,46 @@ Deno.serve(async (req: Request) => {
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
+    }
+
+    // On a preview, cut the series back to the last time the market traded.
+    //
+    // Twelve Data keeps emitting bars while the market is shut, and they are
+    // flat: the first weekend preview came back with the 1h ATR at 0.041
+    // against 0.385-0.421 on the Friday rows of the same pair — a tenth —
+    // a Bollinger band 2.1 pips wide, and price, SMA20, SMA50, tenkan and
+    // kijun all collapsed onto 156.24. The model read that correctly and
+    // called it "an ultra-frozen 1h range", which is a true description of
+    // the data and a false one of the market.
+    //
+    // ATR is the unit this whole app measures in — stop distances, structure
+    // tolerances, the room to the next level, the situation axes — so an ATR
+    // ten times too small makes every distance look ten times further.
+    //
+    // The NARROW predicate, on purpose: `isMarketClosed` answers "may I throw
+    // this bar away?", is deliberately conservative about doing so, and is
+    // already what track-outcomes uses to drop the same bars. The two now
+    // agree on what a bar is.
+    //
+    // Trailing only. The series is ascending, so this removes the tail and
+    // introduces no gap; bars from EARLIER weekends are left exactly as a
+    // weekday run would see them. That contamination is real and older than
+    // this change, and it is measured separately rather than fixed blind here.
+    if (previewMode) {
+      seriesByTf = seriesByTf.map((candles, i) => {
+        const dropped = closedTail(candles.map((c) =>
+          Date.parse(c.datetime.includes("T") ? c.datetime : `${c.datetime.replace(" ", "T")}Z`)
+        ));
+        const end = candles.length - dropped;
+        if (dropped > 0) {
+          // Taken off the raw count too. These bars were not lost to a broken
+          // feed, so they must not count towards the "too much dropped" issue
+          // that exists to catch one.
+          rawCounts[i] = Math.max(0, (rawCounts[i] ?? candles.length) - dropped);
+          console.log("Preview trimmed closed-market bars", { tf: timeframes[i], dropped, kept: end });
+        }
+        return end === candles.length ? candles : candles.slice(0, end);
+      });
     }
 
     // Whether the series are fit to analyse. parseCandles now drops a bar it
