@@ -16,6 +16,9 @@
 // Deno-free on purpose: the vitest suite imports this file directly, and the
 // postmortem function shares the Rule shape.
 
+import { UNCOMPARED } from "./situation.ts";
+import type { RuleFit, RuleSituation } from "./situation.ts";
+
 // A constraint says when not to trade or how to cap the risk; a heuristic
 // says how to take the trade. Constraints are rendered first so a rule
 // that pushes toward execution never buries the rule that holds it back.
@@ -135,10 +138,30 @@ export const parseRules = (value: unknown): Rule[] => {
   return out;
 };
 
-// Constraints first, then the best-supported; ties keep the stored order
-export const orderRules = (rules: Rule[]): Rule[] =>
+// How a rule's situation verdict weighs in the ordering. `unknown` sits above
+// `off` deliberately: "we could not tell" must not be ranked below "we
+// measured that it does not apply", or a rule whose evidence predates the
+// snapshot would be cut before one we actually checked and ruled out.
+const FIT_RANK: Record<RuleFit, number> = { match: 0, unknown: 1, off: 2 };
+
+// Constraints first, then — when the situation has been measured — the rules
+// that fit the market in front of us, then the best-supported; ties keep the
+// stored order.
+//
+// The kind comparison stays outermost on purpose. A constraint says when NOT
+// to trade, and the situation check is a comparison against the handful of
+// plans a rule happens to have been drawn from, not a proof that the
+// constraint is irrelevant. Letting a well-matched heuristic outrank a
+// constraint would turn a thin match into permission.
+export const orderRules = (
+  rules: Rule[],
+  fits: Record<string, RuleSituation> = {},
+): Rule[] =>
   [...rules].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === "constraint" ? -1 : 1;
+    const fa = FIT_RANK[fits[a.id]?.fit ?? "unknown"];
+    const fb = FIT_RANK[fits[b.id]?.fit ?? "unknown"];
+    if (fa !== fb) return fa - fb;
     return b.support - a.support;
   });
 
@@ -147,7 +170,45 @@ const HEADERS: Record<RuleLocale, string> = {
   en: "Rules learned from past outcomes (drawn from reviews against actual prices; the procedure and risk limits above take precedence, these are supplementary guidance under the same conditions; \"under review\" means the evidence is still thin):",
 };
 
-const evidence = (rule: Rule, locale: RuleLocale, contract: string | null): string => {
+// Said once, when at least one rule carries a situation marker: the marker is
+// a measurement, not something the rule claims about itself. Without this the
+// model has no way to tell the two apart, and a rule that asserts its own
+// conditions in its text would read as if the server had confirmed them.
+const FIT_NOTE: Record<RuleLocale, string> = {
+  ja:
+    "各ルールの「今の相場」判定は、そのルールの根拠になった過去の局面の実測値（ADX・RSI・SMA20乖離のATR倍・BB内の位置・上位足ADX）と現在値をサーバが機械的に比べた結果であって、ルール本文の主張ではない。判定できない場合はそう書く。",
+  en:
+    "The \"now\" verdict on each rule is a mechanical comparison the server made between today's readings and those measured on the past plans that rule was drawn from (ADX, RSI, distance from SMA20 in ATR, position in the Bollinger band, higher-timeframe ADX). It is not a claim made by the rule's own text, and it says so when it cannot tell.",
+};
+
+// What each verdict looks like inside a rule's evidence parenthesis.
+const FIT_LABEL: Record<RuleLocale, Record<RuleFit, string>> = {
+  ja: { match: "・今の相場に該当", off: "・今は別局面", unknown: "・今との照合不可" },
+  en: { match: ", fits now", off: ", different situation now", unknown: ", cannot compare" },
+};
+
+// Named when the budget forces a cut. A rulebook that silently loses rules to
+// a character limit reads to the model as a complete book, and the rules it
+// lost are — by the ordering above — the ones furthest from today's market,
+// which is a defensible thing to do and an indefensible thing to hide.
+const heldBack = (count: number, locale: RuleLocale, ranked: boolean): string => {
+  if (locale === "ja") {
+    return ranked
+      ? `（このほかに${count}件のルールがあるが、文字数の都合で省略した。今の相場から遠いものから順に省いている。）`
+      : `（このほかに${count}件のルールがあるが、文字数の都合で省略した。）`;
+  }
+  const rules = `${count} further rule${count === 1 ? "" : "s"}`;
+  return ranked
+    ? `(${rules} were left out for length, the ones furthest from today's market first.)`
+    : `(${rules} were left out for length.)`;
+};
+
+const evidence = (
+  rule: Rule,
+  locale: RuleLocale,
+  contract: string | null,
+  fit: RuleSituation | undefined,
+): string => {
   // ANY citation from another era earns the marker, not only a rule with no
   // in-era citations at all: the analyst is being told the record behind this
   // rule is partly from a game with different moves, and "partly" is the
@@ -155,15 +216,20 @@ const evidence = (rule: Rule, locale: RuleLocale, contract: string | null): stri
   // rule's citation list holds nothing from another era, which for a
   // support=1 rule means its single citation was replaced.
   const mixed = contract !== null && rule.evidence_contracts.some((c) => c !== contract);
+  // Absent when the footprints could not be read at all, in which case every
+  // rule renders exactly as it did before this check existed.
+  const now = fit === undefined ? "" : FIT_LABEL[locale][fit.fit];
   if (locale === "ja") {
     const era = mixed ? "・旧契約含む" : "";
     return rule.support <= VERIFYING_SUPPORT
-      ? `（検証中・実績${rule.support}件${era}）`
-      : `（実績${rule.support}件${era}）`;
+      ? `（検証中・実績${rule.support}件${era}${now}）`
+      : `（実績${rule.support}件${era}${now}）`;
   }
   const cases = `${rule.support} case${rule.support === 1 ? "" : "s"}`;
   const era = mixed ? ", incl. prior contract" : "";
-  return rule.support <= VERIFYING_SUPPORT ? ` (under review, ${cases}${era})` : ` (${cases}${era})`;
+  return rule.support <= VERIFYING_SUPPORT
+    ? ` (under review, ${cases}${era}${now})`
+    : ` (${cases}${era}${now})`;
 };
 
 export interface PromptRules {
@@ -172,6 +238,10 @@ export interface PromptRules {
   // The rules that made it into the block, in the order shown — what the
   // model actually saw, which is what the plan is later judged against
   ids: string[];
+  // In-force rules that did not fit the budget. Recorded as well as printed:
+  // a prompt that showed 12 of 30 rules and one that showed 12 of 12 are
+  // different prompts, and only this number tells them apart afterwards.
+  heldBack: number;
 }
 
 // Rules the analyst can actually act on under `contract`. A rule written for
@@ -205,25 +275,71 @@ export const selectPromptRules = (
   contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
   maxChars = promptCharBudget(locale),
+  // Per rule id, how today's market compares with the plans that rule was
+  // drawn from. null means the comparison was not made — the footprints could
+  // not be read, or the caller does not do situation matching — and every rule
+  // then renders exactly as it did before this existed. A non-null map puts
+  // every in-force rule in one of the three verdicts: a rule with no entry has
+  // no footprint to compare against, which is `unknown`, not silence.
+  fits: Record<string, RuleSituation> | null = null,
 ): PromptRules => {
-  const lines: string[] = [];
-  const ids: string[] = [];
-  // The heading is part of the budget
-  let chars = HEADERS[locale].length + 1;
-  for (const rule of orderRules(inForce(rules, contract))) {
-    if (lines.length >= maxRules) break;
-    const raw = locale === "ja" ? rule.text_ja || rule.text_en : rule.text_en || rule.text_ja;
-    const text = raw.replace(/\s+/g, " ").trim();
-    if (!text) continue;
-    const scope = rule.scope ? (locale === "ja" ? `［${rule.scope}］` : `[${rule.scope}] `) : "";
-    const line = `- ${scope}${text}${evidence(rule, locale, contract)}`;
-    if (chars + line.length > maxChars) break;
-    lines.push(line);
-    ids.push(rule.id);
-    chars += line.length;
+  const ranked = fits !== null;
+  const fitOf = (rule: Rule): RuleSituation | undefined =>
+    fits === null ? undefined : (fits[rule.id] ?? UNCOMPARED);
+
+  const eligible = orderRules(inForce(rules, contract), fits ?? {})
+    .map((rule) => {
+      const raw = locale === "ja" ? rule.text_ja || rule.text_en : rule.text_en || rule.text_ja;
+      const text = raw.replace(/\s+/g, " ").trim();
+      if (!text) return null;
+      const scope = rule.scope ? (locale === "ja" ? `［${rule.scope}］` : `[${rule.scope}] `) : "";
+      return { id: rule.id, line: `- ${scope}${text}${evidence(rule, locale, contract, fitOf(rule))}` };
+    })
+    .filter((v): v is { id: string; line: string } => v !== null);
+
+  const head = ranked ? [HEADERS[locale], FIT_NOTE[locale]] : [HEADERS[locale]];
+  // The heading is part of the budget, and so is the note that explains the
+  // markers — buying room for one more rule by dropping the sentence that
+  // says where the markers come from would be the wrong trade.
+  //
+  // Every line is counted WITH the newline that joins it. Counting the rules
+  // without theirs put the rendered block up to one character per rule over
+  // the budget it reports respecting, which is a small lie about a number
+  // whose only job is to be true.
+  const headChars = head.reduce((n, line) => n + line.length + 1, 0);
+
+  const shown: Array<{ id: string; line: string }> = [];
+  let chars = headChars;
+  for (const item of eligible) {
+    if (shown.length >= maxRules) break;
+    if (chars + item.line.length + 1 > maxChars) break;
+    shown.push(item);
+    chars += item.line.length + 1;
   }
-  if (lines.length === 0) return { text: "", ids: [] };
-  return { text: [HEADERS[locale], ...lines].join("\n"), ids };
+
+  if (shown.length === 0) return { text: "", ids: [], heldBack: eligible.length };
+
+  // Saying what was cut costs characters too, and the cost is not known until
+  // the cut is. Give the sentence room by giving back rules until it fits —
+  // never by printing it outside the budget the rest of the block respects.
+  let cut = eligible.length - shown.length;
+  let note = "";
+  while (cut > 0) {
+    const candidate = heldBack(cut, locale, ranked);
+    if (chars + candidate.length + 1 <= maxChars) {
+      note = candidate;
+      break;
+    }
+    const dropped = shown.pop();
+    if (dropped === undefined) break;
+    chars -= dropped.line.length + 1;
+    cut += 1;
+  }
+  if (shown.length === 0) return { text: "", ids: [], heldBack: eligible.length };
+
+  const body = [...head, ...shown.map((v) => v.line)];
+  if (note) body.push(note);
+  return { text: body.join("\n"), ids: shown.map((v) => v.id), heldBack: cut };
 };
 
 export const renderLearnedRules = (
@@ -232,4 +348,5 @@ export const renderLearnedRules = (
   contract: string | null = null,
   maxRules = MAX_PROMPT_RULES,
   maxChars = promptCharBudget(locale),
-): string => selectPromptRules(rules, locale, contract, maxRules, maxChars).text;
+  fits: Record<string, RuleSituation> | null = null,
+): string => selectPromptRules(rules, locale, contract, maxRules, maxChars, fits).text;

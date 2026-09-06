@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v34-2026-09-06T03:20:00Z";
+const FUNCTION_VERSION = "analyze-v36-2026-09-06T03:52:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -41,7 +41,23 @@ import {
   type WaitPlan,
 } from "./entry.ts";
 
-import { parseRules, selectPromptRules } from "./rules.ts";
+import {
+  inForce,
+  MAX_PROMPT_RULES,
+  parseRules,
+  promptCharBudget,
+  type Rule,
+  selectPromptRules,
+} from "./rules.ts";
+import {
+  type ContextLike,
+  contextFromStored,
+  type Footprint,
+  footprintOf,
+  hasReading,
+  type RuleSituation,
+  situationFor,
+} from "./situation.ts";
 
 import { computeStructure, pivots, structureLines } from "./structure.ts";
 import { detectDivergence, type Divergence } from "./divergence.ts";
@@ -794,6 +810,73 @@ Deno.serve(async (req: Request) => {
       quotaConsumed = true;
     }
 
+    // The plans each in-force rule was drawn from, read back for the indicator
+    // snapshot the analyst was looking at when it made them. One request for
+    // all of them; a rule's footprint is the range those readings span.
+    //
+    // The ids come out of jsonb written by another function, and they go into
+    // a URL — so they are checked against the shape of a uuid first. A book
+    // that has been tampered with should fail to produce a footprint, not
+    // shape the query.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // Twelve rules citing ten plans each stays well inside a URL. The cap is a
+    // backstop, and it costs nothing quietly: a citation left out is simply a
+    // cited plan the footprint could not read, which the block already counts
+    // and reports.
+    const MAX_FOOTPRINT_IDS = 120;
+    const loadFootprints = async (rules: Rule[]): Promise<Record<string, Footprint> | null> => {
+      // Rules are learned across every account, so a rule's citations point at
+      // plans this caller does not own. Without the service role the read goes
+      // out under the caller's own JWT, and RLS answers with their slice of
+      // the evidence: a NARROWER footprint that is indistinguishable from a
+      // real one, on a range whose whole job is to say what evidence exists.
+      // Refuse rather than narrow — the rules then render as they did before
+      // this check existed.
+      if (!serviceRoleKey) return null;
+      const ids = [...new Set(rules.flatMap((r) => r.supported_by))]
+        .filter((id) => UUID_RE.test(id))
+        .slice(0, MAX_FOOTPRINT_IDS);
+      const byId = new Map<string, ContextLike>();
+      if (ids.length > 0) {
+        try {
+          // shadow=is.false is not belt-and-braces. A shadow row is the plan
+          // the analyst would have made under the other contract; it is kept
+          // out of the statistics and out of a rule's support on purpose
+          // (docs §4.4), and a footprint is a statement about the evidence a
+          // rule rests on. Reading a shadow snapshot here would let shadow
+          // evidence back in through the situation check while every other
+          // door stayed shut. The column is NOT NULL DEFAULT false, so this
+          // filter drops nothing else.
+          const res = await fetch(
+            `${supabaseUrl}/rest/v1/analyses?id=in.(${ids.join(",")})&shadow=is.false&select=id,context`,
+            { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
+          );
+          if (!res.ok) return null;
+          const rows = parseJsonResponse(await res.text());
+          if (!Array.isArray(rows)) return null;
+          for (const row of rows) {
+            if (!isRecord(row) || typeof row.id !== "string") continue;
+            byId.set(row.id, contextFromStored(row.context));
+          }
+        } catch (err) {
+          // A rule whose evidence cannot be read must not become a rule that
+          // claims today's market is different. Returning null renders every
+          // rule the way it rendered before this check existed.
+          console.warn("Rule footprints unavailable:", err instanceof Error ? err.message : String(err));
+          return null;
+        }
+      }
+      const out: Record<string, Footprint> = {};
+      for (const rule of rules) {
+        const cited = [...new Set(rule.supported_by)];
+        const readable = cited
+          .map((id) => byId.get(id))
+          .filter((ctx): ctx is ContextLike => ctx !== undefined && hasReading(ctx));
+        out[rule.id] = footprintOf(readable, cited.length);
+      }
+      return out;
+    };
+
     // What the analyzer has learned from its own record (see rules.ts). Best
     // effort: an analysis without the rules is still an analysis.
     stage = "load_rulebook";
@@ -801,6 +884,16 @@ Deno.serve(async (req: Request) => {
     let learnedRules = "";
     // The rules that fit in the prompt — what the model actually saw
     let rulesShown: string[] = [];
+    // In-force rules, kept parsed so they can be RENDERED later, once the
+    // indicators exist and today's market can be compared against the
+    // situations each rule was learned in. The fetch stays here, early, where
+    // it overlaps the rest of the setup; only the rendering waits.
+    let inForceRules: Rule[] = [];
+    // Per rule id, the measured range of each situation axis across the plans
+    // that rule cites. null when the plans could not be read — the rules then
+    // render exactly as they did before this check existed, rather than every
+    // one of them claiming "cannot compare" on the strength of a failed fetch.
+    let footprints: Record<string, Footprint> | null = null;
     try {
       const rulebookRes = await fetch(`${supabaseUrl}/rest/v1/rulebook?id=eq.1&select=version,rules`, {
         headers: {
@@ -817,9 +910,8 @@ Deno.serve(async (req: Request) => {
         rulebookVersion = v === null ? null : Math.round(v);
         // Only the rules the analyst can still act on. A rule written for the
         // previous contract stays in the book but never reaches the prompt.
-        const shown = selectPromptRules(parseRules(rulebook.rules), locale, PLAN_CONTRACT);
-        learnedRules = shown.text;
-        rulesShown = shown.ids;
+        inForceRules = inForce(parseRules(rulebook.rules), PLAN_CONTRACT);
+        footprints = await loadFootprints(inForceRules);
         // Three distinct states, kept distinct the way the calendar already
         // separates "read and clear" from "could not be read":
         //   null -> the rulebook could not be read at all
@@ -1080,6 +1172,46 @@ Deno.serve(async (req: Request) => {
     }
 
     stage = "build_prompt";
+    // The reading the model is about to be given, in the exact shape it will
+    // be stored in on the plan below. Rendered once, here, and used twice: to
+    // compare today's market against the situations each learned rule was
+    // drawn from, and as the record of what the model was looking at. Two
+    // renderings would be two shapes, and a rule's footprint is measured from
+    // stored rows — so the drift would not show up as a bug, it would show up
+    // as a rule quietly matching the wrong markets.
+    const roundTo = (v: number | null, d: number) => (v === null || !Number.isFinite(v) ? null : Number(v.toFixed(d)));
+    const compactSnapshot = (tf: string, s: IndicatorSnapshot | null) =>
+      s === null
+        ? { tf, unavailable: true }
+        : {
+          tf,
+          datetime: s.datetime,
+          price: roundTo(s.price, decimals),
+          change_pct: roundTo(s.changePct, 2),
+          rsi: roundTo(s.rsi, 1),
+          adx: roundTo(s.adx, 1),
+          atr: roundTo(s.atr, decimals),
+          atr_pct: roundTo(s.atrPct, 3),
+          macd_hist: roundTo(s.macdHist, 5),
+          sma20: roundTo(s.sma20, decimals),
+          sma50: roundTo(s.sma50, decimals),
+          sma200: roundTo(s.sma200, decimals),
+          bb_upper: roundTo(s.bbUpper, decimals),
+          bb_lower: roundTo(s.bbLower, decimals),
+          tenkan: roundTo(s.tenkan, decimals),
+          kijun: roundTo(s.kijun, decimals),
+          span_a: roundTo(s.spanA, decimals),
+          span_b: roundTo(s.spanB, decimals),
+          slow_k: roundTo(s.slowK, 1),
+          slow_d: roundTo(s.slowD, 1),
+          swing_highs: s.swingHighs.map((v) => roundTo(v, decimals)),
+          swing_lows: s.swingLows.map((v) => roundTo(v, decimals)),
+        };
+    const entryContext = {
+      entry: compactSnapshot(timeframes[0], snapshots[0]),
+      higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),
+    };
+
     // A pip, for expressing distances in the unit the plan is read in. The
     // other half of every distance is the ATR, because that is the unit the
     // stop rules are written in.
@@ -1167,6 +1299,48 @@ Deno.serve(async (req: Request) => {
     // "low" to leave room for them.
     const EFFORT_TECHNICAL = "medium";
     const EFFORT_SEARCH = "low";
+
+    // Which of the learned rules the market in front of us actually looks
+    // like. Measured, not asserted: each rule's citations carry the reading
+    // the analyst had when it made them, and this compares today against that
+    // range (see situation.ts). Rules that fit are shown first; rules measured
+    // as belonging to another market are shown last and cut first when the
+    // budget bites, with the cut named in the block.
+    //
+    // Deferred to here rather than done beside the rulebook fetch because the
+    // comparison needs the indicators, and the indicators are computed after
+    // the prices arrive.
+    const ruleFits: Record<string, RuleSituation> | null = footprints === null
+      ? null
+      : Object.fromEntries(
+        Object.entries(footprints).map(([id, print]) => [id, situationFor(print, entryContext)]),
+      );
+    const shownRules = selectPromptRules(
+      inForceRules,
+      locale,
+      PLAN_CONTRACT,
+      MAX_PROMPT_RULES,
+      promptCharBudget(locale),
+      ruleFits,
+    );
+    learnedRules = shownRules.text;
+    rulesShown = shownRules.ids;
+    // Enough to reconstruct the comparison from the row: the verdict per rule,
+    // which axes could be compared, which of them today fell outside, and how
+    // much of each rule's cited evidence the footprint could actually read.
+    const ruleFitRecord = ruleFits === null ? null : {
+      shown: shownRules.ids,
+      held_back: shownRules.heldBack,
+      rules: Object.fromEntries(
+        Object.entries(ruleFits).map(([id, fit]) => [id, {
+          fit: fit.fit,
+          comparable: fit.comparable,
+          missed: fit.missed,
+          cases: fit.cases,
+          cited: fit.cited,
+        }]),
+      ),
+    };
 
     const anthropicHeaders = {
       "content-type": "application/json",
@@ -1668,35 +1842,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // What the model was looking at, kept with the plan so a post-mortem can
-    // tell a misread market from a wrong call
-    const roundTo = (v: number | null, d: number) => (v === null || !Number.isFinite(v) ? null : Number(v.toFixed(d)));
-    const compactSnapshot = (tf: string, s: IndicatorSnapshot | null) =>
-      s === null
-        ? { tf, unavailable: true }
-        : {
-          tf,
-          datetime: s.datetime,
-          price: roundTo(s.price, decimals),
-          change_pct: roundTo(s.changePct, 2),
-          rsi: roundTo(s.rsi, 1),
-          adx: roundTo(s.adx, 1),
-          atr: roundTo(s.atr, decimals),
-          atr_pct: roundTo(s.atrPct, 3),
-          macd_hist: roundTo(s.macdHist, 5),
-          sma20: roundTo(s.sma20, decimals),
-          sma50: roundTo(s.sma50, decimals),
-          sma200: roundTo(s.sma200, decimals),
-          bb_upper: roundTo(s.bbUpper, decimals),
-          bb_lower: roundTo(s.bbLower, decimals),
-          tenkan: roundTo(s.tenkan, decimals),
-          kijun: roundTo(s.kijun, decimals),
-          span_a: roundTo(s.spanA, decimals),
-          span_b: roundTo(s.spanB, decimals),
-          slow_k: roundTo(s.slowK, 1),
-          slow_d: roundTo(s.slowD, 1),
-          swing_highs: s.swingHighs.map((v) => roundTo(v, decimals)),
-          swing_lows: s.swingLows.map((v) => roundTo(v, decimals)),
-        };
+    // tell a misread market from a wrong call. The snapshots were rendered
+    // before the prompt was built (see `entryContext` above) — the same
+    // objects, not a second rendering of them, because these rows are what a
+    // rule's situation footprint is later measured from and a shape that
+    // differs between the writing and the reading would make the footprint
+    // describe a market nobody analysed.
     const context = {
       open_same_direction: openSameDirection,
       rules_shown: rulesShown,
@@ -1706,8 +1857,13 @@ Deno.serve(async (req: Request) => {
       rulebook_version_read: rulebookVersion,
       events_ahead: eventsAhead,
       timeframes,
-      entry: compactSnapshot(timeframes[0], snapshots[0]),
-      higher: snapshots.slice(1).map((s, i) => compactSnapshot(timeframes[i + 1], s)),
+      entry: entryContext.entry,
+      higher: entryContext.higher,
+      // Which rules were compared against today's market, and how it came out.
+      // Kept whole: "the plan was shown r4 and r10" and "the plan was shown
+      // r4 and r10, and r10 had been measured as belonging to another market"
+      // are different prompts, and only this tells them apart afterwards.
+      rule_fit: ruleFitRecord,
     };
 
     // The user asked for news to be factored in and it could not be; say so in
