@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v31-2026-09-06T00:20:00Z";
+const FUNCTION_VERSION = "analyze-v32-2026-09-06T01:05:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1941,8 +1941,21 @@ Deno.serve(async (req: Request) => {
           sma200: p(entrySnapshot.sma200),
           tenkan: p(entrySnapshot.tenkan),
           kijun: p(entrySnapshot.kijun),
+          // The pair THIS window projects 26 bars into the future. The panel
+          // used to render these two as plain "Ichimoku Span A/B", which is
+          // the cloud price will meet — not the one it is trading against.
           spanA: p(entrySnapshot.spanA),
           spanB: p(entrySnapshot.spanB),
+          // The cloud price is actually inside, computed 26 bars ago. It was
+          // sent to the model, correctly named, and never to the client at
+          // all — so the panel confirmed a claim about "price below the
+          // cloud" with the wrong pair of numbers.
+          cloudNowTop: p(entrySnapshot.cloudNow?.top ?? null),
+          cloudNowBottom: p(entrySnapshot.cloudNow?.bottom ?? null),
+          cloudSide: entrySnapshot.cloudSide ?? null,
+          // Whether the newest bar had closed when this was read. Without it
+          // a mid-bar price renders as a settled "current rate".
+          barClosed: entrySnapshot.barClosed,
           atr: p(entrySnapshot.atr),
           slowK: x(entrySnapshot.slowK),
           slowD: x(entrySnapshot.slowD),

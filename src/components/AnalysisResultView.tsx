@@ -5,6 +5,7 @@ import MarketContextCard from "./MarketContextCard";
 import ScoreCard from "./ScoreCard";
 import { AlertTriangle, Target, TrendingUp } from "lucide-react";
 import { useT } from "@/lib/i18n";
+import { isInference } from "@/lib/inference";
 import { canSizeInYen, positionSize } from "@/lib/position";
 import type { Dict } from "@/lib/i18n/locales";
 
@@ -160,10 +161,27 @@ const AnalysisResultView = ({ result, techData, pair, interval, settings }: Prop
           <ul className="space-y-1">
             {keyFactors.map((f, i) => (
               <li key={i} className="text-sm text-muted-foreground flex items-start gap-2">
-                <span className="text-primary mt-0.5">•</span> {f}
+                <span className="text-primary mt-0.5">•</span>
+                <span>
+                  {f}
+                  {isInference(f) && (
+                    <span className="ml-1.5 align-middle rounded border border-warning/40 bg-warning/10 px-1 py-0.5 text-[9px] text-warning">
+                      {t.result.inferenceChip}
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
+          {/* Said once, under the claims it applies to, rather than in a
+              disclaimer nobody reads. The tag is decided from the rendered
+              text, so it does not depend on the model having cooperated —
+              and it reaches the rows written before any of this existed. */}
+          {keyFactors.some(isInference) && (
+            <p className="text-[10px] text-muted-foreground pt-1" data-testid="inference-note">
+              {t.result.inferenceNote}
+            </p>
+          )}
         </div>
       )}
 
@@ -173,6 +191,11 @@ const AnalysisResultView = ({ result, techData, pair, interval, settings }: Prop
         <div className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
           {result.analysis}
         </div>
+        {isInference(result.analysis) && (
+          <p className="text-[10px] text-muted-foreground" data-testid="analysis-inference-note">
+            {t.result.inferenceNote}
+          </p>
+        )}
       </div>
 
       {/* Warnings */}

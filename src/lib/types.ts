@@ -68,8 +68,16 @@ export interface TechnicalData {
   sma200: string;
   tenkan: string;
   kijun: string;
+  // The pair this window projects 26 bars AHEAD: the cloud price will meet,
+  // not the one it is in. Named for what it is wherever it is shown.
   spanA: string;
   spanB: string;
+  // The cloud price is actually trading against, computed 26 bars ago.
+  cloudNowTop?: string;
+  cloudNowBottom?: string;
+  cloudSide?: "above" | "inside" | "below" | null;
+  // Whether the newest bar had closed when this was read
+  barClosed?: boolean | null;
   atr: string;
   slowK: string;
   slowD: string;

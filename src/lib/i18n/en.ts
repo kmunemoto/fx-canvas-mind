@@ -73,6 +73,8 @@ export const en: Dict = {
     sentiment: "Sentiment",
     volatility: "Volatility",
     keyFactors: "Key factors",
+    inferenceChip: "inferred",
+    inferenceNote: "This app sees no order book, volume, open interest or executions. Anything marked inferred is a reading of price action, not something observed.",
     detail: "Full analysis",
     warnings: "Warnings",
     positionSize: "Suggested size",
@@ -97,8 +99,11 @@ export const en: Dict = {
     oversold: " (oversold)",
     tenkan: "Ichimoku Tenkan",
     kijun: "Ichimoku Kijun",
-    spanA: "Ichimoku Span A",
-    spanB: "Ichimoku Span B",
+    spanA: "Ichimoku Span A (26 ahead)",
+    spanB: "Ichimoku Span B (26 ahead)",
+    cloudNow: "Cloud at price (computed 26 bars ago)",
+    cloudSides: { above: "price above the cloud", inside: "price inside the cloud", below: "price below the cloud" },
+    forming: "this bar has not closed"
   },
 
   history: {

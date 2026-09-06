@@ -147,6 +147,12 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     kijun: readString("kijun"),
     spanA: readString("spanA"),
     spanB: readString("spanB"),
+    cloudNowTop: readString("cloudNowTop"),
+    cloudNowBottom: readString("cloudNowBottom"),
+    cloudSide: source.cloudSide === "above" || source.cloudSide === "inside" || source.cloudSide === "below"
+      ? source.cloudSide
+      : null,
+    barClosed: typeof source.barClosed === "boolean" ? source.barClosed : null,
     atr: readString("atr"),
     slowK: readString("slowK"),
     slowD: readString("slowD"),
