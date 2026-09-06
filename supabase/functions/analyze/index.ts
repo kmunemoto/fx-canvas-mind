@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v38-2026-09-06T05:45:00Z";
+const FUNCTION_VERSION = "analyze-v39-2026-09-06T06:15:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1137,14 +1137,16 @@ Deno.serve(async (req: Request) => {
     // this build exists to allow would 502 before computing anything. It is
     // the same distinction market-hours.ts already draws: an absence of bars
     // while the market is shut is not evidence that anything failed.
-    const healthNow = previewMode ? lastClose(Date.now()) : Date.now();
+    const staleFrom = previewMode ? lastClose(Date.now()) : Date.now();
     const health = seriesByTf.map((candles, i) =>
       seriesHealth(
         candles,
         rawCounts[i] ?? candles.length,
         i === 0 ? 60 : 2,
         INTERVAL_MS[timeframes[i]] ?? 0,
-        healthNow,
+        Date.now(),
+        3,
+        staleFrom,
       )
     );
     if (!health[0].ok) {
