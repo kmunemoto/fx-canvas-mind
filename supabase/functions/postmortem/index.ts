@@ -49,7 +49,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v16-2026-09-07T07:45:00Z";
+const POSTMORTEM_VERSION = "postmortem-v17-2026-09-07T11:40:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -755,6 +755,12 @@ Deno.serve(async (req: Request) => {
         rulesInForce.map((r) => r.id),
         strOrNull(raw.plan_contract),
         wait ? "WAIT" : row.signal,
+        // For the three causes the model may not simply assert: the parser
+        // checks direction_wrong / stop_too_tight / target_too_far against the
+        // same arithmetic the deterministic hint used, so deleting the loss
+        // branch's fallback cannot be undone by the model repeating what it
+        // used to say.
+        facts,
       );
       if (!diagnosis) {
         await markFailed(row, raw, "no_diagnosis");

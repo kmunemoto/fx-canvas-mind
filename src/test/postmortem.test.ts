@@ -5,9 +5,17 @@ import {
   MARKET_CONTRACT,
   WAIT_CAUSES,
   causeOutsideContract,
+  attributionOf,
+  causeGrounds,
   causesFor,
   computeFacts,
+  favorableInLife,
+  leverMoved,
+  type CfResult,
+  type PostmortemFacts,
   isCause,
+  luckyWinSupported,
+  noFaultGrounds,
   isPostmortemDue,
   type PostmortemRow,
 } from "../../supabase/functions/postmortem/facts.ts";
@@ -26,6 +34,7 @@ import {
   buildDiagnosisPrompt,
   citationAllowed,
   clusterIds,
+  NOT_RULE_EVIDENCE,
   fairShare,
   parseConsolidation,
   parseDiagnosis,
@@ -165,6 +174,482 @@ describe("facts — losses", () => {
     expect(f.counterfactual.tp_half?.resolution).toBe("win");
     expect(f.hints).toContain("target_too_far");
     expect(f.hints).toContain("news_shock");
+  });
+});
+
+// The owner's complaint, in code: "「負けたから、判断が間違っていた」と決めない".
+// The loss branch used to end `push(after.length === 0 ? "inconclusive" :
+// "direction_wrong")` — no lever fired, so blame the direction. Measured on
+// production 2026-09-07: four of the six live direction_wrong diagnoses came
+// out of that line, and three of the four are citations of rule r10.
+//
+// Both fixtures below are the same losing plan. They differ in one thing: how
+// far price came the plan's way before it turned. That is what separates the
+// two verdicts, and the direction of the separation is the point — the loss
+// that went NOWHERE our way is the one that keeps direction_wrong.
+describe("facts — a loss that no lever would have changed", () => {
+  const lost = (over: Partial<Evaluation> = {}) =>
+    evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.4, mae_r: 1, ...over }, "loss", iso(2));
+
+  // The regime read this verdict requires: an ADX that was actually taken and
+  // a mode that was actually declared. `conflict !== true` on its own passes a
+  // plan nobody measured, which is an absent reading scoring as a clean one.
+  const REGIME = { declaredMode: "trend day", adx: 30 };
+  // Far enough out to let the widened stops finish. The variants are judged
+  // over EXPIRY_DAYS — 20 days on a 1h plan — while the postmortem itself asks
+  // after MIN_AFTER_BARS, so a fixture that stops at NOW leaves them open.
+  const LATE = at(72);
+
+  // Stopped at hour 2. Then a drift that stays inside the after-window's 24
+  // bars without ever running a full R past the stop or coming back to the
+  // target, and finally — well AFTER that window closes — a roll-over deep
+  // enough to take out the 1.5x and 2x stops as well.
+  //
+  // Every lever is pulled here and every one of them is answered `loss`. That
+  // is what the verdict claims, and the fixture used to end at `quiet(3, 30,
+  // 149.3, 148.6)`, where the widened stops were never touched and never
+  // reached the target and so were still OPEN — resolution null — when the
+  // diagnosis was written. Reading those as refusals is how this fixture, and
+  // all three of the live rows, earned the verdict.
+  const drifted = [
+    candle(stamp(0), 150.4, 149.6),
+    candle(stamp(1), 150.1, 149.2),
+    candle(stamp(2), 149.5, 148.9), // SL
+    ...quiet(3, 27, 149.4, 148.25), // after-window: 0.75R past the stop, no TP1
+    ...quiet(27, 44, 147.9, 147.2), // later: through 148.5 (1.5x) and 148 (2x)
+  ];
+
+  it("files it as sound_call_lost, not as the direction's fault", async () => {
+    const f = await computeFacts(lost(), drifted, "1h", LATE, REGIME);
+    // Every lever was pulled, the judge FINISHED with every one of them, and
+    // not one of them changed the outcome. "Finished" is the load-bearing
+    // half: an open variant says nothing.
+    expect(f.counterfactual.stop_x1_5?.resolution).toBe("loss");
+    expect(f.counterfactual.stop_x2?.resolution).toBe("loss");
+    expect(f.counterfactual.tp_half?.resolution).toBe("loss");
+    expect(f.counterfactual.limit_pullback?.resolution).toBe("loss");
+    // and neither positive test for a wrong direction holds
+    expect(f.after.reached_tp1).toBeNull();
+    expect(f.after.beyond_sl_r).toBeLessThan(1);
+    expect(f.from_signal.max_favorable_r_in_life).toBeGreaterThanOrEqual(0.1);
+    expect(f.hints).toEqual(["sound_call_lost"]);
+    const g = f.no_fault_grounds;
+    expect(g?.complete).toBe(true);
+    expect(g?.answered).toBe(true);
+    expect(g?.allowed).toBe(true);
+    expect(g?.levers.map((l) => l.lever)).toEqual(["stop_x1_5", "stop_x2", "tp_half", "limit_pullback"]);
+    expect(g?.levers.every((l) => l.computed && l.paid === false)).toBe(true);
+    expect(causeGrounds("sound_call_lost", f)).toBe("supported");
+  });
+
+  it("keeps direction_wrong for the loss that never went our way at all", async () => {
+    // The same plan and the same quiet aftermath; price simply never offered
+    // more than 0.05R in the signal's direction.
+    const dead = [
+      candle(stamp(0), 150.05, 149.7),
+      candle(stamp(1), 149.8, 149.3),
+      candle(stamp(2), 149.4, 148.9), // SL
+      ...quiet(3, 30, 149.05, 148.6),
+    ];
+    const f = await computeFacts(lost({ mfe_r: 0.05 }), dead, "1h", NOW);
+    expect(f.after.beyond_sl_r).toBeLessThan(1);
+    expect(f.from_signal.max_favorable_r_in_life).toBeLessThan(0.1);
+    expect(f.hints).toEqual(["direction_wrong"]);
+    // The grounds table is written either way, so a reader of the stored row
+    // can see WHICH clause refused the verdict rather than only that it was
+    // refused: every lever was tested here, and the direction test is what
+    // held it back.
+    expect(f.no_fault_grounds?.complete).toBe(true);
+    expect(f.no_fault_grounds?.allowed).toBe(false);
+  });
+
+  // The trap the first draft of this verdict fell into: keying it on how far
+  // price drifted our way would mean the noisier the loss, the more thoroughly
+  // the rulebook is insulated from it — and the supply of noisy losses grows
+  // with volatility, not with judgement. Here the loss with by far the LARGEST
+  // favourable excursion is the one that keeps a fault.
+  it("does not hand a no-fault verdict to the loss that ran furthest our way", async () => {
+    const nearlyPaid = [
+      candle(stamp(0), 150.3, 149.9),
+      candle(stamp(1), 150.7, 150.1),
+      candle(stamp(2), 151.2, 150.6), // a target at half the distance is reached
+      candle(stamp(3), 150.4, 148.9), // SL
+      ...quiet(4, 30, 149.4, 148.7),
+    ];
+    const f = await computeFacts(lost({ resolved_at: iso(3), mfe_r: 0.9 }), nearlyPaid, "1h", NOW);
+    expect(f.from_signal.max_favorable_r).toBeGreaterThan(1);
+    expect(f.counterfactual.tp_half?.resolution).toBe("win");
+    expect(f.hints).toEqual(["target_too_far"]);
+    expect(f.no_fault_grounds?.allowed).toBe(false);
+  });
+
+  // "No lever we can move would have changed this" and "there is not yet
+  // enough basis to change anything" are different findings, and the whole
+  // request was that they stop sharing a bucket.
+  it("says inconclusive, not sound, when there is too little aftermath to have looked", async () => {
+    const f = await computeFacts(lost(), drifted, "1h", at(6), REGIME);
+    expect(f.bars_after_settlement).toBeLessThan(8);
+    expect(f.hints).toEqual(["inconclusive"]);
+    expect(f.no_fault_grounds?.allowed).toBe(false);
+    expect(attributionOf(f.hints[0])).not.toBe(attributionOf("sound_call_lost"));
+  });
+
+  it("says inconclusive when a lever was never tested at all", async () => {
+    // A stop entry: the "0.5R better fill" lands on the market side, so no
+    // such counterfactual is computed. A lever nobody tested is not a lever
+    // that would not have helped.
+    const stopRow = evaluated(
+      { ...buyMarket, id: "5", entry_point: 150.5, stop_loss: 149.5, take_profit_1: 152.5, price_at_signal: 150.0 },
+      { order_type: "stop", filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.2, mae_r: 1 },
+      "loss",
+      iso(2),
+    );
+    const bars = [
+      candle(stamp(0), 150.7, 149.9, 149.9, 150.6),
+      candle(stamp(1), 150.6, 150.0),
+      candle(stamp(2), 150.1, 149.4), // SL
+      ...quiet(3, 30, 149.9, 149.0),
+    ];
+    const f = await computeFacts(stopRow, bars, "1h", NOW);
+    expect(f.counterfactual.limit_pullback).toBeNull();
+    expect(f.no_fault_grounds?.complete).toBe(false);
+    expect(f.no_fault_grounds?.levers.find((l) => l.lever === "limit_pullback")).toEqual({
+      lever: "limit_pullback", computed: false, resolution: null, paid: null,
+    });
+    expect(f.hints).toEqual(["inconclusive"]);
+  });
+
+  // Clause by clause, on the fixture that passes all of them. Each of these
+  // is a way for the answer to be no; there is no clause that makes the answer
+  // more yes the worse the loss looked.
+  it("refuses the verdict on any one of its grounds", async () => {
+    const f = await computeFacts(lost(), drifted, "1h", LATE, REGIME);
+    expect(noFaultGrounds(f).allowed).toBe(true);
+    const withoutIt = (over: Partial<typeof f>) => noFaultGrounds({ ...f, ...over }).allowed;
+    const variant = (over: Partial<CfResult>) => ({ ...f.counterfactual.stop_x2!, ...over });
+    const stopX2 = (over: Partial<CfResult>) =>
+      withoutIt({ counterfactual: { ...f.counterfactual, stop_x2: variant(over) } });
+    // 1. too little aftermath to have looked
+    expect(withoutIt({ bars_after_settlement: 7 })).toBe(false);
+    // 2. a lever that pays. Keyed on resolution and never on viable: viable is
+    //    false on every stop and target variant this system will ever compute,
+    //    because doubling the risk or halving the reward drops rr under the
+    //    gate's minimum by construction.
+    expect(stopX2({ resolution: "win", viable: false })).toBe(false);
+    // 2b. ...and every way a variant can decline to answer. The judge runs the
+    //     variants over EXPIRY_DAYS while the postmortem asks after
+    //     MIN_AFTER_BARS, so "still open" is the COMMON case, not a corner:
+    //     measured 2026-09-07, stop_x2 is computed-but-open on 7 of the 9 live
+    //     losses. Reading any of these as "the lever did not help" is the
+    //     whole mechanism the no-fault verdict must not be earned by.
+    expect(stopX2({ resolution: null })).toBe(false);
+    expect(stopX2({ resolution: "ambiguous" })).toBe(false);
+    // 2c. expired is the sharpest of them: the wider stop was never hit and
+    //     never reached the target, so moving that lever turns −1R into about
+    //     0R. The loss does not happen. That is a lever changing the outcome,
+    //     even though the variant never won.
+    expect(stopX2({ resolution: "expired" })).toBe(false);
+    // 3. the target came after the stop
+    expect(withoutIt({ after: { ...f.after, reached_tp1: { at: iso(6), bars: 4 } } })).toBe(false);
+    // 4. price kept running past the stop
+    expect(withoutIt({ after: { ...f.after, beyond_sl_r: 1.2 } })).toBe(false);
+    // 5. ...and the other end of the same question. A DISQUALIFIER only: a
+    //    loss that never went our way is direction_wrong, and nothing here
+    //    grows more favourable the further price drifted.
+    expect(withoutIt({ from_signal: { ...f.from_signal, max_favorable_r_in_life: 0.05 } })).toBe(false);
+    expect(withoutIt({ from_signal: { ...f.from_signal, max_favorable_r_in_life: null } })).toBe(false);
+    // 6. an event bar — and enough bars of life for the test to have been
+    //    able to find one. Under three, the range-against-median ratio cannot
+    //    reach ABNORMAL_RANGE_RATIO at all, so a null there is "we could not
+    //    tell", and live losses settle in as little as 0.88 hours.
+    expect(withoutIt({ abnormal_bar: { at: iso(1), range_ratio: 9, event: null } })).toBe(false);
+    expect(withoutIt({ bars_in_life: 2 })).toBe(false);
+    expect(withoutIt({ bars_in_life: undefined })).toBe(false);
+    // 7. the regime read — taken, and agreeing. `conflict !== true` alone
+    //    passes a plan with no ADX and no declared mode, because conflict can
+    //    only be TRUE when both are present: an absent reading scoring as a
+    //    clean one. regime_misread is also pushed AFTER the switch that files
+    //    this verdict, so an empty hints list cannot stand in for this test.
+    expect(withoutIt({ regime: { declared: "trend day", adx: 14, conflict: true } })).toBe(false);
+    expect(withoutIt({ regime: null })).toBe(false);
+    expect(withoutIt({ regime: { declared: "trend day", adx: null, conflict: false } })).toBe(false);
+    // 9. anything that already found a fault — and only a fault
+    expect(withoutIt({ hints: ["news_shock"] })).toBe(false);
+    expect(withoutIt({ hints: ["inconclusive"] })).toBe(true);
+  });
+
+  // The judge answers the variants over EXPIRY_DAYS — 20 days on a 1h plan —
+  // while the postmortem asks after MIN_AFTER_BARS bars. The gap between those
+  // two horizons is where every live no-fault verdict came from.
+  it("says inconclusive while a lever is still running, not sound", async () => {
+    // The same plan and the same first 27 hours; the roll-over that settles
+    // the widened stops simply has not happened yet.
+    const stillOpen = drifted.slice(0, 27);
+    const f = await computeFacts(lost(), stillOpen, "1h", LATE, REGIME);
+    expect(f.bars_after_settlement).toBeGreaterThanOrEqual(8);
+    expect(f.counterfactual.stop_x2?.resolution).toBeNull();
+    expect(f.no_fault_grounds?.complete).toBe(true);
+    expect(f.no_fault_grounds?.answered).toBe(false);
+    expect(f.hints).toEqual(["inconclusive"]);
+    // ...and it is open, not refuted. A grounding check must not read an
+    // unfinished simulation as a positive answer in either direction.
+    expect(causeGrounds("sound_call_lost", f)).toBe("unknown");
+  });
+
+  // A wider stop that survives to expiry is the textbook clipped stop, and
+  // asking only whether the wider stop WON made that story unsayable from
+  // both ends at once: no hint fired for it, and the model was vetoed for
+  // naming it.
+  it("reads a stop that a wider one would have survived as stop_too_tight", async () => {
+    const base = await computeFacts(lost(), drifted, "1h", LATE, REGIME);
+    const clipped = {
+      ...base,
+      counterfactual: {
+        ...base.counterfactual,
+        stop_x1_5: { ...base.counterfactual.stop_x1_5!, resolution: "expired" as const },
+      },
+    };
+    expect(noFaultGrounds(clipped).allowed).toBe(false);
+    expect(causeGrounds("stop_too_tight", clipped)).toBe("supported");
+    expect(causeGrounds("sound_call_lost", clipped)).toBe("contradicted");
+  });
+
+  // Everything this file measures happened after the decision. A verdict that
+  // moved when the bars AFTER the stop-out moved would be the killed mfe_r
+  // bias wearing a threshold: the noisier the loss, the more insulated the
+  // rulebook, and the supply of noisy losses grows with volatility.
+  it("does not let what happened after the stop-out decide the verdict", async () => {
+    const life = [
+      candle(stamp(0), 150.02, 149.6),
+      candle(stamp(1), 149.95, 149.2),
+      candle(stamp(2), 149.5, 148.9), // SL, having never come 0.1R our way
+    ];
+    // Identical plan, identical life. They differ only in what price did once
+    // the trade was already closed and paid for.
+    const dead = [...life, ...quiet(3, 30, 149.4, 148.7)];
+    const bounced = [...life, candle(stamp(3), 150.25, 149.4), ...quiet(4, 30, 149.4, 148.7)];
+    const a = await computeFacts(lost({ mfe_r: 0.02 }), dead, "1h", LATE, REGIME);
+    const b = await computeFacts(lost({ mfe_r: 0.02 }), bounced, "1h", LATE, REGIME);
+    // from_signal.max_favorable_r spans the after-window and does move
+    expect(b.from_signal.max_favorable_r!).toBeGreaterThan(a.from_signal.max_favorable_r!);
+    // ...the measure the verdict reads does not, and neither does the verdict
+    expect(b.from_signal.max_favorable_r_in_life).toBe(a.from_signal.max_favorable_r_in_life);
+    expect(a.hints).toEqual(["direction_wrong"]);
+    expect(b.hints).toEqual(["direction_wrong"]);
+  });
+
+  // A WAIT reaches this branch whenever the trade it declined would have lost:
+  // the switch reads the synthesised trade's outcome. A lever table about a
+  // position nobody opened has no business riding along in the payload.
+  it("computes no lever table for a call that was never taken", async () => {
+    const f = await computeFacts(
+      { ...buyMarket, id: "w", signal: "BUY", outcome: "skipped", closed_at: iso(2) },
+      drifted, "1h", LATE,
+      { ...REGIME, wait: { hint: "good_wait" as const, untilMs: at(26) } },
+    );
+    expect(f.no_fault_grounds).toBeNull();
+    expect(f.hints).toEqual(["good_wait"]);
+  });
+
+  it("still names the fault when there is one, and never both", async () => {
+    // The stop_too_tight fixture from the top of this file: TP1 came four bars
+    // after the stop. A lever moves, so the no-fault verdict is refused.
+    const row = evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.3, mae_r: 1 }, "loss", iso(2));
+    const candles = [
+      candle(stamp(0), 150.3, 149.9),
+      candle(stamp(1), 150.3, 149.6),
+      candle(stamp(2), 149.7, 148.9), // SL
+      candle(stamp(3), 150.2, 149.3),
+      candle(stamp(4), 151.0, 150.0),
+      candle(stamp(5), 151.8, 150.9),
+      candle(stamp(6), 152.3, 151.5), // TP1, after the stop
+      ...quiet(7, 30, 152.2, 151.8),
+    ];
+    const f = await computeFacts(row, candles, "1h", NOW);
+    expect(f.hints).toContain("stop_too_tight");
+    expect(f.hints).not.toContain("sound_call_lost");
+    expect(f.no_fault_grounds?.allowed).toBe(false);
+  });
+});
+
+// causeGrounds is the table a grounding check reads, and a grounding check
+// reads STORED rows. 7 of the 20 diagnosed rows in production were written
+// under version 1 of this shape, and none of the 20 carries facts.mae_r —
+// which means the value that arrives is `undefined`, not `null`, and the
+// `!== null` guards this table was written with are all true for it.
+describe("causeGrounds against a row of the older shape", () => {
+  const v1 = (over: Partial<PostmortemFacts> = {}): PostmortemFacts => {
+    const f = {
+      version: 1, eval_interval: "1h", bars_after_settlement: 21,
+      risk: 1, reward: 2, rr: 2, order_type: "market",
+      hours_to_fill: 0, hours_to_settle: 103, reference: 150,
+      from_signal: { max_favorable_r: 0.37, max_adverse_r: 1 },
+      after: { first_touch: "sl", reached_tp1: null, reached_sl: { at: iso(1), bars: 1 }, beyond_sl_r: 3.61, returned_to_entry: false },
+      abnormal_bar: null, early_adverse_r: null,
+      counterfactual: {
+        market_entry: null, market_entry_same_risk: null,
+        stop_x1_5: null, stop_x2: null, tp_half: null, limit_pullback: null,
+      },
+      regime: { declared: "breakout", adx: null, conflict: false },
+      danger: null, no_fault_grounds: null, hints: [], notes: [],
+      ...over,
+    } as unknown as Record<string, unknown>;
+    // As STORED: the keys simply are not there, which is not the same as being
+    // there and null. This is the shape the live 46c7c080 row has, and the
+    // version literal is 1 there — a value the current type no longer admits.
+    delete (f.counterfactual as Record<string, unknown>).limit_pullback;
+    delete f.mae_r;
+    delete f.danger;
+    return f as unknown as PostmortemFacts;
+  };
+
+  it("answers instead of throwing when a counterfactual key was never written", () => {
+    const f = v1();
+    expect(f.counterfactual.limit_pullback).toBeUndefined();
+    expect(() => noFaultGrounds(f)).not.toThrow();
+    expect(noFaultGrounds(f).complete).toBe(false);
+    for (const cause of CAUSES) expect(() => causeGrounds(cause, f), cause).not.toThrow();
+    expect(causeGrounds("sound_call_lost", f)).toBe("unknown");
+    expect(causeGrounds("chased_move", f)).toBe("unknown");
+  });
+
+  it("reads a measurement that was never taken as unknown, not as zero", () => {
+    // The win-side causes are decided by mae_r and the danger block, and no
+    // stored row has either. Read with `!==` they came back "contradicted" and
+    // "supported" — a verdict about a number nobody ever recorded, and it
+    // would have marked the only lucky_win on record as contradicted.
+    const win = v1({ resolution: "win" });
+    expect(win.mae_r).toBeUndefined();
+    expect(causeGrounds("lucky_win", win)).toBe("unknown");
+    expect(causeGrounds("good_call", win)).toBe("unknown");
+    // ...and once the number IS there, it decides. mae_r 0.98 with no danger
+    // block is the shape of the one live lucky_win.
+    expect(causeGrounds("lucky_win", { ...win, mae_r: 0.98, danger: null })).toBe("supported");
+    expect(luckyWinSupported({ ...win, mae_r: 0.98, danger: null })).toBe(true);
+  });
+
+  it("reads a direction test whose measure the row never carried as unknown", () => {
+    // max_favorable_r_in_life is new, so no stored row has it. The verdict and
+    // the direction test both read it, and a missing one must not read as 0 —
+    // that would file every stored row as direction_wrong.
+    const f = v1();
+    expect(f.from_signal.max_favorable_r_in_life).toBeUndefined();
+    expect(favorableInLife(f)).toBeNull();
+    expect(noFaultGrounds(f).allowed).toBe(false);
+  });
+});
+
+// The expired branch had its own definition of target_too_far: `mfe_r >= 0.5
+// || won(tp_half)`, where the loss branch and causeGrounds both require the
+// halved target to have paid. On a row where tp_half was computed and LOST,
+// the server pushed a hint its own grounding table called contradicted — the
+// one place it disagreed with itself about what a cause means.
+describe("the expired branch and the grounding table agree", () => {
+  it("does not blame the target on a run the nearer target would not have caught", async () => {
+    const row = evaluated(
+      buyMarket,
+      { filled_at: iso(0), resolved_at: iso(20), resolution: "expired", mfe_r: 0.9, mae_r: 0.7 },
+      "expired",
+      iso(20),
+    );
+    // Ran 0.9R our way, never reached 151 (the halved target), never stopped.
+    // The bars run past EXPIRY_DAYS['1h'] so the halved target VARIANT expires
+    // too — without that it is merely still open, and an open variant is the
+    // one answer that proves nothing either way.
+    const bars = [
+      candle(stamp(0), 150.2, 149.9),
+      ...quiet(1, 20, 150.9, 149.4),
+      ...quiet(20, 520, 150.4, 149.5),
+    ];
+    const f = await computeFacts(row, bars, "1h", at(600), { declaredMode: "trend day", adx: 30 });
+    expect(f.counterfactual.tp_half?.resolution).toBe("expired");
+    // Whatever the hint is, the table must not call it contradicted
+    for (const hint of f.hints) {
+      expect(causeGrounds(hint, f), hint).not.toBe("contradicted");
+    }
+  });
+});
+
+// The one place the two readings of a counterfactual are stated, so the loss
+// branch, the expired branch and the grounding table cannot drift apart.
+describe("what counts as a lever that moved", () => {
+  it("separates an answer from the absence of one", () => {
+    expect(leverMoved("stop_x2", "win", "loss")).toBe(true);
+    // Never hit, never reached the target: −1R becomes about 0R. The loss does
+    // not happen, which is the outcome changing whether or not it won.
+    expect(leverMoved("stop_x2", "expired", "loss")).toBe(true);
+    expect(leverMoved("stop_x2", "loss", "loss")).toBe(false);
+    // Open and ambiguous are both "we asked and there is no answer yet"
+    expect(leverMoved("stop_x2", null, "loss")).toBeNull();
+    expect(leverMoved("stop_x2", "ambiguous", "loss")).toBeNull();
+    // untriggered means something only for the variant with a different entry:
+    // there, the better fill was never on offer, so there was no lever to
+    // pull. For a stop variant it describes a trade that never happened, which
+    // answers nothing about the one that did.
+    expect(leverMoved("limit_pullback", "untriggered", "loss")).toBe(false);
+    expect(leverMoved("stop_x1_5", "untriggered", "loss")).toBeNull();
+  });
+
+  // The comparison is against the plan's OWN ending, not against "win". The
+  // same resolution means opposite things on either side of it: on a loss an
+  // expired variant erases the loss, and on an expired plan an expired
+  // tp_half means the nearer target was missed as well.
+  it("reads the same resolution differently against a different ending", () => {
+    expect(leverMoved("tp_half", "expired", "loss")).toBe(true);
+    expect(leverMoved("tp_half", "expired", "expired")).toBe(false);
+    expect(leverMoved("tp_half", "win", "expired")).toBe(true);
+    // ...and with no recorded ending there is nothing to compare against
+    expect(leverMoved("tp_half", "expired", null)).toBeNull();
+  });
+});
+
+// What naming a cause claims about the decision. A pure function of the stored
+// cause: no column, nothing to backfill, nothing that can drift.
+describe("what a cause asserts about the judgement", () => {
+  it("keeps the no-fault verdict apart from every other kind", () => {
+    expect(attributionOf("sound_call_lost")).toBe("no_fault");
+    expect(attributionOf("good_call")).toBe("credit");
+    expect(attributionOf("good_wait")).toBe("credit");
+    expect(attributionOf("inconclusive")).toBe("undetermined");
+    expect(attributionOf("plan_incoherent")).toBe("undetermined");
+    // A win with an unsafe process names a lever, so it is a fault however
+    // the trade settled
+    expect(attributionOf("lucky_win")).toBe("fault");
+    expect(attributionOf("direction_wrong")).toBe("fault");
+    expect(attributionOf("entry_too_early")).toBe("fault");
+    // The four are four, and the two the owner asked to separate are separate
+    expect(attributionOf("sound_call_lost")).not.toBe(attributionOf("inconclusive"));
+    expect(attributionOf("sound_call_lost")).not.toBe(attributionOf("good_call"));
+  });
+
+  it("reads a lucky win from the facts the win branch read, danger block or not", async () => {
+    // Measured 2026-09-07: no row in the database has a non-empty
+    // danger.flags, and the one live lucky_win has danger null with mae_r
+    // 0.98. A check that demanded a raised flag would reject every real one.
+    const bars = [
+      candle(stamp(0), 150.2, 149.9),
+      candle(stamp(1), 150.4, 149.1),
+      candle(stamp(2), 151.4, 150.3),
+      candle(stamp(3), 152.4, 151.2),
+      ...quiet(4, 30, 152.5, 152.0),
+    ];
+    const clean = await computeFacts(
+      evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(3), resolution: "win", mfe_r: 2, mae_r: 0.2 }, "win", iso(3)),
+      bars, "1h", NOW,
+    );
+    expect(luckyWinSupported(clean)).toBe(false);
+    expect(clean.hints).toEqual(["good_call"]);
+
+    const deep = await computeFacts(
+      evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(3), resolution: "win", mfe_r: 2, mae_r: 0.98 }, "win", iso(3)),
+      bars, "1h", NOW,
+    );
+    expect(luckyWinSupported(deep)).toBe(true);
+    expect(deep.hints).toEqual(["lucky_win"]);
+
+    // ...and with no danger block at all, which is 17 of the 19 rows on record
+    expect(luckyWinSupported({ ...deep, danger: null })).toBe(true);
+    expect(luckyWinSupported({ ...clean, danger: null })).toBe(false);
   });
 });
 
@@ -680,6 +1165,180 @@ describe("diagnosis contract", () => {
     expect(parseDiagnosis({ cause: "good_call", verdict_ja: "v" }, [])).toBeNull();
     expect(parseDiagnosis({ cause: "good_call", lesson_ja: "l" }, [])).toBeNull();
     expect(parseDiagnosis("nope", [])).toBeNull();
+  });
+});
+
+// The other half of deleting the fallback. The server no longer files an
+// unexplained loss as direction_wrong; the model reads the same facts and can
+// write the same sentence, and the fallback's own output is what the live
+// rulebook citations were built on.
+describe("a diagnosis may not assert what the facts do not carry", () => {
+  const answer = (cause: string) => ({
+    cause, secondary_causes: [], avoidable: true, confidence: 70,
+    verdict_ja: "v", verdict_en: "v", evidence_ja: [], evidence_en: [],
+    lesson_ja: "l", lesson_en: "l", scope: null, rule_blamed: null, rule_credited: null,
+  });
+  // A loss the lever table clears: every variant pulled, every one answered,
+  // not one of them changing the outcome. The roll-over after hour 27 is what
+  // SETTLES the widened stops — without it they are still open at diagnosis
+  // time, and an open variant earns nothing.
+  const lossFacts = async () => computeFacts(
+    evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.4, mae_r: 1 }, "loss", iso(2)),
+    [
+      candle(stamp(0), 150.4, 149.6),
+      candle(stamp(1), 150.1, 149.2),
+      candle(stamp(2), 149.5, 148.9),
+      ...quiet(3, 27, 149.4, 148.25),
+      ...quiet(27, 44, 147.9, 147.2),
+    ],
+    "1h", at(72), { declaredMode: "trend day", adx: 30 },
+  );
+
+  it("never offers sound_call_lost to the model, under any contract or signal", () => {
+    for (const contract of ["market_v1", "entry_chosen_v1", null]) {
+      for (const signal of ["BUY", "SELL", "WAIT", null]) {
+        const schema = diagnosisSchema(contract, signal);
+        expect(schema.properties.cause.enum, `${contract}/${signal}`).not.toContain("sound_call_lost");
+        expect(schema.properties.secondary_causes.items.enum, `${contract}/${signal}`).not.toContain("sound_call_lost");
+      }
+    }
+    // ...and the parser refuses it too, so a bypassed schema changes nothing.
+    // Only the server's own lever table earns this verdict.
+    expect(parseDiagnosis(answer("sound_call_lost"), ["inconclusive"], [], "market_v1")?.cause).toBe("inconclusive");
+  });
+
+  it("falls back to the hint when the model blames the direction and no test says so", async () => {
+    const facts = await lossFacts();
+    expect(facts.hints).toEqual(["sound_call_lost"]);
+    const d = parseDiagnosis(answer("direction_wrong"), facts.hints, [], "market_v1", "BUY", facts);
+    expect(d?.cause).toBe("sound_call_lost");
+    // and the same for the two causes whose remedy is to move a lever
+    expect(parseDiagnosis(answer("stop_too_tight"), facts.hints, [], "market_v1", "BUY", facts)?.cause).toBe("sound_call_lost");
+    expect(parseDiagnosis(answer("target_too_far"), facts.hints, [], "market_v1", "BUY", facts)?.cause).toBe("sound_call_lost");
+    // A cause the facts cannot decide either way is still the model's to name:
+    // "unknown" stays permissive, because most causes are questions about the
+    // plan rather than about these numbers.
+    expect(causeGrounds("plan_incoherent", facts)).toBe("unknown");
+    expect(parseDiagnosis(answer("plan_incoherent"), facts.hints, [], "market_v1", "BUY", facts)?.cause)
+      .toBe("plan_incoherent");
+  });
+
+  // The veto started as a list of three — direction_wrong, stop_too_tight,
+  // target_too_far — and a list of three was the wrong shape. On a row the
+  // lever table has just cleared, causeGrounds ALREADY answers "contradicted"
+  // for news_shock, chased_move and regime_misread too: clauses 6, 8 and 7 of
+  // noFaultGrounds require exactly that. Every one of the three used to be
+  // accepted verbatim, carry avoidable=true, and land back inside
+  // CONSTRAINT_CAUSES where the direction rule could cite it again — the same
+  // three citations the change exists to remove, restored through a door two
+  // along from the ones that were fenced.
+  it("refuses every cause the row's own arithmetic contradicts, not a list of three", async () => {
+    const facts = await lossFacts();
+    for (const cause of ["news_shock", "chased_move", "regime_misread", "good_call", "lucky_win"]) {
+      expect(causeGrounds(cause, facts), cause).toBe("contradicted");
+      const d = parseDiagnosis(answer(cause), facts.hints, [], "market_v1", "BUY", facts);
+      expect(d?.cause, cause).toBe("sound_call_lost");
+      expect(d?.avoidable, cause).toBe(false);
+    }
+  });
+
+  // good_call and lucky_win are questions about a WIN. Asked of a loss they
+  // used to answer anyway, because nothing in the table read the outcome — a
+  // losing row with a deep mae_r came back "lucky_win: supported", and a
+  // losing row could be filed good_call, whose attribution is CREDIT.
+  it("does not grade a question about a win against a loss", async () => {
+    const facts = await lossFacts();
+    expect(facts.resolution).toBe("loss");
+    expect(causeGrounds("lucky_win", { ...facts, mae_r: 1.1, danger: null })).toBe("contradicted");
+    expect(attributionOf("good_call")).toBe("credit");
+    expect(parseDiagnosis(answer("good_call"), facts.hints, [], "market_v1", "BUY", facts)?.cause)
+      .not.toBe("good_call");
+  });
+
+  // "inconclusive" is the absence of a finding, so causeGrounds can never
+  // contradict it — it was the one word left that could overwrite a finished
+  // review with nothing. The model cannot name sound_call_lost and is shown no
+  // definition of it, which is exactly the pressure to reach for the nearest
+  // sayable thing.
+  it("will not let the model downgrade a finished review to 'not enough basis'", async () => {
+    const facts = await lossFacts();
+    expect(facts.hints).toEqual(["sound_call_lost"]);
+    expect(parseDiagnosis(answer("inconclusive"), facts.hints, [], "market_v1", "BUY", facts)?.cause)
+      .toBe("sound_call_lost");
+    // ...and where the server itself found no basis, the model may still say so
+    expect(parseDiagnosis(answer("inconclusive"), ["inconclusive"], [], "market_v1", "BUY", facts)?.cause)
+      .toBe("inconclusive");
+  });
+
+  // The veto is opt-in: a caller with no facts cannot be vetoed, because there
+  // is nothing to check the answer against. index.ts (the only production
+  // caller) passes them. This test pins that so the permissive branch is a
+  // decision on the record rather than something a future call site discovers.
+  it("cannot veto an answer it was given no facts for", async () => {
+    const facts = await lossFacts();
+    expect(parseDiagnosis(answer("news_shock"), facts.hints, [], "market_v1", "BUY", facts)?.cause)
+      .toBe("sound_call_lost");
+    expect(parseDiagnosis(answer("news_shock"), facts.hints, [], "market_v1", "BUY")?.cause)
+      .toBe("news_shock");
+    expect(parseDiagnosis(answer("news_shock"), facts.hints, [], "market_v1", "BUY", null)?.cause)
+      .toBe("news_shock");
+  });
+
+  // Refusing the CAUSE and keeping the prose stores a row that argues against
+  // its own verdict — the badge saying one thing and the sentence under it
+  // recommending the lever the facts just refused. The lesson is the half that
+  // travels: it is what the lessons table carries into the next rulebook
+  // revision, where it is read as evidence about the hint's cause.
+  it("takes the model's verdict and lesson with the cause it refuses", async () => {
+    const facts = await lossFacts();
+    const wrong = {
+      ...answer("stop_too_tight"),
+      verdict_ja: "損切りが値幅の中に置かれており、押し目で刈られた。",
+      lesson_ja: "この形では損切りをATR1.5倍まで広げる。",
+      lesson_en: "Widen the stop to 1.5 ATR in this shape.",
+      scope: "1h の戻り売り", rule_blamed: "r10",
+    };
+    const d = parseDiagnosis(wrong, facts.hints, ["r10"], "market_v1", "BUY", facts);
+    expect(d?.cause).toBe("sound_call_lost");
+    expect(d?.lesson_ja).not.toContain("広げる");
+    expect(d?.lesson_en).not.toMatch(/widen/i);
+    expect(d?.verdict_ja).not.toContain("刈られた");
+    expect(d?.scope).toBeNull();
+    expect(d?.rule_blamed).toBeNull();
+    // ...and an answer we KEEP is untouched
+    const kept = parseDiagnosis({ ...wrong, cause: "plan_incoherent" }, facts.hints, ["r10"], "market_v1", "BUY", facts);
+    expect(kept?.cause).toBe("plan_incoherent");
+    expect(kept?.lesson_ja).toContain("広げる");
+    expect(kept?.rule_blamed).toBe("r10");
+  });
+
+  it("keeps the model's answer when the facts do carry it", async () => {
+    const facts = await computeFacts(
+      evaluated(buyMarket, { filled_at: iso(0), resolved_at: iso(2), resolution: "loss", mfe_r: 0.3, mae_r: 1 }, "loss", iso(2)),
+      [
+        candle(stamp(0), 150.3, 149.9),
+        candle(stamp(1), 150.3, 149.6),
+        candle(stamp(2), 149.7, 148.9),
+        candle(stamp(3), 150.2, 149.3),
+        candle(stamp(4), 151.0, 150.0),
+        candle(stamp(5), 151.8, 150.9),
+        candle(stamp(6), 152.3, 151.5),
+        ...quiet(7, 30, 152.2, 151.8),
+      ],
+      "1h", NOW,
+    );
+    expect(facts.after.reached_tp1).not.toBeNull();
+    expect(parseDiagnosis(answer("stop_too_tight"), facts.hints, [], "market_v1", "BUY", facts)?.cause).toBe("stop_too_tight");
+  });
+
+  it("cannot call a no-fault loss avoidable", async () => {
+    const facts = await lossFacts();
+    // The model answers `avoidable` about whatever it thought the cause was,
+    // and that boolean used to pass through verbatim — printing 「回避できた」
+    // under a verdict that says no lever would have changed anything.
+    const d = parseDiagnosis(answer("direction_wrong"), facts.hints, [], "market_v1", "BUY", facts);
+    expect(d?.cause).toBe("sound_call_lost");
+    expect(d?.avoidable).toBe(false);
   });
 });
 
@@ -1486,8 +2145,8 @@ describe("the cause taxonomy across the two entry contracts", () => {
     expect(CAUSES).toContain("chased_move");
     expect(CAUSES).toContain("entry_too_far");
     expect(CAUSES).toContain("entry_too_early");
-    // 12 trade causes plus the two a WAIT can be diagnosed with
-    expect(CAUSES).toHaveLength(14);
+    // 13 trade causes plus the two a WAIT can be diagnosed with
+    expect(CAUSES).toHaveLength(15);
     expect(CAUSES).toContain("wait_missed_trade");
     expect(CAUSES).toContain("good_wait");
     for (const c of ["chased_move", "entry_too_far", "entry_too_early"]) expect(isCause(c)).toBe(true);
@@ -1499,8 +2158,8 @@ describe("the cause taxonomy across the two entry contracts", () => {
     expect(live).not.toContain("entry_too_far");
     expect(live).not.toContain("entry_too_early");
     for (const c of [...causesFor("entry_chosen_v1"), ...live]) expect(CAUSES).toContain(c);
-    expect(causesFor("entry_chosen_v1")).toHaveLength(14);
-    expect(causesFor(null)).toHaveLength(14);
+    expect(causesFor("entry_chosen_v1")).toHaveLength(15);
+    expect(causesFor(null)).toHaveLength(15);
 
     expect(diagnosisSchema("market_v1").properties.cause.enum).not.toContain("entry_too_far");
     expect(diagnosisSchema("entry_chosen_v1").properties.cause.enum).toContain("entry_too_far");
@@ -1537,6 +2196,35 @@ describe("the cause taxonomy across the two entry contracts", () => {
     const legacy = { ...ok, cause: "entry_too_far" };
     expect(parseDiagnosis(legacy, ["stop_too_tight"], [], "market_v1")?.cause).toBe("stop_too_tight");
     expect(parseDiagnosis(legacy, ["stop_too_tight"], [], "entry_chosen_v1")?.cause).toBe("entry_too_far");
+  });
+
+  it("refuses a rule filed under a cause that is evidence for nothing", () => {
+    // CONSOLIDATION_SCHEMA's cause enum is [...CAUSES, "general"], so the
+    // editor may file a rule under one of these. Before the rule-side guard
+    // only the LESSON was tested, and a constraint rule filed under an
+    // uncitable cause still drew on the whole of CONSTRAINT_CAUSES.
+    const lesson = { analysis_id: "a", cause: "direction_wrong", shadow: false };
+    expect(citationAllowed({ cause: "direction_wrong", kind: "constraint" }, lesson)).toBe(true);
+    for (const cause of NOT_RULE_EVIDENCE) {
+      expect(citationAllowed({ cause, kind: "constraint" }, lesson), cause).toBe(false);
+      expect(citationAllowed({ cause, kind: "heuristic" }, lesson), cause).toBe(false);
+      // ...and under its own cause too: a rule about a loss no lever would
+      // have changed is a rule instructing a lever to move.
+      expect(citationAllowed({ cause, kind: "constraint" }, { analysis_id: "b", cause, shadow: false }), cause).toBe(false);
+    }
+    expect(NOT_RULE_EVIDENCE).toContain("sound_call_lost");
+  });
+
+  it("does not offer the editor a cause no rule may ever rest on", () => {
+    // The guard above makes the OUTCOME safe: every citation of such a rule is
+    // refused, support falls to 0 and the rule is deleted at the next
+    // revision. It still costs a rule slot per revision, and the 証拠の数え方
+    // prose names NOT_RULE_EVIDENCE only inside the clause about `general`
+    // rules, so nothing tells the editor a same-cause rule is uncitable.
+    const enumerated: string[] = CONSOLIDATION_SCHEMA.properties.rules.items.properties.cause.enum;
+    for (const cause of NOT_RULE_EVIDENCE) expect(enumerated, cause).not.toContain(cause);
+    expect(enumerated).toContain("general");
+    expect(enumerated).toContain("direction_wrong");
   });
 
   it("cites across the rename in both directions", () => {

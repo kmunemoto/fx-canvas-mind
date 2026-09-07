@@ -250,7 +250,14 @@ export const ja = {
         lucky_win: "勝ったが危うかった",
         wait_missed_trade: "見送ったが取れていた",
         good_wait: "見送りは妥当だった",
+        sound_call_lost: "動かせるレバーが無い負け",
         inconclusive: "判断材料が不足",
+      },
+      // The one verdict that is easy to read as something it does not say, so
+      // the page spells out what it claims. Shown under the badge.
+      causeNote: {
+        sound_call_lost:
+          "損切りを広げても、利確を近づけても、より良い値で入っても、決着まで検証したどの案も結果を変えませんでした。動かせるレバーはどれもこの結果を変えなかった、という意味であり、「読みが正しかった」という判定ではありません（検証できるのは判断より後の値動きだけです）",
       },
       lesson: "教訓",
       avoidable: "分析時点の情報で回避できた",

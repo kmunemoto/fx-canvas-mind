@@ -81,6 +81,17 @@ export type Cause =
   // WAIT only: that trade was stopped out or never paid. Standing aside was
   // right, and like good_call there is no lever to move.
   | "good_wait"
+  // A loss where every lever this file can move was tested and none of them
+  // would have changed the outcome: a wider stop still loses, a nearer target
+  // is never reached, a better fill still loses, and price never came back to
+  // the plan's side afterwards.
+  //
+  // It does NOT say the call was right. Everything measured here happened
+  // AFTER the decision was made, so "the analysis was correct" is not a claim
+  // this file is in any position to make. The whole assertion is: no lever we
+  // can move would have changed this outcome — which is why the verdict names
+  // no lever, and why a lesson filed under it must not move one.
+  | "sound_call_lost"
   // not enough evidence to say
   | "inconclusive";
 
@@ -98,6 +109,7 @@ export const CAUSES: readonly Cause[] = [
   "lucky_win",
   "wait_missed_trade",
   "good_wait",
+  "sound_call_lost",
   "inconclusive",
 ];
 
@@ -199,6 +211,23 @@ export const LUCKY_MAE_R = 0.8;
 export const MISSED_MOVE_R = 1;
 // The pullback the "entered later" counterfactual waits for, in R
 export const PULLBACK_R = 0.5;
+// A loss whose price never came this far the signal's way, in R, is a loss
+// where the direction simply was not there. The SECOND positive test for
+// direction_wrong, beside "price kept running past the stop", and it exists
+// because those two together had to replace a fallback that filed every
+// otherwise-unexplained loss as direction_wrong. Measured 2026-09-07: of the
+// six live direction_wrong diagnoses, two carried beyond_sl_r >= 1 and four
+// came out of that fallback — three of the four cited by rule r10. Under the
+// two positive tests one of those four keeps the verdict (max_favorable_r 0)
+// and three no longer earn it.
+export const DIRECTION_DEAD_R = 0.1;
+
+// Fewest bars of a plan's life at which the abnormal-bar test can return a
+// meaningful "no". With two bars the median IS the mean of the two, so the
+// largest ratio reachable is 2·max/(r1+r2), strictly under 2 and therefore
+// under ABNORMAL_RANGE_RATIO; with three the median is the middle bar and the
+// ratio is unbounded. Three is where the test starts being able to say no.
+export const ABNORMAL_MIN_BARS = 3;
 // An adverse move of this much inside the first bars after a market fill
 // says the entry chased an exhausted move
 export const EARLY_ADVERSE_R = 0.5;
@@ -331,6 +360,56 @@ export interface Danger {
   flags: DangerFlag[];
 }
 
+// One lever, and what the counterfactual that moves it answered.
+export interface LeverVerdict {
+  lever: "stop_x1_5" | "stop_x2" | "tp_half" | "limit_pullback";
+  // The variant was simulated at all. A lever that was never computed is a
+  // lever nobody tested, which is not the same as a lever that would not have
+  // helped — and only the second one may earn sound_call_lost.
+  computed: boolean;
+  // What the judge said about the variant, kept raw so a reader of a stored
+  // row can see the answer and not only our reading of it.
+  resolution: Resolution | null;
+  // Would moving this lever have changed the outcome? Keyed on resolution and
+  // NEVER on viable: viable is false on every stop and target variant this
+  // system will ever compute, because doubling the risk or halving the reward
+  // drops rr under MIN_RISK_REWARD by construction (the rr and gate arithmetic
+  // in simulate()). A no-fault verdict gated on viable would be granted to
+  // every loss on earth.
+  //
+  //   true  — "win", and also "expired": a wider stop that was never hit and
+  //           never reached the target turns −1R into about 0R, and a lever
+  //           that erases the loss has changed the outcome as surely as one
+  //           that wins. Reading expired as "did not pay" was the single most
+  //           flattering thing this table did.
+  //   false — "loss" (the lever was pulled and the trade still lost) or
+  //           "untriggered" (the better fill never existed, so there was no
+  //           lever there to pull).
+  //   null  — not computed, still open (resolution null), or "ambiguous". The
+  //           question was asked and has not been answered. Measured against
+  //           production 2026-09-07: stop_x2 is computed-but-open on 7 of the
+  //           9 live losses and stop_x1_5 on 5 of them, because a postmortem
+  //           runs at MIN_AFTER_BARS bars while the variants are judged over
+  //           EXPIRY_DAYS — 20 days on a 1h plan. Counting those as refusals
+  //           is how all three of the live no-fault verdicts were earned.
+  paid: boolean | null;
+}
+
+// Why a loss may be filed as sound_call_lost. `levers` is the table itself;
+// `complete` says every lever was actually tested; `allowed` is the verdict,
+// which needs the whole table plus the disqualifiers around it.
+export interface NoFaultGrounds {
+  levers: LeverVerdict[];
+  // Every lever was simulated at all
+  complete: boolean;
+  // ...and the judge returned an answer for every one of them. Separate from
+  // `complete` because the two failures need different words: a lever nobody
+  // computed and a lever still running both leave the question open, but only
+  // the second one is waiting on time rather than on code.
+  answered: boolean;
+  allowed: boolean;
+}
+
 export interface PostmortemFacts {
   version: 2;
   eval_interval: string;
@@ -345,7 +424,18 @@ export interface PostmortemFacts {
   reference: number | null;
   // Largest move for / against the signal from the reference, over the
   // plan's life and the after-window, in multiples of the planned risk
-  from_signal: { max_favorable_r: number | null; max_adverse_r: number | null };
+  from_signal: {
+    // Measured over the plan's life PLUS the after-window — "what did the
+    // market do around this call", which is the question the untriggered
+    // branch and the prompt ask.
+    max_favorable_r: number | null;
+    max_adverse_r: number | null;
+    // The same excursion measured only up to the settlement: how far price
+    // came our way while the decision was still live. Optional because rows
+    // written before it existed do not carry it, and a reader must treat a
+    // missing one as "not measured" rather than as zero.
+    max_favorable_r_in_life?: number | null;
+  };
   after: {
     // Which level price reached first after the settlement
     first_touch: "tp1" | "sl" | "both" | null;
@@ -381,6 +471,31 @@ export interface PostmortemFacts {
   // How unsafe the trade was, for every filled plan; null when the plan
   // never filled. Its flags are what turn a win into lucky_win.
   danger: Danger | null;
+  // The judge's own MAE for the real plan, in R. Copied out of the evaluation
+  // rather than left there because luckyWinSupported has to answer from the
+  // facts row alone: 17 of the 19 diagnosed rows in production carry
+  // danger: null (they predate the danger block), and on those the only thing
+  // that separates a lucky win from a clean one is this number. A row written
+  // before this field existed carries null, which is "not recorded", not 0.
+  mae_r: number | null;
+  // Losses only: which lever the no-fault verdict was tested against, and how
+  // each answered. Written whether or not the verdict was earned, so a reader
+  // of a stored row can see which lever decided it. Null on anything else.
+  // Bars of the plan's own life, up to the settlement. The abnormal-bar test
+  // is a range-against-median over exactly these, so with two or fewer of them
+  // the largest ratio reachable is 2·max/(r1+r2) < 2 — under ABNORMAL_RANGE_RATIO
+  // by construction, and a short violent loss is structurally incapable of
+  // showing an event bar. Stored so a clause that reads "no event bar" can
+  // tell "we looked and found none" from "the test could not discriminate".
+  // Optional: rows written before it existed do not carry it.
+  bars_in_life?: number;
+  no_fault_grounds: NoFaultGrounds | null;
+  // What the plan itself settled as — the judge's resolution, or the row's
+  // outcome when there is no evaluation. Optional because rows written before
+  // it existed do not carry it. causeGrounds reads it so that a question about
+  // a win (lucky_win, good_call) is not answered about a loss; without it a
+  // losing row with a deep mae_r came back "lucky_win: supported".
+  resolution?: string | null;
   // Deterministic pre-classification; the model picks among these first
   hints: Cause[];
   notes: string[];
@@ -532,6 +647,283 @@ const describeFlag = (flag: DangerFlag, d: Danger | null, maeR: number | null): 
   }
 };
 
+// How far price came our way BEFORE the trade was settled. Null when the row
+// does not carry the measure — every row written before it existed, and a
+// reader must not read that as zero. Clause 5 and the second direction_wrong
+// test both read this rather than from_signal.max_favorable_r, so neither of
+// them can be decided by bars that arrived after the decision was over.
+export const favorableInLife = (facts: PostmortemFacts): number | null =>
+  facts.from_signal.max_favorable_r_in_life ?? null;
+
+// Did moving this lever change the outcome? The tri-state above, in one
+// place, so noFaultGrounds and causeGrounds cannot read a resolution two
+// different ways. Null means the judge has not answered yet — "we asked and
+// it is still open" is evidence for nothing, in either direction.
+export const leverMoved = (
+  lever: LeverVerdict["lever"],
+  resolution: Resolution | null,
+  // What the real plan settled as. The comparison is against THIS and not
+  // against "win", because "did the lever move the outcome" is a question
+  // about the difference between two endings, not about one of them being
+  // good. On a loss, an expired variant is a lever that moved — the −1R never
+  // happens. On an expired plan, an expired tp_half is a lever that did not:
+  // the nearer target was missed as well, and the ending is the same one.
+  settled: string | null,
+): boolean | null => {
+  // No answer yet. "ambiguous" is the judge declining to say, which is a
+  // different thing from saying no.
+  if (resolution === null || resolution === "ambiguous") return null;
+  // Only limit_pullback can say "untriggered" and mean something: it is the
+  // one variant with a different entry, and never triggering there is the
+  // finding that the better fill was never on offer — a lever that was not
+  // there to pull. The stop and target variants keep the original entry, so an
+  // untriggered one describes a trade that never happened, which answers
+  // nothing about the trade that did.
+  if (resolution === "untriggered") return lever === "limit_pullback" ? false : null;
+  if (settled === null) return null;
+  return resolution !== settled;
+};
+
+// Whether a loss may be filed as "no lever we can move would have changed
+// this outcome". Every clause below is a way for the answer to be no; there
+// is no clause that makes the answer more yes the worse the loss looked,
+// which is the trap this verdict has to stay out of.
+//
+// A first draft keyed it on how far price drifted our way before reversing as
+// the thing that EARNED the verdict. That is the same bias with the sign
+// flipped and the flattering sign showing: the noisier the loss, the more
+// thoroughly the rulebook would be insulated from it, and the supply of noisy
+// losses grows with volatility, not with judgement. The excursion appears here
+// once, as clause 5, only ever to REFUSE — a loss that never went our way at
+// all is direction_wrong and must not be laundered into a no-fault — and it is
+// the LIFE-ONLY excursion, because the one measured over life plus the
+// after-window loosened as more aftermath arrived while every other clause
+// here tightened, which is that same gradient bounded at DIRECTION_DEAD_R
+// rather than unbounded.
+export const noFaultGrounds = (facts: PostmortemFacts): NoFaultGrounds => {
+  const cf = facts.counterfactual;
+  const lever = (name: LeverVerdict["lever"], r: CfResult | null): LeverVerdict => {
+    const computed = r !== null && r !== undefined && typeof r === "object";
+    const resolution = computed ? r.resolution : null;
+    return { lever: name, computed, resolution, paid: computed ? leverMoved(name, resolution, facts.resolution ?? null) : null };
+  };
+  const levers: LeverVerdict[] = [
+    lever("stop_x1_5", cf.stop_x1_5),
+    lever("stop_x2", cf.stop_x2),
+    lever("tp_half", cf.tp_half),
+    lever("limit_pullback", cf.limit_pullback),
+  ];
+  const complete = levers.every((l) => l.computed);
+  const answered = levers.every((l) => l.paid !== null);
+  const after = facts.after;
+  const maxFavR = favorableInLife(facts);
+  const beyondSlR = after.beyond_sl_r;
+  const earlyAdverseR = facts.early_adverse_r;
+  // `?.` and `== null`, not `!== null`: a v1 facts row has no limit_pullback
+  // KEY at all, so the value is undefined rather than null. 7 of the 20 rows
+  // in production are v1, and `undefined !== null` is true — this line used to
+  // throw TypeError on every one of them.
+  const paysPullback = cf.limit_pullback?.resolution === "win" &&
+    cf.limit_pullback.gate !== "poor_rr" && cf.limit_pullback.gate !== "stop_too_tight";
+  const allowed =
+    // 1. enough aftermath to have looked. A thin diagnosis is revisited, and
+    //    "we saw eight bars and found no fault" is a different sentence from
+    //    "we saw two".
+    facts.bars_after_settlement >= MIN_AFTER_BARS &&
+    // 2. every lever was tested, the judge answered for every one of them, and
+    //    not one of the answers moved the outcome. `paid === false` and not
+    //    `paid !== true`, so an unanswered lever refuses the verdict instead
+    //    of supporting it.
+    complete && levers.every((l) => l.paid === false) &&
+    // 3. the target never came after the stop — that is stop_too_tight
+    after.reached_tp1 === null &&
+    // 4. price did not keep running past the stop — that is direction_wrong
+    beyondSlR !== null && beyondSlR < 1 &&
+    // 5. ...and it did go our way at least a little — the other direction_wrong
+    //    test. A DISQUALIFIER, never the thing that earns the verdict.
+    maxFavR !== null && maxFavR >= DIRECTION_DEAD_R &&
+    // 6. we looked for an event bar and found none — and the looking was
+    //    capable of finding one. Under ABNORMAL_MIN_BARS bars of life the
+    //    range-against-median test cannot reach ABNORMAL_RANGE_RATIO at all,
+    //    so `abnormal_bar === null` there means "the test could not answer",
+    //    not "there was no event". Live losses settle in as little as 0.88h.
+    (facts.bars_in_life ?? 0) >= ABNORMAL_MIN_BARS && facts.abnormal_bar === null &&
+    // 7. the regime read was actually checked, and it agreed with the ADX.
+    //    Both halves matter: conflict can only be true when declared AND adx
+    //    are both present, so `conflict !== true` alone passes a plan that
+    //    declared a mode nobody measured — an absent reading scoring as a
+    //    clean one. Tested here EXPLICITLY rather than through hints, because
+    //    regime_misread is pushed AFTER the switch that files this verdict, so
+    //    at that moment hints cannot know about it.
+    facts.regime != null && facts.regime.adx !== null && facts.regime.declared !== null &&
+    facts.regime.conflict !== true &&
+    // 8. the entry did not chase an extended move. Today this is implied by
+    //    clause 2 — pays() begins with the same win test — but the chase asks a
+    //    different question of the same variant, and a clause that only holds
+    //    because another clause happens to overlap it is a clause that breaks
+    //    silently when the other one moves.
+    (earlyAdverseR === null || earlyAdverseR < EARLY_ADVERSE_R || !paysPullback) &&
+    // 9. and nothing else already found a fault
+    !facts.hints.some((h) => attributionOf(h) === "fault");
+  return { levers, complete, answered, allowed };
+};
+
+// Whether the facts support filing a win as lucky rather than clean. Extracted
+// from the win branch so that branch and any later grounding check read one
+// expression and cannot disagree about it.
+//
+// The danger === null arm is not a legacy nicety: measured 2026-09-07, no row
+// in the whole database has a non-empty danger.flags, 17 of 19 diagnosed rows
+// have danger null at all, and the single live lucky_win is one of them —
+// danger null, mae_r 0.98. A check that demanded a raised flag would reject
+// 100% of the real lucky_wins on record.
+export const luckyWinSupported = (facts: PostmortemFacts): boolean => {
+  const flags = facts.danger?.flags ?? [];
+  // `== null`, so a row whose danger key is absent (every v1 row) reads the
+  // same as one whose danger is explicitly null.
+  return flags.length > 0 || (facts.danger == null && (facts.mae_r ?? 0) >= LUCKY_MAE_R);
+};
+
+// What the facts say about a cause somebody named: do they carry it, do they
+// refuse it, or do they not reach. The single table a grounding check reads,
+// so that the model's claim and the server's own tests are compared against
+// one statement of what each cause requires rather than two.
+//
+// "unknown" is the honest answer wherever the deciding measurement is missing
+// or lives off the facts row (a WAIT's verdict, the plan's own text), and it
+// is deliberately the answer for every cause this file cannot test. A checker
+// must not read "unknown" as "contradicted".
+export const causeGrounds = (cause: string, facts: PostmortemFacts): "supported" | "contradicted" | "unknown" => {
+  const cf = facts.counterfactual;
+  const after = facts.after;
+  // `?.` and `== null` throughout, never `!== null`. A v1 facts row has no
+  // limit_pullback key and NO row on record has facts.mae_r, so the value that
+  // arrives here is undefined, not null — and `undefined !== null` is true.
+  // Read with `!==` this table threw TypeError on every v1 row and answered
+  // "contradicted" about a measurement nobody ever took.
+  const won = (r?: CfResult | null) => r?.resolution === "win";
+  const has = (r?: CfResult | null) => r != null;
+  // Did moving this lever change the outcome — true, false, or not yet
+  // answered. The same reading noFaultGrounds uses, from the same table.
+  const moved = (lever: LeverVerdict["lever"], r?: CfResult | null) =>
+    has(r) ? leverMoved(lever, r?.resolution ?? null, outcome) : null;
+  // What the real plan settled as, when the row records it. Rows written
+  // before the field existed do not, and a win-only or loss-only cause must
+  // then answer "unknown" rather than grade a question it cannot see.
+  const outcome = facts.resolution ?? null;
+  const isWin = outcome === null ? null : outcome === "win";
+  const isLoss = outcome === null ? null : outcome === "loss";
+  // The life-only excursion, the same measure the loss branch's own direction
+  // test reads. from_signal.max_favorable_r includes the after-window, and a
+  // table that graded the model's answer on bars the model was not being asked
+  // about would disagree with the hint it is there to check.
+  const maxFavR = favorableInLife(facts);
+  const beyondSlR = after.beyond_sl_r;
+  switch (canonicalCause(cause)) {
+    case "direction_wrong": {
+      // The two positive tests, and nothing else. The fallback that used to
+      // grant this cause for the absence of any other is what this table is
+      // here to stop coming back through the model's answer.
+      const ranPast = beyondSlR !== null && beyondSlR >= 1 && after.reached_tp1 === null;
+      const neverCame = maxFavR !== null && maxFavR < DIRECTION_DEAD_R;
+      if (ranPast || neverCame) return "supported";
+      return beyondSlR !== null && maxFavR !== null ? "contradicted" : "unknown";
+    }
+    case "stop_too_tight": {
+      // moved(), not won(). A wider stop that was never hit and never reached
+      // the target expires flat: it does not win, but it does turn −1R into
+      // about 0R, and "the stop was inside the noise" is exactly what that
+      // says. Asking only whether the wider stop WON made this cause
+      // unsayable on the clipped stop it describes best.
+      // A question about a plan whose stop was actually hit. On anything else
+      // "a wider stop would have done better" is not a claim these numbers can
+      // carry: on an expired plan a wider stop that LOST reads as a lever that
+      // moved the outcome, which is true and is the opposite of this cause.
+      if (isLoss !== true) return isLoss === false ? "contradicted" : "unknown";
+      const wider = [moved("stop_x1_5", cf.stop_x1_5), moved("stop_x2", cf.stop_x2)];
+      if (after.reached_tp1 !== null || wider.includes(true)) return "supported";
+      return wider.every((m) => m === false) && facts.bars_after_settlement > 0 ? "contradicted" : "unknown";
+    }
+    case "target_too_far": {
+      const m = moved("tp_half", cf.tp_half);
+      return m === true ? "supported" : m === false ? "contradicted" : "unknown";
+    }
+    case "chased_move": {
+      const early = facts.early_adverse_r;
+      const paid = won(cf.limit_pullback) && cf.limit_pullback?.gate !== "poor_rr" &&
+        cf.limit_pullback?.gate !== "stop_too_tight";
+      if (early !== null && early >= EARLY_ADVERSE_R && paid) return "supported";
+      return early !== null && has(cf.limit_pullback) ? "contradicted" : "unknown";
+    }
+    case "entry_too_far":
+      if (won(cf.market_entry) || won(cf.market_entry_same_risk)) return "supported";
+      return has(cf.market_entry) || has(cf.market_entry_same_risk) ? "contradicted" : "unknown";
+    case "regime_misread":
+      if (facts.regime === null) return "unknown";
+      return facts.regime.conflict ? "supported" : "contradicted";
+    case "news_shock":
+      // The bar is the fact; whether the plan named the event is a question
+      // about the plan, which the diagnosis prompt asks separately.
+      return facts.abnormal_bar !== null ? "supported" : "contradicted";
+    // Both of these are questions about a WIN. Asked of a loss they used to
+    // answer anyway — a losing row with a deep mae_r came back "lucky_win:
+    // supported" — because nothing here read the outcome. A cause that cannot
+    // apply to this row is not contradicted by it; it is simply the wrong
+    // question, and #4 must not let the model through on a "supported" that
+    // was never about this trade.
+    case "lucky_win":
+      if (isWin !== true) return isWin === false ? "contradicted" : "unknown";
+      if (luckyWinSupported(facts)) return "supported";
+      return facts.danger != null || facts.mae_r != null ? "contradicted" : "unknown";
+    case "good_call":
+      if (isWin !== true) return isWin === false ? "contradicted" : "unknown";
+      if (facts.danger == null && facts.mae_r == null) return "unknown";
+      return luckyWinSupported(facts) ? "contradicted" : "supported";
+    case "sound_call_lost": {
+      // Loss-only by construction: it is the loss branch that files it.
+      if (isLoss !== true) return isLoss === false ? "contradicted" : "unknown";
+      const g = noFaultGrounds(facts);
+      if (g.allowed) return "supported";
+      // Refused for want of evidence is not the same as refused on the
+      // evidence: an untested lever, a lever the judge has not finished with,
+      // or an aftermath too short to have looked at, all leave the question
+      // open rather than answering it no. `answered` and not just `complete`,
+      // or a row whose variants are all still running would be reported as
+      // positively refuted.
+      return g.complete && g.answered && facts.bars_after_settlement >= MIN_AFTER_BARS
+        ? "contradicted"
+        : "unknown";
+    }
+    // plan_incoherent is the judge's verdict, good_wait / wait_missed_trade are
+    // the WAIT scorer's, and inconclusive asserts nothing to check. None of
+    // them is decidable from these numbers.
+    default:
+      return "unknown";
+  }
+};
+
+// What naming this cause claims about the decision. A pure function of the
+// stored cause and nothing else: no column, nothing to backfill, nothing that
+// can drift away from the taxonomy it reads.
+//
+// lucky_win counts as fault on purpose. It is a win, but what it says is
+// "the process was unsafe", which is a lever — and a tally that filed it as
+// credit would let an unsafe process be counted as evidence for itself.
+export const attributionOf = (cause: string): "fault" | "credit" | "no_fault" | "undetermined" => {
+  switch (canonicalCause(cause)) {
+    case "good_call":
+    case "good_wait":
+      return "credit";
+    case "sound_call_lost":
+      return "no_fault";
+    case "inconclusive":
+    case "plan_incoherent":
+      return "undetermined";
+    default:
+      return "fault";
+  }
+};
+
 export interface FactsContext {
   // What the model declared and what the indicators said at signal time
   declaredMode?: string | null;
@@ -601,12 +993,19 @@ export const computeFacts = async (
 
   let maxFav: number | null = null;
   let maxAdv: number | null = null;
+  // The same favourable excursion, stopped at the settlement. A WAIT has no
+  // settlement, so its window IS its life and the two coincide.
+  let maxFavLife: number | null = null;
+  const lifeEndsMs = wait ? wait.untilMs : Number.isFinite(resolvedMs) ? resolvedMs : Infinity;
   if (reference !== null && life.length > 0) {
     maxFav = 0;
     maxAdv = 0;
-    for (const { c } of life) {
-      maxFav = Math.max(maxFav, signal === "BUY" ? c.high - reference : reference - c.low);
+    maxFavLife = 0;
+    for (const { c, t } of life) {
+      const fav = signal === "BUY" ? c.high - reference : reference - c.low;
+      maxFav = Math.max(maxFav, fav);
       maxAdv = Math.max(maxAdv, signal === "BUY" ? reference - c.low : c.high - reference);
+      if (t <= lifeEndsMs) maxFavLife = Math.max(maxFavLife, fav);
     }
   }
 
@@ -833,6 +1232,7 @@ export const computeFacts = async (
     hints.push(c);
   };
   const maxFavR = toR(maxFav);
+  const maxFavLifeR = toR(maxFavLife);
   const maxAdvR = toR(maxAdv);
   const beyondSlR = after.length > 0 ? toR(beyondSl) : null;
   const won = (r: CfResult | null) => r?.resolution === "win";
@@ -840,8 +1240,47 @@ export const computeFacts = async (
   const wonViable = (r: CfResult | null) => won(r) && r?.viable === true;
   const marketOrder = (ev?.order_type ?? "unknown") === "market";
   const marketV1 = ctx.contract === MARKET_CONTRACT;
+  const settledAs = ev?.resolution ?? row.outcome;
 
-  switch (ev?.resolution ?? row.outcome) {
+  // Assembled BEFORE the switch, and returned unchanged at the end. The loss
+  // branch has to ask noFaultGrounds whether any lever moves, and that
+  // question is asked of the facts row a later reader will see — not of a
+  // parallel set of locals that could answer it differently. `hints` and
+  // `notes` are the same arrays push() and notes.push() write to, so the
+  // branches below keep filling them in place.
+  const facts: PostmortemFacts = {
+    version: 2,
+    eval_interval: evalInterval,
+    bars_after_settlement: after.length,
+    risk: round2(risk * 1000) / 1000,
+    reward: round2(reward * 1000) / 1000,
+    rr,
+    order_type: ev?.order_type ?? "unknown",
+    hours_to_fill: hoursBetween(row.created_at, ev?.filled_at ?? null),
+    hours_to_settle: hoursBetween(row.created_at, resolvedIso),
+    reference,
+    from_signal: { max_favorable_r: maxFavR, max_adverse_r: maxAdvR, max_favorable_r_in_life: maxFavLifeR },
+    after: {
+      first_touch: firstTouch,
+      reached_tp1: tp1Touch,
+      reached_sl: slTouch,
+      beyond_sl_r: beyondSlR,
+      returned_to_entry: after.length > 0 ? returnedToEntry : null,
+    },
+    abnormal_bar: abnormal,
+    early_adverse_r: earlyAdverseR,
+    counterfactual: cf,
+    regime,
+    danger,
+    mae_r: typeof ev?.mae_r === "number" && Number.isFinite(ev.mae_r) ? ev.mae_r : null,
+    bars_in_life: during.length,
+    no_fault_grounds: null,
+    resolution: settledAs,
+    hints,
+    notes,
+  };
+
+  switch (settledAs) {
     case "loss": {
       // Chased: an entry that turned against it at once — by at least half the
       // risk, and by a real move (half an ATR) rather than the bar-to-bar
@@ -865,9 +1304,36 @@ export const computeFacts = async (
       // straight into "enter at the market" rules
       if (tp1Touch !== null || won(cf.stop_x1_5) || won(cf.stop_x2)) push("stop_too_tight");
       if ((ev?.mfe_r ?? 0) >= 0.5 && won(cf.tp_half)) push("target_too_far");
+      // The two POSITIVE tests for a wrong direction: price kept running past
+      // the stop, or it never came DIRECTION_DEAD_R our way in the first
+      // place. What stood here as well was a fallback — "no other lever
+      // fired, so blame the direction" — and it was the largest single source
+      // of the verdict: four of the six live direction_wrong diagnoses came
+      // out of it, three of those four cited by rule r10. Blaming the
+      // direction for the absence of evidence is exactly the reading the
+      // owner asked not to make, so the fallback is gone and the second
+      // positive test replaces the part of its work that was real.
       if (beyondSlR !== null && beyondSlR >= 1 && tp1Touch === null) push("direction_wrong");
+      // maxFavLifeR, not maxFavR: "it never came our way" is a question about
+      // the trade's life. Measured over life + after-window instead, a plan
+      // that died flat and then bounced once the stop was already paid would
+      // read as though the direction had been fine — post-decision noise
+      // deciding a verdict about the decision.
+      if (maxFavLifeR !== null && maxFavLifeR < DIRECTION_DEAD_R) push("direction_wrong");
       if (abnormal !== null) push("news_shock");
-      if (hints.length === 0) push(after.length === 0 ? "inconclusive" : "direction_wrong");
+      // Recorded whichever way it comes out, so a reader of the stored row can
+      // see which lever refused the verdict rather than only that it was
+      // refused. Computed after the tests above because clause 9 reads hints.
+      // Not for a WAIT. The switch reads the synthesised trade's outcome, so a
+      // declined plan whose shadow lost arrives here — and a lever table about
+      // a position nobody opened has no business riding along in the payload.
+      const grounds = wait ? null : noFaultGrounds(facts);
+      facts.no_fault_grounds = grounds;
+      // "No lever we can move would have changed this outcome" and "there is
+      // not yet enough basis to change anything" are different findings and
+      // must not share a bucket: the first is a finished review of a loss, the
+      // second is a review that could not be finished.
+      if (hints.length === 0) push(grounds?.allowed ? "sound_call_lost" : "inconclusive");
       break;
     }
     case "untriggered":
@@ -899,10 +1365,17 @@ export const computeFacts = async (
         notes.push(`price moved ${maxFavR}R in the signal's direction from the reference, but no market version of the plan reached TP1 first`);
       } else push("inconclusive");
       break;
-    case "expired":
-      if ((ev?.mfe_r ?? 0) >= 0.5 || won(cf.tp_half)) push("target_too_far");
+    case "expired": {
+      // The same test the loss branch and causeGrounds use. The `||` that
+      // stood here let a large excursion carry the cause on its own, on a row
+      // where the halved target was computed and lost — a hint its own
+      // grounding table called contradicted, and the one place the server
+      // disagreed with itself about what target_too_far means.
+      const halfMoved = leverMoved("tp_half", cf.tp_half?.resolution ?? null, settledAs);
+      if (halfMoved === true || (halfMoved === null && (ev?.mfe_r ?? 0) >= 0.5)) push("target_too_far");
       else push("inconclusive");
       break;
+    }
     case "win": {
       // A win is lucky when any of the danger flags is up — the deep MAE
       // that always made one, or a trade that spent most of its bars
@@ -910,14 +1383,17 @@ export const computeFacts = async (
       // that reversed, or needed most of its allowed life. A win with no
       // flags is a good call as far as the bars can tell; the model may
       // still overrule that from the plan.
-      const maeR = typeof ev?.mae_r === "number" && Number.isFinite(ev.mae_r) ? ev.mae_r : null;
+      const maeR = facts.mae_r;
       const dz = danger;
       if (dz) dz.flags = dangerFlags(dz, maeR);
       // A win whose fill instant is not on record (an early version wrote
       // filled_at null) has no bars to walk, but its MAE is on record and
-      // the rule that read it never needed the walk
+      // the rule that read it never needed the walk. The decision itself is
+      // luckyWinSupported's, read off the same facts row a later grounding
+      // check will read, so the two cannot come to different answers about
+      // the same win; the flag list here is only for the note.
       const flags: DangerFlag[] = dz ? dz.flags : (maeR ?? 0) >= LUCKY_MAE_R ? ["deep_mae"] : [];
-      push(flags.length > 0 ? "lucky_win" : "good_call");
+      push(luckyWinSupported(facts) ? "lucky_win" : "good_call");
       if (flags.length > 0) notes.push(`danger: ${flags.map((f) => describeFlag(f, dz, maeR)).join(", ")}`);
       if (won(cf.limit_pullback) && cf.limit_pullback?.rr !== null && rr !== null && (cf.limit_pullback?.rr ?? 0) > rr) {
         notes.push(
@@ -938,31 +1414,5 @@ export const computeFacts = async (
   }
   if (regime?.conflict) push("regime_misread");
 
-  return {
-    version: 2,
-    eval_interval: evalInterval,
-    bars_after_settlement: after.length,
-    risk: round2(risk * 1000) / 1000,
-    reward: round2(reward * 1000) / 1000,
-    rr,
-    order_type: ev?.order_type ?? "unknown",
-    hours_to_fill: hoursBetween(row.created_at, ev?.filled_at ?? null),
-    hours_to_settle: hoursBetween(row.created_at, resolvedIso),
-    reference,
-    from_signal: { max_favorable_r: maxFavR, max_adverse_r: maxAdvR },
-    after: {
-      first_touch: firstTouch,
-      reached_tp1: tp1Touch,
-      reached_sl: slTouch,
-      beyond_sl_r: beyondSlR,
-      returned_to_entry: after.length > 0 ? returnedToEntry : null,
-    },
-    abnormal_bar: abnormal,
-    early_adverse_r: earlyAdverseR,
-    counterfactual: cf,
-    regime,
-    danger,
-    hints,
-    notes,
-  };
+  return facts;
 };

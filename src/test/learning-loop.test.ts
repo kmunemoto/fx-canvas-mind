@@ -306,7 +306,12 @@ describe("standing aside is reviewed like anything else", () => {
     // trading MORE. If it could not support a rule, the loop could still only
     // push one way.
     expect(promptSrc).toContain('"good_call", "good_wait"');
-    expect(promptSrc).not.toMatch(/UNCITABLE_CAUSES[^;]*wait_missed_trade/);
+    // Named against the CURRENT constant. Under the old name this assertion
+    // went vacuous the moment UNCITABLE_CAUSES was renamed to
+    // NOT_RULE_EVIDENCE — the regex would have matched nothing and passed
+    // whatever the list contained.
+    expect(promptSrc).toMatch(/NOT_RULE_EVIDENCE: readonly string\[\]/);
+    expect(promptSrc).not.toMatch(/NOT_RULE_EVIDENCE[^;]*wait_missed_trade/);
   });
 
   it("never falls back to a trade cause on a call that never entered", () => {

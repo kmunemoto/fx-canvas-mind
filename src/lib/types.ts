@@ -260,6 +260,11 @@ export type PostmortemCause =
   // not. wait_missed_trade is the one cause that pushes toward trading more.
   | "wait_missed_trade"
   | "good_wait"
+  // A loss where every lever the review can move was tested and none of them
+  // would have changed the outcome. Written by the server's own lever table
+  // only — the model is never offered it — and it is not a verdict that the
+  // call was right: everything the review measures happened after the call.
+  | "sound_call_lost"
   | "inconclusive";
 
 export interface Counterfactual {
@@ -279,7 +284,13 @@ export interface PostmortemFacts {
   bars_after_settlement: number;
   hours_to_fill: number | null;
   hours_to_settle: number | null;
-  from_signal: { max_favorable_r: number | null; max_adverse_r: number | null };
+  from_signal: {
+    max_favorable_r: number | null;
+    max_adverse_r: number | null;
+    // The favourable excursion measured only up to the settlement. Absent on
+    // documents written before it existed.
+    max_favorable_r_in_life?: number | null;
+  };
   after: {
     first_touch: "tp1" | "sl" | "both" | null;
     reached_tp1: { at: string; bars: number } | null;
@@ -302,6 +313,25 @@ export interface PostmortemFacts {
   // on documents written before it was measured; null when the plan never
   // filled. Its flags are what filed a win as lucky_win.
   danger?: PostmortemDanger | null;
+  // The judge's MAE for the plan, in R. Absent on documents written before it
+  // was carried here; on those rows the danger block is usually absent too, so
+  // "was this win a lucky one" is not answerable from the document alone.
+  mae_r?: number | null;
+  // Losses only: which lever the no-fault verdict was tested against, and how
+  // each one answered. Absent on anything else and on older documents.
+  no_fault_grounds?: {
+    // `paid` is tri-state: true when moving the lever changed the outcome
+    // (won, or expired without ever being stopped), false when it was pulled
+    // and the trade still lost, null when the judge has not answered yet.
+    levers: Array<{ lever: string; computed: boolean; resolution?: string | null; paid: boolean | null }>;
+    complete: boolean;
+    answered?: boolean;
+    allowed: boolean;
+  } | null;
+  // Bars of the plan's own life. Absent on older documents.
+  bars_in_life?: number;
+  // What the plan settled as. Absent on older documents.
+  resolution?: string | null;
   hints: PostmortemCause[];
   notes?: string[];
 }

@@ -233,7 +233,12 @@ export const en: Dict = {
         lucky_win: "Won, but unsafely",
         wait_missed_trade: "Stood aside from a trade that paid",
         good_wait: "Standing aside was right",
+        sound_call_lost: "Lost with no lever to move",
         inconclusive: "Not enough evidence",
+      },
+      causeNote: {
+        sound_call_lost:
+          "A wider stop, a nearer target and a better fill were each simulated through to a verdict, and not one of them changed the outcome. This says no lever we can move would have changed it — not that the call was right: everything measured here happened after the decision was made",
       },
       lesson: "Lesson",
       avoidable: "Avoidable with what was known at the time",
