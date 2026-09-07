@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v42-2026-09-06T09:20:00Z";
+const FUNCTION_VERSION = "analyze-v43-2026-09-07T03:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -62,7 +62,7 @@ import {
 import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
-import { closedTail, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
+import { barFullyClosed, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
@@ -96,18 +96,54 @@ const ALLOWED_PAIRS = new Set([
   "GBP/JPY", "AUD/USD", "AUD/JPY",
 ]);
 
-// Higher timeframes analyzed alongside the one the user picked. The entry
-// timeframe comes first and is the one prices are planned on.
-// Bars per timeframe. The higher timeframes used to ask for 130, which is
-// below the 200 SMA200 needs, so the long-term trend the chain exists to
-// supply was structurally absent from every higher-timeframe block and
-// rendered as "n/a" on every run.
 // The floor the system prompt states and the server now enforces. Below it the
 // model's own answer is "I am not confident", and WAIT is the honest form of
 // that answer.
 const MIN_CONFIDENCE = 60;
-const ENTRY_BARS = 250;
-const HIGHER_BARS = 250;
+
+// Rows to ask Twelve Data for, per timeframe.
+//
+// Sized so that ~250 bars SURVIVE the closed-market filter in fetchSeries,
+// which is parity with the 250 every rung used to get. The higher timeframes
+// once asked for 130, below the 200 that SMA200 needs, so the long-term trend
+// this chain exists to supply was structurally absent from every higher block
+// and rendered as "n/a" on every run; asking for 250 and then throwing the
+// weekend away would put 15min (172 shut slots a week), 1h (43) and 4h (10)
+// straight back under that floor.
+//
+// Keyed by interval rather than split entry/higher, because the requirement is
+// a property of the interval — both rungs need 200 closes for SMA200 — and not
+// of a position in the chain. Same shape as EVAL_OUTPUTSIZE in
+// track-outcomes/evaluate.ts. The margin above the bare arithmetic
+// (422/336/330/292 raw rows for 250 survivors) buys a market holiday the
+// provider OMITS; one it fills with a flat bar survives the weekend-only
+// filter and pads the count by itself.
+//
+// This costs nothing. Twelve Data charges per request per symbol, not per bar,
+// and this is still exactly three requests per run — which is the number
+// track-outcomes/index.ts reserves quota for. Paging with start_date/end_date
+// would turn one request into several and break that sum.
+const OUTPUTSIZE: Record<string, number> = {
+  "15min": 550,
+  "1h": 480,
+  "4h": 400,
+  "1day": 320,
+  "1week": 250,
+  "1month": 250,
+};
+
+// How few bars is too few to believe a rung's readings.
+//
+// 200 is the SMA200 floor: sma(closes, 200) returns null below it and the
+// block renders 算出不能 with nothing else raised anywhere. The old `2` for the
+// higher rungs is exactly what let the 130-bar regression run unnoticed — it
+// passed the health check cleanly while SMA200 was missing from every prompt.
+// 52 is ichimoku's spanB window, the longest exact one in indicators.ts, and
+// the right question for 1week/1month, where depth is about how much history
+// the provider holds rather than about the feed being broken.
+const MIN_BARS: Record<string, number> = {
+  "15min": 200, "1h": 200, "4h": 200, "1day": 200, "1week": 52, "1month": 52,
+};
 
 // Length of one bar, for deciding whether the newest one has closed and how
 // stale a series is allowed to be.
@@ -120,6 +156,8 @@ const INTERVAL_MS: Record<string, number> = {
   "1month": 30 * 24 * 60 * 60 * 1000,
 };
 
+// Higher timeframes analyzed alongside the one the user picked. The entry
+// timeframe comes first and is the one prices are planned on.
 const TF_CHAIN: Record<string, string[]> = {
   "15min": ["15min", "1h", "4h"],
   "1h": ["1h", "4h", "1day"],
@@ -993,9 +1031,55 @@ Deno.serve(async (req: Request) => {
     const timeframes = TF_CHAIN[interval];
     // How many rows each timeframe's payload carried before parsing, so
     // seriesHealth can tell "the provider sent little" from "we threw a lot
-    // away".
-    const rawCounts: number[] = [];
-    const fetchSeries = async (tf: string, outputsize: number) => {
+    // away". Filled by index below, never by completion order.
+    let rawCounts: number[] = [];
+    // One fetch, one filter, for every rung.
+    //
+    // Twelve Data emits a bar for every interval while the market is shut, and
+    // those bars are filler. The first weekend preview came back with the 1h
+    // ATR at 0.041 against 0.385-0.421 on the Friday rows of the same pair — a
+    // seventh — with a Bollinger band 2.1 pips wide and price, SMA20, SMA50,
+    // tenkan and kijun all collapsed onto 156.24. The model read that
+    // correctly and called it "an ultra-frozen 1h range", which is a true
+    // description of the data and a false one of the market.
+    //
+    // Until now only the PREVIEW path trimmed them, and only the trailing run,
+    // so on a weekday every earlier weekend was still sitting inside every
+    // series. Production, Sunday 2026-09-06 15:01:21Z, is the measurement:
+    // trimming the tail alone dropped 42 of 250 on 1h, 10 on 4h and 2 on 1day
+    // — one flat bar per interval across the whole closure, on every timeframe
+    // including 1day — while a whole-series filter on the same run drops
+    // 85/60/36. The difference is what has never been touched. It shows up in
+    // the rows: 4h ATR read 0.313 on Monday 2026-09-07 01:07 against 0.564 on
+    // Friday 05:57, 0.55x, on the same pair and the same series.
+    //
+    // ATR is the unit this whole app measures in — stop distances, structure
+    // tolerances, the room to the next level, the situation axes — so an ATR
+    // half or a seventh of the truth makes every distance look that many times
+    // further, and the plans written on a Monday morning would carry absurdly
+    // tight stops into the permanent record.
+    //
+    // The NARROW predicate, on purpose, asked of the bar's whole SPAN:
+    // `isMarketClosed` answers "may I throw this bar away?" and is deliberately
+    // conservative about saying yes, and it is already what track-outcomes uses
+    // to drop the same bars (evaluate.ts, waits.ts). The three functions now
+    // agree on what a bar is, on the timeframes the tracker fetches.
+    //
+    // What it will NOT throw away is the Sunday pre-open band: this feed
+    // prices the weekend gap before 21:00Z, so `barFullyClosed` keeps any bar
+    // whose span reaches Sunday 17:00Z (market-hours.ts). Without that the 4h
+    // bar stamped 2026-09-06 17:00Z — range 0.518 against 0.018-0.092 either
+    // side of it, holding the week's opening low — was deleted from every
+    // Monday run by the filter added to protect ATR.
+    //
+    // Here rather than at any of the call sites because this is the one door
+    // all three rungs come through, and the only place that knows both the
+    // timeframe and the raw payload. Everything downstream — the <60 guard,
+    // entryCandles, the health check, the snapshots, the structures, the
+    // printed candles, technicalData.candles — is filtered by construction
+    // instead of by someone remembering to rebind.
+    const fetchSeries = async (tf: string) => {
+      const outputsize = OUTPUTSIZE[tf] ?? 250;
       // timezone=UTC: the tracker and the chart both read these timestamps as
       // UTC, and the provider's default zone is not.
       const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(currencyPair)}&interval=${encodeURIComponent(tf)}&outputsize=${outputsize}&timezone=UTC&apikey=${twelveDataKey}`;
@@ -1009,8 +1093,28 @@ Deno.serve(async (req: Request) => {
         const message = isRecord(parsed) ? asTrimmedString(parsed.message, "") : "";
         throw new Error(message || `市場データ取得エラー (${tf}, HTTP ${res.status})`);
       }
-      rawCounts.push(Array.isArray(parsed.values) ? parsed.values.length : 0);
-      return parseCandles(parsed.values);
+      const values = Array.isArray(parsed.values) ? parsed.values : [];
+      const all = parseCandles(values);
+      const intervalMs = INTERVAL_MS[tf] ?? 0;
+      const candles = all.filter((c) => !barFullyClosed(
+        // The file's one timestamp idiom, not a second one. The intraday
+        // "YYYY-MM-DD HH:mm:ss" form is read as LOCAL time by V8 without the
+        // T and the Z; the coarse timeframes arrive date-only ("2026-08-31"),
+        // which this leaves at UTC midnight. On those the stamp is the
+        // trading day's NAME, not the bar's UTC start — the provider's forex
+        // day runs 21:00Z to 21:00Z — so what gets tested there is the
+        // labelled day. See barFullyClosed for why that is the right question.
+        Date.parse(c.datetime.includes("T") ? c.datetime : `${c.datetime.replace(" ", "T")}Z`),
+        intervalMs,
+      ));
+      const dropped = all.length - candles.length;
+      if (dropped > 0) console.log("Dropped closed-market bars", { tf, dropped, kept: candles.length });
+      // The bars above came off the raw count too. `seriesHealth` calls a
+      // series unfit when more than 5% of the payload failed to parse, and
+      // that check exists to catch a BROKEN feed; bars we removed on purpose
+      // must never enter it. Left in, the drop share would be 31% on 15min and
+      // 14% on 1day, which is a 502 on essentially every request.
+      return { candles, rawCount: Math.max(0, values.length - dropped) };
     };
 
     // The plan is priced here and filled by the tracker days later. Those two
@@ -1039,13 +1143,18 @@ Deno.serve(async (req: Request) => {
     let seriesByTf: Candle[][];
     let gmoRaw: Awaited<typeof gmoAttempt> = null;
     try {
-      // The entry timeframe needs at least 200 closes or sma(closes, 200)
-      // silently returns null and SMA200 vanishes from the prompt.
+      // Both arrays are taken by INDEX, not by completion order. rawCounts used
+      // to be pushed from inside fetchSeries, which recorded whichever
+      // timeframe answered first — and the counts genuinely differ per rung
+      // (production 2026-09-06 12:33 stored bars 241/248/250), so a
+      // misattributed count is either a 502 or a silently mis-scored series.
+      // Promise.all preserves map order in its result; push preserved nothing.
       const [td, gmo] = await Promise.all([
-        Promise.all(timeframes.map((tf, i) => fetchSeries(tf, i === 0 ? ENTRY_BARS : HIGHER_BARS))),
+        Promise.all(timeframes.map((tf) => fetchSeries(tf))),
         gmoAttempt,
       ]);
-      seriesByTf = td;
+      seriesByTf = td.map((r) => r.candles);
+      rawCounts = td.map((r) => r.rawCount);
       gmoRaw = gmo;
     pricedAtIso = new Date().toISOString();
     } catch (err) {
@@ -1093,6 +1202,14 @@ Deno.serve(async (req: Request) => {
         overlayReason = check.reason;
         if (check.ok) {
           seriesByTf = [gmoRaw.bars.map(midCandle), ...seriesByTf.slice(1)];
+          // The raw count describes the payload the series came from, and the
+          // entry rung's payload is now GMO's. Those bars arrive already
+          // interior-filtered (track-outcomes/quotes.ts) and capped at 250, so
+          // nothing in them was lost to a broken feed. Left pointing at the
+          // Twelve Data request this reads dropped 230 of 480 — 48%, a 502 on
+          // every accepted-overlay run — and it is already a latent 502 today
+          // whenever GMO comes back with fewer than 238 of its 250 bars.
+          rawCounts[0] = seriesByTf[0].length;
           priceFeed = "gmo";
         }
       }
@@ -1119,49 +1236,13 @@ Deno.serve(async (req: Request) => {
       }
       : null;
 
+    // Counted on the FILTERED array, which is the reading it always wanted:
+    // sixty weekend bars are not sixty bars of anything. Worst-case survivor
+    // counts under OUTPUTSIZE are 378/351/300/274, so 60 stays what it has
+    // always been — a floor against an empty payload, never a live threshold.
     const entryCandles = seriesByTf[0];
     if (entryCandles.length < 60) {
       return await fail({ ok: false, error: "市場データが不足しています", diagnostics: { error_stage: "empty_market_data", stage } }, 400);
-    }
-
-    // On a preview, cut the series back to the last time the market traded.
-    //
-    // Twelve Data keeps emitting bars while the market is shut, and they are
-    // flat: the first weekend preview came back with the 1h ATR at 0.041
-    // against 0.385-0.421 on the Friday rows of the same pair — a tenth —
-    // a Bollinger band 2.1 pips wide, and price, SMA20, SMA50, tenkan and
-    // kijun all collapsed onto 156.24. The model read that correctly and
-    // called it "an ultra-frozen 1h range", which is a true description of
-    // the data and a false one of the market.
-    //
-    // ATR is the unit this whole app measures in — stop distances, structure
-    // tolerances, the room to the next level, the situation axes — so an ATR
-    // ten times too small makes every distance look ten times further.
-    //
-    // The NARROW predicate, on purpose: `isMarketClosed` answers "may I throw
-    // this bar away?", is deliberately conservative about doing so, and is
-    // already what track-outcomes uses to drop the same bars. The two now
-    // agree on what a bar is.
-    //
-    // Trailing only. The series is ascending, so this removes the tail and
-    // introduces no gap; bars from EARLIER weekends are left exactly as a
-    // weekday run would see them. That contamination is real and older than
-    // this change, and it is measured separately rather than fixed blind here.
-    if (previewMode) {
-      seriesByTf = seriesByTf.map((candles, i) => {
-        const dropped = closedTail(candles.map((c) =>
-          Date.parse(c.datetime.includes("T") ? c.datetime : `${c.datetime.replace(" ", "T")}Z`)
-        ));
-        const end = candles.length - dropped;
-        if (dropped > 0) {
-          // Taken off the raw count too. These bars were not lost to a broken
-          // feed, so they must not count towards the "too much dropped" issue
-          // that exists to catch one.
-          rawCounts[i] = Math.max(0, (rawCounts[i] ?? candles.length) - dropped);
-          console.log("Preview trimmed closed-market bars", { tf: timeframes[i], dropped, kept: end });
-        }
-        return end === candles.length ? candles : candles.slice(0, end);
-      });
     }
 
     // Whether the series are fit to analyse. parseCandles now drops a bar it
@@ -1182,7 +1263,7 @@ Deno.serve(async (req: Request) => {
       seriesHealth(
         candles,
         rawCounts[i] ?? candles.length,
-        i === 0 ? 60 : 2,
+        MIN_BARS[timeframes[i]] ?? 2,
         INTERVAL_MS[timeframes[i]] ?? 0,
         Date.now(),
         3,
@@ -1325,7 +1406,7 @@ Deno.serve(async (req: Request) => {
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
       const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}`;
-      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):\n${lines}`;
+      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
     }).join("\n\n");
 
     const nowUtc = new Date().toISOString();

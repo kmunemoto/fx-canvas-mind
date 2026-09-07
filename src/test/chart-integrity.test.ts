@@ -148,9 +148,15 @@ describe("the analyst's own rules are enforced by the server", () => {
     expect(analyzeSrc).toContain("const beyondPrevious = bound === null || (rung.value - bound) * dir > 0;");
   });
 
-  it("fetches enough bars for the higher timeframes to have an SMA200", () => {
-    expect(analyzeSrc).toContain("const HIGHER_BARS = 250;");
-    expect(analyzeSrc).toContain("i === 0 ? ENTRY_BARS : HIGHER_BARS");
+  it("fetches enough bars for every timeframe to have an SMA200", () => {
+    // Asked per interval, not per rung: both rungs need 200 closes, so the
+    // requirement is a property of the interval. The numbers moved because the
+    // closed-market filter now removes 172 slots a week on 15min, 43 on 1h and
+    // 10 on 4h, and a flat 250 would put all three back under the 200 floor.
+    expect(analyzeSrc).toContain("const OUTPUTSIZE: Record<string, number> = {");
+    expect(analyzeSrc).not.toContain("const HIGHER_BARS");
+    expect(analyzeSrc).not.toContain("const ENTRY_BARS");
+    expect(analyzeSrc).toContain("const outputsize = OUTPUTSIZE[tf] ?? 250;");
     // and says so when it still cannot be computed
     expect(analyzeSrc).toContain("算出不能(足${s.barsUsed}本、200本必要)");
   });

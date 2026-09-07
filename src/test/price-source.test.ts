@@ -187,6 +187,12 @@ describe("the overlay is wired into analyze so nothing can read the old series",
     expect(swap).toBeLessThan(bind);
     // And there is only one such binding to keep honest.
     expect(src.split("const entryCandles = seriesByTf[0];").length - 1).toBe(1);
+    // Nothing may reassign the series AFTER the bind either. The preview trim
+    // did exactly that — bound at one line, reassigned twenty-nine later — so
+    // on every preview run entryCandles.slice(-60) shipped frozen bars to the
+    // browser while the indicators read trimmed ones. This is the clause that
+    // stops the next trim block from stepping in the same hole a third time.
+    expect(src.indexOf("seriesByTf =", bind)).toBe(-1);
   });
 
   it("runs the overlay concurrently with Twelve Data and can never reject", () => {
