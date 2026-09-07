@@ -454,7 +454,7 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
     // Said once, because the alternative is the model reading the edge of the
     // window as a property of the market — which is what produced "空白地帯"
     // and "8月来のもみ合い" in the first twenty-one analyses.
-    "※スイングは前後2本で確定するため、直近2本は構造判定に入らない。上記は参照期間内の事実で、期間外は不明。",
+    "※スイングは前後2本で確定するため、直近2本は構造判定に入らない。上記は参照期間内の事実で、期間外は不明。「N本前」は市場が開いていた足で数えており、週末の足は原則として系列に入っていない。",
     div,
   ].filter((l) => l !== "").join("\n");
 };

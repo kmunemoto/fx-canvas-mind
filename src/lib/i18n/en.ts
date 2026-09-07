@@ -357,7 +357,7 @@ export const en: Dict = {
     showAll: (n: number) => `Show all (${n})`,
     showLess: "Show fewer",
     note: "Generated automatically from reviews against actual prices, and put in front of the model on every new analysis",
-    supportNote: "Cases = independent situations behind the rule (plans on the same day in the same direction count once). Two or fewer is \"under review\"",
+    supportNote: "Cases = independent situations behind the rule (plans in the same direction within a day count once — unless the earlier trade had already finished well before the next was made). Two or fewer is \"under review\"",
     cadence: "Revised only after 5 new lessons or 24 hours since the last revision, adding or dropping at most 2 rules at a time, so each version's results can be compared",
     sharedNote: "These rules are learned from every account's results pooled together, so a rule's evidence count includes plans you will not find in your own history",
     heldBack: (n: number) =>
@@ -385,7 +385,7 @@ export const en: Dict = {
     lessons: (n: number) => `${n} lesson${n === 1 ? "" : "s"}`,
     nextRevision: (n: number) => (n > 0 ? `${n} more lesson${n === 1 ? "" : "s"} until the next revision (or 24 h after the last)` : "revised on the next review"),
     candidateHeld: (decided: number, needed: number) =>
-      `A revision is written and held. It goes live once the current version has ${decided}/${needed} settled trades to compare it against`,
+      `A revision is written and held. It goes live once the current version has been tried on ${decided}/${needed} independent situations to compare it against`,
     waits: "Post-mortems run automatically 1 h (15min plans), 2 h (1h), 4 h (4h) or 8 h (1day) after settlement, and are reviewed again later when little price action has followed",
   },
 

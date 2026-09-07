@@ -146,3 +146,41 @@ describe("analyze stores the whole reading, not half of it", () => {
     expect(analyze).toContain("snap === null ? null : compactSnapshot(timeframes[i], snap)");
   });
 });
+
+describe("a decision can be reproduced from the row it left behind", () => {
+  it("says which build wrote the plan", () => {
+    // FUNCTION_VERSION went out in the response body and the
+    // X-Function-Version header and was then thrown away, so "which code made
+    // this call" could only be answered by dating the row against a deploy log.
+    expect(analyze).toContain("provenance: { function_version: FUNCTION_VERSION },");
+  });
+
+  it("says which book each rung was read from, per timeframe", () => {
+    // `price_feed` is a single label and describes the ENTRY rung only — the
+    // overlay swaps that series alone — so on its own it says nothing about
+    // the higher timeframes.
+    expect(analyze).toContain('feed: i === 0 ? priceFeed : "twelve_data",');
+  });
+
+  it("keeps the closed-market drop per timeframe instead of only logging it", () => {
+    // A reading taken off 190 surviving bars is not the reading taken off 250,
+    // and the count existed only in a log line nobody can query a month later.
+    expect(analyze).toContain("droppedByTf = td.map((r) => r.dropped);");
+    expect(analyze).toContain('dropped: i === 0 && priceFeed === "gmo" ? null : (droppedByTf[i] ?? null),');
+  });
+
+  it("does not store the decision instant a third time", () => {
+    // It is already entry_check.priced_at and the analyses.priced_at column,
+    // both written from pricedAtIso. A third copy is a third thing to
+    // disagree, and provenance whose fields disagree is worse than none.
+    const ctx = analyze
+      .slice(analyze.indexOf("    const context = {"), analyze.indexOf("    const resolvedMode ="))
+      // the comment above the block explains the absence by name; the test is
+      // about the fields, so read only the code
+      .split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+    expect(ctx).toContain("provenance: {");
+    expect(ctx).not.toContain("pricedAtIso");
+    expect(ctx).not.toContain("decided_at");
+    expect(analyze).toContain("priced_at: pricedAtIso,");
+  });
+});

@@ -12,10 +12,16 @@ const STALL_MINUTES = 60;
 // Lessons that must gather before the rulebook is rewritten (see
 // supabase/functions/postmortem/prompt.ts MIN_NEW_LESSONS)
 const MIN_NEW_LESSONS = 5;
-// Trades that must settle under the live version before a written revision
-// replaces it (see supabase/functions/postmortem/index.ts
-// MIN_DECIDED_PER_VERSION)
-const MIN_DECIDED_PER_VERSION = 10;
+// Independent SITUATIONS that must be decided under the live version before a
+// written revision replaces it (see
+// supabase/functions/postmortem/promotion.ts, MIN_DECIDED_EPISODES).
+//
+// Situations, not trades. The gate counts episodes — ten plans on one pair in
+// one afternoon are one reading restated ten times — and this screen used to
+// render loop_health's ROW count against the same floor of ten. Measured
+// 2026-09-07: two decided rows under v8, four hours apart, so the screen read
+// 2/10 for a gate that was at 1/10, and the overstatement grows with cadence.
+const MIN_DECIDED_EPISODES = 10;
 
 const minutesAgo = (iso: string | null, nowIso: string): number | null => {
   if (!iso) return null;
@@ -76,7 +82,13 @@ const LoopHealth = ({ health }: Props) => {
         {typeof health.rulebook_version === "number" ? ` · ${s.rulebook(health.rulebook_version)}` : ""}
       </p>
       <p className="text-[10px] text-muted-foreground">
-        {held ? s.candidateHeld(health.decided_under_version ?? 0, MIN_DECIDED_PER_VERSION) : s.nextRevision(untilRevision)}
+        {held
+          // The episode count when the server has it, the old row count when it
+          // does not. loop_health keeps sending both, so a client deployed
+          // ahead of the migration shows the number it always showed rather
+          // than falling back to a confident zero.
+          ? s.candidateHeld(health.decided_episodes_under_version ?? health.decided_under_version ?? 0, MIN_DECIDED_EPISODES)
+          : s.nextRevision(untilRevision)}
       </p>
       <p className="text-[10px] text-muted-foreground">{s.waits}</p>
     </div>
