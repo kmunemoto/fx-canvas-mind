@@ -31,6 +31,7 @@ import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Caus
 import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import { DECIDED_ROW_LIMIT, MIN_DECIDED_EPISODES, decidedRowsPath, promotionGate, type DecidedRow } from "./promotion.ts";
+import { MAX_PLANS_ADMIN, MAX_PLANS_PER_RUN, isTargeted, parseIds, runLimit, unaccountedIds } from "./targeted.ts";
 import {
   CONSOLIDATION_SCHEMA,
   EPISODE_DEFINITION_VERSION,
@@ -49,7 +50,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v17-2026-09-07T11:40:00Z";
+const POSTMORTEM_VERSION = "postmortem-v19-2026-09-07T15:40:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -57,9 +58,6 @@ const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const SWEEP_COOLDOWN_MS = 10 * MIN;
-// Diagnoses per run: each one is a market-data request and a model turn
-const MAX_PLANS_PER_RUN = 3;
-const MAX_PLANS_ADMIN = 6;
 const MAX_ATTEMPTS = 3;
 // A diagnosis made on almost no aftermath is revisited once the full window
 // of bars exists; this caps how often that happens.
@@ -240,6 +238,27 @@ Deno.serve(async (req: Request) => {
           rule_credited: strOrNull(doc.rule_credited),
           // When the plan was made: what "same situation" is judged on
           analysis_created_at: row.created_at,
+          // How much aftermath the diagnosis actually rested on, and which
+          // build wrote it. Both come off the stored document, so the repair
+          // path rebuilds the same numbers with no model call.
+          //
+          // AFTER_WAIT_MS (facts.ts) is 1h on a 15min plan and 8h on a daily
+          // one, so a diagnosis is written very soon after settlement BY
+          // DESIGN, and postmortem.facts has always recorded how many bars
+          // that was. The lesson did not, and the rulebook editor reads
+          // lessons — so an eight-bar reading and a ninety-five-bar reading
+          // arrived indistinguishable, both stating a confidence in the 70s.
+          // Measured 2026-09-07: of four losses re-diagnosed at 48-95 bars,
+          // three had said something else at 8. Row 1b003cf3 was
+          // direction_wrong with max_favorable_r 0 — "never once in profit" —
+          // and at 48 bars was chased_move with max_favorable_r 7: the
+          // direction was right and price reached TP1 23 bars later.
+          // This column is the depth, and nothing else: what it is worth is
+          // a judgement to be made FROM the record, not inside the writer.
+          bars_after_settlement: numberOrNull(
+            (isRecord(doc.facts) ? doc.facts : {}).bars_after_settlement,
+          ),
+          postmortem_version: strOrNull(doc.version),
           // ...and when it settled, which is the OTHER half of that judgement.
           // The episode rule lets a plan made more than CLUSTER_REOPEN_MS
           // after the previous one closed start a fresh episode; without this
@@ -286,6 +305,37 @@ Deno.serve(async (req: Request) => {
     const bodyRaw = await req.json().catch(() => null);
     const body: JsonRecord = isRecord(bodyRaw) ? bodyRaw : {};
 
+    // Options for a hand-run (either caller is trusted): run on specific
+    // rows, skip the after-settlement wait, force a rulebook rewrite.
+    //
+    // Read BEFORE the auth block, not after it, because whether this request
+    // names rows decides how the sweep cooldown below treats it — and the
+    // body is already in hand at this point. Nothing here grants anything:
+    // the token or the admin JWT is still checked below, and every option is
+    // only acted on once it has been.
+    const options = { force: false, ids: [] as string[], consolidate: false, promote: false, limit: MAX_PLANS_PER_RUN };
+    options.force = body.force === true;
+    options.consolidate = body.consolidate === true;
+    // Escape hatch: promote a revision the decided-trade gate is holding.
+    options.promote = body.promote === true;
+    // Parsed, not sliced: every entry the caller sent comes back either as an
+    // id the run will query for or as a line saying why it will not, and the
+    // truncation that used to happen silently HERE is one of those lines
+    // (targeted.ts). Nothing is dropped between the request and the answer.
+    const parsedIds = parseIds(body.ids);
+    options.ids = parsedIds.ids;
+    // Naming four rows and diagnosing three of them was request 1035
+    // (2026-09-07): the ids bound was MAX_PLANS_ADMIN while the limit stayed
+    // at the cron's default of three, and the fourth row went nowhere. The
+    // ids themselves say how many now (targeted.ts).
+    options.limit = runLimit(options.ids.length, numberOrNull(body.limit));
+    // A run aimed at named rows: an operator action, not a schedule. The
+    // predicate itself lives in targeted.ts so the shapes that must NOT count
+    // as naming a row — a blank string, a list of numbers, a string where a
+    // list belongs — are settled in one tested place rather than by a length
+    // test here.
+    const targeted = isTargeted(parsedIds);
+
     // ---- who is asking -------------------------------------------------
     let scope: Scope;
     const sweepToken = req.headers.get("x-sweep-token");
@@ -295,13 +345,37 @@ Deno.serve(async (req: Request) => {
       if (typeof expected !== "string" || expected.length === 0 || !constantTimeEqual(sweepToken, expected)) {
         return json({ ok: false, error: "認証に失敗しました" }, 401);
       }
-      const cutoff = encodeURIComponent(new Date(nowMs - SWEEP_COOLDOWN_MS).toISOString());
-      const claimed = await patchRows(
-        `postmortem_state?id=eq.1&or=(last_run_at.is.null,last_run_at.lt.${cutoff})`,
-        { last_run_at: nowIso },
-      );
-      if (claimed === 0) {
-        return json({ ok: true, mode: "sweep", diagnosed: 0, skipped: "cooldown", version: POSTMORTEM_VERSION });
+      // The cooldown paces the CRON, and nothing else. A run that names rows
+      // is neither paced by it nor allowed to spend it:
+      //   * it must not WAIT on it — request 1033 at 12:39:45Z named four rows
+      //     and returned {"diagnosed":0,"skipped":"cooldown"} 1m45s after the
+      //     12:38 sweep had claimed the slot, so the ids filter below (whose
+      //     own comment says named rows are re-diagnosed whatever their state)
+      //     was never even reached;
+      //   * it must not CLAIM it — the 12:48 targeted run took the slot and
+      //     made the 12:53 scheduled sweep a no-op. Ten minutes of the queue's
+      //     own progress, spent by a request that was not the queue.
+      // Authentication is unchanged either way: the token was verified above.
+      //
+      // Known and accepted: the slot was also the only thing serializing two
+      // runs, so a targeted run started inside a sweep's ~2-minute window can
+      // diagnose a row the sweep is also diagnosing. Both read the row before
+      // either writes, so the loser's model turn is thrown away and the
+      // `attempts` / `revisions` counters on it lose an increment. That is the
+      // price of the exemption and it is the smaller price: a per-row claim
+      // would make a named row refusable, and naming a row is precisely the
+      // instruction to diagnose it whatever its state. The admin-JWT path has
+      // never claimed the slot either, so this window is not new — it is now
+      // reachable by the token as well.
+      if (!targeted) {
+        const cutoff = encodeURIComponent(new Date(nowMs - SWEEP_COOLDOWN_MS).toISOString());
+        const claimed = await patchRows(
+          `postmortem_state?id=eq.1&or=(last_run_at.is.null,last_run_at.lt.${cutoff})`,
+          { last_run_at: nowIso },
+        );
+        if (claimed === 0) {
+          return json({ ok: true, mode: "sweep", diagnosed: 0, skipped: "cooldown", version: POSTMORTEM_VERSION });
+        }
       }
       scope = { kind: "sweep" };
     } else {
@@ -319,17 +393,6 @@ Deno.serve(async (req: Request) => {
       }
       scope = { kind: "admin", email };
     }
-
-    // Options for a hand-run (either caller is trusted): run on specific
-    // rows, skip the after-settlement wait, force a rulebook rewrite
-    const options = { force: false, ids: [] as string[], consolidate: false, promote: false, limit: MAX_PLANS_PER_RUN };
-    options.force = body.force === true;
-    options.consolidate = body.consolidate === true;
-    // Escape hatch: promote a revision the decided-trade gate is holding.
-    options.promote = body.promote === true;
-    options.ids = strList(body.ids).slice(0, MAX_PLANS_ADMIN);
-    const limit = numberOrNull(body.limit);
-    if (limit !== null) options.limit = Math.max(1, Math.min(MAX_PLANS_ADMIN, Math.round(limit)));
 
     // ---- the rulebook, by version -------------------------------------------
     // Every plan records the rulebook version it was made under; the current
@@ -381,9 +444,19 @@ Deno.serve(async (req: Request) => {
     const rowFilter = options.ids.length > 0
       ? `id=in.(${options.ids.map(encodeURIComponent).join(",")})`
       : retryFilter;
-    const candidates = await readRows(
+    // Read so that a query that FAILED stays distinguishable from a query that
+    // came back empty. For the cron the two are the same thing — an empty page
+    // means nothing to do either way — but for a targeted run the difference is
+    // the whole answer: an empty page reported per id says "no plan with this
+    // id", and saying that about a row the operator is looking straight at, on
+    // the strength of a 400 nobody read, is a worse failure than the silence
+    // this accounting replaced. The run already draws exactly this distinction
+    // for the rulebook and for the repair pass; the candidate queries were the
+    // one place that did not.
+    const candidatesOrNull = await readRowsOrNull(
       `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
+    const candidates = candidatesOrNull ?? [];
 
     // `wait` is set only on a call that declined to trade: `row` then holds
     // the hypothetical trade stored at the call, so the facts machinery can
@@ -455,11 +528,12 @@ Deno.serve(async (req: Request) => {
       shadowRows.map((x) => strOrNull(x.shadow_of)).filter((v): v is string => v !== null),
     );
 
-    const waitCandidates = await readRows(
+    const waitCandidatesOrNull = await readRowsOrNull(
       `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false` +
         `&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
         `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
     );
+    const waitCandidates = waitCandidatesOrNull ?? [];
     for (const r of waitCandidates) {
       const plan = isRecord(r.wait_plan) ? r.wait_plan : null;
       const check = isRecord(r.wait_check) ? r.wait_check : null;
@@ -636,6 +710,50 @@ Deno.serve(async (req: Request) => {
     const diagnosed: Array<{ id: string; cause: string; outcome: string; shadow: boolean }> = [];
     const errors: string[] = [];
     let newLessons = 0;
+
+    // Every named id is accounted for, before a single diagnosis is
+    // attempted. An id can fall out of the run in several ways and only one of
+    // them used to say so: the loop's own `deferred (time budget)` line. The
+    // rest were silent, which is how request 1035 (2026-09-07) reported
+    // `{"candidates":4,"due":4,"diagnosed":3,"errors":[]}` — a fourth row
+    // dropped by the limit, and, when it was re-run on its own, diagnosed
+    // differently. Naming a row is a question; a question deserves an answer
+    // even when the answer is "not this run".
+    //
+    // Worded like the deferred line — `<id>: <what happened>` — so one reader
+    // and one grep cover all of them.
+    //
+    // Entries rejected before the query ran (not a plan id, past
+    // MAX_PLANS_ADMIN) are answered for too, so `requested_ids` in the summary
+    // reconciles against `diagnosed` plus `errors` whatever the caller sent.
+    errors.push(...parsedIds.rejected);
+    if (options.ids.length > 0) {
+      // One extra read, targeted runs only, to tell "there is no such row"
+      // from "the row is there and neither candidate query wants it". Without
+      // it both came out as "no settled plan with this id" — and on
+      // 2026-09-07 the table held ten ungradeable WAITs and one unsettled
+      // trade against two gradeable WAITs, so the misleading branch was the
+      // likely one. The ids reaching here are uuid-shaped (targeted.ts), so
+      // this probe cannot fail the way the candidate queries could.
+      const presentRows = await readRowsOrNull(
+        `analyses?select=id&id=in.(${options.ids.map(encodeURIComponent).join(",")})&limit=${MAX_PLANS_ADMIN}`,
+      );
+      errors.push(...unaccountedIds(
+        options.ids,
+        {
+          due: new Set(due.map((d) => d.row.id)),
+          queued: new Set(rows.map((d) => d.row.id)),
+          fetched: new Set(
+            [...candidates, ...waitCandidates].map((r) => strOrNull(r.id)).filter((v): v is string => v !== null),
+          ),
+          present: presentRows === null
+            ? null
+            : new Set(presentRows.map((r) => strOrNull(r.id)).filter((v): v is string => v !== null)),
+          unavailable: candidatesOrNull === null || waitCandidatesOrNull === null,
+        },
+        options.limit,
+      ));
+    }
 
     const markFailed = async (row: PostmortemRow, raw: JsonRecord, error: string) => {
       const prior = isRecord(raw.postmortem) ? raw.postmortem : null;
@@ -955,7 +1073,11 @@ Deno.serve(async (req: Request) => {
       // arrived with closed_at null and separate decisions inside a day were
       // counted as one. A rule's support is a count of episodes, and support 0
       // is what drops a rule.
-      const lessonSelect = "analysis_id,user_id,plan_contract,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,plan_closed_at,rule_blamed,rule_credited";
+      // bars_after_settlement and postmortem_version are on the end for the
+      // same kind of reason as plan_closed_at is on the list at all: a column
+      // that is written and never selected is a column nobody reads. The
+      // editor is being handed how deep the aftermath under each lesson was.
+      const lessonSelect = "analysis_id,user_id,plan_contract,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,plan_closed_at,rule_blamed,rule_credited,bars_after_settlement,postmortem_version";
       // Over-fetched so the round-robin has something to choose from: taking
       // the newest RECENT_LESSONS and only then sharing them out would already
       // have thrown away every account the busiest one outran.
@@ -1013,6 +1135,8 @@ Deno.serve(async (req: Request) => {
         plan_closed_at: strOrNull(l.plan_closed_at),
         rule_blamed: strOrNull(l.rule_blamed),
         rule_credited: strOrNull(l.rule_credited),
+        bars_after_settlement: numberOrNull(l.bars_after_settlement),
+        postmortem_version: strOrNull(l.postmortem_version),
       })));
 
       const previousRules: Rule[] = current ? parseRules(current.rules) : [];
@@ -1316,6 +1440,17 @@ Deno.serve(async (req: Request) => {
       trade_candidates: candidates.length,
       wait_candidates: waitCandidates.length,
       due: rows.length,
+      // Whether this run was aimed at named rows. It is the difference
+      // between a scheduled sweep and an operator action — the cooldown, the
+      // limit and the state row below all treat the two differently — and a
+      // reader of last_result could not otherwise tell them apart.
+      targeted,
+      // How many ids the caller SENT, not how many survived parsing: request
+      // 1035 was only noticeable at all by counting the response against what
+      // had been sent, and a count that has already dropped the rejected ids
+      // cannot be counted against anything. `requested_ids` equals the ids on
+      // `results` plus the ids on `errors`, always.
+      requested_ids: parsedIds.requested,
       diagnosed: diagnosed.length,
       lessons: newLessons,
       lessons_repaired: repaired,
@@ -1328,7 +1463,12 @@ Deno.serve(async (req: Request) => {
       elapsedMs: elapsed(),
       version: POSTMORTEM_VERSION,
     };
-    if (scope.kind === "sweep") {
+    // The state row is the CRON's record of itself: loop_health reads
+    // last_run_at and last_result->>diagnosed off it to say whether the sweep
+    // is alive. A targeted run is not the sweep — it did not claim the slot
+    // above and it does not report as one here, or an operator diagnosing two
+    // named rows would show up as the schedule's last word on the queue.
+    if (scope.kind === "sweep" && !targeted) {
       await patchRows("postmortem_state?id=eq.1", { last_result: { ...summary, at: nowIso } });
     }
     if (elapsed() > WALL_CLOCK_BUDGET_MS) console.warn("postmortem ran long", { elapsedMs: elapsed() });

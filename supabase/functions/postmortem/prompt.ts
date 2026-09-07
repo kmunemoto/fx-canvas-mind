@@ -818,6 +818,15 @@ export interface LessonRow {
   plan_closed_at?: string | null;
   rule_blamed: string | null;
   rule_credited: string | null;
+  // How many bars of aftermath the diagnosis was written on, and the build
+  // that wrote it. A diagnosis is made soon after settlement by design
+  // (AFTER_WAIT_MS in facts.ts), and depth is the difference between a
+  // reading and a guess: measured 2026-09-07, three of four losses diagnosed
+  // at 8 bars said something else once 48-95 bars existed, each of them at a
+  // confidence in the 70s. Optional because a lesson written before the
+  // column existed carries neither.
+  bars_after_settlement?: number | null;
+  postmortem_version?: string | null;
   // Filled in by withClusters
   cluster?: string;
 }
@@ -995,6 +1004,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
 - 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
 - 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
+- 各 lesson には bars_after_settlement（その診断が見た決着後の足数）が付いている。診断は決着の直後に走る設計なので、この数が小さい lesson は「その後どうなったか」をほとんど見ていない。実測（2026-09-07）では、8足で書かれた4件の診断のうち3件が、48〜95足まで待つと原因ごと変わった（うち1件は「一度も含み益にならなかった」から「23足後に利確1に到達していた」へ）。lesson の confidence はこの深さを織り込んでいない。null は列ができる前に書かれた lesson。
 - entry_too_far / entry_too_early は旧契約の語彙。entry_too_early は chased_move として集計されている。
 - current_rules の各ルールには contract（実行できる契約）・evidence_contracts（根拠 lesson の契約）・in_force（現行契約 ${MARKET_CONTRACT} のプロンプトに実際に入っているか）が付いている。in_force が false のルールはアナリストのプロンプトに入っていない。原因が現行契約では起こりえないか、文言が「押し目を待つ・指値で入る・どこで入るか」というアナリストが動かせない対象を指しているためで、同じ文言のまま出し直しても false のままになる。残す価値があるなら方向・損切り幅・利確幅・見送りの4つのどれかを動かす形に書き直し、書き直せないなら出力から外す。
 - evidence_contracts が現行契約以外だけのルールは、根拠が旧契約の記録しかない。使ってよいが、プロンプトには「旧契約含む」と表示され、証拠としては弱い。
@@ -1049,6 +1059,9 @@ export const buildConsolidationPrompt = (
       rule_credited: l.rule_credited,
       lesson_ja: l.lesson_ja,
       lesson_en: l.lesson_en,
+      // One number per line, so the shape and the budget of the digest are
+      // what they were: how much aftermath this lesson rests on.
+      bars_after_settlement: l.bars_after_settlement ?? null,
     })),
     stats,
   };
