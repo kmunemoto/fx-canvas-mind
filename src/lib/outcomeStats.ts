@@ -1,4 +1,10 @@
 import type { AnalysisRecord, PerformanceGroup, PerformanceStats, PlanContract, PostmortemCause } from "./types";
+// The episode rule, shared verbatim with the edge functions. That file is a
+// LEAF on purpose — zero imports — because postmortem/prompt.ts, where this
+// rule used to live in its second form, reaches facts.ts, analyze/entry.ts and
+// analyze/rules.ts, and importing any of those here would pull the whole
+// server graph into the browser bundle.
+import { episodeIds } from "../../supabase/functions/_shared/episodes";
 
 // Win/loss bookkeeping over history rows.
 //
@@ -105,8 +111,12 @@ export const NO_RULEBOOK = "none";
 // point where a 95% interval on a real edge stops including break-even
 export const TARGET_CLUSTERS = 50;
 // Plans on the same pair in the same direction inside this window are one
-// decision about one situation
-export const CLUSTER_WINDOW_MS = 24 * 60 * 60 * 1000;
+// decision about one situation. Both windows, and the rule that reads them,
+// come from the shared leaf module: this file and postmortem/prompt.ts had
+// each grown their own version of "one situation" and the two disagreed, so
+// the count under the win rate on screen and the count that decides whether a
+// rule survives a revision were different numbers with the same name.
+export { CLUSTER_REOPEN_MS, CLUSTER_WINDOW_MS, EPISODE_DEFINITION_VERSION } from "../../supabase/functions/_shared/episodes";
 
 // [lower bound, upper bound or null for open-ended]
 export const CONFIDENCE_BANDS: Array<[number, number | null]> = [
@@ -188,28 +198,22 @@ export const realizedR = (r: AnalysisRecord): number | null => {
   return null;
 };
 
-// Cluster ids, in input order: same pair, same direction, opened within
-// CLUSTER_WINDOW_MS of the cluster's first plan
-export const clusterIds = (items: Array<Pick<AnalysisRecord, "pair" | "signal" | "created_at">>): string[] => {
-  const order = items
-    .map((item, i) => ({ i, t: Date.parse(item.created_at) }))
-    .sort((a, b) => (Number.isFinite(a.t) ? a.t : 0) - (Number.isFinite(b.t) ? b.t : 0));
-  const starts = new Map<string, { id: string; t: number }>();
-  const out = new Array<string>(items.length);
-  for (const { i, t } of order) {
-    const item = items[i];
-    const key = `${item.pair}|${item.signal}`;
-    const current = starts.get(key);
-    if (current && Number.isFinite(t) && t - current.t < CLUSTER_WINDOW_MS) {
-      out[i] = current.id;
-      continue;
-    }
-    const id = `${key}|${Number.isFinite(t) ? new Date(t).toISOString().slice(0, 13) : "unknown"}`;
-    starts.set(key, { id, t: Number.isFinite(t) ? t : 0 });
-    out[i] = id;
-  }
-  return out;
-};
+// Cluster ids, in input order. The rule itself is in the shared leaf module;
+// what used to stand here had the right anchor (the cluster's start) and no
+// reopen escape at all, so two plans a day apart on either side of a settled
+// trade counted as one situation on screen while the learning path counted
+// them as two — or, under its own chained window, as one across a whole week.
+//
+// The settlement time is passed now, which is what the escape half of the rule
+// needs; a row that has none is still open, and an open position never opens
+// the escape.
+export const clusterIds = (items: Array<Pick<AnalysisRecord, "pair" | "signal" | "created_at" | "closed_at">>): string[] =>
+  episodeIds(items.map((r) => ({
+    pair: r.pair,
+    signal: r.signal,
+    created_at: r.created_at,
+    closed_at: r.closed_at ?? null,
+  })));
 
 // A trade happened if the tracker saw the entry reached; an ambiguous row
 // with a fill still counts as one
@@ -293,10 +297,23 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   let settled = 0;
   let sumR = 0;
   let withR = 0;
-  const clusters = clusterIds(records);
+  // Clustered over the rows that COUNT, not over everything fetched.
+  //
+  // One rule is not enough on its own; the population has to match too. This
+  // used to hand every fetched row to the rule and skip the shadows and
+  // previews inside the loop, while performance_stats — the number actually
+  // shown, this being only the fallback — filters them out before it clusters.
+  // A row taking part in the scan anchors an episode start and hides the
+  // previous plan's settlement from the row after it, so a shadow between two
+  // real plans moved a boundary here and not there: the same rule, two
+  // populations, two answers under one name. Same filter, same order, both
+  // sides.
+  const counted = records.filter((r) => !isShadow(r) && !isPreview(r));
+  const countedIds = clusterIds(counted);
+  const clusterOf = new Map<AnalysisRecord, string>(counted.map((r, i) => [r, countedIds[i]]));
   const settledClusters = new Set<string>();
   const seenContracts = new Set<PlanContract>();
-  records.forEach((r, i) => {
+  records.forEach((r) => {
     if (isShadow(r) || isPreview(r)) return;
     seenContracts.add(contractKey(r));
     if (isRejected(r)) t.rejected++;
@@ -337,7 +354,8 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
     } else if (r.outcome === "untriggered") {
       settled++;
     }
-    if (r.outcome === "win" || r.outcome === "loss") settledClusters.add(clusters[i]);
+    const cluster = clusterOf.get(r);
+    if (cluster !== undefined && (r.outcome === "win" || r.outcome === "loss")) settledClusters.add(cluster);
     const rr = realizedR(r);
     if (rr !== null) {
       sumR += rr;

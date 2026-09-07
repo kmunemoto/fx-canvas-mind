@@ -586,7 +586,7 @@ describe("the filter is wired into the one door all three rungs come through", (
     // single request. `rawCount: candles.length` is green too and silently
     // deletes the broken-feed gate instead.
     expect(analyze).toContain("const dropped = all.length - candles.length;");
-    expect(analyze).toContain("return { candles, rawCount: Math.max(0, values.length - dropped) };");
+    expect(analyze).toContain("return { candles, rawCount: Math.max(0, values.length - dropped), dropped };");
   });
 
   it("logs the drop, which is the only way a deploy can be confirmed live", () => {

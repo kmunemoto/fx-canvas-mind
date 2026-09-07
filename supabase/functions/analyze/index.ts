@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v43-2026-09-07T03:40:00Z";
+const FUNCTION_VERSION = "analyze-v44-2026-09-07T07:45:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1033,6 +1033,11 @@ Deno.serve(async (req: Request) => {
     // seriesHealth can tell "the provider sent little" from "we threw a lot
     // away". Filled by index below, never by completion order.
     let rawCounts: number[] = [];
+    // Bars the closed-market filter removed, per timeframe, in the same index
+    // order as `timeframes`. Kept beside rawCounts because they answer two
+    // different questions: rawCounts is what the health check measures a
+    // broken feed against, this is what the record shows a reader.
+    let droppedByTf: number[] = [];
     // One fetch, one filter, for every rung.
     //
     // Twelve Data emits a bar for every interval while the market is shut, and
@@ -1114,7 +1119,12 @@ Deno.serve(async (req: Request) => {
       // that check exists to catch a BROKEN feed; bars we removed on purpose
       // must never enter it. Left in, the drop share would be 31% on 15min and
       // 14% on 1day, which is a 502 on essentially every request.
-      return { candles, rawCount: Math.max(0, values.length - dropped) };
+      // `dropped` is returned as well as logged. A log line answers "why is
+      // this rung short" for whoever is watching at the time; the row has to
+      // answer it for whoever reads the plan a month later, and a reading
+      // taken off 190 surviving bars is not the same reading as one taken off
+      // 250 whatever the indicators say.
+      return { candles, rawCount: Math.max(0, values.length - dropped), dropped };
     };
 
     // The plan is priced here and filled by the tracker days later. Those two
@@ -1155,6 +1165,7 @@ Deno.serve(async (req: Request) => {
       ]);
       seriesByTf = td.map((r) => r.candles);
       rawCounts = td.map((r) => r.rawCount);
+      droppedByTf = td.map((r) => r.dropped);
       gmoRaw = gmo;
     pricedAtIso = new Date().toISOString();
     } catch (err) {
@@ -1885,11 +1896,25 @@ Deno.serve(async (req: Request) => {
       // Which bar each timeframe's reading came from, and whether it had
       // closed. Two runs a minute apart can see different trends off the same
       // unclosed bar; without this the difference is invisible afterwards.
+      // ...and which book each rung's bars came from, and how many the
+      // closed-market filter took out of it. `price_feed` below is a single
+      // label and only ever describes the ENTRY rung — the overlay swaps that
+      // series alone — so read on its own it says nothing about the higher
+      // timeframes, which are always Twelve Data. Recorded per rung here
+      // rather than as a second, parallel block: this is already the list of
+      // what each timeframe was read from.
+      //
+      // `dropped` is null when the rung is on GMO: those bars arrive already
+      // interior-filtered (track-outcomes/quotes.ts) and never passed through
+      // the filter, so a count from the discarded Twelve Data payload would
+      // describe a series this plan was not written on.
       bars: timeframes.map((tf, i) => ({
         tf,
         bars: seriesByTf[i]?.length ?? 0,
         newest: snapshots[i]?.datetime ?? null,
         closed: snapshots[i]?.barClosed ?? null,
+        feed: i === 0 ? priceFeed : "twelve_data",
+        dropped: i === 0 && priceFeed === "gmo" ? null : (droppedByTf[i] ?? null),
       })),
       // Under market_v1 the model declares no order type — the server sets
       // the entry — so what is worth recording is the contract itself.
@@ -1992,6 +2017,22 @@ Deno.serve(async (req: Request) => {
     // differs between the writing and the reading would make the footprint
     // describe a market nobody analysed.
     const context = {
+      // What it would take to reproduce this decision, over and above the
+      // inputs below.
+      //
+      // Only the build is new. The rest of the provenance was already on the
+      // row and is deliberately NOT copied here: the price feed per timeframe
+      // and the bars the closed-market filter dropped are in entry_check.bars,
+      // where the per-rung reading already lived and where they were extended
+      // in place; the decision instant is entry_check.priced_at and the
+      // analyses.priced_at column, both written from the same pricedAtIso.
+      // Storing any of them twice is storing them to disagree.
+      //
+      // The build was the one thing nowhere on the row. It is returned in the
+      // response body and the X-Function-Version header and then thrown away,
+      // so "which code wrote this plan" could only ever be answered by dating
+      // the row against a deploy log.
+      provenance: { function_version: FUNCTION_VERSION },
       open_same_direction: openSameDirection,
       rules_shown: rulesShown,
       // The version that was READ, kept beside the version that was USED, so

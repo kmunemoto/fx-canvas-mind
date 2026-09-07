@@ -41,6 +41,7 @@ import {
 import { MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
 import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rules.ts";
 import { LEGACY_PLAN_CONTRACT } from "../_shared/contract.ts";
+import { EPISODE_DEFINITION_VERSION, episodeIds } from "../_shared/episodes.ts";
 
 export const MAX_RULES = 10;
 // Storage caps, per language, because one number cannot serve both. The
@@ -64,12 +65,13 @@ export const MIN_STAT_N = 20;
 // Rules a single revision may add / drop
 export const MAX_RULES_ADDED = 2;
 export const MAX_RULES_REMOVED = 2;
-// Plans on the same pair in the same direction this close together were one
-// decision about one situation: they count once...
-export const CLUSTER_WINDOW_MS = 24 * 60 * 60 * 1000;
-// ...unless the earlier plan had already settled this long before the next
-// one was made, in which case the market had moved on
-export const CLUSTER_REOPEN_MS = 4 * 60 * 60 * 1000;
+// What "one situation" means lives in _shared/episodes.ts now, so that this
+// file, src/lib/outcomeStats.ts and public.performance_stats cannot drift
+// apart again — they had drifted into three different rules, and the one this
+// file used decided which rules survive a revision. Re-exported because every
+// caller here already reads them from this module.
+export { CLUSTER_REOPEN_MS, CLUSTER_WINDOW_MS, EPISODE_DEFINITION_VERSION } from "../_shared/episodes.ts";
+export type { Clusterable } from "../_shared/episodes.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -97,54 +99,17 @@ const round2 = (v: number) => Number(v.toFixed(2));
 // Clusters and statistics
 // ---------------------------------------------------------------------------
 
-export interface Clusterable {
-  pair: string;
-  signal: string;
-  created_at: string;
-  // When the plan settled, if known: a plan made well after the previous
-  // one closed is a new decision even inside the window
-  closed_at?: string | null;
-}
-
-// Cluster ids for a set of plans, in input order. A plan joins the cluster of
-// the previous plan on the same pair and direction when it was made within
-// CLUSTER_WINDOW_MS of it, unless that plan had settled more than
-// CLUSTER_REOPEN_MS earlier.
+// The one implementation, imported. What used to stand here anchored its
+// window on the PREVIOUS plan rather than the episode's start — a chain that
+// under a steady cadence fuses everything on a pair into a single episode —
+// and carried an older plan's settlement forward through `Math.max`, so a plan
+// could escape on the strength of some other, long-closed plan while the plan
+// immediately before it was still open. Both are gone; see the module header
+// in _shared/episodes.ts for what replaced them and why.
 //
-// Deliberately NOT keyed by user. A cluster is one market situation, and the
-// rulebook is shared by every account, so two people analysing USD/JPY long
-// within the window received two copies of ONE decision by one analyst — one
-// piece of evidence about it, not two. Keying by user made a rule's support
-// grow with the number of subscribers, and support is the number the prompt
-// prints ("28 cases") and the number that decides whether a rule survives a
-// revision. The client's own clusterIds (src/lib/outcomeStats.ts) never keyed
-// by user either; only this side did.
-export const clusterIds = (items: Clusterable[]): string[] => {
-  const order = items
-    .map((item, i) => ({ i, t: Date.parse(item.created_at) }))
-    .sort((a, b) => (Number.isFinite(a.t) ? a.t : 0) - (Number.isFinite(b.t) ? b.t : 0));
-  const last = new Map<string, { id: string; t: number; closed: number }>();
-  const out = new Array<string>(items.length);
-  for (const { i, t } of order) {
-    const item = items[i];
-    const key = `${item.pair}|${item.signal}`;
-    const prev = last.get(key);
-    const closed = item.closed_at ? Date.parse(item.closed_at) : NaN;
-    const joins = prev !== undefined && Number.isFinite(t) &&
-      t - prev.t < CLUSTER_WINDOW_MS &&
-      !(Number.isFinite(prev.closed) && t > prev.closed + CLUSTER_REOPEN_MS);
-    if (joins && prev) {
-      out[i] = prev.id;
-      last.set(key, { id: prev.id, t, closed: Number.isFinite(closed) ? Math.max(closed, prev.closed || 0) : prev.closed });
-      continue;
-    }
-    const startIso = Number.isFinite(t) ? new Date(t).toISOString().slice(0, 13) : "unknown";
-    const id = `${key}|${startIso}`;
-    last.set(key, { id, t: Number.isFinite(t) ? t : 0, closed: Number.isFinite(closed) ? closed : NaN });
-    out[i] = id;
-  }
-  return out;
-};
+// Re-exported under the old name because summarizeRecord, ruleEvidence and the
+// vitest suite all call it that.
+export { episodeIds as clusterIds };
 
 // One shared rulebook, many accounts: take the newest from each contributor
 // in turn rather than the newest overall.
@@ -206,6 +171,11 @@ export interface RecordRow {
   closed_at?: string | null;
   outcome: string;
   shadow: boolean;
+  // A weekend preview: a reading taken while the market was shut, kept as a
+  // record of a thing that happened and counted in nothing. It is read here
+  // only so that it can be left OUT of the episode scan, which is where
+  // performance_stats already leaves it — see summarizeRecord.
+  preview?: boolean;
   rejection: string | null;
   filled: boolean;
   entry: number | null;
@@ -342,6 +312,12 @@ export interface RecordStats {
   realized_r: { n: number; sum: number; mean: number | null };
   // Settled trades counted once per market situation
   independent_clusters: number;
+  // Which definition of "one situation" produced the two counts above and
+  // by_cause_clusters below. This object is written into rulebook.stats and
+  // kept there for the life of the version, and a change in how episodes are
+  // counted is indistinguishable afterwards from the analyst getting better or
+  // worse — unless the method is stamped beside the number.
+  episode_definition_version: number;
   min_stat_n: number;
   // Lessons of live plans by cause (shadow plans apart)
   by_cause: Record<string, number>;
@@ -371,7 +347,7 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     settled: 0, decided: 0, waits: 0, waits_judged: 0, waits_missed: 0, wait_miss_rate: null,
     win_rate: null, win_rate_ci95: null, fill_rate: null,
     realized_r: { n: 0, sum: 0, mean: null },
-    independent_clusters: 0, min_stat_n: MIN_STAT_N,
+    independent_clusters: 0, episode_definition_version: EPISODE_DEFINITION_VERSION, min_stat_n: MIN_STAT_N,
     by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, lessons_by_contract: {},
     by_rulebook_version: {}, rule_feedback: {},
     rejected: 0,
@@ -379,9 +355,24 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
   };
   let filled = 0;
   let settledOrLapsed = 0;
-  const clusters = clusterIds(rows);
+  // ONE RULE IS NOT ENOUGH: the population has to match too.
+  //
+  // The rule itself now lives in one file, but this call used to hand it every
+  // row it had fetched — shadows, previews, other contracts, WAITs — and drop
+  // the ones that do not count inside the loop below. performance_stats
+  // filters shadow and preview out BEFORE it clusters. That is not a
+  // difference of taste: a row taking part in the scan anchors an episode
+  // start and overwrites the previous plan's settlement, so a shadow plan
+  // sitting between two real ones moves a boundary here and not there, and the
+  // screen's count and the learning path's count go back to being different
+  // numbers with the same name. The population is now the same one the SQL
+  // uses: everything that is neither a shadow nor a preview, WAITs and other
+  // contracts included.
+  const scanned = rows.filter((r) => !r.shadow && r.preview !== true);
+  const scannedIds = episodeIds(scanned);
+  const clusterOf = new Map<RecordRow, string>(scanned.map((r, i) => [r, scannedIds[i]]));
   const settledClusters = new Set<string>();
-  rows.forEach((r, i) => {
+  rows.forEach((r) => {
     // Before anything else: a plan made under another contract is not part of
     // this record. Counted, so that a record that suddenly shrinks is legible
     // as a contract change rather than as plans going missing.
@@ -427,7 +418,8 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     } else if (r.outcome === "untriggered") {
       settledOrLapsed++;
     }
-    if (r.outcome === "win" || r.outcome === "loss") settledClusters.add(clusters[i]);
+    const cluster = clusterOf.get(r);
+    if (cluster !== undefined && (r.outcome === "win" || r.outcome === "loss")) settledClusters.add(cluster);
     const rr = realizedR(r);
     if (rr !== null) {
       s.realized_r.n++;
@@ -749,12 +741,22 @@ export interface LessonRow {
   cluster?: string;
 }
 
+// Episodes are about WHEN THE PLAN WAS MADE, so both timestamps have to come
+// off the plan's own clock. The fallback to l.created_at is the diagnosis
+// clock — hours or days later; lesson 94bdcfaa was reviewed five days after
+// its plan — and pairing that with a settlement time taken from the plan puts
+// the row after its own close, which opens the reopen escape on nothing but
+// review latency. A lesson with no plan time is placed on the review clock and
+// carries no settlement at all: unknown, and an unknown settlement never
+// escapes. Latent today, since every lesson has analysis_created_at and
+// writeLesson always sets it, so only a legacy or hand-written row can reach
+// it.
 export const withClusters = (lessons: LessonRow[]): LessonRow[] => {
-  const ids = clusterIds(lessons.map((l) => ({
+  const ids = episodeIds(lessons.map((l) => ({
     pair: l.pair,
     signal: l.signal,
     created_at: l.plan_created_at ?? l.created_at,
-    closed_at: l.plan_closed_at ?? null,
+    closed_at: l.plan_created_at ? l.plan_closed_at ?? null : null,
   })));
   return lessons.map((l, i) => ({ ...l, cluster: ids[i] }));
 };
@@ -1148,26 +1150,54 @@ export const parseConsolidation = (
     });
   }
 
-  // Omitted (or evidence-less) prior rules: the allowance is spent on the
-  // weakest; the rest come back with their evidence recounted, and those
-  // whose evidence no longer holds up go too
-  const missing = previous.filter((p) => !seen.has(p.id)).sort((a, b) => a.support - b.support);
-  const removed = missing.slice(0, MAX_RULES_REMOVED).map((r) => r.id);
-  for (const id of removed) reasons[id] = reasons[id] ?? "omitted";
+  // Omitted prior rules. Every one of them is recounted against this run's
+  // evidence FIRST; then those left with nothing go for cause, the removal
+  // allowance is spent on the weakest of what remains, and the rest come back.
+  //
+  // Weakest by TODAY'S count. `p.support` is the number
+  // stored on the rule when it was last written, which may have been counted
+  // under an older definition of "one situation" — the four divergent
+  // implementations were definition 1, this file is definition 2. Choosing
+  // which rules to spend the removal allowance on by the stored number while
+  // writing back a recounted one mixes two definitions inside a single
+  // revision, and the mix is not uniform across rules, so it can drop a
+  // different rule than either definition would have on its own. Every rule
+  // here is recounted once, against the same evidence, before anything is
+  // ordered by it; the stored number breaks ties so the order stays stable.
+  const missing = previous
+    .filter((p) => !seen.has(p.id))
+    .map((rule) => ({ rule, ev: evidence(rule, rule.supported_by) }));
+  // A rule with no evidence left goes for cause, not out of the budget, and
+  // says which. The allowance exists to stop one revision throwing away half a
+  // working rulebook on the editor's say-so; a rule whose citations no longer
+  // count is not a judgement call, and letting it eat a slot meant a rule that
+  // still had evidence was dropped in its place — and dropped under the
+  // reason "omitted", which is not what happened to it. Rules removed this way
+  // were already removed on top of the allowance when they happened to reach
+  // the restore path, so this only makes the two paths agree.
+  const gone = missing.filter((m) => m.ev.support === 0);
+  const removed = gone.map((m) => m.rule.id);
+  // `??`, not `=`: a rule the editor RE-PROPOSED whose citations then failed
+  // already said "no_evidence" up in the emit loop, and that is the more
+  // specific fact — the editor argued for it and could not support it, as
+  // against simply leaving it out. Overwriting it would lose the difference.
+  for (const id of removed) reasons[id] = reasons[id] ?? "evidence_gone";
+  const judged = missing
+    .filter((m) => m.ev.support > 0)
+    .sort((a, b) => a.ev.support - b.ev.support || a.rule.support - b.rule.support);
+  for (const m of judged.slice(0, MAX_RULES_REMOVED)) {
+    removed.push(m.rule.id);
+    reasons[m.rule.id] = reasons[m.rule.id] ?? "omitted";
+  }
   const restored: string[] = [];
-  for (const rule of missing.slice(MAX_RULES_REMOVED).sort((a, b) => b.support - a.support)) {
+  for (const { rule, ev } of judged.slice(MAX_RULES_REMOVED).reverse()) {
     if (rules.length >= MAX_RULES) {
       // No room left: it leaves the book, and says so.
       removed.push(rule.id);
       reasons[rule.id] = "no_room";
       continue;
     }
-    const { cited, support, eras } = evidence(rule, rule.supported_by);
-    if (support === 0) {
-      removed.push(rule.id);
-      reasons[rule.id] = "evidence_gone";
-      continue;
-    }
+    const { cited, support, eras } = ev;
     // The stamp is re-derived here too, from the STORED rule's own cause and
     // text. A restored rule must not carry a stamp forward: inheriting it is
     // what let a rule keep an endorsement that only ever existed because a

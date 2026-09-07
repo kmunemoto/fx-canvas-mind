@@ -30,8 +30,10 @@ import { ENTRY_WINDOW_MS, EVAL_INTERVAL, type Evaluation } from "../track-outcom
 import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Cause, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
 import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
+import { DECIDED_ROW_LIMIT, MIN_DECIDED_EPISODES, decidedRowsPath, promotionGate, type DecidedRow } from "./promotion.ts";
 import {
   CONSOLIDATION_SCHEMA,
+  EPISODE_DEFINITION_VERSION,
   MIN_NEW_LESSONS,
   buildConsolidationPrompt,
   buildDiagnosisPrompt,
@@ -47,7 +49,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v15-2026-09-05T18:10:00Z";
+const POSTMORTEM_VERSION = "postmortem-v16-2026-09-07T07:45:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -62,10 +64,10 @@ const MAX_ATTEMPTS = 3;
 // A diagnosis made on almost no aftermath is revisited once the full window
 // of bars exists; this caps how often that happens.
 const MAX_REVISIONS = 1;
-// Decided trades the live rulebook must have accumulated before a revision
-// replaces it. Below this the version was never measured, so swapping it out
-// throws away the only evidence that could ever say whether it helped.
-const MIN_DECIDED_PER_VERSION = 10;
+// How much the live rulebook must have been measured over before a revision
+// replaces it lives in promotion.ts now, counted in independent situations
+// rather than in rows — see the header there for why ten rows and ten
+// situations are not the same evidence.
 // Supabase kills the worker at 150s; leave room to write results
 const WALL_CLOCK_BUDGET_MS = 130_000;
 const START_DIAGNOSIS_BEFORE_MS = 75_000;
@@ -208,7 +210,7 @@ Deno.serve(async (req: Request) => {
       id: string,
       raw: JsonRecord,
       doc: JsonRecord,
-      row: { pair: string; interval: string; signal: string; outcome: string; created_at: string },
+      row: { pair: string; interval: string; signal: string; outcome: string; created_at: string; closed_at?: string | null },
     ): Promise<boolean> => {
       const lesson = isRecord(doc.lesson) ? doc.lesson : {};
       const scope = strOrNull(doc.scope);
@@ -238,6 +240,14 @@ Deno.serve(async (req: Request) => {
           rule_credited: strOrNull(doc.rule_credited),
           // When the plan was made: what "same situation" is judged on
           analysis_created_at: row.created_at,
+          // ...and when it settled, which is the OTHER half of that judgement.
+          // The episode rule lets a plan made more than CLUSTER_REOPEN_MS
+          // after the previous one closed start a fresh episode; without this
+          // the escape read null on every lesson ever written and the rule
+          // degenerated to the 24h window alone, fusing separate decisions and
+          // understating every rule's support. Null on a plan that had not
+          // settled — an open position never opens the escape.
+          plan_closed_at: row.closed_at ?? null,
         }),
       });
       if (!res.ok) {
@@ -858,7 +868,7 @@ Deno.serve(async (req: Request) => {
         const have = new Set(haveLessons.map((l) => String(l.analysis_id ?? "")));
         const missingIds = ids.filter((id) => !have.has(id));
         const missing = missingIds.length === 0 ? [] : (await readRowsOrNull(
-          `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,evaluation,postmortem` +
+          `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,closed_at,evaluation,postmortem` +
             `&id=in.(${missingIds.slice(0, REPAIR_PER_RUN).map(encodeURIComponent).join(",")})`,
         )) ?? [];
         for (const raw of missing.slice(0, REPAIR_PER_RUN)) {
@@ -873,6 +883,10 @@ Deno.serve(async (req: Request) => {
             signal: String(raw.signal ?? ""),
             outcome: String(raw.outcome ?? ""),
             created_at: String(raw.created_at ?? nowIso),
+            // Rebuilt lessons carry the settlement time too, or the repair
+            // path would quietly write the very rows whose missing
+            // plan_closed_at this build exists to stop.
+            closed_at: strOrNull(raw.closed_at),
           });
           if (ok) {
             repaired++;
@@ -929,13 +943,32 @@ Deno.serve(async (req: Request) => {
       };
       errors.push(`rulebook: deferred (time budget, ${elapsed()}ms elapsed)`);
     } else {
-      const lessonSelect = "analysis_id,user_id,plan_contract,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,rule_blamed,rule_credited";
+      // plan_closed_at is in this list for one reason: without it the episode
+      // rule's reopen escape cannot fire. It read a settlement time that was
+      // never selected, off a column that did not exist, so every lesson
+      // arrived with closed_at null and separate decisions inside a day were
+      // counted as one. A rule's support is a count of episodes, and support 0
+      // is what drops a rule.
+      const lessonSelect = "analysis_id,user_id,plan_contract,pair,cause,outcome,interval,signal,mode,order_type,lesson_ja,lesson_en,confidence,avoidable,shadow,scope,created_at,analysis_created_at,plan_closed_at,rule_blamed,rule_credited";
       // Over-fetched so the round-robin has something to choose from: taking
       // the newest RECENT_LESSONS and only then sharing them out would already
       // have thrown away every account the busiest one outran.
-      const lessonPool = (await readRowsOrNull(
+      // `?? []` here was the whole of a silent stop. readRowsOrNull returns
+      // null when the read FAILED, and coercing that to an empty array made an
+      // unreachable lessons table indistinguishable from an empty one: the
+      // run reported reason "no_lessons", pushed nothing onto `errors`, and
+      // the loop stood still while nineteen lessons sat in the table. The
+      // first thing to trip it would have been this build's own new column —
+      // PostgREST rejects a select naming a column that does not exist, so
+      // deploying before the migration lands takes out the whole learning
+      // path and calls it an absence of lessons. The two reads either side of
+      // this one already keep the distinction; this was the one that did not.
+      const lessonPoolOrNull = await readRowsOrNull(
         `lessons?select=${lessonSelect}&order=created_at.desc&limit=${RECENT_LESSONS * FAIR_FETCH_MULTIPLE}`,
-      )) ?? [];
+      );
+      const lessonsUnavailable = lessonPoolOrNull === null;
+      const lessonPool = lessonPoolOrNull ?? [];
+      if (lessonsUnavailable) errors.push("rulebook: lessons unavailable, not revised");
       const lessonRows = fairShare(lessonPool, (l) => strOrNull(l.user_id) ?? "", RECENT_LESSONS);
       lessonContributors = new Set(lessonPool.map((l) => strOrNull(l.user_id) ?? "")).size;
       // The lessons the current rules cite stay in evidence even once they
@@ -971,11 +1004,23 @@ Deno.serve(async (req: Request) => {
         scope: isRecord(l.scope) ? strOrNull(l.scope.text) : null,
         created_at: String(l.created_at ?? ""),
         plan_created_at: strOrNull(l.analysis_created_at),
+        plan_closed_at: strOrNull(l.plan_closed_at),
         rule_blamed: strOrNull(l.rule_blamed),
         rule_credited: strOrNull(l.rule_credited),
       })));
 
       const previousRules: Rule[] = current ? parseRules(current.rules) : [];
+      // Which definition of "one situation" the LIVE rules' support was
+      // counted under. A rulebook written before the stamp existed carries no
+      // number, and that absence is the answer rather than a gap: definition
+      // 1, the four divergent implementations. Recorded on the history entry
+      // when these rules are archived, because `support` is an episode count,
+      // it is the number that decides whether a rule survives, and a v8 rule
+      // reading support 2 is otherwise indistinguishable from a v9 rule
+      // reading support 2 counted a different way.
+      const liveEpisodeDefinition = numberOrNull(
+        (isRecord(current?.stats) ? current.stats : {}).episode_definition_version,
+      ) ?? 1;
       const previousVersion = current ? numberOrNull(current.version) ?? 0 : 0;
       const updatedAt = current ? strOrNull(current.updated_at) : null;
       const priorCandidate = current && isRecord(current.candidate) ? current.candidate : null;
@@ -993,18 +1038,34 @@ Deno.serve(async (req: Request) => {
       // demotes a revision that had earned promotion and reports the coercion
       // as a measured fact.
       const decidedRows = previousVersion > 0
-        ? await readRowsOrNull(
-          `analyses?select=id&rulebook_version=eq.${previousVersion}` +
-            `&outcome=in.(win,loss,expired)&shadow=is.false&limit=100`,
-        )
+        ? await readRowsOrNull(decidedRowsPath(previousVersion))
         : [];
-      const decidedUnderVersion = decidedRows === null ? null : decidedRows.length;
-      if (decidedUnderVersion === null) errors.push("rulebook: decided count unavailable");
-      // Version 0 is an empty book: it has no rules to measure and no cohort
-      // that could ever exist, because no plan can be made under rules that do
-      // not exist. Holding the first revision back holds it forever.
-      const measured = previousVersion === 0 ||
-        (decidedUnderVersion !== null && decidedUnderVersion >= MIN_DECIDED_PER_VERSION);
+      // Counted in independent situations. The rows carry pair, direction and
+      // both timestamps because that is what deciding "same situation" needs;
+      // the old `select=id` gave every row the identical episode id, so the
+      // count would have been one forever however large the population grew.
+      const gate = promotionGate(
+        previousVersion,
+        decidedRows === null ? null : decidedRows.map((r): DecidedRow => ({
+          pair: String(r.pair ?? ""),
+          signal: String(r.signal ?? ""),
+          created_at: String(r.created_at ?? ""),
+          closed_at: strOrNull(r.closed_at),
+        })),
+      );
+      const decidedEpisodes = gate.episodes;
+      const measured = gate.measured;
+      if (gate.unplaceable > 0) {
+        // Rows came back, and not one of them said which situation it was.
+        // That is the `select=id` failure recurring, and it reads as a real
+        // count unless it is named.
+        errors.push(`rulebook: ${gate.unplaceable} decided rows carry no situation, count refused`);
+      } else if (decidedEpisodes === null) errors.push("rulebook: decided count unavailable");
+      // A truncated read is a lower bound, not a wrong number (see
+      // DECIDED_ROW_LIMIT), but a gate running on a bound should say so.
+      if (gate.truncated) {
+        errors.push(`rulebook: decided population truncated at ${DECIDED_ROW_LIMIT}, episodes are a lower bound`);
+      }
 
       // A candidate that has been waiting is promoted as its own act, with no
       // model call and without waiting for the next revision to be due. Left
@@ -1018,7 +1079,12 @@ Deno.serve(async (req: Request) => {
         } else {
           const history = Array.isArray(current?.history) ? current.history : [];
           const nextHistory = previousRules.length > 0
-            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
+            ? [...history.slice(-(HISTORY_KEEP - 1)), {
+              version: previousVersion,
+              rules: previousRules,
+              updated_at: updatedAt,
+              episode_definition_version: liveEpisodeDefinition,
+            }]
             : history;
           const summary = isRecord(priorCandidate.summary) ? priorCandidate.summary : {};
           const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
@@ -1029,6 +1095,14 @@ Deno.serve(async (req: Request) => {
               ...(isRecord(current?.stats) ? current.stats : {}),
               changes: isRecord(priorCandidate.changes) ? priorCandidate.changes : {},
               lessons_considered: numberOrNull(priorCandidate.lessons_considered) ?? 0,
+              // The stamp travels with the candidate, not with today's build.
+              // These rules' support was counted when the candidate was
+              // WRITTEN, possibly runs ago and possibly under a different
+              // definition; stamping the promotion with the current constant
+              // would label definition-1 numbers as definition 2, which is
+              // exactly the confusion the stamp exists to prevent. A candidate
+              // stored before the stamp existed is definition 1.
+              episode_definition_version: numberOrNull(priorCandidate.episode_definition_version) ?? 1,
               promoted_from_candidate: true,
             },
             history: nextHistory,
@@ -1042,7 +1116,9 @@ Deno.serve(async (req: Request) => {
               promoted: true,
               from_candidate: true,
               rules: candidateRules.length,
-              decided_under_previous: decidedUnderVersion,
+              decided_episodes_under_previous: decidedEpisodes,
+              episode_definition_version: gate.episode_definition_version,
+              decided_population_truncated: gate.truncated,
               forced: options.promote && !measured,
             };
             console.log("rulebook candidate promoted", { version: previousVersion + 1 });
@@ -1056,7 +1132,11 @@ Deno.serve(async (req: Request) => {
       }).length;
       const due = options.consolidate || revisionDue(sinceVersion, lastRevisionAt, nowMs);
 
-      if (lessons.length === 0) {
+      if (lessonsUnavailable) {
+        // Checked before the emptiness test, because an unreadable table is
+        // empty by that test and the two mean opposite things.
+        rulebook = { version: previousVersion, revised: false, reason: "lessons_unavailable" };
+      } else if (lessons.length === 0) {
         rulebook = { version: previousVersion, revised: false, reason: "no_lessons" };
       } else if (!evidenceComplete) {
         errors.push("rulebook: cited lessons unavailable, not revised");
@@ -1075,7 +1155,7 @@ Deno.serve(async (req: Request) => {
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;
@@ -1088,6 +1168,12 @@ Deno.serve(async (req: Request) => {
           closed_at: strOrNull(r.closed_at),
           outcome: String(r.outcome ?? ""),
           shadow: r.shadow === true,
+          // Selected so that summarizeRecord can leave weekend previews out of
+          // the episode scan. It could not before: the column was not read, so
+          // a preview row sat between two real plans and moved a boundary on
+          // this side of the loop while performance_stats, which filters them
+          // out before clustering, never saw it. One rule, two populations.
+          preview: r.preview === true,
           rejection: strOrNull(r.rejection),
           filled: typeof r.filled_at === "string" && r.filled_at.length > 0,
           entry: numberOrNull(r.entry_point),
@@ -1121,7 +1207,12 @@ Deno.serve(async (req: Request) => {
         } else {
           const history = Array.isArray(current?.history) ? current.history : [];
           const nextHistory = previousRules.length > 0
-            ? [...history.slice(-(HISTORY_KEEP - 1)), { version: previousVersion, rules: previousRules, updated_at: updatedAt }]
+            ? [...history.slice(-(HISTORY_KEEP - 1)), {
+              version: previousVersion,
+              rules: previousRules,
+              updated_at: updatedAt,
+              episode_definition_version: liveEpisodeDefinition,
+            }]
             : history;
           // Stamped now, after this run's lessons were written, so they are
           // not counted as new again by the next run; and written only over
@@ -1155,7 +1246,9 @@ Deno.serve(async (req: Request) => {
                 promoted: true,
                 rules: consolidated.rules.length,
                 changes: consolidated.changes,
-                decided_under_previous: decidedUnderVersion,
+                decided_episodes_under_previous: decidedEpisodes,
+                episode_definition_version: gate.episode_definition_version,
+                decided_population_truncated: gate.truncated,
                 forced: options.promote && !measured,
               };
               console.log("rulebook revised", { version: previousVersion + 1, changes: consolidated.changes });
@@ -1171,6 +1264,12 @@ Deno.serve(async (req: Request) => {
                 summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
                 changes: consolidated.changes,
                 lessons_considered: lessons.length,
+                // Stamped where the counting happened. A candidate can wait
+                // several runs before it is promoted, and the promotion copies
+                // its rules through without recounting them, so the definition
+                // has to be recorded here or it is lost by the time anyone can
+                // ask which one produced these support numbers.
+                episode_definition_version: EPISODE_DEFINITION_VERSION,
                 created_at: stampIso,
               },
             });
@@ -1182,15 +1281,18 @@ Deno.serve(async (req: Request) => {
                 reason: "candidate_held",
                 candidate_rules: consolidated.rules.length,
                 changes: consolidated.changes,
-                decided_under_version: decidedUnderVersion,
-                decided_needed: decidedUnderVersion === null
-                  ? null
-                  : Math.max(0, MIN_DECIDED_PER_VERSION - decidedUnderVersion),
+                // Episodes, not rows, and named so: ten plans on one pair in
+                // one afternoon are one reading restated ten times, and the
+                // old key counted those as ten measurements.
+                decided_episodes_under_version: decidedEpisodes,
+                decided_needed: gate.needed,
+                episode_definition_version: gate.episode_definition_version,
+                decided_population_truncated: gate.truncated,
               };
               console.log("rulebook candidate held", {
                 base: previousVersion,
-                decided: decidedUnderVersion,
-                needed: MIN_DECIDED_PER_VERSION,
+                episodes: decidedEpisodes,
+                needed: MIN_DECIDED_EPISODES,
               });
             } else errors.push("rulebook: candidate not written (version changed underneath, or write failed)");
           }

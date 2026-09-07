@@ -429,7 +429,18 @@ export interface LoopHealth {
   // the live version has enough decided trades to be measured against.
   candidate_waiting?: boolean;
   candidate_created_at?: string | null;
+  // Rows decided under the live version. Kept because a server that has not
+  // run the loop_health migration yet still sends only this one — but it is
+  // NOT the number the gate decides on, and reading it against the gate's
+  // floor is what made the screen say 2/10 while the gate sat at 1/10.
   decided_under_version?: number;
+  // Independent SITUATIONS decided under the live version: what
+  // MIN_DECIDED_EPISODES is actually compared against. Absent until the
+  // loop_health migration is applied, which is why the display falls back.
+  decided_episodes_under_version?: number;
+  // Which definition of "one situation" produced the count above
+  // (supabase/functions/_shared/episodes.ts, EPISODE_DEFINITION_VERSION).
+  episode_definition_version?: number;
   jobs: Array<{ name: string; schedule: string; active: boolean }>;
   now: string;
 }
@@ -483,6 +494,10 @@ export interface PerformanceGroup {
 export interface PerformanceStats {
   generated_at: string;
   live_contract: string;
+  // Which definition of "one independent situation" every `clusters` below was
+  // counted under. Absent from answers written by a server older than the one
+  // definition; a change of method must never read as the analyst improving.
+  episode_definition_version?: number;
   scopes: Record<string, PerformanceGroup>;
   by_rulebook_version: Record<string, PerformanceGroup>;
   by_confidence: Record<string, PerformanceGroup>;

@@ -1099,21 +1099,25 @@ describe("evidence bookkeeping", () => {
   it("groups plans on the same pair and direction close together into one cluster, unless the earlier one had long settled", () => {
     const ids = clusterIds([
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: "2026-09-03T06:45:00Z" },
+      // made nearly six hours after that trade was over: the market moved on
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T12:35:00Z", closed_at: "2026-09-03T13:00:00Z" },
       // the next day, long after the previous one closed: a new decision
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-04T05:00:00Z" },
       { pair: "USD/JPY", signal: "BUY", created_at: "2026-09-03T05:00:00Z" },
       { pair: "EUR/USD", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
-      // Another account's identical plan is the SAME market situation. The
-      // rulebook is shared, so this is one decision by one analyst delivered
-      // to two people — one piece of evidence about it, not two. Keying the
-      // cluster by user made a rule's support grow with the subscriber count.
-      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
     ]);
     expect(ids[0]).not.toBe(ids[1]);
     expect(ids[2]).not.toBe(ids[1]);
-    expect(ids[5]).toBe(ids[0]);
     expect(new Set(ids).size).toBe(5);
+    // Another account's identical plan is the SAME market situation. The
+    // rulebook is shared, so this is one decision by one analyst delivered
+    // to two people — one piece of evidence about it, not two. Keying the
+    // cluster by user made a rule's support grow with the subscriber count.
+    const shared = clusterIds([
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z" },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T05:00:00Z" },
+    ]);
+    expect(shared[1]).toBe(shared[0]);
     // still open when the next one was made: the same bet again
     const open = clusterIds([
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: null },
@@ -1121,6 +1125,16 @@ describe("evidence bookkeeping", () => {
       { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-04T03:00:00Z" },
     ]);
     expect(new Set(open).size).toBe(1);
+    // ...and an OPEN plan in between blocks the escape the settled one before
+    // it would have opened. prompt.ts used to carry the newest settlement
+    // forward through Math.max, so the third plan here escaped on the strength
+    // of the first while the second was still running.
+    const stillRunning = clusterIds([
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T04:49:00Z", closed_at: "2026-09-03T06:45:00Z" },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T07:00:00Z", closed_at: null },
+      { pair: "USD/JPY", signal: "SELL", created_at: "2026-09-03T12:35:00Z" },
+    ]);
+    expect(new Set(stillRunning).size).toBe(1);
     // Clustered by when the PLAN was made, not when the review ran
     const rows = withClusters([
       { analysis_id: "a", pair: "USD/JPY", signal: "SELL", created_at: "2026-09-05T00:00:00Z", plan_created_at: "2026-09-03T04:49:00Z", cause: "entry_too_far", outcome: "untriggered", interval: "1h", mode: null, order_type: "limit", lesson_ja: "x", lesson_en: "x", confidence: 80, avoidable: true, shadow: false, scope: null, rule_blamed: null, rule_credited: null },

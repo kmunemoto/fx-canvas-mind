@@ -17,6 +17,9 @@ import { LEGACY_PLAN_CONTRACT } from "../../supabase/functions/_shared/contract"
 const index = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 const promptSrc = readFileSync("supabase/functions/postmortem/prompt.ts", "utf8");
 const analyzeSrc = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+// The gate on a candidate lives in its own file now: what it counts (episodes,
+// not rows) is arithmetic worth testing without a database or a model call.
+const promotionSrc = readFileSync("supabase/functions/postmortem/promotion.ts", "utf8");
 
 describe("a plan that was shown is a plan that was kept", () => {
   it("does not report success when the history row did not land", () => {
@@ -104,8 +107,9 @@ describe("the rulebook can actually be revised", () => {
     // Versions 6, 7 and 8 were each replaced before a single trade under them
     // closed. Experience still flows into a candidate on the old cadence;
     // only the swap waits.
-    expect(index).toContain("MIN_DECIDED_PER_VERSION");
-    expect(index).toContain("outcome=in.(win,loss,expired)&shadow=is.false");
+    expect(promotionSrc).toContain("MIN_DECIDED_EPISODES = 10");
+    expect(promotionSrc).toContain("outcome=in.(win,loss,expired)&shadow=is.false");
+    expect(index).toContain("const measured = gate.measured;");
     expect(index).toContain('reason: "candidate_held"');
     expect(index).toContain("decided_needed");
     // the held revision is stored, not thrown away
@@ -139,11 +143,15 @@ describe("the rulebook can actually be revised", () => {
     // Version 0 is an empty book: no rules to measure, and no cohort that
     // could ever exist, because no plan can be made under rules that do not
     // exist.
-    expect(index).toContain("const measured = previousVersion === 0 ||");
+    expect(promotionSrc).toContain("measured: version === 0 || episodes >= MIN_DECIDED_EPISODES,");
+    expect(promotionSrc).toContain("measured: version === 0,");
   });
 
   it("does not read a failed count as zero decided trades", () => {
-    expect(index).toContain("const decidedUnderVersion = decidedRows === null ? null : decidedRows.length;");
+    // A failed read is unknown, not zero: coercing it to zero demotes a
+    // revision that had earned promotion and reports the coercion as a fact.
+    expect(index).toContain("decidedRows === null ? null : decidedRows.map(");
+    expect(promotionSrc).toContain("episodes: null,");
     expect(index).toContain('errors.push("rulebook: decided count unavailable")');
   });
 
