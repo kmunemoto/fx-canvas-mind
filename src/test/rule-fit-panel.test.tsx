@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
 import RuleFitPanel from "../components/RuleFitPanel";
@@ -10,6 +10,10 @@ const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja") =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
+
+// The panel is a fold, closed by default; the verdicts are inside it and the
+// count is on the header.
+const open = () => fireEvent.click(screen.getByRole("button", { name: /適用されたルール|Rules consulted/ }));
 
 const rule = (id: string, ja: string) => ({
   id, text_ja: ja, text_en: `body of ${id}`, cause: "direction_wrong",
@@ -39,6 +43,8 @@ describe("the rules this analysis was given", () => {
   it("shows each rule with its verdict and its own text", () => {
     render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />);
     expect(screen.getByTestId("rule-fit")).toBeTruthy();
+    expect(screen.queryByText("上位足が弱いなら見送る")).toBeNull();
+    open();
     expect(screen.getByText("上位足が弱いなら見送る")).toBeTruthy();
     expect(screen.getByText("伸び切りを追わない")).toBeTruthy();
     expect(screen.getAllByText("別局面")).toHaveLength(2);
@@ -48,12 +54,14 @@ describe("the rules this analysis was given", () => {
   it("says which axes put the market outside, not just that it is outside", () => {
     // "Different situation" on its own is a verdict without its evidence.
     render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />);
+    open();
     expect(screen.getByText(/外れた軸: RSI・SMA20乖離$/)).toBeTruthy();
     expect(screen.getByText(/外れた軸: ADX・RSI・SMA20乖離・上位足ADX$/)).toBeTruthy();
   });
 
   it("says how much of a rule's evidence the comparison could actually read", () => {
     render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />);
+    open();
     // r10 cites five and only four carry the reading of the day
     expect(screen.getByText(/根拠5件のうち4件しか当時の値が残っておらず/)).toBeTruthy();
     // r11 cites three and all three are readable
@@ -62,22 +70,24 @@ describe("the rules this analysis was given", () => {
 
   it("says the verdict is a measurement, not something the rule claims", () => {
     render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />);
+    open();
     const note = screen.getByTestId("rule-fit-note").textContent ?? "";
     expect(note).toContain("ルール本文の主張ではありません");
     // And that the evidence behind a rule is not only this reader's record
     expect(note).toContain("全アカウント");
   });
 
-  it("counts how many of the shown rules fit", () => {
+  it("counts how many of the shown rules fit, on the header, before it is opened", () => {
     const someMatch: RuleFit = {
       ...live,
       rules: { ...live.rules, r4: { fit: "match", comparable: ["adx", "rsi"], missed: [], cases: 2, cited: 2 } },
     };
     render(<RuleFitPanel ruleFit={someMatch} rulebook={rulebook} />);
     expect(screen.getByText(/3件を提示し、うち1件が今の相場に該当/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /適用されたルール/ })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("names what the budget cut", () => {
+  it("names what the budget cut, on the header too", () => {
     render(<RuleFitPanel ruleFit={{ ...live, held_back: 4 }} rulebook={rulebook} />);
     expect(screen.getByText(/4件を省略/)).toBeTruthy();
   });
@@ -96,11 +106,13 @@ describe("the rules this analysis was given", () => {
     // The rulebook comes from a separate RPC and can be absent or behind.
     render(<RuleFitPanel ruleFit={live} rulebook={null} />);
     expect(screen.getByTestId("rule-fit")).toBeTruthy();
+    open();
     expect(screen.getByText(/r10：本文を取得できませんでした/)).toBeTruthy();
   });
 
   it("has an English rendering with no Japanese in it", () => {
     render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />, "en");
+    open();
     const panel = screen.getByTestId("rule-fit").textContent ?? "";
     expect(panel).toContain("different situation");
     expect(panel).not.toMatch(/[ぁ-んァ-ン一-龥]/);

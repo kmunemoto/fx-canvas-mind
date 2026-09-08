@@ -67,23 +67,53 @@ export const en: Dict = {
     tp1: "Take profit 1",
     tp2: "Take profit 2",
     tp3: "Take profit 3",
-    technical: "Technical",
-    fundamental: "Fundamental",
-    risk: "Risk",
-    sentiment: "Sentiment",
-    volatility: "Volatility",
-    keyFactors: "Key factors",
+    distance: (pips: number, atr: number | null) =>
+      atr === null ? `${pips} pips` : `${pips} pips · ${atr}× ATR`,
+    evidence: "Evidence",
+    showAll: (n: number) => `Show all (${n})`,
+    showLess: "Show fewer",
+    ratings: {
+      label: "Model's self-ratings",
+      technical: "Technical",
+      fundamental: "Fundamental",
+      risk: "Risk",
+      volatility: "Volatility",
+    },
     inferenceChip: "inferred",
     inferenceNote: "This app sees no order book, volume, open interest or executions. Anything marked inferred is a reading of price action, not something observed.",
     detail: "Full analysis",
+    marketContext: "Market context and levels",
     warnings: "Warnings",
-    positionSize: "Suggested size",
-    lots: (lots: number, units: number) => `${lots.toFixed(2)} lots (${units.toLocaleString("en-US")} units)`,
-    riskLine: (pips: number, risk: number) => `A ${pips} pip stop costs about ¥${risk.toLocaleString("en-US")} at your risk setting`,
-    noSizing: (pair: string) => `${pair} settles in dollars, so a yen balance cannot size it here without a conversion rate this app does not hold.`,
+    waitReason: {
+      label: "Why it is a WAIT",
+      ownLowConfidence: "The model's own confidence was below the floor we publish at, so no entry, stop or targets were issued",
+      refused: (word: string, gloss: string) => `The model's ${word} (${gloss}) was refused server-side and published as WAIT`,
+      atrMultiple: (n: number) => `${n}× ATR`,
+      confidence: (score: number, floor: number) => `confidence ${score}, floor ${floor}`,
+    },
     riskLevels: { LOW: "Low", MEDIUM: "Medium", HIGH: "High" },
     sentiments: { BULLISH: "Bullish", NEUTRAL: "Neutral", BEARISH: "Bearish" },
     volatilityLevels: { Low: "Low", Medium: "Medium", High: "High" },
+  },
+
+  context: {
+    mode: "Market mode",
+    structure: "Structure",
+    smartMoney: "Smart money",
+    strength: "Strength",
+    session: "Session",
+    direction: "Direction",
+    continuity: "Continuity",
+    summary: "Summary",
+    levels: "Key technical levels",
+    resistance: "Resistance",
+    support: "Support",
+    stopHunt: "Stop hunt zone",
+  },
+
+  disclosure: {
+    open: "Show",
+    close: "Hide",
   },
 
   chart: {
@@ -105,6 +135,9 @@ export const en: Dict = {
     spanA: "Ichimoku Span A (26 ahead)",
     spanB: "Ichimoku Span B (26 ahead)",
     cloudNow: "Cloud at price (computed 26 bars ago)",
+    cloudTop: "top",
+    cloudBottom: "bottom",
+    indicators: "Indicator readings",
     cloudSides: { above: "price above the cloud", inside: "price inside the cloud", below: "price below the cloud" },
     forming: "this bar has not closed"
   },
@@ -185,8 +218,8 @@ export const en: Dict = {
         should_be_market: "Waits for a pullback in a running trend (would not fill)",
         stop_too_tight: "Stop inside the noise (would be hit by it)",
         poor_rr: "Risk/reward does not pay",
-        target_out_of_reach: "target too far to be reached in time",
-        market_closed: "the market was shut, so there was no price to enter at",
+        target_out_of_reach: "Target too far to be reached in time",
+        market_closed: "The market was shut, so there was no price to enter at",
         // Only reachable on a row where the model asked for a BUY or a SELL
         // and rated it below the floor. A model WAIT never reaches this block.
         low_confidence: "The model's own confidence was below the floor",
@@ -388,6 +421,8 @@ export const en: Dict = {
     priorEvidence: "incl. prior contract",
     priorEvidenceNote: "Some of the plans behind this rule were made under the previous entry contract, where the analyst chose the entry price.",
     noneInForce: "No rule is in force under the current contract yet. Rules return here as new plans settle and are reviewed.",
+    editorNote: "Editor's note",
+    editorNoteCaption: "The working note the rulebook editor keeps for itself. It may use internal terms and may no longer match the current state.",
   },
 
   loop: {
@@ -413,7 +448,7 @@ export const en: Dict = {
   },
 
   ruleFit: {
-    title: "Rules this analysis was given",
+    title: "Rules consulted",
     summary: (matched: number, total: number) =>
       `${total} shown, ${matched} of which fit today's market.`,
     heldBack: (n: number) => `${n} more were left out for length, furthest from today's market first.`,
@@ -540,9 +575,6 @@ export const en: Dict = {
     cancelPlan: "Cancel plan",
     upgrade: "Upgrade plan",
     pair: "Currency pair",
-    balance: "Balance (JPY)",
-    riskPercent: "Risk per trade (%)",
-    sizingNote: "The stop and target distances are set by the analyzer, from ATR and structure. What you set here is the size, not the distance: the lot count that makes a stop-out cost this share of the balance.",
     cancelTitle: "Cancel your plan?",
     cancelBody: (plan: string) => `This cancels the ${plan} plan. You keep it until the end of the current period.`,
     cancelBody2: "After that the account switches to the Free plan automatically.",

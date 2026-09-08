@@ -1,12 +1,16 @@
-import type { AnalysisResult } from "@/lib/types";
+import type { AnalysisResult, EntryCheck } from "@/lib/types";
 import ConfidenceGauge from "./ConfidenceGauge";
 import { useT } from "@/lib/i18n";
 import { isInference } from "@/lib/inference";
+import { waitReasonOf } from "@/lib/warnings";
 
 interface Props {
   result: AnalysisResult;
   pair: string;
   interval: string;
+  // The entry gate's verdict on this run. On a WAIT it says why — and who
+  // decided — which used to reach the reader only as the first warning.
+  entryCheck?: EntryCheck | null;
 }
 
 const DIRECTION_COLOR = {
@@ -20,11 +24,64 @@ const biasArrow = (bias: string) =>
 const biasColor = (bias: string) =>
   bias === "BULLISH" ? "text-success" : bias === "BEARISH" ? "text-destructive" : "text-warning";
 
-const DirectionHero = ({ result, pair, interval }: Props) => {
+const DirectionHero = ({ result, pair, interval, entryCheck }: Props) => {
   const t = useT();
   const color = DIRECTION_COLOR[result.signal] ?? DIRECTION_COLOR.WAIT;
   const dir = t.direction[result.signal] ?? t.direction.WAIT;
   const alignment = Array.isArray(result.timeframe_alignment) ? result.timeframe_alignment : [];
+
+  // Read from the structure, never from the warning text: the same string
+  // used to make a model WAIT read as a server override (outcomeStats.ts).
+  const waitReason = waitReasonOf(result.signal, entryCheck);
+  const reason = (() => {
+    if (!waitReason || !entryCheck) return null;
+    const g = t.history.gate;
+    const w = t.result.waitReason;
+    const { rejection } = waitReason;
+    // The number the gate measured, without which "too tight" is a verdict
+    // with no evidence — the server's sentence carried it and is dropped
+    // from the warnings now that the reason is here
+    const measured = (() => {
+      const { risk_reward: rr, stop_atr, distance_atr, confidence, confidence_floor } = entryCheck;
+      switch (rejection) {
+        case "poor_rr":
+        case "target_out_of_reach":
+          return typeof rr === "number" ? `1:${rr}` : null;
+        case "stop_too_tight":
+          return typeof stop_atr === "number" ? w.atrMultiple(stop_atr) : null;
+        case "too_far":
+          return typeof distance_atr === "number" ? w.atrMultiple(distance_atr) : null;
+        case "low_confidence":
+          return typeof confidence === "number" && typeof confidence_floor === "number"
+            ? w.confidence(confidence, confidence_floor)
+            : null;
+        default:
+          return null;
+      }
+    })();
+    if (waitReason.kind === "declined") {
+      // A WAIT the model chose while the market was shut is explained by the
+      // preview banner above this card; a line here would say it a second
+      // time. The server's sentence still leaves the warnings (the banner
+      // covers it), which is why the caller sees a reason even when this
+      // renders nothing.
+      if (rejection === "market_closed") return null;
+      // The confidence floor is the one rejection stamped on a WAIT the model
+      // chose itself; the gate's label for it describes an override, so it is
+      // not reused here. One line: the sentence already names the decider.
+      return {
+        text: rejection === "low_confidence" ? w.ownLowConfidence : g.declinedSummary,
+        measured,
+        who: null,
+      };
+    }
+    const labelled = rejection in g.reasons ? g.reasons[rejection as keyof typeof g.reasons] : null;
+    const proposed = t.direction[waitReason.proposed];
+    const refused = w.refused(proposed.word, proposed.gloss);
+    return labelled
+      ? { text: labelled, measured, who: refused }
+      : { text: refused, measured, who: null };
+  })();
 
   return (
     <div className="glass rounded-xl border border-border p-4 sm:p-5 border-glow">
@@ -45,6 +102,20 @@ const DirectionHero = ({ result, pair, interval }: Props) => {
               {dir.gloss}
             </p>
           </div>
+          {reason && (
+            <div className="mt-1.5 leading-snug" data-testid="wait-reason">
+              <p className="text-xs">
+                <span className="text-[10px] text-muted-foreground mr-1.5">{t.result.waitReason.label}</span>
+                <span className="text-warning">{reason.text}</span>
+                {reason.measured && (
+                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground" data-testid="wait-reason-measured">
+                    {reason.measured}
+                  </span>
+                )}
+              </p>
+              {reason.who && <p className="text-[10px] text-muted-foreground mt-0.5">{reason.who}</p>}
+            </div>
+          )}
           {result.thesis && (
             <p className="text-sm text-foreground mt-1 leading-snug">
               {result.thesis}

@@ -1,6 +1,7 @@
 import { BookOpen } from "lucide-react";
 import type { RuleFit, RuleFitVerdict, Rulebook } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
+import Disclosure from "./Disclosure";
 
 interface Props {
   ruleFit: RuleFit | null;
@@ -30,6 +31,11 @@ const VERDICT_CLASS: Record<RuleFitVerdict, string> = {
 //   - "Cannot compare" is not a quiet "no". It means the evidence behind that
 //     rule was too thin, too broad, or too old to answer, and it is shown as
 //     its own state rather than folded in with "does not apply".
+//
+// Closed by default, below the call and its reasons: it used to sit ABOVE the
+// result, so the first thing a reader saw after an analysis was a list of
+// verdicts on rules. The count stays in the header so folding it hides no
+// number.
 const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
   const { t, locale } = useLocale();
   const s = t.ruleFit;
@@ -42,19 +48,17 @@ const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
     return locale === "ja" ? r.text_ja || r.text_en : r.text_en || r.text_ja;
   };
   const matched = ruleFit.shown.filter((id) => ruleFit.rules[id]?.fit === "match").length;
+  const summary = s.summary(matched, ruleFit.shown.length) +
+    (ruleFit.held_back > 0 ? ` ${s.heldBack(ruleFit.held_back)}` : "");
 
   return (
-    <div className="glass rounded-xl border border-border p-4 space-y-2" data-testid="rule-fit">
-      <div className="flex items-center gap-2 text-primary">
-        <BookOpen className="h-4 w-4" aria-hidden="true" />
-        <h3 className="text-sm font-semibold">{s.title}</h3>
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        {s.summary(matched, ruleFit.shown.length)}
-        {ruleFit.held_back > 0 ? ` ${s.heldBack(ruleFit.held_back)}` : ""}
-      </p>
-
-      <ul className="space-y-2 pt-1">
+    <Disclosure
+      icon={<BookOpen className="h-4 w-4" />}
+      title={s.title}
+      summary={summary}
+      testId="rule-fit"
+    >
+      <ul className="space-y-2">
         {ruleFit.shown.map((id) => {
           const fit = ruleFit.rules[id];
           const verdict: RuleFitVerdict = fit?.fit ?? "unknown";
@@ -87,10 +91,10 @@ const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
         })}
       </ul>
 
-      <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/50" data-testid="rule-fit-note">
+      <p className="text-[10px] text-muted-foreground pt-2 mt-2 border-t border-border/50" data-testid="rule-fit-note">
         {s.note}
       </p>
-    </div>
+    </Disclosure>
   );
 };
 

@@ -42,15 +42,20 @@ export interface AnalysisResult {
 }
 
 export interface AppSettings {
-  // The stop and target widths are the analyzer's to decide (ATR and
-  // structure, inside the entry gate's bounds). What belongs to the trader is
-  // the size: the balance and the share of it risked on one trade.
-  accountBalance: number;
-  riskPercent: number;
+  // Only the pair. The balance and risk-percent fields that used to sit here
+  // sized a position off the plan's stop; the owner asked for them to go, and
+  // settings saved while they existed are still in browsers — the loader in
+  // src/lib/settings.ts drops them without complaint.
   currencyPair: string;
 }
 
 export type TimeInterval = "15min" | "1h" | "4h" | "1day";
+
+// How the analysis was made, as the server resolved it. technical_fallback
+// means news was asked for and could not be fetched, and the server then
+// prepends its own sentence to the warnings list — which is why the result
+// view needs to know the mode to find the server's other sentences.
+export type AnalysisMode = "full" | "technical_only" | "technical_fallback";
 
 export interface TechnicalData {
   price: string;
@@ -249,6 +254,10 @@ export interface EntryCheck {
   priced_at?: string;
   stop_atr?: number | null;
   risk_reward: number | null;
+  // The model's own score and the floor it is published at. Written by
+  // analyze on every row since the floor existed; absent on older rows.
+  confidence?: number;
+  confidence_floor?: number;
   rejection: EntryRejection | null;
   repair_rejection?: EntryRejection | null;
   repaired?: boolean;
