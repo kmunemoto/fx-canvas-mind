@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v44-2026-09-07T07:45:00Z";
+const FUNCTION_VERSION = "analyze-v45-2026-09-08T12:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1853,6 +1853,10 @@ Deno.serve(async (req: Request) => {
           stopAtr: entryVerdict.stopAtr,
           riskReward: entryVerdict.riskReward,
           repairRejection: entryVerdict.repairRejection,
+          // Only the confidence floor reads these; passed unconditionally
+          // because the string, not the caller, decides when they are relevant.
+          confidence: normalizedAnalysis.confidence,
+          confidenceFloor: MIN_CONFIDENCE,
         }),
         ...normalizedAnalysis.warnings,
       ];

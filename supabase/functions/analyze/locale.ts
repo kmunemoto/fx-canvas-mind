@@ -44,8 +44,10 @@ interface LocaleStrings {
   calendarClear: (hours: number) => string;
   // Put in the prompt when the calendar could not be read at all
   calendarUnavailable: string;
-  // Shown when a plan was downgraded to WAIT because the market would never
-  // have reached its entry (see entry.ts)
+  // Shown when a plan was not published as written: either the market would
+  // never have reached its entry (see entry.ts), or the model's own confidence
+  // sat below the floor. Those are different events and the wording has to keep
+  // them apart — see the low_confidence case below.
   entryRejected: (parts: {
     rejection: string;
     signal: string;
@@ -54,6 +56,11 @@ interface LocaleStrings {
     riskReward: number | null;
     // Why moving the entry to the market did not save the plan either
     repairRejection: string | null;
+    // The model's own confidence and the floor it is measured against. Optional
+    // because every other rejection reason is decided without reading either,
+    // so the sentence has to hold together when they are absent.
+    confidence?: number | null;
+    confidenceFloor?: number | null;
   }) => string;
   // Shown when the entry was moved to the market price because the model's
   // pullback entry would not have been filled
@@ -92,7 +99,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
       "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
       const repair = repairRejection === "poor_rr"
@@ -100,7 +107,24 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         : repairRejection === "stop_too_tight"
           ? "。現在値で入り直すと損切りが近すぎます"
           : "";
+      // The confidence floor stamps a rejection on rows the model itself
+      // answered WAIT, so with no case here all sixteen of them fell through to
+      // the default and told the reader that the entry, stop and target
+      // contradicted each other — levels nothing had tested, on a call nothing
+      // had overridden, wrapped in a head and tail that read "the call was WAIT,
+      // changed to WAIT". `signal` is the only thing that separates a WAIT the
+      // model chose from a BUY/SELL the floor really did override, so it decides
+      // the whole sentence.
+      const scored = typeof confidence === "number" && typeof confidenceFloor === "number"
+        ? `確信度${confidence}が公開の下限${confidenceFloor}に`
+        : "確信度が公開の下限に";
       switch (rejection) {
+        case "low_confidence":
+          // Nothing was overridden on a model WAIT, so the head/tail scaffolding
+          // that announces an override is deliberately not reused here.
+          return signal === "WAIT"
+            ? `AI自身の判断が見送り（WAIT）で、${scored}届きませんでした。下限に届かない読みでは水準までは出さない方針なので、エントリー・損切り・利確は出していません。相場の読みは通常どおり出しています。サーバーがAIの判断を覆したわけではありません。`
+            : `${head}${scored}届かない${tail}`;
         case "too_far":
           return `${head}エントリー価格が現在値から離れすぎており（ATRの${distanceAtr ?? "?"}倍）、約定しない可能性が高い${tail}${repair}`;
         case "should_be_market":
@@ -146,7 +170,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:
       "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
       const repair = repairRejection === "poor_rr"
@@ -154,7 +178,16 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         : repairRejection === "stop_too_tight"
           ? " Entering at the market instead would leave the stop too close."
           : "";
+      // Same split as the Japanese: a stand-aside the model chose for itself is
+      // not an override and must not be dressed as one.
+      const scored = typeof confidence === "number" && typeof confidenceFloor === "number"
+        ? `${confidence}, below the ${confidenceFloor} we require to publish`
+        : "below the confidence we require to publish";
       switch (rejection) {
+        case "low_confidence":
+          return signal === "WAIT"
+            ? `The model stood aside of its own accord here, and rated that reading ${scored}. Below that floor we do not put levels on the chart, so no entry, stop or targets were issued — the reading itself is unchanged. Nothing was overruled server-side; this one was the model's own call.`
+            : `${head}it rated the idea ${scored}${tail}`;
         case "too_far":
           return `${head}the entry sits too far from the market (${distanceAtr ?? "?"}× ATR) to be filled${tail}${repair}`;
         case "should_be_market":
