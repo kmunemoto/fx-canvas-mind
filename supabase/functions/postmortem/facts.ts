@@ -387,11 +387,25 @@ export interface LeverVerdict {
   //           lever there to pull).
   //   null  — not computed, still open (resolution null), or "ambiguous". The
   //           question was asked and has not been answered. Measured against
-  //           production 2026-09-07: stop_x2 is computed-but-open on 7 of the
-  //           9 live losses and stop_x1_5 on 5 of them, because a postmortem
+  //           production 2026-09-08: stop_x2 is computed-but-open on 3 of the
+  //           9 live losses and stop_x1_5 on 3 of them, because a postmortem
   //           runs at MIN_AFTER_BARS bars while the variants are judged over
-  //           EXPIRY_DAYS — 20 days on a 1h plan. Counting those as refusals
-  //           is how all three of the live no-fault verdicts were earned.
+  //           EXPIRY_DAYS — 20 days on a 1h plan. (An earlier revision of this
+  //           comment said 7 and 5; those were the counts before four rows were
+  //           re-diagnosed at 48-95 bars on 2026-09-07, and it also claimed the
+  //           null-as-refusal reading had earned three live no-fault verdicts.
+  //           It has earned none: there are zero sound_call_lost rows and zero
+  //           no_fault_grounds.allowed. Both figures are re-checked here rather
+  //           than carried forward, because a stale measurement written as a
+  //           present-tense fact is how a comment starts lying.)
+  //
+  //           The deeper point the counts hint at: `expired` — the one
+  //           resolution leverMoved reads as a wider stop having paid — needs
+  //           EXPIRY_DAYS of market time, while the widest window this code
+  //           examines is AFTER_BARS. The shortfall is 20x on a 1h plan and 36x
+  //           on a 1day plan, so that answer is unreachable by construction: the
+  //           exculpating verdict cannot arrive, while the incriminating ones
+  //           can. Waiting longer before the first diagnosis does not fix it.
   paid: boolean | null;
 }
 
