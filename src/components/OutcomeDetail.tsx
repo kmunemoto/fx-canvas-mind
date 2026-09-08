@@ -1,7 +1,7 @@
 import type { AnalysisRecord, Counterfactual, NumericCandle } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
-import { CURRENT_CONTRACT, contractKey, isRejected } from "@/lib/outcomeStats";
+import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 
 interface Props {
@@ -35,6 +35,11 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   // A WAIT call carries no trade plan, so there is nothing to judge
   const tracked = record.signal !== "WAIT" && record.outcome !== "skipped";
   const rejected = isRejected(record);
+  // The other half of what `rejected` used to mean: a WAIT the analyst itself
+  // answered. It carries a rejection string too — the confidence floor writes
+  // one — so it opened the "refused server-side" panel and said the server had
+  // overruled a plan the analyst never asked for.
+  const declined = isSelfDeclined(record);
   // Whether there is a diagnosis to show. A WAIT is now reviewed too — the
   // trade it declined is diagnosed — and gating this on `tracked` meant every
   // model call spent on a WAIT produced a lesson, a verdict and evidence that
@@ -86,7 +91,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
       case "untriggered":
         return ev?.reason && ev.reason in d.reasons ? d.reasons[ev.reason] : t.history.outcomes.untriggered;
       case "skipped":
-        return rejected ? g.rejectedSummary : d.summary.skipped;
+        return rejected ? g.rejectedSummary : declined ? g.declinedSummary : d.summary.skipped;
       default:
         return d.summary.pending;
     }

@@ -270,8 +270,11 @@ describe("a rule's contract says what the rule can do, not when it was written",
     expect(promptSrc).toContain("export const stampFor = (");
     // Both paths: the re-emitted rule and the restored one. A restore that
     // inherits its stamp is how a dead build's endorsement survives forever.
-    const derived = promptSrc.match(/contract: stampFor\(/g) ?? [];
+    const derived = promptSrc.match(/= stampFor\(/g) ?? [];
     expect(derived).toHaveLength(2);
+    // ...and both write the answer straight onto the rule. stampFor returns a
+    // reason beside the contract now, and the stamp must still come from it.
+    expect(promptSrc.match(/contract: (emitted|stamp)\.contract,/g) ?? []).toHaveLength(2);
   });
 
   it("never assigns the writing contract straight onto a rule", () => {

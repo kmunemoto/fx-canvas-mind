@@ -179,6 +179,10 @@ export interface RecordRow {
   // performance_stats already leaves it — see summarizeRecord.
   preview?: boolean;
   rejection: string | null;
+  // What the ANALYST asked for, before the gate answered. Without it a WAIT the
+  // model itself proposed is indistinguishable here from a plan the gate took
+  // away: the confidence floor stamps a rejection on both.
+  proposed_signal?: string | null;
   filled: boolean;
   entry: number | null;
   stop: number | null;
@@ -335,9 +339,15 @@ export interface RecordStats {
   // How often a diagnosis named a rule as the cause of, or a help to, a
   // result — the one per-rule signal there is
   rule_feedback: Record<string, { blamed: number; credited: number }>;
-  // Plans the entry gate refused, and how many of them the market then
-  // filled anyway
+  // Plans the entry gate refused: the analyst asked for a trade and the server
+  // published a WAIT instead. Measured in production 2026-09-08 on market_v1:
+  // ONE row, against 16 the editor was being shown as refusals.
   rejected: number;
+  // WAITs the analyst chose itself. The editor is asked to weigh standing aside
+  // against trading, and it cannot do that if a decision the analyst made and
+  // one the server imposed arrive as the same number — the correction for the
+  // two is opposite.
+  self_declined: number;
   shadow: { total: number; untriggered: number; wins: number; losses: number; open: number };
 }
 
@@ -352,7 +362,7 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     independent_clusters: 0, episode_definition_version: EPISODE_DEFINITION_VERSION, min_stat_n: MIN_STAT_N,
     by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, lessons_by_contract: {},
     by_rulebook_version: {}, rule_feedback: {},
-    rejected: 0,
+    rejected: 0, self_declined: 0,
     shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0 },
   };
   let filled = 0;
@@ -391,7 +401,25 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
       return;
     }
     if (r.signal === "WAIT") {
-      if (r.rejection) s.rejected++;
+      // Who declined, kept apart. `rejection` alone cannot say: the confidence
+      // floor writes 'low_confidence' onto a WAIT the model itself answered, so
+      // counting the string made 16 of the analyst's own calls look like the
+      // server overruling it. A row with no proposed_signal at all — written
+      // before the field existed — is counted in neither, the same silence
+      // isRejected/isSelfDeclined keep on the screen.
+      //
+      // And the same population the screen and performance_stats count over:
+      // both exclude previews. This loop does not (only `scanned` above does),
+      // so the four weekend reads in production — every one stamped
+      // market_closed, two over a proposed SELL — would arrive as 3 refusals
+      // and 18 self-declines beside a system prompt that says the refusals are
+      // 1. Two numbers with one name is the failure being fixed, so the split
+      // is measured over the population it is named after. `waits` and `total`
+      // keep their older, wider population: that gap predates this split and
+      // moving it would change rates nobody asked to have moved.
+      const counted = r.preview !== true;
+      if (counted && r.rejection && (r.proposed_signal === "BUY" || r.proposed_signal === "SELL")) s.rejected++;
+      if (counted && r.proposed_signal === "WAIT") s.self_declined++;
       s.waits++;
       // 'pending' and 'unknown' are not verdicts, so they stay out of both
       // sides of the rate: the first has not been judged yet, the second
@@ -990,15 +1018,48 @@ export const unfollowableUnder = (text: string, contract: string | null): boolea
 // to run. Four rules learned entirely from entry_chosen_v1 evidence were
 // stamped market_v1 that way, and one of them taught the analyst where to
 // enter under a contract that fills at the market.
+//
+// It also SAYS WHY it refused. It used to return a bare null, and the silence
+// cost days: candidate rule r12 (cause wait_missed_trade, support 2 — the only
+// rule the loop has ever produced that argues for TRADING more) was stamped
+// null and dropped out of every analyst prompt because its English text
+// contains "market entry", one of ENTRY_LEVER_PHRASES. Rule r10, which argues
+// for trading LESS, was vetoed by the identical phrase: the filter is topical,
+// not directional. Nothing on the run recorded either fact, so the rule simply
+// was not there and no artefact said so.
+//
+// The reason is a fact ABOUT the refusal, never a change to it: which rules are
+// vetoed is exactly what it was.
+export type StampRefusal =
+  // the cause cannot occur under this contract, so no instruction about it can
+  | "cause_outside_contract"
+  // the Japanese text moves a lever the contract does not have
+  | "entry_lever_ja"
+  // the English text does — r12's case, with sound Japanese beside it
+  | "entry_lever_en";
+
+export interface Stamp {
+  contract: string | null;
+  // Null when a stamp was granted, and also when no contract was named at all:
+  // a caller that asked no question got no refusal.
+  reason: StampRefusal | null;
+}
+
 export const stampFor = (
   rule: { cause: string; text_ja: string; text_en: string },
   writingContract: string | null,
-): string | null => {
-  if (writingContract === null) return null;
-  if (causeOutsideContract(rule.cause, writingContract)) return null;
-  if (unfollowableUnder(rule.text_ja, writingContract)) return null;
-  if (unfollowableUnder(rule.text_en, writingContract)) return null;
-  return writingContract;
+): Stamp => {
+  if (writingContract === null) return { contract: null, reason: null };
+  if (causeOutsideContract(rule.cause, writingContract)) {
+    return { contract: null, reason: "cause_outside_contract" };
+  }
+  if (unfollowableUnder(rule.text_ja, writingContract)) {
+    return { contract: null, reason: "entry_lever_ja" };
+  }
+  if (unfollowableUnder(rule.text_en, writingContract)) {
+    return { contract: null, reason: "entry_lever_en" };
+  }
+  return { contract: writingContract, reason: null };
 };
 
 export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトに、基本手順とリスク規定の後ろに「補助的な指針」として入ります。基本手順（トレンド局面での成行、損切り幅、RR の下限）を上書きすることはできないので、その範囲内で書きます。
@@ -1010,6 +1071,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - stats は stats.contract のエントリー契約で作られたプランだけを集計している。別の契約のプランは stats.other_contract_rows として件数だけ数え、勝率にも件数にも入れていない。契約をまたいだ比較はできない。
 - 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
 - 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
+- 見送りの内訳: stats.self_declined は AI 自身が「見送る」と答えた件数、stats.rejected は AI が出したプランをサーバーの入口チェックが却下して WAIT にした件数。前者はアナリストの判断、後者はサーバーの強制で、ルールで直せるのは前者だけ。この2つを1つの数にまとめていた間、AI 自身の見送り16件が「サーバーが却下した」件数として渡っていた（実際の却下は1件）。
 - 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
 - 各 lesson には bars_after_settlement（その診断が見た決着後の足数）が付いている。診断は決着の直後に走る設計なので、この数が小さい lesson は「その後どうなったか」をほとんど見ていない。実測（2026-09-07、n=4）では、8足で書かれた診断を48〜95足まで待って読み直したところ、4件中2件は原因そのものが変わり（うち1件は「一度も含み益にならなかった」から「23足後に利確1に到達していた」へ）、残る2件も原因は同じまま avoidable や副次原因が変わった。ただしこの4件は原因語彙を変えた版で読み直しているので、深さの効果とコード変更の効果を分離できていない。lesson の confidence はこの深さを織り込んでいない。null は列ができる前に書かれた lesson。
 - entry_too_far / entry_too_early は旧契約の語彙。entry_too_early は chased_move として集計されている。
@@ -1095,6 +1157,12 @@ export type DropReason =
   | "evidence_gone"
   | "no_room";
 
+// Why a rule that IS in the book reaches no analyst prompt. Not a drop — the
+// rule survived the revision — but the same question, about the same id, and
+// it belongs in the same map: r12 was in the book at v7 and at v8 and reached
+// nobody either time, and nothing on the run said why.
+export type ChangeReason = DropReason | StampRefusal;
+
 export interface Consolidation {
   rules: Rule[];
   summary_ja: string;
@@ -1110,7 +1178,10 @@ export interface Consolidation {
   // nothing, while the sentence the analyst follows had been replaced and its
   // `since` still claimed the older date.
   //
-  // reasons: why each id in `dropped` or `removed` left, keyed by id. The
+  // reasons: why each id in `dropped`, `removed` or `held_back` is there,
+  // keyed by id. For a held-back rule that is the veto stampFor applied, which
+  // was previously recorded nowhere at all — a rule can sit in the book for
+  // versions on end, be printed in every artefact, and reach no prompt. The
   // lists alone say a rule did not make it and stop there, which is enough to
   // notice a rule failing twice and not enough to say why — the editor
   // proposed the same new rule r12 at v7 and at v8 and it was dropped both
@@ -1123,7 +1194,7 @@ export interface Consolidation {
     dropped: string[];
     held_back: string[];
     reworded: string[];
-    reasons: Record<string, DropReason>;
+    reasons: Record<string, ChangeReason>;
   };
 }
 
@@ -1202,7 +1273,10 @@ export const parseConsolidation = (
   const added: string[] = [];
   const dropped: string[] = [];
   const reworded: string[] = [];
-  const reasons: Record<string, DropReason> = {};
+  const reasons: Record<string, ChangeReason> = {};
+  // Kept beside the stamps as they are derived, so the held_back list below can
+  // say why each id is on it without re-deriving anything.
+  const stampRefusals = new Map<string, StampRefusal>();
   for (const item of raw.rules) {
     if (!isRecord(item)) continue;
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
@@ -1256,6 +1330,8 @@ export const parseConsolidation = (
     // the cut can carry a trailing space that no reader would call a change.
     const before = prior.get(id);
     const same = (a: string, b: string) => a.trim() === b.trim();
+    const emitted = stampFor({ cause, text_ja: textJaFinal, text_en: textEnFinal }, writingContract);
+    if (emitted.reason !== null) stampRefusals.set(id, emitted.reason);
     if (before && (!same(before.text_ja, textJaFinal) || !same(before.text_en, textEnFinal) || before.cause !== cause)) {
       reworded.push(id);
     }
@@ -1267,7 +1343,7 @@ export const parseConsolidation = (
       support,
       scope: str(item.scope, 60) || null,
       since: prior.get(id)?.since ?? nowIso,
-      contract: stampFor({ cause, text_ja: textJaFinal, text_en: textEnFinal }, writingContract),
+      contract: emitted.contract,
       evidence_contracts: eras,
       kind,
       supported_by: cited,
@@ -1322,6 +1398,8 @@ export const parseConsolidation = (
       continue;
     }
     const { cited, support, eras } = ev;
+    const stamp = stampFor(rule, writingContract);
+    if (stamp.reason !== null) stampRefusals.set(rule.id, stamp.reason);
     // The stamp is re-derived here too, from the STORED rule's own cause and
     // text. A restored rule must not carry a stamp forward: inheriting it is
     // what let a rule keep an endorsement that only ever existed because a
@@ -1331,7 +1409,7 @@ export const parseConsolidation = (
       support,
       supported_by: cited,
       evidence_contracts: eras,
-      contract: stampFor(rule, writingContract),
+      contract: stamp.contract,
     });
     restored.push(rule.id);
   }
@@ -1340,6 +1418,13 @@ export const parseConsolidation = (
   // With writingContract null every stamp is null and this is empty, which is
   // the right answer: a caller that named no contract asked no question.
   const held_back = writingContract === null ? [] : rules.filter((r) => r.contract !== writingContract).map((r) => r.id);
+  // The rule is in the book, so this is the live fact about the id; a drop
+  // reason already under it belongs to some other proposal that never made it
+  // into `rules` at all.
+  for (const id of held_back) {
+    const why = stampRefusals.get(id);
+    if (why !== undefined) reasons[id] = why;
+  }
 
   return {
     rules: orderRules(rules),

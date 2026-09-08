@@ -27,7 +27,12 @@ import type { AnalysisRecord } from "../lib/types";
 const postmortemIndex = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 const promptSrc = readFileSync("supabase/functions/postmortem/prompt.ts", "utf8");
 const outcomeStatsSrc = readFileSync("src/lib/outcomeStats.ts", "utf8");
-const migration = readFileSync("supabase/migrations/20260907041000_one_episode_definition.sql", "utf8");
+// The NEWEST definition of performance_stats, which is the one that runs.
+// Pinned to 20260907041000 until 20260908093000 redefined the function to
+// split who declined from who refused: a pin left on a superseded file
+// passes while the live definition drops the episode rule, and points the
+// next bump at a migration that has already been applied.
+const migration = readFileSync("supabase/migrations/20260908093000_who_declined_is_not_who_refused.sql", "utf8");
 const settlementMigration = readFileSync("supabase/migrations/20260907040000_lesson_settlement_time.sql", "utf8");
 const loopHealthMigration = readFileSync("supabase/migrations/20260907042000_loop_health_counts_episodes.sql", "utf8");
 const loopHealthComponent = readFileSync("src/components/LoopHealth.tsx", "utf8");

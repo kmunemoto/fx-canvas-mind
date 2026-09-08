@@ -1633,8 +1633,11 @@ describe("rulebook consolidation", () => {
       row({ outcome: "untriggered" }),
       row({ outcome: "ambiguous", filled: true }),
       row({ outcome: "pending" }),
-      row({ outcome: "skipped", signal: "WAIT", rejection: "should_be_market" }),
-      row({ outcome: "skipped", signal: "WAIT" }),
+      // A plan the gate took away, and — the row that used to be counted as
+      // the same event — a WAIT the analyst answered itself, wearing the
+      // confidence floor's rejection stamp.
+      row({ outcome: "skipped", signal: "WAIT", proposed_signal: "SELL", rejection: "should_be_market" }),
+      row({ outcome: "skipped", signal: "WAIT", proposed_signal: "WAIT", rejection: "low_confidence" }),
       row({ outcome: "untriggered", shadow: true, rejection: "should_be_market" }),
       row({ outcome: "win", shadow: true, rejection: "too_far", filled: true }),
     ];
@@ -1646,7 +1649,8 @@ describe("rulebook consolidation", () => {
     ]);
     expect(s).toMatchObject({
       total: 6, wins: 1, losses: 2, untriggered: 1, ambiguous: 1, open: 1, settled: 3,
-      win_rate: null, fill_rate: null, rejected: 1, independent_clusters: 2,
+      win_rate: null, fill_rate: null, rejected: 1, self_declined: 1, independent_clusters: 2,
+      waits: 2,
     });
     expect(s.win_rate_ci95).toEqual([6, 79]);
     expect(s.realized_r).toEqual({ n: 3, sum: 0, mean: 0 });
@@ -1660,10 +1664,37 @@ describe("rulebook consolidation", () => {
     expect(s.shadow_by_cause).toEqual({ entry_too_far: 1 });
     const p = buildConsolidationPrompt(previous, [], s);
     expect(p.user).toContain('"rejected":1');
+    // The editor is told which of the two it is looking at. Pooled, the one
+    // number said the server had overruled the analyst on every WAIT.
+    expect(p.user).toContain('"self_declined":1');
+    expect(p.system).toContain("stats.self_declined");
     expect(p.user).toContain('"rule_feedback"');
     expect(p.system).toContain(String(MAX_RULES));
     expect(p.system).toContain("独立クラスタ");
     expect(p.system).toContain("基本手順");
+  });
+
+  it("splits the WAITs over the population the screen splits them over", () => {
+    // A weekend read is not a decision by either party — the market was shut,
+    // so the analyst was never free to trade and the gate refused nothing it
+    // would otherwise have allowed. performance_stats and the history screen
+    // both drop previews before counting; this loop keeps them, so without the
+    // guard the four in production (all market_closed, two over a proposed
+    // SELL) reached the editor as extra refusals and extra self-declines while
+    // the system prompt beside them named the real refusal count.
+    const wait = (over: Partial<RecordRow>): RecordRow => ({
+      pair: "USD/JPY", signal: "WAIT", created_at: "2026-09-03T04:00:00Z", outcome: "skipped",
+      shadow: false, rejection: null, filled: false, entry: null, stop: null, tp1: null,
+      outcome_price: null, rulebook_version: 2, ...over,
+    });
+    const s = summarizeRecord([
+      wait({ proposed_signal: "SELL", rejection: "poor_rr" }),
+      wait({ proposed_signal: "WAIT", rejection: "low_confidence" }),
+      wait({ preview: true, proposed_signal: "SELL", rejection: "market_closed" }),
+      wait({ preview: true, proposed_signal: "WAIT", rejection: "market_closed" }),
+    ], []);
+    expect(s.rejected).toBe(1);
+    expect(s.self_declined).toBe(1);
   });
 
   const contractRow = (over: Partial<RecordRow>): RecordRow => ({
@@ -1962,6 +1993,7 @@ describe("rules in the analyze prompt", () => {
     expect(inForce(out?.rules ?? [], "market_v1").map((r) => r.id).sort()).toEqual(["keep", "old3"]);
     // A refused stamp is recorded rather than being a silent disappearance
     expect(out?.changes.held_back).toEqual(["old1"]);
+    expect(out?.changes.reasons.old1).toBe("cause_outside_contract");
   });
 
   it("refuses the stamp for a rule that names a lever the contract does not have, however it is labelled", () => {
@@ -1989,6 +2021,44 @@ describe("rules in the analyze prompt", () => {
     expect(out?.rules[0].support).toBe(1);
     expect(out?.rules[0].supported_by).toEqual(["L1"]);
     expect(out?.changes.held_back).toEqual(["r1"]);
+    expect(out?.changes.reasons.r1).toBe("entry_lever_ja");
+  });
+
+  // WHY the stamp was refused, recorded. r12 (cause wait_missed_trade, support
+  // 2 — the only rule this loop has ever produced that argues for trading MORE)
+  // sat in the book at v7 and at v8, reached no analyst prompt either time, and
+  // nothing on either run said why: its English text contains "market entry".
+  // r10, a suppression rule, is vetoed by the identical phrase — the filter is
+  // topical, not directional. Days went into finding that out from the phrase
+  // list by hand.
+  it("says why a stamp was refused, and does not change which rules are refused", () => {
+    const stamped = stampFor(
+      { cause: "wait_missed_trade", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, a market entry with a 0.8xATR stop beats standing aside." },
+      MARKET_CONTRACT,
+    );
+    expect(stamped.contract).toBeNull();
+    // The Japanese half is followable; it is the English that carries the phrase
+    expect(stamped.reason).toBe("entry_lever_en");
+    // Nothing about which rules are vetoed moved: a clean rule is still stamped
+    expect(stampFor({ cause: "wait_missed_trade", text_ja: "ADXが25以上なら見送らない。", text_en: "Do not stand aside when ADX is above 25." }, MARKET_CONTRACT))
+      .toEqual({ contract: MARKET_CONTRACT, reason: null });
+    // A caller that named no contract asked no question, so there is no refusal
+    expect(stampFor({ cause: "wait_missed_trade", text_ja: "x", text_en: "market entry" }, null))
+      .toEqual({ contract: null, reason: null });
+
+    const out = parseConsolidation(
+      {
+        rules: [{ id: "r12", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, a market entry with a 0.8xATR stop beats standing aside.", cause: "wait_missed_trade", kind: "heuristic", scope: null, supported_by: ["L1"] }],
+        summary_ja: "s",
+        summary_en: "s",
+      },
+      [],
+      T0,
+      [{ analysis_id: "L1", cluster: "c1", cause: "wait_missed_trade", contract: "market_v1" }],
+      "market_v1",
+    );
+    expect(out?.changes.held_back).toEqual(["r12"]);
+    expect(out?.changes.reasons.r12).toBe("entry_lever_en");
   });
 
   it("keeps house vocabulary followable: naming the entry price is required, choosing it is what does not exist", () => {

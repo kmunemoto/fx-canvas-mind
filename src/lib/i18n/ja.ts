@@ -131,6 +131,9 @@ export const ja = {
       untriggered: "未約定",
       ambiguous: "判定不能",
       rejected: "却下",
+      // 「却下」と並べて出る別の出来事。AI自身がWAITと答えた行に「却下」を
+      // 出していたため、サーバーが16件のプランを覆したように読めていた。
+      declined: "AI見送り",
     },
     scope: (n: number) => `直近${n}件`,
     // The statistics and the row list are two different populations on one
@@ -174,11 +177,17 @@ export const ja = {
     // The entry gate: plans analyze refused because the market would not
     // have reached them, and what became of them in the shadows
     gate: {
+      // 「サーバーが却下した」と「AI自身が見送った」は別の出来事。確信度の
+      // 下限は AI 自身がWAITと答えた行にも rejection を書くので、この2文を
+      // 1つの件数にまとめていた間、16件の自主的な見送りが「サーバーがAIの
+      // 判断を覆した」と表示されていた（実際の却下は1件）。
       note: (n: number) => `AIの提案 ${n}件は「約定しない・割に合わない」としてサーバー側で却下し、WAITに変更しました。`,
+      declinedNote: (n: number) => `AI自身が「見送る」と判断したものが ${n}件あります（サーバーによる却下ではありません）。`,
       shadowNote: (s: { untriggered: number; wins: number; losses: number; open: number }) =>
         `却下したプランをそのまま追跡した結果: 未約定 ${s.untriggered} / WIN ${s.wins} / LOSS ${s.losses} / 進行中 ${s.open}`,
       rejectedTitle: "サーバー側で却下したプラン",
       rejectedSummary: "AIの提案はサーバー側で却下され、WAITとして公開されました",
+      declinedSummary: "AI自身が見送ると判断しました（サーバーによる却下ではありません）",
       reasons: {
         too_far: "エントリーが現在値から離れすぎ（約定しない）",
         should_be_market: "トレンド継続中に戻りを待つ指値（約定しない）",
@@ -186,6 +195,9 @@ export const ja = {
         poor_rr: "リスクリワードが割に合わない",
         target_out_of_reach: "利確が遠すぎて期限内に届かない",
         market_closed: "市場が閉まっていた（成行で入れない）",
+        // この見出しが出るのは、AIがBUY/SELLを出したうえで確信度が下限に
+        // 届かなかった行だけ。AI自身がWAITと答えた行はここに来ない。
+        low_confidence: "AIの確信度が下限に届かなかった",
         incoherent: "エントリー・損切り・利確の水準が矛盾",
       },
       proposed: "AIの提案",

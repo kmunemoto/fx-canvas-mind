@@ -200,6 +200,12 @@ export type EntryRejection =
   // available action. Recorded apart from a model WAIT — one is the analyst
   // declining, the other is the server declining for it.
   | "market_closed"
+  // The model rated its own call below the floor the policy states, and the
+  // server published the WAIT the policy calls for. On a proposed WAIT this is
+  // the analyst agreeing with itself and nothing was refused; on a proposed BUY
+  // or SELL it is a real refusal. isRejected in outcomeStats.ts is what tells
+  // the two apart — this string cannot.
+  | "low_confidence"
   | "incoherent";
 
 export interface EntryCheck {
@@ -503,7 +509,15 @@ export interface LoopHealth {
 export interface PerformanceGroup {
   calls: number;
   waits: number;
+  // WAIT rows the gate imposed on a plan the analyst asked for.
   rejected: number;
+  // WAIT rows the analyst chose itself. Optional because an answer from a
+  // server that predates the split does not carry it; read as 0 rather than
+  // guessed from `waits - rejected`, which under the old conflated `rejected`
+  // would have produced a number for an event nobody counted. Its absence is
+  // also how serverTally recognises such a server and withholds `rejected`
+  // too, since that field is then the conflated count under a narrower name.
+  self_declined?: number;
   waits_judged: number;
   waits_missed: number;
   total: number;

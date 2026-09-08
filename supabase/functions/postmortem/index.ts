@@ -50,7 +50,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v21-2026-09-08T09:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v22-2026-09-08T10:30:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -1392,7 +1392,7 @@ Deno.serve(async (req: Request) => {
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,proposed_signal:entry_check->>proposed_signal,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;
@@ -1412,6 +1412,10 @@ Deno.serve(async (req: Request) => {
           // out before clustering, never saw it. One rule, two populations.
           preview: r.preview === true,
           rejection: strOrNull(r.rejection),
+          // Read so summarizeRecord can tell a WAIT the analyst chose from one
+          // the gate imposed. The rejection string cannot: the confidence floor
+          // stamps one on both.
+          proposed_signal: strOrNull(r.proposed_signal),
           filled: typeof r.filled_at === "string" && r.filled_at.length > 0,
           entry: numberOrNull(r.entry_point),
           stop: numberOrNull(r.stop_loss),

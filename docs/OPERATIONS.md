@@ -250,6 +250,7 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   **sweep モードだけ**、BUY/SELL の判定が終わった後の残り予算（`MAX_REQUESTS`）でしか走らない。
 - 統計: `wait_miss_rate` は `missed + correct` が `MIN_STAT_N` 以上で初めて出る。`pending` / `unknown` / `no_call` は分母にも入れない。
   サーバが却下した WAIT（`entry_check.rejection`。現行契約で起こるのは market_closed / low_confidence / stop_too_tight / poor_rr / target_out_of_reach）も採点され、`rejection` で区別する。
+  ただし **`rejection` が付いているだけでは却下ではない**: 確信度の下限は AI 自身が WAIT と答えた行にも `low_confidence` を書く。却下と言えるのは `entry_check.proposed_signal` が BUY/SELL の行だけで、`proposed_signal = WAIT` は AI 自身の見送り（`isRejected` / `isSelfDeclined`、`performance_stats` の `rejected` / `self_declined`）。2026-09-08 実測で market_v1 の却下は 1 件、AI 自身の見送りが 16 件。`proposed_signal` が無い旧行はどちらにも数えない。
 - 歩き始めは **`wait_plan.decided_at`**（市場データが解決した瞬間）で、`created_at`（INSERT の時刻）ではない。`created_at` はモデル呼び出し・ゲート・保存の後なので 30〜120 秒遅く、`judgeWait` は「その時刻より後に**始まる**足」しか見ないため、判定足 15 分の 1 本目がまるごと落ちていた。損切りが 0.4 ATR しかないので 1 本の差で判定が反転する。
 - 移行時の実測: 本番の `skipped` 行は 3 件で全部 `verdict = unknown`・`bars_examined = 0`（`price_at_signal` も `entry_check` も無い時代の行）。両側採点は本番で 1 件も判定を出していないので、捨てた測定値は無い。
 
@@ -730,7 +731,10 @@ from public.lessons where created_at > '2026-09-05T13:15:00Z';
 
 ```sql
 select wait_check->>'verdict' as verdict, count(*) as n,
-       count(*) filter (where entry_check->>'rejection' is not null) as server_rejected
+       -- rejection だけを数えると AI 自身の見送りが「サーバの却下」に化ける（§3.6）
+       count(*) filter (where entry_check->>'proposed_signal' in ('BUY','SELL')
+                          and coalesce(entry_check->>'rejection','') <> '') as server_rejected,
+       count(*) filter (where entry_check->>'proposed_signal' = 'WAIT') as self_declined
 from public.analyses where signal = 'WAIT' group by 1 order by n desc;
 ```
 
