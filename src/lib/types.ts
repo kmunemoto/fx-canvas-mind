@@ -371,9 +371,27 @@ export interface Postmortem {
   created_at?: string;
   error?: string;
   attempts?: number;
-  // Diagnosed on little aftermath; revisited once the full window exists
-  thin?: boolean;
+  // Diagnosed on little aftermath. Null on a WAIT, where the aftermath of a
+  // trade that was never taken is not measured at all, so neither true nor
+  // false would be a fact about it.
+  thin?: boolean | null;
   revisions?: number;
+  // Every earlier reading of this same row, oldest first, kept when the
+  // diagnosis is rewritten. A compact snapshot: no facts, and no prior of its
+  // own.
+  prior?: Array<{
+    version?: string | null;
+    created_at?: string | null;
+    cause?: PostmortemCause | null;
+    secondary_causes?: PostmortemCause[];
+    avoidable?: boolean | null;
+    confidence?: number | null;
+    rule_blamed?: string | null;
+    rule_credited?: string | null;
+    lesson?: { ja: string | null; en: string | null };
+    bars_after_settlement?: number | null;
+    thin?: boolean | null;
+  }>;
   rule_blamed?: string | null;
   rule_credited?: string | null;
   rulebook_version?: number | null;

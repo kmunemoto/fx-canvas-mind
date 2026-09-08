@@ -50,7 +50,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v20-2026-09-08T00:30:00Z";
+const POSTMORTEM_VERSION = "postmortem-v21-2026-09-08T09:00:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -249,10 +249,16 @@ Deno.serve(async (req: Request) => {
           // lessons — so an eight-bar reading and a ninety-five-bar reading
           // arrived indistinguishable, both stating a confidence in the 70s.
           // Measured 2026-09-07: of four losses re-diagnosed at 48-95 bars,
-          // three had said something else at 8. Row 1b003cf3 was
-          // direction_wrong with max_favorable_r 0 — "never once in profit" —
-          // and at 48 bars was chased_move with max_favorable_r 7: the
-          // direction was right and price reached TP1 23 bars later.
+          // two changed the cause outright and one kept the cause but flipped
+          // avoidable; the fourth has nothing on record either way. Row
+          // 1b003cf3 was direction_wrong with max_favorable_r 0 — "never once
+          // in profit" — and at 48 bars was chased_move with max_favorable_r
+          // 7: the direction was right and price reached TP1 23 bars later.
+          // (Written up first as "three of four", which the stored causes do
+          // not support. The four were also re-read by a build that had
+          // changed the cause vocabulary, so depth and that change are not
+          // separated. Both caveats travel with the number wherever it is
+          // cited.)
           // This column is the depth, and nothing else: what it is worth is
           // a judgement to be made FROM the record, not inside the writer.
           bars_after_settlement: numberOrNull(
@@ -426,18 +432,33 @@ Deno.serve(async (req: Request) => {
       // where to enter is a lesson nobody can follow.
       "plan_contract",
     ].join(",");
-    // Never diagnosed; failed and still retryable; diagnosed on too little
-    // aftermath (thin) and not yet revisited; or diagnosed by a version that
-    // did not record whether it was thin (the first one), which would
-    // otherwise never be looked at again
+    // Never diagnosed; failed and still retryable; or diagnosed and not yet
+    // revisited — EVERY done row, not only the ones flagged thin.
+    // `thin` was a guess at which diagnoses were unreliable, and the guess
+    // does not survive contact with the record: re-reading four losses at
+    // 48-95 bars changed the cause outright on two of them and flipped
+    // avoidable on a third, and a reading at nine bars is not obviously safer
+    // than one at eight. So the cut is dropped
+    // and depth is given to every row once, MAX_REVISIONS still being 1.
+    // (That measurement is confounded — the same run also changed the cause
+    // vocabulary — which is why this ships as a revisit of everything rather
+    // than as a conclusion; see docs/POSTMORTEM_DEPTH_PREREGISTRATION.md.)
+    //
     // A revisit that failed (no data, model down) is retried a few times and
-    // then left alone, without touching the diagnosis it was revisiting
+    // then left alone, without touching the diagnosis it was revisiting.
     const revisitRetryable = `or(postmortem->>revisit_attempts.is.null,postmortem->>revisit_attempts.lt.${MAX_ATTEMPTS})`;
+    // The same null-tolerant pair, and for the same reason. `revisions` is
+    // ABSENT from every document written before the counter existed, and in
+    // PostgREST `postmortem->>revisions.lt.1` on an absent key compares
+    // against SQL NULL: the result is NULL, not true, so the row does not
+    // match. Those rows used to be carried by the `thin.is.null` branch that
+    // is folded away just above; without this pair the revisit would silently
+    // match nothing and the whole change would be inert.
+    const revisionsLeft = `or(postmortem->>revisions.is.null,postmortem->>revisions.lt.${MAX_REVISIONS})`;
     const retryFilter = [
       "or=(postmortem.is.null",
       `and(postmortem->>status.eq.failed,postmortem->>attempts.lt.${MAX_ATTEMPTS})`,
-      `and(postmortem->>status.eq.done,postmortem->>thin.eq.true,postmortem->>revisions.lt.${MAX_REVISIONS},${revisitRetryable})`,
-      `and(postmortem->>status.eq.done,postmortem->>thin.is.null,${revisitRetryable}))`,
+      `and(postmortem->>status.eq.done,${revisionsLeft},${revisitRetryable}))`,
     ].join(",");
     // Named rows are re-diagnosed whatever their state: that is what naming
     // them is for
@@ -886,16 +907,68 @@ Deno.serve(async (req: Request) => {
       }
 
       const priorDoc = isRecord(raw.postmortem) ? raw.postmortem : null;
+      // What the earlier reading of this same row had said. Until now `stored`
+      // went straight over the row and the earlier diagnosis was gone: twenty
+      // of the thirty-two lessons in the table rest on eight bars or fewer
+      // (counted in production 2026-09-08), MAX_REVISIONS is 1, and this
+      // revisit is therefore the only occasion there will ever be to record
+      // what the shallow reading claimed. Without it the question "did depth
+      // change the answer" is unanswerable after the fact, because the
+      // before-half has been overwritten. Six rows are already past saving:
+      // they spent their revision before this field existed, and three of
+      // those are WAITs that spent it on the permanent-thin bug fixed below.
+      const priorTrail = Array.isArray(priorDoc?.prior) ? priorDoc.prior : [];
+      const priorFacts = isRecord(priorDoc?.facts) ? priorDoc.facts : null;
+      const priorLesson = isRecord(priorDoc?.lesson) ? priorDoc.lesson : null;
+      // Enumerated field by field rather than spread: a snapshot carrying its
+      // own `prior`, or the whole `facts` object, squares the document on
+      // every revision, and these are already 8-10 KB apiece. What survives is
+      // what a later reader needs to answer whether the shallow reading said
+      // something else — the verdict and evidence prose are not part of that.
+      // Capped the way the rulebook caps its history.
+      const prior = priorDoc?.status === "done"
+        ? [...priorTrail.slice(-(HISTORY_KEEP - 1)), {
+          version: strOrNull(priorDoc.version),
+          created_at: strOrNull(priorDoc.created_at),
+          cause: strOrNull(priorDoc.cause),
+          secondary_causes: Array.isArray(priorDoc.secondary_causes) ? priorDoc.secondary_causes : [],
+          // `=== true` would file a document that never stated avoidable as
+          // one that stated false, and the comparison this snapshot exists to
+          // make would then count a flip that was never measured. Every other
+          // field here keeps "absent" distinguishable for the same reason.
+          avoidable: typeof priorDoc.avoidable === "boolean" ? priorDoc.avoidable : null,
+          confidence: numberOrNull(priorDoc.confidence),
+          rule_blamed: strOrNull(priorDoc.rule_blamed),
+          rule_credited: strOrNull(priorDoc.rule_credited),
+          lesson: { ja: strOrNull(priorLesson?.ja), en: strOrNull(priorLesson?.en) },
+          // Lifted out of facts so the depth of the earlier reading travels
+          // without the object it came from
+          bars_after_settlement: numberOrNull(priorFacts?.bars_after_settlement),
+          thin: typeof priorDoc.thin === "boolean" ? priorDoc.thin : null,
+        }]
+        : priorTrail;
       const stored = {
         schema: SCHEMA_VERSION,
         version: POSTMORTEM_VERSION,
         status: "done",
         model: MODEL,
-        // Few bars after the settlement: revisit once the window fills out
-        thin: facts.bars_after_settlement < MIN_AFTER_BARS,
-        // Only the automatic revisit spends the one revision a thin
-        // diagnosis gets; a hand-run by id does not
+        // Few bars after the settlement: the diagnosis rests on very little.
+        // NOT false on a WAIT but null: facts.ts short-circuits the aftermath
+        // of a call that never traded to an empty array on purpose, so
+        // bars_after_settlement is 0 by construction and `thin` was
+        // permanently true — reporting "shallow" about a measurement that was
+        // never taken. false would be the opposite lie, asserting depth that
+        // was equally never measured; null is the only value that says the
+        // question does not apply here. Safe to introduce now because the
+        // `thin.is.null` branch of retryFilter — which used to mean "written
+        // by a build too old to record thinness" — is gone in this same
+        // deploy, so a null no longer pulls the row into a revisit.
+        thin: wait ? null : facts.bars_after_settlement < MIN_AFTER_BARS,
+        // Only the automatic revisit spends the one revision each diagnosis
+        // gets; a hand-run by id does not
         revisions: (numberOrNull(priorDoc?.revisions) ?? 0) + (priorDoc?.status === "done" && options.ids.length === 0 ? 1 : 0),
+        // Every reading this row has had before this one, oldest first
+        prior,
         cause: diagnosis.cause,
         secondary_causes: diagnosis.secondary_causes,
         avoidable: diagnosis.avoidable,
@@ -916,10 +989,10 @@ Deno.serve(async (req: Request) => {
         created_at: nowIso,
       };
       // The lesson goes in FIRST. Marking the diagnosis done and then failing
-      // to write the lesson stranded the row for good: a done row with
-      // thin:false matches no branch of retryFilter, and the consolidation
-      // that rewrites the rulebook reads the lessons table, so that plan's
-      // experience never reached the rules again. The reverse order is safe —
+      // to write the lesson stranded the row for good: a done row that has
+      // spent its revision matches no branch of retryFilter, and the
+      // consolidation that rewrites the rulebook reads the lessons table, so
+      // that plan's experience never reached the rules again. The reverse order is safe —
       // a lesson without the done marker is re-diagnosed next run and the
       // insert is idempotent on analysis_id.
       // Filed under what the row actually is: signal WAIT, outcome skipped.
@@ -956,31 +1029,50 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ---- repair: diagnoses whose lesson never landed ------------------------
+    // ---- repair: lessons that do not match the diagnosis on the row --------
     // Before the ordering was fixed, a failed lesson insert left a row marked
-    // done with no lesson, and retryFilter cannot see such a row again
-    // (thin:false matches none of its branches). The diagnosis itself is on
-    // the row, so the lesson can be rebuilt from it with no model call — this
-    // recovers the rows already stranded, and covers any future insert that
-    // fails after the diagnosis has been stored.
+    // done with no lesson, and retryFilter cannot see such a row again (a done
+    // row that has spent its revision matches none of its branches). The
+    // diagnosis itself is on the row, so the lesson can be rebuilt from it
+    // with no model call — this recovers the rows already stranded, and covers
+    // any future insert that fails after the diagnosis has been stored.
+    //
+    // A lesson that EXISTS but was projected from a diagnosis since rewritten
+    // is the same failure wearing different clothes, and the pass could not
+    // see it because it only ever looked for absence. Analysis 321bccaa was
+    // carrying a v16 lesson under a v17 diagnosis: the rulebook editor reads
+    // the lessons table, so it was being shown a cause and a lesson text that
+    // no longer exist anywhere on the row they claim to summarize. The
+    // revisit shipping in this build makes that the common case rather than
+    // the exception, because every done row is about to be re-diagnosed once.
+    // Rewriting is a pure re-projection through the same writeLesson: the
+    // diagnosis is not touched and the model is not asked anything.
     let repaired = 0;
+    let restated = 0;
     try {
       // Ids first. The documents are 8-10 KB apiece (the whole facts object,
       // plus a 60-point path on the evaluation), and in the common case none
       // of them is needed at all — fetching 200 of those every sweep to
       // compute a set difference is megabytes of JSON thrown away 96 times a
-      // day.
+      // day. The version rides along with the id because PostgREST can alias
+      // a JSON path in select: one short string per row answers "which build
+      // wrote this" without fetching the document it came from.
       const doneIdRows = (await readRowsOrNull(
         // Ordered by created_at, not closed_at: a WAIT row's closed_at is
         // always NULL (its settlement time lives inside wait_check), so
         // nullslast sorted every WAIT behind every diagnosed trade and a
         // stranded WAIT lesson could never be repaired.
-        `analyses?select=id&postmortem->>status=eq.done&order=created_at.desc&limit=${REPAIR_SCAN}`,
+        `analyses?select=id,doc_version:postmortem->>version&postmortem->>status=eq.done&order=created_at.desc&limit=${REPAIR_SCAN}`,
       )) ?? [];
-      const ids = doneIdRows.map((r) => String(r.id ?? "")).filter(Boolean);
+      const docVersion = new Map<string, string | null>();
+      for (const r of doneIdRows) {
+        const id = String(r.id ?? "");
+        if (id) docVersion.set(id, strOrNull(r.doc_version));
+      }
+      const ids = [...docVersion.keys()];
       if (ids.length > 0) {
         const haveLessons = await readRowsOrNull(
-          `lessons?select=analysis_id&analysis_id=in.(${ids.map(encodeURIComponent).join(",")})`,
+          `lessons?select=analysis_id,postmortem_version&analysis_id=in.(${ids.map(encodeURIComponent).join(",")})`,
         );
         // A read that failed is not proof that no lesson exists. Treating it
         // as an empty set would upsert over rows that are already there and
@@ -989,11 +1081,25 @@ Deno.serve(async (req: Request) => {
           errors.push("repair: lessons unavailable, skipped");
           throw new Error("skip repair");
         }
-        const have = new Set(haveLessons.map((l) => String(l.analysis_id ?? "")));
-        const missingIds = ids.filter((id) => !have.has(id));
-        const missing = missingIds.length === 0 ? [] : (await readRowsOrNull(
+        const lessonVersion = new Map<string, string | null>();
+        for (const l of haveLessons) {
+          const id = String(l.analysis_id ?? "");
+          if (id) lessonVersion.set(id, strOrNull(l.postmortem_version));
+        }
+        const missingIds = ids.filter((id) => !lessonVersion.has(id));
+        // Written by a build other than the one whose diagnosis is on the row.
+        // A lesson from before the column existed reads null here and is
+        // rewritten too, which is the only way it ever acquires a version.
+        const staleIds = ids.filter((id) =>
+          lessonVersion.has(id) && lessonVersion.get(id) !== docVersion.get(id)
+        );
+        // Absences first: a row with no lesson at all is invisible to the
+        // rulebook editor, where a stale one is merely wrong.
+        const repairIds = [...missingIds, ...staleIds].slice(0, REPAIR_PER_RUN);
+        const stale = new Set(staleIds);
+        const missing = repairIds.length === 0 ? [] : (await readRowsOrNull(
           `analyses?select=id,user_id,pair,interval,signal,mode,outcome,shadow,plan_contract,created_at,closed_at,evaluation,postmortem` +
-            `&id=in.(${missingIds.slice(0, REPAIR_PER_RUN).map(encodeURIComponent).join(",")})`,
+            `&id=in.(${repairIds.map(encodeURIComponent).join(",")})`,
         )) ?? [];
         for (const raw of missing.slice(0, REPAIR_PER_RUN)) {
           const doc = isRecord(raw.postmortem) ? raw.postmortem : null;
@@ -1013,7 +1119,8 @@ Deno.serve(async (req: Request) => {
             closed_at: strOrNull(raw.closed_at),
           });
           if (ok) {
-            repaired++;
+            if (stale.has(id)) restated++;
+            else repaired++;
             newLessons++;
           } else {
             errors.push(`${id}: lesson repair failed`);
@@ -1454,6 +1561,10 @@ Deno.serve(async (req: Request) => {
       diagnosed: diagnosed.length,
       lessons: newLessons,
       lessons_repaired: repaired,
+      // Rewritten because the lesson was a projection of a diagnosis that has
+      // since been replaced, as opposed to never having landed at all. Kept
+      // apart because they say different things about the run.
+      lessons_restated: restated,
       lesson_contributors: lessonContributors,
       record_contributors: recordContributors,
       rulebook: rulebook ?? promotedCandidate,

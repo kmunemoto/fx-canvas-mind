@@ -191,7 +191,9 @@ export const AFTER_WAIT_MS: Record<string, number> = {
   "1day": 8 * HOUR,
 };
 
-// Bars of the plan's own timeframe examined after the settlement
+// Bars of the plan's own timeframe examined after the settlement. This sets
+// the LENGTH of the window (afterWindowMs below), in the plan's bars: 6h on a
+// 15min plan, 24h on a 1h one, 48h on a 4h one, 120h on a daily one.
 export const AFTER_BARS: Record<string, number> = {
   "15min": 24,
   "1h": 24,
@@ -200,7 +202,22 @@ export const AFTER_BARS: Record<string, number> = {
 };
 
 // Below this many bars of aftermath a diagnosis rests on very little, and is
-// revisited once the full window exists
+// revisited once the full window exists.
+//
+// Counted in EVAL_INTERVAL bars — the bars actually fetched — NOT in the
+// plan's own bars that AFTER_BARS is denominated in. The two are called
+// "bars" and are not the same unit: a 1day plan's window is 5 daily bars long
+// and holds up to ~120 hourly ones, so AFTER_BARS 5 against MIN_AFTER_BARS 8
+// is not the contradiction it reads as. What actually decides the depth of a
+// first diagnosis is AFTER_WAIT_MS, which is 6-15x shorter than the window
+// above: 1h of aftermath on a 15min plan is 4 bars, 8h on a daily one is 8.
+// That is the FLOOR, not the whole distribution — isPostmortemDue is >= and
+// the sweep takes 3 rows a run, so a backlogged row is first read later and
+// deeper, which is why 12 of the 32 lessons in the table sit above the
+// threshold rather than all of them at or below it (production, 2026-09-08).
+// Either way the first reading is bounded by the
+// wait and not by the window, which is why the revisit is not conditioned on
+// `thin` any more.
 export const MIN_AFTER_BARS = 8;
 
 // A bar this many times the median range is an event, not a move

@@ -821,10 +821,17 @@ export interface LessonRow {
   // How many bars of aftermath the diagnosis was written on, and the build
   // that wrote it. A diagnosis is made soon after settlement by design
   // (AFTER_WAIT_MS in facts.ts), and depth is the difference between a
-  // reading and a guess: measured 2026-09-07, three of four losses diagnosed
-  // at 8 bars said something else once 48-95 bars existed, each of them at a
-  // confidence in the 70s. Optional because a lesson written before the
-  // column existed carries neither.
+  // reading and a guess: 2026-09-07, four losses first diagnosed at 8 bars
+  // were re-read at 48-95 bars. TWO changed cause outright (c8788083
+  // direction_wrong -> stop_too_tight, 1b003cf3 direction_wrong ->
+  // chased_move) and ONE kept the cause but flipped avoidable to false
+  // (c14cdb0a). Nothing is on record for the fourth (32d167d3), and it cannot
+  // be recovered: the re-read overwrote the earlier document, which is the
+  // reason `prior` exists at all. The same build had also changed the cause
+  // vocabulary, so depth and that change are not separated, and n is 4. This
+  // is why the depth question is being measured rather than answered — see
+  // docs/POSTMORTEM_DEPTH_PREREGISTRATION.md. Optional because a lesson
+  // written before the column existed carries neither.
   bars_after_settlement?: number | null;
   postmortem_version?: string | null;
   // Filled in by withClusters

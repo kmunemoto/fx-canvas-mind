@@ -14,10 +14,14 @@ import type { Rule } from "../../supabase/functions/analyze/rules";
 // Measured 2026-09-07, re-diagnosing four stored losses at 48-95 bars:
 // 1b003cf3 had been direction_wrong at 8 bars with max_favorable_r 0 — "never
 // once in profit" — and became chased_move with max_favorable_r 7, price
-// having reached TP1 23 bars later. c8788083 became stop_too_tight at 81 bars;
-// 32d167d3 kept its cause at 95 bars but flipped avoidable to false. Three of
-// four eight-bar diagnoses did not survive the full window, and every one of
-// them stated a confidence in the 70s.
+// having reached TP1 23 bars later. c8788083 became stop_too_tight at 81
+// bars. c14cdb0a kept direction_wrong at 95 bars but flipped avoidable to
+// false. Nothing is on record for the fourth, 32d167d3, and it can no longer
+// be recovered — the re-read overwrote the earlier document. So the honest
+// count is two cause changes and one avoidable flip out of four, not the
+// "three of four" this was first written up as, and not four of four either.
+// Every one of them stated a confidence in the 70s. The migration below
+// records the count as it was first written.
 //
 // This records the depth. It does not weight anything by it — that judgement
 // belongs to whoever reads the record.
