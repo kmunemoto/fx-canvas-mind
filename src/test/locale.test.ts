@@ -112,3 +112,59 @@ describe("the calendar's two silences", () => {
     expect(stringsFor("en").calendarUnavailable).not.toMatch(/[\u3040-\u30ff\u4e00-\u9faf]/);
   });
 });
+
+// The defect this guards: entryRejected had no low_confidence case, so all
+// sixteen confidence-floor rows fell to the default and told the reader the
+// entry, stop and target contradicted each other — levels nothing had compared
+// — inside a head and tail that read "the call was WAIT, changed to WAIT".
+// A missing case is invisible in a switch, which is exactly why it shipped.
+describe("the confidence floor's two stories", () => {
+  const parts = (signal: string, scored: boolean) => ({
+    rejection: "low_confidence",
+    signal,
+    distanceAtr: null,
+    stopAtr: null,
+    riskReward: null,
+    repairRejection: null,
+    ...(scored ? { confidence: 45, confidenceFloor: 60 } : {}),
+  });
+
+  it("does not dress the model's own WAIT as an override", () => {
+    // Nothing was overridden and nothing about the levels was tested, so the
+    // sentence may claim neither
+    const ja = stringsFor("ja").entryRejected(parts("WAIT", true));
+    expect(ja).not.toContain("変更しました");
+    expect(ja).not.toContain("却下");
+    expect(ja).not.toContain("矛盾");
+    expect(ja).toContain("確信度45");
+    expect(ja).toContain("60");
+
+    const en = stringsFor("en").entryRejected(parts("WAIT", true));
+    expect(en).not.toContain("downgraded to WAIT");
+    expect(en).not.toContain("contradict");
+    expect(en).toContain("45");
+    expect(en).toContain("60");
+    expect(en).not.toMatch(/[぀-ヿ一-龯]/);
+  });
+
+  it("still calls a real override an override", () => {
+    // A BUY the floor turned into a WAIT is the one case the head and tail
+    // describe truthfully
+    expect(stringsFor("ja").entryRejected(parts("BUY", true))).toContain("変更しました");
+    expect(stringsFor("en").entryRejected(parts("SELL", true))).toContain("downgraded to WAIT");
+  });
+
+  it("reads correctly when the numbers are not passed", () => {
+    // The two fields are optional, so the sentence has to stand without them
+    // rather than print a hole where a number belongs
+    for (const loc of ["ja", "en"] as const) {
+      for (const signal of ["WAIT", "BUY"]) {
+        const text = stringsFor(loc).entryRejected(parts(signal, false));
+        expect(text).not.toContain("undefined");
+        expect(text).not.toContain("null");
+        expect(text).not.toContain("NaN");
+        expect(text).not.toContain("?");
+      }
+    }
+  });
+});
