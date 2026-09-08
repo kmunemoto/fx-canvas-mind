@@ -45,12 +45,13 @@ import {
   summarizeRecord,
   fairShare,
   withClusters,
+  withoutAnalystClaim,
   type LessonRow,
   type PlanSummary,
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v23-2026-09-08T14:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v24-2026-09-08T18:00:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -899,7 +900,8 @@ Deno.serve(async (req: Request) => {
         market_context_detail: mcd,
         timeframe_alignment: Array.isArray(result.timeframe_alignment) ? result.timeframe_alignment : [],
         entry_check: entryCheck,
-        context,
+        // Stripped of the analyst's self-report — see withoutAnalystClaim
+        context: withoutAnalystClaim(context),
         contract: strOrNull(raw.plan_contract),
         shadow: raw.shadow === true,
         rules_in_force: rulesInForce.map((r) => ({ id: r.id, text_ja: r.text_ja })),

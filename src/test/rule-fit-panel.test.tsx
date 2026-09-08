@@ -4,9 +4,12 @@ import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
 import RuleFitPanel from "../components/RuleFitPanel";
+import { claimedRules } from "../../supabase/functions/analyze/rules";
+import { withoutAnalystClaim } from "../../supabase/functions/postmortem/prompt";
 import type { RuleFit, Rulebook } from "../lib/types";
 
 const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+const postmortem = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja") =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
@@ -119,9 +122,221 @@ describe("the rules this analysis was given", () => {
   });
 });
 
+describe("what the analyst says it used, beside what the server measured", () => {
+  // The claim is the analyst's word. It is marked, not scored: the panel must
+  // never let it be read as the measured verdict sitting next to it.
+  const claiming: RuleFit = { ...live, claimed_by_analyst: ["r10"] };
+
+  it("marks the rules the analyst claimed, and only those", () => {
+    render(<RuleFitPanel ruleFit={claiming} rulebook={rulebook} />);
+    open();
+    expect(screen.getByTestId("rule-claimed-r10")).toBeTruthy();
+    expect(screen.queryByTestId("rule-claimed-r4")).toBeNull();
+    expect(screen.queryByTestId("rule-claimed-r11")).toBeNull();
+  });
+
+  it("says in words that the mark is the analyst's word and not a measurement", () => {
+    render(<RuleFitPanel ruleFit={claiming} rulebook={rulebook} />);
+    open();
+    const note = screen.getByTestId("rule-fit-claim-note").textContent ?? "";
+    expect(note).toContain("AI自身");
+    expect(note).toContain("サーバが測ったものではありません");
+  });
+
+  it("keeps the claim visually apart from the measured verdict", () => {
+    // Same chip styling for both would make "the analyst used it" read as
+    // "the server measured it", which is the confusion this panel exists to
+    // prevent.
+    render(<RuleFitPanel ruleFit={claiming} rulebook={rulebook} />);
+    open();
+    const claimClass = screen.getByTestId("rule-claimed-r10").className;
+    expect(claimClass).toContain("border-dashed");
+    expect(claimClass).not.toContain("font-semibold");
+  });
+
+  it("shows no mark and no caption when the analyst did not answer", () => {
+    // The common case: web search is on, so the response schema never binds.
+    render(<RuleFitPanel ruleFit={live} rulebook={rulebook} />);
+    open();
+    expect(screen.queryByTestId("rule-claimed-r10")).toBeNull();
+    expect(screen.queryByTestId("rule-fit-claim-note")).toBeNull();
+  });
+
+  it("keeps 'it used none' distinct from 'it did not say', in words as well", () => {
+    // An empty claim is an answer, so the caption stands and nothing is
+    // marked. With no chips on screen the two states look the same, so the
+    // caption has to be the one that tells them apart — the silent wording
+    // ("a run that said nothing carries no marks") would say the reverse of
+    // what this row holds.
+    render(<RuleFitPanel ruleFit={{ ...live, claimed_by_analyst: [] }} rulebook={rulebook} />);
+    open();
+    const note = screen.getByTestId("rule-fit-claim-note").textContent ?? "";
+    expect(note).toContain("どのルールも使わなかったと述べています");
+    expect(note).not.toContain("申告が無い回");
+    expect(screen.queryByTestId("rule-claimed-r10")).toBeNull();
+  });
+
+  it("survives a rule_fit whose claim is not an array", () => {
+    // Index.tsx casts the response body to RuleFit without validating it. A
+    // decoration must not be able to take the analysis off the screen.
+    const bad = { ...live, claimed_by_analyst: 5 } as unknown as RuleFit;
+    render(<RuleFitPanel ruleFit={bad} rulebook={rulebook} />);
+    open();
+    expect(screen.getByTestId("rule-fit")).toBeTruthy();
+    expect(screen.queryByTestId("rule-fit-claim-note")).toBeNull();
+  });
+
+  it("marks every rule when the analyst claims every rule", () => {
+    render(<RuleFitPanel ruleFit={{ ...live, claimed_by_analyst: ["r4", "r10", "r11"] }} rulebook={rulebook} />);
+    open();
+    for (const id of ["r4", "r10", "r11"]) expect(screen.getByTestId(`rule-claimed-${id}`)).toBeTruthy();
+    // and the header count still reports the MEASUREMENT, untouched by the claim
+    expect(screen.getByText(/3件を提示し、うち0件が今の相場に該当/)).toBeTruthy();
+  });
+
+  it("has an English rendering with no Japanese in it", () => {
+    render(<RuleFitPanel ruleFit={claiming} rulebook={rulebook} />, "en");
+    open();
+    const panel = screen.getByTestId("rule-fit").textContent ?? "";
+    expect(panel).toContain("AI says used");
+    expect(panel).not.toMatch(/[ぁ-んァ-ン一-龥]/);
+  });
+});
+
+describe("the analyst's claim is filtered against what it was shown", () => {
+  const shown = ["r4", "r10", "r11"];
+
+  it("returns null when the field is absent, so silence is not 'used none'", () => {
+    // Structured output does not bind with web search on, which is most
+    // production runs: absent must be ordinary, and must stay tellable from
+    // an answered empty list.
+    expect(claimedRules(undefined, shown)).toBeNull();
+    expect(claimedRules(null, shown)).toBeNull();
+  });
+
+  it("returns null for anything that is not an array", () => {
+    expect(claimedRules("r10", shown)).toBeNull();
+    expect(claimedRules({ r10: true }, shown)).toBeNull();
+    expect(claimedRules(10, shown)).toBeNull();
+  });
+
+  it("drops ids that were never shown", () => {
+    // A rule the run never put in front of it cannot have been applied by it,
+    // and a held-back or invented id must not enter the record as one.
+    expect(claimedRules(["r10", "r99", "r7"], shown)).toEqual(["r10"]);
+  });
+
+  it("treats an answer it could not read as silence, never as 'used none'", () => {
+    // An id the run never showed is an id the analyst invented or carried over
+    // from another rulebook. Filing that as "I used none of them" would be a
+    // denial the analyst never made, on the rows most likely to have leaned
+    // on a rule. The scope is not an id either, which matters more since
+    // 2026-09-08: in English the line reads `- [r10] [over-extended trends]`
+    // and the two bracketed tokens look alike.
+    expect(claimedRules(["r99"], shown)).toBeNull();
+    expect(claimedRules(["over-extended trends"], shown)).toBeNull();
+    expect(claimedRules(["[over-extended trends]"], shown)).toBeNull();
+    expect(claimedRules([null, 10], shown)).toBeNull();
+  });
+
+  it("reads back the bracketed form the prompt actually prints", () => {
+    // The block labels each rule `- [r10]［scope］…` and prints the id in no
+    // other form, so an analyst quoting what it was handed is answering
+    // correctly. Dropping it would file the row as "did not answer" — the
+    // exact silence this field was added to end.
+    expect(claimedRules(["[r10]", "［r4］", " [r11] "], shown)).toEqual(["r10", "r4", "r11"]);
+    expect(claimedRules(["[r99]"], shown)).toBeNull();
+  });
+
+  it("drops non-strings and empty entries without failing the whole list", () => {
+    expect(claimedRules([null, 10, "", "  ", { id: "r10" }, "r11"], shown)).toEqual(["r11"]);
+  });
+
+  it("counts a repeat once", () => {
+    // Same rule named twice is one citation, as parseDiagnosis treats the
+    // secondary causes.
+    expect(claimedRules(["r10", "r10", " r10 "], shown)).toEqual(["r10"]);
+  });
+
+  it("accepts every shown id, in the order the analyst gave them", () => {
+    expect(claimedRules(["r11", "r4", "r10"], shown)).toEqual(["r11", "r4", "r10"]);
+  });
+
+  it("answers 'none' as an empty list, not as silence", () => {
+    expect(claimedRules([], shown)).toEqual([]);
+  });
+
+  it("claims nothing when nothing was shown", () => {
+    expect(claimedRules(["r10"], [])).toBeNull();
+    expect(claimedRules([], [])).toEqual([]);
+  });
+});
+
 describe("the server sends the comparison to the client", () => {
   it("puts rule_fit in the response", () => {
     expect(analyze).toContain("rule_fit: ruleFitRecord,");
+  });
+
+  it("stores the claim inside the same object, named as a claim", () => {
+    // No new column and no migration: the self-report rides in the rule_fit
+    // object that already carries the server's verdicts, under a key that says
+    // whose statement it is.
+    expect(analyze).toContain("ruleFitRecord.claimed_by_analyst = claimed");
+    expect(analyze).toContain("claimedRules(parsedAnalysis.rules_applied, rulesShown)");
+    // and it is written only when there is an answer, so absent stays absent
+    expect(analyze).toContain("if (claimed !== null)");
+  });
+
+  it("asks for what the analyst used, not for what it was shown, and lets it say none", () => {
+    const at = analyze.indexOf("rules_applied:");
+    const schema = analyze.slice(at, analyze.indexOf("  required: [", at));
+    expect(schema).toContain("実際に根拠として使った");
+    expect(schema).toContain("空配列");
+    // Never required: the field is absent on every searching run.
+    const required = analyze.slice(analyze.indexOf("  required: [", at), analyze.indexOf("  additionalProperties: false", at));
+    expect(required).not.toContain("rules_applied");
+  });
+
+  it("puts no live rule id in the schema description", () => {
+    // The whole schema is stringified into the user message on the searching
+    // path. The rule block now prints the ids beside the rules they name
+    // (2026-09-08); an example id in the schema would still be an id the
+    // analyst is handed away from its rule, and the field would measure its
+    // own example rather than the analyst.
+    const at = analyze.indexOf("rules_applied:");
+    const schema = analyze.slice(at, analyze.indexOf("  required: [", at));
+    expect(schema).not.toMatch(/["\[]r\d+/);
+  });
+
+  it("keeps the self-report out of the diagnosis it would later be compared with", () => {
+    // The plan handed to the diagnosis carries the analysis context whole, and
+    // the diagnosis is then asked for rule_blamed / rule_credited — 23 of the
+    // 31 lessons under rulebook version 8 set one of the two. A self-report is
+    // not evidence about a rule, and it is only worth recording because it can
+    // be checked against the server's measurement afterwards, which is
+    // impossible once it has fed the judgement.
+    expect(postmortem).toContain("context: withoutAnalystClaim(context),");
+    // Stripped at the handoff, never from the stored row
+    expect(postmortem).not.toContain("delete context.rule_fit");
+
+    const measured = { fit: "match", comparable: ["adx"], missed: [], cases: 4, cited: 5 };
+    const context = {
+      entry: { adx: 31 },
+      rules_shown: ["r10"],
+      rule_fit: { shown: ["r10"], held_back: 0, rules: { r10: measured }, claimed_by_analyst: ["r10"] },
+    };
+    const stripped = withoutAnalystClaim(context) as typeof context;
+    expect(stripped.rule_fit).not.toHaveProperty("claimed_by_analyst");
+    expect(JSON.stringify(stripped)).not.toContain("claimed_by_analyst");
+    // Everything the diagnosis is entitled to survives, and the stored object
+    // is not touched
+    expect(stripped.rule_fit.rules.r10).toEqual(measured);
+    expect(stripped.rules_shown).toEqual(["r10"]);
+    expect(context.rule_fit.claimed_by_analyst).toEqual(["r10"]);
+    // Nothing to strip is not an error, and neither is no context at all
+    expect(withoutAnalystClaim(null)).toBeNull();
+    const untouched = { rule_fit: { shown: [] } };
+    expect(withoutAnalystClaim(untouched)).toBe(untouched);
   });
 
   it("sends rule ids and verdicts only, never the cited analysis ids", () => {

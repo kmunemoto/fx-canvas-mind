@@ -293,7 +293,47 @@ export const selectPromptRules = (
       const text = raw.replace(/\s+/g, " ").trim();
       if (!text) return null;
       const scope = rule.scope ? (locale === "ja" ? `［${rule.scope}］` : `[${rule.scope}] `) : "";
-      return { id: rule.id, line: `- ${scope}${text}${evidence(rule, locale, contract, fitOf(rule))}` };
+      // The id, in front of the rule as a LABEL for the line — not a word
+      // inside the instruction, and nothing the analyst is asked to act on.
+      //
+      // It is here because the instrument added on 2026-09-08 could not work
+      // without it: `rules_applied` asks the analyst which of these rules it
+      // used, and every stored prompt written before that day carries this
+      // block while NOT ONE carries a rule id (39 of 39 at the commit that
+      // added the field; still 0 of 43 just before the deploy). So every id
+      // an analyst could have produced was an id it had never been shown,
+      // `claimedRules` dropped it, and the field collected nothing. The
+      // postmortem side has always handed its rules over with the id attached
+      // (`rules_in_force`); this is the analyst side catching up.
+      //
+      // THE COST IS PAID OUT OF THE SELECTION BUDGET, so this is not cosmetic.
+      // The loop below stops on `chars + line.length + 1 > maxChars`, and the
+      // label adds 2 + id.length characters per line in Japanese, 3 + id.length
+      // in English. On the live book — r10, r4, r11, the three rules of version
+      // 8 — the Japanese block goes from 582 to 596 against the 1600 cap and
+      // the English from 1284 to 1301 against 3200. Those are budget figures,
+      // counted with the newline this loop charges every line; the rendered
+      // block is one character shorter than each (581 -> 595, 1283 -> 1300),
+      // which is the number docs/OPERATIONS.md quotes. Three rules is also
+      // nowhere near the 12-rule cap, so on the book in force nothing that is
+      // shown today stops being shown.
+      //
+      // ON A LARGER BOOK IT CAN CHANGE THE SELECTION, and that is said here
+      // rather than discovered later. Measured by running this function and
+      // the one it replaces side by side over books built from the live rules:
+      // an ELEVEN-rule book of rules this length shows eleven before the label
+      // and ten after — in both languages — holding one back instead of none.
+      // Eleven is where the label first costs a rule, not twelve: a twelve-rule
+      // book is already cut to ten by the budget alone, with or without labels.
+      // Where the cut lands depends on how long the rules are (a book of
+      // 56-character rules goes twelve to eleven, one of 84-character rules ten
+      // to nine), but it is always exactly one rule, and it is always the last
+      // by the ordering above — furthest from today's market — and the block
+      // still names the count it cut. The caps and the selection logic are
+      // deliberately untouched: what a selected rule LOOKS LIKE is what changed
+      // here, never which rules are selected.
+      const label = locale === "ja" ? `[${rule.id}]` : `[${rule.id}] `;
+      return { id: rule.id, line: `- ${label}${scope}${text}${evidence(rule, locale, contract, fitOf(rule))}` };
     })
     .filter((v): v is { id: string; line: string } => v !== null);
 
@@ -350,3 +390,49 @@ export const renderLearnedRules = (
   maxChars = promptCharBudget(locale),
   fits: Record<string, RuleSituation> | null = null,
 ): string => selectPromptRules(rules, locale, contract, maxRules, maxChars, fits).text;
+
+// The rule ids the analyst says it applied, kept to the ids it was actually
+// shown.
+//
+// Same filter `parseDiagnosis` puts on rule_blamed (postmortem/prompt.ts): a
+// non-string is not an id, an id the run never showed is not an id, and a
+// repeat is not a second citation. Nothing here checks the claim against the
+// market — src/lib/inference.ts says why a model-authored tag can never be
+// evidence, and this one is stored as a claim precisely so it is never read
+// as one.
+//
+// `null` means the analyst did not answer, which is NOT the same as answering
+// "none". Structured output does not bind on the searching path, so silence
+// is the common case and a deliberate empty list has to stay tellable from
+// it.
+//
+// An answer that named things and lost all of them is silence too, not a
+// denial: it is an answer we could not read. Storing `[]` for one of those
+// would file "I used none of them" on a row whose prose may say the opposite.
+//
+// Until 2026-09-08 that was not a corner case but the whole population:
+// `selectPromptRules` rendered each rule as its scope and its text and printed
+// NO id, so every id an analyst could produce was one it had never been shown
+// and every answer was dropped whole. Every stored version-8 prompt is from
+// that era. The block now carries the id, so a lost answer means what it says —
+// an id that was invented, or one from a rulebook this run was not shown — and
+// the two eras of this field must be read apart (docs/OPERATIONS.md).
+export const claimedRules = (value: unknown, shown: string[]): string[] | null => {
+  if (!Array.isArray(value)) return null;
+  const ruleRef = (v: unknown): string | null => {
+    // One enclosing bracket pair comes off first, because the id is printed as
+    // a LABEL — `- [r10]［scope］…` — and that bracketed token is now the only
+    // form of the id anywhere in the prompt: the block prints no bare id and
+    // the schema description is banned from carrying an example. An analyst
+    // answering with exactly what it was handed would otherwise lose its whole
+    // answer to an unmatched `[r10]`, and the row would be filed as "did not
+    // answer" — indistinguishable from the silence this field exists to end.
+    // Both widths, because the line around the label is Japanese.
+    const id = typeof v === "string"
+      ? v.trim().replace(/^[[［](.+)[\]］]$/, "$1").trim().slice(0, 20).trim()
+      : "";
+    return id && shown.includes(id) ? id : null;
+  };
+  const kept = [...new Set(value.map(ruleRef).filter((id): id is string => id !== null))];
+  return kept.length === 0 && value.length > 0 ? null : kept;
+};

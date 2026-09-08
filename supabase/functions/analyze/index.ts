@@ -1,4 +1,8 @@
-const FUNCTION_VERSION = "analyze-v46-2026-09-08T15:00:00Z";
+// v47 is skipped, not lost: it was built (the commit that added `rules_applied`)
+// and never deployed, because the rule block printed no id for the field to
+// cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
+// provenance shows no v47 row because none was ever served.
+const FUNCTION_VERSION = "analyze-v48-2026-09-08T18:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -42,6 +46,7 @@ import {
 } from "./entry.ts";
 
 import {
+  claimedRules,
   inForce,
   MAX_PROMPT_RULES,
   parseRules,
@@ -399,6 +404,34 @@ const RESPONSE_SCHEMA = {
     resistance_levels: { type: "array", items: { type: "number" } },
     analysis: { type: "string", description: "詳細分析（日本語、手順1-5に沿って）" },
     warnings: { type: "array", items: { type: "string" } },
+    // What the analyst says it USED, which is not what it was shown. The
+    // server already measures whether each shown rule fits today's market
+    // (context.rule_fit); nothing until now recorded which of them the answer
+    // actually leaned on, so "the rule as written" and "the rule as used"
+    // could only be told apart by reading the prose — and on the ten v8 rows
+    // whose prose names the over-extension rule, none of them met that rule's
+    // written condition (ADX above 60, RSI near 10).
+    //
+    // Deliberately NOT in `required`. Structured output does not bind when
+    // web search is on, which is most production runs, so this field is
+    // absent far more often than it is present and every reader downstream
+    // treats absent as normal.
+    rules_applied: {
+      type: "array",
+      items: { type: "string" },
+      // No worked example here, and none with a live id in it. The rendered
+      // schema is inlined into the user message on the searching path, which is
+      // all but three of the stored v8 rows (36 of 39 when this was written, 40
+      // of 43 just before the deploy — the three are the whole exception, not
+      // the counts), so an example id is a live id sitting in the prompt.
+      // The rule block now prints the ids (analyze/rules.ts, 2026-09-08), which
+      // removes the reason this field could never be answered but not the
+      // reason for the ban: `r10` as the example is `r10` as the answer, and a
+      // claim that is really an echo of its own example is worse than no claim.
+      // The ids belong beside the rules they name, and nowhere else.
+      description:
+        "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
+    },
   },
   required: [
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",
@@ -413,6 +446,26 @@ const RESPONSE_SCHEMA = {
 // ---------------------------------------------------------------------------
 // Anthropic response handling
 // ---------------------------------------------------------------------------
+
+// What the server measured about the rules this run was shown, plus — when the
+// analyst answered — what it CLAIMS it used. The two live in one object
+// because they are about the same rules, and are named apart because they are
+// not the same kind of statement: `rules[].fit` is a measurement against the
+// rule's own citations, `claimed_by_analyst` is the analyst's word and nothing
+// checks it.
+interface RuleFitRecord {
+  shown: string[];
+  held_back: number;
+  rules: Record<string, {
+    fit: RuleSituation["fit"];
+    comparable: string[];
+    missed: string[];
+    cases: number;
+    cited: number;
+  }>;
+  // Absent when the analyst did not answer — see `claimedRules`.
+  claimed_by_analyst?: string[];
+}
 
 const extractAnthropicText = (value: unknown) => {
   if (!isRecord(value)) return "";
@@ -1482,7 +1535,7 @@ Deno.serve(async (req: Request) => {
     // Enough to reconstruct the comparison from the row: the verdict per rule,
     // which axes could be compared, which of them today fell outside, and how
     // much of each rule's cited evidence the footprint could actually read.
-    const ruleFitRecord = ruleFits === null ? null : {
+    const ruleFitRecord: RuleFitRecord | null = ruleFits === null ? null : {
       shown: shownRules.ids,
       held_back: shownRules.heldBack,
       rules: Object.fromEntries(
@@ -1707,6 +1760,25 @@ Deno.serve(async (req: Request) => {
     }
 
     const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals, locale);
+
+    // Which of the shown rules the analyst says it applied THIS run, beside
+    // the server's own verdict on each of them. The gap between a rule as
+    // written and a rule as used was invisible before this: the only record of
+    // what the analyst leaned on was its prose, and a regex over prose cannot
+    // tell "applied r10" from "reasoned the same way without it" — nine live v8
+    // WAIT rows describe the over-extension case in the rule's own vocabulary
+    // (伸び切り, 売られ過ぎ) while naming no learned rule at all.
+    //
+    // Left ABSENT when it did not answer, never written as an empty list: the
+    // schema does not bind on the searching path and most runs search, so the
+    // field is missing on the rows that matter most and "did not say" must not
+    // be stored as "used none". Nothing in the plan the user trades on reads
+    // this — it is written after every decision the plan turns on has been
+    // made.
+    if (ruleFitRecord !== null) {
+      const claimed = claimedRules(parsedAnalysis.rules_applied, rulesShown);
+      if (claimed !== null) ruleFitRecord.claimed_by_analyst = claimed;
+    }
 
     // A plan whose entry the market never reaches is worth less than a wrong
     // one: it teaches nothing and it inflates the record with trades that
