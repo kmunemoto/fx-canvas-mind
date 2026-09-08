@@ -39,7 +39,15 @@ while (attempts < 3) {
   log(`${slug}: deploy attempt ${attempts}`)
   const dep = await agent(`Deploy the Supabase edge function "${slug}" in project ${project} with EXACTLY the content of the local file ${LOCAL}.
 
-The file is one very long minified line. Read it completely with the Read tool — it is paged: call Read with offset/limit repeatedly until you have seen every line (the tool reports the total line count and how to page). Do not summarise or abbreviate anything.
+SIZE, measured — read this before deciding the job is too big. The file is about 93 KB / 79,000 characters, of which roughly 7,000 are Japanese; emitting it verbatim costs on the order of 36,000 output tokens, which fits in one message. This exact procedure has deployed this same file, at this same size, several times in this project. Three earlier runs of this workflow declined the job on the strength of a token estimate taken off the Read tool's paged output, which counts line-number prefixes and is roughly 3x too high. Do not repeat that. If you still conclude you cannot do it, say which limit you actually hit — but do not decline on an estimate.
+
+READ IT WITH BASH, NOT WITH Read. The Read tool prefixes every line with a line number and a tab, and this file is about 432 hard-wrapped lines (esbuild is run with --line-limit=200, so it is NOT one long line), which means 432 prefixes you would have to strip by hand — a transcription hazard for no benefit. Instead run, one call each:
+  sed -n '1,90p' FILE
+  sed -n '91,180p' FILE
+  sed -n '181,270p' FILE
+  sed -n '271,360p' FILE
+  sed -n '361,$p' FILE
+(substitute the path below for FILE; check the real line count first with wc -l and adjust the ranges to cover every line exactly once). That gives you the raw bytes. Do not summarise or abbreviate anything.
 
 Then use ToolSearch to load mcp__Supabase__deploy_edge_function and call it ONCE with:
 - project_id: "${project}"
@@ -49,7 +57,7 @@ Then use ToolSearch to load mcp__Supabase__deploy_edge_function and call it ONCE
 - verify_jwt: false
 - files: [ { name: "deno.json", content: "{\\n  \\"imports\\": {}\\n}\\n" }, { name: "bundle.js", content: <the file content, VERBATIM, every character, ending with the file's trailing newline> } ]
 
-Rules: the bundle content must be transcribed character for character from what Read showed you — no placeholders, no "...", no reformatting, no added or removed whitespace, non-ASCII strings kept as they are. It contains the string "${version}"; make sure your content contains it too. If the tool call fails, report the error verbatim; do not retry with modified content.
+Rules: the bundle content must be transcribed character for character from what the sed output showed you — no placeholders, no "...", no reformatting, no added or removed whitespace, non-ASCII strings kept as they are. It contains the string "${version}"; make sure your content contains it too. If the tool call fails, report the error verbatim; do not retry with modified content.
 
 Return the tool result JSON (id, version, ezbr_sha256, status) verbatim, or the error.`, { label: `deploy#${attempts}`, phase: 'Deploy', effort: 'high' })
   log(`deploy result: ${String(dep).slice(0, 160)}`)
