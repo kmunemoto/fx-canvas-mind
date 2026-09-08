@@ -133,6 +133,30 @@ describe("the model can no longer choose an entry price", () => {
     // scorer graded the server's refusal as the analyst's judgement.
     expect(analyze).toContain("rejection: entryRejected ? rejectionReason : entryVerdict.rejection");
   });
+
+  it("keeps the shape gate's own verdict when another reason wins", () => {
+    // market_closed and low_confidence outrank the gate when the acted-on
+    // reason is picked, and the row stored only the winner — so on a shut
+    // market whatever the gate concluded about the plan was thrown away. Two
+    // of the four shut-market rows carried a proposed SELL; both are still
+    // reconstructable from the geometry beside them (and both reconstruct to
+    // "no objection"), but only for as long as no threshold moves. Stored
+    // unconditionally, beside the acted-on one.
+    expect(analyze).toContain("shape_rejection: entryVerdict.rejection");
+    // and NOT behind the same ternary, which would lose it all over again
+    expect(analyze).not.toMatch(/shape_rejection:\s*entryRejected\s*\?/);
+    // the reason acted on stays exactly as it was: this change records more,
+    // it does not change which rows take the rejected branch
+    expect(analyze).toContain("rejection: entryRejected ? rejectionReason : entryVerdict.rejection");
+    expect(analyze).toContain('rejectionReason = marketShut');
+    // It has to sit on entry_check, the block every reader of a refused plan
+    // already looks at — not in the branch that only shut-market rows enter.
+    const block = analyze.slice(analyze.indexOf("const entryCheck = {"), analyze.indexOf("const waitPlan: WaitPlan"));
+    expect(block).toContain("shape_rejection: entryVerdict.rejection");
+    // written exactly once — assignments only, so naming the field in a
+    // comment beside it does not fail a test that is about placement
+    expect(analyze.match(/shape_rejection:/g)?.length).toBe(1);
+  });
 });
 
 describe("the shared market week", () => {

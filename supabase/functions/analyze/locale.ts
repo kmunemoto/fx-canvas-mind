@@ -135,8 +135,28 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}このエントリーではリスクリワードが${riskReward ?? "?"}しかなく、割に合わない${tail}`;
         case "target_out_of_reach":
           return `${head}利確がリスクの${riskReward ?? "?"}倍と遠すぎ、期限内に届かず期限切れで終わる可能性が高い${tail}`;
+        // "incoherent" は entry.ts の2か所から返る。片方は水準を実際に突き合わせ
+        // て逆向きだった行、もう片方は entry / 損切り / 利確 / 現在値のいずれかが
+        // 欠けていて突き合わせ自体ができなかった行。後者に「水準が矛盾している」
+        // と言うのは、誰も行っていない比較の結果を名指しすることになる（確信度の
+        // 下限が default に落ちていたときと同じ誤りで、あのときは16件がそう表示さ
+        // れた）。rejection の文字列はどちらだったかを持たないので、両方に当ては
+        // まる言い方だけをして、どちらだったかには触れない。「行には残っていない」
+        // とも書かない——欠けていた値そのものは proposed_stop / proposed_tp1 と
+        // して同じカードに並んで出るので、その隣で嘘になる。
+        case "incoherent":
+          return `${head}エントリー・損切り・利確を筋の通ったプランとして読み取れなかった${tail}`;
+        // 現状ここには何も来ない: この switch に来る rejection は低確信度と
+        // entry.ts の Rejection 6種だけで、いずれも case を持つ。market_closed は
+        // 呼び出し側（index.ts）が marketClosed に振り分け、"unknown" は
+        // entryVerdict.rejection が真であることを条件に入る分岐なので到達しない。
+        // 将来 Rejection を増やして case を書き忘れたときのための受け皿なので、
+        // 起きていない失敗を具体的に描写してはならない。ただし head と tail は
+        // 「AIの判断は X でしたが…変更しました」と覆したことを宣言する形のまま
+        // なので、AI自身がWAITと答えた行にも付く却下を足すときは、低確信度と
+        // 同じように signal === "WAIT" の分岐を持つ case を書くこと。
         default:
-          return `${head}エントリー・損切り・利確の水準に矛盾がある${tail}`;
+          return `${head}公開の基準を満たさなかった${tail}`;
       }
     },
     entryRepaired: ({ signal, originalEntry, entry }) =>
@@ -198,8 +218,29 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}at that entry the risk/reward is only ${riskReward ?? "?"}, which does not pay${tail}`;
         case "target_out_of_reach":
           return `${head}the target sits ${riskReward ?? "?"}x the risk away — far enough that the plan is likelier to expire than to resolve${tail}`;
+        // Same split as the Japanese. "incoherent" arrives from two places in
+        // entry.ts: one where the levels were compared and pointed the wrong
+        // way, one where a level or the price was missing or unusable so no
+        // comparison happened at all. Naming a contradiction on the second is
+        // the same defect the confidence floor had — asserting the result of a
+        // test that never ran. The rejection string does not say which, so the
+        // sentence says neither. It must not go on to claim the ROW is silent
+        // either: the missing level is stored as proposed_stop / proposed_tp1
+        // and rendered on the same card, so that hedge would be its own lie.
+        case "incoherent":
+          return `${head}the entry, stop and target could not be read as a coherent plan${tail}`;
+        // Nothing reaches this today: only low_confidence and the six
+        // rejections in entry.ts arrive here and all of them now have a case;
+        // market_closed is diverted to marketClosed by the caller, and
+        // "unknown" sits behind a branch that requires a real rejection. It is
+        // the catcher for a Rejection added later without a case here, so it
+        // must not describe a specific failure nobody measured. The head and
+        // tail still announce an override, though, so a rejection that can be
+        // stamped on a row the model itself answered WAIT needs its own case
+        // with a signal === "WAIT" branch, the way low_confidence has one —
+        // the default alone would read "called WAIT, downgraded to WAIT".
         default:
-          return `${head}the entry, stop and target contradict each other${tail}`;
+          return `${head}the plan did not meet the bar for publishing${tail}`;
       }
     },
     entryRepaired: ({ signal, originalEntry, entry }) =>

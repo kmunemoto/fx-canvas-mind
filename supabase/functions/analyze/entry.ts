@@ -90,7 +90,23 @@ export type Rejection =
   // target placed where it will not be reached inside the plan's life, so
   // the trade expires instead of resolving
   | "target_out_of_reach"
-  // stop loss or target on the wrong side of the entry
+  // the plan could not be read as a plan. TWO different events share this one
+  // string: below, the stop or the target really was compared against the
+  // entry and sat on the wrong side of it; further down, entry / stop / target
+  // / price was null, non-finite or a non-positive price, so NOTHING was
+  // compared — the check could not run at all. This one string is all either
+  // event leaves behind, so the sentence the reader is shown must be true of
+  // both. (The row itself is not silent — a missing level shows up as a blank
+  // proposed_stop / proposed_tp1 beside the reason — but the reason alone
+  // cannot tell you, so it must not pretend to.)
+  //
+  // Deliberately NOT split into two values: measured 2026-09-08, this
+  // rejection has occurred zero times in production, and `incoherent` already
+  // names three unrelated things across this repo's vocabularies (this gate
+  // reason, the tracker's unjudgeable plan, the post-mortem cause). A fourth
+  // string would buy a distinction nobody has ever needed at the price of
+  // confusing the three that exist. Correcting the wording — see the
+  // "incoherent" case in locale.ts — is the whole benefit available today.
   | "incoherent";
 
 export interface EntryVerdict {

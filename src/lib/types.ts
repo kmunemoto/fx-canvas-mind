@@ -259,6 +259,16 @@ export interface EntryCheck {
   confidence?: number;
   confidence_floor?: number;
   rejection: EntryRejection | null;
+  // The shape gate's own opinion of the plan (entry.ts evaluateEntry), NOT
+  // what happened to the row: `rejection` above is the reason acted on, and
+  // market_closed and low_confidence outrank the gate there, so the gate's
+  // verdict used to be overwritten on exactly the rows where the two differ.
+  // Null does NOT mean the gate approved the plan: on a proposed WAIT the gate
+  // returns before it looks at any level (entry.ts, the WAIT early return), so
+  // null there means not applicable, and that is every low_confidence row we
+  // have. Read it as "no objection recorded" only where proposed_signal is BUY
+  // or SELL. Absent on every row written before analyze-v46.
+  shape_rejection?: EntryRejection | null;
   repair_rejection?: EntryRejection | null;
   repaired?: boolean;
   atr: number | null;
