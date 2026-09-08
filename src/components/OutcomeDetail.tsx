@@ -1,7 +1,7 @@
 import type { AnalysisRecord, Counterfactual, NumericCandle } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
-import { CURRENT_CONTRACT, contractKey, isRejected } from "@/lib/outcomeStats";
+import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 
 interface Props {
@@ -35,6 +35,11 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
   // A WAIT call carries no trade plan, so there is nothing to judge
   const tracked = record.signal !== "WAIT" && record.outcome !== "skipped";
   const rejected = isRejected(record);
+  // The other half of what `rejected` used to mean: a WAIT the analyst itself
+  // answered. It carries a rejection string too — the confidence floor writes
+  // one — so it opened the "refused server-side" panel and said the server had
+  // overruled a plan the analyst never asked for.
+  const declined = isSelfDeclined(record);
   // Whether there is a diagnosis to show. A WAIT is now reviewed too — the
   // trade it declined is diagnosed — and gating this on `tracked` meant every
   // model call spent on a WAIT produced a lesson, a verdict and evidence that
@@ -86,7 +91,7 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
       case "untriggered":
         return ev?.reason && ev.reason in d.reasons ? d.reasons[ev.reason] : t.history.outcomes.untriggered;
       case "skipped":
-        return rejected ? g.rejectedSummary : d.summary.skipped;
+        return rejected ? g.rejectedSummary : declined ? g.declinedSummary : d.summary.skipped;
       default:
         return d.summary.pending;
     }
@@ -343,8 +348,18 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
           {diagnosed && post ? (
             <>
               <div className="flex flex-wrap items-center gap-1.5">
+                {/* Three readings, not two. Amber says "here is the fault";
+                    green says "this went right". sound_call_lost is neither:
+                    it says no lever we can move would have changed the
+                    outcome, so it is drawn plain — amber would print a fault
+                    the review explicitly did not find, and green would print
+                    an endorsement of a judgement the review cannot see. */}
                 <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${
-                  post.cause === "good_call" ? "bg-success/15 text-success border-success/40" : "bg-warning/15 text-warning border-warning/40"
+                  post.cause === "good_call"
+                    ? "bg-success/15 text-success border-success/40"
+                    : post.cause === "sound_call_lost"
+                      ? "bg-secondary text-muted-foreground border-border"
+                      : "bg-warning/15 text-warning border-warning/40"
                 }`}>
                   {causeLabel(post.cause)}
                 </span>
@@ -358,6 +373,9 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
                 )}
               </div>
               <p className="text-foreground">{pick(post.verdict)}</p>
+              {post.cause === "sound_call_lost" && (
+                <p className="text-[10px] text-muted-foreground" data-testid="cause-note">{pm.causeNote.sound_call_lost}</p>
+              )}
               {pickList(post.evidence).length > 0 && (
                 <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                   {pickList(post.evidence).map((e, i) => <li key={i}>{e}</li>)}

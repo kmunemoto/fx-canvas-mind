@@ -75,10 +75,10 @@ describe("the rulebook can actually be revised", () => {
   });
 
   it("writes the lesson before calling the diagnosis done", () => {
-    // The reverse order stranded the plan for good: a done row with
-    // thin:false matches no branch of retryFilter, and the consolidation that
-    // rewrites the rules reads the lessons table, so that plan's experience
-    // never reached the rules again.
+    // The reverse order stranded the plan for good: a done row that has spent
+    // its revision matches no branch of retryFilter, and the consolidation
+    // that rewrites the rules reads the lessons table, so that plan's
+    // experience never reached the rules again.
     const lessonWrite = index.indexOf("const lessonOk = await writeLesson(");
     const markDone = index.indexOf("{ postmortem: stored }");
     expect(lessonWrite).toBeGreaterThan(-1);
@@ -97,10 +97,34 @@ describe("the rulebook can actually be revised", () => {
     // analyses row, so the rows already stranded can be recovered for the
     // price of an insert.
     expect(index).toContain("postmortem->>status=eq.done");
-    expect(index).toContain("lessons?select=analysis_id&analysis_id=in.");
+    expect(index).toContain("lessons?select=analysis_id,postmortem_version&analysis_id=in.");
     expect(index).toContain("lessons_repaired");
     const repair = index.slice(index.indexOf("---- repair:"), index.indexOf("---- rulebook"));
     expect(repair).not.toMatch(/askModel/);
+  });
+
+  it("rebuilds a lesson that no longer matches the diagnosis it claims to summarize", () => {
+    // Absence was the only failure the pass could see. 321bccaa carried a v16
+    // lesson under a v17 diagnosis: the editor reads the lessons table, so it
+    // was shown a cause and a lesson text that no longer exist on the row. The
+    // revisit makes that the common case rather than the exception.
+    const repair = index.slice(index.indexOf("---- repair:"), index.indexOf("---- rulebook"));
+    // The version travels with the id, so the comparison still costs one
+    // short string per row and not the 8-10 KB document.
+    expect(repair).toContain("select=id,doc_version:postmortem->>version");
+    expect(repair).toMatch(/lessonVersion\.get\(id\) !== docVersion\.get\(id\)/);
+    expect(repair).toContain("[...missingIds, ...staleIds].slice(0, REPAIR_PER_RUN)");
+    // and it is still a re-projection: no model call, same writeLesson
+    expect(repair).not.toMatch(/askModel/);
+    expect(repair).toContain("await writeLesson(");
+    // a failed read of the lessons table still aborts rather than reading as
+    // an empty set — otherwise every row in the scan looks lessonless (never
+    // stale: staleIds needs lessonVersion.has(id)) and the pass grinds through
+    // the whole scan REPAIR_PER_RUN at a time on the strength of a 500
+    expect(repair).toContain('errors.push("repair: lessons unavailable, skipped")');
+    expect(repair).toContain('throw new Error("skip repair")');
+    expect(repair).toContain("REPAIR_SCAN");
+    expect(repair).toContain("REPAIR_PER_RUN");
   });
 
   it("does not put a revision in front of the analyst until the live one was measured", () => {
@@ -158,8 +182,8 @@ describe("the rulebook can actually be revised", () => {
   it("does not read a failed lessons lookup as no lessons", () => {
     expect(index).toContain('errors.push("repair: lessons unavailable, skipped")');
     // and fetches the heavy documents only for the rows that need rebuilding
-    expect(index).toContain("analyses?select=id&postmortem->>status=eq.done");
-    expect(index).toContain("const missingIds = ids.filter((id) => !have.has(id));");
+    expect(index).toContain("analyses?select=id,doc_version:postmortem->>version&postmortem->>status=eq.done");
+    expect(index).toContain("const missingIds = ids.filter((id) => !lessonVersion.has(id));");
   });
 
   it("records the run that ran out of clock instead of skipping in silence", () => {
@@ -246,8 +270,11 @@ describe("a rule's contract says what the rule can do, not when it was written",
     expect(promptSrc).toContain("export const stampFor = (");
     // Both paths: the re-emitted rule and the restored one. A restore that
     // inherits its stamp is how a dead build's endorsement survives forever.
-    const derived = promptSrc.match(/contract: stampFor\(/g) ?? [];
+    const derived = promptSrc.match(/= stampFor\(/g) ?? [];
     expect(derived).toHaveLength(2);
+    // ...and both write the answer straight onto the rule. stampFor returns a
+    // reason beside the contract now, and the stamp must still come from it.
+    expect(promptSrc.match(/contract: (emitted|stamp)\.contract,/g) ?? []).toHaveLength(2);
   });
 
   it("never assigns the writing contract straight onto a rule", () => {
@@ -306,7 +333,12 @@ describe("standing aside is reviewed like anything else", () => {
     // trading MORE. If it could not support a rule, the loop could still only
     // push one way.
     expect(promptSrc).toContain('"good_call", "good_wait"');
-    expect(promptSrc).not.toMatch(/UNCITABLE_CAUSES[^;]*wait_missed_trade/);
+    // Named against the CURRENT constant. Under the old name this assertion
+    // went vacuous the moment UNCITABLE_CAUSES was renamed to
+    // NOT_RULE_EVIDENCE — the regex would have matched nothing and passed
+    // whatever the list contained.
+    expect(promptSrc).toMatch(/NOT_RULE_EVIDENCE: readonly string\[\]/);
+    expect(promptSrc).not.toMatch(/NOT_RULE_EVIDENCE[^;]*wait_missed_trade/);
   });
 
   it("never falls back to a trade cause on a call that never entered", () => {
@@ -373,5 +405,99 @@ describe("the WAIT queue cannot be blocked by rows that can never be graded", ()
   it("reports both queues, so a WAIT-only run does not read as empty", () => {
     expect(index).toContain("candidates: candidates.length + waitCandidates.length,");
     expect(index).toContain("wait_candidates: waitCandidates.length,");
+  });
+});
+// A diagnosis is written very soon after settlement by design (AFTER_WAIT_MS
+// is 1h on a 15min plan, 8h on a daily one), and twenty of the thirty-two
+// lessons in the table rest on eight bars or fewer (production, 2026-09-08). `thin` was our guess at
+// which of those readings were unreliable; the guess is what is being dropped
+// here, because a reading at nine bars is not obviously safer than one at
+// eight. The one thing that must not happen is spending the single revision
+// while overwriting what the shallow reading had said.
+describe("every diagnosis is revisited once, and the reading it replaces is kept", () => {
+  const built = (() => {
+    const at = index.indexOf("const retryFilter = [");
+    expect(at).toBeGreaterThan(-1);
+    return index.slice(at, index.indexOf("].join(\",\");", at));
+  })();
+
+  it("no longer asks whether the diagnosis was flagged thin", () => {
+    expect(built).not.toContain("thin.eq.true");
+    expect(built).not.toContain("thin.is.null");
+  });
+
+  it("tolerates a missing revisions counter, or the revisit never fires at all", () => {
+    // `revisions` is absent from every document written before the counter
+    // existed. In PostgREST `postmortem->>revisions.lt.1` on an absent key is
+    // a comparison against SQL NULL, which yields NULL and not true, so the
+    // row does not match — and the `thin.is.null` branch that used to carry
+    // those rows is gone. Without the is.null companion the change is inert.
+    expect(index).toContain(
+      "const revisionsLeft = `or(postmortem->>revisions.is.null,postmortem->>revisions.lt.${MAX_REVISIONS})`;",
+    );
+    expect(built).toContain("${revisionsLeft}");
+    // the same shape the file already uses one line above, for the same reason
+    expect(index).toContain(
+      "const revisitRetryable = `or(postmortem->>revisit_attempts.is.null,postmortem->>revisit_attempts.lt.${MAX_ATTEMPTS})`;",
+    );
+  });
+
+  it("builds a balanced or=(...) expression", () => {
+    // Hand-built PostgREST. A misplaced parenthesis is a 400 that the sweep
+    // swallows, and the run reports nothing to do.
+    const MAX_ATTEMPTS = 3;
+    const MAX_REVISIONS = 1;
+    const revisitRetryable = `or(postmortem->>revisit_attempts.is.null,postmortem->>revisit_attempts.lt.${MAX_ATTEMPTS})`;
+    const revisionsLeft = `or(postmortem->>revisions.is.null,postmortem->>revisions.lt.${MAX_REVISIONS})`;
+    const filter = [
+      "or=(postmortem.is.null",
+      `and(postmortem->>status.eq.failed,postmortem->>attempts.lt.${MAX_ATTEMPTS})`,
+      `and(postmortem->>status.eq.done,${revisionsLeft},${revisitRetryable}))`,
+    ].join(",");
+    // the literal this test rebuilt is the literal the function ships
+    expect(index).toContain("`and(postmortem->>status.eq.done,${revisionsLeft},${revisitRetryable}))`");
+    let depth = 0;
+    for (const c of filter) {
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("still refuses to spend the revision on a run that named the row", () => {
+    // A hand-run by id is how a diagnosis is inspected; if it consumed the
+    // one revision, looking at a row would be what stops it being revisited.
+    expect(index).toContain(
+      'revisions: (numberOrNull(priorDoc?.revisions) ?? 0) + (priorDoc?.status === "done" && options.ids.length === 0 ? 1 : 0),',
+    );
+  });
+
+  it("carries the earlier reading forward instead of writing over it", () => {
+    // MAX_REVISIONS is 1: this is the only occasion there will ever be to
+    // record what the shallow reading claimed, and without it "did depth
+    // change the answer" cannot be asked after the fact.
+    const stored = index.slice(index.indexOf("const priorTrail ="), index.indexOf("      // The lesson goes in FIRST."));
+    expect(stored).toContain("const prior = priorDoc?.status === \"done\"");
+    // capped the way the rulebook caps its history, not with a new idiom
+    expect(stored).toContain("priorTrail.slice(-(HISTORY_KEEP - 1))");
+    // what a later reader needs to compare the two readings
+    for (const field of [
+      "version:", "created_at:", "cause:", "secondary_causes:", "avoidable:", "confidence:",
+      "rule_blamed:", "rule_credited:", "lesson:", "bars_after_settlement:",
+    ]) expect(stored).toContain(field);
+    // ...and nothing that would square the document, which is already 8-10 KB
+    const snapshot = stored.slice(stored.indexOf("priorTrail.slice("), stored.indexOf("        : priorTrail;"));
+    expect(snapshot).not.toMatch(/\bfacts,/);
+    expect(snapshot).not.toMatch(/\bprior:/);
+    expect(index).toContain("        prior,");
+  });
+
+  it("does not call a WAIT shallow, having never measured its aftermath", () => {
+    // facts.ts short-circuits the aftermath of a call that never traded to an
+    // empty array on purpose, so bars_after_settlement is 0 by construction
+    // and thin was permanently true — a claim about a measurement that was
+    // never taken.
+    expect(index).toContain("thin: wait ? null : facts.bars_after_settlement < MIN_AFTER_BARS,");
   });
 });

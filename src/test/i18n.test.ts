@@ -109,6 +109,26 @@ describe("the cause taxonomy is fully labelled on both sides", () => {
   });
 });
 
+// The one verdict in the taxonomy that is easy to render as the opposite of
+// what it means. facts.ts can only measure what happened AFTER the decision,
+// so it is in no position to say the analysis was right; the whole claim is
+// that no lever we can move would have changed the outcome. A label that
+// slipped into "the call was correct" would put that claim in the UI, in a
+// place no test of facts.ts reaches.
+describe("the no-fault verdict says what it can say and no more", () => {
+  it("names the lever in both languages, and endorses the call in neither", () => {
+    expect(ja.history.postmortem.causes.sound_call_lost).toMatch(/レバー/);
+    expect(ja.history.postmortem.causes.sound_call_lost).not.toMatch(/正し|妥当|良い|当たっ/);
+    expect(en.history.postmortem.causes.sound_call_lost).toMatch(/lever/i);
+    expect(en.history.postmortem.causes.sound_call_lost).not.toMatch(/correct|sound call|good call/i);
+    // and the note under the badge, which is where the distinction is spelled out
+    expect(ja.history.postmortem.causeNote.sound_call_lost).toMatch(/レバー/);
+    expect(ja.history.postmortem.causeNote.sound_call_lost).toMatch(/ではありません/);
+    expect(en.history.postmortem.causeNote.sound_call_lost).toMatch(/lever/i);
+    expect(en.history.postmortem.causeNote.sound_call_lost).toMatch(/not that the call was right/i);
+  });
+});
+
 // Three strings drifted away from the code they describe. A dictionary that
 // contradicts the arithmetic is worse than a missing one: the reader trusts it.
 describe("what the dictionary says matches what the code does", () => {

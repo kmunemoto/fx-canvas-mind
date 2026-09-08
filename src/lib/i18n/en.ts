@@ -122,6 +122,10 @@ export const en: Dict = {
       untriggered: "NO FILL",
       ambiguous: "UNCLEAR",
       rejected: "REFUSED",
+      // The other event REFUSED used to be printed for: the model's own WAIT.
+      // Sixteen of those wore the refusal badge while one plan had actually
+      // been refused.
+      declined: "AI DECLINED",
     },
     scope: (n: number) => `last ${n}`,
     statsScope: (n: number) => `Record: ${n} calls, all time`,
@@ -160,11 +164,22 @@ export const en: Dict = {
     },
     modes: { full: "With news", technical_only: "Technical", technical_fallback: "Technical (no search)" },
     gate: {
+      // "the server refused the analyst" and "the analyst declined" are
+      // different events. The confidence floor stamps a rejection on a WAIT the
+      // model itself answered, so while these were one count the screen
+      // reported sixteen server overrides where one plan had been refused.
       note: (n: number) => `${n} of the model's plans were refused server-side as unfillable or not worth taking, and published as WAIT.`,
+      // "nothing was refused server-side" would be printed in the same
+      // paragraph as the sentence above saying something was, and an English
+      // reader has no way to tell which to believe. The clause is scoped to
+      // these calls, the way the Japanese parenthetical already scopes it.
+      declinedNote: (n: number) =>
+        `${n} call${n === 1 ? " was" : "s were"} the model's own decision to stand aside — these were not server refusals.`,
       shadowNote: (s: { untriggered: number; wins: number; losses: number; open: number }) =>
         `Refused plans tracked anyway: no fill ${s.untriggered} / WIN ${s.wins} / LOSS ${s.losses} / open ${s.open}`,
       rejectedTitle: "Plan refused server-side",
       rejectedSummary: "The model's plan was refused server-side and published as WAIT",
+      declinedSummary: "The model declined to trade — this was not a server refusal",
       reasons: {
         too_far: "Entry too far from the market (would not fill)",
         should_be_market: "Waits for a pullback in a running trend (would not fill)",
@@ -172,6 +187,9 @@ export const en: Dict = {
         poor_rr: "Risk/reward does not pay",
         target_out_of_reach: "target too far to be reached in time",
         market_closed: "the market was shut, so there was no price to enter at",
+        // Only reachable on a row where the model asked for a BUY or a SELL
+        // and rated it below the floor. A model WAIT never reaches this block.
+        low_confidence: "The model's own confidence was below the floor",
         incoherent: "Entry, stop and target contradict each other",
       },
       proposed: "Model's call",
@@ -233,7 +251,12 @@ export const en: Dict = {
         lucky_win: "Won, but unsafely",
         wait_missed_trade: "Stood aside from a trade that paid",
         good_wait: "Standing aside was right",
+        sound_call_lost: "Lost with no lever to move",
         inconclusive: "Not enough evidence",
+      },
+      causeNote: {
+        sound_call_lost:
+          "A wider stop, a nearer target and a better fill were each simulated through to a verdict, and not one of them changed the outcome. This says no lever we can move would have changed it — not that the call was right: everything measured here happened after the decision was made",
       },
       lesson: "Lesson",
       avoidable: "Avoidable with what was known at the time",

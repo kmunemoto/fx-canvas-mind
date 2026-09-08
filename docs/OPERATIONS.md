@@ -250,6 +250,7 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   **sweep モードだけ**、BUY/SELL の判定が終わった後の残り予算（`MAX_REQUESTS`）でしか走らない。
 - 統計: `wait_miss_rate` は `missed + correct` が `MIN_STAT_N` 以上で初めて出る。`pending` / `unknown` / `no_call` は分母にも入れない。
   サーバが却下した WAIT（`entry_check.rejection`。現行契約で起こるのは market_closed / low_confidence / stop_too_tight / poor_rr / target_out_of_reach）も採点され、`rejection` で区別する。
+  ただし **`rejection` が付いているだけでは却下ではない**: 確信度の下限は AI 自身が WAIT と答えた行にも `low_confidence` を書く。却下と言えるのは `entry_check.proposed_signal` が BUY/SELL の行だけで、`proposed_signal = WAIT` は AI 自身の見送り（`isRejected` / `isSelfDeclined`、`performance_stats` の `rejected` / `self_declined`）。2026-09-08 実測で market_v1 の却下は 1 件、AI 自身の見送りが 16 件。`proposed_signal` が無い旧行はどちらにも数えない。
 - 歩き始めは **`wait_plan.decided_at`**（市場データが解決した瞬間）で、`created_at`（INSERT の時刻）ではない。`created_at` はモデル呼び出し・ゲート・保存の後なので 30〜120 秒遅く、`judgeWait` は「その時刻より後に**始まる**足」しか見ないため、判定足 15 分の 1 本目がまるごと落ちていた。損切りが 0.4 ATR しかないので 1 本の差で判定が反転する。
 - 移行時の実測: 本番の `skipped` 行は 3 件で全部 `verdict = unknown`・`bars_examined = 0`（`price_at_signal` も `entry_check` も無い時代の行）。両側採点は本番で 1 件も判定を出していないので、捨てた測定値は無い。
 
@@ -269,11 +270,21 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 
 - 判定が付いた行は `closed_at` から `AFTER_WAIT_MS`（15min 1h / 1h 2h / 4h 4h / 1day 8h）待って初めて対象になる（`isPostmortemDue`）。「その後どうなったか」が存在するため。
   手動実行で `force: true` か `ids` を指定した場合はこの待ちを飛ばす。
-- その後の窓は `AFTER_BARS`（15min 24 / 1h 24 / 4h 12 / 1day 5）本 × プランの足（`afterWindowMs`）。窓の中の足は判定足 `EVAL_INTERVAL` で数え、
-  `bars_after_settlement` が `MIN_AFTER_BARS = 8` 本に満たない診断は `thin` として、窓が丸ごと揃ってから `MAX_REVISIONS = 1` 回だけ再診断する
-  （`thin = true` かつ `revisions < 1`。再診断の失敗は `revisit_attempts` に積み `MAX_ATTEMPTS` で止め、元の診断はそのまま残す）。`thin` を記録していない旧版の診断も同じ経路で見直す。
-- `postmortem.status = done` の行はそれ以外では再診断しない。`ids` で名指しした行だけは状態を問わず再診断し、`revisions` は消費しない。`force` は候補を増やさない（done の行は thin の再診断経路以外では拾わない）が、飛ばす待ちには thin 再診断の「窓が丸ごと揃うまで」も含まれる。
-  窓が揃う前に `force: true` で走らせると薄い窓のまま `revisions` が 1 消費され、以後その行は見直されない。thin の行が残っている間は `force` ではなく `ids` で名指しする。
+- その後の窓は `AFTER_BARS`（15min 24 / 1h 24 / 4h 12 / 1day 5）本 × プランの足（`afterWindowMs`）。窓の中の足は判定足 `EVAL_INTERVAL` で数える。
+  **単位が違う 2 つの「本」がある**: `AFTER_BARS` はプランの足で窓の長さを決め、`bars_after_settlement` は判定足で数えた実際の本数。
+  1day の窓は日足 5 本＝120 時間で、その中に 1h 足が最大 120 本入る（`AFTER_BARS` 5 と `MIN_AFTER_BARS` 8 は矛盾していない）。
+- `bars_after_settlement` が `MIN_AFTER_BARS = 8` 本に満たない診断は `thin` と記録する。ただし **`thin` は再診断の条件ではない**（2026-09-08、v21）。
+  done の行はすべて、窓が丸ごと揃ってから `MAX_REVISIONS = 1` 回だけ読み直す（`revisions` が未記録＝旧版の行も拾えるよう、`revisions is null` と `revisions < 1` の両方で当てる）。
+  `thin` を切り口にしていた頃の想定は外れている: `AFTER_WAIT_MS` が窓より 6〜15 倍短いので最初の読みはどの足でも最短 4〜8 本に着地し、
+  8 本ちょうどの 1h / 1day は `thin = false` のまま窓の 1 割も見ていない（4〜8 本は下限であって分布ではない。待ち行列が詰まった行は後から＝深く読まれる。
+  だから `lessons` 32 件のうち 12 件は 8 本超にいる。2026-09-08 実測）。経緯と、何をもって「効かなかった」とするかは `docs/POSTMORTEM_DEPTH_PREREGISTRATION.md`。
+  再診断の失敗は `revisit_attempts` に積み `MAX_ATTEMPTS` で止め、元の診断はそのまま残す。
+- **上書きする前に前の読みを残す**（`postmortem.prior`、`HISTORY_KEEP = 20` 件まで）。done の診断の要約（版・時刻・`cause`・`secondary_causes`・`avoidable`・`confidence`・
+  `rule_blamed` / `rule_credited`・`lesson`・`bars_after_settlement`・`thin`）だけを写す。`facts` と入れ子の `prior` は入れない（文書は 1 件 8〜10 KB あり、入れ子にすると二乗で増える）。
+  `MAX_REVISIONS = 1` なので、これが浅い読みを記録する唯一の機会である。
+- WAIT の `thin` は `null`。見送りの「その後」は意図的に空配列なので `bars_after_settlement` は構造上 0 で、`true` も `false` も測っていない測定についての主張になる（§4.1.1）。
+- `ids` で名指しした行は状態を問わず再診断し、`revisions` は消費しない。`force` は候補を増やさないが、飛ばす待ちには再診断の「窓が丸ごと揃うまで」も含まれる。
+  窓が揃う前に `force: true` で走らせると薄い窓のまま `revisions` が 1 消費され、以後その行は見直されない。読み直していない行が残っている間は `force` ではなく `ids` で名指しする。
 - 1 回に診断するのは `MAX_PLANS_PER_RUN = 3`。増やせるのは body の `limit`（1..`MAX_PLANS_ADMIN = 6` に丸める）だけで、`ids`（先頭 6 件まで）は候補を絞るだけ。
   `ids` を 6 件渡しても `limit` を省略すれば先頭 3 件で止まる（`due = rows.slice(0, options.limit)`）。手動実行は sweep トークンでも管理者 JWT でも同じ。
   失敗は `MAX_ATTEMPTS = 3` 回まで `postmortem.attempts` に積む。
@@ -283,8 +294,14 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   診断の LLM 呼び出しは `LLM_TIMEOUT_MS = 45 秒`（再試行 1 回を含めた合計の期限）。ルールブック改訂の呼び出しは別予算（§4.3）。
 - **教訓を先に書き、それから done を打つ**。順序が逆だと、教訓の書き込みだけ失敗した行が「診断済み」として待ち行列から消え、二度と拾われない（学習に回らないまま消える）。
   教訓が書けなかった行も done は打ち（打たないと同じ行を毎回診断し直して他の行が進まない）、`errors` に `lesson not written, left for the repair pass` を残す。
-- **修復パス**: 毎 run、`postmortem.status = done` の直近 `REPAIR_SCAN = 200` 行を id だけで引き、`lessons` に対応する行が無いものを最大 `REPAIR_PER_RUN = 20` 件まで書き直す。
-  `lessons` 側の読み取りに失敗したときは「教訓が 1 つも無い」と見なさない（見なすと 200 行を全部書き直しにいく）。修復を飛ばして `errors` に `repair: lessons unavailable, skipped` を残す。
+- **修復パス**: 毎 run、`postmortem.status = done` の直近 `REPAIR_SCAN = 200` 行を id と診断の版だけで引き（`select=id,doc_version:postmortem->>version`。文書そのものは 8〜10 KB あるので引かない）、
+  次の 2 種類を最大 `REPAIR_PER_RUN = 20` 件まで書き直す。欠落を先に、版ずれを後に詰める。
+  1. `lessons` に対応する行が無いもの（教訓の書き込みだけ失敗した行）。
+  2. `lessons` の行はあるが `postmortem_version` が `analyses` 側の診断の版と違うもの（`321bccaa` は v16 の教訓の下に v17 の診断があった）。
+     ルールブックの編集者は `lessons` を読むので、版ずれの行は「その行のどこにも存在しない原因と教訓」を見せていたことになる。
+  どちらも **保存済みの診断からの再射影** で、モデルは呼ばず診断も書き換えない（`writeLesson` は 1 つだけ）。run のサマリでは欠落の修復が `lessons_repaired`、版ずれの書き直しが `lessons_restated`。
+  `lessons` 側の読み取りに失敗したときは「教訓が 1 つも無い」と見なさない（見なすと 200 行が全部「教訓が無い」に見えて、毎 run 20 件ずつ上書きしにいく。
+  版ずれには見えない。版ずれの判定は `lessons` に行があることを要求するので、空集合からは 1 件も出ない）。修復を飛ばして `errors` に `repair: lessons unavailable, skipped` を残す。
 - クールダウン `SWEEP_COOLDOWN_MS = 10 分` は sweep トークン呼び出しだけに効き、`postmortem_state.last_run_at` の条件付き UPDATE で先取りする（判定側と同じ作り）。管理者 JWT の手動実行はクールダウンを通らず、`last_result` も書かない。
 
 ### 4.1.1 見送り（WAIT）の診断
@@ -423,7 +440,7 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   - 全体クールダウン（10 分。econ-calendar は 30 分）を `tracker_state` / `postmortem_state` / `econ_calendar_state` の **条件付き UPDATE 1 発** で先取りする。2 tick が同時に来ても片方は `skipped: "cooldown"` で帰る。
   - 判定は市場時間で数えるので、走る時刻に依存しない（§3.4）。同じ feed（`price_basis`）で同じ足を見る限り、同じ行を何度判定しても同じ結果。
     ただし feed は sweep ごとにプランの壁時計の齢（3 日）と Bid/Ask 取得の成否で決まるので、quotes から mid に落ちた pending 行は判定価格が変わり、シグナル足を見直し中の成行は約定価格が `entry_point` で書き換わる（§8）。
-  - 診断は `postmortem.status = done` の行を再診断しない。例外は thin の再診断と `ids` の名指し（§4.1）。
+  - 診断は done の行を無制限には再診断しない。`MAX_REVISIONS = 1` 回だけの読み直しと `ids` の名指しが例外（§4.1）。
 - 一時停止と再開:
 
 ```sql
@@ -714,7 +731,10 @@ from public.lessons where created_at > '2026-09-05T13:15:00Z';
 
 ```sql
 select wait_check->>'verdict' as verdict, count(*) as n,
-       count(*) filter (where entry_check->>'rejection' is not null) as server_rejected
+       -- rejection だけを数えると AI 自身の見送りが「サーバの却下」に化ける（§3.6）
+       count(*) filter (where entry_check->>'proposed_signal' in ('BUY','SELL')
+                          and coalesce(entry_check->>'rejection','') <> '') as server_rejected,
+       count(*) filter (where entry_check->>'proposed_signal' = 'WAIT') as self_declined
 from public.analyses where signal = 'WAIT' group by 1 order by n desc;
 ```
 

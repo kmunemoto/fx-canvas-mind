@@ -12,6 +12,7 @@ import {
   byTimeframe,
   causeCounts,
   isRejected,
+  isSelfDeclined,
   isPreview,
   isShadow,
   shadowTally,
@@ -44,6 +45,9 @@ const OUTCOME_CLASS: Record<string, string> = {
   // Not styled like expired/skipped: an unread record is not a decided one
   ambiguous: "bg-warning/15 text-warning border-warning/40",
   rejected: "bg-warning/15 text-warning border-warning/40",
+  // Not the warning colour the refusals wear: the analyst standing aside is
+  // the app working as designed, not the gate having to step in.
+  declined: "bg-secondary text-muted-foreground border-border",
 };
 
 type Breakdown = "timeframe" | "mode" | "confidence" | "rulebook";
@@ -231,11 +235,16 @@ const AnalysisHistory = ({ records, stats = null }: Props) => {
         </p>
       )}
 
-      {/* the gate's own record */}
-      {overall.rejected > 0 && (
+      {/* the gate's own record, and — kept apart from it — the analyst's.
+          The shadow line belongs to the refusals: what was tracked in the
+          shadows is a plan that existed and was taken away, which is exactly
+          what a call the analyst never made does not have. */}
+      {(overall.rejected > 0 || overall.selfDeclined > 0) && (
         <p className="text-[10px] text-muted-foreground" data-testid="gate-note">
-          {t.history.gate.note(overall.rejected)}
-          {gate.total > 0 ? ` ${t.history.gate.shadowNote(gate)}` : ""}
+          {overall.rejected > 0 ? t.history.gate.note(overall.rejected) : ""}
+          {overall.rejected > 0 && gate.total > 0 ? ` ${t.history.gate.shadowNote(gate)}` : ""}
+          {overall.rejected > 0 && overall.selfDeclined > 0 ? " " : ""}
+          {overall.selfDeclined > 0 ? t.history.gate.declinedNote(overall.selfDeclined) : ""}
         </p>
       )}
 
@@ -315,16 +324,23 @@ const AnalysisHistory = ({ records, stats = null }: Props) => {
       <div className="space-y-1">
         {safe.map((r) => {
           const rejected = isRejected(r);
+          // The analyst's own WAIT. It wore the 却下 / REFUSED badge for as
+          // long as the badge was decided by the rejection string alone, which
+          // told the user the server had overruled a plan that was never
+          // proposed.
+          const declined = isSelfDeclined(r);
           // A weekend read stays in the list — the user asked to keep it — but
           // it must never be mistaken for a call the analyst made when it
           // could act. The badge says so on the row itself, not only in the
           // detail nobody opens.
           const preview = isPreview(r);
-          const badgeKey = rejected ? "rejected" : r.outcome;
+          const badgeKey = rejected ? "rejected" : declined ? "declined" : r.outcome;
           const badgeCls = OUTCOME_CLASS[badgeKey] ?? OUTCOME_CLASS.pending;
           const badgeLabel = rejected
             ? t.history.outcomes.rejected
-            : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
+            : declined
+              ? t.history.outcomes.declined
+              : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
           const diagnosed = r.postmortem?.status === "done";
           const waitMissed = r.wait_check?.verdict === "missed";
           const isOpen = expanded === r.id;

@@ -382,6 +382,36 @@ describe("AnalysisHistory (DB records)", () => {
     expect(gate).toHaveTextContent("却下は正しかった");
     expect(screen.getByText("AIの提案はサーバー側で却下され、WAITとして公開されました")).toBeInTheDocument();
   });
+
+  // The confidence floor writes rejection = 'low_confidence' on a WAIT the
+  // model itself answered. While the badge and the count were decided by that
+  // string alone, sixteen such rows told the user the server had overruled
+  // sixteen plans; exactly one plan had ever been refused.
+  it("does not call the model's own WAIT a server refusal", () => {
+    const selfDeclined: AnalysisRecord = {
+      ...records[2],
+      id: "own-wait",
+      confidence: 45,
+      signal: "WAIT",
+      outcome: "skipped",
+      entry_check: {
+        proposed_signal: "WAIT", proposed_entry: null, proposed_stop: null, proposed_tp1: null,
+        entry_type: null, distance_atr: null, risk_reward: null,
+        rejection: "low_confidence", atr: 0.4,
+      },
+    };
+    render(<AnalysisHistory records={[...records, selfDeclined]} />);
+    expect(screen.getByTestId("gate-note")).toHaveTextContent(
+      "AI自身が「見送る」と判断したものが 1件あります（サーバーによる却下ではありません）",
+    );
+    expect(screen.getByTestId("gate-note")).not.toHaveTextContent("サーバー側で却下し");
+    expect(screen.queryByText("却下")).toBeNull();
+    expect(screen.getByText("AI見送り")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /WAIT 45%/ }));
+    expect(screen.queryByTestId("gate-detail")).toBeNull();
+    expect(screen.getByText("AI自身が見送ると判断しました（サーバーによる却下ではありません）")).toBeInTheDocument();
+  });
 });
 
 describe("LearnedRules", () => {

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   byConfidence, byContract, byMode, byRulebookVersion, byTimeframe,
-  confidenceBandKey, contractKey, headlineScope, realizedR, serverTally, tally,
+  confidenceBandKey, contractKey, headlineScope, isRejected, isSelfDeclined, realizedR,
+  serverTally, tally,
 } from "../lib/outcomeStats";
 import type { AnalysisRecord, OutcomeEvaluation } from "../lib/types";
 
@@ -441,5 +443,117 @@ describe("the record comes from the server, not from the page", () => {
     // pick one arbitrarily or add them together
     expect(headlineScope(stats)?.contract).toBeNull();
     expect(headlineScope(stats)?.group.calls).toBe(0);
+  });
+});
+
+// The confidence floor stamps rejection = 'low_confidence' on a WAIT the model
+// itself answered, and reading that string alone made every one of those rows
+// a server override. Measured in production on 2026-09-08 (market_v1, shadow
+// and preview excluded): 16 rows were the analyst declining, 1 was the gate
+// refusing a SELL. The screen said sixteen.
+describe("who declined: the gate, or the analyst", () => {
+  const declined = (rejection: "low_confidence" | null) =>
+    rec({
+      signal: "WAIT",
+      outcome: "skipped",
+      plan_contract: "market_v1",
+      entry_check: {
+        proposed_signal: "WAIT", proposed_entry: null, proposed_stop: null, proposed_tp1: null,
+        entry_type: null, distance_atr: null, risk_reward: null,
+        rejection, atr: 0.4,
+      },
+    });
+  const refused = rec({
+    signal: "WAIT",
+    outcome: "skipped",
+    plan_contract: "market_v1",
+    entry_check: {
+      proposed_signal: "SELL", proposed_entry: 157.9, proposed_stop: 158.45, proposed_tp1: 157.05,
+      entry_type: "market", distance_atr: 0, risk_reward: 1.19,
+      rejection: "poor_rr", atr: 0.45,
+    },
+  });
+
+  it("counts a refusal only where a trade was asked for and taken away", () => {
+    expect(isRejected(refused)).toBe(true);
+    expect(isSelfDeclined(refused)).toBe(false);
+    expect(isRejected(declined("low_confidence"))).toBe(false);
+    expect(isSelfDeclined(declined("low_confidence"))).toBe(true);
+    // A model WAIT with nothing stamped on it at all is the same event
+    expect(isSelfDeclined(declined(null))).toBe(true);
+  });
+
+  it("splits the two counts the way production actually splits", () => {
+    const rows = [refused, ...Array.from({ length: 16 }, () => declined("low_confidence"))];
+    const t = tally("all", rows);
+    expect(t.waits).toBe(17);
+    expect(t.rejected).toBe(1);
+    expect(t.selfDeclined).toBe(16);
+  });
+
+  it("puts a row that never recorded what was asked for in neither bucket", () => {
+    // 11 rows in production have no proposed_signal, all on the legacy
+    // contract and none carrying a rejection. Nothing may be claimed about
+    // who decided them — least of all that the server overrode the analyst.
+    const legacy = rec({ signal: "WAIT", outcome: "skipped" });
+    expect(isRejected(legacy)).toBe(false);
+    expect(isSelfDeclined(legacy)).toBe(false);
+    const t = tally("all", [legacy]);
+    expect(t.waits).toBe(1);
+    expect(t.rejected).toBe(0);
+    expect(t.selfDeclined).toBe(0);
+  });
+
+  it("prints neither count from a server that cannot split the WAITs", () => {
+    const older = {
+      calls: 21, waits: 17, rejected: 1, waits_judged: 0, waits_missed: 0,
+      total: 4, wins: 0, losses: 0, expired: 0, open: 4, untriggered: 0,
+      ambiguous: 0, incoherent: 0, filled: 0, settled: 0, decided: 0,
+      with_r: 0, clusters: 0, contracts: ["market_v1"],
+      win_rate: null, win_rate_ci95: null, fill_rate: null,
+      sum_r: null, expectancy: null, trades_per_call: null, verdict_rate: 0,
+      wait_rate: 81, expired_rate: 0, untriggered_rate: 0, ambiguous_rate: 0,
+      incoherent_rate: 0, open_rate: 19, wait_miss_rate: null, below_min_n: true,
+    };
+    // `rejected: 1` above is what an unmigrated server sends for a record whose
+    // refusals it has never counted separately — it is the conflated total, and
+    // 17 of them in production. Reprinting it under the narrowed name would put
+    // the retired sentence back over sixteen rows badged AI見送り, so the whole
+    // note is withheld until the server can answer the question being asked.
+    expect(serverTally("all", older).rejected).toBe(0);
+    expect(serverTally("all", older).selfDeclined).toBe(0);
+    const split = serverTally("all", { ...older, self_declined: 16, rejected: 1 });
+    expect(split.rejected).toBe(1);
+    expect(split.selfDeclined).toBe(16);
+  });
+});
+
+// The panel draws performance_stats' answer and falls back to tally() only
+// when the RPC cannot be reached, so the two must split the WAITs the same
+// way. Pinned to the source: the last time one definition lived in two files
+// they drifted, and the same number under the same name meant two things.
+describe("the server and the fallback split the WAITs alike", () => {
+  const migration = readFileSync(
+    "supabase/migrations/20260908093000_who_declined_is_not_who_refused.sql",
+    "utf8",
+  );
+
+  it("splits `rejected` in SQL the way isRejected splits it here", () => {
+    expect(migration).toContain("create or replace function public.performance_stats");
+    expect(migration).toContain("coalesce(m.entry_check->>'proposed_signal', '') in ('BUY', 'SELL')");
+    expect(migration).toContain("coalesce(m.entry_check->>'proposed_signal', '') = 'WAIT') as self_declined");
+    expect(migration).toContain("'self_declined', a.self_declined,");
+  });
+
+  it("carries the rest of the function over untouched", () => {
+    // Same security mode, same argument list, same grants, same episode rule:
+    // a redefinition that quietly changed any of those would be a second,
+    // unannounced change riding along with this one.
+    expect(migration).toContain("security invoker");
+    expect(migration).toContain("performance_stats(live_contract text default 'market_v1')");
+    expect(migration).toContain("grant execute on function public.performance_stats(text) to authenticated;");
+    expect(migration).toContain("'episode_definition_version', 2,");
+    expect(migration).toContain("o.created_at - c.cluster_start < interval '24 hours'");
+    expect(migration.slice(migration.indexOf("as $function$"))).not.toContain("auth.uid()");
   });
 });

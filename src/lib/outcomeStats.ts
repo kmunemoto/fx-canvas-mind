@@ -58,8 +58,14 @@ export interface OutcomeTally {
   total: number;
   // EVERY call, WAIT included. The denominator for the bucket rates below.
   calls: number;
-  // WAIT rows that were the gate's doing, not the model's
+  // WAIT rows that were the gate's doing: the analyst asked for a trade and
+  // the server published a WAIT instead
   rejected: number;
+  // WAIT rows that were the analyst's own call. Kept apart from `rejected`
+  // because the two answer opposite questions about who is being cautious,
+  // and pooling them let the confidence floor's stamp on a model WAIT read as
+  // the server overriding sixteen plans it had never been offered.
+  selfDeclined: number;
   winRate: number | null;
   // Wilson 95% interval for the win rate, in percent
   winRateCi: [number, number] | null;
@@ -136,8 +142,40 @@ export const isShadow = (r: AnalysisRecord): boolean => r.shadow === true;
 // it cannot. Counting one as a call would move the WAIT rate and the trades-
 // per-call ratio without a single trade having been declined.
 export const isPreview = (r: AnalysisRecord): boolean => r.preview === true;
-export const isRejected = (r: AnalysisRecord): boolean =>
-  r.signal === "WAIT" && typeof r.entry_check?.rejection === "string" && r.entry_check.rejection.length > 0;
+
+// WHO DECLINED. Two different events, and the record used to print both as
+// "the server overrode its analyst".
+//
+// The confidence floor stamps rejection = 'low_confidence' on a WAIT the MODEL
+// ITSELF answered — the gate refused nothing there, it agreed. Measured in
+// production 2026-09-08 on contract market_v1: 16 rows carried that stamp on a
+// WAIT the model proposed, against exactly ONE row where the gate turned a
+// SELL into a WAIT (poor_rr, RR 1.19 against a floor of 1.20). The screen said
+// sixteen. Reading `rejection` alone cannot tell the two apart; what the model
+// ASKED FOR can.
+//
+// A refusal is therefore a plan the analyst asked for and did not get.
+export const isRejected = (r: AnalysisRecord): boolean => {
+  const proposed = r.entry_check?.proposed_signal;
+  return r.signal === "WAIT" &&
+    (proposed === "BUY" || proposed === "SELL") &&
+    typeof r.entry_check?.rejection === "string" && r.entry_check.rejection.length > 0;
+};
+
+// The analyst's own answer to stand aside: it proposed WAIT and a WAIT is what
+// was published. A judgement the app made, never an override — whether or not
+// a rejection string is also stamped on the row.
+//
+// ABSENT proposed_signal lands in NEITHER bucket, deliberately. 11 rows in
+// production have no such field (measured 2026-09-08); every one of them is on
+// the legacy contract entry_chosen_v1 and NONE carries a rejection, so no count
+// moves either way today. The default is chosen for the row shape that does not
+// exist yet: with the field missing there is no evidence of what was asked for,
+// and both of these counts are claims about who decided. An unsupported claim
+// that the server overrode the analyst is the exact defect being fixed here, so
+// silence is the answer in both directions rather than a guess in one.
+export const isSelfDeclined = (r: AnalysisRecord): boolean =>
+  r.signal === "WAIT" && r.entry_check?.proposed_signal === "WAIT";
 
 export const confidenceBandKey = (confidence: number | null): string => {
   if (typeof confidence !== "number" || !Number.isFinite(confidence)) return UNKNOWN_BAND;
@@ -249,7 +287,16 @@ export const serverTally = (key: string, g: PerformanceGroup): OutcomeTally => (
   waitsMissed: g.waits_missed,
   total: g.total,
   calls: g.calls,
-  rejected: g.rejected,
+  // NEITHER count is taken from a server that predates the split, and
+  // `self_declined` missing is how that server is recognised. Its `rejected`
+  // is the OLD conflated number — the 17 this change exists to stop printing —
+  // so republishing it under a name that now promises only overrides would put
+  // the retired sentence back on the screen, this time above sixteen rows
+  // badged AI見送り by the row-level predicates. Zero on both suppresses the
+  // note entirely until the migration lands: no summary is the honest shape of
+  // "this server cannot tell me", and the per-row badges are unaffected.
+  rejected: typeof g.self_declined === "number" ? g.rejected : 0,
+  selfDeclined: g.self_declined ?? 0,
   winRate: g.win_rate,
   winRateCi: g.win_rate_ci95,
   clusters: g.clusters,
@@ -288,7 +335,7 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
   const t: OutcomeTally = {
     key, wins: 0, losses: 0, open: 0, untriggered: 0, ambiguous: 0, expired: 0,
     incoherent: 0, waits: 0, waitsJudged: 0, waitsMissed: 0, total: 0, calls: 0,
-    rejected: 0, contracts: [],
+    rejected: 0, selfDeclined: 0, contracts: [],
     winRate: null, winRateCi: null, clusters: 0, fillRate: null, sumR: null, expectancy: null,
     verdictRate: null, waitRate: null, expiredRate: null, untriggeredRate: null,
     ambiguousRate: null, incoherentRate: null, openRate: null, waitMissRate: null,
@@ -317,6 +364,7 @@ export const tally = (key: string, records: AnalysisRecord[]): OutcomeTally => {
     if (isShadow(r) || isPreview(r)) return;
     seenContracts.add(contractKey(r));
     if (isRejected(r)) t.rejected++;
+    if (isSelfDeclined(r)) t.selfDeclined++;
     // Every call counts, WAIT included: a call that declines to trade is
     // still a call, and one that is never counted can never be wrong.
     t.calls++;

@@ -22,6 +22,7 @@ import { WAIT_SCORER } from "../analyze/entry.ts";
 import {
   CAUSES,
   CHOP_CROSSINGS,
+  DIRECTION_DEAD_R,
   LATE_LIFE_RATIO,
   LUCKY_MAE_R,
   MARKET_CONTRACT,
@@ -31,6 +32,7 @@ import {
   SPIKE_REVERSAL_R,
   UNDERWATER_RATIO,
   canonicalCause,
+  causeGrounds,
   causeOutsideContract,
   causesFor,
   causesForSignal,
@@ -177,6 +179,10 @@ export interface RecordRow {
   // performance_stats already leaves it — see summarizeRecord.
   preview?: boolean;
   rejection: string | null;
+  // What the ANALYST asked for, before the gate answered. Without it a WAIT the
+  // model itself proposed is indistinguishable here from a plan the gate took
+  // away: the confidence floor stamps a rejection on both.
+  proposed_signal?: string | null;
   filled: boolean;
   entry: number | null;
   stop: number | null;
@@ -333,9 +339,15 @@ export interface RecordStats {
   // How often a diagnosis named a rule as the cause of, or a help to, a
   // result — the one per-rule signal there is
   rule_feedback: Record<string, { blamed: number; credited: number }>;
-  // Plans the entry gate refused, and how many of them the market then
-  // filled anyway
+  // Plans the entry gate refused: the analyst asked for a trade and the server
+  // published a WAIT instead. Measured in production 2026-09-08 on market_v1:
+  // ONE row, against 16 the editor was being shown as refusals.
   rejected: number;
+  // WAITs the analyst chose itself. The editor is asked to weigh standing aside
+  // against trading, and it cannot do that if a decision the analyst made and
+  // one the server imposed arrive as the same number — the correction for the
+  // two is opposite.
+  self_declined: number;
   shadow: { total: number; untriggered: number; wins: number; losses: number; open: number };
 }
 
@@ -350,7 +362,7 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     independent_clusters: 0, episode_definition_version: EPISODE_DEFINITION_VERSION, min_stat_n: MIN_STAT_N,
     by_cause: {}, by_cause_clusters: {}, shadow_by_cause: {}, lessons_by_contract: {},
     by_rulebook_version: {}, rule_feedback: {},
-    rejected: 0,
+    rejected: 0, self_declined: 0,
     shadow: { total: 0, untriggered: 0, wins: 0, losses: 0, open: 0 },
   };
   let filled = 0;
@@ -389,7 +401,25 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
       return;
     }
     if (r.signal === "WAIT") {
-      if (r.rejection) s.rejected++;
+      // Who declined, kept apart. `rejection` alone cannot say: the confidence
+      // floor writes 'low_confidence' onto a WAIT the model itself answered, so
+      // counting the string made 16 of the analyst's own calls look like the
+      // server overruling it. A row with no proposed_signal at all — written
+      // before the field existed — is counted in neither, the same silence
+      // isRejected/isSelfDeclined keep on the screen.
+      //
+      // And the same population the screen and performance_stats count over:
+      // both exclude previews. This loop does not (only `scanned` above does),
+      // so the four weekend reads in production — every one stamped
+      // market_closed, two over a proposed SELL — would arrive as 3 refusals
+      // and 18 self-declines beside a system prompt that says the refusals are
+      // 1. Two numbers with one name is the failure being fixed, so the split
+      // is measured over the population it is named after. `waits` and `total`
+      // keep their older, wider population: that gap predates this split and
+      // moving it would change rates nobody asked to have moved.
+      const counted = r.preview !== true;
+      if (counted && r.rejection && (r.proposed_signal === "BUY" || r.proposed_signal === "SELL")) s.rejected++;
+      if (counted && r.proposed_signal === "WAIT") s.self_declined++;
       s.waits++;
       // 'pending' and 'unknown' are not verdicts, so they stay out of both
       // sides of the rate: the first has not been judged yet, the second
@@ -457,8 +487,10 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
     // editor to act on, and good_wait was declared evidence for nothing —
     // yet ten WAITs correctly declined under a rule would have credited it
     // ten times, outvoting the trades it actually lost. Same reasoning for
-    // good_call, inconclusive and plan_incoherent, which reached it before.
-    if (!UNCITABLE_CAUSES.includes(cause)) {
+    // good_call, inconclusive and plan_incoherent, which reached it before,
+    // and now for sound_call_lost: a loss no lever would have changed must not
+    // blame the rule that was in force while it happened.
+    if (!NOT_RULE_EVIDENCE.includes(cause)) {
       if (l.rule_blamed) (s.rule_feedback[l.rule_blamed] ??= { blamed: 0, credited: 0 }).blamed++;
       if (l.rule_credited) (s.rule_feedback[l.rule_credited] ??= { blamed: 0, credited: 0 }).credited++;
     }
@@ -527,11 +559,24 @@ export interface Diagnosis {
   rule_credited: string | null;
 }
 
+// The vocabulary the MODEL is offered, which is the row's own vocabulary minus
+// sound_call_lost.
+//
+// "No lever we can move would have changed this outcome" is a claim about the
+// whole lever table — four counterfactuals and the eight tests around them,
+// all of them arithmetic — and the one thing it must never become is a place
+// to put a loss nobody could explain. So it is earned by noFaultGrounds or not at all: the
+// model cannot name it, and parseDiagnosis will not accept it if the schema is
+// somehow bypassed. It reaches a row only as facts.hints[0], and only when the
+// server's own table says every lever was tested and none of them moved.
+const modelCauses = (contract?: string | null, signal?: string | null): Cause[] =>
+  causesForSignal(contract, signal).filter((c) => c !== "sound_call_lost");
+
 export const diagnosisSchema = (contract?: string | null, signal?: string | null) => ({
   type: "object",
   properties: {
-    cause: { type: "string", enum: [...causesForSignal(contract, signal)] },
-    secondary_causes: { type: "array", items: { type: "string", enum: [...causesForSignal(contract, signal)] } },
+    cause: { type: "string", enum: modelCauses(contract, signal) },
+    secondary_causes: { type: "array", items: { type: "string", enum: modelCauses(contract, signal) } },
     avoidable: { type: "boolean", description: "分析時点の情報だけで回避できたか" },
     confidence: { type: "integer", description: "診断の確からしさ 0-100" },
     verdict_ja: { type: "string", description: "何が起きたかの結論。日本語、120字以内" },
@@ -558,6 +603,8 @@ export const DIAGNOSIS_SCHEMA = diagnosisSchema();
 export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担当（ポストモーテム）です。AIアナリストが出したトレードプランと、その後の実際の値動きから計算した事実（facts）を突き合わせ、なぜその予想が外れた（または当たった）のかを厳密に診断します。
 
 原則:
+- 負けたこと自体は、判断が間違っていた証拠ではない。損失は結果であって、原因ではない。原因を名指しできるのは、動かせるレバー（方向・損切り幅・利確幅・そもそも入るか）のどれかが実際に結果を変えていたと facts が示すときだけ。示していないなら、その回について書けることは「動かせるレバーはどれも結果を変えなかった」か「まだ材料が足りない」のどちらかであって、方向のせいにして埋めない。
+- 反実仮想が「勝っていた」ことは、仮説の材料であって、次のプランでレバーを動かす理由ではない。同じ変更は別の場面で損失を大きくしうる。1件の反実仮想から「次回は損切りを広げる／利確を近づける」と書かない。lesson にするのは、同じ条件が繰り返し同じ結果を出していると facts と stats が示すときだけ。
 - 根拠にしてよいのは facts と plan に書かれていることだけ。事実に無い出来事（ニュース等）を推測で作らない。ニュース要因（news_shock）は、plan の warnings/key_factors に指標やイベントへの言及があり、かつ facts.abnormal_bar が観測された場合に限る。
 - 次の順に検討する: (1) 方向は合っていたか (2) その場面で入ったこと自体が妥当だったか（伸びきった動きに飛び乗っていないか。旧契約 entry_chosen_v1 のプランでは、約定したか・逃したかも見る） (3) 損切り幅は適切だったか (4) 利確は届く距離だったか (5) 相場環境（トレンド/レンジ）の読みは正しかったか。
 - facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（同じプランを ${PULLBACK_R}R 有利な値で約定していたら。損切り幅は同じ。現行契約では出せる注文ではなく、「伸びきったところを掴んだ」ことの尺度）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback が win なら「その値位置で入るには遅すぎた」という事実であって、指値・押し目待ちの推奨ではない。ここから書ける lesson は「その条件では見送る（WAIT）」の形だけ。gate はその案が当時のゲートを通るかを示すだけで、「指値にすべきだった」の根拠にはならない。
@@ -574,12 +621,12 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - confidence は診断の確からしさ。決着後の足が無い、反実仮想が ambiguous 等、事実が少ないときは下げる。
 - shadow=true のプランは、サーバー側のエントリーゲートが「約定しない」等の理由で却下したものを検証用に追跡した結果である。却下が正しかったか（未約定なら正しい、勝っていたなら誤り）を verdict に含める。
 
-原因の定義:
-- direction_wrong: 方向そのものが逆。約定後に損切りまでほぼ一直線／損切り後も逆行が続いた（after.beyond_sl_r が大きい）／約定前に損切り側へ到達（reason=invalidated）。
-- stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想が win。広げた案が viable でない（RR 不足）場合、lesson は「損切りを広げる」だけでなく利確の置き方も併せて書く。
+原因の定義（下の条件を facts が明確に否定している原因を選ぶと、サーバー側で却下され、決定論的な hint に差し戻される。そのとき verdict と lesson も破棄される。facts から判定できない原因は却下されないので、plan を読んで言えることは書いてよい）:
+- direction_wrong: 方向そのものが逆。損切り後も逆行が続いた（after.beyond_sl_r ≥ 1 かつ after.reached_tp1 が null）か、そもそも順行が ${DIRECTION_DEAD_R}R も出ていない（from_signal.max_favorable_r < ${DIRECTION_DEAD_R}）かのどちらか。約定前に損切り側へ到達（reason=invalidated）した未約定プランも同じ。「他に説明が付かないから方向のせい」は理由にならない。
+- stop_too_tight: 方向は合っていたが損切りが近すぎた。損切り到達後に TP1 へ到達（after.reached_tp1）、または損切りを広げた反実仮想（stop_x1_5 / stop_x2）が win。そのどちらも無ければこの原因は選べない。広げた案が viable でない（RR 不足）場合、lesson は「損切りを広げる」だけでなく利確の置き方も併せて書く。
 - entry_too_far:（entry_chosen_v1 の旧プランのみ）方向は合っていたがエントリーが約定しなかった。成行の反実仮想（market_entry または market_entry_same_risk）が viable かつ win。market_v1 のプランでは起こりえない。
 - chased_move: 伸びきった動きに乗ってしまい、約定直後の逆行で損切り。early_adverse_r が大きく、limit_pullback（${PULLBACK_R}R 有利な約定）が win。同じ方向・同じ損切り幅でも、より良い値なら勝っていたということ。remedy は「その場面では入らない（WAIT）」であって、押し目を待つことではない。旧プランでは entry_too_early と呼んでいた同じ事象。
-- target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想が win、mfe_r が大きい。
+- target_too_far: 約定して順行したが TP1 に届かず反転。利確を半分にした反実仮想（tp_half）が win であることが必須で、mfe_r が大きいだけでは足りない。
 - regime_misread: トレンド/レンジの読み違い。facts.regime.conflict、レンジ相場でのトレンドフォロー等。
 - news_shock: 指標・イベントの異常な値幅でプランが無効化された。facts.abnormal_bar.event があれば、その足で実際に発表された経済指標なので、推測ではなく事実として名指ししてよい。event が null の異常足は「原因不明の急変動」であって、指標のせいだと断定しない。
 - plan_incoherent: 水準の矛盾で判定不能。
@@ -659,6 +706,31 @@ export const buildWaitDiagnosisPrompt = (
   return { system: WAIT_DIAGNOSIS_SYSTEM_PROMPT, user, schema: diagnosisSchema(plan.contract, "WAIT") };
 };
 
+// A cause the facts REFUSE, the model may not assert.
+//
+// Deleting the loss branch's fallback stops the SERVER filing a loss it cannot
+// explain as direction_wrong. It does nothing about the model, which reads the
+// same facts and can write the same sentence, and its reading of them is not
+// independent of the fallback: three of rule r10's five citations are rows the
+// fallback filed as direction_wrong.
+//
+// This started as a list of three — direction_wrong, stop_too_tight,
+// target_too_far — and a list of three was the wrong shape. On a row the lever
+// table had just cleared, causeGrounds already answered "contradicted" for
+// news_shock, chased_move AND regime_misread as well (they are refused by
+// clauses 6, 8 and 7 of noFaultGrounds by construction), and every one of the
+// three was accepted verbatim, carried avoidable=true, and was back inside
+// CONSTRAINT_CAUSES where r10 could cite it again. Naming three causes fenced
+// the three doors the model was least likely to need and left the three next
+// to them open.
+//
+// So the rule is the general one: whatever the model names, if the row's own
+// arithmetic contradicts it, the deterministic hint stands instead. "unknown"
+// stays permissive — the model is meant to be able to read the plan for
+// things these numbers cannot see, and most causes are undecidable from them.
+const grounds = (c: Cause, facts?: PostmortemFacts | null) =>
+  facts ? causeGrounds(c, facts) : "unknown";
+
 // A malformed answer is not stored. The cause must be one of ours; when the
 // model's pick is not, the deterministic hint stands.
 export const parseDiagnosis = (
@@ -667,6 +739,10 @@ export const parseDiagnosis = (
   ruleIds: string[] = [],
   contract?: string | null,
   signal?: string | null,
+  // The row's own facts, for the three causes above. Optional: a caller with
+  // no facts (the older tests, a hand-run) gets the previous behaviour rather
+  // than a veto it cannot answer.
+  facts?: PostmortemFacts | null,
 ): Diagnosis | null => {
   if (!isRecord(raw)) return null;
   const lessonJa = str(raw.lesson_ja, MAX_LESSON_CHARS);
@@ -678,13 +754,27 @@ export const parseDiagnosis = (
   // Canonicalised in both eras, so no new row ever stores the dead spelling;
   // a cause the row's own contract cannot produce falls through to the
   // deterministic hint, which is contract-correct by construction.
-  const allowed = causesForSignal(contract, signal);
+  const allowed = modelCauses(contract, signal);
+  const hint = hints[0] ?? "inconclusive";
+  const grounded = (c: Cause): boolean => grounds(c, facts) !== "contradicted";
   const pick = (v: unknown): Cause | null => {
     if (!isCause(v)) return null;
     const k = canonicalCause(v);
-    return isCause(k) && allowed.includes(k) ? k : null;
+    return isCause(k) && allowed.includes(k) && grounded(k) ? k : null;
   };
-  const cause: Cause = pick(raw.cause) ?? hints[0] ?? "inconclusive";
+  // "inconclusive" is the absence of a finding, and causeGrounds can never
+  // contradict it, so it was the one word that could still overwrite a
+  // finished review with nothing. The server's own lever table has either
+  // earned sound_call_lost or not; when it has, the model — which cannot name
+  // that cause and is not shown a definition of it — must not be able to
+  // answer "not enough basis" about a question the server already answered.
+  const downgrades = (k: Cause | null) => k === "inconclusive" && hint === "sound_call_lost";
+  const picked = pick(raw.cause);
+  const model: Cause | null = picked !== null && !downgrades(picked) ? picked : null;
+  // Whether the model named a cause and we refused it — as opposed to naming
+  // none, or naming one we kept. Only a refusal makes its prose untrustworthy.
+  const overruled = model === null && isCause(raw.cause) && canonicalCause(raw.cause) !== hint;
+  const cause: Cause = model ?? hint;
   const secondary = Array.isArray(raw.secondary_causes)
     ? [...new Set(raw.secondary_causes.map(pick).filter((c): c is Cause => c !== null && c !== cause))].slice(0, 3)
     : [];
@@ -692,19 +782,38 @@ export const parseDiagnosis = (
     const id = str(v, 20);
     return id && ruleIds.includes(id) ? id : null;
   };
+  // Refusing the model's CAUSE and keeping its prose stores a row that argues
+  // against its own verdict: the badge says one thing and the sentence under
+  // it recommends the lever the facts just refused. Worse than the display,
+  // that sentence is what the lessons table carries into the next rulebook
+  // revision, where it is read as evidence about the hint's cause. So the
+  // narrative goes with the cause it was written for. The evidence list is
+  // kept — it quotes facts numbers, and those are true whatever was concluded
+  // from them — and the scope and the blamed rule are dropped, because both
+  // were chosen to fit the refused reading.
+  const refusedJa = `モデルは別の原因を挙げたが、facts がそれを支持しないため、サーバー側の判定（${cause}）に差し戻した。`;
+  const refusedEn = `The model named a different cause; the facts do not support it, so the server's own reading (${cause}) stands.`;
   return {
     cause,
     secondary_causes: secondary,
-    avoidable: raw.avoidable === true,
-    confidence: clampInt(raw.confidence, 0, 100, 50),
-    verdict_ja: verdictJa || verdictEn,
-    verdict_en: verdictEn || verdictJa,
+    // sound_call_lost is exactly the finding that no lever we can move would
+    // have changed the outcome, so "avoidable with what was known at the time"
+    // is the one answer it cannot carry. The model never names this cause, but
+    // it does answer `avoidable` about whatever it thought the cause was, and
+    // that boolean used to pass through verbatim — which would have printed
+    // 「分析時点の情報で回避できた」under a verdict that says the opposite.
+    // A refused cause loses it for the same reason: the only reading that said
+    // this loss was avoidable is the one the facts just refused.
+    avoidable: cause === "sound_call_lost" || overruled ? false : raw.avoidable === true,
+    confidence: overruled ? Math.min(clampInt(raw.confidence, 0, 100, 50), 30) : clampInt(raw.confidence, 0, 100, 50),
+    verdict_ja: overruled ? refusedJa : verdictJa || verdictEn,
+    verdict_en: overruled ? refusedEn : verdictEn || verdictJa,
     evidence_ja: strList(raw.evidence_ja),
     evidence_en: strList(raw.evidence_en),
-    lesson_ja: lessonJa || lessonEn,
-    lesson_en: lessonEn || lessonJa,
-    scope: str(raw.scope, 60) || null,
-    rule_blamed: ruleRef(raw.rule_blamed),
+    lesson_ja: overruled ? refusedJa : lessonJa || lessonEn,
+    lesson_en: overruled ? refusedEn : lessonEn || lessonJa,
+    scope: overruled ? null : str(raw.scope, 60) || null,
+    rule_blamed: overruled ? null : ruleRef(raw.rule_blamed),
     rule_credited: ruleRef(raw.rule_credited),
   };
 };
@@ -737,6 +846,22 @@ export interface LessonRow {
   plan_closed_at?: string | null;
   rule_blamed: string | null;
   rule_credited: string | null;
+  // How many bars of aftermath the diagnosis was written on, and the build
+  // that wrote it. A diagnosis is made soon after settlement by design
+  // (AFTER_WAIT_MS in facts.ts), and depth is the difference between a
+  // reading and a guess: 2026-09-07, four losses first diagnosed at 8 bars
+  // were re-read at 48-95 bars. TWO changed cause outright (c8788083
+  // direction_wrong -> stop_too_tight, 1b003cf3 direction_wrong ->
+  // chased_move) and ONE kept the cause but flipped avoidable to false
+  // (c14cdb0a). Nothing is on record for the fourth (32d167d3), and it cannot
+  // be recovered: the re-read overwrote the earlier document, which is the
+  // reason `prior` exists at all. The same build had also changed the cause
+  // vocabulary, so depth and that change are not separated, and n is 4. This
+  // is why the depth question is being measured rather than answered — see
+  // docs/POSTMORTEM_DEPTH_PREREGISTRATION.md. Optional because a lesson
+  // written before the column existed carries neither.
+  bars_after_settlement?: number | null;
+  postmortem_version?: string | null;
   // Filled in by withClusters
   cluster?: string;
 }
@@ -760,6 +885,22 @@ export const withClusters = (lessons: LessonRow[]): LessonRow[] => {
   })));
   return lessons.map((l, i) => ({ ...l, cluster: ids[i] }));
 };
+// A cause that names no lever to move cannot support a rule. good_wait is
+// good_call's mirror: "standing aside was right" tells the next plan nothing
+// it can act on. wait_missed_trade is deliberately NOT here — it is the only
+// evidence of over-caution the system has, and a rule is exactly what should
+// come of it.
+//
+// sound_call_lost belongs here for the plainest reason of all: its entire
+// content is that no lever we can move would have changed the outcome. A rule
+// is an instruction to move one. Letting a loss like that support a rule would
+// re-open the door the verdict was built to close — the loss counting as
+// evidence for a change, purely because it was a loss.
+//
+// Renamed from UNCITABLE_CAUSES: the old name read as a property of the
+// LESSON, and the list is now asked about the RULE's cause as well.
+export const NOT_RULE_EVIDENCE: readonly string[] = ["inconclusive", "plan_incoherent", "good_call", "good_wait", "sound_call_lost"];
+
 
 export const CONSOLIDATION_SCHEMA = {
   type: "object",
@@ -772,7 +913,12 @@ export const CONSOLIDATION_SCHEMA = {
           id: { type: "string", description: "既存ルールを引き継ぐ場合はその id、新規は r + 番号（既存と重複しない）" },
           text_ja: { type: "string", description: "「条件 → 行動」の一般則。100字以内、日本語。個別の価格・日付を含めない" },
           text_en: { type: "string", description: "The same rule in English, 240 characters or fewer" },
-          cause: { type: "string", enum: [...CAUSES, "general"] },
+          // The causes a rule may be filed under, which is not every cause.
+          // NOT_RULE_EVIDENCE is exactly the set that is evidence for nothing,
+          // and citationAllowed refuses every citation of a rule filed under
+          // one — so offering them here bought a rule that is deleted at the
+          // next revision for want of support, one wasted slot per revision.
+          cause: { type: "string", enum: [...CAUSES.filter((c) => !NOT_RULE_EVIDENCE.includes(c)), "general"] },
           kind: { type: "string", enum: ["constraint", "heuristic"], description: "constraint: 見送る・リスクを絞る歯止め。heuristic: こう取るという指針" },
           scope: { type: ["string", "null"], description: "適用範囲を短く。無ければ null" },
           supported_by: { type: "array", items: { type: "string" }, description: "このルールの根拠となる lessons の analysis_id（そのルールの cause と同じ原因の lesson に限る）" },
@@ -795,13 +941,7 @@ export const CONSOLIDATION_SCHEMA = {
 // interpolates both lists and is evaluated at module load: moving either back
 // below it is a ReferenceError that takes down the whole function.
 export const CONSTRAINT_CAUSES: readonly string[] = ["lucky_win", "direction_wrong", "regime_misread", "news_shock", "chased_move"];
-// Lessons that are about nothing in particular are evidence for nothing
-// A cause that names no lever to move cannot support a rule. good_wait is
-// good_call's mirror: "standing aside was right" tells the next plan nothing
-// it can act on. wait_missed_trade is deliberately NOT here — it is the only
-// evidence of over-caution the system has, and a rule is exactly what should
-// come of it.
-export const UNCITABLE_CAUSES: readonly string[] = ["inconclusive", "plan_incoherent", "good_call", "good_wait"];
+// Lessons that are about nothing in particular are evidence for nothing.
 
 // Vocabulary that names WHERE or WHEN to enter.
 //
@@ -878,27 +1018,62 @@ export const unfollowableUnder = (text: string, contract: string | null): boolea
 // to run. Four rules learned entirely from entry_chosen_v1 evidence were
 // stamped market_v1 that way, and one of them taught the analyst where to
 // enter under a contract that fills at the market.
+//
+// It also SAYS WHY it refused. It used to return a bare null, and the silence
+// cost days: candidate rule r12 (cause wait_missed_trade, support 2 — the only
+// rule the loop has ever produced that argues for TRADING more) was stamped
+// null and dropped out of every analyst prompt because its English text
+// contains "market entry", one of ENTRY_LEVER_PHRASES. Rule r10, which argues
+// for trading LESS, was vetoed by the identical phrase: the filter is topical,
+// not directional. Nothing on the run recorded either fact, so the rule simply
+// was not there and no artefact said so.
+//
+// The reason is a fact ABOUT the refusal, never a change to it: which rules are
+// vetoed is exactly what it was.
+export type StampRefusal =
+  // the cause cannot occur under this contract, so no instruction about it can
+  | "cause_outside_contract"
+  // the Japanese text moves a lever the contract does not have
+  | "entry_lever_ja"
+  // the English text does — r12's case, with sound Japanese beside it
+  | "entry_lever_en";
+
+export interface Stamp {
+  contract: string | null;
+  // Null when a stamp was granted, and also when no contract was named at all:
+  // a caller that asked no question got no refusal.
+  reason: StampRefusal | null;
+}
+
 export const stampFor = (
   rule: { cause: string; text_ja: string; text_en: string },
   writingContract: string | null,
-): string | null => {
-  if (writingContract === null) return null;
-  if (causeOutsideContract(rule.cause, writingContract)) return null;
-  if (unfollowableUnder(rule.text_ja, writingContract)) return null;
-  if (unfollowableUnder(rule.text_en, writingContract)) return null;
-  return writingContract;
+): Stamp => {
+  if (writingContract === null) return { contract: null, reason: null };
+  if (causeOutsideContract(rule.cause, writingContract)) {
+    return { contract: null, reason: "cause_outside_contract" };
+  }
+  if (unfollowableUnder(rule.text_ja, writingContract)) {
+    return { contract: null, reason: "entry_lever_ja" };
+  }
+  if (unfollowableUnder(rule.text_en, writingContract)) {
+    return { contract: null, reason: "entry_lever_en" };
+  }
+  return { contract: writingContract, reason: null };
 };
 
 export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルールブック」の編集者です。個々のプランの検証結果（lessons）と実績統計（stats）から、次回以降のプラン作成で AI アナリストが従う一般則を最大${MAX_RULES}個にまとめます。ルールブックは AI のシステムプロンプトに、基本手順とリスク規定の後ろに「補助的な指針」として入ります。基本手順（トレンド局面での成行、損切り幅、RR の下限）を上書きすることはできないので、その範囲内で書きます。
 
 証拠の数え方:
 - 証拠の単位は「独立クラスタ」。同じ通貨ペア・同じ方向で近い時間に作られたプランは同じ局面についての同じ判断であり、lessons が何件あっても証拠としては1件。各 lesson には cluster が付いている。stats.by_cause_clusters が原因別のクラスタ数。
-- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、${UNCITABLE_CAUSES.join(" / ")} 以外のどの原因でも可。constraint のルールは ${CONSTRAINT_CAUSES.join(" / ")} も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
+- 各ルールには supported_by として根拠の lesson の analysis_id を列挙する。数えられるのは、そのルールの cause と同じ原因の lesson（cause が general のルールは、${NOT_RULE_EVIDENCE.join(" / ")} 以外のどの原因でも可。constraint のルールは ${CONSTRAINT_CAUSES.join(" / ")} も可）だけで、shadow の lesson は数えない。実績件数（support）はサーバーがその条件で独立クラスタ数を数える。無関係な lesson を引用しても数えられず、根拠が1件も残らないルールは削除される。
 - stats.win_rate / fill_rate は決着数が ${MIN_STAT_N} 未満のとき null。null や小さい n の統計を根拠にルールを強めない。stats.win_rate_ci95 は勝率の95%信頼区間。
 - stats は stats.contract のエントリー契約で作られたプランだけを集計している。別の契約のプランは stats.other_contract_rows として件数だけ数え、勝率にも件数にも入れていない。契約をまたいだ比較はできない。
 - 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
 - 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
+- 見送りの内訳: stats.self_declined は AI 自身が「見送る」と答えた件数、stats.rejected は AI が出したプランをサーバーの入口チェックが却下して WAIT にした件数。前者はアナリストの判断、後者はサーバーの強制で、ルールで直せるのは前者だけ。この2つを1つの数にまとめていた間、AI 自身の見送り16件が「サーバーが却下した」件数として渡っていた（実際の却下は1件）。
 - 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
+- 各 lesson には bars_after_settlement（その診断が見た決着後の足数）が付いている。診断は決着の直後に走る設計なので、この数が小さい lesson は「その後どうなったか」をほとんど見ていない。実測（2026-09-07、n=4）では、8足で書かれた診断を48〜95足まで待って読み直したところ、4件中2件は原因そのものが変わり（うち1件は「一度も含み益にならなかった」から「23足後に利確1に到達していた」へ）、残る2件も原因は同じまま avoidable や副次原因が変わった。ただしこの4件は原因語彙を変えた版で読み直しているので、深さの効果とコード変更の効果を分離できていない。lesson の confidence はこの深さを織り込んでいない。null は列ができる前に書かれた lesson。
 - entry_too_far / entry_too_early は旧契約の語彙。entry_too_early は chased_move として集計されている。
 - current_rules の各ルールには contract（実行できる契約）・evidence_contracts（根拠 lesson の契約）・in_force（現行契約 ${MARKET_CONTRACT} のプロンプトに実際に入っているか）が付いている。in_force が false のルールはアナリストのプロンプトに入っていない。原因が現行契約では起こりえないか、文言が「押し目を待つ・指値で入る・どこで入るか」というアナリストが動かせない対象を指しているためで、同じ文言のまま出し直しても false のままになる。残す価値があるなら方向・損切り幅・利確幅・見送りの4つのどれかを動かす形に書き直し、書き直せないなら出力から外す。
 - evidence_contracts が現行契約以外だけのルールは、根拠が旧契約の記録しかない。使ってよいが、プロンプトには「旧契約含む」と表示され、証拠としては弱い。
@@ -953,6 +1128,9 @@ export const buildConsolidationPrompt = (
       rule_credited: l.rule_credited,
       lesson_ja: l.lesson_ja,
       lesson_en: l.lesson_en,
+      // One number per line, so the shape and the budget of the digest are
+      // what they were: how much aftermath this lesson rests on.
+      bars_after_settlement: l.bars_after_settlement ?? null,
     })),
     stats,
   };
@@ -979,6 +1157,12 @@ export type DropReason =
   | "evidence_gone"
   | "no_room";
 
+// Why a rule that IS in the book reaches no analyst prompt. Not a drop — the
+// rule survived the revision — but the same question, about the same id, and
+// it belongs in the same map: r12 was in the book at v7 and at v8 and reached
+// nobody either time, and nothing on the run said why.
+export type ChangeReason = DropReason | StampRefusal;
+
 export interface Consolidation {
   rules: Rule[];
   summary_ja: string;
@@ -994,7 +1178,10 @@ export interface Consolidation {
   // nothing, while the sentence the analyst follows had been replaced and its
   // `since` still claimed the older date.
   //
-  // reasons: why each id in `dropped` or `removed` left, keyed by id. The
+  // reasons: why each id in `dropped`, `removed` or `held_back` is there,
+  // keyed by id. For a held-back rule that is the veto stampFor applied, which
+  // was previously recorded nowhere at all — a rule can sit in the book for
+  // versions on end, be printed in every artefact, and reach no prompt. The
   // lists alone say a rule did not make it and stop there, which is enough to
   // notice a rule failing twice and not enough to say why — the editor
   // proposed the same new rule r12 at v7 and at v8 and it was dropped both
@@ -1007,7 +1194,7 @@ export interface Consolidation {
     dropped: string[];
     held_back: string[];
     reworded: string[];
-    reasons: Record<string, DropReason>;
+    reasons: Record<string, ChangeReason>;
   };
 }
 
@@ -1028,8 +1215,16 @@ export interface CitableLesson {
 // shadow plan's lesson — those are about the gate, not the analyzer.
 export const citationAllowed = (rule: { cause: string; kind: RuleKind }, lesson: CitableLesson): boolean => {
   if (lesson.shadow) return false;
+  // The rule side, tested first. CONSOLIDATION_SCHEMA's cause enum is
+  // [...CAUSES, "general"], so the editor may file a rule under a cause that
+  // is evidence for nothing — and a constraint rule filed under one of these
+  // would then draw on the whole of CONSTRAINT_CAUSES through the clause
+  // below, collecting evidence for a rule whose own subject names no lever.
+  // The lesson-side test was never going to catch that: it asks about the
+  // lesson.
+  if (NOT_RULE_EVIDENCE.includes(canonicalCause(rule.cause))) return false;
   const cause = canonicalCause(lesson.cause ?? "");
-  if (!cause || UNCITABLE_CAUSES.includes(cause)) return false;
+  if (!cause || NOT_RULE_EVIDENCE.includes(cause)) return false;
   if (canonicalCause(rule.cause) === cause) return true;
   if (rule.cause === "general") return true;
   if (rule.kind === "constraint" && CONSTRAINT_CAUSES.includes(cause)) return true;
@@ -1078,7 +1273,10 @@ export const parseConsolidation = (
   const added: string[] = [];
   const dropped: string[] = [];
   const reworded: string[] = [];
-  const reasons: Record<string, DropReason> = {};
+  const reasons: Record<string, ChangeReason> = {};
+  // Kept beside the stamps as they are derived, so the held_back list below can
+  // say why each id is on it without re-deriving anything.
+  const stampRefusals = new Map<string, StampRefusal>();
   for (const item of raw.rules) {
     if (!isRecord(item)) continue;
     const textJa = str(item.text_ja, MAX_RULE_CHARS);
@@ -1132,6 +1330,8 @@ export const parseConsolidation = (
     // the cut can carry a trailing space that no reader would call a change.
     const before = prior.get(id);
     const same = (a: string, b: string) => a.trim() === b.trim();
+    const emitted = stampFor({ cause, text_ja: textJaFinal, text_en: textEnFinal }, writingContract);
+    if (emitted.reason !== null) stampRefusals.set(id, emitted.reason);
     if (before && (!same(before.text_ja, textJaFinal) || !same(before.text_en, textEnFinal) || before.cause !== cause)) {
       reworded.push(id);
     }
@@ -1143,7 +1343,7 @@ export const parseConsolidation = (
       support,
       scope: str(item.scope, 60) || null,
       since: prior.get(id)?.since ?? nowIso,
-      contract: stampFor({ cause, text_ja: textJaFinal, text_en: textEnFinal }, writingContract),
+      contract: emitted.contract,
       evidence_contracts: eras,
       kind,
       supported_by: cited,
@@ -1198,6 +1398,8 @@ export const parseConsolidation = (
       continue;
     }
     const { cited, support, eras } = ev;
+    const stamp = stampFor(rule, writingContract);
+    if (stamp.reason !== null) stampRefusals.set(rule.id, stamp.reason);
     // The stamp is re-derived here too, from the STORED rule's own cause and
     // text. A restored rule must not carry a stamp forward: inheriting it is
     // what let a rule keep an endorsement that only ever existed because a
@@ -1207,7 +1409,7 @@ export const parseConsolidation = (
       support,
       supported_by: cited,
       evidence_contracts: eras,
-      contract: stampFor(rule, writingContract),
+      contract: stamp.contract,
     });
     restored.push(rule.id);
   }
@@ -1216,6 +1418,13 @@ export const parseConsolidation = (
   // With writingContract null every stamp is null and this is empty, which is
   // the right answer: a caller that named no contract asked no question.
   const held_back = writingContract === null ? [] : rules.filter((r) => r.contract !== writingContract).map((r) => r.id);
+  // The rule is in the book, so this is the live fact about the id; a drop
+  // reason already under it belongs to some other proposal that never made it
+  // into `rules` at all.
+  for (const id of held_back) {
+    const why = stampRefusals.get(id);
+    if (why !== undefined) reasons[id] = why;
+  }
 
   return {
     rules: orderRules(rules),
