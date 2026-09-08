@@ -168,3 +168,65 @@ describe("the confidence floor's two stories", () => {
     }
   });
 });
+
+// entry.ts returns "incoherent" from two places that mean different things:
+// the levels were compared and sat on the wrong side of the entry, or a level
+// (or the price) was missing so nothing was compared at all. Both fell to the
+// switch default, which told the reader the entry, stop and target contradicted
+// each other — on the second path, the result of a test that never ran. Same
+// defect as the confidence floor above, one line further down the switch.
+describe("the two things 'incoherent' means", () => {
+  const parts = (signal: string) => ({
+    rejection: "incoherent",
+    signal,
+    distanceAtr: null,
+    stopAtr: null,
+    riskReward: null,
+    repairRejection: null,
+    confidence: 71,
+    confidenceFloor: 60,
+  });
+
+  it("does not assert a contradiction it may never have tested", () => {
+    const ja = stringsFor("ja").entryRejected(parts("BUY"));
+    expect(ja).not.toContain("矛盾");
+    expect(ja).toContain("読み取れなかった");
+    // and it stops there: it does not go on to say which of the two happened,
+    // nor to claim the row cannot say either — the missing level is rendered
+    // as proposed_stop / proposed_tp1 on the very same card.
+    expect(ja).not.toContain("記録が残っていません");
+
+    const en = stringsFor("en").entryRejected(parts("SELL"));
+    expect(en).not.toContain("contradict");
+    expect(en).toContain("could not be read as a coherent plan");
+    expect(en).not.toContain("not recorded");
+    expect(en).not.toMatch(/[぀-ヿ一-龯]/);
+  });
+
+  it("still says the plan was refused, and prints no holes", () => {
+    for (const loc of ["ja", "en"] as const) {
+      const text = stringsFor(loc).entryRejected(parts("BUY"));
+      expect(text).toContain(loc === "ja" ? "変更しました" : "downgraded to WAIT");
+      for (const hole of ["undefined", "null", "NaN", "?"]) {
+        expect(text).not.toContain(hole);
+      }
+    }
+  });
+
+  it("leaves the default describing no particular failure", () => {
+    // Nothing reaches it today — low_confidence and all six entry.ts
+    // rejections have cases, market_closed is diverted by the caller. It
+    // exists for a rejection added later without a case, so it must not name a
+    // specific failure that was never measured.
+    const ja = stringsFor("ja").entryRejected({ ...parts("BUY"), rejection: "some_future_reason" });
+    const en = stringsFor("en").entryRejected({ ...parts("BUY"), rejection: "some_future_reason" });
+    for (const text of [ja, en]) {
+      expect(text).not.toContain("矛盾");
+      expect(text).not.toContain("contradict");
+      expect(text).not.toContain("読み取れなかった");
+      expect(text).not.toContain("coherent");
+    }
+    expect(ja).toContain("公開の基準");
+    expect(en).toContain("did not meet the bar for publishing");
+  });
+});

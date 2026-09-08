@@ -1,4 +1,4 @@
-const FUNCTION_VERSION = "analyze-v45-2026-09-08T12:00:00Z";
+const FUNCTION_VERSION = "analyze-v46-2026-09-08T15:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1955,6 +1955,18 @@ Deno.serve(async (req: Request) => {
       // refusals were invisible, and the WAIT scorer graded them as the
       // analyst's judgement.
       rejection: entryRejected ? rejectionReason : entryVerdict.rejection,
+      // What the shape gate itself concluded, kept whether or not it won. The
+      // line above gives market_closed and low_confidence precedence, so on
+      // those rows the gate's verdict was overwritten by the reason acted on.
+      // Measured 2026-09-08: four rows refused for a shut market, two of them
+      // carrying a proposed SELL, and on both the gate had no objection — so
+      // nothing has actually been lost yet. Those two are only reconstructable
+      // because the geometry sits beside them (market entry, 0.79 and 1.01
+      // stop ATR, 1.33 and 1.38 RR, all inside today's bounds); move a
+      // threshold and that reconstruction silently returns a different answer.
+      // Recording the verdict is what stops it depending on the bounds.
+      // Never the reason acted on.
+      shape_rejection: entryVerdict.rejection,
       repair_rejection: entryVerdict.repairRejection,
       atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
       // marketEntry, not entrySnapshot.price: entry_point, price_at_signal

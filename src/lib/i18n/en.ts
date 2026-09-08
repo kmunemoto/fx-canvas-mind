@@ -223,7 +223,13 @@ export const en: Dict = {
         // Only reachable on a row where the model asked for a BUY or a SELL
         // and rated it below the floor. A model WAIT never reaches this block.
         low_confidence: "The model's own confidence was below the floor",
-        incoherent: "Entry, stop and target contradict each other",
+        // Written by two different paths in entry.ts — levels compared and
+        // pointing the wrong way, or a level missing so nothing was compared —
+        // and the reason alone does not say which. "Contradict" asserts the
+        // outcome of a comparison that, on the second path, never happened.
+        // (The missing level is visible: proposed_stop and proposed_tp1 are
+        // rendered right beside this label.)
+        incoherent: "Entry, stop and target could not be read as a coherent plan",
       },
       proposed: "Model's call",
       distance: "Distance from market",
