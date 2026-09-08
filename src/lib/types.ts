@@ -189,24 +189,47 @@ export interface OutcomeEvaluation {
 // entry_chosen_v1 contract, where the model picked the entry price and the
 // server sometimes moved it. Under market_v1 the server sets the entry, so
 // there is nothing to move and the fields are absent.
-export type EntryRejection =
-  | "too_far"
-  | "should_be_market"
-  | "stop_too_tight"
-  | "poor_rr"
+// Stated as a runtime array with the TYPE DERIVED FROM IT, rather than as a
+// bare union, so that the list can be walked at runtime and cannot drift from
+// the type the way a hand-kept pair would.
+//
+// Authoritative FOR THE CLIENT, and a mirror rather than a source: the gate's
+// own union is Rejection in supabase/functions/analyze/entry.ts, and
+// market_closed and low_confidence are stamped separately by analyze/index.ts
+// on top of it. Nothing in the language ties this array to either, so
+// src/test/i18n.test.ts does it explicitly — add a member to the server union
+// and the typecheck fails there rather than shipping a rejection that renders
+// as nothing in BOTH languages.
+//
+// It exists because OutcomeDetail renders a rejection only when the key is
+// present in the dictionary (`check.rejection in g.reasons`) and renders
+// NOTHING when it is not — silently, in that one language, with no error
+// anywhere and no test failing. src/test/i18n.test.ts walks this array in both
+// directions; a list re-typed inside the test would have gone stale the first
+// time a rejection was added, which is the whole failure it is there to catch.
+export const ENTRY_REJECTIONS = [
+  "too_far",
+  "should_be_market",
+  "stop_too_tight",
+  "poor_rr",
   // The target was so far out that the ratio stopped meaning anything
-  | "target_out_of_reach"
+  "target_out_of_reach",
   // The server refused because the market was shut: "enter now" was not an
   // available action. Recorded apart from a model WAIT — one is the analyst
   // declining, the other is the server declining for it.
-  | "market_closed"
+  "market_closed",
   // The model rated its own call below the floor the policy states, and the
   // server published the WAIT the policy calls for. On a proposed WAIT this is
   // the analyst agreeing with itself and nothing was refused; on a proposed BUY
   // or SELL it is a real refusal. isRejected in outcomeStats.ts is what tells
-  // the two apart — this string cannot.
-  | "low_confidence"
-  | "incoherent";
+  // the two apart — this string cannot. Measured 2026-09-08: EVERY row
+  // carrying it proposed WAIT, so not one of them was a refusal. The count
+  // itself moves hourly and is deliberately not written down here.
+  "low_confidence",
+  "incoherent",
+] as const;
+
+export type EntryRejection = (typeof ENTRY_REJECTIONS)[number];
 
 export interface EntryCheck {
   proposed_signal: "BUY" | "SELL" | "WAIT";
