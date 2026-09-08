@@ -3,7 +3,6 @@ import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
 import AnalysisResultView from "@/components/AnalysisResultView";
-import RuleFitPanel from "@/components/RuleFitPanel";
 import AnalysisStages from "@/components/AnalysisStages";
 import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
@@ -12,12 +11,15 @@ import LoopHealth from "@/components/LoopHealth";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
+import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
 import { useAuth } from "@/contexts/AuthContext";
 import type {
   AnalysisRecord,
   Rulebook,
+  AnalysisMode,
   AnalysisResult,
   AppSettings,
+  EntryCheck,
   LoadingStage,
   NumericCandle,
   TechnicalData,
@@ -111,6 +113,22 @@ const normalizeAnalysisResult = (value: unknown): AnalysisResult | null => {
   };
 };
 
+// The entry gate's verdict, sent beside `analysis`. Only the two fields the
+// result view reads are checked; the rest is passed through as recorded.
+const normalizeEntryCheck = (value: unknown): EntryCheck | null => {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Partial<EntryCheck> & Record<string, unknown>;
+  const proposed = source.proposed_signal;
+  if (proposed !== "BUY" && proposed !== "SELL" && proposed !== "WAIT") return null;
+  return {
+    ...(source as EntryCheck),
+    proposed_signal: proposed,
+    rejection: typeof source.rejection === "string" && source.rejection.length > 0
+      ? source.rejection as EntryCheck["rejection"]
+      : null,
+  };
+};
+
 const normalizeCandles = (value: unknown): NumericCandle[] => {
   if (!Array.isArray(value)) return [];
   const out: NumericCandle[] = [];
@@ -185,33 +203,14 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
   };
 };
 
-const DEFAULT_SETTINGS: AppSettings = {
-  accountBalance: 1_000_000,
-  riskPercent: 1,
-  currencyPair: "USD/JPY",
-};
-
-// Settings saved before the pips fields were removed are still in the
-// browser; keep the pair and fill in the rest rather than resetting it
-const withDefaults = (stored: unknown): AppSettings => {
-  const s = stored && typeof stored === "object" ? stored as Partial<AppSettings> : {};
-  const num = (v: unknown, fallback: number) =>
-    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
-  return {
-    accountBalance: num(s.accountBalance, DEFAULT_SETTINGS.accountBalance),
-    riskPercent: num(s.riskPercent, DEFAULT_SETTINGS.riskPercent),
-    currencyPair: typeof s.currencyPair === "string" && s.currencyPair ? s.currencyPair : DEFAULT_SETTINGS.currencyPair,
-  };
-};
-
 const loadSettings = (): AppSettings => {
   try {
     const stored = localStorage.getItem("fx-settings-v2");
-    if (stored) return withDefaults(JSON.parse(stored));
+    if (stored) return settingsFromStored(JSON.parse(stored));
   } catch {}
   try {
     const stored = sessionStorage.getItem("fx-settings-v2");
-    if (stored) return withDefaults(JSON.parse(stored));
+    if (stored) return settingsFromStored(JSON.parse(stored));
   } catch {}
   return DEFAULT_SETTINGS;
 };
@@ -227,7 +226,7 @@ const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [interval, setInterval_] = useState<TimeInterval>("1h");
   const [includeFundamental, setIncludeFundamental] = useState(true);
-  const [analysisMode, setAnalysisMode] = useState<"full" | "technical_only" | "technical_fallback" | null>(null);
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode | null>(null);
   // The market was shut when this run was asked for, so it is a read of the
   // last close and not a plan — said above the result rather than in a toast,
   // because it is the result's nature and not an error about it.
@@ -236,6 +235,9 @@ const Index = () => {
   // against today's market. Shown beside the result so a rule quoted under an
   // answer cannot be mistaken for a rule that applied to it.
   const [ruleFit, setRuleFit] = useState<RuleFit | null>(null);
+  // The gate's verdict on this run. On a WAIT it is where the reason lives —
+  // as a structure, not as the first line of the warnings.
+  const [entryCheck, setEntryCheck] = useState<EntryCheck | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
@@ -371,6 +373,7 @@ const Index = () => {
     setAnalysisMode(null);
     setPreview(null);
     setRuleFit(null);
+    setEntryCheck(null);
     setLiveRate(null);
     // Clear the indicators too: on a failed run they would otherwise keep
     // showing the previous pair's numbers next to an error toast
@@ -474,6 +477,7 @@ const Index = () => {
           ? (payload.rule_fit as RuleFit)
           : null,
       );
+      setEntryCheck(normalizeEntryCheck(payload?.entry_check));
       setPreview(
         payload?.preview === true
           ? { opensAt: typeof payload?.market_opens_at === "string" ? payload.market_opens_at : null }
@@ -598,13 +602,15 @@ const Index = () => {
                     </span>
                   </div>
                 )}
-                <RuleFitPanel ruleFit={ruleFit} rulebook={rulebook} />
                 <AnalysisResultView
                   result={result}
                   techData={techData}
                   pair={resultMeta.pair}
                   interval={resultMeta.interval}
-                  settings={settings}
+                  entryCheck={entryCheck}
+                  analysisMode={analysisMode}
+                  ruleFit={ruleFit}
+                  rulebook={rulebook}
                 />
               </>
             ) : (

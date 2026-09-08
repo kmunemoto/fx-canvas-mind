@@ -7,8 +7,10 @@ import AnalysisResultView from "../components/AnalysisResultView";
 import AnalysisHistory from "../components/AnalysisHistory";
 import LearnedRules from "../components/LearnedRules";
 import AnalysisStages from "../components/AnalysisStages";
-import type { AnalysisRecord, AnalysisResult, OutcomeEvaluation, TechnicalData } from "../lib/types";
+import type { AnalysisRecord, AnalysisResult, EntryCheck, OutcomeEvaluation, TechnicalData } from "../lib/types";
 import { CURRENT_CONTRACT } from "../lib/outcomeStats";
+import { ja } from "../lib/i18n/ja";
+import { en } from "../lib/i18n/en";
 
 // Everything user-facing reads the dictionary now, so the provider is part of
 // rendering these components at all. Tests default to Japanese, which is what
@@ -85,20 +87,75 @@ const techData: TechnicalData = {
 };
 
 describe("AnalysisResultView (v9 payload)", () => {
-  it("renders direction, thesis, plan, market context and chart levels", () => {
+  it("renders direction, thesis, plan and chart levels, with the market context folded", () => {
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
 
     expect(screen.getByText("LONG")).toBeInTheDocument();
     expect(screen.getByText("流動性スイープ後の上方拡張")).toBeInTheDocument();
-    expect(screen.getByText("Market Mode")).toBeInTheDocument();
-    expect(screen.getByText("Trend Day")).toBeInTheDocument();
-    expect(screen.getByText("Stop Hunt Zone")).toBeInTheDocument();
     expect(screen.getByText("利確 TP3")).toBeInTheDocument();
     expect(screen.getByText("152.600")).toBeInTheDocument();
     // level pills drawn into the SVG chart
     expect(screen.getByText(/ENTRY 150\.123/)).toBeInTheDocument();
     expect(screen.getByText(/SL 149\.500/)).toBeInTheDocument();
     expect(screen.getByText(/TP1 151\.200/)).toBeInTheDocument();
+
+    // The context rows are reference, closed until asked for
+    expect(screen.queryByText("Trend Day")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /相場環境と水準/ }));
+    expect(screen.getByText("相場モード")).toBeInTheDocument();
+    expect(screen.getByText("Trend Day")).toBeInTheDocument();
+    expect(screen.getByText("ストップ狩りゾーン")).toBeInTheDocument();
+  });
+
+  it("puts the call before the plan, the plan before the evidence, and the folds last", () => {
+    // fullResult's only warning is the disclaimer, so give it one real one
+    const withWarning = { ...fullResult, warnings: [...fullResult.warnings, "指標発表が近い"] };
+    const { container } = render(
+      <AnalysisResultView result={withWarning} techData={techData} pair="USD/JPY" interval="1h" />,
+    );
+    const order = ["trade-plan", "evidence", "warnings", "detail", "market-context-disclosure"]
+      .map((id) => container.querySelector(`[data-testid="${id}"]`))
+      .map((el) => (el ? Array.from(container.querySelectorAll("*")).indexOf(el) : -1));
+    const hero = Array.from(container.querySelectorAll("*")).indexOf(screen.getByText("LONG"));
+    expect(order.every((i) => i > hero)).toBe(true);
+    for (let i = 1; i < order.length; i++) expect(order[i]).toBeGreaterThan(order[i - 1]);
+    // and the one glow left is the hero's
+    expect(container.querySelectorAll(".border-glow")).toHaveLength(1);
+  });
+
+  it("shows the stop and first target as a distance, in pips and in ATR", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    // 150.123 − 149.500 = 62.3 pips = 1.4 × an ATR of 0.450
+    expect(screen.getByTestId("stop-distance")).toHaveTextContent("62 pips・ATR 1.4倍");
+    // 151.200 − 150.123 = 107.7 pips = 2.4 × ATR
+    expect(screen.getByTestId("tp1-distance")).toHaveTextContent("108 pips・ATR 2.4倍");
+  });
+
+  it("gives the distance in pips alone when there is no ATR to scale by", () => {
+    render(<AnalysisResultView result={fullResult} techData={null} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByTestId("stop-distance")).toHaveTextContent("62 pips");
+    expect(screen.getByTestId("stop-distance")).not.toHaveTextContent("ATR");
+  });
+
+  it("shows three factors and folds the rest behind a count", () => {
+    const many = { ...fullResult, key_factors: ["一", "二", "三", "四", "五"] };
+    render(<AnalysisResultView result={many} techData={techData} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByText("三")).toBeInTheDocument();
+    expect(screen.queryByText("四")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "すべて表示（5件）" }));
+    expect(screen.getByText("五")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "折りたたむ" }));
+    expect(screen.queryByText("五")).toBeNull();
+  });
+
+  it("shows no trade plan for a WAIT", () => {
+    const wait: AnalysisResult = {
+      ...fullResult, signal: "WAIT", entry_point: "—", stop_loss: "—",
+      take_profit_1: "—", take_profit_2: "—", take_profit_3: "—", risk_reward_ratio: "—",
+    };
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" />);
+    expect(screen.queryByTestId("trade-plan")).toBeNull();
+    expect(screen.queryByTestId("position-size")).toBeNull();
   });
 
   it("still renders a legacy v8-shaped result without the new fields", () => {
@@ -438,7 +495,13 @@ describe("LearnedRules", () => {
     const panel = screen.getByTestId("learned-rules");
     expect(panel).toHaveTextContent("What the AI has learned");
     expect(panel).toHaveTextContent("v3");
-    expect(panel).toHaveTextContent("Most losses come from tight stops");
+    // The editor's own summary is behind a fold with a caption saying whose
+    // voice it is — it is model prose with internal identifiers in it, and
+    // it used to be the first paragraph under the rules.
+    expect(panel).not.toHaveTextContent("Most losses come from tight stops");
+    fireEvent.click(screen.getByRole("button", { name: /Editor's note/ }));
+    expect(screen.getByTestId("editor-note")).toHaveTextContent("may use internal terms");
+    expect(screen.getByTestId("editor-note")).toHaveTextContent("Most losses come from tight stops");
     expect(panel).toHaveTextContent("[1h]Rule 1");
     expect(panel).toHaveTextContent("7 cases");
     expect(screen.queryByText("Rule 7")).toBeNull();
@@ -475,6 +538,30 @@ describe("LearnedRules", () => {
     // ...and only the mixed-era one is marked
     expect(screen.getAllByTestId("prior-evidence")).toHaveLength(1);
     expect(screen.getByTestId("learned-rules")).toHaveTextContent("incl. prior contract");
+  });
+
+  it("puts the badges under the rule text, not beside it", () => {
+    // On a 390px phone two shrink-0 badges beside the text left the text a
+    // third of the width — a few characters per line.
+    const rulebook = {
+      version: 7,
+      rules: [
+        { id: "old", text_ja: "旧証拠", text_en: "Old evidence", cause: "direction_wrong", support: 2, scope: null, since: null, contract: CURRENT_CONTRACT, evidence_contracts: ["entry_chosen_v1"] },
+      ],
+      summary: null,
+      updated_at: null,
+    };
+    render(<LearnedRules rulebook={rulebook} />, "en");
+    const text = screen.getByText("Old evidence");
+    const badge = screen.getByTestId("prior-evidence");
+    const badges = badge.parentElement!;
+    expect(badges).toHaveAttribute("data-testid", "rule-badges");
+    // the badge row is the text's next sibling in a column, and the text's
+    // parent is not the row that holds the badges
+    expect(text.nextElementSibling).toBe(badges);
+    expect(badge.parentElement).not.toBe(text.parentElement);
+    expect(text.closest("li")!.children).toHaveLength(2);
+    expect(badges).toHaveTextContent("under review, 2 cases");
   });
 
   it("holds back a rule written for a previous contract, and says how many", () => {
@@ -596,20 +683,165 @@ describe("PriceChart level pills", () => {
   });
 });
 
-describe("score cards", () => {
-  // Regression: volatility replaced sentiment via a ternary on ATR, so on every
-  // normal run (ATR always present) the model's sentiment was never displayed.
-  it("shows sentiment and volatility together when indicators are present", () => {
+describe("the model's self-ratings", () => {
+  // One quiet row of chips under the evidence, not five cards with bars: the
+  // scores are the model rating itself and nothing calibrates them.
+  it("shows all five in one row when indicators are present", () => {
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
-    expect(screen.getByText("センチメント")).toBeInTheDocument();
-    expect(screen.getByText("強気")).toBeInTheDocument();
-    expect(screen.getByText("ボラティリティ")).toBeInTheDocument();
+    const row = screen.getByTestId("self-ratings");
+    expect(row).toHaveTextContent("テクニカル 78");
+    expect(row).toHaveTextContent("ファンダ 55");
+    expect(row).toHaveTextContent("リスク 中");
+    expect(row).toHaveTextContent("強気");
+    expect(row).toHaveTextContent("ボラ 中");
+    expect(row.querySelectorAll(".glass")).toHaveLength(0);
   });
 
+  // Regression: volatility replaced sentiment via a ternary on ATR, so on every
+  // normal run (ATR always present) the model's sentiment was never displayed.
   it("still shows sentiment when there are no indicators", () => {
     render(<AnalysisResultView result={fullResult} techData={null} pair="USD/JPY" interval="1h" />);
-    expect(screen.getByText("センチメント")).toBeInTheDocument();
-    expect(screen.queryByText("ボラティリティ")).not.toBeInTheDocument();
+    const row = screen.getByTestId("self-ratings");
+    expect(row).toHaveTextContent("強気");
+    expect(row).not.toHaveTextContent("ボラ");
+  });
+});
+
+describe("why a WAIT is a WAIT", () => {
+  const wait: AnalysisResult = {
+    ...fullResult, signal: "WAIT", confidence: 66, entry_point: "—", stop_loss: "—",
+    take_profit_1: "—", take_profit_2: "—", take_profit_3: "—", risk_reward_ratio: "—",
+    warnings: [
+      "AIの判断は SELL でしたが、損切りが現在値に近すぎ（ATRの0.4倍）、ノイズで刈られる可能性が高いため見送り（WAIT）に変更しました",
+      "指標発表が近い",
+      "この分析は参考情報です。投資判断は自己責任で行ってください",
+    ],
+  };
+  const refused: EntryCheck = {
+    proposed_signal: "SELL", proposed_entry: 150.1, proposed_stop: 150.3, proposed_tp1: 149.5,
+    entry_type: "market", distance_atr: 0, stop_atr: 0.4, risk_reward: 3,
+    rejection: "stop_too_tight", atr: 0.45,
+  };
+
+  it("says the reason under the signal, from entry_check, and drops the server's sentence from the warnings", () => {
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={refused} analysisMode="full" />);
+    const reason = screen.getByTestId("wait-reason");
+    expect(reason).toHaveTextContent("見送りの理由");
+    expect(reason).toHaveTextContent("損切りが近すぎる（ノイズで刈られる）");
+    // The measured number the dropped server sentence used to carry
+    expect(screen.getByTestId("wait-reason-measured")).toHaveTextContent("ATR 0.4倍");
+    expect(reason).toHaveTextContent("SHORT（売り）の提案はサーバー側で却下され");
+    // Said once: the direction line and the summary were two sentences both
+    // beginning "AIの提案"
+    expect(reason.textContent?.match(/AIの提案/g) ?? []).toHaveLength(0);
+
+    const warnings = screen.getByTestId("warnings");
+    expect(warnings).toHaveTextContent("指標発表が近い");
+    expect(warnings).not.toHaveTextContent("見送り（WAIT）に変更");
+  });
+
+  it("finds the server's sentence behind the news-fallback sentence too", () => {
+    const fallback = { ...wait, warnings: ["ニュース検索が利用できなかったため、テクニカルのみで判断しています", ...wait.warnings] };
+    render(<AnalysisResultView result={fallback} techData={techData} pair="USD/JPY" interval="1h" entryCheck={refused} analysisMode="technical_fallback" />);
+    const warnings = screen.getByTestId("warnings");
+    expect(warnings).toHaveTextContent("ニュース検索が利用できなかった");
+    expect(warnings).toHaveTextContent("指標発表が近い");
+    expect(warnings).not.toHaveTextContent("見送り（WAIT）に変更");
+  });
+
+  it("does not call the model's own WAIT a refusal, and says so once", () => {
+    const own: EntryCheck = { ...refused, proposed_signal: "WAIT", rejection: "low_confidence", confidence: 45, confidence_floor: 60 };
+    const ownWait = { ...wait, warnings: ["AI自身の判断が見送り（WAIT）で、確信度45が公開の下限60に届きませんでした。", ...wait.warnings.slice(1)] };
+    render(<AnalysisResultView result={ownWait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={own} analysisMode="full" />);
+    const reason = screen.getByTestId("wait-reason");
+    expect(reason).toHaveTextContent("AI自身の確信度が公開の下限に届かなかった");
+    expect(screen.getByTestId("wait-reason-measured")).toHaveTextContent("確信度 45／下限 60");
+    expect(reason).not.toHaveTextContent("却下");
+    // One line, not the sentence and then a summary of the same sentence
+    expect(reason.querySelectorAll("p")).toHaveLength(1);
+    expect(screen.getByTestId("warnings")).not.toHaveTextContent("AI自身の判断が見送り");
+  });
+
+  it("leaves a model WAIT on a shut market to the preview banner, and still drops the server's sentence", () => {
+    const own: EntryCheck = { ...refused, proposed_signal: "WAIT", rejection: "market_closed" };
+    const shut = { ...wait, warnings: ["為替市場が閉まっているため、見送り（WAIT）にしました。プランは「今の値段で入る」前提で、その値段が存在しないので、エントリー・損切り・利確は出していません。", ...wait.warnings.slice(1)] };
+    render(<AnalysisResultView result={shut} techData={techData} pair="USD/JPY" interval="1h" entryCheck={own} analysisMode="full" />);
+    expect(screen.queryByTestId("wait-reason")).toBeNull();
+    const warnings = screen.getByTestId("warnings");
+    expect(warnings).toHaveTextContent("指標発表が近い");
+    expect(warnings).not.toHaveTextContent("為替市場が閉まっている");
+  });
+
+  it("still names the direction the model wanted when the market refused it by being shut", () => {
+    const shutRefusal: EntryCheck = { ...refused, rejection: "market_closed" };
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={shutRefusal} analysisMode="full" />);
+    const reason = screen.getByTestId("wait-reason");
+    expect(reason).toHaveTextContent("市場が閉まっていた");
+    expect(reason).toHaveTextContent("SHORT（売り）の提案は");
+  });
+
+  it("shows no reason, and keeps every warning, when entry_check names none", () => {
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={null} />);
+    expect(screen.queryByTestId("wait-reason")).toBeNull();
+    // The sentence is not dropped on a guess about its shape
+    expect(screen.getByTestId("warnings")).toHaveTextContent("見送り（WAIT）に変更");
+  });
+
+  it("reads in English", () => {
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={refused} />, "en");
+    const reason = screen.getByTestId("wait-reason");
+    expect(reason).toHaveTextContent("Why it is a WAIT");
+    expect(reason).toHaveTextContent("Stop inside the noise");
+    expect(reason).toHaveTextContent("0.4× ATR");
+    expect(reason).toHaveTextContent("The model's SHORT (Sell) was refused server-side");
+    expect(reason.textContent).not.toMatch(/[ぁ-んァ-ン一-龥]/);
+    // The full-width parentheses are Japanese punctuation, which the kana
+    // check above does not see
+    expect(reason.textContent).not.toMatch(/[（）]/);
+  });
+});
+
+describe("the disclaimer", () => {
+  // The footer carries it on every page; in the warnings box it was the first
+  // line of every result.
+  it("is not repeated in the warnings, in either language", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    // fullResult's only warning IS the disclaimer, so the box does not render
+    expect(screen.queryByTestId("warnings")).toBeNull();
+    expect(screen.queryByText(/自己責任/)).toBeNull();
+
+    const english = {
+      ...fullResult,
+      warnings: ["Thin liquidity into the London open.", "This analysis is reference information. Trading decisions are your own responsibility."],
+    };
+    render(<AnalysisResultView result={english} techData={techData} pair="USD/JPY" interval="1h" />, "en");
+    const box = screen.getByTestId("warnings");
+    expect(box).toHaveTextContent("Thin liquidity");
+    expect(box).not.toHaveTextContent(/your own responsibility/i);
+  });
+});
+
+describe("market context labels", () => {
+  // They were English literals: "Market Mode", "Smart Money", "Stop Hunt
+  // Zone" in the middle of a Japanese screen.
+  it("come from the dictionary in both locales", () => {
+    const { unmount } = render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    fireEvent.click(screen.getByRole("button", { name: /相場環境と水準/ }));
+    const jaPanel = screen.getByTestId("market-context");
+    for (const label of Object.values(ja.context)) expect(jaPanel).toHaveTextContent(label);
+    expect(jaPanel).not.toHaveTextContent("Market Mode");
+    expect(jaPanel).not.toHaveTextContent("Smart Money");
+    expect(jaPanel).not.toHaveTextContent("Stop Hunt Zone");
+    unmount();
+
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />, "en");
+    fireEvent.click(screen.getByRole("button", { name: /Market context and levels/ }));
+    const enPanel = screen.getByTestId("market-context");
+    for (const label of Object.values(en.context)) expect(enPanel).toHaveTextContent(label);
+    // The summary is the model's own prose, written in the locale of the
+    // request; everything around it is chrome and must be English
+    const chrome = (enPanel.textContent ?? "").replace(fullResult.market_context, "");
+    expect(chrome).not.toMatch(/[ぁ-んァ-ン一-龥]/);
   });
 });
 
@@ -619,11 +851,12 @@ describe("localisation", () => {
 
     expect(screen.getByText("Trade plan")).toBeInTheDocument();
     expect(screen.getByText("Take profit 3")).toBeInTheDocument();
-    expect(screen.getByText("Sentiment")).toBeInTheDocument();
+    expect(screen.getByText("Model's self-ratings")).toBeInTheDocument();
     expect(screen.getByText("Bullish")).toBeInTheDocument();
+    expect(screen.getByTestId("stop-distance")).toHaveTextContent("62 pips · 1.4× ATR");
     // and no Japanese chrome leaks through
     expect(screen.queryByText("トレードプラン")).not.toBeInTheDocument();
-    expect(screen.queryByText("センチメント")).not.toBeInTheDocument();
+    expect(screen.queryByText("AIの自己評価")).not.toBeInTheDocument();
   });
 
   it("shows the direction word and its plain-language gloss in both locales", () => {

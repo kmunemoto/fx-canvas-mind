@@ -241,7 +241,7 @@ const PriceChart = ({
   };
 
   return (
-    <div ref={boxRef} className="glass rounded-xl border border-border p-3 border-glow">
+    <div ref={boxRef} className="glass rounded-xl border border-border p-3">
       <div className="flex items-center justify-between gap-2 px-1 pb-2">
         <span className="text-xs font-semibold text-foreground shrink-0">{heading ?? t.chart.title}</span>
         <span className="text-[10px] text-muted-foreground font-mono truncate text-right">
