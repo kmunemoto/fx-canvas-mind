@@ -475,6 +475,11 @@ export const en: Dict = {
       cases === cited
         ? `Compared against all ${cited} plans it was drawn from.`
         : `Only ${cases} of the ${cited} plans it cites still carry the reading of the day; compared against those.`,
+    claimed: "AI says used",
+    claimedNote:
+      "\"AI says used\" marks the rules the analyst itself said it applied on this call, not anything the server measured (a run that said nothing carries no marks).",
+    claimedNone:
+      "The analyst itself reported using none of these rules on this call. The server's own verdicts above are separate and stand as they are.",
     ruleGone: (id: string) => `(${id}: text unavailable)`,
     note:
       "The \"fits\" verdict is a mechanical comparison the server made between today's readings and those measured on the past plans each rule was drawn from (ADX, RSI, distance from SMA20 in ATR, position in the Bollinger band, higher-timeframe ADX). It is not a claim made by the rule's own text. The rules are learned from every account's record, so the evidence counts include plans that are not in your own history.",
