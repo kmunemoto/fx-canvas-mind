@@ -50,7 +50,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v22-2026-09-08T10:30:00Z";
+const POSTMORTEM_VERSION = "postmortem-v23-2026-09-08T14:00:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -122,6 +122,40 @@ const strOrNull = (value: unknown): string | null => (typeof value === "string" 
 
 const strList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+
+// What one draft of the rulebook did to another, by rule id.
+//
+// parseConsolidation already reports the draft's changes against the LIVE
+// book, and that is a different question from what the draft did to the DRAFT
+// BEFORE IT. An operator watching the run summary can see what the candidate
+// does to version 8 and cannot see whether the editor is converging or
+// thrashing. On 2026-09-08 two candidates were written four hours apart and
+// only the later one can still be read: it added r12 and r13, removed r10 and
+// reworded r4 and r11 (queried from rulebook.candidate.changes). What the
+// 07:38 draft contained is already gone — which is the point — so it is not
+// enumerated here; see the held-candidate write for what survives of it.
+// Both drafts reported against v8, neither against each other.
+//
+// `reworded` is the same test parseConsolidation applies (a kept id whose
+// trimmed text_ja, text_en or cause moved), so the two diffs printed side by
+// side in one report mean the same thing by the same word. Trimmed on both
+// sides for the same reason it is there: an untrimmed comparison made the
+// first live `reworded` a false positive on v8's r11.
+const ruleSetDiff = (before: Rule[], after: Rule[]) => {
+  const prior = new Map(before.map((r) => [r.id, r]));
+  const next = new Map(after.map((r) => [r.id, r]));
+  const same = (a: string, b: string) => a.trim() === b.trim();
+  const moved = (was: Rule, now: Rule) =>
+    !same(was.text_ja, now.text_ja) || !same(was.text_en, now.text_en) || was.cause !== now.cause;
+  return {
+    added: after.filter((r) => !prior.has(r.id)).map((r) => r.id),
+    removed: before.filter((r) => !next.has(r.id)).map((r) => r.id),
+    reworded: after.filter((r) => {
+      const was = prior.get(r.id);
+      return was !== undefined && moved(was, r);
+    }).map((r) => r.id),
+  };
+};
 
 const constantTimeEqual = (a: string, b: string): boolean => {
   if (a.length !== b.length) return false;
@@ -1498,10 +1532,66 @@ Deno.serve(async (req: Request) => {
             // Held back. The candidate is replaced each time rather than
             // queued, so what is waiting is always the freshest reading of
             // the evidence.
+            //
+            // That overwrite is deliberate and stays. What did not survive it
+            // was any trace of the OUTGOING draft: `history` only ever
+            // receives PROMOTED versions, and no candidate has ever been
+            // promoted, so a discarded draft was recorded nowhere durable at
+            // all. On 2026-09-08 two candidates were written four hours apart.
+            // The 07:38 one is already unreadable: the run report that carried
+            // its changes has aged out of net._http_response (that table held
+            // 07:53 to 13:48 — 54 rows, under six hours — when this was
+            // written), and all that still proves it existed is the 07:53 run
+            // reporting lessons_since_version 0 with a lesson stamped
+            // 07:38:24, which only a revision written in between can explain.
+            // The 11:39 one is still in the column: added r12 and r13, removed
+            // r10, reworded r4 and r11. Losing the first within the day is the
+            // whole reason for what follows.
+            //
+            // NOTE THE BOUNDARY: this trail lives in `candidate`, and both
+            // promotion paths write `candidate: null`, so it is discarded when
+            // the version finally advances — the one moment the question is
+            // most worth asking. Carrying it onto the `history` entry would
+            // fix that and needs no migration either; it is left alone here
+            // only because it changes the promotion write, which this change
+            // deliberately does not touch.
+            //
+            // So the outgoing draft is folded into the incoming one as
+            // METADATA: when it was written, how many rules it carried, and
+            // its own `changes`. Not the rule bodies — those are the bulk of a
+            // document that is already large, and none of them is needed to
+            // ask whether the editor is converging. Enumerated field by field
+            // rather than spread, so a trail never carries its own trail and
+            // the document cannot square on every run. Capped the way this
+            // file caps its other trails (HISTORY_KEEP), and it lives inside
+            // the existing `candidate` jsonb, so there is no column to add.
+            const priorSuperseded = Array.isArray(priorCandidate?.superseded) ? priorCandidate.superseded : [];
+            const superseded = priorCandidate
+              ? [...priorSuperseded.slice(-(HISTORY_KEEP - 1)), {
+                created_at: strOrNull(priorCandidate.created_at),
+                base_version: numberOrNull(priorCandidate.base_version),
+                rules: Array.isArray(priorCandidate.rules) ? priorCandidate.rules.length : null,
+                changes: isRecord(priorCandidate.changes) ? priorCandidate.changes : {},
+                episode_definition_version: numberOrNull(priorCandidate.episode_definition_version),
+              }]
+              : priorSuperseded;
+            // Null when there was no previous draft, and null again when the
+            // stored one has no readable rules. Neither of those is an empty
+            // diff: diffing against an empty book would report every rule in
+            // the new draft as ADDED and print a total rewrite that never
+            // happened. "No previous draft to compare against" is the honest
+            // answer to both, and it is the same distinction the promotion
+            // branch makes when it refuses to promote a candidate whose rules
+            // will not parse.
+            const priorDraftRules = priorCandidate ? parseRules(priorCandidate.rules) : [];
+            const changesSinceCandidate = priorDraftRules.length > 0
+              ? ruleSetDiff(priorDraftRules, consolidated.rules)
+              : null;
             const n = await patchRows(`rulebook?id=eq.1&version=eq.${previousVersion}`, {
               candidate: {
                 base_version: previousVersion,
                 rules: consolidated.rules,
+                superseded,
                 summary: { ja: consolidated.summary_ja, en: consolidated.summary_en },
                 changes: consolidated.changes,
                 lessons_considered: lessons.length,
@@ -1522,6 +1612,19 @@ Deno.serve(async (req: Request) => {
                 reason: "candidate_held",
                 candidate_rules: consolidated.rules.length,
                 changes: consolidated.changes,
+                // `changes` above is the draft against the LIVE book, which is
+                // the only thing this summary used to say. It answers "what
+                // would promoting this do to version 8" and cannot answer "is
+                // the editor settling or reversing itself", because two drafts
+                // that contradict each other report against the same v8 and
+                // look alike. Both rule sets are in memory at this point, so
+                // the second diff costs nothing to state.
+                changes_since_candidate: changesSinceCandidate,
+                previous_candidate_at: strOrNull(priorCandidate?.created_at),
+                // How many outgoing drafts the candidate now carries, so a
+                // reader can tell "first draft" from "trail capped and rolling"
+                // without fetching the column.
+                superseded_kept: superseded.length,
                 // Episodes, not rows, and named so: ten plans on one pair in
                 // one afternoon are one reading restated ten times, and the
                 // old key counted those as ten measurements.

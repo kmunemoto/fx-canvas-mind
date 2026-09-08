@@ -4,6 +4,7 @@ import type { Rulebook } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst } from "@/lib/candleTime";
 import { CURRENT_CONTRACT } from "@/lib/outcomeStats";
+import Disclosure from "./Disclosure";
 
 interface Props {
   rulebook: Rulebook | null;
@@ -65,39 +66,46 @@ const LearnedRules = ({ rulebook }: Props) => {
         <p className="text-xs text-muted-foreground">{heldBack > 0 ? s.noneInForce : s.empty}</p>
       ) : (
         <>
-          {summary && <p className="text-xs text-muted-foreground">{summary}</p>}
           <ol className="space-y-1.5">
             {visible.map((r, i) => (
               <li key={r.id} className="flex items-start gap-2 text-xs">
                 <span className="font-mono text-muted-foreground shrink-0 w-5 text-right">{i + 1}.</span>
-                <span className="flex-1 text-foreground">
-                  {r.kind && (
-                    <span className={`mr-1 px-1 py-px rounded text-[10px] font-semibold ${
-                      r.kind === "constraint" ? "bg-warning/15 text-warning" : "bg-primary/10 text-primary"
-                    }`}>
-                      {s.kind[r.kind]}
+                {/* The badges go UNDER the text, never beside it. As a flex
+                    row with two shrink-0 badges the rule text was squeezed to
+                    a third of a 390px screen — a few characters per line — on
+                    the owner's phone. */}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="text-foreground">
+                    {r.kind && (
+                      <span className={`mr-1 px-1 py-px rounded text-[10px] font-semibold ${
+                        r.kind === "constraint" ? "bg-warning/15 text-warning" : "bg-primary/10 text-primary"
+                      }`}>
+                        {s.kind[r.kind]}
+                      </span>
+                    )}
+                    {r.scope && <span className="text-muted-foreground mr-1">[{r.scope}]</span>}
+                    {text(r)}
+                  </p>
+                  <div className="flex flex-wrap gap-1" data-testid="rule-badges">
+                    {r.evidence_contracts?.some((c) => c !== CURRENT_CONTRACT) && (
+                      <span
+                        className="px-1.5 py-0.5 rounded border border-warning/30 text-warning text-[10px]"
+                        title={s.priorEvidenceNote}
+                        data-testid="prior-evidence"
+                      >
+                        {s.priorEvidence}
+                      </span>
+                    )}
+                    <span
+                      className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${
+                        r.support <= VERIFYING ? "border-warning/40 text-warning" : "border-border text-muted-foreground"
+                      }`}
+                      title={s.supportNote}
+                    >
+                      {r.support <= VERIFYING ? s.verifyingSupport(r.support) : s.support(r.support)}
                     </span>
-                  )}
-                  {r.scope && <span className="text-muted-foreground mr-1">[{r.scope}]</span>}
-                  {text(r)}
-                </span>
-                {r.evidence_contracts?.some((c) => c !== CURRENT_CONTRACT) && (
-                  <span
-                    className="shrink-0 px-1.5 py-0.5 rounded border border-warning/30 text-warning text-[10px]"
-                    title={s.priorEvidenceNote}
-                    data-testid="prior-evidence"
-                  >
-                    {s.priorEvidence}
-                  </span>
-                )}
-                <span
-                  className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-mono ${
-                    r.support <= VERIFYING ? "border-warning/40 text-warning" : "border-border text-muted-foreground"
-                  }`}
-                  title={s.supportNote}
-                >
-                  {r.support <= VERIFYING ? s.verifyingSupport(r.support) : s.support(r.support)}
-                </span>
+                  </div>
+                </div>
               </li>
             ))}
           </ol>
@@ -110,6 +118,17 @@ const LearnedRules = ({ rulebook }: Props) => {
               {showAll ? <ChevronUp className="h-3 w-3" aria-hidden="true" /> : <ChevronDown className="h-3 w-3" aria-hidden="true" />}
               {showAll ? s.showLess : s.showAll(rules.length)}
             </button>
+          )}
+          {/* The editor's summary is stored prose written by the model for
+              itself: it names internal identifiers and can assert something
+              the current version no longer holds. It was the first paragraph
+              under the rules. It is kept verbatim — it is stored data — but
+              behind a fold, with a caption saying whose voice it is. */}
+          {summary && (
+            <Disclosure title={s.editorNote} testId="editor-note">
+              <p className="text-[10px] text-muted-foreground mb-1">{s.editorNoteCaption}</p>
+              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{summary}</p>
+            </Disclosure>
           )}
           <p className="text-[10px] text-muted-foreground">{s.note}</p>
           <p className="text-[10px] text-muted-foreground">{s.supportNote} {s.cadence}</p>

@@ -3,6 +3,8 @@ import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
 import { LOCALES, DEFAULT_LOCALE, dictionaryFor, isLocale, resolveLocale } from "../lib/i18n/locales";
 import { CAUSES } from "../../supabase/functions/postmortem/facts.ts";
+import { ENTRY_REJECTIONS, type EntryRejection } from "../lib/types";
+import type { Rejection } from "../../supabase/functions/analyze/entry.ts";
 
 // Walks both dictionaries together. TypeScript already requires every key, but
 // it cannot catch a value left as the Japanese original, or an array that has
@@ -106,6 +108,51 @@ describe("the cause taxonomy is fully labelled on both sides", () => {
     for (const key of Object.keys(en.history.postmortem.causes)) {
       expect(CAUSES, `en labels unknown cause ${key}`).toContain(key);
     }
+  });
+});
+
+// The same hole, one screen over, and quieter. OutcomeDetail.tsx renders the
+// gate's reason as `check.rejection in g.reasons ? g.reasons[...] : null` — a
+// membership test with no fallback to the key, so an unlabelled rejection
+// renders NOTHING at all: no badge, no raw enum string, no error, and only in
+// the language whose dictionary is short. The row still shows a refused plan
+// with no reason given, which reads as "no reason was recorded".
+//
+// Walked off ENTRY_REJECTIONS rather than a list written out here, so adding a
+// rejection cannot leave this test agreeing with a stale copy of itself.
+describe("the gate's rejections are fully labelled on both sides", () => {
+  it("has a ja and en label for every rejection the gate can stamp", () => {
+    for (const rejection of ENTRY_REJECTIONS) {
+      expect(ja.history.gate.reasons, `ja is missing ${rejection}`).toHaveProperty(rejection);
+      expect(en.history.gate.reasons, `en is missing ${rejection}`).toHaveProperty(rejection);
+    }
+  });
+
+  it("labels no rejection the gate cannot stamp", () => {
+    for (const key of Object.keys(ja.history.gate.reasons)) {
+      expect(ENTRY_REJECTIONS, `ja labels unknown rejection ${key}`).toContain(key);
+    }
+    for (const key of Object.keys(en.history.gate.reasons)) {
+      expect(ENTRY_REJECTIONS, `en labels unknown rejection ${key}`).toContain(key);
+    }
+  });
+
+  // The two tests above walk ENTRY_REJECTIONS, and ENTRY_REJECTIONS is the
+  // CLIENT's copy: the gate's own union is Rejection in analyze/entry.ts, with
+  // market_closed and low_confidence stamped on top of it by analyze/index.ts.
+  // Nothing in the language ties the two together, so a member added to the
+  // server union would leave both tests above green while OutcomeDetail
+  // rendered that rejection as nothing at all — in BOTH languages this time,
+  // which is strictly worse than the hole they were written to close.
+  //
+  // The assignment below is the tie, and it is checked by
+  // `tsc --noEmit -p tsconfig.app.json` rather than by vitest, because a type
+  // has no runtime to walk. It stops compiling the moment the server can
+  // produce a rejection this dictionary-checked array does not carry. The
+  // expect only keeps the import from being dropped as unused.
+  it("carries every rejection the server's own union can produce", () => {
+    const asLabelled = (r: Rejection): EntryRejection => r;
+    expect(ENTRY_REJECTIONS).toContain(asLabelled("poor_rr"));
   });
 });
 

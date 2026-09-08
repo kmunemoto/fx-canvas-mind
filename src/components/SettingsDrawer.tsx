@@ -180,34 +180,6 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
               ))}
             </select>
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm text-muted-foreground">{t.settings.balance}</label>
-              <input
-                type="number"
-                min={0}
-                step={10000}
-                value={settings.accountBalance}
-                onChange={(e) => updateSettings({ ...settings, accountBalance: Math.max(0, +e.target.value) })}
-                className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground">{t.settings.riskPercent}</label>
-              <input
-                type="number"
-                min={0.1}
-                max={10}
-                step={0.1}
-                value={settings.riskPercent}
-                onChange={(e) => updateSettings({ ...settings, riskPercent: Math.min(10, Math.max(0.1, +e.target.value)) })}
-                className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-          </div>
-
-          <p className="text-[11px] text-muted-foreground leading-relaxed">{t.settings.sizingNote}</p>
         </div>
       </div>
 

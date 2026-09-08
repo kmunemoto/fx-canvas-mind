@@ -72,23 +72,62 @@ export const ja = {
     tp1: "利確 TP1",
     tp2: "利確 TP2",
     tp3: "利確 TP3",
-    technical: "テクニカル",
-    fundamental: "ファンダメンタル",
-    risk: "リスク評価",
-    sentiment: "センチメント",
-    volatility: "ボラティリティ",
-    keyFactors: "判断の主要因",
+    // 損切り・TP1 までの距離。ATR は取得データに無いこともあるので省略可
+    distance: (pips: number, atr: number | null) =>
+      atr === null ? `${pips} pips` : `${pips} pips・ATR ${atr}倍`,
+    evidence: "根拠",
+    showAll: (n: number) => `すべて表示（${n}件）`,
+    showLess: "折りたたむ",
+    // AI の自己採点。何も較正していない数字なので、カードではなく一列のチップ
+    ratings: {
+      label: "AIの自己評価",
+      technical: "テクニカル",
+      fundamental: "ファンダ",
+      risk: "リスク",
+      volatility: "ボラ",
+    },
     inferenceChip: "推測",
     inferenceNote: "板情報・出来高・建玉・約定履歴は取得していません。「推測」と付いた記述は値動きからの解釈であって、観測した事実ではありません。",
     detail: "詳細分析",
-    warnings: "注意事項",
-    positionSize: "推奨ポジションサイズ",
-    lots: (lots: number, units: number) => `${lots.toFixed(2)} ロット（${units.toLocaleString("ja-JP")} 通貨）`,
-    riskLine: (pips: number, risk: number) => `損切り幅 ${pips} pips ＝ 損失 約${risk.toLocaleString("ja-JP")} 円（設定したリスク割合）`,
-    noSizing: (pair: string) => `${pair} は損益がドル建てのため、円資金からのロット計算は行いません（換算レートを保持していないため）。`,
+    marketContext: "相場環境と水準",
+    warnings: "注意",
+    // 見送り（WAIT）の理由。entry_check から読むので、警告文の位置や文言には依存しない
+    waitReason: {
+      label: "見送りの理由",
+      // AI 自身が WAIT と答え、その確信度が公開の下限に届かなかった回。サーバー
+      // が覆したわけではないので、history.gate.reasons.low_confidence は使わない
+      ownLowConfidence: "AI自身の確信度が公開の下限に届かなかったため、エントリー・損切り・利確は出していません",
+      // サーバーが却下した回の2行目。AI が出していた方向を残す
+      refused: (word: string, gloss: string) => `${word}（${gloss}）の提案はサーバー側で却下され、WAITとして公開されました`,
+      // 却下の根拠になった実測値。文言だけでは「近すぎる」がどれだけ近いのか分からない
+      atrMultiple: (n: number) => `ATR ${n}倍`,
+      confidence: (score: number, floor: number) => `確信度 ${score}／下限 ${floor}`,
+    },
     riskLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
     sentiments: { BULLISH: "強気", NEUTRAL: "中立", BEARISH: "弱気" },
     volatilityLevels: { Low: "低", Medium: "中", High: "高" },
+  },
+
+  // 「相場環境と水準」の行ラベル。値の側（Trend Day / Up など）はサーバーの定型英語のまま
+  context: {
+    mode: "相場モード",
+    structure: "構造",
+    smartMoney: "スマートマネー",
+    strength: "勢い",
+    session: "セッション",
+    direction: "方向",
+    continuity: "継続性",
+    summary: "要約",
+    levels: "主要な水準",
+    resistance: "レジスタンス",
+    support: "サポート",
+    stopHunt: "ストップ狩りゾーン",
+  },
+
+  // 折りたたみ行の開閉ラベル
+  disclosure: {
+    open: "開く",
+    close: "閉じる",
   },
 
   chart: {
@@ -114,6 +153,9 @@ export const ja = {
     spanA: "一目 先行A(26本先)",
     spanB: "一目 先行B(26本先)",
     cloudNow: "現在価格の雲(26本前算出)",
+    cloudTop: "上",
+    cloudBottom: "下",
+    indicators: "指標の数値",
     cloudSides: { above: "価格は雲の上", inside: "価格は雲の中", below: "価格は雲の下" },
     forming: "この足はまだ形成中",
   },
@@ -406,6 +448,10 @@ export const ja = {
     priorEvidence: "旧契約の実績を含む",
     priorEvidenceNote: "このルールの根拠には、アナリストがエントリー価格を選んでいた旧契約時代のプランが含まれます",
     noneInForce: "現在の契約で有効なルールはまだありません。新しいプランが決着し検証されると、ここに追加されます",
+    // ルールブックを改訂する AI が自分用に残す文。内部の識別子や、既に古くなった
+    // 主張を含むことがあるので、ルールの下に最初に読む段落にはしない
+    editorNote: "改訂AIのメモ",
+    editorNoteCaption: "ルールブックを改訂するAIが自分用に残したメモです。内部用語を含むことがあり、現在の状態と合っていない場合があります。",
   },
 
   // Whether the automatic review loop is running (public.loop_health)
@@ -433,7 +479,7 @@ export const ja = {
 
   // その回の分析が参照したルールと、今の相場との照合結果（サーバ実測）。
   ruleFit: {
-    title: "この分析が参照したルール",
+    title: "適用されたルール",
     summary: (matched: number, total: number) => `${total}件を提示し、うち${matched}件が今の相場に該当。`,
     heldBack: (n: number) => `文字数の都合で${n}件を省略（今の相場から遠いものから）。`,
     verdicts: {
@@ -561,9 +607,6 @@ export const ja = {
     cancelPlan: "プランを解約する",
     upgrade: "プランをアップグレード",
     pair: "取引通貨ペア",
-    balance: "資金 (円)",
-    riskPercent: "1トレードのリスク (%)",
-    sizingNote: "損切り・利確の幅はAIが相場（ATRと値動きの節目）から決めます。ここで決めるのは「幅」ではなく「枚数」で、損切りに当たったときの損失が資金のこの割合になるようロット数を計算します。",
     cancelTitle: "プランを解約しますか？",
     cancelBody: (plan: string) => `${plan}プランを解約します。期間終了日までは現在のプランを引き続きご利用いただけます。`,
     cancelBody2: "期間終了後は自動的にFreeプランへ切り替わります。",

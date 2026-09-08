@@ -60,7 +60,12 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   `MIN_RISK_REWARD 1.2`、`MAX_RISK_REWARD 6`、`FALLBACK_ATR_RATIO 0.0015`、`TREND_ADX 25` / `RANGE_ADX 20`、`MOMENTUM_MODES = trend day / breakout`。
   ゲートが「約定可能性」（`too_far` / `should_be_market`）を理由に拒否したプランは **shadow 行** として追跡だけ続ける（§4.4）。
   ただし market_v1 ではエントリーが常に現在値なので `inferEntryType` は必ず `market` を返し、この 2 つの拒否は起こらない。現行の analyze は shadow 行を書かない（本番の `analyses` に shadow 行は 1 件も無い。2026-09-05 時点）。
-  現行で起こる拒否は `incoherent` / `stop_too_tight` / `poor_rr` / `target_out_of_reach` で、これらは shadow を作らない。
+  実際に記録に出た拒否は `low_confidence` / `market_closed` / `poor_rr` の 3 種類だけで、**`incoherent` は 1 件も出ていない**。`stop_too_tight` と `target_out_of_reach` も 0 件（`entry_check.rejection` を全行で数えた。2026-09-08 13:50Z 実測で `low_confidence` 17 / `market_closed` 4 / `poor_rr` 1、母集団 59 行）。いずれも「約定可能性」の拒否ではないので shadow を作らない（本番の `analyses` に shadow 行は今も 1 件も無い）。
+  **件数は 1 時間に数件のペースで動く**（この段落を書いてから読み直すまでの数分で `low_confidence` が 16 → 17 になった）。読むべきは「どの拒否が出て、どれが出ていないか」であって、写した数字ではない。数え直すなら `entry_check->>'rejection'` で group by すること。
+  そして拒否の件数を「サーバが覆した回数」と読まないこと。2 段で外れる:
+  1. `low_confidence` は**全行が `proposed_signal = WAIT`**。AI 自身が見送った行に確信度の下限が刻まれただけで、何も覆していない。`rejection` の文字列では区別できず、区別するのは `outcomeStats.ts` の `isRejected`（`signal = WAIT` かつ `proposed_signal` が BUY/SELL）。
+  2. `market_closed` は **4 件すべてが `preview`**（休場中の下見）。`tally` は `isRejected` を呼ぶ**前に** shadow と preview を母集団から外すので（`outcomeStats.ts:358`、`:364`）、この 4 件はどの統計にも入らない。
+  結果、**サーバが提案された BUY/SELL を覆した記録は `poor_rr` の 1 件だけ**（RR 1.19 対 下限 1.20。`outcomeStats.ts:151-155` が名指しているのがこの行）。画面が 16 と出していたのを 1 に直したのがこの 2 段で、ここで `market_closed` を足して「3 件」と書くと、その過大計上がそのまま戻る。
 
 ### 2.0 値動きの構造とダイバージェンス（サーバ計算）
 
@@ -344,12 +349,26 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   時計は「最後に**書かれた**改訂」= `rulebook.candidate.created_at`（候補が無ければ `updated_at`）。候補を保留している間 `updated_at` は止まるので、そちらを時計にすると 24h の門が毎回開く。
 - **改訂は書くところと版に上げるところが別**（`rulebook.candidate` 列）。`revisionDue` が開いたら新しい書は `candidate` に入り、`rules` と `version` は動かない。
   分析が読むのは `rules` だけなので、候補が待っている間も現行版がそのまま出る。
-- 候補が版に上がる条件 `measured`: 現行版で決着した非 shadow のプランが `MIN_DECIDED_PER_VERSION = 10` 件（`outcome in (win, loss, expired)`、`rulebook_version = 現行版`）。
-  版 0（まだルールが無い）は最初の候補で無条件に上がる。上がらない限り学習は止まらない（候補は毎回上書きされ、最新の教訓を反映し続ける）。
-  **これは「10 件たまるまで改訂しない」ではない**: 文字どおり門にすると、決着が月に数件の今のペースでは数か月ルールが 1 行も増えない。書き続け、切り替えだけを律速する。
+- 候補が版に上がる条件 `measured`（`postmortem/promotion.ts` の `promotionGate`）: 現行版で決着したプランが **`MIN_DECIDED_EPISODES = 10` エピソード**（`promotion.ts:29`）。
+  母集団は `rulebook_version = 現行版`・`outcome in (win, loss, expired)`・`shadow is false`・`preview is false` を `created_at` 昇順で `DECIDED_ROW_LIMIT = 1000` 件まで（`decidedRowsPath`）。週末の下見は採点も診断もされないのに `rulebook_version` は持つので、`outcome` の条件で既に外れていても `preview` を明示で外す（副作用で成り立っている不変条件は、壊れても誰も気付かない）。
+- **数える単位は行ではなくエピソード**（`_shared/episodes.ts` の `episodeCount`。定義は下のクラスタの規則と同じ 1 つ）。同じペア・同じ方向のプランが一日のうちに 10 件並んでも、それは 1 つの局面を 10 回言い直しただけで、10 回の測定ではない。それを 10 件と数えると、たった一日の午後を根拠にルールブックを切り替えることになる。
+  ルールの support も実績の「独立した局面」も既にエピソードで数えていて、ここが行で数えていた最後の場所だった。
+  **この差は今の実データで開いている。2026-09-08 実測: 版 8 で決着した非 shadow・非 preview の行は 13 件、エピソードは 3 件**。行で読むと 13/10 で門が開いて見えるが、門は 3/10 で閉じている。行を数える運用判断はここで必ず間違える。
+- 版 0（まだルールが無い）は最初の候補で無条件に上がる（ルールが無い版で作れたコホートは存在しないので、待たせると永久に待つ）。
+  読み取りに失敗したとき、およびペア・方向・時刻が欠けて局面を特定できない行が 1 件でも混じったときは 0 件に丸めず `episodes: null` を返し、`errors` に出して昇格しない（**不明な件数は少ない件数ではない**。0 に丸めると、昇格に値した改訂を降格させたうえで、その丸めを実測値として報告することになる）。
+  母集団が `DECIDED_ROW_LIMIT` で切れた場合の件数は真の値の**下限**（読みは時刻昇順の先頭から、走査は前向きのみ）。門が訊くのは「10 以上か」だけなので下限で判定しても安全側にしか倒れず、切れたことは `decided_population_truncated` に出す。
+  上がらない限り学習は止まらない（候補は毎回上書きされ、最新の教訓を反映し続ける）。
+  **これは「10 エピソードたまるまで改訂しない」ではない**: 文字どおり門にすると、決着が月に数件の今のペースでは数か月ルールが 1 行も増えない。書き続け、切り替えだけを律速する。
 - 昇格は独立した書き込みで、その run が新しい候補を書いたかどうかに依存しない（依存させると「候補は書けたが版は上がらない」状態から抜けられない）。
   昇格した run は `promoted_from_candidate: true` を記録し、`candidate` を null に戻す。`last_result.promoted` に上がった版が入る。
-- 進捗の見せ方: `loop_health` の `candidate_waiting` / `candidate_created_at` / `decided_under_version` を `LoopHealth` が読み、候補が待っている間は「教訓あと n 件」ではなく「決着 x/10 件で適用」と出す（教訓の数はもう関係しないため）。
+- **捨てられた草案の跡**（`rulebook.candidate.superseded`、`HISTORY_KEEP = 20` 世代で頭から切る配列。既存の jsonb の中なので列は増えていない）。
+  上書きそのものは意図どおりで変えないが、`history` に入るのは**昇格した版だけ**なので、まだ 1 度も昇格していない今、出ていく草案はどこにも残らなかった（2026-09-08 に 4 時間差で 2 つの候補が書かれ、前のものは pg_net の応答本体にしか残っていない。その表の保持は 6 時間弱）。
+  残すのは **メタデータだけ**: `created_at` / `base_version` / `rules`（**本数**。本文は残さない。書が既に大きく、収束しているかを問うのに本文は要らない）/ `changes` / `episode_definition_version`。
+  **昇格するとこの跡も `candidate` ごと消える**（昇格の 2 経路がどちらも `candidate: null` を書く）。版が上がる瞬間が「切り替わる前に編集者は往復していたか」を最も訊きたい瞬間なので、そこは今も残っていない。残すなら `history` の要素か `stats` に載せることになる（列は増えない）。
+- 進捗の見せ方: `LoopHealth` が読むのは `loop_health` の `candidate_waiting`（`LoopHealth.tsx:70`）と `decided_episodes_under_version`（`:90`）の 2 つで、候補が待っている間は「教訓あと n 件」ではなく「**独立した局面が x/10 件**で適用」と出す（教訓の数はもう関係しないため）。
+  `candidate_created_at` も `loop_health` は返すが **画面はまだ使っていない**（型 `src/lib/types.ts:499` にあるだけ）。読まれている前提で消すと壊れる、を避けるためにここに書く。
+  旧キー `decided_under_version` は **行数のまま** 残してあり、読みは `decided_episodes_under_version ?? decided_under_version`。移行前のクライアントに 0/10 を出させないための保険で、エピソードの数を持つ版が来ればそちらが勝つ。
+  数え方の版 `EPISODE_DEFINITION_VERSION = 2` は門の判定にも候補にも刻む（`episode_definition_version`）。数え方が変わったのと分析が上手くなったのは、この番号なしでは後から区別できない。
 - 改訂は 1 回の run につき最大 1 回（統合の分岐が 1 つあるだけで、回数を決める定数はない。`MAX_REVISIONS` は thin の再診断回数、§4.1）。
 - 既存の id のまま本文や cause が書き換わったルールは `changes.reworded` に出る。追加でも削除でもないので `since` は据え置きだが、
   記録が無いと「版だけ上がって差分が空」なのに分析者が従う文章は入れ替わっている、という読めない改訂になる。
@@ -359,7 +378,9 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 - 改訂のモデル呼び出しは診断の 45 秒とは別予算: 壁時計の残り − `WRITE_RESERVE_MS = 10 秒` を `MAX_CONSOLIDATION_MS = 110 秒` まで。
   それが `MIN_CONSOLIDATION_MS = 45 秒` 未満なら改訂せず `rulebook.reason = deferred_time_budget` を返す。起きるのは run の経過が 75 秒を超えたときだけで、実測は診断 1 件で約 24 秒・残予算 96 秒（`net._http_response` id 556）。
   この単価なら 3 件でも 45 秒は割らないので、`deferred_time_budget` が常態化していたら診断が想定より遅いということ。
-- `last_result.rulebook.reason` の読み方: `no_lessons` / `evidence_unavailable` / `waiting`（`lessons_since_version`、`lessons_needed` 付き）/ `deferred_time_budget` / `revised: true`（`changes` 付き）。
+- `last_result.rulebook.reason` の読み方（`index.ts` が出す 6 種類すべて）: `no_lessons` / `lessons_unavailable`（**教訓テーブルが読めなかった**。`no_lessons` と逆の意味で、空と読み違えないために別名にしてある）/ `evidence_unavailable` / `waiting`（`lessons_since_version`、`lessons_needed` 付き）/ `deferred_time_budget` / `candidate_held`。改訂して版まで上げた run は reason を持たず `revised: true`（`changes` 付き）。
+  `candidate_held` が **今この本番で毎回出ている値**（版 8 の門が 3/10 で閉じているため。§4.3）。付く鍵は `candidate_rules` / `changes`（＝現行版に対する差分）/ `changes_since_candidate`（＝**上書きされた前の候補**に対する差分。前の候補が無い、またはそのルールが読めないときは null で、空の差分とは意味が違う）/ `previous_candidate_at` / `superseded_kept` / `decided_episodes_under_version` / `decided_needed` / `episode_definition_version` / `decided_population_truncated`。
+  `changes` と `changes_since_candidate` は**別の質問への答え**: 前者は「今これを昇格させたら版 8 に何が起きるか」、後者は「編集者は収束しているのか、それとも往復しているのか」。矛盾する 2 つの草案はどちらも版 8 に対して報告するので、前者だけでは見分けられない。
   `rulebook` そのものが **null** の run は reason を持たない。ルールブックが読めなかった・モデルが答えなかった・条件付き UPDATE が 0 行だったのいずれかで、手がかりは `errors`（`rulebook: unavailable, not revised` など）だけ。
   `lesson_contributors` / `record_contributors` は何アカウントから学んでいるか。
 - ルールは最大 `MAX_RULES = 10`。1 回の追加は `MAX_RULES_ADDED = 2` まで（前版が空の初回だけは `MAX_RULES` まで一度に書ける）。
@@ -369,9 +390,12 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
   モデルが既存ルールの id をそのまま名乗った場合は無効にせず「そのルールの継続」として扱い、本文は丸ごと差し替わり、`since` は前版から引き継ぎ、`MAX_RULES_ADDED` の枠にも数えない（`changes` には何も出ない）。
 - `MIN_STAT_N = 20` が効くのは `win_rate`（分母 `decided`）/ `fill_rate` / `wait_miss_rate`（`waits_judged`）だけで、分母が 20 件未満なら null で渡す。
   `win_rate_ci95`（Wilson）と `realized_r.mean` は件数に関係なく渡し、小さい n を根拠にルールを強めないのはプロンプトの指示（サーバ側では検査しない）。
-- クラスタ: 同じペア × 同じ方向（鍵は `pair|signal`）のプランが直前のプランから `CLUSTER_WINDOW_MS = 24h` 以内に作られたものは 1 つに数える。
-  前のプランが決着（`closed_at`）してから `CLUSTER_REOPEN_MS = 4h` を超えて作られたものは 24h 内でも別クラスタ（前が未決着なら 24h 内は同じクラスタ）。
-  原因は鍵に含めず、原因別のクラスタ数は `by_cause_clusters` で後から数える。クラスタ鍵に `user_id` は含めない（全アカウント学習）。
+- クラスタ（＝エピソード。実装は `_shared/episodes.ts` の 1 か所だけで、postmortem もクライアントもそこを読む。`performance_stats` と `loop_health` は同じ規則を SQL で書き写したもの）: 同じペア × 同じ方向（鍵は `pair|signal`）のプランが、
+  **そのエピソードの開始から** `CLUSTER_WINDOW_MS = 24h` 以内に作られたものは 1 つに数える。**直前のプランからではない**（直前起点だと毎回期限が前へ伸びる鎖になり、日次のプランが 1 週間まるごと 1 エピソードに融合する。`prompt.ts` が鎖で数え、画面と SQL は固定起点で数えていて、ルールが生き残るかを決めていたのは鎖の方だった）。
+  直前のプランが決着（`closed_at`）してから `CLUSTER_REOPEN_MS = 4h` を **超えて** 作られたものは 24h 内でも別エピソード（前が未決着なら 24h 内は同じ）。「直前の 1 件」の決着だけを見る。もっと古い決着を持ち回ると、直前のプランがまだ建っているのに別のプランの決済で逃げられる。
+  境界は 2 つとも逆に読まれたことがあるので明記する: 窓は `<`（ちょうど 24h 空けば別）、逃げ道は `>`（ちょうど 4h 先の決着では逃げない）。
+  4h は集約の閾値であって統計的独立の主張ではない。`closed_at` は判定した足の境界で打たれる（1day のプランなら日単位）ので、エピソードの境界もその粒度しか持たない。エピソード数は「何回別々に判断したか」であって、有意差を許す標本数ではない。
+  原因は鍵に含めず、原因別のクラスタ数は `by_cause_clusters` で後から数える。クラスタ鍵に `user_id` は含めない（全アカウント学習。鍵に入れると support が購読者数で増える）。
 - 1 人のヘビーユーザーが占有しないよう `fairShare`（アカウントごとに新しい順をラウンドロビンで取る）。教訓は `RECENT_LESSONS 60` × `FAIR_FETCH_MULTIPLE 3` 件から 60 件、記録は `RECENT_ROWS 300` × 3 件から 300 件。
   現行ルールが `supported_by` で引用する教訓は窓の外でも別に読んで足し、読めなければ改訂しない（`evidence_unavailable`）。ルールブックの読み取り失敗も「空」ではない（空から書き直さない）。
 - ルールの `contract` スタンプ（§2）: `stampFor` が改訂時の `PLAN_CONTRACT` を刻み、cause がその契約の原因分類に無い（`causeOutsideContract`。market_v1 では `entry_too_far`）か、
