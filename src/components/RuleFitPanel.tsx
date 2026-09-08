@@ -47,6 +47,25 @@ const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
     if (!r) return null;
     return locale === "ja" ? r.text_ja || r.text_en : r.text_en || r.text_ja;
   };
+  // The analyst's own word, kept visibly apart from the measured verdict: a
+  // dashed outline chip, not one of the filled verdict badges, because a
+  // reader who reads "the analyst used this" as "the server measured this"
+  // gets exactly the false confidence this panel exists to prevent.
+  //
+  // `undefined` is not an empty list. The analyst answers this only when the
+  // response schema binds, which it does not on the searching path, so a run
+  // that said nothing shows no marks and no caption rather than an implied
+  // "it used none". An answered EMPTY list is the opposite statement and gets
+  // its own caption: with no chips to see, the two states look identical, and
+  // the silent caption would be telling the reader the reverse of what the
+  // row holds.
+  //
+  // Read defensively even though the server only ever writes an array here:
+  // Index.tsx casts the response body to RuleFit without validating it, and
+  // this panel is inside the result view — a TypeError from `new Set(5)` would
+  // take the user's whole analysis off the screen over a decoration.
+  const claimed = Array.isArray(ruleFit.claimed_by_analyst) ? ruleFit.claimed_by_analyst : undefined;
+  const claimedIds = new Set(claimed ?? []);
   const matched = ruleFit.shown.filter((id) => ruleFit.rules[id]?.fit === "match").length;
   const summary = s.summary(matched, ruleFit.shown.length) +
     (ruleFit.held_back > 0 ? ` ${s.heldBack(ruleFit.held_back)}` : "");
@@ -69,6 +88,14 @@ const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
                 <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${VERDICT_CLASS[verdict]}`}>
                   {s.verdicts[verdict]}
                 </span>
+                {claimedIds.has(id) && (
+                  <span
+                    className="shrink-0 px-1.5 py-0.5 rounded border border-dashed border-border text-[10px] text-muted-foreground"
+                    data-testid={`rule-claimed-${id}`}
+                  >
+                    {s.claimed}
+                  </span>
+                )}
                 <span className="text-muted-foreground leading-relaxed">
                   {body ?? s.ruleGone(id)}
                 </span>
@@ -94,6 +121,11 @@ const RuleFitPanel = ({ ruleFit, rulebook }: Props) => {
       <p className="text-[10px] text-muted-foreground pt-2 mt-2 border-t border-border/50" data-testid="rule-fit-note">
         {s.note}
       </p>
+      {claimed !== undefined && (
+        <p className="text-[10px] text-muted-foreground pt-1" data-testid="rule-fit-claim-note">
+          {claimed.length === 0 ? s.claimedNone : s.claimedNote}
+        </p>
+      )}
     </Disclosure>
   );
 };

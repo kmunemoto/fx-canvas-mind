@@ -499,6 +499,15 @@ export interface RuleFit {
   shown: string[];
   held_back: number;
   rules: Record<string, RuleFitEntry>;
+  // Which of the shown rules the analyst SAID it applied on this call. This is
+  // the analyst's SELF-REPORT and nothing else: it is never evidence about a
+  // rule, never a measurement, and must never be mixed into the `fit` verdicts
+  // above, which the server measured against each rule's own citations.
+  //
+  // Optional because the analyst often does not answer: structured output does
+  // not bind when web search is on, and most runs search. Absent means "did
+  // not say", which is not the same as an empty array — "I applied none".
+  claimed_by_analyst?: string[];
 }
 
 export interface Rulebook {

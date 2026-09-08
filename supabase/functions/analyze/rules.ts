@@ -350,3 +350,35 @@ export const renderLearnedRules = (
   maxChars = promptCharBudget(locale),
   fits: Record<string, RuleSituation> | null = null,
 ): string => selectPromptRules(rules, locale, contract, maxRules, maxChars, fits).text;
+
+// The rule ids the analyst says it applied, kept to the ids it was actually
+// shown.
+//
+// Same filter `parseDiagnosis` puts on rule_blamed (postmortem/prompt.ts): a
+// non-string is not an id, an id the run never showed is not an id, and a
+// repeat is not a second citation. Nothing here checks the claim against the
+// market — src/lib/inference.ts says why a model-authored tag can never be
+// evidence, and this one is stored as a claim precisely so it is never read
+// as one.
+//
+// `null` means the analyst did not answer, which is NOT the same as answering
+// "none". Structured output does not bind on the searching path, so silence
+// is the common case and a deliberate empty list has to stay tellable from
+// it.
+//
+// An answer that named things and lost all of them is silence too, not a
+// denial: it is an answer we could not read. That distinction is not a corner
+// case here — `selectPromptRules` renders each rule as its scope and its
+// text and prints NO id, so every id the analyst can produce today is one it
+// was never shown. Storing `[]` for those would file "I used none of them" on
+// exactly the rows whose prose says the opposite: ten v8 rows argue the
+// over-extension rule by name and none of them could cite its id.
+export const claimedRules = (value: unknown, shown: string[]): string[] | null => {
+  if (!Array.isArray(value)) return null;
+  const ruleRef = (v: unknown): string | null => {
+    const id = typeof v === "string" ? v.trim().slice(0, 20).trim() : "";
+    return id && shown.includes(id) ? id : null;
+  };
+  const kept = [...new Set(value.map(ruleRef).filter((id): id is string => id !== null))];
+  return kept.length === 0 && value.length > 0 ? null : kept;
+};
