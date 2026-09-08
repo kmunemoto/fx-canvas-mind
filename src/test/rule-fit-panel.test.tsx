@@ -5,9 +5,11 @@ import type { ReactElement } from "react";
 import { LocaleProvider } from "../lib/i18n";
 import RuleFitPanel from "../components/RuleFitPanel";
 import { claimedRules } from "../../supabase/functions/analyze/rules";
+import { withoutAnalystClaim } from "../../supabase/functions/postmortem/prompt";
 import type { RuleFit, Rulebook } from "../lib/types";
 
 const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+const postmortem = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja") =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
@@ -225,13 +227,25 @@ describe("the analyst's claim is filtered against what it was shown", () => {
   });
 
   it("treats an answer it could not read as silence, never as 'used none'", () => {
-    // The rule block prints no ids, so an id the analyst produces today is an
-    // id it was never shown. Filing that as "I used none of them" would be a
+    // An id the run never showed is an id the analyst invented or carried over
+    // from another rulebook. Filing that as "I used none of them" would be a
     // denial the analyst never made, on the rows most likely to have leaned
-    // on a rule.
+    // on a rule. The scope is not an id either, which matters more since
+    // 2026-09-08: in English the line reads `- [r10] [over-extended trends]`
+    // and the two bracketed tokens look alike.
     expect(claimedRules(["r99"], shown)).toBeNull();
     expect(claimedRules(["over-extended trends"], shown)).toBeNull();
+    expect(claimedRules(["[over-extended trends]"], shown)).toBeNull();
     expect(claimedRules([null, 10], shown)).toBeNull();
+  });
+
+  it("reads back the bracketed form the prompt actually prints", () => {
+    // The block labels each rule `- [r10]［scope］…` and prints the id in no
+    // other form, so an analyst quoting what it was handed is answering
+    // correctly. Dropping it would file the row as "did not answer" — the
+    // exact silence this field was added to end.
+    expect(claimedRules(["[r10]", "［r4］", " [r11] "], shown)).toEqual(["r10", "r4", "r11"]);
+    expect(claimedRules(["[r99]"], shown)).toBeNull();
   });
 
   it("drops non-strings and empty entries without failing the whole list", () => {
@@ -285,12 +299,44 @@ describe("the server sends the comparison to the client", () => {
 
   it("puts no live rule id in the schema description", () => {
     // The whole schema is stringified into the user message on the searching
-    // path, and the rule block itself prints no ids — so an example id would
-    // be the only id in the prompt, and the field would measure its own
-    // example rather than the analyst.
+    // path. The rule block now prints the ids beside the rules they name
+    // (2026-09-08); an example id in the schema would still be an id the
+    // analyst is handed away from its rule, and the field would measure its
+    // own example rather than the analyst.
     const at = analyze.indexOf("rules_applied:");
     const schema = analyze.slice(at, analyze.indexOf("  required: [", at));
     expect(schema).not.toMatch(/["\[]r\d+/);
+  });
+
+  it("keeps the self-report out of the diagnosis it would later be compared with", () => {
+    // The plan handed to the diagnosis carries the analysis context whole, and
+    // the diagnosis is then asked for rule_blamed / rule_credited — 23 of the
+    // 31 lessons under rulebook version 8 set one of the two. A self-report is
+    // not evidence about a rule, and it is only worth recording because it can
+    // be checked against the server's measurement afterwards, which is
+    // impossible once it has fed the judgement.
+    expect(postmortem).toContain("context: withoutAnalystClaim(context),");
+    // Stripped at the handoff, never from the stored row
+    expect(postmortem).not.toContain("delete context.rule_fit");
+
+    const measured = { fit: "match", comparable: ["adx"], missed: [], cases: 4, cited: 5 };
+    const context = {
+      entry: { adx: 31 },
+      rules_shown: ["r10"],
+      rule_fit: { shown: ["r10"], held_back: 0, rules: { r10: measured }, claimed_by_analyst: ["r10"] },
+    };
+    const stripped = withoutAnalystClaim(context) as typeof context;
+    expect(stripped.rule_fit).not.toHaveProperty("claimed_by_analyst");
+    expect(JSON.stringify(stripped)).not.toContain("claimed_by_analyst");
+    // Everything the diagnosis is entitled to survives, and the stored object
+    // is not touched
+    expect(stripped.rule_fit.rules.r10).toEqual(measured);
+    expect(stripped.rules_shown).toEqual(["r10"]);
+    expect(context.rule_fit.claimed_by_analyst).toEqual(["r10"]);
+    // Nothing to strip is not an error, and neither is no context at all
+    expect(withoutAnalystClaim(null)).toBeNull();
+    const untouched = { rule_fit: { shown: [] } };
+    expect(withoutAnalystClaim(untouched)).toBe(untouched);
   });
 
   it("sends rule ids and verdicts only, never the cited analysis ids", () => {

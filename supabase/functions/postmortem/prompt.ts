@@ -503,6 +503,37 @@ export const summarizeRecord = (rows: RecordRow[], lessons: LessonSummary[]): Re
 // Diagnosis
 // ---------------------------------------------------------------------------
 
+// The analyst's own claim about which rules it used, taken back out of the
+// context before the diagnosis sees it.
+//
+// analyze records that claim on the plan as context.rule_fit.claimed_by_analyst
+// (2026-09-08). The plan goes into both diagnosis prompts WHOLE — the payload
+// is JSON.stringify of the PlanSummary, context included — and the diagnosis is
+// then asked for rule_blamed and rule_credited. That is not a hypothetical
+// path: 23 of the 31 lessons written under rulebook version 8 set one of those
+// two fields (9 blamed, 14 credited). Leaving the claim in would let the
+// diagnosis blame or credit a rule because the analyst said it used it.
+//
+// A SELF-REPORT IS NOT EVIDENCE ABOUT A RULE. The only thing it is worth
+// recording for is the comparison afterwards — what the analyst said it used,
+// against what the server measured about the same rules — and that comparison
+// is destroyed the moment the claim has already fed the judgement it would be
+// compared with. So it is stripped HERE, at the handoff, and never from the
+// stored row: the row keeps the claim, the diagnosis simply never sees it.
+//
+// Nothing else in postmortem/ picks the claim up by another route. The plan's
+// context is read in one place (postmortem/index.ts), the rulebook editor's
+// digest does not select the column at all (see the record pool query), and the
+// rules a plan was shown reach the diagnosis by id from the rulebook table,
+// not from this object.
+export const withoutAnalystClaim = (context: JsonRecord | null): JsonRecord | null => {
+  if (context === null) return null;
+  const fit = context.rule_fit;
+  if (!isRecord(fit) || !("claimed_by_analyst" in fit)) return context;
+  const { claimed_by_analyst: _claimed, ...measured } = fit;
+  return { ...context, rule_fit: measured };
+};
+
 export interface PlanSummary {
   id: string;
   pair: string;

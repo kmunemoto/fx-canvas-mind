@@ -50,9 +50,11 @@ import {
 import {
   MAX_PROMPT_CHARS,
   MAX_PROMPT_CHARS_EN,
+  claimedRules,
   inForce,
   parseRules,
   renderLearnedRules,
+  selectPromptRules,
   type Rule,
 } from "../../supabase/functions/analyze/rules.ts";
 import { emptyEvaluation, type Evaluation } from "../../supabase/functions/track-outcomes/evaluate.ts";
@@ -1871,17 +1873,33 @@ describe("rules in the analyze prompt", () => {
   it("renders constraints first, then the best-supported rules, marking thin ones as under review", () => {
     const lines = renderLearnedRules(rules).split("\n");
     expect(lines[0]).toContain("上の手順とリスク規定が優先");
-    expect(lines[1]).toBe("- 歯止め（実績3件）");
-    expect(lines[2]).toBe("- ［1h］強い方（実績4件）");
-    expect(lines[3]).toBe("- 弱い方（検証中・実績1件）");
+    expect(lines[1]).toBe("- [r3]歯止め（実績3件）");
+    expect(lines[2]).toBe("- [r2]［1h］強い方（実績4件）");
+    expect(lines[3]).toBe("- [r1]弱い方（検証中・実績1件）");
   });
 
   it("renders in English for an English analysis", () => {
     const lines = renderLearnedRules(rules, "en").split("\n");
     expect(lines[0]).toContain("Rules learned from past outcomes");
-    expect(lines[1]).toBe("- guard (3 cases)");
-    expect(lines[2]).toBe("- [1h] strong (4 cases)");
-    expect(lines[3]).toBe("- weak (under review, 1 case)");
+    expect(lines[1]).toBe("- [r3] guard (3 cases)");
+    expect(lines[2]).toBe("- [r2] [1h] strong (4 cases)");
+    expect(lines[3]).toBe("- [r1] weak (under review, 1 case)");
+  });
+
+  it("shows every id it records as shown, so the self-report has something to cite", () => {
+    // The instrument that records what the analyst says it applied
+    // (`rules_applied` -> claimed_by_analyst) keeps only ids the run actually
+    // showed. Until 2026-09-08 the block printed no id at all — every stored
+    // version-8 prompt carries the rulebook and not one carries an id — so
+    // every answer was dropped as an id the analyst was never shown, and the
+    // field could not collect anything. Whatever else the line looks like, the
+    // ids it prints and the ids it reports as shown are the same set.
+    for (const locale of ["ja", "en"] as const) {
+      const out = selectPromptRules(rules, locale);
+      expect(out.ids).toEqual(["r3", "r2", "r1"]);
+      for (const id of out.ids) expect(out.text).toContain(`[${id}]`);
+      expect(claimedRules(out.ids, out.ids)).toEqual(out.ids);
+    }
   });
 
   it("renders nothing when nothing has been learned", () => {

@@ -1,4 +1,8 @@
-const FUNCTION_VERSION = "analyze-v47-2026-09-08T16:00:00Z";
+// v47 is skipped, not lost: it was built (the commit that added `rules_applied`)
+// and never deployed, because the rule block printed no id for the field to
+// cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
+// provenance shows no v47 row because none was ever served.
+const FUNCTION_VERSION = "analyze-v48-2026-09-08T18:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -416,12 +420,15 @@ const RESPONSE_SCHEMA = {
       type: "array",
       items: { type: "string" },
       // No worked example here, and none with a live id in it. The rendered
-      // schema is inlined into the user message on the searching path (36 of
-      // the 39 v8 rows), so an example id is a live id sitting in the prompt —
-      // and since the rule block itself prints no ids at all, it would be the
-      // ONLY id the analyst ever sees. `r10` as the example is `r10` as the
-      // answer, and a claim that is really an echo of its own example is worse
-      // than no claim.
+      // schema is inlined into the user message on the searching path, which is
+      // all but three of the stored v8 rows (36 of 39 when this was written, 40
+      // of 43 just before the deploy — the three are the whole exception, not
+      // the counts), so an example id is a live id sitting in the prompt.
+      // The rule block now prints the ids (analyze/rules.ts, 2026-09-08), which
+      // removes the reason this field could never be answered but not the
+      // reason for the ban: `r10` as the example is `r10` as the answer, and a
+      // claim that is really an echo of its own example is worse than no claim.
+      // The ids belong beside the rules they name, and nowhere else.
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
     },
