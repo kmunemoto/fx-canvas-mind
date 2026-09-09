@@ -419,7 +419,40 @@ describe("the cell floor is above the measured length of a call", () => {
     expect(index).toContain("const WALL_CLOCK_BUDGET_MS = 130_000;");
     expect(index).toContain("const WRITE_RESERVE_MS = 10_000;");
     expect(index).toContain("const LLM_TIMEOUT_MS = 100_000;");
-    expect(index).toContain("const MIN_CALL_SPACING_MS = 2_000;");
+    expect(index).toContain("const MIN_CALL_SPACING_MS = 20_000;");
+  });
+
+  // 2026-09-09. The gap was counted from the moment a call was DISPATCHED, and
+  // a replay call runs about 30 s, so the two seconds had always elapsed before
+  // the call returned and the next went out immediately: measured gaps between
+  // one cell finishing and the next starting were 0.1 s, 0.3 s and 1.0 s. One
+  // edge worker was held continuously for forty minutes, and a user's analyse
+  // request at 05:08 got no worker at all (no invocation logged for it).
+  // These pin the corrected shape, not the number.
+  it("counts the quiet period from the END of a call, on every exit path", () => {
+    expect(index).toContain("let lastCallEndedAt = 0;");
+    expect(index).toContain("const since = Date.now() - lastCallEndedAt;");
+    // spaceCalls must NOT stamp the clock — that was the bug.
+    const space = index.slice(index.indexOf("const spaceCalls = async"), index.indexOf("const markCallEnded ="));
+    expect(space).not.toContain("lastCallEndedAt = Date.now()");
+    // and every call site must close the period: two on the billable path
+    // (success and throw), two on the count_tokens path.
+    expect(index.split("markCallEnded();").length - 1).toBe(4);
+  });
+
+  it("guards the whole window a cell would occupy, not the instant it starts", () => {
+    // The old guard asked only whether the CURRENT minute was a cron minute.
+    // It waited minute 8 out correctly and a cell still ran straight through
+    // 05:08:01, because it had started at 05:07:47. A cell is budgeted
+    // MIN_CELL_START_MS, so that is the window that has to be clear.
+    expect(index).toContain("const firstMinute = Math.floor(fromMs / 60_000);");
+    expect(index).toContain("const lastMinute = Math.floor((fromMs + MIN_CELL_START_MS) / 60_000);");
+    expect(index).toContain("if (windowIsClear(Date.now())) return true;");
+    // the cell loop asks the window question, never the instant question
+    expect(index).toContain("const wasGuardedMinute = !windowIsClear(Date.now());");
+    // the instant-only question is gone from the file entirely; the window
+    // helper asks about a specific minute (new Date(m * 60_000)) instead.
+    expect(index).not.toContain("CRON_MINUTES.has(new Date().getUTCMinutes())");
   });
 
   it("reads the response body inside the try that catches the abort", () => {

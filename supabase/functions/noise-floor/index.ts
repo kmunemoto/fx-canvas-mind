@@ -65,7 +65,7 @@ import {
   type ClassifiedRow,
 } from "./prompt-surgery.ts";
 
-const FUNCTION_VERSION = "noise-floor-v1-2026-09-09T18:00:00Z";
+const FUNCTION_VERSION = "noise-floor-v2-2026-09-09T20:00:00Z";
 
 // The platform kills the worker at 150 s with no chance to respond, which is
 // the same limit analyze/budget.ts is written against. Stop at 130 s and keep
@@ -106,7 +106,29 @@ const MIN_CELL_START_MS = 80_000;
 // guess: the point is that a replay must never be queued alongside a live
 // user's analyse turn on the shared key, and back-to-back calls are how a
 // harness turns into a load test.
-const MIN_CALL_SPACING_MS = 2_000;
+//
+// MEASURED FROM THE END OF THE PREVIOUS CALL, NOT ITS START, and the difference
+// is the whole finding of 2026-09-09. The first version stamped `lastCallAt`
+// before dispatching, so the two seconds were counted from the moment a call
+// BEGAN. A replay call runs about 30 s, so two seconds had almost always
+// elapsed by the time it returned and the next one went out immediately.
+// Measured from the run that was interrupted, consecutive cells:
+//   05:04:36.181 finished -> 05:04:36.297 started   0.1 s apart
+//   05:05:42.393 finished -> 05:05:42.737 started   0.3 s apart
+//   05:06:13.019 finished -> 05:06:14.033 started   1.0 s apart
+// That is not "strictly serial with a gap"; that is one continuously occupied
+// edge worker for forty minutes. At 05:08 a user's analyse request reached the
+// gateway while a replay cell was in flight (05:07:47 -> 05:08:18) and the
+// postmortem sweep had just fired (05:08:01), and it got no worker at all: no
+// invocation was logged for it, and the browser showed the "could not connect"
+// branch. The analyses either side of it succeeded, so nothing was broken --
+// the harness simply took the seat.
+//
+// Twenty seconds against a ~30 s call is a duty cycle of about 60% inside an
+// invocation, and the wall-clock floor below then admits one cell per hop. The
+// number is a judgement, not a measurement: what IS measured is that two
+// seconds was, in practice, zero.
+const MIN_CALL_SPACING_MS = 20_000;
 
 // Cells one invocation may spend on, and the ceiling the request cannot raise.
 // Four is what fits inside the wall clock with the spacing above and a call
@@ -417,15 +439,42 @@ Deno.serve(async (req: Request) => {
   // what the max_chain_hops arithmetic at creation always assumed it cost. It
   // returns true when the caller may proceed. One sleep is enough because no
   // two guarded minutes are consecutive (see CRON_MINUTES).
+  // THE WINDOW, NOT THE INSTANT. Asking only whether the CURRENT minute is
+  // guarded was the second half of the 2026-09-09 finding. A cell takes about
+  // 30 s and is budgeted 80 s, so a cell that starts at :07:47 is still holding
+  // the worker at :08:01 when the postmortem sweep fires -- and that is exactly
+  // what happened: no cell STARTED inside minute 8 (the guard did wait the
+  // minute out, 05:08:18 -> 05:09:02, so the old guard was working as written),
+  // yet a cell was in flight right through it, and the analyse request that
+  // arrived at 05:08 got no worker.
+  //
+  // So the question a cell must ask is not "is this minute guarded" but "does
+  // any minute I could still be running in belong to a cron job". The window is
+  // [now, now + MIN_CELL_START_MS], the same budget the wall-clock guard uses,
+  // which keeps the two from disagreeing about how long a cell can take.
+  //
+  // The loop runs at most a few times: one sleep clears the current minute, and
+  // because no two guarded minutes are consecutive the window can need at most
+  // one more nudge. It is bounded anyway rather than trusted to terminate.
+  const windowIsClear = (fromMs: number): boolean => {
+    const firstMinute = Math.floor(fromMs / 60_000);
+    const lastMinute = Math.floor((fromMs + MIN_CELL_START_MS) / 60_000);
+    for (let m = firstMinute; m <= lastMinute; m++) {
+      if (CRON_MINUTES.has(new Date(m * 60_000).getUTCMinutes())) return false;
+    }
+    return true;
+  };
   const waitOutCronMinute = async (): Promise<boolean> => {
-    if (!CRON_MINUTES.has(new Date().getUTCMinutes())) return true;
-    const wait = 60_000 - (Date.now() % 60_000) + CRON_EXIT_MARGIN_MS;
-    // Never sleep past the wall clock: an invocation that overran would be
-    // killed by the platform mid-write, which is the one thing the write
-    // reserve exists to prevent.
-    if (wait > msLeftForWork()) return false;
-    await sleep(wait);
-    return !CRON_MINUTES.has(new Date().getUTCMinutes());
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (windowIsClear(Date.now())) return true;
+      const wait = 60_000 - (Date.now() % 60_000) + CRON_EXIT_MARGIN_MS;
+      // Never sleep past the wall clock: an invocation that overran would be
+      // killed by the platform mid-write, which is the one thing the write
+      // reserve exists to prevent.
+      if (wait > msLeftForWork()) return false;
+      await sleep(wait);
+    }
+    return windowIsClear(Date.now());
   };
 
   try {
@@ -1200,11 +1249,20 @@ Deno.serve(async (req: Request) => {
     // first call can follow its parent's last by a fraction of a second. The
     // run-level lease below is what stops two workers from calling at the same
     // time; nothing makes the gap between two consecutive workers 2 s.
-    let lastCallAt = 0;
+    // When the previous call FINISHED, not when it started. See
+    // MIN_CALL_SPACING_MS for the measurement that forced this distinction.
+    let lastCallEndedAt = 0;
     const spaceCalls = async () => {
-      const since = Date.now() - lastCallAt;
-      if (lastCallAt > 0 && since < MIN_CALL_SPACING_MS) await sleep(MIN_CALL_SPACING_MS - since);
-      lastCallAt = Date.now();
+      const since = Date.now() - lastCallEndedAt;
+      if (lastCallEndedAt > 0 && since < MIN_CALL_SPACING_MS) {
+        await sleep(MIN_CALL_SPACING_MS - since);
+      }
+    };
+    // Called on every path out of a model call -- success, error, or throw --
+    // because a call that failed still occupied the worker and still has to be
+    // paid for in quiet time before the next one.
+    const markCallEnded = () => {
+      lastCallEndedAt = Date.now();
     };
 
     // Everything about one row that has to be settled before a request can be
@@ -1436,6 +1494,7 @@ Deno.serve(async (req: Request) => {
             signal: AbortSignal.timeout(Math.max(5_000, Math.min(30_000, msLeftForWork()))),
           });
           const parsed = await res.json().catch(() => null);
+          markCallEnded();
           if (!res.ok) {
             const message = isRecord(parsed) && isRecord(parsed.error) ? slice200(parsed.error.message) : "";
             console.error("count_tokens failed:", res.status, res.headers.get("request-id") ?? "", message);
@@ -1459,6 +1518,9 @@ Deno.serve(async (req: Request) => {
           }
           perRow.set(row.analysisId, counted);
         } catch (err) {
+          // Same rule as the billable path: the quiet period is owed from the
+          // end of the call, and a call that threw still held the socket.
+          markCallEnded();
           errors.push(`count_tokens_failed:${slice200(err)}`);
         }
       }
@@ -2083,7 +2145,12 @@ Deno.serve(async (req: Request) => {
           outcome.httpStatus = res.status;
           outcome.requestId = res.headers.get("request-id");
           raw = await res.text();
+          markCallEnded();
         } catch (err) {
+          // The call is over whether or not it answered, and the quiet period
+          // is owed from here either way: a failed call held the worker and
+          // drew on the shared key exactly like a successful one.
+          markCallEnded();
           // AbortSignal.timeout rejects with TimeoutError; anything else is a
           // transport failure. Neither is retried here: a retry inside the cell
           // would spend again on a key whose failures are user-visible, and the
@@ -2272,7 +2339,7 @@ Deno.serve(async (req: Request) => {
       // spans minutes. It WAITS the minute out rather than returning from
       // inside it — see waitOutCronMinute for the burst that behaviour caused
       // and why waiting is what the hop arithmetic always assumed happened.
-      const wasGuardedMinute = CRON_MINUTES.has(new Date().getUTCMinutes());
+      const wasGuardedMinute = !windowIsClear(Date.now());
       if (!(await waitOutCronMinute())) {
         if (cellsThisInvocation === 0) skipped = "cron_minute";
         break;
