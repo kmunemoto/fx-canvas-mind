@@ -25,3 +25,11 @@ verify_jwt = false
 # admin's JWT for a manual refresh.
 [functions.econ-calendar]
 verify_jwt = false
+
+# Authenticates in the function body: the sweep token only. No admin-JWT
+# branch, because this one spends money on every call it makes — see the
+# comment on the gate in its index.ts. It is never scheduled: an operator
+# fires it by hand from SQL (docs/OPERATIONS.md §5.2), and that caller sends
+# no JWT, so the gateway must not demand one.
+[functions.noise-floor]
+verify_jwt = false
