@@ -257,12 +257,22 @@ create index if not exists noise_cells_run_idx on public.noise_cells (run_id, st
 -- collide, because the unique key above is scoped to a run_id and these are
 -- two different runs.
 --
--- Partial on purpose. A 'dry' row carries no dry_run_id, and an 'aborted' or
--- 'done' run has stopped spending: re-authorising a finished dry run to start
--- a fresh attempt after an abort is a legitimate operator move, and a total
--- index would forbid it. What must never happen is two runs spending against
--- one authorisation AT THE SAME TIME, which is what 'running' and 'paused'
--- name.
+-- Partial on purpose, and DELIBERATELY LOOSER THAN THE FUNCTION. A 'dry' row
+-- carries no dry_run_id at all, so a total index would collide every dry run
+-- against every other; that alone forces the predicate. What this index is
+-- for is the one thing that must never happen whatever the function believes:
+-- two runs spending against one authorisation AT THE SAME TIME, which is what
+-- 'running' and 'paused' name.
+--
+-- The function refuses more than this: it rejects a dry_run_id cited by ANY
+-- non-dry run, 'done' and 'aborted' included, and says which run spent it
+-- (measured 2026-09-09: the first attempt at the full run was refused this
+-- way, 400, nothing spent). So the extra room this index leaves is not
+-- reachable through the function today. That is the intended order of
+-- strictness and not an oversight: the index is the floor that survives a
+-- future function change, the function is the policy on top of it. If the
+-- policy is ever relaxed to let a finished dry run authorise a second
+-- attempt, this index already permits it and nothing here needs editing.
 create unique index if not exists noise_runs_one_spend_per_dry_run
   on public.noise_runs ((notes->>'dry_run_id'))
   where status in ('running', 'paused');
