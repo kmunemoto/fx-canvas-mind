@@ -115,7 +115,7 @@ const Login = () => {
             <Zap className="h-7 w-7 text-primary" />
           </div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">
-            FX Tactical Analyzer
+            Sextant
           </h1>
           <p className="text-sm text-muted-foreground">
             {isSignUp ? t.login.createAccount : t.login.signInToStart}

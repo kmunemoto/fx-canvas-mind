@@ -12,7 +12,7 @@ const LandingHeader = () => {
       <div className="container max-w-6xl mx-auto flex items-center justify-between px-4 h-16">
         <button onClick={() => navigate("/")} className="flex items-center gap-2">
           <Zap className="h-5 w-5 text-[#00d4ff]" />
-          <span className="font-bold text-lg tracking-tight">FX Tactical Analyzer</span>
+          <span className="font-bold text-lg tracking-tight">Sextant</span>
         </button>
         <nav className="flex items-center gap-3">
           <LanguageSwitcher compact />

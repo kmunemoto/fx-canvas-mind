@@ -46,7 +46,7 @@ const BlogPost = () => {
 
   const baseUrl = "https://fx-tactical.jp";
   const url = `${baseUrl}/blog/${post.slug}`;
-  const shareText = `${post.title} | FX Tactical Analyzer`;
+  const shareText = `${post.title} | Sextant`;
 
   const onCopy = async () => {
     try {
@@ -67,10 +67,10 @@ const BlogPost = () => {
     image: [post.thumbnailUrl.startsWith("http") ? post.thumbnailUrl : `${baseUrl}${post.thumbnailUrl}`],
     datePublished: post.publishedAt,
     dateModified: post.publishedAt,
-    author: { "@type": "Organization", name: "FX Tactical Analyzer" },
+    author: { "@type": "Organization", name: "Sextant" },
     publisher: {
       "@type": "Organization",
-      name: "FX Tactical Analyzer",
+      name: "Sextant",
       logo: { "@type": "ImageObject", url: `${baseUrl}/icons/icon-512x512.png` },
     },
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
@@ -79,7 +79,7 @@ const BlogPost = () => {
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-foreground">
       <Helmet>
-        <title>{`${post.title}｜FX Tactical Analyzer`}</title>
+        <title>{`${post.title}｜Sextant`}</title>
         <meta name="description" content={post.description} />
         <link rel="canonical" href={url} />
         <meta property="og:title" content={post.title} />

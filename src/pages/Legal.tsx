@@ -4,7 +4,7 @@ const Legal = () => (
   <LegalPageLayout title="特定商取引法に基づく表記" japaneseOnly>
     <div className="space-y-6">
       {[
-        ["販売事業者", "FX Tactical Analyzer 運営事務局"],
+        ["販売事業者", "Sextant 運営事務局"],
         ["運営統括責任者", "（代表者名）"],
         ["所在地", "（所在地を記載）"],
         ["電話番号", "（電話番号を記載）"],

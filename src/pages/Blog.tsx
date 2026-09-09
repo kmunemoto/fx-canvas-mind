@@ -23,10 +23,10 @@ const Blog = () => {
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-foreground">
       <Helmet>
-        <title>ブログ｜FX Tactical Analyzer</title>
+        <title>ブログ｜Sextant</title>
         <meta name="description" content="FXテクニカル分析・ファンダメンタル分析・AI活用に関する解説記事を掲載。初心者から経験者まで役立つトレード知識を発信中。" />
         <link rel="canonical" href={`${baseUrl}/blog`} />
-        <meta property="og:title" content="ブログ｜FX Tactical Analyzer" />
+        <meta property="og:title" content="ブログ｜Sextant" />
         <meta property="og:description" content="FXテクニカル分析・ファンダメンタル分析・AI活用に関する解説記事。" />
         <meta property="og:url" content={`${baseUrl}/blog`} />
         <meta property="og:type" content="website" />

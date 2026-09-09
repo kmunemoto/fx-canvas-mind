@@ -208,7 +208,7 @@ const Landing = () => {
         <div className="container max-w-6xl mx-auto flex items-center justify-between px-4 h-16">
           <div className="flex items-center gap-2">
             <Zap className="h-5 w-5 text-[#00d4ff]" aria-hidden="true" />
-            <span className="font-bold text-lg tracking-tight">FX Tactical Analyzer</span>
+            <span className="font-bold text-lg tracking-tight">Sextant</span>
           </div>
           <nav aria-label={t.lp.aria.nav} className="flex items-center gap-3">
             <LanguageSwitcher compact />
@@ -422,7 +422,7 @@ const Landing = () => {
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <Zap className="h-4 w-4 text-[#00d4ff]" aria-hidden="true" />
-              <span className="text-sm font-semibold">FX Tactical Analyzer</span>
+              <span className="text-sm font-semibold">Sextant</span>
               <span className="text-xs text-muted-foreground ml-2">© 2026</span>
             </div>
             <nav aria-label={t.lp.aria.footerNav} className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">

@@ -8,7 +8,7 @@ export const en: Dict = {
   intlLocale: "en-US",
 
   common: {
-    appName: "FX Tactical Analyzer",
+    appName: "Sextant",
     cancel: "Cancel",
     close: "Close",
     processing: "Processing…",
@@ -626,10 +626,10 @@ export const en: Dict = {
     noCard: "Creating an account is free. Analysis needs a paid plan, from ¥2,980/month",
     painTitle: "Sound familiar?",
     pains: ["Too many indicators to watch", "Never sure when to enter", "Nobody ever checks whether the tool was right"],
-    featuresTitle: "What FX Tactical Analyzer does",
+    featuresTitle: "What Sextant does",
     features: [
       { title: "Data pulled automatically", desc: "Live prices plus RSI, MACD, Bollinger Bands, Ichimoku and 11 indicators in all, together with this week's economic calendar" },
-      { title: "One AI judgement", desc: "Technicals and fundamentals folded into a single buy / sell / stand-aside call with a confidence score. Limits that would never fill and stops inside the noise are rejected server-side" },
+      { title: "Four timeframes measured at once", desc: "15m, 1h, 4h and daily each get their own swing highs and lows, the levels a close has broken, and the room left to the next standing level. Where the timeframes disagree, it says so" },
       { title: "Only closed bars are counted", desc: "The forming bar and the flat stretches from hours when the market was shut are dropped before any indicator is computed, so a weekend does not bend the numbers" },
     ],
     stepsTitle: "Three steps to your first analysis",
@@ -655,7 +655,7 @@ export const en: Dict = {
     honestBody: "We will not publish a win rate until the sample is large enough to mean something. Our threshold is 50 independent settled trades; past that, the app shows it with a 95% confidence interval. We would rather show you nothing than only the flattering numbers.",
     faqTitle: "Frequently asked questions",
     faqs: [
-      { q: "What is FX Tactical Analyzer?", a: "An AI-powered FX analysis tool. It combines 11 technical indicators — RSI, MACD, Bollinger Bands and others — with fundamental analysis, and returns a BUY/SELL/WAIT call with a confidence score in real time." },
+      { q: "What is Sextant?", a: "A tool that measures how a currency pair has moved. It computes 11 indicators — RSI, MACD, Bollinger Bands, Ichimoku and others — together with price structure: recent swing highs and lows, the levels a close has broken, and the room to the next standing level, across 15m, 1h, 4h and daily." },
       { q: "How is this different from other AI analysis tools?", a: "Every call it makes is scored, and every losing call is investigated automatically. Plans are tracked against real bid/ask prices until they expire; the losers are traced back to a cause; and what that turns up is written into the rules the AI must follow. You can read those rules in the app, along with how many settled trades support each one." },
       { q: "What is the win rate?", a: "We do not publish one yet, because the sample is not large enough to mean anything — over a handful of trades a win rate is indistinguishable from luck. Our threshold is 50 independent settled trades, after which the app shows it with a 95% confidence interval." },
       { q: "Is this investment advice?", a: "No. The service provides market analysis, not investment advice or brokerage. Every trading decision, and its outcome, remains yours." },
@@ -701,8 +701,8 @@ export const en: Dict = {
     copiedToast: "Link copied",
     copyFailed: "Could not copy the link",
     related: "Related articles",
-    ctaTitle: "Try FX Tactical Analyzer",
-    ctaBody: "AI combines 11 technical indicators with fundamental analysis, and returns a BUY/SELL/WAIT call with a confidence score in real time.",
+    ctaTitle: "Try Sextant",
+    ctaBody: "Eleven indicators and the shape of the move, computed from closed bars only. The flat stretches from hours when the market was shut are dropped first.",
     japaneseOnly: "Article text is available in Japanese only.",
   },
 

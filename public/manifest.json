@@ -1,7 +1,7 @@
 {
-  "name": "FX Tactical Analyzer",
-  "short_name": "FX Tactical",
-  "description": "AI搭載FXテクニカル分析ツール",
+  "name": "Sextant",
+  "short_name": "Sextant",
+  "description": "為替の値動きを測るテクニカル分析ツール",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

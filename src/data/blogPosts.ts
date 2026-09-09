@@ -21,9 +21,9 @@ export interface BlogPost {
 
 const CTA_HTML = `
 <div class="not-prose mt-10 p-6 rounded-2xl border border-[#00d4ff]/30 bg-gradient-to-br from-[#00d4ff]/10 to-transparent">
-  <h3 class="text-lg font-bold mb-2">FX Tactical Analyzerを無料で試す</h3>
+  <h3 class="text-lg font-bold mb-2">Sextantを無料で試す</h3>
   <p class="text-sm text-muted-foreground mb-4">
-    FX Tactical Analyzerなら、RSI・MACD・ボリンジャーバンドなど11種のテクニカル指標をAIが自動分析。BUY/SELL/WAITの明確な判断と確信度スコアをリアルタイムで提供します。
+    Sextantなら、RSI・MACD・ボリンジャーバンドなど11種のテクニカル指標をAIが自動分析。BUY/SELL/WAITの明確な判断と確信度スコアをリアルタイムで提供します。
   </p>
   <a href="/login?tab=signup" class="inline-block px-5 py-2.5 rounded-lg bg-[#00d4ff] text-[#0a0e17] font-semibold hover:opacity-90 transition-opacity">無料で始める</a>
 </div>
@@ -90,7 +90,7 @@ export const blogPosts: BlogPost[] = [
 </blockquote>
 
 <h2 id="ai">AIによる自動分析という選択肢</h2>
-<p>11種の指標を毎回手動で確認し、整合性を判断するのは熟練者でも骨の折れる作業です。FX Tactical Analyzerはこのプロセスを完全自動化し、各指標のスコアと総合判断（BUY/SELL/WAIT）、確信度を秒速で算出します。</p>
+<p>11種の指標を毎回手動で確認し、整合性を判断するのは熟練者でも骨の折れる作業です。Sextantはこのプロセスを完全自動化し、各指標のスコアと総合判断（BUY/SELL/WAIT）、確信度を秒速で算出します。</p>
 <p>テクニカル分析を学びながら、AIの判断と自分の判断を比較することで、上達のスピードが大きく変わります。</p>
 ${CTA_HTML}
 `,
@@ -518,7 +518,7 @@ ${CTA_HTML}
 <p>例：FOMCで利上げ継続が示唆された → 中期的にドル高 → ドル円のテクニカルで押し目買いを狙う、という流れ。</p>
 
 <h2 id="ai-fundamental">AIによるファンダメンタル分析の自動化</h2>
-<p>個人トレーダーが世界中のニュース・経済指標をリアルタイムで把握するのは現実的に不可能です。FX Tactical AnalyzerのAIファンダメンタル分析機能は、最新ニュース・経済指標をリアルタイムで解析し、テクニカルとあわせて統合判断を提供します。</p>
+<p>個人トレーダーが世界中のニュース・経済指標をリアルタイムで把握するのは現実的に不可能です。SextantのAIファンダメンタル分析機能は、最新ニュース・経済指標をリアルタイムで解析し、テクニカルとあわせて統合判断を提供します。</p>
 <p>「ファンダメンタルは難しい」と感じる初心者ほど、AI支援を活用することで判断の質と速度を一気に引き上げられます。</p>
 ${CTA_HTML}
 `,
