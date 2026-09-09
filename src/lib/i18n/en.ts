@@ -630,7 +630,7 @@ export const en: Dict = {
     features: [
       { title: "Data pulled automatically", desc: "Live prices plus RSI, MACD, Bollinger Bands, Ichimoku and 11 indicators in all, together with this week's economic calendar" },
       { title: "One AI judgement", desc: "Technicals and fundamentals folded into a single buy / sell / stand-aside call with a confidence score. Limits that would never fill and stops inside the noise are rejected server-side" },
-      { title: "Position size worked out for you", desc: "Entry, stop and targets, plus the lot size that follows from your balance and how much of it you are willing to risk on one trade" },
+      { title: "Only closed bars are counted", desc: "The forming bar and the flat stretches from hours when the market was shut are dropped before any indicator is computed, so a weekend does not bend the numbers" },
     ],
     stepsTitle: "Three steps to your first analysis",
     steps: [
