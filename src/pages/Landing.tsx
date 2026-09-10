@@ -50,10 +50,10 @@ const ShareSection = () => {
     try {
       await navigator.clipboard.writeText(SHARE_URL);
       setCopied(true);
-      toast.success(t.blog.copiedToast);
+      toast.success(t.landing.share.copiedToast);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error(t.blog.copyFailed);
+      toast.error(t.landing.share.copyFailed);
     }
   };
 
@@ -73,29 +73,29 @@ const ShareSection = () => {
         <div className="flex flex-wrap items-center justify-center gap-3">
           <button
             onClick={onTwitter}
-            aria-label={t.blog.shareX}
+            aria-label={t.landing.share.shareX}
             className={`${baseBtn} bg-gradient-to-r from-[#00d4ff] to-[#0088ff] text-[#0a0e17] hover:opacity-90 shadow-[0_0_20px_rgba(0,212,255,0.25)]`}
           >
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
             </svg>
-            {t.blog.shareX}
+            {t.landing.share.shareX}
           </button>
           <button
             onClick={onLine}
-            aria-label={t.blog.shareLine}
+            aria-label={t.landing.share.shareLine}
             className={`${baseBtn} border border-[#00d4ff]/40 bg-[#00d4ff]/10 text-[#00d4ff] hover:bg-[#00d4ff]/20`}
           >
             <MessageCircle className="h-4 w-4" aria-hidden="true" />
-            {t.blog.shareLine}
+            {t.landing.share.shareLine}
           </button>
           <button
             onClick={onCopy}
-            aria-label={t.blog.copyLink}
+            aria-label={t.landing.share.copyLink}
             className={`${baseBtn} border border-white/10 bg-white/5 text-foreground hover:border-[#00d4ff]/40 hover:text-[#00d4ff]`}
           >
             {copied ? <CheckIcon className="h-4 w-4" aria-hidden="true" /> : <LinkIcon className="h-4 w-4" aria-hidden="true" />}
-            {copied ? t.blog.copied : t.blog.copyLink}
+            {copied ? t.landing.share.copied : t.landing.share.copyLink}
           </button>
         </div>
       </div>
@@ -215,7 +215,6 @@ const Landing = () => {
             <a href="#features" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">{t.lp.nav.features}</a>
             <a href="#pricing" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">{t.lp.nav.pricing}</a>
             <a href="#faq" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">{t.lp.nav.faq}</a>
-            <Link to="/blog" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">{t.landing.blog}</Link>
             <button onClick={goLogin} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               {t.landing.login}
             </button>
@@ -426,7 +425,6 @@ const Landing = () => {
               <span className="text-xs text-muted-foreground ml-2">© 2026</span>
             </div>
             <nav aria-label={t.lp.aria.footerNav} className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-              <Link to="/blog" className="hover:text-foreground transition-colors">{t.landing.blog}</Link>
               <Link to="/terms" className="hover:text-foreground transition-colors">{t.landing.terms}</Link>
               <Link to="/privacy" className="hover:text-foreground transition-colors">{t.landing.privacy}</Link>
               <Link to="/legal" className="hover:text-foreground transition-colors">{t.landing.tokushoho}</Link>

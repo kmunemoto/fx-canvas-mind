@@ -707,7 +707,6 @@ export const ja = {
   },
 
   landing: {
-    blog: "ブログ",
     login: "ログイン",
     startFree: "始める",
     terms: "利用規約",
@@ -715,30 +714,17 @@ export const ja = {
     tokushoho: "特定商取引法に基づく表記",
     contact: "お問い合わせ",
     footerNote: "本サービスは投資助言ではありません。FX取引にはリスクが伴います。",
-  },
-
-  blog: {
-    title: "ブログ",
-    subtitle: "FXテクニカル分析・ファンダメンタル・AI活用についての解説記事",
-    all: "全て",
-    none: "該当する記事がありません。",
-    readMore: "続きを読む",
-    home: "ホーム",
-    readingTime: (n: number) => `約${n}分`,
-    toc: "目次",
-    share: "この記事をシェア",
-    shareX: "Xでシェア",
-    shareLine: "LINEで共有",
-    copyLink: "リンクをコピー",
-    copied: "コピー済み",
-    copiedToast: "リンクをコピーしました",
-    copyFailed: "コピーに失敗しました",
-    related: "関連記事",
-    ctaTitle: "Sextantを使ってみる",
-    ctaBody: "11種の指標と値動きの構造を、確定した足だけで計算します。休場中の平坦な足は計算前に除きます。",
-    // Article bodies are long-form Japanese content, not UI strings, so they
-    // are not translated; say so rather than showing Japanese with no warning.
-    japaneseOnly: "記事本文は日本語のみです。",
+    // Share strings for the landing page's own SNS buttons. They lived under
+    // `blog` until the blog was removed; the buttons are the landing page's,
+    // so the keys moved here rather than being deleted with it.
+    share: {
+      shareX: "Xでシェア",
+      shareLine: "LINEで共有",
+      copyLink: "リンクをコピー",
+      copied: "コピー済み",
+      copiedToast: "リンクをコピーしました",
+      copyFailed: "コピーに失敗しました",
+    },
   },
 
   contact: {

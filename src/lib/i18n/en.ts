@@ -674,7 +674,6 @@ export const en: Dict = {
   },
 
   landing: {
-    blog: "Blog",
     login: "Sign in",
     startFree: "Get started",
     terms: "Terms of Service",
@@ -682,28 +681,17 @@ export const en: Dict = {
     tokushoho: "Commercial Transactions Act notice",
     contact: "Contact",
     footerNote: "This service is not investment advice. FX trading carries risk.",
-  },
-
-  blog: {
-    title: "Blog",
-    subtitle: "Articles on FX technicals, fundamentals and using AI",
-    all: "All",
-    none: "No articles match.",
-    readMore: "Read more",
-    home: "Home",
-    readingTime: (n: number) => `${n} min read`,
-    toc: "Contents",
-    share: "Share this article",
-    shareX: "Share on X",
-    shareLine: "Share on LINE",
-    copyLink: "Copy link",
-    copied: "Copied",
-    copiedToast: "Link copied",
-    copyFailed: "Could not copy the link",
-    related: "Related articles",
-    ctaTitle: "Try Sextant",
-    ctaBody: "Eleven indicators and the shape of the move, computed from closed bars only. The flat stretches from hours when the market was shut are dropped first.",
-    japaneseOnly: "Article text is available in Japanese only.",
+    // Share strings for the landing page's own SNS buttons. They lived under
+    // `blog` until the blog was removed; the buttons are the landing page's,
+    // so the keys moved here rather than being deleted with it.
+    share: {
+      shareX: "Share on X",
+      shareLine: "Share on LINE",
+      copyLink: "Copy link",
+      copied: "Copied",
+      copiedToast: "Link copied",
+      copyFailed: "Could not copy the link",
+    },
   },
 
   contact: {

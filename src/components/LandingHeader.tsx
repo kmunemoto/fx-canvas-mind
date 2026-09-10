@@ -16,9 +16,6 @@ const LandingHeader = () => {
         </button>
         <nav className="flex items-center gap-3">
           <LanguageSwitcher compact />
-          <Link to="/blog" className="hidden md:inline text-sm text-muted-foreground hover:text-foreground transition-colors">
-            {t.landing.blog}
-          </Link>
           <button onClick={() => navigate("/login")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
             {t.landing.login}
           </button>
