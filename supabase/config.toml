@@ -33,3 +33,10 @@ verify_jwt = false
 # no JWT, so the gateway must not demand one.
 [functions.noise-floor]
 verify_jwt = false
+
+# Authenticates in the function body: the sweep token only, exactly like
+# noise-floor and for the same reason — this one spends money on every call it
+# makes. It is never scheduled: an operator fires it by hand from SQL, and that
+# caller sends no JWT, so the gateway must not demand one.
+[functions.version-compare]
+verify_jwt = false
