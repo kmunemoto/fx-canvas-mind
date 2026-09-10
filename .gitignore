@@ -39,3 +39,4 @@ supabase/functions/analyze/bundle.js
 supabase/functions/track-outcomes/bundle.js
 supabase/functions/postmortem/bundle.js
 supabase/functions/noise-floor/bundle.js
+supabase/functions/version-compare/bundle.js
