@@ -12,9 +12,17 @@
 //     cells scored against outcomes that were unknown when the candidate was
 //     frozen. See pairing.ts for the eligibility rule that guards it.
 //
-//   * `requiredPairs` — given the measured same-version noise floor, how many
+//   * `requiredPairs` — given the discordant rate the null produces, how many
 //     paired rows does that test need before it can say anything at all? This
 //     is the number that decides whether it is worth replaying anything today.
+//     Its argument is a DISCORDANT-PAIR rate, and the two stages reach it
+//     differently: stage B passes the measured per-row disagreement rate
+//     straight in, stage A passes it through `nullDiscordantRate` first. The
+//     comment on that function is the derivation and the reason.
+//
+//   * `nullDiscordantRate` — the bridge between the two. Added when the
+//     borrowed 20.83% constant was replaced by a control arm measured on the
+//     same rows.
 //
 // The sample-size formula is NOT invented here. It is the one pre-registered in
 // docs/NOISE_FLOOR_PREREGISTRATION.md §4 and used there to derive the table of
@@ -56,9 +64,21 @@ export const EXACT_PAIRS_AT_ZERO_NOISE = 39;
 // ---------------------------------------------------------------------------
 
 export interface McnemarResult {
-  // live right & candidate wrong.
+  // WHAT b AND c MEAN IS THE CALLER'S DECLARATION, NOT THIS FUNCTION'S. The
+  // test is symmetric arithmetic on two integers; it is used twice with two
+  // different readings, and both are stated where the counts are formed:
+  //
+  //   stage B (tallyPerformance) — b: live right & candidate wrong.
+  //                                c: live wrong & candidate right.
+  //   stage A (tallyAgainstControl) — b: the CONTROL arm disagreed and the
+  //                                     candidate did not.
+  //                                   c: the CANDIDATE arm disagreed and the
+  //                                     control did not.
+  //
+  // In both readings c is the count that favours the candidate, which is why
+  // `direction` can be named once below. A caller that inverted b and c would
+  // invert the conclusion, so both call sites are pinned by tests.
   b: number;
-  // live wrong & candidate right.
   c: number;
   // b + c. The only pairs the test can see: a pair where both arms were right,
   // or both wrong, carries no information about which arm is better and is
@@ -74,6 +94,13 @@ export interface McnemarResult {
   // Which way the discordant pairs lean. "tied" when b === c, INCLUDING when
   // both are zero — a run with no discordant pairs has no direction, and
   // calling that "live" would hand the incumbent a win it never earned.
+  //
+  // THE WORD "better" IS STAGE B's. In stage A, where the counts are
+  // disagreement indicators and no outcome has been read, "candidate_better"
+  // means only "the candidate arm carries the discordant rows", i.e. swapping
+  // the book moved more answers than resampling it did — which is
+  // `material`, not better. index.ts never prints this field in a stage A
+  // block without `screenAgainstControl`'s verdict beside it.
   direction: "candidate_better" | "live_better" | "tied";
   // pValue <= 0.05. Reported as a field rather than left to the caller so that
   // the threshold is stated in one place and cannot drift between the function
@@ -207,6 +234,51 @@ export function requiredPairs(noiseRate: number, delta: number = DELTA): SampleS
   const k = Z_ALPHA_2 / 2 + Z_BETA * Math.sqrt(psi * (1 - psi));
   const raw = 4 * k * k * (delta + noiseRate) / (delta * delta);
   return { noiseRate, delta, psi, k, raw, pairs: Math.ceil(raw), exact: false };
+}
+
+// ---------------------------------------------------------------------------
+// The stage A design: what p0 is, once the floor is a SECOND MEASUREMENT
+// rather than a constant
+// ---------------------------------------------------------------------------
+//
+// `requiredPairs` above takes p0 = "the rate at which a pair goes discordant
+// for reasons other than the effect", and the pre-registration's own algebra
+// says so: with p_b and p_c the two discordant probabilities, delta = p_c - p_b
+// and p0 = 2 p_b, so p_b + p_c = delta + p0 and psi = p_c / (p_b + p_c) is
+// exactly the expression in the formula.
+//
+// FOR STAGE B, FEEDING IT THE PER-ROW DISAGREEMENT RATE DIRECTLY IS RIGHT, and
+// that is what the 75 was. A stage B pair is discordant only when the two arms
+// give different verdicts AND the truth separates them; two arms that agree
+// are concordant whatever the market did. So the discordant rate is bounded
+// above by the disagreement rate, and using the disagreement rate errs by
+// asking for more rows than strictly needed.
+//
+// FOR STAGE A IT IS NOT, and this is the correction the third arm forces. A
+// stage A observation is ITSELF a disagreement indicator, so a row is
+// discordant when the two indicators differ — D_cand = 1, D_ctrl = 0 or the
+// reverse. Under the null that the candidate behaves like the live book, both
+// indicators are Bernoulli(p) with p the measured control rate, and if they
+// were independent the discordant rate would be 2p(1-p), not p. At p = 0.2083
+// that is 0.3299 rather than 0.2083, and the required rows rise accordingly.
+//
+// THEY ARE NOT INDEPENDENT, AND THE ERROR IS IN THE SAFE DIRECTION. Both
+// comparisons share the arm 'live', so a row on which the live arm answered
+// unusually raises the chance of BOTH disagreements at once. Positive
+// correlation moves probability mass into the concordant cells, so the true
+// discordant rate is BELOW 2p(1-p) and this function overstates the rows
+// required. Overstating n delays a verdict; understating it manufactures one.
+//
+// Deliberately not modelled: the correlation itself. Estimating it would need
+// the joint distribution the run is being built to measure, and a design whose
+// sample size depends on the number it is about to compute is not a
+// pre-registered design.
+export function nullDiscordantRate(perRowDisagreementRate: number): number {
+  const p = perRowDisagreementRate;
+  if (!Number.isFinite(p) || p < 0 || p > 1) {
+    throw new RangeError(`nullDiscordantRate: a rate must lie in [0, 1], got ${p}`);
+  }
+  return 2 * p * (1 - p);
 }
 
 // What is still missing. Separated from `requiredPairs` so that "the design

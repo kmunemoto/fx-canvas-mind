@@ -6,18 +6,30 @@ import {
   Z_ALPHA_2,
   Z_BETA,
   mcnemarExact,
+  nullDiscordantRate,
   pairsStillNeeded,
   requiredPairs,
 } from "../../supabase/functions/version-compare/mcnemar";
 import {
+  ARM_ORDERS,
+  ARMS,
+  ARM_COUNT,
+  armOrderForRow,
   armWasRight,
+  armsShareTheSameBook,
+  candidatePairs,
+  controlPairs,
   eligibleForStage,
   pairVerdicts,
+  screenAgainstControl,
   screenMateriality,
+  tallyAgainstControl,
   tallyMateriality,
   smallestMaterialCount,
   tallyPerformance,
+  tripleVerdicts,
   truthFor,
+  type ArmTriad,
   type VerdictPair,
 } from "../../supabase/functions/version-compare/pairing";
 import { wilson } from "../../supabase/functions/noise-floor/metric";
@@ -33,6 +45,13 @@ import { PLAN_CONTRACT } from "../../supabase/functions/_shared/contract";
 const indexSrc = readFileSync("supabase/functions/version-compare/index.ts", "utf8");
 const migrationSrc = readFileSync(
   "supabase/migrations/20260910180000_freeze_the_candidate_before_measuring_it.sql",
+  "utf8",
+);
+// The migration that adds the control arm. A SECOND FILE and never an edit to
+// the one above: 20260910180000 is applied to production, and a migration that
+// has run is a record of what happened rather than a document to revise.
+const controlMigrationSrc = readFileSync(
+  "supabase/migrations/20260910200000_measure_the_floor_with_the_same_ruler.sql",
   "utf8",
 );
 const pairingSrc = readFileSync("supabase/functions/version-compare/pairing.ts", "utf8");
@@ -892,5 +911,557 @@ describe("the two pure modules stay pure", () => {
   it("say in the payload, not only in the docs, that stage A is not a performance claim", () => {
     // Anyone reading the JSON is one copy-paste away from quoting it as one.
     expect(indexSrc).toContain("it is NOT evidence that either book is better");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The control arm: measuring the floor with the same ruler
+// ---------------------------------------------------------------------------
+
+describe("the arm vocabulary", () => {
+  it("has three arms and one place that says how many", () => {
+    // Every `rows * 2` in the runner became `rows * ARM_COUNT`. If the count
+    // lived in more than one place, a budget or an expected_cells could be
+    // left behind on the old number and a two-thirds-finished run would open
+    // the reporting gate.
+    expect(ARMS).toEqual(["live", "candidate", "live_b"]);
+    expect(ARM_COUNT).toBe(3);
+  });
+
+  it("knows which pairs of arms must carry the same book and which must differ", () => {
+    // live and live_b are the same frozen book by construction. If they ever
+    // differ, the control is not a control and whatever it measures would be
+    // published as the floor.
+    expect(armsShareTheSameBook("live", "live_b")).toBe(true);
+    expect(armsShareTheSameBook("live_b", "live")).toBe(true);
+    expect(armsShareTheSameBook("live", "live")).toBe(true);
+    // Everything involving the candidate must differ, or the cell is not a
+    // comparison at all.
+    expect(armsShareTheSameBook("live", "candidate")).toBe(false);
+    expect(armsShareTheSameBook("candidate", "live")).toBe(false);
+    expect(armsShareTheSameBook("candidate", "live_b")).toBe(false);
+    expect(armsShareTheSameBook("live_b", "candidate")).toBe(false);
+  });
+});
+
+describe("tripleVerdicts", () => {
+  it("needs all three arms; a row missing its control is not a row where the analyst agreed", () => {
+    // Counting it as agreement would push the MEASURED FLOOR down, which makes
+    // the candidate's disagreement look larger by comparison — the direction
+    // that promotes a rulebook.
+    expect(tripleVerdicts({ analysisId: "a", live: "traded", candidate: "waited", liveB: null })).toBeNull();
+    expect(tripleVerdicts({ analysisId: "a", live: null, candidate: "waited", liveB: "traded" })).toBeNull();
+    expect(tripleVerdicts({ analysisId: "a", live: "traded", candidate: null, liveB: "traded" })).toBeNull();
+  });
+
+  it("sets the two paired observations from the live arm, which is the shared reference", () => {
+    const t = tripleVerdicts({ analysisId: "a", live: "traded", candidate: "waited", liveB: "traded" });
+    expect(t).not.toBeNull();
+    // D_cand = 1: the candidate moved the answer.
+    expect(t?.candidateDisagrees).toBe(true);
+    // D_ctrl = 0: the same book, sent twice, agreed with itself.
+    expect(t?.controlDisagrees).toBe(false);
+
+    const u = tripleVerdicts({ analysisId: "b", live: "traded", candidate: "traded", liveB: "waited" });
+    expect(u?.candidateDisagrees).toBe(false);
+    // The control disagreeing is the whole point of having it: this is the
+    // analyst changing its own answer with nothing swapped.
+    expect(u?.controlDisagrees).toBe(true);
+  });
+});
+
+describe("tallyAgainstControl", () => {
+  const triad = (candidateDisagrees: boolean, controlDisagrees: boolean, id = "x"): ArmTriad => ({
+    analysisId: id,
+    live: "traded",
+    candidate: candidateDisagrees ? "waited" : "traded",
+    liveB: controlDisagrees ? "waited" : "traded",
+    candidateDisagrees,
+    controlDisagrees,
+  });
+
+  it("fills the paired 2x2 with b as CONTROL-only and c as CANDIDATE-only", () => {
+    // THE ORIENTATION. An inverted b and c reverses the verdict, so it is
+    // pinned with counts that could not be confused for each other.
+    const rows = [
+      triad(true, false, "c1"),
+      triad(true, false, "c2"),
+      triad(true, false, "c3"),
+      triad(false, true, "b1"),
+      triad(true, true, "both"),
+      triad(false, false, "neither1"),
+      triad(false, false, "neither2"),
+    ];
+    const t = tallyAgainstControl(rows);
+    expect(t.rows).toBe(7);
+    // c: the candidate disagreed and the control did not. Three of them.
+    expect(t.c).toBe(3);
+    // b: the control disagreed and the candidate did not. One.
+    expect(t.b).toBe(1);
+    expect(t.bothDisagree).toBe(1);
+    expect(t.neitherDisagrees).toBe(2);
+    // The two marginals share the denominator, which is what makes them
+    // comparable at all.
+    expect(t.candidateDisagreements).toBe(4);
+    expect(t.controlDisagreements).toBe(2);
+    expect(t.candidateRate).toBeCloseTo(4 / 7, 12);
+    expect(t.controlRate).toBeCloseTo(2 / 7, 12);
+    // Every row lands in exactly one cell of the 2x2.
+    expect(t.b + t.c + t.bothDisagree + t.neitherDisagrees).toBe(t.rows);
+  });
+
+  it("returns NaN over zero rows, never 0", () => {
+    // Zero is precisely the number a reader would take for "the analyst never
+    // disagreed with itself", i.e. a perfect instrument.
+    const t = tallyAgainstControl([]);
+    expect(t.rows).toBe(0);
+    expect(Number.isNaN(t.controlRate)).toBe(true);
+    expect(Number.isNaN(t.candidateRate)).toBe(true);
+  });
+
+  it("feeds mcnemarExact in the orientation that calls c the material direction", () => {
+    // This is the test that would fail if b and c were swapped anywhere
+    // between the tally and the payload.
+    const rows = [
+      ...Array.from({ length: 9 }, (_, i) => triad(true, false, `c${i}`)),
+      triad(false, true, "b0"),
+    ];
+    const t = tallyAgainstControl(rows);
+    const test = mcnemarExact(t.b, t.c);
+    expect(test.discordant).toBe(10);
+    expect(test.pValue).toBeCloseTo(2 * (Math.pow(0.5, 10) * (1 + 10)), 12);
+    expect(test.significant).toBe(true);
+    // "candidate_better" in the generic test's vocabulary; in stage A it means
+    // the candidate arm carries the discordant rows, i.e. MATERIAL.
+    expect(test.direction).toBe("candidate_better");
+    expect(
+      screenAgainstControl({ b: t.b, c: t.c, significant: test.significant, underpowered: test.underpowered }),
+    ).toBe("material");
+
+    // Swapped, the same numbers must NOT read as material. If they did, the
+    // orientation would not be load-bearing and an inversion would go unseen.
+    const swapped = mcnemarExact(t.c, t.b);
+    expect(
+      screenAgainstControl({
+        b: t.c,
+        c: t.b,
+        significant: swapped.significant,
+        underpowered: swapped.underpowered,
+      }),
+    ).toBe("control_exceeds_candidate_investigate");
+  });
+
+  it("projects the triads into the two pair views without changing the disagreements", () => {
+    const rows = [triad(true, false, "a"), triad(false, true, "b")];
+    const cand = candidatePairs(rows);
+    const ctrl = controlPairs(rows);
+    expect(cand.map((p) => p.disagree)).toEqual([true, false]);
+    expect(ctrl.map((p) => p.disagree)).toEqual([false, true]);
+    // The control view puts the SECOND LIVE arm in the `candidate` slot so the
+    // already-tested tallyPerformance can score one book against itself.
+    expect(ctrl[1].candidate).toBe(rows[1].liveB);
+    expect(cand[0].candidate).toBe(rows[0].candidate);
+    // tallyMateriality over the candidate view is the raw candidate rate.
+    expect(tallyMateriality(cand).disagreements).toBe(1);
+  });
+});
+
+describe("screenAgainstControl", () => {
+  it("never calls an underpowered run material", () => {
+    // No split of fewer than six discordant rows can reach 0.05, so a screen
+    // that fired on one would be firing on arithmetic that could not say no.
+    const test = mcnemarExact(0, 5);
+    expect(test.underpowered).toBe(true);
+    expect(
+      screenAgainstControl({ b: 0, c: 5, significant: test.significant, underpowered: test.underpowered }),
+    ).toBe("indistinguishable");
+  });
+
+  it("reports 'indistinguishable' rather than 'the same' when the test does not reject", () => {
+    const test = mcnemarExact(5, 6);
+    expect(test.significant).toBe(false);
+    expect(
+      screenAgainstControl({ b: 5, c: 6, significant: test.significant, underpowered: test.underpowered }),
+    ).toBe("indistinguishable");
+  });
+
+  it("calls a significant result in the wrong direction an instrument finding", () => {
+    // A book cannot be more stable against a DIFFERENT book than against
+    // itself. Reporting that as "immaterial" would bury it.
+    const test = mcnemarExact(9, 0);
+    expect(test.significant).toBe(true);
+    expect(
+      screenAgainstControl({ b: 9, c: 0, significant: test.significant, underpowered: test.underpowered }),
+    ).toBe("control_exceeds_candidate_investigate");
+  });
+
+  it("refuses fractional or negative counts instead of rounding them", () => {
+    expect(() => screenAgainstControl({ b: 1.5, c: 2, significant: true, underpowered: false })).toThrow(RangeError);
+    expect(() => screenAgainstControl({ b: -1, c: 2, significant: true, underpowered: false })).toThrow(RangeError);
+  });
+});
+
+describe("nullDiscordantRate", () => {
+  it("is 2p(1-p): a stage A observation is itself a disagreement indicator", () => {
+    // Under the null both indicators are Bernoulli(p); if they were
+    // independent the pair would be discordant with probability 2p(1-p).
+    expect(nullDiscordantRate(0)).toBe(0);
+    expect(nullDiscordantRate(0.5)).toBe(0.5);
+    expect(nullDiscordantRate(1)).toBe(0);
+    expect(nullDiscordantRate(10 / 48)).toBeCloseTo(0.3298611111, 10);
+  });
+
+  it("asks for about 100 rows where the old one-proportion reading asked for 75", () => {
+    // The relation to the pre-registered 75, stated as arithmetic rather than
+    // as a claim. Same formula, same alpha, same power, same delta — the only
+    // thing that changed is which rate is the discordant rate.
+    const historical = 10 / 48;
+    expect(requiredPairs(historical, DELTA).pairs).toBe(75);
+    expect(requiredPairs(nullDiscordantRate(historical), DELTA).pairs).toBe(100);
+  });
+
+  it("still takes the exact answer when the measured floor is zero", () => {
+    // A control arm that never disagreed with itself gives 2p(1-p) = 0, and
+    // the formula degenerates there exactly as it does for stage B.
+    const need = requiredPairs(nullDiscordantRate(0), DELTA);
+    expect(need.exact).toBe(true);
+    expect(need.pairs).toBe(EXACT_PAIRS_AT_ZERO_NOISE);
+  });
+
+  it("grows with the measured floor, so a noisier instrument buys fewer conclusions", () => {
+    const at10 = requiredPairs(nullDiscordantRate(0.10), DELTA).pairs;
+    const at2083 = requiredPairs(nullDiscordantRate(10 / 48), DELTA).pairs;
+    const at30 = requiredPairs(nullDiscordantRate(0.30), DELTA).pairs;
+    expect(at10).toBeLessThan(at2083);
+    expect(at2083).toBeLessThan(at30);
+  });
+
+  it("refuses a rate outside [0, 1] instead of returning a negative requirement", () => {
+    expect(() => nullDiscordantRate(-0.01)).toThrow(RangeError);
+    expect(() => nullDiscordantRate(1.01)).toThrow(RangeError);
+    expect(() => nullDiscordantRate(Number.NaN)).toThrow(RangeError);
+  });
+});
+
+describe("the control arm in version-compare/index.ts", () => {
+  it("counts three cells per row everywhere, from one constant", () => {
+    // A `* 2` left anywhere is a run that opens the reporting gate with a
+    // third of its cells missing.
+    expect(indexSrc).toContain("frozenIds.length * ARM_COUNT");
+    expect(indexSrc).toContain("population.length * ARM_COUNT");
+    expect(indexSrc).toContain("expected_cells: ids.length * ARM_COUNT");
+    expect(indexSrc).toContain("const expected = dryIds.length * ARM_COUNT");
+    expect(indexSrc).not.toMatch(/\.length \* 2\b/);
+    // The arms are iterated from the exported list, not from a literal pair.
+    expect(indexSrc).not.toContain('["live", "candidate"] as const');
+    expect(indexSrc).toContain("for (const arm of ARMS)");
+  });
+
+  it("sends the control arm the SAME rendered string, not a second render of the same rules", () => {
+    // renderLearnedRules is deterministic, but "almost certainly identical" is
+    // the wrong standard for the arm whose only job is to be identical.
+    expect(indexSrc).toContain("live_b: jaLive");
+    expect(indexSrc).toContain("live_b: enLive");
+    expect(indexSrc).toContain("live_b: jaLiveSha");
+    expect(indexSrc).toContain("live_b: enLiveSha");
+  });
+
+  it("proves the three pairing invariants in report mode instead of assuming them", () => {
+    // All three arms agree on the question; live and live_b agree on BOTH the
+    // rules digest and the system digest; candidate differs from live.
+    expect(indexSrc).toContain("live.userSha !== candidate.userSha || live.userSha !== liveB.userSha");
+    expect(indexSrc).toContain("live.rulesSha !== liveB.rulesSha || live.systemSha !== liveB.systemSha");
+    expect(indexSrc).toContain("control_arm_is_not_identical_to_live");
+    expect(indexSrc).toContain("if (live.rulesSha === candidate.rulesSha)");
+    expect(indexSrc).toContain("same_book_both_arms");
+  });
+
+  it("refuses to buy a cell whose siblings say the control drifted", () => {
+    // The cheap half of the same check, before the money is spent. The one
+    // place that says which pairs must match is the pure function.
+    expect(indexSrc).toContain("armsShareTheSameBook(cell.arm, otherArm)");
+    expect(indexSrc).toContain("control_arm_carries_a_different_book:");
+    expect(indexSrc).toContain("sibling_arm_carries_the_same_book:");
+  });
+
+  it("presents the raw rate, the measured floor and the paired test as three separate things", () => {
+    expect(indexSrc).toContain("candidate_vs_live:");
+    expect(indexSrc).toContain("control_vs_live:");
+    expect(indexSrc).toContain("paired_mcnemar:");
+    expect(indexSrc).toContain("THE MEASURED FLOOR");
+    // The discordant cells are named in the payload, so the orientation cannot
+    // be lost between the tally and the reader.
+    expect(indexSrc).toContain("b_control_disagreed_candidate_did_not");
+    expect(indexSrc).toContain("c_candidate_disagreed_control_did_not");
+  });
+
+  it("keeps 20.83% only as a labelled reference and lets it decide nothing", () => {
+    expect(indexSrc).toContain("historical_floor_reference:");
+    expect(indexSrc).toContain("MEASURED ON A DIFFERENT PROMPT RENDERING");
+    expect(indexSrc).toContain("superseded_screen:");
+    // The verdict comes from the paired test against the measured control.
+    expect(indexSrc).toContain("const verdict = screenAgainstControl({");
+    // And a control rate that differs from the borrowed one is itself surfaced.
+    expect(indexSrc).toContain("measured_floor_differs");
+    expect(indexSrc).toContain("measured_floor_direction");
+  });
+
+  it("sizes the stage B requirement from the floor this run measured", () => {
+    expect(indexSrc).toContain("const need = requiredPairs(control.controlRate, DELTA);");
+    expect(indexSrc).toContain("const needFromHistoricalFloor = requiredPairs(NOISE_FLOOR_RATE, DELTA);");
+    // Sealed with the rate it was sized from, or a reader cannot tell whether
+    // the number came from a measurement or from the constant.
+    expect(indexSrc).toContain("required_pairs_noise_rate: need.noiseRate,");
+    expect(indexSrc).toContain("required_pairs_from_historical_floor");
+    // And it does not reopen optional stopping: the control rate is computed
+    // from cells that are fixed once the run completes.
+    expect(indexSrc).toContain("THIS DOES NOT REOPEN OPTIONAL STOPPING");
+  });
+
+  it("scores the control arm against the same truth as a floor under stage B's own b and c", () => {
+    expect(indexSrc).toContain("const controlPerformance = tallyPerformance(controlScored);");
+    expect(indexSrc).toContain("control_floor:");
+    // A disclosure, not a correction: nothing subtracts one from the other.
+    expect(indexSrc).toContain("b_live_right_control_wrong");
+    expect(indexSrc).toContain("c_live_wrong_control_right");
+  });
+
+  it("refuses to resume or report on an aborted run", () => {
+    expect(indexSrc).toContain("an aborted run cannot be resumed");
+    expect(indexSrc).toContain('refusal: reportStatus === "aborted" ? "run_aborted" : "run_is_a_dry_run"');
+  });
+});
+
+describe("the control-arm migration", () => {
+  it("is a new file and does not edit the one that is already applied", () => {
+    // 20260910180000 has run against production. A migration that has run is a
+    // record of what happened, not a document to revise.
+    expect(migrationSrc).toContain("arm text not null check (arm in ('live', 'candidate'))");
+    expect(controlMigrationSrc).toContain("check (arm in ('live', 'candidate', 'live_b'))");
+  });
+
+  it("drops and recreates the check under one name, so it is safe to re-run", () => {
+    // A CHECK constraint cannot be edited in place, and an `add constraint`
+    // without the drop would fail on a second application.
+    expect(controlMigrationSrc).toContain(
+      "drop constraint if exists version_compare_cells_arm_check",
+    );
+    expect(controlMigrationSrc).toMatch(
+      /add constraint version_compare_cells_arm_check\s*\n?\s*check \(arm in \('live', 'candidate', 'live_b'\)\)/,
+    );
+  });
+
+  it("verifies the unique key admits a third arm rather than assuming it", () => {
+    // The whole design rests on (run_id, analysis_id, arm). A key narrowed to
+    // (run_id, analysis_id) would turn the control arm into a constraint
+    // violation on the first cell of the first run.
+    expect(controlMigrationSrc).toContain("'run_id,analysis_id,arm'");
+    expect(controlMigrationSrc).toContain("the control arm cannot be claimed per (row, arm) without it");
+  });
+
+  it("corrects the comments the third arm made wrong", () => {
+    expect(controlMigrationSrc).toContain("comment on table public.version_compare_runs is");
+    expect(controlMigrationSrc).toContain("comment on column public.version_compare_cells.arm is");
+    expect(controlMigrationSrc).toContain("comment on column public.version_compare_runs.expected_cells is");
+    expect(controlMigrationSrc).toContain("rows x 3");
+  });
+
+  it("makes an aborted run terminal in the database as well as in the function", () => {
+    expect(controlMigrationSrc).toContain("version_compare_runs_aborted_is_final");
+    expect(controlMigrationSrc).toContain("before update of status on public.version_compare_runs");
+  });
+
+  it("leaves the freeze alone, because the control replays a book already frozen", () => {
+    // live_b sends the live book that rulebook_candidate_freezes already
+    // stores. Nothing about a third arm changes what was frozen.
+    expect(controlMigrationSrc).not.toMatch(/alter table public\.rulebook_candidate_freezes/);
+    expect(controlMigrationSrc).not.toMatch(/drop table/i);
+    expect(controlMigrationSrc).not.toMatch(/create policy/i);
+  });
+});
+
+describe("a row whose arm never reached the wire", () => {
+  it("is counted as an unsent arm, not as a control that drifted", () => {
+    // closeUnsent writes an empty rules digest so a refusal cannot be mistaken
+    // for a measurement. With two arms a blank digest fell through harmlessly
+    // — the candidate arm was required to DIFFER. The control arm is required
+    // to MATCH, so the same blank would have read as an instrument alarm
+    // raised by an ordinary skipped row.
+    expect(indexSrc).toContain("const wasSent = (cell: { rulesSha: string }): boolean => cell.rulesSha.length > 0;");
+    expect(indexSrc).toContain("if (!wasSent(live) || !wasSent(candidate) || !wasSent(liveB))");
+    expect(indexSrc).toContain("rows_with_an_unsent_arm");
+    // And closeUnsent is still the thing that writes the blank.
+    expect(indexSrc).toContain('rulesSha: "",');
+  });
+
+  it("refuses a report whose control disagreed with itself on every row", () => {
+    // At a control rate of 1 the sample-size formula has no defined answer and
+    // every number downstream rests on that rate.
+    expect(indexSrc).toContain("if (control.controlRate >= 1) {");
+    expect(indexSrc).toContain("control_disagreed_on_every_row");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The order the three arms are sent in
+// ---------------------------------------------------------------------------
+
+describe("armOrderForRow", () => {
+  it("offers every ordering of the three arms exactly once", () => {
+    expect(ARM_ORDERS).toHaveLength(6);
+    const seen = new Set(ARM_ORDERS.map((order) => order.join(",")));
+    expect(seen.size).toBe(6);
+    for (const order of ARM_ORDERS) {
+      expect([...order].sort()).toEqual([...ARMS].sort());
+    }
+  });
+
+  it("balances how far the candidate and the control comparisons sit from the reference", () => {
+    // THIS IS THE WHOLE POINT OF THE PERMUTATION, and it is checked by
+    // arithmetic rather than by trusting the comment.
+    //
+    // A chained run buys about one cell per hop, so a row's three cells are
+    // three instants. The lag of a comparison is how many cell-slots separate
+    // it from the 'live' arm. Sent in the declared order alone the control lag
+    // is 2 on every row and the candidate lag is 1 on every row, so any drift
+    // in the serving path lands entirely on the measured floor.
+    let candidateLag = 0;
+    let controlLag = 0;
+    for (const order of ARM_ORDERS) {
+      const live = order.indexOf("live");
+      candidateLag += Math.abs(order.indexOf("candidate") - live);
+      controlLag += Math.abs(order.indexOf("live_b") - live);
+    }
+    expect(candidateLag).toBe(8);
+    expect(controlLag).toBe(8);
+    expect(candidateLag).toBe(controlLag);
+
+    // And the declared order on its own is exactly the imbalance being fixed.
+    const declared = ARM_ORDERS[0];
+    expect(declared).toEqual(["live", "candidate", "live_b"]);
+    expect(Math.abs(declared.indexOf("candidate") - declared.indexOf("live"))).toBe(1);
+    expect(Math.abs(declared.indexOf("live_b") - declared.indexOf("live"))).toBe(2);
+  });
+
+  it("gives one row the same order on every hop", () => {
+    // The three cells of a row are claimed in separate invocations hours
+    // apart, and each invocation rebuilds the pending list from scratch. An
+    // order that differed between hops could not be recomputed from the record.
+    const run = "3f1c1c1e-0000-4000-8000-000000000001";
+    const row = "9a2b2b2e-0000-4000-8000-000000000002";
+    const first = armOrderForRow(run, row);
+    for (let i = 0; i < 25; i += 1) expect(armOrderForRow(run, row)).toEqual(first);
+  });
+
+  it("always returns a real permutation, whatever ids it is handed", () => {
+    for (let i = 0; i < 400; i += 1) {
+      const order = armOrderForRow(`run-${i}`, `row-${i * 7 + 1}`);
+      expect(order).toHaveLength(ARM_COUNT);
+      expect([...order].sort()).toEqual([...ARMS].sort());
+    }
+    // Empty strings are not a real input, but returning undefined for them
+    // would be an index error at the one place a cell is created.
+    expect([...armOrderForRow("", "")].sort()).toEqual([...ARMS].sort());
+  });
+
+  it("does not put every row of a run on one ordering", () => {
+    // A hash that collapsed would leave the imbalance in place while looking
+    // like it had been fixed.
+    const run = "3f1c1c1e-0000-4000-8000-000000000001";
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i += 1) seen.add(armOrderForRow(run, `row-${i}`).join(","));
+    expect(seen.size).toBe(6);
+  });
+
+  it("separates the run id from the row id, so ids cannot be chosen to collide", () => {
+    expect(armOrderForRow("ab", "c")).not.toBe(undefined);
+    // ("ab","c") and ("a","bc") would hash alike without the separator. They
+    // are allowed to land on the same order by chance; what must not happen is
+    // that the two keys are the SAME string.
+    expect(`${"ab"}#${"c"}`).not.toBe(`${"a"}#${"bc"}`);
+  });
+});
+
+describe("the arm order as index.ts uses it", () => {
+  it("builds the pending list from the per-row order, not the declared one", () => {
+    expect(indexSrc).toContain("for (const arm of armOrderForRow(runId, row.analysisId))");
+    // The declared list is still what the arithmetic and the dry count use.
+    expect(indexSrc).toContain("for (const arm of ARMS)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A hop that cannot succeed does not hand the chain on
+// ---------------------------------------------------------------------------
+
+describe("the zero-progress guard", () => {
+  it("marks the two breaks that will fail again on the next hop", () => {
+    // Running before 20260910200000 is applied buys the first row's live and
+    // candidate arms normally and then fails the live_b claim on the CHECK.
+    // Without the flag, that failure was handed to a child, and to its child,
+    // for max_chain_hops invocations.
+    expect(indexSrc).toContain("let hardStop: string | null = null;");
+    expect(indexSrc).toContain("hardStop = `claim_failed:${cell.arm}`;");
+    expect(indexSrc).toContain("hardStop = `cell_write_failed:${cell.arm}`;");
+  });
+
+  it("refuses to chain and refuses to look like a success", () => {
+    expect(indexSrc).toContain('if (chain && status === "running" && hardStop === null) {');
+    expect(indexSrc).toContain("if (hardStop !== null) {");
+    expect(indexSrc).toContain("return json(summarize(totals, false), 500);");
+    expect(indexSrc).toContain("hard_stop: hardStop,");
+  });
+
+  it("leaves the ordinary zero-progress hops alone", () => {
+    // A guarded cron minute and a hop with too little wall clock left must
+    // keep chaining, or a run that meets one stalls forever.
+    expect(indexSrc).toContain('skipped = "cron_minute";');
+    expect(indexSrc).not.toContain('hardStop = "cron_minute"');
+    expect(indexSrc).not.toMatch(/hardStop = .{0,40}wall_clock/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An instrument alarm is not an ordinary skipped row
+// ---------------------------------------------------------------------------
+
+describe("the unsent-arm breakdown", () => {
+  it("reads the refusal reason instead of only the blank digest", () => {
+    expect(indexSrc).toContain('"tools_present,schema_in_prompt,shape,error_slice"');
+    expect(indexSrc).toContain("refusal: typeof cell.error_slice === \"string\" ? cell.error_slice : \"\",");
+  });
+
+  it("names the three reasons that mean the harness caught itself", () => {
+    // These are exactly the codes the pre-spend sibling check writes. A row
+    // dropped for one of them is not attrition.
+    expect(indexSrc).toContain("const INSTRUMENT_ALARMS = [");
+    expect(indexSrc).toContain('"control_arm_carries_a_different_book:",');
+    expect(indexSrc).toContain('"sibling_arm_carries_the_same_book:",');
+    expect(indexSrc).toContain('"request_disagrees_with_sibling_arm:",');
+  });
+
+  it("counts them separately and pushes them into errors", () => {
+    expect(indexSrc).toContain("rows_with_an_unsent_arm_on_an_instrument_alarm");
+    expect(indexSrc).toContain("unsent_arm_reasons");
+    expect(indexSrc).toContain("rows_dropped_on_instrument_alarm:");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What stage A says about its own power, and what `material` cannot mean
+// ---------------------------------------------------------------------------
+
+describe("stage A's own disclosures", () => {
+  it("says whether the verdict was reached at the pre-registered n", () => {
+    expect(indexSrc).toContain("rows_reach_required: stageANeed === null ? null : control.rows >= stageANeed.pairs,");
+    expect(indexSrc).toContain("below_required_means");
+  });
+
+  it("states that the control bounds the byte-identical null and nothing wider", () => {
+    // live_b differs from live by nothing; candidate differs by bytes. A
+    // semantically null edit would also break that null, and this design has
+    // no arm that separates the two.
+    expect(indexSrc).toContain("what_material_does_not_separate");
+    expect(indexSrc).toContain("semantically null edit");
   });
 });

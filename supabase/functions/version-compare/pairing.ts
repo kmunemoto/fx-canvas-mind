@@ -29,6 +29,62 @@
 // BE WRITTEN UP AS ONE: a book that changes every answer for the worse would
 // score maximally material.
 //
+// ===========================================================================
+// THE THIRD ARM, AND WHY THE FLOOR IS NO LONGER A BORROWED CONSTANT
+// ===========================================================================
+//
+// "more often than the analyst changes its own answer with nothing swapped"
+// needs a number for the second half of that sentence. Until now it was a
+// constant carried over from #64: 10/48, 20.83%. That number was measured by
+// replaying the STORED prompt bytes, whose rules block was rendered RANKED and
+// carried a per-rule marker computed against the market of that minute. This
+// harness cannot render the candidate's rules with those markers, so BOTH of
+// its arms are re-rendered WITHOUT them — which means the rate stage A
+// measures and the floor it was compared against came from two different
+// prompt shapes. docs/VERSION_COMPARISON.md 5 already recorded that the
+// unranked floor was UNVERIFIED and plausibly HIGHER, and that both directions
+// of that error push toward promoting a rulebook.
+//
+// So the floor is measured instead of assumed, on the same rows, the same
+// rendering and the same day, by replaying the frozen LIVE book a second time:
+//
+//   arm 'live'      — the frozen live book, re-rendered unranked (the reference)
+//   arm 'candidate' — the frozen candidate book, re-rendered unranked
+//   arm 'live_b'    — the frozen LIVE book AGAIN, byte-identical to 'live'
+//
+// Per row that yields two binary observations:
+//
+//   D_cand(i) = 1 if candidate disagrees with live on row i
+//   D_ctrl(i) = 1 if live_b    disagrees with live on row i
+//
+// D_ctrl is one book's self-disagreement under THIS rendering. It is the
+// floor. The question stage A now answers is:
+//
+//   does swapping the rulebook change the answer MORE than merely resampling
+//   the same rulebook does?
+//
+// THE TWO OBSERVATIONS ARE PAIRED — same row, same market, same question — so
+// the test is McNemar on the pair, and the discordant counts are defined once,
+// here, in the names of the fields that carry them:
+//
+//   b = rows where the CONTROL disagreed and the candidate did not
+//   c = rows where the CANDIDATE disagreed and the control did not
+//
+// c > b is the material direction. An inverted b and c reverses the verdict,
+// which is why the orientation is a named field rather than a positional
+// argument and why src/test/version-compare.test.ts pins it with a case that
+// would fail if the two were swapped.
+//
+// THE STRUCTURAL ASYMMETRY, STATED RATHER THAN LEFT TO BE ASSUMED: the arm
+// 'live' appears in BOTH comparisons, so D_cand and D_ctrl are correlated
+// through a shared arm — a row on which the live arm happened to answer
+// unusually raises the chance of both disagreements at once. That correlation
+// is exactly what pairing accounts for, and it is why the two rates must never
+// be compared as if they were two independent samples. It also means the
+// discordant rate is LOWER than two independent Bernoulli draws would give,
+// which is the direction that makes the sample-size arithmetic in mcnemar.ts
+// conservative rather than optimistic. See `nullDiscordantRate` there.
+//
 // STAGE B — PERFORMANCE. Score both arms against what the market actually did
 // afterwards. Admissible ONLY on snapshots created strictly after the freeze,
 // because for those the candidate is a prediction rather than a fit. On an
@@ -45,7 +101,101 @@
 // could walk out looking like evidence.
 
 export type Stage = "materiality" | "performance";
-export type Arm = "live" | "candidate";
+
+// 'live_b' is the CONTROL: the same frozen live book, sent again as a
+// byte-identical request. It is a third arm and not a second run of the first
+// one, because it has to be claimed, budgeted and paired like any other cell —
+// a control that lived outside the cell table could not be shown to have asked
+// the same question.
+export type Arm = "live" | "candidate" | "live_b";
+
+// The order cells are created in, and the ONE place the arm count lives. Every
+// piece of arithmetic that used to say `rows * 2` says `rows * ARM_COUNT`
+// instead, so adding or removing an arm cannot leave a budget, an
+// `expected_cells` or a progress line behind on the old number.
+export const ARMS: readonly Arm[] = ["live", "candidate", "live_b"];
+export const ARM_COUNT = ARMS.length;
+
+// Which pairs of arms must send the SAME rules block and which must send
+// different ones. 'live' and 'live_b' are the same book by construction — if
+// their rules digests differ, the control is not a control and the floor it
+// measures is not a floor. Every other pair must differ, or the cell that
+// carries it is not a comparison.
+export const armsShareTheSameBook = (a: Arm, b: Arm): boolean =>
+  (a === "live" || a === "live_b") && (b === "live" || b === "live_b");
+
+// ---------------------------------------------------------------------------
+// The order a row's three arms are SENT in, and why it is not the order they
+// are declared in
+// ---------------------------------------------------------------------------
+//
+// THE PROBLEM THIS SOLVES IS A TIME CONFOUND, NOT A BYTE ONE. `live` and
+// `live_b` are byte-identical by construction (index.ts hands the control arm
+// the same rendered string, not a second render). What is NOT identical is
+// WHEN each comparison is made. A chained run buys about one billable cell per
+// hop, so the three cells of a row land at three separate instants. Sent in
+// the declared order, every row would measure D_cand across one interval and
+// D_ctrl across two — the control comparison always the wider-spaced of the
+// pair, on every row, never the other way round.
+//
+// Any drift in the serving path over that window — routing, load, a rolling
+// deployment — would then inflate D_ctrl relative to D_cand SYSTEMATICALLY.
+// The direction is the conservative one (a bigger floor makes `material`
+// harder to reach and asks for more rows), but a bias that is always present
+// and never randomised is not something a floor measurement should carry, and
+// it would land in the payload under the label "THE MEASURED FLOOR".
+//
+// So the order is a permutation of the three arms chosen per row. Over the six
+// orderings of three arms the expected separation is the same for both
+// comparisons: relabelling 'candidate' and 'live_b' maps the set of six onto
+// itself, and both lags are symmetric in that relabelling, so their sums over
+// the six orders are equal (8 and 8 — the test writes them out). A per-row
+// draw therefore cancels a linear drift instead of accumulating it.
+//
+// DETERMINISTIC, NOT RANDOM, and that is not a compromise — it is required.
+// The three cells of a row are claimed across separate invocations hours
+// apart, and each invocation rebuilds the pending list from scratch. An order
+// drawn from a random source would differ between hops, which is harmless for
+// the cells already bought but makes the run's behaviour unreproducible from
+// its record. Hashing (run_id, analysis_id) gives one order per row that every
+// hop of that run agrees on and that a reader can recompute from the two ids
+// the cell table already stores.
+//
+// The permutations are WRITTEN OUT rather than generated, for the reason the
+// critical values in mcnemar.ts are: a reader checking that both lags sum to
+// the same number should be able to do it by looking, not by running a
+// factorial.
+export const ARM_ORDERS: readonly (readonly Arm[])[] = [
+  ["live", "candidate", "live_b"],
+  ["live", "live_b", "candidate"],
+  ["candidate", "live", "live_b"],
+  ["candidate", "live_b", "live"],
+  ["live_b", "live", "candidate"],
+  ["live_b", "candidate", "live"],
+];
+
+// FNV-1a, 32-bit. Chosen because it is four lines of integer arithmetic with
+// no imports — this module reaches nothing — and because the only property
+// needed is that it spreads two hex ids across six buckets without caring
+// which. It is NOT a cryptographic choice and nothing security-bearing rests
+// on it: an adversary who could pick analysis ids could at most choose the
+// order their own row's arms are sent in, which changes no measurement.
+const fnv1a32 = (text: string): number => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+};
+
+// The '#' is a separator, not decoration: without it the pair
+// (run "ab", row "c") and the pair (run "a", row "bc") would hash alike, and
+// two different rows of one run could then be forced to share an order by an
+// id chosen to collide. It costs one character.
+export function armOrderForRow(runId: string, analysisId: string): readonly Arm[] {
+  return ARM_ORDERS[fnv1a32(`${runId}#${analysisId}`) % ARM_ORDERS.length];
+}
 
 // The projection metric.ts calls `published_proxy`: the confidence floor only,
 // applied to the model's own signal. This module never computes it — the
@@ -165,9 +315,185 @@ export function tallyMateriality(pairs: ReadonlyArray<VerdictPair>): Materiality
 }
 
 // ---------------------------------------------------------------------------
-// The stage A screen
+// The three arms of one row, and the two paired observations they yield
 // ---------------------------------------------------------------------------
 
+export interface ArmTriad {
+  analysisId: string;
+  live: Verdict;
+  candidate: Verdict;
+  liveB: Verdict;
+  // D_cand: the candidate arm landed on a different published decision from
+  // the live arm.
+  candidateDisagrees: boolean;
+  // D_ctrl: the SECOND LIVE arm landed on a different published decision from
+  // the first one. Same book, same bytes, different sample. This is the floor.
+  controlDisagrees: boolean;
+}
+
+// ALL THREE ARMS OR NOTHING, for `pairVerdicts`'s reason carried one arm
+// further. A row whose control arm failed is not a row where the analyst
+// agreed with itself; it is a row with no control, and entering it as
+// agreement would push the measured floor DOWN — which makes the candidate's
+// disagreement look larger by comparison, which is the direction that promotes
+// a rulebook. Transport and parse failures do not strike rows at random, so
+// the rows lost this way are disproportionately the unstable ones and the bias
+// is not a wash.
+export function tripleVerdicts(input: {
+  analysisId: string;
+  live: Verdict | null;
+  candidate: Verdict | null;
+  liveB: Verdict | null;
+}): ArmTriad | null {
+  if (input.live === null || input.candidate === null || input.liveB === null) return null;
+  return {
+    analysisId: input.analysisId,
+    live: input.live,
+    candidate: input.candidate,
+    liveB: input.liveB,
+    candidateDisagrees: input.candidate !== input.live,
+    controlDisagrees: input.liveB !== input.live,
+  };
+}
+
+export interface ControlTally {
+  // Rows on which all three arms produced a projectable verdict.
+  rows: number;
+  // The two raw counts. Each is a count over `rows`, so the two rates share a
+  // denominator and are directly comparable — which they are NOT if one of
+  // them is quietly measured over a different set of rows.
+  candidateDisagreements: number;
+  controlDisagreements: number;
+  candidateRate: number;
+  // THE MEASURED FLOOR. Same rows, same rendering, same day.
+  controlRate: number;
+
+  // The paired 2x2 over the two disagreement indicators. `b` and `c` are the
+  // only cells the exact test can see; the concordant two are reported because
+  // a reader cannot reconstruct them from b, c and the rates alone.
+  bothDisagree: number;
+  neitherDisagrees: number;
+  // b — THE CONTROL disagreed and the candidate did NOT.
+  b: number;
+  // c — THE CANDIDATE disagreed and the control did NOT. c > b is the material
+  // direction: swapping the book moved the answer on rows where resampling the
+  // same book did not.
+  c: number;
+}
+
+// NaN over zero rows, never 0, for `tallyMateriality`'s reason: the rate of no
+// rows is not zero, and zero is precisely the number a reader would take for
+// "the analyst never disagreed with itself" — i.e. a perfect instrument.
+export function tallyAgainstControl(rows: ReadonlyArray<ArmTriad>): ControlTally {
+  let candidateDisagreements = 0;
+  let controlDisagreements = 0;
+  let bothDisagree = 0;
+  let neitherDisagrees = 0;
+  let b = 0;
+  let c = 0;
+  for (const row of rows) {
+    if (row.candidateDisagrees) candidateDisagreements += 1;
+    if (row.controlDisagrees) controlDisagreements += 1;
+    if (row.candidateDisagrees && row.controlDisagrees) bothDisagree += 1;
+    else if (!row.candidateDisagrees && !row.controlDisagrees) neitherDisagrees += 1;
+    else if (row.controlDisagrees) b += 1;
+    else c += 1;
+  }
+  return {
+    rows: rows.length,
+    candidateDisagreements,
+    controlDisagreements,
+    candidateRate: rows.length === 0 ? Number.NaN : candidateDisagreements / rows.length,
+    controlRate: rows.length === 0 ? Number.NaN : controlDisagreements / rows.length,
+    bothDisagree,
+    neitherDisagrees,
+    b,
+    c,
+  };
+}
+
+// The control arm scored the way stage B scores the candidate: a
+// `VerdictPair` whose second member is the SECOND LIVE ARM rather than the
+// candidate. Feeding these to `tallyPerformance` gives the discordant counts a
+// book earns against ITSELF under the same truth, which is the only honest
+// yardstick for stage B's own b and c.
+//
+// The field is still called `candidate` because it is the same VerdictPair the
+// rest of the file uses and a parallel type would be a second thing to keep in
+// step. Every caller labels it in the payload.
+export function controlPairs(rows: ReadonlyArray<ArmTriad>): VerdictPair[] {
+  return rows.map((row) => ({
+    analysisId: row.analysisId,
+    live: row.live,
+    candidate: row.liveB,
+    disagree: row.controlDisagrees,
+  }));
+}
+
+export function candidatePairs(rows: ReadonlyArray<ArmTriad>): VerdictPair[] {
+  return rows.map((row) => ({
+    analysisId: row.analysisId,
+    live: row.live,
+    candidate: row.candidate,
+    disagree: row.candidateDisagrees,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// The verdict: is the swap bigger than the resample?
+// ---------------------------------------------------------------------------
+
+export type ControlScreenVerdict =
+  // The candidate disagreed with live on strictly more rows than the control
+  // did, by more than the exact paired test attributes to chance. The change
+  // is material; a forward evaluation is worth paying for. IT STILL SAYS
+  // NOTHING ABOUT WHICH BOOK IS BETTER.
+  | "material"
+  // Not distinguishable from resampling the same book. The honest report is
+  // "swapping the book did not move the answer more than asking twice does",
+  // NOT "the two books are the same".
+  | "indistinguishable"
+  // Significant in the WRONG DIRECTION: one book disagreed with itself on more
+  // rows than the other book disagreed with it. That is not a finding about
+  // the candidate — it is a reason to look at the instrument, because a book
+  // cannot be more stable against a different book than against itself.
+  | "control_exceeds_candidate_investigate";
+
+// THE ORIENTATION LIVES HERE AND NOWHERE ELSE, and it is `c > b`.
+//
+// `significant` and `underpowered` are taken from `mcnemarExact` rather than
+// recomputed, so the 0.05 threshold and the m < 6 rule are each stated in one
+// place. An underpowered run is `indistinguishable` and never `material`: no
+// split of fewer than six discordant rows can reach 0.05, and a screen that
+// fired on one would be firing on arithmetic that could not have said no.
+export function screenAgainstControl(input: {
+  b: number;
+  c: number;
+  significant: boolean;
+  underpowered: boolean;
+}): ControlScreenVerdict {
+  if (!Number.isInteger(input.b) || !Number.isInteger(input.c) || input.b < 0 || input.c < 0) {
+    throw new RangeError(
+      `screenAgainstControl: b and c must be non-negative integers, got ${input.b} and ${input.c}`,
+    );
+  }
+  if (input.underpowered || !input.significant) return "indistinguishable";
+  return input.c > input.b ? "material" : "control_exceeds_candidate_investigate";
+}
+
+// ---------------------------------------------------------------------------
+// The SUPERSEDED stage A screen, kept as a secondary reference only
+// ---------------------------------------------------------------------------
+//
+// This is the interval-overlap screen against #64's borrowed 20.83%. IT NO
+// LONGER DECIDES ANYTHING. The verdict comes from `screenAgainstControl`
+// above, over a floor measured on the same rows and the same rendering.
+//
+// It is kept, and still emitted, for one reason: a reader who has seen the old
+// design needs to be able to see what it would have said, and a number that
+// quietly disappears is a number nobody can check. Everywhere it is printed it
+// carries the label that it was measured on a DIFFERENT PROMPT RENDERING —
+// ranked, with per-rule fit markers — from the one both arms of this run use.
 export type MaterialityVerdict =
   // The observed disagreement is clearly above anything the same-version noise
   // floor can explain. The change is material; a forward evaluation is worth

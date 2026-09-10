@@ -9,7 +9,7 @@
 // budgets. Read noise-floor/index.ts first; the comments there explain WHY each
 // of those exists and they are cited here by name rather than restated.
 //
-// WHAT IS NEW HERE, AND IT IS ONLY TWO THINGS.
+// WHAT IS NEW HERE, AND IT IS ONLY THREE THINGS.
 //
 // (1) THE CANDIDATE IS FROZEN BEFORE IT IS MEASURED.
 //     `public.rulebook.candidate` is rewritten by the postmortem sweep every
@@ -22,14 +22,14 @@
 //
 // (2) THERE ARE TWO STAGES AND THEY ANSWER DIFFERENT QUESTIONS.
 //
-//     STAGE A, 'materiality'. Replay each stored snapshot twice: once with the
-//     frozen LIVE book spliced in, once with the frozen CANDIDATE book. Count
-//     how often the two answers differ. NO OUTCOME IS READ, so no outcome can
-//     leak. The result is compared against #64's same-version noise floor
-//     (10/48, 20.83%, Wilson [11.73%, 34.26%]). This is a SCREENING TEST: it
-//     says whether the change is big enough to be worth a forward evaluation.
-//     IT IS NOT A PERFORMANCE CLAIM. A book that changed every answer for the
-//     worse would score maximally material.
+//     STAGE A, 'materiality'. Replay each stored snapshot THREE times: with
+//     the frozen LIVE book spliced in, with the frozen CANDIDATE book, and
+//     with the frozen LIVE book AGAIN as a byte-identical control. Count how
+//     often the candidate disagreed with live, and how often live disagreed
+//     with ITSELF. NO OUTCOME IS READ, so no outcome can leak. This is a
+//     SCREENING TEST: it says whether the change is big enough to be worth a
+//     forward evaluation. IT IS NOT A PERFORMANCE CLAIM. A book that changed
+//     every answer for the worse would score maximally material.
 //
 //     STAGE B, 'performance'. Score both arms against what the market did, and
 //     run an exact McNemar on the discordant pairs. Admissible only on
@@ -41,6 +41,34 @@
 //     The filter is `created_at=gt.<frozen_at>` IN THE QUERY (see
 //     readEligibleIds), it is repeated as a trigger in the migration, and
 //     pairing.ts states it a third time as a pure function.
+//
+// (3) THE NOISE FLOOR IS MEASURED BY THIS RUN, NOT BORROWED FROM #64.
+//
+//     Every row is replayed a third time under the SAME frozen live book, as
+//     a byte-identical request — arm 'live_b'. How often that arm disagrees
+//     with 'live' is one book's self-disagreement under THIS rendering, on
+//     THESE rows, on the same day. It is the floor.
+//
+//     It replaces a constant that did not describe this experiment. #64's
+//     20.83% was measured on the STORED prompt bytes, whose rules block was
+//     rendered RANKED with per-rule fit markers; both arms here are
+//     re-rendered WITHOUT those markers, because they cannot be computed for
+//     the candidate's rules. So the rate stage A measured and the floor it was
+//     compared against came from two different prompt shapes, and
+//     docs/VERSION_COMPARISON.md section 5 recorded that the unranked floor
+//     was plausibly HIGHER — which would make `material` too easy to reach and
+//     stage B's 75-row target too small. Both errors promote a rulebook.
+//
+//     The two observations are PAIRED (same row), so the verdict is an exact
+//     McNemar between them, with b = control-only disagreements and c =
+//     candidate-only. c > b is material. The orientation, and the correlation
+//     induced by 'live' appearing in both comparisons, are argued in
+//     pairing.ts. The historical 20.83% is still printed, labelled as having
+//     been measured on a different prompt rendering, and decides nothing.
+//
+//     THE COST: three cells per row instead of two, so roughly half again the
+//     billable calls. That is the price of a comparator this experiment
+//     actually produced.
 //
 // WHAT IT SPENDS. Every /v1/messages call is billed against the same
 // ANTHROPIC_API_KEY that a live user's analysis and the postmortem sweep run
@@ -92,39 +120,62 @@ import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   DELTA,
   mcnemarExact,
+  nullDiscordantRate,
   pairsStillNeeded,
   requiredPairs,
 } from "./mcnemar.ts";
 import {
+  ARMS,
+  ARM_COUNT,
+  armOrderForRow,
+  armsShareTheSameBook,
+  candidatePairs,
+  controlPairs,
   eligibleForStage,
-  pairVerdicts,
+  screenAgainstControl,
   screenMateriality,
   smallestMaterialCount,
+  tallyAgainstControl,
   tallyMateriality,
   tallyPerformance,
+  tripleVerdicts,
   truthFor,
   type Arm,
+  type ArmTriad,
   type ScoredTruth,
   type Stage,
   type Verdict,
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v1-2026-09-10T18:00:00Z";
+const FUNCTION_VERSION = "version-compare-v2-2026-09-10T20:00:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,
 // noise_runs/noise_cells, arm search_free, N=2).
 //
-// COPIED AS NUMBERS, NOT RE-DERIVED FROM THE TABLES, and the reason is that
-// this is the pre-registered comparator: recomputing it from noise_cells on
-// every report would let a later noise run — a different arm, a wider
-// population, a partial run — silently move the bar this function is measured
-// against. The bar was set on 2026-09-09 and it is written down. If a better
-// floor is measured, somebody edits these three lines and says so.
+// A SECONDARY REFERENCE, NOT THE COMPARATOR. It used to be the bar stage A
+// was measured against. It no longer is, and the reason is stated wherever it
+// is printed: it was measured on the STORED prompt bytes, whose rules block
+// was rendered RANKED with per-rule fit markers, and both arms of this harness
+// are re-rendered WITHOUT them. Two different prompt shapes cannot share one
+// floor. The floor this run uses is the one its own 'live_b' arm measures.
+//
+// It is kept, and still emitted, because a reader who has seen the old design
+// needs to be able to see what it would have said, and because the DIFFERENCE
+// between it and the measured control rate is itself a finding: it is the size
+// of the error the old comparison was carrying.
+//
+// Still copied as numbers rather than recomputed from noise_cells, for the
+// original reason: a later noise run — a different arm, a wider population, a
+// partial run — must not silently move a number this file quotes.
 const NOISE_FLOOR_K = 10;
 const NOISE_FLOOR_N = 48;
 const NOISE_FLOOR_RATE = NOISE_FLOOR_K / NOISE_FLOOR_N;
+const NOISE_FLOOR_SOURCE =
+  "docs/NOISE_FLOOR_PREREGISTRATION.md 12.2 (arm search_free, N=2), measured on the STORED prompt bytes: " +
+  "a RANKED rules block carrying per-rule fit markers. Both arms of this run are re-rendered UNRANKED, " +
+  "so this rate describes a different prompt shape and is a reference only.";
 
 // Every one of the following is noise-floor's, for noise-floor's stated
 // reasons. They are not re-argued here; see that file.
@@ -293,12 +344,19 @@ const parseAnalysisJson = (finalText: string): unknown => {
 // THE COST IS REAL AND IS NOT HIDDEN: neither arm is byte-identical to what
 // production sent. Stage A therefore measures "does swapping the rule list
 // change the answer, under an unranked rendering", not "would production have
-// answered differently". #64's 20.83% floor was measured on the stored bytes,
-// so comparing against it assumes the unranked rendering does not itself change
-// how often the analyst disagrees with itself. THAT ASSUMPTION IS UNVERIFIED.
-// Measuring it would mean a second noise-floor run against unranked prompts,
-// which costs another 96 billable calls. docs/VERSION_COMPARISON.md says so in
-// the owner's language.
+// answered differently".
+//
+// THE ASSUMPTION THAT USED TO SIT ON TOP OF THAT COST HAS BEEN REMOVED.
+// #64's 20.83% floor was measured on the stored, RANKED bytes, so comparing
+// this run's rate against it assumed the unranked rendering does not itself
+// change how often the analyst disagrees with itself — an assumption nothing
+// verified, and one whose likely direction (a HIGHER unranked floor, because
+// the removed markers were confidence-bearing text) biased the screen toward
+// `material` and the sample size toward too small. Both promote a rulebook.
+//
+// Rather than assume it or measure it separately, the run measures it: the
+// arm 'live_b' below sends this same unranked live block a second time, on the
+// same rows, on the same day. That is what the third arm buys.
 //
 // The renderer is production's own — analyze/rules.ts — imported, not copied.
 // It is Deno-free by declaration and imports only situation.ts, which imports
@@ -847,7 +905,7 @@ Deno.serve(async (req: Request) => {
     };
 
     // =====================================================================
-    // Building the two arms of one row
+    // Building the three arms of one row
     // =====================================================================
 
     const anthropicHeaders = replayHeaders(anthropicKey);
@@ -907,13 +965,24 @@ Deno.serve(async (req: Request) => {
       const candidate = parseRules(freeze.candidate_rules);
       if (live.length === 0) return "freeze_live_rules_unreadable";
       if (candidate.length === 0) return "freeze_candidate_rules_unreadable";
+      // THE CONTROL ARM IS THE SAME STRING, NOT A SECOND RENDER OF THE SAME
+      // RULES. `renderLearnedRules` is deterministic, so a second call would
+      // almost certainly produce identical text — but "almost certainly" is
+      // the wrong standard for the arm whose entire job is to be identical.
+      // Assigning the same reference makes `live_b` byte-identical to `live`
+      // by construction, and the digest check in report mode is then a proof
+      // about what was SENT rather than a hope about what was rendered.
+      const jaLive = renderBlock(live, "ja");
+      const enLive = renderBlock(live, "en");
+      const jaLiveSha = await sha256Hex(jaLive);
+      const enLiveSha = await sha256Hex(enLive);
       const blocks = {
-        ja: { live: renderBlock(live, "ja"), candidate: renderBlock(candidate, "ja") },
-        en: { live: renderBlock(live, "en"), candidate: renderBlock(candidate, "en") },
+        ja: { live: jaLive, candidate: renderBlock(candidate, "ja"), live_b: jaLive },
+        en: { live: enLive, candidate: renderBlock(candidate, "en"), live_b: enLive },
       };
       const shas = {
-        ja: { live: await sha256Hex(blocks.ja.live), candidate: await sha256Hex(blocks.ja.candidate) },
-        en: { live: await sha256Hex(blocks.en.live), candidate: await sha256Hex(blocks.en.candidate) },
+        ja: { live: jaLiveSha, candidate: await sha256Hex(blocks.ja.candidate), live_b: jaLiveSha },
+        en: { live: enLiveSha, candidate: await sha256Hex(blocks.en.candidate), live_b: enLiveSha },
       };
       return { live, candidate, blocks, shas };
     };
@@ -1078,6 +1147,41 @@ Deno.serve(async (req: Request) => {
       }
       if (run === null) return refuse("report_run_id names no run");
 
+      // AN ABORTED RUN IS NOT A RESULT, AND A DRY RUN NEVER WILL BE.
+      //
+      // The completeness gate below would already refuse most of them — an
+      // aborted run stopped early, so its cells do not reach `expected_cells`
+      // — but "would already" is not the same as "does", and the run that
+      // exists today makes the difference concrete: e6a97341-69a4-443f-b877-
+      // 5eed16d4ec34 was created under the TWO-ARM design and aborted with
+      // `superseded_by_control_arm_design`. Its header says expected_cells 160
+      // over 80 rows. Reporting on it would compare a two-arm expectation
+      // against a three-arm population count and produce a refusal whose
+      // message named the wrong problem. Refusing by status says the true one.
+      //
+      // The migration makes it durable: an aborted run cannot be moved back to
+      // 'running' by hand either.
+      const reportStatus = typeof run.status === "string" ? run.status : "";
+      if (reportStatus === "aborted" || reportStatus === "dry") {
+        return json({
+          ok: false,
+          mode: "report",
+          run_id: reportRunId,
+          report: {
+            emitted: false,
+            refusal: reportStatus === "aborted" ? "run_aborted" : "run_is_a_dry_run",
+            status: reportStatus,
+            abort_reason: strOrNull(run.abort_reason),
+            detail: reportStatus === "aborted"
+              ? "an aborted run stopped before its population was measured; it cannot be resumed and it cannot be reported on"
+              : "a dry run counts tokens and never calls the model; it has no answers to report",
+          },
+          errors,
+          elapsedMs: elapsed(),
+          version: FUNCTION_VERSION,
+        }, 409);
+      }
+
       const runStage = run.stage === "performance" ? "performance" : "materiality";
       const reportNotes = isRecord(run.notes) ? run.notes : {};
       unmeasuredCellInputBound = numberOrNull(reportNotes.unmeasured_cell_input_bound) ?? 0;
@@ -1093,7 +1197,11 @@ Deno.serve(async (req: Request) => {
       if (frozenIds.length === 0) {
         return refuse("the run header carries no frozen population; it cannot be reported");
       }
-      const expectedFromPopulation = frozenIds.length * 2;
+      // ROWS x THREE ARMS. The 20260910180000 migration's inline comment says
+      // "rows x 2"; that file is applied and immutable, and the column comment
+      // added by 20260910200000 is the correction. A run still counted against
+      // the old number would open this gate with a third of its cells missing.
+      const expectedFromPopulation = frozenIds.length * ARM_COUNT;
       const expectedColumn = numberOrNull(run.expected_cells) ?? 0;
       if (expectedColumn !== expectedFromPopulation) {
         errors.push(`expected_cells_disagrees:column=${expectedColumn}:population=${expectedFromPopulation}`);
@@ -1112,7 +1220,11 @@ Deno.serve(async (req: Request) => {
         reportRunId,
         "analysis_id,arm,status,raw_signal,raw_confidence,input_tokens,output_tokens," +
           "cache_read_input_tokens,system_sha256,user_sha256,rules_sha256,effort,max_tokens," +
-          "tools_present,schema_in_prompt,shape",
+          // `error_slice` is read so that a cell closed before the wire can say
+          // WHY. Its vocabulary is a closed set of reason codes written by
+          // `closeUnsent`; none of them carries a row id, a prompt or a body,
+          // which is what makes it safe to aggregate into the payload.
+          "tools_present,schema_in_prompt,shape,error_slice",
       );
       if (cells === null) {
         return json({ ok: false, mode: "report", errors, elapsedMs: elapsed(), version: FUNCTION_VERSION }, 500);
@@ -1161,19 +1273,24 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // ---- assemble the pairs --------------------------------------------
+      // ---- assemble the triads -------------------------------------------
       interface ArmCell {
         verdict: Verdict | null;
         status: string;
         facts: string;
+        systemSha: string;
         rulesSha: string;
         userSha: string;
+        // Empty unless the cell was closed without a request. Carried so the
+        // report can separate "this row was skipped" from "this row's arms
+        // disagreed about what they were sending".
+        refusal: string;
       }
       const byRow = new Map<string, Partial<Record<Arm, ArmCell>>>();
       for (const cell of cells) {
         const analysisId = typeof cell.analysis_id === "string" ? cell.analysis_id.toLowerCase() : "";
-        const arm = cell.arm === "candidate" ? "candidate" : cell.arm === "live" ? "live" : null;
-        if (analysisId.length === 0 || arm === null) continue;
+        const arm = ARMS.find((candidate) => candidate === cell.arm);
+        if (analysisId.length === 0 || arm === undefined) continue;
         const status = typeof cell.status === "string" ? cell.status : "";
         // The projection is metric.ts's `publishedProxy`, the same function
         // #64's floor was computed with. A second copy of the enum here could
@@ -1191,105 +1308,418 @@ Deno.serve(async (req: Request) => {
           verdict: status === "ok" ? publishedProxy(raw) : null,
           status,
           facts: [cell.effort, cell.max_tokens, cell.tools_present, cell.schema_in_prompt, cell.shape].join("|"),
+          systemSha: typeof cell.system_sha256 === "string" ? cell.system_sha256 : "",
           rulesSha: typeof cell.rules_sha256 === "string" ? cell.rules_sha256 : "",
           userSha: typeof cell.user_sha256 === "string" ? cell.user_sha256 : "",
+          refusal: typeof cell.error_slice === "string" ? cell.error_slice : "",
         };
         byRow.set(analysisId, entry);
       }
 
-      // THE PAIRING PROOF, performed rather than asserted.
+      // THE PAIRING PROOF, PERFORMED RATHER THAN ASSERTED, AND IT IS THE
+      // INSTRUMENT'S SELF-CHECK. With three arms it has three clauses and they
+      // are not interchangeable:
       //
-      // The two arms of a row must have asked the same question (identical
-      // user digest, identical request facts) and must have been given
-      // DIFFERENT books (different rules digest). A pair that fails either test
-      // is excluded and counted, because pooling it would report a request
-      // difference, or no difference at all, as a rulebook effect.
-      const badPairs: string[] = [];
-      const pairs: VerdictPair[] = [];
-      let bothArmsPresent = 0;
+      //   * ALL THREE arms of a row must agree on `user_sha256` and on the
+      //     request facts — same snapshot, same question, same shape. A row
+      //     whose arms asked different questions is not a row.
+      //
+      //   * 'live' and 'live_b' must agree on `rules_sha256` AND on
+      //     `system_sha256`. They are meant to be the same request sent twice.
+      //     IF THEY DIFFER THE CONTROL IS NOT A CONTROL: whatever it would
+      //     then measure is the effect of that difference plus the sampling
+      //     noise, and it would be published as the floor. Both digests are
+      //     checked, not just the rules one — the rules block is spliced into
+      //     the stored system prompt, and a system digest that differs while
+      //     the rules digest matches means something OUTSIDE the seam moved.
+      //
+      //   * 'candidate' must DIFFER from 'live' on `rules_sha256`. A candidate
+      //     arm carrying the live book is not a comparison; it is a second
+      //     control nobody asked for, and it would read as perfect agreement.
+      //
+      // A row failing any clause is excluded and counted. Pooling it would
+      // report a request difference, or no difference at all, as a rulebook
+      // effect. Report mode refuses such rows exactly as it did with two arms.
+      const badRows: string[] = [];
+      const triads: ArmTriad[] = [];
+      let allArmsPresent = 0;
       let unprojectable = 0;
+      let armNeverSent = 0;
+      // A cell that never reached the wire carries no digests: `closeUnsent`
+      // writes an empty rules digest precisely so that a refusal cannot be
+      // mistaken for a measurement. `prepareArm` always writes a sha256, so an
+      // empty one means exactly one thing.
+      //
+      // SUCH A ROW IS NOT AN INVARIANT VIOLATION AND MUST NOT BE COUNTED AS
+      // ONE. With two arms it fell through harmlessly — a blank digest differs
+      // from the live one, which is what the candidate arm was required to do
+      // — but the control arm is required to MATCH, so a live_b cell that was
+      // refused before the request would read as "the control drifted", which
+      // is an instrument alarm raised by an ordinary skipped row. It is
+      // reported as a row with an unsent arm, which is what it is.
+      const wasSent = (cell: { rulesSha: string }): boolean => cell.rulesSha.length > 0;
+
+      // WHICH REFUSALS ARE INSTRUMENT ALARMS AND WHICH ARE ORDINARY.
+      //
+      // `closeUnsent` writes the same blank digest whatever the reason, so
+      // `rows_with_an_unsent_arm` pooled a benign skipped row —
+      // 'row_refused:already_fallback' — with the strongest alarm this design
+      // can raise: the pre-spend sibling check finding that a row's arms did
+      // not agree about what they were sending. The reason survived only in
+      // the cell's own error_slice and in the per-invocation `errors` array,
+      // which is never persisted, so the run that raised the alarm and the run
+      // that skipped a fallback row reported the same single number.
+      //
+      // These three prefixes are exactly the reasons that mismatch check
+      // writes. They mean the harness caught itself asking two different
+      // questions, and they are surfaced by name, counted separately, and
+      // pushed into `errors`.
+      const INSTRUMENT_ALARMS = [
+        "control_arm_carries_a_different_book:",
+        "sibling_arm_carries_the_same_book:",
+        "request_disagrees_with_sibling_arm:",
+      ];
+      const isInstrumentAlarm = (reason: string): boolean =>
+        INSTRUMENT_ALARMS.some((prefix) => reason.startsWith(prefix));
+      // Reason -> rows. A closed vocabulary of codes, so counting them cannot
+      // put a row id or a prompt in the payload.
+      const unsentReasons = new Map<string, number>();
+      let armNeverSentInstrumentAlarm = 0;
+
       for (const id of frozenIds) {
         const entry = byRow.get(id);
         const live = entry?.live;
         const candidate = entry?.candidate;
-        if (!live || !candidate) continue;
-        bothArmsPresent += 1;
-        if (live.userSha !== candidate.userSha || live.facts !== candidate.facts) {
-          badPairs.push(`${id}:request_differs`);
+        const liveB = entry?.live_b;
+        if (!live || !candidate || !liveB) continue;
+        allArmsPresent += 1;
+        if (!wasSent(live) || !wasSent(candidate) || !wasSent(liveB)) {
+          armNeverSent += 1;
+          let alarmed = false;
+          for (const cell of [live, candidate, liveB]) {
+            if (wasSent(cell)) continue;
+            const reason = cell.refusal.length > 0 ? cell.refusal : "unrecorded";
+            unsentReasons.set(reason, (unsentReasons.get(reason) ?? 0) + 1);
+            if (isInstrumentAlarm(reason)) alarmed = true;
+          }
+          if (alarmed) armNeverSentInstrumentAlarm += 1;
+          continue;
+        }
+        if (
+          live.userSha !== candidate.userSha || live.userSha !== liveB.userSha ||
+          live.facts !== candidate.facts || live.facts !== liveB.facts
+        ) {
+          badRows.push(`${id}:request_differs`);
+          continue;
+        }
+        if (live.rulesSha !== liveB.rulesSha || live.systemSha !== liveB.systemSha) {
+          badRows.push(`${id}:control_arm_is_not_identical_to_live`);
           continue;
         }
         if (live.rulesSha === candidate.rulesSha) {
-          badPairs.push(`${id}:same_book_both_arms`);
+          badRows.push(`${id}:same_book_both_arms`);
           continue;
         }
-        const pair = pairVerdicts({ analysisId: id, live: live.verdict, candidate: candidate.verdict });
-        if (pair === null) {
+        const triad = tripleVerdicts({
+          analysisId: id,
+          live: live.verdict,
+          candidate: candidate.verdict,
+          liveB: liveB.verdict,
+        });
+        if (triad === null) {
           unprojectable += 1;
           continue;
         }
-        pairs.push(pair);
+        triads.push(triad);
       }
-      if (badPairs.length > 0) errors.push(`unpaired_rows:${badPairs.length}`);
+      if (badRows.length > 0) errors.push(`unpaired_rows:${badRows.length}`);
+      // Loud, because a row dropped for an instrument alarm is not attrition:
+      // it is the harness reporting that two of a row's arms did not agree
+      // about what they were sending, and a reader who sees only a nonzero
+      // skip count has no way to tell the two apart.
+      if (armNeverSentInstrumentAlarm > 0) {
+        errors.push(`rows_dropped_on_instrument_alarm:${armNeverSentInstrumentAlarm}`);
+      }
+      // Sorted so two reports of the same run print the same object; the Map's
+      // insertion order is whatever order the rows happened to come back in.
+      const unsentArmReasons: Record<string, number> = {};
+      for (const [reason, count] of [...unsentReasons.entries()].sort((x, y) => x[0] < y[0] ? -1 : 1)) {
+        unsentArmReasons[reason] = count;
+      }
 
+      const pairs: VerdictPair[] = candidatePairs(triads);
       const materiality = tallyMateriality(pairs);
+      const control = tallyAgainstControl(triads);
       const floorCi = wilson(NOISE_FLOOR_K, NOISE_FLOOR_N);
 
-      // Emitting nothing is the correct answer to zero pairs. The rate of no
-      // pairs is NaN, not zero, and zero is the number a reader would take for
+      // Emitting nothing is the correct answer to zero rows. The rate of no
+      // rows is NaN, not zero, and zero is the number a reader would take for
       // "the two books agreed".
-      if (materiality.pairs === 0) {
+      if (control.rows === 0) {
         return json({
           ok: true,
           mode: "report",
           run_id: reportRunId,
           stage: runStage,
-          report: { emitted: false, refusal: "no_projectable_pairs", rows_with_both_arms: bothArmsPresent, unprojectable },
+          report: {
+            emitted: false,
+            refusal: "no_projectable_rows",
+            rows_with_all_three_arms: allArmsPresent,
+            rows_with_an_unsent_arm: armNeverSent,
+            rows_with_an_unsent_arm_on_an_instrument_alarm: armNeverSentInstrumentAlarm,
+            unsent_arm_reasons: unsentArmReasons,
+            unprojectable,
+            rows_excluded: badRows.length,
+          },
           errors,
           elapsedMs: elapsed(),
           version: FUNCTION_VERSION,
         });
       }
 
+      // A CONTROL THAT DISAGREED WITH ITSELF ON EVERY ROW IS NOT A FLOOR.
+      //
+      // It is an instrument alarm, and it is refused rather than reported: at
+      // a control rate of 1 the sample-size formula has no defined answer
+      // (`requiredPairs` refuses a rate outside [0, 1)), and every number this
+      // report would print rests on that rate. Emitting a payload with a hole
+      // in it, or quietly substituting a nearby rate, would both be worse than
+      // saying which measurement failed. The counts go in the refusal so the
+      // operator is not left guessing.
+      if (control.controlRate >= 1) {
+        errors.push(`control_disagreed_on_every_row:${control.rows}`);
+        return json({
+          ok: false,
+          mode: "report",
+          run_id: reportRunId,
+          stage: runStage,
+          report: {
+            emitted: false,
+            refusal: "control_disagreed_on_every_row",
+            detail:
+              "the frozen live book disagreed with ITSELF on every row. That is not a floor and it is not a " +
+              "finding about the candidate; nothing downstream of it is interpretable.",
+            rows: control.rows,
+            control_disagreements: control.controlDisagreements,
+            candidate_disagreements: control.candidateDisagreements,
+          },
+          errors,
+          elapsedMs: elapsed(),
+          version: FUNCTION_VERSION,
+        }, 409);
+      }
+
+      // ---- the three things the report must not blur ----------------------
+      //
+      // (1) the raw candidate-vs-live disagreement rate, with its interval;
+      // (2) the raw control rate, with its interval — THE MEASURED FLOOR;
+      // (3) the PAIRED McNemar between them, which is the verdict.
+      //
+      // (1) and (2) are descriptive and share a denominator, so they can be
+      // read side by side — but they must NOT be compared as two independent
+      // proportions: 'live' appears in both, so they are correlated through a
+      // shared arm. That correlation is precisely what (3) accounts for, and
+      // it is why (3) and not a comparison of the two intervals is the verdict.
       const observedCi = wilson(materiality.disagreements, materiality.pairs);
-      const screen = screenMateriality({
+      const controlCi = wilson(control.controlDisagreements, control.rows);
+      const pairedTest = mcnemarExact(control.b, control.c);
+      const verdict = screenAgainstControl({
+        b: control.b,
+        c: control.c,
+        significant: pairedTest.significant,
+        underpowered: pairedTest.underpowered,
+      });
+
+      // WHAT THE OLD DESIGN WOULD HAVE SAID, kept so that it can be checked
+      // rather than quietly dropped. It decides nothing.
+      const supersededScreen = screenMateriality({
         observedLo: observedCi.lo,
         observedHi: observedCi.hi,
         floorLo: floorCi.lo,
         floorHi: floorCi.hi,
       });
 
+      // IS THE MEASURED FLOOR MATERIALLY DIFFERENT FROM THE BORROWED ONE?
+      //
+      // That is a finding in its own right and it goes in the payload rather
+      // than being left for somebody to eyeball two intervals. Non-overlap of
+      // the two Wilson intervals is the conservative reading of "different";
+      // the direction matters more than the fact, because a measured floor
+      // ABOVE 20.83% means every earlier `material` verdict and the 75-row
+      // target were both biased toward promoting a rulebook.
+      const floorDiffers = controlCi.lo > floorCi.hi || controlCi.hi < floorCi.lo;
+      const floorDirection = control.controlRate > NOISE_FLOOR_RATE
+        ? "measured_floor_is_higher"
+        : (control.controlRate < NOISE_FLOOR_RATE ? "measured_floor_is_lower" : "equal");
+
+      // HOW MANY ROWS THIS PAIRED SCREEN NEEDED, recomputed for the design it
+      // actually is. See `nullDiscordantRate` in mcnemar.ts: a stage A
+      // observation is itself a disagreement indicator, so the discordant rate
+      // under the null is 2p(1-p) and not p. At the historical 20.83% that is
+      // 32.99%, which asks for about 100 rows where the old one-proportion
+      // reading of the same formula asked for 75.
+      const stageANoise = Number.isFinite(control.controlRate)
+        ? nullDiscordantRate(control.controlRate)
+        : Number.NaN;
+      const stageANeed = Number.isFinite(stageANoise) ? requiredPairs(stageANoise, DELTA) : null;
+
       const stageA = {
         // SAID IN THE PAYLOAD, not only in the docs. Anyone reading this JSON
         // is one copy-paste away from calling it a performance result.
         what_this_is:
-          "a screening test on how often the two books disagree; it is NOT evidence that either book is better",
-        pairs: materiality.pairs,
-        disagreements: materiality.disagreements,
-        rate: materiality.rate,
-        wilson95: observedCi,
-        noise_floor: {
+          "a screening test on whether swapping the rulebook moves the answer MORE than resampling the same " +
+          "rulebook does; it is NOT evidence that either book is better",
+        rows: control.rows,
+
+        // (1) THE RAW CANDIDATE RATE.
+        candidate_vs_live: {
+          what_this_is: "how often the candidate book landed on a different published decision from the live book",
+          disagreements: materiality.disagreements,
+          rate: materiality.rate,
+          wilson95: observedCi,
+        },
+
+        // (2) THE MEASURED FLOOR.
+        control_vs_live: {
+          what_this_is:
+            "THE MEASURED FLOOR: how often the SAME frozen live book, sent a second time as a byte-identical " +
+            "request, landed on a different published decision from itself. Same rows, same unranked rendering, " +
+            "same day as the candidate arm.",
+          disagreements: control.controlDisagreements,
+          rate: control.controlRate,
+          wilson95: controlCi,
+        },
+
+        // (3) THE VERDICT.
+        paired_mcnemar: {
+          what_this_is:
+            "the actual verdict. The two rates above are PAIRED (same row) and correlated through the shared " +
+            "'live' arm, so they are compared row by row and not interval against interval.",
+          b_control_disagreed_candidate_did_not: control.b,
+          c_candidate_disagreed_control_did_not: control.c,
+          both_disagreed: control.bothDisagree,
+          neither_disagreed: control.neitherDisagrees,
+          mcnemar: pairedTest,
+          direction_means: pairedTest.direction === "candidate_better"
+            ? "the candidate arm carries the discordant rows: swapping the book moved answers that resampling it did not"
+            : (pairedTest.direction === "live_better"
+              ? "the CONTROL arm carries the discordant rows: one book disagreed with itself more than the other book did with it"
+              : "no lean; b equals c"),
+        },
+        verdict,
+        verdict_means: verdict === "material"
+          ? "swapping the rulebook moved the answer more than resampling it did. It says NOTHING about which book is better."
+          : (verdict === "indistinguishable"
+            ? "not distinguishable from asking the same book twice. This is NOT 'the two books are the same'."
+            : "significant in the wrong direction: a book cannot be more stable against a different book than " +
+              "against itself. Look at the instrument, not at the rulebook."),
+
+        // THE LIMIT OF WHAT `material` CAN MEAN, IN THE PAYLOAD RATHER THAN
+        // ONLY IN THE DOCS.
+        //
+        // 'live_b' differs from 'live' by NOTHING — same bytes, same request.
+        // 'candidate' differs by bytes. So the null this test rejects is "the
+        // candidate prompt draws answers from the same distribution as the
+        // live prompt", and ANY textual change violates that null, including
+        // one that changes no meaning: reordering three rules, or rewording
+        // one, still moves the token sequence. There is no arm here carrying a
+        // semantically null perturbation of the live book, so `material`
+        // cannot separate "the new rules changed the analysis" from
+        // "perturbing the prompt text at all moves the sampler".
+        //
+        // The consequence is bounded — a material screen only authorises
+        // paying for a forward evaluation, it never promotes anything — but it
+        // is the sharpest assumption left standing now that the rendering
+        // mismatch is fixed, and it is stated where the verdict is read.
+        what_material_does_not_separate:
+          "the control differs from the reference by NOTHING, while the candidate differs by bytes. A material " +
+          "result therefore says the candidate prompt draws from a different distribution than the live prompt — " +
+          "which a semantically null edit (reordering rules, rewording one) would also do. Separating the two " +
+          "would need a fourth arm carrying the LIVE rules under a null perturbation; this run has no such arm.",
+
+        design: {
+          what_this_is:
+            "the rows this PAIRED screen needs, recomputed from the floor this run measured rather than from a " +
+            "borrowed constant",
+          measured_floor_rate: control.controlRate,
+          null_discordant_rate: stageANoise,
+          required_rows: stageANeed === null ? null : stageANeed.pairs,
+          still_needed: stageANeed === null ? null : pairsStillNeeded(stageANeed.pairs, control.rows),
+          // WHETHER THE VERDICT ABOVE WAS REACHED AT THE PRE-REGISTERED n.
+          //
+          // Stage B has `reached` and a write-once seal; stage A had the
+          // requirement and the shortfall but nothing that marked a verdict
+          // produced below it, and stage A's `material` is what authorises the
+          // stage B spend. It is NOT a correctness problem — the exact
+          // binomial holds its 5% at any n, and `underpowered` already blocks
+          // `material` on fewer than six discordant rows — but a `material`
+          // read off 80 rows when the design asked for about 100 should say so
+          // in the same block as the number.
+          rows_reach_required: stageANeed === null ? null : control.rows >= stageANeed.pairs,
+          below_required_means:
+            "the exact test holds its nominal 5% at any n, so a `material` verdict below the requirement is not " +
+            "inflated. What is missing is power: `indistinguishable` at fewer rows than the design asked for is " +
+            "an unfinished measurement, not a finding of no effect.",
+          powered_for_discordant_share: stageANeed === null ? null : stageANeed.psi,
+          delta: DELTA,
+          how_it_relates_to_the_old_75:
+            "the old 75 came from the same formula read as one proportion against a constant. A stage A " +
+            "observation is itself a disagreement indicator, so the discordant rate under the null is 2p(1-p), " +
+            "not p; at 20.83% that is 32.99% and the requirement rises to about 100 rows. The estimate is " +
+            "conservative because the shared 'live' arm correlates the two indicators, which lowers the true " +
+            "discordant rate.",
+          not_material_means:
+            "not moved by the pre-registered margin at this n; it does NOT mean the candidate changes nothing",
+        },
+
+        // A SECONDARY REFERENCE. Printed, labelled, and decides nothing.
+        historical_floor_reference: {
+          what_this_is:
+            "#64's floor, MEASURED ON A DIFFERENT PROMPT RENDERING (ranked, with per-rule fit markers). It is " +
+            "not the comparator for this run and no verdict above uses it.",
           k: NOISE_FLOOR_K,
           n: NOISE_FLOOR_N,
           rate: NOISE_FLOOR_RATE,
           wilson95: floorCi,
-          source: "docs/NOISE_FLOOR_PREREGISTRATION.md 12.2 (arm search_free, N=2)",
+          source: NOISE_FLOOR_SOURCE,
+          measured_floor_differs: floorDiffers,
+          measured_floor_direction: floorDirection,
+          why_that_matters:
+            "a true floor ABOVE 20.83% means the superseded screen was comparing against a floor that was too " +
+            "low and stage B's 75-row target was too small. Both errors push toward promoting a rulebook.",
+          superseded_screen: {
+            what_this_is:
+              "what the old interval-overlap screen against 20.83% would have said. Kept so it can be checked, " +
+              "not because it decides anything.",
+            verdict: supersededScreen,
+            smallest_material_disagreement: smallestMaterialCount({
+              pairs: materiality.pairs,
+              floorHi: floorCi.hi,
+              wilsonLo: (k, n) => wilson(k, n).lo,
+            }),
+          },
         },
-        verdict: screen,
-        // WHAT THIS SCREEN CAN SEE AT THIS n, stated rather than left to be
-        // derived. `material` needs this run's lower bound to clear the floor's
-        // upper bound of 34.26%, and that bound is high because the floor was
-        // measured on 48 rows. At 78 pairs the observed disagreement has to
-        // reach about 45% before the screen can fire at all — so
-        // `indistinguishable` frequently means "a change this size is invisible
-        // to this screen", not "the candidate does nothing".
-        smallest_material_disagreement: smallestMaterialCount({
-          pairs: materiality.pairs,
-          floorHi: floorCi.hi,
-          wilsonLo: (k, n) => wilson(k, n).lo,
-        }),
-        rows_with_both_arms: bothArmsPresent,
+
+        rows_with_all_three_arms: allArmsPresent,
+        // A row whose arm never reached the wire, a row whose answer would not
+        // project, and a row that failed an invariant are three different
+        // facts and are counted separately. Pooling them would hide an
+        // instrument problem inside a transport statistic.
+        rows_with_an_unsent_arm: armNeverSent,
+        // A SUBSET OF THE LINE ABOVE, AND THE ONE THAT IS NOT ATTRITION. These
+        // rows were dropped because the pre-spend check found a row's arms
+        // disagreeing about what they were sending — the control carrying a
+        // different book, an arm carrying the same book as its sibling, or two
+        // arms asking different questions. A nonzero count here is a reason to
+        // look at the harness, not at the rulebook, and it must not be read as
+        // "some rows were skipped".
+        rows_with_an_unsent_arm_on_an_instrument_alarm: armNeverSentInstrumentAlarm,
+        // The reason codes behind both numbers, counted per ARM (a row with
+        // two unsent arms contributes twice), so an operator can tell a
+        // fallback prompt from a drifted control without opening the cells.
+        unsent_arm_reasons: unsentArmReasons,
         rows_unprojectable: unprojectable,
-        rows_excluded_from_pairing: badPairs.length,
+        rows_excluded_from_pairing: badRows.length,
       };
 
       // ---- stage B, and only stage B, looks at outcomes -------------------
@@ -1447,6 +1877,7 @@ Deno.serve(async (req: Request) => {
           }
         }
 
+        const scoredIds = new Set(idsWithPairs);
         const scored: Array<{ pair: VerdictPair; truth: ScoredTruth | null }> = pairs.map((pair) => {
           const row = outcomes.get(pair.analysisId);
           return {
@@ -1456,7 +1887,51 @@ Deno.serve(async (req: Request) => {
         });
         const performance = tallyPerformance(scored);
         const test = mcnemarExact(performance.b, performance.c);
-        const need = requiredPairs(NOISE_FLOOR_RATE, DELTA);
+
+        // THE SAME SCORING, APPLIED TO THE CONTROL ARM. Stage B's b and c are
+        // discordant pairs between two DIFFERENT books; these are discordant
+        // pairs between one book and ITSELF, on the same rows, under the same
+        // truth and the same scorer. They are the floor for stage B, and they
+        // are nearly free — the cells are already bought and the tally
+        // function is the one already tested.
+        //
+        // What they are FOR: a reader can see how much of stage B's discordance
+        // one book generates against itself before any rulebook change is
+        // involved. If the control's discordant count is of the same order as
+        // the candidate's, the candidate's p-value is describing sampling
+        // noise. This is a DISCLOSURE, not a correction applied to the
+        // p-value: subtracting one from the other would be arithmetic nobody
+        // pre-registered.
+        const controlScored: Array<{ pair: VerdictPair; truth: ScoredTruth | null }> = controlPairs(triads)
+          .filter((pair) => scoredIds.has(pair.analysisId))
+          .map((pair) => {
+            const row = outcomes.get(pair.analysisId);
+            return {
+              pair,
+              truth: row === undefined ? null : truthFor({ outcome: row.outcome, waitVerdict: row.waitVerdict }),
+            };
+          });
+        const controlPerformance = tallyPerformance(controlScored);
+        const controlTest = mcnemarExact(controlPerformance.b, controlPerformance.c);
+
+        // THE REQUIRED n NOW COMES FROM THE MEASURED FLOOR, NOT FROM 20.83%.
+        //
+        // For stage B the formula's p0 is the discordant-pair rate, and the
+        // per-row disagreement rate is the right thing to pass straight in: a
+        // stage B pair is discordant only when the two arms give different
+        // verdicts AND the truth separates them, so the disagreement rate
+        // bounds it from above. That was true of the old 75 as well; what
+        // changes is only which rate is used.
+        //
+        // THIS DOES NOT REOPEN OPTIONAL STOPPING, and the reason is worth
+        // stating because a data-dependent n usually would. The control rate
+        // is computed from the run's CELLS, which are fixed the moment the run
+        // completes and which the reporting gate above requires to be complete.
+        // Every later look recomputes the same rate from the same cells and
+        // gets the same required n. What grows between looks is the number of
+        // SCORED pairs, and that is exactly what the seal freezes.
+        const need = requiredPairs(control.controlRate, DELTA);
+        const needFromHistoricalFloor = requiredPairs(NOISE_FLOOR_RATE, DELTA);
         const reached = performance.pairs >= need.pairs;
         const freshConclusive = reached && !test.underpowered && test.significant;
 
@@ -1530,6 +2005,17 @@ Deno.serve(async (req: Request) => {
             significant: test.significant,
             underpowered: test.underpowered,
             required_pairs: need.pairs,
+            // WHICH FLOOR THE REQUIREMENT WAS SIZED FROM, sealed with it. A
+            // seal that recorded only "75" or only "100" would leave a reader
+            // unable to tell whether the number came from a measurement or
+            // from the borrowed constant, and that is the whole point of this
+            // change.
+            required_pairs_noise_rate: need.noiseRate,
+            required_pairs_source: "control arm measured on this run",
+            required_pairs_from_historical_floor: needFromHistoricalFloor.pairs,
+            control_disagreement_rate: control.controlRate,
+            control_b: controlPerformance.b,
+            control_c: controlPerformance.c,
             conclusive: freshConclusive,
             truth_from_settled_outcome: performance.fromOutcome,
             truth_from_wait_check: performance.fromWaitCheck,
@@ -1567,11 +2053,41 @@ Deno.serve(async (req: Request) => {
           truth_from_wait_check: performance.fromWaitCheck,
           mcnemar: test,
           by_truth_source: bySource,
+          // THE CONTROL ARM, SCORED THE SAME WAY. Same rows, same truth, same
+          // scorer, one book against itself. It is the floor under stage B's
+          // own b and c and it is a disclosure, not a correction: nothing
+          // below subtracts it from anything.
+          control_floor: {
+            what_this_is:
+              "the discordant pairs the frozen LIVE book earns against ITSELF under the same scoring. If these " +
+              "are of the same order as b and c above, the test above is describing sampling noise.",
+            scored_pairs: controlPerformance.pairs,
+            both_right: controlPerformance.bothRight,
+            both_wrong: controlPerformance.bothWrong,
+            b_live_right_control_wrong: controlPerformance.b,
+            c_live_wrong_control_right: controlPerformance.c,
+            mcnemar: controlTest,
+            expected_direction:
+              "tied. One book has no reason to beat itself, so a significant result here is an instrument " +
+              "finding and not a rulebook finding.",
+          },
           design: {
             delta: need.delta,
             noise_rate_used: need.noiseRate,
+            noise_rate_source:
+              "the control arm of THIS run: the frozen live book replayed against itself on the same rows, " +
+              "the same unranked rendering and the same day",
             required_pairs: need.pairs,
             still_needed: pairsStillNeeded(need.pairs, performance.pairs),
+            // WHAT THE BORROWED FLOOR WOULD HAVE ASKED FOR, printed beside it
+            // so the difference between the two is visible rather than
+            // reconstructible. 75 was this number at 20.83%.
+            required_pairs_from_historical_floor: {
+              pairs: needFromHistoricalFloor.pairs,
+              noise_rate: NOISE_FLOOR_RATE,
+              source: NOISE_FLOOR_SOURCE,
+              decides_nothing: true,
+            },
             // WHAT THE DESIGN CAN AND CANNOT SEE, in the payload rather than
             // only in the doc. psi is the share of discordant pairs the
             // candidate must win for this n to have 80% power. A candidate that
@@ -1601,9 +2117,12 @@ Deno.serve(async (req: Request) => {
       console.log("version-compare report", {
         run_id: reportRunId,
         stage: runStage,
-        pairs: materiality.pairs,
-        disagreements: materiality.disagreements,
-        screen,
+        rows: control.rows,
+        candidate_disagreements: control.candidateDisagreements,
+        control_disagreements: control.controlDisagreements,
+        b: control.b,
+        c: control.c,
+        verdict,
       });
 
       return json({
@@ -1699,7 +2218,7 @@ Deno.serve(async (req: Request) => {
           stage: dryStage,
           population_frozen_at: cutIso,
           eligible_after: dryStage === "performance" ? frozenAt : null,
-          expected_cells: ids.length * 2,
+          expected_cells: ids.length * ARM_COUNT,
           // A dry run may not spend, and the columns say what THIS run is
           // allowed to spend rather than what some later run might be.
           budget_input_tokens: 0,
@@ -1738,10 +2257,17 @@ Deno.serve(async (req: Request) => {
       }
 
       const dryNotes = isRecord(notes.dry) ? notes.dry : {};
-      // Keyed `${analysisId}#${arm}`. Unlike #64 the two cells of a row are NOT
+      // Keyed `${analysisId}#${arm}`. Unlike #64 the cells of a row are not all
       // the same bytes — that is the whole point of the experiment — so each
       // arm is counted separately and the per-cell figure is not a
       // multiplication.
+      //
+      // 'live' and 'live_b' ARE the same bytes, and they are still counted
+      // twice on purpose: they are two billable calls, and a dry run that
+      // counted one of them and doubled it would report a budget for a request
+      // it had not actually priced. The redundancy costs two free
+      // count_tokens calls and buys a per-cell record that matches the cells
+      // the live run will write one for one.
       const perCell = new Map<string, number>();
       if (Array.isArray(dryNotes.per_row)) {
         for (const entry of dryNotes.per_row) {
@@ -1764,7 +2290,7 @@ Deno.serve(async (req: Request) => {
           errors.push(`row_refused:already_fallback:${row.analysisId}`);
           continue;
         }
-        for (const arm of ["live", "candidate"] as const) {
+        for (const arm of ARMS) {
           const key = `${row.analysisId}#${arm}`;
           if (perCell.has(key)) continue;
           if (msLeftForWork() < 5_000) break outer;
@@ -1820,7 +2346,11 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      const expectedCellCount = population.length * 2;
+      // THREE CELLS PER ROW. The control arm is counted like any other: it is
+      // a billable call, it is not free because its bytes match another arm's,
+      // and a budget sized on two thirds of the population is a budget that
+      // runs out two thirds of the way through.
+      const expectedCellCount = population.length * ARM_COUNT;
       const cellsCounted = perCell.size;
       const complete = cellsCounted === expectedCellCount;
       let measuredInputTokens = 0;
@@ -1898,6 +2428,21 @@ Deno.serve(async (req: Request) => {
       }
       if (existing === null) return refuse("run_id names no run");
       if (existing.status === "dry") return refuse("run_id names a dry run; create a live run with dry_run_id");
+      // AN ABORTED RUN CANNOT BE RESUMED. It stopped for a reason — a budget,
+      // a 401, a model change, or an operator deciding the design under it had
+      // moved — and every one of those reasons is still true. Without this the
+      // invocation would fall through to the `status !== "running"` branch,
+      // reconcile the header and return ok, which reads as "resumed, nothing
+      // to do" rather than as a refusal. The run that exists today is the case
+      // in point: e6a97341-69a4-443f-b877-5eed16d4ec34 carries a two-arm
+      // `expected_cells` and was aborted precisely because the arms changed.
+      // The migration refuses to move it back to 'running' as well.
+      if (existing.status === "aborted") {
+        return refuse(
+          `run_id names an aborted run (${String(existing.abort_reason ?? "no reason recorded")}); ` +
+            "an aborted run cannot be resumed. Take a new dry run.",
+        );
+      }
       run = existing;
     } else {
       // THERE IS NO RUN WITHOUT A DRY RUN FIRST. The dry run is free, it is the
@@ -1928,11 +2473,11 @@ Deno.serve(async (req: Request) => {
       // THIS GATE IS LOAD-BEARING FOR SPEND, not only for the budget numbers,
       // and the reason is not obvious from here.
       //
-      // The two arms of a row are bought in SEPARATE HOPS. `prepareArm` can
-      // fail for one arm and succeed for the other — spliceRulesBlock refuses a
-      // block containing `$`, and the two arms carry different text — so a
-      // candidate-arm failure discovered mid-run would orphan a live cell that
-      // has already been paid for. It cannot happen today only because such a
+      // The three arms of a row are bought in SEPARATE HOPS. `prepareArm` can
+      // fail for one arm and succeed for another — spliceRulesBlock refuses a
+      // block containing `$`, and the candidate arm carries different text — so
+      // a candidate-arm failure discovered mid-run would orphan a live cell and
+      // a control cell that have already been paid for. It cannot happen today only because such a
       // failure leaves the dry run `complete: false` and this line refuses to
       // create the live run at all. Anything that relaxes this check re-opens a
       // paid half-pair.
@@ -1997,7 +2542,7 @@ Deno.serve(async (req: Request) => {
 
       // The live run INHERITS the freeze and the cut. Taking a new cut here
       // would silently widen the population the budgets were sized against.
-      const expected = dryIds.length * 2;
+      const expected = dryIds.length * ARM_COUNT;
       const cellsAHopCanStart = Math.max(
         1,
         Math.min(maxCells, Math.floor((WALL_CLOCK_BUDGET_MS - WRITE_RESERVE_MS) / MIN_CELL_START_MS)),
@@ -2054,6 +2599,26 @@ Deno.serve(async (req: Request) => {
     let skipped: string | null = null;
     let cellsThisInvocation = 0;
     let chained = false;
+    // A BREAK THAT MEANS "THIS WILL NOT WORK ON THE NEXT HOP EITHER".
+    //
+    // Two of the loop's exits are not "out of time" or "out of budget" — they
+    // are the cell table refusing a write, and they will refuse the next hop's
+    // write for the same reason. Left unmarked they were reported as an
+    // ordinary end of invocation: HTTP 200, ok:true, cells_this_invocation:0,
+    // one string buried in `errors` — and the chain fired again, because the
+    // handoff below asks whether cells REMAIN, never whether this hop made
+    // progress. The concrete case is an operator who runs before applying
+    // 20260910200000: the arm CHECK still reads ('live','candidate'), so the
+    // first two arms of the first row are bought normally and the third fails
+    // its claim, after which every remaining hop repeats that failure. That is
+    // up to max_chain_hops back-to-back edge invocations, which is the burst
+    // the cron-minute guard exists to prevent.
+    //
+    // So a hard stop ends the chain and is reported as a failure. It does NOT
+    // cover the ordinary zero-progress hops — a guarded cron minute, or too
+    // little wall clock left to start a cell — which must keep chaining or the
+    // run stalls forever.
+    let hardStop: string | null = null;
 
     const summarize = (totals: RunTotals | null, ok: boolean) => ({
       ok,
@@ -2074,6 +2639,10 @@ Deno.serve(async (req: Request) => {
       status,
       abort_reason: abortReason,
       skipped,
+      // Null on every ordinary path. Non-null means this invocation stopped on
+      // something that will not fix itself, the chain was NOT handed on, and
+      // the response carries a 500 rather than a success shape.
+      hard_stop: hardStop,
       chained,
       errors,
       elapsedMs: elapsed(),
@@ -2124,15 +2693,30 @@ Deno.serve(async (req: Request) => {
         claimed.add(`${cell.analysis_id.toLowerCase()}#${cell.arm}`);
       }
     }
+    // THE ARM ORDER IS PER ROW, NOT THE DECLARED ONE, and the reason is a time
+    // confound rather than a byte one. A chained run buys about one billable
+    // cell per hop, so a row's three cells land at three separate instants. In
+    // the declared order every row would measure the candidate comparison
+    // across one interval and the CONTROL comparison across two — always that
+    // way round, on every row — and any drift in the serving path over those
+    // minutes would then inflate the measured floor systematically. The
+    // direction is conservative, but a bias that is never randomised has no
+    // business inside a number the payload labels "THE MEASURED FLOOR".
+    //
+    // `armOrderForRow` is a pure hash of (run_id, analysis_id), so every hop of
+    // this run rebuilds the same order and a reader can recompute it from the
+    // two ids the cell table already stores. See pairing.ts for why the six
+    // permutations balance the two lags.
     const pending: PendingCell[] = [];
     for (const row of population) {
-      for (const arm of ["live", "candidate"] as const) {
+      for (const arm of armOrderForRow(runId, row.analysisId)) {
         if (!claimed.has(`${row.analysisId}#${arm}`)) pending.push({ row, arm });
       }
     }
 
-    // What the row's OTHER arm said it sent. The two arms must agree on
-    // everything except the book; this is the cheap half of the check that
+    // What the row's OTHER arms said they sent. All three arms must agree on
+    // everything except the book, and on the book they must agree or differ
+    // according to `armsShareTheSameBook`. This is the cheap half of the check
     // report mode makes over the finished run, and it is the half that saves
     // the money.
     const siblingFacts = new Map<string, { userSha: string; facts: string; rulesSha: string }>();
@@ -2486,6 +3070,7 @@ Deno.serve(async (req: Request) => {
         const outcomeOfClose = await closeUnsent(cell, `row_refused:${classified.code}`);
         if (outcomeOfClose === "claim_failed") {
           errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+          hardStop = `claim_failed:${cell.arm}`;
           break;
         }
         if (outcomeOfClose === "taken") continue;
@@ -2497,6 +3082,7 @@ Deno.serve(async (req: Request) => {
         const outcomeOfClose = await closeUnsent(cell, "row_refused:already_fallback");
         if (outcomeOfClose === "claim_failed") {
           errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+          hardStop = `claim_failed:${cell.arm}`;
           break;
         }
         if (outcomeOfClose === "taken") continue;
@@ -2514,6 +3100,7 @@ Deno.serve(async (req: Request) => {
         const outcomeOfClose = await closeUnsent(cell, `seam_refused:${seam.code}`);
         if (outcomeOfClose === "claim_failed") {
           errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+          hardStop = `claim_failed:${cell.arm}`;
           break;
         }
         if (outcomeOfClose === "taken") continue;
@@ -2527,6 +3114,7 @@ Deno.serve(async (req: Request) => {
         const outcomeOfClose = await closeUnsent(cell, prepared);
         if (outcomeOfClose === "claim_failed") {
           errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+          hardStop = `claim_failed:${cell.arm}`;
           break;
         }
         if (outcomeOfClose === "taken") continue;
@@ -2549,16 +3137,23 @@ Deno.serve(async (req: Request) => {
 
       // A CELL THAT WOULD NOT PAIR IS NOT BOUGHT.
       //
-      // The two arms of a row routinely land in different invocations hours
+      // The three arms of a row routinely land in different invocations hours
       // apart. If rules.ts, shape.ts or prompt-surgery.ts was redeployed
-      // between them, or the stored text was edited, the second cell asks a
-      // different question and the pair is not a pair. The two failures have
-      // opposite meanings and both are refused here rather than discovered in
-      // report mode after the money is gone: a sibling that disagrees about the
-      // USER TURN or the request facts is a broken pair, and a sibling that
-      // agrees about the BOOK is not a comparison at all.
-      const otherArm: Arm = cell.arm === "live" ? "candidate" : "live";
-      const sibling = siblingFacts.get(`${cell.row.analysisId}#${otherArm}`);
+      // between them, or the stored text was edited, a later cell asks a
+      // different question and the row is not a row. The failures have
+      // opposite meanings and all are refused here rather than discovered in
+      // report mode after the money is gone:
+      //
+      //   * a sibling that disagrees about the USER TURN or the request facts
+      //     is a broken row, whichever two arms it is;
+      //   * 'candidate' against 'live' (or against 'live_b') must carry a
+      //     DIFFERENT book, or the cell is not a comparison;
+      //   * 'live' and 'live_b' must carry the SAME book, or the cell is not a
+      //     control — and a control that drifted would be published as the
+      //     floor, which is worse than no control at all.
+      //
+      // `armsShareTheSameBook` in pairing.ts is the one place that says which
+      // pairs are which, so this loop and report mode cannot disagree about it.
       const theseFacts = [
         shapeFacts.effort,
         shapeFacts.maxTokens,
@@ -2566,21 +3161,37 @@ Deno.serve(async (req: Request) => {
         shapeFacts.schemaInPrompt,
         shapeFacts.shape,
       ].join("|");
-      if (sibling !== undefined) {
-        const mismatch = sibling.userSha !== shapeFacts.userSha || sibling.facts !== theseFacts
-          ? "request_disagrees_with_sibling_arm"
-          : (sibling.rulesSha === shapeFacts.rulesSha ? "sibling_arm_carries_the_same_book" : null);
-        if (mismatch !== null) {
-          const outcomeOfClose = await closeUnsent(cell, mismatch);
-          if (outcomeOfClose === "claim_failed") {
-            errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
-            break;
-          }
-          if (outcomeOfClose === "taken") continue;
-          errors.push(`${mismatch}:${cell.row.analysisId}`);
-          cellsThisInvocation += 1;
-          continue;
+      let mismatch: string | null = null;
+      for (const otherArm of ARMS) {
+        if (otherArm === cell.arm) continue;
+        const sibling = siblingFacts.get(`${cell.row.analysisId}#${otherArm}`);
+        if (sibling === undefined) continue;
+        if (sibling.userSha !== shapeFacts.userSha || sibling.facts !== theseFacts) {
+          mismatch = `request_disagrees_with_sibling_arm:${otherArm}`;
+          break;
         }
+        const shouldMatch = armsShareTheSameBook(cell.arm, otherArm);
+        const doesMatch = sibling.rulesSha === shapeFacts.rulesSha;
+        if (shouldMatch && !doesMatch) {
+          mismatch = `control_arm_carries_a_different_book:${otherArm}`;
+          break;
+        }
+        if (!shouldMatch && doesMatch) {
+          mismatch = `sibling_arm_carries_the_same_book:${otherArm}`;
+          break;
+        }
+      }
+      if (mismatch !== null) {
+        const outcomeOfClose = await closeUnsent(cell, mismatch);
+        if (outcomeOfClose === "claim_failed") {
+          errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+          hardStop = `claim_failed:${cell.arm}`;
+          break;
+        }
+        if (outcomeOfClose === "taken") continue;
+        errors.push(`${mismatch}:${cell.row.analysisId}`);
+        cellsThisInvocation += 1;
+        continue;
       }
 
       // CLAIM BEFORE SPENDING. The insert commits before the model call, so a
@@ -2590,6 +3201,7 @@ Deno.serve(async (req: Request) => {
       const cellId = await claimCell(cell, shapeFacts);
       if (cellId === null) {
         errors.push(`claim_failed:${cell.row.analysisId}#${cell.arm}`);
+        hardStop = `claim_failed:${cell.arm}`;
         break;
       }
       if (cellId === "taken") continue;
@@ -2696,6 +3308,7 @@ Deno.serve(async (req: Request) => {
         // Whatever refused this write will refuse the next one, and the run
         // would spend its whole budget leaving nothing but claimed rows.
         errors.push(`patch_failed:cell:${cell.row.analysisId}#${cell.arm}`);
+        hardStop = `cell_write_failed:${cell.arm}`;
         break;
       }
 
@@ -2754,7 +3367,16 @@ Deno.serve(async (req: Request) => {
 
     // Re-read the header rather than trusting what this invocation remembers:
     // the kill switch is an UPDATE somebody else made while this was running.
-    if (chain && status === "running") {
+    //
+    // `hardStop === null` is the ZERO-PROGRESS GUARD. The condition below asks
+    // whether cells REMAIN; it never asked whether this hop achieved anything,
+    // so a hop that broke on a write the database will refuse again handed the
+    // same failure to a child, which handed it to another, until
+    // max_chain_hops ran out. Every one of those hops re-reads the run, the
+    // freeze and the whole population, takes the lease and fires again — for
+    // nothing. The run stays visibly unfinished either way; what the guard
+    // removes is the burst.
+    if (chain && status === "running" && hardStop === null) {
       const fresh = await readRun(runId);
       if (fresh === "read_failed" || fresh === null) {
         errors.push("read_failed:version_compare_runs_chain");
@@ -2805,6 +3427,14 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // A HARD STOP IS NOT A SUCCESS AND MUST NOT BE SHAPED LIKE ONE. The
+    // default 200 with ok:true put "the cell table refused the write" in the
+    // same envelope as "this hop finished its work", with the difference
+    // visible only to an operator who read `errors`.
+    if (hardStop !== null) {
+      console.error("version-compare hard stop", { run_id: runId, hard_stop: hardStop });
+      return json(summarize(totals, false), 500);
+    }
     return json(summarize(totals, true));
   } catch (err) {
     console.error("version-compare error:", slice200(err));
