@@ -453,6 +453,94 @@ export const en: Dict = {
     waits: "Post-mortems run automatically 1 h (15min plans), 2 h (1h), 4 h (4h) or 8 h (1day) after settlement, and are reviewed again later when little price action has followed",
   },
 
+  // Direction, timing and placement scored apart instead of collapsed into
+  // win/loss. Every number is public.separated_scores()' answer rendered as
+  // it arrived; the screen computes none of it (two implementations of one
+  // number is how one number with one name becomes two).
+  scores: {
+    title: "Three scores kept apart",
+    definition: (v: number) => `scoring definition v${v}`,
+    subtitle:
+      "Collapsed into win/loss, \"right about the direction and wrong about where the stop went\" and \"wrong about the direction\" are the same word: loss. These three are kept apart.",
+    none: "No scores came back from the server (this panel never computes them from the rows on screen)",
+    empty: "No trades can be scored yet",
+    noPair: "unknown",
+    noRate: "no interval",
+    span: (from: string, to: string) => `${from} - ${to}`,
+    basis: (calls: number, pairs: string) => `Rests on: ${calls} calls, pair ${pairs}`,
+    basisSignals: (mix: string) => `mix ${mix}`,
+    basisTrades: (trades: number, diagnosed: number, undiagnosed: number) =>
+      `${trades} trades (${diagnosed} diagnosed, ${undiagnosed} not yet)`,
+    // How many trades the scores were actually taken over. This can differ from
+    // "diagnosed" above: rows on a different entry contract are out of scope
+    // for the scores, and the next line says how many.
+    basisGraded: (graded: number) => `${graded} of them are what the scores below were taken over`,
+    otherContract: (rows: number, list: string) =>
+      `${rows} rows use a different entry contract (${list}) and are NOT in the scores below`,
+    // Derived from the population, never asserted from a constant. A fixed
+    // "one pair, about two weeks" outlives its data the day a second pair is
+    // analysed, and then contradicts the line directly above it (#83).
+    narrow: (pairs: number, days: number | null, topSignal: string | null, topShare: number | null) => {
+      const parts = [`${pairs} pair${pairs === 1 ? "" : "s"}`];
+      if (days !== null) parts.push(`${days} day${days === 1 ? "" : "s"} of record`);
+      if (topSignal !== null && topShare !== null) parts.push(`${topSignal} is ${topShare}% of all calls`);
+      return `What these scores rest on: ${parts.join(" / ")}. Change the market and the numbers change.`;
+    },
+    // The "not enough yet" judgement also comes from the intervals, not from a
+    // sentence that stops being true without anyone noticing.
+    undecided:
+      "Every interval below still contains 50%. None of these scores says this is working, or that it is not - not yet.",
+    contractNote: (contract: string) => `The live entry contract has no scoreable trades, so the ${contract} record is shown instead`,
+    direction: {
+      label: "Direction (was the call right about which way)",
+      // The threshold goes on the screen. How weak a test "right about the
+      // direction" actually is cannot be read off the label.
+      hint: (deadR: number | null) =>
+        `Which way price went, and nothing else. A row counts as right when price did not keep running a full 1R past the stop AND came at least ${deadR === null ? "some distance" : `${deadR}R`} the plan's way while the plan was alive - that is the whole test. It does not read whether the stop or the target was hit first. A direction can be right on a trade that LOST, and separating that is what this row is for.`,
+    },
+    timing: {
+      label: "Timing (heat right after entry)",
+      hint: (earlyR: number | null) =>
+        `How often price did NOT go${earlyR === null ? "" : ` ${earlyR}R or more`} against the plan in the first bars after the fill. It does NOT say the entry was wrong: an entry that goes with a trend takes heat by construction.`,
+    },
+    placement: {
+      label: "Placement (where the stop and target went)",
+      // The stop leg is only ever simulated on a loss. Left unsaid, a run of
+      // wins lifts this score and the screen reads as though a judge checked.
+      hint: "Whether a wider stop, or a target half the distance away, would have changed the ending. But the stop half is only actually simulated on a LOSS: a trade that did not lose passes the stop test with its stop never examined (see the count beside the rate). The target half is checked every time. Placement is also partly a consequence of direction and timing.",
+    },
+    deepMae: {
+      // The one row whose polarity is inverted. It has to be in the label:
+      // stacked under three higher-is-better rates it otherwise reads as a
+      // fourth score of about the same quality.
+      label: "Worst excursion reaching the stop's edge (higher is WORSE)",
+      hint: (maeR: number | null) =>
+        `How often the deepest drawdown got within ${maeR === null ? "most of the way" : `${Math.round(maeR * 100)}%`} of the stop. Unlike the three above, a HIGHER number here is worse. Different window and different denominator from the timing row - do not add them or compare them.`,
+    },
+    n: (hits: number, n: number) => `${hits}/${n}`,
+    ci: (lo: number, hi: number) => `95% interval ${lo}-${hi}%`,
+    unscored: (n: number) => `${n} could not be scored`,
+    thin: "Few rows, and the interval spans most of the range",
+    denominators: "The three are taken over three different populations. They are not one denominator split three ways.",
+    notADecomposition:
+      "The three are not independent. They do not add up to the win rate and they are not a breakdown of it - they are three views of the same trades.",
+    causesLabel: "Causes on record (lessons table)",
+    // A different population from the three scores. The count, and how much of
+    // it is WAIT calls, go next to it - without them the block reads as a
+    // fourth view of the same trades.
+    causesTotal: (total: number, waits: number) =>
+      `${total} rows, of which ${waits} are WAIT calls that appear in NONE of the three scores above`,
+    causeSplit: (direction: number, timing: number, placement: number, neither: number) =>
+      `direction ${direction} / timing ${timing} / placement ${placement} / neither ${neither}`,
+    causeStraddle: "\"Stop too tight\" is counted under placement here, but it is also a statement about timing. This grouping does not partition cleanly.",
+    ranPast: (n: number) => `${n} ran past the stop`,
+    neverCame: (n: number) => `${n} never came our way`,
+    wrongPartial: (n: number) => `${n} of these could only ever count as a miss (one measurement missing)`,
+    stopBad: (n: number) => `${n} with the stop misplaced`,
+    targetBad: (n: number) => `${n} with the target misplaced`,
+    stopUntested: (n: number) => `${n} passed the stop test untested - the trade did not lose`,
+  },
+
   ruleFit: {
     title: "Rules consulted",
     summary: (matched: number, total: number) =>

@@ -8,10 +8,12 @@ import TechnicalDataCard from "@/components/TechnicalDataCard";
 import AnalysisHistory from "@/components/AnalysisHistory";
 import LearnedRules from "@/components/LearnedRules";
 import LoopHealth from "@/components/LoopHealth";
+import SeparatedScores from "@/components/SeparatedScores";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
+import { readSeparatedScores, type SeparatedScores as SeparatedScoresData } from "@/lib/outcomeStats";
 import { useAuth } from "@/contexts/AuthContext";
 import type {
   AnalysisRecord,
@@ -248,6 +250,11 @@ const Index = () => {
   const [rulebook, setRulebook] = useState<Rulebook | null>(null);
   const [loopHealth, setLoopHealth] = useState<LoopHealthData | null>(null);
   const [stats, setStats] = useState<PerformanceStats | null>(null);
+  // public.separated_scores(): direction, timing and placement kept apart,
+  // each with its own n. Null until the RPC answers, and null is what the
+  // panel draws when it never does — there is no client-side second
+  // implementation of these three to fall back on.
+  const [separated, setSeparated] = useState<SeparatedScoresData | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -317,6 +324,17 @@ const Index = () => {
     } catch {
       // Best effort: without it the panel falls back to computing what it can
       // from the rows it has, labelled as such
+    }
+    try {
+      // The same rows the record is taken over, scored three ways instead of
+      // one. Read through the function so the three denominators are the
+      // server's and not whatever the browser happened to fetch — and so the
+      // rollup and the per-row post-mortem cannot drift apart.
+      const { data, error } = await supabase.rpc("separated_scores");
+      if (!error) setSeparated(readSeparatedScores(data));
+    } catch {
+      // Best effort. The panel says it has no answer rather than computing
+      // three percentages from forty rows.
     }
     try {
       // Whether the review loop is actually running, shown rather than assumed
@@ -630,6 +648,7 @@ const Index = () => {
           <div className="space-y-4">
             {techData && !loading && <TechnicalDataCard data={techData} />}
             <LoopHealth health={loopHealth} />
+            <SeparatedScores scores={separated} />
             <LearnedRules rulebook={rulebook} />
             <AnalysisHistory records={history} stats={stats} />
           </div>
