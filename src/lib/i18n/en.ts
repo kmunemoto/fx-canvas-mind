@@ -541,6 +541,100 @@ export const en: Dict = {
     stopUntested: (n: number) => `${n} passed the stop test untested - the trade did not lose`,
   },
 
+  // The instrument that runs BEFORE any correction is applied to confidence:
+  // whether a correction could be defined at all. Every number is
+  // public.confidence_calibration()'s answer rendered as it arrived, and this
+  // panel applies no correction to anything.
+  //
+  // Two readings it must not permit. An AUC of 0.5 means "does not rank
+  // outcomes"; a value below 0.5 is NOT evidence of an inverted confidence
+  // while the interval still contains 0.5 - it establishes nothing either way.
+  // And the gate's threshold was written AFTER the numbers were seen; it is
+  // not a preregistration. Both sit next to the numbers, not in a doc.
+  calibration: {
+    title: "Can confidence be corrected at all",
+    subtitle:
+      "A correction is a mapping: \"when the model says 80 it actually wins 55% of the time\". Fitting one needs the stated number to MOVE. If it does not move, the correction is not weak - it is undefined. This panel applies no correction; it only measures whether one could be defined.",
+    contract: (contract: string) => `entry contract ${contract}`,
+    unknown: "-",
+
+    rangeTitle: "1. The range confidence actually takes",
+    // Built from the measurement, never from a fixed sentence. A constant
+    // "62 to 70" outlives its data the day the model emits anything else, and
+    // then contradicts the table directly under it (#83).
+    tradedRange: (lo: number, hi: number, n: number) =>
+      `Across the ${n} plans this system actually traded, it has only ever said ${lo} to ${hi}.`,
+    tradedShape: (distinct: number, width: number) =>
+      `That is ${distinct} distinct values and a width of ${width}, end to end.`,
+    rangeUnknown: "The confidence range on traded plans could not be read.",
+    allRange: (lo: number, hi: number, n: number, distinct: number) =>
+      `All ${n} calls including waits: ${lo} to ${hi} (${distinct} distinct values)`,
+    waitRange: (lo: number, hi: number, n: number, distinct: number) =>
+      `The ${n} WAIT calls: ${lo} to ${hi} (${distinct} distinct values)`,
+    gaugeNote:
+      "The confidence gauge is drawn on a 0 to 100 scale. The range above is all of that scale this record has ever used.",
+    // The width is a fact. "No mapping to fit" is a verdict, so it is rendered
+    // only when a payload-derived test says so. A constant verdict contradicts
+    // the table under it the moment the data moves (#83).
+    roomFact: (width: number) =>
+      `A correction maps the stated number onto the observed win rate. The stated number has actually moved ${width} wide.`,
+    roomNarrow: (needSpan: number) =>
+      `That is not wide enough to lay out the bands the gate asks for (5-wide, ${needSpan} points of span). There is no mapping to fit.`,
+
+    valuesTitle: "2. What became of each value it stated",
+    valuesNote:
+      "The values themselves, not coarse bands. Banding hides the one thing this table is for: how little the number moves.",
+    colConfidence: "confidence",
+    colN: "settled",
+    colRate: "win rate",
+    ciPercent: (lo: number, hi: number) => `95% interval ${lo}-${hi}%`,
+    valueN: (settled: number, wins: number, losses: number) => `${settled} (${wins}W / ${losses}L)`,
+    valueRate: (rate: number, wins: number, settled: number) => `${rate}% (${wins}/${settled})`,
+    // How thin a row is belongs ON the row. A percentage taken over one trade
+    // printed at the same size as one taken over a hundred is the most
+    // dangerous thing this table can do.
+    valueThin: (settled: number) => `this row is ${settled} settled trade${settled === 1 ? "" : "s"}`,
+    noValues: "No trade has settled yet, so there is no win rate per value to show.",
+
+    bandsTitle: "5-wide bands (what the gate below is judged on)",
+    bandLabel: (lo: number, hi: number) => `${lo}-${hi}`,
+    bandThin: (minN: number) => `short of ${minN}`,
+
+    discTitle: "3. Discrimination (does the number rank wins above losses)",
+    discMeaning: (auc: number) =>
+      `Take one winning trade and one losing trade at random: the winner carried the higher stated confidence ${auc} of the time (ties counted as half). 0.5 means the number does not rank outcomes at all.`,
+    discPairs: (pairs: number, nWin: number, nLoss: number) =>
+      `Counted over every pair: ${nWin} wins x ${nLoss} losses = ${pairs} pairs.`,
+    discCi: (lo: number, hi: number) => `95% interval ${lo} to ${hi}`,
+    discTies: (share: number) => `${share}% of the pairs are ties`,
+    // The approximation goes wherever the interval goes. On a separate line it
+    // gets quoted without the caveat.
+    discApproximate:
+      "This interval is a normal approximation (Hanley-McNeil), and it gets coarser the more ties there are.",
+    discNothing:
+      "The interval contains 0.5, so nothing is established. A value below 0.5 is NOT evidence that confidence works in reverse - the interval is simply too wide to tell it apart from chance.",
+    // With no interval read, "the interval contains 0.5" would state a
+    // property of a measurement that is not there.
+    discNoInterval: "No interval was reported, so nothing is established either way.",
+    discEstablished: "The interval does not contain 0.5.",
+    discNone: "No win/loss pairs could be formed, so discrimination could not be measured.",
+
+    gateTitle: "4. What is required before a correction is applied",
+    gateNotApplied:
+      "No correction is applied to confidence anywhere. This panel only measures whether one would be allowed.",
+    gateApplied: "Warning: a correction is being applied.",
+    gateNeed: (bands: number, minN: number, settled: number) =>
+      `Required: at least ${bands} 5-wide bands with ${minN} or more settled trades each, and ${settled} settled trades in total.`,
+    gateHave: (bands: number, settled: number) =>
+      `Currently: ${bands} band${bands === 1 ? " qualifies" : "s qualify"}, ${settled} settled in total.`,
+    gateUnmet: "Not met. Until it is, no correction is applied.",
+    gateMet: "Met. Whether to apply a correction is a separate decision.",
+    // When the threshold was chosen matters as much as what it is.
+    gateAfterTheFact:
+      "This threshold was written AFTER the numbers above were seen. It is not a preregistration. A threshold picked once the data is visible can be placed wherever it is convenient, so this must not be treated like docs/NOISE_FLOOR_PREREGISTRATION.md.",
+    gatePreregistered: "This threshold was registered before the numbers were seen.",
+  },
+
   ruleFit: {
     title: "Rules consulted",
     summary: (matched: number, total: number) =>

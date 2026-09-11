@@ -565,6 +565,97 @@ export const ja = {
     stopUntested: (n: number) => `うち ${n}件は負けなかったため損切りの位置を検証していない`,
   },
 
+  // #68 の計器。確信度に補正を当てる「前に」、補正がそもそも定義できるのかを
+  // 測る画面。数字は public.confidence_calibration() の答えをそのまま描くだけで、
+  // この画面は補正を一切適用しない。
+  //
+  // 読み違えさせてはいけないものが2つある。識別力の 0.5 は「並べ替えていない」で
+  // あって、0.5 未満は「逆向き」の証拠ではない（区間が 0.5 をまたいでいる限り、
+  // 何も確かめられていない）。そして門の閾値は実測を見た後に書いたもので、
+  // 事前登録ではない。どちらも数字と同じ場所に置く。
+  calibration: {
+    title: "確信度は補正できるのか",
+    subtitle:
+      "補正とは「モデルが80と言ったとき実際は55%しか勝たない」という対応づけを当てることです。そのためには、モデルの言う数字が動いていなければなりません。動いていなければ、補正は効かないのではなく定義できません。この画面は補正を一切適用せず、当てられるかどうかだけを測ります。",
+    contract: (contract: string) => `発注方式 ${contract}`,
+    unknown: "—",
+
+    rangeTitle: "1. 実際に出た確信度の幅",
+    // 「62〜70しか言っていない」を固定文ではなく実測から組み立てる。固定文は、
+    // モデルが別の値を出しはじめた日に矛盾したまま残りつづける（#83 と同じ形）。
+    tradedRange: (lo: number, hi: number, n: number) =>
+      `このシステムが実際に取引したプラン${n}件で言った確信度は、${lo} から ${hi} までだけです。`,
+    tradedShape: (distinct: number, width: number) =>
+      `異なる値は${distinct}種類、端から端までの幅は${width}しかありません。`,
+    rangeUnknown: "約定したプランの確信度の幅を読み取れませんでした。",
+    allRange: (lo: number, hi: number, n: number, distinct: number) =>
+      `待ちも含めた全${n}件では ${lo}〜${hi}（${distinct}種類）`,
+    waitRange: (lo: number, hi: number, n: number, distinct: number) =>
+      `「待つ」の判断${n}件では ${lo}〜${hi}（${distinct}種類）`,
+    gaugeNote:
+      "確信度のゲージは 0〜100 の目盛りで描かれます。この記録の中で実際に使われたのは、そのうち上の範囲だけです。",
+    // 幅そのものは事実。「対応が決まらない」は解釈なので、門が求める帯の
+    // 数から導いた条件を満たしたときだけ出す。定数の断定は、データが変わった
+    // 瞬間に下の表と矛盾する（#83）。
+    roomFact: (width: number) =>
+      `補正は「言った数字」と「実際の勝率」の対応づけです。言った数字が実際に動いた幅は${width}です。`,
+    roomNarrow: (needSpan: number) =>
+      `この幅では、門が求める帯（5点刻み、${needSpan}点ぶん）を並べられません。当てられる対応がありません。`,
+
+    valuesTitle: "2. 言った値ごとの決着",
+    valuesNote:
+      "粗い帯にまとめず、実際に出た値そのものを並べています。まとめると、値がほとんど動いていないという肝心のことが見えなくなります。",
+    colConfidence: "確信度",
+    colN: "決着",
+    colRate: "勝率",
+    ciPercent: (lo: number, hi: number) => `95%区間 ${lo}〜${hi}%`,
+    valueN: (settled: number, wins: number, losses: number) => `${settled}件（勝${wins}・負${losses}）`,
+    valueRate: (rate: number, wins: number, settled: number) => `${rate}%（${wins}/${settled}）`,
+    // 件数の少なさは行そのものに書く。1件の行が、100件の行と同じ大きさの
+    // パーセントで並んでいるのが、この表のいちばん危ないところ。
+    valueThin: (settled: number) => `この行はわずか${settled}件の結果です`,
+    noValues: "決着した取引がまだ1件もなく、値ごとの勝率は出せていません。",
+
+    bandsTitle: "5刻みの帯（下の門はこの帯で判定します）",
+    bandLabel: (lo: number, hi: number) => `${lo}〜${hi}`,
+    bandThin: (minN: number) => `${minN}件に届いていません`,
+
+    discTitle: "3. 識別力（数字が勝ち負けを並べ替えているか）",
+    discMeaning: (auc: number) =>
+      `勝った取引と負けた取引を1件ずつ取り出したとき、勝ったほうの確信度が高かった割合は ${auc} です（同点は0.5と数えます）。0.5 は「この数字は勝ち負けをまったく並べ替えていない」という意味です。`,
+    discPairs: (pairs: number, nWin: number, nLoss: number) =>
+      `勝ち${nWin}件 × 負け${nLoss}件 = ${pairs}ペアすべてで数えています。`,
+    discCi: (lo: number, hi: number) => `95%区間 ${lo}〜${hi}`,
+    discTies: (share: number) => `同点のペアが全体の${share}%`,
+    // 近似であることは、区間と必ず同じ場所に置く。別の行に書けば、区間だけが
+    // 引用されて数字が独り歩きする。
+    discApproximate:
+      "この区間は正規近似（Hanley-McNeil）による概算です。同点が多いほど粗くなります。",
+    discNothing:
+      "区間が 0.5 を含んでいます。つまり、何も確かめられていません。数字が 0.5 を下回っていることは「確信度が逆向きに効いている」証拠ではありません——区間が広く、偶然と区別がついていないだけです。",
+    // 区間が読めなかったときに「区間が 0.5 を含む」とは書けない。無い測定の
+    // 性質を述べることになる。
+    discNoInterval:
+      "区間が出ていないので、どちらとも確かめられていません。",
+    discEstablished: "区間は 0.5 を含んでいません。",
+    discNone: "勝ちと負けのペアが作れず、識別力は出せていません。",
+
+    gateTitle: "4. 補正を当ててよい条件",
+    gateNotApplied:
+      "確信度への補正は、現在いっさい適用していません。この画面は当ててよいかどうかだけを測っています。",
+    gateApplied: "注意: 補正が適用されています。",
+    gateNeed: (bands: number, minN: number, settled: number) =>
+      `必要: 5刻みの帯が${bands}つ以上あり、そのどれもが${minN}件以上決着していること。決着の合計が${settled}件以上あること。`,
+    gateHave: (bands: number, settled: number) =>
+      `現在: 条件を満たす帯は${bands}つ、決着は合計${settled}件。`,
+    gateUnmet: "条件はまだ満たされていません。満たされるまで補正は当てません。",
+    gateMet: "条件は満たされています（当てるかどうかは、これとは別の判断です）。",
+    // 閾値をいつ決めたかは、閾値そのものと同じくらい重要な事実である。
+    gateAfterTheFact:
+      "この条件は実測を見た「後」に書いたものです。事前登録ではありません。数字を見てから閾値を決めれば、閾値は都合よく置けます。docs/NOISE_FLOOR_PREREGISTRATION.md のような事前登録と同じ扱いをしないでください。",
+    gatePreregistered: "この条件は数字を見る前に登録されたものです。",
+  },
+
   // その回の分析が参照したルールと、今の相場との照合結果（サーバ実測）。
   ruleFit: {
     title: "適用されたルール",
