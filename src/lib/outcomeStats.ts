@@ -911,3 +911,236 @@ export const separatedUndecided = (b: SeparatedBlock | null): boolean => {
     (s) => s.ci !== null && s.ci[0] <= 50 && s.ci[1] >= 50,
   );
 };
+
+// ---------------------------------------------------------------------------
+// WHETHER CONFIDENCE COULD BE CORRECTED AT ALL
+// ---------------------------------------------------------------------------
+//
+// #68 asks for confidence to be corrected against the record once enough of it
+// exists. Before applying a correction there is one thing to check: a
+// correction is a MAPPING from what the model said to what actually happened,
+// and a mapping needs the stated number to MOVE. If it does not move, the
+// correction is not weak — it is undefined.
+//
+// public.confidence_calibration() answers that question and APPLIES NOTHING.
+// Nothing in this file applies anything either, and nothing here recomputes a
+// rate: the panel draws the server's answer, exactly as SeparatedScores does,
+// for the same reason (two implementations of one number is how one number
+// with one name becomes two).
+//
+// WHAT THE ANSWER MAY NOT BE READ AS — carried here, in the panel and in the
+// migration, because a caveat that lives in one of the three is a caveat
+// nobody reads:
+//   * the AUC is the chance a winning call carried a HIGHER stated confidence
+//     than a losing one, ties counted as half. 0.5 is "does not rank outcomes
+//     at all". An interval containing 0.5 establishes NOTHING — in particular
+//     a measured value under 0.5 is NOT evidence that confidence is inverted.
+//   * the AUC interval is a Hanley-McNeil normal approximation and gets worse
+//     the more ties there are. Whatever prints the interval must print that.
+//   * the gate was written AFTER the numbers were seen. It is not a
+//     preregistration and must never be set beside docs/NOISE_FLOOR_PREREGISTRATION.md.
+
+// The same floor performance_stats and the separated scores use, and the same
+// treatment: a thin band is REPORTED as thin, never withheld. Only a fallback
+// here — the gate carries the server's own min_n_per_band, and that is what is
+// rendered when it arrives.
+export const CONFIDENCE_MIN_N = 20;
+
+// The AUC of a number that ranks nothing. Named rather than spelled 0.5 in
+// aucEstablishesNothing below, so the constant and the sentence the panel
+// renders about it cannot drift apart.
+export const AUC_CHANCE = 0.5;
+
+// How far confidence actually ranges over one population. Every bound is
+// nullable: an empty population has no lowest value, and rendering that as 0
+// would put a confidence of zero on the screen that no call ever carried.
+export interface CalibrationSpan {
+  n: number | null;
+  lo: number | null;
+  hi: number | null;
+  width: number | null;
+  distinctValues: number | null;
+}
+
+// One stated confidence value and what became of the calls carrying it. The
+// value itself, NOT a band: the whole finding is how few distinct values there
+// are, and a band hides exactly that.
+export interface CalibrationValueRow {
+  confidence: number | null;
+  settled: number | null;
+  wins: number | null;
+  losses: number | null;
+  winRate: number | null;
+  ci: [number, number] | null;
+}
+
+export interface CalibrationBandRow extends CalibrationValueRow {
+  bandLo: number | null;
+  bandHi: number | null;
+  belowMinN: boolean;
+}
+
+export interface CalibrationDiscrimination {
+  nWin: number | null;
+  nLoss: number | null;
+  totalPairs: number | null;
+  concordant: number | null;
+  ties: number | null;
+  discordant: number | null;
+  // 0.5 = the stated confidence does not rank outcomes at all.
+  auc: number | null;
+  ci: [number, number] | null;
+  // True unless the server says otherwise, and the server currently always
+  // says true. Defaulting the other way would let a payload that forgot the
+  // flag print an approximate interval as an exact one.
+  ciApproximate: boolean;
+  tieShare: number | null;
+}
+
+export interface CalibrationGate {
+  // Whether a correction is being applied. The server hard-codes false; it is
+  // read rather than assumed so that the day it changes, the screen changes.
+  applies: boolean;
+  minNPerBand: number | null;
+  needBands: number | null;
+  haveBands: number | null;
+  needSettled: number | null;
+  haveSettled: number | null;
+  met: boolean;
+  // FALSE on this instrument: the thresholds were chosen after the numbers
+  // were seen. Defaults to false when absent — an unstated preregistration is
+  // not a preregistration.
+  preregistered: boolean;
+}
+
+export interface ConfidenceCalibration {
+  contract: string | null;
+  span: { all: CalibrationSpan; traded: CalibrationSpan; wait: CalibrationSpan };
+  byValue: CalibrationValueRow[];
+  byBand: CalibrationBandRow[];
+  discrimination: CalibrationDiscrimination;
+  gate: CalibrationGate;
+}
+
+// A number, or null. NOT num(): on this payload every field is a count of real
+// rows or a bound of a real range, and a field the server did not send,
+// rendered as 0, reads as "there are none of those" — a finding, where the
+// truth is the absence of one. The same rule rate() already follows, applied
+// to the counts as well.
+const maybeNum = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+const flag = (v: unknown, fallback: boolean): boolean =>
+  typeof v === "boolean" ? v : fallback;
+
+const span = (v: unknown): CalibrationSpan => {
+  const o = obj(v);
+  return {
+    n: maybeNum(o.n),
+    lo: maybeNum(o.lo),
+    hi: maybeNum(o.hi),
+    // The server sends null for an empty population rather than 0. Kept null:
+    // "no calls, so no width" and "every call carried the same number" are
+    // different findings and must not share a rendering.
+    width: maybeNum(o.width),
+    distinctValues: maybeNum(o.distinct_values),
+  };
+};
+
+const valueRow = (v: unknown): CalibrationValueRow => {
+  const o = obj(v);
+  return {
+    confidence: maybeNum(o.confidence),
+    settled: maybeNum(o.settled),
+    wins: maybeNum(o.wins),
+    losses: maybeNum(o.losses),
+    winRate: rate(o.win_rate),
+    ci: ci(o.ci95),
+  };
+};
+
+const bandRow = (v: unknown, minN: number | null): CalibrationBandRow => {
+  const o = obj(v);
+  const settled = maybeNum(o.settled);
+  return {
+    ...valueRow(v),
+    bandLo: maybeNum(o.band_lo),
+    bandHi: maybeNum(o.band_hi),
+    // Computed here when the server did not send the flag, against the gate's
+    // own floor when it sent one, so an older server still gets the floor
+    // applied. A band whose n cannot be read is treated as thin — the
+    // cautious direction.
+    belowMinN: typeof o.below_min_n === "boolean"
+      ? o.below_min_n
+      : settled === null || settled < (minN ?? CONFIDENCE_MIN_N),
+  };
+};
+
+const rows = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+export const readConfidenceCalibration = (raw: unknown): ConfidenceCalibration | null => {
+  // The only reason to answer null. supabase.rpc() hands back `unknown`, and a
+  // client deployed ahead of the migration gets an error body or a string;
+  // neither is an object and neither can be drawn. Everything past this point
+  // reads defensively and renders "not readable" rather than throwing.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const sp = obj(o.span);
+  const disc = obj(o.discrimination);
+  const g = obj(o.gate);
+  const minNPerBand = maybeNum(g.min_n_per_band);
+  return {
+    contract: typeof o.contract === "string" ? o.contract : null,
+    span: { all: span(sp.all), traded: span(sp.traded), wait: span(sp.wait) },
+    byValue: rows(o.by_value).map(valueRow),
+    byBand: rows(o.by_band).map((b) => bandRow(b, minNPerBand)),
+    discrimination: {
+      nWin: maybeNum(disc.n_win),
+      nLoss: maybeNum(disc.n_loss),
+      totalPairs: maybeNum(disc.total_pairs),
+      concordant: maybeNum(disc.concordant),
+      ties: maybeNum(disc.ties),
+      discordant: maybeNum(disc.discordant),
+      // NOT rounded to a whole number the way a percentage is: this one lives
+      // between 0 and 1, and Math.round would turn every value it can take
+      // into 0 or 1.
+      auc: maybeNum(disc.auc),
+      ci: ci(disc.ci95),
+      ciApproximate: flag(disc.ci95_approximate, true),
+      tieShare: maybeNum(disc.tie_share),
+    },
+    gate: {
+      // Both default to the answer that claims less: no correction is being
+      // applied, and nothing has been met.
+      applies: flag(g.applies, false),
+      minNPerBand,
+      needBands: maybeNum(g.need_bands),
+      haveBands: maybeNum(g.have_bands),
+      needSettled: maybeNum(g.need_settled),
+      haveSettled: maybeNum(g.have_settled),
+      met: flag(g.met, false),
+      preregistered: flag(g.preregistered, false),
+    },
+  };
+};
+
+// Does the AUC interval still contain 0.5? While it does, the number has
+// established nothing IN EITHER DIRECTION — a measured 0.469 is not evidence
+// that confidence is inverted, only that 37 settled calls cannot tell 0.469
+// from chance. Derived from the interval rather than asserted from a sentence
+// that stops being true without anyone noticing (#83).
+//
+// No interval, or no AUC, is also "nothing established": the absence of a
+// measurement must never read as a measurement that came out clean.
+export const aucEstablishesNothing = (d: CalibrationDiscrimination | null): boolean => {
+  if (!d || d.auc === null || d.ci === null) return true;
+  return d.ci[0] <= AUC_CHANCE && d.ci[1] >= AUC_CHANCE;
+};
+
+// How much room a correction would have to work in. A mapping from stated
+// confidence to observed win rate needs the stated number to MOVE; over a
+// span of one distinct value there is no mapping to fit, whatever the record
+// says. Null when the span could not be read — not 0, which would claim the
+// model says the same thing every time.
+export const calibrationRoom = (s: CalibrationSpan): number | null =>
+  s.width !== null ? s.width : s.lo !== null && s.hi !== null ? s.hi - s.lo : null;

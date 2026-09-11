@@ -7,9 +7,17 @@ interface Props {
   // DirectionHero already names the direction; inside it the gauge shows the
   // score alone so LONG/BUY are not both on screen for the same thing.
   showSignalLabel?: boolean;
+  // Where this number has actually landed, from confidence_calibration()'s
+  // span.traded. The ring is drawn on 0..100 and always will be — rescaling it
+  // to the observed range would blow an eight-point spread out to a full
+  // circle and manufacture a resolution the measured AUC does not support
+  // (docs/CONFIDENCE_CALIBRATION.md 6-2). Saying the range instead is the
+  // honest half. Absent for a reader with no settled trades of their own, and
+  // then nothing is drawn — a range with no evidence behind it is not a range.
+  observed?: { lo: number; hi: number; n: number } | null;
 }
 
-const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) => {
+const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true, observed = null }: Props) => {
   const t = useT();
   const [animatedConfidence, setAnimatedConfidence] = useState(0);
 
@@ -81,6 +89,14 @@ const ConfidenceGauge = ({ signal, confidence, showSignalLabel = true }: Props) 
         </div>
       </div>
       <p className="text-[10px] sm:text-xs text-muted-foreground mt-1.5 sm:mt-2">{t.direction.confidence}</p>
+      {observed && observed.n > 0 && (
+        <p
+          className="text-[9px] sm:text-[10px] text-muted-foreground/80 mt-0.5 text-center leading-snug"
+          data-testid="confidence-observed-range"
+        >
+          {t.direction.confidenceObserved(observed.lo, observed.hi, observed.n)}
+        </p>
+      )}
     </div>
   );
 };

@@ -9,11 +9,17 @@ import AnalysisHistory from "@/components/AnalysisHistory";
 import LearnedRules from "@/components/LearnedRules";
 import LoopHealth from "@/components/LoopHealth";
 import SeparatedScores from "@/components/SeparatedScores";
+import ConfidenceCalibration from "@/components/ConfidenceCalibration";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
-import { readSeparatedScores, type SeparatedScores as SeparatedScoresData } from "@/lib/outcomeStats";
+import {
+  readConfidenceCalibration,
+  readSeparatedScores,
+  type ConfidenceCalibration as ConfidenceCalibrationData,
+  type SeparatedScores as SeparatedScoresData,
+} from "@/lib/outcomeStats";
 import { useAuth } from "@/contexts/AuthContext";
 import type {
   AnalysisRecord,
@@ -255,6 +261,21 @@ const Index = () => {
   // panel draws when it never does — there is no client-side second
   // implementation of these three to fall back on.
   const [separated, setSeparated] = useState<SeparatedScoresData | null>(null);
+  // public.confidence_calibration(): whether a correction to confidence
+  // could be DEFINED at all — the range the stated number actually takes,
+  // what each value settled as, whether it ranks outcomes, and the gate that
+  // has to be met first. It applies no correction, and neither does the
+  // panel. Null until the RPC answers, and the panel draws nothing when it
+  // never does: an instrument with no reading is not a reading of zero.
+  const [calibration, setCalibration] = useState<ConfidenceCalibrationData | null>(null);
+  // The gauge's caption, built from span.traded and nothing else. Every bound
+  // must be readable: a half-read range under a number is worse than no range,
+  // because the reader cannot tell which half is missing (#68).
+  const confidenceObserved = (() => {
+    const s = calibration?.span.traded;
+    if (!s || s.lo === null || s.hi === null || s.n === null || s.n <= 0) return null;
+    return { lo: s.lo, hi: s.hi, n: s.n };
+  })();
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -335,6 +356,16 @@ const Index = () => {
     } catch {
       // Best effort. The panel says it has no answer rather than computing
       // three percentages from forty rows.
+    }
+    try {
+      // Read over EVERY row, like the record itself — the span of confidence
+      // the model has actually used cannot be measured from the forty rows the
+      // list happens to hold. The function applies no correction; it reports
+      // whether one could be defined.
+      const { data, error } = await supabase.rpc("confidence_calibration");
+      if (!error) setCalibration(readConfidenceCalibration(data));
+    } catch {
+      // Best effort, like the rest of the panel.
     }
     try {
       // Whether the review loop is actually running, shown rather than assumed
@@ -629,6 +660,7 @@ const Index = () => {
                   analysisMode={analysisMode}
                   ruleFit={ruleFit}
                   rulebook={rulebook}
+                  confidenceObserved={confidenceObserved}
                 />
               </>
             ) : (
@@ -649,6 +681,7 @@ const Index = () => {
             {techData && !loading && <TechnicalDataCard data={techData} />}
             <LoopHealth health={loopHealth} />
             <SeparatedScores scores={separated} />
+            <ConfidenceCalibration calibration={calibration} />
             <LearnedRules rulebook={rulebook} />
             <AnalysisHistory records={history} stats={stats} />
           </div>
