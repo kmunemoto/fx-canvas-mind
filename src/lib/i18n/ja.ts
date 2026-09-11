@@ -62,6 +62,12 @@ export const ja = {
     SELL: { word: "SHORT", gloss: "売り" },
     WAIT: { word: "WAIT", gloss: "様子見" },
     confidence: "確信度スコア",
+    // リングは 0〜100 で描かれるが、このシステムがその目盛りを全部使ったことは
+    // 一度もない。66 を「90 も出せる目盛りの中の 66」と読ませないために、
+    // 実測レンジを数字の真下に添える。固定文にはしない——
+    // confidence_calibration() の span.traded から組み立てる（#68）。
+    confidenceObserved: (lo: number, hi: number, n: number) =>
+      `あなたの記録での実測レンジ ${lo}〜${hi}（約定${n}件）`,
   },
 
   result: {

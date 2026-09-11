@@ -268,6 +268,14 @@ const Index = () => {
   // panel. Null until the RPC answers, and the panel draws nothing when it
   // never does: an instrument with no reading is not a reading of zero.
   const [calibration, setCalibration] = useState<ConfidenceCalibrationData | null>(null);
+  // The gauge's caption, built from span.traded and nothing else. Every bound
+  // must be readable: a half-read range under a number is worse than no range,
+  // because the reader cannot tell which half is missing (#68).
+  const confidenceObserved = (() => {
+    const s = calibration?.span.traded;
+    if (!s || s.lo === null || s.hi === null || s.n === null || s.n <= 0) return null;
+    return { lo: s.lo, hi: s.hi, n: s.n };
+  })();
   const [remaining, setRemaining] = useState<number | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const { t, locale } = useLocale();
@@ -652,6 +660,7 @@ const Index = () => {
                   analysisMode={analysisMode}
                   ruleFit={ruleFit}
                   rulebook={rulebook}
+                  confidenceObserved={confidenceObserved}
                 />
               </>
             ) : (

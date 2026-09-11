@@ -24,6 +24,9 @@ interface Props {
   analysisMode?: AnalysisMode | null;
   ruleFit?: RuleFit | null;
   rulebook?: Rulebook | null;
+  // Where confidence has actually landed in this reader's own record. Threaded
+  // from Index so the gauge can say it without fetching anything itself.
+  confidenceObserved?: { lo: number; hi: number; n: number } | null;
 }
 
 // Bullets shown before the reader asks for the rest. The factors are
@@ -65,7 +68,10 @@ const Chip = ({ children }: { children: string }) => (
 // Ordered by the questions a trader asks, each at the weight of its answer:
 // the call, the chart, the plan, the reasons, the cautions — and then, folded,
 // the material the reasons were drawn from.
-const AnalysisResultView = ({ result, techData, pair, interval, entryCheck, analysisMode, ruleFit, rulebook }: Props) => {
+const AnalysisResultView = ({
+  result, techData, pair, interval, entryCheck, analysisMode, ruleFit, rulebook,
+  confidenceObserved = null,
+}: Props) => {
   const t = useT();
   const [allFactors, setAllFactors] = useState(false);
   const keyFactors = Array.isArray(result?.key_factors) ? result.key_factors : [];
@@ -129,7 +135,13 @@ const AnalysisResultView = ({ result, techData, pair, interval, entryCheck, anal
 
   return (
     <div className="space-y-4">
-      <DirectionHero result={result} pair={pair} interval={interval} entryCheck={entryCheck} />
+      <DirectionHero
+        result={result}
+        pair={pair}
+        interval={interval}
+        entryCheck={entryCheck}
+        confidenceObserved={confidenceObserved}
+      />
 
       {candles.length > 0 && (
         <PriceChart

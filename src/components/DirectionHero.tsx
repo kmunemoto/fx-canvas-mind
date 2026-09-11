@@ -11,6 +11,8 @@ interface Props {
   // The entry gate's verdict on this run. On a WAIT it says why — and who
   // decided — which used to reach the reader only as the first warning.
   entryCheck?: EntryCheck | null;
+  // Passed straight through to the gauge. See ConfidenceGauge's `observed`.
+  confidenceObserved?: { lo: number; hi: number; n: number } | null;
 }
 
 const DIRECTION_COLOR = {
@@ -24,7 +26,7 @@ const biasArrow = (bias: string) =>
 const biasColor = (bias: string) =>
   bias === "BULLISH" ? "text-success" : bias === "BEARISH" ? "text-destructive" : "text-warning";
 
-const DirectionHero = ({ result, pair, interval, entryCheck }: Props) => {
+const DirectionHero = ({ result, pair, interval, entryCheck, confidenceObserved = null }: Props) => {
   const t = useT();
   const color = DIRECTION_COLOR[result.signal] ?? DIRECTION_COLOR.WAIT;
   const dir = t.direction[result.signal] ?? t.direction.WAIT;
@@ -150,7 +152,12 @@ const DirectionHero = ({ result, pair, interval, entryCheck }: Props) => {
           </div>
         </div>
         <div className="shrink-0">
-          <ConfidenceGauge signal={result.signal} confidence={result.confidence} showSignalLabel={false} />
+          <ConfidenceGauge
+            signal={result.signal}
+            confidence={result.confidence}
+            showSignalLabel={false}
+            observed={confidenceObserved}
+          />
         </div>
       </div>
     </div>

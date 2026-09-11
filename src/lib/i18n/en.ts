@@ -57,6 +57,12 @@ export const en: Dict = {
     SELL: { word: "SHORT", gloss: "Sell" },
     WAIT: { word: "WAIT", gloss: "Stand aside" },
     confidence: "Confidence",
+    // The ring is drawn on 0..100, a scale this system has never filled. The
+    // observed range sits under the number so 66 is not read as "66 out of a
+    // scale that could have said 90". Built from confidence_calibration()'s
+    // span.traded, never written as a constant (#68).
+    confidenceObserved: (lo: number, hi: number, n: number) =>
+      `In your record this number has landed between ${lo} and ${hi} (${n} traded)`,
   },
 
   result: {
