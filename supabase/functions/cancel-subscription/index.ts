@@ -51,24 +51,79 @@ serve(async (req) => {
       });
     }
 
+    // Pinned, and deliberately left alone — see the note on `current_period_end`
+    // below, and docs/PAYMENTS_SETUP.md §1.7. src/test/payments.test.ts pins the
+    // string across all three payment functions so that a bump cannot happen as
+    // a side effect of tidying.
     const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" });
 
-    // Find active subscription(s) for this customer
+    // Everything the customer has, filtered here rather than by the API.
+    //
+    // The query used to be `status: "active"`, and that is not the same set as
+    // "subscriptions this user is being billed for". A subscription in a trial
+    // is `trialing`; one whose card just failed is `past_due`, and then
+    // `unpaid`. A user in any of those states who pressed 解約 was told
+    // 「有効なサブスクリプションが見つかりません」 — there is nothing to cancel — and
+    // then kept being billed. Being told you have no subscription while your
+    // card is still being charged is how a chargeback starts, and the frontend
+    // surfaces it as a generic error toast, so nobody would have learned why.
+    //
+    // `incomplete` is deliberately not in the set: that is a subscription whose
+    // very first payment has never confirmed, so there is no billing to stop,
+    // and it expires on its own.
+    //
+    // The limit goes up with the filter. Asking for "all" statuses at limit 10
+    // could have filled the page with long-dead cancelled subscriptions and
+    // hidden the live one behind them.
+    const CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
+      "active",
+      "trialing",
+      "past_due",
+      "unpaid",
+    ]);
+
     const subs = await stripe.subscriptions.list({
       customer: profile.stripe_customer_id,
-      status: "active",
-      limit: 10,
+      status: "all",
+      limit: 100,
     });
 
-    if (subs.data.length === 0) {
+    const cancelable = subs.data.filter((sub) => CANCELABLE_STATUSES.has(sub.status));
+
+    if (cancelable.length === 0) {
       return new Response(JSON.stringify({ error: "有効なサブスクリプションが見つかりません" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // UNVERIFIED, and left exactly as it is on purpose.
+    //
+    // `updated.current_period_end` is read at the SUBSCRIPTION level. Under a
+    // newer Stripe API version this field may have moved onto the subscription
+    // ITEM instead, in which case `periodEnd` would be undefined and the user
+    // would be told their cancellation takes effect on no date at all. Nobody
+    // here can check: Stripe's documentation is unreachable from this
+    // environment, and the account is closed, so there is no live response to
+    // read either.
+    //
+    // Guessing was the one option that could make this worse — a defensive
+    // `?? item.current_period_end` written against a shape nobody has seen would
+    // look like a fix and be untestable. It stays as written, recorded as
+    // UNVERIFIED in docs/PAYMENTS_SETUP.md §1.7, to be settled by looking at one
+    // real API response the day a processor is connected. Note that the
+    // cancellation itself succeeds regardless: only the date shown to the user
+    // depends on this field.
+    //
+    // The loop mutates one subscription at a time, so a throw on the second one
+    // leaves the first already set to cancel while the caller is told the whole
+    // thing failed. That is left as it is on purpose: `cancel_at_period_end` is
+    // an absolute assignment, so pressing 解約 again re-applies it to the first
+    // and carries on to the rest. Nothing is double-cancelled and nothing is
+    // charged twice; the worst case is one confusing error message followed by a
+    // second attempt that works.
     let periodEnd: number | null = null;
-    for (const sub of subs.data) {
+    for (const sub of cancelable) {
       const updated = await stripe.subscriptions.update(sub.id, {
         cancel_at_period_end: true,
       });

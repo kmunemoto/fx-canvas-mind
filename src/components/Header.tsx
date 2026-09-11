@@ -63,7 +63,7 @@ const Header = ({ onOpenSettings, liveRate, currencyPair }: HeaderProps) => {
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <div className="h-7 sm:h-8 w-1 rounded-full bg-primary shrink-0" />
         <h1 className="text-base sm:text-lg font-bold tracking-tight text-foreground truncate">
-          FX Tactical Analyzer
+          Sextant
         </h1>
       </div>
 

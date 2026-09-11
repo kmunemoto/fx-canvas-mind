@@ -1,4 +1,4 @@
-// Simple service worker for FX Tactical Analyzer
+// Simple service worker for Sextant
 // Caches an offline fallback page only. Network-first for navigations.
 const CACHE_NAME = "fx-tactical-v1";
 const OFFLINE_URL = "/offline.html";

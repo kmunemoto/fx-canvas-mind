@@ -11,7 +11,7 @@ export const ja = {
   intlLocale: "ja-JP",
 
   common: {
-    appName: "FX Tactical Analyzer",
+    appName: "Sextant",
     cancel: "キャンセル",
     close: "閉じる",
     processing: "処理中...",
@@ -482,6 +482,89 @@ export const ja = {
     waits: "原因分析は決着の1時間後（15分足）・2時間後（1時間足）・4時間後（4時間足）・8時間後（日足）に自動実行し、決着後の値動きが少ない場合は後で再診断します",
   },
 
+  // 勝ち負けを1つにまとめず、方向・タイミング・置き場所を別々に出す画面。
+  // 数字は public.separated_scores() の答えをそのまま描くだけで、
+  // 画面側では何も計算しない（計算が2箇所にあると必ず食い違う）。
+  scores: {
+    title: "3つに分けた採点",
+    definition: (v: number) => `採点定義 v${v}`,
+    subtitle:
+      "勝ち負けを1つの数字にまとめると、「向きは合っていたのに損切りの位置で負けた」と「そもそも向きが逆だった」が同じ『負け』になります。ここでは3つを分けて出します。",
+    none: "サーバから採点を受け取れませんでした（この画面は手元の行から勝手に計算しません）",
+    empty: "まだ採点できる取引がありません",
+    noPair: "不明",
+    noRate: "区間なし",
+    span: (from: string, to: string) => `${from}〜${to}`,
+    basis: (calls: number, pairs: string) => `土台: 全${calls}件の判断・通貨ペア ${pairs}`,
+    basisSignals: (mix: string) => `内訳 ${mix}`,
+    basisTrades: (trades: number, diagnosed: number, undiagnosed: number) =>
+      `取引 ${trades}件（原因分析ずみ ${diagnosed}件・未分析 ${undiagnosed}件）`,
+    // 採点の土台になった取引の件数。上の「原因分析ずみ」とは違う数字になりうる
+    // ——発注方式が違う行は採点から外れるため。外れた件数は次の行で出す。
+    basisGraded: (graded: number) => `このうち、下の採点の土台になったのは ${graded}件`,
+    otherContract: (rows: number, list: string) =>
+      `別の発注方式の行が ${rows}件（${list}）あり、下の採点には入っていません`,
+    // 「通貨ペアは1つ、期間は約2週間」を固定文で書くのをやめ、実データから
+    // 組み立てる。固定文は、2つ目の通貨ペアが増えた日・記録が2か月に伸びた日に、
+    // すぐ上の行と矛盾したまま残りつづける（#83 と同じ形）。
+    narrow: (pairs: number, days: number | null, topSignal: string | null, topShare: number | null) => {
+      const parts = [`通貨ペア ${pairs}種`];
+      if (days !== null) parts.push(`期間 ${days}日ぶん`);
+      if (topSignal !== null && topShare !== null) parts.push(`${topSignal} が全体の ${topShare}%`);
+      return `この採点が乗っている土台: ${parts.join(" / ")}。相場が変われば数字も変わります。`;
+    },
+    // 「材料が足りない」という判断も、固定文ではなく区間から出す。
+    undecided:
+      "どの採点も、95%区間がまだ「五分五分」をまたいでいます。うまくいっているとも、いっていないとも、まだ言えていません。",
+    contractNote: (contract: string) => `現行の発注方式には採点できる取引がないため、${contract} の記録を表示しています`,
+    direction: {
+      label: "方向（向きは合っていたか）",
+      // しきい値は画面に出す。「向きが合っていた」がどれだけ弱い条件で満たされるかは、
+      // ラベルの字面からは分からない。
+      hint: (deadR: number | null) =>
+        `値動きがどちらへ行ったか、だけを見ます。「合っていた」と数えるのは、損切りを1R超えて走り続けず、かつプランが生きているあいだに${deadR === null ? "わずかでも" : `${deadR}R以上`}こちらへ来た行です（それだけの条件です）。損切りと利確のどちらが先に当たったかは見ません。負けた取引でも方向は正解でありえます——それを分けるのがこの行の目的です。`,
+    },
+    timing: {
+      label: "タイミング（入った直後の逆行）",
+      hint: (earlyR: number | null) =>
+        `約定した直後の数本で、${earlyR === null ? "" : `${earlyR}R以上`}逆へ動かなかった取引の割合です。「入り方が間違っていた」という意味ではありません。流れに乗る入り方は、仕組み上かならず逆行を受けます。`,
+    },
+    placement: {
+      label: "置き場所（損切りと利確の位置）",
+      // 損切り側は「負けた取引でしか実際には検証されない」。ここを書かないと、
+      // 勝ちが増えるだけで置き場所の点が上がるのに、画面は「検証ずみ」と読める。
+      hint: "損切りを広げていたら、または利確を半分の距離にしていたら、結果が変わったか。ただし損切りの側が実際に検証されるのは負けた取引だけで、負けなかった取引は損切りの位置を調べないまま「問題なし」に数えられます（右の件数）。利確の側は毎回検証しています。置き場所は方向とタイミングの結果でもあります。",
+    },
+    deepMae: {
+      // この行だけ向きが逆。ラベル自体に書かないと、上の3つと同じ並びで
+      // 「4つめの成績」に見える。
+      label: "最大逆行が損切り目前まで届いた割合（数字が大きいほど悪い）",
+      hint: (maeR: number | null) =>
+        `損切りまでの距離の${maeR === null ? "大部分" : `${Math.round(maeR * 100)}%`}以上まで逆行した取引の割合です。上の3つと違い、この行は数字が大きいほど悪いという意味になります。測る窓も母数も上のタイミングとは違うので、足したり比べたりしないでください。`,
+    },
+    n: (hits: number, n: number) => `${hits}/${n}件`,
+    ci: (lo: number, hi: number) => `95%区間 ${lo}〜${hi}%`,
+    unscored: (n: number) => `採点できず ${n}件`,
+    thin: "件数が少なく、区間が広いことに注意してください",
+    denominators: "3つの母数（件数）はそれぞれ違います。同じ分母を分けたものではありません。",
+    notADecomposition:
+      "3つは独立していません。足しても勝率になりませんし、内訳でもありません。同じ取引を3つの角度から見ているだけです。",
+    causesLabel: "原因の内訳（教訓テーブル）",
+    // この内訳は上の3つとは母集団が違う。件数と、そのうち「待つ」の判断が
+    // 何件かを必ず並べて出す。出さなければ「同じ取引の4つめの見方」に読める。
+    causesTotal: (total: number, waits: number) =>
+      `全 ${total}件。うち ${waits}件は「待つ」の判断で、上の3つの採点には1件も入っていません`,
+    causeSplit: (direction: number, timing: number, placement: number, neither: number) =>
+      `方向 ${direction} / タイミング ${timing} / 置き場所 ${placement} / どれでもない ${neither}`,
+    causeStraddle: "「損切りが近すぎた」は置き場所に数えていますが、タイミングの話でもあります。この分類はきれいには分かれません。",
+    ranPast: (n: number) => `損切りを超えて走った ${n}件`,
+    neverCame: (n: number) => `一度もこちらへ来なかった ${n}件`,
+    wrongPartial: (n: number) => `うち ${n}件は測定が片方欠けており、「合っていた」側には入りえない行`,
+    stopBad: (n: number) => `損切りの位置に問題 ${n}件`,
+    targetBad: (n: number) => `利確の位置に問題 ${n}件`,
+    stopUntested: (n: number) => `うち ${n}件は負けなかったため損切りの位置を検証していない`,
+  },
+
   // その回の分析が参照したルールと、今の相場との照合結果（サーバ実測）。
   ruleFit: {
     title: "適用されたルール",
@@ -659,11 +742,11 @@ export const ja = {
     noCard: "アカウント作成は無料。分析のご利用は有料プラン（月額2,980円〜）から",
     painTitle: "こんな悩み、ありませんか？",
     pains: ["複数の指標を見るのが大変", "エントリーのタイミングに迷う", "ツールの予想が当たったのか、誰も検証しない"],
-    featuresTitle: "FX Tactical Analyzerでできること",
+    featuresTitle: "Sextantでできること",
     features: [
       { title: "全自動データ取得", desc: "リアルタイム価格、RSI、MACD、ボリンジャーバンド、一目均衡表など11種の指標に加え、今週の経済指標カレンダーまで自動取得" },
-      { title: "AI総合判断", desc: "テクニカルとファンダメンタルを統合し、買い/売り/様子見を確信度スコア付きで提示。約定しない指値や近すぎる損切りはサーバー側で却下します" },
-      { title: "ロット数まで自動計算", desc: "エントリー、損切り、利確に加え、口座残高と1トレードの許容リスクから逆算した必要ロット数を表示" },
+      { title: "4つの時間足を同時に測る", desc: "15分足・1時間足・4時間足・日足で、直近の高安、終値で抜けた水準、次の水準までの余地をそれぞれ計算。時間足どうしが食い違っているときは、食い違っていると出します" },
+      { title: "確定した足だけで計算", desc: "形成中のローソク足と、市場が閉まっていた時間帯の見せかけの値動きを除いてから指標を計算。週末をまたぐ足で数字が歪まない" },
     ],
     stepsTitle: "3ステップで使える",
     steps: [
@@ -688,7 +771,7 @@ export const ja = {
     honestBody: "統計的に意味を持つ件数に達するまで、当サービスは勝率を公表しません。目安は独立した決着50件で、到達後はアプリ内に95%信頼区間つきで表示します。都合のいい数字だけをお見せしないための方針です。",
     faqTitle: "よくある質問",
     faqs: [
-      { q: "FX Tactical Analyzerとは何ですか？", a: "FX Tactical AnalyzerはAIを搭載したFXテクニカル分析ツールです。RSI、MACD、ボリンジャーバンドなど11種のテクニカル指標とファンダメンタル分析を統合し、BUY/SELL/WAITの売買判断と確信度スコアをリアルタイムで提供します。" },
+      { q: "Sextantとは何ですか？", a: "為替の値動きを測るテクニカル分析ツールです。RSI、MACD、ボリンジャーバンド、一目均衡表など11種の指標と、直近の高安・終値で抜けた水準・次の水準までの余地といった値動きの構造を、15分足・1時間足・4時間足・日足で計算します。" },
       { q: "他のAI分析ツールと何が違いますか？", a: "出した予想を必ず採点し、外れた理由を自動で調べる仕組みが入っている点です。全プランは期限まで実際のBid/Askで追跡され、外れたものは決着後の値動きから原因を特定し、その結果がAIの守るルールに反映されます。ルールの内容と、そのルールが何件の実績に裏付けられているかはアプリ内で確認できます。" },
       { q: "勝率はどのくらいですか？", a: "統計的に意味を持つ件数に達していないため、現時点では公表していません。少ない件数の勝率は運とほとんど区別がつかないためです。独立した決着50件を目安とし、到達後はアプリ内に95%信頼区間つきで表示します。" },
       { q: "投資助言サービスですか？", a: "いいえ。本サービスは相場分析情報の提供であり、投資助言・代理業には該当しません。売買の最終判断とその結果はお客様ご自身に帰属します。" },
@@ -700,14 +783,13 @@ export const ja = {
     ],
     ctaTitle: "今すぐ始めましょう",
     ctaBody: "アカウント作成は30秒で完了します",
-    shareTitle: "FX Tactical Analyzerを広める",
+    shareTitle: "Sextantを広める",
     shareBody: "このツールを友人やフォロワーにシェアして、賢いトレードを広めましょう",
     shareText: "予想を出しっぱなしにしないFX AIツールを見つけました。全プランを実勢レートで自動採点して、外れた理由まで調べてくれます。 #FX #AI分析 #トレード",
     aria: { nav: "メインナビゲーション", hero: "ヒーロー", pain: "ユーザーの悩み", features: "機能紹介", steps: "利用ステップ", pricing: "料金プラン", loop: "自動採点と学習の仕組み", faq: "よくある質問", cta: "登録CTA", share: "SNSシェア", footerNav: "フッターナビゲーション" },
   },
 
   landing: {
-    blog: "ブログ",
     login: "ログイン",
     startFree: "始める",
     terms: "利用規約",
@@ -715,30 +797,17 @@ export const ja = {
     tokushoho: "特定商取引法に基づく表記",
     contact: "お問い合わせ",
     footerNote: "本サービスは投資助言ではありません。FX取引にはリスクが伴います。",
-  },
-
-  blog: {
-    title: "ブログ",
-    subtitle: "FXテクニカル分析・ファンダメンタル・AI活用についての解説記事",
-    all: "全て",
-    none: "該当する記事がありません。",
-    readMore: "続きを読む",
-    home: "ホーム",
-    readingTime: (n: number) => `約${n}分`,
-    toc: "目次",
-    share: "この記事をシェア",
-    shareX: "Xでシェア",
-    shareLine: "LINEで共有",
-    copyLink: "リンクをコピー",
-    copied: "コピー済み",
-    copiedToast: "リンクをコピーしました",
-    copyFailed: "コピーに失敗しました",
-    related: "関連記事",
-    ctaTitle: "FX Tactical Analyzerを使ってみる",
-    ctaBody: "11種のテクニカル指標とファンダメンタル分析をAIが統合。BUY/SELL/WAITの判断と確信度をリアルタイムで提供します。",
-    // Article bodies are long-form Japanese content, not UI strings, so they
-    // are not translated; say so rather than showing Japanese with no warning.
-    japaneseOnly: "記事本文は日本語のみです。",
+    // Share strings for the landing page's own SNS buttons. They lived under
+    // `blog` until the blog was removed; the buttons are the landing page's,
+    // so the keys moved here rather than being deleted with it.
+    share: {
+      shareX: "Xでシェア",
+      shareLine: "LINEで共有",
+      copyLink: "リンクをコピー",
+      copied: "コピー済み",
+      copiedToast: "リンクをコピーしました",
+      copyFailed: "コピーに失敗しました",
+    },
   },
 
   contact: {

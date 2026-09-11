@@ -511,13 +511,186 @@ select net.http_post(
 
 ---
 
+### 5.2 noise-floor（アナリストのノイズ床を測る。**cron に載せない**）
+
+- **何のためか**: 同じプロンプトをもう一度送ったとき、答えがどれだけの割合で変わるかを測る。#65（現行ルールブック対候補ルールブックの対応のある比較・McNemar）の**前提条件**であって、それ自体が目的ではない。
+  この数が無いまま #65 を走らせると、観測された差が「ルールブックが効いた」のか「モデルが同じ入力に二度同じ答えを返さなかった」のかを**区別できない**。設計と閾値は `docs/NOISE_FLOOR_PREREGISTRATION.md` に、最初の課金呼び出しの前に固定してある。読み替えを防ぐために先に書いたものなので、走らせたあとに書き換えない。
+- **絶対に cron に載せない。** ジョブは存在しないし、作らない。`§5` の表に行を足す変更は差し戻すこと。理由は 2 つ:
+  この関数は**呼ぶたびに課金される** `ANTHROPIC_API_KEY`（analyze と postmortem と同じ鍵）を使うこと、そして母集団を凍結して 1 パスで走り切る測定なので、勝手に再走したら「いつ止めたか」で結果を作れることである（`§5` の他の 3 つは冪等な sweep で、性質が違う）。
+  実測: 2026-09-08 07:14:46Z〜07:23:02Z に同じ鍵でクレジット残高不足が 6 回連続し、**ライブアプリのユーザーにエラーとして見えた**。これがこの関数の失敗半径である。
+- **ユーザーに見えるものには触らない**: `analyses` / `lessons` / `rulebook` に書かない。`/functions/v1/analyze` を呼ばない（呼べば quota を消費し行を作る）。`analysis_prompts` は**読むだけ**。quota は 1 回も消費されず、返却も発生しない。書き込むのは `public.noise_runs` と `public.noise_cells` の 2 つだけ。
+- **認証は sweep トークンのみ。管理者 JWT の枝は無い**（他の 3 つと違う点）。トークンが無ければ・違えば一律 401。
+  金を使う関数に `ADMIN_EMAILS`（すでに 4 か所）の 5 つ目のコピーを作らないため、そして想定する呼び手が「vault からトークンを読む SQL」＝psql の前での意図的な操作だからである。
+
+#### デプロイ順（この順でしか通らない）
+
+1. **マイグレーション `20260909120000_the_analyst_is_measured_against_itself.sql` を先に当てる。** 関数は最初の 1 リクエストで `noise_runs` に行を作るので、テーブルが無ければ 500 で止まる（課金は 1 回も起きない）。
+2. **`supabase/config.toml` の `[functions.noise-floor] verify_jwt = false`。** 済み。これが無いと `supabase functions deploy noise-floor` 経路でゲートウェイの既定 `verify_jwt = true` が効き、**下の `net.http_post`（`x-sweep-token` だけで JWT を持たない）は関数に届く前に 401 になる**。psql からはトークン不一致と区別が付かない。チェーンの自己 POST も同じ理由で落ちる（関数は `chain_handoff_status:401` を `errors` に出す）。リポジトリのデプロイ経路（`.claude/workflows/deploy-edge-verified.js`）は `verify_jwt: false` を明示的に渡すので、そちらだけなら元から通る。
+3. **`npm run bundle:noise-floor` → `.claude/workflows/deploy-edge-verified.js`。** バンドルは `.gitignore` 済み（他の 3 つと同じく明示パスで列挙）。
+
+#### 呼び方（トークンの値はどこにも書かない）
+
+`x-sweep-token` は必ず `vault.decrypted_secrets` からの副問い合わせで埋める（`§7`）。`timeout_milliseconds` は関数の壁時計予算 130 秒より長くする。
+
+```sql
+-- 1) ドライラン（無料。/v1/messages は 1 回も呼ばれない）
+select net.http_post(
+  url := 'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/noise-floor',
+  headers := jsonb_build_object('Content-Type','application/json',
+    'x-sweep-token', (select decrypted_secret from vault.decrypted_secrets where name = 'track_outcomes_sweep_token')),
+  body := '{"dry_run":true,"arm":"search_free","reps":2}'::jsonb,
+  timeout_milliseconds := 150000);
+
+-- 返り値を読む（run_id / measured_input_tokens / bound_output_tokens）
+select id, status_code, left(content, 1000) from net._http_response order by id desc limit 3;
+```
+
+- `dry_run` の既定は **true**。フィールドを書き忘れた body も、綴りを間違えた body も、JSON ですらない body も、全部無料の経路に落ちる。**明示的な `false` だけがモデルを呼べる。**
+- ドライランは全行に `POST /v1/messages/count_tokens`（無料）を、送る本体から `max_tokens` だけ落として投げる。返すのは
+  `measured_input_tokens`（**実測**。行ごとに 1 回数えて `reps` 倍する。2 反復は同じバイト列なので 2 回数える意味が無い）と
+  `bound_output_tokens = 8000 × 行数 × reps`（**上界であって見積もりではない**。`count_tokens` は入力しか数えず、出力は適応思考が出力レートで `max_tokens` まで課金される）。
+  `status = 'dry'` の行を 1 本書き、セルは 1 つも書かない。壁時計が尽きたら `run_id` を渡して同じドライランを再開できる。
+  **ドライランにもライブと同じ 3 つの安全装置が付いている**（呼び出し間隔 2 秒、cron の分を避ける、401/403/429/5xx で即中止）。無料なのは事実だが、この関数の失敗半径は「課金」ではなく「**共有キー**」である。48 行ぶんの拒否を一気に作るのは 1 回作るより悪い。中断したら `run_id` で再開すればよく、止まる代償は POST 1 回である。
+- **ドライラン無しにライブ実行は作れない。** `dry_run:false` の作成には、同じ母集団・同じアーム・同じ `reps` の**完了した**ドライランを指す `dry_run_id` と、`budget_input_tokens`・`budget_output_tokens` の両方が必須。予算の 2 つの数字はドライランの上の 2 つから**人間が決める**（`docs/NOISE_FLOOR_PREREGISTRATION.md` の未決事項 1）。
+
+#### ドライラン → パイロット → 本走行
+
+1. **ドライラン**（無料）。`run_id` と `measured_input_tokens` / `bound_output_tokens` を得る。この 2 つが出るまで先へ進まない。
+2. **パイロット（器具の検査であって推定ではない）**。目的を絞った 6 行を `analysis_ids` で名指しし、その 6 行だけの**別のドライラン**を取ってから 12 セルを手で流す。
+   パイロットのセルは**事前登録で p̂₀ から除外されている**。合算すれば「先に覗いてから母集団を決めた」ことになる。
+   合格条件は 6 つ（事前登録 §9・設計 §8 のゲート）: 12/12 が `status='ok'`、`usage.input_tokens` が `count_tokens` の値と整合、`response_model` が行の `model` と一致、`missing_required_keys` が空、費用の外挿が承認済み予算の内側、`analyses`/`lessons`/`rulebook` と quota が動いていないこと。
+   ```sql
+   body := jsonb_build_object('dry_run', false, 'dry_run_id', '<pilot dry run>', 'arm','search_free',
+                              'reps', 2, 'max_cells', 2, 'chain', false,
+                              'analysis_ids', jsonb_build_array('<id1>','<id2>','<id3>','<id4>','<id5>','<id6>'),
+                              'budget_input_tokens', <n>, 'budget_output_tokens', <n>)
+   ```
+3. **本走行**。凍結した母集団に対して `chain:true` で 1 回だけ叩けば、あとは自分で次のホップを撃つ。
+   ```sql
+   body := jsonb_build_object('dry_run', false, 'dry_run_id', '<full dry run>', 'arm','search_free',
+                              'reps', 2, 'max_cells', 2, 'chain', true,
+                              'budget_input_tokens', <n>, 'budget_output_tokens', <n>)
+   ```
+   **途中で結果を見ない**（事前登録 §7）。数時間かかる。
+4. **レポート**（モデルを 1 回も呼ばない読み取り専用モード）。
+   ```sql
+   body := jsonb_build_object('report_run_id', '<run id>')
+   ```
+   `metric.ts` の `report(...)` をそのまま返す。`completed + failed < expected` の間、**率は出ない**（`emitted:false` と拒否理由が返る）。`status='claimed'` のセルは `CellStatus` ではないので `report()` に渡さず、`unfinished_cells` として別に数えて返す。
+
+   レポートは `report()` に渡す前に 4 つを自分で拒否する（**HTTP 409、`report.refusal` に理由**。率は出さない）。どれも「間引いた 40 行の率を 48 行の率として出す」向きの事故で、その向きは #65 が耐えられない側である。
+   - `expected_cells_disagrees_with_frozen_population` — 門は**凍結した id リスト**（`notes.population.ids`）から数え直した期待値で判定する。`expected_cells` 列は可変で、手で下げれば `<` の比較は途中の run でも通ってしまう。列は突き合わせるだけ。
+   - `cells_outside_frozen_population` — 凍結した母集団に無い行のセルがある。
+   - `replicates_of_a_row_sent_different_requests` — **1 行の 2 反復が同じリクエストを送ったことの証明**。`system_sha256` / `user_sha256` / `effort` / `max_tokens` / `tools_present` / `schema_in_prompt` / `shape` を反復間で比較する。リクエストは呼び出しごとに保存プロンプトから組み直され、1 行の 2 反復は何時間も離れた別々の呼び出しに落ちるのが普通なので、その間に `shape.ts` を入れ替えれば別々のリクエストが「2 反復」として混ざる。**後の版がより拘束的なら答えは揃いやすくなり、率は低く出る**。（同じ比較は走行中にもしていて、兄弟と食い違うセルは**買わずに** `aborted` にする。）
+   - `stratum_unknown_for_some_cells` — 層が引けなかったセルがある。層が不明なセルは `core` に落ちる＝ preview の 4 行が中核に混ざる＝分母が 40 でなく 44 になる＝ Wilson 上限が**下がる**。以前はこれが `errors` の 1 行として率の隣に出ていた。
+
+#### 走行中の安全装置（すべて関数側で強制。body では緩められない）
+
+- **max_cells は 1 回の呼び出しにつき最大 4**、`reps` は 2〜3。**ただし `max_cells` が数えるのはセルであって課金される呼び出しではない**: `pause_turn` のループは 1 セルの中で最大 5 回叩ける。予算はセルの中でも見るようにしてあり（`budget_crossed_mid_cell`）、そもそも `pause_turn` はサーバツールの信号なので `tools` を付ける `search_on` アームでしか起きない。
+- **壁時計**: 予算 130 秒、書き込み用に 10 秒を残す。**残りが 80 秒を切ったら次のセルを始めない**。1 回のモデル呼び出しの上限は 100 秒。
+  80 秒は実測から決めてある。`analyses.created_at − analysis_prompts.sent_at`（fetch から write までの実時間＝モデル時間の**上界**）を 48 行全部で見ると 最小 39.1 秒・中央値 56.0 秒・p90 66.1 秒・最大 71.8 秒、62 秒超が 11/48、**80 秒超は 0/48**（2026-09-09 実測）。
+  最初は 25 秒だった。それは**実測の最小値より下**で、その残り時間で始めたセルは「claim して、課金される生成をさせて、途中で切る」ことが確定していた。終わったセルは自動で取り直さないので、その反復は永久に失われ、その行は分母から落ちる。**落ちるのは遅い行だから、48 行の母集団からの無作為でない間引き**になる。
+  代償は正直に書く: 80 秒にすると `max_cells:2` でも 1 呼び出し 1 セルが普通になり、ホップ数はおよそ倍要る。`max_chain_hops` は同じ定数から計算しているので、片方だけ動いて run が立ち往生することはない。
+- **cron の分を避ける**: UTC の分が `{3,8,13,18,23,33,38,48,53}` のときはセルを開始しない。**その分を寝て待つ**（次の分の頭まで、壁時計に収まる限り）。時間が足りなければ `skipped:"cron_minute"` で帰る。
+  実測（`select jobid, jobname, schedule, active from cron.job`、2026-09-09）: 生きているジョブは 4 本で、上の 9 分は**エッジ関数を叩く 3 本の和集合**。postmortem は同じ Anthropic キーを共有し、残り 2 本はワーカーとデータベースを共有する。
+  `purge-cron-history`（`0 3 * * *`）は入れていない: 1 日 1 回・関数を呼ばない・`cron.job_run_details` を消すだけ。
+  **「寝て待つ」であって「帰る」ではない理由**: チェーンのブロックは status・残セル・予算・ホップ数は見るが「このホップは仕事をしたか」は見ない。だから帰るだけだと、何もしなかったホップが即座に次のホップを撃ち、そのホップも同じ分の中で refuse し……と 1 秒に 1 回転する。**ガードした分の中で 50〜100 ホップ**、つまり本走行のホップ予算まるごとが、よりによってその分の中で燃える。ガードの目的が正反対に働き、run はセルを大半残して永久に止まる。分を寝て待てば refuse 1 回あたり 1 ホップになり、これが `max_chain_hops` の計算がもともと前提にしていた姿である。9 分ぶんの取りこぼしは `60/51` を掛けて見込んである。
+  なおこの 9 分は**連続しない**（実測）。だから 1 回寝れば必ず抜ける。5 本目の cron を足すときはここを壊さないこと（テストで固定してある）。
+- **課金は呼び出し回数ではなく `usage` で数える**。応答のたびに `noise_runs.spent_*` を**セルから再計算して**書き直し、どちらかの予算を超えたら run を `aborted` にして止まる。`max_tokens: 8000` では回数は費用の上界にならない。
+  再計算にしてあるのはインクリメントを二重に当てる事故（古い claim の再実行、ホップの再コミット）を構造的に不可能にするためで、二重計上は**まだ ok セルが揃っていないのにレポートの門を開ける**＝率を低く出す＝#65 が本物の劣化をノイズと読む方向の誤りになる。
+- **測れなかった費用はゼロではない。** 途中で切られた呼び出しは、サーバが既に出したぶんを課金したうえで `usage` をクライアントに返さない。そのセルの `input_tokens` / `output_tokens` は `null`（＝**不明**であって 0 ではない）で書かれる。
+  `spent_*` の 2 列は**実測のまま**にしてあり（マイグレーションがそう宣言している列に推測を書くと、以後この run の費用の読みが全部推測になる）、代わりに**上界を別の数として持つ**: 応答に `unmeasured_cells` / `bound_input_tokens_unmeasured` / `bound_output_tokens_unmeasured` が出る。入力側の 1 セルあたり上界はドライランの**行ごと最大**入力トークン数（`notes.unmeasured_cell_input_bound`）、出力側は `max_tokens`。
+  **予算の判定は「実測 + 上界」で行う。** そうしないと、全部タイムアウトしている run が「消費 0」のまま母集団ぶん課金できてしまう。
+- **予算はドライランと突き合わせる。** `budget_input_tokens` はドライランの `measured_input_tokens` の、`budget_output_tokens` は `bound_output_tokens` の、**それぞれ 2 倍を超えたら拒否**する（2 倍の理由: ドライランは 1 セル 1 呼び出しで数えるが `pause_turn` の継続は 1 セルで最大 5 回叩き、毎回長くなった会話を送り直すので、`search_on` アームがそもそも成り立たなくなる。桁を 1 つ間違えた入力は 2 倍でも止まる）。
+  拒否の文面には**比較された 2 つの実測値が入る**ので、断られた側は何と比べられたかを見て決め直せる。
+- **1 つの `dry_run_id` で作れるライブ実行は 1 本だけ。** 同じ body を 2 回 POST しても 2 本目は拒否される（`dry_run_id has already been spent by run ...`）。`net.http_post` は非同期で、返り値が `net._http_response` に現れるのは最大 130 秒後だから、「作れたのか分からない」窓＝「もう 1 回叩く」窓である。
+  関数側の判定は読んでから書く形なので、数百ミリ秒以内に重なった 2 回は原理的に両方通りうる。そこはデータベース側で閉じてある: マイグレーションの `noise_runs_one_spend_per_dry_run`（`(notes->>'dry_run_id')` の部分一意インデックス、`status in ('running','paused')` の行だけを対象）が 2 本目の INSERT を落とす。**関数はインデックスより厳しい**: `dry` 以外のどの実行にでも引用済みの `dry_run_id` は、`done` でも `aborted` でも拒否し、どの実行が使ったかを返す（実測 2026-09-09: 本番実行の 1 回目がこれで 400、課金 0）。**中断したあとに走り直すときは、ドライランを取り直す**（無料・約 96 秒）。
+- **占有率の上限は「チェーンを使わないこと」で守る（2026-09-09 の事故）。** 呼び出しの間隔を空けても、自己 POST で連鎖する限りエッジのワーカーは切れ目なく埋まる。実測: 40 分間ほぼ 100% 占有し、05:08 に postmortem の定時ジョブと重なった瞬間、利用者の `analyze` がワーカーを取れず「接続できませんでした」になった（その 1 件は関数の呼び出しログにすら残っていない。前後の分析は成功）。
+  **残りを流すときは `chain:false` で、外から低頻度に叩く。** 一時的な pg_cron ジョブを、既存 4 ジョブと衝突しない分（`1,6,11,16,21,26,31,36,41,46,51,56`）に置き、終わったら `cron.unschedule` で消す。1 発 2 セル ≒ 80 秒 / 5 分 = 占有率 27%。「cron に載せない」という原則は**恒久スケジュールを作らない**という意味であって、運用者が張って外す一時ジョブはその趣旨に反しない。趣旨に反するのは、無人で走り続けることのほう。
+- **同時実行はしない — run 単位のリース**で担保する。1 回の呼び出しは `notes.lease_until` を条件付き PATCH で取ってからでないとセルに触らない。取れなければ何も使わずに `skipped:"locked"` で帰る。
+  **限界を明記する**: 呼び出しの間隔（最低 2 秒）は**1 回の呼び出しの中でだけ**保証される。チェーンの親が最後に叩いてから子が最初に叩くまでの間隔は保証されない。リースが止めるのは「2 つのワーカーが同時に叩くこと」であって、「2 つの連続したワーカーの間隔」ではない。
+- **再試行しない中止条件**: 400 の本文に `credit balance is too low`、**402**（課金ステータスそのもの。上の 400 は 2026-09-08 に観測された形であって唯一の形ではない）、401 / 403 / 429、および **5xx 全部（529 overloaded を含む）**。
+  529 は「再試行可能」とされているが、この関数の規則は再試行しないことである。過負荷の共有キーはまさにその典型で、そのときライブの analyze も同じキーで失敗しており、analyze は**モデルを呼ぶ前に quota を消費する**。2 秒間隔で母集団ぶん撃ち続けるのは、障害に向けた負荷試験である。
+  `retry-after` と `anthropic-ratelimit-*` は記録のためだけに読む。待って撃ち直すことは、ライブの analyze の呼び出しを落とす行為そのものである。
+- **`response.model` が行の `model` と違ったら、そのセルだけでなく run ごと止まる**（`abort_reason` に返ってきた識別子が入る）。
+  以前はセルの status だけだった。`report()` は「全反復が失敗した行」を分母から静かに落として `emitted:true` を出すので、走行の途中でモデルが変わると母集団が黙って縮み、全行が影響を受ける場合は 96 回全部叩いてから拒否していた。止めればパイロットが 1 呼び出しで気づく。**ドライランでは検出できない**（`count_tokens` はモデルを返さない）。
+  実測 2026-09-09: 保存されている `model` 列は 48/48 が同じ値で、日付サフィックスの無いエイリアスである。そして `response.model` をこのリポジトリが読み戻したことは一度も無い（analyze が保存しているのは**リクエスト側**の値）。つまりこの等値はまだ一度も観測されていない。API がエイリアスを日付入りに解決するなら最初のセルで止まるので、そのとき「解決後の識別子を受け入れる」か「止める」かを決めるのは人である。
+- **`search_on` アームの費用は 2 つの予算では縛れない。** web 検索は**リクエスト単位**の課金で、`usage.server_tool_use.web_search_requests` はトークンではない。関数は見つけたら `errors` に `web_search_requests:<n>` として出すが、**上限は無い**。このアームを走らせるなら、上限は人が持つこと。
+- **`run_id` と `analysis_ids` は同時に指定できない。** 行の集合は作成時に固定される。以前は `run_id` があると body の `analysis_ids` を黙って無視していたので、「止まった run の数行だけ流し直す」つもりの再 POST が残り全部に課金していた。
+- **claim してから使う**: セルは `(run_id, analysis_id, rep)` の一意キーに `Prefer: resolution=ignore-duplicates` で先に INSERT する（既定の `status='claimed'`）。0 行返れば他の呼び出しが持っている。claim はモデル呼び出しの**前に**コミットされるので、150 秒で殺されたワーカーは沈黙ではなく証跡を残す。
+- **ログに出るのは status・`request_id`・エラーの 200 文字だけ**。body もプロンプトもヘッダもトークンも出さない。
+
+#### 止め方と直し方
+
+```sql
+-- キルスイッチ。次のホップがこれを読んで撃たない（走行中の 1 セルは走り切る）
+update public.noise_runs set status = 'paused' where id = '<run id>';
+
+-- 再開: 状態を戻してから run_id で 1 回叩く（chain:true なら以後は自走する）
+update public.noise_runs set status = 'running' where id = '<run id>' and status = 'paused';
+--   body := jsonb_build_object('run_id','<run id>','dry_run',false,'chain',true,'max_cells',2)
+
+-- 予算で止まった run を続ける: 予算を上げ、status も戻す（2 つとも意図的に手で行う）
+update public.noise_runs set budget_output_tokens = <n>, status = 'running', abort_reason = null
+ where id = '<run id>' and status = 'aborted';
+
+-- ホップを使い切って止まった run: 上限を上げるか、run_id で叩き直す
+update public.noise_runs set max_chain_hops = max_chain_hops + 20 where id = '<run id>';
+
+-- claim したまま終わらなかったセルを消したあとは、status も戻すこと。
+-- claim 残りがある run は 'done' にならず 'running' のままなので普通は不要だが、
+-- 手で 'done' や 'aborted' にしてしまった run はこれを戻さないと再開が無反応になる
+-- （run_id での再 POST は status が 'running' でなければ何もしない）。
+update public.noise_runs set status = 'running', abort_reason = null
+ where id = '<run id>' and status in ('done', 'aborted');
+```
+
+- **最初のライブ実行で `patch_failed:noise_runs_lease` が返って 500 になったら**、リースの PostgREST フィルタ（`notes->>lease_until=lt....`）の綴りが通っていない。**そのとき課金は 1 回も起きていない**（リースはセルに触る前に取る）。比較の意味論は Postgres で実測してあるが、REST の綴りはこの環境から end-to-end で叩けなかった。直すのは `index.ts` の 1 行。
+- **`skipped:"locked"` が返ったら、その run は別のワーカーが持っている。** チェーンのホップが飛んでいる最中か、165 秒以内に死んだワーカーのリースが残っているか。何も使わずに帰っているので、待ってから叩き直せばよい。**リースが理由で「動いていない」と判断しない。**
+- **`unfinished_cells > 0` の run は `done` にならない。** `pending`（＝まだ claim されていないセル）が空でも、claim したまま終わっていないセルがあれば `running` のままにする。以前はここで `done` を書いていたので、**途中の run が完了した run に見え**、しかも上の「消してから再 POST」がその後 status で弾かれて無反応になっていた。
+
+- **claim したまま終わらなかったセルは自動で再取得しない。** 支払い済みかもしれない呼び出しをもう一度撃つと、記録は 1 回なのに請求は 2 回になる。止まった run は止まったまま見え、レポートの門は閉じたままになる。やり直すなら人が消す:
+  ```sql
+  select id, analysis_id, rep, claimed_at from public.noise_cells
+   where run_id = '<run id>' and status = 'claimed' order by claimed_at;
+  delete from public.noise_cells
+   where run_id = '<run id>' and status = 'claimed' and claimed_at < now() - interval '15 minutes';
+  ```
+- 進捗の確認:
+  ```sql
+  select id, status, arm, reps, expected_cells, completed_cells, failed_cells,
+         spent_input_tokens, budget_input_tokens, spent_output_tokens, budget_output_tokens,
+         chain_hops, max_chain_hops, abort_reason
+    from public.noise_runs order by created_at desc limit 5;
+  select status, count(*) from public.noise_cells where run_id = '<run id>' group by 1 order by 2 desc;
+  ```
+
+#### 2 つのテーブルが意味するもの
+
+| テーブル | 1 行が意味するもの |
+|---|---|
+| `public.noise_runs` | 再実行 1 本の**ヘッダ**。凍結した母集団（`population_frozen_at` と `notes.population.ids`）、アーム、`reps`、`expected_cells`、実測の消費トークン、そして終わったかどうか。 |
+| `public.noise_cells` | **1 行 1 反復**。送った形（`shape` / `effort` / `max_tokens` / `tools_present` / `schema_in_prompt` / `schema_era`）、送った 2 つの文字列の sha256、正規化**前**の生の答え、そしてそのセルが測定になっているかを言う `status`。 |
+
+- どちらも RLS 有効・ポリシー無し、`anon` と `authenticated` から revoke 済み。読み書きできるのは `service_role` だけ。`rls_enabled_no_policy` が INFO の advisor に出るのは**意図した状態**で、`analysis_prompts` が `20260905161000` から持っているのと同じ。
+- **プロンプト本文は保存しない。** 保存するのは実際に送った 2 つの文字列の sha256 だけ。`analyses` はテーブルレベルで `authenticated` に select を許しているので、デバッグの便宜でプロンプトを 2 つ目のテーブルに書き戻せば `20260905161000` が消した露出を作り直すことになる。2 反復が同一のバイト列を送ったことを示すには digest で足りる。
+- **ヘッダを 2 つに分けてある理由**: 途中の run が完了した run に見えてはいけない。レポートは `completed_cells + failed_cells < expected_cells` の間、率を出すことを拒否する。「読めなかったことはゼロではない」に立つ足場がこれである。
+- `status`（run）: `dry` → `running` → `done` / `aborted` / `paused`。`status`（cell）: `claimed` と、`metric.ts` の 9 つの終了値（`ok` / `http_error` / `parse_failed` / `missing_keys` / `refusal` / `truncated` / `timeout` / `pause_exhausted` / `aborted`）。
+  **`ok` 以外は分子からも分母からも外れる。決して WAIT にしない**: `normalizeAnalysis` は読めない signal を `"WAIT"` に、読めない confidence を `0` に丸めるので、正規化後だけを読むハーネスは解析失敗を全て「WAIT で一致」と数え、床を実際より低く出す。実測 2026-09-09 で 48 行中 45 行はフィールド契約をプロンプト中の散文からしか受け取っていない。
+  セルの `aborted` は「これは測定ではない」を 3 つの理由で表す（行を分類できない・`response_model` が行の `model` と違う・答えが列に収まらない）。理由は `error_slice` に入る。
+- **母集団（2026-09-09 実測）**: `analysis_prompts` 48 行、`analyses` に 48/48 join、`mode='full'` 45・`technical_only` 3・`technical_fallback` 0、`preview` 4、v48 世代 4、**この 2 つの層は互いに素**（だから中核は 40 行で、0/40 の Wilson 上限 8.76% は分岐点 8.8% の真上にある。n=48 と n=40 は必ず並べて出す）。
+  直近 24 時間で 22 行増えていた（マイグレーションのコメントは数時間前に 23 行と実測している。窓が動くだけで桁は同じ）。**分母が 1 日で自分の半分ほど動く表なので、凍結は形式ではない。**
+
+---
+
 ## 6. デプロイ手順
 
 ### 6.1 順序の不変条件
 
 1. **エッジ関数を先に、フロントエンドを後に。** フロントは新しい `evaluation` の形を読むので、逆にすると古い関数が書いた行を新しい UI が読めない時間ができる。
-2. 関数を変えたら **バージョン文字列を上げる**: `TRACKER_VERSION`（track-outcomes/index.ts）、`POSTMORTEM_VERSION`（postmortem/index.ts）、`FUNCTION_VERSION`（analyze/index.ts、econ-calendar/index.ts）。
+2. 関数を変えたら **バージョン文字列を上げる**: `TRACKER_VERSION`（track-outcomes/index.ts）、`POSTMORTEM_VERSION`（postmortem/index.ts）、`FUNCTION_VERSION`（analyze/index.ts、econ-calendar/index.ts、noise-floor/index.ts）。
    返り値と `tracker_state.last_sweep_result.version` / `postmortem_state.last_result.version` / `econ_calendar_state.last_result.version` に出る（状態テーブルに書くのは sweep モードのときだけ。analyze は返り値と `X-Function-Version` ヘッダ）ので、本番で「どれが動いているか」を確かめる唯一の手がかり。
+   noise-floor は返り値と `public.noise_runs.version`（run を作った呼び出しのバージョン）に出る。
 3. デプロイしたものは **読み戻して sha256 を比べる** まで「デプロイ済み」と言わない。
 4. データを直すマイグレーションは、それを解釈する関数を先にデプロイし、cron を止めてから流す（§4.3）。
 
@@ -526,15 +699,16 @@ select net.http_post(
 - デプロイは Supabase の `deploy_edge_function` にファイル内容を **インラインで**渡す。つまり誰か（人でもエージェントでも）が中身を転記する。
 - ミニファイの既定は 1 行に詰める形なので、analyze のバンドルは **64 行・最長 15,717 文字**になっていた。この形は読むことも正確に写すこともできず、2026-09-06 のデプロイでエージェントが「この大きさでは転記できない」と実際に拒否した。手写しの事故は #48 と #51 で 2 回起きている。
 - `--line-limit=200` を付けると **402 行・最長 447 文字**になる（サイズ増は 0.5%）。折れないのは長い文字列リテラル（日本語のプロンプト）だけ。
-- 3 つのバンドルすべてに付ける。`bundle:analyze` / `bundle:track-outcomes` / `bundle:postmortem`。
-- **サイズは監視項目**。analyze は 78.8KB、postmortem は 82.0KB（2026-09-06）。これ以上育つなら、インライン以外の経路（CLI にはアクセストークンが要る）を用意する必要がある。
+- 4 つのバンドルすべてに付ける。`bundle:analyze` / `bundle:track-outcomes` / `bundle:postmortem` / `bundle:noise-floor`。
+- **サイズは監視項目**。analyze は 78.8KB、postmortem は 82.0KB（2026-09-06）、noise-floor は 51.5KB・263 行・最長 372 文字（2026-09-09 実測、安全装置の修理後）。これ以上育つなら、インライン以外の経路（CLI にはアクセストークンが要る）を用意する必要がある。
+  `.claude/workflows/deploy-edge-verified.js` の説明文は「約 93KB・約 432 行」を前提に書いてあるが、これは analyze / postmortem の話であって noise-floor はその半分強である。ワークフローは切り出す前に `wc -l` を取るので動作は正しい。数字のほうが 4 つのスラッグ全部には当てはまらない、というだけ。
 
 ### 6.2 手順
 
 ```sh
-npm test                     # vitest 全件（現在 514）
+npm test                     # vitest 全件（現在 1002 / 40 ファイル）
 npx tsc --noEmit -p tsconfig.app.json   # 既存エラー 12 件が基準。増やさない
-npm run check:functions      # deno check（4 関数の入口）
+npm run check:functions      # deno check（5 関数の入口）
 npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bundle.js（gitignore 済み）
 ( cd supabase/functions/<slug> && timeout 6 deno run --allow-net --allow-env bundle.js ); echo $?   # 124 = 起動して待機中 = OK
 ```
@@ -545,7 +719,7 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
   最後まで一致しなくても例外は投げない。sha256 と `version` 文字列のどちらが合わなかったかをログに書いて返り、返り値の `verified` が false になる（版だけ合わないときは大抵ローカルのバンドルが古い。作り直す）。
   `args.version` には `POSTMORTEM_VERSION` 等の文字列全体（例 `postmortem-v9-2026-09-05T05:35:00Z`）を渡す。部分文字列だと sha256 が一致していても 3 回使い切る。
 - バンドルは一度モデルの出力を経由するので写し間違いが起こり得る（このプロジェクトで実際に複数回起きた）。検証を省かない。
-  postmortem（約 71 KB）だけでなく analyze（約 54 KB）のバンドルも Read の 1 ページに収まらない。バンドルを持つ 3 つ（analyze / track-outcomes / postmortem）はどれも必ずワークフロー経由。
+  postmortem（約 71 KB）だけでなく analyze（約 54 KB）のバンドルも Read の 1 ページに収まらない。バンドルを持つ 4 つ（analyze / track-outcomes / postmortem / noise-floor）はどれも必ずワークフロー経由。
   econ-calendar は `./events.ts` しか読まないのでバンドルを作らず、この手順の対象外。
 - 長い関数（postmortem）を差し替える間は cron を止める: `cron.alter_job(4, active := false)` → デプロイ → `true`。
   止めずにデプロイすると、切り替えの瞬間に飛んだ tick は応答を受け取れない。2026-09-05 11:08Z の実測では pg_net が 150 秒待ち切って
@@ -572,7 +746,7 @@ npm run bundle:functions     # esbuild minify → supabase/functions/<slug>/bund
 
 | 秘密 | 置き場所 | 読める者 |
 |---|---|---|
-| sweep トークン | `vault.decrypted_secrets` の `track_outcomes_sweep_token` | `public.track_outcomes_sweep_token()`（`security definer`、**`service_role` のみ実行可**）と cron の SQL |
+| sweep トークン | `vault.decrypted_secrets` の `track_outcomes_sweep_token` | `public.track_outcomes_sweep_token()`（`security definer`、**`service_role` のみ実行可**）、cron の SQL（track-outcomes / postmortem / econ-calendar）、および **noise-floor**（cron からは決して呼ばれない。人が psql から叩くときの SQL と、チェーンの自己 POST だけ） |
 | `SUPABASE_SERVICE_ROLE_KEY`、Twelve Data のキーなど | エッジ関数の環境変数 | 関数だけ |
 | 管理者 | `ADMIN_EMAILS`（analyze / postmortem / econ-calendar の各 `index.ts` と `src/lib/admin.ts` の 4 か所に同じ配列） | `k.munemoto@kyoto-salute.com`, `munekan2989@gmail.com` が Pro 相当 |
 

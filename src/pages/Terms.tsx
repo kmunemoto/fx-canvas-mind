@@ -3,7 +3,7 @@ import LegalPageLayout from "@/components/LegalPageLayout";
 const sections: { title: string; body: string }[] = [
   {
     title: "第1条（適用）",
-    body: "本利用規約（以下「本規約」）は、宗本寛太（以下「運営者」）が提供する「FX Tactical Analyzer」（以下「本サービス」）の利用条件を定めるものです。利用者（以下「ユーザー」）には、本規約に従って本サービスをご利用いただきます。",
+    body: "本利用規約（以下「本規約」）は、宗本寛太（以下「運営者」）が提供する「Sextant」（以下「本サービス」）の利用条件を定めるものです。利用者（以下「ユーザー」）には、本規約に従って本サービスをご利用いただきます。",
   },
   {
     title: "第2条（利用登録）",
