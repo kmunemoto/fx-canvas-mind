@@ -10,14 +10,18 @@ import LearnedRules from "@/components/LearnedRules";
 import LoopHealth from "@/components/LoopHealth";
 import SeparatedScores from "@/components/SeparatedScores";
 import ConfidenceCalibration from "@/components/ConfidenceCalibration";
+import ModelMix from "@/components/ModelMix";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
 import {
+  CURRENT_CONTRACT,
   readConfidenceCalibration,
+  readModelMix,
   readSeparatedScores,
   type ConfidenceCalibration as ConfidenceCalibrationData,
+  type ModelMix as ModelMixData,
   type SeparatedScores as SeparatedScoresData,
 } from "@/lib/outcomeStats";
 import { useAuth } from "@/contexts/AuthContext";
@@ -47,7 +51,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v48-2026-09-08T18:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v49-2026-09-11T10:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -268,6 +272,13 @@ const Index = () => {
   // panel. Null until the RPC answers, and the panel draws nothing when it
   // never does: an instrument with no reading is not a reading of zero.
   const [calibration, setCalibration] = useState<ConfidenceCalibrationData | null>(null);
+  // public.model_mix(): who actually wrote the record shown below. The
+  // statistics are keyed on the entry contract and the rulebook version and on
+  // nothing else, so two analysts answering under one contract pool into a
+  // single win rate that belongs to neither. Null until the RPC answers, and
+  // the panel draws nothing when it never does — silence, rather than a claim
+  // that one analyst wrote everything.
+  const [modelMix, setModelMix] = useState<ModelMixData | null>(null);
   // The gauge's caption, built from span.traded and nothing else. Every bound
   // must be readable: a half-read range under a number is worse than no range,
   // because the reader cannot tell which half is missing (#68).
@@ -364,6 +375,19 @@ const Index = () => {
       // whether one could be defined.
       const { data, error } = await supabase.rpc("confidence_calibration");
       if (!error) setCalibration(readConfidenceCalibration(data));
+    } catch {
+      // Best effort, like the rest of the panel.
+    }
+    try {
+      // Read over EVERY row, like the record it sits beside — which analyst
+      // wrote a win rate cannot be established from the forty rows the list
+      // happens to hold. The function counts and partitions nothing else.
+      // Passed explicitly, never left to the SQL default. The win rate rendered
+      // beside this panel is keyed on CURRENT_CONTRACT; two copies of that
+      // value drifting apart is how the panel ends up describing a different
+      // population from the number it is there to qualify.
+      const { data, error } = await supabase.rpc("model_mix", { live_contract: CURRENT_CONTRACT });
+      if (!error) setModelMix(readModelMix(data));
     } catch {
       // Best effort, like the rest of the panel.
     }
@@ -683,6 +707,10 @@ const Index = () => {
             <SeparatedScores scores={separated} />
             <ConfidenceCalibration calibration={calibration} />
             <LearnedRules rulebook={rulebook} />
+            {/* Immediately above the record, not beside the calibration panel:
+                the question "whose win rate is this" is only answerable in the
+                same glance as the win rate itself. */}
+            <ModelMix mix={modelMix} />
             <AnalysisHistory records={history} stats={stats} />
           </div>
         </div>
