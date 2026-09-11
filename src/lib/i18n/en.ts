@@ -641,6 +641,59 @@ export const en: Dict = {
     gatePreregistered: "This threshold was registered before the numbers were seen.",
   },
 
+  // Who wrote the record. The statistics are keyed on the entry contract and
+  // the rulebook version and on nothing else: which model answered was never
+  // part of the key. Swap the model and two analysts' track records dissolve
+  // into one win rate with nothing left to separate them by. This panel
+  // watches that one thing, right beside the record itself.
+  //
+  // One reading it must never permit: a row with no model recorded means the
+  // record is MISSING, not that the usual one was used. Those rows cannot be
+  // filled in later, so their count must never be folded into a named model's.
+  modelMix: {
+    title: "Who wrote this record",
+    contract: (contract: string) => `entry contract ${contract}`,
+    unknown: "-",
+    scope: (calls: number) => `over ${calls} call${calls === 1 ? "" : "s"}`,
+    // The ordinary case. Information, not a warning, and one line of it.
+    // "alone" is only true when nothing settled unattributed; one such trade
+    // and the panel switches to singlePlusGap below.
+    single: (model: string, settled: number) =>
+      `This record was written by ${model} alone, over ${settled} settled trade${settled === 1 ? "" : "s"}.`,
+    // One named model, but settled trades whose author was never recorded.
+    // Saying "alone" here would hand one model a win rate taken over trades it
+    // may not have written — the exact reading this panel exists to stop.
+    singlePlusGap: (model: string, settled: number, gap: number) =>
+      `${model} wrote ${settled} of the settled trades here. ` +
+      `Another ${gap} settled with no model recorded and also count toward the win rate, ` +
+      `so this rate cannot be read as ${model}'s.`,
+    // What the panel exists for.
+    pooled: (models: number) =>
+      `This win rate is a blend of ${models} different models. It cannot be read as any one of their records.`,
+    pooledNote: "More than one model has settled trades. The split is below.",
+    // The blend is reported but the split is not. Never promise a table and
+    // then draw nothing under it.
+    pooledNoSplit: "More than one model has settled trades here; the per-model split was not reported.",
+    row: (settled: number, calls: number) => `${settled} settled / ${calls} calls`,
+    rowSettledOnly: (settled: number) => `${settled} settled`,
+    none: "No trade has settled yet, so no model has written a win rate.",
+    noCalls: "No analysis has been recorded under this entry contract yet.",
+    // "nothing yet" and "could not be read" are different claims. Rendering an
+    // unreadable payload as the former states a fact nobody measured.
+    notReadable: "Who wrote this record could not be read.",
+    unrecorded: (rows: number) =>
+      rows === 1 ? "1 row has no model recorded." : `${rows} rows have no model recorded.`,
+    unrecordedSettled: (settled: number) =>
+      `${settled} of those have settled and count toward the win rate.`,
+    // The row count was unreadable but the settled count was not. The settled
+    // count is the one feeding the win rate, so a missing row count must not
+    // take this whole warning off the screen with it.
+    unrecordedSettledOnly: (settled: number) =>
+      `${settled} settled trade${settled === 1 ? "" : "s"} count toward the win rate with no model recorded.`,
+    unrecordedNote:
+      "That means the record is missing, not that a default model was used. It cannot be filled in afterwards.",
+  },
+
   ruleFit: {
     title: "Rules consulted",
     summary: (matched: number, total: number) =>

@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v48-2026-09-08T18:00:00Z";
+const FUNCTION_VERSION = "analyze-v49-2026-09-11T10:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -2261,6 +2261,14 @@ Deno.serve(async (req: Request) => {
           // that has to guess will guess the legacy value and the two eras
           // will pool silently.
           plan_contract: PLAN_CONTRACT,
+          // WHICH MODEL WROTE THIS PLAN, for exactly the reason the line above
+          // exists. Until 2026-09-11 the row did not say, and performance_stats
+          // partitions on plan_contract and rulebook_version only — so swapping
+          // the model would have pooled two analysts into one record with
+          // nothing left to separate them by. Read off the request that was
+          // actually sent, never from a constant, so a fallback or an override
+          // cannot be recorded as the model we meant to use.
+          model: typeof baseRequest.model === "string" ? baseRequest.model : null,
           priced_at: pricedAtIso,
           quote_at_signal: quoteAtSignal,
           outcome: trackable ? "pending" : "skipped",
@@ -2372,6 +2380,10 @@ Deno.serve(async (req: Request) => {
             context,
             rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
             plan_contract: PLAN_CONTRACT,
+            // The shadow row is the same analysis under the other gate, so it
+            // carries the same stamp. A shadow with no model would drop out of
+            // every model-partitioned count while still being counted overall.
+            model: typeof baseRequest.model === "string" ? baseRequest.model : null,
             priced_at: pricedAtIso,
             outcome: "pending",
             shadow: true,

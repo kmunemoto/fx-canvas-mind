@@ -1144,3 +1144,116 @@ export const aucEstablishesNothing = (d: CalibrationDiscrimination | null): bool
 // model says the same thing every time.
 export const calibrationRoom = (s: CalibrationSpan): number | null =>
   s.width !== null ? s.width : s.lo !== null && s.hi !== null ? s.hi - s.lo : null;
+
+// ---------------------------------------------------------------------------
+// WHICH ANALYST WROTE THE RECORD
+// ---------------------------------------------------------------------------
+//
+// performance_stats partitions the record on plan_contract and rulebook
+// version, and on nothing else. The analyst behind the calls was never part of
+// the key, so the day a second one starts answering, both of their track
+// records land in one win rate with nothing left to separate them by — the
+// exact confound the contract key already guards against, one column short.
+//
+// public.model_mix() answers the one question that prevents it: how many
+// distinct analysts have settled trades inside the live contract, and how many
+// rows carry no record of who wrote them. Nothing here corrects anything and
+// nothing here re-derives a rate; the panel draws the server's answer, for the
+// same reason every other panel on this screen does.
+//
+// THE ONE READING THIS MUST NEVER PERMIT: a row whose model is NULL means "not
+// recorded". It does NOT mean "the usual one". Those rows predate the column
+// and can never be filled in, so an unrecorded count rendered as, or folded
+// into, a named analyst's total would be a claim about the record invented out
+// of a gap in it.
+
+// One analyst's slice of the record. Every count is nullable for the reason
+// maybeNum() exists: a field the payload never sent, drawn as 0, reads as
+// "this model settled nothing" — a finding, where the truth is the absence of
+// one.
+export interface ModelMixEntry {
+  // The identifier the server stored, rendered verbatim. Data, never a label
+  // this app chooses.
+  model: string;
+  calls: number | null;
+  traded: number | null;
+  // Wins plus losses. THE number that feeds the win rate, which is why the
+  // whole panel is keyed on it rather than on `calls`: a model that was merely
+  // called has not moved the record.
+  settled: number | null;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface ModelMix {
+  contract: string | null;
+  calls: number | null;
+  models: ModelMixEntry[];
+  // More than one model has SETTLED trades here, so the headline win rate is
+  // already a blend and cannot be read as either analyst's.
+  pooled: boolean;
+  // Models with settled trades. Excludes the unrecorded bucket — that bucket
+  // is not a model.
+  modelsWithSettled: number | null;
+  // Rows whose model is NULL: not recorded, never "the default".
+  unrecorded: number | null;
+  unrecordedSettled: number | null;
+}
+
+const modelEntry = (v: unknown): ModelMixEntry | null => {
+  const o = obj(v);
+  const model = typeof o.model === "string" && o.model.length > 0 ? o.model : null;
+  // An entry with no readable identifier is dropped rather than kept under a
+  // placeholder. The panel's whole job is to say WHO wrote the record, and a
+  // nameless row drawn beside the named ones is read as one more analyst — or,
+  // worse, as the usual one.
+  if (model === null) return null;
+  return {
+    model,
+    calls: maybeNum(o.calls),
+    traded: maybeNum(o.traded),
+    settled: maybeNum(o.settled),
+    firstAt: typeof o.first_at === "string" ? o.first_at : null,
+    lastAt: typeof o.last_at === "string" ? o.last_at : null,
+  };
+};
+
+// Models with settled trades, which is the only population the pooling
+// question is about. A model that was called and never settled anything has
+// not written a line of the record.
+export const settledModels = (m: ModelMix): ModelMixEntry[] =>
+  m.models.filter((e) => e.settled !== null && e.settled > 0);
+
+export const readModelMix = (raw: unknown): ModelMix | null => {
+  // The only reason to answer null, exactly as readConfidenceCalibration()
+  // does: supabase.rpc() hands back `unknown`, and a client deployed ahead of
+  // the migration gets an error body or a string. Neither is an object and
+  // neither can be drawn. Everything past this point renders "not readable"
+  // rather than throwing.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const models = rows(o.models)
+    .map(modelEntry)
+    .filter((e): e is ModelMixEntry => e !== null)
+    // Ordered by what the reader is being asked to see — the settled split —
+    // rather than by call volume, so the model that actually wrote the win
+    // rate is the first one named. Unreadable counts sort last; ties break on
+    // the identifier so the list cannot reorder itself between renders.
+    .sort((a, b) => (b.settled ?? -1) - (a.settled ?? -1) || (b.calls ?? -1) - (a.calls ?? -1) || a.model.localeCompare(b.model));
+  const withSettled = models.filter((e) => e.settled !== null && e.settled > 0).length;
+  return {
+    contract: typeof o.contract === "string" ? o.contract : null,
+    calls: maybeNum(o.calls),
+    models,
+    // OR, not a trust. The server's flag is authoritative when it says the
+    // record is pooled, and the visible split is authoritative when it shows
+    // two analysts a flag forgot to mention. Both directions matter, but they
+    // are not symmetric: a blend drawn as one analyst's record is the failure
+    // this panel exists to prevent, and a warning shown one render early is
+    // not.
+    pooled: flag(o.pooled, false) || withSettled > 1,
+    modelsWithSettled: maybeNum(o.models_with_settled),
+    unrecorded: maybeNum(o.unrecorded),
+    unrecordedSettled: maybeNum(o.unrecorded_settled),
+  };
+};
