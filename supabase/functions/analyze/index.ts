@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v51-2026-09-12T11:30:00Z";
+const FUNCTION_VERSION = "analyze-v52-2026-09-12T12:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1588,21 +1588,27 @@ Deno.serve(async (req: Request) => {
       : buildUserMessage(TECHNICAL_NOTE, false);
 
     const baseRequest: JsonRecord = {
-      model: "claude-sonnet-5",
-      // RAISED FROM 8000 WITH THE MODEL SWITCH, and it is not cosmetic.
+      model: "claude-opus-5",
+      // BACK TO 8000 WITH THE MODEL, and the reason to restore it is stronger
+      // than the reason it was ever raised.
       //
-      // Two things moved at once on 2026-09-12. The effort values below went to
-      // "max", which buys more thinking and therefore more output; and this
-      // model's tokenizer emits roughly 30% more tokens for the same text than
-      // the previous one did. A ceiling tuned for the old pair would cut
-      // responses off mid-plan, and a truncated response is not a cheaper
-      // analysis — it is a failed one that was still paid for.
+      // It went to 16000 on 2026-09-12 alongside a model switch, for two
+      // reasons that are both gone: the effort values below were at "max"
+      // (more thinking, more output), and the other model's tokenizer emits
+      // roughly 30% more tokens for the same text. Effort came back the same
+      // day when production could not finish a turn at that depth, and the
+      // model came back with it.
       //
-      // The measured headroom says 8000 was never close on the old pair: over
-      // the 250 replayed turns of run 48fc15da the mean output was 1,683 tokens
-      // and the largest was 2,813. Doubling the ceiling costs nothing on a turn
-      // that does not use it — max_tokens is a backstop, never a target.
-      max_tokens: 16000,
+      // Leaving the ceiling at 16000 would be harmless on its own — it is a
+      // backstop, never a target, and the measured output over the 250 replayed
+      // turns of run 48fc15da was a mean of 1,683 tokens with a largest of
+      // 2,813. It would not be harmless to the MEASUREMENTS. With the model and
+      // both effort values restored, this ceiling was the last thing separating
+      // today's request shape from the shape #64's noise floor (20.83%) and
+      // #65's `material` verdict were measured at. Restoring it means those
+      // numbers describe the analyst actually running in production again,
+      // and that rows written from here pool with the 90 already stored.
+      max_tokens: 8000,
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
         .replace("{{EVENTS}}", eventBlock)
