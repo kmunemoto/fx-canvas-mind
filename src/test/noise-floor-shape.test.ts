@@ -125,8 +125,8 @@ describe("20 — the constants duplicated into shape.ts still equal analyze's", 
     // configuration, not a simplification to bake in: the branch stays, because
     // the searching path is the one with a documented history of hitting the
     // wall clock and is the one value that would be walked back first.
-    expect(EFFORT_SEARCH).toBe("max");
-    expect(EFFORT_TECHNICAL).toBe("max");
+    expect(EFFORT_SEARCH).toBe("low");
+    expect(EFFORT_TECHNICAL).toBe("medium");
   });
 
   it("does not re-sync the pre-switch constants to analyze, ever", () => {
@@ -138,10 +138,14 @@ describe("20 — the constants duplicated into shape.ts still equal analyze's", 
     expect(PRE_SWITCH_MAX_TOKENS).toBe(8000);
     expect(PRE_SWITCH_EFFORT_SEARCH).toBe("low");
     expect(PRE_SWITCH_EFFORT_TECHNICAL).toBe("medium");
-    // They must also differ from the current ones, or the fallback has stopped
-    // being a fallback and the test above has stopped meaning anything.
+    // THE EFFORT VALUES ARE EQUAL AGAIN and that is not a bug. "max" was live
+    // for about 100 minutes on 2026-09-12 and was put back when production
+    // could not finish a turn at that depth (see analyze/index.ts). No row was
+    // ever written at "max" — both turns that tried died at the wall clock —
+    // so nothing is relying on the fallback to tell the two eras apart on
+    // effort. `max_tokens` still differs, and it is the one that moved for
+    // good.
     expect(PRE_SWITCH_MAX_TOKENS).not.toBe(MAX_TOKENS);
-    expect(PRE_SWITCH_EFFORT_TECHNICAL).not.toBe(EFFORT_TECHNICAL);
   });
 
   it("analyze records the shape it sent, so a replay can be honest across a switch", () => {

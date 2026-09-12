@@ -63,8 +63,8 @@ export const MAX_TOKENS = 16000;
 // thinking-depth dial, which is to say it is the dominant driver of exactly the
 // quantity being measured, and a floor measured at the wrong depth is not a
 // floor for anything.
-export const EFFORT_SEARCH = "max";
-export const EFFORT_TECHNICAL = "max";
+export const EFFORT_SEARCH = "low";
+export const EFFORT_TECHNICAL = "medium";
 
 // ---------------------------------------------------------------------------
 // THE SHAPE BEFORE 2026-09-12, kept because rows were sent at it
