@@ -93,14 +93,14 @@ const SYSTEM = "あなたはFXアナリストです。\n\n## 学習済みルー�
 const USER = "通貨ペア: USD/JPY\n現在時刻(UTC): 2026-09-09T12:00:00Z\nまず検索してください。\n\n### 1h\n";
 
 describe("20 — the constants duplicated into shape.ts still equal analyze's", () => {
-  it("max_tokens comes from analyze's baseRequest and is still 16000", () => {
+  it("max_tokens comes from analyze's baseRequest and is still 8000", () => {
     // analyze has no `MAX_TOKENS` symbol: the ceiling is a property of the
     // request literal, so the anchor is the declaration `const baseRequest`
     // plus the property key. Both are names, neither is a position.
     const baseRequest = objectLiteralAfter(analyzeSrc, "const baseRequest: JsonRecord = {");
     const inRequest = soleMatch(baseRequest, /\bmax_tokens:\s*(\d+)/);
     expect(Number(inRequest[1])).toBe(MAX_TOKENS);
-    expect(MAX_TOKENS).toBe(16000);
+    expect(MAX_TOKENS).toBe(8000);
     // Exactly one place SETS the ceiling. The other mentions of the key
     // RECORD it — analyze writes the sent shape onto analysis_prompts so a
     // replay can be honest across a change like this one — and a recorder that
@@ -125,8 +125,8 @@ describe("20 — the constants duplicated into shape.ts still equal analyze's", 
     // configuration, not a simplification to bake in: the branch stays, because
     // the searching path is the one with a documented history of hitting the
     // wall clock and is the one value that would be walked back first.
-    expect(EFFORT_SEARCH).toBe("max");
-    expect(EFFORT_TECHNICAL).toBe("max");
+    expect(EFFORT_SEARCH).toBe("low");
+    expect(EFFORT_TECHNICAL).toBe("medium");
   });
 
   it("does not re-sync the pre-switch constants to analyze, ever", () => {
@@ -138,10 +138,20 @@ describe("20 — the constants duplicated into shape.ts still equal analyze's", 
     expect(PRE_SWITCH_MAX_TOKENS).toBe(8000);
     expect(PRE_SWITCH_EFFORT_SEARCH).toBe("low");
     expect(PRE_SWITCH_EFFORT_TECHNICAL).toBe("medium");
-    // They must also differ from the current ones, or the fallback has stopped
-    // being a fallback and the test above has stopped meaning anything.
-    expect(PRE_SWITCH_MAX_TOKENS).not.toBe(MAX_TOKENS);
-    expect(PRE_SWITCH_EFFORT_TECHNICAL).not.toBe(EFFORT_TECHNICAL);
+    // ALL THREE ARE EQUAL TO THE CURRENT CONSTANTS AGAIN, and that is not a
+    // bug and not a reason to delete them. The 2026-09-12 switch — model,
+    // both efforts, and this ceiling — was fully reverted the same day, and
+    // NO ROW WAS EVER WRITTEN AT THE NEW SHAPE: both turns that tried died at
+    // the wall clock. So the fallback and the current values agree, and a
+    // replay is correct either way today.
+    //
+    // Asserting the equality rather than the difference is the honest version.
+    // It is what makes the two blocks a documented coincidence instead of a
+    // silent one, and it fails the moment analyze moves again without these
+    // being re-read — which is exactly when somebody needs to think.
+    expect(PRE_SWITCH_MAX_TOKENS).toBe(MAX_TOKENS);
+    expect(PRE_SWITCH_EFFORT_SEARCH).toBe(EFFORT_SEARCH);
+    expect(PRE_SWITCH_EFFORT_TECHNICAL).toBe(EFFORT_TECHNICAL);
   });
 
   it("analyze records the shape it sent, so a replay can be honest across a switch", () => {

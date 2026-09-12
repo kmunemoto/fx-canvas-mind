@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v50-2026-09-12T09:00:00Z";
+const FUNCTION_VERSION = "analyze-v52-2026-09-12T12:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1500,30 +1500,40 @@ Deno.serve(async (req: Request) => {
     const elapsed = () => Date.now() - startedAt;
     const msLeft = () => WALL_CLOCK_BUDGET_MS - elapsed();
 
-    // BOTH PATHS RUN AT THE TOP OF THE RANGE ("low" < "medium" < "high" <
-    // "xhigh" < "max"), which is the owner's decision of 2026-09-12: move to
-    // the cheaper model and spend the saving on thinking depth rather than
-    // pocketing it.
+    // THESE WERE RAISED TO "max" ON 2026-09-12 AND PUT BACK 100 MINUTES LATER,
+    // because production could not finish a turn at that depth. The measurement
+    // is written here so nobody re-derives the same wrong estimate.
     //
-    // The old values existed because effort is the dominant cost in a turn and
-    // the worker is killed at 150s. That constraint has not gone away, so here
-    // is the measured headroom it is being spent against. Over the 250 replayed
-    // turns of run 48fc15da — real stored prompts, previous model, technical
-    // path at "medium" — the model call took a mean of 31.7s, p90 36.8s, p99
-    // 42.6s, max 49.5s, against a self-imposed budget of 135s. The technical
-    // path therefore has roughly three times the time it was using.
+    // The reasoning that failed: over the 250 replayed turns of run 48fc15da —
+    // real stored prompts, PREVIOUS model, technical path at "medium" — the
+    // model call took a mean of 31.7s, p99 42.6s, max 49.5s against a 135s
+    // budget, so the technical path looked like it had three times the time it
+    // was using. That headroom was real for that model at that depth, and it
+    // did not transfer. Effort is the dominant driver of turn length, and
+    // "medium" -> "max" is three steps.
     //
-    // THE SEARCHING PATH DOES NOT, and that is the risk this comment exists to
-    // record rather than hide. budget.ts documents a full-mode turn hitting the
-    // budget at 135002ms at effort "low"; raising it to "max" spends headroom
-    // that was already gone. What happens then is not an error: planAttempt
-    // returns `drop_search`, the turn is retried technical-only, and the client
-    // shows the degraded badge. So the failure mode of this setting is
-    // "fundamental analysis quietly becomes technical analysis", not "the
-    // analysis fails" — and if that shows up in the logs, EFFORT_SEARCH is the
-    // one value to walk back, on its own, without touching the technical path.
-    const EFFORT_TECHNICAL = "max";
-    const EFFORT_SEARCH = "max";
+    // What production actually did, both turns killed at the budget:
+    //
+    //   10:40:45Z  full mode. Web search dropped at elapsedMs 85002
+    //              (`search_too_slow`), technical-only retry then ran out too.
+    //              Ended `Analysis exceeded the wall-clock budget` 135001ms.
+    //   10:43:09Z  TECHNICAL ONLY — the user had already turned the news toggle
+    //              off, so there is no search in this turn at all. Market data
+    //              in 1340ms. Ended the same way at 135002ms.
+    //
+    // The second one is the finding. With no web search, no page fetches and
+    // the market data in hand inside two seconds, the model call alone did not
+    // finish in the remaining ~133s. So "max" is not a searching-path problem
+    // that EFFORT_SEARCH alone could fix; it is beyond what this 150s worker
+    // can run at all on the technical path.
+    //
+    // Back to the pair that has 31.7s of measured evidence behind it. Raising
+    // it again is a measurement, not an edit: replay stored prompts through
+    // version-compare at the candidate depth and read the per-cell duration
+    // before any live user sees it. "high" and "xhigh" sit between these values
+    // and "max"; neither has been timed on this model.
+    const EFFORT_TECHNICAL = "medium";
+    const EFFORT_SEARCH = "low";
 
     // Which of the learned rules the market in front of us actually looks
     // like. Measured, not asserted: each rule's citations carry the reading
@@ -1578,21 +1588,27 @@ Deno.serve(async (req: Request) => {
       : buildUserMessage(TECHNICAL_NOTE, false);
 
     const baseRequest: JsonRecord = {
-      model: "claude-sonnet-5",
-      // RAISED FROM 8000 WITH THE MODEL SWITCH, and it is not cosmetic.
+      model: "claude-opus-5",
+      // BACK TO 8000 WITH THE MODEL, and the reason to restore it is stronger
+      // than the reason it was ever raised.
       //
-      // Two things moved at once on 2026-09-12. The effort values below went to
-      // "max", which buys more thinking and therefore more output; and this
-      // model's tokenizer emits roughly 30% more tokens for the same text than
-      // the previous one did. A ceiling tuned for the old pair would cut
-      // responses off mid-plan, and a truncated response is not a cheaper
-      // analysis — it is a failed one that was still paid for.
+      // It went to 16000 on 2026-09-12 alongside a model switch, for two
+      // reasons that are both gone: the effort values below were at "max"
+      // (more thinking, more output), and the other model's tokenizer emits
+      // roughly 30% more tokens for the same text. Effort came back the same
+      // day when production could not finish a turn at that depth, and the
+      // model came back with it.
       //
-      // The measured headroom says 8000 was never close on the old pair: over
-      // the 250 replayed turns of run 48fc15da the mean output was 1,683 tokens
-      // and the largest was 2,813. Doubling the ceiling costs nothing on a turn
-      // that does not use it — max_tokens is a backstop, never a target.
-      max_tokens: 16000,
+      // Leaving the ceiling at 16000 would be harmless on its own — it is a
+      // backstop, never a target, and the measured output over the 250 replayed
+      // turns of run 48fc15da was a mean of 1,683 tokens with a largest of
+      // 2,813. It would not be harmless to the MEASUREMENTS. With the model and
+      // both effort values restored, this ceiling was the last thing separating
+      // today's request shape from the shape #64's noise floor (20.83%) and
+      // #65's `material` verdict were measured at. Restoring it means those
+      // numbers describe the analyst actually running in production again,
+      // and that rows written from here pool with the 90 already stored.
+      max_tokens: 8000,
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
         .replace("{{EVENTS}}", eventBlock)

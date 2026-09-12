@@ -54,7 +54,7 @@
 // spend less — it would spend the same on cells that cannot be counted. Copied
 // rather than raised for the same reason in the other direction: a replay that
 // can think longer than production could is not a replay of production.
-export const MAX_TOKENS = 16000;
+export const MAX_TOKENS = 8000;
 
 // The two effort values production sends, one per path.
 //
@@ -63,21 +63,34 @@ export const MAX_TOKENS = 16000;
 // thinking-depth dial, which is to say it is the dominant driver of exactly the
 // quantity being measured, and a floor measured at the wrong depth is not a
 // floor for anything.
-export const EFFORT_SEARCH = "max";
-export const EFFORT_TECHNICAL = "max";
+export const EFFORT_SEARCH = "low";
+export const EFFORT_TECHNICAL = "medium";
 
 // ---------------------------------------------------------------------------
 // THE SHAPE BEFORE 2026-09-12, kept because rows were sent at it
 // ---------------------------------------------------------------------------
 //
-// On 2026-09-12 analyze moved to a different model and both effort values went
-// to "max"; `max_tokens` doubled with them. Every row written before that
-// instant was sent at the values below, and 90 of them exist.
+// THESE CURRENTLY EQUAL THE THREE CONSTANTS ABOVE, and that is a fact about
+// today rather than a redundancy to delete.
 //
-// Three constants in this file used to be the whole answer to "what shape was
-// this row sent at". They were never quite that — they were "what shape does
-// analyze send TODAY" — and the difference did not matter while the values
-// stood still. It matters now.
+// On 2026-09-12 analyze moved to a different model, both effort values went to
+// "max" and `max_tokens` doubled. Production could not finish a turn at that
+// depth — two consecutive 504s, one of them on the technical path with no web
+// search at all — so effort came back within the hour, and the owner put the
+// model back after it. `max_tokens` came back with the model, because leaving
+// it raised was the last thing separating today's request shape from the shape
+// #64's floor and #65's verdict were measured at.
+//
+// Net effect on the corpus: NO ROW WAS EVER WRITTEN AT THE NEW SHAPE. Both
+// turns that tried died at the wall clock. So the fallback below and the
+// current values agree, and a replay is correct either way today.
+//
+// The structure stays regardless, because it is not about this one reverted
+// switch. Three constants in this file used to be the whole answer to "what
+// shape was this row sent at". They were never quite that — they were "what
+// shape does analyze send TODAY" — and the difference does not matter while
+// the values stand still. It mattered for about a hundred minutes, and it will
+// matter again the next time anything moves.
 //
 // `public.analysis_prompts.effort` and `.max_tokens` (migration
 // 20260912090000) are the real answer, written by analyze at send time. These

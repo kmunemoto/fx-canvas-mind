@@ -43,6 +43,44 @@ import { MARKET_CONTRACT, causeOutsideContract } from "./facts.ts";
 // back the most followable rule the editor can write. Naming the price is
 // required; choosing it is what does not exist.
 //
+// "market entry" WAS ON THIS LIST AND CAME OFF IT on 2026-09-12, with
+// "limit plan" / "limit-based" / 指値プラン / 指値中心 put on in the same edit.
+//
+// The rule for this list is "does the text NAME a lever the contract does not
+// have". "market entry" does not: under market_v1 the analyst decides whether
+// to trade at all, so "skip the market entry" is the WAIT lever and "take the
+// market entry with a 0.6-0.8 ATR stop" is the trade-or-not lever plus the
+// stop-width lever. Both are moves the analyst really has. The phrase was
+// matching a NOUN for the trade, not an instruction about where to enter.
+//
+// Measured over every rule that has ever existed in public.rulebook (live,
+// candidate, history) and in both frozen books — the change flips exactly five
+// rule texts and no others:
+//
+//   UN-VETOED, all three false positives, none of them touching a limit:
+//     r10 direction_wrong   "skip the trend-direction market entry (WAIT)"
+//     r13 wait_missed_trade "take the trend-direction market entry with a
+//                            0.6-0.8x ATR stop"
+//     r8  stop_too_tight    "keep the stop around 0.7 ATR"
+//
+//   NEWLY VETOED, and they should have been all along:
+//     r5  plan_incoherent   "for limit plans, always assess the chance price
+//                            never reaches the level" (x2 wordings)
+//
+// That second pair is a hole this edit closes rather than opens: "limit plans"
+// matched neither "limit entry" nor "limit order", so those wordings were
+// reaching the analyst under a contract that has no limit orders.
+//
+// WHY THE VETO WAS NEVER SEMANTIC, shown by the書き換え that happened while
+// this was being investigated. The freeze used by run 48fc15da has
+// r13 = "...take the trend-direction market entry with a 0.6-0.8x ATR stop"
+// (stamped null, never shown to anyone). The candidate in the table on
+// 2026-09-12 has r13 = "...take the trend with a 0.6-0.8 ATR stop" (stamped
+// market_v1). Same instruction, same Japanese, different stamp. A filter whose
+// verdict turns on which synonym the editor happened to pick is a lottery, and
+// the thing it was deciding was whether the loop's only rule arguing for
+// TRADING MORE reached an analyst at all.
+//
 // A floor, not a ceiling: it catches the vocabulary, not every paraphrase.
 // The ceiling is one model call per REVISION (not per plan) asking of each
 // emitted rule whether it moves one of the four levers. Until that exists this
@@ -65,6 +103,8 @@ const ENTRY_LEVER_PHRASES: readonly string[] = [
   "成行で執行",
   "現値で執行",
   "どこで入る",
+  "指値プラン",
+  "指値中心",
   // en — matched lower-cased
   "wait for a pullback",
   "wait for the pullback",
@@ -72,9 +112,10 @@ const ENTRY_LEVER_PHRASES: readonly string[] = [
   "wait for the retrace",
   "limit entry",
   "limit order",
+  "limit plan",
+  "limit-based",
   "where to enter",
   "enter at market",
-  "market entry",
 ];
 
 // Does this rule's text instruct a move the contract does not have?

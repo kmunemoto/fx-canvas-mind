@@ -62,7 +62,11 @@ describe("what each arm actually showed the analyst", () => {
       cause: "wait_missed_trade",
       kind: "heuristic",
       text_ja: "上位足が同方向でADX30超なら、伸び切り懸念で見送らず順張り。",
-      text_en: "When higher timeframes agree, take the trend-direction market entry.",
+      // A text that genuinely names a lever market_v1 does not have. It used to
+      // say "take the trend-direction market entry", which stamp.ts stopped
+      // vetoing on 2026-09-12 — that is a stop-width-and-whether-to-trade rule,
+      // not an instruction about where to enter.
+      text_en: "When higher timeframes agree, wait for a pullback before entering.",
     });
     const c = composeArm([rule({ id: "r4" }), withEnglishLever], "ja", "market_v1");
     const w = c.withheld.find((x) => x.id === "r13");

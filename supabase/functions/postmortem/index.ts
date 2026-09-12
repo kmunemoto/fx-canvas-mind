@@ -51,7 +51,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v24-2026-09-08T18:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v25-2026-09-12T11:00:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
