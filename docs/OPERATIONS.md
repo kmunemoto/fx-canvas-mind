@@ -952,6 +952,71 @@ NULL は「記録が無い」であって「既定値だった」ではない。
 
 ---
 
+## 8.6 契約フィルタの語句リストを直した（2026-09-12）
+
+`ENTRY_LEVER_PHRASES`（`postmortem/stamp.ts`）から **`"market entry"` を外し**、
+代わりに **`"limit plan"` / `"limit-based"` / `指値プラン` / `指値中心` を足した**。
+
+### なぜ外したか — 名詞を拾っていた
+
+このリストの規則は「**その本文が、この契約に無いレバーを名指しているか**」である。
+market_v1 でアナリストが決められるのは **方向・損切り幅・利確幅・そもそも入るかどうか** の4つ。
+
+`"market entry"` はそのどれも名指していない。**トレードそのものを指す名詞**である。
+
+- 「skip the trend-direction **market entry** (WAIT)」→ 第4レバー（入るかどうか）
+- 「take the trend-direction **market entry** with a 0.6-0.8x ATR stop」→ 第4＋第1＋第2レバー
+- 「When following a strong trend with a **market entry**, keep the stop around 0.7 ATR」→ 第2レバー
+
+この規則はリポジトリが既に書いていた。`src/test/postmortem.test.ts` の
+「naming the entry price is required, choosing it is what does not exist」がそれで、
+**「名詞に当たる veto は、編集者が書ける最も実行可能なルールを止めてしまう。だから動詞に当てる」**
+と明記してある。`"market entry"` はその規則の例外になっていた。
+
+### 実測（全ルールブックの全世代 + 凍結2冊）
+
+判定が変わるのは**ちょうど5本、それ以外は1本も動かない**。
+
+| | id | cause | 本文 |
+|---|---|---|---|
+| **veto 解除** | r10 | direction_wrong | 「…skip the trend-direction market entry (WAIT)」 |
+| **veto 解除** | r13 | wait_missed_trade | 「…take the trend-direction market entry with a 0.6-0.8x ATR stop」 |
+| **veto 解除** | r8 | stop_too_tight | 「…keep the stop around 0.7 ATR」 |
+| **新たに veto** | r5 | plan_incoherent | 「for limit plans, always assess…」（2つの文言） |
+
+解除される3本はいずれも**生きた原因**を持ち、**指値に一切触れていない**。
+新たに veto される2本は**穴を塞いだ**もので、`"limit plans"` は
+`"limit entry"` にも `"limit order"` にも一致しなかったため、
+**指値注文の存在しない契約で、指値プランの話がアナリストに届いていた**。
+
+### この veto は意味ではなく文言で決まっていた
+
+調べている最中に候補ルールブックが書き換わり、それが証拠になった。
+
+| | 本文 | スタンプ |
+|---|---|---|
+| 凍結（#65 が使った版）の r13 | 「…take the trend-direction **market entry** with a 0.6-0.8x ATR stop」 | **null**（誰にも見せられていない） |
+| 2026-09-12 の候補の r13 | 「…take the trend with a 0.6-0.8 ATR stop」 | **market_v1** |
+
+**同じ指示、同じ日本語、違うスタンプ。** 編集者がどの同義語を選んだかで判定が変わる。
+それが決めていたのは「このループが唯一生んだ“もっと取れ”と言うルールが
+アナリストに届くかどうか」だった。
+
+### 今日の本への影響はゼロ
+
+上の書き換えの結果、この修正を入れた時点で live・candidate のどのルールも
+veto されていない。**これは予防的な修正であって、今の本を変えるものではない。**
+一番安全な時期に入れたことになる。
+
+`stampFor` は ja を先に、次に en を見て、どちらかが当たれば**両方のロケールから消す**。
+#65 の凍結84行は全部 ja だったので、日本語として問題のないルールが
+英文の言い回しのせいで消えていた。その非対称はこの修正でも残っている
+（リストの設計がそうなっている）ので、次に効くときは同じことが起きうる。
+
+デプロイ: postmortem v25（fn v35、95,526 bytes、バイト一致確認済み）。
+
+---
+
 ## 9. 次の実データで確かめること
 
 現行契約（`market_v1`）の行はまだ 1 件も無く、今動いているものの多くはコード上でしか確認できていない（§8）。

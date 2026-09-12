@@ -2050,8 +2050,14 @@ describe("rules in the analyze prompt", () => {
   // topical, not directional. Days went into finding that out from the phrase
   // list by hand.
   it("says why a stamp was refused, and does not change which rules are refused", () => {
+    // The example used to be "a market entry with a 0.8xATR stop", which is a
+    // STOP-WIDTH rule and was being vetoed for saying the noun "market entry".
+    // That phrase came off the list on 2026-09-12 (see stamp.ts) because the
+    // test directly below this one states the rule it broke: match the VERB,
+    // not the noun. The example here is now one that genuinely names a lever
+    // this contract does not have.
     const stamped = stampFor(
-      { cause: "wait_missed_trade", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, a market entry with a 0.8xATR stop beats standing aside." },
+      { cause: "wait_missed_trade", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, wait for a pullback before entering rather than standing aside." },
       MARKET_CONTRACT,
     );
     expect(stamped.contract).toBeNull();
@@ -2061,12 +2067,12 @@ describe("rules in the analyze prompt", () => {
     expect(stampFor({ cause: "wait_missed_trade", text_ja: "ADXが25以上なら見送らない。", text_en: "Do not stand aside when ADX is above 25." }, MARKET_CONTRACT))
       .toEqual({ contract: MARKET_CONTRACT, reason: null });
     // A caller that named no contract asked no question, so there is no refusal
-    expect(stampFor({ cause: "wait_missed_trade", text_ja: "x", text_en: "market entry" }, null))
+    expect(stampFor({ cause: "wait_missed_trade", text_ja: "x", text_en: "wait for a pullback" }, null))
       .toEqual({ contract: null, reason: null });
 
     const out = parseConsolidation(
       {
-        rules: [{ id: "r12", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, a market entry with a 0.8xATR stop beats standing aside.", cause: "wait_missed_trade", kind: "heuristic", scope: null, supported_by: ["L1"] }],
+        rules: [{ id: "r12", text_ja: "強トレンドで見送りが続くならATR0.8倍の損切りで入る。", text_en: "In a strong trend, wait for a pullback before entering rather than standing aside.", cause: "wait_missed_trade", kind: "heuristic", scope: null, supported_by: ["L1"] }],
         summary_ja: "s",
         summary_en: "s",
       },
@@ -2105,6 +2111,44 @@ describe("rules in the analyze prompt", () => {
     );
     expect(out?.rules.map((r) => r.contract)).toEqual([MARKET_CONTRACT, MARKET_CONTRACT, MARKET_CONTRACT, MARKET_CONTRACT]);
     expect(out?.changes.held_back).toEqual([]);
+  });
+
+  it("stopped vetoing the NOUN 'market entry', and started catching limit plans", () => {
+    // Measured over every rule that has ever existed in the two books and both
+    // frozen copies, this edit flips exactly five texts. Three were false
+    // positives — the loop's own instructions about whether to trade and how
+    // wide to stop — and two were a hole: "limit plans" matched neither
+    // "limit entry" nor "limit order", so that wording reached the analyst
+    // under a contract with no limit orders.
+    const followable = [
+      // the WAIT lever
+      { ja: "ADX60超で節目まで0.5ATR未満なら成行を出さずWAIT。", en: "When ADX is above 60 and under 0.5 ATR of room remains, skip the trend-direction market entry (WAIT)." },
+      // the trade-or-not lever plus the stop-width lever
+      { ja: "上位足が同方向でADX30超なら見送らず損切りATR0.8倍で入る。", en: "When higher timeframes agree above ADX 30, take the trend-direction market entry with a 0.8x ATR stop." },
+      // the stop-width lever alone
+      { ja: "強トレンドを成行で追随する場合、損切りはATR0.7倍程度を確保する。", en: "When following a strong trend with a market entry, keep the stop around 0.7 ATR." },
+    ];
+    for (const r of followable) {
+      expect(stampFor({ cause: "wait_missed_trade", ...{ text_ja: r.ja, text_en: r.en } }, MARKET_CONTRACT))
+        .toEqual({ contract: MARKET_CONTRACT, reason: null });
+    }
+
+    // ...and the hole is closed, in both languages.
+    expect(stampFor({
+      cause: "plan_incoherent",
+      text_ja: "指値プランでは価格が届かない可能性を必ず評価する。",
+      text_en: "Assess whether price reaches the level.",
+    }, MARKET_CONTRACT).reason).toBe("entry_lever_ja");
+    expect(stampFor({
+      cause: "plan_incoherent",
+      text_ja: "価格が届かない可能性を必ず評価する。",
+      text_en: "For limit plans, always assess the chance price never reaches the level.",
+    }, MARKET_CONTRACT).reason).toBe("entry_lever_en");
+    expect(stampFor({
+      cause: "plan_incoherent",
+      text_ja: "価格が届かない可能性を必ず評価する。",
+      text_en: "For limit-based plans, state a fallback.",
+    }, MARKET_CONTRACT).reason).toBe("entry_lever_en");
   });
 
   it("holds the invariant across every cause and both kinds", () => {
