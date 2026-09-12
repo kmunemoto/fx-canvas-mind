@@ -273,6 +273,12 @@ describe("nothing about the token, the prompt or the body can be logged", () => 
   it("stores digests of the prompt and never the prompt", () => {
     expect(index).toContain("system_sha256: shapeFacts.systemSha,");
     expect(index).toContain("user_sha256: shapeFacts.userSha,");
+    // FORMATTING-SENSITIVE, and that is worth knowing before it fires on
+    // something innocent. It matches `system: row.system,` at end of line,
+    // which a multi-line buildReplayRequest call also produces — and passing
+    // the prompt to the request builder is the one place that IS allowed to
+    // hold it. The call site is kept on one line for that reason; if this ever
+    // fails, check whether it caught a stored column or just a line break.
     expect(index).not.toMatch(/system:\s*(row|cell\.row)\.system,\s*$/m);
   });
 });

@@ -6,6 +6,9 @@ import {
   EFFORT_SEARCH,
   EFFORT_TECHNICAL,
   MAX_TOKENS,
+  PRE_SWITCH_EFFORT_SEARCH,
+  PRE_SWITCH_EFFORT_TECHNICAL,
+  PRE_SWITCH_MAX_TOKENS,
   NEWS_DOMAINS,
   RESPONSE_SCHEMA,
   ROW_CLASSES,
@@ -90,27 +93,65 @@ const SYSTEM = "あなたはFXアナリストです。\n\n## 学習済みルー�
 const USER = "通貨ペア: USD/JPY\n現在時刻(UTC): 2026-09-09T12:00:00Z\nまず検索してください。\n\n### 1h\n";
 
 describe("20 — the constants duplicated into shape.ts still equal analyze's", () => {
-  it("max_tokens comes from analyze's baseRequest and is still 8000", () => {
+  it("max_tokens comes from analyze's baseRequest and is still 16000", () => {
     // analyze has no `MAX_TOKENS` symbol: the ceiling is a property of the
     // request literal, so the anchor is the declaration `const baseRequest`
     // plus the property key. Both are names, neither is a position.
     const baseRequest = objectLiteralAfter(analyzeSrc, "const baseRequest: JsonRecord = {");
     const inRequest = soleMatch(baseRequest, /\bmax_tokens:\s*(\d+)/);
     expect(Number(inRequest[1])).toBe(MAX_TOKENS);
-    expect(MAX_TOKENS).toBe(8000);
-    // And nowhere else in analyze, so there is exactly one ceiling to copy.
-    expect([...analyzeSrc.matchAll(/\bmax_tokens\s*:/g)].length).toBe(1);
+    expect(MAX_TOKENS).toBe(16000);
+    // Exactly one place SETS the ceiling. The other mentions of the key
+    // RECORD it — analyze writes the sent shape onto analysis_prompts so a
+    // replay can be honest across a change like this one — and a recorder that
+    // copies the request cannot drift from it. So the guard is on numeric
+    // literals, which is what "there is one ceiling" actually means.
+    expect([...analyzeSrc.matchAll(/\bmax_tokens:\s*\d+/g)].length).toBe(1);
   });
 
   it("EFFORT_SEARCH and EFFORT_TECHNICAL match their declarations in analyze", () => {
     expect(soleMatch(analyzeSrc, /const EFFORT_SEARCH\s*=\s*"([^"]*)"/)[1]).toBe(EFFORT_SEARCH);
     expect(soleMatch(analyzeSrc, /const EFFORT_TECHNICAL\s*=\s*"([^"]*)"/)[1]).toBe(EFFORT_TECHNICAL);
-    // Pinned as literals too. The two assertions above would both pass if the
-    // pair were swapped in both files at once; these say which is which, and
-    // the whole per-row effort decision (D2) rests on the searching path being
-    // the shallower of the two.
-    expect(EFFORT_SEARCH).toBe("low");
-    expect(EFFORT_TECHNICAL).toBe("medium");
+    // Pinned as literals too, so that swapping the pair in both files at once
+    // would still be caught.
+    //
+    // BOTH PATHS ARE NOW EQUAL, and the older version of this test said the
+    // opposite: "the whole per-row effort decision rests on the searching path
+    // being the shallower of the two". That was true while the values were
+    // "low" and "medium". On 2026-09-12 the owner moved analyze to a cheaper
+    // model and spent the saving on depth, and both went to the top of the
+    // range. The per-shape branch in outputConfigFor therefore no longer
+    // differentiates effort — only `format` — and that is a fact about today's
+    // configuration, not a simplification to bake in: the branch stays, because
+    // the searching path is the one with a documented history of hitting the
+    // wall clock and is the one value that would be walked back first.
+    expect(EFFORT_SEARCH).toBe("max");
+    expect(EFFORT_TECHNICAL).toBe("max");
+  });
+
+  it("does not re-sync the pre-switch constants to analyze, ever", () => {
+    // These describe the shape rows were sent at BEFORE 2026-09-12. They are
+    // history, and history does not track a live file. If a future change
+    // re-points them at analyze's current values — the obvious mistake, since
+    // the three constants above it are supposed to track analyze — every row
+    // written before the switch would replay at a depth it never saw, silently.
+    expect(PRE_SWITCH_MAX_TOKENS).toBe(8000);
+    expect(PRE_SWITCH_EFFORT_SEARCH).toBe("low");
+    expect(PRE_SWITCH_EFFORT_TECHNICAL).toBe("medium");
+    // They must also differ from the current ones, or the fallback has stopped
+    // being a fallback and the test above has stopped meaning anything.
+    expect(PRE_SWITCH_MAX_TOKENS).not.toBe(MAX_TOKENS);
+    expect(PRE_SWITCH_EFFORT_TECHNICAL).not.toBe(EFFORT_TECHNICAL);
+  });
+
+  it("analyze records the shape it sent, so a replay can be honest across a switch", () => {
+    // The reason the pre-switch constants are a FALLBACK and not the answer.
+    // #68b put `model` on the row for exactly this argument; on 2026-09-12 it
+    // came due for the other two request parameters.
+    expect(analyzeSrc).toContain("effort: typeof sentOutputConfig?.effort === \"string\"");
+    expect(analyzeSrc).toContain("max_tokens: typeof baseRequest.max_tokens === \"number\"");
+    expect(analyzeSrc).toContain("effort: promptRecord.effort,");
+    expect(analyzeSrc).toContain("max_tokens: promptRecord.max_tokens,");
   });
 
   it("the version header matches, and neither file asks for a beta", () => {
@@ -389,18 +430,41 @@ describe("26 — no silent default, and two replicates that cannot drift", () =>
     // so if those two ever disagreed the record would describe a call nobody
     // made and no later reader could catch it.
     const pairs = [
-      { arm: "search_free", rowClass: "search_derived", shape: "search_free_inline", tools: false, format: false, effort: EFFORT_SEARCH },
-      { arm: "search_free", rowClass: "technical", shape: "structured", tools: false, format: true, effort: EFFORT_TECHNICAL },
-      { arm: "fallback_surgery", rowClass: "search_derived", shape: "structured", tools: false, format: true, effort: EFFORT_TECHNICAL },
-      { arm: "search_on", rowClass: "search_derived", shape: "search_on", tools: true, format: false, effort: EFFORT_SEARCH },
+      { arm: "search_free", rowClass: "search_derived", shape: "search_free_inline", tools: false, format: false, preSwitchEffort: PRE_SWITCH_EFFORT_SEARCH },
+      { arm: "search_free", rowClass: "technical", shape: "structured", tools: false, format: true, preSwitchEffort: PRE_SWITCH_EFFORT_TECHNICAL },
+      { arm: "fallback_surgery", rowClass: "search_derived", shape: "structured", tools: false, format: true, preSwitchEffort: PRE_SWITCH_EFFORT_TECHNICAL },
+      { arm: "search_on", rowClass: "search_derived", shape: "search_on", tools: true, format: false, preSwitchEffort: PRE_SWITCH_EFFORT_SEARCH },
     ] as const;
     for (const p of pairs) {
       expect(replayShape({ arm: p.arm, rowClass: p.rowClass })).toBe(p.shape);
-      const body = buildReplayRequest({ arm: p.arm, rowClass: p.rowClass, ...row });
-      expect("tools" in body).toBe(p.tools);
-      expect("format" in body.output_config).toBe(p.format);
-      expect(body.output_config.effort).toBe(p.effort);
-      expect(body.max_tokens).toBe(MAX_TOKENS);
+
+      // A ROW WITH NO RECORDED SHAPE is a row written before migration
+      // 20260912090000, which is a row sent at the pre-switch values. It must
+      // replay at those, NOT at today's — that is the whole point of keeping
+      // two sets of constants, and getting it backwards would replay 90
+      // existing rows at a depth none of them ever saw.
+      const legacy = buildReplayRequest({ arm: p.arm, rowClass: p.rowClass, ...row });
+      expect("tools" in legacy).toBe(p.tools);
+      expect("format" in legacy.output_config).toBe(p.format);
+      expect(legacy.output_config.effort).toBe(p.preSwitchEffort);
+      expect(legacy.max_tokens).toBe(PRE_SWITCH_MAX_TOKENS);
+
+      // A ROW THAT RECORDED ITS SHAPE replays at what it recorded, whatever
+      // the constants in this file happen to say today. The recorded value is
+      // deliberately neither of the two constants, so a fallback that fired
+      // when it should not have would show up here rather than passing by
+      // coincidence.
+      const recorded = buildReplayRequest({
+        arm: p.arm,
+        rowClass: p.rowClass,
+        ...row,
+        effort: "xhigh",
+        maxTokens: 12345,
+      });
+      expect(recorded.output_config.effort).toBe("xhigh");
+      expect(recorded.max_tokens).toBe(12345);
+      expect("tools" in recorded).toBe(p.tools);
+      expect("format" in recorded.output_config).toBe(p.format);
     }
     // Those four plus the two refusals above are every (arm, row class) pair
     // there is, so the table is exhaustive and stays exhaustive: adding an arm

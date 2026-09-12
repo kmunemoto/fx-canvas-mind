@@ -54,19 +54,41 @@
 // spend less — it would spend the same on cells that cannot be counted. Copied
 // rather than raised for the same reason in the other direction: a replay that
 // can think longer than production could is not a replay of production.
-export const MAX_TOKENS = 8000;
+export const MAX_TOKENS = 16000;
 
 // The two effort values production sends, one per path.
 //
-// This model runs adaptive thinking at effort "high" when `output_config.effort`
-// is absent, so omitting the key would replay every row at a depth production
-// never used. Effort is the thinking-depth dial, which is to say it is the
-// dominant driver of exactly the quantity being measured, and a floor measured
-// at the wrong depth is not a floor for anything. Each row is therefore replayed
-// at the value its own path sent: "low" on the searching path, where production
-// leaves headroom for page fetches, and "medium" on the technical path.
-export const EFFORT_SEARCH = "low";
-export const EFFORT_TECHNICAL = "medium";
+// Omitting `output_config.effort` lets the API's own default apply, which would
+// replay every row at a depth production never chose. Effort is the
+// thinking-depth dial, which is to say it is the dominant driver of exactly the
+// quantity being measured, and a floor measured at the wrong depth is not a
+// floor for anything.
+export const EFFORT_SEARCH = "max";
+export const EFFORT_TECHNICAL = "max";
+
+// ---------------------------------------------------------------------------
+// THE SHAPE BEFORE 2026-09-12, kept because rows were sent at it
+// ---------------------------------------------------------------------------
+//
+// On 2026-09-12 analyze moved to a different model and both effort values went
+// to "max"; `max_tokens` doubled with them. Every row written before that
+// instant was sent at the values below, and 90 of them exist.
+//
+// Three constants in this file used to be the whole answer to "what shape was
+// this row sent at". They were never quite that — they were "what shape does
+// analyze send TODAY" — and the difference did not matter while the values
+// stood still. It matters now.
+//
+// `public.analysis_prompts.effort` and `.max_tokens` (migration
+// 20260912090000) are the real answer, written by analyze at send time. These
+// constants are the fallback for the rows that predate those columns, and they
+// are named for what they are rather than left looking current. A reader who
+// finds a replay running at PRE_SWITCH_EFFORT_TECHNICAL should be able to see
+// from the name alone that it is replaying an old row, not that this file is
+// stale.
+export const PRE_SWITCH_MAX_TOKENS = 8000;
+export const PRE_SWITCH_EFFORT_SEARCH = "low";
+export const PRE_SWITCH_EFFORT_TECHNICAL = "medium";
 
 // The single version header production sends. There is no `anthropic-beta`
 // header in analyze — measured, zero occurrences in the file — and there is
@@ -265,6 +287,18 @@ export interface ReplayInput {
   // function neither performs nor second-guesses it.
   system: string;
   user: string;
+  // From the stored `effort` and `max_tokens` columns, for the same reason
+  // `model` is: a row must be replayed at the depth and ceiling it was sent at.
+  //
+  // `null` means the row predates those columns (migration 20260912090000), and
+  // it is the ONLY case where this module reaches for a constant. It then uses
+  // the PRE_SWITCH_* values, because a row with no recorded shape is by
+  // definition a row written before the shape was recorded — which is before
+  // 2026-09-12, which is the era those constants describe. Guessing the CURRENT
+  // values there would replay an old row at a depth it never saw, which is the
+  // exact failure this field exists to prevent.
+  effort?: string | null;
+  maxTokens?: number | null;
 }
 
 export interface WebSearchTool {
@@ -404,9 +438,15 @@ export const replayShape = (input: { arm: Arm; rowClass: RowClass }): Shape => {
 // whose effort quietly became the API default is not a replicate of the cell
 // that ran at "low", and pooling the two reports a shape change as model noise.
 // If the option is ever rejected, the cell fails and says so.
-const outputConfigFor = (shape: Shape): OutputConfig => {
+const outputConfigFor = (shape: Shape, recordedEffort: string | null): OutputConfig => {
+  // The recorded value wins whenever there is one. The per-shape constants
+  // below are the pre-switch fallback and nothing else — see the comment on
+  // `ReplayInput.effort`.
   if (shape === "structured") {
-    return { format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT_TECHNICAL };
+    return {
+      format: { type: "json_schema", schema: RESPONSE_SCHEMA },
+      effort: recordedEffort ?? PRE_SWITCH_EFFORT_TECHNICAL,
+    };
   }
   // search_free_inline and search_on are both the searching path's shape: no
   // `format`, because the 45 rows carry their contract as prose in the user
@@ -414,7 +454,7 @@ const outputConfigFor = (shape: Shape): OutputConfig => {
   // to be able to see (a run that never meets a parse failure has not shown
   // that parse failures are rare — it has shown that constrained decoding
   // removed them).
-  return { effort: EFFORT_SEARCH };
+  return { effort: recordedEffort ?? PRE_SWITCH_EFFORT_SEARCH };
 };
 
 // ---------------------------------------------------------------------------
@@ -455,6 +495,16 @@ const outputConfigFor = (shape: Shape): OutputConfig => {
 // body production never sent.
 export const buildReplayRequest = (input: ReplayInput): ReplayBody => {
   const { arm, rowClass, model, system, user } = input;
+  const recordedEffort = typeof input.effort === "string" && input.effort.length > 0
+    ? input.effort
+    : null;
+  // A non-integer or non-positive ceiling is not a ceiling. Treated as absent
+  // rather than passed through, so a corrupt column cannot put a body on the
+  // wire that production could not have sent.
+  const recordedMaxTokens = typeof input.maxTokens === "number" &&
+      Number.isInteger(input.maxTokens) && input.maxTokens > 0
+    ? input.maxTokens
+    : null;
 
   // A missing string is refused rather than defaulted. An empty system prompt
   // is a perfectly valid request that measures a different question, and the
@@ -474,10 +524,10 @@ export const buildReplayRequest = (input: ReplayInput): ReplayBody => {
 
   const body: ReplayBody = {
     model,
-    max_tokens: MAX_TOKENS,
+    max_tokens: recordedMaxTokens ?? PRE_SWITCH_MAX_TOKENS,
     system,
     messages: [{ role: "user", content: user }],
-    output_config: outputConfigFor(shape),
+    output_config: outputConfigFor(shape, recordedEffort),
   };
 
   // `tools` is assigned only on the arm that has them, never assigned as

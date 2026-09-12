@@ -66,7 +66,7 @@ describe("mcnemarExact", () => {
     const r = mcnemarExact(0, 0);
     expect(r.discordant).toBe(0);
     expect(r.pValue).toBe(1);
-    // "tied", not "live_better". A run with no discordant pairs has no
+    // "tied", not "toward_live". A run with no discordant pairs has no
     // direction, and handing the incumbent a default win is exactly the bias a
     // promotion gate must not have.
     expect(r.direction).toBe("tied");
@@ -78,8 +78,8 @@ describe("mcnemarExact", () => {
     const a = mcnemarExact(9, 2);
     const b = mcnemarExact(2, 9);
     expect(a.pValue).toBeCloseTo(b.pValue, 15);
-    expect(a.direction).toBe("live_better");
-    expect(b.direction).toBe("candidate_better");
+    expect(a.direction).toBe("toward_live");
+    expect(b.direction).toBe("toward_candidate");
   });
 
   it("reproduces the closed-form two-sided p for small m", () => {
@@ -112,7 +112,7 @@ describe("mcnemarExact", () => {
     expect(Number.isFinite(r.pValue)).toBe(true);
     expect(r.pValue).toBeGreaterThan(0);
     expect(r.pValue).toBeLessThan(1);
-    expect(r.direction).toBe("candidate_better");
+    expect(r.direction).toBe("toward_candidate");
   });
 
   it("refuses fractional or negative counts instead of rounding them", () => {
@@ -1031,9 +1031,10 @@ describe("tallyAgainstControl", () => {
     expect(test.discordant).toBe(10);
     expect(test.pValue).toBeCloseTo(2 * (Math.pow(0.5, 10) * (1 + 10)), 12);
     expect(test.significant).toBe(true);
-    // "candidate_better" in the generic test's vocabulary; in stage A it means
-    // the candidate arm carries the discordant rows, i.e. MATERIAL.
-    expect(test.direction).toBe("candidate_better");
+    // "toward_candidate" names which side of the table the discordant pairs
+    // fell on, and nothing more. In stage A that side is the candidate arm,
+    // i.e. MATERIAL — a difference, not a win.
+    expect(test.direction).toBe("toward_candidate");
     expect(
       screenAgainstControl({ b: t.b, c: t.c, significant: test.significant, underpowered: test.underpowered }),
     ).toBe("material");

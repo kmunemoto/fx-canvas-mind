@@ -118,6 +118,11 @@ import {
 } from "../analyze/rules.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
+  composeArm,
+  readComposition,
+  type ArmComposition,
+} from "./composition.ts";
+import {
   DELTA,
   mcnemarExact,
   nullDiscordantRate,
@@ -148,7 +153,7 @@ import {
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v2-2026-09-10T20:00:00Z";
+const FUNCTION_VERSION = "version-compare-v6-2026-09-12T10:30:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,
@@ -393,6 +398,12 @@ interface PopulationRow {
   system: string;
   user: string;
   model: string;
+  // The request shape this row was SENT at, from analysis_prompts. Null on
+  // every row written before migration 20260912090000; shape.ts then falls back
+  // to the pre-switch constants, which is what those rows were sent at. Carried
+  // for the same reason `model` is — see ReplayInput in noise-floor/shape.ts.
+  effort: string | null;
+  maxTokens: number | null;
   mode: string;
   preview: boolean;
   createdAt: string;
@@ -690,6 +701,38 @@ Deno.serve(async (req: Request) => {
         sha256Hex(renderedJa.live),
       ]);
 
+      // WHICH RULES EACH BOOK WOULD ACTUALLY PUT IN FRONT OF THE ANALYST.
+      //
+      // Taken here rather than at insert time so the branch that hands back an
+      // EXISTING freeze can report it too. That branch answers with the stored
+      // row's rule counts, which are book counts; without this the caller who
+      // reuses a freeze gets strictly less than the caller who creates one,
+      // and it is the same object.
+      //
+      // ja only. The freeze is identified by its ja digests (see the refusal
+      // above), the corpus this harness replays is ja on all 84 frozen rows as
+      // measured on 2026-09-12, and a second locale here would invite the
+      // reader to average two numbers that describe two different prompts.
+      const composeFrozen = (liveJson: unknown, candidateJson: unknown) => {
+        const l = composeArm(parseRules(liveJson), "ja", PLAN_CONTRACT);
+        const c = composeArm(parseRules(candidateJson), "ja", PLAN_CONTRACT);
+        return {
+          contract: PLAN_CONTRACT,
+          locale: "ja",
+          // Promoted from decoration to a gate, after a review found the
+          // report path emitting a confident verdict beside a `reading` that
+          // said the counts were unknown. When either self-check fails the
+          // breakdown is not evidence, and the caller must be able to see that
+          // without reading the nested objects.
+          trustworthy: l.agrees_with_renderer && c.agrees_with_renderer &&
+            l.counts_close && c.counts_close,
+          live: l,
+          candidate: c,
+          reading: readComposition(l, c),
+        };
+      };
+      const freezeComposition = composeFrozen(book.rules, candidate.rules);
+
       // An existing freeze of the same pair is HANDED BACK rather than
       // duplicated. Two ids for one object would let two runs report on
       // "different" freezes that are the same thing, and the operator would
@@ -708,8 +751,18 @@ Deno.serve(async (req: Request) => {
           created: false,
           freeze_id: existing[0].id,
           frozen_at: existing[0].frozen_at,
-          candidate_rule_count: existing[0].candidate_rule_count,
-          live_rule_count: existing[0].live_rule_count,
+          // BOOK counts, before the contract filter. Named here so the field
+          // cannot be read as "rules the analyst will see" — see
+          // shown_to_the_analyst below, which is that number.
+          candidate_rule_count_in_book: existing[0].candidate_rule_count,
+          live_rule_count_in_book: existing[0].live_rule_count,
+          // FROM THE STORED ROW, not from `freezeComposition`. Those two
+          // counts beside it come from `existing[0]`, and the candidate
+          // rulebook is rewritten by the postmortem sweep every few hours —
+          // so composing the CURRENT books here would put a breakdown of one
+          // book next to the counts of another and call them one object. The
+          // lookup above is `select=*`, so the frozen arrays are already here.
+          shown_to_the_analyst: composeFrozen(existing[0].live_rules, existing[0].candidate_rules),
           candidate_sha256: candidateSha,
           live_sha256: liveSha,
           note: "an identical freeze already exists; reusing it rather than creating a second id for one object",
@@ -743,6 +796,13 @@ Deno.serve(async (req: Request) => {
             ja: { live: renderedJa.live.length, candidate: renderedJa.candidate.length },
             en: { live: renderedEn.live.length, candidate: renderedEn.candidate.length },
           },
+          // WHAT THE ANALYST WOULD ACTUALLY READ, recorded at the instant the
+          // books are frozen. The two *_rule_count columns beside this are
+          // counts of the parsed BOOK, taken before the contract filter, and on
+          // the freeze run 48fc15da used they read 3 and 4 while the prompts
+          // carried 3 and 2. A reader with only those columns concludes the
+          // exact opposite of what happened. See composition.ts.
+          shown_to_the_analyst: freezeComposition,
         },
       });
       if (inserted === null || !isUuid(inserted[0]?.id)) {
@@ -753,8 +813,15 @@ Deno.serve(async (req: Request) => {
       console.log("version-compare freeze", {
         freeze_id: inserted[0].id,
         live_version: liveVersion,
-        candidate_rules: candidateRules.length,
-        live_rules: liveRules.length,
+        // IN THE BOOK, and said so. These are the counts before the contract
+        // filter; the ones that matter are beside them. A log line is where an
+        // operator forms a first impression, and an unqualified pair reading
+        // four against three is the impression this change exists to correct —
+        // the prompts carried two against three.
+        candidate_rules_in_book: candidateRules.length,
+        live_rules_in_book: liveRules.length,
+        candidate_rules_shown: freezeComposition.candidate.rules_shown,
+        live_rules_shown: freezeComposition.live.rules_shown,
       });
 
       return json({
@@ -765,8 +832,9 @@ Deno.serve(async (req: Request) => {
         frozen_at: nowIso,
         live_version: liveVersion,
         candidate_base_version: intOrNull(candidate.base_version),
-        candidate_rule_count: candidateRules.length,
-        live_rule_count: liveRules.length,
+        candidate_rule_count_in_book: candidateRules.length,
+        live_rule_count_in_book: liveRules.length,
+        shown_to_the_analyst: freezeComposition,
         candidate_sha256: candidateSha,
         live_sha256: liveSha,
         errors,
@@ -789,7 +857,7 @@ Deno.serve(async (req: Request) => {
         const rows = await readRowsOrNull(
           `analysis_prompts?analysis_id=in.(${chunk.join(",")})` +
             `&created_at=lte.${encodeURIComponent(cutIso)}` +
-            `&select=analysis_id,system,user,model,created_at`,
+            `&select=analysis_id,system,user,model,effort,max_tokens,created_at`,
         );
         if (rows === null) {
           errors.push("read_failed:analysis_prompts");
@@ -841,6 +909,13 @@ Deno.serve(async (req: Request) => {
           system,
           user,
           model,
+          // Absent is a legitimate value here, unlike system/user/model above:
+          // every row written before migration 20260912090000 has no recorded
+          // shape, and refusing those would drop the entire existing corpus.
+          // shape.ts turns a null into the pre-switch constants, which is what
+          // those rows were in fact sent at.
+          effort: strOrNull(prompt.effort),
+          maxTokens: intOrNull(prompt.max_tokens),
           mode: typeof analysis.mode === "string" ? analysis.mode : "",
           preview: analysis.preview === true,
           createdAt: typeof prompt.created_at === "string" ? prompt.created_at : "",
@@ -1024,6 +1099,8 @@ Deno.serve(async (req: Request) => {
           model: row.model,
           system: spliced.system,
           user: row.user,
+          effort: row.effort,
+          maxTokens: row.maxTokens,
         });
       } catch (err) {
         const message = slice200(err);
@@ -1509,6 +1586,152 @@ Deno.serve(async (req: Request) => {
         }, 409);
       }
 
+      // ---- what each arm actually put in front of the analyst -------------
+      //
+      // Recomputed HERE, at report time, from the frozen rule arrays — not
+      // read back from a column. That is deliberate and it is the whole reason
+      // this block can exist at all: run 48fc15da finished on 2026-09-11, cost
+      // $22, and was reported before anything recorded which rules its arms
+      // showed. Deriving from the freeze means that run — and every run already
+      // in the table — can be re-reported with the answer, for the price of a
+      // single-row read.
+      //
+      // A FAILURE HERE DOES NOT KILL THE REPORT, and it does not go quiet
+      // either. The numbers below are still the numbers; what would be missing
+      // is the caveat on them, and a missing caveat that nothing announces is
+      // the exact failure this block was written to end.
+      let composition: JsonRecord = {
+        available: false,
+        why: "not attempted",
+      };
+      {
+        // EVERY REASON THIS BLOCK CAN REFUSE, collected before anything is
+        // emitted. An adversarial review on 2026-09-12 found the first draft
+        // shipping `available: true` and a confident
+        // `what_this_does_to_the_verdict` beside a `reading` that said the
+        // counts were unknown — two fields of one object contradicting each
+        // other, which is the exact defect this whole change exists to end. So
+        // the refusals gate the WHOLE object now, not one sentence in it.
+        const blockers: string[] = [];
+        const freezeForReport = await readFreeze(String(run.freeze_id));
+        if (freezeForReport === "read_failed" || freezeForReport === null) {
+          errors.push("read_failed:rulebook_candidate_freezes:composition");
+          composition = {
+            available: false,
+            why: "the freeze row could not be read, so which rules each arm showed is unknown for this report",
+          };
+        } else {
+          const liveBook = parseRules(freezeForReport.live_rules);
+          const candidateBook = parseRules(freezeForReport.candidate_rules);
+          if (liveBook.length === 0 || candidateBook.length === 0) {
+            composition = {
+              available: false,
+              why: "a frozen book parsed to zero rules, so the per-arm rule breakdown cannot be reconstructed",
+            };
+          } else {
+            const liveComp: ArmComposition = composeArm(liveBook, "ja", PLAN_CONTRACT);
+            const candComp: ArmComposition = composeArm(candidateBook, "ja", PLAN_CONTRACT);
+
+            // DOES THE RECONSTRUCTION DESCRIBE THE PROMPT THAT WAS SENT?
+            //
+            // `agrees_with_renderer` cannot answer that, and the same review
+            // said so: it compares this module's gate-walk against TODAY's
+            // selectPromptRules, so it is silent about drift in the renderer
+            // itself. A run reported months later, after rules.ts or
+            // ENTRY_LEVER_PHRASES has moved, would get a confident account of
+            // a prompt nobody was ever shown.
+            //
+            // The freeze already carries the answer. `live_sha256` and
+            // `candidate_sha256` are the sha256 of the ja blocks AS RENDERED
+            // ON THE DAY OF THE FREEZE (see freeze mode above, which
+            // identifies a freeze by exactly these two digests). Re-render and
+            // compare. A match is proof; a mismatch means the renderer moved
+            // under the stored book, and the only honest output is to say so.
+            const [liveNow, candNow] = await Promise.all([
+              sha256Hex(renderBlock(liveBook, "ja")),
+              sha256Hex(renderBlock(candidateBook, "ja")),
+            ]);
+            const storedLive = strOrNull(freezeForReport.live_sha256);
+            const storedCand = strOrNull(freezeForReport.candidate_sha256);
+            const digestsMatch = storedLive !== null && storedCand !== null &&
+              liveNow === storedLive && candNow === storedCand;
+
+            if (!digestsMatch) {
+              blockers.push(
+                "the rules block re-rendered from the frozen books does not hash to the digest the freeze " +
+                  "stored, so the renderer or the contract filter has moved since this run and a breakdown " +
+                  "computed today would not describe the prompt that was sent",
+              );
+            }
+            // The module's own two self-checks, promoted from decoration to
+            // gates. Either being false means the breakdown is not evidence.
+            if (!liveComp.agrees_with_renderer || !candComp.agrees_with_renderer) {
+              blockers.push("the reconstructed rule selection did not match the renderer's own output");
+            }
+            if (!liveComp.counts_close || !candComp.counts_close) {
+              blockers.push("the per-arm rule breakdown does not add up to the book it came from");
+            }
+
+            const digests = {
+              what_this_is:
+                "the freeze's stored ja block digests against the same blocks re-rendered now. A match is " +
+                "what makes the breakdown above evidence about the prompt that was actually sent.",
+              match: digestsMatch,
+              live_stored: storedLive,
+              live_rerendered: liveNow,
+              candidate_stored: storedCand,
+              candidate_rerendered: candNow,
+            };
+
+            composition = blockers.length > 0
+              ? {
+                available: false,
+                why:
+                  "the rule breakdown could not be established for this run, so it is not reported. Treat the " +
+                  "per-arm rule counts as UNKNOWN rather than as equal.",
+                blockers,
+                digests,
+              }
+              : {
+                what_this_is:
+                  "which rules each arm actually rendered into the analyst's system prompt, and for every " +
+                  "book rule that did not make it, why. The freeze's *_rule_count columns are counts of the " +
+                  "parsed BOOK, taken before the contract filter; they are NOT this number and on at least " +
+                  "one run they point the opposite way.",
+                available: true,
+                contract: PLAN_CONTRACT,
+                locale: "ja",
+                digests,
+                arms: {
+                  live: liveComp,
+                  candidate: candComp,
+                  // Not recomputed. 'live_b' is handed the SAME rendered string
+                  // as 'live' (see loadFrozenBooks), which is the property
+                  // `armsShareTheSameBook` encodes and the pre-spend check
+                  // enforces on every cell. Rendering it a second time here
+                  // would invite the reader to treat a match as evidence, when
+                  // it is an identity.
+                  live_b: "identical to live by construction; the control arm is handed the same rendered block",
+                },
+                reading: readComposition(liveComp, candComp),
+                // Said in the payload because it is the limit on everything
+                // below it, not a footnote to it. Only reachable once every
+                // blocker above is clear, so it can no longer contradict
+                // `reading`.
+                what_this_does_to_the_verdict:
+                  liveComp.rules_shown === candComp.rules_shown
+                    ? "the arms showed the same NUMBER of rules, so the disagreement rate below is not " +
+                      "carrying a rule-count difference. It still cannot separate 'the new text means " +
+                      "something different' from 'the bytes moved'; that needs a fourth arm."
+                    : "the arms did NOT show the same number of rules, so the disagreement rate below mixes " +
+                      "a difference in rule TEXT with a difference in HOW MANY instructions the analyst got. " +
+                      "`material` remains a statement that swapping the book moved the answer; it does not " +
+                      "say which of those two mechanisms moved it, and this run cannot be made to say.",
+              };
+          }
+        }
+      }
+
       // ---- the three things the report must not blur ----------------------
       //
       // (1) the raw candidate-vs-live disagreement rate, with its interval;
@@ -1571,6 +1794,11 @@ Deno.serve(async (req: Request) => {
           "rulebook does; it is NOT evidence that either book is better",
         rows: control.rows,
 
+        // (0) WHAT THE ARMS ACTUALLY DIFFERED BY. Placed FIRST, above every
+        // rate, because it is the thing the rates are about. Read after the
+        // p-value it is a footnote; read before it, it is the question.
+        what_each_arm_showed: composition,
+
         // (1) THE RAW CANDIDATE RATE.
         candidate_vs_live: {
           what_this_is: "how often the candidate book landed on a different published decision from the live book",
@@ -1600,9 +1828,9 @@ Deno.serve(async (req: Request) => {
           both_disagreed: control.bothDisagree,
           neither_disagreed: control.neitherDisagrees,
           mcnemar: pairedTest,
-          direction_means: pairedTest.direction === "candidate_better"
+          direction_means: pairedTest.direction === "toward_candidate"
             ? "the candidate arm carries the discordant rows: swapping the book moved answers that resampling it did not"
-            : (pairedTest.direction === "live_better"
+            : (pairedTest.direction === "toward_live"
               ? "the CONTROL arm carries the discordant rows: one book disagreed with itself more than the other book did with it"
               : "no lean; b equals c"),
         },

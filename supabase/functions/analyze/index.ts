@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v49-2026-09-11T10:00:00Z";
+const FUNCTION_VERSION = "analyze-v50-2026-09-12T09:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1500,12 +1500,30 @@ Deno.serve(async (req: Request) => {
     const elapsed = () => Date.now() - startedAt;
     const msLeft = () => WALL_CLOCK_BUDGET_MS - elapsed();
 
-    // Opus 5 runs adaptive thinking at effort "high" by default, which is the
-    // dominant cost in a turn. The technical path is fast and can afford
-    // "medium"; the searching path also pays for page fetches, so it runs at
-    // "low" to leave room for them.
-    const EFFORT_TECHNICAL = "medium";
-    const EFFORT_SEARCH = "low";
+    // BOTH PATHS RUN AT THE TOP OF THE RANGE ("low" < "medium" < "high" <
+    // "xhigh" < "max"), which is the owner's decision of 2026-09-12: move to
+    // the cheaper model and spend the saving on thinking depth rather than
+    // pocketing it.
+    //
+    // The old values existed because effort is the dominant cost in a turn and
+    // the worker is killed at 150s. That constraint has not gone away, so here
+    // is the measured headroom it is being spent against. Over the 250 replayed
+    // turns of run 48fc15da — real stored prompts, previous model, technical
+    // path at "medium" — the model call took a mean of 31.7s, p90 36.8s, p99
+    // 42.6s, max 49.5s, against a self-imposed budget of 135s. The technical
+    // path therefore has roughly three times the time it was using.
+    //
+    // THE SEARCHING PATH DOES NOT, and that is the risk this comment exists to
+    // record rather than hide. budget.ts documents a full-mode turn hitting the
+    // budget at 135002ms at effort "low"; raising it to "max" spends headroom
+    // that was already gone. What happens then is not an error: planAttempt
+    // returns `drop_search`, the turn is retried technical-only, and the client
+    // shows the degraded badge. So the failure mode of this setting is
+    // "fundamental analysis quietly becomes technical analysis", not "the
+    // analysis fails" — and if that shows up in the logs, EFFORT_SEARCH is the
+    // one value to walk back, on its own, without touching the technical path.
+    const EFFORT_TECHNICAL = "max";
+    const EFFORT_SEARCH = "max";
 
     // Which of the learned rules the market in front of us actually looks
     // like. Measured, not asserted: each rule's citations carry the reading
@@ -1560,8 +1578,21 @@ Deno.serve(async (req: Request) => {
       : buildUserMessage(TECHNICAL_NOTE, false);
 
     const baseRequest: JsonRecord = {
-      model: "claude-opus-5",
-      max_tokens: 8000,
+      model: "claude-sonnet-5",
+      // RAISED FROM 8000 WITH THE MODEL SWITCH, and it is not cosmetic.
+      //
+      // Two things moved at once on 2026-09-12. The effort values below went to
+      // "max", which buys more thinking and therefore more output; and this
+      // model's tokenizer emits roughly 30% more tokens for the same text than
+      // the previous one did. A ceiling tuned for the old pair would cut
+      // responses off mid-plan, and a truncated response is not a cheaper
+      // analysis — it is a failed one that was still paid for.
+      //
+      // The measured headroom says 8000 was never close on the old pair: over
+      // the 250 replayed turns of run 48fc15da the mean output was 1,683 tokens
+      // and the largest was 2,813. Doubling the ceiling costs nothing on a turn
+      // that does not use it — max_tokens is a backstop, never a target.
+      max_tokens: 16000,
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
         .replace("{{EVENTS}}", eventBlock)
@@ -2201,10 +2232,30 @@ Deno.serve(async (req: Request) => {
       const sentUserText = isRecord(sentTurn) && typeof sentTurn.content === "string"
         ? sentTurn.content
         : userMessageText;
+      // THE SHAPE THE TURN WAS ACTUALLY SENT AT, not only its text.
+      //
+      // #68b put `model` on the row for one reason: a replay that runs a
+      // different model than the row was written under is not a replay. On
+      // 2026-09-12 the same argument came due for the other two request
+      // parameters. noise-floor/shape.ts pins `effort` and `max_tokens` as
+      // constants and takes only the model from the row, so the day those
+      // constants moved — which is the day this comment was written — a replay
+      // of a pre-switch row would have run at a depth that row was never sent
+      // at, and nothing would have said so.
+      //
+      // The effort actually sent depends on which path ran and on whether the
+      // API rejected `output_config` at all, so it is read back off the request
+      // rather than assumed from the constants.
+      const sentOutputConfig = isRecord(baseRequest.output_config) ? baseRequest.output_config : null;
       const promptRecord = {
         system: typeof baseRequest.system === "string" ? baseRequest.system : null,
         user: sentUserText,
         model: typeof baseRequest.model === "string" ? baseRequest.model : null,
+        // Null means "no effort was sent", which is NOT the same as any level:
+        // the API's own default applies, and that default is not this file's to
+        // record. It happens when the retry at `effortEnabled = false` fired.
+        effort: typeof sentOutputConfig?.effort === "string" ? sentOutputConfig.effort : null,
+        max_tokens: typeof baseRequest.max_tokens === "number" ? baseRequest.max_tokens : null,
         at: pricedAtIso,
       };
       // The two-sided quote behind the mid the user was shown. Execution is
@@ -2335,6 +2386,8 @@ Deno.serve(async (req: Request) => {
             system: promptRecord.system,
             user: promptRecord.user,
             model: promptRecord.model,
+            effort: promptRecord.effort,
+            max_tokens: promptRecord.max_tokens,
             sent_at: promptRecord.at,
           }),
         });

@@ -16,6 +16,12 @@ import { LEGACY_PLAN_CONTRACT } from "../../supabase/functions/_shared/contract"
 // that decides whether that logic is reached at all.
 const index = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
 const promptSrc = readFileSync("supabase/functions/postmortem/prompt.ts", "utf8");
+// The stamp moved out of prompt.ts on 2026-09-12 (see the header of stamp.ts:
+// importing it from prompt.ts cost version-compare 42.8 KB of bundle because
+// the consolidation template literals defeat tree-shaking). The invariants
+// below are split the same way the code is — where stampFor is DEFINED is now
+// stamp.ts, where it is CALLED is still prompt.ts — rather than relaxed.
+const stampSrc = readFileSync("supabase/functions/postmortem/stamp.ts", "utf8");
 const analyzeSrc = readFileSync("supabase/functions/analyze/index.ts", "utf8");
 // The gate on a candidate lives in its own file now: what it counts (episodes,
 // not rows) is arithmetic worth testing without a database or a model call.
@@ -267,7 +273,14 @@ describe("consolidation is given enough clock to finish", () => {
 // no unit test can see it come back.
 describe("a rule's contract says what the rule can do, not when it was written", () => {
   it("derives every stamp through stampFor", () => {
-    expect(promptSrc).toContain("export const stampFor = (");
+    expect(stampSrc).toContain("export const stampFor = (");
+    // There is exactly ONE definition. A second copy anywhere would let the
+    // two vocabularies drift, and the whole point of the field is that one
+    // function decides it.
+    expect(promptSrc).not.toContain("export const stampFor = (");
+    // prompt.ts must still REACH it. A re-export alone would satisfy the two
+    // call-site assertions below while the name resolved to nothing.
+    expect(promptSrc).toContain('from "./stamp.ts"');
     // Both paths: the re-emitted rule and the restored one. A restore that
     // inherits its stamp is how a dead build's endorsement survives forever.
     const derived = promptSrc.match(/= stampFor\(/g) ?? [];
