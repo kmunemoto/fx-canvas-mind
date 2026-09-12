@@ -95,13 +95,22 @@ export interface McnemarResult {
   // both are zero — a run with no discordant pairs has no direction, and
   // calling that "live" would hand the incumbent a win it never earned.
   //
-  // THE WORD "better" IS STAGE B's. In stage A, where the counts are
-  // disagreement indicators and no outcome has been read, "candidate_better"
-  // means only "the candidate arm carries the discordant rows", i.e. swapping
-  // the book moved more answers than resampling it did — which is
-  // `material`, not better. index.ts never prints this field in a stage A
-  // block without `screenAgainstControl`'s verdict beside it.
-  direction: "candidate_better" | "live_better" | "tied";
+  // THESE NAMES CARRY NO VERDICT, and they used to. The values were
+  // "candidate_better" and "live_better", with a comment underneath explaining
+  // that in stage A "better" means only "carries the discordant rows". That
+  // comment is not in the JSON. On 2026-09-11 the first material stage A
+  // result was read off a payload whose `direction` field said
+  // "candidate_better", and it reads as a performance claim standing alone —
+  // which is exactly the class of thing #83 removed from the screen. A field
+  // that needs a paragraph beside it to stop being a lie is misnamed.
+  //
+  // "toward_candidate" says which side of the McNemar table the discordant
+  // pairs fall on and nothing else. It is correct in BOTH stages: in stage B,
+  // where outcomes are read, the candidate really did win those pairs; in
+  // stage A, where the counts are disagreement indicators and no outcome has
+  // been read, it means only that swapping the book moved answers that
+  // resampling it did not. Neither reading is a claim that a book is better.
+  direction: "toward_candidate" | "toward_live" | "tied";
   // pValue <= 0.05. Reported as a field rather than left to the caller so that
   // the threshold is stated in one place and cannot drift between the function
   // and its write-up.
@@ -140,7 +149,7 @@ export function mcnemarExact(b: number, c: number): McnemarResult {
 
   const direction: McnemarResult["direction"] = b === c
     ? "tied"
-    : (c > b ? "candidate_better" : "live_better");
+    : (c > b ? "toward_candidate" : "toward_live");
 
   if (m === 0) {
     // No discordant pairs at all. p = 1 is the honest value — every possible

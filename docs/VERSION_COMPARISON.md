@@ -155,6 +155,34 @@ live 腕がたまたま変わった答えを出した行では、両方の食い
 
 > `a screening test on whether swapping the rulebook moves the answer MORE than resampling the same rulebook does; it is NOT evidence that either book is better`
 
+### 2026-09-12: `direction` の名前を直した
+
+上の一文はずっと入っていた。それでも足りなかった。
+
+2026-09-11 に初めて `material` が出たとき、その payload の `direction` は
+`"candidate_better"` と書いてあった。真下の `direction_means` には「候補の腕が食い違いの行を
+持っている」としか書いていないのに、**値そのものが成績の主張として読める**。
+`verdict_means` が「どちらが良いかについては何も言っていない」と明記していても、
+フィールド名が反対のことを言えば、読む側に勝つのは短いほうである。
+
+これは #83 で画面から外したのと同じ種類の誤りで、場所が JSON に変わっただけだった。
+
+| 旧 | 新 |
+| --- | --- |
+| `candidate_better` | `toward_candidate` |
+| `live_better` | `toward_live` |
+| `tied` | `tied`（変更なし） |
+
+新しい名前は「McNemar 表のどちら側に食い違いのペアが落ちたか」だけを言う。
+段階Aでも段階Bでも正しい —— 段階Bでは候補が実際にそのペアを勝っており、
+段階Aでは「本を入れ替えたら、同じ本を引き直したときには動かなかった答えが動いた」
+というだけである。どちらの読みも「本の良し悪し」ではない。
+
+**2026-09-11 より前に保存された実行の payload は古い語彙のまま**である。
+保存済みの JSON は書き換えていない。過去の実行を読み直すときは、
+`candidate_better` を `toward_candidate` と読み替えること
+（意味は同じで、名前だけが直っている）。
+
 ---
 
 ## 3. 段階B（Performance / 成績）— 今日は絶対にできないこと

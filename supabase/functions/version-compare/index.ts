@@ -148,7 +148,7 @@ import {
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v2-2026-09-10T20:00:00Z";
+const FUNCTION_VERSION = "version-compare-v3-2026-09-12T00:00:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,
@@ -1600,9 +1600,9 @@ Deno.serve(async (req: Request) => {
           both_disagreed: control.bothDisagree,
           neither_disagreed: control.neitherDisagrees,
           mcnemar: pairedTest,
-          direction_means: pairedTest.direction === "candidate_better"
+          direction_means: pairedTest.direction === "toward_candidate"
             ? "the candidate arm carries the discordant rows: swapping the book moved answers that resampling it did not"
-            : (pairedTest.direction === "live_better"
+            : (pairedTest.direction === "toward_live"
               ? "the CONTROL arm carries the discordant rows: one book disagreed with itself more than the other book did with it"
               : "no lean; b equals c"),
         },
