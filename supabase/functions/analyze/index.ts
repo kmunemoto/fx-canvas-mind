@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v52-2026-09-12T12:00:00Z";
+const FUNCTION_VERSION = "analyze-v53-2026-09-12T16:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -30,7 +30,28 @@ import {
   type AnalysisLocale,
 } from "./locale.ts";
 
-import { PRICE_OVERLAY_BUDGET_MS, WALL_CLOCK_BUDGET_MS, canRetryWithoutSearch, planAttempt } from "./budget.ts";
+import {
+  PRICE_OVERLAY_BUDGET_MS,
+  WALL_CLOCK_BUDGET_MS,
+  canRetryWithoutSearch,
+  planAttempt,
+  planReviewWait,
+  reviewDeadlineMs,
+} from "./budget.ts";
+import {
+  PREVIOUS_WINDOW_HOURS,
+  buildReviewRequest,
+  emptyReviewRun,
+  finalizeReview,
+  mechanicalFacts,
+  parseReviewAnswer,
+  readHeldReference,
+  readPreviousReference,
+  recordRequest,
+  type PositionReview,
+  type ReferenceSet,
+  type ReviewRun,
+} from "./review.ts";
 
 import {
   MAX_LIMIT_ATR,
@@ -1657,6 +1678,182 @@ Deno.serve(async (req: Request) => {
       searchDroppedReason = "no_allowed_domains";
     }
 
+    // ---- the held-position review, started beside the main call -----------
+    // analyze/review.ts. What the plan the reader HOLDS (or the previous run
+    // published) looks like now, judged on its own thesis and levels. Its own
+    // model call, on purpose: the main prompt and schema are replay artefacts
+    // and must not move, and the main call's own flip rate must not become the
+    // hold verdict's.
+    //
+    // Never on the main path. It runs concurrently with the model turn below;
+    // every fetch it makes carries the absolute deadline fixed HERE, so it
+    // cannot outlive the write reserve on any exit; it is awaited exactly once
+    // (after check_open_plans) with a bounded grace; and it is a pure function
+    // of copied inputs — it never touches `stage`, `messages` or
+    // `baseRequest`, which applyRequestShape rewrites while it is in flight.
+    // Its result is written on THIS run's row. The reference row is never
+    // rewritten.
+    const reviewSignal = AbortSignal.timeout(Math.max(1_000, reviewDeadlineMs(elapsed())));
+    const reviewStartedMs = Date.now();
+    const reviewAcc: ReviewRun = emptyReviewRun(new Date(reviewStartedMs).toISOString());
+    const reviewModel = typeof baseRequest.model === "string" ? baseRequest.model : "";
+    const reviewPrice = Number(entrySnapshot.price.toFixed(decimals));
+    const runPositionReview = async (acc: ReviewRun): Promise<void> => {
+      const restHeaders = { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" };
+      const restGet = async (path: string): Promise<unknown> => {
+        const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, { headers: restHeaders, signal: reviewSignal });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`rest ${res.status}: ${text.slice(0, 120)}`);
+        return parseJsonResponse(text);
+      };
+      const uid = encodeURIComponent(user.id);
+      const pairQ = encodeURIComponent(currencyPair);
+      // The reference row, with the four JSON paths the review reads aliased
+      // out so the row's own evaluation.path (60 points) is not fetched.
+      const planSelect = "id,created_at,priced_at,interval,signal,confidence,thesis,entry_point,stop_loss,take_profit_1," +
+        "outcome,outcome_price,closed_at,entry_check,price_basis:evaluation->>price_basis,key_factors:result->key_factors," +
+        "snapshot:context->entry,structure:context->structure->0";
+      const sinceIso = new Date(Date.now() - PREVIOUS_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+
+      // Two independent lookups: the position the reader holds on this pair
+      // (any timeframe — a position is a position), and the previous run on
+      // this pair and timeframe. Each absence is named, not silent.
+      const refs: ReferenceSet = { held: null, held_reason: null, previous: null, previous_reason: null, thesis_of: null };
+      const [positionsRaw, previousRaw] = await Promise.all([
+        restGet(`positions?user_id=eq.${uid}&pair=eq.${pairQ}&status=eq.open&select=*&order=opened_at.desc,created_at.desc&limit=10`)
+          .catch(() => "lookup_failed" as const),
+        restGet(
+          `analyses?user_id=eq.${uid}&pair=eq.${pairQ}&interval=eq.${encodeURIComponent(interval)}&preview=is.false&shadow=is.false` +
+            `&created_at=gte.${encodeURIComponent(sinceIso)}&select=${planSelect}&order=created_at.desc&limit=1`,
+        ).catch(() => "lookup_failed" as const),
+      ]);
+      if (positionsRaw === "lookup_failed") {
+        refs.held_reason = "lookup_failed";
+      } else if (Array.isArray(positionsRaw) && positionsRaw.length > 0 && isRecord(positionsRaw[0])) {
+        const newest = positionsRaw[0];
+        const others = positionsRaw.slice(1)
+          .map((p) => (isRecord(p) && typeof p.id === "string" ? p.id : null))
+          .filter((x): x is string => x !== null);
+        const planRaw = typeof newest.analysis_id === "string"
+          ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id)}&select=${planSelect}&limit=1`).catch(() => null)
+          : null;
+        const plan = Array.isArray(planRaw) && planRaw.length > 0 ? planRaw[0] : null;
+        refs.held = readHeldReference(newest, plan, others);
+        if (refs.held === null) refs.held_reason = "lookup_failed";
+        else if (plan === null) refs.held_reason = "plan_row_missing";
+      } else {
+        refs.held_reason = "no_open_position";
+      }
+      if (previousRaw === "lookup_failed") {
+        refs.previous_reason = "lookup_failed";
+      } else {
+        refs.previous = Array.isArray(previousRaw) && previousRaw.length > 0 ? readPreviousReference(previousRaw[0]) : null;
+        if (refs.previous === null) refs.previous_reason = "none_within_window";
+      }
+      refs.thesis_of = refs.held ? "held" : refs.previous ? "previous" : null;
+      acc.reference = refs;
+      if (refs.thesis_of === null) {
+        acc.status = "skipped";
+        acc.skipped_reason = "no_reference";
+        return;
+      }
+
+      // The facts first, before any model call, so a timed-out review still
+      // stores them. Measured on the entry-timeframe mid series this run
+      // fetched, from the bar after the anchor.
+      const subject = refs.held ?? refs.previous!;
+      const levels = subject.kind === "held"
+        ? { direction: subject.direction, entry: subject.entry, stop: subject.stop, tp1: subject.tp1 }
+        : subject.levels;
+      acc.mechanical = levels === null ? null : mechanicalFacts({
+        subject: subject.kind,
+        direction: levels.direction,
+        entry: levels.entry,
+        stop: levels.stop,
+        tp1: levels.tp1,
+        anchor: subject.kind === "held"
+          ? { at: subject.opened_at, source: "opened_at" }
+          : { at: subject.priced_at, source: "priced_at" },
+        candles: seriesByTf[0],
+        newestBarClosed: snapshots[0]?.barClosed ?? null,
+        price: reviewPrice,
+        pricedAt: pricedAtIso,
+        feed: priceFeed,
+        feedDeltaAtr,
+        decimals,
+      });
+      if (reviewModel === "") {
+        acc.status = "failed";
+        acc.error = "no_model";
+        return;
+      }
+
+      const request = buildReviewRequest({
+        model: reviewModel,
+        locale,
+        pair: currencyPair,
+        nowUtc,
+        reference: subject,
+        mechanical: acc.mechanical,
+        sections: tfSections,
+        decimals,
+      });
+      const sentAt = new Date().toISOString();
+      acc.request = recordRequest(request, sentAt);
+      const calledAt = Date.now();
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: anthropicHeaders,
+        body: JSON.stringify(request),
+        signal: reviewSignal,
+      });
+      const raw = await res.text();
+      const shape = {
+        model: request.model,
+        effort: acc.request.effort,
+        max_tokens: request.max_tokens,
+        elapsed_ms: Date.now() - calledAt,
+      };
+      const failedAnswer = (error: string) => {
+        acc.analyst = { status: "failed", verdict: null, thesis_status: null, reasons: [], what_changed: [], watch: null, ...shape, error };
+        acc.status = "failed";
+        acc.error = error;
+      };
+      if (!res.ok) {
+        console.error("Position review API error:", res.status, raw.slice(0, 300));
+        failedAnswer(`api_${res.status}`);
+        return;
+      }
+      const answer = parseReviewAnswer(parseAnalysisJson(extractAnthropicText(parseJsonResponse(raw))), subject.kind);
+      if (!answer.ok) {
+        failedAnswer(`parse_${answer.error}`);
+        return;
+      }
+      acc.analyst = {
+        status: "ok",
+        verdict: answer.verdict,
+        thesis_status: answer.thesis_status,
+        reasons: answer.reasons,
+        what_changed: answer.what_changed,
+        watch: answer.watch,
+        ...shape,
+        error: null,
+      };
+      acc.status = "ok";
+    };
+    const classifyReviewError = (err: unknown): string => {
+      if (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")) return "time_budget";
+      return redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200);
+    };
+    // Resolves on every path; never rejects. The accumulator keeps whatever
+    // was produced before the failure.
+    const reviewPromise: Promise<ReviewRun> = runPositionReview(reviewAcc)
+      .then(() => {
+        reviewAcc.elapsed_ms = Date.now() - reviewStartedMs;
+        return reviewAcc;
+      })
+      .catch((err) => ({ ...reviewAcc, status: "failed" as const, error: classifyReviewError(err), elapsed_ms: Date.now() - reviewStartedMs }));
+
     // Server tools may pause long turns (stop_reason "pause_turn"); continue
     // the same turn by echoing the assistant content back. The same bounded
     // loop also re-runs the request after pruning an uncrawlable domain, so
@@ -2144,6 +2341,58 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- the held-position review, awaited once ---------------------------
+    // Bounded by the grace, never by the review: a review still running when
+    // the grace runs out is recorded as timed out (with whatever facts it had
+    // already measured) and the row is saved without waiting for it. Its own
+    // fetches are already on the absolute deadline fixed when it started.
+    stage = "await_position_review";
+    let reviewTimer: ReturnType<typeof setTimeout> | undefined;
+    const reviewRun: ReviewRun = await Promise.race([
+      reviewPromise,
+      new Promise<ReviewRun>((resolve) => {
+        reviewTimer = setTimeout(
+          () => resolve({ ...reviewAcc, status: "failed", error: "time_budget", elapsed_ms: Date.now() - reviewStartedMs }),
+          planReviewWait(elapsed()),
+        );
+      }),
+    ]);
+    if (reviewTimer !== undefined) clearTimeout(reviewTimer);
+    // The derivation needs the main result (the fresh signal, the gate's
+    // reason) and so cannot live inside the concurrent task. It must never
+    // throw out to the catch-all below: that path refunds a credit for an
+    // analysis that completed, before any row is written.
+    let positionReview: PositionReview;
+    try {
+      positionReview = finalizeReview(JSON.parse(JSON.stringify(reviewRun)) as ReviewRun, {
+        signal: normalizedAnalysis.signal,
+        proposed_signal: proposedSignal,
+        rejection: entryCheck.rejection ?? null,
+        confidence: normalizedAnalysis.confidence,
+        gate_rr: entryVerdict.riskReward,
+        at: pricedAtIso,
+      });
+    } catch (err) {
+      const detail = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 160);
+      console.error("Position review finalisation threw:", detail);
+      positionReview = {
+        version: 1,
+        status: "failed",
+        skipped_reason: null,
+        error: `finalise_threw: ${detail}`,
+        reference: null,
+        mechanical: null,
+        analyst: null,
+        verdict: null,
+        decided_by: null,
+        override_reason: null,
+        override_suppressed: null,
+        change: null,
+        at: pricedAtIso,
+        elapsed_ms: null,
+      };
+    }
+
     // What the model was looking at, kept with the plan so a post-mortem can
     // tell a misread market from a wrong call. The snapshots were rendered
     // before the prompt was built (see `entryContext` above) — the same
@@ -2219,6 +2468,10 @@ Deno.serve(async (req: Request) => {
     // History row for the win/loss tracker. Only BUY/SELL plans with prices
     // can be evaluated later; WAIT rows are stored for the record as skipped.
     stage = "save_history";
+    // Declared outside the block so the response can name the row: entry
+    // registration needs its id. Null when no row was written, which only an
+    // admin without a service key can reach.
+    let savedId: string | null = null;
     if (serviceRoleKey) {
       const trackable = normalizedAnalysis.signal !== "WAIT" &&
         normalizedAnalysis.entry_point_num !== null &&
@@ -2338,6 +2591,11 @@ Deno.serve(async (req: Request) => {
           model: typeof baseRequest.model === "string" ? baseRequest.model : null,
           priced_at: pricedAtIso,
           quote_at_signal: quoteAtSignal,
+          // What the plan the reader HOLDS (or the previous run's plan) looks
+          // like now, judged on its own thesis and levels — never derived
+          // from the signal above. Written on THIS row; the reference row is
+          // never rewritten (analyze/review.ts).
+          position_review: positionReview,
           outcome: trackable ? "pending" : "skipped",
       });
       // The row IS the plan. Nothing else persists it: unsaved, it never
@@ -2346,7 +2604,6 @@ Deno.serve(async (req: Request) => {
       // be a console.error under an ok:true response — the user was charged a
       // credit for an analysis that left no trace. Retry the write, and if it
       // still will not land, say so and hand the credit back.
-      let savedId: string | null = null;
       let saveError = "";
       for (let attempt = 1; attempt <= SAVE_ATTEMPTS && savedId === null; attempt++) {
         try {
@@ -2412,6 +2669,34 @@ Deno.serve(async (req: Request) => {
         } else await promptRes.text().catch(() => {});
       } catch (err) {
         console.error("Replay prompt insert threw:", err instanceof Error ? err.message : String(err));
+      }
+
+      // The review's request too, for the same reason and with the same
+      // handling: an answer that cannot be replayed has no measurable noise
+      // floor. Skipped when nothing was sent; a review that timed out after
+      // sending still records what it sent, so "timed out" and "never asked"
+      // stay distinguishable.
+      if (reviewRun.request !== null) {
+        try {
+          const reviewPromptRes = await fetch(`${supabaseUrl}/rest/v1/position_review_prompts?on_conflict=analysis_id`, {
+            method: "POST",
+            headers: { ...historyHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({
+              analysis_id: savedId,
+              system: reviewRun.request.system,
+              user: reviewRun.request.user,
+              model: reviewRun.request.model,
+              effort: reviewRun.request.effort,
+              max_tokens: reviewRun.request.max_tokens,
+              sent_at: reviewRun.request.sent_at,
+            }),
+          });
+          if (!reviewPromptRes.ok) {
+            console.error("Failed to save the review prompt:", reviewPromptRes.status, (await reviewPromptRes.text().catch(() => "")).slice(0, 200));
+          } else await reviewPromptRes.text().catch(() => {});
+        } catch (err) {
+          console.error("Review prompt insert threw:", err instanceof Error ? err.message : String(err));
+        }
       }
 
       // Never parentless: a shadow whose shadow_of is null cannot be folded
@@ -2481,6 +2766,13 @@ Deno.serve(async (req: Request) => {
         mode: resolvedMode,
         entry_check: entryCheck,
         rulebook_version: rulebookVersion,
+        // The row's id, so the reader can register that they entered on it.
+        // Null when no row was written.
+        analysis_id: savedId,
+        // The held-position review and the position it was made for. Null on
+        // the branch that wrote no row, where nothing was recorded.
+        position_review: savedId === null ? null : positionReview,
+        held_position: savedId === null ? null : (positionReview?.reference?.held ?? null),
         // The market was shut when this was asked for, so this is a read of
         // the last close rather than a plan. The client shows it as a result
         // with the plan removed, not as an error — and says when the analyst

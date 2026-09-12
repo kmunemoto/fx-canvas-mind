@@ -1,13 +1,18 @@
-import type { AnalysisRecord, Counterfactual, NumericCandle } from "@/lib/types";
+import type { AnalysisRecord, Counterfactual, NumericCandle, Position } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
 import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
+import { EntryRegistration } from "./EntryRegistration";
 
 interface Props {
   record: AnalysisRecord;
   // The refused plan tracked in the shadows, when this row is a refusal
   shadow?: AnalysisRecord | null;
+  // For the "I entered on this plan" button on a published trade the reader
+  // comes back to later. Absent when the caller cannot reload positions.
+  positions?: Position[];
+  onPositionsChanged?: () => void;
 }
 
 const Row = ({ label, value, className = "", mono = true }: { label: string; value: string; className?: string; mono?: boolean }) => (
@@ -24,7 +29,7 @@ const Heading = ({ children }: { children: string }) => (
 // "Plan vs. actual" for one history row: the levels the AI called, what price
 // then did, the bars it was judged on with the fill and settlement marked —
 // and, once the post-mortem has run, why it went the way it did
-const OutcomeDetail = ({ record, shadow = null }: Props) => {
+const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChanged }: Props) => {
   const { t, locale } = useLocale();
   const d = t.history.detail;
   const g = t.history.gate;
@@ -211,12 +216,33 @@ const OutcomeDetail = ({ record, shadow = null }: Props) => {
     }
   }
   const postTitle = record.outcome === "win" ? pm.titleWin : pm.title;
+  // A published trade with levels, not a preview, not already held: the row
+  // the reader may have entered on and never told the app about.
+  const registered = positions.some((p) => p.analysis_id === record.id && p.status === "open");
+  const canRegister = tracked && record.preview !== true && record.shadow !== true &&
+    record.entry_point !== null && record.stop_loss !== null && record.take_profit_1 !== null &&
+    onPositionsChanged !== undefined;
   const thin = post?.status === "done" && post.thin === true;
   const revised = post?.status === "done" && typeof post.revisions === "number" && post.revisions > 0;
 
   return (
     <div className="mt-2 rounded-lg border border-border/60 bg-background/40 p-3 space-y-3 text-xs" data-testid="outcome-detail">
       {record.thesis && <p className="text-muted-foreground">{record.thesis}</p>}
+      {canRegister && (
+        <div data-testid="row-registration">
+          {registered
+            ? <span className="px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-[10px] text-primary">{t.position.registeredChip}</span>
+            : (
+              <EntryRegistration
+                analysisId={record.id}
+                pair={record.pair}
+                defaultPrice={price(record.entry_point)}
+                onRegistered={() => onPositionsChanged?.()}
+                compact
+              />
+            )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
         <section>

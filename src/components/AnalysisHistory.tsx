@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AnalysisRecord, PerformanceGroup, PerformanceStats } from "@/lib/types";
+import type { AnalysisRecord, PerformanceGroup, PerformanceStats, Position } from "@/lib/types";
 import { ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -30,6 +30,10 @@ interface Props {
   // RPC outage falls back to what can be computed from the rows on screen,
   // and the scope label says which of the two is being shown.
   stats?: PerformanceStats | null;
+  // The reader's open positions and the reload to call after one is
+  // registered from a row: a plan entered on later than its own screen.
+  positions?: Position[];
+  onPositionsChanged?: () => void;
 }
 
 const signalColor = (s: string) =>
@@ -65,7 +69,7 @@ const parseBand = (key: string): [number, number | null] => {
 // into the plan-vs-actual evidence behind its badge and, once settled, the
 // post-mortem. Plans the entry gate refused are tracked in the shadows and
 // shown under the WAIT row they became, not as rows of their own.
-const AnalysisHistory = ({ records, stats = null }: Props) => {
+const AnalysisHistory = ({ records, stats = null, positions = [], onPositionsChanged }: Props) => {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown>("timeframe");
@@ -387,7 +391,7 @@ const AnalysisHistory = ({ records, stats = null }: Props) => {
               </button>
               {isOpen && (
                 <div id={panelId}>
-                  <OutcomeDetail record={r} shadow={shadows.get(r.id) ?? null} />
+                  <OutcomeDetail record={r} shadow={shadows.get(r.id) ?? null} positions={positions} onPositionsChanged={onPositionsChanged} />
                 </div>
               )}
             </div>

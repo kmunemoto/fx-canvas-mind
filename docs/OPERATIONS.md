@@ -150,6 +150,41 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 
 ---
 
+### 2.3 保有中の判断は新規判断と別に出す（positions / position_review、#89）
+
+- **WAIT は「今から新しく入るのは見送り」であって「決済しろ」ではない。** 画面に新規判断しか無かったので、売りを持っている人が WAIT を見て決済の指示と読んでいた。直すのは 3 点: エントリー登録・保有中専用カード・前回からの変更理由。
+- **元のプランは書き換えない。** 建玉は `public.positions`（プランの `analysis_id` を指すだけ）、評価は**今回の**分析行の `analyses.position_review`。参照した行に PATCH は無い。`position_review` が NULL なのは列より前の行だけで、参照が無い回は `status = skipped` の JSON が入る。
+- **WAIT から「継続」を導かない。** 保有プランの評価は analyze の中で**別のモデル呼び出し**（`analyze/review.ts`）が行い、新規判断の答えは渡さない。理由は 2 つ:
+  主プロンプトと `RESPONSE_SCHEMA` は再生ハーネスの資産で（`noise-floor/shape.ts` が凍結コピーを持ち、`analysis_prompts` の 90 行を逐語で再生する）、そこに項目を足すと測定済みの行が黙って無効になる。
+  それと主呼び出しは同一入力で 48 回中 10 回 SELL↔WAIT が割れる（NOISE_FLOOR_PREREGISTRATION.md §12.2）。その上に乗せた保有判定は同じノイズを継ぐ。
+- **参照は 2 つ、独立に引く。** `held` = このペアで開いている最新の建玉（足は問わない。建玉は建玉）。`previous` = 同じペア・同じ足の直近 72 時間以内の分析行（下見と shadow を除く）。無いときは理由を書く（`no_open_position` / `none_within_window` / `lookup_failed`）。両方無ければ `skipped`。
+  評価するのは `held` があればその根拠、無ければ `previous` の根拠（`thesis_of`）。**`change`（前回との差）は常に `previous` について**書く。
+- **`previous` が保有されているかは不明。** プロンプトは「建玉として評価しない・建玉があったかのように書かない・損益は仮定値」と明言し、スキーマに verdict の欄が無い（`REVIEW_SCHEMA_PREVIOUS`）。verdict が出るのは `held` だけ。
+- **計測した事実が分析側の意見に勝つ。** サーバーが先に計算するもの（`mechanical`、モデル呼び出しの前に確定し、時間切れでも残る）:
+  現在値、含み pips / R（`previous` では「プランの価格で入っていた場合」）、損切り・TP1 までの距離、**基準時刻より後の足**での損切り接触と TP1 到達（基準は建玉の `opened_at`、`previous` は `priced_at`。基準時刻を含む足は除外する — その足の値幅には建玉より前の動きが混ざる）。
+  接触は 3 状態: `{measured:true, touched:true, at, bar_closed}` / `{measured:true, touched:false, from, as_of, bars_examined}` / `{measured:false, reason}`。**「未計測」は「なし」ではない。** 系列が基準時刻に届かないときは「なし」を「未計測」に落とすが、見つかった接触は落とさない。
+  板は仲値（Twelve Data か GMO 仲値、`feed` に記録）。**仲値の損切り接触は撤退条件として扱う**（§3.2 の理由と同じ: 仲値で刈られる水準は Bid/Ask でも刈られる）。仲値で接触なし・TP1 到達は仲値上の事実で、判定システムの Bid/Ask 判定は `reference.outcome`（`price_basis` 込み）として**横に**出す。混ぜない。
+- **verdict の導出（`finalizeReview`）。** `held` のときだけ。
+  1. 仲値の損切り接触あり → `exit_condition_met`、`decided_by = server`、`override_reason = {source: mid_touch, at, feed, bar_closed}`。
+  2. 判定システムが `loss` で、決着（`closed_at`）が建玉以後 → 同上、`{source: tracker, basis: price_basis}`。決着が建玉より前なら `override_suppressed = settled_before_open`。決着後に登録した建玉（`registered_after_settlement`）は使わない。
+  3. 分析側の答えが矛盾している（hold×weakened / hold×broken / caution×broken）→ `undecidable`、`{source: analyst_incoherent}`。答えは `override_reason.analyst` に残す。
+  4. それ以外 → 分析側の verdict、`decided_by = analyst`。
+  5. 分析側の答えが無い（時間切れ・API・パース）→ **`verdict = null`**（記録なし）。`undecidable` は分析側の語で、システムの失敗に使わない。画面は「判定できない」と出しつつ理由（時間切れ等）を添える。
+  `analyst` はモデルの答えそのままで、書き換えない。verdict と並べて「誰が決めたか」を必ず 1 行出す。
+- **前回との差（`change`）は分析側の方向で分類する。** `signal` 列はゲートが WAIT に書き換えるので、各側で `{signal, proposed_signal, rejection, decided_by, published, analyst_direction}` を持つ。`decided_by` は `isRejected` / `isSelfDeclined`（§2.1）と同じ規則: 公開された売買は分析側、WAIT + 提案が売買 + 却下理由ありはサーバー、WAIT + 提案が WAIT は分析側、提案の記録が無ければ `unknown`。
+  `kind` は `same_call / reversed / trade_to_wait / wait_to_trade / unclear` で、**根拠の評価（thesis_status）は入れない**。根拠は別のチップ「AI の見立て: 維持／弱化／崩壊／不明」。「新規の条件が悪くなった」と「前の根拠が崩れた」はこの 2 つの別々の行で読み分ける: ゲートの計測（`current_gate_rr`、AI 自身の WAIT では null＝「計測なし」と表示）と、根拠チップ。
+- **時間予算。** 評価はプロンプト構築直後に開始し、主呼び出しと**並行**して走る。すべての fetch に `AbortSignal.timeout(reviewDeadlineMs(elapsed))`（= 壁時計 − `WRITE_RESERVE_MS` 10 s）を付けるので、どの出口でも書き込み予備を食えない。待つのは `check_open_plans` の後の 1 回だけで、`planReviewWait(elapsed)`（= 最大 `REVIEW_GRACE_MS` 15 s、締切まで）を上限とする。時間切れは `status = partial`（事実は残る）または `failed`。組み立て（`finalizeReview`）は try/catch で、handler の catch-all（返金経路）には届かない。
+  並行タスクは `stage` / `messages` / `baseRequest` に触らない（`applyRequestShape` が飛行中に `baseRequest` を書き換え、保存時に読み戻すため）。
+- **送ったものは残す。** `public.position_review_prompts`（service role 専用、`analysis_prompts` と同じ扱い）に system / user / model / effort / max_tokens / sent_at。送っていない回（skipped）は書かない。時間切れでも送っていれば書く。将来「同じ入力なら結果を再利用する」を作るときの鍵はここから決定的に導ける。
+- **登録（`register_position`）・決済（`close_position`）は SECURITY DEFINER の RPC だけ**（authenticated が呼べる definer 書き込みはこの 2 つが最初）。`search_path = ''`、`auth.uid()` が NULL なら明示的に拒む。登録の検査: 自分の行 / BUY か SELL / 下見・shadow でない / 損切りと TP1 がある / 約定価格が損切りと TP1 の間 / 約定時刻がプラン以後・未来でない。`p_opened_at` 省略時はサーバー時刻を記録し `opened_at_source = registered`（ブラウザの時計を既定値にすると進んだ時計が上限で、遅れた時計が下限で弾かれる）。二重登録は既存の行を返す（`already_open`）。決済は条件付き UPDATE 1 発。
+  `outcome` ではゲートしない（判定システムが決着させた後も持ち続けている人はいる）。代わりに `registered_after_settlement` を行に書き、上の 2 で使わない。
+- **画面。** 建玉があれば保有中カードを**新規判断の上**に出す（評価が失敗しても出す — カードが無いことが、この作業が消そうとした混乱そのもの）。固定文「下の新規判断（X）は『今から新しく入るか』の判断で、保有中のポジションを決済する指示ではありません」。新規判断が反対方向なら「別の判断です」の 1 行。`previous` があれば「前回からの変化」カードを hero の下に。損切り接触／判定 loss は最上段に赤で「既に達しています（基準）」。
+  一覧の建玉ストリップは直近 40 行から最新の判定を探し、無ければ「登録後の分析なし」（40 行が登録まで届くとき）か「直近 N 件に判定なし」。ページの空白を記録の空白として出さない（§7.3）。
+- **学習に必要なものは今から残る。** 各評価行に `position_id`・価格・含み R・接触・verdict・`decided_by`・分析側の答え、建玉に決済価格と時刻。途中の継続／撤退判断の損益を後から採点できる。採点そのものは今回の範囲外。
+- **同一入力の再利用（ぶれの削減）は今回やっていない。** `position_review_prompts` に鍵の材料が揃ったところまで。
+
+---
+
 ## 3. 判定（track-outcomes）の不変条件
 
 ### 3.1 何をもって勝ち負けとするか
@@ -693,6 +728,7 @@ update public.noise_runs set status = 'running', abort_reason = null
    noise-floor は返り値と `public.noise_runs.version`（run を作った呼び出しのバージョン）に出る。
 3. デプロイしたものは **読み戻して sha256 を比べる** まで「デプロイ済み」と言わない。
 4. データを直すマイグレーションは、それを解釈する関数を先にデプロイし、cron を止めてから流す（§4.3）。
+5. **スキーマを足すマイグレーション**（関数が書く列・読む表・呼ぶ RPC）は**関数より先に**流す。関数が無い列に INSERT すると `history_not_saved` の 503 と返金になる。1 本で「足す」と「直す」の両方をやるマイグレーションは 2 本に分ける。PostgREST から列が見えることを確認してから関数を出す（`GET /rest/v1/analyses?select=<列>&limit=0` が 200）。
 
 ### 6.1.1 バンドルは行で折る（--line-limit=200）
 
@@ -1248,3 +1284,4 @@ from public.rulebook where id = 1;
 - [ ] 関数を変えたらバージョン文字列を上げ、関数 → フロントの順にデプロイし、sha256 と本番の `version` を確認する。
 - [ ] `rulebook` を手で直すなら `version` / `updated_at` / `history` に触らず、cron を止め、新しい関数を先にデプロイしてから流す（§4.3）。
 - [ ] 秘密の文字列・使い捨てテストがコミットに入っていないか `git diff --cached` で見る。
+- [ ] `position_review` の形（`analyze/review.ts` の `PositionReview`）を変えるなら、フロントの鏡（`src/lib/types.ts`）・カード（`HeldPositionCard` / `ChangeSinceLastCard` / `ReviewFacts`）・i18n を同時に足す。verdict は `held` だけ、`change` は `previous` だけ、根拠の評価は `kind` に入れない（§2.3）。

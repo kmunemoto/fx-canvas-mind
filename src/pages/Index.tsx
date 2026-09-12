@@ -12,9 +12,11 @@ import SeparatedScores from "@/components/SeparatedScores";
 import ConfidenceCalibration from "@/components/ConfidenceCalibration";
 import ModelMix from "@/components/ModelMix";
 import SettingsDrawer from "@/components/SettingsDrawer";
+import OpenPositionsStrip from "@/components/OpenPositionsStrip";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
+import { normalizePositions } from "@/lib/positions";
 import {
   CURRENT_CONTRACT,
   readConfidenceCalibration,
@@ -38,6 +40,8 @@ import type {
   TimeInterval,
   LoopHealth as LoopHealthData,
   PerformanceStats,
+  Position,
+  PositionReview,
   RuleFit,
 } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
@@ -51,7 +55,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v52-2026-09-12T12:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v53-2026-09-12T16:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -67,6 +71,7 @@ export const HISTORY_COLUMNS = [
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
   "rulebook_version", "plan_contract", "wait_check", "wait_plan", "preview",
+  "position_review",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
@@ -250,6 +255,14 @@ const Index = () => {
   // The gate's verdict on this run. On a WAIT it is where the reason lives —
   // as a structure, not as the first line of the warnings.
   const [entryCheck, setEntryCheck] = useState<EntryCheck | null>(null);
+  // The held-position review this run made, and the row it was written on.
+  // The review is the other half of the screen: what the plan the reader
+  // HOLDS looks like now, kept apart from the new-entry call above it.
+  const [positionReview, setPositionReview] = useState<PositionReview | null>(null);
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
+  // The reader's own open positions (RLS). Registered through an RPC that
+  // validates the plan; read back here so the cards can show what is held.
+  const [positions, setPositions] = useState<Position[]>([]);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultMeta, setResultMeta] = useState<{ pair: string; interval: string }>({ pair: "USD/JPY", interval: "1h" });
   const [techData, setTechData] = useState<TechnicalData | null>(null);
@@ -331,6 +344,17 @@ const Index = () => {
       }
     } catch {
       // History is best-effort; the analysis flow must not depend on it
+    }
+    try {
+      const { data, error } = await supabase
+        .from("positions")
+        .select("*")
+        .eq("status", "open")
+        .order("opened_at", { ascending: false });
+      if (!error) setPositions(normalizePositions(data));
+    } catch {
+      // Positions are best-effort on the read side; the cards say when they
+      // could not see one rather than assuming none
     }
     try {
       // Through the function, not the table: the stored row also carries the
@@ -447,6 +471,8 @@ const Index = () => {
     setPreview(null);
     setRuleFit(null);
     setEntryCheck(null);
+    setPositionReview(null);
+    setAnalysisId(null);
     setLiveRate(null);
     // Clear the indicators too: on a failed run they would otherwise keep
     // showing the previous pair's numbers next to an error toast
@@ -551,6 +577,12 @@ const Index = () => {
           : null,
       );
       setEntryCheck(normalizeEntryCheck(payload?.entry_check));
+      setAnalysisId(typeof payload?.analysis_id === "string" ? payload.analysis_id : null);
+      setPositionReview(
+        payload?.position_review && typeof payload.position_review === "object"
+          ? (payload.position_review as PositionReview)
+          : null,
+      );
       setPreview(
         payload?.preview === true
           ? { opensAt: typeof payload?.market_opens_at === "string" ? payload.market_opens_at : null }
@@ -630,6 +662,8 @@ const Index = () => {
           onSubscribe={() => navigate("/pricing")}
         />
 
+        <OpenPositionsStrip positions={positions} history={history} onClosed={() => void loadHistory()} />
+
         {limitReached && (
           <div className="glass rounded-xl border border-destructive p-6 flex flex-col items-center text-center space-y-3">
             <p className="text-destructive font-semibold">{t.index.limitTitle}</p>
@@ -685,6 +719,10 @@ const Index = () => {
                   ruleFit={ruleFit}
                   rulebook={rulebook}
                   confidenceObserved={confidenceObserved}
+                  positionReview={positionReview}
+                  analysisId={analysisId}
+                  positions={positions}
+                  onPositionsChanged={() => void loadHistory()}
                 />
               </>
             ) : (
@@ -711,7 +749,7 @@ const Index = () => {
                 the question "whose win rate is this" is only answerable in the
                 same glance as the win rate itself. */}
             <ModelMix mix={modelMix} />
-            <AnalysisHistory records={history} stats={stats} />
+            <AnalysisHistory records={history} stats={stats} positions={positions} onPositionsChanged={() => void loadHistory()} />
           </div>
         </div>
       </main>

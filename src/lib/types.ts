@@ -724,6 +724,198 @@ export interface AnalysisRecord {
   // close with no entry, stop or targets. Kept in the history, counted nowhere.
   preview?: boolean;
   rulebook_version?: number | null;
+  // The held-position review made on this run (analyze/review.ts). Absent on
+  // rows written before it existed; null on rows written since by a function
+  // that recorded nothing.
+  position_review?: PositionReview | null;
+}
+
+// ---------------------------------------------------------------------------
+// Held positions and the review of them — mirrors of
+// supabase/functions/analyze/review.ts. Every field carries the meaning the
+// server gave it there; nothing here is derived on the client.
+// ---------------------------------------------------------------------------
+
+// Row shape of public.positions as read by the client (RLS: own rows).
+export interface Position {
+  id: string;
+  analysis_id: string;
+  pair: string;
+  interval: string;
+  direction: "BUY" | "SELL";
+  entry_price: number;
+  stop_loss: number;
+  take_profit_1: number;
+  take_profit_2: number | null;
+  take_profit_3: number | null;
+  opened_at: string;
+  // user = the reader typed the fill time; registered = the server clock at
+  // registration stood in for it. Null on a row read by an older client.
+  opened_at_source: "user" | "registered" | null;
+  registered_after_settlement: boolean;
+  status: "open" | "closed";
+  closed_at: string | null;
+  close_price: number | null;
+  close_reason: "manual" | "stop" | "target" | "other" | null;
+  created_at: string;
+}
+
+export type HeldVerdict = "hold" | "caution" | "exit_condition_met" | "undecidable";
+export type ThesisStatus = "intact" | "weakened" | "broken" | "unknown";
+export type ReviewDecidedBy = "server" | "analyst" | "unknown";
+export type ChangeKind = "same_call" | "reversed" | "trade_to_wait" | "wait_to_trade" | "unclear";
+
+export interface ReferenceOutcome {
+  outcome: string;
+  price_basis: "mid" | "quotes" | null;
+  closed_at: string | null;
+  outcome_price: number | null;
+}
+
+export interface HeldReference {
+  kind: "held";
+  position_id: string;
+  analysis_id: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  stop: number;
+  tp1: number;
+  tp2: number | null;
+  tp3: number | null;
+  opened_at: string;
+  opened_at_source: "user" | "registered" | null;
+  registered_after_settlement: boolean;
+  interval: string;
+  confidence: number | null;
+  thesis: string | null;
+  key_factors: string[];
+  feed: "twelve_data" | "gmo" | null;
+  outcome: ReferenceOutcome | null;
+  other_open_positions: { count: number; ids: string[] };
+}
+
+export interface PreviousReference {
+  kind: "previous";
+  analysis_id: string;
+  at: string;
+  priced_at: string | null;
+  interval: string;
+  signal: "BUY" | "SELL" | "WAIT";
+  proposed_signal: "BUY" | "SELL" | "WAIT" | null;
+  rejection: string | null;
+  confidence: number | null;
+  decided_by: ReviewDecidedBy;
+  analyst_direction: "BUY" | "SELL" | "WAIT" | null;
+  levels: { direction: "BUY" | "SELL"; entry: number; stop: number; tp1: number; published: boolean } | null;
+  thesis: string | null;
+  key_factors: string[];
+  feed: "twelve_data" | "gmo" | null;
+  outcome: ReferenceOutcome | null;
+}
+
+export interface ReviewReferenceSet {
+  held: HeldReference | null;
+  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | null;
+  previous: PreviousReference | null;
+  previous_reason: "none_within_window" | "lookup_failed" | null;
+  thesis_of: "held" | "previous" | null;
+}
+
+// One level, three states. `measured: false` is never rendered as "no touch".
+export type LevelTouch =
+  | { measured: true; touched: true; at: string; bar_closed: boolean }
+  | { measured: true; touched: false; from: string; as_of: string; bars_examined: number }
+  | { measured: false; reason: "no_anchor" | "series_starts_after_anchor" | "no_bars_since_anchor" };
+
+export interface ReviewMechanical {
+  subject: "held" | "previous";
+  basis: "mid";
+  feed: "twelve_data" | "gmo";
+  feed_delta_atr: number | null;
+  price: number;
+  priced_at: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  stop: number;
+  tp1: number;
+  risk: number | null;
+  // Signed, favourable positive. Hypothetical when subject is "previous".
+  move_pips: number | null;
+  move_r: number | null;
+  to_stop_pips: number | null;
+  to_tp1_pips: number | null;
+  anchor_at: string | null;
+  anchor_source: "opened_at" | "priced_at" | null;
+  covers_anchor: boolean | null;
+  bars_examined: number;
+  as_of: string | null;
+  stop_touch: LevelTouch;
+  tp1_touch: LevelTouch;
+}
+
+export interface ReviewAnalyst {
+  status: "ok" | "failed";
+  verdict: HeldVerdict | null;
+  thesis_status: ThesisStatus | null;
+  reasons: string[];
+  what_changed: string[];
+  watch: string | null;
+  model: string | null;
+  effort: string | null;
+  max_tokens: number | null;
+  error: string | null;
+  elapsed_ms: number | null;
+}
+
+export interface ReviewOverride {
+  source: "mid_touch" | "tracker" | "analyst_incoherent";
+  at: string | null;
+  basis: "mid" | "quotes" | null;
+  feed: "twelve_data" | "gmo" | null;
+  bar_closed: boolean | null;
+  before_open: boolean | null;
+  analyst: { verdict: HeldVerdict | null; thesis_status: ThesisStatus | null } | null;
+}
+
+export interface ChangeSide {
+  analysis_id: string | null;
+  at: string;
+  signal: "BUY" | "SELL" | "WAIT";
+  proposed_signal: "BUY" | "SELL" | "WAIT" | null;
+  rejection: string | null;
+  confidence: number | null;
+  decided_by: ReviewDecidedBy;
+  published: boolean;
+  analyst_direction: "BUY" | "SELL" | "WAIT" | null;
+}
+
+export interface ReviewChange {
+  previous: ChangeSide;
+  current: ChangeSide;
+  kind: ChangeKind;
+  thesis_of: "held" | "previous" | null;
+  thesis_status: ThesisStatus | null;
+  current_gate_rr: number | null;
+}
+
+// What analyze wrote about the plan the reader holds (or the previous run's
+// plan) on THIS row. `verdict` is the server's derivation and `analyst` is
+// the model's answer as written; the two are kept apart on purpose.
+export interface PositionReview {
+  version: 1;
+  status: "ok" | "partial" | "skipped" | "failed";
+  skipped_reason: "no_reference" | null;
+  error: string | null;
+  reference: ReviewReferenceSet | null;
+  mechanical: ReviewMechanical | null;
+  analyst: ReviewAnalyst | null;
+  verdict: HeldVerdict | null;
+  decided_by: "server" | "analyst" | null;
+  override_reason: ReviewOverride | null;
+  override_suppressed: { reason: "settled_before_open" | "registered_after_settlement"; closed_at: string | null } | null;
+  change: ReviewChange | null;
+  at: string;
+  elapsed_ms: number | null;
 }
 
 export interface HistoryEntry {
