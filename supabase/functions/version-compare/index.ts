@@ -153,7 +153,7 @@ import {
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v5-2026-09-12T07:30:00Z";
+const FUNCTION_VERSION = "version-compare-v6-2026-09-12T10:30:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,
@@ -398,6 +398,12 @@ interface PopulationRow {
   system: string;
   user: string;
   model: string;
+  // The request shape this row was SENT at, from analysis_prompts. Null on
+  // every row written before migration 20260912090000; shape.ts then falls back
+  // to the pre-switch constants, which is what those rows were sent at. Carried
+  // for the same reason `model` is — see ReplayInput in noise-floor/shape.ts.
+  effort: string | null;
+  maxTokens: number | null;
   mode: string;
   preview: boolean;
   createdAt: string;
@@ -851,7 +857,7 @@ Deno.serve(async (req: Request) => {
         const rows = await readRowsOrNull(
           `analysis_prompts?analysis_id=in.(${chunk.join(",")})` +
             `&created_at=lte.${encodeURIComponent(cutIso)}` +
-            `&select=analysis_id,system,user,model,created_at`,
+            `&select=analysis_id,system,user,model,effort,max_tokens,created_at`,
         );
         if (rows === null) {
           errors.push("read_failed:analysis_prompts");
@@ -903,6 +909,13 @@ Deno.serve(async (req: Request) => {
           system,
           user,
           model,
+          // Absent is a legitimate value here, unlike system/user/model above:
+          // every row written before migration 20260912090000 has no recorded
+          // shape, and refusing those would drop the entire existing corpus.
+          // shape.ts turns a null into the pre-switch constants, which is what
+          // those rows were in fact sent at.
+          effort: strOrNull(prompt.effort),
+          maxTokens: intOrNull(prompt.max_tokens),
           mode: typeof analysis.mode === "string" ? analysis.mode : "",
           preview: analysis.preview === true,
           createdAt: typeof prompt.created_at === "string" ? prompt.created_at : "",
@@ -1086,6 +1099,8 @@ Deno.serve(async (req: Request) => {
           model: row.model,
           system: spliced.system,
           user: row.user,
+          effort: row.effort,
+          maxTokens: row.maxTokens,
         });
       } catch (err) {
         const message = slice200(err);

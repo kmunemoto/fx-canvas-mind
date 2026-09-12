@@ -65,7 +65,7 @@ import {
   type ClassifiedRow,
 } from "./prompt-surgery.ts";
 
-const FUNCTION_VERSION = "noise-floor-v2-2026-09-09T20:00:00Z";
+const FUNCTION_VERSION = "noise-floor-v3-2026-09-12T10:00:00Z";
 
 // The platform kills the worker at 150 s with no chance to respond, which is
 // the same limit analyze/budget.ts is written against. Stop at 130 s and keep
@@ -362,6 +362,12 @@ interface PopulationRow {
   system: string;
   user: string;
   model: string;
+  // The request shape this row was SENT at, from analysis_prompts. Null on
+  // every row written before migration 20260912090000; shape.ts then falls back
+  // to the pre-switch constants, which is what those rows were sent at. Carried
+  // for the same reason `model` is — see ReplayInput in shape.ts.
+  effort: string | null;
+  maxTokens: number | null;
   mode: string;
   preview: boolean;
   createdAt: string;
@@ -731,7 +737,7 @@ Deno.serve(async (req: Request) => {
           // characters, measured, and this read happens once per hop.
           `analysis_prompts?analysis_id=in.(${chunk.join(",")})` +
             `&created_at=lte.${encodeURIComponent(frozenAtIso)}` +
-            `&select=analysis_id,system,user,model,created_at`,
+            `&select=analysis_id,system,user,model,effort,max_tokens,created_at`,
         );
         if (rows === null) {
           errors.push("read_failed:analysis_prompts");
@@ -792,6 +798,11 @@ Deno.serve(async (req: Request) => {
           system,
           user,
           model,
+          // Absent is legitimate here, unlike system/user/model above: every
+          // row written before migration 20260912090000 has no recorded shape,
+          // and refusing those would drop the whole existing corpus.
+          effort: typeof prompt.effort === "string" && prompt.effort.length > 0 ? prompt.effort : null,
+          maxTokens: intOrNull(prompt.max_tokens),
           mode: typeof analysis.mode === "string" ? analysis.mode : "",
           preview: analysis.preview === true,
           createdAt: typeof prompt.created_at === "string" ? prompt.created_at : "",
@@ -1313,7 +1324,16 @@ Deno.serve(async (req: Request) => {
       let shape: string;
       try {
         shape = replayShape({ arm: rowArm, rowClass });
-        body = buildReplayRequest({ arm: rowArm, rowClass, model: row.model, system: row.system, user: userToSend });
+        // `effort`/`maxTokens` are the shape this row was SENT at. Null before
+        // migration 20260912090000, and shape.ts then uses the pre-switch
+        // constants — which is what those rows were sent at.
+        //
+        // KEPT ON ONE LINE. The privacy guard in src/test/noise-floor-harness.ts
+        // greps this file for `system: row.system,` at end of line, to catch the
+        // prompt being written to a row instead of its digest. Splitting this
+        // call across lines trips it on a request argument, which is a legitimate
+        // use — so the call stays compact rather than the guard being loosened.
+        body = buildReplayRequest({ arm: rowArm, rowClass, model: row.model, system: row.system, user: userToSend, effort: row.effort, maxTokens: row.maxTokens });
       } catch (err) {
         const message = slice200(err);
         return message.startsWith(SHAPE_REFUSAL_PREFIX) ? message : `shape_error:${message}`;
