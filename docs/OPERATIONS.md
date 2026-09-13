@@ -778,6 +778,11 @@ update public.noise_runs set status = 'running', abort_reason = null
 - `--line-limit=200` を付けると **402 行・最長 447 文字**になる（サイズ増は 0.5%）。折れないのは長い文字列リテラル（日本語のプロンプト）だけ。
 - 4 つのバンドルすべてに付ける。`bundle:analyze` / `bundle:track-outcomes` / `bundle:postmortem` / `bundle:noise-floor`。
 - **サイズは監視項目**。analyze は 78.8KB、postmortem は 82.0KB（2026-09-06）、noise-floor は 51.5KB・263 行・最長 372 文字（2026-09-09 実測、安全装置の修理後）。これ以上育つなら、インライン以外の経路（CLI にはアクセストークンが要る）を用意する必要がある。
+- **2026-09-13、その限界に当たった。** analyze のバンドルが **116.2KB・621 行**（v53 は 110.3KB で通っていた）になり、デプロイのエージェントが「この量は 1 回の呼び出しで出し切れない」と実際に止まった。
+  内訳（esbuild の metafile 実測）: index.ts 47.0KB / review.ts 22.8KB / locale.ts 10.7KB / structure.ts 7.5KB / indicators.ts 5.8KB / rules.ts 4.6KB / entry.ts 3.8KB / 他 14.0KB。**reuse.ts は 2.1KB しかない**——増えたのは #89 の保有中評価と、その周りの本体である。
+  ソースを直接デプロイする案は却下: コメント込みで 430KB あり、バンドルより 3.7 倍悪い。ミニファイ済みバンドルが最小形である。
+  **次に触る人へ**: 削れる余地はもう無いので、増やすなら先に経路を用意すること。選択肢は (a) Supabase のアクセストークンを用意して CLI か Management API で送る、(b) 機能を別のエッジ関数に割る（ただし analyze の壁時計予算に HTTP のホップを足すことになるので、§8.5 の余裕と相談）。
+  なお `--line-limit=200` は **行末バックスラッシュで文字列を継続する行を 119 本**作る。転記の事故はここで起きるので、手写しするなら最優先で確認する箇所である。
   `.claude/workflows/deploy-edge-verified.js` の説明文は「約 93KB・約 432 行」を前提に書いてあるが、これは analyze / postmortem の話であって noise-floor はその半分強である。ワークフローは切り出す前に `wc -l` を取るので動作は正しい。数字のほうが 4 つのスラッグ全部には当てはまらない、というだけ。
 
 ### 6.2 手順
