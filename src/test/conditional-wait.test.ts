@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  conditionalWindowMs,
   MAX_EXPIRES_BARS,
   MAX_TRIGGER_ATR,
+  MIN_EXPIRES_BARS,
   MIN_TRIGGER_ATR,
   readConditionalWait,
   scoreConditionalWait,
   type ConditionalWait,
   type ScorableBar,
 } from "../../supabase/functions/_shared/conditional-wait.ts";
+import { MIN_STOP_ATR } from "../../supabase/functions/analyze/entry.ts";
+import { marketHorizonEnd } from "../../supabase/functions/track-outcomes/waits.ts";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = Date.parse("2026-09-01T00:00:00.000Z");
@@ -41,6 +45,7 @@ describe("readConditionalWait — what gets kept", () => {
     expect(got.value.trigger_side).toBe("above");
     expect(got.value.then_signal).toBe("BUY");
     expect(got.value.expires_bars).toBe(6);
+    expect(got.value.expires_clamped).toBe(false);
     expect(got.value.price_at_call).toBe(150);
     // 1.2 / 0.5
     expect(got.value.distance_atr).toBe(2.4);
@@ -53,13 +58,38 @@ describe("readConditionalWait — what gets kept", () => {
     expect(got.value.expires_bars).toBe(MAX_EXPIRES_BARS);
   });
 
-  it("keeps at least one bar when the analyst writes zero or a fraction", () => {
-    for (const bars of [0, 0.4, -3]) {
+  it("refuses to store a window too short to be wrong in", () => {
+    // One entry bar leaves no room after the touch for the direction to be
+    // judged, so the only reachable verdicts are not_triggered and
+    // triggered_unresolved. A claim that cannot be wrong is not a prediction.
+    for (const bars of [0, 1, 0.4, -3]) {
       const got = read({ expires_bars: bars });
       expect(got.ok).toBe(true);
       if (!got.ok) return;
-      expect(got.value.expires_bars).toBeGreaterThanOrEqual(1);
+      expect(got.value.expires_bars).toBe(MIN_EXPIRES_BARS);
+      expect(got.value.expires_clamped).toBe(true);
     }
+  });
+
+  it("says so when it clamped, and says so when it did not", () => {
+    const kept = read({ expires_bars: 6 });
+    expect(kept.ok && kept.value.expires_clamped).toBe(false);
+    const cut = read({ expires_bars: 400 });
+    expect(cut.ok && cut.value.expires_clamped).toBe(true);
+  });
+
+  it("records whether the claim merely named the prevailing trend", () => {
+    // Without this, triggered_right is a coin weighted by the window's drift
+    // and nothing in the row lets a reader subtract that.
+    const withTrend = read({ then_signal: "BUY" }, { regimeDirection: "Up" });
+    expect(withTrend.ok && withTrend.value.trend_at_call).toBe("with_trend");
+    const against = read({ then_signal: "BUY" }, { regimeDirection: "Down" });
+    expect(against.ok && against.value.trend_at_call).toBe("against_trend");
+    // No regime is its own answer, never folded into either side.
+    const none = read({}, { regimeDirection: null });
+    expect(none.ok && none.value.trend_at_call).toBe("unknown");
+    const absent = read();
+    expect(absent.ok && absent.value.trend_at_call).toBe("unknown");
   });
 
   it("caps the thesis instead of storing an essay", () => {
@@ -117,7 +147,10 @@ describe("readConditionalWait — what gets refused, by name", () => {
     // 0.1 / 0.5 = 0.2 ATR, under the floor
     const got = read({ trigger_price: 150.1 });
     expect(got).toEqual({ ok: false, rejection: "too_close" });
-    expect(MIN_TRIGGER_ATR).toBe(0.25);
+    // 0.3 ATR too: inside the distance the gate itself calls noise.
+    expect(read({ trigger_price: 150.15 })).toEqual({ ok: false, rejection: "too_close" });
+    // The floor IS the gate's stop floor, not a copy of its current value.
+    expect(MIN_TRIGGER_ATR).toBe(MIN_STOP_ATR);
   });
 
   it("too_far, where 'it never came' would mean nothing", () => {
@@ -128,7 +161,7 @@ describe("readConditionalWait — what gets refused, by name", () => {
   });
 
   it("accepts the boundaries themselves — the bounds are inclusive", () => {
-    expect(read({ trigger_price: 150.125 }).ok).toBe(true); // exactly 0.25 ATR
+    expect(read({ trigger_price: 150.2 }).ok).toBe(true); // exactly 0.4 ATR
     expect(read({ trigger_price: 151.5 }).ok).toBe(true); // exactly 3.0 ATR
   });
 });
@@ -141,12 +174,18 @@ const plan = (over: Partial<ConditionalWait> = {}): ConditionalWait => ({
   trigger_side: "above",
   then_signal: "BUY",
   expires_bars: 4,
+  expires_clamped: false,
   thesis_if_triggered: "上抜け継続",
   price_at_call: 150.0,
   atr_at_call: 0.5,
   distance_atr: 2.0,
+  trend_at_call: "unknown",
   ...over,
 });
+
+// Exactly what track-outcomes computes for a 1h plan: the window in entry
+// bars turned into milliseconds, then walked through MARKET time.
+const deadlineFor = (p: ConditionalWait) => marketHorizonEnd(T0, conditionalWindowMs(p, HOUR));
 
 // 15-minute bars, which is what a 1h plan is actually scored on
 // (track-outcomes/evaluate.ts EVAL_INTERVAL).
@@ -173,18 +212,18 @@ describe("scoreConditionalWait — the window is a duration, not a bar count", (
       if (i > 9) return { high: 151.8, low: 151.2, close: 151.6 };
       return {};
     });
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.verdict).toBe("triggered_right");
     expect(got.bars_to_trigger).toBe(10);
     // 4 hours of 15-minute bars
     expect(got.bars_examined).toBe(16);
-    expect(got.window_ends_at).toBe(new Date(T0 + 4 * HOUR).toISOString());
+    expect(got.window_ends_at).toBe(new Date(deadlineFor(plan())).toISOString());
   });
 
   it("stops at the deadline — a touch after it is not a trigger", () => {
     // 17th bar = 4h15m in, one bar past the window.
     const bars = bars15(24, (i) => (i === 16 ? { high: 152, low: 150, close: 151.9 } : {}));
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.verdict).toBe("not_triggered");
     expect(got.bars_examined).toBe(16);
   });
@@ -197,8 +236,8 @@ describe("scoreConditionalWait — the window is a duration, not a bar count", (
     const got = scoreConditionalWait({
       plan: plan(),
       barsAfterCall: [...before, ...bars15(16, () => ({}))],
-      entryBarMs: HOUR,
       signalMs: T0,
+      deadlineMs: deadlineFor(plan()),
     });
     expect(got.verdict).toBe("not_triggered");
     expect(got.bars_examined).toBe(16);
@@ -210,8 +249,8 @@ describe("scoreConditionalWait — the verdicts", () => {
     const got = scoreConditionalWait({
       plan: plan(),
       barsAfterCall: bars15(16, () => ({})),
-      entryBarMs: HOUR,
       signalMs: T0,
+      deadlineMs: deadlineFor(plan()),
     });
     expect(got.verdict).toBe("not_triggered");
     expect(got.triggered_at).toBeNull();
@@ -219,10 +258,10 @@ describe("scoreConditionalWait — the verdicts", () => {
   });
 
   it("unmeasurable when no bar falls inside the window at all", () => {
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: [], entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: [], signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.verdict).toBe("unmeasurable");
     expect(got.bars_examined).toBe(0);
-    expect(got.window_ends_at).toBe(new Date(T0 + 4 * HOUR).toISOString());
+    expect(got.window_ends_at).toBe(new Date(deadlineFor(plan())).toISOString());
   });
 
   it("triggered_wrong when the named direction lost ground after the touch", () => {
@@ -231,7 +270,7 @@ describe("scoreConditionalWait — the verdicts", () => {
       if (i > 1) return { high: 150.6, low: 149.5, close: 150.0 };
       return {};
     });
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.verdict).toBe("triggered_wrong");
     expect(got.bars_to_trigger).toBe(2);
     // (150.0 - 151.0) / 0.5
@@ -244,7 +283,7 @@ describe("scoreConditionalWait — the verdicts", () => {
       if (i === 0) return { high: 150, low: 148.9, close: 149 };
       return { high: 148.6, low: 148.0, close: 148.5 };
     });
-    const got = scoreConditionalWait({ plan: p, barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: p, barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(p) });
     expect(got.verdict).toBe("triggered_right");
     // (149.0 - 148.5) / 0.5
     expect(got.move_after_atr).toBe(1);
@@ -252,7 +291,7 @@ describe("scoreConditionalWait — the verdicts", () => {
 
   it("triggered_unresolved when the touch is the last bar in the window", () => {
     const bars = bars15(16, (i) => (i === 15 ? { high: 151.4, low: 150, close: 151.3 } : {}));
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.verdict).toBe("triggered_unresolved");
     expect(got.bars_to_trigger).toBe(16);
     expect(got.move_after_atr).toBeNull();
@@ -261,7 +300,7 @@ describe("scoreConditionalWait — the verdicts", () => {
   it("the trigger is a touch, not a close", () => {
     // High reaches the level, close never does.
     const bars = bars15(16, (i) => (i === 3 ? { high: 151.05, low: 150, close: 150.2 } : {}));
-    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, entryBarMs: HOUR, signalMs: T0 });
+    const got = scoreConditionalWait({ plan: plan(), barsAfterCall: bars, signalMs: T0, deadlineMs: deadlineFor(plan()) });
     expect(got.triggered_at).toBe(bars[3].datetime);
   });
 
@@ -270,10 +309,55 @@ describe("scoreConditionalWait — the verdicts", () => {
     const got = scoreConditionalWait({
       plan: plan({ atr_at_call: null }),
       barsAfterCall: bars,
-      entryBarMs: HOUR,
       signalMs: T0,
+      deadlineMs: deadlineFor(plan({ atr_at_call: null })),
     });
     expect(got.verdict).toBe("triggered_right");
     expect(got.move_after_atr).toBeNull();
+  });
+});
+
+describe("the deadline is market time — the trap waits.ts already paid for", () => {
+  // track-outcomes/waits.ts:203 records what this cost the WAIT scorer: "a WAIT
+  // issued on a Friday spends most of its 48-hour window on a shut market...
+  // and the call is graded 'correct' on no evidence at all." A conditional
+  // claim fails the same way pointing the other direction — it is graded
+  // `not_triggered`, which is terminal, because the pending index only selects
+  // rows with no outcome yet. Nothing comes back to correct it.
+  const FRI = Date.parse("2026-09-11T20:00:00.000Z"); // Friday, two hours before the close
+
+  it("a Friday claim gets the hours it asked for, not the hours the clock ran", () => {
+    const p = plan({ expires_bars: 24 });
+    const wallClock = FRI + conditionalWindowMs(p, HOUR);
+    const marketTime = marketHorizonEnd(FRI, conditionalWindowMs(p, HOUR));
+    // Wall clock would end Saturday, with ~2 open hours of the 24 inside it.
+    expect(new Date(wallClock).toISOString()).toBe("2026-09-12T20:00:00.000Z");
+    // Market time walks past the weekend to bank all 24.
+    expect(marketTime).toBeGreaterThan(wallClock);
+    expect(new Date(marketTime).getUTCDay()).toBe(1); // Monday
+  });
+
+  it("and a bar the market was shut for is not the market reaching a level", () => {
+    // The caller drops closed-market bars; the module is handed what survived.
+    // Scored over an open window, the same bars trigger.
+    const p = plan({ expires_bars: 24 });
+    const deadline = marketHorizonEnd(FRI, conditionalWindowMs(p, HOUR));
+    const touch: ScorableBar[] = [
+      { datetime: new Date(FRI + 60 * 60 * 1000).toISOString(), high: 151.4, low: 150, close: 151.3 },
+      { datetime: new Date(FRI + 90 * 60 * 1000).toISOString(), high: 151.9, low: 151.2, close: 151.8 },
+    ];
+    const got = scoreConditionalWait({ plan: p, barsAfterCall: touch, signalMs: FRI, deadlineMs: deadline });
+    expect(got.verdict).toBe("triggered_right");
+  });
+
+  it("says unmeasurable rather than throwing when handed a deadline that is not a number", () => {
+    const got = scoreConditionalWait({
+      plan: plan(),
+      barsAfterCall: bars15(16, () => ({})),
+      signalMs: T0,
+      deadlineMs: Number.NaN,
+    });
+    expect(got.verdict).toBe("unmeasurable");
+    expect(got.window_ends_at).toBeNull();
   });
 });

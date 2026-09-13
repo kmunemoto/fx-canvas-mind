@@ -15,6 +15,7 @@
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import {
   parseCandleTime,
+  toIso,
   ENTRY_WINDOW_MS,
   EVAL_INTERVAL,
   EVAL_OUTPUTSIZE,
@@ -27,9 +28,10 @@ import {
   type FineFetcher,
   type OpenRow,
 } from "./evaluate.ts";
-import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
-import { judgeWait, type WaitBar, type WaitPlan } from "./waits.ts";
+import { fetchQuotes, fetchQuoteWindow, isMarketClosed, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
+import { judgeWait, marketHorizonEnd, type WaitBar, type WaitPlan } from "./waits.ts";
 import {
+  conditionalWindowMs,
   scoreConditionalWait,
   type ConditionalWait,
   type ScorableBar,
@@ -299,7 +301,7 @@ Deno.serve(async (req: Request) => {
     const cachedSeries = async (symbol: string, interval: string): Promise<Candle[] | null> => {
       const key = `${symbol}|${interval}`;
       const hit = seriesCache.get(key);
-      if (hit) return hit;
+      if (hit !== undefined) return hit;
       const fetched = await fetchSeries({
         symbol,
         interval,
@@ -308,7 +310,12 @@ Deno.serve(async (req: Request) => {
       // A null is NOT cached: it means the budget ran out or the request
       // failed, and remembering that as "this pair has no data" would turn one
       // bad request into a whole run's worth of silent skips.
-      if (fetched && fetched.length > 0) seriesCache.set(key, fetched);
+      //
+      // An EMPTY array is cached, and the difference is the point: null is "we
+      // did not find out", an empty series is a provider that answered. Not
+      // caching the answer would make every later pass re-ask — and re-charge
+      // the budget for — a question already answered this run.
+      if (fetched) seriesCache.set(key, fetched);
       return fetched;
     };
 
@@ -460,11 +467,13 @@ Deno.serve(async (req: Request) => {
       groupCount++;
 
       const [pair, evalInterval] = key.split("|");
-      const candles = await fetchSeries({
-        symbol: pair,
-        interval: evalInterval,
-        outputsize: String(EVAL_OUTPUTSIZE[evalInterval] ?? 1500),
-      });
+      // Through the cache, like the two passes below. This request is
+      // byte-identical to theirs — same symbol, same interval, same outputsize
+      // — and it runs FIRST, so leaving it outside the cache meant the pass
+      // that actually holds the bars was the one pass not sharing them: an open
+      // USD/JPY 1h trade plus a pending USD/JPY WAIT spent two of the five
+      // requests on the same series.
+      const candles = await cachedSeries(pair, evalInterval);
 
       let refusal: string | null = null;
       if (!candles || candles.length === 0) {
@@ -626,7 +635,21 @@ Deno.serve(async (req: Request) => {
     // computed from the row, in the row's own entry timeframe, and a row whose
     // window is still open is simply left for a later sweep.
     let conditionalsChecked = 0;
-    let conditionalsTriggered = 0;
+    // Split rather than one "triggered" count. Folding `triggered_unresolved`
+    // in with right and wrong would make the only number this function emits
+    // about the arm a pure function of distance, expiry and drift — the
+    // trigger RATE — reported under a name that reads like accuracy.
+    let conditionalsRight = 0;
+    let conditionalsWrong = 0;
+    let conditionalsNotTriggered = 0;
+    if (scope.kind !== "sweep") {
+      // nothing to say: the conditional pass is sweep-only
+    } else if (requests >= MAX_REQUESTS) {
+      // Said out loud. `conditionals_checked: 0` otherwise means either
+      // "nothing was due" or "never looked", and the two are not the same
+      // report. This is the standard the validator is already held to.
+      errors.push("conditionals skipped (request budget spent before the pass)");
+    }
     if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
       const condRes = await rest(
         "analyses?conditional_wait=not.is.null&conditional_outcome=is.null" +
@@ -655,8 +678,14 @@ Deno.serve(async (req: Request) => {
         if (!entryBarMs) continue;
         const expires = Number(plan.expires_bars);
         if (!Number.isFinite(expires) || expires <= 0) continue;
+        // MARKET time, not wall clock — the same walk the WAIT scorer uses, so
+        // a Friday claim is not handed a window it spends on a shut market and
+        // then graded `not_triggered` for. That verdict is terminal (the
+        // pending index only selects rows with no outcome), so getting the
+        // deadline wrong here is not something a later sweep repairs.
+        const deadlineMs = marketHorizonEnd(signalMs, conditionalWindowMs(plan, entryBarMs));
         // Still running. Not an error and not a verdict — just not yet.
-        if (signalMs + expires * entryBarMs > nowMs) continue;
+        if (deadlineMs > nowMs) continue;
 
         if (requests >= MAX_REQUESTS && !seriesCache.has(`${pair}|${EVAL_INTERVAL[interval] ?? interval}`)) {
           errors.push(`${pair}: conditionals deferred (request budget)`);
@@ -674,18 +703,41 @@ Deno.serve(async (req: Request) => {
         // at this call site rather than depending on a guarantee made two
         // modules away.
         const bars: ScorableBar[] = candles
-          .filter((c) => Number.isFinite(parseCandleTime(c.datetime)))
-          .map((c) => ({ datetime: c.datetime, high: c.high, low: c.low, close: c.close }))
+          .filter((c) => {
+            const t = parseCandleTime(c.datetime);
+            // Closed-market bars dropped here, for the reason
+            // scoreConditionalWait states: a flat weekend bar that grazes the
+            // level is not the market reaching it.
+            return Number.isFinite(t) && !isMarketClosed(t);
+          })
+          // toIso(parseCandleTime(...)), not the raw column. Twelve Data sends
+          // "YYYY-MM-DD HH:mm:ss" with no zone marker, and scoreConditionalWait
+          // reads it with Date.parse — which resolves a zone-less string in the
+          // RUNTIME's local zone. Deno Deploy is UTC today, so this is one
+          // environment change away from re-dating every window boundary and
+          // every trigger test by the offset. evaluate.ts has carried
+          // parseCandleTime for exactly this since the first tracker.
+          //
+          // It also makes triggered_at and window_ends_at the same kind of
+          // stamp; they sit next to each other in the row.
+          .map((c) => ({
+            datetime: toIso(parseCandleTime(c.datetime)),
+            high: c.high,
+            low: c.low,
+            close: c.close,
+          }))
           .sort((a, b) => parseCandleTime(a.datetime) - parseCandleTime(b.datetime));
 
-        const outcome = scoreConditionalWait({ plan, barsAfterCall: bars, entryBarMs, signalMs });
+        const outcome = scoreConditionalWait({ plan, barsAfterCall: bars, signalMs, deadlineMs });
         const n = await patchRows(
           `analyses?id=eq.${encodeURIComponent(String(row.id))}&conditional_outcome=is.null`,
           { conditional_outcome: outcome },
         );
         if (n > 0) {
           conditionalsChecked++;
-          if (outcome.verdict.startsWith("triggered")) conditionalsTriggered++;
+          if (outcome.verdict === "triggered_right") conditionalsRight++;
+          else if (outcome.verdict === "triggered_wrong") conditionalsWrong++;
+          else if (outcome.verdict === "not_triggered") conditionalsNotTriggered++;
         }
       }
     }
@@ -709,7 +761,12 @@ Deno.serve(async (req: Request) => {
       waits_checked: waitsChecked,
       waits_missed: waitsMissed,
       conditionals_checked: conditionalsChecked,
-      conditionals_triggered: conditionalsTriggered,
+      conditionals_right: conditionalsRight,
+      conditionals_wrong: conditionalsWrong,
+      // In the report on purpose. A claim whose level never came is the
+      // verdict this arm exists to be able to say, and a count that hid it
+      // would put it back where it started: nowhere.
+      conditionals_not_triggered: conditionalsNotTriggered,
       errors,
       version: TRACKER_VERSION,
     };

@@ -51,7 +51,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v25-2026-09-12T11:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v26-2026-09-13T13:50:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -500,6 +500,27 @@ Deno.serve(async (req: Request) => {
     const rowFilter = options.ids.length > 0
       ? `id=in.(${options.ids.map(encodeURIComponent).join(",")})`
       : retryFilter;
+    // THE LEARNING LOOP IS CONTROL-ONLY, AND THIS IS THE ONE DIRECTION THAT
+    // CANNOT BE UNDONE LATER (#86 / #87).
+    //
+    // Every other place the arms could get pooled is a reporting problem: the
+    // rows keep their `variant` and a query can always split them again. Not
+    // here. A lesson drawn from a candidate row goes into the SHARED rulebook,
+    // and analyze shows that rulebook to control runs — so one `lower_tf` row
+    // teaches every later control run from a timeframe control never saw, and
+    // nothing afterwards can separate the two populations again.
+    //
+    // Concretely, without this: postmortem selects `context`, hands
+    // `withoutAnalystClaim(context)` to the plan summary, and the prompt is a
+    // JSON.stringify of that summary — so `context.lower`, the 15-minute
+    // reading that only exists on the #87 arm, is read by the model that
+    // writes the lesson.
+    //
+    // A named-id run is deliberately NOT exempt. "Diagnose this row" is a
+    // request to understand it, and it still ends in a lesson in the shared
+    // book; the exemption would be a hole exactly where someone is looking
+    // closely at an interesting candidate row.
+    const controlOnly = "variant=eq.control";
     // Read so that a query that FAILED stays distinguishable from a query that
     // came back empty. For the cron the two are the same thing — an empty page
     // means nothing to do either way — but for a targeted run the difference is
@@ -510,7 +531,7 @@ Deno.serve(async (req: Request) => {
     // for the rulebook and for the repair pass; the candidate queries were the
     // one place that did not.
     const candidatesOrNull = await readRowsOrNull(
-      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
+      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${controlOnly}&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
     const candidates = candidatesOrNull ?? [];
 
@@ -586,7 +607,7 @@ Deno.serve(async (req: Request) => {
 
     const waitCandidatesOrNull = await readRowsOrNull(
       `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false` +
-        `&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
+        `&${controlOnly}&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
         `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
     );
     const waitCandidates = waitCandidatesOrNull ?? [];

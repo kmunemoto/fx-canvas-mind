@@ -53,11 +53,19 @@ export const GMO_ANALYSIS_TIMEFRAMES = new Set(["1h"]);
 // A fourth request from here would collide with every overlapping sweep. GMO's
 // FX endpoint is public — no key, no quota — and already serves this function
 // for the 1h overlay, so the lower rung costs nothing that is rationed.
+//
+// `1day` IS ABSENT ON PURPOSE, and it is not an oversight to be tidied up
+// later. Its rung would be 4h, and `fetchRecentQuotes` below refuses anything
+// whose GMO_INTERVALS entry is not keyed by "day" — 4h and 1day are both keyed
+// "year" (track-outcomes/quotes.ts). So `1day -> 4h` would return null on
+// every call, before any network request, and every 1day run of this arm would
+// be a row stamped `lower_tf` that is a control run plus an apology paragraph:
+// a labelled arm that never ran, which is the one thing the variant column
+// exists to make impossible.
 export const LOWER_TIMEFRAME: Record<string, string> = {
   "15min": "5min",
   "1h": "15min",
   "4h": "1h",
-  "1day": "4h",
 };
 
 // How many lower-rung bars to show. Deliberately short: this is "what is the

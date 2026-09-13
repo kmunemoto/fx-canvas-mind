@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   DEFAULT_VARIANT,
   resolveVariant,
@@ -62,6 +63,10 @@ describe("the arm has to change what is SENT", () => {
     expect(hex).toBe(v48!.suffixSha256);
   });
 
+  // The digests move whenever the conditional_wait block's own text changes —
+  // they did once already, when MIN_EXPIRES_BARS made "1以上" false. That is
+  // fine and expected; what must never move silently is the CONTROL digest
+  // above, which is what keeps the stored corpus replayable.
   it("the candidate arm opens its own era, and it is catalogued", async () => {
     const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(RESPONSE_SCHEMA));
     const cond = SCHEMA_ERAS.find((e) => e.era === "v56cond");
@@ -73,5 +78,35 @@ describe("the arm has to change what is SENT", () => {
     expect(hex).toBe(cond!.suffixSha256);
     // Two arms, two eras — never the same label.
     expect(cond!.suffixSha256).not.toBe(SCHEMA_ERAS.find((e) => e.era === "v48")!.suffixSha256);
+  });
+});
+
+describe("the arms stay out of the learning loop and out of the record", () => {
+  const postmortemSrc = readFileSync("supabase/functions/postmortem/index.ts", "utf8");
+  const trackSrc = readFileSync("supabase/functions/track-outcomes/index.ts", "utf8");
+
+  // This is the one direction that cannot be undone by filtering later: a
+  // lesson drawn from a candidate row goes into the SHARED rulebook, and
+  // analyze shows that rulebook to control runs.
+  it("postmortem reads control rows only, on both intakes", () => {
+    expect(postmortemSrc).toContain('const controlOnly = "variant=eq.control";');
+    // Both row intakes, whole statement — the WAIT one is split across
+    // concatenated template literals, so a backtick-bounded match would miss
+    // the half the filter is on.
+    const starts = [...postmortemSrc.matchAll(/analyses\?outcome=/g)].map((m) => m.index ?? 0);
+    expect(starts.length).toBe(2);
+    for (const at of starts) {
+      expect(postmortemSrc.slice(at, at + 400)).toContain("${controlOnly}");
+    }
+  });
+
+  // Terminal verdict + a pending index that only selects rows with no outcome
+  // means a window measured on the wall clock is never corrected later.
+  it("the conditional scorer is given a market-time deadline", () => {
+    expect(trackSrc).toContain(
+      "const deadlineMs = marketHorizonEnd(signalMs, conditionalWindowMs(plan, entryBarMs));",
+    );
+    expect(trackSrc).toContain("deadlineMs });");
+    expect(trackSrc).not.toContain("entryBarMs, signalMs }");
   });
 });

@@ -479,8 +479,16 @@ const RESPONSE_SCHEMA = {
       // #86. OPTIONAL, and it stays out of `required` on purpose: the replay
       // harnesses read RESPONSE_SCHEMA.required as their missing-key check
       // (version-compare, noise-floor), and the frozen corpus they replay was
-      // never asked this question. An extra key they never look at costs them
-      // nothing; a new required one would fail every stored row.
+      // never asked this question — a new REQUIRED key would fail every stored
+      // row.
+      //
+      // Optional is not free, though, and an earlier version of this comment
+      // said it was ("an extra key they never look at costs them nothing").
+      // That was wrong: noise-floor/shape.ts puts the whole object on the wire
+      // for the structured shape, so an extra property is 1,581 bytes of
+      // prompt the corpus never saw. The harness sends
+      // CONTROL_RESPONSE_SCHEMA for that reason; `required` is not the only
+      // thing they read.
       //
       // WHAT THIS IS NOT. It is never an order. #37 measured what happens when
       // the analyst picks the price it fills at: 5 of 8 BUY/SELL went unfilled,
@@ -503,7 +511,7 @@ const RESPONSE_SCHEMA = {
         },
         expires_bars: {
           type: "integer",
-          description: "エントリー足で何本以内に発動しなければ、この見立ては無効か。1以上。長すぎる値はサーバーが上限まで詰める。",
+          description: "エントリー足で何本以内に発動しなければ、この見立ては無効か。3以上24以下。範囲外はサーバーが詰める（短すぎる窓は発動後に方向を判定する余地が無く、外れようが無い主張になるため）。",
         },
         thesis_if_triggered: { type: "string", description: "発動したときに成り立っている想定を一行で（日本語、40字以内）。" },
       },
@@ -589,6 +597,48 @@ interface NormalizedAnalysis {
   take_profit_3_num: number | null;
 }
 
+// Is this the rung we said we would strip? Compared on a NORMALISED form, not
+// on string equality.
+//
+// `item.timeframe` is free model-authored text. Exact equality strips "15min"
+// and lets "15分", "15m", "M15", "15 min" and "15min足" through — and this
+// comparison is the whole enforcement behind "the lower rung never becomes a
+// direction", so enforcement one spelling wide is the same guarantee the
+// comment on `excludeTimeframe` is explicitly disclaiming ("Instructions are
+// not enforcement").
+//
+// Deliberately greedy about what counts as a match: a false positive drops one
+// chip off a chart, a false negative puts a directional arrow on the rung the
+// plan was told is timing-only.
+// Normalised to MINUTES rather than to a canonical spelling, so "60min" and
+// "1h" are the same rung — which they are, and a comparison that said
+// otherwise would leave the obvious paraphrase open.
+const TF_UNITS: Array<[RegExp, number]> = [
+  [/^(?:分|min(?:ute)?s?|m)$/i, 1],
+  [/^(?:時間|hours?|hr?s?|h)$/i, 60],
+  [/^(?:日|days?|d)$/i, 60 * 24],
+  [/^(?:週|weeks?|wk?s?|w)$/i, 60 * 24 * 7],
+  [/^(?:月|months?|mo)$/i, 60 * 24 * 30],
+];
+const timeframeMinutes = (raw: string): number | null => {
+  // "M15" / "H4" as well as "15min" / "4h" / "15分" / "15min足".
+  const t = raw.trim().toLowerCase().replace(/\s+/g, "").replace(/足$/, "");
+  const swapped = /^[a-z]\d+$/.test(t) ? t.slice(1) + t.slice(0, 1) : t;
+  const digits = swapped.match(/^\d+/);
+  if (!digits) return null;
+  const rest = swapped.slice(digits[0].length);
+  if (rest === "") return null;
+  for (const [pattern, minutes] of TF_UNITS) {
+    if (pattern.test(rest)) return Number(digits[0]) * minutes;
+  }
+  return null;
+};
+const sameTimeframe = (a: string, b: string): boolean => {
+  if (a === b) return true;
+  const ma = timeframeMinutes(a);
+  return ma !== null && ma === timeframeMinutes(b);
+};
+
 const normalizeAnalysis = (
   value: unknown,
   decimals: number,
@@ -644,7 +694,7 @@ const normalizeAnalysis = (
         ? item.bias
         : "NEUTRAL";
       const tf = asTrimmedString(item.timeframe, "?");
-      if (excludeTimeframe !== null && tf === excludeTimeframe) continue;
+      if (excludeTimeframe !== null && sameTimeframe(tf, excludeTimeframe)) continue;
       alignment.push({
         timeframe: tf,
         bias,
@@ -2606,6 +2656,11 @@ ${candleLines(lowerCandles, 24)}`;
         price: marketEntry,
         atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
         decimals,
+        // The gate's own regime reading, stamped on the claim so the score can
+        // later be split by whether the claim simply named the prevailing
+        // direction. Without it `triggered_right` is a coin weighted by the
+        // window's drift and nothing in the row says so.
+        regimeDirection: entryVerdict.regimeDirection,
       })
       : null;
     if (conditionalRead !== null && !conditionalRead.ok && conditionalRead.rejection !== "absent") {

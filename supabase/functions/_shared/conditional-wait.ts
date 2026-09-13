@@ -22,7 +22,33 @@
 // and it is NOT a pass: the analyst said the level mattered, and it never
 // came.
 //
+// WHAT THIS SCORE CANNOT TELL ANYONE. Written here rather than in a doc,
+// because the number leaves this file and the caveats do not follow it.
+//
+//  * `triggered_right` is decided by the SIGN of the move from the trigger to
+//    the last close in the window. In a market with any drift, that sign is
+//    mostly the drift. Simulated against this exact rule (40k paths per cell,
+//    sigma set so a 1h true range is about 1 ATR, trigger at 1.0 ATR,
+//    expires_bars 6): with no drift a continuation claim scores ~52%; at 0.1
+//    ATR per bar of drift — an ordinary weak trend — it scores ~64% with no
+//    foresight whatsoever. So the null is NOT 50%, and an analyst that reads
+//    the regime it is already shown and names it will look right. That is why
+//    `trend_at_call` is on every claim: the score is only readable split by it.
+//  * It is not a tradeable result. There is no stop, no target and no
+//    excursion here, so `triggered_right` cannot be put on the same axis as
+//    the record's R per trade — at the longest expiry a majority of "right"
+//    verdicts are claims a real trade would have been stopped out of first,
+//    at this app's own minimum stop.
+//  * The n needed is large. Against a 50% null, detecting 60% needs ~194
+//    RESOLVED claims (not_triggered, triggered_unresolved and unmeasurable are
+//    all outside that denominator). Against the drifting null above it is
+//    larger still. The arm is admin-only and opt-in, so that n is far away,
+//    and any early ratio is noise with a label on it.
+//
 // Deno-free on purpose: src/test/conditional-wait.test.ts imports this file.
+// analyze/entry.ts is Deno-free too, so the gate's own floor imports cleanly.
+
+import { MIN_STOP_ATR } from "../analyze/entry.ts";
 
 export const CONDITIONAL_WAIT_VERSION = 1;
 
@@ -30,12 +56,31 @@ export const CONDITIONAL_WAIT_VERSION = 1;
 // the floor it is inside the noise the plan is already standing aside from;
 // above the ceiling it is a level the entry timeframe cannot plausibly reach
 // inside the window, which would make "it never came" meaningless.
-export const MIN_TRIGGER_ATR = 0.25;
+//
+// The floor is MIN_STOP_ATR (analyze/entry.ts), IMPORTED rather than copied:
+// a copied 0.4 would go on claiming they are the same number after the next
+// calibration moved one of them, which is a comment becoming a lie about a
+// live threshold.
+// It was 0.25 and that was incoherent: the gate refuses a stop closer than
+// 0.4 ATR because inside that distance the app calls the move noise, so a
+// trigger at 0.3 ATR was a level this same app does not believe in, being
+// scored as though it were a level. The two floors are the same statement
+// about the same market and there is no reason for them to disagree.
+export const MIN_TRIGGER_ATR = MIN_STOP_ATR;
 export const MAX_TRIGGER_ATR = 3.0;
 
-// The longest a conditional view may stay alive, in ENTRY-timeframe bars.
-// Bounded so the claim resolves inside the same window the WAIT itself is
+// How long a conditional view may stay alive, in ENTRY-timeframe bars.
+//
+// The FLOOR is the one that stops a claim from being unfalsifiable. With a
+// window of one entry bar the scoring series holds one or two bars, so the
+// only reachable verdicts are `not_triggered` and `triggered_unresolved` —
+// there is no room after the touch for the direction to be wrong. A claim
+// that cannot be wrong is not a prediction, and it would sit in the same
+// column as ones that can.
+//
+// The CEILING keeps the claim resolving inside the window the WAIT itself is
 // scored over rather than trailing a plan nobody is watching any more.
+export const MIN_EXPIRES_BARS = 3;
 export const MAX_EXPIRES_BARS = 24;
 
 export type TriggerSide = "above" | "below";
@@ -48,12 +93,32 @@ export interface ConditionalWait {
   then_signal: ThenSignal;
   expires_bars: number;
   thesis_if_triggered: string;
+  // Whether the window stored above is the one the analyst asked for. A claim
+  // written with a 400-bar expiry and kept at 24 is not the claim that was
+  // made, and a reader comparing stored windows cannot otherwise tell.
+  expires_clamped: boolean;
   // What the price was when the claim was made. Kept so the claim can be read
   // later without trusting that some other column still holds the same number.
   price_at_call: number;
   atr_at_call: number | null;
   distance_atr: number | null;
+  // WHICH WAY THE MARKET WAS ALREADY GOING, and whether this claim agrees.
+  //
+  // Without this the score is uninterpretable, because `triggered_right` is
+  // decided by the sign of the move after the touch and a trending window
+  // produces that sign on its own. An analyst that simply names the
+  // prevailing direction scores well above half with no foresight at all, and
+  // nothing else in the row would let a reader subtract that.
+  //
+  // Read off the gate's own regime reading at the moment of the call — not
+  // recomputed later, which would be reading the answer off the outcome.
+  // "unknown" when the gate saw no directional regime, which is a third of
+  // the population and must not be silently folded into either side.
+  trend_at_call: TrendRelation;
 }
+
+// This claim relative to the regime the gate already measured.
+export type TrendRelation = "with_trend" | "against_trend" | "unknown";
 
 // Why a claim was thrown away. Recorded rather than silently dropped: an arm
 // whose output is discarded 80% of the time is an arm that is not running, and
@@ -85,6 +150,10 @@ export const readConditionalWait = (input: {
   price: number;
   atr: number | null;
   decimals: number;
+  // The gate's regime reading at the call: "Up" / "Down", or null when it saw
+  // no directional regime. Passed in rather than derived here — this module
+  // has no indicators and inventing one would be inventing the control.
+  regimeDirection?: "Up" | "Down" | null;
 }): ConditionalRead => {
   if (input.raw === undefined || input.raw === null) return { ok: false, rejection: "absent" };
   // Only a WAIT can carry one. On a published BUY/SELL the plan itself is the
@@ -120,9 +189,29 @@ export const readConditionalWait = (input: {
   if (input.atr === null || !Number.isFinite(input.atr) || input.atr <= 0) {
     return { ok: false, rejection: "no_atr" };
   }
-  const distanceAtr = Math.abs(trigger - input.price) / input.atr;
+  // Compared at the precision it is REPORTED at, not at full binary precision.
+  // 150.2 - 150.0 is 0.19999999999998863 in IEEE754, so a trigger sitting
+  // exactly on the floor lands either side of it depending on representation
+  // noise — and the row would then store `distance_atr: 0.4` beside a
+  // `too_close` refusal, which is a row contradicting itself. The stored number
+  // is the one the rule is about.
+  const distanceAtr = round(Math.abs(trigger - input.price) / input.atr, 2);
   if (distanceAtr < MIN_TRIGGER_ATR) return { ok: false, rejection: "too_close" };
   if (distanceAtr > MAX_TRIGGER_ATR) return { ok: false, rejection: "too_far" };
+
+  // Clamped rather than refused: a window outside the bounds is a claim about
+  // the right level with the wrong patience, and throwing the level away over
+  // that loses more than it protects. Recorded as clamped, though — see
+  // `expires_clamped`.
+  const asked = Math.round(bars);
+  const expires = Math.max(MIN_EXPIRES_BARS, Math.min(MAX_EXPIRES_BARS, asked));
+
+  const regime = input.regimeDirection ?? null;
+  const trend: TrendRelation = regime === null
+    ? "unknown"
+    : (regime === "Up") === (then === "BUY")
+    ? "with_trend"
+    : "against_trend";
 
   return {
     ok: true,
@@ -131,14 +220,13 @@ export const readConditionalWait = (input: {
       trigger_price: round(trigger, input.decimals),
       trigger_side: side,
       then_signal: then,
-      // Clamped rather than refused: an over-long window is a claim about the
-      // right level with the wrong patience, and throwing the level away over
-      // that loses more than it protects.
-      expires_bars: Math.max(1, Math.min(MAX_EXPIRES_BARS, Math.round(bars))),
+      expires_bars: expires,
+      expires_clamped: expires !== asked,
       thesis_if_triggered: thesis.slice(0, 120),
       price_at_call: round(input.price, input.decimals),
       atr_at_call: round(input.atr, input.decimals),
-      distance_atr: round(distanceAtr, 2),
+      distance_atr: distanceAtr,
+      trend_at_call: trend,
     },
   };
 };
@@ -172,7 +260,8 @@ export interface ConditionalOutcome {
   // how early in the window it happened.
   bars_to_trigger: number | null;
   bars_examined: number;
-  window_ends_at: string;
+  // Null only when the caller handed a deadline that was not a number.
+  window_ends_at: string | null;
   // Where price went after the touch, in the direction the claim named.
   // Positive means the named direction was the profitable one.
   move_after_atr: number | null;
@@ -185,38 +274,74 @@ export interface ScorableBar {
   close: number;
 }
 
-// THE WINDOW IS A DURATION, NOT A BAR COUNT, AND THAT IS THE WHOLE CARE HERE.
+// HOW LONG THE CLAIM IS ALIVE, IN MILLISECONDS OF MARKET TIME.
 //
 // `expires_bars` is written in ENTRY-timeframe bars, because that is the chart
 // the analyst was looking at. The series this is scored on is finer:
 // EVAL_INTERVAL maps 1h -> 15min and 4h/1day -> 1h, so the same number means 4
 // bars where the analyst meant 4 hours, and 24 where the analyst meant 24
-// days. Slicing the supplied array by `expires_bars` would therefore cut the
-// window by 4x to 24x on every timeframe but 15min, and the arm would report a
-// flood of `not_triggered` that is an artefact of the unit and nothing else —
-// a failure that reads exactly like a finding.
+// days. Slicing the supplied array by `expires_bars` would cut the window by
+// 4x to 24x on every timeframe but 15min, and the arm would report a flood of
+// `not_triggered` that is an artefact of the unit and nothing else — a failure
+// that reads exactly like a finding.
 //
-// So the caller passes the length of ONE ENTRY BAR and the instant of the
-// call, and the deadline is computed here.
+// Exported and tested separately because the caller has to hand this to
+// `marketHorizonEnd` (see below) and the conversion must not be re-derived at
+// the call site, where nothing would catch it going wrong again.
+export const conditionalWindowMs = (plan: ConditionalWait, entryBarMs: number): number =>
+  plan.expires_bars * Math.max(1, entryBarMs);
+
+// AND THE DEADLINE IS MARKET TIME, NOT WALL CLOCK — which is the other half of
+// the same mistake, and one this codebase has already made once.
+//
+// track-outcomes/waits.ts:203 records what it cost there: "a WAIT issued on a
+// Friday spends most of its 48-hour window on a shut market: almost no bars
+// survive the weekend filter... and the call is graded 'correct' on no
+// evidence at all." A conditional claim measured on the wall clock fails the
+// same way pointing the other direction: a Friday claim gets a fraction of the
+// hours it asked for, nothing touches the level, and the row says
+// `not_triggered` — which is terminal, because the pending index only selects
+// rows with no outcome yet. Nothing ever comes back to correct it, and the
+// result is a day-of-week artefact in the verdict this whole design turns on.
+//
+// So the CALLER passes the deadline, computed with the market-time walk that
+// already exists (`marketHorizonEnd`), and passes bars with the closed-market
+// ones already dropped. Two copies of a market calendar is how the two drift;
+// this module keeps the part that is pure and testable.
 //
 // The trigger is a TOUCH — high/low, not close — because a level the market
 // reached is a level the market reached; requiring a close would score the
 // claim on a stricter rule than the one it was written under.
 export const scoreConditionalWait = (input: {
   plan: ConditionalWait;
-  // Bars strictly AFTER the call, ascending. Anything at or before the call is
-  // the caller's to drop: a bar the claim was made inside already contains the
-  // price the claim was measured against, and letting it count would hand a
-  // free trigger to any level inside that bar's range.
+  // Bars strictly AFTER the call, ascending, with closed-market bars already
+  // dropped. Anything at or before the call is the caller's to drop too: a bar
+  // the claim was made inside already contains the price the claim was
+  // measured against, and letting it count would hand a free trigger to any
+  // level inside that bar's range.
   barsAfterCall: ScorableBar[];
-  // One entry-timeframe bar, in milliseconds.
-  entryBarMs: number;
   // When the claim was made.
   signalMs: number;
+  // When the window closes, in MARKET time — `marketHorizonEnd(signalMs,
+  // conditionalWindowMs(plan, entryBarMs))`.
+  deadlineMs: number;
 }): ConditionalOutcome => {
   const { plan } = input;
-  const windowMs = plan.expires_bars * Math.max(1, input.entryBarMs);
-  const deadline = input.signalMs + windowMs;
+  const deadline = input.deadlineMs;
+  // A non-finite deadline would throw out of `new Date(...).toISOString()`,
+  // and this runs inside a loop over rows in the sweep — one bad row would
+  // take the whole pass down with it rather than being one unscored row.
+  if (!Number.isFinite(deadline)) {
+    return {
+      version: 1,
+      verdict: "unmeasurable",
+      triggered_at: null,
+      bars_to_trigger: null,
+      bars_examined: 0,
+      window_ends_at: null,
+      move_after_atr: null,
+    };
+  }
   const windowEndsAt = new Date(deadline).toISOString();
 
   const window = input.barsAfterCall.filter((b) => {

@@ -336,9 +336,9 @@ export const SCHEMA_ERAS: readonly SchemaEraEntry[] = [
   // the era column exists to stop.
   {
     era: "v56cond",
-    suffixLength: 3700,
-    suffixMd5: "4683d8d7a68bbc9911041d7f9f8531b7",
-    suffixSha256: "3da8257b69dbd32bcd62fcc5c70db5f7c0564b65ff544742bb6d9ec978cfbd57",
+    suffixLength: 3737,
+    suffixMd5: "d286a4e2ff197e539598f58c6cea1ee8",
+    suffixSha256: "32d35b87c34835f07d869773ca20f6f140958bce05c3d798d64f2d21d42248be",
   },
 ];
 
