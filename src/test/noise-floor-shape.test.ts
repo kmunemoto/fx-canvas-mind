@@ -292,7 +292,18 @@ describe("22 — each arm sends the shape production sent for that row", () => {
     const applyShape = objectLiteralAfter(analyzeSrc, "const applyRequestShape = () => {");
     expect(applyShape).toContain("{ effort: EFFORT_SEARCH }");
     expect(applyShape).toContain(
-      '{ format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT_TECHNICAL }',
+      '{ format: { type: "json_schema", schema: sentSchema }, effort: EFFORT_TECHNICAL }',
+    );
+    // `sentSchema` is RESPONSE_SCHEMA for the #86 candidate arm and
+    // RESPONSE_SCHEMA minus `conditional_wait` for every other. Pinned here
+    // because this file's whole job is that the replay harness sends the shape
+    // production sends: if the strip ever stopped being a strip — a schema
+    // built some other way, or the property moved off the end — the control
+    // arm would leave the v48 era and the stored corpus would stop matching.
+    // src/test/variants.test.ts holds the digest that proves it still does.
+    expect(analyzeSrc).toContain(
+      "    const sentSchema = usesConditionalWait(variant)\n      ? RESPONSE_SCHEMA\n" +
+        "      : { ...RESPONSE_SCHEMA, properties: conditionalFreeProperties };",
     );
     // And that `format` really is the search-incompatible half — analyze
     // deletes tools on the technical branch and never sets format on the

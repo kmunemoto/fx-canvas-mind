@@ -41,6 +41,31 @@ import { MARKET_TOLERANCE_ATR } from "./entry.ts";
 // files for 250 bars.
 export const GMO_ANALYSIS_TIMEFRAMES = new Set(["1h"]);
 
+// ONE RUNG BELOW THE ENTRY FRAME, for #87 — entry timing only, never direction.
+//
+// TF_CHAIN only ever climbs, so a 1h plan reads 1h/4h/1day and never sees what
+// the hour it is about to enter on is actually doing. Under market_v1 the plan
+// fills at the price of the moment, so the thing that decides whether that
+// moment is a good one is exactly the rung that is missing.
+//
+// WHY GMO AND NOT TWELVE DATA. The Twelve Data key is shared and allows 8
+// requests a minute; analyze already spends 3 and track-outcomes reserves 5.
+// A fourth request from here would collide with every overlapping sweep. GMO's
+// FX endpoint is public — no key, no quota — and already serves this function
+// for the 1h overlay, so the lower rung costs nothing that is rationed.
+export const LOWER_TIMEFRAME: Record<string, string> = {
+  "15min": "5min",
+  "1h": "15min",
+  "4h": "1h",
+  "1day": "4h",
+};
+
+// How many lower-rung bars to show. Deliberately short: this is "what is the
+// current entry bar doing", not a second trend read. 48 bars of 15min is the
+// last 12 hours, which covers the entry bar and the few before it without
+// handing the model enough history to form an independent directional view.
+export const LOWER_TIMEFRAME_BARS = 48;
+
 // The SMA200 floor. sma(closes, 200) returns null below this and SMA200 simply
 // vanishes from the prompt with nothing raised, so an overlay that merged short
 // would quietly hand the analyst a thinner picture than Twelve Data would have.

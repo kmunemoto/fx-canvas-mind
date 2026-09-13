@@ -234,6 +234,46 @@ export const RESPONSE_SCHEMA = {
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
     },
+    conditional_wait: {
+      type: "object",
+      // #86. OPTIONAL, and it stays out of `required` on purpose: the replay
+      // harnesses read RESPONSE_SCHEMA.required as their missing-key check
+      // (version-compare, noise-floor), and the frozen corpus they replay was
+      // never asked this question. An extra key they never look at costs them
+      // nothing; a new required one would fail every stored row.
+      //
+      // WHAT THIS IS NOT. It is never an order. #37 measured what happens when
+      // the analyst picks the price it fills at: 5 of 8 BUY/SELL went unfilled,
+      // and all 5 carried the analyst's own Trend Day / Breakout tag pointing
+      // the same way as the signal. analyze/entry.ts's should_be_market exists
+      // to refuse exactly that shape. So this is a RECORDED PREDICTION that
+      // gets scored — did the level come, inside the window, and was taking it
+      // worth anything — and the published plan stays WAIT with no levels.
+      properties: {
+        trigger_price: { type: "number", description: "この価格に触れたら見方が変わる、という水準。現在値の反対側に置かないこと。" },
+        trigger_side: {
+          type: "string",
+          enum: ["above", "below"],
+          description: "現在値より上に触れたら（above）か、下に触れたら（below）か。trigger_price と向きが矛盾する回はサーバーが捨てる。",
+        },
+        then_signal: {
+          type: "string",
+          enum: ["BUY", "SELL"],
+          description: "発動したときに取るべき方向。WAIT は入れない（それは条件付きではなく、ただの見送り）。",
+        },
+        expires_bars: {
+          type: "integer",
+          description: "エントリー足で何本以内に発動しなければ、この見立ては無効か。1以上。長すぎる値はサーバーが上限まで詰める。",
+        },
+        thesis_if_triggered: { type: "string", description: "発動したときに成り立っている想定を一行で（日本語、40字以内）。" },
+      },
+      required: ["trigger_price", "trigger_side", "then_signal", "expires_bars", "thesis_if_triggered"],
+      additionalProperties: false,
+      description:
+        "signal が WAIT のときだけ、任意で書く。「今は入らないが、この水準に触れたらこちらに入る」という条件付きの見立て。"
+        + "自信が無い、または条件を特定できない回は丸ごと省略すること（省略が正しい答えであり、埋めることではない）。"
+        + "ここに書いた水準で注文は出ない。後から機械的に採点され、外れた条件は記録に残る。",
+    },
   },
   required: [
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",

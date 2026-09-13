@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v55-2026-09-13T06:15:00Z";
+const FUNCTION_VERSION = "analyze-v56-2026-09-13T13:20:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -91,9 +91,19 @@ import { compactDivergence, detectDivergence, type Divergence } from "./divergen
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { barFullyClosed, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
+import {
+  DEFAULT_VARIANT,
+  resolveVariant,
+  usesConditionalWait,
+  usesLowerTimeframe,
+  type Variant,
+} from "../_shared/variants.ts";
+import { readConditionalWait } from "../_shared/conditional-wait.ts";
 import { extractAnthropicText, parseAnalysisJson } from "../_shared/model-output.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
+  LOWER_TIMEFRAME,
+  LOWER_TIMEFRAME_BARS,
   acceptOverlay,
   fetchRecentQuotes,
   midCandle,
@@ -214,6 +224,10 @@ type ParsedRequestBody = {
   // while the market is shut the input never changes, so the same answer would
   // come back for as long as it stays shut, with no way past it.
   forceFresh: boolean;
+  // Which arm of the analyst to run (_shared/variants.ts). Unknown values
+  // resolve to control rather than failing: an arm this build does not have is
+  // a control run, and the ROW records which it actually was.
+  variant: Variant;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -460,6 +474,46 @@ const RESPONSE_SCHEMA = {
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
     },
+    conditional_wait: {
+      type: "object",
+      // #86. OPTIONAL, and it stays out of `required` on purpose: the replay
+      // harnesses read RESPONSE_SCHEMA.required as their missing-key check
+      // (version-compare, noise-floor), and the frozen corpus they replay was
+      // never asked this question. An extra key they never look at costs them
+      // nothing; a new required one would fail every stored row.
+      //
+      // WHAT THIS IS NOT. It is never an order. #37 measured what happens when
+      // the analyst picks the price it fills at: 5 of 8 BUY/SELL went unfilled,
+      // and all 5 carried the analyst's own Trend Day / Breakout tag pointing
+      // the same way as the signal. analyze/entry.ts's should_be_market exists
+      // to refuse exactly that shape. So this is a RECORDED PREDICTION that
+      // gets scored — did the level come, inside the window, and was taking it
+      // worth anything — and the published plan stays WAIT with no levels.
+      properties: {
+        trigger_price: { type: "number", description: "この価格に触れたら見方が変わる、という水準。現在値の反対側に置かないこと。" },
+        trigger_side: {
+          type: "string",
+          enum: ["above", "below"],
+          description: "現在値より上に触れたら（above）か、下に触れたら（below）か。trigger_price と向きが矛盾する回はサーバーが捨てる。",
+        },
+        then_signal: {
+          type: "string",
+          enum: ["BUY", "SELL"],
+          description: "発動したときに取るべき方向。WAIT は入れない（それは条件付きではなく、ただの見送り）。",
+        },
+        expires_bars: {
+          type: "integer",
+          description: "エントリー足で何本以内に発動しなければ、この見立ては無効か。1以上。長すぎる値はサーバーが上限まで詰める。",
+        },
+        thesis_if_triggered: { type: "string", description: "発動したときに成り立っている想定を一行で（日本語、40字以内）。" },
+      },
+      required: ["trigger_price", "trigger_side", "then_signal", "expires_bars", "thesis_if_triggered"],
+      additionalProperties: false,
+      description:
+        "signal が WAIT のときだけ、任意で書く。「今は入らないが、この水準に触れたらこちらに入る」という条件付きの見立て。"
+        + "自信が無い、または条件を特定できない回は丸ごと省略すること（省略が正しい答えであり、埋めることではない）。"
+        + "ここに書いた水準で注文は出ない。後から機械的に採点され、外れた条件は記録に残る。",
+    },
   },
   required: [
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",
@@ -470,6 +524,14 @@ const RESPONSE_SCHEMA = {
   ],
   additionalProperties: false,
 };
+
+// The same schema with the conditional-WAIT question removed — what every arm
+// but the candidate sends. Destructured at module scope so the stripped
+// property list is one object for the life of the process rather than a fresh
+// one per request; the per-request cost that matters is the JSON.stringify in
+// SCHEMA_INSTRUCTION, which happens either way.
+const { conditional_wait: _conditionalWaitProperty, ...conditionalFreeProperties } =
+  RESPONSE_SCHEMA.properties;
 
 // ---------------------------------------------------------------------------
 // Anthropic response handling
@@ -527,7 +589,16 @@ interface NormalizedAnalysis {
   take_profit_3_num: number | null;
 }
 
-const normalizeAnalysis = (value: unknown, decimals: number, locale: AnalysisLocale): NormalizedAnalysis => {
+const normalizeAnalysis = (
+  value: unknown,
+  decimals: number,
+  locale: AnalysisLocale,
+  // #87: the lower rung is shown for entry TIMING only. The prompt says so,
+  // but timeframe_alignment is a free array the screen renders as one
+  // direction arrow per entry, so an instruction alone would let a directional
+  // chip for that rung onto the chart. Instructions are not enforcement.
+  excludeTimeframe: string | null = null,
+): NormalizedAnalysis => {
   const source = isRecord(value) ? value : {};
   const signal = source.signal === "BUY" || source.signal === "SELL" || source.signal === "WAIT"
     ? source.signal
@@ -572,8 +643,10 @@ const normalizeAnalysis = (value: unknown, decimals: number, locale: AnalysisLoc
       const bias = item.bias === "BULLISH" || item.bias === "BEARISH" || item.bias === "NEUTRAL"
         ? item.bias
         : "NEUTRAL";
+      const tf = asTrimmedString(item.timeframe, "?");
+      if (excludeTimeframe !== null && tf === excludeTimeframe) continue;
       alignment.push({
-        timeframe: asTrimmedString(item.timeframe, "?"),
+        timeframe: tf,
         bias,
         note: asTrimmedString(item.note, ""),
       });
@@ -632,6 +705,7 @@ const parseRequestBody = async (req: Request): Promise<
     ? body.includeFundamental
     : true;
   const forceFresh = body.forceFresh === true;
+  const variant = resolveVariant(body.variant);
 
   if (!currencyPair || !interval) {
     return { error: "通貨ペアまたは時間足が不正です" };
@@ -651,6 +725,7 @@ const parseRequestBody = async (req: Request): Promise<
       interval,
       includeFundamental,
       forceFresh,
+      variant,
       // Unknown or missing values fall back to Japanese rather than failing.
       locale: resolveAnalysisLocale(body.locale),
     } satisfies ParsedRequestBody,
@@ -762,7 +837,8 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: parsedRequest.error ?? "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const { currencyPair, interval, includeFundamental, forceFresh, locale } = parsedRequest.data;
+    const { currencyPair, interval, includeFundamental, forceFresh, locale, variant: requestedVariant } =
+      parsedRequest.data;
     const L = stringsFor(locale);
     const decimals = pairDecimals(currencyPair);
 
@@ -824,6 +900,27 @@ Deno.serve(async (req: Request) => {
 
     const isAdmin = ADMIN_EMAILS.includes((user.email || "").toLowerCase());
     const plan = isAdmin ? "pro" : (profile?.plan || "free");
+
+    // WHO MAY ASK FOR A CANDIDATE ARM. Nobody but an admin, and only by asking
+    // for it explicitly — there is no automatic assignment.
+    //
+    // Not a permission question; an evidence one. Traffic that CHOOSES its own
+    // arm is a self-selected sample, and the two populations would then differ
+    // by whoever pressed the button as much as by the change. Assigning real
+    // traffic at random would be the textbook answer and is worse here: #87
+    // changes what the analyst reads before it writes the plan somebody trades
+    // with real money, on a record of 48 settled trades — nowhere near enough
+    // to put anyone on an unvalidated arm without their knowing. So the arms
+    // are opt-in, admin-only, and the honest cost is stated rather than hidden:
+    // this yields a small deliberate sample, not a randomised trial.
+    //
+    // Silently demoted to control rather than refused, and the ROW records
+    // which arm actually ran — a request that asked for an arm it may not have
+    // is a control run, and nothing downstream may read it as anything else.
+    const variant = isAdmin ? requestedVariant : DEFAULT_VARIANT;
+    if (variant !== requestedVariant) {
+      console.warn("Variant refused (not an admin)", { requested: requestedVariant });
+    }
 
     // Analysis is a paid feature. Every call costs a model turn and several
     // market-data requests, so an account without a subscription is turned
@@ -1195,6 +1292,26 @@ Deno.serve(async (req: Request) => {
     // never an analysis. The two run concurrently, so the marginal cost is only
     // what GMO takes beyond Twelve Data.
     const overlayDeadline = Date.now() + PRICE_OVERLAY_BUDGET_MS;
+    // #87: one rung BELOW the entry frame, for entry timing only. Kept out of
+    // `timeframes` on purpose — index 0 means "entry" in a dozen places and
+    // .slice(1) means "higher" in two that are PERMANENT RECORD
+    // (analyses.context.higher, read back by the htf_adx situation axis).
+    // Prepending would rewrite all of them; appending would file a lower rung
+    // under "higher" in the stored row, and that lie would flow into the
+    // postmortem prompt and from there into the rulebook.
+    const lowerTf = usesLowerTimeframe(variant) ? (LOWER_TIMEFRAME[interval] ?? null) : null;
+    const lowerAttempt = lowerTf !== null
+      ? fetchRecentQuotes(currencyPair, lowerTf, LOWER_TIMEFRAME_BARS, Date.now(), overlayDeadline, async (url) => {
+        const left = overlayDeadline - Date.now();
+        if (left <= 0) return null;
+        const r = await fetch(url, { signal: AbortSignal.timeout(left) });
+        return r.ok ? await r.json().catch(() => null) : null;
+        // Shares the overlay's rule: this arm may never reject. A missing
+        // lower rung degrades the prompt by one section; it must not be able
+        // to fail the analysis the reader paid for.
+      }).catch(() => null)
+      : Promise.resolve(null);
+
     const overlayWanted = GMO_ANALYSIS_TIMEFRAMES.has(interval);
     const gmoAttempt = overlayWanted
       ? fetchRecentQuotes(currencyPair, interval, 250, Date.now(), overlayDeadline, async (url) => {
@@ -1209,6 +1326,7 @@ Deno.serve(async (req: Request) => {
 
     let seriesByTf: Candle[][];
     let gmoRaw: Awaited<typeof gmoAttempt> = null;
+    let lowerRaw: Awaited<typeof lowerAttempt> = null;
     try {
       // Both arrays are taken by INDEX, not by completion order. rawCounts used
       // to be pushed from inside fetchSeries, which recorded whichever
@@ -1216,14 +1334,16 @@ Deno.serve(async (req: Request) => {
       // (production 2026-09-06 12:33 stored bars 241/248/250), so a
       // misattributed count is either a 502 or a silently mis-scored series.
       // Promise.all preserves map order in its result; push preserved nothing.
-      const [td, gmo] = await Promise.all([
+      const [td, gmo, lower] = await Promise.all([
         Promise.all(timeframes.map((tf) => fetchSeries(tf))),
         gmoAttempt,
+        lowerAttempt,
       ]);
       seriesByTf = td.map((r) => r.candles);
       rawCounts = td.map((r) => r.rawCount);
       droppedByTf = td.map((r) => r.dropped);
       gmoRaw = gmo;
+      lowerRaw = lower;
     pricedAtIso = new Date().toISOString();
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
@@ -1460,6 +1580,12 @@ Deno.serve(async (req: Request) => {
       );
     })();
 
+    // #87: the lower rung, reduced to mid bars and read like any other series.
+    // Its own variable, its own label, its own slot in the row — never inside
+    // `timeframes`.
+    const lowerCandles = lowerRaw !== null ? lowerRaw.bars.map(midCandle) : [];
+    const lowerSnapshot = lowerCandles.length > 0 ? computeSnapshot(lowerCandles) : null;
+
     const tfSections = timeframes.map((tf, i) => {
       const snapshot = snapshots[i];
       const candles = seriesByTf[i];
@@ -1477,22 +1603,57 @@ Deno.serve(async (req: Request) => {
       return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
     }).join("\n\n");
 
+    // Appended after the chain, with a label that is NOT 上位足 and a sentence
+    // that says what it is for. The system prompt's step 3 makes 上位足
+    // direction a confidence veto, so calling this rung by that name would
+    // make "timing only" false the moment the model read it.
+    const lowerSection = lowerTf === null
+      ? ""
+      : lowerSnapshot === null
+        ? `\n\n### ${lowerTf}（仕掛け確認用・下位足）\n取得できなかったため、この足の情報はありません。無いことを理由に判断を変えないこと。`
+        : `\n\n### ${lowerTf}（仕掛け確認用・下位足・GMO Coin 仲値）
+この足は**入るタイミングの確認だけ**に使う。方向・トレンド・確信度はエントリー足と上位足だけで決めること。
+この足がエントリー足と逆を向いていても、それを理由に signal を変えたり confidence を下げたりしない。
+timeframe_alignment にこの足を含めないこと（サーバー側でも除外する）。
+${snapshotLines(lowerSnapshot, decimals)}
+直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):
+${candleLines(lowerCandles, 24)}`;
+
     const nowUtc = new Date().toISOString();
     const SEARCH_NOTE = L.searchNote;
     const TECHNICAL_NOTE = L.technicalNote;
     const FALLBACK_NOTE = L.fallbackNote;
 
+    // WHAT THE ARM ACTUALLY CHANGES (#86). The conditional-WAIT arm is a
+    // different QUESTION, not a different reading of the same answer, so it
+    // has to differ in what is SENT — a schema identical across arms would
+    // make the candidate arm a relabelling of the control arm and the
+    // comparison meaningless.
+    //
+    // Done by stripping rather than by editing RESPONSE_SCHEMA, for two
+    // measured reasons. noise-floor/shape.ts carries a byte-for-byte copy of
+    // that constant and the pin test compares them; and
+    // noise-floor/prompt-surgery.ts keys its SCHEMA_ERAS table on the bytes of
+    // the instruction built from it (v48 = 2811 chars, md5 5cfa2b6d…), which
+    // is how 45 stored rows stay replayable. `conditional_wait` is the last
+    // property, so deleting it restores the v48 key order exactly: the control
+    // arm keeps sending the bytes the corpus is keyed on, and only the
+    // candidate arm opens a new era.
+    const sentSchema = usesConditionalWait(variant)
+      ? RESPONSE_SCHEMA
+      : { ...RESPONSE_SCHEMA, properties: conditionalFreeProperties };
+
     // Structured outputs cannot be combined with web search, so the search path
     // has to carry the same field contract in the prompt instead. Reusing the
     // one RESPONSE_SCHEMA keeps both paths on a single definition.
-    const SCHEMA_INSTRUCTION = L.schemaInstruction(JSON.stringify(RESPONSE_SCHEMA));
+    const SCHEMA_INSTRUCTION = L.schemaInstruction(JSON.stringify(sentSchema));
 
     const buildUserMessage = (note: string, schemaInPrompt: boolean) =>
       L.userMessage({
         pair: currencyPair,
         nowUtc,
         note,
-        sections: tfSections,
+        sections: tfSections + lowerSection,
         schema: schemaInPrompt ? SCHEMA_INSTRUCTION : "",
       });
 
@@ -1651,8 +1812,8 @@ Deno.serve(async (req: Request) => {
       } else {
         delete baseRequest.tools;
         baseRequest.output_config = effortEnabled
-          ? { format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT_TECHNICAL }
-          : { format: { type: "json_schema", schema: RESPONSE_SCHEMA } };
+          ? { format: { type: "json_schema", schema: sentSchema }, effort: EFFORT_TECHNICAL }
+          : { format: { type: "json_schema", schema: sentSchema } };
       }
     };
     applyRequestShape();
@@ -1752,6 +1913,7 @@ Deno.serve(async (req: Request) => {
       preview: previewMode,
       searched: Array.isArray(baseRequest.tools) && baseRequest.tools.length > 0,
       contract: PLAN_CONTRACT,
+      variant,
       locale,
     }).catch(() => "");
 
@@ -2227,7 +2389,7 @@ Deno.serve(async (req: Request) => {
       }, 400);
     }
 
-    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals, locale);
+    const normalizedAnalysis = normalizeAnalysis(parsedAnalysis, decimals, locale, lowerTf);
 
     // Which of the shown rules the analyst says it applied THIS run, beside
     // the server's own verdict on each of them. The gap between a rule as
@@ -2423,6 +2585,37 @@ Deno.serve(async (req: Request) => {
       normalizedAnalysis.risk_reward_ratio = `1:${entryVerdict.riskReward}`;
     }
 
+    // THE CONDITIONAL WAIT, READ AND EITHER KEPT OR NAMED AS DROPPED (#86).
+    //
+    // Judged against `proposedSignal` — the analyst's OWN answer — and not
+    // against the published one. A BUY the server refused is published as a
+    // WAIT, and a conditional claim written beside a BUY is a claim the
+    // analyst attached to a trade it wanted to take; scoring it as though it
+    // had stood aside would credit the arm for a plan it never made. The
+    // stricter reading is also the only one that matches what was asked: the
+    // schema only poses the question on WAIT.
+    //
+    // `null` on every other arm, and the row says nothing rather than
+    // recording a rejection: on those arms the property is not in the sent
+    // schema at all, so there was no question to answer and "the analyst
+    // declined" would be a false statement about it.
+    const conditionalRead = usesConditionalWait(variant)
+      ? readConditionalWait({
+        raw: parsedAnalysis.conditional_wait,
+        signal: proposedSignal,
+        price: marketEntry,
+        atr: Number.isFinite(entrySnapshot.atr as number) ? entrySnapshot.atr : null,
+        decimals,
+      })
+      : null;
+    if (conditionalRead !== null && !conditionalRead.ok && conditionalRead.rejection !== "absent") {
+      console.warn("Conditional wait dropped", {
+        rejection: conditionalRead.rejection,
+        proposedSignal,
+        price: marketEntry,
+      });
+    }
+
     const entryCheck = {
       proposed_signal: proposedSignal,
       proposed_entry: proposed.entry,
@@ -2517,6 +2710,14 @@ Deno.serve(async (req: Request) => {
       // bar our reference sat. Read by the post-mortem record stats.
       price_feed: priceFeed,
       feed_delta_atr: feedDeltaAtr,
+      // #86, candidate arm only. Why the conditional claim was thrown away, by
+      // name, or null when one was kept. An arm whose output is discarded most
+      // of the time is an arm that is not running, and without this the row
+      // would look exactly like an arm the analyst simply never answered on.
+      // Null on every other arm too — see the read above.
+      conditional_rejection: conditionalRead === null || conditionalRead.ok
+        ? null
+        : conditionalRead.rejection,
     };
 
     // What the row is standing aside FROM, decided here rather than
@@ -2651,6 +2852,19 @@ Deno.serve(async (req: Request) => {
       // so "which code wrote this plan" could only ever be answered by dating
       // the row against a deploy log.
       provenance: { function_version: FUNCTION_VERSION },
+      // #87: the lower rung, under its OWN key. Never merged into `higher` —
+      // the situation axes read context.higher[0] as "the higher timeframe"
+      // (htf_adx), so a lower rung filed there would be compared against past
+      // plans' HIGHER readings and the rule-fit verdict would be nonsense.
+      // Null on every control run, which is how a reader of the row tells the
+      // arms apart without trusting the variant column alone.
+      lower: lowerTf === null ? null : {
+        tf: lowerTf,
+        available: lowerSnapshot !== null,
+        feed: "gmo",
+        bars: lowerCandles.length,
+        reading: compactSnapshot(lowerTf, lowerSnapshot),
+      },
       open_same_direction: openSameDirection,
       rules_shown: rulesShown,
       // The version that was READ, kept beside the version that was USED, so
@@ -2765,6 +2979,7 @@ Deno.serve(async (req: Request) => {
         // turn that produced this row is the one without it.
         searched: Array.isArray(baseRequest.tools) && baseRequest.tools.length > 0,
         contract: PLAN_CONTRACT,
+        variant,
         locale,
       }).catch(() => null);
       const promptRecord = {
@@ -2832,6 +3047,19 @@ Deno.serve(async (req: Request) => {
           // that has to guess will guess the legacy value and the two eras
           // will pool silently.
           plan_contract: PLAN_CONTRACT,
+          // WHICH ARM WROTE THIS PLAN. Stamped on the row and never inferred:
+          // the whole point of an arm is that its rows are never pooled with
+          // the control's, and a reader that has to guess will pool them.
+          variant,
+          // #86. The conditional claim as validated, or null. Gated exactly
+          // like wait_plan beside it, and for the same reason: a preview is a
+          // read of the last close taken while the market was shut, and
+          // scoring one would grade a Friday reading against Monday's reopen
+          // across the gap. `not_triggered` is a verdict, so an unscoreable
+          // row must not carry a claim at all.
+          conditional_wait: conditionalRead !== null && conditionalRead.ok && !previewMode
+            ? conditionalRead.value
+            : null,
           // WHICH MODEL WROTE THIS PLAN, for exactly the reason the line above
           // exists. Until 2026-09-11 the row did not say, and performance_stats
           // partitions on plan_contract and rulebook_version only — so swapping
