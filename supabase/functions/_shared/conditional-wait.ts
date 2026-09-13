@@ -71,12 +71,23 @@ export const MAX_TRIGGER_ATR = 3.0;
 
 // How long a conditional view may stay alive, in ENTRY-timeframe bars.
 //
-// The FLOOR is the one that stops a claim from being unfalsifiable. With a
-// window of one entry bar the scoring series holds one or two bars, so the
-// only reachable verdicts are `not_triggered` and `triggered_unresolved` —
-// there is no room after the touch for the direction to be wrong. A claim
-// that cannot be wrong is not a prediction, and it would sit in the same
-// column as ones that can.
+// The FLOOR stops a claim from being unfalsifiable, and it is worth being
+// exact about where that is true, because an earlier version of this comment
+// was not. The scoring series is EVAL_INTERVAL, which equals the entry frame
+// only on 15min (1h -> 15min, 4h/1day -> 1h). So a one-bar window holds:
+//   15min  -> 1 eval bar   — a touch leaves nothing after it. Unfalsifiable:
+//                            `triggered_unresolved` or `not_triggered`, never
+//                            wrong. A claim that cannot be wrong is not a
+//                            prediction, and it would sit in the same column
+//                            as ones that can.
+//   1h     -> 4 eval bars
+//   4h     -> 4 eval bars
+//   1day   -> 24 eval bars
+// Only 15min is structurally unfalsifiable at one bar; the others are merely
+// very short. The floor is set for all of them anyway — one floor that is
+// sometimes stricter than it needs to be beats a per-timeframe floor nobody
+// can hold in their head, and a claim about the next bar or two is a claim
+// about noise on any of these frames.
 //
 // The CEILING keeps the claim resolving inside the window the WAIT itself is
 // scored over rather than trailing a plan nobody is watching any more.

@@ -1305,9 +1305,12 @@ ATR で `MIN_STOP_ATR` 未満（`too_close`）/ 3.0 超（`too_far`）、ATR が
 短くなる**。出てくるのは単位の副作用でしかない `not_triggered` の山で、しかも
 それは「発見」の顔をして出てくる。
 
-なので `scoreConditionalWait` は片足分の ms と発話時刻を受け取り、期限を自分で
-計算する。`src/test/conditional-wait.test.ts` に回帰テストを置いた
-（1h・4本の見立てを 15min 足で採点して、4 時間先まで見ることを確認する）。
+なので窓は時間で計る。`conditionalWindowMs(plan, entryBarMs)` が本数を ms に直し、
+**期限そのものは呼び出し側が `marketHorizonEnd` で市場時間として計算して渡す**
+（`scoreConditionalWait` は `deadlineMs` を受け取る）。市場カレンダーの写しを 2 つ持つと
+必ずずれるので、歩く部分は既にある `waits.ts` に残してある。
+`src/test/conditional-wait.test.ts` に回帰テストを 2 本置いた: 1h・4本の見立てを 15min 足で
+採点して 4 時間先まで見ること、そして金曜の見立てが閉場に窓を食われないこと。
 
 採点は**窓が閉じてから 1 回だけ**。判定は終端で、部分索引は
 `conditional_outcome is null` の行しか引かないので、早すぎる `not_triggered` を
@@ -1326,7 +1329,11 @@ ATR で `MIN_STOP_ATR` 未満（`too_close`）/ 3.0 超（`too_far`）、ATR が
 | 腕 | chars | bytes | sha256 | era |
 |---|---|---|---|---|
 | control（剥がした方） | 2811 | 3449 | `9d28925f…` | **v48 とバイト一致** |
-| conditional_wait | 3700 | 5030 | `3da8257b…` | 新 era `v56cond` |
+| conditional_wait | 3737 | 5137 | `32d35b87…` | 新 era `v56cond` |
+
+差分は 926 文字 / 1,688 バイト。**この表は一度間違っていた**: 最初は 3700 / 5030 /
+`3da8257b…` と書いたが、同じ作業の中で `expires_bars` の説明文を直したので digest が
+動いていた。数字を測ったあとにその数字の元を変えたら、測り直すまでその表は嘘である。
 
 対照版は保存済みコーパスが鍵にしている era に居続ける。候補版だけが新しい era を
 開き、それは `SCHEMA_ERAS` に登録した — "unknown" に落とすと「別の問いをされた行」と
@@ -1388,9 +1395,58 @@ digest は `src/test/variants.test.ts` が固定している。
 
 ### デプロイ
 
-analyze v56（98,831 bytes）、track-outcomes v15（30,238 bytes）。
-マイグレーション 2 本（`analyses.variant`、`analyses.conditional_wait` /
-`conditional_outcome` と部分索引）は関数より先に適用済み。
+§8.7-a に記録した理由で、この節の最初の版が書いたデプロイ記録（analyze v56 =
+98,831 bytes、track-outcomes v15 = 30,238 bytes、マイグレーション 2 本）は**その後の
+修正で全部古くなった**。現在の記録は §8.7-a の末尾にある。
+
+---
+
+## 8.7-a 同じ版名で 2 つのビルドを本番に出した（2026-09-13、#86/#87 の修正時）
+
+§6.2 の手順は「関数を変えたら版名を上げる」である。**破った。**
+
+#86/#87 を v56 / v15 として出したあと、マージ前監査の指摘を直して analyze と
+track-outcomes を**中身を変えたまま同じ版名で再デプロイ**した。2 つのビルドが
+`analyze-v56-2026-09-13T13:20:00Z` を名乗り、両方が行に同じ
+`context.provenance.function_version` を書く。版名は「再デプロイをまたいで母集団を
+割る鍵」なので、その鍵が壊れると 2 つの別の分析器が 1 つの記録に混ざり、後から
+分ける手段が無い — #86/#87 が防ぐために作られたのと同じ形の失敗を、その修正の最中に
+やった。
+
+2 つのビルドは同じ挙動ではない: MIN_TRIGGER_ATR（0.25 と MIN_STOP_ATR）、
+`expires_bars` の下限（無しと 3）、採点の窓（壁時計と市場時間）、タイムスタンプの
+解釈、`timeframe_alignment` の除去方法がそれぞれ違う。
+
+**被害の範囲は測って確定した: 0 行。** 最初のビルドが生きていた約 27 分の間に
+`analyses` に書かれた行は 1 件も無い（本番実測: 13:15Z 以降に作られた行が 0、
+最新行は 07:14Z）。候補版の行も条件付き主張も 0 件なので、どちらのビルドが書いたか
+分からない行は存在しない。
+
+**直した内容**: 変更した 5 関数すべての版名を上げ直した
+（analyze v57 / track-outcomes v16 / postmortem v27 / noise-floor v5 /
+version-compare v8）。
+
+**この穴をテストが捕まえられなかった理由も書いておく。** 版に関するテストは
+`src/test/weekend-preview.test.ts` の 1 本だけで、これはクライアントのピンと関数の
+定数が一致することしか見ない。**両方とも上げなければ通る。** つまり「変えたのに
+上げていない」という当のケースでは必ず緑になる。`TRACKER_VERSION` と
+`POSTMORTEM_VERSION` に至っては 1545 本のどこからも参照されていない。
+版名の一致はテストできるが、版名が**上がっているべきか**はコードからは分からない
+（差分と履歴の話なので）。ここは手順で守るしかない箇所だと、はっきり書いておく。
+
+### デプロイ（この節の時点の記録）
+
+| 関数 | 版 | bytes |
+|---|---|---|
+| analyze | v57 | 下記 §8.7-b で更新 |
+| track-outcomes | v16 | 同上 |
+| postmortem | v27 | 同上 |
+| noise-floor | v5 | 同上 |
+| version-compare | v8 | 同上 |
+
+マイグレーションは 6 本（`analyses.variant` / `conditional_wait` + `conditional_outcome` /
+performance_stats の対照版限定 / 他 4 統計の対照版限定 / loop_health の積み残し /
+variant_stats の内訳修正）で、いずれも関数より先に適用済み。
 
 ---
 

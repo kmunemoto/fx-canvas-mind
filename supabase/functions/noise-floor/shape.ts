@@ -245,7 +245,7 @@ export const RESPONSE_SCHEMA = {
       // Optional is not free, though, and an earlier version of this comment
       // said it was ("an extra key they never look at costs them nothing").
       // That was wrong: noise-floor/shape.ts puts the whole object on the wire
-      // for the structured shape, so an extra property is 1,581 bytes of
+      // for the structured shape, so an extra property is 1,688 bytes of
       // prompt the corpus never saw. The harness sends
       // CONTROL_RESPONSE_SCHEMA for that reason; `required` is not the only
       // thing they read.
@@ -319,7 +319,7 @@ deepFreeze(NEWS_DOMAINS);
 // corpus was drawn BEFORE that property existed, under the stripped shape.
 //
 // So a replay that puts RESPONSE_SCHEMA on the wire sends 48 cells a schema
-// production never sent them — 889 chars / 1,581 bytes of extra Japanese prose
+// production never sent them — 926 chars / 1,688 bytes of extra Japanese prose
 // telling the model it may name a trigger level on a WAIT, into the one
 // measurement whose subject is WAIT-rate stability. And it would be invisible:
 // `noise_cells` records a sha256 of the system and user strings, never of the

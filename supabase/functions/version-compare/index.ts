@@ -153,7 +153,7 @@ import {
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v7-2026-09-13T13:50:00Z";
+const FUNCTION_VERSION = "version-compare-v8-2026-09-13T22:40:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,

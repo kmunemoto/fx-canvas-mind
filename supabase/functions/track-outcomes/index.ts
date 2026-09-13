@@ -37,7 +37,7 @@ import {
   type ScorableBar,
 } from "../_shared/conditional-wait.ts";
 
-const TRACKER_VERSION = "track-outcomes-v15-2026-09-13T13:20:00Z";
+const TRACKER_VERSION = "track-outcomes-v16-2026-09-13T22:40:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -295,9 +295,10 @@ Deno.serve(async (req: Request) => {
       }
     };
 
-    // The same series, fetched at most once per run. Only for the two
-    // whole-series passes (WAIT, conditional); the trade path's refinements
-    // ask for narrower windows and are deliberately not cached here.
+    // The same series, fetched at most once per run — used by all three
+    // whole-series passes (trades, WAITs, conditional claims). The trade
+    // path's REFINEMENTS are not cached here: those ask for narrower windows
+    // at a finer rung, so they are a different request, not this one again.
     const cachedSeries = async (symbol: string, interval: string): Promise<Candle[] | null> => {
       const key = `${symbol}|${interval}`;
       const hit = seriesCache.get(key);

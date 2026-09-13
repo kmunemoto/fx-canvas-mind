@@ -51,7 +51,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v26-2026-09-13T13:50:00Z";
+const POSTMORTEM_VERSION = "postmortem-v27-2026-09-13T22:40:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -503,9 +503,13 @@ Deno.serve(async (req: Request) => {
     // THE LEARNING LOOP IS CONTROL-ONLY, AND THIS IS THE ONE DIRECTION THAT
     // CANNOT BE UNDONE LATER (#86 / #87).
     //
-    // Every other place the arms could get pooled is a reporting problem: the
-    // rows keep their `variant` and a query can always split them again. Not
-    // here. A lesson drawn from a candidate row goes into the SHARED rulebook,
+    // Applied to ALL THREE reads of `analyses` in this function — the two
+    // lesson intakes and the record pool that feeds the rulebook editor. The
+    // first attempt at this filtered two of the three and described the loop
+    // as closed, which was worse than filtering none: it read as done.
+    //
+    // Elsewhere pooling is a reporting problem — the rows keep their `variant`
+    // and a query can always split them again. Not here. A lesson drawn from a candidate row goes into the SHARED rulebook,
     // and analyze shows that rulebook to control runs — so one `lower_tf` row
     // teaches every later control run from a timeframe control never saw, and
     // nothing afterwards can separate the two populations again.
@@ -1448,8 +1452,21 @@ Deno.serve(async (req: Request) => {
         // reason: without the first the two entry eras pool into one win
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
+        // THE THIRD INTAKE, and the one the first pass at this missed.
+        //
+        // `controlOnly` was put on the two LESSON intakes above and this one
+        // was left open, on the reasoning that it only builds a summary. It
+        // does not "only" anything: this pool becomes the record that the
+        // rulebook-consolidation model is shown, and that model writes the
+        // SHARED rulebook that analyze puts in front of control runs. So a
+        // candidate arm's wins and losses were still shaping the book every
+        // control run reads — through a different door, in the same direction
+        // the comment at the top of this function calls irreversible.
+        //
+        // Two intakes filtered and one not is worse than none filtered: it
+        // reads as closed.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,proposed_signal:entry_check->>proposed_signal,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,proposed_signal:entry_check->>proposed_signal,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&${controlOnly}&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;

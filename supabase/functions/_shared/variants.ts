@@ -20,11 +20,14 @@
 // identical, and would say something false about the contract besides.
 //
 // WHY THERE IS NO "both". The record these arms are measured against is 48
-// settled trades. Split two ways that is ~24 each, which is already below
-// MIN_STAT_N. Split four ways it is noise with a label on it. One candidate at
-// a time is not a limitation of the mechanism — it is the only shape the
-// evidence can carry. Adding a combined arm later is one enum value and one
-// CHECK constraint.
+// settled trades. Split two ways that is ~24 each — barely over MIN_STAT_N
+// (20, postmortem/prompt.ts), which is the floor for reporting a statistic at
+// all, not a comfortable sample. Split four ways it is under the floor in
+// every cell: noise with a label on it. (An earlier version of this comment
+// said 24 was already BELOW MIN_STAT_N. That was simply wrong, and it argued
+// for the right answer with a false number.) One candidate at a time is not a
+// limitation of the mechanism — it is the only shape the evidence can carry.
+// Adding a combined arm later is one enum value and one CHECK constraint.
 
 export const VARIANTS = ["control", "lower_tf", "conditional_wait"] as const;
 

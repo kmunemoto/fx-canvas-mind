@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v56-2026-09-13T13:20:00Z";
+const FUNCTION_VERSION = "analyze-v57-2026-09-13T22:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -485,7 +485,7 @@ const RESPONSE_SCHEMA = {
       // Optional is not free, though, and an earlier version of this comment
       // said it was ("an extra key they never look at costs them nothing").
       // That was wrong: noise-floor/shape.ts puts the whole object on the wire
-      // for the structured shape, so an extra property is 1,581 bytes of
+      // for the structured shape, so an extra property is 1,688 bytes of
       // prompt the corpus never saw. The harness sends
       // CONTROL_RESPONSE_SCHEMA for that reason; `required` is not the only
       // thing they read.
@@ -967,9 +967,32 @@ Deno.serve(async (req: Request) => {
     // Silently demoted to control rather than refused, and the ROW records
     // which arm actually ran — a request that asked for an arm it may not have
     // is a control run, and nothing downstream may read it as anything else.
-    const variant = isAdmin ? requestedVariant : DEFAULT_VARIANT;
-    if (variant !== requestedVariant) {
-      console.warn("Variant refused (not an admin)", { requested: requestedVariant });
+    //
+    // AND AN ARM THAT CANNOT RUN ON THIS TIMEFRAME IS NOT THIS ARM.
+    //
+    // #87 has no lower rung for a 1day plan (price-source.ts explains why GMO
+    // cannot serve it). Dropping 1day from the map stopped the apology
+    // paragraph, but on its own it produced the PURE form of the thing the map
+    // comment says is impossible: a run whose prompt is byte-identical to a
+    // control run, stored under `lower_tf`. That row would sit in the
+    // candidate population, be excluded from the record and the rulebook as a
+    // candidate, and have nothing candidate about it.
+    //
+    // So the row says what actually ran. The demotion is recorded rather than
+    // silent, because "asked for an arm and got control" is exactly the kind
+    // of thing a reader of the arm's own statistics has to be able to see.
+    const armHasNothingToDo = usesLowerTimeframe(requestedVariant) &&
+      LOWER_TIMEFRAME[interval] === undefined;
+    const variant = !isAdmin || armHasNothingToDo ? DEFAULT_VARIANT : requestedVariant;
+    const variantDemotion = variant === requestedVariant
+      ? null
+      : (!isAdmin ? "not_admin" : "no_lower_rung");
+    if (variantDemotion !== null) {
+      console.warn("Variant demoted to control", {
+        requested: requestedVariant,
+        reason: variantDemotion,
+        interval,
+      });
     }
 
     // Analysis is a paid feature. Every call costs a model turn and several
@@ -2773,6 +2796,11 @@ ${candleLines(lowerCandles, 24)}`;
       conditional_rejection: conditionalRead === null || conditionalRead.ok
         ? null
         : conditionalRead.rejection,
+      // Which arm was ASKED for, when that is not the arm that ran, and why.
+      // Null on the ordinary case. `variant` on the row is always the arm that
+      // actually ran; this is the only record that a different one was wanted.
+      variant_requested: variantDemotion === null ? null : requestedVariant,
+      variant_demotion: variantDemotion,
     };
 
     // What the row is standing aside FROM, decided here rather than
@@ -3274,6 +3302,13 @@ ${candleLines(lowerCandles, 24)}`;
             context,
             rulebook_version: rulebookVersion === null ? null : (rulesShown.length > 0 ? rulebookVersion : 0),
             plan_contract: PLAN_CONTRACT,
+            // The arm, same as the parent row. Omitted once, and the column
+            // DEFAULT ('control') then stamped a candidate arm's shadow as a
+            // control row while it still carried that arm's `context.lower` —
+            // which walked it straight through postmortem's control-only
+            // filter and into the shared rulebook. A row that does not say
+            // which analyst wrote it is not a cheaper row, it is a false one.
+            variant,
             // The shadow row is the same analysis under the other gate, so it
             // carries the same stamp. A shadow with no model would drop out of
             // every model-partitioned count while still being counted overall.

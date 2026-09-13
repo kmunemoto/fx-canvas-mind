@@ -320,7 +320,7 @@ describe("22a — the replayed schema is the one the corpus was drawn under", ()
   // harness and the test agree. What the corpus needs is that the BYTES on the
   // wire are the bytes production sent, and noise_cells cannot check it for
   // us: it records a sha256 of the system and user strings, never of the
-  // schema. So an extra property here is 1,581 bytes of prompt nobody can see
+  // schema. So an extra property here is 1,688 bytes of prompt nobody can see
   // afterwards — which is what happened when #86 added `conditional_wait`.
   const sha = async (text: string) => {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
