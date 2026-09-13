@@ -103,7 +103,18 @@ const ChangeSinceLastCard = ({ review, previous, change, pair, heldExists, onReg
           {thesisStatus ? p.thesis.status[thesisStatus] : p.thesis.unavailable}
         </span>
       </p>
-      {previous.levels === null && <p className="text-muted-foreground">{p.previousWasWait}</p>}
+      {/* `levels === null` has two causes and they are different events: the
+          analyst stood aside (no levels to name), or the levels were not all
+          recorded — which happens on a plan the SERVER refused as incoherent,
+          where the analyst did name a direction. Printing 見送り there would
+          fold a server refusal into an analyst WAIT, the one conflation this
+          card exists to prevent. */}
+      {previous.analyst_direction === "WAIT" && (
+        <p className="text-muted-foreground" data-testid="previous-wait">{p.previousWasWait}</p>
+      )}
+      {previous.analyst_direction !== "WAIT" && previous.levels === null && (
+        <p className="text-muted-foreground" data-testid="levels-unrecorded">{p.previousLevelsUnrecorded}</p>
+      )}
       {previous.levels !== null && !previous.levels.published && (
         <p className="text-muted-foreground" data-testid="levels-refused">{p.previousLevelsRefused}</p>
       )}

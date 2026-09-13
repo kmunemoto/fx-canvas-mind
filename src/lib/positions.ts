@@ -45,6 +45,7 @@ export const normalizePosition = (raw: unknown): Position | null => {
     registered_after_settlement: r.registered_after_settlement === true,
     status: r.status === "closed" ? "closed" : "open",
     closed_at: typeof r.closed_at === "string" ? r.closed_at : null,
+    closed_at_source: r.closed_at_source === "user" || r.closed_at_source === "registered" ? r.closed_at_source : null,
     close_price: num(r.close_price),
     close_reason: r.close_reason === "manual" || r.close_reason === "stop" || r.close_reason === "target" || r.close_reason === "other"
       ? r.close_reason
@@ -72,6 +73,8 @@ export const REGISTER_ERRORS = [
   "position_not_open",
   "close_price_must_be_positive",
   "close_reason_invalid",
+  "closed_before_open",
+  "closed_in_future",
 ] as const;
 export type RegisterError = (typeof REGISTER_ERRORS)[number] | "generic";
 
@@ -91,6 +94,20 @@ export interface LatestVerdict {
   record: AnalysisRecord;
   review: PositionReview;
 }
+// An analysis DID run on this pair after the position was registered, and
+// reviewed a different position: the server evaluates the newest open
+// position per pair and counts the rest. Saying "no analysis since
+// registration" here would be false twice over.
+export interface NotCovered {
+  kind: "not_covered";
+  record: AnalysisRecord;
+}
+// An analysis ran and could not read the positions table at all. The absence
+// of a verdict is that outage, not a quiet record.
+export interface LookupFailed {
+  kind: "lookup_failed";
+  record: AnalysisRecord;
+}
 export interface NoVerdict {
   kind: "none";
   // True when the page reaches back to the registration, so the absence is
@@ -99,10 +116,12 @@ export interface NoVerdict {
   examined: number;
 }
 
+export type VerdictLookup = LatestVerdict | NotCovered | LookupFailed | NoVerdict;
+
 export const latestVerdictFor = (
   position: Position,
   history: AnalysisRecord[],
-): LatestVerdict | NoVerdict => {
+): VerdictLookup => {
   const rows = history.filter((r) => r.shadow !== true);
   const sorted = [...rows].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   for (const record of sorted) {
@@ -111,9 +130,38 @@ export const latestVerdictFor = (
       return { kind: "found", record, review };
     }
   }
+  // No verdict for THIS position. Before calling that an absence of analysis,
+  // look for an analysis that did run on this pair since it was registered:
+  // what happened there is a fact, and it is not "nothing happened".
+  const after = sorted.find((r) =>
+    r.pair === position.pair && r.position_review != null && r.created_at > position.created_at
+  );
+  if (after?.position_review) {
+    const ref = after.position_review.reference;
+    if (ref?.held && ref.held.position_id !== position.id) return { kind: "not_covered", record: after };
+    if (!ref?.held && ref?.held_reason === "lookup_failed") return { kind: "lookup_failed", record: after };
+  }
   const oldest = sorted.length > 0 ? sorted[sorted.length - 1].created_at : null;
   const conclusive = oldest !== null && oldest <= position.created_at;
   return { kind: "none", conclusive, examined: sorted.length };
+};
+
+// Why the review has no analyst answer, as one dictionary key. Lifted out of
+// the card so the strip can say the same thing: a verdict that was never
+// produced must not appear anywhere as a bare 判定できない, which is the
+// analyst's own word for "I looked and could not judge".
+export type ReviewFailReason = "time_budget" | "api" | "parse" | "lookup" | "no_model" | "finalise" | "unknown";
+
+export const reviewFailReason = (review: PositionReview | null | undefined): ReviewFailReason => {
+  const err = review?.error ?? review?.analyst?.error ?? null;
+  if (err === null) return "unknown";
+  if (err === "time_budget") return "time_budget";
+  if (err.startsWith("api_")) return "api";
+  if (err.startsWith("parse_")) return "parse";
+  if (err.startsWith("finalise")) return "finalise";
+  if (err === "no_model") return "no_model";
+  if (err.includes("lookup")) return "lookup";
+  return "unknown";
 };
 
 // The word the card shows for a review. Null verdict (not produced) renders

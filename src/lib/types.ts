@@ -755,6 +755,10 @@ export interface Position {
   registered_after_settlement: boolean;
   status: "open" | "closed";
   closed_at: string | null;
+  // user = the reader typed the close time; registered = the server clock at
+  // the moment it was recorded stood in for it. Null on an open position and
+  // on a row closed before the column existed.
+  closed_at_source: "user" | "registered" | null;
   close_price: number | null;
   close_reason: "manual" | "stop" | "target" | "other" | null;
   created_at: string;
@@ -912,7 +916,9 @@ export interface PositionReview {
   verdict: HeldVerdict | null;
   decided_by: "server" | "analyst" | null;
   override_reason: ReviewOverride | null;
-  override_suppressed: { reason: "settled_before_open" | "registered_after_settlement"; closed_at: string | null } | null;
+  override_suppressed:
+    | { reason: "settled_before_open" | "settled_before_registration" | "registered_after_settlement"; closed_at: string | null }
+    | null;
   change: ReviewChange | null;
   at: string;
   elapsed_ms: number | null;

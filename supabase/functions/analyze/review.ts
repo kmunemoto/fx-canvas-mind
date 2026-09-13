@@ -262,7 +262,9 @@ export interface PositionReview {
   verdict: HeldVerdict | null;
   decided_by: "server" | "analyst" | null;
   override_reason: OverrideReason | null;
-  override_suppressed: { reason: "settled_before_open" | "registered_after_settlement"; closed_at: string | null } | null;
+  override_suppressed:
+    | { reason: "settled_before_open" | "settled_before_registration" | "registered_after_settlement"; closed_at: string | null }
+    | null;
   change: Change | null;
   at: string;
   elapsed_ms: number | null;
@@ -451,6 +453,28 @@ export const barTimeMs = (datetime: string): number => {
   return Date.parse(`${date}T${time || "00:00:00"}Z`);
 };
 
+// WHEN A BAR BEGINS, which is not the same question as what it is stamped.
+//
+// An intraday stamp names the bar's open, so the stamp IS the start. A
+// date-only stamp does not: the provider's forex day is named for the date it
+// ENDS on (_shared/market-hours.ts — the daily bar stamped 2026-09-05 is the
+// 4h bars from 09-04 21:00Z onward), so the day stamped D begins at the 17:00
+// New York close of D-1: 21:00Z in summer, 22:00Z in winter.
+//
+// 21:00Z is taken, which is exact in summer and an hour early in winter — the
+// same conservative direction `isPossiblyClosed` takes. Being early can only
+// EXCLUDE a bar that might contain the anchor; being late would count a move
+// made before the position existed as a touch after it, and a touch is
+// promoted to a server-decided exit. One of those two errors costs a
+// measurement; the other tells the reader their stop was hit.
+const DAY_STAMP_LEAD_MS = 3 * 60 * 60 * 1000;
+
+const barStartMs = (datetime: string): number => {
+  const stamped = barTimeMs(datetime);
+  if (!Number.isFinite(stamped)) return stamped;
+  return datetime.includes(":") ? stamped : stamped - DAY_STAMP_LEAD_MS;
+};
+
 const pipFor = (decimals: number): number => (decimals === 3 ? 0.01 : 0.0001);
 const round = (v: number, d: number): number => Number(v.toFixed(d));
 
@@ -499,10 +523,13 @@ export const mechanicalFacts = (input: {
 
   const anchorMs = input.anchor.at === null ? NaN : Date.parse(input.anchor.at);
   const dated = input.candles
-    .map((c) => ({ c, t: barTimeMs(c.datetime) }))
+    .map((c) => ({ c, t: barStartMs(c.datetime) }))
     .filter((x) => Number.isFinite(x.t));
   // Strictly after the anchor: the bar containing it is excluded (see the
-  // field comment on `as_of`).
+  // field comment on `as_of`). Keyed on when a bar BEGINS, not on its stamp —
+  // a daily bar stamped D begins the evening of D-1 (barStartMs), so a
+  // stamp-as-instant comparison let a move made three hours before the fill
+  // count as a touch after it.
   const since = Number.isFinite(anchorMs) ? dated.filter((x) => x.t > anchorMs).map((x) => x.c) : [];
   const covers = Number.isFinite(anchorMs) && dated.length > 0 ? dated[0].t <= anchorMs : null;
 
@@ -636,12 +663,82 @@ const factsBlock = (m: MechanicalFacts | null, lang: "ja" | "en", decimals: numb
   ].join("\n");
 };
 
-const outcomeLine = (o: ReferenceOutcome | null, lang: "ja" | "en"): string => {
+// WHETHER THE TRACKER'S SETTLEMENT BELONGS TO THIS POSITION.
+//
+// The tracker settles the PLAN. A position registered on that plan is a
+// different thing with a different clock, and the settlement is only this
+// position's exit when it happened while the position was open. Three cases
+// where it did not, all facts about the row rather than judgements:
+//
+//   registered_after_settlement  the plan was already settled when the
+//                                position was registered
+//   settled_before_open          the settlement bar precedes the fill
+//   settled_before_registration  the same, except the fill time is not
+//                                recorded (opened_at IS the registration
+//                                instant), so whether it precedes the fill is
+//                                not known
+//
+// Exported and used twice on purpose: the verdict must not be promoted from a
+// suppressed settlement, and the ANALYST must not be handed that settlement
+// without the same caveat — otherwise it answers exit_condition_met from it
+// and the card relays that as the analyst's own verdict, one line above the
+// sentence saying the settlement is not used.
+export const trackerSuppression = (held: HeldReference): PositionReview["override_suppressed"] => {
+  const settled = held.outcome && held.outcome.outcome === "loss" ? held.outcome : null;
+  if (!settled) return null;
+  if (held.registered_after_settlement) {
+    return { reason: "registered_after_settlement", closed_at: settled.closed_at };
+  }
+  const closedMs = settled.closed_at === null ? NaN : Date.parse(settled.closed_at);
+  const openedMs = Date.parse(held.opened_at);
+  if (Number.isFinite(closedMs) && Number.isFinite(openedMs) && closedMs < openedMs) {
+    return held.opened_at_source === "registered"
+      ? { reason: "settled_before_registration", closed_at: settled.closed_at }
+      : { reason: "settled_before_open", closed_at: settled.closed_at };
+  }
+  return null;
+};
+
+const suppressionNote = (
+  s: PositionReview["override_suppressed"],
+  openedAt: string,
+  lang: "ja" | "en",
+): string => {
+  if (!s) return "";
+  if (lang === "ja") {
+    if (s.reason === "registered_after_settlement") {
+      return "（決着後に登録された建玉。サーバーはこの決着をこの建玉の撤退条件に使わない）";
+    }
+    if (s.reason === "settled_before_registration") {
+      return `（登録 ${openedAt} より前の決着。実際の約定時刻は記録されていないので、この建玉の撤退条件には使わない）`;
+    }
+    return `（建玉 ${openedAt} より前の決着。この建玉の撤退条件ではない）`;
+  }
+  if (s.reason === "registered_after_settlement") {
+    return " - this position was registered after the tracker had settled the plan; the server does not use this settlement as its exit condition";
+  }
+  if (s.reason === "settled_before_registration") {
+    return ` - settled before this position was registered (${openedAt}); when it was actually filled is not recorded, so this is not its exit condition`;
+  }
+  return ` - settled before this position was opened (${openedAt}); not its exit condition`;
+};
+
+const outcomeLine = (
+  o: ReferenceOutcome | null,
+  lang: "ja" | "en",
+  // Non-null only for a held reference whose settlement the server will not
+  // use. The line itself is never dropped — the tracker's verdict is reported
+  // BESIDE the mid facts rather than merged into them — so the caveat travels
+  // with it instead.
+  suppressed: PositionReview["override_suppressed"] = null,
+  openedAt = "",
+): string => {
   if (!o) return "";
   const basis = o.price_basis === "quotes" ? "Bid/Ask" : o.price_basis === "mid" ? (lang === "ja" ? "仲値" : "mid") : (lang === "ja" ? "板の記録なし" : "basis not recorded");
+  const note = suppressionNote(suppressed, openedAt, lang);
   return lang === "ja"
-    ? `\n判定システムの結果（${basis}）: ${o.outcome}${o.closed_at ? `（${o.closed_at}）` : ""}`
-    : `\nTracker verdict (${basis}): ${o.outcome}${o.closed_at ? ` (${o.closed_at})` : ""}`;
+    ? `\n判定システムの結果（${basis}）: ${o.outcome}${o.closed_at ? `（${o.closed_at}）` : ""}${note}`
+    : `\nTracker verdict (${basis}): ${o.outcome}${o.closed_at ? ` (${o.closed_at})` : ""}${note}`;
 };
 
 const planBlock = (r: HeldReference | PreviousReference, lang: "ja" | "en", decimals: number): string => {
@@ -653,7 +750,7 @@ const planBlock = (r: HeldReference | PreviousReference, lang: "ja" | "en", deci
     return lang === "ja"
       ? [
         `方向: ${r.direction} ／ 約定価格: ${p(r.entry)} ／ 損切り: ${p(r.stop)} ／ TP1: ${p(r.tp1)}`,
-        `建玉の時刻: ${r.opened_at}（プランの分析足: ${r.interval}）${r.other_open_positions.count > 0 ? `\n同じペアに他 ${r.other_open_positions.count} 件の建玉あり（この評価は最新の 1 件のみ）` : ""}`,
+        `${r.opened_at_source === "registered" ? `登録時刻: ${r.opened_at}（約定はこれより前の可能性あり・記録なし）` : `建玉の時刻: ${r.opened_at}`}（プランの分析足: ${r.interval}）${r.other_open_positions.count > 0 ? `\n同じペアに他 ${r.other_open_positions.count} 件の建玉あり（この評価は最新の 1 件のみ）` : ""}`,
         `元の根拠（thesis）: ${r.thesis ?? "（記録なし）"}`,
         `元の根拠（key_factors）:\n${factors}`,
         `プラン作成時の指標スナップショット: ${snap}`,
@@ -661,7 +758,7 @@ const planBlock = (r: HeldReference | PreviousReference, lang: "ja" | "en", deci
       ].join("\n")
       : [
         `Direction: ${r.direction} / fill: ${p(r.entry)} / stop: ${p(r.stop)} / TP1: ${p(r.tp1)}`,
-        `Opened at: ${r.opened_at} (plan timeframe: ${r.interval})${r.other_open_positions.count > 0 ? `\n${r.other_open_positions.count} other open position(s) on this pair; this review covers the newest only` : ""}`,
+        `${r.opened_at_source === "registered" ? `Registered at: ${r.opened_at} (the fill may be earlier; not recorded)` : `Opened at: ${r.opened_at}`} (plan timeframe: ${r.interval})${r.other_open_positions.count > 0 ? `\n${r.other_open_positions.count} other open position(s) on this pair; this review covers the newest only` : ""}`,
         `Original thesis: ${r.thesis ?? "(not recorded)"}`,
         `Original key factors:\n${factors}`,
         `Indicator snapshot when the plan was written: ${snap}`,
@@ -704,7 +801,7 @@ const STRINGS: Record<AnalysisLocale, ReviewStrings> = {
   caution（警戒）: 根拠が弱まった、または不利な事実があるが、撤退条件は成立していない。watch に何を見張るかを書く
   exit_condition_met（撤退条件成立）: プラン自身の損切り水準に到達した、または根拠が拠っていた構造が確定足で崩れた
   undecidable（判定できない）: 材料が足りない、または元の根拠を評価できない
-- thesis_status と verdict は矛盾させない。broken なら exit_condition_met。weakened は caution。intact は hold か caution。unknown は undecidable。
+- thesis_status と verdict は矛盾させない。broken なら exit_condition_met。weakened は caution。intact は hold か caution（プランの損切り水準に到達したときは exit_condition_met も可）。unknown は undecidable。
 - サーバーが計算した事実（含み損益・水準までの距離・接触の有無。いずれも仲値ベース）は事実として引用し、数え直さない。「未計測」は「なし」ではない。
 - what_changed には、プラン作成時のスナップショットと今の相場データを比べて、実際に変わったことだけを書く（数値と足を添える）。
 - 板情報・出来高・建玉は取得していない。推測は推測と書く。
@@ -735,7 +832,13 @@ const STRINGS: Record<AnalysisLocale, ReviewStrings> = {
         planBlock(reference, "ja", decimals),
         "",
         "## サーバーが計算した事実",
-        factsBlock(mechanical, "ja", decimals) + outcomeLine(reference.outcome, "ja"),
+        factsBlock(mechanical, "ja", decimals) +
+          outcomeLine(
+            reference.outcome,
+            "ja",
+            reference.kind === "held" ? trackerSuppression(reference) : null,
+            reference.kind === "held" ? reference.opened_at : "",
+          ),
         "",
         "## 現在の相場データ",
         sections,
@@ -754,7 +857,7 @@ Rules:
   caution: the thesis has weakened or adverse facts have appeared, but no exit condition is met; name what to watch in the watch field
   exit_condition_met: the plan's own stop level was reached, or the structure the thesis rested on has broken on closed bars
   undecidable: not enough material, or the original thesis cannot be evaluated
-- Keep thesis_status and verdict coherent: broken implies exit_condition_met; weakened is the caution case; intact goes with hold or caution; unknown goes with undecidable.
+- Keep thesis_status and verdict coherent: broken implies exit_condition_met; weakened is the caution case; intact goes with hold or caution, or with exit_condition_met when the plan's own stop level was reached; unknown goes with undecidable.
 - Quote the server's measured facts (open P&L, distance to levels, touches — all on the mid price) as facts; do not recount them. "Not measured" is not "none".
 - In what_changed, list only what actually changed between the snapshot at the plan and the market data now, with numbers and bars.
 - This app sees no order book, volume or open interest. Mark inferences as inferences.
@@ -785,7 +888,13 @@ Rules:
         planBlock(reference, "en", decimals),
         "",
         "## Facts measured by the server",
-        factsBlock(mechanical, "en", decimals) + outcomeLine(reference.outcome, "en"),
+        factsBlock(mechanical, "en", decimals) +
+          outcomeLine(
+            reference.outcome,
+            "en",
+            reference.kind === "held" ? trackerSuppression(reference) : null,
+            reference.kind === "held" ? reference.opened_at : "",
+          ),
         "",
         "## Market data now",
         sections,
@@ -879,9 +988,25 @@ export const parseReviewAnswer = (
 // Derivation
 // ---------------------------------------------------------------------------
 
+// Pairs the analyst cannot mean both halves of. Each is a verdict whose own
+// definition asserts something about the thesis that the thesis field denies:
+//
+//   hold × weakened / hold × broken   hold means "the thesis is intact"
+//   caution × broken                  caution means "no exit condition is
+//                                     met", and a broken thesis IS one
+//   hold × unknown                    hold asserts an intact thesis on an
+//                                     answer that declined to evaluate it
+//
+// NOT listed, deliberately: exit_condition_met × anything (the stop being
+// reached is a fact about price, not about the thesis — a sound plan can be
+// stopped out), caution × unknown (adverse facts can appear while the thesis
+// is unevaluable), and undecidable × anything (declining to judge is
+// compatible with any reading). Flagging those would print "the model
+// contradicted itself" over answers that do not contradict themselves.
 const INCOHERENT: Array<[HeldVerdict, ThesisStatus]> = [
   ["hold", "weakened"],
   ["hold", "broken"],
+  ["hold", "unknown"],
   ["caution", "broken"],
 ];
 
@@ -958,11 +1083,10 @@ export const finalizeReview = (run: ReviewRun, current: CurrentSide): PositionRe
     } else if (settled) {
       const closedMs = settled.closed_at === null ? NaN : Date.parse(settled.closed_at);
       const openedMs = Date.parse(held.opened_at);
-      if (held.registered_after_settlement) {
-        suppressed = { reason: "registered_after_settlement", closed_at: settled.closed_at };
-      } else if (Number.isFinite(closedMs) && Number.isFinite(openedMs) && closedMs < openedMs) {
-        suppressed = { reason: "settled_before_open", closed_at: settled.closed_at };
-      } else {
+      // The same rule the analyst was shown (trackerSuppression), so the
+      // prompt and the verdict cannot disagree about whose settlement it is.
+      suppressed = trackerSuppression(held);
+      if (suppressed === null) {
         verdict = "exit_condition_met";
         decidedBy = "server";
         override = {
@@ -1032,7 +1156,10 @@ export const finalizeReview = (run: ReviewRun, current: CurrentSide): PositionRe
   const factsOwed = held !== null || (ref?.previous?.levels ?? null) !== null;
   const status: PositionReview["status"] = run.status === "skipped"
     ? "skipped"
-    : ref === null || (factsOwed && mech === null)
+    // Nothing was produced at all — no reference, no facts where facts were
+    // owed, or a reference lookup that threw. `partial` would claim the facts
+    // are there and only the analyst is missing.
+    : ref === null || (factsOwed && mech === null) || (run.status === "failed" && mech === null)
       ? "failed"
       : analyst?.status === "ok"
         ? "ok"

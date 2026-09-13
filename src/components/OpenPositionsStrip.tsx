@@ -1,7 +1,7 @@
 import type { AnalysisRecord, Position } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals } from "@/lib/candleTime";
-import { displayVerdict, latestVerdictFor } from "@/lib/positions";
+import { displayVerdict, latestVerdictFor, reviewFailReason } from "@/lib/positions";
 import { ClosePositionForm } from "./EntryRegistration";
 import { Briefcase } from "lucide-react";
 
@@ -65,23 +65,43 @@ const OpenPositionsStrip = ({ positions, history, onClosed }: Props) => {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p data-testid="latest-verdict">
                   <span className="text-[10px] text-muted-foreground mr-1.5">{p.latestVerdict}</span>
-                  {latest.kind === "found"
-                    ? (
-                      <>
-                        <span className={`font-semibold ${VERDICT_CLASS[displayVerdict(latest.review)]}`}>
-                          {p.verdicts[displayVerdict(latest.review)]}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground ml-1.5">
-                          {p.verdictAt(formatJst(latest.record.created_at, t.intlLocale))}
-                          {stale ? ` · ${p.verdictStale}` : ""}
-                        </span>
-                      </>
-                    )
-                    : (
-                      <span className="text-muted-foreground">
-                        {latest.conclusive ? p.noVerdictSinceRegistration : p.noVerdictInRecent(latest.examined)}
+                  {latest.kind === "found" && (
+                    <>
+                      <span className={`font-semibold ${VERDICT_CLASS[displayVerdict(latest.review)]}`}>
+                        {p.verdicts[displayVerdict(latest.review)]}
                       </span>
-                    )}
+                      <span className="text-[10px] text-muted-foreground ml-1.5">
+                        {p.verdictAt(formatJst(latest.record.created_at, t.intlLocale))}
+                        {stale ? ` · ${p.verdictStale}` : ""}
+                        {/* A verdict that was never produced must not stand
+                            here as the analyst's word for "I could not
+                            judge" — the reason travels with it. */}
+                        {latest.review.verdict === null
+                          ? ` · ${p.analystUnavailable(p.failReasons[reviewFailReason(latest.review)])}`
+                          : ""}
+                      </span>
+                    </>
+                  )}
+                  {/* An analysis that ran and did not cover this position, or
+                      could not read the positions at all, is not an absence
+                      of analysis. */}
+                  {latest.kind === "not_covered" && (
+                    <span className="text-muted-foreground">
+                      {p.verdictNotCovered}
+                      <span className="text-[10px] ml-1.5">{p.verdictAt(formatJst(latest.record.created_at, t.intlLocale))}</span>
+                    </span>
+                  )}
+                  {latest.kind === "lookup_failed" && (
+                    <span className="text-warning">
+                      {p.verdictLookupFailed}
+                      <span className="text-[10px] ml-1.5">{p.verdictAt(formatJst(latest.record.created_at, t.intlLocale))}</span>
+                    </span>
+                  )}
+                  {latest.kind === "none" && (
+                    <span className="text-muted-foreground">
+                      {latest.conclusive ? p.noVerdictSinceRegistration : p.noVerdictInRecent(latest.examined)}
+                    </span>
+                  )}
                 </p>
                 <ClosePositionForm position={pos} onClosed={onClosed} />
               </div>

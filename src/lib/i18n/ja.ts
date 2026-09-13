@@ -795,6 +795,8 @@ export const ja = {
       position_not_open: "その建玉は開いていません（決済済み、または自分のものではありません）",
       close_price_must_be_positive: "決済価格は 0 より大きい数で入力してください",
       close_reason_invalid: "決済理由が不正です",
+      closed_before_open: "決済時刻が建玉より前です",
+      closed_in_future: "決済時刻が未来です",
       generic: "登録できませんでした。時間をおいて再試行してください",
     },
     openTitle: "保有中の建玉",
@@ -804,6 +806,8 @@ export const ja = {
     closeButton: "決済した",
     closeTitle: "決済を記録",
     closePrice: "決済価格",
+    closeTime: "決済時刻（任意）",
+    closeTimeHint: "未入力なら記録した時刻を使います",
     closeReason: "理由",
     closeReasons: { manual: "手動", stop: "損切り", target: "利確", other: "その他" },
     closeSubmit: "記録する",
@@ -813,6 +817,10 @@ export const ja = {
     latestVerdict: "最新の判定",
     verdictAt: (at: string) => `${at} 時点`,
     noVerdictSinceRegistration: "登録後の分析はまだありません（このペアを分析すると判定が出ます）",
+    // 登録後に分析は走ったが、この建玉は評価されなかった／建玉を読めなかった。
+    // どちらも「分析がまだ無い」ではない。
+    verdictNotCovered: "最新の分析は別の建玉（最新の 1 件）を評価しました",
+    verdictLookupFailed: "最新の分析は建玉を参照できませんでした",
     noVerdictInRecent: (n: number) => `直近${n}件に判定なし`,
     verdictStale: "以後は未評価",
     otherOpen: (n: number) => `他に ${n} 件の建玉あり（この判定は最新の 1 件のみ）`,
@@ -851,6 +859,10 @@ export const ja = {
     suppressed: {
       settled_before_open: (at: string) =>
         `判定システムは損切り（loss）としていますが、その決着（${at}）は建玉より前なので撤退条件には使っていません`,
+      // 登録時刻を建玉時刻にしている建玉。決着が登録より前でも、実際の約定が
+      // その前か後かは記録が無いので分からない——「約定より前」とは言えない。
+      settled_before_registration: (at: string) =>
+        `判定システムは損切り（loss）としていますが、その決着（${at}）は登録より前です。実際の約定時刻は記録されていないため、撤退条件には使っていません`,
       registered_after_settlement: "決着後に登録された建玉なので、判定システムの結果は撤退条件に使っていません",
     },
     facts: {
@@ -869,6 +881,14 @@ export const ja = {
         no_anchor: "未計測（基準時刻なし）",
         series_starts_after_anchor: "未計測（取得した足が建玉時刻に届かない）",
         no_bars_since_anchor: "未計測（建玉後の足がまだ無い）",
+      },
+      // 同じ 3 状態を、建玉が無い参照（前回の判断）向けに言い直したもの。
+      // 基準は約定ではなく前回の値付け時刻なので、「建玉」と書いたら
+      // 存在しなかったポジションの話になる。
+      notMeasuredPriced: {
+        no_anchor: "未計測（基準時刻なし）",
+        series_starts_after_anchor: "未計測（取得した足が前回の価格時刻に届かない）",
+        no_bars_since_anchor: "未計測（前回の価格時刻以降の足がまだ無い）",
       },
       midOnly: "仲値のみ。決済側の Bid/Ask では未計測",
       feed: { twelve_data: "仲値・Twelve Data", gmo: "仲値・GMO Coin" },
@@ -911,6 +931,8 @@ export const ja = {
     gateNone: "今回は新規プランが出ていないため、ゲートの計測はありません",
     previousLevelsRefused: "前回の水準は AI が提案し、サーバーが公開を見送ったものです",
     previousWasWait: "前回は見送り（水準なし）",
+    // 水準が読めなかった回。AI 自身の見送りではないので「見送り」とは書かない。
+    previousLevelsUnrecorded: "前回の水準は揃って記録されていません",
     noiseNote: "同じ入力でも AI の判定は割れることがあります。見出しは、名前の付いた計測事実が裏付けるときだけ信頼してください。",
   },
 

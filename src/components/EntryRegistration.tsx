@@ -141,6 +141,7 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [price, setPrice] = useState("");
+  const [time, setTime] = useState("");
   const [reason, setReason] = useState<"manual" | "stop" | "target" | "other">("manual");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,14 +153,23 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
       setError(p.registerErrors.close_price_must_be_positive);
       return;
     }
+    // The close time is the reader's, not the clock's: a stop hit at 02:00 and
+    // recorded at 09:00 is a 02:00 exit, and a later scoring of hold/exit
+    // decisions measures from it. Left blank the server records its own
+    // instant and marks the row as such rather than passing it off as a fill.
+    const params: Record<string, unknown> = { p_position_id: position.id, p_close_price: n, p_reason: reason };
+    if (time.trim() !== "") {
+      const ms = Date.parse(time);
+      if (!Number.isFinite(ms)) {
+        setError(p.registerErrors.closed_in_future);
+        return;
+      }
+      params.p_closed_at = new Date(ms).toISOString();
+    }
     setBusy(true);
     setError(null);
     try {
-      const { data, error: rpcError } = await supabase.rpc("close_position", {
-        p_position_id: position.id,
-        p_close_price: n,
-        p_reason: reason,
-      });
+      const { data, error: rpcError } = await supabase.rpc("close_position", params);
       if (rpcError) {
         setError(p.registerErrors[registerErrorOf(rpcError.message)]);
         return;
@@ -198,6 +208,11 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
       <label className="block">
         <span className="text-[10px] text-muted-foreground">{p.closePrice}</span>
         <input className={inputCls} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
+      </label>
+      <label className="block">
+        <span className="text-[10px] text-muted-foreground">{p.closeTime}</span>
+        <input className={inputCls} type="datetime-local" value={time} onChange={(e) => setTime(e.target.value)} />
+        <span className="text-[10px] text-muted-foreground">{p.closeTimeHint}</span>
       </label>
       <label className="block">
         <span className="text-[10px] text-muted-foreground">{p.closeReason}</span>

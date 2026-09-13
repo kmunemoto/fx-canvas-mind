@@ -37,8 +37,15 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null }: Props) =>
   const signed = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v}`);
   const r = (v: number | null) => (v === null ? "" : ` (${v > 0 ? "+" : ""}${v}R)`);
 
+  // Which vocabulary the "not measured" reasons are said in. The anchor is a
+  // FILL only when a position was registered; on a previous-call reference it
+  // is that call's pricing instant, and naming a 建玉 there tells the reader a
+  // position existed and when it was filled. Keyed on `anchor_source`, which
+  // is the recorded fact of what the window was measured from.
+  const notMeasured = facts.anchor_source === "priced_at" ? f.notMeasuredPriced : f.notMeasured;
+
   const touchText = (touch: LevelTouch, side: "stop" | "tp1"): string => {
-    if (touch.measured === false) return f.notMeasured[touch.reason];
+    if (touch.measured === false) return notMeasured[touch.reason];
     if (touch.touched === true) {
       const base = f.touched(formatCandleLabel(touch.at, t.intlLocale), !touch.bar_closed);
       return side === "tp1" ? `${base} · ${f.midOnly}` : base;

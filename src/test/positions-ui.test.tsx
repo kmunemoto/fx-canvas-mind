@@ -6,7 +6,7 @@ import HeldPositionCard from "../components/HeldPositionCard";
 import ChangeSinceLastCard from "../components/ChangeSinceLastCard";
 import OpenPositionsStrip from "../components/OpenPositionsStrip";
 import AnalysisResultView from "../components/AnalysisResultView";
-import { EntryRegistration } from "../components/EntryRegistration";
+import { EntryRegistration, ClosePositionForm } from "../components/EntryRegistration";
 import { latestVerdictFor, normalizePosition, registerErrorOf } from "../lib/positions";
 import type { AnalysisRecord, AnalysisResult, HeldReference, Position, PositionReview, PreviousReference, ReviewChange, ReviewMechanical } from "../lib/types";
 
@@ -60,7 +60,7 @@ const review = (over: Partial<PositionReview> = {}): PositionReview => ({
 const position = (over: Partial<Position> = {}): Position => ({
   id: "pos-1", analysis_id: "a-1", pair: "USD/JPY", interval: "1h", direction: "SELL", entry_price: 150.12, stop_loss: 150.6,
   take_profit_1: 149.4, take_profit_2: null, take_profit_3: null, opened_at: "2026-09-12T03:00:00Z", opened_at_source: "user",
-  registered_after_settlement: false, status: "open", closed_at: null, close_price: null, close_reason: null,
+  registered_after_settlement: false, status: "open", closed_at: null, closed_at_source: null, close_price: null, close_reason: null,
   created_at: "2026-09-12T03:05:00Z", ...over,
 });
 
@@ -113,6 +113,10 @@ describe("HeldPositionCard", () => {
     expect(screen.getByTestId("verdict-source")).toHaveTextContent("時間切れ");
     expect(screen.getByTestId("thesis-status")).toHaveTextContent("取得できず");
     expect(screen.getByTestId("review-facts")).toBeInTheDocument();
+    // 判定できない is the analyst's own word for "I looked and could not
+    // judge", and its gloss is that word's DEFINITION. Neither may stand
+    // over a review in which the analyst said nothing.
+    expect(screen.getByTestId("held-verdict").parentElement).not.toHaveTextContent("材料が足りない");
   });
 
   it("names a fresh call in the opposite direction as a separate call", () => {
@@ -126,6 +130,15 @@ describe("HeldPositionCard", () => {
     render(<HeldPositionCard review={r} held={heldRef({ other_open_positions: { count: 2, ids: ["a", "b"] } })} pair="USD/JPY" interval="1h" freshSignal="WAIT" />);
     expect(screen.getByTestId("override-suppressed")).toHaveTextContent("建玉より前");
     expect(screen.getByTestId("other-open")).toHaveTextContent("2");
+  });
+
+  it("says 'before you registered' — not 'before your fill' — when the fill time was never recorded", () => {
+    const r = review({ override_suppressed: { reason: "settled_before_registration", closed_at: "2026-09-12T02:00:00Z" } });
+    render(<HeldPositionCard review={r} held={heldRef({ opened_at_source: "registered" })} pair="USD/JPY" interval="1h" freshSignal="WAIT" />);
+    const line = screen.getByTestId("override-suppressed");
+    expect(line).toHaveTextContent("登録より前");
+    expect(line).toHaveTextContent("実際の約定時刻は記録されていない");
+    expect(line).not.toHaveTextContent("建玉より前");
   });
 
   it("reads in English without a Japanese string left over", () => {
@@ -142,7 +155,7 @@ describe("HeldPositionCard", () => {
 
 describe("ChangeSinceLastCard", () => {
   const withChange = (c: ReviewChange, over: Partial<PositionReview> = {}) =>
-    review({ reference: { held: null, held_reason: "no_open_position", previous: prevRef(), previous_reason: null, thesis_of: "previous" }, mechanical: mech({ subject: "previous" }), verdict: null, decided_by: null, change: c, ...over });
+    review({ reference: { held: null, held_reason: "no_open_position", previous: prevRef(), previous_reason: null, thesis_of: "previous" }, mechanical: mech({ subject: "previous", anchor_source: "priced_at" }), verdict: null, decided_by: null, change: c, ...over });
 
   it("says the analyst declined a NEW entry, keeps the thesis as its own clause, and offers registration", () => {
     render(<ChangeSinceLastCard review={withChange(change())} previous={prevRef()} change={change()} pair="USD/JPY" heldExists={false} onRegistered={() => {}} />);
@@ -155,6 +168,11 @@ describe("ChangeSinceLastCard", () => {
     expect(screen.queryByTestId("change-clause")).toBeNull();
     expect(screen.getByTestId("register-entry")).toHaveTextContent("前回のプランを保有中なら登録");
     expect(screen.getByTestId("review-facts")).toHaveTextContent("プランの価格で入っていた場合");
+    // Nothing was held, so no line may name a 建玉 — including the
+    // "not measured" reasons, which are anchored on the previous call's
+    // pricing instant rather than on a fill.
+    expect(screen.getByTestId("review-facts")).toHaveTextContent("前回の価格時刻");
+    expect(screen.getByTestId("review-facts").textContent ?? "").not.toContain("建玉");
   });
 
   it("names a server refusal as the server's, with the gate's measurement, and hides registration when a position is held", () => {
@@ -172,7 +190,7 @@ describe("ChangeSinceLastCard", () => {
   });
 
   it("puts a reached stop above everything, with its basis", () => {
-    const r = withChange(change(), { mechanical: mech({ subject: "previous", stop_touch: { measured: true, touched: true, at: "2026-09-12 05:00:00", bar_closed: true } }) });
+    const r = withChange(change(), { mechanical: mech({ subject: "previous", anchor_source: "priced_at", stop_touch: { measured: true, touched: true, at: "2026-09-12 05:00:00", bar_closed: true } }) });
     render(<ChangeSinceLastCard review={r} previous={prevRef()} change={change()} pair="USD/JPY" heldExists={false} />);
     expect(screen.getByTestId("stop-reached")).toHaveTextContent("既に達しています");
     expect(screen.getByTestId("stop-reached")).toHaveTextContent("GMO");
@@ -186,6 +204,18 @@ describe("ChangeSinceLastCard", () => {
     expect(screen.getByTestId("change-clause")).toHaveTextContent("前回はサーバーが公開を見送っていました");
     // unpublished levels are not offered for registration
     expect(screen.queryByTestId("register-entry")).toBeNull();
+  });
+
+  it("does not call a server-refused plan an analyst WAIT when its levels were not all recorded", () => {
+    // rejection "incoherent" fires on rows where a level was missing, so the
+    // levels are null although the analyst named a direction. Rendering
+    // 見送り here folds a server refusal into an analyst WAIT.
+    const refused = prevRef({ signal: "WAIT", proposed_signal: "SELL", rejection: "incoherent", decided_by: "server", analyst_direction: "SELL", levels: null });
+    const c = change({ previous: { ...change().previous, signal: "WAIT", rejection: "incoherent", decided_by: "server", published: false } });
+    render(<ChangeSinceLastCard review={withChange(c)} previous={refused} change={c} pair="USD/JPY" heldExists={false} onRegistered={() => {}} />);
+    expect(screen.getByTestId("levels-unrecorded")).toHaveTextContent("揃って記録されていません");
+    expect(screen.queryByTestId("previous-wait")).toBeNull();
+    expect(screen.getByTestId("change-clause")).toHaveTextContent("前回はサーバーが公開を見送っていました");
   });
 
   it("reads in English", () => {
@@ -220,6 +250,35 @@ describe("OpenPositionsStrip and latestVerdictFor", () => {
     expect(screen.getByTestId("latest-verdict")).toHaveTextContent("直近1件に判定なし");
   });
 
+  it("never shows a bare 判定できない for a review that produced no verdict", () => {
+    const rows = [record({ created_at: "2026-09-12T12:00:00Z", position_review: review({ status: "partial", error: "time_budget", analyst: null, verdict: null, decided_by: null }) })];
+    render(<OpenPositionsStrip positions={[position()]} history={rows} onClosed={() => {}} />);
+    const line = screen.getByTestId("latest-verdict");
+    expect(line).toHaveTextContent("判定できない");
+    expect(line).toHaveTextContent("時間切れ");
+  });
+
+  it("distinguishes 'reviewed a different position' and 'could not read the positions' from 'no analysis yet'", () => {
+    const other = heldRef({ position_id: "pos-2", analysis_id: "a-2" });
+    const covered = [record({
+      created_at: "2026-09-12T12:00:00Z",
+      position_review: review({ reference: { held: other, held_reason: null, previous: null, previous_reason: null, thesis_of: "held" } }),
+    })];
+    expect(latestVerdictFor(position(), covered).kind).toBe("not_covered");
+    const { unmount } = render(<OpenPositionsStrip positions={[position()]} history={covered} onClosed={() => {}} />);
+    expect(screen.getByTestId("latest-verdict")).toHaveTextContent("別の建玉");
+    unmount();
+
+    const blind = [record({
+      created_at: "2026-09-12T12:00:00Z",
+      position_review: review({ reference: { held: null, held_reason: "lookup_failed", previous: null, previous_reason: null, thesis_of: null }, status: "failed", error: "lookup_failed", verdict: null, decided_by: null, analyst: null, mechanical: null }),
+    })];
+    expect(latestVerdictFor(position(), blind).kind).toBe("lookup_failed");
+    render(<OpenPositionsStrip positions={[position()]} history={blind} onClosed={() => {}} />);
+    expect(screen.getByTestId("latest-verdict")).toHaveTextContent("参照できませんでした");
+    expect(screen.getByTestId("latest-verdict")).not.toHaveTextContent("登録後の分析はまだありません");
+  });
+
   it("renders nothing without an open position", () => {
     const { container } = render(<OpenPositionsStrip positions={[position({ status: "closed" })]} history={[]} onClosed={() => {}} />);
     expect(container.textContent).toBe("");
@@ -241,6 +300,14 @@ describe("EntryRegistration", () => {
     expect(registerErrorOf("fill_outside_plan")).toBe("fill_outside_plan");
     expect(registerErrorOf("something else")).toBe("generic");
     expect(registerErrorOf(null)).toBe("generic");
+  });
+
+  it("takes a close time, so a stop hit at 02:00 and recorded at 09:00 is a 02:00 exit", () => {
+    render(<ClosePositionForm position={position()} onClosed={() => {}} />);
+    fireEvent.click(screen.getByTestId("close-position"));
+    const form = screen.getByTestId("close-form");
+    expect(form.querySelector("input[type='datetime-local']")).toBeInTheDocument();
+    expect(form).toHaveTextContent("未入力なら記録した時刻を使います");
   });
 
   it("reads a position row and refuses a half row", () => {

@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v53-2026-09-12T16:00:00Z";
+const FUNCTION_VERSION = "analyze-v53-2026-09-13T01:30:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -725,10 +725,18 @@ Deno.serve(async (req: Request) => {
   // A credit is spent before the billable work starts (that is what closes the
   // TOCTOU race), so every failure past that point has to hand it back.
   let quotaConsumed = false;
+  // The held-position review runs beside the main call and must not outlive
+  // the response. Declared here so `fail` — the single exit for every error
+  // path once the review is in flight — can cancel it; aborting a controller
+  // nothing is listening to yet is a no-op on the paths that fail earlier.
+  let reviewAbort: AbortController | undefined;
   let releaseQuota: () => Promise<void> = async () => {};
   let remainingToday: () => number | null = () => null;
 
   const fail = async (payload: JsonRecord, status: number) => {
+    // The analysis is over; a review still walking its lookups would only go
+    // on to spend a model call whose answer no row will carry.
+    reviewAbort?.abort();
     const refunded = quotaConsumed;
     await releaseQuota();
     // Let the client resync its "remaining today" counter after a refund
@@ -1693,7 +1701,18 @@ Deno.serve(async (req: Request) => {
     // `baseRequest`, which applyRequestShape rewrites while it is in flight.
     // Its result is written on THIS run's row. The reference row is never
     // rewritten.
-    const reviewSignal = AbortSignal.timeout(Math.max(1_000, reviewDeadlineMs(elapsed())));
+    // Two ways to stop: the absolute deadline fixed here, so the review can
+    // never eat the write reserve on any path, and the controller, so an
+    // analysis that failed or stopped waiting can cancel one still running.
+    // Without the second, a review abandoned at the grace kept walking to its
+    // deadline and could POST a billed request AFTER the row was written —
+    // charged, its answer discarded, and unreplayable, because the request it
+    // sent was not in the snapshot the row recorded.
+    reviewAbort = new AbortController();
+    const reviewSignal = AbortSignal.any([
+      reviewAbort.signal,
+      AbortSignal.timeout(Math.max(1_000, reviewDeadlineMs(elapsed()))),
+    ]);
     const reviewStartedMs = Date.now();
     const reviewAcc: ReviewRun = emptyReviewRun(new Date(reviewStartedMs).toISOString());
     const reviewModel = typeof baseRequest.model === "string" ? baseRequest.model : "";
@@ -1719,13 +1738,25 @@ Deno.serve(async (req: Request) => {
       // (any timeframe — a position is a position), and the previous run on
       // this pair and timeframe. Each absence is named, not silent.
       const refs: ReferenceSet = { held: null, held_reason: null, previous: null, previous_reason: null, thesis_of: null };
+      // A lookup that could not be made is a different thing from a lookup
+      // that came back empty, and it has to be loud in both places: in the
+      // log, because an outage the row records as "no reference" is invisible;
+      // and in the row, because "nothing to review" and "could not look" draw
+      // the same blank screen.
+      const lookupFailed = (what: string) => (err: unknown) => {
+        console.warn(
+          `Position review ${what} lookup failed:`,
+          redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200),
+        );
+        return "lookup_failed" as const;
+      };
       const [positionsRaw, previousRaw] = await Promise.all([
         restGet(`positions?user_id=eq.${uid}&pair=eq.${pairQ}&status=eq.open&select=*&order=opened_at.desc,created_at.desc&limit=10`)
-          .catch(() => "lookup_failed" as const),
+          .catch(lookupFailed("positions")),
         restGet(
           `analyses?user_id=eq.${uid}&pair=eq.${pairQ}&interval=eq.${encodeURIComponent(interval)}&preview=is.false&shadow=is.false` +
             `&created_at=gte.${encodeURIComponent(sinceIso)}&select=${planSelect}&order=created_at.desc&limit=1`,
-        ).catch(() => "lookup_failed" as const),
+        ).catch(lookupFailed("previous analysis")),
       ]);
       if (positionsRaw === "lookup_failed") {
         refs.held_reason = "lookup_failed";
@@ -1735,11 +1766,18 @@ Deno.serve(async (req: Request) => {
           .map((p) => (isRecord(p) && typeof p.id === "string" ? p.id : null))
           .filter((x): x is string => x !== null);
         const planRaw = typeof newest.analysis_id === "string"
-          ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id)}&select=${planSelect}&limit=1`).catch(() => null)
-          : null;
+          ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id)}&select=${planSelect}&limit=1`)
+            .catch(lookupFailed("held plan"))
+          : "lookup_failed" as const;
+        const planFetchFailed = planRaw === "lookup_failed";
         const plan = Array.isArray(planRaw) && planRaw.length > 0 ? planRaw[0] : null;
         refs.held = readHeldReference(newest, plan, others);
+        // The position row points at its plan with an ON DELETE CASCADE
+        // reference, so a plan row that is genuinely gone cannot coexist with
+        // an open position: `plan_row_missing` is reserved for the fetch that
+        // came back EMPTY, and a fetch that threw says so.
         if (refs.held === null) refs.held_reason = "lookup_failed";
+        else if (planFetchFailed) refs.held_reason = "lookup_failed";
         else if (plan === null) refs.held_reason = "plan_row_missing";
       } else {
         refs.held_reason = "no_open_position";
@@ -1753,8 +1791,13 @@ Deno.serve(async (req: Request) => {
       refs.thesis_of = refs.held ? "held" : refs.previous ? "previous" : null;
       acc.reference = refs;
       if (refs.thesis_of === null) {
-        acc.status = "skipped";
-        acc.skipped_reason = "no_reference";
+        // `skipped` means there was nothing to review. When a lookup threw,
+        // there may well have been — say so, so the row is not counted among
+        // the runs that found no position and no previous call.
+        const failed = refs.held_reason === "lookup_failed" || refs.previous_reason === "lookup_failed";
+        acc.status = failed ? "failed" : "skipped";
+        acc.skipped_reason = failed ? null : "no_reference";
+        acc.error = failed ? "lookup_failed" : null;
         return;
       }
 
@@ -2352,7 +2395,12 @@ Deno.serve(async (req: Request) => {
       reviewPromise,
       new Promise<ReviewRun>((resolve) => {
         reviewTimer = setTimeout(
-          () => resolve({ ...reviewAcc, status: "failed", error: "time_budget", elapsed_ms: Date.now() - reviewStartedMs }),
+          () => {
+            resolve({ ...reviewAcc, status: "failed", error: "time_budget", elapsed_ms: Date.now() - reviewStartedMs });
+            // Stop it rather than leave it running unwatched: what it does
+            // from here cannot reach the row, and it can still spend money.
+            reviewAbort?.abort();
+          },
           planReviewWait(elapsed()),
         );
       }),

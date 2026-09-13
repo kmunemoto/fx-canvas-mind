@@ -17,6 +17,7 @@ import {
   readPreviousReference,
   recordRequest,
   sideOf,
+  trackerSuppression,
   type HeldReference,
   type MechanicalFacts,
   type PreviousReference,
@@ -380,6 +381,43 @@ describe("mechanicalFacts", () => {
     expect(touched.covers_anchor).toBe(false);
   });
 
+  it("excludes a daily bar that BEGINS before the anchor, though its stamp is after it", () => {
+    // The provider names a forex day for the date it ENDS on: the bar stamped
+    // 09-16 runs from 09-15 21:00Z. A fill at 09-15 22:00Z is inside that bar,
+    // so a stop hit at 21:30 — three hours before the position existed — used
+    // to be reported as a touch after it and promoted to a server exit.
+    const daily = [
+      bar("2026-09-15", 150.0, 150.2, 149.9, 150.1),
+      bar("2026-09-16", 150.1, 150.3, 149.60, 150.2),
+      bar("2026-09-17", 150.2, 150.4, 150.05, 150.3),
+    ];
+    const buy = { ...base, direction: "BUY" as const, entry: 150.12, stop: 149.70, tp1: 151.0 };
+    const inside = mechanicalFacts({ ...buy, anchor: { at: "2026-09-15T22:00:00Z", source: "opened_at" }, candles: daily.slice(0, 2) });
+    expect(inside.stop_touch).toEqual({ measured: false, reason: "no_bars_since_anchor" });
+    expect(inside.bars_examined).toBe(0);
+    expect(inside.covers_anchor).toBe(true);
+
+    const next = mechanicalFacts({ ...buy, anchor: { at: "2026-09-15T22:00:00Z", source: "opened_at" }, candles: daily });
+    expect(next.stop_touch).toMatchObject({ measured: true, touched: false, from: "2026-09-17", as_of: "2026-09-17", bars_examined: 1 });
+
+    // A fill before that bar opened keeps it, and its touch is reported.
+    const before = mechanicalFacts({ ...buy, anchor: { at: "2026-09-15T20:59:00Z", source: "opened_at" }, candles: daily.slice(0, 2) });
+    expect(before.stop_touch).toEqual({ measured: true, touched: true, at: "2026-09-16", bar_closed: true });
+  });
+
+  it("still keys an intraday bar on its own stamp", () => {
+    const candles = hourly([
+      [150.1, 150.2, 150.0, 150.1],
+      [150.1, 150.65, 150.0, 150.5],
+    ], "2026-09-12 03:00:00");
+    const f = mechanicalFacts({
+      ...base, direction: "SELL", entry: 150.12, stop: 150.6, tp1: 149.4,
+      anchor: { at: "2026-09-12T03:00:00Z", source: "opened_at" }, candles,
+    });
+    // The 03:00 bar contains the anchor and is excluded; the 04:00 bar touches.
+    expect(f.stop_touch).toEqual({ measured: true, touched: true, at: "2026-09-12 04:00:00", bar_closed: true });
+  });
+
   it("says why nothing was measured", () => {
     const candles = hourly([[150.1, 150.2, 150.0, 150.1]], "2026-09-12 00:00:00");
     expect(mechanicalFacts({
@@ -406,6 +444,34 @@ describe("mechanicalFacts", () => {
 // ---------------------------------------------------------------------------
 // the request
 // ---------------------------------------------------------------------------
+
+describe("trackerSuppression — whose settlement the tracker's loss is", () => {
+  it("names the three cases and keeps quiet on the fourth", () => {
+    const loss = (closed_at: string | null) => ({ outcome: "loss", price_basis: "quotes" as const, closed_at, outcome_price: 150.6 });
+    expect(trackerSuppression(held({ outcome: loss("2026-09-12T06:00:00Z") }))).toBeNull();
+    expect(trackerSuppression(held({ outcome: { ...loss("2026-09-12T06:00:00Z"), outcome: "win" } }))).toBeNull();
+    expect(trackerSuppression(held({ registered_after_settlement: true, outcome: loss("2026-09-12T06:00:00Z") })))
+      .toEqual({ reason: "registered_after_settlement", closed_at: "2026-09-12T06:00:00Z" });
+    expect(trackerSuppression(held({ outcome: loss("2026-09-12T02:00:00Z") })))
+      .toEqual({ reason: "settled_before_open", closed_at: "2026-09-12T02:00:00Z" });
+    // opened_at IS the registration instant here, so "before the fill" is a
+    // claim nothing supports — only "before the registration" is.
+    expect(trackerSuppression(held({ opened_at_source: "registered", outcome: loss("2026-09-12T02:00:00Z") })))
+      .toEqual({ reason: "settled_before_registration", closed_at: "2026-09-12T02:00:00Z" });
+  });
+
+  it("is the same rule finalizeReview applies", () => {
+    for (const h of [
+      held({ registered_after_settlement: true, outcome: { outcome: "loss", price_basis: "quotes", closed_at: "2026-09-12T06:00:00Z", outcome_price: 150.6 } }),
+      held({ outcome: { outcome: "loss", price_basis: "mid", closed_at: "2026-09-12T02:00:00Z", outcome_price: 150.6 } }),
+      held({ opened_at_source: "registered", outcome: { outcome: "loss", price_basis: "mid", closed_at: "2026-09-12T02:00:00Z", outcome_price: 150.6 } }),
+      held(),
+    ]) {
+      const r = finalizeReview(run({ reference: { held: h, held_reason: null, previous: null, previous_reason: null, thesis_of: "held" } }), current());
+      expect(r.override_suppressed).toEqual(trackerSuppression(h));
+    }
+  });
+});
 
 describe("buildReviewRequest", () => {
   const common = { model: "m", pair: "USD/JPY", nowUtc: "2026-09-12T10:00:00Z", sections: "### 1h\n...", decimals: 3 };
@@ -449,6 +515,35 @@ describe("buildReviewRequest", () => {
     expect(en.messages[0].content).toContain("not measured (series starts after the anchor)");
     expect(en.system).toContain("does not mean \"close\"");
     expect(/[ぁ-んァ-ヶ一-龠]/.test(en.system)).toBe(false);
+  });
+
+  it("tells the analyst when the tracker's settlement is not this position's", () => {
+    // Without the caveat the analyst answers exit_condition_met from the
+    // settlement, and the card relays that as its own verdict one line above
+    // the sentence saying the settlement is not used.
+    const loss = (closed_at: string) => ({ outcome: "loss", price_basis: "quotes" as const, closed_at, outcome_price: 150.6 });
+    const late = buildReviewRequest({ ...common, locale: "ja", reference: held({ registered_after_settlement: true, outcome: loss("2026-09-12T06:00:00Z") }), mechanical: facts() });
+    expect(late.messages[0].content).toContain("決着後に登録された建玉");
+    const early = buildReviewRequest({ ...common, locale: "en", reference: held({ outcome: loss("2026-09-12T02:00:00Z") }), mechanical: facts() });
+    expect(early.messages[0].content).toContain("settled before this position was opened (2026-09-12T03:00:00Z)");
+    const registered = buildReviewRequest({ ...common, locale: "en", reference: held({ opened_at_source: "registered", outcome: loss("2026-09-12T02:00:00Z") }), mechanical: facts() });
+    expect(registered.messages[0].content).toContain("when it was actually filled is not recorded");
+    // A settlement that IS this position's carries no caveat.
+    const owned = buildReviewRequest({ ...common, locale: "en", reference: held({ outcome: loss("2026-09-12T06:00:00Z") }), mechanical: facts() });
+    expect(owned.messages[0].content).toContain("Tracker verdict (Bid/Ask): loss");
+    expect(owned.messages[0].content).not.toContain("not its exit condition");
+  });
+
+  it("does not call a registration instant a fill", () => {
+    const ja = buildReviewRequest({ ...common, locale: "ja", reference: held({ opened_at_source: "registered" }), mechanical: facts() });
+    expect(ja.messages[0].content).toContain("登録時刻: 2026-09-12T03:00:00Z");
+    expect(ja.messages[0].content).toContain("約定はこれより前の可能性あり");
+    expect(ja.messages[0].content).not.toContain("建玉の時刻:");
+    const en = buildReviewRequest({ ...common, locale: "en", reference: held({ opened_at_source: "registered" }), mechanical: facts() });
+    expect(en.messages[0].content).toContain("Registered at:");
+    expect(en.messages[0].content).not.toContain("Opened at:");
+    // A recorded fill time is still called one.
+    expect(buildReviewRequest({ ...common, locale: "en", reference: held(), mechanical: facts() }).messages[0].content).toContain("Opened at:");
   });
 
   it("records what was sent off the request object", () => {
@@ -505,17 +600,24 @@ describe("finalizeReview — a measured fact outranks the analyst, and the analy
   });
 
   it("does not relay an analyst that contradicts itself", () => {
-    for (const [verdict, thesis] of [["hold", "weakened"], ["hold", "broken"], ["caution", "broken"]] as const) {
+    for (const [verdict, thesis] of [["hold", "weakened"], ["hold", "broken"], ["hold", "unknown"], ["caution", "broken"]] as const) {
       const r = finalizeReview(run({ analyst: { ...run().analyst!, verdict, thesis_status: thesis } }), current());
       expect(r.verdict).toBe("undecidable");
       expect(r.decided_by).toBe("server");
       expect(r.override_reason).toMatchObject({ source: "analyst_incoherent", analyst: { verdict, thesis_status: thesis } });
     }
-    // exit_condition_met beside an intact thesis is the stop-touch case and is
-    // NOT flagged
-    const ok = finalizeReview(run({ analyst: { ...run().analyst!, verdict: "exit_condition_met", thesis_status: "intact" } }), current());
-    expect(ok.verdict).toBe("exit_condition_met");
-    expect(ok.decided_by).toBe("analyst");
+    // Pairs that are NOT contradictions, and must not be printed as one: the
+    // stop being reached is a fact about price rather than about the thesis,
+    // adverse facts can appear while the thesis is unevaluable, and declining
+    // to judge is compatible with any reading.
+    for (const [verdict, thesis] of [
+      ["exit_condition_met", "intact"], ["exit_condition_met", "unknown"],
+      ["caution", "unknown"], ["undecidable", "intact"],
+    ] as const) {
+      const ok = finalizeReview(run({ analyst: { ...run().analyst!, verdict, thesis_status: thesis } }), current());
+      expect(ok.verdict, `${verdict}×${thesis}`).toBe(verdict);
+      expect(ok.decided_by, `${verdict}×${thesis}`).toBe("analyst");
+    }
   });
 
   it("records a failed analyst as NOT PRODUCED, never as undecidable, and keeps the facts", () => {
@@ -578,6 +680,20 @@ describe("finalizeReview — the change since the previous run", () => {
     expect(r.change?.kind).toBe("wait_to_trade");
   });
 
+  it("calls a lookup that threw a failure, not 'nothing to review'", () => {
+    // `skipped` means there was nothing to review. A lookup that could not be
+    // made is an outage, and counting it among the quiet runs hides it.
+    const blind = finalizeReview({
+      ...emptyReviewRun("t"),
+      status: "failed",
+      error: "lookup_failed",
+      reference: { held: null, held_reason: "lookup_failed", previous: null, previous_reason: "lookup_failed", thesis_of: null },
+    }, current());
+    expect(blind.status).toBe("failed");
+    expect(blind.skipped_reason).toBeNull();
+    expect(blind.error).toBe("lookup_failed");
+  });
+
   it("names the other outcomes: skipped and failed", () => {
     expect(finalizeReview({ ...emptyReviewRun("t"), status: "skipped", skipped_reason: "no_reference", reference: { held: null, held_reason: "no_open_position", previous: null, previous_reason: "none_within_window", thesis_of: null } }, current())).toMatchObject({ status: "skipped", skipped_reason: "no_reference", verdict: null, change: null });
     expect(finalizeReview({ ...emptyReviewRun("t"), error: "lookup" }, current())).toMatchObject({ status: "failed", error: "lookup" });
@@ -633,6 +749,33 @@ describe("the review is wired into analyze without touching the main call", () =
     // and the response names the row
     expect(src).toContain("analysis_id: savedId,");
     expect(src).toContain("position_review: savedId === null ? null : positionReview,");
+  });
+
+  it("can cancel a review it has stopped waiting for, on every exit", () => {
+    // A deadline alone only bounds how long it runs; without a controller an
+    // abandoned review kept walking and could POST a billed request after the
+    // row was written — charged, discarded, and absent from the row's record
+    // of what was sent.
+    expect(src).toContain("reviewAbort = new AbortController();");
+    expect(src).toContain("AbortSignal.any([");
+    // fail() is the single exit for every error path once the review is in
+    // flight, so cancelling there covers outOfTime, every fail() return and
+    // the catch-all.
+    const failBody = src.slice(src.indexOf("const fail = async (payload: JsonRecord, status: number) => {"), src.indexOf("const refunded = quotaConsumed;"));
+    expect(failBody).toContain("reviewAbort?.abort();");
+    // and the grace timer stops it rather than leaving it running unwatched
+    const timer = src.slice(src.indexOf("reviewTimer = setTimeout("), src.indexOf("planReviewWait(elapsed()),"));
+    expect(timer).toContain("reviewAbort?.abort();");
+  });
+
+  it("does not record a lookup that threw as 'nothing to review'", () => {
+    expect(src).toContain("const lookupFailed = (what: string) => (err: unknown) => {");
+    expect(src).toContain("Position review ${what} lookup failed:");
+    // both lookups, and the held plan's row, go through it
+    expect([...src.matchAll(/\.catch\(lookupFailed\(/g)].length).toBe(3);
+    expect(src).not.toContain('.catch(() => "lookup_failed" as const)');
+    // and the status says so rather than counting as a quiet run
+    expect(src).toContain('acc.status = failed ? "failed" : "skipped";');
   });
 
   it("keeps index.ts inside the request-shape pins: one max_tokens literal, one header literal", () => {

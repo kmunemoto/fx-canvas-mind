@@ -1,7 +1,7 @@
 import type { HeldReference, Position, PositionReview } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { formatCandleLabel, formatJst, priceDecimals } from "@/lib/candleTime";
-import { displayVerdict, isTradeSignal } from "@/lib/positions";
+import { displayVerdict, isTradeSignal, reviewFailReason } from "@/lib/positions";
 import ReviewFacts from "./ReviewFacts";
 import { ClosePositionForm } from "./EntryRegistration";
 import { Briefcase } from "lucide-react";
@@ -49,17 +49,7 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
   const analyst = review.analyst;
   const override = review.override_reason;
 
-  const failReason = (() => {
-    const err = review.error ?? analyst?.error ?? null;
-    if (err === null) return p.failReasons.unknown;
-    if (err === "time_budget") return p.failReasons.time_budget;
-    if (err.startsWith("api_")) return p.failReasons.api;
-    if (err.startsWith("parse_")) return p.failReasons.parse;
-    if (err.startsWith("finalise")) return p.failReasons.finalise;
-    if (err === "no_model") return p.failReasons.no_model;
-    if (err.includes("lookup")) return p.failReasons.lookup;
-    return p.failReasons.unknown;
-  })();
+  const failReason = p.failReasons[reviewFailReason(review)];
 
   // Who decided the word above, in one line.
   const source = (() => {
@@ -121,13 +111,21 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
         <p className={`text-2xl sm:text-3xl font-black tracking-tight ${VERDICT_CLASS[verdict]}`} data-testid="held-verdict">
           {p.verdicts[verdict]}
         </p>
-        <p className="text-xs text-muted-foreground">{p.verdictGloss[verdict]}</p>
+        {/* The gloss is the DEFINITION of the analyst's word, so it may
+            only appear over a verdict that was actually produced. On a
+            failed review the word below is the screen's own "we cannot
+            say", and the source line under it gives the reason. */}
+        {review.verdict !== null && (
+          <p className="text-xs text-muted-foreground">{p.verdictGloss[verdict]}</p>
+        )}
         <p className="text-[11px] mt-1" data-testid="verdict-source">{source}</p>
         {review.override_suppressed && (
           <p className="text-[10px] text-muted-foreground mt-0.5" data-testid="override-suppressed">
             {review.override_suppressed.reason === "settled_before_open"
               ? p.suppressed.settled_before_open(review.override_suppressed.closed_at ? formatJst(review.override_suppressed.closed_at, t.intlLocale) : "—")
-              : p.suppressed.registered_after_settlement}
+              : review.override_suppressed.reason === "settled_before_registration"
+                ? p.suppressed.settled_before_registration(review.override_suppressed.closed_at ? formatJst(review.override_suppressed.closed_at, t.intlLocale) : "—")
+                : p.suppressed.registered_after_settlement}
           </p>
         )}
       </div>

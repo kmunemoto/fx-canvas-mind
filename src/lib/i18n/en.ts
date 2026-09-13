@@ -775,6 +775,8 @@ export const en: Dict = {
       position_not_open: "That position is not open (already closed, or not yours)",
       close_price_must_be_positive: "The close price must be greater than 0",
       close_reason_invalid: "Invalid close reason",
+      closed_before_open: "The close time is before the position was opened",
+      closed_in_future: "The close time is in the future",
       generic: "Could not register. Please try again later",
     },
     openTitle: "Open positions",
@@ -784,6 +786,8 @@ export const en: Dict = {
     closeButton: "I closed it",
     closeTitle: "Record the close",
     closePrice: "Close price",
+    closeTime: "Close time (optional)",
+    closeTimeHint: "Left blank, the time it is recorded is used",
     closeReason: "Reason",
     closeReasons: { manual: "Manual", stop: "Stop hit", target: "Target hit", other: "Other" },
     closeSubmit: "Record",
@@ -793,6 +797,8 @@ export const en: Dict = {
     latestVerdict: "Latest verdict",
     verdictAt: (at: string) => `as of ${at}`,
     noVerdictSinceRegistration: "No analysis since registration yet (analyse this pair to get one)",
+    verdictNotCovered: "The latest analysis reviewed a different position (the newest one)",
+    verdictLookupFailed: "The latest analysis could not read the positions",
     noVerdictInRecent: (n: number) => `no verdict in the last ${n} rows`,
     verdictStale: "not re-evaluated since",
     otherOpen: (n: number) => `${n} other open position(s); this verdict covers the newest only`,
@@ -831,6 +837,8 @@ export const en: Dict = {
     suppressed: {
       settled_before_open: (at: string) =>
         `The tracker settled this plan as a loss, but that settlement (${at}) predates your fill, so it is not used as an exit condition`,
+      settled_before_registration: (at: string) =>
+        `The tracker settled this plan as a loss on a bar (${at}) before you registered the position. When you actually filled is not recorded, so it is not used as an exit condition`,
       registered_after_settlement: "This position was registered after the tracker had settled the plan, so the tracker's verdict is not used as an exit condition",
     },
     facts: {
@@ -849,6 +857,11 @@ export const en: Dict = {
         no_anchor: "not measured (no anchor time)",
         series_starts_after_anchor: "not measured (the fetched bars do not reach back to the fill)",
         no_bars_since_anchor: "not measured (no bars since the fill yet)",
+      },
+      notMeasuredPriced: {
+        no_anchor: "not measured (no anchor time)",
+        series_starts_after_anchor: "not measured (the fetched bars do not reach back to the previous call's price time)",
+        no_bars_since_anchor: "not measured (no bars since the previous call's price time yet)",
       },
       midOnly: "mid price only; not measured on the exit side's bid/ask",
       feed: { twelve_data: "mid, Twelve Data", gmo: "mid, GMO Coin" },
@@ -891,6 +904,7 @@ export const en: Dict = {
     gateNone: "No fresh plan was issued this run, so the gate measured nothing",
     previousLevelsRefused: "The previous levels were proposed by the model and the server declined to publish them",
     previousWasWait: "The previous call stood aside (no levels)",
+    previousLevelsUnrecorded: "The previous levels were not fully recorded",
     noiseNote: "The same input can split the model's call. Trust the headline only where a named measured fact backs it.",
   },
 
