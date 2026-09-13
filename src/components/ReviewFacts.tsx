@@ -20,6 +20,9 @@ interface Props {
   // the feed the touches were measured on.
   planFeed?: "twelve_data" | "gmo" | null;
   outcome?: ReferenceOutcome | null;
+  // Why the reference's plan row is not here, when it is not. A tracker
+  // verdict we never asked for is not "not settled yet".
+  planUnavailable?: boolean;
 }
 
 const Row = ({ label, value, cls = "" }: { label: string; value: string; cls?: string }) => (
@@ -29,7 +32,7 @@ const Row = ({ label, value, cls = "" }: { label: string; value: string; cls?: s
   </div>
 );
 
-const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null }: Props) => {
+const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavailable = false }: Props) => {
   const { t } = useLocale();
   const f = t.position.facts;
   const decimals = priceDecimals(pair);
@@ -60,8 +63,13 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null }: Props) =>
   };
 
   const trackerText = (() => {
+    // Three different silences, and only one of them is "it has not settled".
+    if (planUnavailable) return f.trackerUnknown;
     if (!outcome) return f.trackerPending;
     const word = (t.history.outcomes as Record<string, string>)[outcome.outcome] ?? outcome.outcome;
+    // A basis is only recorded when the tracker settles something, so on an
+    // open plan "no basis recorded" describes a record that was never due.
+    if (outcome.outcome === "pending") return word;
     const basis = f.trackerBasis[outcome.price_basis ?? "none"];
     const at = outcome.closed_at ? ` · ${formatJst(outcome.closed_at, t.intlLocale)}` : "";
     return `${word} (${basis}${at})`;
@@ -74,7 +82,9 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null }: Props) =>
       <p className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
         {f.title} · {f.feed[facts.feed]}
       </p>
-      <Row label={f.price} value={price(facts.price)} />
+      {/* With the time, because on a closed-market run this is the last
+          close and not a live price. */}
+      <Row label={f.price} value={f.priceAt(price(facts.price), formatJst(facts.priced_at, t.intlLocale))} />
       <Row
         label={facts.subject === "held" ? f.open : f.hypothetical}
         value={`${signed(facts.move_pips)} pips${r(facts.move_r)}`}

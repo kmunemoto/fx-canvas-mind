@@ -7,7 +7,7 @@ import ChangeSinceLastCard from "../components/ChangeSinceLastCard";
 import OpenPositionsStrip from "../components/OpenPositionsStrip";
 import AnalysisResultView from "../components/AnalysisResultView";
 import { EntryRegistration, ClosePositionForm } from "../components/EntryRegistration";
-import { latestVerdictFor, normalizePosition, registerErrorOf } from "../lib/positions";
+import { latestVerdictFor, normalizePosition, registerErrorOf, registrationFor } from "../lib/positions";
 import type { AnalysisRecord, AnalysisResult, HeldReference, Position, PositionReview, PreviousReference, ReviewChange, ReviewMechanical } from "../lib/types";
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult =>
@@ -90,6 +90,35 @@ describe("HeldPositionCard", () => {
     expect(screen.getByTestId("thesis-status")).toHaveTextContent("維持");
     expect(screen.getByTestId("review-facts")).toHaveTextContent("未計測");
     expect(screen.queryByTestId("reversed-note")).toBeNull();
+    // The price carries the instant it was read: on a closed-market run this
+    // number is the last close, not a live price.
+    expect(screen.getByTestId("review-facts")).toHaveTextContent("現在値");
+    expect(screen.getByTestId("review-facts").textContent ?? "").toMatch(/150\.300（\d/);
+  });
+
+  it("does not call an open plan 'not settled on no recorded basis', nor an unread plan row 'not settled'", () => {
+    // A basis is only written when the tracker settles something, so on a
+    // pending plan "no basis recorded" describes a record never due.
+    const pending = review({ reference: { held: heldRef({ outcome: { outcome: "pending", price_basis: null, closed_at: null, outcome_price: null } }), held_reason: null, previous: null, previous_reason: null, thesis_of: "held" } });
+    const { unmount } = render(<HeldPositionCard review={pending} held={heldRef({ outcome: { outcome: "pending", price_basis: null, closed_at: null, outcome_price: null } })} pair="USD/JPY" interval="1h" freshSignal="WAIT" />);
+    expect(screen.getByTestId("review-facts")).toHaveTextContent("進行中");
+    expect(screen.getByTestId("review-facts").textContent ?? "").not.toContain("板の記録なし");
+    unmount();
+
+    // And a plan row we could not read was never put to the tracker at all.
+    const unread = review({ reference: { held: heldRef({ outcome: null }), held_reason: "plan_row_missing", previous: null, previous_reason: null, thesis_of: "held" } });
+    render(<HeldPositionCard review={unread} held={heldRef({ outcome: null })} pair="USD/JPY" interval="1h" freshSignal="WAIT" />);
+    expect(screen.getByTestId("review-facts")).toHaveTextContent("プラン行を取得できず");
+    expect(screen.getByTestId("review-facts").textContent ?? "").not.toContain("未判定");
+  });
+
+  it("stops calling a position 保有中 once the reader has closed it from this card", () => {
+    const closed = position({ status: "closed", closed_at: "2026-09-12T11:00:00Z", closed_at_source: "user", close_price: 149.9, close_reason: "target" });
+    render(<HeldPositionCard review={review()} held={heldRef()} pair="USD/JPY" interval="1h" freshSignal="WAIT" closed={closed} />);
+    expect(screen.getByTestId("closed-chip")).toHaveTextContent("決済済み");
+    expect(screen.getByTestId("verdict-before-close")).toHaveTextContent("決済前の判定");
+    // Nothing is left below for the fresh call to be mistaken for.
+    expect(screen.queryByTestId("not-an-instruction")).toBeNull();
   });
 
   it("shows a server override with the fact that decided it, and the analyst's own word beside it", () => {
@@ -310,6 +339,17 @@ describe("EntryRegistration", () => {
     expect(form).toHaveTextContent("未入力なら記録した時刻を使います");
   });
 
+  it("tells 'never entered' from 'entered and since closed'", () => {
+    const open = position();
+    const closed = position({ id: "pos-9", status: "closed", closed_at: "2026-09-12T11:00:00Z", close_price: 149.9 });
+    expect(registrationFor("a-1", [open]).state).toBe("open");
+    expect(registrationFor("a-1", [closed]).state).toBe("closed");
+    // an open row wins over a closed one on the same plan
+    expect(registrationFor("a-1", [closed, open]).state).toBe("open");
+    expect(registrationFor("a-1", []).state).toBe("none");
+    expect(registrationFor(null, [open]).state).toBe("none");
+  });
+
   it("reads a position row and refuses a half row", () => {
     expect(normalizePosition({ id: "p", analysis_id: "a", pair: "USD/JPY", direction: "BUY", entry_price: "150.1", stop_loss: "149.7", take_profit_1: "150.7", opened_at: "t", status: "open" })?.entry_price).toBe(150.1);
     expect(normalizePosition({ id: "p", analysis_id: "a", pair: "USD/JPY", direction: "BUY", entry_price: "150.1", opened_at: "t" })).toBeNull();
@@ -342,6 +382,14 @@ describe("AnalysisResultView with a review", () => {
     render(<AnalysisResultView result={trade} pair="USD/JPY" interval="1h" analysisId="r-9" positions={[position({ analysis_id: "r-9" })]} onPositionsChanged={() => {}} />);
     expect(screen.queryByTestId("register-entry")).toBeNull();
     expect(screen.getByTestId("registered-chip")).toBeInTheDocument();
+  });
+
+  it("does not offer registration again on a plan already entered and closed", () => {
+    const trade = result({ signal: "SELL", entry_point: "150.120", stop_loss: "150.600", take_profit_1: "149.400" });
+    const closed = position({ analysis_id: "r-9", status: "closed", closed_at: "2026-09-12T11:00:00Z", close_price: 149.9 });
+    render(<AnalysisResultView result={trade} pair="USD/JPY" interval="1h" analysisId="r-9" positions={[closed]} onPositionsChanged={() => {}} />);
+    expect(screen.queryByTestId("register-entry")).toBeNull();
+    expect(screen.getByTestId("closed-already-chip")).toHaveTextContent("決済済み");
   });
 
   it("offers nothing when the row was not written", () => {

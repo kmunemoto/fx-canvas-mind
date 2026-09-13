@@ -30,6 +30,11 @@ interface Props {
   // loaded positions.
   position?: Position | null;
   onClosed?: (position: Position) => void;
+  // The row `close_position` returned, when the reader closed this position
+  // from this card. The verdict above it was made while the position was
+  // open and stays on screen — relabelled, because it is no longer an
+  // answer to "what about the position I hold".
+  closed?: Position | null;
 }
 
 const VERDICT_CLASS = {
@@ -39,7 +44,7 @@ const VERDICT_CLASS = {
   undecidable: "text-muted-foreground",
 } as const;
 
-const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position = null, onClosed }: Props) => {
+const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position = null, onClosed, closed = null }: Props) => {
   const { t } = useLocale();
   const p = t.position;
   const decimals = priceDecimals(pair);
@@ -81,6 +86,14 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
       <div className="flex items-center gap-2 text-primary">
         <Briefcase className="h-4 w-4" aria-hidden="true" />
         <h3 className="text-sm font-semibold">{p.heldTitle}</h3>
+        {closed && (
+          <span className="ml-auto px-1.5 py-0.5 rounded border border-border bg-secondary text-[10px] text-muted-foreground" data-testid="closed-chip">
+            {p.closedChip(
+              closed.close_price === null ? "—" : closed.close_price.toFixed(decimals),
+              closed.closed_at ? formatJst(closed.closed_at, t.intlLocale) : "—",
+            )}
+          </span>
+        )}
       </div>
       <p className="text-[11px] text-muted-foreground">{p.heldSubtitle}</p>
 
@@ -107,7 +120,12 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
       )}
 
       {/* the verdict word, and who decided it */}
-      <div>
+      <div className={closed ? "opacity-70" : undefined}>
+        {closed && (
+          <p className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase" data-testid="verdict-before-close">
+            {p.verdictBeforeClose}
+          </p>
+        )}
         <p className={`text-2xl sm:text-3xl font-black tracking-tight ${VERDICT_CLASS[verdict]}`} data-testid="held-verdict">
           {p.verdicts[verdict]}
         </p>
@@ -131,7 +149,13 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
       </div>
 
       {review.mechanical && review.mechanical.subject === "held" && (
-        <ReviewFacts facts={review.mechanical} pair={pair} planFeed={held.feed} outcome={held.outcome} />
+        <ReviewFacts
+          facts={review.mechanical}
+          pair={pair}
+          planFeed={held.feed}
+          outcome={held.outcome}
+          planUnavailable={review.reference?.held_reason === "plan_row_missing"}
+        />
       )}
 
       {/* the original plan's thesis, and the model's reading of it */}
@@ -177,11 +201,14 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
         </div>
       )}
 
-      {/* the sentence this card exists for */}
-      <p className="text-[11px] text-foreground border-t border-border/60 pt-2" data-testid="not-an-instruction">
-        {p.notAnInstruction(freshSignal)}
-      </p>
-      {reversed && (
+      {/* the sentence this card exists for. Gone once the position is closed:
+          there is nothing left for the call below to be mistaken for. */}
+      {!closed && (
+        <p className="text-[11px] text-foreground border-t border-border/60 pt-2" data-testid="not-an-instruction">
+          {p.notAnInstruction(freshSignal)}
+        </p>
+      )}
+      {reversed && !closed && (
         <p className="text-[11px] text-warning" data-testid="reversed-note">
           {p.reversedNote(held.direction, freshSignal)}
         </p>

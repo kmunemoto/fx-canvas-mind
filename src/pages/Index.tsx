@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
@@ -330,7 +330,15 @@ const Index = () => {
     saveSettings(settings);
   }, [settings]);
 
+  // Which reload is the freshest. Several fire concurrently (after a run,
+  // after a registration, after a close, on login), and without this an
+  // in-flight one issued BEFORE a close can land after it and put the closed
+  // position back on screen with a live 決済した button.
+  const reloadSeq = useRef(0);
+
   const loadHistory = useCallback(async () => {
+    const mine = ++reloadSeq.current;
+    const stale = () => mine !== reloadSeq.current;
     try {
       // Shadow rows (refused plans, tracked anyway) come along and are
       // folded under their WAIT row by the history view
@@ -339,19 +347,21 @@ const Index = () => {
         .select(HISTORY_COLUMNS)
         .order("created_at", { ascending: false })
         .limit(40);
-      if (!error && Array.isArray(data)) {
+      if (!error && Array.isArray(data) && !stale()) {
         setHistory(data as AnalysisRecord[]);
       }
     } catch {
       // History is best-effort; the analysis flow must not depend on it
     }
     try {
+      // Closed rows too: a plan whose position the reader has closed must
+      // not offer registration again as though it had never been entered.
+      // The strip filters to the open ones itself.
       const { data, error } = await supabase
         .from("positions")
         .select("*")
-        .eq("status", "open")
         .order("opened_at", { ascending: false });
-      if (!error) setPositions(normalizePositions(data));
+      if (!error && !stale()) setPositions(normalizePositions(data));
     } catch {
       // Positions are best-effort on the read side; the cards say when they
       // could not see one rather than assuming none

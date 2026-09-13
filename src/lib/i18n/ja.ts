@@ -775,10 +775,14 @@ export const ja = {
     fillPrice: "約定価格",
     fillTime: "約定時刻（任意）",
     fillTimeHint: "未入力なら登録した時刻を記録します",
+    // 入力はブラウザの時計で解釈される。画面の時刻表示は全部日本時間なので、
+    // 何が記録されるのかをそのまま見せる。
+    timePreview: (at: string) => `記録される時刻: ${at}`,
     registerSubmit: "登録する",
     registering: "登録中…",
     registered: "建玉を登録しました",
     registeredChip: "建玉登録済み",
+    closedAlready: (price: string, at: string) => `決済済み ${price}（${at}）`,
     alreadyOpen: (price: string) => `この建玉は登録済みでした（記録されている約定価格 ${price}）`,
     registerPrevious: "前回のプランを保有中なら登録",
     registerErrors: {
@@ -792,6 +796,7 @@ export const ja = {
       fill_outside_plan: "約定価格が損切りと TP1 の間にありません。プランの水準で評価できる建玉ではありません",
       opened_before_plan: "約定時刻がプランの作成より前です",
       opened_in_future: "約定時刻が未来です",
+      time_unreadable: "時刻を読み取れません",
       position_not_open: "その建玉は開いていません（決済済み、または自分のものではありません）",
       close_price_must_be_positive: "決済価格は 0 より大きい数で入力してください",
       close_reason_invalid: "決済理由が不正です",
@@ -804,6 +809,10 @@ export const ja = {
     openedAtRegistered: "登録時刻で記録",
     planTimeframe: "分析足",
     closeButton: "決済した",
+    // 決済を記録したあとの保有中カード。判定はそのまま残すが、「今の保有中の
+    // 判断」ではなくなったことを見出しで言う。
+    closedChip: (price: string, at: string) => `決済済み ${price}（${at}）`,
+    verdictBeforeClose: "決済前の判定",
     closeTitle: "決済を記録",
     closePrice: "決済価格",
     closeTime: "決済時刻（任意）",
@@ -867,7 +876,10 @@ export const ja = {
     },
     facts: {
       title: "サーバー計測",
+      // 値が付いた時刻を必ず添える。下見（休場中）の回では「現在値」は
+      // 金曜の終値であって、いまの値段ではない。
       price: "現在値",
+      priceAt: (price: string, at: string) => `${price}（${at}）`,
       open: "含み",
       hypothetical: "プランの価格で入っていた場合（仮定）",
       toStop: "損切りまで",
@@ -896,6 +908,9 @@ export const ja = {
       tracker: "判定システム",
       trackerBasis: { quotes: "Bid/Ask 判定", mid: "仲値判定", none: "板の記録なし" },
       trackerPending: "未判定",
+      // プラン行を引けなかった回。判定システムには聞いていないので「未判定」
+      // ではない（聞いた結果まだ決着していない、という意味になる）。
+      trackerUnknown: "プラン行を取得できず",
       basisNote: "仲値での損切り接触は撤退条件として扱います。仲値で接触なし・TP1 到達は仲値上の事実で、判定システムの Bid/Ask 判定はその横に別に出します。",
     },
     thesis: {

@@ -4,6 +4,7 @@ import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
 import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 import { EntryRegistration } from "./EntryRegistration";
+import { registrationFor } from "@/lib/positions";
 
 interface Props {
   record: AnalysisRecord;
@@ -218,7 +219,7 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
   const postTitle = record.outcome === "win" ? pm.titleWin : pm.title;
   // A published trade with levels, not a preview, not already held: the row
   // the reader may have entered on and never told the app about.
-  const registered = positions.some((p) => p.analysis_id === record.id && p.status === "open");
+  const registration = registrationFor(record.id, positions);
   const canRegister = tracked && record.preview !== true && record.shadow !== true &&
     record.entry_point !== null && record.stop_loss !== null && record.take_profit_1 !== null &&
     onPositionsChanged !== undefined;
@@ -230,8 +231,17 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
       {record.thesis && <p className="text-muted-foreground">{record.thesis}</p>}
       {canRegister && (
         <div data-testid="row-registration">
-          {registered
+          {registration.state === "open"
             ? <span className="px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-[10px] text-primary">{t.position.registeredChip}</span>
+            : registration.state === "closed"
+            ? (
+              <span className="px-1.5 py-0.5 rounded border border-border bg-secondary text-[10px] text-muted-foreground" data-testid="closed-already-chip">
+                {t.position.closedAlready(
+                  registration.position.close_price === null ? "—" : price(registration.position.close_price),
+                  registration.position.closed_at ? when(registration.position.closed_at) : "—",
+                )}
+              </span>
+            )
             : (
               <EntryRegistration
                 analysisId={record.id}

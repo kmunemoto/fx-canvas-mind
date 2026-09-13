@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { normalizePosition, registerErrorOf } from "@/lib/positions";
-import { priceDecimals } from "@/lib/candleTime";
+import { formatJst, priceDecimals } from "@/lib/candleTime";
 import type { Position } from "@/lib/types";
 
 // "I entered on this plan." The one thing the app never knew, and the reason
@@ -31,6 +31,22 @@ interface RegisterProps {
 
 const inputCls = "w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-mono";
 
+// What the typed time will actually be recorded as, in the zone the rest of
+// the screen speaks. A datetime-local value carries no zone and is read in
+// the browser's; a reader copying a JST time from their broker in a non-JST
+// browser would otherwise store, and be shown, a different instant.
+const TimePreview = ({ value }: { value: string }) => {
+  const { t } = useLocale();
+  if (value.trim() === "") return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  return (
+    <span className="block text-[10px] text-muted-foreground" data-testid="time-preview">
+      {t.position.timePreview(formatJst(ms, t.intlLocale))}
+    </span>
+  );
+};
+
 export const EntryRegistration = ({ analysisId, pair, defaultPrice, onRegistered, label, compact = false }: RegisterProps) => {
   const { t } = useLocale();
   const p = t.position;
@@ -52,7 +68,7 @@ export const EntryRegistration = ({ analysisId, pair, defaultPrice, onRegistered
     if (time.trim() !== "") {
       const ms = Date.parse(time);
       if (!Number.isFinite(ms)) {
-        setError(p.registerErrors.opened_in_future);
+        setError(p.registerErrors.time_unreadable);
         return;
       }
       params.p_opened_at = new Date(ms).toISOString();
@@ -109,8 +125,11 @@ export const EntryRegistration = ({ analysisId, pair, defaultPrice, onRegistered
         <span className="text-[10px] text-muted-foreground">{p.fillTime}</span>
         <input className={inputCls} type="datetime-local" value={time} onChange={(e) => setTime(e.target.value)} />
         <span className="text-[10px] text-muted-foreground">{p.fillTimeHint}</span>
+        {/* The input is read in the BROWSER's zone; every time this app shows
+            is JST. Rather than explain that, show what will be recorded. */}
+        <TimePreview value={time} />
       </label>
-      {error && <p className="text-destructive" data-testid="register-error">{error}</p>}
+      {error && <p role="alert" className="text-destructive" data-testid="register-error">{error}</p>}
       <div className="flex gap-2">
         <button
           type="submit"
@@ -161,7 +180,7 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
     if (time.trim() !== "") {
       const ms = Date.parse(time);
       if (!Number.isFinite(ms)) {
-        setError(p.registerErrors.closed_in_future);
+        setError(p.registerErrors.time_unreadable);
         return;
       }
       params.p_closed_at = new Date(ms).toISOString();
@@ -213,6 +232,7 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
         <span className="text-[10px] text-muted-foreground">{p.closeTime}</span>
         <input className={inputCls} type="datetime-local" value={time} onChange={(e) => setTime(e.target.value)} />
         <span className="text-[10px] text-muted-foreground">{p.closeTimeHint}</span>
+        <TimePreview value={time} />
       </label>
       <label className="block">
         <span className="text-[10px] text-muted-foreground">{p.closeReason}</span>
@@ -222,7 +242,7 @@ export const ClosePositionForm = ({ position, onClosed }: CloseProps) => {
           ))}
         </select>
       </label>
-      {error && <p className="text-destructive">{error}</p>}
+      {error && <p role="alert" className="text-destructive">{error}</p>}
       <div className="flex gap-2">
         <button type="submit" disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold disabled:opacity-60">
           {busy ? p.closing : p.closeSubmit}

@@ -170,3 +170,21 @@ export const displayVerdict = (review: PositionReview | null): "hold" | "caution
   review?.verdict ?? "undecidable";
 
 export const isTradeSignal = (s: string | null | undefined): s is "BUY" | "SELL" => s === "BUY" || s === "SELL";
+
+// What this reader has already done with a given plan. `positions` carries
+// closed rows as well as open ones, so "not registered" and "registered and
+// since closed" are different answers and the screen must not give the first
+// for the second.
+export const registrationFor = (
+  analysisId: string | null,
+  positions: Position[],
+): { state: "open"; position: Position } | { state: "closed"; position: Position } | { state: "none" } => {
+  if (analysisId === null) return { state: "none" };
+  const mine = positions.filter((p) => p.analysis_id === analysisId);
+  const open = mine.find((p) => p.status === "open");
+  if (open) return { state: "open", position: open };
+  // The newest close, when there were several attempts on the same plan.
+  const closed = [...mine].filter((p) => p.status === "closed")
+    .sort((a, b) => ((a.closed_at ?? "") < (b.closed_at ?? "") ? 1 : -1))[0];
+  return closed ? { state: "closed", position: closed } : { state: "none" };
+};
