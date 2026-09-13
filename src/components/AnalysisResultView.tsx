@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import type { AnalysisMode, AnalysisResult, EntryCheck, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
+import type { AnalysisMode, AnalysisResult, EntryCheck, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
 import PriceChart, { type ChartOverlay } from "./PriceChart";
 import MarketContextCard from "./MarketContextCard";
 import RuleFitPanel from "./RuleFitPanel";
+import HeldPositionCard from "./HeldPositionCard";
+import ChangeSinceLastCard from "./ChangeSinceLastCard";
+import { EntryRegistration } from "./EntryRegistration";
 import Disclosure from "./Disclosure";
 import { AlertTriangle, ChevronDown, ChevronUp, Compass, FileText, ListChecks, Target, TrendingUp } from "lucide-react";
 import { useT } from "@/lib/i18n";
@@ -11,6 +14,7 @@ import { isInference } from "@/lib/inference";
 import { toPips } from "@/lib/candleTime";
 import { visibleWarnings, waitReasonOf } from "@/lib/warnings";
 import { hasMarketContext } from "@/lib/marketContext";
+import { registrationFor } from "@/lib/positions";
 import type { Dict } from "@/lib/i18n/locales";
 
 interface Props {
@@ -27,6 +31,14 @@ interface Props {
   // Where confidence has actually landed in this reader's own record. Threaded
   // from Index so the gauge can say it without fetching anything itself.
   confidenceObserved?: { lo: number; hi: number; n: number } | null;
+  // The held-position review made on this run, and the row's id so the
+  // reader can register an entry on it. Both from the analyze response.
+  positionReview?: PositionReview | null;
+  analysisId?: string | null;
+  // The reader's open positions, so a plan already registered shows as such
+  // and the held card can offer the close form.
+  positions?: Position[];
+  onPositionsChanged?: () => void;
 }
 
 // Bullets shown before the reader asks for the rest. The factors are
@@ -70,10 +82,14 @@ const Chip = ({ children }: { children: string }) => (
 // the material the reasons were drawn from.
 const AnalysisResultView = ({
   result, techData, pair, interval, entryCheck, analysisMode, ruleFit, rulebook,
-  confidenceObserved = null,
+  confidenceObserved = null, positionReview = null, analysisId = null, positions = [], onPositionsChanged,
 }: Props) => {
   const t = useT();
   const [allFactors, setAllFactors] = useState(false);
+  // The position closed from the card on this screen. The reload that follows
+  // drops it from `positions`, which on its own is indistinguishable from
+  // "not loaded" — so the row the RPC returned is what the card is told.
+  const [closedHere, setClosedHere] = useState<Position | null>(null);
   const keyFactors = Array.isArray(result?.key_factors) ? result.key_factors : [];
   // Non-null whenever entry_check names a reason, even the one case the hero
   // draws nothing for (a model WAIT on a shut market, which the preview
@@ -133,8 +149,37 @@ const AnalysisResultView = ({
   const visibleFactors = allFactors ? keyFactors : keyFactors.slice(0, PREVIEW_FACTORS);
   const r = t.result.ratings;
 
+  // The two references the review may carry. The held plan's card goes
+  // FIRST — above the new-entry call — because a reader who holds a position
+  // reads that before anything else; the change card follows the hero.
+  const held = positionReview?.reference?.held ?? null;
+  const previous = positionReview?.reference?.previous ?? null;
+  const heldPosition = held ? positions.find((p) => p.id === held.position_id) ?? null : null;
+  // What the reader has already done with THIS plan. A plan they entered and
+  // have since closed is not an unregistered plan, and offering the button
+  // again would let a second position open on the same row.
+  const registration = registrationFor(analysisId, positions);
+
   return (
     <div className="space-y-4">
+      {positionReview && held && (
+        <HeldPositionCard
+          review={positionReview}
+          held={held}
+          pair={pair}
+          interval={interval}
+          freshSignal={result.signal}
+          position={heldPosition}
+          closed={closedHere && held && closedHere.id === held.position_id ? closedHere : null}
+          onClosed={onPositionsChanged
+            ? (closedPosition) => {
+              setClosedHere(closedPosition);
+              onPositionsChanged();
+            }
+            : undefined}
+        />
+      )}
+
       <DirectionHero
         result={result}
         pair={pair}
@@ -142,6 +187,17 @@ const AnalysisResultView = ({
         entryCheck={entryCheck}
         confidenceObserved={confidenceObserved}
       />
+
+      {positionReview && previous && positionReview.change && (
+        <ChangeSinceLastCard
+          review={positionReview}
+          previous={previous}
+          change={positionReview.change}
+          pair={pair}
+          heldExists={held !== null}
+          onRegistered={onPositionsChanged ? () => onPositionsChanged() : undefined}
+        />
+      )}
 
       {candles.length > 0 && (
         <PriceChart
@@ -163,6 +219,19 @@ const AnalysisResultView = ({
           <div className="flex items-center gap-2 text-primary">
             <Target className="h-4 w-4" />
             <h3 className="text-sm font-semibold">{t.result.tradePlan}</h3>
+            {registration.state === "open" && (
+              <span className="ml-auto px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-[10px] text-primary" data-testid="registered-chip">
+                {t.position.registeredChip}
+              </span>
+            )}
+            {registration.state === "closed" && (
+              <span className="ml-auto px-1.5 py-0.5 rounded border border-border bg-secondary text-[10px] text-muted-foreground" data-testid="closed-already-chip">
+                {t.position.closedAlready(
+                  registration.position.close_price === null ? "—" : String(registration.position.close_price),
+                  registration.position.closed_at ?? "—",
+                )}
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-3 text-sm font-mono">
             <div>
@@ -199,6 +268,18 @@ const AnalysisResultView = ({
               <p className="text-success font-semibold">{result.take_profit_3 ?? "—"}</p>
             </div>
           </div>
+          {/* "I entered on this plan." Only when the row exists to point at,
+              and not twice. */}
+          {analysisId !== null && registration.state === "none" && onPositionsChanged && (
+            <div className="pt-1">
+              <EntryRegistration
+                analysisId={analysisId}
+                pair={pair}
+                defaultPrice={result.entry_point}
+                onRegistered={() => onPositionsChanged()}
+              />
+            </div>
+          )}
         </div>
       )}
 

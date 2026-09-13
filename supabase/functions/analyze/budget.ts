@@ -52,3 +52,32 @@ export const planAttempt = (elapsedMs: number, searchEnabled: boolean): AttemptP
 // as the overall budget has time left in it.
 export const canRetryWithoutSearch = (elapsedMs: number, searchEnabled: boolean): boolean =>
   searchEnabled && WALL_CLOCK_BUDGET_MS - elapsedMs > 0;
+
+// ---------------------------------------------------------------------------
+// The held-position review (analyze/review.ts) runs BESIDE the main call, not
+// after it, and it is never allowed to cost the analysis anything.
+// ---------------------------------------------------------------------------
+
+// What the save tail needs after the review is awaited: the history row (up
+// to SAVE_ATTEMPTS hops with 400+800ms of backoff), the two prompt-record
+// hops and the shadow hop, none of them individually timed. Same name and
+// value as the write reserve every other long function keeps.
+export const WRITE_RESERVE_MS = 10_000;
+
+// The longest the response may wait for the review AFTER the main turn has
+// returned. The review starts when the prompt is built, so on a technical run
+// it has had the whole main turn (mean 31.7s, p99 42.6s at "medium") to
+// finish before this timer even starts; the grace only matters when it is
+// still running then. Treat the number as a measurement to be revisited from
+// the review's own recorded elapsed_ms, never as a target.
+export const REVIEW_GRACE_MS = 15_000;
+
+// The review's own absolute deadline, fixed when it starts: it may never run
+// past the point where the save tail could no longer fit, on any path.
+export const reviewDeadlineMs = (elapsedMs: number): number =>
+  Math.max(0, WALL_CLOCK_BUDGET_MS - elapsedMs - WRITE_RESERVE_MS);
+
+// How long the response waits for a review that is still running once the
+// main turn is done: the grace, but never past the deadline above.
+export const planReviewWait = (elapsedMs: number): number =>
+  Math.max(0, Math.min(REVIEW_GRACE_MS, reviewDeadlineMs(elapsedMs)));

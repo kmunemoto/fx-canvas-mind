@@ -766,6 +766,191 @@ export const ja = {
       })} 以降です。`,
   },
 
+  // 保有中の判断（#89）。新規判断（BUY/SELL/WAIT）とは別枠。WAIT は「今から新しく
+  // 入るのは見送り」であって「決済しろ」ではない、というのがこの節の全部。
+  position: {
+    registerButton: "エントリー登録（この価格で入った）",
+    registerTitle: "エントリー登録",
+    registerHint: "このプランで実際に入った値段と時刻を登録すると、次回の分析から「保有中の判断」が別枠で出ます。元のプランは書き換えません。",
+    fillPrice: "約定価格",
+    fillTime: "約定時刻（任意）",
+    fillTimeHint: "未入力なら登録した時刻を記録します",
+    // 入力はブラウザの時計で解釈される。画面の時刻表示は全部日本時間なので、
+    // 何が記録されるのかをそのまま見せる。
+    timePreview: (at: string) => `記録される時刻: ${at}`,
+    registerSubmit: "登録する",
+    registering: "登録中…",
+    registered: "建玉を登録しました",
+    registeredChip: "建玉登録済み",
+    closedAlready: (price: string, at: string) => `決済済み ${price}（${at}）`,
+    alreadyOpen: (price: string) => `この建玉は登録済みでした（記録されている約定価格 ${price}）`,
+    registerPrevious: "前回のプランを保有中なら登録",
+    registerErrors: {
+      not_signed_in: "ログインが必要です",
+      entry_price_must_be_positive: "約定価格は 0 より大きい数で入力してください",
+      analysis_not_found: "そのプランが見つかりません（自分の分析だけ登録できます）",
+      plan_is_not_a_trade: "WAIT のプランには建玉を登録できません",
+      plan_is_a_preview: "下見（休場中の読み）には建玉を登録できません",
+      plan_is_a_shadow: "却下されたプランの追跡行には登録できません",
+      plan_has_no_levels: "このプランには損切り・TP1 の記録が無く、保有中の評価ができません",
+      fill_outside_plan: "約定価格が損切りと TP1 の間にありません。プランの水準で評価できる建玉ではありません",
+      opened_before_plan: "約定時刻がプランの作成より前です",
+      opened_in_future: "約定時刻が未来です",
+      time_unreadable: "時刻を読み取れません",
+      position_not_open: "その建玉は開いていません（決済済み、または自分のものではありません）",
+      close_price_must_be_positive: "決済価格は 0 より大きい数で入力してください",
+      close_reason_invalid: "決済理由が不正です",
+      closed_before_open: "決済時刻が建玉より前です",
+      closed_in_future: "決済時刻が未来です",
+      generic: "登録できませんでした。時間をおいて再試行してください",
+    },
+    openTitle: "保有中の建玉",
+    openedAt: "建玉",
+    openedAtRegistered: "登録時刻で記録",
+    planTimeframe: "分析足",
+    closeButton: "決済した",
+    // 決済を記録したあとの保有中カード。判定はそのまま残すが、「今の保有中の
+    // 判断」ではなくなったことを見出しで言う。
+    closedChip: (price: string, at: string) => `決済済み ${price}（${at}）`,
+    verdictBeforeClose: "決済前の判定",
+    closeTitle: "決済を記録",
+    closePrice: "決済価格",
+    closeTime: "決済時刻（任意）",
+    closeTimeHint: "未入力なら記録した時刻を使います",
+    closeReason: "理由",
+    closeReasons: { manual: "手動", stop: "損切り", target: "利確", other: "その他" },
+    closeSubmit: "記録する",
+    closing: "記録中…",
+    closed: "決済を記録しました",
+    cancel: "やめる",
+    latestVerdict: "最新の判定",
+    verdictAt: (at: string) => `${at} 時点`,
+    noVerdictSinceRegistration: "登録後の分析はまだありません（このペアを分析すると判定が出ます）",
+    // 登録後に分析は走ったが、この建玉は評価されなかった／建玉を読めなかった。
+    // どちらも「分析がまだ無い」ではない。
+    verdictNotCovered: "最新の分析は別の建玉（最新の 1 件）を評価しました",
+    verdictLookupFailed: "最新の分析は建玉を参照できませんでした",
+    noVerdictInRecent: (n: number) => `直近${n}件に判定なし`,
+    verdictStale: "以後は未評価",
+    otherOpen: (n: number) => `他に ${n} 件の建玉あり（この判定は最新の 1 件のみ）`,
+    intervalDiffers: (registered: string, now: string) => `登録時の分析足は ${registered}、今回の分析は ${now}`,
+    heldTitle: "保有中の判断",
+    heldSubtitle: "登録済みの建玉を、元のプランの根拠と水準で評価しています。新規判断とは別です。",
+    verdicts: {
+      hold: "継続",
+      caution: "警戒",
+      exit_condition_met: "撤退条件成立",
+      undecidable: "判定できない",
+    },
+    verdictGloss: {
+      hold: "根拠は維持されており、撤退条件は成立していません",
+      caution: "根拠が弱まった、または不利な事実があります。撤退条件は成立していません",
+      exit_condition_met: "プラン自身の撤退条件に達しています",
+      undecidable: "材料が足りない、または元の根拠を評価できません",
+    },
+    decidedByAnalyst: "AI の判定",
+    decidedByServerTouch: (at: string, feed: string, forming: boolean) =>
+      `サーバー計測: 損切り水準に接触（${feed}・${at} の足${forming ? "・形成中" : ""}）`,
+    decidedByServerTracker: (outcome: string, basis: string, at: string) =>
+      `判定システムの結果: ${outcome}（${basis}・${at}）`,
+    decidedByIncoherent: (verdict: string, thesis: string) =>
+      `AI の答えが矛盾しているため判定できません（AI の答え: ${verdict}／根拠は${thesis}）`,
+    analystUnavailable: (reason: string) => `AI の判定は取得できませんでした（${reason}）`,
+    failReasons: {
+      time_budget: "時間切れ",
+      api: "AI 呼び出しに失敗",
+      parse: "AI の答えを読めず",
+      lookup: "参照を取得できず",
+      no_model: "モデル未設定",
+      finalise: "判定の組み立てに失敗",
+      unknown: "不明",
+    },
+    suppressed: {
+      settled_before_open: (at: string) =>
+        `判定システムは損切り（loss）としていますが、その決着（${at}）は建玉より前なので撤退条件には使っていません`,
+      // 登録時刻を建玉時刻にしている建玉。決着が登録より前でも、実際の約定が
+      // その前か後かは記録が無いので分からない——「約定より前」とは言えない。
+      settled_before_registration: (at: string) =>
+        `判定システムは損切り（loss）としていますが、その決着（${at}）は登録より前です。実際の約定時刻は記録されていないため、撤退条件には使っていません`,
+      registered_after_settlement: "決着後に登録された建玉なので、判定システムの結果は撤退条件に使っていません",
+    },
+    facts: {
+      title: "サーバー計測",
+      // 値が付いた時刻を必ず添える。下見（休場中）の回では「現在値」は
+      // 金曜の終値であって、いまの値段ではない。
+      price: "現在値",
+      priceAt: (price: string, at: string) => `${price}（${at}）`,
+      open: "含み",
+      hypothetical: "プランの価格で入っていた場合（仮定）",
+      toStop: "損切りまで",
+      toTp1: "TP1まで",
+      beyond: "越え済み",
+      stopTouch: "損切り接触",
+      tp1Touch: "TP1到達",
+      touched: (at: string, forming: boolean) => `あり（${at} の足${forming ? "・形成中" : ""}）`,
+      notTouched: (asOf: string, n: number) => `なし（${asOf} まで・${n} 本）`,
+      notMeasured: {
+        no_anchor: "未計測（基準時刻なし）",
+        series_starts_after_anchor: "未計測（取得した足が建玉時刻に届かない）",
+        no_bars_since_anchor: "未計測（建玉後の足がまだ無い）",
+      },
+      // 同じ 3 状態を、建玉が無い参照（前回の判断）向けに言い直したもの。
+      // 基準は約定ではなく前回の値付け時刻なので、「建玉」と書いたら
+      // 存在しなかったポジションの話になる。
+      notMeasuredPriced: {
+        no_anchor: "未計測（基準時刻なし）",
+        series_starts_after_anchor: "未計測（取得した足が前回の価格時刻に届かない）",
+        no_bars_since_anchor: "未計測（前回の価格時刻以降の足がまだ無い）",
+      },
+      midOnly: "仲値のみ。決済側の Bid/Ask では未計測",
+      feed: { twelve_data: "仲値・Twelve Data", gmo: "仲値・GMO Coin" },
+      feedDiffers: "損切り接触は今回の足で測定しています。元のプランは別の板で価格付けされていました（差は最大 0.15 ATR）",
+      tracker: "判定システム",
+      trackerBasis: { quotes: "Bid/Ask 判定", mid: "仲値判定", none: "板の記録なし" },
+      trackerPending: "未判定",
+      // プラン行を引けなかった回。判定システムには聞いていないので「未判定」
+      // ではない（聞いた結果まだ決着していない、という意味になる）。
+      trackerUnknown: "プラン行を取得できず",
+      basisNote: "仲値での損切り接触は撤退条件として扱います。仲値で接触なし・TP1 到達は仲値上の事実で、判定システムの Bid/Ask 判定はその横に別に出します。",
+    },
+    thesis: {
+      heldLabel: "元のプランの根拠",
+      previousLabel: "前回の根拠",
+      byAnalyst: "AI の見立て",
+      status: { intact: "維持", weakened: "弱化", broken: "崩壊", unknown: "不明" },
+      unavailable: "取得できず",
+    },
+    whatChanged: "変わったこと",
+    reasons: "理由",
+    watch: "見張るもの",
+    notAnInstruction: (signal: string) =>
+      `下の新規判断（${signal}）は「今から新しく入るか」の判断で、保有中のポジションを決済する指示ではありません。`,
+    reversedNote: (held: string, fresh: string) =>
+      `新規判断は保有中（${held}）とは反対方向（${fresh}）です。これは上の保有中の評価を変えるものではなく、別の判断です。`,
+    stopReached: (basis: string) => `前回のプランの損切り水準には既に達しています（${basis}）`,
+    changeTitle: "前回からの変化",
+    changeHeader: (prev: string, cur: string) => `前回 ${prev} → 今回 ${cur}`,
+    withConfidence: (signal: string, confidence: number | null) =>
+      confidence === null ? signal : `${signal} ${confidence}%`,
+    kinds: {
+      sameTrade: (dir: string) => `AI は今回も ${dir} と判断しています`,
+      sameWait: "前回も今回も AI 自身が見送りです",
+      reversed: (prev: string, cur: string) => `AI は方向を ${prev} → ${cur} に変えました`,
+      tradeToWait: "AI は今回、新規エントリーを見送りました（AI 自身の判断）",
+      waitToTrade: (cur: string) => `前回は見送り、今回は ${cur} です`,
+      unclear: "前回の提案シグナルが記録されていないため、比較できません",
+    },
+    refusedNow: (reason: string) => `ただし今回はサーバーが公開を見送りました（${reason}）`,
+    refusedThen: (reason: string) => `前回はサーバーが公開を見送っていました（${reason}）`,
+    gateRr: (rr: number) => `今回のゲート計測: RR 1:${rr}`,
+    gateNone: "今回は新規プランが出ていないため、ゲートの計測はありません",
+    previousLevelsRefused: "前回の水準は AI が提案し、サーバーが公開を見送ったものです",
+    previousWasWait: "前回は見送り（水準なし）",
+    // 水準が読めなかった回。AI 自身の見送りではないので「見送り」とは書かない。
+    previousLevelsUnrecorded: "前回の水準は揃って記録されていません",
+    noiseNote: "同じ入力でも AI の判定は割れることがあります。見出しは、名前の付いた計測事実が裏付けるときだけ信頼してください。",
+  },
+
   index: {
     emptyLine1: "「分析開始」をクリックすると",
     emptyLine2: "マルチタイムフレームのデータ取得＋AI分析を行います",

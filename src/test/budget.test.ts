@@ -84,3 +84,31 @@ describe("canRetryWithoutSearch", () => {
     expect(canRetryWithoutSearch(1_000, false)).toBe(false);
   });
 });
+
+describe("the held-position review's share of the budget", () => {
+  // The review runs BESIDE the main call and is never allowed to cost the
+  // analysis anything: its fetches carry an absolute deadline fixed when it
+  // starts, and the response waits for it only for a bounded grace.
+  it("keeps a write reserve large enough for the save tail", async () => {
+    const { WRITE_RESERVE_MS, REVIEW_GRACE_MS, reviewDeadlineMs, planReviewWait } = await import(
+      "../../supabase/functions/analyze/budget"
+    );
+    // SAVE_ATTEMPTS hops with 400 + 800 ms of backoff, then the two prompt
+    // hops and the shadow hop, none of them timed individually.
+    expect(WRITE_RESERVE_MS).toBeGreaterThanOrEqual(400 + 800 + 3 * 1_500);
+    expect(reviewDeadlineMs(0)).toBe(WALL_CLOCK_BUDGET_MS - WRITE_RESERVE_MS);
+    expect(reviewDeadlineMs(WALL_CLOCK_BUDGET_MS)).toBe(0);
+    expect(reviewDeadlineMs(WALL_CLOCK_BUDGET_MS + 5_000)).toBe(0);
+    // A fresh technical turn gets the whole grace; a run that dropped search
+    // at the search budget and then spent a long retry gets nothing.
+    expect(planReviewWait(0)).toBe(REVIEW_GRACE_MS);
+    expect(planReviewWait(134_500)).toBe(0);
+    for (let elapsed = 0; elapsed < WALL_CLOCK_BUDGET_MS + 10_000; elapsed += 997) {
+      expect(planReviewWait(elapsed)).toBeGreaterThanOrEqual(0);
+      expect(planReviewWait(elapsed)).toBeLessThanOrEqual(REVIEW_GRACE_MS);
+      expect(elapsed + planReviewWait(elapsed) + WRITE_RESERVE_MS).toBeLessThanOrEqual(
+        Math.max(WALL_CLOCK_BUDGET_MS, elapsed + WRITE_RESERVE_MS),
+      );
+    }
+  });
+});
