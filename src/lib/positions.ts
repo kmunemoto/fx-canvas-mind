@@ -156,6 +156,14 @@ export const reviewFailReason = (review: PositionReview | null | undefined): Rev
   const err = review?.error ?? review?.analyst?.error ?? null;
   if (err === null) return "unknown";
   if (err === "time_budget") return "time_budget";
+  // The review runs in its own function now (docs/OPERATIONS.md §6.1.2), so
+  // "ran out of time" arrives by two more names. `time_budget_no_partial` is
+  // the worse one — the round trip was abandoned, so not even the measured
+  // facts came back — but from the reader's side it is still the clock, and
+  // calling it 「不明」 would hide a cause we know.
+  if (err === "time_budget_no_partial") return "time_budget";
+  if (err.startsWith("review_http_") || err === "review_bad_response") return "api";
+  if (err === "no_service_role" || err === "not_configured") return "api";
   if (err.startsWith("api_")) return "api";
   if (err.startsWith("parse_")) return "parse";
   if (err.startsWith("finalise")) return "finalise";

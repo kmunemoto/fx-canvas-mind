@@ -1,6 +1,12 @@
 [functions.analyze]
 verify_jwt = false
 
+# 保有中ポジションの評価。analyze から SERVICE ROLE キーで呼ばれる内部専用の
+# 関数で、ゲートウェイの JWT は使わない（本文で service role を突き合わせる）。
+# 本文が「誰の建玉を読むか」を指定するので、service role 以外は一切通さない。
+[functions.position-review]
+verify_jwt = false
+
 [functions.create-checkout]
 verify_jwt = false
 

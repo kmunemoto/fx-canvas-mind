@@ -57,7 +57,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v54-2026-09-13T03:45:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v55-2026-09-13T06:15:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the

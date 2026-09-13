@@ -154,7 +154,7 @@ public.rulebook ◀──(改訂: revisionDue)── postmortem ◀──(closed
 
 - **WAIT は「今から新しく入るのは見送り」であって「決済しろ」ではない。** 画面に新規判断しか無かったので、売りを持っている人が WAIT を見て決済の指示と読んでいた。直すのは 3 点: エントリー登録・保有中専用カード・前回からの変更理由。
 - **元のプランは書き換えない。** 建玉は `public.positions`（プランの `analysis_id` を指すだけ）、評価は**今回の**分析行の `analyses.position_review`。参照した行に PATCH は無い。`position_review` が NULL なのは列より前の行だけで、参照が無い回は `status = skipped` の JSON が入る。
-- **WAIT から「継続」を導かない。** 保有プランの評価は analyze の中で**別のモデル呼び出し**（`analyze/review.ts`）が行い、新規判断の答えは渡さない。理由は 2 つ:
+- **WAIT から「継続」を導かない。** 保有プランの評価は**別のモデル呼び出し**（`analyze/review.ts`）が行い、新規判断の答えは渡さない。2026-09-13 以降、この呼び出しは**独立したエッジ関数** `position-review` の中で走る（§6.1.2。判断は何も変えていない。動く場所だけが変わった）。理由は 2 つ:
   主プロンプトと `RESPONSE_SCHEMA` は再生ハーネスの資産で（`noise-floor/shape.ts` が凍結コピーを持ち、`analysis_prompts` の 90 行を逐語で再生する）、そこに項目を足すと測定済みの行が黙って無効になる。
   それと主呼び出しは同一入力で 48 回中 10 回 SELL↔WAIT が割れる（NOISE_FLOOR_PREREGISTRATION.md §12.2）。その上に乗せた保有判定は同じノイズを継ぐ。
 - **参照は 2 つ、独立に引く。** `held` = このペアで開いている最新の建玉（足は問わない。建玉は建玉）。`previous` = 同じペア・同じ足の直近 72 時間以内の分析行（下見と shadow を除く）。無いときは理由を書く（`no_open_position` / `none_within_window` / `lookup_failed`）。両方無ければ `skipped`。
@@ -788,7 +788,20 @@ update public.noise_runs set status = 'running', abort_reason = null
   - メインの担当（私）も直接試したが、**116,242 バイトがツール呼び出しに乗らなかった**。実際に届いたのは 84 バイトの `deno.json` だけで、バンドル本体は丸ごと欠落していた。
   - **転記の精度ではなく容量の問題である。** 先に 90 行 / 16,631 バイトを書き出して原本と `cmp` したところ **バイト単位で完全一致**した。つまり「正確に写せない」のではなく「1 通のメッセージに載り切らない」。
   - **安全に失敗した。** Supabase 側は entrypoint の実在を**切り替え前に**検査するので、`bundle.js` を欠いた呼び出しは `Entrypoint path does not exist` で弾かれ、本番は v53 のまま無傷だった（本番へ POST して版を確認済み）。不完全なデプロイが本番を壊す経路にはなっていない。
-  - 結論: **この経路はもう使えない。** 次に analyze を出すときは、先に経路を用意すること（下の選択肢）。
+  - 結論: **この経路はもう使えない。** 次に analyze を出すときは、先に経路を用意すること。→ §6.1.2 で分割した。
+
+### 6.1.2 保有中評価を別関数に切り出した（2026-09-13、analyze v55）
+
+- **やったこと**: `analyze/review.ts` を使う側を、analyze の中から新しいエッジ関数 `position-review` に移した。analyze はそこへ HTTP で投げるだけになった。
+- **効いた理由はツリーシェイキング**。analyze が `review.ts` から import するのを `emptyReviewRun` と `finalizeReview` だけに絞ると、22.8KB のプロンプト本文は esbuild が落とす。ファイルを切り刻む必要はなかった。
+  実測: analyze **116,242 → 93,816 バイト**（621 → 467 行）。`position-review` は 27,030 バイト・171 行。どちらもインライン経路の実績値（110,299 バイトは通った）の下に戻った。
+- **判断は何も変えていない**。参照の引き方・不在の言い分け・機械的事実を先に計算すること・verdict の導出（`finalizeReview` は analyze 側に残す。**この回の signal を知らないと決められない**から）——全部そのまま。
+- **取り消しの保証は作り直した**。分割前は、待つのをやめた analyze が `reviewAbort.abort()` で飛行中の Anthropic 呼び出しごと止めていた。HTTP 越しにはそれが効かないので、`position-review` 側で **`req.signal`（呼び出し元が切ったら発火）と予算タイムアウトを `AbortSignal.any` で束ねる**。これが無いと、見捨てられた評価が締切まで歩いて**誰も読まない課金済みの呼び出し**を投げ、しかも行が記録した送信内容とも食い違う。
+- **足は送る、取り直さない**。`position-review` は市場データを自分では取らない。取り直すとプランが読まれた系列とは別の系列になり、接触の事実が「誰も見ていない系列」の話になる。
+- **認証は service role のみ**。本文が「誰の建玉を読むか」を指定するので、ゲートウェイの JWT ではなく本文で service role を突き合わせる（`config.toml` は `verify_jwt = false`）。
+- **analyze は失敗に耐える**。404 / 500 / 時間切れ / `run` の無い応答は、全部**名前の付いた評価失敗**（`review_http_*` / `review_bad_response` / `no_service_role`）になる。分析そのものは完走して保存される。
+- **出す順番**: `position-review` → `analyze` → フロント。逆にすると analyze が居ない関数を呼ぶ。
+- **モデル出力のパーサは共有する**（`_shared/model-output.ts`）。2 つに分かれた瞬間から、コピーは必ずずれる。ずれると評価側だけが「解析できない」を出し、画面は**存在する verdict について**「判定できない」と言う。
   `.claude/workflows/deploy-edge-verified.js` の説明文は「約 93KB・約 432 行」を前提に書いてあるが、これは analyze / postmortem の話であって noise-floor はその半分強である。ワークフローは切り出す前に `wc -l` を取るので動作は正しい。数字のほうが 4 つのスラッグ全部には当てはまらない、というだけ。
 
 ### 6.2 手順
@@ -1340,4 +1353,6 @@ from public.rulebook where id = 1;
 - [ ] プロンプトの**送り方**（`model` / `effort` / `max_tokens` / tools / user メッセージの組み立て）を変えたら、`analyze/reuse.ts` の `REUSE_VERSION` を上げるか確かめる。答えの出方が変わったのに鍵が同じなら、古い版の答えが新しい版の入力に対して配られる（§2.4）。時刻の文言をロケールに足したときは `CLOCK_LINE` と `src/test/reuse.test.ts` の全ロケール検査を通す。
 - [ ] **プロンプトの外から答えに入るもの**（web 検索のように、モデル呼び出しの時点で取りに行くもの）を足したら、その回を再利用の対象から外す。鍵はプロンプトしか見ていないので、外にあるものは「同じ入力」の判定に入らない（§2.4）。
 - [ ] 断る理由を足したら `REUSE_OUTCOMES` と `analysis_reuses.outcome` の CHECK 制約を**両方**動かす（テストが突き合わせる）。
+- [ ] エッジ関数を増やすなら `config.toml`・`package.json`（`bundle:*` と `check:functions`）・`.gitignore`（bundle.js）・deno.json を同時に足す。出す順番は「呼ばれる側 → 呼ぶ側 → フロント」。
+- [ ] analyze のバンドルは **110KB 未満**に保つ（§6.1.1 の実測。116KB は通らなかった）。`review.ts` から import を増やすとプロンプト本文が丸ごと戻ってくるので、`npm run bundle:analyze && wc -c` で必ず測る。
 - [ ] 部分索引を足すなら、述語を**照会と同じ綴り**で書く。`shadow = false` の索引は `shadow=is.false`（PostgREST の既定）の照会を拾わない。`explain` で実際に選ばれることを確かめる（§2.4）。

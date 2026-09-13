@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v54-2026-09-13T03:45:00Z";
+const FUNCTION_VERSION = "analyze-v55-2026-09-13T06:15:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -35,6 +35,7 @@ import {
   WALL_CLOCK_BUDGET_MS,
   canRetryWithoutSearch,
   planAttempt,
+  planRemoteReviewBudget,
   planReviewWait,
   reviewDeadlineMs,
 } from "./budget.ts";
@@ -47,17 +48,9 @@ import {
   type ReuseRefusal,
 } from "./reuse.ts";
 import {
-  PREVIOUS_WINDOW_HOURS,
-  buildReviewRequest,
   emptyReviewRun,
   finalizeReview,
-  mechanicalFacts,
-  parseReviewAnswer,
-  readHeldReference,
-  readPreviousReference,
-  recordRequest,
   type PositionReview,
-  type ReferenceSet,
   type ReviewRun,
 } from "./review.ts";
 
@@ -98,6 +91,7 @@ import { compactDivergence, detectDivergence, type Divergence } from "./divergen
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import { barFullyClosed, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
+import { extractAnthropicText, parseAnalysisJson } from "../_shared/model-output.ts";
 import {
   GMO_ANALYSIS_TIMEFRAMES,
   acceptOverlay,
@@ -500,50 +494,6 @@ interface RuleFitRecord {
   // Absent when the analyst did not answer — see `claimedRules`.
   claimed_by_analyst?: string[];
 }
-
-const extractAnthropicText = (value: unknown) => {
-  if (!isRecord(value)) return "";
-
-  const content = value.content;
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-
-  const textParts: string[] = [];
-
-  for (const block of content) {
-    if (typeof block === "string") {
-      textParts.push(block);
-      continue;
-    }
-
-    if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
-      textParts.push(block.text);
-    }
-  }
-
-  return textParts.join("").trim();
-};
-
-const parseAnalysisJson = (finalText: string): unknown => {
-  const tagMatch = finalText.match(/<json>([\s\S]*?)<\/json>/);
-  const source = tagMatch ? tagMatch[1] : finalText;
-  const cleaned = source.replace(/```json\n?|```\n?/g, "").trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const first = cleaned.indexOf("{");
-    const last = cleaned.lastIndexOf("}");
-    if (first !== -1 && last > first) {
-      try {
-        return JSON.parse(cleaned.slice(first, last + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-};
 
 interface NormalizedAnalysis {
   signal: "BUY" | "SELL" | "WAIT";
@@ -2047,172 +1997,76 @@ Deno.serve(async (req: Request) => {
     const reviewAcc: ReviewRun = emptyReviewRun(new Date(reviewStartedMs).toISOString());
     const reviewModel = typeof baseRequest.model === "string" ? baseRequest.model : "";
     const reviewPrice = Number(entrySnapshot.price.toFixed(decimals));
-    const runPositionReview = async (acc: ReviewRun): Promise<void> => {
-      const restHeaders = { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" };
-      const restGet = async (path: string): Promise<unknown> => {
-        const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, { headers: restHeaders, signal: reviewSignal });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`rest ${res.status}: ${text.slice(0, 120)}`);
-        return parseJsonResponse(text);
-      };
-      const uid = encodeURIComponent(user.id);
-      const pairQ = encodeURIComponent(currencyPair);
-      // The reference row, with the four JSON paths the review reads aliased
-      // out so the row's own evaluation.path (60 points) is not fetched.
-      const planSelect = "id,created_at,priced_at,interval,signal,confidence,thesis,entry_point,stop_loss,take_profit_1," +
-        "outcome,outcome_price,closed_at,entry_check,price_basis:evaluation->>price_basis,key_factors:result->key_factors," +
-        "snapshot:context->entry,structure:context->structure->0";
-      const sinceIso = new Date(Date.now() - PREVIOUS_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-
-      // Two independent lookups: the position the reader holds on this pair
-      // (any timeframe — a position is a position), and the previous run on
-      // this pair and timeframe. Each absence is named, not silent.
-      const refs: ReferenceSet = { held: null, held_reason: null, previous: null, previous_reason: null, thesis_of: null };
-      // A lookup that could not be made is a different thing from a lookup
-      // that came back empty, and it has to be loud in both places: in the
-      // log, because an outage the row records as "no reference" is invisible;
-      // and in the row, because "nothing to review" and "could not look" draw
-      // the same blank screen.
-      const lookupFailed = (what: string) => (err: unknown) => {
-        console.warn(
-          `Position review ${what} lookup failed:`,
-          redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200),
-        );
-        return "lookup_failed" as const;
-      };
-      const [positionsRaw, previousRaw] = await Promise.all([
-        restGet(`positions?user_id=eq.${uid}&pair=eq.${pairQ}&status=eq.open&select=*&order=opened_at.desc,created_at.desc&limit=10`)
-          .catch(lookupFailed("positions")),
-        restGet(
-          `analyses?user_id=eq.${uid}&pair=eq.${pairQ}&interval=eq.${encodeURIComponent(interval)}&preview=is.false&shadow=is.false` +
-            `&created_at=gte.${encodeURIComponent(sinceIso)}&select=${planSelect}&order=created_at.desc&limit=1`,
-        ).catch(lookupFailed("previous analysis")),
-      ]);
-      if (positionsRaw === "lookup_failed") {
-        refs.held_reason = "lookup_failed";
-      } else if (Array.isArray(positionsRaw) && positionsRaw.length > 0 && isRecord(positionsRaw[0])) {
-        const newest = positionsRaw[0];
-        const others = positionsRaw.slice(1)
-          .map((p) => (isRecord(p) && typeof p.id === "string" ? p.id : null))
-          .filter((x): x is string => x !== null);
-        const planRaw = typeof newest.analysis_id === "string"
-          ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id)}&select=${planSelect}&limit=1`)
-            .catch(lookupFailed("held plan"))
-          : "lookup_failed" as const;
-        const planFetchFailed = planRaw === "lookup_failed";
-        const plan = Array.isArray(planRaw) && planRaw.length > 0 ? planRaw[0] : null;
-        refs.held = readHeldReference(newest, plan, others);
-        // The position row points at its plan with an ON DELETE CASCADE
-        // reference, so a plan row that is genuinely gone cannot coexist with
-        // an open position: `plan_row_missing` is reserved for the fetch that
-        // came back EMPTY, and a fetch that threw says so.
-        if (refs.held === null) refs.held_reason = "lookup_failed";
-        else if (planFetchFailed) refs.held_reason = "lookup_failed";
-        else if (plan === null) refs.held_reason = "plan_row_missing";
-      } else {
-        refs.held_reason = "no_open_position";
-      }
-      if (previousRaw === "lookup_failed") {
-        refs.previous_reason = "lookup_failed";
-      } else {
-        refs.previous = Array.isArray(previousRaw) && previousRaw.length > 0 ? readPreviousReference(previousRaw[0]) : null;
-        if (refs.previous === null) refs.previous_reason = "none_within_window";
-      }
-      refs.thesis_of = refs.held ? "held" : refs.previous ? "previous" : null;
-      acc.reference = refs;
-      if (refs.thesis_of === null) {
-        // `skipped` means there was nothing to review. When a lookup threw,
-        // there may well have been — say so, so the row is not counted among
-        // the runs that found no position and no previous call.
-        const failed = refs.held_reason === "lookup_failed" || refs.previous_reason === "lookup_failed";
-        acc.status = failed ? "failed" : "skipped";
-        acc.skipped_reason = failed ? null : "no_reference";
-        acc.error = failed ? "lookup_failed" : null;
-        return;
-      }
-
-      // The facts first, before any model call, so a timed-out review still
-      // stores them. Measured on the entry-timeframe mid series this run
-      // fetched, from the bar after the anchor.
-      const subject = refs.held ?? refs.previous!;
-      const levels = subject.kind === "held"
-        ? { direction: subject.direction, entry: subject.entry, stop: subject.stop, tp1: subject.tp1 }
-        : subject.levels;
-      acc.mechanical = levels === null ? null : mechanicalFacts({
-        subject: subject.kind,
-        direction: levels.direction,
-        entry: levels.entry,
-        stop: levels.stop,
-        tp1: levels.tp1,
-        anchor: subject.kind === "held"
-          ? { at: subject.opened_at, source: "opened_at" }
-          : { at: subject.priced_at, source: "priced_at" },
-        candles: seriesByTf[0],
-        newestBarClosed: snapshots[0]?.barClosed ?? null,
-        price: reviewPrice,
-        pricedAt: pricedAtIso,
-        feed: priceFeed,
-        feedDeltaAtr,
-        decimals,
-      });
-      if (reviewModel === "") {
-        acc.status = "failed";
-        acc.error = "no_model";
-        return;
-      }
-
-      const request = buildReviewRequest({
-        model: reviewModel,
-        locale,
-        pair: currencyPair,
-        nowUtc,
-        reference: subject,
-        mechanical: acc.mechanical,
-        sections: tfSections,
-        decimals,
-      });
-      const sentAt = new Date().toISOString();
-      acc.request = recordRequest(request, sentAt);
-      const calledAt = Date.now();
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+    // The review now runs in its own function (supabase/functions/position-review).
+    // Nothing about the judgement moved — the references, the mechanical facts
+    // and the model call are the same code, imported from the same review.ts.
+    // What moved is WHERE it runs, and why is in that file's header: analyze's
+    // bundle outgrew the only deploy route this project has, and the review is
+    // 22.8KB of it (docs/OPERATIONS.md §6.1.1).
+    //
+    // Still concurrent with the main model turn, still bounded by the same
+    // absolute deadline, and still cancellable: `reviewSignal` aborts THIS
+    // fetch, and dropping the connection is what the remote watches to stop
+    // its own in-flight Anthropic call.
+    //
+    // The series is sent rather than re-fetched. A second fetch would be a
+    // different set of bars than the plan was read on, and the touch facts
+    // would then describe a series nobody was shown.
+    const runPositionReview = async (acc: ReviewRun): Promise<ReviewRun> => {
+      // The remote reads the reader's positions, so it accepts the service
+      // role and nothing else. Without that key there is no review to run —
+      // say so under its own name rather than sending a call that will 401.
+      if (!serviceRoleKey) return { ...acc, status: "failed", error: "no_service_role" };
+      const res = await fetch(`${supabaseUrl}/functions/v1/position-review`, {
         method: "POST",
-        headers: anthropicHeaders,
-        body: JSON.stringify(request),
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          apikey: dbApiKey,
+          "Content-Type": "application/json",
+        },
         signal: reviewSignal,
+        body: JSON.stringify({
+          user_id: user.id,
+          pair: currencyPair,
+          interval,
+          locale,
+          decimals,
+          model: reviewModel,
+          now_utc: nowUtc,
+          sections: tfSections,
+          price: reviewPrice,
+          priced_at: pricedAtIso,
+          feed: priceFeed,
+          feed_delta_atr: feedDeltaAtr,
+          candles: seriesByTf[0],
+          newest_bar_closed: snapshots[0]?.barClosed ?? null,
+          // The remote gets the SAME absolute deadline this side is holding,
+          // so it cannot outlive the write reserve even if this side stops
+          // listening first.
+          // A deadline the remote must ANSWER by, not merely stop at: it
+          // replies with whatever it has measured so far. Sized to land while
+          // this side is still listening (budget.ts), because a response that
+          // arrives after the grace is the same as no response — and no
+          // response now means the row loses the references, the facts and
+          // the record of what was sent.
+          budget_ms: planRemoteReviewBudget(elapsed()),
+        }),
       });
-      const raw = await res.text();
-      const shape = {
-        model: request.model,
-        effort: acc.request.effort,
-        max_tokens: request.max_tokens,
-        elapsed_ms: Date.now() - calledAt,
-      };
-      const failedAnswer = (error: string) => {
-        acc.analyst = { status: "failed", verdict: null, thesis_status: null, reasons: [], what_changed: [], watch: null, ...shape, error };
-        acc.status = "failed";
-        acc.error = error;
-      };
+      const text = await res.text();
       if (!res.ok) {
-        console.error("Position review API error:", res.status, raw.slice(0, 300));
-        failedAnswer(`api_${res.status}`);
-        return;
+        console.error("Position review call failed:", res.status, text.slice(0, 300));
+        return { ...acc, status: "failed", error: `review_http_${res.status}` };
       }
-      const answer = parseReviewAnswer(parseAnalysisJson(extractAnthropicText(parseJsonResponse(raw))), subject.kind);
-      if (!answer.ok) {
-        failedAnswer(`parse_${answer.error}`);
-        return;
+      const payload = parseJsonResponse(text);
+      const run = isRecord(payload) && isRecord(payload.run) ? payload.run : null;
+      if (run === null) {
+        console.error("Position review returned no run:", text.slice(0, 300));
+        return { ...acc, status: "failed", error: "review_bad_response" };
       }
-      acc.analyst = {
-        status: "ok",
-        verdict: answer.verdict,
-        thesis_status: answer.thesis_status,
-        reasons: answer.reasons,
-        what_changed: answer.what_changed,
-        watch: answer.watch,
-        ...shape,
-        error: null,
-      };
-      acc.status = "ok";
+      // Trusted enough to hand to finalizeReview, which is itself wrapped in a
+      // try/catch: a shape that is wrong in a way this check misses becomes a
+      // named `finalise_threw`, not a broken analysis.
+      return run as unknown as ReviewRun;
     };
     const classifyReviewError = (err: unknown): string => {
       if (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")) return "time_budget";
@@ -2221,10 +2075,7 @@ Deno.serve(async (req: Request) => {
     // Resolves on every path; never rejects. The accumulator keeps whatever
     // was produced before the failure.
     const reviewPromise: Promise<ReviewRun> = runPositionReview(reviewAcc)
-      .then(() => {
-        reviewAcc.elapsed_ms = Date.now() - reviewStartedMs;
-        return reviewAcc;
-      })
+      .then((run) => ({ ...run, elapsed_ms: Date.now() - reviewStartedMs }))
       .catch((err) => ({ ...reviewAcc, status: "failed" as const, error: classifyReviewError(err), elapsed_ms: Date.now() - reviewStartedMs }));
 
     // Server tools may pause long turns (stop_reason "pause_turn"); continue
@@ -2726,7 +2577,12 @@ Deno.serve(async (req: Request) => {
       new Promise<ReviewRun>((resolve) => {
         reviewTimer = setTimeout(
           () => {
-            resolve({ ...reviewAcc, status: "failed", error: "time_budget", elapsed_ms: Date.now() - reviewStartedMs });
+            // NO PARTIAL EXISTS ON THIS PATH. The remote holds the
+            // references and the facts; giving up on the round trip means
+            // this side never sees them. Say that, rather than letting
+            // `reference: null` read as "we looked and found nothing"
+            // (docs/OPERATIONS.md §6.1.2).
+            resolve({ ...reviewAcc, status: "failed", error: "time_budget_no_partial", elapsed_ms: Date.now() - reviewStartedMs });
             // Stop it rather than leave it running unwatched: what it does
             // from here cannot reach the row, and it can still spend money.
             reviewAbort?.abort();

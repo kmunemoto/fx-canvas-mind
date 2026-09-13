@@ -81,3 +81,26 @@ export const reviewDeadlineMs = (elapsedMs: number): number =>
 // main turn is done: the grace, but never past the deadline above.
 export const planReviewWait = (elapsedMs: number): number =>
   Math.max(0, Math.min(REVIEW_GRACE_MS, reviewDeadlineMs(elapsedMs)));
+
+// THE REMOTE REVIEW'S OWN RESPONSE DEADLINE.
+//
+// The review runs in its own function now (§6.1.2), and that turned a shared
+// object into a round trip: when this side stops waiting it gets NOTHING,
+// where before it still held the references, the measured facts and the
+// record of what was sent. Losing those is not a slower review, it is a row
+// that says "we looked and found nothing" about a run that looked, measured,
+// and paid for an answer.
+//
+// So the remote is given a deadline it must ANSWER by — with whatever it has
+// — and the number is chosen to land inside the window this side will still
+// be listening. The review starts when the prompt is built, so it has the
+// whole main turn (mean 31.7s, p99 42.6s) plus REVIEW_GRACE_MS before this
+// side gives up. A remote that always answers within 25s of the request is
+// therefore heard whenever the main turn takes at least ~10s, which is every
+// measured turn.
+//
+// Never past reviewDeadlineMs: the write reserve outranks the review.
+export const REMOTE_REVIEW_BUDGET_MS = 25_000;
+
+export const planRemoteReviewBudget = (elapsedMs: number): number =>
+  Math.max(1_000, Math.min(REMOTE_REVIEW_BUDGET_MS, reviewDeadlineMs(elapsedMs)));

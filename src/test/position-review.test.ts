@@ -768,19 +768,122 @@ describe("the review is wired into analyze without touching the main call", () =
     expect(timer).toContain("reviewAbort?.abort();");
   });
 
+  it("hands the review to its own function without loosening the boundary", () => {
+    // The review moved to supabase/functions/position-review because the
+    // analyze bundle outgrew the deploy path (docs/OPERATIONS.md §6.1.1).
+    // What must survive the move: it still runs beside the main call, still
+    // carries the same absolute deadline, and still stops when this side
+    // stops listening.
+    const task = src.slice(
+      src.indexOf("const runPositionReview = async (acc: ReviewRun)"),
+      src.indexOf("const classifyReviewError"),
+    );
+    expect(task).toContain("/functions/v1/position-review");
+    expect(task).toContain("signal: reviewSignal");
+    // the remote is told the SAME absolute deadline, so it cannot outlive the
+    // write reserve even if this side gives up first
+    expect(task).toContain("budget_ms: planRemoteReviewBudget(elapsed()),");
+    // service role only, and a missing key is a named failure rather than a
+    // call that will 401
+    expect(task).toContain("Bearer ${serviceRoleKey}");
+    expect(task).toContain('return { ...acc, status: "failed", error: "no_service_role" };');
+    // the series is SENT, never re-fetched: a second fetch would be different
+    // bars than the plan was read on
+    expect(task).toContain("candles: seriesByTf[0],");
+    expect([...task.matchAll(/await fetch\(/g)].length).toBe(1);
+    // and a bad answer is a named failure, not a thrown analysis
+    expect(task).toContain('error: `review_http_${res.status}`');
+    expect(task).toContain('error: "review_bad_response"');
+    // and an abandonment with no response at all says so, rather than letting
+    // `reference: null` read as "we looked and found nothing"
+    const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+    expect(analyze).toContain('error: "time_budget_no_partial"');
+  });
+
+  it("no longer carries the review's prompt text in the analyze bundle", () => {
+    // This is the whole point of the split. analyze must import only the
+    // finalisation half; importing a prompt builder would drag the 22.8KB of
+    // system prompts back in and put the bundle over the deploy limit again.
+    const imports = src.slice(src.indexOf('import {\n  emptyReviewRun,'), src.indexOf('} from "./review.ts";') + 21);
+    expect(imports).toContain("emptyReviewRun");
+    expect(imports).toContain("finalizeReview");
+    for (const gone of ["buildReviewRequest", "mechanicalFacts", "parseReviewAnswer", "readHeldReference", "readPreviousReference", "recordRequest"]) {
+      expect(imports, gone).not.toContain(gone);
+    }
+  });
+});
+
+describe("the position-review function", () => {
+  const fn = readFileSync("supabase/functions/position-review/index.ts", "utf8");
+
+  it("accepts the service role and nothing else", () => {
+    // The BODY names whose positions get read, so a caller without the
+    // service role must not reach the lookups at all.
+    expect(fn).toContain("if (auth !== `Bearer ${serviceRoleKey}`)");
+    expect(fn).toContain('return json({ ok: false, error: "service role required" }, 401);');
+  });
+
+  it("stops when the clock runs out OR the caller hangs up", () => {
+    // Before the split, giving up aborted the in-flight Anthropic call. Over
+    // HTTP that has to be rebuilt, or an abandoned review keeps walking to its
+    // deadline and posts a billed request nobody reads.
+    expect(fn).toContain("AbortSignal.any([req.signal, AbortSignal.timeout(budgetMs)])");
+    // and every fetch it makes carries it — the REST reads and the model call
+    const fetches = [...fn.matchAll(/await fetch\(/g)].length;
+    expect(fetches).toBe(2);
+    expect(fn).toContain("{ headers: restHeaders, signal }");
+    expect(fn).toContain("body: JSON.stringify(request),\n      signal,");
+  });
+
   it("does not record a lookup that threw as 'nothing to review'", () => {
-    expect(src).toContain("const lookupFailed = (what: string) => (err: unknown) => {");
-    expect(src).toContain("Position review ${what} lookup failed:");
+    expect(fn).toContain("const lookupFailed = (what: string) => (err: unknown) => {");
+    expect(fn).toContain("Position review ${what} lookup failed:");
     // both lookups, and the held plan's row, go through it
-    expect([...src.matchAll(/\.catch\(lookupFailed\(/g)].length).toBe(3);
-    expect(src).not.toContain('.catch(() => "lookup_failed" as const)');
+    expect([...fn.matchAll(/\.catch\(lookupFailed\(/g)].length).toBe(3);
+    expect(fn).not.toContain('.catch(() => "lookup_failed" as const)');
     // and the status says so rather than counting as a quiet run
-    expect(src).toContain('acc.status = failed ? "failed" : "skipped";');
+    expect(fn).toContain('acc.status = lookupBroke ? "failed" : "skipped";');
+  });
+
+  it("measures the facts before it spends a model call", () => {
+    expect(fn.indexOf("acc.mechanical =")).toBeLessThan(fn.indexOf("api.anthropic.com"));
+  });
+
+  it("never answers with a non-200 that would erase the reason", () => {
+    // analyze reads `run` off the body. A 500 here would make it invent its
+    // own failure text and lose the named status.
+    expect(fn).toContain("const done = (run: ReviewRun) => json({ ok: true, run:");
+    expect(fn).toContain('const failed = (error: string) => done({ ...acc, status: "failed", error });');
+  });
+
+  it("answers with the facts it already measured, not an empty run", () => {
+    // THE REGRESSION THIS FUNCTION WAS ALMOST SHIPPED WITH. Before the split,
+    // a review abandoned mid-flight still left the references, the measured
+    // facts and the record of what was sent on the row, because the caller
+    // held the same object. Over HTTP the only way back is for this side to
+    // ANSWER with them.
+    const hoisted = fn.indexOf("const acc: ReviewRun = emptyReviewRun(startedAt);");
+    expect(hoisted).toBeGreaterThan(-1);
+    // hoisted ABOVE the handler's try, or the catch cannot see it
+    expect(hoisted).toBeLessThan(fn.indexOf('const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")'));
+    // and the catch answers from it
+    expect(fn).toContain("return failed(error);");
+    // `partial` is finalizeReview's word, derived on analyze's side — this
+    // function must not assert it
+    expect(fn).not.toContain('status: "partial"');
+  });
+
+  it("keeps the request-shape pins: one max_tokens source, one header literal", () => {
+    // max_tokens comes from review.ts (REVIEW_MAX_TOKENS); this file must not
+    // introduce a second literal, and must send exactly one version header.
+    expect([...fn.matchAll(/\bmax_tokens:\s*\d+/g)].length).toBe(0);
+    expect([...fn.matchAll(/"anthropic-version"\s*:/g)].length).toBe(1);
   });
 
   it("keeps index.ts inside the request-shape pins: one max_tokens literal, one header literal", () => {
-    expect([...src.matchAll(/\bmax_tokens:\s*\d+/g)].length).toBe(1);
-    expect([...src.matchAll(/"anthropic-version"\s*:/g)].length).toBe(1);
+    const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+    expect([...analyze.matchAll(/\bmax_tokens:\s*\d+/g)].length).toBe(1);
+    expect([...analyze.matchAll(/"anthropic-version"\s*:/g)].length).toBe(1);
   });
 });
 
