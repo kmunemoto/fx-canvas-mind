@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v53-2026-09-13T01:30:00Z";
+const FUNCTION_VERSION = "analyze-v54-2026-09-13T03:45:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -38,6 +38,14 @@ import {
   planReviewWait,
   reviewDeadlineMs,
 } from "./budget.ts";
+import {
+  decideReuse,
+  inputsKey,
+  readCandidate,
+  reuseFloorMs,
+  type ReuseRecord,
+  type ReuseRefusal,
+} from "./reuse.ts";
 import {
   PREVIOUS_WINDOW_HOURS,
   buildReviewRequest,
@@ -207,6 +215,11 @@ type ParsedRequestBody = {
   interval: string;
   includeFundamental: boolean;
   locale: AnalysisLocale;
+  // The reader asked for a fresh analysis even though this account has already
+  // been answered on this exact input. Without it the reuse would be a trap:
+  // while the market is shut the input never changes, so the same answer would
+  // come back for as long as it stays shut, with no way past it.
+  forceFresh: boolean;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -668,6 +681,7 @@ const parseRequestBody = async (req: Request): Promise<
   const includeFundamental = typeof body.includeFundamental === "boolean"
     ? body.includeFundamental
     : true;
+  const forceFresh = body.forceFresh === true;
 
   if (!currencyPair || !interval) {
     return { error: "通貨ペアまたは時間足が不正です" };
@@ -686,6 +700,7 @@ const parseRequestBody = async (req: Request): Promise<
       currencyPair,
       interval,
       includeFundamental,
+      forceFresh,
       // Unknown or missing values fall back to Japanese rather than failing.
       locale: resolveAnalysisLocale(body.locale),
     } satisfies ParsedRequestBody,
@@ -725,6 +740,10 @@ Deno.serve(async (req: Request) => {
   // A credit is spent before the billable work starts (that is what closes the
   // TOCTOU race), so every failure past that point has to hand it back.
   let quotaConsumed = false;
+  // null = no credit was ever consumed (admin). true/false = the refund
+  // landed or did not. Read by the reuse response, which must not claim a
+  // refund that failed.
+  let quotaRefunded: boolean | null = null;
   // The held-position review runs beside the main call and must not outlive
   // the response. Declared here so `fail` — the single exit for every error
   // path once the review is in flight — can cancel it; aborting a controller
@@ -793,7 +812,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: parsedRequest.error ?? "リクエスト形式が不正です", diagnostics: { error_stage: "invalid_input", stage } }, 400);
     }
 
-    const { currencyPair, interval, includeFundamental, locale } = parsedRequest.data;
+    const { currencyPair, interval, includeFundamental, forceFresh, locale } = parsedRequest.data;
     const L = stringsFor(locale);
     const decimals = pairDecimals(currencyPair);
 
@@ -810,6 +829,11 @@ Deno.serve(async (req: Request) => {
     releaseQuota = async () => {
       if (!quotaConsumed) return;
       quotaConsumed = false; // never refund the same credit twice
+      // The refund is best-effort, so whether it LANDED has to be recorded:
+      // the reuse banner tells the reader no credit was used, and saying that
+      // over a counter that just went down is a lie the screen can see.
+      // Stays null when nothing was consumed (admin), which is not a failure.
+      quotaRefunded = false;
       try {
         const res = await fetch(`${supabaseUrl}/rest/v1/rpc/release_analysis_quota`, {
           method: "POST",
@@ -826,6 +850,7 @@ Deno.serve(async (req: Request) => {
         } else {
           await res.text();
           count = Math.max(count - 1, 0);
+          quotaRefunded = true;
         }
       } catch (err) {
         console.error("Quota release threw:", err);
@@ -1685,6 +1710,311 @@ Deno.serve(async (req: Request) => {
     if (includeFundamental && !searchEnabled) {
       searchDroppedReason = "no_allowed_domains";
     }
+
+    // The indicator panel the client draws. Extracted so the reuse exit below
+    // can answer with TODAY's reading rather than a stored copy of it: the
+    // reuse only fires when the market data is identical, so the two are the
+    // same numbers, and computing them here keeps the panel from becoming a
+    // second, ageing record of the same thing.
+    const buildTechnicalData = () => {
+      const p = (v: number | null) => fmt(v, decimals);
+      const x = (v: number | null, d = 2) => fmt(v, d);
+      return {
+        price: p(entrySnapshot.price),
+        datetime: entrySnapshot.datetime,
+        timeSeries: [],
+        rsi: x(entrySnapshot.rsi),
+        macd: x(entrySnapshot.macd, 5),
+        macdSignal: x(entrySnapshot.macdSignal, 5),
+        macdHist: x(entrySnapshot.macdHist, 5),
+        bbUpper: p(entrySnapshot.bbUpper),
+        bbMiddle: p(entrySnapshot.bbMiddle),
+        bbLower: p(entrySnapshot.bbLower),
+        sma20: p(entrySnapshot.sma20),
+        sma50: p(entrySnapshot.sma50),
+        sma200: p(entrySnapshot.sma200),
+        tenkan: p(entrySnapshot.tenkan),
+        kijun: p(entrySnapshot.kijun),
+        // The pair THIS window projects 26 bars into the future. The panel
+        // used to render these two as plain "Ichimoku Span A/B", which is
+        // the cloud price will meet — not the one it is trading against.
+        spanA: p(entrySnapshot.spanA),
+        spanB: p(entrySnapshot.spanB),
+        // The cloud price is actually inside, computed 26 bars ago. It was
+        // sent to the model, correctly named, and never to the client at
+        // all — so the panel confirmed a claim about "price below the
+        // cloud" with the wrong pair of numbers.
+        cloudNowTop: p(entrySnapshot.cloudNow?.top ?? null),
+        cloudNowBottom: p(entrySnapshot.cloudNow?.bottom ?? null),
+        cloudSide: entrySnapshot.cloudSide ?? null,
+        // The levels the judgement rests on, so the chart can draw them and
+        // a reader can check a claim against the picture instead of taking
+        // it on trust. Computed here, never model-authored — which is why
+        // the chart can draw them in a different register from anything the
+        // model cites.
+        levels: (() => {
+          const st = structures[0].structure;
+          if (!st.ok) return [];
+          const out: Array<{ label: string; value: number; kind: string }> = [];
+          for (const h of st.highs) out.push({ label: `H ${h.barsAgo}本前`, value: h.price, kind: "swing_high" });
+          for (const l of st.lows) out.push({ label: `L ${l.barsAgo}本前`, value: l.price, kind: "swing_low" });
+          const brk = [st.lastBreak.up, st.lastBreak.down].filter((b) => b !== null && b.state !== "held");
+          for (const b of brk) out.push({ label: b!.state === "reclaimed" ? "戻された" : "終値ブレイク", value: b!.level, kind: "break" });
+          return out;
+        })(),
+        cloudBand: entrySnapshot.cloudNow
+          ? { top: entrySnapshot.cloudNow.top, bottom: entrySnapshot.cloudNow.bottom }
+          : null,
+        // Whether the newest bar had closed when this was read. Without it
+        // a mid-bar price renders as a settled "current rate".
+        barClosed: entrySnapshot.barClosed,
+        atr: p(entrySnapshot.atr),
+        slowK: x(entrySnapshot.slowK),
+        slowD: x(entrySnapshot.slowD),
+        adx: x(entrySnapshot.adx),
+        candles: entryCandles.slice(-60),
+      };
+    };
+
+    // ---- the same question, already answered ------------------------------
+    // analyze/reuse.ts. Asking the analyst twice on the same input does not
+    // gather evidence: replayed on stored prompts, 10 of 48 flipped SELL↔WAIT
+    // (#64). So when the input is one this reader has already been answered
+    // on, the stored answer is served instead of a second draw.
+    //
+    // Measured before it was built: of 91 stored prompt rows, ONE pair matched
+    // once the wall-clock line was removed, and it was a 下見 (market shut).
+    // That follows from the entry contract — under market_v1 the plan is
+    // filled at the price of the moment and that price is in the prompt, so
+    // while the market trades the input cannot repeat. Expect this to fire on
+    // a shut market, a double submit, or a stalled feed, and nowhere else.
+    stage = "check_reuse";
+    let reuseRefusal: ReuseRefusal = "no_match";
+    let servedReuse: ReuseRecord | null = null;
+    const reuseKey = await inputsKey({
+      system: typeof baseRequest.system === "string" ? baseRequest.system : "",
+      user: userMessageText,
+      model: typeof baseRequest.model === "string" ? baseRequest.model : "",
+      effort: isRecord(baseRequest.output_config) && typeof baseRequest.output_config.effort === "string"
+        ? baseRequest.output_config.effort
+        : null,
+      maxTokens: typeof baseRequest.max_tokens === "number" ? baseRequest.max_tokens : null,
+      preview: previewMode,
+      searched: Array.isArray(baseRequest.tools) && baseRequest.tools.length > 0,
+      contract: PLAN_CONTRACT,
+      locale,
+    }).catch(() => "");
+
+    // Every attempt at reuse is recorded, refused ones included. Logging only
+    // the hits would leave "it never fires" and "it was never tried" looking
+    // the same, and the measured hit rate is the most important fact about
+    // this feature (docs/OPERATIONS.md §2.4).
+    const logReuse = async (
+      outcome: string,
+      analysisId: string | null,
+      analyzedAt: string | null,
+    ): Promise<void> => {
+      if (!serviceRoleKey) return;
+      try {
+        const res = await fetch(`${supabaseUrl}/rest/v1/analysis_reuses`, {
+          method: "POST",
+          headers: {
+            Authorization: dbAuthorization,
+            apikey: dbApiKey,
+            "Content-Type": "application/json",
+            "content-profile": "public",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            analysis_id: analysisId,
+            inputs_key: reuseKey,
+            pair: currencyPair,
+            interval,
+            preview: previewMode,
+            outcome,
+            analyzed_at: analyzedAt,
+          }),
+        });
+        if (!res.ok) {
+          console.warn("Reuse log failed:", res.status, (await res.text().catch(() => "")).slice(0, 160));
+        } else await res.text().catch(() => {});
+      } catch (err) {
+        console.warn("Reuse log threw:", err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    // The whole reuse path is best-effort: every failure inside it falls
+    // through to a normal analysis, which is the answer it would have served
+    // anyway. Nothing here may cost the reader their run — which is also why
+    // the log is never awaited here and every hop carries a timeout: the
+    // budget this block spends is taken from the model turn, and a full-mode
+    // turn has been measured finishing at 135002 ms against a 135000 ms
+    // budget (budget.ts). Milliseconds added before `planAttempt` are
+    // milliseconds of web search dropped — "ファンダ分析が静かに技術分析に
+    // なる" (docs/OPERATIONS.md §8.5) — paid for by a lookup measured to fire
+    // once in 91 rows.
+    const reuseLogs: Promise<void>[] = [];
+    // `forceFresh` is the one path where the reader has already said "do not
+    // reuse, ask again", and is sitting waiting for the model turn. Deciding
+    // that after three round trips would spend their budget to reach a
+    // conclusion known before the first one.
+    if (forceFresh) {
+      reuseRefusal = "forced_fresh";
+      if (serviceRoleKey) reuseLogs.push(logReuse("forced_fresh", null, null));
+    } else if (!serviceRoleKey) {
+      // Nothing can be written by construction, so say it in the function log
+      // instead of letting the feature vanish from the record entirely.
+      console.warn("Reuse skipped: no service role key, so nothing can be looked up or logged");
+    } else if (reuseKey === "") {
+      // The digest threw. The lookup never happened, and a run that could not
+      // ask must not read back as a run that asked and missed.
+      reuseRefusal = "key_unavailable";
+      reuseLogs.push(logReuse("key_unavailable", null, null));
+    } else {
+      try {
+        const reuseHeaders = { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" };
+        // Bounded like every other latency-sensitive fetch in this file. A
+        // stalled PostgREST with no signal would walk to Supabase's 150 s
+        // worker kill, which is the bare 546 with the credit never refunded
+        // that the wall-clock budget exists to prevent.
+        const reuseSignal = () => AbortSignal.timeout(Math.max(1_000, Math.min(5_000, msLeft())));
+        const candidateRes = await fetch(
+          `${supabaseUrl}/rest/v1/analyses?user_id=eq.${encodeURIComponent(user.id)}` +
+            `&inputs_key=eq.${encodeURIComponent(reuseKey)}&shadow=is.false` +
+            "&select=id,created_at,preview,shadow,mode,result,entry_check,position_review,rule_fit:context->rule_fit" +
+            "&order=created_at.desc&limit=1",
+          { headers: reuseHeaders, signal: reuseSignal() },
+        );
+        // A query that errored is NOT a query that came back empty. Saying
+        // `no_match` here would fill the log with "looked, found nothing" for
+        // a feature that never got to look — the exact confusion this log
+        // was built to prevent.
+        if (!candidateRes.ok) throw new Error(`reuse select ${candidateRes.status}`);
+        const candidateRows = parseJsonResponse(await candidateRes.text());
+        const candidateRaw = Array.isArray(candidateRows) && candidateRows.length > 0 ? candidateRows[0] : null;
+        const candidate = readCandidate(candidateRaw);
+
+        // Only asked when there is something to serve: the held-position card
+        // travels with the stored answer, and a position registered or closed
+        // since would make it a judgement about a different holding.
+        let positionsChangedSince: boolean | null = null;
+        if (candidate !== null) {
+          try {
+            // Not `created_at`: the held-position review reads positions
+            // BEFORE the model call and the row lands after it, so the write
+            // time is 30-50 s later than the instant the stored card
+            // describes. A close that happened in that gap would slip past a
+            // cutoff anchored to the write.
+            const since = encodeURIComponent(candidate.read_positions_at);
+            const movedRes = await fetch(
+              `${supabaseUrl}/rest/v1/positions?user_id=eq.${encodeURIComponent(user.id)}` +
+                `&pair=eq.${encodeURIComponent(currencyPair)}` +
+                `&or=(created_at.gt.${since},closed_at.gt.${since})&select=id&limit=1`,
+              { headers: reuseHeaders, signal: reuseSignal() },
+            );
+            const moved = movedRes.ok ? parseJsonResponse(await movedRes.text()) : null;
+            positionsChangedSince = Array.isArray(moved) ? moved.length > 0 : null;
+          } catch (err) {
+            console.warn("Reuse position check failed:", redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 160));
+          }
+        }
+
+        const decision = decideReuse({
+          candidate,
+          floorMs: reuseFloorMs({
+            interval,
+            preview: previewMode,
+            nowMs: Date.now(),
+            sessionStartMs: lastClose(Date.now()),
+          }),
+          preview: previewMode,
+          forceFresh,
+          positionsChangedSince,
+        });
+        reuseRefusal = decision.reuse ? "no_match" : decision.refusal;
+
+        if (decision.reuse && isRecord(candidateRaw)) {
+          servedReuse = {
+            version: 1,
+            analysis_id: decision.analysis_id,
+            analyzed_at: decision.analyzed_at,
+            served_at: new Date().toISOString(),
+            // Filled in below, once the refund has actually run.
+            credit_refunded: null,
+          };
+          // No model call was made, so no credit was earned. The refund runs
+          // before the response so `remaining` is the count the reader keeps.
+          await releaseQuota();
+          // Set after the refund, not before: the record says what happened,
+          // not what was intended.
+          servedReuse.credit_refunded = quotaRefunded;
+          // Awaited here, unlike the refusal logs: this path returns
+          // immediately below, so there is no later point at which to drain it.
+          await logReuse("served", decision.analysis_id, decision.analyzed_at);
+          console.log("Served a stored analysis for an identical input", {
+            analysis_id: decision.analysis_id,
+            analyzed_at: decision.analyzed_at,
+            preview: previewMode,
+          });
+          const storedAnalysis = isRecord(candidateRaw.result) ? candidateRaw.result : null;
+          if (storedAnalysis !== null) {
+            return json({
+              ok: true,
+              data: {
+                analysis: storedAnalysis,
+                remaining: remainingToday(),
+                plan,
+                // The ROW's mode, not one rebuilt from today's request flag.
+                // `result` has never carried a `mode` key, so the old read
+                // could only ever fall through to the rebuild — and a row
+                // written under a dropped search would have been served as
+                // "full" beside its own warning saying news was unavailable.
+                mode: typeof candidateRaw.mode === "string" ? candidateRaw.mode : "technical_only",
+                entry_check: candidateRaw.entry_check ?? null,
+                rulebook_version: rulebookVersion,
+                // The row this answer belongs to. It was not written now, but
+                // it is the plan the reader would be registering an entry on.
+                analysis_id: decision.analysis_id,
+                position_review: candidateRaw.position_review ?? null,
+                held_position: isRecord(candidateRaw.position_review)
+                  ? ((candidateRaw.position_review as JsonRecord).reference as JsonRecord | undefined)?.held ?? null
+                  : null,
+                preview: previewMode,
+                market_opens_at: marketOpensAt,
+                rule_fit: candidateRaw.rule_fit ?? null,
+                // TODAY's reading, not a stored copy: the reuse only fires on
+                // identical market data, so these are the same numbers.
+                technicalData: buildTechnicalData(),
+                // Said plainly, because the screen must not present an old
+                // answer as a new one. The clock is the one thing that was
+                // allowed to differ, so the reader is told which clock it was
+                // made under.
+                reused: servedReuse,
+              },
+              diagnostics: { stage },
+            });
+          }
+          // The row said it had a result and then did not. Fall through to a
+          // normal analysis rather than answer with nothing.
+          servedReuse = null;
+          reuseRefusal = "not_servable";
+        }
+      } catch (err) {
+        console.warn("Reuse lookup failed:", redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 160));
+        reuseRefusal = "lookup_failed";
+      }
+      // Started, not awaited: the model turn does not wait on a log line.
+      // Drained in the save tail, where the write reserve is already spent.
+      if (servedReuse === null) reuseLogs.push(logReuse(reuseRefusal, null, null));
+    }
+    // Back to where the failures below actually happen. Everything from here
+    // to `parse_ai_json` is the model turn, and `stage` is the one field that
+    // says where a run died: leaving it on "check_reuse" would name this
+    // feature on every wall-clock timeout, every Anthropic error and every
+    // unhandled throw in the loop below. The early return above keeps
+    // reporting "check_reuse", which is true there.
+    stage = "request_ai";
 
     // ---- the held-position review, started beside the main call -----------
     // analyze/review.ts. What the plan the reader HOLDS (or the previous run
@@ -2564,6 +2894,23 @@ Deno.serve(async (req: Request) => {
       // API rejected `output_config` at all, so it is read back off the request
       // rather than assumed from the constants.
       const sentOutputConfig = isRecord(baseRequest.output_config) ? baseRequest.output_config : null;
+      // The key for the turn AS SENT. `reuseKey` above was the key for the
+      // turn we intended to send; giveUpSearch rewrites the user message
+      // wholesale, so on a fallback run the two differ and this is the one
+      // that describes the row.
+      const sentInputsKey = await inputsKey({
+        system: typeof baseRequest.system === "string" ? baseRequest.system : "",
+        user: sentUserText,
+        model: typeof baseRequest.model === "string" ? baseRequest.model : "",
+        effort: typeof sentOutputConfig?.effort === "string" ? sentOutputConfig.effort : null,
+        maxTokens: typeof baseRequest.max_tokens === "number" ? baseRequest.max_tokens : null,
+        preview: previewMode,
+        // As sent: giveUpSearch() deletes the tool block mid-flight, and the
+        // turn that produced this row is the one without it.
+        searched: Array.isArray(baseRequest.tools) && baseRequest.tools.length > 0,
+        contract: PLAN_CONTRACT,
+        locale,
+      }).catch(() => null);
       const promptRecord = {
         system: typeof baseRequest.system === "string" ? baseRequest.system : null,
         user: sentUserText,
@@ -2639,6 +2986,12 @@ Deno.serve(async (req: Request) => {
           model: typeof baseRequest.model === "string" ? baseRequest.model : null,
           priced_at: pricedAtIso,
           quote_at_signal: quoteAtSignal,
+          // The fingerprint of what was SENT, so a later run on the same
+          // input can find this answer instead of drawing a second one.
+          // Read off the request that was actually sent, like `model` and
+          // `effort` beside it: a turn that dropped web search sent a
+          // different prompt and must not be found by the searching key.
+          inputs_key: sentInputsKey,
           // What the plan the reader HOLDS (or the previous run's plan) looks
           // like now, judged on its own thesis and levels — never derived
           // from the signal above. Written on THIS row; the reference row is
@@ -2800,6 +3153,12 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Drained here rather than on the model turn's critical path: the refusal
+    // log is started beside the analysis and settled once the row is written,
+    // where the write reserve is already being spent. `logReuse` swallows its
+    // own errors, so this cannot throw.
+    if (reuseLogs.length > 0) await Promise.all(reuseLogs);
+
     stage = "response";
     const p = (v: number | null) => fmt(v, decimals);
     const x = (v: number | null, d = 2) => fmt(v, d);
@@ -2837,61 +3196,10 @@ Deno.serve(async (req: Request) => {
         // learned from is not the client's business (docs §4.4 / the rule that
         // keeps other users' analysis_id off the wire).
         rule_fit: ruleFitRecord,
-        technicalData: {
-          price: p(entrySnapshot.price),
-          datetime: entrySnapshot.datetime,
-          timeSeries: [],
-          rsi: x(entrySnapshot.rsi),
-          macd: x(entrySnapshot.macd, 5),
-          macdSignal: x(entrySnapshot.macdSignal, 5),
-          macdHist: x(entrySnapshot.macdHist, 5),
-          bbUpper: p(entrySnapshot.bbUpper),
-          bbMiddle: p(entrySnapshot.bbMiddle),
-          bbLower: p(entrySnapshot.bbLower),
-          sma20: p(entrySnapshot.sma20),
-          sma50: p(entrySnapshot.sma50),
-          sma200: p(entrySnapshot.sma200),
-          tenkan: p(entrySnapshot.tenkan),
-          kijun: p(entrySnapshot.kijun),
-          // The pair THIS window projects 26 bars into the future. The panel
-          // used to render these two as plain "Ichimoku Span A/B", which is
-          // the cloud price will meet — not the one it is trading against.
-          spanA: p(entrySnapshot.spanA),
-          spanB: p(entrySnapshot.spanB),
-          // The cloud price is actually inside, computed 26 bars ago. It was
-          // sent to the model, correctly named, and never to the client at
-          // all — so the panel confirmed a claim about "price below the
-          // cloud" with the wrong pair of numbers.
-          cloudNowTop: p(entrySnapshot.cloudNow?.top ?? null),
-          cloudNowBottom: p(entrySnapshot.cloudNow?.bottom ?? null),
-          cloudSide: entrySnapshot.cloudSide ?? null,
-          // The levels the judgement rests on, so the chart can draw them and
-          // a reader can check a claim against the picture instead of taking
-          // it on trust. Computed here, never model-authored — which is why
-          // the chart can draw them in a different register from anything the
-          // model cites.
-          levels: (() => {
-            const st = structures[0].structure;
-            if (!st.ok) return [];
-            const out: Array<{ label: string; value: number; kind: string }> = [];
-            for (const h of st.highs) out.push({ label: `H ${h.barsAgo}本前`, value: h.price, kind: "swing_high" });
-            for (const l of st.lows) out.push({ label: `L ${l.barsAgo}本前`, value: l.price, kind: "swing_low" });
-            const brk = [st.lastBreak.up, st.lastBreak.down].filter((b) => b !== null && b.state !== "held");
-            for (const b of brk) out.push({ label: b!.state === "reclaimed" ? "戻された" : "終値ブレイク", value: b!.level, kind: "break" });
-            return out;
-          })(),
-          cloudBand: entrySnapshot.cloudNow
-            ? { top: entrySnapshot.cloudNow.top, bottom: entrySnapshot.cloudNow.bottom }
-            : null,
-          // Whether the newest bar had closed when this was read. Without it
-          // a mid-bar price renders as a settled "current rate".
-          barClosed: entrySnapshot.barClosed,
-          atr: p(entrySnapshot.atr),
-          slowK: x(entrySnapshot.slowK),
-          slowD: x(entrySnapshot.slowD),
-          adx: x(entrySnapshot.adx),
-          candles: entryCandles.slice(-60),
-        },
+        technicalData: buildTechnicalData(),
+        // This run drew a new answer. Null rather than absent, so the client
+        // reads "not a reuse" rather than "an older server".
+        reused: null,
       },
       diagnostics: { stage },
     });

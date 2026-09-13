@@ -924,6 +924,23 @@ export interface PositionReview {
   elapsed_ms: number | null;
 }
 
+// What analyze says when it served a stored answer instead of drawing a new
+// one — mirror of ReuseRecord in supabase/functions/analyze/reuse.ts. Null on
+// a run that actually analysed; the two must never look alike on screen.
+export interface AnalysisReuse {
+  version: 1;
+  // The row this answer belongs to. It was written then, not now.
+  analysis_id: string;
+  analyzed_at: string;
+  served_at: string;
+  // true = the credit came back, false = the refund failed and the count
+  // stayed down, null = none was consumed (admin). The banner says nothing
+  // about credits when this is null.
+  credit_refunded: boolean | null;
+  // No `inputs_key`: the digest covers the analyst system prompt, which is
+  // server-side only, and no screen reads it.
+}
+
 export interface HistoryEntry {
   timestamp: string;
   signal: "BUY" | "SELL" | "WAIT";

@@ -13,6 +13,7 @@ import ConfidenceCalibration from "@/components/ConfidenceCalibration";
 import ModelMix from "@/components/ModelMix";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import OpenPositionsStrip from "@/components/OpenPositionsStrip";
+import ReuseBanner from "@/components/ReuseBanner";
 import { supabase } from "@/lib/supabase";
 import { isAdminEmail } from "@/lib/admin";
 import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
@@ -39,6 +40,7 @@ import type {
   TechnicalData,
   TimeInterval,
   LoopHealth as LoopHealthData,
+  AnalysisReuse,
   PerformanceStats,
   Position,
   PositionReview,
@@ -55,7 +57,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v53-2026-09-13T01:30:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v54-2026-09-13T03:45:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -260,6 +262,10 @@ const Index = () => {
   // HOLDS looks like now, kept apart from the new-entry call above it.
   const [positionReview, setPositionReview] = useState<PositionReview | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
+  // Non-null when the server served a stored answer because this input was
+  // one it had already been asked. The screen has to say so: an old answer
+  // wearing a new answer's face is the one thing this feature could break.
+  const [reused, setReused] = useState<AnalysisReuse | null>(null);
   // The reader's own open positions (RLS). Registered through an RPC that
   // validates the plan; read back here so the cards can show what is held.
   const [positions, setPositions] = useState<Position[]>([]);
@@ -467,7 +473,7 @@ const Index = () => {
     return () => { cancelled = true; };
   }, [userId, loadHistory]);
 
-  const handleAnalyze = useCallback(async () => {
+  const handleAnalyze = useCallback(async (opts?: { forceFresh?: boolean }) => {
     // The server refuses this anyway (analyze checks the plan before doing any
     // paid work); this just avoids a pointless round trip and a raw error
     if (isFreeUser) {
@@ -483,6 +489,7 @@ const Index = () => {
     setEntryCheck(null);
     setPositionReview(null);
     setAnalysisId(null);
+    setReused(null);
     setLiveRate(null);
     // Clear the indicators too: on a failed run they would otherwise keep
     // showing the previous pair's numbers next to an error toast
@@ -510,6 +517,9 @@ const Index = () => {
           interval,
           includeFundamental,
           locale,
+          // Asked for explicitly: without it a shut market would serve the
+          // same stored answer for as long as it stays shut.
+          forceFresh: opts?.forceFresh === true,
         }),
       });
 
@@ -587,6 +597,11 @@ const Index = () => {
           : null,
       );
       setEntryCheck(normalizeEntryCheck(payload?.entry_check));
+      setReused(
+        payload?.reused && typeof payload.reused === "object"
+          ? (payload.reused as AnalysisReuse)
+          : null,
+      );
       setAnalysisId(typeof payload?.analysis_id === "string" ? payload.analysis_id : null);
       setPositionReview(
         payload?.position_review && typeof payload.position_review === "object"
@@ -662,7 +677,7 @@ const Index = () => {
         <ControlBar
           interval={interval}
           onIntervalChange={setInterval_}
-          onAnalyze={handleAnalyze}
+          onAnalyze={() => void handleAnalyze()}
           loading={loading}
           loadingStage={loadingStage}
           remaining={remaining}
@@ -697,6 +712,16 @@ const Index = () => {
                     fact about the market, and this run is a genuine reading of
                     the last close. What it is NOT is a plan, and what the
                     reader wants next is when it becomes one. */}
+                {/* An answer that was not drawn now. Above the preview
+                    banner and the result, because it changes how every
+                    number below it should be read. */}
+                {reused && (
+                  <ReuseBanner
+                    reused={reused}
+                    busy={loading}
+                    onForceFresh={() => void handleAnalyze({ forceFresh: true })}
+                  />
+                )}
                 {preview && (
                   <div
                     className="rounded-xl border border-primary/30 bg-primary/5 p-3 text-[12px] leading-relaxed text-foreground"

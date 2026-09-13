@@ -733,6 +733,22 @@ export const en: Dict = {
     technical_fallback: "Technical only (news search was unavailable)",
   },
 
+  reuse: {
+    // Not "last time": the lookup takes the newest row with the same key,
+    // which need not be the run immediately before this one.
+    title: "This input matched a run you were already answered on, so that answer is shown again",
+    body:
+      "The market data, the learned rules and the settings were byte-for-byte what they were on that run " +
+      "(this only happens on runs that did not use the news search — when one did, what it read cannot be shown to be the same, so nothing is reused). " +
+      "Analysing the same input again only samples the model's noise: replayed on identical input, 10 of 48 runs flipped between SELL and WAIT.",
+    analyzedAt: (at: string) => `This result is the analysis from ${at}.`,
+    clockNote: "Only the clock differs. The session and the distance to the next event are read as of that time.",
+    // The refund is best-effort, so only claim it when it landed.
+    creditReturned: "No analysis credit was used.",
+    creditNotReturned: "A credit was spent to start this run and could not be handed back — your remaining count is one lower.",
+    forceButton: "Analyse again anyway (uses a credit)",
+  },
+
   preview: {
     title: "Preview — the market is shut",
     body:
