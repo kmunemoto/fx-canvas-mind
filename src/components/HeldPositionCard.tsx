@@ -95,7 +95,9 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
           </span>
         )}
       </div>
-      <p className="text-[11px] text-muted-foreground">{p.heldSubtitle}</p>
+      <p className="text-[11px] text-muted-foreground">
+        {held.analysis_id === null ? p.heldSubtitleOwn : p.heldSubtitle}
+      </p>
 
       {/* the position itself, as registered */}
       <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
@@ -110,7 +112,9 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
           {p.openedAt} {formatJst(held.opened_at, t.intlLocale)}
           {held.opened_at_source === "registered" ? ` (${p.openedAtRegistered})` : ""}
         </span>
-        <span className="text-muted-foreground">{p.planTimeframe} {held.interval}</span>
+        <span className="text-muted-foreground">
+          {held.analysis_id === null ? p.ownTimeframe : p.planTimeframe} {held.interval}
+        </span>
       </div>
       {held.interval !== interval && (
         <p className="text-[10px] text-muted-foreground">{p.intervalDiffers(held.interval, interval)}</p>
@@ -155,15 +159,20 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
           planFeed={held.feed}
           outcome={held.outcome}
           planUnavailable={review.reference?.held_reason === "plan_row_missing"}
+          noPlan={held.analysis_id === null}
         />
       )}
 
       {/* the original plan's thesis, and the model's reading of it */}
       <div className="text-xs space-y-1">
-        <p>
-          <span className="text-[10px] text-muted-foreground mr-1.5">{p.thesis.heldLabel}</span>
-          <span className="text-foreground">{held.thesis ?? "—"}</span>
-        </p>
+        {held.analysis_id === null ? (
+          <p className="text-muted-foreground" data-testid="held-no-plan">{p.thesis.noPlan}</p>
+        ) : (
+          <p>
+            <span className="text-[10px] text-muted-foreground mr-1.5">{p.thesis.heldLabel}</span>
+            <span className="text-foreground">{held.thesis ?? "—"}</span>
+          </p>
+        )}
         <p data-testid="thesis-status">
           <span className="text-[10px] text-muted-foreground mr-1.5">{p.thesis.byAnalyst}</span>
           <span className={

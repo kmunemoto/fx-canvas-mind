@@ -695,7 +695,14 @@ const Index = () => {
           onSubscribe={() => navigate("/pricing")}
         />
 
-        <OpenPositionsStrip positions={positions} history={history} onClosed={() => void loadHistory()} />
+        <OpenPositionsStrip
+          positions={positions}
+          history={history}
+          onClosed={() => void loadHistory()}
+          defaultPair={settings.currencyPair}
+          defaultInterval={interval}
+          onRegistered={() => void loadHistory()}
+        />
 
         {limitReached && (
           <div className="glass rounded-xl border border-destructive p-6 flex flex-col items-center text-center space-y-3">

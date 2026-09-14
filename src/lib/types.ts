@@ -790,7 +790,11 @@ export interface PlanHorizon {
 // Row shape of public.positions as read by the client (RLS: own rows).
 export interface Position {
   id: string;
-  analysis_id: string;
+  // Null on a position the reader already held and registered directly with
+  // their own stop and take-profit (#92): it came from no plan of ours. The FK
+  // is ON DELETE CASCADE, so a plan that vanished takes its position with it —
+  // null therefore has exactly one meaning, "there never was a plan".
+  analysis_id: string | null;
   pair: string;
   interval: string;
   direction: "BUY" | "SELL";
@@ -830,7 +834,11 @@ export interface ReferenceOutcome {
 export interface HeldReference {
   kind: "held";
   position_id: string;
-  analysis_id: string;
+  // Mirrors review.ts. Null on a directly-registered position (#92); every
+  // plan-derived field below (confidence, thesis, key_factors, feed, outcome)
+  // is null with it, while direction/entry/stop/tp1 come off the position row
+  // and are always there.
+  analysis_id: string | null;
   direction: "BUY" | "SELL";
   entry: number;
   stop: number;
@@ -870,7 +878,10 @@ export interface PreviousReference {
 
 export interface ReviewReferenceSet {
   held: HeldReference | null;
-  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | null;
+  // `no_plan_registered` is the odd one out: it accompanies a NON-NULL `held`.
+  // The position is there and reviewable on its own levels; what is absent is
+  // a plan behind it (#92). The other three mean there is nothing to review.
+  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | "no_plan_registered" | null;
   previous: PreviousReference | null;
   previous_reason: "none_within_window" | "lookup_failed" | null;
   thesis_of: "held" | "previous" | null;

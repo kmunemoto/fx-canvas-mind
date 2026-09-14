@@ -23,7 +23,11 @@ export const normalizePosition = (raw: unknown): Position | null => {
   const stop = num(r.stop_loss);
   const tp1 = num(r.take_profit_1);
   if (
-    typeof r.id !== "string" || typeof r.analysis_id !== "string" || typeof r.pair !== "string" ||
+    // analysis_id may be null (#92) — a position registered directly. Rejecting
+    // the row here is how a standalone position would vanish before reaching
+    // any screen: typeof null === "object", so the old check dropped it.
+    typeof r.id !== "string" || (r.analysis_id != null && typeof r.analysis_id !== "string") ||
+    typeof r.pair !== "string" ||
     (r.direction !== "BUY" && r.direction !== "SELL") || entry === null || stop === null || tp1 === null ||
     typeof r.opened_at !== "string"
   ) {
@@ -31,7 +35,7 @@ export const normalizePosition = (raw: unknown): Position | null => {
   }
   return {
     id: r.id,
-    analysis_id: r.analysis_id,
+    analysis_id: typeof r.analysis_id === "string" ? r.analysis_id : null,
     pair: r.pair,
     interval: typeof r.interval === "string" ? r.interval : "",
     direction: r.direction,
@@ -70,6 +74,18 @@ export const REGISTER_ERRORS = [
   "fill_outside_plan",
   "opened_before_plan",
   "opened_in_future",
+  // #92: register_held_position's own refusals. It takes the reader's OWN
+  // levels, so these are about what they typed, not about a plan. Missing
+  // from this list, every one of them renders as the generic "could not
+  // register" — the server said exactly what was wrong and the screen
+  // throws it away.
+  "pair_invalid",
+  "interval_invalid",
+  "direction_invalid",
+  "stop_loss_must_be_positive",
+  "take_profit_1_must_be_positive",
+  "levels_incoherent",
+  "targets_out_of_order",
   "position_not_open",
   "close_price_must_be_positive",
   "close_reason_invalid",

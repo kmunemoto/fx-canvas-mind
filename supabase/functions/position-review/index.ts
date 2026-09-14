@@ -46,7 +46,7 @@ import { resolveAnalysisLocale } from "../analyze/locale.ts";
 import type { Candle } from "../analyze/indicators.ts";
 import { extractAnthropicText, parseAnalysisJson } from "../_shared/model-output.ts";
 
-const FUNCTION_VERSION = "position-review-v2-2026-09-14T12:40:00Z";
+const FUNCTION_VERSION = "position-review-v3-2026-09-14T16:20:00Z";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -218,10 +218,15 @@ Deno.serve(async (req) => {
       const others = positionsRaw.slice(1)
         .map((p) => (isRecord(p) && typeof p.id === "string" ? p.id : null))
         .filter((x): x is string => x !== null);
-      const planRaw = typeof newest.analysis_id === "string"
-        ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id)}&select=${planSelect}&limit=1`)
+      // A position registered directly (#92) points at NO plan, so there is
+      // nothing to fetch. That is a fact about the row, not a failed request —
+      // this used to hand the failure sentinel to a fetch that never ran, and
+      // the card then told the reader the plan row could not be read.
+      const hasPlan = typeof newest.analysis_id === "string";
+      const planRaw = hasPlan
+        ? await restGet(`analyses?id=eq.${encodeURIComponent(newest.analysis_id as string)}&select=${planSelect}&limit=1`)
           .catch(lookupFailed("held plan"))
-        : "lookup_failed" as const;
+        : null;
       const planFetchFailed = planRaw === "lookup_failed";
       const plan = Array.isArray(planRaw) && planRaw.length > 0 ? planRaw[0] : null;
       refs.held = readHeldReference(newest, plan, others);
@@ -229,7 +234,12 @@ Deno.serve(async (req) => {
       // reference, so a plan row that is genuinely gone cannot coexist with an
       // open position: `plan_row_missing` is reserved for the fetch that came
       // back EMPTY, and a fetch that threw says so.
+      //
+      // `no_plan_registered` is the one reason here that rides along with a
+      // non-null `held`: the position is reviewable, it simply never had a
+      // plan. It is set LAST so it cannot mask a real failure.
       if (refs.held === null) refs.held_reason = "lookup_failed";
+      else if (!hasPlan) refs.held_reason = "no_plan_registered";
       else if (planFetchFailed) refs.held_reason = "lookup_failed";
       else if (plan === null) refs.held_reason = "plan_row_missing";
     } else {

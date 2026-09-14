@@ -85,7 +85,11 @@ export interface ReferenceOutcome {
 export interface HeldReference {
   kind: "held";
   position_id: string;
-  analysis_id: string;
+  // Null on a position the reader already held and registered with their own
+  // stop and take-profit (#92) — it came from no plan of ours. Everything the
+  // review actually needs (direction, entry, stop, tp1) is on the position row
+  // itself; only the plan-derived fields below go null with it.
+  analysis_id: string | null;
   direction: Direction;
   entry: number;
   stop: number;
@@ -136,7 +140,13 @@ export interface PreviousReference {
 
 export interface ReferenceSet {
   held: HeldReference | null;
-  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | null;
+  // The first three accompany held === null: there is nothing to review, and
+  // the reason says why. `no_plan_registered` is NOT like them — it comes with
+  // a NON-NULL `held`. The position is there and fully reviewable on its own
+  // levels; what is absent is a plan behind it, because the reader registered
+  // a position they already held (#92). Folding it into `lookup_failed` would
+  // report an outage that did not happen.
+  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | "no_plan_registered" | null;
   previous: PreviousReference | null;
   previous_reason: "none_within_window" | "lookup_failed" | null;
   // Whose thesis the analyst was asked about. The held plan when there is
@@ -409,7 +419,10 @@ export const readHeldReference = (
   const stop = num(positionRaw.stop_loss);
   const tp1 = num(positionRaw.take_profit_1);
   const openedAt = str(positionRaw.opened_at);
-  if (id === null || analysisId === null || direction === null || entry === null || stop === null || tp1 === null || openedAt === null) {
+  // `analysisId` is deliberately NOT required (#92). A position registered
+  // directly carries its own direction, entry, stop and tp1 — which is
+  // everything the mechanical review measures — and points at no plan.
+  if (id === null || direction === null || entry === null || stop === null || tp1 === null || openedAt === null) {
     return null;
   }
   const plan = isRec(planRaw) ? planRaw : null;
