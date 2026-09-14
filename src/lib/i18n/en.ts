@@ -86,7 +86,6 @@ export const en: Dict = {
       },
       endsAt: (when: string) => `to about ${when}`,
       notACutoff: "The bar count is not a deadline — scoring continues until the plan settles.",
-      calendarShort: "The economic calendar does not reach the end of this period.",
       tpRoles: "Take profit 1 is the level aimed at inside this period. Take profit 2 and 3 are extensions beyond it and are not expected to be reached within it.",
       absent: "No target period was recorded for this analysis.",
     },
@@ -884,6 +883,12 @@ export const en: Dict = {
       caution: "The thesis has weakened or adverse facts have appeared; no exit condition is met",
       exit_condition_met: "The plan's own exit condition has been reached",
       undecidable: "Not enough material, or the original thesis cannot be evaluated",
+    },
+    verdictGlossOwn: {
+      hold: "None of the exit conditions you registered is met",
+      caution: "Adverse facts have appeared; none of the exit conditions you registered is met",
+      exit_condition_met: "An exit condition you registered has been reached",
+      undecidable: "Not enough material to judge",
     },
     decidedByAnalyst: "The model's verdict",
     decidedByServerTouch: (at: string, feed: string, forming: boolean) =>

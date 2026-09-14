@@ -286,22 +286,40 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
               reader about. Absent on every row written before the column
               existed, which is said rather than left blank — the 117 of them
               were deliberately not backfilled, because a period computed today
-              is not the period that plan was aiming at. */}
-          {horizon
+              is not the period that plan was aiming at.
+
+              Inside `tracked` — this shipped OUTSIDE it, and a WAIT row then
+              announced 「狙う期間」 for a trade that was never proposed. The
+              column IS stamped on WAIT rows (analyze writes it on every row),
+              so the value is real; what is false is calling it the period a
+              trade aimed at when there was no trade. Nothing scores a WAIT
+              against it either — WAIT scoring spends wait_window_ms — so it
+              would be a number that drives nothing. The "not recorded" line
+              is inside the guard for the same reason: on a WAIT it would
+              imply a period that ought to have been there — and all 48 WAIT
+              rows in production have it null, so that complaint would appear
+              on every one of them the day this ships.
+
+              The predicate is `signal !== "WAIT"`, NOT the `tracked` flag
+              beside it: `tracked` also excludes `outcome === "skipped"`, which
+              would hide the period on a BUY/SELL row that was skipped but did
+              declare one. Measured today those are the same set (production:
+              skipped occurs only with WAIT, 48/48), so this changes nothing
+              now — it says what is actually meant, which is the half that
+              survives a later row shape. It mirrors `hasPlan` in
+              AnalysisResultView, so the two screens follow one rule. */}
+          {record.signal !== "WAIT" && (horizon
             ? (
               <div data-testid="detail-horizon">
                 <Row label={t.result.horizon.label} value={horizon.bars} mono={false} />
                 {horizon.endsAt && <Row label="" value={horizon.endsAt} className="text-muted-foreground" />}
-                {horizon.calendarShort && (
-                  <p className="text-warning mt-1" data-testid="detail-horizon-calendar">{horizon.calendarShort}</p>
-                )}
               </div>
             )
             : (
               <p className="text-muted-foreground mt-1" data-testid="detail-horizon-absent">
                 {t.result.horizon.absent}
               </p>
-            )}
+            ))}
         </section>
 
         <section>

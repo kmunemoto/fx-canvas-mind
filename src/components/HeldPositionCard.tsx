@@ -138,7 +138,9 @@ const HeldPositionCard = ({ review, held, pair, interval, freshSignal, position 
             failed review the word below is the screen's own "we cannot
             say", and the source line under it gives the reason. */}
         {review.verdict !== null && (
-          <p className="text-xs text-muted-foreground">{p.verdictGloss[verdict]}</p>
+          <p className="text-xs text-muted-foreground">
+            {(held.analysis_id === null ? p.verdictGlossOwn : p.verdictGloss)[verdict]}
+          </p>
         )}
         <p className="text-[11px] mt-1" data-testid="verdict-source">{source}</p>
         {review.override_suppressed && (

@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v58-2026-09-14T12:40:00Z";
+const FUNCTION_VERSION = "analyze-v59-2026-09-14T17:30:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -2118,7 +2118,7 @@ ${candleLines(lowerCandles, 24)}`;
         const candidateRes = await fetch(
           `${supabaseUrl}/rest/v1/analyses?user_id=eq.${encodeURIComponent(user.id)}` +
             `&inputs_key=eq.${encodeURIComponent(reuseKey)}&shadow=is.false` +
-            "&select=id,created_at,preview,shadow,mode,result,entry_check,position_review,rule_fit:context->rule_fit" +
+            "&select=id,created_at,preview,shadow,mode,result,entry_check,position_review,plan_horizon,rule_fit:context->rule_fit" +
             "&order=created_at.desc&limit=1",
           { headers: reuseHeaders, signal: reuseSignal() },
         );
@@ -2212,6 +2212,17 @@ ${candleLines(lowerCandles, 24)}`;
                 // The row this answer belongs to. It was not written now, but
                 // it is the plan the reader would be registering an entry on.
                 analysis_id: decision.analysis_id,
+                // The period the STORED plan was issued under (#91). Served
+                // from the row, not recomputed: this answer is that plan, and
+                // a period computed now would be a different claim about it.
+                //
+                // It was missing here, and the two success returns are the
+                // only places an answer leaves this function — so a reused
+                // plan showed no period at all while the same row, opened in
+                // the history panel, showed one. planHorizon.ts exists
+                // precisely so the fresh result and the history panel cannot
+                // disagree about one plan; this path was disagreeing.
+                plan_horizon: candidateRaw.plan_horizon ?? null,
                 position_review: candidateRaw.position_review ?? null,
                 held_position: isRecord(candidateRaw.position_review)
                   ? ((candidateRaw.position_review as JsonRecord).reference as JsonRecord | undefined)?.held ?? null

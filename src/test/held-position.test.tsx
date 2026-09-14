@@ -153,6 +153,29 @@ describe("the held card does not invent a plan that never existed", () => {
     expect(line.textContent).not.toContain(ja.position.planTimeframe);
   });
 
+  it("does not gloss the verdict as a thesis that never existed", () => {
+    // 「根拠は維持されており」 three lines under 「元になったプランはありません」
+    // is the card contradicting itself: there is no thesis to be intact, and
+    // no plan whose exit condition this could be.
+    render(<HeldPositionCard review={review()} held={ownHeld()} pair="USD/JPY" interval="1day" freshSignal="WAIT" />);
+    const card = screen.getByTestId("held-verdict").parentElement;
+    expect(card?.textContent ?? "").not.toContain(ja.position.verdictGloss.hold);
+    expect(card?.textContent ?? "").toContain(ja.position.verdictGlossOwn.hold);
+  });
+
+  it("keeps the plan wording on a plan-backed position", () => {
+    const planBacked = ownHeld({ analysis_id: "a-1", thesis: "戻り売り" });
+    render(
+      <HeldPositionCard
+        review={review({ reference: { held: planBacked, held_reason: null, previous: null, previous_reason: null, thesis_of: "held" } })}
+        held={planBacked} pair="USD/JPY" interval="1day" freshSignal="WAIT"
+      />,
+    );
+    const card = screen.getByTestId("held-verdict").parentElement;
+    expect(card?.textContent ?? "").toContain(ja.position.verdictGloss.hold);
+    expect(card?.textContent ?? "").not.toContain(ja.position.verdictGlossOwn.hold);
+  });
+
   it("speaks English to an English reader", () => {
     render(
       <HeldPositionCard review={review()} held={ownHeld()} pair="USD/JPY" interval="1day" freshSignal="WAIT" />,
@@ -245,6 +268,21 @@ describe("the form sends the reader's own levels, through its own RPC", () => {
     await waitFor(() => expect(screen.getByTestId("own-register-error")).toBeTruthy());
     expect(screen.getByTestId("own-register-error").textContent)
       .toBe(ja.position.registerErrors.levels_incoherent);
+  });
+
+  it("names the field that is actually wrong, not the one next to it", async () => {
+    // An unreadable TP2 reported the TAKE PROFIT 1 error, pointing the reader
+    // at a box that was fine.
+    open();
+    type(ja.position.own.fillPrice, "153.274");
+    type(ja.position.own.stopLoss, "156.150");
+    type(ja.position.own.tp1, "151.000");
+    type(ja.position.own.tp2, "abc");
+    fireEvent.submit(screen.getByTestId("register-held-form"));
+    await waitFor(() => expect(screen.getByTestId("own-register-error")).toBeTruthy());
+    const shown = screen.getByTestId("own-register-error").textContent;
+    expect(shown).not.toBe(ja.position.registerErrors.take_profit_1_must_be_positive);
+    expect(shown).toBe(ja.position.registerErrors.targets_out_of_order);
   });
 
   it("says on the form that this position is not part of the app's record", () => {

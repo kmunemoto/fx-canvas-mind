@@ -93,19 +93,24 @@ describe("horizonLines derives the period from the row and nothing else", () => 
     expect(horizonLines(undefined, ja, "ja-JP")).toBeNull();
   });
 
-  it("mentions the calendar only on the rows where it actually fell short", () => {
-    // A caveat printed on every plan is read as boilerplate and stops being
-    // read at all — which is how it would be missing on the Friday row that
-    // needed it.
-    expect(horizonLines(horizon(), ja, "ja-JP")?.calendarShort).toBeNull();
-    expect(horizonLines(horizon({ calendar_covers_horizon: false }), ja, "ja-JP")?.calendarShort)
-      .toBeTruthy();
+  it("renders nothing at all from calendar_covers_horizon", () => {
+    // It was going to be a warning shown only where the calendar fell short.
+    // Measured over four weeks of hourly starts it is false on 31 / 35 / 56 /
+    // 99 % of plans for 15min / 1h / 4h / 1day — the period is walked in
+    // MARKET time, so the flag really says "this window crossed a closure",
+    // and a five-day window always crosses a weekend. True every time and
+    // useless nearly every time is the definition of boilerplate.
+    // The field stays on the row; it is simply not a warning.
+    const covered = horizonLines(horizon({ calendar_covers_horizon: true }), ja, "ja-JP");
+    const short = horizonLines(horizon({ calendar_covers_horizon: false }), ja, "ja-JP");
+    expect(JSON.stringify(short)).toBe(JSON.stringify(covered));
+    expect(JSON.stringify(short)).not.toContain("カレンダー");
   });
 
   it("keeps each locale in its own language", () => {
-    const jaLines = horizonLines(horizon({ calendar_covers_horizon: false }), ja, "ja-JP");
-    const enLines = horizonLines(horizon({ calendar_covers_horizon: false }), en, "en-GB");
-    const enText = [enLines?.bars, enLines?.notACutoff, enLines?.tpRoles, enLines?.calendarShort].join(" ");
+    const jaLines = horizonLines(horizon(), ja, "ja-JP");
+    const enLines = horizonLines(horizon(), en, "en-GB");
+    const enText = [enLines?.bars, enLines?.notACutoff, enLines?.tpRoles].join(" ");
     expect(enText).not.toMatch(/[ぁ-んァ-ヶ一-龠]/);
     expect(jaLines?.notACutoff).toMatch(/[ぁ-んァ-ヶ一-龠]/);
   });
@@ -151,16 +156,16 @@ describe("the plan card says what period the levels were placed against", () => 
     expect(screen.queryByTestId("plan-horizon")).toBeNull();
   });
 
-  it("warns on the card where the calendar did not reach the end of the period", () => {
-    render(
-      <AnalysisResultView
-        result={result()}
-        pair="USD/JPY"
-        interval="1h"
-        planHorizon={horizon({ calendar_covers_horizon: false })}
-      />,
-    );
-    expect(screen.getByTestId("horizon-calendar-short")).toBeTruthy();
+  it("does not warn about the calendar, whichever way the flag went", () => {
+    for (const covers of [true, false]) {
+      const { unmount } = render(
+        <AnalysisResultView result={result()} pair="USD/JPY" interval="1h"
+          planHorizon={horizon({ calendar_covers_horizon: covers })} />,
+      );
+      expect(screen.queryByTestId("horizon-calendar-short"), String(covers)).toBeNull();
+      expect(screen.getByTestId("plan-horizon").textContent ?? "").not.toContain("カレンダー");
+      unmount();
+    }
   });
 
   it("speaks English to an English reader", () => {
@@ -195,6 +200,26 @@ describe("a past plan keeps the period it was issued with", () => {
     render(<OutcomeDetail record={record({ plan_horizon: null })} />);
     expect(screen.getByTestId("detail-horizon-absent")).toBeTruthy();
     expect(screen.queryByTestId("detail-horizon")).toBeNull();
+  });
+
+  it("does not announce a target period on a row that proposed no trade", () => {
+    // The column IS stamped on WAIT rows — analyze writes it on every row — so
+    // this is not about a missing value. It is about what the value MEANS: a
+    // WAIT has no entry, stop or target, so calling anything "the period this
+    // is aiming at" describes a trade that was never proposed. Nothing scores
+    // a WAIT against it either; WAIT scoring spends wait_window_ms.
+    const wait = record({ signal: "WAIT", outcome: "skipped", entry_point: null, stop_loss: null,
+      take_profit_1: null, plan_horizon: horizon() });
+    render(<OutcomeDetail record={wait} />);
+    expect(screen.queryByTestId("detail-horizon")).toBeNull();
+    // and not the "no period recorded" line either — on a WAIT that would
+    // imply a period that ought to have been there
+    expect(screen.queryByTestId("detail-horizon-absent")).toBeNull();
+  });
+
+  it("still shows it on a trade row, so the guard did not silence everything", () => {
+    render(<OutcomeDetail record={record({ plan_horizon: horizon() })} />);
+    expect(screen.getByTestId("detail-horizon")).toBeTruthy();
   });
 
   it("leaves the 'not a deadline' caveat off a row that has already been scored", () => {

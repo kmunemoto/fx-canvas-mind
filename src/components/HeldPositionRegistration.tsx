@@ -86,9 +86,14 @@ export const HeldPositionRegistration = ({ defaultPair, defaultInterval, onRegis
     if (sl === null) return setError(p.registerErrors.stop_loss_must_be_positive);
     if (t1 === null) return setError(p.registerErrors.take_profit_1_must_be_positive);
 
+    // Name the field that is actually wrong. This reported the TAKE PROFIT 1
+    // error for an unreadable TP2 or TP3, pointing the reader at a box that
+    // was fine — the same defect shape as the entry gate's missing switch
+    // cases, one field over.
     const t2 = optional(tp2);
+    if (t2 === null) return setError(p.registerErrors.targets_out_of_order);
     const t3 = optional(tp3);
-    if (t2 === null || t3 === null) return setError(p.registerErrors.take_profit_1_must_be_positive);
+    if (t3 === null) return setError(p.registerErrors.targets_out_of_order);
 
     const params: Record<string, unknown> = {
       p_pair: pair.trim().toUpperCase(),

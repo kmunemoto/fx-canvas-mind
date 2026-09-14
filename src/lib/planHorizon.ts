@@ -28,12 +28,24 @@ export interface HorizonLines {
   // reading "to about Invalid Date" is worse than no line.
   endsAt: string | null;
   notACutoff: string;
-  // Only when the calendar demonstrably fell short, which is a property of
-  // THIS row and not of the app. Null otherwise: a reassurance printed on
-  // every plan is read as boilerplate and stops being read at all.
-  calendarShort: string | null;
   tpRoles: string;
 }
+
+// `calendar_covers_horizon` is NOT rendered, and that is a decision rather
+// than an oversight.
+//
+// It was going to be a warning shown "only where the calendar fell short".
+// Measured over four weeks of hourly starts, it is false on 31% / 35% / 56% /
+// 99% of plans for 15min / 1h / 4h / 1day. The mechanism explains it: the
+// period is walked in MARKET time, so `ends_at` can only ever be later than
+// `priced_at + lookahead`, never earlier — the flag really says "this window
+// crossed a market closure", and a 5-day window always crosses a weekend.
+//
+// The sentence would have been TRUE every time and useless nearly every time,
+// which is the failure this file's own comment warned about one paragraph up:
+// a line printed on every plan is read as boilerplate and stops being read.
+// The field stays ON THE ROW — it is a real fact worth having when the two
+// clocks are compared later — it simply is not a warning.
 
 const spanText = (t: Dict, ms: number): string => {
   const h = t.result.horizon.span;
@@ -65,7 +77,6 @@ export const horizonLines = (
       ? t.result.horizon.endsAt(formatJst(horizon.ends_at, intlLocale))
       : null,
     notACutoff: t.result.horizon.notACutoff,
-    calendarShort: horizon.calendar_covers_horizon ? null : t.result.horizon.calendarShort,
     tpRoles: t.result.horizon.tpRoles,
   };
 };

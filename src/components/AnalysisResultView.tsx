@@ -293,11 +293,6 @@ const AnalysisResultView = ({
               </div>
               <p className="text-[10px] text-muted-foreground">{horizon.notACutoff}</p>
               <p className="text-[10px] text-muted-foreground">{horizon.tpRoles}</p>
-              {horizon.calendarShort && (
-                <p className="text-[10px] text-warning" data-testid="horizon-calendar-short">
-                  {horizon.calendarShort}
-                </p>
-              )}
             </div>
           )}
           {/* "I entered on this plan." Only when the row exists to point at,
