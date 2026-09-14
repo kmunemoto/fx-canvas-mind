@@ -216,10 +216,16 @@ describe("a named row is answered for", () => {
     expect(call).toBeGreaterThan(rejected);
     expect(call).toBeLessThan(loop);
     // the sets are the queue's own stages, not a re-derivation
-    const block = index.slice(call, call + 900);
+    // Sized to the whole call, not a fixed guess: a new set pushed `unavailable`
+    // past the old 900-char window and the assertion below failed for reasons
+    // that had nothing to do with what it pins.
+    const block = index.slice(call, index.indexOf("options.limit,", call) + 40);
     expect(block).toContain("due.map((d) => d.row.id)");
     expect(block).toContain("rows.map((d) => d.row.id)");
     expect(block).toContain("[...candidates, ...waitCandidates]");
+    // ...the arm exclusion, so a candidate-arm row is given its real reason
+    // rather than "nothing on it can be graded"
+    expect(block).toContain("candidateArm:");
     // ...and the failed-read distinction the reasons depend on
     expect(block).toContain("candidatesOrNull === null || waitCandidatesOrNull === null");
     // the response counts what was sent, so it can be reconciled against it

@@ -110,3 +110,28 @@ describe("the arms stay out of the learning loop and out of the record", () => {
     expect(trackSrc).not.toContain("entryBarMs, signalMs }");
   });
 });
+
+describe("the measurement harnesses declare control-only populations", () => {
+  const noiseSrc = readFileSync("supabase/functions/noise-floor/index.ts", "utf8");
+  const compareSrc = readFileSync("supabase/functions/version-compare/index.ts", "utf8");
+
+  // analysis_prompts has no `variant` column and analyze writes to it for every
+  // saved row, so nothing about the arm is visible in the population query
+  // itself. version-compare's own comment warns that a post-read filter is one
+  // a refactor can drop while every test still passes — so it is pinned here.
+  it("both declare their population through the arm filter", () => {
+    for (const src of [noiseSrc, compareSrc]) {
+      expect(src).toContain("return await withoutCandidateArms(ids);");
+      expect(src).toContain("const withoutCandidateArms = async (ids: string[]): Promise<string[] | null> => {");
+      // A failed read must stop the run, never read as "no candidate rows".
+      expect(src).toContain('errors.push("read_failed:analyses_variant");');
+    }
+  });
+
+  // A population frozen before the filter existed can still hold one. Dropping
+  // it would change a declared population, so noise-floor refuses instead.
+  it("noise-floor refuses a frozen population that already carries a candidate arm", () => {
+    expect(noiseSrc).toContain("errors.push(`population_candidate_arm:${id}:${arm}`);");
+    expect(noiseSrc).toContain("select=id,mode,preview,variant");
+  });
+});

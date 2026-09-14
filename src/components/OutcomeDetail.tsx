@@ -463,7 +463,16 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
               </p>
             </>
           ) : (
-            <p className="text-muted-foreground">{post?.status === "failed" ? pm.failed : pm.pending}</p>
+            <p className="text-muted-foreground">
+              {record.variant && record.variant !== "control"
+                // Never "it will run in a few hours" for a row nothing will
+                // ever diagnose: postmortem is control-only on purpose, so
+                // that sentence would be a promise the system cannot keep.
+                ? pm.candidateArm
+                : post?.status === "failed"
+                ? pm.failed
+                : pm.pending}
+            </p>
           )}
         </section>
       )}

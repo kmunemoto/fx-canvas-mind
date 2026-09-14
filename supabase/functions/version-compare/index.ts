@@ -153,7 +153,7 @@ import {
   type VerdictPair,
 } from "./pairing.ts";
 
-const FUNCTION_VERSION = "version-compare-v8-2026-09-13T22:40:00Z";
+const FUNCTION_VERSION = "version-compare-v9-2026-09-14T02:30:00Z";
 
 // #64's measured same-version disagreement rate and its Wilson 95% interval,
 // from docs/NOISE_FLOOR_PREREGISTRATION.md §12.2 (10 of 48 rows,
@@ -976,7 +976,43 @@ Deno.serve(async (req: Request) => {
         }
         ids.push(row.analysis_id.toLowerCase());
       }
-      return ids;
+      // CANDIDATE ARMS ARE NOT PART OF THIS POPULATION (#86 / #87).
+      //
+      // analysis_prompts has no `variant` column and analyze writes to it for
+      // every saved row, so an admin's first arm run would otherwise land in
+      // the next eligible set — and stage B is forward-only, i.e. aimed exactly
+      // at the window where a new arm row appears. Comparing a candidate arm's
+      // stored prompt against the live version measures two analysts and
+      // reports one disagreement rate.
+      //
+      // Applied in TypeScript rather than in the query, unlike the time bounds
+      // above, because analysis_prompts cannot express it: the arm lives on
+      // `analyses`. The comment above says a post-read filter is a filter a
+      // refactor can drop — so this one is pinned by a test, and it EXCLUDES
+      // rather than refuses, because a candidate row is not an eligibility
+      // disagreement: it is a row that was never eligible.
+      return await withoutCandidateArms(ids);
+    };
+
+    // The ids written by the control arm, in the order given. Null on a failed
+    // read: "we could not find out" is a reason to stop, never an empty answer.
+    const withoutCandidateArms = async (ids: string[]): Promise<string[] | null> => {
+      if (ids.length === 0) return ids;
+      const control = new Set<string>();
+      for (let i = 0; i < ids.length; i += ID_CHUNK) {
+        const chunk = ids.slice(i, i + ID_CHUNK);
+        const rows = await readRowsOrNull(`analyses?id=in.(${chunk.join(",")})&select=id,variant`);
+        if (rows === null) {
+          errors.push("read_failed:analyses_variant");
+          return null;
+        }
+        for (const row of rows) {
+          if (typeof row.id !== "string") continue;
+          const arm = typeof row.variant === "string" ? row.variant : "control";
+          if (arm === "control") control.add(row.id.toLowerCase());
+        }
+      }
+      return ids.filter((id) => control.has(id));
     };
 
     // =====================================================================

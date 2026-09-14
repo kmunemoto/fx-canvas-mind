@@ -65,7 +65,7 @@ import {
   type ClassifiedRow,
 } from "./prompt-surgery.ts";
 
-const FUNCTION_VERSION = "noise-floor-v5-2026-09-13T22:40:00Z";
+const FUNCTION_VERSION = "noise-floor-v6-2026-09-14T02:30:00Z";
 
 // The platform kills the worker at 150 s with no chance to respond, which is
 // the same limit analyze/budget.ts is written against. Stop at 130 s and keep
@@ -751,7 +751,9 @@ Deno.serve(async (req: Request) => {
       const meta = new Map<string, JsonRecord>();
       for (let i = 0; i < ids.length; i += ID_CHUNK) {
         const chunk = ids.slice(i, i + ID_CHUNK);
-        const rows = await readRowsOrNull(`analyses?id=in.(${chunk.join(",")})&select=id,mode,preview`);
+        const rows = await readRowsOrNull(
+          `analyses?id=in.(${chunk.join(",")})&select=id,mode,preview,variant`,
+        );
         if (rows === null) {
           errors.push("read_failed:analyses");
           return null;
@@ -776,6 +778,15 @@ Deno.serve(async (req: Request) => {
         }
         if (!analysis) {
           errors.push(`population_analysis_missing:${id}`);
+          return null;
+        }
+        // A frozen population that already contains a candidate-arm row. New
+        // populations exclude them at declaration; this catches one frozen
+        // before that existed, and it REFUSES rather than dropping the row,
+        // because dropping would change a declared population.
+        const arm = typeof analysis.variant === "string" ? analysis.variant : "control";
+        if (arm !== "control") {
+          errors.push(`population_candidate_arm:${id}:${arm}`);
           return null;
         }
         const system = prompt.system;
@@ -831,7 +842,42 @@ Deno.serve(async (req: Request) => {
       for (const row of rows) {
         if (isUuid(row.analysis_id)) ids.push(row.analysis_id.toLowerCase());
       }
-      return ids;
+      // CANDIDATE ARMS ARE NOT PART OF THIS POPULATION (#86 / #87).
+      //
+      // analysis_prompts has no `variant` column and analyze writes to it for
+      // every saved row, so without this the first arm run an admin does lands
+      // in the next frozen corpus. That is not a cosmetic pooling: a lower_tf
+      // prompt carries an extra 15-minute candle block, and a conditional_wait
+      // prompt carries the 926-char schema block shape.ts exists to keep off
+      // the wire — and the measurement this population feeds is WAIT-rate
+      // stability, which is exactly what those change.
+      //
+      // Excluded at DECLARATION rather than refused at replay, because the
+      // stopping rule forbids adding or dropping rows once a population is
+      // declared. A row never in it cannot be dropped from it.
+      return await withoutCandidateArms(ids);
+    };
+
+    // The ids that belong to the control arm, in the order given. Returns null
+    // on a failed read: this file treats "we could not find out" as a reason to
+    // stop, never as an empty answer.
+    const withoutCandidateArms = async (ids: string[]): Promise<string[] | null> => {
+      if (ids.length === 0) return ids;
+      const control = new Set<string>();
+      for (let i = 0; i < ids.length; i += ID_CHUNK) {
+        const chunk = ids.slice(i, i + ID_CHUNK);
+        const rows = await readRowsOrNull(`analyses?id=in.(${chunk.join(",")})&select=id,variant`);
+        if (rows === null) {
+          errors.push("read_failed:analyses_variant");
+          return null;
+        }
+        for (const row of rows) {
+          if (typeof row.id !== "string") continue;
+          const arm = typeof row.variant === "string" ? row.variant : "control";
+          if (arm === "control") control.add(row.id.toLowerCase());
+        }
+      }
+      return ids.filter((id) => control.has(id));
     };
 
     // ---- the run header's counters, recomputed rather than incremented ----

@@ -97,8 +97,11 @@ begin
     from pg_proc p join pg_namespace nsp on nsp.oid = p.pronamespace
     where nsp.nspname = 'public' and p.proname = 'loop_health'
   loop
+    -- この時点では 5。open_plans はこの後 20260913190000 で戻すので、最終状態は 4 に
+    -- なる（あれは統計ではなく、いま建っている建玉の数である）。再生の途中経過として
+    -- ここは 5 で正しい。
     if n <> 5 then
-      raise exception 'loop_health should carry 5 variant predicates, found %', n;
+      raise exception 'loop_health should carry 5 variant predicates at this point, found %', n;
     end if;
   end loop;
 

@@ -51,7 +51,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v27-2026-09-13T22:40:00Z";
+const POSTMORTEM_VERSION = "postmortem-v28-2026-09-14T02:30:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -816,8 +816,13 @@ Deno.serve(async (req: Request) => {
       // trade against two gradeable WAITs, so the misleading branch was the
       // likely one. The ids reaching here are uuid-shaped (targeted.ts), so
       // this probe cannot fail the way the candidate queries could.
+      // `variant` is selected so the report can tell the two reasons apart. A
+      // settled candidate-arm trade IS a settled trade — it was left out by
+      // the arm filter, not by being ungradeable — and reporting it as
+      // "nothing on it can be graded" would be a false statement about the row
+      // the operator is looking straight at.
       const presentRows = await readRowsOrNull(
-        `analyses?select=id&id=in.(${options.ids.map(encodeURIComponent).join(",")})&limit=${MAX_PLANS_ADMIN}`,
+        `analyses?select=id,variant&id=in.(${options.ids.map(encodeURIComponent).join(",")})&limit=${MAX_PLANS_ADMIN}`,
       );
       errors.push(...unaccountedIds(
         options.ids,
@@ -830,6 +835,17 @@ Deno.serve(async (req: Request) => {
           present: presentRows === null
             ? null
             : new Set(presentRows.map((r) => strOrNull(r.id)).filter((v): v is string => v !== null)),
+          // Which of those rows this function is not allowed to diagnose
+          // because of the arm it ran under, so the reason given is the real
+          // one.
+          candidateArm: presentRows === null
+            ? null
+            : new Set(
+              presentRows
+                .filter((r) => strOrNull(r.variant) !== null && strOrNull(r.variant) !== "control")
+                .map((r) => strOrNull(r.id))
+                .filter((v): v is string => v !== null),
+            ),
           unavailable: candidatesOrNull === null || waitCandidatesOrNull === null,
         },
         options.limit,

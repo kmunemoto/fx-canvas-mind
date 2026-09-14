@@ -281,6 +281,7 @@ export const en: Dict = {
       title: "Why it missed (AI review)",
       titleWin: "Why it worked (AI review)",
       pending: "The review runs automatically a few hours after settlement",
+      candidateArm: "This call was made by a candidate arm. The post-mortem feeds the shared rulebook, so it runs on the control arm only and this row is not diagnosed.",
       failed: "The review could not run; it will be retried on the next pass",
       causes: {
         direction_wrong: "Wrong direction",

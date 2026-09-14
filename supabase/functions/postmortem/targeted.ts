@@ -119,6 +119,9 @@ export type IdSets = {
   // Rows that exist in analyses at all, from the plain existence probe — null
   // when the probe itself could not be read.
   present: ReadonlySet<string> | null;
+  // Rows this function is barred from diagnosing because a candidate arm wrote
+  // them (#86 / #87). Null when the lookup was unavailable.
+  candidateArm?: ReadonlySet<string> | null;
   // True when a candidate query failed rather than came back empty.
   unavailable: boolean;
 };
@@ -158,7 +161,15 @@ export const unaccountedIds = (
     if (sets.due.has(id)) continue;
     if (sets.queued.has(id)) lines.push(`${id}: not diagnosed (over this run's limit of ${limit})`);
     else if (sets.fetched.has(id)) lines.push(`${id}: not diagnosed (row found, but nothing on it can be graded)`);
-    else if (sets.present?.has(id)) {
+    else if (sets.candidateArm?.has(id)) {
+      // Named FIRST, because it is the reason that is true. This row may well
+      // be a perfectly gradeable settled trade; the learning loop is
+      // control-only on purpose (a lesson from a candidate arm would enter the
+      // shared rulebook that control runs read), and saying "nothing on it can
+      // be graded" about it would be a false statement about the row the
+      // operator is looking straight at.
+      lines.push(`${id}: not diagnosed (written by a candidate arm; the learning loop is control-only)`);
+    } else if (sets.present?.has(id)) {
       lines.push(`${id}: not diagnosed (row exists, but it is not a settled trade nor a gradeable WAIT)`);
     } else if (sets.unavailable || sets.present === null) {
       lines.push(`${id}: not diagnosed (candidate lookup unavailable, state unknown)`);

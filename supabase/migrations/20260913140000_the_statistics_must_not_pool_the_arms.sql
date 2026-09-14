@@ -38,8 +38,13 @@ do $migration$
 declare
   def text;
   anchor constant text := 'where a.shadow = false and a.preview = false';
-  patched constant text := anchor || E'\n    -- 候補版の腕は見出しの記録に入れない（20260913140000）。\n'
-    || '    and coalesce(a.variant, ''control'') = ''control''';
+  -- 本番に適用したテキストと**1文字も違わないこと**。
+  -- 最初に書いたこのファイルは、置換文にコメント行を1行注入していた。本番に流した
+  -- ほうは注入していない。つまりリポジトリを空のDBに再生すると、本番とは違う関数
+  -- 本文ができる。しかも私はその検証を「アンカーが元ファイルに在るか」の grep だけで
+  -- 済ませ、**置換後の文字列を比べていなかった**。53dca87 が「再生すれば本番と同じ」
+  -- と書いたのは、そのせいで偽だった。
+  patched constant text := anchor || E'\n    and coalesce(a.variant, ''control'') = ''control''';
   hits int;
 begin
   select pg_get_functiondef(p.oid) into def
@@ -135,7 +140,8 @@ comment on function public.variant_stats is
   '#86 / #87。候補版の腕を腕ごとに数える。performance_stats（対照版だけの見出しの成績）とは'
   '別の関数で、合算はしない。conditional_not_triggered が分母つきで出る唯一の場所であり、'
   '**not_triggered は合格ではない**ことが数字として成立するのはここだけである。'
-  'SECURITY DEFINER で service_role のみに grant してある。他の成績 RPC は authenticated にも '
-  'grant されていて SECURITY DEFINER ではない（RLS で呼び手の行だけが見える）ので、**同じ扱いではない**。'
-  'この関数は全ユーザーの行を横断して数えるため、意図的に厳しくしてある。'
-  '※ この comment は 20260913160000 で上書きされる（当初「他の成績 RPC と同じ扱い」と書いたが偽だった）。';
+  'service_role のみに grant してある。他の成績 RPC は authenticated にも grant されているので、'
+  '**同じ扱いではない**。この関数は全ユーザーの行を横断して数えるため意図的に厳しくしてある。'
+  '※ この comment は後続の移行で 2 度上書きされる。1 度目の文言「他の成績 RPC と同じ扱い」は偽で、'
+  'その訂正として書いた「他の成績 RPC は SECURITY DEFINER ではない」も偽だった（loop_health は '
+  'SECURITY DEFINER である）。偽の主張を、別の偽の主張で訂正していた。';

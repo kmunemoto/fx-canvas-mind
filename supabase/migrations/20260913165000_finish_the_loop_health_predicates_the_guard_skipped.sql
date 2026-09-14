@@ -59,8 +59,9 @@ begin
   from pg_proc p join pg_namespace nsp on nsp.oid = p.pronamespace
   where nsp.nspname = 'public' and p.proname = 'loop_health';
 
+  -- 途中経過として 5。最終状態は 20260913190000 で 4 になる。
   if n <> 5 then
-    raise exception 'loop_health should carry 5 variant predicates, found %', n;
+    raise exception 'loop_health should carry 5 variant predicates at this point, found %', n;
   end if;
 end
 $assert$;

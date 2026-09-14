@@ -73,7 +73,7 @@ export const HISTORY_COLUMNS = [
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
   "rulebook_version", "plan_contract", "wait_check", "wait_plan", "preview",
-  "position_review",
+  "position_review", "variant",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";

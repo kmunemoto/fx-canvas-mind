@@ -723,6 +723,12 @@ export interface AnalysisRecord {
   // The market was shut when this was requested, so it is a read of the last
   // close with no entry, stop or targets. Kept in the history, counted nowhere.
   preview?: boolean;
+  // Which arm of the analyst wrote this plan (#86 / #87). Read by the screen
+  // for one reason only: a candidate-arm row is never diagnosed (the learning
+  // loop is control-only), so without this the card promises a post-mortem
+  // that will never come. It is NOT shown as a badge — a reader has no
+  // decision to make with it.
+  variant?: string | null;
   rulebook_version?: number | null;
   // The held-position review made on this run (analyze/review.ts). Absent on
   // rows written before it existed; null on rows written since by a function
