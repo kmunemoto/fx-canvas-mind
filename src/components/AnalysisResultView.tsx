@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AnalysisMode, AnalysisResult, EntryCheck, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
+import type { AnalysisMode, AnalysisResult, EntryCheck, PlanHorizon, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
 import PriceChart, { type ChartOverlay } from "./PriceChart";
 import MarketContextCard from "./MarketContextCard";
@@ -15,6 +15,7 @@ import { toPips } from "@/lib/candleTime";
 import { visibleWarnings, waitReasonOf } from "@/lib/warnings";
 import { hasMarketContext } from "@/lib/marketContext";
 import { registrationFor } from "@/lib/positions";
+import { horizonLines } from "@/lib/planHorizon";
 import type { Dict } from "@/lib/i18n/locales";
 
 interface Props {
@@ -39,6 +40,10 @@ interface Props {
   // and the held card can offer the close form.
   positions?: Position[];
   onPositionsChanged?: () => void;
+  // The period this plan is aiming at (#91), from the analyze response. Until
+  // this shipped the plan card rendered no time at all, while the page header
+  // ticked a live clock to the second beside it.
+  planHorizon?: PlanHorizon | null;
 }
 
 // Bullets shown before the reader asks for the rest. The factors are
@@ -83,6 +88,7 @@ const Chip = ({ children }: { children: string }) => (
 const AnalysisResultView = ({
   result, techData, pair, interval, entryCheck, analysisMode, ruleFit, rulebook,
   confidenceObserved = null, positionReview = null, analysisId = null, positions = [], onPositionsChanged,
+  planHorizon = null,
 }: Props) => {
   const t = useT();
   const [allFactors, setAllFactors] = useState(false);
@@ -118,6 +124,7 @@ const AnalysisResultView = ({
   };
   const stopDistance = hasPlan ? distance(result.stop_loss) : null;
   const tp1Distance = hasPlan ? distance(result.take_profit_1) : null;
+  const horizon = horizonLines(planHorizon, t, t.intlLocale);
 
   // The two registers, assembled here because only this component has both
   // halves: what the server measured, and what the model named.
@@ -268,6 +275,31 @@ const AnalysisResultView = ({
               <p className="text-success font-semibold">{result.take_profit_3 ?? "—"}</p>
             </div>
           </div>
+          {/* The period the plan is aiming at (#91). It sits directly under the
+              levels because it is what the levels were placed against: TP1 is
+              meant to resolve inside it, TP2 and TP3 are not. Before this, the
+              only number on the card with a unit of time was the timeframe
+              label, which says what was READ and not what is being AIMED at. */}
+          {horizon && (
+            <div className="pt-2 border-t border-border/50 space-y-1" data-testid="plan-horizon">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+                <span className="text-[10px] text-muted-foreground shrink-0">{t.result.horizon.label}</span>
+                <span className="text-foreground font-medium font-mono">{horizon.bars}</span>
+                {horizon.endsAt && (
+                  <span className="text-[10px] text-muted-foreground font-mono" data-testid="horizon-ends-at">
+                    {horizon.endsAt}
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground">{horizon.notACutoff}</p>
+              <p className="text-[10px] text-muted-foreground">{horizon.tpRoles}</p>
+              {horizon.calendarShort && (
+                <p className="text-[10px] text-warning" data-testid="horizon-calendar-short">
+                  {horizon.calendarShort}
+                </p>
+              )}
+            </div>
+          )}
           {/* "I entered on this plan." Only when the row exists to point at,
               and not twice. */}
           {analysisId !== null && registration.state === "none" && onPositionsChanged && (

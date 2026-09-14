@@ -75,6 +75,21 @@ export const en: Dict = {
     tp3: "Take profit 3",
     distance: (pips: number, atr: number | null) =>
       atr === null ? `${pips} pips` : `${pips} pips · ${atr}× ATR`,
+    // See the Japanese copy for why the period is declared in bars.
+    horizon: {
+      label: "Target period",
+      bars: (tfLabel: string, bars: number, span: string) =>
+        `${bars} bars of the ${tfLabel} chart (${span} of open market)`,
+      span: {
+        hours: (n: number) => `about ${n} hours`,
+        days: (n: number) => `about ${n} days`,
+      },
+      endsAt: (when: string) => `to about ${when}`,
+      notACutoff: "The bar count is not a deadline — scoring continues until the plan settles.",
+      calendarShort: "The economic calendar does not reach the end of this period.",
+      tpRoles: "Take profit 1 is the level aimed at inside this period. Take profit 2 and 3 are extensions beyond it and are not expected to be reached within it.",
+      absent: "No target period was recorded for this analysis.",
+    },
     evidence: "Evidence",
     showAll: (n: number) => `Show all (${n})`,
     showLess: "Show fewer",

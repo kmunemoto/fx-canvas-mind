@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v57-2026-09-13T22:40:00Z";
+const FUNCTION_VERSION = "analyze-v58-2026-09-14T12:40:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -89,6 +89,15 @@ import {
 import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
+import {
+  buildPlanHorizon,
+  horizonBars,
+  horizonWallMs,
+  type PlanHorizon,
+  type ScoringWindows,
+} from "../_shared/horizon.ts";
+import { marketHorizonEnd } from "../track-outcomes/waits.ts";
+import { ENTRY_WINDOW_MS, EXPIRY_DAYS } from "../track-outcomes/evaluate.ts";
 import { barFullyClosed, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
@@ -1721,12 +1730,54 @@ ${candleLines(lowerCandles, 24)}`;
     // one RESPONSE_SCHEMA keeps both paths on a single definition.
     const SCHEMA_INSTRUCTION = L.schemaInstruction(JSON.stringify(sentSchema));
 
+    // THE PERIOD THIS PLAN IS A PROPOSAL TO CAPTURE (_shared/horizon.ts).
+    //
+    // Built from priced_at, not from now: priced_at is the instant the market
+    // data this plan is written on was read, and it is what every other stamp
+    // on the row is anchored to.
+    //
+    // The calendar lookahead is passed in so the row can record whether the
+    // events block actually covered this period. The two are spent on
+    // different clocks on purpose — a release is scheduled in wall clock, a
+    // plan lives in market time — so on a Friday they come apart, and this
+    // says which way instead of pretending they agree.
+    const planHorizon: PlanHorizon | null = buildPlanHorizon({
+      interval,
+      pricedAtIso,
+      marketEnd: marketHorizonEnd,
+      calendarLookaheadMs: horizonWallMs(interval) ?? 0,
+    });
+
+    // The tracker's outer bounds as they stand for THIS row, frozen at issue.
+    // Values untouched; see the column comment for why freezing them matters.
+    const scoringWindows: ScoringWindows | null = ENTRY_WINDOW_MS[interval] !== undefined &&
+        EXPIRY_DAYS[interval] !== undefined
+      ? {
+        version: 1,
+        unfilled_entry_ms: ENTRY_WINDOW_MS[interval],
+        wait_window_ms: ENTRY_WINDOW_MS[interval],
+        give_up_days: EXPIRY_DAYS[interval],
+      }
+      : null;
+
+    // The sentence the analyst reads. Empty when the interval has no entry in
+    // the table: a plan told it is aiming at a period nobody chose for its
+    // timeframe would be worse than one told nothing.
+    const horizonLine = planHorizon === null
+      ? ""
+      : L.horizonDeclared({
+        tfLabel: interval,
+        bars: planHorizon.bars,
+        hours: Math.round((horizonWallMs(interval) ?? 0) / (60 * 60 * 1000)),
+      });
+
     const buildUserMessage = (note: string, schemaInPrompt: boolean) =>
       L.userMessage({
         pair: currencyPair,
         nowUtc,
         note,
         sections: tfSections + lowerSection,
+        horizon: horizonLine,
         schema: schemaInPrompt ? SCHEMA_INSTRUCTION : "",
       });
 
@@ -3134,6 +3185,12 @@ ${candleLines(lowerCandles, 24)}`;
           // the whole point of an arm is that its rows are never pooled with
           // the control's, and a reader that has to guess will pool them.
           variant,
+          // WHICH PERIOD THIS PLAN IS A PROPOSAL TO CAPTURE, and the tracker's
+          // outer bounds as they stood when it was issued. Null on an interval
+          // the table does not cover. Neither is a cutoff — see the column
+          // comments; a plan past its period keeps being scored to settlement.
+          plan_horizon: planHorizon,
+          scoring_windows: scoringWindows,
           // #86. The conditional claim as validated, or null. Gated exactly
           // like wait_plan beside it, and for the same reason: a preview is a
           // read of the last close taken while the market was shut, and
@@ -3309,6 +3366,10 @@ ${candleLines(lowerCandles, 24)}`;
             // filter and into the shared rulebook. A row that does not say
             // which analyst wrote it is not a cheaper row, it is a false one.
             variant,
+            // Same period as the parent: the shadow is the same analysis under
+            // the other gate, so it is a proposal to capture the same window.
+            plan_horizon: planHorizon,
+            scoring_windows: scoringWindows,
             // The shadow row is the same analysis under the other gate, so it
             // carries the same stamp. A shadow with no model would drop out of
             // every model-partitioned count while still being counted overall.
@@ -3346,6 +3407,10 @@ ${candleLines(lowerCandles, 24)}`;
         plan,
         mode: resolvedMode,
         entry_check: entryCheck,
+        // So the screen can say what period this plan is for. Until now the
+        // plan screen rendered no time at all, while the page header ticked a
+        // live clock to the second beside it.
+        plan_horizon: planHorizon,
         rulebook_version: rulebookVersion,
         // The row's id, so the reader can register that they entered on it.
         // Null when no row was written.

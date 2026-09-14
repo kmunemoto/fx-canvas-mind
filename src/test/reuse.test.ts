@@ -119,12 +119,19 @@ describe("the key is the prompt, minus the clock", () => {
     // retyped, so a locale added later is covered by this test on the day it
     // is added.
     for (const locale of SUPPORTED_LOCALES) {
+      // The declared horizon (#91) is built from the interval alone — bars and
+      // hours, no instant — so it is the same string on both runs and the key
+      // still matches. Passed as the REAL sentence rather than a sentinel: if
+      // an instant were ever added to it, reuse would silently stop firing for
+      // every pair, and the assertion below is what would say so.
+      const horizon = stringsFor(locale).horizonDeclared({ tfLabel: "1h", bars: 12, hours: 12 });
       const message = (nowUtc: string) =>
         stringsFor(locale).userMessage({
           pair: "USD/JPY",
           nowUtc,
           note: "分析モード: full",
           sections: "### 1h\n現在値: 150.123",
+          horizon,
           schema: "",
         });
       const early = message("2026-09-12T10:00:00.000Z");

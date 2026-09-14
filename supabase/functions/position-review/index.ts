@@ -46,7 +46,7 @@ import { resolveAnalysisLocale } from "../analyze/locale.ts";
 import type { Candle } from "../analyze/indicators.ts";
 import { extractAnthropicText, parseAnalysisJson } from "../_shared/model-output.ts";
 
-const FUNCTION_VERSION = "position-review-v1-2026-09-13T06:00:00Z";
+const FUNCTION_VERSION = "position-review-v2-2026-09-14T12:40:00Z";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",

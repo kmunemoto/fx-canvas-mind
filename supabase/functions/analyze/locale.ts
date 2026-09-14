@@ -27,7 +27,8 @@ interface LocaleStrings {
   technicalNote: string;
   fallbackNote: string;
   schemaInstruction: (schema: string) => string;
-  userMessage: (parts: { pair: string; nowUtc: string; note: string; sections: string; schema: string }) => string;
+  horizonDeclared: (a: { tfLabel: string; bars: number; hours: number }) => string;
+  userMessage: (parts: { pair: string; nowUtc: string; note: string; sections: string; horizon: string; schema: string }) => string;
   disclaimer: string;
   // Substring that identifies the disclaimer already being present, so it is
   // not appended twice when the model followed the instruction.
@@ -88,8 +89,23 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       "分析モード: technical_fallback — ニュース検索が利用できないため、テクニカルのみで判断し、fundamental_score は50、ファンダ要因には言及しないでください。",
     schemaInstruction: (schema) =>
       `\n\n最終回答は<json>タグ内に、次のJSON Schemaに厳密に従ったJSONのみを出力してください。キー名とenum値は英語のまま一字一句一致させ、required のフィールドは全て含めること。スキーマ外のキーは出力しないこと。\n${schema}`,
-    userMessage: ({ pair, nowUtc, note, sections, schema }) =>
-      `通貨ペア: ${pair}\n現在時刻(UTC): ${nowUtc}\n${note}\n\n${sections}\n\n上記のマルチタイムフレームデータを手順1-6に沿って分析し、トレードプランを出力してください。${schema}`,
+    userMessage: ({ pair, nowUtc, note, sections, horizon, schema }) =>
+      `通貨ペア: ${pair}\n現在時刻(UTC): ${nowUtc}\n${note}\n\n${sections}\n${horizon}\n上記のマルチタイムフレームデータを手順1-6に沿って分析し、トレードプランを出力してください。${schema}`,
+    // 狙う期間を、初めて明示的に渡す。
+    //
+    // この量は今まで「暗黙のうちに要求されていた」ものである: 経済指標ブロックは
+    // 「このプランの想定寿命が発表をまたぐなら、見送るか、その値幅を吸収できる損切りに
+    // せよ」と指示していながら、想定寿命を一度も述べていなかった（95件中38件に出る）。
+    // つまりモデルは、定義されていない量を根拠に損切りを広げるか見送るかを決めていた。
+    //
+    // 実測値をここに書かないこと。ここは locale.ts の定数なので、記録が増えた瞬間に
+    // 嘘になる。規則だけを述べ、件数は述べない（SeparatedScores.tsx が同じ理由で
+    // 件数を画面に焼き込むのをやめている）。
+    horizonDeclared: ({ tfLabel, bars, hours }) =>
+      `\nこのプランが狙う期間: エントリー足（${tfLabel}）で${bars}本、市場が開いている時間にしておよそ${hours}時間です。` +
+      `損切りと利確1は、この${bars}本のあいだに決着が付く距離に置いてください。利確2・利確3はその先への延長で、この期間内に届くことは求めていません。\n` +
+      `この本数は期限ではありません。${bars}本を過ぎても、決済が付くまで採点は続きます。長く伸びた勝ちを打ち切ることはしないので、` +
+      `本数に合わせて利確を手前に寄せる必要はありません。狙った期間の内に決着したかどうかは、勝敗とは別の記録として残ります。\n`,
     disclaimer: "この分析は参考情報です。投資判断は自己責任で行ってください",
     disclaimerMarker: "自己責任",
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
@@ -179,8 +195,13 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       "Mode: technical_fallback — news search is unavailable, so judge on the technicals alone, set fundamental_score to 50, and do not refer to fundamentals.",
     schemaInstruction: (schema) =>
       `\n\nReturn your final answer inside <json> tags as JSON only, strictly following this JSON Schema. Keep key names and enum values exactly as written, include every required field, and output no keys outside the schema.\n${schema}`,
-    userMessage: ({ pair, nowUtc, note, sections, schema }) =>
-      `Currency pair: ${pair}\nCurrent time (UTC): ${nowUtc}\n${note}\n\n${sections}\n\nAnalyse the multi-timeframe data above following steps 1-6 and output the trade plan.${schema}`,
+    userMessage: ({ pair, nowUtc, note, sections, horizon, schema }) =>
+      `Currency pair: ${pair}\nCurrent time (UTC): ${nowUtc}\n${note}\n\n${sections}\n${horizon}\nAnalyse the multi-timeframe data above following steps 1-6 and output the trade plan.${schema}`,
+    // See the Japanese copy for why this exists and why it carries no counts.
+    horizonDeclared: ({ tfLabel, bars, hours }) =>
+      `\nThe period this plan is aiming at: ${bars} bars of the entry timeframe (${tfLabel}), about ${hours} hours of open market. ` +
+      `Place the stop and take-profit 1 at distances that can resolve within those ${bars} bars. Take-profit 2 and 3 are extensions beyond it and are not expected to be reached inside the period.\n` +
+      `This bar count is NOT a deadline. Past ${bars} bars the plan keeps being scored until it settles, and a winner that runs long is never cut short, so do not pull the targets in to fit the count. Whether it settled inside the period is recorded separately from the win or loss.\n`,
     disclaimer: "This analysis is reference information. Trading decisions are your own responsibility.",
     disclaimerMarker: "your own responsibility",
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",

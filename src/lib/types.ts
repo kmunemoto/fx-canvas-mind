@@ -734,6 +734,51 @@ export interface AnalysisRecord {
   // rows written before it existed; null on rows written since by a function
   // that recorded nothing.
   position_review?: PositionReview | null;
+  // The period this plan was aiming at (#91). Absent on rows read by an older
+  // client, and null on all 117 rows written before the column existed —
+  // deliberately not backfilled, because a period computed today and stamped
+  // on a plan made last week would be a claim about what that plan was aiming
+  // at, which nobody recorded.
+  //
+  // `scoring_windows` is written beside it on the same row and is NOT declared
+  // here on purpose. It is the tracker's own frozen bounds, nothing on this
+  // screen reads it, and history-columns.test.ts would then force it into the
+  // select — a column fetched on 40 rows per load for no reader. That is the
+  // exact shape `wait_check` shipped in.
+  plan_horizon?: PlanHorizon | null;
+}
+
+// ---------------------------------------------------------------------------
+// The declared trade horizon (#91) — mirrors
+// supabase/functions/_shared/horizon.ts. Every field carries the meaning the
+// server gave it there; nothing here is derived on the client.
+// ---------------------------------------------------------------------------
+
+// interval_table_v1 — the period came from the per-timeframe table, which is
+//                     the economic calendar's own lookahead read in bars
+// model             — the analyst chose it (not yet written by anything)
+export type HorizonSource = "interval_table_v1" | "model";
+
+export interface PlanHorizon {
+  version: 1;
+  // Bars of the ENTRY timeframe, which is the unit holding time is actually
+  // distributed in: the measured median is 1.05 / 1.67 / 1.26 / 2.82 bars on
+  // 15min / 1h / 4h / 1day — roughly interval-independent, which is why the
+  // period is declared in bars and not in hours.
+  bars: number;
+  interval: string;
+  source: HorizonSource;
+  bar_ms: number;
+  // priced_at, not created_at — see the server comment for why the difference
+  // is 30 to 120 seconds and why this project has already paid for it twice.
+  declared_at: string;
+  // The end of the period in MARKET time, frozen at issue. Accurate to within
+  // 30 minutes, which is why every string rendering it says "about".
+  ends_at: string;
+  // Whether the economic-calendar block shown to the analyst actually reached
+  // as far as this period does. False on a Friday, when the calendar's wall
+  // clock and this market-time window come apart across the weekend.
+  calendar_covers_horizon: boolean;
 }
 
 // ---------------------------------------------------------------------------

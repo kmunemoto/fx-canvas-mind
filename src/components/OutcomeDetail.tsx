@@ -5,6 +5,7 @@ import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib
 import PriceChart, { type ChartMarker } from "./PriceChart";
 import { EntryRegistration } from "./EntryRegistration";
 import { registrationFor } from "@/lib/positions";
+import { horizonLines } from "@/lib/planHorizon";
 
 interface Props {
   record: AnalysisRecord;
@@ -62,6 +63,10 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
     return typeof r === "number" && Number.isFinite(r) ? `${base} (${r.toFixed(1)}R)` : base;
   };
   const when = (iso: string | null | undefined) => (iso ? formatJst(iso, t.intlLocale) : "—");
+  // The period this plan was aiming at, as it was declared on the day (#91).
+  // Read off the row, never recomputed: a row written under an earlier table
+  // must keep rendering the period it was actually issued with.
+  const horizon = horizonLines(record.plan_horizon, t, t.intlLocale);
 
   const dir = t.direction[record.signal];
   const dirClass = record.signal === "BUY" ? "text-success" : record.signal === "SELL" ? "text-destructive" : "text-warning";
@@ -275,6 +280,28 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
               {check?.repaired && <p className="text-muted-foreground mt-1">{g.repaired}</p>}
             </>
           )}
+          {/* What period this was aiming at. The "not a deadline" caveat that
+              the live card carries is left off here on purpose: this row has
+              already been scored, so there is nothing left to reassure the
+              reader about. Absent on every row written before the column
+              existed, which is said rather than left blank — the 117 of them
+              were deliberately not backfilled, because a period computed today
+              is not the period that plan was aiming at. */}
+          {horizon
+            ? (
+              <div data-testid="detail-horizon">
+                <Row label={t.result.horizon.label} value={horizon.bars} mono={false} />
+                {horizon.endsAt && <Row label="" value={horizon.endsAt} className="text-muted-foreground" />}
+                {horizon.calendarShort && (
+                  <p className="text-warning mt-1" data-testid="detail-horizon-calendar">{horizon.calendarShort}</p>
+                )}
+              </div>
+            )
+            : (
+              <p className="text-muted-foreground mt-1" data-testid="detail-horizon-absent">
+                {t.result.horizon.absent}
+              </p>
+            )}
         </section>
 
         <section>
