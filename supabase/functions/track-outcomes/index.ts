@@ -17,6 +17,7 @@ import {
   parseCandleTime,
   toIso,
   ENTRY_WINDOW_MS,
+  EXPIRY_DAYS,
   EVAL_INTERVAL,
   EVAL_OUTPUTSIZE,
   REFINE_INTERVAL,
@@ -30,6 +31,7 @@ import {
 } from "./evaluate.ts";
 import { fetchQuotes, fetchQuoteWindow, isMarketClosed, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
 import { judgeWait, marketHorizonEnd, type WaitBar, type WaitPlan } from "./waits.ts";
+import { resolveScoringWindows } from "../_shared/horizon.ts";
 import {
   conditionalWindowMs,
   scoreConditionalWait,
@@ -37,7 +39,7 @@ import {
   type ScorableBar,
 } from "../_shared/conditional-wait.ts";
 
-const TRACKER_VERSION = "track-outcomes-v16-2026-09-13T22:40:00Z";
+const TRACKER_VERSION = "track-outcomes-v17-2026-09-14T18:10:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
@@ -218,7 +220,11 @@ Deno.serve(async (req: Request) => {
     // ---- open plans that are due a look ----------------------------------
     // Stalest first (never-checked rows ahead of everything), so a backlog
     // larger than one page still gets through over successive ticks
-    const select = "id,pair,interval,signal,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,created_at,price_at_signal,evaluation";
+    // scoring_windows: the windows frozen at issue (#91 step 2). Without it in
+    // the select every row would arrive undefined and the freeze would be a
+    // no-op that still reported "source: table" — true, and true for the
+    // wrong reason.
+    const select = "id,pair,interval,signal,entry_point,stop_loss,take_profit_1,take_profit_2,take_profit_3,created_at,price_at_signal,evaluation,scoring_windows";
     const ownerFilter = scope.kind === "user" ? `user_id=eq.${encodeURIComponent(scope.userId)}&` : "";
     const listRes = await rest(
       `analyses?${ownerFilter}outcome=eq.pending&select=${select}&order=evaluation->>checked_at.asc.nullsfirst,created_at.asc&limit=${MAX_ROWS}`,
@@ -551,7 +557,7 @@ Deno.serve(async (req: Request) => {
     if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
       const waitRes = await rest(
         "analyses?outcome=eq.skipped&or=(wait_check.is.null,wait_check->>verdict.eq.pending)" +
-          `&select=id,pair,interval,created_at,price_at_signal,context,wait_plan&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
+          `&select=id,pair,interval,created_at,price_at_signal,context,wait_plan,scoring_windows&order=created_at.asc&limit=${MAX_WAIT_ROWS}`,
       );
       const waitRaw = waitRes.ok ? await waitRes.json().catch(() => null) : null;
       const waitRows = Array.isArray(waitRaw) ? waitRaw.filter(isRecord) : [];
@@ -598,7 +604,14 @@ Deno.serve(async (req: Request) => {
               price: numberOrNull(row.price_at_signal) ?? (entrySnap ? numberOrNull(entrySnap.price) : null),
               atr: entrySnap ? numberOrNull(entrySnap.atr) : null,
               signalMs,
-              horizonMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
+              // Same freeze as the trade scorer (#91 step 2), and the WAIT
+              // DIAGNOSIS window in postmortem/index.ts is resolved the same
+              // way — the two walk one horizon together, so they move together.
+              horizonMs: resolveScoringWindows(row.scoring_windows, {
+                unfilledEntryMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
+                waitWindowMs: ENTRY_WINDOW_MS[String(row.interval)] ?? 48 * 60 * 60 * 1000,
+                giveUpDays: EXPIRY_DAYS[String(row.interval)] ?? 30,
+              }).wait_window_ms,
             },
             // The trade fixed at the moment of the call. A row without one
             // grades no_call rather than being scored against whichever side

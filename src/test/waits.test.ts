@@ -244,7 +244,13 @@ describe("the sweep reaches the WAIT pass", () => {
   it("hands the scorer the stored plan, not just the row's price", async () => {
     const src = await import("node:fs").then((fs) =>
       fs.readFileSync("supabase/functions/track-outcomes/index.ts", "utf8"));
-    expect(src).toContain("wait_plan&order=created_at.asc");
+    // The WAIT select must carry the stored plan. Matched on the line rather
+    // than on `wait_plan&order=...` verbatim, because #91 step 2 added
+    // scoring_windows between them — pinning adjacency made this test fail for
+    // a change that kept its own invariant perfectly.
+    const waitSelect = src.split("\n").find((l) => l.includes("select=") && l.includes("wait_plan"));
+    expect(waitSelect, "the WAIT select is gone").toBeTruthy();
+    expect(waitSelect).toContain("order=created_at.asc");
     expect(src).toContain("isRecord(row.wait_plan)");
   });
 

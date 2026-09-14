@@ -225,6 +225,39 @@ const SeparatedScores = ({ scores }: Props) => {
             ].filter(Boolean).join(" · ") || undefined,
           )}
 
+          {/* (d) PACE — did it settle inside the period it declared (#91 step 2)?
+              Its own box, its own n, and deliberately NOT coloured: a winner
+              that runs long settles outside its period, and that is a good
+              trade. Truncating the 53 settled rows at 24 bars drops two, and
+              both are wins — which is why this panel states the number and
+              refuses to grade it. */}
+          <div className="rounded-lg border border-border/60 bg-background/30 p-2 space-y-1" data-testid="score-pace">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[11px] text-foreground">{s.pace.label}</span>
+              <span className="ml-auto font-mono font-bold text-sm text-foreground">
+                {block.pace.rate === null ? "—" : `${block.pace.rate}%`}
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground" data-testid="score-pace-n">
+                {s.n(block.pace.inside, block.pace.n)}
+              </span>
+            </div>
+            <p className="text-[10px] font-mono text-muted-foreground">
+              {block.pace.ci ? s.ci(block.pace.ci[0], block.pace.ci[1]) : s.noRate}
+              {[
+                block.pace.noHorizon > 0 ? s.pace.noHorizon(block.pace.noHorizon) : "",
+                block.pace.openPastHorizon > 0 ? s.pace.openPast(block.pace.openPastHorizon) : "",
+              ].filter(Boolean).map((t) => ` · ${t}`).join("")}
+            </p>
+            {block.pace.n > 0 && block.pace.belowMinN && (
+              <p className="text-[10px] text-warning" data-testid="score-pace-thin">{s.thin}</p>
+            )}
+            {/* The sentence that keeps this from being read as a score. */}
+            <p className="text-[10px] text-warning leading-relaxed" data-testid="score-pace-descriptive">
+              {s.pace.notAScore}
+            </p>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">{s.pace.hint}</p>
+          </div>
+
           <p className="text-[10px] text-warning leading-relaxed" data-testid="separated-caveat">
             {s.notADecomposition}
           </p>

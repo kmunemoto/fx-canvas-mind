@@ -683,7 +683,40 @@ export interface SeparatedBlock {
   direction: SeparatedDirection;
   timing: SeparatedTiming;
   placement: SeparatedPlacement;
+  pace: SeparatedPace;
   causes: SeparatedCauses;
+}
+
+// (d) PACE — did the plan settle inside the period it declared (#91 step 2)?
+//
+// NOT a fourth score. `descriptive` is true on every row this server sends,
+// and it means the screen may not colour this number as good or bad: a winner
+// that runs long settles OUTSIDE its period, and that is a good trade. The
+// measurement that put this rule here: truncating the 53 settled rows at 24
+// bars drops two, and both of them are wins.
+//
+// It also has its OWN denominator, unrelated to the three above. They need a
+// finished post-mortem (they read its facts); this needs only the declared
+// end and the settlement instant, so it can count rows the other three cannot.
+// Printing it under one heading with a shared n would be the denominator error
+// this whole panel exists to refuse.
+export interface SeparatedPace {
+  n: number;
+  inside: number;
+  outside: number;
+  rate: number | null;
+  ci: [number, number] | null;
+  // Settled trades that declared no period at all — every row written before
+  // the horizon existed. Shown, never folded into the rate.
+  noHorizon: number;
+  // Still open with the declared period already past. Not a fault: the period
+  // is not a deadline.
+  openPastHorizon: number;
+  untriggered: number;
+  expired: number;
+  belowMinN: boolean;
+  // Always true from this server. Read it as "neither direction is better".
+  descriptive: boolean;
 }
 
 // What the numbers rest on. Rendered ABOVE the scores, not under a disclosure:
@@ -770,6 +803,27 @@ const causes = (v: unknown): SeparatedCauses => {
   };
 };
 
+// A server that predates #91 step 2 sends no `pace` key at all. That reads as
+// n = 0 with everything zero, which is the truthful shape of "this server did
+// not measure it" — and `rate` stays null, so the panel renders no answer
+// rather than 0%.
+const pace = (v: unknown): SeparatedPace => {
+  const o = obj(v);
+  return {
+    n: num(o.n),
+    inside: num(o.inside),
+    outside: num(o.outside),
+    rate: o.rate === null || o.rate === undefined ? null : num(o.rate),
+    ci: ci(o.ci95),
+    noHorizon: num(o.no_horizon),
+    openPastHorizon: num(o.open_past_horizon),
+    untriggered: num(o.untriggered),
+    expired: num(o.expired),
+    belowMinN: o.below_min_n === true,
+    descriptive: o.descriptive === true,
+  };
+};
+
 const block = (v: unknown): SeparatedBlock => {
   const o = obj(v);
   const timing = obj(o.timing);
@@ -790,6 +844,7 @@ const block = (v: unknown): SeparatedBlock => {
       targetBad: num(placement.target_bad),
       stopUntested: num(placement.stop_untested),
     },
+    pace: pace(o.pace),
     causes: causes(o.causes),
   };
 };
