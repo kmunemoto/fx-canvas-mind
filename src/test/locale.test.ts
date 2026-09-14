@@ -58,9 +58,10 @@ describe("prompt strings", () => {
         nowUtc: "2026-09-03T05:30:00Z",
         note: "MODE-NOTE",
         sections: "TF-SECTIONS",
+        horizon: "HORIZON-BLOCK",
         schema: "SCHEMA-BLOCK",
       });
-      for (const part of ["USD/JPY", "2026-09-03T05:30:00Z", "MODE-NOTE", "TF-SECTIONS", "SCHEMA-BLOCK"]) {
+      for (const part of ["USD/JPY", "2026-09-03T05:30:00Z", "MODE-NOTE", "TF-SECTIONS", "HORIZON-BLOCK", "SCHEMA-BLOCK"]) {
         expect(msg, `${locale} message missing ${part}`).toContain(part);
       }
     }
@@ -69,7 +70,7 @@ describe("prompt strings", () => {
   it("keeps the schema block out of the message when it is not wanted", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const msg = stringsFor(locale).userMessage({
-        pair: "USD/JPY", nowUtc: "t", note: "n", sections: "s", schema: "",
+        pair: "USD/JPY", nowUtc: "t", note: "n", sections: "s", horizon: "", schema: "",
       });
       expect(msg).not.toContain("undefined");
     }

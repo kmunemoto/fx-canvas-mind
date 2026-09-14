@@ -39,8 +39,19 @@ const literalAfter = (src: string, marker: string): string => {
 };
 
 const recordSelect = (() => {
-  const m = index.match(/analyses\?select=([^&]+)&order=created_at\.desc/);
+  // The filter between the select list and the order clause is deliberate:
+  // `${controlOnly}` keeps candidate-arm rows out of the record the rulebook
+  // editor is shown. This regex used to require `&order` to follow the select
+  // immediately, so adding that filter broke it — which is the test doing its
+  // job, and the reason the filter is now pinned here too rather than only
+  // matched around.
+  // Anchored on the record pool's own first columns, not merely on "ends with
+  // order=created_at.desc" — the repair scan a few hundred lines above also
+  // ends that way, and a looser pattern silently matched THAT instead, which
+  // is a test that passes while pinning the wrong query.
+  const m = index.match(/analyses\?select=(id,user_id,pair,signal,[^&]+)&([^`]*?)order=created_at\.desc/);
   expect(m).not.toBeNull();
+  expect((m as RegExpMatchArray)[2]).toContain("${controlOnly}");
   return new Set((m as RegExpMatchArray)[1].split(","));
 })();
 

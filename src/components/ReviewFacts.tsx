@@ -23,6 +23,8 @@ interface Props {
   // Why the reference's plan row is not here, when it is not. A tracker
   // verdict we never asked for is not "not settled yet".
   planUnavailable?: boolean;
+  // The position points at no plan at all (#92) — not a failure to read one.
+  noPlan?: boolean;
 }
 
 const Row = ({ label, value, cls = "" }: { label: string; value: string; cls?: string }) => (
@@ -32,7 +34,7 @@ const Row = ({ label, value, cls = "" }: { label: string; value: string; cls?: s
   </div>
 );
 
-const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavailable = false }: Props) => {
+const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavailable = false, noPlan = false }: Props) => {
   const { t } = useLocale();
   const f = t.position.facts;
   const decimals = priceDecimals(pair);
@@ -63,7 +65,13 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavail
   };
 
   const trackerText = (() => {
-    // Three different silences, and only one of them is "it has not settled".
+    // Four different silences, and only one of them is "it has not settled".
+    // `noPlan` goes first: a directly-registered position (#92) has no plan
+    // row at all, so it would otherwise fall through to "not settled" — which
+    // says the tracker is still working on something that was never given to
+    // it — or, worse, to "the plan row could not be read", an outage report
+    // for a fetch that was never attempted.
+    if (noPlan) return f.trackerNoPlan;
     if (planUnavailable) return f.trackerUnknown;
     if (!outcome) return f.trackerPending;
     const word = (t.history.outcomes as Record<string, string>)[outcome.outcome] ?? outcome.outcome;

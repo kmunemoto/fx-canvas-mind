@@ -34,17 +34,38 @@ export interface EconEvent {
   source: string;
 }
 
+import { ENTRY_BAR_MS, PLAN_HORIZON_BARS } from "../_shared/horizon.ts";
+
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
 // No entry may be timed inside this window around a high-impact release
 export const BLACKOUT_MS = 30 * MIN;
-// How far ahead a plan of each timeframe is told to look
+// How far ahead a plan of each timeframe is told to look.
+//
+// DERIVED, NOT DECLARED HERE, since 2026-09-14. These four durations were the
+// app's only per-interval statement of "how long is this plan about", and the
+// analyst saw them — on the 57 of 95 runs where the calendar came back empty
+// and printed the hours. They were also the only one of the app's four
+// disagreeing horizons that was ever shown to anybody.
+//
+// So they became the declaration rather than being duplicated by one:
+// _shared/horizon.ts holds the same four as a BAR COUNT (6h/15min = 24,
+// 12h/1h = 12, 48h/4h = 12, 120h/1day = 5), which is the unit the trade is
+// actually measured in and the unit that turns out to be interval-independent.
+// The values here are unchanged to the millisecond and the calendar lookahead
+// is unchanged; src/test/horizon.test.ts pins all four products so neither
+// side can drift.
+//
+// Spent in WALL clock (analyze/index.ts), which is correct — a release is
+// scheduled in wall clock — while the plan's own window is walked in MARKET
+// time. On a Friday the two diverge by up to the weekend, and the plan row
+// records which way it fell in `plan_horizon.calendar_covers_horizon`.
 export const HORIZON_MS: Record<string, number> = {
-  "15min": 6 * HOUR,
-  "1h": 12 * HOUR,
-  "4h": 48 * HOUR,
-  "1day": 5 * 24 * HOUR,
+  "15min": PLAN_HORIZON_BARS["15min"] * ENTRY_BAR_MS["15min"],
+  "1h": PLAN_HORIZON_BARS["1h"] * ENTRY_BAR_MS["1h"],
+  "4h": PLAN_HORIZON_BARS["4h"] * ENTRY_BAR_MS["4h"],
+  "1day": PLAN_HORIZON_BARS["1day"] * ENTRY_BAR_MS["1day"],
 };
 // A bar is attributed to an event released inside it, allowing for a print
 // landing just before the bar opened

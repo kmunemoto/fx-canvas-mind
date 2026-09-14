@@ -33,6 +33,11 @@ const base = (over: Partial<CanonicalInput> = {}): CanonicalInput => ({
   preview: false,
   searched: false,
   contract: "market_v1",
+  // Which arm asked. In the key because an arm that changes what is SENT
+  // (#86 strips a schema property; #87 adds a prompt section) and is not in
+  // the key would be served the control arm's stored answer — the candidate
+  // would look identical to control because it never ran.
+  variant: "control",
   locale: "ja",
   ...over,
 });
@@ -60,6 +65,8 @@ describe("the key is the prompt, minus the clock", () => {
       { preview: true },
       { searched: true },
       { contract: "entry_chosen_v1" },
+      { variant: "lower_tf" },
+      { variant: "conditional_wait" },
       { locale: "en" },
     ];
     const keys = await Promise.all(variants.map((v) => inputsKey(base(v))));
@@ -69,6 +76,21 @@ describe("the key is the prompt, minus the clock", () => {
     }
     // and they are all different from each other
     expect(new Set([...keys, home]).size).toBe(variants.length + 1);
+  });
+
+  it("never serves one arm the answer another arm drew", async () => {
+    // The failure this stops is quiet and total: a candidate arm whose runs
+    // are answered out of the control arm's rows produces a population that is
+    // identical to control by construction, and the comparison reports "no
+    // difference" about a change that never ran. The user prompt differs on
+    // #87 (a lower-timeframe section) and the SENT SCHEMA differs on #86 —
+    // which canonicalInput cannot see at all, since it hashes system + user.
+    // So the arm has to be in the key on its own name.
+    const keys = await Promise.all(
+      (["control", "lower_tf", "conditional_wait"] as const).map((v) => inputsKey(base({ variant: v }))),
+    );
+    expect(new Set(keys).size).toBe(3);
+    expect(canonicalInput(base({ variant: "conditional_wait" }))).toContain("variant=conditional_wait");
   });
 
   it("replaces the clock line rather than deleting it, so a crafted prompt cannot collide", async () => {
@@ -97,12 +119,19 @@ describe("the key is the prompt, minus the clock", () => {
     // retyped, so a locale added later is covered by this test on the day it
     // is added.
     for (const locale of SUPPORTED_LOCALES) {
+      // The declared horizon (#91) is built from the interval alone — bars and
+      // hours, no instant — so it is the same string on both runs and the key
+      // still matches. Passed as the REAL sentence rather than a sentinel: if
+      // an instant were ever added to it, reuse would silently stop firing for
+      // every pair, and the assertion below is what would say so.
+      const horizon = stringsFor(locale).horizonDeclared({ tfLabel: "1h", bars: 12, hours: 12 });
       const message = (nowUtc: string) =>
         stringsFor(locale).userMessage({
           pair: "USD/JPY",
           nowUtc,
           note: "分析モード: full",
           sections: "### 1h\n現在値: 150.123",
+          horizon,
           schema: "",
         });
       const early = message("2026-09-12T10:00:00.000Z");

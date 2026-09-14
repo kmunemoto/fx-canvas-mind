@@ -43,6 +43,7 @@ import type {
   AnalysisReuse,
   PerformanceStats,
   Position,
+  PlanHorizon,
   PositionReview,
   RuleFit,
 } from "@/lib/types";
@@ -57,7 +58,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v55-2026-09-13T06:15:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v59-2026-09-14T17:30:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -73,7 +74,7 @@ export const HISTORY_COLUMNS = [
   "price_at_signal", "outcome", "outcome_price", "created_at", "closed_at",
   "evaluation", "entry_check", "postmortem", "shadow", "shadow_of",
   "rulebook_version", "plan_contract", "wait_check", "wait_plan", "preview",
-  "position_review",
+  "position_review", "variant", "plan_horizon",
 ].join(",");
 
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
@@ -261,6 +262,7 @@ const Index = () => {
   // The review is the other half of the screen: what the plan the reader
   // HOLDS looks like now, kept apart from the new-entry call above it.
   const [positionReview, setPositionReview] = useState<PositionReview | null>(null);
+  const [planHorizon, setPlanHorizon] = useState<PlanHorizon | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   // Non-null when the server served a stored answer because this input was
   // one it had already been asked. The screen has to say so: an old answer
@@ -488,6 +490,7 @@ const Index = () => {
     setRuleFit(null);
     setEntryCheck(null);
     setPositionReview(null);
+    setPlanHorizon(null);
     setAnalysisId(null);
     setReused(null);
     setLiveRate(null);
@@ -608,6 +611,11 @@ const Index = () => {
           ? (payload.position_review as PositionReview)
           : null,
       );
+      setPlanHorizon(
+        payload?.plan_horizon && typeof payload.plan_horizon === "object"
+          ? (payload.plan_horizon as PlanHorizon)
+          : null,
+      );
       setPreview(
         payload?.preview === true
           ? { opensAt: typeof payload?.market_opens_at === "string" ? payload.market_opens_at : null }
@@ -687,7 +695,14 @@ const Index = () => {
           onSubscribe={() => navigate("/pricing")}
         />
 
-        <OpenPositionsStrip positions={positions} history={history} onClosed={() => void loadHistory()} />
+        <OpenPositionsStrip
+          positions={positions}
+          history={history}
+          onClosed={() => void loadHistory()}
+          defaultPair={settings.currencyPair}
+          defaultInterval={interval}
+          onRegistered={() => void loadHistory()}
+        />
 
         {limitReached && (
           <div className="glass rounded-xl border border-destructive p-6 flex flex-col items-center text-center space-y-3">
@@ -755,6 +770,7 @@ const Index = () => {
                   rulebook={rulebook}
                   confidenceObserved={confidenceObserved}
                   positionReview={positionReview}
+                  planHorizon={planHorizon}
                   analysisId={analysisId}
                   positions={positions}
                   onPositionsChanged={() => void loadHistory()}

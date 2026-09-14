@@ -73,9 +73,16 @@ export interface DecidedRow extends Clusterable {
 // 'skipped', which the outcome filter already excludes — the filter is written
 // anyway, because an invariant that holds by side effect is one nobody will
 // notice breaking.
+// variant=eq.control is not decoration either (#86 / #87). This count is the
+// gate that decides the SHARED rulebook has been measured enough to be
+// replaced. A candidate arm is a different analyst; letting its decided trades
+// buy a promotion of the book that control reads would mean the control arm's
+// rulebook advanced on evidence control never produced. Candidate rows are
+// already barred from producing lessons — counting them as the evidence for
+// promotion while refusing their lessons is the inconsistent half-measure.
 export const decidedRowsPath = (version: number): string =>
   `analyses?select=pair,signal,created_at,closed_at&rulebook_version=eq.${version}` +
-  `&outcome=in.(win,loss,expired)&shadow=is.false&preview=is.false` +
+  `&outcome=in.(win,loss,expired)&shadow=is.false&preview=is.false&variant=eq.control` +
   `&order=created_at.asc&limit=${DECIDED_ROW_LIMIT}`;
 
 export interface PromotionVerdict {

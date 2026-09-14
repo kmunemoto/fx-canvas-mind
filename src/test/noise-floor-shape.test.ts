@@ -10,6 +10,7 @@ import {
   PRE_SWITCH_EFFORT_TECHNICAL,
   PRE_SWITCH_MAX_TOKENS,
   NEWS_DOMAINS,
+  CONTROL_RESPONSE_SCHEMA,
   RESPONSE_SCHEMA,
   ROW_CLASSES,
   SHAPE_REFUSAL_PREFIX,
@@ -20,6 +21,8 @@ import {
   replayHeaders,
   replayShape,
 } from "../../supabase/functions/noise-floor/shape";
+import { SCHEMA_ERAS } from "../../supabase/functions/noise-floor/prompt-surgery";
+import { stringsFor } from "../../supabase/functions/analyze/locale";
 
 // shape.ts holds a deliberate copy of analyze's request constants: importing
 // them would drag the whole analyzer into this bundle, and #65 needs a shape it
@@ -240,7 +243,7 @@ describe("22 — each arm sends the shape production sent for that row", () => {
     expect(body.output_config.effort).toBe("medium");
     expect(body.output_config.format?.type).toBe("json_schema");
     // The same object, not a copy: a copy could be edited on one replicate.
-    expect(body.output_config.format?.schema).toBe(RESPONSE_SCHEMA);
+    expect(body.output_config.format?.schema).toBe(CONTROL_RESPONSE_SCHEMA);
   });
 
   it("fallback_surgery sends the transformed text in the technical shape", () => {
@@ -251,7 +254,7 @@ describe("22 — each arm sends the shape production sent for that row", () => {
     expect(replayShape({ arm: "fallback_surgery", rowClass: "search_derived" })).toBe("structured");
     expect("tools" in body).toBe(false);
     expect(body.output_config.effort).toBe("medium");
-    expect(body.output_config.format?.schema).toBe(RESPONSE_SCHEMA);
+    expect(body.output_config.format?.schema).toBe(CONTROL_RESPONSE_SCHEMA);
     // The transform is prompt-surgery.ts's job and this builder neither
     // performs it nor checks it — it sends exactly the string it was handed.
     expect(body.messages[0].content).toBe(transformed);
@@ -292,12 +295,57 @@ describe("22 — each arm sends the shape production sent for that row", () => {
     const applyShape = objectLiteralAfter(analyzeSrc, "const applyRequestShape = () => {");
     expect(applyShape).toContain("{ effort: EFFORT_SEARCH }");
     expect(applyShape).toContain(
-      '{ format: { type: "json_schema", schema: RESPONSE_SCHEMA }, effort: EFFORT_TECHNICAL }',
+      '{ format: { type: "json_schema", schema: sentSchema }, effort: EFFORT_TECHNICAL }',
+    );
+    // `sentSchema` is RESPONSE_SCHEMA for the #86 candidate arm and
+    // RESPONSE_SCHEMA minus `conditional_wait` for every other. Pinned here
+    // because this file's whole job is that the replay harness sends the shape
+    // production sends: if the strip ever stopped being a strip — a schema
+    // built some other way, or the property moved off the end — the control
+    // arm would leave the v48 era and the stored corpus would stop matching.
+    // src/test/variants.test.ts holds the digest that proves it still does.
+    expect(analyzeSrc).toContain(
+      "    const sentSchema = usesConditionalWait(variant)\n      ? RESPONSE_SCHEMA\n" +
+        "      : { ...RESPONSE_SCHEMA, properties: conditionalFreeProperties };",
     );
     // And that `format` really is the search-incompatible half — analyze
     // deletes tools on the technical branch and never sets format on the
     // searching one.
     expect(applyShape).toContain("delete baseRequest.tools;");
+  });
+});
+
+describe("22a — the replayed schema is the one the corpus was drawn under", () => {
+  // The weak version of this is `toBe(SOME_SCHEMA)`, which only says the
+  // harness and the test agree. What the corpus needs is that the BYTES on the
+  // wire are the bytes production sent, and noise_cells cannot check it for
+  // us: it records a sha256 of the system and user strings, never of the
+  // schema. So an extra property here is 1,688 bytes of prompt nobody can see
+  // afterwards — which is what happened when #86 added `conditional_wait`.
+  const sha = async (text: string) => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+
+  it("carries no conditional_wait — the corpus was never asked that question", () => {
+    expect(RESPONSE_SCHEMA.properties).toHaveProperty("conditional_wait");
+    expect(CONTROL_RESPONSE_SCHEMA.properties).not.toHaveProperty("conditional_wait");
+    expect(CONTROL_RESPONSE_SCHEMA.required).toEqual(RESPONSE_SCHEMA.required);
+    expect(Object.isFrozen(CONTROL_RESPONSE_SCHEMA)).toBe(true);
+  });
+
+  it("reproduces the v48 era byte for byte", async () => {
+    const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(CONTROL_RESPONSE_SCHEMA));
+    const v48 = SCHEMA_ERAS.find((e) => e.era === "v48")!;
+    expect(suffix.length).toBe(v48.suffixLength);
+    expect(await sha(suffix)).toBe(v48.suffixSha256);
+  });
+
+  it("and the candidate schema does NOT — which is why the harness must not send it", async () => {
+    const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(RESPONSE_SCHEMA));
+    const v48 = SCHEMA_ERAS.find((e) => e.era === "v48")!;
+    expect(suffix.length).not.toBe(v48.suffixLength);
+    expect(await sha(suffix)).not.toBe(v48.suffixSha256);
   });
 });
 

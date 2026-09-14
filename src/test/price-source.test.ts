@@ -198,7 +198,8 @@ describe("the overlay is wired into analyze so nothing can read the old series",
   it("runs the overlay concurrently with Twelve Data and can never reject", () => {
     // The Twelve Data fetch stays the fallback, so its rejection is still the
     // only thing that reaches market_data_failed.
-    expect(src).toContain("const [td, gmo] = await Promise.all([");
+    // #87 added a third arm (the lower rung, also GMO, also non-rejecting).
+    expect(src).toContain("const [td, gmo, lower] = await Promise.all([");
     expect(src).toMatch(/\}\)\.catch\(\(\) => null\)/);
   });
 

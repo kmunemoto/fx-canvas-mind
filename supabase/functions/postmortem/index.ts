@@ -51,7 +51,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v25-2026-09-12T11:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v29-2026-09-14T12:40:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -500,6 +500,31 @@ Deno.serve(async (req: Request) => {
     const rowFilter = options.ids.length > 0
       ? `id=in.(${options.ids.map(encodeURIComponent).join(",")})`
       : retryFilter;
+    // THE LEARNING LOOP IS CONTROL-ONLY, AND THIS IS THE ONE DIRECTION THAT
+    // CANNOT BE UNDONE LATER (#86 / #87).
+    //
+    // Applied to ALL THREE reads of `analyses` in this function — the two
+    // lesson intakes and the record pool that feeds the rulebook editor. The
+    // first attempt at this filtered two of the three and described the loop
+    // as closed, which was worse than filtering none: it read as done.
+    //
+    // Elsewhere pooling is a reporting problem — the rows keep their `variant`
+    // and a query can always split them again. Not here. A lesson drawn from a candidate row goes into the SHARED rulebook,
+    // and analyze shows that rulebook to control runs — so one `lower_tf` row
+    // teaches every later control run from a timeframe control never saw, and
+    // nothing afterwards can separate the two populations again.
+    //
+    // Concretely, without this: postmortem selects `context`, hands
+    // `withoutAnalystClaim(context)` to the plan summary, and the prompt is a
+    // JSON.stringify of that summary — so `context.lower`, the 15-minute
+    // reading that only exists on the #87 arm, is read by the model that
+    // writes the lesson.
+    //
+    // A named-id run is deliberately NOT exempt. "Diagnose this row" is a
+    // request to understand it, and it still ends in a lesson in the shared
+    // book; the exemption would be a hole exactly where someone is looking
+    // closely at an interesting candidate row.
+    const controlOnly = "variant=eq.control";
     // Read so that a query that FAILED stays distinguishable from a query that
     // came back empty. For the cron the two are the same thing — an empty page
     // means nothing to do either way — but for a targeted run the difference is
@@ -510,7 +535,7 @@ Deno.serve(async (req: Request) => {
     // for the rulebook and for the repair pass; the candidate queries were the
     // one place that did not.
     const candidatesOrNull = await readRowsOrNull(
-      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
+      `analyses?outcome=in.(win,loss,untriggered,expired,ambiguous)&signal=in.(BUY,SELL)&${controlOnly}&${rowFilter}&select=${select}&order=closed_at.asc.nullsfirst&limit=40`,
     );
     const candidates = candidatesOrNull ?? [];
 
@@ -586,7 +611,7 @@ Deno.serve(async (req: Request) => {
 
     const waitCandidatesOrNull = await readRowsOrNull(
       `analyses?outcome=eq.skipped&signal=eq.WAIT&wait_plan=not.is.null&shadow=is.false` +
-        `&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
+        `&${controlOnly}&wait_check->>verdict=in.(missed,correct)&${rowFilter}` +
         `&select=${select},wait_plan,wait_check&order=created_at.asc&limit=40`,
     );
     const waitCandidates = waitCandidatesOrNull ?? [];
@@ -791,8 +816,13 @@ Deno.serve(async (req: Request) => {
       // trade against two gradeable WAITs, so the misleading branch was the
       // likely one. The ids reaching here are uuid-shaped (targeted.ts), so
       // this probe cannot fail the way the candidate queries could.
+      // `variant` is selected so the report can tell the two reasons apart. A
+      // settled candidate-arm trade IS a settled trade — it was left out by
+      // the arm filter, not by being ungradeable — and reporting it as
+      // "nothing on it can be graded" would be a false statement about the row
+      // the operator is looking straight at.
       const presentRows = await readRowsOrNull(
-        `analyses?select=id&id=in.(${options.ids.map(encodeURIComponent).join(",")})&limit=${MAX_PLANS_ADMIN}`,
+        `analyses?select=id,variant&id=in.(${options.ids.map(encodeURIComponent).join(",")})&limit=${MAX_PLANS_ADMIN}`,
       );
       errors.push(...unaccountedIds(
         options.ids,
@@ -805,6 +835,17 @@ Deno.serve(async (req: Request) => {
           present: presentRows === null
             ? null
             : new Set(presentRows.map((r) => strOrNull(r.id)).filter((v): v is string => v !== null)),
+          // Which of those rows this function is not allowed to diagnose
+          // because of the arm it ran under, so the reason given is the real
+          // one.
+          candidateArm: presentRows === null
+            ? null
+            : new Set(
+              presentRows
+                .filter((r) => strOrNull(r.variant) !== null && strOrNull(r.variant) !== "control")
+                .map((r) => strOrNull(r.id))
+                .filter((v): v is string => v !== null),
+            ),
           unavailable: candidatesOrNull === null || waitCandidatesOrNull === null,
         },
         options.limit,
@@ -1427,8 +1468,21 @@ Deno.serve(async (req: Request) => {
         // reason: without the first the two entry eras pool into one win
         // rate, and without the second the only call that can never be wrong
         // is also the only call nobody counts.
+        // THE THIRD INTAKE, and the one the first pass at this missed.
+        //
+        // `controlOnly` was put on the two LESSON intakes above and this one
+        // was left open, on the reasoning that it only builds a summary. It
+        // does not "only" anything: this pool becomes the record that the
+        // rulebook-consolidation model is shown, and that model writes the
+        // SHARED rulebook that analyze puts in front of control runs. So a
+        // candidate arm's wins and losses were still shaping the book every
+        // control run reads — through a different door, in the same direction
+        // the comment at the top of this function calls irreversible.
+        //
+        // Two intakes filtered and one not is worse than none filtered: it
+        // reads as closed.
         const recordPool = await readRows(
-          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,proposed_signal:entry_check->>proposed_signal,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
+          `analyses?select=id,user_id,pair,signal,created_at,closed_at,outcome,shadow,preview,rejection:entry_check->>rejection,proposed_signal:entry_check->>proposed_signal,filled_at:evaluation->>filled_at,fill_price:evaluation->>fill_price,entry_point,stop_loss,take_profit_1,outcome_price,rulebook_version,plan_contract,wait_verdict:wait_check->>verdict,wait_scorer:wait_check->>scorer&${controlOnly}&order=created_at.desc&limit=${RECENT_ROWS * FAIR_FETCH_MULTIPLE}`,
         );
         const recordRows = fairShare(recordPool, (r) => strOrNull(r.user_id) ?? "", RECENT_ROWS);
         recordContributors = new Set(recordPool.map((r) => strOrNull(r.user_id) ?? "")).size;

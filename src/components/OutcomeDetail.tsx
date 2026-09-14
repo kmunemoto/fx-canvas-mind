@@ -5,6 +5,7 @@ import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib
 import PriceChart, { type ChartMarker } from "./PriceChart";
 import { EntryRegistration } from "./EntryRegistration";
 import { registrationFor } from "@/lib/positions";
+import { horizonLines } from "@/lib/planHorizon";
 
 interface Props {
   record: AnalysisRecord;
@@ -62,6 +63,10 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
     return typeof r === "number" && Number.isFinite(r) ? `${base} (${r.toFixed(1)}R)` : base;
   };
   const when = (iso: string | null | undefined) => (iso ? formatJst(iso, t.intlLocale) : "—");
+  // The period this plan was aiming at, as it was declared on the day (#91).
+  // Read off the row, never recomputed: a row written under an earlier table
+  // must keep rendering the period it was actually issued with.
+  const horizon = horizonLines(record.plan_horizon, t, t.intlLocale);
 
   const dir = t.direction[record.signal];
   const dirClass = record.signal === "BUY" ? "text-success" : record.signal === "SELL" ? "text-destructive" : "text-warning";
@@ -275,6 +280,46 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
               {check?.repaired && <p className="text-muted-foreground mt-1">{g.repaired}</p>}
             </>
           )}
+          {/* What period this was aiming at. The "not a deadline" caveat that
+              the live card carries is left off here on purpose: this row has
+              already been scored, so there is nothing left to reassure the
+              reader about. Absent on every row written before the column
+              existed, which is said rather than left blank — the 117 of them
+              were deliberately not backfilled, because a period computed today
+              is not the period that plan was aiming at.
+
+              Inside `tracked` — this shipped OUTSIDE it, and a WAIT row then
+              announced 「狙う期間」 for a trade that was never proposed. The
+              column IS stamped on WAIT rows (analyze writes it on every row),
+              so the value is real; what is false is calling it the period a
+              trade aimed at when there was no trade. Nothing scores a WAIT
+              against it either — WAIT scoring spends wait_window_ms — so it
+              would be a number that drives nothing. The "not recorded" line
+              is inside the guard for the same reason: on a WAIT it would
+              imply a period that ought to have been there — and all 48 WAIT
+              rows in production have it null, so that complaint would appear
+              on every one of them the day this ships.
+
+              The predicate is `signal !== "WAIT"`, NOT the `tracked` flag
+              beside it: `tracked` also excludes `outcome === "skipped"`, which
+              would hide the period on a BUY/SELL row that was skipped but did
+              declare one. Measured today those are the same set (production:
+              skipped occurs only with WAIT, 48/48), so this changes nothing
+              now — it says what is actually meant, which is the half that
+              survives a later row shape. It mirrors `hasPlan` in
+              AnalysisResultView, so the two screens follow one rule. */}
+          {record.signal !== "WAIT" && (horizon
+            ? (
+              <div data-testid="detail-horizon">
+                <Row label={t.result.horizon.label} value={horizon.bars} mono={false} />
+                {horizon.endsAt && <Row label="" value={horizon.endsAt} className="text-muted-foreground" />}
+              </div>
+            )
+            : (
+              <p className="text-muted-foreground mt-1" data-testid="detail-horizon-absent">
+                {t.result.horizon.absent}
+              </p>
+            ))}
         </section>
 
         <section>
@@ -463,7 +508,16 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
               </p>
             </>
           ) : (
-            <p className="text-muted-foreground">{post?.status === "failed" ? pm.failed : pm.pending}</p>
+            <p className="text-muted-foreground">
+              {record.variant && record.variant !== "control"
+                // Never "it will run in a few hours" for a row nothing will
+                // ever diagnose: postmortem is control-only on purpose, so
+                // that sentence would be a promise the system cannot keep.
+                ? pm.candidateArm
+                : post?.status === "failed"
+                ? pm.failed
+                : pm.pending}
+            </p>
           )}
         </section>
       )}

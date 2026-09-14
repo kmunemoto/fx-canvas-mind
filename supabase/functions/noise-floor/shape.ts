@@ -234,6 +234,54 @@ export const RESPONSE_SCHEMA = {
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
     },
+    conditional_wait: {
+      type: "object",
+      // #86. OPTIONAL, and it stays out of `required` on purpose: the replay
+      // harnesses read RESPONSE_SCHEMA.required as their missing-key check
+      // (version-compare, noise-floor), and the frozen corpus they replay was
+      // never asked this question — a new REQUIRED key would fail every stored
+      // row.
+      //
+      // Optional is not free, though, and an earlier version of this comment
+      // said it was ("an extra key they never look at costs them nothing").
+      // That was wrong: noise-floor/shape.ts puts the whole object on the wire
+      // for the structured shape, so an extra property is 1,688 bytes of
+      // prompt the corpus never saw. The harness sends
+      // CONTROL_RESPONSE_SCHEMA for that reason; `required` is not the only
+      // thing they read.
+      //
+      // WHAT THIS IS NOT. It is never an order. #37 measured what happens when
+      // the analyst picks the price it fills at: 5 of 8 BUY/SELL went unfilled,
+      // and all 5 carried the analyst's own Trend Day / Breakout tag pointing
+      // the same way as the signal. analyze/entry.ts's should_be_market exists
+      // to refuse exactly that shape. So this is a RECORDED PREDICTION that
+      // gets scored — did the level come, inside the window, and was taking it
+      // worth anything — and the published plan stays WAIT with no levels.
+      properties: {
+        trigger_price: { type: "number", description: "この価格に触れたら見方が変わる、という水準。現在値の反対側に置かないこと。" },
+        trigger_side: {
+          type: "string",
+          enum: ["above", "below"],
+          description: "現在値より上に触れたら（above）か、下に触れたら（below）か。trigger_price と向きが矛盾する回はサーバーが捨てる。",
+        },
+        then_signal: {
+          type: "string",
+          enum: ["BUY", "SELL"],
+          description: "発動したときに取るべき方向。WAIT は入れない（それは条件付きではなく、ただの見送り）。",
+        },
+        expires_bars: {
+          type: "integer",
+          description: "エントリー足で何本以内に発動しなければ、この見立ては無効か。3以上24以下。範囲外はサーバーが詰める（短すぎる窓は発動後に方向を判定する余地が無く、外れようが無い主張になるため）。",
+        },
+        thesis_if_triggered: { type: "string", description: "発動したときに成り立っている想定を一行で（日本語、40字以内）。" },
+      },
+      required: ["trigger_price", "trigger_side", "then_signal", "expires_bars", "thesis_if_triggered"],
+      additionalProperties: false,
+      description:
+        "signal が WAIT のときだけ、任意で書く。「今は入らないが、この水準に触れたらこちらに入る」という条件付きの見立て。"
+        + "自信が無い、または条件を特定できない回は丸ごと省略すること（省略が正しい答えであり、埋めることではない）。"
+        + "ここに書いた水準で注文は出ない。後から機械的に採点され、外れた条件は記録に残る。",
+    },
   },
   required: [
     "signal", "thesis", "confidence", "technical_score", "fundamental_score",
@@ -262,6 +310,28 @@ const deepFreeze = <T>(value: T): T => {
 };
 deepFreeze(RESPONSE_SCHEMA);
 deepFreeze(NEWS_DOMAINS);
+
+// WHAT THE CORPUS WAS ACTUALLY SENT, WHICH IS NOT RESPONSE_SCHEMA ANY MORE.
+//
+// From analyze v56 the sent schema depends on the arm: `conditional_wait` is
+// in the payload only for `variant = "conditional_wait"` and is stripped for
+// every other arm (analyze/index.ts, `sentSchema`). Every row in the frozen
+// corpus was drawn BEFORE that property existed, under the stripped shape.
+//
+// So a replay that puts RESPONSE_SCHEMA on the wire sends 48 cells a schema
+// production never sent them — 926 chars / 1,688 bytes of extra Japanese prose
+// telling the model it may name a trigger level on a WAIT, into the one
+// measurement whose subject is WAIT-rate stability. And it would be invisible:
+// `noise_cells` records a sha256 of the system and user strings, never of the
+// schema — the exact blind spot the comment on `buildReplayRequest` warns
+// about, reached by adding a property rather than by a stray write.
+//
+// Derived by stripping, not written out again, so it cannot drift from the
+// pinned constant above.
+const { conditional_wait: _conditionalWaitProperty, ...CONTROL_PROPERTIES } =
+  RESPONSE_SCHEMA.properties;
+export const CONTROL_RESPONSE_SCHEMA = { ...RESPONSE_SCHEMA, properties: CONTROL_PROPERTIES };
+deepFreeze(CONTROL_RESPONSE_SCHEMA);
 
 // ---------------------------------------------------------------------------
 // Arms, row classes and the shape each pair produces
@@ -457,7 +527,10 @@ const outputConfigFor = (shape: Shape, recordedEffort: string | null): OutputCon
   // `ReplayInput.effort`.
   if (shape === "structured") {
     return {
-      format: { type: "json_schema", schema: RESPONSE_SCHEMA },
+      // CONTROL_RESPONSE_SCHEMA, not RESPONSE_SCHEMA: the corpus was drawn
+      // under the stripped shape and a replay has to send what production
+      // sent. See the constant's own comment.
+      format: { type: "json_schema", schema: CONTROL_RESPONSE_SCHEMA },
       effort: recordedEffort ?? PRE_SWITCH_EFFORT_TECHNICAL,
     };
   }

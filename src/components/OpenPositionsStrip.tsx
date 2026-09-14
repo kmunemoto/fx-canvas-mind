@@ -3,6 +3,7 @@ import { useLocale } from "@/lib/i18n";
 import { formatJst, priceDecimals } from "@/lib/candleTime";
 import { displayVerdict, latestVerdictFor, reviewFailReason } from "@/lib/positions";
 import { ClosePositionForm } from "./EntryRegistration";
+import { HeldPositionRegistration } from "./HeldPositionRegistration";
 import { Briefcase } from "lucide-react";
 
 // Every position the reader has registered and not closed, with the newest
@@ -15,6 +16,11 @@ interface Props {
   positions: Position[];
   history: AnalysisRecord[];
   onClosed: (position: Position) => void;
+  // Seeds for "register a position you already hold" (#92). Absent in the
+  // callers that only list; the form is then not offered.
+  defaultPair?: string;
+  defaultInterval?: string;
+  onRegistered?: (position: Position) => void;
 }
 
 const VERDICT_CLASS = {
@@ -24,11 +30,19 @@ const VERDICT_CLASS = {
   undecidable: "text-muted-foreground",
 } as const;
 
-const OpenPositionsStrip = ({ positions, history, onClosed }: Props) => {
+const OpenPositionsStrip = ({
+  positions, history, onClosed, defaultPair, defaultInterval, onRegistered,
+}: Props) => {
   const { t } = useLocale();
   const p = t.position;
   const open = positions.filter((x) => x.status === "open");
-  if (open.length === 0) return null;
+  const canRegister = defaultPair !== undefined && defaultInterval !== undefined && onRegistered !== undefined;
+  // The strip used to disappear entirely with nothing open. That was right
+  // while the only way in was a plan on screen — but a reader who already
+  // holds a position and has run no analysis would then have nowhere to
+  // register it from (#92). With the form available, an empty strip still has
+  // something to offer, so it stays.
+  if (open.length === 0 && !canRegister) return null;
 
   return (
     <div className="glass rounded-xl border border-border p-3 space-y-2" data-testid="open-positions">
@@ -109,6 +123,15 @@ const OpenPositionsStrip = ({ positions, history, onClosed }: Props) => {
           );
         })}
       </ul>
+      {canRegister && (
+        <div className="pt-1 border-t border-border/50">
+          <HeldPositionRegistration
+            defaultPair={defaultPair}
+            defaultInterval={defaultInterval}
+            onRegistered={onRegistered}
+          />
+        </div>
+      )}
     </div>
   );
 };

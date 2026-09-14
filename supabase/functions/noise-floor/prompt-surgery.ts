@@ -268,10 +268,10 @@ export const detectLocale = (user: string): SurgeryLocale | null => {
 // B5 — the schema eras
 // ---------------------------------------------------------------------------
 
-export type SchemaEra = "v44" | "v48" | "none" | "unknown";
+export type SchemaEra = "v44" | "v48" | "v56cond" | "none" | "unknown";
 
 export interface SchemaEraEntry {
-  era: "v44" | "v48";
+  era: "v44" | "v48" | "v56cond";
   // UTF-16 code units, which is what String.length counts. Every character in
   // both suffixes is in the BMP, so this equals the character count Postgres
   // `length()` reports; that agreement was checked rather than assumed
@@ -319,6 +319,26 @@ export const SCHEMA_ERAS: readonly SchemaEraEntry[] = [
     suffixLength: 2811,
     suffixMd5: "5cfa2b6d1d26cf322bc5b3142929a7bc",
     suffixSha256: "9d28925fc24c5c0946e23bcf525ec36b8359002ee88704d3a1d2bf7a9d70ae05",
+  },
+  // #86's candidate arm, and ONLY that arm. From analyze v56 the sent schema
+  // depends on the variant: `conditional_wait` is in the payload for
+  // `variant = conditional_wait` and stripped for every other arm. Measured
+  // 2026-09-13 by rebuilding both instructions from the working tree — the
+  // stripped one is 2811 chars / md5 5cfa2b6d…, BYTE-IDENTICAL to the v48
+  // entry above, which is the whole reason the strip is written as a strip:
+  // every control row keeps landing in the era the 45 stored rows are keyed
+  // on, and only the candidate arm opens a new one.
+  //
+  // Catalogued rather than left to fall through to "unknown" because the two
+  // would then be the same label, and they are not the same statement: this
+  // is a row that was asked a different question, not a row from a generation
+  // nobody has written down. Pooling those in a replay is the exact mistake
+  // the era column exists to stop.
+  {
+    era: "v56cond",
+    suffixLength: 3737,
+    suffixMd5: "d286a4e2ff197e539598f58c6cea1ee8",
+    suffixSha256: "32d35b87c34835f07d869773ca20f6f140958bce05c3d798d64f2d21d42248be",
   },
 ];
 

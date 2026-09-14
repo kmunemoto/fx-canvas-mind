@@ -104,6 +104,11 @@ export interface CanonicalInput {
   // shapes would share a key.
   searched: boolean;
   contract: string;
+  // Which arm of the analyst ran (_shared/variants.ts). In the key because the
+  // arms are different questions: serving a control answer to a candidate run
+  // would silently un-run the experiment, and the row would say an arm was
+  // tried that never executed.
+  variant: string;
   locale: string;
 }
 
@@ -118,6 +123,7 @@ export const canonicalInput = (input: CanonicalInput): string =>
     `preview=${input.preview ? "1" : "0"}`,
     `searched=${input.searched ? "1" : "0"}`,
     `contract=${input.contract}`,
+    `variant=${input.variant}`,
     `locale=${input.locale}`,
     "--- system ---",
     input.system,

@@ -44,9 +44,14 @@ export const GMO_SYMBOLS: Record<string, string> = {
 // one JST day per request; 4hour and coarser take a year.
 //
 // 5min and 1min are the refinement rungs (evaluate.ts finerRung), never a
-// coarse evaluation interval: EVAL_INTERVAL maps every plan to 15min or 1h,
-// and analyze asks this feed only for the timeframes in its
-// GMO_ANALYSIS_TIMEFRAMES (1h today), so the rungs are never requested there.
+// coarse evaluation interval: EVAL_INTERVAL maps every plan to 15min or 1h.
+//
+// 5min IS requested by analyze, though, and this comment used to say it was
+// not. The #87 arm asks this feed for one rung below the entry frame
+// (analyze/price-source.ts LOWER_TIMEFRAME), which is 5min for a 15min plan —
+// a path that did not exist when the sentence was written and was not revised
+// when it did. GMO_ANALYSIS_TIMEFRAMES governs which rung PRICES a plan; it
+// does not govern what analyze may read.
 // They are here so the sub-bars that split an ambiguous bar can come from the
 // same bid/ask feed as the bar itself (fetchQuoteWindow). Verified on the
 // live host 2026-09-05: `klines?symbol=USD_JPY&priceType=BID&interval=5min&

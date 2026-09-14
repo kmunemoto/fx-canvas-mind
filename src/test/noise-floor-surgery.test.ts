@@ -90,16 +90,27 @@ interface RowParts {
   note?: string;
   payload?: string | null;
   sections?: string;
+  horizon?: string;
 }
 
 // A stored row as `buildUserMessage` would have produced it.
-const userFor = ({ locale = "ja", note, payload = PAYLOAD_OLD, sections = SECTIONS }: RowParts = {}): string => {
+//
+// `horizon` defaults to EMPTY, which is not an omission: every one of the 48
+// stored rows was written before #91 existed, so an empty horizon is the byte
+// sequence the corpus actually holds. The rows production writes from now on
+// carry the line, and those are covered by their own case below rather than by
+// changing this default — a default that stopped reproducing the corpus would
+// make every other test here a test of a shape no stored row has.
+const userFor = (
+  { locale = "ja", note, payload = PAYLOAD_OLD, sections = SECTIONS, horizon = "" }: RowParts = {},
+): string => {
   const L = stringsFor(locale as AnalysisLocale);
   return L.userMessage({
     pair: "USD/JPY",
     nowUtc: "2026-09-09T12:00:00.000Z",
     note: note ?? L.searchNote,
     sections,
+    horizon,
     schema: payload === null ? "" : L.schemaInstruction(payload),
   });
 };
@@ -163,9 +174,22 @@ describe("locale is decided once, from the first line, and never defaulted", () 
       // are recovered by building with a sentinel payload and a sentinel body.
       expect(L.schemaInstruction("PAYLOAD")).toBe(`${LOCALE[locale].schemaInstruction}PAYLOAD`);
       expect(LOCALE[locale].schemaInstruction.startsWith(LOCALE[locale].schemaMarker)).toBe(true);
-      const built = L.userMessage({ pair: "P", nowUtc: "N", note: "NOTE", sections: "SEC", schema: "" });
+      const built = L.userMessage({
+        pair: "P", nowUtc: "N", note: "NOTE", sections: "SEC", horizon: "", schema: "",
+      });
       expect(built.startsWith(`${LOCALE[locale].pairPrefix}P\n${LOCALE[locale].nowPrefix}N\nNOTE\n\nSEC\n\n`)).toBe(true);
       expect(built.endsWith(LOCALE[locale].tail)).toBe(true);
+      // The declared-horizon line (#91) sits between the sections and the tail.
+      // With it EMPTY the bytes are the ones every stored prompt was written
+      // with — that is what keeps the frozen corpus readable. With it PRESENT
+      // the surgery's two anchors must still hold, because from now on that is
+      // the shape production writes.
+      const withHorizon = L.userMessage({
+        pair: "P", nowUtc: "N", note: "NOTE", sections: "SEC", horizon: "HORIZON\n", schema: "",
+      });
+      expect(withHorizon.startsWith(`${LOCALE[locale].pairPrefix}P\n${LOCALE[locale].nowPrefix}N\nNOTE\n\nSEC\n`)).toBe(true);
+      expect(withHorizon.endsWith(LOCALE[locale].tail)).toBe(true);
+      expect(withHorizon).toContain("HORIZON");
       // And the rules heading and fit note come from rules.ts's own renderer,
       // where neither is exported either.
       const block = rulesBlockFor(locale);
@@ -185,6 +209,28 @@ describe("A2-A7 accept the shape production writes, and each has its own refusal
     expect(row.rules.ranked).toBe(true);
     expect(row.rules.ruleLines).toHaveLength(3);
     expect(row.rules.heldBackNote).toBeNull();
+  });
+
+  // The previous test proves the two anchors survive a horizon line in a
+  // message built by hand. This proves the reader does: a row carrying the
+  // REAL sentence production now writes has to come out the far side of
+  // classify AND transform, because from today every new row in the corpus
+  // has one. If it refused, the noise floor would quietly stop measuring the
+  // current version and keep reporting the number it got from the old rows.
+  it("accepts a row carrying the declared-horizon line production now writes", () => {
+    for (const locale of SURGERY_LOCALES) {
+      const L = stringsFor(locale as AnalysisLocale);
+      const horizon = L.horizonDeclared({ tfLabel: "1h", bars: 12, hours: 12 });
+      const user = userFor({ locale, horizon });
+      const row = accepted(classifyRow({ user, system: systemFor(locale), mode: "full" }));
+      expect(row.locale, locale).toBe(locale);
+      expect(row.promptClass, locale).toBe("search_derived");
+      const out = fallbackTransform(row);
+      expect(isRefusal(out), locale).toBe(false);
+      // and the sentence is still there afterwards: the strip removes the
+      // schema and swaps the note, it does not touch the body
+      expect(!isRefusal(out) && out.user, locale).toContain(horizon.trim());
+    }
   });
 
   it("accepts the technical row, which carries no schema in its text", () => {

@@ -15,6 +15,7 @@
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import {
   parseCandleTime,
+  toIso,
   ENTRY_WINDOW_MS,
   EVAL_INTERVAL,
   EVAL_OUTPUTSIZE,
@@ -27,16 +28,35 @@ import {
   type FineFetcher,
   type OpenRow,
 } from "./evaluate.ts";
-import { fetchQuotes, fetchQuoteWindow, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
-import { judgeWait, type WaitBar, type WaitPlan } from "./waits.ts";
+import { fetchQuotes, fetchQuoteWindow, isMarketClosed, supportsQuotes, type Fetcher, type QuoteCandle } from "./quotes.ts";
+import { judgeWait, marketHorizonEnd, type WaitBar, type WaitPlan } from "./waits.ts";
+import {
+  conditionalWindowMs,
+  scoreConditionalWait,
+  type ConditionalWait,
+  type ScorableBar,
+} from "../_shared/conditional-wait.ts";
 
-const TRACKER_VERSION = "track-outcomes-v14-2026-09-05T18:10:00Z";
+const TRACKER_VERSION = "track-outcomes-v16-2026-09-13T22:40:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;
 // WAIT rows judged per sweep. Lower than MAX_ROWS: an open position needs
 // looking at now, a call that declined to trade can wait a tick.
 const MAX_WAIT_ROWS = 20;
+// Conditional-WAIT claims scored per sweep (#86). Same reasoning as the line
+// above, one rung lower again: the claim is already settled by the time it is
+// scoreable — its window has closed — so nothing about it is time-critical.
+const MAX_CONDITIONAL_ROWS = 20;
+// One ENTRY-timeframe bar. The claim's expiry is written in these, and the
+// series it is scored on is finer — see scoreConditionalWait, which is why the
+// window is computed as a duration rather than as a slice.
+const ENTRY_BAR_MS: Record<string, number> = {
+  "15min": 15 * 60 * 1000,
+  "1h": 60 * 60 * 1000,
+  "4h": 4 * 60 * 60 * 1000,
+  "1day": 24 * 60 * 60 * 1000,
+};
 // Market-data requests per run (series fetches + refinements together). The
 // shared key allows 8 per minute; the rest is left for analyses running at
 // the same moment. Anything beyond the budget waits for the next tick.
@@ -251,6 +271,12 @@ Deno.serve(async (req: Request) => {
     }
 
     let requests = 0;
+    // Series already pulled this run, keyed by symbol|interval. The WAIT pass
+    // and the conditional pass below read overlapping sets of rows off the
+    // same pairs, and MAX_REQUESTS is 5 for the whole run — without this the
+    // second pass would spend the budget re-fetching bars the first pass is
+    // still holding, and then report its own rows as deferred.
+    const seriesCache = new Map<string, Candle[]>();
     const fetchSeries = async (params: Record<string, string>): Promise<Candle[] | null> => {
       if (requests >= MAX_REQUESTS) return null;
       requests++;
@@ -267,6 +293,31 @@ Deno.serve(async (req: Request) => {
         console.error("market data fetch failed:", err instanceof Error ? err.message : String(err));
         return null;
       }
+    };
+
+    // The same series, fetched at most once per run — used by all three
+    // whole-series passes (trades, WAITs, conditional claims). The trade
+    // path's REFINEMENTS are not cached here: those ask for narrower windows
+    // at a finer rung, so they are a different request, not this one again.
+    const cachedSeries = async (symbol: string, interval: string): Promise<Candle[] | null> => {
+      const key = `${symbol}|${interval}`;
+      const hit = seriesCache.get(key);
+      if (hit !== undefined) return hit;
+      const fetched = await fetchSeries({
+        symbol,
+        interval,
+        outputsize: String(EVAL_OUTPUTSIZE[interval] ?? 1500),
+      });
+      // A null is NOT cached: it means the budget ran out or the request
+      // failed, and remembering that as "this pair has no data" would turn one
+      // bad request into a whole run's worth of silent skips.
+      //
+      // An EMPTY array is cached, and the difference is the point: null is "we
+      // did not find out", an empty series is a provider that answered. Not
+      // caching the answer would make every later pass re-ask — and re-charge
+      // the budget for — a question already answered this run.
+      if (fetched) seriesCache.set(key, fetched);
+      return fetched;
     };
 
     let checked = 0;
@@ -417,11 +468,13 @@ Deno.serve(async (req: Request) => {
       groupCount++;
 
       const [pair, evalInterval] = key.split("|");
-      const candles = await fetchSeries({
-        symbol: pair,
-        interval: evalInterval,
-        outputsize: String(EVAL_OUTPUTSIZE[evalInterval] ?? 1500),
-      });
+      // Through the cache, like the two passes below. This request is
+      // byte-identical to theirs — same symbol, same interval, same outputsize
+      // — and it runs FIRST, so leaving it outside the cache meant the pass
+      // that actually holds the bars was the one pass not sharing them: an open
+      // USD/JPY 1h trade plus a pending USD/JPY WAIT spent two of the five
+      // requests on the same series.
+      const candles = await cachedSeries(pair, evalInterval);
 
       let refusal: string | null = null;
       if (!candles || candles.length === 0) {
@@ -519,11 +572,7 @@ Deno.serve(async (req: Request) => {
           break;
         }
         const [pair, evalInterval] = key.split("|");
-        const candles = await fetchSeries({
-          symbol: pair,
-          interval: evalInterval,
-          outputsize: String(EVAL_OUTPUTSIZE[evalInterval] ?? 1500),
-        });
+        const candles = await cachedSeries(pair, evalInterval);
         if (!candles || candles.length === 0 || hasFutureCandles(candles, nowMs)) {
           errors.push(`${key}: waits no_data`);
           continue;
@@ -570,6 +619,130 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- and the conditional claims beside them (#86) --------------------
+    //
+    // A conditional WAIT said: not here, but if price touches X from this side
+    // within N bars, that is a BUY. Scored here, and scored SEPARATELY from
+    // the WAIT itself for the reason the column comment states: the existing
+    // WAIT scorer answers `correct` when the window runs out and nothing was
+    // taken, so a claim whose level never came would be graded as a correct
+    // call, and naming an unreachable level would be the cheapest way to look
+    // right. `not_triggered` is its own verdict here and it is not a pass.
+    //
+    // ONLY ONCE THE WINDOW HAS CLOSED. A claim scored early would read
+    // `not_triggered` for a level that still had hours to be touched, and the
+    // verdict is terminal — the partial index only selects rows with no
+    // outcome, so nothing would ever come back to correct it. The deadline is
+    // computed from the row, in the row's own entry timeframe, and a row whose
+    // window is still open is simply left for a later sweep.
+    let conditionalsChecked = 0;
+    // Split rather than one "triggered" count. Folding `triggered_unresolved`
+    // in with right and wrong would make the only number this function emits
+    // about the arm a pure function of distance, expiry and drift — the
+    // trigger RATE — reported under a name that reads like accuracy.
+    let conditionalsRight = 0;
+    let conditionalsWrong = 0;
+    let conditionalsNotTriggered = 0;
+    if (scope.kind !== "sweep") {
+      // nothing to say: the conditional pass is sweep-only
+    } else if (requests >= MAX_REQUESTS) {
+      // Said out loud. `conditionals_checked: 0` otherwise means either
+      // "nothing was due" or "never looked", and the two are not the same
+      // report. This is the standard the validator is already held to.
+      errors.push("conditionals skipped (request budget spent before the pass)");
+    }
+    if (scope.kind === "sweep" && requests < MAX_REQUESTS) {
+      const condRes = await rest(
+        "analyses?conditional_wait=not.is.null&conditional_outcome=is.null" +
+          `&select=id,pair,interval,created_at,priced_at,conditional_wait&order=created_at.asc&limit=${MAX_CONDITIONAL_ROWS}`,
+      );
+      const condRaw = condRes.ok ? await condRes.json().catch(() => null) : null;
+      const condRows = Array.isArray(condRaw) ? condRaw.filter(isRecord) : [];
+      for (const row of condRows) {
+        const pair = typeof row.pair === "string" ? row.pair : "";
+        const interval = typeof row.interval === "string" ? row.interval : "";
+        const plan = isRecord(row.conditional_wait) ? row.conditional_wait as unknown as ConditionalWait : null;
+        if (!pair || !interval || plan === null) continue;
+
+        // The instant the claim was PRICED, same choice as the WAIT pass
+        // above. created_at is stamped after the model turn, the gate, the
+        // open-plan query and the history write — 30 to 120 seconds later —
+        // and the claim's distance was measured against the price at
+        // priced_at, so a window hung off created_at starts after the bar the
+        // trigger was drawn from.
+        const pricedMs = Date.parse(String(row.priced_at ?? ""));
+        const insertedMs = Date.parse(String(row.created_at ?? ""));
+        const signalMs = Number.isFinite(pricedMs) ? pricedMs : insertedMs;
+        if (!Number.isFinite(signalMs)) continue;
+
+        const entryBarMs = ENTRY_BAR_MS[interval];
+        if (!entryBarMs) continue;
+        const expires = Number(plan.expires_bars);
+        if (!Number.isFinite(expires) || expires <= 0) continue;
+        // MARKET time, not wall clock — the same walk the WAIT scorer uses, so
+        // a Friday claim is not handed a window it spends on a shut market and
+        // then graded `not_triggered` for. That verdict is terminal (the
+        // pending index only selects rows with no outcome), so getting the
+        // deadline wrong here is not something a later sweep repairs.
+        const deadlineMs = marketHorizonEnd(signalMs, conditionalWindowMs(plan, entryBarMs));
+        // Still running. Not an error and not a verdict — just not yet.
+        if (deadlineMs > nowMs) continue;
+
+        if (requests >= MAX_REQUESTS && !seriesCache.has(`${pair}|${EVAL_INTERVAL[interval] ?? interval}`)) {
+          errors.push(`${pair}: conditionals deferred (request budget)`);
+          break;
+        }
+        const evalInterval = EVAL_INTERVAL[interval] ?? interval;
+        const candles = await cachedSeries(pair, evalInterval);
+        if (!candles || candles.length === 0 || hasFutureCandles(candles, nowMs)) {
+          errors.push(`${pair}|${evalInterval}: conditionals no_data`);
+          continue;
+        }
+        // scoreConditionalWait walks these in order and takes the FIRST touch,
+        // so the order is part of its contract. parseCandles already sorts
+        // ascending (indicators.ts) — sorted again here so that contract holds
+        // at this call site rather than depending on a guarantee made two
+        // modules away.
+        const bars: ScorableBar[] = candles
+          .filter((c) => {
+            const t = parseCandleTime(c.datetime);
+            // Closed-market bars dropped here, for the reason
+            // scoreConditionalWait states: a flat weekend bar that grazes the
+            // level is not the market reaching it.
+            return Number.isFinite(t) && !isMarketClosed(t);
+          })
+          // toIso(parseCandleTime(...)), not the raw column. Twelve Data sends
+          // "YYYY-MM-DD HH:mm:ss" with no zone marker, and scoreConditionalWait
+          // reads it with Date.parse — which resolves a zone-less string in the
+          // RUNTIME's local zone. Deno Deploy is UTC today, so this is one
+          // environment change away from re-dating every window boundary and
+          // every trigger test by the offset. evaluate.ts has carried
+          // parseCandleTime for exactly this since the first tracker.
+          //
+          // It also makes triggered_at and window_ends_at the same kind of
+          // stamp; they sit next to each other in the row.
+          .map((c) => ({
+            datetime: toIso(parseCandleTime(c.datetime)),
+            high: c.high,
+            low: c.low,
+            close: c.close,
+          }))
+          .sort((a, b) => parseCandleTime(a.datetime) - parseCandleTime(b.datetime));
+
+        const outcome = scoreConditionalWait({ plan, barsAfterCall: bars, signalMs, deadlineMs });
+        const n = await patchRows(
+          `analyses?id=eq.${encodeURIComponent(String(row.id))}&conditional_outcome=is.null`,
+          { conditional_outcome: outcome },
+        );
+        if (n > 0) {
+          conditionalsChecked++;
+          if (outcome.verdict === "triggered_right") conditionalsRight++;
+          else if (outcome.verdict === "triggered_wrong") conditionalsWrong++;
+          else if (outcome.verdict === "not_triggered") conditionalsNotTriggered++;
+        }
+      }
+    }
+
     const summary = {
       ok: true,
       mode: scope.kind,
@@ -588,6 +761,13 @@ Deno.serve(async (req: Request) => {
       resolved,
       waits_checked: waitsChecked,
       waits_missed: waitsMissed,
+      conditionals_checked: conditionalsChecked,
+      conditionals_right: conditionalsRight,
+      conditionals_wrong: conditionalsWrong,
+      // In the report on purpose. A claim whose level never came is the
+      // verdict this arm exists to be able to say, and a count that hid it
+      // would put it back where it started: nowhere.
+      conditionals_not_triggered: conditionalsNotTriggered,
       errors,
       version: TRACKER_VERSION,
     };

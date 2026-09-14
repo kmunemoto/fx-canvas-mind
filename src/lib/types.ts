@@ -723,11 +723,62 @@ export interface AnalysisRecord {
   // The market was shut when this was requested, so it is a read of the last
   // close with no entry, stop or targets. Kept in the history, counted nowhere.
   preview?: boolean;
+  // Which arm of the analyst wrote this plan (#86 / #87). Read by the screen
+  // for one reason only: a candidate-arm row is never diagnosed (the learning
+  // loop is control-only), so without this the card promises a post-mortem
+  // that will never come. It is NOT shown as a badge — a reader has no
+  // decision to make with it.
+  variant?: string | null;
   rulebook_version?: number | null;
   // The held-position review made on this run (analyze/review.ts). Absent on
   // rows written before it existed; null on rows written since by a function
   // that recorded nothing.
   position_review?: PositionReview | null;
+  // The period this plan was aiming at (#91). Absent on rows read by an older
+  // client, and null on all 117 rows written before the column existed —
+  // deliberately not backfilled, because a period computed today and stamped
+  // on a plan made last week would be a claim about what that plan was aiming
+  // at, which nobody recorded.
+  //
+  // `scoring_windows` is written beside it on the same row and is NOT declared
+  // here on purpose. It is the tracker's own frozen bounds, nothing on this
+  // screen reads it, and history-columns.test.ts would then force it into the
+  // select — a column fetched on 40 rows per load for no reader. That is the
+  // exact shape `wait_check` shipped in.
+  plan_horizon?: PlanHorizon | null;
+}
+
+// ---------------------------------------------------------------------------
+// The declared trade horizon (#91) — mirrors
+// supabase/functions/_shared/horizon.ts. Every field carries the meaning the
+// server gave it there; nothing here is derived on the client.
+// ---------------------------------------------------------------------------
+
+// interval_table_v1 — the period came from the per-timeframe table, which is
+//                     the economic calendar's own lookahead read in bars
+// model             — the analyst chose it (not yet written by anything)
+export type HorizonSource = "interval_table_v1" | "model";
+
+export interface PlanHorizon {
+  version: 1;
+  // Bars of the ENTRY timeframe, which is the unit holding time is actually
+  // distributed in: the measured median is 1.05 / 1.67 / 1.26 / 2.82 bars on
+  // 15min / 1h / 4h / 1day — roughly interval-independent, which is why the
+  // period is declared in bars and not in hours.
+  bars: number;
+  interval: string;
+  source: HorizonSource;
+  bar_ms: number;
+  // priced_at, not created_at — see the server comment for why the difference
+  // is 30 to 120 seconds and why this project has already paid for it twice.
+  declared_at: string;
+  // The end of the period in MARKET time, frozen at issue. Accurate to within
+  // 30 minutes, which is why every string rendering it says "about".
+  ends_at: string;
+  // Whether the economic-calendar block shown to the analyst actually reached
+  // as far as this period does. False on a Friday, when the calendar's wall
+  // clock and this market-time window come apart across the weekend.
+  calendar_covers_horizon: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -739,7 +790,11 @@ export interface AnalysisRecord {
 // Row shape of public.positions as read by the client (RLS: own rows).
 export interface Position {
   id: string;
-  analysis_id: string;
+  // Null on a position the reader already held and registered directly with
+  // their own stop and take-profit (#92): it came from no plan of ours. The FK
+  // is ON DELETE CASCADE, so a plan that vanished takes its position with it —
+  // null therefore has exactly one meaning, "there never was a plan".
+  analysis_id: string | null;
   pair: string;
   interval: string;
   direction: "BUY" | "SELL";
@@ -779,7 +834,11 @@ export interface ReferenceOutcome {
 export interface HeldReference {
   kind: "held";
   position_id: string;
-  analysis_id: string;
+  // Mirrors review.ts. Null on a directly-registered position (#92); every
+  // plan-derived field below (confidence, thesis, key_factors, feed, outcome)
+  // is null with it, while direction/entry/stop/tp1 come off the position row
+  // and are always there.
+  analysis_id: string | null;
   direction: "BUY" | "SELL";
   entry: number;
   stop: number;
@@ -819,7 +878,10 @@ export interface PreviousReference {
 
 export interface ReviewReferenceSet {
   held: HeldReference | null;
-  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | null;
+  // `no_plan_registered` is the odd one out: it accompanies a NON-NULL `held`.
+  // The position is there and reviewable on its own levels; what is absent is
+  // a plan behind it (#92). The other three mean there is nothing to review.
+  held_reason: "no_open_position" | "lookup_failed" | "plan_row_missing" | "no_plan_registered" | null;
   previous: PreviousReference | null;
   previous_reason: "none_within_window" | "lookup_failed" | null;
   thesis_of: "held" | "previous" | null;
