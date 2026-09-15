@@ -125,6 +125,70 @@ export interface ScoringWindows {
   give_up_days: number;
 }
 
+// The windows a row is actually SCORED under (#91 step 2).
+//
+// Before this, every scorer read the live module constants, so changing a
+// table silently re-graded plans that had already been issued under the old
+// one — a plan could become "expired" because the allowance shrank after it
+// was made, and nothing on the row would say why. `scoring_windows` is frozen
+// onto the row at issue precisely so that cannot happen; this is the reader
+// that makes the freeze real.
+//
+// FIVE call sites read those tables and they are NOT independent:
+//   track-outcomes/evaluate.ts  the unfilled-entry window and the give-up window
+//   track-outcomes/index.ts     the WAIT scorer's horizon
+//   postmortem/index.ts         the WAIT DIAGNOSIS window — deliberately the
+//                               same horizon judgeWait walked, so freezing one
+//                               without the other would have the scorer and
+//                               the diagnosis reading one row through two
+//                               different windows
+//   postmortem/facts.ts         life_used_ratio's denominator
+// One reader for all five, because two implementations of "which window" is
+// how they come apart.
+//
+// The fallback is passed IN rather than imported, so this module stays free of
+// the scorer's dependencies and each caller keeps using the table it already
+// used. `source` is returned so a verdict can be audited later: without it
+// there is no way to tell whether a row was judged on its own windows or on
+// today's.
+export interface ResolvedWindows {
+  unfilled_entry_ms: number;
+  wait_window_ms: number;
+  give_up_days: number;
+  source: "row" | "table";
+}
+
+const positive = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+
+export const resolveScoringWindows = (
+  stored: unknown,
+  fallback: { unfilledEntryMs: number; waitWindowMs: number; giveUpDays: number },
+): ResolvedWindows => {
+  const table: ResolvedWindows = {
+    unfilled_entry_ms: fallback.unfilledEntryMs,
+    wait_window_ms: fallback.waitWindowMs,
+    give_up_days: fallback.giveUpDays,
+    source: "table",
+  };
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return table;
+  const w = stored as Record<string, unknown>;
+  if (w.version !== 1) return table;
+  const unfilled = positive(w.unfilled_entry_ms);
+  const wait = positive(w.wait_window_ms);
+  const giveUp = positive(w.give_up_days);
+  // All three or none. A half-read object would score one leg on the row and
+  // another on the table, which is the disagreement this reader exists to
+  // prevent — and `source` would then be a lie whichever value it named.
+  if (unfilled === null || wait === null || giveUp === null) return table;
+  return {
+    unfilled_entry_ms: unfilled,
+    wait_window_ms: wait,
+    give_up_days: giveUp,
+    source: "row",
+  };
+};
+
 export const horizonBars = (interval: string): number | null =>
   PLAN_HORIZON_BARS[interval] ?? null;
 

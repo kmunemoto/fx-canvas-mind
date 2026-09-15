@@ -26,7 +26,8 @@
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
 import { currenciesOf, type EconEvent } from "../econ-calendar/events.ts";
 import { parseRules, type Rule } from "../analyze/rules.ts";
-import { ENTRY_WINDOW_MS, EVAL_INTERVAL, type Evaluation } from "../track-outcomes/evaluate.ts";
+import { ENTRY_WINDOW_MS, EVAL_INTERVAL, EXPIRY_DAYS, type Evaluation } from "../track-outcomes/evaluate.ts";
+import { resolveScoringWindows } from "../_shared/horizon.ts";
 import { MIN_AFTER_BARS, afterWindowMs, computeFacts, isPostmortemDue, type Cause, type PostmortemFacts, type PostmortemRow } from "./facts.ts";
 import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
@@ -51,7 +52,7 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v29-2026-09-14T12:40:00Z";
+const POSTMORTEM_VERSION = "postmortem-v30-2026-09-14T18:10:00Z";
 const SCHEMA_VERSION = 2;
 const MODEL = "claude-opus-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
@@ -466,6 +467,11 @@ Deno.serve(async (req: Request) => {
       // market_v1 the analyst never chose the entry price, so a lesson about
       // where to enter is a lesson nobody can follow.
       "plan_contract",
+      // The windows the plan was ISSUED under (#91 step 2). The WAIT diagnosis
+      // walks the same horizon the WAIT scorer walked, and life_used_ratio
+      // divides by the same give-up allowance the judge expires on — both read
+      // it from here, so both keep agreeing with the verdict on the row.
+      "scoring_windows",
     ].join(",");
     // Never diagnosed; failed and still retryable; or diagnosed and not yet
     // revisited — EVERY done row, not only the ones flagged thin.
@@ -667,9 +673,17 @@ Deno.serve(async (req: Request) => {
       // market-time horizon judgeWait walked. Everything the diagnosis is
       // allowed to see stops here.
       const decidedMs = Date.parse(strOrNull(plan.decided_at) ?? String(r.created_at));
+      // The SAME window the WAIT scorer walked (#91 step 2). Frozen on the row
+      // when it is there: if the scorer read the row and the diagnosis read
+      // the table, one row would be judged through two different horizons and
+      // nothing on the row would say which one produced which verdict.
       const untilMs = marketHorizonEnd(
         Number.isFinite(decidedMs) ? decidedMs : Date.parse(String(r.created_at)),
-        ENTRY_WINDOW_MS[String(r.interval)] ?? 48 * 60 * 60 * 1000,
+        resolveScoringWindows((r as Record<string, unknown>).scoring_windows, {
+          unfilledEntryMs: ENTRY_WINDOW_MS[String(r.interval)] ?? 48 * 60 * 60 * 1000,
+          waitWindowMs: ENTRY_WINDOW_MS[String(r.interval)] ?? 48 * 60 * 60 * 1000,
+          giveUpDays: EXPIRY_DAYS[String(r.interval)] ?? 30,
+        }).wait_window_ms,
       );
       rows.push({
         row,

@@ -25,7 +25,9 @@ import {
   isMomentumMode,
   normalizeMode,
 } from "../analyze/entry.ts";
+import { resolveScoringWindows } from "../_shared/horizon.ts";
 import {
+  ENTRY_WINDOW_MS,
   EXPIRY_DAYS,
   FILL_TOLERANCE,
   INTERVAL_MS,
@@ -1179,7 +1181,16 @@ export const computeFacts = async (
       // clock would count a weekend as two days of life and file a Friday
       // plan that paid on Tuesday as late. The same fallback as the judge's
       // for an interval with no allowance; an expiry can reach 1 or more.
-      life_used_ratio: inTrade.length === 0 ? null : round2((inTrade.length * barMs) / HOUR / ((EXPIRY_DAYS[row.interval] ?? 30) * 24)),
+      // The allowance is the one the PLAN was issued under (#91 step 2), not
+      // today's table — otherwise shrinking the table would retroactively make
+      // old plans look late, and this ratio is a fact ABOUT the row.
+      life_used_ratio: inTrade.length === 0 ? null : round2(
+        (inTrade.length * barMs) / HOUR / (resolveScoringWindows(row.scoring_windows, {
+          unfilledEntryMs: ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR,
+          waitWindowMs: ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR,
+          giveUpDays: EXPIRY_DAYS[row.interval] ?? 30,
+        }).give_up_days * 24),
+      ),
       flags: [],
     };
   }

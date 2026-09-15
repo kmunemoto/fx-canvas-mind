@@ -530,6 +530,13 @@ export const en: Dict = {
       // wins lifts this score and the screen reads as though a judge checked.
       hint: "Whether a wider stop, or a target half the distance away, would have changed the ending. But the stop half is only actually simulated on a LOSS: a trade that did not lose passes the stop test with its stop never examined (see the count beside the rate). The target half is checked every time. Placement is also partly a consequence of direction and timing.",
     },
+    pace: {
+      label: "Settled inside the declared period",
+      notAScore: "This is not a score. Higher is not better and lower is not worse — a winner that runs long settles outside its period.",
+      hint: "The denominator is only trades that settled AND declared a period. That is a different population from the three above, which need a finished post-mortem.",
+      noHorizon: (n: number) => `${n} settled with no declared period`,
+      openPast: (n: number) => `${n} still open past their period`,
+    },
     deepMae: {
       // The one row whose polarity is inverted. It has to be in the label:
       // stacked under three higher-is-better rates it otherwise reads as a

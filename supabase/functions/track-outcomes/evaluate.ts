@@ -16,6 +16,7 @@
 
 import type { Candle } from "../analyze/indicators.ts";
 import { exitSide, fillSide, isMarketClosed, sideOf, type QuoteCandle } from "./quotes.ts";
+import { resolveScoringWindows } from "../_shared/horizon.ts";
 
 export type Signal = "BUY" | "SELL";
 export type Resolution = "win" | "loss" | "untriggered" | "ambiguous" | "expired";
@@ -167,6 +168,10 @@ export interface OpenRow {
   id: string;
   pair: string;
   interval: string;
+  // The windows frozen onto the row at issue (#91 step 2). Absent on every row
+  // written before the column existed; resolveScoringWindows then falls back
+  // to the live table, so an older row is judged exactly as it was before.
+  scoring_windows?: unknown;
   signal: Signal;
   entry_point: number;
   stop_loss: number;
@@ -802,8 +807,18 @@ export const judgePlan = async (
   const prev = row.evaluation;
   const risk = Math.abs(row.entry_point - row.stop_loss);
   const ageMs = nowMs - createdMs;
-  const entryWindowMs = ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR;
-  const expiryMs = (EXPIRY_DAYS[row.interval] ?? 30) * DAY;
+  // The windows this PLAN was issued under, not today's table (#91 step 2).
+  // A row written before the freeze carries none and falls back to the table,
+  // which is why no existing verdict moves: measured on production the day
+  // this shipped, 108 of 109 rows had no stored windows and the one that did
+  // held values identical to the constants below.
+  const windows = resolveScoringWindows(row.scoring_windows, {
+    unfilledEntryMs: ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR,
+    waitWindowMs: ENTRY_WINDOW_MS[row.interval] ?? 48 * HOUR,
+    giveUpDays: EXPIRY_DAYS[row.interval] ?? 30,
+  });
+  const entryWindowMs = windows.unfilled_entry_ms;
+  const expiryMs = windows.give_up_days * DAY;
   const twoSided = Array.isArray(quotes) && quotes.length > 0;
   const basis: PriceBasis = twoSided ? "quotes" : "mid";
 
