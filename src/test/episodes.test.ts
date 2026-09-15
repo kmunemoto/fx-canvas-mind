@@ -244,6 +244,10 @@ describe("the promotion gate counts situations, not rows", () => {
     expect(DECIDED_ROW_LIMIT).toBeGreaterThan(100);
   });
 
+  it("counts only the control arm toward promotion (#86/#87 — this is a separate copy of the predicate from index.ts's controlOnly, not an import of it)", () => {
+    expect(decidedRowsPath(8)).toContain("variant=eq.control");
+  });
+
   it("stamps how it counted, so a change of method cannot read as the analyst improving", () => {
     expect(promotionGate(8, [sell(0)]).episode_definition_version).toBe(EPISODE_DEFINITION_VERSION);
     expect(postmortemIndex).toContain("episode_definition_version: gate.episode_definition_version,");

@@ -27,7 +27,11 @@
 // said 24 was already BELOW MIN_STAT_N. That was simply wrong, and it argued
 // for the right answer with a false number.) One candidate at a time is not a
 // limitation of the mechanism — it is the only shape the evidence can carry.
-// Adding a combined arm later is one enum value and one CHECK constraint.
+// Adding a combined arm later touches the data layer only lightly — one enum
+// value and one CHECK constraint — but that is not the whole cost: making the
+// analyst actually DO both things means usesLowerTimeframe and
+// usesConditionalWait below (exact-equality checks against one Variant) also
+// have to change, since a combined value would fail both today.
 
 export const VARIANTS = ["control", "lower_tf", "conditional_wait"] as const;
 
