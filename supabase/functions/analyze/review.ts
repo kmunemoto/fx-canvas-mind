@@ -760,6 +760,34 @@ const planBlock = (r: HeldReference | PreviousReference, lang: "ja" | "en", deci
   const snap = r.snapshot === null ? (lang === "ja" ? "（記録なし）" : "(not recorded)") : JSON.stringify(r.snapshot);
   const structure = r.structure === null ? (lang === "ja" ? "（記録なし）" : "(not recorded)") : JSON.stringify(r.structure);
   if (r.kind === "held") {
+    // A position the reader registered without a plan behind it (#92). Until
+    // 2026-09-19 this fell through to the block below, which printed
+    // 元の根拠（thesis）: （記録なし） four times over, and the analyst did the
+    // only coherent thing with four "(not recorded)"s: thesis_status unknown,
+    // verdict undecidable — on a position 3.6 yen under water. The thesis of
+    // a plan-less position is the position: its direction and its levels.
+    // What the analyst is asked is whether the market on its own timeframe
+    // still supports that direction, measured from the facts the server
+    // computed and the structure it is shown below.
+    if (r.analysis_id === null) {
+      return lang === "ja"
+        ? [
+          `方向: ${r.direction} ／ 約定価格: ${p(r.entry)} ／ 損切り: ${p(r.stop)} ／ TP1: ${p(r.tp1)}`,
+          `${r.opened_at_source === "registered" ? `登録時刻: ${r.opened_at}（約定はこれより前の可能性あり・記録なし）` : `建玉の時刻: ${r.opened_at}`}（見直す足: ${r.interval}）${r.other_open_positions.count > 0 ? `\n同じペアに他 ${r.other_open_positions.count} 件の建玉あり（この評価は最新の 1 件のみ）` : ""}`,
+          `元のプラン: **無し**（利用者が自分で登録した建玉。分析の記録・当時のスナップショット・当時の構造は存在しない）`,
+          `評価する根拠（thesis）: 「${r.direction} で入り、損切り ${p(r.stop)}・TP1 ${p(r.tp1)} を置いた」という建玉そのもの。` +
+          `この方向を ${r.interval} の今の相場（確定スイングの並び・終値ブレイク・SMA の並び・サーバー計算の事実）が支持しているかを判定する。` +
+          `当時のスナップショットが無いので what_changed は「建玉時刻以降に起きた事実」だけを書く。`,
+        ].join("\n")
+        : [
+          `Direction: ${r.direction} / fill: ${p(r.entry)} / stop: ${p(r.stop)} / TP1: ${p(r.tp1)}`,
+          `${r.opened_at_source === "registered" ? `Registered at: ${r.opened_at} (the fill may be earlier; not recorded)` : `Opened at: ${r.opened_at}`} (timeframe to review on: ${r.interval})${r.other_open_positions.count > 0 ? `\n${r.other_open_positions.count} other open position(s) on this pair; this review covers the newest only` : ""}`,
+          `Original plan: **none** (the reader registered a position they already held; there is no analysis record, no snapshot and no structure from the time of the fill)`,
+          `Thesis to evaluate: the position itself — "${r.direction}, stop ${p(r.stop)}, TP1 ${p(r.tp1)}". ` +
+          `Judge whether the ${r.interval} market NOW supports that direction, from the closed swings, the closing breaks, the SMA stack and the server's measured facts. ` +
+          `There is no snapshot to diff against, so what_changed lists only what has happened since the position's time.`,
+        ].join("\n");
+    }
     return lang === "ja"
       ? [
         `方向: ${r.direction} ／ 約定価格: ${p(r.entry)} ／ 損切り: ${p(r.stop)} ／ TP1: ${p(r.tp1)}`,
@@ -809,6 +837,7 @@ const STRINGS: Record<AnalysisLocale, ReviewStrings> = {
 原則:
 - 新規に入るかどうかは判断しない。エントリー価格・損切り・利確を新しく提案しない。元のプランの水準は動かさない。
 - 「今から新しく入るのは見送り」は「決済しろ」ではない。保有プランの評価は、保有プランの根拠が今も成り立つかで決める。
+- **元のプランが無い建玉**（利用者が自分で登録したもの。評価対象の欄にそう書いてある）では、根拠は「登録された方向・損切り・TP1」そのものである。「元の根拠が評価できない」を理由に undecidable にしない。その足の今の相場がその方向を支持していれば intact、逆行する事実が出ていれば weakened、その足で方向と逆の終値ブレイクが確定していれば broken。unknown は相場データそのものが無いときだけ。
 - verdict の定義:
   hold（継続）: 根拠が維持され、撤退条件は成立していない
   caution（警戒）: 根拠が弱まった、または不利な事実があるが、撤退条件は成立していない。watch に何を見張るかを書く
@@ -865,6 +894,7 @@ const STRINGS: Record<AnalysisLocale, ReviewStrings> = {
 Rules:
 - Do not decide whether to open a new position. Do not propose a new entry, stop or target. Do not move the original plan's levels.
 - "Do not open a new position now" does not mean "close". The held plan is judged on whether its own thesis still holds.
+- For a position with NO plan behind it (one the reader registered themselves; the reference block says so), the thesis IS the registered direction, stop and TP1. Do not answer undecidable on the grounds that the original thesis cannot be evaluated. If the market on that timeframe still supports the direction: intact; if adverse facts have appeared: weakened; if that timeframe has closed through a level against the direction: broken. Reserve unknown for the case where the market data itself is missing.
 - Verdict definitions:
   hold: the thesis is intact and no exit condition is met
   caution: the thesis has weakened or adverse facts have appeared, but no exit condition is met; name what to watch in the watch field

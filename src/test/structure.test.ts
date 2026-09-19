@@ -426,13 +426,26 @@ describe("what the structure block costs the prompt", () => {
     expect(rendered.length).toBeLessThan(900);
   });
 
-  it("costs under 200 characters on a higher timeframe", () => {
+  it("gives a higher timeframe its two closing-break lines and nothing else beyond the head", () => {
     // The schema asks a higher timeframe for a bias and a note, not for a
-    // break history — three full blocks would spend two thirds of the added
-    // budget on the timeframes the plan is not built at
+    // break history. But the system prompt makes the higher timeframe's
+    // DIRECTION a confidence veto, and the closing breaks are the strongest
+    // reading of that direction this module produces — until 2026-09-19 they
+    // were the two lines the model was not shown on exactly the rungs the
+    // veto keys on (the daily reached the prompt as "下降 … +2.3ATR" while it
+    // sold the 9/14 rally). So: head, room, the two break lines, and no
+    // pivot list, range or pressure — still well under the full block.
     const rows = built();
     const st = computeStructure(rows, atr(rows) ?? 0.1, PIP);
-    expect(structureLines(st, null, 3, false).length).toBeLessThan(200);
+    const short = structureLines(st, null, 3, false);
+    const full = structureLines(st, null, 3, true);
+    expect(short).toContain("終値ブレイク(上)");
+    expect(short).toContain("終値ブレイク(下)");
+    expect(short).not.toContain("確定スイング高値");
+    expect(short).not.toContain("直近20本レンジ");
+    expect(short.split("\n")).toHaveLength(4);
+    expect(short.length).toBeLessThan(full.length);
+    expect(short.length).toBeLessThan(450);
   });
 
   it("still says something useful when it cannot compute anything", () => {

@@ -922,3 +922,49 @@ describe("the migration", () => {
     expect(sql).toContain("revoke all on public.position_review_prompts from public, anon, authenticated;");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A POSITION WITH NO PLAN BEHIND IT (#92), REVIEWED ON ITS OWN LEVELS.
+//
+// Measured 2026-09-19 on the one such position in production (SHORT USD/JPY
+// @153.274, SL 160, 3.6 yen under water): the review said 判定できない. The
+// reference block had printed 元の根拠（thesis）: （記録なし） and three more
+// "(not recorded)"s, and the analyst did the only coherent thing with that.
+// The thesis of a plan-less position is the position.
+// ---------------------------------------------------------------------------
+describe("a plan-less held position is reviewed on its registered levels", () => {
+  const common = { model: "m", pair: "USD/JPY", nowUtc: "2026-09-19T08:00:00Z", sections: "### 1h\n...", decimals: 3 };
+  const own = () => held({ analysis_id: null, thesis: null, key_factors: [], snapshot: null, structure: null, opened_at_source: "registered" });
+
+  it("tells the analyst there is no plan and what the thesis is instead, in both languages", () => {
+    const ja = buildReviewRequest({ ...common, locale: "ja", reference: own(), mechanical: facts() });
+    const user = ja.messages[0].content;
+    expect(user).toContain("元のプラン: **無し**");
+    expect(user).toContain("評価する根拠（thesis）");
+    expect(user).not.toContain("（記録なし）");
+    expect(user).not.toContain("プラン作成時の指標スナップショット");
+    // the levels it is judged on are the position's own
+    expect(user).toContain(`損切り ${own().stop.toFixed(3)}`);
+    expect(user).toContain(`TP1 ${own().tp1.toFixed(3)}`);
+
+    const en = buildReviewRequest({ ...common, locale: "en", reference: own(), mechanical: facts() });
+    expect(en.messages[0].content).toContain("Original plan: **none**");
+    expect(en.messages[0].content).toContain("Thesis to evaluate: the position itself");
+    expect(en.messages[0].content).not.toContain("(not recorded)");
+  });
+
+  it("forbids undecidable-for-want-of-a-plan in the system prompt", () => {
+    const ja = buildReviewRequest({ ...common, locale: "ja", reference: own(), mechanical: facts() });
+    expect(ja.system).toContain("元のプランが無い建玉");
+    expect(ja.system).toContain("undecidable にしない");
+    const en = buildReviewRequest({ ...common, locale: "en", reference: own(), mechanical: facts() });
+    expect(en.system).toContain("NO plan behind it");
+    expect(en.system).toContain("Do not answer undecidable");
+  });
+
+  it("leaves a planned position's block exactly as it was", () => {
+    const planned = buildReviewRequest({ ...common, locale: "ja", reference: held(), mechanical: facts() });
+    expect(planned.messages[0].content).toContain("元の根拠（thesis）");
+    expect(planned.messages[0].content).not.toContain("元のプラン: **無し**");
+  });
+});

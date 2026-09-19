@@ -557,3 +557,69 @@ describe("the server and the fallback split the WAITs alike", () => {
     expect(migration.slice(migration.indexOf("as $function$"))).not.toContain("auth.uid()");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SAME-DIRECTION LOSING STREAK (2026-09-19).
+//
+// Nine SELLs in a row lost between 9/9 and 9/15 and the screen said nothing
+// about it beside the ninth. This is the number it should have said.
+// ---------------------------------------------------------------------------
+import { STREAK_WARN_AT, directionStreak } from "../lib/outcomeStats";
+
+describe("directionStreak", () => {
+  const at = (day: number, hour = 0) => `2026-09-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:00:00Z`;
+  const call = (signal: AnalysisRecord["signal"], outcome: AnalysisRecord["outcome"], created_at: string, over: Partial<AnalysisRecord> = {}) =>
+    rec({ signal, outcome, created_at, ...over });
+
+  it("counts the newest run of decided same-direction losses, oldest to newest", () => {
+    const rows = [
+      call("SELL", "win", at(8)),
+      call("SELL", "loss", at(9, 13)),
+      call("SELL", "loss", at(9, 14)),
+      call("SELL", "loss", at(10)),
+      call("SELL", "expired", at(14)),   // an expiry is a call that did not work out
+      call("SELL", "loss", at(15)),
+    ];
+    // order of the input must not matter
+    expect(directionStreak([...rows].reverse())).toEqual({ direction: "SELL", losses: 5, from: at(9, 13), to: at(15) });
+    expect(directionStreak(rows)?.losses).toBe(5);
+  });
+
+  it("skips what is not a verdict on the direction without breaking the run", () => {
+    const rows = [
+      call("SELL", "loss", at(9)),
+      call("WAIT", "skipped", at(10)),
+      call("SELL", "pending", at(11)),
+      call("SELL", "untriggered", at(12)),
+      call("SELL", "ambiguous", at(13)),
+      call("SELL", "loss", at(14)),
+    ];
+    expect(directionStreak(rows)).toEqual({ direction: "SELL", losses: 2, from: at(9), to: at(14) });
+  });
+
+  it("ends the run at a win, or at a decided call the other way", () => {
+    expect(directionStreak([call("SELL", "loss", at(9)), call("SELL", "win", at(10)), call("SELL", "loss", at(11))])?.losses).toBe(1);
+    expect(directionStreak([call("SELL", "loss", at(9)), call("BUY", "loss", at(10)), call("SELL", "loss", at(11))])?.losses).toBe(1);
+    // a decided BUY LOSS newest of all: the run is a BUY run of one
+    expect(directionStreak([call("SELL", "loss", at(9)), call("SELL", "loss", at(10)), call("BUY", "loss", at(11))])).toEqual({ direction: "BUY", losses: 1, from: at(11), to: at(11) });
+  });
+
+  it("is null when the newest decided call won, when nothing is decided, and on an empty record", () => {
+    expect(directionStreak([call("SELL", "loss", at(9)), call("SELL", "win", at(10))])).toBeNull();
+    expect(directionStreak([call("SELL", "pending", at(9)), call("WAIT", "skipped", at(10))])).toBeNull();
+    expect(directionStreak([])).toBeNull();
+  });
+
+  it("does not count shadows or previews", () => {
+    const rows = [
+      call("SELL", "loss", at(9)),
+      call("SELL", "loss", at(10), { shadow: true }),
+      call("SELL", "loss", at(11), { preview: true }),
+    ];
+    expect(directionStreak(rows)?.losses).toBe(1);
+  });
+
+  it("warns at three, not two", () => {
+    expect(STREAK_WARN_AT).toBe(3);
+  });
+});

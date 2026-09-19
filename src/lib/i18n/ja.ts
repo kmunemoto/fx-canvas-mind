@@ -106,6 +106,14 @@ export const ja = {
       // 期間の記録が無い行。117件の既存行は意図的に遡って埋めていない。
       absent: "この分析には狙う期間が記録されていません。",
     },
+    // あなた自身の記録での、同方向の連敗。9/9〜9/15 の SELL 9 連敗は、9 件目が
+    // 出たときに画面のどこにも「前の 8 件は負けた」と書いていなかった。
+    // AI はこの数字を見ていない（プランはこれで変わらない）。
+    streak: {
+      warn: (word: string, n: number, from: string, to: string) =>
+        `あなたの記録では、${word} の直近 ${n} 件はすべて負けています（${from} 〜 ${to}）`,
+      note: "AI はこの連敗を見ていません。このプランはそれとは別に出ています。",
+    },
     evidence: "根拠",
     showAll: (n: number) => `すべて表示（${n}件）`,
     showLess: "折りたたむ",
@@ -133,6 +141,12 @@ export const ja = {
       // 却下の根拠になった実測値。文言だけでは「近すぎる」がどれだけ近いのか分からない
       atrMultiple: (n: number) => `ATR ${n}倍`,
       confidence: (score: number, floor: number) => `確信度 ${score}／下限 ${floor}`,
+      // 却下した上位足と、その足が読んだ方向・水準。水準が無い（並びだけで
+      // 読んだ）ときは足と方向だけ。
+      structure: (tf: string, up: boolean, level: string | null) =>
+        level === null
+          ? `${tf} は${up ? "上" : "下"}向き（直近2スイングの並び）`
+          : `${tf} は ${level} を終値で${up ? "上" : "下"}に抜けたまま`,
     },
     riskLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
     sentiments: { BULLISH: "強気", NEUTRAL: "中立", BEARISH: "弱気" },
@@ -216,6 +230,10 @@ export const ja = {
     statsFallback: (n: number) => `成績: 直近 ${n}件のみで集計（サーバ集計を取得できませんでした）`,
     otherContractRows: (n: number) => `別の契約で作られた ${n}件は、この集計に含めていません`,
     autoNote: "結果は実際の値動きで15分ごとに自動判定（TP1到達=WIN / SL到達=LOSS）",
+    // 同方向の連敗（あなたの記録・決着した BUY/SELL だけ・期限切れは負け扱い）。
+    // 3 件以上のときだけ出す: 2 件は同じ午後の言い直しであることが多い。
+    streak: (word: string, n: number, from: string, to: string) =>
+      `同方向の連敗: ${word} ${n} 件連続で負け（${from} 〜 ${to}・あなたの記録）`,
     winRateNote: "勝率はWIN/LOSS/期限切れで計算（未約定・判定不能は除外）。期限切れは「届かない利確を置いた」結果なので、勝率から外れる逃げ道にはしません。約定率はエントリー価格に実際に到達した割合",
     stats: {
       title: "内訳",
@@ -277,6 +295,9 @@ export const ja = {
         // 行っていない比較の結果を断定することになる。（このラベルのすぐ隣に
         // proposed_stop / proposed_tp1 が並ぶので、欠けていた行はそこで分かる。）
         incoherent: "エントリー・損切り・利確を筋の通ったプランとして読めなかった",
+        // 上位足の終値ブレイクが逆向き。9/9〜9/15 の同方向 9 連敗のあとに足した
+        // 歯止めで、上位足が直近高値を終値で抜けた**次の足**から効く。
+        structure_conflict: "上位足の方向（終値ブレイク）に逆らっている",
       },
       proposed: "AIの提案",
       distance: "現在値との距離",
@@ -1020,7 +1041,9 @@ export const ja = {
     },
     thesis: {
       heldLabel: "元のプランの根拠",
-      noPlan: "元になったプランはありません（あなたが登録した建玉です）",
+      // 「プランが無い＝判定できない」ではない。根拠はあなたが登録した方向と
+      // 水準そのもので、AI はその方向を今の相場が支持しているかを見る。
+      noPlan: "元になったプランはありません。あなたが登録した方向・損切り・TP1 を根拠として、今の相場がその方向を支持しているかを判定します",
       previousLabel: "前回の根拠",
       byAnalyst: "AI の見立て",
       status: { intact: "維持", weakened: "弱化", broken: "崩壊", unknown: "不明" },

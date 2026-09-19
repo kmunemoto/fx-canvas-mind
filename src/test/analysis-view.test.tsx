@@ -1083,3 +1083,45 @@ describe("PriceChart draws the evidence, in two registers", () => {
     expect(screen.queryByTestId("chart-legend")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The same-direction losing run on the plan card (2026-09-19).
+// ---------------------------------------------------------------------------
+describe("the plan card shows the reader's own losing run in this direction", () => {
+  const streak = (direction: "BUY" | "SELL", losses: number) =>
+    ({ direction, losses, from: "2026-09-09T13:00:00Z", to: "2026-09-15T13:52:00Z" });
+
+  it("says so, in the plan's direction, once the run is long enough", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" streak={streak("BUY", 9)} />);
+    const strip = screen.getByTestId("direction-streak");
+    expect(strip.textContent).toContain("9");
+    expect(strip.textContent).toContain(ja.direction.BUY.word);
+    expect(strip.textContent).toContain(ja.result.streak.note);
+  });
+
+  it("stays silent for the other direction, for a short run, and on a WAIT", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" streak={streak("SELL", 9)} />);
+    expect(screen.queryByTestId("direction-streak")).toBeNull();
+  });
+
+  it("is silent for a run of two", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" streak={streak("BUY", 2)} />);
+    expect(screen.queryByTestId("direction-streak")).toBeNull();
+  });
+
+  it("is silent on a WAIT even with a long run", () => {
+    render(<AnalysisResultView result={{ ...fullResult, signal: "WAIT" }} techData={techData} pair="USD/JPY" interval="1h" streak={streak("BUY", 9)} />);
+    expect(screen.queryByTestId("direction-streak")).toBeNull();
+  });
+
+  it("the history card carries the same run over the record", () => {
+    const rows: AnalysisRecord[] = [1, 2, 3].map((d) => ({
+      id: `s${d}`, pair: "USD/JPY", interval: "1h", mode: "full", signal: "SELL", confidence: 65, thesis: null,
+      entry_point: 153, stop_loss: 153.5, take_profit_1: 152.5, take_profit_2: null, take_profit_3: null,
+      price_at_signal: 153, outcome: "loss", outcome_price: 153.5, created_at: `2026-09-1${d}T00:00:00Z`, closed_at: null,
+      evaluation: null, plan_contract: CURRENT_CONTRACT,
+    }));
+    render(<AnalysisHistory records={rows} />);
+    expect(screen.getByTestId("history-streak").textContent).toContain("3");
+  });
+});

@@ -403,12 +403,6 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
     ? ""
     : ` / 参照${st.bars}本の正味変化 ${st.netAtr > 0 ? "+" : ""}${st.netAtr.toFixed(1)}ATR`;
   const room = `${gap(st.nextUp, "上値余地")} ${gap(st.nextDown, "下値余地")}`;
-  if (!full) return `${head}${window}\n${room}`;
-
-  const piv = (list: typeof st.highs, kind: string) =>
-    list.length === 0
-      ? `${kind}: なし`
-      : `${kind}: ${list.map((h) => `${p(h.price)}(${h.datetime.slice(5, 16)}Z・${h.barsAgo}本前)`).join(" ← ")}`;
 
   const brk = (b: typeof st.lastBreak.up, dir: string) => {
     if (b === null) return `${dir}: 終値で抜けた水準なし`;
@@ -422,6 +416,20 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
       b.wickOnly > 0 ? `・それ以前にヒゲのみの突破${b.wickOnly}回` : ""
     }`;
   };
+
+  // The higher rungs used to get the head and the room only. The system
+  // prompt makes the higher timeframe's direction a confidence veto, and the
+  // two-pivot label is the weakest reading of that direction this module
+  // produces — the close-breaks are the strongest, and they were the two
+  // lines the model was not shown. Measured 2026-09-19 on the row that
+  // sold the 9/14 rally: the daily rung reached the prompt as "下降 …
+  // 正味変化 +2.3ATR" and nothing else.
+  if (!full) return `${head}${window}\n${room}\n${brk(st.lastBreak.up, "終値ブレイク(上)")}\n${brk(st.lastBreak.down, "終値ブレイク(下)")}`;
+
+  const piv = (list: typeof st.highs, kind: string) =>
+    list.length === 0
+      ? `${kind}: なし`
+      : `${kind}: ${list.map((h) => `${p(h.price)}(${h.datetime.slice(5, 16)}Z・${h.barsAgo}本前)`).join(" ← ")}`;
 
   const rng = (r: typeof st.range20, n: number) =>
     r === null

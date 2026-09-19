@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v60-2026-09-14T18:10:00Z";
+const FUNCTION_VERSION = "analyze-v61-2026-09-19T09:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -61,9 +61,11 @@ import {
   MIN_STOP_ATR,
   TREND_ADX,
   evaluateEntry,
+  readHigherStructures,
   waitPlanFor,
   type EntryType,
   type EntryVerdict,
+  type HigherStructure,
   type WaitPlan,
 } from "./entry.ts";
 
@@ -376,6 +378,8 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
 2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
    **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
 3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
+   上位足の「方向」は、各上位足の「終値ブレイク(上)/(下)」の行で決める: **より最近に終値で抜けたまま**の側が、その足の今の方向である（「戻された」水準は抜けていない）。直近2スイングの並びは、終値ブレイクが無いときだけの補助。
+   上位足がこの基準で上を向いているのに SELL を出す（または下を向いているのに BUY を出す）プランは、サーバーが公開しない。下降トレンドの中で反発が始まり、上位足が直近高値を終値で上抜けたら、それは「戻り売りの場面」ではなく「方向が変わった可能性」として扱い、WAIT か反対方向を検討する。
 4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
 5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
    - 「押し目を待って買う」「戻りを待って売る」は出力できない。今この価格で入るか、入らないかの二択である。待つべき局面なら signal を "WAIT" にする。
@@ -1662,6 +1666,26 @@ Deno.serve(async (req: Request) => {
       );
     })();
 
+    // THE HIGHER RUNGS, AS THE GATE WILL READ THEM (entry.ts, structureBias).
+    //
+    // Same objects the gate is handed, so the sentence the model reads and
+    // the refusal it may get cannot disagree. Written as a plain line rather
+    // than folded into each rung's block because the rule it carries — a
+    // signal against this reading is not published — is a rule about the
+    // chain, and the model needs it in one place beside the chain's verdicts.
+    const higherStructures: HigherStructure[] = timeframes
+      .slice(1)
+      .map((tf, i) => ({ tf, structure: structures[i + 1].structure }));
+    const higherStructureNote = (() => {
+      const reads = readHigherStructures(higherStructures);
+      if (reads.length === 0) return "";
+      const word = (r: (typeof reads)[number]) =>
+        r.bias === null
+          ? "方向なし(終値で抜けたままの水準が無く、直近2スイングも並びを作っていない)"
+          : `${r.bias === "Up" ? "上" : "下"}(${r.from === "break" ? "より最近に終値で抜けたままの側" : "直近2スイングの並び・終値ブレイク無し"})`;
+      return `\n\n上位足の方向(サーバ判定・各足の「終値ブレイク」行から): ${reads.map((r) => `${r.tf}=${word(r)}`).join(" / ")}\nこの方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。逆らう根拠があるなら WAIT にして根拠を書く。`;
+    })();
+
     // #87: the lower rung, reduced to mid bars and read like any other series.
     // Its own variable, its own label, its own slot in the row — never inside
     // `timeframes`.
@@ -1683,7 +1707,7 @@ Deno.serve(async (req: Request) => {
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
       const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}`;
       return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
-    }).join("\n\n");
+    }).join("\n\n") + higherStructureNote;
 
     // Appended after the chain, with a label that is NOT 上位足 and a sentence
     // that says what it is for. The system prompt's step 3 makes 上位足
@@ -2643,6 +2667,10 @@ ${candleLines(lowerCandles, 24)}`;
       mode: detail && typeof detail.mode === "string" ? detail.mode : null,
       direction: detail && typeof detail.direction === "string" ? detail.direction : null,
       indicators: { adx: entrySnapshot.adx, sma20: entrySnapshot.sma20, sma50: entrySnapshot.sma50 },
+      // The higher rungs' computed structure, nearest first. The gate reads
+      // their most recent close-breaks; a plan pointed against one of them is
+      // refused before its geometry is measured (entry.ts, structureBias).
+      higherStructures: higherStructures,
     });
 
     // "Enter now at the market" is not an available action when the market is
@@ -2694,6 +2722,8 @@ ${candleLines(lowerCandles, 24)}`;
           // because the string, not the caller, decides when they are relevant.
           confidence: normalizedAnalysis.confidence,
           confidenceFloor: MIN_CONFIDENCE,
+          // Only the structure gate reads this; same reasoning.
+          structureConflict: entryVerdict.structureConflict,
         }),
         ...normalizedAnalysis.warnings,
       ];
@@ -2819,6 +2849,12 @@ ${candleLines(lowerCandles, 24)}`;
       regime: entryVerdict.regime,
       regime_direction: entryVerdict.regimeDirection,
       momentum: entryVerdict.momentum,
+      // What each higher rung's closes said (every row), and the rung that
+      // refused the plan for pointing against them (when one did). The first
+      // is the audit trail for the second: a SELL published under a rung
+      // reading "Up" is visible afterwards as exactly that.
+      structure_read: entryVerdict.structureRead,
+      structure_conflict: entryVerdict.structureConflict,
       distance_atr: entryVerdict.distanceAtr,
       stop_atr: entryVerdict.stopAtr,
       risk_reward: entryVerdict.riskReward,

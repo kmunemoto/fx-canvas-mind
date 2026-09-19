@@ -22,6 +22,10 @@
 //
 // Deno-free on purpose: src/test/entry.test.ts imports this file directly.
 
+// Type-only: erased at runtime, so this file stays a leaf for the browser
+// bundle (outcomeStats.ts reaches _shared/episodes.ts, never this).
+import type { LevelBreak, Structure } from "./structure.ts";
+
 export type Signal = "BUY" | "SELL" | "WAIT";
 export type EntryType = "market" | "limit" | "stop";
 export type Regime = "trend" | "range" | "unclear";
@@ -75,7 +79,116 @@ export interface EntryPlan {
   direction: string | null; // market_context_detail.direction
   // entry-timeframe indicators, for a regime read independent of the model
   indicators?: RegimeInputs | null;
+  // The HIGHER timeframes' computed structure (structure.ts), nearest rung
+  // first. Read by the structure gate below; absent on callers that predate
+  // it and on tests that are not about it.
+  higherStructures?: HigherStructure[] | null;
 }
+
+// What the structure gate reads off each higher rung. A Pick rather than the
+// whole Structure so a test can hand it three fields.
+export type StructureForGate = Pick<Structure, "ok" | "label" | "lastBreak">;
+
+export interface HigherStructure {
+  tf: string;
+  structure: StructureForGate;
+}
+
+// THE DIRECTION THE HIGHER TIMEFRAME'S OWN CLOSES POINT.
+//
+// Measured 2026-09-19: of the 63 directional calls since 8/29, 62 were SELL
+// and one was BUY. The gate never refused a BUY — the analyst never proposed
+// one. USD/JPY fell 11 yen from 7/20 to 9/8, the daily label read "downtrend"
+// throughout, and the system prompt makes the higher timeframe's direction a
+// confidence veto; so once the market turned (153.7 → 156.9 over 9/14–9/19)
+// the analyst went on selling the rally, six for six, and nothing in the
+// pipeline could say "the higher timeframe has stopped going down". This is
+// where it says so.
+//
+// The reading is the MOST RECENT CLOSE-BREAK on that rung: the last swing
+// level a bar actually settled through and stayed through. A wick is not a
+// break and a reclaimed level is not a break (structure.ts decides both).
+// Only when no level has been settled through does the two-pivot label
+// stand in — and it is reported as the weaker source it is.
+//
+// Deliberately NOT the SMA stack or ADX: those are what deriveRegime reads,
+// and on 9/14 they still said "Down" at 153.7 while the daily was three bars
+// from breaking its 154.66 high. The break is the earlier, more literal fact.
+export type StructureBiasSource = "break" | "label";
+
+export interface StructureBias {
+  bias: TrendDirection | null;
+  from: StructureBiasSource | null;
+  // The break the bias was read off, when it was
+  brk: LevelBreak | null;
+}
+
+export const structureBias = (st: StructureForGate | null | undefined): StructureBias => {
+  const none: StructureBias = { bias: null, from: null, brk: null };
+  if (!st || !st.ok) return none;
+  const up = st.lastBreak.up && st.lastBreak.up.state === "broken" ? st.lastBreak.up : null;
+  const down = st.lastBreak.down && st.lastBreak.down.state === "broken" ? st.lastBreak.down : null;
+  if (up && down) {
+    // Both sides settled through at some point; the newer one is what price
+    // did last. The same bar cannot break a high and a low, so a tie is two
+    // levels broken on one close — a shape, not a direction.
+    if (up.barsAgo < down.barsAgo) return { bias: "Up", from: "break", brk: up };
+    if (down.barsAgo < up.barsAgo) return { bias: "Down", from: "break", brk: down };
+    return none;
+  }
+  if (up) return { bias: "Up", from: "break", brk: up };
+  if (down) return { bias: "Down", from: "break", brk: down };
+  if (st.label === "uptrend") return { bias: "Up", from: "label", brk: null };
+  if (st.label === "downtrend") return { bias: "Down", from: "label", brk: null };
+  return none;
+};
+
+// One line per higher rung, recorded on every row whether or not it refused
+// anything — so a SELL published under a rung reading "Up" is visible
+// afterwards as exactly that, rather than as a gate that never looked.
+export interface StructureRead {
+  tf: string;
+  bias: TrendDirection | null;
+  from: StructureBiasSource | null;
+}
+
+export interface StructureConflict extends StructureRead {
+  bias: TrendDirection;
+  from: StructureBiasSource;
+  level: number | null;
+  datetime: string | null;
+  barsAgo: number | null;
+}
+
+export const readHigherStructures = (higher: HigherStructure[] | null | undefined): StructureRead[] =>
+  (higher ?? []).map((h) => {
+    const b = structureBias(h.structure);
+    return { tf: h.tf, bias: b.bias, from: b.from };
+  });
+
+// The first higher rung whose own closes point against the signal. Nearest
+// rung first, because that is the one the prompt calls 上位足 and the one
+// that turns first.
+export const structureConflictFor = (
+  signal: Signal,
+  higher: HigherStructure[] | null | undefined,
+): StructureConflict | null => {
+  if (signal === "WAIT") return null;
+  const against: TrendDirection = signal === "BUY" ? "Down" : "Up";
+  for (const h of higher ?? []) {
+    const b = structureBias(h.structure);
+    if (b.bias !== against || b.from === null) continue;
+    return {
+      tf: h.tf,
+      bias: b.bias,
+      from: b.from,
+      level: b.brk?.level ?? null,
+      datetime: b.brk?.datetime ?? null,
+      barsAgo: b.brk?.barsAgo ?? null,
+    };
+  }
+  return null;
+};
 
 export type Rejection =
   // the entry sits beyond the distance bound for its order type
@@ -107,7 +220,11 @@ export type Rejection =
   // string would buy a distinction nobody has ever needed at the price of
   // confusing the three that exist. Correcting the wording — see the
   // "incoherent" case in locale.ts — is the whole benefit available today.
-  | "incoherent";
+  | "incoherent"
+  // a higher timeframe's most recent close-break points the other way
+  // (structureBias above). Checked before the geometry: a plan pointed
+  // against the rung above it is refused whatever its stop and target say.
+  | "structure_conflict";
 
 export interface EntryVerdict {
   ok: boolean;
@@ -140,6 +257,11 @@ export interface EntryVerdict {
   // The entry was inside the market band, but pulling it onto the market
   // would have broken the plan (this is why), so it stands as written
   snapDeclined: Rejection | null;
+  // What each higher rung's closes said, and — when the plan pointed against
+  // one of them — which rung refused it. `structureRead` is filled on every
+  // verdict, WAIT included, so the row always shows what the gate saw.
+  structureRead: StructureRead[];
+  structureConflict: StructureConflict | null;
 }
 
 const isFinitePositive = (v: number | null | undefined): v is number =>
@@ -274,6 +396,7 @@ const check = (
 export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
   const { signal, entry, stopLoss, takeProfit1, price } = plan;
   const derived = deriveRegime(price, plan.indicators);
+  const structureRead = readHigherStructures(plan.higherStructures);
   const base = {
     repaired: false,
     snapped: false,
@@ -282,6 +405,8 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
     originalEntry: entry,
     regime: derived.regime,
     regimeDirection: derived.direction,
+    structureRead,
+    structureConflict: null as StructureConflict | null,
   };
 
   // Nothing to enter, nothing to check
@@ -307,6 +432,25 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
   const momentum =
     (derived.regime === "trend" && alignedWithTrend(signal, derived.direction)) ||
     (derived.regime !== "range" && isMomentumMode(plan.mode) && alignedWithTrend(signal, plan.direction));
+
+  // Direction before geometry. A stop and a target measured on a plan that
+  // points against the rung above it would be numbers about a trade the gate
+  // is not going to publish; and no repair moves a plan's direction.
+  const structureConflict = structureConflictFor(signal, plan.higherStructures);
+  if (structureConflict !== null) {
+    return {
+      ...base,
+      ok: false,
+      rejection: "structure_conflict",
+      structureConflict,
+      entry,
+      entryType: null,
+      riskReward: null,
+      distanceAtr: null,
+      stopAtr: null,
+      momentum,
+    };
+  }
 
   if (
     entry === null || stopLoss === null || takeProfit1 === null ||

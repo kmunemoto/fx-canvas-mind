@@ -1312,3 +1312,65 @@ export const readModelMix = (raw: unknown): ModelMix | null => {
     unrecordedSettled: maybeNum(o.unrecorded_settled),
   };
 };
+
+// ---------------------------------------------------------------------------
+// THE SAME-DIRECTION LOSING STREAK.
+//
+// Measured 2026-09-19: between 9/9 and 9/15 the analyst issued nine SELLs in
+// a row and every one of them lost, while the daily still read "downtrend"
+// and the screen showed each call on its own, with nothing beside it saying
+// "the last eight of these lost too". The win rate at the top of the history
+// card is over the whole record and moved by two points. A reader deciding
+// whether to take the ninth SELL needed the one number this computes.
+//
+// Counted over DECIDED directional calls only, newest first: a BUY/SELL whose
+// outcome is win, loss or expired. An expiry counts as a loss here for the
+// same reason it does in tally(): a call that did not work out. Untriggered,
+// pending, ambiguous and incoherent rows, and every WAIT, are skipped without
+// breaking the run — they are not verdicts on the direction. A decided call
+// in the OTHER direction ends the run whatever its outcome, because the
+// question is "how many in a row of THIS direction lost", not "how many in a
+// row lost". Shadows and previews are not part of the record and are not
+// part of this.
+//
+// Over the reader's own rows, because those are what the client has; the
+// text that shows it says so.
+// ---------------------------------------------------------------------------
+
+// Losses in a row before the screen says something about it. Three, not two:
+// two same-direction losses inside one afternoon are one situation restated
+// (the episode rule), and a warning that fires on every pair of them would
+// be ignored by the ninth.
+export const STREAK_WARN_AT = 3;
+
+export interface DirectionStreak {
+  direction: "BUY" | "SELL";
+  // Consecutive decided calls in that direction that lost (expiry included)
+  losses: number;
+  // created_at of the oldest and newest loss in the run
+  from: string;
+  to: string;
+}
+
+const streakDecided = (r: AnalysisRecord): boolean =>
+  (r.signal === "BUY" || r.signal === "SELL") &&
+  (r.outcome === "win" || r.outcome === "loss" || r.outcome === "expired");
+
+export const directionStreak = (records: AnalysisRecord[]): DirectionStreak | null => {
+  const decided = records
+    .filter((r) => !isShadow(r) && !isPreview(r) && streakDecided(r))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  if (decided.length === 0) return null;
+  const newest = decided[0];
+  if (newest.outcome === "win") return null;
+  const direction = newest.signal as "BUY" | "SELL";
+  let losses = 0;
+  let from = newest.created_at;
+  for (const r of decided) {
+    if (r.signal !== direction) break;
+    if (r.outcome === "win") break;
+    losses++;
+    from = r.created_at;
+  }
+  return losses === 0 ? null : { direction, losses, from, to: newest.created_at };
+};

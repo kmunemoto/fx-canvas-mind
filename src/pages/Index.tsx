@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Zap, Crown, X } from "lucide-react";
 import Header from "@/components/Header";
 import ControlBar from "@/components/ControlBar";
@@ -20,6 +20,7 @@ import { DEFAULT_SETTINGS, settingsFromStored } from "@/lib/settings";
 import { normalizePositions } from "@/lib/positions";
 import {
   CURRENT_CONTRACT,
+  directionStreak,
   readConfidenceCalibration,
   readModelMix,
   readSeparatedScores,
@@ -58,7 +59,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v60-2026-09-14T18:10:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v61-2026-09-19T09:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -278,6 +279,9 @@ const Index = () => {
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("idle");
   const [liveRate, setLiveRate] = useState<string | null>(null);
   const [history, setHistory] = useState<AnalysisRecord[]>([]);
+  // The reader's own run of same-direction losses, for the plan card. Over
+  // `history` as loaded: the same rows the history card computes it from.
+  const streak = useMemo(() => directionStreak(history), [history]);
   const [rulebook, setRulebook] = useState<Rulebook | null>(null);
   const [loopHealth, setLoopHealth] = useState<LoopHealthData | null>(null);
   const [stats, setStats] = useState<PerformanceStats | null>(null);
@@ -771,6 +775,7 @@ const Index = () => {
                   confidenceObserved={confidenceObserved}
                   positionReview={positionReview}
                   planHorizon={planHorizon}
+                  streak={streak}
                   analysisId={analysisId}
                   positions={positions}
                   onPositionsChanged={() => void loadHistory()}
