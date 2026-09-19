@@ -20,6 +20,8 @@ import {
   type OutcomeTally,
   headlineScope,
   serverTally,
+  directionStreak,
+  STREAK_WARN_AT,
 } from "@/lib/outcomeStats";
 import { formatJst } from "@/lib/candleTime";
 import OutcomeDetail from "./OutcomeDetail";
@@ -96,6 +98,7 @@ const AnalysisHistory = ({ records, stats = null, positions = [], onPositionsCha
   const closed = overall.wins + overall.losses + overall.expired;
   const gate = stats?.shadow ?? shadowTally(all);
   const causes = causeCounts(safe);
+  const streak = directionStreak(safe);
   // The same four breakdowns, over the whole record when the server answered.
   // Splitting forty rows four ways gave cells of two or three and coloured
   // their win rates with full confidence.
@@ -189,6 +192,20 @@ const AnalysisHistory = ({ records, stats = null, positions = [], onPositionsCha
       </p>
 
       <p className="text-[10px] text-muted-foreground">{t.history.autoNote}</p>
+
+      {/* The run of same-direction losses, over the reader's own rows. The win
+          rate above is over the whole record and barely moved while nine
+          SELLs in a row lost (9/9–9/15); this is the number that did. */}
+      {streak && streak.losses >= STREAK_WARN_AT && (
+        <p className="text-[10px] text-warning font-mono" data-testid="history-streak">
+          {t.history.streak(
+            t.direction[streak.direction].word,
+            streak.losses,
+            formatJst(streak.from, t.intlLocale),
+            formatJst(streak.to, t.intlLocale),
+          )}
+        </p>
+      )}
 
       {overall.contracts.length > 1 && (
         <p className="text-[10px] text-warning" data-testid="mixed-contracts">

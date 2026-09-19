@@ -457,3 +457,189 @@ describe("a floor with no ceiling is an instruction to reverse-engineer the targ
     expect(MAX_RISK_REWARD).toBeGreaterThan(MIN_RISK_REWARD);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE STRUCTURE GATE (2026-09-19).
+//
+// Measured that day: 62 of the 63 directional calls since 8/29 were SELL, the
+// analyst never proposed a BUY, and the six SELLs into the 9/14–9/19 rally
+// (153.7 → 156.9) all lost. Nothing in the pipeline could say "the higher
+// timeframe has stopped going down". This is the thing that says so, and
+// these tests are the contract for exactly what it reads.
+// ---------------------------------------------------------------------------
+
+import {
+  readHigherStructures,
+  structureBias,
+  structureConflictFor,
+  type HigherStructure,
+  type StructureForGate,
+} from "../../supabase/functions/analyze/entry.ts";
+import { readFileSync } from "node:fs";
+
+const brk = (kind: "high" | "low", state: "held" | "broken" | "reclaimed", barsAgo: number, level = 154.66) => ({
+  level,
+  kind,
+  datetime: "2026-09-17 00:00:00",
+  barsAgo,
+  close: kind === "high" ? level + 0.5 : level - 0.5,
+  state,
+  wickOnly: 0,
+});
+
+const st = (over: Partial<StructureForGate> = {}): StructureForGate => ({
+  ok: true,
+  label: "range",
+  lastBreak: { up: null, down: null },
+  ...over,
+});
+
+describe("structureBias reads the higher timeframe off its own closes", () => {
+  it("is the most recent settled close-break, whichever side", () => {
+    // The 9/21 daily, as the code will see it: 154.66 broken up 3 bars ago,
+    // 158.04 broken down 12 bars ago — the up break is what price did last.
+    const daily = st({ label: "downtrend", lastBreak: { up: brk("high", "broken", 3), down: brk("low", "broken", 12, 158.04) } });
+    expect(structureBias(daily)).toMatchObject({ bias: "Up", from: "break" });
+    expect(structureBias(daily).brk?.level).toBe(154.66);
+    // and the mirror image
+    const mirror = st({ label: "uptrend", lastBreak: { up: brk("high", "broken", 12), down: brk("low", "broken", 3, 152.9) } });
+    expect(structureBias(mirror)).toMatchObject({ bias: "Down", from: "break" });
+  });
+
+  it("ignores a reclaimed level and a level only pierced by wicks", () => {
+    // 9/14's daily: the 8/28 up-break was reclaimed, the 9/3 down-break held.
+    // Reclaimed is "the level is alive", not a break; held is a wick.
+    const sept14 = st({ label: "downtrend", lastBreak: { up: brk("high", "reclaimed", 13, 159.78), down: brk("low", "broken", 8, 158.04) } });
+    expect(structureBias(sept14)).toMatchObject({ bias: "Down", from: "break" });
+    const wicks = st({ lastBreak: { up: brk("high", "held", 2), down: null } });
+    expect(structureBias(wicks).bias).toBeNull();
+  });
+
+  it("falls back to the two-pivot label only when nothing was closed through, and says so", () => {
+    expect(structureBias(st({ label: "uptrend" }))).toEqual({ bias: "Up", from: "label", brk: null });
+    expect(structureBias(st({ label: "downtrend" }))).toEqual({ bias: "Down", from: "label", brk: null });
+    for (const label of ["range", "expanding", "contracting", "unknown"] as const) {
+      expect(structureBias(st({ label })).bias, label).toBeNull();
+    }
+    // a break outranks the label, even the opposite label
+    expect(structureBias(st({ label: "downtrend", lastBreak: { up: brk("high", "broken", 3), down: null } })).bias).toBe("Up");
+  });
+
+  it("calls a tie no direction, and an unusable structure no direction", () => {
+    expect(structureBias(st({ lastBreak: { up: brk("high", "broken", 5), down: brk("low", "broken", 5) } })).bias).toBeNull();
+    expect(structureBias(st({ ok: false, label: "uptrend" })).bias).toBeNull();
+    expect(structureBias(null).bias).toBeNull();
+    expect(structureBias(undefined).bias).toBeNull();
+  });
+});
+
+describe("structureConflictFor refuses the plan that points against the rung above it", () => {
+  const up = (tf: string): HigherStructure => ({ tf, structure: st({ lastBreak: { up: brk("high", "broken", 3), down: null } }) });
+  const down = (tf: string): HigherStructure => ({ tf, structure: st({ lastBreak: { up: null, down: brk("low", "broken", 3, 152.9) } }) });
+  const flat = (tf: string): HigherStructure => ({ tf, structure: st() });
+
+  it("names the nearest rung that disagrees, with the level it read", () => {
+    const c = structureConflictFor("SELL", [flat("4h"), up("1day")]);
+    expect(c).toMatchObject({ tf: "1day", bias: "Up", from: "break", level: 154.66, barsAgo: 3 });
+    expect(structureConflictFor("BUY", [down("4h"), up("1day")])).toMatchObject({ tf: "4h", bias: "Down" });
+  });
+
+  it("lets an aligned plan, a WAIT, and a plan with no rungs through", () => {
+    expect(structureConflictFor("SELL", [down("4h"), down("1day")])).toBeNull();
+    expect(structureConflictFor("BUY", [up("4h")])).toBeNull();
+    expect(structureConflictFor("WAIT", [up("4h"), up("1day")])).toBeNull();
+    expect(structureConflictFor("SELL", [])).toBeNull();
+    expect(structureConflictFor("SELL", null)).toBeNull();
+    expect(structureConflictFor("SELL", [flat("4h"), flat("1day")])).toBeNull();
+  });
+
+  it("a label-only reading still refuses, and is reported as the weaker source", () => {
+    const labelUp: HigherStructure = { tf: "1day", structure: st({ label: "uptrend" }) };
+    expect(structureConflictFor("SELL", [labelUp])).toMatchObject({ from: "label", level: null, datetime: null, barsAgo: null });
+  });
+
+  it("records what every rung said, on every call", () => {
+    expect(readHigherStructures([down("4h"), up("1day"), flat("1week")])).toEqual([
+      { tf: "4h", bias: "Down", from: "break" },
+      { tf: "1day", bias: "Up", from: "break" },
+      { tf: "1week", bias: null, from: null },
+    ]);
+    expect(readHigherStructures(null)).toEqual([]);
+  });
+});
+
+describe("evaluateEntry runs the structure gate before the geometry", () => {
+  const rally: HigherStructure[] = [
+    { tf: "4h", structure: st({ lastBreak: { up: brk("high", "broken", 2, 155.64), down: null } }) },
+    { tf: "1day", structure: st({ label: "downtrend", lastBreak: { up: brk("high", "broken", 3), down: brk("low", "broken", 12, 158.04) } }) },
+  ];
+
+  it("refuses the SELL into the rally that the record shows losing six times", () => {
+    const v = evaluateEntry({ ...base, higherStructures: rally });
+    expect(v.ok).toBe(false);
+    expect(v.rejection).toBe("structure_conflict");
+    expect(v.structureConflict).toMatchObject({ tf: "4h", bias: "Up", from: "break", level: 155.64 });
+    expect(v.structureRead).toEqual([
+      { tf: "4h", bias: "Up", from: "break" },
+      { tf: "1day", bias: "Up", from: "break" },
+    ]);
+    // direction before geometry: nothing about the stop or target was measured
+    expect(v.riskReward).toBeNull();
+    expect(v.stopAtr).toBeNull();
+    expect(v.entryType).toBeNull();
+  });
+
+  it("publishes the same plan when the rungs agree, and records what they said", () => {
+    const falling: HigherStructure[] = rally.map((h) => ({
+      tf: h.tf,
+      structure: st({ lastBreak: { up: null, down: brk("low", "broken", 2, 152.9) } }),
+    }));
+    const v = evaluateEntry({ ...base, higherStructures: falling });
+    expect(v.ok).toBe(true);
+    expect(v.rejection).toBeNull();
+    expect(v.structureConflict).toBeNull();
+    expect(v.structureRead.map((r) => r.bias)).toEqual(["Down", "Down"]);
+  });
+
+  it("leaves a WAIT alone but still writes down what the rungs said", () => {
+    const v = evaluateEntry({ ...base, signal: "WAIT", entry: null, stopLoss: null, takeProfit1: null, higherStructures: rally });
+    expect(v.ok).toBe(true);
+    expect(v.rejection).toBeNull();
+    expect(v.structureConflict).toBeNull();
+    expect(v.structureRead).toHaveLength(2);
+  });
+
+  it("is a no-op for a caller that passes no rungs", () => {
+    const v = evaluateEntry(base);
+    expect(v.ok).toBe(true);
+    expect(v.structureRead).toEqual([]);
+    expect(v.structureConflict).toBeNull();
+  });
+});
+
+describe("the gate is wired through, in every place it has to be", () => {
+  const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
+  const locale = readFileSync("supabase/functions/analyze/locale.ts", "utf8");
+
+  it("analyze hands the gate the higher rungs and stores what it read", () => {
+    expect(analyze).toContain("higherStructures: higherStructures,");
+    expect(analyze).toContain("structure_read: entryVerdict.structureRead,");
+    expect(analyze).toContain("structure_conflict: entryVerdict.structureConflict,");
+    expect(analyze).toContain("structureConflict: entryVerdict.structureConflict,");
+    // the same objects go to the prompt as to the gate
+    expect(analyze).toContain("readHigherStructures(higherStructures)");
+  });
+
+  it("the prompt says which line decides the higher timeframe's direction, and that the server enforces it", () => {
+    const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
+    expect(prompt).toContain("終値ブレイク");
+    expect(prompt).toContain("サーバーが公開しない");
+    expect(analyze).toContain("上位足の方向(サーバ判定");
+  });
+
+  it("both languages have a sentence for the refusal that names the rung", () => {
+    const cases = locale.match(/case "structure_conflict":/g) ?? [];
+    expect(cases).toHaveLength(2);
+    expect(locale).toContain("structureConflict?:");
+  });
+});

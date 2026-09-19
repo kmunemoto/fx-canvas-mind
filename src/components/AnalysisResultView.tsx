@@ -16,6 +16,8 @@ import { visibleWarnings, waitReasonOf } from "@/lib/warnings";
 import { hasMarketContext } from "@/lib/marketContext";
 import { registrationFor } from "@/lib/positions";
 import { horizonLines } from "@/lib/planHorizon";
+import { STREAK_WARN_AT, type DirectionStreak } from "@/lib/outcomeStats";
+import { formatJst } from "@/lib/candleTime";
 import type { Dict } from "@/lib/i18n/locales";
 
 interface Props {
@@ -44,6 +46,11 @@ interface Props {
   // this shipped the plan card rendered no time at all, while the page header
   // ticked a live clock to the second beside it.
   planHorizon?: PlanHorizon | null;
+  // The reader's own run of same-direction losses (outcomeStats.ts,
+  // directionStreak). Shown on the plan only when the plan points the same
+  // way and the run is at least STREAK_WARN_AT long — the ninth SELL of
+  // 9/9–9/15 was issued with nothing on screen saying the previous eight lost.
+  streak?: DirectionStreak | null;
 }
 
 // Bullets shown before the reader asks for the rest. The factors are
@@ -88,7 +95,7 @@ const Chip = ({ children }: { children: string }) => (
 const AnalysisResultView = ({
   result, techData, pair, interval, entryCheck, analysisMode, ruleFit, rulebook,
   confidenceObserved = null, positionReview = null, analysisId = null, positions = [], onPositionsChanged,
-  planHorizon = null,
+  planHorizon = null, streak = null,
 }: Props) => {
   const t = useT();
   const [allFactors, setAllFactors] = useState(false);
@@ -125,6 +132,12 @@ const AnalysisResultView = ({
   const stopDistance = hasPlan ? distance(result.stop_loss) : null;
   const tp1Distance = hasPlan ? distance(result.take_profit_1) : null;
   const horizon = horizonLines(planHorizon, t, t.intlLocale);
+  // Only the streak in THIS plan's direction, and only once it is long enough
+  // to be a run rather than an afternoon. A SELL after three BUY losses says
+  // nothing about SELLs.
+  const sameDirectionStreak = hasPlan && streak !== null && streak.direction === result.signal && streak.losses >= STREAK_WARN_AT
+    ? streak
+    : null;
 
   // The two registers, assembled here because only this component has both
   // halves: what the server measured, and what the model named.
@@ -293,6 +306,26 @@ const AnalysisResultView = ({
               </div>
               <p className="text-[10px] text-muted-foreground">{horizon.notACutoff}</p>
               <p className="text-[10px] text-muted-foreground">{horizon.tpRoles}</p>
+            </div>
+          )}
+          {/* The reader's own record in this direction, when it is a run of
+              losses. Not a verdict on the plan — the analyst does not see
+              this number and the plan was not changed by it — but the one
+              fact the screen owed the reader before the ninth SELL. */}
+          {sameDirectionStreak && (
+            <div className="pt-2 border-t border-border/50 flex items-start gap-2 text-xs text-warning" data-testid="direction-streak">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+              <div className="space-y-0.5">
+                <p className="font-medium">
+                  {t.result.streak.warn(
+                    t.direction[sameDirectionStreak.direction].word,
+                    sameDirectionStreak.losses,
+                    formatJst(sameDirectionStreak.from, t.intlLocale),
+                    formatJst(sameDirectionStreak.to, t.intlLocale),
+                  )}
+                </p>
+                <p className="text-[10px] text-muted-foreground">{t.result.streak.note}</p>
+              </div>
             </div>
           )}
           {/* "I entered on this plan." Only when the row exists to point at,

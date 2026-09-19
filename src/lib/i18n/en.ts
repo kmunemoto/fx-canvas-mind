@@ -89,6 +89,12 @@ export const en: Dict = {
       tpRoles: "Take profit 1 is the level aimed at inside this period. Take profit 2 and 3 are extensions beyond it and are not expected to be reached within it.",
       absent: "No target period was recorded for this analysis.",
     },
+    // See the Japanese copy: the reader's own same-direction losing run.
+    streak: {
+      warn: (word: string, n: number, from: string, to: string) =>
+        `In your record the last ${n} ${word} calls all lost (${from} – ${to})`,
+      note: "The analyst does not see this run; this plan was issued independently of it.",
+    },
     evidence: "Evidence",
     showAll: (n: number) => `Show all (${n})`,
     showLess: "Show fewer",
@@ -110,6 +116,10 @@ export const en: Dict = {
       refused: (word: string, gloss: string) => `The model's ${word} (${gloss}) was refused server-side and published as WAIT`,
       atrMultiple: (n: number) => `${n}× ATR`,
       confidence: (score: number, floor: number) => `confidence ${score}, floor ${floor}`,
+      structure: (tf: string, up: boolean, level: string | null) =>
+        level === null
+          ? `${tf} points ${up ? "up" : "down"} (last two swings)`
+          : `${tf} closed ${up ? "up" : "down"} through ${level} and stayed there`,
     },
     riskLevels: { LOW: "Low", MEDIUM: "Medium", HIGH: "High" },
     sentiments: { BULLISH: "Bullish", NEUTRAL: "Neutral", BEARISH: "Bearish" },
@@ -186,6 +196,8 @@ export const en: Dict = {
     statsFallback: (n: number) => `Record: from the last ${n} rows only — the server totals could not be fetched`,
     otherContractRows: (n: number) => `${n} calls made under a different entry contract are not counted here`,
     autoNote: "Judged automatically every 15 minutes against actual prices (TP1 reached = WIN, SL reached = LOSS)",
+    streak: (word: string, n: number, from: string, to: string) =>
+      `Same-direction losing run: ${n} ${word} calls in a row lost (${from} – ${to}, your record)`,
     winRateNote: "Win rate counts WIN, LOSS and expired (no-fill and unclear are excluded). An expiry is what a target too far away looks like, so it is not an exit from the win rate. Fill rate is how often the market actually reached the entry",
     stats: {
       title: "Breakdown",
@@ -250,6 +262,9 @@ export const en: Dict = {
         // (The missing level is visible: proposed_stop and proposed_tp1 are
         // rendered right beside this label.)
         incoherent: "Entry, stop and target could not be read as a coherent plan",
+        // See the Japanese copy: added after nine consecutive same-direction
+        // losses; takes effect on the bar AFTER the higher timeframe turns.
+        structure_conflict: "Runs against the higher timeframe's direction (closing break)",
       },
       proposed: "Model's call",
       distance: "Distance from market",
@@ -956,7 +971,7 @@ export const en: Dict = {
     },
     thesis: {
       heldLabel: "Original plan's thesis",
-      noPlan: "No plan behind this one — you registered it yourself",
+      noPlan: "No plan behind this one. The direction, stop and TP1 you registered are the thesis; the review judges whether the market still supports that direction",
       previousLabel: "Previous call's thesis",
       byAnalyst: "model's reading",
       status: { intact: "intact", weakened: "weakened", broken: "broken", unknown: "unknown" },

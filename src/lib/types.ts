@@ -232,6 +232,10 @@ export const ENTRY_REJECTIONS = [
   // itself moves hourly and is deliberately not written down here.
   "low_confidence",
   "incoherent",
+  // A higher timeframe's most recent close-break points the other way
+  // (entry.ts, structureBias). Stamped only on a proposed BUY/SELL — the gate
+  // returns before this check on a WAIT — so it is always a real refusal.
+  "structure_conflict",
 ] as const;
 
 export type EntryRejection = (typeof ENTRY_REJECTIONS)[number];
@@ -270,6 +274,19 @@ export interface EntryCheck {
   // or SELL. Absent on every row written before analyze-v46.
   shape_rejection?: EntryRejection | null;
   repair_rejection?: EntryRejection | null;
+  // What each higher rung's closes said when the gate looked (every row from
+  // analyze v61), and the rung that refused the plan for pointing against
+  // them (when one did). `from` says how weak the reading was: a settled
+  // close-break, or only the two-pivot label because no level was broken.
+  structure_read?: Array<{ tf: string; bias: "Up" | "Down" | null; from: "break" | "label" | null }>;
+  structure_conflict?: {
+    tf: string;
+    bias: "Up" | "Down";
+    from: "break" | "label";
+    level: number | null;
+    datetime: string | null;
+    barsAgo: number | null;
+  } | null;
   repaired?: boolean;
   atr: number | null;
   // Written by analyze since the first version, never declared until now.

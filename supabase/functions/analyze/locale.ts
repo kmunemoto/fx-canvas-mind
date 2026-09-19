@@ -62,6 +62,16 @@ interface LocaleStrings {
     // so the sentence has to hold together when they are absent.
     confidence?: number | null;
     confidenceFloor?: number | null;
+    // The higher rung that refused the plan for pointing against its own
+    // closes (entry.ts, structureConflictFor). Only structure_conflict reads
+    // it; same reasoning as the two above.
+    structureConflict?: {
+      tf: string;
+      bias: "Up" | "Down";
+      from: "break" | "label";
+      level: number | null;
+      datetime: string | null;
+    } | null;
   }) => string;
   // Shown when the entry was moved to the market price because the model's
   // pullback entry would not have been filled
@@ -115,9 +125,21 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
       "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
+      // The rung, its reading and the level it read it off. The level is what
+      // makes this checkable against the chart; without it the sentence is
+      // "the server disagreed", which is the shape of every unverifiable
+      // claim this project has had to retract.
+      const structure = (() => {
+        const s = structureConflict;
+        if (!s) return "上位足の方向";
+        const dir = s.bias === "Up" ? "上" : "下";
+        return s.from === "break" && s.level !== null
+          ? `上位足 ${s.tf} が ${s.level} を終値で${dir}に抜けたまま${s.datetime ? `（${s.datetime.slice(0, 16)}Z）` : ""}で、その足の方向は${dir}`
+          : `上位足 ${s.tf} の直近2スイングが${dir}向きの並び（終値ブレイクは無し）`;
+      })();
       const repair = repairRejection === "poor_rr"
         ? "。現在値で入り直してもリスクリワードが成立しません"
         : repairRejection === "stop_too_tight"
@@ -162,6 +184,12 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         // して同じカードに並んで出るので、その隣で嘘になる。
         case "incoherent":
           return `${head}エントリー・損切り・利確を筋の通ったプランとして読み取れなかった${tail}`;
+        // 上位足の終値ブレイクが逆を向いている。9/3〜9/15 の SELL 62 件のうち
+        // 反発局面の 9 件が連続で負けたとき、上位足はまだ「下降」のラベルの
+        // まま、日足の直近高値を終値で抜ける 3 本手前だった。この却下は
+        // その次の足から効く（過去の 9 件は救えなかった。ここに嘘を書かない）。
+        case "structure_conflict":
+          return `${head}${structure}であり、上位足の方向に逆らう${tail}`;
         // 現状ここには何も来ない: この switch に来る rejection は低確信度と
         // entry.ts の Rejection 6種だけで、いずれも case を持つ。market_closed は
         // 呼び出し側（index.ts）が marketClosed に振り分け、"unknown" は
@@ -211,9 +239,18 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:
       "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
+      // Same as the Japanese: name the rung, the reading and the level.
+      const structure = (() => {
+        const s = structureConflict;
+        if (!s) return "the higher timeframe points the other way";
+        const dir = s.bias === "Up" ? "up" : "down";
+        return s.from === "break" && s.level !== null
+          ? `the ${s.tf} closed ${dir} through ${s.level}${s.datetime ? ` (${s.datetime.slice(0, 16)}Z)` : ""} and has stayed there, so that timeframe points ${dir}`
+          : `the ${s.tf}'s last two swings run ${dir} (no closing break either way)`;
+      })();
       const repair = repairRejection === "poor_rr"
         ? " Entering at the market instead would not pay either."
         : repairRejection === "stop_too_tight"
@@ -250,6 +287,12 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         // and rendered on the same card, so that hedge would be its own lie.
         case "incoherent":
           return `${head}the entry, stop and target could not be read as a coherent plan${tail}`;
+        // See the Japanese copy: this refusal starts working on the bar AFTER
+        // the one where the higher timeframe's closes turn; it did not exist
+        // for the nine consecutive SELL losses of 9/9–9/15 and would not have
+        // caught the first of them.
+        case "structure_conflict":
+          return `${head}${structure} — the plan runs against it${tail}`;
         // Nothing reaches this today: only low_confidence and the six
         // rejections in entry.ts arrive here and all of them now have a case;
         // market_closed is diverted to marketClosed by the caller, and

@@ -57,6 +57,14 @@ const DirectionHero = ({ result, pair, interval, entryCheck, confidenceObserved 
           return typeof confidence === "number" && typeof confidence_floor === "number"
             ? w.confidence(confidence, confidence_floor)
             : null;
+        case "structure_conflict": {
+          // The rung that refused it, and the level it read the direction
+          // off — the one number that lets the reader check the refusal
+          // against the chart.
+          const s = entryCheck.structure_conflict;
+          if (!s) return null;
+          return w.structure(s.tf, s.bias === "Up", s.from === "break" && s.level !== null ? String(s.level) : null);
+        }
         default:
           return null;
       }
