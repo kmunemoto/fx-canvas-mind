@@ -2047,9 +2047,32 @@ Supabase CLI が **TypeScript ソースを直接**デプロイする。
   **ローカルのサイズ確認とインライン経路の代替**として残すが、本番で動くものではなくなった。
   §8.7-a の「読み戻して sha256 で照合する」手順は、インライン経路を使うときだけの手順である。
 
-### 出したもの
+### 出したもの（GitHub Actions の run #1、2026-09-20 02:35Z）
 
-（GitHub Actions の初回実行後に記入。それまで本番は analyze fn 82 / v61 のまま）
+| 関数 | 版 | fn ver | 経路 |
+|---|---|---|---|
+| analyze | v61 → **v62** | 82 → **83** | Actions |
+| position-review | v4 → **v5** | 4 → **5** | Actions |
+| postmortem | v31 → **v32** | 43 → **44** | Actions |
+| track-outcomes | v18 → **v19** | 26 → **27** | Actions |
+| noise-floor | v6 → **v7** | 14 → **15** | Actions |
+| version-compare | v12 → **v13** | 15 → **16** | Actions |
+
+決済系 3 本と `econ-calendar` は既定の対象外なので、版も fn ver も動いていない（意図どおり）。
+デプロイ全体で 25 秒（`Deploy` ステップ 02:35:11→02:35:36Z）。
+
+**動いている版の確認の仕方も変わった。** バンドルを読み戻して sha256 を比べる代わりに、
+関数に認証なしで当てて、返る JSON の `version` を読む（どの応答にも `FUNCTION_VERSION` が
+入る）。実測:
+
+```
+analyze         → 401 {"version":"analyze-v62-2026-09-19T15:00:00Z", ...}
+position-review → 401 {"version":"position-review-v5-2026-09-19T15:00:00Z", ...}
+```
+
+これは「リポジトリのバイトが本番に届いたか」ではなく「**本番で動いているコードが何と
+名乗るか**」を見ている。Actions が出す以上、届いたバイトはリポジトリのものだと GitHub の
+チェックアウトが保証するので、照合する対象はそちらに移った。
 
 ### 検査
 
