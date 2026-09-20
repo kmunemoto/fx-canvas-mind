@@ -65,6 +65,13 @@ const DirectionHero = ({ result, pair, interval, entryCheck, confidenceObserved 
           if (!s) return null;
           return w.structure(s.tf, s.bias === "Up", s.from === "break" && s.level !== null ? String(s.level) : null);
         }
+        case "turn_conflict": {
+          // The count that refused it and the threshold it was measured
+          // against — carried on the row so this never has to know the number.
+          const tc = entryCheck.turn_conflict;
+          if (!tc) return null;
+          return w.turn(tc.side === "Up", tc.score, tc.block);
+        }
         default:
           return null;
       }

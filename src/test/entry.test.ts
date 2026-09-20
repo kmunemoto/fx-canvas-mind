@@ -13,6 +13,9 @@ import {
   normalizeMode,
   type EntryPlan,
   MAX_RISK_REWARD,
+  FRESH_BREAK_BARS,
+  TURN_BLOCK,
+  type TurnForGate,
 } from "../../supabase/functions/analyze/entry.ts";
 
 // A 1h USD/JPY plan: market 157.08, ATR 0.45 (45 pips). SELL at the market,
@@ -560,11 +563,107 @@ describe("structureConflictFor refuses the plan that points against the rung abo
 
   it("records what every rung said, on every call", () => {
     expect(readHigherStructures([down("4h"), up("1day"), flat("1week")])).toEqual([
-      { tf: "4h", bias: "Down", from: "break" },
-      { tf: "1day", bias: "Up", from: "break" },
-      { tf: "1week", bias: null, from: null },
+      { tf: "4h", bias: "Down", from: "break", turn: null, turning: false },
+      { tf: "1day", bias: "Up", from: "break", turn: null, turning: false },
+      { tf: "1week", bias: null, from: null, turn: null, turning: false },
     ]);
     expect(readHigherStructures(null)).toEqual([]);
+  });
+});
+
+describe("a turning rung yields, and the entry rung's own turn refuses a continuation (#96)", () => {
+  const turn = (up: number, down: number): TurnForGate => ({
+    up: { score: up, facts: ["stale_break", "hist_run", "rsi_recovery", "mean_cross"].slice(0, up) },
+    down: { score: down, facts: ["stale_break", "hist_run", "rsi_recovery", "mean_cross"].slice(0, down) },
+  });
+  // The 9/14 daily as the code saw it: 158.04 broken down eight bars ago, the
+  // 8/28 up-break reclaimed, and three facts that the fall was ending.
+  const dailyTurning: HigherStructure = {
+    tf: "1day",
+    structure: st({ label: "downtrend", lastBreak: { up: brk("high", "reclaimed", 13, 159.78), down: brk("low", "broken", 8, 158.04) } }),
+    turn: turn(3, 0),
+  };
+  const buy: EntryPlan = { signal: "BUY", entry: 154.57, stopLoss: 154.1, takeProfit1: 155.4, price: 154.57, atr: 0.45, mode: "Trend Day", direction: "Up" };
+
+  it("lets the 9/14 1h BUY through the daily that still read Down, and writes the yield down", () => {
+    const v = evaluateEntry({ ...buy, higherStructures: [{ tf: "4h", structure: st() }, dailyTurning] });
+    expect(v.ok).toBe(true);
+    expect(v.rejection).toBeNull();
+    expect(v.structureConflict).toBeNull();
+    expect(v.structureYielded).toEqual([{ tf: "1day", bias: "Down", score: 3 }]);
+    expect(v.structureRead[1]).toEqual({ tf: "1day", bias: "Down", from: "break", turn: { up: 3, down: 0 }, turning: true });
+  });
+
+  it("does not yield below the threshold, nor on a fresh break whatever the oscillators say", () => {
+    const weak = { ...dailyTurning, turn: turn(TURN_BLOCK - 1, 0) };
+    expect(evaluateEntry({ ...buy, higherStructures: [weak] }).rejection).toBe("structure_conflict");
+    const fresh: HigherStructure = {
+      ...dailyTurning,
+      structure: st({ lastBreak: { up: null, down: brk("low", "broken", FRESH_BREAK_BARS, 152.9) } }),
+    };
+    const v = evaluateEntry({ ...buy, higherStructures: [fresh] });
+    expect(v.rejection).toBe("structure_conflict");
+    expect(v.structureYielded).toEqual([]);
+    expect(v.structureRead[0].turning).toBe(false);
+  });
+
+  it("a rung without a turn read never yields", () => {
+    const { turn: _t, ...noTurn } = dailyTurning;
+    expect(evaluateEntry({ ...buy, higherStructures: [noTurn] }).rejection).toBe("structure_conflict");
+  });
+
+  it("refuses the 9/15 daily SELL: the entry rung is turning up under it, before any geometry", () => {
+    const v = evaluateEntry({
+      ...base,
+      entryStructure: { structure: dailyTurning.structure, turn: turn(3, 0) },
+    });
+    expect(v.ok).toBe(false);
+    expect(v.rejection).toBe("turn_conflict");
+    expect(v.turnConflict).toEqual({ side: "Up", score: 3, block: TURN_BLOCK, facts: ["stale_break", "hist_run", "rsi_recovery"] });
+    expect(v.riskReward).toBeNull();
+    expect(v.stopAtr).toBeNull();
+  });
+
+  it("lets the 9/8 SELL through: a breakdown two bars old is the move still going", () => {
+    const v = evaluateEntry({
+      ...base,
+      entryStructure: { structure: st({ lastBreak: { up: null, down: brk("low", "broken", 2, 152.9) } }), turn: turn(3, 0) },
+    });
+    expect(v.ok).toBe(true);
+    expect(v.turnConflict).toBeNull();
+  });
+
+  it("is symmetric: a BUY into an entry rung turning down is refused the same way", () => {
+    const v = evaluateEntry({
+      ...buy,
+      entryStructure: { structure: st({ lastBreak: { up: brk("high", "broken", 9), down: null } }), turn: turn(0, 3) },
+    });
+    expect(v.rejection).toBe("turn_conflict");
+    expect(v.turnConflict).toMatchObject({ side: "Down", score: 3 });
+    // and the same evidence does not touch a SELL
+    expect(evaluateEntry({
+      ...base,
+      entryStructure: { structure: st({ lastBreak: { up: brk("high", "broken", 9), down: null } }), turn: turn(0, 3) },
+    }).turnConflict).toBeNull();
+  });
+
+  it("the rungs above are asked first", () => {
+    const v = evaluateEntry({
+      ...base,
+      higherStructures: [{ tf: "4h", structure: st({ lastBreak: { up: brk("high", "broken", 2, 155.64), down: null } }) }],
+      entryStructure: { structure: dailyTurning.structure, turn: turn(3, 0) },
+    });
+    expect(v.rejection).toBe("structure_conflict");
+    expect(v.turnConflict).toBeNull();
+  });
+
+  it("leaves a WAIT and a caller without an entry read alone", () => {
+    const w = evaluateEntry({ ...base, signal: "WAIT", entry: null, stopLoss: null, takeProfit1: null, entryStructure: { structure: dailyTurning.structure, turn: turn(3, 0) } });
+    expect(w.ok).toBe(true);
+    expect(w.turnConflict).toBeNull();
+    expect(w.structureYielded).toEqual([]);
+    expect(evaluateEntry(base).turnConflict).toBeNull();
+    expect(evaluateEntry({ ...base, entryStructure: { structure: dailyTurning.structure, turn: null } }).ok).toBe(true);
   });
 });
 
@@ -580,8 +679,8 @@ describe("evaluateEntry runs the structure gate before the geometry", () => {
     expect(v.rejection).toBe("structure_conflict");
     expect(v.structureConflict).toMatchObject({ tf: "4h", bias: "Up", from: "break", level: 155.64 });
     expect(v.structureRead).toEqual([
-      { tf: "4h", bias: "Up", from: "break" },
-      { tf: "1day", bias: "Up", from: "break" },
+      { tf: "4h", bias: "Up", from: "break", turn: null, turning: false },
+      { tf: "1day", bias: "Up", from: "break", turn: null, turning: false },
     ]);
     // direction before geometry: nothing about the stop or target was measured
     expect(v.riskReward).toBeNull();
@@ -628,6 +727,37 @@ describe("the gate is wired through, in every place it has to be", () => {
     expect(analyze).toContain("structureConflict: entryVerdict.structureConflict,");
     // the same objects go to the prompt as to the gate
     expect(analyze).toContain("readHigherStructures(higherStructures)");
+  });
+
+  it("analyze hands the gate the turn on every rung and the entry rung, and stores what it did with it (#96)", () => {
+    expect(analyze).toContain("turn: turnForGate(turns[i + 1])");
+    expect(analyze).toContain("entryStructure: { structure: structures[0].structure, turn: turnForGate(turns[0]) },");
+    expect(analyze).toContain("turn_conflict: entryVerdict.turnConflict,");
+    expect(analyze).toContain("structure_yielded: entryVerdict.structureYielded,");
+    expect(analyze).toContain("turnConflict: entryVerdict.turnConflict,");
+    expect(analyze).toContain("turn: turns.map((t, i) => compactTurn(timeframes[i], t, decimals)),");
+    // the line the model reads is rendered from the same read the gate gets
+    expect(analyze).toContain("${turnLines(turns[i], decimals)}");
+  });
+
+  it("the prompt names the turn line, the threshold, and the counter-case it must write (#96)", () => {
+    const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
+    expect(prompt).toContain("転換の証拠");
+    expect(prompt).toContain("${TURN_BLOCK}");
+    expect(prompt).toContain("${FRESH_BREAK_BARS}");
+    expect(prompt).toContain("counter_case");
+    expect(prompt).toContain("上位足が転換中なら、逆方向のプランは止めない");
+    const schema = analyze.slice(analyze.indexOf("const RESPONSE_SCHEMA"), analyze.indexOf("const { conditional_wait"));
+    expect(schema).toContain("counter_case: {");
+    // optional in the schema (the replay harnesses' missing-key check), and
+    // therefore required by the prompt instead
+    expect(schema).not.toMatch(/required: \[[^\]]*"counter_case"/);
+  });
+
+  it("both languages have a sentence for the turn refusal that carries the count", () => {
+    const cases = locale.match(/case "turn_conflict":/g) ?? [];
+    expect(cases).toHaveLength(2);
+    expect(locale).toContain("turnConflict?:");
   });
 
   it("the prompt says which line decides the higher timeframe's direction, and that the server enforces it", () => {

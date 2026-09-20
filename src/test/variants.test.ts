@@ -44,40 +44,53 @@ describe("the arm has to change what is SENT", () => {
     expect(RESPONSE_SCHEMA.required.length).toBe(20);
   });
 
-  // The control arm must keep landing in the era 45 stored rows are keyed on
-  // (noise-floor/prompt-surgery.ts SCHEMA_ERAS). `conditional_wait` is the
-  // last property, so stripping it restores that key order exactly — measured,
-  // not assumed, and pinned here because the next property appended anywhere
-  // but the end would silently break it.
-  it("stripping conditional_wait reproduces the v48 era byte for byte", async () => {
+  const sha = async (text: string) => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const era = (name: string) => {
+    const e = SCHEMA_ERAS.find((x) => x.era === name);
+    expect(e, name).toBeDefined();
+    return e!;
+  };
+
+  // Until #96 the control arm landed in the era the 45 stored rows are keyed
+  // on (v48): `conditional_wait` was the last property and stripping it
+  // restored the v48 bytes exactly. #96 added `counter_case` to what EVERY
+  // arm sends — that is its whole point — so the control arm now opens an
+  // era of its own (v62) and the candidate arm another (v62cond). Both are
+  // catalogued; what must never move silently is the v48 reproduction below,
+  // which is what the replay harnesses send the corpus.
+  it("stripping conditional_wait is the control arm's era, and it is catalogued", async () => {
     const { conditional_wait: _drop, ...free } = RESPONSE_SCHEMA.properties as Record<string, unknown>;
     const control = { ...RESPONSE_SCHEMA, properties: free };
     const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(control));
-
-    const v48 = SCHEMA_ERAS.find((e) => e.era === "v48");
-    expect(v48).toBeDefined();
-    expect(suffix.length).toBe(v48!.suffixLength);
-
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(suffix));
-    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    expect(hex).toBe(v48!.suffixSha256);
+    const v62 = era("v62");
+    expect(suffix.length).toBe(v62.suffixLength);
+    expect(await sha(suffix)).toBe(v62.suffixSha256);
+    expect(v62.suffixSha256).not.toBe(era("v48").suffixSha256);
   });
 
-  // The digests move whenever the conditional_wait block's own text changes —
-  // they did once already, when MIN_EXPIRES_BARS made "1以上" false. That is
-  // fine and expected; what must never move silently is the CONTROL digest
-  // above, which is what keeps the stored corpus replayable.
+  it("stripping counter_case as well reproduces the v48 era byte for byte — the corpus's bytes", async () => {
+    const { conditional_wait: _a, counter_case: _b, ...free } = RESPONSE_SCHEMA.properties as Record<string, unknown>;
+    const corpus = { ...RESPONSE_SCHEMA, properties: free };
+    const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(corpus));
+    const v48 = era("v48");
+    expect(suffix.length).toBe(v48.suffixLength);
+    expect(await sha(suffix)).toBe(v48.suffixSha256);
+  });
+
+  // The digests move whenever either block's own text changes — they did
+  // once already, when MIN_EXPIRES_BARS made "1以上" false. That is fine and
+  // expected, as long as the new era is written down.
   it("the candidate arm opens its own era, and it is catalogued", async () => {
     const suffix = stringsFor("ja").schemaInstruction(JSON.stringify(RESPONSE_SCHEMA));
-    const cond = SCHEMA_ERAS.find((e) => e.era === "v56cond");
-    expect(cond).toBeDefined();
-    expect(suffix.length).toBe(cond!.suffixLength);
-
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(suffix));
-    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    expect(hex).toBe(cond!.suffixSha256);
-    // Two arms, two eras — never the same label.
-    expect(cond!.suffixSha256).not.toBe(SCHEMA_ERAS.find((e) => e.era === "v48")!.suffixSha256);
+    const cond = era("v62cond");
+    expect(suffix.length).toBe(cond.suffixLength);
+    expect(await sha(suffix)).toBe(cond.suffixSha256);
+    // Four eras, four labels — never the same twice.
+    const digests = ["v44", "v48", "v56cond", "v62", "v62cond"].map((n) => era(n).suffixSha256);
+    expect(new Set(digests).size).toBe(digests.length);
   });
 });
 

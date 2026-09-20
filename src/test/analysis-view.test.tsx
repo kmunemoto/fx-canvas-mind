@@ -1125,3 +1125,39 @@ describe("the plan card shows the reader's own losing run in this direction", ()
     expect(screen.getByTestId("history-streak").textContent).toContain("3");
   });
 });
+
+describe("the counter-case card (#96)", () => {
+  const withCase: AnalysisResult = {
+    ...fullResult,
+    counter_case: {
+      direction: "SELL",
+      thesis: "上値余地が 0.4ATR しかない",
+      evidence: ["RSI 71.2 は極値", "上抜け 151.50 は終値で戻された"],
+      trigger: "151.20 を終値で割る",
+    },
+  };
+
+  it("shows the other side's case under the evidence, with the direction it argues for", () => {
+    render(<AnalysisResultView result={withCase} techData={techData} pair="USD/JPY" interval="1h" />);
+    const card = screen.getByTestId("counter-case");
+    expect(card.textContent).toContain(ja.result.counterCase.title);
+    expect(card.textContent).toContain(ja.direction.SELL.word);
+    expect(card.textContent).toContain("上値余地が 0.4ATR しかない");
+    expect(card.textContent).toContain("RSI 71.2 は極値");
+    expect(screen.getByTestId("counter-case-trigger").textContent).toContain("151.20 を終値で割る");
+    expect(card.textContent).toContain(ja.result.counterCase.note);
+  });
+
+  it("reads the dictionary in English too", () => {
+    render(<AnalysisResultView result={withCase} techData={techData} pair="USD/JPY" interval="1h" />, "en");
+    const card = screen.getByTestId("counter-case");
+    expect(card.textContent).toContain(en.result.counterCase.title);
+    expect(card.textContent).toContain(en.direction.SELL.word);
+    expect(card.textContent).toContain(en.result.counterCase.trigger);
+  });
+
+  it("renders nothing for a row without one, and nothing for an empty trigger", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    expect(screen.queryByTestId("counter-case")).toBeNull();
+  });
+});

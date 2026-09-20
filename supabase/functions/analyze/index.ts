@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v61-2026-09-19T09:00:00Z";
+const FUNCTION_VERSION = "analyze-v62-2026-09-19T15:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -55,11 +55,13 @@ import {
 } from "./review.ts";
 
 import {
+  FRESH_BREAK_BARS,
   MAX_LIMIT_ATR,
   MAX_STOP_ATR,
   MIN_RISK_REWARD,
   MIN_STOP_ATR,
   TREND_ADX,
+  TURN_BLOCK,
   evaluateEntry,
   readHigherStructures,
   waitPlanFor,
@@ -89,6 +91,7 @@ import {
 } from "./situation.ts";
 
 import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
+import { TURN_FACTS, compactTurn, computeTurn, turnForGate, turnLines, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import {
@@ -377,15 +380,18 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
    引用する水準は上の一覧にあるものだけにする（一覧に無い価格を「直近高値」と呼ばない）。
 2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
    **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
-3. TREND — 時間足間の方向整合性を評価する。上位足の方向に逆らうエントリーは確信度を大きく下げる。
-   上位足の「方向」は、各上位足の「終値ブレイク(上)/(下)」の行で決める: **より最近に終値で抜けたまま**の側が、その足の今の方向である（「戻された」水準は抜けていない）。直近2スイングの並びは、終値ブレイクが無いときだけの補助。
-   上位足がこの基準で上を向いているのに SELL を出す（または下を向いているのに BUY を出す）プランは、サーバーが公開しない。下降トレンドの中で反発が始まり、上位足が直近高値を終値で上抜けたら、それは「戻り売りの場面」ではなく「方向が変わった可能性」として扱い、WAIT か反対方向を検討する。
+3. TREND — 時間足間の方向整合性を評価する。
+   各足の「方向」は「終値ブレイク(上)/(下)」の行で決める: **より最近に終値で抜けたまま**の側が、その足の今の方向である（「戻された」水準は抜けていない）。直近2スイングの並びは、終値ブレイクが無いときだけの補助。
+   各足には「転換の証拠(サーバ判定)」の行があり、方向と逆向きの証拠を数えてある。逆向きの証拠が ${TURN_BLOCK} 以上あり、直近${FRESH_BREAK_BARS}本以内に方向と同じ側の終値ブレイクが無い足は「転換中」である。
+   - エントリー足が転換中のとき、その方向に乗る継続エントリー（下降中の足で SELL、上昇中の足で BUY）はサーバーが公開しない。戻り売り・押し目買いの場面に見えても、証拠が転換を示しているなら WAIT か反対方向を検討する。
+   - 上位足がこの基準で方向を持ち、かつ転換中でないとき、その方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。上位足が転換中なら、逆方向のプランは止めない。
+   上位足の方向に逆らうエントリーは確信度を下げる。ただし「上位足がまだ下向きだから」だけを理由に反対方向を捨てない: 下降の中で反発が始まり転換の証拠が積み上がっているなら、それは「戻り売りの場面」ではなく「方向が変わりつつある局面」で、手順6の counter_case で正面から扱う。
 4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
 5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
    - 「押し目を待って買う」「戻りを待って売る」は出力できない。今この価格で入るか、入らないかの二択である。待つべき局面なら signal を "WAIT" にする。
    - 現在値でのリスクリワード（TP1基準）が ${MIN_RISK_REWARD} を下回るプランは出さない。損切りを妥当な範囲で近づけて成立しないなら、それは「今は入るところではない」ということなので "WAIT" にする。無理に利確を伸ばして帳尻を合わせない。
    - WAIT は逃げではなく判断である。ただし WAIT もあとで検証される（その後の値動きで、取れたはずのトレードがあったかを機械的に採点する）ので、迷ったら WAIT ということはしない。
-6. PLAN — 全てを統合して最終判断を下す。
+6. PLAN — 全てを統合して最終判断を下す。その前に counter_case を必ず書く: あなたの signal と反対方向（WAIT なら、入るとしたら最も有力な方向）の最強のケースを、上の一覧にある数値・水準・「転換の証拠」の行を引用して書き、何が起きたらそちらに乗り換えるかを trigger に書く。反対方向の証拠が自分の signal の根拠より多いなら signal を見直す。反対のケースが書けない回は、自分の根拠も弱いということである。
 
 ルール:
 - 確信度が60未満の場合、signal は必ず "WAIT"。
@@ -486,6 +492,25 @@ const RESPONSE_SCHEMA = {
       // The ids belong beside the rules they name, and nowhere else.
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
+    },
+    counter_case: {
+      type: "object",
+      // #96. OPTIONAL in the schema for the reason conditional_wait below is —
+      // the replay harnesses read `required` as their missing-key check over a
+      // corpus that was never asked this — and REQUIRED by the prompt: step 6
+      // says it is written before the signal is decided. Measured 2026-09-19:
+      // 62 SELLs, one BUY, and not one BUY proposed by the analyst, across a
+      // fall that ended on 9/14. Nothing in the output ever asked what the
+      // other side would say; this asks every time, and the answer is stored.
+      properties: {
+        direction: { type: "string", enum: ["BUY", "SELL"], description: "あなたの signal と反対の方向。WAIT のときは、入るとしたら最も有力な方向。" },
+        thesis: { type: "string", description: "その方向に入る最強の理由を一行で（日本語、40字以内）" },
+        evidence: { type: "array", items: { type: "string" }, description: "上の一覧にある数値・水準・行を引用した根拠を2〜4件。一覧に無い数字は書かない。" },
+        trigger: { type: "string", description: "何が起きたらこちらに乗り換えるか。水準か指標の条件を1つ（日本語、40字以内）" },
+      },
+      required: ["direction", "thesis", "evidence", "trigger"],
+      additionalProperties: false,
+      description: "反対方向のケース。signal を決める前に必ず書く（省略しない）。反対の証拠が自分の根拠より多ければ signal を見直す。",
     },
     conditional_wait: {
       type: "object",
@@ -599,6 +624,9 @@ interface NormalizedAnalysis {
   timeframe_alignment: { timeframe: string; bias: string; note: string }[];
   analysis: string;
   key_factors: string[];
+  // #96: the case for the other side, as the analyst wrote it. Null when the
+  // model left it out or wrote it unreadably; never invented.
+  counter_case: CounterCase | null;
   warnings: string[];
   support_levels: string[];
   resistance_levels: string[];
@@ -650,6 +678,23 @@ const sameTimeframe = (a: string, b: string): boolean => {
   if (a === b) return true;
   const ma = timeframeMinutes(a);
   return ma !== null && ma === timeframeMinutes(b);
+};
+
+export interface CounterCase {
+  direction: "BUY" | "SELL";
+  thesis: string;
+  evidence: string[];
+  trigger: string;
+}
+
+// The counter-case, or nothing. A direction that is not BUY/SELL or an empty
+// thesis is not a case; the rest is kept as the model wrote it.
+const readCounterCase = (v: unknown): CounterCase | null => {
+  if (!isRecord(v)) return null;
+  const direction = v.direction === "BUY" || v.direction === "SELL" ? v.direction : null;
+  const thesis = asTrimmedString(v.thesis, "");
+  if (direction === null || thesis === "") return null;
+  return { direction, thesis, evidence: toStringArray(v.evidence), trigger: asTrimmedString(v.trigger, "") };
 };
 
 const normalizeAnalysis = (
@@ -738,6 +783,7 @@ const normalizeAnalysis = (
     timeframe_alignment: alignment,
     analysis: asTrimmedString(source.analysis, ""),
     key_factors: toStringArray(source.key_factors),
+    counter_case: readCounterCase(source.counter_case),
     warnings: withDisclaimer(toStringArray(source.warnings), locale),
     support_levels: levelList(source.support_levels),
     resistance_levels: levelList(source.resistance_levels),
@@ -1665,6 +1711,12 @@ Deno.serve(async (req: Request) => {
         atr(bars),
       );
     })();
+    // #96: whether each rung's direction is turning, from the same closed bars
+    // and the same structure. Rendered beside the structure on every rung,
+    // handed to the gate with it, and stored under context.turn.
+    const turns: TurnRead[] = structures.map(({ bars, structure }, i) =>
+      computeTurn(bars, structure, i === 0 ? entryDivergence : null)
+    );
 
     // THE HIGHER RUNGS, AS THE GATE WILL READ THEM (entry.ts, structureBias).
     //
@@ -1675,15 +1727,19 @@ Deno.serve(async (req: Request) => {
     // chain, and the model needs it in one place beside the chain's verdicts.
     const higherStructures: HigherStructure[] = timeframes
       .slice(1)
-      .map((tf, i) => ({ tf, structure: structures[i + 1].structure }));
+      .map((tf, i) => ({ tf, structure: structures[i + 1].structure, turn: turnForGate(turns[i + 1]) }));
     const higherStructureNote = (() => {
       const reads = readHigherStructures(higherStructures);
       if (reads.length === 0) return "";
-      const word = (r: (typeof reads)[number]) =>
-        r.bias === null
-          ? "方向なし(終値で抜けたままの水準が無く、直近2スイングも並びを作っていない)"
-          : `${r.bias === "Up" ? "上" : "下"}(${r.from === "break" ? "より最近に終値で抜けたままの側" : "直近2スイングの並び・終値ブレイク無し"})`;
-      return `\n\n上位足の方向(サーバ判定・各足の「終値ブレイク」行から): ${reads.map((r) => `${r.tf}=${word(r)}`).join(" / ")}\nこの方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。逆らう根拠があるなら WAIT にして根拠を書く。`;
+      const word = (r: (typeof reads)[number]) => {
+        if (r.bias === null) return "方向なし(終値で抜けたままの水準が無く、直近2スイングも並びを作っていない)";
+        const dir = `${r.bias === "Up" ? "上" : "下"}(${r.from === "break" ? "より最近に終値で抜けたままの側" : "直近2スイングの並び・終値ブレイク無し"})`;
+        // The count that lets a plan through is printed beside the direction
+        // it argues with, so the model reads the two as one verdict.
+        const against = r.turn === null ? null : r.bias === "Down" ? r.turn.up : r.turn.down;
+        return r.turning ? `${dir}・ただし転換中(${r.bias === "Down" ? "上" : "下"}向きの証拠${against}/${TURN_FACTS.length})` : dir;
+      };
+      return `\n\n上位足の方向(サーバ判定・各足の「終値ブレイク」行から): ${reads.map((r) => `${r.tf}=${word(r)}`).join(" / ")}\nこの方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）は、その上位足が転換中でない限りサーバーが公開しない。転換中の上位足は逆方向のプランを止めない。逆らう根拠があるなら WAIT にして根拠を書くか、counter_case に書く。`;
     })();
 
     // #87: the lower rung, reduced to mid bars and read like any other series.
@@ -1705,7 +1761,7 @@ Deno.serve(async (req: Request) => {
         : "";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
-      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}`;
+      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}\n${turnLines(turns[i], decimals)}`;
       return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
     }).join("\n\n") + higherStructureNote;
 
@@ -2671,6 +2727,9 @@ ${candleLines(lowerCandles, 24)}`;
       // their most recent close-breaks; a plan pointed against one of them is
       // refused before its geometry is measured (entry.ts, structureBias).
       higherStructures: higherStructures,
+      // The entry rung's own structure and turn, for the turn gate
+      // (entry.ts, turnConflictFor): a plan riding a direction that is turning.
+      entryStructure: { structure: structures[0].structure, turn: turnForGate(turns[0]) },
     });
 
     // "Enter now at the market" is not an available action when the market is
@@ -2724,6 +2783,8 @@ ${candleLines(lowerCandles, 24)}`;
           confidenceFloor: MIN_CONFIDENCE,
           // Only the structure gate reads this; same reasoning.
           structureConflict: entryVerdict.structureConflict,
+          // Only the turn gate reads this; same reasoning.
+          turnConflict: entryVerdict.turnConflict,
         }),
         ...normalizedAnalysis.warnings,
       ];
@@ -2855,6 +2916,10 @@ ${candleLines(lowerCandles, 24)}`;
       // reading "Up" is visible afterwards as exactly that.
       structure_read: entryVerdict.structureRead,
       structure_conflict: entryVerdict.structureConflict,
+      // #96: the rungs that pointed against the plan and were let through for
+      // turning, and the entry rung's turn when it refused the plan.
+      structure_yielded: entryVerdict.structureYielded,
+      turn_conflict: entryVerdict.turnConflict,
       distance_atr: entryVerdict.distanceAtr,
       stop_atr: entryVerdict.stopAtr,
       risk_reward: entryVerdict.riskReward,
@@ -3071,6 +3136,9 @@ ${candleLines(lowerCandles, 24)}`;
       // which is why the difference cannot be an axis), and any replay of a
       // past decision.
       structure: structures.map((x, i) => compactStructure(timeframes[i], x.structure, decimals)),
+      // #96: the turn evidence per timeframe, beside the structure it was read
+      // from. Same order as `timeframes`.
+      turn: turns.map((t, i) => compactTurn(timeframes[i], t, decimals)),
       // Entry timeframe only, which is where it is computed and rendered.
       divergence: compactDivergence(entryDivergence, decimals),
       // The same reading with the forming bar removed. `null` where there was

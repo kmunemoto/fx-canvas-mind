@@ -62,6 +62,22 @@ export const FALLBACK_ATR_RATIO = 0.0015;
 export const TREND_ADX = 25;
 export const RANGE_ADX = 20;
 
+// THE TURN, AS THE GATE READS IT (turn.ts computes it; these are the gate's
+// own thresholds so that turn.ts, not this leaf, is the one importing).
+//
+// A settled break older than this, with nothing settled through on that side
+// since, is a move that has stopped making progress.
+export const STALE_BREAK_BARS = 6;
+// A break this recent is the move still going. A continuation into a break
+// this fresh is never refused for a turn: measured 2026-09-19, a SELL placed
+// within two bars of a settled breakdown won 6 of 8, and refusing those is
+// how a turn gate would trade one blind spot for another.
+export const FRESH_BREAK_BARS = 2;
+// Facts (turn.ts, TURN_FACTS) at or above which a rung is called "turning".
+// The 9/14–9/15 daily carried exactly three — stale break, histogram run, RSI
+// recovery — and the 9/7–9/11 daily SELLs that won carried none.
+export const TURN_BLOCK = 3;
+
 export interface RegimeInputs {
   adx: number | null;
   sma20: number | null;
@@ -83,15 +99,36 @@ export interface EntryPlan {
   // first. Read by the structure gate below; absent on callers that predate
   // it and on tests that are not about it.
   higherStructures?: HigherStructure[] | null;
+  // The entry timeframe's structure and turn evidence, for the turn gate
+  // (turnConflictFor). Absent on callers that predate it.
+  entryStructure?: EntryStructure | null;
 }
 
 // What the structure gate reads off each higher rung. A Pick rather than the
 // whole Structure so a test can hand it three fields.
 export type StructureForGate = Pick<Structure, "ok" | "label" | "lastBreak">;
 
+// turn.ts's two counts, as the gate reads them. Facts are the fact names,
+// carried so a refusal can say which ones it counted.
+export interface TurnForGate {
+  up: { score: number; facts: string[] };
+  down: { score: number; facts: string[] };
+}
+
 export interface HigherStructure {
   tf: string;
   structure: StructureForGate;
+  // The rung's turn evidence (turn.ts, turnForGate). Absent on callers that
+  // predate it; a rung without one never yields and never turns.
+  turn?: TurnForGate | null;
+}
+
+// The ENTRY timeframe's own structure and turn. The higher rungs decide
+// whether a plan may point against them; this decides whether a plan may
+// ride the entry rung's own direction while that direction is turning.
+export interface EntryStructure {
+  structure: StructureForGate;
+  turn: TurnForGate | null;
 }
 
 // THE DIRECTION THE HIGHER TIMEFRAME'S OWN CLOSES POINT.
@@ -150,9 +187,38 @@ export interface StructureRead {
   tf: string;
   bias: TrendDirection | null;
   from: StructureBiasSource | null;
+  // turn.ts's two counts, when the rung carried them; null on rows and
+  // callers from before the turn read existed.
+  turn: { up: number; down: number } | null;
+  // Enough evidence against `bias` to be called turning (TURN_BLOCK), and no
+  // break in the bias's own direction fresh enough to say the move is still
+  // going. A turning rung does not veto a plan pointed against it.
+  turning: boolean;
 }
 
-export interface StructureConflict extends StructureRead {
+// A break settled through on `side` inside FRESH_BREAK_BARS: the move is
+// still going, whatever the oscillators say about it.
+export const freshBreakOn = (st: StructureForGate | null | undefined, side: "up" | "down"): boolean => {
+  const b = st?.lastBreak?.[side] ?? null;
+  return b !== null && b.state === "broken" && b.barsAgo <= FRESH_BREAK_BARS;
+};
+
+// The count of facts arguing AGAINST `bias`: a rung pointing down is argued
+// against by evidence of a turn up.
+export const turnScoreAgainst = (bias: TrendDirection | null, turn: TurnForGate | null | undefined): number =>
+  bias === null || !turn ? 0 : bias === "Down" ? turn.up.score : turn.down.score;
+
+export const isTurning = (
+  st: StructureForGate | null | undefined,
+  bias: TrendDirection | null,
+  turn: TurnForGate | null | undefined,
+): boolean =>
+  bias !== null &&
+  turnScoreAgainst(bias, turn) >= TURN_BLOCK &&
+  !freshBreakOn(st, bias === "Down" ? "down" : "up");
+
+export interface StructureConflict {
+  tf: string;
   bias: TrendDirection;
   from: StructureBiasSource;
   level: number | null;
@@ -163,31 +229,94 @@ export interface StructureConflict extends StructureRead {
 export const readHigherStructures = (higher: HigherStructure[] | null | undefined): StructureRead[] =>
   (higher ?? []).map((h) => {
     const b = structureBias(h.structure);
-    return { tf: h.tf, bias: b.bias, from: b.from };
+    const turn = h.turn ? { up: h.turn.up.score, down: h.turn.down.score } : null;
+    return { tf: h.tf, bias: b.bias, from: b.from, turn, turning: isTurning(h.structure, b.bias, h.turn) };
   });
+
+// A rung that pointed against the plan and was allowed to, because it was
+// turning. Recorded on every such verdict: a BUY published under a rung that
+// still read "Down" must be visible afterwards as exactly that, with the
+// count that let it through.
+export interface StructureYield {
+  tf: string;
+  bias: TrendDirection;
+  score: number;
+}
 
 // The first higher rung whose own closes point against the signal. Nearest
 // rung first, because that is the one the prompt calls 上位足 and the one
 // that turns first.
-export const structureConflictFor = (
+//
+// A rung that is TURNING (isTurning) does not refuse. Measured 2026-09-19:
+// on 9/14 20:47 the 1h had closed through 154.489 and held it, RSI 68, the
+// histogram positive — a confirmed turn — and the daily above it still read
+// "Down" off a breakdown eight bars old while carrying three facts against
+// that reading. Under the first version of this gate that daily would have
+// refused the BUY; the market went on to 156.9. The veto is for a rung that
+// is going the other way, not for one that has stopped.
+export const structureVerdictFor = (
   signal: Signal,
   higher: HigherStructure[] | null | undefined,
-): StructureConflict | null => {
-  if (signal === "WAIT") return null;
+): { conflict: StructureConflict | null; yielded: StructureYield[] } => {
+  const yielded: StructureYield[] = [];
+  if (signal === "WAIT") return { conflict: null, yielded };
   const against: TrendDirection = signal === "BUY" ? "Down" : "Up";
   for (const h of higher ?? []) {
     const b = structureBias(h.structure);
     if (b.bias !== against || b.from === null) continue;
+    if (isTurning(h.structure, b.bias, h.turn)) {
+      yielded.push({ tf: h.tf, bias: b.bias, score: turnScoreAgainst(b.bias, h.turn) });
+      continue;
+    }
     return {
-      tf: h.tf,
-      bias: b.bias,
-      from: b.from,
-      level: b.brk?.level ?? null,
-      datetime: b.brk?.datetime ?? null,
-      barsAgo: b.brk?.barsAgo ?? null,
+      yielded,
+      conflict: {
+        tf: h.tf,
+        bias: b.bias,
+        from: b.from,
+        level: b.brk?.level ?? null,
+        datetime: b.brk?.datetime ?? null,
+        barsAgo: b.brk?.barsAgo ?? null,
+      },
     };
   }
-  return null;
+  return { conflict: null, yielded };
+};
+
+export const structureConflictFor = (
+  signal: Signal,
+  higher: HigherStructure[] | null | undefined,
+): StructureConflict | null => structureVerdictFor(signal, higher).conflict;
+
+// THE ENTRY RUNG'S OWN DIRECTION, TURNING UNDER THE PLAN.
+//
+// The plan rides the entry timeframe's direction (a SELL in a fall) while
+// that timeframe carries TURN_BLOCK or more facts that the fall is ending,
+// and no breakdown fresh enough to say otherwise. This is the 9/14 23:30 and
+// 9/15 02:21 daily SELL, exactly: stale break, histogram run, RSI recovery,
+// no new low. A plan pointed the OTHER way is not this gate's business — the
+// rungs above decide that — and a fresh break in the plan's direction is the
+// move still going, which the record says is the one SELL worth taking.
+export interface TurnConflict {
+  // The turn that argues against the plan: Up against a SELL, Down against a BUY
+  side: TrendDirection;
+  score: number;
+  // The threshold it was measured against, carried so the sentence on the
+  // screen never has to know the number
+  block: number;
+  facts: string[];
+}
+
+export const turnConflictFor = (
+  signal: Signal,
+  es: EntryStructure | null | undefined,
+): TurnConflict | null => {
+  if (signal === "WAIT" || !es || !es.turn) return null;
+  const side: TrendDirection = signal === "SELL" ? "Up" : "Down";
+  const ev = side === "Up" ? es.turn.up : es.turn.down;
+  if (ev.score < TURN_BLOCK) return null;
+  if (freshBreakOn(es.structure, signal === "SELL" ? "down" : "up")) return null;
+  return { side, score: ev.score, block: TURN_BLOCK, facts: ev.facts };
 };
 
 export type Rejection =
@@ -224,7 +353,10 @@ export type Rejection =
   // a higher timeframe's most recent close-break points the other way
   // (structureBias above). Checked before the geometry: a plan pointed
   // against the rung above it is refused whatever its stop and target say.
-  | "structure_conflict";
+  | "structure_conflict"
+  // the plan rides the entry timeframe's direction while that direction is
+  // turning (turnConflictFor above). Also before the geometry.
+  | "turn_conflict";
 
 export interface EntryVerdict {
   ok: boolean;
@@ -262,6 +394,11 @@ export interface EntryVerdict {
   // verdict, WAIT included, so the row always shows what the gate saw.
   structureRead: StructureRead[];
   structureConflict: StructureConflict | null;
+  // Rungs that pointed against the plan and were let through for turning
+  // (structureVerdictFor). Empty on a WAIT and on every plan no rung opposed.
+  structureYielded: StructureYield[];
+  // The entry rung's turn, when it refused the plan (turnConflictFor)
+  turnConflict: TurnConflict | null;
 }
 
 const isFinitePositive = (v: number | null | undefined): v is number =>
@@ -397,6 +534,7 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
   const { signal, entry, stopLoss, takeProfit1, price } = plan;
   const derived = deriveRegime(price, plan.indicators);
   const structureRead = readHigherStructures(plan.higherStructures);
+  const structureVerdict = structureVerdictFor(signal, plan.higherStructures);
   const base = {
     repaired: false,
     snapped: false,
@@ -407,6 +545,8 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
     regimeDirection: derived.direction,
     structureRead,
     structureConflict: null as StructureConflict | null,
+    structureYielded: structureVerdict.yielded,
+    turnConflict: null as TurnConflict | null,
   };
 
   // Nothing to enter, nothing to check
@@ -436,13 +576,32 @@ export const evaluateEntry = (plan: EntryPlan): EntryVerdict => {
   // Direction before geometry. A stop and a target measured on a plan that
   // points against the rung above it would be numbers about a trade the gate
   // is not going to publish; and no repair moves a plan's direction.
-  const structureConflict = structureConflictFor(signal, plan.higherStructures);
+  const structureConflict = structureVerdict.conflict;
   if (structureConflict !== null) {
     return {
       ...base,
       ok: false,
       rejection: "structure_conflict",
       structureConflict,
+      entry,
+      entryType: null,
+      riskReward: null,
+      distanceAtr: null,
+      stopAtr: null,
+      momentum,
+    };
+  }
+
+  // The entry rung's own direction, turning under the plan. After the rungs
+  // above (a plan they refuse is refused whatever the entry rung says) and
+  // still before the geometry.
+  const turnConflict = turnConflictFor(signal, plan.entryStructure);
+  if (turnConflict !== null) {
+    return {
+      ...base,
+      ok: false,
+      rejection: "turn_conflict",
+      turnConflict,
       entry,
       entryType: null,
       riskReward: null,

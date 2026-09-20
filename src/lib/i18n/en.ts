@@ -107,6 +107,13 @@ export const en: Dict = {
     },
     inferenceChip: "inferred",
     inferenceNote: "This app sees no order book, volume, open interest or executions. Anything marked inferred is a reading of price action, not something observed.",
+    // The other side's case (#96): written by the model before it decides.
+    counterCase: {
+      title: "The other side",
+      who: (word: string, gloss: string) => `${word} (${gloss}):`,
+      trigger: "What would flip it",
+      note: "The strongest case the model could make for the opposite direction. It is required to write this before deciding.",
+    },
     detail: "Full analysis",
     marketContext: "Market context and levels",
     warnings: "Warnings",
@@ -120,6 +127,10 @@ export const en: Dict = {
         level === null
           ? `${tf} points ${up ? "up" : "down"} (last two swings)`
           : `${tf} closed ${up ? "up" : "down"} through ${level} and stayed there`,
+      // The turn count that refused the plan and the threshold it was measured
+      // against. `up` means the entry timeframe was turning UP (a SELL refused).
+      turn: (up: boolean, score: number, block: number) =>
+        `${score} facts that the entry timeframe is turning ${up ? "up" : "down"} (threshold ${block})`,
     },
     riskLevels: { LOW: "Low", MEDIUM: "Medium", HIGH: "High" },
     sentiments: { BULLISH: "Bullish", NEUTRAL: "Neutral", BEARISH: "Bearish" },
@@ -265,6 +276,10 @@ export const en: Dict = {
         // See the Japanese copy: added after nine consecutive same-direction
         // losses; takes effect on the bar AFTER the higher timeframe turns.
         structure_conflict: "Runs against the higher timeframe's direction (closing break)",
+        // See the Japanese copy: the entry timeframe was turning (opposing
+        // evidence at the threshold, no fresh break its own way) and the plan
+        // rode the old direction — the 9/14–9/15 daily SELLs.
+        turn_conflict: "The entry timeframe was turning, and the plan rode the old direction",
       },
       proposed: "Model's call",
       distance: "Distance from market",
