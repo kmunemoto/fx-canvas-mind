@@ -36,9 +36,6 @@ scripts/.env.x
 # strings survive, `deno check` still reads the real sources, and a readable
 # build is one flag away when something needs tracing.
 supabase/functions/analyze/bundle.js
-# analyze is deployed as TWO files since #96: bundle.js imports ./locale.ts,
-# and locale.bundle.js is what gets uploaded under that name (docs/OPERATIONS.md §8.13)
-supabase/functions/analyze/locale.bundle.js
 supabase/functions/track-outcomes/bundle.js
 supabase/functions/postmortem/bundle.js
 supabase/functions/noise-floor/bundle.js

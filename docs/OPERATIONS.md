@@ -2018,15 +2018,38 @@ analysis-view（連敗の表示と非表示）。`EXPECTED_ANALYZE_VERSION` は 
   3 は戻り売りの勝ち）。turn.ts が見るのは「連続」「戻り」という**変化**で、それは点値からは
   復元できない。効かなかったら次の決着で分かる（§9 の照会に `turn_conflict` を足すこと）。
 - 「余地 0.5ATR」は入れていない（上の 4）。教訓の文面とデータが食い違う例として残す。
-- **analyze のバンドルが壁を越えた。** 単一ファイルで 115,580 B（§8.12 の壁: 110,299 通過 /
-  116,242 落下）。`locale.ts` を `--external:./locale.ts` で外に出し、**2 ファイル**
-  （`bundle.js` 101,355 B が `./locale.ts` を import、`locale.bundle.js` 14,424 B を `locale.ts`
-  の名前で同じ deploy に載せる）にした。`npm run bundle:analyze` が両方を作る。読み戻しの照合は
-  2 ファイルとも sha256 で行う。deno でローカル起動して import が解決することは確認した。
+- **analyze のバンドルが壁を越えた。** 単一ファイルで 115,580 B（§8.12 の壁: 106,525 は通過・
+  110,299 も通過、116,242 は落下）。これでインラインのデプロイ経路は使えなくなったので、
+  経路そのものを変えた（下）。
+
+### デプロイ経路を変えた — バイトをメッセージに載せるのをやめる（2026-09-20）
+
+これまでのデプロイは、ミニファイ済みバンドル約 100 KB を**丸ごとツール呼び出しに書き写して**
+送っていた。この経路には天井があり（106,525 B は通過、116,242 B は落下。落下時は本文が黙って
+消えて `deno.json` 84 B だけが届いた）、#96 の 115,580 B はその天井の中にある。加えてこの経路は
+本番の手前に転記を挟むので、事故が 3 回起きている（#48・#51・2026-09-19 の 1 文字）。
+
+そこで `.github/workflows/deploy-functions.yml` を足した。GitHub がリポジトリをチェックアウトし、
+Supabase CLI が **TypeScript ソースを直接**デプロイする。
+
+- 既定の対象: `analyze` / `position-review` / `postmortem` / `track-outcomes` / `noise-floor` /
+  `version-compare`。決済系（create-checkout・stripe-webhook・cancel-subscription）と
+  `econ-calendar` は**既定に入れていない**。このパイプラインの一部ではなく、触っていない push で
+  出し直す理由が無いため。手動実行（workflow_dispatch）で slug を名指しすれば出せる。
+- 起動条件: `main` への push で `supabase/functions/**` か `supabase/config.toml` か
+  このワークフロー自身が変わったとき、および手動実行。
+- `verify_jwt` は `supabase/config.toml` から読む（ワークフローのフラグにしない）。
+- **必要な秘密**: リポジトリの Secret `SUPABASE_ACCESS_TOKEN`（Supabase の
+  Account → Access Tokens で発行）。無いときはワークフローが最初のステップで止まり、
+  どこで発行してどこに入れるかを `::error::` で出す。**トークンの値はこのリポジトリにも
+  ログにも残らない。**
+- これで `supabase/functions/**/index.ts` が唯一の出所になる。`bundle.js` 群は
+  **ローカルのサイズ確認とインライン経路の代替**として残すが、本番で動くものではなくなった。
+  §8.7-a の「読み戻して sha256 で照合する」手順は、インライン経路を使うときだけの手順である。
 
 ### 出したもの
 
-（デプロイ後に記入）
+（GitHub Actions の初回実行後に記入。それまで本番は analyze fn 82 / v61 のまま）
 
 ### 検査
 
