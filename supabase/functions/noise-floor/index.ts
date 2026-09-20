@@ -65,7 +65,7 @@ import {
   type ClassifiedRow,
 } from "./prompt-surgery.ts";
 
-const FUNCTION_VERSION = "noise-floor-v6-2026-09-14T02:30:00Z";
+const FUNCTION_VERSION = "noise-floor-v7-2026-09-19T15:00:00Z";
 
 // The platform kills the worker at 150 s with no chance to respond, which is
 // the same limit analyze/budget.ts is written against. Stop at 130 s and keep

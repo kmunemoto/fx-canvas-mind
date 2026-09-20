@@ -39,7 +39,7 @@ import {
   type ScorableBar,
 } from "../_shared/conditional-wait.ts";
 
-const TRACKER_VERSION = "track-outcomes-v18-2026-09-19T09:00:00Z";
+const TRACKER_VERSION = "track-outcomes-v19-2026-09-19T15:00:00Z";
 const USER_COOLDOWN_MS = 5 * 60 * 1000;
 const SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_ROWS = 60;

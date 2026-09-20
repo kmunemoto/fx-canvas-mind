@@ -127,6 +127,15 @@ export const ja = {
     },
     inferenceChip: "推測",
     inferenceNote: "板情報・出来高・建玉・約定履歴は取得していません。「推測」と付いた記述は値動きからの解釈であって、観測した事実ではありません。",
+    // 反対方向のケース（#96）。AI が signal を決める前に、逆の方向の最強の
+    // ケースを書く。9/8〜9/15 は SELL 62 件・BUY 1 件で、AI が BUY を提案した
+    // 回は 0 だった——反対のケースを書く場所が無かった。
+    counterCase: {
+      title: "反対のケース",
+      who: (word: string, gloss: string) => `${word}（${gloss}）なら:`,
+      trigger: "乗り換える条件",
+      note: "AI が自分の判断と逆の方向について書いた最強のケースです。判断の前に必ず書かせています。",
+    },
     detail: "詳細分析",
     marketContext: "相場環境と水準",
     warnings: "注意",
@@ -147,6 +156,10 @@ export const ja = {
         level === null
           ? `${tf} は${up ? "上" : "下"}向き（直近2スイングの並び）`
           : `${tf} は ${level} を終値で${up ? "上" : "下"}に抜けたまま`,
+      // 却下の根拠になった転換の証拠の数と閾値。up はエントリー足が「上」へ
+      // 転換中（＝SELL を止めた）という意味。
+      turn: (up: boolean, score: number, block: number) =>
+        `エントリー足に${up ? "上" : "下"}向きの転換の証拠 ${score}件（閾値 ${block}）`,
     },
     riskLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
     sentiments: { BULLISH: "強気", NEUTRAL: "中立", BEARISH: "弱気" },
@@ -298,6 +311,10 @@ export const ja = {
         // 上位足の終値ブレイクが逆向き。9/9〜9/15 の同方向 9 連敗のあとに足した
         // 歯止めで、上位足が直近高値を終値で抜けた**次の足**から効く。
         structure_conflict: "上位足の方向（終値ブレイク）に逆らっている",
+        // エントリー足が転換中（逆向きの証拠が閾値以上・同方向の新しい終値ブレイク
+        // 無し）なのに、その方向に乗る継続エントリーだった。9/14〜9/15 の日足
+        // SELL がこれ（古い下抜け・MACDヒストの連続上昇・RSIの戻り）。
+        turn_conflict: "エントリー足が転換中なのに、その方向に乗る継続エントリーだった",
       },
       proposed: "AIの提案",
       distance: "現在値との距離",

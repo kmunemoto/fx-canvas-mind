@@ -39,6 +39,16 @@ export interface AnalysisResult {
   market_context_detail?: MarketContextDetail | null;
   stop_hunt_zone?: string;
   timeframe_alignment?: TimeframeBias[];
+  // #96: the case for the other side, written before the call was made
+  // (analyze v62). Absent on older rows and when the model left it out.
+  counter_case?: CounterCase | null;
+}
+
+export interface CounterCase {
+  direction: "BUY" | "SELL";
+  thesis: string;
+  evidence: string[];
+  trigger: string;
 }
 
 export interface AppSettings {
@@ -236,6 +246,9 @@ export const ENTRY_REJECTIONS = [
   // (entry.ts, structureBias). Stamped only on a proposed BUY/SELL — the gate
   // returns before this check on a WAIT — so it is always a real refusal.
   "structure_conflict",
+  // The plan rides the entry timeframe's own direction while that direction
+  // is turning (entry.ts, turnConflictFor; analyze v62). Same stamping rule.
+  "turn_conflict",
 ] as const;
 
 export type EntryRejection = (typeof ENTRY_REJECTIONS)[number];
@@ -278,7 +291,16 @@ export interface EntryCheck {
   // analyze v61), and the rung that refused the plan for pointing against
   // them (when one did). `from` says how weak the reading was: a settled
   // close-break, or only the two-pivot label because no level was broken.
-  structure_read?: Array<{ tf: string; bias: "Up" | "Down" | null; from: "break" | "label" | null }>;
+  structure_read?: Array<{
+    tf: string;
+    bias: "Up" | "Down" | null;
+    from: "break" | "label" | null;
+    // From analyze v62: the rung's turn counts and whether it was turning
+    // (enough facts against its own bias, no fresh break in that bias's
+    // direction). Absent on rows from v61.
+    turn?: { up: number; down: number } | null;
+    turning?: boolean;
+  }>;
   structure_conflict?: {
     tf: string;
     bias: "Up" | "Down";
@@ -287,6 +309,11 @@ export interface EntryCheck {
     datetime: string | null;
     barsAgo: number | null;
   } | null;
+  // #96 (analyze v62): rungs that pointed against the plan and were let
+  // through for turning, and the entry rung's own turn when it refused the
+  // plan. `block` is the threshold the score was measured against.
+  structure_yielded?: Array<{ tf: string; bias: "Up" | "Down"; score: number }>;
+  turn_conflict?: { side: "Up" | "Down"; score: number; block: number; facts: string[] } | null;
   repaired?: boolean;
   atr: number | null;
   // Written by analyze since the first version, never declared until now.

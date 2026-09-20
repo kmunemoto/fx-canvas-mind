@@ -19,6 +19,32 @@ export const resolveAnalysisLocale = (value: unknown): AnalysisLocale => {
     : DEFAULT_ANALYSIS_LOCALE;
 };
 
+// The turn facts (analyze/turn.ts, TURN_FACTS) as words. Carried here as a
+// plain map rather than imported: this file is a leaf that the browser test
+// suite and the replay harnesses import, and turn.ts is not.
+const TURN_FACT_WORDS: Record<AnalysisLocale, Record<string, string>> = {
+  ja: {
+    failed_break: "抜けの失敗",
+    stale_break: "古い抜け",
+    hist_run: "MACDヒストの連続",
+    rsi_recovery: "RSIの戻り",
+    mean_cross: "SMA20の跨ぎ",
+    counter_break: "逆向きの終値ブレイク",
+    divergence: "ダイバージェンス",
+  },
+  en: {
+    failed_break: "a failed break",
+    stale_break: "a stale break",
+    hist_run: "a histogram run",
+    rsi_recovery: "an RSI recovery",
+    mean_cross: "a cross of SMA20",
+    counter_break: "a closing break the other way",
+    divergence: "divergence",
+  },
+};
+const turnFactWords = (facts: string[], locale: AnalysisLocale, sep: string): string =>
+  facts.map((f) => TURN_FACT_WORDS[locale][f] ?? f).join(sep);
+
 interface LocaleStrings {
   // Appended to the system prompt: the analytical method is identical, only
   // the output language changes.
@@ -71,6 +97,14 @@ interface LocaleStrings {
       from: "break" | "label";
       level: number | null;
       datetime: string | null;
+    } | null;
+    // The entry rung's turn that refused the plan (entry.ts, turnConflictFor).
+    // Only turn_conflict reads it; same reasoning again.
+    turnConflict?: {
+      side: "Up" | "Down";
+      score: number;
+      block: number;
+      facts: string[];
     } | null;
   }) => string;
   // Shown when the entry was moved to the market price because the model's
@@ -125,7 +159,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
       "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
       // The rung, its reading and the level it read it off. The level is what
@@ -190,8 +224,19 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         // その次の足から効く（過去の 9 件は救えなかった。ここに嘘を書かない）。
         case "structure_conflict":
           return `${head}${structure}であり、上位足の方向に逆らう${tail}`;
+        // エントリー足そのものが転換中（逆向きの証拠が閾値以上・同方向の新しい
+        // 終値ブレイク無し）なのに、その方向に乗る継続エントリー。9/14 23:30 と
+        // 9/15 02:21 の日足 SELL がこれで、古い下抜け・MACDヒストの連続上昇・
+        // RSI の戻りの 3 件を持っていた。件数と事実名は行から読む。
+        case "turn_conflict": {
+          const tc = turnConflict;
+          const turnDir = tc?.side === "Up" ? "上" : "下";
+          const ride = tc?.side === "Up" ? "下" : "上";
+          const facts = tc && tc.facts.length > 0 ? `（${turnFactWords(tc.facts, "ja", "・")}）` : "";
+          return `${head}エントリー足に${turnDir}向きの転換の証拠が${tc?.score ?? "?"}件あり${facts}、直近に${ride}への新しい終値ブレイクも無く、転換中の足に${ride}方向で乗る継続エントリーになる${tail}`;
+        }
         // 現状ここには何も来ない: この switch に来る rejection は低確信度と
-        // entry.ts の Rejection 6種だけで、いずれも case を持つ。market_closed は
+        // entry.ts の Rejection 7種だけで、いずれも case を持つ。market_closed は
         // 呼び出し側（index.ts）が marketClosed に振り分け、"unknown" は
         // entryVerdict.rejection が真であることを条件に入る分岐なので到達しない。
         // 将来 Rejection を増やして case を書き忘れたときのための受け皿なので、
@@ -239,7 +284,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:
       "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
       // Same as the Japanese: name the rung, the reading and the level.
@@ -293,7 +338,16 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
         // caught the first of them.
         case "structure_conflict":
           return `${head}${structure} — the plan runs against it${tail}`;
-        // Nothing reaches this today: only low_confidence and the six
+        // See the Japanese copy: the entry timeframe itself is turning and the
+        // plan rides the direction that is ending.
+        case "turn_conflict": {
+          const tc = turnConflict;
+          const turnDir = tc?.side === "Up" ? "up" : "down";
+          const ride = tc?.side === "Up" ? "down" : "up";
+          const facts = tc && tc.facts.length > 0 ? ` (${turnFactWords(tc.facts, "en", ", ")})` : "";
+          return `${head}the entry timeframe carries ${tc?.score ?? "?"} facts that it is turning ${turnDir}${facts} and no fresh closing break ${ride} — the plan rides a direction that is ending${tail}`;
+        }
+        // Nothing reaches this today: only low_confidence and the seven
         // rejections in entry.ts arrive here and all of them now have a case;
         // market_closed is diverted to marketClosed by the caller, and
         // "unknown" sits behind a branch that requires a real rejection. It is

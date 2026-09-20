@@ -234,6 +234,25 @@ export const RESPONSE_SCHEMA = {
       description:
         "提示された学習ルールのうち、この回の判断で実際に根拠として使ったものの id だけを列挙する。提示されただけで使わなかったルールは書かない。id を推測して作らない。1つも使わなかった場合は空配列 [] が正しい答えで、無理に埋めない。",
     },
+    counter_case: {
+      type: "object",
+      // #96. OPTIONAL in the schema for the reason conditional_wait below is —
+      // the replay harnesses read `required` as their missing-key check over a
+      // corpus that was never asked this — and REQUIRED by the prompt: step 6
+      // says it is written before the signal is decided. Measured 2026-09-19:
+      // 62 SELLs, one BUY, and not one BUY proposed by the analyst, across a
+      // fall that ended on 9/14. Nothing in the output ever asked what the
+      // other side would say; this asks every time, and the answer is stored.
+      properties: {
+        direction: { type: "string", enum: ["BUY", "SELL"], description: "あなたの signal と反対の方向。WAIT のときは、入るとしたら最も有力な方向。" },
+        thesis: { type: "string", description: "その方向に入る最強の理由を一行で（日本語、40字以内）" },
+        evidence: { type: "array", items: { type: "string" }, description: "上の一覧にある数値・水準・行を引用した根拠を2〜4件。一覧に無い数字は書かない。" },
+        trigger: { type: "string", description: "何が起きたらこちらに乗り換えるか。水準か指標の条件を1つ（日本語、40字以内）" },
+      },
+      required: ["direction", "thesis", "evidence", "trigger"],
+      additionalProperties: false,
+      description: "反対方向のケース。signal を決める前に必ず書く（省略しない）。反対の証拠が自分の根拠より多ければ signal を見直す。",
+    },
     conditional_wait: {
       type: "object",
       // #86. OPTIONAL, and it stays out of `required` on purpose: the replay
@@ -328,7 +347,12 @@ deepFreeze(NEWS_DOMAINS);
 //
 // Derived by stripping, not written out again, so it cannot drift from the
 // pinned constant above.
-const { conditional_wait: _conditionalWaitProperty, ...CONTROL_PROPERTIES } =
+// #96 added `counter_case` the same way (optional in the schema, required by
+// the prompt), and it is stripped here for the same reason: the corpus was
+// never asked for the other side's case, and 45 rows keyed on the v48 bytes
+// must keep receiving the v48 bytes. Production's control arm strips only
+// conditional_wait and so opens its own era (v62, prompt-surgery.ts).
+const { conditional_wait: _conditionalWaitProperty, counter_case: _counterCaseProperty, ...CONTROL_PROPERTIES } =
   RESPONSE_SCHEMA.properties;
 export const CONTROL_RESPONSE_SCHEMA = { ...RESPONSE_SCHEMA, properties: CONTROL_PROPERTIES };
 deepFreeze(CONTROL_RESPONSE_SCHEMA);

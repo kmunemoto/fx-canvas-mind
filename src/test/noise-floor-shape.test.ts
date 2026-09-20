@@ -327,9 +327,14 @@ describe("22a — the replayed schema is the one the corpus was drawn under", ()
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   };
 
-  it("carries no conditional_wait — the corpus was never asked that question", () => {
+  it("carries no conditional_wait and no counter_case — the corpus was never asked either question", () => {
     expect(RESPONSE_SCHEMA.properties).toHaveProperty("conditional_wait");
     expect(CONTROL_RESPONSE_SCHEMA.properties).not.toHaveProperty("conditional_wait");
+    // #96: the same argument, one property later. Production's control arm
+    // DOES send counter_case (it is the whole point of #96), which is why that
+    // arm lives in its own era now; the harness's job is the corpus's bytes.
+    expect(RESPONSE_SCHEMA.properties).toHaveProperty("counter_case");
+    expect(CONTROL_RESPONSE_SCHEMA.properties).not.toHaveProperty("counter_case");
     expect(CONTROL_RESPONSE_SCHEMA.required).toEqual(RESPONSE_SCHEMA.required);
     expect(Object.isFrozen(CONTROL_RESPONSE_SCHEMA)).toBe(true);
   });

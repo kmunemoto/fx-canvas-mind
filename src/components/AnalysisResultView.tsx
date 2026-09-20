@@ -8,7 +8,7 @@ import HeldPositionCard from "./HeldPositionCard";
 import ChangeSinceLastCard from "./ChangeSinceLastCard";
 import { EntryRegistration } from "./EntryRegistration";
 import Disclosure from "./Disclosure";
-import { AlertTriangle, ChevronDown, ChevronUp, Compass, FileText, ListChecks, Target, TrendingUp } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Compass, FileText, ListChecks, Scale, Target, TrendingUp } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { isInference } from "@/lib/inference";
 import { toPips } from "@/lib/candleTime";
@@ -104,6 +104,9 @@ const AnalysisResultView = ({
   // "not loaded" — so the row the RPC returned is what the card is told.
   const [closedHere, setClosedHere] = useState<Position | null>(null);
   const keyFactors = Array.isArray(result?.key_factors) ? result.key_factors : [];
+  // #96: the other side's case, as the analyst wrote it before deciding.
+  // Shown whether or not it changed the call; absent on rows before v62.
+  const counterCase = result?.counter_case ?? null;
   // Non-null whenever entry_check names a reason, even the one case the hero
   // draws nothing for (a model WAIT on a shut market, which the preview
   // banner in Index.tsx already explains): the server's sentence about it is
@@ -398,6 +401,42 @@ const AnalysisResultView = ({
           {vol && <Chip>{`${r.volatility} ${t.result.volatilityLevels[vol.level]}`}</Chip>}
         </div>
       </div>
+
+      {/* The case for the other side (#96). Sixty-two SELLs and one BUY came
+          out of a pipeline that never asked what the bull would have said;
+          the analyst now writes that case before the call, and it is shown
+          under the evidence whether or not it changed anything. */}
+      {counterCase && (
+        <div className="glass rounded-xl border border-border p-4 space-y-2" data-testid="counter-case">
+          <div className="flex items-center gap-2 text-primary">
+            <Scale className="h-4 w-4" />
+            <h3 className="text-sm font-semibold">{t.result.counterCase.title}</h3>
+          </div>
+          <p className="text-sm">
+            <span className="font-semibold">
+              {t.result.counterCase.who(t.direction[counterCase.direction].word, t.direction[counterCase.direction].gloss)}
+            </span>
+            <span className="ml-1">{counterCase.thesis}</span>
+          </p>
+          {counterCase.evidence.length > 0 && (
+            <ul className="space-y-1">
+              {counterCase.evidence.map((e, i) => (
+                <li key={i} className="text-sm text-muted-foreground flex items-start gap-2">
+                  <span className="text-primary mt-0.5">•</span>
+                  <span>{e}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {counterCase.trigger && (
+            <p className="text-xs text-muted-foreground" data-testid="counter-case-trigger">
+              <span className="text-[10px] uppercase tracking-widest mr-2">{t.result.counterCase.trigger}</span>
+              {counterCase.trigger}
+            </p>
+          )}
+          <p className="text-[10px] text-muted-foreground pt-1">{t.result.counterCase.note}</p>
+        </div>
+      )}
 
       {/* Warnings, minus the disclaimer the footer already carries and minus
           the refusal sentence the hero already shows */}

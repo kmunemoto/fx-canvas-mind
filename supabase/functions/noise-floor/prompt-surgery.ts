@@ -268,10 +268,10 @@ export const detectLocale = (user: string): SurgeryLocale | null => {
 // B5 — the schema eras
 // ---------------------------------------------------------------------------
 
-export type SchemaEra = "v44" | "v48" | "v56cond" | "none" | "unknown";
+export type SchemaEra = "v44" | "v48" | "v56cond" | "v62" | "v62cond" | "none" | "unknown";
 
 export interface SchemaEraEntry {
-  era: "v44" | "v48" | "v56cond";
+  era: "v44" | "v48" | "v56cond" | "v62" | "v62cond";
   // UTF-16 code units, which is what String.length counts. Every character in
   // both suffixes is in the BMP, so this equals the character count Postgres
   // `length()` reports; that agreement was checked rather than assumed
@@ -339,6 +339,26 @@ export const SCHEMA_ERAS: readonly SchemaEraEntry[] = [
     suffixLength: 3737,
     suffixMd5: "d286a4e2ff197e539598f58c6cea1ee8",
     suffixSha256: "32d35b87c34835f07d869773ca20f6f140958bce05c3d798d64f2d21d42248be",
+  },
+  // #96 (analyze v62) added `counter_case` to what EVERY arm sends — the
+  // analyst writes the other side's case before deciding — so from v62 the
+  // control arm no longer lands in v48: stripping conditional_wait leaves
+  // counter_case in, and that is a new suffix. The harness keeps sending the
+  // corpus the v48 bytes (shape.ts strips both), so nothing stored moved; the
+  // two entries below are what rows written from v62 on carry. Measured
+  // 2026-09-19 by rebuilding both instructions from the working tree
+  // (src/test/variants.test.ts holds the same digests).
+  {
+    era: "v62",
+    suffixLength: 3402,
+    suffixMd5: "2592d20dad403d2dc2dbbd713a4183f0",
+    suffixSha256: "5aa007b23b530e60f0aba4c219d850069b6812f5a2dee12bf61f7789f1b9dcd8",
+  },
+  {
+    era: "v62cond",
+    suffixLength: 4328,
+    suffixMd5: "6364e1941424a7d90edd5cbe5b0f14dc",
+    suffixSha256: "bd10d40bb99bde0254ecac1e374a6a62f27fa193b0c361dd320da598782dbbfd",
   },
 ];
 
