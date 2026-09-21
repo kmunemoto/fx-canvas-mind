@@ -186,7 +186,15 @@ export const judgeWait = (
     bars_examined: 0,
     horizon_ms: input.horizonMs,
     checked_at,
-    scorer: WAIT_SCORER,
+    // THE ERA OF THE PLAN, not of this build. The levels walked below come
+    // off the stored plan, which was sized by the floors in force the day the
+    // call was made; stamping today's WAIT_SCORER on a verdict about a plan
+    // sized under the old floors would pool two different measurements under
+    // one number, which is the whole thing this field exists to prevent.
+    // (2026-09-21, when MIN_STOP_ATR moved 0.4 -> 0.6 and WAIT_SCORER 2 -> 3.)
+    // The fallback is for a plan with no era on it, which is a plan from
+    // before the field existed and therefore not from a later one.
+    scorer: plan?.scorer ?? WAIT_SCORER,
   };
 
   // No plan, or a plan nothing at the time gave a side to: unmeasurable, and

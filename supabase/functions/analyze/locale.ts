@@ -88,6 +88,9 @@ interface LocaleStrings {
     // so the sentence has to hold together when they are absent.
     confidence?: number | null;
     confidenceFloor?: number | null;
+    // How far the first target sat from the fill, in ATR. Only
+    // target_too_close reads it; same reasoning as the two above.
+    tp1Atr?: number | null;
     // The higher rung that refused the plan for pointing against its own
     // closes (entry.ts, structureConflictFor). Only structure_conflict reads
     // it; same reasoning as the two above.
@@ -159,7 +162,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
       "経済指標カレンダー: 取得できませんでした。予定の有無は不明として扱い、指標が無いことを前提にしたプランを組まないこと。",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict, tp1Atr }) => {
       const head = `AIの判断は ${signal} でしたが、`;
       const tail = "ため見送り（WAIT）に変更しました";
       // The rung, its reading and the level it read it off. The level is what
@@ -203,6 +206,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}トレンドが継続している場面で「戻りを待つ指値」になっており、約定しない可能性が高い${tail}${repair}`;
         case "stop_too_tight":
           return `${head}損切りが現在値に近すぎ（ATRの${stopAtr ?? "?"}倍）、ノイズで刈られる可能性が高い${tail}`;
+        // 利確1が近すぎる。損切りの下限と同じ ATR 倍で、反対側にも同じ要求を
+        // する。届いても「読みが当たった」証拠にならない距離、という意味。
+        case "target_too_close":
+          return `${head}利確1が現在値に近すぎ（ATRの${tp1Atr ?? "?"}倍）、届いても読みが当たった証拠にならない${tail}`;
         case "poor_rr":
           return `${head}このエントリーではリスクリワードが${riskReward ?? "?"}しかなく、割に合わない${tail}`;
         case "target_out_of_reach":
@@ -236,7 +243,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}エントリー足に${turnDir}向きの転換の証拠が${tc?.score ?? "?"}件あり${facts}、直近に${ride}への新しい終値ブレイクも無く、転換中の足に${ride}方向で乗る継続エントリーになる${tail}`;
         }
         // 現状ここには何も来ない: この switch に来る rejection は低確信度と
-        // entry.ts の Rejection 7種だけで、いずれも case を持つ。market_closed は
+        // entry.ts の Rejection 8種だけで、いずれも case を持つ。market_closed は
         // 呼び出し側（index.ts）が marketClosed に振り分け、"unknown" は
         // entryVerdict.rejection が真であることを条件に入る分岐なので到達しない。
         // 将来 Rejection を増やして case を書き忘れたときのための受け皿なので、
@@ -284,7 +291,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:
       "Economic calendar: could not be read. Treat the schedule as unknown and do not build a plan that assumes no release is due.",
-    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict }) => {
+    entryRejected: ({ rejection, signal, distanceAtr, stopAtr, riskReward, repairRejection, confidence, confidenceFloor, structureConflict, turnConflict, tp1Atr }) => {
       const head = `The model called ${signal}, but `;
       const tail = ", so this was downgraded to WAIT.";
       // Same as the Japanese: name the rung, the reading and the level.
@@ -317,6 +324,10 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           return `${head}it waits for a pullback while the trend is still running, which would not have filled${tail}${repair}`;
         case "stop_too_tight":
           return `${head}the stop sits inside the noise (${stopAtr ?? "?"}× ATR from the entry) and would be hit by it${tail}`;
+        // See the Japanese copy: the same ATR demand as the stop floor, made
+        // of the other side of the entry.
+        case "target_too_close":
+          return `${head}the first target sits inside the noise (${tp1Atr ?? "?"}× ATR from the entry), so reaching it would not show the read was right${tail}`;
         case "poor_rr":
           return `${head}at that entry the risk/reward is only ${riskReward ?? "?"}, which does not pay${tail}`;
         case "target_out_of_reach":
@@ -347,7 +358,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
           const facts = tc && tc.facts.length > 0 ? ` (${turnFactWords(tc.facts, "en", ", ")})` : "";
           return `${head}the entry timeframe carries ${tc?.score ?? "?"} facts that it is turning ${turnDir}${facts} and no fresh closing break ${ride} — the plan rides a direction that is ending${tail}`;
         }
-        // Nothing reaches this today: only low_confidence and the seven
+        // Nothing reaches this today: only low_confidence and the eight
         // rejections in entry.ts arrive here and all of them now have a case;
         // market_closed is diverted to marketClosed by the caller, and
         // "unknown" sits behind a branch that requires a real rejection. It is

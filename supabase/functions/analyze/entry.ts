@@ -43,8 +43,38 @@ export const MAX_LIMIT_ATR = 0.5;
 export const MAX_STOP_ATR = 1.0;
 // "At market" in practice: inside the spread and ordinary jitter
 export const MARKET_TOLERANCE_ATR = 0.15;
-// A stop closer than this is inside the bar-to-bar noise and gets hit by it
-export const MIN_STOP_ATR = 0.4;
+// A stop closer than this is inside the bar-to-bar noise and gets hit by it.
+//
+// Raised from 0.4 to 0.6 on 2026-09-21 at the owner's instruction, after a 1h
+// plan went out with a 20-pip stop at 0.9 ATR and the floor underneath it
+// would have allowed 9 pips. The number is a policy choice about how much
+// room a plan must give itself, not something measured into existence.
+//
+// What the record says, because the first draft of this comment guessed and
+// guessed wrong: of the 57 published plans carrying a stop_atr, three sat
+// between 0.4 and 0.6 and WOULD have been refused by this floor — 09-07 12:50
+// JST USD/JPY 1day at 0.50 (won), 09-11 22:01 1day at 0.57 (lost), 09-14
+// 11:01 4h at 0.59 (lost). One win and two losses is not evidence either way
+// at n=3; it is the honest account of what the floor costs and buys so far.
+export const MIN_STOP_ATR = 0.6;
+// And the same demand on the other side of the entry: a first target inside
+// this distance is inside the noise the stop floor names, so reaching it
+// would not be evidence the idea was right.
+//
+// The same number as MIN_STOP_ATR today, and a DIFFERENT statement: one is
+// about where the idea is wrong, the other about where it has paid. Kept
+// apart so either can be calibrated without silently moving the other.
+//
+// Checked BEFORE the risk/reward floor on purpose. With a stop at the floor
+// and a ratio at the floor the reward is already 0.72 ATR, so a target under
+// 0.6 ATR always fails poor_rr too — but "the target is too close" is the
+// more precise of the two sentences, and it is the one the reader needs.
+//
+// Measured 2026-09-21: of the 47 published plans carrying a tp1_atr, the
+// nearest target was 0.71 ATR and none sat under 0.6. So unlike the stop
+// floor above, this one refuses nothing that has been published; it is a
+// guard that stops holding only if MIN_RISK_REWARD is ever lowered.
+export const MIN_TP1_ATR = 0.6;
 // Below this, the trade actually available is not worth taking
 export const MIN_RISK_REWARD = 1.2;
 // And above THIS it is not a plan, it is a lottery ticket.
@@ -326,6 +356,8 @@ export type Rejection =
   | "should_be_market"
   // the stop sits inside the noise around the entry
   | "stop_too_tight"
+  // the first target sits inside the noise, so reaching it proves nothing
+  | "target_too_close"
   // reachable entry, but the reward does not pay for the risk
   | "poor_rr"
   // the reward is so far out that the ratio stopped meaning anything: a
@@ -512,8 +544,20 @@ const check = (
     return { ...out, rejection: "should_be_market" };
   }
 
-  if (stop < MIN_STOP_ATR) {
+  // BOTH FLOORS ARE COMPARED ON THE ROUNDED MULTIPLE, which is the number the
+  // row records and the screen prints. On the raw double they would not be:
+  // 0.6 has no binary representation, so a stop the model places exactly on
+  // the floor arrives as 0.5999999999999943 and would be refused while the
+  // card beside the refusal said "ATR 0.6倍". A gate whose reason contradicts
+  // the number shown next to it is the failure this project keeps having to
+  // undo (#83), and it is cheaper to judge the published number than to
+  // explain the fourteenth decimal to a reader.
+  if (out.stopAtr !== null && out.stopAtr < MIN_STOP_ATR) {
     return { ...out, rejection: "stop_too_tight" };
+  }
+
+  if (round2(reward / scale) < MIN_TP1_ATR) {
+    return { ...out, rejection: "target_too_close" };
   }
 
   if (rr === null || rr < MIN_RISK_REWARD) {
@@ -709,7 +753,15 @@ export interface WaitPlan {
   scorer: number;
 }
 
-export const WAIT_SCORER = 2;
+// Bumped 2 -> 3 on 2026-09-21 with MIN_STOP_ATR. The rule that walks the bars
+// did not change; the TRADE being walked did. A WAIT is scored against the
+// least this app would have demanded of a trade, and that minimum is now a
+// 0.6 ATR stop with a 0.72 ATR target instead of 0.4 and 0.48. A miss under
+// the old minimum and a miss under the new one are two different measurements,
+// so they carry different numbers and are never averaged into one miss rate.
+// Plans already stored keep the 2 they were stamped with, and the scorer
+// grades them against their own stored levels (track-outcomes/waits.ts).
+export const WAIT_SCORER = 3;
 
 const directionOf = (input: {
   proposedSignal: Signal;

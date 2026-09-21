@@ -262,6 +262,8 @@ export const en: Dict = {
         stop_too_tight: "Stop inside the noise (would be hit by it)",
         poor_rr: "Risk/reward does not pay",
         target_out_of_reach: "Target too far to be reached in time",
+        // The stop floor's demand, made of the other side of the entry.
+        target_too_close: "First target inside the noise (reaching it would prove nothing)",
         market_closed: "The market was shut, so there was no price to enter at",
         // Only reachable on a row where the model asked for a BUY or a SELL
         // and rated it below the floor. A model WAIT never reaches this block.

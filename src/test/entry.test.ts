@@ -16,6 +16,9 @@ import {
   FRESH_BREAK_BARS,
   TURN_BLOCK,
   type TurnForGate,
+  MIN_TP1_ATR,
+  WAIT_SCORER,
+  waitPlanFor,
 } from "../../supabase/functions/analyze/entry.ts";
 
 // A 1h USD/JPY plan: market 157.08, ATR 0.45 (45 pips). SELL at the market,
@@ -343,7 +346,7 @@ describe("evaluateEntry — replaying the plans that were actually published", (
   // these was published under the old rules and then judged "untriggered /
   // missed" by the tracker. None of them survives the gate: the pullback is
   // refused, and at the market the model's own stop and target do not pay.
-  const history: Array<{ name: string; plan: EntryPlan; expect: string }> = [
+  const history: Array<{ name: string; plan: EntryPlan; expect: string; repair?: string }> = [
     {
       name: "1h SELL 157.90, Trend Day (14 pips above market)",
       plan: { signal: "SELL", entry: 157.9, stopLoss: 158.45, takeProfit1: 157.05, price: 157.76, atr: 0.45, mode: "Trend Day", direction: "Down" },
@@ -353,6 +356,11 @@ describe("evaluateEntry — replaying the plans that were actually published", (
       name: "4h SELL 158.05, Breakout (66 pips above market)",
       plan: { signal: "SELL", entry: 158.05, stopLoss: 158.75, takeProfit1: 157.0, price: 157.39, atr: 0.9, mode: "Breakout", direction: "Down" },
       expect: "too_far",
+      // Entered at the market this one is refused by the TARGET floor rather
+      // than the ratio: 39 pips of reward on a 0.9 ATR is 0.43 ATR, inside
+      // the noise, and target_too_close is checked first because it is the
+      // more precise of the two sentences (entry.ts, MIN_TP1_ATR).
+      repair: "target_too_close",
     },
     {
       name: "1day SELL 158.30, Breakout (41 pips above market)",
@@ -383,21 +391,28 @@ describe("evaluateEntry — replaying the plans that were actually published", (
     },
   ];
 
-  for (const { name, plan, expect: reason } of history) {
+  for (const { name, plan, expect: reason, repair } of history) {
     it(`refuses: ${name}`, () => {
       const v = evaluateEntry(plan);
       expect(v.ok).toBe(false);
       expect(v.rejection).toBe(reason);
       expect(v.entryType).toBe("limit");
       expect(v.repaired).toBe(false);
-      expect(v.repairRejection).toBe("poor_rr");
+      expect(v.repairRejection).toBe(repair ?? "poor_rr");
     });
   }
 
-  it("still accepts the one plan that did trade", () => {
-    // 1day BUY 159.85, Breakout / Up, 22 pips from a 159.63 market on a
-    // 1.5 ATR — at the market by the tolerance, and 1:1.5 on TP1. It went on
-    // to lose, but it was a real, fillable plan and must not be filtered out.
+  // WHAT THE 0.6 STOP FLOOR COSTS, on the one plan in this set that used to
+  // pass. 1day BUY 159.85, Breakout / Up, 22 pips from a 159.63 market on a
+  // 1.5 ATR: at the market by the tolerance, 1:1.5 on TP1, and a stop 80 pips
+  // away — 0.53 ATR. Until 2026-09-21 that cleared the 0.4 floor and the plan
+  // was published; it then lost. Under the 0.6 floor the same plan is refused.
+  //
+  // This test used to assert the opposite ("must not be filtered out"), and
+  // the assertion is inverted here rather than deleted, because the floor
+  // moving is exactly the kind of change that should have to rewrite a test
+  // that says what the gate publishes.
+  it("now refuses the one plan in this set that used to trade — the stop is 0.53 ATR", () => {
     const v = evaluateEntry({
       signal: "BUY",
       entry: 159.85,
@@ -408,14 +423,14 @@ describe("evaluateEntry — replaying the plans that were actually published", (
       mode: "Breakout",
       direction: "Up",
     });
-    expect(v.ok).toBe(true);
-    expect(v.entryType).toBe("market");
+    expect(v.ok).toBe(false);
+    expect(v.rejection).toBe("stop_too_tight");
+    expect(v.stopAtr).toBeCloseTo(0.53, 2);
+    expect(v.stopAtr).toBeLessThan(MIN_STOP_ATR);
+    // The geometry it was refused on is still measured and reported: the
+    // ratio was never the problem.
     expect(v.riskReward).toBe(1.5);
-    // snapping it onto the market would put the stop inside the noise, so
-    // the model's own entry stands
-    expect(v.snapped).toBe(false);
-    expect(v.snapDeclined).toBe("stop_too_tight");
-    expect(v.entry).toBe(159.85);
+    expect(v.entryType).toBe("market");
   });
 });
 
@@ -428,8 +443,8 @@ describe("a floor with no ceiling is an instruction to reverse-engineer the targ
     const v = evaluateEntry({
       signal: "BUY",
       entry: 150,
-      stopLoss: 149.5,      // risk 0.5
-      takeProfit1: 155,     // reward 5.0 -> RR 10
+      stopLoss: 149.3,      // risk 0.7 ATR, clear of the stop floor
+      takeProfit1: 155,     // reward 5.0 -> RR 7.1
       price: 150,
       atr: 1,
       mode: null,
@@ -444,8 +459,8 @@ describe("a floor with no ceiling is an instruction to reverse-engineer the targ
     const v = evaluateEntry({
       signal: "BUY",
       entry: 150,
-      stopLoss: 149.5,
-      takeProfit1: 151,   // RR 2
+      stopLoss: 149.3,    // risk 0.7 ATR
+      takeProfit1: 151.4, // reward 1.4 ATR -> RR 2
       price: 150,
       atr: 1,
       mode: null,
@@ -458,6 +473,102 @@ describe("a floor with no ceiling is an instruction to reverse-engineer the targ
 
   it("brackets the ratio from both ends", () => {
     expect(MAX_RISK_REWARD).toBeGreaterThan(MIN_RISK_REWARD);
+  });
+});
+
+// THE 0.6 ATR FLOORS (2026-09-21). The owner asked for a minimum width of
+// 0.6 ATR on BOTH sides of the entry after seeing a plan whose stop could
+// legally have been 9 pips. These are the contract for that.
+describe("both sides of the entry have to give the plan room", () => {
+  // 150 with a 1.0 ATR, so an ATR multiple reads off the price directly.
+  const at = (stop: number, target: number): EntryPlan => ({
+    signal: "BUY",
+    entry: 150,
+    stopLoss: 150 - stop,
+    takeProfit1: 150 + target,
+    price: 150,
+    atr: 1,
+    mode: null,
+    direction: null,
+  });
+
+  it("the two floors are the number that was asked for", () => {
+    expect(MIN_STOP_ATR).toBe(0.6);
+    expect(MIN_TP1_ATR).toBe(0.6);
+  });
+
+  it("refuses a stop inside the floor and accepts one exactly on it", () => {
+    const under = evaluateEntry(at(0.59, 2));
+    expect(under.ok).toBe(false);
+    expect(under.rejection).toBe("stop_too_tight");
+    expect(under.stopAtr).toBe(0.59);
+
+    // Exactly on the floor. `150 - 0.6` is 0.5999999999999943 in binary, so
+    // this passes only because the gate judges the ROUNDED multiple — the
+    // same number it reports and the screen prints. A plan cannot be refused
+    // for being under a floor the card beside the refusal says it meets.
+    const on = evaluateEntry(at(MIN_STOP_ATR, 2));
+    expect(on.ok).toBe(true);
+    expect(on.stopAtr).toBe(MIN_STOP_ATR);
+  });
+
+  it("refuses a first target inside the floor and accepts one exactly on it", () => {
+    // Stop well clear of its own floor, so the only thing under test is the
+    // target: 0.5 ATR of reward on 1.0 ATR of risk.
+    const under = evaluateEntry(at(1, 0.5));
+    expect(under.ok).toBe(false);
+    expect(under.rejection).toBe("target_too_close");
+
+    // Exactly on the target floor: this reason is gone, and what refuses it
+    // now is the RATIO (0.6 against a 1.0 stop is 1:0.6), which is the honest
+    // reason at that geometry.
+    expect(evaluateEntry(at(1, MIN_TP1_ATR)).rejection).toBe("poor_rr");
+    // ...and on a stop the target can pay for, it passes.
+    const ok = evaluateEntry(at(MIN_STOP_ATR, 0.72));
+    expect(ok.ok).toBe(true);
+    expect(ok.riskReward).toBe(1.2);
+  });
+
+  it("names the target, not the ratio, when both are wrong", () => {
+    // 0.4 ATR of reward on a 0.8 ATR stop fails the ratio (1:0.5) AND the
+    // target floor. The more precise sentence is the one that is returned.
+    const v = evaluateEntry(at(0.8, 0.4));
+    expect(v.rejection).toBe("target_too_close");
+    expect(v.riskReward).toBe(0.5);
+  });
+
+  it("is the same demand for a SELL", () => {
+    const mirror = (stop: number, target: number): EntryPlan => ({
+      ...at(stop, target),
+      signal: "SELL",
+      stopLoss: 150 + stop,
+      takeProfit1: 150 - target,
+    });
+    expect(evaluateEntry(mirror(0.59, 2)).rejection).toBe("stop_too_tight");
+    expect(evaluateEntry(mirror(1, 0.5)).rejection).toBe("target_too_close");
+    expect(evaluateEntry(mirror(MIN_STOP_ATR, 0.72)).ok).toBe(true);
+  });
+
+  it("the WAIT it is measured against moved with it, and carries a new era", () => {
+    // waitPlanFor builds the least trade the app would have demanded. Both
+    // numbers come from these floors, so the WAIT scorer's subject changed
+    // shape the moment they did — which is what the era number records.
+    const p = waitPlanFor({
+      proposedSignal: "BUY",
+      declaredDirection: null,
+      regime: "unclear",
+      regimeDirection: null,
+      entry: 150,
+      atr: 1,
+      quote: null,
+      decimals: 3,
+      contract: "market_v1",
+      decidedAt: "2026-09-21T12:00:00.000Z",
+    });
+    expect(p.risk).toBeCloseTo(MIN_STOP_ATR, 10);
+    expect(p.reward).toBeCloseTo(MIN_STOP_ATR * MIN_RISK_REWARD, 10);
+    expect(p.scorer).toBe(WAIT_SCORER);
+    expect(WAIT_SCORER).toBe(3);
   });
 });
 

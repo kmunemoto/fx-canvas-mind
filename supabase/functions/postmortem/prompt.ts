@@ -39,7 +39,7 @@ import {
   type Cause,
   type PostmortemFacts,
 } from "./facts.ts";
-import { MIN_RISK_REWARD, MIN_STOP_ATR, TREND_ADX } from "../analyze/entry.ts";
+import { MIN_RISK_REWARD, MIN_STOP_ATR, MIN_TP1_ATR, TREND_ADX } from "../analyze/entry.ts";
 import { isRuleKind, orderRules, type Rule, type RuleKind } from "../analyze/rules.ts";
 import { LEGACY_PLAN_CONTRACT } from "../_shared/contract.ts";
 import { EPISODE_DEFINITION_VERSION, episodeIds } from "../_shared/episodes.ts";
@@ -637,7 +637,7 @@ export const DIAGNOSIS_SYSTEM_PROMPT = `あなたはFXトレードの検証担�
 - 反実仮想が「勝っていた」ことは、仮説の材料であって、次のプランでレバーを動かす理由ではない。同じ変更は別の場面で損失を大きくしうる。1件の反実仮想から「次回は損切りを広げる／利確を近づける」と書かない。lesson にするのは、同じ条件が繰り返し同じ結果を出していると facts と stats が示すときだけ。
 - 根拠にしてよいのは facts と plan に書かれていることだけ。事実に無い出来事（ニュース等）を推測で作らない。ニュース要因（news_shock）は、plan の warnings/key_factors に指標やイベントへの言及があり、かつ facts.abnormal_bar が観測された場合に限る。
 - 次の順に検討する: (1) 方向は合っていたか (2) その場面で入ったこと自体が妥当だったか（伸びきった動きに飛び乗っていないか。旧契約 entry_chosen_v1 のプランでは、約定したか・逃したかも見る） (3) 損切り幅は適切だったか (4) 利確は届く距離だったか (5) 相場環境（トレンド/レンジ）の読みは正しかったか。
-- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（同じプランを ${PULLBACK_R}R 有利な値で約定していたら。損切り幅は同じ。現行契約では出せる注文ではなく、「伸びきったところを掴んだ」ことの尺度）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback が win なら「その値位置で入るには遅すぎた」という事実であって、指値・押し目待ちの推奨ではない。ここから書ける lesson は「その条件では見送る（WAIT）」の形だけ。gate はその案が当時のゲートを通るかを示すだけで、「指値にすべきだった」の根拠にはならない。
+- facts.counterfactual は原因の切り分けに使う最重要の証拠。market_entry（成行で入っていたら）、market_entry_same_risk（成行で入り損切り幅を元のプランと同じにしていたら）、stop_x1_5 / stop_x2（損切りを広げていたら）、tp_half（利確を半分にしていたら）、limit_pullback（同じプランを ${PULLBACK_R}R 有利な値で約定していたら。損切り幅は同じ。現行契約では出せる注文ではなく、「伸びきったところを掴んだ」ことの尺度）。各項目の rr はその案自体のリスクリワード、viable はサーバーのエントリーゲートを通る案かどうか、gate は通らない理由（poor_rr: RR ${MIN_RISK_REWARD} 未満、stop_too_tight: 損切り幅 ATR${MIN_STOP_ATR}倍未満、target_too_close: 利確1の幅 ATR${MIN_TP1_ATR}倍未満、too_far: 指値が現在値から遠すぎる、should_be_market: トレンド局面ではサーバーが指値を成行に修正する）。viable=false の案は「勝っていた」としても採用できない案なので、それを根拠に「成行にすべきだった」「指値にすべきだった」等の教訓を書かない。limit_pullback が win なら「その値位置で入るには遅すぎた」という事実であって、指値・押し目待ちの推奨ではない。ここから書ける lesson は「その条件では見送る（WAIT）」の形だけ。gate はその案が当時のゲートを通るかを示すだけで、「指値にすべきだった」の根拠にはならない。
 - facts.hints は決定論的な事前分類で、通常はその中から選ぶ。覆す場合は evidence で理由を示す。facts.notes には判定の補足がある。
 - facts.early_adverse_r は約定直後 3 本以内の最大逆行（R、取引中のみ）。即座に逆行した場合、伸びきった動きに乗った（chased_move）を疑う。
 - lesson は「条件 → 行動」の形で、次回以降のプラン作成に直接使える一般則にする。個別の価格・日付・その日固有の出来事は書かない。同じ状況が来たときに何を変えるかを書く。
@@ -994,7 +994,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - stats.win_rate / fill_rate は決着数が ${MIN_STAT_N} 未満のとき null。null や小さい n の統計を根拠にルールを強めない。stats.win_rate_ci95 は勝率の95%信頼区間。
 - stats は stats.contract のエントリー契約で作られたプランだけを集計している。別の契約のプランは stats.other_contract_rows として件数だけ数え、勝率にも件数にも入れていない。契約をまたいだ比較はできない。
 - 勝率の分母は stats.decided（WIN + LOSS + 期限切れ）。期限切れは「届かない利確を置いた」結果であり、勝率から外れる逃げ道にはならない。
-- 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
+- 見送り（WAIT）も採点される。stats.waits_missed は「見送った後、このアプリ自身が許す最小のトレード（損切り ATR${MIN_STOP_ATR}倍・RR ${MIN_RISK_REWARD}）なら勝っていた」局面の数（この最小トレードの寸法は 2026-09-21 に変わったので、wait_scorer が 2 の行と 3 の行は別の測定であり、混ぜて割合にしない）、stats.wait_miss_rate はその割合。これが実績の中で唯一「慎重すぎた」ことを示す証拠なので、見送りを増やすルールを足すときは必ずこの数字を見る。損失を減らすルールばかりを積むと、この数字だけが増えていく。
 - 見送りの内訳: stats.self_declined は AI 自身が「見送る」と答えた件数、stats.rejected は AI が出したプランをサーバーの入口チェックが却下して WAIT にした件数。前者はアナリストの判断、後者はサーバーの強制で、ルールで直せるのは前者だけ。この2つを1つの数にまとめていた間、AI 自身の見送り16件が「サーバーが却下した」件数として渡っていた（実際の却下は1件）。
 - 各 lesson には contract（作られた時のエントリー契約）が付いている。別の契約の lesson は「同じ状況がまた起きる」証拠としては使えるが、その remedy が今は存在しない操作（押し目待ち・指値）を指している場合があるので、ルールの文言はそのまま写さない。stats.lessons_by_contract が契約別の件数。
 - 各 lesson には bars_after_settlement（その診断が見た決着後の足数）が付いている。診断は決着の直後に走る設計なので、この数が小さい lesson は「その後どうなったか」をほとんど見ていない。実測（2026-09-07、n=4）では、8足で書かれた診断を48〜95足まで待って読み直したところ、4件中2件は原因そのものが変わり（うち1件は「一度も含み益にならなかった」から「23足後に利確1に到達していた」へ）、残る2件も原因は同じまま avoidable や副次原因が変わった。ただしこの4件は原因語彙を変えた版で読み直しているので、深さの効果とコード変更の効果を分離できていない。lesson の confidence はこの深さを織り込んでいない。null は列ができる前に書かれた lesson。
@@ -1009,7 +1009,7 @@ export const CONSOLIDATION_SYSTEM_PROMPT = `あなたはFX分析AIの「ルー�
 - 条件は指標由来の観測量（ADX、ATR、SMA20/50の並び、上位足との整合、RSI、直近の値幅）に限る。アナリスト自身の自己申告値（confidence、mode の宣言、direction）を条件にしない。
 - 「条件 → 行動」の形、100字以内。個別の価格・日付・銘柄固有の出来事は書かない。
 - アナリストが実際に出力できる形式に限る。プランはエントリー1つ・損切り1つ・利確3つで、分割エントリー・ナンピン・両建て・トレーリングストップは表現できない。
-- ゲートとの整合: 現行契約（market_v1）では、エントリー価格はアナリストが選ばない。分析した瞬間の現在値がそのまま成行の約定価格になる。したがって「押し目を待つ」「浅い指値で入る」「エントリーを引きつける」形のルールは実行できないので書かない。アナリストが決められるのは方向・損切り幅・利確幅と、そもそも入るかどうか（WAIT）の4つだけであり、ルールもその4つのいずれかを動かす形にする。損切り幅は ATR${MIN_STOP_ATR}倍以上、RR は ${MIN_RISK_REWARD} 以上をサーバーが強制する。トレンド局面（ADX ${TREND_ADX} 以上で SMA が方向に並ぶ）の判定は、入るか見送るかの条件としてのみ使う。
+- ゲートとの整合: 現行契約（market_v1）では、エントリー価格はアナリストが選ばない。分析した瞬間の現在値がそのまま成行の約定価格になる。したがって「押し目を待つ」「浅い指値で入る」「エントリーを引きつける」形のルールは実行できないので書かない。アナリストが決められるのは方向・損切り幅・利確幅と、そもそも入るかどうか（WAIT）の4つだけであり、ルールもその4つのいずれかを動かす形にする。損切り幅は ATR${MIN_STOP_ATR}倍以上、利確1の幅は ATR${MIN_TP1_ATR}倍以上、RR は ${MIN_RISK_REWARD} 以上をサーバーが強制する。トレンド局面（ADX ${TREND_ADX} 以上で SMA が方向に並ぶ）の判定は、入るか見送るかの条件としてのみ使う。
 - 同じ趣旨のルールは1つに統合する。
 - id は既存ルールを引き継ぐ場合そのまま、新規は "r" + 通し番号（既存と重複しない）。既存ルールを別の id で書き直さない。
 

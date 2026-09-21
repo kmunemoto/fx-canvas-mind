@@ -20,6 +20,7 @@ import {
   MAX_LIMIT_ATR,
   MIN_RISK_REWARD,
   MIN_STOP_ATR,
+  MIN_TP1_ATR,
   entryScale,
   inferEntryType,
   isMomentumMode,
@@ -317,7 +318,7 @@ export interface CfResult {
   // reward for the risk, the stop's width, a limit's distance from the
   // market, or a limit in a regime where the gate turns limits into
   // market entries
-  gate: "ok" | "poor_rr" | "stop_too_tight" | "too_far" | "should_be_market";
+  gate: "ok" | "poor_rr" | "stop_too_tight" | "target_too_close" | "too_far" | "should_be_market";
 }
 
 export interface GateContext {
@@ -600,9 +601,21 @@ const simulate = async (
   const rr = vRisk > 0 ? round2(vReward / vRisk) : null;
   // The gate's own tests (entry.ts), on the variant: enough reward for the
   // risk, and a stop outside the noise when the ATR is known
-  const stopOk = atr === null || !Number.isFinite(atr) || atr <= 0 || vRisk / atr >= MIN_STOP_ATR;
+  const noAtr = atr === null || !Number.isFinite(atr) || atr <= 0;
+  const stopOk = noAtr || vRisk / atr >= MIN_STOP_ATR;
+  // The target floor the gate applies (entry.ts, MIN_TP1_ATR). Without an ATR
+  // neither distance can be measured, so neither is claimed.
+  const tp1Ok = noAtr || vReward / atr >= MIN_TP1_ATR;
   const rrOk = rr !== null && rr >= MIN_RISK_REWARD;
-  let gate: CfResult["gate"] = !rrOk ? "poor_rr" : !stopOk ? "stop_too_tight" : "ok";
+  // Reported in the gate's own order, so a variant's reason here is the
+  // reason the gate would have given: stop, then target, then ratio.
+  let gate: CfResult["gate"] = !stopOk
+    ? "stop_too_tight"
+    : !tp1Ok
+    ? "target_too_close"
+    : !rrOk
+    ? "poor_rr"
+    : "ok";
   // The gate's distance and regime tests, on a limit variant: the same
   // rules entry.ts applies to the model's own plans
   const ref = base.price_at_signal;
@@ -632,6 +645,8 @@ const gateReason = (r: CfResult | null, atr: number | null): string => {
       return `rr ${r.rr ?? "?"} below ${MIN_RISK_REWARD}`;
     case "stop_too_tight":
       return `stop under ${MIN_STOP_ATR} ATR${atr !== null ? ` (ATR ${atr})` : ""}`;
+    case "target_too_close":
+      return `take-profit 1 under ${MIN_TP1_ATR} ATR${atr !== null ? ` (ATR ${atr})` : ""}`;
     case "too_far":
       return `more than ${MAX_LIMIT_ATR} ATR from the market`;
     case "should_be_market":

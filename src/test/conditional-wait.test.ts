@@ -149,6 +149,9 @@ describe("readConditionalWait — what gets refused, by name", () => {
     expect(got).toEqual({ ok: false, rejection: "too_close" });
     // 0.3 ATR too: inside the distance the gate itself calls noise.
     expect(read({ trigger_price: 150.15 })).toEqual({ ok: false, rejection: "too_close" });
+    // And 0.4 ATR, which cleared this floor until the gate's stop floor
+    // moved on 2026-09-21.
+    expect(read({ trigger_price: 150.2 })).toEqual({ ok: false, rejection: "too_close" });
     // The floor IS the gate's stop floor, not a copy of its current value.
     expect(MIN_TRIGGER_ATR).toBe(MIN_STOP_ATR);
   });
@@ -161,7 +164,11 @@ describe("readConditionalWait — what gets refused, by name", () => {
   });
 
   it("accepts the boundaries themselves — the bounds are inclusive", () => {
-    expect(read({ trigger_price: 150.2 }).ok).toBe(true); // exactly 0.4 ATR
+    // The floor tracks the gate's stop floor, so the boundary is computed
+    // from it rather than written out: a literal here would have gone stale
+    // on 2026-09-21 when the stop floor moved 0.4 -> 0.6.
+    const atFloor = 150 + MIN_TRIGGER_ATR * 0.5;
+    expect(read({ trigger_price: atFloor }).ok).toBe(true);
     expect(read({ trigger_price: 151.5 }).ok).toBe(true); // exactly 3.0 ATR
   });
 });

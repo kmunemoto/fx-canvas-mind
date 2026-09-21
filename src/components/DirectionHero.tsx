@@ -49,6 +49,10 @@ const DirectionHero = ({ result, pair, interval, entryCheck, confidenceObserved 
         case "poor_rr":
         case "target_out_of_reach":
           return typeof rr === "number" ? `1:${rr}` : null;
+        case "target_too_close":
+          // The distance the floor is denominated in, not the ratio: the
+          // ratio is what the OTHER two reasons are about.
+          return typeof entryCheck.tp1_atr === "number" ? w.atrMultiple(entryCheck.tp1_atr) : null;
         case "stop_too_tight":
           return typeof stop_atr === "number" ? w.atrMultiple(stop_atr) : null;
         case "too_far":
