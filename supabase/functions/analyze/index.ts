@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v62-2026-09-19T15:00:00Z";
+const FUNCTION_VERSION = "analyze-v63-2026-09-21T12:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -60,6 +60,7 @@ import {
   MAX_STOP_ATR,
   MIN_RISK_REWARD,
   MIN_STOP_ATR,
+  MIN_TP1_ATR,
   TREND_ADX,
   TURN_BLOCK,
   evaluateEntry,
@@ -386,7 +387,10 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
    - エントリー足が転換中のとき、その方向に乗る継続エントリー（下降中の足で SELL、上昇中の足で BUY）はサーバーが公開しない。戻り売り・押し目買いの場面に見えても、証拠が転換を示しているなら WAIT か反対方向を検討する。
    - 上位足がこの基準で方向を持ち、かつ転換中でないとき、その方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。上位足が転換中なら、逆方向のプランは止めない。
    上位足の方向に逆らうエントリーは確信度を下げる。ただし「上位足がまだ下向きだから」だけを理由に反対方向を捨てない: 下降の中で反発が始まり転換の証拠が積み上がっているなら、それは「戻り売りの場面」ではなく「方向が変わりつつある局面」で、手順6の counter_case で正面から扱う。
-4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.5〜1.0 の範囲に置く。ATR×${MIN_STOP_ATR}未満の損切りはノイズで刈られるためサーバー側で却下され、遠すぎる損切りはリスクリワードが成立せず見送りになる。
+4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.6〜1.2 の範囲に置く。
+   - 損切りは現在値から **ATR×${MIN_STOP_ATR} 以上**離す。これ未満はノイズで刈られるのでサーバーが却下する。遠すぎる損切りはリスクリワードが成立せず見送りになる。
+   - 利確1も現在値から **ATR×${MIN_TP1_ATR} 以上**離す。これ未満は、届いても「読みが当たった」証拠にならないのでサーバーが却下する。
+   - どちらの幅も「ATR の何倍か」で決める。pips で丸めた数字を先に決めてから ATR に当てはめない。
 5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
    - 「押し目を待って買う」「戻りを待って売る」は出力できない。今この価格で入るか、入らないかの二択である。待つべき局面なら signal を "WAIT" にする。
    - 現在値でのリスクリワード（TP1基準）が ${MIN_RISK_REWARD} を下回るプランは出さない。損切りを妥当な範囲で近づけて成立しないなら、それは「今は入るところではない」ということなので "WAIT" にする。無理に利確を伸ばして帳尻を合わせない。
@@ -2713,6 +2717,12 @@ ${candleLines(lowerCandles, 24)}`;
       tp2: normalizedAnalysis.take_profit_2_num,
       tp3: normalizedAnalysis.take_profit_3_num,
     };
+    // How far the first target sits from the fill, in ATR. Computed once: the
+    // refusal sentence needs it (the target floor is denominated in it) and
+    // the row records it, and two expressions for one number is two numbers.
+    const tp1Atr = entrySnapshot.atr && proposed.tp1 !== null
+      ? Number((Math.abs(proposed.tp1 - marketEntry) / entrySnapshot.atr).toFixed(2))
+      : null;
     const entryVerdict: EntryVerdict = evaluateEntry({
       signal: proposedSignal,
       entry: marketEntry,
@@ -2781,6 +2791,8 @@ ${candleLines(lowerCandles, 24)}`;
           // because the string, not the caller, decides when they are relevant.
           confidence: normalizedAnalysis.confidence,
           confidenceFloor: MIN_CONFIDENCE,
+          // Only the target floor reads this; same reasoning as the two above.
+          tp1Atr,
           // Only the structure gate reads this; same reasoning.
           structureConflict: entryVerdict.structureConflict,
           // Only the turn gate reads this; same reasoning.
@@ -2900,9 +2912,7 @@ ${candleLines(lowerCandles, 24)}`;
       // threshold on, and swinging from too permissive to nothing-passes
       // would be the same overfitting in the other direction. Recorded now,
       // decided when there is something to decide it with.
-      tp1_atr: entrySnapshot.atr && proposed.tp1 !== null
-        ? Number((Math.abs(proposed.tp1 - marketEntry) / entrySnapshot.atr).toFixed(2))
-        : null,
+      tp1_atr: tp1Atr,
       declared_mode: detail && typeof detail.mode === "string" ? detail.mode : null,
       declared_direction: detail && typeof detail.direction === "string" ? detail.direction : null,
       priced_at: pricedAtIso,

@@ -229,6 +229,10 @@ export const ENTRY_REJECTIONS = [
   "poor_rr",
   // The target was so far out that the ratio stopped meaning anything
   "target_out_of_reach",
+  // ...and the other end of the same question: the first target sat inside
+  // the noise the stop floor names, so reaching it would prove nothing
+  // (entry.ts, MIN_TP1_ATR; analyze v63).
+  "target_too_close",
   // The server refused because the market was shut: "enter now" was not an
   // available action. Recorded apart from a model WAIT — one is the analyst
   // declining, the other is the server declining for it.

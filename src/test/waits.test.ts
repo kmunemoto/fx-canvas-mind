@@ -45,9 +45,11 @@ describe("the minimal trade a WAIT is judged against", () => {
   it("is built from the app's own floors, not from a number invented here", () => {
     expect(risk).toBeCloseTo(MIN_STOP_ATR * ATR, 10);
     expect(reward).toBeCloseTo(MIN_RISK_REWARD * risk, 10);
-    // The tightest stop and nearest target the entry gate would ever allow
-    expect(risk).toBeCloseTo(0.2, 10);
-    expect(reward).toBeCloseTo(0.24, 10);
+    // The tightest stop and nearest target the entry gate would ever allow.
+    // 0.6 * 0.5 and 1.2 * that, since 2026-09-21; it was 0.4 and 0.48 before,
+    // which is why the verdicts carry a scorer number.
+    expect(risk).toBeCloseTo(0.3, 10);
+    expect(reward).toBeCloseTo(0.36, 10);
   });
 
   it("is fixed at the moment of the call, from what was said then", () => {
@@ -219,8 +221,9 @@ describe("scoring a WAIT", () => {
     expect(w.target).toBeCloseTo(PRICE + reward, 10);
     expect(w.horizon_ms).toBe(48 * HOUR);
     // Which rule produced it: a verdict from the two-sided scorer and one
-    // from this scorer are not the same measurement
-    expect(w.scorer).toBe(2);
+    // from this scorer are not the same measurement. 3 since 2026-09-21,
+    // when the minimal trade the WAIT is judged against changed shape.
+    expect(w.scorer).toBe(3);
     expect(w.direction_source).toBe("proposed_signal");
   });
 });

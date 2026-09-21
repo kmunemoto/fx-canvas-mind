@@ -59,6 +59,7 @@ import {
 } from "../../supabase/functions/analyze/rules.ts";
 import { emptyEvaluation, type Evaluation } from "../../supabase/functions/track-outcomes/evaluate.ts";
 import type { Candle } from "../../supabase/functions/analyze/indicators.ts";
+import { WAIT_SCORER } from "../../supabase/functions/analyze/entry.ts";
 
 const candle = (datetime: string, high: number, low: number, open?: number, close?: number): Candle => ({
   datetime,
@@ -1751,8 +1752,11 @@ describe("rulebook consolidation", () => {
   });
 
   it("scores the calls that declined to trade", () => {
+    // WAIT_SCORER is 3 since 2026-09-21: the minimal trade a WAIT is judged
+    // against is now a 0.6 ATR stop, not 0.4. Rows carry the era they were
+    // scored under, and only the current era counts — see the era test below.
     const wait = (verdict: string | null) =>
-      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict, wait_scorer: 2 });
+      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict, wait_scorer: WAIT_SCORER });
     const s = summarizeRecord(
       [wait("missed"), wait("correct"), wait("correct"), wait("pending"), wait("unknown"), wait(null)],
       [],
@@ -1772,6 +1776,28 @@ describe("rulebook consolidation", () => {
     expect(mixed.waits).toBe(32);
     expect(mixed.waits_judged).toBe(30);
     expect(mixed.wait_miss_rate).toBe(20);
+  });
+
+  // The same rule, applied to the era BEFORE the current one rather than to
+  // the unscored rows. On 2026-09-21 the floors the minimal trade is built
+  // from moved (0.4 -> 0.6 ATR stop), so scorer-2 verdicts measured an easier
+  // trade than scorer-3 verdicts: a "miss" under the old minimum is not a
+  // miss under the new one, and a rate mixing them would drift downward
+  // silently as the corpus turned over. Every WAIT verdict in production on
+  // that date carried scorer 2, so this is not hypothetical — the digest
+  // starts again from zero judged WAITs and says so by counting them.
+  it("counts no WAIT verdict from a superseded scorer, however many there are", () => {
+    const era2 = (verdict: string) =>
+      contractRow({ outcome: "skipped", signal: "WAIT", wait_verdict: verdict, wait_scorer: 2 });
+    const s = summarizeRecord(
+      Array.from({ length: 40 }, (_, i) => era2(i < 10 ? "missed" : "correct")),
+      [],
+    );
+    expect(WAIT_SCORER).toBeGreaterThan(2);
+    expect(s.waits).toBe(40);
+    expect(s.waits_judged).toBe(0);
+    expect(s.waits_missed).toBe(0);
+    expect(s.wait_miss_rate).toBeNull();
   });
 
   it("tells the editor what it may and may not write under the current contract", () => {
