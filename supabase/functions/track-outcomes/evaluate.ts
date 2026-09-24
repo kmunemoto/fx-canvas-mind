@@ -220,6 +220,7 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
 export const INTERVAL_MS: Record<string, number> = {
+  "1min": MIN,
   "15min": 15 * MIN,
   "1h": HOUR,
   "4h": 4 * HOUR,
@@ -230,6 +231,11 @@ export const INTERVAL_MS: Record<string, number> = {
 // fill and its resolution can be ordered; one request per pair+interval
 // regardless of how many plans share it.
 export const EVAL_INTERVAL: Record<string, string> = {
+  // A 1min plan is judged on 1min bars: there is nothing finer to ask GMO
+  // for, so a bar that touches both the stop and the target cannot be split
+  // (finerRung returns null below 5min) and settles as `ambiguous`, which is
+  // the honest verdict for "the order inside that minute is unknowable".
+  "1min": "1min",
   "15min": "15min",
   "1h": "15min",
   "4h": "1h",
@@ -239,6 +245,8 @@ export const EVAL_INTERVAL: Record<string, string> = {
 // Enough bars to reach back to the oldest plan that can still be open
 // (EXPIRY_DAYS), allowing for weekends without candles
 export const EVAL_OUTPUTSIZE: Record<string, number> = {
+  // One market day of expiry plus a weekend, in one-minute bars, with room.
+  "1min": 3200,
   "15min": 2000,
   "1h": 3200,
 };
@@ -269,6 +277,9 @@ export const finerRung = (barMs: number): { interval: string; ms: number } | nul
 // Market days after which a filled plan without a decision is closed as
 // expired
 export const EXPIRY_DAYS: Record<string, number> = {
+  // A thirty-minute plan still open a full market day later is not being
+  // traded by anyone; one day is the smallest whole number this table holds.
+  "1min": 1,
   "15min": 5,
   "1h": 20,
   "4h": 60,
@@ -277,6 +288,9 @@ export const EXPIRY_DAYS: Record<string, number> = {
 
 // How long (market time) an unfilled entry stays valid
 export const ENTRY_WINDOW_MS: Record<string, number> = {
+  // Every other frame gives about 48 of its own bars (12h / 15min, 48h / 1h);
+  // sixty one-minute bars rounds that to the hour.
+  "1min": HOUR,
   "15min": 12 * HOUR,
   "1h": 48 * HOUR,
   "4h": 7 * DAY,
@@ -285,6 +299,7 @@ export const ENTRY_WINDOW_MS: Record<string, number> = {
 
 // Re-judge cadence per plan timeframe (the sweep runs more often than this)
 export const CHECK_EVERY_MS: Record<string, number> = {
+  "1min": MIN,
   "15min": 15 * MIN,
   "1h": HOUR,
   "4h": 4 * HOUR,

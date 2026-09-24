@@ -20,6 +20,8 @@ describe("the declaration introduces no new number", () => {
   // comment claiming otherwise becomes false.
   it("PLAN_HORIZON_BARS x ENTRY_BAR_MS reproduces HORIZON_MS exactly, on every interval", () => {
     const expected: Record<string, number> = {
+      // #98: thirty one-minute bars, half an hour
+      "1min": 30 * 60_000,
       "15min": 6 * HOUR,
       "1h": 12 * HOUR,
       "4h": 48 * HOUR,
@@ -32,12 +34,13 @@ describe("the declaration introduces no new number", () => {
     }
   });
 
-  it("covers exactly the four intervals the app analyses, and no others", () => {
-    expect(Object.keys(PLAN_HORIZON_BARS).sort()).toEqual(["15min", "1day", "1h", "4h"]);
-    expect(Object.keys(ENTRY_BAR_MS).sort()).toEqual(["15min", "1day", "1h", "4h"]);
+  it("covers exactly the five intervals the app analyses, and no others", () => {
+    expect(Object.keys(PLAN_HORIZON_BARS).sort()).toEqual(["15min", "1day", "1h", "1min", "4h"]);
+    expect(Object.keys(ENTRY_BAR_MS).sort()).toEqual(["15min", "1day", "1h", "1min", "4h"]);
   });
 
   it("bar lengths agree with the tracker's own copy", () => {
+    expect(entryBarMs("1min")).toBe(60_000);
     expect(entryBarMs("15min")).toBe(15 * 60_000);
     expect(entryBarMs("1h")).toBe(HOUR);
     expect(entryBarMs("4h")).toBe(4 * HOUR);

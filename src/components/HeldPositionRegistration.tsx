@@ -29,7 +29,7 @@ interface Props {
 }
 
 const inputCls = "w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-mono";
-const INTERVALS = ["15min", "1h", "4h", "1day"] as const;
+const INTERVALS = ["1min", "15min", "1h", "4h", "1day"] as const;
 
 // A datetime-local value carries no zone and is read in the BROWSER's; every
 // time this app shows is JST. Rather than explain that, show what will be

@@ -147,6 +147,12 @@ export const inputsKey = async (input: CanonicalInput): Promise<string> => {
 
 const MINUTE = 60_000;
 const BAR_MS: Record<string, number> = {
+  // Missing, this frame falls through to the 1h window below. In practice the
+  // key would almost never match across that hour — it hashes the prompt, and
+  // the prompt carries the newest one-minute bars — but "almost never" is the
+  // wrong contract for a frame whose whole point is the last minute, so the
+  // window says one bar like every other frame's does.
+  "1min": MINUTE,
   "15min": 15 * MINUTE,
   "1h": 60 * MINUTE,
   "4h": 4 * 60 * MINUTE,

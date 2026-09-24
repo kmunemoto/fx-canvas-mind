@@ -47,11 +47,16 @@ export interface HorizonLines {
 // The field stays ON THE ROW — it is a real fact worth having when the two
 // clocks are compared later — it simply is not a warning.
 
+// Under an hour the period is said in minutes. The 1min frame's thirty bars
+// (#98) would otherwise round to "about 0 hours", which reads as a plan that
+// is already over — the exact sentence the guard below refuses to render.
+const MINUTES_UNDER_MS = 60 * 60 * 1000;
+
 const spanText = (t: Dict, ms: number): string => {
   const h = t.result.horizon.span;
-  return ms >= DAYS_FROM_MS
-    ? h.days(Math.round(ms / (24 * 60 * 60 * 1000)))
-    : h.hours(Math.round(ms / (60 * 60 * 1000)));
+  if (ms >= DAYS_FROM_MS) return h.days(Math.round(ms / (24 * 60 * 60 * 1000)));
+  if (ms < MINUTES_UNDER_MS) return h.minutes(Math.round(ms / (60 * 1000)));
+  return h.hours(Math.round(ms / (60 * 60 * 1000)));
 };
 
 export const horizonLines = (

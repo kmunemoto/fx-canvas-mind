@@ -155,7 +155,7 @@ describe("how far back a match may be taken from", () => {
   const sessionStart = Date.parse("2026-09-11T21:00:00Z");
 
   it("is one bar of the entry timeframe while the market trades", () => {
-    for (const [interval, ms] of [["15min", 15], ["1h", 60], ["4h", 240], ["1day", 1440]] as const) {
+    for (const [interval, ms] of [["1min", 1], ["15min", 15], ["1h", 60], ["4h", 240], ["1day", 1440]] as const) {
       expect(reuseFloorMs({ interval, preview: false, nowMs: now, sessionStartMs: sessionStart }))
         .toBe(now - ms * 60_000);
     }

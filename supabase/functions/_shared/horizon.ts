@@ -65,6 +65,11 @@
 // number that can be argued with and replaced WITHOUT re-grading a single
 // plan already issued; today it is none of those things.
 export const PLAN_HORIZON_BARS: Record<string, number> = {
+  // #98. The one number here that is NOT derived from a measured holding
+  // period, because there is no 1min record to measure: 30 bars, half an hour
+  // of open market, is a declared starting point and is named as one. The
+  // stamp on each row makes it replaceable without re-grading anything.
+  "1min": 30,
   "15min": 24,
   "1h": 12,
   "4h": 12,
@@ -73,6 +78,7 @@ export const PLAN_HORIZON_BARS: Record<string, number> = {
 
 // One entry-timeframe bar, in milliseconds.
 export const ENTRY_BAR_MS: Record<string, number> = {
+  "1min": 60_000,
   "15min": 15 * 60_000,
   "1h": 60 * 60_000,
   "4h": 4 * 60 * 60_000,

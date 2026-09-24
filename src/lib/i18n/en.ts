@@ -26,7 +26,7 @@ export const en: Dict = {
   },
 
   control: {
-    intervals: { "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" },
+    intervals: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" },
     analyze: "Analyze",
     analyzing: "Analyzing…",
     stages: {
@@ -81,6 +81,7 @@ export const en: Dict = {
       bars: (tfLabel: string, bars: number, span: string) =>
         `${bars} bars of the ${tfLabel} chart (${span} of open market)`,
       span: {
+        minutes: (n: number) => `about ${n} minutes`,
         hours: (n: number) => `about ${n} hours`,
         days: (n: number) => `about ${n} days`,
       },
@@ -88,6 +89,9 @@ export const en: Dict = {
       notACutoff: "The bar count is not a deadline — scoring continues until the plan settles.",
       tpRoles: "Take profit 1 is the level aimed at inside this period. Take profit 2 and 3 are extensions beyond it and are not expected to be reached within it.",
       absent: "No target period was recorded for this analysis.",
+      // See the Japanese copy: 1min only (#98).
+      staleness: (time: string, seconds: number) =>
+        `Priced at ${time} (about ${seconds}s before this was shown). On a one-minute chart the market has moved since — check the gap between the entry and the live price before acting.`,
     },
     // See the Japanese copy: the reader's own same-direction losing run.
     streak: {

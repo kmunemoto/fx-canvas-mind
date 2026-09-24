@@ -39,7 +39,16 @@ import { MARKET_TOLERANCE_ATR } from "./entry.ts";
 //                it here is a one-line change once 1h has been observed.
 // 1h is where the plans are, and 24 bars per day file means ~11 productive day
 // files for 250 bars.
-export const GMO_ANALYSIS_TIMEFRAMES = new Set(["1h"]);
+//
+// 1min joined on 2026-09-24 (#98), and for it this is not an optimisation but
+// the difference between a plan and a guess. A one-minute ATR is roughly two
+// or three pips — an ESTIMATE, the stored 15min ATR (about 10 pips) divided by
+// the square root of 15, because there is no 1min record yet to measure. The
+// tracker fills and settles on GMO's bid/ask, so a plan priced off a different
+// feed starts some fraction of a pip — a real share of a stop that size —
+// away from the book it is judged on. One day file holds 1,440 bars, so 250
+// is one or two files: the cheapest overlay of any frame.
+export const GMO_ANALYSIS_TIMEFRAMES = new Set(["1h", "1min"]);
 
 // ONE RUNG BELOW THE ENTRY FRAME, for #87 — entry timing only, never direction.
 //
@@ -221,5 +230,22 @@ export const fetchRecentQuotes = async (
 
 // Local rather than imported: quotes.ts keeps its own copy unexported to avoid
 // an import cycle with evaluate.ts, and this file only needs the day-keyed ones.
-const intervalMsOf = (evalInterval: string): number =>
-  evalInterval === "15min" ? 15 * 60 * 1000 : HOUR_MS;
+//
+// A TABLE, and it has to be one. This used to be `15min ? 15 minutes : an
+// hour`, which was exhaustive while 15min and 1h were the only callers.
+//
+// What it would have done to 1min, stated exactly (the first draft of this
+// comment claimed usableBars would drop the newest sixty bars as forming; it
+// would not — usableBars ignores the bar length). It sizes the day-file WALK:
+// told a 1min bar is an hour long, 250 bars becomes 11 open days, padded to an
+// 18-day span, instead of 1 open day padded to 4. On a normal day the walk
+// stops after one file either way; on a thin stretch — Monday before the
+// roll, a holiday — it would have kept asking, two requests per day key, for
+// up to 18 days of files until the overlay's deadline ran out.
+const DAY_KEYED_MS: Record<string, number> = {
+  "1min": 60 * 1000,
+  "5min": 5 * 60 * 1000,
+  "15min": 15 * 60 * 1000,
+  "1h": HOUR_MS,
+};
+const intervalMsOf = (evalInterval: string): number => DAY_KEYED_MS[evalInterval] ?? HOUR_MS;

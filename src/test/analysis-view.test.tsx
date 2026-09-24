@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import PriceChart from "../components/PriceChart";
 import { fireEvent, render as rtlRender, screen, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -1159,5 +1159,44 @@ describe("the counter-case card (#96)", () => {
   it("renders nothing for a row without one, and nothing for an empty trigger", () => {
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
     expect(screen.queryByTestId("counter-case")).toBeNull();
+  });
+});
+
+// #98. A one-minute plan's entry is the price at the moment the market data
+// was read; the result is saved a median 54 s later. On this frame that is
+// most of a bar, so the card says it in seconds.
+describe("the one-minute price staleness line", () => {
+  const pricedAt = "2026-09-24T12:54:10.000Z"; // 21:54:10 JST
+  const check = { proposed_signal: "BUY", priced_at: pricedAt } as unknown as EntryCheck;
+  afterEach(() => vi.useRealTimers());
+
+  it("says when the price was read and how many seconds ago, on a 1min plan", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.parse(pricedAt) + 53_000));
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1min" entryCheck={check} />);
+    const line = screen.getByTestId("price-staleness");
+    expect(line.textContent).toContain("21:54:10");
+    expect(line.textContent).toContain("約53秒前");
+  });
+
+  it("is not shown on any other frame, nor on a WAIT", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.parse(pricedAt) + 53_000));
+    const { unmount } = render(
+      <AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" entryCheck={check} />,
+    );
+    expect(screen.queryByTestId("price-staleness")).toBeNull();
+    unmount();
+    render(
+      <AnalysisResultView result={{ ...fullResult, signal: "WAIT" }} techData={techData} pair="USD/JPY" interval="1min" entryCheck={check} />,
+    );
+    expect(screen.queryByTestId("price-staleness")).toBeNull();
+  });
+
+  it("reads the dictionary in English too", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.parse(pricedAt) + 53_000));
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1min" entryCheck={check} />, "en");
+    expect(screen.getByTestId("price-staleness").textContent).toContain("about 53s before");
   });
 });

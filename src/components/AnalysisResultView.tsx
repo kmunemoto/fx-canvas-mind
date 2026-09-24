@@ -135,6 +135,24 @@ const AnalysisResultView = ({
   const stopDistance = hasPlan ? distance(result.stop_loss) : null;
   const tp1Distance = hasPlan ? distance(result.take_profit_1) : null;
   const horizon = horizonLines(planHorizon, t, t.intlLocale);
+  // #98, one-minute plans only. The entry is the price at the moment the
+  // market data was read, and measured over 109 runs the result is saved a
+  // median 54 s after that — most of a bar on this frame, and nothing on any
+  // other. Said on the card, in seconds, rather than left for the reader to
+  // discover at the broker.
+  const pricedAtMs = entryCheck?.priced_at ? Date.parse(entryCheck.priced_at) : NaN;
+  const staleness = hasPlan && interval === "1min" && Number.isFinite(pricedAtMs)
+    ? t.result.horizon.staleness(
+      new Intl.DateTimeFormat(t.intlLocale, {
+        timeZone: "Asia/Tokyo",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(pricedAtMs),
+      Math.max(0, Math.round((Date.now() - pricedAtMs) / 1000)),
+    )
+    : null;
   // Only the streak in THIS plan's direction, and only once it is long enough
   // to be a run rather than an afternoon. A SELL after three BUY losses says
   // nothing about SELLs.
@@ -309,6 +327,12 @@ const AnalysisResultView = ({
               </div>
               <p className="text-[10px] text-muted-foreground">{horizon.notACutoff}</p>
               <p className="text-[10px] text-muted-foreground">{horizon.tpRoles}</p>
+            </div>
+          )}
+          {staleness && (
+            <div className="pt-2 border-t border-border/50 flex items-start gap-2 text-xs text-warning" data-testid="price-staleness">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+              <p>{staleness}</p>
             </div>
           )}
           {/* The reader's own record in this direction, when it is a run of
