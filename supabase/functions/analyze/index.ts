@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v63-2026-09-21T12:00:00Z";
+const FUNCTION_VERSION = "analyze-v64-2026-09-24T15:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -176,7 +176,16 @@ const MIN_CONFIDENCE = 60;
 // and this is still exactly three requests per run — which is the number
 // track-outcomes/index.ts reserves quota for. Paging with start_date/end_date
 // would turn one request into several and break that sum.
+//
+// #98's two rows were sized by measurement, not by analogy. The market shuts
+// for about 43 hours at the weekend, which is 2,580 one-minute bars: a first
+// guess of 550 left ZERO usable bars at the worst instant of the week (Monday
+// open), so every 1min analysis just after the open would have failed the
+// health check. 3,000 leaves 420 there and 5min's 800 leaves 284 — both over
+// the 250 src/test/weekend-preview.test.ts demands of every rung.
 const OUTPUTSIZE: Record<string, number> = {
+  "1min": 3000,
+  "5min": 800,
   "15min": 550,
   "1h": 480,
   "4h": 400,
@@ -195,12 +204,15 @@ const OUTPUTSIZE: Record<string, number> = {
 // the right question for 1week/1month, where depth is about how much history
 // the provider holds rather than about the feed being broken.
 const MIN_BARS: Record<string, number> = {
+  "1min": 200, "5min": 200,
   "15min": 200, "1h": 200, "4h": 200, "1day": 200, "1week": 52, "1month": 52,
 };
 
 // Length of one bar, for deciding whether the newest one has closed and how
 // stale a series is allowed to be.
 const INTERVAL_MS: Record<string, number> = {
+  "1min": 60 * 1000,
+  "5min": 5 * 60 * 1000,
   "15min": 15 * 60 * 1000,
   "1h": 60 * 60 * 1000,
   "4h": 4 * 60 * 60 * 1000,
@@ -212,6 +224,13 @@ const INTERVAL_MS: Record<string, number> = {
 // Higher timeframes analyzed alongside the one the user picked. The entry
 // timeframe comes first and is the one prices are planned on.
 const TF_CHAIN: Record<string, string[]> = {
+  // #98, ultra-short trading. 5min then 15min above the 1min: the same
+  // "one rung, then the next" shape as the other chains (15min climbs x4, x4;
+  // this climbs x5, x3). An hourly rung was considered and left out — with
+  // three requests per run fixed by the tracker's quota arithmetic, an hour
+  // above a one-minute entry would spend the third request on a frame the
+  // plan's thirty-minute life never reaches.
+  "1min": ["1min", "5min", "15min"],
   "15min": ["15min", "1h", "4h"],
   "1h": ["1h", "4h", "1day"],
   "4h": ["4h", "1day", "1week"],
@@ -1520,7 +1539,11 @@ Deno.serve(async (req: Request) => {
           refPrice: reference.price,
           atr: reference.atr,
           nowMs: Date.now(),
-          intervalMs: 60 * 60 * 1000,
+          // The ENTRY frame's own bar length. This was a literal hour while 1h
+          // was the only overlay frame, which made it right by coincidence; on
+          // a 1min overlay an hour would let a feed twenty minutes stale pass
+          // the freshness check and a half-hour hole pass the gap check.
+          intervalMs: INTERVAL_MS[interval] ?? 60 * 60 * 1000,
         });
         feedDeltaAtr = check.deltaAtr;
         overlayReason = check.reason;

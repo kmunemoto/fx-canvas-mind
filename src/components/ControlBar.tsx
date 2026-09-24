@@ -21,7 +21,7 @@ interface Props {
   onSubscribe?: () => void;
 }
 
-const INTERVALS: TimeInterval[] = ["15min", "1h", "4h", "1day"];
+const INTERVALS: TimeInterval[] = ["1min", "15min", "1h", "4h", "1day"];
 
 const ControlBar = ({
   interval,
@@ -41,14 +41,17 @@ const ControlBar = ({
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
       {/* A segmented control, not a scrolling strip: on a 320px phone the four
           Japanese labels overflowed the row and the selected one was clipped
-          off the right edge, which reads as broken rather than scrollable. */}
-      <div className="grid grid-cols-4 gap-1 bg-secondary rounded-lg p-1 sm:flex sm:items-center">
+          off the right edge, which reads as broken rather than scrollable.
+          FIVE since 1min (#98): at 320px each cell is ~52px, and the widest
+          label (1時間足, four glyphs) needs 44px at 11px plus 4px of padding,
+          so the phone size drops to 11px and the padding to px-0.5. */}
+      <div className="grid grid-cols-5 gap-1 bg-secondary rounded-lg p-1 sm:flex sm:items-center">
         {INTERVALS.map((value) => (
           <button
             key={value}
             onClick={() => onIntervalChange(value)}
             aria-pressed={interval === value}
-            className={`px-1.5 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
+            className={`px-0.5 sm:px-3 py-1.5 rounded-md text-[11px] sm:text-sm font-medium transition-all whitespace-nowrap ${
               interval === value
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"

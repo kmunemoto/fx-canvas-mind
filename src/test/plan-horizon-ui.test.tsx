@@ -65,6 +65,17 @@ describe("horizonLines derives the period from the row and nothing else", () => 
     expect(horizonLines(horizon(), ja, "ja-JP")?.bars).toContain("12時間");
   });
 
+  it("says minutes under an hour, rather than rounding a 1min period to nothing", () => {
+    // #98: thirty one-minute bars. In hours this rounds to "about 0 hours",
+    // which reads as a plan that is already over.
+    const oneMin = horizonLines(horizon({ interval: "1min", bars: 30, bar_ms: 60_000 }), ja, "ja-JP");
+    expect(oneMin?.bars).toContain("1分足で30本");
+    expect(oneMin?.bars).toContain("約30分");
+    expect(oneMin?.bars).not.toContain("0時間");
+    expect(horizonLines(horizon({ interval: "1min", bars: 30, bar_ms: 60_000 }), en, "en-GB")?.bars)
+      .toContain("about 30 minutes");
+  });
+
   it("labels the timeframe from the dictionary, and falls back to the raw value", () => {
     expect(horizonLines(horizon(), ja, "ja-JP")?.bars).toContain("1時間足");
     expect(horizonLines(horizon(), en, "en-GB")?.bars).toContain("1H");

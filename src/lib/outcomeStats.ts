@@ -109,7 +109,7 @@ export interface ShadowTally {
   other: number;
 }
 
-export const TIMEFRAME_ORDER = ["15min", "1h", "4h", "1day"];
+export const TIMEFRAME_ORDER = ["1min", "15min", "1h", "4h", "1day"];
 export const MODE_ORDER = ["full", "technical_only", "technical_fallback"];
 export const NO_RULEBOOK = "none";
 

@@ -62,6 +62,7 @@ export const BLACKOUT_MS = 30 * MIN;
 // time. On a Friday the two diverge by up to the weekend, and the plan row
 // records which way it fell in `plan_horizon.calendar_covers_horizon`.
 export const HORIZON_MS: Record<string, number> = {
+  "1min": PLAN_HORIZON_BARS["1min"] * ENTRY_BAR_MS["1min"],
   "15min": PLAN_HORIZON_BARS["15min"] * ENTRY_BAR_MS["15min"],
   "1h": PLAN_HORIZON_BARS["1h"] * ENTRY_BAR_MS["1h"],
   "4h": PLAN_HORIZON_BARS["4h"] * ENTRY_BAR_MS["4h"],

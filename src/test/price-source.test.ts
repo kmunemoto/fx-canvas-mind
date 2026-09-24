@@ -30,8 +30,11 @@ const series = (n: number, from = 150): QuoteCandle[] =>
   Array.from({ length: n }, (_, i) => bar(NOW - (n - 1 - i) * HOUR, from + i * 0.01));
 
 describe("which timeframes the overlay covers", () => {
-  it("is 1h only, and says so as data rather than as a branch", () => {
-    expect([...GMO_ANALYSIS_TIMEFRAMES]).toEqual(["1h"]);
+  it("is 1h and 1min, and says so as data rather than as a branch", () => {
+    // 1min joined with #98: on a frame whose ATR is two or three pips, pricing
+    // off a different book from the one the tracker settles on is most of the
+    // error, so this is the frame where the overlay matters most.
+    expect([...GMO_ANALYSIS_TIMEFRAMES]).toEqual(["1h", "1min"]);
     // 4h and 1day are not a policy choice: TF_CHAIN needs 1week/1month for their
     // higher-timeframe snapshots and GMO serves neither, so they cannot be
     // computed on this feed at all.
@@ -156,6 +159,45 @@ describe("walking GMO day files newest first", () => {
     expect(res!.requests).toBe(res!.keys * 2);
   });
 
+  // #98. A 1min day file holds 1,440 bars, so 250 is one file — and on a thin
+  // stretch where the files come back empty, the walk must stop after the few
+  // days a one-minute series could possibly need, not after the eighteen an
+  // hour-long bar would. This pins the size of the walk, which is what the
+  // old `15min ? 15 minutes : an hour` got wrong for this frame.
+  it("sizes the day-file walk for one-minute bars, not hour-long ones", async () => {
+    const asked = new Set<string>();
+    let requests = 0;
+    const res = await fetchRecentQuotes("USD/JPY", "1min", 250, NOW, Date.now() + 60_000, async (url) => {
+      requests += 1;
+      asked.add(new URL(url).searchParams.get("date")!);
+      return { status: 0, data: [] };
+    });
+    // Nothing came back, so nothing is returned — and the walk gave up after
+    // a handful of day keys rather than walking three weeks of empty files.
+    expect(res).toBeNull();
+    expect(asked.size).toBeLessThanOrEqual(5);
+    expect(requests).toBe(asked.size * 2);
+  });
+
+  it("stops after the one day file that holds 250 one-minute bars", async () => {
+    const MIN = 60_000;
+    const asked: string[] = [];
+    const res = await fetchRecentQuotes("USD/JPY", "1min", 250, NOW, Date.now() + 60_000, async (url) => {
+      const key = new URL(url).searchParams.get("date")!;
+      const side = new URL(url).searchParams.get("priceType")!.toLowerCase() as "bid" | "ask";
+      asked.push(key);
+      const start = Date.parse(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T00:00:00Z`) - 9 * HOUR;
+      // Only the minutes that have already opened by NOW exist in the file.
+      const opens = Array.from({ length: 1440 }, (_, i) => start + i * MIN).filter((t) => t <= NOW);
+      return payload(opens, side);
+    });
+    expect(res).not.toBeNull();
+    expect(res!.bars.length).toBe(250);
+    expect(res!.keys).toBe(1);
+    // The newest bar handed back is the minute that is forming at NOW.
+    expect(Date.parse(res!.bars[res!.bars.length - 1].datetime)).toBe(NOW);
+  });
+
   it("gives up on a blown deadline instead of running past the budget", async () => {
     const res = await fetchRecentQuotes("USD/JPY", "1h", 250, NOW, Date.now() - 1, async () => null);
     expect(res).toBeNull();
@@ -193,6 +235,15 @@ describe("the overlay is wired into analyze so nothing can read the old series",
     // browser while the indicators read trimmed ones. This is the clause that
     // stops the next trim block from stepping in the same hole a third time.
     expect(src.indexOf("seriesByTf =", bind)).toBe(-1);
+  });
+
+  // #98. The freshness and gap checks are measured in the ENTRY frame's bars.
+  // While 1h was the only overlay frame an hour literal was right by
+  // coincidence; on 1min it would pass a series ninety minutes stale.
+  it("judges the overlay in the entry frame's own bar length, and 1min climbs 5min then 15min", () => {
+    expect(src).toContain("intervalMs: INTERVAL_MS[interval] ?? 60 * 60 * 1000,");
+    expect(src).not.toMatch(/acceptOverlay\(\{[^}]*intervalMs: 60 \* 60 \* 1000,/);
+    expect(src).toContain('"1min": ["1min", "5min", "15min"],');
   });
 
   it("runs the overlay concurrently with Twelve Data and can never reject", () => {

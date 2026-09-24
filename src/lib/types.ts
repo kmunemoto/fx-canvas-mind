@@ -59,7 +59,8 @@ export interface AppSettings {
   currencyPair: string;
 }
 
-export type TimeInterval = "15min" | "1h" | "4h" | "1day";
+// "1min" since analyze v64 (#98): ultra-short trading, read on 1min/5min/15min.
+export type TimeInterval = "1min" | "15min" | "1h" | "4h" | "1day";
 
 // How the analysis was made, as the server resolved it. technical_fallback
 // means news was asked for and could not be fetched, and the server then

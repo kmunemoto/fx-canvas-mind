@@ -188,6 +188,7 @@ const HOUR = 60 * MIN;
 // Wall-clock wait after a settlement before the post-mortem runs, so "what
 // happened next" exists to look at
 export const AFTER_WAIT_MS: Record<string, number> = {
+  "1min": 15 * MIN,
   "15min": HOUR,
   "1h": 2 * HOUR,
   "4h": 4 * HOUR,
@@ -198,6 +199,8 @@ export const AFTER_WAIT_MS: Record<string, number> = {
 // the LENGTH of the window (afterWindowMs below), in the plan's bars: 6h on a
 // 15min plan, 24h on a 1h one, 48h on a 4h one, 120h on a daily one.
 export const AFTER_BARS: Record<string, number> = {
+  // Half an hour of aftermath, the same length as the plan's own period.
+  "1min": 30,
   "15min": 24,
   "1h": 24,
   "4h": 12,

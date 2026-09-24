@@ -509,13 +509,19 @@ describe("the market-week filter: every bar, not just the tail", () => {
     expect(literal, "analyze must declare OUTPUTSIZE").not.toBeNull();
     const sizes = JSON.parse(literal![1].replace(/,(\s*)\}/, "$1}")) as Record<string, number>;
     const intervals: Record<string, number> = {
+      "1min": MIN, "5min": 5 * MIN,
       "15min": 15 * MIN, "1h": HOUR, "4h": 4 * HOUR, "1day": DAY,
     };
+    // The instant is stepped at the bar length, but never finer than 15
+    // minutes: the market opens and shuts on 15-minute boundaries, so a finer
+    // step finds the same worst case, and stepping a 3,000-bar 1min series
+    // every minute for two weeks is 60 million checks.
     const survivors = (raw: number, iv: number) => {
       let worst = Infinity;
       const base = at("2026-08-31T00:00:00Z"); // a Monday
-      for (let k = 0; k < (14 * DAY) / iv; k++) {
-        const now = base + k * iv;
+      const step = Math.max(iv, 15 * MIN);
+      for (let k = 0; k < (14 * DAY) / step; k++) {
+        const now = base + k * step;
         let kept = 0;
         for (let j = 0; j < raw; j++) if (!barFullyClosed(now - j * iv, iv)) kept += 1;
         worst = Math.min(worst, kept);
@@ -526,6 +532,10 @@ describe("the market-week filter: every bar, not just the tail", () => {
       expect(sizes[tf], tf).toBeGreaterThan(0);
       expect(survivors(sizes[tf], iv), tf).toBeGreaterThanOrEqual(250);
     }
+    // #98: what the first draft of the 1min rows would have left at Monday's
+    // open. Zero bars is a failed analysis, not a thin one.
+    expect(survivors(550, intervals["1min"])).toBe(0);
+    expect(survivors(400, intervals["5min"])).toBe(0);
     expect(survivors(250, intervals["15min"])).toBe(78);
     expect(survivors(250, intervals["1h"])).toBe(164);
     expect(survivors(250, intervals["4h"])).toBe(190);
