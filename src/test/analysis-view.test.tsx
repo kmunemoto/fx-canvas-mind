@@ -16,6 +16,7 @@ import type {
   EntryCheck,
   OutcomeEvaluation,
   RsiSarSummary,
+  GainzSummary,
   TechnicalData,
   TfChart,
 } from "../lib/types";
@@ -1357,6 +1358,28 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     expect(boxes[0].textContent).toContain("SL: 149.500");
   });
 
+  it("#112: draws the GA-style signal as its own outlined flag, even on a bar RSI/SAR fired on too", () => {
+    render(
+      <PriceChart
+        candles={candles}
+        pair="USD/JPY"
+        marks={[mark(20, "BUY", "win", "rsi_sar"), mark(20, "BUY", "loss", "gainz"), mark(40, "SELL", "open", "gainz")]}
+      />,
+    );
+    const flags = document.querySelectorAll("[data-rule]");
+    expect([...flags].map((f) => f.getAttribute("data-rule"))).toEqual(["rsi_sar", "gainz", "gainz"]);
+    const svg = document.querySelector("svg");
+    expect(svg?.textContent).toContain("BUY✓");
+    expect(svg?.textContent).toContain("GA BUY✗");
+    expect(svg?.textContent).toContain("GA SELL");
+    expect(screen.getByTestId("chart-gainz-legend").textContent).toContain("GA型サイン");
+  });
+
+  it("says nothing about GA when no GA signal is on the chart", () => {
+    render(<PriceChart candles={candles} pair="USD/JPY" marks={[mark(20, "BUY", "win", "rsi_sar")]} />);
+    expect(screen.queryByTestId("chart-gainz-legend")).toBeNull();
+  });
+
   it("puts the TP/SL box on the newest three signals only (#104)", () => {
     render(
       <PriceChart
@@ -1502,6 +1525,54 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
     expect(screen.queryByTestId("chart-tabs")).toBeNull();
     expect(screen.queryByTestId("rsi-sar-panel")).toBeNull();
+    expect(screen.queryByTestId("gainz-panel")).toBeNull();
     expect(screen.getByText(/ENTRY 150\.123/)).toBeInTheDocument();
+  });
+
+  // #112: the GA-style rule's card beside RSI/SAR
+  const gaSummary = (over: Partial<GainzSummary> = {}): GainzSummary => ({
+    tf: "1h",
+    rule: "gainz_v2a_050_50_5_atr1_v1",
+    ok: true,
+    reason: null,
+    bars: 470,
+    stop_atr: 1,
+    reward_ratio: 2,
+    horizon: 48,
+    now: { datetime: "2026-09-25 06:00:00", close: 150.1, rsi: 44.2, atr: 0.3, signal: "BUY", plan: { entry: 150.1, stop: 149.8, target: 150.7 } },
+    tally: { BUY: { n: 5, wins: 1, losses: 4, ambiguous: 0, expired: 0, open: 0 }, SELL: { n: 4, wins: 2, losses: 2, ambiguous: 0, expired: 0, open: 0 } },
+    evidence: {
+      period: "2025-07〜2026-09",
+      pairs: 11,
+      breakeven: 1 / 3,
+      tf: { measured: true, win: 0.306, n: 1791, meanR: -0.08 },
+      all: { measured: true, win: 0.288, n: 10757, meanR: -0.134 },
+    },
+    ...over,
+  });
+
+  it("#112: shows the GA-style signal beside RSI/SAR, with its plan, tally and what it was measured at", () => {
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, price: "150.100", rsiSar: summary(), gainz: gaSummary() }} pair="USD/JPY" interval="1h" />);
+    const panel = screen.getByTestId("gainz-panel");
+    // it does not decide the signal: the published one is still WAIT
+    expect(panel.textContent).toContain("売買判定（RSI × SAR）には使っていません");
+    expect(screen.getByTestId("gainz-fired").textContent).toContain("買いのサイン");
+    expect(screen.getByTestId("gainz-plan").textContent).toBe("そのときのプラン: エントリー 150.100・損切り 149.800・利確 150.700");
+    expect(screen.getByTestId("gainz-window").textContent).toContain("買い 5回（勝ち1・負け4）");
+    expect(screen.getByTestId("gainz-evidence").textContent).toContain("勝率 31%（1791回）、1回あたり平均 -0.08R。損益ゼロになる勝率は 33% です。");
+    expect(screen.getByTestId("gainz-evidence").textContent).toContain("マイナスでした");
+  });
+
+  it("#112: falls back to the tested total on an untested timeframe, and says when nothing fired", () => {
+    const g = gaSummary({
+      tf: "1day",
+      now: { datetime: "2026-09-25 00:00:00", close: 150.1, rsi: 52, atr: 0.9, signal: null, plan: null },
+      evidence: { period: "2025-07〜2026-09", pairs: 11, breakeven: 1 / 3, tf: { measured: false, win: null, n: null, meanR: null }, all: { measured: true, win: 0.288, n: 10757, meanR: -0.134 } },
+    });
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, gainz: g }} pair="USD/JPY" interval="1day" />);
+    expect(screen.getByTestId("gainz-fired").textContent).toContain("サインは出ていません");
+    expect(screen.queryByTestId("gainz-plan")).toBeNull();
+    expect(screen.getByTestId("gainz-evidence").textContent).toContain("日足では検証していません");
+    expect(screen.getByTestId("gainz-evidence").textContent).toContain("勝率 29%（10757回）");
   });
 });

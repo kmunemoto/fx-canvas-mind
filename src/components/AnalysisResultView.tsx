@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AnalysisMode, AnalysisResult, EntryCheck, PlanHorizon, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
 import PriceChart from "./PriceChart";
+import GainzPanel from "./GainzPanel";
 import RsiSarPanel from "./RsiSarPanel";
 import MarketContextCard from "./MarketContextCard";
 import RuleFitPanel from "./RuleFitPanel";
@@ -285,6 +286,9 @@ const AnalysisResultView = ({
         pair={pair}
         price={techData && Number.isFinite(Number(techData.price)) ? Number(techData.price) : null}
       />
+
+      {/* #112: the GA-style rule beside it — shown, never used for the signal */}
+      <GainzPanel summary={techData?.gainz ?? null} pair={pair} />
 
       {/* Trade plan — a WAIT has no levels, and a card of dashes is not a plan */}
       {hasPlan && (

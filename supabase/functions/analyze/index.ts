@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v68-2026-09-25T10:00:00Z";
+const FUNCTION_VERSION = "analyze-v69-2026-09-25T18:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -73,6 +73,7 @@ import { compactTurn, computeTurn, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { COSTLY_EVIDENCE, costlyHourAt } from "./timing.ts";
 import { HORIZON_BARS, REWARD_RATIO, RULE_ID, STOP_ATR, chartRsiSar, compactRsiSar, planFor, readRsiSar, rsiSarLines, type RsiSarRead } from "./rsisar.ts";
+import { GA_REWARD, chartGainz, compactGainz, readGainz, type GainzRead } from "./gainz.ts";
 import { compactSignals, computeSignals, type SignalRead } from "./signals.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import {
@@ -1633,6 +1634,9 @@ Deno.serve(async (req: Request) => {
     // bars, per rung. The entry rung's read decides the signal (after the
     // model answers, below); every rung's read is drawn on its chart.
     const rsiSarReads: RsiSarRead[] = structures.map(({ bars }) => readRsiSar(bars));
+    // #112: the GainzAlgo V2 Alpha-style rule, beside it on the same closed
+    // bars. Drawn and summarised only: it never decides the published signal.
+    const gainzReads: GainzRead[] = structures.map(({ bars }) => readGainz(bars));
     // The plan the rule would publish if it has fired, priced where the gate
     // will price it (marketEntry, below), so the analyst can quote the same
     // numbers the row will carry.
@@ -1953,6 +1957,8 @@ Deno.serve(async (req: Request) => {
         // entry rung, the prices at which the next close completes the rule,
         // and the evidence the rule was adopted on.
         rsiSar: compactRsiSar(timeframes[0], rsiSarReads[0], decimals),
+        // #112: the GA-style rule on the same rung, for its own card
+        gainz: compactGainz(timeframes[0], gainzReads[0], decimals),
         // One chart per rung, CHART_BARS deep: the candles (the forming one
         // included, so the current price is on screen), the RSI and SAR
         // aligned to them, and every signal the rule fired inside them —
@@ -1973,7 +1979,34 @@ Deno.serve(async (req: Request) => {
           });
           const drawn = chartRsiSar(read, CHART_BARS, decimals);
           const first = series[0]?.datetime ?? null;
-          const marks = first === null ? [] : drawn.marks.filter((m) => m.datetime >= first);
+          // #112: the GA-style rule's signals on the same bars, beside them
+          const gaMarks = chartGainz(gainzReads[i], CHART_BARS, decimals);
+          const marks = first === null
+            ? []
+            : [...drawn.marks, ...gaMarks].filter((m) => m.datetime >= first).sort((a, b) => (a.datetime < b.datetime ? -1 : a.datetime > b.datetime ? 1 : 0));
+          const gaStatFor = (side: "BUY" | "SELL") => {
+            const own = gainzReads[i].signals.filter((sg) => sg.side === side);
+            const count = (o: string) => own.filter((sg) => sg.outcome === o).length;
+            const wins = count("win");
+            const losses = count("loss");
+            const n = wins + losses;
+            return {
+              rule: "gainz",
+              side,
+              n,
+              wins,
+              losses,
+              ambiguous: count("ambiguous"),
+              expired: count("expired"),
+              open: count("open"),
+              untradable: 0,
+              rate: n > 0 ? Number((wins / n).toFixed(3)) : null,
+              lo: null,
+              hi: null,
+              expectancy_r: n > 0 ? Number(((wins * GA_REWARD - losses) / n).toFixed(2)) : null,
+              avg_bars: null,
+            };
+          };
           const statFor = (side: "BUY" | "SELL") => {
             const own = read.signals.filter((sg) => sg.side === side);
             const count = (o: string) => own.filter((sg) => sg.outcome === o).length;
@@ -2006,7 +2039,7 @@ Deno.serve(async (req: Request) => {
             horizon: HORIZON_BARS,
             candles: series,
             marks,
-            stats: [statFor("BUY"), statFor("SELL")],
+            stats: [statFor("BUY"), statFor("SELL"), gaStatFor("BUY"), gaStatFor("SELL")],
             recent: marks.filter((m) => m.barsAgo === 0),
             lines: [],
             rsi: aligned.map((x) => x.rsi),

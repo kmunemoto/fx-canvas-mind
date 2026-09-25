@@ -7,6 +7,14 @@ export const SIGNAL_ALERTS_URL = "https://endcqzewujdvimdlazhj.supabase.co/funct
 
 export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "skipped";
 
+// #112: RSI + SAR, or the GA-style rule beside it
+export type AlertRule = "rsi_sar" | "gainz";
+export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz"];
+const ruleOf = (v: unknown): AlertRule => (v === "gainz" ? "gainz" : "rsi_sar");
+// signal_alerts / signal_events store the rule's full id (analyze/gainz.ts
+// GA_RULE_ID starts with "gainz"); anything else is RSI + SAR's
+const ruleOfId = (v: unknown): AlertRule => (typeof v === "string" && v.startsWith("gainz") ? "gainz" : "rsi_sar");
+
 // #108: what a recorded signal did after it fired
 export type SignalOutcome = "win" | "loss" | "ambiguous" | "expired" | "no_data";
 
@@ -28,8 +36,7 @@ export interface RecordSummary {
   sumR: number;
 }
 
-export interface Performance {
-  days: number;
+export interface RuleRecord {
   mine: RecordSummary;
   all: RecordSummary;
   costly: RecordSummary;
@@ -37,9 +44,16 @@ export interface Performance {
   backtest: { period: string; n: number; winRate: number; meanR: number; breakeven: number } | null;
 }
 
+// RSI + SAR's record at the top level (as before #112), the GA rule's beside it
+export interface Performance extends RuleRecord {
+  days: number;
+  gainz: RuleRecord | null;
+}
+
 export interface AlertRow {
   id: string;
   kind: "signal" | "test";
+  rule: AlertRule;
   pair: string | null;
   interval: string | null;
   side: "BUY" | "SELL" | null;
@@ -60,7 +74,7 @@ export interface AlertSettings {
   email: string | null;
   pairs: string[];
   intervals: string[];
-  subscriptions: Array<{ pair: string; interval: string }>;
+  subscriptions: Array<{ pair: string; interval: string; rule: AlertRule }>;
   alerts: AlertRow[];
   // the outcome of a test send, when the call was one
   test: AlertStatus | null;
@@ -104,7 +118,7 @@ const summaryOf = (v: unknown): RecordSummary | null => {
   };
 };
 
-export const normalizePerformance = (v: unknown): Performance | null => {
+const ruleRecordOf = (v: unknown, defaultBreakeven: number): RuleRecord | null => {
   const p = rec(v);
   if (!p) return null;
   const mine = summaryOf(p.mine);
@@ -121,9 +135,16 @@ export const normalizePerformance = (v: unknown): Performance | null => {
   }
   const b = rec(p.backtest);
   const backtest = b && typeof b.period === "string" && num(b.winRate) !== null && num(b.meanR) !== null
-    ? { period: b.period, n: num(b.n) ?? 0, winRate: num(b.winRate)!, meanR: num(b.meanR)!, breakeven: num(b.breakeven) ?? 0.4 }
+    ? { period: b.period, n: num(b.n) ?? 0, winRate: num(b.winRate)!, meanR: num(b.meanR)!, breakeven: num(b.breakeven) ?? defaultBreakeven }
     : null;
-  return { days: num(p.days) ?? 365, mine, all, costly, byTf, backtest };
+  return { mine, all, costly, byTf, backtest };
+};
+
+export const normalizePerformance = (v: unknown): Performance | null => {
+  const p = rec(v);
+  const base = ruleRecordOf(p, 0.4);
+  if (!p || !base) return null;
+  return { days: num(p.days) ?? 365, ...base, gainz: ruleRecordOf(p.gainz, 1 / 3) };
 };
 
 const alertRow = (v: unknown): AlertRow | null => {
@@ -135,6 +156,7 @@ const alertRow = (v: unknown): AlertRow | null => {
   return {
     id,
     kind: r.kind,
+    rule: ruleOfId(r.rule),
     pair: str(r.pair),
     interval: str(r.interval),
     side: r.side === "BUY" || r.side === "SELL" ? r.side : null,
@@ -156,7 +178,7 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
     ? s.subscriptions
       .map(rec)
       .filter((x): x is Record<string, unknown> => x !== null && typeof x.pair === "string" && typeof x.interval === "string")
-      .map((x) => ({ pair: x.pair as string, interval: x.interval as string }))
+      .map((x) => ({ pair: x.pair as string, interval: x.interval as string, rule: ruleOf(x.rule) }))
     : [];
   return {
     allowed: s.allowed,
@@ -171,8 +193,8 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
   };
 };
 
-export const isFollowing = (settings: AlertSettings, pair: string, interval: string): boolean =>
-  settings.subscriptions.some((s) => s.pair === pair && s.interval === interval);
+export const isFollowing = (settings: AlertSettings, pair: string, interval: string, rule: AlertRule = "rsi_sar"): boolean =>
+  settings.subscriptions.some((s) => s.pair === pair && s.interval === interval && s.rule === rule);
 
 export class AlertRequestError extends Error {
   constructor(public code: string) {

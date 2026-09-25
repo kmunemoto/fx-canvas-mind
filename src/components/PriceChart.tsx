@@ -268,12 +268,15 @@ const PriceChart = ({
       const ms = parseUtcCandleTime(c.datetime);
       if (Number.isFinite(ms)) at.set(ms, i);
     });
-    const groups = new Map<string, { idx: number; side: "BUY" | "SELL"; marks: ChartSignalMark[] }>();
+    // #112: the GA-style rule's signals get flags of their own, beside the
+    // RSI/SAR ones, so the two are never merged into one label
+    const groups = new Map<string, { idx: number; side: "BUY" | "SELL"; ga: boolean; marks: ChartSignalMark[] }>();
     for (const m of marks) {
       const idx = at.get(parseUtcCandleTime(m.datetime));
       if (idx === undefined) continue;
-      const k = `${idx}:${m.side}`;
-      const g = groups.get(k) ?? { idx, side: m.side, marks: [] };
+      const ga = m.rule === "gainz";
+      const k = `${idx}:${m.side}:${ga ? "ga" : "base"}`;
+      const g = groups.get(k) ?? { idx, side: m.side, ga, marks: [] };
       g.marks.push(m);
       groups.set(k, g);
     }
@@ -334,6 +337,7 @@ const PriceChart = ({
   const boxH = narrow ? 20 : 22;
   const plotTop = PAD_TOP + 1;
   const plotBottom = H - PAD_BOTTOM - 1;
+  const gaLabelW = narrow ? 44 : 54;
   const flagLayout = flags.map((f) => {
     const c = candles[f.idx];
     const buy = f.side === "BUY";
@@ -399,6 +403,11 @@ const PriceChart = ({
       {(flags.length > 0 || trendLines.length > 0 || (sar !== undefined && sar.length === candles.length)) && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-signal-legend">
           {t.chart.signalLegend}
+        </p>
+      )}
+      {flags.some((f) => f.ga) && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gainz-legend">
+          {t.chart.gainzLegend}
         </p>
       )}
       <svg
@@ -539,9 +548,11 @@ const PriceChart = ({
           const boxLeft = box?.left ?? 0;
           const boxTop = box?.top ?? 0;
           const textSize = narrow ? 7 : 8;
+          // #112: a GA-style flag is outlined, not filled, and says GA
+          const w = f.ga ? gaLabelW : labelW;
           return (
-            <g key={`flag-${f.side}-${f.idx}`} data-testid={`chart-signal-${f.side}-${f.outcome}`}>
-              <title>{tip}</title>
+            <g key={`flag-${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`} data-testid={`chart-signal-${f.side}-${f.outcome}`} data-rule={f.ga ? "gainz" : "rsi_sar"}>
+              <title>{f.ga ? `GA ${tip}` : tip}</title>
               {segment(first.target, COLORS.tp)}
               {segment(first.stop, COLORS.sl)}
               <polygon
@@ -552,12 +563,14 @@ const PriceChart = ({
                 opacity={lost ? 0.55 : 0.95}
               />
               <rect
-                x={fx - labelW / 2}
+                x={fx - w / 2}
                 y={top}
-                width={labelW}
+                width={w}
                 height={labelH}
                 rx="2"
-                fill={color}
+                fill={f.ga ? "hsl(var(--background))" : color}
+                stroke={f.ga ? color : "none"}
+                strokeWidth={f.ga ? 1 : 0}
                 opacity={lost ? 0.55 : 0.95}
               />
               <text
@@ -567,9 +580,9 @@ const PriceChart = ({
                 fontWeight="800"
                 fontFamily="monospace"
                 textAnchor="middle"
-                fill="hsl(var(--background))"
+                fill={f.ga ? color : "hsl(var(--background))"}
               >
-                {f.side}{t.chart.outcomeMark[f.outcome]}
+                {f.ga ? "GA " : ""}{f.side}{t.chart.outcomeMark[f.outcome]}
               </text>
               {boxed && (
                 <g data-testid="chart-signal-levels">

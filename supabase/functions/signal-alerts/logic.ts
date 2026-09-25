@@ -29,6 +29,18 @@ import {
   type RsiSarRead,
   type Side,
 } from "../analyze/rsisar.ts";
+import {
+  GA_DELTA,
+  GA_EVIDENCE,
+  GA_REWARD,
+  GA_RSI_LEVEL,
+  GA_RULE_ID,
+  GA_STOP_ATR,
+  planForGa,
+  readGainz,
+  type GainzRead,
+  type RuleKey,
+} from "../analyze/gainz.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { costlyHourAt } from "../analyze/timing.ts";
 import { fetchRecentQuotes, midCandle } from "../analyze/price-source.ts";
@@ -107,6 +119,8 @@ export const closedMidBars = (quotes: QuoteCandle[], interval: string, nowMs: nu
 };
 
 export interface FiredSignal {
+  // #112: which rule fired — RSI + SAR, or the GA-style rule beside it
+  rule: RuleKey;
   pair: string;
   interval: string;
   side: Side;
@@ -118,12 +132,19 @@ export interface FiredSignal {
   stop: number;
   target: number;
   rsi: number;
-  rsiPrev: number;
-  sar: number;
+  // RSI + SAR only
+  rsiPrev: number | null;
+  sar: number | null;
   atr: number;
+  // GA only: the body over the bar's true range, and the close GA_DELTA
+  // bars before the signal bar
+  stability: number | null;
+  closeThen: number | null;
   // the close falls in the hours the app will not publish in (timing.ts)
   costly: boolean;
 }
+
+export const ruleIdOf = (rule: RuleKey): string => (rule === "gainz" ? GA_RULE_ID : RULE_ID);
 
 // Every signal whose bar closed inside the freshness window. Usually that is
 // the newest closed bar or nothing; on 15min the window also reaches the bar
@@ -142,6 +163,7 @@ export const freshSignals = (pair: string, interval: string, read: RsiSarRead, n
     if (age < 0 || age > FRESH_MS) continue;
     const plan = planFor(s.side, s.entry, s.atr);
     out.push({
+      rule: "rsi_sar",
       pair,
       interval,
       side: s.side,
@@ -154,6 +176,42 @@ export const freshSignals = (pair: string, interval: string, read: RsiSarRead, n
       rsiPrev: s.rsiPrev,
       sar: s.sar,
       atr: s.atr,
+      stability: null,
+      closeThen: null,
+      costly: costlyHourAt(interval, closeMs),
+    });
+  }
+  return out;
+};
+
+// #112: the same for the GA-style rule, read on the same closed bars
+export const freshGainzSignals = (pair: string, interval: string, read: GainzRead, closed: Candle[], nowMs: number): FiredSignal[] => {
+  const step = STEP_MS[interval];
+  if (step === undefined || !read.ok) return [];
+  const out: FiredSignal[] = [];
+  for (const s of read.signals) {
+    const openMs = barOpenMs(s.datetime);
+    if (!Number.isFinite(openMs)) continue;
+    const closeMs = openMs + step;
+    const age = nowMs - closeMs;
+    if (age < 0 || age > FRESH_MS) continue;
+    const plan = planForGa(s.side, s.entry, s.atr);
+    out.push({
+      rule: "gainz",
+      pair,
+      interval,
+      side: s.side,
+      barTime: new Date(openMs).toISOString(),
+      closedAt: new Date(closeMs).toISOString(),
+      entry: plan.entry,
+      stop: plan.stop,
+      target: plan.target,
+      rsi: s.rsi,
+      rsiPrev: null,
+      sar: null,
+      atr: s.atr,
+      stability: s.stability,
+      closeThen: s.index >= GA_DELTA ? closed[s.index - GA_DELTA]?.close ?? null : null,
       costly: costlyHourAt(interval, closeMs),
     });
   }
@@ -213,14 +271,22 @@ export const checkPair = async (
   nowMs: number,
   deadlineMs: number,
   fetcher: Fetcher,
-): Promise<{ read: RsiSarRead | null; signals: FiredSignal[]; bars: number; quotes: QuoteCandle[] }> => {
+): Promise<{ read: RsiSarRead | null; gainz: GainzRead | null; signals: FiredSignal[]; bars: number; quotes: QuoteCandle[] }> => {
   const quotes = await fetchAlertQuotes(pair, interval, nowMs, deadlineMs, fetcher);
-  if (!quotes) return { read: null, signals: [], bars: 0, quotes: [] };
+  if (!quotes) return { read: null, gainz: null, signals: [], bars: 0, quotes: [] };
   const closed = closedMidBars(quotes, interval, nowMs);
   const read = readRsiSar(closed);
+  // #112: the GA-style rule on the same bars
+  const gainz = readGainz(closed);
   // the bid/ask bars too: #108 prices each signal's fill and settles the
   // open ones from them, without asking the feed again
-  return { read, signals: freshSignals(pair, interval, read, nowMs), bars: closed.length, quotes };
+  return {
+    read,
+    gainz,
+    signals: [...freshSignals(pair, interval, read, nowMs), ...freshGainzSignals(pair, interval, gainz, closed, nowMs)],
+    bars: closed.length,
+    quotes,
+  };
 };
 
 // ---- the email --------------------------------------------------------------------
@@ -268,14 +334,85 @@ const assemble = (subject: string, paragraphs: string[]): Mail => ({
   ].join(""),
 });
 
-export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
+// #111: the loss per 10,000 units at the stop, in the pair's quote currency
+const lossPer10kText = (s: FiredSignal): string | null => {
+  const quote = s.pair.toUpperCase().split("/")[1];
+  const perTenK = Math.abs(s.entry - s.stop) * 10_000;
+  return quote === "JPY" ? `¥${Math.round(perTenK).toLocaleString("ja-JP")}` : quote === "USD" ? `$${perTenK.toFixed(2)}` : null;
+};
+
+// #112: the GA-style rule's email. Same shape as RSI + SAR's; what fired,
+// the plan, and what the rule did on past charts, said as plainly.
+const renderGainzMail = (s: FiredSignal, lang: Lang): Mail => {
   const d = decimalsOf(s.pair);
   const px = (v: number) => v.toFixed(d);
   const pips = (v: number) => (Math.abs(v - s.entry) / pipOf(s.pair)).toFixed(1);
-  // #111: the loss per 10,000 units at the stop, in the pair's quote currency
-  const quote = s.pair.toUpperCase().split("/")[1];
-  const perTenK = Math.abs(s.entry - s.stop) * 10_000;
-  const money = quote === "JPY" ? `¥${Math.round(perTenK).toLocaleString("ja-JP")}` : quote === "USD" ? `$${perTenK.toFixed(2)}` : null;
+  const money = lossPer10kText(s);
+  const closeMs = Date.parse(s.closedAt);
+  const ev = GA_EVIDENCE.byTf[s.interval];
+  const all = GA_EVIDENCE.all;
+  const be = pct(GA_EVIDENCE.breakeven);
+  const tf = tfLabel(lang, s.interval);
+  const body = s.stability === null ? "—" : `${Math.round(s.stability * 100)}`;
+  const then = s.closeThen === null ? "—" : px(s.closeThen);
+  const measured = ev?.measured ? ev : all;
+  const r2 = (v: number | null) => (v === null ? "—" : v.toFixed(2));
+  if (lang === "en") {
+    const side = s.side === "BUY" ? "BUY" : "SELL";
+    const rsiCond = s.side === "BUY" ? `below ${GA_RSI_LEVEL}` : `above ${100 - GA_RSI_LEVEL}`;
+    const thenCond = s.side === "BUY" ? "below" : "above";
+    const scope = ev?.measured ? `${s.interval} signals` : `signals on the tested timeframes (the ${tf} timeframe was not tested)`;
+    return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (GA style)`, [
+      `A ${side} signal from the GA-style rule (GainzAlgo V2 Alpha style) fired on ${s.pair}, ${tf} chart.`,
+      [
+        `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
+        `Engulfing bar, body ${body}% of the bar's range`,
+        `RSI(14): ${s.rsi.toFixed(1)} (${rsiCond})`,
+        `Close ${px(s.entry)}, ${thenCond} the close ${GA_DELTA} bars earlier (${then})`,
+      ].join("\n"),
+      [
+        "The plan for this rule:",
+        `  Entry ≈ ${px(s.entry)}`,
+        `  Stop ${px(s.stop)} (${pips(s.stop)} pips${money ? `; ${money} per 10,000 units` : ""})`,
+        `  Target ${px(s.target)} (${pips(s.target)} pips)`,
+        `  The stop is ${GA_STOP_ATR} ATR away; the target is ${GA_REWARD} times the stop.`,
+      ].join("\n"),
+      `Tested on past charts (${GA_EVIDENCE.period}, ${GA_EVIDENCE.pairs} pairs, spread paid): ${pct(measured.win)}% of ${scope} won (${measured.n} signals), ${r2(measured.meanR)}R per trade on average. Breaking even takes ${be}%, which this rule has not reached. It is a reproduction matched to the GainzAlgo Suite settings; GainzAlgo does not publish its logic, and the app's own signal (RSI + SAR) does not use it.`,
+      `Prices are the mid of GMO Coin's public bid and ask. Check the latest state in the app before you place an order:\n${APP_URL}`,
+      "To stop these emails, open Settings → Email alerts in the app and untick the chart.\nThis is reference information, not investment advice. Every trading decision is your own.",
+    ]);
+  }
+  const side = s.side === "BUY" ? "買い（BUY）" : "売り（SELL）";
+  const rsiCond = s.side === "BUY" ? `${GA_RSI_LEVEL}未満` : `${100 - GA_RSI_LEVEL}超`;
+  const thenCond = s.side === "BUY" ? "安い" : "高い";
+  const scope = ev?.measured ? "この時間足のサイン" : `検証した時間足の合計のサイン（${tf}は検証していません）`;
+  return assemble(`【Sextant】${s.pair} ${tf} ${side}のサイン（GA型）`, [
+    `${s.pair} の${tf}で、GA型（GainzAlgo V2 Alpha 型）の${side}のサインが出ました。`,
+    [
+      `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
+      `包み足・実体が足の値幅の ${body}%`,
+      `RSI(14): ${s.rsi.toFixed(1)}（${rsiCond}）`,
+      `終値 ${px(s.entry)} は${GA_DELTA}本前の終値（${then}）より${thenCond}`,
+    ].join("\n"),
+    [
+      "このルールの注文の目安:",
+      `  エントリー ≈ ${px(s.entry)}`,
+      `  損切り ${px(s.stop)}（${pips(s.stop)}pips${money ? `・1万通貨で ${money} の損失` : ""}）`,
+      `  利確 ${px(s.target)}（${pips(s.target)}pips）`,
+      `  損切りは ATR の ${GA_STOP_ATR} 倍、利確は損切り幅の ${GA_REWARD} 倍です。`,
+    ].join("\n"),
+    `過去のチャートでの検証（${GA_EVIDENCE.period}・${GA_EVIDENCE.pairs}通貨ペア・スプレッド込み）: ${scope}の勝率は ${pct(measured.win)}%（${measured.n}回）、1回あたり平均 ${r2(measured.meanR)}R。損益ゼロに必要な勝率は ${be}% で、届いていません。GainzAlgo Suite の設定に合わせた再現で、GainzAlgo の中身は公開されていません。アプリの売買判定（RSI＋SAR）には使っていません。`,
+    `価格は GMOコインの公開レート（買値と売値の中間）で判定しています。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+    "この通知を止めるには、アプリの「設定」→「メール通知」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
+  ]);
+};
+
+export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
+  if (s.rule === "gainz") return renderGainzMail(s, lang);
+  const d = decimalsOf(s.pair);
+  const px = (v: number) => v.toFixed(d);
+  const pips = (v: number) => (Math.abs(v - s.entry) / pipOf(s.pair)).toFixed(1);
+  const money = lossPer10kText(s);
   const closeMs = Date.parse(s.closedAt);
   const ev = RSI_SAR_EVIDENCE.byTf[s.interval];
   const all = RSI_SAR_EVIDENCE.all;
@@ -292,8 +429,8 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
       `A ${side} signal fired on ${s.pair}, ${tf} chart.`,
       [
         `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
-        `RSI(14): ${s.rsiPrev.toFixed(1)} → ${s.rsi.toFixed(1)} (${cross})`,
-        `Parabolic SAR: ${px(s.sar)} (${sarSide})`,
+        `RSI(14): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)} (${cross})`,
+        `Parabolic SAR: ${s.sar === null ? "—" : px(s.sar)} (${sarSide})`,
       ].join("\n"),
       [
         "The plan the app would publish at that close:",
@@ -317,8 +454,8 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で${side}のサインが出ました。`,
     [
       `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
-      `RSI(14): ${s.rsiPrev.toFixed(1)} → ${s.rsi.toFixed(1)}（${cross}）`,
-      `パラボリックSAR: ${px(s.sar)}（${sarSide}）`,
+      `RSI(14): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)}（${cross}）`,
+      `パラボリックSAR: ${s.sar === null ? "—" : px(s.sar)}（${sarSide}）`,
     ].join("\n"),
     [
       "この終値でアプリが出す注文の目安:",
@@ -333,18 +470,27 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
   ]);
 };
 
-export const renderTestMail = (subs: Array<{ pair: string; interval: string }>, lang: Lang): Mail => {
+const RULE_LABEL: Record<Lang, Record<RuleKey, string>> = {
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style" },
+};
+
+export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: RuleKey }>, lang: Lang): Mail => {
+  const label = (s: { pair: string; interval: string; rule?: RuleKey }) => {
+    const rule = RULE_LABEL[lang][s.rule ?? "rsi_sar"];
+    return lang === "en" ? `${s.pair} ${tfLabel("en", s.interval)} (${rule})` : `${s.pair} ${tfLabel("ja", s.interval)}（${rule}）`;
+  };
   if (lang === "en") {
-    const list = subs.length === 0 ? "none yet" : subs.map((s) => `${s.pair} ${tfLabel("en", s.interval)}`).join(", ");
+    const list = subs.length === 0 ? "none yet" : subs.map(label).join(", ");
     return assemble("[Sextant] Test email alert", [
-      "This is a test. When the RSI + Parabolic SAR rule fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
+      "This is a test. When the rule you chose (RSI + Parabolic SAR, or the GA-style rule) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
       `Charts you follow: ${list}`,
       `Settings → Email alerts in the app:\n${APP_URL}`,
     ]);
   }
-  const list = subs.length === 0 ? "まだありません" : subs.map((s) => `${s.pair} ${tfLabel("ja", s.interval)}`).join("、");
+  const list = subs.length === 0 ? "まだありません" : subs.map(label).join("、");
   return assemble("【Sextant】メール通知のテスト", [
-    "これはテストです。登録したチャートで RSI＋パラボリックSAR の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
+    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、または GA型）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
     `登録中のチャート: ${list}`,
     `アプリの「設定」→「メール通知」:\n${APP_URL}`,
   ]);

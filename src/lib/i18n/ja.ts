@@ -219,6 +219,8 @@ export const ja = {
     hiddenLevels: (n: number) => `表示範囲の外に ${n}件`,
     // #99: the bounce marks and the trend lines
     signalLegend: "BUY・SELL=RSI が30/70から戻り、SAR が同じ側にある確定足（✓勝ち ✗負け …判定中）。点線=そのサインの損切り（赤）と利確（緑）。点=パラボリックSAR（緑=価格の下・赤=価格の上）",
+    // #112
+    gainzLegend: "枠だけの GA=GA型サイン（包み足・実体が大きい・RSI 50・5本前との比較。損切り ATR×1、利確はその2倍）",
     rsiLabel: "RSI(14)",
     trend: { lows: "安値線", highs: "高値線" },
     // The label on the flag: the side, then how it came out
@@ -269,6 +271,31 @@ export const ja = {
     notMeasured: (tf: string) => `${tf}では検証していません。以下は15分足・1時間足・4時間足の合計です。`,
     belowBreakeven: "検証では、このルールの勝率は損益ゼロに届いていません。",
     unavailable: (reason: string) => `RSI と SAR を計算できませんでした（${reason}）`,
+  },
+
+  // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない
+  gainz: {
+    title: "GA型サイン（GainzAlgo V2 Alpha 型）",
+    rule: "買い: 前の足が陰線、今の足が陽線でその始値より上で確定（包み足）・実体が足の値幅の半分超・RSI(14) が50未満・終値が5本前より安い。売りはその逆。確定足で判定します。",
+    origin: "GainzAlgo Suite の画面の設定（0.5・50・5・1:2）に合わせた再現です。GainzAlgo の中身は公開されていないため、同じサインになるとは限りません。アプリの売買判定（RSI × SAR）には使っていません。",
+    fired: (side: string) => `最新の確定足で${side}のサインが出ています`,
+    noSignal: "最新の確定足ではサインは出ていません",
+    sides: { BUY: "買い", SELL: "売り" },
+    plan: (entry: string, stop: string, target: string) => `そのときのプラン: エントリー ${entry}・損切り ${stop}・利確 ${target}`,
+    windowTitle: (bars: number) => `この${bars}本で出たサイン`,
+    tally: (side: string, n: number, wins: number, losses: number) => `${side} ${n}回（勝ち${wins}・負け${losses}）`,
+    method: (stopAtr: number, rr: number, horizon: number) =>
+      `損切り ATR×${stopAtr}、利確はその${rr}倍、${horizon}本以内に判定。仲値で判定し、スプレッドは含めていません。`,
+    evidenceTitle: "過去の検証（スプレッド込み）",
+    evidence: (period: string, pairs: number, win: number, n: number, breakeven: number, meanR: string) =>
+      `${period}・${pairs}通貨ペア: 勝率 ${win}%（${n}回）、1回あたり平均 ${meanR}R。損益ゼロになる勝率は ${breakeven}% です。`,
+    notMeasured: (tf: string) => `${tf}では検証していません。以下は15分足・1時間足・4時間足の合計です。`,
+    notMeasuredAll: "まだ検証していません。",
+    verdict: (meanR: number): string =>
+      meanR < 0
+        ? "検証では、スプレッドを払うと1回あたりの損益がマイナスでした。"
+        : "検証では1回あたりの損益がプラスでしたが、偶然の範囲かどうかは実際の記録で確かめてください。",
+    unavailable: (reason: string) => `GA型サインを計算できませんでした（${reason}）`,
   },
 
   technical: {
@@ -1393,6 +1420,17 @@ export const ja = {
     saveFailed: "保存できませんでした",
     pairHeader: "通貨ペア",
     intervals: { "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    // #112: どちらのルールの通知か
+    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型" } as Record<string, string>,
+    ruleTabsLabel: "通知するサインの種類",
+    gainzIntro:
+      "GA型は GainzAlgo V2 Alpha 型のサインです（包み足・実体が大きい・RSI 50・5本前との比較、損切り ATR×1・利確はその2倍）。GainzAlgo Suite の画面の設定に合わせた再現で、中身は公開されていないため同じサインになるとは限りません。",
+    gainzNotes: [
+      "過去の検証（2025-07〜2026-09・11通貨ペア・スプレッド込み）では勝率 28.8%、1回あたり平均 −0.134R で、損益ゼロに必要な勝率（33.3%）に届いていません。毎本入った場合との差もありませんでした。",
+      "15分足で1ペアあたり1日数回出るため、メールが多くなります。",
+      "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインはメールしません（履歴には残ります）。",
+    ],
+    ruleTag: { rsi_sar: "", gainz: "（GA型）" } as Record<string, string>,
     notes: [
       "15分足はスプレッドだけで損切り幅の約14%を毎回失います。4時間足（約6%）・日足の方が負担は小さくなります。",
       "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインは、過去の検証で損失が大きかったためメールしません（履歴には残ります）。",
@@ -1421,6 +1459,8 @@ export const ja = {
     // #108: the live record of what each signal did afterwards
     record: {
       title: "通知の成績（その後の実際の値動きで自動記録）",
+      titleFor: (rule: string) => `${rule}の通知の成績（その後の実際の値動きで自動記録）`,
+      rNoteGainz: "R は損切り幅を1とした損益です。GA型は +2R なら損切り幅の2倍の利益、−1R なら損切り幅ぶんの損です。",
       mine: "あなたに届いた通知",
       all: "全7ペアのサイン（メールする時間帯のもの）",
       none: "まだ決着したサインはありません",

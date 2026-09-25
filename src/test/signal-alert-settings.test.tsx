@@ -85,8 +85,56 @@ describe("the email-alert card", () => {
     const off = screen.getByTestId("signal-alert-EUR/USD-1h") as HTMLInputElement;
     expect(off.checked).toBe(false);
     fireEvent.click(off);
-    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "EUR/USD", interval: "1h", on: true, lang: "ja" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "EUR/USD", interval: "1h", on: true, rule: "rsi_sar", lang: "ja" }));
     await waitFor(() => expect((screen.getByTestId("signal-alert-EUR/USD-1h") as HTMLInputElement).checked).toBe(true));
+  });
+
+  it("#112: follows the GA-style rule separately, with its own record and what it was measured at", async () => {
+    const ga = { rule: "gainz_v2a_050_50_5_atr1_v1" };
+    const gaPerf = {
+      mine: { n: 0, wins: 0, losses: 0, expired: 0, open: 0, winRate: null, meanR: null, ciR: null, sumR: 0 },
+      all: { n: 4, wins: 1, losses: 3, expired: 0, open: 2, winRate: 0.25, meanR: -0.26, ciR: null, sumR: -1.04 },
+      costly: { n: 0, wins: 0, losses: 0, expired: 0, open: 0, winRate: null, meanR: null, ciR: null, sumR: 0 },
+      byTf: {},
+      backtest: { period: "2025-07〜2026-09", n: 10757, winRate: 0.288, meanR: -0.134, breakeven: 1 / 3 },
+    };
+    const base = {
+      mine: gaPerf.mine,
+      all: { ...gaPerf.all, n: 7, wins: 3, losses: 4, winRate: 0.43, meanR: 0.1 },
+      costly: gaPerf.costly,
+      byTf: {},
+      backtest: { period: "2025-07〜2026-09", n: 1255, winRate: 0.35, meanR: -0.125, breakeven: 0.4 },
+    };
+    const withGa = (subs: unknown[]) => settings({
+      subscriptions: subs,
+      performance: { days: 365, ...base, gainz: gaPerf },
+      alerts: [{ id: "g1", kind: "signal", pair: "USD/JPY", interval: "4h", side: "SELL", closed_at: "2026-09-25T04:00:00.000Z", entry: 150, stop: 150.3, target: 149.4, status: "sent", created_at: "2026-09-25T04:02:00.000Z", ...ga }],
+    });
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set"
+        ? withGa([{ pair: "USD/JPY", interval: "15min", rule: "rsi_sar" }, { pair: "USD/JPY", interval: "4h", rule: "gainz" }])
+        : withGa([{ pair: "USD/JPY", interval: "15min", rule: "rsi_sar" }])
+    );
+    render(<SignalAlertSettings call={call} />);
+    await waitFor(() => expect(screen.getByTestId("signal-alerts-grid")).toBeTruthy());
+    // RSI + SAR first, as before; its own record
+    expect((screen.getByTestId("signal-alert-USD/JPY-15min") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByTestId("signal-alerts-record-all").textContent).toContain("7回");
+    expect(screen.getAllByTestId("signal-alert-row")[0].textContent).toContain("（GA型）");
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-gainz"));
+    // the GA grid: the RSI + SAR tick does not carry over
+    expect((screen.getByTestId("signal-alert-gainz-USD/JPY-15min") as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByTestId("signal-alerts-gainz-intro").textContent).toContain("GainzAlgo");
+    expect(screen.getByTestId("signal-alerts-notes").textContent).toContain("28.8%");
+    expect(screen.getByTestId("signal-alerts-record").textContent).toContain("GA型の通知の成績");
+    expect(screen.getByTestId("signal-alerts-record-all").textContent).toContain("4回");
+    expect(screen.getByTestId("signal-alerts-record").textContent).toContain("33%");
+    fireEvent.click(screen.getByTestId("signal-alert-gainz-USD/JPY-4h"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "USD/JPY", interval: "4h", on: true, rule: "gainz", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-gainz-USD/JPY-4h") as HTMLInputElement).checked).toBe(true));
+    // and back: RSI + SAR's 4h is still unticked
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-rsi_sar"));
+    expect((screen.getByTestId("signal-alert-USD/JPY-4h") as HTMLInputElement).checked).toBe(false);
   });
 
   it("without Pro nothing new can be ticked, but a tick can still be removed", async () => {

@@ -183,6 +183,7 @@ export const en: Dict = {
     hiddenLevels: (n: number) => `${n} outside the visible range`,
     // #99: the bounce marks and the trend lines
     signalLegend: "BUY · SELL = a closed bar where RSI came back from 30/70 with the SAR on the same side (✓ won ✗ lost … open). Dotted = that signal's stop (red) and target (green). Dots = Parabolic SAR (green under price · red over price)",
+    gainzLegend: "Outlined GA = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; stop 1 ATR, target 2× the stop)",
     rsiLabel: "RSI(14)",
     trend: { lows: "lows", highs: "highs" },
     // The label on the flag: the side, then how it came out
@@ -233,6 +234,30 @@ export const en: Dict = {
     notMeasured: (tf: string) => `Not tested on ${tf}. Below are the 15-minute, 1-hour and 4-hour results together.`,
     belowBreakeven: "In the test, this rule's win rate did not reach break-even.",
     unavailable: (reason: string) => `RSI and SAR could not be computed (${reason})`,
+  },
+
+  gainz: {
+    title: "GA-style signal (GainzAlgo V2 Alpha style)",
+    rule: "Buy: the previous bar closed down and this one closes up, above that bar's open (engulfing); the body is more than half the bar's range; RSI(14) is below 50; the close is below the close 5 bars ago. Sell is the mirror. Judged on closed bars.",
+    origin: "A reproduction matched to the settings on the GainzAlgo Suite screen (0.5 · 50 · 5 · 1:2). GainzAlgo does not publish its logic, so the signals may differ. The app's signal (RSI × SAR) does not use it.",
+    fired: (side: string) => `The newest closed bar gave a ${side} signal`,
+    noSignal: "No signal on the newest closed bar",
+    sides: { BUY: "Buy", SELL: "Sell" },
+    plan: (entry: string, stop: string, target: string) => `The plan then: entry ${entry} · stop ${stop} · target ${target}`,
+    windowTitle: (bars: number) => `Signals in these ${bars} bars`,
+    tally: (side: string, n: number, wins: number, losses: number) => `${side} ${n} (${wins} won · ${losses} lost)`,
+    method: (stopAtr: number, rr: number, horizon: number) =>
+      `Stop ${stopAtr} ATR, target ${rr}× the stop, judged within ${horizon} bars on mid prices without the spread.`,
+    evidenceTitle: "Tested on past charts (spread paid)",
+    evidence: (period: string, pairs: number, win: number, n: number, breakeven: number, meanR: string) =>
+      `${period}, ${pairs} pairs: won ${win}% (${n} trades), ${meanR}R per trade on average. Breaking even needs ${breakeven}%.`,
+    notMeasured: (tf: string) => `Not tested on ${tf}. Below are the 15-minute, 1-hour and 4-hour results together.`,
+    notMeasuredAll: "Not tested yet.",
+    verdict: (meanR: number): string =>
+      meanR < 0
+        ? "In the test, each trade lost money on average once the spread was paid."
+        : "In the test, each trade made money on average; whether that is more than luck is for the live record to show.",
+    unavailable: (reason: string) => `The GA-style signal could not be computed (${reason})`,
   },
 
   technical: {
@@ -1310,6 +1335,16 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style" } as Record<string, string>,
+    ruleTabsLabel: "Which signal to email",
+    gainzIntro:
+      "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 50, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction matched to the GainzAlgo Suite settings; its logic is not published, so the signals may differ.",
+    gainzNotes: [
+      "On past charts (2025-07 to 2026-09, 11 pairs, spread paid) it won 28.8% with −0.134R per trade on average, short of the 33.3% break-even, and no better than entering at every bar.",
+      "On 15-minute charts it fires a few times a day per pair, so expect many emails.",
+      "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
+    ],
+    ruleTag: { rsi_sar: "", gainz: " (GA)" } as Record<string, string>,
     notes: [
       "On 15-minute charts the spread alone costs about 14% of the stop every trade; 4-hour (about 6%) and daily charts cost less.",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed: past charts lost most in those hours (they stay in the log).",
@@ -1338,6 +1373,8 @@ export const en: Dict = {
     // #108: the live record of what each signal did afterwards
     record: {
       title: "How the alerts did (recorded from the prices that followed)",
+      titleFor: (rule: string) => `How the ${rule} alerts did (recorded from the prices that followed)`,
+      rNoteGainz: "R is the result in units of the stop distance: for GA style, +2R is a win of twice the stop, −1R a loss of the stop.",
       mine: "Alerts sent to you",
       all: "Every signal on the 7 pairs (in the hours alerts are sent)",
       none: "No signal has settled yet",
