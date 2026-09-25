@@ -55,6 +55,18 @@ const DirectionHero = ({ result, pair, interval, entryCheck, confidenceObserved 
           return typeof entryCheck.tp1_atr === "number" ? w.atrMultiple(entryCheck.tp1_atr) : null;
         case "stop_too_tight":
           return typeof stop_atr === "number" ? w.atrMultiple(stop_atr) : null;
+        case "costly_hours": {
+          // The hour it was priced in, and — where the timeframe was measured
+          // — the win rate of the refused side inside those hours against
+          // the rest, so the refusal is checkable rather than a rule quoted.
+          const c = entryCheck.costly_hours;
+          if (!c) return null;
+          const side = waitReason.proposed === "BUY" ? "buy" : "sell";
+          const ev = c.evidence;
+          const inside = ev && ev.measured && ev.inside ? Math.round(ev.inside[side] * 100) : null;
+          const outside = ev && ev.measured && ev.outside ? Math.round(ev.outside[side] * 100) : null;
+          return w.costly((c.hour_utc + 9) % 24, inside, outside);
+        }
         case "too_far":
           return typeof distance_atr === "number" ? w.atrMultiple(distance_atr) : null;
         case "low_confidence":

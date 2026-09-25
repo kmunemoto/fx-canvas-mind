@@ -133,6 +133,10 @@ export const en: Dict = {
           : `${tf} closed ${up ? "up" : "down"} through ${level} and stayed there`,
       // The turn count that refused the plan and the threshold it was measured
       // against. `up` means the entry timeframe was turning UP (a SELL refused).
+      costly: (jstHour: number, inside: number | null, outside: number | null) =>
+        inside === null || outside === null
+          ? `${jstHour}:00 JST`
+          : `${jstHour}:00 JST · won ${inside}% in these hours, ${outside}% otherwise`,
       turn: (up: boolean, score: number, block: number) =>
         `${score} facts that the entry timeframe is turning ${up ? "up" : "down"} (threshold ${block})`,
     },
@@ -327,6 +331,7 @@ export const en: Dict = {
         // evidence at the threshold, no fresh break its own way) and the plan
         // rode the old direction — the 9/14–9/15 daily SELLs.
         turn_conflict: "The entry timeframe was turning, and the plan rode the old direction",
+        costly_hours: "Priced in the hours around the daily roll, when the spread widens",
       },
       proposed: "Model's call",
       distance: "Distance from market",
