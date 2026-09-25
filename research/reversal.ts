@@ -112,6 +112,84 @@ export const REVERSALS: readonly RevRule[] = [
   },
 ];
 
+// ---- #107: the conditions write-ups attribute to GainzAlgo V2 [Alpha] ------------
+//
+// The request, after reading how the Suite is described: 「やってみて」 — test
+// the logic third-party analyses of the V2 [Alpha] script report, as
+// written. GainzAlgo publishes none of it; the reports agree on four
+// conditions for a BUY, on the bar's close (a SELL is the mirror):
+//
+//   1. a bullish engulfing bar: the previous bar closed down, this one
+//      closes up and above the previous bar's open;
+//   2. a "stable" bar (Candle Stability Index): a large body;
+//   3. RSI(14) not yet stretched the other way (RSI Index);
+//   4. price fell over the last bars (Candle Delta Length): the close is
+//      below the close 10 bars ago.
+//
+// The reports differ on two numbers, so both readings are fixed here before
+// any data was read, and the study picks one on its first period:
+//
+//   gz_atr80    body at least 0.7 ATR(14), RSI below 80 — the reading the
+//               analyses quote with numbers
+//   gz_range80  body at least 0.7 of the bar's own range (the "body against
+//               the wicks" description of the stability index), RSI below 80
+//   gz_atr50    body at least 0.7 ATR, RSI below 50 (the stricter RSI reading)
+
+export const engulfing = (c: Candle[], i: number, d: Dir): boolean => {
+  if (i < 1) return false;
+  const a = c[i - 1];
+  const b = c[i];
+  return d === 1
+    ? a.close < a.open && b.close > b.open && b.close > a.open
+    : a.close > a.open && b.close < b.open && b.close < a.open;
+};
+
+const bodyOverAtr = (x: RevCtx, i: number, k: number): boolean => {
+  const a = v(x.atr, i);
+  return a !== null && a > 0 && Math.abs(x.c[i].close - x.c[i].open) >= k * a;
+};
+
+const bodyOverRange = (x: RevCtx, i: number, k: number): boolean => {
+  const r = x.c[i].high - x.c[i].low;
+  return r > 0 && Math.abs(x.c[i].close - x.c[i].open) / r >= k;
+};
+
+// RSI not yet stretched the way the trade goes: below `level` for a BUY,
+// above 100 - level for a SELL
+const rsiRoom = (x: RevCtx, i: number, d: Dir, level: number): boolean => {
+  const r = v(x.b.rsi, i);
+  return r !== null && (d === 1 ? r < level : r > 100 - level);
+};
+
+// The move the signal fades: lower than `n` bars ago before a BUY
+const movedAgainst = (c: Candle[], i: number, d: Dir, n: number): boolean =>
+  i >= n && (d === 1 ? c[i].close < c[i - n].close : c[i].close > c[i - n].close);
+
+const gainz = (stable: (x: RevCtx, i: number) => boolean, rsiLevel: number) => (x: RevCtx, i: number): 0 | Dir => {
+  const ok = (d: Dir) => engulfing(x.c, i, d) && stable(x, i) && rsiRoom(x, i, d, rsiLevel) && movedAgainst(x.c, i, d, 10);
+  const buy = ok(1);
+  const sell = ok(-1);
+  return buy && !sell ? 1 : sell && !buy ? -1 : 0;
+};
+
+export const GAINZ: readonly RevRule[] = [
+  {
+    id: "gz_atr80",
+    ja: "包み足 ＋ 実体が ATR の0.7倍以上 ＋ RSI 80未満（売りは20超）＋ 終値が10本前より安い（売りは高い）",
+    at: gainz((x, i) => bodyOverAtr(x, i, 0.7), 80),
+  },
+  {
+    id: "gz_range80",
+    ja: "包み足 ＋ 実体が足の高安の0.7以上 ＋ RSI 80未満 ＋ 10本前より安い",
+    at: gainz((x, i) => bodyOverRange(x, i, 0.7), 80),
+  },
+  {
+    id: "gz_atr50",
+    ja: "包み足 ＋ 実体が ATR の0.7倍以上 ＋ RSI 50未満（売りは50超）＋ 10本前より安い",
+    at: gainz((x, i) => bodyOverAtr(x, i, 0.7), 50),
+  },
+];
+
 // The app's rule since #104, as the #103 study read it (rsi-combos.ts bounce
 // + psar; src/test/rsisar.test.ts pins the app's rule to the same bars).
 export const rsiSarAt = (x: RevCtx, i: number): 0 | Dir => {
