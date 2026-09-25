@@ -1,0 +1,68 @@
+# The study behind #106: does "a big move, then a reversal candle, target
+# twice the stop" (the timing a GainzAlgo video appears to use) pay on past
+# charts, and does the app's RSI + SAR rule do better with a target at twice
+# the stop?
+#
+# Runs research/gainz.ts on GitHub's runners because they can reach GMO's
+# public price API and the development container cannot. Read-only: it
+# fetches public prices, prints a report to the job log and uploads the same
+# numbers as an artifact. It writes nothing to the repository and holds no
+# secret.
+name: Research reversal timing
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/gainz.ts
+      - research/reversal.ts
+      - research/lib.ts
+      - research/indicator-series.ts
+      - research/gmo.ts
+      - .github/workflows/gainz.yml
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "Comma-separated pairs (empty: all eleven GMO pairs)"
+        default: ""
+      split:
+        description: "First day of the second (checking) period"
+        default: "2025-07-01"
+
+permissions:
+  contents: read
+
+jobs:
+  gainz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # The same day files the #100/#102/#103 studies cache; they never
+      # change once the day has rolled.
+      - uses: actions/cache@v4
+        with:
+          path: research/.cache
+          key: gmo-15min-${{ github.run_id }}
+          restore-keys: gmo-15min-
+      - name: Run the study
+        env:
+          PAIRS: ${{ inputs.pairs || '' }}
+          SPLIT: ${{ inputs.split || '2025-07-01' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC
+          research/gainz.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gainz-out
+          path: research/out/
+          retention-days: 30
