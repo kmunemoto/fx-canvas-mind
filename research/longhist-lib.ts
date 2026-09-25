@@ -73,6 +73,63 @@ export const parseFred = (csv: string): Array<[string, number]> => {
   return out.sort((a, b) => (a[0] < b[0] ? -1 : 1));
 };
 
+// One CSV line, with quoted cells (which may hold commas and "" for a quote)
+export const csvCells = (line: string): string[] => {
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+};
+
+// The BIS's central bank policy rates (WS_CBPOL, the bulk "flat" CSV): one
+// observation per row, the columns named "FREQ:Frequency",
+// "REF_AREA:Reference area", "TIME_PERIOD:...", "OBS_VALUE:..." (only the
+// part before the colon is relied on). The monthly rows of the areas asked
+// for, dated the first of their month like FRED's, oldest first. Used when
+// FRED cannot be reached (#109): a policy rate, not a 3-month rate — the
+// two part most in funding stresses such as late 2008.
+export const parseBisPolicy = (csv: string, areas: string[]): Record<string, Array<[string, number]>> => {
+  const out: Record<string, Array<[string, number]>> = {};
+  for (const a of areas) out[a] = [];
+  const lines = csv.split(/\r?\n/);
+  if (lines.length < 2) return out;
+  const head = csvCells(lines[0]).map((h) => h.split(":")[0].trim().toUpperCase());
+  const iF = head.indexOf("FREQ");
+  const iA = head.indexOf("REF_AREA");
+  const iT = head.indexOf("TIME_PERIOD");
+  const iV = head.indexOf("OBS_VALUE");
+  if (iF < 0 || iA < 0 || iT < 0 || iV < 0) return out;
+  const want = new Set(areas);
+  for (const line of lines.slice(1)) {
+    if (!line) continue;
+    const c = csvCells(line);
+    const freq = c[iF]?.split(":")[0].trim();
+    const area = c[iA]?.split(":")[0].trim();
+    if (freq !== "M" || !area || !want.has(area)) continue;
+    const t = c[iT]?.trim() ?? "";
+    const v = Number(c[iV]);
+    if (!/^\d{4}-\d{2}$/.test(t) || c[iV]?.trim() === "" || !Number.isFinite(v)) continue;
+    out[area].push([`${t}-01`, v]);
+  }
+  for (const a of areas) out[a].sort((x, y) => (x[0] < y[0] ? -1 : 1));
+  return out;
+};
+
 // The rate a position held on `date` could have known: the value of the
 // month BEFORE it (a monthly average is not published until its month is
 // over), carried for at most three more months when the series stops.

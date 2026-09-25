@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   TREND_RULES,
   crossSeries,
+  csvCells,
   donchian55x20,
   ma200,
+  parseBisPolicy,
   parseEcb,
   parseFred,
   placebo,
@@ -33,6 +35,28 @@ describe("the data", () => {
     const eurusd = crossSeries(e, "EUR", "USD");
     expect(eurusd.px).toEqual([1.15, 1.16, 1.17]);
     expect(crossSeries(e, "GBP", "USD").px[0]).toBeCloseTo(1.15 / 0.86, 10);
+  });
+
+  it("reads the BIS's policy rates: monthly rows of the areas asked for, quoted cells and all", () => {
+    expect(csvCells('a,"b, c","say ""hi""",')).toEqual(["a", "b, c", 'say "hi"', ""]);
+    const csv = [
+      '"KEY:Timeseries Key","FREQ:Frequency","REF_AREA:Reference area","TIME_PERIOD:Time period or range","OBS_VALUE:Observation Value","TITLE:Title"',
+      '"M.US","M:Monthly","US:United States","2008-12","0.25","Policy rate, US"',
+      '"M.US","M:Monthly","US:United States","2008-11","1","Policy rate, US"',
+      '"D.US","D:Daily","US:United States","2008-12-16","0.25","Policy rate, US"',
+      '"M.JP","M:Monthly","JP:Japan","2016-02","-0.1","Policy rate, JP"',
+      '"M.JP","M:Monthly","JP:Japan","2016-03","","Policy rate, JP"',
+      '"M.BR","M:Monthly","BR:Brazil","2016-02","14.25","Policy rate, BR"',
+    ].join("\n");
+    const r = parseBisPolicy(csv, ["US", "JP", "XM"]);
+    // daily rows, empty values and areas not asked for are left out; oldest first
+    expect(r.US).toEqual([["2008-11-01", 1], ["2008-12-01", 0.25]]);
+    expect(r.JP).toEqual([["2016-02-01", -0.1]]);
+    expect(r.XM).toEqual([]);
+    expect(Object.keys(r)).toEqual(["US", "JP", "XM"]);
+    // one month late, like FRED's
+    expect(rateBefore(r.US, "2009-01-05")).toBe(0.25);
+    expect(rateBefore(r.US, "2008-12-20")).toBe(1);
   });
 
   it("uses a month's rate only once the month is over, and not long after the series stops", () => {

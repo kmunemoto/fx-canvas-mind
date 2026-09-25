@@ -2,7 +2,8 @@
 # interest-rate differential (swap), pay over 25 years of currencies?
 #
 # Downloads the ECB's public daily reference rates (1999 on) and FRED's
-# public OECD 3-month interbank rates, runs research/longhist.ts and prints
+# public OECD 3-month interbank rates (or, when FRED does not answer, the
+# BIS's public policy rates), runs research/longhist.ts and prints
 # the report to the job log. Read-only: public data in, a report out; it
 # writes nothing to the repository and holds no secret.
 name: Research long history
@@ -41,17 +42,28 @@ jobs:
           unzip -o -q /tmp/ecb.zip -d research/.cache/ecb
           head -c 300 research/.cache/ecb/eurofxref-hist.csv; echo
           # FRED answered every HTTP/2 request from the runner with a stream
-          # error (first run, 2026-09-25), so HTTP/1.1, a browser-like client
-          # string, and the older download path as a second try
+          # error (first run, 2026-09-25) and left HTTP/1.1 ones hanging
+          # (second run), so each try is time-limited, and after the first
+          # series that cannot be had the rest are not tried: the study then
+          # uses the BIS's policy rates for every currency (never a mix)
           UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
           for id in IR3TIB01USM156N IR3TIB01JPM156N IR3TIB01EZM156N IR3TIB01GBM156N IR3TIB01AUM156N IR3TIB01NZM156N IR3TIB01CAM156N IR3TIB01CHM156N; do
             out="research/.cache/fred/${id}.csv"
-            curl -sSfL --http1.1 --retry 4 --retry-delay 3 -A "$UA" -o "$out" "https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}" \
-              || curl -sSfL --http1.1 --retry 4 --retry-delay 3 -A "$UA" -o "$out" "https://fred.stlouisfed.org/series/${id}/downloaddata/${id}.csv" \
-              || echo "FRED ${id} failed"
-            echo "${id}: $(wc -l < "$out" 2>/dev/null || echo 0) lines, first: $(sed -n 2p "$out" 2>/dev/null || true), last: $(tail -n 1 "$out" 2>/dev/null || true)"
+            if ! curl -sSfL --http1.1 --connect-timeout 15 --max-time 60 -A "$UA" -o "$out" "https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}"; then
+              rm -f "$out"
+              echo "FRED ${id} failed; not trying the rest"
+              break
+            fi
+            echo "${id}: $(wc -l < "$out") lines, first: $(sed -n 2p "$out"), last: $(tail -n 1 "$out")"
             sleep 1
           done
+          mkdir -p research/.cache/bis
+          if curl -sSfL --connect-timeout 15 --max-time 300 -A "$UA" -o /tmp/bis.zip https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip; then
+            unzip -o -q /tmp/bis.zip -d research/.cache/bis
+            for f in research/.cache/bis/*.csv; do echo "BIS $f: $(wc -l < "$f") lines"; head -n 1 "$f" | cut -c1-400; done
+          else
+            echo "BIS download failed"
+          fi
       - name: Run the study
         env:
           SPLIT: ${{ inputs.split || '2013-01-01' }}

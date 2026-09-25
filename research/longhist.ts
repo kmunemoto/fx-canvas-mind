@@ -7,7 +7,9 @@
 //     the eleven pairs GMO serves (the app's seven among them). One fixing a
 //     day, so these are daily rules held for weeks, not intraday timing.
 //   * Rates: FRED's OECD 3-month interbank rates, monthly, one month late
-//     (what a position could have known), for the carry.
+//     (what a position could have known), for the carry. When FRED does not
+//     answer for all eight currencies, the BIS's monthly central bank
+//     policy rates for all eight instead (never a mix of the two).
 //   * Rules (longhist-lib.ts): 12-month momentum, price vs its 200-day
 //     average, 50-day vs 200-day average, 55/20-day breakout. Carry: long the
 //     higher-yielding currency; carry+trend: the same only when the 200-day
@@ -27,6 +29,7 @@ import {
   TREND_RULES,
   crossSeries,
   ma200,
+  parseBisPolicy,
   parseEcb,
   parseFred,
   placebo,
@@ -58,6 +61,8 @@ const FRED_IDS: Record<string, string> = {
   CAD: "IR3TIB01CAM156N",
   CHF: "IR3TIB01CHM156N",
 };
+// the BIS's reference areas for the same currencies (XM: the euro area)
+const BIS_AREAS: Record<string, string> = { USD: "US", JPY: "JP", EUR: "XM", GBP: "GB", AUD: "AU", NZD: "NZ", CAD: "CA", CHF: "CH" };
 
 const log = (s = "") => console.log(s);
 const pct = (x: number | null | undefined, d = 1) => (x === null || x === undefined || !Number.isFinite(x) ? "n/a" : `${(x * 100).toFixed(d)}%`);
@@ -102,8 +107,10 @@ const main = async () => {
   const t0 = Date.now();
   let ecb: Map<string, Map<string, number>>;
   const fred: Record<string, Array<[string, number]>> = {};
+  let source = "FRED 3-month interbank";
   if (Deno.env.get("SYNTHETIC")) {
     const s = synthetic();
+    source = "synthetic";
     ecb = s.ecb;
     Object.assign(fred, s.fred);
   } else {
@@ -115,8 +122,22 @@ const main = async () => {
         fred[cur] = [];
       }
     }
+    if (Object.values(fred).some((rows) => rows.length < 12)) {
+      source = "BIS policy rates";
+      let csv = "";
+      try {
+        for await (const e of Deno.readDir(`${CACHE}/bis`)) {
+          if (e.isFile && e.name.toLowerCase().endsWith(".csv")) csv = await Deno.readTextFile(`${CACHE}/bis/${e.name}`);
+        }
+      } catch {
+        csv = "";
+      }
+      const bis = parseBisPolicy(csv, Object.values(BIS_AREAS));
+      for (const [cur, area] of Object.entries(BIS_AREAS)) fred[cur] = bis[area] ?? [];
+    }
   }
   log(`# research/longhist.ts  split=${SPLIT}  target vol ${pct(TARGET_VOL, 0)}  spread ${SPREAD_PIPS} pip  swap haircut ${HAIRCUT}%/yr`);
+  log(`rates from: ${source}`);
   for (const [cur, rows] of Object.entries(fred)) {
     log(`rates ${cur}: ${rows.length} months ${rows[0]?.[0] ?? "-"} .. ${rows[rows.length - 1]?.[0] ?? "-"}`);
   }
