@@ -35,7 +35,7 @@ import {
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v1-2026-09-25T12:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v2-2026-09-26T03:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

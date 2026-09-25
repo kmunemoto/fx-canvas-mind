@@ -347,9 +347,12 @@ export const renderTestMail = (subs: Array<{ pair: string; interval: string }>, 
 // ---- sending ----------------------------------------------------------------------
 
 export const RESEND_URL = "https://api.resend.com/emails";
-// Resend's shared sender. It delivers only to the address the Resend account
-// was opened with until a domain is verified there; ALERT_FROM overrides it.
-export const DEFAULT_FROM = "Sextant <onboarding@resend.dev>";
+// fx-tactical.jp was verified in Resend on 2026-09-26 (DKIM on
+// resend._domainkey, SPF through the send/rsend CNAMEs, DMARC p=none), so mail
+// from it reaches any address. Resend's shared onboarding@resend.dev, used
+// until then, delivered only to the Resend account's own address.
+// ALERT_FROM, when set on the function, overrides it.
+export const DEFAULT_FROM = "Sextant <alerts@fx-tactical.jp>";
 
 // Provider errors can quote an address — Resend's "you can only send testing
 // emails to your own email address (…)" names the ACCOUNT OWNER's. The row is
