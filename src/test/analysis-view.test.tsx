@@ -717,6 +717,35 @@ describe("the model's self-ratings", () => {
   });
 });
 
+describe("#100 a plan refused for the hour it was priced in", () => {
+  const wait: AnalysisResult = {
+    ...fullResult, signal: "WAIT", confidence: 70, entry_point: "—", stop_loss: "—",
+    take_profit_1: "—", take_profit_2: "—", take_profit_3: "—", risk_reward_ratio: "—",
+    warnings: ["AIの判断は SELL でしたが、いまは日本時間 6時台（UTC 21時台）で…見送り（WAIT）に変更しました。", "この分析は参考情報です。投資判断は自己責任で行ってください"],
+  };
+  const check = (tf: "1h" | "1min"): EntryCheck => ({
+    proposed_signal: "SELL", proposed_entry: 150.1, proposed_stop: 150.3, proposed_tp1: 149.8,
+    entry_type: "market", distance_atr: 0, stop_atr: 0.8, risk_reward: 1.5,
+    rejection: "costly_hours", atr: 0.25,
+    costly_hours: tf === "1h"
+      ? { hour_utc: 21, evidence: { measured: true, pair: "USD/JPY", period: "2025-07〜2026-09", inside: { buy: 0.275, sell: 0.237 }, outside: { buy: 0.398, sell: 0.356 } } }
+      : { hour_utc: 20, evidence: { measured: false, pair: "USD/JPY", period: "2025-07〜2026-09", inside: null, outside: null } },
+  });
+
+  it("names the reason, the hour in JST and the refused side's measured rates", () => {
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1h" entryCheck={check("1h")} analysisMode="full" />);
+    expect(screen.getByTestId("wait-reason")).toHaveTextContent("スプレッドが開く日替わり前後の時間帯だった");
+    // the SELL side's numbers, not the BUY side's
+    expect(screen.getByTestId("wait-reason-measured")).toHaveTextContent("日本時間 6時台・この時間帯の勝率 24%／ほか 36%");
+  });
+
+  it("gives only the hour where the timeframe was not measured", () => {
+    render(<AnalysisResultView result={wait} techData={techData} pair="USD/JPY" interval="1min" entryCheck={check("1min")} analysisMode="full" />);
+    expect(screen.getByTestId("wait-reason-measured")).toHaveTextContent("日本時間 5時台");
+    expect(screen.getByTestId("wait-reason-measured")).not.toHaveTextContent("勝率");
+  });
+});
+
 describe("why a WAIT is a WAIT", () => {
   const wait: AnalysisResult = {
     ...fullResult, signal: "WAIT", confidence: 66, entry_point: "—", stop_loss: "—",

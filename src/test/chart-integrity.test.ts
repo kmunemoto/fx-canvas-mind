@@ -138,7 +138,10 @@ describe("the analyst's own rules are enforced by the server", () => {
     // routed through the existing refusal, so it becomes a WAIT row that the
     // wait scorer grades and the credit is handed back
     expect(analyzeSrc).toContain('? "low_confidence"');
-    expect(analyzeSrc).toContain("if (marketShut || lowConfidence || (!entryVerdict.ok && entryVerdict.rejection))");
+    expect(analyzeSrc).toContain("if (marketShut || lowConfidence || costlyHours || (!entryVerdict.ok && entryVerdict.rejection))");
+    // the costly-hours gate (#100) sits after the confidence floor, so a plan
+    // that fails both is recorded as low confidence
+    expect(analyzeSrc.indexOf('? "low_confidence"')).toBeLessThan(analyzeSrc.indexOf('? "costly_hours"'));
   });
 
   it("drops a target that points the wrong way instead of showing it as profit", () => {

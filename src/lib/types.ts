@@ -324,6 +324,10 @@ export const ENTRY_REJECTIONS = [
   // The plan rides the entry timeframe's own direction while that direction
   // is turning (entry.ts, turnConflictFor; analyze v62). Same stamping rule.
   "turn_conflict",
+  // #100 (analyze v67): a 1min/15min/1h plan priced in the hours around GMO's
+  // daily roll, where plans lose to the spread (analyze/timing.ts). Stamped
+  // only on a proposed BUY/SELL, so always a real refusal.
+  "costly_hours",
 ] as const;
 
 export type EntryRejection = (typeof ENTRY_REJECTIONS)[number];
@@ -389,6 +393,19 @@ export interface EntryCheck {
   // plan. `block` is the threshold the score was measured against.
   structure_yielded?: Array<{ tf: string; bias: "Up" | "Down"; score: number }>;
   turn_conflict?: { side: "Up" | "Down"; score: number; block: number; facts: string[] } | null;
+  // #100 (analyze v67): the hour a plan was refused for and the measured win
+  // rates inside and outside those hours (null when not measured on this
+  // timeframe). Present only on a costly_hours refusal.
+  costly_hours?: {
+    hour_utc: number;
+    evidence: {
+      measured: boolean;
+      pair: string;
+      period: string;
+      inside: { buy: number; sell: number } | null;
+      outside: { buy: number; sell: number } | null;
+    } | null;
+  } | null;
   repaired?: boolean;
   atr: number | null;
   // Written by analyze since the first version, never declared until now.

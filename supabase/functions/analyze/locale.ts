@@ -65,6 +65,14 @@ interface LocaleStrings {
   // Shown when the plan would have been "enter now" but the market is shut,
   // so there is no "now" to enter at
   marketClosed: string;
+  // #100: shown when a short-term plan was priced in the hours around GMO's
+  // daily roll, where plans lose to the spread (timing.ts)
+  costlyHours: (parts: {
+    signal: string;
+    interval: string;
+    hourUtc: number;
+    evidence: { measured: boolean; pair: string; period: string; inside: { buy: number; sell: number } | null; outside: { buy: number; sell: number } | null } | null;
+  }) => string;
   // Put in the prompt when the calendar WAS consulted and had nothing inside
   // the plan's horizon. Without it, "checked and clear" and "never checked"
   // reach the model as the same empty space.
@@ -158,6 +166,16 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
     subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
     marketClosed: "為替市場が閉まっているため、見送り（WAIT）にしました。プランは「今の値段で入る」前提で、その値段が存在しないので、エントリー・損切り・利確は出していません。直近の終値までの読みは通常どおり出しています。この回は下見として履歴に残りますが、成績にもルールの学習にも数えません。",
+    costlyHours: ({ signal, interval, hourUtc, evidence }) => {
+      const tf = ({ "1min": "1分足", "15min": "15分足", "1h": "1時間足" } as Record<string, string>)[interval] ?? interval;
+      const jst = (hourUtc + 9) % 24;
+      const pct = (v: number) => `${Math.round(v * 100)}%`;
+      const numbers = evidence && evidence.measured && evidence.inside && evidence.outside
+        ? `過去の検証（${evidence.pair}・${evidence.period}）では、この時間帯に出した${tf}のプランの勝率は BUY ${pct(evidence.inside.buy)}・SELL ${pct(evidence.inside.sell)}、ほかの時間帯は ${pct(evidence.outside.buy)}・${pct(evidence.outside.sell)} でした（損益分岐 40%）。`
+        : `${tf}ではこの時間帯の勝率は測っていません。損切りの幅がこのスプレッドより狭いので、スプレッドだけで損切りに掛かるため出していません。`;
+      return `AIの判断は ${signal} でしたが、いまは日本時間 ${jst}時台（UTC ${hourUtc}時台）で、${tf}のプランを出さない時間帯のため見送り（WAIT）に変更しました。` +
+        `GMO はニューヨーク終値の日替わり（日本時間 6〜7時ごろ）にスプレッドが中央値 12.5pips まで開き、この前後に持っているプランはそこで損切りに掛かりやすくなります。${numbers}`;
+    },
     calendarClear: (hours) =>
       `経済指標カレンダー: 確認済み。今後${hours}時間以内に、この通貨ペアに影響するHigh/Mediumの発表予定はありません（カレンダーは今週分までしか公開されていないため、それより先は不明）。`,
     calendarUnavailable:
@@ -287,6 +305,15 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
     subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
     marketClosed: "The market is shut, so this is a WAIT. Every plan here is entered at the price on screen and that price does not exist right now, so no entry, stop or targets were issued — the reading up to the last close is unchanged. The run is kept in your history as a preview and counts towards neither the record nor the rules.",
+    costlyHours: ({ signal, interval, hourUtc, evidence }) => {
+      const tf = ({ "1min": "1-minute", "15min": "15-minute", "1h": "1-hour" } as Record<string, string>)[interval] ?? interval;
+      const pct = (v: number) => `${Math.round(v * 100)}%`;
+      const numbers = evidence && evidence.measured && evidence.inside && evidence.outside
+        ? `Measured (${evidence.pair}, ${evidence.period}): ${tf} plans opened in these hours won ${pct(evidence.inside.buy)} as BUY and ${pct(evidence.inside.sell)} as SELL, against ${pct(evidence.outside.buy)} and ${pct(evidence.outside.sell)} at other hours (break-even 40%).`
+        : `This was not measured on ${tf} plans: their stop is narrower than that spread, so the spread alone would stop them.`;
+      return `The model called ${signal}, but it is ${hourUtc}:00-${hourUtc}:59 UTC, an hour in which ${tf} plans are not published, so this is a WAIT. ` +
+        `GMO's spread widens to a median 12.5 pips at the New York close (the daily roll), and a plan open around it tends to be stopped by that alone. ${numbers}`;
+    },
     calendarClear: (hours) =>
       `Economic calendar: checked. Nothing High or Medium impact is scheduled for this pair in the next ${hours} hours. (Only the current week is published, so anything beyond that is unknown.)`,
     calendarUnavailable:

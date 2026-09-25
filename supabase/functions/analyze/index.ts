@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v66-2026-09-25T07:00:00Z";
+const FUNCTION_VERSION = "analyze-v67-2026-09-25T08:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -94,6 +94,7 @@ import {
 import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
 import { TURN_FACTS, compactTurn, computeTurn, turnForGate, turnLines, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
+import { COSTLY_EVIDENCE, costlyHourAt } from "./timing.ts";
 import { MAX_STOP_WIDTH_ATR, compactSignal, compactSignals, computeSignals, longRunLines, signalLines, type SignalRead } from "./signals.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import {
@@ -2843,14 +2844,24 @@ ${candleLines(lowerCandles, 24)}`;
     // the wait scorer grades and the credit is handed back.
     const lowConfidence = normalizedAnalysis.confidence < MIN_CONFIDENCE;
 
+    // #100: the hours in which a short-term plan loses to GMO's spread at the
+    // daily roll rather than to its direction (timing.ts has the measurement).
+    // Read off the moment the plan was PRICED — its entry — and only on a
+    // proposed BUY/SELL: on a WAIT the analyst already declined, and stamping
+    // this on it would claim a refusal nobody made.
+    const costlyHours = (proposedSignal === "BUY" || proposedSignal === "SELL") &&
+      costlyHourAt(interval, Date.parse(pricedAtIso));
+
     let entryRejected = false;
     let rejectionReason: string | null = null;
-    if (marketShut || lowConfidence || (!entryVerdict.ok && entryVerdict.rejection)) {
+    if (marketShut || lowConfidence || costlyHours || (!entryVerdict.ok && entryVerdict.rejection)) {
       entryRejected = true;
       rejectionReason = marketShut
         ? "market_closed"
         : lowConfidence
         ? "low_confidence"
+        : costlyHours
+        ? "costly_hours"
         : (entryVerdict.rejection ?? "unknown");
       console.warn("Entry rejected", {
         rejection: rejectionReason,
@@ -2860,7 +2871,12 @@ ${candleLines(lowerCandles, 24)}`;
         regime: entryVerdict.regime,
       });
       normalizedAnalysis.warnings = [
-        marketShut ? L.marketClosed : L.entryRejected({
+        marketShut ? L.marketClosed : rejectionReason === "costly_hours" ? L.costlyHours({
+          signal: proposedSignal,
+          interval,
+          hourUtc: new Date(Date.parse(pricedAtIso)).getUTCHours(),
+          evidence: COSTLY_EVIDENCE[interval] ?? null,
+        }) : L.entryRejected({
           rejection: rejectionReason,
           signal: proposedSignal,
           distanceAtr: entryVerdict.distanceAtr,
@@ -3010,6 +3026,13 @@ ${candleLines(lowerCandles, 24)}`;
       // turning, and the entry rung's turn when it refused the plan.
       structure_yielded: entryVerdict.structureYielded,
       turn_conflict: entryVerdict.turnConflict,
+      // #100: the hour the plan was refused for and the measurement behind
+      // the rule, on the row, so the reason shown later carries its number
+      // instead of the server's sentence (which the client drops as a
+      // duplicate once the reason is on screen).
+      costly_hours: rejectionReason === "costly_hours"
+        ? { hour_utc: new Date(Date.parse(pricedAtIso)).getUTCHours(), evidence: COSTLY_EVIDENCE[interval] ?? null }
+        : null,
       distance_atr: entryVerdict.distanceAtr,
       stop_atr: entryVerdict.stopAtr,
       risk_reward: entryVerdict.riskReward,
@@ -3540,8 +3563,13 @@ ${candleLines(lowerCandles, 24)}`;
       // reason actually acted on was the closed market — so without this a
       // weekend preview would quietly open a trade to be settled against
       // Monday's reopen, through the one door the preview rules leave ajar.
+      // #100: a plan refused only for the hour it was priced in is shadowed
+      // too — whether that plan, as written, would have won is exactly the
+      // measurement of the rule in production. Only when the shape gate
+      // passed it: otherwise it would not have been published at any hour.
+      const refusedForTheHour = rejectionReason === "costly_hours" && entryVerdict.ok;
       const shadowable = savedId !== null && entryRejected && !previewMode &&
-        (entryVerdict.rejection === "too_far" || entryVerdict.rejection === "should_be_market") &&
+        (entryVerdict.rejection === "too_far" || entryVerdict.rejection === "should_be_market" || refusedForTheHour) &&
         (proposedSignal === "BUY" || proposedSignal === "SELL") &&
         proposed.entry !== null && proposed.stop !== null && proposed.tp1 !== null;
       if (shadowable) {

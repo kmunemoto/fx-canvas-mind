@@ -166,6 +166,12 @@ export const ja = {
       // 転換中（＝SELL を止めた）という意味。
       turn: (up: boolean, score: number, block: number) =>
         `エントリー足に${up ? "上" : "下"}向きの転換の証拠 ${score}件（閾値 ${block}）`,
+      // 却下した時刻（日本時間）と、この時間帯とほかの時間帯の実測勝率。
+      // 測っていない時間足（1分足）は時刻だけ。
+      costly: (jstHour: number, inside: number | null, outside: number | null) =>
+        inside === null || outside === null
+          ? `日本時間 ${jstHour}時台`
+          : `日本時間 ${jstHour}時台・この時間帯の勝率 ${inside}%／ほか ${outside}%`,
     },
     riskLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
     sentiments: { BULLISH: "強気", NEUTRAL: "中立", BEARISH: "弱気" },
@@ -365,6 +371,9 @@ export const ja = {
         // 無し）なのに、その方向に乗る継続エントリーだった。9/14〜9/15 の日足
         // SELL がこれ（古い下抜け・MACDヒストの連続上昇・RSIの戻り）。
         turn_conflict: "エントリー足が転換中なのに、その方向に乗る継続エントリーだった",
+        // #100: GMO の日替わり（日本時間 6〜7時ごろ）にスプレッドが中央値 12.5pips まで
+        // 開くため、1分・15分・1時間足はその前後の時間帯にプランを出さない。
+        costly_hours: "スプレッドが開く日替わり前後の時間帯だった",
       },
       proposed: "AIの提案",
       distance: "現在値との距離",
