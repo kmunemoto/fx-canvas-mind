@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v67-2026-09-25T08:00:00Z";
+const FUNCTION_VERSION = "analyze-v68-2026-09-25T10:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -55,47 +55,25 @@ import {
 } from "./review.ts";
 
 import {
-  FRESH_BREAK_BARS,
   MAX_LIMIT_ATR,
   MAX_STOP_ATR,
-  MIN_RISK_REWARD,
-  MIN_STOP_ATR,
-  MIN_TP1_ATR,
   TREND_ADX,
-  TURN_BLOCK,
   evaluateEntry,
-  readHigherStructures,
   waitPlanFor,
   type EntryType,
   type EntryVerdict,
-  type HigherStructure,
   type WaitPlan,
 } from "./entry.ts";
 
-import {
-  claimedRules,
-  inForce,
-  MAX_PROMPT_RULES,
-  parseRules,
-  promptCharBudget,
-  type Rule,
-  selectPromptRules,
-} from "./rules.ts";
-import {
-  type ContextLike,
-  contextFromStored,
-  type Footprint,
-  footprintOf,
-  hasReading,
-  type RuleSituation,
-  situationFor,
-} from "./situation.ts";
+import { claimedRules } from "./rules.ts";
+import { type RuleSituation } from "./situation.ts";
 
-import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
-import { TURN_FACTS, compactTurn, computeTurn, turnForGate, turnLines, type TurnRead } from "./turn.ts";
+import { compactStructure, computeStructure, pivots } from "./structure.ts";
+import { compactTurn, computeTurn, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { COSTLY_EVIDENCE, costlyHourAt } from "./timing.ts";
-import { MAX_STOP_WIDTH_ATR, compactSignal, compactSignals, computeSignals, longRunLines, signalLines, type SignalRead } from "./signals.ts";
+import { HORIZON_BARS, REWARD_RATIO, RULE_ID, STOP_ATR, chartRsiSar, compactRsiSar, planFor, readRsiSar, rsiSarLines, type RsiSarRead } from "./rsisar.ts";
+import { compactSignals, computeSignals, type SignalRead } from "./signals.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import {
   buildPlanHorizon,
@@ -367,77 +345,49 @@ const candleLines = (candles: Candle[], count: number) =>
     .map((c) => `${c.datetime},${c.open},${c.high},${c.low},${c.close}`)
     .join("\n");
 
-const snapshotLines = (s: IndicatorSnapshot, decimals: number) => {
-  const p = (v: number | null) => fmt(v, decimals, "n/a");
-  const x = (v: number | null, d = 2) => fmt(v, d, "n/a");
-  return [
-    `現在値: ${p(s.price)} (${s.datetime} UTC 始値の足${
-      s.barClosed === false ? "・この足はまだ形成中" : s.barClosed === true ? "・確定済み" : ""
-    }) 前足比 ${x(s.changePct)}%`,
-    `RSI14: ${x(s.rsi)} | Stoch %K/%D: ${x(s.slowK)}/${x(s.slowD)} | ADX14: ${x(s.adx)}`,
-    `MACD: ${x(s.macd, 5)} Signal: ${x(s.macdSignal, 5)} Hist: ${x(s.macdHist, 5)}`,
-    `SMA20/50/200: ${p(s.sma20)} / ${p(s.sma50)} / ${
-      s.sma200 === null ? `算出不能(足${s.barsUsed}本、200本必要)` : p(s.sma200)
-    }`,
-    `BB(20,2): 上 ${p(s.bbUpper)} 中 ${p(s.bbMiddle)} 下 ${p(s.bbLower)}`,
-    // Two clouds, named apart. The pair this window computes is drawn 26 bars
-    // AHEAD; the cloud standing at the current price was computed 26 bars ago.
-    // Handing over one pair labelled 先行A/先行B invited reading the future
-    // cloud as the one price is trading against.
-    `一目 転換/基準: ${p(s.tenkan)} / ${p(s.kijun)}`,
-    `現在価格の雲(26本前に算出・いま価格が接している雲): 上 ${p(s.cloudNow?.top ?? null)} 下 ${p(s.cloudNow?.bottom ?? null)} → 価格は${
-      s.cloudSide === "above" ? "雲の上" : s.cloudSide === "below" ? "雲の下" : s.cloudSide === "inside" ? "雲の中" : "判定不能"
-    }`,
-    `先行する雲(26本先に描かれる・まだ価格は到達していない): 上 ${p(s.cloudAhead?.top ?? null)} 下 ${p(s.cloudAhead?.bottom ?? null)}${
-      s.cloudAheadTwisted === true ? " ※ねじれ(現在の雲と上下が逆)" : ""
-    }`,
-    `ATR14: ${p(s.atr)} (${x(s.atrPct)}% of price)`,
-    // The two swing lines that used to sit here are gone. They carried four
-    // bare prices with no date, no order and no distance — 156.884 preceded
-    // 157.081 only because the scan ran newest-first, and nothing said so.
-    // The structure block below carries the same levels with the bar they
-    // printed on and how far away they are.
-  ].join("\n");
-};
 
-const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナリストです。マルチタイムフレームの価格データと計算済みテクニカル指標に基づき、規律あるトレードプランを構築します。
+// #104 (analyze v68), at the owner's instruction: 「これからのチャート分析は
+// RSI とパラボリックSARで分析してください。他はいりません。」
+//
+// The signal is no longer the analyst's to choose. The server reads the rule
+// (rsisar.ts) on the entry timeframe's closed bars and the published signal,
+// stop and target are the rule's; the analyst explains the reading and, on a
+// WAIT, turns the server's next-close prices into advice a reader can act on.
+// Everything the previous prompt taught — structure, levels, the turn gate,
+// the bounce counts, the learned rules — was about indicators this analysis
+// no longer reads, and is gone with them.
+const SYSTEM_PROMPT = `あなたはFXアナリストです。このアプリの分析は **RSI(14) とパラボリックSAR(0.02, 0.2) だけ** で行います。
+ほかの指標（移動平均・MACD・ボリンジャーバンド・一目均衡表・ストキャスティクス・ADX・フィボナッチ・チャートパターンなど）は使わず、根拠として名前も出さないでください。
 
-必ず次の手順で分析してください:
-1. STRUCTURE — 構造の判定はあなたの仕事である。ただし材料はサーバが計算済みで、そこにある数値は数え直さず引用する（スイング高安と日付、終値ブレイク、上下の余地、レンジ内の位置、正味変化）。
-   「直近2スイングの並び」は**直近2点だけ**の比較であって、参照期間全体の構造ではない。並びと正味変化が食い違うことは普通にあるので、両方を見て自分で判断し、どちらを根拠にしたか書く。
-   引用する水準は上の一覧にあるものだけにする（一覧に無い価格を「直近高値」と呼ばない）。
-2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
-   **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
-   各足には「反発の実績(サーバ計算)」の行がある。その窓で各条件（確定安値での反発、SMA200での反発、雲の上限での反発、ダブルボトム確定、など）が何回反発したかを、損切りと利確を機械的に置いて数えたものである。引用するときは勝敗の数字と95%CIをそのまま使う。「直近N本で成立した条件」に挙がった条件は、その水準・損切り・利確ごとプランの根拠にしてよい。挙がっていない条件を「反発しやすい形」と呼ばない。n<5 の条件、または95%CIの下限が損益分岐を下回る条件は根拠にしない。
-3. TREND — 時間足間の方向整合性を評価する。
-   各足の「方向」は「終値ブレイク(上)/(下)」の行で決める: **より最近に終値で抜けたまま**の側が、その足の今の方向である（「戻された」水準は抜けていない）。直近2スイングの並びは、終値ブレイクが無いときだけの補助。
-   各足には「転換の証拠(サーバ判定)」の行があり、方向と逆向きの証拠を数えてある。逆向きの証拠が ${TURN_BLOCK} 以上あり、直近${FRESH_BREAK_BARS}本以内に方向と同じ側の終値ブレイクが無い足は「転換中」である。
-   - エントリー足が転換中のとき、その方向に乗る継続エントリー（下降中の足で SELL、上昇中の足で BUY）はサーバーが公開しない。戻り売り・押し目買いの場面に見えても、証拠が転換を示しているなら WAIT か反対方向を検討する。
-   - 上位足がこの基準で方向を持ち、かつ転換中でないとき、その方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。上位足が転換中なら、逆方向のプランは止めない。
-   上位足の方向に逆らうエントリーは確信度を下げる。ただし「上位足がまだ下向きだから」だけを理由に反対方向を捨てない: 下降の中で反発が始まり転換の証拠が積み上がっているなら、それは「戻り売りの場面」ではなく「方向が変わりつつある局面」で、手順6の counter_case で正面から扱う。
-4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×${MIN_STOP_ATR}〜${MAX_STOP_WIDTH_ATR} の範囲に置く。
-   - 損切りは現在値から **ATR×${MIN_STOP_ATR} 以上**離す。これ未満はノイズで刈られるのでサーバーが却下する。遠すぎる損切りはリスクリワードが成立せず見送りになる。
-   - 利確1も現在値から **ATR×${MIN_TP1_ATR} 以上**離す。これ未満は、届いても「読みが当たった」証拠にならないのでサーバーが却下する。
-   - どちらの幅も「ATR の何倍か」で決める。pips で丸めた数字を先に決めてから ATR に当てはめない。
-5. ENTRY — **エントリー価格は選ばない。** 提示された「現在値」が、そのまま成行の約定価格になる。あなたが決めるのは損切りと利確だけで、それを現在値の周りに置く。
-   - 「押し目を待って買う」「戻りを待って売る」は出力できない。今この価格で入るか、入らないかの二択である。待つべき局面なら signal を "WAIT" にする。
-   - 現在値でのリスクリワード（TP1基準）が ${MIN_RISK_REWARD} を下回るプランは出さない。損切りを妥当な範囲で近づけて成立しないなら、それは「今は入るところではない」ということなので "WAIT" にする。無理に利確を伸ばして帳尻を合わせない。
-   - WAIT は逃げではなく判断である。ただし WAIT もあとで検証される（その後の値動きで、取れたはずのトレードがあったかを機械的に採点する）ので、迷ったら WAIT ということはしない。
-6. PLAN — 全てを統合して最終判断を下す。その前に counter_case を必ず書く: あなたの signal と反対方向（WAIT なら、入るとしたら最も有力な方向）の最強のケースを、上の一覧にある数値・水準・「転換の証拠」の行を引用して書き、何が起きたらそちらに乗り換えるかを trigger に書く。反対方向の証拠が自分の signal の根拠より多いなら signal を見直す。反対のケースが書けない回は、自分の根拠も弱いということである。
+売買のルール（サーバーが確定足で機械的に判定します。signal はこの判定で決まり、あなたが変えることはできません）:
+- BUY: RSI が30以下から30を上に戻した確定足で、パラボリックSARが価格の下にあるとき。
+- SELL: RSI が70以上から70を下に戻した確定足で、パラボリックSARが価格の上にあるとき。
+- それ以外は WAIT。
+- エントリーは現在値（成行）。損切りは ATR×${STOP_ATR}、利確1は損切り幅の${REWARD_RATIO}倍。利確2・利確3は使わない。
 
-ルール:
-- 確信度が60未満の場合、signal は必ず "WAIT"。
-- 時間足の方向が矛盾する場合は確信度を下げる。
-- すべての価格は分析対象ペアの実際の価格スケールで出力する。
+手順:
+1. エントリー時間足の「最新の確定足でのサイン」をそのまま signal にする。BUY/SELL ならその方向、「なし」なら WAIT。
+2. RSI と SAR の今の状態を説明する。RSI がいくつからいくつへ動いたか、SAR が価格の上か下か、どれだけ離れているか。数値は与えられたものをそのまま引用し、数え直さない。
+3. WAIT のときは「次の足で条件がそろう価格」の行を、読み手が注文の判断に使える言葉にする。買いなら次の足がいくらを上回って引けたら、売りならいくらを下回って引けたら条件がそろうか。まだ準備前なら、まずいくらまで下がる（上がる）必要があるか。価格はサーバーの数字だけを使う。
+4. 上位足の RSI と SAR は参考として触れてよいが、signal の判断には使わない。
+5. このルールの検証上の勝率は損益ゼロの40%に届いていない。「確実に」「必ず」のような断定はしない。
+6. 下の決まりに沿って出力する。「このプランが狙う期間」の行にある損切り・利確の置き方の指示は、このアプリではサーバーのプランの値をそのまま使うことを意味する。
+
+出力の決まり:
+- signal: サーバーのサインと同じ値。
+- stop_loss / take_profit_1: BUY・SELL のときは与えられたプランの数値。WAIT のときは 0。take_profit_2 と take_profit_3 は常に 0。
+- confidence: RSI と SAR の読みへの自信（0-100）。signal はこの値では変わらない。
+- key_factors: RSI と SAR の事実だけを3〜5件。
+- support_levels / resistance_levels: SAR の水準と、次の足で条件がそろう価格だけ。
+- timeframe_alignment: 各時間足について、SAR が価格の下なら BULLISH、上なら BEARISH。note には RSI の値。
+- market_context_detail: RSI と SAR から見た状態を短く。structure には「RSI・SARのみ」と書いてよい。
+- counter_case は書かなくてよい。
 - 入力データの時刻はすべて UTC。文章で時刻に触れるときは日本時間（JST = UTC+9）に換算し、「JST」を添える。
 {{LANGUAGE_RULE}}
 - warnings には必ず「この分析は参考情報です。投資判断は自己責任で行ってください」を含める。
-- ADX が 20 未満ならトレンドが弱いことを明記し、レンジ戦略を検討する。
-- ダイバージェンスは「ダイバージェンス(RSI14・サーバ判定)」の行が結論である。その行が「なし」「判定不可」なら、ダイバージェンスがあるとは書かない。
-  異なる2つのオシレーター（RSIとStoch）を同じ時点で比べたものや、同じ指標を別の時間足で比べたものはダイバージェンスではない。隠れ（ヒドゥン）ダイバージェンスは計算していないので主張しない。
+- 経済指標の予定は warnings に書くだけにし、signal・損切り・利確は変えない。
 
-{{EVENTS}}
-{{LEARNED_RULES}}`;
+{{EVENTS}}`;
 
 const RESPONSE_SCHEMA = {
   type: "object",
@@ -1178,90 +1128,12 @@ Deno.serve(async (req: Request) => {
       quotaConsumed = true;
     }
 
-    // The plans each in-force rule was drawn from, read back for the indicator
-    // snapshot the analyst was looking at when it made them. One request for
-    // all of them; a rule's footprint is the range those readings span.
-    //
-    // The ids come out of jsonb written by another function, and they go into
-    // a URL — so they are checked against the shape of a uuid first. A book
-    // that has been tampered with should fail to produce a footprint, not
-    // shape the query.
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    // Twelve rules citing ten plans each stays well inside a URL. The cap is a
-    // backstop, and it costs nothing quietly: a citation left out is simply a
-    // cited plan the footprint could not read, which the block already counts
-    // and reports.
-    const MAX_FOOTPRINT_IDS = 120;
-    const loadFootprints = async (rules: Rule[]): Promise<Record<string, Footprint> | null> => {
-      // Rules are learned across every account, so a rule's citations point at
-      // plans this caller does not own. Without the service role the read goes
-      // out under the caller's own JWT, and RLS answers with their slice of
-      // the evidence: a NARROWER footprint that is indistinguishable from a
-      // real one, on a range whose whole job is to say what evidence exists.
-      // Refuse rather than narrow — the rules then render as they did before
-      // this check existed.
-      if (!serviceRoleKey) return null;
-      const ids = [...new Set(rules.flatMap((r) => r.supported_by))]
-        .filter((id) => UUID_RE.test(id))
-        .slice(0, MAX_FOOTPRINT_IDS);
-      const byId = new Map<string, ContextLike>();
-      if (ids.length > 0) {
-        try {
-          // shadow=is.false is not belt-and-braces. A shadow row is the plan
-          // the analyst would have made under the other contract; it is kept
-          // out of the statistics and out of a rule's support on purpose
-          // (docs §4.4), and a footprint is a statement about the evidence a
-          // rule rests on. Reading a shadow snapshot here would let shadow
-          // evidence back in through the situation check while every other
-          // door stayed shut. The column is NOT NULL DEFAULT false, so this
-          // filter drops nothing else.
-          const res = await fetch(
-            `${supabaseUrl}/rest/v1/analyses?id=in.(${ids.join(",")})&shadow=is.false&select=id,context`,
-            { headers: { Authorization: dbAuthorization, apikey: dbApiKey, "accept-profile": "public" } },
-          );
-          if (!res.ok) return null;
-          const rows = parseJsonResponse(await res.text());
-          if (!Array.isArray(rows)) return null;
-          for (const row of rows) {
-            if (!isRecord(row) || typeof row.id !== "string") continue;
-            byId.set(row.id, contextFromStored(row.context));
-          }
-        } catch (err) {
-          // A rule whose evidence cannot be read must not become a rule that
-          // claims today's market is different. Returning null renders every
-          // rule the way it rendered before this check existed.
-          console.warn("Rule footprints unavailable:", err instanceof Error ? err.message : String(err));
-          return null;
-        }
-      }
-      const out: Record<string, Footprint> = {};
-      for (const rule of rules) {
-        const cited = [...new Set(rule.supported_by)];
-        const readable = cited
-          .map((id) => byId.get(id))
-          .filter((ctx): ctx is ContextLike => ctx !== undefined && hasReading(ctx));
-        out[rule.id] = footprintOf(readable, cited.length);
-      }
-      return out;
-    };
-
     // What the analyzer has learned from its own record (see rules.ts). Best
     // effort: an analysis without the rules is still an analysis.
     stage = "load_rulebook";
     let rulebookVersion: number | null = null;
-    let learnedRules = "";
     // The rules that fit in the prompt — what the model actually saw
     let rulesShown: string[] = [];
-    // In-force rules, kept parsed so they can be RENDERED later, once the
-    // indicators exist and today's market can be compared against the
-    // situations each rule was learned in. The fetch stays here, early, where
-    // it overlaps the rest of the setup; only the rendering waits.
-    let inForceRules: Rule[] = [];
-    // Per rule id, the measured range of each situation axis across the plans
-    // that rule cites. null when the plans could not be read — the rules then
-    // render exactly as they did before this check existed, rather than every
-    // one of them claiming "cannot compare" on the strength of a failed fetch.
-    let footprints: Record<string, Footprint> | null = null;
     try {
       const rulebookRes = await fetch(`${supabaseUrl}/rest/v1/rulebook?id=eq.1&select=version,rules`, {
         headers: {
@@ -1276,10 +1148,9 @@ Deno.serve(async (req: Request) => {
       if (isRecord(rulebook)) {
         const v = asFiniteNumber(rulebook.version);
         rulebookVersion = v === null ? null : Math.round(v);
-        // Only the rules the analyst can still act on. A rule written for the
-        // previous contract stays in the book but never reaches the prompt.
-        inForceRules = inForce(parseRules(rulebook.rules), PLAN_CONTRACT);
-        footprints = await loadFootprints(inForceRules);
+        // #104: the book is still read for its version (stored on the row),
+        // but no rule is parsed for the prompt: none is shown (see the rule
+        // block below).
         // Three distinct states, kept distinct the way the calendar already
         // separates "read and clear" from "could not be read":
         //   null -> the rulebook could not be read at all
@@ -1758,30 +1629,17 @@ Deno.serve(async (req: Request) => {
     // block, stored under context.signals, and drawn on the chart with the
     // bars it was counted on (technicalData.charts).
     const signalReads: SignalRead[] = structures.map(({ bars }) => computeSignals(bars));
-
-    // THE HIGHER RUNGS, AS THE GATE WILL READ THEM (entry.ts, structureBias).
-    //
-    // Same objects the gate is handed, so the sentence the model reads and
-    // the refusal it may get cannot disagree. Written as a plain line rather
-    // than folded into each rung's block because the rule it carries — a
-    // signal against this reading is not published — is a rule about the
-    // chain, and the model needs it in one place beside the chain's verdicts.
-    const higherStructures: HigherStructure[] = timeframes
-      .slice(1)
-      .map((tf, i) => ({ tf, structure: structures[i + 1].structure, turn: turnForGate(turns[i + 1]) }));
-    const higherStructureNote = (() => {
-      const reads = readHigherStructures(higherStructures);
-      if (reads.length === 0) return "";
-      const word = (r: (typeof reads)[number]) => {
-        if (r.bias === null) return "方向なし(終値で抜けたままの水準が無く、直近2スイングも並びを作っていない)";
-        const dir = `${r.bias === "Up" ? "上" : "下"}(${r.from === "break" ? "より最近に終値で抜けたままの側" : "直近2スイングの並び・終値ブレイク無し"})`;
-        // The count that lets a plan through is printed beside the direction
-        // it argues with, so the model reads the two as one verdict.
-        const against = r.turn === null ? null : r.bias === "Down" ? r.turn.up : r.turn.down;
-        return r.turning ? `${dir}・ただし転換中(${r.bias === "Down" ? "上" : "下"}向きの証拠${against}/${TURN_FACTS.length})` : dir;
-      };
-      return `\n\n上位足の方向(サーバ判定・各足の「終値ブレイク」行から): ${reads.map((r) => `${r.tf}=${word(r)}`).join(" / ")}\nこの方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）は、その上位足が転換中でない限りサーバーが公開しない。転換中の上位足は逆方向のプランを止めない。逆らう根拠があるなら WAIT にして根拠を書くか、counter_case に書く。`;
-    })();
+    // #104: THE analysis. RSI(14) and the Parabolic SAR on the same closed
+    // bars, per rung. The entry rung's read decides the signal (after the
+    // model answers, below); every rung's read is drawn on its chart.
+    const rsiSarReads: RsiSarRead[] = structures.map(({ bars }) => readRsiSar(bars));
+    // The plan the rule would publish if it has fired, priced where the gate
+    // will price it (marketEntry, below), so the analyst can quote the same
+    // numbers the row will carry.
+    const ruleNow = rsiSarReads[0].ok ? rsiSarReads[0].now : null;
+    const rulePlanPreview = ruleNow && ruleNow.signal
+      ? planFor(ruleNow.signal, Number(entrySnapshot.price.toFixed(decimals)), ruleNow.atr)
+      : null;
 
     // #87: the lower rung, reduced to mid bars and read like any other series.
     // Its own variable, its own label, its own slot in the row — never inside
@@ -1789,38 +1647,26 @@ Deno.serve(async (req: Request) => {
     const lowerCandles = lowerRaw !== null ? lowerRaw.bars.map(midCandle) : [];
     const lowerSnapshot = lowerCandles.length > 0 ? computeSnapshot(lowerCandles) : null;
 
+    // #104: each rung is its RSI and SAR reading and its candles, nothing
+    // else. The entry rung also carries the prices at which the next close
+    // would complete the rule, and the plan if it already has.
     const tfSections = timeframes.map((tf, i) => {
-      const snapshot = snapshots[i];
       const candles = seriesByTf[i];
-      const closed = closedSnapshots[i];
-      const body = snapshot ? snapshotLines(snapshot, decimals) : "指標計算に必要な本数が不足";
-      // When the newest bar is still forming, the same reading without it is
-      // given alongside, so "the trend on closed bars" and "what is happening
-      // right now" are two labelled things rather than one blurred one.
-      const closedBody = closed
-        ? `\n[確定足のみ(形成中の足を除く)]\n${snapshotLines(closed, decimals)}`
-        : "";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
-      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}\n${turnLines(turns[i], decimals)}\n${signalLines(signalReads[i], decimals)}\n${longRunLines(tf, currencyPair)}`;
-      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
-    }).join("\n\n") + higherStructureNote;
+      const plan = i === 0 && rulePlanPreview && ruleNow?.signal
+        ? `\nサインが出たときのプラン（サーバ計算）: ${ruleNow.signal} エントリー(現在値) ${rulePlanPreview.entry.toFixed(decimals)} / 損切り ${rulePlanPreview.stop.toFixed(decimals)} / 利確1 ${rulePlanPreview.target.toFixed(decimals)}`
+        : "";
+      return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・参考・${feedLabel}）`}\n${rsiSarLines(rsiSarReads[i], decimals, i === 0)}${plan}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
+    }).join("\n\n");
 
     // Appended after the chain, with a label that is NOT 上位足 and a sentence
     // that says what it is for. The system prompt's step 3 makes 上位足
     // direction a confidence veto, so calling this rung by that name would
     // make "timing only" false the moment the model read it.
-    const lowerSection = lowerTf === null
-      ? ""
-      : lowerSnapshot === null
-        ? `\n\n### ${lowerTf}（仕掛け確認用・下位足）\n取得できなかったため、この足の情報はありません。無いことを理由に判断を変えないこと。`
-        : `\n\n### ${lowerTf}（仕掛け確認用・下位足・GMO Coin 仲値）
-この足は**入るタイミングの確認だけ**に使う。方向・トレンド・確信度はエントリー足と上位足だけで決めること。
-この足がエントリー足と逆を向いていても、それを理由に signal を変えたり confidence を下げたりしない。
-timeframe_alignment にこの足を含めないこと（サーバー側でも除外する）。
-${snapshotLines(lowerSnapshot, decimals)}
-直近ローソク足 (datetime[UTC],open,high,low,close / 古い順):
-${candleLines(lowerCandles, 24)}`;
+    // #104: the lower rung is still fetched and recorded, but it is not an
+    // RSI/SAR reading the rule uses, so it is not shown to the analyst.
+    const lowerSection = "";
 
     const nowUtc = new Date().toISOString();
     const SEARCH_NOTE = L.searchNote;
@@ -1955,37 +1801,14 @@ ${candleLines(lowerCandles, 24)}`;
     // Deferred to here rather than done beside the rulebook fetch because the
     // comparison needs the indicators, and the indicators are computed after
     // the prices arrive.
-    const ruleFits: Record<string, RuleSituation> | null = footprints === null
-      ? null
-      : Object.fromEntries(
-        Object.entries(footprints).map(([id, print]) => [id, situationFor(print, entryContext)]),
-      );
-    const shownRules = selectPromptRules(
-      inForceRules,
-      locale,
-      PLAN_CONTRACT,
-      MAX_PROMPT_RULES,
-      promptCharBudget(locale),
-      ruleFits,
-    );
-    learnedRules = shownRules.text;
-    rulesShown = shownRules.ids;
-    // Enough to reconstruct the comparison from the row: the verdict per rule,
-    // which axes could be compared, which of them today fell outside, and how
-    // much of each rule's cited evidence the footprint could actually read.
-    const ruleFitRecord: RuleFitRecord | null = ruleFits === null ? null : {
-      shown: shownRules.ids,
-      held_back: shownRules.heldBack,
-      rules: Object.fromEntries(
-        Object.entries(ruleFits).map(([id, fit]) => [id, {
-          fit: fit.fit,
-          comparable: fit.comparable,
-          missed: fit.missed,
-          cases: fit.cases,
-          cited: fit.cited,
-        }]),
-      ),
-    };
+    // #104: no learned rules are shown. Every rule in the book was written
+    // about indicators this analysis no longer reads (ADX, the averages, the
+    // cloud, the structure), and the signal is the RSI/SAR rule's, not the
+    // analyst's, so a rule could only ever change the prose. The record says
+    // so rather than implying a comparison was made: nothing shown, nothing
+    // measured against today's market.
+    rulesShown = [];
+    const ruleFitRecord = null as RuleFitRecord | null;
 
     const anthropicHeaders = {
       "content-type": "application/json",
@@ -2028,7 +1851,6 @@ ${candleLines(lowerCandles, 24)}`;
       system: SYSTEM_PROMPT
         .replace("{{LANGUAGE_RULE}}", L.languageRule)
         .replace("{{EVENTS}}", eventBlock)
-        .replace("{{LEARNED_RULES}}", learnedRules)
         .trimEnd(),
       messages: [{ role: "user", content: userMessageText }],
     };
@@ -2114,19 +1936,11 @@ ${candleLines(lowerCandles, 24)}`;
         // it on trust. Computed here, never model-authored — which is why
         // the chart can draw them in a different register from anything the
         // model cites.
-        levels: (() => {
-          const st = structures[0].structure;
-          if (!st.ok) return [];
-          const out: Array<{ label: string; value: number; kind: string }> = [];
-          for (const h of st.highs) out.push({ label: `H ${h.barsAgo}本前`, value: h.price, kind: "swing_high" });
-          for (const l of st.lows) out.push({ label: `L ${l.barsAgo}本前`, value: l.price, kind: "swing_low" });
-          const brk = [st.lastBreak.up, st.lastBreak.down].filter((b) => b !== null && b.state !== "held");
-          for (const b of brk) out.push({ label: b!.state === "reclaimed" ? "戻された" : "終値ブレイク", value: b!.level, kind: "break" });
-          return out;
-        })(),
-        cloudBand: entrySnapshot.cloudNow
-          ? { top: entrySnapshot.cloudNow.top, bottom: entrySnapshot.cloudNow.bottom }
-          : null,
+        // #104: no measured levels and no cloud. Both were readings of
+        // indicators this analysis no longer uses; the chart draws the SAR
+        // and the rule's signals instead (charts[].sar, charts[].marks).
+        levels: [],
+        cloudBand: null,
         // Whether the newest bar had closed when this was read. Without it
         // a mid-bar price renders as a settled "current rate".
         barClosed: entrySnapshot.barClosed,
@@ -2135,21 +1949,69 @@ ${candleLines(lowerCandles, 24)}`;
         slowD: x(entrySnapshot.slowD),
         adx: x(entrySnapshot.adx),
         candles: entryCandles.slice(-60),
-        // #99: one chart per rung, CHART_BARS deep, carrying every bounce
-        // signal that fired inside those bars (priced, with its outcome),
-        // the counts per condition and the two trend lines. `candles` above
-        // stays at 60 for the readers that already draw it; the marks need
-        // the deeper series to be visible at all.
+        // #104: the RSI/SAR summary the panel draws — the reading on the
+        // entry rung, the prices at which the next close completes the rule,
+        // and the evidence the rule was adopted on.
+        rsiSar: compactRsiSar(timeframes[0], rsiSarReads[0], decimals),
+        // One chart per rung, CHART_BARS deep: the candles (the forming one
+        // included, so the current price is on screen), the RSI and SAR
+        // aligned to them, and every signal the rule fired inside them —
+        // priced the way the plan is priced, with its outcome. The forming
+        // bar carries the SAR it is being measured against and no RSI: its
+        // close is not a close yet.
         charts: timeframes.map((tf, i) => {
+          const read = rsiSarReads[i];
+          const closedBars = structures[i].bars;
           const series = seriesByTf[i].slice(-CHART_BARS);
+          const at = new Map<string, number>();
+          closedBars.forEach((c, k) => at.set(c.datetime, k));
+          const round = (v: number | null | undefined, d: number) => (v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d)));
+          const aligned = series.map((c) => {
+            const k = at.get(c.datetime);
+            if (k !== undefined) return { rsi: round(read.rsi[k], 1), sar: round(read.sar[k], decimals), below: read.long[k] };
+            return { rsi: null, sar: round(read.next?.sar?.level, decimals), below: read.next?.sar?.long ?? null };
+          });
+          const drawn = chartRsiSar(read, CHART_BARS, decimals);
           const first = series[0]?.datetime ?? null;
-          const read = signalReads[i];
+          const marks = first === null ? [] : drawn.marks.filter((m) => m.datetime >= first);
+          const statFor = (side: "BUY" | "SELL") => {
+            const own = read.signals.filter((sg) => sg.side === side);
+            const count = (o: string) => own.filter((sg) => sg.outcome === o).length;
+            const wins = count("win");
+            const losses = count("loss");
+            const n = wins + losses;
+            return {
+              rule: "rsi_sar",
+              side,
+              n,
+              wins,
+              losses,
+              ambiguous: count("ambiguous"),
+              expired: count("expired"),
+              open: count("open"),
+              untradable: 0,
+              rate: n > 0 ? Number((wins / n).toFixed(3)) : null,
+              lo: null,
+              hi: null,
+              expectancy_r: n > 0 ? Number(((wins * REWARD_RATIO - losses) / n).toFixed(2)) : null,
+              avg_bars: null,
+            };
+          };
           return {
-            ...compactSignals(tf, read, decimals),
+            tf,
+            ok: read.ok,
+            reason: read.reason,
+            bars: read.bars,
+            rr: REWARD_RATIO,
+            horizon: HORIZON_BARS,
             candles: series,
-            marks: first === null
-              ? []
-              : read.signals.filter((sg) => sg.datetime >= first).map((sg) => compactSignal(sg, decimals)),
+            marks,
+            stats: [statFor("BUY"), statFor("SELL")],
+            recent: marks.filter((m) => m.barsAgo === 0),
+            lines: [],
+            rsi: aligned.map((x) => x.rsi),
+            sar: aligned.map((x) => x.sar),
+            sar_below: aligned.map((x) => x.below),
           };
         }),
       };
@@ -2716,6 +2578,16 @@ ${candleLines(lowerCandles, 24)}`;
     // refusal so the rate can be measured.
     stage = "check_entry";
     const detail = normalizedAnalysis.market_context_detail;
+    // #104: THE SIGNAL IS THE RULE'S. RSI(14) back across 30/70 with the SAR
+    // on the same side, on the entry rung's newest closed bar (rsisar.ts) —
+    // exactly the rule the study measured, and exactly the flags on the
+    // chart, so the call and the picture cannot disagree. What the analyst
+    // answered is kept on the row (entry_check.model_signal) and changes
+    // nothing: the prompt told it the rule's answer, and an analyst that
+    // departed from it would be publishing a rule nobody measured.
+    const modelSignal = normalizedAnalysis.signal;
+    const ruleSignal = ruleNow?.signal ?? null;
+    normalizedAnalysis.signal = ruleSignal ?? "WAIT";
     const proposedSignal = normalizedAnalysis.signal;
 
     // THE ENTRY IS THE MARKET PRICE, and it is rounded ONCE, here, before
@@ -2737,6 +2609,33 @@ ${candleLines(lowerCandles, 24)}`;
     normalizedAnalysis.entry_point_num = marketEntry;
     normalizedAnalysis.entry_point = marketEntry.toFixed(decimals);
     normalizedAnalysis.entry_type = "market";
+
+    // #104: the rule's plan around the market entry — stop 0.8 ATR of the
+    // entry rung's closed bars, first target 1.5 times that, no second or
+    // third target — or, on a WAIT, no levels at all. Whatever the analyst
+    // wrote in these fields is replaced, never merged.
+    {
+      const fixed = (v: number) => Number(v.toFixed(decimals));
+      if (ruleSignal !== null && ruleNow !== null) {
+        const plan = planFor(ruleSignal, marketEntry, ruleNow.atr);
+        const stop = fixed(plan.stop);
+        const tp1 = fixed(plan.target);
+        normalizedAnalysis.stop_loss_num = stop;
+        normalizedAnalysis.stop_loss = stop.toFixed(decimals);
+        normalizedAnalysis.take_profit_1_num = tp1;
+        normalizedAnalysis.take_profit_1 = tp1.toFixed(decimals);
+      } else {
+        normalizedAnalysis.stop_loss_num = null;
+        normalizedAnalysis.stop_loss = "—";
+        normalizedAnalysis.take_profit_1_num = null;
+        normalizedAnalysis.take_profit_1 = "—";
+        normalizedAnalysis.risk_reward_ratio = "—";
+      }
+      normalizedAnalysis.take_profit_2_num = null;
+      normalizedAnalysis.take_profit_2 = "—";
+      normalizedAnalysis.take_profit_3_num = null;
+      normalizedAnalysis.take_profit_3 = "—";
+    }
 
     // The second and third targets were parsed, stored, drawn on the chart and
     // shown to the user in profit-green without anything ever checking which
@@ -2814,13 +2713,12 @@ ${candleLines(lowerCandles, 24)}`;
       mode: detail && typeof detail.mode === "string" ? detail.mode : null,
       direction: detail && typeof detail.direction === "string" ? detail.direction : null,
       indicators: { adx: entrySnapshot.adx, sma20: entrySnapshot.sma20, sma50: entrySnapshot.sma50 },
-      // The higher rungs' computed structure, nearest first. The gate reads
-      // their most recent close-breaks; a plan pointed against one of them is
-      // refused before its geometry is measured (entry.ts, structureBias).
-      higherStructures: higherStructures,
-      // The entry rung's own structure and turn, for the turn gate
-      // (entry.ts, turnConflictFor): a plan riding a direction that is turning.
-      entryStructure: { structure: structures[0].structure, turn: turnForGate(turns[0]) },
+      // #104: no structure gate and no turn gate. Both refused plans on the
+      // swing structure and the turn evidence, which are not RSI or SAR —
+      // "他はいりません". The geometry checks still run, and the rule's plan
+      // passes them by construction (0.8 ATR stop, 1.5 reward ratio).
+      higherStructures: [],
+      entryStructure: null,
     });
 
     // "Enter now at the market" is not an available action when the market is
@@ -2854,12 +2752,15 @@ ${candleLines(lowerCandles, 24)}`;
 
     let entryRejected = false;
     let rejectionReason: string | null = null;
-    if (marketShut || lowConfidence || costlyHours || (!entryVerdict.ok && entryVerdict.rejection)) {
+    // #104: the confidence floor no longer refuses anything. The signal is
+    // the rule's, and the analyst's confidence is its opinion of the reading,
+    // not a vote on whether the rule fired. `lowConfidence` is still computed
+    // and recorded (entry_check.confidence) so the rate stays measurable.
+    void lowConfidence;
+    if (marketShut || costlyHours || (!entryVerdict.ok && entryVerdict.rejection)) {
       entryRejected = true;
       rejectionReason = marketShut
         ? "market_closed"
-        : lowConfidence
-        ? "low_confidence"
         : costlyHours
         ? "costly_hours"
         : (entryVerdict.rejection ?? "unknown");
@@ -2956,6 +2857,11 @@ ${candleLines(lowerCandles, 24)}`;
     }
 
     const entryCheck = {
+      // #104: which rule decided the signal, what it read, and what the
+      // analyst would have said on its own.
+      rule: RULE_ID,
+      model_signal: modelSignal,
+      rsi_sar: compactRsiSar(timeframes[0], rsiSarReads[0], decimals),
       proposed_signal: proposedSignal,
       proposed_entry: proposed.entry,
       proposed_stop: proposed.stop,
@@ -2964,7 +2870,8 @@ ${candleLines(lowerCandles, 24)}`;
       // plan. Recorded on the row so the rate of low-confidence calls is
       // measurable rather than inferred from a rejection string.
       confidence: normalizedAnalysis.confidence,
-      confidence_floor: MIN_CONFIDENCE,
+      // #104: no longer enforced — null says so
+      confidence_floor: null,
       // Targets removed for pointing the wrong way. Empty on a sound plan; a
       // rising count is evidence the model's output is degrading, which is
       // exactly the kind of thing that otherwise goes unnoticed.
@@ -3256,6 +3163,9 @@ ${candleLines(lowerCandles, 24)}`;
       // in force, the trend lines. Same order as `timeframes`. The full
       // signal list is not stored; the chart payload carries it.
       signals: signalReads.map((sr, i) => compactSignals(timeframes[i], sr, decimals)),
+      // #104: the RSI/SAR reading per timeframe — the one the signal was
+      // decided on is the first. Same order as `timeframes`.
+      rsi_sar: rsiSarReads.map((rs, i) => compactRsiSar(timeframes[i], rs, decimals)),
       // Entry timeframe only, which is where it is computed and rendered.
       divergence: compactDivergence(entryDivergence, decimals),
       // The same reading with the forming bar removed. `null` where there was

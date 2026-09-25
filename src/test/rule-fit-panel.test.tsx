@@ -342,9 +342,11 @@ describe("the server sends the comparison to the client", () => {
   it("sends rule ids and verdicts only, never the cited analysis ids", () => {
     // The rules are learned from every account. Whose plans they were learned
     // from is not the client's business.
+    //
+    // #104: no rule is shown any more, so the record is null and there is
+    // nothing to send — and in particular nothing that names a cited plan.
     const record = analyze.slice(analyze.indexOf("const ruleFitRecord"), analyze.indexOf("const anthropicHeaders"));
-    expect(record).toContain("comparable: fit.comparable");
-    expect(record).toContain("cases: fit.cases");
+    expect(record).toContain("const ruleFitRecord = null as RuleFitRecord | null;");
     expect(record).not.toContain("supported_by");
   });
 });

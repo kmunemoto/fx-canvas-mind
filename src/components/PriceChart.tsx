@@ -56,7 +56,19 @@ interface Props {
   // whose bar is not among `candles` is not drawn.
   marks?: ChartSignalMark[];
   lines?: ChartTrendLine[];
+  // #104: RSI(14) and the Parabolic SAR, one value per candle. The SAR is
+  // drawn as dots on the price chart (green under price, red over it), RSI
+  // in its own strip under it with its 30 and 70 lines.
+  rsi?: Array<number | null>;
+  sar?: Array<number | null>;
+  sarBelow?: Array<boolean | null>;
 }
+
+// #104: up to this many signals carry a TP/SL box beside their label, the
+// way the reference indicator shows them — the newest first, skipping any
+// box that would land on one already drawn. The rest keep the label and say
+// their levels on hover. More boxes than this on a phone is a wall.
+const LEVEL_BOXES = 3;
 
 // How far past the flagged bar the stop and target segments reach: to the
 // bar that settled the signal, or a few bars when nothing has yet.
@@ -108,7 +120,7 @@ const parseLevel = (v: string | undefined): number | null => {
 // trader would mark up the chart (labels carry identity, color is secondary)
 const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
-  overlays = [], band = null, marks = [], lines = [],
+  overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -172,7 +184,19 @@ const PriceChart = ({
       min = Math.min(min, l.value);
       max = Math.max(max, l.value);
     }
-    const pad = (max - min) * 0.06 || Math.abs(max) * 0.001 || 1;
+    // #104: the SAR dots are part of the picture, so they are in the range
+    if (sar && sar.length === candles.length) {
+      for (const v of sar) {
+        if (v === null || !Number.isFinite(v)) continue;
+        min = Math.min(min, v);
+        max = Math.max(max, v);
+      }
+    }
+    // #104: signal labels and their TP/SL boxes stand above the highs and
+    // hang below the lows, so a chart that has any gets more room at both
+    // ends — otherwise a signal at the window's extreme is pushed onto the
+    // candles it points at.
+    const pad = (max - min) * (marks.length > 0 ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
 
@@ -184,7 +208,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * i + slot / 2;
 
     return { min, max, y, x, slot, bodyW };
-  }, [candles, levels, W, H, PAD_RIGHT]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -299,6 +323,45 @@ const PriceChart = ({
     v !== null && Number.isFinite(v) && v >= geometry.min && v <= geometry.max;
   const hovered = hover !== null ? candles[hover] : null;
 
+  // #104: where each signal's label goes, and which of them get a TP/SL box.
+  // Boxes are handed out newest first, up to LEVEL_BOXES, and a box that
+  // would sit on one already placed is not drawn — two signals a few bars
+  // apart used to print their levels on top of each other. A flag without a
+  // box still names its levels on hover.
+  const labelH = narrow ? 12 : 13;
+  const labelW = narrow ? 32 : 38;
+  const boxW = narrow ? 66 : 78;
+  const boxH = narrow ? 20 : 22;
+  const plotTop = PAD_TOP + 1;
+  const plotBottom = H - PAD_BOTTOM - 1;
+  const flagLayout = flags.map((f) => {
+    const c = candles[f.idx];
+    const buy = f.side === "BUY";
+    const away = 5 + f.row * (labelH + 2);
+    const rawTop = buy ? y(c.low) + away + 4 : y(c.high) - away - 4 - labelH;
+    return { top: Math.min(Math.max(rawTop, plotTop), plotBottom - labelH) };
+  });
+  const boxAt = new Map<number, { left: number; top: number }>();
+  {
+    const placed: Array<{ left: number; top: number }> = [];
+    const gap = 2;
+    for (let n = flags.length - 1; n >= 0 && boxAt.size < LEVEL_BOXES; n--) {
+      const f = flags[n];
+      const first = f.marks[0];
+      if (first.target === null || first.stop === null) continue;
+      const fx = x(f.idx);
+      const left = Math.min(Math.max(fx - boxW / 2, PAD_LEFT), W - PAD_RIGHT - boxW);
+      const lt = flagLayout[n].top;
+      const rawTop = f.side === "BUY" ? lt + labelH + 2 : lt - 2 - boxH;
+      const top = Math.min(Math.max(rawTop, plotTop), plotBottom - boxH);
+      const clash = placed.some((b) =>
+        left < b.left + boxW + gap && b.left < left + boxW + gap && top < b.top + boxH + gap && b.top < top + boxH + gap);
+      if (clash) continue;
+      placed.push({ left, top });
+      boxAt.set(n, { left, top });
+    }
+  }
+
   const gridLines = 4;
   const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) =>
     geometry.min + ((geometry.max - geometry.min) * i) / gridLines,
@@ -333,7 +396,7 @@ const PriceChart = ({
           {drawnOverlays.hidden > 0 ? ` · ${t.chart.hiddenLevels(drawnOverlays.hidden)}` : ""}
         </p>
       )}
-      {(flags.length > 0 || trendLines.length > 0) && (
+      {(flags.length > 0 || trendLines.length > 0 || (sar !== undefined && sar.length === candles.length)) && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-signal-legend">
           {t.chart.signalLegend}
         </p>
@@ -427,28 +490,55 @@ const PriceChart = ({
           );
         })}
 
-        {/* #99: one flag per bar a bounce condition fired on. BUY hangs
-            under the low, SELL stands over the high; the short dashed
-            segments beside it are the stop and target the signal was
-            settled against, reaching the bar that settled it. */}
-        {flags.map((f) => {
+        {/* #104: the Parabolic SAR, one dot per bar — green under price
+            (the buy side), red over it (the sell side). */}
+        {sar && sar.length === candles.length && (
+          <g data-testid="chart-sar" clipPath={`url(#${clipId})`}>
+            {sar.map((v, i) =>
+              v !== null && Number.isFinite(v)
+                ? (
+                  <circle
+                    key={`sar-${i}`}
+                    cx={x(i)}
+                    cy={y(v)}
+                    r={narrow ? 1.3 : 1.6}
+                    fill={sarBelow?.[i] === false ? COLORS.down : COLORS.up}
+                    opacity="0.9"
+                  />
+                )
+                : null
+            )}
+          </g>
+        )}
+
+        {/* One flag per bar the rule fired on (#99 drew bounce conditions
+            here; #104 draws the RSI/SAR rule). SELL stands over the high,
+            BUY hangs under the low, as a filled label with a pointer; the
+            newest few also carry a box with the TP and SL the signal was
+            settled against, and the short dotted segments are those same two
+            levels, reaching the bar that settled it. */}
+        {flags.map((f, n) => {
           const c = candles[f.idx];
           const buy = f.side === "BUY";
           const color = buy ? COLORS.up : COLORS.down;
           const fx = x(f.idx);
-          const away = 6 + f.row * 13;
-          const baseY = buy ? y(c.low) + away : y(c.high) - away;
-          const labelY = buy ? baseY + 9 : baseY - 3;
-          const solid = f.outcome === "win";
-          const faded = f.outcome === "loss";
-          const flagW = narrow ? 22 : 26;
+          // the label's top edge, kept inside the plot
+          const top = flagLayout[n].top;
+          const pointerTip = buy ? Math.min(y(c.low) + 1, top) : Math.max(y(c.high) - 1, top + labelH);
+          const lost = f.outcome === "loss";
           const first = f.marks[0];
           const reach = Math.min(candles.length - 1, f.idx + Math.max(1, first.bars ?? OPEN_SEGMENT_BARS));
           const segment = (v: number | null, stroke: string) =>
             inDomain(v) && reach > f.idx
               ? <line x1={fx} x2={x(reach)} y1={y(v)} y2={y(v)} stroke={stroke} strokeWidth="0.8" strokeDasharray="2 2" opacity="0.75" />
               : null;
-          const tip = f.marks.map((m) => `${m.side} ${m.rule} ${m.outcome}${m.stop !== null ? ` SL ${m.stop.toFixed(decimals)}` : ""}${m.target !== null ? ` TP ${m.target.toFixed(decimals)}` : ""}`).join(" / ");
+          const tip = f.marks.map((m) => `${m.side} ${m.outcome}${m.entry !== null ? ` @ ${m.entry.toFixed(decimals)}` : ""}${m.target !== null ? ` TP ${m.target.toFixed(decimals)}` : ""}${m.stop !== null ? ` SL ${m.stop.toFixed(decimals)}` : ""}`).join(" / ");
+          // the TP/SL box, where one was handed out above
+          const box = boxAt.get(n) ?? null;
+          const boxed = box !== null;
+          const boxLeft = box?.left ?? 0;
+          const boxTop = box?.top ?? 0;
+          const textSize = narrow ? 7 : 8;
           return (
             <g key={`flag-${f.side}-${f.idx}`} data-testid={`chart-signal-${f.side}-${f.outcome}`}>
               <title>{tip}</title>
@@ -456,33 +546,52 @@ const PriceChart = ({
               {segment(first.stop, COLORS.sl)}
               <polygon
                 points={buy
-                  ? `${fx},${baseY - 4} ${fx - 3},${baseY} ${fx + 3},${baseY}`
-                  : `${fx},${baseY + 4} ${fx - 3},${baseY} ${fx + 3},${baseY}`}
+                  ? `${fx},${pointerTip} ${fx - 3.5},${top} ${fx + 3.5},${top}`
+                  : `${fx},${pointerTip} ${fx - 3.5},${top + labelH} ${fx + 3.5},${top + labelH}`}
                 fill={color}
-                opacity={solid ? 0.95 : faded ? 0.5 : 0.8}
+                opacity={lost ? 0.55 : 0.95}
               />
               <rect
-                x={fx - flagW / 2}
-                y={buy ? baseY : baseY - 11}
-                width={flagW}
-                height={11}
+                x={fx - labelW / 2}
+                y={top}
+                width={labelW}
+                height={labelH}
                 rx="2"
-                fill={solid || faded ? color : "hsl(var(--background))"}
-                stroke={color}
-                strokeWidth="0.8"
-                opacity={solid ? 0.95 : faded ? 0.5 : 0.9}
+                fill={color}
+                opacity={lost ? 0.55 : 0.95}
               />
               <text
                 x={fx}
-                y={labelY}
-                fontSize={narrow ? 6.5 : 7.5}
-                fontWeight="700"
+                y={top + labelH - (narrow ? 3 : 3.5)}
+                fontSize={narrow ? 7.5 : 8.5}
+                fontWeight="800"
                 fontFamily="monospace"
                 textAnchor="middle"
-                fill={solid || faded ? "hsl(var(--background))" : color}
+                fill="hsl(var(--background))"
               >
                 {f.side}{t.chart.outcomeMark[f.outcome]}
               </text>
+              {boxed && (
+                <g data-testid="chart-signal-levels">
+                  <rect
+                    x={boxLeft}
+                    y={boxTop}
+                    width={boxW}
+                    height={boxH}
+                    rx="2"
+                    fill="hsl(var(--background))"
+                    stroke={COLORS.text}
+                    strokeWidth="0.6"
+                    opacity="0.92"
+                  />
+                  <text x={boxLeft + 3} y={boxTop + boxH / 2 - 1.5} fontSize={textSize} fontFamily="monospace" fill={COLORS.tp}>
+                    {`TP: ${first.target!.toFixed(decimals)}`}
+                  </text>
+                  <text x={boxLeft + 3} y={boxTop + boxH - 3} fontSize={textSize} fontFamily="monospace" fill={COLORS.sl}>
+                    {`SL: ${first.stop!.toFixed(decimals)}`}
+                  </text>
+                </g>
+              )}
             </g>
           );
         })}
@@ -586,6 +695,57 @@ const PriceChart = ({
           );
         })}
       </svg>
+      {/* #104: RSI(14) under the price, on the same x scale so a bar here is
+          the bar above it. The 30 and 70 lines are the rule's levels. */}
+      {rsi && rsi.length === candles.length && rsi.some((v) => v !== null && Number.isFinite(v)) && (() => {
+        const RH = narrow ? 56 : 64;
+        const top = 8;
+        const bottom = RH - 6;
+        const ry = (v: number) => top + ((100 - v) / 100) * (bottom - top);
+        let path = "";
+        let pen = false;
+        rsi.forEach((v, i) => {
+          if (v === null || !Number.isFinite(v)) {
+            pen = false;
+            return;
+          }
+          path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${ry(v).toFixed(1)} `;
+          pen = true;
+        });
+        const last = [...rsi].reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
+        return (
+          <svg
+            viewBox={`0 0 ${W} ${RH}`}
+            className="w-full h-auto mt-1"
+            role="img"
+            aria-label={t.chart.rsiLabel}
+            data-testid="chart-rsi"
+            onMouseMove={handleMove}
+            onMouseLeave={() => setHover(null)}
+          >
+            {[70, 50, 30].map((lv) => (
+              <g key={lv}>
+                <line
+                  x1={PAD_LEFT} x2={W - PAD_RIGHT}
+                  y1={ry(lv)} y2={ry(lv)}
+                  stroke={lv === 50 ? COLORS.grid : lv === 70 ? COLORS.down : COLORS.up}
+                  strokeWidth="0.6"
+                  strokeDasharray={lv === 50 ? "2 3" : "4 3"}
+                  opacity={lv === 50 ? 0.5 : 0.75}
+                />
+                <text x={AXIS_X} y={ry(lv) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{lv}</text>
+              </g>
+            ))}
+            {hover !== null && (
+              <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
+            )}
+            <path d={path} fill="none" stroke={COLORS.entry} strokeWidth="1.2" />
+            <text x={PAD_LEFT + 2} y={top + 2} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">
+              {`${t.chart.rsiLabel} ${hover !== null && rsi[hover] !== null ? (rsi[hover] as number).toFixed(1) : last === null ? "—" : last.toFixed(1)}`}
+            </text>
+          </svg>
+        );
+      })()}
     </div>
   );
 };

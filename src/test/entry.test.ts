@@ -831,33 +831,35 @@ describe("the gate is wired through, in every place it has to be", () => {
   const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
   const locale = readFileSync("supabase/functions/analyze/locale.ts", "utf8");
 
-  it("analyze hands the gate the higher rungs and stores what it read", () => {
-    expect(analyze).toContain("higherStructures: higherStructures,");
+  // #104: the structure gate is off in analyze — the signal is the RSI/SAR
+  // rule's, and the swing structure is not RSI or SAR. The gate itself is
+  // unchanged (the tests above still hold it), analyze just hands it no rungs,
+  // and the row still carries the fields so the record reads as before.
+  it("analyze hands the gate no higher rungs, and still stores the gate's fields", () => {
+    expect(analyze).toContain("higherStructures: [],");
+    expect(analyze).not.toContain("readHigherStructures(");
     expect(analyze).toContain("structure_read: entryVerdict.structureRead,");
     expect(analyze).toContain("structure_conflict: entryVerdict.structureConflict,");
     expect(analyze).toContain("structureConflict: entryVerdict.structureConflict,");
-    // the same objects go to the prompt as to the gate
-    expect(analyze).toContain("readHigherStructures(higherStructures)");
   });
 
-  it("analyze hands the gate the turn on every rung and the entry rung, and stores what it did with it (#96)", () => {
-    expect(analyze).toContain("turn: turnForGate(turns[i + 1])");
-    expect(analyze).toContain("entryStructure: { structure: structures[0].structure, turn: turnForGate(turns[0]) },");
+  // #104: likewise the turn gate. The turn evidence is still computed and
+  // stored (context.turn); it no longer refuses anything or reaches the prompt.
+  it("analyze no longer hands the gate the turn, and still records it (#96, #104)", () => {
+    expect(analyze).toContain("entryStructure: null,");
+    expect(analyze).not.toContain("turnForGate(");
+    expect(analyze).not.toContain("turnLines(");
     expect(analyze).toContain("turn_conflict: entryVerdict.turnConflict,");
     expect(analyze).toContain("structure_yielded: entryVerdict.structureYielded,");
-    expect(analyze).toContain("turnConflict: entryVerdict.turnConflict,");
     expect(analyze).toContain("turn: turns.map((t, i) => compactTurn(timeframes[i], t, decimals)),");
-    // the line the model reads is rendered from the same read the gate gets
-    expect(analyze).toContain("${turnLines(turns[i], decimals)}");
   });
 
-  it("the prompt names the turn line, the threshold, and the counter-case it must write (#96)", () => {
+  it("the prompt states the RSI/SAR rule and no longer asks for a counter-case (#96, #104)", () => {
     const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
-    expect(prompt).toContain("転換の証拠");
-    expect(prompt).toContain("${TURN_BLOCK}");
-    expect(prompt).toContain("${FRESH_BREAK_BARS}");
-    expect(prompt).toContain("counter_case");
-    expect(prompt).toContain("上位足が転換中なら、逆方向のプランは止めない");
+    expect(prompt).not.toContain("転換の証拠");
+    expect(prompt).toContain("RSI が30以下から30を上に戻した確定足で、パラボリックSARが価格の下にあるとき");
+    expect(prompt).toContain("RSI が70以上から70を下に戻した確定足で、パラボリックSARが価格の上にあるとき");
+    expect(prompt).toContain("counter_case は書かなくてよい");
     const schema = analyze.slice(analyze.indexOf("const RESPONSE_SCHEMA"), analyze.indexOf("const { conditional_wait"));
     expect(schema).toContain("counter_case: {");
     // optional in the schema (the replay harnesses' missing-key check), and
@@ -871,11 +873,12 @@ describe("the gate is wired through, in every place it has to be", () => {
     expect(locale).toContain("turnConflict?:");
   });
 
-  it("the prompt says which line decides the higher timeframe's direction, and that the server enforces it", () => {
+  it("the prompt says the higher timeframes are reference only and the server decides", () => {
     const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
-    expect(prompt).toContain("終値ブレイク");
-    expect(prompt).toContain("サーバーが公開しない");
-    expect(analyze).toContain("上位足の方向(サーバ判定");
+    expect(prompt).not.toContain("終値ブレイク");
+    expect(prompt).toContain("上位足の RSI と SAR は参考として触れてよいが、signal の判断には使わない");
+    expect(prompt).toContain("signal はこの判定で決まり、あなたが変えることはできません");
+    expect(analyze).not.toContain("上位足の方向(サーバ判定");
   });
 
   it("both languages have a sentence for the refusal that names the rung", () => {

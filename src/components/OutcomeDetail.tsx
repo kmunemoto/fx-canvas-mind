@@ -102,7 +102,14 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
       case "untriggered":
         return ev?.reason && ev.reason in d.reasons ? d.reasons[ev.reason] : t.history.outcomes.untriggered;
       case "skipped":
-        return rejected ? g.rejectedSummary : declined ? g.declinedSummary : d.summary.skipped;
+        // #104: from v68 a WAIT the row's rule decided means it did not fire
+        return rejected
+          ? g.rejectedSummary
+          : declined && typeof record.entry_check?.rule === "string" && record.entry_check.rule.length > 0
+            ? g.ruleWaitSummary
+            : declined
+              ? g.declinedSummary
+              : d.summary.skipped;
       default:
         return d.summary.pending;
     }

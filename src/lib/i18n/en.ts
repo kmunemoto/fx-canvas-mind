@@ -173,7 +173,8 @@ export const en: Dict = {
     legend: "dashed = measured by the server / dotted = named by the model / band = the cloud at price",
     hiddenLevels: (n: number) => `${n} outside the visible range`,
     // #99: the bounce marks and the trend lines
-    signalLegend: "▲▼ = a bar a bounce condition fired on (solid = won · faded = lost · hollow = open/ambiguous); short lines = its stop and target / diagonal = through the last two swings",
+    signalLegend: "BUY · SELL = a closed bar where RSI came back from 30/70 with the SAR on the same side (✓ won ✗ lost … open). Dotted = that signal's stop (red) and target (green). Dots = Parabolic SAR (green under price · red over price)",
+    rsiLabel: "RSI(14)",
     trend: { lows: "lows", highs: "highs" },
     // The label on the flag: the side, then how it came out
     outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
@@ -182,37 +183,47 @@ export const en: Dict = {
     tf: (tf: string) => tf,
   },
 
-  // #99: the conditions price bounced on, counted by the server per timeframe
-  bounce: {
-    title: "Bounce conditions (record over this window)",
-    columns: { condition: "Condition", record: "W–L", rate: "Hit rate (95% CI)", now: "Now" },
-    // A condition in force on the newest closed bars
-    now: "in force",
-    none: "No condition fired in this window",
-    pending: (reason: string) => `Not measured (${reason})`,
-    record: (wins: number, losses: number) => `${wins}W ${losses}L`,
-    rate: (pct: number, lo: number, hi: number) => `${pct}% (${lo}–${hi})`,
-    noRate: "—",
-    extra: {
-      ambiguous: (n: number) => `${n} ambiguous`,
-      expired: (n: number) => `${n} expired`,
-      open: (n: number) => `${n} open`,
-      untradable: (n: number) => `${n} stop too wide`,
+  // #104: the RSI(14) × Parabolic SAR reading, the next-close prices at
+  // which the rule fires, and the evidence the rule was adopted on
+  rsiSar: {
+    title: "RSI × Parabolic SAR",
+    rule: "Buy: RSI(14) comes back above 30 from 30 or below, with the SAR under price. Sell: RSI comes back below 70 from 70 or above, with the SAR over price. Both are judged on closed bars.",
+    nowTitle: "Now",
+    rsi: (prev: string, now: string) => `RSI(14) ${prev} → ${now}`,
+    sar: (level: string, below: boolean) => `Parabolic SAR ${level} (${below ? "under price, the buy side" : "over price, the sell side"})`,
+    fired: (side: string) => `The newest closed bar gave a ${side} signal`,
+    noSignal: "No signal on the newest closed bar",
+    adviceTitle: "Where to act (judged on the next bar's close)",
+    sides: { BUY: "Buy", SELL: "Sell" },
+    ready: {
+      BUY: (price: string, dist: string) => `If the next bar closes above ${price}, the buy conditions are met (${dist} from the current price).`,
+      SELL: (price: string, dist: string) => `If the next bar closes below ${price}, the sell conditions are met (${dist} from the current price).`,
     },
-    // How the counts were made, said once under the table
-    method: (bars: number, rr: number, horizon: number) =>
-      `${bars} closed bars, mid prices (no spread). Stop just past the extreme the bounce rejected (only within ATR×0.6–1.2), target = ${rr}× the stop distance, settled within ${horizon} bars.`,
-    breakeven: (pct: number) => `Break-even hit rate is ${pct}%. A small n cannot be told from chance. Nothing outside this window is known.`,
-    rules: {
-      level_reject: { BUY: "Bounce at a confirmed swing low", SELL: "Rejection at a confirmed swing high" },
-      ma200_reject: { BUY: "Bounce off SMA200", SELL: "Rejection at SMA200" },
-      ma20_pullback: { BUY: "Pullback to a rising SMA20", SELL: "Rally to a falling SMA20" },
-      band_reentry: { BUY: "Re-entry from below the lower band", SELL: "Re-entry from above the upper band" },
-      cloud_reject: { BUY: "Bounce off the cloud top", SELL: "Rejection at the cloud bottom" },
-      divergence: { BUY: "Bullish divergence confirmed", SELL: "Bearish divergence confirmed" },
-      double_pivot: { BUY: "Double bottom confirmed", SELL: "Double top confirmed" },
-      engulfing: { BUY: "Bullish engulfing at a level", SELL: "Bearish engulfing at a level" },
+    holdSar: {
+      BUY: (level: string) => `That bar's low must also stay above the SAR at ${level}.`,
+      SELL: (level: string) => `That bar's high must also stay below the SAR at ${level}.`,
     },
+    notReady: {
+      BUY: (price: string, dist: string, sar: string) =>
+        `Not set up yet. First a close at or below ${price} has to take RSI under 30 (${dist} from the current price). After that, when RSI comes back above 30 with price above the SAR (now ${sar}), it is a buy.`,
+      SELL: (price: string, dist: string, sar: string) =>
+        `Not set up yet. First a close at or above ${price} has to take RSI over 70 (${dist} from the current price). After that, when RSI comes back below 70 with price below the SAR (now ${sar}), it is a sell.`,
+    },
+    plan: (entry: string, stop: string, target: string) => `The plan then: entry ${entry} · stop ${stop} · target ${target}`,
+    costlyNext: (jstHour: number) => `The next bar closes in the ${jstHour}:00 JST hour, when the spread widens; the app stands aside then even if the conditions are met.`,
+    adviceNote: "The rule is judged on the close. Touching the price during the bar does not meet it. The levels change every bar, so analyse again after the next bar closes.",
+    windowTitle: (bars: number) => `Signals in these ${bars} bars`,
+    tally: (side: string, n: number, wins: number, losses: number) => `${side} ${n} (${wins} won · ${losses} lost)`,
+    method: (stopAtr: number, rr: number, horizon: number) =>
+      `Stop ${stopAtr} ATR, target ${rr}× the stop, judged within ${horizon} bars on mid prices without the spread.`,
+    evidenceTitle: "Tested on past charts",
+    evidence: (period: string, pairs: number, win: number, n: number, breakeven: number) =>
+      `${period}, ${pairs} pairs: won ${win}% (${n} trades). Breaking even needs ${breakeven}%.`,
+    hit: (hit: number, n: number, blind: number) =>
+      `Direction right (1 ATR either way, whichever came first): ${hit}% (${n}). Entering every bar: ${blind}%.`,
+    notMeasured: (tf: string) => `Not tested on ${tf}. Below are the 15-minute, 1-hour and 4-hour results together.`,
+    belowBreakeven: "In the test, this rule's win rate did not reach break-even.",
+    unavailable: (reason: string) => `RSI and SAR could not be computed (${reason})`,
   },
 
   technical: {
@@ -220,16 +231,12 @@ export const en: Dict = {
     currentRate: "Current rate",
     overbought: " (overbought)",
     oversold: " (oversold)",
-    tenkan: "Ichimoku Tenkan",
-    kijun: "Ichimoku Kijun",
-    spanA: "Ichimoku Span A (26 ahead)",
-    spanB: "Ichimoku Span B (26 ahead)",
-    cloudNow: "Cloud at price (computed 26 bars ago)",
-    cloudTop: "top",
-    cloudBottom: "bottom",
-    indicators: "Indicator readings",
-    cloudSides: { above: "price above the cloud", inside: "price inside the cloud", below: "price below the cloud" },
-    forming: "this bar has not closed"
+    // #104: the only readings the analysis uses
+    sar: "Parabolic SAR",
+    sarSide: (below: boolean) => (below ? "under price (buy side)" : "over price (sell side)"),
+    atr: "ATR(14) · the unit for stop and target",
+    closedNote: "RSI and SAR are closed-bar values",
+    forming: "This bar is still forming",
   },
 
   history: {
@@ -249,6 +256,8 @@ export const en: Dict = {
       // Sixteen of those wore the refusal badge while one plan had actually
       // been refused.
       declined: "AI DECLINED",
+      // #104 (v68+): a WAIT because the RSI/SAR rule did not fire
+      ruleWait: "NO SIGNAL",
     },
     scope: (n: number) => `last ${n}`,
     statsScope: (n: number) => `Record: ${n} calls, all time`,
@@ -299,12 +308,13 @@ export const en: Dict = {
       // reader has no way to tell which to believe. The clause is scoped to
       // these calls, the way the Japanese parenthetical already scopes it.
       declinedNote: (n: number) =>
-        `${n} call${n === 1 ? " was" : "s were"} the model's own decision to stand aside — these were not server refusals.`,
+        `${n} call${n === 1 ? " was" : "s were"} a stand-aside by the model itself or a wait for the RSI/SAR conditions — these were not server refusals.`,
       shadowNote: (s: { untriggered: number; wins: number; losses: number; open: number }) =>
         `Refused plans tracked anyway: no fill ${s.untriggered} / WIN ${s.wins} / LOSS ${s.losses} / open ${s.open}`,
       rejectedTitle: "Plan refused server-side",
       rejectedSummary: "The model's plan was refused server-side and published as WAIT",
       declinedSummary: "The model declined to trade — this was not a server refusal",
+      ruleWaitSummary: "The RSI/SAR conditions were not met, so this is a WAIT — not a server refusal",
       reasons: {
         too_far: "Entry too far from the market (would not fill)",
         should_be_market: "Waits for a pullback in a running trend (would not fill)",

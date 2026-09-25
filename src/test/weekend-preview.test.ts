@@ -86,7 +86,7 @@ describe("analyze no longer refuses to look", () => {
     // was still decided at a price that existed; that WAIT is real and the
     // scorer should grade it. So the late gate keeps its own reading.
     expect(analyze).toContain("const marketShut = isPossiblyClosed(Date.now());");
-    expect(analyze).toContain("marketShut || lowConfidence");
+    expect(analyze).toContain("marketShut || costlyHours");
   });
 
   it("writes no wait_plan on a preview, which is what keeps it unscored", () => {

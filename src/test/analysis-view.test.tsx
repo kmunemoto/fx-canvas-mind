@@ -15,6 +15,7 @@ import type {
   ChartTrendLine,
   EntryCheck,
   OutcomeEvaluation,
+  RsiSarSummary,
   TechnicalData,
   TfChart,
 } from "../lib/types";
@@ -469,7 +470,7 @@ describe("AnalysisHistory (DB records)", () => {
     };
     render(<AnalysisHistory records={[...records, selfDeclined]} />);
     expect(screen.getByTestId("gate-note")).toHaveTextContent(
-      "AI自身が「見送る」と判断したものが 1件あります（サーバーによる却下ではありません）",
+      "見送りのうち 1件は、AI自身の判断か RSI・SAR の条件待ちです（サーバーによる却下ではありません）",
     );
     expect(screen.getByTestId("gate-note")).not.toHaveTextContent("サーバー側で却下し");
     expect(screen.queryByText("却下")).toBeNull();
@@ -478,6 +479,30 @@ describe("AnalysisHistory (DB records)", () => {
     fireEvent.click(screen.getByRole("button", { name: /WAIT 45%/ }));
     expect(screen.queryByTestId("gate-detail")).toBeNull();
     expect(screen.getByText("AI自身が見送ると判断しました（サーバーによる却下ではありません）")).toBeInTheDocument();
+  });
+
+  // #104: from v68 a WAIT is the RSI/SAR rule not firing. Calling that "AI
+  // declined" would name a decision nobody made.
+  it("labels a WAIT the RSI/SAR rule decided as waiting for the conditions", () => {
+    const ruleWait: AnalysisRecord = {
+      ...records[2],
+      id: "rule-wait",
+      confidence: 62,
+      signal: "WAIT",
+      outcome: "skipped",
+      entry_check: {
+        rule: "rsi14_30_70_psar_v1",
+        model_signal: "WAIT",
+        proposed_signal: "WAIT", proposed_entry: null, proposed_stop: null, proposed_tp1: null,
+        entry_type: null, distance_atr: null, risk_reward: null,
+        rejection: null, atr: 0.4,
+      },
+    };
+    render(<AnalysisHistory records={[...records, ruleWait]} />);
+    expect(screen.getByText("条件待ち")).toBeInTheDocument();
+    expect(screen.queryByText("AI見送り")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /WAIT 62%/ }));
+    expect(screen.getByText("RSI・SAR の条件がそろわなかったので WAIT です（サーバーによる却下ではありません）")).toBeInTheDocument();
   });
 });
 
@@ -1240,7 +1265,7 @@ describe("the one-minute price staleness line", () => {
   });
 });
 
-describe("#99 the bounce conditions, on the chart and in the panel", () => {
+describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
   const hourly = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
       datetime: new Date(Date.parse("2026-09-01T00:00:00Z") + i * 3_600_000).toISOString().slice(0, 19).replace("T", " "),
@@ -1314,11 +1339,54 @@ describe("#99 the bounce conditions, on the chart and in the panel", () => {
     // a mark whose bar is not on this chart is not drawn anywhere
     expect(screen.queryByTestId("chart-signal-BUY-open")).toBeNull();
     expect(screen.getByTestId("chart-trend-lows")).toBeInTheDocument();
-    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("反発の条件");
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("RSI が30/70から戻り");
     const svg = document.querySelector("svg");
     expect(svg?.textContent).toContain("BUY✓");
     expect(svg?.textContent).toContain("SELL✗");
     expect(svg?.textContent).toContain("安値線");
+    // #104: the reference indicator's TP/SL box beside the label
+    const boxes = screen.getAllByTestId("chart-signal-levels");
+    expect(boxes.length).toBe(2);
+    expect(boxes[0].textContent).toContain("TP: 151.000");
+    expect(boxes[0].textContent).toContain("SL: 149.500");
+  });
+
+  it("puts the TP/SL box on the newest three signals only (#104)", () => {
+    render(
+      <PriceChart
+        candles={candles}
+        pair="USD/JPY"
+        marks={[mark(5, "BUY", "win"), mark(15, "SELL", "loss"), mark(25, "BUY", "loss"), mark(35, "SELL", "win"), mark(45, "BUY", "win")]}
+      />,
+    );
+    expect(screen.getAllByTestId("chart-signal-levels")).toHaveLength(3);
+  });
+
+  it("does not print two signals' levels on top of each other (#104)", () => {
+    // two BUYs two bars apart: their boxes would overlap, so only the newer
+    // one is drawn; the older keeps its label and its tooltip
+    render(<PriceChart candles={candles} pair="USD/JPY" marks={[mark(50, "BUY", "loss"), mark(52, "BUY", "win")]} />);
+    expect(screen.getAllByTestId("chart-signal-levels")).toHaveLength(1);
+    expect(screen.getByTestId("chart-signal-BUY-loss").textContent).toContain("BUY✗");
+    expect(screen.getByTestId("chart-signal-BUY-loss").querySelector("title")?.textContent).toContain("TP 151.000");
+  });
+
+  it("draws the SAR as dots and RSI in its own strip, only when they line up with the candles (#104)", () => {
+    const sar = candles.map((_, i) => (i < 2 ? null : i % 7 < 4 ? 149.3 : 150.7));
+    const sarBelow = candles.map((_, i) => (i < 2 ? null : i % 7 < 4));
+    const rsi = candles.map((_, i) => (i < 14 ? null : 30 + (i % 40)));
+    const { unmount } = render(<PriceChart candles={candles} pair="USD/JPY" sar={sar} sarBelow={sarBelow} rsi={rsi} />);
+    expect(screen.getByTestId("chart-sar").querySelectorAll("circle")).toHaveLength(58);
+    const strip = screen.getByTestId("chart-rsi");
+    expect(strip.textContent).toContain("RSI(14)");
+    expect(strip.textContent).toContain("70");
+    expect(strip.textContent).toContain("30");
+    // a legend is shown for the dots even with no signal on screen
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("パラボリックSAR");
+    unmount();
+    render(<PriceChart candles={candles} pair="USD/JPY" sar={sar.slice(1)} rsi={rsi.slice(1)} />);
+    expect(screen.queryByTestId("chart-sar")).toBeNull();
+    expect(screen.queryByTestId("chart-rsi")).toBeNull();
   });
 
   it("says nothing about signals when there are none", () => {
@@ -1326,21 +1394,89 @@ describe("#99 the bounce conditions, on the chart and in the panel", () => {
     expect(screen.queryByTestId("chart-signal-legend")).toBeNull();
   });
 
-  it("lists the counts per timeframe with the interval, and marks the condition in force", () => {
-    render(<AnalysisResultView result={fullResult} techData={{ ...techData, charts }} pair="USD/JPY" interval="1h" />);
-    const panel = screen.getByTestId("bounce-conditions");
-    const row = screen.getByTestId("bounce-row-1h-level_reject-BUY");
-    expect(row.textContent).toContain("確定安値での反発");
-    expect(row.textContent).toContain("6勝3敗");
-    expect(row.textContent).toContain("67%（35–88）");
-    expect(screen.getByTestId("bounce-now").textContent).toBe("成立");
-    // a condition that fired but needed a stop too wide to price is still
-    // counted, and counted as that
-    expect(screen.getByTestId("bounce-row-1h-band_reentry-SELL").textContent).toContain("損切り幅超過2");
-    expect(screen.getByTestId("bounce-tf-4h").textContent).toContain("この窓で成立した条件はありません");
-    expect(screen.getByTestId("bounce-tf-1day").textContent).toContain("判定保留（too_few_bars:30）");
-    expect(panel.textContent).toContain("確定足480本");
-    expect(panel.textContent).toContain("損益分岐は的中率40%");
+  // #104: the analysis itself — RSI and SAR now, and on a WAIT the price the
+  // next close has to reach on each side.
+  const summary = (over: Partial<RsiSarSummary> = {}): RsiSarSummary => ({
+    tf: "1h",
+    rule: "rsi14_30_70_psar_v1",
+    ok: true,
+    reason: null,
+    bars: 470,
+    stop_atr: 0.8,
+    reward_ratio: 1.5,
+    horizon: 48,
+    now: { datetime: "2026-09-25 06:00:00", close: 150.1, rsi: 28.4, rsi_prev: 31.2, sar: 150.42, sar_below: false, atr: 0.3, signal: null },
+    next: {
+      close: { at: "2026-09-25T08:00:00.000Z", costly: false },
+      sar: { level: 150.4, below: false },
+      buy: { side: "BUY", ready: true, rsi_close: 150.18, sar_on_side: false, sar_level: 150.4, complete_close: 150.4, plan: { entry: 150.4, stop: 150.16, target: 150.76 } },
+      sell: { side: "SELL", ready: false, rsi_close: 151.35, sar_on_side: true, sar_level: 150.4, complete_close: null, plan: null },
+    },
+    tally: { BUY: { n: 3, wins: 1, losses: 2, ambiguous: 0, expired: 0, open: 0 }, SELL: { n: 2, wins: 1, losses: 1, ambiguous: 0, expired: 0, open: 0 } },
+    evidence: {
+      period: "2025-07〜2026-09",
+      pairs: 11,
+      breakeven: { win: 0.4, hit: 0.5 },
+      blind: { win: 0.35, hit: 0.448 },
+      tf: { measured: true, win: 0.34, winN: 247, hit: 0.44, hitN: 248 },
+      all: { measured: true, win: 0.354, winN: 1239, hit: 0.46, hitN: 1243 },
+    },
+    ...over,
+  });
+  const waitResult = { ...fullResult, signal: "WAIT" as const };
+
+  it("on a WAIT, says what close each side needs, how far that is, and the plan it would make (#104)", () => {
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, price: "150.100", rsiSar: summary() }} pair="USD/JPY" interval="1h" />);
+    const panel = screen.getByTestId("rsi-sar-panel");
+    expect(screen.getByTestId("rsi-sar-now").textContent).toContain("RSI(14) 31.2 → 28.4");
+    expect(screen.getByTestId("rsi-sar-now").textContent).toContain("パラボリックSAR 150.420（価格の上＝売り側）");
+    expect(screen.getByTestId("rsi-sar-fired").textContent).toContain("サインは出ていません");
+    const buy = screen.getByTestId("rsi-sar-trigger-BUY").textContent ?? "";
+    expect(buy).toContain("次の足が 150.400 を上回って引けたら、買いの条件がそろいます");
+    expect(buy).toContain("+30.0pips");
+    expect(screen.getByTestId("rsi-sar-plan-BUY").textContent).toContain("エントリー 150.400・損切り 150.160・利確 150.760");
+    const sell = screen.getByTestId("rsi-sar-trigger-SELL").textContent ?? "";
+    expect(sell).toContain("まだ準備前です。まず終値が 151.350 以上で引けて RSI が70を超える必要があります");
+    expect(sell).toContain("+125.0pips");
+    expect(screen.queryByTestId("rsi-sar-plan-SELL")).toBeNull();
+    expect(screen.queryByTestId("rsi-sar-costly-next")).toBeNull();
+    expect(screen.getByTestId("rsi-sar-window").textContent).toContain("買い 3回（勝ち1・負け2）");
+    expect(panel.textContent).toContain("勝率 34%（247回）");
+    expect(panel.textContent).toContain("損益ゼロになる勝率は 40%");
+    expect(panel.textContent).toContain("このルールの勝率は損益ゼロに届いていません");
+  });
+
+  it("warns when the next close falls in the hours the app stands aside, and says a timeframe was not tested (#104)", () => {
+    const s = summary({
+      tf: "1min",
+      next: { ...summary().next!, close: { at: "2026-09-25T21:05:00.000Z", costly: true } },
+      evidence: { ...summary().evidence, tf: { measured: false, win: null, winN: null, hit: null, hitN: null } },
+    });
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, rsiSar: s }} pair="USD/JPY" interval="1min" />);
+    expect(screen.getByTestId("rsi-sar-costly-next").textContent).toContain("日本時間6時台");
+    const ev = screen.getByTestId("rsi-sar-evidence").textContent ?? "";
+    expect(ev).toContain("1分足では検証していません");
+    expect(ev).toContain("勝率 35%（1239回）");
+  });
+
+  it("shows the reading but no next-close advice on a BUY, and reads the row's copy on a past analysis (#104)", () => {
+    const fired = summary({ now: { ...summary().now!, rsi: 31.5, rsi_prev: 28.9, sar_below: true, signal: "BUY" } });
+    const check = { proposed_signal: "BUY", rejection: null, rsi_sar: fired } as unknown as EntryCheck;
+    render(<AnalysisResultView result={fullResult} techData={techData} entryCheck={check} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByTestId("rsi-sar-fired").textContent).toContain("最新の確定足で買いのサインが出ています");
+    expect(screen.queryByTestId("rsi-sar-advice")).toBeNull();
+  });
+
+  it("reads the panel in English too (#104)", () => {
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, price: "150.100", rsiSar: summary() }} pair="USD/JPY" interval="1h" />, "en");
+    expect(screen.getByTestId("rsi-sar-trigger-BUY").textContent).toContain("If the next bar closes above 150.400, the buy conditions are met");
+    expect(screen.getByTestId("rsi-sar-panel").textContent).toContain(en.rsiSar.belowBreakeven);
+  });
+
+  it("says so when the reading could not be made", () => {
+    render(<AnalysisResultView result={waitResult} techData={{ ...techData, rsiSar: summary({ ok: false, reason: "bars<60", now: null, next: null }) }} pair="USD/JPY" interval="1h" />);
+    expect(screen.getByTestId("rsi-sar-unavailable").textContent).toContain("bars<60");
+    expect(screen.queryByTestId("rsi-sar-advice")).toBeNull();
   });
 
   it("switches the chart between the rungs, and keeps the plan's levels on the entry rung only", () => {
@@ -1359,7 +1495,7 @@ describe("#99 the bounce conditions, on the chart and in the panel", () => {
   it("falls back to the entry candles when an older payload carries no charts", () => {
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
     expect(screen.queryByTestId("chart-tabs")).toBeNull();
-    expect(screen.queryByTestId("bounce-conditions")).toBeNull();
+    expect(screen.queryByTestId("rsi-sar-panel")).toBeNull();
     expect(screen.getByText(/ENTRY 150\.123/)).toBeInTheDocument();
   });
 });

@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { AnalysisMode, AnalysisResult, EntryCheck, PlanHorizon, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
-import PriceChart, { type ChartOverlay } from "./PriceChart";
-import BounceConditions from "./BounceConditions";
+import PriceChart from "./PriceChart";
+import RsiSarPanel from "./RsiSarPanel";
 import MarketContextCard from "./MarketContextCard";
 import RuleFitPanel from "./RuleFitPanel";
 import HeldPositionCard from "./HeldPositionCard";
@@ -161,32 +161,6 @@ const AnalysisResultView = ({
     ? streak
     : null;
 
-  // The two registers, assembled here because only this component has both
-  // halves: what the server measured, and what the model named.
-  //
-  // A support level the model quoted may well be right — nothing measured it,
-  // and that is the entire difference the chart is drawing.
-  const overlays = useMemo<ChartOverlay[]>(() => {
-    const out: ChartOverlay[] = (techData?.levels ?? []).map((l) => ({
-      label: l.label,
-      value: l.value,
-      register: "computed" as const,
-    }));
-    const cited = [
-      ...(Array.isArray(result.support_levels) ? result.support_levels : []),
-      ...(Array.isArray(result.resistance_levels) ? result.resistance_levels : []),
-    ];
-    for (const c of cited) {
-      const v = Number(c);
-      if (!Number.isFinite(v)) continue;
-      // Skip one the server already measured: the same price drawn twice, in
-      // two registers, says the measurement is in doubt when it is not.
-      if (out.some((o) => o.register === "computed" && Math.abs(o.value - v) < 1e-9)) continue;
-      out.push({ label: v.toString(), value: v, register: "cited" });
-    }
-    return out;
-  }, [techData, result.support_levels, result.resistance_levels]);
-
   // #99: one chart per rung of the chain, when the server sent them. The
   // entry rung's chart carries the plan's levels and the measured overlays;
   // the higher rungs carry only their own candles, marks and trend lines —
@@ -282,18 +256,25 @@ const AnalysisResultView = ({
             stopLoss={entryChart ? result.stop_loss : undefined}
             takeProfits={entryChart ? [result.take_profit_1, result.take_profit_2, result.take_profit_3] : []}
             pair={pair}
-            overlays={entryChart ? overlays : []}
-            band={entryChart && techData?.cloudBand
-              ? { top: techData.cloudBand.top, bottom: techData.cloudBand.bottom, label: "cloud" }
-              : null}
             marks={activeChart?.marks ?? []}
             lines={activeChart?.lines ?? []}
+            rsi={activeChart?.rsi}
+            sar={activeChart?.sar}
+            sarBelow={activeChart?.sar_below}
             heading={activeChart && !entryChart ? `${t.chart.title} · ${tfLabel(activeChart.tf)}` : undefined}
           />
         </div>
       )}
 
-      {charts.length > 0 && <BounceConditions charts={charts} />}
+      {/* #104: the analysis itself — RSI and SAR now, and on a WAIT the
+          prices the next close has to reach. From the live response, or from
+          the row when this is a past analysis. */}
+      <RsiSarPanel
+        summary={techData?.rsiSar ?? entryCheck?.rsi_sar ?? null}
+        signal={result.signal}
+        pair={pair}
+        price={techData && Number.isFinite(Number(techData.price)) ? Number(techData.price) : null}
+      />
 
       {/* Trade plan — a WAIT has no levels, and a card of dashes is not a plan */}
       {hasPlan && (

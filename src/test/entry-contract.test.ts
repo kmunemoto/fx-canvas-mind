@@ -44,9 +44,10 @@ describe("the model can no longer choose an entry price", () => {
   it("stops telling the model to wait for a pullback", () => {
     const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
     expect(prompt).not.toContain("押し目・戻りを待つ");
-    expect(prompt).toContain("エントリー価格は選ばない");
-    // and it must say what to do instead
-    expect(prompt).toContain("WAIT");
+    // #104: the entry is the market price and the rule decides whether there
+    // is one at all; everything else is WAIT
+    expect(prompt).toContain("エントリーは現在値（成行）");
+    expect(prompt).toContain("それ以外は WAIT");
   });
 
   it("rounds the entry once and uses that one constant everywhere", () => {
@@ -70,32 +71,24 @@ describe("the model can no longer choose an entry price", () => {
     expect(analyze).not.toMatch(/"market_v1"/);
   });
 
-  it("shows the analyst only the rules its own contract allows it to follow", () => {
-    // Seven of the nine rules in the live book were about placing a limit
-    // entry when this shipped — a move that no longer exists — and all nine
-    // were being rendered into the prompt.
-    //
-    // The filter now runs where the book is read, and the rendering waits for
-    // the indicators so each rule can be compared against the market it was
-    // learned in. Both halves are pinned: a rendering that read the whole book
-    // instead of the in-force list would restore the original defect.
-    expect(analyze).toContain("inForceRules = inForce(parseRules(rulebook.rules), PLAN_CONTRACT)");
-    expect(analyze).toContain("selectPromptRules(\n      inForceRules,");
+  // #104: no learned rule reaches the prompt. Every rule in the book was
+  // written about indicators the analysis no longer reads, and the signal is
+  // the RSI/SAR rule's, so a rule could only change the prose. The book is
+  // still read for its version; nothing is parsed, rendered or compared.
+  it("shows the analyst no learned rules and says so on the row", () => {
+    expect(analyze).not.toContain("learnedRules");
+    expect(analyze).toContain("rulesShown = [];");
+    expect(analyze).toContain("const ruleFitRecord = null as RuleFitRecord | null;");
+    expect(analyze).not.toContain("selectPromptRules(");
+    expect(analyze).not.toContain("{{LEARNED_RULES}}");
   });
 
-  it("keeps shadow rows out of the evidence a rule's situation is measured from", () => {
-    // A shadow row is the plan the other contract would have produced. It is
-    // excluded from the statistics and from a rule's support; reading its
-    // snapshot here would let it back in through the situation check.
-    expect(analyze).toContain("&shadow=is.false&select=id,context");
-  });
-
-  it("refuses to measure a footprint it can only see part of", () => {
-    // Rules are learned across every account, so their citations point at
-    // plans the caller does not own. Under the caller's own JWT, RLS would
-    // answer with their slice and the range would look real while describing
-    // less evidence than the rule has.
-    expect(analyze).toContain("if (!serviceRoleKey) return null;");
+  it("no longer reads other readers' plans to measure a rule's footprint", () => {
+    // The footprint read went out under the service role across every
+    // account; with no rule shown there is nothing to measure it for, and a
+    // cross-account read with no purpose is one not to make.
+    expect(analyze).not.toContain("loadFootprints");
+    expect(analyze).not.toContain("&shadow=is.false&select=id,context");
   });
 
   it("prices from the wall clock, never from the forming bar's own stamp", () => {
