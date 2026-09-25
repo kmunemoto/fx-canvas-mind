@@ -235,7 +235,7 @@ export interface Bundle {
   stoch: { k: Series; d: Series };
   ichi: ReturnType<typeof ichimokuSeries>;
   psar: ReturnType<typeof psarSeries>;
-  dmi: { plus: Series; minus: Series };
+  dmi: { plus: Series; minus: Series; adx: Series };
   cci: Series;
   dc: { high: Series; low: Series };
   rci: Series;
@@ -253,7 +253,7 @@ export const bundleOf = (candles: Candle[]): Bundle => {
     stoch: stochSeries(candles),
     ichi: ichimokuSeries(candles),
     psar: psarSeries(candles),
-    dmi: { plus: dmi.map((d) => d.plusDI), minus: dmi.map((d) => d.minusDI) },
+    dmi: { plus: dmi.map((d) => d.plusDI), minus: dmi.map((d) => d.minusDI), adx: dmi.map((d) => d.adx) },
     cci: cciSeries(candles),
     dc: donchianSeries(candles),
     rci: rciSeries(close, 9),
