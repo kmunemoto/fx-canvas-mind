@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chandelierExit, sarExit, sarStops } from "../../research/exits";
+import { chandelierExit, sarExit, sarStops } from "../../research/exits-lib";
 import { psarSeries } from "../../research/indicator-series";
 import type { Candle } from "../../supabase/functions/analyze/indicators";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";

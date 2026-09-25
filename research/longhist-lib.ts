@@ -255,23 +255,27 @@ export const statsOf = (dates: string[], pnl: number[], from: string, to: string
   };
 };
 
-// Equal-weight portfolio of several pairs' daily results, aligned by date
+// Equal-weight portfolio of several pairs' daily results, aligned by date.
+// A leg whose result is not known that day (its carry was unknown) is left
+// out of that day's average rather than voiding the day for every pair; a
+// day is skipped only when no leg is known.
 export const portfolio = (legs: Array<{ dates: string[]; pnl: number[]; skip?: boolean[] }>): { dates: string[]; pnl: number[]; skip: boolean[] } => {
-  const sum = new Map<string, { s: number; k: number; bad: boolean }>();
+  const sum = new Map<string, { s: number; k: number }>();
   for (const leg of legs) {
     for (let t = 1; t < leg.dates.length; t++) {
-      const e = sum.get(leg.dates[t]) ?? { s: 0, k: 0, bad: false };
-      e.s += leg.pnl[t];
-      e.k++;
-      if (leg.skip?.[t]) e.bad = true;
+      const e = sum.get(leg.dates[t]) ?? { s: 0, k: 0 };
+      if (!leg.skip?.[t]) {
+        e.s += leg.pnl[t];
+        e.k++;
+      }
       sum.set(leg.dates[t], e);
     }
   }
   const dates = [...sum.keys()].sort();
   return {
     dates,
-    pnl: dates.map((d) => sum.get(d)!.s / sum.get(d)!.k),
-    skip: dates.map((d) => sum.get(d)!.bad),
+    pnl: dates.map((d) => (sum.get(d)!.k > 0 ? sum.get(d)!.s / sum.get(d)!.k : 0)),
+    skip: dates.map((d) => sum.get(d)!.k === 0),
   };
 };
 

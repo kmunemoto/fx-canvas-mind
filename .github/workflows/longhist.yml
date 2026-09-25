@@ -40,9 +40,17 @@ jobs:
           curl -sSfL --retry 4 -A "fx-canvas-mind-research/1.0" -o /tmp/ecb.zip https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.zip
           unzip -o -q /tmp/ecb.zip -d research/.cache/ecb
           head -c 300 research/.cache/ecb/eurofxref-hist.csv; echo
+          # FRED answered every HTTP/2 request from the runner with a stream
+          # error (first run, 2026-09-25), so HTTP/1.1, a browser-like client
+          # string, and the older download path as a second try
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
           for id in IR3TIB01USM156N IR3TIB01JPM156N IR3TIB01EZM156N IR3TIB01GBM156N IR3TIB01AUM156N IR3TIB01NZM156N IR3TIB01CAM156N IR3TIB01CHM156N; do
-            curl -sSfL --retry 4 -A "fx-canvas-mind-research/1.0" -o "research/.cache/fred/${id}.csv" "https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}" || echo "FRED ${id} failed"
-            echo "${id}: $(wc -l < "research/.cache/fred/${id}.csv" 2>/dev/null || echo 0) lines, last: $(tail -n 1 "research/.cache/fred/${id}.csv" 2>/dev/null || true)"
+            out="research/.cache/fred/${id}.csv"
+            curl -sSfL --http1.1 --retry 4 --retry-delay 3 -A "$UA" -o "$out" "https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}" \
+              || curl -sSfL --http1.1 --retry 4 --retry-delay 3 -A "$UA" -o "$out" "https://fred.stlouisfed.org/series/${id}/downloaddata/${id}.csv" \
+              || echo "FRED ${id} failed"
+            echo "${id}: $(wc -l < "$out" 2>/dev/null || echo 0) lines, first: $(sed -n 2p "$out" 2>/dev/null || true), last: $(tail -n 1 "$out" 2>/dev/null || true)"
+            sleep 1
           done
       - name: Run the study
         env:
