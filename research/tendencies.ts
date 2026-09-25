@@ -187,6 +187,13 @@ interface Sample {
   cluster: number;
   state: StateRow;
   label: Record<Side, Label>;
+  // UTC hour the plan would have been opened at (the entry bar's close)
+  hour: number;
+  // The spread paid at entry, as a share of the stop distance
+  spreadShare: number;
+  spreadPips: number;
+  // UTC hour of the bar that settled it, per side (null when unsettled)
+  resolvedHour: Record<Side, number | null>;
 }
 
 interface Tf {
@@ -198,6 +205,7 @@ interface Tf {
   sub: QuoteCandle[] | null;
   clusterMs: number;
   clusterOffset: number;
+  pip: number;
 }
 
 const samplesOf = (tf: Tf): Sample[] => {
@@ -214,16 +222,22 @@ const samplesOf = (tf: Tf): Sample[] => {
     const a = atr[t];
     if (a === null || a <= 0) continue;
     const decisionMs = barOpenMs(tf.entry[t].datetime) + tf.intervalMs;
+    const buy = labelAt(tf.entry, t, a, "BUY", SPEC, tf.intervalMs, sub);
+    const sell = labelAt(tf.entry, t, a, "SELL", SPEC, tf.intervalMs, sub);
+    const spread = tf.entry[t].ask.close - tf.entry[t].bid.close;
+    const hourOf = (l: Label) =>
+      l.bars === null || t + l.bars >= tf.entry.length ? null : new Date(barOpenMs(tf.entry[t + l.bars].datetime)).getUTCHours();
     out.push({
       t,
       decisionMs,
       period: decisionMs < SPLIT_MS ? "disc" : "val",
       cluster: Math.floor((decisionMs - tf.clusterOffset) / tf.clusterMs),
       state: states[t],
-      label: {
-        BUY: labelAt(tf.entry, t, a, "BUY", SPEC, tf.intervalMs, sub),
-        SELL: labelAt(tf.entry, t, a, "SELL", SPEC, tf.intervalMs, sub),
-      },
+      label: { BUY: buy, SELL: sell },
+      hour: new Date(decisionMs).getUTCHours(),
+      spreadShare: spread / (SPEC.stopAtr * a),
+      spreadPips: spread / tf.pip,
+      resolvedHour: { BUY: hourOf(buy), SELL: hourOf(sell) },
     });
   }
   return out;
@@ -264,11 +278,11 @@ interface CellResult {
 const ci = (r: ReturnType<typeof clusterRate>) =>
   r === null ? null : { n: r.n, p: r.p, lo: Math.max(0, r.p - 1.96 * r.se), hi: Math.min(1, r.p + 1.96 * r.se) };
 
-const analyseCells = (samples: Sample[], side: Side): CellResult[] => {
+const analyseCells = (samples: Sample[], side: Side, features: readonly Feature[] = FEATURES): CellResult[] => {
   const disc = samples.filter((s) => s.period === "disc");
   const val = samples.filter((s) => s.period === "val");
   const cells: CellResult[] = [];
-  for (const f of FEATURES) {
+  for (const f of features) {
     for (const level of LEVELS[f]) {
       const inD = disc.filter((s) => s.state[f] === level);
       const outD = disc.filter((s) => s.state[f] !== null && s.state[f] !== level);
@@ -356,6 +370,103 @@ const scoreOther = (model: ModelResult, samples: Sample[]) => {
   return { auc: auc(scores, y), top: clusterRate(top), bottom: clusterRate(bottom), base: clusterRate(val.map((s) => ({ cluster: s.cluster, win: s.label[model.side].outcome === "win" }))) };
 };
 
+// ---- timing: when not to open, and why ------------------------------------------
+
+// The windows the first run found: GMO widens its spread around the daily
+// roll (21:00-22:00 UTC, 06:00-07:00 JST), and a plan opened in the hours
+// before it is still open when the spread spikes.
+export const LATE_HOURS = (h: number) => h >= 17 && h <= 23;
+const expectancy = (p: number | null) => (p === null ? null : p * SPEC.rr - (1 - p));
+const median = (xs: number[]) => {
+  if (xs.length === 0) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  return a[Math.floor(a.length / 2)];
+};
+
+const timing = (pair: string, tfName: string, samples: Sample[]) => {
+  const out: Record<string, unknown> = {};
+  const hours: unknown[] = [];
+  const primary = pair === PRIMARY;
+  if (primary) log(`timing ${pair} ${tfName}: UTC hour of entry -> win rate (both periods), median spread at entry, share of losses settled 21-22 UTC`);
+  for (let h = 0; h < 24; h++) {
+    const at = samples.filter((s) => s.hour === h);
+    if (at.length === 0) continue;
+    const b = rate(at, "BUY");
+    const se = rate(at, "SELL");
+    const losses = at.flatMap((s) => (["BUY", "SELL"] as Side[]).filter((side) => s.label[side].outcome === "loss").map((side) => s.resolvedHour[side]));
+    const atRoll = losses.filter((x) => x === 21 || x === 22).length / Math.max(1, losses.length);
+    const sp = median(at.map((s) => s.spreadPips));
+    hours.push({ hour: h, n: at.length, buy: b?.p ?? null, sell: se?.p ?? null, spreadPips: sp, lossesAtRoll: atRoll });
+    if (primary) log(`  ${String(h).padStart(2, "0")}h n=${String(at.length).padStart(5)} BUY ${pct(b?.p)} SELL ${pct(se?.p)} spread ${sp?.toFixed(2)}p  losses@21-22 ${pct(atRoll, 0)}`);
+  }
+  out.hours = hours;
+  // the spread paid at entry, as a share of the stop
+  const edges = [0.05, 0.1, 0.2, 0.4];
+  const names = ["<5%", "5-10%", "10-20%", "20-40%", ">=40%"];
+  const shares = names.map((name, i) => {
+    const lo = i === 0 ? -Infinity : edges[i - 1];
+    const hi = i === edges.length ? Infinity : edges[i];
+    const inBin = samples.filter((s) => s.spreadShare >= lo && s.spreadShare < hi);
+    return { bin: name, n: inBin.length, buy: rate(inBin, "BUY")?.p ?? null, sell: rate(inBin, "SELL")?.p ?? null };
+  });
+  out.spreadShare = shares;
+  if (primary) log(`  spread/stop: ${shares.map((x) => `${x.bin} n=${x.n} BUY ${pct(x.buy)} SELL ${pct(x.sell)}`).join(" | ")}`);
+  // the candidate rules, judged on the SECOND period only
+  const rules: Array<{ name: string; drop: (s: Sample) => boolean }> = [
+    { name: "late(17-23UTC)", drop: (s) => LATE_HOURS(s.hour) },
+    { name: "late+quiet", drop: (s) => LATE_HOURS(s.hour) || s.state.vol === "quiet" },
+    { name: "spread>=20%", drop: (s) => s.spreadShare >= 0.2 },
+  ];
+  const val = samples.filter((s) => s.period === "val");
+  const judged = rules.map((r) => {
+    const kept = val.filter((s) => !r.drop(s));
+    const dropped = val.filter((s) => r.drop(s));
+    const row: Record<string, unknown> = { rule: r.name, keptShare: kept.length / Math.max(1, val.length) };
+    for (const side of ["BUY", "SELL"] as Side[]) {
+      const k = rate(kept, side);
+      const d = rate(dropped, side);
+      const all = rate(val, side);
+      row[side] = {
+        all: all?.p ?? null,
+        kept: k?.p ?? null,
+        keptLo: k ? k.p - 1.96 * k.se : null,
+        keptHi: k ? k.p + 1.96 * k.se : null,
+        dropped: d?.p ?? null,
+        eAll: expectancy(all?.p ?? null),
+        eKept: expectancy(k?.p ?? null),
+      };
+    }
+    return row;
+  });
+  out.rules = judged;
+  for (const r of judged) {
+    const b = r.BUY as Record<string, number | null>;
+    const se = r.SELL as Record<string, number | null>;
+    log(`  rule ${pair} ${tfName} ${String(r.rule).padEnd(15)} keep ${pct(r.keptShare as number, 0)} | BUY all ${pct(b.all)} -> kept ${pct(b.kept)} [${pct(b.keptLo)}-${pct(b.keptHi)}] dropped ${pct(b.dropped)} E ${b.eAll?.toFixed(2)}R -> ${b.eKept?.toFixed(2)}R | SELL all ${pct(se.all)} -> kept ${pct(se.kept)} [${pct(se.keptLo)}-${pct(se.keptHi)}] dropped ${pct(se.dropped)} E ${se.eAll?.toFixed(2)}R -> ${se.eKept?.toFixed(2)}R`);
+  }
+  return out;
+};
+
+// Once the costly hours are set aside, is there a DIRECTIONAL tendency left?
+// Only the features that could say which way price goes are tested here.
+const DIRECTIONAL: readonly Feature[] = FEATURES.filter((f) => !["session", "dow", "vol"].includes(f));
+const cleanDirection = (pair: string, tfName: string, samples: Sample[]) => {
+  const clean = samples.filter((s) => !LATE_HOURS(s.hour) && s.state.vol !== "quiet");
+  const out: Record<string, unknown> = { n: clean.length };
+  for (const side of ["BUY", "SELL"] as Side[]) {
+    const cells = analyseCells(clean, side, DIRECTIONAL);
+    const found = cells.filter((c) => c.pDiscHolm < 0.05).sort((a, b) => Math.abs(b.discLift ?? 0) - Math.abs(a.discLift ?? 0));
+    log(`clean ${pair} ${tfName} ${side}: ${clean.length} entries outside late hours and quiet volatility; ${cells.length} directional cells, ${found.length} significant first, ${found.filter((c) => c.validated).length} confirmed`);
+    for (const c of found) {
+      log(`  ${c.validated ? "OK " : "-- "}${side} ${c.feature}=${c.level}: disc ${pct(c.disc?.p)} n=${c.disc?.n} lift ${pct(c.discLift)} | val ${pct(c.val?.p)} n=${c.val?.n ?? 0} lift ${pct(c.valLift)} p=${c.pVal === null ? "n/a" : c.pVal.toExponential(1)}`);
+    }
+    const m = fitModel(clean, side);
+    log(`  clean model ${side}: AUC disc ${m.aucDisc?.toFixed(3)} val ${m.aucVal?.toFixed(3)}  val quintiles ${m.quintiles.map((q) => pct(q.p, 0)).join(" / ")}`);
+    out[side] = { cells: found, aucDisc: m.aucDisc, aucVal: m.aucVal, quintiles: m.quintiles };
+  }
+  return out;
+};
+
 // ---- main -------------------------------------------------------------------------
 
 const main = async () => {
@@ -370,14 +481,15 @@ const main = async () => {
     const { bars, requests, cached, failed } = await fetchPair(pair);
     log(`\n## ${pair}: ${bars.length} 15min bars ${bars[0]?.datetime ?? "-"} .. ${bars[bars.length - 1]?.datetime ?? "-"}  (requests ${requests}, cached ${cached}, failed ${failed}, ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     if (bars.length < 5000) continue;
+    const pip = pair.includes("JPY") ? 0.01 : 0.0001;
     const h1 = aggregate(bars, HOUR, 0, NOW);
     const h4 = aggregate(bars, 4 * HOUR, 0, NOW);
     const d1 = aggregate(bars, DAY, DAY_OFFSET, NOW);
     const w1 = aggregate(bars, WEEK, WEEK_OFFSET, NOW);
     const tfs: Tf[] = [
-      { name: "15min", intervalMs: 15 * MINUTE, entry: bars, h1: { candles: h1, intervalMs: HOUR }, h2: { candles: h4, intervalMs: 4 * HOUR }, sub: null, clusterMs: DAY, clusterOffset: DAY_OFFSET },
-      { name: "1h", intervalMs: HOUR, entry: h1, h1: { candles: h4, intervalMs: 4 * HOUR }, h2: { candles: d1, intervalMs: DAY }, sub: bars, clusterMs: DAY, clusterOffset: DAY_OFFSET },
-      { name: "4h", intervalMs: 4 * HOUR, entry: h4, h1: { candles: d1, intervalMs: DAY }, h2: { candles: w1, intervalMs: WEEK }, sub: bars, clusterMs: WEEK, clusterOffset: WEEK_OFFSET },
+      { name: "15min", intervalMs: 15 * MINUTE, entry: bars, h1: { candles: h1, intervalMs: HOUR }, h2: { candles: h4, intervalMs: 4 * HOUR }, sub: null, clusterMs: DAY, clusterOffset: DAY_OFFSET, pip },
+      { name: "1h", intervalMs: HOUR, entry: h1, h1: { candles: h4, intervalMs: 4 * HOUR }, h2: { candles: d1, intervalMs: DAY }, sub: bars, clusterMs: DAY, clusterOffset: DAY_OFFSET, pip },
+      { name: "4h", intervalMs: 4 * HOUR, entry: h4, h1: { candles: d1, intervalMs: DAY }, h2: { candles: w1, intervalMs: WEEK }, sub: bars, clusterMs: WEEK, clusterOffset: WEEK_OFFSET, pip },
     ];
     samplesByPairTf[pair] = {};
     const pairReport: Record<string, unknown> = {};
@@ -414,6 +526,8 @@ const main = async () => {
           tfReport[`model_${side}`] = { aucDisc: m.aucDisc, aucVal: m.aucVal, quintiles: m.quintiles, edges: m.edges };
         }
       }
+      if (tf.name !== "4h") tfReport.timing = timing(pair, tf.name, samples);
+      if (pair === PRIMARY && tf.name !== "4h") tfReport.clean = cleanDirection(pair, tf.name, samples);
       pairReport[tf.name] = tfReport;
     }
     (report.byPair as Record<string, unknown>)[pair] = pairReport;
