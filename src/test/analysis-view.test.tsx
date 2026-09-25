@@ -7,7 +7,17 @@ import AnalysisResultView from "../components/AnalysisResultView";
 import AnalysisHistory from "../components/AnalysisHistory";
 import LearnedRules from "../components/LearnedRules";
 import AnalysisStages from "../components/AnalysisStages";
-import type { AnalysisRecord, AnalysisResult, EntryCheck, OutcomeEvaluation, TechnicalData } from "../lib/types";
+import type {
+  AnalysisRecord,
+  AnalysisResult,
+  BounceStat,
+  ChartSignalMark,
+  ChartTrendLine,
+  EntryCheck,
+  OutcomeEvaluation,
+  TechnicalData,
+  TfChart,
+} from "../lib/types";
 import { CURRENT_CONTRACT } from "../lib/outcomeStats";
 import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
@@ -1198,5 +1208,129 @@ describe("the one-minute price staleness line", () => {
     vi.setSystemTime(new Date(Date.parse(pricedAt) + 53_000));
     render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1min" entryCheck={check} />, "en");
     expect(screen.getByTestId("price-staleness").textContent).toContain("about 53s before");
+  });
+});
+
+describe("#99 the bounce conditions, on the chart and in the panel", () => {
+  const hourly = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      datetime: new Date(Date.parse("2026-09-01T00:00:00Z") + i * 3_600_000).toISOString().slice(0, 19).replace("T", " "),
+      open: 150,
+      high: 150.4,
+      low: 149.6,
+      close: 150.1,
+    }));
+  const candles = hourly(60);
+  const mark = (i: number, side: "BUY" | "SELL", outcome: ChartSignalMark["outcome"], rule = "level_reject"): ChartSignalMark => ({
+    datetime: candles[i].datetime,
+    barsAgo: candles.length - 1 - i,
+    side,
+    rule,
+    level: 149.6,
+    entry: 150.1,
+    stop: 149.5,
+    target: 151.0,
+    stop_atr: 0.8,
+    outcome,
+    bars: outcome === "open" ? null : 3,
+    mfe_r: 1.2,
+  });
+  const line: ChartTrendLine = {
+    kind: "lows",
+    from: { datetime: candles[10].datetime, barsAgo: 49, price: 149.6 },
+    to: { datetime: candles[30].datetime, barsAgo: 29, price: 149.7 },
+    slope_per_bar: 0.005,
+    now: 149.845,
+  };
+  const stat = (rule: string, side: "BUY" | "SELL", wins: number, losses: number, extra: Partial<BounceStat> = {}): BounceStat => ({
+    rule,
+    side,
+    n: wins + losses,
+    wins,
+    losses,
+    ambiguous: 0,
+    expired: 0,
+    open: 0,
+    untradable: 0,
+    rate: wins + losses > 0 ? wins / (wins + losses) : null,
+    lo: wins + losses > 0 ? 0.354 : null,
+    hi: wins + losses > 0 ? 0.879 : null,
+    expectancy_r: 0.67,
+    avg_bars: 3,
+    ...extra,
+  });
+  const charts: TfChart[] = [
+    {
+      tf: "1h", ok: true, bars: 480, rr: 1.5, horizon: 48, candles,
+      marks: [mark(20, "BUY", "win")],
+      recent: [mark(58, "BUY", "open")],
+      lines: [line],
+      stats: [stat("level_reject", "BUY", 6, 3), stat("band_reentry", "SELL", 0, 0, { untradable: 2 })],
+    },
+    { tf: "4h", ok: true, bars: 400, rr: 1.5, horizon: 48, candles: hourly(40), marks: [], recent: [], lines: [], stats: [] },
+    { tf: "1day", ok: false, reason: "too_few_bars:30", bars: 30, candles: hourly(30), marks: [], recent: [], lines: [], stats: [] },
+  ];
+
+  it("draws a flag on the bar each condition fired on, and the line through the last two swings", () => {
+    render(
+      <PriceChart
+        candles={candles}
+        pair="USD/JPY"
+        marks={[mark(20, "BUY", "win"), mark(40, "SELL", "loss"), { ...mark(0, "BUY", "open"), datetime: "2020-01-01 00:00:00" }]}
+        lines={[line]}
+      />,
+    );
+    expect(screen.getByTestId("chart-signal-BUY-win")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-signal-SELL-loss")).toBeInTheDocument();
+    // a mark whose bar is not on this chart is not drawn anywhere
+    expect(screen.queryByTestId("chart-signal-BUY-open")).toBeNull();
+    expect(screen.getByTestId("chart-trend-lows")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("反発の条件");
+    const svg = document.querySelector("svg");
+    expect(svg?.textContent).toContain("BUY✓");
+    expect(svg?.textContent).toContain("SELL✗");
+    expect(svg?.textContent).toContain("安値線");
+  });
+
+  it("says nothing about signals when there are none", () => {
+    render(<PriceChart candles={candles} pair="USD/JPY" />);
+    expect(screen.queryByTestId("chart-signal-legend")).toBeNull();
+  });
+
+  it("lists the counts per timeframe with the interval, and marks the condition in force", () => {
+    render(<AnalysisResultView result={fullResult} techData={{ ...techData, charts }} pair="USD/JPY" interval="1h" />);
+    const panel = screen.getByTestId("bounce-conditions");
+    const row = screen.getByTestId("bounce-row-1h-level_reject-BUY");
+    expect(row.textContent).toContain("確定安値での反発");
+    expect(row.textContent).toContain("6勝3敗");
+    expect(row.textContent).toContain("67%（35–88）");
+    expect(screen.getByTestId("bounce-now").textContent).toBe("成立");
+    // a condition that fired but needed a stop too wide to price is still
+    // counted, and counted as that
+    expect(screen.getByTestId("bounce-row-1h-band_reentry-SELL").textContent).toContain("損切り幅超過2");
+    expect(screen.getByTestId("bounce-tf-4h").textContent).toContain("この窓で成立した条件はありません");
+    expect(screen.getByTestId("bounce-tf-1day").textContent).toContain("判定保留（too_few_bars:30）");
+    expect(panel.textContent).toContain("確定足480本");
+    expect(panel.textContent).toContain("損益分岐は的中率40%");
+  });
+
+  it("switches the chart between the rungs, and keeps the plan's levels on the entry rung only", () => {
+    render(<AnalysisResultView result={fullResult} techData={{ ...techData, charts }} pair="USD/JPY" interval="1h" />);
+    const tabs = screen.getByTestId("chart-tabs");
+    expect(tabs.textContent).toContain("1時間足");
+    expect(tabs.textContent).toContain("4時間足");
+    expect(screen.getByText(/ENTRY 150\.123/)).toBeInTheDocument();
+    expect(screen.getByTestId("chart-signal-BUY-win")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "4時間足" }));
+    expect(screen.queryByText(/ENTRY 150\.123/)).toBeNull();
+    expect(screen.queryByTestId("chart-signal-BUY-win")).toBeNull();
+    expect(screen.getByText("プライスチャート · 4時間足")).toBeInTheDocument();
+  });
+
+  it("falls back to the entry candles when an older payload carries no charts", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    expect(screen.queryByTestId("chart-tabs")).toBeNull();
+    expect(screen.queryByTestId("bounce-conditions")).toBeNull();
+    expect(screen.getByText(/ENTRY 150\.123/)).toBeInTheDocument();
   });
 });

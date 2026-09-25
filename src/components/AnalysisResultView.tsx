@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { AnalysisMode, AnalysisResult, EntryCheck, PlanHorizon, Position, PositionReview, RuleFit, Rulebook, TechnicalData } from "@/lib/types";
 import DirectionHero from "./DirectionHero";
 import PriceChart, { type ChartOverlay } from "./PriceChart";
+import BounceConditions from "./BounceConditions";
 import MarketContextCard from "./MarketContextCard";
 import RuleFitPanel from "./RuleFitPanel";
 import HeldPositionCard from "./HeldPositionCard";
@@ -186,7 +187,19 @@ const AnalysisResultView = ({
     return out;
   }, [techData, result.support_levels, result.resistance_levels]);
 
-  const candles = techData?.candles ?? [];
+  // #99: one chart per rung of the chain, when the server sent them. The
+  // entry rung's chart carries the plan's levels and the measured overlays;
+  // the higher rungs carry only their own candles, marks and trend lines —
+  // a 1h stop drawn on a 1day chart would be a line at nothing.
+  const charts = techData?.charts ?? [];
+  const [chartTf, setChartTf] = useState<string | null>(null);
+  const activeChart = charts.length > 0
+    ? charts.find((c) => c.tf === chartTf) ?? charts.find((c) => c.tf === interval) ?? charts[0]
+    : null;
+  const entryChart = activeChart === null || activeChart.tf === interval;
+  const candles = activeChart ? activeChart.candles : (techData?.candles ?? []);
+  const intervalLabels = t.control.intervals as Record<string, string>;
+  const tfLabel = (tf: string) => intervalLabels[tf] ?? t.chart.tf(tf);
   const visibleFactors = allFactors ? keyFactors : keyFactors.slice(0, PREVIEW_FACTORS);
   const r = t.result.ratings;
 
@@ -241,18 +254,46 @@ const AnalysisResultView = ({
       )}
 
       {candles.length > 0 && (
-        <PriceChart
-          candles={candles}
-          entry={result.entry_point}
-          stopLoss={result.stop_loss}
-          takeProfits={[result.take_profit_1, result.take_profit_2, result.take_profit_3]}
-          pair={pair}
-          overlays={overlays}
-          band={techData?.cloudBand
-            ? { top: techData.cloudBand.top, bottom: techData.cloudBand.bottom, label: "cloud" }
-            : null}
-        />
+        <div className="space-y-2">
+          {charts.length > 1 && (
+            <div className="flex items-center gap-1 px-1" role="tablist" aria-label={t.chart.tabsLabel} data-testid="chart-tabs">
+              {charts.map((c) => {
+                const selected = activeChart !== null && c.tf === activeChart.tf;
+                return (
+                  <button
+                    key={c.tf}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setChartTf(c.tf)}
+                    className={`px-2 py-0.5 rounded border text-[11px] ${
+                      selected ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    {tfLabel(c.tf)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <PriceChart
+            candles={candles}
+            entry={entryChart ? result.entry_point : undefined}
+            stopLoss={entryChart ? result.stop_loss : undefined}
+            takeProfits={entryChart ? [result.take_profit_1, result.take_profit_2, result.take_profit_3] : []}
+            pair={pair}
+            overlays={entryChart ? overlays : []}
+            band={entryChart && techData?.cloudBand
+              ? { top: techData.cloudBand.top, bottom: techData.cloudBand.bottom, label: "cloud" }
+              : null}
+            marks={activeChart?.marks ?? []}
+            lines={activeChart?.lines ?? []}
+            heading={activeChart && !entryChart ? `${t.chart.title} · ${tfLabel(activeChart.tf)}` : undefined}
+          />
+        </div>
       )}
+
+      {charts.length > 0 && <BounceConditions charts={charts} />}
 
       {/* Trade plan — a WAIT has no levels, and a card of dashes is not a plan */}
       {hasPlan && (

@@ -202,6 +202,47 @@ export const ja = {
     citedMark: "(AI)",
     legend: "破線=サーバ計算の水準 / 点線=AIが挙げた水準 / 帯=現在価格の雲",
     hiddenLevels: (n: number) => `表示範囲の外に ${n}件`,
+    // #99: the bounce marks and the trend lines
+    signalLegend: "▲▼=反発の条件が成立した足（濃い=勝ち・薄い=負け・白抜き=判定中/不能）短い線=その損切りと利確 / 斜線=直近2スイングを結んだ線",
+    trend: { lows: "安値線", highs: "高値線" },
+    // The label on the flag: the side, then how it came out
+    outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
+    tabsLabel: "時間足",
+    // A timeframe the control bar does not offer (the higher rungs of a chain)
+    tf: (tf: string) => tf,
+  },
+
+  // #99: the conditions price bounced on, counted by the server per timeframe
+  bounce: {
+    title: "反発の条件（この窓での実績）",
+    columns: { condition: "条件", record: "勝敗", rate: "的中率（95%CI）", now: "今" },
+    // A condition in force on the newest closed bars
+    now: "成立",
+    none: "この窓で成立した条件はありません",
+    pending: (reason: string) => `判定保留（${reason}）`,
+    record: (wins: number, losses: number) => `${wins}勝${losses}敗`,
+    rate: (pct: number, lo: number, hi: number) => `${pct}%（${lo}–${hi}）`,
+    noRate: "—",
+    extra: {
+      ambiguous: (n: number) => `判定不能${n}`,
+      expired: (n: number) => `期限切れ${n}`,
+      open: (n: number) => `判定中${n}`,
+      untradable: (n: number) => `損切り幅超過${n}`,
+    },
+    // How the counts were made, said once under the table
+    method: (bars: number, rr: number, horizon: number) =>
+      `確定足${bars}本・仲値（スプレッド抜き）。損切りは反発の極値の少し先（ATR×0.6〜1.2 に収まるもののみ）、利確は損切り幅×${rr}、${horizon}本以内に判定。`,
+    breakeven: (pct: number) => `損益分岐は的中率${pct}%。n が小さい条件は偶然と区別できません。この窓の外の実績は不明です。`,
+    rules: {
+      level_reject: { BUY: "確定安値での反発", SELL: "確定高値での反落" },
+      ma200_reject: { BUY: "SMA200での反発", SELL: "SMA200での反落" },
+      ma20_pullback: { BUY: "上向きSMA20への押し目", SELL: "下向きSMA20への戻り" },
+      band_reentry: { BUY: "BB下限の外から復帰", SELL: "BB上限の外から復帰" },
+      cloud_reject: { BUY: "雲の上限での反発", SELL: "雲の下限での反落" },
+      divergence: { BUY: "強気ダイバージェンス確定", SELL: "弱気ダイバージェンス確定" },
+      double_pivot: { BUY: "ダブルボトム確定", SELL: "ダブルトップ確定" },
+      engulfing: { BUY: "水準での陽の包み足", SELL: "水準での陰の包み足" },
+    },
   },
 
   technical: {

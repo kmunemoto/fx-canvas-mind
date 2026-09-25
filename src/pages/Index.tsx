@@ -35,10 +35,13 @@ import type {
   AnalysisMode,
   AnalysisResult,
   AppSettings,
+  ChartSignalMark,
+  ChartTrendLine,
   EntryCheck,
   LoadingStage,
   NumericCandle,
   TechnicalData,
+  TfChart,
   TimeInterval,
   LoopHealth as LoopHealthData,
   AnalysisReuse,
@@ -59,7 +62,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v64-2026-09-24T15:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v65-2026-09-25T05:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -169,6 +172,95 @@ const normalizeCandles = (value: unknown): NumericCandle[] => {
   return out;
 };
 
+// #99: the per-timeframe charts. Every number is checked rather than cast:
+// a mark with a non-numeric stop would otherwise draw a line at NaN.
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const isSide = (v: unknown): v is "BUY" | "SELL" => v === "BUY" || v === "SELL";
+const OUTCOMES = new Set(["win", "loss", "ambiguous", "expired", "open"]);
+const normalizeMark = (value: unknown): ChartSignalMark | null => {
+  if (!value || typeof value !== "object") return null;
+  const m = value as Record<string, unknown>;
+  if (typeof m.datetime !== "string" || !isSide(m.side) || typeof m.rule !== "string") return null;
+  if (typeof m.outcome !== "string" || !OUTCOMES.has(m.outcome)) return null;
+  return {
+    datetime: m.datetime,
+    barsAgo: numOrNull(m.barsAgo) ?? 0,
+    side: m.side,
+    rule: m.rule,
+    level: numOrNull(m.level),
+    entry: numOrNull(m.entry),
+    stop: numOrNull(m.stop),
+    target: numOrNull(m.target),
+    stop_atr: numOrNull(m.stop_atr),
+    outcome: m.outcome as ChartSignalMark["outcome"],
+    bars: numOrNull(m.bars),
+    mfe_r: numOrNull(m.mfe_r),
+  };
+};
+const normalizeTrendPoint = (value: unknown): ChartTrendLine["from"] | null => {
+  if (!value || typeof value !== "object") return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.datetime !== "string") return null;
+  return { datetime: p.datetime, barsAgo: numOrNull(p.barsAgo) ?? 0, price: numOrNull(p.price) };
+};
+const normalizeCharts = (value: unknown): TfChart[] => {
+  if (!Array.isArray(value)) return [];
+  const out: TfChart[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const c = item as Record<string, unknown>;
+    if (typeof c.tf !== "string") continue;
+    const candles = normalizeCandles(c.candles);
+    if (candles.length === 0) continue;
+    out.push({
+      tf: c.tf,
+      ok: c.ok === true,
+      reason: typeof c.reason === "string" ? c.reason : null,
+      bars: numOrNull(c.bars) ?? candles.length,
+      rr: numOrNull(c.rr) ?? undefined,
+      horizon: numOrNull(c.horizon) ?? undefined,
+      candles,
+      marks: Array.isArray(c.marks) ? c.marks.map(normalizeMark).filter((m): m is ChartSignalMark => m !== null) : [],
+      recent: Array.isArray(c.recent) ? c.recent.map(normalizeMark).filter((m): m is ChartSignalMark => m !== null) : [],
+      stats: Array.isArray(c.stats)
+        ? c.stats.flatMap((st) => {
+          if (!st || typeof st !== "object") return [];
+          const s = st as Record<string, unknown>;
+          if (typeof s.rule !== "string" || !isSide(s.side)) return [];
+          const count = (k: string) => numOrNull(s[k]) ?? 0;
+          return [{
+            rule: s.rule,
+            side: s.side,
+            n: count("n"),
+            wins: count("wins"),
+            losses: count("losses"),
+            ambiguous: count("ambiguous"),
+            expired: count("expired"),
+            open: count("open"),
+            untradable: count("untradable"),
+            rate: numOrNull(s.rate),
+            lo: numOrNull(s.lo),
+            hi: numOrNull(s.hi),
+            expectancy_r: numOrNull(s.expectancy_r),
+            avg_bars: numOrNull(s.avg_bars),
+          }];
+        })
+        : [],
+      lines: Array.isArray(c.lines)
+        ? c.lines.flatMap((ln) => {
+          if (!ln || typeof ln !== "object") return [];
+          const l = ln as Record<string, unknown>;
+          const from = normalizeTrendPoint(l.from);
+          const to = normalizeTrendPoint(l.to);
+          if ((l.kind !== "lows" && l.kind !== "highs") || from === null || to === null) return [];
+          return [{ kind: l.kind, from, to, slope_per_bar: numOrNull(l.slope_per_bar), now: numOrNull(l.now) }];
+        })
+        : [],
+    });
+  }
+  return out;
+};
+
 const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
   if (!value || typeof value !== "object") return null;
 
@@ -221,6 +313,7 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     slowD: readString("slowD"),
     adx: readString("adx"),
     candles: normalizeCandles(source.candles),
+    charts: normalizeCharts(source.charts),
   };
 };
 
