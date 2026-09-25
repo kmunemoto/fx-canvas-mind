@@ -213,12 +213,14 @@ export const checkPair = async (
   nowMs: number,
   deadlineMs: number,
   fetcher: Fetcher,
-): Promise<{ read: RsiSarRead | null; signals: FiredSignal[]; bars: number }> => {
+): Promise<{ read: RsiSarRead | null; signals: FiredSignal[]; bars: number; quotes: QuoteCandle[] }> => {
   const quotes = await fetchAlertQuotes(pair, interval, nowMs, deadlineMs, fetcher);
-  if (!quotes) return { read: null, signals: [], bars: 0 };
+  if (!quotes) return { read: null, signals: [], bars: 0, quotes: [] };
   const closed = closedMidBars(quotes, interval, nowMs);
   const read = readRsiSar(closed);
-  return { read, signals: freshSignals(pair, interval, read, nowMs), bars: closed.length };
+  // the bid/ask bars too: #108 prices each signal's fill and settles the
+  // open ones from them, without asking the feed again
+  return { read, signals: freshSignals(pair, interval, read, nowMs), bars: closed.length, quotes };
 };
 
 // ---- the email --------------------------------------------------------------------

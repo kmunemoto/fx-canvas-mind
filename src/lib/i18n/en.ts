@@ -1325,6 +1325,31 @@ export const en: Dict = {
     skipReasons: { costly_hours: "Not emailed (costly hours)" } as Record<string, string>,
     sides: { BUY: "Buy", SELL: "Sell" } as Record<string, string>,
     plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
+    // #108: the live record of what each signal did afterwards
+    record: {
+      title: "How the alerts did (recorded from the prices that followed)",
+      mine: "Alerts sent to you",
+      all: "Every signal on the 7 pairs (in the hours alerts are sent)",
+      none: "No signal has settled yet",
+      line: (n: number, w: number, l: number, e: number) => `${n}: ${w} won, ${l} lost, ${e} expired`,
+      stats: (win: string, mean: string) => `Win rate ${win} / average ${mean} a trade`,
+      ci: (half: string) => ` (±${half})`,
+      open: (n: number) => `${n} still open`,
+      backtest: (period: string, win: string, mean: string, be: string) =>
+        `What past charts suggested (${period}): win rate ${win}, average ${mean}. Breaking even takes ${be}.`,
+      rNote: "R is the result in units of the stop distance: +1.5R is a win of 1.5 times the stop, −1R a loss of the stop.",
+      small: "Below 30 signals chance dominates: read nothing into the numbers yet, good or bad.",
+      method:
+        "Each signal is entered at its bar's close (the ask for a buy, the bid for a sell) and settled by whichever of the emailed stop and target is reached first. After 48 bars it is closed at the market; a bar that reaches both counts as a loss.",
+    },
+    outcome: {
+      win: "Won",
+      loss: "Lost",
+      ambiguous: "Lost (both in one bar)",
+      expired: "Expired",
+      no_data: "No data",
+    } as Record<string, string>,
+    pendingResult: "Open",
   },
 
   legal: {

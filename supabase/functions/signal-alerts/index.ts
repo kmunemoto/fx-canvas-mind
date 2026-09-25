@@ -14,6 +14,11 @@
 // Mail goes out through Resend when RESEND_API_KEY is set. Until it is, every
 // signal is still detected and logged — status "not_configured" — and the
 // app says that no email can be sent yet, rather than pretending it was.
+//
+// #108: the sweep also reads every one of the app's seven pairs on every
+// alert timeframe, followed or not, records each signal once in
+// signal_events and settles the open ones against the bars that came after
+// (record.ts). The app shows that record beside the alerts.
 
 import {
   ALERT_INTERVALS,
@@ -32,10 +37,11 @@ import {
   type FiredSignal,
   type Lang,
 } from "./logic.ts";
-import type { Fetcher } from "../track-outcomes/quotes.ts";
+import type { Fetcher, QuoteCandle } from "../track-outcomes/quotes.ts";
+import { BACKTEST, fillAt, settleEvent, summarize, type EventRow, type OpenEvent } from "./record.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v2-2026-09-25T14:30:00Z";
+const FUNCTION_VERSION = "signal-alerts-v3-2026-09-25T16:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -43,6 +49,8 @@ const FETCH_BUDGET_MS = 90_000;
 // One test email per user per this long
 const TEST_COOLDOWN_MS = 5 * MIN;
 const RECENT_ALERTS = 20;
+// How far back the record shown in the app reaches
+const RECORD_DAYS = 365;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -137,6 +145,23 @@ Deno.serve(async (req: Request) => {
       const body = res.ok ? await res.json().catch(() => null) : null;
       return isRecord(body) && typeof body.email === "string" && body.email.length > 0 ? body.email : null;
     };
+    // One row per signal, whoever follows the chart. The unique key makes a
+    // second sweep that sees the same bar a no-op; either way the id comes back.
+    const eventId = async (row: JsonRecord): Promise<string | null> => {
+      const res = await rest("signal_events?on_conflict=pair,interval,bar_time,side", {
+        method: "POST",
+        headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
+        body: JSON.stringify(row),
+      });
+      const rows = res.ok ? await res.json().catch(() => null) : null;
+      if (!res.ok) console.error("event insert failed:", res.status, await res.text().catch(() => ""));
+      if (Array.isArray(rows) && rows.length > 0 && isRecord(rows[0]) && typeof rows[0].id === "string") return rows[0].id;
+      const found = await readRows(
+        `signal_events?pair=eq.${encodeURIComponent(String(row.pair))}&interval=eq.${encodeURIComponent(String(row.interval))}` +
+          `&bar_time=eq.${encodeURIComponent(String(row.bar_time))}&side=eq.${encodeURIComponent(String(row.side))}&select=id`,
+      );
+      return found.length > 0 && typeof found[0].id === "string" ? found[0].id : null;
+    };
     const planOf = async (userId: string): Promise<string | null> => {
       const rows = await readRows(`profiles?id=eq.${encodeURIComponent(userId)}&select=plan`);
       return rows.length > 0 && typeof rows[0].plan === "string" ? rows[0].plan : null;
@@ -183,17 +208,31 @@ Deno.serve(async (req: Request) => {
           typeof r.user_id === "string" && isAlertPair(r.pair) && isAlertInterval(r.interval) && typeof r.lang === "string"
         );
       summary.subscriptions = subs.length;
-      if (subs.length === 0) return json(summary);
 
-      const combos = [...new Set(subs.map((s) => `${s.pair}|${s.interval}`))]
-        .map((k) => ({ pair: k.split("|")[0], interval: k.split("|")[1] }))
+      // Every chart the app covers, followed or not (#108): the record needs
+      // the rule's signals, not only the ones somebody asked to be told about
+      const charts = ALERT_PAIRS.flatMap((pair) => ALERT_INTERVALS.map((interval) => ({ pair, interval })))
         .filter((c) => mayHaveFreshClose(c.interval, nowMs));
+      const openEvents = (await readRows("signal_events?outcome=is.null&select=id,pair,interval,bar_time,side,entry,stop,target,fill"))
+        .filter((r) => typeof r.id === "string" && typeof r.bar_time === "string" && (r.side === "BUY" || r.side === "SELL"))
+        .map((r) => ({
+          id: r.id as string,
+          pair: String(r.pair),
+          interval: String(r.interval),
+          bar_time: r.bar_time as string,
+          side: r.side as "BUY" | "SELL",
+          entry: Number(r.entry),
+          stop: Number(r.stop),
+          target: Number(r.target),
+          fill: typeof r.fill === "number" ? r.fill : null,
+        } satisfies OpenEvent));
       const deadline = Date.now() + FETCH_BUDGET_MS;
       const reads: JsonRecord[] = [];
-      const fired: FiredSignal[] = [];
+      const fired: Array<FiredSignal & { eventId: string | null }> = [];
+      let recorded = 0;
+      let settled = 0;
       // One chart at a time: two requests in flight is gentle on a public feed
-      // and a sweep is a few dozen requests at most
-      for (const c of combos) {
+      for (const c of charts) {
         if (Date.now() > deadline) {
           reads.push({ pair: c.pair, interval: c.interval, skipped: "deadline" });
           continue;
@@ -209,11 +248,48 @@ Deno.serve(async (req: Request) => {
           signal: r.read?.now?.signal ?? null,
           fresh: r.signals.length,
         });
-        fired.push(...r.signals);
+        const quotes: QuoteCandle[] = r.quotes;
+        for (const sig of r.signals) {
+          const f = fillAt(quotes, sig.barTime, sig.side);
+          const id = await eventId({
+            pair: sig.pair,
+            interval: sig.interval,
+            bar_time: sig.barTime,
+            closed_at: sig.closedAt,
+            side: sig.side,
+            rule: RULE_ID,
+            entry: sig.entry,
+            stop: sig.stop,
+            target: sig.target,
+            atr: sig.atr,
+            rsi: sig.rsi,
+            rsi_prev: sig.rsiPrev,
+            sar: sig.sar,
+            fill: f?.fill ?? null,
+            spread: f?.spread ?? null,
+            costly: sig.costly,
+          });
+          if (id) recorded++;
+          fired.push({ ...sig, eventId: id });
+        }
+        // Settle what this chart's bars can settle
+        for (const ev of openEvents.filter((e) => e.pair === c.pair && e.interval === c.interval)) {
+          const done = settleEvent(ev, quotes, nowMs);
+          if (!done) continue;
+          const res = await rest(`signal_events?id=eq.${encodeURIComponent(ev.id)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ ...done, settled_at: new Date().toISOString() }),
+          });
+          if (res.ok) settled++;
+          else console.error("settle failed:", res.status, await res.text().catch(() => ""));
+        }
       }
       summary.reads = reads;
       summary.signals = fired.length;
-      if (fired.length === 0) return json(summary);
+      summary.recorded = recorded;
+      summary.settled = settled;
+      summary.open = openEvents.length - settled;
+      if (fired.length === 0 || subs.length === 0) return json(summary);
 
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, skipped: 0, duplicate: 0, not_allowed: 0 };
       const access = new Map<string, { allowed: boolean; email: string | null }>();
@@ -246,6 +322,7 @@ Deno.serve(async (req: Request) => {
             sar: sig.sar,
             atr: sig.atr,
             rule: RULE_ID,
+            event_id: sig.eventId,
             status: sig.costly ? "skipped" : "pending",
             skip_reason: sig.costly ? "costly_hours" : null,
           });
@@ -286,9 +363,30 @@ Deno.serve(async (req: Request) => {
       const [subs, alerts] = await Promise.all([
         readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,lang&order=created_at.asc`),
         readRows(
-          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,status,skip_reason,error,created_at,sent_at&order=created_at.desc&limit=${RECENT_ALERTS}`,
+          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,status,skip_reason,error,created_at,sent_at,event:signal_events(outcome,r,bars,exit_at)&order=created_at.desc&limit=${RECENT_ALERTS}`,
         ),
       ]);
+      // #108: the live record. "all" is every signal the rule fired outside
+      // the hours it is not mailed in; "mine" is the alerts this user was
+      // actually sent.
+      const since = encodeURIComponent(new Date(nowMs - RECORD_DAYS * 24 * 60 * MIN).toISOString());
+      const [events, mine] = await Promise.all([
+        readRows(`signal_events?closed_at=gte.${since}&select=interval,costly,outcome,r&limit=20000`),
+        readRows(`signal_alerts?user_id=eq.${uid}&kind=eq.signal&status=eq.sent&created_at=gte.${since}&select=event:signal_events(outcome,r)&limit=20000`),
+      ]);
+      const row = (x: JsonRecord): EventRow => ({
+        outcome: typeof x.outcome === "string" ? x.outcome : null,
+        r: typeof x.r === "number" ? x.r : null,
+      });
+      const mailed = events.filter((e) => e.costly !== true);
+      const performance = {
+        days: RECORD_DAYS,
+        mine: summarize(mine.map((m) => (isRecord(m.event) ? row(m.event) : { outcome: null, r: null }))),
+        all: summarize(mailed.map(row)),
+        costly: summarize(events.filter((e) => e.costly === true).map(row)),
+        byTf: Object.fromEntries(ALERT_INTERVALS.map((iv) => [iv, summarize(mailed.filter((e) => e.interval === iv).map(row))])),
+        backtest: BACKTEST,
+      };
       return {
         ok: true,
         version: FUNCTION_VERSION,
@@ -298,6 +396,7 @@ Deno.serve(async (req: Request) => {
         pairs: ALERT_PAIRS,
         intervals: ALERT_INTERVALS,
         subscriptions: subs.map((s) => ({ pair: s.pair, interval: s.interval })),
+        performance,
         alerts,
       };
     };

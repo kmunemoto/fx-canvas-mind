@@ -129,6 +129,42 @@ describe("the email-alert card", () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("One test email every 5 minutes"));
   });
 
+  it("shows what the alerts did afterwards, and says when there are too few to read anything into", async () => {
+    const perf = {
+      days: 365,
+      mine: { n: 3, wins: 1, losses: 2, expired: 0, open: 1, winRate: 1 / 3, meanR: -0.18, ciR: null, sumR: -0.54 },
+      all: { n: 12, wins: 4, losses: 7, expired: 1, open: 3, winRate: 4 / 12, meanR: -0.11, ciR: 0.62, sumR: -1.32 },
+      costly: { n: 2, wins: 0, losses: 2, expired: 0, open: 0, winRate: 0, meanR: -1, ciR: null, sumR: -2 },
+      byTf: {},
+      backtest: { period: "2025-07〜2026-09", n: 1255, winRate: 0.35, meanR: -0.125, breakeven: 0.4 },
+    };
+    const alerts = [
+      { ...payload().alerts[0], status: "sent", event: { outcome: "win", r: 1.4875, bars: 2, exit_at: null } },
+      { ...payload().alerts[1], id: "a3", status: "sent", skip_reason: null, event: { outcome: null, r: null, bars: null, exit_at: null } },
+    ];
+    render(<SignalAlertSettings call={async () => normalizeAlertSettings(payload({ performance: perf, alerts }))!} />);
+    const record = await screen.findByTestId("signal-alerts-record");
+    expect(record.textContent).toContain("あなたに届いた通知");
+    expect(screen.getByTestId("signal-alerts-record-mine").textContent).toContain("3回：勝ち1・負け2・期限切れ0");
+    expect(screen.getByTestId("signal-alerts-record-mine").textContent).toContain("決着待ち 1回");
+    const all = screen.getByTestId("signal-alerts-record-all").textContent!;
+    expect(all).toContain("勝率 33%");
+    expect(all).toContain("−0.11R");
+    expect(all).toContain("±0.62R");
+    expect(record.textContent).toContain("勝率 35%・平均 −0.13R");
+    expect(screen.getByTestId("signal-alerts-record-small")).toBeTruthy();
+    const results = screen.getAllByTestId("signal-alert-result").map((e) => e.textContent);
+    expect(results).toEqual(["勝ち +1.49R", "決着待ち"]);
+  });
+
+  it("the warning about small numbers goes once thirty signals have settled", async () => {
+    const big = { n: 40, wins: 14, losses: 24, expired: 2, open: 0, winRate: 0.35, meanR: -0.1, ciR: 0.4, sumR: -4 };
+    const perf = { days: 365, mine: big, all: big, costly: big, byTf: {}, backtest: null };
+    render(<SignalAlertSettings call={async () => normalizeAlertSettings(payload({ performance: perf }))!} />);
+    await screen.findByTestId("signal-alerts-record");
+    expect(screen.queryByTestId("signal-alerts-record-small")).toBeNull();
+  });
+
   it("a load that fails says so instead of spinning", async () => {
     render(<SignalAlertSettings call={async () => { throw new Error("down"); }} />);
     expect(await screen.findByTestId("signal-alerts-error")).toBeTruthy();
