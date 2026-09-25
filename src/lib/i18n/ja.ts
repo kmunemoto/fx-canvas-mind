@@ -1370,6 +1370,46 @@ export const ja = {
     sentBody: "お問い合わせを受け付けました。3営業日以内にご返信いたします。",
   },
 
+  // #105: email alerts for the RSI + Parabolic SAR signal
+  alerts: {
+    title: "メール通知（売買サイン）",
+    intro: (email: string) =>
+      `チェックしたチャートで RSI＋パラボリックSAR の買い（BUY）・売り（SELL）のサインが出たら、${email} にメールでお知らせします。足が確定してから数分で届きます。`,
+    introNoEmail:
+      "チェックしたチャートで RSI＋パラボリックSAR の買い（BUY）・売り（SELL）のサインが出たら、ログイン中のメールアドレスにお知らせします。",
+    proOnly: "メール通知は Pro プランの機能です。",
+    notConfigured: "メールの送信設定がまだ済んでいません。サインは下の履歴に記録されますが、今はメールが届きません。",
+    loading: "読み込み中…",
+    loadFailed: "通知の設定を読み込めませんでした",
+    saveFailed: "保存できませんでした",
+    pairHeader: "通貨ペア",
+    intervals: { "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    notes: [
+      "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインは、過去の検証で損失が大きかったためメールしません（履歴には残ります）。",
+      "日足は過去の検証をしていません。",
+      "価格は GMOコインの公開レートで判定します。アプリの分析と数値が少しずれることがあります。",
+      "このルールの過去の勝率は、損益ゼロに必要な水準（40%）に届いていません。通知は注文の指示ではありません。",
+    ],
+    test: "テストメールを送る",
+    testSent: "テストメールを送りました",
+    testNotConfigured: "送信設定がまだのため、テストメールは送られませんでした",
+    testFailed: "テストメールを送れませんでした",
+    testCooldown: "テストメールは5分に1回までです",
+    recentTitle: "最近の通知",
+    none: "まだ通知はありません",
+    testRow: "テストメール",
+    status: {
+      pending: "送信中",
+      sent: "送信済み",
+      failed: "送信失敗",
+      not_configured: "未送信（送信設定なし）",
+      skipped: "メールなし",
+    } as Record<string, string>,
+    skipReasons: { costly_hours: "メールなし（損失の大きい時間帯）" } as Record<string, string>,
+    sides: { BUY: "買い", SELL: "売り" } as Record<string, string>,
+    plan: (entry: string, stop: string, target: string) => `目安 ${entry} / 損切り ${stop} / 利確 ${target}`,
+  },
+
   // Terms / Privacy / 特定商取引法 are Japanese legal documents. A machine
   // translation presented as the operative text would be a liability, so the
   // Japanese stands and non-Japanese readers get told why.

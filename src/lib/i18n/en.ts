@@ -1288,6 +1288,45 @@ export const en: Dict = {
     sentBody: "We have received your message and will reply within three business days.",
   },
 
+  // #105: email alerts for the RSI + Parabolic SAR signal
+  alerts: {
+    title: "Email alerts (buy/sell signals)",
+    intro: (email: string) =>
+      `When the RSI + Parabolic SAR rule fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
+    introNoEmail: "When the RSI + Parabolic SAR rule fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
+    proOnly: "Email alerts are a Pro plan feature.",
+    notConfigured: "Email sending is not set up yet. Signals are logged below, but no email can be delivered for now.",
+    loading: "Loading…",
+    loadFailed: "Could not load your alert settings",
+    saveFailed: "Could not save",
+    pairHeader: "Pair",
+    intervals: { "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
+    notes: [
+      "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed: past charts lost most in those hours (they stay in the log).",
+      "The daily chart was not part of the test on past charts.",
+      "Prices are GMO Coin's public rates, so numbers can differ slightly from the app's analysis.",
+      "On past charts this rule has not reached the win rate needed to break even (40%). An alert is not an instruction to trade.",
+    ],
+    test: "Send a test email",
+    testSent: "Test email sent",
+    testNotConfigured: "Email sending is not set up yet, so no test email was sent",
+    testFailed: "Could not send the test email",
+    testCooldown: "One test email every 5 minutes",
+    recentTitle: "Recent alerts",
+    none: "No alerts yet",
+    testRow: "Test email",
+    status: {
+      pending: "Sending",
+      sent: "Sent",
+      failed: "Failed",
+      not_configured: "Not sent (email not set up)",
+      skipped: "Not emailed",
+    } as Record<string, string>,
+    skipReasons: { costly_hours: "Not emailed (costly hours)" } as Record<string, string>,
+    sides: { BUY: "Buy", SELL: "Sell" } as Record<string, string>,
+    plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
+  },
+
   legal: {
     japaneseAuthoritative:
       "This page is a Japanese legal document and is provided in Japanese only. The Japanese text is the authoritative version.",
