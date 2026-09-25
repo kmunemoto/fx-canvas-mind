@@ -13,6 +13,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, Compass, FileText, ListChecks, S
 import { useT } from "@/lib/i18n";
 import { isInference } from "@/lib/inference";
 import { toPips } from "@/lib/candleTime";
+import { formatLoss, lossPer10k } from "@/lib/costs";
 import { visibleWarnings, waitReasonOf } from "@/lib/warnings";
 import { hasMarketContext } from "@/lib/marketContext";
 import { registrationFor } from "@/lib/positions";
@@ -134,6 +135,15 @@ const AnalysisResultView = ({
     return t.result.distance(Math.round(toPips(pair, diff)), atrMultiple);
   };
   const stopDistance = hasPlan ? distance(result.stop_loss) : null;
+  // #111: the loss per 10,000 units at the stop, in the pair's quote currency
+  const stopLoss10k = (() => {
+    if (!hasPlan) return null;
+    const entry = num(result.entry_point);
+    const stop = num(result.stop_loss);
+    if (entry === null || stop === null) return null;
+    const x = lossPer10k(pair, entry, stop);
+    return x ? t.result.lossPer10k(formatLoss(x)) : null;
+  })();
   const tp1Distance = hasPlan ? distance(result.take_profit_1) : null;
   const horizon = horizonLines(planHorizon, t, t.intlLocale);
   // #98, one-minute plans only. The entry is the price at the moment the
@@ -306,6 +316,9 @@ const AnalysisResultView = ({
               <p className="text-destructive font-semibold">{result.stop_loss}</p>
               {stopDistance && (
                 <p className="text-[10px] text-muted-foreground" data-testid="stop-distance">{stopDistance}</p>
+              )}
+              {stopLoss10k && (
+                <p className="text-[10px] text-muted-foreground" data-testid="stop-loss-10k">{stopLoss10k}</p>
               )}
             </div>
             <div>

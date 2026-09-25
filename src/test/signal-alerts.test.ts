@@ -276,7 +276,8 @@ describe("the email", () => {
     expect(m.text).toContain("2026-09-24 19:00（日本時間）に確定した足");
     expect(m.text).toContain("RSI(14): 28.9 → 31.4");
     expect(m.text).toContain("エントリー ≈ 149.500");
-    expect(m.text).toContain("損切り 149.420（8.0pips）");
+    // #111: 0.08 yen a unit is 800 yen per 10,000
+    expect(m.text).toContain("損切り 149.420（8.0pips・1万通貨で ¥800 の損失）");
     expect(m.text).toContain("利確 149.620（12.0pips）");
     expect(m.text).toContain("勝率は 35%（885回）");
     expect(m.text).toContain("損益ゼロに必要な勝率は 40%");
@@ -294,7 +295,7 @@ describe("the email", () => {
     const m = renderSignalMail(sample({ pair: "EUR/USD", side: "SELL", entry: 1.1, stop: 1.1008, target: 1.0988, sar: 1.1012 }), "en");
     expect(m.subject).toBe("[Sextant] EUR/USD 15-minute SELL signal (RSI + Parabolic SAR)");
     expect(m.text).toContain("Entry ≈ 1.10000");
-    expect(m.text).toContain("Stop 1.10080 (8.0 pips)");
+    expect(m.text).toContain("Stop 1.10080 (8.0 pips; $8.00 per 10,000 units)");
     expect(m.text).toContain("back below 70");
     expect(m.text).toContain("not investment advice");
   });

@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useT } from "@/lib/i18n";
+import { SPREAD_SHARE_OF_STOP } from "@/lib/costs";
 
 interface Props {
   interval: TimeInterval;
@@ -62,6 +63,10 @@ const ControlBar = ({
         ))}
       </div>
 
+      <p className="sm:hidden text-[11px] text-muted-foreground" data-testid="interval-cost">
+        {t.control.cost(t.control.intervals[interval], SPREAD_SHARE_OF_STOP[interval] ?? null)}
+      </p>
+
       <button
         onClick={locked ? onSubscribe : onAnalyze}
         disabled={loading}
@@ -97,6 +102,10 @@ const ControlBar = ({
         </span>
       )}
     </div>
+
+    <p className="hidden sm:block text-[11px] text-muted-foreground -mt-2" data-testid="interval-cost-wide">
+      {t.control.cost(t.control.intervals[interval], SPREAD_SHARE_OF_STOP[interval] ?? null)}
+    </p>
 
     <div className="flex items-start sm:items-center justify-between gap-3 pt-3 border-t border-border">
       <div className="flex-1 min-w-0">

@@ -142,6 +142,12 @@ describe("AnalysisResultView (v9 payload)", () => {
     expect(screen.getByTestId("tp1-distance")).toHaveTextContent("108 pips・ATR 2.4倍");
   });
 
+  it("says what the stop costs per 10,000 units, in the pair's quote currency (#111)", () => {
+    render(<AnalysisResultView result={fullResult} techData={techData} pair="USD/JPY" interval="1h" />);
+    // 150.123 − 149.500 = 0.623 yen a unit
+    expect(screen.getByTestId("stop-loss-10k")).toHaveTextContent("1万通貨で損切りなら ¥6,230 の損失");
+  });
+
   it("gives the distance in pips alone when there is no ATR to scale by", () => {
     render(<AnalysisResultView result={fullResult} techData={null} pair="USD/JPY" interval="1h" />);
     expect(screen.getByTestId("stop-distance")).toHaveTextContent("62 pips");
