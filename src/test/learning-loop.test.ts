@@ -236,8 +236,13 @@ describe("consolidation is given enough clock to finish", () => {
   it("does not reuse the single-plan diagnosis timeout", () => {
     const call = index.slice(index.indexOf("buildConsolidationPrompt"), index.indexOf("parseConsolidation("));
     expect(call).toMatch(/askModel\([^)]*CONSOLIDATION_SCHEMA[^)]*consolidationBudget\(\)\)/);
-    // The diagnosis call keeps the short one — it reads one trade.
-    const diagnosis = index.slice(index.indexOf("DIAGNOSIS_SCHEMA, 2500"), index.indexOf("DIAGNOSIS_SCHEMA, 2500") + 40);
+    // The diagnosis call keeps the short one — it reads one trade. (This
+    // used to search for a string the file did not contain, so it passed
+    // whatever the call said; it now finds the call and fails if it is gone.)
+    const at = index.indexOf("askModel(prompt.system, prompt.user, prompt.schema,");
+    expect(at).toBeGreaterThan(0);
+    const diagnosis = index.slice(at, index.indexOf(")", at) + 1);
+    expect(diagnosis).toMatch(/prompt\.schema, \d+\)$/);
     expect(diagnosis).not.toContain("consolidationBudget");
   });
 

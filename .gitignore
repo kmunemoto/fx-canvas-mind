@@ -41,3 +41,8 @@ supabase/functions/postmortem/bundle.js
 supabase/functions/noise-floor/bundle.js
 supabase/functions/version-compare/bundle.js
 supabase/functions/position-review/bundle.js
+
+# research/tendencies.ts: GMO's raw day files (restored from the Actions
+# cache in CI) and the report it writes. Neither is source.
+research/.cache/
+research/out/

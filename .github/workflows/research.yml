@@ -1,0 +1,61 @@
+# The study behind #100: what each state of the chart was followed by.
+#
+# Runs research/tendencies.ts on GitHub's runners because they can reach
+# GMO's public price API and the development container cannot. Read-only:
+# it fetches public prices, prints a report to the job log and uploads the
+# same numbers as an artifact. It writes nothing to the repository and holds
+# no secret.
+name: Research tendencies
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/**
+      - supabase/functions/analyze/state.ts
+      - .github/workflows/research.yml
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "Comma-separated pairs; the first is the one the models are fitted on"
+        default: "USD/JPY,EUR/USD,EUR/JPY,GBP/JPY,AUD/JPY"
+      split:
+        description: "First day of the second (checking) period"
+        default: "2025-07-01"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # GMO's day files never change once the day has rolled, so they are
+      # kept between runs; only the newest few are fetched again.
+      - uses: actions/cache@v4
+        with:
+          path: research/.cache
+          key: gmo-15min-${{ github.run_id }}
+          restore-keys: gmo-15min-
+      - name: Run the study
+        env:
+          PAIRS: ${{ inputs.pairs || 'USD/JPY,EUR/USD,EUR/JPY,GBP/JPY,AUD/JPY' }}
+          SPLIT: ${{ inputs.split || '2025-07-01' }}
+        run: >
+          deno run
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC
+          research/tendencies.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-out
+          path: research/out/
+          retention-days: 30

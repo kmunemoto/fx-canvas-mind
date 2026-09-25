@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v65-2026-09-25T05:00:00Z";
+const FUNCTION_VERSION = "analyze-v66-2026-09-25T07:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -1997,7 +1997,13 @@ ${candleLines(lowerCandles, 24)}`;
       : buildUserMessage(TECHNICAL_NOTE, false);
 
     const baseRequest: JsonRecord = {
-      model: "claude-opus-5",
+      // #101: moved at the owner's instruction (2026-09-25). Thinking is
+      // always on for this model and effort is its only dial, so both effort
+      // values below are sent explicitly — its API default is one level lower
+      // than the previous model's. Rows written from here are stamped with
+      // this id (analyses.model, analysis_prompts.model), so the record, the
+      // replay harnesses and the model-mix panel keep the two apart.
+      model: "claude-opus-5-5",
       // BACK TO 8000 WITH THE MODEL, and the reason to restore it is stronger
       // than the reason it was ever raised.
       //
@@ -2635,6 +2641,23 @@ ${candleLines(lowerCandles, 24)}`;
       break;
     }
 
+    // A classifier decline comes back as HTTP 200 with no usable content and
+    // stop_reason "refusal". It used to fall through to the JSON parse and be
+    // reported as "could not parse the analysis", which is untrue and hides
+    // a rate worth knowing. Said as what it is, refunded like every failure.
+    if (claudeData && claudeData.stop_reason === "refusal") {
+      const details = isRecord(claudeData.stop_details) ? claudeData.stop_details : null;
+      return await fail({
+        ok: false,
+        error: "AIが今回の分析への回答を控えました。時間をおいて再試行してください。",
+        diagnostics: {
+          error_stage: "model_refusal",
+          stage,
+          category: typeof details?.category === "string" ? details.category : null,
+        },
+      }, 502);
+    }
+
     if (!claudeData) {
       return await fail({
         ok: false,
@@ -2654,10 +2677,14 @@ ${candleLines(lowerCandles, 24)}`;
     const parsedAnalysis = parseAnalysisJson(finalText);
 
     if (!isRecord(parsedAnalysis)) {
+      // Thinking counts toward max_tokens, so a turn that thought long can be
+      // cut off before its JSON closes. Named separately so the rate of that
+      // is visible rather than folded into "unparseable".
+      const cutOff = claudeData.stop_reason === "max_tokens";
       return await fail({
         ok: false,
-        error: "AI分析結果の解析に失敗しました",
-        diagnostics: { error_stage: "analysis_parse_failed", stage, preview: finalText.slice(0, 300) },
+        error: cutOff ? "AIの回答が長すぎて途中で切れました。もう一度お試しください。" : "AI分析結果の解析に失敗しました",
+        diagnostics: { error_stage: cutOff ? "max_tokens" : "analysis_parse_failed", stage, preview: finalText.slice(0, 300) },
       }, 400);
     }
 

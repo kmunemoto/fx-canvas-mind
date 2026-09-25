@@ -52,9 +52,11 @@ import {
   type RecordRow,
 } from "./prompt.ts";
 
-const POSTMORTEM_VERSION = "postmortem-v34-2026-09-24T15:00:00Z";
+const POSTMORTEM_VERSION = "postmortem-v35-2026-09-25T07:00:00Z";
 const SCHEMA_VERSION = 2;
-const MODEL = "claude-opus-5";
+// #101: the same model analyze moved to, so the diagnoses and the rulebook are
+// written by the model whose plans they judge.
+const MODEL = "claude-opus-5-5";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 const MIN = 60_000;
@@ -970,7 +972,9 @@ Deno.serve(async (req: Request) => {
         : buildDiagnosisPrompt(plan, facts);
       let answer: unknown = null;
       try {
-        answer = await askModel(prompt.system, prompt.user, prompt.schema, 2500);
+        // Ceilings raised with the #101 model move (2500 -> 4000, 4000 -> 6000
+        // below): they cover thinking as well as the answer.
+        answer = await askModel(prompt.system, prompt.user, prompt.schema, 4000);
       } catch (err) {
         await markFailed(row, raw, `model: ${err instanceof Error ? err.message : String(err)}`);
         continue;
@@ -1536,7 +1540,7 @@ Deno.serve(async (req: Request) => {
         const prompt = buildConsolidationPrompt(previousRules, lessons, stats);
         let answer: unknown = null;
         try {
-          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 4000, consolidationBudget());
+          answer = await askModel(prompt.system, prompt.user, CONSOLIDATION_SCHEMA, 6000, consolidationBudget());
         } catch (err) {
           errors.push(`rulebook: model ${err instanceof Error ? err.message : String(err)}`);
         }
