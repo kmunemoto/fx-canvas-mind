@@ -46,3 +46,11 @@ verify_jwt = false
 # caller sends no JWT, so the gateway must not demand one.
 [functions.version-compare]
 verify_jwt = false
+
+# #99. Authenticates in the function body with the sweep token, like
+# noise-floor: it does a few hundred outbound fetches per call, so it must not
+# be an open endpoint, and the caller is a SQL statement reading the vault
+# that sends no JWT. Never scheduled; deployed by name from the workflow's
+# manual input, not by the push-to-main set.
+[functions.signal-backtest]
+verify_jwt = false

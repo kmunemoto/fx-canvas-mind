@@ -2,7 +2,7 @@
 // and never deployed, because the rule block printed no id for the field to
 // cite. The deployed sequence is v44 -> v45 -> v46 -> v48, and the stored
 // provenance shows no v47 row because none was ever served.
-const FUNCTION_VERSION = "analyze-v64-2026-09-24T15:00:00Z";
+const FUNCTION_VERSION = "analyze-v65-2026-09-25T05:00:00Z";
 // Open plans in the same direction inside this window are the same bet
 const OPEN_PLAN_WINDOW_HOURS = 24;
 
@@ -94,6 +94,7 @@ import {
 import { compactStructure, computeStructure, pivots, structureLines } from "./structure.ts";
 import { TURN_FACTS, compactTurn, computeTurn, turnForGate, turnLines, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
+import { MAX_STOP_WIDTH_ATR, compactSignal, compactSignals, computeSignals, longRunLines, signalLines, type SignalRead } from "./signals.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
 import {
   buildPlanHorizon,
@@ -183,6 +184,12 @@ const MIN_CONFIDENCE = 60;
 // open), so every 1min analysis just after the open would have failed the
 // health check. 3,000 leaves 420 there and 5min's 800 leaves 284 — both over
 // the 250 src/test/weekend-preview.test.ts demands of every rung.
+// How many bars each rung's chart carries to the client (#99). 60 was enough
+// to show the plan's levels; the bounce marks are counted over the whole
+// window and need more of it on screen to be seen at all. 120 keeps a 1h
+// chart at five days.
+const CHART_BARS = 120;
+
 const OUTPUTSIZE: Record<string, number> = {
   "1min": 3000,
   "5min": 800,
@@ -400,13 +407,14 @@ const SYSTEM_PROMPT = `あなたはプロップファームのシニアFXアナ�
    引用する水準は上の一覧にあるものだけにする（一覧に無い価格を「直近高値」と呼ばない）。
 2. LEVELS — 上記のスイング高安に加え、移動平均・一目の雲・ラウンドナンバーから有効なサポート/レジスタンスを特定する。
    **板情報・出来高・建玉・約定履歴は一切取得していない。** 「ストップが溜まっている」「大口が仕込んでいる」「ストップ狩り」は、価格の動きからの**推測**であって観測した事実ではない。書く場合は推測であると明示し、根拠にした値動き（どの水準を何本前にヒゲだけで抜けたか等）を必ず添える。断定形で書かない。
+   各足には「反発の実績(サーバ計算)」の行がある。その窓で各条件（確定安値での反発、SMA200での反発、雲の上限での反発、ダブルボトム確定、など）が何回反発したかを、損切りと利確を機械的に置いて数えたものである。引用するときは勝敗の数字と95%CIをそのまま使う。「直近N本で成立した条件」に挙がった条件は、その水準・損切り・利確ごとプランの根拠にしてよい。挙がっていない条件を「反発しやすい形」と呼ばない。n<5 の条件、または95%CIの下限が損益分岐を下回る条件は根拠にしない。
 3. TREND — 時間足間の方向整合性を評価する。
    各足の「方向」は「終値ブレイク(上)/(下)」の行で決める: **より最近に終値で抜けたまま**の側が、その足の今の方向である（「戻された」水準は抜けていない）。直近2スイングの並びは、終値ブレイクが無いときだけの補助。
    各足には「転換の証拠(サーバ判定)」の行があり、方向と逆向きの証拠を数えてある。逆向きの証拠が ${TURN_BLOCK} 以上あり、直近${FRESH_BREAK_BARS}本以内に方向と同じ側の終値ブレイクが無い足は「転換中」である。
    - エントリー足が転換中のとき、その方向に乗る継続エントリー（下降中の足で SELL、上昇中の足で BUY）はサーバーが公開しない。戻り売り・押し目買いの場面に見えても、証拠が転換を示しているなら WAIT か反対方向を検討する。
    - 上位足がこの基準で方向を持ち、かつ転換中でないとき、その方向と逆の signal（上向きの上位足に SELL、下向きの上位足に BUY）はサーバーが公開しない。上位足が転換中なら、逆方向のプランは止めない。
    上位足の方向に逆らうエントリーは確信度を下げる。ただし「上位足がまだ下向きだから」だけを理由に反対方向を捨てない: 下降の中で反発が始まり転換の証拠が積み上がっているなら、それは「戻り売りの場面」ではなく「方向が変わりつつある局面」で、手順6の counter_case で正面から扱う。
-4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×0.6〜1.2 の範囲に置く。
+4. TARGETS — 損切りと利確1/2/3を、**与えられたエントリー価格の周りに**決める。損切りは直近スイング±ATRに根拠を置き、現在値から ATR×${MIN_STOP_ATR}〜${MAX_STOP_WIDTH_ATR} の範囲に置く。
    - 損切りは現在値から **ATR×${MIN_STOP_ATR} 以上**離す。これ未満はノイズで刈られるのでサーバーが却下する。遠すぎる損切りはリスクリワードが成立せず見送りになる。
    - 利確1も現在値から **ATR×${MIN_TP1_ATR} 以上**離す。これ未満は、届いても「読みが当たった」証拠にならないのでサーバーが却下する。
    - どちらの幅も「ATR の何倍か」で決める。pips で丸めた数字を先に決めてから ATR に当てはめない。
@@ -1744,6 +1752,11 @@ Deno.serve(async (req: Request) => {
     const turns: TurnRead[] = structures.map(({ bars, structure }, i) =>
       computeTurn(bars, structure, i === 0 ? entryDivergence : null)
     );
+    // #99: where price bounced on each rung, counted from the same closed
+    // bars and priced the way a plan is priced. Rendered under each rung's
+    // block, stored under context.signals, and drawn on the chart with the
+    // bars it was counted on (technicalData.charts).
+    const signalReads: SignalRead[] = structures.map(({ bars }) => computeSignals(bars));
 
     // THE HIGHER RUNGS, AS THE GATE WILL READ THEM (entry.ts, structureBias).
     //
@@ -1788,7 +1801,7 @@ Deno.serve(async (req: Request) => {
         : "";
       const lines = candleLines(candles, i === 0 ? 40 : 20);
       const feedLabel = i === 0 && priceFeed === "gmo" ? "GMO Coin 仲値" : "Twelve Data 仲値";
-      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}\n${turnLines(turns[i], decimals)}`;
+      const structure = `\n${structureLines(structures[i].structure, i === 0 ? entryDivergence : null, decimals, i === 0)}\n${turnLines(turns[i], decimals)}\n${signalLines(signalReads[i], decimals)}\n${longRunLines(tf, currencyPair)}`;
       return `### ${tf}${i === 0 ? `（エントリー時間足・${feedLabel}）` : `（上位足・${feedLabel}）`}\n${body}${closedBody}${structure}\n直近ローソク足 (datetime[UTC],open,high,low,close / 古い順・市場が閉まっていた足は原則除外済みなので週末を跨ぐ箇所で時刻が飛ぶ):\n${lines}`;
     }).join("\n\n") + higherStructureNote;
 
@@ -2115,6 +2128,23 @@ ${candleLines(lowerCandles, 24)}`;
         slowD: x(entrySnapshot.slowD),
         adx: x(entrySnapshot.adx),
         candles: entryCandles.slice(-60),
+        // #99: one chart per rung, CHART_BARS deep, carrying every bounce
+        // signal that fired inside those bars (priced, with its outcome),
+        // the counts per condition and the two trend lines. `candles` above
+        // stays at 60 for the readers that already draw it; the marks need
+        // the deeper series to be visible at all.
+        charts: timeframes.map((tf, i) => {
+          const series = seriesByTf[i].slice(-CHART_BARS);
+          const first = series[0]?.datetime ?? null;
+          const read = signalReads[i];
+          return {
+            ...compactSignals(tf, read, decimals),
+            candles: series,
+            marks: first === null
+              ? []
+              : read.signals.filter((sg) => sg.datetime >= first).map((sg) => compactSignal(sg, decimals)),
+          };
+        }),
       };
     };
 
@@ -3172,6 +3202,10 @@ ${candleLines(lowerCandles, 24)}`;
       // #96: the turn evidence per timeframe, beside the structure it was read
       // from. Same order as `timeframes`.
       turn: turns.map((t, i) => compactTurn(timeframes[i], t, decimals)),
+      // #99: the bounce conditions per timeframe — counts, the conditions
+      // in force, the trend lines. Same order as `timeframes`. The full
+      // signal list is not stored; the chart payload carries it.
+      signals: signalReads.map((sr, i) => compactSignals(timeframes[i], sr, decimals)),
       // Entry timeframe only, which is where it is computed and rendered.
       divergence: compactDivergence(entryDivergence, decimals),
       // The same reading with the forming bar removed. `null` where there was

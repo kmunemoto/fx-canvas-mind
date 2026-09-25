@@ -168,6 +168,47 @@ export const en: Dict = {
     citedMark: "(AI)",
     legend: "dashed = measured by the server / dotted = named by the model / band = the cloud at price",
     hiddenLevels: (n: number) => `${n} outside the visible range`,
+    // #99: the bounce marks and the trend lines
+    signalLegend: "▲▼ = a bar a bounce condition fired on (solid = won · faded = lost · hollow = open/ambiguous); short lines = its stop and target / diagonal = through the last two swings",
+    trend: { lows: "lows", highs: "highs" },
+    // The label on the flag: the side, then how it came out
+    outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
+    tabsLabel: "Timeframe",
+    // A timeframe the control bar does not offer (the higher rungs of a chain)
+    tf: (tf: string) => tf,
+  },
+
+  // #99: the conditions price bounced on, counted by the server per timeframe
+  bounce: {
+    title: "Bounce conditions (record over this window)",
+    columns: { condition: "Condition", record: "W–L", rate: "Hit rate (95% CI)", now: "Now" },
+    // A condition in force on the newest closed bars
+    now: "in force",
+    none: "No condition fired in this window",
+    pending: (reason: string) => `Not measured (${reason})`,
+    record: (wins: number, losses: number) => `${wins}W ${losses}L`,
+    rate: (pct: number, lo: number, hi: number) => `${pct}% (${lo}–${hi})`,
+    noRate: "—",
+    extra: {
+      ambiguous: (n: number) => `${n} ambiguous`,
+      expired: (n: number) => `${n} expired`,
+      open: (n: number) => `${n} open`,
+      untradable: (n: number) => `${n} stop too wide`,
+    },
+    // How the counts were made, said once under the table
+    method: (bars: number, rr: number, horizon: number) =>
+      `${bars} closed bars, mid prices (no spread). Stop just past the extreme the bounce rejected (only within ATR×0.6–1.2), target = ${rr}× the stop distance, settled within ${horizon} bars.`,
+    breakeven: (pct: number) => `Break-even hit rate is ${pct}%. A small n cannot be told from chance. Nothing outside this window is known.`,
+    rules: {
+      level_reject: { BUY: "Bounce at a confirmed swing low", SELL: "Rejection at a confirmed swing high" },
+      ma200_reject: { BUY: "Bounce off SMA200", SELL: "Rejection at SMA200" },
+      ma20_pullback: { BUY: "Pullback to a rising SMA20", SELL: "Rally to a falling SMA20" },
+      band_reentry: { BUY: "Re-entry from below the lower band", SELL: "Re-entry from above the upper band" },
+      cloud_reject: { BUY: "Bounce off the cloud top", SELL: "Rejection at the cloud bottom" },
+      divergence: { BUY: "Bullish divergence confirmed", SELL: "Bearish divergence confirmed" },
+      double_pivot: { BUY: "Double bottom confirmed", SELL: "Double top confirmed" },
+      engulfing: { BUY: "Bullish engulfing at a level", SELL: "Bearish engulfing at a level" },
+    },
   },
 
   technical: {

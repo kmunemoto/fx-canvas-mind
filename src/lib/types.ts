@@ -105,6 +105,76 @@ export interface TechnicalData {
   adx: string;
   // v9+: oldest-first numeric candles of the entry timeframe, for the chart
   candles?: NumericCandle[];
+  // #99 (analyze v65+): one chart per timeframe of the chain, deeper than
+  // `candles`, with the bounce conditions the server counted on it. Absent
+  // on payloads from earlier versions.
+  charts?: TfChart[];
+}
+
+// #99: a bounce condition that fired on a CLOSED bar, priced the way a plan
+// is priced and settled by walking the bars after it. Every number here was
+// computed by the server from the candles; nothing in it was written by the
+// model. The rule ids are the server's (analyze/signals.ts SIGNAL_RULES) and
+// the dictionary names them per side.
+export type SignalOutcome = "win" | "loss" | "ambiguous" | "expired" | "open";
+
+export interface ChartSignalMark {
+  datetime: string;
+  barsAgo: number;
+  side: "BUY" | "SELL";
+  rule: string;
+  level: number | null;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  stop_atr: number | null;
+  outcome: SignalOutcome;
+  bars: number | null;
+  mfe_r: number | null;
+}
+
+// A line through the last two confirmed swings of one kind, extended to the
+// right edge by the chart. The slope is per bar of that chart's series.
+export interface ChartTrendLine {
+  kind: "lows" | "highs";
+  from: { datetime: string; barsAgo: number; price: number | null };
+  to: { datetime: string; barsAgo: number; price: number | null };
+  slope_per_bar: number | null;
+  now: number | null;
+}
+
+// How one condition did over the chart's window. `n` is wins + losses; the
+// other outcomes are counted beside it, never folded into the rate.
+export interface BounceStat {
+  rule: string;
+  side: "BUY" | "SELL";
+  n: number;
+  wins: number;
+  losses: number;
+  ambiguous: number;
+  expired: number;
+  open: number;
+  untradable: number;
+  rate: number | null;
+  lo: number | null;
+  hi: number | null;
+  expectancy_r: number | null;
+  avg_bars: number | null;
+}
+
+export interface TfChart {
+  tf: string;
+  ok: boolean;
+  reason?: string | null;
+  bars: number;
+  rr?: number;
+  horizon?: number;
+  candles: NumericCandle[];
+  marks: ChartSignalMark[];
+  stats: BounceStat[];
+  // The conditions in force: signals on the newest few closed bars
+  recent: ChartSignalMark[];
+  lines: ChartTrendLine[];
 }
 
 export interface CandleData {

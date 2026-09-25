@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { NumericCandle } from "@/lib/types";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
 
@@ -50,7 +50,17 @@ interface Props {
   subtitle?: string;
   overlays?: ChartOverlay[];
   band?: ChartBand | null;
+  // #99: the bounce conditions the server counted on these candles, drawn
+  // as a flag on the bar they fired on with the stop and target they were
+  // settled against, and the lines through the last two swings. A mark
+  // whose bar is not among `candles` is not drawn.
+  marks?: ChartSignalMark[];
+  lines?: ChartTrendLine[];
 }
+
+// How far past the flagged bar the stop and target segments reach: to the
+// bar that settled the signal, or a few bars when nothing has yet.
+const OPEN_SEGMENT_BARS = 6;
 
 // The SVG is drawn at one unit per CSS pixel, measured from its own
 // container. Drawing at a fixed 660 and letting the browser scale it down
@@ -98,9 +108,10 @@ const parseLevel = (v: string | undefined): number | null => {
 // trader would mark up the chart (labels carry identity, color is secondary)
 const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
-  overlays = [], band = null,
+  overlays = [], band = null, marks = [], lines = [],
 }: Props) => {
   const t = useT();
+  const clipId = useId();
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState<number | null>(null);
@@ -223,9 +234,69 @@ const PriceChart = ({
     return { rows: inside, hidden: overlays.length - inside.length };
   }, [overlays, geometry]);
 
+  // One flag per bar and side. Two conditions firing on the same bar are one
+  // flag (the panel lists them both); the flag reads as won if any of them
+  // won, lost if any lost, and hollow otherwise.
+  const flags = useMemo(() => {
+    if (marks.length === 0 || candles.length === 0) return [];
+    const at = new Map<number, number>();
+    candles.forEach((c, i) => {
+      const ms = parseUtcCandleTime(c.datetime);
+      if (Number.isFinite(ms)) at.set(ms, i);
+    });
+    const groups = new Map<string, { idx: number; side: "BUY" | "SELL"; marks: ChartSignalMark[] }>();
+    for (const m of marks) {
+      const idx = at.get(parseUtcCandleTime(m.datetime));
+      if (idx === undefined) continue;
+      const k = `${idx}:${m.side}`;
+      const g = groups.get(k) ?? { idx, side: m.side, marks: [] };
+      g.marks.push(m);
+      groups.set(k, g);
+    }
+    const rows: Record<"BUY" | "SELL", number> = { BUY: 0, SELL: 0 };
+    return [...groups.values()]
+      .sort((a, b) => a.idx - b.idx)
+      .map((g) => {
+        const outcome = g.marks.some((m) => m.outcome === "win")
+          ? "win"
+          : g.marks.some((m) => m.outcome === "loss")
+            ? "loss"
+            : g.marks[0].outcome;
+        // Neighbouring flags on one side alternate rows so their labels do
+        // not sit on top of each other
+        const row = rows[g.side]++ % 2;
+        return { ...g, outcome, row };
+      });
+  }, [marks, candles]);
+
+  const trendLines = useMemo(() => {
+    if (lines.length === 0 || candles.length === 0) return [];
+    const at = new Map<number, number>();
+    candles.forEach((c, i) => {
+      const ms = parseUtcCandleTime(c.datetime);
+      if (Number.isFinite(ms)) at.set(ms, i);
+    });
+    return lines.flatMap((l) => {
+      if (l.slope_per_bar === null) return [];
+      // Anchor on the older swing when it is on screen, else the newer one;
+      // a line whose both swings are off screen is not drawn
+      const fromIdx = at.get(parseUtcCandleTime(l.from.datetime));
+      const toIdx = at.get(parseUtcCandleTime(l.to.datetime));
+      const anchor = fromIdx !== undefined && l.from.price !== null
+        ? { idx: fromIdx, price: l.from.price }
+        : toIdx !== undefined && l.to.price !== null
+          ? { idx: toIdx, price: l.to.price }
+          : null;
+      if (anchor === null) return [];
+      return [{ kind: l.kind, idx: anchor.idx, price: anchor.price, slope: l.slope_per_bar }];
+    });
+  }, [lines, candles]);
+
   if (!geometry || candles.length === 0) return null;
 
   const { y, x, slot, bodyW } = geometry;
+  const inDomain = (v: number | null): v is number =>
+    v !== null && Number.isFinite(v) && v >= geometry.min && v <= geometry.max;
   const hovered = hover !== null ? candles[hover] : null;
 
   const gridLines = 4;
@@ -262,6 +333,11 @@ const PriceChart = ({
           {drawnOverlays.hidden > 0 ? ` · ${t.chart.hiddenLevels(drawnOverlays.hidden)}` : ""}
         </p>
       )}
+      {(flags.length > 0 || trendLines.length > 0) && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-signal-legend">
+          {t.chart.signalLegend}
+        </p>
+      )}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full h-auto"
@@ -270,6 +346,11 @@ const PriceChart = ({
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
       >
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={PAD_LEFT} y={PAD_TOP} width={Math.max(0, W - PAD_RIGHT - PAD_LEFT)} height={Math.max(0, H - PAD_TOP - PAD_BOTTOM)} />
+          </clipPath>
+        </defs>
         {/* The cloud price is actually inside, as a band rather than a line —
             a zone drawn as a rule reads as a level, which it is not. */}
         {band && Number.isFinite(band.top) && Number.isFinite(band.bottom) && (
@@ -323,6 +404,85 @@ const PriceChart = ({
                 width={bodyW} height={bodyH}
                 fill={color} rx="1"
               />
+            </g>
+          );
+        })}
+
+        {/* #99: the lines through the last two swings, extended to the right
+            edge and clipped to the plot. Labelled at the swing they start
+            from, in the same register as the measured levels. */}
+        {trendLines.map((l) => {
+          const x1 = x(l.idx);
+          const last = candles.length - 1;
+          const x2 = x(last);
+          const y1 = y(l.price);
+          const y2 = y(l.price + l.slope * (last - l.idx));
+          return (
+            <g key={`trend-${l.kind}`} data-testid={`chart-trend-${l.kind}`} clipPath={`url(#${clipId})`} opacity="0.6">
+              <line x1={x1} x2={x2} y1={y1} y2={y2} stroke={COLORS.text} strokeWidth="0.9" strokeDasharray="4 2" />
+              <text x={x1 + 2} y={y1 + (l.kind === "lows" ? 8 : -3)} fontSize={labelSize - 1} fill={COLORS.text} fontFamily="monospace">
+                {t.chart.trend[l.kind]}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* #99: one flag per bar a bounce condition fired on. BUY hangs
+            under the low, SELL stands over the high; the short dashed
+            segments beside it are the stop and target the signal was
+            settled against, reaching the bar that settled it. */}
+        {flags.map((f) => {
+          const c = candles[f.idx];
+          const buy = f.side === "BUY";
+          const color = buy ? COLORS.up : COLORS.down;
+          const fx = x(f.idx);
+          const away = 6 + f.row * 13;
+          const baseY = buy ? y(c.low) + away : y(c.high) - away;
+          const labelY = buy ? baseY + 9 : baseY - 3;
+          const solid = f.outcome === "win";
+          const faded = f.outcome === "loss";
+          const flagW = narrow ? 22 : 26;
+          const first = f.marks[0];
+          const reach = Math.min(candles.length - 1, f.idx + Math.max(1, first.bars ?? OPEN_SEGMENT_BARS));
+          const segment = (v: number | null, stroke: string) =>
+            inDomain(v) && reach > f.idx
+              ? <line x1={fx} x2={x(reach)} y1={y(v)} y2={y(v)} stroke={stroke} strokeWidth="0.8" strokeDasharray="2 2" opacity="0.75" />
+              : null;
+          const tip = f.marks.map((m) => `${m.side} ${m.rule} ${m.outcome}${m.stop !== null ? ` SL ${m.stop.toFixed(decimals)}` : ""}${m.target !== null ? ` TP ${m.target.toFixed(decimals)}` : ""}`).join(" / ");
+          return (
+            <g key={`flag-${f.side}-${f.idx}`} data-testid={`chart-signal-${f.side}-${f.outcome}`}>
+              <title>{tip}</title>
+              {segment(first.target, COLORS.tp)}
+              {segment(first.stop, COLORS.sl)}
+              <polygon
+                points={buy
+                  ? `${fx},${baseY - 4} ${fx - 3},${baseY} ${fx + 3},${baseY}`
+                  : `${fx},${baseY + 4} ${fx - 3},${baseY} ${fx + 3},${baseY}`}
+                fill={color}
+                opacity={solid ? 0.95 : faded ? 0.5 : 0.8}
+              />
+              <rect
+                x={fx - flagW / 2}
+                y={buy ? baseY : baseY - 11}
+                width={flagW}
+                height={11}
+                rx="2"
+                fill={solid || faded ? color : "hsl(var(--background))"}
+                stroke={color}
+                strokeWidth="0.8"
+                opacity={solid ? 0.95 : faded ? 0.5 : 0.9}
+              />
+              <text
+                x={fx}
+                y={labelY}
+                fontSize={narrow ? 6.5 : 7.5}
+                fontWeight="700"
+                fontFamily="monospace"
+                textAnchor="middle"
+                fill={solid || faded ? "hsl(var(--background))" : color}
+              >
+                {f.side}{t.chart.outcomeMark[f.outcome]}
+              </text>
             </g>
           );
         })}
