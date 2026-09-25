@@ -2428,7 +2428,7 @@ vitest 1,681 件通過（60 ファイル）、tsc 12・eslint 34（基準どお�
 - **時間足**: 15分・1時間・4時間・日足。1分足は測っていないうえ、通知が多すぎて読まれなくなるので外した。ペアはアプリの7ペア。
 - **設定画面**: 設定 → メール通知。ペア×時間足のチェック、テストメール（5分に1回）、最近の通知20件（送信済み・失敗・未送信（送信設定なし）・時間帯で見送り）。
 - **メール送信は Resend**。関数のシークレット `RESEND_API_KEY` が無い間は、サインを検出して `not_configured` で記録するだけで**メールは出ない**（画面にもそう出す）。
-  - 送信元は `Sextant <alerts@fx-tactical.jp>`（v2、2026-09-26 から）。fx-tactical.jp を Resend で認証済み（お名前.com の DNS に `resend._domainkey` TXT・`send` と `rsend` の CNAME・`_dmarc` TXT `v=DMARC1; p=none;` を追加）。これでどのアドレスにも届く。
+  - 送信元は `Sextant <alerts@fx-tactical.jp>`（v2、2026-09-25 から）。fx-tactical.jp を Resend で認証済み（お名前.com の DNS に `resend._domainkey` TXT・`send` と `rsend` の CNAME・`_dmarc` TXT `v=DMARC1; p=none;` を追加）。これでどのアドレスにも届く。
     - v1 は Resend 共用の `onboarding@resend.dev` から送っていた。この送信元は Resend アカウントを作ったアドレスにしか届かないため、v1 の間はお客様に届かず、料金表の「アラート通知（予定）」も外していなかった。v2 で「売買サインのメール通知」に変えた。
     - 受信（Enable Receiving）は使っていない。`alerts@fx-tactical.jp` 宛ての返信はどこにも届かない。
     - 関数に `ALERT_FROM` を設定すれば送信元を上書きできる。
