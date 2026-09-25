@@ -27,6 +27,13 @@ export const en: Dict = {
 
   control: {
     intervals: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" },
+    // #111: what the spread alone takes (measured, §8.21)
+    cost: (tf: string, share: number | null) =>
+      share === null
+        ? tf === "1min"
+          ? "On 1-minute charts the spread weighs most (share not measured)."
+          : "On daily charts the spread weighs least (not measured)."
+        : `On ${tf} charts the spread alone costs about ${Math.round(share * 100)}% of the stop every trade (measured).${share >= 0.1 ? " 4-hour and daily charts cost less." : ""}`,
     analyze: "Analyze",
     analyzing: "Analyzing…",
     stages: {
@@ -75,6 +82,8 @@ export const en: Dict = {
     tp3: "Take profit 3",
     distance: (pips: number, atr: number | null) =>
       atr === null ? `${pips} pips` : `${pips} pips · ${atr}× ATR`,
+    // #111: sizing help without a balance: the loss per 10,000 units
+    lossPer10k: (money: string) => `${money} lost per 10,000 units if stopped`,
     // See the Japanese copy for why the period is declared in bars.
     horizon: {
       label: "Target period",
@@ -1302,6 +1311,7 @@ export const en: Dict = {
     pairHeader: "Pair",
     intervals: { "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
     notes: [
+      "On 15-minute charts the spread alone costs about 14% of the stop every trade; 4-hour (about 6%) and daily charts cost less.",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed: past charts lost most in those hours (they stay in the log).",
       "The daily chart was not part of the test on past charts.",
       "Prices are GMO Coin's public rates, so numbers can differ slightly from the app's analysis.",

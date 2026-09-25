@@ -346,7 +346,9 @@ const saveSettings = (s: AppSettings) => {
 const Index = () => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [interval, setInterval_] = useState<TimeInterval>("1h");
+  // 4h since #111: the spread costs about 6% of the stop there against 14%
+  // on 15min (src/lib/costs.ts)
+  const [interval, setInterval_] = useState<TimeInterval>("4h");
   const [includeFundamental, setIncludeFundamental] = useState(true);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode | null>(null);
   // The market was shut when this run was asked for, so it is a read of the

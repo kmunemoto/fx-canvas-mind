@@ -272,6 +272,10 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
   const d = decimalsOf(s.pair);
   const px = (v: number) => v.toFixed(d);
   const pips = (v: number) => (Math.abs(v - s.entry) / pipOf(s.pair)).toFixed(1);
+  // #111: the loss per 10,000 units at the stop, in the pair's quote currency
+  const quote = s.pair.toUpperCase().split("/")[1];
+  const perTenK = Math.abs(s.entry - s.stop) * 10_000;
+  const money = quote === "JPY" ? `¥${Math.round(perTenK).toLocaleString("ja-JP")}` : quote === "USD" ? `$${perTenK.toFixed(2)}` : null;
   const closeMs = Date.parse(s.closedAt);
   const ev = RSI_SAR_EVIDENCE.byTf[s.interval];
   const all = RSI_SAR_EVIDENCE.all;
@@ -294,7 +298,7 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
       [
         "The plan the app would publish at that close:",
         `  Entry ≈ ${px(s.entry)}`,
-        `  Stop ${px(s.stop)} (${pips(s.stop)} pips)`,
+        `  Stop ${px(s.stop)} (${pips(s.stop)} pips${money ? `; ${money} per 10,000 units` : ""})`,
         `  Target ${px(s.target)} (${pips(s.target)} pips)`,
         `  The stop is ${STOP_ATR} ATR away; the target is ${REWARD_RATIO} times the stop.`,
       ].join("\n"),
@@ -319,7 +323,7 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
     [
       "この終値でアプリが出す注文の目安:",
       `  エントリー ≈ ${px(s.entry)}`,
-      `  損切り ${px(s.stop)}（${pips(s.stop)}pips）`,
+      `  損切り ${px(s.stop)}（${pips(s.stop)}pips${money ? `・1万通貨で ${money} の損失` : ""}）`,
       `  利確 ${px(s.target)}（${pips(s.target)}pips）`,
       `  損切りは ATR の ${STOP_ATR} 倍、利確は損切り幅の ${REWARD_RATIO} 倍です。`,
     ].join("\n"),
