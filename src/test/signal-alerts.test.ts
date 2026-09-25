@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ALERT_BARS,
+  DEFAULT_FROM,
   FRESH_MS,
   STEP_MS,
   alertsAllowed,
@@ -311,6 +312,11 @@ describe("the email", () => {
 
 describe("sending", () => {
   const mail = renderTestMail([], "ja");
+
+  it("comes from the domain verified in Resend, so it reaches any address", () => {
+    // onboarding@resend.dev delivered only to the Resend account's owner
+    expect(DEFAULT_FROM).toBe("Sextant <alerts@fx-tactical.jp>");
+  });
 
   it("returns the provider's id", async () => {
     let sent: unknown = null;

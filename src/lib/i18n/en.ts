@@ -1187,7 +1187,7 @@ export const en: Dict = {
     features: {
       light: ["10 analyses per day", "USD/JPY only", "1H timeframe only"],
       standard: ["30 analyses per day", "All currency pairs", "All timeframes", "Fundamental analysis", "Saved analysis history"],
-      pro: ["Unlimited analyses", "Every feature", "Alerts (planned)", "Priority support"],
+      pro: ["Unlimited analyses", "Every feature", "Email alerts for buy/sell signals", "Priority support"],
     },
   },
 
