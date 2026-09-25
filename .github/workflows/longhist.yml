@@ -1,0 +1,60 @@
+# The study behind #109: does daily trend following, or collecting the
+# interest-rate differential (swap), pay over 25 years of currencies?
+#
+# Downloads the ECB's public daily reference rates (1999 on) and FRED's
+# public OECD 3-month interbank rates, runs research/longhist.ts and prints
+# the report to the job log. Read-only: public data in, a report out; it
+# writes nothing to the repository and holds no secret.
+name: Research long history
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/longhist.ts
+      - research/longhist-lib.ts
+      - .github/workflows/longhist.yml
+  workflow_dispatch:
+    inputs:
+      split:
+        description: "First day of the second (checking) period"
+        default: "2013-01-01"
+
+permissions:
+  contents: read
+
+jobs:
+  longhist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Download the ECB reference rates and the FRED interest rates
+        run: |
+          set -euo pipefail
+          mkdir -p research/.cache/ecb research/.cache/fred
+          curl -sSfL --retry 4 -A "fx-canvas-mind-research/1.0" -o /tmp/ecb.zip https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.zip
+          unzip -o -q /tmp/ecb.zip -d research/.cache/ecb
+          head -c 300 research/.cache/ecb/eurofxref-hist.csv; echo
+          for id in IR3TIB01USM156N IR3TIB01JPM156N IR3TIB01EZM156N IR3TIB01GBM156N IR3TIB01AUM156N IR3TIB01NZM156N IR3TIB01CAM156N IR3TIB01CHM156N; do
+            curl -sSfL --retry 4 -A "fx-canvas-mind-research/1.0" -o "research/.cache/fred/${id}.csv" "https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}" || echo "FRED ${id} failed"
+            echo "${id}: $(wc -l < "research/.cache/fred/${id}.csv" 2>/dev/null || echo 0) lines, last: $(tail -n 1 "research/.cache/fred/${id}.csv" 2>/dev/null || true)"
+          done
+      - name: Run the study
+        env:
+          SPLIT: ${{ inputs.split || '2013-01-01' }}
+        run: >
+          deno run
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=SPLIT,SYNTHETIC
+          research/longhist.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longhist-out
+          path: research/out/
+          retention-days: 30
