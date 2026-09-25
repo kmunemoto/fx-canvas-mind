@@ -9,12 +9,19 @@ import {
   isFollowing,
   type AlertRow,
   type AlertSettings,
+  type RecordSummary,
 } from "@/lib/signalAlerts";
 
 interface Props {
   // Injected by tests; the app uses the real function
   call?: (body: Record<string, unknown>) => Promise<AlertSettings>;
 }
+
+const fmtR = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}R`;
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+// Below this many settled signals the numbers are read as noise (a 95%
+// interval on a win rate near 35% is still about ±17 points at 30)
+const ENOUGH = 30;
 
 // "09-25 19:15" in Japan time, which is how the rest of the app writes times
 const jst = (iso: string) => {
@@ -80,6 +87,32 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   };
   const statusLabel = (r: AlertRow) =>
     r.status === "skipped" && r.skipReason ? a.skipReasons[r.skipReason] ?? a.status.skipped : a.status[r.status];
+  const resultLabel = (r: AlertRow) => {
+    if (r.kind !== "signal" || !r.result) return null;
+    const o = r.result.outcome;
+    if (o === null) return { text: a.pendingResult, cls: "text-muted-foreground" };
+    const text = r.result.r === null ? a.outcome[o] : `${a.outcome[o]} ${fmtR(r.result.r)}`;
+    return { text, cls: o === "win" ? "text-success" : o === "expired" || o === "no_data" ? "text-muted-foreground" : "text-destructive" };
+  };
+  const summaryBlock = (label: string, sm: RecordSummary, testid: string) => (
+    <div className="space-y-0.5" data-testid={testid}>
+      <p className="text-[11px] text-foreground">{label}</p>
+      {sm.n === 0 ? (
+        <p className="text-[11px] text-muted-foreground">{a.record.none}</p>
+      ) : (
+        <>
+          <p className="text-[11px] font-mono">{a.record.line(sm.n, sm.wins, sm.losses, sm.expired)}</p>
+          {sm.winRate !== null && sm.meanR !== null && (
+            <p className={`text-[11px] font-mono ${sm.meanR >= 0 ? "text-success" : "text-destructive"}`}>
+              {a.record.stats(pct(sm.winRate), fmtR(sm.meanR))}
+              {sm.ciR !== null && a.record.ci(sm.ciR.toFixed(2) + "R")}
+            </p>
+          )}
+        </>
+      )}
+      {sm.open > 0 && <p className="text-[10px] text-muted-foreground">{a.record.open(sm.open)}</p>}
+    </div>
+  );
   const statusClass = (r: AlertRow) =>
     r.status === "sent" ? "text-success" : r.status === "failed" ? "text-destructive" : "text-muted-foreground";
 
@@ -162,6 +195,29 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
             {a.test}
           </button>
 
+          {settings.performance && (
+            <div className="space-y-1.5 pt-1 border-t border-border/60" data-testid="signal-alerts-record">
+              <p className="text-[11px] font-semibold text-foreground">{a.record.title}</p>
+              {summaryBlock(a.record.mine, settings.performance.mine, "signal-alerts-record-mine")}
+              {summaryBlock(a.record.all, settings.performance.all, "signal-alerts-record-all")}
+              {settings.performance.backtest && (
+                <p className="text-[10px] text-muted-foreground">
+                  {a.record.backtest(
+                    settings.performance.backtest.period,
+                    pct(settings.performance.backtest.winRate),
+                    fmtR(settings.performance.backtest.meanR),
+                    pct(settings.performance.backtest.breakeven),
+                  )}
+                </p>
+              )}
+              {settings.performance.all.n < ENOUGH && (
+                <p className="text-[10px] text-warning" data-testid="signal-alerts-record-small">{a.record.small}</p>
+              )}
+              <p className="text-[10px] text-muted-foreground">{a.record.rNote}</p>
+              <p className="text-[10px] text-muted-foreground">{a.record.method}</p>
+            </div>
+          )}
+
           <div className="space-y-1 pt-1 border-t border-border/60" data-testid="signal-alerts-recent">
             <p className="text-[11px] text-muted-foreground">{a.recentTitle}</p>
             {settings.alerts.length === 0 ? (
@@ -179,6 +235,10 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                       </span>
                     </div>
                     <p className={statusClass(r)}>{statusLabel(r)}</p>
+                    {(() => {
+                      const res = resultLabel(r);
+                      return res ? <p className={`font-mono ${res.cls}`} data-testid="signal-alert-result">{res.text}</p> : null;
+                    })()}
                     {r.kind === "signal" && r.entry !== null && (
                       <p className="font-mono text-muted-foreground">{a.plan(fmt(r.entry), fmt(r.stop), fmt(r.target))}</p>
                     )}

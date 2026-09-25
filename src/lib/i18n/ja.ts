@@ -1408,6 +1408,31 @@ export const ja = {
     skipReasons: { costly_hours: "メールなし（損失の大きい時間帯）" } as Record<string, string>,
     sides: { BUY: "買い", SELL: "売り" } as Record<string, string>,
     plan: (entry: string, stop: string, target: string) => `目安 ${entry} / 損切り ${stop} / 利確 ${target}`,
+    // #108: the live record of what each signal did afterwards
+    record: {
+      title: "通知の成績（その後の実際の値動きで自動記録）",
+      mine: "あなたに届いた通知",
+      all: "全7ペアのサイン（メールする時間帯のもの）",
+      none: "まだ決着したサインはありません",
+      line: (n: number, w: number, l: number, e: number) => `${n}回：勝ち${w}・負け${l}・期限切れ${e}`,
+      stats: (win: string, mean: string) => `勝率 ${win} ／ 1回あたり平均 ${mean}`,
+      ci: (half: string) => `（誤差の幅 ±${half}）`,
+      open: (n: number) => `決着待ち ${n}回`,
+      backtest: (period: string, win: string, mean: string, be: string) =>
+        `過去のチャートでの見込み（${period}）：勝率 ${win}・平均 ${mean}。損益ゼロに必要な勝率は ${be}。`,
+      rNote: "R は損切り幅を1とした損益です。+1.5R なら損切り幅の1.5倍の利益、−1R なら損切り幅ぶんの損です。",
+      small: "30回に届くまでは偶然の影響が大きいので、良くても悪くても、まだ判断しないでください。",
+      method:
+        "サインの足の終値で入った（買いは ask、売りは bid）として、メールの損切りと利確のどちらに先に届いたかで決着させています。48本で決着しなければその時点で決済、同じ足で両方に届いたら負けとして数えます。",
+    },
+    outcome: {
+      win: "勝ち",
+      loss: "負け",
+      ambiguous: "負け（同じ足で両方に到達）",
+      expired: "期限切れ",
+      no_data: "判定不能",
+    } as Record<string, string>,
+    pendingResult: "決着待ち",
   },
 
   // Terms / Privacy / 特定商取引法 are Japanese legal documents. A machine
