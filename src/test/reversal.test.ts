@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { REVERSALS, revCtxOf, reversalClose, rsiSarAt, tradeR } from "../../research/reversal";
+import { GAINZ, REVERSALS, engulfing, revCtxOf, reversalClose, rsiSarAt, tradeR } from "../../research/reversal";
 import { mirrored } from "../../research/indicator-series";
 import { BASES, PARTNERS, ctxOf } from "../../research/rsi-combos";
 import type { Candle } from "../../supabase/functions/analyze/indicators";
@@ -30,7 +30,7 @@ const walk = (n: number, seed: number): Candle[] => {
   return out;
 };
 
-const RULES = [...REVERSALS.map((r) => ({ id: r.id, at: r.at })), { id: "rsi_sar", at: rsiSarAt }];
+const RULES = [...REVERSALS, ...GAINZ].map((r) => ({ id: r.id, at: r.at })).concat([{ id: "rsi_sar", at: rsiSarAt }]);
 
 describe("the readings of the video", () => {
   const c = walk(3000, 3);
@@ -86,6 +86,82 @@ describe("the readings of the video", () => {
       const d = bounce.at(ctx, i);
       const study = d !== 0 && psar.bounce.ok(ctx, i, d) ? d : 0;
       expect(rsiSarAt(x, i)).toBe(study);
+    }
+  });
+});
+
+describe("the GainzAlgo V2 [Alpha] conditions as reported (#107)", () => {
+  const c = walk(6000, 13);
+  const x = revCtxOf(c);
+  const settings: Record<string, { stable: (i: number) => boolean; rsi: number }> = {
+    gz_atr80: { stable: (i) => Math.abs(c[i].close - c[i].open) >= 0.7 * x.atr[i]!, rsi: 80 },
+    gz_range80: { stable: (i) => Math.abs(c[i].close - c[i].open) / (c[i].high - c[i].low) >= 0.7, rsi: 80 },
+    gz_atr50: { stable: (i) => Math.abs(c[i].close - c[i].open) >= 0.7 * x.atr[i]!, rsi: 50 },
+  };
+
+  it("fire only where all four conditions hold, on both sides", () => {
+    for (const rule of GAINZ) {
+      const want = settings[rule.id];
+      let n = 0;
+      for (let i = 1; i < c.length; i++) {
+        const d = rule.at(x, i);
+        if (d === 0) continue;
+        n++;
+        const rsi = x.b.rsi[i]!;
+        expect(engulfing(c, i, d), `${rule.id} engulfing at ${i}`).toBe(true);
+        expect(want.stable(i), `${rule.id} body at ${i}`).toBe(true);
+        if (d === 1) {
+          expect(c[i - 1].close).toBeLessThan(c[i - 1].open);
+          expect(c[i].close).toBeGreaterThan(c[i - 1].open);
+          expect(rsi).toBeLessThan(want.rsi);
+          expect(c[i].close).toBeLessThan(c[i - 10].close);
+        } else {
+          expect(c[i - 1].close).toBeGreaterThan(c[i - 1].open);
+          expect(c[i].close).toBeLessThan(c[i - 1].open);
+          expect(rsi).toBeGreaterThan(100 - want.rsi);
+          expect(c[i].close).toBeGreaterThan(c[i - 10].close);
+        }
+      }
+      expect(n, rule.id).toBeGreaterThan(10);
+    }
+  });
+
+  it("and every bar where all four hold is a signal", () => {
+    const rule = GAINZ.find((r) => r.id === "gz_atr80")!;
+    let checked = 0;
+    for (let i = 20; i < c.length; i++) {
+      const rsi = x.b.rsi[i];
+      const a = x.atr[i];
+      if (rsi === null || a === null) continue;
+      const big = Math.abs(c[i].close - c[i].open) >= 0.7 * a;
+      const buy = engulfing(c, i, 1) && big && rsi < 80 && c[i].close < c[i - 10].close;
+      const sell = engulfing(c, i, -1) && big && rsi > 20 && c[i].close > c[i - 10].close;
+      if (buy) expect(rule.at(x, i)).toBe(1);
+      if (sell) expect(rule.at(x, i)).toBe(-1);
+      if (buy || sell) checked++;
+    }
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("a hand-made bullish engulfing bar after a slide is a BUY", () => {
+    // 40 bars sliding down, a small red bar, then a large green bar that
+    // closes above the red bar's open
+    const bars: Candle[] = [];
+    let px = 150;
+    for (let i = 0; i < 40; i++) {
+      const o = px;
+      px -= 0.05 + (i % 3) * 0.01;
+      bars.push({ datetime: stamp(i), open: o, high: o + 0.02, low: px - 0.02, close: px });
+    }
+    const redOpen = px;
+    px -= 0.04;
+    bars.push({ datetime: stamp(40), open: redOpen, high: redOpen + 0.01, low: px - 0.01, close: px });
+    bars.push({ datetime: stamp(41), open: px, high: redOpen + 0.13, low: px - 0.005, close: redOpen + 0.12 });
+    const hx = revCtxOf(bars);
+    expect(engulfing(bars, 41, 1)).toBe(true);
+    for (const rule of GAINZ) {
+      if (rule.id === "gz_atr50") continue; // RSI after the pop may be above 50
+      expect(rule.at(hx, 41), rule.id).toBe(1);
     }
   });
 });

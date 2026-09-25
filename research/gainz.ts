@@ -31,11 +31,18 @@
 //     judged untouched on the second. Nothing is chosen for RSI + SAR: its
 //     three exits are simply reported.
 //   * Intervals are cluster-robust by calendar week.
+//
+// #107 adds a second family, GAINZ in reversal.ts: the four conditions
+// third-party write-ups attribute to the GainzAlgo V2 [Alpha] script
+// (engulfing bar, large body, RSI filter, close against 10 bars ago), in the
+// three readings their numbers allow. It is ranked and judged on exactly the
+// same terms as the #106 family, separately, so neither family's choice
+// sees the other's.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, mid, subStarts, type LabelSpec, type Side } from "./lib.ts";
-import { REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx } from "./reversal.ts";
+import { GAINZ, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, type RevRule } from "./reversal.ts";
 import { fetchPair } from "./gmo.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
@@ -63,6 +70,7 @@ const costly = (tf: Tf, hour: number) => tf !== "4h" && hour >= 17 && hour <= 23
 
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
+  ...GAINZ,
   { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
 ];
 const BLIND = "__blind__";
@@ -248,7 +256,7 @@ const main = async () => {
   const t0 = Date.now();
   log(`# research/gainz.ts  pairs=${PAIRS.length} (${PAIRS.join(",")})  start=${START}  split=${SPLIT}`);
   log(`exits: ${Object.entries(EXITS).map(([k, s]) => `${k}=stop ${s.stopAtr}ATR target ${s.rr}x (break-even win ${pct(1 / (1 + s.rr))}) horizon ${s.horizon}`).join(" | ")}`);
-  log(`rules: ${RULES.map((r) => r.id).join(", ")}  primary: ${PRIMARY_TF} / ${PRIMARY_EXIT}, reversal reading chosen on the first period`);
+  log(`rules: ${RULES.map((r) => r.id).join(", ")}  primary: ${PRIMARY_TF} / ${PRIMARY_EXIT}, one reading per family chosen on the first period`);
   await Deno.mkdir(OUT, { recursive: true });
   const barsByPair: Record<string, number> = {};
 
@@ -269,18 +277,25 @@ const main = async () => {
   const report: Record<string, unknown> = { pairs: barsByPair, start: START, split: SPLIT, exits: EXITS, generatedAt: new Date(NOW).toISOString() };
   const S = (rule: string, ex: string, period: Period, scope: string) => statOf(keyOf(rule, ex, period, scope));
 
-  // 1. the reading of the video, chosen on the first period
-  const ranked = REVERSALS
-    .map((r) => ({ id: r.id, ja: r.ja, disc: S(r.id, PRIMARY_EXIT, "disc", `tf:${PRIMARY_TF}`), val: S(r.id, PRIMARY_EXIT, "val", `tf:${PRIMARY_TF}`) }))
-    .filter((r) => r.disc && r.disc.n > 0)
-    .sort((a, b) => b.disc!.lift - a.disc!.lift);
-  const winner = ranked[0]?.id ?? null;
-  log(`\n# 1. "A big move, then a reversal candle" — ${PRIMARY_TF}, exit ${PRIMARY_EXIT}, ranked by the FIRST period's lift over blind entries`);
-  for (const r of ranked) {
-    log(line(`${r.id} 1st`, r.disc));
-    log(line(`${r.id} 2nd`, r.val));
+  // 1. one reading per family, chosen on the first period
+  const FAMILIES: Array<{ key: string; title: string; rules: readonly RevRule[] }> = [
+    { key: "reversal", title: '#106 "a big move, then a reversal candle"', rules: REVERSALS },
+    { key: "gainz", title: "#107 the GainzAlgo V2 [Alpha] conditions as reported", rules: GAINZ },
+  ];
+  const winners: Record<string, string | null> = {};
+  for (const fam of FAMILIES) {
+    const ranked = fam.rules
+      .map((r) => ({ id: r.id, disc: S(r.id, PRIMARY_EXIT, "disc", `tf:${PRIMARY_TF}`), val: S(r.id, PRIMARY_EXIT, "val", `tf:${PRIMARY_TF}`) }))
+      .filter((r) => r.disc && r.disc.n > 0)
+      .sort((a, b) => b.disc!.lift - a.disc!.lift);
+    winners[fam.key] = ranked[0]?.id ?? null;
+    log(`\n# ${fam.title} — ${PRIMARY_TF}, exit ${PRIMARY_EXIT}, ranked by the FIRST period's lift over blind entries`);
+    for (const r of ranked) {
+      log(line(`${r.id} 1st`, r.disc));
+      log(line(`${r.id} 2nd`, r.val));
+    }
+    log(`WINNER (first period): ${winners[fam.key]}`);
   }
-  log(`WINNER (first period): ${winner}`);
 
   // 2. every rule, every exit, every timeframe, both periods (descriptive)
   for (const ex of EXIT_NAMES) {
@@ -296,11 +311,17 @@ const main = async () => {
     }
   }
 
-  // 3. the two answers, on the second period only
+  // 3. the answers, on the second period only
   log(`\n# ANSWERS (second period, ${SPLIT} on — nothing below was chosen on it)`);
-  if (winner) {
+  for (const fam of FAMILIES) {
+    const winner = winners[fam.key];
+    if (!winner) continue;
+    log(`## ${fam.title}: ${winner}`);
     for (const ex of EXIT_NAMES) {
       log(line(`${winner} ${PRIMARY_TF} ${ex}`, S(winner, ex, "val", `tf:${PRIMARY_TF}`)));
+    }
+    for (const tf of TFS) {
+      if (tf !== PRIMARY_TF) log(line(`${winner} ${tf} ${PRIMARY_EXIT}`, S(winner, PRIMARY_EXIT, "val", `tf:${tf}`)));
     }
     for (const side of SIDES) log(line(`${winner} ${PRIMARY_TF} ${PRIMARY_EXIT} ${side}`, S(winner, PRIMARY_EXIT, "val", `tfside:${PRIMARY_TF}:${side}`)));
     let up = 0, total = 0;
@@ -314,6 +335,7 @@ const main = async () => {
     }
     log(`   pairs with positive expectancy (all timeframes, ${PRIMARY_EXIT}): ${up}/${total}  ${per.join(" | ")}`);
   }
+  log(`## the app's RSI + SAR rule`);
   for (const tf of TFS) {
     for (const ex of EXIT_NAMES) log(line(`rsi_sar ${tf} ${ex}`, S("rsi_sar", ex, "val", `tf:${tf}`)));
   }
@@ -330,7 +352,7 @@ const main = async () => {
       }
     }
   }
-  report.winner = winner;
+  report.winners = winners;
   report.stats = dump;
   await Deno.writeTextFile(`${OUT}/gainz.json`, JSON.stringify(report));
   log(`\ndone in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
