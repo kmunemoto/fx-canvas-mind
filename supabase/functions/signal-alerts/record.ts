@@ -179,3 +179,8 @@ export const summarize = (rows: EventRow[]): Summary => {
 // all timeframes, 2025-07 to 2026-09, spread paid): the yardstick the live
 // record is read against.
 export const BACKTEST = { period: "2025-07〜2026-09", n: 1255, winRate: 0.35, meanR: -0.125, breakeven: 0.4 };
+
+// #112: the same yardstick for the GA-style rule (research/gainz.ts #112
+// block: its own plan, stop 1 ATR and target 2x, all timeframes, 2025-07 to
+// 2026-09, spread paid; analyze/gainz.ts GA_EVIDENCE)
+export const GA_BACKTEST = { period: "2025-07〜2026-09", n: 10757, winRate: 0.288, meanR: -0.134, breakeven: 1 / 3 };

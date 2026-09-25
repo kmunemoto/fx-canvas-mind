@@ -1,4 +1,4 @@
-import type { RsiSarEvidence, RsiSarSummary, RsiSarTrigger } from "./types";
+import type { GainzEvidence, GainzSummary, RsiSarEvidence, RsiSarSummary, RsiSarTrigger } from "./types";
 
 // #104: the RSI/SAR summary as the client accepts it. Everything arrives as
 // JSON from the analyze function (technicalData.rsiSar, entry_check.rsi_sar);
@@ -92,6 +92,49 @@ export const normalizeRsiSar = (value: unknown): RsiSarSummary | null => {
       blind: { win: num(blind?.win) ?? 0, hit: num(blind?.hit) ?? 0 },
       tf: evidence(ev?.tf),
       all: evidence(ev?.all),
+    },
+  };
+};
+
+// #112: the GA-style rule's summary (analyze/gainz.ts compactGainz)
+const gaEvidence = (v: unknown): GainzEvidence => {
+  const e = rec(v);
+  return { measured: e?.measured === true, win: num(e?.win), n: num(e?.n), meanR: num(e?.meanR) };
+};
+
+export const normalizeGainz = (value: unknown): GainzSummary | null => {
+  const s = rec(value);
+  if (!s || typeof s.tf !== "string" || typeof s.ok !== "boolean") return null;
+  const now = rec(s.now);
+  const plan = now ? rec(now.plan) : null;
+  const ev = rec(s.evidence);
+  const t = rec(s.tally);
+  return {
+    tf: s.tf,
+    rule: typeof s.rule === "string" ? s.rule : "",
+    ok: s.ok,
+    reason: typeof s.reason === "string" ? s.reason : null,
+    bars: num(s.bars) ?? 0,
+    stop_atr: num(s.stop_atr) ?? 1,
+    reward_ratio: num(s.reward_ratio) ?? 2,
+    horizon: num(s.horizon) ?? 48,
+    now: now && typeof now.datetime === "string"
+      ? {
+        datetime: now.datetime,
+        close: num(now.close),
+        rsi: num(now.rsi),
+        atr: num(now.atr),
+        signal: sideOf(now.signal),
+        plan: plan ? { entry: num(plan.entry), stop: num(plan.stop), target: num(plan.target) } : null,
+      }
+      : null,
+    tally: { BUY: tally(t?.BUY), SELL: tally(t?.SELL) },
+    evidence: {
+      period: typeof ev?.period === "string" ? ev.period : "",
+      pairs: num(ev?.pairs) ?? 0,
+      breakeven: num(ev?.breakeven) ?? 1 / 3,
+      tf: gaEvidence(ev?.tf),
+      all: gaEvidence(ev?.all),
     },
   };
 };

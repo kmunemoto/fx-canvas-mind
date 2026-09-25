@@ -19,12 +19,16 @@
 // alert timeframe, followed or not, records each signal once in
 // signal_events and settles the open ones against the bars that came after
 // (record.ts). The app shows that record beside the alerts.
+//
+// #112: a second rule beside RSI + SAR, the GA-style rule
+// (analyze/gainz.ts). It is read on the same bars, recorded and settled the
+// same way (signal_events.rule tells the two apart), and mailed only to the
+// charts subscribed with rule = 'gainz'.
 
 import {
   ALERT_INTERVALS,
   ALERT_PAIRS,
   DEFAULT_FROM,
-  RULE_ID,
   alertsAllowed,
   checkPair,
   isAlertInterval,
@@ -33,15 +37,17 @@ import {
   mayHaveFreshClose,
   renderSignalMail,
   renderTestMail,
+  ruleIdOf,
   sendMail,
   type FiredSignal,
   type Lang,
 } from "./logic.ts";
+import { GA_RULE_ID, isRuleKey, type RuleKey } from "../analyze/gainz.ts";
 import type { Fetcher, QuoteCandle } from "../track-outcomes/quotes.ts";
-import { BACKTEST, fillAt, settleEvent, summarize, type EventRow, type OpenEvent } from "./record.ts";
+import { BACKTEST, GA_BACKTEST, fillAt, settleEvent, summarize, type EventRow, type OpenEvent } from "./record.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v4-2026-09-25T17:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v5-2026-09-25T18:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -94,6 +100,7 @@ interface Subscription {
   pair: string;
   interval: string;
   lang: string;
+  rule: RuleKey;
 }
 
 Deno.serve(async (req: Request) => {
@@ -131,7 +138,7 @@ Deno.serve(async (req: Request) => {
     // same subscriber. The unique key is the claim: two overlapping sweeps
     // cannot both mail it.
     const claimRow = async (row: JsonRecord): Promise<string | null> => {
-      const res = await rest("signal_alerts?on_conflict=user_id,kind,pair,interval,bar_time,side", {
+      const res = await rest("signal_alerts?on_conflict=user_id,kind,pair,interval,bar_time,side,rule", {
         method: "POST",
         headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
         body: JSON.stringify(row),
@@ -148,7 +155,7 @@ Deno.serve(async (req: Request) => {
     // One row per signal, whoever follows the chart. The unique key makes a
     // second sweep that sees the same bar a no-op; either way the id comes back.
     const eventId = async (row: JsonRecord): Promise<string | null> => {
-      const res = await rest("signal_events?on_conflict=pair,interval,bar_time,side", {
+      const res = await rest("signal_events?on_conflict=pair,interval,bar_time,side,rule", {
         method: "POST",
         headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
         body: JSON.stringify(row),
@@ -158,7 +165,8 @@ Deno.serve(async (req: Request) => {
       if (Array.isArray(rows) && rows.length > 0 && isRecord(rows[0]) && typeof rows[0].id === "string") return rows[0].id;
       const found = await readRows(
         `signal_events?pair=eq.${encodeURIComponent(String(row.pair))}&interval=eq.${encodeURIComponent(String(row.interval))}` +
-          `&bar_time=eq.${encodeURIComponent(String(row.bar_time))}&side=eq.${encodeURIComponent(String(row.side))}&select=id`,
+          `&bar_time=eq.${encodeURIComponent(String(row.bar_time))}&side=eq.${encodeURIComponent(String(row.side))}` +
+          `&rule=eq.${encodeURIComponent(String(row.rule))}&select=id`,
       );
       return found.length > 0 && typeof found[0].id === "string" ? found[0].id : null;
     };
@@ -203,10 +211,15 @@ Deno.serve(async (req: Request) => {
       // which is when analyze refuses too
       if (isPossiblyClosed(nowMs)) return json({ ...summary, skipped: "market_closed" });
 
-      const subs = (await readRows("signal_alert_subscriptions?select=user_id,pair,interval,lang"))
-        .filter((r): r is JsonRecord & Subscription =>
-          typeof r.user_id === "string" && isAlertPair(r.pair) && isAlertInterval(r.interval) && typeof r.lang === "string"
-        );
+      const subs: Subscription[] = (await readRows("signal_alert_subscriptions?select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isAlertPair(r.pair) && isAlertInterval(r.interval) && typeof r.lang === "string")
+        .map((r) => ({
+          user_id: r.user_id as string,
+          pair: r.pair as string,
+          interval: r.interval as string,
+          lang: r.lang as string,
+          rule: isRuleKey(r.rule) ? r.rule : "rsi_sar",
+        }));
       summary.subscriptions = subs.length;
 
       // Every chart the app covers, followed or not (#108): the record needs
@@ -246,6 +259,7 @@ Deno.serve(async (req: Request) => {
           bar: r.read?.now?.datetime ?? null,
           rsi: r.read?.now ? Number(r.read.now.rsi.toFixed(1)) : null,
           signal: r.read?.now?.signal ?? null,
+          ga: r.gainz?.now?.signal ?? null,
           fresh: r.signals.length,
         });
         const quotes: QuoteCandle[] = r.quotes;
@@ -257,7 +271,7 @@ Deno.serve(async (req: Request) => {
             bar_time: sig.barTime,
             closed_at: sig.closedAt,
             side: sig.side,
-            rule: RULE_ID,
+            rule: ruleIdOf(sig.rule),
             entry: sig.entry,
             stop: sig.stop,
             target: sig.target,
@@ -294,7 +308,7 @@ Deno.serve(async (req: Request) => {
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, skipped: 0, duplicate: 0, not_allowed: 0 };
       const access = new Map<string, { allowed: boolean; email: string | null }>();
       for (const sig of fired) {
-        for (const sub of subs.filter((s) => s.pair === sig.pair && s.interval === sig.interval)) {
+        for (const sub of subs.filter((s) => s.pair === sig.pair && s.interval === sig.interval && s.rule === sig.rule)) {
           let who = access.get(sub.user_id);
           if (!who) {
             const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
@@ -321,7 +335,7 @@ Deno.serve(async (req: Request) => {
             rsi_prev: sig.rsiPrev,
             sar: sig.sar,
             atr: sig.atr,
-            rule: RULE_ID,
+            rule: ruleIdOf(sig.rule),
             event_id: sig.eventId,
             status: sig.costly ? "skipped" : "pending",
             skip_reason: sig.costly ? "costly_hours" : null,
@@ -361,9 +375,9 @@ Deno.serve(async (req: Request) => {
 
     const status = async () => {
       const [subs, alerts] = await Promise.all([
-        readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,lang&order=created_at.asc`),
+        readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,lang,rule&order=created_at.asc`),
         readRows(
-          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,status,skip_reason,error,created_at,sent_at,event:signal_events(outcome,r,bars,exit_at)&order=created_at.desc&limit=${RECENT_ALERTS}`,
+          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,rule,status,skip_reason,error,created_at,sent_at,event:signal_events(outcome,r,bars,exit_at)&order=created_at.desc&limit=${RECENT_ALERTS}`,
         ),
       ]);
       // #108: the live record. "all" is every signal the rule fired outside
@@ -371,21 +385,31 @@ Deno.serve(async (req: Request) => {
       // actually sent.
       const since = encodeURIComponent(new Date(nowMs - RECORD_DAYS * 24 * 60 * MIN).toISOString());
       const [events, mine] = await Promise.all([
-        readRows(`signal_events?closed_at=gte.${since}&select=interval,costly,outcome,r&limit=20000`),
-        readRows(`signal_alerts?user_id=eq.${uid}&kind=eq.signal&status=eq.sent&created_at=gte.${since}&select=event:signal_events(outcome,r)&limit=20000`),
+        readRows(`signal_events?closed_at=gte.${since}&select=interval,costly,outcome,r,rule&limit=20000`),
+        readRows(`signal_alerts?user_id=eq.${uid}&kind=eq.signal&status=eq.sent&created_at=gte.${since}&select=rule,event:signal_events(outcome,r)&limit=20000`),
       ]);
       const row = (x: JsonRecord): EventRow => ({
         outcome: typeof x.outcome === "string" ? x.outcome : null,
         r: typeof x.r === "number" ? x.r : null,
       });
-      const mailed = events.filter((e) => e.costly !== true);
+      // #112: one record per rule. A row is the GA rule's only when it says
+      // so; everything before #112 is RSI + SAR's.
+      const isGa = (x: JsonRecord) => x.rule === GA_RULE_ID;
+      const recordOf = (ga: boolean, backtest: typeof BACKTEST) => {
+        const own = events.filter((e) => isGa(e) === ga);
+        const mailed = own.filter((e) => e.costly !== true);
+        return {
+          mine: summarize(mine.filter((m) => isGa(m) === ga).map((m) => (isRecord(m.event) ? row(m.event) : { outcome: null, r: null }))),
+          all: summarize(mailed.map(row)),
+          costly: summarize(own.filter((e) => e.costly === true).map(row)),
+          byTf: Object.fromEntries(ALERT_INTERVALS.map((iv) => [iv, summarize(mailed.filter((e) => e.interval === iv).map(row))])),
+          backtest,
+        };
+      };
       const performance = {
         days: RECORD_DAYS,
-        mine: summarize(mine.map((m) => (isRecord(m.event) ? row(m.event) : { outcome: null, r: null }))),
-        all: summarize(mailed.map(row)),
-        costly: summarize(events.filter((e) => e.costly === true).map(row)),
-        byTf: Object.fromEntries(ALERT_INTERVALS.map((iv) => [iv, summarize(mailed.filter((e) => e.interval === iv).map(row))])),
-        backtest: BACKTEST,
+        ...recordOf(false, BACKTEST),
+        gainz: recordOf(true, GA_BACKTEST),
       };
       return {
         ok: true,
@@ -395,7 +419,7 @@ Deno.serve(async (req: Request) => {
         email,
         pairs: ALERT_PAIRS,
         intervals: ALERT_INTERVALS,
-        subscriptions: subs.map((s) => ({ pair: s.pair, interval: s.interval })),
+        subscriptions: subs.map((s) => ({ pair: s.pair, interval: s.interval, rule: isRuleKey(s.rule) ? s.rule : "rsi_sar" })),
         performance,
         alerts,
       };
@@ -408,12 +432,15 @@ Deno.serve(async (req: Request) => {
       if (!isAlertPair(body.pair) || !isAlertInterval(body.interval) || typeof body.on !== "boolean") {
         return json({ ok: false, error: "invalid_request" }, 400);
       }
+      // #112: which rule's signals; absent means RSI + SAR, as before
+      if (body.rule !== undefined && !isRuleKey(body.rule)) return json({ ok: false, error: "invalid_request" }, 400);
+      const rule: RuleKey = isRuleKey(body.rule) ? body.rule : "rsi_sar";
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
-        const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval", {
+        const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval,rule", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-          body: JSON.stringify({ user_id: userId, pair: body.pair, interval: body.interval, lang: isLang(body.lang) ? body.lang : "ja" }),
+          body: JSON.stringify({ user_id: userId, pair: body.pair, interval: body.interval, rule, lang: isLang(body.lang) ? body.lang : "ja" }),
         });
         if (!res.ok) {
           console.error("subscribe failed:", res.status, await res.text().catch(() => ""));
@@ -423,7 +450,7 @@ Deno.serve(async (req: Request) => {
         // Always possible, plan or not: nobody should need a subscription to
         // stop receiving mail
         const res = await rest(
-          `signal_alert_subscriptions?user_id=eq.${uid}&pair=eq.${encodeURIComponent(body.pair)}&interval=eq.${encodeURIComponent(body.interval)}`,
+          `signal_alert_subscriptions?user_id=eq.${uid}&pair=eq.${encodeURIComponent(body.pair)}&interval=eq.${encodeURIComponent(body.interval)}&rule=eq.${rule}`,
           { method: "DELETE" },
         );
         if (!res.ok) {
@@ -447,12 +474,12 @@ Deno.serve(async (req: Request) => {
       const rows = res.ok ? await res.json().catch(() => null) : null;
       const id = Array.isArray(rows) && isRecord(rows[0]) && typeof rows[0].id === "string" ? rows[0].id : null;
       if (!id) return json({ ok: false, error: "save_failed" }, 500);
-      const subs = await readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval&order=created_at.asc`);
+      const subs = await readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,rule&order=created_at.asc`);
       const lang: Lang = isLang(body.lang) ? body.lang : "ja";
       const outcome = await deliver(
         id,
         email,
-        renderTestMail(subs.map((s) => ({ pair: String(s.pair), interval: String(s.interval) })), lang),
+        renderTestMail(subs.map((s) => ({ pair: String(s.pair), interval: String(s.interval), rule: isRuleKey(s.rule) ? s.rule : "rsi_sar" })), lang),
       );
       return json({ ...(await status()), test: outcome });
     }

@@ -113,6 +113,9 @@ export interface TechnicalData {
   // #104 (analyze v68+): the RSI/SAR reading on the entry timeframe, the
   // prices at which the next close completes the rule, and the evidence.
   rsiSar?: RsiSarSummary | null;
+  // #112 (analyze v69+): the GainzAlgo V2 Alpha-style rule on the same bars,
+  // drawn beside RSI/SAR; it never decides the signal
+  gainz?: GainzSummary | null;
 }
 
 // #99: a bounce condition that fired on a CLOSED bar, priced the way a plan
@@ -244,6 +247,41 @@ export interface RsiSarSummary {
     blind: { win: number; hit: number };
     tf: RsiSarEvidence;
     all: RsiSarEvidence;
+  };
+}
+
+// #112: analyze/gainz.ts compactGainz, as the client accepts it
+export interface GainzEvidence {
+  measured: boolean;
+  win: number | null;
+  n: number | null;
+  meanR: number | null;
+}
+
+export interface GainzSummary {
+  tf: string;
+  rule: string;
+  ok: boolean;
+  reason: string | null;
+  bars: number;
+  stop_atr: number;
+  reward_ratio: number;
+  horizon: number;
+  now: {
+    datetime: string;
+    close: number | null;
+    rsi: number | null;
+    atr: number | null;
+    signal: "BUY" | "SELL" | null;
+    plan: { entry: number | null; stop: number | null; target: number | null } | null;
+  } | null;
+  tally: Record<"BUY" | "SELL", { n: number; wins: number; losses: number; ambiguous: number; expired: number; open: number }>;
+  evidence: {
+    period: string;
+    pairs: number;
+    breakeven: number;
+    tf: GainzEvidence;
+    all: GainzEvidence;
   };
 }
 

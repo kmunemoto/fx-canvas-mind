@@ -51,7 +51,7 @@ import type {
   PositionReview,
   RuleFit,
 } from "@/lib/types";
-import { alignedBools, alignedNumbers, normalizeRsiSar } from "@/lib/rsiSar";
+import { alignedBools, alignedNumbers, normalizeGainz, normalizeRsiSar } from "@/lib/rsiSar";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
 import { useNavigate } from "react-router-dom";
@@ -63,7 +63,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v68-2026-09-25T10:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v69-2026-09-25T18:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -322,6 +322,7 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     candles: normalizeCandles(source.candles),
     charts: normalizeCharts(source.charts),
     rsiSar: normalizeRsiSar(source.rsiSar),
+    gainz: normalizeGainz(source.gainz),
   };
 };
 

@@ -4,10 +4,12 @@ import { toast } from "sonner";
 import { useLocale } from "@/lib/i18n";
 import { priceDecimals } from "@/lib/candleTime";
 import {
+  ALERT_RULES,
   AlertRequestError,
   callSignalAlerts,
   isFollowing,
   type AlertRow,
+  type AlertRule,
   type AlertSettings,
   type RecordSummary,
 } from "@/lib/signalAlerts";
@@ -39,6 +41,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const [settings, setSettings] = useState<AlertSettings | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // #112: which rule's grid and record are on screen
+  const [rule, setRule] = useState<AlertRule>("rsi_sar");
 
   const load = useCallback(async () => {
     setLoadError(false);
@@ -54,10 +58,10 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   }, [load]);
 
   const toggle = async (pair: string, interval: string, on: boolean) => {
-    const key = `${pair}|${interval}`;
+    const key = `${rule}|${pair}|${interval}`;
     setBusy(key);
     try {
-      setSettings(await call({ action: "set", pair, interval, on, lang: locale }));
+      setSettings(await call({ action: "set", pair, interval, on, rule, lang: locale }));
     } catch {
       toast.error(a.saveFailed);
     } finally {
@@ -83,7 +87,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const rowLabel = (r: AlertRow) => {
     if (r.kind === "test") return a.testRow;
     const tf = r.interval ? a.intervals[r.interval] ?? r.interval : "";
-    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim();
+    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (a.ruleTag[r.rule] ?? "");
   };
   const statusLabel = (r: AlertRow) =>
     r.status === "skipped" && r.skipReason ? a.skipReasons[r.skipReason] ?? a.status.skipped : a.status[r.status];
@@ -145,6 +149,25 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
             </p>
           )}
 
+          <div className="flex items-center gap-1" role="tablist" aria-label={a.ruleTabsLabel} data-testid="signal-alerts-rules">
+            {ALERT_RULES.map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={rule === k}
+                onClick={() => setRule(k)}
+                data-testid={`signal-alerts-rule-${k}`}
+                className={`px-2 py-0.5 rounded border text-[11px] ${
+                  rule === k ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
+                }`}
+              >
+                {a.ruleTabs[k]}
+              </button>
+            ))}
+          </div>
+          {rule === "gainz" && <p className="text-[11px] text-muted-foreground" data-testid="signal-alerts-gainz-intro">{a.gainzIntro}</p>}
+
           <table className="w-full text-xs" data-testid="signal-alerts-grid">
             <thead>
               <tr className="text-muted-foreground">
@@ -159,7 +182,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                 <tr key={pair} className="border-t border-border/50">
                   <td className="py-1 font-mono text-foreground">{pair}</td>
                   {settings.intervals.map((iv) => {
-                    const on = isFollowing(settings, pair, iv);
+                    const on = isFollowing(settings, pair, iv, rule);
                     // A lapsed plan can still untick, never tick
                     const disabled = busy !== null || (!on && !settings.allowed);
                     return (
@@ -169,8 +192,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                           checked={on}
                           disabled={disabled}
                           onChange={() => void toggle(pair, iv, !on)}
-                          aria-label={`${pair} ${a.intervals[iv] ?? iv}`}
-                          data-testid={`signal-alert-${pair}-${iv}`}
+                          aria-label={`${pair} ${a.intervals[iv] ?? iv} ${a.ruleTabs[rule]}`}
+                          data-testid={rule === "gainz" ? `signal-alert-gainz-${pair}-${iv}` : `signal-alert-${pair}-${iv}`}
                           className="h-4 w-4 accent-primary disabled:opacity-40"
                         />
                       </td>
@@ -182,7 +205,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           </table>
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {a.notes.map((n) => <li key={n}>{n}</li>)}
+            {(rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button
@@ -195,28 +218,34 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
             {a.test}
           </button>
 
-          {settings.performance && (
-            <div className="space-y-1.5 pt-1 border-t border-border/60" data-testid="signal-alerts-record">
-              <p className="text-[11px] font-semibold text-foreground">{a.record.title}</p>
-              {summaryBlock(a.record.mine, settings.performance.mine, "signal-alerts-record-mine")}
-              {summaryBlock(a.record.all, settings.performance.all, "signal-alerts-record-all")}
-              {settings.performance.backtest && (
-                <p className="text-[10px] text-muted-foreground">
-                  {a.record.backtest(
-                    settings.performance.backtest.period,
-                    pct(settings.performance.backtest.winRate),
-                    fmtR(settings.performance.backtest.meanR),
-                    pct(settings.performance.backtest.breakeven),
-                  )}
-                </p>
-              )}
-              {settings.performance.all.n < ENOUGH && (
-                <p className="text-[10px] text-warning" data-testid="signal-alerts-record-small">{a.record.small}</p>
-              )}
-              <p className="text-[10px] text-muted-foreground">{a.record.rNote}</p>
-              <p className="text-[10px] text-muted-foreground">{a.record.method}</p>
-            </div>
-          )}
+          {(() => {
+            // #112: the record of the rule on screen
+            const perf = settings.performance;
+            const record = perf ? (rule === "gainz" ? perf.gainz : perf) : null;
+            if (!record) return null;
+            return (
+              <div className="space-y-1.5 pt-1 border-t border-border/60" data-testid="signal-alerts-record">
+                <p className="text-[11px] font-semibold text-foreground">{a.record.titleFor(a.ruleTabs[rule])}</p>
+                {summaryBlock(a.record.mine, record.mine, "signal-alerts-record-mine")}
+                {summaryBlock(a.record.all, record.all, "signal-alerts-record-all")}
+                {record.backtest && (
+                  <p className="text-[10px] text-muted-foreground">
+                    {a.record.backtest(
+                      record.backtest.period,
+                      pct(record.backtest.winRate),
+                      fmtR(record.backtest.meanR),
+                      pct(record.backtest.breakeven),
+                    )}
+                  </p>
+                )}
+                {record.all.n < ENOUGH && (
+                  <p className="text-[10px] text-warning" data-testid="signal-alerts-record-small">{a.record.small}</p>
+                )}
+                <p className="text-[10px] text-muted-foreground">{rule === "gainz" ? a.record.rNoteGainz : a.record.rNote}</p>
+                <p className="text-[10px] text-muted-foreground">{a.record.method}</p>
+              </div>
+            );
+          })()}
 
           <div className="space-y-1 pt-1 border-t border-border/60" data-testid="signal-alerts-recent">
             <p className="text-[11px] text-muted-foreground">{a.recentTitle}</p>

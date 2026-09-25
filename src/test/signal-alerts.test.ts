@@ -244,13 +244,15 @@ describe("one chart, from the feed to the rule", () => {
     // the forming bar was left out, so the newest read bar is the one that fired
     expect(r.read!.now!.datetime).toBe("2026-09-24 09:00:00");
     expect(r.signals.map((s) => s.closedAt)).toContain("2026-09-24T10:00:00.000Z");
-    expect(r.signals[r.signals.length - 1].side).toBe(readRsiSar(closed).now!.signal);
+    const own = r.signals.filter((s) => s.rule === "rsi_sar");
+    expect(own[own.length - 1].side).toBe(readRsiSar(closed).now!.signal);
   });
 });
 
 // ---- the email -----------------------------------------------------------------------------
 
 const sample = (over: Partial<FiredSignal> = {}): FiredSignal => ({
+  rule: "rsi_sar",
   pair: "USD/JPY",
   interval: "15min",
   side: "BUY",
@@ -263,6 +265,8 @@ const sample = (over: Partial<FiredSignal> = {}): FiredSignal => ({
   rsiPrev: 28.9,
   sar: 149.31,
   atr: 0.1,
+  stability: null,
+  closeThen: null,
   costly: false,
   ...over,
 });

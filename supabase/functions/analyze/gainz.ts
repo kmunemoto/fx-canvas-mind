@@ -181,12 +181,57 @@ export const chartGainz = (read: GainzRead, chartBars: number, decimals: number)
   }));
 };
 
+// What the client's GA card draws: the reading on the newest closed bar, the
+// plan if the rule fired on it, the tally on this chart and the evidence.
+export const compactGainz = (tf: string, read: GainzRead, decimals: number) => {
+  const sideTally = (side: Side) => {
+    const s = read.signals.filter((x) => x.side === side);
+    const count = (o: Outcome) => s.filter((x) => x.outcome === o).length;
+    return { n: s.length, wins: count("win"), losses: count("loss"), ambiguous: count("ambiguous"), expired: count("expired"), open: count("open") };
+  };
+  const now = read.now;
+  const plan = now && now.signal ? planForGa(now.signal, now.close, now.atr) : null;
+  return {
+    tf,
+    rule: GA_RULE_ID,
+    ok: read.ok,
+    reason: read.reason,
+    bars: read.bars,
+    stop_atr: GA_STOP_ATR,
+    reward_ratio: GA_REWARD,
+    horizon: GA_HORIZON,
+    now: now === null ? null : {
+      datetime: now.datetime,
+      close: round(now.close, decimals),
+      rsi: round(now.rsi, 1),
+      atr: round(now.atr, decimals),
+      signal: now.signal,
+      plan: plan === null ? null : { entry: round(plan.entry, decimals), stop: round(plan.stop, decimals), target: round(plan.target, decimals) },
+    },
+    tally: { BUY: sideTally("BUY"), SELL: sideTally("SELL") },
+    evidence: {
+      period: GA_EVIDENCE.period,
+      pairs: GA_EVIDENCE.pairs,
+      breakeven: GA_EVIDENCE.breakeven,
+      tf: GA_EVIDENCE.byTf[tf] ?? NOT_MEASURED,
+      all: GA_EVIDENCE.all,
+    },
+  };
+};
+
 // ---- what was measured -------------------------------------------------------------
 //
-// research/gainz.ts (#112 block): GMO 15-minute bid/ask, eleven pairs, this
-// exact rule and plan, spread paid, 17:00-23:59 UTC left out on 15min and
-// 1h. Nothing was chosen on these numbers — the settings are the
-// screenshot's — so both periods are reported; the second is the one quoted.
+// research/gainz.ts (#112 block, run 2026-09-25): GMO 15-minute bid/ask,
+// eleven pairs, this exact rule and plan, spread paid, 17:00-23:59 UTC left
+// out on 15min and 1h. Nothing was chosen on these numbers — the settings
+// are the screenshot's — so both periods were reported; the second is the
+// one quoted. `win` is over the trades that reached the stop or the target,
+// `meanR` over every trade (one still open at 48 bars at its value then).
+//
+//   first period (2024-01 to 2025-06): 12,880 trades, won 30.4%, -0.086R
+//   second period (2025-07 on):        10,757 trades, won 28.8%, -0.134R;
+//     entering at every bar instead: -0.118R (the rule adds -0.015R,
+//     [-0.047, +0.016]); 0 of 11 pairs positive
 export interface GainzEvidence {
   measured: boolean;
   win: number | null;
@@ -199,12 +244,12 @@ export const GA_EVIDENCE = {
   period: "2025-07〜2026-09",
   pairs: 11,
   breakeven: 1 / (1 + GA_REWARD),
-  all: NOT_MEASURED,
+  all: { measured: true, win: 0.288, n: 10757, meanR: -0.134 } as GainzEvidence,
   byTf: {
     "1min": NOT_MEASURED,
-    "15min": NOT_MEASURED,
-    "1h": NOT_MEASURED,
-    "4h": NOT_MEASURED,
+    "15min": { measured: true, win: 0.282, n: 8317, meanR: -0.15 },
+    "1h": { measured: true, win: 0.306, n: 1791, meanR: -0.08 },
+    "4h": { measured: true, win: 0.307, n: 649, meanR: -0.08 },
     "1day": NOT_MEASURED,
   } as Record<string, GainzEvidence>,
 };
