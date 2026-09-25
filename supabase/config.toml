@@ -60,3 +60,7 @@ verify_jwt = false
 # user's JWT from the settings screen.
 [functions.signal-alerts]
 verify_jwt = false
+
+# #113: the live chart. It checks the user's token itself, as signal-alerts does.
+[functions.live-chart]
+verify_jwt = false

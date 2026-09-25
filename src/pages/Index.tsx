@@ -29,6 +29,7 @@ import {
   type SeparatedScores as SeparatedScoresData,
 } from "@/lib/outcomeStats";
 import { useAuth } from "@/contexts/AuthContext";
+import LiveChart from "@/components/LiveChart";
 import type {
   AnalysisRecord,
   Rulebook,
@@ -802,6 +803,9 @@ const Index = () => {
           locked={isFreeUser}
           onSubscribe={() => navigate("/pricing")}
         />
+
+        {/* #113: five pairs, live, with both rules' signals */}
+        {user && <LiveChart defaultInterval={interval} />}
 
         <OpenPositionsStrip
           positions={positions}

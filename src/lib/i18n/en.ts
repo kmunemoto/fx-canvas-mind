@@ -236,6 +236,25 @@ export const en: Dict = {
     unavailable: (reason: string) => `RSI and SAR could not be computed (${reason})`,
   },
 
+  live: {
+    title: "Live chart",
+    connecting: "Connecting…",
+    updated: (clock: string) => `Updated ${clock}`,
+    pairsLabel: "Pairs",
+    intervalsLabel: "Timeframe",
+    bidAsk: (bid: string, ask: string, spreadPips: string) => `Bid ${bid}   Ask ${ask}   Spread ${spreadPips} pips`,
+    closed: "Market closed (last price)",
+    loading: "Loading the chart…",
+    error: "The chart could not be loaded. Please wait a moment and open it again.",
+    ruleRsiSar: "RSI + SAR",
+    ruleGa: "GA style",
+    sides: { BUY: "BUY", SELL: "SELL" },
+    none: "No signal on the newest closed bar",
+    fresh: (what: string) => `New signal: ${what}`,
+    nextClose: (time: string, remain: string) => `Next bar closes ${time} JST (in ${remain})`,
+    note: "Prices are GMO Coin's public rates (the mid of bid and ask), updated every 5 seconds. Signals are judged on closed bars only, so the forming bar moving does not change the marks. The chart reloads when a bar closes.",
+  },
+
   gainz: {
     title: "GA-style signal (GainzAlgo V2 Alpha style)",
     rule: "Buy: the previous bar closed down and this one closes up, above that bar's open (engulfing); the body is more than half the bar's range; RSI(14) is below 50; the close is below the close 5 bars ago. Sell is the mirror. Judged on closed bars.",

@@ -70,9 +70,10 @@ jobs:
           # them. Name them explicitly in workflow_dispatch to deploy one.
           # signal-alerts (#105) IS in it: it imports analyze's rule
           # (rsisar.ts), and a change to the rule must reach the emails too.
+          # live-chart (#113) likewise reads both rules.
           FUNCTIONS="${{ github.event.inputs.functions }}"
           if [ -z "${FUNCTIONS}" ]; then
-            FUNCTIONS="analyze position-review postmortem track-outcomes noise-floor version-compare signal-alerts"
+            FUNCTIONS="analyze position-review postmortem track-outcomes noise-floor version-compare signal-alerts live-chart"
           fi
           for slug in ${FUNCTIONS}; do
             echo "::group::deploy ${slug}"

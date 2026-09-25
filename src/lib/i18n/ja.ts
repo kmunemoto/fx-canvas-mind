@@ -273,6 +273,26 @@ export const ja = {
     unavailable: (reason: string) => `RSI と SAR を計算できませんでした（${reason}）`,
   },
 
+  // #113: リアルタイムチャート（5通貨ペア）
+  live: {
+    title: "リアルタイムチャート",
+    connecting: "接続中…",
+    updated: (clock: string) => `更新 ${clock}`,
+    pairsLabel: "通貨ペア",
+    intervalsLabel: "時間足",
+    bidAsk: (bid: string, ask: string, spreadPips: string) => `売値 ${bid} / 買値 ${ask} / スプレッド ${spreadPips}pips`,
+    closed: "市場休止中（最後の価格）",
+    loading: "チャートを読み込み中…",
+    error: "チャートを読み込めませんでした。少し待ってから開き直してください。",
+    ruleRsiSar: "RSI＋SAR",
+    ruleGa: "GA型",
+    sides: { BUY: "買い（BUY）", SELL: "売り（SELL）" },
+    none: "最新の確定足ではサインなし",
+    fresh: (what: string) => `新しいサイン: ${what}`,
+    nextClose: (time: string, remain: string) => `次の足の確定 ${time}（あと ${remain}）`,
+    note: "価格は GMOコインの公開レート（買値と売値の中間）で、5秒ごとに更新します。サインは確定した足だけで判定するため、形成中の足が動いても印は変わりません。足が確定すると自動で読み直します。",
+  },
+
   // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない
   gainz: {
     title: "GA型サイン（GainzAlgo V2 Alpha 型）",
