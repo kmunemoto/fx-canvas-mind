@@ -223,7 +223,7 @@ export interface RsiSarSignal {
 // Walk the bars after a signal on the mid candles in hand. A bar that
 // reached both the stop and the target is "ambiguous": which came first is
 // not in the candle, and it is never guessed.
-const settle = (candles: Candle[], i: number, side: Side, stop: number, target: number): { outcome: Outcome; bars: number | null } => {
+export const settle = (candles: Candle[], i: number, side: Side, stop: number, target: number): { outcome: Outcome; bars: number | null } => {
   const last = Math.min(candles.length - 1, i + HORIZON_BARS);
   for (let j = i + 1; j <= last; j++) {
     const c = candles[j];

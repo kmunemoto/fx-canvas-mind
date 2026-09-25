@@ -38,11 +38,17 @@
 // three readings their numbers allow. It is ranked and judged on exactly the
 // same terms as the #106 family, separately, so neither family's choice
 // sees the other's.
+//
+// #112 adds the rule the app now draws and mails beside RSI + SAR
+// (analyze/gainz.ts: the V2 Alpha conditions with the settings on the
+// owner's GainzAlgo Suite screenshot, stop 1 ATR, target 2x — the r2w exit
+// exactly). Its settings were not chosen on any data, so it is not ranked:
+// both periods are reported, and the app quotes the second.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, mid, subStarts, type LabelSpec, type Side } from "./lib.ts";
-import { GAINZ, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, type RevRule } from "./reversal.ts";
+import { GAINZ, GAINZ_APP, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, type RevRule } from "./reversal.ts";
 import { fetchPair } from "./gmo.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
@@ -71,6 +77,7 @@ const costly = (tf: Tf, hour: number) => tf !== "4h" && hour >= 17 && hour <= 23
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
+  GAINZ_APP,
   { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
 ];
 const BLIND = "__blind__";
@@ -340,6 +347,29 @@ const main = async () => {
     for (const ex of EXIT_NAMES) log(line(`rsi_sar ${tf} ${ex}`, S("rsi_sar", ex, "val", `tf:${tf}`)));
   }
   for (const ex of EXIT_NAMES) log(line(`rsi_sar all ${ex}`, S("rsi_sar", ex, "val", "all")));
+
+  // 4. #112: the app's GA rule, as the app runs it (r2w is its plan)
+  log(`\n# #112 the app's GA rule (${GAINZ_APP.id}: ${GAINZ_APP.ja}), exit ${PRIMARY_EXIT} — not chosen on any data, both periods`);
+  for (const period of ["disc", "val"] as Period[]) {
+    log(`## ${period === "disc" ? "first period (before " + SPLIT + ")" : "second period (" + SPLIT + " on)"}`);
+    log(line(`${GAINZ_APP.id} all`, S(GAINZ_APP.id, PRIMARY_EXIT, period, "all")));
+    for (const tf of TFS) log(line(`${GAINZ_APP.id} ${tf}`, S(GAINZ_APP.id, PRIMARY_EXIT, period, `tf:${tf}`)));
+    for (const tf of TFS) {
+      for (const side of SIDES) log(line(`${GAINZ_APP.id} ${tf} ${side}`, S(GAINZ_APP.id, PRIMARY_EXIT, period, `tfside:${tf}:${side}`)));
+    }
+    let up = 0, total = 0;
+    const per: string[] = [];
+    for (const pair of Object.keys(barsByPair)) {
+      const s = S(GAINZ_APP.id, PRIMARY_EXIT, period, `pair:${pair}`);
+      if (!s) continue;
+      total++;
+      if (s.e > 0) up++;
+      per.push(`${pair} ${rr(s.e, 2)} (n=${s.n})`);
+    }
+    log(`   pairs with positive expectancy (all timeframes): ${up}/${total}  ${per.join(" | ")}`);
+  }
+  log(`## the same rule with the app's RSI + SAR exit (stop 0.8 ATR, target 1.5x), second period`);
+  for (const tf of TFS) log(line(`${GAINZ_APP.id} ${tf} app`, S(GAINZ_APP.id, "app", "val", `tf:${tf}`)));
 
   const dump: Record<string, unknown> = {};
   for (const rule of [...RULES.map((r) => r.id), BLIND]) {

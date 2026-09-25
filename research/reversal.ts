@@ -28,6 +28,7 @@
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { atrSeriesOf } from "../supabase/functions/analyze/state.ts";
+import { gainzAt } from "../supabase/functions/analyze/gainz.ts";
 import { bundleOf, crossDown, crossUp, type Bundle, type Series } from "./indicator-series.ts";
 import { labelAt, type LabelSpec, type Side } from "./lib.ts";
 
@@ -189,6 +190,19 @@ export const GAINZ: readonly RevRule[] = [
     at: gainz((x, i) => bodyOverAtr(x, i, 0.7), 50),
   },
 ];
+
+// #112: the rule the app now draws and mails beside RSI + SAR — the Suite's
+// V2 Alpha with the settings the owner's screenshot showed (body over true
+// range above 0.5, RSI 50, 5 bars). It IS the app's function, not a copy of
+// it, so the study and the app cannot drift apart.
+export const GAINZ_APP: RevRule = {
+  id: "gz_app",
+  ja: "包み足 ＋ 実体が真の値幅の半分超 ＋ RSI 50未満（売りは50超）＋ 終値が5本前より安い（売りは高い）",
+  at: (x, i) => {
+    const s = gainzAt(x.c, x.b.rsi, i);
+    return s === "BUY" ? 1 : s === "SELL" ? -1 : 0;
+  },
+};
 
 // The app's rule since #104, as the #103 study read it (rsi-combos.ts bounce
 // + psar; src/test/rsisar.test.ts pins the app's rule to the same bars).
