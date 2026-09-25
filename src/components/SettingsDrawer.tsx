@@ -3,6 +3,7 @@ import { X, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useT } from "@/lib/i18n";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import SignalAlertSettings from "@/components/SignalAlertSettings";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
@@ -161,6 +162,8 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             )}
           </div>
         </div>
+
+        <SignalAlertSettings />
 
         <div className="space-y-4">
           <div className="flex items-center justify-between">

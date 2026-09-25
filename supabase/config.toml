@@ -54,3 +54,9 @@ verify_jwt = false
 # manual input, not by the push-to-main set.
 [functions.signal-backtest]
 verify_jwt = false
+
+# #105. Authenticates in the function body: the sweep token from pg_cron
+# (migrations/20260925120000_signal_alerts.sql), which sends no JWT, or a
+# user's JWT from the settings screen.
+[functions.signal-alerts]
+verify_jwt = false

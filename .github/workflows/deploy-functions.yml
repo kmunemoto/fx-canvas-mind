@@ -68,9 +68,11 @@ jobs:
           # deliberately NOT in the default list: they are not part of this
           # pipeline and a push that does not touch them should not redeploy
           # them. Name them explicitly in workflow_dispatch to deploy one.
+          # signal-alerts (#105) IS in it: it imports analyze's rule
+          # (rsisar.ts), and a change to the rule must reach the emails too.
           FUNCTIONS="${{ github.event.inputs.functions }}"
           if [ -z "${FUNCTIONS}" ]; then
-            FUNCTIONS="analyze position-review postmortem track-outcomes noise-floor version-compare"
+            FUNCTIONS="analyze position-review postmortem track-outcomes noise-floor version-compare signal-alerts"
           fi
           for slug in ${FUNCTIONS}; do
             echo "::group::deploy ${slug}"
