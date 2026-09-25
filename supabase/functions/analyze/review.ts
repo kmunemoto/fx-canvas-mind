@@ -52,7 +52,13 @@ export const REVIEW_VERSION = 1;
 // request shape can be recorded off the object that was sent, and so
 // index.ts carries no second numeric max_tokens literal (the noise-floor shape
 // test pins that file to exactly one).
-export const REVIEW_MAX_TOKENS = 2000;
+//
+// 4000 since #101 (was 2000). The ceiling covers the model's thinking as well
+// as the answer, and the model analyze moved to thinks more per turn at the
+// same effort; a ceiling sized for the answer alone would cut reviews off
+// mid-JSON. A ceiling, not a target: an answer that needs 900 tokens still
+// costs 900.
+export const REVIEW_MAX_TOKENS = 4000;
 export const REVIEW_EFFORT = "medium";
 // How far back "the previous run" reaches. Older than this and the market the
 // previous call read is not the market this one reads.
