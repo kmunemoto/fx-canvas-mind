@@ -347,7 +347,7 @@ export const renderTestMail = (subs: Array<{ pair: string; interval: string }>, 
 // ---- sending ----------------------------------------------------------------------
 
 export const RESEND_URL = "https://api.resend.com/emails";
-// fx-tactical.jp was verified in Resend on 2026-09-26 (DKIM on
+// fx-tactical.jp was verified in Resend on 2026-09-25 (DKIM on
 // resend._domainkey, SPF through the send/rsend CNAMEs, DMARC p=none), so mail
 // from it reaches any address. Resend's shared onboarding@resend.dev, used
 // until then, delivered only to the Resend account's own address.
