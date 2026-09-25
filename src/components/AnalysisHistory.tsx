@@ -350,6 +350,9 @@ const AnalysisHistory = ({ records, stats = null, positions = [], onPositionsCha
           // told the user the server had overruled a plan that was never
           // proposed.
           const declined = isSelfDeclined(r);
+          // #104: from v68 the RSI/SAR rule decides, and a WAIT means it did
+          // not fire — nobody declined anything. The row says which rule.
+          const ruleWait = declined && typeof r.entry_check?.rule === "string" && r.entry_check.rule.length > 0;
           // A weekend read stays in the list — the user asked to keep it — but
           // it must never be mistaken for a call the analyst made when it
           // could act. The badge says so on the row itself, not only in the
@@ -359,9 +362,11 @@ const AnalysisHistory = ({ records, stats = null, positions = [], onPositionsCha
           const badgeCls = OUTCOME_CLASS[badgeKey] ?? OUTCOME_CLASS.pending;
           const badgeLabel = rejected
             ? t.history.outcomes.rejected
-            : declined
-              ? t.history.outcomes.declined
-              : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
+            : ruleWait
+              ? t.history.outcomes.ruleWait
+              : declined
+                ? t.history.outcomes.declined
+                : t.history.outcomes[r.outcome] ?? t.history.outcomes.pending;
           const diagnosed = r.postmortem?.status === "done";
           const waitMissed = r.wait_check?.verdict === "missed";
           const isOpen = expanded === r.id;

@@ -107,8 +107,12 @@ export interface TechnicalData {
   candles?: NumericCandle[];
   // #99 (analyze v65+): one chart per timeframe of the chain, deeper than
   // `candles`, with the bounce conditions the server counted on it. Absent
-  // on payloads from earlier versions.
+  // on payloads from earlier versions. From #104 (v68) the marks are the
+  // RSI/SAR rule's signals and the chart carries the two lines.
   charts?: TfChart[];
+  // #104 (analyze v68+): the RSI/SAR reading on the entry timeframe, the
+  // prices at which the next close completes the rule, and the evidence.
+  rsiSar?: RsiSarSummary | null;
 }
 
 // #99: a bounce condition that fired on a CLOSED bar, priced the way a plan
@@ -175,6 +179,72 @@ export interface TfChart {
   // The conditions in force: signals on the newest few closed bars
   recent: ChartSignalMark[];
   lines: ChartTrendLine[];
+  // #104: RSI(14) and the Parabolic SAR, one value per candle (null where
+  // not formed; the forming bar has a SAR and no RSI). `sar_below` is true
+  // where the SAR stands under price (the buy side).
+  rsi?: Array<number | null>;
+  sar?: Array<number | null>;
+  sar_below?: Array<boolean | null>;
+}
+
+// #104: what the next close has to do for the RSI/SAR rule to fire on one
+// side. Every price here was computed by the server (analyze/rsisar.ts).
+export interface RsiSarTrigger {
+  side: "BUY" | "SELL";
+  // RSI is already past 30 (buy) / 70 (sell): the next close can complete it
+  ready: boolean;
+  // The close that puts RSI exactly on the level next bar
+  rsi_close: number | null;
+  // Whether the SAR already stands on this side, and where it is next bar
+  sar_on_side: boolean | null;
+  sar_level: number | null;
+  // Ready only: the close beyond which the rule fires next bar
+  complete_close: number | null;
+  plan: { entry: number | null; stop: number | null; target: number | null } | null;
+}
+
+export interface RsiSarEvidence {
+  measured: boolean;
+  win: number | null;
+  winN: number | null;
+  hit: number | null;
+  hitN: number | null;
+}
+
+export interface RsiSarSummary {
+  tf: string;
+  rule: string;
+  ok: boolean;
+  reason: string | null;
+  bars: number;
+  stop_atr: number;
+  reward_ratio: number;
+  horizon: number;
+  now: {
+    datetime: string;
+    close: number | null;
+    rsi: number | null;
+    rsi_prev: number | null;
+    sar: number | null;
+    sar_below: boolean | null;
+    atr: number | null;
+    signal: "BUY" | "SELL" | null;
+  } | null;
+  next: {
+    close: { at: string; costly: boolean } | null;
+    sar: { level: number | null; below: boolean } | null;
+    buy: RsiSarTrigger;
+    sell: RsiSarTrigger;
+  } | null;
+  tally: Record<"BUY" | "SELL", { n: number; wins: number; losses: number; ambiguous: number; expired: number; open: number }>;
+  evidence: {
+    period: string;
+    pairs: number;
+    breakeven: { win: number; hit: number };
+    blind: { win: number; hit: number };
+    tf: RsiSarEvidence;
+    all: RsiSarEvidence;
+  };
 }
 
 export interface CandleData {
@@ -333,6 +403,11 @@ export const ENTRY_REJECTIONS = [
 export type EntryRejection = (typeof ENTRY_REJECTIONS)[number];
 
 export interface EntryCheck {
+  // #104 (v68+): the rule that decided the signal, the analyst's own answer,
+  // and the RSI/SAR reading the decision was made on
+  rule?: string | null;
+  model_signal?: "BUY" | "SELL" | "WAIT" | null;
+  rsi_sar?: RsiSarSummary | null;
   proposed_signal: "BUY" | "SELL" | "WAIT";
   proposed_entry: number | null;
   proposed_stop: number | null;
@@ -353,7 +428,7 @@ export interface EntryCheck {
   // The model's own score and the floor it is published at. Written by
   // analyze on every row since the floor existed; absent on older rows.
   confidence?: number;
-  confidence_floor?: number;
+  confidence_floor?: number | null;
   rejection: EntryRejection | null;
   // The shape gate's own opinion of the plan (entry.ts evaluateEntry), NOT
   // what happened to the row: `rejection` above is the reason acted on, and

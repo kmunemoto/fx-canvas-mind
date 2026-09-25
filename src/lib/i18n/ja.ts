@@ -209,7 +209,8 @@ export const ja = {
     legend: "破線=サーバ計算の水準 / 点線=AIが挙げた水準 / 帯=現在価格の雲",
     hiddenLevels: (n: number) => `表示範囲の外に ${n}件`,
     // #99: the bounce marks and the trend lines
-    signalLegend: "▲▼=反発の条件が成立した足（濃い=勝ち・薄い=負け・白抜き=判定中/不能）短い線=その損切りと利確 / 斜線=直近2スイングを結んだ線",
+    signalLegend: "BUY・SELL=RSI が30/70から戻り、SAR が同じ側にある確定足（✓勝ち ✗負け …判定中）。点線=そのサインの損切り（赤）と利確（緑）。点=パラボリックSAR（緑=価格の下・赤=価格の上）",
+    rsiLabel: "RSI(14)",
     trend: { lows: "安値線", highs: "高値線" },
     // The label on the flag: the side, then how it came out
     outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
@@ -218,37 +219,47 @@ export const ja = {
     tf: (tf: string) => tf,
   },
 
-  // #99: the conditions price bounced on, counted by the server per timeframe
-  bounce: {
-    title: "反発の条件（この窓での実績）",
-    columns: { condition: "条件", record: "勝敗", rate: "的中率（95%CI）", now: "今" },
-    // A condition in force on the newest closed bars
-    now: "成立",
-    none: "この窓で成立した条件はありません",
-    pending: (reason: string) => `判定保留（${reason}）`,
-    record: (wins: number, losses: number) => `${wins}勝${losses}敗`,
-    rate: (pct: number, lo: number, hi: number) => `${pct}%（${lo}–${hi}）`,
-    noRate: "—",
-    extra: {
-      ambiguous: (n: number) => `判定不能${n}`,
-      expired: (n: number) => `期限切れ${n}`,
-      open: (n: number) => `判定中${n}`,
-      untradable: (n: number) => `損切り幅超過${n}`,
+  // #104: the RSI(14) × Parabolic SAR reading, the next-close prices at
+  // which the rule fires, and the evidence the rule was adopted on
+  rsiSar: {
+    title: "RSI × パラボリックSAR",
+    rule: "買い: RSI(14) が30以下から30を上に戻し、SAR が価格の下。売り: RSI が70以上から70を下に戻し、SAR が価格の上。どちらも確定足で判定します。",
+    nowTitle: "今の状態",
+    rsi: (prev: string, now: string) => `RSI(14) ${prev} → ${now}`,
+    sar: (level: string, below: boolean) => `パラボリックSAR ${level}（${below ? "価格の下＝買い側" : "価格の上＝売り側"}）`,
+    fired: (side: string) => `最新の確定足で${side}のサインが出ています`,
+    noSignal: "最新の確定足ではサインは出ていません",
+    adviceTitle: "注文の目安（次の足の終値で判定）",
+    sides: { BUY: "買い", SELL: "売り" },
+    ready: {
+      BUY: (price: string, dist: string) => `次の足が ${price} を上回って引けたら、買いの条件がそろいます（現在値から${dist}）。`,
+      SELL: (price: string, dist: string) => `次の足が ${price} を下回って引けたら、売りの条件がそろいます（現在値から${dist}）。`,
     },
-    // How the counts were made, said once under the table
-    method: (bars: number, rr: number, horizon: number) =>
-      `確定足${bars}本・仲値（スプレッド抜き）。損切りは反発の極値の少し先（ATR×0.6〜1.2 に収まるもののみ）、利確は損切り幅×${rr}、${horizon}本以内に判定。`,
-    breakeven: (pct: number) => `損益分岐は的中率${pct}%。n が小さい条件は偶然と区別できません。この窓の外の実績は不明です。`,
-    rules: {
-      level_reject: { BUY: "確定安値での反発", SELL: "確定高値での反落" },
-      ma200_reject: { BUY: "SMA200での反発", SELL: "SMA200での反落" },
-      ma20_pullback: { BUY: "上向きSMA20への押し目", SELL: "下向きSMA20への戻り" },
-      band_reentry: { BUY: "BB下限の外から復帰", SELL: "BB上限の外から復帰" },
-      cloud_reject: { BUY: "雲の上限での反発", SELL: "雲の下限での反落" },
-      divergence: { BUY: "強気ダイバージェンス確定", SELL: "弱気ダイバージェンス確定" },
-      double_pivot: { BUY: "ダブルボトム確定", SELL: "ダブルトップ確定" },
-      engulfing: { BUY: "水準での陽の包み足", SELL: "水準での陰の包み足" },
+    holdSar: {
+      BUY: (level: string) => `その足の安値が SAR ${level} を割らないことも必要です。`,
+      SELL: (level: string) => `その足の高値が SAR ${level} を超えないことも必要です。`,
     },
+    notReady: {
+      BUY: (price: string, dist: string, sar: string) =>
+        `まだ準備前です。まず終値が ${price} 以下で引けて RSI が30を割る必要があります（現在値から${dist}）。そのあと RSI が30を上に戻したとき、価格が SAR（今は ${sar}）より上にあれば買いです。`,
+      SELL: (price: string, dist: string, sar: string) =>
+        `まだ準備前です。まず終値が ${price} 以上で引けて RSI が70を超える必要があります（現在値から${dist}）。そのあと RSI が70を下に戻したとき、価格が SAR（今は ${sar}）より下にあれば売りです。`,
+    },
+    plan: (entry: string, stop: string, target: string) => `そのときのプラン: エントリー ${entry}・損切り ${stop}・利確 ${target}`,
+    costlyNext: (jstHour: number) => `次の足は日本時間${jstHour}時台に確定します。この時間帯はスプレッドが開くため、条件がそろってもアプリは見送ります。`,
+    adviceNote: "終値で判定するルールです。足の途中でその価格に触れただけでは条件はそろいません。条件は足ごとに変わるので、次の足が確定したら分析し直してください。",
+    windowTitle: (bars: number) => `この${bars}本で出たサイン`,
+    tally: (side: string, n: number, wins: number, losses: number) => `${side} ${n}回（勝ち${wins}・負け${losses}）`,
+    method: (stopAtr: number, rr: number, horizon: number) =>
+      `損切り ATR×${stopAtr}、利確はその${rr}倍、${horizon}本以内に判定。仲値で判定し、スプレッドは含めていません。`,
+    evidenceTitle: "過去の検証",
+    evidence: (period: string, pairs: number, win: number, n: number, breakeven: number) =>
+      `${period}・${pairs}通貨ペア: 勝率 ${win}%（${n}回）。損益ゼロになる勝率は ${breakeven}% です。`,
+    hit: (hit: number, n: number, blind: number) =>
+      `値動きの向きの当たり（ATR 1本分、先に届いた方）: ${hit}%（${n}回）。毎回入った場合は ${blind}%。`,
+    notMeasured: (tf: string) => `${tf}では検証していません。以下は15分足・1時間足・4時間足の合計です。`,
+    belowBreakeven: "検証では、このルールの勝率は損益ゼロに届いていません。",
+    unavailable: (reason: string) => `RSI と SAR を計算できませんでした（${reason}）`,
   },
 
   technical: {
@@ -256,18 +267,11 @@ export const ja = {
     currentRate: "現在レート",
     overbought: " (買われすぎ)",
     oversold: " (売られすぎ)",
-    tenkan: "一目 転換線",
-    kijun: "一目 基準線",
-    // Named for where they are drawn. "先行A/B" alone read as the cloud
-    // price is in, which is a different pair computed 26 bars earlier — so
-    // the panel confirmed "price is below the cloud" with the wrong numbers.
-    spanA: "一目 先行A(26本先)",
-    spanB: "一目 先行B(26本先)",
-    cloudNow: "現在価格の雲(26本前算出)",
-    cloudTop: "上",
-    cloudBottom: "下",
-    indicators: "指標の数値",
-    cloudSides: { above: "価格は雲の上", inside: "価格は雲の中", below: "価格は雲の下" },
+    // #104: the only readings the analysis uses
+    sar: "パラボリックSAR",
+    sarSide: (below: boolean): string => (below ? "価格の下（買い側）" : "価格の上（売り側）"),
+    atr: "ATR(14)・損切りと利確の幅の基準",
+    closedNote: "RSI と SAR は確定足の値です",
     forming: "この足はまだ形成中",
   },
 
@@ -287,6 +291,8 @@ export const ja = {
       // 「却下」と並べて出る別の出来事。AI自身がWAITと答えた行に「却下」を
       // 出していたため、サーバーが16件のプランを覆したように読めていた。
       declined: "AI見送り",
+      // #104 (v68+): a WAIT because the RSI/SAR rule did not fire — no one declined
+      ruleWait: "条件待ち",
     },
     scope: (n: number) => `直近${n}件`,
     // The statistics and the row list are two different populations on one
@@ -339,12 +345,13 @@ export const ja = {
       // 1つの件数にまとめていた間、16件の自主的な見送りが「サーバーがAIの
       // 判断を覆した」と表示されていた（実際の却下は1件）。
       note: (n: number) => `AIの提案 ${n}件は「約定しない・割に合わない」としてサーバー側で却下し、WAITに変更しました。`,
-      declinedNote: (n: number) => `AI自身が「見送る」と判断したものが ${n}件あります（サーバーによる却下ではありません）。`,
+      declinedNote: (n: number) => `見送りのうち ${n}件は、AI自身の判断か RSI・SAR の条件待ちです（サーバーによる却下ではありません）。`,
       shadowNote: (s: { untriggered: number; wins: number; losses: number; open: number }) =>
         `却下したプランをそのまま追跡した結果: 未約定 ${s.untriggered} / WIN ${s.wins} / LOSS ${s.losses} / 進行中 ${s.open}`,
       rejectedTitle: "サーバー側で却下したプラン",
       rejectedSummary: "AIの提案はサーバー側で却下され、WAITとして公開されました",
       declinedSummary: "AI自身が見送ると判断しました（サーバーによる却下ではありません）",
+      ruleWaitSummary: "RSI・SAR の条件がそろわなかったので WAIT です（サーバーによる却下ではありません）",
       reasons: {
         too_far: "エントリーが現在値から離れすぎ（約定しない）",
         should_be_market: "トレンド継続中に戻りを待つ指値（約定しない）",

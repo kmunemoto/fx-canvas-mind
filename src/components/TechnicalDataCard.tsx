@@ -1,92 +1,64 @@
 import type { TechnicalData } from "@/lib/types";
 import { BarChart3 } from "lucide-react";
 import { useT } from "@/lib/i18n";
-import Disclosure from "./Disclosure";
 
 interface Props {
   data: TechnicalData;
 }
 
-const Indicator = ({ label, value, warn }: { label: string; value: string; warn?: boolean }) => (
+const Row = ({ label, value, tone }: { label: string; value: string; tone?: "warn" | "buy" | "sell" }) => (
   <div className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
     <span className="text-xs text-muted-foreground">{label}</span>
-    <span className={`text-xs font-mono font-medium ${warn ? "text-warning" : "text-foreground"}`}>
+    <span
+      className={`text-xs font-mono font-medium ${
+        tone === "warn" ? "text-warning" : tone === "buy" ? "text-success" : tone === "sell" ? "text-destructive" : "text-foreground"
+      }`}
+    >
       {value}
     </span>
   </div>
 );
 
-// The three numbers a reader checks against the plan stay in view; the
-// eighteen-row table behind them is reference, folded by default.
+// #104: the numbers the analysis actually uses and nothing else — the rate,
+// RSI(14) and the Parabolic SAR it decides on, and the ATR the stop and target
+// are measured in. The eighteen-row table of averages, bands, the cloud,
+// MACD, the stochastic and ADX went with the analysis that read them.
 const TechnicalDataCard = ({ data }: Props) => {
   const t = useT();
-  const rsiNum = parseFloat(data.rsi);
-  const rsiWarn = !isNaN(rsiNum) && (rsiNum > 70 || rsiNum < 30);
-  const rsiNote = !isNaN(rsiNum)
-    ? rsiNum > 70
-      ? t.technical.overbought
-      : rsiNum < 30
-        ? t.technical.oversold
-        : ""
-    : "";
+  const now = data.rsiSar?.now ?? null;
+  const rsi = now?.rsi ?? null;
+  const rsiNote = rsi === null ? "" : rsi >= 70 ? t.technical.overbought : rsi <= 30 ? t.technical.oversold : "";
+  const decimals = data.price.includes(".") ? data.price.split(".")[1].length : 3;
 
   return (
-    <div className="glass rounded-xl border border-border p-4 space-y-3">
+    <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid="technical-data-card">
       <div className="flex items-center gap-2 text-primary">
         <BarChart3 className="h-4 w-4" />
         <h3 className="text-sm font-semibold">{t.technical.title}</h3>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground">{t.technical.currentRate}</p>
-          <p className="text-sm font-mono font-bold text-foreground">{data.price}</p>
-          {data.barClosed === false && (
-            <p className="text-[9px] text-warning">{t.technical.forming}</p>
-          )}
-        </div>
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground">SMA20</p>
-          <p className="text-sm font-mono font-bold text-foreground">{data.sma20}</p>
-        </div>
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground">ATR(14)</p>
-          <p className="text-sm font-mono font-bold text-foreground">{data.atr}</p>
-        </div>
+      <div className="text-center">
+        <p className="text-[10px] text-muted-foreground">{t.technical.currentRate}</p>
+        <p className="text-sm font-mono font-bold text-foreground">{data.price}</p>
+        {data.barClosed === false && <p className="text-[9px] text-warning">{t.technical.forming}</p>}
       </div>
 
-      {/* Which side of the cloud price is on — the one it is IN, not the one
-          drawn 26 bars ahead. The panel used to show only the forward pair,
-          so a reader checking "price is below the cloud" checked it against
-          numbers price has not reached yet. */}
-      {data.cloudSide && (
-        <p className="text-[10px] text-muted-foreground" data-testid="cloud-side">
-          {t.technical.cloudSides[data.cloudSide]}
-        </p>
-      )}
-
-      <Disclosure title={t.technical.indicators} testId="indicator-table">
-        <div className="space-y-0">
-          <Indicator label="RSI(14)" value={`${data.rsi}${rsiNote}`} warn={rsiWarn} />
-          <Indicator label="MACD" value={data.macd} />
-          <Indicator label="MACD Signal" value={data.macdSignal} />
-          <Indicator label="MACD Hist" value={data.macdHist} />
-          <Indicator label="BB Upper" value={data.bbUpper} />
-          <Indicator label="BB Middle" value={data.bbMiddle} />
-          <Indicator label="BB Lower" value={data.bbLower} />
-          <Indicator label="SMA50" value={data.sma50} />
-          <Indicator label="SMA200" value={data.sma200} />
-          <Indicator label={t.technical.tenkan} value={data.tenkan} />
-          <Indicator label={t.technical.kijun} value={data.kijun} />
-          <Indicator label={t.technical.spanA} value={data.spanA} />
-          <Indicator label={t.technical.spanB} value={data.spanB} />
-          {data.cloudNowTop && <Indicator label={`${t.technical.cloudNow} ${t.technical.cloudTop}`} value={data.cloudNowTop} />}
-          {data.cloudNowBottom && <Indicator label={`${t.technical.cloudNow} ${t.technical.cloudBottom}`} value={data.cloudNowBottom} />}
-          <Indicator label="Stoch %K" value={data.slowK} />
-          <Indicator label="Stoch %D" value={data.slowD} />
-          <Indicator label="ADX(14)" value={data.adx} />
-        </div>
-      </Disclosure>
+      <div className="space-y-0">
+        <Row
+          label="RSI(14)"
+          value={rsi === null ? "—" : `${rsi.toFixed(1)}${rsiNote}`}
+          tone={rsi !== null && (rsi >= 70 || rsi <= 30) ? "warn" : undefined}
+        />
+        <Row
+          label={t.technical.sar}
+          value={now?.sar === null || now?.sar === undefined || now.sar_below === null
+            ? "—"
+            : `${now.sar.toFixed(decimals)} ${t.technical.sarSide(now.sar_below)}`}
+          tone={now?.sar_below === true ? "buy" : now?.sar_below === false ? "sell" : undefined}
+        />
+        <Row label={t.technical.atr} value={data.atr} />
+      </div>
+      <p className="text-[9px] text-muted-foreground">{t.technical.closedNote}</p>
     </div>
   );
 };

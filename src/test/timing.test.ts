@@ -58,9 +58,12 @@ describe("the hours a short-term plan loses to the spread (#100)", () => {
 });
 
 describe("the gate, as analyze applies it", () => {
-  it("checks the hour after the shut market and the confidence floor, before the plan's shape", () => {
+  // #104: the confidence floor is no longer a refusal (the rule decides the
+  // signal), so the chain is the shut market, then the hour, then the shape.
+  it("checks the hour after the shut market, before the plan's shape", () => {
     const chain = analyzeSrc.slice(analyzeSrc.indexOf("rejectionReason = marketShut"), analyzeSrc.indexOf("console.warn(\"Entry rejected\""));
-    const order = ["\"market_closed\"", "\"low_confidence\"", "\"costly_hours\"", "entryVerdict.rejection"].map((s) => chain.indexOf(s));
+    expect(chain).not.toContain("\"low_confidence\"");
+    const order = ["\"market_closed\"", "\"costly_hours\"", "entryVerdict.rejection"].map((s) => chain.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });

@@ -124,24 +124,27 @@ describe("a forming bar is not a closed one", () => {
     expect(computeSnapshot(series)!.barClosed).toBeNull();
   });
 
-  it("gives the model the closed-bar reading alongside the live one", () => {
-    expect(analyzeSrc).toContain("closedSnapshots");
-    expect(analyzeSrc).toContain("[確定足のみ(形成中の足を除く)]");
-    expect(analyzeSrc).toContain("この足はまだ形成中");
+  // #104: the analyst is given one reading per rung, RSI and SAR, and it is
+  // the closed-bar one — the rule is decided on a close, so a mid-bar RSI is
+  // not something it can act on. The closed snapshot is still recorded.
+  it("reads the rule on closed bars and records the closed snapshot", () => {
+    expect(analyzeSrc).toContain("const rsiSarReads: RsiSarRead[] = structures.map(({ bars }) => readRsiSar(bars));");
+    expect(analyzeSrc).toContain("rsiSarLines(rsiSarReads[i], decimals, i === 0)");
+    expect(analyzeSrc).toContain("closed: closedSnapshots.map(");
+    expect(analyzeSrc).not.toContain("[確定足のみ(形成中の足を除く)]");
   });
 });
 
 describe("the analyst's own rules are enforced by the server", () => {
-  it("refuses a plan the model itself rated below the stated floor", () => {
+  // #104: the signal is the RSI/SAR rule's, so the analyst's confidence is
+  // its opinion of the reading and no longer a vote on whether to publish.
+  // Still computed and recorded, so the rate stays measurable.
+  it("records the analyst's confidence but no longer refuses on it", () => {
     expect(analyzeSrc).toContain("const MIN_CONFIDENCE = 60;");
     expect(analyzeSrc).toContain("const lowConfidence = normalizedAnalysis.confidence < MIN_CONFIDENCE;");
-    // routed through the existing refusal, so it becomes a WAIT row that the
-    // wait scorer grades and the credit is handed back
-    expect(analyzeSrc).toContain('? "low_confidence"');
-    expect(analyzeSrc).toContain("if (marketShut || lowConfidence || costlyHours || (!entryVerdict.ok && entryVerdict.rejection))");
-    // the costly-hours gate (#100) sits after the confidence floor, so a plan
-    // that fails both is recorded as low confidence
-    expect(analyzeSrc.indexOf('? "low_confidence"')).toBeLessThan(analyzeSrc.indexOf('? "costly_hours"'));
+    expect(analyzeSrc).toContain("if (marketShut || costlyHours || (!entryVerdict.ok && entryVerdict.rejection))");
+    expect(analyzeSrc).not.toContain('? "low_confidence"');
+    expect(analyzeSrc).toContain("confidence_floor: null,");
   });
 
   it("drops a target that points the wrong way instead of showing it as profit", () => {
@@ -160,8 +163,8 @@ describe("the analyst's own rules are enforced by the server", () => {
     expect(analyzeSrc).not.toContain("const HIGHER_BARS");
     expect(analyzeSrc).not.toContain("const ENTRY_BARS");
     expect(analyzeSrc).toContain("const outputsize = OUTPUTSIZE[tf] ?? 250;");
-    // and says so when it still cannot be computed
-    expect(analyzeSrc).toContain("算出不能(足${s.barsUsed}本、200本必要)");
+    // and the RSI/SAR reading says so when a rung is too short to read
+    expect(readFileSync("supabase/functions/analyze/rsisar.ts", "utf8")).toContain("算出不能（確定足${read.bars}本");
   });
 
   it("stops on market data it cannot believe", () => {
@@ -180,8 +183,10 @@ describe("the prompt stops asking for things the app cannot observe", () => {
 
   it("no longer instructs the analyst to locate resting stops", () => {
     expect(analyzeSrc).not.toContain("ストップが溜まる「ストップハントゾーン」があれば特定する");
-    // and says plainly which inputs do not exist
-    expect(analyzeSrc).toContain("板情報・出来高・建玉・約定履歴は一切取得していない");
+    // #104: and the prompt no longer talks about stops resting anywhere at
+    // all — it reads RSI and SAR, and names nothing else as evidence
+    expect(analyzeSrc).not.toContain("ストップ狩り");
+    expect(analyzeSrc).toContain("RSI(14) とパラボリックSAR(0.02, 0.2) だけ");
   });
 
   it("does not force an institutional-intent label on every run", () => {
@@ -189,16 +194,14 @@ describe("the prompt stops asking for things the app cannot observe", () => {
     expect(analyzeSrc).not.toMatch(/required: \[[^\]]*"smart_money"/);
   });
 
-  it("hands over a computed structure instead of asking the model to count", () => {
-    expect(analyzeSrc).toContain("structureLines(structures[i].structure");
-    // The verdict is NOT handed over as settled. It compares two pivots that
-    // can sit a handful of bars apart, and on a decisively trending series it
-    // disagrees with the window it sits in about one time in eight — so
-    // instructing the analyst to adopt it would have replaced a biased guess
-    // with a protected one.
-    expect(analyzeSrc).toContain("構造の判定はあなたの仕事である");
-    expect(analyzeSrc).toContain("参照期間全体の構造ではない");
-    // the undated swing prices are gone
+  // #104: the structure is still computed and stored (context.structure),
+  // but it is not an RSI/SAR reading, so it is no longer handed to the
+  // analyst; the reading it is handed is computed, and it is told to quote
+  // it rather than count.
+  it("hands over the computed RSI/SAR reading and nothing else to count from", () => {
+    expect(analyzeSrc).not.toContain("structureLines(");
+    expect(analyzeSrc).toContain("structure: structures.map((x, i) => compactStructure(");
+    expect(analyzeSrc).toContain("数値は与えられたものをそのまま引用し、数え直さない");
     expect(analyzeSrc).not.toContain("`直近スイング高値: ${s.swingHighs");
   });
 
@@ -209,11 +212,11 @@ describe("the prompt stops asking for things the app cannot observe", () => {
     expect(analyzeSrc).toContain("const structures = seriesByTf.map(");
   });
 
-  it("makes the divergence verdict the server's, not the model's", () => {
-    expect(analyzeSrc).toContain("ダイバージェンスは「ダイバージェンス(RSI14・サーバ判定)」の行が結論である");
+  // #104: divergence is no longer part of the analysis (it is not the RSI/
+  // SAR rule); it is still computed and stored, never shown to the analyst.
+  it("does not ask the analyst about divergence at all", () => {
     expect(analyzeSrc).not.toContain("ダイバージェンス）は必ず言及する");
-    // the two shapes production actually produced, named as not divergence
-    expect(analyzeSrc).toContain("異なる2つのオシレーター");
-    expect(analyzeSrc).toContain("隠れ（ヒドゥン）ダイバージェンスは計算していない");
+    expect(analyzeSrc).not.toContain("ダイバージェンス(RSI14・サーバ判定)");
+    expect(analyzeSrc).toContain("divergence: compactDivergence(entryDivergence, decimals),");
   });
 });

@@ -51,6 +51,7 @@ import type {
   PositionReview,
   RuleFit,
 } from "@/lib/types";
+import { alignedBools, alignedNumbers, normalizeRsiSar } from "@/lib/rsiSar";
 import { useToast } from "@/hooks/use-toast";
 import { useLocale } from "@/lib/i18n";
 import { useNavigate } from "react-router-dom";
@@ -62,7 +63,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_O6jJsLFQ9zArYsenDxIHGQ_bJdkOm2I";
 // (v24 against a live v36), so the mismatch warning fired on every single
 // call — which is worse than not having one, because it teaches the reader
 // to ignore the day it means something.
-const EXPECTED_ANALYZE_VERSION = "analyze-v67-2026-09-25T08:00:00Z";
+const EXPECTED_ANALYZE_VERSION = "analyze-v68-2026-09-25T10:00:00Z";
 // Every column the history view and the statistics actually read.
 //
 // PostgREST returns ONLY what is listed here, and AnalysisRecord declares the
@@ -147,6 +148,8 @@ const normalizeEntryCheck = (value: unknown): EntryCheck | null => {
   return {
     ...(source as EntryCheck),
     proposed_signal: proposed,
+    // #104: validated like the live summary, since history rows carry it too
+    rsi_sar: normalizeRsiSar(source.rsi_sar),
     rejection: typeof source.rejection === "string" && source.rejection.length > 0
       ? source.rejection as EntryCheck["rejection"]
       : null,
@@ -256,6 +259,10 @@ const normalizeCharts = (value: unknown): TfChart[] => {
           return [{ kind: l.kind, from, to, slope_per_bar: numOrNull(l.slope_per_bar), now: numOrNull(l.now) }];
         })
         : [],
+      // #104: the two lines, only when they line up with the candles
+      rsi: alignedNumbers(c.rsi, candles.length),
+      sar: alignedNumbers(c.sar, candles.length),
+      sar_below: alignedBools(c.sar_below, candles.length),
     });
   }
   return out;
@@ -314,6 +321,7 @@ const normalizeTechnicalData = (value: unknown): TechnicalData | null => {
     adx: readString("adx"),
     candles: normalizeCandles(source.candles),
     charts: normalizeCharts(source.charts),
+    rsiSar: normalizeRsiSar(source.rsiSar),
   };
 };
 
