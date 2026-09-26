@@ -238,6 +238,58 @@ describe("#113 the live chart card", () => {
     expect(screen.getByTestId("live-latest-outcome").textContent).toBe("結果: 利確に到達");
   });
 
+  it("#115: draws each signal's position as a box to where it settled, an × there, a line on its bar, and the SAR as a band", async () => {
+    const base = readFor("USD/JPY", "1h");
+    const n = base.candles.length;
+    const at = (i: number) => base.candles[i].datetime;
+    const e1 = base.candles[n - 60].close;
+    const win = { ...base.marks[0], rule: "gainz", side: "BUY" as const, datetime: at(n - 60), barsAgo: 58, entry: e1, stop: e1 - 0.1, target: e1 + 0.2, outcome: "win" as const, bars: 5 };
+    const e2 = base.candles[n - 4].close;
+    const open = { ...win, side: "SELL" as const, datetime: at(n - 4), barsAgo: 2, entry: e2, stop: e2 + 0.1, target: e2 - 0.2, outcome: "open" as const, bars: null };
+    const e3 = base.candles[n - 100].close;
+    const expired = { ...win, rule: "rsi_sar", datetime: at(n - 100), barsAgo: 98, entry: e3, stop: e3 - 0.1, target: e3 + 0.2, outcome: "expired" as const, bars: null };
+    const r = { ...base, marks: [expired, win, open], latest: { rsiSar: expired, gainz: open } };
+    render(<LiveChart loadBars={async () => r} loadTicks={async () => ({})} />);
+    await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
+    const num = (el: Element | null | undefined, a: string) => Number(el?.getAttribute(a));
+
+    // the won buy: green over the entry, red under it, running to the bar
+    // that settled it, with the dashed line ending on the target at an ×
+    const box = screen.getByTestId("chart-position-BUY-win");
+    const [tp, sl] = [...box.querySelectorAll("rect")];
+    expect(num(tp, "y")).toBeLessThan(num(sl, "y"));
+    expect(num(tp, "y") + num(tp, "height")).toBeCloseTo(num(sl, "y"), 6);
+    const exit = screen.getByTestId("chart-exit-win");
+    const path = exit.querySelector("line");
+    expect(num(path, "y2")).toBeCloseTo(num(tp, "y"), 6);
+    expect(num(path, "x2")).toBeCloseTo(num(tp, "x") + num(tp, "width"), 6);
+    expect(exit.textContent).toBe("TP");
+    // settled 5 bars on: one bar's width
+    const slot = num(tp, "width") / 5;
+    // the open sell: the target under the entry, no × yet
+    const [tp2, sl2] = [...screen.getByTestId("chart-position-SELL-open").querySelectorAll("rect")];
+    expect(num(tp2, "y")).toBeGreaterThan(num(sl2, "y"));
+    expect(screen.getByTestId("chart-exit-open").querySelector("path")).toBeNull();
+    expect(screen.getAllByTestId("chart-signal-line")).toHaveLength(2);
+    // the GA view: the SAR as a band only, said in the legend
+    expect(screen.getByTestId("chart-cloud").querySelectorAll("polygon").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("chart-sar")).toBeNull();
+    expect(screen.getByTestId("chart-position-legend").textContent).toContain("箱=サインの建玉");
+    expect(screen.getByTestId("chart-position-legend").textContent).toContain("帯=パラボリックSAR");
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("GA型の判定には使っていません");
+
+    // both rules: the dots come back beside the band, and the expired one
+    // ends at the 48th bar
+    fireEvent.click(screen.getByTestId("live-view-both"));
+    expect(screen.getByTestId("chart-sar")).toBeTruthy();
+    expect(screen.getByTestId("chart-cloud")).toBeTruthy();
+    expect(screen.getAllByTestId("chart-signal-line")).toHaveLength(3);
+    expect(screen.getByTestId("chart-exit-expired").textContent).toBe("期限");
+    const [tp3] = [...screen.getByTestId("chart-position-BUY-expired").querySelectorAll("rect")];
+    expect(num(tp3, "width")).toBeCloseTo(slot * 48, 4);
+    expect(screen.getByTestId("chart-signal-legend").textContent).not.toContain("点線");
+  });
+
   it("v3: shows the last bars from the other feed while GMO is down, with no live price and when the market reopens", async () => {
     const r = readFor("USD/JPY", "1h", {
       source: "twelvedata",
