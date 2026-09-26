@@ -83,7 +83,8 @@ const axisPrices = () =>
     .filter((x) => /^\d+\.\d{3}$/.test(x))
     .map(Number);
 const timeLabels = () =>
-  [...document.querySelectorAll("[data-testid='chart-price'] text[text-anchor]")].map((x) => x.textContent);
+  [...document.querySelectorAll("[data-testid='chart-price'] text[data-time-label]")].map((x) => x.textContent);
+const lastTime = () => timeLabels().at(-1);
 // the drawing is 660 wide when nothing measures it (jsdom): let the screen say so too
 const sized = (el: Element) =>
   Object.defineProperty(el, "getBoundingClientRect", {
@@ -109,7 +110,7 @@ describe("#116 zoom, pan and full screen on the chart", () => {
     // the spike on bar 5 is off screen: the scale is the bars that are
     expect(Math.max(...axisPrices())).toBeLessThan(151);
     // the newest bar is still the last one
-    expect(timeLabels()[2]).toBe(formatCandleLabel(candles[59].datetime, "ja-JP"));
+    expect(lastTime()).toBe(formatCandleLabel(candles[59].datetime, "ja-JP"));
 
     fireEvent.click(screen.getByTestId("chart-zoom-in"));
     fireEvent.click(screen.getByTestId("chart-zoom-in"));
@@ -134,12 +135,13 @@ describe("#116 zoom, pan and full screen on the chart", () => {
     expect(candleCount()).toBe(60);
 
     fireEvent.click(screen.getByTestId("chart-zoom-in"));
-    // 40 bars across a plot 524 wide: 100 units is about 8 bars
+    // 40 bars across a plot 606 wide (660, less the left pad and a 46-wide
+    // price axis — no plan levels, so no pill lane): 100 units is 6.6 bars
     fireEvent.pointerDown(svg, { pointerId: 1, pointerType: "mouse", button: 0, clientX: 300 });
     fireEvent.pointerMove(svg, { pointerId: 1, pointerType: "mouse", clientX: 400 });
     fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "mouse", clientX: 400 });
     expect(candleCount()).toBe(40);
-    expect(timeLabels()[2]).toBe(formatCandleLabel(candles[51].datetime, "ja-JP"));
+    expect(lastTime()).toBe(formatCandleLabel(candles[52].datetime, "ja-JP"));
 
     fireEvent.doubleClick(svg);
     expect(candleCount()).toBe(60);
@@ -183,7 +185,13 @@ describe("#116 zoom, pan and full screen on the chart", () => {
     expect(overlay.parentElement).toBe(document.body);
     expect(screen.getByTestId("chart-fullscreen-placeholder").textContent).toContain("全画面で表示しています");
     expect(document.body.style.overflow).toBe("hidden");
+    // #118: the settings sheet holds the gesture hint, and Esc closes the
+    // sheet before full screen
+    fireEvent.click(within(overlay).getByTestId("chart-sheet-settings-open"));
     expect(within(overlay).getByTestId("chart-zoom-hint").textContent).toContain("ピンチ");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("chart-sheet")).toBeNull());
+    expect(screen.getByTestId("chart-fullscreen-overlay")).toBeTruthy();
     // in full screen a plain wheel zooms
     const svg = within(overlay).getByTestId("chart-price");
     sized(svg);
@@ -211,13 +219,16 @@ describe("#116 zoom, pan and full screen on the chart", () => {
     fireEvent.pointerDown(svg, { pointerId: 1, pointerType: "mouse", button: 0, clientX: 300 });
     fireEvent.pointerMove(svg, { pointerId: 1, pointerType: "mouse", clientX: 400 });
     fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "mouse", clientX: 400 });
-    expect(timeLabels()[2]).toBe(formatCandleLabel(candles[51].datetime, "ja-JP"));
+    expect(lastTime()).toBe(formatCandleLabel(candles[52].datetime, "ja-JP"));
     rerender(<LocaleProvider initial="ja"><PriceChart candles={candles} pair="USD/JPY" seriesKey="b" /></LocaleProvider>);
     expect(candleCount()).toBe(40);
-    expect(timeLabels()[2]).toBe(formatCandleLabel(candles[59].datetime, "ja-JP"));
+    expect(lastTime()).toBe(formatCandleLabel(candles[59].datetime, "ja-JP"));
 
     rerender(<LocaleProvider initial="ja"><PriceChart candles={candles} pair="USD/JPY" interactive={false} /></LocaleProvider>);
-    expect(screen.queryByTestId("chart-toolbar")).toBeNull();
+    // no zoom and no full screen; the background can still be chosen
+    expect(screen.queryByTestId("chart-zoom-in")).toBeNull();
+    expect(screen.queryByTestId("chart-fullscreen")).toBeNull();
+    expect(screen.getByTestId("chart-theme-toggle")).toBeTruthy();
     expect(candleCount()).toBe(60);
   });
 });
@@ -241,23 +252,45 @@ describe("#116 the live chart in full screen", () => {
     return { ...r, pair, interval, nextClose: new Date(Date.now() + 600_000).toISOString() };
   };
 
-  it("keeps the pair, timeframe and view tabs over the chart, and switching them does not leave full screen", async () => {
+  it("#118: switches the pair, timeframe and signals from sheets at the bottom, without leaving full screen", async () => {
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
-    const loadTicks = vi.fn(async () => ({ "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: new Date().toISOString(), open: true } }));
+    const loadTicks = vi.fn(async () => ({
+      "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: new Date().toISOString(), open: true },
+      "EUR/USD": { bid: 1.1, ask: 1.10002, mid: 1.10001, time: new Date().toISOString(), open: true },
+    }));
     render(<LiveChart loadBars={loadBars} loadTicks={loadTicks} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     fireEvent.click(screen.getByTestId("chart-fullscreen"));
-    const overlay = screen.getByTestId("chart-fullscreen-overlay");
-    const bar = within(overlay).getByTestId("chart-fullscreen-bar");
-    await waitFor(() => expect(within(bar).getByTestId("live-price").textContent).toContain("150.120"));
-    fireEvent.click(within(bar).getByTestId("live-pair-EUR/USD"));
+    const overlay = () => screen.getByTestId("chart-fullscreen-overlay");
+    // the pair's price and move at the top, the bid/ask under it
+    await waitFor(() => expect(within(overlay()).getByTestId("chart-fullscreen-status").textContent).toContain("150.120"));
+    expect(within(overlay()).getByTestId("chart-fullscreen-price").textContent).toContain("前の足比");
+    expect(within(overlay()).getByTestId("chart-sheet-symbol-open").textContent).toBe("USDJPY");
+    expect(within(overlay()).getByTestId("chart-sheet-interval-open").textContent).toBe("1時間");
+
+    fireEvent.click(within(overlay()).getByTestId("chart-sheet-symbol-open"));
+    const row = within(overlay()).getByTestId("live-sheet-pair-EUR/USD");
+    expect(row.textContent).toContain("ユーロ／米ドル");
+    expect(row.textContent).toContain("1.10001");
+    expect(within(overlay()).getByTestId("live-sheet-pair-USD/JPY").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(row);
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "1h"));
+    expect(screen.queryByTestId("chart-sheet")).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByTestId("chart-fullscreen-overlay")).toBeTruthy();
-    expect(within(screen.getByTestId("chart-fullscreen-overlay")).getByTestId("live-pair-EUR/USD").getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(within(screen.getByTestId("chart-fullscreen-overlay")).getByTestId("live-interval-4h"));
+    expect(within(overlay()).getByTestId("chart-sheet-symbol-open").textContent).toBe("EURUSD");
+
+    fireEvent.click(within(overlay()).getByTestId("chart-sheet-interval-open"));
+    fireEvent.click(within(overlay()).getByTestId("live-sheet-interval-4h"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "4h"));
+    fireEvent.click(within(overlay()).getByTestId("chart-sheet-interval-open"));
+    fireEvent.click(within(overlay()).getByTestId("live-sheet-view-both"));
+    expect(screen.getByTestId("live-view-both").getAttribute("aria-selected")).toBe("true");
+    // the backdrop closes a sheet too
+    fireEvent.click(within(overlay()).getByTestId("chart-sheet-symbol-open"));
+    fireEvent.click(within(overlay()).getByTestId("chart-sheet-backdrop"));
+    expect(screen.queryByTestId("chart-sheet")).toBeNull();
+    expect(screen.getByTestId("chart-fullscreen-overlay")).toBeTruthy();
   });
 });

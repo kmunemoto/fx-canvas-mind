@@ -252,6 +252,16 @@ export const ja = {
       reset: "既定（14・1・3）に戻す",
       note: "TradingView の「ストキャスティクス」と同じ計算（%K=直近の高値・安値の中での終値の位置、%D=%K の移動平均、80/20）。表示のみで、サインの判定には使っていません。",
     },
+    // #118: full screen's sheets and the background
+    settingsTitle: "チャート設定",
+    background: "背景",
+    themeNames: { dark: "黒", light: "白" },
+    themeLight: "白背景にする",
+    themeDark: "黒背景にする",
+    zoomTitle: "表示範囲",
+    closeSheet: "閉じる",
+    vsPrevBar: "前の足比",
+    priceNow: "現在値",
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -315,6 +325,15 @@ export const ja = {
     maintenanceShort: "配信メンテナンス中",
     // #114
     viewLabel: "表示するサイン",
+    // #118: full screen's pair sheet and the timeframe button
+    pairNames: {
+      "USD/JPY": "米ドル／円",
+      "EUR/USD": "ユーロ／米ドル",
+      "GBP/USD": "英ポンド／米ドル",
+      "EUR/JPY": "ユーロ／円",
+      "GBP/JPY": "英ポンド／円",
+    } as Record<string, string>,
+    intervalShort: { "1min": "1分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
     recommended:
       "おすすめ設定は GA型・1時間足です。GA型の3つの時間足のうち、前半・後半の両方でランダムに入るより少し良かったのは1時間足だけでした（+0.07R・+0.01R）。ただし差は誤差の範囲で、スプレッドを払うと損益はまだマイナスです。勝てる根拠ではありません。",
