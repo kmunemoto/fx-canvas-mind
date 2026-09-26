@@ -1,12 +1,19 @@
 import { supabase } from "@/lib/supabase";
 import type { ChartSignalMark, NumericCandle } from "@/lib/types";
+import { priceDecimals } from "@/lib/candleTime";
 
 // #113: the live chart's two reads (supabase/functions/live-chart), as the
 // client accepts them. Anything malformed is dropped rather than drawn.
 
 export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/live-chart";
-export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY"];
+export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"];
 export const LIVE_INTERVALS = ["1min", "15min", "1h", "4h", "1day"];
+// #127: gold (XAU/USD) — its bars from Twelve Data, its price from
+// Swissquote (GMO has no gold); no 1-minute chart (the shared key's daily
+// allowance)
+export const GOLD_PAIR = "XAU/USD";
+export const GOLD_INTERVALS = ["15min", "1h", "4h", "1day"];
+export const intervalsFor = (pair: string): string[] => (pair === GOLD_PAIR ? GOLD_INTERVALS : LIVE_INTERVALS);
 // How often the price is asked for while the chart is on screen
 export const TICK_MS = 5_000;
 
@@ -97,7 +104,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     interval: r.interval,
     ok: r.ok === true,
     reason: typeof r.reason === "string" ? r.reason : null,
-    decimals: num(r.decimals) ?? (r.pair.includes("JPY") ? 3 : 5),
+    decimals: num(r.decimals) ?? priceDecimals(r.pair),
     candles: candles as NumericCandle[],
     rsi: aligned(r.rsi, num),
     sar: aligned(r.sar, num),

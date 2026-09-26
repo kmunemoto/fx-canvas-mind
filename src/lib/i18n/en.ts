@@ -307,6 +307,8 @@ export const en: Dict = {
     updated: (clock: string) => `Updated ${clock}`,
     pairsLabel: "Pairs",
     intervalsLabel: "Timeframe",
+    // #127: gold's spread in dollars
+    bidAskUsd: (bid: string, ask: string, spread: string) => `Bid ${bid}   Ask ${ask}   Spread $${spread}`,
     bidAsk: (bid: string, ask: string, spreadPips: string) => `Bid ${bid}   Ask ${ask}   Spread ${spreadPips} pips`,
     closed: "Market closed (last price)",
     loading: "Loading the chart…",
@@ -320,6 +322,7 @@ export const en: Dict = {
       "GBP/USD": "British Pound / US Dollar",
       "EUR/JPY": "Euro / Japanese Yen",
       "GBP/JPY": "British Pound / Japanese Yen",
+      "XAU/USD": "Gold / US Dollar (per ounce)",
     } as Record<string, string>,
     intervalShort: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
@@ -341,6 +344,9 @@ export const en: Dict = {
     fresh: (what: string) => `New signal: ${what}`,
     nextClose: (time: string, remain: string) => `Next bar closes ${time} JST (in ${remain})`,
     note: "Prices are GMO Coin's public rates (the mid of bid and ask), updated every 5 seconds. Signals are judged on closed bars only, so the forming bar moving does not change the marks. The chart reloads when a bar closes.",
+    // #127
+    goldNote:
+      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. No 1-minute chart (Twelve Data's free allowance).",
   },
 
   gainz: {

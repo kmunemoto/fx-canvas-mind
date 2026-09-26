@@ -34,8 +34,13 @@ export const formatCandleLabel = (datetime: string, intlLocale: string): string 
   return formatJst(ms, intlLocale, { withTime: hasTime });
 };
 
-export const pipSize = (pair: string): number => (pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001);
+// #127: gold (XAU/USD) is quoted in dollars to the cent. It has no pip
+// convention the app relies on — its spread is shown in dollars — so its
+// "pip" here is the cent, only so that nothing divides by a currency's pip.
+export const isGoldPair = (pair: string): boolean => pair.toUpperCase() === "XAU/USD";
+
+export const pipSize = (pair: string): number => (isGoldPair(pair) ? 0.01 : pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001);
 
 export const toPips = (pair: string, priceDiff: number): number => priceDiff / pipSize(pair);
 
-export const priceDecimals = (pair: string): number => (pair.toUpperCase().includes("JPY") ? 3 : 5);
+export const priceDecimals = (pair: string): number => (isGoldPair(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);

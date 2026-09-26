@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
+import { formatCandleLabel, parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
@@ -374,7 +374,7 @@ const PriceChart = ({
   // #118: larger print in full screen, where it is read at arm's length
   const labelSize = full ? (narrow ? 10.5 : 11.5) : narrow ? 8 : 9;
   const pillSize = full ? (narrow ? 9.5 : 10.5) : narrow ? 7.5 : 8.5;
-  const decimals = pair.toUpperCase().includes("JPY") ? 3 : 5;
+  const decimals = priceDecimals(pair);
   // #116: the bars on screen
   const n = candles.length;
   const { from, to } = visibleRange(n, interactive ? view : null);
