@@ -276,7 +276,32 @@ export const ja = {
       kalman: (atr: number, factor: number) => `SPECTRA型 ${atr} ${factor}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
+      dow: "ダウ理論",
     },
+    // #129: Dow theory — the timeframes' short names, its levels and marks
+    dowTfShort: { "4h": "4H", "1h": "1H", "15min": "15M", "5min": "5M" } as Record<string, string>,
+    dowLevel: { pushLow: "押し安値", pullHigh: "戻り高値", high: "高値", low: "安値" },
+    dowBroken: { pushLow: "（1回割れ）", pullHigh: "（1回抜け）" },
+    dowBreak1: "①",
+    dowConfirm: "確定",
+    dowCancel: "取消",
+    dowEventTitle: (kind: "update" | "break1" | "confirm" | "cancel", dir: "up" | "down", level: string) =>
+      kind === "break1"
+        ? `1回目: 終値が${dir === "down" ? "押し安値" : "戻り高値"} ${level} を${dir === "down" ? "下" : "上"}に抜けた（転換の兆し・未確定）`
+        : kind === "confirm"
+          ? `2回目: ${dir === "down" ? "下降" : "上昇"}への転換が確定（終値が ${level} を${dir === "down" ? "下" : "上"}に抜けた）`
+          : kind === "cancel"
+            ? `取消: 確定する前に終値が元の${dir === "up" ? "高値" : "安値"} ${level} を超えた（${dir === "up" ? "上昇" : "下降"}が続行）`
+            : `${dir === "up" ? "高値" : "安値"}更新 ${level}`,
+    dowNote: (status: "loading" | "ready" | "error", hasCurrent: boolean, higher: string[]) =>
+      "ダウ理論（Instagram の動画〈The5ers Japan〉で紹介されたインジケーターを、話している内容から作ったもの。本人のコードは公開されておらず、元のインタビューも読めなかったため、同じ判定になるとは限りません）: " +
+      "山と谷=左右5本の足より高い高値・低い安値（5本後に確定し、後から変わりません）。HH=高値の切り上げ・HL=安値の切り上げ・LH=高値の切り下げ・LL=安値の切り下げで、山と谷を細い線でつないで表示。" +
+      "終値が直前の山を上に抜けたら上昇（高値更新中）で、その前の谷が押し安値（緑の線）。下降はその逆で戻り高値（赤の線）。" +
+      "終値が押し安値を割ったら①（1回目=転換の兆し）。その後に谷→それより低い山（戻り高値の切り下げ）ができ、終値がその谷を割ったら「確定」（2回目で下降への転換が確定。動画の「もう1回タッチしたら確定」を、オーナーが選んだこの読み方にしています）。確定する前に終値が元の上昇の高値を超えたら「取消」。下降から上昇への転換も同じ。" +
+      (higher.length > 0 ? `点線=上位足（${higher.join("・")}）の押し安値・戻り高値（太い点線）と直近の山・谷。` : "") +
+      (hasCurrent ? "" : "この時間足は判定の対象外です（4時間・1時間・15分・5分のみ）。") +
+      (status === "loading" ? "読み込み中です。" : status === "error" ? "読めませんでした（1分後に読み直します）。" : "") +
+      "確定した足の終値だけで判定します。表示のみで、サインの判定・メールには使っていません。過去のチャートでの成績はまだ測っていません。",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
       "Zone Shift（ChartPrime の公開コード〈MPL 2.0〉を移植）: 中央線=EMA(100) と HMA(60) の平均（点線）、上下の線=中央線±直近200本の値幅（高値−安値）の平均。" +
@@ -395,6 +420,25 @@ export const ja = {
     fresh: (what: string) => `新しいサイン: ${what}`,
     nextClose: (time: string, remain: string) => `次の足の確定 ${time}（あと ${remain}）`,
     note: "価格は GMOコインの公開レート（買値と売値の中間）で、5秒ごとに更新します。サインは確定した足だけで判定するため、形成中の足が動いても印は変わりません。足が確定すると自動で読み直します。",
+    // #129: Dow theory on four timeframes
+    dowTitle: (tfs: string) => `ダウ理論（${tfs}）`,
+    dowTfNames: { "4h": "4時間", "1h": "1時間", "15min": "15分", "5min": "5分" } as Record<string, string>,
+    dowStates: {
+      up: "上昇（高値更新中）",
+      down: "下降（安値更新中）",
+      toDown: "上昇→下降の兆し（押し安値を1回割った・未確定）",
+      toUp: "下降→上昇の兆し（戻り高値を1回抜けた・未確定）",
+      none: "判定なし（山と谷がまだ足りない）",
+    },
+    dowShort: { up: "上昇", down: "下降", toDown: "下降の兆し", toUp: "上昇の兆し", none: "—" },
+    dowKey: (kind: "pushLow" | "pullHigh", price: string, broken: boolean) =>
+      kind === "pushLow" ? `${broken ? "割った" : ""}押し安値 ${price}` : `${broken ? "抜けた" : ""}戻り高値 ${price}`,
+    dowSince: (time: string) => `${time}〜`,
+    dowLoading: "読み込み中…",
+    dowError: "読めませんでした（1分後に読み直します）",
+    dowTfError: "読めませんでした",
+    dowHint: "1回目=兆し、2回目=確定（詳しくはチャートの下の説明）。金は5分足なし。表示のみで、売買サインには使っていません。",
+    dowCompact: "ダウ",
     // #127
     goldNote:
       "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。1分足はありません（Twelve Data の無料枠の回数の都合）。",

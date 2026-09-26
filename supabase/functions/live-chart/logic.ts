@@ -25,6 +25,7 @@ import { barOpenMs } from "../analyze/state.ts";
 import { fetchRecentQuotes, midCandle } from "../analyze/price-source.ts";
 import { fetchYearQuotes } from "../signal-alerts/logic.ts";
 import { GMO_HOST, GMO_INTERVALS, GMO_SYMBOLS, type Fetcher, type QuoteCandle } from "../track-outcomes/quotes.ts";
+import { dowTheory } from "../_shared/dow.ts";
 
 // #127: and gold (XAU/USD), which GMO does not carry — see "gold" below
 export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"] as const;
@@ -34,6 +35,8 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 export const LIVE_STEP_MS: Record<string, number> = {
   "1min": MIN,
+  // #129: read for the Dow theory panel, not charted
+  "5min": 5 * MIN,
   "15min": 15 * MIN,
   "1h": HOUR,
   "4h": 4 * HOUR,
@@ -233,6 +236,65 @@ export const readBars = (
 };
 
 export type LiveRead = ReturnType<typeof liveRead>;
+
+// ---- #129: Dow theory on four timeframes ---------------------------------------------------
+//
+// _shared/dow.ts reads each timeframe's closed bars; this answers for all of
+// them at once, so the chart can say where each stands and draw the higher
+// ones' lines. Gold has no 5-minute read (Twelve Data's free allowance), as
+// it has no 1-minute chart.
+export const DOW_TFS = ["4h", "1h", "15min", "5min"] as const;
+export const dowTfsFor = (pair: string): readonly string[] => (isGold(pair) ? ["4h", "1h", "15min"] : DOW_TFS);
+// closed bars read per timeframe (the swings need a few dozen; the state
+// is carried from the first of them)
+export const DOW_BARS = 300;
+
+export const fetchDowQuotes = async (
+  pair: string,
+  tf: string,
+  nowMs: number,
+  deadlineMs: number,
+  fetcher: Fetcher,
+): Promise<QuoteCandle[] | null> => {
+  const spec = GMO_INTERVALS[tf];
+  if (!spec || !isLivePair(pair) || !(DOW_TFS as readonly string[]).includes(tf)) return null;
+  if (spec.key === "day") {
+    const got = await fetchRecentQuotes(pair, tf, DOW_BARS + 1, nowMs, deadlineMs, fetcher);
+    return got ? got.bars : null;
+  }
+  return fetchYearQuotes(pair, tf, DOW_BARS + 1, nowMs, fetcher);
+};
+
+// One timeframe's reading, its bars named by their datetimes (the chart's own)
+export const dowOf = (pair: string, tf: string, closed: Candle[]) => {
+  const d = decimalsOf(pair);
+  const r = dowTheory(closed);
+  const at = (i: number | null) => (i === null ? null : closed[i]?.datetime ?? null);
+  const px = (v: number) => round(v, d)!;
+  const lastOf = (kind: "H" | "L") => {
+    for (let k = r.swings.length - 1; k >= 0; k--) if (r.swings[k].kind === kind) return r.swings[k];
+    return null;
+  };
+  const hi = lastOf("H");
+  const lo = lastOf("L");
+  return {
+    tf,
+    state: r.state,
+    since: at(r.since),
+    key: r.key ? { kind: r.key.kind, price: px(r.key.price), at: at(r.key.i) } : null,
+    high: hi ? { price: px(hi.price), at: at(hi.i) } : null,
+    low: lo ? { price: px(lo.price), at: at(lo.i) } : null,
+    swings: r.swings.slice(-30).map((s) => ({ kind: s.kind, label: s.label, price: px(s.price), at: at(s.i) })),
+    events: r.events.slice(-20).map((e) => ({ kind: e.kind, dir: e.dir, level: px(e.level), at: at(e.i) })),
+    as_of: at(closed.length - 1),
+  };
+};
+
+// The closed bars of a read (mid candles), the forming one left out
+export const closedOf = (bars: Candle[], tf: string, nowMs: number): Candle[] => {
+  const step = LIVE_STEP_MS[tf] ?? 0;
+  return bars.filter((c) => barOpenMs(c.datetime) + step <= nowMs);
+};
 
 // #124: the closed bars (mid, rounded as the chart's), oldest first — the
 // client keeps those older than the chart's own and computes over both

@@ -234,7 +234,32 @@ export const en: Dict = {
       kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
+      dow: "Dow theory",
     },
+    // #129: Dow theory — the timeframes' short names, its levels and marks
+    dowTfShort: { "4h": "4H", "1h": "1H", "15min": "15M", "5min": "5M" } as Record<string, string>,
+    dowLevel: { pushLow: "Pullback low", pullHigh: "Rally high", high: "High", low: "Low" },
+    dowBroken: { pushLow: " (broken once)", pullHigh: " (broken once)" },
+    dowBreak1: "①",
+    dowConfirm: "Confirmed",
+    dowCancel: "Off",
+    dowEventTitle: (kind: "update" | "break1" | "confirm" | "cancel", dir: "up" | "down", level: string) =>
+      kind === "break1"
+        ? `First break: a close ${dir === "down" ? "below the pullback low" : "above the rally high"} ${level} (a sign of a turn, not confirmed)`
+        : kind === "confirm"
+          ? `Second break: the turn ${dir === "down" ? "down" : "up"} is confirmed (a close ${dir === "down" ? "below" : "above"} ${level})`
+          : kind === "cancel"
+            ? `Off: before it was confirmed, a close beyond the old ${dir === "up" ? "high" : "low"} ${level} (the ${dir === "up" ? "uptrend" : "downtrend"} goes on)`
+            : `New ${dir === "up" ? "high" : "low"} ${level}`,
+    dowNote: (status: "loading" | "ready" | "error", hasCurrent: boolean, higher: string[]) =>
+      "Dow theory (built from what is said in an Instagram video by The5ers Japan presenting such an indicator; its author's code is not published and the full interview could not be read, so its readings may differ): " +
+      "swing highs and lows = a high (low) above (below) the 5 candles either side (known 5 candles later, never redrawn). HH = higher high, HL = higher low, LH = lower high, LL = lower low; the swings are joined by a thin line. " +
+      "A close above the last swing high = uptrend (making new highs), and the swing low before it is the pullback low (green line); a downtrend mirrors it with the rally high (red line). " +
+      "A close below the pullback low = ① (the first break: a sign of a turn). A swing low after it, a lower swing high, then a close below that low = Confirmed (the second break confirms the turn down — the owner's chosen reading of the video's \"touch it once more and it is confirmed\"). A close above the old uptrend's high before that = Off. A turn up from a downtrend mirrors it. " +
+      (higher.length > 0 ? `Dashed = the higher timeframes' (${higher.join(", ")}) pullback low or rally high (thicker) and their last swing high and low. ` : "") +
+      (hasCurrent ? "" : "This timeframe is not read (4h, 1h, 15m and 5m only). ") +
+      (status === "loading" ? "Loading. " : status === "error" ? "Could not be read (tried again in a minute). " : "") +
+      "Judged on closed candles' closes only. Shown only: no signal or email uses it. Not yet measured on past data.",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
       "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(100) and HMA(60) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
@@ -348,6 +373,25 @@ export const en: Dict = {
     fresh: (what: string) => `New signal: ${what}`,
     nextClose: (time: string, remain: string) => `Next bar closes ${time} JST (in ${remain})`,
     note: "Prices are GMO Coin's public rates (the mid of bid and ask), updated every 5 seconds. Signals are judged on closed bars only, so the forming bar moving does not change the marks. The chart reloads when a bar closes.",
+    // #129: Dow theory on four timeframes
+    dowTitle: (tfs: string) => `Dow theory (${tfs})`,
+    dowTfNames: { "4h": "4h", "1h": "1h", "15min": "15m", "5min": "5m" } as Record<string, string>,
+    dowStates: {
+      up: "Up (making new highs)",
+      down: "Down (making new lows)",
+      toDown: "Up → a sign of down (pullback low broken once, not confirmed)",
+      toUp: "Down → a sign of up (rally high broken once, not confirmed)",
+      none: "No reading (not enough swings yet)",
+    },
+    dowShort: { up: "Up", down: "Down", toDown: "Sign of down", toUp: "Sign of up", none: "—" },
+    dowKey: (kind: "pushLow" | "pullHigh", price: string, broken: boolean) =>
+      kind === "pushLow" ? `${broken ? "Broken p" : "P"}ullback low ${price}` : `${broken ? "Broken r" : "R"}ally high ${price}`,
+    dowSince: (time: string) => `since ${time}`,
+    dowLoading: "Loading…",
+    dowError: "Could not be read (tried again in a minute)",
+    dowTfError: "Could not be read",
+    dowHint: "First break = a sign, second = confirmed (more under the chart). Gold has no 5m. Shown only: no signal uses it.",
+    dowCompact: "Dow",
     // #127
     goldNote:
       "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. No 1-minute chart (Twelve Data's free allowance).",
