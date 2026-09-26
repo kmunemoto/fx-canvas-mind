@@ -1,11 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
-import { setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
+import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
+import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 
 interface Level {
@@ -102,6 +103,11 @@ interface Props {
     interval: FullscreenMenu;
   };
   fullscreenStatus?: ReactNode;
+  // #119: the newest candle is still forming (the live chart): the
+  // SPECTRA-style line marks no turn on it
+  formingLast?: boolean;
+  // #119: what the signal labels are called in the chart's indicator list
+  signalName?: string;
   // #116: when this changes (another pair or timeframe) the view goes back
   // to the newest bars, at the same zoom
   seriesKey?: string;
@@ -197,6 +203,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
+  formingLast = false, signalName,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -292,6 +299,18 @@ const PriceChart = ({
   // stochastic, each as chosen (for every chart, kept in this browser)
   const prefs = useChartPrefs();
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
+  // #119: what is drawn over the price, as switched in the chart's list
+  const ov = prefs.overlays;
+  const hasSar = !!sar && sar.length === candles.length;
+  const showSarDots = hasSar && sarStyle !== "cloud" && ov.sarDots;
+  const showSarCloud = hasSar && sarStyle !== "dots" && ov.sarCloud;
+  const kst = useMemo(
+    () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
+    [ov.kalman, candles, formingLast],
+  );
+  // the list open or folded: open in full screen and on a wide screen until
+  // folded, folded on a phone's card until opened
+  const [listOpen, setListOpen] = useState<boolean | null>(null);
   const [stochSettings, setStochSettings] = useState(false);
   const showRsi = hasRsi && prefs.rsi;
   const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
@@ -360,7 +379,8 @@ const PriceChart = ({
       max = Math.max(max, l.value);
     }
     // #104: the SAR dots are part of the picture, so they are in the range
-    if (sar && sar.length === candles.length) {
+    // (#119: while the dots or the band are shown)
+    if (sar && sar.length === candles.length && (showSarDots || showSarCloud)) {
       for (let i = from; i < to; i++) {
         const v = sar[i];
         if (v === null || !Number.isFinite(v)) continue;
@@ -385,7 +405,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -476,7 +496,7 @@ const PriceChart = ({
   // #115: the SAR band, one piece per run of bars with the SAR on the same
   // side of price, with the ATR that sets its width
   const cloud = useMemo(() => {
-    if (sarStyle === "dots" || !sar || !sarBelow || sar.length !== candles.length || sarBelow.length !== candles.length) {
+    if (!showSarCloud || !sar || !sarBelow || sar.length !== candles.length || sarBelow.length !== candles.length) {
       return { runs: [], atr: [] };
     }
     const runs: Array<{ below: boolean; from: number; to: number }> = [];
@@ -488,7 +508,7 @@ const PriceChart = ({
       else runs.push({ below, from: i, to: i });
     });
     return { runs, atr: atrOf(candles) };
-  }, [sarStyle, sar, sarBelow, candles]);
+  }, [showSarCloud, sar, sarBelow, candles]);
 
   const trendLines = useMemo(() => {
     if (lines.length === 0 || candles.length === 0) return [];
@@ -572,6 +592,30 @@ const PriceChart = ({
     </>
   );
 
+  // #119: everything the chart can draw besides the candles, each with its
+  // switch — listed at the chart's top left with an eye, as TradingView
+  // lists its indicators, and in full screen's settings sheet. Only what
+  // this chart has is listed.
+  const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
+  const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
+  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void }> = [
+    ...(flags.length > 0 ? [{ key: "signals", name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
+    ...(positions && flags.length > 0 ? [{ key: "positions", name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
+    ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
+    ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
+    ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
+    { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
+    ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
+    {
+      key: "stoch",
+      name: `${t.chart.stoch.name} ${prefs.stochParams.kLength} ${prefs.stochParams.kSmoothing} ${prefs.stochParams.dSmoothing}`,
+      on: prefs.stoch,
+      toggle: () => setChartPrefs({ stoch: !prefs.stoch }),
+      settings: openStochSettings,
+    },
+  ];
+  const listShown = listOpen ?? (full || !narrow);
+
   // #117: the stochastic's three lengths, and back to TradingView's
   const stochForm = (
     <div className="flex flex-wrap items-end gap-2 rounded border border-border p-2 text-[11px]" data-testid="chart-stoch-form">
@@ -633,15 +677,14 @@ const PriceChart = ({
             <section className="space-y-2">
               <h4 className="text-xs text-muted-foreground">{t.chart.indicators}</h4>
               <div className="flex flex-wrap gap-2">
-                {hasRsi && (
-                  <button type="button" aria-pressed={prefs.rsi} onClick={() => setChartPrefs({ rsi: !prefs.rsi })} data-testid="chart-sheet-rsi" className={switchBtn(prefs.rsi)}>
-                    {t.chart.rsiLabel}
+                {overlayItems.map((item) => (
+                  <button key={item.key} type="button" aria-pressed={item.on} onClick={item.toggle} data-testid={`chart-sheet-${item.key}`} className={switchBtn(item.on)}>
+                    {item.on ? <Eye className="inline h-3.5 w-3.5 mr-1 -mt-0.5" /> : <EyeOff className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />}
+                    {item.name}
                   </button>
-                )}
-                <button type="button" aria-pressed={prefs.stoch} onClick={() => setChartPrefs({ stoch: !prefs.stoch })} data-testid="chart-sheet-stoch" className={switchBtn(prefs.stoch)}>
-                  {t.chart.stoch.name} {prefs.stochParams.kLength} {prefs.stochParams.kSmoothing} {prefs.stochParams.dSmoothing}
-                </button>
+                ))}
               </div>
+              {ov.kalman && <p className="text-[11px] text-muted-foreground">{t.chart.kalmanNote}</p>}
               {stochForm}
             </section>
             <section className="space-y-2">
@@ -895,7 +938,7 @@ const PriceChart = ({
   // at, or the price now. #116: of those reaching onto the screen.
   const lastIdx = candles.length - 1;
   const positionRows = (() => {
-    if (!positions) return [];
+    if (!positions || !ov.positions) return [];
     const out: Array<{
       key: string; side: "BUY" | "SELL"; outcome: ChartSignalMark["outcome"];
       from: number; to: number; entry: number; stop: number; target: number; exit: number;
@@ -913,6 +956,18 @@ const PriceChart = ({
       out.push({ key: `${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`, side: f.side, outcome: m.outcome, from: f.idx, to: end, entry: m.entry, stop: m.stop, target: m.target, exit });
     }
     return out.reverse();
+  })();
+  // #119: the SPECTRA-style line in runs of one trend
+  const kstRuns = (() => {
+    if (!kst) return [];
+    const runs: Array<{ up: boolean; from: number; to: number }> = [];
+    kst.trend.forEach((tr, i) => {
+      if (tr === null || kst.line[i] === null) return;
+      const last = runs[runs.length - 1];
+      if (last && last.up === (tr === 1) && last.to === i - 1) last.to = i;
+      else runs.push({ up: tr === 1, from: i, to: i });
+    });
+    return runs;
   })();
   const exitColor = (o: ChartSignalMark["outcome"]) => (o === "win" ? COLORS.tp : o === "loss" ? COLORS.sl : COLORS.text);
 
@@ -1084,6 +1139,11 @@ const PriceChart = ({
           {t.chart.gainzLegend}
         </p>
       )}
+      {ov.kalman && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-kalman-legend">
+          {t.chart.kalmanNote}
+        </p>
+      )}
     </>
   );
 
@@ -1206,8 +1266,68 @@ const PriceChart = ({
     );
   };
 
+  // #119: the list at the chart's top left: each thing drawn, its eye to
+  // switch it, and a fold, as TradingView's chart has it
+  const overlayList = (
+    <div
+      className="absolute left-1 top-1 z-10 max-w-[78%] rounded-md bg-background/80 px-1.5 py-1 text-[10px] leading-snug shadow-sm"
+      data-testid="chart-overlay-list"
+    >
+      {listShown && overlayItems.map((item) => (
+        <div key={item.key} className="flex items-center gap-1" data-testid={`chart-overlay-${item.key}`}>
+          <span className={`truncate ${item.on ? "text-foreground" : "text-muted-foreground line-through opacity-60"}`} data-testid={`chart-overlay-name-${item.key}`}>
+            {item.name}
+          </span>
+          <button
+            type="button"
+            aria-pressed={item.on}
+            aria-label={`${item.name}: ${item.on ? t.chart.hide : t.chart.show}`}
+            title={item.on ? t.chart.hide : t.chart.show}
+            onClick={item.toggle}
+            data-testid={`chart-toggle-${item.key}`}
+            className="p-0.5 rounded text-muted-foreground hover:text-foreground"
+          >
+            {item.on ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          </button>
+          {item.settings && (
+            <button
+              type="button"
+              aria-expanded={stochSettings}
+              aria-label={t.chart.stoch.settings}
+              title={t.chart.stoch.settings}
+              onClick={item.settings}
+              data-testid="chart-stoch-settings"
+              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => setListOpen(!listShown)}
+        aria-expanded={listShown}
+        aria-label={listShown ? t.chart.foldList : t.chart.indicators}
+        data-testid="chart-overlay-fold"
+        className="mt-0.5 flex items-center gap-1 rounded border border-border px-1 text-muted-foreground hover:text-foreground"
+      >
+        {listShown ? (
+          <ChevronUp className="h-3.5 w-3.5" />
+        ) : (
+          <>
+            {t.chart.indicators} {overlayItems.filter((i) => i.on).length}/{overlayItems.length}
+            <ChevronDown className="h-3.5 w-3.5" />
+          </>
+        )}
+      </button>
+    </div>
+  );
+
   const charts = (
     <>
+      <div className="relative">
+      {overlayList}
       <svg
         ref={setSvgEl}
         viewBox={`0 0 ${W} ${H}`}
@@ -1293,6 +1413,23 @@ const PriceChart = ({
           </g>
         )}
 
+        {/* #119: the SPECTRA-style trend cloud — between the smoothed price
+            and its Supertrend line, green while up, red while down */}
+        {kst && kstRuns.length > 0 && (
+          <g data-testid="chart-kalman-cloud" clipPath={`url(#${clipId})`}>
+            {kstRuns.map((r) => {
+              const cols: number[] = [];
+              for (let i = r.from; i <= r.to; i++) if (kst.mid[i] !== null && kst.line[i] !== null) cols.push(i);
+              if (cols.length < 2) return null;
+              const top = cols.map((i) => `${x(i).toFixed(1)},${y(kst.mid[i] as number).toFixed(1)}`);
+              const bottom = cols.map((i) => `${x(i).toFixed(1)},${y(kst.line[i] as number).toFixed(1)}`).reverse();
+              return (
+                <polygon key={`kc-${r.from}`} points={[...top, ...bottom].join(" ")} fill={r.up ? COLORS.up : COLORS.down} opacity="0.1" />
+              );
+            })}
+          </g>
+        )}
+
         {/* #115: each position, green from entry to target and red from
             entry to stop, with its entry line; and a faint line on the bar
             each signal fired on */}
@@ -1310,7 +1447,7 @@ const PriceChart = ({
             </g>
           );
         })}
-        {positions && shown.map((f) => (
+        {positions && ov.positions && shown.map((f) => (
           <line
             key={`sig-${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`}
             data-testid="chart-signal-line"
@@ -1377,10 +1514,47 @@ const PriceChart = ({
           );
         })}
 
+        {/* #119: the SPECTRA-style Supertrend line, and a triangle on each
+            closed bar where it turned and RSI agreed (▲ up under the low,
+            ▼ down over the high) */}
+        {kst && kstRuns.length > 0 && (
+          <g data-testid="chart-kalman" clipPath={`url(#${clipId})`}>
+            {kstRuns.map((r) => {
+              // broken where the trend turns, as TradingView draws it
+              let d = "";
+              for (let i = r.from; i <= r.to; i++) {
+                d += `${i === r.from ? "M" : "L"}${x(i).toFixed(1)},${y(kst.line[i] as number).toFixed(1)} `;
+              }
+              return (
+                <path key={`kl-${r.from}`} d={d} fill="none" stroke={r.up ? COLORS.up : COLORS.down} strokeWidth={full ? 2 : 1.6} data-testid="chart-kalman-line" />
+              );
+            })}
+            {kst.flips.filter((f) => f.passed && onScreen(f.i)).map((f) => {
+              const c = candles[f.i];
+              const buy = f.side === "BUY";
+              const cx = x(f.i);
+              const sz = (narrow ? 4 : 4.5) * fs;
+              const cy = buy ? y(c.low) + sz + 3 : y(c.high) - sz - 3;
+              const color = buy ? COLORS.up : COLORS.down;
+              return (
+                <g key={`kf-${f.i}`} data-testid={`chart-kalman-signal-${f.side}`}>
+                  <title>{`SPECTRA ${f.side}${f.rsi !== null ? ` · RSI ${f.rsi.toFixed(1)}` : ""}`}</title>
+                  <polygon
+                    points={buy
+                      ? `${cx},${cy - sz} ${cx - sz},${cy + sz * 0.8} ${cx + sz},${cy + sz * 0.8}`
+                      : `${cx},${cy + sz} ${cx - sz},${cy - sz * 0.8} ${cx + sz},${cy - sz * 0.8}`}
+                    fill={color}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
         {/* #99: the lines through the last two swings, extended to the right
             edge and clipped to the plot. Labelled at the swing they start
             from, in the same register as the measured levels. */}
-        {trendLines.map((l) => {
+        {ov.trendLines && trendLines.map((l) => {
           const x1 = x(l.idx);
           const last = candles.length - 1;
           const x2 = x(last);
@@ -1398,7 +1572,7 @@ const PriceChart = ({
 
         {/* #104: the Parabolic SAR, one dot per bar — green under price
             (the buy side), red over it (the sell side). */}
-        {sar && sar.length === candles.length && sarStyle !== "cloud" && (
+        {showSarDots && sar && (
           <g data-testid="chart-sar" clipPath={`url(#${clipId})`}>
             {sar.map((v, i) =>
               v !== null && Number.isFinite(v) && onScreen(i)
@@ -1423,7 +1597,7 @@ const PriceChart = ({
             newest few also carry a box with the TP and SL the signal was
             settled against, and the short dotted segments are those same two
             levels, reaching the bar that settled it. */}
-        {shown.map((f, n) => {
+        {ov.signals && shown.map((f, n) => {
           const c = candles[f.idx];
           const buy = f.side === "BUY";
           const color = buy ? COLORS.up : COLORS.down;
@@ -1658,48 +1832,10 @@ const PriceChart = ({
           );
         })()}
       </svg>
-      {/* #117: the strips' switches, and the stochastic's lengths — in the
-          card; in full screen they are in the settings sheet (#118) */}
-      {!full && (
-        <div className="px-1 pt-1 space-y-1" data-testid="chart-indicators">
-          <div className="flex flex-wrap items-center gap-1 text-[10px]" role="group" aria-label={t.chart.indicators}>
-            <span className="text-muted-foreground mr-0.5">{t.chart.indicators}</span>
-            {hasRsi && (
-              <button
-                type="button"
-                aria-pressed={prefs.rsi}
-                onClick={() => setChartPrefs({ rsi: !prefs.rsi })}
-                data-testid="chart-toggle-rsi"
-                className={`px-1.5 py-0.5 rounded border ${prefs.rsi ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
-              >
-                {t.chart.rsiLabel}
-              </button>
-            )}
-            <button
-              type="button"
-              aria-pressed={prefs.stoch}
-              onClick={() => setChartPrefs({ stoch: !prefs.stoch })}
-              title={t.chart.stoch.note}
-              data-testid="chart-toggle-stoch"
-              className={`px-1.5 py-0.5 rounded border ${prefs.stoch ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
-            >
-              {t.chart.stoch.name} {prefs.stochParams.kLength} {prefs.stochParams.kSmoothing} {prefs.stochParams.dSmoothing}
-            </button>
-            <button
-              type="button"
-              aria-expanded={stochSettings}
-              aria-label={t.chart.stoch.settings}
-              title={t.chart.stoch.settings}
-              onClick={() => setStochSettings((v) => !v)}
-              data-testid="chart-stoch-settings"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          {stochSettings && stochForm}
-        </div>
-      )}
+      </div>
+      {/* #117: the stochastic's lengths, opened from its gear in the list
+          (#119; in full screen the gear opens the settings sheet) */}
+      {!full && stochSettings && <div className="px-1 pt-1">{stochForm}</div>}
       {/* #104: RSI(14) under the price, on the same x scale so a bar here is
           the bar above it. The 30 and 70 lines are the rule's levels. */}
       {showRsi && rsi && strip({
