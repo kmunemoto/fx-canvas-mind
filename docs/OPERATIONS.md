@@ -2790,6 +2790,18 @@ select rule, count(*) from public.signal_alert_subscriptions group by 1;
 - **表示**: 3つのチャートの左上の一覧に「Weighted Volume Profile 200 30」（既定でオン、目のアイコンで切り替え）。
 - **サインには使っていない**: 売買の判定・メール・記録は変えていない。過去データでの検証もしていない。
 - **確かめたこと**: テスト `volume-profile.test.tsx`（段の区切り・触れた段への加算・買い側／売り側・1〜50本の長さと四捨五入・POC の同数の扱い・全段同数・範囲より1本古い足・重み付けの式・一覧での切り替え・200本の窓・白背景の POC の色）。Chromium でリアルタイムチャート相当（15分足121本）を PC・スマホ幅・白背景で表示して確認。
+- **#123 で変更**: 下の §8.36 のとおり、FVG Crossfire と1つのインジケーターにまとめた（一覧の名前・スイッチ・凡例・色）。
+
+### 8.36 FVG Crossfire と Weighted Volume Profile を1つのインジケーターにまとめた（#123）
+
+- **指示**: 「さっきのFVG Crossfireとこれは表示をニコイチにしてチャートに表示させるようにしてください」。
+- **変更**（計算は §8.34・§8.35 のまま。表示だけ）:
+  - 一覧（3つのチャートの左上と、全画面の設定シート）の2行を1行「FVG Crossfire + Volume Profile」にまとめた。目のアイコン1つで両方をオン／オフ（既定でオン）。
+  - 設定は `overlays.fvgProfile` の1つ。#121 からの `overlays.fvgCrossfire` が保存されている端末では、その値を引き継ぐ（FVG Crossfire を消していた人は、まとめた後も消えたまま）。#122 の `volumeProfile` の保存値は使わない。
+  - 凡例も1つの段落にまとめ、【箱】（FVG Crossfire）と【左の横棒】（Volume Profile）に分けて説明。
+  - 色をそろえた: Volume Profile の横棒を FVG Crossfire と同じ #0ecb81（買い側）・#f6465d（売り側）に（§8.35 ではチャートの陽線・陰線の色だった）。POC の黄色の線はそのまま。
+- **サインには使っていない**: 変わらず表示のみ。
+- **確かめたこと**: テスト（`volume-profile.test.tsx`: 一覧が1行・スイッチ1つで両方が消える・凡例が1つ・色・以前の設定の引き継ぎ、`fvg-crossfire.test.tsx`・`spectra.test.tsx` の一覧の名前と件数）。Chromium で PC・スマホ幅・白背景の表示と、スイッチで両方が消えることを確認。
 ---
 
 ## 9. 次の実データで確かめること

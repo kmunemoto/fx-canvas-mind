@@ -85,11 +85,13 @@ describe("#122 the Weighted Volume Profile on the chart", () => {
     resetChartPrefsCache();
   });
 
-  it("is on in the list, draws its rows under the candles and the POC line, and is switched off by its eye", () => {
+  it("is one indicator with FVG Crossfire (#123): one line in the list, one switch, one legend, the same colours", () => {
     const bars = series(80);
     render(<PriceChart candles={bars} pair="USD/JPY" />);
-    expect(screen.getByTestId("chart-overlay-name-volumeProfile").textContent).toBe("Weighted Volume Profile 200 30");
-    expect(screen.getByTestId("chart-toggle-volumeProfile").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByTestId("chart-overlay-name-volumeProfile")).toBeNull();
+    expect(screen.queryByTestId("chart-overlay-name-fvgCrossfire")).toBeNull();
+    expect(screen.getByTestId("chart-overlay-name-fvgProfile").textContent).toBe("FVG Crossfire + Volume Profile");
+    expect(screen.getByTestId("chart-toggle-fvgProfile").getAttribute("aria-pressed")).toBe("true");
 
     const group = screen.getByTestId("chart-vp");
     // under the candles
@@ -101,22 +103,40 @@ describe("#122 the Weighted Volume Profile on the chart", () => {
     expect(rows.filter((r) => r.getAttribute("data-side") === "bear")).toHaveLength(vp.rows.filter((r) => r.bearSize > 0).length);
     expect(Number(screen.getByTestId("chart-vp-poc").getAttribute("data-price"))).toBeCloseTo(vp.poc!.price);
     expect(screen.getByTestId("chart-vp-poc").getAttribute("stroke")).toBe("#FFEB3B");
+    // FVG Crossfire's green and red
+    expect(rows.find((r) => r.getAttribute("data-side") === "bull")!.getAttribute("fill")).toBe("#0ecb81");
+    expect(rows.find((r) => r.getAttribute("data-side") === "bear")!.getAttribute("fill")).toBe("#f6465d");
 
-    const legend = screen.getByTestId("chart-vp-legend").textContent!;
+    const legends = screen.getAllByTestId("chart-fvgprofile-legend");
+    expect(legends).toHaveLength(1);
+    const legend = legends[0].textContent!;
+    expect(legend).toContain("FVG Crossfire ＋ Weighted Volume Profile");
     expect(legend).toContain("MPL 2.0");
-    expect(legend).toContain("直近80本（チャートにある全部。元は200本）");
+    expect(legend).toContain("【箱】");
+    expect(legend).toContain("【左の横棒】直近80本（チャートにある全部。元は200本）");
     expect(legend).toContain("出来高がない");
 
-    fireEvent.click(screen.getByTestId("chart-toggle-volumeProfile"));
+    // one switch takes both off
+    fireEvent.click(screen.getByTestId("chart-toggle-fvgProfile"));
     expect(screen.queryByTestId("chart-vp")).toBeNull();
-    expect(screen.queryByTestId("chart-vp-legend")).toBeNull();
-    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.volumeProfile).toBe(false);
+    expect(screen.queryByTestId("chart-fvgcf")).toBeNull();
+    expect(screen.queryByTestId("chart-fvgprofile-legend")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.fvgProfile).toBe(false);
+    fireEvent.click(screen.getByTestId("chart-toggle-fvgProfile"));
+    expect(screen.getByTestId("chart-vp")).toBeTruthy();
+  });
+
+  it("keeps FVG Crossfire's own switch from before as the pair's", () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { fvgCrossfire: false } }));
+    render(<PriceChart candles={series(80)} pair="USD/JPY" />);
+    expect(screen.getByTestId("chart-toggle-fvgProfile").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByTestId("chart-vp")).toBeNull();
   });
 
   it("reads the newest 200 when the chart has more, and draws the POC deeper yellow on the white background", () => {
     localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ theme: "light" }));
     render(<PriceChart candles={series(250)} pair="USD/JPY" />);
-    const legend = screen.getByTestId("chart-vp-legend").textContent!;
+    const legend = screen.getByTestId("chart-fvgprofile-legend").textContent!;
     expect(legend).toContain("直近200本の値幅");
     expect(screen.getByTestId("chart-vp-poc").getAttribute("stroke")).toBe("#F2A900");
   });
