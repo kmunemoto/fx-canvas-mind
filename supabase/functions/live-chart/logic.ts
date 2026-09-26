@@ -17,7 +17,8 @@
 //
 // Everything here is Deno-free: src/test/live-chart.test.ts imports it.
 
-import type { Candle } from "../analyze/indicators.ts";
+import { parseCandles, type Candle } from "../analyze/indicators.ts";
+import { barFullyClosed } from "../_shared/market-hours.ts";
 import { chartRsiSar, readRsiSar } from "../analyze/rsisar.ts";
 import { chartGainz, readGainz } from "../analyze/gainz.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -80,13 +81,38 @@ export const splitBars = (quotes: QuoteCandle[], interval: string, nowMs: number
   return { closed: closed.map(midCandle), forming: forming ? midCandle(forming) : null, formingQuote: forming };
 };
 
+// Where a read's bars came from: GMO, or — v3, while GMO cannot be read —
+// Twelve Data's last bars (see fallbackBars below)
+export interface ReadSource {
+  source: "gmo" | "twelvedata";
+  // why GMO was not used: "maintenance" | "unavailable"
+  feed: string | null;
+  // when the fallback bars were fetched, ISO
+  fetchedAt: string | null;
+}
+const GMO_SOURCE: ReadSource = { source: "gmo", feed: null, fetchedAt: null };
+
 // What the client draws: the candles (the forming one last), RSI and the
 // SAR aligned to them, both rules' signals as marks, and each rule's
 // reading on the newest closed bar.
 export const liveRead = (pair: string, interval: string, quotes: QuoteCandle[], nowMs: number) => {
+  const { closed, forming, formingQuote } = splitBars(quotes, interval, nowMs);
+  const spread = formingQuote ? formingQuote.ask.close - formingQuote.bid.close : null;
+  return readBars(pair, interval, closed, forming, spread, nowMs, GMO_SOURCE);
+};
+
+// The same read from mid candles already split into closed and forming
+export const readBars = (
+  pair: string,
+  interval: string,
+  closed: Candle[],
+  forming: Candle | null,
+  spreadNow: number | null,
+  nowMs: number,
+  from: ReadSource,
+) => {
   const d = decimalsOf(pair);
   const step = LIVE_STEP_MS[interval];
-  const { closed, forming, formingQuote } = splitBars(quotes, interval, nowMs);
   const rs = readRsiSar(closed);
   const ga = readGainz(closed);
   const drawn = chartRsiSar(rs, CHART_BARS, d);
@@ -133,13 +159,63 @@ export const liveRead = (pair: string, interval: string, quotes: QuoteCandle[], 
       gainz: ga.now?.signal ?? null,
     },
     latest: { rsi_sar: newest("rsi_sar"), gainz: newest("gainz") },
-    spread: formingQuote ? round(formingQuote.ask.close - formingQuote.bid.close, d) : null,
+    spread: round(spreadNow, d),
     next_close: nextCloseMs !== null && Number.isFinite(nextCloseMs) ? new Date(nextCloseMs).toISOString() : null,
     at: new Date(nowMs).toISOString(),
+    source: from.source,
+    feed: from.feed,
+    fetched_at: from.fetchedAt,
   };
 };
 
 export type LiveRead = ReturnType<typeof liveRead>;
+
+// ---- v3: the fallback while GMO cannot be read ------------------------------------------
+//
+// The request (2026-09-26), after the chart stood empty through GMO's
+// Saturday maintenance: show the chart up to the last close from another
+// feed. Twelve Data, the analysis's own feed — whose shared key allows eight
+// requests a minute, so these bars are kept in public.live_chart_fallback
+// and fetched again at most every FALLBACK_TTL_MS per pair and timeframe
+// (while the market is shut they cannot change anyway). No live price: the
+// chart says it is showing the last bars, not the market now.
+
+export const FALLBACK_TTL_MS = 30 * MIN;
+// Enough closed bars for RSI and the SAR to settle and a chart to draw
+export const FALLBACK_BARS = 260;
+
+export const twelveDataUrl = (pair: string, interval: string, apiKey: string): string =>
+  `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${encodeURIComponent(interval)}` +
+  `&outputsize=${FALLBACK_BARS}&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`;
+
+// Twelve Data's time_series body -> oldest-first candles with the app's
+// timestamps: intraday "YYYY-MM-DD HH:mm:ss" (UTC) as sent, daily bars
+// ("YYYY-MM-DD") given a time so every reader parses them, and bars that
+// lie wholly inside the weekend closure dropped, as the analysis drops them
+export const parseTwelveData = (body: unknown, interval: string): Candle[] | null => {
+  if (typeof body !== "object" || body === null) return null;
+  const b = body as { status?: unknown; values?: unknown };
+  if (b.status === "error" || !Array.isArray(b.values)) return null;
+  const step = LIVE_STEP_MS[interval] ?? 0;
+  return parseCandles(b.values)
+    .map((c) => (/^\d{4}-\d{2}-\d{2}$/.test(c.datetime) ? { ...c, datetime: `${c.datetime} 00:00:00` } : c))
+    .filter((c) => !barFullyClosed(barOpenMs(c.datetime), step));
+};
+
+// Stored bars -> the same read as GMO's, the newest bar forming if it has
+// not closed yet
+export const fallbackRead = (pair: string, interval: string, bars: Candle[], nowMs: number, from: ReadSource) => {
+  const step = LIVE_STEP_MS[interval];
+  const closed: Candle[] = [];
+  let forming: Candle | null = null;
+  for (const c of bars) {
+    const t = barOpenMs(c.datetime);
+    if (!Number.isFinite(t) || step === undefined) continue;
+    if (t + step <= nowMs) closed.push(c);
+    else if (t <= nowMs) forming = c;
+  }
+  return readBars(pair, interval, closed, forming, null, nowMs, from);
+};
 
 // GMO answers every public call with {"status": 5, messages: [{message_code:
 // "ERR-5201", message_string: "MAINTENANCE. ..."}]} while its feed is down

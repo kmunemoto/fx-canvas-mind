@@ -28,6 +28,13 @@ export interface LiveRead {
   spread: number | null;
   nextClose: string | null;
   at: string;
+  // v3: "twelvedata" while GMO cannot be read, with why ("maintenance" |
+  // "unavailable") and when those bars were fetched
+  source: "gmo" | "twelvedata";
+  feed: string | null;
+  fetchedAt: string | null;
+  // when the market reopens, while it may be shut
+  reopens: string | null;
 }
 
 export interface Tick {
@@ -107,6 +114,10 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     spread: num(r.spread),
     nextClose: typeof r.next_close === "string" ? r.next_close : null,
     at: typeof r.at === "string" ? r.at : new Date().toISOString(),
+    source: r.source === "twelvedata" ? "twelvedata" : "gmo",
+    feed: typeof r.feed === "string" ? r.feed : null,
+    fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
+    reopens: typeof r.reopens === "string" ? r.reopens : null,
   };
 };
 
@@ -136,7 +147,8 @@ export const applyTick = (candles: NumericCandle[], mid: number, formingOpenMs: 
 };
 
 export class LiveChartError extends Error {
-  constructor(public code: string) {
+  // when the market reopens, if the function said
+  constructor(public code: string, public reopens: string | null = null) {
     super(code);
   }
 }
@@ -150,13 +162,15 @@ const call = async (body: Record<string, unknown>): Promise<Record<string, unkno
     body: JSON.stringify(body),
   });
   const data = rec(await res.json().catch(() => null));
-  if (!res.ok || !data || data.ok !== true) throw new LiveChartError(typeof data?.error === "string" ? data.error : `http_${res.status}`);
+  if (!res.ok || !data || data.ok !== true) {
+    throw new LiveChartError(typeof data?.error === "string" ? data.error : `http_${res.status}`, typeof data?.reopens === "string" ? data.reopens : null);
+  }
   return data;
 };
 
 export const fetchLiveBars = async (pair: string, interval: string): Promise<LiveRead> => {
   const data = await call({ action: "bars", pair, interval });
-  const read = normalizeLiveRead(data.read);
+  const read = normalizeLiveRead(rec(data.read) ? { ...(data.read as Record<string, unknown>), reopens: data.reopens } : data.read);
   if (!read) throw new LiveChartError("bad_response");
   return read;
 };

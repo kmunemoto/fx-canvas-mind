@@ -248,6 +248,9 @@ export const en: Dict = {
     error: "The chart could not be loaded. It tries again every minute.",
     maintenance: "GMO Coin's price feed is down for maintenance (it happens at weekends), so the chart cannot be shown now. It checks every minute and appears as soon as the feed is back.",
     maintenanceShort: "Feed maintenance",
+    fallback: (maintenance: boolean, fetched: string) =>
+      `${maintenance ? "GMO Coin's price feed is down for maintenance" : "GMO Coin's price feed cannot be read"}, so these are the latest bars from another feed (Twelve Data, fetched ${fetched} JST). Prices do not move. It switches back to GMO automatically.`,
+    reopens: (at: string) => `The market is due to reopen at ${at} JST.`,
     ruleRsiSar: "RSI + SAR",
     ruleGa: "GA style",
     sides: { BUY: "BUY", SELL: "SELL" },

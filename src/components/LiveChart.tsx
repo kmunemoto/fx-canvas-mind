@@ -8,6 +8,7 @@ import {
   LIVE_PAIRS,
   TICK_MS,
   applyTick,
+  LiveChartError,
   fetchLiveBars,
   fetchTicks,
   type LiveRead,
@@ -31,6 +32,8 @@ interface Props {
 
 // "19:15:07" in Japan time
 const jstClock = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(11, 19);
+// "09-28 07:00" in Japan time
+const jstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(5, 16).replace("T", " ");
 
 // #113: five pairs, live. The bars and both rules' signals come from the
 // live-chart function when a bar closes; in between, the price every few
@@ -45,6 +48,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   );
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reopens, setReopens] = useState<string | null>(null);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
   const [tickError, setTickError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<number | null>(null);
@@ -69,10 +73,12 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
       }
       seen.current = { key, initial: false };
       setRead(r);
+      setReopens(r.reopens);
       setError(null);
     } catch (err) {
       if (current.current.pair !== p || current.current.interval !== iv) return;
       setError(err instanceof Error ? err.message : "error");
+      if (err instanceof LiveChartError) setReopens(err.reopens);
     }
   }, [loadBars, l]);
 
@@ -132,7 +138,10 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
     };
   }, [loadTicks]);
 
-  const tick = ticks[pair] ?? null;
+  // v3: GMO cannot be read, so the bars are Twelve Data's last ones and no
+  // price moves them
+  const fallback = read?.source === "twelvedata";
+  const tick = fallback ? null : ticks[pair] ?? null;
   const step = STEP_MS[interval] ?? 60_000;
   // the forming bar, when the read has one: the last candle opened one step
   // before the next close
@@ -213,6 +222,15 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         <p className="text-xs font-semibold text-primary" data-testid="live-fresh">{l.fresh(fresh)}</p>
       )}
 
+      {fallback && read && (
+        <p className="text-[11px] text-warning" data-testid="live-fallback">
+          {l.fallback(read.feed === "maintenance", read.fetchedAt ? jstDay(Date.parse(read.fetchedAt)) : "—")}
+        </p>
+      )}
+      {reopens && (
+        <p className="text-[11px] text-muted-foreground" data-testid="live-reopens">{l.reopens(jstDay(Date.parse(reopens)))}</p>
+      )}
+
       {error && !read ? (
         error === "maintenance" ? (
           <p className="text-xs text-warning" data-testid="live-maintenance">{l.maintenance}</p>
@@ -245,7 +263,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
                 {sideText(read.now.gainz)}
               </span>
             </p>
-            {nextCloseMs !== null && (
+            {nextCloseMs !== null && nextCloseMs > now && (
               <p className="text-muted-foreground font-mono" data-testid="live-next-close">{l.nextClose(jstClock(nextCloseMs).slice(0, 5), remainText)}</p>
             )}
           </div>

@@ -286,6 +286,9 @@ export const ja = {
     error: "チャートを読み込めませんでした。1分ごとに自動で読み直します。",
     maintenance: "GMOコインの価格配信がメンテナンス中のため、今はチャートを表示できません（週末などに行われます）。1分ごとに確認し、再開すると自動で表示します。",
     maintenanceShort: "配信メンテナンス中",
+    fallback: (maintenance: boolean, fetched: string) =>
+      `${maintenance ? "GMOコインの価格配信がメンテナンス中" : "GMOコインの価格配信が読めない"}ため、別の配信（Twelve Data）の直近の足を表示しています（${fetched} 取得）。価格は動きません。GMO が戻ると自動で切り替わります。`,
+    reopens: (at: string) => `市場の再開は ${at}（日本時間）の予定です。`,
     ruleRsiSar: "RSI＋SAR",
     ruleGa: "GA型",
     sides: { BUY: "買い（BUY）", SELL: "売り（SELL）" },
