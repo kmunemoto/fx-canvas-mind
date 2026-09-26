@@ -117,14 +117,14 @@ describe("#119 switching what the chart draws, from the list at its top left", (
   it("lists only what this chart draws, the SPECTRA-style line off until switched on", () => {
     render(chart());
     const names = [...screen.getByTestId("chart-overlay-list").querySelectorAll("[data-testid^='chart-overlay-name-']")].map((e) => e.textContent);
-    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 10 3（未検証）", "ストキャス 14 1 3"]);
+    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 10 3", "ストキャス 14 1 3"]);
     expect(screen.getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByTestId("chart-kalman")).toBeNull();
 
     fireEvent.click(screen.getByTestId("chart-toggle-kalman"));
     expect(screen.getByTestId("chart-kalman").querySelectorAll("[data-testid='chart-kalman-line']").length).toBeGreaterThan(0);
     expect(screen.getByTestId("chart-kalman-cloud")).toBeTruthy();
-    expect(screen.getByTestId("chart-kalman-legend").textContent).toContain("過去の検証はしておらず");
+    expect(screen.getByTestId("chart-kalman-legend").textContent).toContain("ランダムに入った場合と差がありませんでした");
     expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.kalman).toBe(true);
   });
 
