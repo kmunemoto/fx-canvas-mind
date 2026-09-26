@@ -78,14 +78,15 @@ describe("analyze no longer refuses to look", () => {
     // did not exist.
     expect(analyze).not.toContain('error_stage: "market_closed", stage');
     expect(analyze).not.toContain("market_closed: true");
-    expect(analyze).toContain("const previewMode = isPossiblyClosed(Date.now());");
+    // (#128: pair-aware; the same predicate for a currency pair)
+    expect(analyze).toContain("const previewMode = isPossiblyClosedFor(currencyPair, Date.now());");
   });
 
   it("decides preview from the arrival time, not from the gate's own clock", () => {
     // A run that began while the market was open and finished after the close
     // was still decided at a price that existed; that WAIT is real and the
     // scorer should grade it. So the late gate keeps its own reading.
-    expect(analyze).toContain("const marketShut = isPossiblyClosed(Date.now());");
+    expect(analyze).toContain("const marketShut = isPossiblyClosedFor(currencyPair, Date.now());");
     expect(analyze).toContain("marketShut || costlyHours");
   });
 
@@ -233,7 +234,7 @@ describe("a weekend series is not a broken feed", () => {
   });
 
   it("is wired as a separate clock in analyze, not a substituted one", () => {
-    expect(analyze).toContain("const staleFrom = previewMode ? lastClose(Date.now()) : Date.now();");
+    expect(analyze).toContain("const staleFrom = previewMode ? lastCloseFor(currencyPair, Date.now()) : Date.now();");
     // The real clock still goes in as nowMs; only staleness gets the close.
     expect(analyze).toMatch(/Date\.now\(\),\s*\n\s*3,\s*\n\s*staleFrom,/);
   });

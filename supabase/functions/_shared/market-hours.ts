@@ -181,3 +181,55 @@ export const lastClose = (ms: number): number => {
     0,
   );
 };
+
+// ---- #128: gold (XAU/USD) ---------------------------------------------------------------
+//
+// Gold trades the FX week, and ALSO stops for an hour every day at 17:00 New
+// York (21:00 UTC in US summer time, 22:00 UTC in winter), reopening at 18:00.
+// Its Sunday open is that same 18:00 New York — an hour after FX in winter —
+// which the daily hour covers, so "the FX weekend, or 17:xx New York" is the
+// whole of gold's closure. The FX functions above are unchanged: every
+// question about gold goes through the *For(pair, ms) ones below.
+
+export const isGoldPair = (pair: string): boolean => pair.toUpperCase() === "XAU/USD";
+
+const HOUR_MS = 3_600_000;
+
+// New York's offset from UTC at a moment: −4h from the second Sunday of March
+// 02:00 local (07:00 UTC) to the first Sunday of November 02:00 local (06:00
+// UTC), −5h otherwise
+export const nyOffsetMs = (ms: number): number => {
+  const y = new Date(ms).getUTCFullYear();
+  const nthSunday = (month: number, nth: number) => {
+    const first = new Date(Date.UTC(y, month, 1)).getUTCDay();
+    return 1 + ((7 - first) % 7) + 7 * (nth - 1);
+  };
+  const start = Date.UTC(y, 2, nthSunday(2, 2), 7);
+  const end = Date.UTC(y, 10, nthSunday(10, 1), 6);
+  return ms >= start && ms < end ? -4 * HOUR_MS : -5 * HOUR_MS;
+};
+
+// Inside gold's daily hour off (17:00-18:00 New York)
+export const isGoldBreak = (ms: number): boolean => new Date(ms + nyOffsetMs(ms)).getUTCHours() === 17;
+
+// The 17:00 New York that began the break `ms` is in
+const goldBreakStart = (ms: number): number => {
+  const off = nyOffsetMs(ms);
+  return Math.floor((ms + off) / HOUR_MS) * HOUR_MS - off;
+};
+
+// isPossiblyClosed, for a pair: gold's daily hour counts as shut too
+export const isPossiblyClosedFor = (pair: string, ms: number): boolean =>
+  isPossiblyClosed(ms) || (isGoldPair(pair) && isGoldBreak(ms));
+
+// nextOpen, for a pair: gold reopens at the end of its hour, and on a winter
+// Sunday an hour after the FX open (which lands inside that hour)
+export const nextOpenFor = (pair: string, ms: number): number => {
+  if (!isGoldPair(pair)) return nextOpen(ms);
+  const base = isPossiblyClosed(ms) ? nextOpen(ms) : ms;
+  return isGoldBreak(base) ? goldBreakStart(base) + HOUR_MS : base;
+};
+
+// lastClose, for a pair: during gold's daily hour, the 17:00 New York it began at
+export const lastCloseFor = (pair: string, ms: number): number =>
+  isGoldPair(pair) && !isPossiblyClosed(ms) && isGoldBreak(ms) ? goldBreakStart(ms) : lastClose(ms);

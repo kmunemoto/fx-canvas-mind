@@ -85,7 +85,7 @@ import {
 } from "../_shared/horizon.ts";
 import { marketHorizonEnd } from "../track-outcomes/waits.ts";
 import { ENTRY_WINDOW_MS, EXPIRY_DAYS } from "../track-outcomes/evaluate.ts";
-import { barFullyClosed, isPossiblyClosed, lastClose, nextOpen } from "../_shared/market-hours.ts";
+import { barFullyClosed, isGoldPair, isPossiblyClosedFor, lastCloseFor, nextOpenFor } from "../_shared/market-hours.ts";
 import { PLAN_CONTRACT } from "../_shared/contract.ts";
 import {
   DEFAULT_VARIANT,
@@ -128,6 +128,10 @@ const PAID_PLANS = new Set(["light", "standard", "pro"]);
 const ALLOWED_PAIRS = new Set([
   "USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY",
   "GBP/JPY", "AUD/USD", "AUD/JPY",
+  // #128: gold, from Twelve Data (XAU/USD is on the Basic plan). Priced to
+  // the cent, its distances in dollars, and shut an hour a day as well as
+  // at the weekend (market-hours.ts, "*For").
+  "XAU/USD",
 ]);
 
 // The floor the system prompt states and the server now enforces. Below it the
@@ -328,8 +332,9 @@ const toStringArray = (value: unknown): string[] => {
   return normalized;
 };
 
-// JPY-quoted pairs trade in 3 decimals, everything else in 5
-const pairDecimals = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5);
+// JPY-quoted pairs trade in 3 decimals, everything else in 5 — and gold
+// (#128) in 2: dollars and cents
+const pairDecimals = (pair: string) => (isGoldPair(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
 const fmt = (value: number | null | undefined, decimals: number, fallback = "—") =>
   value === null || value === undefined || !Number.isFinite(value)
@@ -1079,8 +1084,9 @@ Deno.serve(async (req: Request) => {
     // the close was still decided at a price that existed, and that WAIT is a
     // real one the scorer should grade.
     stage = "check_market_hours";
-    const previewMode = isPossiblyClosed(Date.now());
-    const marketOpensAt = previewMode ? new Date(nextOpen(Date.now())).toISOString() : null;
+    // (#128: for gold, its daily hour off too)
+    const previewMode = isPossiblyClosedFor(currencyPair, Date.now());
+    const marketOpensAt = previewMode ? new Date(nextOpenFor(currencyPair, Date.now())).toISOString() : null;
 
     const limits: Record<string, number> = {
       light: 10,
@@ -1486,7 +1492,7 @@ Deno.serve(async (req: Request) => {
     // this build exists to allow would 502 before computing anything. It is
     // the same distinction market-hours.ts already draws: an absence of bars
     // while the market is shut is not evidence that anything failed.
-    const staleFrom = previewMode ? lastClose(Date.now()) : Date.now();
+    const staleFrom = previewMode ? lastCloseFor(currencyPair, Date.now()) : Date.now();
     const health = seriesByTf.map((candles, i) =>
       seriesHealth(
         candles,
@@ -1586,7 +1592,8 @@ Deno.serve(async (req: Request) => {
     // A pip, for expressing distances in the unit the plan is read in. The
     // other half of every distance is the ATR, because that is the unit the
     // stop rules are written in.
-    const pipSize = decimals === 3 ? 0.01 : 0.0001;
+    // (#128: gold's distances are in dollars — its "pip" here is one dollar)
+    const pipSize = decimals === 2 ? 1 : decimals === 3 ? 0.01 : 0.0001;
     // Structure is computed on CLOSED bars only: a forming bar's close is not
     // a close, and every break here is decided on a close. Computed on
     // seriesByTf, which is the series AFTER the GMO overlay swap — the same
@@ -2201,7 +2208,7 @@ Deno.serve(async (req: Request) => {
             interval,
             preview: previewMode,
             nowMs: Date.now(),
-            sessionStartMs: lastClose(Date.now()),
+            sessionStartMs: lastCloseFor(currencyPair, Date.now()),
           }),
           preview: previewMode,
           forceFresh,
@@ -2765,7 +2772,7 @@ Deno.serve(async (req: Request) => {
     // to enter at, and publishing anyway is what lets a weekend gap be written
     // up as a trade nobody could have taken. The narrow one left a one-hour
     // hole every week.
-    const marketShut = isPossiblyClosed(Date.now());
+    const marketShut = isPossiblyClosedFor(currencyPair, Date.now());
 
     // The prompt has always said "below 60 confidence the answer is WAIT", and
     // nothing enforced it: a BUY the model itself rated 10/100 was published
@@ -2780,7 +2787,9 @@ Deno.serve(async (req: Request) => {
     // Read off the moment the plan was PRICED — its entry — and only on a
     // proposed BUY/SELL: on a WAIT the analyst already declined, and stamping
     // this on it would claim a refusal nobody made.
-    const costlyHours = (proposedSignal === "BUY" || proposedSignal === "SELL") &&
+    // (#128: measured on GMO's FX spread — not applied to gold, where it was
+    // never measured)
+    const costlyHours = (proposedSignal === "BUY" || proposedSignal === "SELL") && !isGoldPair(currencyPair) &&
       costlyHourAt(interval, Date.parse(pricedAtIso));
 
     let entryRejected = false;
@@ -2805,7 +2814,7 @@ Deno.serve(async (req: Request) => {
         regime: entryVerdict.regime,
       });
       normalizedAnalysis.warnings = [
-        marketShut ? L.marketClosed : rejectionReason === "costly_hours" ? L.costlyHours({
+        marketShut ? (isGoldPair(currencyPair) ? L.marketClosedGold : L.marketClosed) : rejectionReason === "costly_hours" ? L.costlyHours({
           signal: proposedSignal,
           interval,
           hourUtc: new Date(Date.parse(pricedAtIso)).getUTCHours(),

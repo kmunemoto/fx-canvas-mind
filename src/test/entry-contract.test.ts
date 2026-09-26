@@ -105,8 +105,10 @@ describe("the model can no longer choose an entry price", () => {
     // bar and wrong for deciding whether to publish: it left a one-hour window
     // each week in which an "enter now" plan went out into a market that may
     // already have closed, and the weekend gap then reads as a trade.
-    expect(analyze).toContain("const marketShut = isPossiblyClosed(Date.now());");
-    expect(analyze).toContain("marketShut ? L.marketClosed");
+    // (#128: through the pair-aware form, which for a currency pair is this
+    // same predicate — market-hours-gold.test.ts holds it to that)
+    expect(analyze).toContain("const marketShut = isPossiblyClosedFor(currencyPair, Date.now());");
+    expect(analyze).toContain("marketShut ? (isGoldPair(currencyPair) ? L.marketClosedGold : L.marketClosed)");
     expect(analyze).not.toContain("isMarketClosed(Date.now())");
   });
 

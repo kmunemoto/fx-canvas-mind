@@ -1,6 +1,6 @@
 import type { LevelTouch, ReferenceOutcome, ReviewMechanical } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
-import { formatCandleLabel, formatJst, priceDecimals } from "@/lib/candleTime";
+import { formatCandleLabel, formatJst, isGoldPair, priceDecimals } from "@/lib/candleTime";
 
 // The server's measured facts about a plan, rendered so that each number
 // says what it was measured on. Shared by the held-position card and the
@@ -41,6 +41,9 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavail
   const price = (v: number) => v.toFixed(decimals);
   const signed = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v}`);
   const r = (v: number | null) => (v === null ? "" : ` (${v > 0 ? "+" : ""}${v}R)`);
+  // #128: the server measures gold in dollars (its *_pips hold dollars)
+  const unit = (v: number | null) =>
+    v === null ? "—" : isGoldPair(pair) ? `${v > 0 ? "+" : v < 0 ? "−" : ""}$${Math.abs(v).toFixed(2)}` : `${signed(v)} pips`;
 
   // Which vocabulary the "not measured" reasons are said in. The anchor is a
   // FILL only when a position was registered; on a previous-call reference it
@@ -95,11 +98,11 @@ const ReviewFacts = ({ facts, pair, planFeed = null, outcome = null, planUnavail
       <Row label={f.price} value={f.priceAt(price(facts.price), formatJst(facts.priced_at, t.intlLocale))} />
       <Row
         label={facts.subject === "held" ? f.open : f.hypothetical}
-        value={`${signed(facts.move_pips)} pips${r(facts.move_r)}`}
+        value={`${unit(facts.move_pips)}${r(facts.move_r)}`}
         cls={facts.move_pips !== null && facts.move_pips < 0 ? "text-destructive" : "text-success"}
       />
-      <Row label={f.toStop} value={`${signed(facts.to_stop_pips)} pips${beyond(facts.to_stop_pips)}`} />
-      <Row label={f.toTp1} value={`${signed(facts.to_tp1_pips)} pips${beyond(facts.to_tp1_pips)}`} />
+      <Row label={f.toStop} value={`${unit(facts.to_stop_pips)}${beyond(facts.to_stop_pips)}`} />
+      <Row label={f.toTp1} value={`${unit(facts.to_tp1_pips)}${beyond(facts.to_tp1_pips)}`} />
       <Row label={f.stopTouch} value={touchText(facts.stop_touch, "stop")} cls={touchCls(facts.stop_touch, "stop")} />
       <Row label={f.tp1Touch} value={touchText(facts.tp1_touch, "tp1")} cls={touchCls(facts.tp1_touch, "tp1")} />
       <Row label={f.tracker} value={trackerText} cls="text-muted-foreground" />

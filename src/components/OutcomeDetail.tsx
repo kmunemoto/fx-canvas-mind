@@ -1,6 +1,6 @@
 import type { AnalysisRecord, Counterfactual, NumericCandle, Position } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
-import { formatJst, priceDecimals, toPips } from "@/lib/candleTime";
+import { formatDistance, formatJst, isGoldPair, priceDecimals, toPips } from "@/lib/candleTime";
 import { CURRENT_CONTRACT, contractKey, isRejected, isSelfDeclined } from "@/lib/outcomeStats";
 import PriceChart, { type ChartMarker } from "./PriceChart";
 import { EntryRegistration } from "./EntryRegistration";
@@ -59,7 +59,8 @@ const OutcomeDetail = ({ record, shadow = null, positions = [], onPositionsChang
     typeof v === "number" && Number.isFinite(v) ? v.toFixed(decimals) : "—";
   const pips = (v: number | null | undefined, r: number | null | undefined) => {
     if (typeof v !== "number" || !Number.isFinite(v)) return "—";
-    const base = `${Math.round(toPips(record.pair, v))} ${d.pips}`;
+    // (#128: gold in dollars)
+    const base = isGoldPair(record.pair) ? formatDistance(record.pair, v) : `${Math.round(toPips(record.pair, v))} ${d.pips}`;
     return typeof r === "number" && Number.isFinite(r) ? `${base} (${r.toFixed(1)}R)` : base;
   };
   const when = (iso: string | null | undefined) => (iso ? formatJst(iso, t.intlLocale) : "—");

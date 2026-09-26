@@ -19,7 +19,9 @@ export const SPREAD_SHARE_OF_STOP: Record<string, number | null> = {
 // is converted — a rate the app did not read would be a number it made up.
 export const lossPer10k = (pair: string, entry: number, stop: number): { amount: number; currency: "JPY" | "USD" } | null => {
   if (!Number.isFinite(entry) || !Number.isFinite(stop) || entry === stop) return null;
-  const quote = pair.toUpperCase().split("/")[1];
+  const [base, quote] = pair.toUpperCase().split("/");
+  // (#128: gold is not sized in units of 10,000 — its loss is shown per ounce)
+  if (base === "XAU") return null;
   if (quote !== "JPY" && quote !== "USD") return null;
   return { amount: Math.abs(entry - stop) * 10_000, currency: quote };
 };

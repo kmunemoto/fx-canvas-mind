@@ -1,7 +1,7 @@
 import { Activity } from "lucide-react";
 import type { RsiSarSummary, RsiSarTrigger } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { priceDecimals, toPips } from "@/lib/candleTime";
+import { formatDistance, isGoldPair, priceDecimals } from "@/lib/candleTime";
 
 interface Props {
   summary: RsiSarSummary | null;
@@ -28,8 +28,7 @@ const RsiSarPanel = ({ summary, signal, pair, price }: Props) => {
   const from = price ?? summary.now?.close ?? null;
   const dist = (v: number | null) => {
     if (v === null || from === null) return "—";
-    const pips = toPips(pair, v - from);
-    return `${pips >= 0 ? "+" : "−"}${Math.abs(pips).toFixed(1)}pips`;
+    return formatDistance(pair, v - from, { signed: true, digits: 1 });
   };
   const intervals = t.control.intervals as Record<string, string>;
   const tfLabel = intervals[summary.tf] ?? summary.tf;
@@ -121,6 +120,7 @@ const RsiSarPanel = ({ summary, signal, pair, price }: Props) => {
       <div className="space-y-0.5 pt-2 border-t border-border/60" data-testid="rsi-sar-evidence">
         <p className="text-[10px] text-muted-foreground">{r.evidenceTitle}</p>
         {!ev.tf.measured && <p className="text-[11px] text-muted-foreground">{r.notMeasured(tfLabel)}</p>}
+        {isGoldPair(pair) && <p className="text-[11px] text-warning" data-testid="rsi-sar-evidence-gold">{t.result.evidenceNotGold}</p>}
         {measured.win !== null && measured.winN !== null && (
           <p className="text-xs">{r.evidence(ev.period, ev.pairs, pct(measured.win), measured.winN, pct(ev.breakeven.win))}</p>
         )}

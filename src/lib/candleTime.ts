@@ -44,3 +44,11 @@ export const pipSize = (pair: string): number => (isGoldPair(pair) ? 0.01 : pair
 export const toPips = (pair: string, priceDiff: number): number => priceDiff / pipSize(pair);
 
 export const priceDecimals = (pair: string): number => (isGoldPair(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
+
+// #128: a price distance in the unit it is read in — pips for a currency
+// pair, dollars for gold ("12 pips", "$12.34"); `signed` puts + or − in front
+export const formatDistance = (pair: string, diff: number, opts: { signed?: boolean; digits?: number } = {}): string => {
+  const sign = opts.signed ? (diff >= 0 ? "+" : "−") : diff < 0 ? "−" : "";
+  if (isGoldPair(pair)) return `${sign}$${Math.abs(diff).toFixed(2)}`;
+  return `${sign}${Math.abs(toPips(pair, diff)).toFixed(opts.digits ?? 0)}pips`;
+};
