@@ -286,6 +286,15 @@ export const ja = {
     error: "チャートを読み込めませんでした。1分ごとに自動で読み直します。",
     maintenance: "GMOコインの価格配信がメンテナンス中のため、今はチャートを表示できません（週末などに行われます）。1分ごとに確認し、再開すると自動で表示します。",
     maintenanceShort: "配信メンテナンス中",
+    // #114
+    viewLabel: "表示するサイン",
+    views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
+    recommended:
+      "おすすめ設定は GA型・1時間足です。GA型の3つの時間足のうち、前半・後半の両方でランダムに入るより少し良かったのは1時間足だけでした（+0.07R・+0.01R）。ただし差は誤差の範囲で、スプレッドを払うと損益はまだマイナスです。勝てる根拠ではありません。",
+    gaLegend: "BUY・SELL=GA型のサイン（包み足・実体が大きい・RSI 50・5本前との比較、確定足で判定）。TP/SL=損切り ATR×1、利確はその2倍（✓勝ち ✗負け …判定中）",
+    latestTitle: (rule: string) => `最新のサイン（${rule}）`,
+    latestPlan: (entry: string, tp: string, sl: string) => `エントリー ${entry} / TP ${tp} / SL ${sl}`,
+    outcome: { win: "結果: 利確に到達", loss: "結果: 損切りに到達", ambiguous: "結果: 同じ足で両方に到達（負け扱い）", expired: "結果: 48本で決着せず", open: "結果: 判定中" } as Record<string, string>,
     fallback: (maintenance: boolean, fetched: string) =>
       `${maintenance ? "GMOコインの価格配信がメンテナンス中" : "GMOコインの価格配信が読めない"}ため、別の配信（Twelve Data）の直近の足を表示しています（${fetched} 取得）。価格は動きません。GMO が戻ると自動で切り替わります。`,
     reopens: (at: string) => `市場の再開は ${at}（日本時間）の予定です。`,
