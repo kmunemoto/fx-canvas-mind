@@ -228,7 +228,10 @@ export const en: Dict = {
       sarDots: "Parabolic SAR",
       trendLines: "Swing lines",
       kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor}`,
+      fvgCrossfire: "FVG Crossfire",
     },
+    fvgNote:
+      "FVG Crossfire (a port of FluxChart's open-source code, MPL 2.0): boxes only where a new fair value gap printed over an unfilled opposite one. Green = bullish, red = bearish (the newer gap's side). Another opposite gap over it flips it and narrows it to the overlap. ★ = times formed or flipped, ▲▼ = a candle back in the zone after leaving it (a retest), the faint wedge = the gap it grew from, a faint box = finished by a close through its far side. Judged on closed candles. Only the candles on the chart are searched (the live chart's 120), not the original's 3,000, so there are fewer zones. Shown only: no signal or email uses it.",
     kalmanNote:
       "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 7,164 trades, 29.4% won (break-even 33.3%), −0.116R each — no different from entering at random (1h: −0.031R, +0.05R over random, within noise). The RSI filter removed about 1 in 7,000. No signal or email uses it.",
     hide: "Hide",

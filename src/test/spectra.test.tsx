@@ -117,7 +117,7 @@ describe("#119 switching what the chart draws, from the list at its top left", (
   it("lists only what this chart draws, the SPECTRA-style line off until switched on", () => {
     render(chart());
     const names = [...screen.getByTestId("chart-overlay-list").querySelectorAll("[data-testid^='chart-overlay-name-']")].map((e) => e.textContent);
-    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 10 3", "ストキャス 14 1 3"]);
+    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 10 3", "FVG Crossfire", "ストキャス 14 1 3"]);
     expect(screen.getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByTestId("chart-kalman")).toBeNull();
 
@@ -158,7 +158,7 @@ describe("#119 switching what the chart draws, from the list at its top left", (
     render(chart());
     fireEvent.click(screen.getByTestId("chart-overlay-fold"));
     expect(screen.queryByTestId("chart-overlay-name-signals")).toBeNull();
-    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 5/6");
+    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 6/7");
     fireEvent.click(screen.getByTestId("chart-overlay-fold"));
     expect(screen.getByTestId("chart-overlay-name-signals")).toBeTruthy();
   });

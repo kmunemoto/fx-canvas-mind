@@ -7,6 +7,7 @@ import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
+import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 
 interface Level {
@@ -163,6 +164,9 @@ const COLORS = {
   tp: "hsl(var(--success))",
   grid: "hsl(var(--border))",
   text: "hsl(var(--muted-foreground))",
+  // #121: FVG Crossfire's own colours
+  fvgBull: "#0ecb81",
+  fvgBear: "#f6465d",
   // #117: TradingView's own colours for the stochastic's two lines and band
   stochK: "#2962FF",
   stochD: "#FF6D00",
@@ -307,6 +311,11 @@ const PriceChart = ({
   const kst = useMemo(
     () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
     [ov.kalman, candles, formingLast],
+  );
+  // #121: FVG Crossfire, on the closed candles
+  const fvgcf = useMemo(
+    () => (ov.fvgCrossfire ? fvgCrossfire(candles, formingLast ? candles.length - 2 : candles.length - 1) : null),
+    [ov.fvgCrossfire, candles, formingLast],
   );
   // the list open or folded: open in full screen and on a wide screen until
   // folded, folded on a phone's card until opened
@@ -605,6 +614,7 @@ const PriceChart = ({
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
+    { key: "fvgCrossfire", name: t.chart.overlayNames.fvgCrossfire, on: ov.fvgCrossfire, toggle: flip("fvgCrossfire") },
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1144,6 +1154,11 @@ const PriceChart = ({
           {t.chart.kalmanNote}
         </p>
       )}
+      {ov.fvgCrossfire && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgcf-legend">
+          {t.chart.fvgNote}
+        </p>
+      )}
     </>
   );
 
@@ -1413,6 +1428,50 @@ const PriceChart = ({
           </g>
         )}
 
+        {/* #121: FVG Crossfire's zones — each state of a chain as a box from
+            where it began to where it flipped (or to the newest candle while
+            live), faded once a close went through it — and the funnel from
+            the older gap each chain grew out of */}
+        {fvgcf && fvgcf.segments.length > 0 && (
+          <g data-testid="chart-fvgcf" clipPath={`url(#${clipId})`}>
+            {fvgcf.segments.map((sg, k) => {
+              const color = sg.dir === 1 ? COLORS.fvgBull : COLORS.fvgBear;
+              const x0 = x(sg.from);
+              const x1 = x(sg.to ?? lastIdx);
+              const funnel = sg.funnel;
+              return (
+                <g key={`fz-${k}`}>
+                  {funnel && (
+                    <polygon
+                      points={`${x(funnel.topBar).toFixed(1)},${y(funnel.top).toFixed(1)} ${x0.toFixed(1)},${y(sg.top).toFixed(1)} ${x0.toFixed(1)},${y(sg.bottom).toFixed(1)} ${x(funnel.bottomBar).toFixed(1)},${y(funnel.bottom).toFixed(1)}`}
+                      fill={funnel.dir === 1 ? COLORS.fvgBull : COLORS.fvgBear}
+                      opacity={sg.done ? 0.04 : 0.14}
+                      data-testid="chart-fvgcf-funnel"
+                    />
+                  )}
+                  {/* the prices are the original's; on a chart this small a
+                      band a few pips wide is a line, so it is drawn at least
+                      2 high, and a live one gets an edge to be seen by */}
+                  <rect
+                    x={x0}
+                    y={Math.min(y(sg.top), (y(sg.top) + y(sg.bottom)) / 2 - 1)}
+                    width={Math.max(1, x1 - x0)}
+                    height={Math.max(2, y(sg.bottom) - y(sg.top))}
+                    fill={color}
+                    opacity={sg.done ? 0.1 : sg.active ? 0.28 : 0.2}
+                    stroke={sg.active && !sg.done ? color : "none"}
+                    strokeOpacity={0.7}
+                    strokeWidth={0.8}
+                    data-testid="chart-fvgcf-zone"
+                    data-dir={sg.dir === 1 ? "bull" : "bear"}
+                    data-live={sg.active && !sg.done ? "1" : "0"}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
         {/* #119: the SPECTRA-style trend cloud — between the smoothed price
             and its Supertrend line, green while up, red while down */}
         {kst && kstRuns.length > 0 && (
@@ -1513,6 +1572,54 @@ const PriceChart = ({
             </g>
           );
         })}
+
+        {/* #121: FVG Crossfire's marks — the stars on each live zone's edge at
+            the newest candle (under a bullish zone, over a bearish one) and
+            an arrow on each retest (▲ under the candle for a bullish zone,
+            ▼ over it for a bearish one) */}
+        {fvgcf && (
+          <g clipPath={`url(#${clipId})`}>
+            {/* arrows stay with a frozen state of a chain until the chain is
+                finished, as the original's labels do; stars only on the live one */}
+            {fvgcf.segments.filter((sg) => !sg.done).map((sg, k) => {
+              const color = sg.dir === 1 ? COLORS.fvgBull : COLORS.fvgBear;
+              const size = labelSize + 1;
+              return (
+                <g key={`fs-${k}`}>
+                  {sg.active && (
+                    <text
+                      x={x(lastIdx)}
+                      y={sg.dir === 1 ? y(sg.bottom) + size + 1 : y(sg.top) - 3}
+                      fontSize={size}
+                      textAnchor="end"
+                      fill={color}
+                      data-testid="chart-fvgcf-stars"
+                    >
+                      {starText(sg.flips)}
+                    </text>
+                  )}
+                  {sg.retests.filter(onScreen).map((i) => {
+                    const c = candles[i];
+                    const bull = sg.dir === 1;
+                    return (
+                      <text
+                        key={`fr-${i}`}
+                        x={x(i)}
+                        y={bull ? y(c.low) + labelSize + 3 : y(c.high) - 3}
+                        fontSize={labelSize - 1}
+                        textAnchor="middle"
+                        fill={color}
+                        data-testid={`chart-fvgcf-retest-${bull ? "bull" : "bear"}`}
+                      >
+                        {bull ? "▲" : "▼"}
+                      </text>
+                    );
+                  })}
+                </g>
+              );
+            })}
+          </g>
+        )}
 
         {/* #119: the SPECTRA-style Supertrend line, and a triangle on each
             closed bar where it turned and RSI agreed (▲ up under the low,
