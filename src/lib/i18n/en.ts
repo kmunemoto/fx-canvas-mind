@@ -227,10 +227,10 @@ export const en: Dict = {
       sarCloud: "SAR band",
       sarDots: "Parabolic SAR",
       trendLines: "Swing lines",
-      kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor} (unmeasured)`,
+      kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor}`,
     },
     kalmanNote:
-      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. Not measured on past data, and no signal or email uses it.",
+      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 7,164 trades, 29.4% won (break-even 33.3%), −0.116R each — no different from entering at random (1h: −0.031R, +0.05R over random, within noise). The RSI filter removed about 1 in 7,000. No signal or email uses it.",
     hide: "Hide",
     show: "Show",
     foldList: "Fold the list",

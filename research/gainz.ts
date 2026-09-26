@@ -44,12 +44,24 @@
 // owner's GainzAlgo Suite screenshot, stop 1 ATR, target 2x — the r2w exit
 // exactly). Its settings were not chosen on any data, so it is not ranked:
 // both periods are reported, and the app quotes the second.
+//
+// #119 adds the SPECTRA-style line the chart can draw (src/lib/
+// kalmanSupertrend.ts, imported as it is: HL2 and ATR(10) through a Kalman
+// filter, Supertrend at 3 ATR, a turn marked when RSI(14) is on its side of
+// 50), and the same turns without the RSI filter, to see what the filter
+// adds. Settings are TradingView's Supertrend defaults and the filter's
+// fixed values, set before any data was read: not ranked, both periods
+// reported. Exits: r2w, and "split" — SPECTRA's own shape, half the
+// position at 1x the stop and half at 2x with one stop (two brackets with
+// the same stop: the mean of r1w and r2w). Its early exit on an opposite
+// signal is not modelled (48 bars, as every exit here).
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, mid, subStarts, type LabelSpec, type Side } from "./lib.ts";
 import { GAINZ, GAINZ_APP, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, type RevRule } from "./reversal.ts";
 import { fetchPair } from "./gmo.ts";
+import { kalmanSupertrend, type KalmanStRead } from "../src/lib/kalmanSupertrend.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS).split(",").map((s) => s.trim()).filter(Boolean);
@@ -64,7 +76,11 @@ export const EXITS: Record<string, LabelSpec> = {
   app: { stopAtr: 0.8, rr: 1.5, horizon: 48 },
   r2: { stopAtr: 0.8, rr: 2, horizon: 48 },
   r2w: { stopAtr: 1.0, rr: 2, horizon: 48 },
+  // #119: SPECTRA's first target (its second is r2w's)
+  r1w: { stopAtr: 1.0, rr: 1, horizon: 48 },
 };
+// #119: half at r1w, half at r2w, one stop
+const SPLIT_EXIT = "split";
 const EXIT_NAMES = Object.keys(EXITS);
 const PRIMARY_EXIT = "r2w";
 const PRIMARY_TF = "15min";
@@ -74,11 +90,42 @@ const TFS = ["15min", "1h", "4h"] as const;
 type Tf = (typeof TFS)[number];
 const costly = (tf: Tf, hour: number) => tf !== "4h" && hour >= 17 && hour <= 23;
 
+// #119: the SPECTRA-style read, once per pair and timeframe
+const kstCache = new WeakMap<RevCtx, { read: KalmanStRead; at: Map<number, { side: Side; passed: boolean }> }>();
+const kstOf = (x: RevCtx) => {
+  let k = kstCache.get(x);
+  if (!k) {
+    const read = kalmanSupertrend(x.c);
+    k = { read, at: new Map(read.flips.map((f) => [f.i, { side: f.side, passed: f.passed }])) };
+    kstCache.set(x, k);
+  }
+  return k;
+};
+const SPECTRA_RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
+  {
+    id: "spectra_rsi",
+    ja: "SPECTRA型（アプリのチャートと同じ）: カルマン平滑の HL2・ATR(10) でスーパートレンド ATR×3 の反転、RSI(14) が50の側",
+    at: (x, i) => {
+      const f = kstOf(x).at.get(i);
+      return f && f.passed ? (f.side === "BUY" ? 1 : -1) : 0;
+    },
+  },
+  {
+    id: "spectra_st",
+    ja: "同じスーパートレンドの反転すべて（RSI フィルターなし）",
+    at: (x, i) => {
+      const f = kstOf(x).at.get(i);
+      return f ? (f.side === "BUY" ? 1 : -1) : 0;
+    },
+  },
+];
+
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
   GAINZ_APP,
   { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
+  ...SPECTRA_RULES,
 ];
 const BLIND = "__blind__";
 
@@ -180,7 +227,7 @@ const study = (pair: string, tf: Tf, entry: QuoteCandle[], intervalMs: number, s
   // be known (the trade is still open at the end of the history)
   const R: Record<string, Record<Side, Float64Array>> = {};
   const O: Record<string, Record<Side, Array<string | null>>> = {};
-  for (const ex of EXIT_NAMES) {
+  for (const ex of [...EXIT_NAMES, SPLIT_EXIT]) {
     R[ex] = { BUY: new Float64Array(n).fill(Number.NaN), SELL: new Float64Array(n).fill(Number.NaN) };
     O[ex] = { BUY: new Array(n).fill(null), SELL: new Array(n).fill(null) };
   }
@@ -210,6 +257,19 @@ const study = (pair: string, tf: Tf, entry: QuoteCandle[], intervalMs: number, s
         c.r += tr.r;
       }
     }
+    // #119: the split exit — two brackets on one stop; "win" when the first
+    // target was reached
+    for (const side of SIDES) {
+      const a1 = R.r1w[side][t];
+      const a2 = R.r2w[side][t];
+      if (Number.isNaN(a1) || Number.isNaN(a2)) continue;
+      R[SPLIT_EXIT][side][t] = (a1 + a2) / 2;
+      O[SPLIT_EXIT][side][t] = O.r1w[side][t] === "win" ? "win" : O.r1w[side][t];
+      const k = baseKey(SPLIT_EXIT, period, side, hour);
+      const c = base[k] ?? (base[k] = { n: 0, r: 0 });
+      c.n++;
+      c.r += R[SPLIT_EXIT][side][t];
+    }
   }
   const baseAt = (ex: string, period: Period, side: Side, hour: number) => {
     const c = base[baseKey(ex, period, side, hour)];
@@ -229,7 +289,7 @@ const study = (pair: string, tf: Tf, entry: QuoteCandle[], intervalMs: number, s
       if (d !== 0) hits.push({ id: rule.id, side: d === 1 ? "BUY" : "SELL" });
     }
     fired += hits.length;
-    for (const ex of EXIT_NAMES) {
+    for (const ex of [...EXIT_NAMES, SPLIT_EXIT]) {
       for (const side of SIDES) {
         const r = R[ex][side][t];
         const b = baseAt(ex, period, side, hour);
@@ -371,9 +431,36 @@ const main = async () => {
   log(`## the same rule with the app's RSI + SAR exit (stop 0.8 ATR, target 1.5x), second period`);
   for (const tf of TFS) log(line(`${GAINZ_APP.id} ${tf} app`, S(GAINZ_APP.id, "app", "val", `tf:${tf}`)));
 
+  // 5. #119: the SPECTRA-style line the chart draws, and its turns unfiltered
+  log(`\n# #119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts) — settings fixed before any data, not ranked, both periods`);
+  for (const rule of SPECTRA_RULES) {
+    log(`## ${rule.id}: ${rule.ja}`);
+    for (const ex of [PRIMARY_EXIT, SPLIT_EXIT]) {
+      for (const period of ["disc", "val"] as Period[]) {
+        const label = `${period === "disc" ? "1st" : "2nd"} ${ex}`;
+        log(line(`blind all ${label}`, S(BLIND, ex, period, "all")));
+        log(line(`${rule.id} all ${label}`, S(rule.id, ex, period, "all")));
+        for (const tf of TFS) log(line(`${rule.id} ${tf} ${label}`, S(rule.id, ex, period, `tf:${tf}`)));
+        for (const tf of TFS) {
+          for (const side of SIDES) log(line(`${rule.id} ${tf} ${side} ${label}`, S(rule.id, ex, period, `tfside:${tf}:${side}`)));
+        }
+        let up = 0, total = 0;
+        const per: string[] = [];
+        for (const pair of Object.keys(barsByPair)) {
+          const st = S(rule.id, ex, period, `pair:${pair}`);
+          if (!st) continue;
+          total++;
+          if (st.e > 0) up++;
+          per.push(`${pair} ${rr(st.e, 2)} (n=${st.n})`);
+        }
+        log(`   ${label}: pairs with positive expectancy ${up}/${total}  ${per.join(" | ")}`);
+      }
+    }
+  }
+
   const dump: Record<string, unknown> = {};
   for (const rule of [...RULES.map((r) => r.id), BLIND]) {
-    for (const ex of EXIT_NAMES) {
+    for (const ex of [...EXIT_NAMES, SPLIT_EXIT]) {
       for (const period of ["disc", "val"] as Period[]) {
         for (const scope of ["all", ...TFS.map((t) => `tf:${t}`), ...SIDES.map((s) => `side:${s}`)]) {
           const s = S(rule, ex, period, scope);

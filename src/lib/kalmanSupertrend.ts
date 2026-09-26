@@ -16,7 +16,9 @@
 // the first few bars.
 //
 // Shown on the chart only, off unless switched on: no signal, alert or
-// record is judged on it, and it has not been measured on past data.
+// record is judged on it. #120 measured it on past data (research/gainz.ts,
+// docs §8.33): after the spread it lost as entering at random did, and the
+// RSI filter almost never removed a turn (a 3-ATR break has RSI on its side).
 
 export interface KalmanStParams {
   // the filter's process and measurement noise (only their ratio matters)
