@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
 import { applyTick, normalizeLiveRead, normalizeTicks, type LiveRead } from "../lib/liveChart";
-import { CHART_BARS, liveRead, parseTicker, splitBars } from "../../supabase/functions/live-chart/logic";
+import { CHART_BARS, isMaintenance, liveRead, parseTicker, splitBars } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 
 const M15 = 15 * 60_000;
@@ -174,5 +174,54 @@ describe("#113 the live chart card", () => {
     render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} />);
     await waitFor(() => expect(screen.getByTestId("live-error")).toBeTruthy());
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "15min");
+  });
+
+  it("recognises GMO's maintenance answer (as seen on 2026-09-26)", () => {
+    expect(isMaintenance({ status: 5, messages: [{ message_code: "ERR-5201", message_string: "MAINTENANCE. Please wait for a while" }] })).toBe(true);
+    expect(isMaintenance({ status: 0, data: [] })).toBe(false);
+    expect(isMaintenance(null)).toBe(false);
+  });
+
+  it("says the feed is in maintenance, asks again a minute later, and shows the chart once it is back", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    const loadBars = vi.fn(async (pair: string, interval: string) => {
+      calls++;
+      if (calls === 1) throw new Error("maintenance");
+      return readFor(pair, interval);
+    });
+    const loadTicks = vi.fn(async () => {
+      throw new Error("maintenance");
+    });
+    render(<LiveChart defaultInterval="1h" loadBars={loadBars} loadTicks={loadTicks} />);
+    await waitFor(() => expect(screen.getByTestId("live-maintenance").textContent).toContain("メンテナンス中"));
+    await waitFor(() => expect(screen.getByTestId("live-updated").textContent).toBe("配信メンテナンス中"));
+    expect(screen.queryByTestId("live-error")).toBeNull();
+    // the price is not asked for every 5 seconds while the feed is down
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(loadTicks).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
+    expect(screen.queryByTestId("live-maintenance")).toBeNull();
+  });
+
+  it("does not ask every few seconds when no bar is forming (the market is shut)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval, { nextClose: new Date(Date.now() - 3_600_000).toISOString() }));
+    render(<LiveChart defaultInterval="1h" loadBars={loadBars} loadTicks={async () => ({})} />);
+    await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(loadBars).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(2));
   });
 });

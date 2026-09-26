@@ -8,10 +8,20 @@
 // seconds in this instance, so several people watching one chart cost the
 // public feed one read, not one each.
 
-import { LIVE_PAIRS, LIVE_INTERVALS, TICKER_URL, fetchLiveQuotes, isLiveInterval, isLivePair, liveRead, parseTicker } from "./logic.ts";
+import {
+  LIVE_INTERVALS,
+  LIVE_PAIRS,
+  TICKER_URL,
+  fetchLiveQuotes,
+  isLiveInterval,
+  isLivePair,
+  isMaintenance,
+  liveRead,
+  parseTicker,
+} from "./logic.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v1-2026-09-25T18:00:00Z";
+const FUNCTION_VERSION = "live-chart-v2-2026-09-26T01:00:00Z";
 
 // A bar read is good until its forming bar has moved on a little; the ticker
 // for a couple of seconds
@@ -67,12 +77,23 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => null) as Record<string, unknown> | null;
     const action = typeof body?.action === "string" ? body.action : "bars";
+    // v2: whether GMO said it is down for maintenance on any call below
+    let maintenance = false;
+    const fetcher: Fetcher = async (url) => {
+      const got = await gmoFetcher(url);
+      if (isMaintenance(got)) maintenance = true;
+      return got;
+    };
+    const unavailable = () =>
+      maintenance
+        ? json({ ok: false, error: "maintenance", version: FUNCTION_VERSION }, 503)
+        : json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
 
     if (action === "ticker") {
       if (!tickerCache || nowMs - tickerCache.at > TICKER_TTL_MS) {
-        const raw = await gmoFetcher(TICKER_URL);
+        const raw = await fetcher(TICKER_URL);
         const ticks = parseTicker(raw);
-        if (Object.keys(ticks).length === 0) return json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
+        if (Object.keys(ticks).length === 0) return unavailable();
         tickerCache = { at: nowMs, body: { ok: true, version: FUNCTION_VERSION, at: new Date(nowMs).toISOString(), ticks } };
       }
       return json(tickerCache.body);
@@ -91,8 +112,8 @@ Deno.serve(async (req: Request) => {
         const next = (hit.body as { read?: { next_close?: string | null } }).read?.next_close;
         if (!next || Date.parse(next) > nowMs) return json(hit.body);
       }
-      const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, gmoFetcher);
-      if (!quotes || quotes.length === 0) return json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
+      const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, fetcher);
+      if (!quotes || quotes.length === 0) return unavailable();
       const out = { ok: true, version: FUNCTION_VERSION, read: liveRead(pair, interval, quotes, nowMs) };
       if (barsCache.size > 100) barsCache.clear();
       barsCache.set(key, { at: nowMs, body: out });
