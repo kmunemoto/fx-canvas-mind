@@ -141,6 +141,18 @@ export const liveRead = (pair: string, interval: string, quotes: QuoteCandle[], 
 
 export type LiveRead = ReturnType<typeof liveRead>;
 
+// GMO answers every public call with {"status": 5, messages: [{message_code:
+// "ERR-5201", message_string: "MAINTENANCE. ..."}]} while its feed is down
+// for maintenance (seen on a Saturday morning, 2026-09-26): no bars and no
+// prices, which is not an error of ours and should not read as one.
+export const isMaintenance = (body: unknown): boolean => {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as { status?: unknown; messages?: unknown };
+  if (b.status === 5) return true;
+  return Array.isArray(b.messages) &&
+    b.messages.some((m) => typeof m === "object" && m !== null && (m as { message_code?: unknown }).message_code === "ERR-5201");
+};
+
 // ---- the ticker ----------------------------------------------------------------------
 
 export const TICKER_URL = `${GMO_HOST}/ticker`;

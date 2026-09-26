@@ -17,6 +17,10 @@ import {
 const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
 const AFTER_CLOSE_MS = 4_000;
+// Asked again this often while the feed cannot be read (GMO's maintenance,
+// an outage) or while no bar is forming (the market is shut): never every
+// few seconds for a whole weekend
+const RETRY_MS = 60_000;
 
 interface Props {
   defaultInterval?: string;
@@ -42,6 +46,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
+  const [tickError, setTickError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // the newest signal seen per rule, so a new one can be pointed out
@@ -82,22 +87,39 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   useEffect(() => {
     if (!read?.nextClose) return;
     const due = Date.parse(read.nextClose) + AFTER_CLOSE_MS - Date.now();
-    const id = window.setTimeout(() => void load(pair, interval), Math.min(Math.max(due, 5_000), 3_600_000));
+    // a close already past means no bar is forming (the market is shut):
+    // look again once a minute, not every few seconds
+    const wait = due <= 0 ? RETRY_MS : Math.min(Math.max(due, 5_000), 3_600_000);
+    const id = window.setTimeout(() => void load(pair, interval), wait);
     return () => window.clearTimeout(id);
-  }, [read?.nextClose, pair, interval, load]);
+  }, [read, pair, interval, load]);
+
+  // A read that failed is tried again, once a minute
+  useEffect(() => {
+    if (!error) return;
+    const id = window.setTimeout(() => void load(pair, interval), RETRY_MS);
+    return () => window.clearTimeout(id);
+  }, [error, pair, interval, load]);
 
   // The price, every few seconds while the page is on screen
   useEffect(() => {
     let stop = false;
+    // while GMO is down for maintenance, ask once a minute, not every 5 s
+    let quietUntil = 0;
     const tick = async () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (Date.now() < quietUntil) return;
       try {
         const got = await loadTicks();
         if (stop) return;
         setTicks(got);
         setTickAt(Date.now());
-      } catch {
+        setTickError(null);
+      } catch (err) {
         // the chart keeps its last price; the "updated" time says how old it is
+        const code = err instanceof Error ? err.message : "error";
+        if (code === "maintenance") quietUntil = Date.now() + RETRY_MS;
+        if (!stop) setTickError(code);
       }
     };
     void tick();
@@ -137,7 +159,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         <Radio className="h-4 w-4 text-primary" />
         <h3 className="text-sm font-semibold text-foreground">{l.title}</h3>
         <span className="ml-auto text-[10px] text-muted-foreground font-mono" data-testid="live-updated">
-          {tickAt !== null ? l.updated(jstClock(tickAt)) : l.connecting}
+          {tickError === "maintenance" ? l.maintenanceShort : tickAt !== null ? l.updated(jstClock(tickAt)) : l.connecting}
         </span>
       </div>
 
@@ -192,7 +214,11 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
       )}
 
       {error && !read ? (
-        <p className="text-xs text-destructive" data-testid="live-error">{l.error}</p>
+        error === "maintenance" ? (
+          <p className="text-xs text-warning" data-testid="live-maintenance">{l.maintenance}</p>
+        ) : (
+          <p className="text-xs text-destructive" data-testid="live-error">{l.error}</p>
+        )
       ) : !read ? (
         <p className="text-xs text-muted-foreground" data-testid="live-loading">{l.loading}</p>
       ) : (
