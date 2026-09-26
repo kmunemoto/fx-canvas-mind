@@ -202,6 +202,16 @@ export const en: Dict = {
     fullscreenOn: "The chart is open in full screen",
     zoomShown: (shown: number, total: number) => `${shown}/${total} bars`,
     zoomHint: "Pinch or wheel to zoom, drag sideways to go back in time, ↺ for all bars. The price scale fits the bars on screen",
+    indicators: "Indicators",
+    stoch: {
+      name: "Stoch",
+      settings: "Stochastic settings",
+      kLength: "%K length",
+      kSmoothing: "%K smoothing",
+      dSmoothing: "%D smoothing",
+      reset: "Back to the defaults (14, 1, 3)",
+      note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average, 80/20). Shown only: no signal is judged on it.",
+    },
     tabsLabel: "Timeframe",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,

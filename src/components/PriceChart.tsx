@@ -1,10 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Maximize2, RotateCcw, Settings2, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
+import { setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
+import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 
 interface Level {
   label: string;
@@ -131,6 +133,10 @@ const PILL_W = 84;
 const NARROW_AXIS_W = 38;
 const NARROW_PILL_W = 70;
 const NARROW = 480;
+// #117: the height of the indicator switches' row, and the gap above each
+// strip — what full screen leaves out of the height it shares
+const SWITCHES_H = 30;
+const STRIP_GAP = 4;
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -140,6 +146,10 @@ const COLORS = {
   tp: "hsl(var(--success))",
   grid: "hsl(var(--border))",
   text: "hsl(var(--muted-foreground))",
+  // #117: TradingView's own colours for the stochastic's two lines and band
+  stochK: "#2962FF",
+  stochD: "#FF6D00",
+  stochBand: "#2196F3",
 };
 
 const MARKER_COLORS: Record<ChartMarker["kind"], string> = {
@@ -257,14 +267,28 @@ const PriceChart = ({
   const W = measured && measured.w > 0 ? measured.w : FALLBACK_W;
   const narrow = W < NARROW;
   const hasRsi = !!rsi && rsi.length === candles.length && rsi.some((v) => v !== null && Number.isFinite(v));
-  // In full screen the RSI strip takes a share of the height, the price the rest
+  // #117: the strips under the price — RSI when the chart has it, and the
+  // stochastic, each as chosen (for every chart, kept in this browser)
+  const prefs = useChartPrefs();
+  const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
+  const [stochSettings, setStochSettings] = useState(false);
+  const showRsi = hasRsi && prefs.rsi;
+  const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
+  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0);
+  // In full screen the strips (and their switches) take a share of the
+  // height and the price the rest; on a short screen (a phone on its side)
+  // the strips give way first, so everything fits
   const fitted = full && measured !== null && measured.h > 0;
-  const RH = fitted ? Math.min(140, Math.max(56, Math.round(measured.h * 0.18))) : narrow ? 56 : 64;
+  let RH = narrow ? 56 : 64;
   // Squarer on a phone, wider on a desktop, so neither wastes the space it
   // has: the ratio is what keeps the candles readable at both ends.
-  const H = fitted
-    ? Math.max(160, measured.h - (hasRsi ? RH + 4 : 0))
-    : Math.round(Math.min(300, Math.max(200, W * (narrow ? 0.72 : 0.45))));
+  let H = Math.round(Math.min(300, Math.max(200, W * (narrow ? 0.72 : 0.45))));
+  if (fitted) {
+    const avail = measured.h - SWITCHES_H;
+    RH = Math.min(140, Math.max(40, Math.round(measured.h * 0.18)));
+    if (strips > 0) RH = Math.min(RH, Math.max(36, Math.floor((avail - 120) / strips) - STRIP_GAP));
+    H = Math.max(100, avail - strips * (RH + STRIP_GAP));
+  }
   const axisW = narrow ? NARROW_AXIS_W : AXIS_W;
   const pillW = narrow ? NARROW_PILL_W : PILL_W;
   const PAD_RIGHT = axisW + pillW;
@@ -498,7 +522,9 @@ const PriceChart = ({
           {fullscreenBar && <div className="px-1 pb-2 space-y-1" data-testid="chart-fullscreen-bar">{fullscreenBar}</div>}
           {/* not on a phone on its side: the chart needs the height */}
           <p className="px-1 pb-1 text-[9px] text-muted-foreground [@media(max-height:480px)]:hidden" data-testid="chart-zoom-hint">{t.chart.zoomHint}</p>
-          <div ref={setBoxEl} className="flex-1 min-h-0 overflow-hidden">
+          {/* scrolls only if something opened in it (the stochastic's
+              settings) is taller than the screen */}
+          <div ref={setBoxEl} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
             {body}
           </div>
         </div>,
@@ -812,6 +838,97 @@ const PriceChart = ({
       )}
     </>
   );
+
+  // An oscillator (0–100) under the price, on the same x scale so a bar
+  // here is the bar above it: its lines, its levels, and its reading at the
+  // bar hovered or the last one on screen. RSI (#104) and the stochastic (#117).
+  const strip = (o: {
+    testid: string;
+    aria: string;
+    label: string;
+    lines: Array<{ name: string; values: Array<number | null>; color: string }>;
+    levels: Array<{ v: number; color: string; dash: string; opacity: number }>;
+    band?: { from: number; to: number; color: string; opacity: number };
+  }) => {
+    const top = 8;
+    const bottom = RH - 6;
+    const ry = (v: number) => top + ((100 - Math.min(100, Math.max(0, v))) / 100) * (bottom - top);
+    const pathOf = (values: Array<number | null>) => {
+      let path = "";
+      let pen = false;
+      // #116: the bars on screen
+      for (let i = from; i < to; i++) {
+        const v = values[i];
+        if (v === null || v === undefined || !Number.isFinite(v)) {
+          pen = false;
+          continue;
+        }
+        path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${ry(v).toFixed(1)} `;
+        pen = true;
+      }
+      return path;
+    };
+    const readingOf = (values: Array<number | null>) => {
+      if (hover !== null && hovered) {
+        const v = values[hover];
+        return v === null || v === undefined || !Number.isFinite(v) ? null : v;
+      }
+      return values.slice(from, to).reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
+    };
+    return (
+      <svg
+        viewBox={`0 0 ${W} ${RH}`}
+        className="w-full h-auto mt-1"
+        role="img"
+        aria-label={o.aria}
+        data-testid={o.testid}
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHover(null)}
+      >
+        {o.band && (
+          <rect
+            x={PAD_LEFT}
+            y={ry(o.band.to)}
+            width={Math.max(0, W - PAD_RIGHT - PAD_LEFT)}
+            height={Math.max(0, ry(o.band.from) - ry(o.band.to))}
+            fill={o.band.color}
+            opacity={o.band.opacity}
+            data-testid={`${o.testid}-band`}
+          />
+        )}
+        {o.levels.map((lv) => (
+          <g key={lv.v}>
+            <line
+              x1={PAD_LEFT} x2={W - PAD_RIGHT}
+              y1={ry(lv.v)} y2={ry(lv.v)}
+              stroke={lv.color}
+              strokeWidth="0.6"
+              strokeDasharray={lv.dash}
+              opacity={lv.opacity}
+            />
+            <text x={AXIS_X} y={ry(lv.v) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{lv.v}</text>
+          </g>
+        ))}
+        {hover !== null && hovered && (
+          <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
+        )}
+        {o.lines.map((ln) => (
+          <path key={ln.name || "line"} d={pathOf(ln.values)} fill="none" stroke={ln.color} strokeWidth="1.2" data-line={ln.name || undefined} />
+        ))}
+        <text x={PAD_LEFT + 2} y={top + 2} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace" data-testid={`${o.testid}-reading`}>
+          {o.label}
+          {o.lines.map((ln) => {
+            const v = readingOf(ln.values);
+            return (
+              <tspan key={ln.name || "line"} fill={ln.name ? ln.color : COLORS.text}>
+                {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : v.toFixed(1)}`}
+              </tspan>
+            );
+          })}
+        </text>
+      </svg>
+    );
+  };
 
   const charts = (
     <>
@@ -1207,58 +1324,110 @@ const PriceChart = ({
           );
         })}
       </svg>
+      {/* #117: the strips' switches, and the stochastic's lengths */}
+      <div className="px-1 pt-1 space-y-1" data-testid="chart-indicators">
+        <div className="flex flex-wrap items-center gap-1 text-[10px]" role="group" aria-label={t.chart.indicators}>
+          <span className="text-muted-foreground mr-0.5">{t.chart.indicators}</span>
+          {hasRsi && (
+            <button
+              type="button"
+              aria-pressed={prefs.rsi}
+              onClick={() => setChartPrefs({ rsi: !prefs.rsi })}
+              data-testid="chart-toggle-rsi"
+              className={`px-1.5 py-0.5 rounded border ${prefs.rsi ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+            >
+              {t.chart.rsiLabel}
+            </button>
+          )}
+          <button
+            type="button"
+            aria-pressed={prefs.stoch}
+            onClick={() => setChartPrefs({ stoch: !prefs.stoch })}
+            title={t.chart.stoch.note}
+            data-testid="chart-toggle-stoch"
+            className={`px-1.5 py-0.5 rounded border ${prefs.stoch ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+          >
+            {t.chart.stoch.name} {prefs.stochParams.kLength} {prefs.stochParams.kSmoothing} {prefs.stochParams.dSmoothing}
+          </button>
+          <button
+            type="button"
+            aria-expanded={stochSettings}
+            aria-label={t.chart.stoch.settings}
+            title={t.chart.stoch.settings}
+            onClick={() => setStochSettings((v) => !v)}
+            data-testid="chart-stoch-settings"
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {stochSettings && (
+          <div className="flex flex-wrap items-end gap-2 rounded border border-border p-2 text-[10px]" data-testid="chart-stoch-form">
+            {([
+              ["kLength", t.chart.stoch.kLength],
+              ["kSmoothing", t.chart.stoch.kSmoothing],
+              ["dSmoothing", t.chart.stoch.dSmoothing],
+            ] as Array<[keyof StochParams, string]>).map(([key, label]) => (
+              <label key={key} className="flex flex-col gap-0.5 text-muted-foreground">
+                {label}
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={STOCH_MAX}
+                  step={1}
+                  value={prefs.stochParams[key]}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 1) setChartPrefs({ stochParams: { ...prefs.stochParams, [key]: v } });
+                  }}
+                  data-testid={`chart-stoch-${key}`}
+                  className="w-16 rounded border border-border bg-background px-1 py-0.5 font-mono text-foreground"
+                />
+              </label>
+            ))}
+            <button
+              type="button"
+              onClick={() => setChartPrefs({ stochParams: STOCH_DEFAULTS })}
+              data-testid="chart-stoch-reset"
+              className="px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+            >
+              {t.chart.stoch.reset}
+            </button>
+            <p className="w-full text-muted-foreground">{t.chart.stoch.note}</p>
+          </div>
+        )}
+      </div>
       {/* #104: RSI(14) under the price, on the same x scale so a bar here is
           the bar above it. The 30 and 70 lines are the rule's levels. */}
-      {hasRsi && rsi && (() => {
-        const top = 8;
-        const bottom = RH - 6;
-        const ry = (v: number) => top + ((100 - v) / 100) * (bottom - top);
-        let path = "";
-        let pen = false;
-        // #116: the bars on screen
-        for (let i = from; i < to; i++) {
-          const v = rsi[i];
-          if (v === null || !Number.isFinite(v)) {
-            pen = false;
-            continue;
-          }
-          path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${ry(v).toFixed(1)} `;
-          pen = true;
-        }
-        const last = rsi.slice(from, to).reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
-        return (
-          <svg
-            viewBox={`0 0 ${W} ${RH}`}
-            className="w-full h-auto mt-1"
-            role="img"
-            aria-label={t.chart.rsiLabel}
-            data-testid="chart-rsi"
-            onMouseMove={handleMove}
-            onMouseLeave={() => setHover(null)}
-          >
-            {[70, 50, 30].map((lv) => (
-              <g key={lv}>
-                <line
-                  x1={PAD_LEFT} x2={W - PAD_RIGHT}
-                  y1={ry(lv)} y2={ry(lv)}
-                  stroke={lv === 50 ? COLORS.grid : lv === 70 ? COLORS.down : COLORS.up}
-                  strokeWidth="0.6"
-                  strokeDasharray={lv === 50 ? "2 3" : "4 3"}
-                  opacity={lv === 50 ? 0.5 : 0.75}
-                />
-                <text x={AXIS_X} y={ry(lv) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{lv}</text>
-              </g>
-            ))}
-            {hover !== null && hovered && (
-              <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
-            )}
-            <path d={path} fill="none" stroke={COLORS.entry} strokeWidth="1.2" />
-            <text x={PAD_LEFT + 2} y={top + 2} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">
-              {`${t.chart.rsiLabel} ${hover !== null && hovered && rsi[hover] !== null ? (rsi[hover] as number).toFixed(1) : last === null ? "—" : last.toFixed(1)}`}
-            </text>
-          </svg>
-        );
-      })()}
+      {showRsi && rsi && strip({
+        testid: "chart-rsi",
+        aria: t.chart.rsiLabel,
+        label: t.chart.rsiLabel,
+        lines: [{ name: "", values: rsi, color: COLORS.entry }],
+        levels: [
+          { v: 70, color: COLORS.down, dash: "4 3", opacity: 0.75 },
+          { v: 50, color: COLORS.grid, dash: "2 3", opacity: 0.5 },
+          { v: 30, color: COLORS.up, dash: "4 3", opacity: 0.75 },
+        ],
+      })}
+      {/* #117: the stochastic, drawn as TradingView draws it — %K blue, %D
+          orange, 80/50/20, the band between 20 and 80 shaded */}
+      {showStoch && strip({
+        testid: "chart-stoch",
+        aria: t.chart.stoch.name,
+        label: `Stoch ${prefs.stochParams.kLength} ${prefs.stochParams.kSmoothing} ${prefs.stochParams.dSmoothing}`,
+        lines: [
+          { name: "%K", values: stoch.k, color: COLORS.stochK },
+          { name: "%D", values: stoch.d, color: COLORS.stochD },
+        ],
+        levels: [
+          { v: STOCH_LEVELS.upper, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+          { v: STOCH_LEVELS.middle, color: COLORS.text, dash: "1.5 3", opacity: 0.45 },
+          { v: STOCH_LEVELS.lower, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+        ],
+        band: { from: STOCH_LEVELS.lower, to: STOCH_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
+      })}
     </>
   );
 
