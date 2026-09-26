@@ -240,6 +240,7 @@ export const en: Dict = {
         : status === "error"
           ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
           : `Computed over ${bars ?? 0} candles (including those before the screen). `) +
+      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): entering at its turns, 5,687 trades, 29.7% won (break-even 33.3%), −0.109R each; at its ◆, 9,028 trades, 30.4%, −0.085R. Neither differs from entering at random beyond noise (1h a little better, still about zero). " +
       "Shown only: no signal or email uses it.",
     // #123: the two Flux Charts ports, shown as one indicator
     fvgProfileNote: (bars: number) =>
