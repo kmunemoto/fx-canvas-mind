@@ -80,10 +80,14 @@ export const en: Dict = {
     tp1: "Take profit 1",
     tp2: "Take profit 2",
     tp3: "Take profit 3",
-    distance: (pips: number, atr: number | null) =>
-      atr === null ? `${pips} pips` : `${pips} pips · ${atr}× ATR`,
+    // (#128: amount carries its unit — "62 pips", or "$12.34" for gold)
+    distance: (amount: string, atr: number | null) =>
+      atr === null ? amount : `${amount} · ${atr}× ATR`,
     // #111: sizing help without a balance: the loss per 10,000 units
     lossPer10k: (money: string) => `${money} lost per 10,000 units if stopped`,
+    // #128: gold per ounce
+    lossPerOz: (money: string) => `${money} lost per ounce if stopped`,
+    evidenceNotGold: "This test was run on currency pairs. It has not been run on gold (XAU/USD).",
     // See the Japanese copy for why the period is declared in bars.
     horizon: {
       label: "Target period",

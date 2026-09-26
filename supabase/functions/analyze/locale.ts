@@ -65,6 +65,8 @@ interface LocaleStrings {
   // Shown when the plan would have been "enter now" but the market is shut,
   // so there is no "now" to enter at
   marketClosed: string;
+  // #128: gold is also shut an hour every day
+  marketClosedGold: string;
   // #100: shown when a short-term plan was priced in the hours around GMO's
   // daily roll, where plans lose to the spread (timing.ts)
   costlyHours: (parts: {
@@ -166,6 +168,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     fallbackWarning: "ニュース検索が利用できなかったため、テクニカルのみで判断しています",
     subscriptionRequired: "分析機能は有料プラン専用です。プランに申し込むとご利用いただけます。",
     marketClosed: "為替市場が閉まっているため、見送り（WAIT）にしました。プランは「今の値段で入る」前提で、その値段が存在しないので、エントリー・損切り・利確は出していません。直近の終値までの読みは通常どおり出しています。この回は下見として履歴に残りますが、成績にもルールの学習にも数えません。",
+    marketClosedGold: "金の市場が閉まっている（週末、または毎日のニューヨーク17時台＝日本時間 朝6時台〈冬は7時台〉の休止）ため、見送り（WAIT）にしました。プランは「今の値段で入る」前提で、その値段が存在しないので、エントリー・損切り・利確は出していません。直近の終値までの読みは通常どおり出しています。この回は下見として履歴に残りますが、成績にもルールの学習にも数えません。",
     costlyHours: ({ signal, interval, hourUtc, evidence }) => {
       const tf = ({ "1min": "1分足", "15min": "15分足", "1h": "1時間足" } as Record<string, string>)[interval] ?? interval;
       const jst = (hourUtc + 9) % 24;
@@ -305,6 +308,7 @@ const STRINGS: Record<AnalysisLocale, LocaleStrings> = {
     fallbackWarning: "News search was unavailable, so this call is based on technicals alone.",
     subscriptionRequired: "Analysis is available on a paid plan. Subscribe to start using it.",
     marketClosed: "The market is shut, so this is a WAIT. Every plan here is entered at the price on screen and that price does not exist right now, so no entry, stop or targets were issued — the reading up to the last close is unchanged. The run is kept in your history as a preview and counts towards neither the record nor the rules.",
+    marketClosedGold: "The gold market is shut (the weekend, or its daily hour off at 17:00 New York), so this is a WAIT. Every plan here is entered at the price on screen and that price does not exist right now, so no entry, stop or targets were issued — the reading up to the last close is unchanged. The run is kept in your history as a preview and counts towards neither the record nor the rules.",
     costlyHours: ({ signal, interval, hourUtc, evidence }) => {
       const tf = ({ "1min": "1-minute", "15min": "15-minute", "1h": "1-hour" } as Record<string, string>)[interval] ?? interval;
       const pct = (v: number) => `${Math.round(v * 100)}%`;

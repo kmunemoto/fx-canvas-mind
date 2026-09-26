@@ -86,10 +86,14 @@ export const ja = {
     tp2: "利確 TP2",
     tp3: "利確 TP3",
     // 損切り・TP1 までの距離。ATR は取得データに無いこともあるので省略可
-    distance: (pips: number, atr: number | null) =>
-      atr === null ? `${pips} pips` : `${pips} pips・ATR ${atr}倍`,
+    // (#128: amount は単位込み — "62 pips"、金は "$12.34")
+    distance: (amount: string, atr: number | null) =>
+      atr === null ? amount : `${amount}・ATR ${atr}倍`,
     // #111: 数量の目安。資金は持たないので、1万通貨あたりの損失だけ
     lossPer10k: (money: string) => `1万通貨で損切りなら ${money} の損失`,
+    // #128: 金は1オンスあたり
+    lossPerOz: (money: string) => `1オンスで損切りなら ${money} の損失`,
+    evidenceNotGold: "この検証は FX の通貨ペアのものです。金（XAU/USD）では測っていません。",
     // 狙う取引期間（#91）。これまでこの画面は時刻を1つも出していなかった
     // （すぐ上のヘッダーが現在時刻を秒まで刻んでいる横で）。「1時間足」は
     // 1時間後を予測するという意味ではなく、実測の保有本数の中央値は

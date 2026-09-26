@@ -1,7 +1,7 @@
 import { Sparkles } from "lucide-react";
 import type { GainzSummary } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { priceDecimals } from "@/lib/candleTime";
+import { isGoldPair, priceDecimals } from "@/lib/candleTime";
 
 interface Props {
   summary: GainzSummary | null;
@@ -67,6 +67,7 @@ const GainzPanel = ({ summary, pair }: Props) => {
 
       <div className="space-y-0.5 pt-2 border-t border-border/60" data-testid="gainz-evidence">
         <p className="text-[10px] text-muted-foreground">{g.evidenceTitle}</p>
+        {isGoldPair(pair) && <p className="text-[11px] text-warning" data-testid="gainz-evidence-gold">{t.result.evidenceNotGold}</p>}
         {measured === null ? (
           <p className="text-[11px] text-muted-foreground">{g.notMeasuredAll}</p>
         ) : (

@@ -382,10 +382,12 @@ export const structureLines = (st: Structure, dv: Divergence | null, decimals: n
 
   if (!st.ok) return `構造(サーバ計算): 判定保留 (${st.reason ?? "不明"}・足${st.bars}本)`;
 
+  // (#128: gold, the one instrument in 2 decimals, measures in dollars)
+  const dist = (v: number) => (decimals === 2 ? `${v.toFixed(2)}ドル` : `${v.toFixed(1)}pips`);
   const gap = (g: { level: number; pips: number; atr: number } | null, dir: string) =>
     g === null
       ? `${dir}: 参照期間内に未突破の水準なし`
-      : `${dir}: ${p(g.level)} (${g.pips.toFixed(1)}pips / ${g.atr.toFixed(2)}ATR)`;
+      : `${dir}: ${p(g.level)} (${dist(g.pips)} / ${g.atr.toFixed(2)}ATR)`;
 
   // The head names the two swings it compared, and calls itself what it is.
   //

@@ -494,7 +494,10 @@ const barStartMs = (datetime: string): number => {
   return datetime.includes(":") ? stamped : stamped - DAY_STAMP_LEAD_MS;
 };
 
-const pipFor = (decimals: number): number => (decimals === 3 ? 0.01 : 0.0001);
+// (#128: gold, the one instrument priced in 2 decimals, has its distances in
+// dollars — its "pip" is one dollar and the *_pips fields hold dollars)
+const pipFor = (decimals: number): number => (decimals === 2 ? 1 : decimals === 3 ? 0.01 : 0.0001);
+const unitFor = (decimals: number, lang: "ja" | "en"): string => (decimals === 2 ? (lang === "ja" ? "ドル" : "USD") : "pips");
 const round = (v: number, d: number): number => Number(v.toFixed(d));
 
 const touchOf = (
@@ -662,12 +665,13 @@ const factsBlock = (m: MechanicalFacts | null, lang: "ja" | "en", decimals: numb
   const p = (v: number) => v.toFixed(decimals);
   const feed = m.feed === "gmo" ? "GMO Coin" : "Twelve Data";
   const hypo = m.subject === "previous";
+  const u = unitFor(decimals, lang);
   if (lang === "ja") {
     return [
       `基準の板: 仲値・${feed}${m.feed_delta_atr === null ? "" : `（決定時の GMO との差 ${m.feed_delta_atr} ATR）`}`,
       `現在値: ${p(m.price)}（${m.priced_at}）`,
-      `${hypo ? "プランの価格で入っていた場合（仮定値）" : "含み"}: ${m.move_pips} pips${m.move_r === null ? "" : `（${m.move_r}R）`}`,
-      `損切りまで: ${m.to_stop_pips} pips ／ TP1まで: ${m.to_tp1_pips} pips（負なら既に越えている）`,
+      `${hypo ? "プランの価格で入っていた場合（仮定値）" : "含み"}: ${m.move_pips} ${u}${m.move_r === null ? "" : `（${m.move_r}R）`}`,
+      `損切りまで: ${m.to_stop_pips} ${u} ／ TP1まで: ${m.to_tp1_pips} ${u}（負なら既に越えている）`,
       `損切り接触（${m.anchor_at ?? "基準なし"} より後の足・仲値）: ${fmtTouch(m.stop_touch, "ja")}`,
       `TP1到達（同上）: ${fmtTouch(m.tp1_touch, "ja")}`,
     ].join("\n");
@@ -675,8 +679,8 @@ const factsBlock = (m: MechanicalFacts | null, lang: "ja" | "en", decimals: numb
   return [
     `Basis: mid, ${feed}${m.feed_delta_atr === null ? "" : ` (reference sat ${m.feed_delta_atr} ATR from GMO at the decision)`}`,
     `Current price: ${p(m.price)} (${m.priced_at})`,
-    `${hypo ? "If filled at the plan's entry (hypothetical)" : "Open P&L"}: ${m.move_pips} pips${m.move_r === null ? "" : ` (${m.move_r}R)`}`,
-    `To stop: ${m.to_stop_pips} pips / to TP1: ${m.to_tp1_pips} pips (negative = already beyond)`,
+    `${hypo ? "If filled at the plan's entry (hypothetical)" : "Open P&L"}: ${m.move_pips} ${u}${m.move_r === null ? "" : ` (${m.move_r}R)`}`,
+    `To stop: ${m.to_stop_pips} ${u} / to TP1: ${m.to_tp1_pips} ${u} (negative = already beyond)`,
     `Stop touched (bars after ${m.anchor_at ?? "no anchor"}, mid): ${fmtTouch(m.stop_touch, "en")}`,
     `TP1 reached (same window): ${fmtTouch(m.tp1_touch, "en")}`,
   ].join("\n");

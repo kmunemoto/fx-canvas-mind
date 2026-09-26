@@ -27,7 +27,8 @@ interface Props {
   onSettingsChange: (s: AppSettings) => void;
 }
 
-const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD", "AUD/JPY"];
+// #128: and gold (the analysis reads it from Twelve Data)
+const PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD", "AUD/JPY", "XAU/USD"];
 const PAID_PLANS = ["light", "standard", "pro"];
 
 const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) => {

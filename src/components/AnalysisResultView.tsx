@@ -13,7 +13,7 @@ import Disclosure from "./Disclosure";
 import { AlertTriangle, ChevronDown, ChevronUp, Compass, FileText, ListChecks, Scale, Target, TrendingUp } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { isInference } from "@/lib/inference";
-import { toPips } from "@/lib/candleTime";
+import { formatDistance, isGoldPair, toPips } from "@/lib/candleTime";
 import { formatLoss, lossPer10k } from "@/lib/costs";
 import { visibleWarnings, waitReasonOf } from "@/lib/warnings";
 import { hasMarketContext } from "@/lib/marketContext";
@@ -133,7 +133,9 @@ const AnalysisResultView = ({
     const diff = Math.abs(entry - target);
     const atr = techData ? Number(techData.atr) : NaN;
     const atrMultiple = Number.isFinite(atr) && atr > 0 ? Number((diff / atr).toFixed(1)) : null;
-    return t.result.distance(Math.round(toPips(pair, diff)), atrMultiple);
+    // (#128: gold in dollars)
+    const amount = isGoldPair(pair) ? formatDistance(pair, diff) : `${Math.round(toPips(pair, diff))} pips`;
+    return t.result.distance(amount, atrMultiple);
   };
   const stopDistance = hasPlan ? distance(result.stop_loss) : null;
   // #111: the loss per 10,000 units at the stop, in the pair's quote currency
@@ -142,6 +144,8 @@ const AnalysisResultView = ({
     const entry = num(result.entry_point);
     const stop = num(result.stop_loss);
     if (entry === null || stop === null) return null;
+    // (#128: gold per ounce — its distance in dollars is exactly that)
+    if (isGoldPair(pair)) return t.result.lossPerOz(`$${Math.abs(entry - stop).toFixed(2)}`);
     const x = lossPer10k(pair, entry, stop);
     return x ? t.result.lossPer10k(formatLoss(x)) : null;
   })();

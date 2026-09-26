@@ -151,7 +151,8 @@ Deno.serve(async (req) => {
     if (!userId || !pair || !interval) return failed("bad_request");
 
     const locale = resolveAnalysisLocale(body.locale);
-    const decimals = num(body.decimals) ?? (pair.toUpperCase().includes("JPY") ? 3 : 5);
+    // (#128: gold in dollars and cents)
+    const decimals = num(body.decimals) ?? (pair.toUpperCase() === "XAU/USD" ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
     const model = str(body.model);
     const nowUtc = str(body.now_utc) || startedAt;
     const sections = str(body.sections);
