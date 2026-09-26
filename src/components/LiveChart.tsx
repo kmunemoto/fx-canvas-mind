@@ -283,10 +283,15 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
             // the GA view is the clean chart the reference draws: candles
             // and the rule's labels, no RSI strip or SAR dots
             rsi={view === "gainz" ? undefined : read.rsi}
-            sar={view === "gainz" ? undefined : read.sar}
-            sarBelow={view === "gainz" ? undefined : read.sarBelow}
+            sar={read.sar}
+            sarBelow={read.sarBelow}
+            // #115: the scalping indicator's drawing — each signal's
+            // position box with an × where it settled, and the SAR as a band
+            // (in the GA view, the band only: the rule does not read it)
+            positions
+            sarStyle={view === "gainz" ? "cloud" : "both"}
             gaStyle={view === "gainz" ? "filled" : "outline"}
-            signalLegend={view === "gainz" ? l.gaLegend : undefined}
+            signalLegend={view === "gainz" ? l.gaLegend : l.rsiSarLegend}
             heading={`${pair} · ${intervals[interval] ?? interval}`}
           />
           {latest && (

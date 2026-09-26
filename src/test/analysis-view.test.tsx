@@ -1400,6 +1400,47 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     expect(screen.getByTestId("chart-signal-BUY-loss").querySelector("title")?.textContent).toContain("TP 151.000");
   });
 
+  it("#115: keeps each label inside the plot and off the others, even two signals pushed to the top edge", () => {
+    // bars 30 and 31 make the high of the window: both SELL labels are
+    // pushed against the top of the plot
+    const spiky = candles.map((c, i) => (i === 30 || i === 31 ? { ...c, high: 151.5 } : c));
+    const at = (i: number, side: "BUY" | "SELL") => ({ ...mark(i, side, "win"), datetime: spiky[i].datetime });
+    render(<PriceChart candles={spiky} pair="USD/JPY" marks={[at(0, "BUY"), at(30, "SELL"), at(31, "SELL")]} />);
+    const labels = [...document.querySelectorAll("g[data-rule] > rect")].map((r) => ({
+      left: Number(r.getAttribute("x")),
+      top: Number(r.getAttribute("y")),
+      w: Number(r.getAttribute("width")),
+      h: Number(r.getAttribute("height")),
+    }));
+    expect(labels).toHaveLength(3);
+    // the first bar's label is not cut off at the left edge
+    expect(labels[0].left).toBeGreaterThanOrEqual(8);
+    const [a, b] = [labels[1], labels[2]];
+    const overlap = a.left < b.left + b.w && b.left < a.left + a.w && a.top < b.top + b.h && b.top < a.top + a.h;
+    expect(overlap).toBe(false);
+  });
+
+  it("#115: draws positions, the signal lines and the SAR band only when asked, and the band in place of the dots", () => {
+    const sar = candles.map((_, i) => (i < 2 ? null : i % 7 < 4 ? 149.3 : 150.7));
+    const sarBelow = candles.map((_, i) => (i < 2 ? null : i % 7 < 4));
+    const marks = [mark(20, "BUY", "win"), mark(40, "SELL", "loss")];
+    const { unmount } = render(<PriceChart candles={candles} pair="USD/JPY" marks={marks} sar={sar} sarBelow={sarBelow} />);
+    expect(screen.queryByTestId("chart-cloud")).toBeNull();
+    expect(screen.queryAllByTestId(/^chart-position-/)).toHaveLength(0);
+    expect(screen.queryAllByTestId("chart-signal-line")).toHaveLength(0);
+    unmount();
+    render(<PriceChart candles={candles} pair="USD/JPY" marks={marks} sar={sar} sarBelow={sarBelow} positions sarStyle="cloud" />);
+    // one piece of band per run of bars on one side: 2–3, then every 7 bars
+    expect(screen.getByTestId("chart-cloud").querySelectorAll("polygon").length).toBe(17);
+    expect(screen.getByTestId("chart-cloud").querySelectorAll("g[data-side='below']").length).toBe(9);
+    expect(screen.queryByTestId("chart-sar")).toBeNull();
+    expect(screen.getByTestId("chart-position-BUY-win")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-position-SELL-loss")).toBeInTheDocument();
+    expect(screen.getByTestId("chart-exit-loss").textContent).toBe("SL");
+    expect(screen.getAllByTestId("chart-signal-line")).toHaveLength(2);
+    expect(screen.getByTestId("chart-position-legend").textContent).toContain("帯=パラボリックSAR");
+  });
+
   it("draws the SAR as dots and RSI in its own strip, only when they line up with the candles (#104)", () => {
     const sar = candles.map((_, i) => (i < 2 ? null : i % 7 < 4 ? 149.3 : 150.7));
     const sarBelow = candles.map((_, i) => (i < 2 ? null : i % 7 < 4));

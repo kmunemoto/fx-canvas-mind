@@ -188,6 +188,12 @@ export const en: Dict = {
     trend: { lows: "lows", highs: "highs" },
     // The label on the flag: the side, then how it came out
     outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
+    exitMark: { win: "TP", loss: "SL", ambiguous: "?", expired: "END", open: "" } as Record<string, string>,
+    positionLegend: (boxes: boolean, cloud: boolean): string =>
+      [
+        boxes ? "Box = the signal's position (green: entry to target, red: entry to stop) up to the bar that settled it. Dashed = from the entry to where it ended (the price now while open), × = settled (TP target · SL stop · END neither within 48 bars). Vertical line = the signal's bar" : "",
+        cloud ? "Band = from the Parabolic SAR away from price by 1 ATR (green under price · red over price)" : "",
+      ].filter((x) => x !== "").join(". "),
     tabsLabel: "Timeframe",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -252,7 +258,8 @@ export const en: Dict = {
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
     recommended:
       "The recommended setting is GA style on the 1-hour chart: of its three timeframes, the only one that did a little better than entering at random in both periods (+0.07R, +0.01R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
-    gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open)",
+    gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open). The SAR band is a guide to the trend; the GA-style rule does not use it",
+    rsiSarLegend: "BUY · SELL = a closed bar where RSI came back from 30/70 with the SAR on the same side (✓ won ✗ lost … open). Dots = Parabolic SAR (green under price · red over price)",
     latestTitle: (rule: string) => `Latest signal (${rule})`,
     latestPlan: (entry: string, tp: string, sl: string) => `Entry ${entry}  TP ${tp}  SL ${sl}`,
     outcome: { win: "Result: reached the target", loss: "Result: reached the stop", ambiguous: "Result: both in one bar (counted as a loss)", expired: "Result: not settled in 48 bars", open: "Result: open" } as Record<string, string>,

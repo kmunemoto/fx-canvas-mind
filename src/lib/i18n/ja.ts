@@ -225,6 +225,13 @@ export const ja = {
     trend: { lows: "安値線", highs: "高値線" },
     // The label on the flag: the side, then how it came out
     outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
+    // #115: the live chart's positions and SAR band
+    exitMark: { win: "TP", loss: "SL", ambiguous: "?", expired: "期限", open: "" } as Record<string, string>,
+    positionLegend: (boxes: boolean, cloud: boolean): string =>
+      [
+        boxes ? "箱=サインの建玉（緑=エントリー〜利確、赤=エントリー〜損切り）を決着した足まで。破線=エントリーから決着したところ（判定中は今の価格）まで、×=決着（TP=利確・SL=損切り・期限=48本で決着せず）。縦線=サインの足" : "",
+        cloud ? "帯=パラボリックSAR から価格と反対側へ ATR×1 の幅（緑=価格の下・赤=価格の上）" : "",
+      ].filter((x) => x !== "").join("。"),
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -291,7 +298,10 @@ export const ja = {
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
     recommended:
       "おすすめ設定は GA型・1時間足です。GA型の3つの時間足のうち、前半・後半の両方でランダムに入るより少し良かったのは1時間足だけでした（+0.07R・+0.01R）。ただし差は誤差の範囲で、スプレッドを払うと損益はまだマイナスです。勝てる根拠ではありません。",
-    gaLegend: "BUY・SELL=GA型のサイン（包み足・実体が大きい・RSI 50・5本前との比較、確定足で判定）。TP/SL=損切り ATR×1、利確はその2倍（✓勝ち ✗負け …判定中）",
+    gaLegend: "BUY・SELL=GA型のサイン（包み足・実体が大きい・RSI 50・5本前との比較、確定足で判定）。TP/SL=損切り ATR×1、利確はその2倍（✓勝ち ✗負け …判定中）。SAR の帯は流れの目安で、GA型の判定には使っていません",
+    // #115: the RSI+SAR views' legend, where the position boxes stand in
+    // for the dotted stop and target
+    rsiSarLegend: "BUY・SELL=RSI が30/70から戻り、SAR が同じ側にある確定足（✓勝ち ✗負け …判定中）。点=パラボリックSAR（緑=価格の下・赤=価格の上）",
     latestTitle: (rule: string) => `最新のサイン（${rule}）`,
     latestPlan: (entry: string, tp: string, sl: string) => `エントリー ${entry} / TP ${tp} / SL ${sl}`,
     outcome: { win: "結果: 利確に到達", loss: "結果: 損切りに到達", ambiguous: "結果: 同じ足で両方に到達（負け扱い）", expired: "結果: 48本で決着せず", open: "結果: 判定中" } as Record<string, string>,
