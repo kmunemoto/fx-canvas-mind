@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
 import { applyTick, normalizeLiveRead, normalizeTicks, type LiveRead } from "../lib/liveChart";
-import { CHART_BARS, isMaintenance, liveRead, parseTicker, splitBars } from "../../supabase/functions/live-chart/logic";
+import { CHART_BARS, fallbackRead, isMaintenance, liveRead, parseTicker, parseTwelveData, splitBars } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 
 const M15 = 15 * 60_000;
@@ -76,6 +76,37 @@ describe("#113 the live read (live-chart/logic.ts)", () => {
     expect(t["USD/JPY"].mid).toBeCloseTo(150.1215, 10);
     expect(t["GBP/USD"].open).toBe(false);
     expect(parseTicker(null)).toEqual({});
+  });
+});
+
+describe("#113 v3: the fallback while GMO cannot be read", () => {
+  it("reads Twelve Data's bars oldest first, gives daily bars a time, and drops bars inside the weekend closure", () => {
+    const body = {
+      status: "ok",
+      values: [
+        // newest first on the wire; Saturday 2026-09-26 is wholly closed
+        { datetime: "2026-09-26", open: "149.5", high: "149.6", low: "149.4", close: "149.5" },
+        { datetime: "2026-09-25", open: "149.0", high: "149.9", low: "148.8", close: "149.5" },
+        { datetime: "2026-09-24", open: "148.5", high: "149.2", low: "148.3", close: "149.0" },
+      ],
+    };
+    const bars = parseTwelveData(body, "1day")!;
+    expect(bars.map((b) => b.datetime)).toEqual(["2026-09-24 00:00:00", "2026-09-25 00:00:00"]);
+    expect(parseTwelveData({ status: "error", message: "run out of credits" }, "1h")).toBeNull();
+    expect(parseTwelveData(null, "1h")).toBeNull();
+  });
+
+  it("draws stored bars like GMO's, says where they came from, and has no spread", () => {
+    const bars = quotes(260).map((q) => ({ datetime: q.datetime.slice(0, 19).replace("T", " "), open: q.bid.open, high: q.bid.high, low: q.bid.low, close: q.bid.close }));
+    const now = T0 + 262 * M15;
+    const r = fallbackRead("USD/JPY", "15min", bars, now, { source: "twelvedata", feed: "maintenance", fetchedAt: "2026-09-26T01:00:00.000Z" });
+    expect(r.source).toBe("twelvedata");
+    expect(r.feed).toBe("maintenance");
+    expect(r.spread).toBeNull();
+    // every bar has closed: none forming, RSI to the last candle
+    expect(r.candles).toHaveLength(CHART_BARS);
+    expect(r.rsi[r.rsi.length - 1]).not.toBeNull();
+    expect(liveRead("USD/JPY", "15min", quotes(260), now).source).toBe("gmo");
   });
 });
 
@@ -174,6 +205,26 @@ describe("#113 the live chart card", () => {
     render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} />);
     await waitFor(() => expect(screen.getByTestId("live-error")).toBeTruthy());
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "15min");
+  });
+
+  it("v3: shows the last bars from the other feed while GMO is down, with no live price and when the market reopens", async () => {
+    const r = readFor("USD/JPY", "1h", {
+      source: "twelvedata",
+      feed: "maintenance",
+      fetchedAt: "2026-09-26T01:00:00.000Z",
+      reopens: "2026-09-27T22:00:00.000Z",
+      nextClose: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const loadBars = vi.fn(async () => r);
+    const loadTicks = vi.fn(async () => ({ "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: null, open: true } }));
+    render(<LiveChart defaultInterval="1h" loadBars={loadBars} loadTicks={loadTicks} />);
+    await waitFor(() => expect(screen.getByTestId("live-fallback").textContent).toContain("別の配信（Twelve Data）の直近の足"));
+    expect(screen.getByTestId("live-fallback").textContent).toContain("09-26 10:00 取得");
+    expect(screen.getByTestId("live-reopens").textContent).toBe("市場の再開は 09-28 07:00（日本時間）の予定です。");
+    expect(screen.getByTestId("live-signals")).toBeTruthy();
+    // no price line and no countdown to a close that has passed
+    expect(screen.queryByTestId("live-price")).toBeNull();
+    expect(screen.queryByTestId("live-next-close")).toBeNull();
   });
 
   it("recognises GMO's maintenance answer (as seen on 2026-09-26)", () => {

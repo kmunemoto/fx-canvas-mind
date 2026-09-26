@@ -18,10 +18,20 @@ import {
   isMaintenance,
   liveRead,
   parseTicker,
+  FALLBACK_TTL_MS,
+  fallbackRead,
+  parseTwelveData,
+  twelveDataUrl,
 } from "./logic.ts";
+import type { Candle } from "../analyze/indicators.ts";
+import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v2-2026-09-26T01:00:00Z";
+const FUNCTION_VERSION = "live-chart-v3-2026-09-26T02:00:00Z";
+// v3: Twelve Data fetches this instance may make in a minute for the
+// fallback, so a person flipping through every pair and timeframe cannot
+// spend the analysis's shared eight-a-minute key
+const FALLBACK_FETCHES_PER_MIN = 3;
 
 // A bar read is good until its forming bar has moved on a little; the ticker
 // for a couple of seconds
@@ -55,13 +65,21 @@ const gmoFetcher: Fetcher = async (url) => {
 const barsCache = new Map<string, { at: number; body: unknown }>();
 let tickerCache: { at: number; body: unknown } | null = null;
 const authCache = new Map<string, number>();
+const fallbackFetches: number[] = [];
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
-    if (!supabaseUrl || !anonKey) return json({ ok: false, error: "サーバー設定エラー" }, 500);
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
+    if (!supabaseUrl || !anonKey || !serviceKey) return json({ ok: false, error: "サーバー設定エラー" }, 500);
+    const rest = (path: string, init: RequestInit = {}) =>
+      fetch(`${supabaseUrl}/rest/v1/${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, "Content-Type": "application/json", ...(init.headers ?? {}) },
+      });
 
     const auth = req.headers.get("Authorization");
     if (!auth?.startsWith("Bearer ")) return json({ ok: false, error: "認証が必要です" }, 401);
@@ -77,17 +95,54 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => null) as Record<string, unknown> | null;
     const action = typeof body?.action === "string" ? body.action : "bars";
-    // v2: whether GMO said it is down for maintenance on any call below
+    // v2: whether GMO said it is down for maintenance on any call below.
+    // Once it has, the rest of the calls are not made: they would all say so.
     let maintenance = false;
     const fetcher: Fetcher = async (url) => {
+      if (maintenance) return null;
       const got = await gmoFetcher(url);
       if (isMaintenance(got)) maintenance = true;
       return got;
     };
+    // v3: the market's reopening, while it may be shut
+    const reopens = isPossiblyClosed(nowMs) ? new Date(nextOpen(nowMs)).toISOString() : null;
+
+    // v3: the last bars from Twelve Data, from the table while they are
+    // fresh, fetched again when not (within this instance's allowance), and
+    // stale ones rather than none
+    const fallbackBars = async (pair: string, interval: string): Promise<{ bars: Candle[]; fetchedAt: string } | null> => {
+      const key = `pair=eq.${encodeURIComponent(pair)}&interval=eq.${encodeURIComponent(interval)}`;
+      const res = await rest(`live_chart_fallback?${key}&select=bars,fetched_at`);
+      const rows = res.ok ? await res.json().catch(() => null) : null;
+      const row = Array.isArray(rows) && rows.length > 0 ? rows[0] as { bars?: unknown; fetched_at?: unknown } : null;
+      const stored = row && Array.isArray(row.bars) && typeof row.fetched_at === "string"
+        ? { bars: row.bars as Candle[], fetchedAt: row.fetched_at }
+        : null;
+      if (stored && nowMs - Date.parse(stored.fetchedAt) < FALLBACK_TTL_MS) return stored;
+      while (fallbackFetches.length > 0 && nowMs - fallbackFetches[0] > 60_000) fallbackFetches.shift();
+      if (!twelveKey || fallbackFetches.length >= FALLBACK_FETCHES_PER_MIN) return stored;
+      fallbackFetches.push(nowMs);
+      try {
+        const r = await fetch(twelveDataUrl(pair, interval, twelveKey), { signal: AbortSignal.timeout(10_000) });
+        const bars = parseTwelveData(await r.json().catch(() => null), interval);
+        if (!r.ok || !bars || bars.length < 60) return stored;
+        const fetchedAt = new Date(nowMs).toISOString();
+        const up = await rest("live_chart_fallback?on_conflict=pair,interval", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ pair, interval, bars, source: "twelvedata", fetched_at: fetchedAt }),
+        });
+        if (!up.ok) console.error("fallback store failed:", up.status, await up.text().catch(() => ""));
+        return { bars, fetchedAt };
+      } catch (err) {
+        console.error("fallback fetch failed:", err);
+        return stored;
+      }
+    };
     const unavailable = () =>
       maintenance
-        ? json({ ok: false, error: "maintenance", version: FUNCTION_VERSION }, 503)
-        : json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
+        ? json({ ok: false, error: "maintenance", reopens, version: FUNCTION_VERSION }, 503)
+        : json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
 
     if (action === "ticker") {
       if (!tickerCache || nowMs - tickerCache.at > TICKER_TTL_MS) {
@@ -113,8 +168,19 @@ Deno.serve(async (req: Request) => {
         if (!next || Date.parse(next) > nowMs) return json(hit.body);
       }
       const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, fetcher);
-      if (!quotes || quotes.length === 0) return unavailable();
-      const out = { ok: true, version: FUNCTION_VERSION, read: liveRead(pair, interval, quotes, nowMs) };
+      if (!quotes || quotes.length === 0) {
+        // v3: GMO cannot be read — the last bars from Twelve Data instead
+        const fb = await fallbackBars(pair, interval);
+        if (!fb) return unavailable();
+        const read = fallbackRead(pair, interval, fb.bars, nowMs, {
+          source: "twelvedata",
+          feed: maintenance ? "maintenance" : "unavailable",
+          fetchedAt: fb.fetchedAt,
+        });
+        // not cached here: the next read should try GMO again
+        return json({ ok: true, version: FUNCTION_VERSION, reopens, read });
+      }
+      const out = { ok: true, version: FUNCTION_VERSION, reopens, read: liveRead(pair, interval, quotes, nowMs) };
       if (barsCache.size > 100) barsCache.clear();
       barsCache.set(key, { at: nowMs, body: out });
       return json(out);
