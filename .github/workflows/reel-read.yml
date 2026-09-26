@@ -20,6 +20,9 @@ on:
       url:
         description: "The video's public URL"
         default: ""
+      model:
+        description: "Whisper model when there are no captions (small is faster on a long video)"
+        default: "medium"
 
 permissions:
   contents: read
@@ -27,7 +30,7 @@ permissions:
 jobs:
   read:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Tools
         run: |
@@ -42,8 +45,29 @@ jobs:
         run: |
           set -u
           mkdir -p out
-          yt-dlp --no-progress -f "b" -o "out/video.%(ext)s" --write-info-json "$URL" || echo "yt-dlp failed"
+          # captions first (a long YouTube interview has them); then the video
+          yt-dlp --no-progress --skip-download --write-subs --write-auto-subs --sub-langs "ja,ja-orig,en" --sub-format vtt \
+            -o "out/subs.%(ext)s" "$URL" || echo "no captions"
+          yt-dlp --no-progress -f "b[height<=480]/b" -o "out/video.%(ext)s" --write-info-json "$URL" || echo "yt-dlp failed"
           ls -la out
+          for f in out/subs*.vtt; do
+            [ -f "$f" ] || continue
+            echo "=== CAPTIONS $f ==="
+            # the cue text once each, without timing lines or the repeats auto-captions carry
+            python3 - "$f" <<'PY2'
+          import re, sys
+          seen, last = set(), None
+          for line in open(sys.argv[1], encoding="utf-8"):
+              line = re.sub(r"<[^>]+>", "", line).strip()
+              if not line or "-->" in line or line.startswith(("WEBVTT", "Kind:", "Language:")) or line.isdigit():
+                  continue
+              if line != last and line not in seen:
+                  print(line)
+                  seen.add(line)
+              last = line
+          PY2
+            echo "=== END CAPTIONS ==="
+          done
           python3 - <<'PY'
           import glob, json
           for p in glob.glob("out/*.info.json"):
@@ -54,14 +78,18 @@ jobs:
                       print(d[k])
           PY
       - name: Transcribe the speech
+        env:
+          MODEL: ${{ inputs.model || 'medium' }}
         run: |
           set -u
           V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
           if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          if ls out/subs*.vtt >/dev/null 2>&1; then echo "captions read; no transcription"; exit 0; fi
           ffmpeg -loglevel error -y -i "$V" -ac 1 -ar 16000 out/audio.wav
           python3 - <<'PY'
           from faster_whisper import WhisperModel
-          m = WhisperModel("medium", device="cpu", compute_type="int8")
+          import os
+          m = WhisperModel(os.environ.get("MODEL") or "medium", device="cpu", compute_type="int8")
           segs, info = m.transcribe("out/audio.wav", language="ja", beam_size=5, vad_filter=True)
           print(f"=== TRANSCRIPT ({info.duration:.0f}s) ===")
           for s in segs:
@@ -73,6 +101,9 @@ jobs:
           set -u
           V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
           if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          # a long video's frames are not read (minutes of OCR for little)
+          D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$V" | cut -d. -f1)
+          if [ "${D:-0}" -gt 180 ]; then echo "long video (${D}s): frames not read"; exit 0; fi
           mkdir -p out/frames
           ffmpeg -loglevel error -y -i "$V" -vf "fps=1/2,scale=720:-1" out/frames/f%03d.png
           for f in out/frames/*.png; do
