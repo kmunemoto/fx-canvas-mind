@@ -241,6 +241,17 @@ export const ja = {
     fullscreenOn: "チャートを全画面で表示しています",
     zoomShown: (shown: number, total: number) => `${shown}/${total}本`,
     zoomHint: "ピンチ・ホイールで拡大縮小、左右にドラッグで過去へ移動、↺ で全体。価格の目盛りは表示中の足に合わせます",
+    // #117: the strips under the price, and the stochastic's settings
+    indicators: "インジケーター",
+    stoch: {
+      name: "ストキャス",
+      settings: "ストキャスティクスの設定",
+      kLength: "%K の期間",
+      kSmoothing: "%K の平滑化",
+      dSmoothing: "%D の平滑化",
+      reset: "既定（14・1・3）に戻す",
+      note: "TradingView の「ストキャスティクス」と同じ計算（%K=直近の高値・安値の中での終値の位置、%D=%K の移動平均、80/20）。表示のみで、サインの判定には使っていません。",
+    },
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
