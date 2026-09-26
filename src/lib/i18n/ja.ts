@@ -262,6 +262,20 @@ export const ja = {
     closeSheet: "閉じる",
     vsPrevBar: "前の足比",
     priceNow: "現在値",
+    // #119: the list of what the chart draws, and the SPECTRA-style line
+    overlayNames: {
+      signals: "売買サイン",
+      positions: "建玉の箱",
+      sarCloud: "SAR の帯",
+      sarDots: "パラボリックSAR",
+      trendLines: "高値線・安値線",
+      kalman: (atr: number, factor: number) => `SPECTRA型 ${atr} ${factor}（未検証）`,
+    },
+    kalmanNote:
+      "SPECTRA型 = SentioEdge の SPECTRA の公開説明の処理順を再現したもの：高値と安値の中間と ATR(10) をカルマンフィルターで平滑 → スーパートレンド（ATR×3）→ RSI(14) が50の上（売りは下）のときだけ ▲▼。緑=上昇・赤=下降、雲=平滑した価格との間。Smart Trail（公開されていない）と出来高の分類（GMO の足に出来高が無い）は入っていません。確定足だけで印を付けます。過去の検証はしておらず、サインの判定・メールには使っていません。",
+    hide: "隠す",
+    show: "表示する",
+    foldList: "一覧をたたむ",
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -334,6 +348,7 @@ export const ja = {
       "GBP/JPY": "英ポンド／円",
     } as Record<string, string>,
     intervalShort: { "1min": "1分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
     recommended:
       "おすすめ設定は GA型・1時間足です。GA型の3つの時間足のうち、前半・後半の両方でランダムに入るより少し良かったのは1時間足だけでした（+0.07R・+0.01R）。ただし差は誤差の範囲で、スプレッドを払うと損益はまだマイナスです。勝てる根拠ではありません。",

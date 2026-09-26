@@ -98,7 +98,11 @@ describe("#117 the stochastic on the chart", () => {
     expect(screen.getByTestId("chart-stoch-band")).toBeTruthy();
     const { k, d } = stochastic(c);
     expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 14 1 3 %K ${lastOf(k).toFixed(1)} %D ${lastOf(d).toFixed(1)}`);
-    expect(screen.getByTestId("chart-toggle-stoch").getAttribute("title")).toContain("サインの判定には使っていません");
+    // #119: its switch is the eye beside its name in the chart's list; the
+    // settings say it is shown only
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 14 1 3");
+    fireEvent.click(screen.getByTestId("chart-stoch-settings"));
+    expect(screen.getByTestId("chart-stoch-form").textContent).toContain("サインの判定には使っていません");
   });
 
   it("is switched off and on, and the choice is kept for the next chart", () => {
@@ -124,12 +128,12 @@ describe("#117 the stochastic on the chart", () => {
     fireEvent.change(screen.getByTestId("chart-stoch-kSmoothing"), { target: { value: "3" } });
     const { k, d } = stochastic(c, { kLength: 5, kSmoothing: 3, dSmoothing: 3 });
     expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 5 3 3 %K ${lastOf(k).toFixed(1)} %D ${lastOf(d).toFixed(1)}`);
-    expect(screen.getByTestId("chart-toggle-stoch").textContent).toBe("ストキャス 5 3 3");
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 5 3 3");
     // a length that is not one is not taken
     fireEvent.change(screen.getByTestId("chart-stoch-dSmoothing"), { target: { value: "0" } });
-    expect(screen.getByTestId("chart-toggle-stoch").textContent).toBe("ストキャス 5 3 3");
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 5 3 3");
     fireEvent.click(screen.getByTestId("chart-stoch-reset"));
-    expect(screen.getByTestId("chart-toggle-stoch").textContent).toBe("ストキャス 14 1 3");
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 14 1 3");
   });
 
   it("switches the RSI strip too, where the chart has one", () => {

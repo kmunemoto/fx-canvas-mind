@@ -391,6 +391,9 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         signalLegend={view === "gainz" ? l.gaLegend : l.rsiSarLegend}
         heading={`${pair} · ${intervals[interval] ?? interval}`}
         seriesKey={`${pair}|${interval}`}
+        // #119: the newest candle is still forming while a close is due
+        formingLast={formingOpen !== null}
+        signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
         fullscreenStatus={

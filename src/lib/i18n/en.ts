@@ -221,6 +221,19 @@ export const en: Dict = {
     closeSheet: "Close",
     vsPrevBar: "vs previous bar",
     priceNow: "Price now",
+    overlayNames: {
+      signals: "Signals",
+      positions: "Position boxes",
+      sarCloud: "SAR band",
+      sarDots: "Parabolic SAR",
+      trendLines: "Swing lines",
+      kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor} (unmeasured)`,
+    },
+    kalmanNote:
+      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. Not measured on past data, and no signal or email uses it.",
+    hide: "Hide",
+    show: "Show",
+    foldList: "Fold the list",
     tabsLabel: "Timeframe",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -290,6 +303,7 @@ export const en: Dict = {
       "GBP/JPY": "British Pound / Japanese Yen",
     } as Record<string, string>,
     intervalShort: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
+    signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
     recommended:
       "The recommended setting is GA style on the 1-hour chart: of its three timeframes, the only one that did a little better than entering at random in both periods (+0.07R, +0.01R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
