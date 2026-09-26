@@ -11,6 +11,7 @@ import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
+import type { DowTf } from "@/lib/liveChart";
 
 interface Level {
   label: string;
@@ -121,6 +122,13 @@ interface Props {
   // average (the live chart reads them while it is on). Given, Zone Shift is
   // listed; without it, only on a chart with 200 candles of its own.
   zoneShiftHistory?: { bars: ReadonlyArray<{ open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
+  // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
+  // and 5min — `current` the chart's own timeframe (null when it is not one
+  // of them), `higher` those above it. Given, it is listed; drawn: the
+  // current one's swings (HH/HL/LH/LL), its 押し安値 or 戻り高値 from its
+  // swing to the right edge, ① on a first break and 確定 on the second, and
+  // the higher ones' key levels and last high and low as dashed lines.
+  dow?: { current: DowTf | null; higher: DowTf[]; status: "loading" | "ready" | "error" };
 }
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -225,7 +233,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, signalName, zoneShiftHistory,
+  formingLast = false, signalName, zoneShiftHistory, dow,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -350,6 +358,38 @@ const PriceChart = ({
     const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
     return { ...zoneShift(all, formingLast ? all.length - 2 : all.length - 1), off: zsPast.length, total: all.length };
   }, [ov.zoneShift, zsListed, zsPast, candles, formingLast]);
+  // #129: the Dow reading placed on the chart's candles (by their open
+  // times; a swing or mark before the first candle is not drawn, the key
+  // level from an older swing starts at the first candle)
+  const dowDraw = useMemo(() => {
+    if (!dow || !ov.dow || candles.length === 0) return null;
+    const at = new Map<number, number>();
+    candles.forEach((c, i) => {
+      const ms = parseUtcCandleTime(c.datetime);
+      if (Number.isFinite(ms)) at.set(ms, i);
+    });
+    const idx = (s: string | null) => (s === null ? undefined : at.get(parseUtcCandleTime(s)));
+    const cur = dow.current;
+    const swings = (cur?.swings ?? []).flatMap((s) => {
+      const i = idx(s.at);
+      return i === undefined ? [] : [{ ...s, i }];
+    });
+    const events = (cur?.events ?? []).filter((e) => e.kind !== "update").flatMap((e) => {
+      const i = idx(e.at);
+      return i === undefined ? [] : [{ ...e, i }];
+    });
+    const key = cur?.key ? { ...cur.key, i: idx(cur.key.at) ?? 0, broken: cur.state === "toDown" || cur.state === "toUp" } : null;
+    // each higher timeframe's key level, and its last high and low where
+    // they are not the same price
+    const higher = dow.higher.flatMap((h) => {
+      const rows: Array<{ tf: string; kind: "pushLow" | "pullHigh" | "high" | "low"; price: number }> = [];
+      if (h.key) rows.push({ tf: h.tf, kind: h.key.kind, price: h.key.price });
+      if (h.high && h.high.price !== h.key?.price) rows.push({ tf: h.tf, kind: "high", price: h.high.price });
+      if (h.low && h.low.price !== h.key?.price) rows.push({ tf: h.tf, kind: "low", price: h.low.price });
+      return rows;
+    });
+    return { swings, events, key, higher };
+  }, [dow, ov.dow, candles]);
   // the list open or folded: open in full screen and on a wide screen until
   // folded, folded on a phone's card until opened
   const [listOpen, setListOpen] = useState<boolean | null>(null);
@@ -649,6 +689,7 @@ const PriceChart = ({
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
+    ...(dow ? [{ key: "dow", name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1014,6 +1055,44 @@ const PriceChart = ({
     return runs;
   })();
   const exitColor = (o: ChartSignalMark["outcome"]) => (o === "win" ? COLORS.tp : o === "loss" ? COLORS.sl : COLORS.text);
+  // #129: Dow theory's levels — lows (押し安値) green, highs (戻り高値) red;
+  // the higher timeframes' inside the price range only (they do not stretch
+  // it, as the overlays do not), their labels pushed apart
+  const dowColor = (k: "pushLow" | "pullHigh" | "high" | "low") => (k === "pushLow" || k === "low" ? COLORS.up : COLORS.down);
+  const dowHigher = dowDraw
+    ? dowDraw.higher
+      .filter((r) => r.price >= geometry.min && r.price <= geometry.max)
+      .map((r) => ({ ...r, key: r.kind === "pushLow" || r.kind === "pullHigh" }))
+    : [];
+  // every level's label at the right end of its line (the indicator list
+  // covers the top left), the chart's own key level's among them, moved
+  // apart where two would overlap
+  const dowLabels = (() => {
+    if (!dowDraw) return [];
+    const rows: Array<{ id: string; text: string; color: string; bold: boolean; ly: number }> = dowHigher.map((r) => ({
+      id: `chart-dow-higher-label-${r.tf}-${r.kind}`,
+      text: `${t.chart.dowTfShort[r.tf] ?? r.tf} ${t.chart.dowLevel[r.kind]} ${r.price.toFixed(decimals)}`,
+      color: dowColor(r.kind),
+      bold: false,
+      ly: y(r.price) - 2,
+    }));
+    const k = dowDraw.key;
+    if (k && k.price >= geometry.min && k.price <= geometry.max) {
+      rows.push({
+        id: `chart-dow-key-label-${k.kind}`,
+        text: `${t.chart.dowLevel[k.kind]}${k.broken ? t.chart.dowBroken[k.kind] : ""} ${k.price.toFixed(decimals)}`,
+        color: dowColor(k.kind),
+        bold: true,
+        ly: y(k.price) - 3,
+      });
+    }
+    rows.sort((a, b) => a.ly - b.ly);
+    for (let n = 1; n < rows.length; n++) rows[n].ly = Math.max(rows[n].ly, rows[n - 1].ly + labelSize + 1);
+    return rows;
+  })();
+  const dowZigzag = dowDraw && dowDraw.swings.length > 1
+    ? dowDraw.swings.map((sw, k) => `${k === 0 ? "M" : "L"}${x(sw.i).toFixed(1)},${y(sw.price).toFixed(1)}`).join(" ")
+    : "";
 
   // #116: a tall chart (full screen) gets a gridline every 70 or so
   const gridLines = Math.min(10, Math.max(4, Math.round((H - PAD_TOP - PAD_BOTTOM) / 70)));
@@ -1191,6 +1270,11 @@ const PriceChart = ({
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
           {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
+        </p>
+      )}
+      {dow && ov.dow && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-dow-legend">
+          {t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf))}
         </p>
       )}
       {ov.fvgProfile && (
@@ -1646,6 +1730,39 @@ const PriceChart = ({
           </g>
         )}
 
+        {/* #129: Dow theory — the higher timeframes' levels dashed (their
+            key level bolder), the chart's own swings joined, and its key
+            level from its swing to the right edge (dashed once broken) */}
+        {dowDraw && (
+          <g data-testid="chart-dow" clipPath={`url(#${clipId})`}>
+            {dowHigher.map((r) => (
+              <line
+                key={`dh-${r.tf}-${r.kind}`}
+                data-testid={`chart-dow-higher-${r.tf}-${r.kind}`}
+                x1={PAD_LEFT} x2={W - PAD_RIGHT}
+                y1={y(r.price)} y2={y(r.price)}
+                stroke={dowColor(r.kind)}
+                strokeWidth={(r.key ? 1.2 : 0.8) * fs}
+                strokeDasharray={r.key ? "6 3" : "2 3"}
+                opacity={r.key ? 0.85 : 0.55}
+              />
+            ))}
+            {dowZigzag && (
+              <path d={dowZigzag} fill="none" stroke={COLORS.zsLine} strokeWidth={fs} opacity="0.45" data-testid="chart-dow-zigzag" />
+            )}
+            {dowDraw.key && (
+              <line
+                data-testid={`chart-dow-key-${dowDraw.key.kind}`}
+                x1={x(dowDraw.key.i)} x2={W - PAD_RIGHT}
+                y1={y(dowDraw.key.price)} y2={y(dowDraw.key.price)}
+                stroke={dowColor(dowDraw.key.kind)} strokeWidth={1.4 * fs}
+                strokeDasharray={dowDraw.key.broken ? "4 2" : undefined}
+                opacity="0.9"
+              />
+            )}
+          </g>
+        )}
+
         {/* candles — #116: those on screen (#124: in Zone Shift's trend
             colour while it is on, as the original paints them) */}
         <g data-testid="chart-candles">
@@ -1759,6 +1876,57 @@ const PriceChart = ({
                   fill={r.up ? COLORS.zsUp : COLORS.zsDown}
                   data-testid={`chart-zoneshift-retest-${r.up ? "up" : "down"}`}
                 />
+              );
+            })}
+          </g>
+        )}
+
+        {/* #129: Dow theory's level labels (each at the right end of its
+            line), its swing labels (HH/HL up-coloured, LH/LL
+            down-coloured), and ① on a first break, 確定 on the second, 取消
+            when the old trend resumed first — under the candle for a break
+            down, over it for a break up */}
+        {dowDraw && (
+          <g clipPath={`url(#${clipId})`} stroke="hsl(var(--background))" strokeWidth={2.5} strokeLinejoin="round" paintOrder="stroke">
+            {dowLabels.map((r) => (
+              <text
+                key={r.id}
+                data-testid={r.id}
+                x={W - PAD_RIGHT - 2} y={r.ly}
+                textAnchor="end" fontSize={r.bold ? labelSize : labelSize - 0.5} fontWeight={r.bold ? 700 : 400} fontFamily="monospace"
+                fill={r.color}
+              >
+                {r.text}
+              </text>
+            ))}
+            {dowDraw.swings.filter((sw) => sw.label !== null && onScreen(sw.i)).map((sw) => (
+              <text
+                key={`ds-${sw.i}-${sw.kind}`}
+                x={x(sw.i)}
+                y={sw.kind === "H" ? y(sw.price) - 3 : y(sw.price) + labelSize + 1}
+                textAnchor="middle" fontSize={labelSize - 1} fontWeight="700" fontFamily="monospace"
+                fill={sw.label === "HH" || sw.label === "HL" ? COLORS.up : COLORS.down}
+                data-testid={`chart-dow-swing-${sw.label}`}
+              >
+                {sw.label}
+              </text>
+            ))}
+            {dowDraw.events.filter((e) => onScreen(e.i)).map((e) => {
+              const c = candles[e.i];
+              const below = e.dir === "down";
+              const color = e.kind === "cancel" ? COLORS.text : e.dir === "up" ? COLORS.up : COLORS.down;
+              const size = e.kind === "break1" ? labelSize + 2 : labelSize;
+              return (
+                <text
+                  key={`de-${e.i}-${e.kind}`}
+                  x={x(e.i)}
+                  y={below ? y(c.low) + size + 3 + (labelSize + 1) : y(c.high) - 4 - (labelSize + 1)}
+                  textAnchor="middle" fontSize={size} fontWeight="700" fill={color}
+                  data-testid={`chart-dow-${e.kind}-${e.dir}`}
+                >
+                  <title>{t.chart.dowEventTitle(e.kind, e.dir, e.level.toFixed(decimals))}</title>
+                  {e.kind === "break1" ? t.chart.dowBreak1 : e.kind === "confirm" ? t.chart.dowConfirm : t.chart.dowCancel}
+                </text>
               );
             })}
           </g>

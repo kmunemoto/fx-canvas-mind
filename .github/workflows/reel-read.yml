@@ -1,0 +1,146 @@
+# Reads a public short video the owner points at (an Instagram reel, a
+# YouTube short) so an indicator described in it can be built from what is
+# actually said and shown, not from a guess: the post's caption, a
+# transcript of its speech, and the text on its frames. The development
+# container cannot reach these sites; GitHub's runners can.
+#
+# Read-only: public URL only, no account, no key and no secret. Prints to
+# the job log and keeps the frames as a short-lived artifact; writes nothing
+# to the repository.
+name: Read a short video
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/reel-read.yml
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "The video's public URL"
+        default: ""
+      model:
+        description: "Whisper model when there are no captions (small is faster on a long video)"
+        default: "medium"
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # yt-dlp solves YouTube's JavaScript challenges with Deno
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Tools
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-jpn > /dev/null
+          pip install -q "yt-dlp[default]" faster-whisper youtube-transcript-api
+      - name: Fetch the video and its caption
+        env:
+          # #129: the owner's reel on Dow theory
+          URL: ${{ inputs.url || 'https://www.instagram.com/reel/DdbXdO_C9EW/' }}
+        run: |
+          set -u
+          mkdir -p out
+          # captions first (a long YouTube interview has them); then the video
+          # YouTube asks datacenter addresses to sign in on its web client;
+          # its other clients are tried in turn
+          for client in default tv_simply web_safari mweb android_vr; do
+            yt-dlp --no-progress --extractor-args "youtube:player_client=${client}" --skip-download --write-subs --write-auto-subs \
+              --sub-langs "ja,ja-orig,en" --sub-format vtt -o "out/subs.%(ext)s" "$URL" && ls out/subs*.vtt >/dev/null 2>&1 && break
+            echo "no captions (${client})"
+          done
+          for client in default tv_simply web_safari mweb android_vr; do
+            yt-dlp --no-progress --extractor-args "youtube:player_client=${client}" -f "b[height<=480]/b" \
+              -o "out/video.%(ext)s" --write-info-json "$URL" && break
+            echo "yt-dlp failed (${client})"
+          done
+          # the transcript panel's text, another way in
+          python3 - "$URL" <<'PY3' || true
+          import re, sys
+          m = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", sys.argv[1])
+          if m:
+              try:
+                  from youtube_transcript_api import YouTubeTranscriptApi
+                  t = YouTubeTranscriptApi().fetch(m.group(1), languages=["ja", "en"])
+                  print("=== TRANSCRIPT API ===")
+                  for s in t:
+                      print(f"[{s.start:7.1f}] {s.text}")
+                  print("=== END TRANSCRIPT API ===")
+              except Exception as e:
+                  print("transcript api:", type(e).__name__, str(e)[:300])
+          PY3
+          ls -la out
+          for f in out/subs*.vtt; do
+            [ -f "$f" ] || continue
+            echo "=== CAPTIONS $f ==="
+            # the cue text once each, without timing lines or the repeats auto-captions carry
+            python3 - "$f" <<'PY2'
+          import re, sys
+          seen, last = set(), None
+          for line in open(sys.argv[1], encoding="utf-8"):
+              line = re.sub(r"<[^>]+>", "", line).strip()
+              if not line or "-->" in line or line.startswith(("WEBVTT", "Kind:", "Language:")) or line.isdigit():
+                  continue
+              if line != last and line not in seen:
+                  print(line)
+                  seen.add(line)
+              last = line
+          PY2
+            echo "=== END CAPTIONS ==="
+          done
+          python3 - <<'PY'
+          import glob, json
+          for p in glob.glob("out/*.info.json"):
+              d = json.load(open(p))
+              for k in ("title", "uploader", "channel", "upload_date", "duration", "description"):
+                  if d.get(k):
+                      print(f"=== {k.upper()} ===")
+                      print(d[k])
+          PY
+      - name: Transcribe the speech
+        env:
+          MODEL: ${{ inputs.model || 'medium' }}
+        run: |
+          set -u
+          V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
+          if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          if ls out/subs*.vtt >/dev/null 2>&1; then echo "captions read; no transcription"; exit 0; fi
+          ffmpeg -loglevel error -y -i "$V" -ac 1 -ar 16000 out/audio.wav
+          python3 - <<'PY'
+          from faster_whisper import WhisperModel
+          import os
+          m = WhisperModel(os.environ.get("MODEL") or "medium", device="cpu", compute_type="int8")
+          segs, info = m.transcribe("out/audio.wav", language="ja", beam_size=5, vad_filter=True)
+          print(f"=== TRANSCRIPT ({info.duration:.0f}s) ===")
+          for s in segs:
+              print(f"[{s.start:6.1f}-{s.end:6.1f}] {s.text}")
+          print("=== END TRANSCRIPT ===")
+          PY
+      - name: Read the text on the frames
+        run: |
+          set -u
+          V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
+          if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          # a long video's frames are not read (minutes of OCR for little)
+          D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$V" | cut -d. -f1)
+          if [ "${D:-0}" -gt 180 ]; then echo "long video (${D}s): frames not read"; exit 0; fi
+          mkdir -p out/frames
+          ffmpeg -loglevel error -y -i "$V" -vf "fps=1/2,scale=720:-1" out/frames/f%03d.png
+          for f in out/frames/*.png; do
+            txt=$(tesseract "$f" - -l jpn+eng --psm 6 2>/dev/null | tr -s ' \n' ' ' | head -c 400)
+            echo "--- $(basename "$f"): $txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reel-frames
+          path: out/frames/
+          retention-days: 7
+          if-no-files-found: ignore

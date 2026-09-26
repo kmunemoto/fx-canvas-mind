@@ -11,11 +11,14 @@ import {
   TICK_MS,
   applyTick,
   LiveChartError,
+  dowTfsFor,
+  fetchDow,
   fetchLiveBars,
   fetchLiveHistory,
   fetchTicks,
   historyBefore,
   intervalsFor,
+  type DowTf,
   type LiveRead,
   type Tick,
 } from "@/lib/liveChart";
@@ -35,6 +38,11 @@ const AFTER_CLOSE_MS = 4_000;
 // an outage) or while no bar is forming (the market is shut): never every
 // few seconds for a whole weekend
 const RETRY_MS = 60_000;
+// #129: the Dow reading is asked for this often while it is on (the
+// function reads each timeframe again only once a newer bar has closed)
+const DOW_POLL_MS = 60_000;
+// a timeframe's length, to tell which are above the chart's
+const DOW_STEP_MS: Record<string, number> = { "5min": 300_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000 };
 
 interface Props {
   defaultInterval?: string;
@@ -42,6 +50,7 @@ interface Props {
   loadBars?: (pair: string, interval: string) => Promise<LiveRead>;
   loadTicks?: () => Promise<Record<string, Tick>>;
   loadHistory?: (pair: string, interval: string) => Promise<NumericCandle[]>;
+  loadDow?: (pair: string) => Promise<DowTf[]>;
 }
 
 // "19:15:07" in Japan time
@@ -53,7 +62,7 @@ const jstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(
 // live-chart function when a bar closes; in between, the price every few
 // seconds moves the bar still forming. Signals are judged on closed bars
 // only — the forming bar never makes or unmakes one.
-const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks, loadHistory = fetchLiveHistory }: Props) => {
+const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks, loadHistory = fetchLiveHistory, loadDow = fetchDow }: Props) => {
   const t = useT();
   const l = t.live;
   const [pair, setPairOnly] = useState<string>(LIVE_PAIRS[0]);
@@ -164,7 +173,8 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   // when the chart has moved past them, and once more on the next read
   // after one failed (never in a loop). GMO's only: not joined to Twelve
   // Data's bars.
-  const zoneShiftOn = useChartPrefs().overlays.zoneShift;
+  const overlays = useChartPrefs().overlays;
+  const zoneShiftOn = overlays.zoneShift;
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)
@@ -187,6 +197,43 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
       },
     );
   }, [zoneShiftOn, gmoRead, history, historyKey, pair, interval, loadHistory]);
+
+  // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
+  // read while it is on, now and once a minute while the page is on
+  // screen. A read that fails keeps the last one of the same pair.
+  const dowOn = overlays.dow;
+  const [dowRead, setDowRead] = useState<{ pair: string; tfs: DowTf[]; status: "loading" | "ready" | "error" } | null>(null);
+  useEffect(() => {
+    if (!dowOn) return;
+    let stop = false;
+    const get = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      try {
+        const tfs = await loadDow(pair);
+        if (!stop) setDowRead({ pair, tfs, status: "ready" });
+      } catch {
+        if (!stop) setDowRead((r) => (r && r.pair === pair && r.tfs.length > 0 ? r : { pair, tfs: [], status: "error" }));
+      }
+    };
+    setDowRead((r) => (r && r.pair === pair ? r : { pair, tfs: [], status: "loading" }));
+    void get();
+    const id = window.setInterval(() => void get(), DOW_POLL_MS);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [dowOn, pair, loadDow]);
+  const dowNow = dowRead && dowRead.pair === pair ? dowRead : null;
+  // for the chart: its own timeframe's reading, and those above it
+  const dowChart = useMemo(() => {
+    const own = STEP_MS[interval] ?? 0;
+    const tfs = dowNow?.tfs ?? [];
+    return {
+      current: tfs.find((d) => d.tf === interval) ?? null,
+      higher: tfs.filter((d) => (DOW_STEP_MS[d.tf] ?? 0) > own),
+      status: dowNow?.status ?? ("loading" as const),
+    };
+  }, [dowNow, interval]);
 
   // v3: GMO cannot be read, so the bars are Twelve Data's last ones and no
   // price moves them
@@ -388,6 +435,62 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const freshLine = fresh && (
     <p className="text-xs font-semibold text-primary" data-testid="live-fresh">{l.fresh(fresh)}</p>
   );
+  // #129: each timeframe's Dow state, in the chart's colours
+  const dowTone = (s: DowTf["state"]) =>
+    s === "up" ? "text-success" : s === "down" ? "text-destructive" : s === "none" ? "text-muted-foreground" : "text-warning";
+  const dowOf = (tf: string) => dowNow?.tfs.find((d) => d.tf === tf) ?? null;
+  // one line over the chart in full screen
+  const dowLine = dowOn && dowNow && dowNow.tfs.length > 0 ? (
+    <p className="text-[11px] font-mono" data-testid="live-dow-compact">
+      <span className="text-muted-foreground">{l.dowCompact} </span>
+      {dowTfsFor(pair).map((tf, k) => {
+        const d = dowOf(tf);
+        return (
+          <span key={tf}>
+            {k > 0 ? <span className="text-muted-foreground"> · </span> : null}
+            <span className="text-muted-foreground">{t.chart.dowTfShort[tf] ?? tf} </span>
+            <span className={d ? dowTone(d.state) : "text-muted-foreground"}>{d ? l.dowShort[d.state] : "—"}</span>
+          </span>
+        );
+      })}
+    </p>
+  ) : null;
+  const dowPanel = dowOn ? (
+    <div className="rounded-lg border border-border p-2 space-y-0.5" data-testid="live-dow">
+      <p className="text-[10px] text-muted-foreground">{l.dowTitle(dowTfsFor(pair).map((tf) => l.dowTfNames[tf] ?? tf).join("・"))}</p>
+      {dowNow && dowNow.tfs.length > 0
+        ? dowTfsFor(pair).map((tf) => {
+          const d = dowOf(tf);
+          const since = d?.since ? parseUtcCandleTime(d.since) + (DOW_STEP_MS[tf] ?? 0) : null;
+          return (
+            <p key={tf} className={`text-xs flex flex-wrap items-baseline gap-x-2 ${tf === interval ? "font-semibold" : ""}`} data-testid={`live-dow-${tf}`}>
+              <span className="w-10 shrink-0 text-muted-foreground">{l.dowTfNames[tf] ?? tf}</span>
+              {d ? (
+                <>
+                  <span className={dowTone(d.state)} data-testid={`live-dow-state-${tf}`}>{l.dowStates[d.state]}</span>
+                  {d.key && (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {l.dowKey(d.key.kind, d.key.price.toFixed(priceDecimals(pair)), d.state === "toDown" || d.state === "toUp")}
+                    </span>
+                  )}
+                  {since !== null && Number.isFinite(since) && (
+                    <span className="font-mono text-[10px] text-muted-foreground">{l.dowSince(jstDay(since))}</span>
+                  )}
+                </>
+              ) : (
+                <span className="text-muted-foreground">{l.dowTfError}</span>
+              )}
+            </p>
+          );
+        })
+        : (
+          <p className="text-xs text-muted-foreground" data-testid="live-dow-status">
+            {dowNow?.status === "error" ? l.dowError : l.dowLoading}
+          </p>
+        )}
+      <p className="text-[10px] text-muted-foreground">{l.dowHint}</p>
+    </div>
+  ) : null;
 
   return (
     <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid="live-chart">
@@ -449,12 +552,14 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
+        dow={dowChart}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
         fullscreenStatus={
-          priceLine || freshLine ? (
+          priceLine || freshLine || dowLine ? (
             <>
               {priceLine}
               {freshLine}
+              {dowLine}
             </>
           ) : undefined
         }
@@ -493,6 +598,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
               <p className="text-muted-foreground font-mono" data-testid="live-next-close">{l.nextClose(jstClock(nextCloseMs).slice(0, 5), remainText)}</p>
             )}
           </div>
+          {dowPanel}
           <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : l.note}</p>
         </>
       )}

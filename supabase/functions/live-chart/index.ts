@@ -3,6 +3,7 @@
 //   {action: "bars", pair, interval} — the bars, both rules' signals and
 //     their readings on the newest closed bar;
 //   {action: "ticker"} — every live pair's bid and ask now;
+//   {action: "dow", pair} — #129: Dow theory on 4h, 1h, 15min and 5min;
 //   {action: "history", pair, interval} — #124: HISTORY_BARS closed bars,
 //     for an indicator that needs more than the chart draws (Zone Shift).
 // #127: gold (XAU/USD) reads its bars from Twelve Data and its price from
@@ -17,6 +18,12 @@ import {
   LIVE_PAIRS,
   TICKER_URL,
   fetchLiveQuotes,
+  closedOf,
+  dowOf,
+  dowTfsFor,
+  fetchDowQuotes,
+  splitBars,
+  LIVE_STEP_MS,
   GOLD,
   GOLD_BARS,
   GOLD_QUOTE_URL,
@@ -39,10 +46,11 @@ import {
   twelveDataUrl,
 } from "./logic.ts";
 import type { Candle } from "../analyze/indicators.ts";
-import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
+import { barOpenMs } from "../analyze/state.ts";
+import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v5-2026-09-26T17:00:00Z";
+const FUNCTION_VERSION = "live-chart-v6-2026-09-26T18:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key
@@ -82,6 +90,11 @@ const gmoFetcher: Fetcher = async (url) => {
 
 const barsCache = new Map<string, { at: number; body: unknown }>();
 const historyCache = new Map<string, { at: number; body: unknown }>();
+// #129: each pair's and timeframe's closed bars for the Dow read, until a
+// newer bar has closed (and not asked again within DOW_RETRY_MS of a read)
+const dowCache = new Map<string, { at: number; closed: Candle[] }>();
+const DOW_RETRY_MS = 30_000;
+const DOW_SHUT_RETRY_MS = 5 * 60_000;
 let tickerCache: { at: number; body: unknown } | null = null;
 const authCache = new Map<string, number>();
 const fallbackFetches: number[] = [];
@@ -255,6 +268,40 @@ Deno.serve(async (req: Request) => {
       if (historyCache.size > 50) historyCache.clear();
       historyCache.set(key, { at: nowMs, body: out });
       return json(out);
+    }
+
+    // #129: Dow theory on four timeframes
+    if (action === "dow") {
+      const pair = body?.pair;
+      if (!isLivePair(pair)) return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS }, 400);
+      const shut = isPossiblyClosedFor(pair, nowMs);
+      // the timeframes at once (each within the same fetch budget)
+      const out = await Promise.all(dowTfsFor(pair).map(async (tf) => {
+        const key = `${pair}|${tf}`;
+        const step = LIVE_STEP_MS[tf];
+        const hit = dowCache.get(key);
+        const newest = hit && hit.closed.length > 0 ? barOpenMs(hit.closed[hit.closed.length - 1].datetime) : NaN;
+        // a newer bar has closed since this was read (and a while has
+        // passed); while the market may be shut, every few minutes
+        const stale = !hit || !Number.isFinite(newest) ||
+          (shut ? nowMs - hit.at > DOW_SHUT_RETRY_MS : nowMs >= newest + 2 * step && nowMs - hit.at > DOW_RETRY_MS);
+        let closed = hit?.closed ?? null;
+        if (stale) {
+          if (isGold(pair)) {
+            const fb = await goldBars(tf);
+            closed = fb ? closedOf(fb.bars, tf, nowMs) : closed;
+          } else {
+            const quotes = await fetchDowQuotes(pair, tf, nowMs, nowMs + FETCH_BUDGET_MS, fetcher);
+            closed = quotes && quotes.length > 0 ? splitBars(quotes, tf, nowMs).closed : closed;
+          }
+          if (closed) {
+            if (dowCache.size > 100) dowCache.clear();
+            dowCache.set(key, { at: nowMs, closed });
+          }
+        }
+        return closed && closed.length > 0 ? dowOf(pair, tf, closed) : { tf, error: "unavailable" };
+      }));
+      return json({ ok: true, version: FUNCTION_VERSION, at: new Date(nowMs).toISOString(), dow: out });
     }
 
     return json({ ok: false, error: "invalid_request" }, 400);

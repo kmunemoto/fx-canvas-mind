@@ -184,6 +184,74 @@ export const fetchLiveBars = async (pair: string, interval: string): Promise<Liv
 
 export const fetchTicks = async (): Promise<Record<string, Tick>> => normalizeTicks((await call({ action: "ticker" })).ticks);
 
+// #129: Dow theory on four timeframes (supabase/functions/_shared/dow.ts),
+// as the live-chart function reads it — gold without the 5-minute one
+export const DOW_TFS = ["4h", "1h", "15min", "5min"];
+export const dowTfsFor = (pair: string): string[] => (pair === GOLD_PAIR ? DOW_TFS.slice(0, 3) : DOW_TFS);
+export type DowState = "up" | "down" | "toDown" | "toUp" | "none";
+export interface DowPoint {
+  price: number;
+  at: string | null;
+}
+export interface DowTf {
+  tf: string;
+  state: DowState;
+  since: string | null;
+  key: (DowPoint & { kind: "pushLow" | "pullHigh" }) | null;
+  high: DowPoint | null;
+  low: DowPoint | null;
+  swings: Array<DowPoint & { kind: "H" | "L"; label: string | null }>;
+  events: Array<{ kind: "update" | "break1" | "confirm" | "cancel"; dir: "up" | "down"; level: number; at: string | null }>;
+  asOf: string | null;
+}
+const DOW_STATES = new Set(["up", "down", "toDown", "toUp", "none"]);
+const point = (v: unknown): DowPoint | null => {
+  const r = rec(v);
+  const price = num(r?.price);
+  return r && price !== null ? { price, at: typeof r.at === "string" ? r.at : null } : null;
+};
+export const normalizeDow = (value: unknown): DowTf[] => {
+  if (!Array.isArray(value)) return [];
+  const out: DowTf[] = [];
+  for (const v of value) {
+    const r = rec(v);
+    if (!r || typeof r.tf !== "string" || typeof r.state !== "string" || !DOW_STATES.has(r.state)) continue;
+    const key = point(r.key);
+    const keyKind = rec(r.key)?.kind;
+    out.push({
+      tf: r.tf,
+      state: r.state as DowState,
+      since: typeof r.since === "string" ? r.since : null,
+      key: key && (keyKind === "pushLow" || keyKind === "pullHigh") ? { ...key, kind: keyKind } : null,
+      high: point(r.high),
+      low: point(r.low),
+      swings: Array.isArray(r.swings)
+        ? r.swings.flatMap((s) => {
+          const p = point(s);
+          const k = rec(s)?.kind;
+          const label = rec(s)?.label;
+          return p && (k === "H" || k === "L") ? [{ ...p, kind: k, label: typeof label === "string" ? label : null }] : [];
+        })
+        : [],
+      events: Array.isArray(r.events)
+        ? r.events.flatMap((e) => {
+          const x = rec(e);
+          const level = num(x?.level);
+          const kind = x?.kind;
+          const dir = x?.dir;
+          return x && level !== null && (kind === "update" || kind === "break1" || kind === "confirm" || kind === "cancel") && (dir === "up" || dir === "down")
+            ? [{ kind, dir, level, at: typeof x.at === "string" ? x.at : null }]
+            : [];
+        })
+        : [],
+      asOf: typeof r.as_of === "string" ? r.as_of : null,
+    });
+  }
+  return out;
+};
+
+export const fetchDow = async (pair: string): Promise<DowTf[]> => normalizeDow((await call({ action: "dow", pair })).dow);
+
 // #124: the closed bars before the chart's own, for Zone Shift's 200-bar
 // average — all or nothing, like the bars (a gap would move every average)
 export const normalizeHistory = (value: unknown): NumericCandle[] | null => {

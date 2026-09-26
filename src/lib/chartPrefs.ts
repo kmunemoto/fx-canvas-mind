@@ -29,6 +29,8 @@ export interface ChartOverlays {
   // #124: ChartPrime's Zone Shift (a port of its open-source code) — it
   // paints the candles in its trend's colours
   zoneShift: boolean;
+  // #129: Dow theory on four timeframes (the live chart)
+  dow: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -40,6 +42,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   kalman: false,
   fvgProfile: true,
   zoneShift: true,
+  dow: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
