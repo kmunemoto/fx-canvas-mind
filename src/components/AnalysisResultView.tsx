@@ -273,6 +273,7 @@ const AnalysisResultView = ({
             sar={activeChart?.sar}
             sarBelow={activeChart?.sar_below}
             heading={activeChart && !entryChart ? `${t.chart.title} · ${tfLabel(activeChart.tf)}` : undefined}
+            seriesKey={activeChart?.tf ?? "entry"}
           />
         </div>
       )}

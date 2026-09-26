@@ -1125,7 +1125,7 @@ describe("PriceChart draws the evidence, in two registers", () => {
         ]}
       />,
     );
-    const svg = document.querySelector("svg");
+    const svg = document.querySelector("svg[role='img']");
     expect(svg?.textContent).toContain("H 8本前");
     // the model-named one carries its mark; the measured one does not
     expect(svg?.textContent).toContain("(AI)");
@@ -1143,7 +1143,7 @@ describe("PriceChart draws the evidence, in two registers", () => {
         overlays={[{ label: "far", value: 900, register: "computed" }]}
       />,
     );
-    const svg = document.querySelector("svg");
+    const svg = document.querySelector("svg[role='img']");
     expect(svg?.textContent).not.toContain("far");
     // and it says how many it could not draw rather than dropping them silently
     expect(screen.getByTestId("chart-legend").textContent).toContain("表示範囲の外に 1件");
@@ -1347,7 +1347,7 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     expect(screen.queryByTestId("chart-signal-BUY-open")).toBeNull();
     expect(screen.getByTestId("chart-trend-lows")).toBeInTheDocument();
     expect(screen.getByTestId("chart-signal-legend").textContent).toContain("RSI が30/70から戻り");
-    const svg = document.querySelector("svg");
+    const svg = document.querySelector("svg[role='img']");
     expect(svg?.textContent).toContain("BUY✓");
     expect(svg?.textContent).toContain("SELL✗");
     expect(svg?.textContent).toContain("安値線");
@@ -1368,7 +1368,7 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     );
     const flags = document.querySelectorAll("[data-rule]");
     expect([...flags].map((f) => f.getAttribute("data-rule"))).toEqual(["rsi_sar", "gainz", "gainz"]);
-    const svg = document.querySelector("svg");
+    const svg = document.querySelector("svg[role='img']");
     expect(svg?.textContent).toContain("BUY✓");
     expect(svg?.textContent).toContain("GA BUY✗");
     expect(svg?.textContent).toContain("GA SELL");
