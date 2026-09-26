@@ -1,0 +1,45 @@
+# Reads public price-feed endpoints and prints what they answer, so a feed
+# the app might use can be checked before any code depends on it. The
+# development container cannot reach these hosts; GitHub's runners can.
+#
+# Read-only: public URLs only, no API key and no secret; nothing is written
+# to the repository. A URL that would need a key is not asked for here.
+name: Check public price feeds
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/feed-check.yml
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Space-separated public URLs to read"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read each URL
+        env:
+          URLS: ${{ inputs.urls || '' }}
+        run: |
+          set -u
+          # #127 (gold): does GMO's FX feed carry gold, does Twelve Data list
+          # XAU/USD, and what does Swissquote's public quote feed answer
+          DEFAULT="https://forex-api.coin.z.com/public/v1/symbols \
+          https://forex-api.coin.z.com/public/v1/ticker \
+          https://api.twelvedata.com/forex_pairs?symbol=XAU/USD \
+          https://api.twelvedata.com/symbol_search?symbol=XAU/USD \
+          https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"
+          for u in ${URLS:-$DEFAULT}; do
+            echo "=== ${u}"
+            curl -sS --max-time 20 -A "Mozilla/5.0" -w "\n--- http %{http_code}, %{size_download} bytes\n" "$u" | head -c 3000
+            echo
+          done

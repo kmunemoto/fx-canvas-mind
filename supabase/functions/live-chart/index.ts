@@ -5,6 +5,8 @@
 //   {action: "ticker"} — every live pair's bid and ask now;
 //   {action: "history", pair, interval} — #124: HISTORY_BARS closed bars,
 //     for an indicator that needs more than the chart draws (Zone Shift).
+// #127: gold (XAU/USD) reads its bars from Twelve Data and its price from
+// Swissquote (logic.ts, "gold").
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -15,8 +17,17 @@ import {
   LIVE_PAIRS,
   TICKER_URL,
   fetchLiveQuotes,
+  GOLD,
+  GOLD_BARS,
+  GOLD_QUOTE_URL,
+  goldFresh,
+  goldRead,
   HISTORY_BARS,
+  historyOfBars,
   historyRead,
+  intervalsFor,
+  isGold,
+  parseSwissquote,
   isLiveInterval,
   isLivePair,
   isMaintenance,
@@ -31,7 +42,7 @@ import type { Candle } from "../analyze/indicators.ts";
 import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v4-2026-09-26T14:00:00Z";
+const FUNCTION_VERSION = "live-chart-v5-2026-09-26T17:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key
@@ -118,7 +129,13 @@ Deno.serve(async (req: Request) => {
     // v3: the last bars from Twelve Data, from the table while they are
     // fresh, fetched again when not (within this instance's allowance), and
     // stale ones rather than none
-    const fallbackBars = async (pair: string, interval: string): Promise<{ bars: Candle[]; fetchedAt: string } | null> => {
+    const fallbackBars = async (
+      pair: string,
+      interval: string,
+      // #127: gold's own rule for "fresh", and how many bars it reads
+      fresh: (fetchedAtMs: number) => boolean = (t) => nowMs - t < FALLBACK_TTL_MS,
+      outputsize?: number,
+    ): Promise<{ bars: Candle[]; fetchedAt: string } | null> => {
       const key = `pair=eq.${encodeURIComponent(pair)}&interval=eq.${encodeURIComponent(interval)}`;
       const res = await rest(`live_chart_fallback?${key}&select=bars,fetched_at`);
       const rows = res.ok ? await res.json().catch(() => null) : null;
@@ -126,12 +143,12 @@ Deno.serve(async (req: Request) => {
       const stored = row && Array.isArray(row.bars) && typeof row.fetched_at === "string"
         ? { bars: row.bars as Candle[], fetchedAt: row.fetched_at }
         : null;
-      if (stored && nowMs - Date.parse(stored.fetchedAt) < FALLBACK_TTL_MS) return stored;
+      if (stored && fresh(Date.parse(stored.fetchedAt))) return stored;
       while (fallbackFetches.length > 0 && nowMs - fallbackFetches[0] > 60_000) fallbackFetches.shift();
       if (!twelveKey || fallbackFetches.length >= FALLBACK_FETCHES_PER_MIN) return stored;
       fallbackFetches.push(nowMs);
       try {
-        const r = await fetch(twelveDataUrl(pair, interval, twelveKey), { signal: AbortSignal.timeout(10_000) });
+        const r = await fetch(twelveDataUrl(pair, interval, twelveKey, outputsize), { signal: AbortSignal.timeout(10_000) });
         const bars = parseTwelveData(await r.json().catch(() => null), interval);
         if (!r.ok || !bars || bars.length < 60) return stored;
         const fetchedAt = new Date(nowMs).toISOString();
@@ -147,6 +164,9 @@ Deno.serve(async (req: Request) => {
         return stored;
       }
     };
+    // #127: gold's bars, from the table while no bar has closed since
+    const goldBars = (interval: string) =>
+      fallbackBars(GOLD, interval, (t) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs)), GOLD_BARS);
     const unavailable = () =>
       maintenance
         ? json({ ok: false, error: "maintenance", reopens, version: FUNCTION_VERSION }, 503)
@@ -154,8 +174,17 @@ Deno.serve(async (req: Request) => {
 
     if (action === "ticker") {
       if (!tickerCache || nowMs - tickerCache.at > TICKER_TTL_MS) {
-        const raw = await fetcher(TICKER_URL);
-        const ticks = parseTicker(raw);
+        // #127: gold's price from Swissquote, beside GMO's
+        const goldQuote = async () => {
+          try {
+            const r = await fetch(GOLD_QUOTE_URL, { signal: AbortSignal.timeout(5_000) });
+            return r.ok ? parseSwissquote(await r.json().catch(() => null), nowMs) : null;
+          } catch {
+            return null;
+          }
+        };
+        const [raw, gold] = await Promise.all([fetcher(TICKER_URL), goldQuote()]);
+        const ticks = { ...parseTicker(raw), ...(gold ? { [GOLD]: gold } : {}) };
         if (Object.keys(ticks).length === 0) return unavailable();
         tickerCache = { at: nowMs, body: { ok: true, version: FUNCTION_VERSION, at: new Date(nowMs).toISOString(), ticks } };
       }
@@ -165,7 +194,7 @@ Deno.serve(async (req: Request) => {
     if (action === "bars") {
       const pair = body?.pair;
       const interval = body?.interval;
-      if (!isLivePair(pair) || !isLiveInterval(interval)) {
+      if (!isLivePair(pair) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
         return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
       }
       const key = `${pair}|${interval}`;
@@ -174,6 +203,15 @@ Deno.serve(async (req: Request) => {
         // a cached read whose forming bar has since closed is stale
         const next = (hit.body as { read?: { next_close?: string | null } }).read?.next_close;
         if (!next || Date.parse(next) > nowMs) return json(hit.body);
+      }
+      // #127: gold, from Twelve Data (GMO has none)
+      if (isGold(pair)) {
+        const fb = await goldBars(interval);
+        if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
+        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt) };
+        if (barsCache.size > 100) barsCache.clear();
+        barsCache.set(key, { at: nowMs, body: out });
+        return json(out);
       }
       const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, fetcher);
       if (!quotes || quotes.length === 0) {
@@ -199,8 +237,14 @@ Deno.serve(async (req: Request) => {
     if (action === "history") {
       const pair = body?.pair;
       const interval = body?.interval;
-      if (!isLivePair(pair) || !isLiveInterval(interval)) {
+      if (!isLivePair(pair) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
         return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
+      }
+      // #127: gold's history is the bars it already reads (GOLD_BARS deep)
+      if (isGold(pair)) {
+        const fb = await goldBars(interval);
+        if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
+        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, fb.bars, nowMs) });
       }
       const key = `${pair}|${interval}`;
       const hit = historyCache.get(key);

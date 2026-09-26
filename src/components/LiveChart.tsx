@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
-import { parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
+import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { useChartPrefs } from "@/lib/chartPrefs";
 import type { NumericCandle } from "@/lib/types";
 import {
@@ -15,6 +15,7 @@ import {
   fetchLiveHistory,
   fetchTicks,
   historyBefore,
+  intervalsFor,
   type LiveRead,
   type Tick,
 } from "@/lib/liveChart";
@@ -55,11 +56,17 @@ const jstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(
 const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks, loadHistory = fetchLiveHistory }: Props) => {
   const t = useT();
   const l = t.live;
-  const [pair, setPair] = useState<string>(LIVE_PAIRS[0]);
+  const [pair, setPairOnly] = useState<string>(LIVE_PAIRS[0]);
   const [interval, setIntervalTf] = useState<string>(
     defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : RECOMMENDED_INTERVAL,
   );
   const [view, setView] = useState<LiveView>("gainz");
+  // #127: gold has no 1-minute chart: another pair's timeframe it lacks
+  // becomes the recommended one
+  const setPair = (p: string) => {
+    setPairOnly(p);
+    if (!intervalsFor(p).includes(interval)) setIntervalTf(RECOMMENDED_INTERVAL);
+  };
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reopens, setReopens] = useState<string | null>(null);
@@ -160,7 +167,8 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const zoneShiftOn = useChartPrefs().overlays.zoneShift;
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
-  const gmoRead = read && read.source === "gmo" ? read : null;
+  // (#127: or gold's own Twelve Data bars)
+  const gmoRead = read && (read.source === "gmo" || read.feed === "gold") ? read : null;
   useEffect(() => {
     if (!zoneShiftOn || !gmoRead) return;
     const h = history;
@@ -182,7 +190,8 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
 
   // v3: GMO cannot be read, so the bars are Twelve Data's last ones and no
   // price moves them
-  const fallback = read?.source === "twelvedata";
+  // (#127: not gold, whose bars are always Twelve Data's and move with its price)
+  const fallback = read?.source === "twelvedata" && read.feed !== "gold";
   const tick = fallback ? null : ticks[pair] ?? null;
   const step = STEP_MS[interval] ?? 60_000;
   // the forming bar, when the read has one: the last candle opened one step
@@ -249,7 +258,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         })}
       </div>
       <div className={row} role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
-        {LIVE_INTERVALS.map((iv) => (
+        {intervalsFor(pair).map((iv) => (
           <button
             key={iv}
             type="button"
@@ -328,7 +337,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
     render: (close) => (
       <div className="space-y-4">
         <div className="grid grid-cols-3 gap-2" data-testid="live-sheet-intervals">
-          {LIVE_INTERVALS.map((iv) => (
+          {intervalsFor(pair).map((iv) => (
             <button
               key={iv}
               type="button"
@@ -370,7 +379,9 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   };
   const priceLine = tick ? (
     <p className="text-xs font-mono" data-testid="live-price">
-      {l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
+      {isGoldPair(pair)
+        ? l.bidAskUsd(tick.bid.toFixed(d), tick.ask.toFixed(d), (tick.ask - tick.bid).toFixed(2))
+        : l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
       {!tick.open && <span className="ml-2 text-warning" data-testid="live-closed">{l.closed}</span>}
     </p>
   ) : null;
@@ -482,7 +493,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
               <p className="text-muted-foreground font-mono" data-testid="live-next-close">{l.nextClose(jstClock(nextCloseMs).slice(0, 5), remainText)}</p>
             )}
           </div>
-          <p className="text-[10px] text-muted-foreground">{l.note}</p>
+          <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : l.note}</p>
         </>
       )}
     </div>

@@ -351,6 +351,8 @@ export const ja = {
     pairsLabel: "通貨ペア",
     intervalsLabel: "時間足",
     bidAsk: (bid: string, ask: string, spreadPips: string) => `売値 ${bid} / 買値 ${ask} / スプレッド ${spreadPips}pips`,
+    // #127: gold's spread in dollars
+    bidAskUsd: (bid: string, ask: string, spread: string) => `売値 ${bid} / 買値 ${ask} / スプレッド ${spread}ドル`,
     closed: "市場休止中（最後の価格）",
     loading: "チャートを読み込み中…",
     error: "チャートを読み込めませんでした。1分ごとに自動で読み直します。",
@@ -365,6 +367,7 @@ export const ja = {
       "GBP/USD": "英ポンド／米ドル",
       "EUR/JPY": "ユーロ／円",
       "GBP/JPY": "英ポンド／円",
+      "XAU/USD": "金（米ドル／オンス）",
     } as Record<string, string>,
     intervalShort: { "1min": "1分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
@@ -388,6 +391,9 @@ export const ja = {
     fresh: (what: string) => `新しいサイン: ${what}`,
     nextClose: (time: string, remain: string) => `次の足の確定 ${time}（あと ${remain}）`,
     note: "価格は GMOコインの公開レート（買値と売値の中間）で、5秒ごとに更新します。サインは確定した足だけで判定するため、形成中の足が動いても印は変わりません。足が確定すると自動で読み直します。",
+    // #127
+    goldNote:
+      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。1分足はありません（Twelve Data の無料枠の回数の都合）。",
   },
 
   // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない

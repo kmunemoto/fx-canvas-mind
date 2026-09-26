@@ -26,7 +26,8 @@ import { fetchRecentQuotes, midCandle } from "../analyze/price-source.ts";
 import { fetchYearQuotes } from "../signal-alerts/logic.ts";
 import { GMO_HOST, GMO_INTERVALS, GMO_SYMBOLS, type Fetcher, type QuoteCandle } from "../track-outcomes/quotes.ts";
 
-export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY"] as const;
+// #127: and gold (XAU/USD), which GMO does not carry — see "gold" below
+export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"] as const;
 export const LIVE_INTERVALS = ["1min", "15min", "1h", "4h", "1day"] as const;
 
 const MIN = 60_000;
@@ -51,7 +52,62 @@ export const HISTORY_BARS = 600;
 export const isLivePair = (v: unknown): v is string => typeof v === "string" && (LIVE_PAIRS as readonly string[]).includes(v);
 export const isLiveInterval = (v: unknown): v is string => typeof v === "string" && (LIVE_INTERVALS as readonly string[]).includes(v);
 
-const decimalsOf = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5);
+// ---- #127: gold -----------------------------------------------------------------------
+//
+// The request (2026-09-26), with a TradingView chart of 金CFD (US$/oz):
+// 「金cFDを追加して」. GMO's FX feed has no gold (its /symbols lists 21 FX
+// pairs), so gold's chart has its own two reads:
+//   * bars: Twelve Data's XAU/USD ("Gold Spot / US Dollar", on the Basic
+//     plan: its symbol_search with show_plan says so), kept in
+//     public.live_chart_fallback and read again once a bar has closed since;
+//   * price: Swissquote's public quotes (no key), every few seconds with the
+//     FX ticker, moving the forming bar as GMO's price does for the pairs.
+// No 1-minute chart: a new bar a minute would need up to 1,440 reads a day of
+// a key that allows 800 and is shared with the analysis.
+export const GOLD = "XAU/USD";
+export const isGold = (pair: string): boolean => pair.toUpperCase() === GOLD;
+export const GOLD_INTERVALS = ["15min", "1h", "4h", "1day"] as const;
+export const intervalsFor = (pair: string): readonly string[] => (isGold(pair) ? GOLD_INTERVALS : LIVE_INTERVALS);
+// Bars read at once: enough for the chart, its signals and Zone Shift's history
+export const GOLD_BARS = 800;
+// Stored gold bars are fresh while no bar has closed since they were read
+// (a bar opens on the UTC grid of its length, as Twelve Data's do); while the
+// market may be shut, for FALLBACK_TTL_MS
+export const goldFresh = (fetchedAtMs: number, nowMs: number, interval: string, marketShut: boolean): boolean => {
+  const step = LIVE_STEP_MS[interval];
+  if (!Number.isFinite(fetchedAtMs) || step === undefined) return false;
+  if (marketShut) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
+  return fetchedAtMs >= Math.floor(nowMs / step) * step;
+};
+
+export const GOLD_QUOTE_URL = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD";
+// A quote older than this is not a market trading now (the daily break, the weekend)
+export const GOLD_QUOTE_STALE_MS = 3 * 60_000;
+// [{topo: {platform}, spreadProfilePrices: [{spreadProfile: "standard",
+// bid, ask}, ...], ts}] — the first platform's standard profile (or its
+// first), and only a sane book
+export const parseSwissquote = (body: unknown, nowMs: number): Tick | null => {
+  if (!Array.isArray(body)) return null;
+  for (const platform of body) {
+    if (typeof platform !== "object" || platform === null) continue;
+    const p = platform as { spreadProfilePrices?: unknown; ts?: unknown };
+    if (!Array.isArray(p.spreadProfilePrices) || p.spreadProfilePrices.length === 0) continue;
+    const profiles = p.spreadProfilePrices.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
+    const pick = profiles.find((x) => x.spreadProfile === "standard") ?? profiles[0];
+    const bid = Number(pick?.bid);
+    const ask = Number(pick?.ask);
+    const ts = Number(p.ts);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid || !Number.isFinite(ts)) continue;
+    return { bid, ask, mid: (bid + ask) / 2, time: new Date(ts).toISOString(), open: nowMs - ts < GOLD_QUOTE_STALE_MS };
+  }
+  return null;
+};
+
+// Gold's stored bars -> the chart's read, and its closed bars for the history
+export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string) =>
+  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt });
+
+const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 const round = (v: number | null | undefined, d: number): number | null =>
   v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d));
 
@@ -92,7 +148,8 @@ export const splitBars = (quotes: QuoteCandle[], interval: string, nowMs: number
 // Twelve Data's last bars (see fallbackBars below)
 export interface ReadSource {
   source: "gmo" | "twelvedata";
-  // why GMO was not used: "maintenance" | "unavailable"
+  // why GMO was not used: "maintenance" | "unavailable" — or "gold" (#127):
+  // Twelve Data is gold's own feed, GMO has none
   feed: string | null;
   // when the fallback bars were fetched, ISO
   fetchedAt: string | null;
@@ -179,9 +236,17 @@ export type LiveRead = ReturnType<typeof liveRead>;
 
 // #124: the closed bars (mid, rounded as the chart's), oldest first — the
 // client keeps those older than the chart's own and computes over both
-export const historyRead = (pair: string, interval: string, quotes: QuoteCandle[], nowMs: number) => {
+export const historyRead = (pair: string, interval: string, quotes: QuoteCandle[], nowMs: number) =>
+  historyOf(pair, interval, splitBars(quotes, interval, nowMs).closed, nowMs);
+
+// #127: the same from mid candles (gold's), those not closed left out
+export const historyOfBars = (pair: string, interval: string, bars: Candle[], nowMs: number) => {
+  const step = LIVE_STEP_MS[interval] ?? 0;
+  return historyOf(pair, interval, bars.filter((c) => barOpenMs(c.datetime) + step <= nowMs), nowMs);
+};
+
+const historyOf = (pair: string, interval: string, closed: Candle[], nowMs: number) => {
   const d = decimalsOf(pair);
-  const { closed } = splitBars(quotes, interval, nowMs);
   return {
     pair,
     interval,
@@ -205,9 +270,9 @@ export const FALLBACK_TTL_MS = 30 * MIN;
 // Enough closed bars for RSI and the SAR to settle and a chart to draw
 export const FALLBACK_BARS = 260;
 
-export const twelveDataUrl = (pair: string, interval: string, apiKey: string): string =>
+export const twelveDataUrl = (pair: string, interval: string, apiKey: string, outputsize: number = FALLBACK_BARS): string =>
   `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${encodeURIComponent(interval)}` +
-  `&outputsize=${FALLBACK_BARS}&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`;
+  `&outputsize=${outputsize}&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`;
 
 // Twelve Data's time_series body -> oldest-first candles with the app's
 // timestamps: intraday "YYYY-MM-DD HH:mm:ss" (UTC) as sent, daily bars

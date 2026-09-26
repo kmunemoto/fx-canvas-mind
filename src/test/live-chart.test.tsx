@@ -154,7 +154,7 @@ describe("#113 the live chart card", () => {
     return { ...r, pair, interval, nextClose: new Date(Date.now() + 60_000).toISOString(), ...over };
   };
 
-  it("shows the five pairs with their prices, the chart and both rules, and switches pair and timeframe", async () => {
+  it("shows the five pairs (#127: and gold) with their prices, the chart and both rules, and switches pair and timeframe", async () => {
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
     const loadTicks = vi.fn(async () => ({
       "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: new Date().toISOString(), open: true },
@@ -163,7 +163,7 @@ describe("#113 the live chart card", () => {
     render(<LiveChart defaultInterval="4h" loadBars={loadBars} loadTicks={loadTicks} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
-    expect(screen.getAllByRole("tab").filter((b) => b.getAttribute("data-testid")?.startsWith("live-pair-"))).toHaveLength(5);
+    expect(screen.getAllByRole("tab").filter((b) => b.getAttribute("data-testid")?.startsWith("live-pair-"))).toHaveLength(6);
     await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 150.120 / 買値 150.123 / スプレッド 0.3pips"));
     expect(screen.getByTestId("live-pair-USD/JPY").textContent).toBe("USD/JPY150.121");
     expect(screen.getByTestId("live-signals").textContent).toContain("RSI＋SAR");
