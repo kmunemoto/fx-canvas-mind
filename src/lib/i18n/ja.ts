@@ -232,6 +232,15 @@ export const ja = {
         boxes ? "箱=サインの建玉（緑=エントリー〜利確、赤=エントリー〜損切り）を決着した足まで。破線=エントリーから決着したところ（判定中は今の価格）まで、×=決着（TP=利確・SL=損切り・期限=48本で決着せず）。縦線=サインの足" : "",
         cloud ? "帯=パラボリックSAR から価格と反対側へ ATR×1 の幅（緑=価格の下・赤=価格の上）" : "",
       ].filter((x) => x !== "").join("。"),
+    // #116: zoom, pan and full screen
+    zoomIn: "拡大（表示する足を減らす）",
+    zoomOut: "縮小（表示する足を増やす）",
+    zoomReset: "全体を表示",
+    fullscreen: "全画面で表示",
+    exitFullscreen: "全画面を閉じる",
+    fullscreenOn: "チャートを全画面で表示しています",
+    zoomShown: (shown: number, total: number) => `${shown}/${total}本`,
+    zoomHint: "ピンチ・ホイールで拡大縮小、左右にドラッグで過去へ移動、↺ で全体。価格の目盛りは表示中の足に合わせます",
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,

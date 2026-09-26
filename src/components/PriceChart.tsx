@@ -1,7 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime } from "@/lib/candleTime";
+import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 
 interface Level {
   label: string;
@@ -76,6 +79,20 @@ interface Props {
   // (green under price, red over it), or both.
   positions?: boolean;
   sarStyle?: "dots" | "cloud" | "both";
+  // #116: zoom and pan — the ＋/− buttons, a pinch, a drag, the wheel (with
+  // Ctrl, or plain in full screen: on the page it scrolls), a double click
+  // back to every bar — and full screen. The price scale fits the bars on
+  // screen. On unless turned off.
+  interactive?: boolean;
+  // #116: shown above the chart in full screen — the live chart puts its
+  // pair and timeframe tabs here, so they can be changed without leaving it
+  fullscreenBar?: ReactNode;
+  // #116: when this changes (another pair or timeframe) the view goes back
+  // to the newest bars, at the same zoom
+  seriesKey?: string;
+  // #116: said in full screen while there are no bars (the next pair
+  // loading): full screen stays open through it
+  emptyText?: string;
 }
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -158,30 +175,96 @@ const atrOf = (candles: NumericCandle[], n = 14): number[] => {
 const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
-  positions = false, sarStyle = "dots",
+  positions = false, sarStyle = "dots", interactive = true, fullscreenBar, seriesKey, emptyText,
 }: Props) => {
   const t = useT();
   const clipId = useId();
   const [hover, setHover] = useState<number | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [measured, setMeasured] = useState<number | null>(null);
+  // #116: the element measured — the card, or in full screen the area the
+  // chart has — as state, so the observer follows it from one to the other
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null);
+  const [measured, setMeasured] = useState<{ w: number; h: number } | null>(null);
+  const [view, setView] = useState<ChartView | null>(null);
+  const [full, setFull] = useState(false);
+  const [svgEl, setSvgEl] = useState<SVGSVGElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  // the pointers down on the chart, and the gesture they started
+  const pointers = useRef(new Map<number, number>());
+  const gesture = useRef<{ kind: "pan" | "pinch"; view: ChartView | null; x: number; dist: number; at: number; moved: boolean } | null>(null);
 
   useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!boxEl || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver((entries) => {
-      const next = Math.round(entries[0]?.contentRect.width ?? 0);
-      if (next > 0) setMeasured(next);
+      const r = entries[0]?.contentRect;
+      const w = Math.round(r?.width ?? 0);
+      if (w > 0) setMeasured({ w, h: Math.round(r?.height ?? 0) });
     });
-    observer.observe(el);
+    observer.observe(boxEl);
     return () => observer.disconnect();
-  }, []);
+  }, [boxEl]);
 
-  const W = measured && measured > 0 ? measured : FALLBACK_W;
+  // #116: another pair or timeframe starts at its newest bars
+  const lastKey = useRef(seriesKey);
+  useEffect(() => {
+    if (lastKey.current === seriesKey) return;
+    lastKey.current = seriesKey;
+    setView((v) => (v ? { ...v, offset: 0 } : v));
+    setHover(null);
+  }, [seriesKey]);
+
+  // #116: full screen stops the page behind it scrolling, closes on Esc, and
+  // asks the browser for its own full screen where it has one (not on an
+  // iPhone: there the layer is the full screen)
+  useEffect(() => {
+    if (!full) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFull(false);
+    };
+    // the browser's full screen ended (Esc, the back gesture): so does ours
+    let native = false;
+    const onChange = () => {
+      if (document.fullscreenElement) native = true;
+      else if (native) setFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onChange);
+    const el = overlayRef.current;
+    if (el && typeof el.requestFullscreen === "function" && !document.fullscreenElement) {
+      el.requestFullscreen().catch(() => undefined);
+    }
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onChange);
+      if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+        document.exitFullscreen().catch(() => undefined);
+      }
+    };
+  }, [full]);
+
+  // #116: the wheel, listened for directly: React's own wheel listener
+  // cannot stop the page scrolling. What it does is set on each render.
+  const wheel = useRef<(e: WheelEvent) => void>(() => undefined);
+  useEffect(() => {
+    if (!svgEl) return;
+    const onWheel = (e: WheelEvent) => wheel.current(e);
+    svgEl.addEventListener("wheel", onWheel, { passive: false });
+    return () => svgEl.removeEventListener("wheel", onWheel);
+  }, [svgEl]);
+
+  const W = measured && measured.w > 0 ? measured.w : FALLBACK_W;
   const narrow = W < NARROW;
+  const hasRsi = !!rsi && rsi.length === candles.length && rsi.some((v) => v !== null && Number.isFinite(v));
+  // In full screen the RSI strip takes a share of the height, the price the rest
+  const fitted = full && measured !== null && measured.h > 0;
+  const RH = fitted ? Math.min(140, Math.max(56, Math.round(measured.h * 0.18))) : narrow ? 56 : 64;
   // Squarer on a phone, wider on a desktop, so neither wastes the space it
   // has: the ratio is what keeps the candles readable at both ends.
-  const H = Math.round(Math.min(300, Math.max(200, W * (narrow ? 0.72 : 0.45))));
+  const H = fitted
+    ? Math.max(160, measured.h - (hasRsi ? RH + 4 : 0))
+    : Math.round(Math.min(300, Math.max(200, W * (narrow ? 0.72 : 0.45))));
   const axisW = narrow ? NARROW_AXIS_W : AXIS_W;
   const pillW = narrow ? NARROW_PILL_W : PILL_W;
   const PAD_RIGHT = axisW + pillW;
@@ -191,6 +274,9 @@ const PriceChart = ({
   const pillSize = narrow ? 7.5 : 8.5;
 
   const decimals = pair.toUpperCase().includes("JPY") ? 3 : 5;
+  // #116: the bars on screen
+  const n = candles.length;
+  const { from, to } = visibleRange(n, interactive ? view : null);
 
   const levels = useMemo<Level[]>(() => {
     const out: Level[] = [];
@@ -212,11 +298,12 @@ const PriceChart = ({
   const geometry = useMemo(() => {
     if (candles.length === 0) return null;
 
+    // #116: the price scale fits the bars on screen
     let min = Infinity;
     let max = -Infinity;
-    for (const c of candles) {
-      min = Math.min(min, c.low);
-      max = Math.max(max, c.high);
+    for (let i = from; i < to; i++) {
+      min = Math.min(min, candles[i].low);
+      max = Math.max(max, candles[i].high);
     }
     for (const l of levels) {
       min = Math.min(min, l.value);
@@ -224,7 +311,8 @@ const PriceChart = ({
     }
     // #104: the SAR dots are part of the picture, so they are in the range
     if (sar && sar.length === candles.length) {
-      for (const v of sar) {
+      for (let i = from; i < to; i++) {
+        const v = sar[i];
         if (v === null || !Number.isFinite(v)) continue;
         min = Math.min(min, v);
         max = Math.max(max, v);
@@ -240,13 +328,14 @@ const PriceChart = ({
 
     const plotW = W - PAD_LEFT - PAD_RIGHT;
     const plotH = H - PAD_TOP - PAD_BOTTOM;
-    const slot = plotW / candles.length;
-    const bodyW = Math.max(2, Math.min(9, slot * 0.62));
+    const slot = plotW / (to - from);
+    // wider candles when zoomed in, up to a point
+    const bodyW = Math.max(2, Math.min(interactive && view ? 18 : 9, slot * 0.62));
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
-    const x = (i: number) => PAD_LEFT + slot * i + slot / 2;
+    const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
-    return { min, max, y, x, slot, bodyW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length]);
+    return { min, max, y, x, slot, bodyW, plotW };
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -374,12 +463,77 @@ const PriceChart = ({
     });
   }, [lines, candles]);
 
-  if (!geometry || candles.length === 0) return null;
+  // #116: full screen — drawn into <body> (the card's blur would otherwise
+  // pin a fixed layer to the card), with the card keeping its place. One
+  // shape whether or not there are bars, so the layer (and the browser's
+  // full screen on it) lasts while the next pair loads.
+  const fullscreenLayer = (top: ReactNode, body: ReactNode) => (
+    <>
+      <div className="glass rounded-xl border border-border p-3 flex items-center justify-between gap-2" data-testid="chart-fullscreen-placeholder">
+        <span className="text-xs text-muted-foreground">{t.chart.fullscreenOn}</span>
+        <button
+          type="button"
+          onClick={() => setFull(false)}
+          className="px-2 py-0.5 rounded border border-border text-[11px] text-foreground"
+        >
+          {t.chart.exitFullscreen}
+        </button>
+      </div>
+      {createPortal(
+        <div
+          ref={overlayRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={heading ?? t.chart.title}
+          data-testid="chart-fullscreen-overlay"
+          className="fixed inset-0 z-[100] flex flex-col bg-background text-foreground"
+          style={{
+            paddingTop: "max(0.5rem, env(safe-area-inset-top))",
+            paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))",
+            paddingLeft: "max(0.5rem, env(safe-area-inset-left))",
+            paddingRight: "max(0.5rem, env(safe-area-inset-right))",
+          }}
+        >
+          {top}
+          {fullscreenBar && <div className="px-1 pb-2 space-y-1" data-testid="chart-fullscreen-bar">{fullscreenBar}</div>}
+          {/* not on a phone on its side: the chart needs the height */}
+          <p className="px-1 pb-1 text-[9px] text-muted-foreground [@media(max-height:480px)]:hidden" data-testid="chart-zoom-hint">{t.chart.zoomHint}</p>
+          <div ref={setBoxEl} className="flex-1 min-h-0 overflow-hidden">
+            {body}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 
-  const { y, x, slot, bodyW } = geometry;
+  if (!geometry || candles.length === 0) {
+    if (!full || typeof document === "undefined") return null;
+    return fullscreenLayer(
+      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+        <span className="text-xs font-semibold text-foreground">{heading ?? t.chart.title}</span>
+        <button
+          type="button"
+          onClick={() => setFull(false)}
+          aria-label={t.chart.exitFullscreen}
+          title={t.chart.exitFullscreen}
+          data-testid="chart-fullscreen-close"
+          className="ml-1 p-1 rounded border border-border text-foreground hover:bg-muted/40"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>,
+      <p className="px-1 text-xs text-muted-foreground" data-testid="chart-fullscreen-empty">{emptyText ?? ""}</p>,
+    );
+  }
+
+  const { y, x, slot, bodyW, plotW } = geometry;
   const inDomain = (v: number | null): v is number =>
     v !== null && Number.isFinite(v) && v >= geometry.min && v <= geometry.max;
-  const hovered = hover !== null ? candles[hover] : null;
+  // #116: whether bar i is on screen, and the flags that are
+  const onScreen = (i: number) => i >= from && i < to;
+  const hovered = hover !== null && onScreen(hover) ? candles[hover] : null;
+  const shown = flags.filter((f) => onScreen(f.idx));
 
   // #104: where each signal's label goes, and which of them get a TP/SL box.
   // Boxes are handed out newest first, up to LEVEL_BOXES, and a box that
@@ -399,7 +553,7 @@ const PriceChart = ({
   // the plot's edge is in the way — two signals near a high both pushed to
   // the top edge used to print one label over the other
   const flagLayout: Array<{ top: number; left: number; w: number }> = [];
-  for (const f of flags) {
+  for (const f of shown) {
     const c = candles[f.idx];
     const buy = f.side === "BUY";
     const w = f.ga && gaStyle !== "filled" ? gaLabelW : labelW;
@@ -419,8 +573,8 @@ const PriceChart = ({
     // the plot's edge used to cover its own label or a neighbour's
     const placed: Array<{ left: number; top: number; w: number; h: number }> = flagLayout.map((o) => ({ ...o, h: labelH }));
     const gap = 2;
-    for (let n = flags.length - 1; n >= 0 && boxAt.size < LEVEL_BOXES; n--) {
-      const f = flags[n];
+    for (let n = shown.length - 1; n >= 0 && boxAt.size < LEVEL_BOXES; n--) {
+      const f = shown[n];
       const first = f.marks[0];
       if (first.target === null || first.stop === null) continue;
       const label = flagLayout[n];
@@ -445,7 +599,7 @@ const PriceChart = ({
   // it fired on to the bar that settled it — the 48th bar when neither level
   // was reached, the newest bar while it is open — and where it ended: the
   // target, the stop (also when one bar reached both), the close it expired
-  // at, or the price now
+  // at, or the price now. #116: of those reaching onto the screen.
   const lastIdx = candles.length - 1;
   const positionRows = (() => {
     if (!positions) return [];
@@ -453,43 +607,182 @@ const PriceChart = ({
       key: string; side: "BUY" | "SELL"; outcome: ChartSignalMark["outcome"];
       from: number; to: number; entry: number; stop: number; target: number; exit: number;
     }> = [];
-    for (let n = flags.length - 1; n >= 0 && out.length < POSITION_BOXES; n--) {
-      const f = flags[n];
+    for (let k = flags.length - 1; k >= 0 && out.length < POSITION_BOXES; k--) {
+      const f = flags[k];
       const m = f.marks[0];
       if (m.entry === null || m.stop === null || m.target === null) continue;
       const settled = m.outcome === "win" || m.outcome === "loss" || m.outcome === "ambiguous";
-      const to = Math.min(lastIdx, m.outcome === "open"
+      const end = Math.min(lastIdx, m.outcome === "open"
         ? lastIdx
         : settled && m.bars !== null ? f.idx + m.bars : f.idx + SIGNAL_HORIZON_BARS);
-      const exit = m.outcome === "win" ? m.target : settled ? m.stop : candles[to].close;
-      out.push({ key: `${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`, side: f.side, outcome: m.outcome, from: f.idx, to, entry: m.entry, stop: m.stop, target: m.target, exit });
+      if (end < from || f.idx >= to) continue;
+      const exit = m.outcome === "win" ? m.target : settled ? m.stop : candles[end].close;
+      out.push({ key: `${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`, side: f.side, outcome: m.outcome, from: f.idx, to: end, entry: m.entry, stop: m.stop, target: m.target, exit });
     }
     return out.reverse();
   })();
   const exitColor = (o: ChartSignalMark["outcome"]) => (o === "win" ? COLORS.tp : o === "loss" ? COLORS.sl : COLORS.text);
 
-  const gridLines = 4;
+  // #116: a tall chart (full screen) gets a gridline every 70 or so
+  const gridLines = Math.min(10, Math.max(4, Math.round((H - PAD_TOP - PAD_BOTTOM) / 70)));
   const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) =>
     geometry.min + ((geometry.max - geometry.min) * i) / gridLines,
   );
 
+  // A point on the chart, in the drawing's own units, from the screen
+  const svgX = (clientX: number, el: Element) => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 ? ((clientX - rect.left) / rect.width) * W : 0;
+  };
+  // how far across the plot a point is, 0 to 1
+  const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / plotW));
+  const barAt = (px: number) => from + Math.floor((px - PAD_LEFT) / slot);
+
   const handleMove = (evt: React.MouseEvent<SVGSVGElement>) => {
-    const rect = evt.currentTarget.getBoundingClientRect();
-    const px = ((evt.clientX - rect.left) / rect.width) * W;
-    const idx = Math.floor((px - PAD_LEFT) / slot);
-    setHover(idx >= 0 && idx < candles.length ? idx : null);
+    const idx = barAt(svgX(evt.clientX, evt.currentTarget));
+    setHover(onScreen(idx) ? idx : null);
   };
 
-  return (
-    <div ref={boxRef} className="glass rounded-xl border border-border p-3">
-      <div className="flex items-center justify-between gap-2 px-1 pb-2">
-        <span className="text-xs font-semibold text-foreground shrink-0">{heading ?? t.chart.title}</span>
-        <span className="text-[10px] text-muted-foreground font-mono truncate text-right">
-          {hovered
-            ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
-            : subtitle ?? t.chart.recentBars(pair, candles.length)}
+  // #116: one finger (or the mouse) drags the bars sideways, two pinch them.
+  // A tap without a drag shows that bar's prices, as hovering does.
+  const startGesture = () => {
+    const xs = [...pointers.current.values()];
+    if (xs.length >= 2) {
+      const [a, b] = xs;
+      gesture.current = { kind: "pinch", view, x: 0, dist: Math.max(1, Math.abs(a - b)), at: across((a + b) / 2), moved: true };
+    } else if (xs.length === 1) {
+      gesture.current = { kind: "pan", view, x: xs[0], dist: 0, at: 0, moved: false };
+    } else {
+      gesture.current = null;
+    }
+  };
+  const onPointerDown = (evt: React.PointerEvent<SVGSVGElement>) => {
+    if (!interactive || (evt.pointerType === "mouse" && evt.button !== 0)) return;
+    evt.currentTarget.setPointerCapture?.(evt.pointerId);
+    pointers.current.set(evt.pointerId, svgX(evt.clientX, evt.currentTarget));
+    startGesture();
+  };
+  const onPointerMove = (evt: React.PointerEvent<SVGSVGElement>) => {
+    if (!pointers.current.has(evt.pointerId)) return;
+    pointers.current.set(evt.pointerId, svgX(evt.clientX, evt.currentTarget));
+    const g = gesture.current;
+    if (!g) return;
+    if (g.kind === "pan") {
+      const dx = (pointers.current.get(evt.pointerId) ?? g.x) - g.x;
+      if (!g.moved && Math.abs(dx) < 4) return;
+      g.moved = true;
+      if (g.view) setView(panView(n, g.view, dx / slot));
+    } else {
+      const [a, b] = [...pointers.current.values()];
+      if (b === undefined) return;
+      setView(zoomView(n, g.view, Math.max(1, Math.abs(a - b)) / g.dist, g.at));
+    }
+  };
+  const onPointerEnd = (evt: React.PointerEvent<SVGSVGElement>) => {
+    if (!pointers.current.has(evt.pointerId)) return;
+    const g = gesture.current;
+    const px = pointers.current.get(evt.pointerId) ?? 0;
+    pointers.current.delete(evt.pointerId);
+    if (g?.kind === "pan" && !g.moved && evt.type === "pointerup" && evt.pointerType !== "mouse") {
+      const idx = barAt(px);
+      setHover(onScreen(idx) ? idx : null);
+    }
+    // the finger left on the glass after a pinch drags from where it is
+    startGesture();
+  };
+
+  // #116: the wheel zooms about the pointer — in full screen, or with Ctrl
+  // (a trackpad's pinch) on the page, where a plain wheel scrolls the page
+  wheel.current = (e: WheelEvent) => {
+    if (!interactive || !(full || e.ctrlKey) || !svgEl || e.deltaY === 0) return;
+    e.preventDefault();
+    const at = across(svgX(e.clientX, svgEl));
+    setView((v) => zoomView(n, v, e.deltaY < 0 ? WHEEL_STEP : 1 / WHEEL_STEP, at));
+  };
+
+  const count = to - from;
+  const zoomed = interactive && view !== null;
+  const toolbar = interactive && (
+    <div className="flex items-center gap-0.5 shrink-0" data-testid="chart-toolbar">
+      {zoomed && (
+        <span className="mr-1 text-[10px] text-muted-foreground font-mono" data-testid="chart-zoom-count">
+          {t.chart.zoomShown(count, n)}
         </span>
-      </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setView((v) => zoomView(n, v, ZOOM_STEP, 1))}
+        disabled={count <= Math.min(MIN_VISIBLE_BARS, n)}
+        aria-label={t.chart.zoomIn}
+        title={t.chart.zoomIn}
+        data-testid="chart-zoom-in"
+        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 disabled:opacity-30"
+      >
+        <ZoomIn className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={() => setView((v) => zoomView(n, v, 1 / ZOOM_STEP, 1))}
+        disabled={!zoomed}
+        aria-label={t.chart.zoomOut}
+        title={t.chart.zoomOut}
+        data-testid="chart-zoom-out"
+        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 disabled:opacity-30"
+      >
+        <ZoomOut className="h-4 w-4" />
+      </button>
+      {zoomed && (
+        <button
+          type="button"
+          onClick={() => setView(null)}
+          aria-label={t.chart.zoomReset}
+          title={t.chart.zoomReset}
+          data-testid="chart-zoom-reset"
+          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+      )}
+      {full ? (
+        <button
+          type="button"
+          onClick={() => setFull(false)}
+          aria-label={t.chart.exitFullscreen}
+          title={t.chart.exitFullscreen}
+          data-testid="chart-fullscreen-close"
+          className="ml-1 p-1 rounded border border-border text-foreground hover:bg-muted/40"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setFull(true)}
+          aria-label={t.chart.fullscreen}
+          title={t.chart.fullscreen}
+          data-testid="chart-fullscreen"
+          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40"
+        >
+          <Maximize2 className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+
+  const header = (
+    <div className="flex items-center justify-between gap-2 px-1 pb-2">
+      <span className="text-xs font-semibold text-foreground shrink-0">{heading ?? t.chart.title}</span>
+      <span className="text-[10px] text-muted-foreground font-mono truncate text-right min-w-0 flex-1">
+        {hovered
+          ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
+          : subtitle ?? t.chart.recentBars(pair, candles.length)}
+      </span>
+      {toolbar}
+    </div>
+  );
+
+  const legends = (
+    <>
       {/* Said once, under the chart, so the two registers can be told apart
           without hovering anything. Only shown when there is something drawn
           in them. */}
@@ -517,13 +810,28 @@ const PriceChart = ({
           {t.chart.gainzLegend}
         </p>
       )}
+    </>
+  );
+
+  const charts = (
+    <>
       <svg
+        ref={setSvgEl}
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full h-auto"
+        className="w-full h-auto select-none"
         role="img"
         aria-label={t.chart.ariaLabel(pair)}
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+        onDoubleClick={interactive ? () => setView(null) : undefined}
+        // a drag sideways moves the bars, up and down still scrolls the
+        // page; in full screen every gesture is the chart's
+        style={interactive ? { touchAction: full ? "none" : "pan-y", cursor: zoomed ? "grab" : undefined } : undefined}
+        data-testid="chart-price"
       >
         <defs>
           <clipPath id={clipId}>
@@ -600,7 +908,7 @@ const PriceChart = ({
             </g>
           );
         })}
-        {positions && flags.map((f) => (
+        {positions && shown.map((f) => (
           <line
             key={`sig-${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`}
             data-testid="chart-signal-line"
@@ -613,7 +921,7 @@ const PriceChart = ({
         ))}
 
         {/* crosshair */}
-        {hover !== null && (
+        {hover !== null && hovered && (
           <line
             x1={x(hover)} x2={x(hover)}
             y1={PAD_TOP} y2={H - PAD_BOTTOM}
@@ -621,8 +929,10 @@ const PriceChart = ({
           />
         )}
 
-        {/* candles */}
+        {/* candles — #116: those on screen */}
+        <g data-testid="chart-candles">
         {candles.map((c, i) => {
+          if (!onScreen(i)) return null;
           const up = c.close >= c.open;
           const color = up ? COLORS.up : COLORS.down;
           const bodyTop = y(Math.max(c.open, c.close));
@@ -638,6 +948,7 @@ const PriceChart = ({
             </g>
           );
         })}
+        </g>
 
         {/* #115: from the entry to where each position ended (the price
             now while it is open), and an × there: TP, SL, or neither */}
@@ -688,7 +999,7 @@ const PriceChart = ({
         {sar && sar.length === candles.length && sarStyle !== "cloud" && (
           <g data-testid="chart-sar" clipPath={`url(#${clipId})`}>
             {sar.map((v, i) =>
-              v !== null && Number.isFinite(v)
+              v !== null && Number.isFinite(v) && onScreen(i)
                 ? (
                   <circle
                     key={`sar-${i}`}
@@ -710,7 +1021,7 @@ const PriceChart = ({
             newest few also carry a box with the TP and SL the signal was
             settled against, and the short dotted segments are those same two
             levels, reaching the bar that settled it. */}
-        {flags.map((f, n) => {
+        {shown.map((f, n) => {
           const c = candles[f.idx];
           const buy = f.side === "BUY";
           const color = buy ? COLORS.up : COLORS.down;
@@ -798,6 +1109,7 @@ const PriceChart = ({
 
         {/* event markers: vertical rule + label, labels alternate rows */}
         {markerCols.map((m) => {
+          if (!onScreen(m.idx)) return null;
           const color = MARKER_COLORS[m.kind];
           const mx = x(m.idx);
           const labelY = PAD_TOP + 9 + (m.row % 2) * 11;
@@ -881,9 +1193,9 @@ const PriceChart = ({
         {/* time axis (JST): first / middle / last labels only. The outer two
             are anchored to the plot edges rather than centred on their
             candle, which would hang half the label off the canvas. */}
-        {[0, Math.floor(candles.length / 2), candles.length - 1].map((i, n) => {
-          const anchor = n === 0 ? "start" : n === 2 ? "end" : "middle";
-          const tx = n === 0 ? PAD_LEFT : n === 2 ? W - PAD_RIGHT : x(i);
+        {[from, from + Math.floor(count / 2), to - 1].map((i, k) => {
+          const anchor = k === 0 ? "start" : k === 2 ? "end" : "middle";
+          const tx = k === 0 ? PAD_LEFT : k === 2 ? W - PAD_RIGHT : x(i);
           return (
             <text
               key={i}
@@ -897,22 +1209,23 @@ const PriceChart = ({
       </svg>
       {/* #104: RSI(14) under the price, on the same x scale so a bar here is
           the bar above it. The 30 and 70 lines are the rule's levels. */}
-      {rsi && rsi.length === candles.length && rsi.some((v) => v !== null && Number.isFinite(v)) && (() => {
-        const RH = narrow ? 56 : 64;
+      {hasRsi && rsi && (() => {
         const top = 8;
         const bottom = RH - 6;
         const ry = (v: number) => top + ((100 - v) / 100) * (bottom - top);
         let path = "";
         let pen = false;
-        rsi.forEach((v, i) => {
+        // #116: the bars on screen
+        for (let i = from; i < to; i++) {
+          const v = rsi[i];
           if (v === null || !Number.isFinite(v)) {
             pen = false;
-            return;
+            continue;
           }
           path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${ry(v).toFixed(1)} `;
           pen = true;
-        });
-        const last = [...rsi].reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
+        }
+        const last = rsi.slice(from, to).reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
         return (
           <svg
             viewBox={`0 0 ${W} ${RH}`}
@@ -936,16 +1249,26 @@ const PriceChart = ({
                 <text x={AXIS_X} y={ry(lv) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{lv}</text>
               </g>
             ))}
-            {hover !== null && (
+            {hover !== null && hovered && (
               <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
             )}
             <path d={path} fill="none" stroke={COLORS.entry} strokeWidth="1.2" />
             <text x={PAD_LEFT + 2} y={top + 2} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">
-              {`${t.chart.rsiLabel} ${hover !== null && rsi[hover] !== null ? (rsi[hover] as number).toFixed(1) : last === null ? "—" : last.toFixed(1)}`}
+              {`${t.chart.rsiLabel} ${hover !== null && hovered && rsi[hover] !== null ? (rsi[hover] as number).toFixed(1) : last === null ? "—" : last.toFixed(1)}`}
             </text>
           </svg>
         );
       })()}
+    </>
+  );
+
+  if (full && typeof document !== "undefined") return fullscreenLayer(header, charts);
+
+  return (
+    <div ref={setBoxEl} className="glass rounded-xl border border-border p-3">
+      {header}
+      {legends}
+      {charts}
     </div>
   );
 };

@@ -178,17 +178,16 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
     ? `${Math.floor(remain / 3600)}:${String(Math.floor((remain % 3600) / 60)).padStart(2, "0")}:${String(remain % 60).padStart(2, "0")}`
     : `${Math.floor(remain / 60)}:${String(remain % 60).padStart(2, "0")}`;
 
-  return (
-    <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid="live-chart">
-      <div className="flex items-center gap-2">
-        <Radio className="h-4 w-4 text-primary" />
-        <h3 className="text-sm font-semibold text-foreground">{l.title}</h3>
-        <span className="ml-auto text-[10px] text-muted-foreground font-mono" data-testid="live-updated">
-          {tickError === "maintenance" ? l.maintenanceShort : tickAt !== null ? l.updated(jstClock(tickAt)) : l.connecting}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
+  // #116: the tabs, the price and a new signal's notice — in the card, and
+  // over the chart in full screen, so the pair and timeframe can be changed
+  // without leaving it
+  // in full screen the three rows are one line that scrolls sideways, so
+  // the chart keeps the height
+  const tabs = (compact: boolean) => {
+    const row = compact ? "flex flex-nowrap items-center gap-1 shrink-0" : "flex flex-wrap items-center gap-1";
+    return (
+    <>
+      <div className={row} role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
         {LIVE_PAIRS.map((p) => {
           const tk = ticks[p];
           return (
@@ -209,7 +208,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
           );
         })}
       </div>
-      <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
+      <div className={row} role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
         {LIVE_INTERVALS.map((iv) => (
           <button
             key={iv}
@@ -227,7 +226,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label={l.viewLabel} data-testid="live-views">
+      <div className={row} role="tablist" aria-label={l.viewLabel} data-testid="live-views">
         {VIEWS.map((v) => (
           <button
             key={v}
@@ -244,18 +243,35 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
           </button>
         ))}
       </div>
+    </>
+    );
+  };
+  const priceLine = tick ? (
+    <p className="text-xs font-mono" data-testid="live-price">
+      {l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
+      {!tick.open && <span className="ml-2 text-warning" data-testid="live-closed">{l.closed}</span>}
+    </p>
+  ) : null;
+  const freshLine = fresh && (
+    <p className="text-xs font-semibold text-primary" data-testid="live-fresh">{l.fresh(fresh)}</p>
+  );
+
+  return (
+    <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid="live-chart">
+      <div className="flex items-center gap-2">
+        <Radio className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold text-foreground">{l.title}</h3>
+        <span className="ml-auto text-[10px] text-muted-foreground font-mono" data-testid="live-updated">
+          {tickError === "maintenance" ? l.maintenanceShort : tickAt !== null ? l.updated(jstClock(tickAt)) : l.connecting}
+        </span>
+      </div>
+
+      {tabs(false)}
       {view === "gainz" && <p className="text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>}
 
-      {tick ? (
-        <p className="text-xs font-mono" data-testid="live-price">
-          {l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
-          {!tick.open && <span className="ml-2 text-warning" data-testid="live-closed">{l.closed}</span>}
-        </p>
-      ) : null}
+      {priceLine}
 
-      {fresh && (
-        <p className="text-xs font-semibold text-primary" data-testid="live-fresh">{l.fresh(fresh)}</p>
-      )}
+      {freshLine}
 
       {fallback && read && (
         <p className="text-[11px] text-warning" data-testid="live-fallback">
@@ -274,26 +290,38 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         )
       ) : !read ? (
         <p className="text-xs text-muted-foreground" data-testid="live-loading">{l.loading}</p>
-      ) : (
+      ) : null}
+      {/* #116: always here, bars or not, so a chart open in full screen
+          stays open while the next pair or timeframe loads */}
+      <PriceChart
+        candles={read ? candles : []}
+        pair={pair}
+        marks={marks}
+        // the GA view is the clean chart the reference draws: candles
+        // and the rule's labels, no RSI strip or SAR dots
+        rsi={view === "gainz" ? undefined : read?.rsi}
+        sar={read?.sar}
+        sarBelow={read?.sarBelow}
+        // #115: the scalping indicator's drawing — each signal's
+        // position box with an × where it settled, and the SAR as a band
+        // (in the GA view, the band only: the rule does not read it)
+        positions
+        sarStyle={view === "gainz" ? "cloud" : "both"}
+        gaStyle={view === "gainz" ? "filled" : "outline"}
+        signalLegend={view === "gainz" ? l.gaLegend : l.rsiSarLegend}
+        heading={`${pair} · ${intervals[interval] ?? interval}`}
+        seriesKey={`${pair}|${interval}`}
+        emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
+        fullscreenBar={
+          <>
+            <div className="flex items-center gap-2 overflow-x-auto pb-0.5">{tabs(true)}</div>
+            {priceLine}
+            {freshLine}
+          </>
+        }
+      />
+      {read && (
         <>
-          <PriceChart
-            candles={candles}
-            pair={pair}
-            marks={marks}
-            // the GA view is the clean chart the reference draws: candles
-            // and the rule's labels, no RSI strip or SAR dots
-            rsi={view === "gainz" ? undefined : read.rsi}
-            sar={read.sar}
-            sarBelow={read.sarBelow}
-            // #115: the scalping indicator's drawing — each signal's
-            // position box with an × where it settled, and the SAR as a band
-            // (in the GA view, the band only: the rule does not read it)
-            positions
-            sarStyle={view === "gainz" ? "cloud" : "both"}
-            gaStyle={view === "gainz" ? "filled" : "outline"}
-            signalLegend={view === "gainz" ? l.gaLegend : l.rsiSarLegend}
-            heading={`${pair} · ${intervals[interval] ?? interval}`}
-          />
           {latest && (
             <div className="rounded-lg border border-border p-2 space-y-0.5" data-testid="live-latest">
               <p className="text-[10px] text-muted-foreground">{l.latestTitle(latest.rule === "gainz" ? l.ruleGa : l.ruleRsiSar)}</p>
