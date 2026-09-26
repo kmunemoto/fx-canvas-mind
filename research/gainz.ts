@@ -55,6 +55,15 @@
 // position at 1x the stop and half at 2x with one stop (two brackets with
 // the same stop: the mean of r1w and r2w). Its early exit on an opposite
 // signal is not modelled (48 bars, as every exit here).
+//
+// #125 adds Zone Shift [ChartPrime] as the live chart draws it (src/lib/
+// zoneShift.ts, imported as it is, the published default Length 100): an
+// entry where its trend turns on a closed bar (zs_shift — the candles change
+// colour), and one at each retest diamond (zs_retest), each in the trend's
+// direction. The settings are the published defaults, set before any data
+// was read: not ranked, both periods reported, with the exits SPECTRA was
+// read with (r2w and split). Read over each pair's whole history, so the
+// trend state is settled long before WARMUP.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
@@ -62,6 +71,7 @@ import { HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, mid, subStarts, type LabelS
 import { GAINZ, GAINZ_APP, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, type RevRule } from "./reversal.ts";
 import { fetchPair } from "./gmo.ts";
 import { kalmanSupertrend, type KalmanStRead } from "../src/lib/kalmanSupertrend.ts";
+import { zoneShift } from "../src/lib/zoneShift.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS).split(",").map((s) => s.trim()).filter(Boolean);
@@ -120,12 +130,45 @@ const SPECTRA_RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) 
   },
 ];
 
+// #125: Zone Shift's turns and retests, once per pair and timeframe
+const zsCache = new WeakMap<RevCtx, { shift: Map<number, Side>; retest: Map<number, Side> }>();
+const zsOf = (x: RevCtx) => {
+  let z = zsCache.get(x);
+  if (!z) {
+    const read = zoneShift(x.c);
+    const shift = new Map<number, Side>();
+    for (let i = 1; i < read.up.length; i++) {
+      if (read.up[i] !== read.up[i - 1]) shift.set(i, read.up[i] ? "BUY" : "SELL");
+    }
+    z = { shift, retest: new Map(read.retests.map((r) => [r.i, r.up ? "BUY" : "SELL"] as [number, Side])) };
+    zsCache.set(x, z);
+  }
+  return z;
+};
+const sideAt = (m: Map<number, Side>, i: number): 0 | 1 | -1 => {
+  const s = m.get(i);
+  return s === undefined ? 0 : s === "BUY" ? 1 : -1;
+};
+const ZS_RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
+  {
+    id: "zs_shift",
+    ja: "Zone Shift（アプリのチャートと同じ、Length 100）: 確定足で安値が上の線を上抜け→買い、高値が下の線を下抜け→売り（足の色が変わるところ）",
+    at: (x, i) => sideAt(zsOf(x).shift, i),
+  },
+  {
+    id: "zs_retest",
+    ja: "Zone Shift の再テスト◆: トレンド開始の水準を終値かひげがトレンドの向きに抜け直した足（前の◆から6本以上）",
+    at: (x, i) => sideAt(zsOf(x).retest, i),
+  },
+];
+
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
   GAINZ_APP,
   { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
   ...SPECTRA_RULES,
+  ...ZS_RULES,
 ];
 const BLIND = "__blind__";
 
@@ -431,32 +474,38 @@ const main = async () => {
   log(`## the same rule with the app's RSI + SAR exit (stop 0.8 ATR, target 1.5x), second period`);
   for (const tf of TFS) log(line(`${GAINZ_APP.id} ${tf} app`, S(GAINZ_APP.id, "app", "val", `tf:${tf}`)));
 
-  // 5. #119: the SPECTRA-style line the chart draws, and its turns unfiltered
-  log(`\n# #119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts) — settings fixed before any data, not ranked, both periods`);
-  for (const rule of SPECTRA_RULES) {
-    log(`## ${rule.id}: ${rule.ja}`);
-    for (const ex of [PRIMARY_EXIT, SPLIT_EXIT]) {
-      for (const period of ["disc", "val"] as Period[]) {
-        const label = `${period === "disc" ? "1st" : "2nd"} ${ex}`;
-        log(line(`blind all ${label}`, S(BLIND, ex, period, "all")));
-        log(line(`${rule.id} all ${label}`, S(rule.id, ex, period, "all")));
-        for (const tf of TFS) log(line(`${rule.id} ${tf} ${label}`, S(rule.id, ex, period, `tf:${tf}`)));
-        for (const tf of TFS) {
-          for (const side of SIDES) log(line(`${rule.id} ${tf} ${side} ${label}`, S(rule.id, ex, period, `tfside:${tf}:${side}`)));
+  // 5. #119: the SPECTRA-style line the chart draws, and its turns
+  // unfiltered; 6. #125: Zone Shift's turns and retests — each fixed before
+  // any data, not ranked, both periods
+  const fixedRules = (title: string, rules: ReadonlyArray<{ id: string; ja: string }>) => {
+    log(`\n# ${title} — settings fixed before any data, not ranked, both periods`);
+    for (const rule of rules) {
+      log(`## ${rule.id}: ${rule.ja}`);
+      for (const ex of [PRIMARY_EXIT, SPLIT_EXIT]) {
+        for (const period of ["disc", "val"] as Period[]) {
+          const label = `${period === "disc" ? "1st" : "2nd"} ${ex}`;
+          log(line(`blind all ${label}`, S(BLIND, ex, period, "all")));
+          log(line(`${rule.id} all ${label}`, S(rule.id, ex, period, "all")));
+          for (const tf of TFS) log(line(`${rule.id} ${tf} ${label}`, S(rule.id, ex, period, `tf:${tf}`)));
+          for (const tf of TFS) {
+            for (const side of SIDES) log(line(`${rule.id} ${tf} ${side} ${label}`, S(rule.id, ex, period, `tfside:${tf}:${side}`)));
+          }
+          let up = 0, total = 0;
+          const per: string[] = [];
+          for (const pair of Object.keys(barsByPair)) {
+            const st = S(rule.id, ex, period, `pair:${pair}`);
+            if (!st) continue;
+            total++;
+            if (st.e > 0) up++;
+            per.push(`${pair} ${rr(st.e, 2)} (n=${st.n})`);
+          }
+          log(`   ${label}: pairs with positive expectancy ${up}/${total}  ${per.join(" | ")}`);
         }
-        let up = 0, total = 0;
-        const per: string[] = [];
-        for (const pair of Object.keys(barsByPair)) {
-          const st = S(rule.id, ex, period, `pair:${pair}`);
-          if (!st) continue;
-          total++;
-          if (st.e > 0) up++;
-          per.push(`${pair} ${rr(st.e, 2)} (n=${st.n})`);
-        }
-        log(`   ${label}: pairs with positive expectancy ${up}/${total}  ${per.join(" | ")}`);
       }
     }
-  }
+  };
+  fixedRules("#119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts)", SPECTRA_RULES);
+  fixedRules("#125 Zone Shift [ChartPrime] (src/lib/zoneShift.ts)", ZS_RULES);
 
   const dump: Record<string, unknown> = {};
   for (const rule of [...RULES.map((r) => r.id), BLIND]) {
