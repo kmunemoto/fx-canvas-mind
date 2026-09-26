@@ -32,12 +32,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # yt-dlp solves YouTube's JavaScript challenges with Deno
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Tools
         run: |
           set -eu
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-jpn > /dev/null
-          pip install -q yt-dlp faster-whisper
+          pip install -q "yt-dlp[default]" faster-whisper youtube-transcript-api
       - name: Fetch the video and its caption
         env:
           # #129: the owner's reel on Dow theory
@@ -46,9 +50,33 @@ jobs:
           set -u
           mkdir -p out
           # captions first (a long YouTube interview has them); then the video
-          yt-dlp --no-progress --skip-download --write-subs --write-auto-subs --sub-langs "ja,ja-orig,en" --sub-format vtt \
-            -o "out/subs.%(ext)s" "$URL" || echo "no captions"
-          yt-dlp --no-progress -f "b[height<=480]/b" -o "out/video.%(ext)s" --write-info-json "$URL" || echo "yt-dlp failed"
+          # YouTube asks datacenter addresses to sign in on its web client;
+          # its other clients are tried in turn
+          for client in default tv_simply web_safari mweb android_vr; do
+            yt-dlp --no-progress --extractor-args "youtube:player_client=${client}" --skip-download --write-subs --write-auto-subs \
+              --sub-langs "ja,ja-orig,en" --sub-format vtt -o "out/subs.%(ext)s" "$URL" && ls out/subs*.vtt >/dev/null 2>&1 && break
+            echo "no captions (${client})"
+          done
+          for client in default tv_simply web_safari mweb android_vr; do
+            yt-dlp --no-progress --extractor-args "youtube:player_client=${client}" -f "b[height<=480]/b" \
+              -o "out/video.%(ext)s" --write-info-json "$URL" && break
+            echo "yt-dlp failed (${client})"
+          done
+          # the transcript panel's text, another way in
+          python3 - "$URL" <<'PY3' || true
+          import re, sys
+          m = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", sys.argv[1])
+          if m:
+              try:
+                  from youtube_transcript_api import YouTubeTranscriptApi
+                  t = YouTubeTranscriptApi().fetch(m.group(1), languages=["ja", "en"])
+                  print("=== TRANSCRIPT API ===")
+                  for s in t:
+                      print(f"[{s.start:7.1f}] {s.text}")
+                  print("=== END TRANSCRIPT API ===")
+              except Exception as e:
+                  print("transcript api:", type(e).__name__, str(e)[:300])
+          PY3
           ls -la out
           for f in out/subs*.vtt; do
             [ -f "$f" ] || continue
