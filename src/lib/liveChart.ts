@@ -176,3 +176,29 @@ export const fetchLiveBars = async (pair: string, interval: string): Promise<Liv
 };
 
 export const fetchTicks = async (): Promise<Record<string, Tick>> => normalizeTicks((await call({ action: "ticker" })).ticks);
+
+// #124: the closed bars before the chart's own, for Zone Shift's 200-bar
+// average — all or nothing, like the bars (a gap would move every average)
+export const normalizeHistory = (value: unknown): NumericCandle[] | null => {
+  const r = rec(value);
+  if (!r || !Array.isArray(r.candles)) return null;
+  const candles = r.candles.map(candle);
+  if (candles.some((c) => c === null) || candles.length === 0) return null;
+  return candles as NumericCandle[];
+};
+
+export const fetchLiveHistory = async (pair: string, interval: string): Promise<NumericCandle[]> => {
+  const got = normalizeHistory((await call({ action: "history", pair, interval })).history);
+  if (!got) throw new LiveChartError("bad_response");
+  return got;
+};
+
+// The history joined to the chart's candles: those older than the chart's
+// first, or null when the history ends before the chart begins (it was
+// read too long ago, and a gap would move every average)
+export const historyBefore = (history: ReadonlyArray<NumericCandle> | null, candles: ReadonlyArray<NumericCandle>): NumericCandle[] | null => {
+  if (!history || history.length === 0 || candles.length === 0) return null;
+  const first = candles[0].datetime;
+  if (history[history.length - 1].datetime < first) return null;
+  return history.filter((h) => h.datetime < first);
+};

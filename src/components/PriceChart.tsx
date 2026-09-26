@@ -9,6 +9,7 @@ import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPre
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
+import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 
 interface Level {
@@ -116,6 +117,10 @@ interface Props {
   // #116: said in full screen while there are no bars (the next pair
   // loading): full screen stays open through it
   emptyText?: string;
+  // #124: the closed candles before `candles`, for Zone Shift's 200-bar
+  // average (the live chart reads them while it is on). Given, Zone Shift is
+  // listed; without it, only on a chart with 200 candles of its own.
+  zoneShiftHistory?: { bars: ReadonlyArray<{ open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
 }
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -123,6 +128,8 @@ interface Props {
 // box that would land on one already drawn. The rest keep the label and say
 // their levels on hover. More boxes than this on a phone is a wall.
 const LEVEL_BOXES = 3;
+// #124: no history (one array, so the memo that reads it holds)
+const NO_BARS: ReadonlyArray<{ open: number; high: number; low: number; close: number }> = [];
 
 // How far past the flagged bar the stop and target segments reach: to the
 // bar that settled the signal, or a few bars when nothing has yet.
@@ -173,6 +180,11 @@ const COLORS = {
   // barely shows)
   poc: "#FFEB3B",
   pocLight: "#F2A900",
+  // #124: Zone Shift's own colours (Pine's color.lime and color.blue), and
+  // its lines in the chart's foreground colour (chart.fg_color)
+  zsUp: "#00E676",
+  zsDown: "#2962FF",
+  zsLine: "hsl(var(--foreground))",
   // #117: TradingView's own colours for the stochastic's two lines and band
   stochK: "#2962FF",
   stochD: "#FF6D00",
@@ -213,7 +225,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, signalName,
+  formingLast = false, signalName, zoneShiftHistory,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -327,6 +339,17 @@ const PriceChart = ({
     [ov.fvgProfile, candles, formingLast],
   );
   const vp = useMemo(() => (ov.fvgProfile ? weightedVolumeProfile(candles) : null), [ov.fvgProfile, candles]);
+  // #124: Zone Shift, over the history before the chart's candles and the
+  // candles themselves; `zsOff` is where the chart's first candle is in it.
+  // While the history is not there, nothing is drawn (the candles alone
+  // are too few for its 200-bar average, and every candle would be blue).
+  const zsListed = zoneShiftHistory !== undefined || candles.length >= ZS_DEFAULTS.rangeLength;
+  const zsPast = zoneShiftHistory ? zoneShiftHistory.bars : NO_BARS;
+  const zs = useMemo(() => {
+    if (!ov.zoneShift || !zsListed || candles.length === 0 || zsPast === null) return null;
+    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    return { ...zoneShift(all, formingLast ? all.length - 2 : all.length - 1), off: zsPast.length, total: all.length };
+  }, [ov.zoneShift, zsListed, zsPast, candles, formingLast]);
   // the list open or folded: open in full screen and on a wide screen until
   // folded, folded on a phone's card until opened
   const [listOpen, setListOpen] = useState<boolean | null>(null);
@@ -625,6 +648,7 @@ const PriceChart = ({
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
+    ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1164,6 +1188,11 @@ const PriceChart = ({
           {t.chart.kalmanNote}
         </p>
       )}
+      {ov.zoneShift && zsListed && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
+          {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
+        </p>
+      )}
       {ov.fvgProfile && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgprofile-legend">
           {t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length))}
@@ -1580,12 +1609,50 @@ const PriceChart = ({
           />
         )}
 
-        {/* candles — #116: those on screen */}
+        {/* #124: Zone Shift's band — the top and bottom solid, the midline
+            and the trend initiation level dashed (the original draws them
+            on every other candle), in the chart's foreground colour */}
+        {zs && (
+          <g data-testid="chart-zoneshift" clipPath={`url(#${clipId})`}>
+            {(["top", "bot"] as const).map((k) => {
+              const vals = zs[k];
+              let d = "";
+              let pen = false;
+              for (let i = Math.max(0, from - 1); i < Math.min(candles.length, to + 1); i++) {
+                const v = vals[i + zs.off];
+                if (v === null) {
+                  pen = false;
+                  continue;
+                }
+                d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+                pen = true;
+              }
+              return d ? <path key={k} d={d} fill="none" stroke={COLORS.zsLine} strokeWidth={fs} opacity="0.75" data-testid={`chart-zoneshift-${k}`} /> : null;
+            })}
+            {(["mid", "level"] as const).map((k) => {
+              const vals = zs[k];
+              let d = "";
+              for (let i = Math.max(1, from - 1); i < Math.min(candles.length, to + 1); i++) {
+                const g = i + zs.off;
+                const a = vals[g - 1];
+                const b = vals[g];
+                // a segment is drawn in the colour of the candle it ends on:
+                // every other one (Pine's `bar_index % 2 == 0`)
+                if (a === null || b === null || g % 2 !== 0) continue;
+                d += `M${x(i - 1).toFixed(1)},${y(a).toFixed(1)} L${x(i).toFixed(1)},${y(b).toFixed(1)} `;
+              }
+              return d ? <path key={k} d={d} fill="none" stroke={COLORS.zsLine} strokeWidth={fs} opacity="0.75" data-testid={`chart-zoneshift-${k}`} /> : null;
+            })}
+          </g>
+        )}
+
+        {/* candles — #116: those on screen (#124: in Zone Shift's trend
+            colour while it is on, as the original paints them) */}
         <g data-testid="chart-candles">
         {candles.map((c, i) => {
           if (!onScreen(i)) return null;
           const up = c.close >= c.open;
-          const color = up ? COLORS.up : COLORS.down;
+          const color = zs ? (zs.up[i + zs.off] ? COLORS.zsUp : COLORS.zsDown) : up ? COLORS.up : COLORS.down;
           const bodyTop = y(Math.max(c.open, c.close));
           const bodyH = Math.max(1, Math.abs(y(c.open) - y(c.close)));
           return (
@@ -1669,6 +1736,29 @@ const PriceChart = ({
                     );
                   })}
                 </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #124: Zone Shift's retests — a diamond under the candle in an
+            uptrend, over it in a downtrend, in the trend's colour */}
+        {zs && (
+          <g clipPath={`url(#${clipId})`}>
+            {zs.retests.map((r) => {
+              const i = r.i - zs.off;
+              if (!onScreen(i)) return null;
+              const c = candles[i];
+              const sz = (narrow ? 3.5 : 4) * fs;
+              const cx = x(i);
+              const cy = r.up ? y(c.low) + sz + 3 : y(c.high) - sz - 3;
+              return (
+                <path
+                  key={`zr-${r.i}`}
+                  d={`M${cx},${cy - sz} L${cx + sz},${cy} L${cx},${cy + sz} L${cx - sz},${cy} Z`}
+                  fill={r.up ? COLORS.zsUp : COLORS.zsDown}
+                  data-testid={`chart-zoneshift-retest-${r.up ? "up" : "down"}`}
+                />
               );
             })}
           </g>

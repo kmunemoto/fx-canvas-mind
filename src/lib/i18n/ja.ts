@@ -271,7 +271,18 @@ export const ja = {
       trendLines: "高値線・安値線",
       kalman: (atr: number, factor: number) => `SPECTRA型 ${atr} ${factor}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
+      zoneShift: (length: number) => `Zone Shift ${length}`,
     },
+    // #124
+    zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
+      "Zone Shift（ChartPrime の公開コード〈MPL 2.0〉を移植）: 中央線=EMA(100) と HMA(60) の平均（点線）、上下の線=中央線±直近200本の値幅（高値−安値）の平均。" +
+      "確定足の安値が上の線を上に抜けたら上昇トレンド（足をライム色に）、高値が下の線を下に抜けたら下降トレンド（青に）。トレンドが始まった足の安値（高値）を点線の水平線で表示し、その線を終値かひげがトレンドの向きに抜け直したら◆（再テスト。前の◆から6本以上あいたときだけ）。" +
+      (status === "loading"
+        ? "200本の平均に足りる過去の足を読み込み中です。"
+        : status === "error"
+          ? "過去の足を読めなかったため表示していません（次の足で読み直します）。"
+          : `計算に使った足: ${bars ?? 0}本（画面より前の足を含む）。`) +
+      "表示のみで、サインの判定・メールには使っていません。",
     // #123: the two Flux Charts ports, shown as one indicator
     fvgProfileNote: (bars: number) =>
       `FVG Crossfire ＋ Weighted Volume Profile（どちらも Flux Charts の公開コード〈MPL 2.0〉を移植し、1つにまとめて表示）。` +

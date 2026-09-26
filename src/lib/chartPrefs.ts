@@ -26,6 +26,9 @@ export interface ChartOverlays {
   // ports of their open-source code — one switch for the two (#123: the
   // owner asked for them as one, "ニコイチ")
   fvgProfile: boolean;
+  // #124: ChartPrime's Zone Shift (a port of its open-source code) — it
+  // paints the candles in its trend's colours
+  zoneShift: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -36,6 +39,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   trendLines: true,
   kalman: false,
   fvgProfile: true,
+  zoneShift: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
