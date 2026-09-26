@@ -3,9 +3,9 @@
 // に…高値・安値の更新を追っていけるインジケーター", on 4h, 1h, 15min and 5min,
 // telling "高値を更新してる状態か安値を更新してる状態か", with "1回タッチしたけど
 // もう1回タッチしたら初めて確定する", and the higher timeframes' horizontal
-// lines drawn by machine. His code is not published and the full interview
-// could not be read here, so what the reel does not say is the textbook Dow
-// reading, chosen before any data (and said on the chart):
+// lines drawn by machine. The trader's code is not published and the full
+// interview could not be read here, so what the reel does not say is the
+// textbook Dow reading, chosen before any data (and said on the chart):
 //
 //   * Swings: a high (low) with no higher (lower) high in the DOW_PIVOT bars
 //     either side — known DOW_PIVOT bars later, so nothing repaints. Two of a
@@ -13,7 +13,7 @@
 //   * Up (高値更新中): a close above the last swing high updates the trend, and
 //     the swing low before it becomes 押し安値; down (安値更新中) mirrors it
 //     with 戻り高値.
-//   * The owner's reading of "もう1回…確定" (chosen by him, 2026-09-26): a
+//   * The owner's reading of "もう1回…確定" (the owner's choice, 2026-09-26): a
 //     close through 押し安値 is the FIRST break — the uptrend is over and a
 //     turn is only signalled (転換の兆し). The turn is CONFIRMED on the second:
 //     after that break, a swing low, a swing high under it (the lower high),
