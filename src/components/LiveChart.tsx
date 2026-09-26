@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
+import { useChartPrefs } from "@/lib/chartPrefs";
+import type { NumericCandle } from "@/lib/types";
 import {
   LIVE_INTERVALS,
   LIVE_PAIRS,
@@ -10,7 +12,9 @@ import {
   applyTick,
   LiveChartError,
   fetchLiveBars,
+  fetchLiveHistory,
   fetchTicks,
+  historyBefore,
   type LiveRead,
   type Tick,
 } from "@/lib/liveChart";
@@ -36,6 +40,7 @@ interface Props {
   // Injected by tests; the app uses the real function
   loadBars?: (pair: string, interval: string) => Promise<LiveRead>;
   loadTicks?: () => Promise<Record<string, Tick>>;
+  loadHistory?: (pair: string, interval: string) => Promise<NumericCandle[]>;
 }
 
 // "19:15:07" in Japan time
@@ -47,7 +52,7 @@ const jstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(
 // live-chart function when a bar closes; in between, the price every few
 // seconds moves the bar still forming. Signals are judged on closed bars
 // only — the forming bar never makes or unmakes one.
-const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks }: Props) => {
+const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks, loadHistory = fetchLiveHistory }: Props) => {
   const t = useT();
   const l = t.live;
   const [pair, setPair] = useState<string>(LIVE_PAIRS[0]);
@@ -147,6 +152,34 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
     };
   }, [loadTicks]);
 
+  // #124: the closed bars before the chart's, for Zone Shift's 200-bar
+  // average — read while it is on, again for another pair or timeframe or
+  // when the chart has moved past them, and once more on the next read
+  // after one failed (never in a loop). GMO's only: not joined to Twelve
+  // Data's bars.
+  const zoneShiftOn = useChartPrefs().overlays.zoneShift;
+  const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
+  const historyKey = `${pair}|${interval}`;
+  const gmoRead = read && read.source === "gmo" ? read : null;
+  useEffect(() => {
+    if (!zoneShiftOn || !gmoRead) return;
+    const h = history;
+    const fresh = h && h.key === historyKey && (h.status === "loading" || h.readAt === gmoRead.at || (h.status === "ready" && historyBefore(h.bars, gmoRead.candles) !== null));
+    if (fresh) return;
+    const readAt = gmoRead.at;
+    setHistory({ key: historyKey, readAt, bars: h?.key === historyKey ? h.bars : null, status: "loading" });
+    loadHistory(pair, interval).then(
+      (bars) => {
+        if (current.current.pair !== pair || current.current.interval !== interval) return;
+        setHistory({ key: historyKey, readAt, bars, status: "ready" });
+      },
+      () => {
+        if (current.current.pair !== pair || current.current.interval !== interval) return;
+        setHistory({ key: historyKey, readAt, bars: null, status: "error" });
+      },
+    );
+  }, [zoneShiftOn, gmoRead, history, historyKey, pair, interval, loadHistory]);
+
   // v3: GMO cannot be read, so the bars are Twelve Data's last ones and no
   // price moves them
   const fallback = read?.source === "twelvedata";
@@ -164,6 +197,15 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const candles = read && tick && tick.open && tickMs !== null ? applyTick(read.candles, tick.mid, formingOpen, tickMs, step) : read?.candles ?? [];
   const d = priceDecimals(pair);
   const intervals = t.control.intervals as Record<string, string>;
+  // #124: what Zone Shift is computed over besides the chart's candles
+  // (joined by the chart's first candle only, so the price moving the
+  // forming one does not make it anew)
+  const firstCandle = candles[0] ?? null;
+  const zoneShiftHistory = useMemo(() => {
+    const past = gmoRead && firstCandle && history?.key === historyKey ? historyBefore(history.bars, [firstCandle]) : null;
+    if (past) return { bars: past, status: "ready" as const };
+    return { bars: null, status: history?.key === historyKey && history.status === "error" ? ("error" as const) : ("loading" as const) };
+  }, [gmoRead, firstCandle, history, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
   // #114: the signals of the rule on screen, and the newest of them
   const marks = read ? read.marks.filter((m) => view === "both" || m.rule === view) : [];
@@ -395,6 +437,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         formingLast={formingOpen !== null}
         signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
+        zoneShiftHistory={zoneShiftHistory}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
         fullscreenStatus={
           priceLine || freshLine ? (

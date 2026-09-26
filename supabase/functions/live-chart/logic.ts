@@ -42,6 +42,11 @@ export const LIVE_STEP_MS: Record<string, number> = {
 // Closed bars read (the alerts read the same number) and bars drawn
 export const READ_BARS = 200;
 export const CHART_BARS = 120;
+// #124: closed bars read for the chart's history — the candles before the
+// ones drawn, which Zone Shift's 200-bar average needs before its first
+// value. Asked for only while that indicator is on, and apart from the
+// bars above, so the signals read exactly what they did.
+export const HISTORY_BARS = 600;
 
 export const isLivePair = (v: unknown): v is string => typeof v === "string" && (LIVE_PAIRS as readonly string[]).includes(v);
 export const isLiveInterval = (v: unknown): v is string => typeof v === "string" && (LIVE_INTERVALS as readonly string[]).includes(v);
@@ -50,21 +55,23 @@ const decimalsOf = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5
 const round = (v: number | null | undefined, d: number): number | null =>
   v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d));
 
-// READ_BARS closed bars and the one forming, oldest first
+// READ_BARS closed bars and the one forming, oldest first (#124: or as
+// many as asked for, for the history)
 export const fetchLiveQuotes = async (
   pair: string,
   interval: string,
   nowMs: number,
   deadlineMs: number,
   fetcher: Fetcher,
+  count: number = READ_BARS + 1,
 ): Promise<QuoteCandle[] | null> => {
   const spec = GMO_INTERVALS[interval];
   if (!spec || !isLivePair(pair) || !isLiveInterval(interval)) return null;
   if (spec.key === "day") {
-    const got = await fetchRecentQuotes(pair, interval, READ_BARS + 1, nowMs, deadlineMs, fetcher);
+    const got = await fetchRecentQuotes(pair, interval, count, nowMs, deadlineMs, fetcher);
     return got ? got.bars : null;
   }
-  return fetchYearQuotes(pair, interval, READ_BARS + 1, nowMs, fetcher);
+  return fetchYearQuotes(pair, interval, count, nowMs, fetcher);
 };
 
 // The closed bars (mid) and the one still forming, if the feed has it
@@ -169,6 +176,20 @@ export const readBars = (
 };
 
 export type LiveRead = ReturnType<typeof liveRead>;
+
+// #124: the closed bars (mid, rounded as the chart's), oldest first — the
+// client keeps those older than the chart's own and computes over both
+export const historyRead = (pair: string, interval: string, quotes: QuoteCandle[], nowMs: number) => {
+  const d = decimalsOf(pair);
+  const { closed } = splitBars(quotes, interval, nowMs);
+  return {
+    pair,
+    interval,
+    decimals: d,
+    candles: closed.map((c) => ({ datetime: c.datetime, open: round(c.open, d)!, high: round(c.high, d)!, low: round(c.low, d)!, close: round(c.close, d)! })),
+    at: new Date(nowMs).toISOString(),
+  };
+};
 
 // ---- v3: the fallback while GMO cannot be read ------------------------------------------
 //

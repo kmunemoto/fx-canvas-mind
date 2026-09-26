@@ -229,7 +229,18 @@ export const en: Dict = {
       trendLines: "Swing lines",
       kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
+      zoneShift: (length: number) => `Zone Shift ${length}`,
     },
+    // #124
+    zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
+      "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(100) and HMA(60) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
+      "An uptrend when a closed candle's low crosses above the top line (candles turn lime), a downtrend when its high crosses below the bottom line (blue). The low (high) of the candle the trend began on is drawn as a dotted level; ◆ = the close or wick crossing back over it in the trend's direction (a retest, at least 6 candles after the last ◆). " +
+      (status === "loading"
+        ? "Loading the earlier candles its 200-candle average needs. "
+        : status === "error"
+          ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
+          : `Computed over ${bars ?? 0} candles (including those before the screen). `) +
+      "Shown only: no signal or email uses it.",
     // #123: the two Flux Charts ports, shown as one indicator
     fvgProfileNote: (bars: number) =>
       "FVG Crossfire + Weighted Volume Profile (both ports of Flux Charts' open-source code, MPL 2.0, shown together as one). " +

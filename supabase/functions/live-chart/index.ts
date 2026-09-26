@@ -2,7 +2,9 @@
 //
 //   {action: "bars", pair, interval} — the bars, both rules' signals and
 //     their readings on the newest closed bar;
-//   {action: "ticker"} — every live pair's bid and ask now.
+//   {action: "ticker"} — every live pair's bid and ask now;
+//   {action: "history", pair, interval} — #124: HISTORY_BARS closed bars,
+//     for an indicator that needs more than the chart draws (Zone Shift).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -13,6 +15,8 @@ import {
   LIVE_PAIRS,
   TICKER_URL,
   fetchLiveQuotes,
+  HISTORY_BARS,
+  historyRead,
   isLiveInterval,
   isLivePair,
   isMaintenance,
@@ -27,7 +31,7 @@ import type { Candle } from "../analyze/indicators.ts";
 import { isPossiblyClosed, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v3-2026-09-26T02:00:00Z";
+const FUNCTION_VERSION = "live-chart-v4-2026-09-26T14:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key
@@ -37,6 +41,9 @@ const FALLBACK_FETCHES_PER_MIN = 3;
 // for a couple of seconds
 const BARS_TTL_MS = 20_000;
 const TICKER_TTL_MS = 2_000;
+// #124: the history is of closed bars, which do not change; the client
+// joins it to the chart's newest bars itself
+const HISTORY_TTL_MS = 10 * 60_000;
 const AUTH_TTL_MS = 60_000;
 const FETCH_BUDGET_MS = 20_000;
 
@@ -63,6 +70,7 @@ const gmoFetcher: Fetcher = async (url) => {
 };
 
 const barsCache = new Map<string, { at: number; body: unknown }>();
+const historyCache = new Map<string, { at: number; body: unknown }>();
 let tickerCache: { at: number; body: unknown } | null = null;
 const authCache = new Map<string, number>();
 const fallbackFetches: number[] = [];
@@ -183,6 +191,25 @@ Deno.serve(async (req: Request) => {
       const out = { ok: true, version: FUNCTION_VERSION, reopens, read: liveRead(pair, interval, quotes, nowMs) };
       if (barsCache.size > 100) barsCache.clear();
       barsCache.set(key, { at: nowMs, body: out });
+      return json(out);
+    }
+
+    // #124: the closed bars before the chart's, from GMO only (Twelve
+    // Data's shared key is kept for the chart itself)
+    if (action === "history") {
+      const pair = body?.pair;
+      const interval = body?.interval;
+      if (!isLivePair(pair) || !isLiveInterval(interval)) {
+        return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
+      }
+      const key = `${pair}|${interval}`;
+      const hit = historyCache.get(key);
+      if (hit && nowMs - hit.at <= HISTORY_TTL_MS) return json(hit.body);
+      const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, fetcher, HISTORY_BARS + 1);
+      if (!quotes || quotes.length === 0) return unavailable();
+      const out = { ok: true, version: FUNCTION_VERSION, history: historyRead(pair, interval, quotes, nowMs) };
+      if (historyCache.size > 50) historyCache.clear();
+      historyCache.set(key, { at: nowMs, body: out });
       return json(out);
     }
 
