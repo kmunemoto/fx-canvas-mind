@@ -804,8 +804,9 @@ const Index = () => {
           onSubscribe={() => navigate("/pricing")}
         />
 
-        {/* #113: five pairs, live, with both rules' signals */}
-        {user && <LiveChart defaultInterval={interval} />}
+        {/* #113: five pairs, live, with both rules' signals. #114: opens on
+            the recommended GA-style 1h view, not the analysis's timeframe */}
+        {user && <LiveChart />}
 
         <OpenPositionsStrip
           positions={positions}

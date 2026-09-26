@@ -204,7 +204,38 @@ describe("#113 the live chart card", () => {
     });
     render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} />);
     await waitFor(() => expect(screen.getByTestId("live-error")).toBeTruthy());
-    expect(loadBars).toHaveBeenCalledWith("USD/JPY", "15min");
+    // #114: the recommended timeframe first
+    expect(loadBars).toHaveBeenCalledWith("USD/JPY", "1h");
+  });
+
+  it("#114: opens on the GA-style view — its signals only, as filled BUY/SELL labels, no RSI/SAR — with the latest signal's plan", async () => {
+    const base = readFor("USD/JPY", "1h");
+    const gaMark = { ...base.marks[0], rule: "gainz", side: "SELL" as const, datetime: base.candles[base.candles.length - 3].datetime, barsAgo: 1, entry: 150.1, stop: 150.4, target: 149.5, outcome: "open" as const };
+    const rsMark = { ...gaMark, rule: "rsi_sar", side: "BUY" as const, datetime: base.candles[base.candles.length - 10].datetime, barsAgo: 8, outcome: "win" as const };
+    const r = { ...base, marks: [rsMark, gaMark], latest: { rsiSar: rsMark, gainz: gaMark } };
+    render(<LiveChart loadBars={async () => r} loadTicks={async () => ({})} />);
+    await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
+    expect(screen.getByTestId("live-view-gainz").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("live-recommended").textContent).toContain("GA型・1時間足");
+    const flags = () => [...document.querySelectorAll("[data-rule]")].map((f) => f.getAttribute("data-rule"));
+    expect(flags()).toEqual(["gainz"]);
+    // the label itself (its hover title still says GA)
+    const labels = () => [...document.querySelectorAll("[data-testid='live-chart'] svg[role='img'] text")].map((x) => x.textContent ?? "");
+    expect(labels().some((x) => x.startsWith("SELL"))).toBe(true);
+    expect(labels().some((x) => x.startsWith("GA "))).toBe(false);
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("GA型のサイン");
+    expect(screen.queryByTestId("chart-gainz-legend")).toBeNull();
+    expect(screen.getByTestId("live-latest").textContent).toContain("最新のサイン（GA型）");
+    expect(screen.getByTestId("live-latest-plan").textContent).toBe("エントリー 150.100 / TP 149.500 / SL 150.400");
+    expect(screen.getByTestId("live-latest-outcome").textContent).toBe("結果: 判定中");
+    // both rules, the GA one outlined beside RSI/SAR's
+    fireEvent.click(screen.getByTestId("live-view-both"));
+    expect(flags()).toEqual(["rsi_sar", "gainz"]);
+    expect(labels().some((x) => x.startsWith("GA SELL"))).toBe(true);
+    fireEvent.click(screen.getByTestId("live-view-rsi_sar"));
+    expect(flags()).toEqual(["rsi_sar"]);
+    expect(screen.getByTestId("live-latest").textContent).toContain("最新のサイン（RSI＋SAR）");
+    expect(screen.getByTestId("live-latest-outcome").textContent).toBe("結果: 利確に到達");
   });
 
   it("v3: shows the last bars from the other feed while GMO is down, with no live price and when the market reopens", async () => {

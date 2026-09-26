@@ -248,6 +248,14 @@ export const en: Dict = {
     error: "The chart could not be loaded. It tries again every minute.",
     maintenance: "GMO Coin's price feed is down for maintenance (it happens at weekends), so the chart cannot be shown now. It checks every minute and appears as soon as the feed is back.",
     maintenanceShort: "Feed maintenance",
+    viewLabel: "Signals shown",
+    views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
+    recommended:
+      "The recommended setting is GA style on the 1-hour chart: of its three timeframes, the only one that did a little better than entering at random in both periods (+0.07R, +0.01R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
+    gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open)",
+    latestTitle: (rule: string) => `Latest signal (${rule})`,
+    latestPlan: (entry: string, tp: string, sl: string) => `Entry ${entry}  TP ${tp}  SL ${sl}`,
+    outcome: { win: "Result: reached the target", loss: "Result: reached the stop", ambiguous: "Result: both in one bar (counted as a loss)", expired: "Result: not settled in 48 bars", open: "Result: open" } as Record<string, string>,
     fallback: (maintenance: boolean, fetched: string) =>
       `${maintenance ? "GMO Coin's price feed is down for maintenance" : "GMO Coin's price feed cannot be read"}, so these are the latest bars from another feed (Twelve Data, fetched ${fetched} JST). Prices do not move. It switches back to GMO automatically.`,
     reopens: (at: string) => `The market is due to reopen at ${at} JST.`,

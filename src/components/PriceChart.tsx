@@ -62,6 +62,11 @@ interface Props {
   rsi?: Array<number | null>;
   sar?: Array<number | null>;
   sarBelow?: Array<boolean | null>;
+  // #114: how the GA-style rule's flags are drawn — outlined beside RSI/SAR
+  // (the default), or as the chart's own filled BUY/SELL labels when it is
+  // the only rule on it; and the legend to say instead of RSI/SAR's
+  gaStyle?: "outline" | "filled";
+  signalLegend?: string;
 }
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -120,7 +125,7 @@ const parseLevel = (v: string | undefined): number | null => {
 // trader would mark up the chart (labels carry identity, color is secondary)
 const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
-  overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow,
+  overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -402,10 +407,10 @@ const PriceChart = ({
       )}
       {(flags.length > 0 || trendLines.length > 0 || (sar !== undefined && sar.length === candles.length)) && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-signal-legend">
-          {t.chart.signalLegend}
+          {signalLegend ?? t.chart.signalLegend}
         </p>
       )}
-      {flags.some((f) => f.ga) && (
+      {gaStyle !== "filled" && flags.some((f) => f.ga) && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gainz-legend">
           {t.chart.gainzLegend}
         </p>
@@ -548,8 +553,10 @@ const PriceChart = ({
           const boxLeft = box?.left ?? 0;
           const boxTop = box?.top ?? 0;
           const textSize = narrow ? 7 : 8;
-          // #112: a GA-style flag is outlined, not filled, and says GA
-          const w = f.ga ? gaLabelW : labelW;
+          // #112: a GA-style flag is outlined, not filled, and says GA —
+          // unless it is the chart's only rule (#114)
+          const outlined = f.ga && gaStyle !== "filled";
+          const w = outlined ? gaLabelW : labelW;
           return (
             <g key={`flag-${f.side}-${f.idx}-${f.ga ? "ga" : "base"}`} data-testid={`chart-signal-${f.side}-${f.outcome}`} data-rule={f.ga ? "gainz" : "rsi_sar"}>
               <title>{f.ga ? `GA ${tip}` : tip}</title>
@@ -568,9 +575,9 @@ const PriceChart = ({
                 width={w}
                 height={labelH}
                 rx="2"
-                fill={f.ga ? "hsl(var(--background))" : color}
-                stroke={f.ga ? color : "none"}
-                strokeWidth={f.ga ? 1 : 0}
+                fill={outlined ? "hsl(var(--background))" : color}
+                stroke={outlined ? color : "none"}
+                strokeWidth={outlined ? 1 : 0}
                 opacity={lost ? 0.55 : 0.95}
               />
               <text
@@ -580,9 +587,9 @@ const PriceChart = ({
                 fontWeight="800"
                 fontFamily="monospace"
                 textAnchor="middle"
-                fill={f.ga ? color : "hsl(var(--background))"}
+                fill={outlined ? color : "hsl(var(--background))"}
               >
-                {f.ga ? "GA " : ""}{f.side}{t.chart.outcomeMark[f.outcome]}
+                {outlined ? "GA " : ""}{f.side}{t.chart.outcomeMark[f.outcome]}
               </text>
               {boxed && (
                 <g data-testid="chart-signal-levels">

@@ -15,6 +15,14 @@ import {
   type Tick,
 } from "@/lib/liveChart";
 
+// #114: which rule's signals the chart shows. GA-style on 1h is the
+// recommended setting (docs §8.27): of the GA rule's three measured
+// timeframes, the only one that did (slightly, within noise) better than
+// entering at random in both periods. Not an edge: after the spread it lost.
+export type LiveView = "gainz" | "rsi_sar" | "both";
+const VIEWS: LiveView[] = ["gainz", "rsi_sar", "both"];
+export const RECOMMENDED_INTERVAL = "1h";
+
 const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
 const AFTER_CLOSE_MS = 4_000;
@@ -44,8 +52,9 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const l = t.live;
   const [pair, setPair] = useState<string>(LIVE_PAIRS[0]);
   const [interval, setIntervalTf] = useState<string>(
-    defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : "15min",
+    defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : RECOMMENDED_INTERVAL,
   );
+  const [view, setView] = useState<LiveView>("gainz");
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reopens, setReopens] = useState<string | null>(null);
@@ -156,6 +165,13 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const d = priceDecimals(pair);
   const intervals = t.control.intervals as Record<string, string>;
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
+  // #114: the signals of the rule on screen, and the newest of them
+  const marks = read ? read.marks.filter((m) => view === "both" || m.rule === view) : [];
+  const latest = (() => {
+    if (!read) return null;
+    const own = [read.latest.gainz, read.latest.rsiSar].filter((m): m is NonNullable<typeof m> => m !== null && (view === "both" || m.rule === view));
+    return own.sort((a, b) => (a.datetime < b.datetime ? 1 : -1))[0] ?? null;
+  })();
   const nextCloseMs = read?.nextClose ? Date.parse(read.nextClose) : null;
   const remain = nextCloseMs !== null ? Math.max(0, Math.round((nextCloseMs - now) / 1000)) : null;
   const remainText = remain === null ? "—" : remain >= 3600
@@ -211,6 +227,25 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label={l.viewLabel} data-testid="live-views">
+        {VIEWS.map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={v === view}
+            onClick={() => setView(v)}
+            data-testid={`live-view-${v}`}
+            className={`px-2 py-0.5 rounded border text-[11px] ${
+              v === view ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
+            }`}
+          >
+            {l.views[v]}
+          </button>
+        ))}
+      </div>
+      {view === "gainz" && <p className="text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>}
+
       {tick ? (
         <p className="text-xs font-mono" data-testid="live-price">
           {l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
@@ -244,12 +279,31 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
           <PriceChart
             candles={candles}
             pair={pair}
-            marks={read.marks}
-            rsi={read.rsi}
-            sar={read.sar}
-            sarBelow={read.sarBelow}
+            marks={marks}
+            // the GA view is the clean chart the reference draws: candles
+            // and the rule's labels, no RSI strip or SAR dots
+            rsi={view === "gainz" ? undefined : read.rsi}
+            sar={view === "gainz" ? undefined : read.sar}
+            sarBelow={view === "gainz" ? undefined : read.sarBelow}
+            gaStyle={view === "gainz" ? "filled" : "outline"}
+            signalLegend={view === "gainz" ? l.gaLegend : undefined}
             heading={`${pair} · ${intervals[interval] ?? interval}`}
           />
+          {latest && (
+            <div className="rounded-lg border border-border p-2 space-y-0.5" data-testid="live-latest">
+              <p className="text-[10px] text-muted-foreground">{l.latestTitle(latest.rule === "gainz" ? l.ruleGa : l.ruleRsiSar)}</p>
+              <p className="text-xs">
+                <span className={`font-bold mr-2 ${latest.side === "BUY" ? "text-success" : "text-destructive"}`}>{latest.side}</span>
+                <span className="font-mono text-muted-foreground">{jstDay(parseUtcCandleTime(latest.datetime) + step)}</span>
+              </p>
+              {latest.entry !== null && latest.target !== null && latest.stop !== null && (
+                <p className="text-[11px] font-mono" data-testid="live-latest-plan">
+                  {l.latestPlan(latest.entry.toFixed(d), latest.target.toFixed(d), latest.stop.toFixed(d))}
+                </p>
+              )}
+              <p className="text-[11px] text-muted-foreground" data-testid="live-latest-outcome">{l.outcome[latest.outcome]}</p>
+            </div>
+          )}
           <div className="space-y-0.5 text-xs" data-testid="live-signals">
             <p>
               <span className="text-muted-foreground">{l.ruleRsiSar}: </span>
