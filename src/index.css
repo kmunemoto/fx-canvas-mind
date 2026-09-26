@@ -57,6 +57,36 @@
 }
 
 @layer base {
+  /* #118: a chart on a white background, as TradingView's light theme —
+     the variables the chart draws with, redefined inside it only */
+  .chart-light {
+    --background: 0 0% 100%;
+    --foreground: 225 26% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 225 26% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 225 26% 11%;
+    --primary: 224 100% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 95%;
+    --secondary-foreground: 225 26% 11%;
+    --muted: 220 14% 95%;
+    --muted-foreground: 229 6% 50%;
+    --accent: 220 14% 93%;
+    --accent-foreground: 225 26% 11%;
+    --destructive: 355 88% 58%;
+    --success: 170 90% 32%;
+    --warning: 32 95% 44%;
+    --border: 223 20% 88%;
+    --input: 223 20% 88%;
+    --ring: 224 100% 58%;
+    --glass-bg: 0 0% 100% / 1;
+    --glass-border: 223 20% 86% / 1;
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer base {
   * {
     @apply border-border;
   }

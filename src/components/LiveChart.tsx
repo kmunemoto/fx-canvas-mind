@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Radio } from "lucide-react";
-import PriceChart from "./PriceChart";
+import { Check, Radio } from "lucide-react";
+import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import {
@@ -181,10 +181,8 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   // #116: the tabs, the price and a new signal's notice — in the card, and
   // over the chart in full screen, so the pair and timeframe can be changed
   // without leaving it
-  // in full screen the three rows are one line that scrolls sideways, so
-  // the chart keeps the height
-  const tabs = (compact: boolean) => {
-    const row = compact ? "flex flex-nowrap items-center gap-1 shrink-0" : "flex flex-wrap items-center gap-1";
+  const tabs = () => {
+    const row = "flex flex-wrap items-center gap-1";
     return (
     <>
       <div className={row} role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
@@ -246,6 +244,88 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
     </>
     );
   };
+  // #118: full screen's two sheets, as TradingView's app has them — the
+  // pairs with their prices, and the timeframes with which signals to show
+  const sheetRow = (on: boolean) =>
+    `flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left ${on ? "bg-primary/10" : "hover:bg-muted/40"}`;
+  const symbolMenu: FullscreenMenu = {
+    label: pair.replace("/", ""),
+    title: l.pairsLabel,
+    render: (close) => (
+      <ul className="divide-y divide-border" data-testid="live-sheet-pairs">
+        {LIVE_PAIRS.map((p) => {
+          const tk = ticks[p];
+          return (
+            <li key={p}>
+              <button
+                type="button"
+                aria-pressed={p === pair}
+                onClick={() => {
+                  setPair(p);
+                  close();
+                }}
+                data-testid={`live-sheet-pair-${p}`}
+                className={sheetRow(p === pair)}
+              >
+                <span className="flex-1 min-w-0">
+                  <span className="block text-base font-semibold">{p.replace("/", "")}</span>
+                  <span className="block text-xs text-muted-foreground truncate">{l.pairNames[p] ?? p}</span>
+                </span>
+                <span className="font-mono text-sm">{tk ? tk.mid.toFixed(priceDecimals(p)) : ""}</span>
+                <Check className={`h-5 w-5 ${p === pair ? "text-primary" : "invisible"}`} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    ),
+  };
+  const intervalMenu: FullscreenMenu = {
+    label: l.intervalShort[interval] ?? interval,
+    title: l.intervalsLabel,
+    render: (close) => (
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-2" data-testid="live-sheet-intervals">
+          {LIVE_INTERVALS.map((iv) => (
+            <button
+              key={iv}
+              type="button"
+              aria-pressed={iv === interval}
+              onClick={() => {
+                setIntervalTf(iv);
+                close();
+              }}
+              data-testid={`live-sheet-interval-${iv}`}
+              className={`rounded-lg border px-2 py-2.5 text-sm ${iv === interval ? "border-primary/60 bg-primary/10 text-primary" : "border-border"}`}
+            >
+              {intervals[iv] ?? iv}
+            </button>
+          ))}
+        </div>
+        <section className="space-y-2">
+          <h4 className="text-xs text-muted-foreground">{l.viewLabel}</h4>
+          <div className="grid grid-cols-3 gap-2">
+            {VIEWS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={v === view}
+                onClick={() => {
+                  setView(v);
+                  close();
+                }}
+                data-testid={`live-sheet-view-${v}`}
+                className={`rounded-lg border px-2 py-2.5 text-sm ${v === view ? "border-primary/60 bg-primary/10 text-primary" : "border-border"}`}
+              >
+                {l.views[v]}
+              </button>
+            ))}
+          </div>
+          {view === "gainz" && <p className="text-[11px] text-muted-foreground">{l.recommended}</p>}
+        </section>
+      </div>
+    ),
+  };
   const priceLine = tick ? (
     <p className="text-xs font-mono" data-testid="live-price">
       {l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
@@ -266,7 +346,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         </span>
       </div>
 
-      {tabs(false)}
+      {tabs()}
       {view === "gainz" && <p className="text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>}
 
       {priceLine}
@@ -312,12 +392,14 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         heading={`${pair} · ${intervals[interval] ?? interval}`}
         seriesKey={`${pair}|${interval}`}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
-        fullscreenBar={
-          <>
-            <div className="flex items-center gap-2 overflow-x-auto pb-0.5">{tabs(true)}</div>
-            {priceLine}
-            {freshLine}
-          </>
+        fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
+        fullscreenStatus={
+          priceLine || freshLine ? (
+            <>
+              {priceLine}
+              {freshLine}
+            </>
+          ) : undefined
         }
       />
       {read && (
