@@ -22,6 +22,8 @@ export interface ChartOverlays {
   trendLines: boolean;
   // the SPECTRA-style Kalman Supertrend — off until switched on
   kalman: boolean;
+  // #121: FluxChart's FVG Crossfire (a port of its open-source code)
+  fvgCrossfire: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -31,6 +33,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   sarDots: true,
   trendLines: true,
   kalman: false,
+  fvgCrossfire: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
