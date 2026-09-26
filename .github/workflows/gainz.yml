@@ -20,6 +20,7 @@ on:
       - research/lib.ts
       - research/indicator-series.ts
       - research/gmo.ts
+      - src/lib/kalmanSupertrend.ts
       - .github/workflows/gainz.yml
   workflow_dispatch:
     inputs:
