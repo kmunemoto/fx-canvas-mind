@@ -64,6 +64,22 @@
 // was read: not ranked, both periods reported, with the exits SPECTRA was
 // read with (r2w and split). Read over each pair's whole history, so the
 // trend state is settled long before WARMUP.
+//
+// #126: the owner, of three GA SELLs stopped out on a 1h chart while the
+// stochastic sat over 80: 「測ってみて、80の数字を見直すか」. So: wait,
+// after a GA signal, for the chart's stochastic (src/lib/stochastic.ts,
+// 14·1·3, imported as it is) to leave its zone — a SELL on the first bar
+// whose %K closes under the level having been at or over it the bar before,
+// within STOCH_WAIT bars of a GA SELL (the GA bar itself included); a BUY
+// mirrored at 100 − level — and enter there, at that bar's close with that
+// bar's ATR (the same exits). Only the first such crossing after a GA
+// signal: GA signals before one crossing give one entry, and a later
+// crossing needs a GA signal after the last one. The level is chosen from STOCH_TRY on the FIRST
+// period — 1h (the app's recommended GA timeframe, the owner's chart), exit
+// r2w (GA's plan) — and judged untouched on the second. STOCH_WAIT, %K
+// rather than %D, and the candidate levels were fixed before any data was
+// read. The same crossings without GA (the stochastic alone) are reported
+// beside it, not ranked.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
@@ -72,6 +88,7 @@ import { GAINZ, GAINZ_APP, REVERSALS, revCtxOf, rsiSarAt, tradeR, type RevCtx, t
 import { fetchPair } from "./gmo.ts";
 import { kalmanSupertrend, type KalmanStRead } from "../src/lib/kalmanSupertrend.ts";
 import { zoneShift } from "../src/lib/zoneShift.ts";
+import { STOCH_DEFAULTS, stochastic } from "../src/lib/stochastic.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS).split(",").map((s) => s.trim()).filter(Boolean);
@@ -162,6 +179,77 @@ const ZS_RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 
   },
 ];
 
+// #126: the GA signals, and the chart's stochastic leaving its zone
+const STOCH_WAIT = 24;
+const STOCH_TRY = [70, 75, 80, 85, 90] as const;
+const STOCH_TF: Tf = "1h";
+const gsCache = new WeakMap<RevCtx, { k: Array<number | null>; lastBuy: Int32Array; lastSell: Int32Array; entries: Map<number, Int8Array> }>();
+const gsOf = (x: RevCtx) => {
+  let g = gsCache.get(x);
+  if (!g) {
+    const n = x.c.length;
+    const lastBuy = new Int32Array(n).fill(-1);
+    const lastSell = new Int32Array(n).fill(-1);
+    let b = -1;
+    let sl = -1;
+    for (let i = 0; i < n; i++) {
+      const d = GAINZ_APP.at(x, i);
+      if (d === 1) b = i;
+      if (d === -1) sl = i;
+      lastBuy[i] = b;
+      lastSell[i] = sl;
+    }
+    g = { k: stochastic(x.c, STOCH_DEFAULTS).k, lastBuy, lastSell, entries: new Map() };
+    gsCache.set(x, g);
+  }
+  return g;
+};
+// %K leaving the zone on bar i: under `level` from at or over it (a SELL),
+// over 100 − level from at or under it (a BUY)
+const stochOut = (k: Array<number | null>, i: number, level: number): 0 | 1 | -1 => {
+  const a = i > 0 ? k[i - 1] : null;
+  const b = k[i];
+  if (a === null || b === null) return 0;
+  if (a >= level && b < level) return -1;
+  if (a <= 100 - level && b > 100 - level) return 1;
+  return 0;
+};
+// the entries at one level: the first crossing after a GA signal of the
+// same side, within STOCH_WAIT bars of it
+const gaStochEntries = (x: RevCtx, level: number): Int8Array => {
+  const g = gsOf(x);
+  let e = g.entries.get(level);
+  if (!e) {
+    e = new Int8Array(x.c.length);
+    let lastDown = -1;
+    let lastUp = -1;
+    for (let i = 0; i < e.length; i++) {
+      const d = stochOut(g.k, i, level);
+      if (d === -1) {
+        const s = g.lastSell[i];
+        if (s >= 0 && s > lastDown && i - s <= STOCH_WAIT) e[i] = -1;
+        lastDown = i;
+      } else if (d === 1) {
+        const b = g.lastBuy[i];
+        if (b >= 0 && b > lastUp && i - b <= STOCH_WAIT) e[i] = 1;
+        lastUp = i;
+      }
+    }
+    g.entries.set(level, e);
+  }
+  return e;
+};
+const GA_STOCH_RULES: RevRule[] = STOCH_TRY.map((level) => ({
+  id: `ga_st${level}`,
+  ja: `GA型のサインから${STOCH_WAIT}本以内に、ストキャス %K（14・1・3）が最初に${level}を下に抜けた足で売り（買いは${100 - level}を上に抜けた足）`,
+  at: (x: RevCtx, i: number) => gaStochEntries(x, level)[i] as 0 | 1 | -1,
+}));
+const STOCH_OUT_RULES: RevRule[] = STOCH_TRY.map((level) => ({
+  id: `st_out${level}`,
+  ja: `ストキャス %K（14・1・3）が${level}を下に抜けた足で売り、${100 - level}を上に抜けた足で買い（GA型なし）`,
+  at: (x: RevCtx, i: number) => stochOut(gsOf(x).k, i, level),
+}));
+
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
@@ -169,6 +257,8 @@ const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1
   { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
   ...SPECTRA_RULES,
   ...ZS_RULES,
+  ...GA_STOCH_RULES,
+  ...STOCH_OUT_RULES,
 ];
 const BLIND = "__blind__";
 
@@ -506,6 +596,47 @@ const main = async () => {
   };
   fixedRules("#119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts)", SPECTRA_RULES);
   fixedRules("#125 Zone Shift [ChartPrime] (src/lib/zoneShift.ts)", ZS_RULES);
+
+  // 7. #126: GA, then the stochastic leaving its zone — the level chosen on
+  // the first period (1h, r2w), judged on the second
+  log(`\n# #126 GA then the stochastic (14·1·3 %K) leaving its zone within ${STOCH_WAIT} bars — level chosen on the FIRST period (${STOCH_TF}, ${PRIMARY_EXIT})`);
+  log(`## GA as it is (${GAINZ_APP.id}), for comparison`);
+  for (const period of ["disc", "val"] as Period[]) {
+    const label = period === "disc" ? "1st" : "2nd";
+    for (const tf of TFS) log(line(`${GAINZ_APP.id} ${tf} ${label}`, S(GAINZ_APP.id, PRIMARY_EXIT, period, `tf:${tf}`)));
+  }
+  const stRanked = GA_STOCH_RULES
+    .map((r) => ({ id: r.id, disc: S(r.id, PRIMARY_EXIT, "disc", `tf:${STOCH_TF}`) }))
+    .filter((r) => r.disc && r.disc.n > 0)
+    .sort((a, b) => b.disc!.lift - a.disc!.lift);
+  log(`## ranked by the first period's lift (${STOCH_TF}, ${PRIMARY_EXIT})`);
+  for (const r of stRanked) log(line(`${r.id} ${STOCH_TF} 1st`, r.disc));
+  const stWinner = stRanked[0]?.id ?? null;
+  log(`WINNER (first period): ${stWinner}`);
+  if (stWinner) {
+    log(`## the winner on the second period — nothing below was chosen on it`);
+    log(line(`${stWinner} ${STOCH_TF} 2nd`, S(stWinner, PRIMARY_EXIT, "val", `tf:${STOCH_TF}`)));
+    log(line(`${stWinner} ${STOCH_TF} 2nd split`, S(stWinner, SPLIT_EXIT, "val", `tf:${STOCH_TF}`)));
+    for (const side of SIDES) log(line(`${stWinner} ${STOCH_TF} ${side} 2nd`, S(stWinner, PRIMARY_EXIT, "val", `tfside:${STOCH_TF}:${side}`)));
+    let up = 0, total = 0;
+    const per: string[] = [];
+    for (const pair of Object.keys(barsByPair)) {
+      const st = S(stWinner, PRIMARY_EXIT, "val", `pair:${pair}`);
+      if (!st) continue;
+      total++;
+      if (st.e > 0) up++;
+      per.push(`${pair} ${rr(st.e, 2)} (n=${st.n})`);
+    }
+    log(`   2nd (all timeframes): pairs with positive expectancy ${up}/${total}  ${per.join(" | ")}`);
+  }
+  log(`## every level, every timeframe, both periods (descriptive), ${PRIMARY_EXIT}`);
+  for (const rule of [...GA_STOCH_RULES, ...STOCH_OUT_RULES]) {
+    for (const period of ["disc", "val"] as Period[]) {
+      const label = period === "disc" ? "1st" : "2nd";
+      for (const tf of TFS) log(line(`${rule.id} ${tf} ${label}`, S(rule.id, PRIMARY_EXIT, period, `tf:${tf}`)));
+    }
+  }
+  report.stochWinner = stWinner;
 
   const dump: Record<string, unknown> = {};
   for (const rule of [...RULES.map((r) => r.id), BLIND]) {
