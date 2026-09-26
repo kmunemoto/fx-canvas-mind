@@ -8,6 +8,7 @@ import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomVie
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
+import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 
 interface Level {
@@ -167,6 +168,11 @@ const COLORS = {
   // #121: FVG Crossfire's own colours
   fvgBull: "#0ecb81",
   fvgBear: "#f6465d",
+  // #122: the Weighted Volume Profile's Point Of Control, yellow as in the
+  // original (a deeper yellow on the white background, where that one
+  // barely shows)
+  poc: "#FFEB3B",
+  pocLight: "#F2A900",
   // #117: TradingView's own colours for the stochastic's two lines and band
   stochK: "#2962FF",
   stochD: "#FF6D00",
@@ -317,6 +323,9 @@ const PriceChart = ({
     () => (ov.fvgCrossfire ? fvgCrossfire(candles, formingLast ? candles.length - 2 : candles.length - 1) : null),
     [ov.fvgCrossfire, candles, formingLast],
   );
+  // #122: the Weighted Volume Profile of the newest candles — the forming
+  // one too, as the original recomputes on the chart's last bar
+  const vp = useMemo(() => (ov.volumeProfile ? weightedVolumeProfile(candles) : null), [ov.volumeProfile, candles]);
   // the list open or folded: open in full screen and on a wide screen until
   // folded, folded on a phone's card until opened
   const [listOpen, setListOpen] = useState<boolean | null>(null);
@@ -615,6 +624,12 @@ const PriceChart = ({
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "fvgCrossfire", name: t.chart.overlayNames.fvgCrossfire, on: ov.fvgCrossfire, toggle: flip("fvgCrossfire") },
+    {
+      key: "volumeProfile",
+      name: t.chart.overlayNames.volumeProfile(WVP_DEFAULTS.analyzeBars, WVP_DEFAULTS.rowCount),
+      on: ov.volumeProfile,
+      toggle: flip("volumeProfile"),
+    },
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1159,6 +1174,11 @@ const PriceChart = ({
           {t.chart.fvgNote}
         </p>
       )}
+      {vp && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-vp-legend">
+          {t.chart.vpNote(vp.to - vp.from + 1)}
+        </p>
+      )}
     </>
   );
 
@@ -1404,6 +1424,48 @@ const PriceChart = ({
             </text>
           </g>
         ))}
+
+        {/* #122: the Weighted Volume Profile — a bar per price row from the
+            first candle it reads, bullish then bearish, as long as the row
+            is full (1 to 50 candles), and the Point Of Control's line from
+            the end of the fullest row to the right edge. Under the candles
+            and see-through, where the original's opaque boxes sit on top. */}
+        {vp && (
+          <g data-testid="chart-vp" clipPath={`url(#${clipId})`}>
+            {vp.rows.map((r, k) => {
+              if (r.total <= 0) return null;
+              const yTop = y(r.top - vp.gap / 2);
+              const h = Math.max(1, y(r.bottom + vp.gap / 2) - yTop);
+              const xMid = x(r.start + r.bullSize);
+              return (
+                <g key={`vp-${k}`}>
+                  {r.bullSize > 0 && (
+                    <rect
+                      x={x(r.start)} y={yTop} width={Math.max(0.5, xMid - x(r.start))} height={h}
+                      fill={COLORS.up} opacity="0.3"
+                      data-testid="chart-vp-row" data-side="bull"
+                    />
+                  )}
+                  {r.bearSize > 0 && (
+                    <rect
+                      x={xMid} y={yTop} width={Math.max(0.5, x(r.end) - xMid)} height={h}
+                      fill={COLORS.down} opacity="0.3"
+                      data-testid="chart-vp-row" data-side="bear"
+                    />
+                  )}
+                </g>
+              );
+            })}
+            {vp.poc && (
+              <line
+                x1={x(vp.rows[vp.poc.row].end)} x2={W - PAD_RIGHT}
+                y1={y(vp.poc.price)} y2={y(vp.poc.price)}
+                stroke={prefs.theme === "light" ? COLORS.pocLight : COLORS.poc} strokeWidth={2 * fs}
+                data-testid="chart-vp-poc" data-price={vp.poc.price}
+              />
+            )}
+          </g>
+        )}
 
         {/* #115: the SAR as a band — from the SAR outward, away from
             price — green while it is under price, red while over it */}

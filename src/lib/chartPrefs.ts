@@ -24,6 +24,9 @@ export interface ChartOverlays {
   kalman: boolean;
   // #121: FluxChart's FVG Crossfire (a port of its open-source code)
   fvgCrossfire: boolean;
+  // #122: FluxChart's Weighted Volume Profile (a port of its open-source
+  // code; candles counted in place of the volume FX candles lack)
+  volumeProfile: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -34,6 +37,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   trendLines: true,
   kalman: false,
   fvgCrossfire: true,
+  volumeProfile: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
