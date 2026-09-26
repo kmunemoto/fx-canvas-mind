@@ -22,11 +22,10 @@ export interface ChartOverlays {
   trendLines: boolean;
   // the SPECTRA-style Kalman Supertrend — off until switched on
   kalman: boolean;
-  // #121: FluxChart's FVG Crossfire (a port of its open-source code)
-  fvgCrossfire: boolean;
-  // #122: FluxChart's Weighted Volume Profile (a port of its open-source
-  // code; candles counted in place of the volume FX candles lack)
-  volumeProfile: boolean;
+  // Flux Charts' FVG Crossfire (#121) and Weighted Volume Profile (#122),
+  // ports of their open-source code — one switch for the two (#123: the
+  // owner asked for them as one, "ニコイチ")
+  fvgProfile: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -36,8 +35,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   sarDots: true,
   trendLines: true,
   kalman: false,
-  fvgCrossfire: true,
-  volumeProfile: true,
+  fvgProfile: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
@@ -46,6 +44,8 @@ const overlaysOf = (v: unknown): ChartOverlays => {
   for (const k of Object.keys(OVERLAY_DEFAULTS) as Array<keyof ChartOverlays>) {
     if (typeof r[k] === "boolean") out[k] = r[k] as boolean;
   }
+  // kept from before #123, when FVG Crossfire had a switch of its own
+  if (typeof r.fvgProfile !== "boolean" && typeof r.fvgCrossfire === "boolean") out.fvgProfile = r.fvgCrossfire;
   return out;
 };
 

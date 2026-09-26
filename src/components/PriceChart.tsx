@@ -318,14 +318,15 @@ const PriceChart = ({
     () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
     [ov.kalman, candles, formingLast],
   );
-  // #121: FVG Crossfire, on the closed candles
+  // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
+  // Volume Profile of the newest candles — the forming one too, as the
+  // original recomputes on the chart's last bar. #123: one indicator, on
+  // one switch.
   const fvgcf = useMemo(
-    () => (ov.fvgCrossfire ? fvgCrossfire(candles, formingLast ? candles.length - 2 : candles.length - 1) : null),
-    [ov.fvgCrossfire, candles, formingLast],
+    () => (ov.fvgProfile ? fvgCrossfire(candles, formingLast ? candles.length - 2 : candles.length - 1) : null),
+    [ov.fvgProfile, candles, formingLast],
   );
-  // #122: the Weighted Volume Profile of the newest candles — the forming
-  // one too, as the original recomputes on the chart's last bar
-  const vp = useMemo(() => (ov.volumeProfile ? weightedVolumeProfile(candles) : null), [ov.volumeProfile, candles]);
+  const vp = useMemo(() => (ov.fvgProfile ? weightedVolumeProfile(candles) : null), [ov.fvgProfile, candles]);
   // the list open or folded: open in full screen and on a wide screen until
   // folded, folded on a phone's card until opened
   const [listOpen, setListOpen] = useState<boolean | null>(null);
@@ -623,13 +624,7 @@ const PriceChart = ({
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
-    { key: "fvgCrossfire", name: t.chart.overlayNames.fvgCrossfire, on: ov.fvgCrossfire, toggle: flip("fvgCrossfire") },
-    {
-      key: "volumeProfile",
-      name: t.chart.overlayNames.volumeProfile(WVP_DEFAULTS.analyzeBars, WVP_DEFAULTS.rowCount),
-      on: ov.volumeProfile,
-      toggle: flip("volumeProfile"),
-    },
+    { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1169,14 +1164,9 @@ const PriceChart = ({
           {t.chart.kalmanNote}
         </p>
       )}
-      {ov.fvgCrossfire && (
-        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgcf-legend">
-          {t.chart.fvgNote}
-        </p>
-      )}
-      {vp && (
-        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-vp-legend">
-          {t.chart.vpNote(vp.to - vp.from + 1)}
+      {ov.fvgProfile && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgprofile-legend">
+          {t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length))}
         </p>
       )}
     </>
@@ -1429,7 +1419,8 @@ const PriceChart = ({
             first candle it reads, bullish then bearish, as long as the row
             is full (1 to 50 candles), and the Point Of Control's line from
             the end of the fullest row to the right edge. Under the candles
-            and see-through, where the original's opaque boxes sit on top. */}
+            and see-through, where the original's opaque boxes sit on top;
+            #123: in FVG Crossfire's colours, the two being one indicator. */}
         {vp && (
           <g data-testid="chart-vp" clipPath={`url(#${clipId})`}>
             {vp.rows.map((r, k) => {
@@ -1442,14 +1433,14 @@ const PriceChart = ({
                   {r.bullSize > 0 && (
                     <rect
                       x={x(r.start)} y={yTop} width={Math.max(0.5, xMid - x(r.start))} height={h}
-                      fill={COLORS.up} opacity="0.3"
+                      fill={COLORS.fvgBull} opacity="0.3"
                       data-testid="chart-vp-row" data-side="bull"
                     />
                   )}
                   {r.bearSize > 0 && (
                     <rect
                       x={xMid} y={yTop} width={Math.max(0.5, x(r.end) - xMid)} height={h}
-                      fill={COLORS.down} opacity="0.3"
+                      fill={COLORS.fvgBear} opacity="0.3"
                       data-testid="chart-vp-row" data-side="bear"
                     />
                   )}

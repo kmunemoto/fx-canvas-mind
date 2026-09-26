@@ -91,21 +91,21 @@ describe("#121 FVG Crossfire on the chart", () => {
     resetChartPrefsCache();
   });
 
-  it("is on in the list, draws the zones, the funnel, the live zone's stars and the arrows, and is switched off by its eye", () => {
+  it("is on in the list (#123: with the volume profile, as one), draws the zones, the funnel, the live zone's stars and the arrows, and is switched off by its eye", () => {
     render(<PriceChart candles={bars.slice(0, 16)} pair="USD/JPY" />);
-    expect(screen.getByTestId("chart-overlay-name-fvgCrossfire").textContent).toBe("FVG Crossfire");
-    expect(screen.getByTestId("chart-toggle-fvgCrossfire").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("chart-overlay-name-fvgProfile").textContent).toBe("FVG Crossfire + Volume Profile");
+    expect(screen.getByTestId("chart-toggle-fvgProfile").getAttribute("aria-pressed")).toBe("true");
     const zones = screen.getAllByTestId("chart-fvgcf-zone");
     expect(zones.map((z) => [z.getAttribute("data-dir"), z.getAttribute("data-live")])).toEqual([["bear", "0"], ["bull", "1"]]);
     expect(screen.getAllByTestId("chart-fvgcf-funnel")).toHaveLength(1);
     expect(screen.getByTestId("chart-fvgcf-stars").textContent).toBe("★★");
     expect(screen.getAllByTestId("chart-fvgcf-retest-bear")).toHaveLength(1);
     expect(screen.getAllByTestId("chart-fvgcf-retest-bull")).toHaveLength(1);
-    expect(screen.getByTestId("chart-fvgcf-legend").textContent).toContain("MPL 2.0");
+    expect(screen.getByTestId("chart-fvgprofile-legend").textContent).toContain("MPL 2.0");
 
-    fireEvent.click(screen.getByTestId("chart-toggle-fvgCrossfire"));
+    fireEvent.click(screen.getByTestId("chart-toggle-fvgProfile"));
     expect(screen.queryByTestId("chart-fvgcf")).toBeNull();
-    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.fvgCrossfire).toBe(false);
+    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.fvgProfile).toBe(false);
   });
 
   it("marks nothing on the candle still forming", () => {
