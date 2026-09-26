@@ -1,0 +1,87 @@
+# Reads a public short video the owner points at (an Instagram reel, a
+# YouTube short) so an indicator described in it can be built from what is
+# actually said and shown, not from a guess: the post's caption, a
+# transcript of its speech, and the text on its frames. The development
+# container cannot reach these sites; GitHub's runners can.
+#
+# Read-only: public URL only, no account, no key and no secret. Prints to
+# the job log and keeps the frames as a short-lived artifact; writes nothing
+# to the repository.
+name: Read a short video
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/reel-read.yml
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "The video's public URL"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Tools
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-jpn > /dev/null
+          pip install -q yt-dlp faster-whisper
+      - name: Fetch the video and its caption
+        env:
+          # #129: the owner's reel on Dow theory
+          URL: ${{ inputs.url || 'https://www.instagram.com/reel/DdbXdO_C9EW/' }}
+        run: |
+          set -u
+          mkdir -p out
+          yt-dlp --no-progress -f "b" -o "out/video.%(ext)s" --write-info-json "$URL" || echo "yt-dlp failed"
+          ls -la out
+          python3 - <<'PY'
+          import glob, json
+          for p in glob.glob("out/*.info.json"):
+              d = json.load(open(p))
+              for k in ("title", "uploader", "channel", "upload_date", "duration", "description"):
+                  if d.get(k):
+                      print(f"=== {k.upper()} ===")
+                      print(d[k])
+          PY
+      - name: Transcribe the speech
+        run: |
+          set -u
+          V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
+          if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          ffmpeg -loglevel error -y -i "$V" -ac 1 -ar 16000 out/audio.wav
+          python3 - <<'PY'
+          from faster_whisper import WhisperModel
+          m = WhisperModel("medium", device="cpu", compute_type="int8")
+          segs, info = m.transcribe("out/audio.wav", language="ja", beam_size=5, vad_filter=True)
+          print(f"=== TRANSCRIPT ({info.duration:.0f}s) ===")
+          for s in segs:
+              print(f"[{s.start:6.1f}-{s.end:6.1f}] {s.text}")
+          print("=== END TRANSCRIPT ===")
+          PY
+      - name: Read the text on the frames
+        run: |
+          set -u
+          V=$(ls out/video.* 2>/dev/null | grep -v json | head -1 || true)
+          if [ -z "$V" ]; then echo "no video"; exit 0; fi
+          mkdir -p out/frames
+          ffmpeg -loglevel error -y -i "$V" -vf "fps=1/2,scale=720:-1" out/frames/f%03d.png
+          for f in out/frames/*.png; do
+            txt=$(tesseract "$f" - -l jpn+eng --psm 6 2>/dev/null | tr -s ' \n' ' ' | head -c 400)
+            echo "--- $(basename "$f"): $txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reel-frames
+          path: out/frames/
+          retention-days: 7
+          if-no-files-found: ignore
