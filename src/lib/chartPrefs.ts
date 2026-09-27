@@ -25,6 +25,9 @@ export interface ChartOverlays {
   // #136: KivancOzbilgic's SuperTrend (a port of its open-source code) —
   // off until switched on
   supertrend: boolean;
+  // #137: QuantNomad's UT Bot Alerts (a port of its open-source code) — it
+  // paints the candles; off until switched on
+  utBot: boolean;
   // Flux Charts' FVG Crossfire (#121) and Weighted Volume Profile (#122),
   // ports of their open-source code — one switch for the two (#123: the
   // owner asked for them as one, "ニコイチ")
@@ -47,6 +50,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   trendLines: true,
   kalman: false,
   supertrend: false,
+  utBot: false,
   fvgProfile: true,
   zoneShift: true,
   dow: true,

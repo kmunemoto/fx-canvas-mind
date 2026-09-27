@@ -8,6 +8,7 @@ import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomVie
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
+import { UT_DEFAULTS, utBot } from "@/lib/utBot";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
@@ -357,6 +358,11 @@ const PriceChart = ({
   const st = useMemo(
     () => (ov.supertrend ? supertrend(candles, ST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
     [ov.supertrend, candles, formingLast],
+  );
+  // #137: UT Bot Alerts, on the closed candles
+  const ut = useMemo(
+    () => (ov.utBot ? utBot(candles, UT_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
+    [ov.utBot, candles, formingLast],
   );
   // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
   // Volume Profile of the newest candles — the forming one too, as the
@@ -720,6 +726,7 @@ const PriceChart = ({
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "supertrend", name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
+    { key: "utBot", name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
     { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
     ...(dow ? [{ key: "dow", name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
@@ -1322,6 +1329,11 @@ const PriceChart = ({
           {t.chart.supertrendNote}
         </p>
       )}
+      {ov.utBot && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-utbot-legend">
+          {t.chart.utBotNote}
+        </p>
+      )}
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
           {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
@@ -1873,12 +1885,14 @@ const PriceChart = ({
         )}
 
         {/* candles — #116: those on screen (#124: in Zone Shift's trend
-            colour while it is on, as the original paints them) */}
+            colour while it is on, as the original paints them; #137: UT
+            Bot's green or red first while it is on, as its barcolor) */}
         <g data-testid="chart-candles">
         {candles.map((c, i) => {
           if (!onScreen(i)) return null;
           const up = c.close >= c.open;
-          const color = zs ? (zs.up[i + zs.off] ? COLORS.zsUp : COLORS.zsDown) : up ? COLORS.up : COLORS.down;
+          const utSide = ut ? ut.side[i] : null;
+          const color = utSide !== null ? (utSide === 1 ? COLORS.up : COLORS.down) : zs ? (zs.up[i + zs.off] ? COLORS.zsUp : COLORS.zsDown) : up ? COLORS.up : COLORS.down;
           const bodyTop = y(Math.max(c.open, c.close));
           const bodyH = Math.max(1, Math.abs(y(c.open) - y(c.close)));
           return (
@@ -2132,6 +2146,33 @@ const PriceChart = ({
                   <title>{`SuperTrend ${text}`}</title>
                   <circle cx={cx} cy={cy} r={2.4 * fs} fill={color} />
                   <polygon points={buy ? `${cx},${cy + 2} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${cy - 2} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
+                  <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
+                  <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #137: UT Bot's "Buy" under the candle and "Sell" over it, as the
+            original's labels (belowbar / abovebar) */}
+        {ut && (
+          <g data-testid="chart-utbot">
+            {ut.signals.filter((s) => onScreen(s.i)).map((s) => {
+              const c = candles[s.i];
+              const buy = s.side === "BUY";
+              const cx = x(s.i);
+              const color = buy ? COLORS.up : COLORS.down;
+              const text = buy ? "Buy" : "Sell";
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const w = text.length * fsz * 0.62 + 6;
+              const h = fsz + 5;
+              const tip = buy ? y(c.low) + 2 : y(c.high) - 2;
+              const ty = buy ? tip + 4 : tip - 4 - h;
+              return (
+                <g key={`ut-${s.i}`} data-testid={`chart-utbot-signal-${s.side}`}>
+                  <title>{`UT Bot ${text}`}</title>
+                  <polygon points={buy ? `${cx},${tip} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${tip} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
                   <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
                   <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
                 </g>
