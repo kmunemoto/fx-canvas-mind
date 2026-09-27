@@ -23,14 +23,16 @@ import {
   type Tick,
 } from "@/lib/liveChart";
 
-// #114: which rule's signals the chart shows. GA-style is the recommended
-// view, on the timeframe that — of the GA rule's three measured ones — was
-// the only one (slightly, within noise) better than entering at random in
-// both periods. Not an edge: after the spread it lost. That was 1h (docs
-// §8.27); with the GA settings chosen in #132 it is 15min (docs §8.45).
+// #114: which rule's signals the chart shows; GA-style is the recommended
+// view. #138: the chart opens on 4h, the owner's base timeframe (the
+// analysis has used it since #111): the spread takes the smallest share of
+// the stop there (src/lib/costs.ts) and entering at random lost least there
+// (docs §8.45). It was the timeframe the GA rule did (slightly, within
+// noise) better than random on in both periods — 1h (§8.27), then 15min
+// (§8.45).
 export type LiveView = "gainz" | "rsi_sar" | "both";
 const VIEWS: LiveView[] = ["gainz", "rsi_sar", "both"];
-export const RECOMMENDED_INTERVAL = "15min";
+export const BASE_INTERVAL = "4h";
 
 const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
@@ -68,14 +70,14 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   const l = t.live;
   const [pair, setPairOnly] = useState<string>(LIVE_PAIRS[0]);
   const [interval, setIntervalTf] = useState<string>(
-    defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : RECOMMENDED_INTERVAL,
+    defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : BASE_INTERVAL,
   );
   const [view, setView] = useState<LiveView>("gainz");
   // #127: gold has no 1-minute chart: another pair's timeframe it lacks
-  // becomes the recommended one
+  // becomes the base one
   const setPair = (p: string) => {
     setPairOnly(p);
-    if (!intervalsFor(p).includes(interval)) setIntervalTf(RECOMMENDED_INTERVAL);
+    if (!intervalsFor(p).includes(interval)) setIntervalTf(BASE_INTERVAL);
   };
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);

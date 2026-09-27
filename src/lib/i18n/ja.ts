@@ -436,7 +436,7 @@ export const ja = {
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
     recommended:
-      "おすすめ設定は GA型・15分足です。今の GA型の設定（#132 で選び直したもの）で、3つの時間足のうち前半・後半の両方でランダムに入るより少し良かったのは15分足だけでした（+0.07R・+0.02R）。ただし差は誤差の範囲で、スプレッドを払うと損益はまだマイナスです。勝てる根拠ではありません。",
+      "基本の時間足は4時間足です。4時間足はスプレッドが損切り幅に占める割合が小さく（15分足の約14%に対し約6%）、ランダムに入った場合の損も3つの時間足で一番小さくなります。GA型（#132 の設定）の4時間足は、前半 106回・勝率30.2%・1回あたり −0.094R、後半 102回・39.2%・+0.176R で、回数が少なく期間によってばらつきが大きいため、勝てる根拠ではありません。",
     gaLegend: "BUY・SELL=GA型のサイン（包み足・実体が大きい・RSI 40・5本前との比較、確定足で判定）。TP/SL=損切り ATR×1、利確はその2倍（✓勝ち ✗負け …判定中）。SAR の帯は流れの目安で、GA型の判定には使っていません",
     // #115: the RSI+SAR views' legend, where the position boxes stand in
     // for the dotted stop and target

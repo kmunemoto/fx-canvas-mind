@@ -206,8 +206,8 @@ describe("#113 the live chart card", () => {
     });
     render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} />);
     await waitFor(() => expect(screen.getByTestId("live-error")).toBeTruthy());
-    // #114: the recommended timeframe first
-    expect(loadBars).toHaveBeenCalledWith("USD/JPY", "15min");
+    // #138: the base timeframe first (4h)
+    expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
   });
 
   it("#114: opens on the GA-style view — its signals only, as filled BUY/SELL labels, no RSI/SAR — with the latest signal's plan", async () => {
@@ -218,7 +218,7 @@ describe("#113 the live chart card", () => {
     render(<LiveChart loadBars={async () => r} loadTicks={async () => ({})} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     expect(screen.getByTestId("live-view-gainz").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("live-recommended").textContent).toContain("GA型・15分足");
+    expect(screen.getByTestId("live-recommended").textContent).toContain("基本の時間足は4時間足");
     const flags = () => [...document.querySelectorAll("[data-rule]")].map((f) => f.getAttribute("data-rule"));
     expect(flags()).toEqual(["gainz"]);
     // the label itself (its hover title still says GA)

@@ -133,9 +133,9 @@ describe("#127 gold on the live chart", () => {
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("USD/JPY", "1min"));
     expect(screen.getByTestId("live-pair-XAU/USD").textContent).toBe("XAU/USD4285.21");
 
-    // from the 1-minute chart, gold opens on the recommended timeframe
+    // from the 1-minute chart, gold opens on the base timeframe (#138: 4h)
     fireEvent.click(screen.getByTestId("live-pair-XAU/USD"));
-    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("XAU/USD", "15min"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("XAU/USD", "4h"));
     expect(loadBars).not.toHaveBeenCalledWith("XAU/USD", "1min");
     expect(screen.queryByTestId("live-interval-1min")).toBeNull();
     expect(screen.getByTestId("live-interval-15min")).toBeTruthy();

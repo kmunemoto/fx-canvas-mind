@@ -391,7 +391,7 @@ export const en: Dict = {
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
     recommended:
-      "The recommended setting is GA style on the 15-minute chart: with the GA settings chosen again in #132, of its three timeframes the only one that did a little better than entering at random in both periods (+0.07R, +0.02R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
+      "The base timeframe is the 4-hour chart: there the spread takes the smallest share of the stop (about 6%, against about 14% on the 15-minute chart), and entering at random lost least of the three timeframes. The GA style (#132's settings) on 4 hours: first period 106 trades, 30.2% won, −0.094R each; second period 102 trades, 39.2%, +0.176R. Few trades and a wide swing between the periods: it is not a reason to expect to win.",
     gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 40, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open). The SAR band is a guide to the trend; the GA-style rule does not use it",
     rsiSarLegend: "BUY · SELL = a closed bar where RSI(9) came back from 25/75 with the SAR on the same side (✓ won ✗ lost … open). Dots = Parabolic SAR (green under price · red over price)",
     latestTitle: (rule: string) => `Latest signal (${rule})`,
