@@ -373,7 +373,7 @@ const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1
   ...REVERSALS,
   ...GAINZ,
   GAINZ_APP,
-  { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（アプリの今のルール）", at: rsiSarAt },
+  { id: "rsi_sar", ja: "RSI(14) が30/70から戻し、SAR が同じ側（#131 までのアプリのルール。#132 で RSI(9)・25/75 に変更）", at: rsiSarAt },
   ...SPECTRA_RULES,
   ...ZS_RULES,
   ...GA_STOCH_RULES,

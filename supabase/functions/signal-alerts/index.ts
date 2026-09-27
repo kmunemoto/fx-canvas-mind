@@ -37,6 +37,7 @@ import {
   mayHaveFreshClose,
   renderSignalMail,
   renderTestMail,
+  RULE_ID,
   ruleIdOf,
   sendMail,
   type FiredSignal,
@@ -392,14 +393,15 @@ Deno.serve(async (req: Request) => {
         outcome: typeof x.outcome === "string" ? x.outcome : null,
         r: typeof x.r === "number" ? x.r : null,
       });
-      // #112: one record per rule. A row is the GA rule's only when it says
-      // so; everything before #112 is RSI + SAR's.
-      const isGa = (x: JsonRecord) => x.rule === GA_RULE_ID;
+      // #112: one record per rule. #132: a row counts only under the rule id
+      // it was decided by, the current setting's — a row of an earlier
+      // setting (RSI(14) 30/70, GA 0.5/50/5) belongs to neither record.
+      const ofRule = (ga: boolean) => (x: JsonRecord) => x.rule === (ga ? GA_RULE_ID : RULE_ID);
       const recordOf = (ga: boolean, backtest: typeof BACKTEST) => {
-        const own = events.filter((e) => isGa(e) === ga);
+        const own = events.filter(ofRule(ga));
         const mailed = own.filter((e) => e.costly !== true);
         return {
-          mine: summarize(mine.filter((m) => isGa(m) === ga).map((m) => (isRecord(m.event) ? row(m.event) : { outcome: null, r: null }))),
+          mine: summarize(mine.filter(ofRule(ga)).map((m) => (isRecord(m.event) ? row(m.event) : { outcome: null, r: null }))),
           all: summarize(mailed.map(row)),
           costly: summarize(own.filter((e) => e.costly === true).map(row)),
           byTf: Object.fromEntries(ALERT_INTERVALS.map((iv) => [iv, summarize(mailed.filter((e) => e.interval === iv).map(row))])),

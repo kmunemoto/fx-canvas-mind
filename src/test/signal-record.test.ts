@@ -136,7 +136,8 @@ describe("the record, summed up", () => {
   });
 
   it("the yardstick is the past-chart result the docs record", () => {
-    expect(BACKTEST.meanR).toBe(-0.125);
+    // #132: RSI(9) 25/75's second period (research/tune.ts)
+    expect(BACKTEST.meanR).toBe(-0.112);
     expect(BACKTEST.breakeven).toBe(0.4);
   });
 });

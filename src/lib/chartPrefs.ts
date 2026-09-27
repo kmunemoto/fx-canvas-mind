@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { STOCH_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
+import { STOCH_DEFAULTS, STOCH_OLD_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
 
 // #117: which indicator strips the charts show under the price, and the
 // stochastic's lengths (#118: the background; #119: what is drawn over the
@@ -70,6 +70,11 @@ export interface ChartPrefs {
 }
 
 export const CHART_PREFS_KEY = "sextant.chart.prefs.v1";
+// #132: saved beside the preferences once the stochastic's defaults changed;
+// preferences saved before it that hold the old defaults (14, 1, 3) held
+// them because they were the defaults, and take the new ones
+const STOCH_DEFAULTS_MARK = 132;
+const sameStoch = (a: StochParams, b: StochParams) => a.kLength === b.kLength && a.kSmoothing === b.kSmoothing && a.dSmoothing === b.dSmoothing;
 export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   rsi: true,
   stoch: true,
@@ -89,7 +94,10 @@ const read = (): ChartPrefs => {
     return {
       rsi: typeof v.rsi === "boolean" ? v.rsi : CHART_PREFS_DEFAULTS.rsi,
       stoch: typeof v.stoch === "boolean" ? v.stoch : CHART_PREFS_DEFAULTS.stoch,
-      stochParams: normalizeStochParams(v.stochParams),
+      stochParams: (() => {
+        const p = normalizeStochParams(v.stochParams);
+        return v.stochDefaults !== STOCH_DEFAULTS_MARK && sameStoch(p, STOCH_OLD_DEFAULTS) ? STOCH_DEFAULTS : p;
+      })(),
       theme: v.theme === "light" ? "light" : "dark",
       overlays: overlaysOf(v.overlays),
     };
@@ -109,7 +117,7 @@ export const setChartPrefs = (patch: Partial<ChartPrefs>): void => {
     overlays: overlaysOf(next.overlays),
   };
   try {
-    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify(current));
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ ...current, stochDefaults: STOCH_DEFAULTS_MARK }));
   } catch {
     // kept for this page only
   }

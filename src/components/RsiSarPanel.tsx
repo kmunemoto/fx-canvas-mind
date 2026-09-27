@@ -2,6 +2,7 @@ import { Activity } from "lucide-react";
 import type { RsiSarSummary, RsiSarTrigger } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatDistance, isGoldPair, priceDecimals } from "@/lib/candleTime";
+import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
 
 interface Props {
   summary: RsiSarSummary | null;
@@ -63,7 +64,7 @@ const RsiSarPanel = ({ summary, signal, pair, price }: Props) => {
         <>
           <div className="space-y-0.5" data-testid="rsi-sar-now">
             <p className="text-[10px] text-muted-foreground">{r.nowTitle}</p>
-            <p className={`text-sm font-mono ${now.rsi !== null && (now.rsi <= 30 || now.rsi >= 70) ? "text-warning" : "text-foreground"}`}>
+            <p className={`text-sm font-mono ${now.rsi !== null && (now.rsi <= RSI_SAR_LEVELS.buy || now.rsi >= RSI_SAR_LEVELS.sell) ? "text-warning" : "text-foreground"}`}>
               {r.rsi(now.rsi_prev === null ? "—" : now.rsi_prev.toFixed(1), now.rsi === null ? "—" : now.rsi.toFixed(1))}
             </p>
             {now.sar !== null && now.sar_below !== null && (

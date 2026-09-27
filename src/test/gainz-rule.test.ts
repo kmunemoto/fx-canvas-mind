@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  GA_RSI_PERIOD,
   GA_DELTA,
   GA_REWARD,
   GA_STOP_ATR,
@@ -66,19 +67,19 @@ describe("#112 the GA-style rule", () => {
   it("fires a BUY when all four conditions meet on the close, and the mirror fires a SELL", () => {
     const bars = buySetup();
     const i = bars.length - 1;
-    const { rsi } = wilderRsi(bars.map((b) => b.close));
+    const { rsi } = wilderRsi(bars.map((b) => b.close), GA_RSI_PERIOD);
     expect(rsi[i]!).toBeLessThan(50);
     expect(bars[i].close).toBeLessThan(bars[i - GA_DELTA].close);
     expect(gainzAt(bars, rsi, i)).toBe("BUY");
     const down = flip(bars);
-    const { rsi: rsiDown } = wilderRsi(down.map((b) => b.close));
+    const { rsi: rsiDown } = wilderRsi(down.map((b) => b.close), GA_RSI_PERIOD);
     expect(gainzAt(down, rsiDown, i)).toBe("SELL");
   });
 
   it("needs every condition", () => {
     const bars = buySetup();
     const i = bars.length - 1;
-    const rsiOf = (b: Candle[]) => wilderRsi(b.map((x) => x.close)).rsi;
+    const rsiOf = (b: Candle[]) => wilderRsi(b.map((x) => x.close), GA_RSI_PERIOD).rsi;
     // a long upper wick: the body is no longer more than half the true range
     const wick = bars.map((b, k) => (k === i ? { ...b, high: b.high + 0.2 } : b));
     expect(trueRange(wick, i)).toBeGreaterThan(0.2);
@@ -98,7 +99,7 @@ describe("#112 the GA-style rule", () => {
   });
 
   it("never reads a later bar, and the study reads it exactly as the app does", () => {
-    const bars = walk(1500, 7);
+    const bars = walk(4000, 7);
     const full = readGainz(bars);
     expect(full.signals.length).toBeGreaterThan(10);
     for (const cut of [200, 777, 1499]) {
@@ -108,7 +109,7 @@ describe("#112 the GA-style rule", () => {
     }
     // research/reversal.ts GAINZ_APP runs on the study's own RSI series
     const x = revCtxOf(bars);
-    const { rsi } = wilderRsi(bars.map((b) => b.close));
+    const { rsi } = wilderRsi(bars.map((b) => b.close), GA_RSI_PERIOD);
     for (let i = 0; i < bars.length; i++) {
       const app = gainzAt(bars, rsi, i);
       expect(GAINZ_APP.at(x, i), `bar ${i}`).toBe(app === "BUY" ? 1 : app === "SELL" ? -1 : 0);
@@ -125,7 +126,8 @@ describe("#112 the GA-style rule", () => {
     expect(marks.every((m) => m.rule === "gainz" && m.barsAgo >= 0 && m.barsAgo < 120)).toBe(true);
     const summary = compactGainz("4h", read, 3);
     expect(summary.evidence.tf.measured).toBe(true);
-    expect(summary.evidence.tf.win).toBeCloseTo(0.307, 3);
+    // #132: the 0.7/40/5 setting's second period on 4h
+    expect(summary.evidence.tf.win).toBeCloseTo(0.392, 3);
     expect(compactGainz("1day", read, 3).evidence.tf.measured).toBe(false);
   });
 });
@@ -157,7 +159,7 @@ describe("#112 the GA-style alert", () => {
       entry: 150,
       stop: 150.3,
       target: 149.4,
-      rsi: 58.2,
+      rsi: 62.4,
       rsiPrev: null,
       sar: null,
       atr: 0.3,
@@ -168,11 +170,11 @@ describe("#112 the GA-style alert", () => {
     const ja = renderSignalMail(s, "ja");
     expect(ja.subject).toBe("【Sextant】USD/JPY 4時間足 売り（SELL）のサイン（GA型）");
     expect(ja.text).toContain("実体が足の値幅の 72%");
-    expect(ja.text).toContain("RSI(14): 58.2（50超）");
+    expect(ja.text).toContain("RSI(14): 62.4（60超）");
     expect(ja.text).toContain("終値 150.000 は5本前の終値（149.800）より高い");
     expect(ja.text).toContain("損切り 150.300（30.0pips・1万通貨で ¥3,000 の損失）");
     expect(ja.text).toContain("利確 149.400（60.0pips）");
-    expect(ja.text).toContain("勝率は 31%（649回）");
+    expect(ja.text).toContain("勝率は 39%（102回）");
     expect(ja.text).toContain("届いていません");
     expect(ja.text).not.toContain("パラボリックSAR:");
     const en = renderSignalMail(s, "en");

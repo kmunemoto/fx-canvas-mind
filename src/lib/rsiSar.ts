@@ -1,5 +1,11 @@
 import type { GainzEvidence, GainzSummary, RsiSarEvidence, RsiSarSummary, RsiSarTrigger } from "./types";
 
+// #132: the rule's RSI length and levels, as analyze/rsisar.ts has them
+// (RSI_PERIOD, BUY_LEVEL, SELL_LEVEL; a test pins the two together) — for
+// the chart's RSI strip and the card's label
+export const RSI_SAR_PERIOD = 9;
+export const RSI_SAR_LEVELS = { buy: 25, sell: 75 };
+
 // #104: the RSI/SAR summary as the client accepts it. Everything arrives as
 // JSON from the analyze function (technicalData.rsiSar, entry_check.rsi_sar);
 // anything malformed is dropped rather than rendered as a price.

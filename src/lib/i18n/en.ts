@@ -186,9 +186,9 @@ export const en: Dict = {
     legend: "dashed = measured by the server / dotted = named by the model / band = the cloud at price",
     hiddenLevels: (n: number) => `${n} outside the visible range`,
     // #99: the bounce marks and the trend lines
-    signalLegend: "BUY · SELL = a closed bar where RSI came back from 30/70 with the SAR on the same side (✓ won ✗ lost … open). Dotted = that signal's stop (red) and target (green). Dots = Parabolic SAR (green under price · red over price)",
-    gainzLegend: "Outlined GA = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; stop 1 ATR, target 2× the stop)",
-    rsiLabel: "RSI(14)",
+    signalLegend: "BUY · SELL = a closed bar where RSI(9) came back from 25/75 with the SAR on the same side (✓ won ✗ lost … open). Dotted = that signal's stop (red) and target (green). Dots = Parabolic SAR (green under price · red over price)",
+    gainzLegend: "Outlined GA = the GA-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop)",
+    rsiLabel: "RSI(9)",
     trend: { lows: "lows", highs: "highs" },
     // The label on the flag: the side, then how it came out
     outcomeMark: { win: "✓", loss: "✗", ambiguous: "?", expired: "–", open: "…" },
@@ -213,8 +213,8 @@ export const en: Dict = {
       kLength: "%K length",
       kSmoothing: "%K smoothing",
       dSmoothing: "%D smoothing",
-      reset: "Back to the defaults (14, 1, 3)",
-      note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average, 80/20). Shown only: no signal is judged on it.",
+      reset: "Back to the defaults (21, 5, 3)",
+      note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average). The default settings and lines (21, 5, 3; 70/30) are from #132: every combination was tried, reading %K falling back under 70 as a sell and rising back over 30 as a buy, and this one won most often on the first period (2024-01 to 2025-06; it was TradingView's 14, 1, 3 and 80/20). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 17,317 trades, 28.7% won (break-even 33.3%), −0.136R each (the old setting: 46,684, 29.1%, −0.125R) — no better, and no different from entering at random. Shown only: no signal is judged on it.",
     },
     settingsTitle: "Chart settings",
     background: "Background",
@@ -239,16 +239,16 @@ export const en: Dict = {
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
-      `Pro-style ${side === "BUY" ? "buy" : "sell"} · score ${score}/100 (above ${rank}% of the last 100 scores)`,
+      `Pro-style ${side === "BUY" ? "buy" : "sell"} · score ${score}/100 (above ${rank}% of the last 50 scores)`,
     gainzProNote: (bars: number | null, status: "loading" | "ready" | "error") =>
       "Pro-style score: this app's own formulas for what GainzAlgo publishes about the Pro configuration of its Suite (pattern, volatility, momentum and trend turned into percentile-ranked scores, a signal above a threshold set by recent conditions). GainzAlgo's code is not public, so its signals will differ. " +
-      "On a down candle then an up candle (a sell: the mirror), ① the candle's shape (where it closed × its body's share of the range), ② RSI(14)'s acceleration, ③ its range expansion (true range ÷ the ATR(14) before it) and ④ EMA(50)'s 10-bar slope (for a buy, the more upward the higher) are each ranked among their last 100 values and averaged; a P marks a bar whose score is in the top 5% of the last 100 (under the candle for a buy, over it for a sell). " +
+      "On a down candle then an up candle (a sell: the mirror), ① the candle's shape (where it closed × its body's share of the range), ② RSI(14)'s acceleration, ③ its range expansion (true range ÷ the ATR(14) before it) and ④ EMA(50)'s 10-bar slope (for a buy, the more upward the higher) are each ranked among their last 50 values and averaged; a P marks a bar whose score is in the top 5% of the last 50 (under the candle for a buy, over it for a sell). " +
       (status === "loading"
-        ? "Loading the earlier candles it needs (about 260). "
+        ? "Loading the earlier candles it needs (about 160). "
         : status === "error"
           ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
           : `Computed over ${bars ?? 0} candles. `) +
-      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 43,665 trades, 29.3% won (break-even 33.3%), −0.118R each — no different from entering at random (the GA rule: 10,757, 28.8%, −0.134R). The same without the slope. " +
+      "The ranking window was searched in #132: 50 won most often on the first period (2024-01 to 2025-06; it was 100). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 43,752 trades, 29.5% won (break-even 33.3%), −0.114R each (with 100: 43,665, 29.3%, −0.118R) — no different from entering at random. " +
       "Shown only: no signal or email uses it.",
     // #129: Dow theory — the timeframes' short names, its levels and marks
     dowTfShort: { "4h": "4H", "1h": "1H", "15min": "15M", "5min": "5M" } as Record<string, string>,
@@ -267,34 +267,36 @@ export const en: Dict = {
             : `New ${dir === "up" ? "high" : "low"} ${level}`,
     dowNote: (status: "loading" | "ready" | "error", hasCurrent: boolean, higher: string[]) =>
       "Dow theory (built from what is said in an Instagram video by The5ers Japan presenting such an indicator; its author's code is not published and the full interview could not be read, so its readings may differ): " +
-      "swing highs and lows = a high (low) above (below) the 5 candles either side (known 5 candles later, never redrawn). HH = higher high, HL = higher low, LH = lower high, LL = lower low; the swings are joined by a thin line. " +
+      "swing highs and lows = a high (low) above (below) the 4 candles either side (known 4 candles later, never redrawn). HH = higher high, HL = higher low, LH = lower high, LL = lower low; the swings are joined by a thin line. " +
       "A close above the last swing high = uptrend (making new highs), and the swing low before it is the pullback low (green line); a downtrend mirrors it with the rally high (red line). " +
       "A close below the pullback low = ① (the first break: a sign of a turn). A swing low after it, a lower swing high, then a close below that low = Confirmed (the second break confirms the turn down — the owner's chosen reading of the video's \"touch it once more and it is confirmed\"). A close above the old uptrend's high before that = Off. A turn up from a downtrend mirrors it. " +
       (higher.length > 0 ? `Dashed = the higher timeframes' (${higher.join(", ")}) pullback low or rally high (thicker) and their last swing high and low. ` : "") +
       (hasCurrent ? "" : "This timeframe is not read (4h, 1h, 15m and 5m only). ") +
       (status === "loading" ? "Loading. " : status === "error" ? "Could not be read (tried again in a minute). " : "") +
       "Judged on closed candles' closes only. " +
-      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): entering at the confirmation (the second break), 2,059 trades, 28.6% won (break-even 33.3%), −0.139R each; at the first break, 3,094 trades, 29.9%, −0.101R; at each new high or low, 5,434 trades, 31.3%, −0.062R. None differs from entering at random beyond noise; waiting for the second break did not help, nor did keeping to the higher timeframe's direction. " +
+      "The swing width was searched in #132: 4 candles either side won most often on the first period (2024-01 to 2025-06; it was 5). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid), entering at the confirmation (the second break): 2,460 trades, 29.4% won (break-even 33.3%), −0.117R each (with 5: 2,059, 28.6%, −0.139R) — no different from entering at random beyond noise. Measured with 5, entering at the first break or at each new high or low, or keeping to the higher timeframe's direction, did no better. " +
       "Shown only: no signal or email uses it.",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
-      "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(100) and HMA(60) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
-      "An uptrend when a closed candle's low crosses above the top line (candles turn lime), a downtrend when its high crosses below the bottom line (blue). The low (high) of the candle the trend began on is drawn as a dotted level; ◆ = the close or wick crossing back over it in the trend's direction (a retest, at least 6 candles after the last ◆). " +
+      "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(75) and HMA(35) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
+      "An uptrend when a closed candle's low crosses above the top line (candles turn lime), a downtrend when its high crosses below the bottom line (blue). The low (high) of the candle the trend began on is drawn as a dotted level; ◆ = the close or wick crossing back over it in the trend's direction (a retest, at least 11 candles after the last ◆). " +
       (status === "loading"
         ? "Loading the earlier candles its 200-candle average needs. "
         : status === "error"
           ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
           : `Computed over ${bars ?? 0} candles (including those before the screen). `) +
-      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): entering at its turns, 5,687 trades, 29.7% won (break-even 33.3%), −0.109R each; at its ◆, 9,028 trades, 30.4%, −0.085R. Neither differs from entering at random beyond noise (1h a little better, still about zero). " +
+      "Settings from #132: every combination was tried and this one won most often on the first period (2024-01 to 2025-06) — Length 75 and a retest gap of 10 (the original's defaults are 100 and 5). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid), entering at its turns and its ◆: 10,056 trades, 29.2% won (break-even 33.3%), −0.122R each — no better than the old setting (12,361, 29.9%, −0.102R) and no different from entering at random. " +
       "Shown only: no signal or email uses it.",
     // #123: the two Flux Charts ports, shown as one indicator
     fvgProfileNote: (bars: number) =>
       "FVG Crossfire + Weighted Volume Profile (both ports of Flux Charts' open-source code, MPL 2.0, shown together as one). " +
-      "[Boxes] only where a new fair value gap printed over an unfilled opposite one. Green = bullish, red = bearish (the newer gap's side). Another opposite gap over it flips it and narrows it to the overlap. ★ = times formed or flipped, ▲▼ = a candle back in the zone after leaving it (a retest), the faint wedge = the gap it grew from, a faint box = finished by a close through its far side. Judged on closed candles. Only the candles on the chart are searched (the live chart's 120), not the original's 3,000, so there are fewer zones. " +
+      "[Boxes] only where a new fair value gap (at least 0.05% of price) printed over an unfilled opposite one. Green = bullish, red = bearish (the newer gap's side). Another opposite gap over it flips it and narrows it to the overlap. ★ = times formed or flipped, ▲▼ = a candle back in the zone after leaving it (a retest), the faint wedge = the gap it grew from, a faint box = finished by a close through its far side. Judged on closed candles. Only the candles on the chart are searched (the live chart's 120), not the original's 3,000, so there are fewer zones. " +
       `[Bars at the left] the price range of the newest ${bars} candles${bars < 200 ? " (all the chart has; the original reads 200)" : ""} in 30 rows, each as long as the number of candles that traded through it — green for up candles, red for down, longest = most. The yellow line = the fullest row (the point of control). The original weighs each candle by its volume; GMO's FX candles have none, so here every candle counts as 1: the bars show where price spent its time, not volume. Drawn under the candles and see-through (the original's boxes are opaque, on top). ` +
+      "The smallest gap (0.05% of price) is from #132: every setting was tried and this one's retest arrows (▲▼) won most often on the first period (2024-01 to 2025-06; the original's default is 0, every gap; the 3-bar fill delay stayed, as 2 and 3 gave the same results). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 5,287 trades, 31.4% won (break-even 33.3%), −0.057R each (the old setting: 22,085, 29.0%, −0.128R); +0.042R over entering at random, within noise (95%: −0.005 to +0.089R). " +
       "Shown only: no signal or email uses it.",
     kalmanNote:
-      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 7,164 trades, 29.4% won (break-even 33.3%), −0.116R each — no different from entering at random (1h: −0.031R, +0.05R over random, within noise). The RSI filter removed about 1 in 7,000. No signal or email uses it.",
+      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(7) smoothed by a Kalman filter → Supertrend (1.5 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. " +
+      "Settings from #132: every combination was tried and this one won most often on the first period (2024-01 to 2025-06) — ATR 7, 1.5x, a stronger Kalman smoothing (it was ATR 10, 3x). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 15,901 trades, 29.2% won (break-even 33.3%), −0.121R each — no better than the old setting (7,164, 29.4%, −0.116R) and no different from entering at random. No signal or email uses it.",
     hide: "Hide",
     show: "Show",
     foldList: "Fold the list",
@@ -307,9 +309,9 @@ export const en: Dict = {
   // which the rule fires, and the evidence the rule was adopted on
   rsiSar: {
     title: "RSI × Parabolic SAR",
-    rule: "Buy: RSI(14) comes back above 30 from 30 or below, with the SAR under price. Sell: RSI comes back below 70 from 70 or above, with the SAR over price. Both are judged on closed bars.",
+    rule: "Buy: RSI(9) comes back above 25 from 25 or below, with the SAR under price. Sell: RSI comes back below 75 from 75 or above, with the SAR over price. Both are judged on closed bars (the RSI length and levels were searched in #132 and are the ones that won most often on past charts; they were RSI(14), 30/70).",
     nowTitle: "Now",
-    rsi: (prev: string, now: string) => `RSI(14) ${prev} → ${now}`,
+    rsi: (prev: string, now: string) => `RSI(9) ${prev} → ${now}`,
     sar: (level: string, below: boolean) => `Parabolic SAR ${level} (${below ? "under price, the buy side" : "over price, the sell side"})`,
     fired: (side: string) => `The newest closed bar gave a ${side} signal`,
     noSignal: "No signal on the newest closed bar",
@@ -325,9 +327,9 @@ export const en: Dict = {
     },
     notReady: {
       BUY: (price: string, dist: string, sar: string) =>
-        `Not set up yet. First a close at or below ${price} has to take RSI under 30 (${dist} from the current price). After that, when RSI comes back above 30 with price above the SAR (now ${sar}), it is a buy.`,
+        `Not set up yet. First a close at or below ${price} has to take RSI under 25 (${dist} from the current price). After that, when RSI comes back above 25 with price above the SAR (now ${sar}), it is a buy.`,
       SELL: (price: string, dist: string, sar: string) =>
-        `Not set up yet. First a close at or above ${price} has to take RSI over 70 (${dist} from the current price). After that, when RSI comes back below 70 with price below the SAR (now ${sar}), it is a sell.`,
+        `Not set up yet. First a close at or above ${price} has to take RSI over 75 (${dist} from the current price). After that, when RSI comes back below 75 with price below the SAR (now ${sar}), it is a sell.`,
     },
     plan: (entry: string, stop: string, target: string) => `The plan then: entry ${entry} · stop ${stop} · target ${target}`,
     costlyNext: (jstHour: number) => `The next bar closes in the ${jstHour}:00 JST hour, when the spread widens; the app stands aside then even if the conditions are met.`,
@@ -373,9 +375,9 @@ export const en: Dict = {
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
     recommended:
-      "The recommended setting is GA style on the 1-hour chart: of its three timeframes, the only one that did a little better than entering at random in both periods (+0.07R, +0.01R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
-    gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 50, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open). The SAR band is a guide to the trend; the GA-style rule does not use it",
-    rsiSarLegend: "BUY · SELL = a closed bar where RSI came back from 30/70 with the SAR on the same side (✓ won ✗ lost … open). Dots = Parabolic SAR (green under price · red over price)",
+      "The recommended setting is GA style on the 15-minute chart: with the GA settings chosen again in #132, of its three timeframes the only one that did a little better than entering at random in both periods (+0.07R, +0.02R). The difference is within noise and, after the spread, it still lost money: it is not a reason to expect to win.",
+    gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 40, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open). The SAR band is a guide to the trend; the GA-style rule does not use it",
+    rsiSarLegend: "BUY · SELL = a closed bar where RSI(9) came back from 25/75 with the SAR on the same side (✓ won ✗ lost … open). Dots = Parabolic SAR (green under price · red over price)",
     latestTitle: (rule: string) => `Latest signal (${rule})`,
     latestPlan: (entry: string, tp: string, sl: string) => `Entry ${entry}  TP ${tp}  SL ${sl}`,
     outcome: { win: "Result: reached the target", loss: "Result: reached the stop", ambiguous: "Result: both in one bar (counted as a loss)", expired: "Result: not settled in 48 bars", open: "Result: open" } as Record<string, string>,
@@ -415,8 +417,8 @@ export const en: Dict = {
 
   gainz: {
     title: "GA-style signal (GainzAlgo V2 Alpha style)",
-    rule: "Buy: the previous bar closed down and this one closes up, above that bar's open (engulfing); the body is more than half the bar's range; RSI(14) is below 50; the close is below the close 5 bars ago. Sell is the mirror. Judged on closed bars.",
-    origin: "A reproduction matched to the settings on the GainzAlgo Suite screen (0.5 · 50 · 5 · 1:2). GainzAlgo does not publish its logic, so the signals may differ. The app's signal (RSI × SAR) does not use it.",
+    rule: "Buy: the previous bar closed down and this one closes up, above that bar's open (engulfing); the body is more than 70% of the bar's range; RSI(14) is below 40; the close is below the close 5 bars ago. Sell is the mirror (RSI over 60). Judged on closed bars.",
+    origin: "A reproduction matched to the settings on the GainzAlgo Suite screen (0.5 · 50 · 5 · 1:2), with its numbers then searched in #132 and set to the ones that won most often on the first period of past charts: 0.7 · 40 · 5 (the stop and target unchanged). GainzAlgo does not publish its logic, so the signals may differ. The app's signal (RSI × SAR) does not use it.",
     fired: (side: string) => `The newest closed bar gave a ${side} signal`,
     noSignal: "No signal on the newest closed bar",
     sides: { BUY: "Buy", SELL: "Sell" },
@@ -1416,7 +1418,7 @@ export const en: Dict = {
     pains: ["Too many indicators to watch", "Never sure when to enter", "Nobody ever checks whether the tool was right"],
     featuresTitle: "What Sextant does",
     features: [
-      { title: "Data pulled automatically", desc: "RSI(14) and the Parabolic SAR computed from live prices, together with this week's economic calendar" },
+      { title: "Data pulled automatically", desc: "RSI(9) and the Parabolic SAR computed from live prices, together with this week's economic calendar" },
       { title: "Past signals on the chart", desc: "Every bar where the RSI and SAR conditions were met is marked BUY or SELL, with its stop, its target and whether it won" },
       { title: "Only closed bars are counted", desc: "The forming bar and the flat stretches from hours when the market was shut are dropped before any indicator is computed, so a weekend does not bend the numbers" },
     ],
@@ -1443,14 +1445,14 @@ export const en: Dict = {
     honestBody: "We will not publish a win rate until the sample is large enough to mean something. Our threshold is 50 independent settled trades; past that, the app shows it with a 95% confidence interval. We would rather show you nothing than only the flattering numbers.",
     faqTitle: "Frequently asked questions",
     faqs: [
-      { q: "What is Sextant?", a: "A technical analysis tool for currency pairs. It decides buy and sell conditions on two indicators only, RSI(14) and the Parabolic SAR, on 1m, 15m, 1h, 4h and daily charts." },
+      { q: "What is Sextant?", a: "A technical analysis tool for currency pairs. It decides buy and sell conditions on two indicators only, RSI(9) and the Parabolic SAR, on 1m, 15m, 1h, 4h and daily charts." },
       { q: "How is this different from other AI analysis tools?", a: "Every call it makes is scored, and every losing call is investigated automatically. Plans are tracked against real bid/ask prices until they expire; the losers are traced back to a cause, which is recorded in a rulebook. You can read those rules in the app, along with how many settled trades support each one." },
       { q: "What is the win rate?", a: "We do not publish one yet, because the sample is not large enough to mean anything — over a handful of trades a win rate is indistinguishable from luck. Our threshold is 50 independent settled trades, after which the app shows it with a 95% confidence interval." },
       { q: "Is this investment advice?", a: "No. The service provides market analysis, not investment advice or brokerage. Every trading decision, and its outcome, remains yours." },
       { q: "Which currency pairs are supported?", a: "Major pairs including USD/JPY, EUR/USD, GBP/JPY and EUR/JPY. The Light plan covers USD/JPY only; Standard and Pro cover every pair." },
       { q: "Is there a free option?", a: "Creating an account is free and lets you see the plans and the app, but running an analysis requires a paid plan: Light (¥2,980/month), Standard (¥5,980/month) or Pro (¥12,800/month)." },
       { q: "How long does an analysis take?", a: "About 10–15 seconds for technicals only, and about 20–30 seconds when fundamental analysis is included." },
-      { q: "Which technical indicators are used?", a: "Two: RSI(14) and the Parabolic SAR (0.02, 0.2). A signal is given on a closed bar where RSI comes back from 30 or 70 with the SAR on the same side. ATR(14) sets the stop and target distances. In tests on past charts, this rule's win rate did not reach break-even." },
+      { q: "Which technical indicators are used?", a: "Two: RSI(9) and the Parabolic SAR (0.02, 0.2). A signal is given on a closed bar where RSI comes back from 25 or 75 with the SAR on the same side (the numbers that won most often on past charts). ATR(14) sets the stop and target distances. In tests on past charts, this rule's win rate did not reach break-even." },
       { q: "Can I cancel at any time?", a: "Yes, from your account page at any time. You keep access until the end of the current billing period." },
     ],
     ctaTitle: "Get started now",
@@ -1515,7 +1517,7 @@ export const en: Dict = {
     ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
-      "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 50, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction matched to the GainzAlgo Suite settings; its logic is not published, so the signals may differ.",
+      "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
     gainzNotes: [
       "On past charts (2025-07 to 2026-09, 11 pairs, spread paid) it won 28.8% with −0.134R per trade on average, short of the 33.3% break-even, and no better than entering at every bar.",
       "On 15-minute charts it fires a few times a day per pair, so expect many emails.",

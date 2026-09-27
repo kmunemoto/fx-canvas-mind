@@ -51,7 +51,7 @@ describe("#131 the Pro-style score on the chart", () => {
     expect(screen.queryAllByTestId("chart-gainzpro-signal-BUY")).toHaveLength(expected.filter((s) => s.side === "BUY").length);
     const legend = screen.getByTestId("chart-gainzpro-legend").textContent!;
     expect(legend).toContain("独自に式にしたもの");
-    expect(legend).toContain("43,665回・勝率29.3%");
+    expect(legend).toContain("43,752回・勝率29.5%");
     expect(legend).toContain("計算に使った足: 700本");
   });
 

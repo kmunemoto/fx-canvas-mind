@@ -1,5 +1,4 @@
-// The analysis, from #104 on: RSI(14) and the Parabolic SAR, and nothing
-// else.
+// The analysis, from #104 on: RSI and the Parabolic SAR, and nothing else.
 //
 // The owner's instruction (2026-09-25): 「これからのチャート分析はRSI と
 // パラボリックSARで分析してください。他はいりません。」 — after #102 found RSI
@@ -7,14 +6,18 @@
 // the only partner whose contribution to it was positive in both periods of
 // the study (research/rsi-pairs.ts).
 //
-// THE RULE, exactly as the study tested it (research/rsi-combos.ts, base
-// "bounce" with partner "psar"; src/test/rsisar.test.ts pins the two to the
-// same bars):
+// THE RULE, as the study tested it (research/rsi-combos.ts, base "bounce"
+// with partner "psar"):
 //
-//   BUY  when RSI(14) closes back above 30 (the bar before it was 30 or
-//        below) and the SAR is under price after that bar;
-//   SELL when RSI(14) closes back below 70 (the bar before it was 70 or
-//        above) and the SAR is over price after that bar.
+//   BUY  when RSI closes back above BUY_LEVEL (the bar before it was at or
+//        below it) and the SAR is under price after that bar;
+//   SELL when RSI closes back below SELL_LEVEL (the bar before it was at or
+//        above it) and the SAR is over price after that bar.
+//
+// #132: its numbers were searched (research/tune.ts, docs §8.45: the owner's
+// 「一番勝率の高い設定を探してそれをそのインジケーターに設定して」) — RSI(9),
+// 25/75 and the SAR's 0.02/0.2 won most often on the study's first period,
+// with the plan below unchanged. #103 had tested RSI(14), 30/70.
 //
 // Read on CLOSED bars only. A plan is published when the rule fired on the
 // newest closed bar; at any other time the answer is WAIT, and the reader is
@@ -31,9 +34,9 @@ import type { Candle } from "./indicators.ts";
 import { atrSeriesOf, barOpenMs } from "./state.ts";
 import { costlyHourAt } from "./timing.ts";
 
-export const RSI_PERIOD = 14;
-export const BUY_LEVEL = 30;
-export const SELL_LEVEL = 70;
+export const RSI_PERIOD = 9;
+export const BUY_LEVEL = 25;
+export const SELL_LEVEL = 75;
 export const SAR_STEP = 0.02;
 export const SAR_MAX = 0.2;
 // The plan: the same numbers entry.ts's floors are written around
@@ -45,7 +48,8 @@ export const HORIZON_BARS = 48;
 // Fewer closed bars than this and neither line has settled from its seed
 export const MIN_BARS = 60;
 // The version of the rule a row was decided by, stored on it
-export const RULE_ID = "rsi14_30_70_psar_v1";
+// (v1 was RSI(14), 30/70, until #132)
+export const RULE_ID = "rsi9_25_75_psar_v2";
 
 export type Side = "BUY" | "SELL";
 export type Outcome = "win" | "loss" | "ambiguous" | "expired" | "open";
@@ -395,8 +399,8 @@ export const readRsiSar = (bars: Candle[]): RsiSarRead => {
 
 // ---- what was measured --------------------------------------------------------------
 
-// The study behind the rule (#103, research/rsi-pairs.ts): GMO 15-minute
-// bid/ask, eleven pairs, 2024-01 to 2026-09, the rule chosen on the first
+// The study behind the rule's numbers (#132, research/tune.ts): GMO 15-minute
+// bid/ask, eleven pairs, 2024-01 to 2026-09, the setting chosen on the first
 // period and these numbers read on the SECOND (2025-07 onwards), spread paid,
 // 17:00-23:59 UTC left out on 15min and 1h.
 //
@@ -418,12 +422,12 @@ export const RSI_SAR_EVIDENCE = {
   pairs: 11,
   breakeven: { win: 0.4, hit: 0.5 },
   blind: { win: 0.35, hit: 0.448 },
-  all: { measured: true, win: 0.354, winN: 1239, hit: 0.46, hitN: 1243 } as RsiSarEvidence,
+  all: { measured: true, win: 0.355, winN: 802, hit: 0.453, hitN: 802 } as RsiSarEvidence,
   byTf: {
     "1min": { measured: false, win: null, winN: null, hit: null, hitN: null },
-    "15min": { measured: true, win: 0.35, winN: 885, hit: 0.462, hitN: 888 },
-    "1h": { measured: true, win: 0.34, winN: 247, hit: 0.44, hitN: 248 },
-    "4h": { measured: true, win: 0.421, winN: 107, hit: 0.495, hitN: 107 },
+    "15min": { measured: true, win: 0.35, winN: 568, hit: 0.454, hitN: 568 },
+    "1h": { measured: true, win: 0.348, winN: 161, hit: 0.416, hitN: 161 },
+    "4h": { measured: true, win: 0.411, winN: 73, hit: 0.521, hitN: 73 },
     "1day": { measured: false, win: null, winN: null, hit: null, hitN: null },
   } as Record<string, RsiSarEvidence>,
 };
@@ -439,8 +443,8 @@ export const rsiSarLines = (read: RsiSarRead, decimals: number, entryRung: boole
   const n = read.now;
   const sarSide = n.long === null ? "—" : n.long ? "価格の下（買い側）" : "価格の上（売り側）";
   const lines = [
-    `RSI(14)（確定足）: ${f(n.rsiPrev, 1)} → ${f(n.rsi, 1)}`,
-    `パラボリックSAR(0.02, 0.2)（確定足）: ${f(n.sar, decimals)}・${sarSide}`,
+    `RSI(${RSI_PERIOD})（確定足）: ${f(n.rsiPrev, 1)} → ${f(n.rsi, 1)}`,
+    `パラボリックSAR(${SAR_STEP}, ${SAR_MAX})（確定足）: ${f(n.sar, decimals)}・${sarSide}`,
     `ATR(14): ${f(n.atr, decimals)}`,
     `最新の確定足（${n.datetime} UTC）でのサイン: ${n.signal ?? "なし"}`,
   ];

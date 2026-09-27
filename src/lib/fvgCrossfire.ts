@@ -43,8 +43,10 @@ export const FVG_DEFAULTS = {
   maxFvgs: 80,
   maxSegments: 120,
   maxRetestMarks: 20,
-  // smallest gap kept, % of price (0: every gap)
-  minGapPct: 0,
+  // smallest gap kept, % of price (0: every gap). #132: 0.05, the setting
+  // whose retest arrows won most often on the first period of every one
+  // tried (research/tune.ts; docs §8.45); the original's default is 0
+  minGapPct: 0.05,
 };
 
 type Bar = { datetime: string; high: number; low: number; close: number };
@@ -82,6 +84,11 @@ export interface CrossfireSegment {
 
 export interface CrossfireRead {
   segments: CrossfireSegment[];
+  // #132: every retest arrow the chart showed at its bar's close, in order,
+  // kept after its chain finished (the chart clears those) — for measuring
+  // them on past data. One whose chain finished on the same bar is left out
+  // (the chart never showed it).
+  retestEvents: Array<{ i: number; dir: 1 | -1 }>;
   // the newest closed bar the engine read
   lastClosed: number;
 }
@@ -133,6 +140,7 @@ export const fvgCrossfire = (
   let fvgs: Fvg[] = [];
   let segs: CrossfireSegment[] = [];
   let chainSeq = 0;
+  const retestEvents: Array<{ i: number; dir: 1 | -1; chainId: number }> = [];
 
   const newSegment = (dir: 1 | -1, t: number, bot: number, cid: number, flips: number, handoff: number, bar: number): CrossfireSegment => {
     const s: CrossfireSegment = {
@@ -222,12 +230,16 @@ export const fvgCrossfire = (
       if (!s.active || s.done || s.createBar >= i) continue;
       const touch = bar.high >= s.bottom && bar.low <= s.top;
       if (touch && !s.touching) {
+        retestEvents.push({ i, dir: s.dir, chainId: s.chainId });
         s.retests.push(i);
         if (s.retests.length > o.maxRetestMarks) s.retests.shift();
       }
       s.touching = touch;
       const through = s.dir === 1 ? bar.close <= s.bottom : bar.close >= s.top;
       if (through) {
+        for (let k = retestEvents.length - 1; k >= 0 && retestEvents[k].i === i; k--) {
+          if (retestEvents[k].chainId === s.chainId) retestEvents.splice(k, 1);
+        }
         for (const c of segs) {
           if (c.chainId !== s.chainId || c.done) continue;
           c.done = true;
@@ -241,7 +253,7 @@ export const fvgCrossfire = (
     if (fvgs.length > o.maxFvgs) fvgs = fvgs.slice(fvgs.length - o.maxFvgs);
     if (segs.length > o.maxSegments) segs = segs.slice(segs.length - o.maxSegments);
   }
-  return { segments: segs, lastClosed: n - 1 };
+  return { segments: segs, retestEvents: retestEvents.map(({ i, dir }) => ({ i, dir })), lastClosed: n - 1 };
 };
 
 // The star counter: ★ per formation up to four, then a count

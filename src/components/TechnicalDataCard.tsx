@@ -1,6 +1,7 @@
 import type { TechnicalData } from "@/lib/types";
 import { BarChart3 } from "lucide-react";
 import { useT } from "@/lib/i18n";
+import { RSI_SAR_LEVELS, RSI_SAR_PERIOD } from "@/lib/rsiSar";
 
 interface Props {
   data: TechnicalData;
@@ -27,7 +28,7 @@ const TechnicalDataCard = ({ data }: Props) => {
   const t = useT();
   const now = data.rsiSar?.now ?? null;
   const rsi = now?.rsi ?? null;
-  const rsiNote = rsi === null ? "" : rsi >= 70 ? t.technical.overbought : rsi <= 30 ? t.technical.oversold : "";
+  const rsiNote = rsi === null ? "" : rsi >= RSI_SAR_LEVELS.sell ? t.technical.overbought : rsi <= RSI_SAR_LEVELS.buy ? t.technical.oversold : "";
   const decimals = data.price.includes(".") ? data.price.split(".")[1].length : 3;
 
   return (
@@ -45,9 +46,9 @@ const TechnicalDataCard = ({ data }: Props) => {
 
       <div className="space-y-0">
         <Row
-          label="RSI(14)"
+          label={`RSI(${RSI_SAR_PERIOD})`}
           value={rsi === null ? "—" : `${rsi.toFixed(1)}${rsiNote}`}
-          tone={rsi !== null && (rsi >= 70 || rsi <= 30) ? "warn" : undefined}
+          tone={rsi !== null && (rsi >= RSI_SAR_LEVELS.sell || rsi <= RSI_SAR_LEVELS.buy) ? "warn" : undefined}
         />
         <Row
           label={t.technical.sar}

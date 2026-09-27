@@ -23,13 +23,14 @@ import {
   type Tick,
 } from "@/lib/liveChart";
 
-// #114: which rule's signals the chart shows. GA-style on 1h is the
-// recommended setting (docs §8.27): of the GA rule's three measured
-// timeframes, the only one that did (slightly, within noise) better than
-// entering at random in both periods. Not an edge: after the spread it lost.
+// #114: which rule's signals the chart shows. GA-style is the recommended
+// view, on the timeframe that — of the GA rule's three measured ones — was
+// the only one (slightly, within noise) better than entering at random in
+// both periods. Not an edge: after the spread it lost. That was 1h (docs
+// §8.27); with the GA settings chosen in #132 it is 15min (docs §8.45).
 export type LiveView = "gainz" | "rsi_sar" | "both";
 const VIEWS: LiveView[] = ["gainz", "rsi_sar", "both"];
-export const RECOMMENDED_INTERVAL = "1h";
+export const RECOMMENDED_INTERVAL = "15min";
 
 const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
