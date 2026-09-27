@@ -156,7 +156,8 @@ describe("#129 Dow theory on the chart", () => {
     const legend = screen.getByTestId("chart-dow-legend").textContent!;
     expect(legend).toContain("オーナーが選んだ");
     expect(legend).toContain("上位足（1H）");
-    expect(legend).toContain("過去のチャートでの成績はまだ測っていません");
+    // #130: what the study found, said beside it
+    expect(legend).toContain("確定（2回目）で入ると 2,059回・勝率28.6%");
   });
 
   it("is listed with a switch, and off draws nothing", () => {

@@ -259,7 +259,9 @@ export const en: Dict = {
       (higher.length > 0 ? `Dashed = the higher timeframes' (${higher.join(", ")}) pullback low or rally high (thicker) and their last swing high and low. ` : "") +
       (hasCurrent ? "" : "This timeframe is not read (4h, 1h, 15m and 5m only). ") +
       (status === "loading" ? "Loading. " : status === "error" ? "Could not be read (tried again in a minute). " : "") +
-      "Judged on closed candles' closes only. Shown only: no signal or email uses it. Not yet measured on past data.",
+      "Judged on closed candles' closes only. " +
+      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): entering at the confirmation (the second break), 2,059 trades, 28.6% won (break-even 33.3%), −0.139R each; at the first break, 3,094 trades, 29.9%, −0.101R; at each new high or low, 5,434 trades, 31.3%, −0.062R. None differs from entering at random beyond noise; waiting for the second break did not help, nor did keeping to the higher timeframe's direction. " +
+      "Shown only: no signal or email uses it.",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
       "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(100) and HMA(60) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
