@@ -19,15 +19,16 @@ export interface StochParams {
   dSmoothing: number;
 }
 
-// #132: %K 21 smoothed over 5, and zone lines at 70/30 — the setting whose
-// zone exits won most often on the first period of every one tried
-// (research/tune.ts; docs §8.45). It was TradingView's 14, 1, 3 and 80/20.
-export const STOCH_DEFAULTS: StochParams = { kLength: 21, kSmoothing: 5, dSmoothing: 3 };
-// the defaults before #132, which a browser that saved them before then
-// holds without having chosen them (chartPrefs moves it to the new ones)
-export const STOCH_OLD_DEFAULTS: StochParams = { kLength: 14, kSmoothing: 1, dSmoothing: 3 };
+// TradingView's defaults. #132 made them 21, 5, 3 with lines at 70/30 (the
+// first period's best); that did worse on the second period, and #133 put
+// these back (docs §8.45)
+export const STOCH_DEFAULTS: StochParams = { kLength: 14, kSmoothing: 1, dSmoothing: 3 };
+// #132's defaults, which a browser that saved its preferences while they
+// were the defaults holds without having chosen them (chartPrefs moves it
+// back)
+export const STOCH_132_DEFAULTS: StochParams = { kLength: 21, kSmoothing: 5, dSmoothing: 3 };
 export const STOCH_MAX = 100;
-export const STOCH_LEVELS = { upper: 70, middle: 50, lower: 30 };
+export const STOCH_LEVELS = { upper: 80, middle: 50, lower: 20 };
 
 const whole = (v: unknown, fallback: number): number => {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;

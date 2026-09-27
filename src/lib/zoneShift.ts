@@ -31,15 +31,14 @@
 //
 // Shown on the chart only: no signal, alert or record is judged on it.
 
-// #132: the setting that won most often on the first period of every one
-// tried (research/tune.ts; docs §8.45): Length 75 and a retest gap of 10.
-// The original's defaults are Length 100 and a gap of 5.
+// #132's first-period best (Length 75, a retest gap of 10) did worse on the
+// second period, and #133 kept the original's (docs §8.45)
 export const ZS_DEFAULTS = {
-  length: 75,
+  length: 100,
   // the range average's length, fixed in the original
   rangeLength: 200,
   // candles that must pass between two retests (more than this)
-  retestGap: 10,
+  retestGap: 5,
 };
 
 type Bar = { open: number; high: number; low: number; close: number };

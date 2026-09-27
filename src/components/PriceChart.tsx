@@ -2313,8 +2313,7 @@ const PriceChart = ({
         ],
       })}
       {/* #117: the stochastic, drawn as TradingView draws it — %K blue, %D
-          orange, its zone lines and the band between them shaded (#132:
-          70/50/30) */}
+          orange, 80/50/20, the band between 20 and 80 shaded */}
       {showStoch && strip({
         testid: "chart-stoch",
         aria: t.chart.stoch.name,

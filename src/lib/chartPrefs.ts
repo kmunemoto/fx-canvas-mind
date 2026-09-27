@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { STOCH_DEFAULTS, STOCH_OLD_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
+import { STOCH_132_DEFAULTS, STOCH_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
 
 // #117: which indicator strips the charts show under the price, and the
 // stochastic's lengths (#118: the background; #119: what is drawn over the
@@ -70,10 +70,13 @@ export interface ChartPrefs {
 }
 
 export const CHART_PREFS_KEY = "sextant.chart.prefs.v1";
-// #132: saved beside the preferences once the stochastic's defaults changed;
-// preferences saved before it that hold the old defaults (14, 1, 3) held
-// them because they were the defaults, and take the new ones
-const STOCH_DEFAULTS_MARK = 132;
+// Saved beside the preferences, to say which stochastic defaults were in
+// force when they were saved. #132 changed the defaults to 21, 5, 3 and
+// marked what it saved 132; #133 put 14, 1, 3 back. Preferences marked 132
+// that hold 21, 5, 3 held them because they were the defaults, and take
+// 14, 1, 3 again; anything saved from now on is marked 133 and kept.
+const STOCH_DEFAULTS_MARK = 133;
+const STOCH_132_MARK = 132;
 const sameStoch = (a: StochParams, b: StochParams) => a.kLength === b.kLength && a.kSmoothing === b.kSmoothing && a.dSmoothing === b.dSmoothing;
 export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   rsi: true,
@@ -96,7 +99,7 @@ const read = (): ChartPrefs => {
       stoch: typeof v.stoch === "boolean" ? v.stoch : CHART_PREFS_DEFAULTS.stoch,
       stochParams: (() => {
         const p = normalizeStochParams(v.stochParams);
-        return v.stochDefaults !== STOCH_DEFAULTS_MARK && sameStoch(p, STOCH_OLD_DEFAULTS) ? STOCH_DEFAULTS : p;
+        return v.stochDefaults === STOCH_132_MARK && sameStoch(p, STOCH_132_DEFAULTS) ? STOCH_DEFAULTS : p;
       })(),
       theme: v.theme === "light" ? "light" : "dark",
       overlays: overlaysOf(v.overlays),

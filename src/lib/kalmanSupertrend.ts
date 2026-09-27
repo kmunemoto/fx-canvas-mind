@@ -29,10 +29,9 @@ export interface KalmanStParams {
   rsiLength: number;
 }
 
-// #132: the setting that won most often on the first period of every one
-// tried (research/tune.ts; docs §8.45) — ATR(7), 1.5 ATR, Q/R 0.01/0.02 (a
-// Kalman gain of 0.5, about a 3-bar EMA). It was ATR(10), 3 ATR, 0.01/0.1.
-export const KST_DEFAULTS: KalmanStParams = { q: 0.01, r: 0.02, atrLength: 7, factor: 1.5, rsiLength: 14 };
+// #132's first-period best (ATR 7, 1.5 ATR, R 0.02) did worse on the second
+// period, and #133 kept these (docs §8.45)
+export const KST_DEFAULTS: KalmanStParams = { q: 0.01, r: 0.1, atrLength: 10, factor: 3, rsiLength: 14 };
 
 type Bar = { high: number; low: number; close: number };
 
