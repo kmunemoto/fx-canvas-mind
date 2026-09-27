@@ -31,6 +31,9 @@ export interface ChartOverlays {
   zoneShift: boolean;
   // #129: Dow theory on four timeframes (the live chart)
   dow: boolean;
+  // #131: the Pro-style confidence score (this app's reading of GainzAlgo's
+  // Pro configuration)
+  gainzPro: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -43,6 +46,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   fvgProfile: true,
   zoneShift: true,
   dow: true,
+  gainzPro: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

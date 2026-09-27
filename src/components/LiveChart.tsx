@@ -175,12 +175,14 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   // Data's bars.
   const overlays = useChartPrefs().overlays;
   const zoneShiftOn = overlays.zoneShift;
+  // #131: the Pro-style score reads the same history
+  const historyOn = zoneShiftOn || overlays.gainzPro;
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)
   const gmoRead = read && (read.source === "gmo" || read.feed === "gold") ? read : null;
   useEffect(() => {
-    if (!zoneShiftOn || !gmoRead) return;
+    if (!historyOn || !gmoRead) return;
     const h = history;
     const fresh = h && h.key === historyKey && (h.status === "loading" || h.readAt === gmoRead.at || (h.status === "ready" && historyBefore(h.bars, gmoRead.candles) !== null));
     if (fresh) return;
@@ -196,7 +198,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         setHistory({ key: historyKey, readAt, bars: null, status: "error" });
       },
     );
-  }, [zoneShiftOn, gmoRead, history, historyKey, pair, interval, loadHistory]);
+  }, [historyOn, gmoRead, history, historyKey, pair, interval, loadHistory]);
 
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on

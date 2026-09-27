@@ -10,6 +10,7 @@ import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
+import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 import type { DowTf } from "@/lib/liveChart";
 
@@ -136,6 +137,8 @@ interface Props {
 // box that would land on one already drawn. The rest keep the label and say
 // their levels on hover. More boxes than this on a phone is a wall.
 const LEVEL_BOXES = 3;
+// #131: the bars the Pro-style score needs before its first signal
+const GP_MIN_BARS = 2 * GP_DEFAULTS.window + GP_DEFAULTS.emaLength + GP_DEFAULTS.slopeBars;
 // #124: no history (one array, so the memo that reads it holds)
 const NO_BARS: ReadonlyArray<{ open: number; high: number; low: number; close: number }> = [];
 
@@ -358,6 +361,16 @@ const PriceChart = ({
     const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
     return { ...zoneShift(all, formingLast ? all.length - 2 : all.length - 1), off: zsPast.length, total: all.length };
   }, [ov.zoneShift, zsListed, zsPast, candles, formingLast]);
+  // #131: the Pro-style score's signals, over the same history as Zone Shift
+  // (each part and the score are ranked against 100 bars each, so its first
+  // signal needs about 260); listed where Zone Shift is
+  const gpListed = zoneShiftHistory !== undefined || candles.length >= GP_MIN_BARS;
+  const gp = useMemo(() => {
+    if (!ov.gainzPro || !gpListed || candles.length === 0 || zsPast === null) return null;
+    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    const read = gainzPro(all, GP_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
+    return { signals: read.signals.map((sg) => ({ ...sg, i: sg.i - zsPast.length })).filter((sg) => sg.i >= 0), total: all.length };
+  }, [ov.gainzPro, gpListed, zsPast, candles, formingLast]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)
@@ -690,6 +703,7 @@ const PriceChart = ({
     { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
     ...(dow ? [{ key: "dow", name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
+    ...(gpListed ? [{ key: "gainzPro", name: t.chart.overlayNames.gainzPro, on: ov.gainzPro, toggle: flip("gainzPro") }] : []),
     ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
@@ -1270,6 +1284,11 @@ const PriceChart = ({
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
           {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
+        </p>
+      )}
+      {ov.gainzPro && gpListed && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gainzpro-legend">
+          {t.chart.gainzProNote(gp ? gp.total : null, zoneShiftHistory ? (gp ? "ready" : zoneShiftHistory.status) : "ready")}
         </p>
       )}
       {dow && ov.dow && (
@@ -1927,6 +1946,31 @@ const PriceChart = ({
                   <title>{t.chart.dowEventTitle(e.kind, e.dir, e.level.toFixed(decimals))}</title>
                   {e.kind === "break1" ? t.chart.dowBreak1 : e.kind === "confirm" ? t.chart.dowConfirm : t.chart.dowCancel}
                 </text>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #131: the Pro-style score's signals — a ringed P under the candle
+            for a buy, over it for a sell (a row further out where a GA label
+            sits on the same bar) */}
+        {gp && (
+          <g clipPath={`url(#${clipId})`}>
+            {gp.signals.filter((sg) => onScreen(sg.i)).map((sg) => {
+              const c = candles[sg.i];
+              const buy = sg.side === "BUY";
+              const r = (narrow ? 5 : 5.5) * fs;
+              const gaHere = ov.signals && flags.some((f) => f.idx === sg.i && f.side === sg.side);
+              const away = r + 3 + (gaHere ? labelH + 4 : 0);
+              const cx = x(sg.i);
+              const cy = buy ? y(c.low) + away : y(c.high) - away;
+              const color = buy ? COLORS.up : COLORS.down;
+              return (
+                <g key={`gp-${sg.i}`} data-testid={`chart-gainzpro-signal-${sg.side}`}>
+                  <title>{t.chart.gainzProTitle(sg.side, Math.round(sg.score * 100), Math.round(sg.rank * 100))}</title>
+                  <circle cx={cx} cy={cy} r={r} fill="hsl(var(--background))" stroke={color} strokeWidth={1.3} />
+                  <text x={cx} y={cy + r * 0.45} textAnchor="middle" fontSize={r * 1.3} fontWeight="700" fill={color}>P</text>
+                </g>
               );
             })}
           </g>
