@@ -251,6 +251,9 @@ export const en: Dict = {
       dow: "Dow theory",
       gainzPro: "Pro-style score",
       ema: (length: number) => `EMA ${length}`,
+      // #145
+      qTrend: (period: number, atr: number, mult: number) => `Q-Trend ${period} ${atr} ${mult}`,
+      qtBlsh: "Q-Trend × BLSH (triple confirmation)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -309,6 +312,16 @@ export const en: Dict = {
       `[Bars at the left] the price range of the newest ${bars} candles${bars < 200 ? " (all the chart has; the original reads 200)" : ""} in 30 rows, each as long as the number of candles that traded through it — green for up candles, red for down, longest = most. The yellow line = the fullest row (the point of control). The original weighs each candle by its volume; GMO's FX candles have none, so here every candle counts as 1: the bars show where price spent its time, not volume. Drawn under the candles and see-through (the original's boxes are opaque, on top). ` +
       "The smallest gap (0.05% of price) is from #132: every setting was tried and this one's retest arrows (▲▼) won most often on the first period (2024-01 to 2025-06; the original's default is 0, every gap; the 3-bar fill delay stayed, as 2 and 3 gave the same results). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 5,287 trades, 31.4% won (break-even 33.3%), −0.057R each (the old setting: 22,085, 29.0%, −0.128R); +0.042R over entering at random, within noise (95%: −0.005 to +0.089R). " +
       "Shown only: no signal or email uses it.",
+    // #145: the two indicators of the owner's video, and its combination
+    qTrendNote:
+      "Q-Trend (a port of the code tarasenko_ published on TradingView, MPL 2.0; the video's default settings: period 200, ATR 14, multiplier 1): a trend line that starts at the middle of the highest and lowest close of the last 200 bars. A close over line + ATR(14) lifts the line by one ATR and is a BUY; under line − ATR lowers it and is a SELL (only the first of a run). A buy whose bar, or one of the four before, opened in the bottom eighth of the 200-bar range is STRONG (a sell: the top eighth). The line and the candles take the last signal's colour (green after a buy, red otherwise; UT Bot's colours win when it is on). Judged on closed bars. TradingView starts the line at its chart's first bar, so here (from the 600 bars before the chart) it can sit a little apart. Not measured on past data. Shown only: no signal or email uses it.",
+    qtBlshNote:
+      "Q-Trend × BLSH (the video's \"triple confirmation\"): 3✓ BUY / 3✓ SELL on the first closed bar where ① Q-Trend's last signal (a buy, a sell), ② the BLSH line's colour (yellow for a buy, blue for a sell) and ③ the BLSH area's colour (green for a buy, red for a sell) agree. As the video does, it marks the bar where the last of the three comes in after the signal (\"as soon as the histogram turned red\"), and a signal that never gets all three before the next one is the video's \"fake entry\": no mark. Once per Q-Trend signal. The video's rule written as it is said, not measured on past data (the single signals this app has measured did no better than entering at random after the spread). Shown only: no signal or email uses it.",
+    qtBlshTitle: (side: "BUY" | "SELL") => `Q-Trend × BLSH triple confirmation: ${side === "BUY" ? "buy" : "sell"}`,
+    blsh: {
+      name: "BLSH",
+      note: "BLSH (Buy Low Sell High Composite, a port of the code zacmcc published on TradingView): RSI(14) (25–75), EMA(5) − EMA(35) and the MACD histogram (both within ±2 × ATR(9)) and MFI(14) (25–75), each scaled to −1…+1, summed and divided by 4: an area green above 0, red at or under it. The line is the MACD signal line scaled the same way, yellow while MACD is at or over it and blue while under (the video's colours; the original's lime and red). Its author: \"buy when it's very red, sell when it's very green\". GMO's FX bars have no volume, so MFI counts each bar as one (a guide to the share of the last 14 bars' typical prices on bars that rose). The original's crossover dots are not drawn (the video shows none). Not measured on past data. Shown only: no signal or email uses it.",
+    },
     // #143
     emaNote: (bars: number | null, status: "loading" | "ready" | "error") =>
       "EMA 50 (orange) and EMA 200 (purple): exponential moving averages of the close (TradingView's arithmetic). A close above the line is an upward flow, below it a downward one. " +
