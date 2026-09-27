@@ -266,7 +266,7 @@ describe("#116 the live chart in full screen", () => {
     await waitFor(() => expect(within(overlay()).getByTestId("chart-fullscreen-status").textContent).toContain("150.120"));
     expect(within(overlay()).getByTestId("chart-fullscreen-price").textContent).toContain("前の足比");
     expect(within(overlay()).getByTestId("chart-sheet-symbol-open").textContent).toBe("USDJPY");
-    expect(within(overlay()).getByTestId("chart-sheet-interval-open").textContent).toBe("15分");
+    expect(within(overlay()).getByTestId("chart-sheet-interval-open").textContent).toBe("4時間");
 
     fireEvent.click(within(overlay()).getByTestId("chart-sheet-symbol-open"));
     const row = within(overlay()).getByTestId("live-sheet-pair-EUR/USD");
@@ -274,7 +274,7 @@ describe("#116 the live chart in full screen", () => {
     expect(row.textContent).toContain("1.10001");
     expect(within(overlay()).getByTestId("live-sheet-pair-USD/JPY").getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(row);
-    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "15min"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "4h"));
     expect(screen.queryByTestId("chart-sheet")).toBeNull();
     await act(async () => {
       await Promise.resolve();
