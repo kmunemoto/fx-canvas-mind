@@ -11,6 +11,7 @@ import { useT } from "@/lib/i18n";
 // The same key the analysis page used, so a banner dismissed there stays
 // dismissed
 const UPGRADE_BANNER_DISMISS_KEY = "fx-upgrade-banner-dismissed";
+const PAID_PLANS = ["light", "standard", "pro"];
 
 // #139: the app is the live chart (#113) and, in the settings, the signal
 // emails (#105, Light and up). The analysis and the held positions came off
@@ -25,6 +26,9 @@ const Index = () => {
   const isAdmin = isAdminEmail(user?.email);
   const planLower = (profile?.plan || "Free").toLowerCase();
   const isFreeUser = !isAdmin && (!profile?.plan || planLower === "free");
+  // #140: the indicators with any paid plan (and for the admins); locked
+  // until the profile says so
+  const indicatorsAllowed = isAdmin || PAID_PLANS.includes(planLower);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(UPGRADE_BANNER_DISMISS_KEY) === "1";
@@ -79,7 +83,7 @@ const Index = () => {
           </div>
         )}
 
-        {user && <LiveChart />}
+        {user && <LiveChart indicatorsAllowed={indicatorsAllowed} onLockedIndicator={() => navigate("/pricing")} />}
       </main>
 
       <footer className="border-t border-border py-3 px-4">

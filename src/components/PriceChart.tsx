@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
@@ -135,7 +135,17 @@ interface Props {
   // swing to the right edge, ① on a first break and 確定 on the second, and
   // the higher ones' key levels and last high and low as dashed lines.
   dow?: { current: DowTf | null; higher: DowTf[]; status: "loading" | "ready" | "error" };
+  // #140: the indicators are a paid feature — locked, they are listed with a
+  // lock instead of an eye, never drawn whatever was saved, and a tap on one
+  // calls `onLockedIndicator` (the pricing page). The signals and what they
+  // are made of (the rule's RSI and SAR, the position boxes) stay free.
+  indicatorsLocked?: boolean;
+  onLockedIndicator?: () => void;
 }
+
+// #140: what the lock covers — every indicator added to the chart (#117 on)
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro"] as const;
+const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -246,7 +256,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, signalName, zoneShiftHistory, dow,
+  formingLast = false, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -340,7 +350,15 @@ const PriceChart = ({
   const hasRsi = !!rsi && rsi.length === candles.length && rsi.some((v) => v !== null && Number.isFinite(v));
   // #117: the strips under the price — RSI when the chart has it, and the
   // stochastic, each as chosen (for every chart, kept in this browser)
-  const prefs = useChartPrefs();
+  const saved = useChartPrefs();
+  // #140: while the indicators are locked, every one of them is off here,
+  // whatever this browser saved (the saved choice comes back with a plan)
+  const prefs = useMemo(() => {
+    if (!indicatorsLocked) return saved;
+    const overlays = { ...saved.overlays };
+    for (const k of LOCKED_OVERLAYS) overlays[k] = false;
+    return { ...saved, stoch: false, pctB: false, rci: false, overlays };
+  }, [saved, indicatorsLocked]);
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
   // #135: Bollinger %b and RCI, computed only while switched on
   const pctB = useMemo(() => (prefs.pctB ? percentB(candles) : null), [prefs.pctB, candles]);
@@ -718,7 +736,7 @@ const PriceChart = ({
   // this chart has is listed.
   const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
   const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
-  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void }> = [
+  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true }> = [
     ...(flags.length > 0 ? [{ key: "signals", name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
     ...(positions && flags.length > 0 ? [{ key: "positions", name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
@@ -742,7 +760,10 @@ const PriceChart = ({
     // #135: off until switched on
     { key: "pctB", name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
     { key: "rci", name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
-  ];
+  ].map((item) => (indicatorsLocked && LOCKED_KEYS.has(item.key)
+    // #140: listed, so what a plan adds is in sight, but off and locked
+    ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
+    : item));
   const listShown = listOpen ?? (full || !narrow);
 
   // #117: the stochastic's three lengths, and back to TradingView's
@@ -807,14 +828,25 @@ const PriceChart = ({
               <h4 className="text-xs text-muted-foreground">{t.chart.indicators}</h4>
               <div className="flex flex-wrap gap-2">
                 {overlayItems.map((item) => (
-                  <button key={item.key} type="button" aria-pressed={item.on} onClick={item.toggle} data-testid={`chart-sheet-${item.key}`} className={switchBtn(item.on)}>
-                    {item.on ? <Eye className="inline h-3.5 w-3.5 mr-1 -mt-0.5" /> : <EyeOff className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />}
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-pressed={item.locked ? undefined : item.on}
+                    onClick={item.toggle}
+                    title={item.locked ? t.chart.lockedHint : undefined}
+                    data-testid={item.locked ? `chart-sheet-lock-${item.key}` : `chart-sheet-${item.key}`}
+                    className={switchBtn(item.on)}
+                  >
+                    {item.locked
+                      ? <Lock className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
+                      : item.on ? <Eye className="inline h-3.5 w-3.5 mr-1 -mt-0.5" /> : <EyeOff className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />}
                     {item.name}
                   </button>
                 ))}
               </div>
+              {indicatorsLocked && <p className="text-[11px] text-muted-foreground" data-testid="chart-sheet-locked-note">{t.chart.lockedNote}</p>}
               {ov.kalman && <p className="text-[11px] text-muted-foreground">{t.chart.kalmanNote}</p>}
-              {stochForm}
+              {!indicatorsLocked && stochForm}
             </section>
             <section className="space-y-2">
               <h4 className="text-xs text-muted-foreground">{t.chart.background}</h4>
@@ -1518,20 +1550,37 @@ const PriceChart = ({
     >
       {listShown && overlayItems.map((item) => (
         <div key={item.key} className="flex items-center gap-1" data-testid={`chart-overlay-${item.key}`}>
-          <span className={`truncate ${item.on ? "text-foreground" : "text-muted-foreground line-through opacity-60"}`} data-testid={`chart-overlay-name-${item.key}`}>
+          <span
+            className={`truncate ${item.on ? "text-foreground" : item.locked ? "text-muted-foreground opacity-60" : "text-muted-foreground line-through opacity-60"}`}
+            data-testid={`chart-overlay-name-${item.key}`}
+          >
             {item.name}
           </span>
-          <button
-            type="button"
-            aria-pressed={item.on}
-            aria-label={`${item.name}: ${item.on ? t.chart.hide : t.chart.show}`}
-            title={item.on ? t.chart.hide : t.chart.show}
-            onClick={item.toggle}
-            data-testid={`chart-toggle-${item.key}`}
-            className="p-0.5 rounded text-muted-foreground hover:text-foreground"
-          >
-            {item.on ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-          </button>
+          {item.locked ? (
+            // #140: a paid indicator — the lock says so and leads to the plan
+            <button
+              type="button"
+              aria-label={`${item.name}: ${t.chart.lockedHint}`}
+              title={t.chart.lockedHint}
+              onClick={item.toggle}
+              data-testid={`chart-lock-${item.key}`}
+              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
+            >
+              <Lock className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              aria-pressed={item.on}
+              aria-label={`${item.name}: ${item.on ? t.chart.hide : t.chart.show}`}
+              title={item.on ? t.chart.hide : t.chart.show}
+              onClick={item.toggle}
+              data-testid={`chart-toggle-${item.key}`}
+              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
+            >
+              {item.on ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            </button>
+          )}
           {item.settings && (
             <button
               type="button"
