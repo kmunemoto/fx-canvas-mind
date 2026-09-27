@@ -54,9 +54,12 @@ const TFS = ["15min", "1h", "4h"] as const;
 type Tf = (typeof TFS)[number];
 const costly = (tf: Tf, hour: number) => tf !== "4h" && hour >= 17 && hour <= 23;
 
-const EXITS: Record<"r2w" | "app", LabelSpec> = {
+const EXITS: Record<"r2w" | "app" | "r1w", LabelSpec> = {
   r2w: { stopAtr: 1.0, rr: 2, horizon: 48 },
   app: { stopAtr: 0.8, rr: 1.5, horizon: 48 },
+  // not searched on: RSI + SAR's "hit" evidence (1 ATR either way first),
+  // which the app quotes beside its win rate
+  r1w: { stopAtr: 1.0, rr: 1, horizon: 48 },
 };
 type Exit = keyof typeof EXITS;
 
@@ -74,6 +77,8 @@ interface Family {
   key: string;
   title: string;
   exit: Exit;
+  // exits also counted (reported for the current and the chosen setting)
+  alsoExits?: Exit[];
   current: Params;
   grid: Params[];
   // +1 buy, -1 sell, 0 none, per bar
@@ -120,6 +125,7 @@ const FAMILIES: Family[] = [
     key: "rsi_sar",
     title: "RSI＋SAR（アプリの分析）: RSI が売られすぎの水準から戻し、SAR が同じ側",
     exit: "app",
+    alsoExits: ["r1w"],
     current: { period: 14, level: 30, sarStep: 0.02, sarMax: 0.2 },
     grid: product({ period: [7, 9, 14, 21], level: [20, 25, 30, 35, 40], sarStep: [0.01, 0.02, 0.03] }).map((p) => ({ ...p, sarMax: p.sarStep * 10 })),
     signals: (x, p, m) => {
@@ -345,6 +351,12 @@ const study = (tf: Tf, entry: QuoteCandle[], intervalMs: number, sub: QuoteCandl
         const b = baseAt(fam.exit, periodOf[t], side, hourOf[t]);
         if (Number.isNaN(r) || b === null) continue;
         for (const scope of ["all", `tf:${tf}`]) add(keyOf(fam.key, setting, periodOf[t], scope), weekOf[t], r, b, O[fam.exit][side][t]!);
+        for (const ex of fam.alsoExits ?? []) {
+          const r2 = R[ex][side][t];
+          const b2 = baseAt(ex, periodOf[t], side, hourOf[t]);
+          if (Number.isNaN(r2) || b2 === null) continue;
+          for (const scope of ["all", `tf:${tf}`]) add(keyOf(fam.key, `${setting}|${ex}`, periodOf[t], scope), weekOf[t], r2, b2, O[ex][side][t]!);
+        }
       }
     }
   }
@@ -390,6 +402,7 @@ const main = async () => {
     log(`## current: ${nameOf(f.current)}`);
     log(line("current 1st", S(f.current, "disc")));
     log(line("current 2nd", S(f.current, "val")));
+    for (const tf of TFS) log(line(`current ${tf} 2nd`, S(f.current, "val", `tf:${tf}`)));
     if (best) {
       log(`## CHOSEN (highest first-period win rate): ${nameOf(best.p)}`);
       log(line("chosen 1st", best.disc));
@@ -397,6 +410,13 @@ const main = async () => {
       for (const tf of TFS) {
         log(line(`chosen ${tf} 1st`, S(best.p, "disc", `tf:${tf}`)));
         log(line(`chosen ${tf} 2nd`, S(best.p, "val", `tf:${tf}`)));
+      }
+    }
+    for (const ex of f.alsoExits ?? []) {
+      for (const [label, p] of [["current", f.current], ...(best ? [["chosen", best.p] as const] : [])] as Array<readonly [string, Params]>) {
+        const X = (period: Period, scope: string) => statOf(keyOf(f.key, `${nameOf(p)}|${ex}`, period, scope));
+        log(line(`${label} ${ex} all 2nd`, X("val", "all")));
+        for (const tf of TFS) log(line(`${label} ${ex} ${tf} 2nd`, X("val", `tf:${tf}`)));
       }
     }
     log(`## the ten best on the first period, and how each did on the second`);
