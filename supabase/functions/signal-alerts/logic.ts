@@ -87,11 +87,14 @@ export const FRESH_MS = 20 * MIN;
 // restarts at every reversal, so the two reads agree on the same prices.
 export const ALERT_BARS = 200;
 
-// Who may subscribe. The pricing page lists alerts under Pro; admins get
-// everything (the same allowlist analyze uses).
+// Who may subscribe: #139, every paid plan — the pricing page sells Light
+// alone for the alerts now (it was Pro only while the plans sold the
+// analysis), and Standard and Pro, no longer sold, keep what they had.
+// Admins get everything (the same allowlist analyze uses).
 export const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
+const ALERT_PLANS = ["light", "standard", "pro"];
 export const alertsAllowed = (plan: string | null | undefined, email: string | null | undefined): boolean =>
-  (!!email && ADMIN_EMAILS.includes(email.toLowerCase())) || (plan ?? "").toLowerCase() === "pro";
+  (!!email && ADMIN_EMAILS.includes(email.toLowerCase())) || ALERT_PLANS.includes((plan ?? "").toLowerCase());
 
 export const isAlertPair = (v: unknown): v is string => typeof v === "string" && (ALERT_PAIRS as readonly string[]).includes(v);
 export const isAlertInterval = (v: unknown): v is string =>

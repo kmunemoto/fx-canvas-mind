@@ -23,8 +23,10 @@ import type { AppSettings } from "@/lib/types";
 interface Props {
   open: boolean;
   onClose: () => void;
-  settings: AppSettings;
-  onSettingsChange: (s: AppSettings) => void;
+  // the analysis's pair (#139: the analysis page, not routed, passes them;
+  // without them the drawer has no pair to choose)
+  settings?: AppSettings;
+  onSettingsChange?: (s: AppSettings) => void;
 }
 
 // #128: and gold (the analysis reads it from Twelve Data)
@@ -46,7 +48,7 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
   if (!open) return null;
 
   const updateSettings = (newSettings: AppSettings) => {
-    onSettingsChange(newSettings);
+    onSettingsChange?.(newSettings);
     toast.success(t.settings.saved);
   };
 
@@ -172,18 +174,20 @@ const SettingsDrawer = ({ open, onClose, settings, onSettingsChange }: Props) =>
             <LanguageSwitcher />
           </div>
 
-          <div>
-            <label className="text-sm text-muted-foreground">{t.settings.pair}</label>
-            <select
-              value={settings.currencyPair}
-              onChange={(e) => updateSettings({ ...settings, currencyPair: e.target.value })}
-              className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {PAIRS.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </div>
+          {settings && (
+            <div>
+              <label className="text-sm text-muted-foreground">{t.settings.pair}</label>
+              <select
+                value={settings.currencyPair}
+                onChange={(e) => updateSettings({ ...settings, currencyPair: e.target.value })}
+                className="w-full mt-1 px-3 py-2 bg-secondary rounded-lg border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {PAIRS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       </div>
 

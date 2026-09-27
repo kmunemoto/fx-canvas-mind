@@ -360,7 +360,7 @@ describe("the reuse is wired into analyze without costing a run", () => {
     // is only the wiring that reaches it.
     expect(src).toContain("const forceFresh = body.forceFresh === true;");
     expect(src).toContain("forceFresh,");
-    const page = readFileSync("src/pages/Index.tsx", "utf8");
+    const page = readFileSync("src/pages/Analysis.tsx", "utf8");
     expect(page).toContain("forceFresh: opts?.forceFresh === true,");
     // the page renders the banner and hands it the button's action
     expect(page).toContain("onForceFresh={() => void handleAnalyze({ forceFresh: true })}");

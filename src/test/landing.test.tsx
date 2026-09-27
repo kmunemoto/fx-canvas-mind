@@ -29,36 +29,20 @@ beforeEach(() => {
 });
 
 describe("landing page", () => {
-  it("shows the live rulebook version once the public RPC answers", async () => {
-    rpc.mockResolvedValue({
-      data: { rulebook_version: 5, rules: 9, updated_at: "2026-09-03T17:08:00Z" },
-      error: null,
-    });
+  it("#139: sells the chart and the emails — the analysis's learning loop is gone, and so is its RPC", () => {
     render(<Landing />);
-    await waitFor(() => expect(screen.getByTestId("rulebook-live")).toBeInTheDocument());
-    expect(rpc).toHaveBeenCalledWith("public_track_record");
-    expect(screen.getByTestId("rulebook-live").textContent).toContain("v5");
-    expect(screen.getByTestId("rulebook-live").textContent).toContain("9");
-  });
-
-  it("says nothing at all rather than claiming a rulebook that was never revised", async () => {
-    rpc.mockResolvedValue({ data: { rulebook_version: 0, rules: 0, updated_at: null }, error: null });
-    render(<Landing />);
-    await waitFor(() => expect(rpc).toHaveBeenCalled());
+    expect(screen.getByTestId("lp-honest").textContent).toContain(ja.lp.honestTitle);
+    expect(rpc).not.toHaveBeenCalled();
     expect(screen.queryByTestId("rulebook-live")).toBeNull();
   });
 
-  it("survives the RPC failing — the page is still the page", async () => {
-    rpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+  it("#139: two plans — Free starts the signup, Light carries its plan to it; no Standard or Pro", () => {
     render(<Landing />);
-    await waitFor(() => expect(rpc).toHaveBeenCalled());
-    expect(screen.queryByTestId("rulebook-live")).toBeNull();
-    expect(screen.getByText(ja.lp.loopTitle)).toBeInTheDocument();
-  });
-
-  it("gives every plan its own call to action, carrying the plan to signup", () => {
-    render(<Landing />);
-    expect(screen.getAllByText(ja.lp.choosePlan)).toHaveLength(3);
+    expect(screen.getAllByText(ja.lp.choosePlan)).toHaveLength(1);
+    expect(screen.getByText("Free")).toBeInTheDocument();
+    expect(screen.getByText("Light")).toBeInTheDocument();
+    expect(screen.queryByText("Standard")).toBeNull();
+    expect(screen.queryByText("Pro")).toBeNull();
   });
 });
 
@@ -66,28 +50,16 @@ describe("the landing page's promises match the product", () => {
   for (const [name, d] of [["ja", ja], ["en", en]] as const) {
     it(`${name}: never quotes a win rate anywhere on the page`, () => {
       // The whole point of the honesty section is that no number is claimed
-      // before the sample supports one. A percentage in the sales copy would
-      // contradict it on the same screen.
+      // on the sales page. A percentage in the copy would contradict it on
+      // the same screen.
       const copy = JSON.stringify({ ...d.lp, faqs: d.lp.faqs, honestBody: d.lp.honestBody });
       const percentages = copy.match(/\d+(\.\d+)?\s?%/g) ?? [];
-      // 95% (the confidence interval) is the only percentage that may appear
-      expect(percentages.filter((p) => !p.startsWith("95"))).toEqual([]);
+      expect(percentages).toEqual([]);
     });
 
-    it(`${name}: does not promise a faster analysis than the FAQ admits`, () => {
-      const faqAnswer = d.lp.faqs.find((f) => /10.*15|10.*15/.test(f.a))?.a ?? "";
-      expect(faqAnswer).not.toBe("");
-      const features = d.lp.features.map((f) => `${f.title} ${f.desc}`).join(" ");
-      // "in ten seconds" in a feature card contradicted the FAQ's 10-30s
-      expect(features).not.toMatch(/10\s?秒|ten seconds|10 seconds/i);
-    });
-
-    it(`${name}: the loop section has exactly the three stages the code runs`, () => {
-      expect(d.lp.loopSteps).toHaveLength(3);
-      for (const s of d.lp.loopSteps) {
-        expect(s.title.length).toBeGreaterThan(0);
-        expect(s.desc.length).toBeGreaterThan(20);
-      }
+    it(`${name}: #139: promises no analysis, which came off the screen`, () => {
+      const copy = JSON.stringify({ lp: d.lp, pricing: d.pricing.features, index: [d.index.upgradeTitle, d.index.upgradeBody, d.index.disclaimer] });
+      expect(copy).not.toMatch(name === "ja" ? /分析|AI/ : /analys|\bAI\b/i);
     });
   }
 });
@@ -105,8 +77,16 @@ describe("signup entry points", () => {
   });
 
   it("carries the plan picked on the landing page through to pricing", () => {
-    render(<Pricing />, "/pricing?plan=standard");
-    expect(screen.getByTestId("chosen-plan").textContent).toContain("Standard");
+    render(<Pricing />, "/pricing?plan=light");
+    expect(screen.getByTestId("chosen-plan").textContent).toContain("Light");
+  });
+
+  it("#139: pricing offers Free and Light only", () => {
+    render(<Pricing />, "/pricing");
+    expect(screen.getByTestId("pricing-free").textContent).toBe(ja.pricing.freeIncluded);
+    expect(screen.getAllByText(ja.pricing.subscribe)).toHaveLength(1);
+    expect(screen.queryByText("Standard")).toBeNull();
+    expect(screen.queryByText("Pro")).toBeNull();
   });
 
   it("marks nothing when no plan was picked", () => {

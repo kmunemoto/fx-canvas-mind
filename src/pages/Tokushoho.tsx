@@ -8,7 +8,7 @@ const rows: [string, string][] = [
   ["メールアドレス", "k.munemoto@kyoto-salute.com"],
   [
     "販売価格",
-    "Lightプラン: 月額2,980円（税込）\nStandardプラン: 月額5,980円（税込）\nProプラン: 月額12,800円（税込）",
+    "Lightプラン: 月額2,980円（税込）\n（Standardプラン・Proプランの新規のお申し込みは終了しました）",
   ],
   ["商品代金以外の必要料金", "通信費はお客様のご負担となります"],
   ["支払方法", "クレジットカード決済（Stripeを通じて処理）"],
@@ -35,7 +35,7 @@ const Tokushoho = () => (
         </div>
       ))}
     </div>
-    <p className="text-sm text-muted-foreground/60 pt-6 border-t border-white/5">最終更新日: 2026年4月18日</p>
+    <p className="text-sm text-muted-foreground/60 pt-6 border-t border-white/5">最終更新日: 2026年9月27日</p>
   </LegalPageLayout>
 );
 

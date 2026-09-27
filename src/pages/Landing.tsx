@@ -3,10 +3,9 @@ import { motion } from "framer-motion";
 import {
   Zap, BarChart3, Clock, Brain, Download, Sparkles, Scale,
   ChevronRight, Check, Star, ArrowRight, Share2, Link as LinkIcon, MessageCircle, Check as CheckIcon,
-  ClipboardCheck, Search, RefreshCw, ShieldQuestion,
+  ShieldQuestion,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useState } from "react";
 import { toast } from "sonner";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -23,10 +22,11 @@ const stagger = {
   visible: { transition: { staggerChildren: 0.15 } },
 };
 
+// #139: the chart is free and Light adds the emails; Standard and Pro sold
+// the analysis, which came off the screen, and are no longer offered
 const PLANS = [
-  { id: "light", name: "Light", price: "¥2,980", recommended: false },
-  { id: "standard", name: "Standard", price: "¥5,980", recommended: true },
-  { id: "pro", name: "Pro", price: "¥12,800", recommended: false },
+  { id: "free", name: "Free", price: "¥0", recommended: false },
+  { id: "light", name: "Light", price: "¥2,980", recommended: true },
 ] as const;
 
 const SHARE_URL = "https://fx-tactical.jp";
@@ -103,85 +103,16 @@ const ShareSection = () => {
   );
 };
 
-// Proof for a visitor who cannot sign in and try it.
-//
-// Analysis is now paid-only, so the landing page is the only place a stranger
-// can see that the learning loop is real. The rulebook's version and its
-// last-changed time are the honest evidence: only the post-mortem
-// consolidation moves them, so they cannot be staged from here. The RPC
-// returns counts and nothing else — no rule text, no per-user row, and no
-// win rate, which the sample is nowhere near large enough to support.
-interface TrackRecord {
-  rulebook_version: number;
-  rules: number;
-  updated_at: string | null;
-}
-
-const LoopSection = () => {
+// #139: why no win rate is quoted — once beside the analysis's learning
+// loop, which came off with the analysis
+const HonestSection = () => {
   const t = useT();
-  const [record, setRecord] = useState<TrackRecord | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    supabase.rpc("public_track_record").then(({ data, error }) => {
-      if (!live || error || !data) return;
-      const r = data as TrackRecord;
-      // A rulebook that has never been revised proves nothing, so the badge
-      // stays hidden rather than announcing "v0"
-      if (typeof r.rulebook_version === "number" && r.rulebook_version > 0) setRecord(r);
-    });
-    return () => { live = false; };
-  }, []);
-
-  const updated = record?.updated_at
-    ? new Date(record.updated_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-    : "";
-
   return (
-    <Section ariaLabel={t.lp.aria.loop}>
-      <SectionTitle>{t.lp.loopTitle}</SectionTitle>
-      <motion.p
-        variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
-        className="text-center text-muted-foreground max-w-2xl mx-auto -mt-6 mb-12"
-      >
-        {t.lp.loopBody}
-      </motion.p>
-
-      <motion.div
-        className="grid grid-cols-1 md:grid-cols-3 gap-6"
-        variants={stagger} initial="hidden" whileInView="visible" viewport={{ once: true }}
-      >
-        {[ClipboardCheck, Search, RefreshCw].map((Icon, i) => {
-          const { title, desc } = t.lp.loopSteps[i];
-          return (
-            <motion.article key={title} variants={fadeUp} className="glass rounded-2xl p-8 border border-white/5">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-[#00d4ff]/10 mb-4">
-                <Icon className="h-6 w-6 text-[#00d4ff]" aria-hidden="true" />
-              </div>
-              <h3 className="text-lg font-bold mb-2">{title}</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
-            </motion.article>
-          );
-        })}
-      </motion.div>
-
-      {record && (
-        <motion.div
-          variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
-          className="mt-8 text-center"
-          data-testid="rulebook-live"
-        >
-          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#00d4ff]/30 bg-[#00d4ff]/5 font-mono-data text-sm text-[#00d4ff]">
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            {t.lp.loopLive(record.rulebook_version, record.rules, updated)}
-          </span>
-          <p className="text-xs text-muted-foreground mt-3">{t.lp.loopLiveNote}</p>
-        </motion.div>
-      )}
-
+    <Section ariaLabel={t.lp.aria.honest}>
       <motion.aside
         variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}
-        className="glass rounded-2xl border border-white/5 p-8 mt-12 max-w-3xl mx-auto"
+        className="glass rounded-2xl border border-white/5 p-8 max-w-3xl mx-auto"
+        data-testid="lp-honest"
       >
         <div className="flex items-start gap-4">
           <ShieldQuestion className="h-6 w-6 text-[#00d4ff] shrink-0 mt-0.5" aria-hidden="true" />
@@ -316,7 +247,7 @@ const Landing = () => {
         {/* Pricing */}
         <Section id="pricing" ariaLabel={t.lp.aria.pricing}>
           <SectionTitle>{t.lp.pricingTitle}</SectionTitle>
-          <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-6" variants={stagger} initial="hidden" whileInView="visible" viewport={{ once: true }}>
+          <motion.div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto" variants={stagger} initial="hidden" whileInView="visible" viewport={{ once: true }}>
             {PLANS.map((plan) => (
               <motion.div
                 key={plan.id}
@@ -343,14 +274,14 @@ const Landing = () => {
                   ))}
                 </ul>
                 <button
-                  onClick={() => navigate(`/login?tab=signup&plan=${plan.id}`)}
+                  onClick={() => (plan.id === "free" ? goSignup() : navigate(`/login?tab=signup&plan=${plan.id}`))}
                   className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${
                     plan.recommended
                       ? "bg-gradient-to-r from-[#00d4ff] to-[#0088ff] text-[#0a0e17] hover:opacity-90"
                       : "border border-[#00d4ff]/40 bg-[#00d4ff]/10 text-[#00d4ff] hover:bg-[#00d4ff]/20"
                   }`}
                 >
-                  {t.lp.choosePlan}
+                  {plan.id === "free" ? t.landing.startFree : t.lp.choosePlan}
                 </button>
               </motion.div>
             ))}
@@ -365,8 +296,8 @@ const Landing = () => {
           </div>
         </Section>
 
-        {/* How the loop works */}
-        <LoopSection />
+        {/* Why no win rate is quoted */}
+        <HonestSection />
 
         {/* FAQ */}
         <Section id="faq" ariaLabel={t.lp.aria.faq}>
