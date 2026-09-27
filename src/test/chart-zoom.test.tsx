@@ -166,14 +166,17 @@ describe("#116 zoom, pan and full screen on the chart", () => {
     expect(candleCount()).toBe(30);
   });
 
-  it("taps a bar for its prices on a touch screen", () => {
+  it("taps a bar for its prices on a touch screen (#144: 始・高・安・終), and a tap again hides them", () => {
     const candles = hourly(60);
     render(<PriceChart candles={candles} pair="USD/JPY" />);
     const svg = screen.getByTestId("chart-price");
     sized(svg);
     fireEvent.pointerDown(svg, { pointerId: 1, pointerType: "touch", clientX: 400 });
     fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "touch", clientX: 400 });
-    expect(document.body.textContent).toContain("O 150.000 H 150.400 L 149.600 C 150.100");
+    expect(document.body.textContent).toContain("始 150.000 高 150.400 安 149.600 終 150.100");
+    fireEvent.pointerDown(svg, { pointerId: 1, pointerType: "touch", clientX: 200 });
+    fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "touch", clientX: 200 });
+    expect(document.body.textContent).not.toContain("始 150.000");
   });
 
   it("opens full screen over the page and closes it with the button or Esc", async () => {

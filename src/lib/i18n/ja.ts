@@ -373,6 +373,19 @@ export const ja = {
     hide: "隠す",
     show: "表示する",
     foldList: "一覧をたたむ",
+    // #144: as iSPEED FX lays its chart out
+    notesTitle: "チャートの見方・インジケーターの説明",
+    info: "説明",
+    groups: {
+      signals: "サインと建玉",
+      trend: "トレンド系（チャートに重ねる）",
+      oscillator: "オシレーター系（チャートの下）",
+    },
+    ohlc: (o: string, h: string, l: string, c: string) => `始 ${o} 高 ${h} 安 ${l} 終 ${c}`,
+    priceAuto: "自動",
+    priceAutoHint: "価格の目盛りを自動に戻す",
+    gestureHint:
+      "長押しで十字カーソル（指を動かすと追従、もう一度タップで消える）。右の価格の目盛りを上下にドラッグで縦の拡大・縮小（「自動」で戻す）、下の時間の目盛りを左右にドラッグで横の拡大・縮小。スマホを横にすると全画面で開きます。",
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -450,6 +463,8 @@ export const ja = {
     intervalShort: { "1min": "1分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
+    // #144: folded under the chart
+    recommendedTitle: "基本の時間足（4時間足）について",
     recommended:
       "基本の時間足は4時間足です。4時間足はスプレッドが損切り幅に占める割合が小さく（15分足の約14%に対し約6%）、ランダムに入った場合の損も3つの時間足で一番小さくなります。GA型（#132 の設定）の4時間足は、前半 106回・勝率30.2%・1回あたり −0.094R、後半 102回・39.2%・+0.176R で、回数が少なく期間によってばらつきが大きいため、勝てる根拠ではありません。",
     gaLegend: "BUY・SELL=GA型のサイン（包み足・実体が大きい・RSI 40・5本前との比較、確定足で判定）。TP/SL=損切り ATR×1、利確はその2倍（✓勝ち ✗負け …判定中）。SAR の帯は流れの目安で、GA型の判定には使っていません",

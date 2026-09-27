@@ -337,7 +337,8 @@ const LiveChart = ({
     const row = "flex flex-wrap items-center gap-1";
     return (
     <>
-      <div className={row} role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
+      {/* #144: the pairs in one row that scrolls sideways, so the chart sits higher */}
+      <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-0.5" role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
         {LIVE_PAIRS.map((p) => {
           const tk = ticks[p];
           return (
@@ -348,7 +349,7 @@ const LiveChart = ({
               aria-selected={p === pair}
               onClick={() => setPair(p)}
               data-testid={`live-pair-${p}`}
-              className={`px-2 py-1 rounded border text-[11px] font-mono ${
+              className={`shrink-0 whitespace-nowrap px-2 py-1 rounded border text-[11px] font-mono ${
                 p === pair ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
               }`}
             >
@@ -557,7 +558,6 @@ const LiveChart = ({
       </div>
 
       {tabs()}
-      {view === "gainz" && <p className="text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>}
 
       {priceLine}
 
@@ -610,6 +610,7 @@ const LiveChart = ({
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
+        landscapeFullscreen
         fullscreenStatus={
           priceLine || freshLine || dowLine ? (
             <>
@@ -655,6 +656,13 @@ const LiveChart = ({
             )}
           </div>
           {dowPanel}
+          {/* #144: said under the chart, folded */}
+          {view === "gainz" && (
+            <details data-testid="live-recommended-fold">
+              <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">{l.recommendedTitle}</summary>
+              <p className="pt-1 text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>
+            </details>
+          )}
           <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : l.note}</p>
         </>
       )}
