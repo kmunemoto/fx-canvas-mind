@@ -13,6 +13,8 @@ import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
+import { PCTB_DEFAULTS, PCTB_LEVELS, percentB } from "@/lib/percentB";
+import { RCI_DEFAULTS, RCI_LEVELS, rci as rciOf } from "@/lib/rci";
 import type { DowTf } from "@/lib/liveChart";
 
 interface Level {
@@ -201,6 +203,11 @@ const COLORS = {
   stochK: "#2962FF",
   stochD: "#FF6D00",
   stochBand: "#2196F3",
+  // #135: TradingView's colours for Bollinger %b and RCI (its line blue, its
+  // average yellow)
+  pctB: "#2962FF",
+  rci: "#2962FF",
+  rciMa: "#FDD835",
 };
 
 const MARKER_COLORS: Record<ChartMarker["kind"], string> = {
@@ -333,6 +340,9 @@ const PriceChart = ({
   // stochastic, each as chosen (for every chart, kept in this browser)
   const prefs = useChartPrefs();
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
+  // #135: Bollinger %b and RCI, computed only while switched on
+  const pctB = useMemo(() => (prefs.pctB ? percentB(candles) : null), [prefs.pctB, candles]);
+  const rciRead = useMemo(() => (prefs.rci ? rciOf(candles) : null), [prefs.rci, candles]);
   // #119: what is drawn over the price, as switched in the chart's list
   const ov = prefs.overlays;
   const hasSar = !!sar && sar.length === candles.length;
@@ -410,7 +420,9 @@ const PriceChart = ({
   const [stochSettings, setStochSettings] = useState(false);
   const showRsi = hasRsi && prefs.rsi;
   const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
-  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0);
+  const showPctB = pctB !== null && pctB.some((v) => v !== null);
+  const showRci = rciRead !== null && rciRead.rci.some((v) => v !== null);
+  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0);
   // In full screen the strips take a share of the height and the price the
   // rest (#118: the switches live in the settings sheet there); on a short
   // screen (a phone on its side) the strips give way first, so all of it fits
@@ -713,6 +725,9 @@ const PriceChart = ({
       toggle: () => setChartPrefs({ stoch: !prefs.stoch }),
       settings: openStochSettings,
     },
+    // #135: off until switched on
+    { key: "pctB", name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
+    { key: "rci", name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
   ];
   const listShown = listOpen ?? (full || !narrow);
 
@@ -1292,6 +1307,16 @@ const PriceChart = ({
           {t.chart.gainzProNote(gp ? gp.total : null, zoneShiftHistory ? (gp ? "ready" : zoneShiftHistory.status) : "ready")}
         </p>
       )}
+      {showPctB && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-pctb-legend">
+          {t.chart.pctB.note}
+        </p>
+      )}
+      {showRci && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-rci-legend">
+          {t.chart.rci.note}
+        </p>
+      )}
       {dow && ov.dow && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-dow-legend">
           {t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf))}
@@ -1305,20 +1330,31 @@ const PriceChart = ({
     </>
   );
 
-  // An oscillator (0–100) under the price, on the same x scale so a bar
-  // here is the bar above it: its lines, its levels, and its reading at the
-  // bar hovered or the last one on screen. RSI (#104) and the stochastic (#117).
+  // An oscillator under the price, on the same x scale so a bar here is the
+  // bar above it: its lines, its levels, and its reading at the bar hovered
+  // or the last one on screen. RSI (#104) and the stochastic (#117), 0–100;
+  // #135: Bollinger %b (its own range) and RCI (−100 to 100).
   const strip = (o: {
     testid: string;
     aria: string;
     label: string;
-    lines: Array<{ name: string; values: Array<number | null>; color: string }>;
+    // `tagText`: the value's colour on its axis tag (white unless given, dark
+    // on a light line)
+    lines: Array<{ name: string; values: Array<number | null>; color: string; tagText?: string }>;
     levels: Array<{ v: number; color: string; dash: string; opacity: number }>;
     band?: { from: number; to: number; color: string; opacity: number };
+    bands?: Array<{ from: number; to: number; color: string; opacity: number; key: string }>;
+    // the values at the strip's top and foot (0–100 unless given)
+    range?: { min: number; max: number };
+    // decimals of the reading, and how a level is written
+    digits?: number;
+    levelText?: (v: number) => string;
   }) => {
     const top = 8;
     const bottom = RH - 6;
-    const ry = (v: number) => top + ((100 - Math.min(100, Math.max(0, v))) / 100) * (bottom - top);
+    const lo = o.range?.min ?? 0;
+    const hi = o.range?.max ?? 100;
+    const ry = (v: number) => top + ((hi - Math.min(hi, Math.max(lo, v))) / (hi - lo)) * (bottom - top);
     const pathOf = (values: Array<number | null>) => {
       let path = "";
       let pen = false;
@@ -1362,6 +1398,18 @@ const PriceChart = ({
             data-testid={`${o.testid}-band`}
           />
         )}
+        {o.bands?.map((b) => (
+          <rect
+            key={b.key}
+            x={PAD_LEFT}
+            y={ry(b.to)}
+            width={Math.max(0, W - PAD_RIGHT - PAD_LEFT)}
+            height={Math.max(0, ry(b.from) - ry(b.to))}
+            fill={b.color}
+            opacity={b.opacity}
+            data-testid={`${o.testid}-band-${b.key}`}
+          />
+        ))}
         {o.levels.map((lv) => (
           <g key={lv.v}>
             <line
@@ -1372,7 +1420,7 @@ const PriceChart = ({
               strokeDasharray={lv.dash}
               opacity={lv.opacity}
             />
-            <text x={AXIS_X} y={ry(lv.v) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{lv.v}</text>
+            <text x={AXIS_X} y={ry(lv.v) + 3} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace">{o.levelText ? o.levelText(lv.v) : lv.v}</text>
           </g>
         ))}
         {hover !== null && hovered && (
@@ -1403,7 +1451,7 @@ const PriceChart = ({
           return tags.map(({ ln, v, cy }) => (
             <g key={`tag-${ln.name || "line"}`} data-testid={`${o.testid}-tag${ln.name ? `-${ln.name.replace("%", "")}` : ""}`}>
               <rect x={W - PAD_RIGHT + 1} y={cy - tagH / 2} width={axisW - 2} height={tagH} rx="2" fill={ln.color} />
-              <text x={AXIS_X} y={cy + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill="#fff" fontFamily="monospace">
+              <text x={AXIS_X} y={cy + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill={ln.tagText ?? "#fff"} fontFamily="monospace">
                 {v.toFixed(2)}
               </text>
             </g>
@@ -1415,7 +1463,7 @@ const PriceChart = ({
             const v = readingOf(ln.values);
             return (
               <tspan key={ln.name || "line"} fill={ln.name ? ln.color : COLORS.text}>
-                {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : v.toFixed(1)}`}
+                {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : v.toFixed(o.digits ?? 1)}`}
               </tspan>
             );
           })}
@@ -2328,6 +2376,52 @@ const PriceChart = ({
           { v: STOCH_LEVELS.lower, color: COLORS.text, dash: "4 3", opacity: 0.8 },
         ],
         band: { from: STOCH_LEVELS.lower, to: STOCH_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
+      })}
+      {/* #135: Bollinger %b as TradingView draws it — a blue line, dashed
+          lines at 1, 0.5 and 0, the space between the bands blue, above
+          the upper one red and below the lower one green; its scale follows
+          what is on screen, always showing 0 to 1 */}
+      {showPctB && pctB && (() => {
+        const seen = pctB.slice(from, to).filter((v): v is number => v !== null && Number.isFinite(v));
+        const min = Math.min(PCTB_LEVELS.lower, ...seen) - 0.1;
+        const max = Math.max(PCTB_LEVELS.upper, ...seen) + 0.1;
+        return strip({
+          testid: "chart-pctb",
+          aria: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult),
+          label: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult),
+          lines: [{ name: "", values: pctB, color: COLORS.pctB }],
+          levels: [
+            { v: PCTB_LEVELS.upper, color: COLORS.down, dash: "4 3", opacity: 0.75 },
+            { v: PCTB_LEVELS.middle, color: COLORS.pctB, dash: "4 3", opacity: 0.6 },
+            { v: PCTB_LEVELS.lower, color: COLORS.up, dash: "4 3", opacity: 0.75 },
+          ],
+          bands: [
+            { key: "over", from: PCTB_LEVELS.upper, to: max, color: COLORS.down, opacity: 0.08 },
+            { key: "in", from: PCTB_LEVELS.lower, to: PCTB_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
+            { key: "under", from: min, to: PCTB_LEVELS.lower, color: COLORS.up, opacity: 0.08 },
+          ],
+          range: { min, max },
+          digits: 2,
+          levelText: (v) => v.toFixed(2),
+        });
+      })()}
+      {/* #135: RCI as TradingView draws it — a blue line, its 14-bar average
+          yellow, dashed lines at +80, 0 and −80 and the band between them */}
+      {showRci && rciRead && strip({
+        testid: "chart-rci",
+        aria: t.chart.rci.name(RCI_DEFAULTS.length),
+        label: t.chart.rci.name(RCI_DEFAULTS.length),
+        lines: [
+          { name: "", values: rciRead.rci, color: COLORS.rci },
+          { name: "MA", values: rciRead.ma, color: COLORS.rciMa, tagText: "#131722" },
+        ],
+        levels: [
+          { v: RCI_LEVELS.upper, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+          { v: RCI_LEVELS.middle, color: COLORS.text, dash: "1.5 3", opacity: 0.45 },
+          { v: RCI_LEVELS.lower, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+        ],
+        band: { from: RCI_LEVELS.lower, to: RCI_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
+        range: { min: -100, max: 100 },
       })}
     </>
   );

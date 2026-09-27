@@ -216,6 +216,15 @@ export const en: Dict = {
       reset: "Back to the defaults (14, 1, 3)",
       note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average, 80/20). #132's first-period best (21, 5, 3; 70/30) did worse on the second period (28.7% won; this setting 29.1%), so these were put back. Shown only: no signal is judged on it.",
     },
+    // #135: Bollinger %b and RCI, TradingView's built-ins
+    pctB: {
+      name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
+      note: "Bollinger Bands %b (TradingView's built-in, with its calculation and defaults): where the close sits in the band of the 20-bar average ± 2 standard deviations. 1 = the upper band, 0.5 = the average, 0 = the lower band; outside the band it goes above 1 or below 0. Like the stochastic, a gauge of whether the price is high or low in its recent range: above 1 is not a reversal signal (TradingView's help also says that in a strong trend the price \"walks the band\"). Shown only: no signal is judged on it.",
+    },
+    rci: {
+      name: (length: number) => `RCI ${length}`,
+      note: "RCI (Rank Correlation Index; TradingView's built-in, with its calculation and defaults): the correlation between the last 10 closes' ranks and their order in time, × 100. +100 = each close higher than the one before, −100 = each lower, near 0 = no consistent direction. The yellow line is its 14-bar average. A gauge of how steadily the price has moved, not where it is: past ±80 is not a reversal signal. Shown only: no signal is judged on it.",
+    },
     settingsTitle: "Chart settings",
     background: "Background",
     themeNames: { dark: "Dark", light: "White" },
