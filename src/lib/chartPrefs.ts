@@ -64,6 +64,10 @@ export interface ChartPrefs {
   rsi: boolean;
   stoch: boolean;
   stochParams: StochParams;
+  // #135: Bollinger %b and RCI strips (TradingView's built-ins), off until
+  // switched on
+  pctB: boolean;
+  rci: boolean;
   // #118: the chart's background — the app's dark one, or white
   theme: ChartTheme;
   overlays: ChartOverlays;
@@ -82,6 +86,8 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   rsi: true,
   stoch: true,
   stochParams: STOCH_DEFAULTS,
+  pctB: false,
+  rci: false,
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
 };
@@ -101,6 +107,8 @@ const read = (): ChartPrefs => {
         const p = normalizeStochParams(v.stochParams);
         return v.stochDefaults === STOCH_132_MARK && sameStoch(p, STOCH_132_DEFAULTS) ? STOCH_DEFAULTS : p;
       })(),
+      pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
+      rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
       theme: v.theme === "light" ? "light" : "dark",
       overlays: overlaysOf(v.overlays),
     };
