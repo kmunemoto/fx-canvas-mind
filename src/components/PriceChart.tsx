@@ -12,6 +12,7 @@ import { UT_DEFAULTS, utBot } from "@/lib/utBot";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
+import { EMA_LINES, emaLine } from "@/lib/emaLines";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
@@ -126,7 +127,8 @@ interface Props {
   emptyText?: string;
   // #124: the closed candles before `candles`, for Zone Shift's 200-bar
   // average (the live chart reads them while it is on). Given, Zone Shift is
-  // listed; without it, only on a chart with 200 candles of its own.
+  // listed; without it, only on a chart with 200 candles of its own. #131:
+  // the Pro-style score and #143: the EMA lines read them too.
   zoneShiftHistory?: { bars: ReadonlyArray<{ open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
@@ -144,7 +146,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -412,6 +414,16 @@ const PriceChart = ({
     const read = gainzPro(all, GP_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
     return { signals: read.signals.map((sg) => ({ ...sg, i: sg.i - zsPast.length })).filter((sg) => sg.i >= 0), total: all.length };
   }, [ov.gainzPro, gpListed, zsPast, candles, formingLast]);
+  // #143: EMA 50 and EMA 200 over the same history and the candles, the
+  // forming one too (as TradingView draws them). Given a history that is
+  // still loading, nothing yet: the line would move when it came.
+  const emaOn = EMA_LINES.filter((l) => ov[l.key]).map((l) => l.key).join(" ");
+  const emas = useMemo(() => {
+    const on = EMA_LINES.filter((l) => emaOn.split(" ").includes(l.key));
+    if (on.length === 0 || candles.length === 0 || zsPast === null) return null;
+    const closes = [...zsPast.map((b) => b.close), ...candles.map((c) => c.close)];
+    return { off: zsPast.length, total: closes.length, lines: on.map((l) => ({ ...l, values: emaLine(closes, l.length) })) };
+  }, [emaOn, zsPast, candles]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)
@@ -526,6 +538,18 @@ const PriceChart = ({
         max = Math.max(max, v);
       }
     }
+    // #143: the EMA lines too — the price is read against them (as
+    // TradingView fits its scale to the lines it draws)
+    if (emas) {
+      for (const l of emas.lines) {
+        for (let i = from; i < to; i++) {
+          const v = l.values[i + emas.off];
+          if (v === null || !Number.isFinite(v)) continue;
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
+      }
+    }
     // #104: signal labels and their TP/SL boxes stand above the highs and
     // hang below the lows, so a chart that has any gets more room at both
     // ends — otherwise a signal at the window's extreme is pushed onto the
@@ -543,7 +567,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -736,12 +760,14 @@ const PriceChart = ({
   // this chart has is listed.
   const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
   const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
-  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true }> = [
+  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
     ...(flags.length > 0 ? [{ key: "signals", name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
     ...(positions && flags.length > 0 ? [{ key: "positions", name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
+    // #143: each with its line's colour
+    ...EMA_LINES.map((l) => ({ key: l.key, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "supertrend", name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
     { key: "utBot", name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
@@ -840,6 +866,7 @@ const PriceChart = ({
                     {item.locked
                       ? <Lock className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
                       : item.on ? <Eye className="inline h-3.5 w-3.5 mr-1 -mt-0.5" /> : <EyeOff className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />}
+                    {item.swatch && <span aria-hidden="true" className="inline-block h-0.5 w-3 mr-1 align-middle rounded" style={{ background: item.swatch }} />}
                     {item.name}
                   </button>
                 ))}
@@ -1366,6 +1393,11 @@ const PriceChart = ({
           {t.chart.utBotNote}
         </p>
       )}
+      {emaOn !== "" && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-ema-legend">
+          {t.chart.emaNote(emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready")}
+        </p>
+      )}
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
           {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
@@ -1550,6 +1582,7 @@ const PriceChart = ({
     >
       {listShown && overlayItems.map((item) => (
         <div key={item.key} className="flex items-center gap-1" data-testid={`chart-overlay-${item.key}`}>
+          {item.swatch && <span aria-hidden="true" className="inline-block h-0.5 w-3 shrink-0 rounded" style={{ background: item.swatch }} data-testid={`chart-swatch-${item.key}`} />}
           <span
             className={`truncate ${item.on ? "text-foreground" : item.locked ? "text-muted-foreground opacity-60" : "text-muted-foreground line-through opacity-60"}`}
             data-testid={`chart-overlay-name-${item.key}`}
@@ -2199,6 +2232,26 @@ const PriceChart = ({
                   <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
                 </g>
               );
+            })}
+          </g>
+        )}
+
+        {/* #143: EMA 50 (orange) and EMA 200 (purple) over the candles */}
+        {emas && (
+          <g data-testid="chart-ema" clipPath={`url(#${clipId})`}>
+            {emas.lines.map((l) => {
+              let d = "";
+              let pen = false;
+              for (let i = Math.max(0, from - 1); i < Math.min(candles.length, to + 1); i++) {
+                const v = l.values[i + emas.off];
+                if (v === null || !Number.isFinite(v)) {
+                  pen = false;
+                  continue;
+                }
+                d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+                pen = true;
+              }
+              return d ? <path key={l.key} d={d} fill="none" stroke={l.color} strokeWidth={1.5 * fs} opacity="0.9" data-testid={`chart-${l.key}-line`} /> : null;
             })}
           </g>
         )}

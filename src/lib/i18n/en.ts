@@ -250,6 +250,7 @@ export const en: Dict = {
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "Dow theory",
       gainzPro: "Pro-style score",
+      ema: (length: number) => `EMA ${length}`,
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -308,6 +309,17 @@ export const en: Dict = {
       `[Bars at the left] the price range of the newest ${bars} candles${bars < 200 ? " (all the chart has; the original reads 200)" : ""} in 30 rows, each as long as the number of candles that traded through it — green for up candles, red for down, longest = most. The yellow line = the fullest row (the point of control). The original weighs each candle by its volume; GMO's FX candles have none, so here every candle counts as 1: the bars show where price spent its time, not volume. Drawn under the candles and see-through (the original's boxes are opaque, on top). ` +
       "The smallest gap (0.05% of price) is from #132: every setting was tried and this one's retest arrows (▲▼) won most often on the first period (2024-01 to 2025-06; the original's default is 0, every gap; the 3-bar fill delay stayed, as 2 and 3 gave the same results). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 5,287 trades, 31.4% won (break-even 33.3%), −0.057R each (the old setting: 22,085, 29.0%, −0.128R); +0.042R over entering at random, within noise (95%: −0.005 to +0.089R). " +
       "Shown only: no signal or email uses it.",
+    // #143
+    emaNote: (bars: number | null, status: "loading" | "ready" | "error") =>
+      "EMA 50 (orange) and EMA 200 (purple): exponential moving averages of the close (TradingView's arithmetic). A close above the line is an upward flow, below it a downward one. " +
+      "#142 compared 31 indicators on past charts (11 pairs, 15min/1h/4h, 2024-01 to 2026-09): the flow across the chart's 120 bars (about 3–4 weeks on 4h) was read best by the close above or below EMA 50 (71.6% on the later period; the stochastic 68.3%), and a larger flow (about 2–3 months on 4h) by the 200-bar averages. " +
+      "They read where the flow has been: over the next 48 bars the price went the reading's way about half the time. On 4h alone, the later period could not tell EMA 50 from the stochastic. " +
+      (status === "loading"
+        ? "Loading the bars before the chart's. "
+        : status === "error"
+          ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
+          : `Computed over ${bars ?? 0} bars (including those before the chart's). `) +
+      "Shown only: no signal or email uses them.",
     // #136
     supertrendNote:
       "SuperTrend (a port of the code KivancOzbilgic published on TradingView): a line at the high–low midpoint ± 3 × ATR(10). While the trend is up the lower line shows (green), while down the upper one (red); the line only rises in an uptrend and only falls in a downtrend. When a close crosses the line on the other side the trend turns, marked with a dot and Buy / Sell on the line. The space between the line and the candles' average (open, high, low, close) is tinted. Judged on closed bars only, not drawn on the bar still forming. As its author says, it does not work in a sideways market. Not yet measured on past data (the SPECTRA style, the same mechanism smoothed by a Kalman filter, did no better than entering at random in #120). Shown only: no signal or email uses it.",
