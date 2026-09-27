@@ -294,6 +294,32 @@ const main = async () => {
     log(`(b) against the 2nd period's best (${valBest.id}): ${vsBest ? ci(vsBest, pp) : "it is the best"} → ${b ? "still among the best" : "behind the best"}`);
     log(`## VERDICT: ${a && b ? "HOLDS" : "DOES NOT HOLD"} on the second period`);
     report.chosen = { id: chosen.id, holds: a && b, vsStoch, vsBest, valBest: valBest.id, valRank };
+
+    // Added after the first run, to describe it (the choice and the verdict
+    // above are as fixed before): the difference on each timeframe, the
+    // closest candidates against the chosen one, and what came next on both
+    // periods
+    log(`\n# described after the first run (not part of the choice)`);
+    for (const tf of TFS) {
+      for (const period of PERIODS) log(`${chosen.id} − stoch, ${tf} ${period === "disc" ? "1st" : "2nd"}: ${ci(diffOf(chosen.id, "stoch", PRIMARY, period, [tf]), pp)}`);
+    }
+    const near = [...rows].sort((x, y) => (y.val?.est ?? -1) - (x.val?.est ?? -1)).filter((r) => r.c.id !== chosen.id).slice(0, 6);
+    for (const r of near) {
+      const tfNotes = TFS.map((tf) => `${tf} ${ci(diffOf(chosen.id, r.c.id, PRIMARY, "val", [tf]), pp)}`).join(", ");
+      log(`${chosen.id} − ${r.c.id}, 2nd: ${ci(diffOf(chosen.id, r.c.id, PRIMARY, "val"), pp)} | ${tfNotes}`);
+    }
+    for (const id of [chosen.id, ...near.map((r) => r.c.id), "stoch"]) {
+      const parts = PERIODS.map((period) => {
+        const hit = fwdHit.get(`${id}|${period}`);
+        const mv = fwdMove.get(`${id}|${period}`);
+        return `${period === "disc" ? "1st" : "2nd"} same way ${ci(hit ? tfMean(hit, TFS) : null, (v) => pct(v))}, move ${ci(mv ? tfMean(mv, TFS) : null, atrs)} ATR`;
+      });
+      const on4h = PERIODS.map((period) => {
+        const mv = fwdMove.get(`${id}|${period}`);
+        return `${period === "disc" ? "1st" : "2nd"} ${ci(mv ? tfMean(mv, ["4h"]) : null, atrs)}`;
+      });
+      log(`next 48 bars, ${id.padEnd(16)} ${parts.join(" | ")} | 4h move: ${on4h.join(", ")}`);
+    }
   }
   for (const c of CANDIDATES) {
     (report.candidates as Record<string, unknown>)[c.id] = Object.fromEntries(
