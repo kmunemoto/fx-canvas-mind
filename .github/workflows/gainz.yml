@@ -32,6 +32,9 @@ on:
       split:
         description: "First day of the second (checking) period"
         default: "2025-07-01"
+      weeks_of:
+        description: "Cells to show week by week: rule|exit|disc or val|scope, separated by ;"
+        default: ""
 
 permissions:
   contents: read
@@ -56,13 +59,14 @@ jobs:
         env:
           PAIRS: ${{ inputs.pairs || '' }}
           SPLIT: ${{ inputs.split || '2025-07-01' }}
+          WEEKS_OF: ${{ inputs.weeks_of || '' }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,WEEKS_OF
           research/gainz.ts
       - uses: actions/upload-artifact@v4
         with:

@@ -117,6 +117,9 @@ const START = Deno.env.get("START") || "2024-01-01";
 const SPLIT = Deno.env.get("SPLIT") || "2025-07-01";
 const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
 const NOW = Date.now();
+// #130: cells to show week by week (rule|exit|disc or val|scope, ";"-separated), to see
+// whether a number rests on a few weeks
+const WEEKS_OF = (Deno.env.get("WEEKS_OF") || "").split(";").map((s) => s.trim()).filter(Boolean);
 const CACHE = "research/.cache";
 const OUT = "research/out";
 
@@ -727,6 +730,20 @@ const main = async () => {
     }
   }
   report.stochWinner = stWinner;
+
+  // #130: the cells asked for, week by week (the weeks with trades, most first)
+  for (const key of WEEKS_OF) {
+    const m = agg.get(key);
+    log(`\n# weeks of ${key}${m ? "" : " — no trades"}`);
+    if (!m) continue;
+    const rows = [...m.entries()].sort((a, b) => b[1].n - a[1].n);
+    const total = rows.reduce((t, [, a]) => t + a.n, 0);
+    log(`   ${rows.length} weeks, ${total} trades`);
+    for (const [week, a] of rows) {
+      const from = new Date(week * WEEK + WEEK_OFFSET).toISOString().slice(0, 10);
+      log(`   week of ${from}: n=${a.n} won ${a.w}/${a.res} R ${rr(a.r, 2)} (blind ${rr(a.base, 2)})`);
+    }
+  }
 
   const dump: Record<string, unknown> = {};
   for (const rule of [...RULES.map((r) => r.id), BLIND]) {
