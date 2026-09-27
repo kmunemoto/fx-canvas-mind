@@ -70,7 +70,8 @@ describe("#129 Dow theory, read mechanically", () => {
     const bars = legBars(LEGS);
     const all = dowTheory(bars, 2).states;
     for (let k = 1; k <= bars.length; k++) expect(dowTheory(bars.slice(0, k), 2).states).toEqual(all.slice(0, k));
-    expect(DOW_PIVOT).toBe(5);
+    // #132: 4 won most often on the first period of every width tried
+    expect(DOW_PIVOT).toBe(4);
   });
 });
 
@@ -157,7 +158,7 @@ describe("#129 Dow theory on the chart", () => {
     expect(legend).toContain("オーナーが選んだ");
     expect(legend).toContain("上位足（1H）");
     // #130: what the study found, said beside it
-    expect(legend).toContain("確定（2回目）で入ると 2,059回・勝率28.6%");
+    expect(legend).toContain("確定（2回目）で入ると 2,460回・勝率29.4%");
   });
 
   it("is listed with a switch, and off draws nothing", () => {

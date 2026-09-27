@@ -43,8 +43,10 @@ export const FVG_DEFAULTS = {
   maxFvgs: 80,
   maxSegments: 120,
   maxRetestMarks: 20,
-  // smallest gap kept, % of price (0: every gap)
-  minGapPct: 0,
+  // smallest gap kept, % of price (0: every gap). #132: 0.05, the setting
+  // whose retest arrows won most often on the first period of every one
+  // tried (research/tune.ts; docs §8.45); the original's default is 0
+  minGapPct: 0.05,
 };
 
 type Bar = { datetime: string; high: number; low: number; close: number };

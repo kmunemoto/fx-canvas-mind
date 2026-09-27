@@ -42,13 +42,20 @@ const vee = () =>
   });
 
 describe("#119 the SPECTRA-style line (Kalman-smoothed Supertrend with an RSI filter)", () => {
-  it("smooths as a Kalman filter whose gain settles where Q/R puts it (0.01/0.1: about 0.27, a 6-bar EMA)", () => {
-    const xs = kalman([0, ...Array.from({ length: 60 }, () => 1)], KST_DEFAULTS.q, KST_DEFAULTS.r);
-    // once settled, what is left of the gap shrinks by 1 − K a bar
-    const ratio = (1 - xs[60]) / (1 - xs[59]);
-    const s = (0.01 + Math.sqrt(0.01 ** 2 + 4 * 0.01 * 0.1)) / 2;
-    expect(1 - ratio).toBeCloseTo(s / (s + 0.1), 6);
-    expect(1 - ratio).toBeCloseTo(0.27, 2);
+  it("smooths as a Kalman filter whose gain settles where Q/R puts it (#132's 0.01/0.02: 0.5, a 3-bar EMA; 0.01/0.1: about 0.27)", () => {
+    const gainAt = (q: number, r: number) => {
+      const xs = kalman([0, ...Array.from({ length: 30 }, () => 1)], q, r);
+      // once settled, what is left of the gap shrinks by 1 − K a bar
+      return 1 - (1 - xs[30]) / (1 - xs[29]);
+    };
+    const settled = (q: number, r: number) => {
+      const s = (q + Math.sqrt(q ** 2 + 4 * q * r)) / 2;
+      return s / (s + r);
+    };
+    expect(KST_DEFAULTS).toEqual({ q: 0.01, r: 0.02, atrLength: 7, factor: 1.5, rsiLength: 14 });
+    expect(gainAt(KST_DEFAULTS.q, KST_DEFAULTS.r)).toBeCloseTo(settled(KST_DEFAULTS.q, KST_DEFAULTS.r), 6);
+    expect(gainAt(KST_DEFAULTS.q, KST_DEFAULTS.r)).toBeCloseTo(0.5, 6);
+    expect(gainAt(0.01, 0.1)).toBeCloseTo(0.27, 2);
   });
 
   it("reads RSI as the server's Wilder RSI does", () => {
@@ -117,14 +124,14 @@ describe("#119 switching what the chart draws, from the list at its top left", (
   it("lists only what this chart draws, the SPECTRA-style line off until switched on", () => {
     render(chart());
     const names = [...screen.getByTestId("chart-overlay-list").querySelectorAll("[data-testid^='chart-overlay-name-']")].map((e) => e.textContent);
-    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 10 3", "FVG Crossfire + Volume Profile", "ストキャス 14 1 3"]);
+    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "SPECTRA型 7 1.5", "FVG Crossfire + Volume Profile", "ストキャス 21 5 3"]);
     expect(screen.getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByTestId("chart-kalman")).toBeNull();
 
     fireEvent.click(screen.getByTestId("chart-toggle-kalman"));
     expect(screen.getByTestId("chart-kalman").querySelectorAll("[data-testid='chart-kalman-line']").length).toBeGreaterThan(0);
     expect(screen.getByTestId("chart-kalman-cloud")).toBeTruthy();
-    expect(screen.getByTestId("chart-kalman-legend").textContent).toContain("ランダムに入った場合と差がありませんでした");
+    expect(screen.getByTestId("chart-kalman-legend").textContent).toContain("ランダムに入った場合とも差がありませんでした");
     expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).overlays.kalman).toBe(true);
   });
 

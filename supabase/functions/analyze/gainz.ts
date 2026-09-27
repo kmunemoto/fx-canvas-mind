@@ -24,9 +24,15 @@
 //
 //   1. engulfing: the bar before closed down, this one closes up and above
 //      that bar's open;
-//   2. stable: the body is more than half the bar's true range;
-//   3. RSI(14) below 50 (above 50 for a SELL);
-//   4. the close is below the close 5 bars earlier (above, for a SELL).
+//   2. stable: the body is more than GA_STABILITY of the bar's true range;
+//   3. RSI(14) below GA_RSI_LEVEL (above 100 minus it for a SELL);
+//   4. the close is below the close GA_DELTA bars earlier (above, for a
+//      SELL).
+//
+// #132: those three numbers were searched (research/tune.ts, docs §8.45: the
+// owner's 「一番勝率の高い設定を探してそれをそのインジケーターに設定して」) —
+// 0.7, 40 and 5 won most often on the study's first period, with the plan
+// below unchanged. The screenshot's were 0.5, 50 and 5.
 //
 // THE PLAN: stop 1 ATR(14) from the close, target twice the stop (break-even
 // win rate 33.3%), the same 48-bar horizon as RSI + SAR.
@@ -41,16 +47,19 @@ import type { Candle } from "./indicators.ts";
 import { atrSeriesOf } from "./state.ts";
 import { HORIZON_BARS, settle, wilderRsi, type Outcome, type Side } from "./rsisar.ts";
 
-export const GA_STABILITY = 0.5;
-export const GA_RSI_LEVEL = 50;
+export const GA_STABILITY = 0.7;
+export const GA_RSI_LEVEL = 40;
 export const GA_DELTA = 5;
+// the GA rule's own RSI length — never RSI + SAR's (#132 changed that one)
+export const GA_RSI_PERIOD = 14;
 export const GA_STOP_ATR = 1;
 export const GA_REWARD = 2;
 export const GA_HORIZON = HORIZON_BARS;
 // RSI's seed and ATR need this many bars before the first reading counts
 export const GA_MIN_BARS = 60;
 // The version of the rule a row was decided by, stored on it
-export const GA_RULE_ID = "gainz_v2a_050_50_5_atr1_v1";
+// (v1 was 0.5, 50, 5, until #132)
+export const GA_RULE_ID = "gainz_v2a_070_40_5_atr1_v2";
 // How the app and the alert tables name the two rules
 export const RULES = ["rsi_sar", "gainz"] as const;
 export type RuleKey = (typeof RULES)[number];
@@ -122,7 +131,7 @@ export interface GainzRead {
 // `bars` must be CLOSED bars, oldest first.
 export const readGainz = (bars: Candle[]): GainzRead => {
   if (bars.length < GA_MIN_BARS) return { ok: false, reason: `bars<${GA_MIN_BARS}`, bars: bars.length, signals: [], now: null };
-  const { rsi } = wilderRsi(bars.map((c) => c.close));
+  const { rsi } = wilderRsi(bars.map((c) => c.close), GA_RSI_PERIOD);
   const atr = atrSeriesOf(bars);
   const signals: GainzSignal[] = [];
   for (let i = 1; i < bars.length; i++) {
@@ -221,17 +230,18 @@ export const compactGainz = (tf: string, read: GainzRead, decimals: number) => {
 
 // ---- what was measured -------------------------------------------------------------
 //
-// research/gainz.ts (#112 block, run 2026-09-25): GMO 15-minute bid/ask,
-// eleven pairs, this exact rule and plan, spread paid, 17:00-23:59 UTC left
-// out on 15min and 1h. Nothing was chosen on these numbers — the settings
-// are the screenshot's — so both periods were reported; the second is the
-// one quoted. `win` is over the trades that reached the stop or the target,
-// `meanR` over every trade (one still open at 48 bars at its value then).
+// research/tune.ts (#132, run 36314734948): GMO 15-minute bid/ask, eleven
+// pairs, this exact rule and plan, spread paid, 17:00-23:59 UTC left out on
+// 15min and 1h. The settings were chosen on the FIRST period (the highest
+// win rate of 180); the second, never seen by the choice, is the one quoted.
+// `win` is over the trades that reached the stop or the target, `meanR` over
+// every trade (one still open at 48 bars at its value then).
 //
-//   first period (2024-01 to 2025-06): 12,880 trades, won 30.4%, -0.086R
-//   second period (2025-07 on):        10,757 trades, won 28.8%, -0.134R;
-//     entering at every bar instead: -0.118R (the rule adds -0.015R,
-//     [-0.047, +0.016]); 0 of 11 pairs positive
+//   first period (2024-01 to 2025-06): 2,036 trades, won 32.6%, -0.019R
+//   second period (2025-07 on):        1,754 trades, won 30.1%, -0.093R;
+//     the rule adds +0.025R over entering at every bar ([-0.057, +0.107])
+//   the screenshot's 0.5/50/5 on the second period: 10,757 trades, won
+//     28.8%, -0.134R
 export interface GainzEvidence {
   measured: boolean;
   win: number | null;
@@ -244,12 +254,12 @@ export const GA_EVIDENCE = {
   period: "2025-07〜2026-09",
   pairs: 11,
   breakeven: 1 / (1 + GA_REWARD),
-  all: { measured: true, win: 0.288, n: 10757, meanR: -0.134 } as GainzEvidence,
+  all: { measured: true, win: 0.301, n: 1754, meanR: -0.093 } as GainzEvidence,
   byTf: {
     "1min": NOT_MEASURED,
-    "15min": { measured: true, win: 0.282, n: 8317, meanR: -0.15 },
-    "1h": { measured: true, win: 0.306, n: 1791, meanR: -0.08 },
-    "4h": { measured: true, win: 0.307, n: 649, meanR: -0.08 },
+    "15min": { measured: true, win: 0.295, n: 1398, meanR: -0.109 },
+    "1h": { measured: true, win: 0.295, n: 254, meanR: -0.114 },
+    "4h": { measured: true, win: 0.392, n: 102, meanR: 0.176 },
     "1day": NOT_MEASURED,
   } as Record<string, GainzEvidence>,
 };

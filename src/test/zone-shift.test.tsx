@@ -37,7 +37,11 @@ const scenario = (): Bar[] => {
   flat(90, 3); // 65..67
   return bars;
 };
-const SHORT = { length: 44, rangeLength: 3 };
+// (#132 moved the app's retest gap to 10; these read the original's 5)
+const SHORT = { length: 44, rangeLength: 3, retestGap: 5 };
+// ChartPrime's published defaults, which the port still reads as the
+// original does; the app's own are #132's
+const ORIGINAL = { length: 100, rangeLength: 200, retestGap: 5 };
 
 describe("#124 Zone Shift (a port of ChartPrime's open-source code): Pine's averages", () => {
   it("SMA and WMA are nothing until their window is full, or while it holds nothing", () => {
@@ -58,10 +62,14 @@ describe("#124 Zone Shift (a port of ChartPrime's open-source code): Pine's aver
 });
 
 describe("#124 Zone Shift: the band, the trend, the level and the retests", () => {
-  it("has the published defaults: Length 100 (HMA 60), a 200-candle range average, retests more than 5 candles apart", () => {
-    expect(ZS_DEFAULTS).toEqual({ length: 100, rangeLength: 200, retestGap: 5 });
+  it("reads the published defaults as the original does (Length 100, HMA 60, a 200-candle range average), and the app's are #132's", () => {
+    // #132: Length 75 (HMA 35) and retests more than 10 candles apart won
+    // most often on the first period of every setting tried
+    expect(ZS_DEFAULTS).toEqual({ length: 75, rangeLength: 200, retestGap: 10 });
     const flat = Array.from({ length: 230 }, () => ({ open: 100, high: 100.5, low: 99.5, close: 100 }));
-    const r = zoneShift(flat);
+    expect(zoneShift(flat).mid[74]).toBe(100);
+    expect(zoneShift(flat).mid[73]).toBeNull();
+    const r = zoneShift(flat, undefined, ORIGINAL);
     // the midline from the 100th candle (EMA 100), the band from the 200th
     expect(r.mid[98]).toBeNull();
     expect(r.mid[99]).toBe(100);
@@ -148,7 +156,7 @@ describe("#124 Zone Shift on the chart", () => {
     const past = all.slice(0, 480);
     const candles = all.slice(480);
     render(<PriceChart candles={candles} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} />);
-    expect(screen.getByTestId("chart-overlay-name-zoneShift").textContent).toBe("Zone Shift 100");
+    expect(screen.getByTestId("chart-overlay-name-zoneShift").textContent).toBe("Zone Shift 75");
     expect(screen.getByTestId("chart-toggle-zoneShift").getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByTestId("chart-zoneshift-top")).toBeTruthy();
     expect(screen.getByTestId("chart-zoneshift-bot")).toBeTruthy();
@@ -178,11 +186,15 @@ describe("#124 Zone Shift on the chart", () => {
   });
 
   it("marks the retests with a diamond under the candle (up) or over it (down)", () => {
-    // 600 flat candles, then the scenario's jump, dip and crash, read with the defaults
+    // 600 flat candles, then the scenario's jump, dip and crash, read with the
+    // defaults — five more flat candles before the crash, so the second
+    // retest is more than #132's 10 candles after the first
     const flat = Array.from({ length: 600 }, () => ({ open: 100, high: 100.5, low: 99.5, close: 100 }));
-    const all = [...flat, ...scenario().slice(50)].map((b, i) => ({ ...b, datetime: new Date(T0 + i * M15).toISOString().slice(0, 19).replace("T", " ") }));
+    const s = scenario().slice(50);
+    const wait = Array.from({ length: 5 }, () => ({ open: 110, high: 110.5, low: 109.5, close: 110 }));
+    const all = [...flat, ...s.slice(0, 14), ...wait, ...s.slice(14)].map((b, i) => ({ ...b, datetime: new Date(T0 + i * M15).toISOString().slice(0, 19).replace("T", " ") }));
     const r = zoneShift(all);
-    expect(r.retests.map((x) => [x.i - 600, x.up])).toEqual([[8, true], [14, false]]);
+    expect(r.retests.map((x) => [x.i - 600, x.up])).toEqual([[8, true], [19, false]]);
     render(<PriceChart candles={all.slice(600)} pair="USD/JPY" zoneShiftHistory={{ bars: all.slice(0, 600), status: "ready" }} />);
     const upMark = screen.getByTestId("chart-zoneshift-retest-up");
     const downMark = screen.getByTestId("chart-zoneshift-retest-down");

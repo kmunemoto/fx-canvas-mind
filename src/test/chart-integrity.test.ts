@@ -186,7 +186,7 @@ describe("the prompt stops asking for things the app cannot observe", () => {
     // #104: and the prompt no longer talks about stops resting anywhere at
     // all — it reads RSI and SAR, and names nothing else as evidence
     expect(analyzeSrc).not.toContain("ストップ狩り");
-    expect(analyzeSrc).toContain("RSI(14) とパラボリックSAR(0.02, 0.2) だけ");
+    expect(analyzeSrc).toContain("RSI(${RSI_PERIOD}) とパラボリックSAR(${SAR_STEP}, ${SAR_MAX}) だけ");
   });
 
   it("does not force an institutional-intent label on every run", () => {

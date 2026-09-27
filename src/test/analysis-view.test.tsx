@@ -1346,7 +1346,7 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     // a mark whose bar is not on this chart is not drawn anywhere
     expect(screen.queryByTestId("chart-signal-BUY-open")).toBeNull();
     expect(screen.getByTestId("chart-trend-lows")).toBeInTheDocument();
-    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("RSI が30/70から戻り");
+    expect(screen.getByTestId("chart-signal-legend").textContent).toContain("RSI(9) が25/75から戻り");
     const svg = document.querySelector("svg[role='img']");
     expect(svg?.textContent).toContain("BUY✓");
     expect(svg?.textContent).toContain("SELL✗");
@@ -1448,9 +1448,9 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     const { unmount } = render(<PriceChart candles={candles} pair="USD/JPY" sar={sar} sarBelow={sarBelow} rsi={rsi} />);
     expect(screen.getByTestId("chart-sar").querySelectorAll("circle")).toHaveLength(58);
     const strip = screen.getByTestId("chart-rsi");
-    expect(strip.textContent).toContain("RSI(14)");
-    expect(strip.textContent).toContain("70");
-    expect(strip.textContent).toContain("30");
+    expect(strip.textContent).toContain("RSI(9)");
+    expect(strip.textContent).toContain("75");
+    expect(strip.textContent).toContain("25");
     // a legend is shown for the dots even with no signal on screen
     expect(screen.getByTestId("chart-signal-legend").textContent).toContain("パラボリックSAR");
     unmount();
@@ -1498,7 +1498,7 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
   it("on a WAIT, says what close each side needs, how far that is, and the plan it would make (#104)", () => {
     render(<AnalysisResultView result={waitResult} techData={{ ...techData, price: "150.100", rsiSar: summary() }} pair="USD/JPY" interval="1h" />);
     const panel = screen.getByTestId("rsi-sar-panel");
-    expect(screen.getByTestId("rsi-sar-now").textContent).toContain("RSI(14) 31.2 → 28.4");
+    expect(screen.getByTestId("rsi-sar-now").textContent).toContain("RSI(9) 31.2 → 28.4");
     expect(screen.getByTestId("rsi-sar-now").textContent).toContain("パラボリックSAR 150.420（価格の上＝売り側）");
     expect(screen.getByTestId("rsi-sar-fired").textContent).toContain("サインは出ていません");
     const buy = screen.getByTestId("rsi-sar-trigger-BUY").textContent ?? "";
@@ -1506,7 +1506,7 @@ describe("the chart's signals and the RSI/SAR panel (#99, #104)", () => {
     expect(buy).toContain("+30.0pips");
     expect(screen.getByTestId("rsi-sar-plan-BUY").textContent).toContain("エントリー 150.400・損切り 150.160・利確 150.760");
     const sell = screen.getByTestId("rsi-sar-trigger-SELL").textContent ?? "";
-    expect(sell).toContain("まだ準備前です。まず終値が 151.350 以上で引けて RSI が70を超える必要があります");
+    expect(sell).toContain("まだ準備前です。まず終値が 151.350 以上で引けて RSI が75を超える必要があります");
     expect(sell).toContain("+125.0pips");
     expect(screen.queryByTestId("rsi-sar-plan-SELL")).toBeNull();
     expect(screen.queryByTestId("rsi-sar-costly-next")).toBeNull();

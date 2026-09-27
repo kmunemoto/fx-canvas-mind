@@ -25,6 +25,9 @@
 //     win). The SECOND period, never seen by the choice, says whether it
 //     holds. Both are reported, with the current setting beside them.
 //   * The Weighted Volume Profile draws no signal, so it has no win rate.
+//
+// Each family's `current` is the setting the app had before #132 applied the
+// choices (docs §8.45), kept so a rerun measures the same comparison.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
@@ -107,7 +110,7 @@ const FAMILIES: Family[] = [
     current: { stability: 0.5, rsiLevel: 50, delta: 5 },
     grid: product({ stability: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8], rsiLevel: [30, 40, 50, 60, 70], delta: [2, 3, 5, 7, 10, 15] }),
     signals: (x, p, m) => {
-      const rsi = memo(m, "rsi14", () => wilderRsi(x.c.map((c) => c.close)).rsi);
+      const rsi = memo(m, "rsi14", () => wilderRsi(x.c.map((c) => c.close), 14).rsi);
       const out = new Int8Array(x.c.length);
       for (let i = Math.max(1, p.delta); i < x.c.length; i++) {
         const r = rsi[i];

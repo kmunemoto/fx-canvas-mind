@@ -22,6 +22,7 @@ import {
   REWARD_RATIO,
   RSI_SAR_EVIDENCE,
   RULE_ID,
+  RSI_PERIOD,
   SELL_LEVEL,
   STOP_ATR,
   planFor,
@@ -34,6 +35,7 @@ import {
   GA_EVIDENCE,
   GA_REWARD,
   GA_RSI_LEVEL,
+  GA_RSI_PERIOD,
   GA_RULE_ID,
   GA_STOP_ATR,
   planForGa,
@@ -367,7 +369,7 @@ const renderGainzMail = (s: FiredSignal, lang: Lang): Mail => {
       [
         `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
         `Engulfing bar, body ${body}% of the bar's range`,
-        `RSI(14): ${s.rsi.toFixed(1)} (${rsiCond})`,
+        `RSI(${GA_RSI_PERIOD}): ${s.rsi.toFixed(1)} (${rsiCond})`,
         `Close ${px(s.entry)}, ${thenCond} the close ${GA_DELTA} bars earlier (${then})`,
       ].join("\n"),
       [
@@ -391,7 +393,7 @@ const renderGainzMail = (s: FiredSignal, lang: Lang): Mail => {
     [
       `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
       `包み足・実体が足の値幅の ${body}%`,
-      `RSI(14): ${s.rsi.toFixed(1)}（${rsiCond}）`,
+      `RSI(${GA_RSI_PERIOD}): ${s.rsi.toFixed(1)}（${rsiCond}）`,
       `終値 ${px(s.entry)} は${GA_DELTA}本前の終値（${then}）より${thenCond}`,
     ].join("\n"),
     [
@@ -429,7 +431,7 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
       `A ${side} signal fired on ${s.pair}, ${tf} chart.`,
       [
         `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
-        `RSI(14): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)} (${cross})`,
+        `RSI(${RSI_PERIOD}): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)} (${cross})`,
         `Parabolic SAR: ${s.sar === null ? "—" : px(s.sar)} (${sarSide})`,
       ].join("\n"),
       [
@@ -454,7 +456,7 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で${side}のサインが出ました。`,
     [
       `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
-      `RSI(14): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)}（${cross}）`,
+      `RSI(${RSI_PERIOD}): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)}（${cross}）`,
       `パラボリックSAR: ${s.sar === null ? "—" : px(s.sar)}（${sarSide}）`,
     ].join("\n"),
     [

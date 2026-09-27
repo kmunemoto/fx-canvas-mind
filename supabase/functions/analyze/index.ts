@@ -72,7 +72,7 @@ import { compactStructure, computeStructure, pivots } from "./structure.ts";
 import { compactTurn, computeTurn, type TurnRead } from "./turn.ts";
 import { compactDivergence, detectDivergence, type Divergence } from "./divergence.ts";
 import { COSTLY_EVIDENCE, costlyHourAt } from "./timing.ts";
-import { HORIZON_BARS, REWARD_RATIO, RULE_ID, STOP_ATR, chartRsiSar, compactRsiSar, planFor, readRsiSar, rsiSarLines, type RsiSarRead } from "./rsisar.ts";
+import { BUY_LEVEL, HORIZON_BARS, REWARD_RATIO, RSI_PERIOD, RULE_ID, SAR_MAX, SAR_STEP, SELL_LEVEL, STOP_ATR, chartRsiSar, compactRsiSar, planFor, readRsiSar, rsiSarLines, type RsiSarRead } from "./rsisar.ts";
 import { GA_REWARD, chartGainz, compactGainz, readGainz, type GainzRead } from "./gainz.ts";
 import { compactSignals, computeSignals, type SignalRead } from "./signals.ts";
 import { HORIZON_MS, currenciesOf, renderEventBlock, upcomingFor, type EconEvent } from "../econ-calendar/events.ts";
@@ -362,12 +362,12 @@ const candleLines = (candles: Candle[], count: number) =>
 // Everything the previous prompt taught — structure, levels, the turn gate,
 // the bounce counts, the learned rules — was about indicators this analysis
 // no longer reads, and is gone with them.
-const SYSTEM_PROMPT = `あなたはFXアナリストです。このアプリの分析は **RSI(14) とパラボリックSAR(0.02, 0.2) だけ** で行います。
+const SYSTEM_PROMPT = `あなたはFXアナリストです。このアプリの分析は **RSI(${RSI_PERIOD}) とパラボリックSAR(${SAR_STEP}, ${SAR_MAX}) だけ** で行います。
 ほかの指標（移動平均・MACD・ボリンジャーバンド・一目均衡表・ストキャスティクス・ADX・フィボナッチ・チャートパターンなど）は使わず、根拠として名前も出さないでください。
 
 売買のルール（サーバーが確定足で機械的に判定します。signal はこの判定で決まり、あなたが変えることはできません）:
-- BUY: RSI が30以下から30を上に戻した確定足で、パラボリックSARが価格の下にあるとき。
-- SELL: RSI が70以上から70を下に戻した確定足で、パラボリックSARが価格の上にあるとき。
+- BUY: RSI が${BUY_LEVEL}以下から${BUY_LEVEL}を上に戻した確定足で、パラボリックSARが価格の下にあるとき。
+- SELL: RSI が${SELL_LEVEL}以上から${SELL_LEVEL}を下に戻した確定足で、パラボリックSARが価格の上にあるとき。
 - それ以外は WAIT。
 - エントリーは現在値（成行）。損切りは ATR×${STOP_ATR}、利確1は損切り幅の${REWARD_RATIO}倍。利確2・利確3は使わない。
 

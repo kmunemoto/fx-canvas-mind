@@ -3,7 +3,7 @@ import { render as rtlRender, screen, fireEvent, type RenderResult } from "@test
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 import PriceChart from "../components/PriceChart";
-import { STOCH_DEFAULTS, normalizeStochParams, stochastic } from "../lib/stochastic";
+import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_OLD_DEFAULTS, normalizeStochParams, stochastic } from "../lib/stochastic";
 import { CHART_PREFS_KEY, resetChartPrefsCache } from "../lib/chartPrefs";
 import { stochSeries } from "../../research/indicator-series";
 
@@ -65,11 +65,18 @@ describe("#117 the stochastic (TradingView's Stochastic: %K length 14, %K smooth
     const theirs = stochSeries(c, 14, 3, 3);
     mine.k.forEach((v, i) => (v === null ? expect(theirs.k[i]).toBeNull() : expect(v).toBeCloseTo(theirs.k[i] as number, 9)));
     mine.d.forEach((v, i) => (v === null ? expect(theirs.d[i]).toBeNull() : expect(v).toBeCloseTo(theirs.d[i] as number, 9)));
-    const fast = stochastic(c);
+    // TradingView's defaults, which the app used until #132
+    const fast = stochastic(c, STOCH_OLD_DEFAULTS);
     const ref = stochSeries(c, 14, 1, 3);
     expect(fast.k.filter((v) => v !== null)).toHaveLength(300 - 13);
     fast.k.forEach((v, i) => (v === null ? expect(ref.k[i]).toBeNull() : expect(v).toBeCloseTo(ref.k[i] as number, 9)));
     fast.d.forEach((v, i) => (v === null ? expect(ref.d[i]).toBeNull() : expect(v).toBeCloseTo(ref.d[i] as number, 9)));
+  });
+
+  it("#132: defaults to 21, 5, 3 with zone lines at 70/30 (it was TradingView's 14, 1, 3 and 80/20)", () => {
+    expect(STOCH_DEFAULTS).toEqual({ kLength: 21, kSmoothing: 5, dSmoothing: 3 });
+    expect(STOCH_OLD_DEFAULTS).toEqual({ kLength: 14, kSmoothing: 1, dSmoothing: 3 });
+    expect(STOCH_LEVELS).toEqual({ upper: 70, middle: 50, lower: 30 });
   });
 
   it("takes only whole lengths from 1 to 100", () => {
@@ -87,20 +94,20 @@ describe("#117 the stochastic on the chart", () => {
 
   const lastOf = (xs: Array<number | null>) => [...xs].reverse().find((v): v is number => v !== null)!;
 
-  it("draws %K and %D under the price with 80/50/20 and the band between 20 and 80, and says the newest reading", () => {
+  it("draws %K and %D under the price with 70/50/30 and the band between 30 and 70, and says the newest reading", () => {
     const c = walk(120);
     render(<PriceChart candles={c} pair="USD/JPY" />);
     const strip = screen.getByTestId("chart-stoch");
     expect(strip.querySelector("[data-line='%K']")?.getAttribute("stroke")).toBe("#2962FF");
     expect(strip.querySelector("[data-line='%D']")?.getAttribute("stroke")).toBe("#FF6D00");
     const levels = [...strip.querySelectorAll("text")].map((t) => t.textContent).filter((x) => /^\d+$/.test(x ?? ""));
-    expect(levels).toEqual(["80", "50", "20"]);
+    expect(levels).toEqual(["70", "50", "30"]);
     expect(screen.getByTestId("chart-stoch-band")).toBeTruthy();
     const { k, d } = stochastic(c);
-    expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 14 1 3 %K ${lastOf(k).toFixed(1)} %D ${lastOf(d).toFixed(1)}`);
+    expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 21 5 3 %K ${lastOf(k).toFixed(1)} %D ${lastOf(d).toFixed(1)}`);
     // #119: its switch is the eye beside its name in the chart's list; the
     // settings say it is shown only
-    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 14 1 3");
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 21 5 3");
     fireEvent.click(screen.getByTestId("chart-stoch-settings"));
     expect(screen.getByTestId("chart-stoch-form").textContent).toContain("サインの判定には使っていません");
   });
@@ -120,7 +127,7 @@ describe("#117 the stochastic on the chart", () => {
     expect(screen.getByTestId("chart-stoch")).toBeTruthy();
   });
 
-  it("takes its three lengths from the settings, and goes back to 14, 1, 3", () => {
+  it("takes its three lengths from the settings, and goes back to 21, 5, 3", () => {
     const c = walk(120);
     render(<PriceChart candles={c} pair="USD/JPY" />);
     fireEvent.click(screen.getByTestId("chart-stoch-settings"));
@@ -133,7 +140,31 @@ describe("#117 the stochastic on the chart", () => {
     fireEvent.change(screen.getByTestId("chart-stoch-dSmoothing"), { target: { value: "0" } });
     expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 5 3 3");
     fireEvent.click(screen.getByTestId("chart-stoch-reset"));
-    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 14 1 3");
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 21 5 3");
+  });
+
+  it("#132: a browser that saved the old defaults before the change takes the new ones; one that chose them after keeps them", () => {
+    const c = walk(120);
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ stoch: true, stochParams: { kLength: 14, kSmoothing: 1, dSmoothing: 3 } }));
+    const { unmount } = render(<PriceChart candles={c} pair="USD/JPY" />);
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 21 5 3");
+    unmount();
+    // a choice of its own, saved before: kept
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ stoch: true, stochParams: { kLength: 9, kSmoothing: 3, dSmoothing: 3 } }));
+    resetChartPrefsCache();
+    const second = render(<PriceChart candles={c} pair="USD/JPY" />);
+    expect(screen.getByTestId("chart-overlay-name-stoch").textContent).toBe("ストキャス 9 3 3");
+    second.unmount();
+    // 14, 1, 3 typed in after the change: kept
+    localStorage.clear();
+    resetChartPrefsCache();
+    render(<PriceChart candles={c} pair="USD/JPY" />);
+    fireEvent.click(screen.getByTestId("chart-stoch-settings"));
+    fireEvent.change(screen.getByTestId("chart-stoch-kLength"), { target: { value: "14" } });
+    fireEvent.change(screen.getByTestId("chart-stoch-kSmoothing"), { target: { value: "1" } });
+    resetChartPrefsCache();
+    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).stochParams).toEqual({ kLength: 14, kSmoothing: 1, dSmoothing: 3 });
+    expect(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!).stochDefaults).toBe(132);
   });
 
   it("switches the RSI strip too, where the chart has one", () => {
@@ -161,6 +192,6 @@ describe("#117 the stochastic on the chart", () => {
     fireEvent.wheel(svg, { deltaY: -100, ctrlKey: true, clientX: 0 });
     expect(screen.getByTestId("chart-zoom-count").textContent).toBe("100/120本");
     const { k, d } = stochastic(c);
-    expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 14 1 3 %K ${(k[99] as number).toFixed(1)} %D ${(d[99] as number).toFixed(1)}`);
+    expect(screen.getByTestId("chart-stoch-reading").textContent).toBe(`Stoch 21 5 3 %K ${(k[99] as number).toFixed(1)} %D ${(d[99] as number).toFixed(1)}`);
   });
 });

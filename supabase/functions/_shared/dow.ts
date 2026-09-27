@@ -23,7 +23,9 @@
 //
 // Deno-free on purpose: the live-chart function and the vitest suite import it.
 
-export const DOW_PIVOT = 5;
+// #132: 4, the swing width that won most often on the first period of
+// every one tried (research/tune.ts; docs §8.45). It was 5.
+export const DOW_PIVOT = 4;
 
 export type DowState = "up" | "down" | "toDown" | "toUp" | "none";
 

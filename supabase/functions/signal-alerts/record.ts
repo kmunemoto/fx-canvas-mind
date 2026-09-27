@@ -175,12 +175,12 @@ export const summarize = (rows: EventRow[]): Summary => {
   };
 };
 
-// What the past charts said the same rule would do (§8.21, the app's exit,
-// all timeframes, 2025-07 to 2026-09, spread paid): the yardstick the live
-// record is read against.
-export const BACKTEST = { period: "2025-07〜2026-09", n: 1255, winRate: 0.35, meanR: -0.125, breakeven: 0.4 };
+// What the past charts said the same rule would do (#132, research/tune.ts:
+// the app's exit, all timeframes, 2025-07 to 2026-09, spread paid): the
+// yardstick the live record is read against.
+export const BACKTEST = { period: "2025-07〜2026-09", n: 802, winRate: 0.355, meanR: -0.112, breakeven: 0.4 };
 
-// #112: the same yardstick for the GA-style rule (research/gainz.ts #112
-// block: its own plan, stop 1 ATR and target 2x, all timeframes, 2025-07 to
-// 2026-09, spread paid; analyze/gainz.ts GA_EVIDENCE)
-export const GA_BACKTEST = { period: "2025-07〜2026-09", n: 10757, winRate: 0.288, meanR: -0.134, breakeven: 1 / 3 };
+// #112: the same yardstick for the GA-style rule (#132, research/tune.ts: its
+// own plan, stop 1 ATR and target 2x, all timeframes, 2025-07 to 2026-09,
+// spread paid; analyze/gainz.ts GA_EVIDENCE)
+export const GA_BACKTEST = { period: "2025-07〜2026-09", n: 1754, winRate: 0.301, meanR: -0.093, breakeven: 1 / 3 };

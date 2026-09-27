@@ -28,7 +28,7 @@
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { atrSeriesOf } from "../supabase/functions/analyze/state.ts";
-import { gainzAt } from "../supabase/functions/analyze/gainz.ts";
+import { GA_DELTA, GA_RSI_LEVEL, GA_STABILITY, gainzAt } from "../supabase/functions/analyze/gainz.ts";
 import { bundleOf, crossDown, crossUp, type Bundle, type Series } from "./indicator-series.ts";
 import { labelAt, type LabelSpec, type Side } from "./lib.ts";
 
@@ -194,10 +194,11 @@ export const GAINZ: readonly RevRule[] = [
 // #112: the rule the app now draws and mails beside RSI + SAR — the Suite's
 // V2 Alpha with the settings the owner's screenshot showed (body over true
 // range above 0.5, RSI 50, 5 bars). It IS the app's function, not a copy of
-// it, so the study and the app cannot drift apart.
+// it, so the study and the app cannot drift apart. #132 changed its numbers
+// (0.7, RSI 40, 5 bars; docs §8.45): the label reads them from the app.
 export const GAINZ_APP: RevRule = {
   id: "gz_app",
-  ja: "包み足 ＋ 実体が真の値幅の半分超 ＋ RSI 50未満（売りは50超）＋ 終値が5本前より安い（売りは高い）",
+  ja: `包み足 ＋ 実体が真の値幅の${GA_STABILITY * 10}割超 ＋ RSI ${GA_RSI_LEVEL}未満（売りは${100 - GA_RSI_LEVEL}超）＋ 終値が${GA_DELTA}本前より安い（売りは高い）`,
   at: (x, i) => {
     const s = gainzAt(x.c, x.b.rsi, i);
     return s === "BUY" ? 1 : s === "SELL" ? -1 : 0;

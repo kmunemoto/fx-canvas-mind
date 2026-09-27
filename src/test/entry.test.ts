@@ -857,8 +857,9 @@ describe("the gate is wired through, in every place it has to be", () => {
   it("the prompt states the RSI/SAR rule and no longer asks for a counter-case (#96, #104)", () => {
     const prompt = analyze.slice(analyze.indexOf("const SYSTEM_PROMPT"), analyze.indexOf("const RESPONSE_SCHEMA"));
     expect(prompt).not.toContain("転換の証拠");
-    expect(prompt).toContain("RSI が30以下から30を上に戻した確定足で、パラボリックSARが価格の下にあるとき");
-    expect(prompt).toContain("RSI が70以上から70を下に戻した確定足で、パラボリックSARが価格の上にあるとき");
+    // #132: the levels are the rule's constants (25/75), not written out
+    expect(prompt).toContain("RSI が${BUY_LEVEL}以下から${BUY_LEVEL}を上に戻した確定足で、パラボリックSARが価格の下にあるとき");
+    expect(prompt).toContain("RSI が${SELL_LEVEL}以上から${SELL_LEVEL}を下に戻した確定足で、パラボリックSARが価格の上にあるとき");
     expect(prompt).toContain("counter_case は書かなくてよい");
     const schema = analyze.slice(analyze.indexOf("const RESPONSE_SCHEMA"), analyze.indexOf("const { conditional_wait"));
     expect(schema).toContain("counter_case: {");

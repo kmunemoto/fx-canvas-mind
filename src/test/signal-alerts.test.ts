@@ -261,8 +261,8 @@ const sample = (over: Partial<FiredSignal> = {}): FiredSignal => ({
   entry: 149.5,
   stop: 149.42,
   target: 149.62,
-  rsi: 31.4,
-  rsiPrev: 28.9,
+  rsi: 26.4,
+  rsiPrev: 23.9,
   sar: 149.31,
   atr: 0.1,
   stability: null,
@@ -278,12 +278,12 @@ describe("the email", () => {
     expect(m.subject).toContain("15分足");
     expect(m.subject).toContain("買い（BUY）");
     expect(m.text).toContain("2026-09-24 19:00（日本時間）に確定した足");
-    expect(m.text).toContain("RSI(14): 28.9 → 31.4");
+    expect(m.text).toContain("RSI(9): 23.9 → 26.4");
     expect(m.text).toContain("エントリー ≈ 149.500");
     // #111: 0.08 yen a unit is 800 yen per 10,000
     expect(m.text).toContain("損切り 149.420（8.0pips・1万通貨で ¥800 の損失）");
     expect(m.text).toContain("利確 149.620（12.0pips）");
-    expect(m.text).toContain("勝率は 35%（885回）");
+    expect(m.text).toContain("勝率は 35%（568回）");
     expect(m.text).toContain("損益ゼロに必要な勝率は 40%");
     expect(m.text).toContain("投資助言ではありません");
     expect(m.text).toContain("https://fx-tactical.jp/");
@@ -292,7 +292,7 @@ describe("the email", () => {
   it("does not claim a measurement the study did not make", () => {
     const m = renderSignalMail(sample({ interval: "1day" }), "ja");
     expect(m.text).toContain("日足は検証していません");
-    expect(m.text).not.toContain("885");
+    expect(m.text).not.toContain("568");
   });
 
   it("writes a SELL on a dollar pair in five decimals", () => {
@@ -300,7 +300,7 @@ describe("the email", () => {
     expect(m.subject).toBe("[Sextant] EUR/USD 15-minute SELL signal (RSI + Parabolic SAR)");
     expect(m.text).toContain("Entry ≈ 1.10000");
     expect(m.text).toContain("Stop 1.10080 (8.0 pips; $8.00 per 10,000 units)");
-    expect(m.text).toContain("back below 70");
+    expect(m.text).toContain("back below 75");
     expect(m.text).toContain("not investment advice");
   });
 

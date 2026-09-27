@@ -12,6 +12,7 @@ import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
+import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
 import type { DowTf } from "@/lib/liveChart";
 
 interface Level {
@@ -74,9 +75,9 @@ interface Props {
   // whose bar is not among `candles` is not drawn.
   marks?: ChartSignalMark[];
   lines?: ChartTrendLine[];
-  // #104: RSI(14) and the Parabolic SAR, one value per candle. The SAR is
+  // #104: RSI and the Parabolic SAR, one value per candle. The SAR is
   // drawn as dots on the price chart (green under price, red over it), RSI
-  // in its own strip under it with its 30 and 70 lines.
+  // in its own strip under it with the rule's two levels.
   rsi?: Array<number | null>;
   sar?: Array<number | null>;
   sarBelow?: Array<boolean | null>;
@@ -362,8 +363,8 @@ const PriceChart = ({
     return { ...zoneShift(all, formingLast ? all.length - 2 : all.length - 1), off: zsPast.length, total: all.length };
   }, [ov.zoneShift, zsListed, zsPast, candles, formingLast]);
   // #131: the Pro-style score's signals, over the same history as Zone Shift
-  // (each part and the score are ranked against 100 bars each, so its first
-  // signal needs about 260); listed where Zone Shift is
+  // (each part and the score are ranked against `window` bars each, so its first
+  // signal needs about 2 windows and the EMA); listed where Zone Shift is
   const gpListed = zoneShiftHistory !== undefined || candles.length >= GP_MIN_BARS;
   const gp = useMemo(() => {
     if (!ov.gainzPro || !gpListed || candles.length === 0 || zsPast === null) return null;
@@ -2298,21 +2299,22 @@ const PriceChart = ({
       {/* #117: the stochastic's lengths, opened from its gear in the list
           (#119; in full screen the gear opens the settings sheet) */}
       {!full && stochSettings && <div className="px-1 pt-1">{stochForm}</div>}
-      {/* #104: RSI(14) under the price, on the same x scale so a bar here is
-          the bar above it. The 30 and 70 lines are the rule's levels. */}
+      {/* #104: RSI under the price, on the same x scale so a bar here is the
+          bar above it. The two outer lines are the rule's levels (#132: 25/75) */}
       {showRsi && rsi && strip({
         testid: "chart-rsi",
         aria: t.chart.rsiLabel,
         label: t.chart.rsiLabel,
         lines: [{ name: "", values: rsi, color: COLORS.entry }],
         levels: [
-          { v: 70, color: COLORS.down, dash: "4 3", opacity: 0.75 },
+          { v: RSI_SAR_LEVELS.sell, color: COLORS.down, dash: "4 3", opacity: 0.75 },
           { v: 50, color: COLORS.grid, dash: "2 3", opacity: 0.5 },
-          { v: 30, color: COLORS.up, dash: "4 3", opacity: 0.75 },
+          { v: RSI_SAR_LEVELS.buy, color: COLORS.up, dash: "4 3", opacity: 0.75 },
         ],
       })}
       {/* #117: the stochastic, drawn as TradingView draws it — %K blue, %D
-          orange, 80/50/20, the band between 20 and 80 shaded */}
+          orange, its zone lines and the band between them shaded (#132:
+          70/50/30) */}
       {showStoch && strip({
         testid: "chart-stoch",
         aria: t.chart.stoch.name,

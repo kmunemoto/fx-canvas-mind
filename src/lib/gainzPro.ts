@@ -40,7 +40,9 @@ export interface GainzProParams {
   trend: boolean;
 }
 
-export const GP_DEFAULTS: GainzProParams = { rsiLength: 14, atrLength: 14, emaLength: 50, slopeBars: 10, window: 100, threshold: 0.95, trend: true };
+// #132: a window of 50 won most often on the first period of every setting
+// tried (research/tune.ts; docs §8.45). It was 100.
+export const GP_DEFAULTS: GainzProParams = { rsiLength: 14, atrLength: 14, emaLength: 50, slopeBars: 10, window: 50, threshold: 0.95, trend: true };
 
 type Bar = { open: number; high: number; low: number; close: number };
 type Side = "BUY" | "SELL";

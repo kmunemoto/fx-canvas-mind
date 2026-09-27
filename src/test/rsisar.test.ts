@@ -3,7 +3,10 @@ import {
   BUY_LEVEL,
   HORIZON_BARS,
   REWARD_RATIO,
+  RSI_PERIOD,
   RSI_SAR_EVIDENCE,
+  SAR_MAX,
+  SAR_STEP,
   SELL_LEVEL,
   STOP_ATR,
   chartRsiSar,
@@ -18,7 +21,7 @@ import {
 } from "../../supabase/functions/analyze/rsisar";
 import { rsiSeries, type Candle } from "../../supabase/functions/analyze/indicators";
 import { psarSeries } from "../../research/indicator-series";
-import { BASES, PARTNERS, ctxOf } from "../../research/rsi-combos";
+import { RSI_SAR_LEVELS, RSI_SAR_PERIOD } from "../lib/rsiSar";
 
 const T0 = Date.parse("2026-01-05T00:00:00Z");
 const H = 3_600_000;
@@ -59,8 +62,14 @@ describe("the two lines are the ones the study measured", () => {
 
   it("RSI is the app's RSI, value for value", () => {
     const mine = wilderRsi(closes).rsi;
-    const app = rsiSeries(closes);
+    const app = rsiSeries(closes, RSI_PERIOD);
     expect(mine).toEqual(app);
+  });
+
+  it("#132: the rule's numbers are the ones the search chose, and the client draws the same", () => {
+    expect({ RSI_PERIOD, BUY_LEVEL, SELL_LEVEL, SAR_STEP, SAR_MAX }).toEqual({ RSI_PERIOD: 9, BUY_LEVEL: 25, SELL_LEVEL: 75, SAR_STEP: 0.02, SAR_MAX: 0.2 });
+    expect(RSI_SAR_PERIOD).toBe(RSI_PERIOD);
+    expect(RSI_SAR_LEVELS).toEqual({ buy: BUY_LEVEL, sell: SELL_LEVEL });
   });
 
   it("the SAR is the study's SAR, bar for bar", () => {
@@ -70,20 +79,24 @@ describe("the two lines are the ones the study measured", () => {
     expect(mine.long).toEqual(study.long);
   });
 
-  it("the rule fires on exactly the bars the study counted as bounce + SAR", () => {
-    // The rule is rare — about one signal per few hundred bars, as in the
-    // study — so the count is checked over all three walks together.
+  it("the rule fires on exactly the bars where RSI comes back across its level with the study's SAR on that side", () => {
+    // The rule is rare — about one signal per few hundred bars — so the
+    // count is checked over all three walks together. #132: RSI(9) back
+    // across 25/75 (research/tune.ts's reading of the rule, with the SAR
+    // #103 tested).
     let total = 0;
     for (const seed of [7, 8, 9]) {
-      const bars = walk(3000, seed);
+      const bars = walk(6000, seed);
       const read = readRsiSar(bars);
-      const ctx = ctxOf(bars, bars.map(() => null));
-      const bounce = BASES.find((b) => b.id === "bounce")!;
-      const psar = PARTNERS.find((p) => p.id === "psar")!;
+      const rsi = rsiSeries(bars.map((b) => b.close), RSI_PERIOD);
+      const long = psarSeries(bars).long;
       const study: string[] = [];
       for (let i = 1; i < bars.length; i++) {
-        const d = bounce.at(ctx, i);
-        if (d !== 0 && psar.bounce.ok(ctx, i, d)) study.push(`${i}:${d === 1 ? "BUY" : "SELL"}`);
+        const a = rsi[i - 1];
+        const b = rsi[i];
+        if (a === null || b === null) continue;
+        if (a <= BUY_LEVEL && b > BUY_LEVEL && long[i] === true) study.push(`${i}:BUY`);
+        else if (a >= SELL_LEVEL && b < SELL_LEVEL && long[i] === false) study.push(`${i}:SELL`);
       }
       // the read drops a signal only where the ATR has not formed yet
       const mine = read.signals.map((s) => `${s.index}:${s.side}`);
@@ -184,7 +197,7 @@ describe("the triggers", () => {
 
 describe("past signals", () => {
   it("are priced the app's way and settled by walking the bars after them", () => {
-    const read = readRsiSar(walk(3000, 51));
+    const read = readRsiSar(walk(6000, 51));
     expect(read.signals.length).toBeGreaterThan(3);
     for (const s of read.signals) {
       const dir = s.side === "BUY" ? 1 : -1;
@@ -235,7 +248,7 @@ describe("what leaves the server", () => {
 
   it("the analyst's lines quote the reading and, on the entry rung, the triggers", () => {
     const entry = rsiSarLines(read, 3, true);
-    expect(entry).toContain("RSI(14)");
+    expect(entry).toContain(`RSI(${RSI_PERIOD})`);
     expect(entry).toContain("パラボリックSAR");
     expect(entry).toContain("次の足で条件がそろう価格");
     expect(rsiSarLines(read, 3, false)).not.toContain("次の足で条件がそろう価格");
