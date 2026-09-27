@@ -277,7 +277,21 @@ export const ja = {
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "ダウ理論",
+      gainzPro: "Pro型（点数）",
     },
+    // #131: the Pro-style score
+    gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
+      `Pro型 ${side === "BUY" ? "買い" : "売り"} · 点数 ${score}/100（直近100本の点数の${rank}%より上）`,
+    gainzProNote: (bars: number | null, status: "loading" | "ready" | "error") =>
+      "Pro型（点数方式）: GainzAlgo Suite の「Pro」の公開説明（足の形・値動きの大きさ・勢い・トレンドを点数にして順位で正規化し、相場に合わせたしきい値を超えたらサイン）を、このアプリが独自に式にしたもの。GainzAlgo のコードは非公開なので、同じサインにはなりません。" +
+      "陰線→陽線の確定足（売りは陽線→陰線）で、①足の形（終値の位置×実体の割合）②RSI(14) の加速 ③値幅の広がり（真の値幅÷直前の ATR(14)）④EMA(50) の10本の傾き（買いは上向きほど高い）を、それぞれ直近100本の中の順位にして平均し、その点数が直近100本の上位5%に入った足に P（下に買い、上に売り）。" +
+      (status === "loading"
+        ? "計算に要る過去の足（約260本）を読み込み中です。"
+        : status === "error"
+          ? "過去の足を読めなかったため表示していません（次の足で読み直します）。"
+          : `計算に使った足: ${bars ?? 0}本。`) +
+      "過去のチャート（11ペア・15分/1時間/4時間、損切り ATR×1・利確2倍、スプレッド込み、2025-07以降）: 43,665回・勝率29.3%（損益ゼロは33.3%）・1回あたり −0.118R で、ランダムに入った場合と差がありませんでした（GA型は 10,757回・28.8%・−0.134R）。傾きを外しても同じ。" +
+      "表示のみで、サインの判定・メールには使っていません。",
     // #129: Dow theory — the timeframes' short names, its levels and marks
     dowTfShort: { "4h": "4H", "1h": "1H", "15min": "15M", "5min": "5M" } as Record<string, string>,
     dowLevel: { pushLow: "押し安値", pullHigh: "戻り高値", high: "高値", low: "安値" },

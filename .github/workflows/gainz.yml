@@ -23,6 +23,7 @@ on:
       - src/lib/kalmanSupertrend.ts
       - src/lib/zoneShift.ts
       - supabase/functions/_shared/dow.ts
+      - src/lib/gainzPro.ts
       - .github/workflows/gainz.yml
   workflow_dispatch:
     inputs:

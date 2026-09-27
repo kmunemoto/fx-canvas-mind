@@ -235,7 +235,21 @@ export const en: Dict = {
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "Dow theory",
+      gainzPro: "Pro-style score",
     },
+    // #131: the Pro-style score
+    gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
+      `Pro-style ${side === "BUY" ? "buy" : "sell"} · score ${score}/100 (above ${rank}% of the last 100 scores)`,
+    gainzProNote: (bars: number | null, status: "loading" | "ready" | "error") =>
+      "Pro-style score: this app's own formulas for what GainzAlgo publishes about the Pro configuration of its Suite (pattern, volatility, momentum and trend turned into percentile-ranked scores, a signal above a threshold set by recent conditions). GainzAlgo's code is not public, so its signals will differ. " +
+      "On a down candle then an up candle (a sell: the mirror), ① the candle's shape (where it closed × its body's share of the range), ② RSI(14)'s acceleration, ③ its range expansion (true range ÷ the ATR(14) before it) and ④ EMA(50)'s 10-bar slope (for a buy, the more upward the higher) are each ranked among their last 100 values and averaged; a P marks a bar whose score is in the top 5% of the last 100 (under the candle for a buy, over it for a sell). " +
+      (status === "loading"
+        ? "Loading the earlier candles it needs (about 260). "
+        : status === "error"
+          ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
+          : `Computed over ${bars ?? 0} candles. `) +
+      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 43,665 trades, 29.3% won (break-even 33.3%), −0.118R each — no different from entering at random (the GA rule: 10,757, 28.8%, −0.134R). The same without the slope. " +
+      "Shown only: no signal or email uses it.",
     // #129: Dow theory — the timeframes' short names, its levels and marks
     dowTfShort: { "4h": "4H", "1h": "1H", "15min": "15M", "5min": "5M" } as Record<string, string>,
     dowLevel: { pushLow: "Pullback low", pullHigh: "Rally high", high: "High", low: "Low" },
