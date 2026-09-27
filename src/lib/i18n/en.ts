@@ -331,6 +331,19 @@ export const en: Dict = {
     hide: "Hide",
     show: "Show",
     foldList: "Fold the list",
+    // #144: as iSPEED FX lays its chart out
+    notesTitle: "How to read the chart, and the indicators",
+    info: "About",
+    groups: {
+      signals: "Signals and positions",
+      trend: "Trend (drawn over the price)",
+      oscillator: "Oscillators (under the price)",
+    },
+    ohlc: (o: string, h: string, l: string, c: string) => `O ${o} H ${h} L ${l} C ${c}`,
+    priceAuto: "Auto",
+    priceAutoHint: "Fit the price scale again",
+    gestureHint:
+      "Long-press for the crosshair (it follows the finger; tap again to hide it). Drag the price scale on the right up or down to stretch it (Auto puts it back), the time scale at the bottom sideways to zoom. Turn the phone on its side for full screen.",
     tabsLabel: "Timeframe",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -405,6 +418,8 @@ export const en: Dict = {
     intervalShort: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
+    // #144: folded under the chart
+    recommendedTitle: "About the base timeframe (4 hours)",
     recommended:
       "The base timeframe is the 4-hour chart: there the spread takes the smallest share of the stop (about 6%, against about 14% on the 15-minute chart), and entering at random lost least of the three timeframes. The GA style (#132's settings) on 4 hours: first period 106 trades, 30.2% won, −0.094R each; second period 102 trades, 39.2%, +0.176R. Few trades and a wide swing between the periods: it is not a reason to expect to win.",
     gaLegend: "BUY · SELL = the GA-style signal (engulfing, large body, RSI 40, against 5 bars ago; judged on closed bars). TP/SL = stop 1 ATR, target twice the stop (✓ won ✗ lost … open). The SAR band is a guide to the trend; the GA-style rule does not use it",

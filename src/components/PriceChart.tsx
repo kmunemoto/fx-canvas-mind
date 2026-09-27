@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { formatCandleLabel, parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
@@ -143,6 +143,10 @@ interface Props {
   // are made of (the rule's RSI and SAR, the position boxes) stay free.
   indicatorsLocked?: boolean;
   onLockedIndicator?: () => void;
+  // #144: a phone turned on its side opens the chart in full screen (as
+  // iSPEED FX's chart turns with the phone), and back upright closes it
+  // again if that is how it opened
+  landscapeFullscreen?: boolean;
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
@@ -156,6 +160,13 @@ const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci"]
 const LEVEL_BOXES = 3;
 // #131: the bars the Pro-style score needs before its first signal
 const GP_MIN_BARS = 2 * GP_DEFAULTS.window + GP_DEFAULTS.emaLength + GP_DEFAULTS.slopeBars;
+// #144: how long a finger is held still for the crosshair, and how far the
+// price scale stretches or spreads
+const LONG_PRESS_MS = 350;
+const TOUCH_MOUSE_MS = 800;
+const LANDSCAPE_PHONE = "(orientation: landscape) and (pointer: coarse) and (max-height: 540px)";
+const PRICE_ZOOM_MIN = 0.25;
+const PRICE_ZOOM_MAX = 4;
 // #124: no history (one array, so the memo that reads it holds)
 const NO_BARS: ReadonlyArray<{ open: number; high: number; low: number; close: number }> = [];
 
@@ -259,6 +270,7 @@ const PriceChart = ({
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
   formingLast = false, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
+  landscapeFullscreen = false,
 }: Props) => {
   const t = useT();
   const clipId = useId();
@@ -279,7 +291,27 @@ const PriceChart = ({
   const overlayRef = useRef<HTMLDivElement>(null);
   // the pointers down on the chart, and the gesture they started
   const pointers = useRef(new Map<number, number>());
-  const gesture = useRef<{ kind: "pan" | "pinch"; view: ChartView | null; x: number; dist: number; at: number; moved: boolean } | null>(null);
+  // #144: besides a drag of the bars and a pinch, the crosshair (a long
+  // press, then it follows the finger) and a drag on an axis, as iSPEED FX
+  // has them
+  const gesture = useRef<{
+    kind: "pan" | "pinch" | "cross" | "yzoom" | "xzoom";
+    view: ChartView | null;
+    x: number;
+    y: number;
+    dist: number;
+    at: number;
+    moved: boolean;
+    zoom: number;
+  } | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // #144: when a finger last touched the chart — the mouse moves a browser
+  // sends after a tap are not a mouse, and must not bring the crosshair
+  // back that the tap hid
+  const touchedAt = useRef(-Infinity);
+  // #144: the price scale stretched (over 1) or spread (under 1) by a drag
+  // on it, about the middle of the bars on screen; 1 is fitted to them
+  const [priceZoom, setPriceZoom] = useState(1);
 
   useEffect(() => {
     if (!boxEl || typeof ResizeObserver === "undefined") return;
@@ -299,6 +331,7 @@ const PriceChart = ({
     lastKey.current = seriesKey;
     setView((v) => (v ? { ...v, offset: 0 } : v));
     setHover(null);
+    setPriceZoom(1);
   }, [seriesKey]);
 
   // #116: full screen stops the page behind it scrolling, closes on Esc, and
@@ -346,6 +379,48 @@ const PriceChart = ({
     svgEl.addEventListener("wheel", onWheel, { passive: false });
     return () => svgEl.removeEventListener("wheel", onWheel);
   }, [svgEl]);
+
+  // #144: full screen on its side (a phone: a coarse pointer, and short)
+  const fullNow = useRef(full);
+  fullNow.current = full;
+  const autoFull = useRef(false);
+  useEffect(() => {
+    if (!landscapeFullscreen || !interactive || typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(LANDSCAPE_PHONE);
+    const apply = () => {
+      if (mq.matches) {
+        if (!fullNow.current) {
+          autoFull.current = true;
+          setFull(true);
+        }
+      } else if (autoFull.current) {
+        autoFull.current = false;
+        setFull(false);
+      }
+    };
+    apply();
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, [landscapeFullscreen, interactive]);
+
+  // #144: while the crosshair follows a finger or the price scale is
+  // dragged, the page does not scroll under it (on the card a drag up and
+  // down otherwise scrolls the page); and no long press outlives the chart
+  useEffect(() => {
+    if (!svgEl) return;
+    const onTouchMove = (e: TouchEvent) => {
+      const k = gesture.current?.kind;
+      if ((k === "cross" || k === "yzoom") && e.cancelable) e.preventDefault();
+    };
+    svgEl.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => svgEl.removeEventListener("touchmove", onTouchMove);
+  }, [svgEl]);
+  useEffect(
+    () => () => {
+      if (pressTimer.current) clearTimeout(pressTimer.current);
+    },
+    [],
+  );
 
   const W = measured && measured.w > 0 ? measured.w : FALLBACK_W;
   const narrow = W < NARROW;
@@ -456,10 +531,9 @@ const PriceChart = ({
     });
     return { swings, events, key, higher };
   }, [dow, ov.dow, candles]);
-  // the list open or folded: open in full screen and on a wide screen until
-  // folded, folded on a phone's card until opened
-  const [listOpen, setListOpen] = useState<boolean | null>(null);
   const [stochSettings, setStochSettings] = useState(false);
+  // #144: the indicator whose ⓘ is open in the settings list
+  const [infoOpen, setInfoOpen] = useState<string | null>(null);
   const showRsi = hasRsi && prefs.rsi;
   const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
   const showPctB = pctB !== null && pctB.some((v) => v !== null);
@@ -557,6 +631,13 @@ const PriceChart = ({
     const pad = (max - min) * (marks.length > 0 ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
+    // #144: as dragged on the price scale
+    if (priceZoom !== 1) {
+      const mid = (min + max) / 2;
+      const half = ((max - min) / 2) * priceZoom;
+      min = mid - half;
+      max = mid + half;
+    }
 
     const plotW = W - PAD_LEFT - PAD_RIGHT;
     const plotH = H - PAD_TOP - PAD_BOTTOM;
@@ -567,7 +648,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas, priceZoom]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -755,42 +836,151 @@ const PriceChart = ({
   );
 
   // #119: everything the chart can draw besides the candles, each with its
-  // switch — listed at the chart's top left with an eye, as TradingView
-  // lists its indicators, and in full screen's settings sheet. Only what
-  // this chart has is listed.
+  // switch. #144: grouped as iSPEED FX groups its indicators — the signals,
+  // the trend ones drawn over the price, the oscillators under it — in the
+  // settings list (the card's, and full screen's sheet), each with its note
+  // behind an ⓘ. Only what this chart has is listed.
   const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
   const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
-  const overlayItems: Array<{ key: string; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
-    ...(flags.length > 0 ? [{ key: "signals", name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
-    ...(positions && flags.length > 0 ? [{ key: "positions", name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
-    ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
-    ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
-    ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
+  const emaNoteText = t.chart.emaNote(emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready");
+  const noteOf: Partial<Record<string, ReactNode>> = {
+    signals: signalLegend ?? t.chart.signalLegend,
+    ema50: emaNoteText,
+    ema200: emaNoteText,
+    kalman: t.chart.kalmanNote,
+    supertrend: t.chart.supertrendNote,
+    utBot: t.chart.utBotNote,
+    fvgProfile: t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length)),
+    zoneShift: t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready"),
+    dow: dow ? t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf)) : undefined,
+    gainzPro: t.chart.gainzProNote(gp ? gp.total : null, zoneShiftHistory ? (gp ? "ready" : zoneShiftHistory.status) : "ready"),
+    stoch: t.chart.stoch.note,
+    pctB: t.chart.pctB.note,
+    rci: t.chart.rci.note,
+  };
+  type Group = "signals" | "trend" | "oscillator";
+  const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
+    ...(flags.length > 0 ? [{ key: "signals", group: "signals" as const, name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
+    ...(positions && flags.length > 0 ? [{ key: "positions", group: "signals" as const, name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
+    ...(trendLines.length > 0 ? [{ key: "trendLines", group: "signals" as const, name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
+    ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
+    ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     // #143: each with its line's colour
-    ...EMA_LINES.map((l) => ({ key: l.key, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
-    { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
-    { key: "supertrend", name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
-    { key: "utBot", name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
-    { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
-    ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
-    ...(dow ? [{ key: "dow", name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
-    ...(gpListed ? [{ key: "gainzPro", name: t.chart.overlayNames.gainzPro, on: ov.gainzPro, toggle: flip("gainzPro") }] : []),
-    ...(hasRsi ? [{ key: "rsi", name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
+    ...EMA_LINES.map((l) => ({ key: l.key, group: "trend" as const, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
+    { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
+    { key: "supertrend", group: "trend" as const, name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
+    { key: "utBot", group: "trend" as const, name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
+    { key: "fvgProfile", group: "trend" as const, name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
+    ...(zsListed ? [{ key: "zoneShift", group: "trend" as const, name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
+    ...(dow ? [{ key: "dow", group: "trend" as const, name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
+    ...(gpListed ? [{ key: "gainzPro", group: "trend" as const, name: t.chart.overlayNames.gainzPro, on: ov.gainzPro, toggle: flip("gainzPro") }] : []),
+    ...(hasRsi ? [{ key: "rsi", group: "oscillator" as const, name: t.chart.rsiLabel, on: prefs.rsi, toggle: () => setChartPrefs({ rsi: !prefs.rsi }) }] : []),
     {
       key: "stoch",
+      group: "oscillator" as const,
       name: `${t.chart.stoch.name} ${prefs.stochParams.kLength} ${prefs.stochParams.kSmoothing} ${prefs.stochParams.dSmoothing}`,
       on: prefs.stoch,
       toggle: () => setChartPrefs({ stoch: !prefs.stoch }),
       settings: openStochSettings,
     },
     // #135: off until switched on
-    { key: "pctB", name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
-    { key: "rci", name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
+    { key: "pctB", group: "oscillator" as const, name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
+    { key: "rci", group: "oscillator" as const, name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
   ].map((item) => (indicatorsLocked && LOCKED_KEYS.has(item.key)
     // #140: listed, so what a plan adds is in sight, but off and locked
     ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
     : item));
-  const listShown = listOpen ?? (full || !narrow);
+  const onCount = overlayItems.filter((i) => i.on).length;
+  // #144: the settings list, grouped — in the card (folded under its
+  // button) and in full screen's settings sheet; `ids` names its switches
+  const indicatorList = (ids: { toggle: string; lock: string }) => (
+    <div className="space-y-3" data-testid="chart-overlay-list">
+      {(["signals", "trend", "oscillator"] as const).map((g) => {
+        const items = overlayItems.filter((i) => i.group === g);
+        if (items.length === 0) return null;
+        return (
+          <section key={g} className="space-y-1" data-testid={`chart-group-${g}`}>
+            <h4 className="text-[11px] font-semibold text-muted-foreground">{t.chart.groups[g]}</h4>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {items.map((item) => {
+                const note = noteOf[item.key];
+                const open = infoOpen === item.key;
+                return (
+                  <li key={item.key} className="px-2 py-1" data-testid={`chart-overlay-${item.key}`}>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      {item.locked ? (
+                        // #140: a paid indicator — the lock says so and leads to the plan
+                        <button
+                          type="button"
+                          aria-label={`${item.name}: ${t.chart.lockedHint}`}
+                          title={t.chart.lockedHint}
+                          onClick={item.toggle}
+                          data-testid={`${ids.lock}-${item.key}`}
+                          className="p-1 rounded text-muted-foreground hover:text-foreground"
+                        >
+                          <Lock className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-pressed={item.on}
+                          aria-label={`${item.name}: ${item.on ? t.chart.hide : t.chart.show}`}
+                          title={item.on ? t.chart.hide : t.chart.show}
+                          onClick={item.toggle}
+                          data-testid={`${ids.toggle}-${item.key}`}
+                          className={`p-1 rounded hover:text-foreground ${item.on ? "text-primary" : "text-muted-foreground"}`}
+                        >
+                          {item.on ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                        </button>
+                      )}
+                      {item.swatch && <span aria-hidden="true" className="inline-block h-0.5 w-3 shrink-0 rounded" style={{ background: item.swatch }} data-testid={`chart-swatch-${item.key}`} />}
+                      <span
+                        className={`min-w-0 flex-1 truncate ${item.on ? "text-foreground" : item.locked ? "text-muted-foreground opacity-60" : "text-muted-foreground line-through opacity-60"}`}
+                        data-testid={`chart-overlay-name-${item.key}`}
+                      >
+                        {item.name}
+                      </span>
+                      {item.settings && (
+                        <button
+                          type="button"
+                          aria-expanded={stochSettings}
+                          aria-label={t.chart.stoch.settings}
+                          title={t.chart.stoch.settings}
+                          onClick={item.settings}
+                          data-testid="chart-stoch-settings"
+                          className="p-1 rounded text-muted-foreground hover:text-foreground"
+                        >
+                          <Settings2 className="h-4 w-4" />
+                        </button>
+                      )}
+                      {note && (
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          aria-label={`${item.name}: ${t.chart.info}`}
+                          title={t.chart.info}
+                          onClick={() => setInfoOpen(open ? null : item.key)}
+                          data-testid={`chart-info-${item.key}`}
+                          className={`p-1 rounded hover:text-foreground ${open ? "text-primary" : "text-muted-foreground"}`}
+                        >
+                          <Info className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    {open && note && (
+                      <p className="pb-1 pl-7 text-[11px] leading-relaxed text-muted-foreground" data-testid={`chart-info-text-${item.key}`}>{note}</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
+      {indicatorsLocked && <p className="text-[11px] text-muted-foreground" data-testid="chart-sheet-locked-note">{t.chart.lockedNote}</p>}
+    </div>
+  );
+
 
   // #117: the stochastic's three lengths, and back to TradingView's
   const stochForm = (
@@ -851,28 +1041,7 @@ const PriceChart = ({
         ? (
           <div className="space-y-4" data-testid="chart-settings">
             <section className="space-y-2">
-              <h4 className="text-xs text-muted-foreground">{t.chart.indicators}</h4>
-              <div className="flex flex-wrap gap-2">
-                {overlayItems.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    aria-pressed={item.locked ? undefined : item.on}
-                    onClick={item.toggle}
-                    title={item.locked ? t.chart.lockedHint : undefined}
-                    data-testid={item.locked ? `chart-sheet-lock-${item.key}` : `chart-sheet-${item.key}`}
-                    className={switchBtn(item.on)}
-                  >
-                    {item.locked
-                      ? <Lock className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
-                      : item.on ? <Eye className="inline h-3.5 w-3.5 mr-1 -mt-0.5" /> : <EyeOff className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />}
-                    {item.swatch && <span aria-hidden="true" className="inline-block h-0.5 w-3 mr-1 align-middle rounded" style={{ background: item.swatch }} />}
-                    {item.name}
-                  </button>
-                ))}
-              </div>
-              {indicatorsLocked && <p className="text-[11px] text-muted-foreground" data-testid="chart-sheet-locked-note">{t.chart.lockedNote}</p>}
-              {ov.kalman && <p className="text-[11px] text-muted-foreground">{t.chart.kalmanNote}</p>}
+              {indicatorList({ toggle: "chart-sheet", lock: "chart-sheet-lock" })}
               {!indicatorsLocked && stochForm}
             </section>
             <section className="space-y-2">
@@ -893,6 +1062,7 @@ const PriceChart = ({
                   {t.chart.zoomReset}
                 </button>
                 <p className="text-[11px] text-muted-foreground" data-testid="chart-zoom-hint">{t.chart.zoomHint}</p>
+                <p className="text-[11px] text-muted-foreground" data-testid="chart-gesture-hint">{t.chart.gestureHint}</p>
               </section>
             )}
           </div>
@@ -937,7 +1107,7 @@ const PriceChart = ({
             <div className="font-mono min-h-[1.5rem] basis-full [@media(min-width:640px)]:basis-auto" data-testid="chart-fullscreen-price">
               {hovered ? (
                 <span className="text-xs text-muted-foreground">
-                  {`O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`}
+                  {t.chart.ohlc(hovered.open.toFixed(decimals), hovered.high.toFixed(decimals), hovered.low.toFixed(decimals), hovered.close.toFixed(decimals))}
                 </span>
               ) : last ? (
                 <span className="flex items-baseline gap-2" style={{ color: moveColor }}>
@@ -1232,7 +1402,9 @@ const PriceChart = ({
   const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / plotW));
   const barAt = (px: number) => from + Math.floor((px - PAD_LEFT) / slot);
 
+  const afterTouch = () => Date.now() - touchedAt.current < TOUCH_MOUSE_MS;
   const handleMove = (evt: React.MouseEvent<SVGSVGElement>) => {
+    if (afterTouch()) return;
     const idx = barAt(svgX(evt.clientX, evt.currentTarget));
     setHover(onScreen(idx) ? idx : null);
     setHoverY(null);
@@ -1246,6 +1418,7 @@ const PriceChart = ({
     return py >= PAD_TOP && py <= H - PAD_BOTTOM ? py : null;
   };
   const handlePriceMove = (evt: React.MouseEvent<SVGSVGElement>) => {
+    if (afterTouch()) return;
     handleMove(evt);
     setHoverY(levelAt(evt.clientY, evt.currentTarget));
   };
@@ -1255,33 +1428,97 @@ const PriceChart = ({
   };
 
   // #116: one finger (or the mouse) drags the bars sideways, two pinch them.
-  // A tap without a drag shows that bar's prices, as hovering does.
-  const startGesture = () => {
+  // #144: as iSPEED FX: a finger held still brings up the crosshair, which
+  // then follows it (and stays where it is let go); a tap hides it, or shows
+  // it where there was none; one finger up and down the price scale
+  // stretches it, sideways along the time scale zooms.
+  const svgY = (clientY: number, el: Element) => {
+    const rect = el.getBoundingClientRect();
+    return rect.height > 0 ? ((clientY - rect.top) / rect.height) * H : 0;
+  };
+  const cancelPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+  };
+  const startGesture = (clientY = 0) => {
     const xs = [...pointers.current.values()];
     if (xs.length >= 2) {
       const [a, b] = xs;
-      gesture.current = { kind: "pinch", view, x: 0, dist: Math.max(1, Math.abs(a - b)), at: across((a + b) / 2), moved: true };
+      gesture.current = { kind: "pinch", view, x: 0, y: clientY, dist: Math.max(1, Math.abs(a - b)), at: across((a + b) / 2), moved: true, zoom: priceZoom };
     } else if (xs.length === 1) {
-      gesture.current = { kind: "pan", view, x: xs[0], dist: 0, at: 0, moved: false };
+      gesture.current = { kind: "pan", view, x: xs[0], y: clientY, dist: 0, at: 0, moved: false, zoom: priceZoom };
     } else {
       gesture.current = null;
     }
   };
   const onPointerDown = (evt: React.PointerEvent<SVGSVGElement>) => {
+    if (evt.pointerType !== "mouse") touchedAt.current = Date.now();
     if (!interactive || (evt.pointerType === "mouse" && evt.button !== 0)) return;
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
-    pointers.current.set(evt.pointerId, svgX(evt.clientX, evt.currentTarget));
-    startGesture();
+    const px = svgX(evt.clientX, evt.currentTarget);
+    const py = svgY(evt.clientY, evt.currentTarget);
+    pointers.current.set(evt.pointerId, px);
+    cancelPress();
+    if (pointers.current.size === 1) {
+      if (px >= W - PAD_RIGHT && py <= H - PAD_BOTTOM) {
+        gesture.current = { kind: "yzoom", view, x: px, y: evt.clientY, dist: 0, at: 0, moved: false, zoom: priceZoom };
+        return;
+      }
+      if (py > H - PAD_BOTTOM && px < W - PAD_RIGHT) {
+        gesture.current = { kind: "xzoom", view, x: px, y: evt.clientY, dist: 0, at: 1, moved: false, zoom: priceZoom };
+        return;
+      }
+    }
+    startGesture(evt.clientY);
+    if (evt.pointerType !== "mouse" && pointers.current.size === 1) {
+      const el = evt.currentTarget;
+      const clientY = evt.clientY;
+      pressTimer.current = setTimeout(() => {
+        pressTimer.current = null;
+        const g = gesture.current;
+        if (!g || g.kind !== "pan" || g.moved) return;
+        g.kind = "cross";
+        const idx = barAt(px);
+        setHover(onScreen(idx) ? idx : null);
+        setHoverY(levelAt(clientY, el));
+      }, LONG_PRESS_MS);
+    }
   };
   const onPointerMove = (evt: React.PointerEvent<SVGSVGElement>) => {
     if (!pointers.current.has(evt.pointerId)) return;
-    pointers.current.set(evt.pointerId, svgX(evt.clientX, evt.currentTarget));
+    const px = svgX(evt.clientX, evt.currentTarget);
+    pointers.current.set(evt.pointerId, px);
     const g = gesture.current;
     if (!g) return;
+    if (g.kind === "cross") {
+      const idx = barAt(px);
+      setHover(onScreen(idx) ? idx : null);
+      setHoverY(levelAt(evt.clientY, evt.currentTarget));
+      return;
+    }
+    if (g.kind === "yzoom") {
+      const dy = evt.clientY - g.y;
+      if (!g.moved && Math.abs(dy) < 3) return;
+      g.moved = true;
+      // down squeezes the prices together, up spreads them apart
+      setPriceZoom(Math.min(PRICE_ZOOM_MAX, Math.max(PRICE_ZOOM_MIN, g.zoom * Math.exp(dy / 150))));
+      return;
+    }
+    if (g.kind === "xzoom") {
+      const dx = px - g.x;
+      if (!g.moved && Math.abs(dx) < 3) return;
+      g.moved = true;
+      // right: fewer, wider bars; left: more — the newest kept at the right
+      setView(zoomView(n, g.view, Math.exp(dx / 120), 1));
+      return;
+    }
     if (g.kind === "pan") {
-      const dx = (pointers.current.get(evt.pointerId) ?? g.x) - g.x;
+      const dx = px - g.x;
+      // a finger that moves is not held still (up and down it scrolls the page)
+      if (Math.abs(evt.clientY - g.y) > 8) cancelPress();
       if (!g.moved && Math.abs(dx) < 4) return;
       g.moved = true;
+      cancelPress();
       if (g.view) setView(panView(n, g.view, dx / slot));
     } else {
       const [a, b] = [...pointers.current.values()];
@@ -1290,19 +1527,30 @@ const PriceChart = ({
     }
   };
   const onPointerEnd = (evt: React.PointerEvent<SVGSVGElement>) => {
+    if (evt.pointerType !== "mouse") touchedAt.current = Date.now();
     if (!pointers.current.has(evt.pointerId)) return;
+    cancelPress();
     const g = gesture.current;
     const px = pointers.current.get(evt.pointerId) ?? 0;
     pointers.current.delete(evt.pointerId);
+    if (g && (g.kind === "cross" || g.kind === "yzoom" || g.kind === "xzoom")) {
+      // the crosshair stays where it was let go, an axis as it was dragged
+      gesture.current = null;
+      if (pointers.current.size > 0) startGesture();
+      return;
+    }
     if (g?.kind === "pan" && !g.moved && evt.type === "pointerup" && evt.pointerType !== "mouse") {
-      const idx = barAt(px);
-      setHover(onScreen(idx) ? idx : null);
-      setHoverY(levelAt(evt.clientY, evt.currentTarget));
+      if (hover !== null) {
+        clearHover();
+      } else {
+        const idx = barAt(px);
+        setHover(onScreen(idx) ? idx : null);
+        setHoverY(levelAt(evt.clientY, evt.currentTarget));
+      }
     }
     // the finger left on the glass after a pinch drags from where it is
     startGesture();
   };
-
   // #116: the wheel zooms about the pointer — in full screen, or with Ctrl
   // (a trackpad's pinch) on the page, where a plain wheel scrolls the page
   wheel.current = (e: WheelEvent) => {
@@ -1341,9 +1589,7 @@ const PriceChart = ({
     <div className="flex items-center justify-between gap-2 px-1 pb-2">
       <span className="text-xs font-semibold text-foreground shrink-0">{heading ?? t.chart.title}</span>
       <span className="text-[10px] text-muted-foreground font-mono truncate text-right min-w-0 flex-1">
-        {hovered
-          ? `O ${hovered.open.toFixed(decimals)} H ${hovered.high.toFixed(decimals)} L ${hovered.low.toFixed(decimals)} C ${hovered.close.toFixed(decimals)}`
-          : subtitle ?? t.chart.recentBars(pair, candles.length)}
+        {subtitle ?? t.chart.recentBars(pair, candles.length)}
       </span>
       {toolbar}
     </div>
@@ -1351,6 +1597,12 @@ const PriceChart = ({
 
   const legends = (
     <>
+      {/* #144: how the chart is worked, first */}
+      {interactive && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gesture-note">
+          {t.chart.gestureHint}
+        </p>
+      )}
       {/* Said once, under the chart, so the two registers can be told apart
           without hovering anything. Only shown when there is something drawn
           in them. */}
@@ -1395,17 +1647,17 @@ const PriceChart = ({
       )}
       {emaOn !== "" && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-ema-legend">
-          {t.chart.emaNote(emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready")}
+          {noteOf.ema50}
         </p>
       )}
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
-          {t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready")}
+          {noteOf.zoneShift}
         </p>
       )}
       {ov.gainzPro && gpListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gainzpro-legend">
-          {t.chart.gainzProNote(gp ? gp.total : null, zoneShiftHistory ? (gp ? "ready" : zoneShiftHistory.status) : "ready")}
+          {noteOf.gainzPro}
         </p>
       )}
       {showPctB && (
@@ -1420,12 +1672,12 @@ const PriceChart = ({
       )}
       {dow && ov.dow && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-dow-legend">
-          {t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf))}
+          {noteOf.dow}
         </p>
       )}
       {ov.fvgProfile && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgprofile-legend">
-          {t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length))}
+          {noteOf.fvgProfile}
         </p>
       )}
     </>
@@ -1573,86 +1825,71 @@ const PriceChart = ({
     );
   };
 
-  // #119: the list at the chart's top left: each thing drawn, its eye to
-  // switch it, and a fold, as TradingView's chart has it
-  const overlayList = (
+  // #144: the chart's top left says what is drawn over the price and, for
+  // the EMA lines, their values — at the crosshair's bar, or the last one on
+  // screen — as iSPEED FX heads its chart. It takes no touches: the switches
+  // are in the settings list.
+  const legendAt = hover !== null && hovered ? hover : Math.min(to, candles.length) - 1;
+  const legendNames = overlayItems.filter((i) => i.group === "trend" && i.on && !i.swatch).map((i) => i.name);
+  // the crosshair's bar's prices first (始 高 安 終, as iSPEED FX heads its
+  // chart; full screen has them in its header)
+  const ohlcLine = hovered && !full
+    ? t.chart.ohlc(hovered.open.toFixed(decimals), hovered.high.toFixed(decimals), hovered.low.toFixed(decimals), hovered.close.toFixed(decimals))
+    : null;
+  const overlayLegend = emas || legendNames.length > 0 || ohlcLine ? (
     <div
-      className="absolute left-1 top-1 z-10 max-w-[78%] rounded-md bg-background/80 px-1.5 py-1 text-[10px] leading-snug shadow-sm"
-      data-testid="chart-overlay-list"
+      className={`pointer-events-none absolute left-1 top-1 z-10 ${ohlcLine ? "max-w-[94%]" : "max-w-[78%]"} rounded bg-background/70 px-1.5 py-0.5 text-[10px] leading-snug`}
+      data-testid="chart-overlay-legend"
     >
-      {listShown && overlayItems.map((item) => (
-        <div key={item.key} className="flex items-center gap-1" data-testid={`chart-overlay-${item.key}`}>
-          {item.swatch && <span aria-hidden="true" className="inline-block h-0.5 w-3 shrink-0 rounded" style={{ background: item.swatch }} data-testid={`chart-swatch-${item.key}`} />}
-          <span
-            className={`truncate ${item.on ? "text-foreground" : item.locked ? "text-muted-foreground opacity-60" : "text-muted-foreground line-through opacity-60"}`}
-            data-testid={`chart-overlay-name-${item.key}`}
-          >
-            {item.name}
-          </span>
-          {item.locked ? (
-            // #140: a paid indicator — the lock says so and leads to the plan
-            <button
-              type="button"
-              aria-label={`${item.name}: ${t.chart.lockedHint}`}
-              title={t.chart.lockedHint}
-              onClick={item.toggle}
-              data-testid={`chart-lock-${item.key}`}
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
-            >
-              <Lock className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              aria-pressed={item.on}
-              aria-label={`${item.name}: ${item.on ? t.chart.hide : t.chart.show}`}
-              title={item.on ? t.chart.hide : t.chart.show}
-              onClick={item.toggle}
-              data-testid={`chart-toggle-${item.key}`}
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
-            >
-              {item.on ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-            </button>
-          )}
-          {item.settings && (
-            <button
-              type="button"
-              aria-expanded={stochSettings}
-              aria-label={t.chart.stoch.settings}
-              title={t.chart.stoch.settings}
-              onClick={item.settings}
-              data-testid="chart-stoch-settings"
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-            </button>
-          )}
+      {ohlcLine && <div className="whitespace-nowrap font-mono text-foreground" data-testid="chart-legend-ohlc">{ohlcLine}</div>}
+      {emas && (
+        <div className="flex flex-wrap gap-x-2 font-mono">
+          {emas.lines.map((l) => {
+            const v = l.values[legendAt + emas.off];
+            return (
+              <span key={l.key} style={{ color: l.color }} data-testid={`chart-legend-${l.key}`}>
+                {`EMA ${l.length} ${v === null || v === undefined ? "—" : v.toFixed(decimals)}`}
+              </span>
+            );
+          })}
         </div>
-      ))}
-      <button
-        type="button"
-        onClick={() => setListOpen(!listShown)}
-        aria-expanded={listShown}
-        aria-label={listShown ? t.chart.foldList : t.chart.indicators}
-        data-testid="chart-overlay-fold"
-        className="mt-0.5 flex items-center gap-1 rounded border border-border px-1 text-muted-foreground hover:text-foreground"
-      >
-        {listShown ? (
-          <ChevronUp className="h-3.5 w-3.5" />
-        ) : (
-          <>
-            {t.chart.indicators} {overlayItems.filter((i) => i.on).length}/{overlayItems.length}
-            <ChevronDown className="h-3.5 w-3.5" />
-          </>
-        )}
-      </button>
+      )}
+      {legendNames.length > 0 && <div className="truncate text-muted-foreground" data-testid="chart-legend-names">{legendNames.join(" · ")}</div>}
     </div>
+  ) : null;
+
+  // #144: the card's settings list, folded under a button above the chart
+  // (how many of the listed are on); full screen has it in its sheet
+  const indicatorPanel = (
+    <details className="px-1 pb-2" data-testid="chart-indicator-panel">
+      <summary
+        className="flex w-fit cursor-pointer list-none items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        data-testid="chart-overlay-fold"
+      >
+        <SlidersHorizontal className="h-3.5 w-3.5" />
+        {t.chart.indicators} {onCount}/{overlayItems.length}
+        <ChevronDown className="h-3.5 w-3.5" />
+      </summary>
+      <div className="pt-2">{indicatorList({ toggle: "chart-toggle", lock: "chart-lock" })}</div>
+    </details>
   );
 
   const charts = (
     <>
       <div className="relative">
-      {overlayList}
+      {overlayLegend}
+      {priceZoom !== 1 && (
+        <button
+          type="button"
+          onClick={() => setPriceZoom(1)}
+          aria-label={t.chart.priceAutoHint}
+          title={t.chart.priceAutoHint}
+          data-testid="chart-price-auto"
+          className="absolute right-1 top-1 z-10 rounded border border-border bg-background/80 px-1.5 py-0.5 text-[10px] text-foreground"
+        >
+          {t.chart.priceAuto}
+        </button>
+      )}
       <svg
         ref={setSvgEl}
         viewBox={`0 0 ${W} ${H}`}
@@ -1665,10 +1902,10 @@ const PriceChart = ({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
-        onDoubleClick={interactive ? () => setView(null) : undefined}
+        onDoubleClick={interactive ? () => { setView(null); setPriceZoom(1); } : undefined}
         // a drag sideways moves the bars, up and down still scrolls the
         // page; in full screen every gesture is the chart's
-        style={interactive ? { touchAction: full ? "none" : "pan-y", cursor: zoomed ? "grab" : undefined } : undefined}
+        style={interactive ? { touchAction: full ? "none" : "pan-y", cursor: zoomed ? "grab" : undefined, WebkitTouchCallout: "none" } : undefined}
         data-testid="chart-price"
       >
         <defs>
@@ -2649,11 +2886,16 @@ const PriceChart = ({
 
   if (full && typeof document !== "undefined") return fullscreenLayer(charts);
 
+  // #144: the chart first, and what it all means folded under it
   return (
     <div ref={setBoxEl} className={`glass rounded-xl border border-border p-3 ${themeClass}`} data-theme={prefs.theme}>
       {header}
-      {legends}
+      {indicatorPanel}
       {charts}
+      <details className="mt-2 px-1" data-testid="chart-notes">
+        <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">{t.chart.notesTitle}</summary>
+        <div className="pt-1">{legends}</div>
+      </details>
     </div>
   );
 };

@@ -154,13 +154,15 @@ describe("#119 switching what the chart draws, from the list at its top left", (
     expect(labels()).toBe(2);
   });
 
-  it("folds the list to one button that says how many are on", () => {
+  it("#144: folds the list under one button above the chart that says how many are on", () => {
     render(chart());
-    fireEvent.click(screen.getByTestId("chart-overlay-fold"));
-    expect(screen.queryByTestId("chart-overlay-name-signals")).toBeNull();
+    const panel = screen.getByTestId("chart-indicator-panel");
+    expect(panel.tagName).toBe("DETAILS");
+    expect(panel.hasAttribute("open")).toBe(false);
     expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 8/13");
-    fireEvent.click(screen.getByTestId("chart-overlay-fold"));
-    expect(screen.getByTestId("chart-overlay-name-signals")).toBeTruthy();
+    // above the chart, not over it
+    expect(panel.compareDocumentPosition(screen.getByTestId("chart-price")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("chart-price").parentElement!.contains(panel)).toBe(false);
   });
 
   it("offers the same switches in full screen's settings sheet", () => {
@@ -171,7 +173,9 @@ describe("#119 switching what the chart draws, from the list at its top left", (
     fireEvent.click(within(overlay).getByTestId("chart-sheet-kalman"));
     expect(within(overlay).getByTestId("chart-kalman")).toBeTruthy();
     expect(within(overlay).getByTestId("chart-sheet-kalman").getAttribute("aria-pressed")).toBe("true");
-    // the list is on the chart in full screen too
-    expect(within(overlay).getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("true");
+    // #144: the chart itself only says what is drawn (the list no longer covers it)
+    expect(within(overlay).queryByTestId("chart-toggle-kalman")).toBeNull();
+    fireEvent.click(within(overlay).getByTestId("chart-sheet-close"));
+    expect(within(overlay).getByTestId("chart-legend-names").textContent).toContain("SPECTRA型 10 3");
   });
 });

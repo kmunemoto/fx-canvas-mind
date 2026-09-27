@@ -1,0 +1,92 @@
+# Reads public web pages the development container cannot reach (#144: the
+# how-to pages of Rakuten's iSPEED FX chart, to learn how it is operated):
+# each page's text, and the text on its images (OCR, Japanese and English),
+# printed to the job log.
+#
+# Read-only: public URLs only, no account, no key and no secret. Writes
+# nothing to the repository.
+name: Read web pages
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/page-read.yml
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Space-separated public URLs"
+        default: ""
+      images:
+        description: "OCR the pages' images too (yes/no)"
+        default: "yes"
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-jpn >/dev/null
+          pip install -q beautifulsoup4 pillow
+      - name: Read
+        env:
+          URLS: ${{ inputs.urls || 'https://ispeed.jp/fx/howto/chart/ https://ispeed.jp/fx/howto/trading-chart/ https://www.rakuten-sec.co.jp/web/fx/demo_sp/chart.html https://www.rakuten-bank.co.jp/assets/fx/ispeedfx/feature/chart/ https://prtimes.jp/main/html/rd/p/000000706.000011088.html https://fx-quicknavi.com/fxapp/rakuten-fx-app/' }}
+          IMAGES: ${{ inputs.images || 'yes' }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, urllib.parse, urllib.request
+          from bs4 import BeautifulSoup
+
+          UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+          def get(url):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "ja,en;q=0.8"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return r.read(), r.headers.get_content_charset() or "utf-8"
+
+          for url in os.environ["URLS"].split():
+              print("=" * 100)
+              print("PAGE", url)
+              try:
+                  body, cs = get(url)
+              except Exception as e:
+                  print("  failed:", e)
+                  continue
+              soup = BeautifulSoup(body.decode(cs, errors="replace"), "html.parser")
+              for t in soup(["script", "style", "noscript", "svg"]):
+                  t.decompose()
+              main = soup.find("main") or soup.find("article") or soup.body or soup
+              lines = [re.sub(r"\s+", " ", l).strip() for l in main.get_text("\n").split("\n")]
+              text = "\n".join(l for l in lines if l)
+              print("--- TEXT ---")
+              print(text[:30000])
+              if os.environ.get("IMAGES", "yes") != "yes":
+                  continue
+              seen = set()
+              for img in main.find_all("img"):
+                  src = img.get("src") or img.get("data-src") or ""
+                  if not src or src.startswith("data:"):
+                      continue
+                  full = urllib.parse.urljoin(url, src)
+                  if full in seen or re.search(r"(logo|icon|btn|arrow|spacer|badge)", full, re.I):
+                      continue
+                  seen.add(full)
+                  alt = (img.get("alt") or "").strip()
+                  print(f"--- IMAGE {full}  alt={alt!r}")
+                  try:
+                      data, _ = get(full)
+                      open("img", "wb").write(data)
+                      out = subprocess.run(["tesseract", "img", "-", "-l", "jpn+eng", "--psm", "11"], capture_output=True, text=True, timeout=60).stdout
+                      words = " ".join(w for w in re.split(r"\s+", out) if w)
+                      print("  OCR:", words[:1500])
+                  except Exception as e:
+                      print("  image failed:", e)
+                  if len(seen) >= 40:
+                      break
+          PY
