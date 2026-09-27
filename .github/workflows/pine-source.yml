@@ -42,7 +42,8 @@ jobs:
           if meta:
               print("=== DESCRIPTION (meta) ===")
               print(html.unescape(meta.group(1)))
-          ids = list(dict.fromkeys(re.findall(r'PUB;[0-9a-f]{20,}', s)))
+          # ids are hex on older scripts, mixed-case letters and digits on others
+          ids = list(dict.fromkeys(re.findall(r'PUB;[0-9A-Za-z]{20,}', s)))
           print("script ids:", ids[:5])
           # the page's own long description, when it is embedded
           for m in re.finditer(r'"description"\s*:\s*"((?:[^"\\]|\\.){400,})"', s):
