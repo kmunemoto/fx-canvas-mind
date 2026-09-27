@@ -54,6 +54,11 @@ interface Props {
   loadTicks?: () => Promise<Record<string, Tick>>;
   loadHistory?: (pair: string, interval: string) => Promise<NumericCandle[]>;
   loadDow?: (pair: string) => Promise<DowTf[]>;
+  // #140: the indicators are a paid feature: without them none is drawn or
+  // read (Dow theory's timeframes, the history for Zone Shift and the Pro
+  // score), and a tap on a locked one calls `onLockedIndicator`
+  indicatorsAllowed?: boolean;
+  onLockedIndicator?: () => void;
 }
 
 // "19:15:07" in Japan time
@@ -65,7 +70,15 @@ const jstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(
 // live-chart function when a bar closes; in between, the price every few
 // seconds moves the bar still forming. Signals are judged on closed bars
 // only — the forming bar never makes or unmakes one.
-const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetchTicks, loadHistory = fetchLiveHistory, loadDow = fetchDow }: Props) => {
+const LiveChart = ({
+  defaultInterval,
+  loadBars = fetchLiveBars,
+  loadTicks = fetchTicks,
+  loadHistory = fetchLiveHistory,
+  loadDow = fetchDow,
+  indicatorsAllowed = true,
+  onLockedIndicator,
+}: Props) => {
   const t = useT();
   const l = t.live;
   const [pair, setPairOnly] = useState<string>(LIVE_PAIRS[0]);
@@ -178,8 +191,9 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   // Data's bars.
   const overlays = useChartPrefs().overlays;
   const zoneShiftOn = overlays.zoneShift;
-  // #131: the Pro-style score reads the same history
-  const historyOn = zoneShiftOn || overlays.gainzPro;
+  // #131: the Pro-style score reads the same history (#140: neither while
+  // the indicators are locked)
+  const historyOn = indicatorsAllowed && (zoneShiftOn || overlays.gainzPro);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)
@@ -206,7 +220,7 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on
   // screen. A read that fails keeps the last one of the same pair.
-  const dowOn = overlays.dow;
+  const dowOn = indicatorsAllowed && overlays.dow;
   const [dowRead, setDowRead] = useState<{ pair: string; tfs: DowTf[]; status: "loading" | "ready" | "error" } | null>(null);
   useEffect(() => {
     if (!dowOn) return;
@@ -558,6 +572,8 @@ const LiveChart = ({ defaultInterval, loadBars = fetchLiveBars, loadTicks = fetc
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
         dow={dowChart}
+        indicatorsLocked={!indicatorsAllowed}
+        onLockedIndicator={onLockedIndicator}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
         fullscreenStatus={
           priceLine || freshLine || dowLine ? (
