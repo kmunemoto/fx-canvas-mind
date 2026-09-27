@@ -40,6 +40,10 @@ export interface ChartOverlays {
   // #131: the Pro-style confidence score (this app's reading of GainzAlgo's
   // Pro configuration)
   gainzPro: boolean;
+  // #143: EMA 50 and EMA 200, the lines #142 found read the big flow best
+  // (the flow across the chart, and the larger one) — on unless switched off
+  ema50: boolean;
+  ema200: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -55,6 +59,8 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   zoneShift: true,
   dow: true,
   gainzPro: false,
+  ema50: true,
+  ema200: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

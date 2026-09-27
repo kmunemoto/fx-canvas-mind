@@ -226,9 +226,9 @@ const LiveChart = ({
   // Data's bars.
   const overlays = useChartPrefs().overlays;
   const zoneShiftOn = overlays.zoneShift;
-  // #131: the Pro-style score reads the same history (#140: neither while
-  // the indicators are locked)
-  const historyOn = indicatorsAllowed && (zoneShiftOn || overlays.gainzPro);
+  // #131: the Pro-style score reads the same history, and #143: the EMA
+  // lines (#140: none of them while the indicators are locked)
+  const historyOn = indicatorsAllowed && (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)

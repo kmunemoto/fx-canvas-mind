@@ -33,9 +33,9 @@ const ALL_ON = {
   stoch: true,
   pctB: true,
   rci: true,
-  overlays: { kalman: true, supertrend: true, utBot: true, fvgProfile: true, zoneShift: true, dow: true, gainzPro: true },
+  overlays: { kalman: true, supertrend: true, utBot: true, fvgProfile: true, zoneShift: true, dow: true, gainzPro: true, ema50: true, ema200: true },
 };
-const LOCKED = ["kalman", "supertrend", "utBot", "fvgProfile", "stoch", "pctB", "rci"];
+const LOCKED = ["kalman", "supertrend", "utBot", "fvgProfile", "stoch", "pctB", "rci", "ema50", "ema200"];
 
 describe("#140 the indicators are a paid feature", () => {
   afterEach(() => {
@@ -51,7 +51,7 @@ describe("#140 the indicators are a paid feature", () => {
       expect(screen.getByTestId(`chart-lock-${k}`)).toBeTruthy();
       expect(screen.queryByTestId(`chart-toggle-${k}`)).toBeNull();
     }
-    for (const id of ["chart-stoch", "chart-pctb", "chart-rci", "chart-kalman", "chart-supertrend", "chart-utbot", "chart-fvgcf", "chart-fvgprofile-legend", "chart-zoneshift", "chart-stoch-settings"]) {
+    for (const id of ["chart-stoch", "chart-pctb", "chart-rci", "chart-kalman", "chart-supertrend", "chart-utbot", "chart-fvgcf", "chart-fvgprofile-legend", "chart-zoneshift", "chart-stoch-settings", "chart-ema", "chart-ema-legend"]) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
     fireEvent.click(screen.getByTestId("chart-lock-supertrend"));
@@ -68,6 +68,7 @@ describe("#140 the indicators are a paid feature", () => {
     expect(screen.getByTestId("chart-pctb")).toBeTruthy();
     expect(screen.getByTestId("chart-supertrend")).toBeTruthy();
     expect(screen.getByTestId("chart-fvgprofile-legend")).toBeTruthy();
+    expect(screen.getByTestId("chart-ema200-line")).toBeTruthy();
   });
 
   it("keeps the signals and what they are made of free: the rule's RSI and the SAR stay switchable", () => {
