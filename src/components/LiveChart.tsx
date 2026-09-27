@@ -3,7 +3,7 @@ import { Check, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
-import { useChartPrefs } from "@/lib/chartPrefs";
+import { getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import type { NumericCandle } from "@/lib/types";
 import {
   LIVE_INTERVALS,
@@ -33,6 +33,11 @@ import {
 export type LiveView = "gainz" | "rsi_sar" | "both";
 const VIEWS: LiveView[] = ["gainz", "rsi_sar", "both"];
 export const BASE_INTERVAL = "4h";
+
+// #141: a saved choice, if the chart still offers it
+const savedPair = (p: string | null): string | null => (p && LIVE_PAIRS.includes(p) ? p : null);
+const savedInterval = (iv: string | null, pair: string): string | null => (iv && intervalsFor(pair).includes(iv) ? iv : null);
+const savedView = (v: string | null): LiveView | null => (v && (VIEWS as string[]).includes(v) ? (v as LiveView) : null);
 
 const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
@@ -81,17 +86,47 @@ const LiveChart = ({
 }: Props) => {
   const t = useT();
   const l = t.live;
-  const [pair, setPairOnly] = useState<string>(LIVE_PAIRS[0]);
-  const [interval, setIntervalTf] = useState<string>(
-    defaultInterval && LIVE_INTERVALS.includes(defaultInterval) ? defaultInterval : BASE_INTERVAL,
+  // #141: the pair, timeframe and signals chosen last (kept with the chart's
+  // other settings, in this browser and with the account), each only if the
+  // chart still offers it; a timeframe given by the page comes first
+  const [pair, setPairOnly] = useState<string>(() => savedPair(getChartPrefs().live.pair) ?? LIVE_PAIRS[0]);
+  const [interval, setIntervalTf] = useState<string>(() =>
+    defaultInterval && LIVE_INTERVALS.includes(defaultInterval)
+      ? defaultInterval
+      : savedInterval(getChartPrefs().live.interval, savedPair(getChartPrefs().live.pair) ?? LIVE_PAIRS[0]) ?? BASE_INTERVAL,
   );
-  const [view, setView] = useState<LiveView>("gainz");
-  // #127: gold has no 1-minute chart: another pair's timeframe it lacks
-  // becomes the base one
-  const setPair = (p: string) => {
+  const [view, setViewOnly] = useState<LiveView>(() => savedView(getChartPrefs().live.view) ?? "gainz");
+  // what is chosen on the chart is kept
+  const choose = (next: { pair?: string; interval?: string; view?: LiveView }) => {
+    const p = next.pair ?? pair;
+    // #127: gold has no 1-minute chart: another pair's timeframe it lacks
+    // becomes the base one
+    const want = next.interval ?? interval;
+    const iv = intervalsFor(p).includes(want) ? want : BASE_INTERVAL;
+    const v = next.view ?? view;
     setPairOnly(p);
-    if (!intervalsFor(p).includes(interval)) setIntervalTf(BASE_INTERVAL);
+    setIntervalTf(iv);
+    setViewOnly(v);
+    setChartPrefs({ live: { pair: p, interval: iv, view: v } });
   };
+  const setPair = (p: string) => choose({ pair: p });
+  const chooseInterval = (iv: string) => choose({ interval: iv });
+  const setView = (v: LiveView) => choose({ view: v });
+  // and the account's, when it arrives after the chart opened (or another
+  // chart changes them), is shown
+  const livePrefs = useChartPrefs().live;
+  const liveKey = `${livePrefs.pair}|${livePrefs.interval}|${livePrefs.view}`;
+  const seenLiveKey = useRef(liveKey);
+  useEffect(() => {
+    if (seenLiveKey.current === liveKey) return;
+    seenLiveKey.current = liveKey;
+    const p = savedPair(livePrefs.pair) ?? pair;
+    setPairOnly(p);
+    setIntervalTf(savedInterval(livePrefs.interval, p) ?? (intervalsFor(p).includes(interval) ? interval : BASE_INTERVAL));
+    setViewOnly(savedView(livePrefs.view) ?? view);
+    // only a change in what is kept moves the chart
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey]);
   const [read, setRead] = useState<LiveRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reopens, setReopens] = useState<string | null>(null);
@@ -330,7 +365,7 @@ const LiveChart = ({
             type="button"
             role="tab"
             aria-selected={iv === interval}
-            onClick={() => setIntervalTf(iv)}
+            onClick={() => chooseInterval(iv)}
             data-testid={`live-interval-${iv}`}
             className={`px-2 py-0.5 rounded border text-[11px] ${
               iv === interval ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
@@ -409,7 +444,7 @@ const LiveChart = ({
               type="button"
               aria-pressed={iv === interval}
               onClick={() => {
-                setIntervalTf(iv);
+                chooseInterval(iv);
                 close();
               }}
               data-testid={`live-sheet-interval-${iv}`}

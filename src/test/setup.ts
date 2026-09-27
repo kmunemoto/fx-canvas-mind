@@ -1,4 +1,17 @@
 import "@testing-library/jest-dom";
+import { afterEach } from "vitest";
+import { resetChartPrefsCache } from "@/lib/chartPrefs";
+
+// #141: the charts keep what was chosen on them (the pair and timeframe
+// too), so each test starts from an empty browser rather than the last one's
+afterEach(() => {
+  try {
+    localStorage.clear();
+  } catch {
+    // no storage in this environment
+  }
+  resetChartPrefsCache();
+});
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,

@@ -68,6 +68,21 @@ const overlaysOf = (v: unknown): ChartOverlays => {
   return out;
 };
 
+// #141: the live chart's own choices — its pair, timeframe and which rule's
+// signals it shows. Kept as given (null: the chart's default); the live
+// chart checks each against what it offers before using it.
+export interface LivePrefs {
+  pair: string | null;
+  interval: string | null;
+  view: string | null;
+}
+export const LIVE_PREFS_DEFAULTS: LivePrefs = { pair: null, interval: null, view: null };
+const livePrefsOf = (v: unknown): LivePrefs => {
+  const r = v !== null && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  const str = (x: unknown) => (typeof x === "string" && x.length > 0 && x.length <= 16 ? x : null);
+  return { pair: str(r.pair), interval: str(r.interval), view: str(r.view) };
+};
+
 export interface ChartPrefs {
   rsi: boolean;
   stoch: boolean;
@@ -79,6 +94,7 @@ export interface ChartPrefs {
   // #118: the chart's background — the app's dark one, or white
   theme: ChartTheme;
   overlays: ChartOverlays;
+  live: LivePrefs;
 }
 
 export const CHART_PREFS_KEY = "sextant.chart.prefs.v1";
@@ -98,28 +114,41 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   rci: false,
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
+  live: LIVE_PREFS_DEFAULTS,
 };
 
 let current: ChartPrefs | null = null;
 const listeners = new Set<() => void>();
 
+// Anything stored — in this browser, or (#141) with the account — as
+// preferences the charts can use
+export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
+  if (stored === null || typeof stored !== "object") return CHART_PREFS_DEFAULTS;
+  const v = stored as Record<string, unknown>;
+  return {
+    rsi: typeof v.rsi === "boolean" ? v.rsi : CHART_PREFS_DEFAULTS.rsi,
+    stoch: typeof v.stoch === "boolean" ? v.stoch : CHART_PREFS_DEFAULTS.stoch,
+    stochParams: (() => {
+      const p = normalizeStochParams(v.stochParams);
+      return v.stochDefaults === STOCH_132_MARK && sameStoch(p, STOCH_132_DEFAULTS) ? STOCH_DEFAULTS : p;
+    })(),
+    pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
+    rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
+    theme: v.theme === "light" ? "light" : "dark",
+    overlays: overlaysOf(v.overlays),
+    live: livePrefsOf(v.live),
+  };
+};
+
+// What is saved: the preferences and the mark saying which stochastic
+// defaults were in force
+export const storedChartPrefs = (p: ChartPrefs): Record<string, unknown> => ({ ...p, stochDefaults: STOCH_DEFAULTS_MARK });
+
 const read = (): ChartPrefs => {
   try {
     const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(CHART_PREFS_KEY);
     if (!raw) return CHART_PREFS_DEFAULTS;
-    const v = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      rsi: typeof v.rsi === "boolean" ? v.rsi : CHART_PREFS_DEFAULTS.rsi,
-      stoch: typeof v.stoch === "boolean" ? v.stoch : CHART_PREFS_DEFAULTS.stoch,
-      stochParams: (() => {
-        const p = normalizeStochParams(v.stochParams);
-        return v.stochDefaults === STOCH_132_MARK && sameStoch(p, STOCH_132_DEFAULTS) ? STOCH_DEFAULTS : p;
-      })(),
-      pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
-      rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
-      theme: v.theme === "light" ? "light" : "dark",
-      overlays: overlaysOf(v.overlays),
-    };
+    return chartPrefsFrom(JSON.parse(raw));
   } catch {
     return CHART_PREFS_DEFAULTS;
   }
@@ -134,23 +163,34 @@ export const setChartPrefs = (patch: Partial<ChartPrefs>): void => {
     stochParams: normalizeStochParams(next.stochParams),
     theme: next.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(next.overlays),
+    live: livePrefsOf(next.live),
   };
+  save();
+};
+
+const save = () => {
   try {
-    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ ...current, stochDefaults: STOCH_DEFAULTS_MARK }));
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify(storedChartPrefs(getChartPrefs())));
   } catch {
     // kept for this page only
   }
   listeners.forEach((l) => l());
 };
 
-const subscribe = (l: () => void) => {
+// #141: the account's saved preferences, taken as this browser's
+export const replaceChartPrefs = (stored: unknown): void => {
+  current = chartPrefsFrom(stored);
+  save();
+};
+
+export const subscribeChartPrefs = (l: () => void) => {
   listeners.add(l);
   return () => {
     listeners.delete(l);
   };
 };
 
-export const useChartPrefs = (): ChartPrefs => useSyncExternalStore(subscribe, getChartPrefs, () => CHART_PREFS_DEFAULTS);
+export const useChartPrefs = (): ChartPrefs => useSyncExternalStore(subscribeChartPrefs, getChartPrefs, () => CHART_PREFS_DEFAULTS);
 
 // Tests start each case from what storage holds
 export const resetChartPrefsCache = (): void => {

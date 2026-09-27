@@ -6,6 +6,7 @@ import LiveChart from "@/components/LiveChart";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { useAuth } from "@/contexts/AuthContext";
 import { isAdminEmail } from "@/lib/admin";
+import { useChartPrefsSync } from "@/lib/chartPrefsSync";
 import { useT } from "@/lib/i18n";
 
 // The same key the analysis page used, so a banner dismissed there stays
@@ -22,6 +23,8 @@ const Index = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // #141: the chart's settings follow the account
+  useChartPrefsSync(user?.id);
 
   const isAdmin = isAdminEmail(user?.email);
   const planLower = (profile?.plan || "Free").toLowerCase();
