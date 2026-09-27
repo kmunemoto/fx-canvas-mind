@@ -80,6 +80,26 @@
 // rather than %D, and the candidate levels were fixed before any data was
 // read. The same crossings without GA (the stochastic alone) are reported
 // beside it, not ranked.
+//
+// #129: the Dow theory reading the live chart draws (supabase/functions/
+// _shared/dow.ts, imported as it is: swings of DOW_PIVOT = 5 bars either
+// side, judged on closes), after the owner's 「測って」. Five entries, all
+// fixed before any data was read, at the close of the bar the event is on:
+//   dow_update  — a new high (low) in the trend: its direction;
+//   dow_break1  — the first close through 押し安値 (戻り高値), the sign of a
+//                 turn: the direction of the break;
+//   dow_confirm — the second break that confirms the turn (the reel's
+//                 "もう1回タッチしたら確定", as the owner chose to read it):
+//                 the new direction;
+//   dow_update_htf / dow_confirm_htf — the same, only while the next higher
+//                 timeframe of the reel's four (15min → 1h, 1h → 4h) is in a
+//                 trend the same way on its last closed bar ("up" for a buy,
+//                 "down" for a sell). 4h has none above it among the four, so
+//                 these fire on 15min and 1h only.
+// Read over each pair's whole history. Not ranked: both periods reported
+// with the exits SPECTRA and Zone Shift were read with (r2w and split). The
+// reel's 5-minute timeframe is not here (the history is GMO's 15-minute
+// bars), nor gold (GMO has none).
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
@@ -89,6 +109,7 @@ import { fetchPair } from "./gmo.ts";
 import { kalmanSupertrend, type KalmanStRead } from "../src/lib/kalmanSupertrend.ts";
 import { zoneShift } from "../src/lib/zoneShift.ts";
 import { STOCH_DEFAULTS, stochastic } from "../src/lib/stochastic.ts";
+import { dowTheory, type DowEvent } from "../supabase/functions/_shared/dow.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS).split(",").map((s) => s.trim()).filter(Boolean);
@@ -250,6 +271,64 @@ const STOCH_OUT_RULES: RevRule[] = STOCH_TRY.map((level) => ({
   at: (x: RevCtx, i: number) => stochOut(gsOf(x).k, i, level),
 }));
 
+// #129: Dow theory's events, once per pair and timeframe (at most one a bar),
+// and the next higher timeframe's trend at each bar's close (set by study)
+const dowCache = new WeakMap<RevCtx, Map<number, { kind: DowEvent["kind"]; dir: 1 | -1 }>>();
+const dowEventsOf = (x: RevCtx) => {
+  let m = dowCache.get(x);
+  if (!m) {
+    m = new Map(dowTheory(x.c).events.map((e) => [e.i, { kind: e.kind, dir: e.dir === "up" ? 1 : -1 }] as [number, { kind: DowEvent["kind"]; dir: 1 | -1 }]));
+    dowCache.set(x, m);
+  }
+  return m;
+};
+const dowHtf = new WeakMap<RevCtx, Int8Array>();
+// 1 (up) or -1 (down) on the higher timeframe's last bar closed by each of
+// `entry`'s closes, 0 otherwise (a turn pending, no trend yet, no bar)
+const htfTrendOf = (entry: QuoteCandle[], intervalMs: number, higher: QuoteCandle[], higherMs: number): Int8Array => {
+  const states = dowTheory(higher.map(mid)).states;
+  const out = new Int8Array(entry.length);
+  let j = -1;
+  for (let t = 0; t < entry.length; t++) {
+    const closeMs = barOpenMs(entry[t].datetime) + intervalMs;
+    while (j + 1 < higher.length && barOpenMs(higher[j + 1].datetime) + higherMs <= closeMs) j++;
+    out[t] = j < 0 ? 0 : states[j] === "up" ? 1 : states[j] === "down" ? -1 : 0;
+  }
+  return out;
+};
+const dowAt = (x: RevCtx, i: number, kind: DowEvent["kind"]): 0 | 1 | -1 => {
+  const e = dowEventsOf(x).get(i);
+  return e && e.kind === kind ? e.dir : 0;
+};
+const withHtf = (x: RevCtx, i: number, d: 0 | 1 | -1): 0 | 1 | -1 => (d !== 0 && dowHtf.get(x)?.[i] === d ? d : 0);
+const DOW_RULES: RevRule[] = [
+  {
+    id: "dow_update",
+    ja: "ダウ理論（アプリのチャートと同じ、山と谷は左右5本）: トレンド中に終値が直前の山（谷）を抜けた足（高値・安値の更新）で、トレンドの向きに",
+    at: (x, i) => dowAt(x, i, "update"),
+  },
+  {
+    id: "dow_break1",
+    ja: "1回目: 終値が押し安値（戻り高値）を抜けた足で、抜けた向きに（転換の兆し・未確定）",
+    at: (x, i) => dowAt(x, i, "break1"),
+  },
+  {
+    id: "dow_confirm",
+    ja: "2回目（確定）: 1回目の後、戻り高値の切り下げ（押し安値の切り上げ）を経て終値が直近の谷（山）を抜け、転換が確定した足で、新しい向きに",
+    at: (x, i) => dowAt(x, i, "confirm"),
+  },
+  {
+    id: "dow_update_htf",
+    ja: "高値・安値の更新で、1つ上の時間足（15分→1時間、1時間→4時間）の最後の確定足が同じ向きのトレンドのときだけ（4時間足は対象外）",
+    at: (x, i) => withHtf(x, i, dowAt(x, i, "update")),
+  },
+  {
+    id: "dow_confirm_htf",
+    ja: "転換の確定で、1つ上の時間足の最後の確定足が同じ向きのトレンドのときだけ（4時間足は対象外）",
+    at: (x, i) => withHtf(x, i, dowAt(x, i, "confirm")),
+  },
+];
+
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
@@ -259,6 +338,7 @@ const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1
   ...ZS_RULES,
   ...GA_STOCH_RULES,
   ...STOCH_OUT_RULES,
+  ...DOW_RULES,
 ];
 const BLIND = "__blind__";
 
@@ -347,9 +427,18 @@ const statOf = (key: string): Stat | null => {
 
 // ---- one timeframe of one pair -------------------------------------------------
 
-const study = (pair: string, tf: Tf, entry: QuoteCandle[], intervalMs: number, sub: QuoteCandle[] | null) => {
+const study = (
+  pair: string,
+  tf: Tf,
+  entry: QuoteCandle[],
+  intervalMs: number,
+  sub: QuoteCandle[] | null,
+  // #129: the next higher timeframe, for the Dow rules that read its trend
+  higher: { bars: QuoteCandle[]; intervalMs: number } | null = null,
+) => {
   const n = entry.length;
   const x = revCtxOf(entry.map(mid));
+  if (higher) dowHtf.set(x, htfTrendOf(entry, intervalMs, higher.bars, higher.intervalMs));
   const subIdx = sub ? { bars: sub, startOf: subStarts(entry, sub) } : null;
 
   const eligible = new Uint8Array(n);
@@ -468,8 +557,8 @@ const main = async () => {
     barsByPair[pair] = bars.length;
     const h1 = aggregate(bars, HOUR, 0, NOW);
     const h4 = aggregate(bars, 4 * HOUR, 0, NOW);
-    const f15 = study(pair, "15min", bars, 15 * MINUTE, null);
-    const f1 = study(pair, "1h", h1, HOUR, bars);
+    const f15 = study(pair, "15min", bars, 15 * MINUTE, null, { bars: h1, intervalMs: HOUR });
+    const f1 = study(pair, "1h", h1, HOUR, bars, { bars: h4, intervalMs: 4 * HOUR });
     const f4 = study(pair, "4h", h4, 4 * HOUR, bars);
     log(`   signals 15min ${f15} / 1h ${f1} / 4h ${f4}  studied in ${((Date.now() - t1) / 1000).toFixed(1)}s`);
   }
@@ -596,6 +685,7 @@ const main = async () => {
   };
   fixedRules("#119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts)", SPECTRA_RULES);
   fixedRules("#125 Zone Shift [ChartPrime] (src/lib/zoneShift.ts)", ZS_RULES);
+  fixedRules("#129 Dow theory (supabase/functions/_shared/dow.ts, swings of 5 bars either side, closes)", DOW_RULES);
 
   // 7. #126: GA, then the stochastic leaving its zone — the level chosen on
   // the first period (1h, r2w), judged on the second
