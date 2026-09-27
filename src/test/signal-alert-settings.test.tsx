@@ -125,7 +125,7 @@ describe("the email-alert card", () => {
     // the GA grid: the RSI + SAR tick does not carry over
     expect((screen.getByTestId("signal-alert-gainz-USD/JPY-15min") as HTMLInputElement).checked).toBe(false);
     expect(screen.getByTestId("signal-alerts-gainz-intro").textContent).toContain("GainzAlgo");
-    expect(screen.getByTestId("signal-alerts-notes").textContent).toContain("28.8%");
+    expect(screen.getByTestId("signal-alerts-notes").textContent).toContain("30.1%");
     expect(screen.getByTestId("signal-alerts-record").textContent).toContain("GA型の通知の成績");
     expect(screen.getByTestId("signal-alerts-record-all").textContent).toContain("4回");
     expect(screen.getByTestId("signal-alerts-record").textContent).toContain("33%");

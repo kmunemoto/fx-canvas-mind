@@ -33,7 +33,8 @@ const jst = (iso: string) => {
 };
 
 // #105: which charts email the RSI + Parabolic SAR signal, and what was sent.
-// The server decides who may follow a chart (Pro and the admins) and holds the
+// The server decides who may follow a chart (#139: every paid plan, and the
+// admins) and holds the
 // only copy of the choice; this card asks it and shows the answer.
 const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const { t, locale } = useLocale();

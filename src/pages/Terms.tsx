@@ -19,7 +19,7 @@ const sections: { title: string; body: string }[] = [
   },
   {
     title: "第5条（投資助言ではないこと）",
-    body: "本サービスは、AIによる市場データの分析結果を表示する情報提供サービスであり、金融商品取引法に定める投資助言業ではありません。本サービスの分析結果はあくまで参考情報であり、投資判断の最終決定はユーザーご自身の責任において行うものとします。本サービスの利用によって生じたいかなる損失についても、運営者は一切責任を負いません。",
+    body: "本サービスは、市場データのチャートおよび売買サインを表示し、その通知を送信する情報提供サービスであり、金融商品取引法に定める投資助言業ではありません。本サービスのチャート、売買サインおよび通知はあくまで参考情報であり、投資判断の最終決定はユーザーご自身の責任において行うものとします。本サービスの利用によって生じたいかなる損失についても、運営者は一切責任を負いません。",
   },
   {
     title: "第6条（禁止事項）",
@@ -51,7 +51,7 @@ const Terms = () => (
         <p className="whitespace-pre-line">{s.body}</p>
       </section>
     ))}
-    <p className="text-sm text-muted-foreground/60 pt-6 border-t border-white/5">最終更新日: 2026年4月18日</p>
+    <p className="text-sm text-muted-foreground/60 pt-6 border-t border-white/5">最終更新日: 2026年9月27日</p>
   </LegalPageLayout>
 );
 

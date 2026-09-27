@@ -143,11 +143,14 @@ describe("a fresh signal", () => {
 });
 
 describe("who may follow a chart", () => {
-  it("Pro and the admins, nobody else", () => {
+  it("every paid plan and the admins, nobody else (#139: it was Pro only)", () => {
     expect(alertsAllowed("pro", "someone@example.com")).toBe(true);
     expect(alertsAllowed("PRO", null)).toBe(true);
-    expect(alertsAllowed("standard", "someone@example.com")).toBe(false);
-    expect(alertsAllowed("light", "someone@example.com")).toBe(false);
+    // #139: every paid plan
+    expect(alertsAllowed("standard", "someone@example.com")).toBe(true);
+    expect(alertsAllowed("light", "someone@example.com")).toBe(true);
+    expect(alertsAllowed("Light", null)).toBe(true);
+    expect(alertsAllowed("free", "someone@example.com")).toBe(false);
     expect(alertsAllowed(null, null)).toBe(false);
     expect(alertsAllowed("free", "K.Munemoto@kyoto-salute.com")).toBe(true);
     expect(alertsAllowed(undefined, "munekan2989@gmail.com")).toBe(true);

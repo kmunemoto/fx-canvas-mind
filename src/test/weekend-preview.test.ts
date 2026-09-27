@@ -13,7 +13,7 @@ import { byTimeframe, causeCounts, isPreview, tally } from "../lib/outcomeStats"
 import type { AnalysisRecord } from "../lib/types";
 
 const analyze = readFileSync("supabase/functions/analyze/index.ts", "utf8");
-const indexPage = readFileSync("src/pages/Index.tsx", "utf8");
+const indexPage = readFileSync("src/pages/Analysis.tsx", "utf8");
 const structure = readFileSync("supabase/functions/analyze/structure.ts", "utf8");
 const marketHours = readFileSync("supabase/functions/_shared/market-hours.ts", "utf8");
 

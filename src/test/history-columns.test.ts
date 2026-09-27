@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
-import { HISTORY_COLUMNS } from "../pages/Index";
+import { HISTORY_COLUMNS } from "../pages/Analysis";
 
 // The read path is as much a part of a feature as the write path, and it is
 // the half that fails silently.
@@ -68,7 +68,7 @@ describe("the history select fetches everything the statistics read", () => {
     // And someone besides the query and the declaration has to look at it.
     // Both of those files mention every field by construction, so counting
     // them as readers is how this half of the test quietly passes forever.
-    const declarers = new Set(["src/pages/Index.tsx", "src/lib/types.ts"]);
+    const declarers = new Set(["src/pages/Analysis.tsx", "src/lib/types.ts"]);
     const readers = sourceFiles()
       .filter((f) => !declarers.has(f))
       .map((f) => readFileSync(f, "utf8"))
@@ -78,7 +78,7 @@ describe("the history select fetches everything the statistics read", () => {
   });
 
   it("is the only select used for history", () => {
-    const index = readFileSync("src/pages/Index.tsx", "utf8");
+    const index = readFileSync("src/pages/Analysis.tsx", "utf8");
     // A second hand-written select would drift from this one
     const selects = [...index.matchAll(/\.from\("analyses"\)[\s\S]{0,200}?\.select\(([^)]*)\)/g)];
     expect(selects.length).toBeGreaterThan(0);

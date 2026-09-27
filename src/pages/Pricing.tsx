@@ -9,10 +9,11 @@ import { useT } from "@/lib/i18n";
 
 // Prices and ids stay here; the feature copy and the "/month" suffix come from
 // the dictionary so they translate with everything else.
+// #139: the chart is free and Light adds the emails; Standard and Pro sold
+// the analysis, which came off the screen, and are no longer offered
 const PLANS = [
-  { id: "light", name: "Light", price: "¥2,980", recommended: false },
-  { id: "standard", name: "Standard", price: "¥5,980", recommended: true },
-  { id: "pro", name: "Pro", price: "¥12,800", recommended: false },
+  { id: "free", name: "Free", price: "¥0", recommended: false },
+  { id: "light", name: "Light", price: "¥2,980", recommended: true },
 ] as const;
 
 const Pricing = () => {
@@ -98,7 +99,7 @@ const Pricing = () => {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
           {PLANS.map((plan) => (
             <div
               key={plan.id}
@@ -133,6 +134,15 @@ const Pricing = () => {
                 ))}
               </ul>
 
+              {plan.id === "free" ? (
+                <button
+                  onClick={() => navigate(user ? "/" : "/login?tab=signup")}
+                  className="w-full py-3 rounded-xl font-semibold text-sm bg-secondary text-foreground border border-border hover:bg-accent"
+                  data-testid="pricing-free"
+                >
+                  {t.pricing.freeIncluded}
+                </button>
+              ) : (
               <button
                 onClick={() => handleSubscribe(plan.id)}
                 disabled={loadingPlan !== null || isAdmin}
@@ -150,6 +160,7 @@ const Pricing = () => {
                   t.pricing.subscribe
                 )}
               </button>
+              )}
             </div>
           ))}
         </div>
