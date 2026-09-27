@@ -44,6 +44,11 @@ export interface ChartOverlays {
   // (the flow across the chart, and the larger one) — on unless switched off
   ema50: boolean;
   ema200: boolean;
+  // #145: the two indicators of the owner's video — tarasenko_'s Q-Trend
+  // over the price, and where it, the BLSH line and the BLSH area agree
+  // (the video's "triple confirmation"); on unless switched off
+  qTrend: boolean;
+  qtBlsh: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -61,6 +66,8 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   gainzPro: false,
   ema50: true,
   ema200: true,
+  qTrend: true,
+  qtBlsh: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
@@ -97,6 +104,8 @@ export interface ChartPrefs {
   // switched on
   pctB: boolean;
   rci: boolean;
+  // #145: zacmcc's Buy Low Sell High Composite under the price
+  blsh: boolean;
   // #118: the chart's background — the app's dark one, or white
   theme: ChartTheme;
   overlays: ChartOverlays;
@@ -118,6 +127,7 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   stochParams: STOCH_DEFAULTS,
   pctB: false,
   rci: false,
+  blsh: true,
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
   live: LIVE_PREFS_DEFAULTS,
@@ -140,6 +150,7 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
     })(),
     pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
     rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
+    blsh: typeof v.blsh === "boolean" ? v.blsh : CHART_PREFS_DEFAULTS.blsh,
     theme: v.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(v.overlays),
     live: livePrefsOf(v.live),

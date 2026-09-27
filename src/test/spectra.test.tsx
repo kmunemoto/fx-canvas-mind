@@ -117,7 +117,7 @@ describe("#119 switching what the chart draws, from the list at its top left", (
   it("lists only what this chart draws, the SPECTRA-style line off until switched on", () => {
     render(chart());
     const names = [...screen.getByTestId("chart-overlay-list").querySelectorAll("[data-testid^='chart-overlay-name-']")].map((e) => e.textContent);
-    expect(names).toEqual(["売買サイン", "建玉の箱", "SAR の帯", "パラボリックSAR", "EMA 50", "EMA 200", "SPECTRA型 10 3", "SuperTrend 10 3", "UT Bot 1 10", "FVG Crossfire + Volume Profile", "ストキャス 14 1 3", "BB %b 20 2", "RCI 10"]);
+    expect(names).toEqual(["売買サイン", "建玉の箱", "Q-Trend × BLSH（3つの確認）", "SAR の帯", "パラボリックSAR", "EMA 50", "EMA 200", "Q-Trend 200 14 1", "SPECTRA型 10 3", "SuperTrend 10 3", "UT Bot 1 10", "FVG Crossfire + Volume Profile", "ストキャス 14 1 3", "BB %b 20 2", "RCI 10", "BLSH"]);
     expect(screen.getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByTestId("chart-kalman")).toBeNull();
 
@@ -159,7 +159,7 @@ describe("#119 switching what the chart draws, from the list at its top left", (
     const panel = screen.getByTestId("chart-indicator-panel");
     expect(panel.tagName).toBe("DETAILS");
     expect(panel.hasAttribute("open")).toBe(false);
-    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 8/13");
+    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 11/16");
     // above the chart, not over it
     expect(panel.compareDocumentPosition(screen.getByTestId("chart-price")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("chart-price").parentElement!.contains(panel)).toBe(false);

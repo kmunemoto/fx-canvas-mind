@@ -13,6 +13,9 @@ import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { EMA_LINES, emaLine } from "@/lib/emaLines";
+import { QT_DEFAULTS, qTrend } from "@/lib/qTrend";
+import { placeEdgeLabels } from "@/lib/edgeLabels";
+import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
@@ -150,8 +153,8 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200"] as const;
-const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci"]);
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh"] as const;
+const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -233,6 +236,14 @@ const COLORS = {
   pctB: "#2962FF",
   rci: "#2962FF",
   rciMa: "#FDD835",
+  // #145: BLSH as the video colours it — the area green and red, the line
+  // yellow and blue
+  blshUp: "#16A34A",
+  blshDown: "#DC2626",
+  blshLineUp: "#FFD600",
+  blshLineDown: "#2962FF",
+  // the yellow deeper on the white background, as the POC's
+  blshLineUpLight: "#F2A900",
 };
 
 const MARKER_COLORS: Record<ChartMarker["kind"], string> = {
@@ -434,7 +445,7 @@ const PriceChart = ({
     if (!indicatorsLocked) return saved;
     const overlays = { ...saved.overlays };
     for (const k of LOCKED_OVERLAYS) overlays[k] = false;
-    return { ...saved, stoch: false, pctB: false, rci: false, overlays };
+    return { ...saved, stoch: false, pctB: false, rci: false, blsh: false, overlays };
   }, [saved, indicatorsLocked]);
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
   // #135: Bollinger %b and RCI, computed only while switched on
@@ -499,6 +510,38 @@ const PriceChart = ({
     const closes = [...zsPast.map((b) => b.close), ...candles.map((c) => c.close)];
     return { off: zsPast.length, total: closes.length, lines: on.map((l) => ({ ...l, values: emaLine(closes, l.length) })) };
   }, [emaOn, zsPast, candles]);
+  // #145: Q-Trend and BLSH over the same history and the candles (Q-Trend's
+  // line needs 200 closes before its first); the triple confirmation needs
+  // both, whichever of them is drawn
+  const qtNeeded = ov.qTrend || ov.qtBlsh;
+  const blshNeeded = prefs.blsh || ov.qtBlsh;
+  const qt = useMemo(() => {
+    if (!qtNeeded || candles.length === 0 || zsPast === null) return null;
+    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    const r = qTrend(all, QT_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
+    const off = zsPast.length;
+    return {
+      whole: r,
+      off,
+      line: r.line.slice(off),
+      trend: r.trend.slice(off),
+      signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
+    };
+  }, [qtNeeded, zsPast, candles, formingLast]);
+  const blshRead = useMemo(() => {
+    if (!blshNeeded || candles.length === 0 || zsPast === null) return null;
+    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    const r = blshOf(all);
+    const off = zsPast.length;
+    return { whole: r, off, composite: r.composite.slice(off), line: r.line.slice(off), lineUp: r.lineUp.slice(off) };
+  }, [blshNeeded, zsPast, candles]);
+  const triple = useMemo(() => {
+    if (!ov.qtBlsh || !qt || !blshRead) return null;
+    const last = qt.whole.line.length - 1 - (formingLast ? 1 : 0);
+    return tripleConfirm(qt.whole.trend, blshRead.whole, last)
+      .map((sg) => ({ ...sg, i: sg.i - qt.off }))
+      .filter((sg) => sg.i >= 0);
+  }, [ov.qtBlsh, qt, blshRead, formingLast]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)
@@ -538,7 +581,8 @@ const PriceChart = ({
   const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
   const showPctB = pctB !== null && pctB.some((v) => v !== null);
   const showRci = rciRead !== null && rciRead.rci.some((v) => v !== null);
-  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0);
+  const showBlsh = prefs.blsh && blshRead !== null && blshRead.composite.some((v) => v !== null);
+  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0) + (showBlsh ? 1 : 0);
   // In full screen the strips take a share of the height and the price the
   // rest (#118: the switches live in the settings sheet there); on a short
   // screen (a phone on its side) the strips give way first, so all of it fits
@@ -857,16 +901,22 @@ const PriceChart = ({
     stoch: t.chart.stoch.note,
     pctB: t.chart.pctB.note,
     rci: t.chart.rci.note,
+    qTrend: t.chart.qTrendNote,
+    blsh: t.chart.blsh.note,
+    qtBlsh: t.chart.qtBlshNote,
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
     ...(flags.length > 0 ? [{ key: "signals", group: "signals" as const, name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
     ...(positions && flags.length > 0 ? [{ key: "positions", group: "signals" as const, name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", group: "signals" as const, name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
+    // #145: the video's combination
+    { key: "qtBlsh", group: "signals" as const, name: t.chart.overlayNames.qtBlsh, on: ov.qtBlsh, toggle: flip("qtBlsh") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     // #143: each with its line's colour
     ...EMA_LINES.map((l) => ({ key: l.key, group: "trend" as const, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
+    { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "supertrend", group: "trend" as const, name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
     { key: "utBot", group: "trend" as const, name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
@@ -886,6 +936,7 @@ const PriceChart = ({
     // #135: off until switched on
     { key: "pctB", group: "oscillator" as const, name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
     { key: "rci", group: "oscillator" as const, name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
+    { key: "blsh", group: "oscillator" as const, name: t.chart.blsh.name, on: prefs.blsh, toggle: () => setChartPrefs({ blsh: !prefs.blsh }) },
   ].map((item) => (indicatorsLocked && LOCKED_KEYS.has(item.key)
     // #140: listed, so what a plan adds is in sight, but off and locked
     ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
@@ -1241,6 +1292,28 @@ const PriceChart = ({
   const plotTop = PAD_TOP + 1;
   const plotBottom = H - PAD_BOTTOM - 1;
   const gaLabelW = (narrow ? 44 : 54) * fs;
+  // #145: Q-Trend's labels and the 3✓ badges (the badge a row beyond the
+  // label), placed in bar order clear of one another and of the plot's edges
+  const qtFsz = (narrow ? 7.5 : 8.5) * fs;
+  const qtLabels = [
+    ...(qt && ov.qTrend
+      ? qt.signals.filter((sg) => onScreen(sg.i)).map((sg) => ({ key: `qt-${sg.i}`, i: sg.i, buy: sg.side === "BUY", text: sg.strong ? "STRONG" : sg.side, badge: false }))
+      : []),
+    ...(triple ? triple.filter((sg) => onScreen(sg.i)).map((sg) => ({ key: `tc-${sg.i}`, i: sg.i, buy: sg.side === "BUY", text: `3✓ ${sg.side}`, badge: true })) : []),
+  ]
+    .sort((a, b) => a.i - b.i || Number(a.badge) - Number(b.badge))
+    .map((it) => ({
+      key: it.key,
+      x: x(it.i),
+      highY: y(candles[it.i].high),
+      lowY: y(candles[it.i].low),
+      w: it.text.length * qtFsz * 0.62 + (it.badge ? 8 : 6),
+      h: qtFsz + (it.badge ? 6 : 5),
+      off: it.badge ? 6 + qtFsz + 12 : 6,
+      buy: it.buy,
+    }));
+  const qtSpots = placeEdgeLabels(qtLabels, plotTop, plotBottom);
+  const qtPlaced = new Map(qtLabels.map((l) => [l.key, { ...qtSpots.get(l.key)!, w: l.w, h: l.h }]));
   // #115: each label is kept inside the plot sideways as well (one on the
   // first or last bars was cut in half), and one that would land on a label
   // already placed is moved a row away from the price, or toward it when
@@ -1650,6 +1723,21 @@ const PriceChart = ({
           {noteOf.ema50}
         </p>
       )}
+      {ov.qtBlsh && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-qtblsh-legend">
+          {noteOf.qtBlsh}
+        </p>
+      )}
+      {ov.qTrend && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-qtrend-legend">
+          {noteOf.qTrend}
+        </p>
+      )}
+      {prefs.blsh && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-blsh-legend">
+          {noteOf.blsh}
+        </p>
+      )}
       {ov.zoneShift && zsListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zoneshift-legend">
           {noteOf.zoneShift}
@@ -1692,9 +1780,22 @@ const PriceChart = ({
     aria: string;
     label: string;
     // `tagText`: the value's colour on its axis tag (white unless given, dark
-    // on a light line)
-    lines: Array<{ name: string; values: Array<number | null>; color: string; tagText?: string }>;
+    // on a light line; #145: or chosen by the tag's colour)
+    // #145: `colors` a colour for each bar's stretch (the line changes
+    // colour), `colorAt` its tag's and reading's colour at the bar read,
+    // `hidden` read and tagged but not drawn (an area draws it)
+    lines: Array<{
+      name: string;
+      values: Array<number | null>;
+      color: string;
+      tagText?: string | ((fill: string) => string);
+      colors?: Array<string | null>;
+      colorAt?: (i: number) => string;
+      hidden?: boolean;
+    }>;
     levels: Array<{ v: number; color: string; dash: string; opacity: number }>;
+    // #145: an area from `base` to the values, `up` above it and `down` below
+    area?: { values: Array<number | null>; base: number; up: string; down: string; opacity: number };
     band?: { from: number; to: number; color: string; opacity: number };
     bands?: Array<{ from: number; to: number; color: string; opacity: number; key: string }>;
     // the values at the strip's top and foot (0–100 unless given)
@@ -1723,12 +1824,17 @@ const PriceChart = ({
       }
       return path;
     };
-    const readingOf = (values: Array<number | null>) => {
+    // the bar read: the crosshair's, or the last on screen with a value
+    const readAt = (values: Array<number | null>): number | null => {
       if (hover !== null && hovered) {
         const v = values[hover];
-        return v === null || v === undefined || !Number.isFinite(v) ? null : v;
+        return v === null || v === undefined || !Number.isFinite(v) ? null : hover;
       }
-      return values.slice(from, to).reverse().find((v): v is number => v !== null && Number.isFinite(v)) ?? null;
+      for (let i = to - 1; i >= from; i--) {
+        const v = values[i];
+        if (v !== null && v !== undefined && Number.isFinite(v)) return i;
+      }
+      return null;
     };
     return (
       <svg
@@ -1779,16 +1885,73 @@ const PriceChart = ({
         {hover !== null && hovered && (
           <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
         )}
-        {o.lines.map((ln) => (
-          <path key={ln.name || "line"} d={pathOf(ln.values)} fill="none" stroke={ln.color} strokeWidth={full ? 1.5 : 1.2} data-line={ln.name || undefined} />
-        ))}
+        {/* #145: the area, split at its base: one colour over, one under */}
+        {o.area && (() => {
+          const a = o.area;
+          let d = "";
+          let run: number[] = [];
+          const close = () => {
+            if (run.length > 0) {
+              d += `M${x(run[0]).toFixed(1)},${ry(a.base).toFixed(1)} `;
+              for (const i of run) d += `L${x(i).toFixed(1)},${ry(a.values[i] as number).toFixed(1)} `;
+              d += `L${x(run[run.length - 1]).toFixed(1)},${ry(a.base).toFixed(1)} Z `;
+            }
+            run = [];
+          };
+          for (let i = from; i < to; i++) {
+            const v = a.values[i];
+            if (v === null || v === undefined || !Number.isFinite(v)) close();
+            else run.push(i);
+          }
+          close();
+          if (!d) return null;
+          const baseY = ry(a.base);
+          const idAbove = `${clipId}-${o.testid}-over`;
+          const idBelow = `${clipId}-${o.testid}-under`;
+          return (
+            <g data-testid={`${o.testid}-area`}>
+              <defs>
+                <clipPath id={idAbove}><rect x={0} y={0} width={W} height={Math.max(0, baseY)} /></clipPath>
+                <clipPath id={idBelow}><rect x={0} y={baseY} width={W} height={Math.max(0, RH - baseY)} /></clipPath>
+              </defs>
+              <path d={d} fill={a.up} stroke={a.up} strokeWidth={1} opacity={a.opacity} clipPath={`url(#${idAbove})`} data-testid={`${o.testid}-area-up`} />
+              <path d={d} fill={a.down} stroke={a.down} strokeWidth={1} opacity={a.opacity} clipPath={`url(#${idBelow})`} data-testid={`${o.testid}-area-down`} />
+            </g>
+          );
+        })()}
+        {o.lines.map((ln) => {
+          if (ln.hidden) return null;
+          if (!ln.colors) {
+            return <path key={ln.name || "line"} d={pathOf(ln.values)} fill="none" stroke={ln.color} strokeWidth={full ? 1.5 : 1.2} data-line={ln.name || undefined} />;
+          }
+          // #145: each stretch in the colour of the bar it ends on
+          const runs: Array<{ color: string; d: string }> = [];
+          for (let i = Math.max(from, 1); i < to; i++) {
+            const a = ln.values[i - 1];
+            const b = ln.values[i];
+            if (a === null || b === null || a === undefined || b === undefined) continue;
+            const color = ln.colors[i] ?? ln.color;
+            const seg = `M${x(i - 1).toFixed(1)},${ry(a).toFixed(1)} L${x(i).toFixed(1)},${ry(b).toFixed(1)} `;
+            const lastRun = runs[runs.length - 1];
+            if (lastRun && lastRun.color === color) lastRun.d += seg;
+            else runs.push({ color, d: seg });
+          }
+          return (
+            <g key={ln.name || "line"} data-line={ln.name || undefined}>
+              {runs.map((r, k) => <path key={k} d={r.d} fill="none" stroke={r.color} strokeWidth={full ? 1.5 : 1.2} />)}
+            </g>
+          );
+        })}
         {/* #118: each line's value as a tag on the axis, in its colour, as
             TradingView shows them; two that would overlap are pushed apart */}
         {(() => {
           const tagH = labelSize + 6;
           const tags = o.lines
-            .map((ln) => ({ ln, v: readingOf(ln.values) }))
-            .filter((g): g is { ln: typeof g.ln; v: number } => g.v !== null)
+            .map((ln) => {
+              const i = readAt(ln.values);
+              return { ln, v: i === null ? null : (ln.values[i] as number), fill: i !== null && ln.colorAt ? ln.colorAt(i) : ln.color };
+            })
+            .filter((g): g is { ln: typeof g.ln; v: number; fill: string } => g.v !== null)
             .map((g) => ({ ...g, cy: ry(g.v) }))
             .sort((a, b) => a.cy - b.cy);
           for (let i = 1; i < tags.length; i++) {
@@ -1801,10 +1964,10 @@ const PriceChart = ({
             if (tags[i + 1].cy - tags[i].cy < tagH) tags[i].cy = tags[i + 1].cy - tagH;
           }
           for (const g of tags) g.cy = Math.max(g.cy, tagH / 2);
-          return tags.map(({ ln, v, cy }) => (
+          return tags.map(({ ln, v, cy, fill }) => (
             <g key={`tag-${ln.name || "line"}`} data-testid={`${o.testid}-tag${ln.name ? `-${ln.name.replace("%", "")}` : ""}`}>
-              <rect x={W - PAD_RIGHT + 1} y={cy - tagH / 2} width={axisW - 2} height={tagH} rx="2" fill={ln.color} />
-              <text x={AXIS_X} y={cy + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill={ln.tagText ?? "#fff"} fontFamily="monospace">
+              <rect x={W - PAD_RIGHT + 1} y={cy - tagH / 2} width={axisW - 2} height={tagH} rx="2" fill={fill} />
+              <text x={AXIS_X} y={cy + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill={typeof ln.tagText === "function" ? ln.tagText(fill) : ln.tagText ?? "#fff"} fontFamily="monospace">
                 {v.toFixed(2)}
               </text>
             </g>
@@ -1813,9 +1976,10 @@ const PriceChart = ({
         <text x={PAD_LEFT + 2} y={top + 2} fontSize={labelSize} fill={COLORS.text} fontFamily="monospace" data-testid={`${o.testid}-reading`}>
           {o.label}
           {o.lines.map((ln) => {
-            const v = readingOf(ln.values);
+            const i = readAt(ln.values);
+            const v = i === null ? null : (ln.values[i] as number);
             return (
-              <tspan key={ln.name || "line"} fill={ln.name ? ln.color : COLORS.text}>
+              <tspan key={ln.name || "line"} fill={ln.name ? (i !== null && ln.colorAt ? ln.colorAt(i) : ln.color) : COLORS.text}>
                 {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : v.toFixed(o.digits ?? 1)}`}
               </tspan>
             );
@@ -2211,7 +2375,14 @@ const PriceChart = ({
           if (!onScreen(i)) return null;
           const up = c.close >= c.open;
           const utSide = ut ? ut.side[i] : null;
-          const color = utSide !== null ? (utSide === 1 ? COLORS.up : COLORS.down) : zs ? (zs.up[i + zs.off] ? COLORS.zsUp : COLORS.zsDown) : up ? COLORS.up : COLORS.down;
+          // #145: Q-Trend's colour (green after its buy, red otherwise, as
+          // the original's barcolor), under UT Bot's and over Zone Shift's
+          const qtSide = qt && ov.qTrend ? qt.trend[i] ?? null : null;
+          const color = utSide !== null
+            ? (utSide === 1 ? COLORS.up : COLORS.down)
+            : qtSide !== null
+              ? (qtSide === 1 ? COLORS.up : COLORS.down)
+              : zs ? (zs.up[i + zs.off] ? COLORS.zsUp : COLORS.zsDown) : up ? COLORS.up : COLORS.down;
           const bodyTop = y(Math.max(c.open, c.close));
           const bodyH = Math.max(1, Math.abs(y(c.open) - y(c.close)));
           return (
@@ -2467,6 +2638,72 @@ const PriceChart = ({
                   <polygon points={buy ? `${cx},${cy + 2} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${cy - 2} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
                   <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
                   <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #145: Q-Trend's line (3 wide in the original), each stretch in the
+            colour of the bar it ends on, and its BUY / SELL / STRONG labels
+            (under the candle for a buy, over it for a sell) */}
+        {qt && ov.qTrend && (
+          <g data-testid="chart-qtrend" clipPath={`url(#${clipId})`}>
+            {(() => {
+              const runs: Array<{ up: boolean; d: string }> = [];
+              for (let i = Math.max(1, from - 1); i < Math.min(candles.length, to + 1); i++) {
+                const a = qt.line[i - 1];
+                const b = qt.line[i];
+                if (a === null || b === null || a === undefined || b === undefined) continue;
+                const upSeg = qt.trend[i] === 1;
+                const seg = `M${x(i - 1).toFixed(1)},${y(a).toFixed(1)} L${x(i).toFixed(1)},${y(b).toFixed(1)} `;
+                const lastRun = runs[runs.length - 1];
+                if (lastRun && lastRun.up === upSeg) lastRun.d += seg;
+                else runs.push({ up: upSeg, d: seg });
+              }
+              return runs.map((r, k) => (
+                <path key={`qt-${k}`} d={r.d} fill="none" stroke={r.up ? COLORS.up : COLORS.down} strokeWidth={2.2 * fs} strokeLinecap="round" data-testid="chart-qtrend-line" />
+              ));
+            })()}
+          </g>
+        )}
+        {qt && ov.qTrend && (
+          <g data-testid="chart-qtrend-signals">
+            {qt.signals.filter((sg) => onScreen(sg.i)).map((sg) => {
+              const c = candles[sg.i];
+              const cx = x(sg.i);
+              const color = sg.side === "BUY" ? COLORS.up : COLORS.down;
+              const text = sg.strong ? "STRONG" : sg.side;
+              const fsz = qtFsz;
+              const { top: ty, under, w, h } = qtPlaced.get(`qt-${sg.i}`)!;
+              const tip = under ? y(c.low) + 2 : y(c.high) - 2;
+              return (
+                <g key={`qt-${sg.i}`} data-testid={`chart-qtrend-signal-${sg.side}${sg.strong ? "-strong" : ""}`}>
+                  <title>{`Q-Trend ${sg.strong ? `STRONG ${sg.side}` : sg.side}`}</title>
+                  <polygon points={under ? `${cx},${tip} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${tip} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
+                  <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
+                  <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+        {/* #145: the video's triple confirmation — Q-Trend, the BLSH line
+            and the BLSH area agreeing — an outlined badge beyond Q-Trend's
+            label (under for a buy, over for a sell) */}
+        {triple && (
+          <g data-testid="chart-qtblsh">
+            {triple.filter((sg) => onScreen(sg.i)).map((sg) => {
+              const cx = x(sg.i);
+              const color = sg.side === "BUY" ? COLORS.up : COLORS.down;
+              const text = `3✓ ${sg.side}`;
+              const fsz = qtFsz;
+              const { top: ty, w, h } = qtPlaced.get(`tc-${sg.i}`)!;
+              return (
+                <g key={`tc-${sg.i}`} data-testid={`chart-qtblsh-signal-${sg.side}`}>
+                  <title>{t.chart.qtBlshTitle(sg.side)}</title>
+                  <rect x={cx - w / 2} y={ty} width={w} height={h} rx={h / 2} fill="hsl(var(--background))" stroke={color} strokeWidth={1.4} />
+                  <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill={color} fontWeight="700">{text}</text>
                 </g>
               );
             })}
@@ -2881,6 +3118,44 @@ const PriceChart = ({
         band: { from: RCI_LEVELS.lower, to: RCI_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
         range: { min: -100, max: 100 },
       })}
+      {/* #145: BLSH as the video shows it — the composite as an area (green
+          over 0, red at or under), the MACD signal line yellow while MACD is
+          at or over it and blue while under, a dotted line at 0; its scale
+          follows what is on screen, always showing −1 to +1 */}
+      {showBlsh && blshRead && (() => {
+        const seen = [...blshRead.composite.slice(from, to), ...blshRead.line.slice(from, to)].filter((v): v is number => v !== null && Number.isFinite(v));
+        const min = Math.min(-1, ...seen) - 0.05;
+        const max = Math.max(1, ...seen) + 0.05;
+        const yellow = prefs.theme === "light" ? COLORS.blshLineUpLight : COLORS.blshLineUp;
+        const lineColor = (u: boolean | null | undefined) => (u === null || u === undefined ? null : u ? yellow : COLORS.blshLineDown);
+        return strip({
+          testid: "chart-blsh",
+          aria: t.chart.blsh.name,
+          label: t.chart.blsh.name,
+          lines: [
+            {
+              name: "",
+              values: blshRead.composite,
+              color: COLORS.blshUp,
+              hidden: true,
+              colorAt: (i) => ((blshRead.composite[i] ?? 0) > 0 ? COLORS.blshUp : COLORS.blshDown),
+            },
+            {
+              name: "MACD",
+              values: blshRead.line,
+              color: yellow,
+              colors: blshRead.lineUp.map(lineColor),
+              colorAt: (i) => lineColor(blshRead.lineUp[i]) ?? yellow,
+              // dark on the yellow, white on the blue
+              tagText: (fill) => (fill === COLORS.blshLineDown ? "#fff" : "#131722"),
+            },
+          ],
+          levels: [{ v: 0, color: COLORS.text, dash: "1.5 3", opacity: 0.6 }],
+          area: { values: blshRead.composite, base: 0, up: COLORS.blshUp, down: COLORS.blshDown, opacity: 0.5 },
+          range: { min, max },
+          digits: 2,
+        });
+      })()}
     </>
   );
 

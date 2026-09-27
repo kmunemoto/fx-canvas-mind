@@ -224,11 +224,14 @@ const LiveChart = ({
   // when the chart has moved past them, and once more on the next read
   // after one failed (never in a loop). GMO's only: not joined to Twelve
   // Data's bars.
-  const overlays = useChartPrefs().overlays;
+  const chartPrefs = useChartPrefs();
+  const overlays = chartPrefs.overlays;
   const zoneShiftOn = overlays.zoneShift;
-  // #131: the Pro-style score reads the same history, and #143: the EMA
-  // lines (#140: none of them while the indicators are locked)
-  const historyOn = indicatorsAllowed && (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200);
+  // #131: the Pro-style score reads the same history, #143: the EMA lines,
+  // and #145: Q-Trend (200 closes before its line) and BLSH (#140: none of
+  // them while the indicators are locked)
+  const historyOn =
+    indicatorsAllowed && (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)

@@ -144,6 +144,8 @@ describe("#124 Zone Shift on the chart", () => {
   });
 
   it("is on with the history: the band, the candles in its trend's colours and a legend with the count; off by its eye", () => {
+    // #145: Q-Trend's colours are over Zone Shift's
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { qTrend: false } }));
     const all = series(601);
     const past = all.slice(0, 480);
     const candles = all.slice(480);
@@ -243,8 +245,8 @@ describe("#124 the live chart's history", () => {
     expect(screen.getByTestId("chart-zoneshift-legend").textContent).toContain("計算に使った足: 260本");
   });
 
-  it("is not read while Zone Shift is off (#143: and the EMA lines, which read it too)", async () => {
-    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { zoneShift: false, ema50: false, ema200: false } }));
+  it("is not read while Zone Shift is off (#143, #145: and the others that read it)", async () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ blsh: false, overlays: { zoneShift: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false } }));
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
     const loadHistory = vi.fn(async () => historyFor());
     render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={loadHistory} />);
