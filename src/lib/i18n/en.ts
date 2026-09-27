@@ -213,8 +213,8 @@ export const en: Dict = {
       kLength: "%K length",
       kSmoothing: "%K smoothing",
       dSmoothing: "%D smoothing",
-      reset: "Back to the defaults (21, 5, 3)",
-      note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average). The default settings and lines (21, 5, 3; 70/30) are from #132: every combination was tried, reading %K falling back under 70 as a sell and rising back over 30 as a buy, and this one won most often on the first period (2024-01 to 2025-06; it was TradingView's 14, 1, 3 and 80/20). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 17,317 trades, 28.7% won (break-even 33.3%), −0.136R each (the old setting: 46,684, 29.1%, −0.125R) — no better, and no different from entering at random. Shown only: no signal is judged on it.",
+      reset: "Back to the defaults (14, 1, 3)",
+      note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average, 80/20). #132's first-period best (21, 5, 3; 70/30) did worse on the second period (28.7% won; this setting 29.1%), so these were put back. Shown only: no signal is judged on it.",
     },
     settingsTitle: "Chart settings",
     background: "Background",
@@ -278,14 +278,14 @@ export const en: Dict = {
       "Shown only: no signal or email uses it.",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
-      "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(75) and HMA(35) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
-      "An uptrend when a closed candle's low crosses above the top line (candles turn lime), a downtrend when its high crosses below the bottom line (blue). The low (high) of the candle the trend began on is drawn as a dotted level; ◆ = the close or wick crossing back over it in the trend's direction (a retest, at least 11 candles after the last ◆). " +
+      "Zone Shift (a port of ChartPrime's open-source code, MPL 2.0): the midline = the average of EMA(100) and HMA(60) (dotted), the outer lines = the midline ± the 200-candle average of high − low. " +
+      "An uptrend when a closed candle's low crosses above the top line (candles turn lime), a downtrend when its high crosses below the bottom line (blue). The low (high) of the candle the trend began on is drawn as a dotted level; ◆ = the close or wick crossing back over it in the trend's direction (a retest, at least 6 candles after the last ◆). " +
       (status === "loading"
         ? "Loading the earlier candles its 200-candle average needs. "
         : status === "error"
           ? "Not drawn: the earlier candles could not be read (tried again on the next candle). "
           : `Computed over ${bars ?? 0} candles (including those before the screen). `) +
-      "Settings from #132: every combination was tried and this one won most often on the first period (2024-01 to 2025-06) — Length 75 and a retest gap of 10 (the original's defaults are 100 and 5). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid), entering at its turns and its ◆: 10,056 trades, 29.2% won (break-even 33.3%), −0.122R each — no better than the old setting (12,361, 29.9%, −0.102R) and no different from entering at random. " +
+      "On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): entering at its turns, 5,687 trades, 29.7% won (break-even 33.3%), −0.109R each; at its ◆, 9,028 trades, 30.4%, −0.085R. Neither differs from entering at random beyond noise (1h a little better, still about zero). #132's first-period best (Length 75, a retest gap of 10) did worse on the second period (29.2% won; this setting 29.9%), so these were put back. " +
       "Shown only: no signal or email uses it.",
     // #123: the two Flux Charts ports, shown as one indicator
     fvgProfileNote: (bars: number) =>
@@ -295,8 +295,7 @@ export const en: Dict = {
       "The smallest gap (0.05% of price) is from #132: every setting was tried and this one's retest arrows (▲▼) won most often on the first period (2024-01 to 2025-06; the original's default is 0, every gap; the 3-bar fill delay stayed, as 2 and 3 gave the same results). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 5,287 trades, 31.4% won (break-even 33.3%), −0.057R each (the old setting: 22,085, 29.0%, −0.128R); +0.042R over entering at random, within noise (95%: −0.005 to +0.089R). " +
       "Shown only: no signal or email uses it.",
     kalmanNote:
-      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(7) smoothed by a Kalman filter → Supertrend (1.5 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. " +
-      "Settings from #132: every combination was tried and this one won most often on the first period (2024-01 to 2025-06) — ATR 7, 1.5x, a stronger Kalman smoothing (it was ATR 10, 3x). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid): 15,901 trades, 29.2% won (break-even 33.3%), −0.121R each — no better than the old setting (7,164, 29.4%, −0.116R) and no different from entering at random. No signal or email uses it.",
+      "SPECTRA-style = the processing order SentioEdge publishes for SPECTRA, rebuilt: the high–low midpoint and ATR(10) smoothed by a Kalman filter → Supertrend (3 ATR) → ▲▼ only when RSI(14) is above 50 (below for a sell). Green = up, red = down; the cloud is the gap to the smoothed price. Its Smart Trail (not published) and volume classification (GMO's bars have no volume) are not in it. Marked on closed bars only. On past data (11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid, 2025-07 on): 7,164 trades, 29.4% won (break-even 33.3%), −0.116R each — no different from entering at random (1h: −0.031R, +0.05R over random, within noise). The RSI filter removed about 1 in 7,000. #132's first-period best (ATR 7, 1.5x) did worse on the second period (29.2% won; this setting 29.4%), so these were put back. No signal or email uses it.",
     hide: "Hide",
     show: "Show",
     foldList: "Fold the list",
