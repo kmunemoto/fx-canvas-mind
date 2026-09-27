@@ -100,6 +100,16 @@
 // with the exits SPECTRA and Zone Shift were read with (r2w and split). The
 // reel's 5-minute timeframe is not here (the history is GMO's 15-minute
 // bars), nor gold (GMO has none).
+//
+// #131: a "Pro-style" confidence score (src/lib/gainzPro.ts, imported as it
+// is), the owner's 「作って測って」 after reading GainzAlgo Suite's published
+// description of its Pro configuration (scores for pattern, volatility,
+// momentum and trend, percentile-ranked, and an adaptive threshold). Its
+// formulas are not published: the reading is this app's own, fixed before
+// any data was read — gp_score with all four parts, and gp_rev without the
+// trend part (the three reversal parts alone), to see what the trend part
+// adds. Not ranked: both periods reported with r2w and split, beside the
+// GA rule (the "Standard" four-condition reading, #112).
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
@@ -110,6 +120,7 @@ import { kalmanSupertrend, type KalmanStRead } from "../src/lib/kalmanSupertrend
 import { zoneShift } from "../src/lib/zoneShift.ts";
 import { STOCH_DEFAULTS, stochastic } from "../src/lib/stochastic.ts";
 import { dowTheory, type DowEvent } from "../supabase/functions/_shared/dow.ts";
+import { GP_DEFAULTS, gainzPro } from "../src/lib/gainzPro.ts";
 
 const ALL_PAIRS = "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,GBP/USD,AUD/USD,NZD/USD";
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS).split(",").map((s) => s.trim()).filter(Boolean);
@@ -332,6 +343,32 @@ const DOW_RULES: RevRule[] = [
   },
 ];
 
+// #131: the Pro-style score's signals, once per pair, timeframe and reading
+const gpCache = new WeakMap<RevCtx, Map<string, Map<number, Side>>>();
+const gpOf = (x: RevCtx, trend: boolean) => {
+  let byReading = gpCache.get(x);
+  if (!byReading) gpCache.set(x, (byReading = new Map()));
+  const key = trend ? "trend" : "rev";
+  let m = byReading.get(key);
+  if (!m) {
+    m = new Map(gainzPro(x.c, { ...GP_DEFAULTS, trend }).signals.map((sg) => [sg.i, sg.side] as [number, Side]));
+    byReading.set(key, m);
+  }
+  return m;
+};
+const PRO_RULES: RevRule[] = [
+  {
+    id: "gp_score",
+    ja: "Pro型（点数方式、独自の定義）: 陰線→陽線の足で、足の形・RSI の加速・値幅の広がり・EMA(50) の傾きをそれぞれ直近100本の中の順位にして平均し、その点数が直近100本の上位5%のとき（売りは鏡像）",
+    at: (x, i) => sideAt(gpOf(x, true), i),
+  },
+  {
+    id: "gp_rev",
+    ja: "同じ点数方式から傾き（トレンド）を外し、足の形・RSI の加速・値幅の広がりの3つだけにしたもの",
+    at: (x, i) => sideAt(gpOf(x, false), i),
+  },
+];
+
 const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1 | -1 }> = [
   ...REVERSALS,
   ...GAINZ,
@@ -342,6 +379,7 @@ const RULES: Array<{ id: string; ja: string; at: (x: RevCtx, i: number) => 0 | 1
   ...GA_STOCH_RULES,
   ...STOCH_OUT_RULES,
   ...DOW_RULES,
+  ...PRO_RULES,
 ];
 const BLIND = "__blind__";
 
@@ -689,6 +727,7 @@ const main = async () => {
   fixedRules("#119 the SPECTRA-style line (src/lib/kalmanSupertrend.ts)", SPECTRA_RULES);
   fixedRules("#125 Zone Shift [ChartPrime] (src/lib/zoneShift.ts)", ZS_RULES);
   fixedRules("#129 Dow theory (supabase/functions/_shared/dow.ts, swings of 5 bars either side, closes)", DOW_RULES);
+  fixedRules("#131 the Pro-style confidence score (src/lib/gainzPro.ts), beside the GA rule", [GAINZ_APP, ...PRO_RULES]);
 
   // 7. #126: GA, then the stochastic leaving its zone — the level chosen on
   // the first period (1h, r2w), judged on the second
