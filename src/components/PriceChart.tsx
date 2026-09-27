@@ -7,6 +7,7 @@ import { formatCandleLabel, parseUtcCandleTime, priceDecimals } from "@/lib/cand
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
+import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
@@ -351,6 +352,11 @@ const PriceChart = ({
   const kst = useMemo(
     () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
     [ov.kalman, candles, formingLast],
+  );
+  // #136: SuperTrend, on the closed candles
+  const st = useMemo(
+    () => (ov.supertrend ? supertrend(candles, ST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
+    [ov.supertrend, candles, formingLast],
   );
   // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
   // Volume Profile of the newest candles — the forming one too, as the
@@ -713,6 +719,7 @@ const PriceChart = ({
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     { key: "kalman", name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
+    { key: "supertrend", name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
     { key: "fvgProfile", name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(zsListed ? [{ key: "zoneShift", name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
     ...(dow ? [{ key: "dow", name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
@@ -1084,6 +1091,19 @@ const PriceChart = ({
     });
     return runs;
   })();
+  // #136: SuperTrend's line in runs of one trend (broken where it turns, as
+  // the original's plot.style_linebr)
+  const stRuns = (() => {
+    if (!st) return [];
+    const runs: Array<{ up: boolean; from: number; to: number }> = [];
+    st.trend.forEach((tr, i) => {
+      if (tr === null || st.line[i] === null) return;
+      const last = runs[runs.length - 1];
+      if (last && last.up === (tr === 1) && last.to === i - 1) last.to = i;
+      else runs.push({ up: tr === 1, from: i, to: i });
+    });
+    return runs;
+  })();
   const exitColor = (o: ChartSignalMark["outcome"]) => (o === "win" ? COLORS.tp : o === "loss" ? COLORS.sl : COLORS.text);
   // #129: Dow theory's levels — lows (押し安値) green, highs (戻り高値) red;
   // the higher timeframes' inside the price range only (they do not stretch
@@ -1295,6 +1315,11 @@ const PriceChart = ({
       {ov.kalman && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-kalman-legend">
           {t.chart.kalmanNote}
+        </p>
+      )}
+      {ov.supertrend && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-supertrend-legend">
+          {t.chart.supertrendNote}
         </p>
       )}
       {ov.zoneShift && zsListed && (
@@ -1723,6 +1748,22 @@ const PriceChart = ({
           </g>
         )}
 
+        {/* #136: SuperTrend's highlight — between its line and ohlc4, green
+            while up, red while down (the original's fills, 90% transparent) */}
+        {st && stRuns.length > 0 && (
+          <g data-testid="chart-supertrend-fill" clipPath={`url(#${clipId})`}>
+            {stRuns.map((r) => {
+              const cols: number[] = [];
+              for (let i = Math.max(r.from, from); i <= Math.min(r.to, to - 1); i++) cols.push(i);
+              if (cols.length < 2) return null;
+              const mid = (i: number) => (candles[i].open + candles[i].high + candles[i].low + candles[i].close) / 4;
+              const top = cols.map((i) => `${x(i).toFixed(1)},${y(mid(i)).toFixed(1)}`);
+              const bottom = cols.map((i) => `${x(i).toFixed(1)},${y(st.line[i] as number).toFixed(1)}`).reverse();
+              return <polygon key={`sf-${r.from}`} points={[...top, ...bottom].join(" ")} fill={r.up ? COLORS.up : COLORS.down} opacity="0.1" />;
+            })}
+          </g>
+        )}
+
         {/* #115: each position, green from entry to target and red from
             entry to stop, with its entry line; and a faint line on the bar
             each signal fired on */}
@@ -2056,6 +2097,43 @@ const PriceChart = ({
                       : `${cx},${cy + sz} ${cx - sz},${cy - sz * 0.8} ${cx + sz},${cy - sz * 0.8}`}
                     fill={color}
                   />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #136: SuperTrend's line (green under the price while up, red over
+            it while down), and where it turned a dot on the line with a
+            "Buy" label under it or a "Sell" label over it, as the original */}
+        {st && stRuns.length > 0 && (
+          <g data-testid="chart-supertrend" clipPath={`url(#${clipId})`}>
+            {stRuns.map((r) => {
+              let d = "";
+              for (let i = Math.max(r.from, from); i <= Math.min(r.to, to - 1); i++) {
+                d += `${d === "" ? "M" : "L"}${x(i).toFixed(1)},${y(st.line[i] as number).toFixed(1)} `;
+              }
+              return d === "" ? null : (
+                <path key={`sl-${r.from}`} d={d} fill="none" stroke={r.up ? COLORS.up : COLORS.down} strokeWidth={full ? 2.2 : 1.8} data-testid="chart-supertrend-line" />
+              );
+            })}
+            {st.signals.filter((s) => onScreen(s.i)).map((s) => {
+              const buy = s.side === "BUY";
+              const cx = x(s.i);
+              const cy = y(s.price);
+              const color = buy ? COLORS.up : COLORS.down;
+              const text = buy ? "Buy" : "Sell";
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const w = text.length * fsz * 0.62 + 6;
+              const h = fsz + 5;
+              const ty = buy ? cy + 5 : cy - 5 - h;
+              return (
+                <g key={`ss-${s.i}`} data-testid={`chart-supertrend-signal-${s.side}`}>
+                  <title>{`SuperTrend ${text}`}</title>
+                  <circle cx={cx} cy={cy} r={2.4 * fs} fill={color} />
+                  <polygon points={buy ? `${cx},${cy + 2} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${cy - 2} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
+                  <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
+                  <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{text}</text>
                 </g>
               );
             })}

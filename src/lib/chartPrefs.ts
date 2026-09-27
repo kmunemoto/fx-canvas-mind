@@ -22,6 +22,9 @@ export interface ChartOverlays {
   trendLines: boolean;
   // the SPECTRA-style Kalman Supertrend — off until switched on
   kalman: boolean;
+  // #136: KivancOzbilgic's SuperTrend (a port of its open-source code) —
+  // off until switched on
+  supertrend: boolean;
   // Flux Charts' FVG Crossfire (#121) and Weighted Volume Profile (#122),
   // ports of their open-source code — one switch for the two (#123: the
   // owner asked for them as one, "ニコイチ")
@@ -43,6 +46,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   sarDots: true,
   trendLines: true,
   kalman: false,
+  supertrend: false,
   fvgProfile: true,
   zoneShift: true,
   dow: true,
