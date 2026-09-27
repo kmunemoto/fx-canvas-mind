@@ -260,6 +260,8 @@ const add = (key: string, week: number, r: number, base: number, outcome: string
 };
 interface Stat {
   n: number;
+  // trades that reached the stop or the target (the win rate's count)
+  res: number;
   win: number | null;
   seW: number | null;
   e: number;
@@ -290,7 +292,7 @@ const statOf = (key: string): Stat | null => {
     if (win !== null) sw += (a.w - win * a.res) ** 2;
   }
   const f = C > 1 ? C / (C - 1) : Number.NaN;
-  return { n, win, seW: win === null || res === 0 ? null : Math.sqrt(f * sw) / res, e, seE: Math.sqrt(f * se) / n, lift, seL: Math.sqrt(f * sl) / n };
+  return { n, res, win, seW: win === null || res === 0 ? null : Math.sqrt(f * sw) / res, e, seE: Math.sqrt(f * se) / n, lift, seL: Math.sqrt(f * sl) / n };
 };
 
 // ---- one timeframe of one pair ---------------------------------------------------------
@@ -368,7 +370,7 @@ const pct = (x: number | null | undefined, d = 1) => (x === null || x === undefi
 const rr = (x: number | null | undefined, d = 3) => (x === null || x === undefined || !Number.isFinite(x) ? "n/a" : `${x >= 0 ? "+" : ""}${x.toFixed(d)}R`);
 const ci = (x: number, se: number, f: (v: number) => string) => `${f(x)} [${f(x - 1.96 * se)}〜${f(x + 1.96 * se)}]`;
 const line = (label: string, s: Stat | null) =>
-  `${label.padEnd(44)} n=${String(s?.n ?? 0).padStart(6)} win ${s && s.win !== null && s.seW !== null ? ci(s.win, s.seW, (v) => pct(v)) : "n/a"} | E ${s ? ci(s.e, s.seE, (v) => rr(v)) : "n/a"} | lift ${s ? ci(s.lift, s.seL, (v) => rr(v)) : "n/a"}`;
+  `${label.padEnd(44)} n=${String(s?.n ?? 0).padStart(6)} (settled ${String(s?.res ?? 0).padStart(6)}) win ${s && s.win !== null && s.seW !== null ? ci(s.win, s.seW, (v) => pct(v)) : "n/a"} | E ${s ? ci(s.e, s.seE, (v) => rr(v)) : "n/a"} | lift ${s ? ci(s.lift, s.seL, (v) => rr(v)) : "n/a"}`;
 const log = (s = "") => console.log(s);
 
 const main = async () => {
