@@ -127,8 +127,95 @@ export const parseSwissquote = (body: unknown, nowMs: number): Tick | null => {
 };
 
 // Gold's stored bars -> the chart's read, and its closed bars for the history
-export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false) =>
-  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt, limited });
+export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false, ticksFrom: string | null = null) =>
+  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt, limited, ticksFrom });
+
+// ---- #147: gold between Twelve Data's reads ---------------------------------------------
+//
+// The request (2026-09-28): 「チャートはいつもリアルタイムで表示するように」.
+// When gold's bars cannot be read again (the day's reads spent, Twelve Data
+// not answering), the chart goes on from the bars it last read with the
+// prices recorded since: Swissquote's mid, which the ticker reads every few
+// seconds while anyone has a live chart open, kept one row a minute in
+// public.gold_tick_bars. Only while someone was watching: a minute nobody
+// watched has no row, and a bar with no minute in it is not made.
+
+export interface TickMinute {
+  // the minute's start, ISO
+  minute: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  // the minute's last price's time, ISO
+  lastAt: string;
+}
+
+// The table's rows, oldest first; anything malformed left out
+export const parseTickMinutes = (rows: unknown): TickMinute[] => {
+  if (!Array.isArray(rows)) return [];
+  const out: TickMinute[] = [];
+  for (const r of rows) {
+    if (typeof r !== "object" || r === null) continue;
+    const x = r as Record<string, unknown>;
+    const [open, high, low, close] = [x.open, x.high, x.low, x.close].map(Number);
+    const minute = typeof x.minute === "string" ? x.minute : null;
+    const lastAt = typeof x.last_at === "string" ? x.last_at : null;
+    if (!minute || !lastAt || !Number.isFinite(Date.parse(minute)) || !Number.isFinite(Date.parse(lastAt))) continue;
+    if (![open, high, low, close].every((v) => Number.isFinite(v) && v > 0) || high < low) continue;
+    out.push({ minute, open, high, low, close, lastAt });
+  }
+  return out.sort((a, b) => Date.parse(a.minute) - Date.parse(b.minute));
+};
+
+const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
+// The bars read at `fetchedAt`, and after them the bars made from the
+// minutes recorded since, on the bars' own grid: the bar that was forming
+// when they were read goes on with the minutes after it (its open kept, its
+// high and low widened, its close the newest), each later bar is made of
+// its minutes alone. The bars are then as of the newest price recorded
+// (`fetchedAt` in the answer): a bar whose time is up by then is closed.
+// Unchanged when no minute was recorded since.
+export const extendWithTicks = (
+  bars: Candle[],
+  interval: string,
+  fetchedAt: string,
+  minutes: TickMinute[],
+): { bars: Candle[]; fetchedAt: string; ticksFrom: string | null } => {
+  const step = LIVE_STEP_MS[interval];
+  const readMs = Date.parse(fetchedAt);
+  const same = { bars, fetchedAt, ticksFrom: null };
+  if (step === undefined || !Number.isFinite(readMs) || bars.length === 0) return same;
+  const lastOpen = barOpenMs(bars[bars.length - 1].datetime);
+  if (!Number.isFinite(lastOpen)) return same;
+  // the minute the bars were read in, and those after it
+  const since = minutes.filter((m) => Date.parse(m.minute) + MIN > readMs && Date.parse(m.minute) >= lastOpen);
+  if (since.length === 0) return same;
+  const bucketOf = (ms: number) => lastOpen + Math.floor((ms - lastOpen) / step) * step;
+  const partial = lastOpen + step > readMs ? bars[bars.length - 1] : null;
+  const kept = partial ? bars.slice(0, -1) : bars;
+  const made = new Map<number, Candle>();
+  if (partial) made.set(lastOpen, { ...partial });
+  for (const m of since) {
+    const at = bucketOf(Date.parse(m.minute));
+    const cur = made.get(at);
+    made.set(
+      at,
+      cur
+        ? { ...cur, high: Math.max(cur.high, m.high), low: Math.min(cur.low, m.low), close: m.close }
+        : { datetime: utcStamp(at), open: m.open, high: m.high, low: m.low, close: m.close },
+    );
+  }
+  const added = [...made.entries()].sort((a, b) => a[0] - b[0]);
+  const newest = Math.max(...since.map((m) => Date.parse(m.lastAt)));
+  return {
+    bars: [...kept, ...added.map(([, c]) => c)],
+    fetchedAt: new Date(Math.max(newest, readMs)).toISOString(),
+    // the first bar with recorded prices in it (the one forming when read, if any)
+    ticksFrom: new Date(added[0][0]).toISOString(),
+  };
+};
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 const round = (v: number | null | undefined, d: number): number | null =>
@@ -179,6 +266,9 @@ export interface ReadSource {
   // #146: they could not be read again: the day's reads for this
   // timeframe are spent ("Twelve Data's day")
   limited?: boolean;
+  // #147: the first bar built from the prices recorded since (gold's
+  // extendWithTicks), ISO
+  ticksFrom?: string | null;
 }
 const GMO_SOURCE: ReadSource = { source: "gmo", feed: null, fetchedAt: null };
 
@@ -256,6 +346,7 @@ export const readBars = (
     feed: from.feed,
     fetched_at: from.fetchedAt,
     limited: from.limited === true,
+    ticks_from: from.ticksFrom ?? null,
   };
 };
 

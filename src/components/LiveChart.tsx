@@ -9,7 +9,6 @@ import {
   LIVE_INTERVALS,
   LIVE_PAIRS,
   TICK_MS,
-  applyTick,
   LiveChartError,
   dowTfsFor,
   fetchDow,
@@ -18,7 +17,10 @@ import {
   fetchTicks,
   historyBefore,
   intervalsFor,
+  tickLive,
+  withRead,
   type DowTf,
+  type LiveBars,
   type LiveRead,
   type Tick,
 } from "@/lib/liveChart";
@@ -212,12 +214,33 @@ const LiveChart = ({
     void tick();
     const id = window.setInterval(() => void tick(), TICK_MS);
     const clock = window.setInterval(() => setNow(Date.now()), 1_000);
+    // #147: back on screen, the price now, not up to a tick later
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setNow(Date.now());
+        void tick();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stop = true;
       window.clearInterval(id);
       window.clearInterval(clock);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [loadTicks]);
+
+  // #147: back on screen after a bar closed, the bars again at once (the
+  // browser may have held the timer while the page was hidden)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || !read?.nextClose) return;
+      const due = Date.parse(read.nextClose) + AFTER_CLOSE_MS;
+      if (Date.now() >= due && Date.now() - Date.parse(read.at) > AFTER_CLOSE_MS) void load(pair, interval);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [read, pair, interval, load]);
 
   // #124: the closed bars before the chart's, for Zone Shift's 200-bar
   // average — read while it is on, again for another pair or timeframe or
@@ -307,7 +330,23 @@ const LiveChart = ({
     return last === open ? open : null;
   })();
   const tickMs = tick?.time ? Date.parse(tick.time) : tickAt;
-  const candles = read && tick && tick.open && tickMs !== null ? applyTick(read.candles, tick.mid, formingOpen, tickMs, step) : read?.candles ?? [];
+  // #147: the bars the prices have made on top of the read — the forming
+  // bar's high and low kept, the next bar started as soon as its time comes
+  // (tickLive, withRead)
+  const chartKey = `${pair}|${interval}`;
+  const [live, setLive] = useState<{ key: string; bars: LiveBars } | null>(null);
+  useEffect(() => {
+    if (!read) return;
+    setLive((prev) => ({ key: chartKey, bars: withRead(read.candles, formingOpen, prev && prev.key === chartKey ? prev.bars : null) }));
+    // formingOpen is the read's own
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [read]);
+  useEffect(() => {
+    if (!tick || !tick.open || tickMs === null) return;
+    setLive((prev) => (prev && prev.key === chartKey ? { ...prev, bars: tickLive(prev.bars, tick.mid, tickMs, step) } : prev));
+  }, [tick, tickMs, chartKey, step]);
+  const shown: LiveBars | null = read ? (live && live.key === chartKey ? live.bars : { candles: read.candles, formingOpen }) : null;
+  const candles = shown?.candles ?? [];
   const d = priceDecimals(pair);
   const intervals = t.control.intervals as Record<string, string>;
   // #124: what Zone Shift is computed over besides the chart's candles
@@ -327,7 +366,8 @@ const LiveChart = ({
     const own = [read.latest.gainz, read.latest.rsiSar].filter((m): m is NonNullable<typeof m> => m !== null && (view === "both" || m.rule === view));
     return own.sort((a, b) => (a.datetime < b.datetime ? 1 : -1))[0] ?? null;
   })();
-  const nextCloseMs = read?.nextClose ? Date.parse(read.nextClose) : null;
+  // #147: the bar forming on screen, which may be one the prices started
+  const nextCloseMs = shown?.formingOpen != null ? shown.formingOpen + step : read?.nextClose ? Date.parse(read.nextClose) : null;
   const remain = nextCloseMs !== null ? Math.max(0, Math.round((nextCloseMs - now) / 1000)) : null;
   const remainText = remain === null ? "—" : remain >= 3600
     ? `${Math.floor(remain / 3600)}:${String(Math.floor((remain % 3600) / 60)).padStart(2, "0")}:${String(remain % 60).padStart(2, "0")}`
@@ -571,11 +611,12 @@ const LiveChart = ({
           {l.fallback(read.feed === "maintenance", read.fetchedAt ? jstDay(Date.parse(read.fetchedAt)) : "—")}
         </p>
       )}
-      {/* #146: gold's bars could not be read again today (the day's Twelve
-          Data reads for this timeframe are spent) */}
-      {read && read.feed === "gold" && read.limited && (
+      {/* #146, #147: gold's bars could not be read again (the day's Twelve
+          Data reads for this timeframe spent, or Twelve Data not answering):
+          from when they are made from Swissquote's prices */}
+      {read && read.feed === "gold" && (read.limited || read.ticksFrom) && (
         <p className="text-[11px] text-warning" data-testid="live-gold-limited">
-          {l.goldLimited(intervals[interval] ?? interval, read.fetchedAt ? jstDay(Date.parse(read.fetchedAt)) : "—")}
+          {l.goldFromTicks(intervals[interval] ?? interval, read.limited, read.ticksFrom ? jstDay(Date.parse(read.ticksFrom)) : null)}
         </p>
       )}
       {reopens && (
@@ -612,7 +653,7 @@ const LiveChart = ({
         heading={`${pair} · ${intervals[interval] ?? interval}`}
         seriesKey={`${pair}|${interval}`}
         // #119: the newest candle is still forming while a close is due
-        formingLast={formingOpen !== null}
+        formingLast={shown?.formingOpen != null}
         signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}

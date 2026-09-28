@@ -518,10 +518,10 @@ export const ja = {
     dowCompact: "ダウ",
     // #127
     goldNote:
-      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、1分足・5分足から先に止まります（止まった足はその旨を表示し、日本時間の朝9時に戻ります）。",
-    // #146
-    goldLimited: (tf: string, at: string) =>
-      `金の${tf}は、きょうの Twelve Data の読み込み上限に達したため、${at} に読んだ足までを表示しています（足は動きません）。上限は日本時間の朝9時に戻ります。時間足が長いほど上限は後まで残ります。`,
+      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、1分足・5分足から先に上限に達します。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。",
+    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's last read
+    goldFromTicks: (tf: string, limited: boolean, from: string | null) =>
+      `金の${tf}は、${limited ? "きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達した" : "Twelve Data から読み直せなかった"}ため、${from ? `${from} からの足` : "このあとの足"}を Swissquote の価格（数秒ごと）から作っています。価格はチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。`,
   },
 
   // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない

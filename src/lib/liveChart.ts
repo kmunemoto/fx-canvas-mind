@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import type { ChartSignalMark, NumericCandle } from "@/lib/types";
-import { priceDecimals } from "@/lib/candleTime";
+import { parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
 
 // #113: the live chart's two reads (supabase/functions/live-chart), as the
 // client accepts them. Anything malformed is dropped rather than drawn.
@@ -44,6 +44,9 @@ export interface LiveRead {
   // #146: Twelve Data's bars could not be read again: the day's reads for
   // this timeframe are spent, so these are the ones read at fetchedAt
   limited: boolean;
+  // #147: gold's bars from this one on are made from the prices recorded
+  // since Twelve Data was last read (ISO), or null
+  ticksFrom: string | null;
   // when the market reopens, while it may be shut
   reopens: string | null;
 }
@@ -129,6 +132,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     feed: typeof r.feed === "string" ? r.feed : null,
     fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
     limited: r.limited === true,
+    ticksFrom: typeof r.ticks_from === "string" ? r.ticks_from : null,
     reopens: typeof r.reopens === "string" ? r.reopens : null,
   };
 };
@@ -147,15 +151,55 @@ export const normalizeTicks = (value: unknown): Record<string, Tick> => {
   return out;
 };
 
-// The forming bar moved by a new price: its close is the price, its high and
-// low only widen. A price for a bar the chart does not have yet (the bar
-// closed and the next read has not arrived) changes nothing.
-export const applyTick = (candles: NumericCandle[], mid: number, formingOpenMs: number | null, tickMs: number, stepMs: number): NumericCandle[] => {
-  if (candles.length === 0 || formingOpenMs === null || !Number.isFinite(mid)) return candles;
-  if (!(tickMs >= formingOpenMs && tickMs < formingOpenMs + stepMs)) return candles;
+// #147: the chart in real time between reads (「チャートはいつもリアルタイム
+// で表示するように」; it had moved the forming bar only, with the newest
+// price alone). What the prices have made on top of the last read:
+//   * the forming bar keeps the highest and lowest price since (moving it
+//     with the newest price alone let a wick shrink back when the price
+//     turned);
+//   * once its time is up, the next price starts the next bar there and
+//     then, on the bars' own grid, instead of the chart standing still
+//     until the next read (a few seconds after each close, or longer when a
+//     read cannot be had);
+//   * a new read replaces all of it, except bars newer than its own (a read
+//     that could not be refreshed).
+export interface LiveBars {
+  candles: NumericCandle[];
+  // when the newest candle opened, while it is forming (ms)
+  formingOpen: number | null;
+}
+
+const stamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
+// One price at its own time
+export const tickLive = (live: LiveBars, mid: number, tickMs: number, stepMs: number): LiveBars => {
+  const { candles } = live;
+  if (candles.length === 0 || !Number.isFinite(mid) || mid <= 0 || !Number.isFinite(tickMs) || !(stepMs > 0)) return live;
   const last = candles[candles.length - 1];
-  const next = { ...last, close: mid, high: Math.max(last.high, mid), low: Math.min(last.low, mid) };
-  return [...candles.slice(0, -1), next];
+  const lastOpen = parseUtcCandleTime(last.datetime);
+  if (!Number.isFinite(lastOpen) || tickMs < lastOpen) return live;
+  if (live.formingOpen === lastOpen && tickMs < lastOpen + stepMs) {
+    if (mid === last.close && mid <= last.high && mid >= last.low) return live;
+    const next = { ...last, close: mid, high: Math.max(last.high, mid), low: Math.min(last.low, mid) };
+    return { candles: [...candles.slice(0, -1), next], formingOpen: lastOpen };
+  }
+  // a price inside the newest bar's time, when that bar is not forming
+  // (a read taken just as it closed): it is left as read
+  const k = Math.floor((tickMs - lastOpen) / stepMs);
+  if (k < 1) return live;
+  const open = lastOpen + k * stepMs;
+  return { candles: [...candles, { datetime: stamp(open), open: mid, high: mid, low: mid, close: mid }], formingOpen: open };
+};
+
+// A new read: its candles, and after them the bars the prices made that
+// are newer than its own
+export const withRead = (candles: NumericCandle[], formingOpen: number | null, prev: LiveBars | null): LiveBars => {
+  const base = { candles, formingOpen };
+  if (!prev || candles.length === 0) return base;
+  const newest = parseUtcCandleTime(candles[candles.length - 1].datetime);
+  if (!Number.isFinite(newest)) return base;
+  const newer = prev.candles.filter((c) => parseUtcCandleTime(c.datetime) > newest);
+  return newer.length === 0 ? base : { candles: [...candles, ...newer], formingOpen: prev.formingOpen };
 };
 
 export class LiveChartError extends Error {

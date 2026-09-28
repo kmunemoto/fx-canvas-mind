@@ -9,7 +9,9 @@
 // #127: gold (XAU/USD) reads its bars from Twelve Data and its price from
 // Swissquote (logic.ts, "gold"). #146: every pair on every timeframe, 1 and
 // 5 minutes too; Twelve Data's reads counted per day (logic.ts, "Twelve
-// Data's day").
+// Data's day"). #147: gold's price recorded a minute at a time, and its bars
+// going on from it when Twelve Data cannot be read again (logic.ts, "gold
+// between Twelve Data's reads").
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -47,13 +49,15 @@ import {
   parseTwelveData,
   twelveCapFor,
   twelveDataUrl,
+  extendWithTicks,
+  parseTickMinutes,
 } from "./logic.ts";
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v7-2026-09-28T06:00:00Z";
+const FUNCTION_VERSION = "live-chart-v8-2026-09-28T08:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -201,9 +205,26 @@ Deno.serve(async (req: Request) => {
         return stored;
       }
     };
-    // #127: gold's bars, from the table while no bar has closed since
-    const goldBars = (interval: string) =>
-      fallbackBars(GOLD, interval, (t) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs)), GOLD_BARS);
+    // #127: gold's bars, from the table while no bar has closed since.
+    // #147: bars that could not be read again go on from the prices
+    // recorded since they were read
+    const goldBars = async (
+      interval: string,
+    ): Promise<{ bars: Candle[]; fetchedAt: string; limited?: boolean; ticksFrom?: string | null } | null> => {
+      const fresh = (t: number) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs));
+      const fb = await fallbackBars(GOLD, interval, fresh, GOLD_BARS);
+      if (!fb || fresh(Date.parse(fb.fetchedAt))) return fb;
+      try {
+        const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
+        const res = await rest(`gold_tick_bars?minute=gte.${encodeURIComponent(from)}&select=minute,open,high,low,close,last_at&order=minute.asc&limit=5000`);
+        if (!res.ok) return fb;
+        const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(await res.json().catch(() => null)));
+        return { ...fb, ...ext };
+      } catch (err) {
+        console.error("gold ticks read failed:", err);
+        return fb;
+      }
+    };
     const unavailable = () =>
       maintenance
         ? json({ ok: false, error: "maintenance", reopens, version: FUNCTION_VERSION }, 503)
@@ -222,6 +243,16 @@ Deno.serve(async (req: Request) => {
         };
         const [raw, gold] = await Promise.all([fetcher(TICKER_URL), goldQuote()]);
         const ticks = { ...parseTicker(raw), ...(gold ? { [GOLD]: gold } : {}) };
+        // #147: gold's price kept, a minute at a time, for its bars between
+        // Twelve Data's reads (only a price from a market trading now)
+        if (gold && gold.open && gold.time) {
+          try {
+            const r = await rest("rpc/record_gold_tick", { method: "POST", body: JSON.stringify({ p_at: gold.time, p_mid: gold.mid }) });
+            if (!r.ok) console.error("gold tick record failed:", r.status, await r.text().catch(() => ""));
+          } catch (err) {
+            console.error("gold tick record failed:", err);
+          }
+        }
         if (Object.keys(ticks).length === 0) return unavailable();
         tickerCache = { at: nowMs, body: { ok: true, version: FUNCTION_VERSION, at: new Date(nowMs).toISOString(), ticks } };
       }
@@ -245,7 +276,7 @@ Deno.serve(async (req: Request) => {
       if (isGold(pair)) {
         const fb = await goldBars(interval);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
-        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true) };
+        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true, fb.ticksFrom ?? null) };
         if (barsCache.size > 100) barsCache.clear();
         barsCache.set(key, { at: nowMs, body: out });
         return json(out);
