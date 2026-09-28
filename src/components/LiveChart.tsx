@@ -39,7 +39,7 @@ const savedPair = (p: string | null): string | null => (p && LIVE_PAIRS.includes
 const savedInterval = (iv: string | null, pair: string): string | null => (iv && intervalsFor(pair).includes(iv) ? iv : null);
 const savedView = (v: string | null): LiveView | null => (v && (VIEWS as string[]).includes(v) ? (v as LiveView) : null);
 
-const STEP_MS: Record<string, number> = { "1min": 60_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
+const STEP_MS: Record<string, number> = { "1min": 60_000, "5min": 300_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
 // Asked again this long after a bar closes, so the feed has it
 const AFTER_CLOSE_MS = 4_000;
 // Asked again this often while the feed cannot be read (GMO's maintenance,
@@ -99,8 +99,8 @@ const LiveChart = ({
   // what is chosen on the chart is kept
   const choose = (next: { pair?: string; interval?: string; view?: LiveView }) => {
     const p = next.pair ?? pair;
-    // #127: gold has no 1-minute chart: another pair's timeframe it lacks
-    // becomes the base one
+    // #127: a timeframe the pair does not have becomes the base one (#146:
+    // every pair has every timeframe now; a saved one from elsewhere may not)
     const want = next.interval ?? interval;
     const iv = intervalsFor(p).includes(want) ? want : BASE_INTERVAL;
     const v = next.view ?? view;
@@ -569,6 +569,13 @@ const LiveChart = ({
       {fallback && read && (
         <p className="text-[11px] text-warning" data-testid="live-fallback">
           {l.fallback(read.feed === "maintenance", read.fetchedAt ? jstDay(Date.parse(read.fetchedAt)) : "—")}
+        </p>
+      )}
+      {/* #146: gold's bars could not be read again today (the day's Twelve
+          Data reads for this timeframe are spent) */}
+      {read && read.feed === "gold" && read.limited && (
+        <p className="text-[11px] text-warning" data-testid="live-gold-limited">
+          {l.goldLimited(intervals[interval] ?? interval, read.fetchedAt ? jstDay(Date.parse(read.fetchedAt)) : "—")}
         </p>
       )}
       {reopens && (

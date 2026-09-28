@@ -7,7 +7,20 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
 import { applyTick, normalizeLiveRead, normalizeTicks, type LiveRead } from "../lib/liveChart";
-import { CHART_BARS, fallbackRead, isMaintenance, liveRead, parseTicker, parseTwelveData, splitBars } from "../../supabase/functions/live-chart/logic";
+import {
+  CHART_BARS,
+  HISTORY_BARS,
+  LIVE_INTERVALS,
+  READ_BARS,
+  fallbackRead,
+  fetchLiveQuotes,
+  isLiveInterval,
+  isMaintenance,
+  liveRead,
+  parseTicker,
+  parseTwelveData,
+  splitBars,
+} from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 
 const M15 = 15 * 60_000;
@@ -78,6 +91,49 @@ describe("#113 the live read (live-chart/logic.ts)", () => {
     expect(t["USD/JPY"].mid).toBeCloseTo(150.1215, 10);
     expect(t["GBP/USD"].open).toBe(false);
     expect(parseTicker(null)).toEqual({});
+  });
+});
+
+describe("#146 the 5-minute chart for every pair", () => {
+  // GMO's 5-minute bars, one JST day file (06:00 JST on) at a time
+  const M5 = 5 * 60_000;
+  const dayFile = (key: string, side: "bid" | "ask") => {
+    const start = Date.parse(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T06:00:00+09:00`);
+    return {
+      status: 0,
+      data: Array.from({ length: 288 }, (_, i) => {
+        const p = 150 + Math.sin(i / 9) * 0.2 + (side === "ask" ? 0.003 : 0);
+        return { openTime: String(start + i * M5), open: String(p), high: String(p + 0.02), low: String(p - 0.02), close: String(p + 0.01) };
+      }),
+    };
+  };
+  // a Thursday, 14:02 JST
+  const NOW = Date.parse("2026-09-24T05:02:00Z");
+
+  it("is offered beside the others, in order", () => {
+    expect(LIVE_INTERVALS).toEqual(["1min", "5min", "15min", "1h", "4h", "1day"]);
+    expect(isLiveInterval("5min")).toBe(true);
+  });
+
+  it("reads GMO's 5-minute bars for the chart and for the history", async () => {
+    const asked: string[] = [];
+    const fetcher = async (url: string) => {
+      const u = new URL(url);
+      asked.push(u.searchParams.get("interval")!);
+      return dayFile(u.searchParams.get("date")!, u.searchParams.get("priceType")!.toLowerCase() as "bid" | "ask");
+    };
+    const bars = (await fetchLiveQuotes("USD/JPY", "5min", NOW, Date.now() + 60_000, fetcher))!;
+    expect(new Set(asked)).toEqual(new Set(["5min"]));
+    expect(bars).toHaveLength(READ_BARS + 1);
+    const times = bars.map((b) => Date.parse(b.datetime));
+    expect(times.slice(1).every((t, i) => t - times[i] === M5)).toBe(true);
+    // the newest is the one forming now (14:00 JST)
+    expect(times.at(-1)).toBe(NOW - 2 * 60_000);
+    const r = liveRead("USD/JPY", "5min", bars, NOW);
+    expect(r.candles).toHaveLength(CHART_BARS + 1);
+    expect(r.next_close).toBe(new Date(NOW + 3 * 60_000).toISOString());
+    const history = (await fetchLiveQuotes("USD/JPY", "5min", NOW, Date.now() + 60_000, fetcher, HISTORY_BARS + 1))!;
+    expect(history).toHaveLength(HISTORY_BARS + 1);
   });
 });
 
@@ -176,6 +232,11 @@ describe("#113 the live chart card", () => {
     await waitFor(() => expect(screen.getByTestId("live-closed").textContent).toContain("市場休止中"));
     fireEvent.click(screen.getByTestId("live-interval-1min"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "1min"));
+    // #146: and the 5-minute chart, between the 1- and 15-minute ones
+    const tfs = screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-interval-"));
+    expect(tfs).toEqual(["1min", "5min", "15min", "1h", "4h", "1day"].map((tf) => `live-interval-${tf}`));
+    fireEvent.click(screen.getByTestId("live-interval-5min"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "5min"));
   });
 
   it("reads again when the bar closes and says when a new signal appeared", async () => {

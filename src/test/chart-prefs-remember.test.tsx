@@ -118,8 +118,17 @@ describe("#141 the live chart opens where it was left", () => {
   });
 
   it("uses a saved choice only if the chart still offers it", async () => {
-    // gold has no 1-minute chart; an unknown pair and signal fall back
+    // #146: gold's 1-minute chart is offered now
     setChartPrefs({ live: { pair: "XAU/USD", interval: "1min", view: "gainz" } });
+    reload();
+    const g = loaders();
+    const gold = render(<LiveChart loadBars={g.loadBars} loadTicks={g.loadTicks} />);
+    await waitFor(() => expect(g.loadBars).toHaveBeenCalled());
+    expect(g.loadBars.mock.calls[0]).toEqual(["XAU/USD", "1min"]);
+    gold.unmount();
+
+    // a timeframe the chart does not offer falls back
+    setChartPrefs({ live: { pair: "XAU/USD", interval: "3min", view: "gainz" } });
     reload();
     const a = loaders();
     const first = render(<LiveChart loadBars={a.loadBars} loadTicks={a.loadTicks} />);
@@ -136,13 +145,16 @@ describe("#141 the live chart opens where it was left", () => {
     expect(selected("live-view-gainz")).toBe("true");
   });
 
-  it("switching to gold from its missing timeframe keeps the base one", async () => {
+  it("#146: switching to gold keeps the 1- or 5-minute timeframe (every pair has them now)", async () => {
     const a = loaders();
     render(<LiveChart loadBars={a.loadBars} loadTicks={a.loadTicks} />);
-    fireEvent.click(screen.getByTestId("live-interval-1min"));
+    fireEvent.click(screen.getByTestId("live-interval-5min"));
     fireEvent.click(screen.getByTestId("live-pair-XAU/USD"));
-    await waitFor(() => expect(a.loadBars).toHaveBeenCalledWith("XAU/USD", "4h"));
-    expect(stored().live).toMatchObject({ pair: "XAU/USD", interval: "4h" });
+    await waitFor(() => expect(a.loadBars).toHaveBeenCalledWith("XAU/USD", "5min"));
+    expect(stored().live).toMatchObject({ pair: "XAU/USD", interval: "5min" });
+    fireEvent.click(screen.getByTestId("live-interval-1min"));
+    await waitFor(() => expect(a.loadBars).toHaveBeenCalledWith("XAU/USD", "1min"));
+    expect(stored().live).toMatchObject({ pair: "XAU/USD", interval: "1min" });
   });
 
   it("a timeframe the page asks for comes first, and is not kept until something is chosen", async () => {

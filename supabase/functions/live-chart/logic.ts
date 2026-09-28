@@ -29,13 +29,15 @@ import { dowTheory } from "../_shared/dow.ts";
 
 // #127: and gold (XAU/USD), which GMO does not carry — see "gold" below
 export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"] as const;
-export const LIVE_INTERVALS = ["1min", "15min", "1h", "4h", "1day"] as const;
+// #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、
+// 全てのペアに」)
+export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"] as const;
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 export const LIVE_STEP_MS: Record<string, number> = {
   "1min": MIN,
-  // #129: read for the Dow theory panel, not charted
+  // #129: read for the Dow theory panel; #146: charted too
   "5min": 5 * MIN,
   "15min": 15 * MIN,
   "1h": HOUR,
@@ -65,12 +67,30 @@ export const isLiveInterval = (v: unknown): v is string => typeof v === "string"
 //     public.live_chart_fallback and read again once a bar has closed since;
 //   * price: Swissquote's public quotes (no key), every few seconds with the
 //     FX ticker, moving the forming bar as GMO's price does for the pairs.
-// No 1-minute chart: a new bar a minute would need up to 1,440 reads a day of
-// a key that allows 800 and is shared with the analysis.
+// #146: every timeframe, the 1- and 5-minute ones too (they had been left
+// out for the key's daily allowance; see "Twelve Data's day" below).
 export const GOLD = "XAU/USD";
 export const isGold = (pair: string): boolean => pair.toUpperCase() === GOLD;
-export const GOLD_INTERVALS = ["15min", "1h", "4h", "1day"] as const;
+export const GOLD_INTERVALS = LIVE_INTERVALS;
 export const intervalsFor = (pair: string): readonly string[] => (isGold(pair) ? GOLD_INTERVALS : LIVE_INTERVALS);
+
+// ---- #146: Twelve Data's day ---------------------------------------------------------
+//
+// The key allows 800 reads a day (its day ends at 00:00 UTC, 9:00 in
+// Japan) and eight a minute. Gold's bars are read again once a bar has
+// closed, so a 1-minute chart left open all day would read 1,440 times and
+// a 5-minute one 288 — the key's day gone by the afternoon, and with it
+// every gold chart and the pairs' fallback while GMO is down. So the live
+// chart counts its reads (public.twelve_data_usage, the UTC day's count)
+// and stops reading for a timeframe once the count reaches that
+// timeframe's cap: the 1-minute one first, the 5-minute one next, the rest
+// last. Past its cap a chart shows the bars it last read and says so. The
+// 80 left under the key's 800 are for the other functions' reads (the
+// analysis's, now rare), which are not counted here.
+export const TWELVE_DAILY_LIMIT = 800;
+export const TWELVE_CAPS: Record<string, number> = { "1min": 450, "5min": 600 };
+export const TWELVE_CAP_REST = 720;
+export const twelveCapFor = (interval: string): number => TWELVE_CAPS[interval] ?? TWELVE_CAP_REST;
 // Bars read at once: enough for the chart, its signals and Zone Shift's history
 export const GOLD_BARS = 800;
 // Stored gold bars are fresh while no bar has closed since they were read
@@ -107,8 +127,8 @@ export const parseSwissquote = (body: unknown, nowMs: number): Tick | null => {
 };
 
 // Gold's stored bars -> the chart's read, and its closed bars for the history
-export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string) =>
-  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt });
+export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false) =>
+  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt, limited });
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 const round = (v: number | null | undefined, d: number): number | null =>
@@ -156,6 +176,9 @@ export interface ReadSource {
   feed: string | null;
   // when the fallback bars were fetched, ISO
   fetchedAt: string | null;
+  // #146: they could not be read again: the day's reads for this
+  // timeframe are spent ("Twelve Data's day")
+  limited?: boolean;
 }
 const GMO_SOURCE: ReadSource = { source: "gmo", feed: null, fetchedAt: null };
 
@@ -232,6 +255,7 @@ export const readBars = (
     source: from.source,
     feed: from.feed,
     fetched_at: from.fetchedAt,
+    limited: from.limited === true,
   };
 };
 
@@ -241,10 +265,10 @@ export type LiveRead = ReturnType<typeof liveRead>;
 //
 // _shared/dow.ts reads each timeframe's closed bars; this answers for all of
 // them at once, so the chart can say where each stands and draw the higher
-// ones' lines. Gold has no 5-minute read (Twelve Data's free allowance), as
-// it has no 1-minute chart.
+// ones' lines. #146: gold's 5-minute one too, now that it has the chart
+// (it had been left out for Twelve Data's allowance).
 export const DOW_TFS = ["4h", "1h", "15min", "5min"] as const;
-export const dowTfsFor = (pair: string): readonly string[] => (isGold(pair) ? ["4h", "1h", "15min"] : DOW_TFS);
+export const dowTfsFor = (_pair: string): readonly string[] => DOW_TFS;
 // closed bars read per timeframe (the swings need a few dozen; the state
 // is carried from the first of them)
 export const DOW_BARS = 300;
@@ -290,10 +314,18 @@ export const dowOf = (pair: string, tf: string, closed: Candle[]) => {
   };
 };
 
+// #146: a stored bar that was still forming when the bars were read is not
+// a closed bar once its time is up: what was read of it stops where the
+// read did. Until the bars are read again it is left out.
+const closedBy = (openMs: number, step: number, nowMs: number, fetchedAt: string | null): boolean => {
+  const read = fetchedAt === null ? Number.NaN : Date.parse(fetchedAt);
+  return openMs + step <= nowMs && !(Number.isFinite(read) && openMs + step > read);
+};
+
 // The closed bars of a read (mid candles), the forming one left out
-export const closedOf = (bars: Candle[], tf: string, nowMs: number): Candle[] => {
+export const closedOf = (bars: Candle[], tf: string, nowMs: number, fetchedAt: string | null = null): Candle[] => {
   const step = LIVE_STEP_MS[tf] ?? 0;
-  return bars.filter((c) => barOpenMs(c.datetime) + step <= nowMs);
+  return bars.filter((c) => closedBy(barOpenMs(c.datetime), step, nowMs, fetchedAt));
 };
 
 // #124: the closed bars (mid, rounded as the chart's), oldest first — the
@@ -302,10 +334,8 @@ export const historyRead = (pair: string, interval: string, quotes: QuoteCandle[
   historyOf(pair, interval, splitBars(quotes, interval, nowMs).closed, nowMs);
 
 // #127: the same from mid candles (gold's), those not closed left out
-export const historyOfBars = (pair: string, interval: string, bars: Candle[], nowMs: number) => {
-  const step = LIVE_STEP_MS[interval] ?? 0;
-  return historyOf(pair, interval, bars.filter((c) => barOpenMs(c.datetime) + step <= nowMs), nowMs);
-};
+export const historyOfBars = (pair: string, interval: string, bars: Candle[], nowMs: number, fetchedAt: string | null = null) =>
+  historyOf(pair, interval, closedOf(bars, interval, nowMs, fetchedAt), nowMs);
 
 const historyOf = (pair: string, interval: string, closed: Candle[], nowMs: number) => {
   const d = decimalsOf(pair);
@@ -359,8 +389,10 @@ export const fallbackRead = (pair: string, interval: string, bars: Candle[], now
   for (const c of bars) {
     const t = barOpenMs(c.datetime);
     if (!Number.isFinite(t) || step === undefined) continue;
-    if (t + step <= nowMs) closed.push(c);
-    else if (t <= nowMs) forming = c;
+    // #146: one still forming when the bars were read is left out once its
+    // time is up (closedBy)
+    if (closedBy(t, step, nowMs, from.fetchedAt)) closed.push(c);
+    else if (t <= nowMs && nowMs < t + step) forming = c;
   }
   return readBars(pair, interval, closed, forming, null, nowMs, from);
 };
