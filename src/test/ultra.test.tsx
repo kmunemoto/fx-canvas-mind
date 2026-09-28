@@ -194,12 +194,21 @@ describe("#151 ULTRA on the chart", () => {
     expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4247.39・TP1 4262.39・TP2 4267.39・TP3 4272.39");
     expect(screen.queryByTestId("chart-ultra-tag-entry")).toBeNull();
     // the table: every signal from bar 0, the ones before the chart too
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1990%");
-    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2660%");
-    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3330%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り110%");
-    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計: 10");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率: 90%");
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 9 90%");
+    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 6 60%");
+    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 3 30%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 1 10%");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 10");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 90%");
+    // #152: the tally is a row above the chart, not over it
+    const table = screen.getByTestId("chart-ultra-table");
+    expect(table.closest("svg")).toBeNull();
+    expect(table.compareDocumentPosition(screen.getByTestId("chart-candles")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the newest signal has ended: no room is left right of the newest bar
+    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const lastBody = bodies[bodies.length - 1];
+    const plotRight = Number(screen.getByTestId("chart-candles").closest("svg")!.getAttribute("viewBox")!.split(" ")[2]);
+    expect(plotRight - (Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width")))).toBeLessThan(80);
     const note = screen.getByTestId("chart-ultra-legend").textContent!;
     for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "約67%", "測っていません"]) expect(note).toContain(part);
   });
@@ -214,15 +223,22 @@ describe("#151 ULTRA on the chart", () => {
     // the sell on 391 at 149.7491: its stop 10 pips above, its targets 5, 10 and 15 below
     const box = screen.getByTestId("chart-ultra-box");
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
-    expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry: 149.749");
-    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL: 149.849");
-    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1: 149.699");
-    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2: 149.649");
-    expect(screen.getByTestId("chart-ultra-tag-tp3").textContent).toBe("TP3: 149.599");
+    expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 149.749");
+    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 149.849");
+    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 149.699");
+    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 149.649");
+    expect(screen.getByTestId("chart-ultra-tag-tp3").textContent).toBe("TP3 149.599");
+    // #152: the prices sit in room left right of the newest candle, not over it
+    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const lastBody = bodies[bodies.length - 1];
+    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
+    for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) {
+      expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
+    }
     // 5, 4, 4 and 16 of 21 (the two still open not counted)
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1524%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り1676%");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率: 24%");
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 5 24%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 16 76%");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 24%");
   });
 
   it("the forming bar is not judged: its reach of TP1 is neither marked nor counted", () => {
@@ -234,8 +250,8 @@ describe("#151 ULTRA on the chart", () => {
     render(<PriceChart candles={b} pair="XAU/USD" formingLast />);
     expect(screen.getAllByTestId("chart-ultra-signal-BUY")).toHaveLength(1);
     expect(screen.queryByTestId("chart-ultra-hit-TP1")).toBeNull();
-    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計: 0");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率: —");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 0");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 —");
   });
 
   it("switched off: nothing drawn, and remembered", () => {
