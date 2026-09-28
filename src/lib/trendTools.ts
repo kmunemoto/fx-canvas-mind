@@ -12,45 +12,13 @@
 // Shown on the chart only: no signal, alert or record is judged on them,
 // and none has been measured on past data.
 
+// #155: Pine's averages moved to supabase/functions/_shared/pine.ts, shared
+// with the functions
+import { pineEma, pineRma, type Series } from "../../supabase/functions/_shared/pine";
+export { pineEma, pineRma };
+export type { Series };
+
 type Bar = { high: number; low: number; close: number };
-export type Series = Array<number | null>;
-
-// Pine's ta.ema over a series that may start with nothing: the simple
-// average of the first `n` values, then alpha = 2 / (n + 1)
-export const pineEma = (xs: ReadonlyArray<number | null>, n: number): Series => pineSmoothed(xs, n, 2 / (n + 1));
-
-// Pine's ta.rma (Wilder's): the same with alpha = 1 / n
-export const pineRma = (xs: ReadonlyArray<number | null>, n: number): Series => pineSmoothed(xs, n, 1 / n);
-
-const pineSmoothed = (xs: ReadonlyArray<number | null>, n: number, alpha: number): Series => {
-  const out: Series = new Array(xs.length).fill(null);
-  let prev: number | null = null;
-  for (let i = 0; i < xs.length; i++) {
-    const v = xs[i];
-    if (prev === null) {
-      if (i < n - 1) continue;
-      let s = 0;
-      let ok = true;
-      for (let k = i - n + 1; k <= i; k++) {
-        const w = xs[k];
-        if (w === null || w === undefined || !Number.isFinite(w)) {
-          ok = false;
-          break;
-        }
-        s += w;
-      }
-      if (!ok) continue;
-      prev = s / n;
-    } else if (v === null || v === undefined || !Number.isFinite(v)) {
-      prev = null;
-      continue;
-    } else {
-      prev = alpha * v + (1 - alpha) * prev;
-    }
-    out[i] = prev;
-  }
-  return out;
-};
 
 // ---- MACD (TradingView's built-in: 12, 26, 9; both averages EMAs) ----------
 

@@ -1748,18 +1748,18 @@ export const ja = {
   alerts: {
     title: "メール通知（売買サイン）",
     intro: (email: string) =>
-      `チェックしたチャートで RSI＋パラボリックSAR の買い（BUY）・売り（SELL）のサインが出たら、${email} にメールでお知らせします。足が確定してから数分で届きます。`,
+      `チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA）の買い（BUY）・売り（SELL）のサインが出たら、${email} にメールでお知らせします。足が確定してから数分で届きます。`,
     introNoEmail:
-      "チェックしたチャートで RSI＋パラボリックSAR の買い（BUY）・売り（SELL）のサインが出たら、ログイン中のメールアドレスにお知らせします。",
+      "チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA）の買い（BUY）・売り（SELL）のサインが出たら、ログイン中のメールアドレスにお知らせします。",
     proOnly: "メール通知は Light プラン（月額2,980円）の機能です。",
     notConfigured: "メールの送信設定がまだ済んでいません。サインは下の履歴に記録されますが、今はメールが届きません。",
     loading: "読み込み中…",
     loadFailed: "通知の設定を読み込めませんでした",
     saveFailed: "保存できませんでした",
     pairHeader: "通貨ペア",
-    intervals: { "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
-    // #112: どちらのルールの通知か
-    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型" } as Record<string, string>,
+    intervals: { "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    // #112: どちらのルールの通知か。#155: Q-Trend と ULTRA も
+    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA" } as Record<string, string>,
     ruleTabsLabel: "通知するサインの種類",
     gainzIntro:
       "GA型は GainzAlgo V2 Alpha 型のサインです（包み足・実体が大きい・RSI 40・5本前との比較、損切り ATR×1・利確はその2倍）。GainzAlgo Suite の画面の設定に合わせた再現を、#132 で過去のチャートで勝率が最も高かった数字（実体7割・RSI 40・5本前）に変えたもので、中身は公開されていないため同じサインになるとは限りません。",
@@ -1768,7 +1768,22 @@ export const ja = {
       "15分足で1ペアあたり2〜3日に1回ほど出ます（#132 の設定で、以前の約6分の1）。",
       "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインはメールしません（履歴には残ります）。",
     ],
-    ruleTag: { rsi_sar: "", gainz: "（GA型）" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: "（GA型）", qtrend: "（Q-Trend）", ultra: "（ULTRA）" } as Record<string, string>,
+    // #155
+    strongTag: "・STRONG",
+    indicatorIntro: {
+      qtrend: "Q-Trend（tarasenko_ の公開コードを移植、設定 200・14・1）の BUY・SELL・STRONG のサインです。リアルタイムチャートに出る印と同じものが届きます。",
+      ultra: "ULTRA（F-INVEST の動画の設定と印から作ったもの）の Buy ☆・Sell ☆ のサインです。リアルタイムチャートに出る印と同じもので、メールに損切り（10pips、金は10ドル）と利確1〜3（5・10・15）の目安が入ります。",
+    } as Record<string, string>,
+    allPairs: "すべての銘柄",
+    indicatorHourOnly: "GMOコインにない銘柄は、1時間足・4時間足・日足だけです",
+    indicatorNotes: [
+      "リアルタイムチャートと同じ足・同じ計算で判定します。足が確定してから1〜3分ほどで届きます（GMOコインにない銘柄は、Twelve Data の読み込みを分けて行うため最大30分ほど遅れることがあります）。",
+      "GMOコインにない16銘柄（ドル/カナダドル・香港ドル/円などの15ペアと金）は、Twelve Data の無料枠（1日800回、チャートと共有）で足を読むため、1時間足・4時間足・日足だけです。",
+      "5分足・15分足を全銘柄でオンにすると、1日に数百通になることがあります。メールの送信サービス（Resend）の無料プランは1日100通・月3,000通までで、超えた分は「送信失敗」になります。",
+      "Q-Trend も ULTRA も、過去のチャートでの検証はしていません。通知は注文の指示ではありません。成績の記録（勝ち負け）は付けていません。",
+      "市場が閉まっている時間（週末など）は判定しません。",
+    ],
     notes: [
       "15分足はスプレッドだけで損切り幅の約14%を毎回失います。4時間足（約6%）・日足の方が負担は小さくなります。",
       "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインは、過去の検証で損失が大きかったためメールしません（履歴には残ります）。",

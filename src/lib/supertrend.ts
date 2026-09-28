@@ -14,6 +14,11 @@
 // line where it turns, and the space between the line and ohlc4 tinted.
 // Shown on the chart only: no signal, alert or record is judged on it.
 
+import { pineAtr } from "../../supabase/functions/_shared/pine";
+
+// #155: moved to supabase/functions/_shared/pine.ts, shared with the functions
+export { pineAtr };
+
 export interface SupertrendParams {
   period: number;
   multiplier: number;
@@ -31,25 +36,6 @@ export interface SupertrendRead {
   signals: Array<{ i: number; side: "BUY" | "SELL"; price: number }>;
 }
 
-// Pine's atr(): Wilder's RMA of the true range, seeded with the simple
-// average of the first `n` (the first bar's true range is its high − low)
-export const pineAtr = (bars: ReadonlyArray<Bar>, n: number): Array<number | null> => {
-  let prev: number | null = null;
-  let sum = 0;
-  return bars.map((b, i) => {
-    const tr = i === 0
-      ? b.high - b.low
-      : Math.max(b.high - b.low, Math.abs(b.high - bars[i - 1].close), Math.abs(b.low - bars[i - 1].close));
-    if (prev === null) {
-      sum += tr;
-      if (i < n - 1) return null;
-      prev = sum / n;
-      return prev;
-    }
-    prev = (tr + (n - 1) * prev) / n;
-    return prev;
-  });
-};
 
 // `lastClosed`: the index of the newest closed bar — a turn on a bar still
 // forming is not marked, and the line is not drawn there (it can still

@@ -305,14 +305,15 @@ const decimalsOf = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5
 const pipOf = (pair: string) => (pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001);
 const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)}`);
 
+// #155: the 5-minute chart too (Q-Trend's and ULTRA's alerts)
 const TF_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
-  en: { "15min": "15-minute", "1h": "1-hour", "4h": "4-hour", "1day": "daily" },
+  ja: { "5min": "5分足", "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
+  en: { "5min": "5-minute", "15min": "15-minute", "1h": "1-hour", "4h": "4-hour", "1day": "daily" },
 };
 export const tfLabel = (lang: Lang, interval: string) => TF_LABEL[lang][interval] ?? interval;
 
 // "2026-09-25 19:15"
-const clock = (ms: number, offsetHours: number) =>
+export const clock = (ms: number, offsetHours: number) =>
   new Date(ms + offsetHours * HOUR).toISOString().slice(0, 16).replace("T", " ");
 
 export interface Mail {
@@ -325,8 +326,8 @@ const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // Paragraphs, rendered twice from the same source so the text and the HTML
-// part can never say different things
-const assemble = (subject: string, paragraphs: string[]): Mail => ({
+// part can never say different things (#155: Q-Trend's and ULTRA's too)
+export const assemble = (subject: string, paragraphs: string[]): Mail => ({
   subject,
   text: paragraphs.join("\n\n"),
   html: [
@@ -475,27 +476,28 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
   ]);
 };
 
-const RULE_LABEL: Record<Lang, Record<RuleKey, string>> = {
-  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型" },
-  en: { rsi_sar: "RSI + SAR", gainz: "GA style" },
+// #155: and Q-Trend's and ULTRA's
+const RULE_LABEL: Record<Lang, Record<string, string>> = {
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA" },
 };
 
-export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: RuleKey }>, lang: Lang): Mail => {
-  const label = (s: { pair: string; interval: string; rule?: RuleKey }) => {
-    const rule = RULE_LABEL[lang][s.rule ?? "rsi_sar"];
+export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: string }>, lang: Lang): Mail => {
+  const label = (s: { pair: string; interval: string; rule?: string }) => {
+    const rule = RULE_LABEL[lang][s.rule ?? "rsi_sar"] ?? RULE_LABEL[lang].rsi_sar;
     return lang === "en" ? `${s.pair} ${tfLabel("en", s.interval)} (${rule})` : `${s.pair} ${tfLabel("ja", s.interval)}（${rule}）`;
   };
   if (lang === "en") {
     const list = subs.length === 0 ? "none yet" : subs.map(label).join(", ");
     return assemble("[Sextant] Test email alert", [
-      "This is a test. When the rule you chose (RSI + Parabolic SAR, or the GA-style rule) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
+      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend or ULTRA) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
       `Charts you follow: ${list}`,
       `Settings → Email alerts in the app:\n${APP_URL}`,
     ]);
   }
   const list = subs.length === 0 ? "まだありません" : subs.map(label).join("、");
   return assemble("【Sextant】メール通知のテスト", [
-    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、または GA型）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
+    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
     `登録中のチャート: ${list}`,
     `アプリの「設定」→「メール通知」:\n${APP_URL}`,
   ]);
