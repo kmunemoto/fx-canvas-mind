@@ -55,6 +55,41 @@ export interface QTrendRead {
   signals: Array<{ i: number; side: "BUY" | "SELL"; strong: boolean }>;
 }
 
+// #148: where the line's computation starts. The line is built step by
+// step from its first bar, so the same bars read from another first bar
+// give another line, and other labels: on the gold 1-hour bars read on
+// 2026-09-28, starting 1 to 48 hours later moved or removed a label in the
+// chart's 120 bars in 44 of the 48 cases. The live chart reads the bars
+// before its own again each time it is opened, from a first bar that moves
+// with the clock — so a label seen live could be elsewhere after a reload.
+// The owner: 「1は直して」.
+//
+// So the computation starts at a fixed time instead: the first bar at or
+// after the earliest multiple of `period` bars' time (from 1970-01-01 UTC)
+// that the bars read reach back to. Opened again, the chart starts there
+// again and draws the same line and labels, until the bars read no longer
+// reach it (once every `period` bars' time), when it moves to the next
+// multiple. With fewer than `period` bars left before the chart's first
+// bar there (a short history), it starts at the first bar read, as before.
+export const anchoredStart = (openTimes: ReadonlyArray<number>, stepMs: number, firstShown: number, period: number = QT_DEFAULTS.period): number => {
+  const t0 = openTimes[0];
+  if (!(stepMs > 0) || !Number.isFinite(t0)) return 0;
+  const grid = period * stepMs;
+  const at = Math.ceil(t0 / grid) * grid;
+  const s = openTimes.findIndex((t) => t >= at);
+  return s >= 0 && s <= firstShown - period ? s : 0;
+};
+
+// the bars' length: the shortest gap between two of them (a weekend's is longer)
+export const barStepMs = (openTimes: ReadonlyArray<number>): number => {
+  let step = Infinity;
+  for (let i = 1; i < openTimes.length; i++) {
+    const d = openTimes[i] - openTimes[i - 1];
+    if (Number.isFinite(d) && d > 0 && d < step) step = d;
+  }
+  return Number.isFinite(step) ? step : 0;
+};
+
 // the highest and lowest of the last `n` values, nothing until there are n
 const extremes = (xs: ReadonlyArray<number>, n: number) => {
   const hi: Array<number | null> = xs.map(() => null);
