@@ -480,6 +480,22 @@ export const en: Dict = {
       "NOK/SEK": "Norwegian Krone / Swedish Krona",
       "AUD/CAD": "Australian Dollar / Canadian Dollar",
       "NZD/CAD": "New Zealand Dollar / Canadian Dollar",
+      // #154
+      "USD/CAD": "US Dollar / Canadian Dollar",
+      "USD/CHF": "US Dollar / Swiss Franc",
+      "GBP/CHF": "British Pound / Swiss Franc",
+      "EUR/CHF": "Euro / Swiss Franc",
+      "AUD/CHF": "Australian Dollar / Swiss Franc",
+      "NZD/CHF": "New Zealand Dollar / Swiss Franc",
+      "HKD/JPY": "Hong Kong Dollar / Japanese Yen",
+      "SGD/JPY": "Singapore Dollar / Japanese Yen",
+      "NOK/JPY": "Norwegian Krone / Japanese Yen",
+      "EUR/AUD": "Euro / Australian Dollar",
+      "GBP/AUD": "British Pound / Australian Dollar",
+      "PLN/JPY": "Polish Zloty / Japanese Yen",
+      "CZK/JPY": "Czech Koruna / Japanese Yen",
+      "CAD/CHF": "Canadian Dollar / Swiss Franc",
+      "USD/HKD": "US Dollar / Hong Kong Dollar",
     } as Record<string, string>,
     // #153: the pair picker's groups and its button
     pairGroups: { fx: "FX", commodities: "Commodities (CFD)" } as Record<string, string>,
@@ -491,8 +507,16 @@ export const en: Dict = {
       "TRY/JPY": "Lira/Yen", "NZD/USD": "Kiwi/Dollar", "EUR/GBP": "Euro/Pound", "AUD/NZD": "Aussie/Kiwi",
       "HUF/JPY": "Forint/Yen", "SEK/JPY": "Krona/Yen", "NOK/SEK": "Krone/Krona", "AUD/CAD": "Aussie/Loonie",
       "NZD/CAD": "Kiwi/Loonie", "XAU/USD": "Gold",
+      // #154
+      "USD/CAD": "Dollar/Loonie", "USD/CHF": "Dollar/Franc", "GBP/CHF": "Pound/Franc", "EUR/CHF": "Euro/Franc",
+      "AUD/CHF": "Aussie/Franc", "NZD/CHF": "Kiwi/Franc", "HKD/JPY": "HK Dollar/Yen", "SGD/JPY": "SG Dollar/Yen",
+      "NOK/JPY": "Krone/Yen", "EUR/AUD": "Euro/Aussie", "GBP/AUD": "Pound/Aussie", "PLN/JPY": "Zloty/Yen",
+      "CZK/JPY": "Koruna/Yen", "CAD/CHF": "Loonie/Franc", "USD/HKD": "Dollar/HK Dollar",
     } as Record<string, string>,
     pairGrid: "All symbols",
+    // #154
+    pairGridNote:
+      "The prices listed for the 15 pairs GMO Coin does not carry (Dollar/Loonie, HK Dollar/Yen and so on) are Swissquote's, and those not on screen are one to three minutes old. CNH/JPY and CNH/HKD are not here yet: no free feed with their bars was found.",
     intervalShort: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
@@ -537,9 +561,13 @@ export const en: Dict = {
     // #127
     goldNote:
       "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, reached first by the 1- and 5-minute charts. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST).",
-    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's last read
-    goldFromTicks: (tf: string, limited: boolean, from: string | null) =>
-      `Gold's ${tf} chart ${limited ? "has used today's Twelve Data reads (they come back at 9:00 JST)" : "could not be read again from Twelve Data"}, so its bars ${from ? `from ${from} JST` : "from now"} are made from Swissquote's prices (every few seconds). Prices are recorded only while a chart is open, so a time nobody had one open has no bars.`,
+    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's
+    // last read; #154: a pair's GMO does not serve too
+    fromTicks: (name: string, tf: string, limited: boolean, from: string | null, ownChart: boolean) =>
+      `${name}'s ${tf} chart ${limited ? "has used today's Twelve Data reads (they come back at 9:00 JST)" : "could not be read again from Twelve Data"}, so its bars ${from ? `from ${from} JST` : "from now"} are made from Swissquote's prices (every few seconds). Prices are recorded only while ${ownChart ? "this pair's" : "a"} chart is open, so a time nobody had one open has no bars.`,
+    // #154
+    twelveNote:
+      "This pair is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from Rakuten FX's, so prices can differ a little. The signal marks are drawn, but the pair is not in the email alerts or the outcome records. Twelve Data's free allowance (800 reads a day) is shared with gold, and each timeframe has a cap on the day's reads, reached first by the 1- and 5-minute charts. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST). Opening several of these pairs or timeframes within a minute can hit the reads' per-minute limit (five), and a chart may then take about a minute to appear.",
   },
 
   gainz: {

@@ -525,6 +525,22 @@ export const ja = {
       "NOK/SEK": "ノルウェークローネ／スウェーデンクローナ",
       "AUD/CAD": "豪ドル／カナダドル",
       "NZD/CAD": "NZドル／カナダドル",
+      // #154
+      "USD/CAD": "米ドル／カナダドル",
+      "USD/CHF": "米ドル／スイスフラン",
+      "GBP/CHF": "英ポンド／スイスフラン",
+      "EUR/CHF": "ユーロ／スイスフラン",
+      "AUD/CHF": "豪ドル／スイスフラン",
+      "NZD/CHF": "NZドル／スイスフラン",
+      "HKD/JPY": "香港ドル／円",
+      "SGD/JPY": "シンガポールドル／円",
+      "NOK/JPY": "ノルウェークローネ／円",
+      "EUR/AUD": "ユーロ／豪ドル",
+      "GBP/AUD": "英ポンド／豪ドル",
+      "PLN/JPY": "ポーランドズロチ／円",
+      "CZK/JPY": "チェココルナ／円",
+      "CAD/CHF": "カナダドル／スイスフラン",
+      "USD/HKD": "米ドル／香港ドル",
     } as Record<string, string>,
     // #153: the pair picker's groups and its button, and each pair as the
     // owner's broker (楽天FX) labels it in its own picker
@@ -536,8 +552,16 @@ export const ja = {
       "TRY/JPY": "トルコリラ/円", "NZD/USD": "NZドル/ドル", "EUR/GBP": "ユーロ/ポンド", "AUD/NZD": "豪ドル/NZドル",
       "HUF/JPY": "フォリント/円", "SEK/JPY": "Sクローナ/円", "NOK/SEK": "Nクローネ/Sクローナ", "AUD/CAD": "豪ドル/カナダドル",
       "NZD/CAD": "NZドル/カナダドル", "XAU/USD": "金",
+      // #154
+      "USD/CAD": "ドル/カナダドル", "USD/CHF": "ドル/スイス", "GBP/CHF": "ポンド/スイス", "EUR/CHF": "ユーロ/スイス",
+      "AUD/CHF": "豪ドル/スイス", "NZD/CHF": "NZドル/スイス", "HKD/JPY": "香港ドル/円", "SGD/JPY": "SGドル/円",
+      "NOK/JPY": "Nクローネ/円", "EUR/AUD": "ユーロ/豪ドル", "GBP/AUD": "ポンド/豪ドル", "PLN/JPY": "ズロチ/円",
+      "CZK/JPY": "チェココルナ/円", "CAD/CHF": "カナダドル/スイス", "USD/HKD": "ドル/香港ドル",
     } as Record<string, string>,
     pairGrid: "銘柄の一覧",
+    // #154
+    pairGridNote:
+      "GMOコインにないペア（ドル/カナダドル・香港ドル/円など15ペア）の一覧の価格は Swissquote のもので、表示中のペア以外は1〜3分ほど前のものです。人民元/円と人民元/香港ドルは、無料で足を取れる配信が見つからないため、まだありません。",
     intervalShort: { "1min": "1分", "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
@@ -584,9 +608,14 @@ export const ja = {
     // #127
     goldNote:
       "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、1分足・5分足から先に上限に達します。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。",
-    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's last read
-    goldFromTicks: (tf: string, limited: boolean, from: string | null) =>
-      `金の${tf}は、${limited ? "きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達した" : "Twelve Data から読み直せなかった"}ため、${from ? `${from} からの足` : "このあとの足"}を Swissquote の価格（数秒ごと）から作っています。価格はチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。`,
+    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's
+    // last read; #154: a pair's GMO does not serve too (its prices recorded
+    // only while its own chart is open)
+    fromTicks: (name: string, tf: string, limited: boolean, from: string | null, ownChart: boolean) =>
+      `${name}の${tf}は、${limited ? "きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達した" : "Twelve Data から読み直せなかった"}ため、${from ? `${from} からの足` : "このあとの足"}を Swissquote の価格（数秒ごと）から作っています。価格は${ownChart ? "このペアの" : ""}チャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。`,
+    // #154
+    twelveNote:
+      "このペアは GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。楽天FXとは提供元が違うので、価格が少しずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。Twelve Data の無料枠（1日800回）は金と分け合い、1日の読み込み回数に時間足ごとの上限があります（1分足・5分足から先に達します）。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。GMOコインにないペアや時間足を1分の間に続けていくつも開くと、読み込みの上限（1分に5回）に当たり、チャートが1分ほど後に出ることがあります。",
   },
 
   // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない

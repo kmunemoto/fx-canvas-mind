@@ -9,8 +9,23 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
 import { CHART_PREFS_KEY, resetChartPrefsCache } from "../lib/chartPrefs";
-import { LIVE_COMMODITIES, LIVE_FX_PAIRS, LIVE_PAIRS, LIVE_PAIR_GROUPS, normalizeLiveRead, type LiveRead } from "../lib/liveChart";
-import { LIVE_PAIRS as SERVER_PAIRS, fetchLiveQuotes, liveRead } from "../../supabase/functions/live-chart/logic";
+import {
+  LIVE_COMMODITIES,
+  LIVE_FX_PAIRS,
+  LIVE_PAIRS,
+  LIVE_PAIR_GROUPS,
+  TWELVE_FX_PAIRS,
+  isTwelveFx,
+  normalizeLiveRead,
+  type LiveRead,
+} from "../lib/liveChart";
+import {
+  LIVE_PAIRS as SERVER_PAIRS,
+  TWELVE_FX_PAIRS as SERVER_TWELVE_FX,
+  fetchLiveQuotes,
+  isTwelvePair,
+  liveRead,
+} from "../../supabase/functions/live-chart/logic";
 import { GMO_SYMBOLS, type QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 import { priceDecimals, toPips } from "../lib/candleTime";
 
@@ -32,12 +47,29 @@ const BROKER = [
 describe("#153 the pairs the live chart offers", () => {
   it("every pair GMO serves (all 21 of its list), each among the broker's, in the broker's order, then gold", () => {
     expect(Object.values(GMO_SYMBOLS).sort()).toEqual([...GMO_LISTED].sort());
-    expect(LIVE_FX_PAIRS).toEqual(BROKER.filter((p) => GMO_SYMBOLS[p] !== undefined));
-    expect(LIVE_FX_PAIRS).toHaveLength(21);
+    expect(LIVE_FX_PAIRS.filter((p) => GMO_SYMBOLS[p] !== undefined)).toEqual(BROKER.filter((p) => GMO_SYMBOLS[p] !== undefined));
+    expect(LIVE_FX_PAIRS.filter((p) => GMO_SYMBOLS[p] !== undefined)).toHaveLength(21);
     expect(LIVE_COMMODITIES).toEqual(["XAU/USD"]);
     // the function and the page list the same pairs in the same order
     expect([...SERVER_PAIRS]).toEqual(LIVE_PAIRS);
-    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 21], ["commodities", 1]]);
+  });
+
+  it("#154: and all of the broker's others but the two with no feed, in its order, each read as gold is", () => {
+    expect(LIVE_FX_PAIRS).toEqual(BROKER.filter((p) => p !== "CNH/JPY" && p !== "CNH/HKD"));
+    expect(LIVE_FX_PAIRS).toHaveLength(36);
+    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 36], ["commodities", 1]]);
+    // those GMO does not serve are those read from Twelve Data and Swissquote
+    const notGmo = LIVE_FX_PAIRS.filter((p) => GMO_SYMBOLS[p] === undefined);
+    expect(notGmo).toEqual([...SERVER_TWELVE_FX]);
+    expect(TWELVE_FX_PAIRS).toEqual([...SERVER_TWELVE_FX]);
+    for (const p of LIVE_FX_PAIRS) {
+      expect(isTwelveFx(p), p).toBe(GMO_SYMBOLS[p] === undefined);
+      expect(isTwelvePair(p), p).toBe(GMO_SYMBOLS[p] === undefined);
+    }
+    expect(isTwelvePair("XAU/USD")).toBe(true);
+    expect(isTwelveFx("XAU/USD")).toBe(false);
+    // not GMO's feed: no GMO read is made for them
+    expect(GMO_SYMBOLS["USD/CAD"]).toBeUndefined();
   });
 
   it("names each in both languages", () => {
@@ -115,7 +147,7 @@ describe("#153 choosing among them", () => {
     const grid = screen.getByTestId("live-pair-grid");
     const fx = within(screen.getByTestId("live-pair-group-fx"));
     expect(fx.getByText("FX")).toBeTruthy();
-    expect(fx.getAllByRole("button")).toHaveLength(21);
+    expect(fx.getAllByRole("button")).toHaveLength(36);
     expect(within(screen.getByTestId("live-pair-group-commodities")).getAllByRole("button")).toHaveLength(1);
     expect(within(grid).getByTestId("live-grid-pair-USD/JPY").getAttribute("aria-pressed")).toBe("true");
     // labelled as the broker's picker labels them

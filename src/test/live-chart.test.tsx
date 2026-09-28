@@ -282,11 +282,14 @@ describe("#113 the live chart card", () => {
     render(<LiveChart defaultInterval="4h" loadBars={loadBars} loadTicks={loadTicks} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
-    // #153: GMO's 21 pairs in the broker's (楽天FX) order, then gold
+    // #153: GMO's 21 pairs in the broker's (楽天FX) order, then gold; #154:
+    // with 15 more of the broker's among them, in its order
     expect(screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-pair-"))).toEqual(
       [
         "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY",
-        "CHF/JPY", "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD", "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD", "NZD/CAD", "XAU/USD",
+        "CHF/JPY", "TRY/JPY", "NZD/USD", "USD/CAD", "USD/CHF", "GBP/CHF", "EUR/GBP", "EUR/CHF", "AUD/CHF", "NZD/CHF", "AUD/NZD",
+        "HKD/JPY", "SGD/JPY", "NOK/JPY", "EUR/AUD", "GBP/AUD", "HUF/JPY", "SEK/JPY", "PLN/JPY", "CZK/JPY", "CAD/CHF", "NOK/SEK",
+        "AUD/CAD", "NZD/CAD", "USD/HKD", "XAU/USD",
       ].map((p) => `live-pair-${p}`),
     );
     await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 150.120 / 買値 150.123 / スプレッド 0.3pips"));
