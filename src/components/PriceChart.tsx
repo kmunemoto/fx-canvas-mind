@@ -728,6 +728,24 @@ const PriceChart = ({
   const AXIS_X = W - PAD_RIGHT + 4;
   const PILL_X = W - pillW + 2;
 
+  // #151: ULTRA's newest signal while it is open, its prices as their tags
+  // say them, and — while the newest bar is on screen — room to the right of
+  // it for those tags (the video draws them past the newest bar), so they do
+  // not cover the newest candles
+  const ulOpen = ul && ul.trades.length > 0 && ul.trades[ul.trades.length - 1].end === null ? ul.trades[ul.trades.length - 1] : null;
+  const ulTagFsz = (narrow ? 7 : 8) * (full ? 1.25 : 1);
+  const ulLevels = ulOpen
+    ? [
+        { key: "tp3", text: "TP3", v: ulOpen.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
+        { key: "tp2", text: "TP2", v: ulOpen.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
+        { key: "tp1", text: "TP1", v: ulOpen.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
+        { key: "entry", text: "Entry", v: ulOpen.entry, color: ULTRA_COLORS.entry },
+        { key: "sl", text: "SL", v: ulOpen.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
+      ].map((l) => ({ ...l, label: `${l.text} ${l.v.toFixed(decimals)}` }))
+    : [];
+  const ulTagW = (label: string) => label.length * ulTagFsz * 0.6 + 6;
+  const ulGap = ulOpen && to >= n ? Math.ceil(Math.max(...ulLevels.map((l) => ulTagW(l.label))) + 4) : 0;
+
   // Deliberately NOT part of the price domain below. A confirmed swing well
   // above the window would stretch the scale until every candle was a flat
   // line — the overlay would have made the chart worse at the one job it
@@ -785,14 +803,16 @@ const PriceChart = ({
 
     const plotW = W - PAD_LEFT - PAD_RIGHT;
     const plotH = H - PAD_TOP - PAD_BOTTOM;
-    const slot = plotW / (to - from);
+    // the bars' width: the plot, less ULTRA's room (#151)
+    const barsW = plotW - ulGap;
+    const slot = barsW / (to - from);
     // wider candles when zoomed in, up to a point
     const bodyW = Math.max(2, Math.min(interactive && view ? 18 : 9, slot * 0.62));
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
-    return { min, max, y, x, slot, bodyW, plotW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas, priceZoom]);
+    return { min, max, y, x, slot, bodyW, plotW, barsW };
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas, priceZoom, ulGap]);
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -1389,7 +1409,7 @@ const PriceChart = ({
     );
   }
 
-  const { y, x, slot, bodyW, plotW } = geometry;
+  const { y, x, slot, bodyW, plotW, barsW } = geometry;
   const inDomain = (v: number | null): v is number =>
     v !== null && Number.isFinite(v) && v >= geometry.min && v <= geometry.max;
   // #116: the flags on screen
@@ -1445,16 +1465,16 @@ const PriceChart = ({
     const x0 = Math.max(x(tr.i), PAD_LEFT);
     const x1 = open ? plotRight : Math.min(Math.max(x(tr.end as number), x(tr.i + 1)), plotRight);
     if (x1 <= x0) return null;
-    const fsz = (narrow ? 7 : 8) * fs;
-    const levels: Array<{ key: string; text: string; v: number; color: string; dash?: string }> = [
-      { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "tp2", text: "TP2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "tp1", text: "TP1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "entry", text: "Entry", v: tr.entry, color: ULTRA_COLORS.entry },
-      { key: "sl", text: "SL", v: tr.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
+    const fsz = ulTagFsz;
+    const levels: Array<{ key: string; v: number; color: string; dash?: string }> = [
+      { key: "tp3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "tp2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "tp1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "entry", v: tr.entry, color: ULTRA_COLORS.entry },
+      { key: "sl", v: tr.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
     ];
     const tagH = fsz + 5;
-    const tags = (open ? levels : []).map((l) => ({ ...l, label: `${l.text}: ${l.v.toFixed(decimals)}`, cy: y(l.v) })).sort((a, b) => a.cy - b.cy);
+    const tags = (open ? ulLevels : []).map((l) => ({ ...l, cy: y(l.v) })).sort((a, b) => a.cy - b.cy);
     for (let k = 1; k < tags.length; k++) tags[k].cy = Math.max(tags[k].cy, tags[k - 1].cy + tagH + 1);
     const over = tags.length > 0 ? tags[tags.length - 1].cy + tagH / 2 - plotBottom : 0;
     if (over > 0) tags.forEach((g) => (g.cy -= over));
@@ -1621,7 +1641,7 @@ const PriceChart = ({
     return rect.width > 0 ? ((clientX - rect.left) / rect.width) * W : 0;
   };
   // how far across the plot a point is, 0 to 1
-  const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / plotW));
+  const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / barsW));
   const barAt = (px: number) => from + Math.floor((px - PAD_LEFT) / slot);
 
   const afterTouch = () => Date.now() - touchedAt.current < TOUCH_MOUSE_MS;
@@ -2243,45 +2263,39 @@ const PriceChart = ({
 
   const charts = (
     <>
-      <div className="relative">
-      {overlayLegend}
-      {/* #151: ULTRA's tally, at the top right as the video has it (TOTAL
-          is TP1 + the stop; each share is of TOTAL; the win rate is TP1's) */}
-      {ul && !(narrow && ohlcLine) && (
-        <div
-          className="pointer-events-none absolute top-1 z-10 rounded border bg-background/80 px-1.5 py-0.5 font-mono text-[9px] leading-tight"
-          style={{ right: PAD_RIGHT + 2, borderColor: "#C2185B" }}
-          data-testid="chart-ultra-table"
-        >
-          <div className="text-center font-bold text-foreground">★ ULTRA ★</div>
-          <table className="border-collapse">
-            <tbody>
-              {([
-                ["tp1", t.chart.ultraTable.tp1, ul.stats.tp1, "#B39DDB"],
-                ["tp2", t.chart.ultraTable.tp2, ul.stats.tp2, "#26C6DA"],
-                ["tp3", t.chart.ultraTable.tp3, ul.stats.tp3, "#EF5350"],
-                ["sl", t.chart.ultraTable.sl, ul.stats.sl, "#E53935"],
-              ] as const).map(([key, name, n, color]) => {
-                const pct = pctOf(n, ul.stats.total);
-                return (
-                  <tr key={key} data-testid={`chart-ultra-row-${key}`}>
-                    <td className="pr-1.5" style={{ color }}>{name}</td>
-                    <td className="pr-1.5 text-right text-foreground">{n}</td>
-                    <td className="text-right text-muted-foreground">{pct === null ? "—" : `${pct}%`}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div className="text-foreground" data-testid="chart-ultra-total">{`${t.chart.ultraTable.total}: ${ul.stats.total}`}</div>
-          <div className="font-bold text-foreground" data-testid="chart-ultra-winrate">
-            {`${t.chart.ultraTable.winRate}: ${(() => {
+      {/* #151: ULTRA's tally (TOTAL is TP1 + the stop; each share is of
+          TOTAL; the win rate is TP1's). #152: in a row above the chart — at
+          its top right, as the video has it, it covered the newest candles
+          and the open signal's prices */}
+      {ul && (
+        <div className="flex flex-wrap items-baseline gap-x-2 px-1 pb-0.5 font-mono text-[10px] leading-snug text-foreground" data-testid="chart-ultra-table">
+          <span className="font-bold" style={{ color: "#C2185B" }}>ULTRA</span>
+          {([
+            ["tp1", t.chart.ultraTable.tp1, ul.stats.tp1, "#8E6FD8"],
+            ["tp2", t.chart.ultraTable.tp2, ul.stats.tp2, "#0FA3B8"],
+            ["tp3", t.chart.ultraTable.tp3, ul.stats.tp3, "#EF6C57"],
+            ["sl", t.chart.ultraTable.sl, ul.stats.sl, "#E53935"],
+          ] as const).map(([key, name, count, color]) => {
+            const pct = pctOf(count, ul.stats.total);
+            return (
+              <span key={key} className="whitespace-nowrap" data-testid={`chart-ultra-row-${key}`}>
+                <span style={{ color }}>{name}</span>
+                {` ${count} `}
+                <span className="text-muted-foreground">{pct === null ? "—" : `${pct}%`}</span>
+              </span>
+            );
+          })}
+          <span className="whitespace-nowrap" data-testid="chart-ultra-total">{`${t.chart.ultraTable.total} ${ul.stats.total}`}</span>
+          <span className="whitespace-nowrap font-bold" data-testid="chart-ultra-winrate">
+            {`${t.chart.ultraTable.winRate} ${(() => {
               const p = pctOf(ul.stats.tp1, ul.stats.total);
               return p === null ? "—" : `${p}%`;
             })()}`}
-          </div>
+          </span>
         </div>
       )}
+      <div className="relative">
+      {overlayLegend}
       {priceZoom !== 1 && (
         <button
           type="button"
@@ -3066,7 +3080,7 @@ const PriceChart = ({
             })}
             {/* the open trade's prices, over the labels so they stay readable */}
             {ulBox && ulBox.tags.map((g) => {
-              const w = g.label.length * ulBox.fsz * 0.6 + 6;
+              const w = ulTagW(g.label);
               return (
                 <g key={g.key} data-testid={`chart-ultra-tag-${g.key}`}>
                   <rect x={ulBox.x1 - w} y={g.cy - ulBox.tagH / 2} width={w} height={ulBox.tagH} rx="2" fill={g.color} />
