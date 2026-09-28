@@ -76,12 +76,23 @@ describe("#129 Dow theory, read mechanically", () => {
 });
 
 describe("#129 the live-chart function's Dow reading", () => {
-  it("reads 4h, 1h, 15min and 5min, gold without the 5-minute one", () => {
+  it("reads 4h, 1h, 15min and 5min — #146: gold's 5-minute one too, now that it has the chart", () => {
     expect(DOW_TFS).toEqual(["4h", "1h", "15min", "5min"]);
     expect(dowTfsFor("USD/JPY")).toEqual(["4h", "1h", "15min", "5min"]);
-    expect(dowTfsFor("XAU/USD")).toEqual(["4h", "1h", "15min"]);
-    expect(clientTfsFor("XAU/USD")).toEqual(["4h", "1h", "15min"]);
+    expect(dowTfsFor("XAU/USD")).toEqual(["4h", "1h", "15min", "5min"]);
+    expect(clientTfsFor("XAU/USD")).toEqual(["4h", "1h", "15min", "5min"]);
     expect(clientTfsFor("EUR/USD")).toEqual(["4h", "1h", "15min", "5min"]);
+  });
+
+  it("#146: leaves out a stored bar that was still forming when the bars were read, once its time is up", () => {
+    const bars = legBars(LEGS, 8).slice(0, 93);
+    // read two minutes into bar 92; now bar 93 is forming
+    const readAt = new Date(T0 + 92 * M15 + 120_000).toISOString();
+    const now = T0 + 93 * M15 + 60_000;
+    expect(closedOf(bars, "15min", now)).toHaveLength(93);
+    expect(closedOf(bars, "15min", now, readAt)).toHaveLength(92);
+    // read after bar 92 closed: it is complete
+    expect(closedOf(bars, "15min", now, new Date(T0 + 93 * M15 + 5_000).toISOString())).toHaveLength(93);
   });
 
   it("names every point by its bar's datetime, rounds the prices as the chart's, and leaves the forming bar out", () => {

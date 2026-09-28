@@ -7,12 +7,13 @@ import { priceDecimals } from "@/lib/candleTime";
 
 export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/live-chart";
 export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"];
-export const LIVE_INTERVALS = ["1min", "15min", "1h", "4h", "1day"];
+// #146: the 5-minute chart too, for every pair
+export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"];
 // #127: gold (XAU/USD) — its bars from Twelve Data, its price from
-// Swissquote (GMO has no gold); no 1-minute chart (the shared key's daily
-// allowance)
+// Swissquote (GMO has no gold); #146: every timeframe, the 1- and 5-minute
+// ones too, within the day's reads the function keeps for each
 export const GOLD_PAIR = "XAU/USD";
-export const GOLD_INTERVALS = ["15min", "1h", "4h", "1day"];
+export const GOLD_INTERVALS = LIVE_INTERVALS;
 export const intervalsFor = (pair: string): string[] => (pair === GOLD_PAIR ? GOLD_INTERVALS : LIVE_INTERVALS);
 // How often the price is asked for while the chart is on screen
 export const TICK_MS = 5_000;
@@ -40,6 +41,9 @@ export interface LiveRead {
   source: "gmo" | "twelvedata";
   feed: string | null;
   fetchedAt: string | null;
+  // #146: Twelve Data's bars could not be read again: the day's reads for
+  // this timeframe are spent, so these are the ones read at fetchedAt
+  limited: boolean;
   // when the market reopens, while it may be shut
   reopens: string | null;
 }
@@ -124,6 +128,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     source: r.source === "twelvedata" ? "twelvedata" : "gmo",
     feed: typeof r.feed === "string" ? r.feed : null,
     fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
+    limited: r.limited === true,
     reopens: typeof r.reopens === "string" ? r.reopens : null,
   };
 };
@@ -185,9 +190,9 @@ export const fetchLiveBars = async (pair: string, interval: string): Promise<Liv
 export const fetchTicks = async (): Promise<Record<string, Tick>> => normalizeTicks((await call({ action: "ticker" })).ticks);
 
 // #129: Dow theory on four timeframes (supabase/functions/_shared/dow.ts),
-// as the live-chart function reads it — gold without the 5-minute one
+// as the live-chart function reads it — #146: gold's 5-minute one too
 export const DOW_TFS = ["4h", "1h", "15min", "5min"];
-export const dowTfsFor = (pair: string): string[] => (pair === GOLD_PAIR ? DOW_TFS.slice(0, 3) : DOW_TFS);
+export const dowTfsFor = (_pair: string): string[] => DOW_TFS;
 export type DowState = "up" | "down" | "toDown" | "toUp" | "none";
 export interface DowPoint {
   price: number;

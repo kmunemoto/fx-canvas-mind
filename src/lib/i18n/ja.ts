@@ -29,7 +29,7 @@ export const ja = {
   },
 
   control: {
-    intervals: { "1min": "1分足", "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
+    intervals: { "1min": "1分足", "5min": "5分足", "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
     // #111: スプレッドだけで失う割合（§8.21 の実測、毎回入った場合）
     cost: (tf: string, share: number | null) =>
       share === null
@@ -473,7 +473,7 @@ export const ja = {
       "GBP/JPY": "英ポンド／円",
       "XAU/USD": "金（米ドル／オンス）",
     } as Record<string, string>,
-    intervalShort: { "1min": "1分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    intervalShort: { "1min": "1分", "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
     // #144: folded under the chart
@@ -514,11 +514,14 @@ export const ja = {
     dowLoading: "読み込み中…",
     dowError: "読めませんでした（1分後に読み直します）",
     dowTfError: "読めませんでした",
-    dowHint: "1回目=兆し、2回目=確定（詳しくはチャートの下の説明）。金は5分足なし。表示のみで、売買サインには使っていません。",
+    dowHint: "1回目=兆し、2回目=確定（詳しくはチャートの下の説明）。表示のみで、売買サインには使っていません。",
     dowCompact: "ダウ",
     // #127
     goldNote:
-      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。1分足はありません（Twelve Data の無料枠の回数の都合）。",
+      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示しますが、メール通知と成績の記録の対象外です。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、1分足・5分足から先に止まります（止まった足はその旨を表示し、日本時間の朝9時に戻ります）。",
+    // #146
+    goldLimited: (tf: string, at: string) =>
+      `金の${tf}は、きょうの Twelve Data の読み込み上限に達したため、${at} に読んだ足までを表示しています（足は動きません）。上限は日本時間の朝9時に戻ります。時間足が長いほど上限は後まで残ります。`,
   },
 
   // #112: GainzAlgo V2 Alpha 型のサイン。RSI×SAR の横に出すだけで、売買判定には使わない

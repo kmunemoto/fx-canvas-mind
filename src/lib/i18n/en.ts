@@ -26,7 +26,7 @@ export const en: Dict = {
   },
 
   control: {
-    intervals: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" },
+    intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" },
     // #111: what the spread alone takes (measured, §8.21)
     cost: (tf: string, share: number | null) =>
       share === null
@@ -428,7 +428,7 @@ export const en: Dict = {
       "GBP/JPY": "British Pound / Japanese Yen",
       "XAU/USD": "Gold / US Dollar (per ounce)",
     } as Record<string, string>,
-    intervalShort: { "1min": "1m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
+    intervalShort: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
     // #144: folded under the chart
@@ -467,11 +467,14 @@ export const en: Dict = {
     dowLoading: "Loading…",
     dowError: "Could not be read (tried again in a minute)",
     dowTfError: "Could not be read",
-    dowHint: "First break = a sign, second = confirmed (more under the chart). Gold has no 5m. Shown only: no signal uses it.",
+    dowHint: "First break = a sign, second = confirmed (more under the chart). Shown only: no signal uses it.",
     dowCompact: "Dow",
     // #127
     goldNote:
-      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. No 1-minute chart (Twelve Data's free allowance).",
+      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, and the 1- and 5-minute charts stop first (a stopped chart says so; the reads come back at 9:00 JST).",
+    // #146
+    goldLimited: (tf: string, at: string) =>
+      `Gold's ${tf} chart has used today's Twelve Data reads, so it shows the bars as read at ${at} JST (they do not move). The reads come back at 9:00 JST; longer timeframes keep theirs longer.`,
   },
 
   gainz: {

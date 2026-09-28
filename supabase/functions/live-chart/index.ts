@@ -7,7 +7,9 @@
 //   {action: "history", pair, interval} — #124: HISTORY_BARS closed bars,
 //     for an indicator that needs more than the chart draws (Zone Shift).
 // #127: gold (XAU/USD) reads its bars from Twelve Data and its price from
-// Swissquote (logic.ts, "gold").
+// Swissquote (logic.ts, "gold"). #146: every pair on every timeframe, 1 and
+// 5 minutes too; Twelve Data's reads counted per day (logic.ts, "Twelve
+// Data's day").
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -43,6 +45,7 @@ import {
   FALLBACK_TTL_MS,
   fallbackRead,
   parseTwelveData,
+  twelveCapFor,
   twelveDataUrl,
 } from "./logic.ts";
 import type { Candle } from "../analyze/indicators.ts";
@@ -50,11 +53,13 @@ import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v6-2026-09-26T18:00:00Z";
+const FUNCTION_VERSION = "live-chart-v7-2026-09-28T06:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
-// spend the analysis's shared eight-a-minute key
-const FALLBACK_FETCHES_PER_MIN = 3;
+// spend the analysis's shared eight-a-minute key. #146: five — gold's
+// 1-minute chart and its Dow reading (5 and 15 minutes, 1 and 4 hours) can
+// all be due in the same minute; the key allows eight.
+const FALLBACK_FETCHES_PER_MIN = 5;
 
 // A bar read is good until its forming bar has moved on a little; the ticker
 // for a couple of seconds
@@ -139,16 +144,34 @@ Deno.serve(async (req: Request) => {
     // v3: the market's reopening, while it may be shut
     const reopens = isPossiblyClosed(nowMs) ? new Date(nextOpen(nowMs)).toISOString() : null;
 
+    // #146: one more Twelve Data read counted for the UTC day, unless the
+    // day's count has reached `cap` (false). Counting that fails lets the
+    // read go ahead: the chart is not taken down by its own bookkeeping.
+    const takeTwelveRead = async (cap: number): Promise<boolean> => {
+      try {
+        const r = await rest("rpc/take_twelve_data_credit", { method: "POST", body: JSON.stringify({ p_cap: cap }) });
+        if (!r.ok) {
+          console.error("twelve data count failed:", r.status, await r.text().catch(() => ""));
+          return true;
+        }
+        return (await r.json().catch(() => true)) !== false;
+      } catch (err) {
+        console.error("twelve data count failed:", err);
+        return true;
+      }
+    };
+
     // v3: the last bars from Twelve Data, from the table while they are
-    // fresh, fetched again when not (within this instance's allowance), and
-    // stale ones rather than none
+    // fresh, fetched again when not (within this instance's allowance and,
+    // #146, the day's for the timeframe), and stale ones rather than none
+    // (#146: `limited` when it was the day's that stopped them)
     const fallbackBars = async (
       pair: string,
       interval: string,
       // #127: gold's own rule for "fresh", and how many bars it reads
       fresh: (fetchedAtMs: number) => boolean = (t) => nowMs - t < FALLBACK_TTL_MS,
       outputsize?: number,
-    ): Promise<{ bars: Candle[]; fetchedAt: string } | null> => {
+    ): Promise<{ bars: Candle[]; fetchedAt: string; limited?: boolean } | null> => {
       const key = `pair=eq.${encodeURIComponent(pair)}&interval=eq.${encodeURIComponent(interval)}`;
       const res = await rest(`live_chart_fallback?${key}&select=bars,fetched_at`);
       const rows = res.ok ? await res.json().catch(() => null) : null;
@@ -159,6 +182,7 @@ Deno.serve(async (req: Request) => {
       if (stored && fresh(Date.parse(stored.fetchedAt))) return stored;
       while (fallbackFetches.length > 0 && nowMs - fallbackFetches[0] > 60_000) fallbackFetches.shift();
       if (!twelveKey || fallbackFetches.length >= FALLBACK_FETCHES_PER_MIN) return stored;
+      if (!(await takeTwelveRead(twelveCapFor(interval)))) return stored ? { ...stored, limited: true } : null;
       fallbackFetches.push(nowMs);
       try {
         const r = await fetch(twelveDataUrl(pair, interval, twelveKey, outputsize), { signal: AbortSignal.timeout(10_000) });
@@ -221,7 +245,7 @@ Deno.serve(async (req: Request) => {
       if (isGold(pair)) {
         const fb = await goldBars(interval);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
-        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt) };
+        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true) };
         if (barsCache.size > 100) barsCache.clear();
         barsCache.set(key, { at: nowMs, body: out });
         return json(out);
@@ -235,6 +259,7 @@ Deno.serve(async (req: Request) => {
           source: "twelvedata",
           feed: maintenance ? "maintenance" : "unavailable",
           fetchedAt: fb.fetchedAt,
+          limited: fb.limited === true,
         });
         // not cached here: the next read should try GMO again
         return json({ ok: true, version: FUNCTION_VERSION, reopens, read });
@@ -257,7 +282,7 @@ Deno.serve(async (req: Request) => {
       if (isGold(pair)) {
         const fb = await goldBars(interval);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
-        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, fb.bars, nowMs) });
+        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, fb.bars, nowMs, fb.fetchedAt) });
       }
       const key = `${pair}|${interval}`;
       const hit = historyCache.get(key);
@@ -289,7 +314,7 @@ Deno.serve(async (req: Request) => {
         if (stale) {
           if (isGold(pair)) {
             const fb = await goldBars(tf);
-            closed = fb ? closedOf(fb.bars, tf, nowMs) : closed;
+            closed = fb ? closedOf(fb.bars, tf, nowMs, fb.fetchedAt) : closed;
           } else {
             const quotes = await fetchDowQuotes(pair, tf, nowMs, nowMs + FETCH_BUDGET_MS, fetcher);
             closed = quotes && quotes.length > 0 ? splitBars(quotes, tf, nowMs).closed : closed;
