@@ -77,17 +77,19 @@ describe("#113 the live read (live-chart/logic.ts)", () => {
     expect([...r.marks].sort((a, b) => (a.datetime < b.datetime ? -1 : 1)).map((m) => m.datetime)).toEqual(r.marks.map((m) => m.datetime));
   });
 
-  it("reads GMO's ticker for the five pairs only, and never a crossed book", () => {
+  it("reads GMO's ticker for the chart's pairs only (#153: all 21 GMO serves), and never a crossed book", () => {
     const t = parseTicker({
       status: 0,
       data: [
         { symbol: "USD_JPY", bid: "150.120", ask: "150.123", timestamp: "2026-09-25T10:00:01.000Z", status: "OPEN" },
         { symbol: "EUR_USD", bid: "1.10010", ask: "1.10000", timestamp: "2026-09-25T10:00:01.000Z", status: "OPEN" },
         { symbol: "AUD_JPY", bid: "98.1", ask: "98.2", status: "OPEN" },
+        { symbol: "NOK_SEK", bid: "1.04381", ask: "1.04451", timestamp: "2026-09-28T17:10:53.315Z", status: "OPEN" },
+        { symbol: "USD_CHF", bid: "0.83", ask: "0.8301", status: "OPEN" },
         { symbol: "GBP_USD", bid: "1.3", ask: "1.30002", status: "CLOSE" },
       ],
     });
-    expect(Object.keys(t).sort()).toEqual(["GBP/USD", "USD/JPY"]);
+    expect(Object.keys(t).sort()).toEqual(["AUD/JPY", "GBP/USD", "NOK/SEK", "USD/JPY"]);
     expect(t["USD/JPY"].mid).toBeCloseTo(150.1215, 10);
     expect(t["GBP/USD"].open).toBe(false);
     expect(parseTicker(null)).toEqual({});
@@ -280,7 +282,13 @@ describe("#113 the live chart card", () => {
     render(<LiveChart defaultInterval="4h" loadBars={loadBars} loadTicks={loadTicks} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
-    expect(screen.getAllByRole("tab").filter((b) => b.getAttribute("data-testid")?.startsWith("live-pair-"))).toHaveLength(6);
+    // #153: GMO's 21 pairs in the broker's (楽天FX) order, then gold
+    expect(screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-pair-"))).toEqual(
+      [
+        "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY",
+        "CHF/JPY", "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD", "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD", "NZD/CAD", "XAU/USD",
+      ].map((p) => `live-pair-${p}`),
+    );
     await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 150.120 / 買値 150.123 / スプレッド 0.3pips"));
     expect(screen.getByTestId("live-pair-USD/JPY").textContent).toBe("USD/JPY150.121");
     expect(screen.getByTestId("live-signals").textContent).toContain("RSI＋SAR");
