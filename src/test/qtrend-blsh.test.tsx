@@ -12,7 +12,7 @@ import { normalizeLiveRead, type LiveRead } from "../lib/liveChart";
 import { liveRead } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 import type { NumericCandle } from "../lib/types";
-import { qTrend } from "../lib/qTrend";
+import { anchoredStart, barStepMs, qTrend } from "../lib/qTrend";
 import { blsh, normalize, pineRsi, tripleConfirm, unitMfi } from "../lib/blsh";
 import { placeEdgeLabels } from "../lib/edgeLabels";
 
@@ -154,6 +154,50 @@ describe("#145 where the labels by a candle go", () => {
     // c sits at 256–270 against the foot: d has no row under it
     expect(got.get("c")).toEqual({ top: 256, under: true });
     expect(got.get("d")).toEqual({ top: 210, under: false });
+  });
+});
+
+describe("#148 where Q-Trend starts", () => {
+  const H = 3_600_000;
+  // a multiple of 200 hours from 1970-01-01 UTC
+  const G = 200 * H * 2475;
+
+  it("at the first bar at or after the earliest multiple of 200 bars' time the bars read reach back to", () => {
+    const times = Array.from({ length: 600 }, (_, i) => G - 10 * H + i * H);
+    expect(anchoredStart(times, H, 480)).toBe(10);
+    // read from five bars later: the same bar
+    expect(anchoredStart(times.slice(5), H, 475)).toBe(5);
+    // read from past it: the next multiple, 200 hours on
+    expect(anchoredStart(times.slice(11), H, 469)).toBe(199);
+    // with fewer than 200 bars left before the chart's first there, the first bar read, as before
+    expect(anchoredStart(times, H, 205)).toBe(0);
+    // no times (or no length): the first bar read
+    expect(anchoredStart([Number.NaN, Number.NaN], H, 1)).toBe(0);
+    expect(anchoredStart(times, 0, 480)).toBe(0);
+    // a weekend's gap: the first bar after the multiple
+    const gap = [G - 30 * H, G - 29 * H, G + 20 * H, G + 21 * H, ...Array.from({ length: 400 }, (_, i) => G + (22 + i) * H)];
+    expect(anchoredStart(gap, H, 300)).toBe(2);
+  });
+
+  it("reads the bars' length as the shortest gap between two", () => {
+    expect(barStepMs([0, H, 2 * H, 50 * H, 51 * H])).toBe(H);
+    expect(barStepMs([0])).toBe(0);
+    expect(barStepMs([Number.NaN, Number.NaN])).toBe(0);
+  });
+
+  it("on the chart: the same Q-Trend and 3✓ labels whether the bars read before the chart begin a few bars earlier or later", () => {
+    const stamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+    const timed = bars.map((b, i) => ({ ...b, datetime: stamp(G - 10 * H + i * H) }));
+    const labels = () =>
+      [...document.querySelectorAll("[data-testid^='chart-qtrend-signal-'], [data-testid^='chart-qtblsh-signal-']")].map(
+        (g) => `${g.getAttribute("data-testid")}@${g.querySelector("rect")!.getAttribute("x")}`,
+      );
+    const a = render(<PriceChart candles={timed.slice(400)} pair="USD/JPY" zoneShiftHistory={{ bars: timed.slice(0, 400), status: "ready" }} />);
+    const first = labels();
+    a.unmount();
+    render(<PriceChart candles={timed.slice(400)} pair="USD/JPY" zoneShiftHistory={{ bars: timed.slice(4, 400), status: "ready" }} />);
+    expect(first.length).toBeGreaterThan(0);
+    expect(labels()).toEqual(first);
   });
 });
 

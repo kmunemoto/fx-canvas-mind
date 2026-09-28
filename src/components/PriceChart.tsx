@@ -13,7 +13,7 @@ import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { EMA_LINES, emaLine } from "@/lib/emaLines";
-import { QT_DEFAULTS, qTrend } from "@/lib/qTrend";
+import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
@@ -132,7 +132,8 @@ interface Props {
   // average (the live chart reads them while it is on). Given, Zone Shift is
   // listed; without it, only on a chart with 200 candles of its own. #131:
   // the Pro-style score and #143: the EMA lines read them too.
-  zoneShiftHistory?: { bars: ReadonlyArray<{ open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
+  // (#148: with their times, when known, for where Q-Trend starts)
+  zoneShiftHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
   // of them), `higher` those above it. Given, it is listed; drawn: the
@@ -171,7 +172,7 @@ const LANDSCAPE_PHONE = "(orientation: landscape) and (pointer: coarse) and (max
 const PRICE_ZOOM_MIN = 0.25;
 const PRICE_ZOOM_MAX = 4;
 // #124: no history (one array, so the memo that reads it holds)
-const NO_BARS: ReadonlyArray<{ open: number; high: number; low: number; close: number }> = [];
+const NO_BARS: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> = [];
 
 // How far past the flagged bar the stop and target segments reach: to the
 // bar that settled the signal, or a few bars when nothing has yet.
@@ -515,11 +516,18 @@ const PriceChart = ({
   // both, whichever of them is drawn
   const qtNeeded = ov.qTrend || ov.qtBlsh;
   const blshNeeded = prefs.blsh || ov.qtBlsh;
+  // #148: both computed from a fixed time (anchoredStart), not from the
+  // first bar read, so the chart opened again draws the same labels
+  const qtFrom = useMemo(() => {
+    if (!(qtNeeded || blshNeeded) || candles.length === 0 || zsPast === null) return 0;
+    const times = (bars: ReadonlyArray<{ datetime?: string }>) => bars.map((c) => parseUtcCandleTime(c.datetime ?? ""));
+    return anchoredStart([...times(zsPast), ...times(candles)], barStepMs(times(candles)), zsPast.length);
+  }, [qtNeeded, blshNeeded, zsPast, candles]);
   const qt = useMemo(() => {
     if (!qtNeeded || candles.length === 0 || zsPast === null) return null;
-    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
     const r = qTrend(all, QT_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
-    const off = zsPast.length;
+    const off = zsPast.length - qtFrom;
     return {
       whole: r,
       off,
@@ -527,14 +535,14 @@ const PriceChart = ({
       trend: r.trend.slice(off),
       signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
     };
-  }, [qtNeeded, zsPast, candles, formingLast]);
+  }, [qtNeeded, zsPast, candles, formingLast, qtFrom]);
   const blshRead = useMemo(() => {
     if (!blshNeeded || candles.length === 0 || zsPast === null) return null;
-    const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
+    const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
     const r = blshOf(all);
-    const off = zsPast.length;
+    const off = zsPast.length - qtFrom;
     return { whole: r, off, composite: r.composite.slice(off), line: r.line.slice(off), lineUp: r.lineUp.slice(off) };
-  }, [blshNeeded, zsPast, candles]);
+  }, [blshNeeded, zsPast, candles, qtFrom]);
   const triple = useMemo(() => {
     if (!ov.qtBlsh || !qt || !blshRead) return null;
     const last = qt.whole.line.length - 1 - (formingLast ? 1 : 0);
