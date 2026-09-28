@@ -16,6 +16,24 @@ import { EMA_LINES, emaLine } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
+import {
+  ADX_COLORS,
+  ADX_DEFAULTS,
+  ADX_TREND_LEVEL,
+  ICHIMOKU_COLORS,
+  ICHIMOKU_DEFAULTS,
+  MACD_COLORS,
+  MACD_DEFAULTS,
+  cloudSide,
+  crosses as crossesOf,
+  dmi as dmiOf,
+  histColors,
+  ichimoku as ichimokuOf,
+  lineAt,
+  macd as macdOf,
+  trendLines as trendLinesOf,
+  type TrendLine,
+} from "@/lib/trendTools";
 import { GP_DEFAULTS, gainzPro } from "@/lib/gainzPro";
 import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams } from "@/lib/stochastic";
 import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
@@ -159,8 +177,8 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh"] as const;
-const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh"]);
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku"] as const;
+const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -453,7 +471,7 @@ const PriceChart = ({
     if (!indicatorsLocked) return saved;
     const overlays = { ...saved.overlays };
     for (const k of LOCKED_OVERLAYS) overlays[k] = false;
-    return { ...saved, stoch: false, pctB: false, rci: false, blsh: false, overlays };
+    return { ...saved, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
   }, [saved, indicatorsLocked]);
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
   // #135: Bollinger %b and RCI, computed only while switched on
@@ -557,6 +575,48 @@ const PriceChart = ({
       .map((sg) => ({ ...sg, i: sg.i - qt.off }))
       .filter((sg) => sg.i >= 0);
   }, [ov.qtBlsh, qt, blshRead, tail]);
+  // #150: the trend tools of the owner's note, over the same history and
+  // the candles (their averages and ranges settle before the first candle)
+  const histAll = useMemo(
+    () => (candles.length === 0 || zsPast === null ? null : zsPast.length > 0 ? [...zsPast, ...candles] : candles),
+    [zsPast, candles],
+  );
+  const histOff = zsPast ? zsPast.length : 0;
+  const ichi = useMemo(() => {
+    if (!ov.ichimoku || !histAll) return null;
+    const r = ichimokuOf(histAll);
+    const cut = (xs: Array<number | null>) => xs.slice(histOff);
+    return { conversion: cut(r.conversion), base: cut(r.base), spanA: cut(r.spanA), spanB: cut(r.spanB), lagging: cut(r.lagging) };
+  }, [ov.ichimoku, histAll, histOff]);
+  const macdRead = useMemo(() => {
+    if (!prefs.macd || !histAll) return null;
+    const r = macdOf(histAll.map((b) => b.close));
+    return { macd: r.macd.slice(histOff), signal: r.signal.slice(histOff), hist: r.hist.slice(histOff), colors: histColors(r.hist).slice(histOff) };
+  }, [prefs.macd, histAll, histOff]);
+  const dmiRead = useMemo(() => {
+    if (!prefs.adx || !histAll) return null;
+    const r = dmiOf(histAll);
+    return { plus: r.plus.slice(histOff), minus: r.minus.slice(histOff), adx: r.adx.slice(histOff) };
+  }, [prefs.adx, histAll, histOff]);
+  // golden and dead crosses of EMA 50 and 200 (whether the lines are drawn
+  // or not), on closed bars
+  const maCrosses = useMemo(() => {
+    if (!ov.maCross || !histAll) return null;
+    const closes = histAll.map((b) => b.close);
+    const fast = emaLine(closes, 50);
+    return crossesOf(fast, emaLine(closes, 200), histAll.length - 1 - tail)
+      .map((c) => ({ ...c, i: c.i - histOff, price: fast[c.i] as number }))
+      .filter((c) => c.i >= 0);
+  }, [ov.maCross, histAll, histOff, tail]);
+  // the trend lines, on closed bars; indices on the chart's candles (a
+  // swing before the first is off to the left)
+  const autoLines = useMemo(() => {
+    if (!ov.autoTrend || !histAll) return null;
+    const r = trendLinesOf(histAll, histAll.length - 1 - tail);
+    const onChart = (l: TrendLine | null): TrendLine | null =>
+      l ? { ...l, a: l.a - histOff, b: l.b - histOff, brokenAt: l.brokenAt === null ? null : l.brokenAt - histOff } : null;
+    return { up: onChart(r.up), down: onChart(r.down) };
+  }, [ov.autoTrend, histAll, histOff, tail]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)
@@ -597,7 +657,10 @@ const PriceChart = ({
   const showPctB = pctB !== null && pctB.some((v) => v !== null);
   const showRci = rciRead !== null && rciRead.rci.some((v) => v !== null);
   const showBlsh = prefs.blsh && blshRead !== null && blshRead.composite.some((v) => v !== null);
-  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0) + (showBlsh ? 1 : 0);
+  // #150
+  const showMacd = prefs.macd && macdRead !== null && macdRead.macd.some((v) => v !== null);
+  const showAdx = prefs.adx && dmiRead !== null && dmiRead.adx.some((v) => v !== null);
+  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0) + (showBlsh ? 1 : 0) + (showMacd ? 1 : 0) + (showAdx ? 1 : 0);
   // In full screen the strips take a share of the height and the price the
   // rest (#118: the switches live in the settings sheet there); on a short
   // screen (a phone on its side) the strips give way first, so all of it fits
@@ -919,6 +982,12 @@ const PriceChart = ({
     qTrend: t.chart.qTrendNote,
     blsh: t.chart.blsh.note,
     qtBlsh: t.chart.qtBlshNote,
+    // #150
+    autoTrend: t.chart.autoTrendNote,
+    maCross: t.chart.maCrossNote,
+    ichimoku: t.chart.ichimokuNote,
+    macd: t.chart.macd.note,
+    adx: t.chart.adx.note,
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
@@ -931,6 +1000,10 @@ const PriceChart = ({
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     // #143: each with its line's colour
     ...EMA_LINES.map((l) => ({ key: l.key, group: "trend" as const, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
+    // #150: the golden and dead crosses of those two lines
+    { key: "maCross", group: "trend" as const, name: t.chart.overlayNames.maCross, on: ov.maCross, toggle: flip("maCross") },
+    { key: "autoTrend", group: "trend" as const, name: t.chart.overlayNames.autoTrend, on: ov.autoTrend, toggle: flip("autoTrend") },
+    { key: "ichimoku", group: "trend" as const, name: t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2), on: ov.ichimoku, toggle: flip("ichimoku") },
     { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "supertrend", group: "trend" as const, name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
@@ -952,6 +1025,9 @@ const PriceChart = ({
     { key: "pctB", group: "oscillator" as const, name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
     { key: "rci", group: "oscillator" as const, name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
     { key: "blsh", group: "oscillator" as const, name: t.chart.blsh.name, on: prefs.blsh, toggle: () => setChartPrefs({ blsh: !prefs.blsh }) },
+    // #150: off until switched on
+    { key: "macd", group: "oscillator" as const, name: t.chart.macd.name(MACD_DEFAULTS.fast, MACD_DEFAULTS.slow, MACD_DEFAULTS.signal), on: prefs.macd, toggle: () => setChartPrefs({ macd: !prefs.macd }) },
+    { key: "adx", group: "oscillator" as const, name: t.chart.adx.name(ADX_DEFAULTS.di, ADX_DEFAULTS.adx), on: prefs.adx, toggle: () => setChartPrefs({ adx: !prefs.adx }) },
   ].map((item) => (indicatorsLocked && LOCKED_KEYS.has(item.key)
     // #140: listed, so what a plan adds is in sight, but off and locked
     ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
@@ -1783,6 +1859,32 @@ const PriceChart = ({
           {noteOf.fvgProfile}
         </p>
       )}
+      {/* #150 */}
+      {ov.autoTrend && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-autotrend-legend">
+          {noteOf.autoTrend}
+        </p>
+      )}
+      {ov.maCross && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-macross-legend">
+          {noteOf.maCross}
+        </p>
+      )}
+      {ov.ichimoku && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-ichimoku-legend">
+          {noteOf.ichimoku}
+        </p>
+      )}
+      {prefs.macd && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-macd-legend">
+          {noteOf.macd}
+        </p>
+      )}
+      {prefs.adx && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-adx-legend">
+          {noteOf.adx}
+        </p>
+      )}
     </>
   );
 
@@ -1811,6 +1913,8 @@ const PriceChart = ({
     levels: Array<{ v: number; color: string; dash: string; opacity: number }>;
     // #145: an area from `base` to the values, `up` above it and `down` below
     area?: { values: Array<number | null>; base: number; up: string; down: string; opacity: number };
+    // #150: a bar from `base` to each value, in its own colour (MACD's histogram)
+    histogram?: { values: Array<number | null>; colors: Array<string | null>; base: number };
     band?: { from: number; to: number; color: string; opacity: number };
     bands?: Array<{ from: number; to: number; color: string; opacity: number; key: string }>;
     // the values at the strip's top and foot (0–100 unless given)
@@ -1899,6 +2003,20 @@ const PriceChart = ({
         ))}
         {hover !== null && hovered && (
           <line x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} stroke={COLORS.text} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.7" />
+        )}
+        {/* #150: the histogram's bars */}
+        {o.histogram && (
+          <g data-testid={`${o.testid}-histogram`}>
+            {Array.from({ length: Math.max(0, to - from) }, (_, k) => from + k).map((i) => {
+              const h = o.histogram!;
+              const v = h.values[i];
+              if (v === null || v === undefined || !Number.isFinite(v)) return null;
+              const y0 = ry(h.base);
+              const y1 = ry(v);
+              const w = Math.max(1, bodyW * 0.8);
+              return <rect key={i} x={x(i) - w / 2} y={Math.min(y0, y1)} width={w} height={Math.max(0.5, Math.abs(y1 - y0))} fill={h.colors[i] ?? COLORS.text} />;
+            })}
+          </g>
         )}
         {/* #145: the area, split at its base: one colour over, one under */}
         {o.area && (() => {
@@ -2015,7 +2133,9 @@ const PriceChart = ({
   const ohlcLine = hovered && !full
     ? t.chart.ohlc(hovered.open.toFixed(decimals), hovered.high.toFixed(decimals), hovered.low.toFixed(decimals), hovered.close.toFixed(decimals))
     : null;
-  const overlayLegend = emas || legendNames.length > 0 || ohlcLine ? (
+  // #150: where the close stands against Ichimoku's cloud, at the same bar
+  const ichiSide = ichi && candles[legendAt] ? cloudSide(candles[legendAt].close, ichi.spanA[legendAt] ?? null, ichi.spanB[legendAt] ?? null) : null;
+  const overlayLegend = emas || legendNames.length > 0 || ohlcLine || ichiSide ? (
     <div
       className={`pointer-events-none absolute left-1 top-1 z-10 ${ohlcLine ? "max-w-[94%]" : "max-w-[78%]"} rounded bg-background/70 px-1.5 py-0.5 text-[10px] leading-snug`}
       data-testid="chart-overlay-legend"
@@ -2031,6 +2151,11 @@ const PriceChart = ({
               </span>
             );
           })}
+        </div>
+      )}
+      {ichiSide && (
+        <div className="whitespace-nowrap" style={{ color: ichiSide === "above" ? ICHIMOKU_COLORS.cloudUp : ichiSide === "below" ? ICHIMOKU_COLORS.cloudDown : undefined }} data-testid="chart-legend-ichimoku">
+          {`${t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2).split(" ")[0]}: ${t.chart.ichimokuSide[ichiSide]}`}
         </div>
       )}
       {legendNames.length > 0 && <div className="truncate text-muted-foreground" data-testid="chart-legend-names">{legendNames.join(" · ")}</div>}
@@ -2385,6 +2510,53 @@ const PriceChart = ({
         {/* candles — #116: those on screen (#124: in Zone Shift's trend
             colour while it is on, as the original paints them; #137: UT
             Bot's green or red first while it is on, as its barcolor) */}
+        {/* #150: Ichimoku under the candles — the cloud between the leading
+            spans (green while span 1 is on top, red otherwise), then its lines */}
+        {ichi && (() => {
+          const lo = Math.max(1, from - 1);
+          const hi = Math.min(candles.length, to + 1);
+          let upD = "";
+          let downD = "";
+          for (let i = lo; i < hi; i++) {
+            const [a0, b0, a1, b1] = [ichi.spanA[i - 1], ichi.spanB[i - 1], ichi.spanA[i], ichi.spanB[i]];
+            if (a0 === null || b0 === null || a1 === null || b1 === null) continue;
+            const seg = `M${x(i - 1).toFixed(1)},${y(a0).toFixed(1)} L${x(i).toFixed(1)},${y(a1).toFixed(1)} L${x(i).toFixed(1)},${y(b1).toFixed(1)} L${x(i - 1).toFixed(1)},${y(b0).toFixed(1)} Z `;
+            if (a1 >= b1) upD += seg;
+            else downD += seg;
+          }
+          const pathOf = (values: Array<number | null>) => {
+            let d = "";
+            let pen = false;
+            for (let i = Math.max(0, from - 1); i < hi; i++) {
+              const v = values[i];
+              if (v === null || v === undefined || !Number.isFinite(v)) {
+                pen = false;
+                continue;
+              }
+              d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+              pen = true;
+            }
+            return d;
+          };
+          const lines: Array<[string, Array<number | null>, string]> = [
+            ["spanA", ichi.spanA, ICHIMOKU_COLORS.spanA],
+            ["spanB", ichi.spanB, ICHIMOKU_COLORS.spanB],
+            ["lagging", ichi.lagging, ICHIMOKU_COLORS.lagging],
+            ["base", ichi.base, ICHIMOKU_COLORS.base],
+            ["conversion", ichi.conversion, ICHIMOKU_COLORS.conversion],
+          ];
+          return (
+            <g data-testid="chart-ichimoku" clipPath={`url(#${clipId})`}>
+              {upD && <path d={upD} fill={ICHIMOKU_COLORS.cloudUp} opacity="0.14" data-testid="chart-ichimoku-cloud-up" />}
+              {downD && <path d={downD} fill={ICHIMOKU_COLORS.cloudDown} opacity="0.14" data-testid="chart-ichimoku-cloud-down" />}
+              {lines.map(([k, values, color]) => {
+                const d = pathOf(values);
+                return d ? <path key={k} d={d} fill="none" stroke={color} strokeWidth={1.1 * fs} opacity="0.9" data-testid={`chart-ichimoku-${k}`} /> : null;
+              })}
+            </g>
+          );
+        })()}
+
         <g data-testid="chart-candles">
         {candles.map((c, i) => {
           if (!onScreen(i)) return null;
@@ -2741,6 +2913,61 @@ const PriceChart = ({
                 pen = true;
               }
               return d ? <path key={l.key} d={d} fill="none" stroke={l.color} strokeWidth={1.5 * fs} opacity="0.9" data-testid={`chart-${l.key}-line`} /> : null;
+            })}
+          </g>
+        )}
+
+        {/* #150: the trend lines — through the latest two rising swing lows
+            (green) and falling swing highs (red), to the close that broke
+            them ("割れ" / "抜け") or on to the newest candle */}
+        {autoLines && (
+          <g data-testid="chart-trendlines">
+            {(["up", "down"] as const).map((k) => {
+              const l = autoLines[k];
+              if (!l) return null;
+              const end = l.brokenAt ?? candles.length - 1;
+              if (end < from) return null;
+              const color = k === "up" ? COLORS.up : COLORS.down;
+              const fsz = (narrow ? 7 : 8) * fs;
+              return (
+                <g key={k} data-testid={`chart-trendline-${k}`}>
+                  <title>{t.chart.overlayNames.autoTrend}</title>
+                  <line
+                    x1={x(l.a)} y1={y(lineAt(l, l.a))} x2={x(end)} y2={y(lineAt(l, end))}
+                    stroke={color} strokeWidth={1.4 * fs} opacity="0.9" clipPath={`url(#${clipId})`}
+                  />
+                  {l.brokenAt !== null && onScreen(l.brokenAt) && (
+                    <text
+                      x={x(l.brokenAt)}
+                      y={y(lineAt(l, l.brokenAt)) + (k === "up" ? fsz + 4 : -4)}
+                      fontSize={fsz} fontWeight="700" textAnchor="middle" fill={color}
+                      data-testid={`chart-trendline-${k}-break`}
+                    >
+                      {t.chart.trendBreak[k]}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        )}
+        {/* #150: EMA 50 × 200 — GC over the crossing, DC under it */}
+        {maCrosses && (
+          <g data-testid="chart-macross">
+            {maCrosses.filter((c) => onScreen(c.i)).map((c) => {
+              const gc = c.side === "GC";
+              const color = gc ? "#F9A825" : "#78909C";
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const cy = y(c.price);
+              return (
+                <g key={`mx-${c.i}`} data-testid={`chart-macross-${c.side}`}>
+                  <title>{t.chart.maCrossTitle(c.side)}</title>
+                  <circle cx={x(c.i)} cy={cy} r={3 * fs} fill={color} stroke="hsl(var(--background))" strokeWidth={1} />
+                  <text x={x(c.i)} y={gc ? cy - 6 * fs : cy + fsz + 5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}>
+                    {c.side}
+                  </text>
+                </g>
+              );
             })}
           </g>
         )}
@@ -3169,6 +3396,50 @@ const PriceChart = ({
           area: { values: blshRead.composite, base: 0, up: COLORS.blshUp, down: COLORS.blshDown, opacity: 0.5 },
           range: { min, max },
           digits: 2,
+        });
+      })()}
+      {/* #150: MACD as TradingView draws it — the MACD line blue, the signal
+          orange, the histogram in its four colours; its scale follows what
+          is on screen */}
+      {showMacd && macdRead && (() => {
+        const seen = [...macdRead.macd.slice(from, to), ...macdRead.signal.slice(from, to), ...macdRead.hist.slice(from, to)].filter((v): v is number => v !== null && Number.isFinite(v));
+        const top = Math.max(0, ...seen);
+        const foot = Math.min(0, ...seen);
+        const pad = (top - foot) * 0.08 || 1e-6;
+        const d = Math.min(Math.max(decimals, 2), 6);
+        return strip({
+          testid: "chart-macd",
+          aria: t.chart.macd.name(MACD_DEFAULTS.fast, MACD_DEFAULTS.slow, MACD_DEFAULTS.signal),
+          label: t.chart.macd.name(MACD_DEFAULTS.fast, MACD_DEFAULTS.slow, MACD_DEFAULTS.signal),
+          lines: [
+            { name: "Hist", values: macdRead.hist, color: MACD_COLORS.upGrow, hidden: true, colorAt: (i) => macdRead.colors[i] ?? MACD_COLORS.upGrow, tagText: "#131722" },
+            { name: "MACD", values: macdRead.macd, color: MACD_COLORS.line },
+            { name: "Signal", values: macdRead.signal, color: MACD_COLORS.signal },
+          ],
+          levels: [{ v: 0, color: COLORS.text, dash: "1.5 3", opacity: 0.6 }],
+          histogram: { values: macdRead.hist, colors: macdRead.colors, base: 0 },
+          range: { min: foot - pad, max: top + pad },
+          digits: d,
+          levelText: (v) => v.toFixed(0),
+        });
+      })()}
+      {/* #150: ADX and DMI as TradingView draws them — ADX pink, +DI blue,
+          −DI orange — and the trend level of 25 dotted */}
+      {showAdx && dmiRead && (() => {
+        const seen = [...dmiRead.adx.slice(from, to), ...dmiRead.plus.slice(from, to), ...dmiRead.minus.slice(from, to)].filter((v): v is number => v !== null && Number.isFinite(v));
+        const max = Math.max(50, ...seen) + 5;
+        return strip({
+          testid: "chart-adx",
+          aria: t.chart.adx.name(ADX_DEFAULTS.di, ADX_DEFAULTS.adx),
+          label: t.chart.adx.name(ADX_DEFAULTS.di, ADX_DEFAULTS.adx),
+          lines: [
+            { name: "ADX", values: dmiRead.adx, color: ADX_COLORS.adx },
+            { name: "+DI", values: dmiRead.plus, color: ADX_COLORS.plus },
+            { name: "−DI", values: dmiRead.minus, color: ADX_COLORS.minus },
+          ],
+          levels: [{ v: ADX_TREND_LEVEL, color: COLORS.text, dash: "1.5 3", opacity: 0.7 }],
+          range: { min: 0, max },
+          digits: 1,
         });
       })()}
     </>

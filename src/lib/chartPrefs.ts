@@ -49,6 +49,13 @@ export interface ChartOverlays {
   // (the video's "triple confirmation"); on unless switched off
   qTrend: boolean;
   qtBlsh: boolean;
+  // #150: the trend tools of the owner's note the chart lacked — trend
+  // lines through the swings and the EMA 50 × 200 golden and dead crosses
+  // (on unless switched off), and Ichimoku (off until switched on: a cloud
+  // and four lines over the price)
+  autoTrend: boolean;
+  maCross: boolean;
+  ichimoku: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -68,6 +75,9 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   ema200: true,
   qTrend: true,
   qtBlsh: true,
+  autoTrend: true,
+  maCross: true,
+  ichimoku: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
@@ -106,6 +116,9 @@ export interface ChartPrefs {
   rci: boolean;
   // #145: zacmcc's Buy Low Sell High Composite under the price
   blsh: boolean;
+  // #150: TradingView's MACD and ADX (DMI) strips, off until switched on
+  macd: boolean;
+  adx: boolean;
   // #118: the chart's background — the app's dark one, or white
   theme: ChartTheme;
   overlays: ChartOverlays;
@@ -128,6 +141,8 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   pctB: false,
   rci: false,
   blsh: true,
+  macd: false,
+  adx: false,
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
   live: LIVE_PREFS_DEFAULTS,
@@ -151,6 +166,8 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
     pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
     rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
     blsh: typeof v.blsh === "boolean" ? v.blsh : CHART_PREFS_DEFAULTS.blsh,
+    macd: typeof v.macd === "boolean" ? v.macd : CHART_PREFS_DEFAULTS.macd,
+    adx: typeof v.adx === "boolean" ? v.adx : CHART_PREFS_DEFAULTS.adx,
     theme: v.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(v.overlays),
     live: livePrefsOf(v.live),

@@ -245,8 +245,11 @@ describe("#124 the live chart's history", () => {
     expect(screen.getByTestId("chart-zoneshift-legend").textContent).toContain("計算に使った足: 260本");
   });
 
-  it("is not read while Zone Shift is off (#143, #145: and the others that read it)", async () => {
-    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ blsh: false, overlays: { zoneShift: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false } }));
+  it("is not read while Zone Shift is off (#143, #145, #150: and the others that read it)", async () => {
+    localStorage.setItem(
+      CHART_PREFS_KEY,
+      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false } }),
+    );
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
     const loadHistory = vi.fn(async () => historyFor());
     render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={loadHistory} />);

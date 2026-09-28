@@ -254,8 +254,11 @@ const LiveChart = ({
   // #131: the Pro-style score reads the same history, #143: the EMA lines,
   // and #145: Q-Trend (200 closes before its line) and BLSH (#140: none of
   // them while the indicators are locked)
+  // #150: and the trend tools (their averages and ranges settle on it)
   const historyOn =
-    indicatorsAllowed && (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh);
+    indicatorsAllowed &&
+    (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
+      overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)
