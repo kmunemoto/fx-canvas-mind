@@ -61,6 +61,7 @@ import {
   INDICATOR_RULES,
   TWELVE_ALERT_INTERVALS,
   TWELVE_READS_PER_RUN,
+  TWELVE_RETRY_MS,
   gmoIntervalsDue,
   indicatorIntervalsFor,
   indicatorRuleId,
@@ -75,6 +76,8 @@ import {
   klinePreloadDays,
   renderIndicatorMail,
   twelveCloseDue,
+  twelvePhase,
+  twelveReadDue,
   type IndicatorRule,
   type IndicatorSignal,
   type KlineFile,
@@ -94,7 +97,7 @@ import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outc
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v6-2026-09-29T06:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v7-2026-09-29T07:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -161,10 +164,12 @@ const klinePreloaded = new Set<string>();
 // each chart's newest closed bar judged (its open, ms), so one close is
 // judged once an instance
 const judgedBar = new Map<string, number>();
-// when each Twelve Data chart was last read here: a bar Twelve Data does not
-// have yet is asked for again after a few minutes, not every minute
+// when each Twelve Data chart was last read here (besides the stored row's
+// time, which twelveReadDue goes by: this holds when storing it failed)
 const twelveReadAt = new Map<string, number>();
-const TWELVE_RETRY_MS = 3 * MIN;
+// where each Twelve Data chart's bars start within their length
+// (twelvePhase), learned from its bars; 0 until they are seen
+const twelvePhaseOf = new Map<string, number>();
 // GMO's public API a request at a time, a fifth of a second apart
 let gmoNextAt = 0;
 const GMO_GAP_MS = 200;
@@ -315,7 +320,15 @@ Deno.serve(async (req: Request) => {
       });
       const order = (iv: string) => (INDICATOR_INTERVALS as readonly string[]).indexOf(iv);
       const gmoCharts = followed.filter((c) => isGmoChartPair(c.pair) && gmoDue.includes(c.interval)).sort((a, b) => order(a.interval) - order(b.interval));
-      const twelveCharts = followed.filter((c) => isTwelvePair(c.pair) && twelveCloseDue(c.interval, nowMs) !== null).sort((a, b) => order(a.interval) - order(b.interval));
+      // Twelve Data's by where their own bars close: a chart whose bars have
+      // not been seen by this instance is looked at in the first half hour
+      // of every hour, when its stored bars tell
+      const anHourClosed = twelveCloseDue("1h", nowMs) !== null;
+      const twelveCharts = followed.filter((c) => {
+        if (!isTwelvePair(c.pair)) return false;
+        const phase = twelvePhaseOf.get(`${c.pair}|${c.interval}`);
+        return phase === undefined ? anHourClosed : twelveCloseDue(c.interval, nowMs, phase) !== null;
+      }).sort((a, b) => order(a.interval) - order(b.interval));
       const deadline = Date.now() + FETCH_BUDGET_MS;
       const reads: JsonRecord[] = [];
       const fired: IndicatorSignal[] = [];
@@ -411,8 +424,14 @@ Deno.serve(async (req: Request) => {
       for (const c of twelveCharts) {
         const key = `${c.pair}|${c.interval}`;
         const step = LIVE_STEP_MS[c.interval];
-        const expected = (twelveCloseDue(c.interval, nowMs) as number) - step;
-        if (judgedBar.get(key) === expected) {
+        const learn = (bars: Candle[]) => {
+          const phase = twelvePhase(bars, c.interval);
+          if (phase !== null) twelvePhaseOf.set(key, phase);
+        };
+        const closeNow = () => twelveCloseDue(c.interval, nowMs, twelvePhaseOf.get(key) ?? 0);
+        const known = twelvePhaseOf.has(key);
+        let close = known ? closeNow() : null;
+        if (known && judgedBar.get(key) === (close as number) - step) {
           reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
           continue;
         }
@@ -421,6 +440,16 @@ Deno.serve(async (req: Request) => {
         let stored = rows.length > 0 && Array.isArray(rows[0].bars) && typeof rows[0].fetched_at === "string"
           ? { bars: rows[0].bars as Candle[], fetchedAt: rows[0].fetched_at as string }
           : null;
+        if (stored) learn(stored.bars);
+        else if (!twelvePhaseOf.has(key)) twelvePhaseOf.set(key, 0);
+        close = closeNow();
+        // its bars close at another hour
+        if (close === null) continue;
+        let expected = close - step;
+        if (judgedBar.get(key) === expected) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
+          continue;
+        }
         const closedOfStored = (x: { bars: Candle[]; fetchedAt: string }) => historyOfBars(c.pair, c.interval, x.bars, nowMs, x.fetchedAt).candles;
         const hasClose = (x: { bars: Candle[]; fetchedAt: string } | null) => {
           if (!x) return false;
@@ -428,6 +457,11 @@ Deno.serve(async (req: Request) => {
           return cl.length > 0 && barOpenMs(cl[cl.length - 1].datetime) === expected;
         };
         if (!hasClose(stored)) {
+          // read since the close (twice at most) and the bar was not there
+          if (!twelveReadDue(close, stored ? Date.parse(stored.fetchedAt) : Number.NaN, nowMs)) {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "not_yet" });
+            continue;
+          }
           if (!twelveKey || twelveLeft <= 0 || Date.now() > deadline || nowMs - (twelveReadAt.get(key) ?? 0) < TWELVE_RETRY_MS) {
             reads.push({ pair: c.pair, interval: c.interval, skipped: "waiting" });
             continue;
@@ -455,11 +489,16 @@ Deno.serve(async (req: Request) => {
             });
             if (!up.ok) console.error("fallback store failed:", up.status, await up.text().catch(() => ""));
             stored = { bars, fetchedAt };
+            learn(bars);
           } catch (err) {
             console.error("twelve data read failed:", err);
             reads.push({ pair: c.pair, interval: c.interval, error: "twelve_unavailable" });
             continue;
           }
+          // the bars read may start at another hour than was assumed
+          close = closeNow();
+          if (close === null) continue;
+          expected = close - step;
           if (!hasClose(stored)) {
             reads.push({ pair: c.pair, interval: c.interval, skipped: "not_yet" });
             continue;

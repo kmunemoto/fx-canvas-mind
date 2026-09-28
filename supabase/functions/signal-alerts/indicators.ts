@@ -187,16 +187,42 @@ export const gmoIntervalsDue = (nowMs: number): string[] => {
   return out;
 };
 
-// Twelve Data's bars close on the UTC grid of their length: the newest
-// close of this timeframe, if it fell inside its freshness window
-export const twelveCloseDue = (interval: string, nowMs: number): number | null => {
+// Twelve Data's bars close on the grid of their length, shifted by where
+// they start: the hourly and daily on the UTC grid, the 4-hour ones at
+// 01:00, 05:00 ... UTC (every pair's, gold's too, read 2026-09-28). The
+// newest close of this timeframe, if it fell inside its freshness window.
+export const twelveCloseDue = (interval: string, nowMs: number, phaseMs = 0): number | null => {
   const step = LIVE_STEP_MS[interval];
   if (step === undefined) return null;
-  const close = Math.floor(nowMs / step) * step;
+  const close = Math.floor((nowMs - phaseMs) / step) * step + phaseMs;
   const age = nowMs - close;
   // a minute after the close at the earliest (Twelve Data has the bar)
   return age >= 60_000 && age <= freshFor(interval) ? close : null;
 };
+
+// Where a timeframe's bars start within its length, from the bars
+// themselves (the newest's open), so a shift Twelve Data makes (daylight
+// saving, say) is followed rather than assumed
+export const twelvePhase = (bars: ReadonlyArray<{ datetime: string }>, interval: string): number | null => {
+  const step = LIVE_STEP_MS[interval];
+  const last = bars[bars.length - 1];
+  if (step === undefined || !last) return null;
+  const t = barOpenMs(last.datetime);
+  return Number.isFinite(t) ? ((t % step) + step) % step : null;
+};
+
+// Whether a chart's bars may be read from Twelve Data again for a close,
+// by when they were last read (the stored row's time, the chart's reads
+// too, so every instance keeps to it): once a minute after the close, and
+// once more three minutes later if the bar was not there yet; never a third
+// time. 2026-09-28: the 4-hour charts, looked for at the wrong hour, were
+// read every minute for half an hour.
+export const TWELVE_RETRY_MS = 3 * 60_000;
+export const TWELVE_RETRY_WINDOW_MS = 4 * 60_000;
+export const twelveReadDue = (closeMs: number, fetchedAtMs: number, nowMs: number): boolean =>
+  !Number.isFinite(fetchedAtMs) ||
+  fetchedAtMs < closeMs + 60_000 ||
+  (fetchedAtMs < closeMs + TWELVE_RETRY_WINDOW_MS && nowMs - fetchedAtMs >= TWELVE_RETRY_MS);
 
 // Twelve Data reads a sweep may make: the key allows eight a minute and the
 // live chart makes its own

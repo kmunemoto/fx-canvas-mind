@@ -25,7 +25,10 @@ import {
   keepableKlines,
   klineFileEnded,
   klineFileOf,
+  TWELVE_RETRY_MS,
   twelveCloseDue,
+  twelvePhase,
+  twelveReadDue,
   ultraUnit,
 } from "../../supabase/functions/signal-alerts/indicators";
 import { LIVE_PAIRS as SERVER_PAIRS, TWELVE_CAPS, TWELVE_CAP_REST, TWELVE_DAILY_LIMIT, TWELVE_FX_PAIRS } from "../../supabase/functions/live-chart/logic";
@@ -267,9 +270,12 @@ describe("#155 what the sweep reads, and when", () => {
     expect(twelveCloseDue("1h", h + 60_000)).toBe(h);
     expect(twelveCloseDue("1h", h + 29 * 60_000)).toBe(h);
     expect(twelveCloseDue("1h", h + 31 * 60_000)).toBeNull();
-    // 4 hours: on the UTC grid (08:00, 12:00)
-    expect(twelveCloseDue("4h", h + 5 * 60_000)).toBeNull();
-    expect(twelveCloseDue("4h", Date.UTC(2026, 8, 29, 12, 5, 0))).toBe(Date.UTC(2026, 8, 29, 12, 0, 0));
+    // 4 hours: where the bars start (Twelve Data's at 01:00, 05:00 ... UTC)
+    const at = (hh: number, mm: number) => Date.UTC(2026, 8, 28, hh, mm, 0);
+    expect(twelveCloseDue("4h", at(20, 5), H)).toBeNull();
+    expect(twelveCloseDue("4h", at(21, 1), H)).toBe(at(21, 0));
+    expect(twelveCloseDue("4h", at(21, 31), H)).toBeNull();
+    expect(twelveCloseDue("4h", at(20, 5))).toBe(at(20, 0));
     expect(twelveCloseDue("1day", Date.UTC(2026, 8, 29, 0, 10, 0))).toBe(Date.UTC(2026, 8, 29, 0, 0, 0));
     expect(freshFor("5min")).toBe(10 * 60_000);
     expect(freshFor("15min")).toBe(20 * 60_000);
@@ -277,6 +283,30 @@ describe("#155 what the sweep reads, and when", () => {
     // the alerts read past the chart's caps, under the key's day
     expect(ALERT_TWELVE_CAP).toBeGreaterThan(Math.max(TWELVE_CAP_REST, ...Object.values(TWELVE_CAPS)));
     expect(ALERT_TWELVE_CAP).toBeLessThan(TWELVE_DAILY_LIMIT);
+  });
+
+  it("where Twelve Data's bars start, from the bars themselves", () => {
+    // as stored in production, 2026-09-28 (USD/CAD 4h; the hourly; a daily bar as parsed)
+    expect(twelvePhase([{ datetime: "2026-09-28 13:00:00" }, { datetime: "2026-09-28 17:00:00" }], "4h")).toBe(H);
+    expect(twelvePhase([{ datetime: "2026-09-28 19:00:00" }], "1h")).toBe(0);
+    expect(twelvePhase([{ datetime: "2026-09-28 00:00:00" }], "1day")).toBe(0);
+    expect(twelvePhase([{ datetime: "2026-11-02 02:00:00" }], "4h")).toBe(2 * H);
+    expect(twelvePhase([], "4h")).toBeNull();
+  });
+
+  it("reads a close from Twelve Data twice at most, whichever instance runs", () => {
+    const close = Date.UTC(2026, 8, 28, 21, 0, 0);
+    const m = 60_000;
+    // not read since the close (or read before the bar could be there)
+    expect(twelveReadDue(close, Number.NaN, close + m)).toBe(true);
+    expect(twelveReadDue(close, close - 3 * H, close + m)).toBe(true);
+    expect(twelveReadDue(close, close + 30_000, close + m)).toBe(true);
+    // read a minute after and the bar was not there: once more, three minutes on
+    expect(twelveReadDue(close, close + m, close + 2 * m)).toBe(false);
+    expect(twelveReadDue(close, close + m, close + m + TWELVE_RETRY_MS)).toBe(true);
+    // read again and still not there: no more
+    expect(twelveReadDue(close, close + 4 * m, close + 8 * m)).toBe(false);
+    expect(twelveReadDue(close, close + 4 * m, close + 29 * m)).toBe(false);
   });
 
   it("keeps a GMO file once its day (or year) has ended, and only a sound answer", () => {
@@ -340,5 +370,10 @@ describe("#155 the two sweeps keep to their own rules", () => {
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('if (body.mode === "indicators") {');
     expect(fn).toContain("if (indicatorSweepRunning) return json(");
+  });
+  it("Twelve Data's charts are read by where their own bars close, twice a close at most", () => {
+    expect(fn).toContain("return phase === undefined ? anHourClosed : twelveCloseDue(c.interval, nowMs, phase) !== null;");
+    expect(fn).toContain("if (!twelveReadDue(close, stored ? Date.parse(stored.fetchedAt) : Number.NaN, nowMs)) {");
+    expect(fn).not.toContain("twelveCloseDue(c.interval, nowMs) as number");
   });
 });
