@@ -6,7 +6,23 @@ import { parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
 // client accepts them. Anything malformed is dropped rather than drawn.
 
 export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/live-chart";
-export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"];
+// #153: every pair GMO serves, in the owner's broker's order (楽天FX), then
+// gold — as the function lists them
+export const LIVE_FX_PAIRS = [
+  "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
+  "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY",
+  "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
+  "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD",
+  "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD",
+  "NZD/CAD",
+];
+export const LIVE_COMMODITIES = ["XAU/USD"];
+export const LIVE_PAIRS = [...LIVE_FX_PAIRS, ...LIVE_COMMODITIES];
+// the picker's groups, as the broker's lists are split
+export const LIVE_PAIR_GROUPS: Array<{ key: "fx" | "commodities"; pairs: string[] }> = [
+  { key: "fx", pairs: LIVE_FX_PAIRS },
+  { key: "commodities", pairs: LIVE_COMMODITIES },
+];
 // #146: the 5-minute chart too, for every pair
 export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"];
 // #127: gold (XAU/USD) — its bars from Twelve Data, its price from

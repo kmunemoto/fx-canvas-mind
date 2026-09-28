@@ -27,8 +27,19 @@ import { fetchYearQuotes } from "../signal-alerts/logic.ts";
 import { GMO_HOST, GMO_INTERVALS, GMO_SYMBOLS, type Fetcher, type QuoteCandle } from "../track-outcomes/quotes.ts";
 import { dowTheory } from "../_shared/dow.ts";
 
-// #127: and gold (XAU/USD), which GMO does not carry — see "gold" below
-export const LIVE_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "XAU/USD"] as const;
+// #127: and gold (XAU/USD), which GMO does not carry — see "gold" below.
+// #153: every pair GMO serves (all 21 are among the owner's broker's, 楽天FX),
+// in that broker's order, then gold. The broker's other 17 pairs and its
+// other commodities have no feed here yet (docs §8.65).
+export const LIVE_PAIRS = [
+  "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
+  "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY",
+  "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
+  "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD",
+  "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD",
+  "NZD/CAD",
+  "XAU/USD",
+] as const;
 // #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、
 // 全てのペアに」)
 export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"] as const;

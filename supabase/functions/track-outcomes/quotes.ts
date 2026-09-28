@@ -38,6 +38,18 @@ export const GMO_SYMBOLS: Record<string, string> = {
   "GBP/USD": "GBP_USD",
   "AUD/USD": "AUD_USD",
   "NZD/USD": "NZD_USD",
+  // #153: the rest of GMO's 21 (its /symbols on 2026-09-28), for the live
+  // chart — every one of them is among the owner's broker's pairs
+  "TRY/JPY": "TRY_JPY",
+  "ZAR/JPY": "ZAR_JPY",
+  "MXN/JPY": "MXN_JPY",
+  "HUF/JPY": "HUF_JPY",
+  "SEK/JPY": "SEK_JPY",
+  "EUR/GBP": "EUR_GBP",
+  "AUD/NZD": "AUD_NZD",
+  "AUD/CAD": "AUD_CAD",
+  "NZD/CAD": "NZD_CAD",
+  "NOK/SEK": "NOK_SEK",
 };
 
 // Our intervals, in GMO's spelling. The ones keyed by a calendar day return

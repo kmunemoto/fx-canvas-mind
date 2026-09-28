@@ -57,7 +57,7 @@ import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v8-2026-09-28T08:00:00Z";
+const FUNCTION_VERSION = "live-chart-v9-2026-09-29T02:30:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -97,6 +97,9 @@ const gmoFetcher: Fetcher = async (url) => {
   }
 };
 
+// #153: room for every pair's every timeframe (22 × 6), so a cache is not
+// emptied each time the chart moves to another pair
+const CACHE_KEYS = 200;
 const barsCache = new Map<string, { at: number; body: unknown }>();
 const historyCache = new Map<string, { at: number; body: unknown }>();
 // #129: each pair's and timeframe's closed bars for the Dow read, until a
@@ -277,7 +280,7 @@ Deno.serve(async (req: Request) => {
         const fb = await goldBars(interval);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
         const out = { ok: true, version: FUNCTION_VERSION, reopens, read: goldRead(fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true, fb.ticksFrom ?? null) };
-        if (barsCache.size > 100) barsCache.clear();
+        if (barsCache.size > CACHE_KEYS) barsCache.clear();
         barsCache.set(key, { at: nowMs, body: out });
         return json(out);
       }
@@ -296,7 +299,7 @@ Deno.serve(async (req: Request) => {
         return json({ ok: true, version: FUNCTION_VERSION, reopens, read });
       }
       const out = { ok: true, version: FUNCTION_VERSION, reopens, read: liveRead(pair, interval, quotes, nowMs) };
-      if (barsCache.size > 100) barsCache.clear();
+      if (barsCache.size > CACHE_KEYS) barsCache.clear();
       barsCache.set(key, { at: nowMs, body: out });
       return json(out);
     }
@@ -321,7 +324,7 @@ Deno.serve(async (req: Request) => {
       const quotes = await fetchLiveQuotes(pair, interval, nowMs, nowMs + FETCH_BUDGET_MS, fetcher, HISTORY_BARS + 1);
       if (!quotes || quotes.length === 0) return unavailable();
       const out = { ok: true, version: FUNCTION_VERSION, history: historyRead(pair, interval, quotes, nowMs) };
-      if (historyCache.size > 50) historyCache.clear();
+      if (historyCache.size > CACHE_KEYS) historyCache.clear();
       historyCache.set(key, { at: nowMs, body: out });
       return json(out);
     }
@@ -351,7 +354,7 @@ Deno.serve(async (req: Request) => {
             closed = quotes && quotes.length > 0 ? splitBars(quotes, tf, nowMs).closed : closed;
           }
           if (closed) {
-            if (dowCache.size > 100) dowCache.clear();
+            if (dowCache.size > CACHE_KEYS) dowCache.clear();
             dowCache.set(key, { at: nowMs, closed });
           }
         }

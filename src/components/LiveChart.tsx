@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Radio } from "lucide-react";
+import { Check, LayoutGrid, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
@@ -8,6 +8,7 @@ import type { NumericCandle } from "@/lib/types";
 import {
   LIVE_INTERVALS,
   LIVE_PAIRS,
+  LIVE_PAIR_GROUPS,
   TICK_MS,
   LiveChartError,
   dowTfsFor,
@@ -114,6 +115,15 @@ const LiveChart = ({
   };
   const setPair = (p: string) => choose({ pair: p });
   const chooseInterval = (iv: string) => choose({ interval: iv });
+  // #153: the grouped list of every pair, and the row keeps the chosen pair
+  // in sight (with 22 of them, it may be far along the row)
+  const [gridOpen, setGridOpen] = useState(false);
+  const pairRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = pairRowRef.current;
+    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-pair-${pair}`) : undefined;
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [pair]);
   const setView = (v: LiveView) => choose({ view: v });
   // and the account's, when it arrives after the chart opened (or another
   // chart changes them), is shown
@@ -384,8 +394,22 @@ const LiveChart = ({
     const row = "flex flex-wrap items-center gap-1";
     return (
     <>
-      {/* #144: the pairs in one row that scrolls sideways, so the chart sits higher */}
-      <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-0.5" role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
+      {/* #144: the pairs in one row that scrolls sideways, so the chart sits higher.
+          #153: with the broker's 21 pairs, a button before it opens them all
+          at once, grouped, as the broker's own picker has them */}
+      <div className="-mx-1 flex items-center gap-1 px-1">
+      <button
+        type="button"
+        aria-expanded={gridOpen}
+        aria-label={l.pairGrid}
+        title={l.pairGrid}
+        onClick={() => setGridOpen((v) => !v)}
+        data-testid="live-pair-grid-open"
+        className={`shrink-0 rounded border p-1 ${gridOpen ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+      >
+        <LayoutGrid className="h-4 w-4" />
+      </button>
+      <div ref={pairRowRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5" role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
         {LIVE_PAIRS.map((p) => {
           const tk = ticks[p];
           return (
@@ -406,6 +430,42 @@ const LiveChart = ({
           );
         })}
       </div>
+      </div>
+      {gridOpen && (
+        <div className="space-y-2 rounded-lg border border-border p-2" data-testid="live-pair-grid">
+          {LIVE_PAIR_GROUPS.map((g) => (
+            <section key={g.key} className="space-y-1" data-testid={`live-pair-group-${g.key}`}>
+              <h4 className="text-[11px] font-semibold text-muted-foreground">{l.pairGroups[g.key] ?? g.key}</h4>
+              <div className="grid grid-cols-3 gap-1 sm:grid-cols-4">
+                {g.pairs.map((p) => {
+                  const tk = ticks[p];
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={p === pair}
+                      onClick={() => {
+                        setPair(p);
+                        setGridOpen(false);
+                      }}
+                      data-testid={`live-grid-pair-${p}`}
+                      className={`rounded border px-1 py-1 text-left ${
+                        p === pair ? "border-primary/60 bg-primary/10 text-primary" : "border-border"
+                      }`}
+                    >
+                      <span className="block truncate text-[11px] font-semibold">{l.pairShort[p] ?? l.pairNames[p] ?? p}</span>
+                      <span className="flex items-baseline justify-between gap-1 font-mono text-[10px] text-muted-foreground">
+                        <span>{p}</span>
+                        <span className="text-foreground">{tk ? tk.mid.toFixed(priceDecimals(p)) : ""}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
       <div className={row} role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
         {intervalsFor(pair).map((iv) => (
           <button
@@ -451,9 +511,14 @@ const LiveChart = ({
   const symbolMenu: FullscreenMenu = {
     label: pair.replace("/", ""),
     title: l.pairsLabel,
+    // #153: grouped as the card's list is (FX, then the commodities)
     render: (close) => (
-      <ul className="divide-y divide-border" data-testid="live-sheet-pairs">
-        {LIVE_PAIRS.map((p) => {
+      <div className="space-y-3" data-testid="live-sheet-pairs">
+      {LIVE_PAIR_GROUPS.map((g) => (
+      <section key={g.key} data-testid={`live-sheet-group-${g.key}`}>
+      <h4 className="px-2 pb-1 text-xs font-semibold text-muted-foreground">{l.pairGroups[g.key] ?? g.key}</h4>
+      <ul className="divide-y divide-border">
+        {g.pairs.map((p) => {
           const tk = ticks[p];
           return (
             <li key={p}>
@@ -478,6 +543,9 @@ const LiveChart = ({
           );
         })}
       </ul>
+      </section>
+      ))}
+      </div>
     ),
   };
   const intervalMenu: FullscreenMenu = {
