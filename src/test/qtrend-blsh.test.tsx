@@ -291,6 +291,19 @@ describe("#145 on the chart", () => {
     }
   });
 
+  it("#149: judges nothing on the newest candles it is told to leave out (those the prices made after the last read)", () => {
+    // bar 419's STRONG BUY is the second newest candle here
+    const candles = bars.slice(400, 421);
+    const view = render(<PriceChart candles={candles} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
+    expect(screen.getAllByTestId("chart-qtrend-signal-BUY-strong")).toHaveLength(2);
+    expect(screen.getAllByTestId("chart-qtblsh-signal-BUY")).toHaveLength(2);
+    view.unmount();
+    // the same candles, the second newest made by the prices since the read: not judged until the read brings it
+    render(<PriceChart candles={candles} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast unjudged={2} />);
+    expect(screen.getAllByTestId("chart-qtrend-signal-BUY-strong")).toHaveLength(1);
+    expect(screen.getAllByTestId("chart-qtblsh-signal-BUY")).toHaveLength(1);
+  });
+
   it("waits for the bars before the chart's (the line needs 200 closes), and is locked without a plan", () => {
     const { unmount } = render(<PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: null, status: "loading" }} />);
     expect(screen.queryByTestId("chart-qtrend")).toBeNull();

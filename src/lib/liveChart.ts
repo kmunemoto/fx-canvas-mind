@@ -191,6 +191,13 @@ export const tickLive = (live: LiveBars, mid: number, tickMs: number, stepMs: nu
   return { candles: [...candles, { datetime: stamp(open), open: mid, high: mid, low: mid, close: mid }], formingOpen: open };
 };
 
+// #149: how many of the newest candles on screen no indicator judges on:
+// everything after the read's last closed bar — its forming bar, and the
+// bars the prices made since (their open, high, low and close are the
+// prices seen here, not the feed's; the next read brings the feed's)
+export const unjudgedOf = (readLength: number, readForming: boolean, shownLength: number): number =>
+  Math.max(0, shownLength - (readLength - (readForming ? 1 : 0)));
+
 // A new read: its candles, and after them the bars the prices made that
 // are newer than its own
 export const withRead = (candles: NumericCandle[], formingOpen: number | null, prev: LiveBars | null): LiveBars => {

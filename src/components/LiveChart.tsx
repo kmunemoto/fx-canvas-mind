@@ -18,6 +18,7 @@ import {
   historyBefore,
   intervalsFor,
   tickLive,
+  unjudgedOf,
   withRead,
   type DowTf,
   type LiveBars,
@@ -654,6 +655,9 @@ const LiveChart = ({
         seriesKey={`${pair}|${interval}`}
         // #119: the newest candle is still forming while a close is due
         formingLast={shown?.formingOpen != null}
+        // #149: indicators judge on the feed's bars only, not on those the
+        // prices made since the last read
+        unjudged={read ? unjudgedOf(read.candles.length, formingOpen !== null, candles.length) : 0}
         signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}

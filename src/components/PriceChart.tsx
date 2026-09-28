@@ -120,6 +120,11 @@ interface Props {
   // #119: the newest candle is still forming (the live chart): the
   // SPECTRA-style line marks no turn on it
   formingLast?: boolean;
+  // #149: how many of the newest candles no indicator judges on — the one
+  // forming and, on the live chart, those the prices made after its last
+  // read, until the next read brings them from the feed (at least 1 with
+  // formingLast)
+  unjudged?: number;
   // #119: what the signal labels are called in the chart's indicator list
   signalName?: string;
   // #116: when this changes (another pair or timeframe) the view goes back
@@ -281,9 +286,11 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
+  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
   landscapeFullscreen = false,
 }: Props) => {
+  // #149: the newest candles left out of every indicator's judging
+  const tail = Math.max(unjudged, formingLast ? 1 : 0);
   const t = useT();
   const clipId = useId();
   const [hover, setHover] = useState<number | null>(null);
@@ -458,26 +465,26 @@ const PriceChart = ({
   const showSarDots = hasSar && sarStyle !== "cloud" && ov.sarDots;
   const showSarCloud = hasSar && sarStyle !== "dots" && ov.sarCloud;
   const kst = useMemo(
-    () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
-    [ov.kalman, candles, formingLast],
+    () => (ov.kalman ? kalmanSupertrend(candles, KST_DEFAULTS, candles.length - 1 - tail) : null),
+    [ov.kalman, candles, tail],
   );
   // #136: SuperTrend, on the closed candles
   const st = useMemo(
-    () => (ov.supertrend ? supertrend(candles, ST_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
-    [ov.supertrend, candles, formingLast],
+    () => (ov.supertrend ? supertrend(candles, ST_DEFAULTS, candles.length - 1 - tail) : null),
+    [ov.supertrend, candles, tail],
   );
   // #137: UT Bot Alerts, on the closed candles
   const ut = useMemo(
-    () => (ov.utBot ? utBot(candles, UT_DEFAULTS, formingLast ? candles.length - 2 : candles.length - 1) : null),
-    [ov.utBot, candles, formingLast],
+    () => (ov.utBot ? utBot(candles, UT_DEFAULTS, candles.length - 1 - tail) : null),
+    [ov.utBot, candles, tail],
   );
   // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
   // Volume Profile of the newest candles — the forming one too, as the
   // original recomputes on the chart's last bar. #123: one indicator, on
   // one switch.
   const fvgcf = useMemo(
-    () => (ov.fvgProfile ? fvgCrossfire(candles, formingLast ? candles.length - 2 : candles.length - 1) : null),
-    [ov.fvgProfile, candles, formingLast],
+    () => (ov.fvgProfile ? fvgCrossfire(candles, candles.length - 1 - tail) : null),
+    [ov.fvgProfile, candles, tail],
   );
   const vp = useMemo(() => (ov.fvgProfile ? weightedVolumeProfile(candles) : null), [ov.fvgProfile, candles]);
   // #124: Zone Shift, over the history before the chart's candles and the
@@ -489,8 +496,8 @@ const PriceChart = ({
   const zs = useMemo(() => {
     if (!ov.zoneShift || !zsListed || candles.length === 0 || zsPast === null) return null;
     const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
-    return { ...zoneShift(all, formingLast ? all.length - 2 : all.length - 1), off: zsPast.length, total: all.length };
-  }, [ov.zoneShift, zsListed, zsPast, candles, formingLast]);
+    return { ...zoneShift(all, all.length - 1 - tail), off: zsPast.length, total: all.length };
+  }, [ov.zoneShift, zsListed, zsPast, candles, tail]);
   // #131: the Pro-style score's signals, over the same history as Zone Shift
   // (each part and the score are ranked against `window` bars each, so its first
   // signal needs about 2 windows and the EMA); listed where Zone Shift is
@@ -498,9 +505,9 @@ const PriceChart = ({
   const gp = useMemo(() => {
     if (!ov.gainzPro || !gpListed || candles.length === 0 || zsPast === null) return null;
     const all = zsPast.length > 0 ? [...zsPast, ...candles] : candles;
-    const read = gainzPro(all, GP_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
+    const read = gainzPro(all, GP_DEFAULTS, all.length - 1 - tail);
     return { signals: read.signals.map((sg) => ({ ...sg, i: sg.i - zsPast.length })).filter((sg) => sg.i >= 0), total: all.length };
-  }, [ov.gainzPro, gpListed, zsPast, candles, formingLast]);
+  }, [ov.gainzPro, gpListed, zsPast, candles, tail]);
   // #143: EMA 50 and EMA 200 over the same history and the candles, the
   // forming one too (as TradingView draws them). Given a history that is
   // still loading, nothing yet: the line would move when it came.
@@ -526,7 +533,7 @@ const PriceChart = ({
   const qt = useMemo(() => {
     if (!qtNeeded || candles.length === 0 || zsPast === null) return null;
     const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
-    const r = qTrend(all, QT_DEFAULTS, formingLast ? all.length - 2 : all.length - 1);
+    const r = qTrend(all, QT_DEFAULTS, all.length - 1 - tail);
     const off = zsPast.length - qtFrom;
     return {
       whole: r,
@@ -535,7 +542,7 @@ const PriceChart = ({
       trend: r.trend.slice(off),
       signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
     };
-  }, [qtNeeded, zsPast, candles, formingLast, qtFrom]);
+  }, [qtNeeded, zsPast, candles, tail, qtFrom]);
   const blshRead = useMemo(() => {
     if (!blshNeeded || candles.length === 0 || zsPast === null) return null;
     const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
@@ -545,11 +552,11 @@ const PriceChart = ({
   }, [blshNeeded, zsPast, candles, qtFrom]);
   const triple = useMemo(() => {
     if (!ov.qtBlsh || !qt || !blshRead) return null;
-    const last = qt.whole.line.length - 1 - (formingLast ? 1 : 0);
+    const last = qt.whole.line.length - 1 - tail;
     return tripleConfirm(qt.whole.trend, blshRead.whole, last)
       .map((sg) => ({ ...sg, i: sg.i - qt.off }))
       .filter((sg) => sg.i >= 0);
-  }, [ov.qtBlsh, qt, blshRead, formingLast]);
+  }, [ov.qtBlsh, qt, blshRead, tail]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)

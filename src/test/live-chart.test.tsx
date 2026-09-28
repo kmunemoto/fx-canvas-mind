@@ -6,7 +6,7 @@ import { LocaleProvider } from "@/lib/i18n";
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
-import { normalizeLiveRead, normalizeTicks, tickLive, withRead, type LiveBars, type LiveRead } from "../lib/liveChart";
+import { normalizeLiveRead, normalizeTicks, tickLive, unjudgedOf, withRead, type LiveBars, type LiveRead } from "../lib/liveChart";
 import {
   CHART_BARS,
   HISTORY_BARS,
@@ -230,6 +230,17 @@ describe("#113 the client side", () => {
     const next = tickLive(live, 151, open + M15 + 1_000, M15);
     expect(next.candles).toHaveLength(3);
     expect(next.formingOpen).toBe(open + M15);
+  });
+
+  it("#149: leaves out of the indicators' judging everything after the read's last closed bar", () => {
+    // a read with its bar forming, nothing made since: only the forming one
+    expect(unjudgedOf(121, true, 121)).toBe(1);
+    // the prices started the next bar: the read's forming one (now closed on screen) and the new one
+    expect(unjudgedOf(121, true, 122)).toBe(2);
+    // a read with nothing forming (the market shut): none
+    expect(unjudgedOf(120, false, 120)).toBe(0);
+    // a read that could not be refreshed, and two bars the prices made since
+    expect(unjudgedOf(120, false, 122)).toBe(2);
   });
 
   it("#147: a new read replaces what the prices made, except bars newer than its own", () => {
