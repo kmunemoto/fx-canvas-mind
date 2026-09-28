@@ -24,6 +24,13 @@
 // (analyze/gainz.ts). It is read on the same bars, recorded and settled the
 // same way (signal_events.rule tells the two apart), and mailed only to the
 // charts subscribed with rule = 'gainz'.
+//
+// #155: Q-Trend's and ULTRA's signals, on every pair of the live chart
+// (indicators.ts): a third caller, pg_cron every minute with the same token
+// and {"mode": "indicators"}. Judged on the bars the live chart holds, with
+// the chart's own code, and mailed to the charts subscribed with rule =
+// 'qtrend' or 'ultra'. Not recorded or settled (signal_events is the two
+// rules' record).
 
 import {
   ALERT_INTERVALS,
@@ -47,8 +54,47 @@ import { GA_RULE_ID, isRuleKey, type RuleKey } from "../analyze/gainz.ts";
 import type { Fetcher, QuoteCandle } from "../track-outcomes/quotes.ts";
 import { BACKTEST, GA_BACKTEST, fillAt, settleEvent, summarize, type EventRow, type OpenEvent } from "./record.ts";
 import { isPossiblyClosed } from "../_shared/market-hours.ts";
+import {
+  ALERT_TWELVE_CAP,
+  INDICATOR_INTERVALS,
+  INDICATOR_PAIRS,
+  INDICATOR_RULES,
+  TWELVE_ALERT_INTERVALS,
+  TWELVE_READS_PER_RUN,
+  gmoIntervalsDue,
+  indicatorIntervalsFor,
+  indicatorRuleId,
+  indicatorSignals,
+  isGmoChartPair,
+  isIndicatorChart,
+  isIndicatorRule,
+  keepableKlines,
+  klineFileEnded,
+  klineFileKey,
+  klineFileOf,
+  klinePreloadDays,
+  renderIndicatorMail,
+  twelveCloseDue,
+  type IndicatorRule,
+  type IndicatorSignal,
+  type KlineFile,
+} from "./indicators.ts";
+import {
+  GOLD_BARS,
+  HISTORY_BARS,
+  LIVE_STEP_MS,
+  fetchLiveQuotes,
+  historyOfBars,
+  historyRead,
+  isTwelvePair,
+  parseTwelveData,
+  twelveDataUrl,
+} from "../live-chart/logic.ts";
+import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
+import { barOpenMs } from "../analyze/state.ts";
+import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v5-2026-09-25T18:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v6-2026-09-29T06:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -103,6 +149,32 @@ interface Subscription {
   lang: string;
   rule: RuleKey;
 }
+
+// ---- #155: what the "indicators" sweep keeps between its runs ----------------------------
+//
+// GMO's ended files (indicators.ts "GMO's files, kept"): those this instance
+// has read, by klineFileKey; the table keeps them across instances, and each
+// chart's are read from it once an instance
+const klineMemory = new Map<string, unknown>();
+const KLINE_MEMORY_MAX = 6000;
+const klinePreloaded = new Set<string>();
+// each chart's newest closed bar judged (its open, ms), so one close is
+// judged once an instance
+const judgedBar = new Map<string, number>();
+// when each Twelve Data chart was last read here: a bar Twelve Data does not
+// have yet is asked for again after a few minutes, not every minute
+const twelveReadAt = new Map<string, number>();
+const TWELVE_RETRY_MS = 3 * MIN;
+// GMO's public API a request at a time, a fifth of a second apart
+let gmoNextAt = 0;
+const GMO_GAP_MS = 200;
+// a sweep that runs past the minute is not joined by the next one in the
+// same instance (it would read the same charts again)
+let indicatorSweepRunning = false;
+// Resend allows two requests a second
+let sendNextAt = 0;
+const SEND_GAP_MS = 600;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -185,7 +257,19 @@ Deno.serve(async (req: Request) => {
         await patchRow(id, { status: "failed", error: "no_email" });
         return "failed";
       }
-      const sent = await sendMail(resendKey, from, to, mail);
+      // #155: two a second at most (Resend's limit), once more after a
+      // "429 rate limit"
+      const send = async () => {
+        const at = Math.max(Date.now(), sendNextAt);
+        sendNextAt = at + SEND_GAP_MS;
+        await sleep(at - Date.now());
+        return await sendMail(resendKey, from, to, mail);
+      };
+      let sent = await send();
+      if (!sent.ok && sent.error.startsWith("429") && !/quota/i.test(sent.error)) {
+        await sleep(1_500);
+        sent = await send();
+      }
       if (sent.ok) {
         await patchRow(id, { status: "sent", provider_id: sent.id, sent_at: new Date().toISOString() });
         return "sent";
@@ -199,6 +283,284 @@ Deno.serve(async (req: Request) => {
     const bodyRaw = await req.json().catch(() => null);
     const body: JsonRecord = isRecord(bodyRaw) ? bodyRaw : {};
 
+    // ---- #155: Q-Trend's and ULTRA's signals (indicators.ts) --------------------------------
+    //
+    // The charts due at this minute that somebody follows: GMO's read with
+    // its ended files kept, Twelve Data's from the bars the live chart keeps
+    // (public.live_chart_fallback, read again here when no bar of this close
+    // is in them, within the day's reads), each judged as the chart judges
+    // it, each fresh signal mailed once per subscriber.
+    const indicatorSweep = async (): Promise<JsonRecord> => {
+      const summary: JsonRecord = { ok: true, mode: "indicators", version: FUNCTION_VERSION, email_configured: emailConfigured };
+      if (isPossiblyClosed(nowMs)) return { ...summary, skipped: "market_closed" };
+      const minute = new Date(nowMs).getUTCMinutes();
+      // GMO's files kept past two months are not needed again (the hourly
+      // chart reaches back some 40 days)
+      if (new Date(nowMs).getUTCHours() === 3 && minute === 7) {
+        const res = await rest(`gmo_kline_files?fetched_at=lt.${encodeURIComponent(new Date(nowMs - 60 * 24 * 60 * MIN).toISOString())}`, { method: "DELETE" });
+        if (!res.ok) console.error("kline purge failed:", res.status, await res.text().catch(() => ""));
+      }
+      const subs = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra)&select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && isIndicatorChart(r.pair, r.interval) && typeof r.lang === "string")
+        .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
+      summary.subscriptions = subs.length;
+      if (subs.length === 0) return summary;
+
+      // the charts followed, due now: GMO's by the minute, Twelve Data's by
+      // their close; the quicker timeframes first
+      const gmoDue = gmoIntervalsDue(nowMs);
+      const followed = [...new Set(subs.map((x) => `${x.pair}|${x.interval}`))].map((k) => {
+        const [pair, interval] = k.split("|");
+        return { pair, interval };
+      });
+      const order = (iv: string) => (INDICATOR_INTERVALS as readonly string[]).indexOf(iv);
+      const gmoCharts = followed.filter((c) => isGmoChartPair(c.pair) && gmoDue.includes(c.interval)).sort((a, b) => order(a.interval) - order(b.interval));
+      const twelveCharts = followed.filter((c) => isTwelvePair(c.pair) && twelveCloseDue(c.interval, nowMs) !== null).sort((a, b) => order(a.interval) - order(b.interval));
+      const deadline = Date.now() + FETCH_BUDGET_MS;
+      const reads: JsonRecord[] = [];
+      const fired: IndicatorSignal[] = [];
+      const files = { memory: 0, table: 0, ended: 0, live: 0 };
+
+      // GMO, a request at a time; once it says it is down for maintenance,
+      // no more
+      let maintenance = false;
+      const paced = async (url: string) => {
+        if (maintenance) return null;
+        const at = Math.max(Date.now(), gmoNextAt);
+        gmoNextAt = at + GMO_GAP_MS;
+        await sleep(at - Date.now());
+        const got = await gmoFetcher(url);
+        if (typeof got === "object" && got !== null && (got as { status?: unknown }).status === 5) maintenance = true;
+        return got;
+      };
+      const storeFile = async (f: KlineFile, body: unknown) => {
+        const res = await rest("gmo_kline_files?on_conflict=symbol,price_type,interval,date_key", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ symbol: f.symbol, price_type: f.priceType, interval: f.interval, date_key: f.date, body }),
+        });
+        if (!res.ok) console.error("kline store failed:", res.status, await res.text().catch(() => ""));
+      };
+      // an ended file from this instance, else from GMO (and kept); a file
+      // still being written from GMO
+      const cachedFetcher: Fetcher = async (url) => {
+        const f = klineFileOf(url);
+        if (!f || !klineFileEnded(f.date, nowMs)) {
+          files.live++;
+          return await paced(url);
+        }
+        const k = klineFileKey(f);
+        if (klineMemory.has(k)) {
+          files.memory++;
+          return klineMemory.get(k);
+        }
+        files.ended++;
+        const body = await paced(url);
+        if (keepableKlines(body)) {
+          if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+          klineMemory.set(k, body);
+          await storeFile(f, body);
+        }
+        return body;
+      };
+      // a chart's kept files, from the table, once an instance
+      const preload = async (pair: string, interval: string) => {
+        const symbol = GMO_SYMBOLS[pair];
+        const spec = GMO_INTERVALS[interval];
+        if (!symbol || !spec) return;
+        const key = `${symbol}|${spec.name}`;
+        if (klinePreloaded.has(key)) return;
+        const since = spec.key === "day"
+          ? jstDayKey(nowMs - klinePreloadDays(interval, HISTORY_BARS + 1) * 24 * 60 * MIN)
+          : String(Number(jstYearKey(nowMs)) - 1);
+        const rows = await readRows(
+          `gmo_kline_files?symbol=eq.${encodeURIComponent(symbol)}&interval=eq.${encodeURIComponent(spec.name)}&date_key=gte.${since}&select=price_type,date_key,body`,
+        );
+        for (const r of rows) {
+          if (typeof r.price_type !== "string" || typeof r.date_key !== "string" || !keepableKlines(r.body)) continue;
+          if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+          klineMemory.set(klineFileKey({ symbol, priceType: r.price_type, interval: spec.name, date: r.date_key }), r.body);
+          files.table++;
+        }
+        klinePreloaded.add(key);
+      };
+      const judge = (pair: string, interval: string, closed: Candle[], newest: number) => {
+        const sigs = indicatorSignals(pair, interval, closed, nowMs);
+        judgedBar.set(`${pair}|${interval}`, newest);
+        fired.push(...sigs);
+        return { pair, interval, bars: closed.length, newest: new Date(newest).toISOString(), signals: sigs.map((x) => `${x.rule}:${x.side}${x.strong ? "!" : ""}`) };
+      };
+
+      // Twelve Data's first: a few reads at most, which GMO's many would
+      // otherwise leave no time for
+      let twelveLeft = TWELVE_READS_PER_RUN;
+      const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
+      const takeTwelveRead = async (cap: number): Promise<boolean> => {
+        try {
+          const r = await rest("rpc/take_twelve_data_credit", { method: "POST", body: JSON.stringify({ p_cap: cap }) });
+          if (!r.ok) {
+            console.error("twelve data count failed:", r.status, await r.text().catch(() => ""));
+            return true;
+          }
+          return (await r.json().catch(() => true)) !== false;
+        } catch (err) {
+          console.error("twelve data count failed:", err);
+          return true;
+        }
+      };
+      for (const c of twelveCharts) {
+        const key = `${c.pair}|${c.interval}`;
+        const step = LIVE_STEP_MS[c.interval];
+        const expected = (twelveCloseDue(c.interval, nowMs) as number) - step;
+        if (judgedBar.get(key) === expected) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
+          continue;
+        }
+        // the bars the live chart keeps (live-chart index.ts fallbackBars)
+        const rows = await readRows(`live_chart_fallback?pair=eq.${encodeURIComponent(c.pair)}&interval=eq.${encodeURIComponent(c.interval)}&select=bars,fetched_at`);
+        let stored = rows.length > 0 && Array.isArray(rows[0].bars) && typeof rows[0].fetched_at === "string"
+          ? { bars: rows[0].bars as Candle[], fetchedAt: rows[0].fetched_at as string }
+          : null;
+        const closedOfStored = (x: { bars: Candle[]; fetchedAt: string }) => historyOfBars(c.pair, c.interval, x.bars, nowMs, x.fetchedAt).candles;
+        const hasClose = (x: { bars: Candle[]; fetchedAt: string } | null) => {
+          if (!x) return false;
+          const cl = closedOfStored(x);
+          return cl.length > 0 && barOpenMs(cl[cl.length - 1].datetime) === expected;
+        };
+        if (!hasClose(stored)) {
+          if (!twelveKey || twelveLeft <= 0 || Date.now() > deadline || nowMs - (twelveReadAt.get(key) ?? 0) < TWELVE_RETRY_MS) {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "waiting" });
+            continue;
+          }
+          if (!(await takeTwelveRead(ALERT_TWELVE_CAP))) {
+            reads.push({ pair: c.pair, interval: c.interval, error: "day_spent" });
+            continue;
+          }
+          twelveLeft--;
+          twelveReadAt.set(key, nowMs);
+          try {
+            const r = await fetch(twelveDataUrl(c.pair, c.interval, twelveKey, GOLD_BARS), { signal: AbortSignal.timeout(10_000) });
+            const bars = parseTwelveData(await r.json().catch(() => null), c.interval);
+            if (!r.ok || !bars || bars.length < 60) {
+              reads.push({ pair: c.pair, interval: c.interval, error: "twelve_unavailable" });
+              continue;
+            }
+            // as of the run's clock, as the live chart stamps its reads
+            const fetchedAt = new Date(nowMs).toISOString();
+            // kept for the chart as well, in its own shape
+            const up = await rest("live_chart_fallback?on_conflict=pair,interval", {
+              method: "POST",
+              headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+              body: JSON.stringify({ pair: c.pair, interval: c.interval, bars, source: "twelvedata", fetched_at: fetchedAt }),
+            });
+            if (!up.ok) console.error("fallback store failed:", up.status, await up.text().catch(() => ""));
+            stored = { bars, fetchedAt };
+          } catch (err) {
+            console.error("twelve data read failed:", err);
+            reads.push({ pair: c.pair, interval: c.interval, error: "twelve_unavailable" });
+            continue;
+          }
+          if (!hasClose(stored)) {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "not_yet" });
+            continue;
+          }
+        }
+        const closed = closedOfStored(stored!);
+        reads.push({ ...judge(c.pair, c.interval, closed, expected), twelve: true });
+      }
+      for (const c of gmoCharts) {
+        const key = `${c.pair}|${c.interval}`;
+        const step = LIVE_STEP_MS[c.interval];
+        const spec = GMO_INTERVALS[c.interval];
+        // on the day-keyed charts (5 min to 1 hour, on the UTC grid) the
+        // newest closed bar is known before reading
+        const expected = spec.key === "day" ? Math.floor(nowMs / step) * step - step : null;
+        if (expected !== null && judgedBar.get(key) === expected) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
+          continue;
+        }
+        if (Date.now() > deadline || maintenance) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: maintenance ? "maintenance" : "deadline" });
+          continue;
+        }
+        await preload(c.pair, c.interval);
+        // the chart's history read (the chart's own function), rounded as drawn
+        const quotes = await fetchLiveQuotes(c.pair, c.interval, nowMs, deadline, cachedFetcher, HISTORY_BARS + 1);
+        if (!quotes || quotes.length === 0) {
+          reads.push({ pair: c.pair, interval: c.interval, error: maintenance ? "maintenance" : "unavailable" });
+          continue;
+        }
+        const closed = historyRead(c.pair, c.interval, quotes, nowMs).candles;
+        const newest = closed.length > 0 ? barOpenMs(closed[closed.length - 1].datetime) : Number.NaN;
+        // a read cut short is not the chart's history (a year-keyed read
+        // holds what the chart's does, fewer than 600 on the daily chart)
+        if (spec.key === "day" && closed.length < HISTORY_BARS) {
+          reads.push({ pair: c.pair, interval: c.interval, error: "short", bars: closed.length });
+          continue;
+        }
+        if (expected !== null && newest !== expected) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: "not_yet", newest: Number.isFinite(newest) ? new Date(newest).toISOString() : null });
+          continue;
+        }
+        if (judgedBar.get(key) === newest) {
+          reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
+          continue;
+        }
+        reads.push(judge(c.pair, c.interval, closed, newest));
+      }
+
+      summary.reads = reads;
+      summary.files = files;
+      summary.twelve_reads = TWELVE_READS_PER_RUN - twelveLeft;
+      summary.signals = fired.length;
+      if (fired.length === 0) return summary;
+
+      const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
+      const access = new Map<string, { allowed: boolean; email: string | null }>();
+      for (const sig of fired) {
+        for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
+          let who = access.get(sub.user_id);
+          if (!who) {
+            const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
+            who = { allowed: alertsAllowed(plan, email), email };
+            access.set(sub.user_id, who);
+          }
+          if (!who.allowed) {
+            counts.not_allowed++;
+            continue;
+          }
+          const id = await claimRow({
+            user_id: sub.user_id,
+            kind: "signal",
+            pair: sig.pair,
+            interval: sig.interval,
+            bar_time: sig.barTime,
+            closed_at: sig.closedAt,
+            side: sig.side,
+            entry: sig.close,
+            stop: sig.sl,
+            target: sig.tps ? sig.tps[0] : null,
+            rsi: sig.rsi,
+            rsi_prev: sig.rsiPrev,
+            sar: null,
+            atr: sig.eps,
+            rule: indicatorRuleId(sig.rule),
+            strong: sig.rule === "qtrend" ? sig.strong : null,
+            event_id: null,
+            status: "pending",
+          });
+          if (id === null) {
+            counts.duplicate++;
+            continue;
+          }
+          const lang: Lang = isLang(sub.lang) ? sub.lang : "ja";
+          const outcome = await deliver(id, who.email, renderIndicatorMail(sig, lang));
+          counts[outcome] = (counts[outcome] ?? 0) + 1;
+        }
+      }
+      return { ...summary, ...counts };
+    };
+
     // ---- the sweep ---------------------------------------------------------------
     const sweepToken = req.headers.get("x-sweep-token");
     if (sweepToken) {
@@ -207,13 +569,26 @@ Deno.serve(async (req: Request) => {
       if (typeof expected !== "string" || expected.length === 0 || !constantTimeEqual(sweepToken, expected)) {
         return json({ ok: false, error: "認証に失敗しました" }, 401);
       }
+      // #155: every minute, Q-Trend's and ULTRA's
+      if (body.mode === "indicators") {
+        if (indicatorSweepRunning) return json({ ok: true, mode: "indicators", version: FUNCTION_VERSION, skipped: "busy" });
+        indicatorSweepRunning = true;
+        try {
+          return json(await indicatorSweep());
+        } finally {
+          indicatorSweepRunning = false;
+        }
+      }
       const summary: JsonRecord = { ok: true, mode: "sweep", version: FUNCTION_VERSION, email_configured: emailConfigured };
       // "Enter now" is not an available action while the market may be shut,
       // which is when analyze refuses too
       if (isPossiblyClosed(nowMs)) return json({ ...summary, skipped: "market_closed" });
 
-      const subs: Subscription[] = (await readRows("signal_alert_subscriptions?select=user_id,pair,interval,lang,rule"))
-        .filter((r) => typeof r.user_id === "string" && isAlertPair(r.pair) && isAlertInterval(r.interval) && typeof r.lang === "string")
+      // (#155: its own two rules' only — Q-Trend's and ULTRA's are the
+      // "indicators" sweep's, and a rule this sweep does not know is not
+      // RSI + SAR)
+      const subs: Subscription[] = (await readRows("signal_alert_subscriptions?rule=in.(rsi_sar,gainz)&select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isAlertPair(r.pair) && isAlertInterval(r.interval) && typeof r.lang === "string" && isRuleKey(r.rule))
         .map((r) => ({
           user_id: r.user_id as string,
           pair: r.pair as string,
@@ -378,7 +753,7 @@ Deno.serve(async (req: Request) => {
       const [subs, alerts] = await Promise.all([
         readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,lang,rule&order=created_at.asc`),
         readRows(
-          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,rule,status,skip_reason,error,created_at,sent_at,event:signal_events(outcome,r,bars,exit_at)&order=created_at.desc&limit=${RECENT_ALERTS}`,
+          `signal_alerts?user_id=eq.${uid}&select=id,kind,pair,interval,bar_time,closed_at,side,entry,stop,target,rsi,rsi_prev,sar,rule,strong,status,skip_reason,error,created_at,sent_at,event:signal_events(outcome,r,bars,exit_at)&order=created_at.desc&limit=${RECENT_ALERTS}`,
         ),
       ]);
       // #108: the live record. "all" is every signal the rule fired outside
@@ -421,7 +796,20 @@ Deno.serve(async (req: Request) => {
         email,
         pairs: ALERT_PAIRS,
         intervals: ALERT_INTERVALS,
-        subscriptions: subs.map((s) => ({ pair: s.pair, interval: s.interval, rule: isRuleKey(s.rule) ? s.rule : "rsi_sar" })),
+        // #155: Q-Trend's and ULTRA's charts: every pair of the live chart,
+        // those read from Twelve Data on 1 hour and up
+        indicator: {
+          rules: INDICATOR_RULES,
+          pairs: INDICATOR_PAIRS,
+          intervals: INDICATOR_INTERVALS,
+          limited: Object.fromEntries(INDICATOR_PAIRS.filter((p) => isTwelvePair(p)).map((p) => [p, indicatorIntervalsFor(p)])),
+          limited_intervals: TWELVE_ALERT_INTERVALS,
+        },
+        subscriptions: subs.map((s) => ({
+          pair: s.pair,
+          interval: s.interval,
+          rule: isRuleKey(s.rule) || isIndicatorRule(s.rule) ? s.rule : "rsi_sar",
+        })),
         performance,
         alerts,
       };
@@ -431,12 +819,15 @@ Deno.serve(async (req: Request) => {
     if (action === "status") return json(await status());
 
     if (action === "set") {
-      if (!isAlertPair(body.pair) || !isAlertInterval(body.interval) || typeof body.on !== "boolean") {
+      // #155: Q-Trend's and ULTRA's on their own charts
+      const indicator = isIndicatorRule(body.rule);
+      const chartOk = indicator ? isIndicatorChart(body.pair, body.interval) : isAlertPair(body.pair) && isAlertInterval(body.interval);
+      if (!chartOk || typeof body.pair !== "string" || typeof body.interval !== "string" || typeof body.on !== "boolean") {
         return json({ ok: false, error: "invalid_request" }, 400);
       }
       // #112: which rule's signals; absent means RSI + SAR, as before
-      if (body.rule !== undefined && !isRuleKey(body.rule)) return json({ ok: false, error: "invalid_request" }, 400);
-      const rule: RuleKey = isRuleKey(body.rule) ? body.rule : "rsi_sar";
+      if (body.rule !== undefined && !isRuleKey(body.rule) && !indicator) return json({ ok: false, error: "invalid_request" }, 400);
+      const rule: RuleKey | IndicatorRule = indicator ? (body.rule as IndicatorRule) : isRuleKey(body.rule) ? body.rule : "rsi_sar";
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
         const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval,rule", {
@@ -463,6 +854,45 @@ Deno.serve(async (req: Request) => {
       return json(await status());
     }
 
+    // #155: many of Q-Trend's or ULTRA's charts at once (a timeframe across
+    // every pair, or a pair across its timeframes)
+    if (action === "set_many") {
+      if (!isIndicatorRule(body.rule) || typeof body.on !== "boolean" || !Array.isArray(body.charts) || body.charts.length === 0 || body.charts.length > 200) {
+        return json({ ok: false, error: "invalid_request" }, 400);
+      }
+      const rule = body.rule;
+      const charts = body.charts.map((c) => (isRecord(c) ? { pair: c.pair, interval: c.interval } : { pair: null, interval: null }));
+      if (!charts.every((c) => isIndicatorChart(c.pair, c.interval))) return json({ ok: false, error: "invalid_request" }, 400);
+      const list = charts as Array<{ pair: string; interval: string }>;
+      if (body.on) {
+        if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
+        const lang = isLang(body.lang) ? body.lang : "ja";
+        const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval,rule", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify(list.map((c) => ({ user_id: userId, pair: c.pair, interval: c.interval, rule, lang }))),
+        });
+        if (!res.ok) {
+          console.error("subscribe failed:", res.status, await res.text().catch(() => ""));
+          return json({ ok: false, error: "save_failed" }, 500);
+        }
+      } else {
+        // by timeframe, the pairs in one request each
+        for (const iv of [...new Set(list.map((c) => c.interval))]) {
+          const pairs = list.filter((c) => c.interval === iv).map((c) => `"${c.pair}"`).join(",");
+          const res = await rest(
+            `signal_alert_subscriptions?user_id=eq.${uid}&rule=eq.${rule}&interval=eq.${encodeURIComponent(iv)}&pair=in.(${encodeURIComponent(pairs)})`,
+            { method: "DELETE" },
+          );
+          if (!res.ok) {
+            console.error("unsubscribe failed:", res.status, await res.text().catch(() => ""));
+            return json({ ok: false, error: "save_failed" }, 500);
+          }
+        }
+      }
+      return json(await status());
+    }
+
     if (action === "test") {
       if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
       const since = encodeURIComponent(new Date(nowMs - TEST_COOLDOWN_MS).toISOString());
@@ -481,7 +911,10 @@ Deno.serve(async (req: Request) => {
       const outcome = await deliver(
         id,
         email,
-        renderTestMail(subs.map((s) => ({ pair: String(s.pair), interval: String(s.interval), rule: isRuleKey(s.rule) ? s.rule : "rsi_sar" })), lang),
+        renderTestMail(
+          subs.map((s) => ({ pair: String(s.pair), interval: String(s.interval), rule: isRuleKey(s.rule) || isIndicatorRule(s.rule) ? s.rule : "rsi_sar" })),
+          lang,
+        ),
       );
       return json({ ...(await status()), test: outcome });
     }

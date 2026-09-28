@@ -7,7 +7,9 @@ import {
   ALERT_RULES,
   AlertRequestError,
   callSignalAlerts,
+  indicatorChartOffered,
   isFollowing,
+  isIndicatorAlertRule,
   type AlertRow,
   type AlertRule,
   type AlertSettings,
@@ -36,6 +38,8 @@ const jst = (iso: string) => {
 // The server decides who may follow a chart (#139: every paid plan, and the
 // admins) and holds the
 // only copy of the choice; this card asks it and shows the answer.
+// #155: and Q-Trend's and ULTRA's signals, on every pair of the live chart
+// (a row to follow a timeframe on all of them at once).
 const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const { t, locale } = useLocale();
   const a = t.alerts;
@@ -70,6 +74,18 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
     }
   };
 
+  // #155: a timeframe across every pair offered, at once
+  const toggleMany = async (charts: Array<{ pair: string; interval: string }>, on: boolean, key: string) => {
+    setBusy(key);
+    try {
+      setSettings(await call({ action: "set_many", rule, on, charts, lang: locale }));
+    } catch {
+      toast.error(a.saveFailed);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const sendTest = async () => {
     setBusy("test");
     try {
@@ -88,7 +104,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const rowLabel = (r: AlertRow) => {
     if (r.kind === "test") return a.testRow;
     const tf = r.interval ? a.intervals[r.interval] ?? r.interval : "";
-    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (a.ruleTag[r.rule] ?? "");
+    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (r.strong ? a.strongTag : "") + (a.ruleTag[r.rule] ?? "");
   };
   const statusLabel = (r: AlertRow) =>
     r.status === "skipped" && r.skipReason ? a.skipReasons[r.skipReason] ?? a.status.skipped : a.status[r.status];
@@ -150,7 +166,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
             </p>
           )}
 
-          <div className="flex items-center gap-1" role="tablist" aria-label={a.ruleTabsLabel} data-testid="signal-alerts-rules">
+          <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label={a.ruleTabsLabel} data-testid="signal-alerts-rules">
             {ALERT_RULES.map((k) => (
               <button
                 key={k}
@@ -168,7 +184,88 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
             ))}
           </div>
           {rule === "gainz" && <p className="text-[11px] text-muted-foreground" data-testid="signal-alerts-gainz-intro">{a.gainzIntro}</p>}
+          {isIndicatorAlertRule(rule) && (
+            <p className="text-[11px] text-muted-foreground" data-testid="signal-alerts-indicator-intro">{a.indicatorIntro[rule]}</p>
+          )}
 
+          {isIndicatorAlertRule(rule) ? (
+            settings.indicator ? (
+              (() => {
+                const ind = settings.indicator;
+                const offered = (iv: string) => ind.pairs.filter((p) => indicatorChartOffered(settings, p, iv));
+                return (
+                  <table className="w-full text-xs" data-testid="signal-alerts-grid">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="text-left font-normal py-1">{a.pairHeader}</th>
+                        {ind.intervals.map((iv) => (
+                          <th key={iv} className="font-normal py-1 text-center">{a.intervals[iv] ?? iv}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t border-border/50" data-testid="signal-alerts-all-row">
+                        <td className="py-1 text-foreground font-semibold">{a.allPairs}</td>
+                        {ind.intervals.map((iv) => {
+                          const pairs = offered(iv);
+                          const n = pairs.filter((p) => isFollowing(settings, p, iv, rule)).length;
+                          const all = pairs.length > 0 && n === pairs.length;
+                          const disabled = busy !== null || (!all && !settings.allowed) || pairs.length === 0;
+                          return (
+                            <td key={iv} className="py-1 text-center">
+                              <input
+                                type="checkbox"
+                                checked={all}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = n > 0 && !all;
+                                }}
+                                disabled={disabled}
+                                onChange={() => void toggleMany(pairs.map((pair) => ({ pair, interval: iv })), !all, `${rule}|all|${iv}`)}
+                                aria-label={`${a.allPairs} ${a.intervals[iv] ?? iv} ${a.ruleTabs[rule]}`}
+                                data-testid={`signal-alert-${rule}-all-${iv}`}
+                                className="h-4 w-4 accent-primary disabled:opacity-40"
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {ind.pairs.map((pair) => (
+                        <tr key={pair} className="border-t border-border/50">
+                          <td className="py-1 font-mono text-foreground">{pair}</td>
+                          {ind.intervals.map((iv) => {
+                            if (!indicatorChartOffered(settings, pair, iv)) {
+                              return (
+                                <td key={iv} className="py-1 text-center text-muted-foreground" title={a.indicatorHourOnly} data-testid={`signal-alert-${rule}-${pair}-${iv}-none`}>
+                                  —
+                                </td>
+                              );
+                            }
+                            const on = isFollowing(settings, pair, iv, rule);
+                            const disabled = busy !== null || (!on && !settings.allowed);
+                            return (
+                              <td key={iv} className="py-1 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  disabled={disabled}
+                                  onChange={() => void toggle(pair, iv, !on)}
+                                  aria-label={`${pair} ${a.intervals[iv] ?? iv} ${a.ruleTabs[rule]}`}
+                                  data-testid={`signal-alert-${rule}-${pair}-${iv}`}
+                                  className="h-4 w-4 accent-primary disabled:opacity-40"
+                                />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                );
+              })()
+            ) : (
+              <p className="text-xs text-destructive" data-testid="signal-alerts-error">{a.loadFailed}</p>
+            )
+          ) : (
           <table className="w-full text-xs" data-testid="signal-alerts-grid">
             <thead>
               <tr className="text-muted-foreground">
@@ -204,9 +301,10 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
               ))}
             </tbody>
           </table>
+          )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button
@@ -222,7 +320,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           {(() => {
             // #112: the record of the rule on screen
             const perf = settings.performance;
-            const record = perf ? (rule === "gainz" ? perf.gainz : perf) : null;
+            // (#155: Q-Trend's and ULTRA's signals are not recorded)
+            const record = perf && !isIndicatorAlertRule(rule) ? (rule === "gainz" ? perf.gainz : perf) : null;
             if (!record) return null;
             return (
               <div className="space-y-1.5 pt-1 border-t border-border/60" data-testid="signal-alerts-record">
@@ -269,7 +368,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                       const res = resultLabel(r);
                       return res ? <p className={`font-mono ${res.cls}`} data-testid="signal-alert-result">{res.text}</p> : null;
                     })()}
-                    {r.kind === "signal" && r.entry !== null && (
+                    {r.kind === "signal" && r.entry !== null && r.stop !== null && (
                       <p className="font-mono text-muted-foreground">{a.plan(fmt(r.entry), fmt(r.stop), fmt(r.target))}</p>
                     )}
                   </div>

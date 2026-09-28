@@ -7,13 +7,21 @@ export const SIGNAL_ALERTS_URL = "https://endcqzewujdvimdlazhj.supabase.co/funct
 
 export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "skipped";
 
-// #112: RSI + SAR, or the GA-style rule beside it
-export type AlertRule = "rsi_sar" | "gainz";
-export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz"];
-const ruleOf = (v: unknown): AlertRule => (v === "gainz" ? "gainz" : "rsi_sar");
+// #112: RSI + SAR, or the GA-style rule beside it; #155: Q-Trend's and
+// ULTRA's signals, on every pair of the live chart
+export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra";
+export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra"];
+export type IndicatorAlertRule = "qtrend" | "ultra";
+export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule => r === "qtrend" || r === "ultra";
+const ruleOf = (v: unknown): AlertRule => (v === "gainz" || v === "qtrend" || v === "ultra" ? v : "rsi_sar");
 // signal_alerts / signal_events store the rule's full id (analyze/gainz.ts
-// GA_RULE_ID starts with "gainz"); anything else is RSI + SAR's
-const ruleOfId = (v: unknown): AlertRule => (typeof v === "string" && v.startsWith("gainz") ? "gainz" : "rsi_sar");
+// GA_RULE_ID starts with "gainz", signal-alerts/indicators.ts's with
+// "qtrend" and "ultra"); anything else is RSI + SAR's
+const ruleOfId = (v: unknown): AlertRule => {
+  if (typeof v !== "string") return "rsi_sar";
+  for (const r of ["gainz", "qtrend", "ultra"] as const) if (v.startsWith(r)) return r;
+  return "rsi_sar";
+};
 
 // #108: what a recorded signal did after it fired
 export type SignalOutcome = "win" | "loss" | "ambiguous" | "expired" | "no_data";
@@ -61,6 +69,8 @@ export interface AlertRow {
   entry: number | null;
   stop: number | null;
   target: number | null;
+  // #155: a Q-Trend signal that was a STRONG one
+  strong: boolean;
   status: AlertStatus;
   skipReason: string | null;
   createdAt: string;
@@ -74,6 +84,9 @@ export interface AlertSettings {
   email: string | null;
   pairs: string[];
   intervals: string[];
+  // #155: Q-Trend's and ULTRA's charts: every pair of the live chart on
+  // these timeframes, some pairs (those read from Twelve Data) on fewer
+  indicator: { pairs: string[]; intervals: string[]; limited: Record<string, string[]> } | null;
   subscriptions: Array<{ pair: string; interval: string; rule: AlertRule }>;
   alerts: AlertRow[];
   // the outcome of a test send, when the call was one
@@ -164,6 +177,7 @@ const alertRow = (v: unknown): AlertRow | null => {
     entry: num(r.entry),
     stop: num(r.stop),
     target: num(r.target),
+    strong: r.strong === true,
     status,
     skipReason: str(r.skip_reason),
     createdAt,
@@ -180,12 +194,16 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
       .filter((x): x is Record<string, unknown> => x !== null && typeof x.pair === "string" && typeof x.interval === "string")
       .map((x) => ({ pair: x.pair as string, interval: x.interval as string, rule: ruleOf(x.rule) }))
     : [];
+  const ind = rec(s.indicator);
+  const limited: Record<string, string[]> = {};
+  for (const [p, ivs] of Object.entries(rec(ind?.limited) ?? {})) limited[p] = strings(ivs);
   return {
     allowed: s.allowed,
     emailConfigured: s.email_configured,
     email: str(s.email),
     pairs: strings(s.pairs),
     intervals: strings(s.intervals),
+    indicator: ind ? { pairs: strings(ind.pairs), intervals: strings(ind.intervals), limited } : null,
     subscriptions: subs,
     alerts: Array.isArray(s.alerts) ? s.alerts.map(alertRow).filter((x): x is AlertRow => x !== null) : [],
     test: statusOf(s.test),
@@ -195,6 +213,14 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
 
 export const isFollowing = (settings: AlertSettings, pair: string, interval: string, rule: AlertRule = "rsi_sar"): boolean =>
   settings.subscriptions.some((s) => s.pair === pair && s.interval === interval && s.rule === rule);
+
+// #155: whether Q-Trend's and ULTRA's alerts can be had on this chart
+export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string): boolean => {
+  const ind = settings.indicator;
+  if (!ind || !ind.pairs.includes(pair) || !ind.intervals.includes(interval)) return false;
+  const only = ind.limited[pair];
+  return !only || only.includes(interval);
+};
 
 export class AlertRequestError extends Error {
   constructor(public code: string) {

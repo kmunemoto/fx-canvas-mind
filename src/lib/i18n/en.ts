@@ -1649,16 +1649,16 @@ export const en: Dict = {
   alerts: {
     title: "Email alerts (buy/sell signals)",
     intro: (email: string) =>
-      `When the RSI + Parabolic SAR rule fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
-    introNoEmail: "When the RSI + Parabolic SAR rule fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
+      `When the kind chosen below (RSI + SAR, GA style, Q-Trend or ULTRA) fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
+    introNoEmail: "When the kind chosen below (RSI + SAR, GA style, Q-Trend or ULTRA) fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
     proOnly: "Email alerts are a Light plan feature (¥2,980 a month).",
     notConfigured: "Email sending is not set up yet. Signals are logged below, but no email can be delivered for now.",
     loading: "Loading…",
     loadFailed: "Could not load your alert settings",
     saveFailed: "Could not save",
     pairHeader: "Pair",
-    intervals: { "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style" } as Record<string, string>,
+    intervals: { "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1667,7 +1667,22 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)" } as Record<string, string>,
+    // #155
+    strongTag: " STRONG",
+    indicatorIntro: {
+      qtrend: "Q-Trend's BUY, SELL and STRONG signals (tarasenko_'s open-source script, at 200, 14, 1): the same marks the live chart draws.",
+      ultra: "ULTRA's Buy ☆ and Sell ☆ signals (built from F-INVEST's video): the same marks the live chart draws, with a stop (10 pips, $10 on gold) and targets 1 to 3 (5, 10, 15) in the email.",
+    } as Record<string, string>,
+    allPairs: "All symbols",
+    indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only",
+    indicatorNotes: [
+      "Judged on the live chart's own bars with its own code. Emails arrive a minute to three after the bar closes (the symbols GMO Coin does not carry can take up to about 30 minutes: Twelve Data is read a few at a time).",
+      "The 16 symbols GMO Coin does not carry (15 pairs such as USD/CAD and HKD/JPY, and gold) are read from Twelve Data's free allowance (800 reads a day, shared with the chart), so on the 1-hour, 4-hour and daily charts only.",
+      "Every symbol on the 5- and 15-minute charts can mean hundreds of emails a day. The mail service's (Resend's) free plan sends 100 a day and 3,000 a month; the rest show as failed.",
+      "Neither Q-Trend nor ULTRA has been tested on past charts here. An alert is not an instruction to trade, and no record of their outcomes is kept.",
+      "Nothing is judged while the market is shut (weekends and the like).",
+    ],
     notes: [
       "On 15-minute charts the spread alone costs about 14% of the stop every trade; 4-hour (about 6%) and daily charts cost less.",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed: past charts lost most in those hours (they stay in the log).",

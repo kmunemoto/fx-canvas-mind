@@ -8,7 +8,8 @@ vi.mock("sonner", () => ({ toast }));
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import SignalAlertSettings from "../components/SignalAlertSettings";
-import { AlertRequestError, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
+import { AlertRequestError, indicatorChartOffered, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
+import { INDICATOR_INTERVALS, INDICATOR_PAIRS, indicatorIntervalsFor } from "../../supabase/functions/signal-alerts/indicators";
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
@@ -216,5 +217,110 @@ describe("the email-alert card", () => {
   it("a load that fails says so instead of spinning", async () => {
     render(<SignalAlertSettings call={async () => { throw new Error("down"); }} />);
     expect(await screen.findByTestId("signal-alerts-error")).toBeTruthy();
+  });
+});
+
+// #155: Q-Trend's and ULTRA's alerts, on every pair of the live chart
+describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
+  const twelve = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).length < INDICATOR_INTERVALS.length);
+  const gmo = INDICATOR_PAIRS.filter((p) => !twelve.includes(p));
+  const indicator = {
+    rules: ["qtrend", "ultra"],
+    pairs: INDICATOR_PAIRS,
+    intervals: INDICATOR_INTERVALS,
+    limited: Object.fromEntries(twelve.map((p) => [p, indicatorIntervalsFor(p)])),
+  };
+  const withInd = (over: Record<string, unknown> = {}) => settings({ indicator, ...over });
+
+  it("reads the charts offered, each rule's subscriptions and a STRONG alert as they arrive", () => {
+    const s = withInd({
+      subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "qtrend" }, { pair: "USD/CAD", interval: "1h", rule: "ultra" }],
+      alerts: [
+        { id: "q1", kind: "signal", rule: "qtrend_200_14_1_v1", strong: true, pair: "USD/JPY", interval: "5min", side: "SELL", closed_at: "2026-09-29T02:50:00.000Z", entry: 157.209, stop: null, target: null, status: "sent", created_at: "2026-09-29T02:51:30.000Z" },
+        { id: "u1", kind: "signal", rule: "ultra_rsi14_30_70_sl10_tp5_10_15_v1", pair: "XAU/USD", interval: "1h", side: "BUY", closed_at: "2026-09-29T02:00:00.000Z", entry: 4139.89, stop: 4129.89, target: 4144.89, status: "sent", created_at: "2026-09-29T02:03:00.000Z" },
+      ],
+    });
+    expect(s.indicator!.pairs).toHaveLength(37);
+    expect(twelve).toHaveLength(16);
+    expect(s.subscriptions.map((x) => x.rule)).toEqual(["qtrend", "ultra"]);
+    expect(s.alerts.map((r) => [r.rule, r.strong])).toEqual([["qtrend", true], ["ultra", false]]);
+    expect(indicatorChartOffered(s, "USD/JPY", "5min")).toBe(true);
+    expect(indicatorChartOffered(s, "USD/CAD", "5min")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "15min")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "1h")).toBe(true);
+    // a server that does not send them yet: nothing offered
+    expect(indicatorChartOffered(settings(), "USD/JPY", "5min")).toBe(false);
+  });
+
+  it("lists every pair on 5 minutes to daily, those read from Twelve Data from 1 hour, and saves a tick as Q-Trend's", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set" ? withInd({ subscriptions: [{ pair: "USD/CAD", interval: "1h", rule: "qtrend" }] }) : withInd()
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-qtrend"));
+    expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("STRONG");
+    const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
+    // the all-symbols row, then the 37
+    expect(rows).toHaveLength(38);
+    expect(screen.getByTestId("signal-alert-qtrend-USD/JPY-5min")).toBeTruthy();
+    expect(screen.getByTestId("signal-alert-qtrend-USD/CAD-5min-none").textContent).toBe("—");
+    expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-15min-none")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("signal-alert-qtrend-USD/CAD-1h"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "USD/CAD", interval: "1h", on: true, rule: "qtrend", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-qtrend-USD/CAD-1h") as HTMLInputElement).checked).toBe(true));
+    // ULTRA's is its own
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
+    expect((screen.getByTestId("signal-alert-ultra-USD/CAD-1h") as HTMLInputElement).checked).toBe(false);
+    // no record is kept of these signals, and their own notes are shown
+    expect(screen.queryByTestId("signal-alerts-record")).toBeNull();
+    expect(screen.getByTestId("signal-alerts-notes").textContent).toContain("1日100通");
+  });
+
+  it("the all-symbols row follows a timeframe on every pair offered at once, and shows how much of it is followed", async () => {
+    const all5 = gmo.map((pair) => ({ pair, interval: "5min", rule: "ultra" }));
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set_many"
+        ? withInd({ subscriptions: body.on ? all5 : [] })
+        : withInd({ subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "ultra" }] })
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-ultra"));
+    const five = screen.getByTestId("signal-alert-ultra-all-5min") as HTMLInputElement;
+    // one of 21 followed: neither ticked nor clear
+    expect(five.checked).toBe(false);
+    expect(five.indeterminate).toBe(true);
+    fireEvent.click(five);
+    await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "ultra", on: true, lang: "ja" })));
+    const sent = call.mock.calls.find((c) => c[0].action === "set_many")![0] as { charts: Array<{ pair: string; interval: string }> };
+    // the 21 GMO pairs: the 16 read from Twelve Data have no 5-minute alerts
+    expect(sent.charts.map((c) => c.pair)).toEqual(gmo);
+    expect(new Set(sent.charts.map((c) => c.interval))).toEqual(new Set(["5min"]));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-ultra-all-5min") as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByTestId("signal-alert-ultra-all-5min") as HTMLInputElement).indeterminate).toBe(false);
+    // untick: every pair off again
+    fireEvent.click(screen.getByTestId("signal-alert-ultra-all-5min"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "ultra", on: false })));
+    // the hourly one takes all 37
+    fireEvent.click(screen.getByTestId("signal-alert-ultra-all-1h"));
+    await waitFor(() => expect(call.mock.calls.filter((c) => c[0].action === "set_many")).toHaveLength(3));
+    const hourly = call.mock.calls.filter((c) => c[0].action === "set_many")[2][0] as { charts: unknown[] };
+    expect(hourly.charts).toHaveLength(37);
+  });
+
+  it("names a STRONG Q-Trend alert in the recent list, with no stop or target to show", async () => {
+    const call = vi.fn(async () =>
+      withInd({
+        alerts: [
+          { id: "q1", kind: "signal", rule: "qtrend_200_14_1_v1", strong: true, pair: "USD/JPY", interval: "5min", side: "SELL", closed_at: "2026-09-29T02:50:00.000Z", entry: 157.209, stop: null, target: null, status: "sent", created_at: "2026-09-29T02:51:30.000Z" },
+          { id: "u1", kind: "signal", rule: "ultra_rsi14_30_70_sl10_tp5_10_15_v1", pair: "XAU/USD", interval: "1h", side: "BUY", closed_at: "2026-09-29T02:00:00.000Z", entry: 4139.89, stop: 4129.89, target: 4144.89, status: "sent", created_at: "2026-09-29T02:03:00.000Z" },
+        ],
+      })
+    );
+    render(<SignalAlertSettings call={call} />);
+    const rows = await screen.findAllByTestId("signal-alert-row");
+    expect(rows[0].textContent).toContain("USD/JPY 5分 売り・STRONG（Q-Trend）");
+    expect(rows[0].textContent).not.toContain("損切り");
+    expect(rows[1].textContent).toContain("XAU/USD 1時間 買い（ULTRA）");
+    expect(rows[1].textContent).toContain("目安 4139.89 / 損切り 4129.89 / 利確 4144.89");
   });
 });

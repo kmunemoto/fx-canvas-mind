@@ -543,12 +543,15 @@ const PriceChart = ({
   const qtNeeded = ov.qTrend || ov.qtBlsh;
   const blshNeeded = prefs.blsh || ov.qtBlsh;
   // #148: both computed from a fixed time (anchoredStart), not from the
-  // first bar read, so the chart opened again draws the same labels
+  // first bar read, so the chart opened again draws the same labels; #155:
+  // counted from the newest bar judged on, so a chart left open with an
+  // older history starts where the chart opened now (and the email) does
   const qtFrom = useMemo(() => {
     if (!(qtNeeded || blshNeeded) || candles.length === 0 || zsPast === null) return 0;
     const times = (bars: ReadonlyArray<{ datetime?: string }>) => bars.map((c) => parseUtcCandleTime(c.datetime ?? ""));
-    return anchoredStart([...times(zsPast), ...times(candles)], barStepMs(times(candles)), zsPast.length);
-  }, [qtNeeded, blshNeeded, zsPast, candles]);
+    const all = [...times(zsPast), ...times(candles)];
+    return anchoredStart(all, barStepMs(times(candles)), zsPast.length, QT_DEFAULTS.period, all.length - 1 - tail);
+  }, [qtNeeded, blshNeeded, zsPast, candles, tail]);
   const qt = useMemo(() => {
     if (!qtNeeded || candles.length === 0 || zsPast === null) return null;
     const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
@@ -626,8 +629,8 @@ const PriceChart = ({
   const ultraFrom = useMemo(() => {
     if (!ov.ultra || !histAll) return 0;
     const times = histAll.map((c) => parseUtcCandleTime((c as { datetime?: string }).datetime ?? ""));
-    return anchoredStart(times, barStepMs(times.slice(histOff)), histOff);
-  }, [ov.ultra, histAll, histOff]);
+    return anchoredStart(times, barStepMs(times.slice(histOff)), histOff, QT_DEFAULTS.period, times.length - 1 - tail);
+  }, [ov.ultra, histAll, histOff, tail]);
   const ul = useMemo(() => {
     if (!ov.ultra || !histAll) return null;
     const all = histAll.slice(ultraFrom);
