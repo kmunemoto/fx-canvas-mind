@@ -471,10 +471,10 @@ export const en: Dict = {
     dowCompact: "Dow",
     // #127
     goldNote:
-      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, and the 1- and 5-minute charts stop first (a stopped chart says so; the reads come back at 9:00 JST).",
-    // #146
-    goldLimited: (tf: string, at: string) =>
-      `Gold's ${tf} chart has used today's Twelve Data reads, so it shows the bars as read at ${at} JST (they do not move). The reads come back at 9:00 JST; longer timeframes keep theirs longer.`,
+      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn, but gold is not in the email alerts or the outcome records. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, reached first by the 1- and 5-minute charts. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST).",
+    // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's last read
+    goldFromTicks: (tf: string, limited: boolean, from: string | null) =>
+      `Gold's ${tf} chart ${limited ? "has used today's Twelve Data reads (they come back at 9:00 JST)" : "could not be read again from Twelve Data"}, so its bars ${from ? `from ${from} JST` : "from now"} are made from Swissquote's prices (every few seconds). Prices are recorded only while a chart is open, so a time nobody had one open has no bars.`,
   },
 
   gainz: {

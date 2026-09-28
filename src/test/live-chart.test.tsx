@@ -6,7 +6,7 @@ import { LocaleProvider } from "@/lib/i18n";
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import LiveChart from "../components/LiveChart";
-import { applyTick, normalizeLiveRead, normalizeTicks, type LiveRead } from "../lib/liveChart";
+import { normalizeLiveRead, normalizeTicks, tickLive, withRead, type LiveBars, type LiveRead } from "../lib/liveChart";
 import {
   CHART_BARS,
   HISTORY_BARS,
@@ -182,21 +182,69 @@ describe("#113 the client side", () => {
     expect(normalizeTicks({ "USD/JPY": { bid: 150, ask: 149 } })).toEqual({});
   });
 
-  it("moves only the forming bar, and only with a price from inside it", () => {
-    const c = [
-      { datetime: "2026-09-25 10:00:00", open: 150, high: 150.2, low: 149.9, close: 150.1 },
-      { datetime: "2026-09-25 10:15:00", open: 150.1, high: 150.15, low: 150.05, close: 150.12 },
-    ];
-    const open = Date.parse("2026-09-25T10:15:00Z");
-    const moved = applyTick(c, 150.3, open, open + 60_000, M15);
-    expect(moved[1]).toEqual({ ...c[1], close: 150.3, high: 150.3 });
-    expect(moved[0]).toBe(c[0]);
-    const down = applyTick(c, 150.0, open, open + 60_000, M15);
-    expect(down[1].low).toBe(150.0);
-    // a price from after the bar closed changes nothing
-    expect(applyTick(c, 151, open, open + M15 + 1, M15)).toBe(c);
-    // no forming bar in the read: nothing moves
-    expect(applyTick(c, 151, null, open + 1, M15)).toBe(c);
+  const c = [
+    { datetime: "2026-09-25 10:00:00", open: 150, high: 150.2, low: 149.9, close: 150.1 },
+    { datetime: "2026-09-25 10:15:00", open: 150.1, high: 150.15, low: 150.05, close: 150.12 },
+  ];
+  const open = Date.parse("2026-09-25T10:15:00Z");
+
+  it("moves the forming bar with each price: its close the newest, its high and low #147: the furthest the price has gone", () => {
+    const live: LiveBars = { candles: c, formingOpen: open };
+    const up = tickLive(live, 150.3, open + 60_000, M15);
+    expect(up.candles[1]).toEqual({ ...c[1], close: 150.3, high: 150.3 });
+    expect(up.candles[0]).toBe(c[0]);
+    // the price turning back leaves the wick where it went
+    const back = tickLive(up, 150.0, open + 120_000, M15);
+    expect(back.candles[1]).toEqual({ ...c[1], close: 150.0, high: 150.3, low: 150.0 });
+    const again = tickLive(back, 150.1, open + 180_000, M15);
+    expect(again.candles[1]).toEqual({ ...c[1], close: 150.1, high: 150.3, low: 150.0 });
+    expect(again.formingOpen).toBe(open);
+    // a price from before the newest bar changes nothing
+    expect(tickLive(live, 151, open - 1, M15)).toBe(live);
+    expect(tickLive(live, Number.NaN, open + 1, M15)).toBe(live);
+  });
+
+  it("#147: once the forming bar's time is up, the next price starts the next bar there, on the bars' grid", () => {
+    const live: LiveBars = { candles: c, formingOpen: open };
+    const next = tickLive(live, 150.4, open + M15 + 2_000, M15);
+    expect(next.candles).toHaveLength(3);
+    // the bar it was in stays as the price left it
+    expect(next.candles[1]).toBe(c[1]);
+    expect(next.candles[2]).toEqual({ datetime: "2026-09-25 10:30:00", open: 150.4, high: 150.4, low: 150.4, close: 150.4 });
+    expect(next.formingOpen).toBe(open + M15);
+    const moved = tickLive(next, 150.5, open + M15 + 30_000, M15);
+    expect(moved.candles[2]).toEqual({ datetime: "2026-09-25 10:30:00", open: 150.4, high: 150.5, low: 150.4, close: 150.5 });
+    // bars with no price in them are not made: the next price's own bar
+    const later = tickLive(live, 150.6, open + 3 * M15 + 5_000, M15);
+    expect(later.candles[2].datetime).toBe("2026-09-25 11:00:00");
+    // a 4-hour chart whose bars open at 21:00 UTC keeps that grid
+    const h4 = [{ datetime: "2026-09-24 21:00:00", open: 150, high: 150.2, low: 149.9, close: 150.1 }];
+    const H4 = 4 * 3_600_000;
+    const four = tickLive({ candles: h4, formingOpen: Date.parse("2026-09-24T21:00:00Z") }, 150.2, Date.parse("2026-09-25T02:30:00Z"), H4);
+    expect(four.candles[1].datetime).toBe("2026-09-25 01:00:00");
+  });
+
+  it("#147: with no bar forming in the read, a price inside the newest bar's time leaves it as read; a later one starts the next", () => {
+    const live: LiveBars = { candles: c, formingOpen: null };
+    expect(tickLive(live, 151, open + 60_000, M15)).toBe(live);
+    const next = tickLive(live, 151, open + M15 + 1_000, M15);
+    expect(next.candles).toHaveLength(3);
+    expect(next.formingOpen).toBe(open + M15);
+  });
+
+  it("#147: a new read replaces what the prices made, except bars newer than its own", () => {
+    const made = tickLive({ candles: c, formingOpen: open }, 150.4, open + M15 + 2_000, M15);
+    // a read with the new bar forming: it is the chart
+    const fresh = [...c, { datetime: "2026-09-25 10:30:00", open: 150.41, high: 150.45, low: 150.39, close: 150.42 }];
+    expect(withRead(fresh, open + M15, made)).toEqual({ candles: fresh, formingOpen: open + M15 });
+    // a read that could not be refreshed (the same bars, nothing forming):
+    // the bar the prices started stays
+    const stale = withRead(c, null, made);
+    expect(stale.candles).toHaveLength(3);
+    expect(stale.candles[2]).toBe(made.candles[2]);
+    expect(stale.formingOpen).toBe(open + M15);
+    // no earlier state: the read alone
+    expect(withRead(c, open, null)).toEqual({ candles: c, formingOpen: open });
   });
 });
 
@@ -405,6 +453,35 @@ describe("#113 the live chart card", () => {
     await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
     expect(screen.queryByTestId("live-maintenance")).toBeNull();
+  });
+
+  it("#147: starts the next bar as soon as its time comes, without waiting for the next read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const M1 = 60_000;
+    const formingAt = Math.floor(Date.now() / M1) * M1;
+    const base = readFor("USD/JPY", "1min");
+    const n = base.candles.length;
+    const at = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+    const first: LiveRead = {
+      ...base,
+      candles: base.candles.map((k, i) => ({ ...k, datetime: at(formingAt - (n - 1 - i) * M1) })),
+      nextClose: new Date(formingAt + M1).toISOString(),
+    };
+    let calls = 0;
+    // the read after the close never answers
+    const loadBars = vi.fn((): Promise<LiveRead> => (++calls === 1 ? Promise.resolve(first) : new Promise<LiveRead>(() => {})));
+    const loadTicks = vi.fn(async () => ({
+      "USD/JPY": { bid: 150.2, ask: 150.203, mid: 150.2015, time: new Date(Date.now()).toISOString(), open: true },
+    }));
+    const jst = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(11, 16);
+    render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={loadTicks} />);
+    await waitFor(() => expect(screen.getByTestId("live-next-close").textContent).toContain(jst(formingAt + M1)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(formingAt + M1 - Date.now() + 6_000);
+    });
+    // the next read was asked for and has not answered: the chart is on the next bar anyway
+    expect(loadBars.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(screen.getByTestId("live-next-close").textContent).toContain(jst(formingAt + 2 * M1)));
   });
 
   it("does not ask every few seconds when no bar is forming (the market is shut)", async () => {

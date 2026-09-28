@@ -15,6 +15,7 @@ import {
   GOLD_QUOTE_STALE_MS,
   LIVE_PAIRS,
   TWELVE_DAILY_LIMIT,
+  extendWithTicks,
   goldFresh,
   goldRead,
   historyOfBars,
@@ -22,6 +23,7 @@ import {
   isGold,
   parseSwissquote,
   parseTicker,
+  parseTickMinutes,
   twelveCapFor,
   twelveDataUrl,
 } from "../../supabase/functions/live-chart/logic";
@@ -155,6 +157,94 @@ describe("#127 gold (XAU/USD) in the live-chart function", () => {
   });
 });
 
+describe("#147 gold between Twelve Data's reads", () => {
+  const M1 = 60_000;
+  // Swissquote's mid, a minute at a time, as public.gold_tick_bars keeps it
+  const minute = (ms: number, open: number, high: number, low: number, close: number) => ({
+    minute: new Date(ms).toISOString(),
+    open,
+    high,
+    low,
+    close,
+    lastAt: new Date(ms + 55_000).toISOString(),
+  });
+
+  it("reads the table's rows, oldest first, leaving out anything malformed", () => {
+    const rows = [
+      { minute: "2026-09-28T05:01:00+00:00", open: "4285.1", high: "4285.9", low: "4284.8", close: "4285.5", last_at: "2026-09-28T05:01:58+00:00" },
+      { minute: "2026-09-28T05:00:00+00:00", open: 4284, high: 4285, low: 4283.5, close: 4285.1, last_at: "2026-09-28T05:00:57+00:00" },
+      { minute: "2026-09-28T05:02:00+00:00", open: 1, high: 0.5, low: 1, close: 1, last_at: "2026-09-28T05:02:01+00:00" },
+      { minute: "x", open: 1, high: 1, low: 1, close: 1, last_at: "2026-09-28T05:02:01+00:00" },
+    ];
+    const got = parseTickMinutes(rows);
+    expect(got.map((m) => m.minute)).toEqual(["2026-09-28T05:00:00+00:00", "2026-09-28T05:01:00+00:00"]);
+    expect(got[1]).toEqual({ minute: "2026-09-28T05:01:00+00:00", open: 4285.1, high: 4285.9, low: 4284.8, close: 4285.5, lastAt: "2026-09-28T05:01:58+00:00" });
+    expect(parseTickMinutes(null)).toEqual([]);
+  });
+
+  it("goes on from the bars last read: the one forming then widened by the minutes after, the later ones made of their minutes", () => {
+    const bars = goldBars(299);
+    // read 30 seconds into bar 298 (15-minute bars); minutes recorded from
+    // then until six minutes into bar 300
+    const b298 = T0 + 298 * M15;
+    const fetchedAt = new Date(b298 + 30_000).toISOString();
+    const minutes = [
+      // before the read: its prices are in the bar read already
+      minute(b298 - M1, 1, 9999, 0.5, 1),
+      minute(b298, 4290, 4290.5, 4289.5, 4290.2),
+      minute(b298 + 7 * M1, 4290.2, 4299.9, 4290, 4295),
+      minute(b298 + 14 * M1, 4295, 4296, 4270.1, 4271),
+      minute(b298 + 15 * M1, 4271, 4272, 4268, 4269),
+      minute(b298 + 29 * M1, 4269, 4275, 4266.6, 4274),
+      minute(b298 + 36 * M1, 4274, 4280, 4273, 4279.5),
+    ];
+    const got = extendWithTicks(bars, "15min", fetchedAt, minutes);
+    expect(got.bars).toHaveLength(301);
+    // the bars closed before the read are as read
+    expect(got.bars.slice(0, 298)).toEqual(bars.slice(0, 298));
+    const read298 = bars[298];
+    expect(got.bars[298]).toEqual({
+      ...read298,
+      high: Math.max(read298.high, 4299.9),
+      low: Math.min(read298.low, 4270.1),
+      close: 4271,
+    });
+    expect(got.bars[299]).toEqual({ datetime: bars[298].datetime.replace("02:30", "02:45"), open: 4271, high: 4275, low: 4266.6, close: 4274 });
+    expect(got.bars[300]).toEqual({ datetime: bars[298].datetime.replace("02:30", "03:00"), open: 4274, high: 4280, low: 4273, close: 4279.5 });
+    // as of the newest price recorded
+    expect(got.fetchedAt).toBe(new Date(b298 + 36 * M1 + 55_000).toISOString());
+    expect(got.ticksFrom).toBe(new Date(b298).toISOString());
+    // on the chart: bar 300 forming, 298 and 299 closed, marked as made from the prices
+    const now = b298 + 36 * M1 + 58_000;
+    const r = goldRead(got.bars, "15min", now, got.fetchedAt, true, got.ticksFrom);
+    expect(r.candles.at(-1)!.datetime).toBe(got.bars[300].datetime);
+    expect(r.now.datetime).toBe(got.bars[299].datetime);
+    expect(r.next_close).toBe(new Date(b298 + 45 * M1).toISOString());
+    expect(r.limited).toBe(true);
+    expect(r.ticks_from).toBe(new Date(b298).toISOString());
+  });
+
+  it("with no minute recorded since the read, leaves the bars as read", () => {
+    const bars = goldBars(299);
+    const fetchedAt = new Date(T0 + 298 * M15 + 30_000).toISOString();
+    expect(extendWithTicks(bars, "15min", fetchedAt, [])).toEqual({ bars, fetchedAt, ticksFrom: null });
+    expect(extendWithTicks(bars, "15min", fetchedAt, [minute(T0 + 297 * M15, 1, 1, 1, 1)])).toEqual({ bars, fetchedAt, ticksFrom: null });
+  });
+
+  it("a minute nobody watched makes no bar: the next bar is the next minute recorded", () => {
+    const bars = goldBars(299);
+    const b298 = T0 + 298 * M15;
+    // bars read just after bar 298 closed would have it whole; here the read
+    // is at its end, and the prices recorded resume three bars later
+    const fetchedAt = new Date(b298 + M15).toISOString();
+    const got = extendWithTicks(bars, "15min", fetchedAt, [minute(b298 + 3 * M15 + 2 * M1, 4300, 4301, 4299, 4300.5)]);
+    expect(got.bars).toHaveLength(300);
+    expect(got.bars[298]).toEqual(bars[298]);
+    expect(got.bars[299].datetime).toBe(bars[298].datetime.replace("02:30", "03:15"));
+    expect(got.ticksFrom).toBe(new Date(b298 + 3 * M15).toISOString());
+  });
+});
+
 describe("#127 gold on the live chart", () => {
   afterEach(() => {
     localStorage.clear();
@@ -196,16 +286,23 @@ describe("#127 gold on the live chart", () => {
     expect(screen.queryByTestId("live-fallback")).toBeNull();
   });
 
-  it("#146: says when gold's timeframe has used the day's reads, and when they come back", async () => {
-    const loadBars = vi.fn(async (pair: string, interval: string): Promise<LiveRead> => ({ ...readFor(pair, interval), limited: true, fetchedAt: "2026-09-28T05:04:10.000Z" }));
-    render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} />);
+  it("#146, #147: says when gold's bars are made from Swissquote's prices, and why", async () => {
+    let over: Partial<LiveRead> = { limited: true, ticksFrom: "2026-09-28T05:04:00.000Z" };
+    const loadBars = vi.fn(async (pair: string, interval: string): Promise<LiveRead> => ({ ...readFor(pair, interval), ...over }));
+    const view = render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} />);
     fireEvent.click(await screen.findByTestId("live-pair-XAU/USD"));
     const note = await screen.findByTestId("live-gold-limited");
     expect(note.textContent).toBe(
-      "金の1分足は、きょうの Twelve Data の読み込み上限に達したため、09-28 14:04 に読んだ足までを表示しています（足は動きません）。上限は日本時間の朝9時に戻ります。時間足が長いほど上限は後まで残ります。",
+      "金の1分足は、きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達したため、09-28 14:04 からの足を Swissquote の価格（数秒ごと）から作っています。価格はチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。",
     );
     // not the notice for GMO's feed being down
     expect(screen.queryByTestId("live-fallback")).toBeNull();
+    view.unmount();
+    // Twelve Data not answering, within the day's reads
+    over = { limited: false, ticksFrom: "2026-09-28T05:04:00.000Z" };
+    render(<LiveChart defaultInterval="5min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} />);
+    fireEvent.click(await screen.findByTestId("live-pair-XAU/USD"));
+    expect((await screen.findByTestId("live-gold-limited")).textContent).toContain("金の5分足は、Twelve Data から読み直せなかったため、09-28 14:04 からの足を");
   });
 
   it("formats gold's prices to the cent", () => {
