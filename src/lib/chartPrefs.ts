@@ -56,6 +56,9 @@ export interface ChartOverlays {
   autoTrend: boolean;
   maCross: boolean;
   ichimoku: boolean;
+  // #151: the owner's video's ULTRA EN (RSI 14 at 70 and 30, a stop and
+  // three targets, and their tally) — on unless switched off
+  ultra: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -78,6 +81,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   autoTrend: true,
   maCross: true,
   ichimoku: false,
+  ultra: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

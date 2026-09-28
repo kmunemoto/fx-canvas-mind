@@ -300,6 +300,8 @@ export const ja = {
       autoTrend: "トレンドライン",
       maCross: "GC・DC（EMA 50×200）",
       ichimoku: (conv: number, base: number, span2: number) => `一目均衡表 ${conv} ${base} ${span2}`,
+      // #151
+      ultra: (gold: boolean): string => (gold ? "ULTRA（RSI 14・SL $10・TP $5/10/15）" : "ULTRA（RSI 14・SL 10・TP 5/10/15 pips）"),
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -377,6 +379,18 @@ export const ja = {
       "一目均衡表（TradingView の標準インジケーターと同じ計算・初期設定 9・26・52、ずらし26）: 転換線（青、9本の高値と安値の中間）、基準線（濃い赤、26本）、先行スパン1・2（転換線と基準線の平均、52本の中間）を25本先にずらして描いた「雲」（先行1が上なら緑、下なら赤）、遅行スパン（緑、終値を25本前にずらした線）。価格が雲より上なら上昇優勢、下なら下落優勢、中なら様子見の目安で、チャートの左上に「雲の上・中・下」を出します。このチャートは最新の足より右に余白がないため、25本先の雲（未来の部分）は描いていません。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
     ichimokuSide: { above: "雲の上（上昇優勢）", inside: "雲の中", below: "雲の下（下落優勢）" } as Record<string, string>,
     trendBreak: { up: "割れ", down: "抜け" },
+    // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
+    ultraNote:
+      "ULTRA（動画の「ULTRA EN」〈TradingView の F-INVEST〉を、動画に映っている設定と印から作ったもの。招待制で、作者の公開スクリプトは0本〈Telegram で配布〉のためコードは読めず、同じサインになるとは限りません）: " +
+      "RSI(14) が70以上から70を下に抜けた確定足に Sell、30以下から30を上に抜けた確定足に Buy（動画の設定は RSI 14・買われすぎ70・売られすぎ30・トレードモード「Trend-f…」。動画のチャートでは天井の少しあとに Sell、底の少しあとに Buy が出ているので、このアプリでは「行き過ぎから戻り始めた所で入る」と読みました）。" +
+      "その足の終値で入り、損切り10・利確 TP1 5・TP2 10・TP3 15（動画の数値。金はドルで、動画では 4327.154 の売りに損切り 4337.154・TP1 4322.154。FX ペアは同じ数字を pips として使います。動画は金だけで、金の10ドルをそのまま価格にするとドル円では10円になるため、これはこのアプリの決め事です）。" +
+      "届いた足に ★TP1〜★TP3、TP1 より先に損切りに届いた足に小さな×。最新のサインの箱（緑=エントリー、赤=損切りまで、青=利確まで。決着していなければ右端まで延ばして価格を表示、決着したら薄く）と、右上の表（読み込んだ足の中で TP1・TP2・TP3・損切りに届いた回数と、合計〈TP1＋損切り〉に対する割合。勝率は TP1 の割合で、動画の表と同じ数え方）。" +
+      "同じ足で損切りと利確の両方に届いたら損切りに数え、TP1 のあとに損切りに届いたらそこで終わり（損切りには数えません）。どのサインも前のサインと関係なく、損切りか TP3 まで追います。動画の MACD（オフ）と平均足 MACD の欄は作っていません。" +
+      "動画の「80% WIN RATE」はこのアプリでは測っていません。TP1 は損切りの半分の幅なので、値動きに偏りがなければ、でたらめに入っても約67%は損切りより先に TP1 に届く数え方です。確定足だけで判定。表示のみで、サインの判定・メールには使っていません。",
+    ultraTable: { tp1: "TP1", tp2: "TP2", tp3: "TP3", sl: "損切り", total: "合計", winRate: "勝率" },
+    ultraTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[]): string =>
+      `ULTRA ${side === "BUY" ? "買い" : "売り"}: エントリー ${entry}・損切り ${sl}・TP1 ${tps[0]}・TP2 ${tps[1]}・TP3 ${tps[2]}`,
+    ultraHit: (what: string, price: string): string => `ULTRA: ${what === "SL" ? "損切り" : what} ${price} に到達`,
     maCrossTitle: (side: "GC" | "DC"): string => (side === "GC" ? "ゴールデンクロス（EMA 50 が EMA 200 を上に抜けた）" : "デッドクロス（EMA 50 が EMA 200 を下に抜けた）"),
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
