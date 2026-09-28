@@ -254,6 +254,10 @@ export const en: Dict = {
       // #145
       qTrend: (period: number, atr: number, mult: number) => `Q-Trend ${period} ${atr} ${mult}`,
       qtBlsh: "Q-Trend × BLSH (triple confirmation)",
+      // #150
+      autoTrend: "Trend lines",
+      maCross: "GC / DC (EMA 50 × 200)",
+      ichimoku: (conv: number, base: number, span2: number) => `Ichimoku ${conv} ${base} ${span2}`,
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -321,6 +325,24 @@ export const en: Dict = {
     blsh: {
       name: "BLSH",
       note: "BLSH (Buy Low Sell High Composite, a port of the code zacmcc published on TradingView): RSI(14) (25–75), EMA(5) − EMA(35) and the MACD histogram (both within ±2 × ATR(9)) and MFI(14) (25–75), each scaled to −1…+1, summed and divided by 4: an area green above 0, red at or under it. The line is the MACD signal line scaled the same way, yellow while MACD is at or over it and blue while under (the video's colours; the original's lime and red). Its author: \"buy when it's very red, sell when it's very green\". GMO's FX bars have no volume, so MFI counts each bar as one (a guide to the share of the last 14 bars' typical prices on bars that rose). The original's crossover dots are not drawn (the video shows none). Not measured on past data. Shown only: no signal or email uses it.",
+    },
+    // #150: the trend tools of the owner's note
+    autoTrendNote:
+      "Trend lines: rising, the line through the lows; falling, through the highs. Of the swings Dow theory reads (a bar higher or lower than the 4 on each side, known 4 bars later), the line through the latest two rising swing lows (green) and through the latest two falling swing highs (red), drawn on to the right. When a close goes clearly through one (a close, not a wick) it stops there, marked 'break': a sign the flow is changing. Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
+    maCrossNote:
+      "GC / DC: GC (golden cross) on the closed bar where EMA 50 crosses above EMA 200, DC (dead cross) where it crosses below; marked even when the lines are hidden. A crossing of averages, so it comes after the flow has turned. Not measured on past data. Shown only: no signal or email uses it.",
+    ichimokuNote:
+      "Ichimoku (as TradingView's built-in computes it, its defaults 9, 26, 52 and displacement 26): the conversion line (blue, the middle of the last 9 highs and lows), the base line (dark red, 26), the cloud of the leading spans (the average of the two lines, and the middle of 52) drawn 25 bars ahead (green while span 1 is on top, red otherwise), and the lagging span (green, the close drawn 25 bars back). The price over the cloud leans up, under it down, inside it neither; the chart's top left says which. This chart has no room to the right of its newest bar, so the cloud's part ahead of it is not drawn. Not measured on past data. Shown only: no signal or email uses it.",
+    ichimokuSide: { above: "over the cloud (leaning up)", inside: "in the cloud", below: "under the cloud (leaning down)" } as Record<string, string>,
+    trendBreak: { up: "break", down: "break" },
+    maCrossTitle: (side: "GC" | "DC"): string => (side === "GC" ? "Golden cross (EMA 50 crossed above EMA 200)" : "Dead cross (EMA 50 crossed below EMA 200)"),
+    macd: {
+      name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
+      note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. Shown only: no signal uses it.",
+    },
+    adx: {
+      name: (di: number, adx: number) => `ADX ${di} ${adx}`,
+      note: "ADX and DMI (as TradingView's built-in 'Directional Movement Index' computes it, its defaults 14, 14): the pink line is ADX (how strong the trend is, not its direction), blue +DI (the move up), orange −DI (the move down). ADX over 25 (dotted) is a trend being there: up while +DI is on top, down while −DI is. Under 25 is a sideways market. Shown only: no signal uses it.",
     },
     // #143
     emaNote: (bars: number | null, status: "loading" | "ready" | "error") =>
