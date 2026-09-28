@@ -18,7 +18,7 @@
 // Everything here is Deno-free: src/test/live-chart.test.ts imports it.
 
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
-import { barFullyClosed } from "../_shared/market-hours.ts";
+import { barFullyClosed, isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
 import { chartRsiSar, readRsiSar } from "../analyze/rsisar.ts";
 import { chartGainz, readGainz } from "../analyze/gainz.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -29,15 +29,20 @@ import { dowTheory } from "../_shared/dow.ts";
 
 // #127: and gold (XAU/USD), which GMO does not carry — see "gold" below.
 // #153: every pair GMO serves (all 21 are among the owner's broker's, 楽天FX),
-// in that broker's order, then gold. The broker's other 17 pairs and its
-// other commodities have no feed here yet (docs §8.65).
+// in that broker's order, then gold. #154: and 15 of the broker's other 17
+// pairs, read as gold is (see "the broker's pairs GMO does not serve"
+// below); CNH/JPY and CNH/HKD have no feed here (docs §8.66). The broker's
+// other commodities are not added (the owner's choice, docs §8.65).
 export const LIVE_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
   "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY",
   "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
-  "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD",
-  "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD",
-  "NZD/CAD",
+  "TRY/JPY", "NZD/USD", "USD/CAD", "USD/CHF",
+  "GBP/CHF", "EUR/GBP", "EUR/CHF", "AUD/CHF",
+  "NZD/CHF", "AUD/NZD", "HKD/JPY", "SGD/JPY",
+  "NOK/JPY", "EUR/AUD", "GBP/AUD", "HUF/JPY",
+  "SEK/JPY", "PLN/JPY", "CZK/JPY", "CAD/CHF",
+  "NOK/SEK", "AUD/CAD", "NZD/CAD", "USD/HKD",
   "XAU/USD",
 ] as const;
 // #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、
@@ -103,10 +108,12 @@ export const TWELVE_CAPS: Record<string, number> = { "1min": 450, "5min": 600 };
 export const TWELVE_CAP_REST = 720;
 export const twelveCapFor = (interval: string): number => TWELVE_CAPS[interval] ?? TWELVE_CAP_REST;
 // Bars read at once: enough for the chart, its signals and Zone Shift's history
+// (#154: for every pair read as gold is)
 export const GOLD_BARS = 800;
-// Stored gold bars are fresh while no bar has closed since they were read
-// (a bar opens on the UTC grid of its length, as Twelve Data's do); while the
-// market may be shut, for FALLBACK_TTL_MS
+// Stored gold bars (#154: any pair's read as gold is) are fresh while no bar
+// has closed since they were read (a bar opens on the UTC grid of its
+// length, as Twelve Data's do); while the market may be shut, for
+// FALLBACK_TTL_MS
 export const goldFresh = (fetchedAtMs: number, nowMs: number, interval: string, marketShut: boolean): boolean => {
   const step = LIVE_STEP_MS[interval];
   if (!Number.isFinite(fetchedAtMs) || step === undefined) return false;
@@ -114,32 +121,111 @@ export const goldFresh = (fetchedAtMs: number, nowMs: number, interval: string, 
   return fetchedAtMs >= Math.floor(nowMs / step) * step;
 };
 
-export const GOLD_QUOTE_URL = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD";
+// Swissquote's public quote for a pair ("XAU/USD" -> .../instrument/XAU/USD)
+export const swissquoteUrl = (pair: string): string =>
+  `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${pair.toUpperCase()}`;
+export const GOLD_QUOTE_URL = swissquoteUrl(GOLD);
 // A quote older than this is not a market trading now (the daily break, the weekend)
 export const GOLD_QUOTE_STALE_MS = 3 * 60_000;
 // [{topo: {platform}, spreadProfilePrices: [{spreadProfile: "standard",
-// bid, ask}, ...], ts}] — the first platform's standard profile (or its
-// first), and only a sane book
+// bid, ask}, ...], ts}] — the "standard" profile, on whichever platform has
+// it, else the first platform's first; and only a sane book. #154: the
+// platforms come in another order from one answer to the next and only one
+// of them has a "standard" profile (read 2026-09-28, 15 pairs), so taking
+// the first platform's made the spread jump between two profiles.
 export const parseSwissquote = (body: unknown, nowMs: number): Tick | null => {
   if (!Array.isArray(body)) return null;
+  const tickOf = (pick: Record<string, unknown> | undefined, tsv: unknown): Tick | null => {
+    const bid = Number(pick?.bid);
+    const ask = Number(pick?.ask);
+    const ts = Number(tsv);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid || !Number.isFinite(ts)) return null;
+    return { bid, ask, mid: (bid + ask) / 2, time: new Date(ts).toISOString(), open: nowMs - ts < GOLD_QUOTE_STALE_MS };
+  };
+  let first: Tick | null = null;
   for (const platform of body) {
     if (typeof platform !== "object" || platform === null) continue;
     const p = platform as { spreadProfilePrices?: unknown; ts?: unknown };
     if (!Array.isArray(p.spreadProfilePrices) || p.spreadProfilePrices.length === 0) continue;
     const profiles = p.spreadProfilePrices.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
-    const pick = profiles.find((x) => x.spreadProfile === "standard") ?? profiles[0];
-    const bid = Number(pick?.bid);
-    const ask = Number(pick?.ask);
-    const ts = Number(p.ts);
-    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid || !Number.isFinite(ts)) continue;
-    return { bid, ask, mid: (bid + ask) / 2, time: new Date(ts).toISOString(), open: nowMs - ts < GOLD_QUOTE_STALE_MS };
+    const standard = tickOf(profiles.find((x) => x.spreadProfile === "standard"), p.ts);
+    if (standard) return standard;
+    first ??= tickOf(profiles[0], p.ts);
   }
-  return null;
+  return first;
 };
 
-// Gold's stored bars -> the chart's read, and its closed bars for the history
+// A pair's stored Twelve Data bars -> the chart's read, and its closed bars
+// for the history (#154: gold's and the pairs' alike, told apart by `feed`)
+export const twelveRead = (
+  pair: string,
+  bars: Candle[],
+  interval: string,
+  nowMs: number,
+  fetchedAt: string,
+  limited = false,
+  ticksFrom: string | null = null,
+) => fallbackRead(pair, interval, bars, nowMs, { source: "twelvedata", feed: isGold(pair) ? "gold" : "twelve", fetchedAt, limited, ticksFrom });
 export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false, ticksFrom: string | null = null) =>
-  fallbackRead(GOLD, interval, bars, nowMs, { source: "twelvedata", feed: "gold", fetchedAt, limited, ticksFrom });
+  twelveRead(GOLD, bars, interval, nowMs, fetchedAt, limited, ticksFrom);
+
+// ---- #154: the broker's pairs GMO does not serve ----------------------------------------
+//
+// The request (2026-09-28), with the owner's broker's (楽天FX) 38 pairs:
+// 「画像のペアと銘柄を全て追加して」. GMO serves 21 of them (#153). The rest,
+// on the owner's choice of the free plans (「個人向けプランで追加して」,
+// 「1進んで」), are read as gold is: bars from Twelve Data (each of these on
+// its Basic plan: symbol_search with show_plan, read 2026-09-28), the
+// moving price from Swissquote's public quotes (each answered, 2026-09-28),
+// within the same day's reads as gold's ("Twelve Data's day"). Twelve Data
+// has no CNH/JPY (its forex_pairs has the offshore yuan only against USD
+// and CNY; its CNY/JPY is the onshore yuan, another price) and neither feed
+// has CNH/HKD, so those two are not here.
+export const TWELVE_FX_PAIRS = [
+  "USD/CAD", "USD/CHF", "GBP/CHF", "EUR/CHF", "AUD/CHF",
+  "NZD/CHF", "HKD/JPY", "SGD/JPY", "NOK/JPY", "EUR/AUD",
+  "GBP/AUD", "PLN/JPY", "CZK/JPY", "CAD/CHF", "USD/HKD",
+] as const;
+export const isTwelveFx = (pair: string): boolean => (TWELVE_FX_PAIRS as readonly string[]).includes(pair.toUpperCase());
+// Every pair whose bars are Twelve Data's own, gold's too: fresh by
+// goldFresh, GOLD_BARS deep, moved by Swissquote's price
+export const isTwelvePair = (pair: string): boolean => isGold(pair) || isTwelveFx(pair);
+
+// A pair's price from Swissquote. Its time is when the book last changed,
+// and a quiet pair's can be many minutes old while it is still the price
+// (USD/HKD's was 18 minutes old on a Monday night, 2026-09-28, the other
+// pairs' a second or two). So unlike gold, whose daily break shows as a
+// quote left standing, a pair is trading while the FX week is open; only in
+// the hours that may or may not be shut (the week's two edges, which move
+// with daylight saving) does a quote unchanged for GOLD_QUOTE_STALE_MS say
+// it is shut. While trading, the price is the price now: it is stamped with
+// when it was read, so the chart's next bar starts on it.
+export const parseSwissquoteFx = (body: unknown, nowMs: number): Tick | null => {
+  const t = parseSwissquote(body, nowMs);
+  if (!t) return null;
+  const open = !isMarketClosed(nowMs) && (!isPossiblyClosed(nowMs) || t.open);
+  return { ...t, open, time: open ? new Date(nowMs).toISOString() : t.time };
+};
+
+// Which of those pairs' prices a ticker read asks Swissquote for: the pair
+// on screen, when it was last tried more than `viewedMs` ago (as often as
+// gold's), and of the others those not tried for `othersMs`, the longest
+// untried first, at most `perRead` — so the list's prices come round in turn
+export const swissquoteDue = (
+  viewed: string | null,
+  lastTry: (pair: string) => number | undefined,
+  nowMs: number,
+  viewedMs: number,
+  othersMs: number,
+  perRead: number,
+): string[] => {
+  const since = (p: string) => nowMs - (lastTry(p) ?? 0);
+  const onScreen = viewed && isTwelveFx(viewed) && since(viewed) > viewedMs ? [viewed] : [];
+  const others = TWELVE_FX_PAIRS.filter((p) => p !== viewed && since(p) >= othersMs)
+    .sort((a, b) => since(b) - since(a))
+    .slice(0, perRead);
+  return [...onScreen, ...others];
+};
 
 // ---- #147: gold between Twelve Data's reads ---------------------------------------------
 //
@@ -270,7 +356,8 @@ export const splitBars = (quotes: QuoteCandle[], interval: string, nowMs: number
 export interface ReadSource {
   source: "gmo" | "twelvedata";
   // why GMO was not used: "maintenance" | "unavailable" — or "gold" (#127):
-  // Twelve Data is gold's own feed, GMO has none
+  // Twelve Data is gold's own feed, GMO has none; #154: "twelve", the same
+  // for a pair GMO does not serve
   feed: string | null;
   // when the fallback bars were fetched, ISO
   fetchedAt: string | null;

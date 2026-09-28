@@ -18,6 +18,8 @@ import {
   fetchTicks,
   historyBefore,
   intervalsFor,
+  isTwelveFx,
+  ownFeed,
   tickLive,
   unjudgedOf,
   withRead,
@@ -60,7 +62,8 @@ interface Props {
   defaultInterval?: string;
   // Injected by tests; the app uses the real function
   loadBars?: (pair: string, interval: string) => Promise<LiveRead>;
-  loadTicks?: () => Promise<Record<string, Tick>>;
+  // #154: told the pair on screen
+  loadTicks?: (pair?: string) => Promise<Record<string, Tick>>;
   loadHistory?: (pair: string, interval: string) => Promise<NumericCandle[]>;
   loadDow?: (pair: string) => Promise<DowTf[]>;
   // #140: the indicators are a paid feature: without them none is drawn or
@@ -116,14 +119,9 @@ const LiveChart = ({
   const setPair = (p: string) => choose({ pair: p });
   const chooseInterval = (iv: string) => choose({ interval: iv });
   // #153: the grouped list of every pair, and the row keeps the chosen pair
-  // in sight (with 22 of them, it may be far along the row)
+  // in sight (with 22 of them, #154: 37, it may be far along the row; below)
   const [gridOpen, setGridOpen] = useState(false);
   const pairRowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const row = pairRowRef.current;
-    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-pair-${pair}`) : undefined;
-    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [pair]);
   const setView = (v: LiveView) => choose({ view: v });
   // and the account's, when it arrives after the chart opened (or another
   // chart changes them), is shown
@@ -144,6 +142,15 @@ const LiveChart = ({
   const [error, setError] = useState<string | null>(null);
   const [reopens, setReopens] = useState<string | null>(null);
   const [ticks, setTicks] = useState<Record<string, Tick>>({});
+  // #153: the row's chosen pair kept in sight; #154: again once the prices
+  // are in, which widen every button, so a saved pair far along the row is
+  // still in sight when the chart opens on it
+  const pricesIn = Object.keys(ticks).length > 0;
+  useEffect(() => {
+    const row = pairRowRef.current;
+    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-pair-${pair}`) : undefined;
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [pair, pricesIn]);
   const [tickError, setTickError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -201,17 +208,25 @@ const LiveChart = ({
     return () => window.clearTimeout(id);
   }, [error, pair, interval, load]);
 
-  // The price, every few seconds while the page is on screen
+  // The price, every few seconds while the page is on screen (#154: of the
+  // pair on screen too, when the function reads it apart from the others)
+  const tickNow = useRef<(() => void) | null>(null);
   useEffect(() => {
     let stop = false;
     // while GMO is down for maintenance, ask once a minute, not every 5 s
     let quietUntil = 0;
+    // #154: an answer older than one already shown is dropped (asked for the
+    // pair before, it may lack the new one's price)
+    let asked = 0;
+    let shown = 0;
     const tick = async () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       if (Date.now() < quietUntil) return;
+      const mine = ++asked;
       try {
-        const got = await loadTicks();
-        if (stop) return;
+        const got = await loadTicks(current.current.pair);
+        if (stop || mine < shown) return;
+        shown = mine;
         setTicks(got);
         setTickAt(Date.now());
         setTickError(null);
@@ -223,6 +238,7 @@ const LiveChart = ({
       }
     };
     void tick();
+    tickNow.current = () => void tick();
     const id = window.setInterval(() => void tick(), TICK_MS);
     const clock = window.setInterval(() => setNow(Date.now()), 1_000);
     // #147: back on screen, the price now, not up to a tick later
@@ -235,11 +251,20 @@ const LiveChart = ({
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       stop = true;
+      tickNow.current = null;
       window.clearInterval(id);
       window.clearInterval(clock);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [loadTicks]);
+  // #154: another pair's price at once, not up to a tick later (the first
+  // pair's is asked for as the chart opens, above)
+  const tickedPair = useRef(pair);
+  useEffect(() => {
+    if (tickedPair.current === pair) return;
+    tickedPair.current = pair;
+    tickNow.current?.();
+  }, [pair]);
 
   // #147: back on screen after a bar closed, the bars again at once (the
   // browser may have held the timer while the page was hidden)
@@ -271,8 +296,8 @@ const LiveChart = ({
       overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
-  // (#127: or gold's own Twelve Data bars)
-  const gmoRead = read && (read.source === "gmo" || read.feed === "gold") ? read : null;
+  // (#127: or gold's own Twelve Data bars; #154: or a pair's GMO does not serve)
+  const gmoRead = read && ownFeed(read) ? read : null;
   useEffect(() => {
     if (!historyOn || !gmoRead) return;
     const h = history;
@@ -331,8 +356,9 @@ const LiveChart = ({
 
   // v3: GMO cannot be read, so the bars are Twelve Data's last ones and no
   // price moves them
-  // (#127: not gold, whose bars are always Twelve Data's and move with its price)
-  const fallback = read?.source === "twelvedata" && read.feed !== "gold";
+  // (#127: not gold, whose bars are always Twelve Data's and move with its
+  // price; #154: nor a pair GMO does not serve)
+  const fallback = read !== null && !ownFeed(read);
   const tick = fallback ? null : ticks[pair] ?? null;
   const step = STEP_MS[interval] ?? 60_000;
   // the forming bar, when the read has one: the last candle opened one step
@@ -464,6 +490,7 @@ const LiveChart = ({
               </div>
             </section>
           ))}
+          <p className="text-[10px] text-muted-foreground" data-testid="live-pair-grid-note">{l.pairGridNote}</p>
         </div>
       )}
       <div className={row} role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
@@ -685,10 +712,17 @@ const LiveChart = ({
       )}
       {/* #146, #147: gold's bars could not be read again (the day's Twelve
           Data reads for this timeframe spent, or Twelve Data not answering):
-          from when they are made from Swissquote's prices */}
-      {read && read.feed === "gold" && (read.limited || read.ticksFrom) && (
-        <p className="text-[11px] text-warning" data-testid="live-gold-limited">
-          {l.goldFromTicks(intervals[interval] ?? interval, read.limited, read.ticksFrom ? jstDay(Date.parse(read.ticksFrom)) : null)}
+          from when they are made from Swissquote's prices. #154: a pair's
+          GMO does not serve, the same */}
+      {read && read.source === "twelvedata" && ownFeed(read) && (read.limited || read.ticksFrom) && (
+        <p className="text-[11px] text-warning" data-testid="live-ticks-limited">
+          {l.fromTicks(
+            l.pairShort[pair] ?? pair,
+            intervals[interval] ?? interval,
+            read.limited,
+            read.ticksFrom ? jstDay(Date.parse(read.ticksFrom)) : null,
+            read.feed !== "gold",
+          )}
         </p>
       )}
       {reopens && (
@@ -789,7 +823,7 @@ const LiveChart = ({
               <p className="pt-1 text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>
             </details>
           )}
-          <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : l.note}</p>
+          <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : isTwelveFx(pair) ? l.twelveNote : l.note}</p>
         </>
       )}
     </div>

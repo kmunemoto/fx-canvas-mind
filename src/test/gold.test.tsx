@@ -278,7 +278,7 @@ describe("#127 gold on the live chart", () => {
     expect(screen.getByTestId("live-interval-5min").textContent).toBe("5分足");
     fireEvent.click(screen.getByTestId("live-interval-5min"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("XAU/USD", "5min"));
-    expect(screen.queryByTestId("live-gold-limited")).toBeNull();
+    expect(screen.queryByTestId("live-ticks-limited")).toBeNull();
 
     await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 4284.86 / 買値 4285.55 / スプレッド 0.69ドル"));
     expect(screen.getByTestId("live-note").textContent).toContain("Swissquote");
@@ -291,7 +291,7 @@ describe("#127 gold on the live chart", () => {
     const loadBars = vi.fn(async (pair: string, interval: string): Promise<LiveRead> => ({ ...readFor(pair, interval), ...over }));
     const view = render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} />);
     fireEvent.click(await screen.findByTestId("live-pair-XAU/USD"));
-    const note = await screen.findByTestId("live-gold-limited");
+    const note = await screen.findByTestId("live-ticks-limited");
     expect(note.textContent).toBe(
       "金の1分足は、きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達したため、09-28 14:04 からの足を Swissquote の価格（数秒ごと）から作っています。価格はチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。",
     );
@@ -302,7 +302,7 @@ describe("#127 gold on the live chart", () => {
     over = { limited: false, ticksFrom: "2026-09-28T05:04:00.000Z" };
     render(<LiveChart defaultInterval="5min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} />);
     fireEvent.click(await screen.findByTestId("live-pair-XAU/USD"));
-    expect((await screen.findByTestId("live-gold-limited")).textContent).toContain("金の5分足は、Twelve Data から読み直せなかったため、09-28 14:04 からの足を");
+    expect((await screen.findByTestId("live-ticks-limited")).textContent).toContain("金の5分足は、Twelve Data から読み直せなかったため、09-28 14:04 からの足を");
   });
 
   it("formats gold's prices to the cent", () => {

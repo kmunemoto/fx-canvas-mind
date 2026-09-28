@@ -7,15 +7,27 @@ import { parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
 
 export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/functions/v1/live-chart";
 // #153: every pair GMO serves, in the owner's broker's order (楽天FX), then
-// gold — as the function lists them
+// gold — as the function lists them. #154: and 15 of the broker's pairs GMO
+// does not serve, read as gold is (their bars Twelve Data's, their price
+// Swissquote's); the broker's CNH/JPY and CNH/HKD have no feed here
 export const LIVE_FX_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
   "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY",
   "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
-  "TRY/JPY", "NZD/USD", "EUR/GBP", "AUD/NZD",
-  "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD",
-  "NZD/CAD",
+  "TRY/JPY", "NZD/USD", "USD/CAD", "USD/CHF",
+  "GBP/CHF", "EUR/GBP", "EUR/CHF", "AUD/CHF",
+  "NZD/CHF", "AUD/NZD", "HKD/JPY", "SGD/JPY",
+  "NOK/JPY", "EUR/AUD", "GBP/AUD", "HUF/JPY",
+  "SEK/JPY", "PLN/JPY", "CZK/JPY", "CAD/CHF",
+  "NOK/SEK", "AUD/CAD", "NZD/CAD", "USD/HKD",
 ];
+// #154: those read as gold is
+export const TWELVE_FX_PAIRS = [
+  "USD/CAD", "USD/CHF", "GBP/CHF", "EUR/CHF", "AUD/CHF",
+  "NZD/CHF", "HKD/JPY", "SGD/JPY", "NOK/JPY", "EUR/AUD",
+  "GBP/AUD", "PLN/JPY", "CZK/JPY", "CAD/CHF", "USD/HKD",
+];
+export const isTwelveFx = (pair: string): boolean => TWELVE_FX_PAIRS.includes(pair);
 export const LIVE_COMMODITIES = ["XAU/USD"];
 export const LIVE_PAIRS = [...LIVE_FX_PAIRS, ...LIVE_COMMODITIES];
 // the picker's groups, as the broker's lists are split
@@ -53,7 +65,8 @@ export interface LiveRead {
   nextClose: string | null;
   at: string;
   // v3: "twelvedata" while GMO cannot be read, with why ("maintenance" |
-  // "unavailable") and when those bars were fetched
+  // "unavailable") and when those bars were fetched — or, as the pair's own
+  // feed, "gold" (#127) and "twelve" (#154, a pair GMO does not serve)
   source: "gmo" | "twelvedata";
   feed: string | null;
   fetchedAt: string | null;
@@ -254,7 +267,15 @@ export const fetchLiveBars = async (pair: string, interval: string): Promise<Liv
   return read;
 };
 
-export const fetchTicks = async (): Promise<Record<string, Tick>> => normalizeTicks((await call({ action: "ticker" })).ticks);
+// #154: told the pair on screen, whose price the function then reads each
+// time when it is one Swissquote prices
+export const fetchTicks = async (pair?: string): Promise<Record<string, Tick>> =>
+  normalizeTicks((await call(pair ? { action: "ticker", pair } : { action: "ticker" })).ticks);
+
+// #154: a read whose bars are the pair's own feed's (GMO's, or Twelve Data's
+// for gold and the pairs GMO does not serve) — not a stand-in while GMO is
+// down — so the price moves them and the history joins them
+export const ownFeed = (r: LiveRead): boolean => r.source === "gmo" || r.feed === "gold" || r.feed === "twelve";
 
 // #129: Dow theory on four timeframes (supabase/functions/_shared/dow.ts),
 // as the live-chart function reads it — #146: gold's 5-minute one too
