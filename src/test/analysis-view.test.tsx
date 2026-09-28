@@ -721,7 +721,8 @@ describe("PriceChart level pills", () => {
     expect(screen.queryAllByText("BUY")).toHaveLength(0);
     // the gauge animates from 0, so assert the readout exists rather than its
     // instantaneous value
-    expect(screen.getByText(/^\d+%$/)).toBeInTheDocument();
+    // (#151: the ULTRA tally's shares on the chart are its own)
+    expect(screen.getAllByText(/^\d+%$/).filter((el) => !el.closest("[data-testid='chart-ultra-table']"))).toHaveLength(1);
   });
 });
 

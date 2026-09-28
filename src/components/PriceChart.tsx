@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { formatCandleLabel, parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
+import { formatCandleLabel, isGoldPair, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
@@ -16,6 +16,7 @@ import { EMA_LINES, emaLine } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
+import { ULTRA_COLORS, pctOf, ultra as ultraOf } from "@/lib/ultra";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -177,7 +178,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -617,6 +618,27 @@ const PriceChart = ({
       l ? { ...l, a: l.a - histOff, b: l.b - histOff, brokenAt: l.brokenAt === null ? null : l.brokenAt - histOff } : null;
     return { up: onChart(r.up), down: onChart(r.down) };
   }, [ov.autoTrend, histAll, histOff, tail]);
+  // #151: the video's ULTRA over the same history and the candles, from a
+  // fixed time as Q-Trend (#148), so the chart opened again draws the same
+  // signals and counts them alike; indices on the chart's candles (a signal
+  // before the first is in the table, not drawn). Gold's settings are
+  // dollars, a currency pair's pips.
+  const ultraFrom = useMemo(() => {
+    if (!ov.ultra || !histAll) return 0;
+    const times = histAll.map((c) => parseUtcCandleTime((c as { datetime?: string }).datetime ?? ""));
+    return anchoredStart(times, barStepMs(times.slice(histOff)), histOff);
+  }, [ov.ultra, histAll, histOff]);
+  const ul = useMemo(() => {
+    if (!ov.ultra || !histAll) return null;
+    const all = histAll.slice(ultraFrom);
+    const r = ultraOf(all, all.length - 1 - tail, isGoldPair(pair) ? 1 : pipSize(pair));
+    const off = histOff - ultraFrom;
+    const at = (v: number | null) => (v === null ? null : v - off);
+    return {
+      stats: r.stats,
+      trades: r.trades.map((tr) => ({ ...tr, i: tr.i - off, tpAt: tr.tpAt.map(at) as typeof tr.tpAt, slAt: at(tr.slAt), end: at(tr.end) })),
+    };
+  }, [ov.ultra, histAll, histOff, ultraFrom, tail, pair]);
   // #129: the Dow reading placed on the chart's candles (by their open
   // times; a swing or mark before the first candle is not drawn, the key
   // level from an older swing starts at the first candle)
@@ -988,6 +1010,8 @@ const PriceChart = ({
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
     adx: t.chart.adx.note,
+    // #151
+    ultra: t.chart.ultraNote,
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
@@ -996,6 +1020,8 @@ const PriceChart = ({
     ...(trendLines.length > 0 ? [{ key: "trendLines", group: "signals" as const, name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
     // #145: the video's combination
     { key: "qtBlsh", group: "signals" as const, name: t.chart.overlayNames.qtBlsh, on: ov.qtBlsh, toggle: flip("qtBlsh") },
+    // #151: the video's ULTRA
+    { key: "ultra", group: "signals" as const, name: t.chart.overlayNames.ultra(isGoldPair(pair)), on: ov.ultra, toggle: flip("ultra") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     // #143: each with its line's colour
@@ -1391,6 +1417,8 @@ const PriceChart = ({
       ? qt.signals.filter((sg) => onScreen(sg.i)).map((sg) => ({ key: `qt-${sg.i}`, i: sg.i, buy: sg.side === "BUY", text: sg.strong ? "STRONG" : sg.side, badge: false }))
       : []),
     ...(triple ? triple.filter((sg) => onScreen(sg.i)).map((sg) => ({ key: `tc-${sg.i}`, i: sg.i, buy: sg.side === "BUY", text: `3✓ ${sg.side}`, badge: true })) : []),
+    // #151: ULTRA's Buy ☆ / Sell ☆, laid out with them
+    ...(ul ? ul.trades.filter((tr) => onScreen(tr.i)).map((tr) => ({ key: `ul-${tr.i}`, i: tr.i, buy: tr.side === "BUY", text: tr.side === "BUY" ? "Buy ☆" : "Sell ☆", badge: false })) : []),
   ]
     .sort((a, b) => a.i - b.i || Number(a.badge) - Number(b.badge))
     .map((it) => ({
@@ -1405,6 +1433,36 @@ const PriceChart = ({
     }));
   const qtSpots = placeEdgeLabels(qtLabels, plotTop, plotBottom);
   const qtPlaced = new Map(qtLabels.map((l) => [l.key, { ...qtSpots.get(l.key)!, w: l.w, h: l.h }]));
+  // #151: ULTRA's newest signal's box: while it is open, on to the plot's
+  // right edge with its prices there (pushed apart where they would
+  // overlap); once ended, to the bar it ended on, without them
+  const ulBox = (() => {
+    const tr = ul && ul.trades.length > 0 ? ul.trades[ul.trades.length - 1] : null;
+    if (!tr) return null;
+    const open = tr.end === null;
+    const plotRight = W - PAD_RIGHT - 1;
+    if (tr.i >= to || (!open && (tr.end as number) < from)) return null;
+    const x0 = Math.max(x(tr.i), PAD_LEFT);
+    const x1 = open ? plotRight : Math.min(Math.max(x(tr.end as number), x(tr.i + 1)), plotRight);
+    if (x1 <= x0) return null;
+    const fsz = (narrow ? 7 : 8) * fs;
+    const levels: Array<{ key: string; text: string; v: number; color: string; dash?: string }> = [
+      { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "tp2", text: "TP2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "tp1", text: "TP1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
+      { key: "entry", text: "Entry", v: tr.entry, color: ULTRA_COLORS.entry },
+      { key: "sl", text: "SL", v: tr.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
+    ];
+    const tagH = fsz + 5;
+    const tags = (open ? levels : []).map((l) => ({ ...l, label: `${l.text}: ${l.v.toFixed(decimals)}`, cy: y(l.v) })).sort((a, b) => a.cy - b.cy);
+    for (let k = 1; k < tags.length; k++) tags[k].cy = Math.max(tags[k].cy, tags[k - 1].cy + tagH + 1);
+    const over = tags.length > 0 ? tags[tags.length - 1].cy + tagH / 2 - plotBottom : 0;
+    if (over > 0) tags.forEach((g) => (g.cy -= over));
+    const under = tags.length > 0 ? plotTop - (tags[0].cy - tagH / 2) : 0;
+    if (under > 0) tags.forEach((g) => (g.cy += under));
+    const band = (a: number, b: number) => ({ y: Math.min(y(a), y(b)), height: Math.abs(y(a) - y(b)) });
+    return { tr, open, x0, x1, fsz, tagH, levels, tags, band };
+  })();
   // #115: each label is kept inside the plot sideways as well (one on the
   // first or last bars was cut in half), and one that would land on a label
   // already placed is moved a row away from the price, or toward it when
@@ -1819,6 +1877,11 @@ const PriceChart = ({
           {noteOf.qtBlsh}
         </p>
       )}
+      {ov.ultra && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-ultra-legend">
+          {noteOf.ultra}
+        </p>
+      )}
       {ov.qTrend && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-qtrend-legend">
           {noteOf.qTrend}
@@ -2182,6 +2245,43 @@ const PriceChart = ({
     <>
       <div className="relative">
       {overlayLegend}
+      {/* #151: ULTRA's tally, at the top right as the video has it (TOTAL
+          is TP1 + the stop; each share is of TOTAL; the win rate is TP1's) */}
+      {ul && !(narrow && ohlcLine) && (
+        <div
+          className="pointer-events-none absolute top-1 z-10 rounded border bg-background/80 px-1.5 py-0.5 font-mono text-[9px] leading-tight"
+          style={{ right: PAD_RIGHT + 2, borderColor: "#C2185B" }}
+          data-testid="chart-ultra-table"
+        >
+          <div className="text-center font-bold text-foreground">★ ULTRA ★</div>
+          <table className="border-collapse">
+            <tbody>
+              {([
+                ["tp1", t.chart.ultraTable.tp1, ul.stats.tp1, "#B39DDB"],
+                ["tp2", t.chart.ultraTable.tp2, ul.stats.tp2, "#26C6DA"],
+                ["tp3", t.chart.ultraTable.tp3, ul.stats.tp3, "#EF5350"],
+                ["sl", t.chart.ultraTable.sl, ul.stats.sl, "#E53935"],
+              ] as const).map(([key, name, n, color]) => {
+                const pct = pctOf(n, ul.stats.total);
+                return (
+                  <tr key={key} data-testid={`chart-ultra-row-${key}`}>
+                    <td className="pr-1.5" style={{ color }}>{name}</td>
+                    <td className="pr-1.5 text-right text-foreground">{n}</td>
+                    <td className="text-right text-muted-foreground">{pct === null ? "—" : `${pct}%`}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="text-foreground" data-testid="chart-ultra-total">{`${t.chart.ultraTable.total}: ${ul.stats.total}`}</div>
+          <div className="font-bold text-foreground" data-testid="chart-ultra-winrate">
+            {`${t.chart.ultraTable.winRate}: ${(() => {
+              const p = pctOf(ul.stats.tp1, ul.stats.total);
+              return p === null ? "—" : `${p}%`;
+            })()}`}
+          </div>
+        </div>
+      )}
       {priceZoom !== 1 && (
         <button
           type="button"
@@ -2891,6 +2991,86 @@ const PriceChart = ({
                   <title>{t.chart.qtBlshTitle(sg.side)}</title>
                   <rect x={cx - w / 2} y={ty} width={w} height={h} rx={h / 2} fill="hsl(var(--background))" stroke={color} strokeWidth={1.4} />
                   <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill={color} fontWeight="700">{text}</text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #151: the video's ULTRA — the newest signal's box (the entry in
+            green, red to the stop, blue to TP3 with TP1 and TP2 dashed): while
+            it is open, on to the plot's right edge with its prices there, as
+            the video draws it; once ended, faint and to the bar it ended on.
+            ★TP1–★TP3 on the bars that reached them, a small × where the stop
+            came first, and its Buy ☆ / Sell ☆ labels (under the candle for a
+            buy, over it for a sell) */}
+        {ul && (
+          <g data-testid="chart-ultra">
+            {ulBox && (
+              <g data-testid="chart-ultra-box" data-side={ulBox.tr.side} data-open={ulBox.open ? "true" : "false"} opacity={ulBox.open ? 1 : 0.55}>
+                <title>{t.chart.ultraTitle(ulBox.tr.side, ulBox.tr.entry.toFixed(decimals), ulBox.tr.sl.toFixed(decimals), ulBox.tr.tps.map((v) => v.toFixed(decimals)))}</title>
+                <g clipPath={`url(#${clipId})`}>
+                  <rect x={ulBox.x0} width={ulBox.x1 - ulBox.x0} {...ulBox.band(ulBox.tr.entry, ulBox.tr.sl)} fill={ULTRA_COLORS.sl} opacity="0.14" />
+                  <rect x={ulBox.x0} width={ulBox.x1 - ulBox.x0} {...ulBox.band(ulBox.tr.entry, ulBox.tr.tps[2])} fill={ULTRA_COLORS.tp} opacity="0.12" />
+                  {ulBox.levels.map((l) => (
+                    <line key={l.key} x1={ulBox.x0} x2={ulBox.x1} y1={y(l.v)} y2={y(l.v)} stroke={l.color} strokeWidth={l.key === "entry" ? 1.4 : 1} strokeDasharray={l.dash} opacity="0.9" />
+                  ))}
+                </g>
+              </g>
+            )}
+            {ul.trades.flatMap((tr) => {
+              const fsz = (narrow ? 6.5 : 7.5) * fs;
+              const hits: Array<{ what: string; at: number; v: number; color: string }> = [
+                ...tr.tpAt.map((at, k) => (at === null ? null : { what: `TP${k + 1}`, at, v: tr.tps[k], color: ULTRA_COLORS.tp })).filter((h): h is { what: string; at: number; v: number; color: string } => h !== null),
+                ...(tr.result === "SL" && tr.slAt !== null ? [{ what: "SL", at: tr.slAt, v: tr.sl, color: ULTRA_COLORS.sl }] : []),
+              ];
+              return hits.filter((h) => onScreen(h.at)).map((h) => {
+                if (h.what === "SL") {
+                  const r = 3 * fs;
+                  const [hx, hy] = [x(h.at), Math.min(Math.max(y(h.v), plotTop + r), plotBottom - r)];
+                  return (
+                    <g key={`uh-${tr.i}-SL`} data-testid="chart-ultra-hit-SL">
+                      <title>{t.chart.ultraHit("SL", h.v.toFixed(decimals))}</title>
+                      <path d={`M${hx - r},${hy - r} L${hx + r},${hy + r} M${hx - r},${hy + r} L${hx + r},${hy - r}`} stroke={h.color} strokeWidth={1.8 * fs} strokeLinecap="round" />
+                    </g>
+                  );
+                }
+                const text = `★${h.what}`;
+                const w = text.length * fsz * 0.62 + 5;
+                const hh = fsz + 4;
+                const cy = Math.min(Math.max(y(h.v), plotTop + hh / 2), plotBottom - hh / 2);
+                return (
+                  <g key={`uh-${tr.i}-${h.what}`} data-testid={`chart-ultra-hit-${h.what}`}>
+                    <title>{t.chart.ultraHit(h.what, h.v.toFixed(decimals))}</title>
+                    <rect x={x(h.at) - w / 2} y={cy - hh / 2} width={w} height={hh} rx="2" fill={h.color} />
+                    <text x={x(h.at)} y={cy + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="700">{text}</text>
+                  </g>
+                );
+              });
+            })}
+            {ul.trades.filter((tr) => onScreen(tr.i)).map((tr) => {
+              const c = candles[tr.i];
+              const cx = x(tr.i);
+              const color = tr.side === "BUY" ? ULTRA_COLORS.buy : ULTRA_COLORS.sell;
+              const fsz = qtFsz;
+              const { top: ty, under, w, h } = qtPlaced.get(`ul-${tr.i}`)!;
+              const tip = under ? y(c.low) + 2 : y(c.high) - 2;
+              return (
+                <g key={`ul-${tr.i}`} data-testid={`chart-ultra-signal-${tr.side}`}>
+                  <title>{t.chart.ultraTitle(tr.side, tr.entry.toFixed(decimals), tr.sl.toFixed(decimals), tr.tps.map((v) => v.toFixed(decimals)))}</title>
+                  <polygon points={under ? `${cx},${tip} ${cx - 3},${ty} ${cx + 3},${ty}` : `${cx},${tip} ${cx - 3},${ty + h} ${cx + 3},${ty + h}`} fill={color} />
+                  <rect x={cx - w / 2} y={ty} width={w} height={h} rx="2" fill={color} />
+                  <text x={cx} y={ty + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill="#fff" fontWeight="600">{tr.side === "BUY" ? "Buy ☆" : "Sell ☆"}</text>
+                </g>
+              );
+            })}
+            {/* the open trade's prices, over the labels so they stay readable */}
+            {ulBox && ulBox.tags.map((g) => {
+              const w = g.label.length * ulBox.fsz * 0.6 + 6;
+              return (
+                <g key={g.key} data-testid={`chart-ultra-tag-${g.key}`}>
+                  <rect x={ulBox.x1 - w} y={g.cy - ulBox.tagH / 2} width={w} height={ulBox.tagH} rx="2" fill={g.color} />
+                  <text x={ulBox.x1 - w / 2} y={g.cy + ulBox.fsz * 0.36} fontSize={ulBox.fsz} textAnchor="middle" fill="#fff" fontWeight="600">{g.label}</text>
                 </g>
               );
             })}

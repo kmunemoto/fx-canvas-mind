@@ -258,7 +258,7 @@ const LiveChart = ({
   const historyOn =
     indicatorsAllowed &&
     (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
-      overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx);
+      overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars)

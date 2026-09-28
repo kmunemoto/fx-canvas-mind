@@ -258,6 +258,8 @@ export const en: Dict = {
       autoTrend: "Trend lines",
       maCross: "GC / DC (EMA 50 × 200)",
       ichimoku: (conv: number, base: number, span2: number) => `Ichimoku ${conv} ${base} ${span2}`,
+      // #151
+      ultra: (gold: boolean): string => (gold ? "ULTRA (RSI 14, SL $10, TP $5/10/15)" : "ULTRA (RSI 14, SL 10, TP 5/10/15 pips)"),
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -335,6 +337,18 @@ export const en: Dict = {
       "Ichimoku (as TradingView's built-in computes it, its defaults 9, 26, 52 and displacement 26): the conversion line (blue, the middle of the last 9 highs and lows), the base line (dark red, 26), the cloud of the leading spans (the average of the two lines, and the middle of 52) drawn 25 bars ahead (green while span 1 is on top, red otherwise), and the lagging span (green, the close drawn 25 bars back). The price over the cloud leans up, under it down, inside it neither; the chart's top left says which. This chart has no room to the right of its newest bar, so the cloud's part ahead of it is not drawn. Not measured on past data. Shown only: no signal or email uses it.",
     ichimokuSide: { above: "over the cloud (leaning up)", inside: "in the cloud", below: "under the cloud (leaning down)" } as Record<string, string>,
     trendBreak: { up: "break", down: "break" },
+    // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
+    ultraNote:
+      "ULTRA (the video's \"ULTRA EN\" by F-INVEST on TradingView, rebuilt from the settings and marks the video shows. It is invite-only and its author has no published script (it is handed out on Telegram), so its code cannot be read and its signals may differ): " +
+      "Sell on the closed bar where RSI(14) crosses back under 70 from above, Buy where it crosses back over 30 from below (the video's settings: RSI 14, overbought 70, oversold 30, trade mode \"Trend-f...\". On the video's chart the Sell comes a little after a top and the Buy a little after a bottom, so this app reads it as entering once the stretch starts to turn). " +
+      "Entered at that bar's close with a stop of 10 and targets of TP1 5, TP2 10, TP3 15 (the video's numbers: dollars on gold — in the video a sell at 4327.154 has its stop at 4337.154 and TP1 at 4322.154. On a currency pair the same numbers are pips: the video is gold only, and $10 taken as a price would be ten yen on USD/JPY; this is this app's choice). " +
+      "★TP1 to ★TP3 on the bars that reached them, a small × where the stop came before TP1. The newest signal's box (green entry, red to the stop, blue to the targets; on to the right edge with its prices while it is open, faint once it has ended) and the table at the top right: how many signals reached TP1, TP2, TP3 and the stop among the bars read, each as a share of the total (TP1 + stop); the win rate is TP1's share, counted as the video's table counts. " +
+      "A bar that reaches both the stop and a target counts the stop; a stop after TP1 ends the trade and is not counted as a stop. Each signal is followed on its own to its stop or TP3. The video's MACD (off) and Heikin Ashi MACD sections are not built. " +
+      "The video's \"80% win rate\" has not been measured here. TP1 is half the stop's distance, so with no drift in price about 67% of random entries would reach TP1 before the stop. Closed bars only. Shown on the chart only: not used to judge signals or in emails.",
+    ultraTable: { tp1: "TP1", tp2: "TP2", tp3: "TP3", sl: "SL", total: "TOTAL", winRate: "WIN RATE" },
+    ultraTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[]): string =>
+      `ULTRA ${side === "BUY" ? "buy" : "sell"}: entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]}, TP3 ${tps[2]}`,
+    ultraHit: (what: string, price: string): string => `ULTRA: ${what === "SL" ? "stop" : what} ${price} reached`,
     maCrossTitle: (side: "GC" | "DC"): string => (side === "GC" ? "Golden cross (EMA 50 crossed above EMA 200)" : "Dead cross (EMA 50 crossed below EMA 200)"),
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
