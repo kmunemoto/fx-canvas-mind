@@ -35,8 +35,9 @@
 //
 // Shown on the chart, and #155: the email alerts (signal-alerts) judge on
 // its signals too, from this same code (moved here from src/lib/ultra.ts,
-// which re-exports it). No record is kept of them, and the video's 79–80%
-// has not been measured here.
+// which re-exports it). No record is kept of them. #157: the video's
+// 79–80% is on gold; on GMO's FX pairs, spread paid, TP1 came before the
+// stop 61–64% of the time on 5-minute to 4-hour bars (docs §8.69).
 
 import { pineRma, type Series } from "./pine.ts";
 

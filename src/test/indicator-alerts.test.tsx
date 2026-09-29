@@ -378,7 +378,7 @@ describe("#155 what the sweep reads, and when", () => {
     expect(Date.parse(qt.closedAt) - Date.parse(qt.barTime)).toBe(M5);
   });
 
-  it("#156: a Q-Trend email carries the stop and targets (ULTRA's numbers) and what they did on past 5-minute bars", () => {
+  it("#156/#157: a Q-Trend email carries the stop and targets (ULTRA's numbers) and what they did on its own timeframe", () => {
     const sig = {
       rule: "qtrend" as const, pair: "USD/JPY", interval: "5min", side: "SELL" as const, strong: true,
       barTime: "2026-09-29T02:20:00.000Z", closedAt: "2026-09-29T02:25:00.000Z",
@@ -394,22 +394,42 @@ describe("#155 what the sweep reads, and when", () => {
       "  利確2 149.649（10.0pips）",
       "  利確3 149.599（15.0pips）",
       "もともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています",
-      "約2.3〜2.4 pips の負け",
-      "ほかの時間足は測っていません",
+      "過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.9%（損益ゼロには67%より上が要ります）で、利確1か損切りで全部決済すると1回あたり平均で約2.10 pips の負けでした。",
     ]) expect(ja.text).toContain(part);
     expect(ja.text).not.toContain("損切り・利確の目安はありません");
+    // #157: no longer "other timeframes have not been measured", nor the older 5-minute figure
+    expect(ja.text).not.toContain("測っていません");
+    expect(ja.text).not.toContain("2.3〜2.4");
     const en = renderIndicatorMail(sig, "en");
-    for (const part of ["Stop and targets (ULTRA's numbers):", "  Stop 149.849 (10.0 pips)", "  TP3 149.599 (15.0 pips)", "about 2.3–2.4 pips a trade", "other timeframes have not been measured"]) {
+    for (const part of [
+      "Stop and targets (ULTRA's numbers):", "  Stop 149.849 (10.0 pips)", "  TP3 149.599 (15.0 pips)",
+      "Measured on past 5-minute bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop 58.9% of the time (breaking even needs more than 67%); closing all of it at TP1 or the stop lost about 2.10 pips a trade on average.",
+    ]) {
       expect(en.text).toContain(part);
     }
+    expect(en.text).not.toContain("not been measured");
+    // #157: the figures are the email's own timeframe's
+    const h4 = renderIndicatorMail({ ...sig, interval: "4h", closedAt: "2026-09-29T08:00:00.000Z", barTime: "2026-09-29T04:00:00.000Z" }, "ja");
+    expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 61.4%");
+    expect(h4.text).toContain("約1.35 pips の負けでした。");
+    // a pair read from Twelve Data was not measured: said so
+    const twelve = renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h", close: 0.9312, sl: 0.9322, tps: [0.9307, 0.9302, 0.9297] }, "ja");
+    expect(twelve.text).toContain("EUR/CHF そのものは測っていません（GMO の FX の値です）。");
+    expect(renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h" }, "en").text).toContain("EUR/CHF itself was not measured; these are GMO's FX pairs' figures.");
+    expect(h4.text).not.toContain("そのものは測っていません");
     // gold in dollars
     const gold = renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h", close: 4327.15, sl: 4337.15, tps: [4322.15, 4317.15, 4312.15] }, "ja");
     expect(gold.text).toContain("  損切り 4337.15（$10.00）");
     expect(gold.text).toContain("  利確1 4322.15（$5.00）");
-    // ULTRA's email as it was
+    // ULTRA's email: the video's figure beside what was measured on its own timeframe
     const ul = renderIndicatorMail({ ...sig, rule: "ultra", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
     expect(ul.text).toContain("ULTRA の目安（動画の設定）:");
-    expect(ul.text).toContain("動画の勝率（79〜80%）は、このアプリでは測っていません。");
+    expect(ul.text).toContain("動画（金）の勝率は79〜80%です。過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 61.0%");
+    expect(ul.text).toContain("約1.64 pips の負けでした。");
+    const ul4 = renderIndicatorMail({ ...sig, rule: "ultra", interval: "4h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "en");
+    expect(ul4.text).toContain("The video shows a 79–80% win rate (on gold). Measured on past 4-hour bars");
+    expect(ul4.text).toContain("64.2% of the time");
+    expect(ul4.text).toContain("lost about 0.82 pips a trade");
   });
 });
 
