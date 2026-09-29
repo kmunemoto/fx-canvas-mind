@@ -747,7 +747,8 @@ const PriceChart = ({
       ].map((l) => ({ ...l, label: `${l.text} ${l.v.toFixed(decimals)}` }))
     : [];
   const ulTagW = (label: string) => label.length * ulTagFsz * 0.6 + 6;
-  const ulGap = ulOpen && to >= n ? Math.ceil(Math.max(...ulLevels.map((l) => ulTagW(l.label))) + 4) : 0;
+  // (wide enough for the arrow a price off the chart is tagged with)
+  const ulGap = ulOpen && to >= n ? Math.ceil(Math.max(...ulLevels.map((l) => ulTagW(`${l.label} ↑`))) + 4) : 0;
 
   // Deliberately NOT part of the price domain below. A confirmed swing well
   // above the window would stretch the scale until every candle was a flat
@@ -1477,12 +1478,22 @@ const PriceChart = ({
       { key: "sl", v: tr.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
     ];
     const tagH = fsz + 5;
-    const tags = (open ? ulLevels : []).map((l) => ({ ...l, cy: y(l.v) })).sort((a, b) => a.cy - b.cy);
+    // each tag at its price, or — its price off the chart — at the edge it
+    // is beyond, with an arrow that way; then pushed apart, and back inside
+    // from the bottom. 2026-09-29: moved as one block, a sell whose stop was
+    // above the chart and targets below (a quiet 5-minute EUR/GBP) showed
+    // its SL alone; the Entry and TPs were pushed off the bottom.
+    const lo = plotTop + tagH / 2;
+    const hi = plotBottom - tagH / 2;
+    const tags = (open ? ulLevels : [])
+      .map((l) => {
+        const at = y(l.v);
+        const off = at < plotTop ? " ↑" : at > plotBottom ? " ↓" : "";
+        return { ...l, label: l.label + off, at, cy: Math.min(Math.max(at, lo), hi) };
+      })
+      .sort((a, b) => a.at - b.at);
     for (let k = 1; k < tags.length; k++) tags[k].cy = Math.max(tags[k].cy, tags[k - 1].cy + tagH + 1);
-    const over = tags.length > 0 ? tags[tags.length - 1].cy + tagH / 2 - plotBottom : 0;
-    if (over > 0) tags.forEach((g) => (g.cy -= over));
-    const under = tags.length > 0 ? plotTop - (tags[0].cy - tagH / 2) : 0;
-    if (under > 0) tags.forEach((g) => (g.cy += under));
+    for (let k = tags.length - 1; k >= 0; k--) tags[k].cy = Math.min(tags[k].cy, k === tags.length - 1 ? hi : tags[k + 1].cy - tagH - 1);
     const band = (a: number, b: number) => ({ y: Math.min(y(a), y(b)), height: Math.abs(y(a) - y(b)) });
     return { tr, open, x0, x1, fsz, tagH, levels, tags, band };
   })();

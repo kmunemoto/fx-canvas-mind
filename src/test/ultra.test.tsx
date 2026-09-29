@@ -241,6 +241,49 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 24%");
   });
 
+  it("prices off the chart are tagged at its edge with an arrow, every tag inside the plot (a quiet 5-minute EUR/GBP)", () => {
+    // 2026-09-29, on the owner's EUR/GBP 5-minute chart: a sell's stop 10
+    // pips above the chart and its targets 5–15 below, and only "SL" showed
+    // (the tags moved as one block, the Entry and TPs off the bottom)
+    let s = 3;
+    const rnd = () => (s = (s * 16807) % 2147483647);
+    let c = 85796;
+    const quiet = Array.from({ length: 400 }, (_, i) => {
+      const o = c;
+      c = o + (rnd() % 7) - 3;
+      const hi = Math.max(o, c) + (rnd() % 3);
+      const lo = Math.min(o, c) - (rnd() % 3);
+      return { datetime: dated[i].datetime, open: o / 100000, high: hi / 100000, low: lo / 100000, close: c / 100000 };
+    });
+    render(<PriceChart candles={quiet.slice(280)} pair="EUR/GBP" zoneShiftHistory={{ bars: quiet.slice(0, 280), status: "ready" }} formingLast />);
+    const box = screen.getByTestId("chart-ultra-box");
+    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
+    const text = (k: string) => screen.getByTestId(`chart-ultra-tag-${k}`).textContent;
+    // the chart shows 0.85762–0.85789; the entry on it, the stop above, the targets below
+    expect(text("entry")).toBe("Entry 0.85784");
+    expect(text("sl")).toBe("SL 0.85884 ↑");
+    expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(["TP1 0.85734 ↓", "TP2 0.85684 ↓", "TP3 0.85634 ↓"]);
+    const clip = document.querySelector("clipPath rect")!;
+    const top = Number(clip.getAttribute("y"));
+    const bottom = top + Number(clip.getAttribute("height"));
+    const rectOf = (k: string) => {
+      const r = screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!;
+      const y0 = Number(r.getAttribute("y"));
+      return { y0, y1: y0 + Number(r.getAttribute("height")) };
+    };
+    for (const k of ["sl", "entry", "tp1", "tp2", "tp3"]) {
+      const { y0, y1 } = rectOf(k);
+      expect(y0).toBeGreaterThanOrEqual(top);
+      expect(y1).toBeLessThanOrEqual(bottom);
+    }
+    // in price order, top to bottom, none over another
+    const order = ["sl", "entry", "tp1", "tp2", "tp3"].map(rectOf);
+    for (let k = 1; k < order.length; k++) expect(order[k].y0).toBeGreaterThanOrEqual(order[k - 1].y1);
+    // the stop at the top edge, the targets at the bottom
+    expect(order[0].y0 - top).toBeLessThan(3);
+    expect(bottom - order[4].y1).toBeLessThan(3);
+  });
+
   it("the forming bar is not judged: its reach of TP1 is neither marked nor counted", () => {
     const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 97];
     const b = closes.map((c, i) => {
