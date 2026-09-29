@@ -59,7 +59,7 @@ import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
-import { ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
+import { ULTRA_DEFAULTS, ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
 import { INDICATOR_PAIRS, indicatorIntervalsFor, indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
 import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, clusterRate, iso } from "./lib.ts";
 
@@ -73,6 +73,11 @@ const START_MS = Date.parse(`${START}T00:00:00Z`);
 const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
 const NOW = Date.now();
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
+// #166: the stop, pips from the entry. 10 (ULTRA_DEFAULTS, the video's) was
+// the email's when this was written (#157); since #166 the emails on the
+// currency pairs carry 30, and SL=30 measures those. The targets as before.
+const SL = Number(Deno.env.get("SL") || ULTRA_DEFAULTS.sl);
+const LEVELS = { ...ULTRA_DEFAULTS, sl: SL };
 const CACHE = "research/.cache";
 const OUT = "research/out";
 const FINE = 5 * MINUTE;
@@ -516,7 +521,7 @@ for (const [pi, pair] of PAIRS.entries()) {
       const T = times[i] + step;
       const buy = side === "BUY";
       const q = qs[i];
-      const lv = ultraLevels(side, candles[i].close, unit);
+      const lv = ultraLevels(side, candles[i].close, unit, LEVELS);
       const e = lowerBound(fine.t, T);
       const spread = (q.ask.close - q.bid.close) / unit;
       const hour = new Date(times[i]).getUTCHours();
@@ -645,9 +650,9 @@ const row = (label: string, s: Summary) =>
 
 const sel = (f: (x: Rec) => boolean) => recs.filter(f);
 const both = (x: Rec) => x.rule === "qtrend" || x.rule === "ultra";
-const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), synthetic: SYNTHETIC, maxHold: MAX_HOLD, pairs: PAIRS, coverage, check, lateSkipped };
+const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), synthetic: SYNTHETIC, sl: SL, maxHold: MAX_HOLD, pairs: PAIRS, coverage, check, lateSkipped };
 
-console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT})${SYNTHETIC ? " — SYNTHETIC" : ""}; the email's stop 10 and TP 5/10/15 pips, followed on 5-minute bid/ask`);
+console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT})${SYNTHETIC ? " — SYNTHETIC" : ""}; the stop ${SL} and TP 5/10/15 pips, followed on 5-minute bid/ask`);
 for (const tf of TFS) {
   const c = check[tf];
   console.log(`check against indicatorSignals, ${tf}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`);
