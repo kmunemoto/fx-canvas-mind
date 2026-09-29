@@ -28,6 +28,12 @@
 //     first period (before SPLIT) and the second, STRONG and not, each pair;
 //     95% intervals cluster-robust by calendar week. Nothing is chosen here:
 //     the numbers are for the owner to choose from.
+//   * Added after the first run (every rule lost about 2.2 pips a trade),
+//     to tell the cost from the timing: the spread paid at each entry, each
+//     pair's; the signals by the UTC hour they fired in; and blind entries
+//     as the yardstick — every BLIND_EVERY-th bar, on the side Q-Trend's
+//     trend then points, with the same three exits (TP1) — so a signal is
+//     compared with entering the same trend at any other time.
 
 import { GMO_SYMBOLS, dateKeys, jstDayKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
@@ -52,6 +58,8 @@ const STEP = 5 * MINUTE;
 const WINDOW = 600;
 const MAX_HOLD = 288;
 const CHECK_EVERY = 97;
+const BLIND_EVERY = 6;
+const MAJORS = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"];
 
 // GMO's 5-minute day files, as research/gmo.ts reads the 15-minute ones
 // (that file is left as it is: four studies rerun whenever it changes)
@@ -182,6 +190,9 @@ interface Trade {
   pips: number;
   slPips: number;
   bars: number;
+  blind: boolean;
+  hour: number;
+  spreadPips: number;
 }
 
 const simulate = (qs: QuoteCandle[], i: number, side: Side, sl: number, tp: number): { kind: Kind; exit: number; bars: number } | null => {
@@ -274,6 +285,7 @@ for (const pair of PAIRS) {
   // Q-Trend reads only the bars up to each one, so one run from an anchor
   // gives every newest bar that anchor serves
   const signals: Array<{ i: number; side: Side; strong: boolean; lineAfter: number; atr: number }> = [];
+  const blinds: typeof signals = [];
   let g0 = WINDOW - 1;
   let s0 = n > g0 ? anchorOf(g0) : -1;
   for (let i = g0 + 1; i <= n && n > WINDOW - 1; i++) {
@@ -289,6 +301,15 @@ for (const pair of PAIRS) {
       const a = atr[sig.i];
       if (lineAfter === null || a === null || !Number.isFinite(lineAfter) || !Number.isFinite(a)) continue;
       signals.push({ i: at, side: sig.side, strong: sig.strong, lineAfter, atr: a });
+    }
+    // the yardstick: the same trend entered at any bar
+    for (let at = g0; at <= i - 1; at++) {
+      if (at % BLIND_EVERY !== 0) continue;
+      const tr = qt.trend[at - s0];
+      const lineAfter = qt.line[at - s0];
+      const a = atr[at - s0];
+      if ((tr !== 1 && tr !== -1) || lineAfter === null || a === null || !Number.isFinite(lineAfter) || !Number.isFinite(a)) continue;
+      blinds.push({ i: at, side: tr === 1 ? "BUY" : "SELL", strong: false, lineAfter, atr: a });
     }
     g0 = i;
     s0 = s;
@@ -318,17 +339,19 @@ for (const pair of PAIRS) {
     }
   }
 
-  for (const sg of signals) {
+  for (const sg of [...signals.map((x) => ({ ...x, blind: false })), ...blinds.map((x) => ({ ...x, blind: true }))]) {
     const buy = sg.side === "BUY";
     const entry = buy ? qs[sg.i].ask.close : qs[sg.i].bid.close;
+    const spreadPips = (qs[sg.i].ask.close - qs[sg.i].bid.close) / unit;
+    const hour = new Date(times[sg.i]).getUTCHours();
     for (const rule of RULES) {
-      for (const k of KS) {
+      for (const k of sg.blind ? [1] : KS) {
         const lv = levels(rule, sg.side, entry, sg.lineAfter, sg.atr, unit, k);
         if (!(lv.r > 0)) continue;
         const res = simulate(qs, sg.i, sg.side, lv.sl, lv.tp);
         if (!res) continue;
         const pnl = buy ? res.exit - entry : entry - res.exit;
-        trades.push({ pair, t: times[sg.i], side: sg.side, strong: sg.strong, rule, k, kind: res.kind, r: pnl / lv.r, pips: pnl / unit, slPips: lv.r / unit, bars: res.bars });
+        trades.push({ pair, t: times[sg.i], side: sg.side, strong: sg.strong, rule, k, kind: res.kind, r: pnl / lv.r, pips: pnl / unit, slPips: lv.r / unit, bars: res.bars, blind: sg.blind, hour, spreadPips });
       }
     }
   }
@@ -355,11 +378,11 @@ const row = (label: string, s: ReturnType<typeof summarize>, be: number) =>
 
 const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), maxHold: MAX_HOLD, pairs: PAIRS, coverage, check };
 const sections: Record<string, (x: Trade) => boolean> = {
-  all: () => true,
-  first: (x) => x.t < SPLIT_MS,
-  second: (x) => x.t >= SPLIT_MS,
-  strong: (x) => x.strong,
-  normal: (x) => !x.strong,
+  all: (x) => !x.blind,
+  first: (x) => !x.blind && x.t < SPLIT_MS,
+  second: (x) => !x.blind && x.t >= SPLIT_MS,
+  strong: (x) => !x.blind && x.strong,
+  normal: (x) => !x.blind && !x.strong,
 };
 console.log(`\n#156 Q-Trend's signals on 5 minutes, ${START} .. ${iso(NOW)} (split ${SPLIT}); the whole position out at TPk or the stop; ${MAX_HOLD} bars at most`);
 console.log(`check against indicatorSignals: ${check.mismatched} of ${check.compared} differ${check.examples.length ? ": " + check.examples.join("; ") : ""}`);
@@ -376,12 +399,39 @@ for (const [name, keep] of Object.entries(sections)) {
   }
   tables[name] = t;
 }
-console.log("\n== each pair: mean R (TP1 / TP2 / TP3)");
+console.log("\n== the yardstick (TP1): the signals, and the same trend entered at every " + BLIND_EVERY + "th bar");
+const yard: Record<string, unknown> = {};
+const groups: Array<[string, (x: Trade) => boolean]> = [["all pairs", () => true], ["7 majors", (x) => MAJORS.includes(x.pair)]];
+for (const [name, keep] of groups) {
+  for (const rule of RULES) {
+    const sig = summarize(trades.filter((x) => !x.blind && x.rule === rule && x.k === 1 && keep(x)));
+    const bl = summarize(trades.filter((x) => x.blind && x.rule === rule && x.k === 1 && keep(x)));
+    yard[`${name}-${rule}`] = { signals: sig, blind: bl };
+    console.log(row(`${name} ${rule} signals`, sig, breakEven(rule, 1)));
+    console.log(row(`${name} ${rule} blind`, bl, breakEven(rule, 1)));
+  }
+}
+report.yardstick = yard;
+
+console.log("\n== by the UTC hour the signal fired (TP1): mean R / pips a trade / median spread paid");
+const buckets: Array<[string, number, number]> = [["00-05", 0, 5], ["06-11", 6, 11], ["12-16", 12, 16], ["17-20", 17, 20], ["21-23", 21, 23]];
+const byHour: Record<string, unknown> = {};
+for (const [label, a, b] of buckets) {
+  const cells = RULES.map((rule) => summarize(trades.filter((x) => !x.blind && x.rule === rule && x.k === 1 && x.hour >= a && x.hour <= b)));
+  const sp = trades.filter((x) => !x.blind && x.rule === "line" && x.k === 1 && x.hour >= a && x.hour <= b).map((x) => x.spreadPips).sort((p, q) => p - q);
+  byHour[label] = { n: cells[0].n, medianSpread: sp.length ? sp[Math.floor(sp.length / 2)] : null, ...Object.fromEntries(RULES.map((rule, k) => [rule, { meanR: cells[k].meanR, meanPips: cells[k].meanPips, win: cells[k].win }])) };
+  console.log(`${label} UTC  n=${String(cells[0].n).padStart(6)}  spread ${num(sp.length ? sp[Math.floor(sp.length / 2)] : null, 2)} pips  ` + RULES.map((rule, k) => `${rule} ${num(cells[k].meanR, 2)}R ${num(cells[k].meanPips, 2)}p ${pct(cells[k].win)}`).join("   "));
+}
+report.byHour = byHour;
+
+console.log("\n== each pair: median spread paid; mean R (TP1 / TP2 / TP3); pips a trade at TP1");
 const perPair: Record<string, unknown> = {};
 for (const pair of PAIRS) {
-  const cells = RULES.map((rule) => KS.map((k) => summarize(trades.filter((x) => x.pair === pair && x.rule === rule && x.k === k))));
-  perPair[pair] = Object.fromEntries(RULES.map((rule, a) => [rule, cells[a].map((s) => ({ n: s.n, meanR: s.meanR, win: s.win }))]));
-  console.log(`${pair.padEnd(8)} ` + RULES.map((rule, a) => `${rule} ${cells[a].map((s) => num(s.meanR, 2).padStart(6)).join(" ")}`).join("   ") + `   n=${cells[0][0].n}`);
+  const cells = RULES.map((rule) => KS.map((k) => summarize(trades.filter((x) => !x.blind && x.pair === pair && x.rule === rule && x.k === k))));
+  const sp = trades.filter((x) => !x.blind && x.pair === pair && x.rule === "line" && x.k === 1).map((x) => x.spreadPips).sort((p, q) => p - q);
+  const spread = sp.length ? sp[Math.floor(sp.length / 2)] : null;
+  perPair[pair] = { spread, ...Object.fromEntries(RULES.map((rule, a) => [rule, cells[a].map((s) => ({ n: s.n, meanR: s.meanR, win: s.win, meanPips: s.meanPips, stopPips: s.medianSlPips }))])) };
+  console.log(`${pair.padEnd(8)} spread ${num(spread, 2).padStart(5)}  ` + RULES.map((rule, a) => `${rule} ${cells[a].map((s) => num(s.meanR, 2).padStart(6)).join(" ")} (${num(cells[a][0].meanPips, 2)}p, stop ${num(cells[a][0].medianSlPips, 1)})`).join("  ") + `  n=${cells[0][0].n}`);
 }
 report.tables = tables;
 report.perPair = perPair;
