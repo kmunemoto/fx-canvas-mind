@@ -1,0 +1,74 @@
+# #167: the emails' levels on gold (research/gold.ts), on the gold prices
+# research/dukascopy.py kept in the Actions cache (the "Research gold"
+# workflow fetches them). Run with both 4-hour grids (GRID4 ny, utc1), the
+# winter one of Twelve Data's not being known.
+#
+# Read-only: it reads the kept prices, prints a report to the job log and
+# uploads the same numbers as an artifact. It fetches nothing, writes
+# nothing to the repository and holds no secret.
+name: Study gold
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/gold.ts
+      - .github/workflows/gold-study.yml
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First day judged"
+        default: "2024-01-01"
+      split:
+        description: "First day of the second half"
+        default: "2025-05-19"
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache/dukascopy
+          key: dukascopy-xau-none
+          restore-keys: dukascopy-xau-
+      - name: What the kept prices hold
+        run: python3 research/dukascopy.py --report
+      - name: Run the study (4-hour bars from 17:00 New York)
+        env:
+          START: ${{ inputs.start || '2024-01-01' }}
+          SPLIT: ${{ inputs.split || '2025-05-19' }}
+          GRID4: ny
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=START,SPLIT,SYNTHETIC,SEED,GRID4,GRIDD
+          research/gold.ts
+      - name: Run the study (4-hour bars from 01:00 UTC)
+        if: always()
+        env:
+          START: ${{ inputs.start || '2024-01-01' }}
+          SPLIT: ${{ inputs.split || '2025-05-19' }}
+          GRID4: utc1
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=START,SPLIT,SYNTHETIC,SEED,GRID4,GRIDD
+          research/gold.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-out
+          path: research/out/
+          retention-days: 30
