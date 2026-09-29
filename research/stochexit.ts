@@ -39,6 +39,14 @@
 //     (either), the Stoch exit's pips per trade over now's on both halves, and
 //     the low end of the difference over 0 on the second. Whether it goes in
 //     is the owner's to decide on the numbers.
+//
+// THE RESULT (2026-09-29, docs §8.74): not clearly better — worse. The
+// emails' signals, GMO's 14 pairs with the history, 4-hour bars: now −1.28
+// and −1.06 pips a trade (first, second half; 60% and 61% won), the Stoch
+// exit −2.44 and −1.66 (24% and 27% won, the average win about +21 pips);
+// the difference −1.16 (−2.22 to −0.11) and −0.60 (−1.51 to +0.30). Every
+// close either way came out the same under both (−1.66 and −1.62, −1.47 and
+// −1.59).
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
