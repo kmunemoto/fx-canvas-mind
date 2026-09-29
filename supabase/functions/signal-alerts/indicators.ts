@@ -308,22 +308,24 @@ export const keepableKlines = (body: unknown): boolean =>
 // entered at its bar's close on the side it fills on (spread paid) and
 // followed on 5-minute bid/ask. `win`: the share of those settled that
 // reached TP1 before the stop, %; `pips`: a trade's mean when all of it is
-// closed at TP1 or the stop. Gold and the pairs read from Twelve Data were
-// not measured.
+// closed at TP1 or the stop (or after five days, where neither was
+// reached). Gold and the pairs read from Twelve Data were not measured.
+// #166: measured again at the currency pairs' stop of 30 pips (tf-winrate
+// with SL=30, GitHub Actions run 36587276263, docs §8.78); #157's were at 10.
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
-    "5min": { win: 58.9, pips: -2.1 },
-    "15min": { win: 59.5, pips: -1.92 },
-    "1h": { win: 61.9, pips: -1.46 },
-    "4h": { win: 61.4, pips: -1.35 },
-    "1day": { win: 35.9, pips: -9.11 },
+    "5min": { win: 84.1, pips: -1.9 },
+    "15min": { win: 84.1, pips: -1.8 },
+    "1h": { win: 85.3, pips: -1.31 },
+    "4h": { win: 86.0, pips: -0.87 },
+    "1day": { win: 75.8, pips: -8.07 },
   },
   ultra: {
-    "5min": { win: 61.0, pips: -1.64 },
-    "15min": { win: 61.1, pips: -1.51 },
-    "1h": { win: 61.6, pips: -1.67 },
-    "4h": { win: 64.2, pips: -0.82 },
-    "1day": { win: 33.5, pips: -10.0 },
+    "5min": { win: 84.9, pips: -1.49 },
+    "15min": { win: 84.6, pips: -1.47 },
+    "1h": { win: 85.5, pips: -1.39 },
+    "4h": { win: 86.6, pips: -0.46 },
+    "1day": { win: 77.0, pips: -8.1 },
   },
 };
 

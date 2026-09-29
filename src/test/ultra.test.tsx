@@ -213,7 +213,7 @@ describe("#151 ULTRA on the chart", () => {
     const plotRight = Number(screen.getByTestId("chart-candles").closest("svg")!.getAttribute("viewBox")!.split(" ")[2]);
     expect(plotRight - (Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width")))).toBeLessThan(80);
     const note = screen.getByTestId("chart-ultra-legend").textContent!;
-    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "約67%", "4時間足 64.2%", "金と Twelve Data の銘柄は測っていません"]) expect(note).toContain(part);
+    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips で測ると", "約86%", "4時間足 86.6%", "金と Twelve Data の銘柄は測っていません"]) expect(note).toContain(part);
     expect(note).not.toContain("このアプリでは測っていません");
   });
 
