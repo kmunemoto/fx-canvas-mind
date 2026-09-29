@@ -7,13 +7,9 @@
 # uploads the same numbers as an artifact. It fetches nothing, writes
 # nothing to the repository and holds no secret.
 name: Study gold
+# run by hand once the prices are all kept (a push does not start it: a run on
+# a part of them would show a part of the numbers)
 on:
-  push:
-    branches:
-      - claude/app-confirmation-jvmk03
-    paths:
-      - research/gold.ts
-      - .github/workflows/gold-study.yml
   workflow_dispatch:
     inputs:
       start:

@@ -32,33 +32,43 @@
 //     the 5- and 15-minute ones are measured the same way, as the chart
 //     shows them.
 //   * the trades: entered at the signal bar's close on the side it fills on
-//     (BUY the ask, SELL the bid); TP1 $5 from the bar's mid close (the
-//     email's), and the stop S dollars from it, S = 10 (the email's now),
-//     15, 20, 30, 50, 100 or none; followed on 5-minute bid/ask bars built
+//     (BUY the ask, SELL the bid); the target and the stop from the bar's
+//     mid close (as the email's); followed on 5-minute bid/ask bars built
 //     from the minutes (as the pairs were on GMO's 5-minute bars), on the
 //     side it goes out on: out at whichever a bar reaches first (both in one
 //     5-minute bar: the stop; a bar opening past one: at that open), or at
 //     the close after L five-minute bars: L = 1380 (five days of gold's 23
 //     hours) or, on the 4-hour chart, 5520 too (four weeks). Every rule on
 //     the same trades: those whose longest limit lies inside the data.
-//   * told, per chart: for each stop (five days), the share out at TP1 of
-//     those out at TP1 or at the stop (the email's win rate), and dollars a
-//     trade (spread paid; one still in at the limit at that close), with its
-//     95% interval by week (and by four weeks), on each half (split
-//     2025-05-19) and on the whole; a coin the same way (both sides at a
-//     hashed sample of the chart's closes; every close on the 4-hour chart).
+//   * the rules: the target T and the stop S in dollars, T = 5 (the email's
+//     TP1 now), 15, 30 or 50, and S = 10 (the email's now), 15, 20, 30, 50,
+//     100 or none; and six set by the chart's own range, ATR(14) at the
+//     signal bar (Pine's, as Q-Trend's ε): T 0.5, 1 or 2 times it and S 1 or
+//     2 times it. Now: T 5, S 10, five days.
+//     The targets and the range-set rules were added before any gold price
+//     was read: the owner, shown gold's 4-hour chart with TP1..TP3 inside
+//     one bar's range, asked 「tp低すぎない？」; told that the app's gold bars
+//     range $3.4 (5 minutes), $6.6 (15), $14.3 (hourly) and $30.3 (4-hour)
+//     at the median, and offered wider targets measured: 「1で」.
+//   * told, per chart: for each rule (five days), the share out at the
+//     target of those out at the target or the stop (the email's win rate
+//     at T 5), and dollars a trade (spread paid; one still in at the limit
+//     at that close), with its 95% interval by week (and by four weeks), on
+//     each half (split 2025-05-19) and on the whole; a coin the same way
+//     (both sides at a hashed sample of the chart's closes; every close on
+//     the 4-hour chart).
 //   * THE PICK AND THE CALL, as #165's (§8.77), on the 4-hour chart the
-//     owner's emails come from: among S 15, 20, 30, 50, 100 and L five days,
-//     four weeks (ten), the one with the most dollars a trade on the first
-//     half for the emails' signals (either); called clearly better if on the
-//     second half its dollars a trade are above now's (S 10, five days) and
-//     the low end of the difference (the lower of the intervals by week and
-//     by four weeks) is above 0. Whether anything changes is the owner's to
-//     decide on the numbers.
+//     owner's emails come from: among every rule but now, both limits
+//     (67), the one with the most dollars a trade on the first half for the
+//     emails' signals (either); called clearly better if on the second half
+//     its dollars a trade are above now's and the low end of the difference
+//     (the lower of the intervals by week and by four weeks) is above 0.
+//     Whether anything changes is the owner's to decide on the numbers.
 //   * checks: the signals against indicatorSignals; the hourly files'
 //     candles against the minutes' (2024 on); the signal bar's close against
-//     the 5-minute bar ending there; a trade out at TP1 or at the limit under
-//     a stop the same trade under the next wider one; the data's days.
+//     the 5-minute bar ending there; a trade out at the target or at the
+//     limit under a stop the same trade under the next wider one (the same
+//     target); the data's days.
 //
 // SYNTHETIC=1: a seeded random walk instead (SEED; each 5-minute bar 100
 // small steps, as #165's "path" walks; a 5-minute bar's move about $1.2, the
@@ -66,7 +76,8 @@
 // less its daily hour): every rule must come out near the spread's cost, and
 // the call quiet.
 //
-// ON RANDOM WALKS (before any gold price was read; 50 seeds, 7 .. 130):
+// ON RANDOM WALKS, the stops alone (T 5), before the targets were added
+// (before any gold price was read; 50 seeds, 7 .. 130):
 //   * every check 0 differ on every seed.
 //   * each rule's dollars a trade against the spread's cost: near it (on
 //     the 4-hour chart, z of the difference from −$0.30 mean −0.12 to +0.04
@@ -91,6 +102,7 @@ import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
 import { ultra } from "../supabase/functions/_shared/ultra.ts";
+import { pineAtr } from "../supabase/functions/_shared/pine.ts";
 import { indicatorSignals } from "../supabase/functions/signal-alerts/indicators.ts";
 import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, iso } from "./lib.ts";
 
@@ -115,18 +127,34 @@ const OUT = "research/out";
 const FINE = 5 * MINUTE;
 const WINDOW = 600;
 const UNIT = 1;
-const TP1 = 5;
-// the stops, dollars from the bar's mid close (null: none), and the limits,
-// 5-minute bars: five days of gold's 23 hours, four weeks
+// the targets and the stops, dollars from the bar's mid close (a stop null:
+// none); the range-set ones, times the chart's ATR(14) at the signal bar;
+// the limits, 5-minute bars: five days of gold's 23 hours, four weeks
+const TARGETS = [5, 15, 30, 50] as const;
 const STOPS = [10, 15, 20, 30, 50, 100, null] as const;
 type Stop = (typeof STOPS)[number];
+const ATR_RULES = [[0.5, 1], [0.5, 2], [1, 1], [1, 2], [2, 1], [2, 2]] as const;
 const L5D = 5 * 23 * 12;
 const L4W = 4 * L5D;
 const LIMITS_OF = (tf: Tf): number[] => (tf === "4h" ? [L5D, L4W] : [L5D]);
 const limitName = (l: number) => (l === L5D ? "5d" : "4w");
-const ruleKey = (s: Stop, l: number) => `S${s ?? "none"} L${limitName(l)}`;
-const NOW_RULE = ruleKey(10, L5D);
-const PICKS = [L5D, L4W].flatMap((l) => STOPS.filter((s) => s !== null && s > 10).map((s) => ruleKey(s, l)));
+const ruleKey = (t: number, s: Stop, l: number) => `T${t} S${s ?? "none"} L${limitName(l)}`;
+const atrKey = (k: number, m: number, l: number) => `T${k}atr S${m}atr L${limitName(l)}`;
+interface Rule {
+  key: string;
+  // dollars, or times the ATR
+  target: number;
+  stop: number | null;
+  atr: boolean;
+  limit: number;
+}
+const rulesOf = (limits: number[]): Rule[] =>
+  limits.flatMap((l) => [
+    ...TARGETS.flatMap((t) => STOPS.map((s) => ({ key: ruleKey(t, s, l), target: t, stop: s, atr: false, limit: l }))),
+    ...ATR_RULES.map(([k, m]) => ({ key: atrKey(k, m, l), target: k, stop: m, atr: true, limit: l })),
+  ]);
+const NOW_RULE = ruleKey(5, 10, L5D);
+const PICKS = rulesOf(LIMITS_OF("4h")).map((r) => r.key).filter((k) => k !== NOW_RULE);
 // the sweep reads a Twelve Data chart a minute after the close and again
 // three minutes later (signal-alerts twelveCloseDue, TWELVE_RETRY_MS)
 const READ_AFTER = [1, 4];
@@ -522,6 +550,7 @@ interface Cover {
   ultra: number;
   trades: number;
   tooLate: number;
+  noAtr: number;
 }
 const coverage: Cover[] = [];
 const compareLines: string[] = [];
@@ -663,10 +692,13 @@ for (const tf of TFS) {
 
   // the trades
   const limits = LIMITS_OF(tf);
-  const rules = limits.flatMap((l) => STOPS.map((s) => ({ key: ruleKey(s, l), stop: s, limit: l })));
+  const rules = rulesOf(limits);
   const need = Math.max(...limits);
   const sets4h = tf === "4h";
+  // the chart's ATR(14) at each bar (Pine's, from the first bar held)
+  const atr = pineAtr(candles, 14);
   let tooLate = 0;
+  let noAtr = 0;
   // every rule on one trade at bar i's close; false when the data does not hold it
   const recordAt = (i: number, side: Side, sets: string[]): boolean => {
     const T = dataEndOf(tf, times[i]);
@@ -675,28 +707,37 @@ for (const tf of TFS) {
       tooLate++;
       return false;
     }
+    const a = atr[i];
+    if (a === null || !(a > 0)) {
+      noAtr++;
+      return false;
+    }
     const buy = side === "BUY";
     const q = qs[i];
     const fill = buy ? q.ask.close : q.bid.close;
     const close = candles[i].close;
     const dir = buy ? 1 : -1;
-    const tp = close + dir * TP1 * UNIT;
     const got = new Map<string, Trade>();
     for (const r of rules) {
-      const t = follow(e, side, fill, tp, r.stop === null ? null : close - dir * r.stop * UNIT, r.limit);
+      const size = r.atr ? a : UNIT;
+      const tp = close + dir * r.target * size;
+      const sl = r.stop === null ? null : close - dir * r.stop * size;
+      const t = follow(e, side, fill, tp, sl, r.limit);
       if (!t) return false;
       got.set(r.key, t);
     }
     const tag = `${tf} ${iso(T)} ${side}`;
     for (const l of limits) {
-      for (let k = 0; k + 1 < STOPS.length; k++) {
-        const a = got.get(ruleKey(STOPS[k], l))!;
-        if (a.exit !== "tp" && a.exit !== "time") continue;
-        const b = got.get(ruleKey(STOPS[k + 1], l))!;
-        nestCheck.compared++;
-        if (!same(a, b)) {
-          nestCheck.mismatched++;
-          if (nestCheck.examples.length < 10) nestCheck.examples.push(`${tag} ${ruleKey(STOPS[k], l)} ${a.exit} ${a.usd} / ${ruleKey(STOPS[k + 1], l)} ${b.exit} ${b.usd}`);
+      for (const tgt of TARGETS) {
+        for (let k = 0; k + 1 < STOPS.length; k++) {
+          const x = got.get(ruleKey(tgt, STOPS[k], l))!;
+          if (x.exit !== "tp" && x.exit !== "time") continue;
+          const y = got.get(ruleKey(tgt, STOPS[k + 1], l))!;
+          nestCheck.compared++;
+          if (!same(x, y)) {
+            nestCheck.mismatched++;
+            if (nestCheck.examples.length < 10) nestCheck.examples.push(`${tag} ${ruleKey(tgt, STOPS[k], l)} ${x.exit} ${x.usd} / ${ruleKey(tgt, STOPS[k + 1], l)} ${y.exit} ${y.usd}`);
+          }
         }
       }
     }
@@ -757,6 +798,7 @@ for (const tf of TFS) {
     ultra: sent.filter((s) => s.rule === "ultra").length,
     trades,
     tooLate,
+    noAtr,
   };
   coverage.push(cover);
   console.log(`${tf.padEnd(5)}: ${n} bars ${cover.first} .. ${cover.last}, judged ${judged} (${noWindow} without a window); mailed Q-Trend ${cover.qtrend} (${cover.strong} STRONG), ULTRA ${cover.ultra}, not mailed ${cover.unmailed}; trades (either) ${trades}`);
@@ -771,30 +813,41 @@ const checkLine = (what: string, c: { compared: number; mismatched: number; exam
   `${what}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`;
 const halfName = (h: Half) => (h === 0 ? "first half" : h === 1 ? "second half" : "whole");
 
-console.log(`\n#167 the emails' levels on gold (${PAIR}), ${START} .. ${iso(NOW)} (first half before ${SPLIT})${SYNTHETIC ? ` — SYNTHETIC, seed ${SEED}` : ""}; grid ${GRID}; TP1 $${TP1}; stops ${STOPS.map((s) => s ?? "none").join(", ")} dollars; limits ${L5D} (5d) and, on 4h, ${L4W} (4w) five-minute bars`);
+console.log(`\n#167 the emails' levels on gold (${PAIR}), ${START} .. ${iso(NOW)} (first half before ${SPLIT})${SYNTHETIC ? ` — SYNTHETIC, seed ${SEED}` : ""}; grid ${GRID}; targets ${TARGETS.join(", ")} and stops ${STOPS.map((s) => s ?? "none").join(", ")} dollars; ATR(14) × ${ATR_RULES.map(([k, m]) => `${k}/${m}`).join(", ")} (target/stop); limits ${L5D} (5d) and, on 4h, ${L4W} (4w) five-minute bars`);
 for (const tf of TFS) console.log(checkLine(`signals against indicatorSignals, ${tf}`, check[tf]));
-console.log(checkLine("out at TP1 or the limit under a stop, the same under the next wider", nestCheck));
+console.log(checkLine("out at the target or the limit under a stop, the same under the next wider", nestCheck));
 console.log(checkLine("the signal bar's close against the 5-minute bar ending there", closeCheck));
 for (const [tf, xs] of Object.entries(spreadPaid)) {
   const s = [...xs].sort((a, b) => a - b);
   console.log(`spread paid at the signals' closes, ${tf}: median $${s[Math.floor(s.length / 2)]?.toFixed(3)}, 90% $${s[Math.floor(0.9 * (s.length - 1))]?.toFixed(3)} (${s.length})`);
 }
-console.log(`trades not taken, their limit past the data's end: ${coverage.map((c) => `${c.tf} ${c.tooLate}`).join(", ")}`);
+console.log(`trades not taken, their limit past the data's end: ${coverage.map((c) => `${c.tf} ${c.tooLate}`).join(", ")}; no ATR yet: ${coverage.map((c) => `${c.tf} ${c.noAtr}`).join(", ")}`);
 
-// A. each chart, each stop (five days): the email's win rate and dollars a trade
-console.log(`\n== A. each chart and stop, five days: out at TP1 of those out at TP1 or the stop; dollars a trade [95% by week] (first half; second half); trades; still in at five days`);
+// A. each chart, five days: every target and stop, dollars a trade and the
+// share out at the target of those out at the target or the stop
+const cell = (a: Agg | undefined, withRate = true) => {
+  if (!a || a.n === 0) return "      -       ";
+  const m = meanOf(a).m!;
+  return withRate ? `${num(m).padStart(7)} (${(100 * (tpRate(a) ?? 0)).toFixed(0).padStart(3)}%)` : num(m).padStart(7);
+};
+const matrix = (g: Array<Map<string, Agg>>, half: Half, withRate: boolean) => {
+  console.log(`         ${STOPS.map((s) => `S${s ?? "none"}`.padStart(withRate ? 14 : 7)).join(" ")}`);
+  for (const t of TARGETS) console.log(`  T${String(t).padEnd(4)}  ${STOPS.map((s) => cell(g[half].get(ruleKey(t, s, L5D)), withRate)).join(" ")}`);
+  console.log(`  ATR    ${ATR_RULES.map(([k, m]) => `T${k}×S${m} ${cell(g[half].get(atrKey(k, m, L5D)), withRate)}`).join("  ")}`);
+};
+console.log(`\n== A. each chart, five days: dollars a trade (out at the target of those out at the target or the stop)`);
 for (const tf of TFS) {
-  for (const set of ["either", "qtrend", "strong", "ultra", "coin"]) {
+  for (const set of ["either", "qtrend", "ultra", "coin"]) {
     const g = groups.get(`${tf} ${set}`);
     if (!g) continue;
-    console.log(`-- ${tf} ${set}`);
-    for (const s of STOPS) {
-      const k = ruleKey(s, L5D);
-      const a = g[2].get(k)!;
-      const r = meanOf(a);
-      const f = meanOf(g[0].get(k) ?? newAgg()).m;
-      const sc = meanOf(g[1].get(k) ?? newAgg()).m;
-      console.log(`  S${String(s ?? "none").padEnd(4)} TP1 first ${pct(tpRate(a))}  ${num(r.m)} [${num(r.lo)},${num(r.hi)}] (${num(f)}; ${num(sc)})  n ${a.n}  time ${pct(a.n ? a.exits.time / a.n : null)}`);
+    const now = g[2].get(NOW_RULE);
+    console.log(`-- ${tf} ${set}, whole: ${now?.n ?? 0} trades; now (T5 S10) ${num(now ? meanOf(now).m : null)} [${num(now ? meanOf(now).lo : null)},${num(now ? meanOf(now).hi : null)}]`);
+    matrix(g, 2, true);
+    if (set === "either") {
+      for (const h of [0, 1] as const) {
+        console.log(`-- ${tf} ${set}, ${halfName(h)}: ${g[h].get(NOW_RULE)?.n ?? 0} trades`);
+        matrix(g, h, false);
+      }
     }
   }
 }
@@ -806,19 +859,16 @@ const ruleLine = (key: string, half: Half, rule: string) => {
   const r4 = meanOf(a, "blocks");
   const t = tailOf(a);
   const out = (Object.keys(a.exits) as Exit[]).filter((k) => a.exits[k] > 0).map((k) => `${k} ${pct(a.exits[k] / a.n)}`).join(" ");
-  const head = `  ${(rule + (rule === NOW_RULE ? " (now)" : "")).padEnd(17)} ${num(r.m)} ${ci(r, r4)} $/trade of ${String(a.n).padStart(5)}; TP1 first ${pct(tpRate(a))}, won ${pct(a.wins / Math.max(1, a.n))}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}, 5-min bars ${(a.bars / Math.max(1, a.n)).toFixed(0)}; ${out}`;
+  const head = `  ${(rule + (rule === NOW_RULE ? " (now)" : "")).padEnd(21)} ${num(r.m)} ${ci(r, r4)} $/trade of ${String(a.n).padStart(5)}; target first ${pct(tpRate(a))}, won ${pct(a.wins / Math.max(1, a.n))}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}, 5-min bars ${(a.bars / Math.max(1, a.n)).toFixed(0)}; ${out}`;
   if (rule === NOW_RULE) return head;
   const d = groups.get(key)![half].get(rule + DIFF)!;
-  return `${head}\n  ${"".padEnd(17)} less now ${num(meanOf(d).m)} ${ci(meanOf(d), meanOf(d, "blocks"))}`;
+  return `${head}\n  ${"".padEnd(21)} less now ${num(meanOf(d).m)} ${ci(meanOf(d), meanOf(d, "blocks"))}`;
 };
-const RULES_4H = LIMITS_OF("4h").flatMap((l) => STOPS.map((s) => ruleKey(s, l)));
-for (const set of ["either", "either BUY", "either SELL", "qtrend", "strong", "ultra", "coin", "coin BUY", "coin SELL"]) {
-  const key = `4h ${set}`;
-  if (!groups.has(key)) continue;
-  for (const half of HALVES) {
-    console.log(`\n== B. ${key}, ${halfName(half)}`);
-    for (const r of RULES_4H) console.log(ruleLine(key, half, r));
-  }
+const RULES_4H = rulesOf(LIMITS_OF("4h")).map((r) => r.key);
+for (const half of HALVES) {
+  if (!groups.has("4h either")) break;
+  console.log(`\n== B. 4h either, ${halfName(half)}`);
+  for (const r of RULES_4H) console.log(ruleLine("4h either", half, r));
 }
 const e = groups.get("4h either");
 let verdict = "no signals";
@@ -828,7 +878,7 @@ if (e) {
   let best = -Infinity;
   for (const k of PICKS) {
     const m = meanOf(e[0].get(k)!).m ?? -Infinity;
-    console.log(`  ${k.padEnd(12)} ${num(m)}`);
+    console.log(`  ${k.padEnd(21)} ${num(m)}`);
     if (m > best) {
       best = m;
       pick = k;
@@ -844,6 +894,13 @@ if (e) {
   verdict = clearly ? `${pick} is clearly better than now for the emails' signals` : `${pick} is not clearly better than now for the emails' signals`;
   console.log(`  the pick: ${pick} (first half ${num(best)}; now ${num(meanOf(e[0].get(NOW_RULE)!).m)})`);
   console.log(`\n== VERDICT: on the second half ${pick} ${num(pm)} against now ${num(nm)}; the difference ${num(meanOf(d).m)}, its low end ${num(lo)} → ${verdict}`);
+  console.log(`\n== the pick and now on the 4-hour chart's other sets, whole`);
+  for (const set of ["either BUY", "either SELL", "qtrend", "strong", "ultra", "coin", "coin BUY", "coin SELL"]) {
+    if (!groups.has(`4h ${set}`)) continue;
+    console.log(`-- 4h ${set}`);
+    console.log(ruleLine(`4h ${set}`, 2, NOW_RULE));
+    console.log(ruleLine(`4h ${set}`, 2, pick!));
+  }
 }
 
 if (compareLines.length) {
