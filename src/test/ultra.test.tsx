@@ -172,7 +172,7 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL $10・TP $5/10/15）");
     unmount();
     render(<PriceChart candles={shown.map((b) => ({ ...b }))} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
-    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL 10・TP 5/10/15 pips）");
+    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL 30・TP 5/10/15 pips）");
   });
 
   it("draws the signals on screen, ★TP1–3 where reached, the newest signal's box, and the tally of all the bars read", () => {
@@ -223,12 +223,14 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.getAllByTestId("chart-ultra-signal-BUY")).toHaveLength(7);
     expect(screen.getAllByTestId("chart-ultra-signal-SELL")).toHaveLength(2);
     expect(screen.getAllByTestId("chart-ultra-signal-SELL")[0].querySelector("text")!.textContent).toBe("Sell ☆");
-    for (const [what, n] of [["TP1", 2], ["TP2", 2], ["TP3", 2], ["SL", 8]] as const) expect(screen.getAllByTestId(`chart-ultra-hit-${what}`)).toHaveLength(n);
-    // the sell on 391 at 149.7491: its stop 10 pips above, its targets 5, 10 and 15 below
+    // #166: a currency pair's stop is 30 pips (with 10: TP1 2, TP2 2, TP3 2, SL 8)
+    for (const [what, n] of [["TP1", 4], ["TP2", 2], ["TP3", 2], ["SL", 8]] as const) expect(screen.getAllByTestId(`chart-ultra-hit-${what}`)).toHaveLength(n);
+    // the sell on 391 at 149.7491: its stop 30 pips above, its targets 5, 10 and 15 below
     const box = screen.getByTestId("chart-ultra-box");
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
     expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 149.749");
-    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 149.849");
+    // #166: 30 pips up, above the chart: tagged at its top edge
+    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 150.049 ↑");
     expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 149.699");
     expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 149.649");
     expect(screen.getByTestId("chart-ultra-tag-tp3").textContent).toBe("TP3 149.599");
@@ -239,16 +241,20 @@ describe("#151 ULTRA on the chart", () => {
     for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) {
       expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
     }
-    // 5, 4, 4 and 16 of 21 (the two still open not counted)
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 5 24%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 16 76%");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 24%");
+    // 8, 6, 6 and 8 of 16 (the five still open not counted; with a stop of
+    // 10: 5, 4, 4 and 16 of 21)
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 8 50%");
+    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 6 38%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 8 50%");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 16");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 50%");
   });
 
   it("prices off the chart are tagged at its edge with an arrow, every tag inside the plot (a quiet 5-minute EUR/GBP)", () => {
     // 2026-09-29, on the owner's EUR/GBP 5-minute chart: a sell's stop 10
     // pips above the chart and its targets 5–15 below, and only "SL" showed
-    // (the tags moved as one block, the Entry and TPs off the bottom)
+    // (the tags moved as one block, the Entry and TPs off the bottom). #166:
+    // the stop 30 pips above
     let s = 3;
     const rnd = () => (s = (s * 16807) % 2147483647);
     let c = 85796;
@@ -268,7 +274,7 @@ describe("#151 ULTRA on the chart", () => {
     const text = (k: string) => screen.getByTestId(`chart-ultra-tag-${k}`).textContent;
     // the chart shows 0.85762–0.85789; the entry on it, the stop above, the targets below
     expect(text("entry")).toBe("Entry 0.85784");
-    expect(text("sl")).toBe("SL 0.85884 ↑");
+    expect(text("sl")).toBe("SL 0.86084 ↑");
     expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(["TP1 0.85734 ↓", "TP2 0.85684 ↓", "TP3 0.85634 ↓"]);
     const clip = document.querySelector("clipPath rect")!;
     const top = Number(clip.getAttribute("y"));

@@ -361,16 +361,17 @@ describe("#155 what the sweep reads, and when", () => {
     );
     const ul = all.find((sg) => sg.rule === "ultra")!;
     const dir = ul.side === "BUY" ? 1 : -1;
-    expect(ul.sl).toBeCloseTo(ul.close - dir * 0.1, 9);
+    // #166: a currency pair's stop 30 pips
+    expect(ul.sl).toBeCloseTo(ul.close - dir * 0.3, 9);
     expect(ul.tps![0]).toBeCloseTo(ul.close + dir * 0.05, 9);
     expect(ul.tps![2]).toBeCloseTo(ul.close + dir * 0.15, 9);
     expect(ul.side === "BUY" ? ul.rsi! > 30 && ul.rsiPrev! <= 30 : ul.rsi! < 70 && ul.rsiPrev! >= 70).toBe(true);
     const qt = all.find((sg) => sg.rule === "qtrend")!;
     expect(qt.line).not.toBeNull();
     expect(qt.eps).toBeGreaterThan(0);
-    // #156: ULTRA's numbers — the stop 10 pips, the targets 5, 10 and 15
+    // #156: ULTRA's numbers — the stop 30 pips on a pair (#166), the targets 5, 10 and 15
     const qd = qt.side === "BUY" ? 1 : -1;
-    expect(qt.sl).toBeCloseTo(qt.close - qd * 0.1, 9);
+    expect(qt.sl).toBeCloseTo(qt.close - qd * 0.3, 9);
     expect(qt.tps!.map((v) => (v - qt.close) * qd)).toEqual([0.05, 0.1, 0.15].map((d) => expect.closeTo(d, 9)));
     expect(all.filter((sg) => sg.rule === "qtrend").every((sg) => sg.sl !== null && sg.tps !== null)).toBe(true);
     // the close broke the line by ε

@@ -24,7 +24,7 @@
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../_shared/qtrend.ts";
-import { ULTRA_DEFAULTS, ultra, ultraLevels } from "../_shared/ultra.ts";
+import { ULTRA_DEFAULTS, ultra, ultraLevels, ultraParamsFor } from "../_shared/ultra.ts";
 import { pineAtr } from "../_shared/pine.ts";
 import { CHART_BARS, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
@@ -34,7 +34,10 @@ export const INDICATOR_RULES = ["qtrend", "ultra"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
 export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra";
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
-// signal was judged at
+// signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
+// signals do not depend on the stop, the id is part of the key that keeps a
+// signal from being mailed twice, and each row keeps the stop it was mailed
+// with (signal_alerts.stop; 30 pips on a currency pair since #166).
 export const QTREND_RULE_ID = `qtrend_${QT_DEFAULTS.period}_${QT_DEFAULTS.atrPeriod}_${QT_DEFAULTS.mult}_v1`;
 export const ULTRA_RULE_ID =
   `ultra_rsi${ULTRA_DEFAULTS.rsiLength}_${ULTRA_DEFAULTS.oversold}_${ULTRA_DEFAULTS.overbought}` +
@@ -117,6 +120,8 @@ export const indicatorSignals = (
     return age >= 0 && age <= freshMs ? open : null;
   };
   const out: IndicatorSignal[] = [];
+  // #166: a currency pair's stop 30 pips, gold's the video's $10
+  const levels = ultraParamsFor(isGold(pair));
   const qt = qTrend(bars, QT_DEFAULTS, bars.length - 1);
   const atr = pineAtr(bars, QT_DEFAULTS.atrPeriod);
   for (const s of qt.signals) {
@@ -127,7 +132,7 @@ export const indicatorSignals = (
     const line = s.i > QT_DEFAULTS.period ? qt.line[s.i - 1] : null;
     const a = s.i > 0 ? atr[s.i - 1] : null;
     // #156: ULTRA's stop and targets (the owner's choice), as the chart draws them
-    const lv = ultraLevels(s.side, bars[s.i].close, ultraUnit(pair));
+    const lv = ultraLevels(s.side, bars[s.i].close, ultraUnit(pair), levels);
     out.push({
       rule: "qtrend",
       pair,
@@ -145,7 +150,7 @@ export const indicatorSignals = (
       tps: lv.tps,
     });
   }
-  const ul = ultra(bars, bars.length - 1, ultraUnit(pair));
+  const ul = ultra(bars, bars.length - 1, ultraUnit(pair), levels);
   for (const tr of ul.trades) {
     const open = freshAt(tr.i);
     if (open === null) continue;
@@ -322,17 +327,27 @@ export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: num
   },
 };
 
-// the sentence saying so, on this email's timeframe
+// the sentence saying so, on this email's timeframe. The share of TP1
+// before the stop that breaks even, spread aside: the stop over the stop and
+// TP1 (30 pips against 5: 86%). Gold's levels (the video's $10 stop) were not
+// measured, and the currency pairs' figures are at another stop.
+export const breakEvenPct = (gold: boolean): number => {
+  const o = ultraParamsFor(gold);
+  return Math.round((100 * o.sl) / (o.sl + o.tp1));
+};
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
+  const even = breakEvenPct(false);
   if (lang === "en") {
+    if (isGold(s.pair)) return "Gold has not been measured at these levels.";
     if (!m) return "This timeframe has not been measured.";
-    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than 67%); closing all of it at TP1 or the stop ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
       (unmeasured ? ` ${s.pair} itself was not measured; these are GMO's FX pairs' figures.` : "");
   }
+  if (isGold(s.pair)) return "金はこの目安では測っていません。";
   if (!m) return "この時間足は測っていません。";
-  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには67%より上が要ります）で、利確1か損切りで全部決済すると1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
     (unmeasured ? `${s.pair} そのものは測っていません（GMO の FX の値です）。` : "");
 };
 
@@ -387,12 +402,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)} (${cross})`,
       ].join("\n"),
       [
-        "ULTRA's levels (the video's settings):",
+        gold ? "ULTRA's levels (the video's settings):" : "ULTRA's levels (the video's targets; the stop 30 pips):",
         `  Entry ≈ ${px(s.close)}`,
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
         ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
       ].join("\n"),
-      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold). ${measuredLine(s, "en")}`,
+      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? "" : " On currency pairs this app sets the stop at 30 pips, chosen on its own measurements."} ${measuredLine(s, "en")}`,
       ...footer,
     ]);
   }
@@ -430,12 +445,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で、ULTRA の${sideU}のサインが出ました。`,
     [`判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`, `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)}（${cross}）`].join("\n"),
     [
-      "ULTRA の目安（動画の設定）:",
+      gold ? "ULTRA の目安（動画の設定）:" : "ULTRA の目安（利確は動画の設定、損切りは30pips）:",
       `  エントリー ≈ ${px(s.close)}`,
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
       ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
     ].join("\n"),
-    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%です。${measuredLine(s, "ja")}`,
+    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "" : "FX では、このアプリで測った結果から損切りを30pipsにしています。"}${measuredLine(s, "ja")}`,
     ...footer,
   ]);
 };

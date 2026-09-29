@@ -32,6 +32,8 @@
 // SL in the video); each signal is followed on its own, whatever came
 // before it. On a currency pair the same numbers are pips (10 pips, 5/10/15
 // pips): $10 on gold taken as a currency's price would be ten yen on USD/JPY.
+// #166: on a currency pair the stop is 30 pips (ULTRA_PAIRS below); gold
+// keeps the video's $10.
 //
 // Shown on the chart, and #155: the email alerts (signal-alerts) judge on
 // its signals too, from this same code (moved here from src/lib/ultra.ts,
@@ -45,6 +47,14 @@ type Bar = { high: number; low: number; close: number };
 
 export const ULTRA_DEFAULTS = { rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 5, tp2: 10, tp3: 15 };
 export type UltraParams = typeof ULTRA_DEFAULTS;
+
+// #166: the stop on a currency pair. The owner (2026-09-29), shown the stops
+// 10 to 100 pips measured on the emails' 4-hour signals (docs §8.77), chose
+// 30 pips (「2で」). The signals themselves do not depend on it; gold, not
+// measured, keeps the video's $10.
+export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 30 };
+// the settings a chart's levels are drawn and mailed at
+export const ultraParamsFor = (gold: boolean): UltraParams => (gold ? ULTRA_DEFAULTS : ULTRA_PAIRS);
 
 // the video's colours: a green entry and Buy, a red stop and Sell, blue targets
 export const ULTRA_COLORS = { buy: "#43A047", sell: "#F4511E", entry: "#4CAF50", sl: "#E53935", tp: "#2962FF" };

@@ -37,7 +37,7 @@
 // re-exports it). No record is kept of its signals.
 
 import { pineAtr } from "./pine.ts";
-import { followTrade, type UltraTrade } from "./ultra.ts";
+import { ULTRA_DEFAULTS, followTrade, type UltraParams, type UltraTrade } from "./ultra.ts";
 
 export interface QTrendParams {
   period: number;
@@ -183,9 +183,12 @@ export const qTrend = (bars: ReadonlyArray<Bar>, params: QTrendParams = QT_DEFAU
 // each signal entered at its bar's close, the stop 10, TP1–TP3 5, 10 and 15
 // (pips on a pair, dollars on gold), followed as ULTRA's are (ultra.ts
 // followTrade). The chart draws the newest; the emails carry the same.
+// #166: ULTRA's settings for the chart's pair (ultraParamsFor: a currency
+// pair's stop 30 pips).
 export const qTrendTrades = (
   bars: ReadonlyArray<Bar>,
   signals: QTrendRead["signals"],
   lastClosed: number,
   unit: number,
-): UltraTrade[] => signals.filter((s) => s.i <= lastClosed).map((s) => followTrade(bars, s.i, s.side, lastClosed, unit));
+  o: UltraParams = ULTRA_DEFAULTS,
+): UltraTrade[] => signals.filter((s) => s.i <= lastClosed).map((s) => followTrade(bars, s.i, s.side, lastClosed, unit, o));

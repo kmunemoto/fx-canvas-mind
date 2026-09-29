@@ -43,7 +43,7 @@ import { EMA_LINES, emaLine } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
-import { ULTRA_COLORS, pctOf, ultra as ultraOf } from "@/lib/ultra";
+import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ultra";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -672,7 +672,7 @@ const PriceChart = ({
       signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
       // #156: each signal with ULTRA's stop and targets (pips; dollars on
       // gold), followed on the closed bars as ULTRA's are
-      trades: qTrendTrades(all, r.signals, last, isGoldPair(pair) ? 1 : pipSize(pair)).map((tr) => ({
+      trades: qTrendTrades(all, r.signals, last, isGoldPair(pair) ? 1 : pipSize(pair), ultraParamsFor(isGoldPair(pair))).map((tr) => ({
         ...tr,
         i: tr.i - off,
         tpAt: tr.tpAt.map(at) as typeof tr.tpAt,
@@ -750,7 +750,7 @@ const PriceChart = ({
   const ul = useMemo(() => {
     if (!ov.ultra || !histAll) return null;
     const all = histAll.slice(ultraFrom);
-    const r = ultraOf(all, all.length - 1 - tail, isGoldPair(pair) ? 1 : pipSize(pair));
+    const r = ultraOf(all, all.length - 1 - tail, isGoldPair(pair) ? 1 : pipSize(pair), ultraParamsFor(isGoldPair(pair)));
     const off = histOff - ultraFrom;
     const at = (v: number | null) => (v === null ? null : v - off);
     return {
