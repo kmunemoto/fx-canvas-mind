@@ -37,6 +37,7 @@
 // re-exports it). No record is kept of its signals.
 
 import { pineAtr } from "./pine.ts";
+import { followTrade, type UltraTrade } from "./ultra.ts";
 
 export interface QTrendParams {
   period: number;
@@ -174,3 +175,17 @@ export const qTrend = (bars: ReadonlyArray<Bar>, params: QTrendParams = QT_DEFAU
   }
   return { line, trend, signals };
 };
+
+// #156: a stop and three targets for Q-Trend's signals, which have none of
+// their own. The owner (「buy、sellの合図が出た時にtp出してくれないの？」), shown
+// three ways measured on the 5-minute charts (docs §8.68: each lost 2.2 to
+// 2.4 pips a trade on average, spread paid), chose ULTRA's numbers (「B」):
+// each signal entered at its bar's close, the stop 10, TP1–TP3 5, 10 and 15
+// (pips on a pair, dollars on gold), followed as ULTRA's are (ultra.ts
+// followTrade). The chart draws the newest; the emails carry the same.
+export const qTrendTrades = (
+  bars: ReadonlyArray<Bar>,
+  signals: QTrendRead["signals"],
+  lastClosed: number,
+  unit: number,
+): UltraTrade[] => signals.filter((s) => s.i <= lastClosed).map((s) => followTrade(bars, s.i, s.side, lastClosed, unit));

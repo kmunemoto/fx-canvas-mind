@@ -25,6 +25,7 @@ import {
   keepableKlines,
   klineFileEnded,
   klineFileOf,
+  renderIndicatorMail,
   TWELVE_RETRY_MS,
   twelveCloseDue,
   twelvePhase,
@@ -140,7 +141,7 @@ describe("#155 the email's signal is the chart's label", () => {
   });
 
   it("at each close, what the sweep judges on the newest bar is what the live chart labels there", () => {
-    let seen = { qtrend: 0, ultra: 0, strong: 0 };
+    let seen = { qtrend: 0, ultra: 0, strong: 0, plans: 0 };
     // 120 closes: bar 639 to bar 758 closing, each read a minute later with
     // the next bar forming
     for (let m = 639; m < 759; m++) {
@@ -164,24 +165,37 @@ describe("#155 the email's signal is the chart's label", () => {
         .filter((g) => xs.indexOf(g.querySelector("polygon")!.getAttribute("points")!.split(",")[0]) === newest)
         .map((g) => g.getAttribute("data-testid")!)
         .sort();
+      // #156: the stop and targets the chart draws for its newest Q-Trend signal
+      const plan = document.querySelector("[data-testid='chart-qtrend-plan'] title")?.textContent ?? null;
       view.unmount();
       // the sweep: the same history, judged by the alert code
       const barTime = new Date(T - (760 - m) * M5).toISOString();
-      const mailed = indicatorSignals("USD/JPY", "5min", historyRead("USD/JPY", "5min", upTo.slice(-(HISTORY_BARS + 1)), now).candles, now)
-        .filter((sg) => sg.barTime === barTime)
+      const judged = indicatorSignals("USD/JPY", "5min", historyRead("USD/JPY", "5min", upTo.slice(-(HISTORY_BARS + 1)), now).candles, now)
+        .filter((sg) => sg.barTime === barTime);
+      const mailed = judged
         .map((sg) => (sg.rule === "qtrend" ? `chart-qtrend-signal-${sg.side}${sg.strong ? "-strong" : ""}` : `chart-ultra-signal-${sg.side}`))
         .sort();
       expect(mailed, `bar ${m}`).toEqual(onChart);
+      // a Q-Trend signal on the newest bar: the email's stop and targets are the chart's
+      const q = judged.find((sg) => sg.rule === "qtrend");
+      if (q) {
+        const f = (v: number) => v.toFixed(3);
+        expect(plan, `bar ${m}`).toBe(
+          `Q-Trend ${q.side === "BUY" ? "買い" : "売り"}（損切り・利確は ULTRA と同じ数字）: エントリー ${f(q.close)}・損切り ${f(q.sl!)}・TP1 ${f(q.tps![0])}・TP2 ${f(q.tps![1])}・TP3 ${f(q.tps![2])}`,
+        );
+      }
       seen = {
         qtrend: seen.qtrend + mailed.filter((x) => x.includes("qtrend")).length,
         ultra: seen.ultra + mailed.filter((x) => x.includes("ultra")).length,
         strong: seen.strong + mailed.filter((x) => x.includes("strong")).length,
+        plans: seen.plans + (q ? 1 : 0),
       };
     }
     // the stretch has both indicators' signals, a STRONG among them
     expect(seen.qtrend).toBeGreaterThan(2);
     expect(seen.ultra).toBeGreaterThan(1);
     expect(seen.strong).toBeGreaterThan(0);
+    expect(seen.plans).toBe(seen.qtrend);
   }, 60_000);
 
   it("the same where the chart's history holds fewer than 600 bars (GMO's daily bars: two years' files)", () => {
@@ -354,9 +368,48 @@ describe("#155 what the sweep reads, and when", () => {
     const qt = all.find((sg) => sg.rule === "qtrend")!;
     expect(qt.line).not.toBeNull();
     expect(qt.eps).toBeGreaterThan(0);
+    // #156: ULTRA's numbers — the stop 10 pips, the targets 5, 10 and 15
+    const qd = qt.side === "BUY" ? 1 : -1;
+    expect(qt.sl).toBeCloseTo(qt.close - qd * 0.1, 9);
+    expect(qt.tps!.map((v) => (v - qt.close) * qd)).toEqual([0.05, 0.1, 0.15].map((d) => expect.closeTo(d, 9)));
+    expect(all.filter((sg) => sg.rule === "qtrend").every((sg) => sg.sl !== null && sg.tps !== null)).toBe(true);
     // the close broke the line by ε
     expect(qt.side === "BUY" ? qt.close > qt.line! + qt.eps! : qt.close < qt.line! - qt.eps!).toBe(true);
     expect(Date.parse(qt.closedAt) - Date.parse(qt.barTime)).toBe(M5);
+  });
+
+  it("#156: a Q-Trend email carries the stop and targets (ULTRA's numbers) and what they did on past 5-minute bars", () => {
+    const sig = {
+      rule: "qtrend" as const, pair: "USD/JPY", interval: "5min", side: "SELL" as const, strong: true,
+      barTime: "2026-09-29T02:20:00.000Z", closedAt: "2026-09-29T02:25:00.000Z",
+      close: 149.749, line: 149.8, eps: 0.02, rsi: null, rsiPrev: null, sl: 149.849, tps: [149.699, 149.649, 149.599] as [number, number, number],
+    };
+    const ja = renderIndicatorMail(sig, "ja");
+    expect(ja.subject).toBe("【Sextant】USD/JPY 5分足 売り（SELL・STRONG）のサイン（Q-Trend）");
+    for (const part of [
+      "損切り・利確の目安（ULTRA と同じ数字）:",
+      "  エントリー ≈ 149.749",
+      "  損切り 149.849（10.0pips）",
+      "  利確1 149.699（5.0pips）",
+      "  利確2 149.649（10.0pips）",
+      "  利確3 149.599（15.0pips）",
+      "もともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています",
+      "約2.3〜2.4 pips の負け",
+      "ほかの時間足は測っていません",
+    ]) expect(ja.text).toContain(part);
+    expect(ja.text).not.toContain("損切り・利確の目安はありません");
+    const en = renderIndicatorMail(sig, "en");
+    for (const part of ["Stop and targets (ULTRA's numbers):", "  Stop 149.849 (10.0 pips)", "  TP3 149.599 (15.0 pips)", "about 2.3–2.4 pips a trade", "other timeframes have not been measured"]) {
+      expect(en.text).toContain(part);
+    }
+    // gold in dollars
+    const gold = renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h", close: 4327.15, sl: 4337.15, tps: [4322.15, 4317.15, 4312.15] }, "ja");
+    expect(gold.text).toContain("  損切り 4337.15（$10.00）");
+    expect(gold.text).toContain("  利確1 4322.15（$5.00）");
+    // ULTRA's email as it was
+    const ul = renderIndicatorMail({ ...sig, rule: "ultra", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
+    expect(ul.text).toContain("ULTRA の目安（動画の設定）:");
+    expect(ul.text).toContain("動画の勝率（79〜80%）は、このアプリでは測っていません。");
   });
 });
 

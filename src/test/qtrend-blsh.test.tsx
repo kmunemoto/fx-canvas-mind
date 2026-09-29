@@ -7,12 +7,13 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import PriceChart from "../components/PriceChart";
 import LiveChart from "../components/LiveChart";
-import { CHART_PREFS_KEY } from "../lib/chartPrefs";
+import { CHART_PREFS_KEY, resetChartPrefsCache } from "../lib/chartPrefs";
+import { parseUtcCandleTime } from "../lib/candleTime";
 import { normalizeLiveRead, type LiveRead } from "../lib/liveChart";
 import { liveRead } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 import type { NumericCandle } from "../lib/types";
-import { anchoredStart, barStepMs, qTrend } from "../lib/qTrend";
+import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "../lib/qTrend";
 import { blsh, normalize, pineRsi, tripleConfirm, unitMfi } from "../lib/blsh";
 import { placeEdgeLabels } from "../lib/edgeLabels";
 
@@ -67,6 +68,166 @@ describe("#145 Q-Trend (tarasenko_), as its Pine code computes it", () => {
     expect(f.trend[208]).toBeNull();
     expect(f.signals.some((s) => s.i === 208)).toBe(false);
     expect(qTrend(bars.slice(0, 209)).signals.at(-1)).toEqual({ i: 208, side: "BUY", strong: false });
+  });
+});
+
+describe("#156 Q-Trend's stop and targets: ULTRA's numbers (the owner's choice, 「B」)", () => {
+  // a unit of 0.5 in this series' price (as a pip): stop 5.0, targets 2.5, 5.0, 7.5
+  // (at 0.1 every stop fell on the next bar: the bars here swing about 1.0)
+  const u = 0.5;
+  const r = qTrend(bars);
+  // followed on its own here, by the rules written out: the stop first on a
+  // bar that reaches both; each target's first bar; the end at the stop or TP3
+  const follow = (i: number, side: "BUY" | "SELL", last: number) => {
+    const d = side === "BUY" ? 1 : -1;
+    const entry = bars[i].close;
+    const sl = entry - d * 10 * u;
+    const tps = [5, 10, 15].map((k) => entry + d * k * u);
+    const tpAt: Array<number | null> = [null, null, null];
+    let slAt: number | null = null;
+    let end: number | null = null;
+    for (let t = i + 1; t <= last && end === null; t++) {
+      if (d === 1 ? bars[t].low <= sl : bars[t].high >= sl) {
+        slAt = t;
+        end = t;
+        break;
+      }
+      tps.forEach((v, k) => {
+        if (tpAt[k] === null && (d === 1 ? bars[t].high >= v : bars[t].low <= v)) tpAt[k] = t;
+      });
+      if (tpAt[2] !== null) end = t;
+    }
+    const result = tpAt[0] !== null && (slAt === null || tpAt[0] < slAt) ? "TP1" : slAt !== null ? "SL" : null;
+    return { entry, sl, tps, tpAt, slAt, end, result };
+  };
+
+  it("each signal entered at its close, the stop 10 and the targets 5, 10 and 15 units away", () => {
+    const trades = qTrendTrades(bars, r.signals, N - 1, u);
+    expect(trades.map((t) => [t.i, t.side])).toEqual(r.signals.map((s) => [s.i, s.side]));
+    for (const t of trades) {
+      const d = t.side === "BUY" ? 1 : -1;
+      expect(t.entry).toBe(bars[t.i].close);
+      expect(t.sl).toBeCloseTo(t.entry - d * 5.0, 10);
+      expect(t.tps[0]).toBeCloseTo(t.entry + d * 2.5, 10);
+      expect(t.tps[1]).toBeCloseTo(t.entry + d * 5.0, 10);
+      expect(t.tps[2]).toBeCloseTo(t.entry + d * 7.5, 10);
+    }
+  });
+
+  it("followed as ULTRA's are: each target's first bar, the stop (first on a bar reaching both), the end at the stop or TP3", () => {
+    const trades = qTrendTrades(bars, r.signals, N - 1, u);
+    let ended = 0;
+    for (const t of trades) {
+      const want = follow(t.i, t.side, N - 1);
+      expect([t.tpAt, t.slAt, t.end, t.result]).toEqual([want.tpAt, want.slAt, want.end, want.result]);
+      if (t.end !== null) ended++;
+    }
+    // the series has every kind: stops, TP1s, trades ended and some still open
+    expect(ended).toBeGreaterThan(0);
+    expect(trades.some((t) => t.end === null)).toBe(true);
+    expect(trades.some((t) => t.result === "SL")).toBe(true);
+    expect(trades.some((t) => t.result === "TP1")).toBe(true);
+  });
+
+  it("closed bars only: a signal after the last closed bar is not followed, and none is followed past it", () => {
+    const last = 400;
+    const trades = qTrendTrades(bars, r.signals, last, u);
+    expect(trades.every((t) => t.i <= last)).toBe(true);
+    expect(trades.length).toBe(r.signals.filter((s) => s.i <= last).length);
+    for (const t of trades) {
+      for (const v of [...t.tpAt, t.slAt, t.end]) if (v !== null) expect(v).toBeLessThanOrEqual(last);
+      const want = follow(t.i, t.side, last);
+      expect([t.tpAt, t.slAt, t.end]).toEqual([want.tpAt, want.slAt, want.end]);
+    }
+  });
+});
+
+describe("#156 on the chart: the newest Q-Trend signal's stop and targets", () => {
+  // a quiet 5-minute EUR/GBP (moves of a pip or so): on it both the newest
+  // Q-Trend signal (a sell) and ULTRA's (a sell) are still open
+  const T5 = Date.UTC(2026, 8, 28, 0, 0, 0);
+  let seed = 3;
+  const rnd = () => (seed = (seed * 16807) % 2147483647);
+  let c = 85796;
+  const quiet = Array.from({ length: 400 }, (_, i) => {
+    const o = c;
+    c = o + (rnd() % 7) - 3;
+    const hi = Math.max(o, c) + (rnd() % 3);
+    const lo = Math.min(o, c) - (rnd() % 3);
+    return { datetime: new Date(T5 + i * 300_000).toISOString().replace("T", " ").slice(0, 19), open: o / 100000, high: hi / 100000, low: lo / 100000, close: c / 100000 };
+  });
+  const show = () => render(<PriceChart candles={quiet.slice(280)} pair="EUR/GBP" zoneShiftHistory={{ bars: quiet.slice(0, 280), status: "ready" }} formingLast />);
+  // the chart's own reading, done here apart: Q-Trend from its fixed start
+  // (#148), closed bars only (the newest is forming), ULTRA's numbers in pips
+  const want = (() => {
+    const times = quiet.map((b) => parseUtcCandleTime(b.datetime));
+    const last = quiet.length - 2;
+    const from = anchoredStart(times, barStepMs(times.slice(280)), 280, QT_DEFAULTS.period, last);
+    const bars = quiet.slice(from);
+    const r = qTrend(bars, QT_DEFAULTS, last - from);
+    return qTrendTrades(bars, r.signals, last - from, 0.0001).at(-1)!;
+  })();
+  const rectOf = (el: Element) => {
+    const r = el.querySelector("rect")!;
+    const y0 = Number(r.getAttribute("y"));
+    return { x: Number(r.getAttribute("x")), y0, y1: y0 + Number(r.getAttribute("height")) };
+  };
+
+  it("its entry, stop and TP1–TP3 as ULTRA's numbers, dotted to the right edge, the tags \"Q\"-marked", () => {
+    show();
+    const plan = screen.getByTestId("chart-qtrend-plan");
+    expect([plan.getAttribute("data-side"), plan.getAttribute("data-open")]).toEqual([want.side, "true"]);
+    expect(want.end).toBeNull();
+    const f = (v: number) => v.toFixed(5);
+    const text = (k: string) => screen.getByTestId(`chart-qtrend-tag-${k}`).textContent!.replace(/ [↑↓]$/, "");
+    expect(text("entry")).toBe(`Q Entry ${f(want.entry)}`);
+    expect(text("sl")).toBe(`Q SL ${f(want.sl)}`);
+    expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(want.tps.map((v, k) => `Q TP${k + 1} ${f(v)}`));
+    // a sell: the stop 10 pips above, the targets 5, 10 and 15 below
+    expect(want.side).toBe("SELL");
+    expect(want.sl - want.entry).toBeCloseTo(0.001, 8);
+    expect(want.tps.map((v) => want.entry - v)).toEqual([0.0005, 0.001, 0.0015].map((d) => expect.closeTo(d, 8)));
+    expect(plan.querySelector("title")!.textContent).toBe(
+      `Q-Trend 売り（損切り・利確は ULTRA と同じ数字）: エントリー ${f(want.entry)}・損切り ${f(want.sl)}・TP1 ${f(want.tps[0])}・TP2 ${f(want.tps[1])}・TP3 ${f(want.tps[2])}`,
+    );
+    // its lines are dotted (ULTRA's dashed)
+    expect(screen.getByTestId("chart-qtrend-plan-sl").getAttribute("stroke-dasharray")).toBe("1 2");
+  });
+
+  it("its tags and ULTRA's in one column inside the plot: none over another, in price order", () => {
+    show();
+    expect(screen.getByTestId("chart-ultra-box").getAttribute("data-open")).toBe("true");
+    const clip = document.querySelector("clipPath rect")!;
+    const top = Number(clip.getAttribute("y"));
+    const bottom = top + Number(clip.getAttribute("height"));
+    const tags = [...document.querySelectorAll("[data-testid^='chart-qtrend-tag-'], [data-testid^='chart-ultra-tag-']")];
+    expect(tags).toHaveLength(10);
+    expect(tags.filter((g) => g.textContent!.startsWith("Q "))).toHaveLength(5);
+    const boxes = tags.map((g) => ({ ...rectOf(g), label: g.textContent! })).sort((a, b) => a.y0 - b.y0);
+    for (const b of boxes) {
+      expect(b.y0).toBeGreaterThanOrEqual(top);
+      expect(b.y1).toBeLessThanOrEqual(bottom);
+    }
+    for (let k = 1; k < boxes.length; k++) expect(boxes[k].y0).toBeGreaterThanOrEqual(boxes[k - 1].y1);
+    // top to bottom by price (the higher price higher up)
+    const price = (label: string) => Number(label.replace(/ [↑↓]$/, "").split(" ").at(-1));
+    for (let k = 1; k < boxes.length; k++) expect(price(boxes[k].label)).toBeLessThanOrEqual(price(boxes[k - 1].label));
+  });
+
+  it("with ULTRA off, room is left right of the newest candle for its tags; switched off, nothing is drawn", () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { ultra: false } }));
+    resetChartPrefsCache();
+    const { unmount } = show();
+    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const lastBody = bodies[bodies.length - 1];
+    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
+    for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) expect(rectOf(screen.getByTestId(`chart-qtrend-tag-${k}`)).x).toBeGreaterThan(newestRight);
+    unmount();
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { qTrend: false, ultra: false } }));
+    resetChartPrefsCache();
+    show();
+    expect(screen.queryByTestId("chart-qtrend-plan")).toBeNull();
+    expect(document.querySelector("[data-testid^='chart-qtrend-tag-']")).toBeNull();
   });
 });
 

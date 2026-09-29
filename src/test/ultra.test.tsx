@@ -176,6 +176,9 @@ describe("#151 ULTRA on the chart", () => {
   });
 
   it("draws the signals on screen, ★TP1–3 where reached, the newest signal's box, and the tally of all the bars read", () => {
+    // ULTRA alone (#156: Q-Trend's open trade has tags and room of its own)
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { qTrend: false } }));
+    resetChartPrefsCache();
     render(<PriceChart candles={shown} pair="XAU/USD" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
     // the Buys on bars 304 and 358 (the chart starts at 280)
     expect(screen.getAllByTestId("chart-ultra-signal-BUY")).toHaveLength(2);
@@ -255,6 +258,9 @@ describe("#151 ULTRA on the chart", () => {
       const lo = Math.min(o, c) - (rnd() % 3);
       return { datetime: dated[i].datetime, open: o / 100000, high: hi / 100000, low: lo / 100000, close: c / 100000 };
     });
+    // ULTRA alone (#156: Q-Trend's open trade shares the column; tested with it)
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { qTrend: false } }));
+    resetChartPrefsCache();
     render(<PriceChart candles={quiet.slice(280)} pair="EUR/GBP" zoneShiftHistory={{ bars: quiet.slice(0, 280), status: "ready" }} formingLast />);
     const box = screen.getByTestId("chart-ultra-box");
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);

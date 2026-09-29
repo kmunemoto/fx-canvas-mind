@@ -13,7 +13,7 @@ import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { EMA_LINES, emaLine } from "@/lib/emaLines";
-import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "@/lib/qTrend";
+import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { ULTRA_COLORS, pctOf, ultra as ultraOf } from "@/lib/ultra";
@@ -555,16 +555,27 @@ const PriceChart = ({
   const qt = useMemo(() => {
     if (!qtNeeded || candles.length === 0 || zsPast === null) return null;
     const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
-    const r = qTrend(all, QT_DEFAULTS, all.length - 1 - tail);
+    const last = all.length - 1 - tail;
+    const r = qTrend(all, QT_DEFAULTS, last);
     const off = zsPast.length - qtFrom;
+    const at = (v: number | null) => (v === null ? null : v - off);
     return {
       whole: r,
       off,
       line: r.line.slice(off),
       trend: r.trend.slice(off),
       signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
+      // #156: each signal with ULTRA's stop and targets (pips; dollars on
+      // gold), followed on the closed bars as ULTRA's are
+      trades: qTrendTrades(all, r.signals, last, isGoldPair(pair) ? 1 : pipSize(pair)).map((tr) => ({
+        ...tr,
+        i: tr.i - off,
+        tpAt: tr.tpAt.map(at) as typeof tr.tpAt,
+        slAt: at(tr.slAt),
+        end: at(tr.end),
+      })),
     };
-  }, [qtNeeded, zsPast, candles, tail, qtFrom]);
+  }, [qtNeeded, zsPast, candles, tail, qtFrom, pair]);
   const blshRead = useMemo(() => {
     if (!blshNeeded || candles.length === 0 || zsPast === null) return null;
     const all = (zsPast.length > 0 ? [...zsPast, ...candles] : candles).slice(qtFrom);
@@ -736,19 +747,23 @@ const PriceChart = ({
   // it for those tags (the video draws them past the newest bar), so they do
   // not cover the newest candles
   const ulOpen = ul && ul.trades.length > 0 && ul.trades[ul.trades.length - 1].end === null ? ul.trades[ul.trades.length - 1] : null;
+  // #156: Q-Trend's newest signal with ULTRA's stop and targets (the
+  // owner's choice), its tags "Q"-marked and outlined beside ULTRA's
+  const qtTrade = ov.qTrend && qt && qt.trades.length > 0 ? qt.trades[qt.trades.length - 1] : null;
+  const qtOpen = qtTrade && qtTrade.end === null ? qtTrade : null;
   const ulTagFsz = (narrow ? 7 : 8) * (full ? 1.25 : 1);
-  const ulLevels = ulOpen
-    ? [
-        { key: "tp3", text: "TP3", v: ulOpen.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
-        { key: "tp2", text: "TP2", v: ulOpen.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
-        { key: "tp1", text: "TP1", v: ulOpen.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
-        { key: "entry", text: "Entry", v: ulOpen.entry, color: ULTRA_COLORS.entry },
-        { key: "sl", text: "SL", v: ulOpen.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
-      ].map((l) => ({ ...l, label: `${l.text} ${l.v.toFixed(decimals)}` }))
-    : [];
+  const planLevels = (tr: { entry: number; sl: number; tps: [number, number, number] }, dash: string) => [
+    { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash },
+    { key: "tp2", text: "TP2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash },
+    { key: "tp1", text: "TP1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash },
+    { key: "entry", text: "Entry", v: tr.entry, color: ULTRA_COLORS.entry, dash: dash === "3 2" ? undefined : dash },
+    { key: "sl", text: "SL", v: tr.sl, color: ULTRA_COLORS.sl, dash },
+  ];
+  const ulLevels = ulOpen ? planLevels(ulOpen, "3 2").map((l) => ({ ...l, owner: "ul" as const, label: `${l.text} ${l.v.toFixed(decimals)}` })) : [];
+  const qtLevels = qtOpen ? planLevels(qtOpen, "1 2").map((l) => ({ ...l, owner: "qt" as const, label: `Q ${l.text} ${l.v.toFixed(decimals)}` })) : [];
   const ulTagW = (label: string) => label.length * ulTagFsz * 0.6 + 6;
   // (wide enough for the arrow a price off the chart is tagged with)
-  const ulGap = ulOpen && to >= n ? Math.ceil(Math.max(...ulLevels.map((l) => ulTagW(`${l.label} ↑`))) + 4) : 0;
+  const ulGap = (ulOpen || qtOpen) && to >= n ? Math.ceil(Math.max(...[...ulLevels, ...qtLevels].map((l) => ulTagW(`${l.label} ↑`))) + 4) : 0;
 
   // Deliberately NOT part of the price domain below. A confirmed swing well
   // above the window would stretch the scale until every candle was a flat
@@ -1460,8 +1475,8 @@ const PriceChart = ({
   // #151: ULTRA's newest signal's box: while it is open, on to the plot's
   // right edge with its prices there (pushed apart where they would
   // overlap); once ended, to the bar it ended on, without them
-  const ulBox = (() => {
-    const tr = ul && ul.trades.length > 0 ? ul.trades[ul.trades.length - 1] : null;
+  // #156: Q-Trend's newest signal the same way (its lines dotted, no bands)
+  const tradeBox = <T extends { i: number; end: number | null; entry: number; sl: number; tps: [number, number, number] }>(tr: T | null, dash: string) => {
     if (!tr) return null;
     const open = tr.end === null;
     const plotRight = W - PAD_RIGHT - 1;
@@ -1469,23 +1484,21 @@ const PriceChart = ({
     const x0 = Math.max(x(tr.i), PAD_LEFT);
     const x1 = open ? plotRight : Math.min(Math.max(x(tr.end as number), x(tr.i + 1)), plotRight);
     if (x1 <= x0) return null;
-    const fsz = ulTagFsz;
-    const levels: Array<{ key: string; v: number; color: string; dash?: string }> = [
-      { key: "tp3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "tp2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "tp1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash: "3 2" },
-      { key: "entry", v: tr.entry, color: ULTRA_COLORS.entry },
-      { key: "sl", v: tr.sl, color: ULTRA_COLORS.sl, dash: "3 2" },
-    ];
-    const tagH = fsz + 5;
-    // each tag at its price, or — its price off the chart — at the edge it
-    // is beyond, with an arrow that way; then pushed apart, and back inside
-    // from the bottom. 2026-09-29: moved as one block, a sell whose stop was
-    // above the chart and targets below (a quiet 5-minute EUR/GBP) showed
-    // its SL alone; the Entry and TPs were pushed off the bottom.
+    return { tr, open, x0, x1, levels: planLevels(tr, dash) };
+  };
+  const ulBase = tradeBox(ul && ul.trades.length > 0 ? ul.trades[ul.trades.length - 1] : null, "3 2");
+  const qtBase = tradeBox(qtTrade, "1 2");
+  const tagH = ulTagFsz + 5;
+  // each tag at its price, or — its price off the chart — at the edge it is
+  // beyond, with an arrow that way; then pushed apart, and back inside from
+  // the bottom. 2026-09-29: moved as one block, a sell whose stop was above
+  // the chart and targets below (a quiet 5-minute EUR/GBP) showed its SL
+  // alone; the Entry and TPs were pushed off the bottom. #156: ULTRA's and
+  // Q-Trend's open trades in one column, so neither covers the other.
+  const planTags = (() => {
     const lo = plotTop + tagH / 2;
     const hi = plotBottom - tagH / 2;
-    const tags = (open ? ulLevels : [])
+    const tags = [...(ulBase?.open ? ulLevels : []), ...(qtBase?.open ? qtLevels : [])]
       .map((l) => {
         const at = y(l.v);
         const off = at < plotTop ? " ↑" : at > plotBottom ? " ↓" : "";
@@ -1494,9 +1507,11 @@ const PriceChart = ({
       .sort((a, b) => a.at - b.at);
     for (let k = 1; k < tags.length; k++) tags[k].cy = Math.max(tags[k].cy, tags[k - 1].cy + tagH + 1);
     for (let k = tags.length - 1; k >= 0; k--) tags[k].cy = Math.min(tags[k].cy, k === tags.length - 1 ? hi : tags[k + 1].cy - tagH - 1);
-    const band = (a: number, b: number) => ({ y: Math.min(y(a), y(b)), height: Math.abs(y(a) - y(b)) });
-    return { tr, open, x0, x1, fsz, tagH, levels, tags, band };
+    return tags;
   })();
+  const bandOf = (a: number, b: number) => ({ y: Math.min(y(a), y(b)), height: Math.abs(y(a) - y(b)) });
+  const ulBox = ulBase ? { ...ulBase, fsz: ulTagFsz, tagH, tags: planTags.filter((g) => g.owner === "ul"), band: bandOf } : null;
+  const qtBox = qtBase ? { ...qtBase, fsz: ulTagFsz, tagH, tags: planTags.filter((g) => g.owner === "qt") } : null;
   // #115: each label is kept inside the plot sideways as well (one on the
   // first or last bars was cut in half), and one that would land on a label
   // already placed is moved a row away from the price, or toward it when
@@ -2982,6 +2997,20 @@ const PriceChart = ({
             })()}
           </g>
         )}
+        {/* #156: Q-Trend's newest signal with ULTRA's stop and targets
+            (the owner's choice) — dotted, without ULTRA's bands: to the
+            plot's right edge while open (its "Q" tags at the edge, laid out
+            with ULTRA's), faint to the bar it ended on */}
+        {qtBox && (
+          <g data-testid="chart-qtrend-plan" data-side={qtBox.tr.side} data-open={qtBox.open ? "true" : "false"} opacity={qtBox.open ? 1 : 0.55}>
+            <title>{t.chart.qtPlanTitle(qtBox.tr.side, qtBox.tr.entry.toFixed(decimals), qtBox.tr.sl.toFixed(decimals), qtBox.tr.tps.map((v) => v.toFixed(decimals)))}</title>
+            <g clipPath={`url(#${clipId})`}>
+              {qtBox.levels.map((l) => (
+                <line key={l.key} x1={qtBox.x0} x2={qtBox.x1} y1={y(l.v)} y2={y(l.v)} stroke={l.color} strokeWidth={l.key === "entry" ? 1.2 : 1} strokeDasharray={l.dash} opacity="0.9" data-testid={`chart-qtrend-plan-${l.key}`} />
+              ))}
+            </g>
+          </g>
+        )}
         {qt && ov.qTrend && (
           <g data-testid="chart-qtrend-signals">
             {qt.signals.filter((sg) => onScreen(sg.i)).map((sg) => {
@@ -3099,6 +3128,22 @@ const PriceChart = ({
                 <g key={g.key} data-testid={`chart-ultra-tag-${g.key}`}>
                   <rect x={ulBox.x1 - w} y={g.cy - ulBox.tagH / 2} width={w} height={ulBox.tagH} rx="2" fill={g.color} />
                   <text x={ulBox.x1 - w / 2} y={g.cy + ulBox.fsz * 0.36} fontSize={ulBox.fsz} textAnchor="middle" fill="#fff" fontWeight="600">{g.label}</text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #156: the open Q-Trend trade's prices, outlined and "Q"-marked, in
+            the column the ULTRA tags are laid out in */}
+        {qtBox && qtBox.tags.length > 0 && (
+          <g data-testid="chart-qtrend-plan-tags">
+            {qtBox.tags.map((g) => {
+              const w = ulTagW(g.label);
+              return (
+                <g key={g.key} data-testid={`chart-qtrend-tag-${g.key}`}>
+                  <rect x={qtBox.x1 - w} y={g.cy - qtBox.tagH / 2} width={w} height={qtBox.tagH} rx="2" fill="hsl(var(--background))" fillOpacity="0.92" stroke={g.color} strokeWidth="1" />
+                  <text x={qtBox.x1 - w / 2} y={g.cy + qtBox.fsz * 0.36} fontSize={qtBox.fsz} textAnchor="middle" fill={g.color} fontWeight="700">{g.label}</text>
                 </g>
               );
             })}

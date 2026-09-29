@@ -24,7 +24,7 @@
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../_shared/qtrend.ts";
-import { ULTRA_DEFAULTS, ultra } from "../_shared/ultra.ts";
+import { ULTRA_DEFAULTS, ultra, ultraLevels } from "../_shared/ultra.ts";
 import { pineAtr } from "../_shared/pine.ts";
 import { CHART_BARS, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
@@ -126,6 +126,8 @@ export const indicatorSignals = (
     // first `period` bars) by ε, ATR of the bar before × mult
     const line = s.i > QT_DEFAULTS.period ? qt.line[s.i - 1] : null;
     const a = s.i > 0 ? atr[s.i - 1] : null;
+    // #156: ULTRA's stop and targets (the owner's choice), as the chart draws them
+    const lv = ultraLevels(s.side, bars[s.i].close, ultraUnit(pair));
     out.push({
       rule: "qtrend",
       pair,
@@ -139,8 +141,8 @@ export const indicatorSignals = (
       eps: a === null ? null : QT_DEFAULTS.mult * a,
       rsi: null,
       rsiPrev: null,
-      sl: null,
-      tps: null,
+      sl: lv.sl,
+      tps: lv.tps,
     });
   }
   const ul = ultra(bars, bars.length - 1, ultraUnit(pair));
@@ -291,10 +293,12 @@ export const keepableKlines = (body: unknown): boolean =>
 
 // ---- the email --------------------------------------------------------------------------
 //
-// What fired and on which bar, the numbers that made it fire, ULTRA's stop
-// and targets (the video's settings; Q-Trend has none), where the prices
-// come from, and — as plainly as the other alerts — that neither indicator
-// has been tested on past charts here.
+// What fired and on which bar, the numbers that made it fire, the stop and
+// targets (ULTRA's, the video's settings; #156: Q-Trend's the same numbers,
+// the owner's choice), where the prices come from, and — as plainly as the
+// other alerts — what has and has not been measured: ULTRA not at all,
+// Q-Trend with these levels on the 5-minute charts (docs §8.68: a loss of
+// about 2.3–2.4 pips a trade, spread paid).
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
@@ -329,7 +333,13 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
             ? [`STRONG: one of the last five bars opened in the ${s.side === "BUY" ? "lowest" : "highest"} eighth of the 200-bar range of closes`]
             : []),
         ].join("\n"),
-        "Q-Trend (tarasenko_'s open-source Pine script, at its defaults 200, 14, 1) gives no stop or target. It has not been tested on past charts here.",
+        [
+          "Stop and targets (ULTRA's numbers):",
+          `  Entry ≈ ${px(s.close)}`,
+          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
+          ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
+        ].join("\n"),
+        "Q-Trend (tarasenko_'s open-source Pine script, at its defaults 200, 14, 1) has no stop or target of its own, so these are ULTRA's numbers. Measured on past 5-minute bars (January–September 2026, GMO's 21 pairs, spread paid), this way lost about 2.3–2.4 pips a trade on average; other timeframes have not been measured.",
         ...footer,
       ]);
     }
@@ -368,7 +378,13 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `終値 ${px(s.close)} が Q-Trend の線 ${px(s.line)} を、ε（ATR(14)×1 = ${px(s.eps)}）より大きく${how}に抜けました`,
         ...(s.strong ? [`STRONG: 直近5本のうちに、終値の200本の値幅の${s.side === "BUY" ? "下" : "上"}から8分の1の所で始まった足があります`] : []),
       ].join("\n"),
-      "Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）には、損切り・利確の目安はありません。過去のチャートでの検証はしていません。",
+      [
+        "損切り・利確の目安（ULTRA と同じ数字）:",
+        `  エントリー ≈ ${px(s.close)}`,
+        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
+        ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
+      ].join("\n"),
+      "Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。過去の5分足（2026年1〜9月、GMO の21ペア、スプレッド込み）で測ると、この決め方では1回あたり平均で約2.3〜2.4 pips の負けでした。ほかの時間足は測っていません。",
       ...footer,
     ]);
   }

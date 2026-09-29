@@ -95,8 +95,46 @@ export interface UltraRead {
   stats: UltraStats;
 }
 
-// `unit`: what one of the settings' numbers is in price — 1 on gold (the
-// video's dollars), a pip on a currency pair
+// The stop and the three targets of a signal entered at `entry`. `unit`:
+// what one of the settings' numbers is in price — 1 on gold (the video's
+// dollars), a pip on a currency pair
+export const ultraLevels = (side: "BUY" | "SELL", entry: number, unit: number, o: UltraParams = ULTRA_DEFAULTS): { sl: number; tps: [number, number, number] } => {
+  const dir = side === "BUY" ? 1 : -1;
+  return {
+    sl: entry - dir * o.sl * unit,
+    tps: [entry + dir * o.tp1 * unit, entry + dir * o.tp2 * unit, entry + dir * o.tp3 * unit],
+  };
+};
+
+// A signal on bar `i` entered at its close and followed on the closed bars
+// after it, until its stop or TP3 (the rules above). #156: Q-Trend's
+// signals are followed the same way (qtrend.ts qTrendTrades).
+export const followTrade = (bars: ReadonlyArray<Bar>, i: number, side: "BUY" | "SELL", lastClosed: number, unit: number, o: UltraParams = ULTRA_DEFAULTS): UltraTrade => {
+  const dir = side === "BUY" ? 1 : -1;
+  const last = Math.min(lastClosed, bars.length - 1);
+  const entry = bars[i].close;
+  const trade: UltraTrade = { i, side, entry, ...ultraLevels(side, entry, unit, o), tpAt: [null, null, null], slAt: null, result: null, end: null };
+  for (let t = i + 1; t <= last; t++) {
+    const b = bars[t];
+    const stopped = dir === 1 ? b.low <= trade.sl : b.high >= trade.sl;
+    if (stopped) {
+      trade.slAt = t;
+      trade.end = t;
+      if (trade.result === null) trade.result = "SL";
+      break;
+    }
+    for (let k = 0; k < 3; k++) {
+      if (trade.tpAt[k] === null && (dir === 1 ? b.high >= trade.tps[k] : b.low <= trade.tps[k])) trade.tpAt[k] = t;
+    }
+    if (trade.result === null && trade.tpAt[0] !== null) trade.result = "TP1";
+    if (trade.tpAt[2] !== null) {
+      trade.end = t;
+      break;
+    }
+  }
+  return trade;
+};
+
 export const ultra = (bars: ReadonlyArray<Bar>, lastClosed: number, unit: number, o: UltraParams = ULTRA_DEFAULTS): UltraRead => {
   const rsi = pineRsi(bars.map((b) => b.close), o.rsiLength);
   const last = Math.min(lastClosed, bars.length - 1);
@@ -106,38 +144,7 @@ export const ultra = (bars: ReadonlyArray<Bar>, lastClosed: number, unit: number
     if (r === null || p === null) continue;
     const side = r > o.oversold && p <= o.oversold ? "BUY" : r < o.overbought && p >= o.overbought ? "SELL" : null;
     if (!side) continue;
-    const dir = side === "BUY" ? 1 : -1;
-    const entry = bars[i].close;
-    const trade: UltraTrade = {
-      i,
-      side,
-      entry,
-      sl: entry - dir * o.sl * unit,
-      tps: [entry + dir * o.tp1 * unit, entry + dir * o.tp2 * unit, entry + dir * o.tp3 * unit],
-      tpAt: [null, null, null],
-      slAt: null,
-      result: null,
-      end: null,
-    };
-    for (let t = i + 1; t <= last; t++) {
-      const b = bars[t];
-      const stopped = dir === 1 ? b.low <= trade.sl : b.high >= trade.sl;
-      if (stopped) {
-        trade.slAt = t;
-        trade.end = t;
-        if (trade.result === null) trade.result = "SL";
-        break;
-      }
-      for (let k = 0; k < 3; k++) {
-        if (trade.tpAt[k] === null && (dir === 1 ? b.high >= trade.tps[k] : b.low <= trade.tps[k])) trade.tpAt[k] = t;
-      }
-      if (trade.result === null && trade.tpAt[0] !== null) trade.result = "TP1";
-      if (trade.tpAt[2] !== null) {
-        trade.end = t;
-        break;
-      }
-    }
-    trades.push(trade);
+    trades.push(followTrade(bars, i, side, last, unit, o));
   }
   const stats: UltraStats = { tp1: 0, tp2: 0, tp3: 0, sl: 0, total: 0 };
   for (const tr of trades) {
