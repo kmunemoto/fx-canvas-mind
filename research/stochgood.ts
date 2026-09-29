@@ -47,6 +47,17 @@
 // out −0.12 and −0.06 points on average, and 1.9% and 0% cleared them at the
 // low end. The rate alone (before the margin over chance) put one in on the
 // first of them.
+//
+// THE RESULT (2026-09-29, docs §8.73): kept. On GMO's 14 pairs with the
+// history, 4-hour bars: the emails' signals reached %K 20 (80) before the
+// stop 29.8% and 34.9% of the time (first, second half), every close either
+// way 30.0% and 33.9%; over chance −1.7 and +0.5 points. ULTRA's 21.4% and
+// 24.6% (+1.7, +3.4), Q-Trend's 32.7% and 38.9% (−3.3, −0.7). ULTRA's sells
+// while Dow theory read up (the circled kind) 23.7% of 856, while it read
+// down 27.5% of 131. The first half chose ULTRA's signals with, for a buy,
+// %K at or under 20, BLSH and MACD's histogram rising and against Q-Trend
+// (a sell's mirrored): +6.5 there; +2.2 (−3.0 to +7.3, 202 signals, 7% of
+// the emails') on the second half, against the emails' +0.5.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
