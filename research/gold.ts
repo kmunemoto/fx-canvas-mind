@@ -58,12 +58,15 @@
 //     (both sides at a hashed sample of the chart's closes; every close on
 //     the 4-hour chart).
 //   * THE PICK AND THE CALL, as #165's (§8.77), on the 4-hour chart the
-//     owner's emails come from: among every rule but now, both limits
-//     (67), the one with the most dollars a trade on the first half for the
-//     emails' signals (either); called clearly better if on the second half
-//     its dollars a trade are above now's and the low end of the difference
-//     (the lower of the intervals by week and by four weeks) is above 0.
-//     Whether anything changes is the owner's to decide on the numbers.
+//     owner's emails come from: among every rule but now and those with a
+//     stop of $100 or none, both limits (51), the one with the most dollars
+//     a trade on the first half for the emails' signals (either); called
+//     clearly better if on the second half its dollars a trade are above
+//     now's and the low end of the difference (the lower of the intervals
+//     by week and by four weeks) is above 0. The stops of $100 and none are
+//     told but not called: on the random walks their intervals do not hold
+//     (below). Whether anything changes is the owner's to decide on the
+//     numbers.
 //   * checks: the signals against indicatorSignals; the hourly files'
 //     candles against the minutes' (2024 on); the signal bar's close against
 //     the 5-minute bar ending there; a trade out at the target or at the
@@ -95,6 +98,21 @@
 //   * the same walk's 4-hour bars an hour apart (GRID4) gave other signals
 //     and, on the second half, now −$0.34 against +$0.38 a trade (seed 7):
 //     with about 200 trades a half, a number moves that much by chance.
+//
+// ON RANDOM WALKS, with the targets (the same 50 seeds, still before any
+// gold price was read):
+//   * every check 0 differ on every seed.
+//   * a rule's interval against the walks, "rule less now" on the 4-hour
+//     chart, each half (100): for the stops up to $50 and the range-set
+//     rules, z's sd 0.87 to 1.12 by week (0.94 to 1.19 by four weeks) and
+//     its mean −0.05 to +0.27; for a stop of $100 or none, sd 0.96 to 1.59
+//     and mean +0.12 to +0.67 (T5 none, four weeks: z above 1.96 on 17 of
+//     the 100 halves) — the rare large loss again.
+//   * with every rule a candidate (67), the pick was a stop of $100 or none
+//     on 31 of the 50 and the call fired on 3 (seeds 31, 41, 101; all none,
+//     four weeks). With those left out (51, as fixed above) it fired on 1
+//     (seed 106, T30 S50 five days). Replayed from the runs' output, the 67
+//     reproduce the program's own pick and call on all 50.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isGoldBreak, isMarketClosed, isPossiblyClosed, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
@@ -154,7 +172,9 @@ const rulesOf = (limits: number[]): Rule[] =>
     ...ATR_RULES.map(([k, m]) => ({ key: atrKey(k, m, l), target: k, stop: m, atr: true, limit: l })),
   ]);
 const NOW_RULE = ruleKey(5, 10, L5D);
-const PICKS = rulesOf(LIMITS_OF("4h")).map((r) => r.key).filter((k) => k !== NOW_RULE);
+// THE PICK's candidates: every rule but now and those with a stop of $100 or
+// none, whose interval does not hold on the random walks (below)
+const PICKS = rulesOf(LIMITS_OF("4h")).filter((r) => r.key !== NOW_RULE && (r.atr || (r.stop !== null && r.stop <= 50))).map((r) => r.key);
 // the sweep reads a Twelve Data chart a minute after the close and again
 // three minutes later (signal-alerts twelveCloseDue, TWELVE_RETRY_MS)
 const READ_AFTER = [1, 4];
