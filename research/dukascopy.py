@@ -132,31 +132,38 @@ class Stats:
 
 
 def fetch_one(url: str, timeout: float, attempts: int, stats: Stats):
-    """(status, bytes): 200 with the file, 404 (none for that day), or None
-    after `attempts` tries."""
+    """(status, bytes, what each try got): 200 with the file, 404 (none for
+    that day), or None after `attempts` tries."""
     wait = 4.0
+    got = []
     for k in range(attempts):
         t0 = time.monotonic()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = r.read()
-            stats.add(tries=1, seconds=time.monotonic() - t0)
-            return 200, body
+            took = time.monotonic() - t0
+            stats.add(tries=1, seconds=took)
+            got.append(f"200/{took:.0f}s")
+            return 200, body, got
         except urllib.error.HTTPError as e:
-            stats.add(tries=1, seconds=time.monotonic() - t0)
+            took = time.monotonic() - t0
+            stats.add(tries=1, seconds=took)
+            got.append(f"{e.code}/{took:.0f}s")
             if e.code == 404:
-                return 404, b""
+                return 404, b"", got
             if e.code in (429, 500, 502, 503, 504):
                 stats.add(refused=1)
             else:
-                return None, f"http {e.code}".encode()
-        except Exception:  # timeouts, resets
-            stats.add(tries=1, seconds=time.monotonic() - t0)
+                return None, f"http {e.code}".encode(), got
+        except Exception as e:  # timeouts, resets
+            took = time.monotonic() - t0
+            stats.add(tries=1, seconds=took)
+            got.append(f"{type(e).__name__}/{took:.0f}s")
         if k < attempts - 1:
             time.sleep(wait)
-            wait = min(wait * 2, 120.0)
-    return None, b"gave up"
+            wait = min(wait * 2, 60.0)
+    return None, b"gave up", got
 
 
 def work(item, symbol: str, timeout: float, attempts: int, stats: Stats):
@@ -164,7 +171,8 @@ def work(item, symbol: str, timeout: float, attempts: int, stats: Stats):
     if not fresh and os.path.exists(path):
         stats.add(cached=1)
         return
-    status, body = fetch_one(url, timeout, attempts, stats)
+    status, body, got = fetch_one(url, timeout, attempts, stats)
+    print(f"  {url.split('/datafeed/')[1]}: {' '.join(got)}", flush=True)
     if status is None:
         stats.add(failed=1, failure=f"{url} ({body.decode(errors='replace')})")
         return
@@ -230,20 +238,59 @@ def report(symbol: str):
     }, indent=1), flush=True)
 
 
+def closes(symbol: str, day_from: str, all_from: str):
+    """The mid price at hour marks, to compare with the Twelve Data bars the
+    app keeps (where their bars start and end, and how near the two feeds'
+    prices are): the close of the last minute before each mark, when that
+    minute is within the five before it. From day_from, the marks 20:00 to
+    01:00 UTC around each day's end; from all_from, every hour's. Printed as
+    lines "CLOSE <UTC hour> <mid>" between markers."""
+    base = f"{CACHE}/{symbol}/m1"
+    days = sorted(set(os.listdir(f"{base}/BID")) & set(os.listdir(f"{base}/ASK")))
+    mids = {}
+    for name in days:
+        if name[:10] < day_from:
+            continue
+        sides = {}
+        for side in SIDES:
+            with open(f"{base}/{side}/{name}") as f:
+                sides[side] = {r[0]: r[4] for r in json.load(f)["rows"]}
+        for t in set(sides["BID"]) & set(sides["ASK"]):
+            mids[t] = (sides["BID"][t] + sides["ASK"][t]) / 2
+    print("CLOSES BEGIN", flush=True)
+    if mids:
+        first = min(mids)
+        last = max(mids)
+        h = (first // 3_600_000 + 1) * 3_600_000
+        while h <= last + 60_000:
+            when = dt.datetime.fromtimestamp(h / 1000, dt.timezone.utc)
+            if when.strftime("%Y-%m-%d") >= all_from or when.hour in (20, 21, 22, 23, 0, 1):
+                for k in range(1, 6):
+                    v = mids.get(h - k * 60_000)
+                    if v is not None:
+                        print(f"CLOSE {when.strftime('%Y-%m-%dT%H')} {v:.3f}")
+                        break
+            h += 3_600_000
+    print("CLOSES END", flush=True)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol", default="XAUUSD")
     p.add_argument("--start")
     p.add_argument("--end")
     p.add_argument("--report", action="store_true", help="only report on the kept minute files")
+    p.add_argument("--closes", nargs=2, metavar=("DAY_FROM", "ALL_FROM"), help="only print the mid at hour marks")
     p.add_argument("--hours-from", default=None, help="YYYY-MM: the hourly files from this month")
     p.add_argument("--workers", type=int, default=3)
-    p.add_argument("--attempts", type=int, default=8)
-    p.add_argument("--timeout", type=float, default=60.0)
+    p.add_argument("--attempts", type=int, default=6)
+    p.add_argument("--timeout", type=float, default=40.0)
     p.add_argument("--budget-minutes", type=float, default=150.0, help="stop starting new files after this long")
     a = p.parse_args()
     if a.report:
         return report(a.symbol)
+    if a.closes:
+        return closes(a.symbol, a.closes[0], a.closes[1])
     start = dt.date.fromisoformat(a.start)
     end = dt.date.fromisoformat(a.end)
     hours_from = dt.date.fromisoformat(a.hours_from + "-01") if a.hours_from else None
