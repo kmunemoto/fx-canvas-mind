@@ -1,10 +1,37 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, Pencil, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { formatCandleLabel, isGoldPair, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
-import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
+import { formatCandleLabel, formatDistance, isGoldPair, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
+import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, aheadOf, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
+import {
+  MAX_DRAWINGS_PER_PAIR,
+  POINTS_OF,
+  TAPS_OF,
+  distanceTo,
+  drawingAt,
+  handleAt,
+  indexAtTime,
+  movePoint,
+  newDrawingId,
+  positionPoints,
+  shapeOf,
+  shiftDrawing,
+  snapPrice,
+  timeAtIndex,
+  timeAxisOf,
+  type Drawing,
+  type DrawingPoint,
+  type DrawingTool,
+  type Frame,
+  type MagnetMode,
+  type Shape,
+  type Words,
+} from "@/lib/drawings";
+import { setPairDrawings, usePairDrawings } from "@/lib/drawingsStore";
+import DrawingLayer from "@/components/DrawingLayer";
+import { DrawingBar, SelectedBar } from "@/components/DrawingToolbar";
 import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPrefs";
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
@@ -175,6 +202,8 @@ interface Props {
   // iSPEED FX's chart turns with the phone), and back upright closes it
   // again if that is how it opened
   landscapeFullscreen?: boolean;
+  // #160: lines and shapes drawn by hand (the drawing tools), kept per pair
+  drawable?: boolean;
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
@@ -279,6 +308,13 @@ const MARKER_COLORS: Record<ChartMarker["kind"], string> = {
   end: "hsl(var(--muted-foreground))",
 };
 
+// #160: dark print on a light colour (a yellow or white line's price tag), white on the rest
+const inkOn = (hex: string): string => {
+  const v = /^#[0-9a-fA-F]{6}$/.test(hex) ? parseInt(hex.slice(1), 16) : 0;
+  const lum = (0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
+  return lum > 0.6 ? "#131722" : "#fff";
+};
+
 const parseLevel = (v: string | undefined): number | null => {
   if (!v) return null;
   const n = Number(v);
@@ -306,7 +342,7 @@ const PriceChart = ({
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
   formingLast = false, unjudged = 0, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
-  landscapeFullscreen = false,
+  landscapeFullscreen = false, drawable = false,
 }: Props) => {
   // #149: the newest candles left out of every indicator's judging
   const tail = Math.max(unjudged, formingLast ? 1 : 0);
@@ -333,7 +369,9 @@ const PriceChart = ({
   // press, then it follows the finger) and a drag on an axis, as iSPEED FX
   // has them
   const gesture = useRef<{
-    kind: "pan" | "pinch" | "cross" | "yzoom" | "xzoom";
+    // #160: "draw" puts a drawing's point down (it follows the finger until
+    // let go), "point" moves one point of the selected drawing, "shape" all of it
+    kind: "pan" | "pinch" | "cross" | "yzoom" | "xzoom" | "draw" | "point" | "shape";
     view: ChartView | null;
     x: number;
     y: number;
@@ -341,6 +379,11 @@ const PriceChart = ({
     at: number;
     moved: boolean;
     zoom: number;
+    // #160: the point where a "draw" or "shape" started, the handle a
+    // "point" moves, and the drawing as it was before the move
+    start?: DrawingPoint;
+    k?: number;
+    orig?: Drawing;
   } | null>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // #144: when a finger last touched the chart — the mouse moves a browser
@@ -350,6 +393,39 @@ const PriceChart = ({
   // #144: the price scale stretched (over 1) or spread (under 1) by a drag
   // on it, about the middle of the bars on screen; 1 is fitted to them
   const [priceZoom, setPriceZoom] = useState(1);
+  // #160: the drawing tools — whether their bar is open, the tool chosen,
+  // the drawing being put down (its points so far, and the next one, which
+  // follows the finger or the mouse), the drawing selected, one being moved
+  // (drawn from here until let go, then kept), and whether a selected
+  // text's field is open. The drawings are the pair's, kept in this browser
+  // and with the account (drawingsStore, drawingsSync).
+  const draw = drawable && interactive;
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [tool, setTool] = useState<DrawingTool | null>(null);
+  const [draft, setDraftState] = useState<{ tool: DrawingTool; fixed: DrawingPoint[]; float: DrawingPoint | null } | null>(null);
+  const draftRef = useRef(draft);
+  const setDraft = (v: typeof draft) => {
+    draftRef.current = v;
+    setDraftState(v);
+  };
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [moving, setMovingState] = useState<Drawing | null>(null);
+  const movingRef = useRef(moving);
+  const setMoving = (v: Drawing | null) => {
+    movingRef.current = v;
+    setMovingState(v);
+  };
+  const [editingText, setEditingText] = useState(false);
+  // when a drawing's point was last put down (the click that ends a drawing
+  // is also the second of a double click)
+  const pointPutAt = useRef(0);
+  const stored = usePairDrawings(pair);
+  // undo and redo, for this pair while the chart is open
+  const history = useRef<{ undo: Drawing[][]; redo: Drawing[][] }>({ undo: [], redo: [] });
+  const [, setHistoryTick] = useState(0);
+  // what Esc does first while drawing (the chart sets it on each render)
+  const drawEsc = useRef<() => boolean>(() => false);
+  const drawKeys = useRef<(e: KeyboardEvent) => void>(() => undefined);
 
   useEffect(() => {
     if (!boxEl || typeof ResizeObserver === "undefined") return;
@@ -361,6 +437,34 @@ const PriceChart = ({
     observer.observe(boxEl);
     return () => observer.disconnect();
   }, [boxEl]);
+
+  // #160: another pair has its own drawings, and its own undo
+  const lastPair = useRef(pair);
+  useEffect(() => {
+    if (lastPair.current === pair) return;
+    lastPair.current = pair;
+    history.current = { undo: [], redo: [] };
+    draftRef.current = null;
+    setDraftState(null);
+    setSelectedId(null);
+    movingRef.current = null;
+    setMovingState(null);
+    setEditingText(false);
+  }, [pair]);
+  // #160: the keys while drawing (not while typing in a field): Delete
+  // removes the selected drawing, Ctrl/Cmd+Z undoes, Ctrl+Y or
+  // Ctrl/Cmd+Shift+Z redoes, Esc lets go of what is being drawn or selected
+  // (in full screen, before full screen closes)
+  useEffect(() => {
+    if (!draw) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      drawKeys.current(e);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [draw]);
 
   // #116: another pair or timeframe starts at its newest bars
   const lastKey = useRef(seriesKey);
@@ -383,6 +487,7 @@ const PriceChart = ({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (sheetOpen.current) setSheet(null);
+      else if (drawEsc.current()) return;
       else setFull(false);
     };
     // the browser's full screen ended (Esc, the back gesture): so does ours
@@ -448,7 +553,7 @@ const PriceChart = ({
     if (!svgEl) return;
     const onTouchMove = (e: TouchEvent) => {
       const k = gesture.current?.kind;
-      if ((k === "cross" || k === "yzoom") && e.cancelable) e.preventDefault();
+      if ((k === "cross" || k === "yzoom" || k === "draw" || k === "point" || k === "shape") && e.cancelable) e.preventDefault();
     };
     svgEl.addEventListener("touchmove", onTouchMove, { passive: false });
     return () => svgEl.removeEventListener("touchmove", onTouchMove);
@@ -718,6 +823,8 @@ const PriceChart = ({
   // #116: the bars on screen
   const n = candles.length;
   const { from, to } = visibleRange(n, interactive ? view : null);
+  // #160: room for bars past the newest one, dragged into view
+  const ahead = interactive ? aheadOf(n, view) : 0;
 
   const levels = useMemo<Level[]>(() => {
     const out: Level[] = [];
@@ -822,16 +929,123 @@ const PriceChart = ({
 
     const plotW = W - PAD_LEFT - PAD_RIGHT;
     const plotH = H - PAD_TOP - PAD_BOTTOM;
-    // the bars' width: the plot, less ULTRA's room (#151)
+    // the bars' width: the plot, less ULTRA's room (#151); #160: the bars
+    // past the newest one, dragged into view, share it
     const barsW = plotW - ulGap;
-    const slot = barsW / (to - from);
+    const slot = barsW / (to - from + ahead);
     // wider candles when zoomed in, up to a point
     const bodyW = Math.max(2, Math.min(interactive && view ? 18 : 9, slot * 0.62));
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, interactive, view, showSarDots, showSarCloud, emas, priceZoom, ulGap]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, priceZoom, ulGap]);
+
+  // #160: the drawings where they land now — the pair's, with the one being
+  // moved as it is (none while hidden) — and the one being put down
+  const drawAxis = useMemo(() => timeAxisOf(candles.map((c) => parseUtcCandleTime(c.datetime))), [candles]);
+  const drawWords = useMemo<Words>(() => {
+    const w = t.chart.draw;
+    const span = (ms: number) => {
+      const min = Math.round(Math.abs(ms) / 60_000);
+      return w.span(Math.floor(min / 1440), Math.floor((min % 1440) / 60), min % 60);
+    };
+    return {
+      price: (p) => p.toFixed(decimals),
+      measure: (m) => w.measure(
+        `${m.diff > 0 ? "+" : m.diff < 0 ? "−" : ""}${Math.abs(m.diff).toFixed(decimals)}`,
+        formatDistance(pair, m.diff, { signed: true, digits: 1 }),
+        m.pct === null ? "—" : `${m.pct > 0 ? "+" : m.pct < 0 ? "−" : ""}${Math.abs(m.pct).toFixed(2)}`,
+        m.bars,
+        span(m.ms),
+      ),
+      position: (p) => ({
+        target: w.target(p.target.toFixed(decimals), formatDistance(pair, Math.abs(p.target - p.entry), { digits: 1 })),
+        stop: w.stop(p.stop.toFixed(decimals), formatDistance(pair, Math.abs(p.stop - p.entry), { digits: 1 })),
+        ratio: w.ratio(p.ratio === null ? "—" : p.ratio.toFixed(2)),
+      }),
+    };
+  }, [t, decimals, pair]);
+  const drawFrame = useMemo<Frame | null>(
+    () => (geometry ? { x: geometry.x, y: geometry.y, left: PAD_LEFT, right: W - PAD_RIGHT, top: PAD_TOP, bottom: H - PAD_BOTTOM } : null),
+    [geometry, W, H, PAD_RIGHT],
+  );
+  const drawHidden = prefs.drawing.hidden;
+  const drawn = useMemo(() => {
+    if (!draw || !drawFrame || drawHidden || candles.length === 0) return [] as Array<{ d: Drawing; shape: Shape }>;
+    return stored.map((d0) => {
+      const d = moving && moving.id === d0.id ? moving : d0;
+      return { d, shape: shapeOf(d, drawAxis, drawFrame, drawWords) };
+    });
+  }, [draw, drawFrame, drawHidden, candles.length, stored, moving, drawAxis, drawWords]);
+  // #160: kept, with a step to undo (the pair's drawings as they were); a
+  // text typed is kept as it is typed, its step taken when its field opened
+  const commitDrawings = (next: Drawing[], withHistory = true) => {
+    if (withHistory) {
+      history.current.undo.push(stored);
+      if (history.current.undo.length > 100) history.current.undo.shift();
+      history.current.redo = [];
+    }
+    setPairDrawings(pair, next);
+    setHistoryTick((v) => v + 1);
+  };
+  const stepHistory = (which: "undo" | "redo") => {
+    const h = history.current;
+    const back = which === "undo" ? h.undo.pop() : h.redo.pop();
+    if (!back) return;
+    (which === "undo" ? h.redo : h.undo).push(stored);
+    setPairDrawings(pair, back);
+    setSelectedId(null);
+    setEditingText(false);
+    setHistoryTick((v) => v + 1);
+  };
+  const removeDrawing = (id: string) => {
+    commitDrawings(stored.filter((x) => x.id !== id));
+    if (selectedId === id) setSelectedId(null);
+    setEditingText(false);
+  };
+  // the colour, width and line chosen on a drawing are the next one's too
+  const setDrawPrefs = (patch: Partial<typeof saved.drawing>) => setChartPrefs({ drawing: { ...saved.drawing, ...patch } });
+  drawEsc.current = () => {
+    if (draftRef.current) {
+      setDraft(null);
+      setHover(null);
+      setHoverY(null);
+      return true;
+    }
+    if (tool) {
+      setTool(null);
+      return true;
+    }
+    if (selectedId) {
+      setSelectedId(null);
+      setEditingText(false);
+      return true;
+    }
+    return false;
+  };
+  drawKeys.current = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      // in full screen, its own Esc asks first
+      if (!fullNow.current && drawEsc.current()) e.preventDefault();
+      return;
+    }
+    if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+      e.preventDefault();
+      removeDrawing(selectedId);
+      return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod || !(drawOpen || selectedId)) return;
+    const key = e.key.toLowerCase();
+    if (key === "z") {
+      e.preventDefault();
+      stepHistory(e.shiftKey ? "redo" : "undo");
+    } else if (key === "y") {
+      e.preventDefault();
+      stepHistory("redo");
+    }
+  };
 
   // Pills are anchored to their price, then pushed apart just enough that two
   // nearby levels stay readable instead of stacking on top of each other.
@@ -1276,6 +1490,72 @@ const PriceChart = ({
         )
         : null;
 
+  // #160: the drawing tools' button (the card's top right, full screen's
+  // bottom bar), their bar, and what it says to do next
+  const dw = t.chart.draw;
+  const drawHint = prefs.drawing.hidden
+    ? dw.hintHidden
+    : tool && stored.length >= MAX_DRAWINGS_PER_PAIR
+      ? dw.hintFull(MAX_DRAWINGS_PER_PAIR)
+      : tool
+      ? dw.hintTool(dw.tools[tool], TAPS_OF[tool] - (draft?.fixed.length ?? 0), TAPS_OF[tool])
+      : selectedId
+        ? dw.hintSelected
+        : dw.hintStart;
+  const closeDrawing = () => {
+    setDrawOpen(false);
+    setTool(null);
+    setDraft(null);
+  };
+  const drawToggle = draw ? (
+    <button
+      type="button"
+      aria-pressed={drawOpen}
+      aria-label={dw.open}
+      title={dw.open}
+      onClick={() => (drawOpen ? closeDrawing() : setDrawOpen(true))}
+      data-testid="chart-draw-open"
+      className={`${iconBtn} ${drawOpen ? "text-primary" : ""}`}
+    >
+      <Pencil className="h-4 w-4" />
+    </button>
+  ) : null;
+  const drawBar = draw && drawOpen ? (
+    <DrawingBar
+      tool={tool}
+      onTool={(k) => {
+        setTool(k);
+        setDraft(null);
+        setSelectedId(null);
+        setEditingText(false);
+        if (k && prefs.drawing.hidden) setDrawPrefs({ hidden: false });
+      }}
+      magnet={prefs.drawing.magnet}
+      onMagnet={() => setDrawPrefs({ magnet: prefs.drawing.magnet === "off" ? "weak" : prefs.drawing.magnet === "weak" ? "strong" : "off" })}
+      keep={prefs.drawing.keep}
+      onKeep={() => setDrawPrefs({ keep: !prefs.drawing.keep })}
+      hidden={prefs.drawing.hidden}
+      onHidden={() => {
+        setDrawPrefs({ hidden: !prefs.drawing.hidden });
+        setSelectedId(null);
+        setEditingText(false);
+      }}
+      canUndo={history.current.undo.length > 0}
+      canRedo={history.current.redo.length > 0}
+      onUndo={() => stepHistory("undo")}
+      onRedo={() => stepHistory("redo")}
+      count={stored.length}
+      onClear={() => {
+        commitDrawings([]);
+        setSelectedId(null);
+        setEditingText(false);
+      }}
+      onClose={closeDrawing}
+      hint={drawHint}
+      dropUp={full}
+    />
+  ) : null;
+
   const fullscreenLayer = (body: ReactNode) => (
     <>
       <div className="glass rounded-xl border border-border p-3 flex items-center justify-between gap-2" data-testid="chart-fullscreen-placeholder">
@@ -1334,6 +1614,7 @@ const PriceChart = ({
           <div ref={setBoxEl} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
             {body}
           </div>
+          {drawBar && <div className="px-2 pb-1">{drawBar}</div>}
           <div className="flex items-center gap-1 border-t border-border px-2 pt-1" data-testid="chart-fullscreen-toolbar">
             {fullscreenMenus && (
               <>
@@ -1358,6 +1639,7 @@ const PriceChart = ({
               </>
             )}
             <div className="ml-auto flex items-center gap-0.5">
+              {drawToggle}
               {zoomButtons}
               <button
                 type="button"
@@ -1669,8 +1951,9 @@ const PriceChart = ({
     const rect = el.getBoundingClientRect();
     return rect.width > 0 ? ((clientX - rect.left) / rect.width) * W : 0;
   };
-  // how far across the plot a point is, 0 to 1
-  const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / barsW));
+  // how far across the bars a point is, 0 to 1 (#160: not counting the
+  // room past the newest bar)
+  const across = (px: number) => Math.min(1, Math.max(0, (px - PAD_LEFT) / (slot * (to - from))));
   const barAt = (px: number) => from + Math.floor((px - PAD_LEFT) / slot);
 
   const afterTouch = () => Date.now() - touchedAt.current < TOUCH_MOUSE_MS;
@@ -1692,11 +1975,93 @@ const PriceChart = ({
     if (afterTouch()) return;
     handleMove(evt);
     setHoverY(levelAt(evt.clientY, evt.currentTarget));
+    // #160: the next point of a drawing being put down follows the mouse
+    const dr = draftRef.current;
+    if (draw && dr && !gesture.current) {
+      setDraft({ ...dr, float: pointAt(svgX(evt.clientX, evt.currentTarget), svgY(evt.clientY, evt.currentTarget), magnetFor(evt)) });
+    }
   };
   const clearHover = () => {
     setHover(null);
     setHoverY(null);
   };
+
+  // #160: a point put down on the chart — on the bar under it (as TradingView
+  // puts a drawing's points on bars, past the newest one too) at the price
+  // there, or with the magnet on that bar's open, high, low or close. Ctrl
+  // or Cmd held turns the magnet on (strong), or off while it is on, as on
+  // TradingView.
+  const magnetFor = (e: { ctrlKey?: boolean; metaKey?: boolean }): MagnetMode => {
+    const m = prefs.drawing.magnet;
+    return e.ctrlKey || e.metaKey ? (m === "off" ? "strong" : "off") : m;
+  };
+  const pointAt = (px: number, py: number, magnet: MagnetMode): DrawingPoint => {
+    const f = Math.round((px - PAD_LEFT - slot / 2) / slot + from);
+    const cy = Math.min(H - PAD_BOTTOM, Math.max(PAD_TOP, py));
+    const span = geometry.max - geometry.min;
+    const raw = geometry.max - ((cy - PAD_TOP) / plotH) * span;
+    const p = snapPrice(f >= 0 && f < n ? candles[f] : undefined, raw, magnet, plotH / span);
+    return { t: timeAtIndex(drawAxis, f), p };
+  };
+  const inPlot = (px: number, py: number) => px >= PAD_LEFT && px <= W - PAD_RIGHT && py >= PAD_TOP && py <= H - PAD_BOTTOM;
+  // a finger is wider than the mouse
+  const hitTol = (touch: boolean) => (touch ? 14 : 7);
+  const handleTol = (touch: boolean) => (touch ? 22 : 10);
+  const selectedItem = selectedId ? drawn.find((x) => x.d.id === selectedId) ?? null : null;
+  // the crosshair where a point is being put, so a finger can see it
+  const showCross = (px: number, py: number) => {
+    const idx = barAt(px);
+    setHover(onScreen(idx) ? idx : null);
+    setHoverY(py >= PAD_TOP && py <= H - PAD_BOTTOM ? py : null);
+  };
+  // a position is put down with its target and stop 8% of the prices on
+  // screen away, and its box running on a sixth of the bars on screen
+  const positionAt = (side: "long" | "short", entry: DrawingPoint) =>
+    positionPoints(side, entry, (geometry.max - geometry.min) * 0.08, timeAtIndex(drawAxis, indexAtTime(drawAxis, entry.t) + Math.max(8, Math.round(count / 6))));
+  // the lines of the Fibonacci tools, shapes and measures start thin
+  const startsThin = (k: DrawingTool) => k.startsWith("fib") || k === "rect" || k === "measure" || k === "long" || k === "short";
+  const newDrawing = (k: DrawingTool, pts: DrawingPoint[], id: string): Drawing => ({
+    id,
+    tool: k,
+    points: k === "long" || k === "short" ? positionAt(k, pts[0]) : pts,
+    color: k === "arrowUp" ? "#089981" : k === "arrowDown" ? "#F23645" : prefs.drawing.color,
+    width: startsThin(k) ? 1 : prefs.drawing.width,
+    style: prefs.drawing.style,
+    ...(k === "text" ? { text: t.chart.draw.defaultText } : {}),
+  });
+  const finishDrawing = (k: DrawingTool, pts: DrawingPoint[]) => {
+    setDraft(null);
+    clearHover();
+    if (stored.length >= MAX_DRAWINGS_PER_PAIR) return;
+    const d = newDrawing(k, pts, newDrawingId());
+    commitDrawings([...stored, d]);
+    // selected, as TradingView leaves a new drawing; a text with its field open
+    setSelectedId(d.id);
+    setEditingText(k === "text");
+    if (prefs.drawing.hidden) setDrawPrefs({ hidden: false });
+    if (!prefs.drawing.keep) setTool(null);
+  };
+  // a finger let go while putting a drawing down: a tap puts the next point
+  // where it was; a drag from the first point puts the first where it began
+  // and the second where it ended (any later point where it ended)
+  const placeDraftPoint = (moved: boolean, start: DrawingPoint | undefined) => {
+    const dr = draftRef.current;
+    if (!dr || !dr.float) return;
+    pointPutAt.current = Date.now();
+    const taps = TAPS_OF[dr.tool];
+    const fixed = moved && dr.fixed.length === 0 && taps >= 2 && start ? [start, dr.float] : [...dr.fixed, dr.float];
+    if (fixed.length >= taps) finishDrawing(dr.tool, fixed.slice(0, taps));
+    else setDraft({ tool: dr.tool, fixed, float: fixed[fixed.length - 1] });
+  };
+  // the drawing being put down, as it will be: the points so far and the
+  // next where the finger or the mouse is (the rest on it too)
+  const draftItem = (() => {
+    if (!draw || !draft || !drawFrame) return null;
+    const pts = draft.float ? [...draft.fixed, draft.float] : draft.fixed;
+    if (pts.length === 0) return null;
+    const d = newDrawing(draft.tool, Array.from({ length: POINTS_OF[draft.tool] }, (_, k) => pts[Math.min(k, pts.length - 1)]), "draft");
+    return { d, shape: shapeOf(d, drawAxis, drawFrame, drawWords) };
+  })();
 
   // #116: one finger (or the mouse) drags the bars sideways, two pinch them.
   // #144: as iSPEED FX: a finger held still brings up the crosshair, which
@@ -1730,6 +2095,34 @@ const PriceChart = ({
     const py = svgY(evt.clientY, evt.currentTarget);
     pointers.current.set(evt.pointerId, px);
     cancelPress();
+    // #160: on the plot, with a tool chosen, a finger puts the drawing's next
+    // point down (it follows until let go); on the selected drawing, one of
+    // its round handles moves that point and the drawing itself moves it all
+    if (draw && pointers.current.size === 1 && inPlot(px, py)) {
+      const touch = evt.pointerType !== "mouse";
+      if (tool) {
+        // no mouse events after the finger (they would take the focus from
+        // a text's field as it opens)
+        if (touch) evt.preventDefault();
+        const pt = pointAt(px, py, magnetFor(evt));
+        const dr = draftRef.current;
+        setDraft(dr && dr.tool === tool ? { ...dr, float: pt } : { tool, fixed: [], float: pt });
+        gesture.current = { kind: "draw", view, x: px, y: py, dist: 0, at: 0, moved: false, zoom: priceZoom, start: pt };
+        showCross(px, py);
+        return;
+      }
+      if (selectedItem && !selectedItem.d.locked) {
+        const k = handleAt(selectedItem.shape, px, py, handleTol(touch));
+        if (k !== null) {
+          gesture.current = { kind: "point", view, x: px, y: py, dist: 0, at: 0, moved: false, zoom: priceZoom, k, orig: selectedItem.d };
+          return;
+        }
+        if (distanceTo(selectedItem.shape, px, py) <= hitTol(touch)) {
+          gesture.current = { kind: "shape", view, x: px, y: py, dist: 0, at: 0, moved: false, zoom: priceZoom, start: pointAt(px, py, "off"), orig: selectedItem.d };
+          return;
+        }
+      }
+    }
     if (pointers.current.size === 1) {
       if (px >= W - PAD_RIGHT && py <= H - PAD_BOTTOM) {
         gesture.current = { kind: "yzoom", view, x: px, y: evt.clientY, dist: 0, at: 0, moved: false, zoom: priceZoom };
@@ -1761,6 +2154,24 @@ const PriceChart = ({
     pointers.current.set(evt.pointerId, px);
     const g = gesture.current;
     if (!g) return;
+    // #160: a drawing's point being put down, a handle or a drawing moved
+    if (g.kind === "draw" || g.kind === "point" || g.kind === "shape") {
+      const py = svgY(evt.clientY, evt.currentTarget);
+      // a finger's tap wobbles: it is a drag once it has gone this far
+      if (!g.moved && Math.hypot(px - g.x, py - g.y) < (evt.pointerType === "mouse" ? 5 : 10)) return;
+      g.moved = true;
+      if (g.kind === "draw") {
+        const dr = draftRef.current;
+        if (dr) setDraft({ ...dr, float: pointAt(px, py, magnetFor(evt)) });
+        showCross(px, py);
+      } else if (g.kind === "point" && g.orig && g.k !== undefined) {
+        setMoving(movePoint(g.orig, g.k, pointAt(px, py, magnetFor(evt))));
+      } else if (g.kind === "shape" && g.orig && g.start) {
+        const now = pointAt(px, py, "off");
+        setMoving(shiftDrawing(g.orig, drawAxis, Math.round(indexAtTime(drawAxis, now.t) - indexAtTime(drawAxis, g.start.t)), now.p - g.start.p));
+      }
+      return;
+    }
     if (g.kind === "cross") {
       const idx = barAt(px);
       setHover(onScreen(idx) ? idx : null);
@@ -1790,7 +2201,8 @@ const PriceChart = ({
       if (!g.moved && Math.abs(dx) < 4) return;
       g.moved = true;
       cancelPress();
-      if (g.view) setView(panView(n, g.view, dx / slot));
+      // #160: past the newest bar too, on a chart showing every bar as well
+      setView(panView(n, g.view, dx / slot));
     } else {
       const [a, b] = [...pointers.current.values()];
       if (b === undefined) return;
@@ -1804,6 +2216,33 @@ const PriceChart = ({
     const g = gesture.current;
     const px = pointers.current.get(evt.pointerId) ?? 0;
     pointers.current.delete(evt.pointerId);
+    // #160: a point put down; a point or a drawing moved, kept where let go
+    if (g && g.kind === "draw") {
+      gesture.current = null;
+      if (evt.type === "pointerup") placeDraftPoint(g.moved, g.start);
+      if (pointers.current.size > 0) startGesture();
+      return;
+    }
+    if (g && (g.kind === "point" || g.kind === "shape")) {
+      gesture.current = null;
+      const moved = movingRef.current;
+      if (moved && g.moved && evt.type === "pointerup") commitDrawings(stored.map((x) => (x.id === moved.id ? moved : x)));
+      setMoving(null);
+      if (pointers.current.size > 0) startGesture();
+      return;
+    }
+    // #160: a tap (or click) on a drawing selects it; on nothing, lets the
+    // selected one go (the crosshair stays as it was)
+    if (draw && g?.kind === "pan" && !g.moved && evt.type === "pointerup") {
+      const py = svgY(evt.clientY, evt.currentTarget);
+      const hit = inPlot(px, py) ? drawingAt(drawn.map((x) => ({ id: x.d.id, shape: x.shape })), px, py, hitTol(evt.pointerType !== "mouse")) : null;
+      if (hit || selectedId) {
+        setSelectedId(hit);
+        setEditingText(false);
+        startGesture();
+        return;
+      }
+    }
     if (g && (g.kind === "cross" || g.kind === "yzoom" || g.kind === "xzoom")) {
       // the crosshair stays where it was let go, an axis as it was dragged
       gesture.current = null;
@@ -1839,6 +2278,7 @@ const PriceChart = ({
           {t.chart.zoomShown(count, n)}
         </span>
       )}
+      {drawToggle}
       {zoomButtons}
       {themeToggle}
       {interactive && (
@@ -2290,6 +2730,59 @@ const PriceChart = ({
     </details>
   );
 
+  // #160: on the price axis, each horizontal line's price, and the
+  // selected drawing's points' prices
+  const priceAtY = (py: number) => geometry.max - ((py - PAD_TOP) / plotH) * (geometry.max - geometry.min);
+  const drawTags: Array<{ key: string; y: number; price: number; color: string }> = [];
+  if (draw) {
+    for (const { d } of drawn) {
+      if ((d.tool === "hline" || d.tool === "hray") && inDomain(d.points[0].p)) drawTags.push({ key: d.id, y: y(d.points[0].p), price: d.points[0].p, color: d.color });
+    }
+    if (selectedItem && selectedItem.d.tool !== "hline" && selectedItem.d.tool !== "hray") {
+      for (const h of selectedItem.shape.handles) {
+        if (h.y >= PAD_TOP && h.y <= H - PAD_BOTTOM) drawTags.push({ key: `sel-${h.k}`, y: h.y, price: priceAtY(h.y), color: selectedItem.d.color });
+      }
+    }
+  }
+  // the selected drawing's bar: its colour, width, line, text, lock, a copy, delete
+  const selectedBar = draw && selectedItem ? (
+    <div className="pointer-events-none absolute inset-x-0 bottom-7 z-20 flex justify-center px-1" data-testid="chart-draw-selected-wrap">
+      <SelectedBar
+        d={selectedItem.d}
+        editing={editingText}
+        onEditing={(v) => {
+          // a text's words are kept as they are typed: its step to undo is taken here
+          if (v && !editingText) {
+            history.current.undo.push(stored);
+            history.current.redo = [];
+          }
+          setEditingText(v);
+        }}
+        onChange={(patch) => {
+          const id = selectedItem.d.id;
+          commitDrawings(stored.map((x) => (x.id === id ? { ...x, ...patch } : x)), !("text" in patch));
+          const look: Partial<typeof saved.drawing> = {};
+          if (patch.color) look.color = patch.color;
+          if (patch.width && !startsThin(selectedItem.d.tool)) look.width = patch.width;
+          if (patch.style) look.style = patch.style;
+          if (Object.keys(look).length > 0) setDrawPrefs(look);
+        }}
+        onCopy={() => {
+          const { locked: _locked, ...base } = selectedItem.d;
+          const copy = { ...shiftDrawing(base, drawAxis, 3, 0), id: newDrawingId() };
+          commitDrawings([...stored, copy]);
+          setSelectedId(copy.id);
+          setEditingText(false);
+        }}
+        onDelete={() => removeDrawing(selectedItem.d.id)}
+        onClose={() => {
+          setSelectedId(null);
+          setEditingText(false);
+        }}
+      />
+    </div>
+  ) : null;
+
   const charts = (
     <>
       {/* #151: ULTRA's tally (TOTAL is TP1 + the stop; each share is of
@@ -2325,6 +2818,7 @@ const PriceChart = ({
       )}
       <div className="relative">
       {overlayLegend}
+      {selectedBar}
       {priceZoom !== 1 && (
         <button
           type="button"
@@ -2349,10 +2843,13 @@ const PriceChart = ({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
-        onDoubleClick={interactive ? () => { setView(null); setPriceZoom(1); } : undefined}
+        // (#160: not while a drawing is being put down, where two clicks are two points)
+        onDoubleClick={interactive ? () => { if (draw && (tool || draftRef.current || Date.now() - pointPutAt.current < 700)) return; setView(null); setPriceZoom(1); } : undefined}
         // a drag sideways moves the bars, up and down still scrolls the
         // page; in full screen every gesture is the chart's
-        style={interactive ? { touchAction: full ? "none" : "pan-y", cursor: zoomed ? "grab" : undefined, WebkitTouchCallout: "none" } : undefined}
+        // #160: while drawing, or with a drawing selected, every touch is the
+        // chart's (a finger drawing up or down does not scroll the page)
+        style={interactive ? { touchAction: full || (draw && (tool || selectedId)) ? "none" : "pan-y", cursor: draw && tool ? "crosshair" : zoomed ? "grab" : undefined, WebkitTouchCallout: "none" } : undefined}
         data-testid="chart-price"
       >
         <defs>
@@ -3467,6 +3964,25 @@ const PriceChart = ({
           );
         })}
 
+        {/* #160: the drawings over it all, and on the price axis the price
+            of each horizontal line and of the selected drawing's points */}
+        {draw && (
+          <>
+            <DrawingLayer items={drawn} selectedId={selectedId} draft={draftItem} clipId={clipId} fontSize={labelSize} handleR={narrow || full ? 6 : 4.5} left={PAD_LEFT} right={W - PAD_RIGHT} />
+            {drawTags.map((tag) => {
+              const tagH = labelSize + 7;
+              return (
+                <g key={tag.key} data-testid="chart-draw-axis-tag" pointerEvents="none">
+                  <rect x={W - PAD_RIGHT + 1} y={tag.y - tagH / 2} width={axisW - 2} height={tagH} rx="2" fill={tag.color} />
+                  <text x={AXIS_X} y={tag.y + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill={inkOn(tag.color)} fontFamily="monospace">
+                    {tag.price.toFixed(decimals)}
+                  </text>
+                </g>
+              );
+            })}
+          </>
+        )}
+
         {/* #118: the price now — the newest bar's close — as a dotted line
             across the plot and a tag on the axis, green if that bar is up,
             red if down, as TradingView marks it */}
@@ -3705,6 +4221,7 @@ const PriceChart = ({
     <div ref={setBoxEl} className={`glass rounded-xl border border-border p-3 ${themeClass}`} data-theme={prefs.theme}>
       {header}
       {indicatorPanel}
+      {drawBar && <div className="px-1 pb-2">{drawBar}</div>}
       {charts}
       <details className="mt-2 px-1" data-testid="chart-notes">
         <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">{t.chart.notesTitle}</summary>
