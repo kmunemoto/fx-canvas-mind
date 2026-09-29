@@ -21,22 +21,12 @@ export type { Series };
 type Bar = { high: number; low: number; close: number };
 
 // ---- MACD (TradingView's built-in: 12, 26, 9; both averages EMAs) ----------
-
-export const MACD_DEFAULTS = { fast: 12, slow: 26, signal: 9 };
-
-export interface MacdRead {
-  macd: Series;
-  signal: Series;
-  hist: Series;
-}
-
-export const macd = (closes: ReadonlyArray<number>, o = MACD_DEFAULTS): MacdRead => {
-  const fast = pineEma(closes, o.fast);
-  const slow = pineEma(closes, o.slow);
-  const line: Series = closes.map((_, i) => (fast[i] === null || slow[i] === null ? null : (fast[i] as number) - (slow[i] as number)));
-  const signal = pineEma(line, o.signal);
-  return { macd: line, signal, hist: line.map((v, i) => (v === null || signal[i] === null ? null : v - (signal[i] as number))) };
-};
+//
+// #158: the calculation moved to supabase/functions/_shared/macd.ts
+// unchanged, where the email alerts read it too
+import { MACD_DEFAULTS, macd, type MacdRead } from "../../supabase/functions/_shared/macd";
+export { MACD_DEFAULTS, macd };
+export type { MacdRead };
 
 // TradingView's four histogram colours: over 0 rising / falling, under 0
 // rising / falling (against the bar before)
