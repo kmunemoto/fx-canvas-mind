@@ -8,7 +8,7 @@
 # secret.
 name: Research gold
 on:
-  # a push here runs a trial: two weeks of minute candles, no hourly ones
+  # a push here fetches what is not kept yet (the defaults below)
   push:
     branches:
       - claude/app-confirmation-jvmk03
@@ -19,7 +19,7 @@ on:
     inputs:
       start:
         description: "First UTC day of minute candles"
-        default: "2024-01-01"
+        default: "2023-12-15"
       end:
         description: "Last UTC day of minute candles (empty: yesterday)"
         default: ""
@@ -28,17 +28,17 @@ on:
         default: "2021-01"
       workers:
         description: "Files fetched at once"
-        default: "3"
+        default: "4"
       budget:
         description: "Minutes to spend fetching"
-        default: "150"
+        default: "320"
 permissions:
   contents: read
 
 jobs:
   gold:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache/restore@v4
@@ -48,11 +48,11 @@ jobs:
           restore-keys: dukascopy-xau-
       - name: Fetch gold's candles
         env:
-          START: ${{ inputs.start || '2024-01-01' }}
-          END: ${{ github.event_name == 'push' && '2024-01-14' || inputs.end || '' }}
-          HOURS_FROM: ${{ github.event_name == 'push' && '' || inputs.hours_from || '' }}
-          WORKERS: ${{ inputs.workers || '3' }}
-          BUDGET: ${{ inputs.budget || '150' }}
+          START: ${{ inputs.start || '2023-12-15' }}
+          END: ${{ inputs.end || '' }}
+          HOURS_FROM: ${{ github.event_name == 'push' && '2021-01' || inputs.hours_from || '' }}
+          WORKERS: ${{ inputs.workers || '4' }}
+          BUDGET: ${{ inputs.budget || '320' }}
         run: |
           set -eu
           end="${END:-$(date -u -d yesterday +%F)}"
@@ -68,3 +68,9 @@ jobs:
       - name: Check what was read
         if: always()
         run: python3 research/dukascopy.py --report
+      # the mid at hour marks, to find where the app's Twelve Data bars start
+      # and end (around each day's end from 2024-04-09, every hour from
+      # 2026-05-18: the periods those bars reach)
+      - name: Print the mid at hour marks
+        if: always()
+        run: python3 research/dukascopy.py --closes 2024-04-09 2026-05-18
