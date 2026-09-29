@@ -49,6 +49,26 @@
 // call came out "clearly better" on 2 of the 20 (hold on seed 97, hold 120
 // on seed 31), "not clearly better" on the rest: an edge that small can
 // make the call on its own; beyond the coin's is told beside it.
+//
+// THE RESULT (2026-09-29, docs §8.76), GMO's 14 pairs with the history,
+// 4-hour bars; the emails' signals (either), first half and second:
+//   * now took 38.0% and 34.6% of the trades off at the stop. Held on, 78.7%
+//     and 80.3% of those reached TP1 within five days (3.8 and 4.2 bars in
+//     on average), 89.3% and 89.7% within four weeks. The rest came to −54.3
+//     and −70.2 pips on average at five days (the worst −422.0 and −587.1),
+//     −98.4 and −111.8 at four weeks (the worst −1,067.7 and −555.8). Held
+//     on, the stopped trades came to −8.03 and −10.06 pips a trade (four
+//     weeks: −6.48 and −7.32) against −10.52 and −10.69 at the stop.
+//   * every trade: now −1.28 and −1.06 pips; hold −0.33 and −0.84 (89.6% and
+//     89.0% won); hold 120 +0.25 and +0.06 (94.3% and 93.3% won). Hold less
+//     now +0.95 (−0.06 to +1.95) and +0.22 (−1.07 to +1.51); hold 120 less
+//     now +1.53 (−0.20 to +3.26) and +1.13 (−0.13 to +2.40; by four weeks
+//     −0.37 to +2.64).
+//   * the call: not clearly better, both (over now on both halves; the
+//     second's low end −1.07 and −0.37).
+//   * every close either way gained by it too: hold less now +0.38 and
+//     +0.30, hold 120 less now +0.62 and +1.25; beyond the coin's, hold
+//     +0.57 and −0.08, hold 120 +0.91 and −0.12.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
