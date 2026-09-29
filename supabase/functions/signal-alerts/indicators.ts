@@ -296,9 +296,45 @@ export const keepableKlines = (body: unknown): boolean =>
 // What fired and on which bar, the numbers that made it fire, the stop and
 // targets (ULTRA's, the video's settings; #156: Q-Trend's the same numbers,
 // the owner's choice), where the prices come from, and — as plainly as the
-// other alerts — what has and has not been measured: ULTRA not at all,
-// Q-Trend with these levels on the 5-minute charts (docs §8.68: a loss of
-// about 2.3–2.4 pips a trade, spread paid).
+// other alerts — what these levels did on the email's own timeframe.
+
+// #157: what the emails' own levels did (research/tf-winrate.ts, docs §8.69):
+// GMO's FX pairs, 2024-01-01 to 2026-09-29, each signal the sweep would mail
+// entered at its bar's close on the side it fills on (spread paid) and
+// followed on 5-minute bid/ask. `win`: the share of those settled that
+// reached TP1 before the stop, %; `pips`: a trade's mean when all of it is
+// closed at TP1 or the stop. Gold and the pairs read from Twelve Data were
+// not measured.
+export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
+  qtrend: {
+    "5min": { win: 58.9, pips: -2.1 },
+    "15min": { win: 59.5, pips: -1.92 },
+    "1h": { win: 61.9, pips: -1.46 },
+    "4h": { win: 61.4, pips: -1.35 },
+    "1day": { win: 35.9, pips: -9.11 },
+  },
+  ultra: {
+    "5min": { win: 61.0, pips: -1.64 },
+    "15min": { win: 61.1, pips: -1.51 },
+    "1h": { win: 61.6, pips: -1.67 },
+    "4h": { win: 64.2, pips: -0.82 },
+    "1day": { win: 33.5, pips: -10.0 },
+  },
+};
+
+// the sentence saying so, on this email's timeframe
+const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  const m = INDICATOR_MEASURED[s.rule][s.interval];
+  const unmeasured = !isGmoChartPair(s.pair);
+  if (lang === "en") {
+    if (!m) return "This timeframe has not been measured.";
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than 67%); closing all of it at TP1 or the stop ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
+      (unmeasured ? ` ${s.pair} itself was not measured; these are GMO's FX pairs' figures.` : "");
+  }
+  if (!m) return "この時間足は測っていません。";
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには67%より上が要ります）で、利確1か損切りで全部決済すると1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
+    (unmeasured ? `${s.pair} そのものは測っていません（GMO の FX の値です）。` : "");
+};
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
@@ -339,7 +375,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
           ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
         ].join("\n"),
-        "Q-Trend (tarasenko_'s open-source Pine script, at its defaults 200, 14, 1) has no stop or target of its own, so these are ULTRA's numbers. Measured on past 5-minute bars (January–September 2026, GMO's 21 pairs, spread paid), this way lost about 2.3–2.4 pips a trade on average; other timeframes have not been measured.",
+        `Q-Trend (tarasenko_'s open-source Pine script, at its defaults 200, 14, 1) has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
         ...footer,
       ]);
     }
@@ -356,7 +392,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
         ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
       ].join("\n"),
-      "ULTRA is built from F-INVEST's video (its code is not published). The video's win rate (79–80%) has not been measured here.",
+      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold). ${measuredLine(s, "en")}`,
       ...footer,
     ]);
   }
@@ -384,7 +420,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
         ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
       ].join("\n"),
-      "Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。過去の5分足（2026年1〜9月、GMO の21ペア、スプレッド込み）で測ると、この決め方では1回あたり平均で約2.3〜2.4 pips の負けでした。ほかの時間足は測っていません。",
+      `Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       ...footer,
     ]);
   }
@@ -399,7 +435,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
       ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
     ].join("\n"),
-    "ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画の勝率（79〜80%）は、このアプリでは測っていません。",
+    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%です。${measuredLine(s, "ja")}`,
     ...footer,
   ]);
 };

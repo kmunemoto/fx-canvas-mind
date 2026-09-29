@@ -97,7 +97,7 @@ import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outc
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v8-2026-09-29T12:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v9-2026-09-29T15:30:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
