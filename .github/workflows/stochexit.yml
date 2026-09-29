@@ -1,0 +1,85 @@
+# #162: the Stoch exit (out when %K closes under 20 for a sell, over 80 for a
+# buy) against the exit now (TP1, 5 pips), in pips per trade
+# (research/stochexit.ts).
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research the Stoch exit
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/stochexit.ts
+      - .github/workflows/stochexit.yml
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "Comma-separated pairs (empty: the 21 GMO serves)"
+        default: ""
+      start:
+        description: "First day judged"
+        default: "2024-01-01"
+      split:
+        description: "First day of the second half"
+        default: "2025-05-19"
+permissions:
+  contents: read
+
+jobs:
+  stochexit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # GMO's day files never change once the day has rolled: this study's
+      # own kept files, or else those the 5-minute (#156) and 15-minute
+      # studies kept, so only the rest is fetched
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-none
+          restore-keys: gmo-5min-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-15min-none
+          restore-keys: gmo-15min-
+      - name: Run the study
+        env:
+          PAIRS: ${{ inputs.pairs || '' }}
+          START: ${{ inputs.start || '2024-01-01' }}
+          SPLIT: ${{ inputs.split || '2025-05-19' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,MIN_TRAIN
+          research/stochexit.ts
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stochexit-out
+          path: research/out/
+          retention-days: 30
