@@ -36,6 +36,15 @@
 //     (either trigger, no condition) and the low end of its interval is over
 //     the rate of entering at every close either way (the coin);
 //   * otherwise the emails stay as they are.
+//
+// THE RESULT (2026-09-29, docs §8.71): kept. On GMO's 14 pairs with the
+// history (4-hour bars), the first half chose either signal with, for a buy,
+// Stoch's %K under 50, BLSH rising and MACD's histogram rising (a sell's
+// mirrored): 64.9% against the emails' 61.2% there; on the second half 64.7%
+// (61.2–68.2%, 921 trades) against the emails' 63.2% and the coin's 61.4%, so
+// the low end fell short of the coin. 279 of the 565 patterns kept were over
+// the emails on the second half. On the random walk the same pattern once
+// came out 3.4 points over the emails.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
