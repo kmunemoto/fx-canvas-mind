@@ -30,7 +30,8 @@
 // computed from nothing is nothing.
 //
 // Shown on the chart. #158: moved here from src/lib/blsh.ts (which
-// re-exports it) unchanged, so the email alerts can read it as the chart does.
+// re-exports it) unchanged, so the functions can read it as the chart does
+// (research/confirm.ts; #158's check was measured and not put in).
 
 import { ema, pineAtr, sma } from "./pine.ts";
 

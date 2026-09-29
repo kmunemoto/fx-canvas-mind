@@ -12,7 +12,8 @@
 // with a missing value is missing too, as Pine's ta.sma is.
 //
 // Shown on the chart. #158: moved here from src/lib/stochastic.ts (which
-// re-exports it) unchanged, so the email alerts can read it as the chart does.
+// re-exports it) unchanged, so the functions can read it as the chart does
+// (research/confirm.ts; #158's check was measured and not put in).
 
 export interface StochParams {
   kLength: number;

@@ -26,6 +26,12 @@
 // kept signals' TP1 rate is below all signals' with the difference's
 // interval wholly under 0, the check made the emails worse: report and ask
 // before putting it in. Otherwise put it in, and say what the numbers show.
+//
+// THE RESULT (2026-09-29, docs §8.70): not worse by that rule on 4 hours
+// (kept − all −1.1 points, interval −4.0 to +1.7) but not better on any
+// intraday timeframe (5 and 15 minutes worse past chance), no ULTRA signal
+// kept on 4 hours, and the check alone no help on blind entries. Shown the
+// numbers, the owner chose not to put it in (「入れない」).
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";

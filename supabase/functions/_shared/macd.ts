@@ -1,6 +1,7 @@
 // #150: MACD as TradingView's built-in computes it (12, 26, 9; both averages
 // EMAs, Pine's ta.ema). #158: moved here from src/lib/trendTools.ts (which
-// re-exports it) unchanged, so the email alerts can read it as the chart does.
+// re-exports it) unchanged, so the functions can read it as the chart does
+// (research/confirm.ts; #158's check was measured and not put in).
 
 import { pineEma, type Series } from "./pine.ts";
 
