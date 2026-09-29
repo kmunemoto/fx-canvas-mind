@@ -1,0 +1,61 @@
+# #156: a target and a stop for Q-Trend's 5-minute signals — three ways,
+# measured side by side (research/qtrend-tp.ts).
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research Q-Trend targets
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/qtrend-tp.ts
+      - .github/workflows/qtrend-tp.yml
+  workflow_dispatch:
+    inputs:
+      pairs:
+        description: "Comma-separated pairs (empty: the 21 the 5-minute alerts cover)"
+        default: ""
+      start:
+        description: "First day read"
+        default: "2026-01-05"
+      split:
+        description: "First day of the second (checking) period"
+        default: "2026-05-18"
+permissions:
+  contents: read
+
+jobs:
+  qtrend-tp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/cache@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-${{ github.run_id }}
+          restore-keys: gmo-5min-
+      - name: Run the study
+        env:
+          PAIRS: ${{ inputs.pairs || '' }}
+          START: ${{ inputs.start || '2026-01-05' }}
+          SPLIT: ${{ inputs.split || '2026-05-18' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC
+          research/qtrend-tp.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qtrend-tp-out
+          path: research/out/
+          retention-days: 30
