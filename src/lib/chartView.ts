@@ -4,10 +4,15 @@
 // follows the newest bar as new ones arrive (the live chart); null is every
 // bar, the chart as it always was. The chart has only the bars it was given,
 // so zooming out stops at all of them.
+//
+// #160: and `ahead`, room for that many bars to the right of the newest one,
+// dragged into view past it (as TradingView's chart has room there), so a
+// line can be drawn on into the time to come. Only with offset 0.
 
 export interface ChartView {
   count: number;
   offset: number;
+  ahead?: number;
 }
 
 // Fewer bars than this is a few candles filling the screen: no more reading
@@ -18,6 +23,19 @@ export const ZOOM_STEP = 1.5;
 export const WHEEL_STEP = 1.2;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// #160: the most room past the newest bar: half the bars on screen (at least 10)
+export const maxAhead = (count: number): number => Math.max(10, Math.round(count / 2));
+
+// #160: the room past the newest bar, in bars
+export const aheadOf = (n: number, view: ChartView | null): number => {
+  if (!view || n <= 0) return 0;
+  const { from, to } = visibleRange(n, view);
+  return to < n ? 0 : clamp(Math.round(view.ahead ?? 0), 0, maxAhead(to - from));
+};
+
+// The view with this much room past the newest bar (none: no `ahead`)
+const withAhead = (v: ChartView, ahead: number): ChartView => (ahead > 0 ? { ...v, ahead } : { count: v.count, offset: v.offset });
 
 // The bars on screen, [from, to), out of n
 export const visibleRange = (n: number, view: ChartView | null): { from: number; to: number } => {
@@ -40,14 +58,21 @@ export const zoomView = (n: number, view: ChartView | null, factor: number, at =
   const a = clamp(at, 0, 1);
   const anchor = from + a * count;
   const nextFrom = Math.round(anchor - a * next);
-  return { count: next, offset: clamp(n - (nextFrom + next), 0, n - next) };
+  const offset = clamp(n - (nextFrom + next), 0, n - next);
+  // the room past the newest bar stays while the newest bar does
+  return withAhead({ count: next, offset }, offset === 0 ? Math.min(aheadOf(n, view), maxAhead(next)) : 0);
 };
 
-// Dragged `bars` bars to the right: older bars come in from the left. A
-// chart showing every bar has nowhere to go.
+// Dragged `bars` bars to the right: older bars come in from the left. #160:
+// dragged to the left past the newest bar, room opens to its right (up to
+// maxAhead), even on a chart showing every bar; dragged back, it closes
+// before older bars come in.
 export const panView = (n: number, view: ChartView | null, bars: number): ChartView | null => {
-  if (!view || n <= 0 || !Number.isFinite(bars)) return view;
+  if (n <= 0 || !Number.isFinite(bars)) return view;
+  if (!view && Math.round(bars) >= 0) return view;
   const { from, to } = visibleRange(n, view);
   const count = to - from;
-  return { count, offset: clamp(n - to + Math.round(bars), 0, n - count) };
+  const pos = n - to - aheadOf(n, view) + Math.round(bars);
+  const offset = clamp(pos, 0, n - count);
+  return withAhead({ count, offset }, clamp(-pos, 0, maxAhead(count)));
 };

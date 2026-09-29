@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { STOCH_132_DEFAULTS, STOCH_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
+import { DRAWING_COLORS, DRAWING_WIDTHS, LINE_STYLES, type LineStyle, type MagnetMode } from "./drawings";
 
 // #117: which indicator strips the charts show under the price, and the
 // stochastic's lengths (#118: the background; #119: what is drawn over the
@@ -110,6 +111,32 @@ const livePrefsOf = (v: unknown): LivePrefs => {
   return { pair: str(r.pair), interval: str(r.interval), view: str(r.view) };
 };
 
+// #160: the drawing tools' settings — the magnet, whether a tool stays on
+// after a drawing is put down (TradingView's "stay in drawing mode"), whether
+// the drawings are hidden, and the colour, width and line a new drawing
+// starts with (the last chosen on one)
+export interface DrawingPrefs {
+  magnet: MagnetMode;
+  keep: boolean;
+  hidden: boolean;
+  color: string;
+  width: number;
+  style: LineStyle;
+}
+export const DRAWING_PREFS_DEFAULTS: DrawingPrefs = { magnet: "off", keep: false, hidden: false, color: DRAWING_COLORS[0], width: 2, style: "solid" };
+const drawingPrefsOf = (v: unknown): DrawingPrefs => {
+  const r = v !== null && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  const d = DRAWING_PREFS_DEFAULTS;
+  return {
+    magnet: r.magnet === "weak" || r.magnet === "strong" ? r.magnet : d.magnet,
+    keep: typeof r.keep === "boolean" ? r.keep : d.keep,
+    hidden: typeof r.hidden === "boolean" ? r.hidden : d.hidden,
+    color: typeof r.color === "string" && /^#[0-9a-fA-F]{6}$/.test(r.color) ? r.color : d.color,
+    width: DRAWING_WIDTHS.includes(r.width as number) ? (r.width as number) : d.width,
+    style: (LINE_STYLES as ReadonlyArray<unknown>).includes(r.style) ? (r.style as LineStyle) : d.style,
+  };
+};
+
 export interface ChartPrefs {
   rsi: boolean;
   stoch: boolean;
@@ -127,6 +154,7 @@ export interface ChartPrefs {
   theme: ChartTheme;
   overlays: ChartOverlays;
   live: LivePrefs;
+  drawing: DrawingPrefs;
 }
 
 export const CHART_PREFS_KEY = "sextant.chart.prefs.v1";
@@ -150,6 +178,7 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
   live: LIVE_PREFS_DEFAULTS,
+  drawing: DRAWING_PREFS_DEFAULTS,
 };
 
 let current: ChartPrefs | null = null;
@@ -175,6 +204,7 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
     theme: v.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(v.overlays),
     live: livePrefsOf(v.live),
+    drawing: drawingPrefsOf(v.drawing),
   };
 };
 
@@ -202,6 +232,7 @@ export const setChartPrefs = (patch: Partial<ChartPrefs>): void => {
     theme: next.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(next.overlays),
     live: livePrefsOf(next.live),
+    drawing: drawingPrefsOf(next.drawing),
   };
   save();
 };

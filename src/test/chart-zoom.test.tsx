@@ -8,7 +8,7 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 import PriceChart from "../components/PriceChart";
 import LiveChart from "../components/LiveChart";
 import { formatCandleLabel } from "../lib/candleTime";
-import { MIN_VISIBLE_BARS, panView, visibleRange, zoomView } from "../lib/chartView";
+import { MIN_VISIBLE_BARS, aheadOf, maxAhead, panView, visibleRange, zoomView } from "../lib/chartView";
 import { normalizeLiveRead, type LiveRead } from "../lib/liveChart";
 import { liveRead } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
@@ -59,10 +59,32 @@ describe("#116 which bars are on screen (lib/chartView)", () => {
 
   it("drags within the bars there are", () => {
     expect(panView(120, { count: 40, offset: 0 }, 10)).toEqual({ count: 40, offset: 10 });
-    expect(panView(120, { count: 40, offset: 10 }, -30)).toEqual({ count: 40, offset: 0 });
     expect(panView(120, { count: 40, offset: 0 }, 1000)).toEqual({ count: 40, offset: 80 });
-    // every bar on screen: nowhere to go
+    // every bar on screen: no older bars to go to
     expect(panView(120, null, 10)).toBeNull();
+  });
+
+  it("#160: dragged past the newest bar, opens room to its right, up to half the bars on screen, and closes it first when dragged back", () => {
+    // 10 bars back, then 20 more: the newest bar, and room for 10 past it
+    expect(panView(120, { count: 40, offset: 10 }, -20)).toEqual({ count: 40, offset: 0, ahead: 10 });
+    expect(panView(120, { count: 40, offset: 0 }, -1000)).toEqual({ count: 40, offset: 0, ahead: maxAhead(40) });
+    expect(maxAhead(40)).toBe(20);
+    expect(maxAhead(16)).toBe(10);
+    // back: the room closes, then older bars come in
+    expect(panView(120, { count: 40, offset: 0, ahead: 10 }, 4)).toEqual({ count: 40, offset: 0, ahead: 6 });
+    expect(panView(120, { count: 40, offset: 0, ahead: 10 }, 15)).toEqual({ count: 40, offset: 5 });
+    // on a chart showing every bar too
+    expect(panView(120, null, -5)).toEqual({ count: 120, offset: 0, ahead: 5 });
+    expect(aheadOf(120, { count: 40, offset: 0, ahead: 7 })).toBe(7);
+    expect(aheadOf(120, { count: 40, offset: 3, ahead: 7 })).toBe(0);
+    expect(aheadOf(120, null)).toBe(0);
+  });
+
+  it("#160: keeps the room past the newest bar through a zoom that keeps the newest bar", () => {
+    expect(zoomView(120, { count: 40, offset: 0, ahead: 12 }, 2, 1)).toEqual({ count: 20, offset: 0, ahead: 10 });
+    expect(zoomView(120, { count: 40, offset: 0, ahead: 4 }, 2, 1)).toEqual({ count: 20, offset: 0, ahead: 4 });
+    // zoomed out to every bar: the chart as it always was
+    expect(zoomView(120, { count: 80, offset: 0, ahead: 12 }, 1 / 1.5, 1)).toBeNull();
   });
 });
 

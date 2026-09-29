@@ -771,6 +771,8 @@ const LiveChart = ({
         onLockedIndicator={onLockedIndicator}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
         landscapeFullscreen
+        // #160: lines drawn by hand, kept per pair (on every timeframe)
+        drawable
         fullscreenStatus={
           priceLine || freshLine || dowLine ? (
             <>
