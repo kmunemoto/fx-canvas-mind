@@ -51,6 +51,25 @@
 //   rule is. On real prices the wicks are prices that were quoted; whether
 //   the price comes back from them, as on the first walks, is what the
 //   real data tells.
+//
+// THE RESULT (2026-09-29, docs §8.77), GMO's 14 pairs with the history,
+// 4-hour bars; the emails' signals (either), first half and second, pips a
+// trade:
+//   * L30: S10 (now) −1.28 and −1.07; S15 −1.05 and −0.97; S20 −0.95 and
+//     −1.05; S30 −0.61 and −0.99; S50 −0.74 and −0.43; S100 −0.40 and
+//     −0.57; none −0.33 and −0.80. L120: S10 −1.32 and −1.11; S15 −1.09 and
+//     −1.04; S20 −1.00 and −1.12; S30 −0.62 and −1.08; S50 −0.83 and −0.51;
+//     S100 −0.50 and −0.54; none +0.25 and +0.06.
+//   * the pick: S100 L30 (first half −0.40). On the second half −0.57
+//     against now −1.07; the difference +0.51 (−0.40 to +1.41; by four
+//     weeks −0.44 to +1.45): not clearly better.
+//   * L30, won: S10 60.0% and 61.0%, S30 81.0% and 79.3%, S50 85.0% and
+//     84.9%, S100 88.7% and 88.1%; the average loss −10.2 and −9.8, −22.9
+//     and −22.3, −31.2 and −28.6, −39.8 and −38.7 pips; the worst trade
+//     −32.0 and −53.3, −41.0 and −88.0, −66.1 and −88.0, −108.5 and −129.4
+//     (a 5-minute bar opening past the stop goes out at that open).
+//   * every close either way gained by a wider stop too (L30 less now): S30
+//     +0.22 and +0.23, S50 +0.13 and +0.32, S100 +0.15 and +0.28.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
