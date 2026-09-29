@@ -49,6 +49,22 @@
 // 0.80 to 1.25 by week, 0.90 to 1.20 by four weeks; free 120 0.90 to 1.32
 // by week, 0.95 to 1.22 by four weeks. The call came out "not clearly
 // better" on all ten, for free and free 120. Every check: 0 differ.
+//
+// THE RESULT (2026-09-29, docs §8.75), GMO's 14 pairs with the history,
+// 4-hour bars; the emails' signals (either), first half and second:
+//   * now −1.28 and −1.06 pips a trade; Stoch (with the stop) −2.44 and
+//     −1.61; free −1.98 (−9.11 to +5.15) and +3.72 (+0.07 to +7.38); free
+//     120 −0.40 (−7.67 to +6.86) and +5.55 (+2.07 to +9.04).
+//   * the call: free not clearly better (worse than now on the first half);
+//     free 120 clearly better (over now on both halves; the second half's
+//     difference +6.63, low end +3.08 by week, +3.33 by four weeks).
+//   * beyond the coin's, free 120 less now came out −2.66 (−11.31 to +5.98)
+//     and +3.46 (−1.30 to +8.23): every close either way gained +3.54 and
+//     +3.17 by it too (its buys +3.99 and +7.77, its sells +3.09 and −1.44).
+//   * no stop: the worst trade −1,025.8 pips (free) and −1,121.9 (free 120),
+//     both buys in the first half; the worst 5% from −155 and −146 there;
+//     the most a trade went against it 1,723 and 1,766 pips; 64 to 70% of
+//     the trades went past the email's stop on the way.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
