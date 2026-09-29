@@ -66,3 +66,43 @@ const pineSmoothed = (xs: ReadonlyArray<number | null>, n: number, alpha: number
   }
   return out;
 };
+
+// #158: Zone Shift's own two (src/lib/zoneShift.ts, #124), moved here
+// unchanged so BLSH (_shared/blsh.ts) computes as the chart always has.
+
+// Pine's ta.sma: the mean of the last n values, nothing until there are n
+// (or while any of them is nothing)
+export const sma = (xs: ReadonlyArray<number | null>, n: number): Series => {
+  const out: Series = new Array(xs.length).fill(null);
+  for (let i = n - 1; i < xs.length; i++) {
+    let s = 0;
+    let ok = true;
+    for (let k = 0; k < n; k++) {
+      const v = xs[i - k];
+      if (v === null) {
+        ok = false;
+        break;
+      }
+      s += v;
+    }
+    if (ok) out[i] = s / n;
+  }
+  return out;
+};
+
+// Pine's ta.ema: the simple average of the first n values, then
+// alpha = 2 / (n + 1) of each new one
+export const ema = (xs: ReadonlyArray<number>, n: number): Series => {
+  const out: Series = new Array(xs.length).fill(null);
+  if (xs.length < n) return out;
+  const alpha = 2 / (n + 1);
+  let prev = 0;
+  for (let k = 0; k < n; k++) prev += xs[k];
+  prev /= n;
+  out[n - 1] = prev;
+  for (let i = n; i < xs.length; i++) {
+    prev = alpha * xs[i] + (1 - alpha) * prev;
+    out[i] = prev;
+  }
+  return out;
+};

@@ -44,25 +44,10 @@ export const ZS_DEFAULTS = {
 type Bar = { open: number; high: number; low: number; close: number };
 type Series = Array<number | null>;
 
-// Pine's ta.sma: the mean of the last n values, nothing until there are n
-// (or while any of them is nothing)
-export const sma = (xs: ReadonlyArray<number | null>, n: number): Series => {
-  const out: Series = new Array(xs.length).fill(null);
-  for (let i = n - 1; i < xs.length; i++) {
-    let s = 0;
-    let ok = true;
-    for (let k = 0; k < n; k++) {
-      const v = xs[i - k];
-      if (v === null) {
-        ok = false;
-        break;
-      }
-      s += v;
-    }
-    if (ok) out[i] = s / n;
-  }
-  return out;
-};
+// #158: Pine's ta.sma and ta.ema (over a series without gaps) moved to
+// supabase/functions/_shared/pine.ts unchanged, shared with BLSH there
+import { ema, sma } from "../../supabase/functions/_shared/pine";
+export { ema, sma };
 
 // Pine's ta.wma: weights n (the newest) down to 1
 export const wma = (xs: ReadonlyArray<number | null>, n: number): Series => {
@@ -80,23 +65,6 @@ export const wma = (xs: ReadonlyArray<number | null>, n: number): Series => {
       s += v * (n - k);
     }
     if (ok) out[i] = s / norm;
-  }
-  return out;
-};
-
-// Pine's ta.ema: the simple average of the first n values, then
-// alpha = 2 / (n + 1) of each new one
-export const ema = (xs: ReadonlyArray<number>, n: number): Series => {
-  const out: Series = new Array(xs.length).fill(null);
-  if (xs.length < n) return out;
-  const alpha = 2 / (n + 1);
-  let prev = 0;
-  for (let k = 0; k < n; k++) prev += xs[k];
-  prev /= n;
-  out[n - 1] = prev;
-  for (let i = n; i < xs.length; i++) {
-    prev = alpha * xs[i] + (1 - alpha) * prev;
-    out[i] = prev;
   }
   return out;
 };
