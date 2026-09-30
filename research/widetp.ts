@@ -147,10 +147,11 @@
 //   * path: the call on 0 of the 50, the Bonferroni road on 0. Each
 //     candidate's low end over 0 on 0 to 3 of its 100 halves, z's sd 0.96 to
 //     1.11 by week and 1.00 to 1.18 by four weeks, the means -0.23 to -0.06
-//     by week (-0.26 to -0.07 by four weeks): no candidate left out. The coin: TP1 first 84.9% for T5 (29.8 / 35.0 =
-//     85.1%), 74.4 (74.5), 66.2 (66.2), 59.6 (59.6), 49.7 (49.7); A0.5 72.8
-//     (72.9), A1 57.6 (57.6). "less now" +0.025 (T10) to +0.166 (T90 L120),
-//     within ±0.3 and wider higher, as expected. The picks spread over all
+//     by week (-0.26 to -0.07 by four weeks): no candidate left out. The
+//     coin: TP1 first 84.9% for T5 (29.8 / 35.0 = 85.1%), 74.4 (74.5), 66.2
+//     (66.2), 59.6 (59.6), 49.7 (49.7); A0.5 72.8 (72.9), A1 57.6 (57.6).
+//     "less now" +0.025 (T10) to +0.166 (T90 L120), within ±0.3 and wider
+//     higher, as expected. The picks spread over all
 //     ten (T10 10 times, T90 8, ... T20 and A1 twice).
 //   * wicks: the call on 0 of 10; every wider target less than now (-0.07 to
 //     -0.42 pips a trade), as the walk is built.
