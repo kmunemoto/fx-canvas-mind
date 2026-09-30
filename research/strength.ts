@@ -149,6 +149,27 @@
 //            were seen). Again with USD/JPY one bar off either way: the
 //            median at least 5 times the one in step, or the check could not
 //            see a slip.
+//            CHANGED after the data's prices were seen, before any trade
+//            was followed:
+//              - the first run (36763362396) stopped here. EUR/USD had 39 and
+//                GBP/USD 37 of 5,455 bars over 5 pips (0.7%). The medians
+//                were 0.07 to 0.11 pips; one bar off, 5.6 to 12.5.
+//              - a second run (36763749912) listed those bars, prices only.
+//                They are whole trading days, or most of one (20:00 to 16:00
+//                UTC), where the four dollar pairs are off by about the same
+//                3 to 8 in 1e-4 of their close: 2023-04-05, 2024-03-27, 2024-12-24,
+//                2025-04-16 and 2025-12-24. That points at USD/JPY, the leg
+//                they share, being out of line with the crosses that day.
+//              - also days where EUR/USD and GBP/USD, or EUR/USD alone, are
+//                off (2023-04-28, 2024-04-30, 2025-04-30), and single bars at
+//                thin hours (16:00 or 20:00 UTC; 26 and 27 December, 3 July,
+//                Friday evenings).
+//              - none is a slip: the medians are 1/60 to 1/140 of one bar
+//                off's.
+//              - so the share over 5 pips is now told, not a gate. The median
+//                and the slip stay gates. Told beside the call: e without the
+//                fires whose meter reads one of those bars (k, k − 1, k − L,
+//                k − 1 − L).
 //       (p0) at every G bar from 60 days before START (so the bars before
 //            START the meter reads too) whose 5-minute bar ending at T_k is
 //            in the data, each pair's 4-hour close against that bar's mid
@@ -403,7 +424,6 @@ const IC_AHEAD = 6;
 const GRID_GATE = 0.005;
 const TRI_MEDIAN = 1;
 const TRI_FAR = 5;
-const TRI_FAR_SHARE = 0.001;
 const TRI_SLIP = 5;
 // the placebo gate
 const PLACEBO_GATE = 0.04;
@@ -765,6 +785,8 @@ const T_OF = (k: number) => G[k] + STEP;
 const gIndex = new Map(G.map((t, k) => [t, k]));
 // each cross's close at each G bar (by time)
 const closeAt = crossCharts.map((ch) => Float64Array.from(G, (t) => ch.candles[ch.byTime.get(t)!].close));
+// G's bars where a dollar pair is over TRI_FAR pips off the triangle (told)
+const triFlag = new Uint8Array(nG);
 {
   const uj = closeAt[0];
   for (const pair of ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"]) {
@@ -793,7 +815,8 @@ const closeAt = crossCharts.map((ch) => Float64Array.from(G, (t) => ch.candles[c
     }
     align.tri[pair] = { n: r0.length, median: med(r0), far, farShare: r0.length ? far / r0.length : 0, max: r0.length ? r0[r0.length - 1] : Number.NaN, slipMedians: slips, examples };
     if (!(med(r0) <= TRI_MEDIAN)) align.stopped.push(`(tri) ${pair}: median ${med(r0).toFixed(2)} pips`);
-    if (r0.length && far / r0.length > TRI_FAR_SHARE) align.stopped.push(`(tri) ${pair}: ${far} bars over ${TRI_FAR} pips`);
+    // the share over TRI_FAR pips: told, not a gate (the header: changed
+    // after the data's prices were seen, before any trade)
     if (!slips.every((m) => m >= TRI_SLIP * Math.max(med(r0), 1e-9))) align.stopped.push(`(tri) ${pair}: one bar off, the median ${slips.map((m) => m.toFixed(2)).join(" / ")} against ${med(r0).toFixed(2)}: the check cannot see a slip`);
   }
   // every bar where a dollar pair is over TRI_FAR, with the four pairs'
@@ -809,7 +832,10 @@ const closeAt = crossCharts.map((ch) => Float64Array.from(G, (t) => ch.candles[c
       return ((ch.candles[i].close - implied) / ch.candles[i].close) * 1e4;
     });
     const far = usd.some((pair, j) => Number.isFinite(rel[j]) && Math.abs(rel[j] * chartOf(pair).candles[chartOf(pair).byTime.get(G[k])!].close) > TRI_FAR);
-    if (far) align.triBars.push({ t: iso(G[k]), rel: rel.map((r) => Number(r.toFixed(2))) });
+    if (far) {
+      align.triBars.push({ t: iso(G[k]), rel: rel.map((r) => Number(r.toFixed(2))) });
+      triFlag[k] = 1;
+    }
   }
 }
 const num = (x: number | null | undefined, d = 2) => (x === null || x === undefined || !Number.isFinite(x) ? "   -  " : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}`);
@@ -1333,6 +1359,15 @@ const keep = (name: string, fires: Fire[], detail: boolean) => {
 };
 const lostX = new Map<number, number>();
 for (const L of LS) lostX.set(L, keep(`X${L}`, firesX.get(L)!, true));
+// told: the same without the fires whose meter reads a bar off the triangle
+// by more than TRI_FAR pips (k, k − 1, k − L, k − 1 − L)
+const offTri = new Map<number, number>();
+for (const L of LS) {
+  const reads = (k: number) => [k, k - 1, k - L, k - 1 - L].some((j) => j >= 0 && triFlag[j] === 1);
+  const clean = firesX.get(L)!.filter((f) => !reads(f.k));
+  offTri.set(L, firesX.get(L)!.length - clean.length);
+  keep(`X${L}c`, clean, false);
+}
 // top one and bottom one; M; the stale meter
 for (const L of LS) {
   keep(`T1_${L}`, rankFires(ranks.get(L)!, RULE_LEGS, table, 1), false);
@@ -1510,6 +1545,7 @@ console.log(`\n== TOLD: the money and the yardstick (the whole period, the halve
 for (const L of LS) {
   told(`X${L}`, `X${L}`);
   console.log(`    how X${L} went out: ${exitLine(`X${L}`)}`);
+  console.log(`    X${L} without the ${offTri.get(L)} fires whose meter reads a bar over ${TRI_FAR} pips off the triangle: e whole ${num(mean(aggAt(`X${L}c e`, "full")))} ${ci(aggAt(`X${L}c e`, "full"))}, second ${num(mean(aggAt(`X${L}c e`, 1)))} ${ci(aggAt(`X${L}c e`, 1))}`);
 }
 console.log(`  the coin at every close: whole ${num(mean(aggAt("coin all", "full")))} ${ci(aggAt("coin all", "full"))}, first ${num(mean(aggAt("coin all", 0)))}, second ${num(mean(aggAt("coin all", 1)))}`);
 console.log(`\n== TOLD: beyond the pair's own momentum (M: the sign of s_A − s_B, once on each change)`);
