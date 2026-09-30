@@ -17,6 +17,9 @@ on:
       urls:
         description: "Space-separated public URLs to read"
         default: ""
+      flags:
+        description: "Extra curl options (e.g. -4 -L, or -D - -o /dev/null for the headers alone)"
+        default: ""
 
 permissions:
   contents: read
@@ -29,6 +32,7 @@ jobs:
       - name: Read each URL
         env:
           URLS: ${{ inputs.urls || '' }}
+          FLAGS: ${{ inputs.flags || '' }}
         run: |
           set -u
           # #127 (gold): does GMO's FX feed carry gold, does Twelve Data list
@@ -40,6 +44,9 @@ jobs:
           https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"
           for u in ${URLS:-$DEFAULT}; do
             echo "=== ${u}"
-            curl -sS --max-time 20 -A "Mozilla/5.0" -w "\n--- http %{http_code}, %{size_download} bytes\n" "$u" | head -c 3000
+            # #167: with any extra options, and where the answer came from
+            # (the address, the connection and TLS times, a redirect's target)
+            # shellcheck disable=SC2086
+            curl -sS --max-time 20 -A "Mozilla/5.0" ${FLAGS} -w "\n--- http %{http_code}, %{size_download} bytes, ip %{remote_ip}, connect %{time_connect}s, tls %{time_appconnect}s, redirect %{redirect_url}\n" "$u" | head -c 3000
             echo
           done

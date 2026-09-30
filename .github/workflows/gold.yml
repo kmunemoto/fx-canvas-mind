@@ -1,0 +1,76 @@
+# #167: gold's (XAU/USD's) history from Dukascopy's public feed, bid and ask
+# (research/dukascopy.py), for measuring the emails' levels on gold.
+#
+# Runs on GitHub's runners because they can reach the feed and the
+# development container cannot. Read-only: it fetches public prices, keeps
+# them in the Actions cache (a file kept is not fetched again) and prints a
+# report to the job log. It writes nothing to the repository and holds no
+# secret.
+name: Research gold
+on:
+  # a push here fetches what is not kept yet (the defaults below)
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/dukascopy.py
+      - .github/workflows/gold.yml
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First UTC day of minute candles"
+        default: "2023-12-15"
+      end:
+        description: "Last UTC day of minute candles (empty: yesterday)"
+        default: ""
+      hours_from:
+        description: "First month of hourly candles, YYYY-MM (empty: none)"
+        default: "2021-01"
+      workers:
+        description: "Files fetched at once"
+        default: "4"
+      budget:
+        description: "Minutes to spend fetching"
+        default: "320"
+permissions:
+  contents: read
+
+jobs:
+  gold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache/dukascopy
+          key: dukascopy-xau-none
+          restore-keys: dukascopy-xau-
+      - name: Fetch gold's candles
+        env:
+          START: ${{ inputs.start || '2023-12-15' }}
+          END: ${{ inputs.end || '' }}
+          HOURS_FROM: ${{ github.event_name == 'push' && '2021-01' || inputs.hours_from || '' }}
+          WORKERS: ${{ inputs.workers || '4' }}
+          BUDGET: ${{ inputs.budget || '320' }}
+        run: |
+          set -eu
+          end="${END:-$(date -u -d yesterday +%F)}"
+          hours=()
+          if [ -n "$HOURS_FROM" ]; then hours=(--hours-from "$HOURS_FROM"); fi
+          python3 research/dukascopy.py --start "$START" --end "$end" "${hours[@]}" --workers "$WORKERS" --budget-minutes "$BUDGET"
+      # kept even when a step fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache/dukascopy
+          key: dukascopy-xau-${{ github.run_id }}
+      - name: Check what was read
+        if: always()
+        run: python3 research/dukascopy.py --report
+      # the mid at hour marks, to find where the app's Twelve Data bars start
+      # and end (around each day's end from 2024-04-09, every hour from
+      # 2026-05-18: the periods those bars reach)
+      - name: Print the mid at hour marks
+        if: always()
+        run: python3 research/dukascopy.py --closes 2024-04-09 2026-05-18
