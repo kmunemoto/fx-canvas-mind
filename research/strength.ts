@@ -945,8 +945,9 @@ for (let p = 0; p < PAIRS.length; p++) {
         f++;
       }
       if (f >= fine.n && fine.t[fine.n - 1] + FINE < end) return null;
-      if (f === f0) return null;
       if (j === i + LIMIT) {
+        // no 5-minute bar in the whole 30 (as research/prewarn.ts follow)
+        if (f === f0) return null;
         const closePx = c[f - 1];
         const own = buy ? qs[j].bid.close : qs[j].ask.close;
         // (d) the time-out's close against the 4-hour bar's own

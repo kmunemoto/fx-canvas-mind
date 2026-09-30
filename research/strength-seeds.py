@@ -19,9 +19,9 @@ CURRENCIES = ["JPY", "USD", "EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]
 SPREAD_PIPS = {"USD/JPY": 0.2, "EUR/JPY": 0.4, "GBP/JPY": 0.9, "AUD/JPY": 0.6, "NZD/JPY": 1.2, "CAD/JPY": 1.5, "CHF/JPY": 1.8, "EUR/USD": 0.3, "GBP/USD": 1.0, "AUD/USD": 0.5, "NZD/USD": 1.3}
 
 
-def load(folder, pattern):
+def load(folder, pattern, deep=False):
     out = []
-    for p in sorted(glob.glob(os.path.join(folder, pattern))):
+    for p in sorted(glob.glob(os.path.join(folder, "**", pattern) if deep else os.path.join(folder, pattern), recursive=deep)):
         with open(p) as f:
             out.append(json.load(f))
     return out
@@ -57,7 +57,8 @@ def larger_se(a):
 
 
 if len(sys.argv) > 2 and sys.argv[1] == "--delta":
-    runs = load(sys.argv[2], "strength-rank*-7.json")
+    # each δ's run in a folder of its own (the file names do not carry δ)
+    runs = load(sys.argv[2], "strength-rank*-7.json", deep=True)
     if not runs:
         sys.exit("no rank runs on seed 7")
     print("seed 7, the planted candidate's second-half e against 5 standard errors (the larger of by week and by four weeks):")
