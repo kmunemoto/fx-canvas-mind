@@ -120,7 +120,8 @@ export const indicatorSignals = (
     return age >= 0 && age <= freshMs ? open : null;
   };
   const out: IndicatorSignal[] = [];
-  // #166: a currency pair's stop 30 pips, gold's the video's $10
+  // #166: a currency pair's stop 30 pips; #168: gold's targets $30, $60 and
+  // $90 (its stop the video's $10)
   const levels = ultraParamsFor(isGold(pair));
   const qt = qTrend(bars, QT_DEFAULTS, bars.length - 1);
   const atr = pineAtr(bars, QT_DEFAULTS.atrPeriod);
@@ -309,7 +310,8 @@ export const keepableKlines = (body: unknown): boolean =>
 // followed on 5-minute bid/ask. `win`: the share of those settled that
 // reached TP1 before the stop, %; `pips`: a trade's mean when all of it is
 // closed at TP1 or the stop (or after five days, where neither was
-// reached). Gold and the pairs read from Twelve Data were not measured.
+// reached). Gold: GOLD_MEASURED below; the pairs read from Twelve Data were
+// not measured.
 // #166: measured again at the currency pairs' stop of 30 pips (tf-winrate
 // with SL=30, GitHub Actions run 36587276263, docs §8.78); #157's were at 10.
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
@@ -328,26 +330,57 @@ export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: num
     "1day": { win: 77.0, pips: -8.1 },
   },
 };
+// #168: gold's, at its levels since (TP1 $30, the stop $10): research/gold.ts
+// on Dukascopy's gold, bid and ask, cut into bars as the app holds Twelve
+// Data's (docs §8.79, §8.80; the "Study gold" run 36678229867), 2024-01-01
+// to 2026-09-28, each signal the sweep would mail entered at its bar's close
+// on the side it fills on and followed on 5-minute bid/ask, as the pairs'
+// above. `usd`: dollars a trade.
+export const GOLD_MEASURED: Record<IndicatorRule, Record<string, { win: number; usd: number }>> = {
+  qtrend: {
+    "5min": { win: 25.5, usd: -0.09 },
+    "15min": { win: 25.6, usd: -0.01 },
+    "1h": { win: 25.6, usd: -0.03 },
+    "4h": { win: 27.2, usd: 0.59 },
+    "1day": { win: 26.5, usd: 0.21 },
+  },
+  ultra: {
+    "5min": { win: 22.8, usd: -1.14 },
+    "15min": { win: 21.4, usd: -1.68 },
+    "1h": { win: 23.9, usd: -0.74 },
+    "4h": { win: 20.8, usd: -1.97 },
+    "1day": { win: 15.4, usd: -4.45 },
+  },
+};
 
 // the sentence saying so, on this email's timeframe. The share of TP1
 // before the stop that breaks even, spread aside: the stop over the stop and
-// TP1 (30 pips against 5: 86%). Gold's levels (the video's $10 stop) were not
-// measured, and the currency pairs' figures are at another stop.
+// TP1 (30 pips against 5: 86%; gold's $10 against $30: 25%).
 export const breakEvenPct = (gold: boolean): number => {
   const o = ultraParamsFor(gold);
   return Math.round((100 * o.sl) / (o.sl + o.tp1));
 };
+// #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
+const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  const g = GOLD_MEASURED[s.rule][s.interval];
+  const even = breakEvenPct(true);
+  if (lang === "en") {
+    if (!g) return "This timeframe has not been measured.";
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, Dukascopy's gold prices cut into bars as Twelve Data's, spread paid), these levels reached TP1 before the stop ${g.win.toFixed(1)}% of the time (breaking even needs more than ${even}%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${g.usd < 0 ? "lost" : "made"} about $${Math.abs(g.usd).toFixed(2)} a trade on average.`;
+  }
+  if (!g) return "この時間足は測っていません。";
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${g.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(g.usd).toFixed(2)}ドルの${g.usd < 0 ? "負け" : "勝ち"}でした。`;
+};
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
   const even = breakEvenPct(false);
   if (lang === "en") {
-    if (isGold(s.pair)) return "Gold has not been measured at these levels.";
     if (!m) return "This timeframe has not been measured.";
     return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
       (unmeasured ? ` ${s.pair} itself was not measured; these are GMO's FX pairs' figures.` : "");
   }
-  if (isGold(s.pair)) return "金はこの目安では測っていません。";
   if (!m) return "この時間足は測っていません。";
   return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
     (unmeasured ? `${s.pair} そのものは測っていません（GMO の FX の値です）。` : "");
@@ -404,12 +437,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)} (${cross})`,
       ].join("\n"),
       [
-        gold ? "ULTRA's levels (the video's settings):" : "ULTRA's levels (the video's targets; the stop 30 pips):",
+        gold ? "ULTRA's levels (the video's stop; the targets $30, $60 and $90):" : "ULTRA's levels (the video's targets; the stop 30 pips):",
         `  Entry ≈ ${px(s.close)}`,
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
         ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
       ].join("\n"),
-      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? "" : " On currency pairs this app sets the stop at 30 pips, chosen on its own measurements."} ${measuredLine(s, "en")}`,
+      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? " On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them." : " On currency pairs this app sets the stop at 30 pips, chosen on its own measurements."} ${measuredLine(s, "en")}`,
       ...footer,
     ]);
   }
@@ -447,12 +480,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で、ULTRA の${sideU}のサインが出ました。`,
     [`判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`, `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)}（${cross}）`].join("\n"),
     [
-      gold ? "ULTRA の目安（動画の設定）:" : "ULTRA の目安（利確は動画の設定、損切りは30pips）:",
+      gold ? "ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:" : "ULTRA の目安（利確は動画の設定、損切りは30pips）:",
       `  エントリー ≈ ${px(s.close)}`,
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
       ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
     ].join("\n"),
-    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "" : "FX では、このアプリで測った結果から損切りを30pipsにしています。"}${measuredLine(s, "ja")}`,
+    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。" : "FX では、このアプリで測った結果から損切りを30pipsにしています。"}${measuredLine(s, "ja")}`,
     ...footer,
   ]);
 };
