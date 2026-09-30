@@ -1,0 +1,57 @@
+# #171: how soon after a bar closes GMO's public klines hold it, as it
+# finally stands (research/gmo-lag.py says how it is measured). Before the
+# email sweep reads a chart the moment its bar closes rather than minutes
+# later. The development container cannot reach GMO; GitHub's runners can.
+#
+# Read-only: GMO's public klines, no key and no secret; nothing is written
+# to the repository or anywhere else.
+name: Measure GMO's bar lag
+
+on:
+  # a push of the script or of this file watches the next close (the script's
+  # default), so a change is tried at once
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/gmo-lag.yml
+      - research/gmo-lag.py
+  workflow_dispatch:
+    inputs:
+      close:
+        description: "The close to watch, UTC (e.g. 2026-09-30T12:00:00Z); empty: the next 4-hour or hourly close within 15 minutes, else the next 5-minute one"
+        default: ""
+      symbols:
+        description: "GMO symbols, space-separated"
+        default: "USD_JPY"
+      intervals:
+        description: "Of 1min 5min 15min 1hour 4hour, space-separated"
+        default: "1min 5min 1hour 4hour"
+      before:
+        description: "Seconds before the close to start"
+        default: "10"
+      after:
+        description: "Seconds after the close to stop"
+        default: "60"
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the summary on made-up answers
+        run: python3 research/gmo-lag.py --selftest
+      - name: Watch one close
+        env:
+          CLOSE: ${{ inputs.close || '' }}
+          SYMBOLS: ${{ inputs.symbols || 'USD_JPY' }}
+          INTERVALS: ${{ inputs.intervals || '1min 5min 1hour 4hour' }}
+          BEFORE: ${{ inputs.before || '10' }}
+          AFTER: ${{ inputs.after || '60' }}
+        run: |
+          date -u +"runner clock %Y-%m-%dT%H:%M:%S.%NZ"
+          python3 -u research/gmo-lag.py
