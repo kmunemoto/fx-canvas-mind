@@ -36,8 +36,9 @@
 //     fixed as "none expected"; the program's first try on a walk, before
 //     the data, gave 35 of 4,299 closes at L 6 and 23 at L 30: a cross whose
 //     rounded close is back where it was L bars before ties with the yen).
-//     No volatility scaling, no smoothing, nothing fitted on the sample. The dollar pairs are not in it (USD would count twice): they
-//     are traded, and checked against it (tri).
+//     No volatility scaling, no smoothing, nothing fitted on the sample.
+//     The dollar pairs are not in it (USD would count twice): they are
+//     traded, and checked against it (tri).
 //   * what it can add: s_A − s_B is A/B's own L-bar log return (exactly on
 //     the yen crosses; on the dollar pairs up to the triangle's residual).
 //     "A stronger than B" is the pair's own momentum; the meter adds only
@@ -148,25 +149,40 @@
 //            were seen). Again with USD/JPY one bar off either way: the
 //            median at least 5 times the one in step, or the check could not
 //            see a slip.
-//       (p0) at every G bar, each pair's 4-hour close against the mid close,
-//            rounded, of its 5-minute bar ending at T_k.
+//       (p0) at every G bar from 60 days before START (so the bars before
+//            START the meter reads too) whose 5-minute bar ending at T_k is
+//            in the data, each pair's 4-hour close against that bar's mid
+//            close, rounded. (First fixed "at every G bar"; the program read
+//            the 5-minute bars from 5 days before START only, which a review
+//            before the data found.)
 //       (id) Σ s = 0, and s_c − s_JPY = the log of c/JPY's close over its
 //            close L bars before, within 1e-12, at every G bar, L 6 and 30.
 //       (la) at every signal and every 13th G bar, a second, plain working
 //            from each cross's candles cut at T_k (only those closed by
 //            then) and its own grid from them: the eight s's (within 1e-12),
-//            the ranks (by counting), each pair's states at k and k − 1 and
-//            whether it signals. A planted look-ahead (LOOKAHEAD=1: the meter
-//            reading the close after) must fail it on a walk at 99% of the
-//            bars compared or more (#171-5's first look-ahead check could not
-//            fail: §8.84).
+//            the ranks (by counting), each pair's states at k and k − 1,
+//            whether a fire may be taken there (worked again from T_k), and
+//            which way it signals, against the way the program fired, both
+//            ways round (a fire where the state is 0 counts: the first
+//            working compared only where the plain state was not 0, which a
+//            review before the data found). A planted look-ahead
+//            (LOOKAHEAD=1: the meter reading the close after) must fail it
+//            on a walk at 99% of the bars compared or more (#171-5's first
+//            look-ahead check could not fail: §8.84).
 //       (c) each meter trade followed again, against the coin's at the same
 //           pair, close and side; (a2) its stop and targets against
-//           ultraLevels(side, close, unit, ULTRA_PAIRS); (m) following
-//           starts at the first 5-minute bar opening at or after T_k; (d)
-//           the time-outs' closes against the 4-hour bar's own.
+//           ultraLevels(side, close, unit, ULTRA_PAIRS); (m) a trade
+//           entered at the close its caller has from elsewhere (T_k from G;
+//           an email's, its quote's own), followed from the first 5-minute
+//           bar opening at or after it; (d) the time-outs' closes against
+//           the 4-hour bar's own.
 //       (pk) the pick again from the meter and the coin cut at SPLIT: the
-//            same pick and t.
+//            crosses' candles closed by then (their own grid and meter), the
+//            coin followed on the 4-hour and 5-minute bars closed by then;
+//            every first-half trade the pick may take the same trade there,
+//            and none it may not; the same pick and t. (The first working
+//            sliced the same meter and copied the coin, so it could not see
+//            a trade reading past SPLIT: found by a review before the data.)
 //       (a) the emails' signals against indicatorSignals, on every 13th bar
 //           and every bar with a signal; (g) no GMO read failed; (h) §8.83's
 //           T20 again (A+B, either, the trades with 120 bars in the data,
@@ -308,6 +324,8 @@ const STEP = LIVE_STEP_MS[TF];
 const READ_AFTER = [0, 4, 6];
 const mailed = (closeMs: number): boolean => READ_AFTER.some((m) => !isPossiblyClosed(closeMs + m * MINUTE));
 const CHECK_EVERY = 13;
+// the 5-minute bars from this many days before START (p0)
+const P0_DAYS = 60;
 
 // the email's exit (#166, #173)
 if (ULTRA_PAIRS.sl !== 30 || ULTRA_PAIRS.tp1 !== 20) throw new Error("ULTRA_PAIRS is not TP1 20, stop 30: the email's exit has moved");
@@ -847,9 +865,18 @@ const plainState = (r: number[], a: number, b: number) => (r[a] <= TOP && r[b] >
           const mine = rankState(rk, k, RULE_LEGS[p][0], RULE_LEGS[p][1], TOP);
           const minePrev = rankState(rk, k - 1, RULE_LEGS[p][0], RULE_LEGS[p][1], TOP);
           if (mine !== now || minePrev !== prev) bad.push(`${PAIRS[p]} states ${minePrev}→${mine} / ${prev}→${now}`);
-          const fires = now !== 0 && now !== prev && okAt(p, k);
-          const fired = firesAt.get(L)!.has(`${p}:${k}:${now}`);
-          if (fires !== fired) bad.push(`${PAIRS[p]} signals ${fired} / ${fires}`);
+          // whether a fire may be taken, worked again here: the close in the
+          // period, mailed, and the pair's own bar at the plain grid's last
+          const T = pl.t + STEP;
+          const own = charts[p].times;
+          const at = lowerBound(own, pl.t);
+          const mayFire = T >= START_MS && T <= NOW && mailed(T) && at < own.length && own[at] === pl.t;
+          // the side the plain working signals, against the side the program
+          // fired (either way: a fire where the state is 0 counts too)
+          const plainSide = now !== 0 && now !== prev && mayFire ? now : 0;
+          const fs = firesAt.get(L)!;
+          const progSide = fs.has(`${p}:${k}:1`) ? 1 : fs.has(`${p}:${k}:-1`) ? -1 : 0;
+          if (plainSide !== progSide) bad.push(`${PAIRS[p]} signals ${progSide} / ${plainSide}`);
         }
       }
       tally(checks.lookahead, bad.length === 0, () => `L${L} ${iso(G[k])}: ${bad.slice(0, 3).join("; ")}`);
@@ -895,6 +922,28 @@ interface Cover {
 }
 const coverage: Cover[] = [];
 
+// (pk)'s own data, cut at SPLIT: the crosses' candles closed by then, their
+// own grid and meter, and a coin followed on the bars closed by then only
+// (filled in the pair loop): a first-half trade that reads past SPLIT is
+// then missing from it
+const cutCross = crossCharts.map((ch) => {
+  const m = lowerBound(ch.times, SPLIT_MS - STEP + 1);
+  return { times: ch.times.subarray(0, m), close: new Map(Array.from(ch.times.subarray(0, m), (t, i) => [t, ch.candles[i].close])) };
+});
+const Gc = gridOf(cutCross.map((c) => c.times));
+const vCut: Values = [new Float64Array(Gc.length), ...cutCross.map((c) => Float64Array.from(Gc, (t) => Math.log(c.close.get(t)!)))];
+const tCut: Table = newTable(Gc.length, PAIRS.length);
+for (let k = 0; k < Gc.length; k++) {
+  const T = Gc[k] + STEP;
+  tCut.week[k] = weekOf(T);
+  tCut.half[k] = T < START_MS || T > NOW ? -1 : T < SPLIT_MS ? 0 : 1;
+  for (let p = 0; p < PAIRS.length; p++) {
+    const own = charts[p].times;
+    const at = lowerBound(own, Gc[k]);
+    if (tCut.half[k] >= 0 && mailed(T) && at < own.length && own[at] === Gc[k] && own[at] + STEP <= SPLIT_MS) tCut.ok[p * Gc.length + k] = 1;
+  }
+}
+
 for (let p = 0; p < PAIRS.length; p++) {
   const pair = PAIRS[p];
   const ch = charts[p];
@@ -903,7 +952,9 @@ for (let p = 0; p < PAIRS.length; p++) {
   let fine: Fine;
   if (walkFines) fine = walkFines.get(pair)!;
   else {
-    const got = await loadGmo(pair, "5min", START_MS - 5 * DAY);
+    // from 60 days before START, so (p0) also sees the bars before START the
+    // meter reads (L 30, and the stale meter's 120 bars before)
+    const got = await loadGmo(pair, "5min", START_MS - P0_DAYS * DAY);
     failedReads += got.failed;
     fine = toFine(got.quotes);
   }
@@ -912,9 +963,11 @@ for (let p = 0; p < PAIRS.length; p++) {
   // a trade at bar i's close (a buy at the ask, a sell at the bid), TP1 and
   // the stop from the mid close, followed on the 5-minute bid/ask until the
   // close of bar i + LIMIT (as research/widetp.ts tradeAt); null when its 30
-  // bars are not all in the data
-  const follow = (i: number, side: Side): Trade | null => {
-    if (i + LIMIT >= n) return null;
+  // bars are not all in the data. `nb` and `fn`: the 4-hour and 5-minute
+  // bars it may read (all, or those closed by SPLIT for (pk)); `closeMs`:
+  // the close as the caller has it from elsewhere (G, or the quote), (m)
+  const followOn = (nb: number, fn: number, main: boolean) => (i: number, side: Side, closeMs: number): Trade | null => {
+    if (i + LIMIT >= nb) return null;
     const T = times[i] + STEP;
     const buy = side === "BUY";
     const dir = buy ? 1 : -1;
@@ -928,13 +981,15 @@ for (let p = 0; p < PAIRS.length; p++) {
     const l = buy ? fine.bl : fine.al;
     const c = buy ? fine.bc : fine.ac;
     let f = lowerBound(fine.t, T);
-    if (f >= fine.n) return null;
+    if (f >= fn) return null;
     const f0 = f;
-    // (m) following starts at the first 5-minute bar opening at or after T
-    tally(checks.follow, fine.t[f0] >= T && (f0 === 0 || fine.t[f0 - 1] < T), () => `${pair} ${iso(T)} follows from ${iso(fine.t[f0])}`);
+    // (m) the trade is entered at the close the caller has (T_k from G, or
+    // the quote's own), and followed from the first 5-minute bar opening at
+    // or after it
+    if (main) tally(checks.follow, T === closeMs && fine.t[f0] >= closeMs && (f0 === 0 || fine.t[f0 - 1] < closeMs), () => `${pair} ${iso(closeMs)}: entered at ${iso(T)}, follows from ${iso(fine.t[f0])}`);
     for (let j = i + 1; j <= i + LIMIT; j++) {
       const end = times[j] + STEP;
-      while (f < fine.n && fine.t[f] < end) {
+      while (f < fn && fine.t[f] < end) {
         if (buy ? o[f] <= sl : o[f] >= sl) return { pips: pipsOf(o[f]), exit: 2 };
         if (buy ? o[f] >= tp : o[f] <= tp) return { pips: pipsOf(o[f]), exit: 1 };
         const hitSl = buy ? l[f] <= sl : h[f] >= sl;
@@ -944,19 +999,24 @@ for (let p = 0; p < PAIRS.length; p++) {
         if (hitTp) return { pips: pipsOf(tp), exit: 1 };
         f++;
       }
-      if (f >= fine.n && fine.t[fine.n - 1] + FINE < end) return null;
+      if (f >= fn && fine.t[fn - 1] + FINE < end) return null;
       if (j === i + LIMIT) {
         // no 5-minute bar in the whole 30 (as research/prewarn.ts follow)
         if (f === f0) return null;
         const closePx = c[f - 1];
         const own = buy ? qs[j].bid.close : qs[j].ask.close;
         // (d) the time-out's close against the 4-hour bar's own
-        tally(checks.closes, Math.abs(closePx - own) <= unit / 1000, () => `${pair} ${iso(times[j])} ${side} ${closePx}/${own}`);
+        if (main) tally(checks.closes, Math.abs(closePx - own) <= unit / 1000, () => `${pair} ${iso(times[j])} ${side} ${closePx}/${own}`);
         return { pips: pipsOf(closePx), exit: 4 };
       }
     }
     return null;
   };
+  const follow = followOn(n, fine.n, true);
+  // what a follow has with the data cut at SPLIT (the 4-hour bars closed by
+  // then, the 5-minute bars ended by then), for (pk)
+  const followCut = followOn(lowerBound(times, SPLIT_MS - STEP + 1), lowerBound(fine.t, SPLIT_MS - FINE + 1), false);
+  const quoteClose = (i: number) => barOpenMs(qs[i].datetime) + STEP;
 
   // the coin at every G bar a fire may be taken at
   let inG = 0;
@@ -968,7 +1028,7 @@ for (let p = 0; p < PAIRS.length; p++) {
     inG++;
     const T = T_OF(k);
     // (p0) the 5-minute bar ending at the close: its mid close, rounded
-    if (T >= START_MS && T <= NOW) {
+    if (T <= NOW) {
       const fz = lowerBound(fine.t, T - FINE);
       if (fz < fine.n && fine.t[fz] === T - FINE) {
         const mid = roundTo((fine.bc[fz] + fine.ac[fz]) / 2, dec);
@@ -977,8 +1037,8 @@ for (let p = 0; p < PAIRS.length; p++) {
     }
     if (!okAt(p, k)) continue;
     nOk++;
-    const b = follow(i, "BUY");
-    const s = follow(i, "SELL");
+    const b = follow(i, "BUY", T);
+    const s = follow(i, "SELL", T);
     if (!b || !s) continue;
     nCoin++;
     const at = p * nG + k;
@@ -988,6 +1048,26 @@ for (let p = 0; p < PAIRS.length; p++) {
     exitS[at] = s.exit;
     if (table.half[k] === 0 && times[i + LIMIT] + STEP <= SPLIT_MS) table.pickable[at] = 1;
   }
+  // (pk): the coin again on the bars closed by SPLIT; a trade there is one
+  // the pick may take, and it must be the same trade
+  for (let k = 0; k < Gc.length; k++) {
+    const atCut = p * Gc.length + k;
+    if (!tCut.ok[atCut]) continue;
+    const i = ch.byTime.get(Gc[k])!;
+    const T = Gc[k] + STEP;
+    const b = followCut(i, "BUY", T);
+    const s = followCut(i, "SELL", T);
+    const kk = gIndex.get(Gc[k]);
+    const at = kk === undefined ? -1 : p * nG + kk;
+    const inCut = b !== null && s !== null && tCut.half[k] === 0;
+    if (inCut) {
+      tCut.buy[atCut] = b.pips;
+      tCut.sell[atCut] = s.pips;
+      tCut.pickable[atCut] = 1;
+    }
+    const same = at >= 0 && (table.pickable[at] === 1) === inCut && (!inCut || (table.buy[at] === b.pips && table.sell[at] === s.pips));
+    tally(checks.pick, same, () => `${pair} ${iso(Gc[k])}: pickable ${at >= 0 ? table.pickable[at] : "-"}, on the bars cut at SPLIT ${inCut ? `${b!.pips}/${s!.pips}` : "none"}`);
+  }
 
   // (c) and (a2): the meter's trades followed again, and their levels
   // against the email's own
@@ -996,7 +1076,7 @@ for (let p = 0; p < PAIRS.length; p++) {
       if (f.p !== p) continue;
       const i = ownBar(p, f.k)!;
       const side = sideOf(f.side);
-      const again = follow(i, side);
+      const again = follow(i, side, T_OF(f.k));
       const at = p * nG + f.k;
       const want = f.side === 1 ? table.buy[at] : table.sell[at];
       tally(checks.again, again === null ? Number.isNaN(want) : again.pips === want && again.exit === (f.side === 1 ? exitB[at] : exitS[at]), () => `${pair} ${iso(times[i])} ${side} ${again?.pips} / ${want}`);
@@ -1075,7 +1155,7 @@ for (let p = 0; p < PAIRS.length; p++) {
       const key = `${s.i}:${s.side}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const t = follow(s.i, s.side);
+      const t = follow(s.i, s.side, quoteClose(s.i));
       if (t) addTo(reproAgg[T < SPLIT_MS ? 0 : 1], weekOf(T), t.pips);
     }
   }
@@ -1092,8 +1172,8 @@ for (let p = 0; p < PAIRS.length; p++) {
         const key = `${s.i}:${s.side}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const t = follow(s.i, s.side);
-        const o = follow(s.i, s.side === "BUY" ? "SELL" : "BUY");
+        const t = follow(s.i, s.side, quoteClose(s.i));
+        const o = follow(s.i, s.side === "BUY" ? "SELL" : "BUY", quoteClose(s.i));
         if (!t || !o) continue;
         const half: 0 | 1 = T < SPLIT_MS ? 0 : 1;
         const w = weekOf(T);
@@ -1217,24 +1297,9 @@ const verdict: Verdict = verdictOf(
   edges.map((x) => x.first),
   edges.map((x) => x.second),
 );
-// (pk) the pick again from the meter and the coin cut at SPLIT
+// (pk) the pick again from the meter and the coin cut at SPLIT (built above
+// from the candles closed by then, and the coin followed on them)
 {
-  const nCut = G.findIndex((_t, k) => T_OF(k) >= SPLIT_MS);
-  const cut = nCut < 0 ? nG : nCut;
-  const vCut = v.map((a) => a.slice(0, cut));
-  const tCut = newTable(cut, PAIRS.length);
-  tCut.half.set(table.half.subarray(0, cut));
-  tCut.week.set(table.week.subarray(0, cut));
-  for (let p = 0; p < PAIRS.length; p++) {
-    tCut.ok.set(table.ok.subarray(p * nG, p * nG + cut), p * cut);
-    tCut.pickable.set(table.pickable.subarray(p * nG, p * nG + cut), p * cut);
-    // only the trades that end before SPLIT: the others would read past it
-    for (let k = 0; k < cut; k++) {
-      if (!table.pickable[p * nG + k]) continue;
-      tCut.buy[p * cut + k] = table.buy[p * nG + k];
-      tCut.sell[p * cut + k] = table.sell[p * nG + k];
-    }
-  }
   const again = LS.map((L) => edgesOf(rankFires(ranksFor(vCut, L), RULE_LEGS, tCut, TOP), tCut).first);
   const tAgain = again.map((a) => tOf(a));
   const pickAgain = verdictOf(again, again.map(() => newAgg())).pick;
@@ -1312,7 +1377,7 @@ LS.forEach((L, c) => {
   const x = edges[c];
   const st1 = statOf(x.first, "weeks");
   const st2 = statOf(x.second, "weeks");
-  console.log(`  X${L}: first half (pickable) e ${num(st1?.m)} of ${x.first.n}, t ${num(verdict.t[c])}; second half e ${num(st2?.m)} ${ci(x.second)} of ${x.second.n} in ${x.second.weeks.size} weeks, Bonferroni low end ${num(verdict.bonfLow[c])}${verdict.bonf[c] ? " (above 0 after the correction)" : ""}; fires without their 30 bars ${lostX.get(L)}`);
+  console.log(`  X${L}: first half (pickable) e ${num(st1?.m)} of ${x.first.n}, t ${num(verdict.t[c])}; second half e ${num(st2?.m)} ${ci(x.second)} of ${x.second.n} in ${x.second.weeks.size} weeks, Bonferroni low end ${num(verdict.bonfLow[c])}${verdict.bonf[c] ? (placeboPassed && allDiffer === 0 ? " (above 0 after the correction)" : " (above 0, not called: the placebo gate or the checks)") : ""}; fires without their 30 bars ${lostX.get(L)}`);
 });
 console.log(`  the pick: ${verdict.pick === null ? "none" : cand(verdict.pick)}; its low end ${num(verdict.low)} in ${verdict.weeks} weeks: ${verdict.called ? "CALLED" : "not called"}`);
 console.log(`  the placebo gate: ${placeboCalled} of ${PLACEBOS} made-up meters called (${pctOf(placeboRate)}), the Bonferroni road ${placeboBonf} (${pctOf(placeboBonfRate)}): ${placeboPassed ? "passed" : "NOT PASSED: nothing is called"}`);

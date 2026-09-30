@@ -58,9 +58,13 @@ def larger_se(a):
 
 if len(sys.argv) > 2 and sys.argv[1] == "--delta":
     # each δ's run in a folder of its own (the file names do not carry δ)
-    runs = load(sys.argv[2], "strength-rank*-7.json", deep=True)
+    runs = [r for r in load(sys.argv[2], "strength-rank*-7.json", deep=True) if r.get("verdict") and not r["fault"] and r["allDiffer"] == 0 and r["seed"] == 7]
     if not runs:
-        sys.exit("no rank runs on seed 7")
+        sys.exit("no clean rank runs on seed 7")
+    for L in sorted({r["lstar"] for r in runs}):
+        have = sorted(r["delta"] for r in runs if r["lstar"] == L)
+        if have != [0.5, 1, 1.5, 2]:
+            sys.exit(f"L* {L}: the δ runs are {have}, not 0.5, 1, 1.5 and 2 each once (clean, seed 7)")
     print("seed 7, the planted candidate's second-half e against 5 standard errors (the larger of by week and by four weeks):")
     chosen = {}
     for r in sorted(runs, key=lambda r: (r["lstar"], r["delta"])):
@@ -80,6 +84,13 @@ folder = sys.argv[1] if len(sys.argv) > 1 else "research/out"
 ok_all = True
 
 
+def settled(runs, what):
+    # the header's period and 1,000 placebos on every run gated
+    bad = [r["seed"] for r in runs if (r["start"], r["split"], r["now"]) != ("2024-01-01", "2025-05-19", "2026-09-29 14:16:25") or r["placebo"]["n"] != 1000]
+    if bad:
+        sys.exit(f"{what}: seeds {bad} not run with the header's period and 1,000 placebos")
+
+
 def gate(ok, what):
     global ok_all
     if not ok:
@@ -93,6 +104,7 @@ seeds = sorted(r["seed"] for r in null)
 print(f"null: {len(null)} runs, seeds {seeds[0] if seeds else '-'} .. {seeds[-1] if seeds else '-'}")
 if seeds != list(range(7, 57)) or any(r["synth"] != "null" or r["fault"] for r in null):
     sys.exit(f"not the fifty null runs the gates are fixed on (seeds 7 .. 56, no fault): {seeds}")
+settled(null, "null")
 Ls = null[0]["Ls"]
 names = sorted(null[0]["checks"])
 print("  checks, the runs together: " + ", ".join(f"{k} {sum(r['checks'][k]['mismatched'] for r in null)} of {sum(r['checks'][k]['compared'] for r in null)}" for k in names))
@@ -106,21 +118,30 @@ for c, L in enumerate(Ls):
     pooled, n = merged(null, f"X{L} e")
     se = se_of_means(means)
     gate(pooled is not None and se is not None and abs(pooled) <= 0.3 and abs(pooled) <= 3 * se, f"X{L}: e, the seeds together, {fmt(pooled)} of {n} (se {fmt(se)}): within ±0.3 and 3 se")
+    # widetp's rule (research/widetp-seeds.py): z by week and z by four
+    # weeks, each sd at most 1.25; the low end (the lower of the two) over 0
+    # on fewer than 7 of the 100
     zs = []
+    z4s = []
     lows = 0
     for r in null:
         for part in ("first", "second"):
             a = r["candidates"][c][part]
-            se1 = larger_se(a) if a else None
-            if not a or not se1:
+            if not a or not a["se"] or not a["se4"]:
                 continue
-            zs.append(a["m"] / se1)
+            zs.append(a["m"] / a["se"])
+            z4s.append(a["m"] / a["se4"])
             if a["low"] is not None and a["low"] > 0:
                 lows += 1
-    mz = sum(zs) / len(zs)
-    sdz = math.sqrt(sum((z - mz) ** 2 for z in zs) / (len(zs) - 1))
-    keep = lows < 7 and sdz <= 1.25
-    print(f"  X{L}: z on the halves ({len(zs)}): mean {fmt(mz)}, sd {sdz:.2f}; the low end over 0 on {lows}: {'kept' if keep else 'LEFT OUT before the data'}")
+
+    def mean_sd(xs):
+        m = sum(xs) / len(xs)
+        return m, math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+    mz, sdz = mean_sd(zs)
+    mz4, sdz4 = mean_sd(z4s)
+    keep = lows < 7 and sdz <= 1.25 and sdz4 <= 1.25
+    print(f"  X{L}: z on the halves ({len(zs)}): by week mean {fmt(mz)} sd {sdz:.2f}, by four weeks mean {fmt(mz4)} sd {sdz4:.2f}; the low end over 0 on {lows}: {'kept' if keep else 'LEFT OUT before the data'}")
     if not keep:
         ok_all = False
 passed = sum(1 for r in null if r["placebo"]["passed"])
@@ -176,6 +197,7 @@ for L, lo, hi in ((6, 8, 17), (30, 18, 27)):
     print(f"\nrank, L* {L}: {len(runs)} runs, seeds {seeds}; δ {sorted({r['delta'] for r in runs})}")
     if seeds != list(range(lo, hi + 1)) or len({r["delta"] for r in runs}) != 1:
         sys.exit(f"not the ten rank runs the gate is fixed on (L* {L}, seeds {lo} .. {hi}, one δ)")
+    settled(runs, f"rank L* {L}")
     gate(all(r["allDiffer"] == 0 for r in runs), "every check 0 differ on every run")
     called = sum(1 for r in runs if r["verdict"]["called"])
     gate(called >= 9, f"the call on {called} of 10 (at least 9)")
@@ -196,8 +218,12 @@ for L, lo, hi in ((6, 8, 17), (30, 18, 27)):
 
 # ---- trend (told) ----------------------------------------------------------------------------
 trend = [r for r in load(folder, "strength-trend-[0-9]*.json") if not r["fault"]]
+if sorted(r["seed"] for r in trend) != list(range(7, 17)):
+    sys.exit(f"not the ten trend runs (seeds 7 .. 16): {sorted(r['seed'] for r in trend)}")
+settled(trend, "trend")
 if trend:
-    print(f"\ntrend (told): {len(trend)} runs, seeds {sorted(r['seed'] for r in trend)}; every check 0 differ on {sum(1 for r in trend if r['allDiffer'] == 0)}")
+    print(f"\ntrend (told, but its checks gated): {len(trend)} runs, seeds {sorted(r['seed'] for r in trend)}")
+    gate(all(r["allDiffer"] == 0 for r in trend), "every check 0 differ on every run")
     print(f"  the call on {sum(1 for r in trend if r['verdict']['called'])}, the Bonferroni road on {sum(1 for r in trend if any(r['verdict']['bonf']))}; the placebo gate passed on {sum(1 for r in trend if r['placebo']['passed'])}")
     for L in Ls:
         x = merged(trend, f"X{L} e", (1,))
@@ -206,24 +232,23 @@ if trend:
         print(f"  X{L}, the second half: e {fmt(x[0])} of {x[1]}; without the yen {fmt(j[0])} of {j[1]}; the stale meter {fmt(s[0])} of {s[1]}")
 
 # ---- the faults (told; each must show) -------------------------------------------------------
-print("\nthe planted faults:")
+print("\nthe planted faults (once each on seed 7):")
 for fault, pattern in (("LOOKAHEAD", "strength-null-LOOKAHEAD-*.json"), ("MISALIGN", "strength-null-MISALIGN-*.json"), ("ORIENT", "strength-rank*-ORIENT-*.json")):
     runs = load(folder, pattern)
-    if not runs:
-        print(f"  {fault}: not run")
-        ok_all = False
+    if len(runs) != 1 or runs[0]["seed"] != 7:
+        gate(False, f"{fault}: {len(runs)} runs ({', '.join(str(r['seed']) for r in runs)}), not one on seed 7")
         continue
     r = runs[0]
     la = r["checks"]["lookahead"] if "checks" in r else None
     if fault == "LOOKAHEAD":
         share = la["mismatched"] / la["compared"] if la and la["compared"] else 0
-        gate(share >= 0.99, f"LOOKAHEAD (seed {r['seed']}): (la) {la['mismatched']} of {la['compared']} differ ({100 * share:.1f}%, at least 99%); the call {'made' if r['verdict']['called'] else 'not made'}, X6 e {fmt(r['candidates'][0]['all']['m'])}, X30 {fmt(r['candidates'][1]['all']['m'])}")
+        gate(share >= 0.99, f"LOOKAHEAD: (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ ({100 * share:.1f}%, at least 99%); the call {'made' if r.get('verdict', {}).get('called') else 'not made'}, X6 e {fmt(r['candidates'][0]['all']['m'])}, X30 {fmt(r['candidates'][1]['all']['m'])}")
     elif fault == "MISALIGN":
-        tri_bad = bool(r.get("stopped")) or (r.get("align") and r["align"].get("stopped"))
-        gate(bool(tri_bad) or (la is not None and la["mismatched"] > 0), f"MISALIGN (seed {r['seed']}): (tri) {'stopped' if tri_bad else 'passed'}, (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ")
+        stopped = r.get("stopped") or (r.get("align") or {}).get("stopped")
+        gate(bool(stopped) or (la is not None and la["mismatched"] > 0), f"MISALIGN: (tri) {'stopped the run' if stopped else 'passed'}, (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ")
     else:
         L = r["lstar"]
         m, n = merged([r], f"X{L} e @EUR/USD")
-        gate(m is not None and m < 0, f"ORIENT (L* {L}, seed {r['seed']}): EUR/USD's e {fmt(m)} of {n}, below 0")
+        gate(m is not None and m < 0, f"ORIENT (L* {L}): EUR/USD's e {fmt(m)} of {n}, below 0")
 
 print(f"\ngates: {'all passed' if ok_all else 'NOT PASSED: look into the program before the data'}")
