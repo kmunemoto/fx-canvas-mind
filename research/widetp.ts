@@ -24,7 +24,11 @@
 //     anchoredStart: a number the email could compute), and the stop 30 pips
 //     from it; out at whichever a 5-minute bar reaches first (both in one
 //     bar: the stop; a bar opening past one: at that open), or at the close
-//     of the L-th 4-hour bar. now: T5 S30 L30, the email's.
+//     of the L-th 4-hour bar. now: T5 S30 L30, the email's when this was
+//     fixed. #173 (the same day, before this was run on the data): the owner
+//     set the email's targets to 20, 40 and 60 pips (the stop 30) without
+//     waiting for these numbers — the email's exit is now the candidate T20
+//     S30 L30. now here stays T5, the email's before #173, as fixed.
 //       - the candidates (PICKS, ten, L30): T 10, 15, 20, 30, 45, 60, 90;
 //         k 0.5, 1, 2.
 //       - told only: T 5 to 90 at L120 (four weeks). The email says five days.
@@ -74,8 +78,9 @@
 //     result is read:
 //       (a) the signals against indicatorSignals, on every 13th bar and on
 //           every bar with a signal;
-//       (a2) the email's close, stop and three targets against now's:
-//            close ∓ 30 pips, close ± 5, 10, 15;
+//       (a2) the email's close, stop and three targets against the ones
+//            here: close ∓ 30 pips, and close ± ULTRA_PAIRS' targets (5, 10
+//            and 15 when fixed; 20, 40 and 60 since #173: T20's levels);
 //       (a3) Q-Trend's ε in the email against ATR(14) of the bar before from
 //            the same start: the ATR series here is the email's;
 //       (a4) on the same bars, the bar's own ATR(14) (the ATR rules' unit)
@@ -190,8 +195,8 @@ const AB = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "NZD/JPY", "CAD/JPY", "C
 const C_PAIRS = ["TRY/JPY", "ZAR/JPY", "MXN/JPY", "HUF/JPY", "SEK/JPY"];
 for (const p of [...AB, ...C_PAIRS]) if (!GMO_SYMBOLS[p] || !ALL_PAIRS.includes(p)) throw new Error(`${p} is not one of GMO's pairs here`);
 const groupOf = (pair: string) => (AB.includes(pair) ? "AB" : C_PAIRS.includes(pair) ? "C" : "D");
-// now is the email's: ULTRA_PAIRS (#166)
-if (ULTRA_PAIRS.sl !== 30 || ULTRA_PAIRS.tp1 !== 5 || ULTRA_PAIRS.tp2 !== 10 || ULTRA_PAIRS.tp3 !== 15) throw new Error("ULTRA_PAIRS is not TP 5/10/15, stop 30: now has moved");
+// the stop is the email's (ULTRA_PAIRS, #166); its targets, since #173, T20's
+if (ULTRA_PAIRS.sl !== 30) throw new Error("ULTRA_PAIRS' stop is not 30: every rule here has moved");
 
 // ---- Student's t, for the intervals ---------------------------------------------------
 
@@ -850,7 +855,7 @@ for (const pair of PAIRS) {
     const c = candles[i].close;
     for (const x of xs) {
       const dir = x.side === "BUY" ? 1 : -1;
-      const ok = x.close === c && x.sl === c - dir * 30 * unit && x.tps !== null && x.tps[0] === c + dir * 5 * unit && x.tps[1] === c + dir * 10 * unit && x.tps[2] === c + dir * 15 * unit;
+      const ok = x.close === c && x.sl === c - dir * 30 * unit && x.tps !== null && x.tps[0] === c + dir * ULTRA_PAIRS.tp1 * unit && x.tps[1] === c + dir * ULTRA_PAIRS.tp2 * unit && x.tps[2] === c + dir * ULTRA_PAIRS.tp3 * unit;
       tally(checks.levels, ok, () => `${pair} ${iso(times[i])} ${x.rule} ${x.side} close ${x.close}/${c} sl ${x.sl} tps ${x.tps?.join("/")}`);
       if (x.rule === "qtrend") {
         const e = epsAt[i];
@@ -1142,7 +1147,7 @@ const ruleLine = (key: string, period: 0 | 1 | 2 | "full", rule: string) => {
 console.log(`\n#172 the email's TP1 wider on ${TF}, ${START} .. ${iso(NOW)} (first half before ${SPLIT})${SYNTHETIC ? ` — SYNTHETIC (${SYNTH}${DRIFTING ? `, ${DRIFT} pip a 5-minute bar` : ""}), seed ${SEED}` : ""}; the stop ${STOP}; TP1 ${T_GRID.join(", ")} pips and ${K_GRID.join(", ")} × ATR(14); limits 30 and 120 bars; every rule on the trades with ${NEED} bars in the data; the pick and the call on A+B (${AB.length} pairs)`);
 console.log(`candidates: ${PICKS.join(", ")}${EXCLUDED.length ? `; left out after the walks: ${EXCLUDED.join(", ")}` : ""}`);
 console.log(checkLine("(a) signals against indicatorSignals", checks.signals));
-console.log(checkLine("(a2) the email's close, stop and targets against now's", checks.levels));
+console.log(checkLine(`(a2) the email's close, stop and targets against the stop 30 and TP ${ULTRA_PAIRS.tp1}/${ULTRA_PAIRS.tp2}/${ULTRA_PAIRS.tp3} (ULTRA_PAIRS)`, checks.levels));
 console.log(checkLine("(a3) Q-Trend's ε against ATR(14) of the bar before", checks.eps));
 console.log(checkLine("(a4) the bar's ATR(14) against it computed again from the email's start", checks.atrSeries));
 console.log(checkLine(`(b) T5 S10 against #164's now, T5 none against #164's hold${DRIFTING ? " (the coin only: the signals' prices moved)" : ""}`, checks.ref));
