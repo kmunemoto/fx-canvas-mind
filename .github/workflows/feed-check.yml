@@ -20,6 +20,12 @@ on:
       flags:
         description: "Extra curl options (e.g. -4 -L, or -D - -o /dev/null for the headers alone)"
         default: ""
+      filter:
+        description: "A jq program each JSON answer is cut down with first (empty: printed as it came)"
+        default: ""
+      max_bytes:
+        description: "How much of each answer to print"
+        default: "3000"
 
 permissions:
   contents: read
@@ -33,6 +39,8 @@ jobs:
         env:
           URLS: ${{ inputs.urls || '' }}
           FLAGS: ${{ inputs.flags || '' }}
+          FILTER: ${{ inputs.filter || '' }}
+          MAX_BYTES: ${{ inputs.max_bytes || '3000' }}
         run: |
           set -u
           # #127 (gold): does GMO's FX feed carry gold, does Twelve Data list
@@ -42,11 +50,24 @@ jobs:
           https://api.twelvedata.com/forex_pairs?symbol=XAU/USD \
           https://api.twelvedata.com/symbol_search?symbol=XAU/USD \
           https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"
+          # #169: how much of each answer is printed (3000 bytes unless asked)
+          case "${MAX_BYTES}" in ''|*[!0-9]*) MAX_BYTES=3000 ;; esac
           for u in ${URLS:-$DEFAULT}; do
             echo "=== ${u}"
-            # #167: with any extra options, and where the answer came from
-            # (the address, the connection and TLS times, a redirect's target)
-            # shellcheck disable=SC2086
-            curl -sS --max-time 20 -A "Mozilla/5.0" ${FLAGS} -w "\n--- http %{http_code}, %{size_download} bytes, ip %{remote_ip}, connect %{time_connect}s, tls %{time_appconnect}s, redirect %{redirect_url}\n" "$u" | head -c 3000
+            if [ -z "${FILTER}" ]; then
+              # #167: with any extra options, and where the answer came from
+              # (the address, the connection and TLS times, a redirect's target)
+              # shellcheck disable=SC2086
+              curl -sS --max-time 20 -A "Mozilla/5.0" ${FLAGS} -w "\n--- http %{http_code}, %{size_download} bytes, ip %{remote_ip}, connect %{time_connect}s, tls %{time_appconnect}s, redirect %{redirect_url}\n" "$u" | head -c "${MAX_BYTES}"
+            else
+              # #169: a long JSON answer (a day of GMO's 5-minute bars) cut
+              # down with jq to the part asked for, then where it came from
+              rm -f "${RUNNER_TEMP}/answer"
+              # shellcheck disable=SC2086
+              status=$(curl -sS --max-time 20 -A "Mozilla/5.0" ${FLAGS} -o "${RUNNER_TEMP}/answer" -w "--- http %{http_code}, %{size_download} bytes, ip %{remote_ip}" "$u") || true
+              jq -c "${FILTER}" "${RUNNER_TEMP}/answer" | head -c "${MAX_BYTES}"
+              echo
+              echo "${status}"
+            fi
             echo
           done

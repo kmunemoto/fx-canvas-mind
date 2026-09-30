@@ -177,22 +177,98 @@ export const indicatorSignals = (
 
 // ---- when each chart is read ---------------------------------------------------------
 //
-// The sweep runs every minute. GMO's charts are read a minute after their
-// bar closes and again two minutes later (the first may find the bar not
-// there yet, or fail); a chart whose newest bar was already judged is not
-// read again. The hourly and slower ones a few minutes into the hour, apart
-// from the 5- and 15-minute ones, so a run does not ask GMO for everything
-// at once. 4-hour and daily bars: GMO's trading day rolls at 06:00 or 07:00
-// JST (quotes.ts jstDayKey), so where they close is not asserted: they are
-// looked at every hour, and read only when a newer bar has closed.
+// The sweep runs every minute. #171: a GMO chart is read in the minute its
+// bar closes, as soon as GMO has the bar — the owner, on an email that came
+// four minutes after its 4-hour close (TP1 was reached in those minutes):
+// 「4分後じゃ遅いじゃないですか？一瞬で届く様にはならない？」. Measured
+// (research/gmo-lag.py, docs §8.81): GMO's answers pass a CDN and can be a
+// few seconds old, but an answer GMO made after the close held the closed
+// bar as it finally stood. So an answer made before the close that holds
+// the bar is read again, not judged on (staleForClose).
+//
+// The later reads stay, for a run that failed or did not get a fresh answer
+// in time: the 5- and 15-minute charts a minute and three minutes after
+// their close, the hourly three and five, the 4-hour and daily four and six,
+// apart from each other so a run does not ask GMO for everything at once. A
+// chart whose newest bar was already judged is not read again. 4-hour and
+// daily bars: GMO's trading day rolls at 06:00 or 07:00 JST (quotes.ts
+// jstDayKey), so where they close is not asserted: they are looked at every
+// hour, the first chart read telling whether a bar closed this hour
+// (hourCloseOf); when none did, the others are not read.
 export const gmoIntervalsDue = (nowMs: number): string[] => {
   const m = new Date(nowMs).getUTCMinutes();
   const out: string[] = [];
-  if (m % 5 === 1 || m % 5 === 3) out.push("5min");
-  if (m % 15 === 1 || m % 15 === 3) out.push("15min");
-  if (m === 3 || m === 5) out.push("1h");
-  if (m === 4 || m === 6) out.push("4h", "1day");
+  if (m % 5 === 0 || m % 5 === 1 || m % 5 === 3) out.push("5min");
+  if (m % 15 === 0 || m % 15 === 1 || m % 15 === 3) out.push("15min");
+  if (m === 0 || m === 3 || m === 5) out.push("1h");
+  if (m === 0 || m === 4 || m === 6) out.push("4h", "1day");
   return out;
+};
+
+const MIN_MS = 60_000;
+const HOUR_MS = 60 * MIN_MS;
+
+// #171: the newest time a bar of this chart can have closed at — the close a
+// read now is for: the grid of its length on the day-keyed charts (5 minutes
+// to an hour, on the UTC grid), some hour on the 4-hour and daily ones
+export const latestCloseMs = (interval: string, nowMs: number): number => {
+  const step = LIVE_STEP_MS[interval] ?? MIN_MS;
+  const grid = Math.min(step, HOUR_MS);
+  return Math.floor(nowMs / grid) * grid;
+};
+
+// When GMO made an answer (its `responsetime`), ms; null when it does not say
+export const gmoMadeAt = (body: unknown): number | null => {
+  const rt = typeof body === "object" && body !== null ? (body as { responsetime?: unknown }).responsetime : undefined;
+  const t = typeof rt === "string" ? Date.parse(rt) : Number.NaN;
+  return Number.isFinite(t) ? t : null;
+};
+
+// #171: whether an answer cannot be judged on for the close at `closeMs`:
+// GMO made it before the close (the CDN keeps answers a few seconds) and it
+// holds the bar that closed then or a later one, which it may hold short of
+// its last prices. An answer holding older bars only (a trading day's file
+// that ended earlier, served from the CDN for hours) is as good as ever; one
+// that does not say when it was made is taken as it is, as before #171.
+export const staleForClose = (body: unknown, closeMs: number, stepMs: number): boolean => {
+  const made = gmoMadeAt(body);
+  if (made === null || made >= closeMs) return false;
+  const data = typeof body === "object" && body !== null ? (body as { data?: unknown }).data : undefined;
+  if (!Array.isArray(data)) return false;
+  return data.some((b) => {
+    const t = typeof b === "object" && b !== null ? Number((b as { openTime?: unknown }).openTime) : Number.NaN;
+    return Number.isFinite(t) && t >= closeMs - stepMs;
+  });
+};
+// Read again this long after a stale answer, this many times at most
+export const STALE_RETRY_MS = 1_000;
+export const STALE_TRIES = 8;
+
+// #171: what a 4-hour or daily chart's newest closed bar (its open) says of
+// the hour now, so its other pairs are read only when a bar closed in it:
+// "closed" (it closed at this hour), "none" (it closed within the bar's
+// length before this hour, so none closed now) or "unknown" (older still: a
+// read cut short, or the market's weekend — the next pair is asked)
+export type HourClose = "closed" | "none" | "unknown";
+export const hourCloseOf = (newestOpenMs: number, interval: string, nowMs: number): HourClose => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !Number.isFinite(newestOpenMs)) return "unknown";
+  const hour = Math.floor(nowMs / HOUR_MS) * HOUR_MS;
+  const close = newestOpenMs + step;
+  if (close === hour) return "closed";
+  return close < hour && close > hour - step ? "none" : "unknown";
+};
+
+// #171: how long a run waits before reading, from where in the minute it
+// starts: the cron starts it at the minute, and a bar that closed then is
+// taken as closed from a second after it (a clock a little behind would
+// otherwise not count it as closed yet); a run that starts in the last two
+// seconds of a minute waits for the next one's
+export const FAST_START_MS = 1_000;
+export const startWaitMs = (nowMs: number): number => {
+  const into = ((nowMs % MIN_MS) + MIN_MS) % MIN_MS;
+  if (into >= MIN_MS - 2_000) return MIN_MS - into + FAST_START_MS;
+  return into < FAST_START_MS ? FAST_START_MS - into : 0;
 };
 
 // Twelve Data's bars close on the grid of their length, shifted by where

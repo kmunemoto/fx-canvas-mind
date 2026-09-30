@@ -13,12 +13,17 @@ import { HISTORY_BARS, READ_BARS, historyRead, liveRead } from "../../supabase/f
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 import {
   ALERT_TWELVE_CAP,
+  FAST_START_MS,
   INDICATOR_INTERVALS,
   QTREND_RULE_ID,
+  STALE_RETRY_MS,
+  STALE_TRIES,
   ULTRA_RULE_ID,
   breakEvenPct,
   freshFor,
   gmoIntervalsDue,
+  gmoMadeAt,
+  hourCloseOf,
   indicatorIntervalsFor,
   indicatorSignals,
   isGmoChartPair,
@@ -26,7 +31,10 @@ import {
   keepableKlines,
   klineFileEnded,
   klineFileOf,
+  latestCloseMs,
   renderIndicatorMail,
+  staleForClose,
+  startWaitMs,
   TWELVE_RETRY_MS,
   twelveCloseDue,
   twelvePhase,
@@ -261,22 +269,96 @@ describe("#155 what the sweep reads, and when", () => {
     for (const p of SERVER_PAIRS) expect(ultraUnit(p), p).toBe(p === "XAU/USD" ? 1 : pipSize(p));
   });
 
-  it("GMO's charts a minute after their bars close and two minutes later; the hourly and slower a few minutes into the hour", () => {
+  it("#171: GMO's charts in the minute their bars close, and again later (a minute and three after; the hourly and slower a few minutes into the hour)", () => {
     const at = (m: number) => gmoIntervalsDue(Date.UTC(2026, 8, 29, 10, m, 0));
-    expect(at(0)).toEqual([]);
+    expect(at(0)).toEqual(["5min", "15min", "1h", "4h", "1day"]);
     expect(at(1)).toEqual(["5min", "15min"]);
     expect(at(2)).toEqual([]);
     expect(at(3)).toEqual(["5min", "15min", "1h"]);
     expect(at(4)).toEqual(["4h", "1day"]);
-    expect(at(5)).toEqual(["1h"]);
+    expect(at(5)).toEqual(["5min", "1h"]);
     expect(at(6)).toEqual(["5min", "4h", "1day"]);
     expect(at(8)).toEqual(["5min"]);
+    expect(at(15)).toEqual(["5min", "15min"]);
     expect(at(16)).toEqual(["5min", "15min"]);
     expect(at(18)).toEqual(["5min", "15min"]);
     expect(at(31)).toEqual(["5min", "15min"]);
-    // every 5-minute close is looked at twice
-    const fives = Array.from({ length: 60 }, (_, m) => m).filter((m) => at(m).includes("5min"));
-    expect(fives).toHaveLength(24);
+    // every close is read in its own minute: each 5-minute close three times
+    const minutes = Array.from({ length: 60 }, (_, m) => m);
+    for (const m of minutes.filter((x) => x % 5 === 0)) expect(at(m), `${m}`).toContain("5min");
+    for (const m of minutes.filter((x) => x % 15 === 0)) expect(at(m), `${m}`).toContain("15min");
+    expect(minutes.filter((m) => at(m).includes("5min"))).toHaveLength(36);
+    expect(minutes.filter((m) => at(m).includes("4h"))).toEqual([0, 4, 6]);
+  });
+
+  it("#171: the close a read is for — the grid of the chart's length, some hour on the 4-hour and daily charts", () => {
+    const t = Date.UTC(2026, 8, 30, 13, 7, 30);
+    expect(new Date(latestCloseMs("5min", t)).toISOString()).toBe("2026-09-30T13:05:00.000Z");
+    expect(new Date(latestCloseMs("15min", t)).toISOString()).toBe("2026-09-30T13:00:00.000Z");
+    expect(new Date(latestCloseMs("1h", t)).toISOString()).toBe("2026-09-30T13:00:00.000Z");
+    expect(new Date(latestCloseMs("4h", t)).toISOString()).toBe("2026-09-30T13:00:00.000Z");
+    expect(new Date(latestCloseMs("1day", t)).toISOString()).toBe("2026-09-30T13:00:00.000Z");
+  });
+
+  it("#171: GMO's answer made before the close, holding the closed bar, is not judged on; one made after it, or holding older bars only, is", () => {
+    // USD/JPY's 1-minute answers around 08:30:00 UTC, 2026-09-30 (research/gmo-lag.py, run 36689582649):
+    // asked 1.46s after the close, the CDN gave one made 0.24s before it — the 08:29 bar still forming
+    const close = Date.UTC(2026, 8, 30, 8, 30, 0);
+    const bar = (t: string, c: string) => ({ openTime: String(Date.parse(t)), open: "156.959", high: "156.968", low: "156.94", close: c });
+    const before = { status: 0, data: [bar("2026-09-30T08:28:00Z", "156.959"), bar("2026-09-30T08:29:00Z", "156.944")], responsetime: "2026-09-30T08:29:59.760Z" };
+    const after = { ...before, data: [...before.data, bar("2026-09-30T08:30:00Z", "156.93")], responsetime: "2026-09-30T08:30:03.660Z" };
+    expect(gmoMadeAt(before)).toBe(close - 240);
+    expect(staleForClose(before, close, 60_000)).toBe(true);
+    expect(staleForClose(after, close, 60_000)).toBe(false);
+    // made exactly at the close: fresh
+    expect(staleForClose({ ...before, responsetime: "2026-09-30T08:30:00.000Z" }, close, 60_000)).toBe(false);
+    // an earlier trading day's file, served from the CDN long after it ended: nothing of this close in it
+    const ended = { status: 0, data: [bar("2026-09-29T20:00:00Z", "0.69833")], responsetime: "2026-09-29T21:00:01.739Z" };
+    expect(staleForClose(ended, Date.UTC(2026, 8, 30, 12, 0, 0), 3_600_000)).toBe(false);
+    // the 4-hour year file made before 12:00 holds the 08:00 bar that closes then
+    const year = { status: 0, data: [bar("2026-09-30T04:00:00Z", "156.889"), bar("2026-09-30T08:00:00Z", "156.943")], responsetime: "2026-09-30T11:59:57.000Z" };
+    expect(staleForClose(year, Date.UTC(2026, 8, 30, 12, 0, 0), 4 * 3_600_000)).toBe(true);
+    // an answer that does not say when it was made is taken as before
+    expect(gmoMadeAt({ status: 0, data: before.data })).toBeNull();
+    expect(staleForClose({ status: 0, data: before.data }, close, 60_000)).toBe(false);
+    expect(gmoMadeAt({ responsetime: "not a time" })).toBeNull();
+    expect(gmoMadeAt(null)).toBeNull();
+    expect(staleForClose(null, close, 60_000)).toBe(false);
+    expect(STALE_RETRY_MS * STALE_TRIES).toBeLessThanOrEqual(10_000);
+  });
+
+  it("#171: whether a 4-hour or daily bar closed this hour, from the first pair read", () => {
+    const H = 3_600_000;
+    const at = (iso: string) => Date.parse(iso);
+    // the 08:00 4-hour bar closes at 12:00
+    expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T12:00:01Z"))).toBe("closed");
+    expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T12:06:00Z"))).toBe("closed");
+    // at 13:00 the newest closed at 12:00: none closed this hour
+    expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T13:00:01Z"))).toBe("none");
+    expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T15:59:59Z"))).toBe("none");
+    // a read that stopped at last year's file, or a Monday after the weekend: not told
+    expect(hourCloseOf(at("2025-12-31T20:00:00Z"), "4h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
+    expect(hourCloseOf(at("2026-09-25T16:00:00Z"), "4h", at("2026-09-28T00:00:01Z"))).toBe("unknown");
+    // a bar that has not closed by the hour (a clock behind): not told either
+    expect(hourCloseOf(at("2026-09-30T12:00:00Z"), "4h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
+    // the daily bar that closes at GMO's roll
+    expect(hourCloseOf(at("2026-09-28T21:00:00Z"), "1day", at("2026-09-29T21:00:02Z"))).toBe("closed");
+    expect(hourCloseOf(at("2026-09-28T21:00:00Z"), "1day", at("2026-09-30T08:00:00Z"))).toBe("none");
+    expect(hourCloseOf(Number.NaN, "4h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
+    expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "2h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
+    expect(4 * H).toBe(14_400_000);
+  });
+
+  it("#171: a run waits until a second into its minute; one started just before the minute waits for the next", () => {
+    const m = Date.UTC(2026, 8, 30, 12, 0, 0);
+    expect(FAST_START_MS).toBe(1_000);
+    expect(startWaitMs(m + 300)).toBe(700);
+    expect(startWaitMs(m)).toBe(1_000);
+    expect(startWaitMs(m + 1_000)).toBe(0);
+    expect(startWaitMs(m + 1_500)).toBe(0);
+    expect(startWaitMs(m + 30_000)).toBe(0);
+    expect(startWaitMs(m - 1_500)).toBe(2_500);
+    expect(startWaitMs(m - 2_100)).toBe(0);
   });
 
   it("Twelve Data's bars from a minute after their close, within their freshness", () => {

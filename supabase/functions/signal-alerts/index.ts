@@ -59,10 +59,13 @@ import {
   INDICATOR_INTERVALS,
   INDICATOR_PAIRS,
   INDICATOR_RULES,
+  STALE_RETRY_MS,
+  STALE_TRIES,
   TWELVE_ALERT_INTERVALS,
   TWELVE_READS_PER_RUN,
   TWELVE_RETRY_MS,
   gmoIntervalsDue,
+  hourCloseOf,
   indicatorIntervalsFor,
   indicatorRuleId,
   indicatorSignals,
@@ -74,7 +77,10 @@ import {
   klineFileKey,
   klineFileOf,
   klinePreloadDays,
+  latestCloseMs,
   renderIndicatorMail,
+  staleForClose,
+  startWaitMs,
   twelveCloseDue,
   twelvePhase,
   twelveReadDue,
@@ -97,7 +103,7 @@ import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outc
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v10-2026-09-29T16:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v11-2026-09-30T09:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -296,6 +302,12 @@ Deno.serve(async (req: Request) => {
     // is in them, within the day's reads), each judged as the chart judges
     // it, each fresh signal mailed once per subscriber.
     const indicatorSweep = async (): Promise<JsonRecord> => {
+      // #171: a bar that closed at this minute is read from a second after it
+      // (indicators.ts startWaitMs), and this run's clock is taken then — it
+      // shadows the request's, which this run may have waited past
+      const wait = startWaitMs(Date.now());
+      if (wait > 0) await sleep(wait);
+      const nowMs = Date.now();
       const summary: JsonRecord = { ok: true, mode: "indicators", version: FUNCTION_VERSION, email_configured: emailConfigured };
       if (isPossiblyClosed(nowMs)) return { ...summary, skipped: "market_closed" };
       const minute = new Date(nowMs).getUTCMinutes();
@@ -332,7 +344,7 @@ Deno.serve(async (req: Request) => {
       const deadline = Date.now() + FETCH_BUDGET_MS;
       const reads: JsonRecord[] = [];
       const fired: IndicatorSignal[] = [];
-      const files = { memory: 0, table: 0, ended: 0, live: 0 };
+      const files = { memory: 0, table: 0, ended: 0, live: 0, stale: 0 };
 
       // GMO, a request at a time; once it says it is down for maintenance,
       // no more
@@ -355,12 +367,21 @@ Deno.serve(async (req: Request) => {
         if (!res.ok) console.error("kline store failed:", res.status, await res.text().catch(() => ""));
       };
       // an ended file from this instance, else from GMO (and kept); a file
-      // still being written from GMO
-      const cachedFetcher: Fetcher = async (url) => {
+      // still being written from GMO — #171: for a chart whose bars close at
+      // `closeMs`, read again while GMO made its answer before that close and
+      // the answer holds the bar (indicators.ts staleForClose), STALE_TRIES
+      // times at most; past them the read fails, and a later run reads it
+      const chartFetcher = (closeMs: number, stepMs: number): Fetcher => async (url) => {
         const f = klineFileOf(url);
         if (!f || !klineFileEnded(f.date, nowMs)) {
           files.live++;
-          return await paced(url);
+          for (let tries = 1; ; tries++) {
+            const got = await paced(url);
+            if (got === null || maintenance || !staleForClose(got, closeMs, stepMs)) return got;
+            files.stale++;
+            if (tries >= STALE_TRIES || Date.now() + STALE_RETRY_MS > deadline) return null;
+            await sleep(STALE_RETRY_MS);
+          }
         }
         const k = klineFileKey(f);
         if (klineMemory.has(k)) {
@@ -397,11 +418,70 @@ Deno.serve(async (req: Request) => {
         }
         klinePreloaded.add(key);
       };
-      const judge = (pair: string, interval: string, closed: Candle[], newest: number) => {
+      // Each fresh signal to each follower of its chart, once (the claim's
+      // unique key)
+      const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
+      const access = new Map<string, { allowed: boolean; email: string | null }>();
+      const mailSignals = async (sigs: IndicatorSignal[]) => {
+        for (const sig of sigs) {
+          for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
+            let who = access.get(sub.user_id);
+            if (!who) {
+              const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
+              who = { allowed: alertsAllowed(plan, email), email };
+              access.set(sub.user_id, who);
+            }
+            if (!who.allowed) {
+              counts.not_allowed++;
+              continue;
+            }
+            const id = await claimRow({
+              user_id: sub.user_id,
+              kind: "signal",
+              pair: sig.pair,
+              interval: sig.interval,
+              bar_time: sig.barTime,
+              closed_at: sig.closedAt,
+              side: sig.side,
+              entry: sig.close,
+              stop: sig.sl,
+              target: sig.tps ? sig.tps[0] : null,
+              rsi: sig.rsi,
+              rsi_prev: sig.rsiPrev,
+              sar: null,
+              atr: sig.eps,
+              rule: indicatorRuleId(sig.rule),
+              strong: sig.rule === "qtrend" ? sig.strong : null,
+              event_id: null,
+              status: "pending",
+            });
+            if (id === null) {
+              counts.duplicate++;
+              continue;
+            }
+            const lang: Lang = isLang(sub.lang) ? sub.lang : "ja";
+            const outcome = await deliver(id, who.email, renderIndicatorMail(sig, lang));
+            counts[outcome] = (counts[outcome] ?? 0) + 1;
+          }
+        }
+      };
+      // #171: a chart's signals are mailed as soon as it is judged, before
+      // the other charts due are read
+      const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         judgedBar.set(`${pair}|${interval}`, newest);
         fired.push(...sigs);
-        return { pair, interval, bars: closed.length, newest: new Date(newest).toISOString(), signals: sigs.map((x) => `${x.rule}:${x.side}${x.strong ? "!" : ""}`) };
+        const read = {
+          pair,
+          interval,
+          bars: closed.length,
+          newest: new Date(newest).toISOString(),
+          signals: sigs.map((x) => `${x.rule}:${x.side}${x.strong ? "!" : ""}`),
+          // #171: how long after the bar closed it was judged, ms
+          judged_after_ms: Date.now() - (newest + (LIVE_STEP_MS[interval] ?? 0)),
+        };
+        if (sigs.length > 0) await mailSignals(sigs);
+        return read;
       };
 
       // Twelve Data's first: a few reads at most, which GMO's many would
@@ -505,15 +585,28 @@ Deno.serve(async (req: Request) => {
           }
         }
         const closed = closedOfStored(stored!);
-        reads.push({ ...judge(c.pair, c.interval, closed, expected), twelve: true });
+        reads.push({ ...(await judge(c.pair, c.interval, closed, expected)), twelve: true });
       }
+      // #171: the 4-hour and daily charts' newest closed bar this hour (its
+      // open), once the first of them read tells (hourCloseOf); null when
+      // none closed this hour
+      const yearNewest = new Map<string, number | null>();
       for (const c of gmoCharts) {
         const key = `${c.pair}|${c.interval}`;
         const step = LIVE_STEP_MS[c.interval];
         const spec = GMO_INTERVALS[c.interval];
         // on the day-keyed charts (5 min to 1 hour, on the UTC grid) the
-        // newest closed bar is known before reading
-        const expected = spec.key === "day" ? Math.floor(nowMs / step) * step - step : null;
+        // newest closed bar is known before reading; on the others once a
+        // pair of the timeframe was read this run
+        let expected = spec.key === "day" ? Math.floor(nowMs / step) * step - step : null;
+        if (spec.key === "year" && yearNewest.has(c.interval)) {
+          const e = yearNewest.get(c.interval) as number | null;
+          if (e === null) {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "no_close" });
+            continue;
+          }
+          expected = e;
+        }
         if (expected !== null && judgedBar.get(key) === expected) {
           reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
           continue;
@@ -523,8 +616,10 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         await preload(c.pair, c.interval);
-        // the chart's history read (the chart's own function), rounded as drawn
-        const quotes = await fetchLiveQuotes(c.pair, c.interval, nowMs, deadline, cachedFetcher, HISTORY_BARS + 1);
+        // the chart's history read (the chart's own function), rounded as
+        // drawn; #171: not from an answer GMO made before the close it is for
+        const fetcher = chartFetcher(latestCloseMs(c.interval, nowMs), step);
+        const quotes = await fetchLiveQuotes(c.pair, c.interval, nowMs, deadline, fetcher, HISTORY_BARS + 1);
         if (!quotes || quotes.length === 0) {
           reads.push({ pair: c.pair, interval: c.interval, error: maintenance ? "maintenance" : "unavailable" });
           continue;
@@ -537,6 +632,19 @@ Deno.serve(async (req: Request) => {
           reads.push({ pair: c.pair, interval: c.interval, error: "short", bars: closed.length });
           continue;
         }
+        if (spec.key === "year" && expected === null) {
+          const said = hourCloseOf(newest, c.interval, nowMs);
+          if (said === "unknown") {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "unknown", newest: Number.isFinite(newest) ? new Date(newest).toISOString() : null });
+            continue;
+          }
+          yearNewest.set(c.interval, said === "closed" ? newest : null);
+          if (said === "none") {
+            reads.push({ pair: c.pair, interval: c.interval, skipped: "no_close", newest: new Date(newest).toISOString() });
+            continue;
+          }
+          expected = newest;
+        }
         if (expected !== null && newest !== expected) {
           reads.push({ pair: c.pair, interval: c.interval, skipped: "not_yet", newest: Number.isFinite(newest) ? new Date(newest).toISOString() : null });
           continue;
@@ -545,7 +653,7 @@ Deno.serve(async (req: Request) => {
           reads.push({ pair: c.pair, interval: c.interval, skipped: "judged" });
           continue;
         }
-        reads.push(judge(c.pair, c.interval, closed, newest));
+        reads.push(await judge(c.pair, c.interval, closed, newest));
       }
 
       summary.reads = reads;
@@ -553,50 +661,6 @@ Deno.serve(async (req: Request) => {
       summary.twelve_reads = TWELVE_READS_PER_RUN - twelveLeft;
       summary.signals = fired.length;
       if (fired.length === 0) return summary;
-
-      const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
-      const access = new Map<string, { allowed: boolean; email: string | null }>();
-      for (const sig of fired) {
-        for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
-          let who = access.get(sub.user_id);
-          if (!who) {
-            const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
-            who = { allowed: alertsAllowed(plan, email), email };
-            access.set(sub.user_id, who);
-          }
-          if (!who.allowed) {
-            counts.not_allowed++;
-            continue;
-          }
-          const id = await claimRow({
-            user_id: sub.user_id,
-            kind: "signal",
-            pair: sig.pair,
-            interval: sig.interval,
-            bar_time: sig.barTime,
-            closed_at: sig.closedAt,
-            side: sig.side,
-            entry: sig.close,
-            stop: sig.sl,
-            target: sig.tps ? sig.tps[0] : null,
-            rsi: sig.rsi,
-            rsi_prev: sig.rsiPrev,
-            sar: null,
-            atr: sig.eps,
-            rule: indicatorRuleId(sig.rule),
-            strong: sig.rule === "qtrend" ? sig.strong : null,
-            event_id: null,
-            status: "pending",
-          });
-          if (id === null) {
-            counts.duplicate++;
-            continue;
-          }
-          const lang: Lang = isLang(sub.lang) ? sub.lang : "ja";
-          const outcome = await deliver(id, who.email, renderIndicatorMail(sig, lang));
-          counts[outcome] = (counts[outcome] ?? 0) + 1;
-        }
-      }
       return { ...summary, ...counts };
     };
 
