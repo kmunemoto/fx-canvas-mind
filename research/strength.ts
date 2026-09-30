@@ -154,7 +154,11 @@
 //            in the data, each pair's 4-hour close against that bar's mid
 //            close, rounded. (First fixed "at every G bar"; the program read
 //            the 5-minute bars from 5 days before START only, which a review
-//            before the data found.)
+//            before the data found.) Told beside it, not a gate: the bars
+//            with no 5-minute bar ending at T_k (the week's last, closing
+//            Saturday 00:00 UTC after the market's close, about 1 in 30),
+//            their close against the last 5-minute bar inside them. CAD/JPY
+//            and CHF/JPY have no dollar pair here for tri: p0 is theirs.
 //       (id) Σ s = 0, and s_c − s_JPY = the log of c/JPY's close over its
 //            close L bars before, within 1e-12, at every G bar, L 6 and 30.
 //       (la) at every signal and every 13th G bar, a second, plain working
@@ -166,11 +170,11 @@
 //            ways round (a fire where the state is 0 counts: the first
 //            working compared only where the plain state was not 0, which a
 //            review before the data found). A planted look-ahead
-//            (LOOKAHEAD=1: the meter reading the close after) must fail it
+//            (FAULT=LOOKAHEAD: the meter reading the close after) must fail it
 //            on a walk at 99% of the bars compared or more (#171-5's first
 //            look-ahead check could not fail: §8.84).
 //       (c) each meter trade followed again, against the coin's at the same
-//           pair, close and side; (a2) its stop and targets against
+//           pair, close and side; (a2) the stop and TP1 it used against
 //           ultraLevels(side, close, unit, ULTRA_PAIRS); (m) a trade
 //           entered at the close its caller has from elsewhere (T_k from G;
 //           an email's, its quote's own), followed from the first 5-minute
@@ -225,9 +229,12 @@
 //   * the power (the null runs): 1, 2 or 3 pips a trade added to one
 //     candidate's e: how often it is picked, and called.
 //   * planted faults, once each on seed 7 (told): LOOKAHEAD (above);
-//     MISALIGN (one cross joined by position after one of its bars is taken
-//     out): tri or la must fail; ORIENT (EUR/USD's state the wrong way
-//     round) on a rank walk: its e below 0.
+//     MISALIGN (USD/JPY without one of its bars, and AUD/JPY joined by
+//     position, so after that bar the meter reads AUD's bar before): la must
+//     fail (tri reads the closes by time and cannot see it; first written
+//     "one cross joined by position after one of its bars is taken out",
+//     which cannot misalign: G drops that time too); ORIENT (EUR/USD's state
+//     the wrong way round) on a rank walk: its e below 0.
 //   * what the walks cannot show: weekend gaps, the spread by the hour,
 //     news, the pairs' real co-movement (EUR with CHF, AUD with NZD), GMO's
 //     missing bars.
@@ -644,6 +651,9 @@ const checks = {
   signals: newCheck(), // (a)
 };
 let failedReads = 0;
+// (p0, told) the 4-hour bars without a 5-minute bar ending at their close
+const closeMidLast = newCheck();
+let closeMidNone = 0;
 
 // ---- the 4-hour bars of the eleven --------------------------------------------------------
 
@@ -891,6 +901,9 @@ const EXITS = ["", "tp", "sl", "amb", "time"];
 interface Trade {
   pips: number;
   exit: Exit;
+  // the levels the trade used (a2)
+  tp: number;
+  sl: number;
 }
 const exitB = new Int8Array(nG * PAIRS.length);
 const exitS = new Int8Array(nG * PAIRS.length);
@@ -990,13 +1003,13 @@ for (let p = 0; p < PAIRS.length; p++) {
     for (let j = i + 1; j <= i + LIMIT; j++) {
       const end = times[j] + STEP;
       while (f < fn && fine.t[f] < end) {
-        if (buy ? o[f] <= sl : o[f] >= sl) return { pips: pipsOf(o[f]), exit: 2 };
-        if (buy ? o[f] >= tp : o[f] <= tp) return { pips: pipsOf(o[f]), exit: 1 };
+        if (buy ? o[f] <= sl : o[f] >= sl) return { pips: pipsOf(o[f]), exit: 2, tp, sl };
+        if (buy ? o[f] >= tp : o[f] <= tp) return { pips: pipsOf(o[f]), exit: 1, tp, sl };
         const hitSl = buy ? l[f] <= sl : h[f] >= sl;
         const hitTp = buy ? h[f] >= tp : l[f] <= tp;
-        if (hitSl && hitTp) return { pips: pipsOf(sl), exit: 3 };
-        if (hitSl) return { pips: pipsOf(sl), exit: 2 };
-        if (hitTp) return { pips: pipsOf(tp), exit: 1 };
+        if (hitSl && hitTp) return { pips: pipsOf(sl), exit: 3, tp, sl };
+        if (hitSl) return { pips: pipsOf(sl), exit: 2, tp, sl };
+        if (hitTp) return { pips: pipsOf(tp), exit: 1, tp, sl };
         f++;
       }
       if (f >= fn && fine.t[fn - 1] + FINE < end) return null;
@@ -1007,7 +1020,7 @@ for (let p = 0; p < PAIRS.length; p++) {
         const own = buy ? qs[j].bid.close : qs[j].ask.close;
         // (d) the time-out's close against the 4-hour bar's own
         if (main) tally(checks.closes, Math.abs(closePx - own) <= unit / 1000, () => `${pair} ${iso(times[j])} ${side} ${closePx}/${own}`);
-        return { pips: pipsOf(closePx), exit: 4 };
+        return { pips: pipsOf(closePx), exit: 4, tp, sl };
       }
     }
     return null;
@@ -1033,7 +1046,13 @@ for (let p = 0; p < PAIRS.length; p++) {
       if (fz < fine.n && fine.t[fz] === T - FINE) {
         const mid = roundTo((fine.bc[fz] + fine.ac[fz]) / 2, dec);
         tally(checks.closeMid, mid === candles[i].close, () => `${pair} ${iso(times[i])} 5-minute mid ${mid} / close ${candles[i].close}`);
-      }
+      } else if (fz > 0 && fine.t[fz - 1] >= G[k]) {
+        // (p0, told) no 5-minute bar ends at the close (the week's last bar,
+        // whose 5-minute bars stop at the market's close): the last one
+        // inside the bar
+        const mid = roundTo((fine.bc[fz - 1] + fine.ac[fz - 1]) / 2, dec);
+        tally(closeMidLast, mid === candles[i].close, () => `${pair} ${iso(times[i])} the last 5-minute mid ${mid} (${iso(fine.t[fz - 1])}) / close ${candles[i].close}`);
+      } else closeMidNone++;
     }
     if (!okAt(p, k)) continue;
     nOk++;
@@ -1083,7 +1102,10 @@ for (let p = 0; p < PAIRS.length; p++) {
       const close = candles[i].close;
       const dir = f.side;
       const lv = ultraLevels(side, close, unit, ULTRA_PAIRS);
-      tally(checks.levels, lv.sl === close - dir * SL * unit && lv.tps[0] === close + dir * TP * unit, () => `${pair} ${iso(times[i])} ${side} sl ${lv.sl} tp ${lv.tps[0]}`);
+      // the levels the trade used, against the email's own (and the close's
+      // ∓ 30 and ± 20 worked here)
+      // (none where the trade has no 30 bars in the data: (c) sees that)
+      if (again) tally(checks.levels, again.sl === lv.sl && again.tp === lv.tps[0] && lv.sl === close - dir * SL * unit && lv.tps[0] === close + dir * TP * unit, () => `${pair} ${iso(times[i])} ${side} used sl ${again.sl} tp ${again.tp}; ultraLevels sl ${lv.sl} tp ${lv.tps[0]}`);
     }
   }
 
@@ -1344,6 +1366,7 @@ console.log(checkLine("(m) following starts at the first 5-minute bar at or afte
 console.log(checkLine("(d) time-out closes against the 4-hour bar's own", checks.closes));
 console.log(checkLine("(pk) the pick again from the meter and the coin cut at SPLIT", checks.pick));
 console.log(checkLine("(p0) the 5-minute mid at the close against the bar's close", checks.closeMid));
+console.log(checkLine("(p0, told) no 5-minute bar ending at the close: the last one inside the bar", closeMidLast) + `; no 5-minute bar inside ${closeMidNone}`);
 console.log(checkLine("(a) the emails' signals against indicatorSignals", checks.signals));
 console.log(`(g) GMO reads that failed: ${failedReads}`);
 // (h) holds for the run fixed above only (as research/widetp.ts)
@@ -1377,10 +1400,10 @@ LS.forEach((L, c) => {
   const x = edges[c];
   const st1 = statOf(x.first, "weeks");
   const st2 = statOf(x.second, "weeks");
-  console.log(`  X${L}: first half (pickable) e ${num(st1?.m)} of ${x.first.n}, t ${num(verdict.t[c])}; second half e ${num(st2?.m)} ${ci(x.second)} of ${x.second.n} in ${x.second.weeks.size} weeks, Bonferroni low end ${num(verdict.bonfLow[c])}${verdict.bonf[c] ? (placeboPassed && allDiffer === 0 ? " (above 0 after the correction)" : " (above 0, not called: the placebo gate or the checks)") : ""}; fires without their 30 bars ${lostX.get(L)}`);
+  console.log(`  X${L}: first half (pickable) e ${num(st1?.m)} of ${x.first.n}, t ${num(verdict.t[c])}; second half e ${num(st2?.m)} ${ci(x.second)} of ${x.second.n} in ${x.second.weeks.size} weeks, Bonferroni low end ${num(verdict.bonfLow[c])}${verdict.bonf[c] && c !== verdict.pick ? (placeboPassed && allDiffer === 0 ? " (above 0 after the correction)" : " (above 0, not told so: the placebo gate or the checks)") : ""}; fires without their 30 bars ${lostX.get(L)}`);
 });
 console.log(`  the pick: ${verdict.pick === null ? "none" : cand(verdict.pick)}; its low end ${num(verdict.low)} in ${verdict.weeks} weeks: ${verdict.called ? "CALLED" : "not called"}`);
-console.log(`  the placebo gate: ${placeboCalled} of ${PLACEBOS} made-up meters called (${pctOf(placeboRate)}), the Bonferroni road ${placeboBonf} (${pctOf(placeboBonfRate)}): ${placeboPassed ? "passed" : "NOT PASSED: nothing is called"}`);
+console.log(`  the placebo gate: ${placeboCalled} of ${PLACEBOS} made-up meters called (${pctOf(placeboRate)}), the Bonferroni road ${placeboBonf} (${pctOf(placeboBonfRate)}): ${placeboPassed ? "passed" : "NOT PASSED: the intervals were too narrow for this data, and nothing is called"}`);
 if (verdict.pick !== null && placeboE.length) {
   const real = mean(edges[verdict.pick].second);
   const below = placeboE.filter((x) => real !== null && x < real).length;
@@ -1388,7 +1411,7 @@ if (verdict.pick !== null && placeboE.length) {
 }
 const cannot: string[] = [];
 if (verdict.pick !== null && verdict.weeks < 30) cannot.push(`the pick's second-half trades in ${verdict.weeks} weeks`);
-if (!placeboPassed) cannot.push("the placebo gate");
+if (!placeboPassed) cannot.push("the placebo gate: the intervals were too narrow for this data");
 const finalCall = verdict.called && placeboPassed && allDiffer === 0;
 console.log(`  RESULT: ${finalCall ? `CALLED: ${cand(verdict.pick!)} picks the side better than a coin toss at the same closes` : `not called${cannot.length ? ` (cannot say: ${cannot.join("; ")})` : ""}`}`);
 

@@ -244,8 +244,8 @@ for fault, pattern in (("LOOKAHEAD", "strength-null-LOOKAHEAD-*.json"), ("MISALI
         share = la["mismatched"] / la["compared"] if la and la["compared"] else 0
         gate(share >= 0.99, f"LOOKAHEAD: (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ ({100 * share:.1f}%, at least 99%); the call {'made' if r.get('verdict', {}).get('called') else 'not made'}, X6 e {fmt(r['candidates'][0]['all']['m'])}, X30 {fmt(r['candidates'][1]['all']['m'])}")
     elif fault == "MISALIGN":
-        stopped = r.get("stopped") or (r.get("align") or {}).get("stopped")
-        gate(bool(stopped) or (la is not None and la["mismatched"] > 0), f"MISALIGN: (tri) {'stopped the run' if stopped else 'passed'}, (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ")
+        # tri reads the closes by time and cannot see this fault: la must fail
+        gate(la is not None and la["mismatched"] > 0, f"MISALIGN: (la) {la['mismatched'] if la else '-'} of {la['compared'] if la else '-'} differ (at least one)")
     else:
         L = r["lstar"]
         m, n = merged([r], f"X{L} e @EUR/USD")
