@@ -1107,6 +1107,22 @@ if (e) {
   }
 }
 
+// #168: the emails' gold levels since the owner's choice on THE RESULT (docs
+// §8.80: TP1 $30, TP2 $60 and TP3 $90, the stop $10), as the email tells
+// them: on each chart and for each indicator, the share out at TP1 of those
+// out at TP1 or the stop, and dollars a trade (all of it out at TP1 or the
+// stop, or after five days)
+const MAIL_RULE = ruleKey(30, 10, L5D);
+console.log(`\n== MAIL: ${MAIL_RULE} (the emails' TP1 and stop since #168), whole: out at TP1 of those out at TP1 or the stop %, dollars a trade`);
+for (const tf of TFS) {
+  for (const set of ["qtrend", "ultra", "either"]) {
+    const a = groups.get(`${tf} ${set}`)?.[2].get(MAIL_RULE);
+    if (!a) continue;
+    const r = meanOf(a);
+    console.log(`MAIL ${tf} ${set} n=${a.n} win=${(100 * (tpRate(a) ?? 0)).toFixed(1)} usd=${num(r.m)} [${num(r.lo)},${num(r.hi)}]`);
+  }
+}
+
 if (compareLines.length) {
   console.log("\nCOMPARE BEGIN");
   for (const l of compareLines) console.log(l);
