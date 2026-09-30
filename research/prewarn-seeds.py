@@ -16,6 +16,11 @@ for p in sorted(glob.glob(os.path.join(folder, "prewarn-*-*.json"))):
         runs.append(json.load(f))
 if not runs:
     sys.exit(f"no runs in {folder}")
+# the gates are fixed on these ten runs only: "path", seeds 7 .. 16, the 21 pairs
+seeds = sorted(r["seed"] for r in runs)
+wrong = [f"seed {r['seed']}: {r['synth']}, {len(r['coverage'])} pairs" for r in runs if r["synth"] != "path" or len(r["coverage"]) != 21]
+if seeds != list(range(7, 17)) or wrong:
+    sys.exit(f"not the ten runs the gates are fixed on (path, seeds 7 .. 16, 21 pairs): seeds {seeds}; {'; '.join(wrong) or 'the seeds'}")
 synths = sorted({r["synth"] for r in runs})
 print(f"runs: {len(runs)} ({', '.join(synths)}), seeds {sorted(r['seed'] for r in runs)}")
 
@@ -40,6 +45,20 @@ def pooled(group, series):
     return (s / n if n else None), n
 
 
+def per_seed(group, series):
+    out = []
+    for r in runs:
+        n = 0
+        s = 0.0
+        for half in (0, 1):
+            a = r["store"].get(f"{group}|{half}|{series}")
+            if a:
+                n += a["n"]
+                s += a["sum"]
+        out.append(s / n if n else None)
+    return out
+
+
 def fmt(x, pct=False):
     if x is None:
         return "  -  "
@@ -60,11 +79,16 @@ for group in ("all", "AB"):
             R, Rn = pooled(group, f"R {tag}")
             wt, wtn = pooled(group, f"WT {tag}")
             d = None if wt is None or et is None else wt - et
+            # the standard error of the difference, from the ten seeds' own
+            ws = per_seed(group, f"WT {tag}")
+            es = per_seed(group, "ET either")
+            ds = [w - e for w, e in zip(ws, es) if w is not None and e is not None]
+            se = (sum((x - sum(ds) / len(ds)) ** 2 for x in ds) / (len(ds) - 1)) ** 0.5 / len(ds) ** 0.5 if len(ds) > 1 else None
             flag = ""
-            if gated and (d is None or abs(d) > 0.3):
-                flag = "  <- OUT OF ±0.3"
+            if gated and (d is None or se is None or abs(d) > 0.3 or abs(d) > 3 * se):
+                flag = "  <- OUT OF ±0.3 OR 3 SE"
                 ok_all = False
-            print(f"  {design:5} {X:3} min: hit {fmt(P, True)} of {Pn}, warned {fmt(R, True)} of {Rn}; every warning's trade {fmt(wt)} of {wtn}, less the email's {fmt(d)}{flag}")
+            print(f"  {design:5} {X:3} min: hit {fmt(P, True)} of {Pn}, warned {fmt(R, True)} of {Rn}; every warning's trade {fmt(wt)} of {wtn}, less the email's {fmt(d)} (se {se:.3f}, {abs(d) / se:.1f} se){flag}" if se else f"  {design:5} {X:3} min: less the email's {fmt(d)}, no se{flag}")
     if gated:
         ps = [pooled(group, f"W either once {X}")[0] for X in (5, 30, 120)]
         rs = [pooled(group, f"R either once {X}")[0] for X in (5, 30, 120)]

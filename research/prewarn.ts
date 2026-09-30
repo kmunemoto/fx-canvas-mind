@@ -52,14 +52,21 @@
 //     warning a bar and side (as §8.83's "either": one trade a bar and
 //     side).
 //   * for each: the warnings, and of them those whose indicator gave the
-//     same signal at the close (hits), and those it gave the other way;
-//     the share that hit ("当たり"), by week and by four weeks with
-//     intervals as §8.83's (t(C − 1), clusters by week or four weeks); the
-//     signals at the close on the bars checked, and the share warned
-//     ("拾えた"); warnings a week; how long before the close (watch).
+//     same signal at the close (hits), and those it gave the other way (by
+//     the email's rules this is 0 for each indicator alone: Q-Trend's side
+//     before the bar and ULTRA's RSI before it are fixed for the bar, and
+//     each side needs its own; under "either" it counts the two indicators
+//     disagreeing; so a miss is a bar with no signal at the close); the
+//     share that hit ("当たり"), by week and by four weeks with intervals as
+//     §8.83's (t(C − 1), clusters by week or four weeks); the signals at the
+//     close on the bars checked, and the share warned ("拾えた"), with the
+//     same intervals; warnings a week (the group's pairs together, over the
+//     weeks — from Sunday 21:00 UTC — with a bar judged and mailed); how
+//     long before the close (watch: the hits' median).
 //   * the price: on a hit, the entry at the warning (the ask for a buy, the
 //     bid for a sell, at the 5-minute bar ending at t) against the email's
-//     (at the close): the pips gained by entering at the warning. A hit is
+//     (at the close): the pips gained by entering at the warning (mean,
+//     interval and median). A hit is
 //     a warning the price then went on to make a signal of, so on the hits
 //     alone the warning's entry is ahead by construction (a walk shows it:
 //     +0.1 to +4.8 pips, the leads 5 to 120 minutes, on a first try of this
@@ -73,7 +80,12 @@
 //     bar after the signal's bar, at that close), as §8.83's. Pips a trade:
 //     on every warning, on the hits, on the misses; the email's own trade
 //     (entered at the close) on the signals; on the hits, the warning's
-//     trade less the email's on the same signal.
+//     trade less the email's on the same signal; pips a week of every
+//     warning's trades and of the email's (the group's pairs together, the
+//     weeks as above).
+//   * printed: A+B, C and all for the whole period; the halves for A+B
+//     (C's and all's are in the JSON); each pair's bars judged, signals,
+//     checks at the leads and the leads with no price.
 //   * nothing here is a call: no rule is picked or judged better. The
 //     numbers are shown to the owner, who decides.
 //   * checks, every one 0 differ on the walks and on the data before any
@@ -85,30 +97,45 @@
 //       (p1) a check's signals (worked from the bar before's state: the
 //            line, its last side, ε, RSI's averages, the 200-close range)
 //            against indicatorSignals on the bars with the forming bar
-//            last, on every 13th bar at each lead and at every check that
-//            gives a signal at a lead;
+//            last (which never sees the bar's own close or anything after
+//            t), at every check of every 13th bar and at every check that
+//            gives a signal;
 //       (p2) the same worked at the close's price against the signals at
 //            the close, on every bar;
-//       (p3) no check reads a 5-minute bar that opens at or after t;
+//       (p3) at every check, the price, the bid and the ask again from
+//            the 5-minute bars cut at t (only those opening before it, the
+//            last ending at t), against those used, and each warning's
+//            fill against them; the trades followed from the first
+//            5-minute bar opening at or after the entry (a program reading
+//            the 5-minute bar after t for the price, or for the fill, fails
+//            it: tried on a walk, 195,623 and 22,540 of about 222,000
+//            differ);
 //       (d) the trades' time-out closes against the 4-hour bar's own;
 //       (g) no GMO read failed;
 //       (h) §8.83's T20 again: the email's trades (A+B, either, those with
 //           120 bars in the data), each half's trades and pips a trade to
-//           two places (−1.35 of 2,416 and −1.27 of 2,216).
+//           two places (−1.35 of 2,416 and −1.27 of 2,216); on the run
+//           fixed above only (START, SPLIT, END and every pair).
 //
 // ON RANDOM WALKS (SYNTHETIC=1, "path": 100 small steps a 5-minute bar, no
 // rule gains), seeds 7 .. 16, the 21 pairs, before any data is read
-// (research/prewarn-seeds.py): every check 0 differ ((d) and (h) have
-// nothing to compare on a walk); the share of hits and the share of signals
+// (research/prewarn-seeds.py, which takes these ten runs only): every check
+// 0 differ ((d) and (h) have nothing to compare on a walk: its trades end
+// at a level within 30 bars); the share of hits and the share of signals
 // warned, the seeds and all the pairs together, higher at 5 minutes than at
 // 30 and at 30 than at 120 (either, once); for each design and lead, every
-// warning's trade within ±0.3 pips a trade of the email's (either, all the
-// pairs, the seeds together: about three standard errors; on a walk neither
-// entry gains). Else the program is looked into before the data.
+// warning's trade less the email's (either, all the pairs, the seeds
+// together) within ±0.3 pips a trade and within three standard errors (the
+// ten seeds' own differences' spread): on a walk neither entry gains. Else
+// the program is looked into before the data. (First fixed as ±0.3 alone,
+// said to be about three standard errors; the review before the data found
+// it 2.3 to 8.3 by row, so the three standard errors were added.)
 //
 // NOT MEASURED: the other timeframes; the pairs above; the time a warning
 // email takes to arrive, and to be acted on; swap; slippage; a sweep's
-// minute steps (the data's are 5 minutes).
+// minute steps (the data's are 5 minutes); on the walks, the time-out
+// closes (check d: none there; a reviewer's walk made to time out gave
+// 8,639, 0 differ, as the reviewer reported; not run again here).
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
@@ -539,11 +566,17 @@ const checks = {
   closeMid: newCheck(), // (p0)
   partial: newCheck(), // (p1)
   atClose: newCheck(), // (p2)
-  noAhead: newCheck(), // (p3)
+  noAhead: newCheck(), // (p3): the price and the fill
+  follow: newCheck(), // (p3): where following starts
   closes: newCheck(), // (d)
 };
 let failedReads = 0;
 const weekOf = (t: number) => Math.floor((t - WEEK_OFFSET) / WEEK);
+interface Seen {
+  c: number;
+  bid: number;
+  ask: number;
+}
 interface Cover {
   pair: string;
   group: string;
@@ -757,6 +790,9 @@ for (const pair of PAIRS) {
     const f0 = lowerBound(fine.t, fromMs);
     let f = f0;
     if (f >= fine.n) return null;
+    // (p3) following starts at the first 5-minute bar opening at or after
+    // the entry, and the one before it opened before
+    tally(checks.follow, fine.t[f0] >= fromMs && (f0 === 0 || fine.t[f0 - 1] < fromMs), () => `${pair} ${iso(fromMs)} follows from ${iso(fine.t[f0])}`);
     const endMs = times[i + LIMIT] + STEP;
     while (f < fine.n && fine.t[f] < endMs) {
       if (buy ? o[f] <= sl : o[f] >= sl) return pipsOf(o[f]);
@@ -795,6 +831,17 @@ for (const pair of PAIRS) {
     }
   }
 
+  // what a sweep at t has: the 5-minute bars opening before t, cut there
+  // (a view, not the arrays past it), and the last of them if it ends at t
+  const seenAt = (t: number): Seen | null => {
+    const k = lowerBound(fine.t, t);
+    const ts = fine.t.subarray(0, k);
+    if (!ts.length || ts[ts.length - 1] + FINE !== t) return null;
+    const bid = fine.bc.subarray(0, k)[k - 1];
+    const ask = fine.ac.subarray(0, k)[k - 1];
+    return { c: roundTo((bid + ask) / 2, dec), bid, ask };
+  };
+
   // the checks before each close, and what they warn
   let nChecks = 0;
   let noPrice = 0;
@@ -814,7 +861,7 @@ for (const pair of PAIRS) {
       tally(checks.closeMid, mid === closes[i], () => `${pair} ${iso(times[i])} 5-minute mid ${mid} / close ${closes[i]}`);
     }
     // the checks: step m is t = T − 5m minutes
-    const at: Array<{ t: number; fi: number; c: number; fires: Array<{ rule: Rule; side: Side; strong: boolean }> } | null> = new Array(MAX_STEPS + 1).fill(null);
+    const at: Array<{ t: number; fi: number; c: number; fires: Array<{ rule: Rule; side: Side; strong: boolean }>; seen: Seen | null } | null> = new Array(MAX_STEPS + 1).fill(null);
     const a = anchorOf(i)!;
     for (let m = 1; m <= MAX_STEPS; m++) {
       const t = T - m * FINE;
@@ -823,14 +870,17 @@ for (const pair of PAIRS) {
         if (leadSteps.has(m)) noPrice++;
         continue;
       }
-      // (p3) the bar read opens before t, and so does every bar in the range
-      tally(checks.noAhead, fine.t[fi] + FINE <= t && fine.t[fi] >= times[i], () => `${pair} ${iso(t)} read ${iso(fine.t[fi])}`);
       const c = roundTo((fine.bc[fi] + fine.ac[fi]) / 2, dec);
+      // (p3) the price again, from the 5-minute bars cut at t (only those
+      // opening before t: what a sweep at t has)
+      const seen = seenAt(t);
+      tally(checks.noAhead, seen !== null && seen.c === c && seen.bid === fine.bc[fi] && seen.ask === fine.ac[fi], () => `${pair} ${iso(t)} used ${c} (${fine.bc[fi]}/${fine.ac[fi]}), seen ${seen ? `${seen.c} (${seen.bid}/${seen.ask})` : "none"}`);
       const fires = fast(i, c);
-      at[m] = { t, fi, c, fires };
+      at[m] = { t, fi, c, fires, seen };
       if (leadSteps.has(m)) nChecks++;
-      // (p1) against the email's function with the forming bar last
-      if (leadSteps.has(m) && (i % CHECK_EVERY === 0 || fires.length > 0)) {
+      // (p1) against the email's function with the forming bar last, at
+      // every check that gives a signal and at every check of every 13th bar
+      if (i % CHECK_EVERY === 0 || fires.length > 0) {
         const f0 = lowerBound(fine.t, times[i]);
         let hh = candles[i].open;
         let ll = candles[i].open;
@@ -899,6 +949,7 @@ for (const pair of PAIRS) {
             const ck = at[m]!;
             const buy = side === "BUY";
             const fill = buy ? fine.ac[ck.fi] : fine.bc[ck.fi];
+            tally(checks.noAhead, ck.seen !== null && fill === (buy ? ck.seen.ask : ck.seen.bid), () => `${pair} ${iso(ck.t)} ${side} fill ${fill}, seen ${ck.seen ? (buy ? ck.seen.ask : ck.seen.bid) : "none"}`);
             const wt = wtAt(side, m);
             for (const g of groups) {
               addTo(aggOf(g, half, `W ${tag}`), week, hit ? 1 : 0);
@@ -938,11 +989,15 @@ console.log(checkLine("(a) the signals at the close against indicatorSignals", c
 console.log(checkLine("(p0) the 5-minute mid at the close against the bar's close", checks.closeMid));
 console.log(checkLine("(p1) a check's signals, worked, against indicatorSignals with the forming bar", checks.partial));
 console.log(checkLine("(p2) worked at the close's price against the signals at the close", checks.atClose));
-console.log(checkLine("(p3) no 5-minute bar read opens at or after the check", checks.noAhead));
+console.log(checkLine("(p3) the price and the fill again from the 5-minute bars cut at the check", checks.noAhead));
+console.log(checkLine("(p3) following starts at the first 5-minute bar at or after the entry", checks.follow));
 console.log(checkLine("(d) time-out closes against the 4-hour bar's own", checks.closes));
 console.log(`(g) GMO reads that failed: ${failedReads}`);
+// (h) holds for the run fixed above only (as research/widetp.ts)
+const hApplies = !SYNTHETIC && START === "2024-01-01" && SPLIT === "2025-05-19" && NOW === Date.parse("2026-09-29T14:16:25Z") && !Deno.env.get("PAIRS");
 let hDiffer: number | null = null;
-if (!SYNTHETIC) {
+if (!SYNTHETIC && !hApplies) console.log("(h) does not apply: not the run fixed in the header");
+if (hApplies) {
   const want = [{ m: "−1.35", n: 2416 }, { m: "−1.27", n: 2216 }];
   hDiffer = 0;
   const parts: string[] = [];
