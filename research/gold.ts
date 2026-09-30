@@ -13,8 +13,10 @@
 //     app keeps (BAR lines below, compared outside this program).
 //   * the bars: mid ((bid + ask) / 2), rounded to cents as the chart draws
 //     gold (live-chart historyRead). The 5- and 15-minute bars from the
-//     minutes, on the UTC grid. The hourly, 4-hour and daily ones from the
-//     hourly candles, cut as the app holds Twelve Data's (GRID4=tw,
+//     minutes, on the UTC grid. The hourly, 4-hour and daily ones from hourly
+//     candles (built from the minutes where they are held, Dukascopy's hourly
+//     files before: the month in progress has no hourly file yet; the two
+//     agree, checked below), cut as the app holds Twelve Data's (GRID4=tw,
 //     GRIDD=tw, FILL=twelve), which was found before this study's results
 //     were seen, from the Twelve Data bars the app keeps against Dukascopy's
 //     mid at the hour (the CLOSE lines of the "Research gold" workflow; read
@@ -597,6 +599,18 @@ if (SYNTHETIC) {
   dataInfo.minutes = { candles: m1.series.n, files: m1.files, oneSide: m1.oneSide, unmatchedFiles: m1.unmatchedFiles.slice(0, 20), first: m1.series.n ? iso(m1.series.t[0]) : null, last: m1.series.n ? iso(m1.series.t[m1.series.n - 1]) : null, missingDays: missing };
   dataInfo.hours = { candles: hourly.n, files: h1.files, oneSide: h1.oneSide, unmatchedFiles: h1.unmatchedFiles.slice(0, 20), span: hourlyOnly };
   dataInfo.hoursAgainstMinutes = { compared, differ, examples };
+  // the hours used: from the minutes where they are held, the hourly files
+  // before (the month in progress has no hourly file yet)
+  if (hm.n) {
+    const cut = lowerBound(hourly.t, hm.t[0]);
+    const joined = newSeries(cut + hm.n);
+    for (const k of ["t", "bo", "bh", "bl", "bc", "ao", "ah", "al", "ac"] as const) {
+      joined[k].set(hourly[k].subarray(0, cut), 0);
+      joined[k].set(hm[k], cut);
+    }
+    hourly = joined;
+    dataInfo.hoursUsed = { fromFiles: cut, fromMinutes: hm.n, span: [iso(hourly.t[0]), iso(hourly.t[hourly.n - 1])] };
+  }
 }
 if (FILL === "twelve") {
   hourly = fillAsTwelve(hourly);
