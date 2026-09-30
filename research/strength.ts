@@ -239,6 +239,58 @@
 //     news, the pairs' real co-movement (EUR with CHF, AUD with NZD), GMO's
 //     missing bars.
 // Then an independent review of the program and the walks, before the data.
+// It was three reviewers apart (look-ahead, the statistics, the header
+// against the program). It found checks that could not fail: (la) blind to
+// a fire where the state is 0, (pk) copying the coin, (m) and (a2) testing
+// their own arithmetic. It also found (p0) short of its words, and the seeds
+// script not holding the runs to 1,000 placebos and writing widetp's rule
+// otherwise. All were fixed before the data (2db6dfa, e53ab98).
+//
+// THE WALKS' RESULTS (the program as of e53ab98; research/strength-seeds.py
+// on the 83 runs, each with 1,000 placebos, and seed 7's eight δ runs):
+//   * δ, seed 7. L* 6: δ 0.5 / 1 / 1.5 / 2 gave the planted candidate's
+//     second-half e 2.2 / 4.9 / 6.2 / 7.3 standard errors, so δ 1.5. L* 30:
+//     1.0 / 2.7 / 4.1 / 5.5, so δ 2.
+//   * null, seeds 7 .. 56:
+//       - every check 0 differ (la 317,194 compared, pk 1,148,450, p0
+//         3,115,200; the p0 told line 2,145 a run, 0 differ).
+//       - the call on 0 of the 50, the Bonferroni road on 0.
+//       - e, the seeds together: X6 +0.05 (187,784 trades, se 0.06), X30
+//         −0.05 (98,825, se 0.10).
+//       - z on the halves: X6 sd 0.98 by week, 1.03 by four weeks; X30 0.89
+//         and 0.96. The low end over 0 on 0 and 1 of the 100. Both kept.
+//       - the placebo gate passed on 50 of 50 (971 of the 50,000 placebos
+//         called, 1.9%; the Bonferroni road 880, 1.8%).
+//       - told (L 6 / 30): the stale meter +0.02 / +0.18, M +0.02 / +0.03,
+//         top 1 +0.08 / +0.11, the rank IC +0.0008 / +0.0016; the coin's TP1
+//         first within 1.3 points of (30 − the spread / 2) / 50 on every pair.
+//   * the power (the null runs; a pips a trade added to one candidate's e):
+//       - X6: +1, +2, +3 called on 11, 40, 50 of the 50.
+//       - X30: +1, +2, +3 called on 2, 19, 40.
+//       - so an edge of about +2 pips a trade (X6) or +3 (X30) is called
+//         most of the time, and +1 seldom.
+//   * rank:
+//       - L* 6 (δ 1.5, seeds 8 .. 17): called on 10 of 10, X6 picked on 10.
+//         Every pair's e above 0 (+3.03 to +5.74; X6 +4.47; M +1.45, the
+//         stale meter +0.10).
+//       - L* 30 (δ 2, seeds 18 .. 27): called on 10 of 10, X30 picked on 10.
+//         Every pair's e +6.72 to +12.15 (X30 +8.70; M +1.33, stale +0.25).
+//   * trend (seeds 7 .. 16): every check 0 differ; the call on 0, the
+//     Bonferroni road on 0. The second half's e: X6 −0.06 (without the yen
+//     −0.16, the stale meter +0.11); X30 +0.05 (+0.03, +0.33). The yen's 8%
+//     fall made no call here.
+//   * the faults (seed 7):
+//       - LOOKAHEAD: la 6,312 of 6,312 differ (the checks aside, it would be
+//         called: X6 e +9.51).
+//       - MISALIGN: la 6,292 of 6,442.
+//       - ORIENT: EUR/USD's e −8.12 (216 trades).
+//   * the review's own planted faults, run again on the fixed program:
+//       - a fire a bar early: la 4,667 of 6,310.
+//       - the pick taking trades that reach past SPLIT: pk 320 of 22,969.
+//       - following from the bar's open: m, all 121,704.
+//       - the levels taken from the fill: a2, all 5,821.
+//   * the first 83 runs (the program as of 5276f0e, before the fixes) gave
+//     the same calls and e.
 //
 // POWER, a rough guess from the design (a small simulation on made-up walks,
 // not this program, not the data): about 1,850 (X6) and 1,000 (X30) trades in
