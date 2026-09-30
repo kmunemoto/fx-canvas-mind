@@ -131,6 +131,22 @@
 // said to be about three standard errors; the review before the data found
 // it 2.3 to 8.3 by row, so the three standard errors were added.)
 //
+// THE WALKS' RESULTS (the program as of 5b3144e, ten runs, research/
+// prewarn-seeds.py): every check 0 differ (the signals 165,209 compared, at
+// the close's price 933,030, the forming bar 3,393,396, the price and the
+// fill cut at t 23,408,489, where following starts 750,926; the time-out
+// closes none). Either, all the pairs, the seeds together:
+//   * once, 5 / 30 / 120 minutes: hit 93.1% / 84.1% / 70.5%, warned 91.9% /
+//     77.8% / 47.0%: higher nearer the close.
+//   * every warning's trade less the email's (the email's −0.61 pips a
+//     trade): +0.03 to +0.13 by design and lead, 0.8 to 2.1 standard errors
+//     each; within ±0.3 and three standard errors on every row. Every row
+//     above 0: the rows share their bars, so they move together; whether
+//     the walk gives the warnings a small edge is not looked into further.
+//   * the same on A+B (told): +0.03 to +0.14, 0.6 to 1.3 standard errors.
+// A first ten runs (the program before the review's fixes) gave the same
+// numbers, with fewer checks.
+//
 // NOT MEASURED: the other timeframes; the pairs above; the time a warning
 // email takes to arrive, and to be acted on; swap; slippage; a sweep's
 // minute steps (the data's are 5 minutes); on the walks, the time-out
