@@ -13,15 +13,38 @@
 //     app keeps (BAR lines below, compared outside this program).
 //   * the bars: mid ((bid + ask) / 2), rounded to cents as the chart draws
 //     gold (live-chart historyRead). The 5- and 15-minute bars from the
-//     minutes, on the UTC grid; the hourly, 4-hour and daily ones from the
-//     hourly candles, on Twelve Data's grid as the bars the app keeps show
-//     it (read 2026-09-29, before this study): hourly and daily on the UTC
-//     grid (the daily bars since April 2025 include Sunday's two hours as a
-//     bar of their own, and the newest, read at 00:11 UTC, held eleven
-//     minutes); 4-hour bars from 01:00, 05:00 ... UTC in US summer time. In
-//     winter the app's bars do not reach: GRID4=ny moves them with New York
-//     (02:00, 06:00 ... UTC), GRID4=utc1 keeps 01:00 all year; the study is
-//     run both ways.
+//     minutes, on the UTC grid. The hourly, 4-hour and daily ones from the
+//     hourly candles, cut as the app holds Twelve Data's (GRID4=tw,
+//     GRIDD=tw, FILL=twelve), which was found before this study's results
+//     were seen, from the Twelve Data bars the app keeps against Dukascopy's
+//     mid at the hour (the CLOSE lines of the "Research gold" workflow; read
+//     2026-09-29 and 30):
+//     - Twelve Data prices every hour from Sunday 17:00 UTC to Friday 21:00
+//       as the app keeps them (it drops a bar wholly inside the weekend,
+//       barFullyClosed): the Sunday hours before the open, Friday's hour
+//       after the close (US summer) and the daily hour off, all at about the
+//       last price (a range of $0.3 to $1.7 at the median; five weeks of
+//       hourly bars, 19 of 4-hour). Dukascopy has no prices then. FILL=twelve
+//       puts in a flat bar at the last bid and ask for each such hour: on a
+//       Friday after its last hour to 21:00, on a Sunday from 17:00 to the
+//       open, and a gap of one or two hours on a weekday (FILL=none: not).
+//     - the 4-hour bars from 01:00, 05:00 ... UTC (kept 2026-05-19 to 09-30).
+//     - the daily bars (kept from 2025-11-11, the feed as it is now) end at
+//       07:00 Sydney: 21:00 UTC, and 20:00 while Sydney keeps summer time
+//       (the first Sunday of October to the first Sunday of April); each
+//       weekday alike, the close $0.39 to $0.91 from the mid then at the
+//       median, against $2.9 to $9.7 an hour off. A bar is stamped the UTC
+//       date it ends on. So there is a small bar on Sunday (the hours before
+//       the open; 46 of 46 weeks), and in Sydney's summer Friday's last
+//       hours fall in a bar stamped Saturday, which the app drops.
+//     - not known: the 4-hour grid while Sydney keeps summer time (the kept
+//       bars do not reach it). GRID4=tw takes it with the day (00:00, 04:00
+//       ... UTC), GRID4=ny with 17:00 New York (02:00, 06:00 ... in US
+//       winter), GRID4=utc1 at 01:00 all year; the study is run each way.
+//     Twelve Data cut its daily bars other ways before (17:00 New York to
+//     2025-04-16, then some other way); the emails read them as they are now.
+//     The daily email comes at 00:01 UTC, three or four hours after the bar
+//     ends; its trade is still entered at the bar's close, as every chart's.
 //   * the signals: the emails' (indicatorSignals, as #157 and #165): Q-Trend's
 //     BUY and SELL (STRONG or not) and ULTRA's, each bar judged with the 600
 //     bars to it, from anchoredStart; only those the sweep mails: it reads a
@@ -115,7 +138,7 @@
 //     reproduce the program's own pick and call on all 50.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isGoldBreak, isMarketClosed, isPossiblyClosed, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
+import { barFullyClosed, isGoldBreak, isMarketClosed, isPossiblyClosed, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
@@ -133,13 +156,19 @@ const START_MS = Date.parse(`${START}T00:00:00Z`);
 const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
 const SEED = Number(Deno.env.get("SEED") || 7);
-// the 4-hour grid: "ny" — from 17:00 New York (01:00, 05:00 ... UTC in US
-// summer time, 02:00, 06:00 ... in winter); "utc1" — from 01:00 UTC all year
-const GRID4 = Deno.env.get("GRID4") === "utc1" ? "utc1" : "ny";
-// the daily grid: "utc" — the UTC day (Twelve Data's now); "ny-end" — 17:00
-// New York to 17:00, stamped 00:00 UTC of the day it ends (kept for a check)
-const GRIDD = Deno.env.get("GRIDD") === "ny-end" ? "ny-end" : "utc";
-const GRID = `4h ${GRID4}, daily ${GRIDD}`;
+// the 4-hour grid (THE MEASURE, the bars): "tw" — with the day of 07:00
+// Sydney (00:00, 04:00 ... UTC while Sydney keeps summer time, 01:00, 05:00
+// ... else); "ny" — from 17:00 New York (01:00 ... in US summer time, 02:00
+// ... in winter); "utc1" — from 01:00 UTC all year
+const GRID4 = (["tw", "ny", "utc1"] as const).find((g) => g === Deno.env.get("GRID4")) ?? "tw";
+// the daily grid: "tw" — 07:00 to 07:00 Sydney, stamped the UTC date it ends
+// on (Twelve Data's now); "utc" — the UTC day; "ny-end" — 17:00 New York to
+// 17:00, stamped the day it ends (Twelve Data's to 2025-04-16)
+const GRIDD = (["tw", "utc", "ny-end"] as const).find((g) => g === Deno.env.get("GRIDD")) ?? "tw";
+// the hours Twelve Data prices and Dukascopy does not: "twelve" — a flat bar
+// at the last bid and ask; "none" — left out
+const FILL = Deno.env.get("FILL") === "none" ? "none" : "twelve";
+const GRID = `4h ${GRID4}, daily ${GRIDD}, fill ${FILL}`;
 const CACHE = "research/.cache/dukascopy/XAUUSD";
 const OUT = "research/out";
 const FINE = 5 * MINUTE;
@@ -182,12 +211,12 @@ const mailed = (closeMs: number): boolean => READ_AFTER.some((m) => !isPossiblyC
 // bars checked against indicatorSignals, and the coin's sample
 const CHECK_EVERY: Record<Tf, number> = { "5min": 661, "15min": 223, "1h": 53, "4h": 13, "1day": 3 };
 const COIN_EVERY: Record<Tf, number> = { "5min": 100, "15min": 33, "1h": 8, "4h": 1, "1day": 1 };
-// the periods the app's Twelve Data bars reach (read 2026-09-29): the bars
-// here printed for the comparison
+// the periods the app's Twelve Data bars reach (read 2026-09-29; the daily
+// ones as the feed is now): the bars here printed for the comparison
 const COMPARE_FROM: Partial<Record<Tf, number>> = {
   "1h": Date.parse("2026-08-26T00:00:00Z"),
   "4h": Date.parse("2026-05-18T00:00:00Z"),
-  "1day": Date.parse("2024-04-09T00:00:00Z"),
+  "1day": Date.parse("2025-11-10T00:00:00Z"),
 };
 
 // ---- the prices ----------------------------------------------------------------------
@@ -307,16 +336,39 @@ const regroup = (s: Series, keyOf: (t: number) => number, openOf: (k: number) =>
   return out;
 };
 
+// Sydney's offset from UTC: summer time (+11) from the first Sunday of
+// October, 02:00 standard time, to the first Sunday of April, 03:00 summer
+// time — each 16:00 UTC the day before (the rule since 2008; the same as the
+// tz database's Australia/Sydney at every quarter hour 2020-2026)
+const sydneyOffsetMs = (ms: number): number => {
+  const y = new Date(ms).getUTCFullYear();
+  const firstSunday = (month: number) => {
+    const first = new Date(Date.UTC(y, month, 1)).getUTCDay();
+    return 1 + ((7 - first) % 7);
+  };
+  const end = Date.UTC(y, 3, firstSunday(3) - 1, 16);
+  const start = Date.UTC(y, 9, firstSunday(9) - 1, 16);
+  return ms < end || ms >= start ? 11 * HOUR : 10 * HOUR;
+};
+// GRID4=tw: the 4-hour grid's first hour, with the day of 07:00 Sydney
+const twStart4 = (t: number) => (sydneyOffsetMs(t) === 11 * HOUR ? 0 : HOUR);
+
 // the grids: each timeframe's bar key for a moment, and that bar's stamp
 const nyLocal = (t: number) => t + nyOffsetMs(t);
 const GRIDS: Record<Tf, { key: (t: number) => number; open: (k: number, t: number) => number }> = {
   "5min": { key: (t) => Math.floor(t / FINE), open: (k) => k * FINE },
   "15min": { key: (t) => Math.floor(t / (15 * MINUTE)), open: (k) => k * 15 * MINUTE },
   "1h": { key: (t) => Math.floor(t / HOUR), open: (k) => k * HOUR },
-  "4h": GRID4 === "ny"
+  "4h": GRID4 === "tw"
+    ? { key: (t) => Math.floor((t - twStart4(t)) / (4 * HOUR)), open: (k, t) => k * 4 * HOUR + twStart4(t) }
+    : GRID4 === "ny"
     ? { key: (t) => Math.floor((nyLocal(t) - HOUR) / (4 * HOUR)), open: (k, t) => k * 4 * HOUR + HOUR - nyOffsetMs(t) }
     : { key: (t) => Math.floor((t - HOUR) / (4 * HOUR)), open: (k) => k * 4 * HOUR + HOUR },
-  "1day": GRIDD === "ny-end"
+  "1day": GRIDD === "tw"
+    // 07:00 to 07:00 Sydney, stamped the UTC midnight of the day it ends
+    // (the Sydney date it starts on)
+    ? { key: (t) => Math.floor((t + sydneyOffsetMs(t) - 7 * HOUR) / DAY), open: (k) => k * DAY }
+    : GRIDD === "ny-end"
     // 17:00 New York to 17:00, stamped the UTC midnight of the day it ends
     ? { key: (t) => Math.floor((nyLocal(t) - 17 * HOUR) / DAY), open: (k) => (k + 1) * DAY }
     : { key: (t) => Math.floor(t / DAY), open: (k) => k * DAY },
@@ -324,12 +376,77 @@ const GRIDS: Record<Tf, { key: (t: number) => number; open: (k: number, t: numbe
 // where a bar's prices end (its close), which for a daily bar stamped the
 // day it ends is not its stamp and a day
 const dataEndOf = (tf: Tf, stamp: number): number => {
+  if (tf === "1day" && GRIDD === "tw") {
+    // 07:00 Sydney the next day: 21:00 UTC on the stamped day, 20:00 in
+    // Sydney's summer
+    return stamp + 31 * HOUR - sydneyOffsetMs(stamp + 20 * HOUR);
+  }
   if (tf === "1day" && GRIDD === "ny-end") {
     // 17:00 New York on the stamped day
     const guess = stamp + 21 * HOUR;
     return stamp + 17 * HOUR - nyOffsetMs(guess);
   }
   return stamp + LIVE_STEP_MS[tf];
+};
+// FILL=twelve: the hours Twelve Data prices and Dukascopy does not (THE
+// MEASURE, the bars), each a flat hour at the last bid and ask: on a Friday
+// after its last hour to 21:00, on a Sunday from 17:00 (the app's
+// SUNDAY_PREOPEN_UTC_HOUR) to the open, and a gap of one or two hours on a
+// weekday (the daily hour off). A longer gap (a day the data lacks) is left.
+const fillCount = { friday: 0, sunday: 0, weekday: 0 };
+const fillAsTwelve = (s: Series): Series => {
+  const at: number[] = [];
+  const src: number[] = [];
+  const add = (t: number, i: number) => {
+    at.push(t);
+    src.push(i);
+  };
+  for (let i = 0; i < s.n; i++) {
+    add(s.t[i], -1 - i);
+    if (i + 1 >= s.n) break;
+    const a = s.t[i];
+    const b = s.t[i + 1];
+    if (b - a <= HOUR) continue;
+    if (b - a > DAY) {
+      if (new Date(a).getUTCDay() === 5) {
+        for (let h = a + HOUR; h <= Math.floor(a / DAY) * DAY + 21 * HOUR && h < b; h += HOUR) {
+          add(h, i);
+          fillCount.friday++;
+        }
+      }
+      if (new Date(b).getUTCDay() === 0) {
+        for (let h = Math.max(Math.floor(b / DAY) * DAY + 17 * HOUR, a + HOUR); h < b; h += HOUR) {
+          add(h, i);
+          fillCount.sunday++;
+        }
+      }
+    } else if (b - a <= 3 * HOUR) {
+      for (let h = a + HOUR; h < b; h += HOUR) {
+        add(h, i);
+        fillCount.weekday++;
+      }
+    }
+  }
+  const out = newSeries(at.length);
+  at.forEach((t, j) => {
+    out.t[j] = t;
+    const k = src[j];
+    if (k < 0) {
+      const i = -1 - k;
+      out.bo[j] = s.bo[i];
+      out.bh[j] = s.bh[i];
+      out.bl[j] = s.bl[i];
+      out.bc[j] = s.bc[i];
+      out.ao[j] = s.ao[i];
+      out.ah[j] = s.ah[i];
+      out.al[j] = s.al[i];
+      out.ac[j] = s.ac[i];
+    } else {
+      out.bo[j] = out.bh[j] = out.bl[j] = out.bc[j] = s.bc[k];
+      out.ao[j] = out.ah[j] = out.al[j] = out.ac[j] = s.ac[k];
+    }
+  });
+  return out;
 };
 const put = (s: Series, tf: Tf): Series => {
   const g = GRIDS[tf];
@@ -464,6 +581,10 @@ if (SYNTHETIC) {
   dataInfo.minutes = { candles: m1.series.n, files: m1.files, oneSide: m1.oneSide, unmatchedFiles: m1.unmatchedFiles.slice(0, 20), first: m1.series.n ? iso(m1.series.t[0]) : null, last: m1.series.n ? iso(m1.series.t[m1.series.n - 1]) : null, missingDays: missing };
   dataInfo.hours = { candles: hourly.n, files: h1.files, oneSide: h1.oneSide, unmatchedFiles: h1.unmatchedFiles.slice(0, 20), span: hourlyOnly };
   dataInfo.hoursAgainstMinutes = { compared, differ, examples };
+}
+if (FILL === "twelve") {
+  hourly = fillAsTwelve(hourly);
+  dataInfo.filledHours = fillCount;
 }
 // the data's end: the last 5-minute bar's close
 const NOW = fine.t[fine.n - 1] + FINE;
@@ -615,7 +736,9 @@ const sampled = (t: number, every: number): boolean => every <= 1 || mix(mix(791
 for (const tf of TFS) {
   const step = LIVE_STEP_MS[tf];
   const base = tf === "5min" ? fine : tf === "15min" ? put(fine, "15min") : tf === "1h" ? hourly : put(hourly, tf);
-  const quotes = quotesOf(base);
+  // less the bars wholly inside the weekend, as the app drops Twelve Data's
+  // (parseTwelveData): on the daily chart the one stamped Saturday
+  const quotes = quotesOf(base).filter((q) => !barFullyClosed(barOpenMs(q.datetime), step));
   // the chart's bars: mid, rounded to cents, closed by the data's end
   const candles = historyRead(PAIR, tf, quotes, NOW).candles;
   const byOpen = new Map(quotes.map((q) => [barOpenMs(q.datetime), q]));
@@ -780,13 +903,14 @@ for (const tf of TFS) {
   let trades = 0;
   const eitherSeen = new Set<string>();
   for (const sg of sent) {
-    // the signal bar's close against the 5-minute bar ending there
+    // the signal bar's close against the last 5-minute bar before its end
+    // (the one ending there, or for a flat hour the last price)
     const T = dataEndOf(tf, times[sg.i]);
-    const j = lowerBound(fine.t, T - FINE);
+    const j = lowerBound(fine.t, T) - 1;
     closeCheck.compared++;
-    if (!(j < fine.n && fine.t[j] === T - FINE && Math.abs(fine.bc[j] - qs[sg.i].bid.close) < 0.0015 && Math.abs(fine.ac[j] - qs[sg.i].ask.close) < 0.0015)) {
+    if (!(j >= 0 && fine.t[j] >= times[sg.i] - 3 * DAY && Math.abs(fine.bc[j] - qs[sg.i].bid.close) < 0.0015 && Math.abs(fine.ac[j] - qs[sg.i].ask.close) < 0.0015)) {
       closeCheck.mismatched++;
-      if (closeCheck.examples.length < 10) closeCheck.examples.push(`${tf} ${iso(times[sg.i])} bar ${qs[sg.i].bid.close}/${qs[sg.i].ask.close} 5-min ${j < fine.n ? `${iso(fine.t[j])} ${fine.bc[j]}/${fine.ac[j]}` : "none"}`);
+      if (closeCheck.examples.length < 10) closeCheck.examples.push(`${tf} ${iso(times[sg.i])} bar ${qs[sg.i].bid.close}/${qs[sg.i].ask.close} 5-min ${j >= 0 ? `${iso(fine.t[j])} ${fine.bc[j]}/${fine.ac[j]}` : "none"}`);
     }
     const sets = sg.rule === "qtrend" ? ["qtrend", ...(sg.strong ? ["strong"] : [])] : ["ultra"];
     const ek = `${sg.i}:${sg.side}`;
@@ -932,6 +1056,6 @@ if (compareLines.length) {
 const aggOut = (a: Agg) => ({ ...meanOf(a), lo4: meanOf(a, "blocks").lo, hi4: meanOf(a, "blocks").hi, ...tailOf(a), n: a.n, wins: a.wins, tpFirst: tpRate(a), exits: a.exits, bars: a.n ? a.bars / a.n : null });
 await Deno.mkdir(OUT, { recursive: true });
 await Deno.writeTextFile(
-  `${OUT}/gold${SYNTHETIC ? `-synthetic-${SEED}` : ""}-${GRID4}-${GRIDD}.json`,
+  `${OUT}/gold${SYNTHETIC ? `-synthetic-${SEED}` : ""}-${GRID4}-${GRIDD}-${FILL}.json`,
   JSON.stringify({ start: START, split: SPLIT, now: iso(NOW), grid: GRID, synthetic: SYNTHETIC, seed: SEED, data: dataInfo, coverage, check, nestCheck, closeCheck, groups: Object.fromEntries([...groups].map(([k, g]) => [k, g.map((h) => Object.fromEntries([...h].map(([s, a]) => [s, aggOut(a)])))])), pick, verdict }, null, 1),
 );

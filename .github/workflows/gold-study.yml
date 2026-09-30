@@ -1,7 +1,10 @@
 # #167: the emails' levels on gold (research/gold.ts), on the gold prices
 # research/dukascopy.py kept in the Actions cache (the "Research gold"
-# workflow fetches them). Run with both 4-hour grids (GRID4 ny, utc1), the
-# winter one of Twelve Data's not being known.
+# workflow fetches them). The bars cut as the app holds Twelve Data's (tw),
+# and three other ways for what is not known of them: the 4-hour grid while
+# Sydney keeps summer time (ny, utc1), and the hours Twelve Data prices and
+# Dukascopy does not left out (fill none). One job each, so each job's log
+# holds its whole report.
 #
 # Read-only: it reads the kept prices, prints a report to the job log and
 # uploads the same numbers as an artifact. It fetches nothing, writes
@@ -23,8 +26,17 @@ permissions:
 
 jobs:
   study:
+    name: study (4h ${{ matrix.grid4 }}, daily ${{ matrix.gridd }}, fill ${{ matrix.fill }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { grid4: tw, gridd: tw, fill: twelve }
+          - { grid4: ny, gridd: tw, fill: twelve }
+          - { grid4: utc1, gridd: tw, fill: twelve }
+          - { grid4: tw, gridd: tw, fill: none }
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -37,34 +49,23 @@ jobs:
           restore-keys: dukascopy-xau-
       - name: What the kept prices hold
         run: python3 research/dukascopy.py --report
-      - name: Run the study (4-hour bars from 17:00 New York)
+      - name: Run the study
         env:
           START: ${{ inputs.start || '2024-01-01' }}
           SPLIT: ${{ inputs.split || '2025-05-19' }}
-          GRID4: ny
+          GRID4: ${{ matrix.grid4 }}
+          GRIDD: ${{ matrix.gridd }}
+          FILL: ${{ matrix.fill }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-read=.
           --allow-write=research/out
-          --allow-env=START,SPLIT,SYNTHETIC,SEED,GRID4,GRIDD
-          research/gold.ts
-      - name: Run the study (4-hour bars from 01:00 UTC)
-        if: always()
-        env:
-          START: ${{ inputs.start || '2024-01-01' }}
-          SPLIT: ${{ inputs.split || '2025-05-19' }}
-          GRID4: utc1
-        run: >
-          deno run
-          --v8-flags=--max-old-space-size=6144
-          --allow-read=.
-          --allow-write=research/out
-          --allow-env=START,SPLIT,SYNTHETIC,SEED,GRID4,GRIDD
+          --allow-env=START,SPLIT,SYNTHETIC,SEED,GRID4,GRIDD,FILL
           research/gold.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gold-out
+          name: gold-out-${{ matrix.grid4 }}-${{ matrix.gridd }}-${{ matrix.fill }}
           path: research/out/
           retention-days: 30
