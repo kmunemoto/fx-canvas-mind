@@ -12,7 +12,7 @@ import { normalizeLiveRead, type LiveRead } from "../lib/liveChart";
 import { liveRead } from "../../supabase/functions/live-chart/logic";
 import type { QuoteCandle } from "../../supabase/functions/track-outcomes/quotes";
 import type { NumericCandle } from "../lib/types";
-import { ULTRA_DEFAULTS, pctOf, pineRsi, ultra, type UltraTrade } from "../lib/ultra";
+import { ULTRA_DEFAULTS, ULTRA_GOLD, ULTRA_PAIRS, pctOf, pineRsi, ultra, ultraParamsFor, type UltraTrade } from "../lib/ultra";
 
 const render = (ui: ReactElement): RenderResult => rtlRender(<LocaleProvider initial="ja">{ui}</LocaleProvider>);
 
@@ -54,6 +54,13 @@ describe("#151 ULTRA: the video's settings", () => {
     expect(ULTRA_DEFAULTS).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 5, tp2: 10, tp3: 15 });
   });
 
+  it("#166/#168: a currency pair's stop 30 pips; gold's targets $30, $60 and $90 with the video's $10 stop", () => {
+    expect(ULTRA_PAIRS).toEqual({ ...ULTRA_DEFAULTS, sl: 30 });
+    expect(ULTRA_GOLD).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 30, tp2: 60, tp3: 90 });
+    expect(ultraParamsFor(true)).toBe(ULTRA_GOLD);
+    expect(ultraParamsFor(false)).toBe(ULTRA_PAIRS);
+  });
+
   it("Pine's ta.rsi: Wilder's averages from the simple average of the first 14 changes; 100 with no fall, 0 with no rise", () => {
     const r = pineRsi(gold.map((b) => b.close), 14);
     expect(r[13]).toBeNull();
@@ -89,6 +96,26 @@ describe("#151 ULTRA: its signals, targets and tally", () => {
       if (tr.side === "BUY") expect(p <= 30 && c > 30).toBe(true);
       else expect(p >= 70 && c < 70).toBe(true);
     }
+  });
+
+  // #168: the same signals at gold's targets. The expected rows were counted
+  // again independently (a Python count from the rules above, which gives the
+  // rows of the test before it at 5, 10 and 15 exactly)
+  it("gold at $30, $60 and $90: the same signals, most stopped before TP1; one still open, not counted", () => {
+    const r = ultra(gold, gold.length - 2, 1, ULTRA_GOLD);
+    same(r.trades.map(rowOf), [
+      [111, "BUY", 4294.3, 4284.3, [4324.3, 4354.3, 4384.3], [null, null, null], 169, "SL", 169],
+      [114, "BUY", 4290.23, 4280.23, [4320.23, 4350.23, 4380.23], [null, null, null], 221, "SL", 221],
+      [170, "BUY", 4284.09, 4274.09, [4314.09, 4344.09, 4374.09], [null, null, null], 227, "SL", 227],
+      [228, "BUY", 4277.09, 4267.09, [4307.09, 4337.09, 4367.09], [null, null, null], 247, "SL", 247],
+      [230, "BUY", 4277.51, 4267.51, [4307.51, 4337.51, 4367.51], [null, null, null], 247, "SL", 247],
+      [247, "BUY", 4271.65, 4261.65, [4301.65, 4331.65, 4361.65], [null, null, null], 303, "SL", 303],
+      [263, "SELL", 4287.66, 4297.66, [4257.66, 4227.66, 4197.66], [null, null, null], 270, "SL", 270],
+      [271, "SELL", 4294.91, 4304.91, [4264.91, 4234.91, 4204.91], [295, null, null], null, "TP1", null],
+      [304, "BUY", 4265.1, 4255.1, [4295.1, 4325.1, 4355.1], [null, null, null], 357, "SL", 357],
+      [358, "BUY", 4257.39, 4247.39, [4287.39, 4317.39, 4347.39], [null, null, null], null, null, null],
+    ]);
+    expect(r.stats).toEqual({ tp1: 1, tp2: 0, tp3: 0, sl: 8, total: 9 });
   });
 
   it("a currency pair: the same numbers in pips (USD/JPY: 0.10 and 0.05, 0.10, 0.15); still open at the end: not counted", () => {
@@ -165,11 +192,12 @@ describe("#151 ULTRA on the chart", () => {
     resetChartPrefsCache();
   });
 
-  it("is on unless switched off, listed with the signals, named with the video's numbers ($ on gold, pips on a pair)", () => {
+  it("is on unless switched off, listed with the signals, named with its numbers ($ on gold, pips on a pair)", () => {
     expect(CHART_PREFS_DEFAULTS.overlays.ultra).toBe(true);
     const { unmount } = render(<PriceChart candles={shown} pair="XAU/USD" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
     expect(screen.getByTestId("chart-group-signals").contains(screen.getByTestId("chart-overlay-name-ultra"))).toBe(true);
-    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL $10・TP $5/10/15）");
+    // #168: gold's targets $30, $60 and $90
+    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL $10・TP $30/60/90）");
     unmount();
     render(<PriceChart candles={shown.map((b) => ({ ...b }))} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
     expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL 30・TP 5/10/15 pips）");
@@ -185,36 +213,53 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.queryByTestId("chart-ultra-signal-SELL")).toBeNull();
     const first = screen.getAllByTestId("chart-ultra-signal-BUY")[0];
     expect(first.querySelector("text")!.textContent).toBe("Buy ☆");
-    expect(first.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4265.10・損切り 4255.10・TP1 4270.10・TP2 4275.10・TP3 4280.10");
-    // TP1 on 308 and 363; TP2 on 281, 326 and 367; TP3 on 288 and 370; no stop on screen
-    expect(screen.getAllByTestId("chart-ultra-hit-TP1")).toHaveLength(2);
-    expect(screen.getAllByTestId("chart-ultra-hit-TP2")).toHaveLength(3);
-    expect(screen.getAllByTestId("chart-ultra-hit-TP3")).toHaveLength(2);
-    expect(screen.queryByTestId("chart-ultra-hit-SL")).toBeNull();
-    // the newest signal (358): a buy that reached TP3 on 370 — its box faint, without prices
+    // #168: gold's targets $30, $60 and $90 (the trades as counted in "gold at
+    // $30, $60 and $90" above)
+    expect(first.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4265.10・損切り 4255.10・TP1 4295.10・TP2 4325.10・TP3 4355.10");
+    // on screen: TP1 on 295 (the sell of 271); the stops of 247 (on 303) and 304 (on 357)
+    expect(screen.getAllByTestId("chart-ultra-hit-TP1")).toHaveLength(1);
+    expect(screen.queryByTestId("chart-ultra-hit-TP2")).toBeNull();
+    expect(screen.queryByTestId("chart-ultra-hit-TP3")).toBeNull();
+    expect(screen.getAllByTestId("chart-ultra-hit-SL")).toHaveLength(2);
+    // the newest signal (358): a buy neither stopped nor at TP1 yet — its box open, with its prices
     const box = screen.getByTestId("chart-ultra-box");
-    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["BUY", "false"]);
-    expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4247.39・TP1 4262.39・TP2 4267.39・TP3 4272.39");
-    expect(screen.queryByTestId("chart-ultra-tag-entry")).toBeNull();
+    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["BUY", "true"]);
+    expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4247.39・TP1 4287.39・TP2 4317.39・TP3 4347.39");
+    // the entry and TP1 lie among the bars shown (4253.73–4288.25); TP3 lies
+    // above every bar read (4311.22), so above the chart whatever it draws
+    const tag = (k: string) => screen.getByTestId(`chart-ultra-tag-${k}`).textContent;
+    expect(tag("entry")).toBe("Entry 4257.39");
+    expect(tag("tp1")).toBe("TP1 4287.39");
+    expect(tag("tp3")).toBe("TP3 4347.39 ↑");
+    // the stop and TP2 lie past the bars shown and the room the chart leaves
+    // around them (4253.73–4288.25, padded 16% of it: 4248.21–4293.77): at
+    // the edges, with arrows
+    expect(tag("sl")).toBe("SL 4247.39 ↓");
+    expect(tag("tp2")).toBe("TP2 4317.39 ↑");
     // the table: every signal from bar 0, the ones before the chart too
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 9 90%");
-    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 6 60%");
-    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 3 30%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 1 10%");
-    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 10");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 90%");
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 1 11%");
+    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 0 0%");
+    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 0 0%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 8 89%");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 9");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 11%");
     // #152: the tally is a row above the chart, not over it
     const table = screen.getByTestId("chart-ultra-table");
     expect(table.closest("svg")).toBeNull();
     expect(table.compareDocumentPosition(screen.getByTestId("chart-candles")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // the newest signal has ended: no room is left right of the newest bar
+    // the newest signal is open: its prices sit in room left right of the newest candle
     const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
     const lastBody = bodies[bodies.length - 1];
-    const plotRight = Number(screen.getByTestId("chart-candles").closest("svg")!.getAttribute("viewBox")!.split(" ")[2]);
-    expect(plotRight - (Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width")))).toBeLessThan(80);
+    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
+    for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) {
+      expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
+    }
     const note = screen.getByTestId("chart-ultra-legend").textContent!;
-    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips で測ると", "約86%", "4時間足 86.6%", "金と Twelve Data の銘柄は測っていません"]) expect(note).toContain(part);
+    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips で測ると", "約86%", "4時間足 86.6%", "TP1 30・TP2 60・TP3 90 ドル", "金は Dukascopy の値", "4時間足 20.8%", "損益ゼロには25%より上、スプレッドの分さらに上が要ります", "金以外の Twelve Data の銘柄は測っていません"]) {
+      expect(note).toContain(part);
+    }
     expect(note).not.toContain("このアプリでは測っていません");
+    expect(note).not.toContain("金と Twelve Data の銘柄は測っていません");
   });
 
   it("a pair in pips: the newest signal still open, its box on to the right edge with its prices; × where stops came first", () => {
@@ -298,7 +343,8 @@ describe("#151 ULTRA on the chart", () => {
   });
 
   it("the forming bar is not judged: its reach of TP1 is neither marked nor counted", () => {
-    const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 97];
+    // #168: gold's TP1 is $30 above the Buy's close of 92
+    const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 122];
     const b = closes.map((c, i) => {
       const o = i > 0 ? closes[i - 1] : c;
       return { datetime: new Date(T0 + i * M1).toISOString().replace("T", " ").slice(0, 19), open: o, high: Math.max(o, c) + 0.2, low: Math.min(o, c) - 0.2, close: c };

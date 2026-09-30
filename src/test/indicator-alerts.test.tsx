@@ -16,6 +16,7 @@ import {
   INDICATOR_INTERVALS,
   QTREND_RULE_ID,
   ULTRA_RULE_ID,
+  breakEvenPct,
   freshFor,
   gmoIntervalsDue,
   indicatorIntervalsFor,
@@ -379,6 +380,26 @@ describe("#155 what the sweep reads, and when", () => {
     expect(Date.parse(qt.closedAt) - Date.parse(qt.barTime)).toBe(M5);
   });
 
+  it("#168: a gold signal carries the $10 stop and targets of $30, $60 and $90, on either indicator", () => {
+    const H1 = 60 * 60_000;
+    const T = Date.parse("2026-09-01T00:00:00Z");
+    const bars = Array.from({ length: 700 }, (_, i) => {
+      const mid = 4300 + 60 * Math.sin(i / 37) + 0.18 * i + 24 * Math.sin(i / 6) + 4.5 * Math.sin(i * 1.7);
+      const r = (v: number) => Number(v.toFixed(2));
+      return { datetime: new Date(T + i * H1).toISOString().slice(0, 19).replace("T", " "), open: r(mid - 1.5), high: r(mid + 4.5), low: r(mid - 4.5), close: r(mid) };
+    });
+    const all = Array.from({ length: 100 }, (_, k) => 600 + k).flatMap((n) =>
+      indicatorSignals("XAU/USD", "1h", bars.slice(0, n), T + n * H1 + 60_000).filter((sg) => sg.barTime === new Date(T + (n - 1) * H1).toISOString()),
+    );
+    for (const rule of ["ultra", "qtrend"] as const) {
+      const sg = all.find((x) => x.rule === rule)!;
+      expect(sg, rule).toBeTruthy();
+      const d = sg.side === "BUY" ? 1 : -1;
+      expect(sg.sl).toBeCloseTo(sg.close - d * 10, 9);
+      expect(sg.tps!.map((v) => (v - sg.close) * d)).toEqual([30, 60, 90].map((x) => expect.closeTo(x, 9)));
+    }
+  });
+
   it("#156/#157: a Q-Trend email carries the stop and targets (ULTRA's numbers) and what they did on its own timeframe", () => {
     const sig = {
       rule: "qtrend" as const, pair: "USD/JPY", interval: "5min", side: "SELL" as const, strong: true,
@@ -420,17 +441,35 @@ describe("#155 what the sweep reads, and when", () => {
     expect(twelve.text).toContain("EUR/CHF そのものは測っていません（GMO の FX の値です）。");
     expect(renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h" }, "en").text).toContain("EUR/CHF itself was not measured; these are GMO's FX pairs' figures.");
     expect(h4.text).not.toContain("そのものは測っていません");
-    // gold in dollars, the video's $10 stop (#166); not measured, and the
-    // currency pairs' figures are at another stop: none given
-    const gold = renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h", close: 4327.15, sl: 4337.15, tps: [4322.15, 4317.15, 4312.15] }, "ja");
+    // gold in dollars: the video's $10 stop (#166), the targets $30, $60 and
+    // $90 (#168), and what they did, measured on Dukascopy's gold (docs §8.80)
+    const goldLv = { close: 4327.15, sl: 4337.15, tps: [4297.15, 4267.15, 4237.15] as [number, number, number] };
+    const gold = renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h", ...goldLv }, "ja");
     expect(gold.text).toContain("  損切り 4337.15（$10.00）");
-    expect(gold.text).toContain("  利確1 4322.15（$5.00）");
-    expect(gold.text).toContain("金はこの目安では測っていません。");
-    expect(gold.text).not.toContain("過去の1時間足");
-    expect(renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h" }, "en").text).toContain("Gold has not been measured at these levels.");
-    const goldUl = renderIndicatorMail({ ...sig, rule: "ultra", pair: "XAU/USD", interval: "1h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, close: 4327.15, sl: 4337.15, tps: [4322.15, 4317.15, 4312.15] }, "ja");
-    expect(goldUl.text).toContain("ULTRA の目安（動画の設定）:");
+    expect(gold.text).toContain("  利確1 4297.15（$30.00）");
+    expect(gold.text).toContain("  利確3 4237.15（$90.00）");
+    // breaking even needs $10 / ($10 + $30)
+    expect(gold.text).toContain("過去の1時間足（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 25.6%（損益ゼロには25%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約0.03ドルの負けでした。");
+    expect(gold.text).not.toContain("測っていません");
+    expect(gold.text).not.toContain("GMO の FX");
+    expect(renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "1h", ...goldLv }, "en").text).toContain(
+      "Measured on past 1-hour bars (January 2024–September 2026, Dukascopy's gold prices cut into bars as Twelve Data's, spread paid), these levels reached TP1 before the stop 25.6% of the time (breaking even needs more than 25%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) lost about $0.03 a trade on average.",
+    );
+    // a gain where it was one: Q-Trend on the 4-hour chart
+    expect(renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "4h", ...goldLv }, "ja").text).toContain("利確1に届いたのは 27.2%（損益ゼロには25%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約0.59ドルの勝ちでした。");
+    expect(renderIndicatorMail({ ...sig, pair: "XAU/USD", interval: "4h", ...goldLv }, "en").text).toContain("made about $0.59 a trade on average.");
+    const goldUl = renderIndicatorMail({ ...sig, rule: "ultra", pair: "XAU/USD", interval: "1h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, ...goldLv }, "ja");
+    expect(goldUl.text).toContain("ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:");
+    expect(goldUl.text).toContain("動画（金）の勝率は79〜80%で、損切りは10です。金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。過去の1時間足（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 23.9%");
+    expect(goldUl.text).toContain("約0.74ドルの負けでした。");
     expect(goldUl.text).not.toContain("損切りを30pipsにしています");
+    const goldUlEn = renderIndicatorMail({ ...sig, rule: "ultra", pair: "XAU/USD", interval: "4h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, ...goldLv }, "en");
+    expect(goldUlEn.text).toContain("ULTRA's levels (the video's stop; the targets $30, $60 and $90):");
+    expect(goldUlEn.text).toContain("with a stop of 10. On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them. Measured on past 4-hour bars");
+    expect(goldUlEn.text).toContain("20.8% of the time");
+    expect(goldUlEn.text).toContain("lost about $1.97 a trade");
+    expect(breakEvenPct(true)).toBe(25);
+    expect(breakEvenPct(false)).toBe(86);
     // ULTRA's email: the video's figure beside what was measured on its own timeframe
     const ul = renderIndicatorMail({ ...sig, rule: "ultra", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
     expect(ul.text).toContain("ULTRA の目安（利確は動画の設定、損切りは30pips）:");

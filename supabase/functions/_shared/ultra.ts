@@ -33,7 +33,8 @@
 // before it. On a currency pair the same numbers are pips (10 pips, 5/10/15
 // pips): $10 on gold taken as a currency's price would be ten yen on USD/JPY.
 // #166: on a currency pair the stop is 30 pips (ULTRA_PAIRS below); gold
-// keeps the video's $10.
+// keeps the video's $10. #168: gold's targets are $30, $60 and $90
+// (ULTRA_GOLD below).
 //
 // Shown on the chart, and #155: the email alerts (signal-alerts) judge on
 // its signals too, from this same code (moved here from src/lib/ultra.ts,
@@ -50,11 +51,16 @@ export type UltraParams = typeof ULTRA_DEFAULTS;
 
 // #166: the stop on a currency pair. The owner (2026-09-29), shown the stops
 // 10 to 100 pips measured on the emails' 4-hour signals (docs §8.77), chose
-// 30 pips (「2で」). The signals themselves do not depend on it; gold, not
-// measured, keeps the video's $10.
+// 30 pips (「2で」). The signals themselves do not depend on it.
 export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 30 };
+// #168: gold's targets. The owner (2026-09-30), shown gold measured with
+// targets of $5 to $50 and stops of $10 up (docs §8.79: none clearly better
+// than now), chose wider targets (「2で」): TP1 $30, and TP2 and TP3 twice and
+// three times it, as the video's 5, 10 and 15; the stop stays the video's
+// $10. The signals themselves do not depend on them.
+export const ULTRA_GOLD: UltraParams = { ...ULTRA_DEFAULTS, tp1: 30, tp2: 60, tp3: 90 };
 // the settings a chart's levels are drawn and mailed at
-export const ultraParamsFor = (gold: boolean): UltraParams => (gold ? ULTRA_DEFAULTS : ULTRA_PAIRS);
+export const ultraParamsFor = (gold: boolean): UltraParams => (gold ? ULTRA_GOLD : ULTRA_PAIRS);
 
 // the video's colours: a green entry and Buy, a red stop and Sell, blue targets
 export const ULTRA_COLORS = { buy: "#43A047", sell: "#F4511E", entry: "#4CAF50", sl: "#E53935", tp: "#2962FF" };

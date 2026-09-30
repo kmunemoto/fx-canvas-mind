@@ -184,7 +184,7 @@ export const qTrend = (bars: ReadonlyArray<Bar>, params: QTrendParams = QT_DEFAU
 // (pips on a pair, dollars on gold), followed as ULTRA's are (ultra.ts
 // followTrade). The chart draws the newest; the emails carry the same.
 // #166: ULTRA's settings for the chart's pair (ultraParamsFor: a currency
-// pair's stop 30 pips).
+// pair's stop 30 pips; #168: gold's targets $30, $60 and $90).
 export const qTrendTrades = (
   bars: ReadonlyArray<Bar>,
   signals: QTrendRead["signals"],
