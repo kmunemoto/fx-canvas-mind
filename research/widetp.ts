@@ -180,9 +180,10 @@
 //     whole period −0.49 (−1.24 to +0.26; by four weeks −1.33 to +0.35).
 //   * told: the pick's second-half "less now" on ULTRA's signals alone
 //     +3.34 (+0.41 to +6.27; by four weeks −0.23 to +6.91; 671 trades),
-//     STRONG's +4.09, Q-Trend's −0.31; each pair −3.98 (EUR/USD) to +5.26
-//     (USD/JPY). The coin on A+B: now and the candidates (L30) −1.23 to
-//     −1.84 on the halves.
+//     STRONG's +4.09 (+0.47 to +7.71; by four weeks −0.06 to +8.25; 493),
+//     Q-Trend's −0.31; each pair −3.98 (EUR/USD) to +5.26 (USD/JPY): told
+//     only, one cut of many. The coin on A+B: now and the candidates (L30)
+//     −1.23 to −1.84 on the halves.
 //
 // NOT MEASURED: the other timeframes (ULTRA_PAIRS is one set for every
 // timeframe and currency pair, so a change reaches them too); the pairs
