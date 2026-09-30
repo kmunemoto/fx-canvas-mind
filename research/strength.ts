@@ -313,6 +313,33 @@
 //   * the first 83 runs (the program as of 5276f0e, before the fixes) gave
 //     the same calls and e.
 //
+// THE RESULT (2026-09-30, docs §8.85, run 36764072301 at 55ce46c; the two
+// runs before it stopped at tri, before any trade, as told under tri):
+//   * every check 0 differ: la 6,142; pk 22,804; p0 48,004 (the told line
+//     1,727, 0 differ); a 8,073; (h) −1.35 of 2,416 and −1.27 of 2,216
+//     again. No GMO read failed. G 5,455 bars; 144 weeks (72 and 72).
+//   * the placebo gate passed: 14 of the 1,000 called (1.4%), the Bonferroni
+//     road 17 (1.7%).
+//   * the pick X6 (first half t −0.35; X30 −0.49). Its second-half e +0.23
+//     of 1,859 trades in 71 weeks, [−1.32, +1.78] by week, [−1.74, +2.20]
+//     by four weeks: NOT CALLED. Above 610 of the 1,000 placebos' picks.
+//     X30's +0.09 [−1.61, +1.79]. Bonferroni: neither above 0.
+//   * the words fixed above: the meter does not pick the side clearly better
+//     than a coin toss at the same closes (at most about +2.2 pips a trade
+//     better). After the spread its trades lose as the coin does: X6 −1.66
+//     pips a trade (26.8 a week), X30 −1.93; the coin at every close −1.63;
+//     the emails −1.36 (4,742). TP1 first 57.7% and 57.1% (break-even 60%).
+//   * told: e without the fires reading a bar off the triangle, X6 second
+//     half +0.28 (67 fires fewer), about the same. M (the pair's own
+//     momentum): e +0.10 (L 6) and +0.44 (L 30; its second half +1.08,
+//     [+0.02, +2.14] by week, [−0.08, +2.24] by four weeks, one told line
+//     of many). The rank IC −0.022 (L 6) and −0.002 (L 30), neither away
+//     from 0. The stale meter −0.30 and +0.40. The yen the most often among
+//     the bottom two (36% and 41%). The emails labelled by the meter at L
+//     30: agree −2.95 pips a trade, against −0.82 (the second half, agree
+//     less against −3.98 [−7.82, −0.14] by week, [−8.72, +0.77] by four
+//     weeks): the strength agreeing with the email did not do better.
+//
 // POWER, a rough guess from the design (a small simulation on made-up walks,
 // not this program, not the data): about 1,850 (X6) and 1,000 (X30) trades in
 // the second half, standard errors of e about 0.7 and 0.95 pips; so about +2
