@@ -4231,6 +4231,8 @@ select rule, count(*) from public.signal_alert_subscriptions group by 1;
   - `research/gmo-lag.py --selftest`（作り物の答えでのまとめ方）と、そのまちがい2つを見つけること。
   - 型チェック（既存の12件のみ、変えたファイルには0件）、lint（既存の34件のみ、変えたファイルには0件）、Deno の型チェック（signal-alerts）。
 - **反映**: main へのマージで、GitHub Actions（`deploy-functions.yml`）が signal-alerts を反映する。画面は変えていない（Lovable の公開は要らない）。
+  - 4時間足そのものの確定を測る前に反映した。オーナーの指示「今反映して」（2026-09-30 20:10 JST。「今夜 21:00 の確定からすぐ速くしたい場合は、測る前に反映することもできる」と示したうえで）。
+  - 21:00 JST（12:00 UTC）の確定を、本番の巡回と測定（`gmo-lag.yml`）の両方で確かめる。
 
 ---
 
