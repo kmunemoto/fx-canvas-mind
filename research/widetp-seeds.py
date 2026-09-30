@@ -145,10 +145,9 @@ def main():
         same = 0
         for r in rs:
             p, c = replay(r, picks, None, 0)
-            same += p == r["pick"] and c == r["clearly"]
             b = {k for k in picks if bonf_above(r, k, len(picks))}
             same_b = b == {k for k, x in r["bonf"].items() if x["above"]}
-            same -= not same_b
+            same += p == r["pick"] and c == r["clearly"] and same_b
         print(f"  replayed from the runs' numbers: the pick, the call and the Bonferroni road as the runs' own on {same} of {len(rs)}")
         if out:
             kept = [k for k in picks if k not in out]
@@ -172,7 +171,8 @@ def main():
                     over += lo is not None and lo > 0
             mz, sz = mean_sd(zs)
             mz4, sz4 = mean_sd(z4s)
-            flag = " — LEAVE OUT (7 or more, or an sd over 1.25)" if over >= 7 or sz > 1.25 or sz4 > 1.25 else ""
+            # the gate is the path walks' (no rule gains there)
+            flag = " — LEAVE OUT (7 or more, or an sd over 1.25)" if synth == "path" and (over >= 7 or sz > 1.25 or sz4 > 1.25) else ""
             print(f"    {k:14s} low end over 0 on {over} of {len(zs)}; z {mz:+.2f} sd {sz:.2f}, 4 wk {mz4:+.2f} sd {sz4:.2f}{flag}")
 
         # the coin: TP1 first at L120, and "less now", the runs and halves together
@@ -191,6 +191,24 @@ def main():
             want = 100 * 29.8 / (30 + t)
             gate = "" if synth != "path" or t > 30 else (" ok" if abs(first - want) <= 2 else " — OFF BY MORE THAN 2 POINTS")
             print(f"    T{t} L120: TP1 first {first:.1f}% against 29.8/(30+T) {want:.1f}% (time-outs {100 * time / max(1, tp + sl + amb + time):.1f}%){gate}")
+        # the ATR targets, within 30 bars: TP1 first against the mean of
+        # 29.8 / (30 + k·ATR) over the trades (be is the mean of 30 / (30 + k·ATR))
+        for k in ("A0.5", "A1", "A2"):
+            tp = sl = amb = time = 0
+            be = ben = 0.0
+            for g in coin:
+                for h in (0, 1):
+                    s = g[h].get(f"{k} S30 L30")
+                    tp += s["exits"]["tp"]
+                    sl += s["exits"]["sl"]
+                    amb += s["exits"]["amb"]
+                    time += s["exits"]["time"]
+                    be += s["be"]
+                    ben += s["beN"]
+            first = 100 * tp / max(1, tp + sl + amb)
+            want = 100 * (29.8 / 30) * be / max(1, ben)
+            gate = "" if synth != "path" or k == "A2" else (" ok" if abs(first - want) <= 2 else " — OFF BY MORE THAN 2 POINTS")
+            print(f"    {k} L30: TP1 first {first:.1f}% against the mean of 29.8/(30+k·ATR) {want:.1f}% (time-outs {100 * time / max(1, tp + sl + amb + time):.1f}%){gate}")
         worst = 0.0
         for k in coin[0][0]:
             if not k.endswith(" − now"):

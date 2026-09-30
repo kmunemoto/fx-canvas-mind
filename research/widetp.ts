@@ -9,9 +9,11 @@
 // is §8.77's, whose TP1-5 rules' numbers have been seen; no other target's
 // on the currency pairs):
 //   * the data: GMO's pairs, 4-hour bars, START 2024-01-01 to END 2026-09-29
-//     14:16:25 UTC (the #165 run's own end, read from its log, so that its
-//     numbers come out again: check h), the first half before SPLIT
-//     2025-05-19. One run on the data.
+//     14:16:25 UTC (the end of #165's run 36581316006, read from its log, so
+//     that its numbers come out again: check h; §8.77 was written from the
+//     run before it, which ended 14:09:47 with the same 4-hour bars closed and
+//     printed the same numbers), the first half before SPLIT 2025-05-19. One
+//     run on the data.
 //   * the signals, the coin (every close either way), the entry (the signal
 //     bar's close, a buy at the ask, a sell at the bid) and the 5-minute
 //     bid/ask a trade is followed on (a buy's bid, a sell's ask): as #165
@@ -76,14 +78,20 @@
 //            close ∓ 30 pips, close ± 5, 10, 15;
 //       (a3) Q-Trend's ε in the email against ATR(14) of the bar before from
 //            the same start: the ATR series here is the email's;
+//       (a4) on the same bars, the bar's own ATR(14) (the ATR rules' unit)
+//            against it computed again on the bars from the email's start;
 //       (b) T5 S10 L30 against #164's now, T5 none against #164's hold;
 //       (c1) a trade out at TP1 or the limit under a stop, the same under the
 //            next wider (T5: 10, 30, none);
-//       (c2) the stop 30, a target and the next wider: out at the stop or the
-//            limit under the narrower, the same under the wider (both in one
-//            bar: the same pips and bars, out at the stop or both); out at
-//            TP1 under the wider, at TP1 under the narrower no later;
-//       (c3) out within 30 bars, the same within 120;
+//       (c2) the stop 30, a target and the next wider, the pips and the ATR
+//            ones together in the order of the trade's own distances (L30;
+//            L120, the pips ones): out at the stop or the limit under the
+//            narrower, the same under the wider (both in one bar: the same
+//            pips and bars, out at the stop or both); out at TP1 under the
+//            wider, at TP1 under the narrower no later; the wider never out
+//            sooner;
+//       (c3) out within 30 bars, the same within 120; timed out at 30 bars,
+//            out later within 120;
 //       (d) the exits at a close against the 4-hour bar's own;
 //       (e) no trade without its ATR, and no signal without its TP2 and TP3;
 //       (f) the reads at 0, 4 and 6 minutes mail the bars those at 4 and 6
@@ -104,8 +112,9 @@
 //     of the 100 (nominal 2.5 of 100; 7 or more by chance 1.3%), or whose z
 //     has an sd over 1.25, is left out of the candidates before the data
 //     (told). The coin: TP1 first at L120 within 2 points of 29.8 / (30 + T)
-//     for T5 to T30 (the levels on the mid close, the exit on the bid or ask,
-//     0.2 pip off it); "less now" within ±0.3 pips for every rule with the
+//     for T5 to T30, and at L30 of the mean of 29.8 / (30 + k·ATR) for A0.5
+//     and A1 (the levels on the mid close, the exit on the bid or ask, 0.2
+//     pip off it); "less now" within ±0.3 pips for every rule with the
 //     stop 30, the seeds and halves together (the stop filled at its level
 //     while the step crossing it went a little past, about 0.1 pip, gives a
 //     wider target a small edge: expected, and told).
@@ -507,13 +516,15 @@ for (const k of [NOW_RULE, ...PICKS]) {
   TP23.set(k, [at(2), at(3)]);
   for (const x of TP23.get(k)!) if (!RULE_KEYS.has(x) && !EXTRA_KEYS.has(x)) throw new Error(`no rule ${x} for ${k}'s TP2 or TP3`);
 }
-// the chains the nesting checks walk, narrow to wide
+// the chains the nesting checks walk, narrow to wide. (c2) within 30 bars
+// walks every target with the stop 30, the pips and the ATR ones together, in
+// the order of the trade's own distances (so an ATR level is held against the
+// pips levels about it); within 120, the pips ones
 const C1_CHAINS = [["T5 S10 L30", "T5 S30 L30", "T5 Snone L30"], ["T5 S30 L120", "T5 Snone L120"]];
-const C2_CHAINS = [
-  [5, 10, 15, 20, 30, 40, 45, 60, 90, 120, 135, 180, 270].map((t) => `T${t} S30 L30`),
-  T_GRID.map((t) => `T${t} S30 L120`),
-  [0.5, 1, 1.5, 2, 3, 4, 6].map((k) => `A${k} S30 L30`),
-];
+// (by the rules' names, so a rule whose stop is not the one its name says is
+// held against the others and shows)
+const C2_L30 = [...RULES, ...EXTRAS].map((r) => r.key).filter((k) => k.endsWith(" S30 L30"));
+const C2_CHAINS = [T_GRID.map((t) => `T${t} S30 L120`)];
 const C3_PAIRS: Array<[string, string]> = [...T_GRID.map((t): [string, string] => [`T${t} S30 L30`, `T${t} S30 L120`]), ["T5 Snone L30", "T5 Snone L120"]];
 for (const k of [...C1_CHAINS.flat(), ...C2_CHAINS.flat(), ...C3_PAIRS.flat()]) if (!RULE_KEYS.has(k) && !EXTRA_KEYS.has(k)) throw new Error(`no rule ${k} for a check`);
 // every rule on the trades whose 120 bars are in the data
@@ -527,8 +538,9 @@ interface Trade {
   bars: number;
   f5: number;
   ms: number;
-  // TP1's distance, pips
+  // TP1's distance and the stop's, pips (the stop null: none)
   tgt: number;
+  stop: number | null;
 }
 // TP1 reached within the first 5-minute bar, 15 minutes, an hour, 4 hours, a
 // day (market 5-minute bars)
@@ -547,8 +559,10 @@ interface Agg {
   bars: number;
   exits: Record<Exit, number>;
   exitSum: Record<Exit, number>;
-  // Σ 30 / (30 + TP1): the break-even share of TP1 first, the spread left out
+  // Σ S / (S + TP1) over the trades with a stop S, and those trades: the
+  // break-even share of TP1 first, the spread left out
   be: number;
+  beN: number;
   fast: number[];
   msSum: number;
   held: number[];
@@ -556,7 +570,7 @@ interface Agg {
   blocks: Map<number, { n: number; s: number }>;
   all: number[];
 }
-const newAgg = (): Agg => ({ n: 0, sum: 0, wins: 0, winSum: 0, lossSum: 0, bars: 0, exits: { tp: 0, sl: 0, amb: 0, time: 0 }, exitSum: { tp: 0, sl: 0, amb: 0, time: 0 }, be: 0, fast: FAST.map(() => 0), msSum: 0, held: [], weeks: new Map(), blocks: new Map(), all: [] });
+const newAgg = (): Agg => ({ n: 0, sum: 0, wins: 0, winSum: 0, lossSum: 0, bars: 0, exits: { tp: 0, sl: 0, amb: 0, time: 0 }, exitSum: { tp: 0, sl: 0, amb: 0, time: 0 }, be: 0, beN: 0, fast: FAST.map(() => 0), msSum: 0, held: [], weeks: new Map(), blocks: new Map(), all: [] });
 const addTo = (a: Agg, week: number, pips: number, t?: Trade, tails = false) => {
   a.n++;
   a.sum += pips;
@@ -569,7 +583,10 @@ const addTo = (a: Agg, week: number, pips: number, t?: Trade, tails = false) => 
     a.bars += t.bars;
     a.exits[t.exit]++;
     a.exitSum[t.exit] += pips;
-    a.be += STOP / (STOP + t.tgt);
+    if (t.stop !== null) {
+      a.be += t.stop / (t.stop + t.tgt);
+      a.beN++;
+    }
     a.msSum += t.ms;
     if (tails) a.held.push(t.ms);
     if (t.exit === "tp") {
@@ -595,6 +612,7 @@ const mergeAgg = (xs: Array<Agg | undefined>): Agg | undefined => {
     a.lossSum += y.lossSum;
     a.bars += y.bars;
     a.be += y.be;
+    a.beN += y.beN;
     a.msSum += y.msSum;
     for (const k of Object.keys(a.exits) as Exit[]) {
       a.exits[k] += y.exits[k];
@@ -723,6 +741,7 @@ const checks = {
   signals: newCheck(), // (a)
   levels: newCheck(), // (a2)
   eps: newCheck(), // (a3)
+  atrSeries: newCheck(), // (a4)
   ref: newCheck(), // (b)
   stopNest: newCheck(), // (c1)
   targetNest: newCheck(), // (c2)
@@ -839,6 +858,10 @@ for (const pair of PAIRS) {
         tally(checks.eps, okE, () => `${pair} ${iso(times[i])} ε ${x.eps} / ATR before ${e}`);
       }
     }
+    // (a4) the bar's own ATR(14), the ATR rules' unit, computed again on the
+    // bars from the email's start to the bar
+    const own = pineAtr(candles.slice(a.s, i + 1), QT_DEFAULTS.atrPeriod).at(-1) ?? Number.NaN;
+    tally(checks.atrSeries, Number.isFinite(own) && own === atrAt[i], () => `${pair} ${iso(times[i])} ATR ${atrAt[i]} / again ${own}`);
   }
 
   // a trade entered at bar i's close under rule r (`a`: the bar's ATR),
@@ -866,7 +889,7 @@ for (const pair of PAIRS) {
     if (f >= fine.n) return null;
     const f0 = f;
     const mu = drift ? dir * DRIFT * unit : 0;
-    const out = (pips: number, exit: Exit, bars: number, at: number): Trade => ({ pips, exit, bars, f5: at - f0 + 1, ms: fine.t[at] + FINE - T, tgt });
+    const out = (pips: number, exit: Exit, bars: number, at: number): Trade => ({ pips, exit, bars, f5: at - f0 + 1, ms: fine.t[at] + FINE - T, tgt, stop: r.stop });
     for (let j = i + 1; j <= i + r.limit; j++) {
       const end = times[j] + step;
       const bars = j - i;
@@ -892,7 +915,7 @@ for (const pair of PAIRS) {
         const closePx = c[f - 1];
         const own = buy ? qs[j].bid.close : qs[j].ask.close;
         tally(checks.closes, Math.abs(closePx - own) <= unit / 1000, () => `${pair} ${iso(times[j])} ${side} ${closePx}/${own}`);
-        return { pips: pipsOf(closePx + mu * (f - f0)), exit: "time", bars, f5: f - f0, ms: fine.t[f - 1] + FINE - T, tgt };
+        return { pips: pipsOf(closePx + mu * (f - f0)), exit: "time", bars, f5: f - f0, ms: fine.t[f - 1] + FINE - T, tgt, stop: r.stop };
       }
     }
     return null;
@@ -912,7 +935,7 @@ for (const pair of PAIRS) {
     const h = buy ? fine.bh : fine.ah;
     const l = buy ? fine.bl : fine.al;
     const c = buy ? fine.bc : fine.ac;
-    const out = (pips: number, exit: Exit, bars: number): Trade => ({ pips, exit, bars, f5: 0, ms: 0, tgt: 5 });
+    const out = (pips: number, exit: Exit, bars: number): Trade => ({ pips, exit, bars, f5: 0, ms: 0, tgt: 5, stop: rule === "now" ? 10 : null });
     let f = lowerBound(fine.t, T);
     if (f >= fine.n) return null;
     for (let j = i + 1; j <= i + cap; j++) {
@@ -984,25 +1007,31 @@ for (const pair of PAIRS) {
         tally(checks.stopNest, sameFull(x, y), () => `${tag} ${chain[k]} ${x.exit} ${x.pips} ${x.bars} / ${chain[k + 1]} ${y.exit} ${y.pips} ${y.bars}`);
       }
     }
-    // (c2) a target and the next wider, the stop 30
-    for (const full of C2_CHAINS) {
-      const chain = full.filter((k) => got.has(k));
+    // (c2) a target and the next wider, the stop 30: out at the stop or the
+    // limit under the narrower, the same under the wider (both in one bar:
+    // the same pips and bars, out at the stop or both); out at TP1 under the
+    // wider, at TP1 under the narrower no later; the wider never out sooner.
+    // Two levels less than 1e-9 pip apart are one level: not compared.
+    const l30 = C2_L30.filter((k) => got.has(k)).sort((p, q) => got.get(p)!.tgt - got.get(q)!.tgt);
+    for (const chain of [l30, ...C2_CHAINS.map((full) => full.filter((k) => got.has(k)))]) {
       for (let k = 0; k + 1 < chain.length; k++) {
         const x = got.get(chain[k])!;
         const y = got.get(chain[k + 1])!;
-        let ok = true;
-        if (x.exit === "sl" || x.exit === "time") ok = sameFull(x, y);
-        else if (x.exit === "amb") ok = y.pips === x.pips && y.bars === x.bars && y.f5 === x.f5 && (y.exit === "sl" || y.exit === "amb");
-        if (y.exit === "tp") ok = ok && x.exit === "tp" && x.bars <= y.bars && x.f5 <= y.f5;
+        if (y.tgt - x.tgt <= 1e-9) continue;
+        let ok = y.f5 >= x.f5;
+        if (x.exit === "sl" || x.exit === "time") ok = ok && sameFull(x, y);
+        else if (x.exit === "amb") ok = ok && y.pips === x.pips && y.bars === x.bars && y.f5 === x.f5 && (y.exit === "sl" || y.exit === "amb");
+        if (y.exit === "tp") ok = ok && x.exit === "tp" && x.bars <= y.bars;
         tally(checks.targetNest, ok, () => `${tag} ${chain[k]} ${x.exit} ${x.pips} ${x.bars}/${x.f5} / ${chain[k + 1]} ${y.exit} ${y.pips} ${y.bars}/${y.f5}`);
       }
     }
-    // (c3) out within 30 bars: the same within 120
+    // (c3) out within 30 bars: the same within 120; timed out at 30 bars:
+    // out later within 120
     for (const [k30, k120] of C3_PAIRS) {
       const x = got.get(k30)!;
-      if (x.exit === "time") continue;
       const y = got.get(k120)!;
-      tally(checks.limitNest, sameFull(x, y), () => `${tag} ${k30} ${x.exit} ${x.pips} ${x.bars} / ${k120} ${y.exit} ${y.pips} ${y.bars}`);
+      const ok = x.exit === "time" ? y.bars > x.bars && y.f5 > x.f5 : sameFull(x, y);
+      tally(checks.limitNest, ok, () => `${tag} ${k30} ${x.exit} ${x.pips} ${x.bars}/${x.f5} / ${k120} ${y.exit} ${y.pips} ${y.bars}/${y.f5}`);
     }
 
     const half = T < SPLIT_MS ? 0 : 1;
@@ -1098,7 +1127,7 @@ const ruleText = (a: Agg | undefined, rule: string) => {
   const t = tailOf(a);
   const out = (Object.keys(a.exits) as Exit[]).filter((k) => a.exits[k] > 0).map((k) => `${k} ${pct(a.exits[k], a.n)}`).join(" ");
   const done = a.exits.tp + a.exits.sl + a.exits.amb;
-  return `  ${(rule + (rule === NOW_RULE ? " (now)" : "")).padEnd(20)} ${num(a.sum / a.n)} ${ciText(a)} pips/trade of ${String(a.n).padStart(5)}; won ${pct(a.wins, a.n)}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}; ${out}; TP1 first ${pct(a.exits.tp, done)} (break-even ${pct(a.be, a.n)}), the time-outs ${num(a.exits.time ? a.exitSum.time / a.exits.time : null, 1)}; held ${days(a.msSum / a.n)} d on average`;
+  return `  ${(rule + (rule === NOW_RULE ? " (now)" : "")).padEnd(20)} ${num(a.sum / a.n)} ${ciText(a)} pips/trade of ${String(a.n).padStart(5)}; won ${pct(a.wins, a.n)}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}; ${out}; TP1 first ${pct(a.exits.tp, done)} (break-even ${pct(a.be, a.beN)}), the time-outs ${num(a.exits.time ? a.exitSum.time / a.exits.time : null, 1)}; held ${days(a.msSum / a.n)} d on average`;
 };
 const ruleLine = (key: string, period: 0 | 1 | 2 | "full", rule: string) => {
   const a = period === "full" ? aggFull(key, rule) : aggAt(key, period, rule);
@@ -1115,10 +1144,11 @@ console.log(`candidates: ${PICKS.join(", ")}${EXCLUDED.length ? `; left out afte
 console.log(checkLine("(a) signals against indicatorSignals", checks.signals));
 console.log(checkLine("(a2) the email's close, stop and targets against now's", checks.levels));
 console.log(checkLine("(a3) Q-Trend's ε against ATR(14) of the bar before", checks.eps));
+console.log(checkLine("(a4) the bar's ATR(14) against it computed again from the email's start", checks.atrSeries));
 console.log(checkLine(`(b) T5 S10 against #164's now, T5 none against #164's hold${DRIFTING ? " (the coin only: the signals' prices moved)" : ""}`, checks.ref));
 console.log(checkLine("(c1) out at TP1 or the limit under a stop, the same under the next wider", checks.stopNest));
-console.log(checkLine("(c2) a target and the next wider", checks.targetNest));
-console.log(checkLine("(c3) out within 30 bars, the same within 120", checks.limitNest));
+console.log(checkLine("(c2) a target and the next wider, the pips and ATR ones together", checks.targetNest));
+console.log(checkLine("(c3) out within 30 bars the same within 120, timed out at 30 out later", checks.limitNest));
 console.log(checkLine("(d) exit closes against the 4-hour bar's own", checks.closes));
 console.log(checkLine("(e) trades with their ATR", checks.atr));
 console.log(checkLine("(e) signals with their TP2 and TP3", checks.extras));
@@ -1233,7 +1263,7 @@ const ownerLine = (key: string, period: 0 | 1 | "full", rule: string) => {
   const tp3 = tpReach(key, period, rule, 1);
   return [
     `  ${rule.padEnd(14)} ${String(a.n).padStart(5)} trades; ${num(a.sum / a.n)} ${ciText(a)} pips a trade${d ? `; less now ${num(d.sum / d.n)} ${ciText(d)}` : ""}`,
-    `  ${"".padEnd(14)} TP1 first ${pct(a.exits.tp, done)} (break-even ${pct(a.be, a.n)}); out: tp ${pct(a.exits.tp, a.n)}, sl ${pct(a.exits.sl + a.exits.amb, a.n)}, time ${pct(a.exits.time, a.n)} (those ${num(a.exits.time ? a.exitSum.time / a.exits.time : null, 1)} pips); TP1 within 15 min ${pct(a.fast[1], a.n)}, an hour ${pct(a.fast[2], a.n)}, a day ${pct(a.fast[4], a.n)}; held ${days(medianOf(a.held))} d (median)${tp2 ? `; TP2 ${tp2}, TP3 ${tp3}` : ""}${sig === "either" && TP23.has(rule) ? `; the chart's count: TP1 ${pct(ch.tp1, ch.tp1 + ch.sl)} (${ch.tp1} of ${ch.tp1 + ch.sl}, ${ch.open} open)` : ""}`,
+    `  ${"".padEnd(14)} TP1 first ${pct(a.exits.tp, done)} (break-even ${pct(a.be, a.beN)}); out: tp ${pct(a.exits.tp, a.n)}, sl ${pct(a.exits.sl + a.exits.amb, a.n)}, time ${pct(a.exits.time, a.n)} (those ${num(a.exits.time ? a.exitSum.time / a.exits.time : null, 1)} pips); TP1 within the first 5-minute bar ${pct(a.fast[0], a.n)}, 15 min ${pct(a.fast[1], a.n)}, an hour ${pct(a.fast[2], a.n)}, 4 hours ${pct(a.fast[3], a.n)}, a day ${pct(a.fast[4], a.n)}; held ${days(medianOf(a.held))} d (median)${tp2 ? `; TP2 ${tp2}, TP3 ${tp3}` : ""}${sig === "either" && TP23.has(rule) ? `; the chart's count: TP1 ${pct(ch.tp1, ch.tp1 + ch.sl)} (${ch.tp1} of ${ch.tp1 + ch.sl}, ${ch.open} open)` : ""}`,
   ].join("\n");
 };
 const OWNER_ROWS = [NOW_RULE, ...PICKS, ...L120_RULES];
@@ -1301,7 +1331,7 @@ const aggOut = (a: Agg | undefined) => {
   if (!a || !a.n) return null;
   const w = statOf(a, "weeks")!;
   const b = statOf(a, "blocks")!;
-  return { n: a.n, m: w.m, se: Number.isFinite(w.se) ? w.se : null, se4: Number.isFinite(b.se) ? b.se : null, C: w.C, C4: b.C, wins: a.wins, exits: a.exits, exitSum: a.exitSum, be: a.be, fast: a.fast, bars: a.bars / a.n, ...tailOf(a) };
+  return { n: a.n, m: w.m, se: Number.isFinite(w.se) ? w.se : null, se4: Number.isFinite(b.se) ? b.se : null, C: w.C, C4: b.C, wins: a.wins, exits: a.exits, exitSum: a.exitSum, be: a.be, beN: a.beN, fast: a.fast, bars: a.bars / a.n, ...tailOf(a) };
 };
 const OUT_KEYS = ["either|AB", "either|C", "either|all", "either BUY|AB", "either SELL|AB", "coin|AB", "coin|all"];
 const seriesOut = (key: string, period: 0 | 1 | 2) => {
