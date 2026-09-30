@@ -32,9 +32,11 @@
 //     GBP, AUD, NZD, CAD, CHF: v_c(k) the log of c/JPY's close, v_JPY 0;
 //     r_c(k; L) = v_c(k) − v_c(k − L); the strength s_c(k; L) = r_c less the
 //     mean of the eight r's (so the eight sum to 0). Ranked 1 (the strongest)
-//     to 8; an exact tie goes to the earlier in the order (counted: none
-//     expected). No volatility scaling, no smoothing, nothing fitted on the
-//     sample. The dollar pairs are not in it (USD would count twice): they
+//     to 8; an exact tie goes to the earlier in the order (counted. First
+//     fixed as "none expected"; the program's first try on a walk, before
+//     the data, gave 35 of 4,299 closes at L 6 and 23 at L 30: a cross whose
+//     rounded close is back where it was L bars before ties with the yen).
+//     No volatility scaling, no smoothing, nothing fitted on the sample. The dollar pairs are not in it (USD would count twice): they
 //     are traded, and checked against it (tri).
 //   * what it can add: s_A − s_B is A/B's own L-bar log return (exactly on
 //     the yen crosses; on the dollar pairs up to the triangle's residual).
@@ -226,4 +228,1221 @@
 // emails (told only); swap; slippage; the time from an email to an order;
 // whether production could read all seven crosses at a close in time.
 
-export {};
+import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
+import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import type { Candle } from "../supabase/functions/analyze/indicators.ts";
+import { barOpenMs } from "../supabase/functions/analyze/state.ts";
+import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
+import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
+import { ULTRA_PAIRS, ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
+import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, iso } from "./lib.ts";
+import {
+  CROSSES,
+  CURRENCIES,
+  NC,
+  TRADED,
+  addTo,
+  diffStatOf,
+  edgeOf,
+  edgesOf,
+  firesOf,
+  gridOf,
+  legsOf,
+  lowEndOf,
+  mergeAggs,
+  momentumState,
+  newAgg,
+  newTable,
+  placeboValues,
+  rankFires,
+  rankState,
+  ranksFor,
+  rng,
+  spearman,
+  statOf,
+  strengthAt,
+  tQuantile,
+  tiesOf,
+  tOf,
+  verdictOf,
+  verdictOn,
+  type Agg,
+  type Fire,
+  type Table,
+  type Values,
+  type Verdict,
+} from "./strength-lib.ts";
+
+const START = Deno.env.get("START") || "2024-01-01";
+const SPLIT = Deno.env.get("SPLIT") || "2025-05-19";
+// §8.83's end (the #165 run's)
+const END = Deno.env.get("END") || "2026-09-29T14:16:25Z";
+const START_MS = Date.parse(`${START}T00:00:00Z`);
+const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
+const END_ISO = END.includes("T") ? END : END.replace(" ", "T");
+const NOW = Date.parse(/[zZ]$|[+-]\d\d:\d\d$/.test(END_ISO) ? END_ISO : `${END_ISO}Z`);
+if (!Number.isFinite(NOW)) throw new Error(`END ${END} is not a time`);
+const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
+const SEED = Number(Deno.env.get("SEED") || 7);
+// the walks (the header): "null", "rank" (the positive control, with LSTAR
+// and DELTA), "trend"
+const SYNTH = Deno.env.get("SYNTH") || "null";
+if (!["null", "rank", "trend"].includes(SYNTH)) throw new Error(`SYNTH ${SYNTH} is not a walk here`);
+const LSTAR = Number(Deno.env.get("LSTAR") || 6);
+// pips a 4-hour bar, as on a 150-yen pair
+const DELTA = Number(Deno.env.get("DELTA") || 1);
+// the planted faults (the header): LOOKAHEAD, MISALIGN, ORIENT
+const FAULT = Deno.env.get("FAULT") || "";
+if (!["", "LOOKAHEAD", "MISALIGN", "ORIENT"].includes(FAULT)) throw new Error(`FAULT ${FAULT} is not a fault here`);
+if (!SYNTHETIC && (FAULT || SYNTH !== "null")) throw new Error("the faults and the walks' kinds are for SYNTHETIC runs only");
+const PLACEBOS = Number(Deno.env.get("PLACEBOS") || 1000);
+const CACHE = "research/.cache";
+const OUT = Deno.env.get("OUTDIR") || "research/out";
+const FINE = 5 * MINUTE;
+// the sweep's window (signal-alerts HISTORY_BARS, anchoredStart's)
+const WINDOW = 600;
+const TF = "4h";
+const STEP = LIVE_STEP_MS[TF];
+// #171: the sweep reads a 4-hour chart 0, 4 and 6 minutes after its close
+const READ_AFTER = [0, 4, 6];
+const mailed = (closeMs: number): boolean => READ_AFTER.some((m) => !isPossiblyClosed(closeMs + m * MINUTE));
+const CHECK_EVERY = 13;
+
+// the email's exit (#166, #173)
+if (ULTRA_PAIRS.sl !== 30 || ULTRA_PAIRS.tp1 !== 20) throw new Error("ULTRA_PAIRS is not TP1 20, stop 30: the email's exit has moved");
+const TP = ULTRA_PAIRS.tp1;
+const SL = ULTRA_PAIRS.sl;
+const LIMIT = 30;
+// §8.83's trades: those with 120 bars in the data (check h)
+const REPRO_NEED = 120;
+
+// the candidates (X6, X30), and the told lines' own settings
+const LS = [6, 30];
+const TOP = 2;
+const STALE = 120;
+const IC_AHEAD = 6;
+// the alignment gates (g1, tri)
+const GRID_GATE = 0.005;
+const TRI_MEDIAN = 1;
+const TRI_FAR = 5;
+const TRI_FAR_SHARE = 0.001;
+const TRI_SLIP = 5;
+// the placebo gate
+const PLACEBO_GATE = 0.04;
+
+const PAIRS = TRADED;
+const LEGS = PAIRS.map(legsOf);
+type Side = "BUY" | "SELL";
+const sideOf = (x: 1 | -1): Side => (x === 1 ? "BUY" : "SELL");
+const weekOf = (t: number) => Math.floor((t - WEEK_OFFSET) / WEEK);
+
+// ---- GMO's files (as research/prewarn.ts) ----------------------------------------------
+
+const getJson = async (url: string): Promise<{ status: number; body: unknown }> => {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (r.status === 404) return { status: 404, body: null };
+      if (r.status === 429 || r.status >= 500) {
+        await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
+        continue;
+      }
+      return { status: r.status, body: await r.json() };
+    } catch {
+      await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
+    }
+  }
+  return { status: 0, body: null };
+};
+const sound = (body: unknown): boolean => {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as { status?: unknown; data?: unknown };
+  return (b.status === 0 || b.status === 404) && Array.isArray(b.data);
+};
+const loadGmo = async (pair: string, tf: "5min" | "4h", fromMs: number): Promise<{ quotes: QuoteCandle[]; failed: number }> => {
+  const step = LIVE_STEP_MS[tf];
+  const symbol = GMO_SYMBOLS[pair];
+  const spec = GMO_INTERVALS[tf];
+  if (!symbol || !spec) throw new Error(`no GMO file for ${pair} ${tf}`);
+  // the 5-minute bars in day files (the last three read again), the 4-hour
+  // in year files (read again)
+  let keys: string[];
+  let fresh: Set<string>;
+  if (spec.key === "day") {
+    const today = jstDayKey(NOW);
+    keys = dateKeys(fromMs, NOW, "day").filter((k) => k <= today);
+    fresh = new Set(keys.slice(-3));
+  } else {
+    keys = [];
+    for (let y = Number(jstYearKey(fromMs)); y <= Number(jstYearKey(NOW)); y++) keys.push(String(y));
+    fresh = new Set(keys);
+  }
+  const bid: Array<{ t: number; c: Candle }> = [];
+  const ask: typeof bid = [];
+  let failed = 0;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < keys.length) {
+      const key = keys[cursor++];
+      for (const side of ["bid", "ask"] as const) {
+        const path = `${CACHE}/${symbol}/${spec.name}/${side}/${key}.json`;
+        let body: unknown;
+        if (!fresh.has(key)) {
+          try {
+            body = JSON.parse(await Deno.readTextFile(path));
+          } catch {
+            body = undefined;
+          }
+          if (body !== undefined && !sound(body)) body = undefined;
+        }
+        if (body === undefined) {
+          const r = await getJson(klineUrl(symbol, side, spec.name, key));
+          body = r.status === 404 ? { status: 404, data: [] } : r.body;
+          if (r.status === 0 || !sound(body)) {
+            failed++;
+            continue;
+          }
+          await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+          await Deno.writeTextFile(path, JSON.stringify(body));
+        }
+        (side === "bid" ? bid : ask).push(...parseKlines(body));
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  bid.sort((a, b) => a.t - b.t);
+  ask.sort((a, b) => a.t - b.t);
+  const quotes = mergeSides(bid, ask).filter((q) => {
+    const t = Date.parse(q.datetime);
+    return Number.isFinite(t) && t >= fromMs && !isMarketClosed(t) && t + step <= NOW;
+  });
+  return { quotes, failed };
+};
+
+// ---- the 5-minute bars ------------------------------------------------------------------
+
+interface Fine {
+  n: number;
+  t: Float64Array;
+  bo: Float64Array;
+  bh: Float64Array;
+  bl: Float64Array;
+  bc: Float64Array;
+  ao: Float64Array;
+  ah: Float64Array;
+  al: Float64Array;
+  ac: Float64Array;
+}
+const newFine = (n: number): Fine => ({ n, t: new Float64Array(n), bo: new Float64Array(n), bh: new Float64Array(n), bl: new Float64Array(n), bc: new Float64Array(n), ao: new Float64Array(n), ah: new Float64Array(n), al: new Float64Array(n), ac: new Float64Array(n) });
+const toFine = (qs: QuoteCandle[]): Fine => {
+  const f = newFine(qs.length);
+  qs.forEach((q, i) => {
+    f.t[i] = barOpenMs(q.datetime);
+    f.bo[i] = q.bid.open;
+    f.bh[i] = q.bid.high;
+    f.bl[i] = q.bid.low;
+    f.bc[i] = q.bid.close;
+    f.ao[i] = q.ask.open;
+    f.ah[i] = q.ask.high;
+    f.al[i] = q.ask.low;
+    f.ac[i] = q.ask.close;
+  });
+  return f;
+};
+const lowerBound = (xs: ArrayLike<number>, ms: number): number => {
+  let lo = 0;
+  let hi = xs.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (xs[m] < ms) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+};
+// the chart's rounding (live-chart logic.ts decimalsOf and round)
+const decimalsOf = (pair: string) => (pair.toUpperCase().includes("JPY") ? 3 : 5);
+const roundTo = (v: number, d: number): number => Number(v.toFixed(d));
+
+// ---- the walk "basket" (the header) ------------------------------------------------------
+
+// each currency's yen value to start from (made up), its step's size and
+// each pair's spread (pips; made up)
+const LEVEL = [1, 150, 160, 190, 100, 90, 110, 170];
+const AMP = [1.3, 1, 0.8, 1, 1.3, 1.3, 1, 0.8];
+const SPREAD_PIPS: Record<string, number> = { "USD/JPY": 0.2, "EUR/JPY": 0.4, "GBP/JPY": 0.9, "AUD/JPY": 0.6, "NZD/JPY": 1.2, "CAD/JPY": 1.5, "CHF/JPY": 1.8, "EUR/USD": 0.3, "GBP/USD": 1.0, "AUD/USD": 0.5, "NZD/USD": 1.3 };
+const SUB = 100;
+// a pair of two 1× currencies about 2 pips a 5-minute bar on a 150-yen pair:
+// the sd of 100 uniform steps of two is BASE × sqrt(200 / 12)
+const BASE = 0.02 / 150 / Math.sqrt((2 * SUB) / 12);
+const WEEK_SD = 0.3;
+const TREND_FALL = Math.log(0.92);
+
+// the walk's own ranking (not the program's: research/strength-lib.ts is
+// not used here), for the positive control
+const walkTopBottom = (now: Float64Array, before: Float64Array): { top: number[]; bottom: number[] } => {
+  const r = Array.from(now, (x, c) => x - before[c]);
+  const mean = r.reduce((a, b) => a + b, 0) / r.length;
+  const order = r.map((x, c) => ({ s: x - mean, c })).sort((a, b) => b.s - a.s || a.c - b.c);
+  return { top: [order[0].c, order[1].c], bottom: [order[NC - 1].c, order[NC - 2].c] };
+};
+
+const basket = (): Map<string, Fine> => {
+  const r = rng(SEED);
+  const gauss = () => {
+    let u = 0;
+    while (u === 0) u = r();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r());
+  };
+  const from = Math.floor(Date.UTC(new Date(START_MS).getUTCFullYear() - 1, 0, 1) / FINE) * FINE;
+  const times: number[] = [];
+  for (let ms = from; ms + FINE <= NOW; ms += FINE) if (!isMarketClosed(ms)) times.push(ms);
+  const n = times.length;
+  const out = new Map<string, Fine>(PAIRS.map((p) => [p, newFine(n)]));
+  const fines = PAIRS.map((p) => out.get(p)!);
+  const half = PAIRS.map((p) => (SPREAD_PIPS[p] * ultraUnit(p)) / 2);
+  const ratio = LEGS.map(([a, b]) => LEVEL[a] / LEVEL[b]);
+  const v = new Float64Array(NC);
+  const drift = new Float64Array(NC);
+  // the trend walk: the yen's fall spread evenly over the second half's steps
+  const secondSteps = times.filter((t) => t >= SPLIT_MS).length;
+  const jpyFall = SYNTH === "trend" && secondSteps ? TREND_FALL / secondSteps / SUB : 0;
+  // the rank walk: the kept 4-hour bars' closes (the load keeps a bar whose
+  // open the market is not shut at)
+  const closes: Float64Array[] = [];
+  const dLog = (DELTA * 0.01) / 150 / (STEP / FINE) / SUB;
+  let week = Number.NaN;
+  let mult = 1;
+  let bucket = Number.NaN;
+  let bucketKept = false;
+  const x = new Float64Array(PAIRS.length);
+  const hi = new Float64Array(PAIRS.length);
+  const lo = new Float64Array(PAIRS.length);
+  for (let i = 0; i < n; i++) {
+    const ms = times[i];
+    const w = weekOf(ms);
+    if (w !== week) {
+      week = w;
+      mult = Math.exp(WEEK_SD * gauss());
+    }
+    const bk = Math.floor(ms / STEP);
+    if (bk !== bucket) {
+      if (bucketKept) closes.push(Float64Array.from(v));
+      bucket = bk;
+      bucketKept = !isMarketClosed(bk * STEP);
+      drift.fill(0);
+      if (SYNTH === "rank" && closes.length > LSTAR) {
+        const tb = walkTopBottom(closes[closes.length - 1], closes[closes.length - 1 - LSTAR]);
+        for (const c of tb.top) drift[c] = dLog;
+        for (const c of tb.bottom) drift[c] = -dLog;
+      }
+    }
+    const fall = ms >= SPLIT_MS ? jpyFall : 0;
+    for (let p = 0; p < PAIRS.length; p++) {
+      x[p] = v[LEGS[p][0]] - v[LEGS[p][1]];
+      hi[p] = x[p];
+      lo[p] = x[p];
+    }
+    const open = Float64Array.from(x);
+    for (let k = 0; k < SUB; k++) {
+      for (let c = 0; c < NC; c++) v[c] += (r() - 0.5) * BASE * AMP[c] * mult + drift[c];
+      v[0] += fall;
+      for (let p = 0; p < PAIRS.length; p++) {
+        const y = v[LEGS[p][0]] - v[LEGS[p][1]];
+        if (y > hi[p]) hi[p] = y;
+        if (y < lo[p]) lo[p] = y;
+        x[p] = y;
+      }
+    }
+    for (let p = 0; p < PAIRS.length; p++) {
+      const f = fines[p];
+      const m = ratio[p];
+      const o = m * Math.exp(open[p]);
+      const h = m * Math.exp(hi[p]);
+      const l = m * Math.exp(lo[p]);
+      const c = m * Math.exp(x[p]);
+      const s = half[p];
+      f.t[i] = ms;
+      f.bo[i] = o - s;
+      f.bh[i] = h - s;
+      f.bl[i] = l - s;
+      f.bc[i] = c - s;
+      f.ao[i] = o + s;
+      f.ah[i] = h + s;
+      f.al[i] = l + s;
+      f.ac[i] = c + s;
+    }
+  }
+  return out;
+};
+// a walk's 4-hour bars from its 5-minute ones, on GMO's grid (0, 4, 8 … UTC),
+// kept as the load keeps them
+const fourHour = (f: Fine): QuoteCandle[] => {
+  const out: QuoteCandle[] = [];
+  let i = 0;
+  while (i < f.n) {
+    const open = Math.floor(f.t[i] / STEP) * STEP;
+    let j = i;
+    let bh = -Infinity;
+    let bl = Infinity;
+    let ah = -Infinity;
+    let al = Infinity;
+    while (j < f.n && f.t[j] < open + STEP) {
+      bh = Math.max(bh, f.bh[j]);
+      bl = Math.min(bl, f.bl[j]);
+      ah = Math.max(ah, f.ah[j]);
+      al = Math.min(al, f.al[j]);
+      j++;
+    }
+    if (!isMarketClosed(open) && open + STEP <= NOW) {
+      const dt = new Date(open).toISOString();
+      out.push({ datetime: dt, bid: { datetime: dt, open: f.bo[i], high: bh, low: bl, close: f.bc[j - 1] }, ask: { datetime: dt, open: f.ao[i], high: ah, low: al, close: f.ac[j - 1] } });
+    }
+    i = j;
+  }
+  return out;
+};
+
+// ---- the checks -------------------------------------------------------------------------
+
+const newCheck = () => ({ compared: 0, mismatched: 0, examples: [] as string[] });
+type Check = ReturnType<typeof newCheck>;
+const tally = (c: Check, ok: boolean, example: () => string) => {
+  c.compared++;
+  if (!ok) {
+    c.mismatched++;
+    if (c.examples.length < 10) c.examples.push(example());
+  }
+};
+const checks = {
+  identity: newCheck(), // (id)
+  lookahead: newCheck(), // (la)
+  again: newCheck(), // (c)
+  levels: newCheck(), // (a2)
+  follow: newCheck(), // (m)
+  closes: newCheck(), // (d)
+  pick: newCheck(), // (pk)
+  closeMid: newCheck(), // (p0)
+  signals: newCheck(), // (a)
+};
+let failedReads = 0;
+
+// ---- the 4-hour bars of the eleven --------------------------------------------------------
+
+interface Chart {
+  pair: string;
+  unit: number;
+  candles: Candle[];
+  times: Float64Array;
+  qs: QuoteCandle[];
+  byTime: Map<number, number>;
+}
+const walkFines = SYNTHETIC ? basket() : null;
+const charts: Chart[] = [];
+for (const pair of PAIRS) {
+  const from = Date.UTC(new Date(START_MS).getUTCFullYear() - 1, 0, 1) - 9 * HOUR;
+  let quotes: QuoteCandle[];
+  if (walkFines) {
+    quotes = fourHour(walkFines.get(pair)!).filter((q) => barOpenMs(q.datetime) >= from);
+    // MISALIGN: USD/JPY without one of its bars (the meter then joins AUD/JPY
+    // by position below)
+    if (FAULT === "MISALIGN" && pair === "USD/JPY") quotes = quotes.filter((_q, i) => i !== 1000);
+  } else {
+    const got = await loadGmo(pair, TF, from);
+    failedReads += got.failed;
+    quotes = got.quotes;
+  }
+  const candles = historyRead(pair, TF, quotes, NOW).candles;
+  const byOpen = new Map(quotes.map((q) => [barOpenMs(q.datetime), q]));
+  const times = Float64Array.from(candles, (c) => barOpenMs(c.datetime));
+  const qs = Array.from(times, (t) => byOpen.get(t)!);
+  if (qs.some((q) => !q)) throw new Error(`${pair}: a chart bar without its quote`);
+  charts.push({ pair, unit: ultraUnit(pair), candles, times, qs, byTime: new Map(Array.from(times, (t, i) => [t, i])) });
+}
+const chartOf = (pair: string) => charts[PAIRS.indexOf(pair)];
+const crossCharts = CROSSES.map(chartOf);
+
+// ---- the alignment (g1, tri): before anything else ----------------------------------------
+
+const align: { grid: Record<string, { lacks: number; share: number; offGrid: number; examples: string[] }>; union: number; tri: Record<string, { n: number; median: number; far: number; farShare: number; max: number; slipMedians: number[]; examples: string[] }>; stopped: string[] } = { grid: {}, union: 0, tri: {}, stopped: [] };
+{
+  const union = new Set<number>();
+  for (const c of crossCharts) for (const t of c.times) union.add(t);
+  align.union = union.size;
+  for (const ch of charts) {
+    const offGrid = Array.from(ch.times).filter((t) => t % STEP !== 0).length;
+    const isCross = CROSSES.includes(ch.pair);
+    const lacking = isCross ? [...union].filter((t) => !ch.byTime.has(t)).sort((a, b) => a - b) : [];
+    const share = isCross ? lacking.length / union.size : 0;
+    align.grid[ch.pair] = { lacks: lacking.length, share, offGrid, examples: lacking.slice(0, 10).map(iso) };
+    if (offGrid > 0) align.stopped.push(`(g1) ${ch.pair}: ${offGrid} bars not opening at 0, 4, 8, 12, 16 or 20 UTC`);
+    if (share > GRID_GATE) align.stopped.push(`(g1) ${ch.pair} lacks ${(100 * share).toFixed(2)}% of the crosses' times`);
+  }
+}
+const G = gridOf(crossCharts.map((c) => c.times));
+const nG = G.length;
+const T_OF = (k: number) => G[k] + STEP;
+const gIndex = new Map(G.map((t, k) => [t, k]));
+// each cross's close at each G bar (by time)
+const closeAt = crossCharts.map((ch) => Float64Array.from(G, (t) => ch.candles[ch.byTime.get(t)!].close));
+{
+  const uj = closeAt[0];
+  for (const pair of ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"]) {
+    const ch = chartOf(pair);
+    const x = closeAt[CROSSES.indexOf(`${pair.slice(0, 3)}/JPY`)];
+    const res = (shift: number) => {
+      const out: number[] = [];
+      for (let k = 0; k < nG; k++) {
+        const i = ch.byTime.get(G[k]);
+        const ku = k + shift;
+        if (i === undefined || ku < 0 || ku >= nG) continue;
+        out.push(Math.abs(ch.candles[i].close - x[k] / uj[ku]) / ch.unit);
+      }
+      return out.sort((a, b) => a - b);
+    };
+    const r0 = res(0);
+    const med = (xs: number[]) => (xs.length ? xs[Math.floor(xs.length / 2)] : Number.NaN);
+    const far = r0.filter((d) => d > TRI_FAR).length;
+    const slips = [res(-1), res(1)].map(med);
+    const examples: string[] = [];
+    for (let k = 0; k < nG && examples.length < 10; k++) {
+      const i = ch.byTime.get(G[k]);
+      if (i === undefined) continue;
+      const d = Math.abs(ch.candles[i].close - x[k] / uj[k]) / ch.unit;
+      if (d > TRI_FAR) examples.push(`${iso(G[k])} ${d.toFixed(1)}`);
+    }
+    align.tri[pair] = { n: r0.length, median: med(r0), far, farShare: r0.length ? far / r0.length : 0, max: r0.length ? r0[r0.length - 1] : Number.NaN, slipMedians: slips, examples };
+    if (!(med(r0) <= TRI_MEDIAN)) align.stopped.push(`(tri) ${pair}: median ${med(r0).toFixed(2)} pips`);
+    if (r0.length && far / r0.length > TRI_FAR_SHARE) align.stopped.push(`(tri) ${pair}: ${far} bars over ${TRI_FAR} pips`);
+    if (!slips.every((m) => m >= TRI_SLIP * Math.max(med(r0), 1e-9))) align.stopped.push(`(tri) ${pair}: one bar off, the median ${slips.map((m) => m.toFixed(2)).join(" / ")} against ${med(r0).toFixed(2)}: the check cannot see a slip`);
+  }
+}
+const num = (x: number | null | undefined, d = 2) => (x === null || x === undefined || !Number.isFinite(x) ? "   -  " : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}`);
+const pctOf = (x: number | null | undefined) => (x === null || x === undefined || !Number.isFinite(x) ? "  -  " : `${(100 * x).toFixed(1)}%`);
+console.log(`\n#174 currency strength, ${START} .. ${iso(NOW)} (halves at ${SPLIT}); the email's exit TP1 ${TP}, stop ${SL}, ${LIMIT} bars${SYNTHETIC ? `; SYNTHETIC ${SYNTH}${SYNTH === "rank" ? ` L* ${LSTAR} δ ${DELTA}` : ""} seed ${SEED}${FAULT ? ` FAULT ${FAULT}` : ""}` : ""}`);
+console.log(`\n== ALIGNMENT (before any trade)`);
+console.log(`(g1) the crosses' times: ${align.union}; G (all seven): ${nG}`);
+for (const [pair, g] of Object.entries(align.grid)) console.log(`  ${pair.padEnd(8)} off the grid ${g.offGrid}${CROSSES.includes(pair) ? `, lacks ${g.lacks} (${pctOf(g.share)})${g.examples.length ? ": " + g.examples.join(", ") : ""}` : ""}`);
+for (const [pair, t] of Object.entries(align.tri)) console.log(`(tri) ${pair.padEnd(8)} ${t.n} bars: median ${t.median.toFixed(3)} pips, over ${TRI_FAR} ${t.far} (${pctOf(t.farShare)}), max ${t.max.toFixed(2)}; USD/JPY one bar off: medians ${t.slipMedians.map((m) => m.toFixed(2)).join(" / ")}${t.examples.length ? "; " + t.examples.join(", ") : ""}`);
+const stopEarly = async () => {
+  console.log(`\nSTOPPED before any trade was followed:\n  ${align.stopped.join("\n  ")}`);
+  await Deno.mkdir(OUT, { recursive: true });
+  await Deno.writeTextFile(`${OUT}/strength${SYNTHETIC ? `-${SYNTH}${FAULT ? "-" + FAULT : ""}-${SEED}` : ""}.json`, JSON.stringify({ stopped: align.stopped, align, failedReads }));
+  Deno.exit(2);
+};
+if (align.stopped.length) await stopEarly();
+
+// ---- the meter ---------------------------------------------------------------------------
+
+// v by time (the program's): the log of each cross's close at G's bars
+const vTrue: Values = [new Float64Array(nG), ...closeAt.map((cl) => Float64Array.from(cl, Math.log))];
+let v: Values = vTrue;
+if (FAULT === "LOOKAHEAD") {
+  // the meter reading the close after
+  v = vTrue.map((a) => Float64Array.from(a, (_x, k) => a[Math.min(k + 1, nG - 1)]));
+}
+if (FAULT === "MISALIGN") {
+  // AUD/JPY joined by position from G's first bar
+  const ch = chartOf("AUD/JPY");
+  const i0 = ch.byTime.get(G[0])!;
+  v = vTrue.slice();
+  v[CURRENCIES.indexOf("AUD")] = Float64Array.from(G, (_t, k) => Math.log(ch.candles[Math.min(i0 + k, ch.candles.length - 1)].close));
+}
+// ORIENT: EUR/USD's state the wrong way round
+const RULE_LEGS: Array<[number, number]> = LEGS.map(([a, b], p) => (FAULT === "ORIENT" && PAIRS[p] === "EUR/USD" ? [b, a] : [a, b]));
+
+// where a fire may be taken: in the period, mailed, the pair's own bar
+const table: Table = newTable(nG, PAIRS.length);
+for (let k = 0; k < nG; k++) {
+  const T = T_OF(k);
+  table.week[k] = weekOf(T);
+  table.half[k] = T < START_MS || T > NOW ? -1 : T < SPLIT_MS ? 0 : 1;
+}
+const ownBar = (p: number, k: number) => charts[p].byTime.get(G[k]);
+for (let p = 0; p < PAIRS.length; p++) {
+  for (let k = 0; k < nG; k++) {
+    if (table.half[k] >= 0 && mailed(T_OF(k)) && ownBar(p, k) !== undefined) table.ok[p * nG + k] = 1;
+  }
+}
+const okAt = (p: number, k: number) => table.ok[p * nG + k] === 1;
+
+const ranks = new Map(LS.map((L) => [L, ranksFor(v, L)]));
+const firesX = new Map(LS.map((L) => [L, rankFires(ranks.get(L)!, RULE_LEGS, table, TOP)]));
+
+// (id): Σ s = 0, and s_c − s_JPY against the cross's own candles
+{
+  const s = new Float64Array(NC);
+  for (const L of LS) {
+    for (let k = L; k < nG; k++) {
+      strengthAt(v, k, L, s);
+      const sum = s.reduce((a, b) => a + b, 0);
+      let ok = Math.abs(sum) <= 1e-12;
+      let worst = "";
+      for (let c = 1; c < NC && ok; c++) {
+        const ch = crossCharts[c - 1];
+        const own = Math.log(ch.candles[ch.byTime.get(G[k])!].close / ch.candles[ch.byTime.get(G[k - L])!].close);
+        if (Math.abs(s[c] - s[0] - own) > 1e-12) {
+          ok = false;
+          worst = `${CURRENCIES[c]} ${s[c] - s[0]} / ${own}`;
+        }
+      }
+      tally(checks.identity, ok, () => `L${L} ${iso(G[k])} Σ ${sum} ${worst}`);
+    }
+  }
+}
+
+// (la): a second, plain working from each cross's candles cut at T_k, its
+// own grid from them (walked back from the last bar closed by then)
+const plainAt = (T: number, L: number): { t: number; s: number[]; sPrev: number[] } | null => {
+  const need = L + 2;
+  const ptr = crossCharts.map((ch) => lowerBound(ch.times, T - STEP + 1) - 1);
+  const common: number[][] = [];
+  const at: number[] = [];
+  while (common.length < need) {
+    if (ptr.some((q) => q < 0)) return null;
+    const tops = ptr.map((q, c) => crossCharts[c].times[q]);
+    const least = Math.min(...tops);
+    if (tops.every((t) => t === least)) {
+      common.push(ptr.map((q, c) => crossCharts[c].candles[q].close));
+      at.push(least);
+      for (let c = 0; c < ptr.length; c++) ptr[c]--;
+    } else {
+      for (let c = 0; c < ptr.length; c++) if (tops[c] > least) ptr[c]--;
+    }
+  }
+  const strengths = (a: number, b: number) => {
+    // the yen first, its value 1 throughout
+    const r = [0, ...common[a].map((x, c) => Math.log(x) - Math.log(common[b][c]))];
+    const mean = r.reduce((x, y) => x + y, 0) / r.length;
+    return r.map((x) => x - mean);
+  };
+  return { t: at[0], s: strengths(0, L), sPrev: strengths(1, L + 1) };
+};
+const plainRanks = (s: number[]) => s.map((x, c) => 1 + s.filter((y, d) => y > x || (y === x && d < c)).length);
+const plainState = (r: number[], a: number, b: number) => (r[a] <= TOP && r[b] >= NC + 1 - TOP ? 1 : r[a] >= NC + 1 - TOP && r[b] <= TOP ? -1 : 0);
+{
+  const firesAt = new Map(LS.map((L) => [L, new Set(firesX.get(L)!.map((f) => `${f.p}:${f.k}:${f.side}`))]));
+  const toCheck = new Set<number>();
+  for (const L of LS) for (const f of firesX.get(L)!) toCheck.add(f.k);
+  for (let k = 0; k < nG; k += CHECK_EVERY) toCheck.add(k);
+  const s = new Float64Array(NC);
+  for (const k of [...toCheck].sort((a, b) => a - b)) {
+    for (const L of LS) {
+      if (k - L - 1 < 0) continue;
+      const pl = plainAt(T_OF(k), L);
+      const bad: string[] = [];
+      if (!pl) bad.push("no plain working");
+      else {
+        if (pl.t !== G[k]) bad.push(`its last bar ${iso(pl.t)}`);
+        strengthAt(v, k, L, s);
+        for (let c = 0; c < NC; c++) if (Math.abs(s[c] - pl.s[c]) > 1e-12) bad.push(`s ${CURRENCIES[c]} ${s[c]} / ${pl.s[c]}`);
+        const rk = ranks.get(L)!;
+        const pr = plainRanks(pl.s);
+        const pp = plainRanks(pl.sPrev);
+        for (let c = 0; c < NC; c++) if (rk[k * NC + c] !== pr[c]) bad.push(`rank ${CURRENCIES[c]} ${rk[k * NC + c]} / ${pr[c]}`);
+        for (let p = 0; p < PAIRS.length; p++) {
+          const [a, b] = LEGS[p];
+          const now = plainState(pr, a, b);
+          const prev = plainState(pp, a, b);
+          const mine = rankState(rk, k, RULE_LEGS[p][0], RULE_LEGS[p][1], TOP);
+          const minePrev = rankState(rk, k - 1, RULE_LEGS[p][0], RULE_LEGS[p][1], TOP);
+          if (mine !== now || minePrev !== prev) bad.push(`${PAIRS[p]} states ${minePrev}→${mine} / ${prev}→${now}`);
+          const fires = now !== 0 && now !== prev && okAt(p, k);
+          const fired = firesAt.get(L)!.has(`${p}:${k}:${now}`);
+          if (fires !== fired) bad.push(`${PAIRS[p]} signals ${fired} / ${fires}`);
+        }
+      }
+      tally(checks.lookahead, bad.length === 0, () => `L${L} ${iso(G[k])}: ${bad.slice(0, 3).join("; ")}`);
+    }
+  }
+}
+
+// ---- the coin, the emails, and the meter's trades followed again, pair by pair -----------
+
+type Exit = 1 | 2 | 3 | 4; // tp, sl, amb (both in one bar: the stop), time
+const EXITS = ["", "tp", "sl", "amb", "time"];
+interface Trade {
+  pips: number;
+  exit: Exit;
+}
+const exitB = new Int8Array(nG * PAIRS.length);
+const exitS = new Int8Array(nG * PAIRS.length);
+const store = new Map<string, Agg>();
+const put = (series: string, half: 0 | 1, week: number, x: number) => {
+  const k = `${series}|${half}`;
+  let a = store.get(k);
+  if (!a) {
+    a = newAgg();
+    store.set(k, a);
+  }
+  addTo(a, week, x);
+};
+const aggAt = (series: string, half: 0 | 1 | "full"): Agg | undefined => (half === "full" ? mergeAggs([store.get(`${series}|0`), store.get(`${series}|1`)]) : store.get(`${series}|${half}`));
+const exitCounts = new Map<string, number[]>();
+const countExit = (series: string, e: Exit) => {
+  const c = exitCounts.get(series) ?? [0, 0, 0, 0, 0];
+  c[e]++;
+  exitCounts.set(series, c);
+};
+const reproAgg = [newAgg(), newAgg()];
+interface Cover {
+  pair: string;
+  bars: number;
+  inG: number;
+  ok: number;
+  coin: number;
+  signals: number;
+}
+const coverage: Cover[] = [];
+
+for (let p = 0; p < PAIRS.length; p++) {
+  const pair = PAIRS[p];
+  const ch = charts[p];
+  const { unit, candles, times, qs } = ch;
+  const n = candles.length;
+  let fine: Fine;
+  if (walkFines) fine = walkFines.get(pair)!;
+  else {
+    const got = await loadGmo(pair, "5min", START_MS - 5 * DAY);
+    failedReads += got.failed;
+    fine = toFine(got.quotes);
+  }
+  const dec = decimalsOf(pair);
+
+  // a trade at bar i's close (a buy at the ask, a sell at the bid), TP1 and
+  // the stop from the mid close, followed on the 5-minute bid/ask until the
+  // close of bar i + LIMIT (as research/widetp.ts tradeAt); null when its 30
+  // bars are not all in the data
+  const follow = (i: number, side: Side): Trade | null => {
+    if (i + LIMIT >= n) return null;
+    const T = times[i] + STEP;
+    const buy = side === "BUY";
+    const dir = buy ? 1 : -1;
+    const close = candles[i].close;
+    const tp = close + dir * TP * unit;
+    const sl = close - dir * SL * unit;
+    const fill = buy ? qs[i].ask.close : qs[i].bid.close;
+    const pipsOf = (x: number) => (buy ? x - fill : fill - x) / unit;
+    const o = buy ? fine.bo : fine.ao;
+    const h = buy ? fine.bh : fine.ah;
+    const l = buy ? fine.bl : fine.al;
+    const c = buy ? fine.bc : fine.ac;
+    let f = lowerBound(fine.t, T);
+    if (f >= fine.n) return null;
+    const f0 = f;
+    // (m) following starts at the first 5-minute bar opening at or after T
+    tally(checks.follow, fine.t[f0] >= T && (f0 === 0 || fine.t[f0 - 1] < T), () => `${pair} ${iso(T)} follows from ${iso(fine.t[f0])}`);
+    for (let j = i + 1; j <= i + LIMIT; j++) {
+      const end = times[j] + STEP;
+      while (f < fine.n && fine.t[f] < end) {
+        if (buy ? o[f] <= sl : o[f] >= sl) return { pips: pipsOf(o[f]), exit: 2 };
+        if (buy ? o[f] >= tp : o[f] <= tp) return { pips: pipsOf(o[f]), exit: 1 };
+        const hitSl = buy ? l[f] <= sl : h[f] >= sl;
+        const hitTp = buy ? h[f] >= tp : l[f] <= tp;
+        if (hitSl && hitTp) return { pips: pipsOf(sl), exit: 3 };
+        if (hitSl) return { pips: pipsOf(sl), exit: 2 };
+        if (hitTp) return { pips: pipsOf(tp), exit: 1 };
+        f++;
+      }
+      if (f >= fine.n && fine.t[fine.n - 1] + FINE < end) return null;
+      if (f === f0) return null;
+      if (j === i + LIMIT) {
+        const closePx = c[f - 1];
+        const own = buy ? qs[j].bid.close : qs[j].ask.close;
+        // (d) the time-out's close against the 4-hour bar's own
+        tally(checks.closes, Math.abs(closePx - own) <= unit / 1000, () => `${pair} ${iso(times[j])} ${side} ${closePx}/${own}`);
+        return { pips: pipsOf(closePx), exit: 4 };
+      }
+    }
+    return null;
+  };
+
+  // the coin at every G bar a fire may be taken at
+  let inG = 0;
+  let nOk = 0;
+  let nCoin = 0;
+  for (let k = 0; k < nG; k++) {
+    const i = ownBar(p, k);
+    if (i === undefined) continue;
+    inG++;
+    const T = T_OF(k);
+    // (p0) the 5-minute bar ending at the close: its mid close, rounded
+    if (T >= START_MS && T <= NOW) {
+      const fz = lowerBound(fine.t, T - FINE);
+      if (fz < fine.n && fine.t[fz] === T - FINE) {
+        const mid = roundTo((fine.bc[fz] + fine.ac[fz]) / 2, dec);
+        tally(checks.closeMid, mid === candles[i].close, () => `${pair} ${iso(times[i])} 5-minute mid ${mid} / close ${candles[i].close}`);
+      }
+    }
+    if (!okAt(p, k)) continue;
+    nOk++;
+    const b = follow(i, "BUY");
+    const s = follow(i, "SELL");
+    if (!b || !s) continue;
+    nCoin++;
+    const at = p * nG + k;
+    table.buy[at] = b.pips;
+    table.sell[at] = s.pips;
+    exitB[at] = b.exit;
+    exitS[at] = s.exit;
+    if (table.half[k] === 0 && times[i + LIMIT] + STEP <= SPLIT_MS) table.pickable[at] = 1;
+  }
+
+  // (c) and (a2): the meter's trades followed again, and their levels
+  // against the email's own
+  for (const L of LS) {
+    for (const f of firesX.get(L)!) {
+      if (f.p !== p) continue;
+      const i = ownBar(p, f.k)!;
+      const side = sideOf(f.side);
+      const again = follow(i, side);
+      const at = p * nG + f.k;
+      const want = f.side === 1 ? table.buy[at] : table.sell[at];
+      tally(checks.again, again === null ? Number.isNaN(want) : again.pips === want && again.exit === (f.side === 1 ? exitB[at] : exitS[at]), () => `${pair} ${iso(times[i])} ${side} ${again?.pips} / ${want}`);
+      const close = candles[i].close;
+      const dir = f.side;
+      const lv = ultraLevels(side, close, unit, ULTRA_PAIRS);
+      tally(checks.levels, lv.sl === close - dir * SL * unit && lv.tps[0] === close + dir * TP * unit, () => `${pair} ${iso(times[i])} ${side} sl ${lv.sl} tp ${lv.tps[0]}`);
+    }
+  }
+
+  // the emails' signals (as research/widetp.ts): on the bars the sweep judges
+  const anchorOf = (i: number): { ws: number; s: number } | null => {
+    if (i < WINDOW - 1) return null;
+    const ws = i - WINDOW + 1;
+    const w = times.subarray(ws, i + 1) as unknown as number[];
+    const last = i - ws;
+    const firstShown = Math.max(0, last - (CHART_BARS - 1));
+    return { ws, s: ws + anchoredStart(w, barStepMs(w.slice(firstShown)), firstShown, QT_DEFAULTS.period, last) };
+  };
+  const judgedBar = new Uint8Array(n);
+  const signals: Array<{ i: number; rule: "qtrend" | "ultra"; side: Side; strong: boolean }> = [];
+  let seg: { s: number; from: number; to: number } | null = null;
+  const flush = () => {
+    if (!seg) return;
+    const bars = candles.slice(seg.s, seg.to + 1);
+    const qt = qTrend(bars, QT_DEFAULTS, bars.length - 1);
+    for (const x of qt.signals) {
+      const at = seg.s + x.i;
+      if (at >= seg.from && at <= seg.to) signals.push({ i: at, rule: "qtrend", side: x.side, strong: x.strong });
+    }
+    const ul = ultra(bars, bars.length - 1, unit, ULTRA_PAIRS);
+    for (const tr of ul.trades) {
+      const at = seg.s + tr.i;
+      if (at >= seg.from && at <= seg.to) signals.push({ i: at, rule: "ultra", side: tr.side, strong: false });
+    }
+    seg = null;
+  };
+  for (let i = 0; i < n; i++) {
+    if (times[i] + STEP < START_MS) continue;
+    const a = anchorOf(i);
+    if (!a) {
+      flush();
+      continue;
+    }
+    judgedBar[i] = 1;
+    if (seg && seg.s === a.s && seg.to === i - 1) seg.to = i;
+    else {
+      flush();
+      seg = { s: a.s, from: i, to: i };
+    }
+  }
+  flush();
+  // (a) against the email's own function, on every 13th bar and every bar
+  // with a signal
+  {
+    const mine = new Map<number, string[]>();
+    for (const s of signals) mine.set(s.i, [...(mine.get(s.i) ?? []), `${s.rule}:${s.side}:${s.strong ? "S" : "-"}`]);
+    const toCheck = new Set<number>(signals.map((s) => s.i));
+    for (let i = 0; i < n; i += CHECK_EVERY) toCheck.add(i);
+    for (const i of [...toCheck].sort((x, y) => x - y)) {
+      if (!judgedBar[i]) continue;
+      const a = anchorOf(i)!;
+      const xs = indicatorSignals(pair, TF, candles.slice(a.ws, i + 1), times[i] + STEP + 60_000, 120_000).filter((x) => Date.parse(x.barTime) === times[i]);
+      const theirs = xs.map((x) => `${x.rule}:${x.side}:${x.strong ? "S" : "-"}`).sort().join(",");
+      const ours = (mine.get(i) ?? []).sort().join(",");
+      tally(checks.signals, theirs === ours, () => `${pair} ${iso(times[i])} mine=${ours || "-"} theirs=${theirs || "-"}`);
+    }
+  }
+  // (h) §8.83's T20: the email's trades, one a bar and side, those with 120
+  // bars in the data
+  {
+    const seen = new Set<string>();
+    for (const s of signals) {
+      const T = times[s.i] + STEP;
+      if (!mailed(T) || s.i + REPRO_NEED >= n) continue;
+      const key = `${s.i}:${s.side}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const t = follow(s.i, s.side);
+      if (t) addTo(reproAgg[T < SPLIT_MS ? 0 : 1], weekOf(T), t.pips);
+    }
+  }
+  // the emails (told): their trades (those with 30 bars in the data), e at
+  // their own closes, and the meter's label at each
+  {
+    const sEach = LS.map(() => new Float64Array(NC));
+    for (const rule of ["either", "qtrend", "ultra"] as const) {
+      const seen = new Set<string>();
+      for (const s of signals) {
+        if (rule !== "either" && s.rule !== rule) continue;
+        const T = times[s.i] + STEP;
+        if (T > NOW || !mailed(T)) continue;
+        const key = `${s.i}:${s.side}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const t = follow(s.i, s.side);
+        const o = follow(s.i, s.side === "BUY" ? "SELL" : "BUY");
+        if (!t || !o) continue;
+        const half: 0 | 1 = T < SPLIT_MS ? 0 : 1;
+        const w = weekOf(T);
+        const e = (t.pips - o.pips) / 2;
+        put(`em ${rule} pips`, half, w, t.pips);
+        put(`em ${rule} e`, half, w, e);
+        const k = gIndex.get(times[s.i]);
+        LS.forEach((L, li) => {
+          let label = "no meter";
+          if (k !== undefined && strengthAt(v, k, L, sEach[li])) {
+            const [a, b] = LEGS[p];
+            const sa = sEach[li][a];
+            const sb = sEach[li][b];
+            const dir = s.side === "BUY" ? 1 : -1;
+            label = dir * sa > 0 && dir * sb < 0 ? "agree" : dir * sa < 0 && dir * sb > 0 ? "against" : "mixed";
+          }
+          put(`em ${rule} L${L} ${label} pips`, half, w, t.pips);
+          put(`em ${rule} L${L} ${label} e`, half, w, e);
+        });
+      }
+    }
+  }
+  coverage.push({ pair, bars: n, inG, ok: nOk, coin: nCoin, signals: signals.length });
+  console.log(`${pair}: ${n} 4-hour bars, in G ${inG}, closes a fire may be taken at ${nOk}, the coin at ${nCoin}; the emails' signals ${signals.length}`);
+}
+
+// ---- the meter's trades, and the told lines -------------------------------------------------
+
+const quarterOf = (T: number) => Math.min(3, Math.max(0, Math.floor((4 * (T - SPLIT_MS)) / (NOW - SPLIT_MS))));
+// a rule's trades into the store: pips and e by half; by pair, side, and
+// (the second half) quarter; leave one currency out
+const keep = (name: string, fires: Fire[], detail: boolean) => {
+  let lost = 0;
+  for (const f of fires) {
+    const at = f.p * nG + f.k;
+    const b = table.buy[at];
+    const s = table.sell[at];
+    if (Number.isNaN(b) || Number.isNaN(s)) {
+      lost++;
+      continue;
+    }
+    const T = T_OF(f.k);
+    const half = table.half[f.k] as 0 | 1;
+    const w = table.week[f.k];
+    const pips = f.side === 1 ? b : s;
+    const e = edgeOf(b, s, f.side);
+    put(`${name} pips`, half, w, pips);
+    put(`${name} e`, half, w, e);
+    put(`${name} coin`, half, w, (b + s) / 2);
+    countExit(`${name}|${half}`, (f.side === 1 ? exitB[at] : exitS[at]) as Exit);
+    if (!detail) continue;
+    put(`${name} e @${PAIRS[f.p]}`, half, w, e);
+    put(`${name} e ${sideOf(f.side)}`, half, w, e);
+    if (half === 1) put(`${name} e q${quarterOf(T) + 1}`, 1, w, e);
+    for (let c = 0; c < NC; c++) if (LEGS[f.p][0] !== c && LEGS[f.p][1] !== c) put(`${name} e -${CURRENCIES[c]}`, half, w, e);
+  }
+  return lost;
+};
+const lostX = new Map<number, number>();
+for (const L of LS) lostX.set(L, keep(`X${L}`, firesX.get(L)!, true));
+// top one and bottom one; M; the stale meter
+for (const L of LS) {
+  keep(`T1_${L}`, rankFires(ranks.get(L)!, RULE_LEGS, table, 1), false);
+  keep(`M${L}`, firesOf((p, k) => momentumState(v, k, L, RULE_LEGS[p][0], RULE_LEGS[p][1]), PAIRS.length, nG, okAt), false);
+  keep(`S${L}`, rankFires(ranks.get(L)!, RULE_LEGS, table, TOP, STALE), true);
+}
+// the coin at every close it has
+for (let p = 0; p < PAIRS.length; p++) {
+  for (let k = 0; k < nG; k++) {
+    const at = p * nG + k;
+    if (Number.isNaN(table.buy[at])) continue;
+    const half = table.half[k] as 0 | 1;
+    put("coin all", half, table.week[k], (table.buy[at] + table.sell[at]) / 2);
+    put(`coin @${PAIRS[p]}`, half, table.week[k], (table.buy[at] + table.sell[at]) / 2);
+    countExit(`coin @${PAIRS[p]}`, exitB[at] as Exit);
+    countExit(`coin @${PAIRS[p]}`, exitS[at] as Exit);
+  }
+}
+// the rank IC, the shares of the top and bottom two, ties, and the hours a
+// lookback spans
+const shares = new Map<number, { top: number[]; bottom: number[]; bars: number }>();
+const ties = new Map<number, number>();
+const spans = new Map<number, number[]>();
+{
+  const s = new Float64Array(NC);
+  const ahead = new Float64Array(NC);
+  for (const L of LS) {
+    const sh = { top: new Array(NC).fill(0), bottom: new Array(NC).fill(0), bars: 0 };
+    let tie = 0;
+    const sp: number[] = [];
+    const rk = ranks.get(L)!;
+    for (let k = L; k < nG; k++) {
+      if (table.half[k] < 0) continue;
+      strengthAt(v, k, L, s);
+      if (tiesOf(s) > 0) tie++;
+      sh.bars++;
+      for (let c = 0; c < NC; c++) {
+        if (rk[k * NC + c] <= TOP) sh.top[c]++;
+        if (rk[k * NC + c] >= NC + 1 - TOP) sh.bottom[c]++;
+      }
+      sp.push((G[k] - G[k - L]) / HOUR);
+      if (k + IC_AHEAD < nG && strengthAt(v, k + IC_AHEAD, IC_AHEAD, ahead)) put(`ic ${L}`, table.half[k] as 0 | 1, table.week[k], spearman(s, ahead));
+    }
+    shares.set(L, sh);
+    ties.set(L, tie);
+    spans.set(L, sp.sort((a, b) => a - b));
+  }
+}
+// states entered where no fire may be taken (the market shut at the reads,
+// or the pair without its bar), in the period
+const lostStates = new Map<number, number>();
+for (const L of LS) {
+  const all = firesOf((p, k) => rankState(ranks.get(L)!, k, RULE_LEGS[p][0], RULE_LEGS[p][1], TOP), PAIRS.length, nG, (_p, k) => table.half[k] >= 0);
+  lostStates.set(L, all.filter((f) => !okAt(f.p, f.k)).length);
+}
+
+// ---- the pick and the call ----------------------------------------------------------------
+
+const edges = LS.map((L) => edgesOf(firesX.get(L)!, table));
+const verdict: Verdict = verdictOf(
+  edges.map((x) => x.first),
+  edges.map((x) => x.second),
+);
+// (pk) the pick again from the meter and the coin cut at SPLIT
+{
+  const nCut = G.findIndex((_t, k) => T_OF(k) >= SPLIT_MS);
+  const cut = nCut < 0 ? nG : nCut;
+  const vCut = v.map((a) => a.slice(0, cut));
+  const tCut = newTable(cut, PAIRS.length);
+  tCut.half.set(table.half.subarray(0, cut));
+  tCut.week.set(table.week.subarray(0, cut));
+  for (let p = 0; p < PAIRS.length; p++) {
+    tCut.ok.set(table.ok.subarray(p * nG, p * nG + cut), p * cut);
+    tCut.pickable.set(table.pickable.subarray(p * nG, p * nG + cut), p * cut);
+    // only the trades that end before SPLIT: the others would read past it
+    for (let k = 0; k < cut; k++) {
+      if (!table.pickable[p * nG + k]) continue;
+      tCut.buy[p * cut + k] = table.buy[p * nG + k];
+      tCut.sell[p * cut + k] = table.sell[p * nG + k];
+    }
+  }
+  const again = LS.map((L) => edgesOf(rankFires(ranksFor(vCut, L), RULE_LEGS, tCut, TOP), tCut).first);
+  const tAgain = again.map((a) => tOf(a));
+  const pickAgain = verdictOf(again, again.map(() => newAgg())).pick;
+  tally(checks.pick, pickAgain === verdict.pick && tAgain.every((t, c) => t === verdict.t[c]), () => `the pick ${verdict.pick} t ${verdict.t.join(", ")} / again ${pickAgain} t ${tAgain.join(", ")}`);
+}
+// the placebo gate
+let placeboCalled = 0;
+let placeboBonf = 0;
+const placeboE: number[] = [];
+for (let seed = 1; seed <= PLACEBOS; seed++) {
+  const pv = verdictOn(placeboValues(seed, nG), LS, RULE_LEGS, table, TOP);
+  if (pv.called) placeboCalled++;
+  if (pv.bonf.some(Boolean)) placeboBonf++;
+  if (pv.pick !== null) {
+    const x = edgesOf(rankFires(ranksFor(placeboValues(seed, nG), LS[pv.pick]), RULE_LEGS, table, TOP), table).second;
+    placeboE.push(x.n ? x.sum / x.n : Number.NaN);
+  }
+}
+const placeboRate = PLACEBOS ? placeboCalled / PLACEBOS : Number.NaN;
+const placeboBonfRate = PLACEBOS ? placeboBonf / PLACEBOS : Number.NaN;
+const placeboPassed = PLACEBOS > 0 && placeboRate <= PLACEBO_GATE && placeboBonfRate <= PLACEBO_GATE;
+
+// ---- the report --------------------------------------------------------------------------
+
+const ci = (a: Agg | undefined) => {
+  const part = (by: "weeks" | "blocks") => {
+    const st = statOf(a, by);
+    if (!st || !(st.C > 1)) return "[-]";
+    const q = tQuantile(0.975, st.C - 1);
+    return `[${num(st.m - q * st.se)},${num(st.m + q * st.se)}]`;
+  };
+  return `${part("weeks")} (4 wk ${part("blocks")})`;
+};
+const mean = (a: Agg | undefined) => (a && a.n ? a.sum / a.n : null);
+const checkLine = (what: string, c: Check) => `${what}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`;
+console.log(`\n== CHECKS`);
+console.log(checkLine("(id) Σ s = 0 and s_c − s_JPY against the cross's own candles", checks.identity));
+console.log(checkLine("(la) the meter, its ranks, states and signals worked again from the candles cut at the close", checks.lookahead));
+console.log(checkLine("(c) the meter's trades followed again, against the coin's", checks.again));
+console.log(checkLine("(a2) their stop and TP1 against ultraLevels", checks.levels));
+console.log(checkLine("(m) following starts at the first 5-minute bar at or after the close", checks.follow));
+console.log(checkLine("(d) time-out closes against the 4-hour bar's own", checks.closes));
+console.log(checkLine("(pk) the pick again from the meter and the coin cut at SPLIT", checks.pick));
+console.log(checkLine("(p0) the 5-minute mid at the close against the bar's close", checks.closeMid));
+console.log(checkLine("(a) the emails' signals against indicatorSignals", checks.signals));
+console.log(`(g) GMO reads that failed: ${failedReads}`);
+// (h) holds for the run fixed above only (as research/widetp.ts)
+const hApplies = !SYNTHETIC && START === "2024-01-01" && SPLIT === "2025-05-19" && NOW === Date.parse("2026-09-29T14:16:25Z");
+let hDiffer: number | null = null;
+if (!SYNTHETIC && !hApplies) console.log("(h) does not apply: not the run fixed in the header");
+if (hApplies) {
+  const want = [{ m: "−1.35", n: 2416 }, { m: "−1.27", n: 2216 }];
+  hDiffer = 0;
+  const parts: string[] = [];
+  for (const half of [0, 1] as const) {
+    const a = reproAgg[half];
+    const m = a.n ? num(a.sum / a.n) : "-";
+    const ok = m === want[half].m && a.n === want[half].n;
+    if (!ok) hDiffer++;
+    parts.push(`${half === 0 ? "first" : "second"} ${m} of ${a.n} (§8.83: ${want[half].m} of ${want[half].n})`);
+  }
+  console.log(`(h) §8.83's T20 again, ${hDiffer} of 2 differ: ${parts.join("; ")}`);
+}
+const allDiffer = Object.values(checks).reduce((s, c) => s + c.mismatched, 0) + failedReads + (hDiffer ?? 0);
+console.log(allDiffer === 0 ? "EVERY CHECK 0 DIFFER" : `CHECKS DIFFER (${allDiffer}): the numbers below are not to be read`);
+
+const weeksWith = (half: 0 | 1 | "full") => {
+  const s = new Set<number>();
+  for (let k = 0; k < nG; k++) if (table.half[k] >= 0 && (half === "full" || table.half[k] === half)) s.add(table.week[k]);
+  return s.size;
+};
+const cand = (c: number) => `X${LS[c]}`;
+console.log(`\n== THE CALL (A+B, top ${TOP} / bottom ${TOP}, once on entering; e = pips less the coin's mean at the same close)`);
+LS.forEach((L, c) => {
+  const x = edges[c];
+  const st1 = statOf(x.first, "weeks");
+  const st2 = statOf(x.second, "weeks");
+  console.log(`  X${L}: first half (pickable) e ${num(st1?.m)} of ${x.first.n}, t ${num(verdict.t[c])}; second half e ${num(st2?.m)} ${ci(x.second)} of ${x.second.n} in ${x.second.weeks.size} weeks, Bonferroni low end ${num(verdict.bonfLow[c])}${verdict.bonf[c] ? " (above 0 after the correction)" : ""}; fires without their 30 bars ${lostX.get(L)}`);
+});
+console.log(`  the pick: ${verdict.pick === null ? "none" : cand(verdict.pick)}; its low end ${num(verdict.low)} in ${verdict.weeks} weeks: ${verdict.called ? "CALLED" : "not called"}`);
+console.log(`  the placebo gate: ${placeboCalled} of ${PLACEBOS} made-up meters called (${pctOf(placeboRate)}), the Bonferroni road ${placeboBonf} (${pctOf(placeboBonfRate)}): ${placeboPassed ? "passed" : "NOT PASSED: nothing is called"}`);
+if (verdict.pick !== null && placeboE.length) {
+  const real = mean(edges[verdict.pick].second);
+  const below = placeboE.filter((x) => real !== null && x < real).length;
+  console.log(`  the pick's second-half e among the placebos' picks: above ${below} of ${placeboE.length}`);
+}
+const cannot: string[] = [];
+if (verdict.pick !== null && verdict.weeks < 30) cannot.push(`the pick's second-half trades in ${verdict.weeks} weeks`);
+if (!placeboPassed) cannot.push("the placebo gate");
+const finalCall = verdict.called && placeboPassed && allDiffer === 0;
+console.log(`  RESULT: ${finalCall ? `CALLED: ${cand(verdict.pick!)} picks the side better than a coin toss at the same closes` : `not called${cannot.length ? ` (cannot say: ${cannot.join("; ")})` : ""}`}`);
+
+const exitLine = (series: string) => {
+  const c = [0, 1].map((h) => exitCounts.get(`${series}|${h}`) ?? [0, 0, 0, 0, 0]).reduce((a, b) => a.map((x, i) => x + b[i]));
+  const lvl = c[1] + c[2] + c[3];
+  return `tp ${c[1]}, sl ${c[2]}, amb ${c[3]}, time ${c[4]}; TP1 first ${pctOf(lvl ? c[1] / lvl : null)} (break-even ${pctOf(SL / (SL + TP))}, the spread left out)`;
+};
+const told = (name: string, label: string) => {
+  for (const half of ["full", 0, 1] as const) {
+    const e = aggAt(`${name} e`, half);
+    const pips = aggAt(`${name} pips`, half);
+    const coin = aggAt(`${name} coin`, half);
+    const weeks = weeksWith(half);
+    console.log(`  ${label} ${half === "full" ? "whole" : half === 0 ? "first" : "second"}: ${pips?.n ?? 0} trades (${num(weeks ? (pips?.n ?? 0) / weeks : null, 1)} a week); pips ${num(mean(pips))} ${ci(pips)}; e ${num(mean(e))} ${ci(e)}; the coin at its closes ${num(mean(coin))}`);
+  }
+};
+console.log(`\n== TOLD: the money and the yardstick (the whole period, the halves)`);
+for (const L of LS) {
+  told(`X${L}`, `X${L}`);
+  console.log(`    how X${L} went out: ${exitLine(`X${L}`)}`);
+}
+console.log(`  the coin at every close: whole ${num(mean(aggAt("coin all", "full")))} ${ci(aggAt("coin all", "full"))}, first ${num(mean(aggAt("coin all", 0)))}, second ${num(mean(aggAt("coin all", 1)))}`);
+console.log(`\n== TOLD: beyond the pair's own momentum (M: the sign of s_A − s_B, once on each change)`);
+for (const L of LS) {
+  told(`M${L}`, `M${L}`);
+  for (const half of ["full", 1] as const) {
+    const x = aggAt(`X${L} e`, half);
+    const m = aggAt(`M${L} e`, half);
+    const dw = diffStatOf(x, m, "weeks");
+    const db = diffStatOf(x, m, "blocks");
+    const q = (d: typeof dw) => (d && d.C > 1 ? `[${num(d.m - tQuantile(0.975, d.C - 1) * d.se)},${num(d.m + tQuantile(0.975, d.C - 1) * d.se)}]` : "[-]");
+    console.log(`    X${L} less M${L}, e, ${half === "full" ? "whole" : "second"}: ${num(dw?.m)} ${q(dw)} (4 wk ${q(db)}); a comparison only (no walk gauges it)`);
+  }
+}
+console.log(`\n== TOLD: the rank IC (Spearman across the eight, s(k; L) against the next ${IC_AHEAD} bars' s)`);
+for (const L of LS) for (const half of ["full", 0, 1] as const) console.log(`  L${L} ${half === "full" ? "whole" : half === 0 ? "first" : "second"}: ${num(mean(aggAt(`ic ${L}`, half)), 4)} ${ci(aggAt(`ic ${L}`, half))} of ${aggAt(`ic ${L}`, half)?.n ?? 0} closes`);
+console.log(`\n== TOLD: one currency's trend? (the stale meter: the ranks of ${STALE} bars before; leave one out)`);
+for (const L of LS) {
+  told(`S${L}`, `stale X${L}`);
+  for (const half of ["full", 1] as const) {
+    console.log(`    X${L} ${half === "full" ? "whole" : "second"}, e without each currency: ${CURRENCIES.map((c) => `${c} ${num(mean(aggAt(`X${L} e -${c}`, half)))} (${aggAt(`X${L} e -${c}`, half)?.n ?? 0})`).join(", ")}`);
+  }
+  const sh = shares.get(L)!;
+  console.log(`    X${L}: each currency's share of the top ${TOP} / bottom ${TOP} (${sh.bars} closes): ${CURRENCIES.map((c, i) => `${c} ${pctOf(sh.top[i] / sh.bars)}/${pctOf(sh.bottom[i] / sh.bars)}`).join(", ")}`);
+}
+console.log(`\n== TOLD: each pair, each side, the second half by quarter (e)`);
+for (const L of LS) {
+  console.log(`  X${L} by pair (whole): ${PAIRS.map((p) => `${p} ${num(mean(aggAt(`X${L} e @${p}`, "full")))} (${aggAt(`X${L} e @${p}`, "full")?.n ?? 0})`).join(", ")}`);
+  console.log(`  X${L} by side (whole): ${(["BUY", "SELL"] as const).map((s) => `${s} ${num(mean(aggAt(`X${L} e ${s}`, "full")))} (${aggAt(`X${L} e ${s}`, "full")?.n ?? 0})`).join(", ")}`);
+  console.log(`  X${L} second half by quarter: ${[1, 2, 3, 4].map((q) => `q${q} ${num(mean(aggAt(`X${L} e q${q}`, 1)))} (${aggAt(`X${L} e q${q}`, 1)?.n ?? 0})`).join(", ")}`);
+}
+console.log(`\n== TOLD: top one and bottom one (the strongest against the weakest)`);
+for (const L of LS) told(`T1_${L}`, `top 1 L${L}`);
+console.log(`\n== TOLD: the emails (A+B, their own trades, those with 30 bars in the data), and the meter's label at their close`);
+for (const rule of ["either", "qtrend", "ultra"]) {
+  for (const half of ["full", 1] as const) {
+    const pips = aggAt(`em ${rule} pips`, half);
+    const e = aggAt(`em ${rule} e`, half);
+    console.log(`  ${rule} ${half === "full" ? "whole" : "second"}: ${pips?.n ?? 0} trades, pips ${num(mean(pips))} ${ci(pips)}, e ${num(mean(e))} ${ci(e)}`);
+    for (const L of LS) {
+      const parts = ["agree", "against", "mixed", "no meter"].map((lb) => {
+        const a = aggAt(`em ${rule} L${L} ${lb} pips`, half);
+        const ae = aggAt(`em ${rule} L${L} ${lb} e`, half);
+        return `${lb} ${a?.n ?? 0}: pips ${num(mean(a))}, e ${num(mean(ae))}`;
+      });
+      const d = diffStatOf(aggAt(`em ${rule} L${L} agree pips`, half), aggAt(`em ${rule} L${L} against pips`, half), "weeks");
+      const d4 = diffStatOf(aggAt(`em ${rule} L${L} agree pips`, half), aggAt(`em ${rule} L${L} against pips`, half), "blocks");
+      const q = (x: typeof d) => (x && x.C > 1 ? `[${num(x.m - tQuantile(0.975, x.C - 1) * x.se)},${num(x.m + tQuantile(0.975, x.C - 1) * x.se)}]` : "[-]");
+      console.log(`    L${L}: ${parts.join("; ")}; agree less against (pips) ${num(d?.m)} ${q(d)} (4 wk ${q(d4)})`);
+    }
+  }
+}
+console.log(`  (picking a filter from these lines would be a choice made after seeing them: not offered as measured)`);
+console.log(`\n== COVERAGE`);
+console.log(`  G: ${nG} bars (${G.length ? `${iso(G[0])} .. ${iso(G[nG - 1])}` : "-"}); weeks with a close in the period ${weeksWith("full")} (first ${weeksWith(0)}, second ${weeksWith(1)})`);
+for (const L of LS) {
+  const sp = spans.get(L)!;
+  console.log(`  L${L}: the lookback spans ${sp.length ? `${sp[Math.floor(sp.length / 2)]} hours (median), ${sp[0]} .. ${sp[sp.length - 1]}` : "-"}; closes with an exact tie ${ties.get(L)}; states entered where no fire may be taken ${lostStates.get(L)}`);
+}
+for (const c of coverage) console.log(`  ${c.pair.padEnd(8)} bars ${c.bars}, in G ${c.inG}, a fire may be taken ${c.ok}, the coin ${c.coin}, the emails' signals ${c.signals}`);
+if (SYNTHETIC) console.log(`  the coin's TP1 first by pair (a walk: (30 − the spread / 2) / 50): ${PAIRS.map((p) => {
+  const c = exitCounts.get(`coin @${p}`) ?? [0, 0, 0, 0, 0];
+  const lvl = c[1] + c[2] + c[3];
+  return `${p} ${pctOf(lvl ? c[1] / lvl : null)} (${pctOf((30 - SPREAD_PIPS[p] / 2) / 50)})`;
+}).join(", ")}`);
+
+// ---- the numbers out, for the walks' summary ------------------------------------------------
+
+const aggOut = (a: Agg | undefined) => {
+  if (!a || !a.n) return null;
+  const w = statOf(a, "weeks")!;
+  const b = statOf(a, "blocks")!;
+  return { n: a.n, sum: a.sum, m: w.m, se: Number.isFinite(w.se) ? w.se : null, se4: Number.isFinite(b.se) ? b.se : null, C: w.C, C4: b.C, low: lowEndOf(a) };
+};
+await Deno.mkdir(OUT, { recursive: true });
+await Deno.writeTextFile(
+  `${OUT}/strength${SYNTHETIC ? `-${SYNTH}${SYNTH === "rank" ? `${LSTAR}` : ""}${FAULT ? "-" + FAULT : ""}-${SEED}` : ""}.json`,
+  JSON.stringify({
+    start: START,
+    split: SPLIT,
+    now: iso(NOW),
+    synthetic: SYNTHETIC,
+    synth: SYNTH,
+    seed: SEED,
+    lstar: SYNTH === "rank" ? LSTAR : null,
+    delta: SYNTH === "rank" ? DELTA : null,
+    fault: FAULT,
+    Ls: LS,
+    align,
+    checks,
+    failedReads,
+    hDiffer,
+    allDiffer,
+    verdict,
+    candidates: LS.map((L, c) => ({ L, first: aggOut(edges[c].first), second: aggOut(edges[c].second), all: aggOut(edges[c].all) })),
+    placebo: { n: PLACEBOS, called: placeboCalled, bonf: placeboBonf, passed: placeboPassed },
+    finalCall,
+    coverage,
+    coinTp1: Object.fromEntries(PAIRS.map((p) => [p, exitCounts.get(`coin @${p}`) ?? null])),
+    store: Object.fromEntries([...store].map(([k, a]) => [k, aggOut(a)])),
+  }),
+);
