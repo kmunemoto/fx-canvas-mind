@@ -135,6 +135,33 @@
 //   * what the walks cannot show: pairs moving together (the walks' are
 //     independent), the spread varying by the hour, the weekend gaps.
 //
+// THE WALKS' RESULTS (the program as of de9efd4, ULTRA_PAIRS' targets 20, 40
+// and 60; 70 runs: path 7 .. 56, wicks and drift 7 .. 16;
+// research/widetp-seeds.py on their JSON. A first batch, before the review's
+// fixes of 59446aa, gave the same numbers but the break-even told; the batch
+// at 59446aa stopped on 39 runs at the assertion that the email's targets
+// were 5, 10 and 15 once #173 moved them, and was run again whole):
+//   * every check 0 differ on all 70 (signals 1,151,693 compared, the levels
+//     717,092, the ATR series 1,151,693, the target nest 219,471,372, the
+//     reads 6,531,210, ...).
+//   * path: the call on 0 of the 50, the Bonferroni road on 0. Each
+//     candidate's low end over 0 on 0 to 3 of its 100 halves, z's sd 0.96 to
+//     1.11 by week and 1.00 to 1.18 by four weeks, the means -0.23 to -0.06
+//     by week (-0.26 to -0.07 by four weeks): no candidate left out. The coin: TP1 first 84.9% for T5 (29.8 / 35.0 =
+//     85.1%), 74.4 (74.5), 66.2 (66.2), 59.6 (59.6), 49.7 (49.7); A0.5 72.8
+//     (72.9), A1 57.6 (57.6). "less now" +0.025 (T10) to +0.166 (T90 L120),
+//     within ±0.3 and wider higher, as expected. The picks spread over all
+//     ten (T10 10 times, T90 8, ... T20 and A1 twice).
+//   * wicks: the call on 0 of 10; every wider target less than now (-0.07 to
+//     -0.42 pips a trade), as the walk is built.
+//   * drift: the call on 10 of 10 (the gate 9), T90 picked every time, every
+//     candidate on the Bonferroni road.
+//   * the power on the path runs, a gain added to one candidate (picked; then
+//     called): T20 +0.5 pip 35 of 50, 3; +1 48, 23; +2 50, 49. T45 +0.5 23,
+//     3; +1 39, 6; +2 50, 30. A1 +0.5 32, 2; +1 48, 20; +2 50, 48. So a gain
+//     under a pip a trade is seldom called at the walks' noise, which is not
+//     the data's: the data's own intervals are told with the result.
+//
 // NOT MEASURED: the other timeframes (ULTRA_PAIRS is one set for every
 // timeframe and currency pair, so a change reaches them too); the pairs
 // without 4-hour history, and Twelve Data's; swap; slippage (but for the stop
