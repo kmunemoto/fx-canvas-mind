@@ -744,7 +744,7 @@ const crossCharts = CROSSES.map(chartOf);
 
 // ---- the alignment (g1, tri): before anything else ----------------------------------------
 
-const align: { grid: Record<string, { lacks: number; share: number; offGrid: number; examples: string[] }>; union: number; tri: Record<string, { n: number; median: number; far: number; farShare: number; max: number; slipMedians: number[]; examples: string[] }>; stopped: string[] } = { grid: {}, union: 0, tri: {}, stopped: [] };
+const align: { grid: Record<string, { lacks: number; share: number; offGrid: number; examples: string[] }>; union: number; tri: Record<string, { n: number; median: number; far: number; farShare: number; max: number; slipMedians: number[]; examples: string[] }>; triBars: Array<{ t: string; rel: number[] }>; stopped: string[] } = { grid: {}, union: 0, tri: {}, triBars: [], stopped: [] };
 {
   const union = new Set<number>();
   for (const c of crossCharts) for (const t of c.times) union.add(t);
@@ -796,6 +796,21 @@ const closeAt = crossCharts.map((ch) => Float64Array.from(G, (t) => ch.candles[c
     if (r0.length && far / r0.length > TRI_FAR_SHARE) align.stopped.push(`(tri) ${pair}: ${far} bars over ${TRI_FAR} pips`);
     if (!slips.every((m) => m >= TRI_SLIP * Math.max(med(r0), 1e-9))) align.stopped.push(`(tri) ${pair}: one bar off, the median ${slips.map((m) => m.toFixed(2)).join(" / ")} against ${med(r0).toFixed(2)}: the check cannot see a slip`);
   }
+  // every bar where a dollar pair is over TRI_FAR, with the four pairs'
+  // signed residuals relative to their own close (in 1e-4): the same on all
+  // four points at USD/JPY, the leg they share (prices only; told)
+  const usd = ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"];
+  for (let k = 0; k < nG; k++) {
+    const rel = usd.map((pair) => {
+      const ch = chartOf(pair);
+      const i = ch.byTime.get(G[k]);
+      if (i === undefined) return Number.NaN;
+      const implied = closeAt[CROSSES.indexOf(`${pair.slice(0, 3)}/JPY`)][k] / uj[k];
+      return ((ch.candles[i].close - implied) / ch.candles[i].close) * 1e4;
+    });
+    const far = usd.some((pair, j) => Number.isFinite(rel[j]) && Math.abs(rel[j] * chartOf(pair).candles[chartOf(pair).byTime.get(G[k])!].close) > TRI_FAR);
+    if (far) align.triBars.push({ t: iso(G[k]), rel: rel.map((r) => Number(r.toFixed(2))) });
+  }
 }
 const num = (x: number | null | undefined, d = 2) => (x === null || x === undefined || !Number.isFinite(x) ? "   -  " : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}`);
 const pctOf = (x: number | null | undefined) => (x === null || x === undefined || !Number.isFinite(x) ? "  -  " : `${(100 * x).toFixed(1)}%`);
@@ -804,6 +819,16 @@ console.log(`\n== ALIGNMENT (before any trade)`);
 console.log(`(g1) the crosses' times: ${align.union}; G (all seven): ${nG}`);
 for (const [pair, g] of Object.entries(align.grid)) console.log(`  ${pair.padEnd(8)} off the grid ${g.offGrid}${CROSSES.includes(pair) ? `, lacks ${g.lacks} (${pctOf(g.share)})${g.examples.length ? ": " + g.examples.join(", ") : ""}` : ""}`);
 for (const [pair, t] of Object.entries(align.tri)) console.log(`(tri) ${pair.padEnd(8)} ${t.n} bars: median ${t.median.toFixed(3)} pips, over ${TRI_FAR} ${t.far} (${pctOf(t.farShare)}), max ${t.max.toFixed(2)}; USD/JPY one bar off: medians ${t.slipMedians.map((m) => m.toFixed(2)).join(" / ")}${t.examples.length ? "; " + t.examples.join(", ") : ""}`);
+if (align.triBars.length) {
+  // by month, and the bars themselves (the four dollar pairs' residuals, 1e-4
+  // of their own close: EUR/USD, GBP/USD, AUD/USD, NZD/USD)
+  const byMonth = new Map<string, number>();
+  for (const b of align.triBars) byMonth.set(b.t.slice(0, 7), (byMonth.get(b.t.slice(0, 7)) ?? 0) + 1);
+  const fromMs = START_MS - P0_DAYS * DAY;
+  const inStudy = align.triBars.filter((b) => Date.parse(`${b.t.replace(" ", "T")}Z`) >= fromMs).length;
+  console.log(`(tri) bars with a dollar pair over ${TRI_FAR} pips: ${align.triBars.length} (from ${P0_DAYS} days before START: ${inStudy}); by month: ${[...byMonth].map(([m, n]) => `${m} ${n}`).join(", ")}`);
+  for (const b of align.triBars) console.log(`  ${b.t}  ${b.rel.map((r) => (r >= 0 ? "+" : "") + r.toFixed(2)).join("  ")}`);
+}
 const stopEarly = async () => {
   console.log(`\nSTOPPED before any trade was followed:\n  ${align.stopped.join("\n  ")}`);
   await Deno.mkdir(OUT, { recursive: true });
