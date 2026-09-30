@@ -154,6 +154,36 @@
 //     none, four weeks), and the pick was a stop of $100 or none on 29.
 //     Replayed from the runs' output, the 51 reproduce the program's own
 //     pick and call on all 50.
+//
+// THE RESULT (2026-09-30, docs §8.79; the "Study gold" run 36657390402),
+// 2024-01-01 to 2026-09-28, the bars cut as Twelve Data's (GRID4=tw,
+// GRIDD=tw, FILL=twelve); the emails' signals (either), dollars a trade:
+//   * the data: the minutes of 871 days (the three missing are Good
+//     Fridays); the hourly files against the minutes, 3 of 15,978 hours
+//     differ; every check 0 differ. These bars against the app's Twelve
+//     Data bars: the daily 276 of 276 on the same stamps (the close $0.71
+//     apart at the median; Twelve Data's Christmas bar not here), every one
+//     of Twelve Data's 602 4-hour bars ($0.79), the hourly 557 ($0.87; three
+//     of theirs, a US holiday's afternoon, not here). The one gold email in
+//     the data's span (1h ULTRA BUY at 2026-09-28 22:00, RSI 30.12) is here
+//     at 18:00 and 23:00, not at 22:00.
+//   * now (T5 S10, five days): 5min −0.77 (TP first 64%), 15min −0.74
+//     (64%), 1h −0.69 (64%), 4h −0.77 (63%), daily −1.36 (61%); the spread
+//     paid $0.54 at the median ($0.73 daily); the coin on the 4-hour chart
+//     −0.65 (64%).
+//   * the 4-hour chart, whole, five days: T5 with S10 −0.77, S15 −0.86, S20
+//     −1.59, S30 −1.75, S50 −1.26; S10 with T15 −0.88, T30 −0.09, T50
+//     −0.06; T50 S50 +1.13; ATR T1×S2 +0.74, T2×S2 +1.66. The halves far
+//     apart: T50 S50 −3.44 and +6.13, ATR T2×S2 −0.86 and +4.42.
+//   * the pick: T50 S10 L4w (first half +0.51, now −0.74). On the second
+//     half −0.33 against now −0.80; the difference +0.47 (its low end
+//     −3.10): not clearly better. Its gain is the BUYs' (+4.63 a trade,
+//     SELL −3.54), as the coin's (BUY +3.61, SELL −3.03): gold rose.
+//   * the other cuts (GRID4=ny, GRID4=utc1, FILL=none): now on the 4-hour
+//     chart −1.04, −0.68, −1.07; the pick T30 S15 L5d, T15 S20 L5d, T15 S30
+//     L5d, each not clearly better (the second half's difference −0.72,
+//     −1.41, −0.04). T50 S50 L5d's second half, +6.13 here, is −0.16,
+//     +0.41 and +1.36 there.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barFullyClosed, isGoldBreak, isMarketClosed, isPossiblyClosed, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
