@@ -1,21 +1,23 @@
-# #157: which timeframe's email signals (Q-Trend and ULTRA) win most often
-# (research/tf-winrate.ts). #166: the stop is an input, 30 unless given (the
-# emails' on the currency pairs since #166); #157's own figures are SL 10.
-# #173: TP1 is an input too, 20 unless given (TP2 and TP3 twice and three
-# times it: the emails' on the currency pairs since #173); #166's are TP1 5.
+# #172: the email's TP1 wider (10 to 90 pips, or 0.5 to 2 times the 4-hour
+# bar's ATR), the stop kept at 30 pips, against the exit now (TP1 5 pips or
+# the stop 30, within five days), in pips per trade (research/widetp.ts).
+#
+# Run by hand, once: the random walks are run before it, so the data is not
+# read before the walks have been looked at. A push of this file only lets
+# GitHub know the workflow (its job is skipped on a push: nothing is read).
+# END is fixed so a run again reads the same bars.
 #
 # Runs on GitHub's runners because they can reach GMO's public price API and
 # the development container cannot. Read-only: it fetches public prices,
 # prints a report to the job log and uploads the same numbers as an
 # artifact. It writes nothing to the repository and holds no secret.
-name: Research timeframe win rates
+name: Research a wider TP1
 on:
   push:
     branches:
       - claude/app-confirmation-jvmk03
     paths:
-      - research/tf-winrate.ts
-      - .github/workflows/tf-winrate.yml
+      - .github/workflows/widetp.yml
   workflow_dispatch:
     inputs:
       pairs:
@@ -27,17 +29,15 @@ on:
       split:
         description: "First day of the second half"
         default: "2025-05-19"
-      sl:
-        description: "The stop, pips (#157: 10; the emails' since #166: 30)"
-        default: "30"
-      tp1:
-        description: "TP1, pips; TP2 and TP3 twice and three times it (#166: 5; the emails' since #173: 20)"
-        default: "20"
+      end:
+        description: "The data's end, UTC (the #165 run's own)"
+        default: "2026-09-29T14:16:25Z"
 permissions:
   contents: read
 
 jobs:
-  tf-winrate:
+  widetp:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -45,9 +45,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      # GMO's day files never change once the day has rolled: this study's
-      # own kept files, or else those the 5-minute (#156) and 15-minute
-      # studies kept, so only the rest is fetched
+      # GMO's day files never change once the day has rolled: the files the
+      # other studies kept, so only the rest is fetched
       - id: own
         uses: actions/cache/restore@v4
         with:
@@ -71,16 +70,15 @@ jobs:
           PAIRS: ${{ inputs.pairs || '' }}
           START: ${{ inputs.start || '2024-01-01' }}
           SPLIT: ${{ inputs.split || '2025-05-19' }}
-          SL: ${{ inputs.sl || '30' }}
-          TP1: ${{ inputs.tp1 || '20' }}
+          END: ${{ inputs.end || '2026-09-29T14:16:25Z' }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1
-          research/tf-winrate.ts
+          --allow-env=PAIRS,START,SPLIT,END,SYNTHETIC,SEED,SYNTH,OUTDIR
+          research/widetp.ts
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()
         uses: actions/cache/save@v4
@@ -90,6 +88,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tf-winrate-out
+          name: widetp-out
           path: research/out/
           retention-days: 30

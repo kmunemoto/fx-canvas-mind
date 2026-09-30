@@ -859,13 +859,17 @@ const PriceChart = ({
   const qtTrade = ov.qTrend && qt && qt.trades.length > 0 ? qt.trades[qt.trades.length - 1] : null;
   const qtOpen = qtTrade && qtTrade.end === null ? qtTrade : null;
   const ulTagFsz = (narrow ? 7 : 8) * (full ? 1.25 : 1);
-  const planLevels = (tr: { entry: number; sl: number; tps: [number, number, number] }, dash: string) => [
-    { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash },
-    { key: "tp2", text: "TP2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash },
-    { key: "tp1", text: "TP1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash },
-    { key: "entry", text: "Entry", v: tr.entry, color: ULTRA_COLORS.entry, dash: dash === "3 2" ? undefined : dash },
-    { key: "sl", text: "SL", v: tr.sl, color: ULTRA_COLORS.sl, dash },
-  ];
+  // #173: a level at or below zero (a sell's TP3 on HUF/JPY, about 0.49
+  // yen: 60 pips is 0.60) is no price: neither drawn nor tagged
+  const planLevels = (tr: { entry: number; sl: number; tps: [number, number, number] }, dash: string) =>
+    [
+      { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash },
+      { key: "tp2", text: "TP2", v: tr.tps[1], color: ULTRA_COLORS.tp, dash },
+      { key: "tp1", text: "TP1", v: tr.tps[0], color: ULTRA_COLORS.tp, dash },
+      { key: "entry", text: "Entry", v: tr.entry, color: ULTRA_COLORS.entry, dash: dash === "3 2" ? undefined : dash },
+      { key: "sl", text: "SL", v: tr.sl, color: ULTRA_COLORS.sl, dash },
+    ].filter((l) => l.v > 0);
+  const priceOrNone = (v: number) => (v > 0 ? v.toFixed(decimals) : "—");
   const ulLevels = ulOpen ? planLevels(ulOpen, "3 2").map((l) => ({ ...l, owner: "ul" as const, label: `${l.text} ${l.v.toFixed(decimals)}` })) : [];
   const qtLevels = qtOpen ? planLevels(qtOpen, "1 2").map((l) => ({ ...l, owner: "qt" as const, label: `Q ${l.text} ${l.v.toFixed(decimals)}` })) : [];
   const ulTagW = (label: string) => label.length * ulTagFsz * 0.6 + 6;
@@ -3500,7 +3504,7 @@ const PriceChart = ({
             with ULTRA's), faint to the bar it ended on */}
         {qtBox && (
           <g data-testid="chart-qtrend-plan" data-side={qtBox.tr.side} data-open={qtBox.open ? "true" : "false"} opacity={qtBox.open ? 1 : 0.55}>
-            <title>{t.chart.qtPlanTitle(qtBox.tr.side, qtBox.tr.entry.toFixed(decimals), qtBox.tr.sl.toFixed(decimals), qtBox.tr.tps.map((v) => v.toFixed(decimals)))}</title>
+            <title>{t.chart.qtPlanTitle(qtBox.tr.side, qtBox.tr.entry.toFixed(decimals), priceOrNone(qtBox.tr.sl), qtBox.tr.tps.map(priceOrNone))}</title>
             <g clipPath={`url(#${clipId})`}>
               {qtBox.levels.map((l) => (
                 <line key={l.key} x1={qtBox.x0} x2={qtBox.x1} y1={y(l.v)} y2={y(l.v)} stroke={l.color} strokeWidth={l.key === "entry" ? 1.2 : 1} strokeDasharray={l.dash} opacity="0.9" data-testid={`chart-qtrend-plan-${l.key}`} />
@@ -3562,7 +3566,7 @@ const PriceChart = ({
           <g data-testid="chart-ultra">
             {ulBox && (
               <g data-testid="chart-ultra-box" data-side={ulBox.tr.side} data-open={ulBox.open ? "true" : "false"} opacity={ulBox.open ? 1 : 0.55}>
-                <title>{t.chart.ultraTitle(ulBox.tr.side, ulBox.tr.entry.toFixed(decimals), ulBox.tr.sl.toFixed(decimals), ulBox.tr.tps.map((v) => v.toFixed(decimals)))}</title>
+                <title>{t.chart.ultraTitle(ulBox.tr.side, ulBox.tr.entry.toFixed(decimals), priceOrNone(ulBox.tr.sl), ulBox.tr.tps.map(priceOrNone))}</title>
                 <g clipPath={`url(#${clipId})`}>
                   <rect x={ulBox.x0} width={ulBox.x1 - ulBox.x0} {...ulBox.band(ulBox.tr.entry, ulBox.tr.sl)} fill={ULTRA_COLORS.sl} opacity="0.14" />
                   <rect x={ulBox.x0} width={ulBox.x1 - ulBox.x0} {...ulBox.band(ulBox.tr.entry, ulBox.tr.tps[2])} fill={ULTRA_COLORS.tp} opacity="0.12" />

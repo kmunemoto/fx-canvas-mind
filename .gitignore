@@ -46,3 +46,6 @@ supabase/functions/position-review/bundle.js
 # cache in CI) and the report it writes. Neither is source.
 research/.cache/
 research/out/
+
+# Python byte-code (research/*.py)
+__pycache__/

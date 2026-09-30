@@ -34,7 +34,8 @@
 // pips): $10 on gold taken as a currency's price would be ten yen on USD/JPY.
 // #166: on a currency pair the stop is 30 pips (ULTRA_PAIRS below); gold
 // keeps the video's $10. #168: gold's targets are $30, $60 and $90
-// (ULTRA_GOLD below).
+// (ULTRA_GOLD below). #173: a currency pair's targets are 20, 40 and 60 pips
+// (ULTRA_PAIRS).
 //
 // Shown on the chart, and #155: the email alerts (signal-alerts) judge on
 // its signals too, from this same code (moved here from src/lib/ultra.ts,
@@ -52,7 +53,13 @@ export type UltraParams = typeof ULTRA_DEFAULTS;
 // #166: the stop on a currency pair. The owner (2026-09-29), shown the stops
 // 10 to 100 pips measured on the emails' 4-hour signals (docs §8.77), chose
 // 30 pips (「2で」). The signals themselves do not depend on it.
-export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 30 };
+// #173: the targets on a currency pair. The owner (2026-09-30): 「利確幅、
+// 狭すぎる」, then 「利確を広げてください」 and, offered TP1 10, 20 or 30 pips or
+// waiting for the measurement of 10 to 90 (research/widetp.ts, not yet run
+// on the data then), chose TP1 20 pips; TP2 and TP3 twice and three times it,
+// as the video's 5, 10 and 15. The stop stays 30. The signals themselves do
+// not depend on them.
+export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 30, tp1: 20, tp2: 40, tp3: 60 };
 // #168: gold's targets. The owner (2026-09-30), shown gold measured with
 // targets of $5 to $50 and stops of $10 up (docs §8.79: none clearly better
 // than now), chose wider targets (「2で」): TP1 $30, and TP2 and TP3 twice and

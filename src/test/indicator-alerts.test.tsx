@@ -444,18 +444,19 @@ describe("#155 what the sweep reads, and when", () => {
     );
     const ul = all.find((sg) => sg.rule === "ultra")!;
     const dir = ul.side === "BUY" ? 1 : -1;
-    // #166: a currency pair's stop 30 pips
+    // #166: a currency pair's stop 30 pips; #173: its targets 20, 40 and 60
     expect(ul.sl).toBeCloseTo(ul.close - dir * 0.3, 9);
-    expect(ul.tps![0]).toBeCloseTo(ul.close + dir * 0.05, 9);
-    expect(ul.tps![2]).toBeCloseTo(ul.close + dir * 0.15, 9);
+    expect(ul.tps![0]).toBeCloseTo(ul.close + dir * 0.2, 9);
+    expect(ul.tps![1]).toBeCloseTo(ul.close + dir * 0.4, 9);
+    expect(ul.tps![2]).toBeCloseTo(ul.close + dir * 0.6, 9);
     expect(ul.side === "BUY" ? ul.rsi! > 30 && ul.rsiPrev! <= 30 : ul.rsi! < 70 && ul.rsiPrev! >= 70).toBe(true);
     const qt = all.find((sg) => sg.rule === "qtrend")!;
     expect(qt.line).not.toBeNull();
     expect(qt.eps).toBeGreaterThan(0);
-    // #156: ULTRA's numbers — the stop 30 pips on a pair (#166), the targets 5, 10 and 15
+    // #156: ULTRA's numbers — the stop 30 pips on a pair (#166), the targets 20, 40 and 60 (#173)
     const qd = qt.side === "BUY" ? 1 : -1;
     expect(qt.sl).toBeCloseTo(qt.close - qd * 0.3, 9);
-    expect(qt.tps!.map((v) => (v - qt.close) * qd)).toEqual([0.05, 0.1, 0.15].map((d) => expect.closeTo(d, 9)));
+    expect(qt.tps!.map((v) => (v - qt.close) * qd)).toEqual([0.2, 0.4, 0.6].map((d) => expect.closeTo(d, 9)));
     expect(all.filter((sg) => sg.rule === "qtrend").every((sg) => sg.sl !== null && sg.tps !== null)).toBe(true);
     // the close broke the line by ε
     expect(qt.side === "BUY" ? qt.close > qt.line! + qt.eps! : qt.close < qt.line! - qt.eps!).toBe(true);
@@ -486,7 +487,7 @@ describe("#155 what the sweep reads, and when", () => {
     const sig = {
       rule: "qtrend" as const, pair: "USD/JPY", interval: "5min", side: "SELL" as const, strong: true,
       barTime: "2026-09-29T02:20:00.000Z", closedAt: "2026-09-29T02:25:00.000Z",
-      close: 149.749, line: 149.8, eps: 0.02, rsi: null, rsiPrev: null, sl: 150.049, tps: [149.699, 149.649, 149.599] as [number, number, number],
+      close: 149.749, line: 149.8, eps: 0.02, rsi: null, rsiPrev: null, sl: 150.049, tps: [149.549, 149.349, 149.149] as [number, number, number],
     };
     const ja = renderIndicatorMail(sig, "ja");
     expect(ja.subject).toBe("【Sextant】USD/JPY 5分足 売り（SELL・STRONG）のサイン（Q-Trend）");
@@ -494,12 +495,13 @@ describe("#155 what the sweep reads, and when", () => {
       "損切り・利確の目安（ULTRA と同じ数字）:",
       "  エントリー ≈ 149.749",
       "  損切り 150.049（30.0pips）",
-      "  利確1 149.699（5.0pips）",
-      "  利確2 149.649（10.0pips）",
-      "  利確3 149.599（15.0pips）",
+      "  利確1 149.549（20.0pips）",
+      "  利確2 149.349（40.0pips）",
+      "  利確3 149.149（60.0pips）",
       "もともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています",
-      // #166: measured at the 30-pip stop; breaking even needs 30 / (30 + 5)
-      "過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 84.1%（損益ゼロには86%より上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約1.90 pips の負けでした。",
+      // #166: measured at the 30-pip stop; #173: at TP1 20, breaking even
+      // needs 30 / (30 + 20)
+      "過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.0%（損益ゼロには60%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約2.03 pips の負けでした。",
     ]) expect(ja.text).toContain(part);
     expect(ja.text).not.toContain("損切り・利確の目安はありません");
     // #157: no longer "other timeframes have not been measured", nor the older 5-minute figure
@@ -507,18 +509,18 @@ describe("#155 what the sweep reads, and when", () => {
     expect(ja.text).not.toContain("2.3〜2.4");
     const en = renderIndicatorMail(sig, "en");
     for (const part of [
-      "Stop and targets (ULTRA's numbers):", "  Stop 150.049 (30.0 pips)", "  TP3 149.599 (15.0 pips)",
-      "Measured on past 5-minute bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop 84.1% of the time (breaking even needs more than 86%); closing all of it at TP1 or the stop (or after five days, where neither was reached) lost about 1.90 pips a trade on average.",
+      "Stop and targets (ULTRA's numbers):", "  Stop 150.049 (30.0 pips)", "  TP1 149.549 (20.0 pips)", "  TP3 149.149 (60.0 pips)",
+      "Measured on past 5-minute bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop 58.0% of the time (breaking even needs more than 60%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) lost about 2.03 pips a trade on average.",
     ]) {
       expect(en.text).toContain(part);
     }
     expect(en.text).not.toContain("not been measured");
     // #157: the figures are the email's own timeframe's
     const h4 = renderIndicatorMail({ ...sig, interval: "4h", closedAt: "2026-09-29T08:00:00.000Z", barTime: "2026-09-29T04:00:00.000Z" }, "ja");
-    expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 86.0%");
-    expect(h4.text).toContain("約0.87 pips の負けでした。");
+    expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.3%");
+    expect(h4.text).toContain("約1.47 pips の負けでした。");
     // a pair read from Twelve Data was not measured: said so
-    const twelve = renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h", close: 0.9312, sl: 0.9342, tps: [0.9307, 0.9302, 0.9297] }, "ja");
+    const twelve = renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h", close: 0.9312, sl: 0.9342, tps: [0.9292, 0.9272, 0.9252] }, "ja");
     expect(twelve.text).toContain("  損切り 0.93420（30.0pips）");
     expect(twelve.text).toContain("EUR/CHF そのものは測っていません（GMO の FX の値です）。");
     expect(renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h" }, "en").text).toContain("EUR/CHF itself was not measured; these are GMO's FX pairs' figures.");
@@ -544,24 +546,36 @@ describe("#155 what the sweep reads, and when", () => {
     expect(goldUl.text).toContain("ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:");
     expect(goldUl.text).toContain("動画（金）の勝率は79〜80%で、損切りは10です。金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。過去の1時間足（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 23.9%");
     expect(goldUl.text).toContain("約0.74ドルの負けでした。");
-    expect(goldUl.text).not.toContain("損切りを30pipsにしています");
+    expect(goldUl.text).not.toContain("損切りを30pips");
     const goldUlEn = renderIndicatorMail({ ...sig, rule: "ultra", pair: "XAU/USD", interval: "4h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, ...goldLv }, "en");
     expect(goldUlEn.text).toContain("ULTRA's levels (the video's stop; the targets $30, $60 and $90):");
     expect(goldUlEn.text).toContain("with a stop of 10. On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them. Measured on past 4-hour bars");
     expect(goldUlEn.text).toContain("20.8% of the time");
     expect(goldUlEn.text).toContain("lost about $1.97 a trade");
+    // #173: HUF/JPY, about 0.49 yen: a sell's TP3 60 pips (0.60) below would be
+    // below zero, and is said to be none
+    const huf = { ...sig, rule: "ultra" as const, pair: "HUF/JPY", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, close: 0.488, sl: 0.788, tps: [0.288, 0.088, -0.112] as [number, number, number] };
+    const hufJa = renderIndicatorMail(huf, "ja").text;
+    expect(hufJa).toContain("  利確1 0.288（20.0pips）");
+    expect(hufJa).toContain("  利確2 0.088（40.0pips）");
+    expect(hufJa).toContain("  利確3 —（0より下になるため、この目安はありません）");
+    expect(hufJa).not.toContain("-0.112");
+    const hufEn = renderIndicatorMail(huf, "en").text;
+    expect(hufEn).toContain("  TP3 — (it would be below zero, so there is none)");
+    expect(hufEn).not.toContain("-0.112");
+    expect(renderIndicatorMail({ ...huf, rule: "qtrend", line: 0.49, eps: 0.001 }, "ja").text).toContain("  利確3 —（0より下になるため、この目安はありません）");
     expect(breakEvenPct(true)).toBe(25);
-    expect(breakEvenPct(false)).toBe(86);
+    expect(breakEvenPct(false)).toBe(60);
     // ULTRA's email: the video's figure beside what was measured on its own timeframe
     const ul = renderIndicatorMail({ ...sig, rule: "ultra", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
-    expect(ul.text).toContain("ULTRA の目安（利確は動画の設定、損切りは30pips）:");
-    expect(ul.text).toContain("動画（金）の勝率は79〜80%で、損切りは10です。FX では、このアプリで測った結果から損切りを30pipsにしています。過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 84.9%");
-    expect(ul.text).toContain("約1.49 pips の負けでした。");
+    expect(ul.text).toContain("ULTRA の目安（利確は20・40・60pips、損切りは30pips）:");
+    expect(ul.text).toContain("動画（金）の勝率は79〜80%で、損切りは10です。FX では、損切りを30pips（このアプリで測った結果から）、利確を20・40・60pips（動画は5・10・15）にしています。過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.2%");
+    expect(ul.text).toContain("約1.81 pips の負けでした。");
     const ul4 = renderIndicatorMail({ ...sig, rule: "ultra", interval: "4h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "en");
-    expect(ul4.text).toContain("ULTRA's levels (the video's targets; the stop 30 pips):");
-    expect(ul4.text).toContain("The video shows a 79–80% win rate (on gold), with a stop of 10. On currency pairs this app sets the stop at 30 pips, chosen on its own measurements. Measured on past 4-hour bars");
-    expect(ul4.text).toContain("86.6% of the time");
-    expect(ul4.text).toContain("lost about 0.46 pips a trade");
+    expect(ul4.text).toContain("ULTRA's levels (the targets 20, 40 and 60 pips; the stop 30 pips):");
+    expect(ul4.text).toContain("The video shows a 79–80% win rate (on gold), with a stop of 10. On currency pairs this app sets the stop at 30 pips (from its own measurements) and the targets at 20, 40 and 60 pips (the video's are 5, 10 and 15). Measured on past 4-hour bars");
+    expect(ul4.text).toContain("60.1% of the time");
+    expect(ul4.text).toContain("lost about 0.54 pips a trade");
   });
 });
 
