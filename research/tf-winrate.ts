@@ -75,9 +75,13 @@ const NOW = Date.now();
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
 // #166: the stop, pips from the entry. 10 (ULTRA_DEFAULTS, the video's) was
 // the email's when this was written (#157); since #166 the emails on the
-// currency pairs carry 30, and SL=30 measures those. The targets as before.
+// currency pairs carry 30, and SL=30 measures those.
 const SL = Number(Deno.env.get("SL") || ULTRA_DEFAULTS.sl);
-const LEVELS = { ...ULTRA_DEFAULTS, sl: SL };
+// #173: TP1, pips from the entry, TP2 and TP3 twice and three times it (the
+// video's 5, 10 and 15 unless given); the emails on the currency pairs carry
+// 20, 40 and 60 since #173, and TP1=20 measures those.
+const TP1 = Number(Deno.env.get("TP1") || ULTRA_DEFAULTS.tp1);
+const LEVELS = { ...ULTRA_DEFAULTS, sl: SL, tp1: TP1, tp2: 2 * TP1, tp3: 3 * TP1 };
 const CACHE = "research/.cache";
 const OUT = "research/out";
 const FINE = 5 * MINUTE;
@@ -652,7 +656,7 @@ const sel = (f: (x: Rec) => boolean) => recs.filter(f);
 const both = (x: Rec) => x.rule === "qtrend" || x.rule === "ultra";
 const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), synthetic: SYNTHETIC, sl: SL, maxHold: MAX_HOLD, pairs: PAIRS, coverage, check, lateSkipped };
 
-console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT})${SYNTHETIC ? " — SYNTHETIC" : ""}; the stop ${SL} and TP 5/10/15 pips, followed on 5-minute bid/ask`);
+console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT})${SYNTHETIC ? " — SYNTHETIC" : ""}; the stop ${SL} and TP ${LEVELS.tp1}/${LEVELS.tp2}/${LEVELS.tp3} pips, followed on 5-minute bid/ask`);
 for (const tf of TFS) {
   const c = check[tf];
   console.log(`check against indicatorSignals, ${tf}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`);

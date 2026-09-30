@@ -1,6 +1,8 @@
 # #157: which timeframe's email signals (Q-Trend and ULTRA) win most often
 # (research/tf-winrate.ts). #166: the stop is an input, 30 unless given (the
 # emails' on the currency pairs since #166); #157's own figures are SL 10.
+# #173: TP1 is an input too, 20 unless given (TP2 and TP3 twice and three
+# times it: the emails' on the currency pairs since #173); #166's are TP1 5.
 #
 # Runs on GitHub's runners because they can reach GMO's public price API and
 # the development container cannot. Read-only: it fetches public prices,
@@ -28,6 +30,9 @@ on:
       sl:
         description: "The stop, pips (#157: 10; the emails' since #166: 30)"
         default: "30"
+      tp1:
+        description: "TP1, pips; TP2 and TP3 twice and three times it (#166: 5; the emails' since #173: 20)"
+        default: "20"
 permissions:
   contents: read
 
@@ -67,13 +72,14 @@ jobs:
           START: ${{ inputs.start || '2024-01-01' }}
           SPLIT: ${{ inputs.split || '2025-05-19' }}
           SL: ${{ inputs.sl || '30' }}
+          TP1: ${{ inputs.tp1 || '20' }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1
           research/tf-winrate.ts
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()
