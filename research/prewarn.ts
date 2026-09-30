@@ -147,6 +147,27 @@
 // A first ten runs (the program before the review's fixes) gave the same
 // numbers, with fewer checks.
 //
+// THE RESULT (2026-09-30, docs §8.84, run 36749311538 at 163556e): every
+// check 0 differ ((h) −1.35 of 2,416 and −1.27 of 2,216 again; the time-out
+// closes 7,518; the price and the fill cut at t 1,541,574), no GMO read
+// failed. A+B, either, the whole period (144 weeks; the email's own trades
+// −1.36 pips a trade of 4,742):
+//   * once, 5 / 10 / 15 / 30 / 60 / 120 minutes: hit 92.7% / 89.7% / 88.4%
+//     / 86.2% / 80.2% / 72.2%; warned 93.1% / 90.7% / 87.8% / 81.9% /
+//     69.8% / 50.8%; 23.3 to 33.5 warnings a week; every warning's trade
+//     −1.34 / −1.74 / −2.09 / −1.66 / −1.34 / −2.47 pips a trade (the
+//     misses −5.80 to −17.61); on a hit, entering at the warning gained
+//     +0.06 / +0.17 / +0.35 / +1.37 / +4.01 / +7.49 (medians 0.00 to +3.90).
+//   * watch, 10 / 15 / 30 / 60 / 120: hit 88.1% / 85.2% / 79.9% / 72.4% /
+//     63.5%; warned 94.8% to 97.9%; every warning's trade −1.57 / −2.03 /
+//     −1.81 / −1.35 / −1.74.
+//   * the halves alike (once, 5 minutes: hit 93.1% and 92.3%, warned 93.3%
+//     and 92.8%). Each indicator alike (once, 5 minutes: Q-Trend hit 92.5%,
+//     warned 92.5%; ULTRA 92.8%, 94.4%); C alike (92.5%, 93.8%).
+//   * no lead or way to warn made a trade better than the email's: every
+//     warning's trade −1.34 to −2.47 against the email's −1.36 (different
+//     trades, so no interval of the difference is worked).
+//
 // NOT MEASURED: the other timeframes; the pairs above; the time a warning
 // email takes to arrive, and to be acted on; swap; slippage; a sweep's
 // minute steps (the data's are 5 minutes); on the walks, the time-out
