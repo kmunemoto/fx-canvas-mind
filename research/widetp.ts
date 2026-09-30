@@ -162,6 +162,28 @@
 //     under a pip a trade is seldom called at the walks' noise, which is not
 //     the data's: the data's own intervals are told with the result.
 //
+// THE RESULT (2026-09-30, docs §8.83, run 36738170786 at 75c56c4): every
+// check 0 differ, (h) §8.77's five numbers again to two places, no GMO read
+// failed. A+B, the emails' signals (either), 4-hour bars, pips a trade, the
+// first half and the second (2,416 and 2,216 trades):
+//   * now T5 −0.48 and −1.20; T10 −0.90 and −1.10; T15 −1.15 and −1.29; T20
+//     −1.35 and −1.27; T30 −1.77 and −0.96; T45 −1.41 and −0.58; T60 −1.82
+//     and −0.91; T90 −2.91 and −0.85; A0.5 −1.66 and −1.24; A1 −2.53 and
+//     −1.18; A2 −3.47 and −1.36. TP1 first just under the break-even for
+//     every one (T5 84.7% against 85.7%, T20 58.3% against 60.0%, the whole
+//     period).
+//   * the pick: every candidate's t below 0 on the first half; T45 the
+//     least (t −1.07). On the second half −0.58 against now −1.20; the
+//     difference +0.62 (−1.33 to +2.57; by four weeks −1.73 to +2.97): not
+//     clearly better. The Bonferroni road: no candidate.
+//   * T20, the email's exit since #173, less now: −0.88 and −0.07; the
+//     whole period −0.49 (−1.24 to +0.26; by four weeks −1.33 to +0.35).
+//   * told: the pick's second-half "less now" on ULTRA's signals alone
+//     +3.34 (+0.41 to +6.27; by four weeks −0.23 to +6.91; 671 trades),
+//     STRONG's +4.09, Q-Trend's −0.31; each pair −3.98 (EUR/USD) to +5.26
+//     (USD/JPY). The coin on A+B: now and the candidates (L30) −1.23 to
+//     −1.84 on the halves.
+//
 // NOT MEASURED: the other timeframes (ULTRA_PAIRS is one set for every
 // timeframe and currency pair, so a change reaches them too); the pairs
 // without 4-hour history, and Twelve Data's; swap; slippage (but for the stop
