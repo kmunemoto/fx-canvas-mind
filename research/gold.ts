@@ -92,9 +92,9 @@
 //     numbers.
 //   * checks: the signals against indicatorSignals; the hourly files'
 //     candles against the minutes' (2024 on); the signal bar's close against
-//     the 5-minute bar ending there; a trade out at the target or at the
-//     limit under a stop the same trade under the next wider one (the same
-//     target); the data's days.
+//     the last 5-minute bar before its end; a trade out at the target or at
+//     the limit under a stop the same trade under the next wider one (the
+//     same target); the data's days.
 //
 // SYNTHETIC=1: a seeded random walk instead (SEED; each 5-minute bar 100
 // small steps, as #165's "path" walks; a 5-minute bar's move about $1.2, the
@@ -103,7 +103,8 @@
 // the call quiet.
 //
 // ON RANDOM WALKS, the stops alone (T 5), before the targets were added
-// (before any gold price was read; 50 seeds, 7 .. 130):
+// (before any gold price was read; 50 seeds, 7 .. 130; this section and the
+// next with the bars cut GRID4=ny, daily on the UTC day, no flat hours):
 //   * every check 0 differ on every seed.
 //   * each rule's dollars a trade against the spread's cost: near it (on
 //     the 4-hour chart, z of the difference from −$0.30 mean −0.12 to +0.04
@@ -136,6 +137,21 @@
 //     four weeks). With those left out (51, as fixed above) it fired on 1
 //     (seed 106, T30 S50 five days). Replayed from the runs' output, the 67
 //     reproduce the program's own pick and call on all 50.
+//
+// ON RANDOM WALKS, the bars cut as the app holds Twelve Data's (GRID4=tw,
+// GRIDD=tw, FILL=twelve; the same 50 seeds, before any of this study's
+// results on gold were seen):
+//   * every check 0 differ on every seed (350).
+//   * "rule less now" on the 4-hour chart, each half (100): for the
+//     candidates, z's sd 0.89 to 1.08 by week (0.95 to 1.15 by four weeks),
+//     its mean −0.08 to +0.19; for a stop of $100 or none, sd 0.96 to 1.46
+//     and mean +0.10 to +0.47 (T50 none, four weeks: z above 1.96 on 19 of
+//     the 100 halves).
+//   * the call (51 candidates) fired on 1 of the 50 (seed 53, T50 S50 four
+//     weeks); with every rule a candidate (67) on 2 (seeds 41 and 53, both
+//     none, four weeks), and the pick was a stop of $100 or none on 29.
+//     Replayed from the runs' output, the 51 reproduce the program's own
+//     pick and call on all 50.
 
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { barFullyClosed, isGoldBreak, isMarketClosed, isPossiblyClosed, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
@@ -960,7 +976,7 @@ const halfName = (h: Half) => (h === 0 ? "first half" : h === 1 ? "second half" 
 console.log(`\n#167 the emails' levels on gold (${PAIR}), ${START} .. ${iso(NOW)} (first half before ${SPLIT})${SYNTHETIC ? ` — SYNTHETIC, seed ${SEED}` : ""}; grid ${GRID}; targets ${TARGETS.join(", ")} and stops ${STOPS.map((s) => s ?? "none").join(", ")} dollars; ATR(14) × ${ATR_RULES.map(([k, m]) => `${k}/${m}`).join(", ")} (target/stop); limits ${L5D} (5d) and, on 4h, ${L4W} (4w) five-minute bars`);
 for (const tf of TFS) console.log(checkLine(`signals against indicatorSignals, ${tf}`, check[tf]));
 console.log(checkLine("out at the target or the limit under a stop, the same under the next wider", nestCheck));
-console.log(checkLine("the signal bar's close against the 5-minute bar ending there", closeCheck));
+console.log(checkLine("the signal bar's close against the last 5-minute bar before its end", closeCheck));
 for (const [tf, xs] of Object.entries(spreadPaid)) {
   const s = [...xs].sort((a, b) => a - b);
   console.log(`spread paid at the signals' closes, ${tf}: median $${s[Math.floor(s.length / 2)]?.toFixed(3)}, 90% $${s[Math.floor(0.9 * (s.length - 1))]?.toFixed(3)} (${s.length})`);
