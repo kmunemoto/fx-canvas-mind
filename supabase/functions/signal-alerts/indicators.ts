@@ -458,11 +458,11 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   const even = breakEvenPct(false);
   if (lang === "en") {
     if (!m) return "This timeframe has not been measured.";
-    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${Math.abs(m.pips).toFixed(2)} pips a trade on average.` +
       (unmeasured ? ` ${s.pair} itself was not measured; these are GMO's FX pairs' figures.` : "");
   }
   if (!m) return "この時間足は測っていません。";
-  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
     (unmeasured ? `${s.pair} そのものは測っていません（GMO の FX の値です）。` : "");
 };
 
@@ -479,6 +479,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const tf = tfLabel(lang, s.interval);
   const twelve = isTwelvePair(s.pair);
   const r1 = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(1));
+  // #173: a target at or below zero (a sell's TP3 on HUF/JPY, about 0.49
+  // yen: 60 pips is 0.60) is no price, and is said to be none
+  const tpLine = (k: number, v: number) =>
+    v > 0
+      ? lang === "en" ? `  TP${k + 1} ${px(v)} (${dist(v)})` : `  利確${k + 1} ${px(v)}（${dist(v)}）`
+      : lang === "en" ? `  TP${k + 1} — (it would be below zero, so there is none)` : `  利確${k + 1} —（0より下になるため、この目安はありません）`;
   if (lang === "en") {
     const side = s.side === "BUY" ? "BUY" : "SELL";
     const source = twelve
@@ -503,7 +509,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           "Stop and targets (ULTRA's numbers):",
           `  Entry ≈ ${px(s.close)}`,
           `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
-          ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
+          ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
         ].join("\n"),
         `Q-Trend (tarasenko_'s open-source Pine script, at its defaults 200, 14, 1) has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
         ...footer,
@@ -520,7 +526,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         gold ? "ULTRA's levels (the video's stop; the targets $30, $60 and $90):" : "ULTRA's levels (the targets 20, 40 and 60 pips; the stop 30 pips):",
         `  Entry ≈ ${px(s.close)}`,
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
-        ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
+        ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
       `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? " On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them." : " On currency pairs this app sets the stop at 30 pips (from its own measurements) and the targets at 20, 40 and 60 pips (the video's are 5, 10 and 15)."} ${measuredLine(s, "en")}`,
       ...footer,
@@ -548,7 +554,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         "損切り・利確の目安（ULTRA と同じ数字）:",
         `  エントリー ≈ ${px(s.close)}`,
         `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
-        ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
+        ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
       `Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       ...footer,
@@ -563,7 +569,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       gold ? "ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:" : "ULTRA の目安（利確は20・40・60pips、損切りは30pips）:",
       `  エントリー ≈ ${px(s.close)}`,
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
-      ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
+      ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
     ].join("\n"),
     `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。" : "FX では、損切りを30pips（このアプリで測った結果から）、利確を20・40・60pips（動画は5・10・15）にしています。"}${measuredLine(s, "ja")}`,
     ...footer,

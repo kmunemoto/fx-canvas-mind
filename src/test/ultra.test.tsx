@@ -349,6 +349,23 @@ describe("#151 ULTRA on the chart", () => {
     expect(bottom - order[4].y1).toBeLessThan(3);
   });
 
+  it("#173: a level at or below zero is no price — HUF/JPY (about 0.49 yen), a sell's TP3 60 pips (0.60) below", () => {
+    // the newest signal a sell on 320 at 0.49075, still open (counted apart
+    // in Python): its stop 0.79075, its targets 0.29075, 0.09075 and −0.10925
+    const huf = barsOf(400, 4, 48800, 100000, 3, 20, 20).map((b, i) => ({ ...b, datetime: dated[i].datetime }));
+    render(<PriceChart candles={huf.slice(280)} pair="HUF/JPY" zoneShiftHistory={{ bars: huf.slice(0, 280), status: "ready" }} formingLast />);
+    const box = screen.getByTestId("chart-ultra-box");
+    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
+    expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 0.491");
+    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 0.791 ↑");
+    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 0.291 ↓");
+    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 0.091 ↓");
+    expect(screen.queryByTestId("chart-ultra-tag-tp3")).toBeNull();
+    expect(box.querySelector("title")!.textContent).toBe("ULTRA 売り: エントリー 0.491・損切り 0.791・TP1 0.291・TP2 0.091・TP3 —");
+    // no price below zero anywhere on the chart's tags (Q-Trend's too)
+    for (const g of document.querySelectorAll("[data-testid^='chart-ultra-tag-'], [data-testid^='chart-qtrend-tag-']")) expect(g.textContent).not.toMatch(/-\d/);
+  });
+
   it("the forming bar is not judged: its reach of TP1 is neither marked nor counted", () => {
     // #168: gold's TP1 is $30 above the Buy's close of 92
     const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 122];

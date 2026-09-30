@@ -501,7 +501,7 @@ describe("#155 what the sweep reads, and when", () => {
       "もともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています",
       // #166: measured at the 30-pip stop; #173: at TP1 20, breaking even
       // needs 30 / (30 + 20)
-      "過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.0%（損益ゼロには60%より上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約2.03 pips の負けでした。",
+      "過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.0%（損益ゼロには60%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約2.03 pips の負けでした。",
     ]) expect(ja.text).toContain(part);
     expect(ja.text).not.toContain("損切り・利確の目安はありません");
     // #157: no longer "other timeframes have not been measured", nor the older 5-minute figure
@@ -510,7 +510,7 @@ describe("#155 what the sweep reads, and when", () => {
     const en = renderIndicatorMail(sig, "en");
     for (const part of [
       "Stop and targets (ULTRA's numbers):", "  Stop 150.049 (30.0 pips)", "  TP1 149.549 (20.0 pips)", "  TP3 149.149 (60.0 pips)",
-      "Measured on past 5-minute bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop 58.0% of the time (breaking even needs more than 60%); closing all of it at TP1 or the stop (or after five days, where neither was reached) lost about 2.03 pips a trade on average.",
+      "Measured on past 5-minute bars (January 2024–September 2026, GMO's FX pairs, spread paid), these levels reached TP1 before the stop 58.0% of the time (breaking even needs more than 60%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) lost about 2.03 pips a trade on average.",
     ]) {
       expect(en.text).toContain(part);
     }
@@ -552,6 +552,18 @@ describe("#155 what the sweep reads, and when", () => {
     expect(goldUlEn.text).toContain("with a stop of 10. On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them. Measured on past 4-hour bars");
     expect(goldUlEn.text).toContain("20.8% of the time");
     expect(goldUlEn.text).toContain("lost about $1.97 a trade");
+    // #173: HUF/JPY, about 0.49 yen: a sell's TP3 60 pips (0.60) below would be
+    // below zero, and is said to be none
+    const huf = { ...sig, rule: "ultra" as const, pair: "HUF/JPY", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5, close: 0.488, sl: 0.788, tps: [0.288, 0.088, -0.112] as [number, number, number] };
+    const hufJa = renderIndicatorMail(huf, "ja").text;
+    expect(hufJa).toContain("  利確1 0.288（20.0pips）");
+    expect(hufJa).toContain("  利確2 0.088（40.0pips）");
+    expect(hufJa).toContain("  利確3 —（0より下になるため、この目安はありません）");
+    expect(hufJa).not.toContain("-0.112");
+    const hufEn = renderIndicatorMail(huf, "en").text;
+    expect(hufEn).toContain("  TP3 — (it would be below zero, so there is none)");
+    expect(hufEn).not.toContain("-0.112");
+    expect(renderIndicatorMail({ ...huf, rule: "qtrend", line: 0.49, eps: 0.001 }, "ja").text).toContain("  利確3 —（0より下になるため、この目安はありません）");
     expect(breakEvenPct(true)).toBe(25);
     expect(breakEvenPct(false)).toBe(60);
     // ULTRA's email: the video's figure beside what was measured on its own timeframe
