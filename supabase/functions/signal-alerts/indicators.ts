@@ -121,7 +121,8 @@ export const indicatorSignals = (
   };
   const out: IndicatorSignal[] = [];
   // #166: a currency pair's stop 30 pips; #168: gold's targets $30, $60 and
-  // $90 (its stop the video's $10)
+  // $90 (its stop the video's $10); #173: a currency pair's targets 20, 40
+  // and 60 pips
   const levels = ultraParamsFor(isGold(pair));
   const qt = qTrend(bars, QT_DEFAULTS, bars.length - 1);
   const atr = pineAtr(bars, QT_DEFAULTS.atrPeriod);
@@ -390,20 +391,23 @@ export const keepableKlines = (body: unknown): boolean =>
 // not measured.
 // #166: measured again at the currency pairs' stop of 30 pips (tf-winrate
 // with SL=30, GitHub Actions run 36587276263, docs §8.78); #157's were at 10.
+// #173: measured again at their targets since, TP1 20 pips (TP2 40, TP3 60)
+// and the stop 30 (tf-winrate with TP1=20 and SL=30, 2024-01-01 to
+// 2026-09-30, GitHub Actions run 36730814776, docs §8.82); #166's were at TP1 5.
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
-    "5min": { win: 84.1, pips: -1.9 },
-    "15min": { win: 84.1, pips: -1.8 },
-    "1h": { win: 85.3, pips: -1.31 },
-    "4h": { win: 86.0, pips: -0.87 },
-    "1day": { win: 75.8, pips: -8.07 },
+    "5min": { win: 58.0, pips: -2.03 },
+    "15min": { win: 58.4, pips: -1.8 },
+    "1h": { win: 59.2, pips: -1.33 },
+    "4h": { win: 58.3, pips: -1.47 },
+    "1day": { win: 55.1, pips: -6.92 },
   },
   ultra: {
-    "5min": { win: 84.9, pips: -1.49 },
-    "15min": { win: 84.6, pips: -1.47 },
-    "1h": { win: 85.5, pips: -1.39 },
-    "4h": { win: 86.6, pips: -0.46 },
-    "1day": { win: 77.0, pips: -8.1 },
+    "5min": { win: 58.2, pips: -1.81 },
+    "15min": { win: 58.0, pips: -1.79 },
+    "1h": { win: 58.4, pips: -1.87 },
+    "4h": { win: 60.1, pips: -0.54 },
+    "1day": { win: 50.0, pips: -9.5 },
   },
 };
 // #168: gold's, at its levels since (TP1 $30, the stop $10): research/gold.ts
@@ -431,7 +435,7 @@ export const GOLD_MEASURED: Record<IndicatorRule, Record<string, { win: number; 
 
 // the sentence saying so, on this email's timeframe. The share of TP1
 // before the stop that breaks even, spread aside: the stop over the stop and
-// TP1 (30 pips against 5: 86%; gold's $10 against $30: 25%).
+// TP1 (30 pips against 20: 60%, #173; gold's $10 against $30: 25%).
 export const breakEvenPct = (gold: boolean): number => {
   const o = ultraParamsFor(gold);
   return Math.round((100 * o.sl) / (o.sl + o.tp1));
@@ -513,12 +517,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)} (${cross})`,
       ].join("\n"),
       [
-        gold ? "ULTRA's levels (the video's stop; the targets $30, $60 and $90):" : "ULTRA's levels (the video's targets; the stop 30 pips):",
+        gold ? "ULTRA's levels (the video's stop; the targets $30, $60 and $90):" : "ULTRA's levels (the targets 20, 40 and 60 pips; the stop 30 pips):",
         `  Entry ≈ ${px(s.close)}`,
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
         ...(s.tps ?? []).map((v, k) => `  TP${k + 1} ${px(v)} (${dist(v)})`),
       ].join("\n"),
-      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? " On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them." : " On currency pairs this app sets the stop at 30 pips, chosen on its own measurements."} ${measuredLine(s, "en")}`,
+      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? " On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them." : " On currency pairs this app sets the stop at 30 pips (from its own measurements) and the targets at 20, 40 and 60 pips (the video's are 5, 10 and 15)."} ${measuredLine(s, "en")}`,
       ...footer,
     ]);
   }
@@ -556,12 +560,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で、ULTRA の${sideU}のサインが出ました。`,
     [`判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`, `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)}（${cross}）`].join("\n"),
     [
-      gold ? "ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:" : "ULTRA の目安（利確は動画の設定、損切りは30pips）:",
+      gold ? "ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:" : "ULTRA の目安（利確は20・40・60pips、損切りは30pips）:",
       `  エントリー ≈ ${px(s.close)}`,
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
       ...(s.tps ?? []).map((v, k) => `  利確${k + 1} ${px(v)}（${dist(v)}）`),
     ].join("\n"),
-    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。" : "FX では、このアプリで測った結果から損切りを30pipsにしています。"}${measuredLine(s, "ja")}`,
+    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。" : "FX では、損切りを30pips（このアプリで測った結果から）、利確を20・40・60pips（動画は5・10・15）にしています。"}${measuredLine(s, "ja")}`,
     ...footer,
   ]);
 };

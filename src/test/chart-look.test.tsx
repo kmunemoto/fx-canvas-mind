@@ -79,6 +79,12 @@ describe("#118 the chart made easier to read and to use", () => {
 
   it("shows the crosshair's price on the axis and its bar on the time axis", () => {
     const c = walk(80);
+    // #173: with a currency pair's targets 20, 40 and 60 pips this walk's
+    // newest ULTRA trade is still open, and room is left right of the newest
+    // candle for its prices (#152), which narrows the bars; the axis is what
+    // is tested here, so ULTRA and Q-Trend are off
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { ultra: false, qTrend: false } }));
+    resetChartPrefsCache();
     render(<PriceChart candles={c} pair="USD/JPY" />);
     const svg = screen.getByTestId("chart-price");
     const h = Number(svg.getAttribute("viewBox")!.split(" ")[3]);
