@@ -125,6 +125,11 @@ export const twelveCapFor = (interval: string): number => TWELVE_CAPS[interval] 
 // one credit whatever the number of bars (its "Credits" article, read
 // 2026-10-01: "/time_series ... (1 credit) * (3 symbols) = 3 credits")
 export const GOLD_BARS = 1400;
+// #176: the newest of them the chart's own reads use (its bars and signals,
+// the other indicators' history, the Dow reading), as many as they read
+// before (the newest 800 of a read of 1,400 are a read of 800), so nothing
+// but the Zero-lag TEMA reads deeper
+export const TWELVE_CHART_BARS = 800;
 // Stored gold bars (#154: any pair's read as gold is) are fresh while no bar
 // has closed since they were read (a bar opens on the UTC grid of its
 // length, as Twelve Data's do); while the market may be shut, for
@@ -547,8 +552,9 @@ export const historyOfBars = (pair: string, interval: string, bars: Candle[], no
 // comes to TradingView's only some 1,200 bars in, the owner's choice
 // 「TradingView と同じにする」 (src/lib/zlTema.ts, docs §8.87). So while it
 // is on, the chart reads DEEP_HISTORY_BARS closed bars instead of
-// HISTORY_BARS. The other indicators keep reading HISTORY_BARS, so nothing
-// they draw moves, nor do the emails, which read as they do.
+// HISTORY_BARS. The other indicators keep reading HISTORY_BARS (the pairs
+// read as gold is, TWELVE_CHART_BARS), so nothing they draw moves, nor do
+// the emails, which judge from a start of their own (anchoredStart).
 //
 // A year's file (4h, 1day) is read back year by year, DEEP_YEARS at most,
 // and stops where GMO has no more; a day's (1min to 1h) newest first, as
@@ -574,6 +580,18 @@ export interface DeepQuotes {
   // may bring more; true: as many as asked for, or all GMO has
   complete: boolean;
 }
+
+// GMO's 404, a file it does not have: the JST day before GMO's own day has
+// begun (its 06:00 JST roll; track-outcomes/quotes.ts jstDayKey, measured
+// 2026-09-04), and any other day or year it has no file for. A file with
+// no bars, as the regular read takes a file not answered (parseKlines) and
+// the research scripts take the 404: the walk goes on past it. The caller
+// gives this for the 404 alone; a timeout or another failure is null, and
+// stops the walk short. Never kept: the file may yet come.
+export const NO_KLINE_FILE: { readonly status: 0; readonly data: readonly never[] } = Object.freeze({
+  status: 0,
+  data: Object.freeze([]),
+});
 
 // GMO answered (status 0 with its list; a day with no bars is an empty one)
 const gmoAnswered = (body: unknown): boolean =>

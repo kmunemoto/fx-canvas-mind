@@ -15,8 +15,9 @@
 // its first n values, so six EMAs of 144 in a row give the slow line its
 // first value 858 bars in, and it then needs some hundreds more before it
 // stops depending on where the bars began. TradingView computes it over
-// years of bars; the chart reads some 1,300 (live-chart's deep history,
-// DEEP_HISTORY_BARS). Over those, an EMA started from its first value comes
+// years of bars; the chart reads some 1,400 (live-chart's deep history,
+// DEEP_HISTORY_BARS), some 1,280 of them before the 120 it shows. Over
+// those, an EMA started from its first value comes
 // to TradingView's line sooner: on random walks (docs §8.87), with 1,200
 // bars before the 120 drawn the L/S marks on them were TradingView's in all
 // 120 walks (Pine's own start: 116), and the slow line within 0.4% of a
