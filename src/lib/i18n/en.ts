@@ -246,6 +246,8 @@ export const en: Dict = {
       kalman: (atr: number, factor: number) => `SPECTRA-style ${atr} ${factor}`,
       supertrend: (period: number, mult: number) => `SuperTrend ${period} ${mult}`,
       utBot: (key: number, atr: number) => `UT Bot ${key} ${atr}`,
+      // #176
+      zlTema: (fast: number, slow: number) => `Zero-lag TEMA ${fast} ${slow}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "Dow theory",
@@ -375,6 +377,22 @@ export const en: Dict = {
     // #136
     supertrendNote:
       "SuperTrend (a port of the code KivancOzbilgic published on TradingView): a line at the high–low midpoint ± 3 × ATR(10). While the trend is up the lower line shows (green), while down the upper one (red); the line only rises in an uptrend and only falls in a downtrend. When a close crosses the line on the other side the trend turns, marked with a dot and Buy / Sell on the line. The space between the line and the candles' average (open, high, low, close) is tinted. Judged on closed bars only, not drawn on the bar still forming. As its author says, it does not work in a sideways market. Not yet measured on past data (the SPECTRA style, the same mechanism smoothed by a Kalman filter, did no better than entering at random in #120). Shown only: no signal or email uses it.",
+    // #176
+    zlTemaTitle: (side: "BUY" | "SELL"): string =>
+      side === "BUY" ? "Zero-lag TEMA L (the fast line crossed over the slow one)" : "Zero-lag TEMA S (the fast line crossed under the slow one)",
+    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number) =>
+      "Zero-lag TEMA Crosses (a port of the code loxx published on TradingView, Pine v5, MPL 2.0, with its defaults: the close, fast 22, slow 144): " +
+      "two lines, each the TEMA (3 × (EMA1 − EMA2) + EMA3) of the TEMA of the close. While the fast line is above the slow one, it and the candles are green, otherwise red (the candles take its colours over the other indicators'). The slow line is white (dark on a light background). " +
+      "L (a yellow ▲ under the candle) where the fast line crosses over the slow one, S (a fuchsia ▼ over it) where it crosses under. Judged on closed bars. " +
+      `The slow line is TradingView's only with some ${settle.toLocaleString("en-US")} bars before it, so while this is on the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). One thing differs from the original: each EMA starts from the first value (over the bars the chart can read, it comes to TradingView's line sooner). ` +
+      (status === "loading"
+        ? "Loading the bars before the chart's (the lines and marks come after). "
+        : status === "error"
+          ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
+          : before !== null && before < settle
+            ? `Only ${before.toLocaleString("en-US")} bars before the chart's could be read, so the slow line and the L/S marks may differ a little from TradingView's (some ${settle.toLocaleString("en-US")} make them the same). `
+            : `Bars before the chart's: ${(before ?? 0).toLocaleString("en-US")}. `) +
+      "Not tested on past charts. Shown only: no signal, email or record uses it.",
     // #137
     utBotNote:
       "UT Bot Alerts (a port of the code QuantNomad published on TradingView; UT Bot by Yo_adriiiiaan from an idea of HPotter): a trailing stop kept 1 × ATR(10) from the close; Buy (under the candle) where the close crosses over it, Sell (over the candle) where it crosses under. Candles are painted green while the close is above the stop and red while below (over Zone Shift's colours). As in the original, the stop itself is not drawn. Its Heikin Ashi option (off by default there) is not ported. Judged on closed bars only; the bar still forming is not painted. Not measured on past data. Shown only: no signal or email uses it.",

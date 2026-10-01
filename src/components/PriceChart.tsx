@@ -36,6 +36,7 @@ import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPre
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
 import { UT_DEFAULTS, utBot } from "@/lib/utBot";
+import { ZLT_DEFAULTS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/lib/zlTema";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
@@ -185,6 +186,11 @@ interface Props {
   // the Pro-style score and #143: the EMA lines read them too.
   // (#148: with their times, when known, for where Q-Trend starts)
   zoneShiftHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
+  // #176: the closed bars before the chart's first candle for the Zero-lag
+  // TEMA, read deep (the live chart reads them while it is on). Not given,
+  // it computes over the candles alone and says the slow line is not
+  // TradingView's yet.
+  deepHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
   // of them), `higher` those above it. Given, it is listed; drawn: the
@@ -207,7 +213,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -259,6 +265,10 @@ const NARROW_PILL_W = 70;
 const NARROW = 480;
 // #117: the gap above each strip
 const STRIP_GAP = 4;
+
+// #176: the Zero-lag TEMA's own colours (its greencolor and redcolor, and
+// TradingView's color.yellow and color.fuchsia for L and S)
+const ZLT_COLORS = { up: "#2DD204", down: "#D2042D", long: "#FFEB3B", short: "#E040FB" };
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -341,7 +351,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, dow, indicatorsLocked = false, onLockedIndicator,
+  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, deepHistory, dow, indicatorsLocked = false, onLockedIndicator,
   landscapeFullscreen = false, drawable = false,
 }: Props) => {
   // #149: the newest candles left out of every indicator's judging
@@ -602,6 +612,25 @@ const PriceChart = ({
     () => (ov.utBot ? utBot(candles, UT_DEFAULTS, candles.length - 1 - tail) : null),
     [ov.utBot, candles, tail],
   );
+  // #176: Zero-lag TEMA Crosses, over its deep history and the candles (the
+  // lines on the forming one too, as TradingView draws them; the colours
+  // and L/S on the closed ones). While that history is loading, nothing:
+  // the slow line would move when it came. A chart not given one computes
+  // over its candles alone. `before`: the bars before the first candle.
+  const zltPast = deepHistory ? deepHistory.bars : NO_BARS;
+  const zlt = useMemo(() => {
+    if (!ov.zlTema || candles.length === 0 || zltPast === null) return null;
+    const closes = [...zltPast.map((b) => b.close), ...candles.map((c) => c.close)];
+    const off = zltPast.length;
+    const r = zlTemaCrosses(closes, ZLT_DEFAULTS, closes.length - 1 - tail);
+    return {
+      fast: r.fast.slice(off),
+      slow: r.slow.slice(off),
+      side: r.side.slice(off),
+      signals: r.signals.map((sg) => ({ ...sg, i: sg.i - off })).filter((sg) => sg.i >= 0),
+      before: off,
+    };
+  }, [ov.zlTema, zltPast, candles, tail]);
   // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
   // Volume Profile of the newest candles — the forming one too, as the
   // original recomputes on the chart's last bar. #123: one indicator, on
@@ -904,6 +933,17 @@ const PriceChart = ({
         max = Math.max(max, v);
       }
     }
+    // #176: and the Zero-lag TEMA's two lines
+    if (zlt) {
+      for (const values of [zlt.fast, zlt.slow]) {
+        for (let i = from; i < to; i++) {
+          const v = values[i];
+          if (v === undefined || !Number.isFinite(v)) continue;
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
+      }
+    }
     // #143: the EMA lines too — the price is read against them (as
     // TradingView fits its scale to the lines it draws)
     if (emas) {
@@ -943,7 +983,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, priceZoom, ulGap]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1251,6 +1291,7 @@ const PriceChart = ({
     kalman: t.chart.kalmanNote,
     supertrend: t.chart.supertrendNote,
     utBot: t.chart.utBotNote,
+    zlTema: t.chart.zlTemaNote(zlt ? zlt.before : null, deepHistory ? (zlt ? "ready" : deepHistory.status) : "ready", ZLT_SETTLE_BARS),
     fvgProfile: t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length)),
     zoneShift: t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready"),
     dow: dow ? t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf)) : undefined,
@@ -1291,6 +1332,8 @@ const PriceChart = ({
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
     { key: "supertrend", group: "trend" as const, name: t.chart.overlayNames.supertrend(ST_DEFAULTS.period, ST_DEFAULTS.multiplier), on: ov.supertrend, toggle: flip("supertrend") },
     { key: "utBot", group: "trend" as const, name: t.chart.overlayNames.utBot(UT_DEFAULTS.keyValue, UT_DEFAULTS.atrPeriod), on: ov.utBot, toggle: flip("utBot") },
+    // #176
+    { key: "zlTema", group: "trend" as const, name: t.chart.overlayNames.zlTema(ZLT_DEFAULTS.fast, ZLT_DEFAULTS.slow), on: ov.zlTema, toggle: flip("zlTema") },
     { key: "fvgProfile", group: "trend" as const, name: t.chart.overlayNames.fvgProfile, on: ov.fvgProfile, toggle: flip("fvgProfile") },
     ...(zsListed ? [{ key: "zoneShift", group: "trend" as const, name: t.chart.overlayNames.zoneShift(ZS_DEFAULTS.length), on: ov.zoneShift, toggle: flip("zoneShift") }] : []),
     ...(dow ? [{ key: "dow", group: "trend" as const, name: t.chart.overlayNames.dow, on: ov.dow, toggle: flip("dow") }] : []),
@@ -2360,6 +2403,11 @@ const PriceChart = ({
           {t.chart.utBotNote}
         </p>
       )}
+      {ov.zlTema && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-zltema-legend">
+          {noteOf.zlTema}
+        </p>
+      )}
       {emaOn !== "" && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-ema-legend">
           {noteOf.ema50}
@@ -3209,7 +3257,11 @@ const PriceChart = ({
           // #145: Q-Trend's colour (green after its buy, red otherwise, as
           // the original's barcolor), under UT Bot's and over Zone Shift's
           const qtSide = qt && ov.qTrend ? qt.trend[i] ?? null : null;
-          const color = utSide !== null
+          // #176: the Zero-lag TEMA's (its barcolor) over them all
+          const zltSide = zlt ? zlt.side[i] ?? null : null;
+          const color = zltSide !== null
+            ? (zltSide === 1 ? ZLT_COLORS.up : ZLT_COLORS.down)
+            : utSide !== null
             ? (utSide === 1 ? COLORS.up : COLORS.down)
             : qtSide !== null
               ? (qtSide === 1 ? COLORS.up : COLORS.down)
@@ -3670,6 +3722,31 @@ const PriceChart = ({
             })}
           </g>
         )}
+        {/* #176: the Zero-lag TEMA — the slow line (white on the dark
+            background, as the original; the text colour on a light one) and
+            the fast one, each stretch green while it is above the slow one */}
+        {zlt && (() => {
+          const lo = Math.max(1, from - 1);
+          const hi = Math.min(candles.length, to + 1);
+          let slowD = "";
+          let upD = "";
+          let downD = "";
+          for (let i = lo; i < hi; i++) {
+            const [s0, s1, f0, f1] = [zlt.slow[i - 1], zlt.slow[i], zlt.fast[i - 1], zlt.fast[i]];
+            if (![s0, s1, f0, f1].every((v) => v !== undefined && Number.isFinite(v))) continue;
+            slowD += `M${x(i - 1).toFixed(1)},${y(s0).toFixed(1)} L${x(i).toFixed(1)},${y(s1).toFixed(1)} `;
+            const seg = `M${x(i - 1).toFixed(1)},${y(f0).toFixed(1)} L${x(i).toFixed(1)},${y(f1).toFixed(1)} `;
+            if (f1 > s1) upD += seg;
+            else downD += seg;
+          }
+          return (
+            <g data-testid="chart-zltema" clipPath={`url(#${clipId})`}>
+              {slowD && <path d={slowD} fill="none" stroke="hsl(var(--foreground))" strokeWidth={1.1 * fs} opacity="0.85" data-testid="chart-zltema-slow" />}
+              {upD && <path d={upD} fill="none" stroke={ZLT_COLORS.up} strokeWidth={2 * fs} strokeLinecap="round" data-testid="chart-zltema-fast-up" />}
+              {downD && <path d={downD} fill="none" stroke={ZLT_COLORS.down} strokeWidth={2 * fs} strokeLinecap="round" data-testid="chart-zltema-fast-down" />}
+            </g>
+          );
+        })()}
 
         {/* #150: the trend lines — through the latest two rising swing lows
             (green) and falling swing highs (red), to the close that broke
@@ -3719,6 +3796,35 @@ const PriceChart = ({
                   <circle cx={x(c.i)} cy={cy} r={3 * fs} fill={color} stroke="hsl(var(--background))" strokeWidth={1} />
                   <text x={x(c.i)} y={gc ? cy - 6 * fs : cy + fsz + 5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}>
                     {c.side}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #176: the Zero-lag TEMA's L under the candle (a yellow ▲) and S
+            over it (a fuchsia ▼), as the original's plotshape */}
+        {zlt && (
+          <g data-testid="chart-zltema-signals">
+            {zlt.signals.filter((sg) => onScreen(sg.i)).map((sg) => {
+              const c = candles[sg.i];
+              const buy = sg.side === "BUY";
+              const cx = x(sg.i);
+              const color = buy ? ZLT_COLORS.long : ZLT_COLORS.short;
+              const r = (narrow ? 3.5 : 4) * fs;
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const tip = buy ? y(c.low) + 3 : y(c.high) - 3;
+              const base = buy ? tip + r * 1.6 : tip - r * 1.6;
+              return (
+                <g key={`zlt-${sg.i}`} data-testid={`chart-zltema-signal-${sg.side}`}>
+                  <title>{t.chart.zlTemaTitle(sg.side)}</title>
+                  <polygon points={`${cx},${tip} ${cx - r},${base} ${cx + r},${base}`} fill={color} stroke="hsl(var(--background))" strokeWidth={0.8} />
+                  <text
+                    x={cx} y={buy ? base + fsz : base - 3} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}
+                    stroke="hsl(var(--background))" strokeWidth={2} paintOrder="stroke"
+                  >
+                    {buy ? "L" : "S"}
                   </text>
                 </g>
               );

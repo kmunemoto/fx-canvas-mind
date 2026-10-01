@@ -117,7 +117,7 @@ describe("#119 switching what the chart draws, from the list at its top left", (
   it("lists only what this chart draws, the SPECTRA-style line off until switched on", () => {
     render(chart());
     const names = [...screen.getByTestId("chart-overlay-list").querySelectorAll("[data-testid^='chart-overlay-name-']")].map((e) => e.textContent);
-    expect(names).toEqual(["売買サイン", "建玉の箱", "Q-Trend × BLSH（3つの確認）", "ULTRA（RSI 14・SL 30・TP 20/40/60 pips）", "SAR の帯", "パラボリックSAR", "EMA 50", "EMA 200", "GC・DC（EMA 50×200）", "トレンドライン", "一目均衡表 9 26 52", "Q-Trend 200 14 1", "SPECTRA型 10 3", "SuperTrend 10 3", "UT Bot 1 10", "FVG Crossfire + Volume Profile", "ストキャス 14 1 3", "BB %b 20 2", "RCI 10", "BLSH", "MACD 12 26 9", "ADX 14 14"]);
+    expect(names).toEqual(["売買サイン", "建玉の箱", "Q-Trend × BLSH（3つの確認）", "ULTRA（RSI 14・SL 30・TP 20/40/60 pips）", "SAR の帯", "パラボリックSAR", "EMA 50", "EMA 200", "GC・DC（EMA 50×200）", "トレンドライン", "一目均衡表 9 26 52", "Q-Trend 200 14 1", "SPECTRA型 10 3", "SuperTrend 10 3", "UT Bot 1 10", "Zero-lag TEMA 22 144", "FVG Crossfire + Volume Profile", "ストキャス 14 1 3", "BB %b 20 2", "RCI 10", "BLSH", "MACD 12 26 9", "ADX 14 14"]);
     expect(screen.getByTestId("chart-toggle-kalman").getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByTestId("chart-kalman")).toBeNull();
 
@@ -160,8 +160,8 @@ describe("#119 switching what the chart draws, from the list at its top left", (
     expect(panel.tagName).toBe("DETAILS");
     expect(panel.hasAttribute("open")).toBe(false);
     // #150: and GC・DC and the trend lines on, Ichimoku, MACD and ADX off;
-    // #151: and ULTRA on
-    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 14/22");
+    // #151: and ULTRA on; #176: the Zero-lag TEMA listed, off
+    expect(screen.getByTestId("chart-overlay-fold").textContent).toBe("インジケーター 14/23");
     // above the chart, not over it
     expect(panel.compareDocumentPosition(screen.getByTestId("chart-price")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("chart-price").parentElement!.contains(panel)).toBe(false);
