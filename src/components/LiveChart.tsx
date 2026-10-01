@@ -329,34 +329,56 @@ const LiveChart = ({
   // #176: the Zero-lag TEMA's deep history (live-chart's `deep`), read
   // while it is on, as the history above is; a read the function stopped
   // short (it keeps what it read, so the next goes on) is asked again
-  // after DEEP_RETRY_MS, DEEP_TRIES times at most
+  // after DEEP_RETRY_MS, DEEP_TRIES times at most. Read again on the next
+  // bar after one that failed or stopped short (`complete` false), and once
+  // the chart has moved past it. The reading under way is called off when
+  // the indicator is turned off, on another pair or timeframe, and when
+  // the chart is left; "loading" is only believed while it goes on.
   const zltOn = indicatorsAllowed && overlays.zlTema;
-  const [deepHistory, setDeepHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
+  const [deepHistory, setDeepHistory] = useState<{
+    key: string;
+    readAt: string;
+    bars: NumericCandle[] | null;
+    status: "loading" | "ready" | "error";
+    complete: boolean;
+  } | null>(null);
+  const deepRun = useRef<{ key: string; off: boolean } | null>(null);
+  useEffect(() => () => {
+    if (deepRun.current) deepRun.current.off = true;
+  }, [zltOn, historyKey]);
   useEffect(() => {
     if (!zltOn || !gmoRead) return;
     const h = deepHistory;
-    const fresh = h && h.key === historyKey && (h.status === "loading" || h.readAt === gmoRead.at || (h.status === "ready" && historyBefore(h.bars, gmoRead.candles) !== null));
+    const live = deepRun.current !== null && !deepRun.current.off && deepRun.current.key === historyKey;
+    const fresh = h && h.key === historyKey && (
+      h.status === "loading"
+        ? live
+        : h.readAt === gmoRead.at || (h.status === "ready" && h.complete && historyBefore(h.bars, gmoRead.candles) !== null)
+    );
     if (fresh) return;
     const readAt = gmoRead.at;
-    const still = () => current.current.pair === pair && current.current.interval === interval;
-    setDeepHistory({ key: historyKey, readAt, bars: h?.key === historyKey ? h.bars : null, status: "loading" });
+    if (deepRun.current) deepRun.current.off = true;
+    const run = { key: historyKey, off: false };
+    deepRun.current = run;
+    const on = () => !run.off && current.current.pair === pair && current.current.interval === interval;
+    setDeepHistory({ key: historyKey, readAt, bars: h?.key === historyKey ? h.bars : null, status: "loading", complete: false });
     void (async () => {
       let last: { bars: NumericCandle[]; complete: boolean } | null = null;
       for (let tries = 1; ; tries++) {
         try {
           last = await loadDeepHistory(pair, interval);
         } catch {
-          if (!still()) return;
+          if (!on()) return;
           // what an earlier try brought is shown; nothing at all is an error
-          setDeepHistory({ key: historyKey, readAt, bars: last ? last.bars : null, status: last ? "ready" : "error" });
+          setDeepHistory({ key: historyKey, readAt, bars: last ? last.bars : null, status: last ? "ready" : "error", complete: false });
           return;
         }
-        if (!still()) return;
+        if (!on()) return;
         if (last.complete || tries >= DEEP_TRIES) break;
         await new Promise((r) => setTimeout(r, DEEP_RETRY_MS));
-        if (!still()) return;
+        if (!on()) return;
       }
-      setDeepHistory({ key: historyKey, readAt, bars: last.bars, status: "ready" });
+      setDeepHistory({ key: historyKey, readAt, bars: last.bars, status: "ready", complete: last.complete });
     })();
   }, [zltOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
 

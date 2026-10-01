@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render as rtlRender, screen, fireEvent, waitFor, type RenderResult } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, act, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 
@@ -155,4 +155,73 @@ describe("#176 the live chart reads the deep history while the Zero-lag TEMA is 
     expect(before).toBeGreaterThanOrEqual(ZLT_SETTLE_BARS);
     expect(note).not.toContain("しか読めなかった");
   });
+
+  const on = () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { zlTema: true } }));
+    resetChartPrefsCache();
+  };
+  type Deep = { bars: typeof deepBars; complete: boolean };
+
+  it("turned off while reading, another pair looked at, back and on again: reads again and draws (not 'loading' for good)", async () => {
+    on();
+    const loadBars = vi.fn(async (p: string, i: string) => readFor(p, i));
+    let first: ((v: Deep) => void) | null = null;
+    const loadDeepHistory = vi.fn((): Promise<Deep> => {
+      if (!first) return new Promise<Deep>((r) => (first = r));
+      return Promise.resolve({ bars: deepBars, complete: true });
+    });
+    render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} loadDeepHistory={loadDeepHistory} loadDow={async () => []} />);
+    await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledWith("USD/JPY", "15min"));
+    fireEvent.click(screen.getByTestId("chart-toggle-zlTema"));
+    fireEvent.click(screen.getByTestId("live-pair-EUR/JPY"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/JPY", "15min"));
+    // the USD/JPY read ends while EUR/JPY is on screen
+    await act(async () => {
+      first!({ bars: deepBars, complete: true });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    fireEvent.click(screen.getByTestId("live-pair-USD/JPY"));
+    await waitFor(() => expect(loadBars).toHaveBeenLastCalledWith("USD/JPY", "15min"));
+    fireEvent.click(screen.getByTestId("chart-toggle-zlTema"));
+    await waitFor(() => expect(screen.getByTestId("chart-zltema-slow")).toBeTruthy());
+    expect(loadDeepHistory).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("chart-zltema-legend").textContent).not.toContain("読み込み中");
+  });
+
+  it("asks no more once the indicator is turned off, or the chart is left", async () => {
+    for (const leave of ["off", "unmount"] as const) {
+      on();
+      const loadDeepHistory = vi.fn(async (): Promise<Deep> => ({ bars: deepBars.slice(-400), complete: false }));
+      const view = render(<LiveChart defaultInterval="15min" loadBars={async (p, i) => readFor(p, i)} loadTicks={async () => ({})} loadHistory={async () => []} loadDeepHistory={loadDeepHistory} loadDow={async () => []} />);
+      await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledTimes(1));
+      if (leave === "off") fireEvent.click(screen.getByTestId("chart-toggle-zlTema"));
+      else view.unmount();
+      // it would have asked again at 1.5 s and 3 s
+      await new Promise((r) => setTimeout(r, 3_500));
+      expect(loadDeepHistory).toHaveBeenCalledTimes(1);
+      view.unmount();
+      localStorage.clear();
+      resetChartPrefsCache();
+    }
+  }, 12_000);
+
+  it("a read that stopped short is read again on the next bar", async () => {
+    on();
+    // each read of the bars a new one, the next close half a second away:
+    // the chart reads its bars again some 5 s on
+    const loadBars = vi.fn(async (p: string, i: string) => ({ ...readFor(p, i), at: new Date().toISOString(), nextClose: new Date(Date.now() + 500).toISOString() }));
+    const answers: Array<Deep | Error> = [{ bars: deepBars.slice(-400), complete: false }, new Error("feed_unavailable")];
+    const loadDeepHistory = vi.fn(async (): Promise<Deep> => {
+      const a = answers.shift() ?? { bars: deepBars, complete: true };
+      if (a instanceof Error) throw a;
+      return a;
+    });
+    render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} loadDeepHistory={loadDeepHistory} loadDow={async () => []} />);
+    // short, then a failure: what it had is drawn, and it says so
+    await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("しか読めなかった"), { timeout: 4_000 });
+    expect(loadDeepHistory).toHaveBeenCalledTimes(2);
+    // the next bar: asked again, and now the whole of it
+    await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledTimes(3), { timeout: 8_000 });
+    await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).not.toContain("しか読めなかった"));
+  }, 15_000);
 });

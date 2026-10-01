@@ -588,9 +588,9 @@ export interface DeepQuotes {
 // the research scripts take the 404: the walk goes on past it. The caller
 // gives this for the 404 alone; a timeout or another failure is null, and
 // stops the walk short. Never kept: the file may yet come.
-export const NO_KLINE_FILE: { readonly status: 0; readonly data: readonly never[] } = Object.freeze({
-  status: 0,
-  data: Object.freeze([]),
+export const NO_KLINE_FILE: { readonly status: 0; readonly data: readonly unknown[] } = Object.freeze({
+  status: 0 as const,
+  data: Object.freeze([] as unknown[]),
 });
 
 // GMO answered (status 0 with its list; a day with no bars is an empty one)
