@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ZLT_DEFAULTS,
+  ZLT_ROUGH_BARS,
   ZLT_SETTLE_BARS,
   emaFromFirst,
   tema,
@@ -47,6 +48,7 @@ describe("#176 Zero-lag TEMA Crosses [Loxx] (a port of its open-source Pine code
   it("has the original's defaults", () => {
     expect(ZLT_DEFAULTS).toEqual({ fast: 22, slow: 144 });
     expect(ZLT_SETTLE_BARS).toBe(1200);
+    expect(ZLT_ROUGH_BARS).toBe(600);
   });
 
   it("is TEMA of TEMA, each EMA started from the first value (worked by hand)", () => {
@@ -117,10 +119,22 @@ describe("#176 Zero-lag TEMA Crosses [Loxx] (a port of its open-source Pine code
     expect(closed.signals.map((s) => s.i)).toEqual([2, 4]);
   });
 
+  it("marks nothing on the second bar, where the two lines only part from the same first close", () => {
+    // without it, every chart computed from its first bar had an L or S on
+    // its second (up: L, down: S); Pine marks none there
+    for (let seed = 1; seed <= 200; seed++) {
+      const closes = walk(200, seed);
+      const r = zlTemaCrosses(closes);
+      expect(r.fast[0]).toBe(r.slow[0]);
+      expect(r.signals.some((sg) => sg.i < 2)).toBe(false);
+    }
+    expect(zlTemaCrosses([100, 100, 101, 102, 101]).signals.some((sg) => sg.i === 1)).toBe(false);
+  });
+
   it("on a long walk, marks every change of side and alternates L and S", () => {
     const r = zlTemaCrosses(walk(2000, 7));
     let changes = 0;
-    for (let i = 1; i < r.side.length; i++) if (r.side[i] !== r.side[i - 1]) changes++;
+    for (let i = 2; i < r.side.length; i++) if (r.side[i] !== r.side[i - 1]) changes++;
     expect(r.signals.length).toBe(changes);
     expect(r.signals.length).toBeGreaterThan(4);
     for (let k = 1; k < r.signals.length; k++) expect(r.signals[k].side).not.toBe(r.signals[k - 1].side);

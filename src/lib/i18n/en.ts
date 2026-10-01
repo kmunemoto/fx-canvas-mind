@@ -380,7 +380,7 @@ export const en: Dict = {
     // #176
     zlTemaTitle: (side: "BUY" | "SELL"): string =>
       side === "BUY" ? "Zero-lag TEMA L (the fast line crossed over the slow one)" : "Zero-lag TEMA S (the fast line crossed under the slow one)",
-    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number) =>
+    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number, rough: number) =>
       "Zero-lag TEMA Crosses (a port of the code loxx published on TradingView, Pine v5, MPL 2.0, with its defaults: the close, fast 22, slow 144): " +
       "two lines, each the TEMA (3 × (EMA1 − EMA2) + EMA3) of the TEMA of the close. While the fast line is above the slow one, it and the candles are green, otherwise red (the candles take its colours over the other indicators'). The slow line is white (dark on a light background). " +
       "L (a yellow ▲ under the candle) where the fast line crosses over the slow one, S (a fuchsia ▼ over it) where it crosses under. Judged on closed bars. " +
@@ -390,7 +390,8 @@ export const en: Dict = {
         : status === "error"
           ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
           : before !== null && before < settle
-            ? `Only ${before.toLocaleString("en-US")} bars before the chart's could be read, so the slow line and the L/S marks may differ a little from TradingView's (some ${settle.toLocaleString("en-US")} make them the same). `
+            ? (before === 0 ? "No bars before the chart's could be read" : `Only ${before.toLocaleString("en-US")} bars before the chart's could be read`) +
+              `, so the slow line and the L/S marks may differ ${before < rough ? "a lot" : "a little"} from TradingView's (some ${settle.toLocaleString("en-US")} make them the same). `
             : `Bars before the chart's: ${(before ?? 0).toLocaleString("en-US")}. `) +
       "Not tested on past charts. Shown only: no signal, email or record uses it.",
     // #137

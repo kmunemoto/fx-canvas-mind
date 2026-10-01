@@ -36,7 +36,7 @@ import { setChartPrefs, useChartPrefs, type ChartOverlays } from "@/lib/chartPre
 import { KST_DEFAULTS, kalmanSupertrend } from "@/lib/kalmanSupertrend";
 import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
 import { UT_DEFAULTS, utBot } from "@/lib/utBot";
-import { ZLT_DEFAULTS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/lib/zlTema";
+import { ZLT_DEFAULTS, ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/lib/zlTema";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
@@ -188,8 +188,8 @@ interface Props {
   zoneShiftHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
   // #176: the closed bars before the chart's first candle for the Zero-lag
   // TEMA, read deep (the live chart reads them while it is on). Not given,
-  // it computes over the candles alone and says the slow line is not
-  // TradingView's yet.
+  // it computes over the candles alone and says the slow line and the marks
+  // may be far from TradingView's.
   deepHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
@@ -1291,7 +1291,7 @@ const PriceChart = ({
     kalman: t.chart.kalmanNote,
     supertrend: t.chart.supertrendNote,
     utBot: t.chart.utBotNote,
-    zlTema: t.chart.zlTemaNote(zlt ? zlt.before : null, deepHistory ? (zlt ? "ready" : deepHistory.status) : "ready", ZLT_SETTLE_BARS),
+    zlTema: t.chart.zlTemaNote(zlt ? zlt.before : null, deepHistory ? (zlt ? "ready" : deepHistory.status) : "ready", ZLT_SETTLE_BARS, ZLT_ROUGH_BARS),
     fvgProfile: t.chart.fvgProfileNote(vp ? vp.to - vp.from + 1 : Math.min(WVP_DEFAULTS.analyzeBars, candles.length)),
     zoneShift: t.chart.zoneShiftNote(zs ? zs.total : null, zoneShiftHistory ? (zs ? "ready" : zoneShiftHistory.status) : "ready"),
     dow: dow ? t.chart.dowNote(dow.status, dow.current !== null, dow.higher.map((h) => t.chart.dowTfShort[h.tf] ?? h.tf)) : undefined,

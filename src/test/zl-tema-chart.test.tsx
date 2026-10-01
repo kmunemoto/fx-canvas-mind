@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import PriceChart from "../components/PriceChart";
 import LiveChart from "../components/LiveChart";
-import { ZLT_SETTLE_BARS, zlTemaCrosses } from "../lib/zlTema";
+import { ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "../lib/zlTema";
 import { CHART_PREFS_KEY, resetChartPrefsCache } from "../lib/chartPrefs";
 import { normalizeLiveRead, type LiveRead } from "../lib/liveChart";
 import { liveRead } from "../../supabase/functions/live-chart/logic";
@@ -79,14 +79,35 @@ describe("#176 the Zero-lag TEMA on the chart", () => {
     expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("読み込み中");
   });
 
-  it("with fewer bars before the chart than the slow line needs, draws them and says they may differ from TradingView", () => {
+  it("with fewer bars before the chart than the slow line needs, draws them and says how far they may be from TradingView's", () => {
     localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { zlTema: true } }));
     resetChartPrefsCache();
-    render(<PriceChart candles={shown} pair="USD/JPY" interactive={false} deepHistory={{ bars: past.slice(-300), status: "ready" }} />);
-    expect(screen.getByTestId("chart-zltema-slow")).toBeTruthy();
-    const note = screen.getByTestId("chart-zltema-legend").textContent!;
-    expect(note).toContain("画面より前の足が300本しか読めなかった");
-    expect(note).toContain(`約${ZLT_SETTLE_BARS.toLocaleString("ja-JP")}本で同じになります`);
+    // under ZLT_ROUGH_BARS: far; from it to ZLT_SETTLE_BARS: a little
+    for (const [n, says] of [[300, "大きく"], [ZLT_ROUGH_BARS - 1, "大きく"], [ZLT_ROUGH_BARS, "少し"], [800, "少し"]] as const) {
+      const view = render(<PriceChart candles={shown} pair="USD/JPY" interactive={false} deepHistory={{ bars: past.slice(-n), status: "ready" }} />);
+      expect(screen.getByTestId("chart-zltema-slow")).toBeTruthy();
+      const note = screen.getByTestId("chart-zltema-legend").textContent!;
+      expect(note).toContain(`画面より前の足が${n.toLocaleString("ja-JP")}本しか読めなかったため、遅い線と L・S が TradingView と${says}ずれることがあります`);
+      expect(note).toContain(`約${ZLT_SETTLE_BARS.toLocaleString("ja-JP")}本で同じになります`);
+      view.unmount();
+    }
+  });
+
+  it("with none before the chart: no mark on its second candle, and it says the lines may be far from TradingView's", () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { zlTema: true } }));
+    resetChartPrefsCache();
+    for (const deepHistory of [{ bars: [], status: "ready" as const }, undefined]) {
+      for (let k = 0; k < 4; k++) {
+        const candles = walk(120, 101 + k);
+        const view = render(<PriceChart candles={candles} pair="USD/JPY" interactive={false} deepHistory={deepHistory} />);
+        // the marks are those of the candles' own crossings from the third on
+        const want = zlTemaCrosses(candles.map((c) => c.close)).signals;
+        expect(want.every((sg) => sg.i >= 2)).toBe(true);
+        expect(screen.queryAllByTestId(/chart-zltema-signal-/)).toHaveLength(want.length);
+        expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("画面より前の足を1本も読めなかったため、遅い線と L・S が TradingView と大きくずれることがあります");
+        view.unmount();
+      }
+    }
   });
 
   it("the forming candle is neither painted nor marked", () => {

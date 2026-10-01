@@ -37,6 +37,12 @@ export const ZLT_DEFAULTS: ZlTemaParams = { fast: 22, slow: 144 };
 // The bars before the first one drawn that the slow line needs to be
 // TradingView's (docs §8.87); with fewer, the chart says so
 export const ZLT_SETTLE_BARS = 1200;
+// Below this many, it says the lines and marks may be far from
+// TradingView's, not a little: on the random walks of docs §8.87, with 600
+// bars before the 120 drawn the L/S marks were TradingView's in 106 of the
+// 120 walks (a bar coloured otherwise: 0.15 of the 120 on average); with
+// 500 in 84, 300 in 22, none before in none
+export const ZLT_ROUGH_BARS = 600;
 
 // An EMA started from the first value: alpha = 2 / (n + 1) of each new one
 export const emaFromFirst = (xs: ReadonlyArray<number>, n: number): number[] => {
@@ -86,7 +92,10 @@ export const zltSidesAndSignals = (
   return { side, signals };
 };
 
-// `lastClosed`: the index of the newest closed bar
+// `lastClosed`: the index of the newest closed bar. Both lines start from
+// the same close on the first bar (each EMA from its first value), so on
+// the second they only part, one way or the other: no crossing is marked
+// there (Pine's lines have no value before their first, and mark none)
 export const zlTemaCrosses = (
   closes: ReadonlyArray<number>,
   params: ZlTemaParams = ZLT_DEFAULTS,
@@ -94,5 +103,6 @@ export const zlTemaCrosses = (
 ): ZlTemaRead => {
   const fast = zeroLagTema(closes, Math.max(1, Math.round(params.fast)));
   const slow = zeroLagTema(closes, Math.max(1, Math.round(params.slow)));
-  return { fast, slow, ...zltSidesAndSignals(fast, slow, lastClosed) };
+  const { side, signals } = zltSidesAndSignals(fast, slow, lastClosed);
+  return { fast, slow, side, signals: signals.filter((sg) => sg.i >= 2) };
 };

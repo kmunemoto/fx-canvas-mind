@@ -422,7 +422,7 @@ export const ja = {
     // #176
     zlTemaTitle: (side: "BUY" | "SELL"): string =>
       side === "BUY" ? "Zero-lag TEMA の L（速い線が遅い線を上に抜けた）" : "Zero-lag TEMA の S（速い線が遅い線を下に抜けた）",
-    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number) =>
+    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number, rough: number) =>
       "Zero-lag TEMA Crosses（loxx が TradingView に公開したコード〈Pine v5、MPL 2.0〉を移植、既定のまま: 終値、速い22・遅い144）: " +
       "終値の TEMA（3×(EMA1−EMA2)+EMA3）をもう一度 TEMA にした線を2本引きます。速い線が遅い線より上なら速い線とローソク足を緑、下なら赤にします（ローソク足はほかのインジケーターの色より優先）。遅い線は白（明るい背景では濃い色）。" +
       "速い線が遅い線を上に抜けた足に L（黄色の▲、足の下）、下に抜けた足に S（赤紫の▼、足の上）。確定した足だけで判定します。" +
@@ -432,7 +432,8 @@ export const ja = {
         : status === "error"
           ? "画面より前の足を読めなかったため表示していません（次の足で読み直します）。"
           : before !== null && before < settle
-            ? `画面より前の足が${before.toLocaleString("ja-JP")}本しか読めなかったため、遅い線と L・S が TradingView と少しずれることがあります（約${settle.toLocaleString("ja-JP")}本で同じになります）。`
+            ? (before === 0 ? "画面より前の足を1本も読めなかったため" : `画面より前の足が${before.toLocaleString("ja-JP")}本しか読めなかったため`) +
+              `、遅い線と L・S が TradingView と${before < rough ? "大きく" : "少し"}ずれることがあります（約${settle.toLocaleString("ja-JP")}本で同じになります）。`
             : `画面より前の足: ${(before ?? 0).toLocaleString("ja-JP")}本。`) +
       "過去の検証はしていません。表示のみで、サインの判定・メール・成績には使っていません。",
     // #137
