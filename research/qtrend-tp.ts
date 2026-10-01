@@ -42,10 +42,11 @@ import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
 import { pineAtr } from "../supabase/functions/_shared/pine.ts";
-import { INDICATOR_PAIRS, indicatorIntervalsFor, indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
-import { MINUTE, WEEK, WEEK_OFFSET, iso, wilson } from "./lib.ts";
+import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { GMO_STUDY_PAIRS, MINUTE, WEEK, WEEK_OFFSET, iso, wilson } from "./lib.ts";
 
-const ALL_PAIRS = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).includes("5min"));
+// #175: the 21 pairs measured before the app kept the yen pairs only
+const ALL_PAIRS = GMO_STUDY_PAIRS;
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 const START = Deno.env.get("START") || "2026-01-05";
 const SPLIT = Deno.env.get("SPLIT") || "2026-05-18";

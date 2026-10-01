@@ -15,7 +15,8 @@
 // signal is still detected and logged — status "not_configured" — and the
 // app says that no email can be sent yet, rather than pretending it was.
 //
-// #108: the sweep also reads every one of the app's seven pairs on every
+// #108: the sweep also reads every one of the app's seven pairs (#175: the
+// four yen pairs among them, logic.ts ALERT_PAIRS) on every
 // alert timeframe, followed or not, records each signal once in
 // signal_events and settles the open ones against the bars that came after
 // (record.ts). The app shows that record beside the alerts.
@@ -103,7 +104,7 @@ import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outc
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v12-2026-09-30T15:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v13-2026-10-01T05:30:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -705,8 +706,9 @@ Deno.serve(async (req: Request) => {
       // the rule's signals, not only the ones somebody asked to be told about
       const charts = ALERT_PAIRS.flatMap((pair) => ALERT_INTERVALS.map((interval) => ({ pair, interval })))
         .filter((c) => mayHaveFreshClose(c.interval, nowMs));
+      // (#175: of the pairs still read; another pair's is left as it is)
       const openEvents = (await readRows("signal_events?outcome=is.null&select=id,pair,interval,bar_time,side,entry,stop,target,fill"))
-        .filter((r) => typeof r.id === "string" && typeof r.bar_time === "string" && (r.side === "BUY" || r.side === "SELL"))
+        .filter((r) => typeof r.id === "string" && typeof r.bar_time === "string" && (r.side === "BUY" || r.side === "SELL") && isAlertPair(r.pair))
         .map((r) => ({
           id: r.id as string,
           pair: String(r.pair),
@@ -861,12 +863,12 @@ Deno.serve(async (req: Request) => {
       ]);
       // #108: the live record. "all" is every signal the rule fired outside
       // the hours it is not mailed in; "mine" is the alerts this user was
-      // actually sent.
+      // actually sent. #175: both on the pairs still read (ALERT_PAIRS) only.
       const since = encodeURIComponent(new Date(nowMs - RECORD_DAYS * 24 * 60 * MIN).toISOString());
       const [events, mine] = await Promise.all([
-        readRows(`signal_events?closed_at=gte.${since}&select=interval,costly,outcome,r,rule&limit=20000`),
-        readRows(`signal_alerts?user_id=eq.${uid}&kind=eq.signal&status=eq.sent&created_at=gte.${since}&select=rule,event:signal_events(outcome,r)&limit=20000`),
-      ]);
+        readRows(`signal_events?closed_at=gte.${since}&select=pair,interval,costly,outcome,r,rule&limit=20000`),
+        readRows(`signal_alerts?user_id=eq.${uid}&kind=eq.signal&status=eq.sent&created_at=gte.${since}&select=pair,rule,event:signal_events(outcome,r)&limit=20000`),
+      ]).then((rs) => rs.map((xs) => xs.filter((x) => isAlertPair(x.pair))));
       const row = (x: JsonRecord): EventRow => ({
         outcome: typeof x.outcome === "string" ? x.outcome : null,
         r: typeof x.r === "number" ? x.r : null,

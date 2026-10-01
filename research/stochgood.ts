@@ -70,12 +70,13 @@ import { blsh } from "../supabase/functions/_shared/blsh.ts";
 import { macd } from "../supabase/functions/_shared/macd.ts";
 import { STOCH_DEFAULTS, stochastic } from "../supabase/functions/_shared/stochastic.ts";
 import { dowTheory, type DowState } from "../supabase/functions/_shared/dow.ts";
-import { INDICATOR_PAIRS, indicatorIntervalsFor, indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
-import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, clusterRate, iso } from "./lib.ts";
+import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { DAY, GMO_STUDY_PAIRS, HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, clusterRate, iso } from "./lib.ts";
 
 const TFS = ["5min", "15min", "1h", "4h", "1day"] as const;
 type Tf = (typeof TFS)[number];
-const ALL_PAIRS = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).includes("5min"));
+// #175: the 21 pairs measured before the app kept the yen pairs only
+const ALL_PAIRS = GMO_STUDY_PAIRS;
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 const START = Deno.env.get("START") || "2024-01-01";
 const SPLIT = Deno.env.get("SPLIT") || "2025-05-19";

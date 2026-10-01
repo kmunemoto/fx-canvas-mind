@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   ALERT_BARS,
+  ALERT_PAIRS,
   DEFAULT_FROM,
   FRESH_MS,
   STEP_MS,
@@ -10,6 +12,7 @@ import {
   fetchAlertQuotes,
   fetchYearQuotes,
   freshSignals,
+  isAlertPair,
   mayHaveFreshClose,
   redactEmails,
   renderSignalMail,
@@ -354,5 +357,19 @@ describe("sending", () => {
     }) as unknown as typeof fetch;
     expect(await sendMail("key", "x", "u@example.com", mail, thrown)).toEqual({ ok: false, error: "network down" });
     expect(redactEmails("to a.b+c@d.co.jp now")).toBe("to [email] now");
+  });
+});
+
+describe("#175 the yen pairs only", () => {
+  it("reads, mails and settles RSI + SAR and the GA-style rule on the four yen pairs, and the record counts those only", () => {
+    expect([...ALERT_PAIRS]).toEqual(["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY"]);
+    for (const p of ["EUR/USD", "GBP/USD", "AUD/USD"]) expect(isAlertPair(p), p).toBe(false);
+    const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    // an open signal on a pair taken away is not settled
+    expect(fn).toMatch(/readRows\("signal_events\?outcome=is\.null&[^\n]*\n[^\n]*&& isAlertPair\(r\.pair\)\)/);
+    // the record's rows carry their pair, and only the four's are counted
+    expect(fn).toContain("signal_events?closed_at=gte.${since}&select=pair,interval,costly,outcome,r,rule&");
+    expect(fn).toContain("&select=pair,rule,event:signal_events(outcome,r)&");
+    expect(fn).toContain(".then((rs) => rs.map((xs) => xs.filter((x) => isAlertPair(x.pair))));");
   });
 });

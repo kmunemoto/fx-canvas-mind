@@ -41,12 +41,13 @@ import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/liv
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../supabase/functions/_shared/qtrend.ts";
 import { ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
 import { confirmRead, confirms } from "../supabase/functions/_shared/confirm.ts";
-import { INDICATOR_PAIRS, indicatorIntervalsFor, indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
-import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, clusterRate, iso } from "./lib.ts";
+import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { DAY, GMO_STUDY_PAIRS, HOUR, MINUTE, WEEK, WEEK_OFFSET, aggregate, clusterRate, iso } from "./lib.ts";
 
 const TFS = ["5min", "15min", "1h", "4h", "1day"] as const;
 type Tf = (typeof TFS)[number];
-const ALL_PAIRS = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).includes("5min"));
+// #175: the 21 pairs measured before the app kept the yen pairs only
+const ALL_PAIRS = GMO_STUDY_PAIRS;
 const PAIRS = (Deno.env.get("PAIRS") || ALL_PAIRS.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 const START = Deno.env.get("START") || "2024-01-01";
 const SPLIT = Deno.env.get("SPLIT") || "2025-05-19";

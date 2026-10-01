@@ -27,6 +27,16 @@ export const DAY_OFFSET = 21 * HOUR;
 // 1970-01-04 was a Sunday: weeks start Sunday 21:00 UTC, the week's open.
 export const WEEK_OFFSET = 3 * DAY + 21 * HOUR;
 
+// #175: the 21 pairs GMO serves, in the order the live chart listed them
+// until #175 left only the yen pairs (and gold) in the app (docs §8.86). The
+// studies that took their pairs from the live chart's list measured these;
+// they read them still, so a study run again measures what it measured.
+export const GMO_STUDY_PAIRS: readonly string[] = [
+  "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "GBP/USD", "AUD/USD",
+  "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY", "NZD/USD",
+  "EUR/GBP", "AUD/NZD", "HUF/JPY", "SEK/JPY", "NOK/SEK", "AUD/CAD", "NZD/CAD",
+];
+
 export const iso = (ms: number): string => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 const openMs = (q: { datetime: string }): number =>
   Date.parse(q.datetime.includes("T") ? (q.datetime.endsWith("Z") ? q.datetime : `${q.datetime}Z`) : `${q.datetime.replace(" ", "T")}Z`);

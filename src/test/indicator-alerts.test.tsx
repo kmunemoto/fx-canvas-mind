@@ -253,10 +253,16 @@ describe("#155 what the sweep reads, and when", () => {
       expect(indicatorIntervalsFor(p), p).toEqual(twelve ? ["1h", "4h", "1day"] : ["5min", "15min", "1h", "4h", "1day"]);
       expect(isGmoChartPair(p), p).toBe(!twelve);
     }
-    expect(SERVER_PAIRS).toHaveLength(37);
+    // #175: the yen pairs and gold
+    expect(SERVER_PAIRS).toHaveLength(18);
     expect(isIndicatorChart("USD/JPY", "5min")).toBe(true);
-    expect(isIndicatorChart("USD/CAD", "5min")).toBe(false);
-    expect(isIndicatorChart("USD/CAD", "1h")).toBe(true);
+    expect(isIndicatorChart("HKD/JPY", "5min")).toBe(false);
+    expect(isIndicatorChart("HKD/JPY", "1h")).toBe(true);
+    // a pair taken away, on any timeframe: not followed (#175)
+    for (const iv of INDICATOR_INTERVALS) {
+      expect(isIndicatorChart("EUR/USD", iv)).toBe(false);
+      expect(isIndicatorChart("USD/CAD", iv)).toBe(false);
+    }
     expect(isIndicatorChart("XAU/USD", "15min")).toBe(false);
     expect(isIndicatorChart("USD/JPY", "1min")).toBe(false);
     expect(isIndicatorChart("CNH/JPY", "1h")).toBe(false);
@@ -519,11 +525,12 @@ describe("#155 what the sweep reads, and when", () => {
     const h4 = renderIndicatorMail({ ...sig, interval: "4h", closedAt: "2026-09-29T08:00:00.000Z", barTime: "2026-09-29T04:00:00.000Z" }, "ja");
     expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.3%");
     expect(h4.text).toContain("約1.47 pips の負けでした。");
-    // a pair read from Twelve Data was not measured: said so
-    const twelve = renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h", close: 0.9312, sl: 0.9342, tps: [0.9292, 0.9272, 0.9252] }, "ja");
-    expect(twelve.text).toContain("  損切り 0.93420（30.0pips）");
-    expect(twelve.text).toContain("EUR/CHF そのものは測っていません（GMO の FX の値です）。");
-    expect(renderIndicatorMail({ ...sig, pair: "EUR/CHF", interval: "4h" }, "en").text).toContain("EUR/CHF itself was not measured; these are GMO's FX pairs' figures.");
+    // a pair read from Twelve Data was not measured: said so (#175: a yen
+    // pair now; this was EUR/CHF)
+    const twelve = renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h", close: 19.123, sl: 19.423, tps: [18.923, 18.723, 18.523] }, "ja");
+    expect(twelve.text).toContain("  損切り 19.423（30.0pips）");
+    expect(twelve.text).toContain("HKD/JPY そのものは測っていません（GMO の FX の値です）。");
+    expect(renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h" }, "en").text).toContain("HKD/JPY itself was not measured; these are GMO's FX pairs' figures.");
     expect(h4.text).not.toContain("そのものは測っていません");
     // gold in dollars: the video's $10 stop (#166), the targets $30, $60 and
     // $90 (#168), and what they did, measured on Dukascopy's gold (docs §8.80)
