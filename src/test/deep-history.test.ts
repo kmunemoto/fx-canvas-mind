@@ -153,7 +153,7 @@ describe("#176 the deep history (live-chart/logic.ts fetchDeepQuotes)", () => {
     const g = fakeGmo();
     expect(await fetchDeepQuotes("HKD/JPY", "1h", 1401, NOW, Date.now() + 60_000, g.fetcher)).toBeNull();
     expect(await fetchDeepQuotes("XAU/USD", "1h", 1401, NOW, Date.now() + 60_000, g.fetcher)).toBeNull();
-    expect(await fetchDeepQuotes("EUR/USD", "1h", 1401, NOW, Date.now() + 60_000, g.fetcher)).toBeNull();
+    expect(await fetchDeepQuotes("GBP/USD", "1h", 1401, NOW, Date.now() + 60_000, g.fetcher)).toBeNull();
     expect(g.asked).toHaveLength(0);
   });
 

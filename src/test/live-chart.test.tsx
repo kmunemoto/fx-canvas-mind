@@ -77,7 +77,7 @@ describe("#113 the live read (live-chart/logic.ts)", () => {
     expect([...r.marks].sort((a, b) => (a.datetime < b.datetime ? -1 : 1)).map((m) => m.datetime)).toEqual(r.marks.map((m) => m.datetime));
   });
 
-  it("reads GMO's ticker for the chart's pairs only (#153: those GMO serves; #175: its yen pairs), and never a crossed book", () => {
+  it("reads GMO's ticker for the chart's pairs only (#153: those GMO serves; #175: its yen pairs; #177: and EUR/USD), and never a crossed book", () => {
     const t = parseTicker({
       status: 0,
       data: [
@@ -85,14 +85,16 @@ describe("#113 the live read (live-chart/logic.ts)", () => {
         { symbol: "EUR_JPY", bid: "163.010", ask: "163.000", timestamp: "2026-09-25T10:00:01.000Z", status: "OPEN" },
         { symbol: "AUD_JPY", bid: "98.1", ask: "98.2", status: "OPEN" },
         { symbol: "SEK_JPY", bid: "15.871", ask: "15.879", timestamp: "2026-09-28T17:10:53.315Z", status: "OPEN" },
-        // GMO serves these, but the chart no longer has them (#175)
+        // #177: the chart has it again
         { symbol: "EUR_USD", bid: "1.10000", ask: "1.10010", status: "OPEN" },
+        // GMO serves these, but the chart no longer has them (#175)
+        { symbol: "GBP_USD", bid: "1.33000", ask: "1.33012", status: "OPEN" },
         { symbol: "NOK_SEK", bid: "1.04381", ask: "1.04451", timestamp: "2026-09-28T17:10:53.315Z", status: "OPEN" },
         { symbol: "USD_CHF", bid: "0.83", ask: "0.8301", status: "OPEN" },
         { symbol: "GBP_JPY", bid: "201.5", ask: "201.52", status: "CLOSE" },
       ],
     });
-    expect(Object.keys(t).sort()).toEqual(["AUD/JPY", "GBP/JPY", "SEK/JPY", "USD/JPY"]);
+    expect(Object.keys(t).sort()).toEqual(["AUD/JPY", "EUR/USD", "GBP/JPY", "SEK/JPY", "USD/JPY"]);
     expect(t["USD/JPY"].mid).toBeCloseTo(150.1215, 10);
     expect(t["GBP/JPY"].open).toBe(false);
     expect(parseTicker(null)).toEqual({});
@@ -287,10 +289,10 @@ describe("#113 the live chart card", () => {
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
     // #153: GMO's pairs in the broker's (楽天FX) order, then gold; #154:
     // with more of the broker's among them, in its order. #175: the yen
-    // pairs only, and gold
+    // pairs only, and gold; #177: and EUR/USD, in its place
     expect(screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-pair-"))).toEqual(
       [
-        "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
+        "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
         "TRY/JPY", "HKD/JPY", "SGD/JPY", "NOK/JPY", "HUF/JPY", "SEK/JPY", "PLN/JPY", "CZK/JPY", "XAU/USD",
       ].map((p) => `live-pair-${p}`),
     );

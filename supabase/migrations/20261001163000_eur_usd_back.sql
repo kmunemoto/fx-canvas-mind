@@ -1,0 +1,17 @@
+-- #177: EUR/USD again.
+--
+-- The owner's request (2026-10-01): 「ユーロドル追加して」, after #175 kept the
+-- yen pairs and gold only (20261001053000_yen_pairs_only.sql). The owner's
+-- choices: the whole app as before #175 for this pair — the live chart, the
+-- Q-Trend and ULTRA emails, and RSI + SAR and the GA-style rule
+-- (signal-alerts/logic.ts ALERT_PAIRS) — and the owner's own 4-hour Q-Trend
+-- and ULTRA subscriptions to it again (set apart from this migration, as the
+-- owner's subscriptions always have been; docs §8.88).
+--
+-- Only the check on the pairs a subscription may name changes: the 18 of
+-- #175 and EUR/USD, in the live chart's order (live-chart/logic.ts
+-- LIVE_PAIRS). Nothing is deleted.
+
+alter table public.signal_alert_subscriptions drop constraint if exists signal_alert_subscriptions_pair_check;
+alter table public.signal_alert_subscriptions add constraint signal_alert_subscriptions_pair_check
+  check (pair = any (array['USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'EUR/USD', 'MXN/JPY', 'NZD/JPY', 'ZAR/JPY', 'CAD/JPY', 'CHF/JPY', 'TRY/JPY', 'HKD/JPY', 'SGD/JPY', 'NOK/JPY', 'HUF/JPY', 'SEK/JPY', 'PLN/JPY', 'CZK/JPY', 'XAU/USD']));

@@ -18,7 +18,7 @@
 // between Twelve Data's reads"). #154: 15 more pairs, read as gold is
 // (logic.ts, "the broker's pairs GMO does not serve"); the ticker is told
 // the pair on screen. #175: the yen pairs and gold only, 18 (logic.ts,
-// LIVE_PAIRS; docs §8.86).
+// LIVE_PAIRS; docs §8.86). #177: and EUR/USD again, 19 (docs §8.88).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -77,7 +77,7 @@ import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/mark
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
 import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
 
-const FUNCTION_VERSION = "live-chart-v12-2026-10-01T14:00:00Z";
+const FUNCTION_VERSION = "live-chart-v13-2026-10-01T16:30:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -125,8 +125,8 @@ const gmoFetcher: Fetcher = gmoFetch(null);
 const gmoDeepFetcher: Fetcher = gmoFetch(NO_KLINE_FILE);
 
 // #153: room for every pair's every timeframe (#154: 37 × 6; #175: 18 × 6,
-// the room left as it was), so a cache is not emptied each time the chart
-// moves to another pair
+// #177: 19 × 6, the room left as it was), so a cache is not emptied each
+// time the chart moves to another pair
 const CACHE_KEYS = 240;
 const barsCache = new Map<string, { at: number; body: unknown }>();
 const historyCache = new Map<string, { at: number; body: unknown }>();
