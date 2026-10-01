@@ -3819,10 +3819,11 @@ const PriceChart = ({
               return (
                 <g key={`zlt-${sg.i}`} data-testid={`chart-zltema-signal-${sg.side}`}>
                   <title>{t.chart.zlTemaTitle(sg.side)}</title>
-                  <polygon points={`${cx},${tip} ${cx - r},${base} ${cx + r},${base}`} fill={color} stroke="hsl(var(--background))" strokeWidth={0.8} />
+                  {/* a dark edge, so the yellow L reads on the white background too */}
+                  <polygon points={`${cx},${tip} ${cx - r},${base} ${cx + r},${base}`} fill={color} stroke="rgba(0,0,0,0.65)" strokeWidth={0.8} />
                   <text
                     x={cx} y={buy ? base + fsz : base - 3} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}
-                    stroke="hsl(var(--background))" strokeWidth={2} paintOrder="stroke"
+                    stroke="rgba(0,0,0,0.75)" strokeWidth={1.6} paintOrder="stroke"
                   >
                     {buy ? "L" : "S"}
                   </text>
