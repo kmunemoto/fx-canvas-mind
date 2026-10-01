@@ -101,18 +101,18 @@ describe("#141 the live chart opens where it was left", () => {
     await waitFor(() => expect(a.loadBars).toHaveBeenCalledWith("USD/JPY", "4h"));
     // nothing chosen yet: nothing kept
     expect(stored()).toBeNull();
-    fireEvent.click(screen.getByTestId("live-pair-EUR/USD"));
+    fireEvent.click(screen.getByTestId("live-pair-EUR/JPY"));
     fireEvent.click(screen.getByTestId("live-interval-1h"));
     fireEvent.click(screen.getByTestId("live-view-rsi_sar"));
-    expect(stored().live).toEqual({ pair: "EUR/USD", interval: "1h", view: "rsi_sar" });
+    expect(stored().live).toEqual({ pair: "EUR/JPY", interval: "1h", view: "rsi_sar" });
     first.unmount();
 
     reload();
     const b = loaders();
     render(<LiveChart loadBars={b.loadBars} loadTicks={b.loadTicks} />);
     await waitFor(() => expect(b.loadBars).toHaveBeenCalled());
-    expect(b.loadBars.mock.calls[0]).toEqual(["EUR/USD", "1h"]);
-    expect(selected("live-pair-EUR/USD")).toBe("true");
+    expect(b.loadBars.mock.calls[0]).toEqual(["EUR/JPY", "1h"]);
+    expect(selected("live-pair-EUR/JPY")).toBe("true");
     expect(selected("live-interval-1h")).toBe("true");
     expect(selected("live-view-rsi_sar")).toBe("true");
   });
@@ -158,12 +158,12 @@ describe("#141 the live chart opens where it was left", () => {
   });
 
   it("a timeframe the page asks for comes first, and is not kept until something is chosen", async () => {
-    setChartPrefs({ live: { pair: "GBP/USD", interval: "1day", view: "both" } });
+    setChartPrefs({ live: { pair: "GBP/JPY", interval: "1day", view: "both" } });
     reload();
     const a = loaders();
     render(<LiveChart defaultInterval="15min" loadBars={a.loadBars} loadTicks={a.loadTicks} />);
     await waitFor(() => expect(a.loadBars).toHaveBeenCalled());
-    expect(a.loadBars.mock.calls[0]).toEqual(["GBP/USD", "15min"]);
+    expect(a.loadBars.mock.calls[0]).toEqual(["GBP/JPY", "15min"]);
     expect(stored().live.interval).toBe("1day");
     // another preference changing does not move the chart
     act(() => setChartPrefs({ rsi: false }));

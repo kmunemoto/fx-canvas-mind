@@ -281,7 +281,7 @@ describe("#116 the live chart in full screen", () => {
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
     const loadTicks = vi.fn(async () => ({
       "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: new Date().toISOString(), open: true },
-      "EUR/USD": { bid: 1.1, ask: 1.10002, mid: 1.10001, time: new Date().toISOString(), open: true },
+      "EUR/JPY": { bid: 163.1, ask: 163.102, mid: 163.101, time: new Date().toISOString(), open: true },
     }));
     render(<LiveChart loadBars={loadBars} loadTicks={loadTicks} />);
     await waitFor(() => expect(screen.getByTestId("live-signals")).toBeTruthy());
@@ -294,21 +294,21 @@ describe("#116 the live chart in full screen", () => {
     expect(within(overlay()).getByTestId("chart-sheet-interval-open").textContent).toBe("4時間");
 
     fireEvent.click(within(overlay()).getByTestId("chart-sheet-symbol-open"));
-    const row = within(overlay()).getByTestId("live-sheet-pair-EUR/USD");
-    expect(row.textContent).toContain("ユーロ／米ドル");
-    expect(row.textContent).toContain("1.10001");
+    const row = within(overlay()).getByTestId("live-sheet-pair-EUR/JPY");
+    expect(row.textContent).toContain("ユーロ／円");
+    expect(row.textContent).toContain("163.101");
     expect(within(overlay()).getByTestId("live-sheet-pair-USD/JPY").getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(row);
-    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "4h"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/JPY", "4h"));
     expect(screen.queryByTestId("chart-sheet")).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
-    expect(within(overlay()).getByTestId("chart-sheet-symbol-open").textContent).toBe("EURUSD");
+    expect(within(overlay()).getByTestId("chart-sheet-symbol-open").textContent).toBe("EURJPY");
 
     fireEvent.click(within(overlay()).getByTestId("chart-sheet-interval-open"));
     fireEvent.click(within(overlay()).getByTestId("live-sheet-interval-4h"));
-    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/USD", "4h"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/JPY", "4h"));
     fireEvent.click(within(overlay()).getByTestId("chart-sheet-interval-open"));
     fireEvent.click(within(overlay()).getByTestId("live-sheet-view-both"));
     expect(screen.getByTestId("live-view-both").getAttribute("aria-selected")).toBe("true");

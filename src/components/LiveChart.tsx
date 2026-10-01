@@ -119,7 +119,8 @@ const LiveChart = ({
   const setPair = (p: string) => choose({ pair: p });
   const chooseInterval = (iv: string) => choose({ interval: iv });
   // #153: the grouped list of every pair, and the row keeps the chosen pair
-  // in sight (with 22 of them, #154: 37, it may be far along the row; below)
+  // in sight (with 22 of them, #154: 37, #175: 18, it may be far along the
+  // row; below)
   const [gridOpen, setGridOpen] = useState(false);
   const pairRowRef = useRef<HTMLDivElement>(null);
   const setView = (v: LiveView) => choose({ view: v });

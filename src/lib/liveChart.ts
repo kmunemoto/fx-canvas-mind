@@ -9,23 +9,19 @@ export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/function
 // #153: every pair GMO serves, in the owner's broker's order (楽天FX), then
 // gold — as the function lists them. #154: and 15 of the broker's pairs GMO
 // does not serve, read as gold is (their bars Twelve Data's, their price
-// Swissquote's); the broker's CNH/JPY and CNH/HKD have no feed here
+// Swissquote's); the broker's CNH/JPY and CNH/HKD have no feed here.
+// #175: the yen pairs only (「通貨のペアを円とどれかだけにして」), in the
+// broker's order — 12 GMO serves, 5 read as gold is
 export const LIVE_FX_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
-  "EUR/USD", "GBP/USD", "AUD/USD", "MXN/JPY",
-  "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
-  "TRY/JPY", "NZD/USD", "USD/CAD", "USD/CHF",
-  "GBP/CHF", "EUR/GBP", "EUR/CHF", "AUD/CHF",
-  "NZD/CHF", "AUD/NZD", "HKD/JPY", "SGD/JPY",
-  "NOK/JPY", "EUR/AUD", "GBP/AUD", "HUF/JPY",
-  "SEK/JPY", "PLN/JPY", "CZK/JPY", "CAD/CHF",
-  "NOK/SEK", "AUD/CAD", "NZD/CAD", "USD/HKD",
+  "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY",
+  "CHF/JPY", "TRY/JPY", "HKD/JPY", "SGD/JPY",
+  "NOK/JPY", "HUF/JPY", "SEK/JPY", "PLN/JPY",
+  "CZK/JPY",
 ];
 // #154: those read as gold is
 export const TWELVE_FX_PAIRS = [
-  "USD/CAD", "USD/CHF", "GBP/CHF", "EUR/CHF", "AUD/CHF",
-  "NZD/CHF", "HKD/JPY", "SGD/JPY", "NOK/JPY", "EUR/AUD",
-  "GBP/AUD", "PLN/JPY", "CZK/JPY", "CAD/CHF", "USD/HKD",
+  "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY",
 ];
 export const isTwelveFx = (pair: string): boolean => TWELVE_FX_PAIRS.includes(pair);
 export const LIVE_COMMODITIES = ["XAU/USD"];

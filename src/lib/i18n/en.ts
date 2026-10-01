@@ -607,7 +607,7 @@ export const en: Dict = {
     pairGrid: "All symbols",
     // #154
     pairGridNote:
-      "The prices listed for the 15 pairs GMO Coin does not carry (Dollar/Loonie, HK Dollar/Yen and so on) are Swissquote's, and those not on screen are one to three minutes old. CNH/JPY and CNH/HKD are not here yet: no free feed with their bars was found.",
+      "The prices listed for the 5 pairs GMO Coin does not carry (HK Dollar/Yen, SG Dollar/Yen and so on) are Swissquote's, and those not on screen are one to three minutes old. CNH/JPY is not here yet: no free feed with its bars was found.",
     intervalShort: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
@@ -1644,7 +1644,7 @@ export const en: Dict = {
     adminToastTitle: "Admin account",
     adminToastBody: "Every feature is available without a subscription",
     features: {
-      free: ["The live chart (5 pairs and gold, 1-minute to daily bars)", "GA-style and RSI + SAR signals on the chart"],
+      free: ["The live chart (17 yen pairs and gold, 1-minute to daily bars)", "GA-style and RSI + SAR signals on the chart"],
       light: ["Everything in Free", "Indicators (stochastic, Bollinger %b, RCI, SuperTrend, UT Bot, Dow theory and more)", "Email alerts for signals (GA style, RSI + SAR; pick the pairs and timeframes)", "The record of the signals emailed"],
     },
     freeIncluded: "Included when you sign up",
@@ -1664,7 +1664,7 @@ export const en: Dict = {
     pains: ["Too many indicators to watch", "Missing the moment a signal fires", "Nobody checks whether the signals were right"],
     featuresTitle: "What Sextant does",
     features: [
-      { title: "A live chart", desc: "Five currency pairs and gold (XAU/USD) from 1-minute to daily bars, the price moving every few seconds. With the Light plan, the stochastic, Bollinger %b, RCI, SuperTrend, UT Bot, Dow theory and more to switch on" },
+      { title: "A live chart", desc: "17 yen pairs and gold (XAU/USD) from 1-minute to daily bars, the price moving every few seconds. With the Light plan, the stochastic, Bollinger %b, RCI, SuperTrend, UT Bot, Dow theory and more to switch on" },
       { title: "Email alerts for signals", desc: "Pick the pairs and timeframes: when a GA-style or RSI + SAR signal fires on a closed bar, an email arrives within minutes (Light plan)" },
       { title: "The record in plain sight", desc: "Every signal emailed is followed to its stop or its target and recorded, beside how the rule did on past charts. Losing numbers are shown as they are" },
     ],
@@ -1685,7 +1685,7 @@ export const en: Dict = {
       { q: "How is it different from other tools?", a: "It does not hide the record. How each rule did on past charts, and whether each signal emailed reached its stop or its target first, are shown as they are, losing ones included. Signals are judged on closed bars only and never vanish or move afterwards." },
       { q: "What is the win rate?", a: "On past charts (11 pairs, spread paid), none of the signals reached the win rate needed to break even. The numbers are in the app's notes. Please do not take them as a reason to expect to win." },
       { q: "Is this investment advice?", a: "No. The service provides a chart and signals as information, and is not an investment advisory business. Every trading decision and its outcome are your own." },
-      { q: "Which currency pairs are covered?", a: "The live chart covers USD/JPY, EUR/USD, GBP/USD, EUR/JPY, GBP/JPY and gold (XAU/USD). Email alerts can be set for USD/JPY, EUR/USD, GBP/USD, EUR/JPY, GBP/JPY, AUD/USD and AUD/JPY on 15-minute, 1-hour, 4-hour and daily bars." },
+      { q: "Which currency pairs are covered?", a: "17 yen pairs (USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY and more) and gold (XAU/USD). Email alerts can be set for Q-Trend's and ULTRA's signals on every one of them, 5-minute to daily bars (1-hour to daily for those GMO Coin does not carry), and for the GA-style and RSI + SAR signals on USD/JPY, EUR/JPY, GBP/JPY and AUD/JPY, 15-minute, 1-hour, 4-hour and daily bars." },
       { q: "Can I use it for free?", a: "Yes. With an account the live chart and its signals are free. The indicators and email alerts for signals come with the Light plan (¥2,980 a month)." },
       { q: "When do the emails arrive?", a: "Within minutes of the bar closing. Signals on 15-minute and 1-hour bars closing 17:00–23:59 UTC are not emailed, as those hours lost most on past charts (they stay in the app's log)." },
       { q: "Which technical indicators are used?", a: "Two kinds of signal: GA style (engulfing, a large body, RSI(14), against the close 5 bars back) and RSI(9) with the Parabolic SAR (0.02, 0.2) (RSI back from 25 or 75, the SAR on the same side). Stops and targets use ATR(14). With the Light plan the chart can also show the stochastic, Bollinger %b, RCI, SuperTrend, UT Bot, Dow theory and more (shown only, no signal uses them)." },
@@ -1769,7 +1769,7 @@ export const en: Dict = {
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only",
     indicatorNotes: [
       "Judged on the live chart's own bars with its own code. On GMO Coin's symbols an email is sent some ten seconds after the bar closes (a few minutes later where the first read failed); the symbols GMO Coin does not carry can take up to about 30 minutes (Twelve Data is read a few at a time).",
-      "The 16 symbols GMO Coin does not carry (15 pairs such as USD/CAD and HKD/JPY, and gold) are read from Twelve Data's free allowance (800 reads a day, shared with the chart), so on the 1-hour, 4-hour and daily charts only.",
+      "The 6 symbols GMO Coin does not carry (5 pairs such as HKD/JPY and SGD/JPY, and gold) are read from Twelve Data's free allowance (800 reads a day, shared with the chart), so on the 1-hour, 4-hour and daily charts only.",
       "Every symbol on the 5- and 15-minute charts can mean hundreds of emails a day. The mail service's (Resend's) free plan sends 100 a day and 3,000 a month; the rest show as failed.",
       "What these levels did on past bars (GMO's FX pairs and gold) is in the emails and the chart's notes (the Twelve Data symbols other than gold were not measured). An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
       "Nothing is judged while the market is shut (weekends and the like).",
@@ -1805,7 +1805,7 @@ export const en: Dict = {
       titleFor: (rule: string) => `How the ${rule} alerts did (recorded from the prices that followed)`,
       rNoteGainz: "R is the result in units of the stop distance: for GA style, +2R is a win of twice the stop, −1R a loss of the stop.",
       mine: "Alerts sent to you",
-      all: "Every signal on the 7 pairs (in the hours alerts are sent)",
+      all: "Every signal on the 4 pairs (in the hours alerts are sent)",
       none: "No signal has settled yet",
       line: (n: number, w: number, l: number, e: number) => `${n}: ${w} won, ${l} lost, ${e} expired`,
       stats: (win: string, mean: string) => `Win rate ${win} / average ${mean} a trade`,

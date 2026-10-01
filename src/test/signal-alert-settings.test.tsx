@@ -19,7 +19,7 @@ const payload = (over: Record<string, unknown> = {}) => ({
   allowed: true,
   email_configured: true,
   email: "me@example.com",
-  pairs: ["USD/JPY", "EUR/USD"],
+  pairs: ["USD/JPY", "EUR/JPY"],
   intervals: ["15min", "1h", "4h", "1day"],
   subscriptions: [{ pair: "USD/JPY", interval: "15min" }],
   alerts: [
@@ -77,17 +77,17 @@ describe("the settings as they arrive", () => {
 describe("the email-alert card", () => {
   it("shows what is followed and saves a tick in the app's language", async () => {
     const call = vi.fn(async (body: Record<string, unknown>) =>
-      body.action === "set" ? settings({ subscriptions: [{ pair: "USD/JPY", interval: "15min" }, { pair: "EUR/USD", interval: "1h" }] }) : settings()
+      body.action === "set" ? settings({ subscriptions: [{ pair: "USD/JPY", interval: "15min" }, { pair: "EUR/JPY", interval: "1h" }] }) : settings()
     );
     render(<SignalAlertSettings call={call} />);
     const on = await screen.findByTestId("signal-alert-USD/JPY-15min");
     expect((on as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText(/me@example\.com/)).toBeTruthy();
-    const off = screen.getByTestId("signal-alert-EUR/USD-1h") as HTMLInputElement;
+    const off = screen.getByTestId("signal-alert-EUR/JPY-1h") as HTMLInputElement;
     expect(off.checked).toBe(false);
     fireEvent.click(off);
-    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "EUR/USD", interval: "1h", on: true, rule: "rsi_sar", lang: "ja" }));
-    await waitFor(() => expect((screen.getByTestId("signal-alert-EUR/USD-1h") as HTMLInputElement).checked).toBe(true));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "EUR/JPY", interval: "1h", on: true, rule: "rsi_sar", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-EUR/JPY-1h") as HTMLInputElement).checked).toBe(true));
   });
 
   it("#112: follows the GA-style rule separately, with its own record and what it was measured at", async () => {
@@ -141,7 +141,7 @@ describe("the email-alert card", () => {
   it("without Pro nothing new can be ticked, but a tick can still be removed", async () => {
     render(<SignalAlertSettings call={async () => settings({ allowed: false })} />);
     expect(await screen.findByTestId("signal-alerts-pro-only")).toBeTruthy();
-    expect((screen.getByTestId("signal-alert-EUR/USD-1h") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId("signal-alert-EUR/JPY-1h") as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByTestId("signal-alert-USD/JPY-15min") as HTMLInputElement).disabled).toBe(false);
     expect((screen.getByTestId("signal-alerts-test") as HTMLButtonElement).disabled).toBe(true);
   });
@@ -234,18 +234,22 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
 
   it("reads the charts offered, each rule's subscriptions and a STRONG alert as they arrive", () => {
     const s = withInd({
-      subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "qtrend" }, { pair: "USD/CAD", interval: "1h", rule: "ultra" }],
+      subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "qtrend" }, { pair: "HKD/JPY", interval: "1h", rule: "ultra" }],
       alerts: [
         { id: "q1", kind: "signal", rule: "qtrend_200_14_1_v1", strong: true, pair: "USD/JPY", interval: "5min", side: "SELL", closed_at: "2026-09-29T02:50:00.000Z", entry: 157.209, stop: null, target: null, status: "sent", created_at: "2026-09-29T02:51:30.000Z" },
         { id: "u1", kind: "signal", rule: "ultra_rsi14_30_70_sl10_tp5_10_15_v1", pair: "XAU/USD", interval: "1h", side: "BUY", closed_at: "2026-09-29T02:00:00.000Z", entry: 4139.89, stop: 4129.89, target: 4144.89, status: "sent", created_at: "2026-09-29T02:03:00.000Z" },
       ],
     });
-    expect(s.indicator!.pairs).toHaveLength(37);
-    expect(twelve).toHaveLength(16);
+    // #175: the yen pairs and gold; 5 of the pairs and gold from Twelve Data
+    expect(s.indicator!.pairs).toHaveLength(18);
+    expect(twelve).toHaveLength(6);
     expect(s.subscriptions.map((x) => x.rule)).toEqual(["qtrend", "ultra"]);
     expect(s.alerts.map((r) => [r.rule, r.strong])).toEqual([["qtrend", true], ["ultra", false]]);
     expect(indicatorChartOffered(s, "USD/JPY", "5min")).toBe(true);
-    expect(indicatorChartOffered(s, "USD/CAD", "5min")).toBe(false);
+    expect(indicatorChartOffered(s, "HKD/JPY", "5min")).toBe(false);
+    expect(indicatorChartOffered(s, "HKD/JPY", "1h")).toBe(true);
+    // a pair taken away (#175) is not offered on any timeframe
+    expect(indicatorChartOffered(s, "USD/CAD", "1h")).toBe(false);
     expect(indicatorChartOffered(s, "XAU/USD", "15min")).toBe(false);
     expect(indicatorChartOffered(s, "XAU/USD", "1h")).toBe(true);
     // a server that does not send them yet: nothing offered
@@ -254,23 +258,24 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
 
   it("lists every pair on 5 minutes to daily, those read from Twelve Data from 1 hour, and saves a tick as Q-Trend's", async () => {
     const call = vi.fn(async (body: Record<string, unknown>) =>
-      body.action === "set" ? withInd({ subscriptions: [{ pair: "USD/CAD", interval: "1h", rule: "qtrend" }] }) : withInd()
+      body.action === "set" ? withInd({ subscriptions: [{ pair: "HKD/JPY", interval: "1h", rule: "qtrend" }] }) : withInd()
     );
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-qtrend"));
     expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("STRONG");
     const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
-    // the all-symbols row, then the 37
-    expect(rows).toHaveLength(38);
+    // the all-symbols row, then the 18 (#175)
+    expect(rows).toHaveLength(19);
     expect(screen.getByTestId("signal-alert-qtrend-USD/JPY-5min")).toBeTruthy();
-    expect(screen.getByTestId("signal-alert-qtrend-USD/CAD-5min-none").textContent).toBe("—");
+    expect(screen.getByTestId("signal-alert-qtrend-HKD/JPY-5min-none").textContent).toBe("—");
+    expect(screen.queryByTestId("signal-alert-qtrend-USD/CAD-1h")).toBeNull();
     expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-15min-none")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("signal-alert-qtrend-USD/CAD-1h"));
-    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "USD/CAD", interval: "1h", on: true, rule: "qtrend", lang: "ja" }));
-    await waitFor(() => expect((screen.getByTestId("signal-alert-qtrend-USD/CAD-1h") as HTMLInputElement).checked).toBe(true));
+    fireEvent.click(screen.getByTestId("signal-alert-qtrend-HKD/JPY-1h"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "HKD/JPY", interval: "1h", on: true, rule: "qtrend", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-qtrend-HKD/JPY-1h") as HTMLInputElement).checked).toBe(true));
     // ULTRA's is its own
     fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
-    expect((screen.getByTestId("signal-alert-ultra-USD/CAD-1h") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId("signal-alert-ultra-HKD/JPY-1h") as HTMLInputElement).checked).toBe(false);
     // no record is kept of these signals, and their own notes are shown
     expect(screen.queryByTestId("signal-alerts-record")).toBeNull();
     expect(screen.getByTestId("signal-alerts-notes").textContent).toContain("1日100通");
@@ -286,13 +291,14 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-ultra"));
     const five = screen.getByTestId("signal-alert-ultra-all-5min") as HTMLInputElement;
-    // one of 21 followed: neither ticked nor clear
+    // one of 12 followed (#175): neither ticked nor clear
     expect(five.checked).toBe(false);
     expect(five.indeterminate).toBe(true);
     fireEvent.click(five);
     await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "ultra", on: true, lang: "ja" })));
     const sent = call.mock.calls.find((c) => c[0].action === "set_many")![0] as { charts: Array<{ pair: string; interval: string }> };
-    // the 21 GMO pairs: the 16 read from Twelve Data have no 5-minute alerts
+    // the 12 GMO pairs (#175): the 6 read from Twelve Data have no 5-minute alerts
+    expect(gmo).toHaveLength(12);
     expect(sent.charts.map((c) => c.pair)).toEqual(gmo);
     expect(new Set(sent.charts.map((c) => c.interval))).toEqual(new Set(["5min"]));
     await waitFor(() => expect((screen.getByTestId("signal-alert-ultra-all-5min") as HTMLInputElement).checked).toBe(true));
@@ -300,11 +306,11 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
     // untick: every pair off again
     fireEvent.click(screen.getByTestId("signal-alert-ultra-all-5min"));
     await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "ultra", on: false })));
-    // the hourly one takes all 37
+    // the hourly one takes all 18
     fireEvent.click(screen.getByTestId("signal-alert-ultra-all-1h"));
     await waitFor(() => expect(call.mock.calls.filter((c) => c[0].action === "set_many")).toHaveLength(3));
     const hourly = call.mock.calls.filter((c) => c[0].action === "set_many")[2][0] as { charts: unknown[] };
-    expect(hourly.charts).toHaveLength(37);
+    expect(hourly.charts).toHaveLength(18);
   });
 
   it("names a STRONG Q-Trend alert in the recent list, with no stop or target to show", async () => {

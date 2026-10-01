@@ -58,8 +58,11 @@ import {
   type QuoteCandle,
 } from "../track-outcomes/quotes.ts";
 
-// The pairs the app analyses (analyze/index.ts ALLOWED_PAIRS)
-export const ALERT_PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "EUR/JPY", "GBP/JPY", "AUD/USD", "AUD/JPY"] as const;
+// The pairs the app analyses (analyze/index.ts ALLOWED_PAIRS). #175: their
+// yen pairs only (「通貨のペアを円とどれかだけにして」, docs §8.86) — the
+// record (index.ts, status) counts these four's signals only, and an open
+// signal on the other three is no longer settled.
+export const ALERT_PAIRS = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY"] as const;
 
 // 1min is left out: the study never measured it, and a rule that fires a few
 // times a day per pair on 15min would fire every hour or so on 1min — an inbox

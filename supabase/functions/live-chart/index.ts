@@ -14,7 +14,8 @@
 // going on from it when Twelve Data cannot be read again (logic.ts, "gold
 // between Twelve Data's reads"). #154: 15 more pairs, read as gold is
 // (logic.ts, "the broker's pairs GMO does not serve"); the ticker is told
-// the pair on screen.
+// the pair on screen. #175: the yen pairs and gold only, 18 (logic.ts,
+// LIVE_PAIRS; docs §8.86).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -67,7 +68,7 @@ import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import type { Fetcher } from "../track-outcomes/quotes.ts";
 
-const FUNCTION_VERSION = "live-chart-v10-2026-09-29T03:30:00Z";
+const FUNCTION_VERSION = "live-chart-v11-2026-10-01T05:30:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -111,8 +112,9 @@ const gmoFetcher: Fetcher = async (url) => {
   }
 };
 
-// #153: room for every pair's every timeframe (#154: 37 × 6), so a cache
-// is not emptied each time the chart moves to another pair
+// #153: room for every pair's every timeframe (#154: 37 × 6; #175: 18 × 6,
+// the room left as it was), so a cache is not emptied each time the chart
+// moves to another pair
 const CACHE_KEYS = 240;
 const barsCache = new Map<string, { at: number; body: unknown }>();
 const historyCache = new Map<string, { at: number; body: unknown }>();
@@ -127,8 +129,8 @@ const fallbackFetches: number[] = [];
 // #154: the pairs' prices from Swissquote (logic.ts, "the broker's pairs GMO
 // does not serve"). The pair on screen is read again with each ticker read,
 // as gold is; the others a few at a time, each at most once a minute, so
-// the pair list's prices stay near the market without fifteen requests
-// every few seconds. `at` is the last try, `readAt` the last answer; a
+// the pair list's prices stay near the market without five requests
+// (#154: fifteen) every few seconds. `at` is the last try, `readAt` the last answer; a
 // price not answered for SQ_KEEP_MS is left out.
 const SQ_OTHERS_MS = 60_000;
 const SQ_OTHERS_PER_READ = 3;

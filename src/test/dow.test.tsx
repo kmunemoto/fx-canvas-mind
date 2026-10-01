@@ -247,8 +247,8 @@ describe("#129 Dow theory on the live chart", () => {
     expect(screen.getByTestId("chart-dow-swing-LH")).toBeTruthy();
     expect(screen.getByTestId("chart-dow-legend").textContent).toContain("上位足（4H・1H）");
 
-    fireEvent.click(screen.getByTestId("live-pair-EUR/USD"));
-    await waitFor(() => expect(loadDow).toHaveBeenCalledWith("EUR/USD"));
+    fireEvent.click(screen.getByTestId("live-pair-EUR/JPY"));
+    await waitFor(() => expect(loadDow).toHaveBeenCalledWith("EUR/JPY"));
   });
 
   it("is not read while it is off", async () => {

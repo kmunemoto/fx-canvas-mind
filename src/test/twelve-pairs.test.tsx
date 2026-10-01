@@ -76,7 +76,8 @@ const READ_AT = Date.parse("2026-09-28T17:53:55Z");
 
 describe("#154 the broker's pairs GMO does not serve, in the live-chart function", () => {
   it("reads each from Twelve Data (bars) and Swissquote (price) by its own symbol, gold's as before", () => {
-    expect(TWELVE_FX_PAIRS).toHaveLength(15);
+    // #175: the yen pairs only
+    expect([...TWELVE_FX_PAIRS]).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]);
     for (const p of TWELVE_FX_PAIRS) {
       expect(swissquoteUrl(p)).toBe(`https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${p}`);
       const url = new URL(twelveDataUrl(p, "1h", "KEY", GOLD_BARS));
@@ -155,14 +156,16 @@ describe("#154 the broker's pairs GMO does not serve, in the live-chart function
     const tried = new Map<string, number>();
     const lastTry = (p: string) => tried.get(p);
     // nothing asked yet: the pair on screen, and the first three others
-    expect(swissquoteDue("USD/CAD", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["USD/CAD", "USD/CHF", "GBP/CHF", "EUR/CHF"]);
+    expect(swissquoteDue("HKD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY"]);
     // a GMO pair (or none) on screen: only the others
-    expect(swissquoteDue("USD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["USD/CAD", "USD/CHF", "GBP/CHF"]);
+    expect(swissquoteDue("USD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY"]);
     expect(swissquoteDue(null, lastTry, 1_000_000, 2_000, 60_000, 3)).toHaveLength(3);
-    // a client asking every 5 seconds with USD/CAD on screen, for three minutes
+    // #175: a pair taken away is not asked for, even on screen
+    expect(swissquoteDue("USD/CAD", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY"]);
+    // a client asking every 5 seconds with HKD/JPY on screen, for three minutes
     const reads = new Map<string, number[]>();
     for (let now = 1_000_000; now < 1_180_000; now += 5_000) {
-      const due = swissquoteDue("USD/CAD", lastTry, now, 2_000, 60_000, 3);
+      const due = swissquoteDue("HKD/JPY", lastTry, now, 2_000, 60_000, 3);
       // never more than four requests in one read
       expect(due.length).toBeLessThanOrEqual(4);
       for (const p of due) {
@@ -171,8 +174,8 @@ describe("#154 the broker's pairs GMO does not serve, in the live-chart function
       }
     }
     // the pair on screen every time
-    expect(reads.get("USD/CAD")).toHaveLength(36);
-    for (const p of TWELVE_FX_PAIRS.filter((x) => x !== "USD/CAD")) {
+    expect(reads.get("HKD/JPY")).toHaveLength(36);
+    for (const p of TWELVE_FX_PAIRS.filter((x) => x !== "HKD/JPY")) {
       const at = reads.get(p) ?? [];
       // each within the first 25 seconds, then about once a minute, never more often
       expect(at[0] - 1_000_000, p).toBeLessThanOrEqual(25_000);
@@ -182,12 +185,12 @@ describe("#154 the broker's pairs GMO does not serve, in the live-chart function
     }
     // after a pause (the page hidden), with more due than one read asks for:
     // the longest untried first
-    const ages = new Map<string, number>([["USD/CHF", 70_000], ["GBP/CHF", 300_000], ["EUR/CHF", 90_000], ["AUD/CHF", 200_000], ["NZD/CHF", 61_000]]);
+    const ages = new Map<string, number>([["SGD/JPY", 70_000], ["NOK/JPY", 300_000], ["PLN/JPY", 90_000], ["CZK/JPY", 200_000], ["HKD/JPY", 61_000]]);
     const pause = (p: string) => (ages.has(p) ? 3_000_000 - ages.get(p)! : 3_000_000 - 1_000);
-    expect(swissquoteDue(null, pause, 3_000_000, 2_000, 60_000, 3)).toEqual(["GBP/CHF", "AUD/CHF", "EUR/CHF"]);
+    expect(swissquoteDue(null, pause, 3_000_000, 2_000, 60_000, 3)).toEqual(["NOK/JPY", "CZK/JPY", "PLN/JPY"]);
     // the pair on screen asked 1 second ago: not again
-    tried.set("USD/CAD", 2_000_000 - 1_000);
-    expect(swissquoteDue("USD/CAD", lastTry, 2_000_000, 2_000, 60_000, 3)).not.toContain("USD/CAD");
+    tried.set("HKD/JPY", 2_000_000 - 1_000);
+    expect(swissquoteDue("HKD/JPY", lastTry, 2_000_000, 2_000, 60_000, 3)).not.toContain("HKD/JPY");
   });
 
   it("records the pair on screen's price for its bars as gold's is, in a table only the function can use", () => {
@@ -214,65 +217,71 @@ describe("#154 those pairs on the live chart", () => {
     resetChartPrefsCache();
   });
   const M1 = 60_000;
-  // Twelve Data's USD/CAD 1-minute bars, the last one forming now
+  // Twelve Data's HKD/JPY 1-minute bars, the last one forming now (#175: the
+  // pairs read as gold is are yen pairs now; this was USD/CAD's)
   const readFor = (pair: string, interval: string, over: Partial<LiveRead> = {}): LiveRead => {
     const now = Date.now();
     const last = Math.floor(now / M1) * M1;
     const bars = Array.from({ length: 300 }, (_, i) => {
-      const p = 1.3712 + Math.sin(i / 8) * 0.0021;
-      return { datetime: new Date(last - (299 - i) * M1).toISOString().slice(0, 19).replace("T", " "), open: p, high: p + 0.00031, low: p - 0.00029, close: p + 0.00012 };
+      const p = 19.123 + Math.sin(i / 8) * 0.021;
+      return { datetime: new Date(last - (299 - i) * M1).toISOString().slice(0, 19).replace("T", " "), open: p, high: p + 0.0031, low: p - 0.0029, close: p + 0.0012 };
     });
-    const r = normalizeLiveRead(twelveRead("USD/CAD", bars, "1min", now, new Date(now).toISOString()))!;
+    const r = normalizeLiveRead(twelveRead("HKD/JPY", bars, "1min", now, new Date(now).toISOString()))!;
     return { ...r, pair, interval, ...over };
   };
-  const cad: Tick = { bid: 1.37101, ask: 1.37117, mid: 1.37109, time: new Date().toISOString(), open: true };
+  const hkd: Tick = { bid: 19.101, ask: 19.117, mid: 19.109, time: new Date().toISOString(), open: true };
 
   it("opens one from the list, tells the ticker which is on screen at once, and moves its chart with Swissquote's price", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const loadBars = vi.fn(async (p: string, i: string) => readFor(p, i));
     // each answer new, as each read of the function is
-    const loadTicks = vi.fn(async (p?: string): Promise<Record<string, Tick>> => (p === "USD/CAD" ? { "USD/CAD": { ...cad, time: new Date().toISOString() } } : {}));
+    const loadTicks = vi.fn(async (p?: string): Promise<Record<string, Tick>> => (p === "HKD/JPY" ? { "HKD/JPY": { ...hkd, time: new Date().toISOString() } } : {}));
     const loadHistory = vi.fn(async () => []);
     render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={loadTicks} loadHistory={loadHistory} loadDow={async () => []} />);
     await waitFor(() => expect(loadTicks).toHaveBeenCalledWith("USD/JPY"));
     fireEvent.click(screen.getByTestId("live-pair-grid-open"));
     const grid = screen.getByTestId("live-pair-grid");
-    expect(within(grid).getByTestId("live-grid-pair-USD/CAD").textContent).toMatch(/^ドル\/カナダドルUSD\/CAD/);
-    expect(within(grid).getByTestId("live-grid-pair-USD/HKD").textContent).toMatch(/^ドル\/香港ドルUSD\/HKD/);
+    expect(within(grid).getByTestId("live-grid-pair-HKD/JPY").textContent).toMatch(/^香港ドル\/円HKD\/JPY/);
+    expect(within(grid).getByTestId("live-grid-pair-CZK/JPY").textContent).toMatch(/^チェココルナ\/円CZK\/JPY/);
     expect(within(grid).queryByTestId("live-grid-pair-CNH/JPY")).toBeNull();
+    // #175: the pairs without the yen are gone
+    expect(within(grid).queryByTestId("live-grid-pair-USD/CAD")).toBeNull();
+    expect(within(grid).queryByTestId("live-grid-pair-USD/HKD")).toBeNull();
     expect(screen.getByTestId("live-pair-grid-note").textContent).toContain("表示中のペア以外は1〜3分ほど前");
-    fireEvent.click(within(grid).getByTestId("live-grid-pair-USD/CAD"));
-    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("USD/CAD", "1min"));
+    expect(screen.getByTestId("live-pair-grid-note").textContent).toContain("香港ドル/円・SGドル/円など5ペア");
+    fireEvent.click(within(grid).getByTestId("live-grid-pair-HKD/JPY"));
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("HKD/JPY", "1min"));
     // at once, not at the next 5-second tick
-    await waitFor(() => expect(loadTicks).toHaveBeenCalledWith("USD/CAD"), { timeout: 1_000 });
-    await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 1.37101 / 買値 1.37117 / スプレッド 1.6pips"));
+    await waitFor(() => expect(loadTicks).toHaveBeenCalledWith("HKD/JPY"), { timeout: 1_000 });
+    await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 19.101 / 買値 19.117 / スプレッド 1.6pips"));
     // the pair's own feed: not the "GMO cannot be read" notice, its history read as a GMO pair's is
     expect(screen.queryByTestId("live-fallback")).toBeNull();
     expect(screen.queryByTestId("live-ticks-limited")).toBeNull();
-    await waitFor(() => expect(loadHistory).toHaveBeenCalledWith("USD/CAD", "1min"));
+    await waitFor(() => expect(loadHistory).toHaveBeenCalledWith("HKD/JPY", "1min"));
     const note = screen.getByTestId("live-note").textContent!;
     expect(note).toContain("GMOコインにないため、足は Twelve Data");
     expect(note).toContain("金と分け合い");
     // the forming bar closes at the price by the next tick
-    expect(readFor("USD/CAD", "1min").candles.at(-1)!.close.toFixed(5)).not.toBe("1.37109");
+    expect(readFor("HKD/JPY", "1min").candles.at(-1)!.close.toFixed(3)).not.toBe("19.109");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6_000);
     });
     fireEvent.click(screen.getByTestId("chart-fullscreen"));
-    expect(within(screen.getByTestId("chart-fullscreen-overlay")).getByTestId("chart-fullscreen-price").textContent).toContain("1.37109");
+    expect(within(screen.getByTestId("chart-fullscreen-overlay")).getByTestId("chart-fullscreen-price").textContent).toContain("19.109");
   });
 
   it("says when its bars are made from Swissquote's prices, and that only its own chart records them", async () => {
     const loadBars = vi.fn(async (p: string, i: string) => readFor(p, i, { limited: true, ticksFrom: "2026-09-28T05:04:00.000Z" }));
     render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} loadDow={async () => []} />);
-    fireEvent.click(await screen.findByTestId("live-pair-USD/CAD"));
+    fireEvent.click(await screen.findByTestId("live-pair-HKD/JPY"));
     expect((await screen.findByTestId("live-ticks-limited")).textContent).toBe(
-      "ドル/カナダドルの1分足は、きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達したため、09-28 14:04 からの足を Swissquote の価格（数秒ごと）から作っています。価格はこのペアのチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。",
+      "香港ドル/円の1分足は、きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達したため、09-28 14:04 からの足を Swissquote の価格（数秒ごと）から作っています。価格はこのペアのチャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。",
     );
   });
 
   it("opening on a saved pair far along the row, keeps it in sight once the prices have widened the row", async () => {
-    localStorage.setItem("sextant.chart.prefs.v1", JSON.stringify({ live: { pair: "USD/HKD", interval: "1min", view: "gainz" } }));
+    // #175: the row's last pair before gold is CZK/JPY now (USD/HKD was)
+    localStorage.setItem("sextant.chart.prefs.v1", JSON.stringify({ live: { pair: "CZK/JPY", interval: "1min", view: "gainz" } }));
     resetChartPrefsCache();
     const seen: string[] = [];
     const had = Element.prototype.scrollIntoView;
@@ -283,11 +292,11 @@ describe("#154 those pairs on the live chart", () => {
       let answer: ((v: Record<string, Tick>) => void) | null = null;
       const loadTicks = vi.fn(() => new Promise<Record<string, Tick>>((res) => (answer ??= res)));
       render(<LiveChart loadBars={async (p, i) => readFor(p, i)} loadTicks={loadTicks} loadHistory={async () => []} loadDow={async () => []} />);
-      await waitFor(() => expect(seen).toContain("live-pair-USD/HKD"));
+      await waitFor(() => expect(seen).toContain("live-pair-CZK/JPY"));
       const before = seen.length;
-      answer!({ "USD/HKD": { bid: 7.8449, ask: 7.8451, mid: 7.845, time: new Date().toISOString(), open: true } });
+      answer!({ "CZK/JPY": { bid: 6.845, ask: 6.851, mid: 6.848, time: new Date().toISOString(), open: true } });
       await waitFor(() => expect(seen.length).toBeGreaterThan(before));
-      expect(seen.at(-1)).toBe("live-pair-USD/HKD");
+      expect(seen.at(-1)).toBe("live-pair-CZK/JPY");
     } finally {
       Element.prototype.scrollIntoView = had;
     }
@@ -296,16 +305,16 @@ describe("#154 those pairs on the live chart", () => {
   it("drops a price answer older than the one shown (asked before the pair changed)", async () => {
     let first: ((v: Record<string, Tick>) => void) | null = null;
     const loadTicks = vi.fn((p?: string) =>
-      p === "USD/JPY" && !first ? new Promise<Record<string, Tick>>((res) => (first = res)) : Promise.resolve(p === "USD/CAD" ? { "USD/CAD": cad } : {}),
+      p === "USD/JPY" && !first ? new Promise<Record<string, Tick>>((res) => (first = res)) : Promise.resolve(p === "HKD/JPY" ? { "HKD/JPY": hkd } : {}),
     );
     const loadBars = vi.fn(async (p: string, i: string) => readFor(p, i));
     render(<LiveChart defaultInterval="1min" loadBars={loadBars} loadTicks={loadTicks} loadHistory={async () => []} loadDow={async () => []} />);
     await waitFor(() => expect(first).not.toBeNull());
-    fireEvent.click(screen.getByTestId("live-pair-USD/CAD"));
-    await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 1.37101"));
-    // the answer asked for with USD/JPY on screen arrives last, without USD/CAD's price
+    fireEvent.click(screen.getByTestId("live-pair-HKD/JPY"));
+    await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 19.101"));
+    // the answer asked for with USD/JPY on screen arrives last, without HKD/JPY's price
     first!({ "USD/JPY": { bid: 150.12, ask: 150.123, mid: 150.1215, time: new Date().toISOString(), open: true } });
     await new Promise((r) => setTimeout(r, 50));
-    expect(screen.getByTestId("live-price").textContent).toContain("売値 1.37101");
+    expect(screen.getByTestId("live-price").textContent).toContain("売値 19.101");
   });
 });
