@@ -24,7 +24,20 @@ import { chartGainz, readGainz } from "../analyze/gainz.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { fetchRecentQuotes, midCandle } from "../analyze/price-source.ts";
 import { fetchYearQuotes } from "../signal-alerts/logic.ts";
-import { GMO_HOST, GMO_INTERVALS, GMO_SYMBOLS, type Fetcher, type QuoteCandle } from "../track-outcomes/quotes.ts";
+import {
+  GMO_HOST,
+  GMO_INTERVALS,
+  GMO_SYMBOLS,
+  dateKeys,
+  jstDayKey,
+  jstYearKey,
+  klineUrl,
+  mergeSides,
+  parseKlines,
+  usableBars,
+  type Fetcher,
+  type QuoteCandle,
+} from "../track-outcomes/quotes.ts";
 import { dowTheory } from "../_shared/dow.ts";
 
 // #127: and gold (XAU/USD), which GMO does not carry — see "gold" below.
@@ -107,8 +120,11 @@ export const TWELVE_CAPS: Record<string, number> = { "1min": 450, "5min": 600 };
 export const TWELVE_CAP_REST = 720;
 export const twelveCapFor = (interval: string): number => TWELVE_CAPS[interval] ?? TWELVE_CAP_REST;
 // Bars read at once: enough for the chart, its signals and Zone Shift's history
-// (#154: for every pair read as gold is)
-export const GOLD_BARS = 800;
+// (#154: for every pair read as gold is). #176: and the Zero-lag TEMA's deep
+// history (DEEP_HISTORY_BARS, below), 800 before: a read costs Twelve Data
+// one credit whatever the number of bars (its "Credits" article, read
+// 2026-10-01: "/time_series ... (1 credit) * (3 symbols) = 3 credits")
+export const GOLD_BARS = 1400;
 // Stored gold bars (#154: any pair's read as gold is) are fresh while no bar
 // has closed since they were read (a bar opens on the UTC grid of its
 // length, as Twelve Data's do); while the market may be shut, for
@@ -523,6 +539,95 @@ export const historyRead = (pair: string, interval: string, quotes: QuoteCandle[
 // #127: the same from mid candles (gold's), those not closed left out
 export const historyOfBars = (pair: string, interval: string, bars: Candle[], nowMs: number, fetchedAt: string | null = null) =>
   historyOf(pair, interval, closedOf(bars, interval, nowMs, fetchedAt), nowMs);
+
+// ---- #176: the deep history -------------------------------------------------------------
+//
+// The request (2026-10-01): 「これ追加して」, TradingView's Zero-lag TEMA
+// Crosses [Loxx]; and, told that its slow line (six EMAs of 144 in a row)
+// comes to TradingView's only some 1,200 bars in, the owner's choice
+// 「TradingView と同じにする」 (src/lib/zlTema.ts, docs §8.87). So while it
+// is on, the chart reads DEEP_HISTORY_BARS closed bars instead of
+// HISTORY_BARS. The other indicators keep reading HISTORY_BARS, so nothing
+// they draw moves, nor do the emails, which read as they do.
+//
+// A year's file (4h, 1day) is read back year by year, DEEP_YEARS at most,
+// and stops where GMO has no more; a day's (1min to 1h) newest first, as
+// fetchRecentQuotes walks, and on the hourly chart that is some 60 days of
+// files, both sides. Past the read's own time a partial answer is given
+// (`complete: false`) and the client asks again: the caller keeps the ended
+// files (index.ts), so the next read goes on from where this one stopped.
+export const DEEP_HISTORY_BARS = 1400;
+export const DEEP_YEARS = 8;
+// The days of a day-keyed chart's files the deep read walks for `count`
+// bars: the span fetchRecentQuotes walks (open days, padded for weekends
+// and two more), and three days more
+export const deepDaySpan = (interval: string, count: number): number => {
+  const step = LIVE_STEP_MS[interval] ?? HOUR;
+  const perDay = Math.max(1, Math.floor((24 * HOUR) / step));
+  return Math.ceil((Math.ceil(count / perDay) * 7) / 5) + 5;
+};
+
+export interface DeepQuotes {
+  // oldest first, the newest `count` at most
+  bars: QuoteCandle[];
+  // false: stopped by the time allowed or a file not read, so asking again
+  // may bring more; true: as many as asked for, or all GMO has
+  complete: boolean;
+}
+
+// GMO answered (status 0 with its list; a day with no bars is an empty one)
+const gmoAnswered = (body: unknown): boolean =>
+  typeof body === "object" && body !== null && (body as { status?: unknown }).status === 0 &&
+  Array.isArray((body as { data?: unknown }).data);
+
+export const fetchDeepQuotes = async (
+  pair: string,
+  interval: string,
+  count: number,
+  nowMs: number,
+  deadlineMs: number,
+  fetcher: Fetcher,
+): Promise<DeepQuotes | null> => {
+  const symbol = GMO_SYMBOLS[pair];
+  const spec = GMO_INTERVALS[interval];
+  const step = LIVE_STEP_MS[interval];
+  if (!symbol || !spec || step === undefined || !isLivePair(pair) || isTwelvePair(pair)) return null;
+  let keys: string[];
+  if (spec.key === "year") {
+    const year = Number(jstYearKey(nowMs));
+    keys = Array.from({ length: DEEP_YEARS }, (_, k) => String(year - k));
+  } else {
+    const today = jstDayKey(nowMs);
+    keys = dateKeys(nowMs - deepDaySpan(interval, count) * 24 * HOUR, nowMs, "day").filter((k) => k <= today).reverse();
+  }
+  let bid: Array<{ t: number; c: Candle }> = [];
+  let ask: Array<{ t: number; c: Candle }> = [];
+  const merged = () => usableBars(mergeSides(bid, ask), step, nowMs);
+  const answer = (complete: boolean): DeepQuotes | null => {
+    const m = merged();
+    return m.length > 0 ? { bars: m.slice(-count), complete } : null;
+  };
+  let found = false;
+  for (const key of keys) {
+    if (Date.now() > deadlineMs) return answer(false);
+    if (spec.key === "day") {
+      // a whole JST day inside the weekend break holds no bar
+      const dayStart = Date.parse(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T00:00:00Z`) - 9 * HOUR;
+      if (isPossiblyClosed(dayStart) && isPossiblyClosed(dayStart + 24 * HOUR - 1)) continue;
+    }
+    const [b, a] = await Promise.all([fetcher(klineUrl(symbol, "bid", spec.name, key)), fetcher(klineUrl(symbol, "ask", spec.name, key))]);
+    if (!gmoAnswered(b) || !gmoAnswered(a)) return answer(false);
+    const bRows = parseKlines(b);
+    const aRows = parseKlines(a);
+    // a year with nothing, after one with bars: GMO has no more
+    if (spec.key === "year" && found && bRows.length === 0 && aRows.length === 0) break;
+    if (bRows.length > 0) found = true;
+    bid = [...bRows, ...bid];
+    ask = [...aRows, ...ask];
+    if (merged().length >= count) return answer(true);
+  }
+  return answer(true);
+};
 
 const historyOf = (pair: string, interval: string, closed: Candle[], nowMs: number) => {
   const d = decimalsOf(pair);
