@@ -1,0 +1,84 @@
+# #174: currency strength (通貨の強弱): the eight currencies' strength from
+# the seven yen crosses, a buy or a sell on A+B when a pair's base enters the
+# top two and its quote the bottom two, against a coin toss at the same
+# closes, with the email's exit (research/strength.ts).
+#
+# Run by hand, once: the random walks are run before it, so the data is not
+# read before the walks have been looked at. A push of this file only lets
+# GitHub know the workflow (its job is skipped on a push: nothing is read).
+# END is fixed so a run again reads the same bars.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research currency strength
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/strength.yml
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First day judged"
+        default: "2024-01-01"
+      split:
+        description: "First day of the second half"
+        default: "2025-05-19"
+      end:
+        description: "The data's end, UTC (§8.83's)"
+        default: "2026-09-29T14:16:25Z"
+permissions:
+  contents: read
+
+jobs:
+  strength:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # GMO's day files never change once the day has rolled: the files the
+      # other studies kept, so only the rest is fetched
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-none
+          restore-keys: gmo-5min-
+      - name: Run the study
+        env:
+          START: ${{ inputs.start || '2024-01-01' }}
+          SPLIT: ${{ inputs.split || '2025-05-19' }}
+          END: ${{ inputs.end || '2026-09-29T14:16:25Z' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=START,SPLIT,END,SYNTHETIC,SEED,SYNTH,LSTAR,DELTA,FAULT,PLACEBOS,OUTDIR
+          research/strength.ts
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strength-out
+          path: research/out/
+          retention-days: 30
