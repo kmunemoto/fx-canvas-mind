@@ -17,11 +17,11 @@
 // stops depending on where the bars began. TradingView computes it over
 // years of bars; the chart reads some 1,400 (live-chart's deep history,
 // DEEP_HISTORY_BARS), some 1,280 of them before the 120 it shows. Over
-// those, an EMA started from its first value comes
-// to TradingView's line sooner: on random walks (docs §8.87), with 1,200
-// bars before the 120 drawn the L/S marks on them were TradingView's in all
-// 120 walks (Pine's own start: 116), and the slow line within 0.4% of a
-// bar's mean move. So the EMAs here start from the first value; past the
+// those, an EMA started from its first value comes to TradingView's line
+// sooner: on random walks (research/zltema-warmup.py, docs §8.87), with
+// 1,200 bars before the 120 drawn the L/S marks on them were TradingView's
+// in all 120 walks (Pine's own start: 116), and the slow line within 0.4% of
+// a bar's mean move. So the EMAs here start from the first value; past the
 // bars that start needs, the two are the same line (the tests check it).
 //
 // Judged on closed bars only. Shown on the chart only: no signal, alert or
@@ -38,7 +38,7 @@ export const ZLT_DEFAULTS: ZlTemaParams = { fast: 22, slow: 144 };
 // TradingView's (docs §8.87); with fewer, the chart says so
 export const ZLT_SETTLE_BARS = 1200;
 // Below this many, it says the lines and marks may be far from
-// TradingView's, not a little: on the random walks of docs §8.87, with 600
+// TradingView's, not a little: on the same random walks, with 600
 // bars before the 120 drawn the L/S marks were TradingView's in 106 of the
 // 120 walks (bars coloured otherwise than TradingView's: 0.15 a walk on
 // average, 4 at most, of the 120); with 500 in 84, 300 in 22, none before
