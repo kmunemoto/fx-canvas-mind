@@ -11,13 +11,14 @@ export const LIVE_CHART_URL = "https://endcqzewujdvimdlazhj.supabase.co/function
 // does not serve, read as gold is (their bars Twelve Data's, their price
 // Swissquote's); the broker's CNH/JPY and CNH/HKD have no feed here.
 // #175: the yen pairs only (「通貨のペアを円とどれかだけにして」), in the
-// broker's order — 12 GMO serves, 5 read as gold is
+// broker's order — 12 GMO serves, 5 read as gold is. #177: and EUR/USD
+// again (「ユーロドル追加して」), in its place, from GMO
 export const LIVE_FX_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
-  "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY",
-  "CHF/JPY", "TRY/JPY", "HKD/JPY", "SGD/JPY",
-  "NOK/JPY", "HUF/JPY", "SEK/JPY", "PLN/JPY",
-  "CZK/JPY",
+  "EUR/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY",
+  "CAD/JPY", "CHF/JPY", "TRY/JPY", "HKD/JPY",
+  "SGD/JPY", "NOK/JPY", "HUF/JPY", "SEK/JPY",
+  "PLN/JPY", "CZK/JPY",
 ];
 // #154: those read as gold is
 export const TWELVE_FX_PAIRS = [
