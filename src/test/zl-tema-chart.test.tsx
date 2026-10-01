@@ -226,23 +226,46 @@ describe("#176 the live chart reads the deep history while the Zero-lag TEMA is 
     }
   }, 12_000);
 
-  it("a read that stopped short is read again on the next bar", async () => {
-    on();
-    // each read of the bars a new one, the next close half a second away:
-    // the chart reads its bars again some 5 s on
-    const loadBars = vi.fn(async (p: string, i: string) => ({ ...readFor(p, i), at: new Date().toISOString(), nextClose: new Date(Date.now() + 500).toISOString() }));
-    const answers: Array<Deep | Error> = [{ bars: deepBars.slice(-400), complete: false }, new Error("feed_unavailable")];
-    const loadDeepHistory = vi.fn(async (): Promise<Deep> => {
-      const a = answers.shift() ?? { bars: deepBars, complete: true };
-      if (a instanceof Error) throw a;
-      return a;
-    });
-    render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} loadDeepHistory={loadDeepHistory} loadDow={async () => []} />);
-    // short, then a failure: what it had is drawn, and it says so
-    await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("しか読めなかった"), { timeout: 4_000 });
-    expect(loadDeepHistory).toHaveBeenCalledTimes(2);
-    // the next bar: asked again, and now the whole of it
-    await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledTimes(3), { timeout: 8_000 });
-    await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).not.toContain("しか読めなかった"));
-  }, 15_000);
+  it("a read that stopped short is read again on the next bar, drawn meanwhile, and kept if that read fails", async () => {
+    for (const third of ["whole", "fails"] as const) {
+      on();
+      // each read of the bars a new one, the next close half a second away:
+      // the chart reads its bars again some 5 s on
+      const loadBars = vi.fn(async (p: string, i: string) => ({ ...readFor(p, i), at: new Date().toISOString(), nextClose: new Date(Date.now() + 500).toISOString() }));
+      let release: (() => void) | null = null;
+      const answers: Array<Deep | Error | "wait"> = [{ bars: deepBars.slice(-400), complete: false }, new Error("feed_unavailable"), "wait"];
+      const loadDeepHistory = vi.fn(async (): Promise<Deep> => {
+        const a = answers.shift() ?? { bars: deepBars, complete: true };
+        if (a === "wait") {
+          await new Promise<void>((r) => (release = r));
+          if (third === "fails") throw new Error("feed_unavailable");
+          return { bars: deepBars, complete: true };
+        }
+        if (a instanceof Error) throw a;
+        return a;
+      });
+      const view = render(<LiveChart defaultInterval="15min" loadBars={loadBars} loadTicks={async () => ({})} loadHistory={async () => []} loadDeepHistory={loadDeepHistory} loadDow={async () => []} />);
+      // short, then a failure: what it had is drawn, and it says so
+      await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("しか読めなかった"), { timeout: 4_000 });
+      expect(loadDeepHistory).toHaveBeenCalledTimes(2);
+      // the next bar: asked again; meanwhile the short read is still drawn
+      await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledTimes(3), { timeout: 8_000 });
+      expect(screen.getByTestId("chart-zltema-slow")).toBeTruthy();
+      expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("しか読めなかった");
+      await act(async () => {
+        release!();
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      if (third === "whole") {
+        await waitFor(() => expect(screen.getByTestId("chart-zltema-legend").textContent).not.toContain("しか読めなかった"));
+      } else {
+        // it failed: the short read stays drawn (not "could not be read")
+        expect(screen.getByTestId("chart-zltema-slow")).toBeTruthy();
+        expect(screen.getByTestId("chart-zltema-legend").textContent).toContain("しか読めなかった");
+      }
+      view.unmount();
+      localStorage.clear();
+      resetChartPrefsCache();
+    }
+  }, 30_000);
 });

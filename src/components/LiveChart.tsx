@@ -361,7 +361,10 @@ const LiveChart = ({
     const run = { key: historyKey, off: false };
     deepRun.current = run;
     const on = () => !run.off && current.current.pair === pair && current.current.interval === interval;
-    setDeepHistory({ key: historyKey, readAt, bars: h?.key === historyKey ? h.bars : null, status: "loading", complete: false });
+    // bars a read that stopped short brought, still joined to the chart:
+    // drawn while they are read again, and kept if that read fails
+    const kept = h?.key === historyKey && historyBefore(h.bars, gmoRead.candles) !== null ? h.bars : null;
+    setDeepHistory({ key: historyKey, readAt, bars: kept, status: "loading", complete: false });
     void (async () => {
       let last: { bars: NumericCandle[]; complete: boolean } | null = null;
       for (let tries = 1; ; tries++) {
@@ -369,8 +372,10 @@ const LiveChart = ({
           last = await loadDeepHistory(pair, interval);
         } catch {
           if (!on()) return;
-          // what an earlier try brought is shown; nothing at all is an error
-          setDeepHistory({ key: historyKey, readAt, bars: last ? last.bars : null, status: last ? "ready" : "error", complete: false });
+          // what an earlier try (or read) brought is shown; nothing at all
+          // is an error
+          const got = last ? last.bars : kept;
+          setDeepHistory({ key: historyKey, readAt, bars: got, status: got ? "ready" : "error", complete: false });
           return;
         }
         if (!on()) return;
@@ -463,10 +468,11 @@ const LiveChart = ({
     if (past) return { bars: past, status: "ready" as const };
     return { bars: null, status: history?.key === historyKey && history.status === "error" ? ("error" as const) : ("loading" as const) };
   }, [gmoRead, firstCandle, history, historyKey]);
-  // #176: the same for the Zero-lag TEMA, from its deep history
+  // #176: the same for the Zero-lag TEMA, from its deep history (bars
+  // kept while a short read is read again are drawn meanwhile)
   const zltHistory = useMemo(() => {
     const past = gmoRead && firstCandle && deepHistory?.key === historyKey ? historyBefore(deepHistory.bars, [firstCandle]) : null;
-    if (past && deepHistory?.status === "ready") return { bars: past, status: "ready" as const };
+    if (past && deepHistory?.status !== "error") return { bars: past, status: "ready" as const };
     return { bars: null, status: deepHistory?.key === historyKey && deepHistory.status === "error" ? ("error" as const) : ("loading" as const) };
   }, [gmoRead, firstCandle, deepHistory, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);

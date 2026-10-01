@@ -131,6 +131,22 @@ describe("#176 Zero-lag TEMA Crosses [Loxx] (a port of its open-source Pine code
     expect(zlTemaCrosses([100, 100, 101, 102, 101]).signals.some((sg) => sg.i === 1)).toBe(false);
   });
 
+  it("nor up to and on the bar where the closes first move from the first one (the lines one till then, but for rounding)", () => {
+    for (const closes of [[0.42, 0.42, 0.421, 0.422, 0.421], [100, 100, 99, 98, 99], [150.123, 150.123, 150.0, 149.9]]) {
+      expect(zlTemaCrosses(closes).signals.some((sg) => sg.i <= 2)).toBe(false);
+    }
+    expect(zlTemaCrosses([5, 5, 5, 5]).signals).toEqual([]);
+    // walks rounded to 3 decimals whose first k closes are the same
+    for (let seed = 1; seed <= 300; seed++) {
+      const k = 1 + (seed % 4);
+      const w = walk(150, seed, 0.004).map((x) => Math.round(x * 1000) / 1000);
+      const closes = [...Array.from({ length: k }, () => w[0]), ...w.slice(1).map((x) => (x === w[0] ? x + 0.001 : x))];
+      const parted = closes.findIndex((c) => c !== closes[0]);
+      expect(parted).toBe(k);
+      expect(zlTemaCrosses(closes).signals.some((sg) => sg.i <= parted)).toBe(false);
+    }
+  });
+
   it("on a long walk, marks every change of side and alternates L and S", () => {
     const r = zlTemaCrosses(walk(2000, 7));
     let changes = 0;

@@ -142,7 +142,10 @@ describe("#176 the deep history (live-chart/logic.ts fetchDeepQuotes)", () => {
     const r = (await fetchDeepQuotes("USD/JPY", "1h", 1401, NOW, Date.now() + 60_000, g.fetcher))!;
     expect(r.complete).toBe(true);
     expect(r.bars).toHaveLength(1401);
-    expect(r.bars.some((b) => b.datetime.startsWith("2026-09-25 03:00"))).toBe(false);
+    // none from that day (GMO's 20260925: 06:00 JST on the 25th, for 24 hours)
+    const from = Date.parse("2026-09-24T21:00:00Z");
+    expect(r.bars.some((b) => Date.parse(b.datetime) >= from && Date.parse(b.datetime) < from + 24 * HOUR)).toBe(false);
+    expect(r.bars.some((b) => Date.parse(b.datetime) >= from + 24 * HOUR)).toBe(true);
     expect(r.bars.some((b) => Date.parse(b.datetime) < Date.parse("2026-09-24T21:00:00Z"))).toBe(true);
   });
 
