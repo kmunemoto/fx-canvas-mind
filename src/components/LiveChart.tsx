@@ -15,6 +15,7 @@ import {
   fetchDow,
   fetchLiveBars,
   fetchLiveHistory,
+  fetchLiveDeepHistory,
   fetchTicks,
   historyBefore,
   intervalsFor,
@@ -55,6 +56,10 @@ const RETRY_MS = 60_000;
 // #129: the Dow reading is asked for this often while it is on (the
 // function reads each timeframe again only once a newer bar has closed)
 const DOW_POLL_MS = 60_000;
+// #176: a deep history read the function stopped short of, asked again
+// after this long, this many times at most in all
+const DEEP_RETRY_MS = 1_500;
+const DEEP_TRIES = 6;
 // a timeframe's length, to tell which are above the chart's
 const DOW_STEP_MS: Record<string, number> = { "5min": 300_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000 };
 
@@ -65,6 +70,8 @@ interface Props {
   // #154: told the pair on screen
   loadTicks?: (pair?: string) => Promise<Record<string, Tick>>;
   loadHistory?: (pair: string, interval: string) => Promise<NumericCandle[]>;
+  // #176: the deep history, for the Zero-lag TEMA
+  loadDeepHistory?: (pair: string, interval: string) => Promise<{ bars: NumericCandle[]; complete: boolean }>;
   loadDow?: (pair: string) => Promise<DowTf[]>;
   // #140: the indicators are a paid feature: without them none is drawn or
   // read (Dow theory's timeframes, the history for Zone Shift and the Pro
@@ -87,6 +94,7 @@ const LiveChart = ({
   loadBars = fetchLiveBars,
   loadTicks = fetchTicks,
   loadHistory = fetchLiveHistory,
+  loadDeepHistory = fetchLiveDeepHistory,
   loadDow = fetchDow,
   indicatorsAllowed = true,
   onLockedIndicator,
@@ -318,6 +326,67 @@ const LiveChart = ({
     );
   }, [historyOn, gmoRead, history, historyKey, pair, interval, loadHistory]);
 
+  // #176: the Zero-lag TEMA's deep history (live-chart's `deep`), read
+  // while it is on, as the history above is; a read the function stopped
+  // short (it keeps what it read, so the next goes on) is asked again
+  // after DEEP_RETRY_MS, DEEP_TRIES times at most. Read again on the next
+  // bar after one that failed or stopped short (`complete` false), and once
+  // the chart has moved past it. The reading under way is called off when
+  // the indicator is turned off, on another pair or timeframe, and when
+  // the chart is left; "loading" is only believed while it goes on.
+  const zltOn = indicatorsAllowed && overlays.zlTema;
+  const [deepHistory, setDeepHistory] = useState<{
+    key: string;
+    readAt: string;
+    bars: NumericCandle[] | null;
+    status: "loading" | "ready" | "error";
+    complete: boolean;
+  } | null>(null);
+  const deepRun = useRef<{ key: string; off: boolean } | null>(null);
+  useEffect(() => () => {
+    if (deepRun.current) deepRun.current.off = true;
+  }, [zltOn, historyKey]);
+  useEffect(() => {
+    if (!zltOn || !gmoRead) return;
+    const h = deepHistory;
+    const live = deepRun.current !== null && !deepRun.current.off && deepRun.current.key === historyKey;
+    const fresh = h && h.key === historyKey && (
+      h.status === "loading"
+        ? live
+        : h.readAt === gmoRead.at || (h.status === "ready" && h.complete && historyBefore(h.bars, gmoRead.candles) !== null)
+    );
+    if (fresh) return;
+    const readAt = gmoRead.at;
+    if (deepRun.current) deepRun.current.off = true;
+    const run = { key: historyKey, off: false };
+    deepRun.current = run;
+    const on = () => !run.off && current.current.pair === pair && current.current.interval === interval;
+    // bars a read that stopped short brought, still joined to the chart:
+    // drawn while they are read again, and kept if that read fails
+    const kept = h?.key === historyKey && historyBefore(h.bars, gmoRead.candles) !== null ? h.bars : null;
+    setDeepHistory({ key: historyKey, readAt, bars: kept, status: "loading", complete: false });
+    void (async () => {
+      let last: { bars: NumericCandle[]; complete: boolean } | null = null;
+      for (let tries = 1; ; tries++) {
+        try {
+          last = await loadDeepHistory(pair, interval);
+        } catch {
+          if (!on()) return;
+          // what an earlier try (or read) brought is shown; nothing at all
+          // is an error
+          const got = last ? last.bars : kept;
+          setDeepHistory({ key: historyKey, readAt, bars: got, status: got ? "ready" : "error", complete: false });
+          return;
+        }
+        if (!on()) return;
+        if (last.complete || tries >= DEEP_TRIES) break;
+        await new Promise((r) => setTimeout(r, DEEP_RETRY_MS));
+        if (!on()) return;
+      }
+      setDeepHistory({ key: historyKey, readAt, bars: last.bars, status: "ready", complete: last.complete });
+    })();
+  }, [zltOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
+
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on
   // screen. A read that fails keeps the last one of the same pair.
@@ -399,6 +468,13 @@ const LiveChart = ({
     if (past) return { bars: past, status: "ready" as const };
     return { bars: null, status: history?.key === historyKey && history.status === "error" ? ("error" as const) : ("loading" as const) };
   }, [gmoRead, firstCandle, history, historyKey]);
+  // #176: the same for the Zero-lag TEMA, from its deep history (bars
+  // kept while a short read is read again are drawn meanwhile)
+  const zltHistory = useMemo(() => {
+    const past = gmoRead && firstCandle && deepHistory?.key === historyKey ? historyBefore(deepHistory.bars, [firstCandle]) : null;
+    if (past && deepHistory?.status !== "error") return { bars: past, status: "ready" as const };
+    return { bars: null, status: deepHistory?.key === historyKey && deepHistory.status === "error" ? ("error" as const) : ("loading" as const) };
+  }, [gmoRead, firstCandle, deepHistory, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
   // #114: the signals of the rule on screen, and the newest of them
   const marks = read ? read.marks.filter((m) => view === "both" || m.rule === view) : [];
@@ -767,6 +843,7 @@ const LiveChart = ({
         signalName={l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
+        deepHistory={zltHistory}
         dow={dowChart}
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}

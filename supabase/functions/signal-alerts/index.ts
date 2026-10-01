@@ -104,7 +104,10 @@ import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outc
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
 
-const FUNCTION_VERSION = "signal-alerts-v13-2026-10-01T05:30:00Z";
+// v14 (#176): the code is v13's; the bars of the pairs read as gold is are
+// read GOLD_BARS (1,400) at once, as the live chart's deep history needs
+// them stored. The signals judge from anchoredStart, so the mails are the same.
+const FUNCTION_VERSION = "signal-alerts-v14-2026-10-01T16:30:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

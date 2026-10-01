@@ -60,6 +60,10 @@ export interface ChartOverlays {
   // #151: the owner's video's ULTRA EN (RSI 14 at 70 and 30, a stop and
   // three targets, and their tally) — on unless switched off
   ultra: boolean;
+  // #176: loxx's Zero-lag TEMA Crosses (a port of its open-source code) —
+  // it paints the candles, and reads deep into the bars before the chart;
+  // off until switched on
+  zlTema: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -83,6 +87,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   maCross: true,
   ichimoku: false,
   ultra: true,
+  zlTema: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

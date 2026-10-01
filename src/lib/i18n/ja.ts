@@ -288,6 +288,8 @@ export const ja = {
       kalman: (atr: number, factor: number) => `SPECTRA型 ${atr} ${factor}`,
       supertrend: (period: number, mult: number) => `SuperTrend ${period} ${mult}`,
       utBot: (key: number, atr: number) => `UT Bot ${key} ${atr}`,
+      // #176
+      zlTema: (fast: number, slow: number) => `Zero-lag TEMA ${fast} ${slow}`,
       fvgProfile: "FVG Crossfire + Volume Profile",
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "ダウ理論",
@@ -417,6 +419,23 @@ export const ja = {
     // #136
     supertrendNote:
       "SuperTrend（KivancOzbilgic が TradingView に公開したコードを移植）: 高値と安値の中間 ± ATR(10)×3 の線。上昇中は下の線（緑）、下降中は上の線（赤）を表示し、線は上昇中は上がるだけ・下降中は下がるだけです。終値が反対側の線を抜けたら向きが変わり、その足の線上に ● と Buy / Sell。線とローソク足の平均値（始値・高値・安値・終値の平均）の間を薄く塗ります。確定足だけで判定し、形成中の足には描きません。作者の説明にあるとおり、横ばいの相場ではうまくいきません。過去の検証はまだしていません（同じ仕組みをカルマンフィルターでならした SPECTRA型は、#120 でランダムに入った場合と差がありませんでした）。表示のみで、サインの判定・メールには使っていません。",
+    // #176
+    zlTemaTitle: (side: "BUY" | "SELL"): string =>
+      side === "BUY" ? "Zero-lag TEMA の L（速い線が遅い線を上に抜けた）" : "Zero-lag TEMA の S（速い線が遅い線を下に抜けた）",
+    zlTemaNote: (before: number | null, status: "loading" | "ready" | "error", settle: number, rough: number) =>
+      "Zero-lag TEMA Crosses（loxx が TradingView に公開したコード〈Pine v5、MPL 2.0〉を移植、既定のまま: 終値、速い22・遅い144）: " +
+      "終値の TEMA（3×(EMA1−EMA2)+EMA3）をもう一度 TEMA にした線を2本引きます。速い線が遅い線より上なら速い線とローソク足を緑、下なら赤にします（ローソク足はほかのインジケーターの色より優先）。遅い線は白（明るい背景では濃い色）。" +
+      "速い線が遅い線を上に抜けた足に L（黄色の▲、足の下）、下に抜けた足に S（赤紫の▼、足の上）。確定した足だけで判定します。" +
+      `遅い線は約${settle.toLocaleString("ja-JP")}本前からの足がないと TradingView の値とずれるため、オンの間は画面より前の足を深く読みます（1時間足などは、最初に開くとき時間がかかります）。EMA の始まりだけは元と違い最初の値から数えます（読める足の中で TradingView の値に早く近づくため）。` +
+      (status === "loading"
+        ? "画面より前の足を読み込み中です（線と印はそのあと描きます）。"
+        : status === "error"
+          ? "画面より前の足を読めなかったため表示していません（次の足で読み直します）。"
+          : before !== null && before < settle
+            ? (before === 0 ? "画面より前の足を1本も読めなかったため" : `画面より前の足が${before.toLocaleString("ja-JP")}本しか読めなかったため`) +
+              `、遅い線と L・S が TradingView と${before < rough ? "大きく" : "少し"}ずれることがあります（約${settle.toLocaleString("ja-JP")}本で同じになります）。`
+            : `画面より前の足: ${(before ?? 0).toLocaleString("ja-JP")}本。`) +
+      "過去の検証はしていません。表示のみで、サインの判定・メール・成績には使っていません。",
     // #137
     utBotNote:
       "UT Bot Alerts（QuantNomad が TradingView に公開したコードを移植。元は Yo_adriiiiaan・HPotter の UT Bot）: 終値から ATR(10)×1 離れたところについてくる損切りの線（トレーリングストップ）を作り、終値がその線を上に抜けた足に Buy（足の下）、下に抜けた足に Sell（足の上）。ローソク足は、終値が線より上なら緑、下なら赤で塗ります（Zone Shift の色より優先）。元のとおり線そのものは描きません。Heikin Ashi の足で判定する設定（元は既定でオフ）は入れていません。確定足だけで判定し、形成中の足は塗りません。過去の検証はしていません。表示のみで、サインの判定・メールには使っていません。",

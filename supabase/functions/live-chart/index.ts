@@ -6,7 +6,10 @@
 //     the pair on screen's read again each time, see "the pairs' prices");
 //   {action: "dow", pair} — #129: Dow theory on 4h, 1h, 15min and 5min;
 //   {action: "history", pair, interval} — #124: HISTORY_BARS closed bars,
-//     for an indicator that needs more than the chart draws (Zone Shift).
+//     for an indicator that needs more than the chart draws (Zone Shift);
+//     #176: with `deep: true`, DEEP_HISTORY_BARS of them, for the Zero-lag
+//     TEMA (logic.ts, "the deep history"), and `complete: false` while the
+//     read stopped short (the client asks again).
 // #127: gold (XAU/USD) reads its bars from Twelve Data and its price from
 // Swissquote (logic.ts, "gold"). #146: every pair on every timeframe, 1 and
 // 5 minutes too; Twelve Data's reads counted per day (logic.ts, "Twelve
@@ -34,6 +37,7 @@ import {
   LIVE_STEP_MS,
   GOLD,
   GOLD_BARS,
+  TWELVE_CHART_BARS,
   GOLD_QUOTE_URL,
   goldFresh,
   twelveRead,
@@ -44,6 +48,10 @@ import {
   swissquoteDue,
   swissquoteUrl,
   HISTORY_BARS,
+  DEEP_HISTORY_BARS,
+  NO_KLINE_FILE,
+  deepDaySpan,
+  fetchDeepQuotes,
   historyOfBars,
   historyRead,
   intervalsFor,
@@ -66,9 +74,10 @@ import {
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
-import type { Fetcher } from "../track-outcomes/quotes.ts";
+import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
+import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
 
-const FUNCTION_VERSION = "live-chart-v11-2026-10-01T05:30:00Z";
+const FUNCTION_VERSION = "live-chart-v12-2026-10-01T14:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -99,18 +108,21 @@ const corsHeaders = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-const gmoFetcher: Fetcher = async (url) => {
+// `missing`: what GMO's 404 gives (#176: NO_KLINE_FILE for the deep history)
+const gmoFetch = (missing: unknown): Fetcher => async (url) => {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(8_000) });
     if (!r.ok) {
       await r.body?.cancel();
-      return null;
+      return r.status === 404 ? missing : null;
     }
     return await r.json().catch(() => null);
   } catch {
     return null;
   }
 };
+const gmoFetcher: Fetcher = gmoFetch(null);
+const gmoDeepFetcher: Fetcher = gmoFetch(NO_KLINE_FILE);
 
 // #153: room for every pair's every timeframe (#154: 37 × 6; #175: 18 × 6,
 // the room left as it was), so a cache is not emptied each time the chart
@@ -136,6 +148,20 @@ const SQ_OTHERS_MS = 60_000;
 const SQ_OTHERS_PER_READ = 3;
 const SQ_KEEP_MS = 3 * 60_000;
 const sqCache = new Map<string, { at: number; readAt: number; tick: Tick | null }>();
+// #176: GMO's ended files for the deep history (logic.ts, "the deep
+// history"): from this instance's memory, else the table the email sweep
+// keeps them in (public.gmo_kline_files, read once an instance for a pair
+// and timeframe), else from GMO, and kept there. A file still being written
+// is always GMO's. Requests to GMO DEEP_GMO_GAP_MS apart from each
+// instance, so up to ten a second (the email sweep's are 200 ms apart;
+// GMO's own limit has not been looked up here). A 429 or another failure
+// stops the read short, and the client asks again.
+const klineMemory = new Map<string, unknown>();
+const KLINE_MEMORY_MAX = 4000;
+const klinePreloaded = new Set<string>();
+const DEEP_GMO_GAP_MS = 100;
+let deepGmoNextAt = 0;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -168,12 +194,13 @@ Deno.serve(async (req: Request) => {
     // v2: whether GMO said it is down for maintenance on any call below.
     // Once it has, the rest of the calls are not made: they would all say so.
     let maintenance = false;
-    const fetcher: Fetcher = async (url) => {
+    const watched = (f: Fetcher): Fetcher => async (url) => {
       if (maintenance) return null;
-      const got = await gmoFetcher(url);
+      const got = await f(url);
       if (isMaintenance(got)) maintenance = true;
       return got;
     };
+    const fetcher = watched(gmoFetcher);
     // v3: the market's reopening, while it may be shut
     const reopens = isPossiblyClosed(nowMs) ? new Date(nextOpen(nowMs)).toISOString() : null;
 
@@ -246,14 +273,18 @@ Deno.serve(async (req: Request) => {
     // #127: gold's bars, from the table while no bar has closed since.
     // #147: bars that could not be read again go on from the prices
     // recorded since they were read. #154: any pair's read as gold is (its
-    // prices recorded in live_tick_bars; gold's in gold_tick_bars)
+    // prices recorded in live_tick_bars; gold's in gold_tick_bars).
+    // #176: GOLD_BARS are read and kept, and the newest `depth` of them are
+    // used: TWELVE_CHART_BARS, all of them for the deep history
     const twelveBars = async (
       pair: string,
       interval: string,
       room = 0,
+      depth = TWELVE_CHART_BARS,
     ): Promise<{ bars: Candle[]; fetchedAt: string; limited?: boolean; ticksFrom?: string | null } | null> => {
       const fresh = (t: number) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs));
-      const fb = await fallbackBars(pair, interval, fresh, GOLD_BARS, room);
+      const read = await fallbackBars(pair, interval, fresh, GOLD_BARS, room);
+      const fb = read && read.bars.length > depth ? { ...read, bars: read.bars.slice(-depth) } : read;
       if (!fb || fresh(Date.parse(fb.fetchedAt))) return fb;
       try {
         const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
@@ -394,12 +425,93 @@ Deno.serve(async (req: Request) => {
       if (!isLivePair(pair) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
         return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
       }
-      // #127: gold's history is the bars it already reads (GOLD_BARS deep);
-      // #154: so is each pair's read as gold is
+      // #176: the deep one (DEEP_HISTORY_BARS), for the Zero-lag TEMA
+      const deep = body?.deep === true;
+      // #127: gold's history is the bars it already reads; #154: so is each
+      // pair's read as gold is. #176: TWELVE_CHART_BARS of them, as before;
+      // the deep one, all GOLD_BARS (one read, the same credit)
       if (isTwelvePair(pair)) {
-        const fb = await twelveBars(pair, interval);
+        const fb = await twelveBars(pair, interval, 0, deep ? GOLD_BARS : TWELVE_CHART_BARS);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
-        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, fb.bars, nowMs, fb.fetchedAt) });
+        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, fb.bars, nowMs, fb.fetchedAt), complete: true });
+      }
+      if (deep) {
+        const key = `${pair}|${interval}|deep`;
+        const hit = historyCache.get(key);
+        if (hit && nowMs - hit.at <= HISTORY_TTL_MS) return json(hit.body);
+        const symbol = GMO_SYMBOLS[pair];
+        const spec = GMO_INTERVALS[interval];
+        // the day files kept, read once an instance (a year's file is
+        // asked for as it is needed, newest first: two on the 4-hour chart;
+        // on the daily, back to where GMO's files end and the empty year
+        // before them, DEEP_YEARS at most)
+        const kept = `${symbol}|${spec.name}`;
+        // A read of the table, or a store to it, that fails is logged and
+        // the read goes on from GMO: the chart is not taken down by its own
+        // bookkeeping. The walk does not wait for the stores; they are
+        // waited for before the answer.
+        if (spec.key === "day" && !klinePreloaded.has(kept)) {
+          try {
+            const since = jstDayKey(nowMs - (deepDaySpan(interval, DEEP_HISTORY_BARS + 1) + 1) * 24 * 60 * 60_000);
+            const res = await rest(
+              `gmo_kline_files?symbol=eq.${encodeURIComponent(symbol)}&interval=eq.${encodeURIComponent(spec.name)}&date_key=gte.${since}&select=price_type,date_key,body`,
+            );
+            const rows = res.ok ? await res.json().catch(() => null) : null;
+            if (Array.isArray(rows)) {
+              for (const r of rows as Array<Record<string, unknown>>) {
+                if (typeof r.price_type !== "string" || typeof r.date_key !== "string" || !keepableKlines(r.body)) continue;
+                if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+                klineMemory.set(klineFileKey({ symbol, priceType: r.price_type, interval: spec.name, date: r.date_key }), r.body);
+              }
+              klinePreloaded.add(kept);
+            } else {
+              console.error("kline preload failed:", res.status);
+            }
+          } catch (err) {
+            console.error("kline preload failed:", err);
+          }
+        }
+        const stores: Array<Promise<void>> = [];
+        const deepFetcher = watched(gmoDeepFetcher);
+        const paced = async (url: string) => {
+          const at = Math.max(Date.now(), deepGmoNextAt);
+          deepGmoNextAt = at + DEEP_GMO_GAP_MS;
+          await sleep(at - Date.now());
+          return deepFetcher(url);
+        };
+        const keptFetcher: Fetcher = async (url) => {
+          const f = klineFileOf(url);
+          if (!f || !klineFileEnded(f.date, nowMs)) return paced(url);
+          const k = klineFileKey(f);
+          if (klineMemory.has(k)) return klineMemory.get(k);
+          const got = await paced(url);
+          if (got !== NO_KLINE_FILE && keepableKlines(got)) {
+            if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+            klineMemory.set(k, got);
+            stores.push(
+              rest("gmo_kline_files?on_conflict=symbol,price_type,interval,date_key", {
+                method: "POST",
+                headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+                body: JSON.stringify({ symbol: f.symbol, price_type: f.priceType, interval: f.interval, date_key: f.date, body: got }),
+              })
+                .then(async (res) => {
+                  if (!res.ok) console.error("kline store failed:", res.status, await res.text().catch(() => ""));
+                })
+                .catch((err) => console.error("kline store failed:", err)),
+            );
+          }
+          return got;
+        };
+        const got = await fetchDeepQuotes(pair, interval, DEEP_HISTORY_BARS + 1, nowMs, Date.now() + FETCH_BUDGET_MS, keptFetcher);
+        await Promise.all(stores);
+        if (!got) return unavailable();
+        const out = { ok: true, version: FUNCTION_VERSION, history: historyRead(pair, interval, got.bars, nowMs), complete: got.complete };
+        // a partial answer is not kept: the next ask goes on reading
+        if (got.complete) {
+          if (historyCache.size > CACHE_KEYS) historyCache.clear();
+          historyCache.set(key, { at: nowMs, body: out });
+        }
+        return json(out);
       }
       const key = `${pair}|${interval}`;
       const hit = historyCache.get(key);

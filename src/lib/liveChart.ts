@@ -357,6 +357,15 @@ export const fetchLiveHistory = async (pair: string, interval: string): Promise<
   return got;
 };
 
+// #176: the deep history, for the Zero-lag TEMA (live-chart's `deep`):
+// `complete` false while the function's read stopped short (asked again)
+export const fetchLiveDeepHistory = async (pair: string, interval: string): Promise<{ bars: NumericCandle[]; complete: boolean }> => {
+  const res = await call({ action: "history", pair, interval, deep: true });
+  const got = normalizeHistory(res.history);
+  if (!got) throw new LiveChartError("bad_response");
+  return { bars: got, complete: res.complete !== false };
+};
+
 // The history joined to the chart's candles: those older than the chart's
 // first, or null when the history ends before the chart begins (it was
 // read too long ago, and a gap would move every average)
