@@ -154,18 +154,27 @@
 //              - the first run (36763362396) stopped here. EUR/USD had 39 and
 //                GBP/USD 37 of 5,455 bars over 5 pips (0.7%). The medians
 //                were 0.07 to 0.11 pips; one bar off, 5.6 to 12.5.
-//              - a second run (36763749912) listed those bars, prices only.
-//                They are whole trading days, or most of one (20:00 to 16:00
-//                UTC), where the four dollar pairs are off by about the same
-//                3 to 8 in 1e-4 of their close: 2023-04-05, 2024-03-27, 2024-12-24,
-//                2025-04-16 and 2025-12-24. That points at USD/JPY, the leg
-//                they share, being out of line with the crosses that day.
+//              - a second run (36763749912) listed those bars, prices only
+//                (the bars where a dollar pair is over 5 pips). Most are
+//                whole trading days (the six bars 20:00 to 16:00 UTC:
+//                2023-04-05, 2024-03-27, 2024-12-24 with its 20:00 bar after,
+//                2025-04-16) where the four dollar pairs are off by about the
+//                same 3.4 to 6.8 in 1e-4 of their close (at a day's 16:00 or
+//                20:00 bar one pair up to 9.1). On 2025-12-24 only its 12:00
+//                and 16:00 bars and the 20:00 after are listed; whether its
+//                other bars were off is not seen. That points at USD/JPY, the
+//                leg they share, being out of line with the crosses (an
+//                inference).
 //              - also days where EUR/USD and GBP/USD, or EUR/USD alone, are
 //                off (2023-04-28, 2024-04-30, 2025-04-30), and single bars at
 //                thin hours (16:00 or 20:00 UTC; 26 and 27 December, 3 July,
 //                Friday evenings).
-//              - none is a slip: the medians are 1/60 to 1/140 of one bar
-//                off's.
+//              - the series as a whole is not one bar off: the medians are
+//                1/60 to 1/140 of one bar off's. The listed bars were not
+//                each checked for a slip; the whole days are taken not to be
+//                one because their offset stays about the same all day (a
+//                slip would change bar by bar with USD/JPY's move), an
+//                inference. The single bars at thin hours are not known.
 //              - so the share over 5 pips is now told, not a gate. The median
 //                and the slip stay gates. Told beside the call: e without the
 //                fires whose meter reads one of those bars (k, k − 1, k − L,
@@ -288,8 +297,9 @@
 //   * the power (the null runs; a pips a trade added to one candidate's e):
 //       - X6: +1, +2, +3 called on 11, 40, 50 of the 50.
 //       - X30: +1, +2, +3 called on 2, 19, 40.
-//       - so an edge of about +2 pips a trade (X6) or +3 (X30) is called
-//         most of the time, and +1 seldom.
+//       - so an edge of about +2 pips a trade (X6) or +3 (X30), in both
+//         halves, is called most of the time; +1 on 11 (X6) and 2 (X30) of
+//         the 50.
 //   * rank:
 //       - L* 6 (δ 1.5, seeds 8 .. 17): called on 10 of 10, X6 picked on 10.
 //         Every pair's e above 0 (+3.03 to +5.74; X6 +4.47; M +1.45, the
@@ -309,9 +319,14 @@
 //       - a fire a bar early: la 4,667 of 6,310.
 //       - the pick taking trades that reach past SPLIT: pk 320 of 22,969.
 //       - following from the bar's open: m, all 121,704.
-//       - the levels taken from the fill: a2, all 5,821.
+//       - the levels taken from the fill: a2, all 5,821. (Run on the program
+//         just before e53ab98, whose own control, without the plant, also
+//         had 30 of the 5,821 differ: the trades without their 30 bars,
+//         compared with no levels. e53ab98 leaves those out: 0 of 5,791.
+//         The plant was not run again on e53ab98.)
 //   * the first 83 runs (the program as of 5276f0e, before the fixes) gave
-//     the same calls and e.
+//     the same calls and e, except that ORIENT was then run on seed 8 (not
+//     7, as written above): EUR/USD's e −5.20 (249 trades), also below 0.
 //
 // THE RESULT (2026-09-30, docs §8.85, run 36764072301 at 55ce46c; the two
 // runs before it stopped at tri, before any trade, as told under tri):
@@ -323,14 +338,19 @@
 //   * the pick X6 (first half t −0.35; X30 −0.49). Its second-half e +0.23
 //     of 1,859 trades in 71 weeks, [−1.32, +1.78] by week, [−1.74, +2.20]
 //     by four weeks: NOT CALLED. Above 610 of the 1,000 placebos' picks.
-//     X30's +0.09 [−1.61, +1.79]. Bonferroni: neither above 0.
+//     X30's +0.09, [−1.61, +1.79] by week, [−1.79, +1.97] by four weeks.
+//     Bonferroni: neither above 0.
 //   * the words fixed above: the meter does not pick the side clearly better
 //     than a coin toss at the same closes (at most about +2.2 pips a trade
-//     better). After the spread its trades lose as the coin does: X6 −1.66
-//     pips a trade (26.8 a week), X30 −1.93; the coin at every close −1.63;
-//     the emails −1.36 (4,742). TP1 first 57.7% and 57.1% (break-even 60%).
-//   * told: e without the fires reading a bar off the triangle, X6 second
-//     half +0.28 (67 fires fewer), about the same. M (the pair's own
+//     better). After the spread, over the whole period (144 weeks), its
+//     trades lose as the coin does: X6 −1.66 pips a trade (3,866 trades,
+//     26.8 a week), X30 −1.93; the coin at every close −1.63; the emails
+//     −1.36 (4,742). TP1 first 57.7% and 57.1% (break-even 60%, the spread
+//     left out). The second half alone: X6 −1.29 [−2.74, +0.16], X30 −1.57
+//     [−3.49, +0.34], the coin −1.59, the emails −1.36 (2,326).
+//   * told: e without the fires reading a bar off the triangle (67 fires
+//     fewer over the whole period; how many in the second half is not
+//     printed): X6 second half +0.28 (whole +0.02), about the same. M (the pair's own
 //     momentum): e +0.10 (L 6) and +0.44 (L 30; its second half +1.08,
 //     [+0.02, +2.14] by week, [−0.08, +2.24] by four weeks, one told line
 //     of many). The rank IC −0.022 (L 6) and −0.002 (L 30), neither away
