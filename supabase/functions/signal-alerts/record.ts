@@ -8,10 +8,11 @@
 // it was made.
 //
 // Every signal on the app's seven pairs (#175: four, the yen pairs; the
-// record counts those only; #177: five, with EUR/USD again) and four alert
-// timeframes is recorded (signal_events), not only the ones somebody
-// follows: at ~50 a month across the pairs the record can say something
-// within a few months, where one pair alone (~7 a month) would take years.
+// record counts those only; #177: five, with EUR/USD again; #178: six, with
+// AUD/USD again) and four alert timeframes is recorded (signal_events), not
+// only the ones somebody follows: at ~50 a month across the pairs the record
+// can say something within a few months, where one pair alone (~7 a month)
+// would take years.
 //
 // HOW A SIGNAL IS SETTLED, fixed before any live result was seen:
 //

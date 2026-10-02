@@ -253,9 +253,10 @@ describe("#155 what the sweep reads, and when", () => {
       expect(indicatorIntervalsFor(p), p).toEqual(twelve ? ["1h", "4h", "1day"] : ["5min", "15min", "1h", "4h", "1day"]);
       expect(isGmoChartPair(p), p).toBe(!twelve);
     }
-    // #175: the yen pairs and gold; #177: and EUR/USD, from GMO
-    expect(SERVER_PAIRS).toHaveLength(19);
+    // #175: the yen pairs and gold; #177: and EUR/USD, #178: and AUD/USD, from GMO
+    expect(SERVER_PAIRS).toHaveLength(20);
     expect(isIndicatorChart("EUR/USD", "5min")).toBe(true);
+    expect(isIndicatorChart("AUD/USD", "5min")).toBe(true);
     expect(isIndicatorChart("USD/JPY", "5min")).toBe(true);
     expect(isIndicatorChart("HKD/JPY", "5min")).toBe(false);
     expect(isIndicatorChart("HKD/JPY", "1h")).toBe(true);
