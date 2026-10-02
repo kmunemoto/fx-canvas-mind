@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   CHART_GMO,
   LIVE_INTERVALS as SERVER_INTERVALS,
@@ -12,6 +13,11 @@ import {
   builtFresh,
   extendWithTicks,
   fetchChartQuotes,
+  gmoFileClosed,
+  twelveBuiltOffset,
+  twelveReadBars,
+  TWELVE_1MIN_BARS,
+  GOLD_BARS,
   fetchLiveQuotes,
   isChartGmoInterval,
   isTwelveServed,
@@ -419,5 +425,85 @@ describe("#181 the client", () => {
     expect(medianGapMs(["2026-10-01 00:00:00", "2026-10-02 00:00:00"])).toBeLessThan(LONG_BAR_MS);
     expect(formatCandleLabel("2026-09-26T21:00:00.000Z", "ja-JP", { long: true })).toBe("2026/09/27");
     expect(formatCandleLabel("2026-09-26T21:00:00.000Z", "ja-JP")).toBe("09/27 06:00");
+  });
+});
+
+describe("#181 after the review", () => {
+  it("Twelve Data's 8-hour bars: made of two whole 4-hour bars on whichever hour Twelve Data's open", () => {
+    const four = (hours: number[]) => hours.map((h, k) => ({ datetime: `2026-11-0${4 + Math.floor(k / 6)} ${String(h).padStart(2, "0")}:00:00`, open: k, high: k + 1, low: k - 1, close: k + 0.5 }));
+    // measured: 01, 05 ... UTC; if they move with daylight saving: 00, 04 ... or 02, 06 ...
+    for (const [grid, offset] of [[1, 5], [0, 8], [2, 6]] as const) {
+      const bars = four([0, 1, 2, 3, 4, 5].map((k) => (grid + 4 * k) % 24));
+      expect(twelveBuiltOffset("8h", bars) / HOUR % 8).toBe(offset % 8);
+      const made = buildCandles(bars, 8 * HOUR, twelveBuiltOffset("8h", bars));
+      // every bar made holds exactly two of them, from its own open
+      for (const m of made) {
+        const open = Date.parse(m.datetime.replace(" ", "T") + "Z");
+        const inside = bars.filter((b) => {
+          const t = Date.parse(b.datetime.replace(" ", "T") + "Z");
+          return t >= open && t < open + 8 * HOUR;
+        });
+        expect(inside.length).toBeLessThanOrEqual(2);
+        expect(Date.parse(inside[0].datetime.replace(" ", "T") + "Z")).toBe(open);
+      }
+    }
+    // 2 hours of hourly bars stay on the odd hours; nothing read, the table's
+    expect(twelveBuiltOffset("2h", [{ datetime: "2026-11-04 07:00:00" }])).toBe(HOUR);
+    expect(twelveBuiltOffset("8h", [])).toBe(5 * HOUR);
+    // and the 8-hour bars are fresh on that grid
+    const now = Date.parse("2026-11-04T09:30:00Z");
+    expect(builtFresh(Date.parse("2026-11-04T08:10:00Z"), now, "8h", false, 8 * HOUR)).toBe(true);
+    expect(builtFresh(Date.parse("2026-11-04T08:10:00Z"), now, "8h", false, 5 * HOUR)).toBe(true);
+    expect(builtFresh(Date.parse("2026-11-04T07:50:00Z"), now, "8h", false, 8 * HOUR)).toBe(false);
+  });
+
+  it("Twelve Data's 1-minute bars are read 3,000 at a time, so 3 and 4 minutes reach past Q-Trend's fixed start", () => {
+    expect(twelveReadBars("1min")).toBe(TWELVE_1MIN_BARS);
+    expect(TWELVE_1MIN_BARS / 4).toBeGreaterThanOrEqual(600 + 120);
+    for (const iv of ["5min", "15min", "1h", "4h", "1day", "1week", "1month"]) expect(twelveReadBars(iv)).toBe(GOLD_BARS);
+    // and the others built: 700 of them at least
+    for (const iv of ["2min", "10min", "30min", "2h", "8h"]) {
+      const from = twelveSourceOf(iv);
+      expect(Math.floor(twelveReadBars(from.base) / from.of)).toBeGreaterThanOrEqual(700);
+    }
+  });
+
+  it("a year of GMO's weeks is kept only once its last week has closed (GMO's 2025 file ends with the week to 2026-01-03)", () => {
+    const body = { status: 0, data: [{ openTime: String(Date.parse("2025-12-27T21:00:00Z")), open: "1", high: "1", low: "1", close: "1" }] };
+    expect(gmoFileClosed("1week", body, Date.parse("2026-01-02T10:00:00Z"))).toBe(false);
+    expect(gmoFileClosed("1week", body, Date.parse("2026-01-03T21:00:00Z"))).toBe(true);
+    expect(gmoFileClosed("1month", body, Date.parse("2026-01-02T10:00:00Z"))).toBe(true);
+    expect(gmoFileClosed("4hour", body, Date.parse("2026-01-02T10:00:00Z"))).toBe(true);
+  });
+
+  it("a GMO read stopped short is none, as the old timeframes' walk: not drawn or kept as if whole", async () => {
+    const NOW = Date.parse("2026-10-01T12:03:30Z");
+    const g = fakeGmo(NOW);
+    // a file not answered partway through the walk
+    let n = 0;
+    const failing = async (url: string) => (++n === 9 ? null : g.fetcher(url));
+    const r = (await fetchChartQuotes("USD/JPY", "2h", 201, NOW, Date.now() + 60_000, failing))!;
+    expect(r.complete).toBe(false);
+    expect(r.bars.length).toBeLessThan(201);
+    expect(await fetchLiveQuotes("USD/JPY", "2h", NOW, Date.now() + 60_000, async (url: string) => (url.includes("20260922") ? null : fakeGmo(NOW).fetcher(url)))).toBeNull();
+    // out of time
+    expect(await fetchLiveQuotes("USD/JPY", "2h", NOW, Date.now() - 1, fakeGmo(NOW).fetcher)).toBeNull();
+  });
+
+  it("the function: Twelve Data is asked only for what it has, the shorter one for a timeframe made of it, fresh on the chart's own grid", () => {
+    const fn = readFileSync("supabase/functions/live-chart/index.ts", "utf8");
+    // the name is checked before the minute's slot and the day's count are taken
+    const guard = fn.indexOf("if (!isTwelveServed(interval)) return stored;");
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(fn.indexOf("fallbackFetches.push(nowMs);"));
+    expect(guard).toBeLessThan(fn.indexOf("await takeTwelveRead(twelveCapFor(interval))"));
+    // the added timeframes read the shorter one (`from.base`), fresh by the chart's own timeframe and grid
+    expect(fn).toContain("const read = await fallbackBars(pair, from.base, fresh, twelveReadBars(from.base), room);");
+    expect(fn).toContain("from.of > 1 ? builtFresh(t, nowMs, interval, shut, twelveBuiltOffset(interval, bars)) : newestBarFresh(t, nowMs, interval, bars, shut);");
+    expect(fn).toContain("buildCandles(fb.bars, LIVE_STEP_MS[interval], twelveBuiltOffset(interval, read.bars))");
+    // while GMO is down, enough of the shorter one to make the chart
+    expect(fn).toContain("bars.length >= FALLBACK_BARS * from.of, FALLBACK_BARS * from.of);");
+    // a GMO read stopped short is none
+    expect(fn).toContain("return got && got.complete ? got.bars : null;");
   });
 });

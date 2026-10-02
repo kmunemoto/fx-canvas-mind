@@ -84,6 +84,9 @@ import {
   builtFresh,
   newestBarFresh,
   buildCandles,
+  twelveBuiltOffset,
+  twelveReadBars,
+  gmoFileClosed,
   type Tick,
 } from "./logic.ts";
 import type { Candle } from "../analyze/indicators.ts";
@@ -176,6 +179,12 @@ const klineMemory = new Map<string, unknown>();
 const KLINE_MEMORY_MAX = 4000;
 // #181: by the earliest day read in (a later read reaching further back reads the table again)
 const klinePreloaded = new Map<string, string>();
+// emptied together: what was read in is read in again from the table, not
+// fetched from GMO file by file
+const clearKlineMemory = () => {
+  klineMemory.clear();
+  klinePreloaded.clear();
+};
 const DEEP_GMO_GAP_MS = 100;
 let deepGmoNextAt = 0;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -327,12 +336,13 @@ Deno.serve(async (req: Request) => {
     const twelveAddedBars = async (pair: string, interval: string, room: number, depth: number): Promise<TwelveBars | null> => {
       const from = twelveSourceOf(interval);
       const shut = isPossiblyClosed(nowMs);
+      // on the grid of the shorter bars as read (twelveBuiltOffset)
       const fresh = (t: number, bars: Candle[]) =>
-        from.of > 1 ? builtFresh(t, nowMs, interval, shut) : newestBarFresh(t, nowMs, interval, bars, shut);
-      const read = await fallbackBars(pair, from.base, fresh, GOLD_BARS, room);
+        from.of > 1 ? builtFresh(t, nowMs, interval, shut, twelveBuiltOffset(interval, bars)) : newestBarFresh(t, nowMs, interval, bars, shut);
+      const read = await fallbackBars(pair, from.base, fresh, twelveReadBars(from.base), room);
       if (!read) return null;
       const fb = fresh(Date.parse(read.fetchedAt), read.bars) ? read : await withTicks(pair, from.base, read);
-      const bars = from.of > 1 ? buildCandles(fb.bars, LIVE_STEP_MS[interval], from.offsetMs) : fb.bars;
+      const bars = from.of > 1 ? buildCandles(fb.bars, LIVE_STEP_MS[interval], twelveBuiltOffset(interval, read.bars)) : fb.bars;
       return { ...fb, bars: bars.length > depth ? bars.slice(-depth) : bars };
     };
     const twelveBars = async (
@@ -343,7 +353,8 @@ Deno.serve(async (req: Request) => {
     ): Promise<TwelveBars | null> => {
       if (isChartGmoInterval(interval)) return twelveAddedBars(pair, interval, room, depth);
       const fresh = (t: number) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs));
-      const read = await fallbackBars(pair, interval, fresh, GOLD_BARS, room);
+      // (#181: the 1-minute bars, more of them: twelveReadBars)
+      const read = await fallbackBars(pair, interval, fresh, twelveReadBars(interval), room);
       const fb = read && read.bars.length > depth ? { ...read, bars: read.bars.slice(-depth) } : read;
       if (!fb || fresh(Date.parse(fb.fetchedAt))) return fb;
       return withTicks(pair, interval, fb);
@@ -352,9 +363,12 @@ Deno.serve(async (req: Request) => {
     // added timeframe made of the shorter one's, as twelveSourceOf says)
     const outageBars = async (pair: string, interval: string) => {
       const from = twelveSourceOf(interval);
-      const fb = await fallbackBars(pair, from.base, undefined, from.of > 1 ? FALLBACK_BARS * from.of : undefined);
-      if (!fb || from.of === 1) return fb;
-      return { ...fb, bars: buildCandles(fb.bars, LIVE_STEP_MS[interval], from.offsetMs) };
+      if (from.of === 1) return fallbackBars(pair, interval);
+      // the shorter one's row is shared with its own chart, which reads
+      // FALLBACK_BARS of them: too few to make as many of the longer ones
+      const fb = await fallbackBars(pair, from.base, (t, bars) => nowMs - t < FALLBACK_TTL_MS && bars.length >= FALLBACK_BARS * from.of, FALLBACK_BARS * from.of);
+      if (!fb) return fb;
+      return { ...fb, bars: buildCandles(fb.bars, LIVE_STEP_MS[interval], twelveBuiltOffset(interval, fb.bars)) };
     };
     // #176: GMO's ended files for the deep history (logic.ts, "the deep
     // history"): from this instance's memory, else the table the email sweep
@@ -386,7 +400,7 @@ Deno.serve(async (req: Request) => {
           if (Array.isArray(rows)) {
             for (const r of rows as Array<Record<string, unknown>>) {
               if (typeof r.price_type !== "string" || typeof r.date_key !== "string" || !keepableKlines(r.body)) continue;
-              if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+              if (klineMemory.size >= KLINE_MEMORY_MAX) clearKlineMemory();
               klineMemory.set(klineFileKey({ symbol, priceType: r.price_type, interval: spec.name, date: r.date_key }), r.body);
             }
             klinePreloaded.set(kept, since);
@@ -411,8 +425,9 @@ Deno.serve(async (req: Request) => {
         const k = klineFileKey(f);
         if (klineMemory.has(k)) return klineMemory.get(k);
         const got = await paced(url);
-        if (got !== NO_KLINE_FILE && keepableKlines(got)) {
-          if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+        // #181: a year of weeks whose last week has not closed is not kept
+        if (got !== NO_KLINE_FILE && keepableKlines(got) && gmoFileClosed(f.interval, got, nowMs)) {
+          if (klineMemory.size >= KLINE_MEMORY_MAX) clearKlineMemory();
           klineMemory.set(k, got);
           stores.push(
             rest("gmo_kline_files?on_conflict=symbol,price_type,interval,date_key", {
@@ -431,12 +446,14 @@ Deno.serve(async (req: Request) => {
       return { fetcher, stored: async () => void (await Promise.all(stores)) };
     };
     // #181: an added timeframe's bars from GMO (logic.ts fetchChartQuotes),
-    // `count` of them at most, through the files kept
+    // `count` of them at most, through the files kept. A read stopped short
+    // (the time allowed, a file not answered) is none, as the old
+    // timeframes' walk gives none: not drawn or kept as if it were whole.
     const chartQuotes = async (pair: string, interval: string, count: number) => {
       const reader = await keptReader(pair, interval, count);
       const got = await fetchChartQuotes(pair, interval, count, nowMs, Date.now() + FETCH_BUDGET_MS, reader.fetcher);
       await reader.stored();
-      return got ? got.bars : null;
+      return got && got.complete ? got.bars : null;
     };
     const unavailable = () =>
       maintenance

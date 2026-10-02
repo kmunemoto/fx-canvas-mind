@@ -184,6 +184,33 @@ export const TWELVE_BUILT: Record<string, BuiltFrom> = {
 // shorter ones it is made of
 export const twelveSourceOf = (interval: string): BuiltFrom => TWELVE_BUILT[interval] ?? { base: interval, of: 1, offsetMs: 0 };
 
+// The grid a built timeframe's bars are made on, moved to where the shorter
+// bars read actually open (the newest of them): Twelve Data's 4-hour bars
+// were measured opening at 01, 05 ... UTC in Sydney's winter and New York's
+// summer, and whether they move with daylight saving is not known (gold's
+// research, research/gold.ts). Two of them make an 8-hour bar whichever hour
+// they open on, and a bar is never made of parts of two. TWELVE_BUILT's
+// offset where the bars say nothing.
+export const twelveBuiltOffset = (interval: string, bars: ReadonlyArray<{ datetime: string }>): number => {
+  const from = TWELVE_BUILT[interval];
+  if (!from) return 0;
+  const baseLen = LIVE_STEP_MS[from.base];
+  const last = bars[bars.length - 1];
+  const t = last ? barOpenMs(last.datetime) : Number.NaN;
+  if (baseLen === undefined || !Number.isFinite(t)) return from.offsetMs;
+  const phase = ((t % baseLen) + baseLen) % baseLen;
+  return from.offsetMs + ((((phase - from.offsetMs) % baseLen) + baseLen) % baseLen);
+};
+
+// How many bars a read of a timeframe asks Twelve Data for. A read costs one
+// credit whatever the number (§8.87), so the 1-minute one reads enough for
+// the 3- and 4-minute charts made of it to reach back past the fixed start
+// of Q-Trend and ULTRA (ANCHOR_WINDOW, 600 bars, and the chart's 120): 3,000
+// one-minute bars are 750 four-minute ones. The chart's own reads of the
+// 1-minute bars use the newest TWELVE_CHART_BARS of them, as before.
+export const TWELVE_1MIN_BARS = 3000;
+export const twelveReadBars = (interval: string): number => (interval === "1min" ? TWELVE_1MIN_BARS : GOLD_BARS);
+
 // The open of the bar of length `lenMs` an instant falls in, on the grid
 // `offsetMs` from the epoch's
 export const bucketOpenMs = (ms: number, lenMs: number, offsetMs: number): number =>
@@ -301,12 +328,19 @@ export const goldFresh = (fetchedAtMs: number, nowMs: number, interval: string, 
 // #181: the stored bars a longer timeframe is made of (TWELVE_BUILT) are
 // fresh while none of its own bars has closed since they were read, on its
 // own grid; while the market may be shut, as goldFresh
-export const builtFresh = (fetchedAtMs: number, nowMs: number, interval: string, marketShut: boolean): boolean => {
+export const builtFresh = (
+  fetchedAtMs: number,
+  nowMs: number,
+  interval: string,
+  marketShut: boolean,
+  // the grid the bars are made on (twelveBuiltOffset)
+  offsetMs: number = TWELVE_BUILT[interval]?.offsetMs ?? 0,
+): boolean => {
   const len = LIVE_STEP_MS[interval];
   const from = TWELVE_BUILT[interval];
   if (!Number.isFinite(fetchedAtMs) || len === undefined || !from) return false;
   if (marketShut) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
-  return fetchedAtMs >= bucketOpenMs(nowMs, len, from.offsetMs);
+  return fetchedAtMs >= bucketOpenMs(nowMs, len, offsetMs);
 };
 
 // #181: Twelve Data's weeks and months, stamped as it stamps them (which day
@@ -548,10 +582,11 @@ export const fetchLiveQuotes = async (
   fetcher: Fetcher,
   count: number = READ_BARS + 1,
 ): Promise<QuoteCandle[] | null> => {
-  // #181: the timeframes read the new way (CHART_GMO), that way
+  // #181: the timeframes read the new way (CHART_GMO), that way — and as
+  // the old way's walk does, a read stopped short is none
   if (isChartGmoInterval(interval)) {
     const got = await fetchChartQuotes(pair, interval, count, nowMs, deadlineMs, fetcher);
-    return got ? got.bars : null;
+    return got && got.complete ? got.bars : null;
   }
   const spec = GMO_INTERVALS[interval];
   if (!spec || !isLivePair(pair) || !isLiveInterval(interval)) return null;
@@ -862,6 +897,19 @@ export const fetchDeepQuotes = async (
     if (merged().length >= count) return answer(true);
   }
   return answer(true);
+};
+
+// #181: whether a GMO file read for an added timeframe may be kept as
+// ended (keptReader). A year's file is taken as ended on 2 January
+// (klineFileEnded), but a file of weeks may end with a week that runs into
+// the next year: GMO files a week under the year of its JST Sunday (its 2025
+// file's last week opens 2025-12-27 21:00 UTC and runs to 2026-01-03), so it
+// is kept only once that week has closed.
+export const gmoFileClosed = (gmoInterval: string, body: unknown, nowMs: number): boolean => {
+  if (gmoInterval !== "1week") return true;
+  const rows = parseKlines(body);
+  const last = rows[rows.length - 1];
+  return !last || last.t + 7 * DAY <= nowMs;
 };
 
 // #181: the days of GMO's day files a read of `count` bars of a CHART_GMO
