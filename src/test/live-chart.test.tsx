@@ -119,8 +119,10 @@ describe("#146 the 5-minute chart for every pair", () => {
   const NOW = Date.parse("2026-09-24T05:02:00Z");
 
   it("is offered beside the others, in order", () => {
-    expect(LIVE_INTERVALS).toEqual(["1min", "5min", "15min", "1h", "4h", "1day"]);
+    // #181: the broker's 15 bar timeframes, in its menu's order
+    expect(LIVE_INTERVALS).toEqual(["1min", "2min", "3min", "4min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "8h", "1day", "1week", "1month"]);
     expect(isLiveInterval("5min")).toBe(true);
+    expect(isLiveInterval("tick")).toBe(false);
   });
 
   it("reads GMO's 5-minute bars for the chart and for the history", async () => {
@@ -308,9 +310,12 @@ describe("#113 the live chart card", () => {
     await waitFor(() => expect(screen.getByTestId("live-closed").textContent).toContain("市場休止中"));
     fireEvent.click(screen.getByTestId("live-interval-1min"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/JPY", "1min"));
-    // #146: and the 5-minute chart, between the 1- and 15-minute ones
+    // #146: and the 5-minute chart, between the 1- and 15-minute ones;
+    // #181: the broker's 15, in its menu's order
     const tfs = screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-interval-"));
-    expect(tfs).toEqual(["1min", "5min", "15min", "1h", "4h", "1day"].map((tf) => `live-interval-${tf}`));
+    expect(tfs).toEqual(["1min", "2min", "3min", "4min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "8h", "1day", "1week", "1month"].map((tf) => `live-interval-${tf}`));
+    expect(screen.getByTestId("live-interval-1week").textContent).toBe("週足");
+    expect(screen.getByTestId("live-interval-1month").textContent).toBe("月足");
     fireEvent.click(screen.getByTestId("live-interval-5min"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("EUR/JPY", "5min"));
   });

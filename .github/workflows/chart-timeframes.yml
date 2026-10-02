@@ -1,0 +1,30 @@
+# #181: the live chart's added timeframes on GMO's own files
+# (research/chart-timeframes.ts, docs §8.92): the chart's own read of each,
+# and the bars it makes of shorter ones against GMO's own longer bars.
+#
+# Read-only: GMO's public klines; prints to the job log, writes nothing to the
+# repository and holds no secret. Runs on GitHub's runners because they can
+# reach GMO and the development container cannot.
+name: Research chart timeframes
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/chart-timeframes.ts
+      - .github/workflows/chart-timeframes.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Read GMO's files as the chart does
+        run: deno run --allow-net=forex-api.coin.z.com research/chart-timeframes.ts

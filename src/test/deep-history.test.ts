@@ -168,15 +168,19 @@ describe("#176 the deep history (live-chart/logic.ts fetchDeepQuotes)", () => {
     expect(fn).toContain("const gmoFetcher: Fetcher = gmoFetch(null);");
     expect(fn).toContain("const gmoDeepFetcher: Fetcher = gmoFetch(NO_KLINE_FILE);");
     expect(fn).toContain("const deepFetcher = watched(gmoDeepFetcher);");
-    expect(fn).toContain("if (got !== NO_KLINE_FILE && keepableKlines(got)) {");
+    // (#181: and a year of weeks only once its last week has closed)
+    expect(fn).toContain("if (got !== NO_KLINE_FILE && keepableKlines(got) && gmoFileClosed(f.interval, got, nowMs)) {");
     // a failed read of the table or store to it is logged, not thrown; the
     // stores are waited for after the walk, before the answer
     expect(fn).toContain('console.error("kline preload failed:", err);');
     expect(fn).toContain('.catch((err) => console.error("kline store failed:", err)),');
-    expect(fn).toMatch(/const got = await fetchDeepQuotes\([^\n]+\);\n\s*await Promise\.all\(stores\);/);
+    // (#181: in keptReader, which the added timeframes' reads use too)
+    expect(fn).toMatch(/const got = await fetchDeepQuotes\([^\n]+reader\.fetcher\);\n\s*await reader\.stored\(\);/);
+    expect(fn).toContain("return { fetcher, stored: async () => void (await Promise.all(stores)) };");
     // the pairs read as gold is: every read but the deep one uses the newest
     // TWELVE_CHART_BARS (the Dow reading's and the chart's bars by default)
-    expect(fn).toContain("const read = await fallbackBars(pair, interval, fresh, GOLD_BARS, room);");
+    // (#181: the 1-minute ones 3,000 of them, twelveReadBars; the others GOLD_BARS)
+    expect(fn).toContain("const read = await fallbackBars(pair, interval, fresh, twelveReadBars(interval), room);");
     expect(fn).toContain("const fb = read && read.bars.length > depth ? { ...read, bars: read.bars.slice(-depth) } : read;");
     expect(fn).toContain("const fb = await twelveBars(pair, interval, 0, deep ? GOLD_BARS : TWELVE_CHART_BARS);");
     expect(fn.match(/twelveBars\(pair, (interval|tf)(, DOW_ROOM)?\)/g)).toEqual(["twelveBars(pair, interval)", "twelveBars(pair, tf, DOW_ROOM)"]);

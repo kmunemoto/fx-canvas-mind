@@ -114,7 +114,11 @@ import type { Candle } from "../analyze/indicators.ts";
 // v17 (#180): USD/CAD again, for Q-Trend and ULTRA (the live chart's pairs),
 // read from Twelve Data as before #175: 1-hour to daily only. Not for RSI +
 // SAR and the GA-style rule, which read GMO's bars (as before #175).
-const FUNCTION_VERSION = "signal-alerts-v17-2026-10-02T09:00:00Z";
+// v18 (#181): the version only. The live chart's 15 timeframes are in the
+// live-chart logic this reads (LIVE_STEP_MS, barEndMs); the emails' own
+// lists (ALERT_INTERVALS, INDICATOR_INTERVALS) are as they were, and for
+// their timeframes every bar closes where it did.
+const FUNCTION_VERSION = "signal-alerts-v18-2026-10-02T14:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

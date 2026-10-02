@@ -62,20 +62,200 @@ export const LIVE_PAIRS = [
   "XAU/USD",
 ] as const;
 // #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、
-// 全てのペアに」)
-export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"] as const;
+// 全てのペアに」). #181: the broker's (楽天FX) bar timeframes, in its menu's
+// order (「足の種類、これだけ追加して」, with its menu: 1・2・3・4・5・10・
+// 15・30分足, 1・2・4・8時間足, 日足, 週足, 月足 and TICK, docs §8.92) — TICK
+// is not a bar of a fixed length and is not one of these. The emails keep
+// their own lists (signal-alerts INDICATOR_INTERVALS, ALERT_INTERVALS).
+export const LIVE_INTERVALS = [
+  "1min", "2min", "3min", "4min", "5min", "10min", "15min", "30min",
+  "1h", "2h", "4h", "8h", "1day", "1week", "1month",
+] as const;
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
 export const LIVE_STEP_MS: Record<string, number> = {
   "1min": MIN,
+  "2min": 2 * MIN,
+  "3min": 3 * MIN,
+  "4min": 4 * MIN,
   // #129: read for the Dow theory panel; #146: charted too
   "5min": 5 * MIN,
+  "10min": 10 * MIN,
   "15min": 15 * MIN,
+  "30min": 30 * MIN,
   "1h": HOUR,
+  "2h": 2 * HOUR,
   "4h": 4 * HOUR,
-  "1day": 24 * HOUR,
+  "8h": 8 * HOUR,
+  "1day": DAY,
+  "1week": 7 * DAY,
+  // #181: a month is not one length. This is the longest, for the questions
+  // a length answers whichever month it is (a bar this long always holds
+  // trading hours: market-hours barFullyClosed); when a month's bar closes
+  // is barEndMs's.
+  "1month": 31 * DAY,
 };
+
+// #181: when a bar that opened at `openMs` closes: its open and its length,
+// and for a month's bar the next month's open at the same time of day — GMO
+// stamps a month at 06:00 JST on its first day (21:00 UTC the day before,
+// measured 2026-10-02: USD_JPY 1month 2026 opens 2025-12-31T21:00Z,
+// 2026-01-31T21:00Z, ..., 2026-09-30T21:00Z), Twelve Data on the 1st, read
+// as 00:00 UTC (docs §8, the weekend bars: 「本番の月足は 1 日始まり」).
+// NaN for a timeframe the chart does not have.
+export const barEndMs = (interval: string, openMs: number): number => {
+  if (!Number.isFinite(openMs)) return Number.NaN;
+  if (interval === "1month") {
+    // the month the bar is of: GMO's open is 3 hours before the 1st (UTC)
+    const d = new Date(openMs + 12 * HOUR);
+    const start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) + (openMs - start);
+  }
+  const step = LIVE_STEP_MS[interval];
+  return step === undefined ? Number.NaN : openMs + step;
+};
+
+// ---- #181: the timeframes the feeds do not serve as they are ------------------------------
+//
+// GMO's files (read 2026-10-02 from GitHub's runners, USD_JPY BID; docs
+// §8.92): 10min and 30min are day files (YYYYMMDD) on GMO's 06:00 JST day,
+// 8hour, 1week and 1month year files (YYYY); 2min, 3min, 4min and 2hour it
+// answers 404. Its 8-hour bars open at 0, 8 and 16 UTC, as its 4-hour ones at
+// 0, 4, 8 ... UTC (a week's opening hours are in the Sunday 16:00 / 20:00 UTC
+// bar), its weeks at 21:00 UTC on Saturday (06:00 JST Sunday), its months at
+// 06:00 JST on the 1st. So 2min, 3min and 4min are made of its 1-minute bars,
+// and 2h of its hourly ones on the even UTC hours, the grid its 4- and 8-hour
+// bars are on. GMO's old timeframes are read as they always were
+// (GMO_INTERVALS, fetchLiveQuotes); only these go the way below.
+//
+// Twelve Data (the 7 symbols GMO does not serve): its 1min, 5min, 15min, 1h,
+// 4h and 1day are read as before, and 1week and 1month as they are (the
+// analysis asked it for both). The rest are made of the bars read and kept
+// for a shorter timeframe (its row in live_chart_fallback, read again when a
+// bar of the longer one has closed since), so a read for them is that
+// timeframe's read and counts against its daily cap (TWELVE_CAPS): 2, 3 and 4 minutes
+// of 1-minute bars, 10 minutes of 5-minute bars, 30 minutes of 15-minute
+// bars, 2 hours of hourly bars on the odd UTC hours and 8 hours of its 4-hour
+// bars from 21:00 UTC — the grid its 4-hour bars are on (01, 05, 09 ... UTC,
+// measured on the stored bars, docs §8.67).
+export interface BuiltFrom {
+  // the timeframe read, in the app's spelling
+  base: string;
+  // how many of its bars make one; 1: read as it is
+  of: number;
+  // the grid's offset from the UTC epoch's (whole hours of the day)
+  offsetMs: number;
+}
+export interface ChartGmoSpec extends BuiltFrom {
+  // GMO's own name for the file read, and how it is keyed
+  name: string;
+  key: "day" | "year";
+}
+export const CHART_GMO: Record<string, ChartGmoSpec> = {
+  "2min": { name: "1min", key: "day", base: "1min", of: 2, offsetMs: 0 },
+  "3min": { name: "1min", key: "day", base: "1min", of: 3, offsetMs: 0 },
+  "4min": { name: "1min", key: "day", base: "1min", of: 4, offsetMs: 0 },
+  "10min": { name: "10min", key: "day", base: "10min", of: 1, offsetMs: 0 },
+  "30min": { name: "30min", key: "day", base: "30min", of: 1, offsetMs: 0 },
+  "2h": { name: "1hour", key: "day", base: "1h", of: 2, offsetMs: 0 },
+  "8h": { name: "8hour", key: "year", base: "8h", of: 1, offsetMs: 0 },
+  "1week": { name: "1week", key: "year", base: "1week", of: 1, offsetMs: 0 },
+  "1month": { name: "1month", key: "year", base: "1month", of: 1, offsetMs: 0 },
+};
+export const isChartGmoInterval = (interval: string): boolean => CHART_GMO[interval] !== undefined;
+
+// The timeframes Twelve Data is asked for, by their names there. Nothing
+// else is ever sent to it: a name it does not know would still take the
+// day's read and bring no bars.
+export const TWELVE_SERVED = ["1min", "5min", "15min", "1h", "4h", "1day", "1week", "1month"] as const;
+export const isTwelveServed = (interval: string): boolean => (TWELVE_SERVED as readonly string[]).includes(interval);
+export const TWELVE_BUILT: Record<string, BuiltFrom> = {
+  "2min": { base: "1min", of: 2, offsetMs: 0 },
+  "3min": { base: "1min", of: 3, offsetMs: 0 },
+  "4min": { base: "1min", of: 4, offsetMs: 0 },
+  "10min": { base: "5min", of: 2, offsetMs: 0 },
+  "30min": { base: "15min", of: 2, offsetMs: 0 },
+  "2h": { base: "1h", of: 2, offsetMs: HOUR },
+  "8h": { base: "4h", of: 2, offsetMs: 5 * HOUR },
+};
+// What is read from Twelve Data for a timeframe: its own bars, or the
+// shorter ones it is made of
+export const twelveSourceOf = (interval: string): BuiltFrom => TWELVE_BUILT[interval] ?? { base: interval, of: 1, offsetMs: 0 };
+
+// The grid a built timeframe's bars are made on, moved to where the shorter
+// bars read actually open (the newest of them): Twelve Data's 4-hour bars
+// were measured opening at 01, 05 ... UTC in Sydney's winter and New York's
+// summer, and whether they move with daylight saving is not known (gold's
+// research, research/gold.ts). Two of them make an 8-hour bar whichever hour
+// they open on, and a bar is never made of parts of two. TWELVE_BUILT's
+// offset where the bars say nothing.
+export const twelveBuiltOffset = (interval: string, bars: ReadonlyArray<{ datetime: string }>): number => {
+  const from = TWELVE_BUILT[interval];
+  if (!from) return 0;
+  const baseLen = LIVE_STEP_MS[from.base];
+  const last = bars[bars.length - 1];
+  const t = last ? barOpenMs(last.datetime) : Number.NaN;
+  if (baseLen === undefined || !Number.isFinite(t)) return from.offsetMs;
+  const phase = ((t % baseLen) + baseLen) % baseLen;
+  return from.offsetMs + ((((phase - from.offsetMs) % baseLen) + baseLen) % baseLen);
+};
+
+// How many bars a read of a timeframe asks Twelve Data for. A read costs one
+// credit whatever the number (§8.87), so the 1-minute one reads enough for
+// the 3- and 4-minute charts made of it to reach back past the fixed start
+// of Q-Trend and ULTRA (ANCHOR_WINDOW, 600 bars, and the chart's 120): 3,000
+// one-minute bars are 750 four-minute ones. The chart's own reads of the
+// 1-minute bars use the newest TWELVE_CHART_BARS of them, as before.
+export const TWELVE_1MIN_BARS = 3000;
+export const twelveReadBars = (interval: string): number => (interval === "1min" ? TWELVE_1MIN_BARS : GOLD_BARS);
+
+// The open of the bar of length `lenMs` an instant falls in, on the grid
+// `offsetMs` from the epoch's
+export const bucketOpenMs = (ms: number, lenMs: number, offsetMs: number): number =>
+  Math.floor((ms - offsetMs) / lenMs) * lenMs + offsetMs;
+
+// Bars of `lenMs` made of shorter ones, oldest first: each the first one's
+// open, the highest high, the lowest low and the last one's close, stamped
+// with its own open by `stampOf`. The first is left out: the bars read may
+// begin partway into it, and a bar short of its start would be drawn as
+// whole. A bar that has a gap (no shorter bar while the market was shut, or
+// none was traded) is made of those there are.
+const buildBars = <T>(
+  items: readonly T[],
+  timeOf: (x: T) => number,
+  lenMs: number,
+  offsetMs: number,
+  make: (group: T[], openMs: number) => T,
+): T[] => {
+  const groups: Array<{ open: number; items: T[] }> = [];
+  for (const x of items) {
+    const t = timeOf(x);
+    if (!Number.isFinite(t)) continue;
+    const open = bucketOpenMs(t, lenMs, offsetMs);
+    const last = groups[groups.length - 1];
+    if (last && last.open === open) last.items.push(x);
+    else groups.push({ open, items: [x] });
+  }
+  return groups.slice(1).map((g) => make(g.items, g.open));
+};
+const joined = (group: Candle[], datetime: string): Candle => ({
+  datetime,
+  open: group[0].open,
+  high: Math.max(...group.map((c) => c.high)),
+  low: Math.min(...group.map((c) => c.low)),
+  close: group[group.length - 1].close,
+});
+// Twelve Data's candles ("YYYY-MM-DD HH:mm:ss", UTC), as they are stamped
+export const buildCandles = (bars: readonly Candle[], lenMs: number, offsetMs: number): Candle[] =>
+  buildBars(bars, (c) => barOpenMs(c.datetime), lenMs, offsetMs, (g, open) => joined(g, utcStamp(open)));
+// GMO's bid and ask bars (ISO, as parseKlines stamps them), each side alike
+export const buildQuotes = (bars: readonly QuoteCandle[], lenMs: number, offsetMs: number): QuoteCandle[] =>
+  buildBars(bars, (q) => Date.parse(q.datetime), lenMs, offsetMs, (g, open) => {
+    const at = new Date(open).toISOString();
+    return { datetime: at, bid: joined(g.map((q) => q.bid), at), ask: joined(g.map((q) => q.ask), at) };
+  });
 
 // Closed bars read (the alerts read the same number) and bars drawn
 export const READ_BARS = 200;
@@ -144,6 +324,51 @@ export const goldFresh = (fetchedAtMs: number, nowMs: number, interval: string, 
   if (marketShut) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
   return fetchedAtMs >= Math.floor(nowMs / step) * step;
 };
+
+// #181: the stored bars a longer timeframe is made of (TWELVE_BUILT) are
+// fresh while none of its own bars has closed since they were read, on its
+// own grid; while the market may be shut, as goldFresh
+export const builtFresh = (
+  fetchedAtMs: number,
+  nowMs: number,
+  interval: string,
+  marketShut: boolean,
+  // the grid the bars are made on (twelveBuiltOffset)
+  offsetMs: number = TWELVE_BUILT[interval]?.offsetMs ?? 0,
+): boolean => {
+  const len = LIVE_STEP_MS[interval];
+  const from = TWELVE_BUILT[interval];
+  if (!Number.isFinite(fetchedAtMs) || len === undefined || !from) return false;
+  if (marketShut) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
+  return fetchedAtMs >= bucketOpenMs(nowMs, len, offsetMs);
+};
+
+// #181: Twelve Data's weeks and months, stamped as it stamps them (which day
+// its weeks are stamped on has not been seen here), go by the newest bar
+// read: while it is forming, they are read again once a UTC day (it moves
+// all week, all month); once it has closed since, at once; read when it had
+// already closed (the next not listed yet), again after FALLBACK_TTL_MS.
+// While the market may be shut, as goldFresh.
+export const newestBarFresh = (
+  fetchedAtMs: number,
+  nowMs: number,
+  interval: string,
+  bars: readonly Candle[],
+  marketShut: boolean,
+): boolean => {
+  if (!Number.isFinite(fetchedAtMs) || bars.length === 0) return false;
+  if (marketShut) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
+  const end = barEndMs(interval, barOpenMs(bars[bars.length - 1].datetime));
+  if (!Number.isFinite(end)) return false;
+  if (end <= fetchedAtMs) return nowMs - fetchedAtMs < FALLBACK_TTL_MS;
+  if (end <= nowMs) return false;
+  return fetchedAtMs >= Math.floor(nowMs / DAY) * DAY;
+};
+
+// #181: the fewest of a timeframe's bars Twelve Data's answer must have to be
+// kept: a month's or a week's chart may have fewer than the others' 60 (an
+// answer not kept is asked for again on the next read, a read each time)
+export const twelveMinBars = (interval: string): number => (interval === "1week" || interval === "1month" ? 12 : 60);
 
 // Swissquote's public quote for a pair ("XAU/USD" -> .../instrument/XAU/USD)
 export const swissquoteUrl = (pair: string): string =>
@@ -312,8 +537,14 @@ export const extendWithTicks = (
   // the minute the bars were read in, and those after it
   const since = minutes.filter((m) => Date.parse(m.minute) + MIN > readMs && Date.parse(m.minute) >= lastOpen);
   if (since.length === 0) return same;
-  const bucketOf = (ms: number) => lastOpen + Math.floor((ms - lastOpen) / step) * step;
-  const partial = lastOpen + step > readMs ? bars[bars.length - 1] : null;
+  // #181: a month's bars by the calendar (barEndMs), the others by their length
+  const bucketOf = (ms: number) => {
+    if (interval !== "1month") return lastOpen + Math.floor((ms - lastOpen) / step) * step;
+    let open = lastOpen;
+    while (barEndMs(interval, open) <= ms) open = barEndMs(interval, open);
+    return open;
+  };
+  const partial = barEndMs(interval, lastOpen) > readMs ? bars[bars.length - 1] : null;
   const kept = partial ? bars.slice(0, -1) : bars;
   const made = new Map<number, Candle>();
   if (partial) made.set(lastOpen, { ...partial });
@@ -351,6 +582,12 @@ export const fetchLiveQuotes = async (
   fetcher: Fetcher,
   count: number = READ_BARS + 1,
 ): Promise<QuoteCandle[] | null> => {
+  // #181: the timeframes read the new way (CHART_GMO), that way — and as
+  // the old way's walk does, a read stopped short is none
+  if (isChartGmoInterval(interval)) {
+    const got = await fetchChartQuotes(pair, interval, count, nowMs, deadlineMs, fetcher);
+    return got && got.complete ? got.bars : null;
+  }
   const spec = GMO_INTERVALS[interval];
   if (!spec || !isLivePair(pair) || !isLiveInterval(interval)) return null;
   if (spec.key === "day") {
@@ -362,13 +599,14 @@ export const fetchLiveQuotes = async (
 
 // The closed bars (mid) and the one still forming, if the feed has it
 export const splitBars = (quotes: QuoteCandle[], interval: string, nowMs: number) => {
-  const step = LIVE_STEP_MS[interval];
   const closed: QuoteCandle[] = [];
   let forming: QuoteCandle | null = null;
   for (const q of quotes) {
     const t = Date.parse(q.datetime);
-    if (!Number.isFinite(t) || step === undefined) continue;
-    if (t + step <= nowMs) closed.push(q);
+    // #181: its close by barEndMs (a month's by the calendar)
+    const end = barEndMs(interval, t);
+    if (!Number.isFinite(end)) continue;
+    if (end <= nowMs) closed.push(q);
     else if (t <= nowMs) forming = q;
   }
   return { closed: closed.map(midCandle), forming: forming ? midCandle(forming) : null, formingQuote: forming };
@@ -413,7 +651,6 @@ export const readBars = (
   from: ReadSource,
 ) => {
   const d = decimalsOf(pair);
-  const step = LIVE_STEP_MS[interval];
   const rs = readRsiSar(closed);
   const ga = readGainz(closed);
   const drawn = chartRsiSar(rs, CHART_BARS, d);
@@ -433,10 +670,12 @@ export const readBars = (
       .sort((a, b) => (a.datetime < b.datetime ? -1 : a.datetime > b.datetime ? 1 : 0));
   const lastClosed = closed[closed.length - 1] ?? null;
   const lastOpen = lastClosed ? barOpenMs(lastClosed.datetime) : Number.NaN;
-  // when the bar now forming closes: the client asks again then
+  // when the bar now forming closes: the client asks again then (#181: by
+  // barEndMs, a month's by the calendar)
+  const formingOpen = forming ? barOpenMs(forming.datetime) : Number.NaN;
   const nextCloseMs = forming
-    ? barOpenMs(forming.datetime) + step
-    : Number.isFinite(lastOpen) ? lastOpen + 2 * step : null;
+    ? barEndMs(interval, formingOpen)
+    : Number.isFinite(lastOpen) ? barEndMs(interval, barEndMs(interval, lastOpen)) : null;
   const newest = (rule: string) => {
     const own = marks.filter((m) => m.rule === rule);
     return own.length > 0 ? own[own.length - 1] : null;
@@ -462,6 +701,9 @@ export const readBars = (
     latest: { rsi_sar: newest("rsi_sar"), gainz: newest("gainz") },
     spread: round(spreadNow, d),
     next_close: nextCloseMs !== null && Number.isFinite(nextCloseMs) ? new Date(nextCloseMs).toISOString() : null,
+    // #181: the forming bar's open, so the client need not work it back
+    // from next_close (a month is not one length)
+    forming_open: Number.isFinite(formingOpen) ? new Date(formingOpen).toISOString() : null,
     at: new Date(nowMs).toISOString(),
     source: from.source,
     feed: from.feed,
@@ -529,16 +771,20 @@ export const dowOf = (pair: string, tf: string, closed: Candle[]) => {
 // #146: a stored bar that was still forming when the bars were read is not
 // a closed bar once its time is up: what was read of it stops where the
 // read did. Until the bars are read again it is left out.
-const closedBy = (openMs: number, step: number, nowMs: number, fetchedAt: string | null): boolean => {
+// #181: by the bar's close (barEndMs), not its open and a length
+const closedBy = (endMs: number, nowMs: number, fetchedAt: string | null): boolean => {
   const read = fetchedAt === null ? Number.NaN : Date.parse(fetchedAt);
-  return openMs + step <= nowMs && !(Number.isFinite(read) && openMs + step > read);
+  return endMs <= nowMs && !(Number.isFinite(read) && endMs > read);
 };
 
-// The closed bars of a read (mid candles), the forming one left out
-export const closedOf = (bars: Candle[], tf: string, nowMs: number, fetchedAt: string | null = null): Candle[] => {
-  const step = LIVE_STEP_MS[tf] ?? 0;
-  return bars.filter((c) => closedBy(barOpenMs(c.datetime), step, nowMs, fetchedAt));
-};
+// The closed bars of a read (mid candles), the forming one left out (a
+// timeframe without a length: each bar taken as closed at its open, as before)
+export const closedOf = (bars: Candle[], tf: string, nowMs: number, fetchedAt: string | null = null): Candle[] =>
+  bars.filter((c) => {
+    const open = barOpenMs(c.datetime);
+    const end = barEndMs(tf, open);
+    return closedBy(Number.isFinite(end) ? end : open, nowMs, fetchedAt);
+  });
 
 // #124: the closed bars (mid, rounded as the chart's), oldest first — the
 // client keeps those older than the chart's own and computes over both
@@ -610,6 +856,8 @@ export const fetchDeepQuotes = async (
   deadlineMs: number,
   fetcher: Fetcher,
 ): Promise<DeepQuotes | null> => {
+  // #181: the timeframes read the new way (CHART_GMO), that way
+  if (isChartGmoInterval(interval)) return fetchChartQuotes(pair, interval, count, nowMs, deadlineMs, fetcher);
   const symbol = GMO_SYMBOLS[pair];
   const spec = GMO_INTERVALS[interval];
   const step = LIVE_STEP_MS[interval];
@@ -647,6 +895,97 @@ export const fetchDeepQuotes = async (
     bid = [...bRows, ...bid];
     ask = [...aRows, ...ask];
     if (merged().length >= count) return answer(true);
+  }
+  return answer(true);
+};
+
+// #181: whether a GMO file read for an added timeframe may be kept as
+// ended (keptReader). A year's file is taken as ended on 2 January
+// (klineFileEnded), but a file of weeks may end with a week that runs into
+// the next year: GMO files a week under the year of its JST Sunday (its 2025
+// file's last week opens 2025-12-27 21:00 UTC and runs to 2026-01-03), so it
+// is kept only once that week has closed.
+export const gmoFileClosed = (gmoInterval: string, body: unknown, nowMs: number): boolean => {
+  if (gmoInterval !== "1week") return true;
+  const rows = parseKlines(body);
+  const last = rows[rows.length - 1];
+  return !last || last.t + 7 * DAY <= nowMs;
+};
+
+// #181: the days of GMO's day files a read of `count` bars of a CHART_GMO
+// timeframe walks: those of its own (or its shorter) bars, one bar more of
+// the shorter ones than it is made of, for the first bar left out
+export const chartGmoBaseCount = (interval: string, count: number): number => {
+  const spec = CHART_GMO[interval];
+  return spec && spec.of > 1 ? (count + 1) * spec.of : count;
+};
+export const chartDaySpan = (interval: string, count: number): number => {
+  const spec = CHART_GMO[interval];
+  return spec ? deepDaySpan(spec.base, chartGmoBaseCount(interval, count)) : deepDaySpan(interval, count);
+};
+
+// #181: a CHART_GMO timeframe's bars from GMO — the bars read, the forming
+// one last, `count` at most — as the deep read walks its files (a year's
+// newest first, back to where GMO has no more and DEEP_YEARS at most; a
+// day's newest first), for the chart's bars, its history and the deep
+// history alike. A bar is left out only when the market was shut for the
+// whole of it (barFullyClosed), not for where its stamp falls: GMO stamps
+// its weeks on Saturday 21:00 UTC and its 8-hour bar holding a week's first
+// trading hours on Sunday 16:00 UTC, which the old timeframes' test of the
+// stamp (usableBars) would throw away. Made of shorter bars where GMO has
+// none of this length (buildQuotes). `complete` as fetchDeepQuotes's.
+export const fetchChartQuotes = async (
+  pair: string,
+  interval: string,
+  count: number,
+  nowMs: number,
+  deadlineMs: number,
+  fetcher: Fetcher,
+): Promise<DeepQuotes | null> => {
+  const symbol = GMO_SYMBOLS[pair];
+  const spec = CHART_GMO[interval];
+  const len = LIVE_STEP_MS[interval];
+  const baseLen = spec ? LIVE_STEP_MS[spec.base] : undefined;
+  if (!symbol || !spec || len === undefined || baseLen === undefined || !isLivePair(pair) || isTwelvePair(pair)) return null;
+  const want = chartGmoBaseCount(interval, count);
+  let keys: string[];
+  if (spec.key === "year") {
+    const year = Number(jstYearKey(nowMs));
+    keys = Array.from({ length: DEEP_YEARS }, (_, k) => String(year - k));
+  } else {
+    const today = jstDayKey(nowMs);
+    keys = dateKeys(nowMs - chartDaySpan(interval, count) * 24 * HOUR, nowMs, "day").filter((k) => k <= today).reverse();
+  }
+  let bid: Array<{ t: number; c: Candle }> = [];
+  let ask: Array<{ t: number; c: Candle }> = [];
+  const merged = () =>
+    mergeSides(bid, ask).filter((q) => {
+      const t = Date.parse(q.datetime);
+      return Number.isFinite(t) && t <= nowMs + 60_000 && !barFullyClosed(t, baseLen);
+    });
+  const answer = (complete: boolean): DeepQuotes | null => {
+    const m = merged();
+    const bars = spec.of > 1 ? buildQuotes(m, len, spec.offsetMs) : m;
+    return bars.length > 0 ? { bars: bars.slice(-count), complete } : null;
+  };
+  let found = false;
+  for (const key of keys) {
+    if (Date.now() > deadlineMs) return answer(false);
+    if (spec.key === "day") {
+      // a whole JST day inside the weekend break holds no bar
+      const dayStart = Date.parse(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T00:00:00Z`) - 9 * HOUR;
+      if (isPossiblyClosed(dayStart) && isPossiblyClosed(dayStart + 24 * HOUR - 1)) continue;
+    }
+    const [b, a] = await Promise.all([fetcher(klineUrl(symbol, "bid", spec.name, key)), fetcher(klineUrl(symbol, "ask", spec.name, key))]);
+    if (!gmoAnswered(b) || !gmoAnswered(a)) return answer(false);
+    const bRows = parseKlines(b);
+    const aRows = parseKlines(a);
+    // a year with nothing, after one with bars: GMO has no more
+    if (spec.key === "year" && found && bRows.length === 0 && aRows.length === 0) break;
+    if (bRows.length > 0) found = true;
+    bid = [...bRows, ...bid];
+    ask = [...aRows, ...ask];
+    if (merged().length >= want) return answer(true);
   }
   return answer(true);
 };
@@ -697,16 +1036,17 @@ export const parseTwelveData = (body: unknown, interval: string): Candle[] | nul
 // Stored bars -> the same read as GMO's, the newest bar forming if it has
 // not closed yet
 export const fallbackRead = (pair: string, interval: string, bars: Candle[], nowMs: number, from: ReadSource) => {
-  const step = LIVE_STEP_MS[interval];
   const closed: Candle[] = [];
   let forming: Candle | null = null;
   for (const c of bars) {
     const t = barOpenMs(c.datetime);
-    if (!Number.isFinite(t) || step === undefined) continue;
+    // #181: its close by barEndMs (a month's by the calendar)
+    const end = barEndMs(interval, t);
+    if (!Number.isFinite(end)) continue;
     // #146: one still forming when the bars were read is left out once its
     // time is up (closedBy)
-    if (closedBy(t, step, nowMs, from.fetchedAt)) closed.push(c);
-    else if (t <= nowMs && nowMs < t + step) forming = c;
+    if (closedBy(end, nowMs, from.fetchedAt)) closed.push(c);
+    else if (t <= nowMs && nowMs < end) forming = c;
   }
   return readBars(pair, interval, closed, forming, null, nowMs, from);
 };

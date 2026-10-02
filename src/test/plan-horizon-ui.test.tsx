@@ -81,8 +81,9 @@ describe("horizonLines derives the period from the row and nothing else", () => 
     expect(horizonLines(horizon(), en, "en-GB")?.bars).toContain("1H");
     // An interval the dictionary has no label for still renders — an unknown
     // key must not print "undefined" where the timeframe belongs.
-    const unknown = horizonLines(horizon({ interval: "30min" }), ja, "ja-JP");
-    expect(unknown?.bars).toContain("30min");
+    // (#181: 30min has a label now; 6h has none)
+    const unknown = horizonLines(horizon({ interval: "6h" }), ja, "ja-JP");
+    expect(unknown?.bars).toContain("6h");
     expect(unknown?.bars).not.toContain("undefined");
   });
 
