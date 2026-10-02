@@ -87,7 +87,17 @@
 //     the pair carry); the walks use the chart's decimals.
 //   * Look-ahead yardsticks reported beside the verdicts: a label that knows
 //     the answer (the band O1 reached first; it must score ~100%), and the
-//     Dow state one bar ahead (what one bar of look-ahead would add).
+//     Dow state one bar ahead; what one bar of look-ahead adds is its lift
+//     less the plain label's, printed too.
+//   * After the review (still before any real data): the chart check takes
+//     only moments whose bars all closed by the data's end — the files, read
+//     after it, hold the bar forming then, which the bars here leave out, so
+//     the last moments would differ for that alone (none of them counted:
+//     their follow runs past the data). The walks' miss rate is printed by
+//     label as well as by timeframe; every rate of 65% or more is listed,
+//     those under 100 samples marked. A kept day file stopping less than 30
+//     minutes before its day's end is not found (no hole next to it); the
+//     last ten days are always read again.
 //
 // MODE=real reads GMO; MODE=null|momentum|meanrev runs a seeded walk
 // (SEEDS=1,2,...) instead; MODE=report reads the JSON the others left in
@@ -1313,8 +1323,12 @@ interface LiveCheck {
 }
 const liveCheck = async (pair: string, s: Series, L: Labels, fine: Bars, fetcher: Fetcher): Promise<LiveCheck> => {
   const res: LiveCheck = { checked: 0, mismatches: 0, examples: [] };
+  // only moments whose bars all closed by the data's end: the files read
+  // after it hold the bar forming then, which the bars here leave out (those
+  // moments are past the follow's end, never counted)
+  const inRange = (k: number) => fine.t[k] + FINE >= START_MS && fine.t[k] + FINE + s.step <= NOW && L.state[k] >= 0;
   const cand: number[] = [];
-  for (let k = 1; k < fine.n; k++) if (fine.t[k] + FINE >= START_MS && L.state[k] >= 0) cand.push(k);
+  for (let k = 1; k < fine.n; k++) if (inRange(k)) cand.push(k);
   if (cand.length === 0) return res;
   const ks: number[] = [];
   const every = Math.max(1, Math.floor(cand.length / CHECKS));
@@ -1335,7 +1349,7 @@ const liveCheck = async (pair: string, s: Series, L: Labels, fine: Bars, fetcher
   }
   const T = s.bars;
   for (const k of [...new Set(ks)].sort((a, b) => a - b)) {
-    if (L.state[k] < 0) continue;
+    if (!inRange(k)) continue;
     const C = fine.t[k] + FINE;
     const nowMs = C + LAG;
     const qs = await fetchDowQuotes(pair, s.tf, nowMs, Number.MAX_SAFE_INTEGER, fetcher);
@@ -1724,19 +1738,27 @@ const report = async () => {
   for (const tf of TFS) {
     let miss = 0;
     let all = 0;
-    for (const nk of nullKeys) {
-      for (const combo of PRIMARY) {
+    // and by label (described: the decision is the timeframe's)
+    const byLabel: string[] = [];
+    for (const combo of PRIMARY) {
+      let m = 0;
+      let a = 0;
+      for (const nk of nullKeys) {
         for (const half of ["H1", "H2"]) {
           const e = nk.get(keyName({ g: "12", tf, combo, half, o: "O1" }));
           if (!e) continue;
-          all++;
-          if (Math.abs(e.L) > 1.96 * seUse(e)) miss++;
+          a++;
+          if (Math.abs(e.L) > 1.96 * seUse(e)) m++;
         }
       }
+      miss += m;
+      all += a;
+      byLabel.push(`${combo} ${m}/${a}`);
     }
     const cov = all > 0 ? miss / all : Number.NaN;
     coverage.set(tf, cov);
     console.log(`  ${tf}: intervals missing 0 in ${miss} of ${all} (${pct(cov)}%; nominal 5%)${cov > 0.1 ? " -> the walks' spread is used" : ""}`);
+    console.log(`    by label: ${byLabel.join(", ")}`);
   }
   for (const tf of TFS) {
     console.log(
@@ -1811,13 +1833,29 @@ const report = async () => {
     }
   }
 
-  // look-ahead guard: any rate of 65% or more outside the yardsticks
-  const high = real.keys.filter((e) => (e.o === "O1" || e.o === "O1L" || e.o === "O2" || e.o === "W") && !e.combo.startsWith("lk:") && e.n >= 100 && e.y >= 0.65);
-  console.log(`\n== rates of 65% or more (outside the yardsticks): ${high.length} ==`);
-  for (const e of high.slice(0, 30)) console.log(`  ${keyName(e)} n=${e.n} ${pct(e.y)}%`);
+  // look-ahead guard: every rate of 65% or more outside the yardsticks, the
+  // largest first (under 100 samples marked: in the walks with no effect such
+  // small cells reach 65% by chance)
+  const high = real.keys
+    .filter((e) => (e.o === "O1" || e.o === "O1L" || e.o === "O2" || e.o === "W") && !e.combo.startsWith("lk:") && e.y >= 0.65)
+    .sort((a, b) => b.n - a.n);
+  const big = high.filter((e) => e.n >= 100).length;
+  console.log(`\n== rates of 65% or more (outside the yardsticks): ${high.length}, of them ${big} with 100 samples or more ==`);
+  for (const e of high.slice(0, 80)) console.log(`  ${keyName(e)} n=${e.n} ${pct(e.y)}%${e.n < 100 ? " (small)" : ""}`);
+  if (high.length > 80) console.log(`  ... ${high.length - 80} more, all smaller (in the JSON)`);
 
   console.log(`\n== look-ahead yardsticks (group 12, O1) ==`);
   for (const l of rowsFor(realKeys, "12", YARDSTICKS, "O1")) console.log(l);
+  // what one bar of look-ahead adds over the plain label (the yardstick's lift less the label's)
+  for (const tf of TFS) {
+    const parts = LABEL_STATES.map((s) => {
+      const name = STATE_NAMES[s];
+      const a = realKeys.get(keyName({ g: "12", tf, combo: `lk:dow1:${name}`, half: "all", o: "O1" }));
+      const b = realKeys.get(keyName({ g: "12", tf, combo: `st:${name}`, half: "all", o: "O1" }));
+      return `${name} ${a && b ? pts(a.L - b.L) : "-"}`;
+    });
+    console.log(`  ${tf.padEnd(5)} one bar ahead adds (pt, all): ${parts.join(", ")}`);
+  }
   console.log(`\n== O1, both sides pooled (group 12) ==`);
   for (const l of rowsFor(realKeys, "12", ["dir:U", "dir:D"], "O1")) console.log(l);
   console.log(`\n== O2: 12 bars later (group 12) ==`);
