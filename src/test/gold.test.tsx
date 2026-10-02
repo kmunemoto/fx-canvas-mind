@@ -62,7 +62,8 @@ describe("#127 gold (XAU/USD) in the live-chart function", () => {
   it("is a live pair with every timeframe — #146: the 1- and 5-minute ones too, as every pair", () => {
     expect(LIVE_PAIRS).toContain("XAU/USD");
     expect(isGold("xau/usd")).toBe(true);
-    for (const pair of LIVE_PAIRS) expect(intervalsFor(pair)).toEqual(["1min", "5min", "15min", "1h", "4h", "1day"]);
+    // #181: the broker's 15, every pair alike
+    for (const pair of LIVE_PAIRS) expect(intervalsFor(pair)).toEqual(["1min", "2min", "3min", "4min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "8h", "1day", "1week", "1month"]);
   });
 
   it("#146: caps the day's Twelve Data reads per timeframe — the 1-minute chart stops first, the 5-minute next, the rest last, under the key's 800", () => {

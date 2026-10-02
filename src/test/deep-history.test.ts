@@ -173,7 +173,9 @@ describe("#176 the deep history (live-chart/logic.ts fetchDeepQuotes)", () => {
     // stores are waited for after the walk, before the answer
     expect(fn).toContain('console.error("kline preload failed:", err);');
     expect(fn).toContain('.catch((err) => console.error("kline store failed:", err)),');
-    expect(fn).toMatch(/const got = await fetchDeepQuotes\([^\n]+\);\n\s*await Promise\.all\(stores\);/);
+    // (#181: in keptReader, which the added timeframes' reads use too)
+    expect(fn).toMatch(/const got = await fetchDeepQuotes\([^\n]+reader\.fetcher\);\n\s*await reader\.stored\(\);/);
+    expect(fn).toContain("return { fetcher, stored: async () => void (await Promise.all(stores)) };");
     // the pairs read as gold is: every read but the deep one uses the newest
     // TWELVE_CHART_BARS (the Dow reading's and the chart's bars by default)
     expect(fn).toContain("const read = await fallbackBars(pair, interval, fresh, GOLD_BARS, room);");

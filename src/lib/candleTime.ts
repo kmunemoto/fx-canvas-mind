@@ -11,13 +11,14 @@ export const parseUtcCandleTime = (datetime: string): number => {
 export const formatJst = (
   input: string | number,
   intlLocale: string,
-  opts: { withTime?: boolean } = {},
+  opts: { withTime?: boolean; withYear?: boolean } = {},
 ): string => {
   const ms = typeof input === "number" ? input : Date.parse(input);
   if (!Number.isFinite(ms)) return String(input);
   const withTime = opts.withTime ?? true;
   return new Date(ms).toLocaleString(intlLocale, {
     timeZone: "Asia/Tokyo",
+    ...(opts.withYear ? { year: "numeric" as const } : {}),
     month: "2-digit",
     day: "2-digit",
     // h23, not hour12:false — the latter has rendered midnight as "24:00" in
@@ -26,12 +27,29 @@ export const formatJst = (
   });
 };
 
-// Axis label for a candle: date only for daily bars, date + time otherwise
-export const formatCandleLabel = (datetime: string, intlLocale: string): string => {
+// Axis label for a candle: date only for daily bars, date + time otherwise.
+// #181: on a chart of weeks or months (`long`), the date with its year: a
+// chart of them spans years
+export const formatCandleLabel = (datetime: string, intlLocale: string, opts: { long?: boolean } = {}): string => {
   const ms = parseUtcCandleTime(datetime);
   if (!Number.isFinite(ms)) return datetime.slice(5, 16);
+  if (opts.long) return formatJst(ms, intlLocale, { withTime: false, withYear: true });
   const hasTime = datetime.includes(":") || datetime.includes("T");
   return formatJst(ms, intlLocale, { withTime: hasTime });
+};
+
+// #181: bars at least this far apart, on the whole, are weeks or months
+export const LONG_BAR_MS = 6 * 24 * 60 * 60 * 1000;
+// The middle gap between neighbouring candles (ms), or NaN with fewer than two
+export const medianGapMs = (datetimes: readonly string[]): number => {
+  const gaps: number[] = [];
+  for (let i = 1; i < datetimes.length; i++) {
+    const g = parseUtcCandleTime(datetimes[i]) - parseUtcCandleTime(datetimes[i - 1]);
+    if (Number.isFinite(g) && g > 0) gaps.push(g);
+  }
+  if (gaps.length === 0) return Number.NaN;
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
 };
 
 // #127: gold (XAU/USD) is quoted in dollars to the cent. It has no pip

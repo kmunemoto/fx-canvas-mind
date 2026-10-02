@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, Pencil, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { formatCandleLabel, formatDistance, isGoldPair, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
+import { LONG_BAR_MS, formatCandleLabel, formatDistance, isGoldPair, medianGapMs, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, aheadOf, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import {
   MAX_DRAWINGS_PER_PAIR,
@@ -1989,6 +1989,8 @@ const PriceChart = ({
   const timeLabelW = 11 * labelSize * 0.6 + 24;
   const timeSlots = Math.min(8, Math.max(3, Math.floor(plotW / timeLabelW)));
   const timeIdx = [...new Set(Array.from({ length: timeSlots }, (_, j) => from + Math.round((j * (count - 1)) / (timeSlots - 1))))];
+  // #181: weeks or months: the labels give the year
+  const longBars = medianGapMs(candles.slice(-60).map((c) => c.datetime)) >= LONG_BAR_MS;
   const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) =>
     geometry.min + ((geometry.max - geometry.min) * i) / gridLines,
   );
@@ -4141,13 +4143,13 @@ const PriceChart = ({
               fontSize={labelSize} fill={COLORS.text} fontFamily="monospace" textAnchor={anchor}
               data-time-label=""
             >
-              {formatCandleLabel(candles[i].datetime, t.intlLocale)}
+              {formatCandleLabel(candles[i].datetime, t.intlLocale, { long: longBars })}
             </text>
           );
         })}
         {/* #118: the crosshair's bar, on the time axis */}
         {hover !== null && hovered && (() => {
-          const label = formatCandleLabel(hovered.datetime, t.intlLocale);
+          const label = formatCandleLabel(hovered.datetime, t.intlLocale, { long: longBars });
           const w = label.length * labelSize * 0.6 + 10;
           const cx = Math.min(Math.max(x(hover), PAD_LEFT + w / 2), W - PAD_RIGHT - w / 2);
           return (

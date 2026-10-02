@@ -127,8 +127,9 @@ describe("#141 the live chart opens where it was left", () => {
     expect(g.loadBars.mock.calls[0]).toEqual(["XAU/USD", "1min"]);
     gold.unmount();
 
-    // a timeframe the chart does not offer falls back
-    setChartPrefs({ live: { pair: "XAU/USD", interval: "3min", view: "gainz" } });
+    // a timeframe the chart does not offer falls back (#181: 3min and 2h
+    // are offered now; 6h and 12h are not)
+    setChartPrefs({ live: { pair: "XAU/USD", interval: "6h", view: "gainz" } });
     reload();
     const a = loaders();
     const first = render(<LiveChart loadBars={a.loadBars} loadTicks={a.loadTicks} />);
@@ -136,7 +137,7 @@ describe("#141 the live chart opens where it was left", () => {
     expect(a.loadBars.mock.calls[0]).toEqual(["XAU/USD", "4h"]);
     first.unmount();
 
-    setChartPrefs({ live: { pair: "ZZZ/YYY", interval: "2h", view: "magic" } });
+    setChartPrefs({ live: { pair: "ZZZ/YYY", interval: "12h", view: "magic" } });
     reload();
     const b = loaders();
     render(<LiveChart loadBars={b.loadBars} loadTicks={b.loadTicks} />);

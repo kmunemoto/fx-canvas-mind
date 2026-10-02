@@ -34,8 +34,38 @@ export const LIVE_PAIR_GROUPS: Array<{ key: "fx" | "commodities"; pairs: string[
   { key: "fx", pairs: LIVE_FX_PAIRS },
   { key: "commodities", pairs: LIVE_COMMODITIES },
 ];
-// #146: the 5-minute chart too, for every pair
-export const LIVE_INTERVALS = ["1min", "5min", "15min", "1h", "4h", "1day"];
+// #146: the 5-minute chart too, for every pair. #181: the broker's (楽天FX)
+// bar timeframes, in its menu's order (「足の種類、これだけ追加して」) — as
+// the function lists them (supabase/functions/live-chart/logic.ts)
+export const LIVE_INTERVALS = [
+  "1min", "2min", "3min", "4min", "5min", "10min", "15min", "30min",
+  "1h", "2h", "4h", "8h", "1day", "1week", "1month",
+];
+const MIN_MS = 60_000;
+const HOUR_MS = 60 * MIN_MS;
+const DAY_MS = 24 * HOUR_MS;
+// Each timeframe's length, as the function's LIVE_STEP_MS: a month's is the
+// longest (31 days); when a month's bar closes is barEndMs's
+export const INTERVAL_STEP_MS: Record<string, number> = {
+  "1min": MIN_MS, "2min": 2 * MIN_MS, "3min": 3 * MIN_MS, "4min": 4 * MIN_MS,
+  "5min": 5 * MIN_MS, "10min": 10 * MIN_MS, "15min": 15 * MIN_MS, "30min": 30 * MIN_MS,
+  "1h": HOUR_MS, "2h": 2 * HOUR_MS, "4h": 4 * HOUR_MS, "8h": 8 * HOUR_MS,
+  "1day": DAY_MS, "1week": 7 * DAY_MS, "1month": 31 * DAY_MS,
+};
+// #181: when a bar that opened at `openMs` closes, as the function's
+// barEndMs: its open and its length, and a month's at the next month's open
+// at the same time of day (GMO's at 06:00 JST on the 1st, Twelve Data's at
+// 00:00 UTC). NaN for a timeframe the chart does not have.
+export const barEndMs = (interval: string, openMs: number): number => {
+  if (!Number.isFinite(openMs)) return Number.NaN;
+  if (interval === "1month") {
+    const d = new Date(openMs + 12 * HOUR_MS);
+    const start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) + (openMs - start);
+  }
+  const step = INTERVAL_STEP_MS[interval];
+  return step === undefined ? Number.NaN : openMs + step;
+};
 // #127: gold (XAU/USD) — its bars from Twelve Data, its price from
 // Swissquote (GMO has no gold); #146: every timeframe, the 1- and 5-minute
 // ones too, within the day's reads the function keeps for each
@@ -62,6 +92,9 @@ export interface LiveRead {
   latest: { rsiSar: ChartSignalMark | null; gainz: ChartSignalMark | null };
   spread: number | null;
   nextClose: string | null;
+  // #181: the forming bar's open, as the function says (ms; null: none, or
+  // an older function that does not say)
+  formingOpen: number | null;
   at: string;
   // v3: "twelvedata" while GMO cannot be read, with why ("maintenance" |
   // "unavailable") and when those bars were fetched — or, as the pair's own
@@ -155,6 +188,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     latest: { rsiSar: mark(latest?.rsi_sar), gainz: mark(latest?.gainz) },
     spread: num(r.spread),
     nextClose: typeof r.next_close === "string" ? r.next_close : null,
+    formingOpen: typeof r.forming_open === "string" && Number.isFinite(Date.parse(r.forming_open)) ? Date.parse(r.forming_open) : null,
     at: typeof r.at === "string" ? r.at : new Date().toISOString(),
     source: r.source === "twelvedata" ? "twelvedata" : "gmo",
     feed: typeof r.feed === "string" ? r.feed : null,
@@ -199,23 +233,34 @@ export interface LiveBars {
 
 const stamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
-// One price at its own time
-export const tickLive = (live: LiveBars, mid: number, tickMs: number, stepMs: number): LiveBars => {
+// One price at its own time. #181: `endOf` gives a bar's close from its open
+// when the bars are not all one length (a month's: barEndMs); by default
+// the open and `stepMs`.
+export const tickLive = (
+  live: LiveBars,
+  mid: number,
+  tickMs: number,
+  stepMs: number,
+  endOf: (openMs: number) => number = (o) => o + stepMs,
+): LiveBars => {
   const { candles } = live;
   if (candles.length === 0 || !Number.isFinite(mid) || mid <= 0 || !Number.isFinite(tickMs) || !(stepMs > 0)) return live;
   const last = candles[candles.length - 1];
   const lastOpen = parseUtcCandleTime(last.datetime);
   if (!Number.isFinite(lastOpen) || tickMs < lastOpen) return live;
-  if (live.formingOpen === lastOpen && tickMs < lastOpen + stepMs) {
+  const lastEnd = endOf(lastOpen);
+  if (!(lastEnd > lastOpen)) return live;
+  if (live.formingOpen === lastOpen && tickMs < lastEnd) {
     if (mid === last.close && mid <= last.high && mid >= last.low) return live;
     const next = { ...last, close: mid, high: Math.max(last.high, mid), low: Math.min(last.low, mid) };
     return { candles: [...candles.slice(0, -1), next], formingOpen: lastOpen };
   }
   // a price inside the newest bar's time, when that bar is not forming
   // (a read taken just as it closed): it is left as read
-  const k = Math.floor((tickMs - lastOpen) / stepMs);
-  if (k < 1) return live;
-  const open = lastOpen + k * stepMs;
+  if (tickMs < lastEnd) return live;
+  // the bar the price falls in, on the bars' own grid
+  let open = lastEnd;
+  for (let next = endOf(open); next <= tickMs && next > open; next = endOf(open)) open = next;
   return { candles: [...candles, { datetime: stamp(open), open: mid, high: mid, low: mid, close: mid }], formingOpen: open };
 };
 

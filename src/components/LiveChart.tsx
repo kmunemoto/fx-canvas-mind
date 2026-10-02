@@ -6,11 +6,13 @@ import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/can
 import { getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import type { NumericCandle } from "@/lib/types";
 import {
+  INTERVAL_STEP_MS,
   LIVE_INTERVALS,
   LIVE_PAIRS,
   LIVE_PAIR_GROUPS,
   TICK_MS,
   LiveChartError,
+  barEndMs,
   dowTfsFor,
   fetchDow,
   fetchLiveBars,
@@ -46,7 +48,8 @@ const savedPair = (p: string | null): string | null => (p && LIVE_PAIRS.includes
 const savedInterval = (iv: string | null, pair: string): string | null => (iv && intervalsFor(pair).includes(iv) ? iv : null);
 const savedView = (v: string | null): LiveView | null => (v && (VIEWS as string[]).includes(v) ? (v as LiveView) : null);
 
-const STEP_MS: Record<string, number> = { "1min": 60_000, "5min": 300_000, "15min": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1day": 86_400_000 };
+// #181: each timeframe's length (INTERVAL_STEP_MS), 15 of them
+const STEP_MS = INTERVAL_STEP_MS;
 // Asked again this long after a bar closes, so the feed has it
 const AFTER_CLOSE_MS = 4_000;
 // Asked again this often while the feed cannot be read (GMO's maintenance,
@@ -131,6 +134,8 @@ const LiveChart = ({
   // 21, it may be far along the row; below)
   const [gridOpen, setGridOpen] = useState(false);
   const pairRowRef = useRef<HTMLDivElement>(null);
+  // #181: the timeframes too, 15 of them, in one row that scrolls sideways
+  const intervalRowRef = useRef<HTMLDivElement>(null);
   const setView = (v: LiveView) => choose({ view: v });
   // and the account's, when it arrives after the chart opened (or another
   // chart changes them), is shown
@@ -160,6 +165,11 @@ const LiveChart = ({
     const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-pair-${pair}`) : undefined;
     el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [pair, pricesIn]);
+  useEffect(() => {
+    const row = intervalRowRef.current;
+    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-interval-${interval}`) : undefined;
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [interval]);
   const [tickError, setTickError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -431,12 +441,15 @@ const LiveChart = ({
   const fallback = read !== null && !ownFeed(read);
   const tick = fallback ? null : ticks[pair] ?? null;
   const step = STEP_MS[interval] ?? 60_000;
+  // #181: a bar's close from its open (a month's by the calendar)
+  const endOf = useCallback((open: number) => barEndMs(interval, open), [interval]);
   // the forming bar, when the read has one: the last candle opened one step
-  // before the next close
+  // before the next close (#181: or, as the function now says, at
+  // `formingOpen`: a month is not one length)
   const formingOpen = (() => {
     if (!read?.nextClose || read.candles.length === 0) return null;
-    const open = Date.parse(read.nextClose) - step;
     const last = parseUtcCandleTime(read.candles[read.candles.length - 1].datetime);
+    const open = read.formingOpen ?? Date.parse(read.nextClose) - step;
     return last === open ? open : null;
   })();
   const tickMs = tick?.time ? Date.parse(tick.time) : tickAt;
@@ -453,8 +466,8 @@ const LiveChart = ({
   }, [read]);
   useEffect(() => {
     if (!tick || !tick.open || tickMs === null) return;
-    setLive((prev) => (prev && prev.key === chartKey ? { ...prev, bars: tickLive(prev.bars, tick.mid, tickMs, step) } : prev));
-  }, [tick, tickMs, chartKey, step]);
+    setLive((prev) => (prev && prev.key === chartKey ? { ...prev, bars: tickLive(prev.bars, tick.mid, tickMs, step, endOf) } : prev));
+  }, [tick, tickMs, chartKey, step, endOf]);
   const shown: LiveBars | null = read ? (live && live.key === chartKey ? live.bars : { candles: read.candles, formingOpen }) : null;
   const candles = shown?.candles ?? [];
   const d = priceDecimals(pair);
@@ -484,10 +497,14 @@ const LiveChart = ({
     return own.sort((a, b) => (a.datetime < b.datetime ? 1 : -1))[0] ?? null;
   })();
   // #147: the bar forming on screen, which may be one the prices started
-  const nextCloseMs = shown?.formingOpen != null ? shown.formingOpen + step : read?.nextClose ? Date.parse(read.nextClose) : null;
+  const nextCloseMs = shown?.formingOpen != null ? endOf(shown.formingOpen) : read?.nextClose ? Date.parse(read.nextClose) : null;
   const remain = nextCloseMs !== null ? Math.max(0, Math.round((nextCloseMs - now) / 1000)) : null;
-  const remainText = remain === null ? "—" : remain >= 3600
-    ? `${Math.floor(remain / 3600)}:${String(Math.floor((remain % 3600) / 60)).padStart(2, "0")}:${String(remain % 60).padStart(2, "0")}`
+  const hms = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+  // #181: a week's and a month's bars close days away: the days said apart
+  const remainText = remain === null ? "—" : remain >= 86_400
+    ? l.remainDays(Math.floor(remain / 86_400), hms(remain % 86_400))
+    : remain >= 3600
+    ? hms(remain)
     : `${Math.floor(remain / 60)}:${String(remain % 60).padStart(2, "0")}`;
 
   // #116: the tabs, the price and a new signal's notice — in the card, and
@@ -570,7 +587,8 @@ const LiveChart = ({
           <p className="text-[10px] text-muted-foreground" data-testid="live-pair-grid-note">{l.pairGridNote}</p>
         </div>
       )}
-      <div className={row} role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
+      {/* #181: the broker's 15 timeframes in one row that scrolls sideways, as the pairs do */}
+      <div ref={intervalRowRef} className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-0.5" role="tablist" aria-label={l.intervalsLabel} data-testid="live-intervals">
         {intervalsFor(pair).map((iv) => (
           <button
             key={iv}
@@ -579,7 +597,7 @@ const LiveChart = ({
             aria-selected={iv === interval}
             onClick={() => chooseInterval(iv)}
             data-testid={`live-interval-${iv}`}
-            className={`px-2 py-0.5 rounded border text-[11px] ${
+            className={`shrink-0 whitespace-nowrap px-2 py-0.5 rounded border text-[11px] ${
               iv === interval ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
             }`}
           >
@@ -657,7 +675,8 @@ const LiveChart = ({
     title: l.intervalsLabel,
     render: (close) => (
       <div className="space-y-4">
-        <div className="grid grid-cols-3 gap-2" data-testid="live-sheet-intervals">
+        {/* #181: four to a row, as the broker's menu has its 15 timeframes */}
+        <div className="grid grid-cols-4 gap-2" data-testid="live-sheet-intervals">
           {intervalsFor(pair).map((iv) => (
             <button
               key={iv}
@@ -868,7 +887,7 @@ const LiveChart = ({
               <p className="text-[10px] text-muted-foreground">{l.latestTitle(latest.rule === "gainz" ? l.ruleGa : l.ruleRsiSar)}</p>
               <p className="text-xs">
                 <span className={`font-bold mr-2 ${latest.side === "BUY" ? "text-success" : "text-destructive"}`}>{latest.side}</span>
-                <span className="font-mono text-muted-foreground">{jstDay(parseUtcCandleTime(latest.datetime) + step)}</span>
+                <span className="font-mono text-muted-foreground">{jstDay(endOf(parseUtcCandleTime(latest.datetime)))}</span>
               </p>
               {latest.entry !== null && latest.target !== null && latest.stop !== null && (
                 <p className="text-[11px] font-mono" data-testid="live-latest-plan">
@@ -892,7 +911,10 @@ const LiveChart = ({
               </span>
             </p>
             {nextCloseMs !== null && nextCloseMs > now && (
-              <p className="text-muted-foreground font-mono" data-testid="live-next-close">{l.nextClose(jstClock(nextCloseMs).slice(0, 5), remainText)}</p>
+              <p className="text-muted-foreground font-mono" data-testid="live-next-close">
+                {/* #181: a close on another day says which (a week's, a month's, and the daily's across midnight) */}
+                {l.nextClose(nextCloseMs - now >= 86_400_000 ? jstDay(nextCloseMs) : jstClock(nextCloseMs).slice(0, 5), remainText)}
+              </p>
             )}
           </div>
           {dowPanel}
