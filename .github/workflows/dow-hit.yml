@@ -4,7 +4,10 @@
 # effect beside them for the zero and the intervals; the report job prints
 # the data's checks first, then the verdicts.
 #
-# END is fixed so a run again reads the same bars.
+# Run by hand: the code is reviewed and the walks are checked before the
+# data is read. A push of these files only lets GitHub know the workflow
+# (its jobs are skipped on a push: nothing is read). END is fixed so a run
+# again reads the same bars.
 #
 # Runs on GitHub's runners because they can reach GMO's public price API and
 # the development container cannot. Read-only: it fetches public prices,
@@ -32,6 +35,7 @@ env:
 
 jobs:
   real:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -78,6 +82,7 @@ jobs:
           retention-days: 30
 
   walks:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -108,7 +113,7 @@ jobs:
 
   report:
     needs: [real, walks]
-    if: always()
+    if: always() && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
