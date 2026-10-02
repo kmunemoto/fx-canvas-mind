@@ -46,9 +46,9 @@ const BROKER = [
 ];
 
 // #175: the app keeps the yen pairs only (and gold); #177: and EUR/USD again;
-// #178: and AUD/USD again
+// #178: and AUD/USD again; #180: and USD/CAD again
 const isYen = (p: string) => p.endsWith("/JPY");
-const kept = (p: string) => isYen(p) || p === "EUR/USD" || p === "AUD/USD";
+const kept = (p: string) => isYen(p) || p === "EUR/USD" || p === "AUD/USD" || p === "USD/CAD";
 
 describe("#153 the pairs the live chart offers", () => {
   it("every yen pair GMO serves (#175: 12 of its 21; #177: and EUR/USD, 13; #178: and AUD/USD, 14), each among the broker's, in the broker's order, then gold", () => {
@@ -60,10 +60,10 @@ describe("#153 the pairs the live chart offers", () => {
     expect([...SERVER_PAIRS]).toEqual(LIVE_PAIRS);
   });
 
-  it("#154: and the broker's other yen pairs but the one with no feed (#175), in its order, each read as gold is", () => {
+  it("#154: and the broker's other yen pairs but the one with no feed (#175; #180: and USD/CAD), in its order, each read as gold is", () => {
     expect(LIVE_FX_PAIRS).toEqual(BROKER.filter((p) => kept(p) && p !== "CNH/JPY"));
-    expect(LIVE_FX_PAIRS).toHaveLength(19);
-    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 19], ["commodities", 1]]);
+    expect(LIVE_FX_PAIRS).toHaveLength(20);
+    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 20], ["commodities", 1]]);
     // those GMO does not serve are those read from Twelve Data and Swissquote
     const notGmo = LIVE_FX_PAIRS.filter((p) => GMO_SYMBOLS[p] === undefined);
     expect(notGmo).toEqual([...SERVER_TWELVE_FX]);
@@ -76,11 +76,13 @@ describe("#153 the pairs the live chart offers", () => {
     expect(isTwelveFx("XAU/USD")).toBe(false);
     // not GMO's feed: no GMO read is made for them
     expect(GMO_SYMBOLS["HKD/JPY"]).toBeUndefined();
+    // #180: USD/CAD among them again, first as #154 had it
+    expect([...SERVER_TWELVE_FX]).toEqual(["USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]);
   });
 
-  it("#175: none of the pairs taken away (the 19 without the yen; #177: but EUR/USD, 18; #178: and AUD/USD, 17), on the page or in the function", () => {
+  it("#175: none of the pairs taken away (the 19 without the yen; #177: but EUR/USD, 18; #178: and AUD/USD, 17; #180: and USD/CAD, 16), on the page or in the function", () => {
     const away = BROKER.filter((p) => !kept(p) && p !== "CNH/HKD");
-    expect(away).toHaveLength(17);
+    expect(away).toHaveLength(16);
     for (const p of away) {
       expect(LIVE_PAIRS.includes(p), p).toBe(false);
       expect((SERVER_PAIRS as readonly string[]).includes(p), p).toBe(false);
@@ -98,14 +100,20 @@ describe("#153 the pairs the live chart offers", () => {
     expect((SERVER_PAIRS as readonly string[]).includes("AUD/USD")).toBe(true);
     expect(isTwelvePair("AUD/USD")).toBe(false);
     expect(GMO_SYMBOLS["AUD/USD"]).toBe("AUD_USD");
+    // #180: USD/CAD too, read as gold is (GMO has none)
+    expect(LIVE_PAIRS.includes("USD/CAD")).toBe(true);
+    expect((SERVER_PAIRS as readonly string[]).includes("USD/CAD")).toBe(true);
+    expect(isTwelvePair("USD/CAD")).toBe(true);
+    expect(isTwelveFx("USD/CAD")).toBe(true);
+    expect(GMO_SYMBOLS["USD/CAD"]).toBeUndefined();
   });
 
   it("#175: the database keeps subscriptions, stored bars and prices of those 18 only", () => {
     const sql = readFileSync("supabase/migrations/20261001053000_yen_pairs_only.sql", "utf8");
     const lists = [...sql.matchAll(/array\[([^\]]*)\]/g)].map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
     expect(lists).toHaveLength(4);
-    // the 18 of then: the function's pairs but EUR/USD (#177) and AUD/USD (#178)
-    for (const l of lists) expect(l).toEqual([...SERVER_PAIRS].filter((p) => p !== "EUR/USD" && p !== "AUD/USD"));
+    // the 18 of then: the function's pairs but EUR/USD (#177), AUD/USD (#178) and USD/CAD (#180)
+    for (const l of lists) expect(l).toEqual([...SERVER_PAIRS].filter((p) => p !== "EUR/USD" && p !== "AUD/USD" && p !== "USD/CAD"));
     // the subscriptions to the others go before the check that forbids them
     const del = sql.indexOf("delete from public.signal_alert_subscriptions");
     const check = sql.indexOf("add constraint signal_alert_subscriptions_pair_check");
@@ -120,8 +128,8 @@ describe("#153 the pairs the live chart offers", () => {
   it("#177: and then subscriptions to the 19, EUR/USD among them, nothing deleted", () => {
     const sql = readFileSync("supabase/migrations/20261001163000_eur_usd_back.sql", "utf8");
     const lists = [...sql.matchAll(/array\[([^\]]*)\]/g)].map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
-    // the 19 of then: the function's pairs but AUD/USD (#178)
-    expect(lists).toEqual([[...SERVER_PAIRS].filter((p) => p !== "AUD/USD")]);
+    // the 19 of then: the function's pairs but AUD/USD (#178) and USD/CAD (#180)
+    expect(lists).toEqual([[...SERVER_PAIRS].filter((p) => p !== "AUD/USD" && p !== "USD/CAD")]);
     expect(sql.indexOf("drop constraint if exists signal_alert_subscriptions_pair_check")).toBeGreaterThan(-1);
     expect(sql.indexOf("add constraint signal_alert_subscriptions_pair_check")).toBeGreaterThan(sql.indexOf("drop constraint"));
     expect(sql).not.toMatch(/\b(delete from|update|insert into)\b/i);
@@ -130,8 +138,20 @@ describe("#153 the pairs the live chart offers", () => {
   it("#178: and then subscriptions to the 20, AUD/USD among them, nothing deleted", () => {
     const sql = readFileSync("supabase/migrations/20261002010000_aud_usd_back.sql", "utf8");
     const lists = [...sql.matchAll(/array\[([^\]]*)\]/g)].map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
-    expect(lists).toEqual([[...SERVER_PAIRS]]);
+    // the 20 of then: the function's pairs but USD/CAD (#180)
+    expect(lists).toEqual([[...SERVER_PAIRS].filter((p) => p !== "USD/CAD")]);
     expect(lists[0]).toHaveLength(20);
+    expect(sql.indexOf("drop constraint if exists signal_alert_subscriptions_pair_check")).toBeGreaterThan(-1);
+    expect(sql.indexOf("add constraint signal_alert_subscriptions_pair_check")).toBeGreaterThan(sql.indexOf("drop constraint"));
+    expect(sql).not.toMatch(/\b(delete from|update|insert into)\b/i);
+  });
+
+  it("#180: and then subscriptions to the 21, USD/CAD among them, nothing deleted", () => {
+    const sql = readFileSync("supabase/migrations/20261002090000_usd_cad_back.sql", "utf8");
+    const lists = [...sql.matchAll(/array\[([^\]]*)\]/g)].map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+    expect(lists).toEqual([[...SERVER_PAIRS]]);
+    expect(lists[0]).toHaveLength(21);
+    expect(lists[0]).toContain("USD/CAD");
     expect(sql.indexOf("drop constraint if exists signal_alert_subscriptions_pair_check")).toBeGreaterThan(-1);
     expect(sql.indexOf("add constraint signal_alert_subscriptions_pair_check")).toBeGreaterThan(sql.indexOf("drop constraint"));
     expect(sql).not.toMatch(/\b(delete from|update|insert into)\b/i);
@@ -213,17 +233,18 @@ describe("#153 choosing among them", () => {
     const grid = screen.getByTestId("live-pair-grid");
     const fx = within(screen.getByTestId("live-pair-group-fx"));
     expect(fx.getByText("FX")).toBeTruthy();
-    expect(fx.getAllByRole("button")).toHaveLength(19);
+    expect(fx.getAllByRole("button")).toHaveLength(20);
     expect(within(screen.getByTestId("live-pair-group-commodities")).getAllByRole("button")).toHaveLength(1);
     expect(within(grid).getByTestId("live-grid-pair-USD/JPY").getAttribute("aria-pressed")).toBe("true");
     // labelled as the broker's picker labels them
     await waitFor(() => expect(within(grid).getByTestId("live-grid-pair-ZAR/JPY").textContent).toBe("ランド/円ZAR/JPY9.585"));
     expect(within(grid).getByTestId("live-grid-pair-SEK/JPY").textContent).toMatch(/^Sクローナ\/円SEK\/JPY/);
-    // #175: no pair without the yen; #177: but EUR/USD; #178: and AUD/USD
+    // #175: no pair without the yen; #177: but EUR/USD; #178: and AUD/USD; #180: and USD/CAD
     expect(within(grid).queryByTestId("live-grid-pair-NOK/SEK")).toBeNull();
     expect(within(grid).queryByTestId("live-grid-pair-GBP/USD")).toBeNull();
     expect(within(grid).getByTestId("live-grid-pair-EUR/USD").textContent).toMatch(/^ユーロ\/ドルEUR\/USD/);
     expect(within(grid).getByTestId("live-grid-pair-AUD/USD").textContent).toMatch(/^豪ドル\/ドルAUD\/USD/);
+    expect(within(grid).getByTestId("live-grid-pair-USD/CAD").textContent).toMatch(/^ドル\/カナダドルUSD\/CAD/);
     fireEvent.click(within(grid).getByTestId("live-grid-pair-ZAR/JPY"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("ZAR/JPY", "15min"));
     expect(screen.queryByTestId("live-pair-grid")).toBeNull();
@@ -256,6 +277,15 @@ describe("#153 choosing among them", () => {
     render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} loadDow={async () => []} />);
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("AUD/USD", "4h"));
     expect(screen.getByTestId("live-pair-AUD/USD").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("#180: USD/CAD saved before #175 took it away opens USD/CAD again", async () => {
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ live: { pair: "USD/CAD", interval: "4h", view: "gainz" } }));
+    resetChartPrefsCache();
+    const loadBars = vi.fn(async (p: string, i: string) => readFor(p, i));
+    render(<LiveChart loadBars={loadBars} loadTicks={async () => ({})} loadDow={async () => []} />);
+    await waitFor(() => expect(loadBars).toHaveBeenCalledWith("USD/CAD", "4h"));
+    expect(screen.getByTestId("live-pair-USD/CAD").getAttribute("aria-selected")).toBe("true");
   });
 
   it("#175: a pair saved before that the chart no longer has opens USD/JPY, on the saved timeframe", async () => {

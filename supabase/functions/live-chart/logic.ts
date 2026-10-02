@@ -51,13 +51,14 @@ import { dowTheory } from "../_shared/dow.ts";
 // are read here, in its order (12 from GMO, 5 read as gold is), then gold.
 // #177: and EUR/USD again (「ユーロドル追加して」, docs §8.88), in its place
 // in the broker's order, from GMO. #178: and AUD/USD again (「豪ドル/ドル、
-// 追加して」, docs §8.89), likewise.
+// 追加して」, docs §8.89), likewise. #180: and USD/CAD again (「ドルカナダ
+// ドルも追加して」, docs §8.91), in its place, read as gold is (as #154 had it).
 export const LIVE_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
   "EUR/USD", "AUD/USD", "MXN/JPY", "NZD/JPY",
   "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY",
-  "HKD/JPY", "SGD/JPY", "NOK/JPY", "HUF/JPY",
-  "SEK/JPY", "PLN/JPY", "CZK/JPY",
+  "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY",
+  "HUF/JPY", "SEK/JPY", "PLN/JPY", "CZK/JPY",
   "XAU/USD",
 ] as const;
 // #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、
@@ -204,9 +205,9 @@ export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetche
 // has no CNH/JPY (its forex_pairs has the offshore yuan only against USD
 // and CNY; its CNY/JPY is the onshore yuan, another price) and neither feed
 // has CNH/HKD, so those two are not here. #175: the yen pairs only (docs
-// §8.86); the other 10 are no longer read.
+// §8.86); the other 10 are no longer read. #180: USD/CAD again (docs §8.91).
 export const TWELVE_FX_PAIRS = [
-  "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY",
+  "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY",
 ] as const;
 export const isTwelveFx = (pair: string): boolean => (TWELVE_FX_PAIRS as readonly string[]).includes(pair.toUpperCase());
 // Every pair whose bars are Twelve Data's own, gold's too: fresh by
