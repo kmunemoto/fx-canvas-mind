@@ -1,0 +1,138 @@
+# #179: how often the live chart's Dow line is right while it is shown
+# (research/dow-hit.ts, docs §8.90): the line's labels as the chart reads
+# them on GMO's bars of the 14 pairs, 5min to 4h, and twenty walks with no
+# effect beside them for the zero and the intervals; the report job prints
+# the data's checks first, then the verdicts.
+#
+# Run by hand: the code is reviewed and the walks are checked before the
+# data is read. A push of these files only lets GitHub know the workflow
+# (its jobs are skipped on a push: nothing is read). END is fixed so a run
+# again reads the same bars.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as artifacts.
+# It writes nothing to the repository and holds no secret.
+name: Research Dow line hit rate
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/dow-hit.ts
+      - .github/workflows/dow-hit.yml
+  workflow_dispatch:
+    inputs:
+      end:
+        description: "The data's end, UTC"
+        default: "2026-10-02T00:00:00Z"
+permissions:
+  contents: read
+env:
+  START: "2024-01-01"
+  SPLIT: "2025-07-01"
+  END: ${{ inputs.end || '2026-10-02T00:00:00Z' }}
+
+jobs:
+  real:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # GMO's day files never change once the day has rolled: the files the
+      # other studies kept, so only the rest is fetched
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-none
+          restore-keys: gmo-5min-
+      - name: Read GMO's bars and measure
+        env:
+          MODE: real
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          research/dow-hit.ts
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dow-hit-real
+          path: research/out/
+          retention-days: 30
+
+  walks:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        seeds: ["1,2", "3,4", "5,6", "7,8", "9,10", "11,12", "13,14", "15,16", "17,18", "19,20"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Walks with no effect
+        env:
+          MODE: "null"
+          SEEDS: ${{ matrix.seeds }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          research/dow-hit.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dow-hit-null-${{ strategy.job-index }}
+          path: research/out/
+          retention-days: 30
+
+  report:
+    needs: [real, walks]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dow-hit-*
+          path: research/in
+          merge-multiple: true
+      - name: The verdicts
+        env:
+          MODE: report
+          REPORT_DIR: research/in
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-read=.
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          research/dow-hit.ts
