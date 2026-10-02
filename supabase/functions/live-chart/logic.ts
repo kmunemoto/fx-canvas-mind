@@ -50,13 +50,14 @@ import { dowTheory } from "../_shared/dow.ts";
 // the whole app, 「金は残す」; docs §8.86): the broker's 17 yen pairs that
 // are read here, in its order (12 from GMO, 5 read as gold is), then gold.
 // #177: and EUR/USD again (「ユーロドル追加して」, docs §8.88), in its place
-// in the broker's order, from GMO.
+// in the broker's order, from GMO. #178: and AUD/USD again (「豪ドル/ドル、
+// 追加して」, docs §8.89), likewise.
 export const LIVE_PAIRS = [
   "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY",
-  "EUR/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY",
-  "CAD/JPY", "CHF/JPY", "TRY/JPY", "HKD/JPY",
-  "SGD/JPY", "NOK/JPY", "HUF/JPY", "SEK/JPY",
-  "PLN/JPY", "CZK/JPY",
+  "EUR/USD", "AUD/USD", "MXN/JPY", "NZD/JPY",
+  "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY",
+  "HKD/JPY", "SGD/JPY", "NOK/JPY", "HUF/JPY",
+  "SEK/JPY", "PLN/JPY", "CZK/JPY",
   "XAU/USD",
 ] as const;
 // #146: and the 5-minute chart, for every pair (「1分足と5分足を追加して、

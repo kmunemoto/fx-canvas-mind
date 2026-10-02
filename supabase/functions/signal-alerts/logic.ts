@@ -63,8 +63,9 @@ import {
 // record (index.ts, status) counts these four's signals only, and an open
 // signal on the other three is no longer settled. #177: and EUR/USD again
 // (「ユーロドル追加して」, with RSI + SAR and the GA-style rule, docs §8.88),
-// in its old place: five, its record counted again.
-export const ALERT_PAIRS = ["USD/JPY", "EUR/USD", "EUR/JPY", "GBP/JPY", "AUD/JPY"] as const;
+// in its old place: five, its record counted again. #178: and AUD/USD
+// again (「豪ドル/ドル、追加して」, docs §8.89), likewise: six.
+export const ALERT_PAIRS = ["USD/JPY", "EUR/USD", "EUR/JPY", "GBP/JPY", "AUD/USD", "AUD/JPY"] as const;
 
 // 1min is left out: the study never measured it, and a rule that fires a few
 // times a day per pair on 15min would fire every hour or so on 1min — an inbox

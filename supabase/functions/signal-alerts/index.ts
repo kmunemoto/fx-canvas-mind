@@ -16,10 +16,11 @@
 // app says that no email can be sent yet, rather than pretending it was.
 //
 // #108: the sweep also reads every one of the app's seven pairs (#175: the
-// four yen pairs among them, logic.ts ALERT_PAIRS; #177: and EUR/USD) on every
-// alert timeframe, followed or not, records each signal once in
-// signal_events and settles the open ones against the bars that came after
-// (record.ts). The app shows that record beside the alerts.
+// four yen pairs among them, logic.ts ALERT_PAIRS; #177: and EUR/USD;
+// #178: and AUD/USD) on every alert timeframe, followed or not, records
+// each signal once in signal_events and settles the open ones against the
+// bars that came after (record.ts). The app shows that record beside the
+// alerts.
 //
 // #112: a second rule beside RSI + SAR, the GA-style rule
 // (analyze/gainz.ts). It is read on the same bars, recorded and settled the
@@ -109,7 +110,8 @@ import type { Candle } from "../analyze/indicators.ts";
 // them stored. The signals judge from anchoredStart, so the mails are the same.
 // v15 (#177): EUR/USD again, for RSI + SAR and the GA-style rule (ALERT_PAIRS)
 // and Q-Trend and ULTRA (the live chart's pairs).
-const FUNCTION_VERSION = "signal-alerts-v15-2026-10-01T17:00:00Z";
+// v16 (#178): and AUD/USD again, likewise.
+const FUNCTION_VERSION = "signal-alerts-v16-2026-10-02T01:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
