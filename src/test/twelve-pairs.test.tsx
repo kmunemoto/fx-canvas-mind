@@ -76,8 +76,8 @@ const READ_AT = Date.parse("2026-09-28T17:53:55Z");
 
 describe("#154 the broker's pairs GMO does not serve, in the live-chart function", () => {
   it("reads each from Twelve Data (bars) and Swissquote (price) by its own symbol, gold's as before", () => {
-    // #175: the yen pairs only
-    expect([...TWELVE_FX_PAIRS]).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]);
+    // #175: the yen pairs only; #180: and USD/CAD again, first as #154 had it
+    expect([...TWELVE_FX_PAIRS]).toEqual(["USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]);
     for (const p of TWELVE_FX_PAIRS) {
       expect(swissquoteUrl(p)).toBe(`https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${p}`);
       const url = new URL(twelveDataUrl(p, "1h", "KEY", GOLD_BARS));
@@ -156,12 +156,14 @@ describe("#154 the broker's pairs GMO does not serve, in the live-chart function
     const tried = new Map<string, number>();
     const lastTry = (p: string) => tried.get(p);
     // nothing asked yet: the pair on screen, and the first three others
-    expect(swissquoteDue("HKD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY"]);
+    expect(swissquoteDue("HKD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "USD/CAD", "SGD/JPY", "NOK/JPY"]);
     // a GMO pair (or none) on screen: only the others
-    expect(swissquoteDue("USD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY"]);
+    expect(swissquoteDue("USD/JPY", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["USD/CAD", "HKD/JPY", "SGD/JPY"]);
     expect(swissquoteDue(null, lastTry, 1_000_000, 2_000, 60_000, 3)).toHaveLength(3);
     // #175: a pair taken away is not asked for, even on screen
-    expect(swissquoteDue("USD/CAD", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["HKD/JPY", "SGD/JPY", "NOK/JPY"]);
+    expect(swissquoteDue("USD/CHF", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["USD/CAD", "HKD/JPY", "SGD/JPY"]);
+    // #180: USD/CAD is one of them again, asked at every read while on screen
+    expect(swissquoteDue("USD/CAD", lastTry, 1_000_000, 2_000, 60_000, 3)).toEqual(["USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY"]);
     // a client asking every 5 seconds with HKD/JPY on screen, for three minutes
     const reads = new Map<string, number[]>();
     for (let now = 1_000_000; now < 1_180_000; now += 5_000) {
@@ -244,11 +246,12 @@ describe("#154 those pairs on the live chart", () => {
     expect(within(grid).getByTestId("live-grid-pair-HKD/JPY").textContent).toMatch(/^香港ドル\/円HKD\/JPY/);
     expect(within(grid).getByTestId("live-grid-pair-CZK/JPY").textContent).toMatch(/^チェココルナ\/円CZK\/JPY/);
     expect(within(grid).queryByTestId("live-grid-pair-CNH/JPY")).toBeNull();
-    // #175: the pairs without the yen are gone
-    expect(within(grid).queryByTestId("live-grid-pair-USD/CAD")).toBeNull();
+    // #175: the pairs without the yen are gone; #180: but USD/CAD, back
+    expect(within(grid).getByTestId("live-grid-pair-USD/CAD").textContent).toMatch(/^ドル\/カナダドルUSD\/CAD/);
     expect(within(grid).queryByTestId("live-grid-pair-USD/HKD")).toBeNull();
+    expect(within(grid).queryByTestId("live-grid-pair-USD/CHF")).toBeNull();
     expect(screen.getByTestId("live-pair-grid-note").textContent).toContain("表示中のペア以外は1〜3分ほど前");
-    expect(screen.getByTestId("live-pair-grid-note").textContent).toContain("香港ドル/円・SGドル/円など5ペア");
+    expect(screen.getByTestId("live-pair-grid-note").textContent).toContain("ドル/カナダドル・香港ドル/円など6ペア");
     fireEvent.click(within(grid).getByTestId("live-grid-pair-HKD/JPY"));
     await waitFor(() => expect(loadBars).toHaveBeenCalledWith("HKD/JPY", "1min"));
     // at once, not at the next 5-second tick

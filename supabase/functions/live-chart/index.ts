@@ -19,7 +19,8 @@
 // (logic.ts, "the broker's pairs GMO does not serve"); the ticker is told
 // the pair on screen. #175: the yen pairs and gold only, 18 (logic.ts,
 // LIVE_PAIRS; docs §8.86). #177: and EUR/USD again, 19 (docs §8.88).
-// #178: and AUD/USD again, 20 (docs §8.89).
+// #178: and AUD/USD again, 20 (docs §8.89). #180: and USD/CAD again, 21,
+// read as gold is (docs §8.91).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -78,7 +79,7 @@ import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/mark
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
 import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
 
-const FUNCTION_VERSION = "live-chart-v14-2026-10-02T01:00:00Z";
+const FUNCTION_VERSION = "live-chart-v15-2026-10-02T09:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -126,8 +127,8 @@ const gmoFetcher: Fetcher = gmoFetch(null);
 const gmoDeepFetcher: Fetcher = gmoFetch(NO_KLINE_FILE);
 
 // #153: room for every pair's every timeframe (#154: 37 × 6; #175: 18 × 6,
-// #177: 19 × 6, #178: 20 × 6, the room left as it was), so a cache is not
-// emptied each time the chart moves to another pair
+// #177: 19 × 6, #178: 20 × 6, #180: 21 × 6, the room left as it was), so
+// a cache is not emptied each time the chart moves to another pair
 const CACHE_KEYS = 240;
 const barsCache = new Map<string, { at: number; body: unknown }>();
 const historyCache = new Map<string, { at: number; body: unknown }>();
@@ -142,8 +143,8 @@ const fallbackFetches: number[] = [];
 // #154: the pairs' prices from Swissquote (logic.ts, "the broker's pairs GMO
 // does not serve"). The pair on screen is read again with each ticker read,
 // as gold is; the others a few at a time, each at most once a minute, so
-// the pair list's prices stay near the market without five requests
-// (#154: fifteen) every few seconds. `at` is the last try, `readAt` the last answer; a
+// the pair list's prices stay near the market without six requests
+// (#154: fifteen; #175: five) every few seconds. `at` is the last try, `readAt` the last answer; a
 // price not answered for SQ_KEEP_MS is left out.
 const SQ_OTHERS_MS = 60_000;
 const SQ_OTHERS_PER_READ = 3;

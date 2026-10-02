@@ -65,7 +65,7 @@ export const ultraUnit = (pair: string): number => (isGold(pair) ? 1 : pair.toUp
 // run is covered by the next, and past this the price has moved on. The
 // hourly and slower ones wait longer: those read from Twelve Data are read
 // a few a minute (TWELVE_READS_PER_RUN), up to 48 at midnight UTC (#175:
-// 18, six of them on three timeframes).
+// 18, six of them on three timeframes; #180: 21, seven).
 export const freshFor = (interval: string): number =>
   interval === "5min" ? 10 * 60_000 : interval === "15min" ? 20 * 60_000 : 30 * 60_000;
 

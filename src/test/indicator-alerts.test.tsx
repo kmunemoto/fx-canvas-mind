@@ -253,8 +253,12 @@ describe("#155 what the sweep reads, and when", () => {
       expect(indicatorIntervalsFor(p), p).toEqual(twelve ? ["1h", "4h", "1day"] : ["5min", "15min", "1h", "4h", "1day"]);
       expect(isGmoChartPair(p), p).toBe(!twelve);
     }
-    // #175: the yen pairs and gold; #177: and EUR/USD, #178: and AUD/USD, from GMO
-    expect(SERVER_PAIRS).toHaveLength(20);
+    // #175: the yen pairs and gold; #177: and EUR/USD, #178: and AUD/USD, from GMO;
+    // #180: and USD/CAD, from Twelve Data
+    expect(SERVER_PAIRS).toHaveLength(21);
+    expect(isIndicatorChart("USD/CAD", "5min")).toBe(false);
+    expect(isIndicatorChart("USD/CAD", "1h")).toBe(true);
+    expect(isGmoChartPair("USD/CAD")).toBe(false);
     expect(isIndicatorChart("EUR/USD", "5min")).toBe(true);
     expect(isIndicatorChart("AUD/USD", "5min")).toBe(true);
     expect(isIndicatorChart("USD/JPY", "5min")).toBe(true);
@@ -263,7 +267,7 @@ describe("#155 what the sweep reads, and when", () => {
     // a pair taken away, on any timeframe: not followed (#175)
     for (const iv of INDICATOR_INTERVALS) {
       expect(isIndicatorChart("GBP/USD", iv)).toBe(false);
-      expect(isIndicatorChart("USD/CAD", iv)).toBe(false);
+      expect(isIndicatorChart("USD/CHF", iv)).toBe(false);
     }
     expect(isIndicatorChart("XAU/USD", "15min")).toBe(false);
     expect(isIndicatorChart("USD/JPY", "1min")).toBe(false);

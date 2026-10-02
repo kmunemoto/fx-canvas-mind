@@ -290,11 +290,12 @@ describe("#113 the live chart card", () => {
     expect(loadBars).toHaveBeenCalledWith("USD/JPY", "4h");
     // #153: GMO's pairs in the broker's (楽天FX) order, then gold; #154:
     // with more of the broker's among them, in its order. #175: the yen
-    // pairs only, and gold; #177: and EUR/USD, #178: and AUD/USD, in their places
+    // pairs only, and gold; #177: and EUR/USD, #178: and AUD/USD, #180: and
+    // USD/CAD, in their places
     expect(screen.getAllByRole("tab").map((b) => b.getAttribute("data-testid") ?? "").filter((id) => id.startsWith("live-pair-"))).toEqual(
       [
         "USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY",
-        "TRY/JPY", "HKD/JPY", "SGD/JPY", "NOK/JPY", "HUF/JPY", "SEK/JPY", "PLN/JPY", "CZK/JPY", "XAU/USD",
+        "TRY/JPY", "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "HUF/JPY", "SEK/JPY", "PLN/JPY", "CZK/JPY", "XAU/USD",
       ].map((p) => `live-pair-${p}`),
     );
     await waitFor(() => expect(screen.getByTestId("live-price").textContent).toContain("売値 150.120 / 買値 150.123 / スプレッド 0.3pips"));
