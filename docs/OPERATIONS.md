@@ -4988,6 +4988,10 @@ select rule, count(*) from public.signal_alert_subscriptions group by 1;
   - 2時間足の過去（601本）は1時間足のファイルを約70日分読む。保存したファイル（60日で消える）が無いと、1回の読み込み（20秒）で読み切れないことがある。そのときは途中までの足を出さず、保存もしない（下の「見直し」）。画面は過去なしでチャートを出し、次のチャートの読み込みのときに読み直す。読んだファイルは保存されるので、何度か開くと読み切れるようになる（本番では確かめていない）。
   - 楽天FXの2時間足・8時間足の区切りは確かめていない（ここでは GMO・Twelve Data それぞれの4時間足の格子に合わせた）。
 - **見つけた別の問題（今回は直していない）**: 今の4時間足は、GMO の日曜 20:00 UTC の足（週の最初の2時間）を、足の始まりが休みの時間という理由で捨てている（`usableBars` が足の始まりの時刻を見る）。チャートの4時間足と、メール（4時間足の Q-Trend・ULTRA）の判定の両方に関わる。直すとメールの判定が変わるので、オーナーに伺う。
+- **本番への反映**（2026-10-02）: PR #156 をマージ（14:37 UTC）。
+  - 関数: GitHub Actions の Deploy edge functions（run 37021173952）が成功した（14:38:17 UTC）。本番の live-chart のコードは `live-chart-v16-2026-10-02T14:00:00Z` で、見直しの直し（`twelveBuiltOffset`・`gmoFileClosed`・`clearKlineMemory`・`TWELVE_1MIN_BARS`）が入っている。毎分の巡回は 14:39:00 UTC から `signal-alerts-v18-2026-10-02T14:00:00Z` で、200・購読42件（その前の 14:38:00 は v17）。
+  - 画面: Lovable にマージのコミット（9eccd36）が届いたのを見てから公開した（deploy_project、14:40 UTC 頃）。返事は pending（deployment d53bdfe8）。公開が終わったかは確かめていない。
+  - まだ確かめていないこと: 本番の関数が新しい足を読むこと。関数はログインした人しか呼べず、ここからは届かない。反映の直後（14:40 UTC 頃）の `gmo_kline_files` には、新しい足のファイル（10min・30min・8hour・1week・1month）はまだ無い（誰もまだ開いていない）。誰かが開いたあとに、保存されたファイルで確かめる。
 - **TICK**: 次の段階。今は、価格は画面が5秒ごとに聞く値だけで、価格が動くたびの記録はどこにも無い。GMO の公開 WebSocket で動くたびの値を受けられるかを確かめてから、作り方を決める。
 
 ---
@@ -5147,6 +5151,20 @@ select public.variant_stats();
 
 `performance_stats()` と足し算してはいけない。あちらは `variant = 'control'`
 だけの記録である。
+
+**J. 新しい足（#181、§8.92）** — 本番で読めているか
+
+```sql
+-- GMO の新しい足のファイル（誰かが開いたあと）。週足の年のファイルは、最後の週が終わった年だけ
+select interval, count(*) as files, min(date_key), max(date_key), max(fetched_at)
+from public.gmo_kline_files
+where interval in ('10min', '30min', '8hour', '1week', '1month')
+group by interval order by interval;
+```
+
+1. 週足（`1week`）に、今年（最後の週がまだ終わっていない年）の行が無いこと（`gmoFileClosed`）。
+2. Twelve Data の7銘柄の週足・月足の保存行（`live_chart_fallback` の `1week`・`1month`）で、週足の日付が何曜日に付くかを見る（まだ見ていない）。
+3. 2026-11-01（ニューヨークの冬時間）のあと、Twelve Data の4時間足の始まりの時刻が動いたかを、保存行（`4h`）で見る。動いていたら、8時間足は読んだ足に合わせて区切られる（`twelveBuiltOffset`）が、§8.92 の記録を直す。
 
 ---
 
