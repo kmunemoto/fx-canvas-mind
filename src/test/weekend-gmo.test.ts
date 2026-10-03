@@ -150,6 +150,11 @@ describe("#182 GMO's 4-hour bars through usableBars, the e-mails' read and the c
 
 describe("#182 pinned at the source", () => {
   const quotes = readFileSync("supabase/functions/track-outcomes/quotes.ts", "utf8");
+  const chart = readFileSync("supabase/functions/live-chart/logic.ts", "utf8");
+  it("the chart's added timeframes (#181) ask the same of GMO's bars", () => {
+    expect(chart).toContain("!barInsideClosure(t, baseLen)");
+    expect(chart).not.toContain("!barFullyClosed(t, baseLen)");
+  });
   const marketHours = readFileSync("supabase/functions/_shared/market-hours.ts", "utf8");
   it("usableBars asks barInsideClosure of the bar's length", () => {
     expect(quotes).toContain("return !barInsideClosure(t, intervalMs);");

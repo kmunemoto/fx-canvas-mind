@@ -397,19 +397,24 @@ export const keepableKlines = (body: unknown): boolean =>
 // #173: measured again at their targets since, TP1 20 pips (TP2 40, TP3 60)
 // and the stop 30 (tf-winrate with TP1=20 and SL=30, 2024-01-01 to
 // 2026-09-30, GitHub Actions run 36730814776, docs §8.82); #166's were at TP1 5.
+// #182: 4h measured again on the bars the sweep reads since, GMO's 4-hour bar
+// stamped Sunday 20:00 UTC kept (tf-winrate with WEEKEND=inside, the same end,
+// 2026-09-30T14:40:11Z, GitHub Actions run 37134322956, docs §8.93; the other
+// timeframes came out the same to the trade). Before: Q-Trend 58.3 / -1.47,
+// ULTRA 60.1 / -0.54 (run 37133903888, WEEKEND=stamp, repeating 36730814776).
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
     "5min": { win: 58.0, pips: -2.03 },
     "15min": { win: 58.4, pips: -1.8 },
     "1h": { win: 59.2, pips: -1.33 },
-    "4h": { win: 58.3, pips: -1.47 },
+    "4h": { win: 59.1, pips: -1.17 },
     "1day": { win: 55.1, pips: -6.92 },
   },
   ultra: {
     "5min": { win: 58.2, pips: -1.81 },
     "15min": { win: 58.0, pips: -1.79 },
     "1h": { win: 58.4, pips: -1.87 },
-    "4h": { win: 60.1, pips: -0.54 },
+    "4h": { win: 60.8, pips: -0.37 },
     "1day": { win: 50.0, pips: -9.5 },
   },
 };

@@ -532,8 +532,8 @@ describe("#155 what the sweep reads, and when", () => {
     expect(en.text).not.toContain("not been measured");
     // #157: the figures are the email's own timeframe's
     const h4 = renderIndicatorMail({ ...sig, interval: "4h", closedAt: "2026-09-29T08:00:00.000Z", barTime: "2026-09-29T04:00:00.000Z" }, "ja");
-    expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 58.3%");
-    expect(h4.text).toContain("約1.47 pips の負けでした。");
+    expect(h4.text).toContain("過去の4時間足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 59.1%");
+    expect(h4.text).toContain("約1.17 pips の負けでした。");
     // a pair read from Twelve Data was not measured: said so (#175: a yen
     // pair now; this was EUR/CHF)
     const twelve = renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h", close: 19.123, sl: 19.423, tps: [18.923, 18.723, 18.523] }, "ja");
@@ -590,8 +590,8 @@ describe("#155 what the sweep reads, and when", () => {
     const ul4 = renderIndicatorMail({ ...sig, rule: "ultra", interval: "4h", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "en");
     expect(ul4.text).toContain("ULTRA's levels (the targets 20, 40 and 60 pips; the stop 30 pips):");
     expect(ul4.text).toContain("The video shows a 79–80% win rate (on gold), with a stop of 10. On currency pairs this app sets the stop at 30 pips (from its own measurements) and the targets at 20, 40 and 60 pips (the video's are 5, 10 and 15). Measured on past 4-hour bars");
-    expect(ul4.text).toContain("60.1% of the time");
-    expect(ul4.text).toContain("lost about 0.54 pips a trade");
+    expect(ul4.text).toContain("60.8% of the time");
+    expect(ul4.text).toContain("lost about 0.37 pips a trade");
   });
 });
 

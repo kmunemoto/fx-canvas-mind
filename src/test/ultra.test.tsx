@@ -255,7 +255,7 @@ describe("#151 ULTRA on the chart", () => {
       expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
     }
     const note = screen.getByTestId("chart-ultra-legend").textContent!;
-    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips・TP1 20 pips で測ると", "約60%", "4時間足 60.1%", "TP1 30・TP2 60・TP3 90 ドル", "金は Dukascopy の値", "4時間足 20.8%", "損益ゼロには25%より上、スプレッドの分さらに上が要ります", "金以外の Twelve Data の銘柄は測っていません"]) {
+    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips・TP1 20 pips で測ると", "約60%", "4時間足 60.8%", "TP1 30・TP2 60・TP3 90 ドル", "金は Dukascopy の値", "4時間足 20.8%", "損益ゼロには25%より上、スプレッドの分さらに上が要ります", "金以外の Twelve Data の銘柄は測っていません"]) {
       expect(note).toContain(part);
     }
     expect(note).not.toContain("このアプリでは測っていません");

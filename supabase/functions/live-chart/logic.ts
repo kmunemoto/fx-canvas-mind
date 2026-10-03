@@ -18,7 +18,7 @@
 // Everything here is Deno-free: src/test/live-chart.test.ts imports it.
 
 import { parseCandles, type Candle } from "../analyze/indicators.ts";
-import { barFullyClosed, isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
+import { barFullyClosed, barInsideClosure, isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
 import { chartRsiSar, readRsiSar } from "../analyze/rsisar.ts";
 import { chartGainz, readGainz } from "../analyze/gainz.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -929,10 +929,16 @@ export const chartDaySpan = (interval: string, count: number): number => {
 // newest first, back to where GMO has no more and DEEP_YEARS at most; a
 // day's newest first), for the chart's bars, its history and the deep
 // history alike. A bar is left out only when the market was shut for the
-// whole of it (barFullyClosed), not for where its stamp falls: GMO stamps
-// its weeks on Saturday 21:00 UTC and its 8-hour bar holding a week's first
-// trading hours on Sunday 16:00 UTC, which the old timeframes' test of the
-// stamp (usableBars) would throw away. Made of shorter bars where GMO has
+// whole of it, not for where its stamp falls: GMO stamps its weeks on
+// Saturday 21:00 UTC and its 8-hour bar holding a week's first trading hours
+// on Sunday 16:00 UTC, which a test of the stamp alone would throw away.
+// #182: by the narrow predicate at both ends (barInsideClosure), the one
+// usableBars asks of GMO's bars since, not barFullyClosed, whose Sunday
+// pre-open band is Twelve Data's: GMO filed flat filler bars for HUF/JPY and
+// SEK/JPY on Sunday 2026-09-13 17:00-20:59 UTC (1 minute to 1 hour, in the
+// Sunday JST file, which the walk below skips; and a daily and a 4-hour one,
+// docs §8.93), which that band would keep. On what this reads the two
+// answer the same today; one rule decides GMO's bars everywhere. Made of shorter bars where GMO has
 // none of this length (buildQuotes). `complete` as fetchDeepQuotes's.
 export const fetchChartQuotes = async (
   pair: string,
@@ -961,7 +967,7 @@ export const fetchChartQuotes = async (
   const merged = () =>
     mergeSides(bid, ask).filter((q) => {
       const t = Date.parse(q.datetime);
-      return Number.isFinite(t) && t <= nowMs + 60_000 && !barFullyClosed(t, baseLen);
+      return Number.isFinite(t) && t <= nowMs + 60_000 && !barInsideClosure(t, baseLen);
     });
   const answer = (complete: boolean): DeepQuotes | null => {
     const m = merged();
