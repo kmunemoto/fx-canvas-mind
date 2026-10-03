@@ -301,6 +301,7 @@ export const en: Dict = {
       (status === "loading" ? "Loading. " : status === "error" ? "Could not be read (tried again in a minute). " : "") +
       "Judged on closed candles' closes only. " +
       "The swing width was searched in #132: 4 candles either side won most often on the first period (2024-01 to 2025-06; it was 5). On the second period (2025-07 on; 11 pairs, 15m/1h/4h, stop 1 ATR, target 2x, spread paid), entering at the confirmation (the second break): 2,460 trades, 29.4% won (break-even 33.3%), −0.117R each (with 5: 2,059, 28.6%, −0.139R) — no different from entering at random beyond noise. Measured with 5, entering at the first break or at each new high or low, or keeping to the higher timeframe's direction, did no better. " +
+      "Entering while a reading is shown was measured too, in #179 (GMO's 12 pairs, 2024-01-01 to 2026-10-01, counted every 5 minutes; a hit = reaching one ATR in the read direction first): on every timeframe and every reading 45–51% hit, against 48–52% entering at random at the same times — no difference beyond noise (none of the 24 groups clearly beat random on both periods). 4h and 1h down with 15m and 5m the other way: 50.2% (random 49.0%), the same. Trading it with the spread paid (stop and target 1 ATR): 30–45% won, −0.11R to −0.70R each — every group lost. " +
       "Shown only: no signal or email uses it.",
     // #124
     zoneShiftNote: (bars: number | null, status: "loading" | "ready" | "error") =>
