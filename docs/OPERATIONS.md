@@ -5062,6 +5062,15 @@ select rule, count(*) from public.signal_alert_subscriptions group by 1;
   - 本番で月曜 00:00 UTC の判定が動くことは、反映のあとの最初の月曜（2026-10-05 00:00 UTC）に確かめる（§9 K）。
   - GMO の週が日曜 22:00 UTC より早く始まった週（2026-09-13 の 21:00）も、値動きは日曜 20:00 の4時間足に入るので残る。日曜 20:00 より前に値動きのある週は、確かめた範囲（2023〜2026年の年のファイル）には無かった（日曜 16:00 UTC の4時間足は、詰め物の2本だけ）。もし日曜 20:00 より前に週が始まると、日曜 16:00 の足は今のやり方でも捨てる。
   - 研究の過去の数字（上）は前のやり方のまま。
+- **本番への反映**（2026-10-03、市場が閉まっている土曜）: PR #158 をマージ（16:30 UTC、52e244b）。
+  - 関数: GitHub Actions の Deploy edge functions（run 37137092818）が成功した（16:31:12 UTC）。
+    - 本番の live-chart のコードは `live-chart-v17-2026-10-03T16:00:00Z` で、`barInsideClosure` が入っている（`get_edge_function` で読んで確かめた。`usableBars` の `return !barInsideClosure(t, intervalMs);` と `fetchChartQuotes` の `!barInsideClosure(t, baseLen)`）。
+    - 毎分の巡回は 16:32:00 UTC から `signal-alerts-v19-2026-10-03T16:00:00Z`（`indicators` と `sweep` のどちらも 200。その前の 16:31:00 は v18）。土曜なので `market_closed` で飛ばしていて、購読の数や読んだ足はこの応答には出ない。
+  - **版名を上げずに出し直した関数**: 同じ反映で analyze・postmortem・track-outcomes・version-compare も出し直しになった（変えた `track-outcomes/quotes.ts`・`_shared/market-hours.ts` と、コメントだけ変えた `track-outcomes/evaluate.ts`・`analyze/price-source.ts` を含むため。`deno info` で確かめた）。版名は上げていない。§6.2 の決まり（関数を変えたら版名を上げる）からは外れている。
+    - 上げなかった理由: この4つが `usableBars` を使うのは1分〜1時間足（日のファイルの足）だけで、GMO の格子では前と答えが同じ（src/test/weekend-gmo.test.ts で、夏と冬の週の全部の格子の時刻で確かめた）。同じ版名の2つのビルドの動きは同じなので、§8.7-a のように別の動きが1つの版名に混ざることは無い。版名を上げると、動きが同じなのに version-compare などの母集団が分かれる。
+    - 前例: #153 で `quotes.ts` を変えたときも、この4つの版名は上げていない。#181 では `live-chart/logic.ts` を読み込む signal-alerts の版名を上げた（こちらは動きが変わるものを含んでいた）。
+  - 画面: Lovable にマージのコミット（52e244b）が届いたのを見てから公開した（`deploy_project`、16:32 UTC 頃）。返事は pending（deployment c938b699）。公開が終わったかは確かめていない。
+  - まだ確かめていないこと: 月曜 00:00 UTC の4時間足の判定（§9 K、2026-10-05 00:00 UTC）。日曜の夜のチャートの形成中の足（関数はログインした人しか呼べず、ここからは見られない）。
 
 ---
 
