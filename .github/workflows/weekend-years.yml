@@ -1,0 +1,29 @@
+# #182: every weekend in GMO's 4-hour and daily year files, against the two ways of throwing a weekend bar away
+# (research/weekend-years.ts, docs §8.93).
+#
+# Read-only: GMO's public klines; prints to the job log, writes nothing to the
+# repository and holds no secret. Runs on GitHub's runners because they can
+# reach GMO and the development container cannot.
+name: Research weekend years
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/weekend-years.ts
+      - .github/workflows/weekend-years.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Read every weekend in GMO's 4-hour and daily year files
+        run: deno run --allow-net=forex-api.coin.z.com research/weekend-years.ts
