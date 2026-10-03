@@ -54,7 +54,7 @@
 //     by chance. The low end does not reward that.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barFullyClosed, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
@@ -72,7 +72,22 @@ const START = Deno.env.get("START") || "2024-01-01";
 const SPLIT = Deno.env.get("SPLIT") || "2025-05-19";
 const START_MS = Date.parse(`${START}T00:00:00Z`);
 const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
-const NOW = Date.now();
+// #182: when the study ends (its "now"), END as an ISO time, to repeat an
+// earlier run on the same bars (run 36730814776's was 2026-09-30T14:40:11Z);
+// the time it runs unless given
+const END = Deno.env.get("END") || "";
+const NOW = END ? Date.parse(END) : Date.now();
+if (!Number.isFinite(NOW)) throw new Error(`END ${END} is not a time`);
+// #182: which bars the weekend throws away. "span" (the default): a bar the
+// market was shut for the whole of (market-hours.ts barFullyClosed), as the
+// sweep's usableBars since #182. "stamp": a bar whose open stamp is inside
+// isMarketClosed, as usableBars before #182, which threw away GMO's 4-hour
+// bar stamped Sunday 20:00 UTC (the week's first two hours) — to repeat the
+// runs before #182.
+const WEEKEND = Deno.env.get("WEEKEND") || "span";
+if (WEEKEND !== "span" && WEEKEND !== "stamp") throw new Error(`WEEKEND ${WEEKEND} is neither span nor stamp`);
+const weekendOut = (openMs: number, stepMs: number): boolean =>
+  WEEKEND === "stamp" ? isMarketClosed(openMs) : barFullyClosed(openMs, stepMs);
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
 // #166: the stop, pips from the entry. 10 (ULTRA_DEFAULTS, the video's) was
 // the email's when this was written (#157); since #166 the emails on the
@@ -185,7 +200,7 @@ const load = async (pair: string, tf: Tf, fromMs: number): Promise<Loaded> => {
     const quotes = tf === "5min"
       ? fine
       : aggregate(fine, step, offset, NOW)
-        .filter((q) => !isMarketClosed(barOpenMs(q.datetime)))
+        .filter((q) => !weekendOut(barOpenMs(q.datetime), step))
         .map((q) => {
           const dt = new Date(barOpenMs(q.datetime)).toISOString();
           return { datetime: dt, bid: { ...q.bid, datetime: dt }, ask: { ...q.ask, datetime: dt } };
@@ -248,11 +263,11 @@ const load = async (pair: string, tf: Tf, fromMs: number): Promise<Loaded> => {
   await Promise.all(Array.from({ length: 8 }, worker));
   bid.sort((a, b) => a.t - b.t);
   ask.sort((a, b) => a.t - b.t);
-  // the bars the sweep keeps (quotes.ts usableBars), closed by now
+  // the bars the sweep keeps (quotes.ts usableBars; WEEKEND), closed by now
   const quotes = mergeSides(bid, ask)
     .filter((q) => {
       const t = Date.parse(q.datetime);
-      return Number.isFinite(t) && t >= fromMs && !isMarketClosed(t) && t + step <= NOW;
+      return Number.isFinite(t) && t >= fromMs && !weekendOut(t, step) && t + step <= NOW;
     });
   return { quotes, requests, cached, failed };
 };
@@ -655,9 +670,9 @@ const row = (label: string, s: Summary) =>
 
 const sel = (f: (x: Rec) => boolean) => recs.filter(f);
 const both = (x: Rec) => x.rule === "qtrend" || x.rule === "ultra";
-const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), synthetic: SYNTHETIC, sl: SL, maxHold: MAX_HOLD, pairs: PAIRS, coverage, check, lateSkipped };
+const report: Record<string, unknown> = { start: START, split: SPLIT, now: iso(NOW), weekend: WEEKEND, synthetic: SYNTHETIC, sl: SL, maxHold: MAX_HOLD, pairs: PAIRS, coverage, check, lateSkipped };
 
-console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT})${SYNTHETIC ? " — SYNTHETIC" : ""}; the stop ${SL} and TP ${LEVELS.tp1}/${LEVELS.tp2}/${LEVELS.tp3} pips, followed on 5-minute bid/ask`);
+console.log(`\n#157 the emails' signals by timeframe, ${START} .. ${iso(NOW)} (split ${SPLIT}; weekend bars out by ${WEEKEND})${SYNTHETIC ? " — SYNTHETIC" : ""}; the stop ${SL} and TP ${LEVELS.tp1}/${LEVELS.tp2}/${LEVELS.tp3} pips, followed on 5-minute bid/ask`);
 for (const tf of TFS) {
   const c = check[tf];
   console.log(`check against indicatorSignals, ${tf}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`);
