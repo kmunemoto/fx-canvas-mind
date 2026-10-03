@@ -170,6 +170,10 @@ describe("#129 Dow theory on the chart", () => {
     expect(legend).toContain("上位足（1H）");
     // #130: what the study found, said beside it
     expect(legend).toContain("確定（2回目）で入ると 2,460回・勝率29.4%");
+    // #183: and #179's, entering while a reading is shown (docs §8.94)
+    expect(legend).toContain("表示が出ている間に入った場合も #179 で測りました");
+    expect(legend).toContain("当たりは45〜51%で、同じ時刻にランダムに入った場合（48〜52%）");
+    expect(legend).toContain("勝率は30〜45%、1回あたり −0.11〜−0.70R");
   });
 
   it("is listed with a switch, and off draws nothing", () => {
