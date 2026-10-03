@@ -12,15 +12,22 @@
 //         isMarketClosed (Saturday, Friday from 22:00, Sunday before 21:00);
 //   new — barFullyClosed: thrown away only when the market was shut for the
 //         whole of it.
+// and a third way:
+//   inside — barInsideClosure (#182, what usableBars asks since): thrown
+//         away only when both the start and the end of the bar are inside
+//         isMarketClosed.
 // Printed: per timeframe, how many bars each way throws away, every bar the
-// new way keeps that the old way threw away (with its prices), the last bar
-// before each weekend and the first after it, and, for each 4-hour bar kept
-// anew, the 1-hour bars of the same four hours put together (open of the
-// first, highest high, lowest low, close of the last) against it.
+// new or the inside way keeps that the old way threw away (with its prices),
+// the last bar before each weekend and the first after it, and, for each
+// 4-hour bar the inside way keeps anew, the 1-hour bars of the same four
+// hours put together (open of the first, highest high, lowest low, close of
+// the last) against it. The weekend of 2026-09-12 is in because HUF/JPY and
+// SEK/JPY have flat bars in it (research/weekend-years.ts); 10 and 30 minutes
+// because the chart reads them from day files too (#181).
 //
 //   deno run --allow-net=forex-api.coin.z.com research/weekend-bars.ts
 
-import { barFullyClosed, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barFullyClosed, barInsideClosure, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
 import { LIVE_PAIRS, NO_KLINE_FILE, isTwelvePair } from "../supabase/functions/live-chart/logic.ts";
 import { GMO_SYMBOLS, klineUrl, parseKlines } from "../supabase/functions/track-outcomes/quotes.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
@@ -65,9 +72,11 @@ const key = (ms: number) => new Date(ms + 9 * HOUR).toISOString().slice(0, 10).r
 // (Europe 2025-10-26 and 2026-03-29, New York 2025-11-02 and 2026-03-08)
 const SATURDAYS = [
   "2025-10-25", "2025-11-01", "2025-12-13", "2026-01-17", "2026-02-21",
-  "2026-03-07", "2026-03-28", "2026-05-16", "2026-07-18", "2026-09-26",
+  "2026-03-07", "2026-03-28", "2026-05-16", "2026-07-18", "2026-09-12", "2026-09-26",
 ];
-const DAY_TFS: Array<[string, number]> = [["1min", MIN], ["5min", 5 * MIN], ["15min", 15 * MIN], ["1hour", HOUR]];
+const DAY_TFS: Array<[string, number]> = [
+  ["1min", MIN], ["5min", 5 * MIN], ["10min", 10 * MIN], ["15min", 15 * MIN], ["30min", 30 * MIN], ["1hour", HOUR],
+];
 const YEAR_TFS: Array<[string, number]> = [["4hour", 4 * HOUR], ["1day", DAY]];
 const PAIRS = LIVE_PAIRS.filter((p) => !isTwelvePair(p) && GMO_SYMBOLS[p] !== undefined);
 
@@ -82,13 +91,16 @@ interface Tally {
   inWindow: number;
   oldDrop: number;
   newDrop: number;
+  insideDrop: number;
   keptAnew: string[];
+  insideAnew: number;
+  fullOnly: string[];
   edges: Map<string, number>;
 }
 const tallies = new Map<string, Tally>();
 const tally = (tf: string): Tally => {
   let t = tallies.get(tf);
-  if (!t) tallies.set(tf, (t = { inWindow: 0, oldDrop: 0, newDrop: 0, keptAnew: [], edges: new Map() }));
+  if (!t) tallies.set(tf, (t = { inWindow: 0, oldDrop: 0, newDrop: 0, insideDrop: 0, keptAnew: [], insideAnew: 0, fullOnly: [], edges: new Map() }));
   return t;
 };
 const fourHourChecks: string[] = [];
@@ -124,12 +136,17 @@ for (const pair of PAIRS) {
         t.inWindow++;
         const oldOut = isMarketClosed(b.t);
         const newOut = barFullyClosed(b.t, len);
+        const insideOut = barInsideClosure(b.t, len);
         if (oldOut) t.oldDrop++;
         if (newOut) t.newDrop++;
+        if (insideOut) t.insideDrop++;
+        if (insideOut && !oldOut) t.keptAnew.push(`${pair} ${iso(b.t)} DROPPED BY INSIDE ONLY`);
+        if (oldOut && !insideOut) t.insideAnew++;
+        if (insideOut && !newOut) t.fullOnly.push(`${pair} ${iso(b.t)} (${at(b.t)}) o ${b.c.open} h ${b.c.high} l ${b.c.low} c ${b.c.close}`);
         if (newOut && !oldOut) t.keptAnew.push(`${pair} ${iso(b.t)} DROPPED BY NEW ONLY`);
         if (oldOut && !newOut) {
           t.keptAnew.push(`${pair} ${iso(b.t)} (${at(b.t)}) o ${b.c.open} h ${b.c.high} l ${b.c.low} c ${b.c.close}`);
-          if (tf === "4hour") {
+          if (tf === "4hour" && !insideOut) {
             const inside = hours.filter((h) => h.t >= b.t && h.t < b.t + len);
             const made = inside.length
               ? { o: inside[0].c.open, h: Math.max(...inside.map((h) => h.c.high)), l: Math.min(...inside.map((h) => h.c.low)), c: inside[inside.length - 1].c.close }
@@ -157,7 +174,8 @@ for (const pair of PAIRS) {
 console.log("");
 console.log("per timeframe (all pairs, all weekends; bars stamped Fri 18:00 to Mon 02:00 UTC)");
 for (const [tf, t] of tallies) {
-  console.log(`${tf}: ${t.inWindow} bars; thrown away old ${t.oldDrop}, new ${t.newDrop}; kept anew ${t.keptAnew.length}`);
+  console.log(`${tf}: ${t.inWindow} bars; thrown away old ${t.oldDrop}, new ${t.newDrop}, inside ${t.insideDrop}; kept anew by new ${t.keptAnew.length}, by inside ${t.insideAnew}`);
+  for (const line of t.fullOnly) console.log(`  kept by new, thrown away by inside: ${line}`);
   for (const [label, n] of [...t.edges.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${n} × ${label}`);
   for (const line of t.keptAnew.slice(0, 400)) console.log(`  kept anew: ${line}`);
 }

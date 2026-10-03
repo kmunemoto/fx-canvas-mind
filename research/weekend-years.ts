@@ -11,6 +11,10 @@
 //         Friday from 22:00, Sunday before 21:00 UTC);
 //   new — barFullyClosed: thrown away only when the market was shut for the
 //         whole of it.
+// and a third way:
+//   inside — barInsideClosure (#182, what usableBars asks since): thrown
+//         away only when both the start and the end of the bar are inside
+//         isMarketClosed.
 // Printed: per timeframe and side, the bars, how many each way throws away,
 // the bars the new way keeps that the old threw away counted by weekday and
 // hour (UTC), any the new way throws away that the old kept, and, for the
@@ -20,7 +24,7 @@
 //
 //   deno run --allow-net=forex-api.coin.z.com research/weekend-years.ts
 
-import { barFullyClosed, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barFullyClosed, barInsideClosure, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
 import { LIVE_PAIRS, NO_KLINE_FILE, isTwelvePair } from "../supabase/functions/live-chart/logic.ts";
 import { GMO_SYMBOLS, klineUrl, parseKlines } from "../supabase/functions/track-outcomes/quotes.ts";
 
@@ -70,6 +74,9 @@ for (const [tf, len] of TFS) {
     let bars = 0;
     let oldDrop = 0;
     let newDrop = 0;
+    let insideDrop = 0;
+    const insideAnew = new Map<string, number>();
+    const insideOnly: string[] = [];
     const keptAnew = new Map<string, number>();
     const droppedNewOnly: string[] = [];
     const stamps = new Map<string, Set<number>>();
@@ -92,8 +99,12 @@ for (const [tf, len] of TFS) {
         bars++;
         const o = isMarketClosed(t);
         const n = barFullyClosed(t, len);
+        const inside = barInsideClosure(t, len);
         if (o) oldDrop++;
         if (n) newDrop++;
+        if (inside) insideDrop++;
+        if (inside && !o) insideOnly.push(`${pair} ${iso(t)}`);
+        if (o && !inside) insideAnew.set(at(t), (insideAnew.get(at(t)) ?? 0) + 1);
         if (n && !o) droppedNewOnly.push(`${pair} ${iso(t)}`);
         if (o && !n) {
           anew.add(t);
@@ -121,8 +132,10 @@ for (const [tf, len] of TFS) {
       stamps.set(pair, anew);
       if (ts.length) lines.push(`${tf} ${side} ${pair}: ${ts.length} bars ${iso(ts[0])} to ${iso(ts[ts.length - 1])}, kept anew ${anew.size}`);
     }
-    console.log(`${tf} ${side}: ${bars} bars; thrown away old ${oldDrop}, new ${newDrop}; dropped by new only ${droppedNewOnly.length}`);
+    console.log(`${tf} ${side}: ${bars} bars; thrown away old ${oldDrop}, new ${newDrop}, inside ${insideDrop}; dropped by new only ${droppedNewOnly.length}, by inside only ${insideOnly.length}`);
     for (const [k, n] of [...keptAnew.entries()].sort()) console.log(`  kept anew at ${k}: ${n}`);
+    for (const [k, n] of [...insideAnew.entries()].sort()) console.log(`  kept anew by inside at ${k}: ${n}`);
+    for (const d of insideOnly.slice(0, 20)) console.log(`  DROPPED BY INSIDE ONLY ${d}`);
     for (const d of droppedNewOnly.slice(0, 20)) console.log(`  DROPPED BY NEW ONLY ${d}`);
     keptBy.set(`${tf}-${side}`, stamps);
   }
