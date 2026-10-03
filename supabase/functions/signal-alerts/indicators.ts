@@ -250,7 +250,9 @@ export const STALE_TRIES = 8;
 // the hour now, so its other pairs are read only when a bar closed in it:
 // "closed" (it closed at this hour), "none" (it closed within the bar's
 // length before this hour, so none closed now) or "unknown" (older still: a
-// read cut short, or the market's weekend — the next pair is asked)
+// read cut short, or the market's weekend — the next pair is asked). #182:
+// GMO's 4-hour bar stamped Sunday 20:00 UTC is kept now, so a week's first
+// 4-hour close is Monday 00:00 UTC (09:00 JST), not 04:00.
 export type HourClose = "closed" | "none" | "unknown";
 export const hourCloseOf = (newestOpenMs: number, interval: string, nowMs: number): HourClose => {
   const step = LIVE_STEP_MS[interval];

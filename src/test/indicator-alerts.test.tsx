@@ -348,9 +348,12 @@ describe("#155 what the sweep reads, and when", () => {
     // at 13:00 the newest closed at 12:00: none closed this hour
     expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T13:00:01Z"))).toBe("none");
     expect(hourCloseOf(at("2026-09-30T08:00:00Z"), "4h", at("2026-09-30T15:59:59Z"))).toBe("none");
-    // a read that stopped at last year's file, or a Monday after the weekend: not told
+    // a read that stopped at last year's file, or one whose newest bar is
+    // still Friday's on Monday morning: not told (#182: GMO's Sunday 20:00 bar
+    // is kept now, and closes at Monday 00:00 — src/test/weekend-gmo.test.ts)
     expect(hourCloseOf(at("2025-12-31T20:00:00Z"), "4h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
     expect(hourCloseOf(at("2026-09-25T16:00:00Z"), "4h", at("2026-09-28T00:00:01Z"))).toBe("unknown");
+    expect(hourCloseOf(at("2026-09-27T20:00:00Z"), "4h", at("2026-09-28T00:00:01Z"))).toBe("closed");
     // a bar that has not closed by the hour (a clock behind): not told either
     expect(hourCloseOf(at("2026-09-30T12:00:00Z"), "4h", at("2026-09-30T12:00:01Z"))).toBe("unknown");
     // the daily bar that closes at GMO's roll
