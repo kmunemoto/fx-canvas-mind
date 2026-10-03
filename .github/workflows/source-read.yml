@@ -1,0 +1,74 @@
+# #185: the sources the research on professional traders cited, read on
+# GitHub's runners (the development container cannot open them), one job a
+# source, so each number can be checked against the source's own text
+# (research/source-read.py, docs §8.95).
+#
+# Read-only: public URLs only, no account, no key and no secret; prints to
+# the job log and writes nothing to the repository or anywhere else.
+name: Read research sources
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/source-read.yml
+      - research/source-read.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        url:
+          # retail traders' results (regulators, the industry body, the Bank of Japan)
+          - https://www.esma.europa.eu/press-news/esma-news/esma-agrees-prohibit-binary-options-and-restrict-cfds-protect-retail-investors
+          - https://www.fsa.go.jp/news/29/singi/20180312-1/01.pdf
+          - https://www.boj.or.jp/research/wps_rev/rev_2023/rev23j06.htm
+          - https://www.boj.or.jp/en/research/wps_rev/rev_2016/data/rev16e05.pdf
+          - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3423101
+          # the Tokyo fixing and gotobi days
+          - https://www.nber.org/papers/w22820
+          - https://arxiv.org/abs/2301.13204
+          - https://tsuzuki.ise.ibaraki.ac.jp/TS_lab/PDF/CCS2022-46.pdf
+          - https://zai.diamond.jp/articles/-/319691
+          - https://da.lib.kobe-u.ac.jp/da/kernel/E0042579/E0042579.pdf
+          - https://www.econ.kobe-u.ac.jp/wp/wp-content/uploads/2023/05/R2_shirakisho2.pdf
+          - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3521370
+          # Japanese professionals' own words on win rates
+          - https://www.gaitame.com/media/entry/2026/02/13/200000
+          - https://zai.diamond.jp/articles/-/487518
+          # institutional strategies: trend following, carry, currency momentum
+          - https://www.aqr.com/-/media/AQR/Documents/Insights/White-Papers/Understanding-Managed-Futures.pdf
+          - https://arxiv.org/pdf/1404.3274
+          - https://faculty.washington.edu/ss1110/IF/Sarno%20JF%20Carry%20Trade%20(1).pdf
+          - https://faculty.washington.edu/ss1110/IF/Sarno%20Currency%20Momentum%20JFE%20(1).pdf
+          - https://www.bis.org/publ/bisbull90.htm
+          - https://www.nber.org/system/files/working_papers/w14054/revisions/w14054.rev2.pdf
+          # proprietary trading firms
+          - https://www.topstep.com/disclosures-notices
+          - https://fundednext.com/blog/fundednext-payout-report-feb-2026
+          - https://ftmo.com/en/blog/how-do-our-best-ftmo-traders-trade/
+          - https://ftmo.com/en/blog/how-much-should-you-risk-on-one-trade/
+          # the Turtles' rules, and a market maker's losing days
+          - https://oxfordstrat.com/coasdfASD32/uploads/2016/01/turtle-rules.pdf
+          - https://www.sec.gov/Archives/edgar/data/0001592386/000104746914002070/a2218589zs-1.htm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils >/dev/null
+          pip install -q beautifulsoup4
+      - name: Read
+        env:
+          URL: ${{ matrix.url }}
+          KEYWORDS: "win rate|winning|losing day|lose money|lost money|Sharpe|per cent|percent|勝率|損失|利益|口座|預託金|ゴトー|五十日|仲値|9:55|Sharpe ratio|annual|drawdown|risk per trade|1%|2%"
+        run: python3 research/source-read.py
