@@ -54,7 +54,7 @@
 //     by chance. The low end does not reward that.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { barFullyClosed, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
@@ -78,16 +78,16 @@ const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
 const END = Deno.env.get("END") || "";
 const NOW = END ? Date.parse(END) : Date.now();
 if (!Number.isFinite(NOW)) throw new Error(`END ${END} is not a time`);
-// #182: which bars the weekend throws away. "span" (the default): a bar the
-// market was shut for the whole of (market-hours.ts barFullyClosed), as the
-// sweep's usableBars since #182. "stamp": a bar whose open stamp is inside
-// isMarketClosed, as usableBars before #182, which threw away GMO's 4-hour
-// bar stamped Sunday 20:00 UTC (the week's first two hours) — to repeat the
-// runs before #182.
-const WEEKEND = Deno.env.get("WEEKEND") || "span";
-if (WEEKEND !== "span" && WEEKEND !== "stamp") throw new Error(`WEEKEND ${WEEKEND} is neither span nor stamp`);
+// #182: which bars the weekend throws away. "inside" (the default): a bar
+// whose start and end are both inside isMarketClosed (market-hours.ts
+// barInsideClosure), as the sweep's usableBars since #182. "stamp": a bar
+// whose open stamp is inside isMarketClosed, as usableBars before #182, which
+// threw away GMO's 4-hour bar stamped Sunday 20:00 UTC (the week's first two
+// hours) — to repeat the runs before #182.
+const WEEKEND = Deno.env.get("WEEKEND") || "inside";
+if (WEEKEND !== "inside" && WEEKEND !== "stamp") throw new Error(`WEEKEND ${WEEKEND} is neither inside nor stamp`);
 const weekendOut = (openMs: number, stepMs: number): boolean =>
-  WEEKEND === "stamp" ? isMarketClosed(openMs) : barFullyClosed(openMs, stepMs);
+  WEEKEND === "stamp" ? isMarketClosed(openMs) : barInsideClosure(openMs, stepMs);
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
 // #166: the stop, pips from the entry. 10 (ULTRA_DEFAULTS, the video's) was
 // the email's when this was written (#157); since #166 the emails on the

@@ -26,12 +26,16 @@ on:
       end:
         description: "The data's end, UTC"
         default: "2026-10-02T00:00:00Z"
+      weekend:
+        description: "#182: weekend bars out by inside (barInsideClosure, the chart's since #182) or stamp (before #182, #179's run)"
+        default: "inside"
 permissions:
   contents: read
 env:
   START: "2024-01-01"
   SPLIT: "2025-07-01"
   END: ${{ inputs.end || '2026-10-02T00:00:00Z' }}
+  WEEKEND: ${{ inputs.weekend || 'inside' }}
 
 jobs:
   real:
@@ -66,7 +70,7 @@ jobs:
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,WEEKEND,OUTDIR,REPORT_DIR,CHECKS,PERTURB
           research/dow-hit.ts
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()
@@ -103,7 +107,7 @@ jobs:
           --v8-flags=--max-old-space-size=6144
           --allow-read=.
           --allow-write=research/out
-          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,WEEKEND,OUTDIR,REPORT_DIR,CHECKS,PERTURB
           research/dow-hit.ts
       - uses: actions/upload-artifact@v4
         with:
@@ -134,5 +138,5 @@ jobs:
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-read=.
-          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,OUTDIR,REPORT_DIR,CHECKS,PERTURB
+          --allow-env=MODE,SEEDS,PAIRS,START,SPLIT,END,WEEKEND,OUTDIR,REPORT_DIR,CHECKS,PERTURB
           research/dow-hit.ts

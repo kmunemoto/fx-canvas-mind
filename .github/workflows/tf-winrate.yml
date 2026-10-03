@@ -37,8 +37,8 @@ on:
         description: "#182: when the study ends, ISO (empty: now; run 36730814776's: 2026-09-30T14:40:11Z)"
         default: ""
       weekend:
-        description: "#182: weekend bars out by span (barFullyClosed, the sweep's since #182) or stamp (before #182)"
-        default: "span"
+        description: "#182: weekend bars out by inside (barInsideClosure, the sweep's since #182) or stamp (before #182)"
+        default: "inside"
 permissions:
   contents: read
 
@@ -80,7 +80,7 @@ jobs:
           SL: ${{ inputs.sl || '30' }}
           TP1: ${{ inputs.tp1 || '20' }}
           END: ${{ inputs.end || '' }}
-          WEEKEND: ${{ inputs.weekend || 'span' }}
+          WEEKEND: ${{ inputs.weekend || 'inside' }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
