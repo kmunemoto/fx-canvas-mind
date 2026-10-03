@@ -250,7 +250,9 @@ export const STALE_TRIES = 8;
 // the hour now, so its other pairs are read only when a bar closed in it:
 // "closed" (it closed at this hour), "none" (it closed within the bar's
 // length before this hour, so none closed now) or "unknown" (older still: a
-// read cut short, or the market's weekend — the next pair is asked)
+// read cut short, or the market's weekend — the next pair is asked). #182:
+// GMO's 4-hour bar stamped Sunday 20:00 UTC is kept now, so a week's first
+// 4-hour close is Monday 00:00 UTC (09:00 JST), not 04:00.
 export type HourClose = "closed" | "none" | "unknown";
 export const hourCloseOf = (newestOpenMs: number, interval: string, nowMs: number): HourClose => {
   const step = LIVE_STEP_MS[interval];
@@ -395,19 +397,24 @@ export const keepableKlines = (body: unknown): boolean =>
 // #173: measured again at their targets since, TP1 20 pips (TP2 40, TP3 60)
 // and the stop 30 (tf-winrate with TP1=20 and SL=30, 2024-01-01 to
 // 2026-09-30, GitHub Actions run 36730814776, docs §8.82); #166's were at TP1 5.
+// #182: 4h measured again on the bars the sweep reads since, GMO's 4-hour bar
+// stamped Sunday 20:00 UTC kept (tf-winrate with WEEKEND=inside, the same end,
+// 2026-09-30T14:40:11Z, GitHub Actions run 37134322956, docs §8.93; the other
+// timeframes came out the same to the trade). Before: Q-Trend 58.3 / -1.47,
+// ULTRA 60.1 / -0.54 (run 37133903888, WEEKEND=stamp, repeating 36730814776).
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
     "5min": { win: 58.0, pips: -2.03 },
     "15min": { win: 58.4, pips: -1.8 },
     "1h": { win: 59.2, pips: -1.33 },
-    "4h": { win: 58.3, pips: -1.47 },
+    "4h": { win: 59.1, pips: -1.17 },
     "1day": { win: 55.1, pips: -6.92 },
   },
   ultra: {
     "5min": { win: 58.2, pips: -1.81 },
     "15min": { win: 58.0, pips: -1.79 },
     "1h": { win: 58.4, pips: -1.87 },
-    "4h": { win: 60.1, pips: -0.54 },
+    "4h": { win: 60.8, pips: -0.37 },
     "1day": { win: 50.0, pips: -9.5 },
   },
 };

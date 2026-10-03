@@ -8,7 +8,7 @@
 // every study here must find nothing.
 
 import { GMO_SYMBOLS, dateKeys, jstDayKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { MINUTE } from "./lib.ts";
 
@@ -121,7 +121,7 @@ export const fetchPair = async (
   const bars = mergeSides(bid, ask)
     .filter((q) => {
       const t = Date.parse(q.datetime);
-      return Number.isFinite(t) && !isMarketClosed(t) && t + 15 * MINUTE <= opts.now;
+      return Number.isFinite(t) && !barInsideClosure(t, 15 * MINUTE) && t + 15 * MINUTE <= opts.now;
     })
     .map((q) => ({ ...q, datetime: q.datetime.slice(0, 19).replace("T", " ") }));
   return { bars, requests, cached, failed };

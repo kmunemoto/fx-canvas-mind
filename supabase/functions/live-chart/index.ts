@@ -23,6 +23,9 @@
 // read as gold is (docs §8.91). #181: the broker's 15 bar timeframes, 1
 // minute to a month; the 9 added are read as logic.ts says ("the timeframes
 // the feeds do not serve as they are"), the 6 before as they were (docs §8.92).
+// #182: a GMO bar is thrown away only when the market was shut for all of it
+// (quotes.ts usableBars, market-hours.ts barInsideClosure), so the 4-hour bar
+// stamped Sunday 20:00 UTC, the week's first two hours, is drawn (docs §8.93).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -95,7 +98,7 @@ import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/mark
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
 import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
 
-const FUNCTION_VERSION = "live-chart-v16-2026-10-02T14:00:00Z";
+const FUNCTION_VERSION = "live-chart-v17-2026-10-03T16:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's

@@ -175,7 +175,7 @@
 // 8,639, 0 differ, as the reviewer reported; not run again here).
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
@@ -392,7 +392,7 @@ const load = async (pair: string, tf: "5min" | "4h", fromMs: number): Promise<Lo
     const quotes = tf === "5min"
       ? fine
       : aggregate(fine, step, 21 * HOUR, NOW)
-        .filter((q) => !isMarketClosed(barOpenMs(q.datetime)))
+        .filter((q) => !barInsideClosure(barOpenMs(q.datetime), step))
         .map((q) => {
           const dt = new Date(barOpenMs(q.datetime)).toISOString();
           return { datetime: dt, bid: { ...q.bid, datetime: dt }, ask: { ...q.ask, datetime: dt } };
@@ -452,7 +452,7 @@ const load = async (pair: string, tf: "5min" | "4h", fromMs: number): Promise<Lo
   ask.sort((a, b) => a.t - b.t);
   const quotes = mergeSides(bid, ask).filter((q) => {
     const t = Date.parse(q.datetime);
-    return Number.isFinite(t) && t >= fromMs && !isMarketClosed(t) && t + step <= NOW;
+    return Number.isFinite(t) && t >= fromMs && !barInsideClosure(t, step) && t + step <= NOW;
   });
   return { quotes, failed };
 };

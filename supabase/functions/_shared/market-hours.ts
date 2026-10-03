@@ -123,6 +123,35 @@ export const barFullyClosed = (openMs: number, intervalMs: number): boolean => {
   return isMarketClosed(openMs) && isMarketClosed(endMs);
 };
 
+// #182: Was the market shut for the whole of this GMO bar, by the narrow
+// predicate alone?
+//
+// The question usableBars (track-outcomes/quotes.ts) asks of GMO's bars. It
+// used to ask isMarketClosed of the open stamp only, which threw away GMO's
+// 4h bar stamped Sunday 20:00 UTC: GMO's week opens at 22:00, so that bar
+// holds the week's first two hours of trading (docs §8.93: 2,158 of them in
+// GMO's 2023-2026 4-hour files for the 14 pairs, Bid and Ask alike, each
+// equal to the 22:00 and 23:00 1h bars inside it). Its end is inside the
+// trading week, so it is kept here.
+//
+// Not barFullyClosed: that keeps any bar reaching Sunday 17:00 UTC, because
+// Twelve Data prices the weekly open from then (SUNDAY_PREOPEN_UTC_HOUR). GMO
+// does not trade before 22:00, and what it files earlier is filler: in the
+// same files the only other bars barFullyClosed keeps are HUF/JPY's and
+// SEK/JPY's 4h bar stamped 2026-09-13 16:00 and daily bar stamped 2026-09-12
+// 21:00, each one price for open, high, low and close. Both are thrown away
+// here, as before. On GMO's 1-minute to 1-hour bars this answers as the open
+// stamp did: none of them reaches from the closure into the trading week.
+//
+// An unknown length (0 or less) answers as the open stamp alone, as usableBars
+// did; a bar longer than the longest closure always holds trading.
+export const barInsideClosure = (openMs: number, intervalMs: number): boolean => {
+  if (!Number.isFinite(openMs)) return false;
+  if (!(intervalMs > 0)) return isMarketClosed(openMs);
+  if (intervalMs > CLOSED_WINDOW_MS) return false;
+  return isMarketClosed(openMs) && isMarketClosed(openMs + intervalMs - 1);
+};
+
 // When does it open again?
 //
 // Only meaningful while `isPossiblyClosed(ms)` is true — it answers the

@@ -33,6 +33,12 @@ on:
       tp1:
         description: "TP1, pips; TP2 and TP3 twice and three times it (#166: 5; the emails' since #173: 20)"
         default: "20"
+      end:
+        description: "#182: when the study ends, ISO (empty: now; run 36730814776's: 2026-09-30T14:40:11Z)"
+        default: ""
+      weekend:
+        description: "#182: weekend bars out by inside (barInsideClosure, the sweep's since #182) or stamp (before #182)"
+        default: "inside"
 permissions:
   contents: read
 
@@ -73,13 +79,15 @@ jobs:
           SPLIT: ${{ inputs.split || '2025-05-19' }}
           SL: ${{ inputs.sl || '30' }}
           TP1: ${{ inputs.tp1 || '20' }}
+          END: ${{ inputs.end || '' }}
+          WEEKEND: ${{ inputs.weekend || 'inside' }}
         run: >
           deno run
           --v8-flags=--max-old-space-size=6144
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,END,WEEKEND
           research/tf-winrate.ts
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()

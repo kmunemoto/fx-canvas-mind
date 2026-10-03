@@ -683,7 +683,11 @@ const timeline = (candles: Candle[], nowMs: number, ms: number): Timed[] =>
 // side fills it and which side closes it. Unlike the mid feed, this
 // provider's behaviour across the weekend break is not established, so a bar
 // stamped inside the closed session is dropped — a level "touched" while
-// nobody could trade was never really reached.
+// nobody could trade was never really reached. (#182: usableBars asks
+// whether the market was shut for the whole bar, which keeps GMO's 4-hour
+// bar stamped Sunday 20:00. The bars judged here are 1 minute to 1 hour, on
+// which the stamp answers the same: none of them reaches from the closure
+// into the trading week.)
 const quoteTimeline = (quotes: QuoteCandle[], signal: Signal, nowMs: number, ms: number): Timed[] => {
   const fill = fillSide(signal);
   const exit = exitSide(signal);

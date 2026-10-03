@@ -236,7 +236,11 @@ export const fetchRecentQuotes = async (
 //
 // What it would have done to 1min, stated exactly (the first draft of this
 // comment claimed usableBars would drop the newest sixty bars as forming; it
-// would not — usableBars ignores the bar length). It sizes the day-file WALK:
+// would not — usableBars keeps the forming bar whatever its length). #182:
+// usableBars now takes the length too, to throw a bar away only when the
+// market was shut for all of it; on these day-keyed timeframes that answers
+// as the open stamp did (GMO files none of them across the weekend's edge).
+// It sizes the day-file WALK:
 // told a 1min bar is an hour long, 250 bars becomes 11 open days, padded to an
 // 18-day span, instead of 1 open day padded to 4. On a normal day the walk
 // stops after one file either way; on a thin stretch — Monday before the

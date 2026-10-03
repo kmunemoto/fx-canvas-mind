@@ -36,7 +36,7 @@
 //     compared with entering the same trend at any other time.
 
 import { GMO_SYMBOLS, dateKeys, jstDayKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, historyRead } from "../supabase/functions/live-chart/logic.ts";
@@ -154,7 +154,7 @@ const fetch5 = async (pair: string): Promise<{ bars: QuoteCandle[]; requests: nu
   const bars = mergeSides(bid, ask)
     .filter((q) => {
       const t = Date.parse(q.datetime);
-      return Number.isFinite(t) && !isMarketClosed(t) && t + STEP <= NOW;
+      return Number.isFinite(t) && !barInsideClosure(t, STEP) && t + STEP <= NOW;
     })
     .map((q) => ({ ...q, datetime: q.datetime.slice(0, 19).replace("T", " ") }));
   return { bars, requests, cached, failed };

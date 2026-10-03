@@ -372,7 +372,7 @@
 // whether production could read all seven crosses at a close in time.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
@@ -559,7 +559,7 @@ const loadGmo = async (pair: string, tf: "5min" | "4h", fromMs: number): Promise
   ask.sort((a, b) => a.t - b.t);
   const quotes = mergeSides(bid, ask).filter((q) => {
     const t = Date.parse(q.datetime);
-    return Number.isFinite(t) && t >= fromMs && !isMarketClosed(t) && t + step <= NOW;
+    return Number.isFinite(t) && t >= fromMs && !barInsideClosure(t, step) && t + step <= NOW;
   });
   return { quotes, failed };
 };
@@ -673,7 +673,7 @@ const basket = (): Map<string, Fine> => {
     if (bk !== bucket) {
       if (bucketKept) closes.push(Float64Array.from(v));
       bucket = bk;
-      bucketKept = !isMarketClosed(bk * STEP);
+      bucketKept = !barInsideClosure(bk * STEP, STEP);
       drift.fill(0);
       if (SYNTH === "rank" && closes.length > LSTAR) {
         const tb = walkTopBottom(closes[closes.length - 1], closes[closes.length - 1 - LSTAR]);
@@ -738,7 +738,7 @@ const fourHour = (f: Fine): QuoteCandle[] => {
       al = Math.min(al, f.al[j]);
       j++;
     }
-    if (!isMarketClosed(open) && open + STEP <= NOW) {
+    if (!barInsideClosure(open, STEP) && open + STEP <= NOW) {
       const dt = new Date(open).toISOString();
       out.push({ datetime: dt, bid: { datetime: dt, open: f.bo[i], high: bh, low: bl, close: f.bc[j - 1] }, ask: { datetime: dt, open: f.ao[i], high: ah, low: al, close: f.ac[j - 1] } });
     }

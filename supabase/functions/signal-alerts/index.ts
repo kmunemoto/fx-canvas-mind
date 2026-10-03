@@ -118,7 +118,11 @@ import type { Candle } from "../analyze/indicators.ts";
 // live-chart logic this reads (LIVE_STEP_MS, barEndMs); the emails' own
 // lists (ALERT_INTERVALS, INDICATOR_INTERVALS) are as they were, and for
 // their timeframes every bar closes where it did.
-const FUNCTION_VERSION = "signal-alerts-v18-2026-10-02T14:00:00Z";
+// v19 (#182): GMO's 4-hour bar stamped Sunday 20:00 UTC (the week's first two
+// hours) is no longer thrown away (quotes.ts usableBars): the 4-hour charts
+// are judged at Monday 00:00 UTC too, and every 4-hour reading runs on the
+// bars with it. The other timeframes' bars are as they were.
+const FUNCTION_VERSION = "signal-alerts-v19-2026-10-03T16:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

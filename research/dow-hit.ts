@@ -115,7 +115,7 @@ import {
   parseKlines,
   type QuoteCandle,
 } from "../supabase/functions/track-outcomes/quotes.ts";
-import { isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import { atrSeriesOf } from "../supabase/functions/analyze/state.ts";
 import { dowTheory } from "../supabase/functions/_shared/dow.ts";
 import { DOW_BARS, LIVE_PAIRS, LIVE_STEP_MS, dowOf, fetchDowQuotes, isTwelvePair, splitBars } from "../supabase/functions/live-chart/logic.ts";
@@ -146,6 +146,16 @@ const START_MS = Date.parse(`${START}T00:00:00Z`);
 const SPLIT_MS = Date.parse(`${SPLIT}T00:00:00Z`);
 const END_ENV = Deno.env.get("END");
 const NOW = END_ENV ? Date.parse(END_ENV.includes("T") ? END_ENV : `${END_ENV}T00:00:00Z`) : Date.now();
+// #182: which bars the weekend throws away, as the chart's usableBars.
+// "inside" (the default): a bar whose start and end are both inside
+// isMarketClosed (market-hours.ts barInsideClosure), the chart's since #182.
+// "stamp": a bar whose open stamp is inside isMarketClosed, the chart's
+// before #182 (#179's run 36983279241), which threw away GMO's 4-hour bar
+// stamped Sunday 20:00 UTC, the week's first two hours.
+const WEEKEND = Deno.env.get("WEEKEND") || "inside";
+if (WEEKEND !== "inside" && WEEKEND !== "stamp") throw new Error(`WEEKEND ${WEEKEND} is neither inside nor stamp`);
+const weekendOut = (openMs: number, stepMs: number): boolean =>
+  WEEKEND === "stamp" ? isMarketClosed(openMs) : barInsideClosure(openMs, stepMs);
 const CACHE = "research/.cache";
 const OUT = Deno.env.get("OUTDIR") || "research/out";
 const REPORT_DIR = Deno.env.get("REPORT_DIR") || "research/in";
@@ -261,10 +271,10 @@ const midHigh = (b: Bars, i: number) => (b.bh[i] + b.ah[i]) / 2;
 const midLow = (b: Bars, i: number) => (b.bl[i] + b.al[i]) / 2;
 
 // a bar stamped s belongs in GMO's file and is kept by the chart: not
-// stamped while the market is shut (usableBars), and with some of its time
-// certainly open
+// thrown away for the weekend (usableBars; WEEKEND), and with some of its
+// time certainly open
 const shouldExist = (s: number, step: number): boolean => {
-  if (isMarketClosed(s)) return false;
+  if (weekendOut(s, step)) return false;
   for (let m = s; m < s + step; m += FINE) if (!isPossiblyClosed(m)) return true;
   return false;
 };
@@ -376,8 +386,8 @@ interface LoadStats {
 }
 const newStats = (): LoadStats => ({ requests: 0, cached: 0, failed: 0, refetched: 0, failedKeys: [], keyOrder: 0 });
 
-// The bars the chart keeps (quotes.ts usableBars: none stamped while the
-// market is shut) of one pair and timeframe from `fromMs`, closed by the
+// The bars the chart keeps (quotes.ts usableBars: none the weekend throws
+// away, WEEKEND) of one pair and timeframe from `fromMs`, closed by the
 // data's end, each with the key of the newest file it is in (the walk reads
 // a bar if any file holding it is new enough)
 const loadReal = async (pair: string, tf: Tf, fromMs: number, stats: LoadStats): Promise<Bars> => {
@@ -461,7 +471,7 @@ const loadReal = async (pair: string, tf: Tf, fromMs: number, stats: LoadStats):
     ask.sort((a, b) => a.t - b.t);
     const qs = mergeSides(bid, ask).filter((q) => {
       const t = Date.parse(q.datetime);
-      return Number.isFinite(t) && t >= fromMs && !isMarketClosed(t) && t + step <= NOW;
+      return Number.isFinite(t) && t >= fromMs && !weekendOut(t, step) && t + step <= NOW;
     });
     return fromQuotes(qs, (t) => keyOfT.get(t) ?? Number(spec.key === "year" ? jstYearKey(t) : jstDayKey(t)));
   };
@@ -636,7 +646,7 @@ const aggregateBars = (f: Bars, step: number, yearKey: boolean): { raw: Bars; us
   while (m > 0 && out.t[m - 1] + step > NOW) m--;
   const raw = sliceBars(out, 0, m);
   const keep: number[] = [];
-  for (let i = 0; i < raw.n; i++) if (!isMarketClosed(raw.t[i])) keep.push(i);
+  for (let i = 0; i < raw.n; i++) if (!weekendOut(raw.t[i], step)) keep.push(i);
   return { raw, usable: pickBars(raw, keep) };
 };
 

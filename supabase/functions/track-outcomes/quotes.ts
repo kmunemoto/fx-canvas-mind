@@ -21,7 +21,7 @@
 // Deno-free on purpose: src/test/quotes.test.ts imports this file directly.
 
 import type { Candle } from "../analyze/indicators.ts";
-import { isMarketClosed, isPossiblyClosed } from "../_shared/market-hours.ts";
+import { barInsideClosure, isPossiblyClosed } from "../_shared/market-hours.ts";
 
 export const GMO_HOST = "https://forex-api.coin.z.com/public/v1";
 
@@ -220,14 +220,17 @@ export const mergeSides = (
 // The bar still forming is deliberately kept. Its high and low can only
 // widen, so a level it has already touched really was reached, and dropping
 // it would delay every settlement by up to a whole bar for no gain. Only a
-// bar stamped inside the weekend break is discarded — a level "touched"
-// while nobody could trade was never really reached.
-export const usableBars = (bars: QuoteCandle[], _intervalMs: number, nowMs: number): QuoteCandle[] =>
+// bar the market was shut for the whole of is discarded — a level "touched"
+// while nobody could trade was never really reached. #182: the whole of it,
+// not its open stamp (market-hours.ts barInsideClosure): GMO's 4h bar stamped
+// Sunday 20:00 UTC holds the week's first two hours and is kept. `intervalMs`
+// is the bar's length; without one, the open stamp decides, as it did.
+export const usableBars = (bars: QuoteCandle[], intervalMs: number, nowMs: number): QuoteCandle[] =>
   bars.filter((q) => {
     const t = Date.parse(q.datetime);
     if (!Number.isFinite(t)) return false;
     if (t > nowMs + 60_000) return false;
-    return !isMarketClosed(t);
+    return !barInsideClosure(t, intervalMs);
   });
 
 // Whether the feed actually answered for the window asked about.
