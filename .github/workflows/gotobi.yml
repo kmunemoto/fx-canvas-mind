@@ -1,0 +1,139 @@
+# #186: does buying USD/JPY at 23:00 JST the evening before a gotobi day and
+# selling at the 9:55 JST fixing still pay on GMO's 1-minute bid/ask bars
+# (research/gotobi.ts, design docs §8.96)?
+#
+# A push of these files runs the two parts that read no price: "prepare"
+# (the Cabinet Office's holiday list checked, the calendars counted, and
+# GMO's first 1-minute day file found from which files exist and how many
+# bars they hold) and "synthetic" (the made-up checks). The study itself
+# ("real") runs only by hand, after the first day and the synthetic results
+# are committed in docs: FIRST and END are inputs so a run again reads the
+# same days.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the Cabinet Office's site and the development container cannot. Read-only:
+# it fetches public files, prints a report to the job log and uploads the
+# same tables as artifacts. It writes nothing to the repository and holds no
+# secret.
+name: Research gotobi USD/JPY
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/gotobi.ts
+      - research/gotobi-lib.ts
+      - .github/workflows/gotobi.yml
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "prepare, synthetic, real or check (real again from the kept day files, then research/gotobi-check.py)"
+        default: "prepare"
+      first:
+        description: "real: GMO's first 1-minute day file with both sides (from prepare, committed in docs §8.96)"
+        default: ""
+      end:
+        description: "the last trade day (JST date)"
+        default: "2026-10-02"
+permissions:
+  contents: read
+env:
+  END: ${{ inputs.end || '2026-10-02' }}
+
+jobs:
+  prepare:
+    if: github.event_name == 'push' || inputs.mode == 'prepare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Holidays, calendars and GMO's first 1-minute day file (no price read)
+        env:
+          MODE: prepare
+        run: >
+          deno run
+          --allow-net=forex-api.coin.z.com,www8.cao.go.jp
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=MODE,FIRST,END,BOOT,NULLS,NEFFECT,HOLIDAYS_FILE
+          research/gotobi.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotobi-prepare
+          path: research/out/
+          retention-days: 30
+
+  synthetic:
+    if: github.event_name == 'push' || inputs.mode == 'synthetic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The made-up checks
+        env:
+          MODE: synthetic
+          FIRST: ${{ inputs.first }}
+        run: >
+          deno run
+          --allow-net=www8.cao.go.jp
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env=MODE,FIRST,END,BOOT,NULLS,NEFFECT,HOLIDAYS_FILE
+          research/gotobi.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotobi-synthetic
+          path: research/out/
+          retention-days: 30
+
+  real:
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'real' || inputs.mode == 'check')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled: kept between runs
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache/gotobi
+          key: gmo-gotobi-none
+          restore-keys: gmo-gotobi-
+      - name: Read GMO's 1-minute bars and measure
+        env:
+          MODE: real
+          FIRST: ${{ inputs.first }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com,www8.cao.go.jp
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=MODE,FIRST,END,BOOT,NULLS,NEFFECT,HOLIDAYS_FILE
+          research/gotobi.ts
+      # the independent check of every trade from the raw day files
+      - if: inputs.mode == 'check'
+        name: Check every trade again from the raw files
+        run: python3 research/gotobi-check.py
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache/gotobi
+          key: gmo-gotobi-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotobi-real
+          path: research/out/
+          retention-days: 30
