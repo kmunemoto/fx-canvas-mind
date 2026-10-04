@@ -113,12 +113,12 @@ describe("#156 Q-Trend's stop and targets: ULTRA's numbers (the owner's choice, 
       expect(t.tps[1]).toBeCloseTo(t.entry + d * 5.0, 10);
       expect(t.tps[2]).toBeCloseTo(t.entry + d * 7.5, 10);
     }
-    // #166: a currency pair's settings, the stop 30 units away; #173: the
-    // targets 20, 40 and 60
+    // a currency pair's settings: #192, the stop 13 units away and the
+    // targets 4, 10 and 16 (#166's stop 30, #173's targets 20, 40 and 60)
     for (const t of qTrendTrades(bars, r.signals, N - 1, u, ULTRA_PAIRS)) {
       const d = t.side === "BUY" ? 1 : -1;
-      expect(t.sl).toBeCloseTo(t.entry - d * 15.0, 10);
-      expect(t.tps.map((v) => (v - t.entry) * d)).toEqual([10.0, 20.0, 30.0].map((x) => expect.closeTo(x, 10)));
+      expect(t.sl).toBeCloseTo(t.entry - d * 6.5, 10);
+      expect(t.tps.map((v) => (v - t.entry) * d)).toEqual([2.0, 5.0, 8.0].map((x) => expect.closeTo(x, 10)));
     }
   });
 
@@ -167,7 +167,7 @@ describe("#156 on the chart: the newest Q-Trend signal's stop and targets", () =
   const show = () => render(<PriceChart candles={quiet.slice(280)} pair="EUR/GBP" zoneShiftHistory={{ bars: quiet.slice(0, 280), status: "ready" }} formingLast />);
   // the chart's own reading, done here apart: Q-Trend from its fixed start
   // (#148), closed bars only (the newest is forming), ULTRA's numbers in pips
-  // (#166: a currency pair's, the stop 30)
+  // (a currency pair's: #192, the stop 13 and the targets 4, 10 and 16)
   const want = (() => {
     const times = quiet.map((b) => parseUtcCandleTime(b.datetime));
     const last = quiet.length - 2;
@@ -192,10 +192,10 @@ describe("#156 on the chart: the newest Q-Trend signal's stop and targets", () =
     expect(text("entry")).toBe(`Q Entry ${f(want.entry)}`);
     expect(text("sl")).toBe(`Q SL ${f(want.sl)}`);
     expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(want.tps.map((v, k) => `Q TP${k + 1} ${f(v)}`));
-    // a sell: the stop 30 pips above (#166), the targets 20, 40 and 60 below (#173)
+    // a sell: #192, the stop 13 pips above, the targets 4, 10 and 16 below
     expect(want.side).toBe("SELL");
-    expect(want.sl - want.entry).toBeCloseTo(0.003, 8);
-    expect(want.tps.map((v) => want.entry - v)).toEqual([0.002, 0.004, 0.006].map((d) => expect.closeTo(d, 8)));
+    expect(want.sl - want.entry).toBeCloseTo(0.0013, 8);
+    expect(want.tps.map((v) => want.entry - v)).toEqual([0.0004, 0.001, 0.0016].map((d) => expect.closeTo(d, 8)));
     expect(plan.querySelector("title")!.textContent).toBe(
       `Q-Trend 売り（損切り・利確は ULTRA と同じ数字）: エントリー ${f(want.entry)}・損切り ${f(want.sl)}・TP1 ${f(want.tps[0])}・TP2 ${f(want.tps[1])}・TP3 ${f(want.tps[2])}`,
     );

@@ -54,9 +54,9 @@ describe("#151 ULTRA: the video's settings", () => {
     expect(ULTRA_DEFAULTS).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 5, tp2: 10, tp3: 15 });
   });
 
-  it("#166/#168/#173: a currency pair's stop 30 pips and targets 20, 40 and 60; gold's targets $30, $60 and $90 with the video's $10 stop", () => {
-    expect(ULTRA_PAIRS).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 30, tp1: 20, tp2: 40, tp3: 60 });
-    expect(ULTRA_GOLD).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 30, tp2: 60, tp3: 90 });
+  it("#192: gold and the currency pairs both at the second video's chart: the stop 13 and the targets 4, 10 and 16", () => {
+    expect(ULTRA_PAIRS).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 13, tp1: 4, tp2: 10, tp3: 16 });
+    expect(ULTRA_GOLD).toEqual({ rsiLength: 14, overbought: 70, oversold: 30, sl: 13, tp1: 4, tp2: 10, tp3: 16 });
     expect(ultraParamsFor(true)).toBe(ULTRA_GOLD);
     expect(ultraParamsFor(false)).toBe(ULTRA_PAIRS);
   });
@@ -98,24 +98,27 @@ describe("#151 ULTRA: its signals, targets and tally", () => {
     }
   });
 
-  // #168: the same signals at gold's targets. The expected rows were counted
-  // again independently (a Python count from the rules above, which gives the
-  // rows of the test before it at 5, 10 and 15 exactly)
-  it("gold at $30, $60 and $90: the same signals, most stopped before TP1; one still open, not counted", () => {
+  // #192: the same signals at the levels since (#168's $30, $60 and $90 with
+  // the $10 stop: TP1 1, SL 8 of 9). The expected rows were counted again
+  // independently (a Python count from the rules above, which gives the rows
+  // of the test before it at 5, 10 and 15 and #168's at 30, 60 and 90 exactly).
+  // On this made-up walk, whose bars move about $3, every one reached TP1
+  // first: a test of the counting, not a measurement
+  it("#192: gold at $4, $10 and $16 with a $13 stop: the same signals, every one at TP1 before its stop; one still open, counted at TP1", () => {
     const r = ultra(gold, gold.length - 2, 1, ULTRA_GOLD);
     same(r.trades.map(rowOf), [
-      [111, "BUY", 4294.3, 4284.3, [4324.3, 4354.3, 4384.3], [null, null, null], 169, "SL", 169],
-      [114, "BUY", 4290.23, 4280.23, [4320.23, 4350.23, 4380.23], [null, null, null], 221, "SL", 221],
-      [170, "BUY", 4284.09, 4274.09, [4314.09, 4344.09, 4374.09], [null, null, null], 227, "SL", 227],
-      [228, "BUY", 4277.09, 4267.09, [4307.09, 4337.09, 4367.09], [null, null, null], 247, "SL", 247],
-      [230, "BUY", 4277.51, 4267.51, [4307.51, 4337.51, 4367.51], [null, null, null], 247, "SL", 247],
-      [247, "BUY", 4271.65, 4261.65, [4301.65, 4331.65, 4361.65], [null, null, null], 303, "SL", 303],
-      [263, "SELL", 4287.66, 4297.66, [4257.66, 4227.66, 4197.66], [null, null, null], 270, "SL", 270],
-      [271, "SELL", 4294.91, 4304.91, [4264.91, 4234.91, 4204.91], [295, null, null], null, "TP1", null],
-      [304, "BUY", 4265.1, 4255.1, [4295.1, 4325.1, 4355.1], [null, null, null], 357, "SL", 357],
-      [358, "BUY", 4257.39, 4247.39, [4287.39, 4317.39, 4347.39], [null, null, null], null, null, null],
+      [111, "BUY", 4294.3, 4281.3, [4298.3, 4304.3, 4310.3], [134, null, null], 221, "TP1", 221],
+      [114, "BUY", 4290.23, 4277.23, [4294.23, 4300.23, 4306.23], [124, 141, null], 225, "TP1", 225],
+      [170, "BUY", 4284.09, 4271.09, [4288.09, 4294.09, 4300.09], [175, 184, null], 244, "TP1", 244],
+      [228, "BUY", 4277.09, 4264.09, [4281.09, 4287.09, 4293.09], [232, 260, 266], null, "TP1", 266],
+      [230, "BUY", 4277.51, 4264.51, [4281.51, 4287.51, 4293.51], [232, 262, 267], null, "TP1", 267],
+      [247, "BUY", 4271.65, 4258.65, [4275.65, 4281.65, 4287.65], [253, 259, 262], null, "TP1", 262],
+      [263, "SELL", 4287.66, 4300.66, [4283.66, 4277.66, 4271.66], [282, 288, 293], null, "TP1", 293],
+      [271, "SELL", 4294.91, 4307.91, [4290.91, 4284.91, 4278.91], [273, 281, 288], null, "TP1", 288],
+      [304, "BUY", 4265.1, 4252.1, [4269.1, 4275.1, 4281.1], [308, 326, null], null, "TP1", null],
+      [358, "BUY", 4257.39, 4244.39, [4261.39, 4267.39, 4273.39], [360, 367, 384], null, "TP1", 384],
     ]);
-    expect(r.stats).toEqual({ tp1: 1, tp2: 0, tp3: 0, sl: 8, total: 9 });
+    expect(r.stats).toEqual({ tp1: 10, tp2: 9, tp3: 6, sl: 0, total: 10 });
   });
 
   it("a currency pair: the same numbers in pips (USD/JPY: 0.10 and 0.05, 0.10, 0.15); still open at the end: not counted", () => {
@@ -196,11 +199,11 @@ describe("#151 ULTRA on the chart", () => {
     expect(CHART_PREFS_DEFAULTS.overlays.ultra).toBe(true);
     const { unmount } = render(<PriceChart candles={shown} pair="XAU/USD" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
     expect(screen.getByTestId("chart-group-signals").contains(screen.getByTestId("chart-overlay-name-ultra"))).toBe(true);
-    // #168: gold's targets $30, $60 and $90
-    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL $10・TP $30/60/90）");
+    // #192: the stop 13 and the targets 4, 10 and 16, dollars on gold, pips on a pair
+    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL $13・TP $4/10/16）");
     unmount();
     render(<PriceChart candles={shown.map((b) => ({ ...b }))} pair="USD/JPY" zoneShiftHistory={{ bars: past, status: "ready" }} formingLast />);
-    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL 30・TP 20/40/60 pips）");
+    expect(screen.getByTestId("chart-overlay-name-ultra").textContent).toBe("ULTRA（RSI 14・SL 13・TP 4/10/16 pips）");
   });
 
   it("draws the signals on screen, ★TP1–3 where reached, the newest signal's box, and the tally of all the bars read", () => {
@@ -213,49 +216,43 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.queryByTestId("chart-ultra-signal-SELL")).toBeNull();
     const first = screen.getAllByTestId("chart-ultra-signal-BUY")[0];
     expect(first.querySelector("text")!.textContent).toBe("Buy ☆");
-    // #168: gold's targets $30, $60 and $90 (the trades as counted in "gold at
-    // $30, $60 and $90" above)
-    expect(first.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4265.10・損切り 4255.10・TP1 4295.10・TP2 4325.10・TP3 4355.10");
-    // on screen: TP1 on 295 (the sell of 271); the stops of 247 (on 303) and 304 (on 357)
-    expect(screen.getAllByTestId("chart-ultra-hit-TP1")).toHaveLength(1);
-    expect(screen.queryByTestId("chart-ultra-hit-TP2")).toBeNull();
-    expect(screen.queryByTestId("chart-ultra-hit-TP3")).toBeNull();
-    expect(screen.getAllByTestId("chart-ultra-hit-SL")).toHaveLength(2);
-    // the newest signal (358): a buy neither stopped nor at TP1 yet — its box open, with its prices
+    // #192: the stop $13 and the targets $4, $10 and $16 (the trades as
+    // counted in "gold at $4, $10 and $16" above)
+    expect(first.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4265.10・損切り 4252.10・TP1 4269.10・TP2 4275.10・TP3 4281.10");
+    // on screen (from bar 280): TP1 on 282 (the sell of 263), 308 (304) and
+    // 360 (358); TP2 on 281 (271), 288 (263), 326 (304) and 367 (358); TP3 on
+    // 288 (271), 293 (263) and 384 (358); no stop before TP1
+    expect(screen.getAllByTestId("chart-ultra-hit-TP1")).toHaveLength(3);
+    expect(screen.getAllByTestId("chart-ultra-hit-TP2")).toHaveLength(4);
+    expect(screen.getAllByTestId("chart-ultra-hit-TP3")).toHaveLength(3);
+    expect(screen.queryByTestId("chart-ultra-hit-SL")).toBeNull();
+    // the newest signal (358): a buy that reached TP3 on 384 — its box faint,
+    // no prices tagged and no room left for them (a pair's open box: below)
     const box = screen.getByTestId("chart-ultra-box");
-    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["BUY", "true"]);
-    expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4247.39・TP1 4287.39・TP2 4317.39・TP3 4347.39");
-    // the entry and TP1 lie among the bars shown (4253.73–4288.25); TP3 lies
-    // above every bar read (4311.22), so above the chart whatever it draws
-    const tag = (k: string) => screen.getByTestId(`chart-ultra-tag-${k}`).textContent;
-    expect(tag("entry")).toBe("Entry 4257.39");
-    expect(tag("tp1")).toBe("TP1 4287.39");
-    expect(tag("tp3")).toBe("TP3 4347.39 ↑");
-    // the stop and TP2 lie past the bars shown and the room the chart leaves
-    // around them (4253.73–4288.25, padded 16% of it: 4248.21–4293.77): at
-    // the edges, with arrows
-    expect(tag("sl")).toBe("SL 4247.39 ↓");
-    expect(tag("tp2")).toBe("TP2 4317.39 ↑");
+    expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["BUY", "false"]);
+    expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4244.39・TP1 4261.39・TP2 4267.39・TP3 4273.39");
+    expect(document.querySelector("[data-testid^='chart-ultra-tag-']")).toBeNull();
+    // ended, it leaves no room right of the newest candle: the plot ends
+    // within a bar of it (open, the room is checked on EUR/GBP below)
+    const candles = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const [prevBody, lastBody] = [candles[candles.length - 2], candles[candles.length - 1]];
+    const barStep = Number(lastBody.getAttribute("x")) - Number(prevBody.getAttribute("x"));
+    const plot = document.querySelector("clipPath rect")!;
+    const plotRight = Number(plot.getAttribute("x")) + Number(plot.getAttribute("width"));
+    expect(plotRight - (Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width")))).toBeLessThan(barStep);
     // the table: every signal from bar 0, the ones before the chart too
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 1 11%");
-    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 0 0%");
-    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 0 0%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 8 89%");
-    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 9");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 11%");
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 10 100%");
+    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 9 90%");
+    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 6 60%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 0 0%");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 10");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 100%");
     // #152: the tally is a row above the chart, not over it
     const table = screen.getByTestId("chart-ultra-table");
     expect(table.closest("svg")).toBeNull();
     expect(table.compareDocumentPosition(screen.getByTestId("chart-candles")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // the newest signal is open: its prices sit in room left right of the newest candle
-    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
-    const lastBody = bodies[bodies.length - 1];
-    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
-    for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) {
-      expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
-    }
     const note = screen.getByTestId("chart-ultra-legend").textContent!;
-    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "損切り30 pips・TP1 20 pips で測ると", "約60%", "4時間足 60.8%", "TP1 30・TP2 60・TP3 90 ドル", "金は Dukascopy の値", "4時間足 20.8%", "損益ゼロには25%より上、スプレッドの分さらに上が要ります", "金以外の Twelve Data の銘柄は測っていません"]) {
+    for (const part of ["ULTRA EN", "F-INVEST", "コードは読めず", "F-INVEST PREMIUM", "損切り13・利確 TP1 4・TP2 10・TP3 16", "上位版の絞り込みは作っていません", "損切り13 pips・TP1 4 pips で測ると", "約76%", "4時間足 74.5%", "金は Dukascopy の値", "TP1 4ドル・損切り13ドルで測ると", "4時間足 72.5%", "損益ゼロには76%より上、スプレッドの分さらに上が要ります", "金以外の Twelve Data の銘柄は測っていません"]) {
       expect(note).toContain(part);
     }
     expect(note).not.toContain("このアプリでは測っていません");
@@ -268,23 +265,22 @@ describe("#151 ULTRA on the chart", () => {
     expect(screen.getAllByTestId("chart-ultra-signal-BUY")).toHaveLength(7);
     expect(screen.getAllByTestId("chart-ultra-signal-SELL")).toHaveLength(2);
     expect(screen.getAllByTestId("chart-ultra-signal-SELL")[0].querySelector("text")!.textContent).toBe("Sell ☆");
-    // #166: a currency pair's stop is 30 pips (with 10: TP1 2, TP2 2, TP3 2,
-    // SL 8); #173: its targets 20, 40 and 60 (with 5, 10 and 15: TP1 4, TP2 2,
-    // TP3 2, SL 8). Counted again apart from this code, in Python, from the
-    // rules ultra.ts states: the TP1s of the trades that went on to TP2 and
-    // TP3 on screen were reached before bar 280, off it
-    for (const [what, n] of [["TP1", 0], ["TP2", 2], ["TP3", 3], ["SL", 8]] as const) expect(screen.queryAllByTestId(`chart-ultra-hit-${what}`)).toHaveLength(n);
-    // the sell on 391 at 149.7491: its stop 30 pips above, its targets 20, 40 and 60 below
+    // #192: the stop 13 pips and the targets 4, 10 and 16 (#173's 30 and 20,
+    // 40 and 60: TP1 0, TP2 2, TP3 3, SL 8). Counted again apart from this
+    // code, in Python, from the rules ultra.ts states: TP1 on 366 (the buy of
+    // 357) and 368 (353), TP2 on 376 and 382, TP3 on 385 (357); the stops
+    // before TP1 of the buys of 234 to 297, on 281 to 356
+    for (const [what, n] of [["TP1", 2], ["TP2", 2], ["TP3", 1], ["SL", 8]] as const) expect(screen.queryAllByTestId(`chart-ultra-hit-${what}`)).toHaveLength(n);
+    // the sell on 391 at 149.7491, still open: its stop 13 pips above, its targets 4, 10 and 16 below
     const box = screen.getByTestId("chart-ultra-box");
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
     expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 149.749");
-    // #166: 30 pips up, above the chart: tagged at its top edge; #173: TP1
-    // inside the chart (its lowest low 149.5533, less the scale's margin),
-    // TP2 and TP3 below it
-    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 150.049 ↑");
-    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 149.549");
-    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 149.349 ↓");
-    expect(screen.getByTestId("chart-ultra-tag-tp3").textContent).toBe("TP3 149.149 ↓");
+    // all inside the chart: the bars shown reach 149.5533–149.802 and the
+    // 200-bar EMA on it about 149.97, so neither the stop nor TP3 is off it
+    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 149.879");
+    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 149.709");
+    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 149.649");
+    expect(screen.getByTestId("chart-ultra-tag-tp3").textContent).toBe("TP3 149.589");
     // #152: the prices sit in room left right of the newest candle, not over it
     const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
     const lastBody = bodies[bodies.length - 1];
@@ -292,21 +288,22 @@ describe("#151 ULTRA on the chart", () => {
     for (const k of ["entry", "sl", "tp1", "tp2", "tp3"]) {
       expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
     }
-    // #173: 4, 4, 3 and 8 of 12 (the rest still open not counted; with the
-    // targets 5, 10 and 15: 8, 6, 6 and 8 of 16; with a stop of 10 too: 5, 4,
-    // 4 and 16 of 21)
-    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 4 33%");
-    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 4 33%");
-    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 8 67%");
-    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 12");
-    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 33%");
+    // #192: 6, 5, 4 and 15 of 21 (the two sells still open not counted;
+    // #173's: 4, 4, 3 and 8 of 12)
+    expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 6 29%");
+    expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 5 24%");
+    expect(screen.getByTestId("chart-ultra-row-tp3").textContent).toBe("TP3 4 19%");
+    expect(screen.getByTestId("chart-ultra-row-sl").textContent).toBe("損切り 15 71%");
+    expect(screen.getByTestId("chart-ultra-total").textContent).toBe("合計 21");
+    expect(screen.getByTestId("chart-ultra-winrate").textContent).toBe("勝率 29%");
   });
 
   it("prices off the chart are tagged at its edge with an arrow, every tag inside the plot (a quiet 5-minute EUR/GBP)", () => {
     // 2026-09-29, on the owner's EUR/GBP 5-minute chart: a sell's stop 10
     // pips above the chart and its targets 5–15 below, and only "SL" showed
-    // (the tags moved as one block, the Entry and TPs off the bottom). #166:
-    // the stop 30 pips above; #173: the targets 20, 40 and 60 below
+    // (the tags moved as one block, the Entry and TPs off the bottom). #192:
+    // the stop 13 pips above, the targets 4, 10 and 16 below (counted apart
+    // in Python: the newest signal a sell on 325, still open)
     let s = 3;
     const rnd = () => (s = (s * 16807) % 2147483647);
     let c = 85796;
@@ -326,8 +323,8 @@ describe("#151 ULTRA on the chart", () => {
     const text = (k: string) => screen.getByTestId(`chart-ultra-tag-${k}`).textContent;
     // the chart shows 0.85762–0.85789; the entry on it, the stop above, the targets below
     expect(text("entry")).toBe("Entry 0.85784");
-    expect(text("sl")).toBe("SL 0.86084 ↑");
-    expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(["TP1 0.85584 ↓", "TP2 0.85384 ↓", "TP3 0.85184 ↓"]);
+    expect(text("sl")).toBe("SL 0.85914 ↑");
+    expect([text("tp1"), text("tp2"), text("tp3")]).toEqual(["TP1 0.85744 ↓", "TP2 0.85684 ↓", "TP3 0.85624 ↓"]);
     const clip = document.querySelector("clipPath rect")!;
     const top = Number(clip.getAttribute("y"));
     const bottom = top + Number(clip.getAttribute("height"));
@@ -347,28 +344,41 @@ describe("#151 ULTRA on the chart", () => {
     // the stop at the top edge, the targets at the bottom
     expect(order[0].y0 - top).toBeLessThan(3);
     expect(bottom - order[4].y1).toBeLessThan(3);
+    // ULTRA alone and its newest trade open: its prices sit in room left
+    // right of the newest candle, not over it (#152)
+    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const lastBody = bodies[bodies.length - 1];
+    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
+    for (const k of ["sl", "entry", "tp1", "tp2", "tp3"]) {
+      expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
+    }
   });
 
-  it("#173: a level at or below zero is no price — HUF/JPY (about 0.49 yen), a sell's TP3 60 pips (0.60) below", () => {
-    // the newest signal a sell on 320 at 0.49075, still open (counted apart
-    // in Python): its stop 0.79075, its targets 0.29075, 0.09075 and −0.10925
-    const huf = barsOf(400, 4, 48800, 100000, 3, 20, 20).map((b, i) => ({ ...b, datetime: dated[i].datetime }));
+  it("#173: a level at or below zero is no price — a yen pair at about 0.13, a sell's TP3 16 pips (0.16) below", () => {
+    // #173's case was HUF/JPY at about 0.49 yen and TP3 60 pips (0.60).
+    // #192's 16 pips reach below zero on no pair charted now, so the guard is
+    // tested on HUF/JPY's old walk moved down to about 0.13 yen (the same
+    // steps, so the same signals): the newest signal a sell on 320 at
+    // 0.13275, still open (counted apart in Python), its stop 0.26275, its
+    // targets 0.09275, 0.03275 and −0.02725
+    const huf = barsOf(400, 4, 13000, 100000, 3, 20, 20).map((b, i) => ({ ...b, datetime: dated[i].datetime }));
     render(<PriceChart candles={huf.slice(280)} pair="HUF/JPY" zoneShiftHistory={{ bars: huf.slice(0, 280), status: "ready" }} formingLast />);
     const box = screen.getByTestId("chart-ultra-box");
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["SELL", "true"]);
-    expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 0.491");
-    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 0.791 ↑");
-    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 0.291 ↓");
-    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 0.091 ↓");
+    expect(screen.getByTestId("chart-ultra-tag-entry").textContent).toBe("Entry 0.133");
+    expect(screen.getByTestId("chart-ultra-tag-sl").textContent).toBe("SL 0.263 ↑");
+    expect(screen.getByTestId("chart-ultra-tag-tp1").textContent).toBe("TP1 0.093 ↓");
+    expect(screen.getByTestId("chart-ultra-tag-tp2").textContent).toBe("TP2 0.033 ↓");
     expect(screen.queryByTestId("chart-ultra-tag-tp3")).toBeNull();
-    expect(box.querySelector("title")!.textContent).toBe("ULTRA 売り: エントリー 0.491・損切り 0.791・TP1 0.291・TP2 0.091・TP3 —");
+    expect(box.querySelector("title")!.textContent).toBe("ULTRA 売り: エントリー 0.133・損切り 0.263・TP1 0.093・TP2 0.033・TP3 —");
     // no price below zero anywhere on the chart's tags (Q-Trend's too)
     for (const g of document.querySelectorAll("[data-testid^='chart-ultra-tag-'], [data-testid^='chart-qtrend-tag-']")) expect(g.textContent).not.toMatch(/-\d/);
   });
 
   it("the forming bar is not judged: its reach of TP1 is neither marked nor counted", () => {
-    // #168: gold's TP1 is $30 above the Buy's close of 92
-    const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 122];
+    // #192: gold's TP1 is $4 above the Buy's close of 92 (the forming bar
+    // reaches 97.2, short of TP2's 102)
+    const closes = [...Array.from({ length: 16 }, (_, k) => 100 - k), 92, 97];
     const b = closes.map((c, i) => {
       const o = i > 0 ? closes[i - 1] : c;
       return { datetime: new Date(T0 + i * M1).toISOString().replace("T", " ").slice(0, 19), open: o, high: Math.max(o, c) + 0.2, low: Math.min(o, c) - 0.2, close: c };

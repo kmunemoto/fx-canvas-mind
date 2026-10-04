@@ -122,7 +122,12 @@ import type { Candle } from "../analyze/indicators.ts";
 // hours) is no longer thrown away (quotes.ts usableBars): the 4-hour charts
 // are judged at Monday 00:00 UTC too, and every 4-hour reading runs on the
 // bars with it. The other timeframes' bars are as they were.
-const FUNCTION_VERSION = "signal-alerts-v19-2026-10-03T16:00:00Z";
+// v20 (#192): Q-Trend's and ULTRA's stop and targets, on gold and the pairs
+// both, at the second F-INVEST video's chart: the stop 13 and the targets 4,
+// 10 and 16 (dollars on gold, pips on a pair; _shared/ultra.ts ULTRA_PAIRS and
+// ULTRA_GOLD), and the emails' measured figures at them (indicators.ts). The
+// signals and the rule ids are as they were.
+const FUNCTION_VERSION = "signal-alerts-v20-2026-10-04T10:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

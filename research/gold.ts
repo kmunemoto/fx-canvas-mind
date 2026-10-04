@@ -227,13 +227,12 @@ const UNIT = 1;
 // the limits, 5-minute bars: five days of gold's 23 hours, four weeks
 const TARGETS = [5, 15, 30, 50] as const;
 const STOPS = [10, 15, 20, 30, 50, 100, null] as const;
-type Stop = (typeof STOPS)[number];
 const ATR_RULES = [[0.5, 1], [0.5, 2], [1, 1], [1, 2], [2, 1], [2, 2]] as const;
 const L5D = 5 * 23 * 12;
 const L4W = 4 * L5D;
 const LIMITS_OF = (tf: Tf): number[] => (tf === "4h" ? [L5D, L4W] : [L5D]);
 const limitName = (l: number) => (l === L5D ? "5d" : "4w");
-const ruleKey = (t: number, s: Stop, l: number) => `T${t} S${s ?? "none"} L${limitName(l)}`;
+const ruleKey = (t: number, s: number | null, l: number) => `T${t} S${s ?? "none"} L${limitName(l)}`;
 const atrKey = (k: number, m: number, l: number) => `T${k}atr S${m}atr L${limitName(l)}`;
 interface Rule {
   key: string;
@@ -249,6 +248,11 @@ const rulesOf = (limits: number[]): Rule[] =>
     ...ATR_RULES.map(([k, m]) => ({ key: atrKey(k, m, l), target: k, stop: m, atr: true, limit: l })),
   ]);
 const NOW_RULE = ruleKey(5, 10, L5D);
+// #192: the emails' gold levels since the owner's second video (TP1 $4, the
+// stop $13; docs §8.98), outside the grid: followed on every trade (with the
+// grid's five days, so no trade is dropped for it) for the MAIL lines only,
+// never in THE PICK, the grid's tables or the nest check
+const MAIL_EXTRA: Rule[] = [{ key: ruleKey(4, 13, L5D), target: 4, stop: 13, atr: false, limit: L5D }];
 // THE PICK's candidates: every rule but now and those with a stop of $100 or
 // none, whose interval does not hold on the random walks (below)
 const PICKS = rulesOf(LIMITS_OF("4h")).filter((r) => r.key !== NOW_RULE && (r.atr || (r.stop !== null && r.stop <= 50))).map((r) => r.key);
@@ -895,7 +899,7 @@ for (const tf of TFS) {
 
   // the trades
   const limits = LIMITS_OF(tf);
-  const rules = rulesOf(limits);
+  const rules = [...rulesOf(limits), ...MAIL_EXTRA];
   const need = Math.max(...limits);
   const sets4h = tf === "4h";
   // the chart's ATR(14) at each bar (Pine's, from the first bar held)
@@ -1111,15 +1115,17 @@ if (e) {
 // §8.80: TP1 $30, TP2 $60 and TP3 $90, the stop $10), as the email tells
 // them: on each chart and for each indicator, the share out at TP1 of those
 // out at TP1 or the stop, and dollars a trade (all of it out at TP1 or the
-// stop, or after five days)
-const MAIL_RULE = ruleKey(30, 10, L5D);
-console.log(`\n== MAIL: ${MAIL_RULE} (the emails' TP1 and stop since #168), whole: out at TP1 of those out at TP1 or the stop %, dollars a trade`);
-for (const tf of TFS) {
-  for (const set of ["qtrend", "ultra", "either"]) {
-    const a = groups.get(`${tf} ${set}`)?.[2].get(MAIL_RULE);
-    if (!a) continue;
-    const r = meanOf(a);
-    console.log(`MAIL ${tf} ${set} n=${a.n} win=${(100 * (tpRate(a) ?? 0)).toFixed(1)} usd=${num(r.m)} [${num(r.lo)},${num(r.hi)}]`);
+// stop, or after five days). #192: and the levels since (TP1 $4, the stop
+// $13), the same way; #168's line kept, to be the same as before.
+for (const [mailRule, since] of [[ruleKey(30, 10, L5D), "#168"], [MAIL_EXTRA[0].key, "#192"]] as const) {
+  console.log(`\n== MAIL: ${mailRule} (the emails' TP1 and stop since ${since}), whole: out at TP1 of those out at TP1 or the stop %, dollars a trade`);
+  for (const tf of TFS) {
+    for (const set of ["qtrend", "ultra", "either"]) {
+      const a = groups.get(`${tf} ${set}`)?.[2].get(mailRule);
+      if (!a) continue;
+      const r = meanOf(a);
+      console.log(`MAIL ${since} ${tf} ${set} n=${a.n} win=${(100 * (tpRate(a) ?? 0)).toFixed(1)} usd=${num(r.m)} [${num(r.lo)},${num(r.hi)}]`);
+    }
   }
 }
 

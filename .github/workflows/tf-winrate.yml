@@ -3,6 +3,9 @@
 # emails' on the currency pairs since #166); #157's own figures are SL 10.
 # #173: TP1 is an input too, 20 unless given (TP2 and TP3 twice and three
 # times it: the emails' on the currency pairs since #173); #166's are TP1 5.
+# #192: TP2 and TP3 are inputs of their own (twice and three times TP1 unless
+# given); the emails' since #192 are the stop 13 and TP 4, 10 and 16, the
+# defaults now.
 #
 # Runs on GitHub's runners because they can reach GMO's public price API and
 # the development container cannot. Read-only: it fetches public prices,
@@ -28,11 +31,17 @@ on:
         description: "First day of the second half"
         default: "2025-05-19"
       sl:
-        description: "The stop, pips (#157: 10; the emails' since #166: 30)"
-        default: "30"
+        description: "The stop, pips (#157: 10; #166: 30; the emails' since #192: 13)"
+        default: "13"
       tp1:
-        description: "TP1, pips; TP2 and TP3 twice and three times it (#166: 5; the emails' since #173: 20)"
-        default: "20"
+        description: "TP1, pips (#166: 5; #173: 20; the emails' since #192: 4)"
+        default: "4"
+      tp2:
+        description: "TP2, pips (empty: twice TP1; the emails' since #192: 10)"
+        default: "10"
+      tp3:
+        description: "TP3, pips (empty: three times TP1; the emails' since #192: 16)"
+        default: "16"
       end:
         description: "#182: when the study ends, ISO (empty: now; run 36730814776's: 2026-09-30T14:40:11Z)"
         default: ""
@@ -77,8 +86,10 @@ jobs:
           PAIRS: ${{ inputs.pairs || '' }}
           START: ${{ inputs.start || '2024-01-01' }}
           SPLIT: ${{ inputs.split || '2025-05-19' }}
-          SL: ${{ inputs.sl || '30' }}
-          TP1: ${{ inputs.tp1 || '20' }}
+          SL: ${{ inputs.sl || '13' }}
+          TP1: ${{ inputs.tp1 || '4' }}
+          TP2: ${{ github.event_name == 'push' && '10' || inputs.tp2 }}
+          TP3: ${{ github.event_name == 'push' && '16' || inputs.tp3 }}
           END: ${{ inputs.end || '' }}
           WEEKEND: ${{ inputs.weekend || 'inside' }}
         run: >
@@ -87,7 +98,7 @@ jobs:
           --allow-net=forex-api.coin.z.com
           --allow-read=.
           --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,END,WEEKEND
+          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND
           research/tf-winrate.ts
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()

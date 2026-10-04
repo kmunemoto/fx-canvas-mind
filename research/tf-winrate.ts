@@ -90,14 +90,23 @@ const weekendOut = (openMs: number, stepMs: number): boolean =>
   WEEKEND === "stamp" ? isMarketClosed(openMs) : barInsideClosure(openMs, stepMs);
 const SYNTHETIC = Boolean(Deno.env.get("SYNTHETIC"));
 // #166: the stop, pips from the entry. 10 (ULTRA_DEFAULTS, the video's) was
-// the email's when this was written (#157); since #166 the emails on the
-// currency pairs carry 30, and SL=30 measures those.
+// the email's when this was written (#157); from #166 to #192 the emails on
+// the currency pairs carried 30 (SL=30 measures those).
 const SL = Number(Deno.env.get("SL") || ULTRA_DEFAULTS.sl);
 // #173: TP1, pips from the entry, TP2 and TP3 twice and three times it (the
-// video's 5, 10 and 15 unless given); the emails on the currency pairs carry
-// 20, 40 and 60 since #173, and TP1=20 measures those.
+// video's 5, 10 and 15 unless given); from #173 to #192 the emails on the
+// currency pairs carried 20, 40 and 60 (TP1=20 measures those).
+// #192: TP2 and TP3 inputs of their own (twice and three times TP1 unless
+// given): the second video's 4, 10 and 16 are not in proportion. Since #192
+// the emails, on gold and the pairs, carry the stop 13 and TP 4, 10 and 16:
+// SL=13, TP1=4, TP2=10 and TP3=16 (the workflow's defaults) measure those.
+// The emails' numbers (TP1 first, pips a trade) are TP1's alone; TP2 and TP3
+// only move the lines that hold the whole position to them.
 const TP1 = Number(Deno.env.get("TP1") || ULTRA_DEFAULTS.tp1);
-const LEVELS = { ...ULTRA_DEFAULTS, sl: SL, tp1: TP1, tp2: 2 * TP1, tp3: 3 * TP1 };
+const TP2 = Number(Deno.env.get("TP2") || 2 * TP1);
+const TP3 = Number(Deno.env.get("TP3") || 3 * TP1);
+if (![SL, TP1, TP2, TP3].every((x) => Number.isFinite(x) && x > 0) || !(TP1 < TP2 && TP2 < TP3)) throw new Error(`levels SL ${SL}, TP ${TP1}/${TP2}/${TP3}: each over 0 and the targets in order`);
+const LEVELS = { ...ULTRA_DEFAULTS, sl: SL, tp1: TP1, tp2: TP2, tp3: TP3 };
 const CACHE = "research/.cache";
 const OUT = "research/out";
 const FINE = 5 * MINUTE;
