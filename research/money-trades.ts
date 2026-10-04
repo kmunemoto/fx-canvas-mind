@@ -203,9 +203,11 @@ export interface Trade {
   mu: number;
   // half the spread paid at the entry, pips
   h: number;
-  // (t0, x]: the calendar time, the weekends (Sunday 21:00 UTC) and Rakuten's
-  // NY closes passed (t0 < τ < x: held through it; a trade out in the bar
-  // ending at τ is out by it), and the swap days (a Wednesday's close 3)
+  // (T, x], every variant from the email's close (a late one's too, whose
+  // path starts at t0): the calendar time, the weekends (Sunday 21:00 UTC)
+  // and Rakuten's NY closes passed (T < τ < x: held through it; a trade out
+  // in the bar ending at τ is out by it), and the swap days (a Wednesday's
+  // close 3)
   calMs: number;
   weekend: number;
   nightsNy: number;
@@ -459,8 +461,11 @@ const follow = (cfg: Config, sig: Signal, pd: PairData, variant: Variant, mu: nu
   // exit a 5-minute bar later, at the same price
   if (cfg.plant === "exitlate" && fx + 1 < book.n) fx++;
   const x = book.t[fx] + FINE;
-  const span = between(t0, x);
-  return { ...base, fill, t0, entryG: variant === "late" ? t0 + FINE : sig.T, exit: out.kind, fx, exitOpen: book.t[fx], x, exitPx: out.px, pips: (buy ? out.px - fill : fill - out.px) / unit, atOpen: out.atOpen, h, calMs: x - t0, weekend: weekOf(x) - weekOf(t0), nightsNy: span.nights, swapDays: span.swap };
+  // the time held, the weekends and the NY closes from T for every variant
+  // (§8.99 持った5分足の数 (T, 決済の足の終わり], 暦の時間も同じ): a late trade's
+  // pair without a bar opening at T starts its path later, not its count
+  const span = between(sig.T, x);
+  return { ...base, fill, t0, entryG: variant === "late" ? t0 + FINE : sig.T, exit: out.kind, fx, exitOpen: book.t[fx], x, exitPx: out.px, pips: (buy ? out.px - fill : fill - out.px) / unit, atOpen: out.atOpen, h, calMs: x - sig.T, weekend: weekOf(x) - weekOf(sig.T), nightsNy: span.nights, swapDays: span.swap };
 };
 
 // ---- the study --------------------------------------------------------------------------------
@@ -897,7 +902,8 @@ export const statsOf = (all: Trade[], grid: Grid, plant = "") => {
   const worst = ts.reduce((a, t) => Math.min(a, t.pips), Infinity);
   // out at an open beyond the stop (the gap past it)
   const gaps = ts.filter((t) => t.exit === "sl" && t.atOpen && (t.sig.dir === 1 ? t.exitPx < t.sl : t.exitPx > t.sl));
-  const holds = ts.map((t) => holdOn(grid, t.t0, t.x));
+  // the closes of G held, (T, x] (a late trade's too, as its calendar time)
+  const holds = ts.map((t) => holdOn(grid, t.sig.T, t.x));
   const cal = ts.map((t) => t.calMs);
   const timed = ts.filter((t) => t.exit === "time");
   const swap = ts.reduce((a, t) => a + t.swapDays, 0);

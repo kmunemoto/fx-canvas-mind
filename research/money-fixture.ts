@@ -6,16 +6,21 @@
 // fixture.json: {name, what, hand, start, end, pairs, digits, runs: [{key,
 // sizing, cap, course, losscut, row, start_equity, order, weeks?,
 // shift_weeks?}], expect: {<key>:
-// {ledger: [rows, with the columns that matter], summary: {...}}}, plants}.
-// The tolerances are interface.md §5's: prices 1e-9, yen (balance, equity,
-// pnl, margin, E*, the falls) 1e-6, units, kinds, times and counts exactly.
+// {ledger: [rows, with the columns that matter], summary: {...}}},
+// expect_trades?: [rows of money-trades.csv: id, variant and the columns
+// that matter], plants}.
+// The tolerances are interface.md §5's: prices 1e-9, pips 1e-6, yen (balance,
+// equity, pnl, margin, E*, the falls) 1e-6, units, kinds, times and counts
+// exactly. A summary value expected null (an E* term never set) is null here.
 // An expected ledger row with `seq` is compared with that row; without, the
-// rows are compared in order and their numbers must agree.
+// rows are compared in order; either way the ledger written has exactly the
+// rows expected (a row more or fewer fails). E*'s terms are compared by
+// name (value 1e-6, g exactly), "loss" read as "negative".
 
 import { type Config } from "./money-data.ts";
 import { type Cap, type Row, type RunSpec, type Summary, estarCheck, hashOrder, ledgerCsv, ordersOf, runAccount, runChecks, specOf, summarize, tapeOf } from "./money-account.ts";
 import { placedTape, weeksOf } from "./money-boot.ts";
-import { type Check, type Study, iso, yenOf } from "./money-trades.ts";
+import { type Check, type Study, iso, newCheck, tally, yenOf } from "./money-trades.ts";
 
 interface FixtureRun {
   key: string;
@@ -37,8 +42,19 @@ interface Fixture {
   what?: string;
   runs: FixtureRun[];
   expect: Record<string, { ledger?: Array<Record<string, unknown>>; summary?: Record<string, unknown> }>;
+  // rows of the trades table (money-trades.csv), each by id and variant, with
+  // the columns the hand calculation gives (decisions R7)
+  expect_trades?: Array<Record<string, unknown>>;
   plants?: string[];
 }
+
+// a row of the trades table (money-trades.csv, interface.md §4.2) as
+// research/money.ts makes it: the columns by name, times in ms, blanks null
+export type TradeRow = Record<string, string | number | null>;
+// the trades table's tolerances (interface.md §5): prices 1e-9, pips 1e-6;
+// the times, the counts (hold_grid, weekend, nights_ny), cal_ms and the
+// kinds exactly
+const TRADE_TOL: Record<string, number> = { fill: 1e-9, mid_close: 1e-9, sl: 1e-9, tp: 1e-9, exit_px: 1e-9, pips: 1e-6 };
 
 const ALIAS: Record<string, string> = { loss: "negative" };
 const LEDGER_COLS = ["seq", "g", "kind", "id", "units", "px", "pnl_yen", "balance", "equity", "margin", "reason"] as const;
@@ -95,7 +111,9 @@ const compareSummary = (want: unknown, got: unknown, path: string, out: string[]
     if (!named && want.length !== got.length) out.push(`${path}: ${want.length} expected, ${got.length} got`);
     return;
   }
-  if (!same(want, got, tolOf(path, want))) out.push(`${path}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+  // the term that set E* by its name too ("loss" read as "negative")
+  const w = /(^|\.)set_by$/.test(path) && typeof want === "string" ? ALIAS[want] ?? want : want;
+  if (!same(w, got, tolOf(path, w))) out.push(`${path}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
 };
 
 // one fixture run's settings from its line (interface.md §6)
@@ -118,9 +136,10 @@ const specOfRun = (r: FixtureRun, plant: string, zero: { yen: number; r: number 
   return { ...spec, key: r.key };
 };
 
-// the fixture's runs against its expectations; PASS/FAIL lines, the outputs
-// in cfg.out; true when every item passed
-export const runFixture = async (study: Study, cfg: Config): Promise<{ pass: boolean; checks: Record<string, Check>; results: Record<string, { pass: boolean; problems: string[]; summary: Summary }> }> => {
+// the fixture's runs against its expectations, and its expect_trades rows
+// against the trades table (`trades`, money-trades.csv's rows); PASS/FAIL
+// lines, the outputs in cfg.out; true when every item passed
+export const runFixture = async (study: Study, cfg: Config, trades: TradeRow[]): Promise<{ pass: boolean; checks: Record<string, Check>; results: Record<string, { pass: boolean; problems: string[]; summary: Summary }> }> => {
   const fx = JSON.parse(await Deno.readTextFile(`${cfg.fixture}/fixture.json`)) as Fixture;
   // the zero row's δ from the fixture's own trades (as the data's from the 3,958)
   const grid = study.grids.CALL9!;
@@ -151,7 +170,9 @@ export const runFixture = async (study: Study, cfg: Config): Promise<{ pass: boo
     const rows = run.ledger.map((x) => Object.fromEntries(LEDGER_COLS.map((c, j) => [c, x[j]])) as Record<string, unknown>);
     const wantRows = want?.ledger ?? [];
     const bySeq = wantRows.length > 0 && wantRows.every((w) => w.seq !== undefined && w.seq !== null);
-    if (!bySeq && want?.ledger && wantRows.length !== rows.length) problems.push(`ledger: ${wantRows.length} rows expected, ${rows.length} written`);
+    // the hand calculation lists every row: one more or fewer written fails,
+    // with seq or without (an extra call or deadline at the end too)
+    if (want?.ledger && wantRows.length !== rows.length) problems.push(`ledger: ${wantRows.length} rows expected, ${rows.length} written`);
     wantRows.forEach((w, j) => {
       const got = bySeq ? rows.find((x) => x.seq === Number(w.seq)) : rows[j];
       if (!got) {
@@ -170,6 +191,30 @@ export const runFixture = async (study: Study, cfg: Config): Promise<{ pass: boo
     console.log(`  ${r.key}: ${pass ? "PASS" : "FAIL"}`);
     for (const p of problems.slice(0, 20)) console.log(`    ${p}`);
     if (problems.length > 20) console.log(`    … and ${problems.length - 20} more`);
+  }
+  // the trades table against expect_trades (decisions R7): each row given
+  // found by id and variant, each column it gives at the table's tolerances
+  // (a column the table does not have fails); one check, its count the rows
+  // found and the values compared
+  const wantTrades = fx.expect_trades ?? [];
+  if (wantTrades.length) {
+    const ck = (checks.expect_trades ??= newCheck());
+    const byKey = new Map(trades.map((t) => [`${t.id}|${t.variant}`, t]));
+    const shown = (c: string, x: unknown) => (typeof x === "number" && (c === "entry_g" || c === "exit_open" || c === "x") ? iso(x) : JSON.stringify(x));
+    let values = 0;
+    for (const w of wantTrades) {
+      const key = `${w.id}|${w.variant}`;
+      const got = byKey.get(key);
+      tally(ck, got !== undefined, () => `${key}: no such row in the trades table`);
+      if (!got) continue;
+      for (const [c, v] of Object.entries(w)) {
+        if (c === "id" || c === "variant") continue;
+        values++;
+        tally(ck, c in got && same(v, got[c], TRADE_TOL[c] ?? 0), () => `${key} ${c}: expected ${JSON.stringify(v)}, got ${c in got ? shown(c, got[c]) : "no such column"}`);
+      }
+    }
+    console.log(`  expect_trades: ${wantTrades.length} rows, ${values} values: ${ck.mismatched ? "FAIL" : "PASS"}`);
+    for (const p of ck.examples) console.log(`    ${p}`);
   }
   for (const [name, c] of Object.entries(checks)) console.log(`  ${name}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.slice(0, 5).join("; ") : ""}`);
   const pass = Object.values(results).every((x) => x.pass) && (fx.runs ?? []).length > 0 && Object.values(checks).every((c) => c.mismatched === 0);

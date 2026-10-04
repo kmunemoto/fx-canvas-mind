@@ -26,11 +26,18 @@ class's compared and mismatched with up to 5 examples and exits 1 on any
 mismatch or missing file.
 
 --fixture DIR runs DIR/fixture.json's runs on DIR/gmo/ and DIR/signals.csv and
-compares them with its expect. --plant NAME puts an error into this check's
-own reading, to show the comparison catches it: exitlate (one exit a 5-minute
-bar later), pipplus (one trade's pips +1), balance (one ledger balance +1
-yen). --write DIR writes this check's own numbers in money.ts's formats (to
-test the comparison itself on a synthetic walk).
+compares them with its expect, and its "expect_trades" rows (money-trades.csv's
+columns, by id and variant) with this check's trades table, at the same
+tolerances ("order": 0 or none is the broker's order; a run of the x10 row is the
+10× course whatever its "course" says, as in the real run; a fixture marked
+money_ts_only is not for this check and is passed over).
+--plant NAME puts an error into this check's own reading, to show the
+comparison catches it: exitlate (every variant of the first CALL9 trade out a
+5-minute bar later), pipplus (that trade's exit price one pip its way, so its
+pips, the ledgers and the summaries move), balance (one ledger balance +1
+yen). With --fixture a plant is only reported: a fixture's "plants" list names
+money.ts's plants, not these. --write DIR writes this check's own numbers in
+money.ts's formats (to test the comparison itself on a synthetic walk).
 
 Usage: python3 research/money-check.py [--cache research/.cache]
   [--out research/out] [--start 2024-01-01] [--split 2025-05-19]
@@ -106,6 +113,10 @@ THIN_CELLS = [f"F10k_{c}" for c in CAPS[1:]] + [f"FF05_{c}" for c in CAPS[1:]] +
 THIN_DRAWS = 3
 NIGHT_HOURS = (16, 20)
 TERMS = ["order", "nyclose", "losscut", "negative"]
+# R3: a running peak moves only when the equity is above it by more than this
+# (yen), a deepest fall only when a fall is deeper by more than this, and a fall
+# is made up when the equity is back within this of its peak; in every fall
+PEAK_EPS = 1e-6
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 NY = ZoneInfo("America/New_York")
@@ -525,6 +536,24 @@ class World:
             four_ends.update(t + FOUR for t in fours[p].t)
         self.four_g = sorted(self.at[g] for g in four_ends if g in self.at)
         self.four_set = set(self.four_g)
+        self._starts = {}
+
+    def period_starts(self, offset, length):
+        """the grid indices where a new period (from offset, of length) begins:
+        a grid time is the end of a bar counted by its open, so one on a
+        boundary closes the period before it"""
+        key = (offset, length)
+        out = self._starts.get(key)
+        if out is None:
+            out = []
+            last = None
+            for i, g in enumerate(self.G):
+                k = (g - 1 - offset) // length
+                if k != last:
+                    out.append(i)
+                    last = k
+            self._starts[key] = out
+        return out
 
     def conv(self, gi):
         """USD/JPY's mid close at grid index gi (its last bar ending by then)"""
@@ -597,11 +626,13 @@ def thirds_units(total):
 def run(W, emails, spec, ledger=True):
     """One account on the grid. Returns the ledger rows and the summary. The bar
     B ending at grid time G[gi] opens at s = G[gi] − 5 min; its order (§8.99):
-    ① a call past its deadline: everything out; ② the emails with T in B's
-    open (the state at s: the closes of the bars ending by s); ③ the exits
-    inside B in the order of their entries (their cap slots free after B), then
-    the late entries at B's close; ④ at G[gi]: the loss-cut, then the cure of
-    an open call; ⑤ a NY close: the call; ⑥ the equity and margin recorded."""
+    ① a call past its deadline: everything out; ② the emails with
+    G[gi − 1] ≤ T ≤ s (the state at T: the closes of the bars ending by T; their
+    rows at g = T, R1); ③ the exits inside B in the order of their
+    entries (their cap slots free after B), then the late entries at B's close;
+    ④ at G[gi]: the loss-cut, then the cure of an open call; ⑤ a NY close: the
+    call; ⑥ the equity and margin recorded. E*'s NY-close term is taken at every
+    NY close of the clock from its first grid time (R6b)."""
     G = W.G
     F = W.F
     ff = W.ff
@@ -628,6 +659,11 @@ def run(W, emails, spec, ledger=True):
     est = [[-math.inf, None, 0.0, 0.0] for _ in TERMS]
     bpeak = start
     mdd_closed = 0.0
+    # the bar being looked at, the last bar anything happened in and the
+    # first entry's time (D5: the summaries' span)
+    cur = None
+    last_ev = None
+    first_in = None
     # the worst prices are looked up only where they are used
     want_bad = spec.lcworst or ledger
 
@@ -717,15 +753,25 @@ def run(W, emails, spec, ledger=True):
         return rate * m
 
     def row(g, kind, id_="", units="", px="", pnl="", eq=None, reason=""):
+        # every event, written or not, ends the summaries' span no earlier than
+        # the end of the bar it happened in (D5); the first fill starts it (R2:
+        # the first enter row's g, T, or for a late entry its fill bar's end)
+        nonlocal last_ev, first_in
+        last_ev = cur
+        if kind == "enter" and first_in is None:
+            first_in = g
         if ledger:
             rows.append([g, kind, id_, units, px, pnl, bal, eq[0], eq[1], reason])
 
     def note_bal():
-        # the drawdown on the balance alone (each exit), §8.99's 「決済だけ」
+        # the drawdown on the balance alone, §8.99's 「決済だけ」: the realised
+        # balance once a bar, after ①–④ (C1, money.ts's definition: a peak
+        # between two exits of one bar is not seen); peaks and falls move
+        # only by more than PEAK_EPS (R3)
         nonlocal bpeak, mdd_closed
-        if bal > bpeak:
+        if bal > bpeak + PEAK_EPS:
             bpeak = bal
-        elif bpeak - bal > mdd_closed:
+        elif bpeak - bal > mdd_closed + PEAK_EPS:
             mdd_closed = bpeak - bal
 
     def add(pos):
@@ -764,7 +810,6 @@ def run(W, emails, spec, ledger=True):
             if st[4] == 0:
                 del active[pos.pair]
         pos.parts.append((units, px, pnl, kind))
-        note_bal()
         return pnl
 
     def enter(em, tv, units, leg):
@@ -816,28 +861,33 @@ def run(W, emails, spec, ledger=True):
     adm_g = sorted(adm)
     if not adm_g:
         return rows, None
+    # E*'s NY-close term at every NY close of the clock from the clock's first
+    # grid time (R6b), not only from the first email's bar: before that bar
+    # nothing is open and nothing has been made or lost, so each of those
+    # closes gives 0 − 0, and the earliest is kept (a tie keeps the earlier)
+    if spec.estar and W.tau_g and W.tau_g[0] < adm_g[0]:
+        est[1] = [0.0, G[W.tau_g[0]], 0.0, 0.0]
 
-    # the summary's running numbers
+    # the summary's running numbers. Before the first entry nothing is open
+    # (the equity is the start) and after the last bar anything happened in
+    # nothing moves, so these running ones need no cut to the span (D5); the
+    # 4-hour closes and the weeks and days do, and are cut after the loop
     peak = start
     peak_g = None
     mdd = 0.0
     mdd_at = (None, None, None)
     mdd_pct = 0.0
     below = 0.0
-    peak4 = start
-    mdd4 = 0.0
     mddw = 0.0
+    # (grid index, equity) at each bar looked at, and at each 4-hour close
     samples = []
+    four_s = []
     trough_peak = None
     recovered = None
     last_e = start
 
-    def note4(e):
-        nonlocal peak4, mdd4
-        if e > peak4:
-            peak4 = e
-        elif peak4 - e > mdd4:
-            mdd4 = peak4 - e
+    def note4(fgi, e):
+        four_s.append((fgi, e))
 
     ai = 0
     ti = bisect.bisect_left(W.tau_g, adm_g[0])
@@ -848,12 +898,17 @@ def run(W, emails, spec, ledger=True):
         s = G[gi] - FINE
         gk = gi - 1
         g = G[gi]
+        cur = gi
         # ① a call not cured by its deadline: everything out at the open (exit
         # side) of its pair's first 5-minute bar opening at or after the deadline
         if call is not None and call.d <= s:
             d = call.d
 
             def at_deadline(pos):
+                # a dollar pair's P/L in yen at USD/JPY's mid of the last grid
+                # time at or before that bar's open, and the zero row's share of
+                # its shift at that same time (D2: what is known at the price;
+                # the time is s, the row's g, when the pair has a bar at s)
                 f = F[pos.pair]
                 k = bisect.bisect_left(f.t, d)
                 if k >= len(f.t):
@@ -861,13 +916,20 @@ def run(W, emails, spec, ledger=True):
                 px = f.bo[k] if pos.dir > 0 else f.ao[k]
                 if rk and f.rk is not None and f.rk[k] >= 0:
                     px = (f.bo[k] + f.ao[k]) / 2 - pos.dir * f.rk[k]
-                return px, W.at[f.end[k]]
+                return px, bisect.bisect_right(G, f.t[k]) - 1
 
             forced("deadline", gk, s, at_deadline)
             counts["deadlines"] += 1
             call = None
 
-        # ② the emails of this bar, judged one by one on the state at s
+        # ② the emails of this bar, judged one by one on the state at T (the
+        # closes of the bars ending by s: no grid time lies between T and s).
+        # The rows their admission writes (enter, skip, a netting close) carry
+        # g = T, the 4-hour close the email belongs to, even when no bar opens
+        # at T (R1: a US-summer Friday 20:00 email is judged after that
+        # evening's stand-in NY close and before the next bar's ③, which may be
+        # Sunday 22:00's); a late email's fill or "passed" row carries its
+        # fill bar's end (③ below)
         if ai < len(adm_g) and adm_g[ai] == gi:
             group = adm[gi]
             ai += 1
@@ -889,8 +951,12 @@ def run(W, emails, spec, ledger=True):
                 for em in same:
                     units = None
                     if not spec.f10k:
+                        # whole lots of 1,000, floored with 1e-9 of a lot to
+                        # spare (D12, as money.ts): a size that is a whole
+                        # number of lots on paper but a hair under it in floating
+                        # point is not cut a lot short
                         cv = 1.0 if em.jpy else W.conv(gk)
-                        units = math.floor(spec.k * cap_base / (SL_PIPS * em.unit * cv) / LOT) * LOT
+                        units = math.floor(spec.k * cap_base / (SL_PIPS * em.unit * cv) / LOT + 1e-9) * LOT
                     else:
                         units = 10_000
                     # the AS netting: the opposite positions out, the oldest first,
@@ -904,7 +970,7 @@ def run(W, emails, spec, ledger=True):
                                 continue
                             c = min(left, pos.units)
                             pnl = close(pos, c, em.legs[0].fill, gk, gk, "net")
-                            row(s, "exit", pos.em.id, c, em.legs[0].fill, pnl, state(gk), "net")
+                            row(T, "exit", pos.em.id, c, em.legs[0].fill, pnl, state(gk), "net")
                             left -= c
                         if left == 0:
                             counts["netted_all"] += 1
@@ -913,25 +979,25 @@ def run(W, emails, spec, ledger=True):
                     if spec.calls and call is not None:
                         skipped["call"] += 1
                         skipped_emails.append(em)
-                        row(s, "skip", em.id, eq=state(gk), reason="call")
+                        row(T, "skip", em.id, eq=state(gk), reason="call")
                         continue
                     if cap_blocks(spec.cap, em, open_pos, pend):
                         skipped["cap"] += 1
                         skipped_emails.append(em)
-                        row(s, "skip", em.id, eq=state(gk), reason="cap")
+                        row(T, "skip", em.id, eq=state(gk), reason="cap")
                         continue
                     if units < LOT:
                         if first_lot is None:
                             first_lot = T
                         skipped["lot"] += 1
                         skipped_emails.append(em)
-                        row(s, "skip", em.id, units, eq=state(gk), reason="lot")
+                        row(T, "skip", em.id, units, eq=state(gk), reason="lot")
                         continue
                     m_after = margin_with(gk, extra + [(em.pair, em.dir, units)])
                     if spec.margin and m_after > eT:
                         skipped["margin"] += 1
                         skipped_emails.append(em)
-                        row(s, "skip", em.id, units, eq=state(gk), reason="margin")
+                        row(T, "skip", em.id, units, eq=state(gk), reason="margin")
                         continue
                     if spec.estar:
                         v = m_after - pl_T
@@ -947,7 +1013,7 @@ def run(W, emails, spec, ledger=True):
                             pos = enter(em, tv, u, leg)
                             pos.rec = rec
                             rec[1].append(pos)
-                            row(s, "enter", f"{em.id}#{leg}", u, tv.fill, eq=state(gk))
+                            row(T, "enter", f"{em.id}#{leg}", u, tv.fill, eq=state(gk))
                         continue
                     tv = em.legs[0]
                     if tv.variant == "late":
@@ -961,7 +1027,7 @@ def run(W, emails, spec, ledger=True):
                     pos = enter(em, tv, units, 1)
                     pos.rec = rec
                     rec[1].append(pos)
-                    row(s, "enter", em.id, units, tv.fill, eq=state(gk))
+                    row(T, "enter", em.id, units, tv.fill, eq=state(gk))
 
         # ③ the exits inside the bar, in the order of their entries
         xs = exits_at.pop(gi, None)
@@ -1019,8 +1085,11 @@ def run(W, emails, spec, ledger=True):
                 counts["cures"] += 1
                 call = None
                 row(g, "cure", eq=state(gi))
+        # the realised balance once a bar, after ①–④ (C1)
+        note_bal()
 
-        # ⑤ New York's close: the call, on mids
+        # ⑤ New York's close: the call, on mids; none with nothing open (D10:
+        # with no margin there is nothing to call on, whatever the balance)
         if gi in W.tau_at:
             tau, deadline = W.tau_at[gi]
             e, m, em_, _ = state(gi, mid=True)
@@ -1028,7 +1097,7 @@ def run(W, emails, spec, ledger=True):
                 v = m - (em_ - start)
                 if v > est[1][0]:
                     est[1] = [v, g, -(em_ - start), m]
-            if spec.calls and call is None and em_ < m:
+            if spec.calls and call is None and m > 0 and em_ < m:
                 call = Call()
                 call.tau = tau
                 call.g = g
@@ -1043,31 +1112,34 @@ def run(W, emails, spec, ledger=True):
                 counts["calls"] += 1
                 row(g, "call", pnl=call.C, eq=(e, m))
 
-        # ⑥ the equity and margin at the close
+        # ⑥ the equity and margin at the close. The falls (R3): a new running
+        # peak only above the peak by more than PEAK_EPS, a new deepest fall
+        # only deeper by more than PEAK_EPS, made up within PEAK_EPS of its
+        # peak (so a peak or trough is not moved by the rounding of a sum)
         e, m, _, ew = state(gi, bad=want_bad)
-        samples.append((g, e))
+        samples.append((gi, e))
         last_e = e
-        if e > peak:
+        if e > peak + PEAK_EPS:
             peak = e
             peak_g = g
         dd = peak - e
-        if dd > mdd:
+        if dd > mdd + PEAK_EPS:
             mdd = dd
             mdd_at = (peak, peak_g, g)
             trough_peak = peak
             recovered = None
-        elif trough_peak is not None and recovered is None and e >= trough_peak:
+        elif trough_peak is not None and recovered is None and e >= trough_peak - PEAK_EPS:
             recovered = g
         if not spec.f10k and peak > 0 and dd / peak > mdd_pct:
             mdd_pct = dd / peak
-        if start - e > below:
+        if start - e > below + PEAK_EPS:
             below = start - e
         # the bound: every open position at its bar's worst at once, against
         # the peak on the closes
-        if want_bad and peak - ew > mddw:
+        if want_bad and peak - ew > mddw + PEAK_EPS:
             mddw = peak - ew
         if gi in W.four_set:
-            note4(e)
+            note4(gi, e)
         if spec.estar:
             pl = e - start
             plw = (ew - start) if spec.lcworst else pl
@@ -1087,8 +1159,8 @@ def run(W, emails, spec, ledger=True):
                 cands.append(adm_g[ai])
             while ti < len(W.tau_g) and W.tau_g[ti] <= gi:
                 ti += 1
-            # every NY close to the grid's end (E*'s second term, a call on a
-            # balance below 0)
+            # every NY close to the grid's end (E*'s second term; past the last
+            # event nothing happens there, D10)
             if ti < len(W.tau_g):
                 cands.append(W.tau_g[ti])
             if call is not None:
@@ -1098,13 +1170,36 @@ def run(W, emails, spec, ledger=True):
             hi = nxt if nxt is not None else n
             while fi < len(W.four_g) and W.four_g[fi] < hi:
                 if W.four_g[fi] > gi:
-                    note4(bal)
+                    note4(W.four_g[fi], bal)
                 fi += 1
         if nxt is None or nxt >= n:
             break
         gi = nxt
 
-    return rows, finish(spec, rows, samples, taken, skipped, skipped_emails, counts, bal, last_e, start, shortfall, est,
+    # the summaries' span (D5): from the last close at or before the first
+    # entry (its enter row: T for an email entered in its bar, the close of the
+    # first 5-minute bar for a late one, §8.99's 「最初の5分足の終値で入り」;
+    # nothing is open before it, so the running numbers start at the start)
+    # to the end of the last bar anything happened in (a deadline's or a
+    # netting's close too, though its row's g is the bar's open)
+    k0 = max(0, bisect.bisect_right(G, first_in) - 1) if first_in is not None else None
+    k1 = last_ev if first_in is not None else None
+    if k0 is not None and mdd > 0 and mdd_at[1] is None:
+        # the deepest fall starts at the start: its peak is the span's first time (C1)
+        mdd_at = (mdd_at[0], G[k0], mdd_at[2])
+    # the 4-hour closes inside the span only (a loss after the last 4-hour
+    # close before the span's end is not seen), from the start
+    peak4 = start
+    mdd4 = 0.0
+    for fgi, e in four_s:
+        if k0 is None or fgi < k0 or fgi > k1:
+            continue
+        if e > peak4 + PEAK_EPS:
+            peak4 = e
+        elif peak4 - e > mdd4 + PEAK_EPS:
+            mdd4 = peak4 - e
+    span = (k0, k1, samples)
+    return rows, finish(spec, W, span, taken, skipped, skipped_emails, counts, bal, last_e, start, shortfall, est,
                         dict(mdd=mdd, mdd_at=mdd_at, mdd_pct=mdd_pct, below=below, mdd_closed=mdd_closed, mdd4=mdd4, mddw=mddw, recovered=recovered, first_lot=first_lot))
 
 
@@ -1126,28 +1221,39 @@ def cap_blocks(cap, em, open_pos, pend):
     raise ValueError(cap)
 
 
-def changes(samples, start, offset, length):
-    """each period's change of equity (a period from offset, of length; a grid
-    time on a boundary closes the period before it): the smallest"""
-    if not samples:
+def changes(W, span, start, offset, length):
+    """The smallest change of equity over the periods (from offset, of length)
+    that have a grid time in the summaries' span (D5); a grid time on a
+    boundary closes the period before it (a bar counts by its open). A period's
+    change: the equity at its last grid time in the span less the period
+    before's (the start for the first). A period with no grid time at all (a
+    weekend's day) is no period; one with grid times and nothing moving
+    changes 0. Not floored at 0: when no period fell, it is the smallest rise.
+    Between the bars looked at nothing moves, so the equity at any grid time is
+    the last looked-at bar's at or before it."""
+    k0, k1, samples = span
+    if k0 is None:
         return 0.0
-    ends = {}
-    for g, e in samples:
-        ends[(g - 1 - offset) // length] = e
-    keys = sorted(ends)
+    starts = W.period_starts(offset, length)
+    a = bisect.bisect_right(starts, k0)
+    b = bisect.bisect_right(starts, k1)
     worst = math.inf
     prev = start
-    last = None
-    for k in keys:
-        if last is not None and k > last + 1:
-            worst = min(worst, 0.0)  # a period with nothing moving
-        worst = min(worst, ends[k] - prev)
-        prev = ends[k]
-        last = k
+    e = start
+    j = 0
+    for end in [i - 1 for i in starts[a:b]] + [k1]:
+        while j < len(samples) and samples[j][0] <= end:
+            e = samples[j][1]
+            j += 1
+        worst = min(worst, e - prev)
+        prev = e
     return worst
 
 
-def finish(spec, rows, samples, taken, skipped, skipped_emails, counts, bal, last_e, start, shortfall, est, mm):
+NOT_MADE_UP = "not made up"
+
+
+def finish(spec, W, span, taken, skipped, skipped_emails, counts, bal, last_e, start, shortfall, est, mm):
     """the run's summary"""
     wins = 0
     resolved = 0
@@ -1170,19 +1276,22 @@ def finish(spec, rows, samples, taken, skipped, skipped_emails, counts, bal, las
             kind = "net"
         else:
             kind = [k for leg, k in kinds if leg == 1][-1]
+        # of those resolved (D1): every trade taken but the 30-bar time-outs;
+        # a netting, a loss-cut or a deadline is in it and never a win
         wins += kind == "tp"
         resolved += kind != "time"
         pips.append(psum / units)
         yen.append(ysum)
     n = len(taken)
+    k0, k1, samples = span
     out = {
         "final_balance": bal,
         "final_equity": last_e,
         "total_yen": bal - start,
         "mdd_yen": mm["mdd"],
         "mdd_pct": mm["mdd_pct"],
-        "worst_week_yen": changes(samples, start, WEEK_OFFSET, WEEK),
-        "worst_day_yen": changes(samples, start, DAY_OFFSET, DAY),
+        "worst_week_yen": changes(W, span, start, WEEK_OFFSET, WEEK),
+        "worst_day_yen": changes(W, span, start, DAY_OFFSET, DAY),
         "taken": n,
         "skipped": dict(skipped),
         "calls": counts["calls"],
@@ -1194,40 +1303,58 @@ def finish(spec, rows, samples, taken, skipped, skipped_emails, counts, bal, las
         "win_resolved": wins / resolved if resolved else None,
         "mean_pips": sum(pips) / len(pips) if pips else None,
         "mean_yen": sum(yen) / len(yen) if yen else None,
-        # beyond the interface's list: compared only where money.json has them
-        "mdd_4h_yen": mm["mdd4"],
-        "mdd_closed_yen": mm["mdd_closed"],
-        "mdd_worst_yen": mm["mddw"],
-        "below_start_yen": mm["below"],
-        "netted_all": counts["netted_all"],
-        "first_lot_skip_g": iso(mm["first_lot"]) if mm["first_lot"] is not None else None,
+        # beyond the interface's list, under money.json's names (C1): the
+        # 4-hour, exits-only and all-at-the-worst falls, the most under the
+        # start, the emails only netted, the first lot skip (its T)
+        "mdd_4h": {"yen": mm["mdd4"]},
+        "mdd_exits": {"yen": mm["mdd_closed"]},
+        "mdd_worst": {"yen": mm["mddw"]},
+        "below_start_max": mm["below"],
+        "net_only": counts["netted_all"],
+        "first_lot_skip": iso(mm["first_lot"]) if mm["first_lot"] is not None else None,
     }
-    if mm["mdd_at"][1] is not None:
-        out["mdd_peak_g"] = iso(mm["mdd_at"][1])
-        out["mdd_trough_g"] = iso(mm["mdd_at"][2])
-        out["mdd_recovered_g"] = iso(mm["recovered"]) if mm["recovered"] is not None else None
     if spec.estar:
         j = max(range(len(TERMS)), key=lambda q: (est[q][0], -q))
         v = est[j][0]
+
+        def told(x):
+            # a term no time ever set (−inf here): None, null in money.json (R6b)
+            return None if x == -math.inf else x
+
         out["estar"] = {
-            "value": v,
-            "terms": [{"name": TERMS[q], "value": est[q][0], "g": iso(est[q][1]) if est[q][1] is not None else None} for q in range(len(TERMS))],
-            "lost": est[j][2],
-            "margin": est[j][3],
+            "value": told(v),
+            "terms": [{"name": TERMS[q], "value": told(est[q][0]), "g": iso(est[q][1]) if est[q][1] is not None else None} for q in range(len(TERMS))],
+            "lost": est[j][2] if v != -math.inf else None,
+            "margin": est[j][3] if v != -math.inf else None,
         }
         # the ratio against the account the cell needed: E* + the yen path
-        peak = v
-        worst = 0.0
-        for _, e in samples:
-            x = v + e
-            if x > peak:
-                peak = x
-            elif peak > 0 and (peak - x) / peak > worst:
-                worst = (peak - x) / peak
-        out["mdd_pct"] = worst
+        # (its running peak moves as R3 says)
+        if v != -math.inf:
+            peak = v
+            worst = 0.0
+            for gi, e in samples:
+                if k0 is None or gi < k0 or gi > k1:
+                    continue
+                x = v + e
+                if x > peak + PEAK_EPS:
+                    peak = x
+                elif peak > 0 and (peak - x) / peak > worst:
+                    worst = (peak - x) / peak
+            out["mdd_pct"] = worst
+    # the deepest fall's peak, trough and the first close back at the peak
+    # ("not made up" when none); when nothing fell (no fall deeper than
+    # PEAK_EPS, R3), all three are None (R6a: null in money.json)
+    _, pk, tr = mm["mdd_at"]
+    fell = mm["mdd"] > 0 and pk is not None
+    out["mdd"] = {
+        "yen": mm["mdd"],
+        "pct": out["mdd_pct"],
+        "peak": iso(pk) if fell else None,
+        "trough": iso(tr) if fell else None,
+        "recovered": (iso(mm["recovered"]) if mm["recovered"] is not None else NOT_MADE_UP) if fell else None,
+    }
     out["_skipped_emails"] = skipped_emails
     out["_taken"] = taken
-    out["_samples"] = samples
     return out
 
 
@@ -1406,16 +1533,24 @@ RATE_COLS = {"win_all", "win_resolved", "mdd_pct", "timeout_share"}
 EXACT_INT_COLS = {"hold_grid", "cal_ms", "weekend", "nights_ny", "units", "seq"}
 
 
+def unset(x):
+    """a value never set: None, an empty cell, JSON's null, or −inf (E*'s term
+    no time ever reached, R6b; JSON has no −inf, so money.json holds null)"""
+    if x is None:
+        return True
+    if isinstance(x, str):
+        return x.strip() in ("", "null", "-Infinity", "-inf")
+    return isinstance(x, float) and x == -math.inf
+
+
 def same(col, mine, theirs):
-    """mine (a number, a string or None) against theirs (a CSV cell or a JSON value)"""
+    """mine (a number, a string or None) against theirs (a CSV cell or a JSON
+    value). A value never set (unset: None, empty, null, −inf) equals only
+    another such value, never a number (R6b)"""
     if isinstance(theirs, str):
         theirs = theirs.strip()
-        if theirs == "":
-            theirs = None
-    if mine is None or mine == "":
-        return theirs is None or theirs == "" or theirs == "null"
-    if theirs is None:
-        return False
+    if unset(mine) or unset(theirs):
+        return unset(mine) and unset(theirs)
     if col in TIME_COLS or col == "g":
         try:
             return (mine if isinstance(mine, int) else ms_of(mine)) == ms_of(theirs)
@@ -1433,6 +1568,9 @@ def same(col, mine, theirs):
         else:
             return False
     m = float(mine)
+    if not (math.isfinite(m) and math.isfinite(t)):
+        # +inf only as +inf, NaN never (no tolerance swallows an infinity)
+        return m == t
     if col in EXACT_INT_COLS or isinstance(mine, int):
         return m == t
     if col in PRICE_COLS:
@@ -1496,22 +1634,78 @@ def compare_ledger(ck, key, rows, path):
 
 
 SUMMARY_KEYS = ["final_balance", "final_equity", "total_yen", "mdd_yen", "mdd_pct", "worst_week_yen", "worst_day_yen", "taken", "skipped", "calls", "cures", "deadlines", "losscuts", "shortfall_yen", "win_all", "win_resolved", "mean_pips", "mean_yen"]
-EXTRA_KEYS = ["mdd_4h_yen", "mdd_closed_yen", "mdd_worst_yen", "below_start_yen", "netted_all", "mdd_peak_g", "mdd_trough_g", "mdd_recovered_g", "first_lot_skip_g"]
+# the further numbers this check works out, by their place in money.json (a
+# dot: inside an object); one money.json lacks is a mismatch (C1)
+EXTRA_KEYS = ["mdd_4h.yen", "mdd_exits.yen", "mdd_worst.yen", "below_start_max", "net_only", "mdd.peak", "mdd.trough", "mdd.recovered", "first_lot_skip"]
+TIME_KEYS = {"g", "peak", "trough", "recovered", "first_lot_skip"}
 
 
 def num_class(k):
-    if k in ("taken", "calls", "cures", "deadlines", "losscuts", "netted_all") or k.startswith("skipped"):
+    k = k.split(".")[-1]
+    if k in ("taken", "calls", "cures", "deadlines", "losscuts", "net_only") or k.startswith("skipped"):
         return "summary:counts"
-    if k.endswith("_g") or k == "g":
+    if k.endswith("_g") or k in TIME_KEYS:
         return "summary:times"
     if k in ("mean_pips",):
         return "summary:pips"
-    if k in ("win_all", "win_resolved", "mdd_pct"):
+    if k in ("win_all", "win_resolved", "mdd_pct", "pct"):
         return "summary:rates"
     return "summary:yen"
 
 
-def compare_summary(ck, key, mine, theirs, absent):
+def at_path(d, path):
+    """d's value at a dotted path, or KeyError when a part is missing"""
+    for k in path.split("."):
+        if not isinstance(d, dict) or k not in d:
+            raise KeyError(path)
+        d = d[k]
+    return d
+
+
+def same_num(k, mine, theirs):
+    """a summary number by its kind; a time with "not made up" the same as none"""
+    cls = num_class(k)
+    if cls == "summary:times":
+        return same("g", None if mine == NOT_MADE_UP else mine, None if theirs == NOT_MADE_UP else theirs)
+    col = "mean_pips" if cls == "summary:pips" else "units" if cls == "summary:counts" else "mdd_pct" if cls == "summary:rates" else "yen"
+    return same(col, mine, theirs)
+
+
+def by_name(terms, alias=False):
+    """E*'s terms by name (D13: order, nyclose, losscut, negative; a fixture's
+    "loss" read as "negative")"""
+    out = {}
+    for b in terms or []:
+        if isinstance(b, dict):
+            name = b.get("name")
+            out["negative" if alias and name == "loss" else name] = b
+    return out
+
+
+def compare_terms(ck, key, mine, theirs, cls, fixture=False):
+    """E*'s terms against theirs by name (C3, D13): the value to 1e-6 yen, g
+    exactly. money.json must hold all four, each once; a fixture's are each
+    compared, its "loss" read as "negative", a name not one of the four a
+    mismatch"""
+    names = [b.get("name") if isinstance(b, dict) else None for b in theirs or []]
+    got = by_name(theirs, alias=fixture)
+    if fixture:
+        want = [n for n in got if n is not None]
+        ck.tally(cls, all(n in TERMS for n in want) and len(got) == len(names), f"{key}.estar.terms: {names} expected, the names {TERMS} here")
+    else:
+        want = TERMS
+        ck.tally(cls, len(names) == len(TERMS) and set(got) == set(TERMS), f"{key}.estar.terms: {names} in money.json, {TERMS} here")
+    mine_by = {a["name"]: a for a in mine}
+    for name in want:
+        a, b = mine_by.get(name), got.get(name)
+        if a is None or b is None:
+            ck.tally(cls, False, f"{key}.estar.terms: {name} {'not here' if a is None else 'not there'}")
+            continue
+        ck.tally(cls, same("yen", a["value"], b.get("value")), f"{key}.estar.terms {name} value: there {b.get('value')!r}, here {a['value']!r}")
+        ck.tally(cls + ":times" if cls == "estar" else cls, same("g", a["g"], b.get("g")), f"{key}.estar.terms {name} g: there {b.get('g')!r}, here {a['g']}")
+
+
+def compare_summary(ck, key, mine, theirs):
     if theirs is None:
         ck.tally("summary:missing", False, f"{key}: not in money.json")
         return
@@ -1527,13 +1721,13 @@ def compare_summary(ck, key, mine, theirs, absent):
         col = "mean_pips" if k == "mean_pips" else ("units" if num_class(k) == "summary:counts" else k)
         ck.tally(num_class(k), same(col, mine[k], theirs[k]), f"{key}.{k}: money.ts {theirs[k]!r}, here {mine[k]!r}")
     for k in EXTRA_KEYS:
-        if k not in mine:
+        try:
+            t = at_path(theirs, k)
+        except KeyError:
+            ck.tally("summary:missing", False, f"{key}.{k}: not in money.json")
             continue
-        if k not in theirs:
-            absent.add(k)
-            continue
-        col = "g" if k.endswith("_g") else ("units" if k == "netted_all" else k)
-        ck.tally(num_class(k), same(col, mine[k], theirs[k]), f"{key}.{k}: money.ts {theirs[k]!r}, here {mine[k]!r}")
+        m = at_path(mine, k)
+        ck.tally(num_class(k), same_num(k, m, t), f"{key}.{k}: money.ts {t!r}, here {m!r}")
     if "estar" in mine:
         t = theirs.get("estar")
         if not isinstance(t, dict):
@@ -1543,11 +1737,7 @@ def compare_summary(ck, key, mine, theirs, absent):
         ck.tally("estar", same("yen", m["value"], t.get("value")), f"{key}.estar.value: money.ts {t.get('value')!r}, here {m['value']!r}")
         for k in ("lost", "margin"):
             ck.tally("estar", same("yen", m[k], t.get(k)), f"{key}.estar.{k}: money.ts {t.get(k)!r}, here {m[k]!r}")
-        terms = t.get("terms") or []
-        ck.tally("estar", len(terms) == len(m["terms"]), f"{key}.estar.terms: {len(terms)} in money.json")
-        for q, (a, b) in enumerate(zip(m["terms"], terms)):
-            ck.tally("estar", same("yen", a["value"], b.get("value")), f"{key}.estar.terms[{q}] ({a['name']}/{b.get('name')}) value: money.ts {b.get('value')!r}, here {a['value']!r}")
-            ck.tally("estar:times", same("g", a["g"], b.get("g")), f"{key}.estar.terms[{q}] ({a['name']}) g: money.ts {b.get('g')!r}, here {a['g']}")
+        compare_terms(ck, key, m["terms"], t.get("terms"), "estar")
 
 
 # ---- the main check -----------------------------------------------------------------------------
@@ -1624,24 +1814,33 @@ def prepare(sigs, F, fours, ck, need=True, start=None, digits=None):
 
 
 def plant_trades(sigs, plant, F):
-    """--plant: an error put into this check's own reading of the trades"""
+    """--plant: an error put into this check's own reading of the trades, on
+    the first CALL9 trade that has all five variants (C2): exitlate takes every
+    variant out a 5-minute bar later (its price kept), so each run that uses the
+    trade, told rows too, moves; pipplus moves the main trade's exit price one
+    pip its way, so its pips, the ledgers' yen and the summaries move (one pip
+    on the pips alone would reach no ledger)"""
     for sg in sigs:
-        tv = sg.tv.get("main")
-        if tv is None or sg.group != "CALL9":
+        if sg.group != "CALL9" or any(sg.tv.get(v) is None for v in VARIANTS):
             continue
-        if plant == "exitlate" and tv.kind in ("tp", "sl"):
-            # the exit one 5-minute bar later (its price kept)
+        if plant == "exitlate":
             f = F[sg.pair]
-            if tv.f_exit + 1 >= len(f.t):
-                continue
-            print(f"planted: {sg.id} main out a 5-minute bar later")
-            tv.f_exit += 1
-            tv.exit_open = f.t[tv.f_exit]
-            tv.x = tv.exit_open + FINE
-            return True
+            moved = []
+            for v in VARIANTS:
+                tv = sg.tv[v]
+                if tv.kind == "passed" or tv.f_exit + 1 >= len(f.t):
+                    continue
+                tv.f_exit += 1
+                tv.exit_open = f.t[tv.f_exit]
+                tv.x = tv.exit_open + FINE
+                moved.append(v)
+            print(f"planted: {sg.id} out a 5-minute bar later ({', '.join(moved) or 'no variant could move'})")
+            return bool(moved)
         if plant == "pipplus":
-            print(f"planted: {sg.id} main 1 pip more")
-            tv.pips += 1
+            tv = sg.tv["main"]
+            tv.px += sg.dir * sg.unit
+            tv.pips = (tv.px - tv.fill) / sg.unit if sg.buy else (tv.fill - tv.px) / sg.unit
+            print(f"planted: {sg.id} main out 1 pip better (at {tv.px!r})")
             return True
     return False
 
@@ -1845,12 +2044,11 @@ def windows(W, ems):
 
 
 def compare_json(ck, mine, theirs, quick):
-    absent = set()
     for part in ("cells", "rows"):
         for key, sm in mine[part].items():
             if sm is None:
                 continue
-            compare_summary(ck, key, sm, (theirs.get(part) or {}).get(key), absent)
+            compare_summary(ck, key, sm, (theirs.get(part) or {}).get(key))
     t = theirs.get("trades") or {}
     m = mine["trades"]
     for k in ("n", "win_all", "win_resolved", "mean_pips"):
@@ -1914,8 +2112,6 @@ def compare_json(ck, mine, theirs, quick):
         ck.tally("windows", len(vals) == len(mw), f"windows: {len(vals)} in money.json, {len(mw)} here")
         for i, (a, b) in enumerate(zip(mw, vals)):
             ck.tally("windows", same("yen", a["estar"], b), f"windows[{i}] ({a['start']}): money.ts {b!r}, here {a['estar']!r}")
-    if absent:
-        print(f"  (not in money.json, so not compared: {', '.join(sorted(absent))})")
 
 
 # ---- fixtures -----------------------------------------------------------------------------------
@@ -1925,6 +2121,11 @@ def fixture_main(args):
     """DIR/fixture.json's runs on DIR/gmo/ and DIR/signals.csv, against its expect"""
     d = args.fixture
     fx = json.load(open(os.path.join(d, "fixture.json")))
+    if fx.get("money_ts_only"):
+        # money.ts's own (the weeks rearranged, which this check does not work
+        # out, §8.99): not for this check, so neither a pass nor a fail here
+        print(f"fixture {fx.get('name')}: money.ts only ({fx.get('what', '')}); not for this check")
+        return 0
     start = ms_of(fx["start"])
     now = ms_of(fx["end"])
     pairs = [p for p in LIVE_ORDER if p in fx["pairs"]]
@@ -1949,13 +2150,42 @@ def fixture_main(args):
     d_yen = sum(yen10k(W, tv) for tv in tvs) / len(tvs) if tvs else 0.0
     d_r = sum(tv.pips for tv in tvs) / len(tvs) / SL_PIPS if tvs else 0.0
     print(f"fixture {fx.get('name')}: {fx.get('what', '')}")
+    # R7: the fixture's own trade rows ("expect_trades", money-trades.csv's
+    # columns, matched by id and variant) against this check's trades table,
+    # every column given, at the same tolerances as against money.ts's
+    exp_tr = fx.get("expect_trades") or []
+    if exp_tr:
+        mine_tr = trade_rows(W, W, sigs, W.taus)
+        before = ck.bad()
+        for er in exp_tr:
+            k = (er.get("id"), er.get("variant"))
+            r = mine_tr.get(k)
+            if r is None:
+                ck.tally("fixture:trades", False, f"{k[0]} {k[1]}: no such trade here")
+                continue
+            for c, v in er.items():
+                if c in ("id", "variant"):
+                    continue
+                if c not in r:
+                    ck.tally("fixture:trades", False, f"{k[0]} {k[1]} {c}: a column this check does not have (expect {v!r:.40})")
+                    continue
+                ck.tally("fixture:trades", same(c, r[c], v),
+                         lambda c=c, v=v, r=r, k=k: f"{k[0]} {k[1]} {c}: expect {v!r}, here {iso(r[c]) if c in TIME_COLS and r[c] is not None else fmt(r[c])}")
+        print(f"  expect_trades ({len(exp_tr)} rows): {'PASS' if ck.bad() == before else 'FAIL'}")
     planted_balance = args.plant == "balance"
     for r in fx["runs"]:
         key = r["key"]
         sizing, cap = r.get("sizing", "F10k"), r.get("cap", "C0")
         row = r.get("row") or None
         course = int(r.get("course") or 25)
-        spec = Spec(key, sizing, cap, row=row, course=course, losscut=float(r.get("losscut") if r.get("losscut") is not None else 0.5), start=r.get("start_equity"), order=r.get("order"))
+        if row == "x10":
+            # R6c: the x10 row is the 10× course whatever "course" says, as
+            # spec_of makes it for the real run (margin 10%, no call; the
+            # loss-cut at the run's "losscut", 0.5 when none is given)
+            course = 10
+        # "order": 0 or none is the broker's order (D3: as make.py and money.ts
+        # read it), 1..20 a hash order
+        spec = Spec(key, sizing, cap, row=row, course=course, losscut=float(r.get("losscut") if r.get("losscut") is not None else 0.5), start=r.get("start_equity"), order=(r.get("order") or None))
         cell = f"{sizing}_{cap}"
         W_, ems = told_emails(W, W, sigs, sigs, row, cell, (d_yen, d_r)) if row else (W, emails_for(W, sigs, "main"))
         rows, sm = run(W_, ems, spec)
@@ -1977,27 +2207,29 @@ def fixture_main(args):
                     continue
                 ck.tally("fixture:ledger", same(c, mine.get(c), v), f"{key} row {j + 1} {c}: expect {v!r}, here {iso(mine.get(c)) if c == 'g' else fmt(mine.get(c))}")
         if "ledger" in exp:
-            ck.tally("fixture:ledger", len(rows) == len(exp["ledger"]) or any("seq" in x for x in exp["ledger"]), f"{key}: {len(rows)} rows here, {len(exp['ledger'])} expected")
+            # every row, so a row too many here is caught (C3)
+            ck.tally("fixture:ledger", len(rows) == len(exp["ledger"]), f"{key}: {len(rows)} rows here, {len(exp['ledger'])} expected")
         for k, v in (exp.get("summary") or {}).items():
             mv = (sm or {}).get(k)
             if isinstance(v, dict) and isinstance(mv, dict):
                 for kk, vv in v.items():
-                    if isinstance(vv, (dict, list)):
+                    if k == "estar" and kk == "terms":
+                        compare_terms(ck, key, mv.get("terms") or [], vv, "fixture:summary", fixture=True)
                         continue
-                    col = "units" if k == "skipped" else ("g" if kk == "g" else "yen")
-                    ck.tally("fixture:summary", same(col, mv.get(kk), vv), f"{key}.{k}.{kk}: expect {vv!r}, here {mv.get(kk)!r}")
+                    if isinstance(vv, (dict, list)):
+                        ck.tally("fixture:summary", False, f"{key}.{k}.{kk}: an expectation this check does not read ({vv!r:.60})")
+                        continue
+                    ok = same("units", mv.get(kk), vv) if k == "skipped" else same_num(f"{k}.{kk}", mv.get(kk), vv)
+                    ck.tally("fixture:summary", ok, f"{key}.{k}.{kk}: expect {vv!r}, here {mv.get(kk)!r}")
             else:
-                cls = num_class(k)
-                col = "units" if cls == "summary:counts" else "g" if cls == "summary:times" else "mean_pips" if cls == "summary:pips" else k
-                ck.tally("fixture:summary", same(col, mv, v), f"{key}.{k}: expect {v!r}, here {mv!r}")
+                ck.tally("fixture:summary", same_num(k, mv, v), f"{key}.{k}: expect {v!r}, here {mv!r}")
         print(f"  {key}: {'PASS' if ck.bad() == before else 'FAIL'}")
     ck.print()
     bad = ck.bad()
-    if args.plant != "none" and args.plant in (fx.get("plants") or []):
-        if bad == 0:
-            print(f"PLANT {args.plant} NOT CAUGHT by fixture {fx.get('name')}")
-            return 1
-        print(f"plant {args.plant} caught ({bad} mismatched): as it must")
+    if args.plant != "none":
+        # this check's own plant is only told here (C2): a fixture's "plants"
+        # names money.ts's plants, which these are not, so nothing is judged
+        print(f"this check's own plant {args.plant}: {bad} mismatched on fixture {fx.get('name')} (told, not judged)")
         return 0
     print("FIXTURE PASS" if bad == 0 else "FIXTURE FAIL")
     return 0 if bad == 0 else 1

@@ -27,6 +27,11 @@ the two must agree (1e-9 a price, 1e-6 a yen), or this stops. recompute.py also
 puts each plant into its own reading, and every plant a fixture lists must move
 at least one expected number there; every plant must be listed somewhere.
 
+A fixture may also give "expect_trades": rows of money-trades.csv (interface.md
+§4.2) worked out by hand, which recompute.py works out again too. Both programs'
+fixture modes compare these with their own trades table, as well as "expect"
+with their ledgers and summaries (decisions R7).
+
 Choices the fixtures had to make that §8.99 and interface.md leave open (listed
 in each fixture.json as "conventions" too, so a FAIL can be read against them):
 """
@@ -52,11 +57,11 @@ ORDER = recompute.ORDER
 SYMBOL = recompute.SYMBOL
 
 CONVENTIONS = [
-    "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+    "the rows an email's admission writes (its enter or skip, and the AS netting closes of the told row 'net') carry g = T, the 4-hour close the email belongs to, even where no 5-minute bar of any pair opens at T (decisions R1; in every fixture some pair's bar opens at T, so T is also that bar's open s); a deadline and its exits carry the forced bar's open s; rows of exits inside a bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end: T + 5 min where its pair has a bar opening at T (in late_nobar_at_T one pair has none, and its first bar is the next it has).",
     "seq counts from 1 in each run; rows in processing order (①–⑥), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
     "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at τ) carries the stand-in grid time as its g, not τ.",
-    "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = −(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value − lost (for the loss-cut term, half the margin held).",
-    "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+    "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = −(P/L) at the binding term's time (order: the state at T before the order; nyclose: on mids), margin = value − lost (for the loss-cut term, half the margin held).",
+    "the emails of one bar are sized on the equity at T, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at T (the earlier orders' spread not taken off).",
     "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
     "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
     "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after ③ at its first bar's close, and is in E and the margin from that bar's end.",
@@ -64,8 +69,11 @@ CONVENTIONS = [
     "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
     "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
     "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
-    "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+    "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T), except for a pair a fixture names in no_bar_at_T (late_nobar_at_T): its trade starts at its next bar, while another pair's bar opens at T.",
     "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then.",
+    "the zero row's δ comes from the fixture's own trades (every signal's TP1-whole trade stands for §8.99's 3,958): F10k −(their mean yen at 10,000 units, a USD pair at USD/JPY's mid at its exit's g), FFk −(their mean pips ÷ 13), there turned into yen a position as δ × units × 13 pips at T; a position's share at a grid time g is #(T, g] ÷ its trade's hold_grid, both counted on the union grid.",
+    "worst_week_yen and worst_day_yen: weeks from Sunday 21:00 UTC, days from 21:00 UTC; a close is in the period of its bar's open (no close in the fixtures that expect them ends at exactly 21:00, so this decides nothing there); a period's change is its last equity in the span less the last of the period before, the start for the first.",
+    "expect_trades rows are money-trades.csv's (interface.md §4.2), matched by id and variant; a late row's entry_g and fill are its first bar's end and close. Both programs' fixture modes compare them with their own trades table (every column a row gives: hold_grid, cal_ms, weekend, nights_ny and the rest) at the same tolerances as expect (decisions R7), as make.py does with recompute.py's.",
 ]
 __doc__ += "".join(f"  {i}. {c}\n" for i, c in enumerate(CONVENTIONS, start=1))
 
@@ -128,12 +136,18 @@ class Ledger:
         self.add(g=iso(at(g)), kind="losscut", equity=equity)
 
 
-def summary(final, taken=None, call=0, cap=0, lot=0, margin=0, passed=0, calls=0, cures=0, deadlines=0, losscuts=0, estar=None):
+def summary(final, taken=None, call=0, cap=0, lot=0, margin=0, passed=0, calls=0, cures=0, deadlines=0, losscuts=0, estar=None,
+            win=None, worst=None):
+    """win = (win_all, win_resolved); worst = (worst_week_yen, worst_day_yen)."""
     s = {"final_balance": final, "final_equity": final}
     if taken is not None:
         s["taken"] = taken
     s.update({"skipped": {"call": call, "cap": cap, "lot": lot, "margin": margin, "passed": passed},
               "calls": calls, "cures": cures, "deadlines": deadlines, "losscuts": losscuts, "shortfall_yen": 0.0})
+    if win is not None:
+        s["win_all"], s["win_resolved"] = win
+    if worst is not None:
+        s["worst_week_yen"], s["worst_day_yen"] = worst
     if estar is not None:
         s["estar"] = estar
     return s
@@ -478,6 +492,8 @@ def net_partial():
             "  (S1's own exit, the stop at Wed 03:05, and S2's TP1 at Wed 01:05 are the trades' own; nothing of them is open in either account then.)",
             "F10k E*: order 60,112.8 (Tue 20:00; S1's 60,000 at 12:00 is less); NY close 21:55 60,012.8 + 640 = 60,652.8 (the largest); loss-cut term 21:55 30,006.4 + 660 = 30,666.4; loss 660 at 21:55 (14:05, S1 at 149.940: 620).",
             "  E* = 60,652.8: lost 640, margin 60,012.8. Taken: S1 and S3 (2); S2 only closed.",
+            "Win rates (decisions D1), both runs: of the 2 taken, S1 went out by the AS order ('net': in both denominators, never a win) and S3 at TP1.",
+            "  win_all 1/2 = 0.5; win_resolved (all but the 30-bar time-outs, none here) 1/2 = 0.5. (Counting only tp, sl and amb would give 1/1.)",
             "Plants: exitlate (S3 out at 03:05, the next USD/JPY bar).",
         ],
         "pairs": ["USD/JPY"],
@@ -489,8 +505,8 @@ def net_partial():
         "signals": [("USD/JPY", "2024-01-16 08:00", "BUY"), ("USD/JPY", "2024-01-16 12:00", "SELL"), ("USD/JPY", "2024-01-16 16:00", "SELL")],
         "runs": [run("row_net_F10k_C0", "F10k", row="net"), run("row_net_FF1_C0", "FF1", row="net", start=988_500)],
         "expect": {
-            "row_net_F10k_C0": {"ledger": f10.rows, "summary": summary(260.0, taken=2, estar=es)},
-            "row_net_FF1_C0": {"ledger": ff.rows, "summary": summary(990_390.0, taken=2)},
+            "row_net_F10k_C0": {"ledger": f10.rows, "summary": summary(260.0, taken=2, estar=es, win=(1 / 2, 1 / 2))},
+            "row_net_FF1_C0": {"ledger": ff.rows, "summary": summary(990_390.0, taken=2, win=(1 / 2, 1 / 2))},
         },
         "plants": ["exitlate"],
     }
@@ -628,6 +644,8 @@ def call_deadline():
             "Thu 09:00 (the first bars opening at the deadline): close everything at each bar's open on the exit side.",
             "  USD/JPY bid open 139.960: 76,000 x (139.960 - 140.002) = -3,192 (996,808). GBP/JPY bid open 187.980: 76,000 x (187.980 - 188.002) = -1,672 (995,136).",
             "  (The trades' own exits come later: USD/JPY's stop and GBP/JPY's TP1 at 10:05; the account no longer holds them.)",
+            "Win rates (decisions D1): both taken trades went out at the deadline ('deadline': in both denominators, never a win): win_all 0/2 = 0, win_resolved 0/2 = 0.",
+            "  (Counting only tp, sl and amb would leave no denominator.)",
             "Plants: curemove cures at Thu 03:05 and nothing is closed at 09:00. callexitside: C = 996,785.6 - 991,032 = 5,753.6. marginentry: the margin fixed at the entry (997,120 at the entry mids, 997,132.16 at the fills) gives C = 5,784 or 5,796.16.",
         ],
         "pairs": ["USD/JPY", "GBP/JPY"],
@@ -639,7 +657,7 @@ def call_deadline():
         },
         "signals": [("USD/JPY", "2024-01-24 08:00", "BUY"), ("GBP/JPY", "2024-01-24 08:00", "BUY")],
         "runs": [run("FF1_C0", "FF1")],
-        "expect": {"FF1_C0": {"ledger": led.rows, "summary": summary(995_136.0, taken=2, calls=1, deadlines=1)}},
+        "expect": {"FF1_C0": {"ledger": led.rows, "summary": summary(995_136.0, taken=2, calls=1, deadlines=1, win=(0.0, 0.0))}},
         "plants": ["curemove", "callexitside", "marginentry"],
     }
 
@@ -857,6 +875,8 @@ def gap_losscut():
             "  Loss-cut term: Fri 16:05 and 21:00 79,000 + 140; Sun 22:05 (P/L -108,540 - 64.34 - 40 = -108,644.34; margin 0.04 x 10,000 x 1.1 x 160.85 + 32,000 = 102,774) 51,387 + 108,644.34 = 160,031.34;",
             "    Sun 22:10 (EUR/USD bid 1.09990: P/L -108,540 - 193.02 - 40 = -108,773.02; margin 0.04 x 10,000 x 1.09992 x 160.85 + 32,000 = 102,768.8528) 51,384.4264 + 108,773.02 = 160,157.4464 (the largest).",
             "  Loss term: 108,773.02 at Sun 22:10 (the end, flat: 107,548.77). E* = 160,157.4464 from the loss-cut term: lost 108,773.02, margin 51,384.4264.",
+            "Win rates (decisions D1): FF1 took USD/JPY (out at its stop, 'sl') and EUR/USD (the loss-cut, 'losscut': in both denominators, never a win): win_all 0/2 = 0, win_resolved 0/2 = 0.",
+            "  F10k took all three: USD/JPY 'sl', EUR/USD and NZD/JPY 'tp': win_all 2/3, win_resolved 2/3 (no time-outs).",
             "Plants: skipgaplc skips Sunday's first test: the loss-cut comes at 22:10 (EUR/USD at 1.09990). marginentry keeps EUR/USD (no loss-cut; it later reaches TP1). usdentry turns EUR/USD at 150: -306, not -328.134.",
             "  exitlate moves USD/JPY's exit to 22:10; pipplus (USD/JPY, the first trade) 1 pip better.",
         ],
@@ -872,8 +892,8 @@ def gap_losscut():
         "signals": [("USD/JPY", "2024-01-12 12:00", "SELL"), ("EUR/USD", "2024-01-12 12:00", "BUY"), ("NZD/JPY", "2024-01-12 12:00", "BUY")],
         "runs": [run("FF1_C0", "FF1"), run("F10k_C0", "F10k")],
         "expect": {
-            "FF1_C0": {"ledger": ff.rows, "summary": summary(1_000_000 + loss + mark, taken=2, margin=1, losscuts=1)},
-            "F10k_C0": {"ledger": f10.rows, "summary": summary(l10 + win + 380, taken=3, estar=es)},
+            "FF1_C0": {"ledger": ff.rows, "summary": summary(1_000_000 + loss + mark, taken=2, margin=1, losscuts=1, win=(0.0, 0.0))},
+            "F10k_C0": {"ledger": f10.rows, "summary": summary(l10 + win + 380, taken=3, estar=es, win=(2 / 3, 2 / 3))},
         },
         "plants": ["skipgaplc", "marginentry", "usdentry", "exitlate", "pipplus"],
     }
@@ -1018,6 +1038,233 @@ def cap_kinds():
 FIXTURES.append(cap_kinds)
 
 
+# ---- deadline_usd_zero: dollar pairs closed at a deadline, and the zero row there (D2) -------
+
+
+def deadline_usd_zero():
+    uj, eu, au = tid("USD/JPY", "2024-02-07 08:00", "BUY"), tid("EUR/USD", "2024-02-07 08:00", "BUY"), tid("AUD/USD", "2024-02-07 08:00", "BUY")
+    m_tau = 0.04 * (76_000 * 149.940 + 51_000 * 1.07940 * 149.940 + 51_000 * 0.65940 * 149.940)
+    e_mid = 1_000_000 + 76_000 * (149.940 - 150.002) + 51_000 * (1.07940 - 1.08002) * 149.940 + 51_000 * (0.65940 - 0.66002) * 149.940
+    e_1205 = 1_000_000 + 76_000 * (149.998 - 150.002) + 2 * 51_000 * (1.07998 - 1.08002) * 150.000
+    # the deadline closes at the bars' opens, the dollar pairs at USD/JPY's mid
+    # of the bar ending at 09:00 (149.950), not of the deadline bar (150.200)
+    p_uj, p_eu, p_au = 76_000 * (149.958 - 150.002), 51_000 * (1.07960 - 1.08002) * 149.950, 51_000 * (0.65960 - 0.66002) * 149.950
+    ff = Ledger()
+    ff.enter("2024-02-07 12:00", uj, 76_000, 150.002)
+    ff.enter("2024-02-07 12:00", eu, 51_000, 1.08002)
+    ff.enter("2024-02-07 12:00", au, 51_000, 0.66002)
+    ff.call("2024-02-07 21:55", m_tau - e_mid, m_tau)
+    ff.deadline("2024-02-08 09:00")
+    ff.exit("2024-02-08 09:00", uj, 76_000, 149.958, p_uj, 1_000_000 + p_uj, "deadline")
+    ff.exit("2024-02-08 09:00", eu, 51_000, 1.07960, p_eu, 1_000_000 + p_uj + p_eu, "deadline")
+    ff.exit("2024-02-08 09:00", au, 51_000, 0.65960, p_au, 1_000_000 + p_uj + p_eu + p_au, "deadline")
+    fin = 1_000_000 + p_uj + p_eu + p_au
+    # the zero row: δR = −(the mean R of the three TP1-whole trades), turned
+    # into yen a position at T (13 pips; the dollar pairs at USD/JPY 150.000);
+    # a position's share at a grid time is its closes since T over its
+    # TP1-whole trade's (hold_grid)
+    dR = -((3.8 - 13.2 + 3.8) / 3) / 13
+    s_uj, s_eu, s_au = dR * 76_000 * 0.13, dR * 51_000 * 0.0013 * 150.000, dR * 51_000 * 0.0013 * 150.000
+    z_mid = e_mid + s_uj * 2 / 5 + s_eu * 2 / 6 + s_au * 2 / 6
+    z_uj, z_eu, z_au = p_uj + s_uj * 4 / 5, p_eu + s_eu * 4 / 6, p_au + s_au * 4 / 6
+    zr = Ledger()
+    zr.enter("2024-02-07 12:00", uj, 76_000, 150.002)
+    zr.enter("2024-02-07 12:00", eu, 51_000, 1.08002)
+    zr.enter("2024-02-07 12:00", au, 51_000, 0.66002)
+    zr.call("2024-02-07 21:55", m_tau - z_mid, m_tau)
+    zr.deadline("2024-02-08 09:00")
+    zr.exit("2024-02-08 09:00", uj, 76_000, 149.958, z_uj, 1_000_000 + z_uj, "deadline")
+    zr.exit("2024-02-08 09:00", eu, 51_000, 1.07960, z_eu, 1_000_000 + z_uj + z_eu, "deadline")
+    zr.exit("2024-02-08 09:00", au, 51_000, 0.65960, z_au, 1_000_000 + z_uj + z_eu + z_au, "deadline")
+    zfin = 1_000_000 + z_uj + z_eu + z_au
+    z_1205 = e_1205 + s_uj / 5 + s_eu / 6 + s_au / 6
+    return {
+        "name": "deadline_usd_zero",
+        "what": "decisions D2: two dollar pairs closed at an uncured call's deadline in FF1, USD/JPY moving inside the deadline bar; the same as the zero row; and (D5) the span ends with the deadline's bar",
+        "hand": [
+            "Runs FF1_C0 and row_zero_FF1_C0, from 1,000,000. Spread 0.4 pip (USD/JPY 0.004; EUR/USD and AUD/USD 0.00004). Winter: the NY close is 21:55 UTC.",
+            "T Wed 2024-02-07 12:00 (bar 08:00), in admission order, all BUY: USD/JPY (mid 150.000, fill 150.002, TP1 150.040, stop 149.870), EUR/USD (mid 1.08000, fill 1.08002, TP1 1.08040, stop 1.07870), AUD/USD (mid 0.66000, fill 0.66002, TP1 0.66040, stop 0.65870).",
+            "  E = 1,000,000. USD/JPY 0.01 x 1,000,000 / 0.13 = 76,923 -> 76,000; a dollar pair's 13 pips are 0.0013 x 150.000 (USD/JPY's mid at T) = 0.195 yen a unit: 51,282 -> 51,000 each.",
+            "  Margin after USD/JPY 0.04 x 76,000 x 150 = 456,000; after EUR/USD + 0.04 x 51,000 x 1.08 x 150 = 330,480 -> 786,480; after AUD/USD + 0.04 x 51,000 x 0.66 x 150 = 201,960 -> 988,440 <= 1,000,000: all three enter.",
+            "12:05 (the flat bars at T): E = 1,000,000 - 304 - 306 - 306 = 999,084.",
+            "NY close Wed 21:55: bids 149.938, 1.07938, 0.65938 (mids 149.940, 1.07940, 0.65940; the dollar pairs at USD/JPY 149.940).",
+            "  Loss-cut: E = 1,000,000 - 4,864 - 4,894.0416 - 4,894.0416 = 985,347.9168; margin 455,817.6 + 330,164.28144 + 201,695.68944 = 987,677.57088, half 493,838.78544: none.",
+            "  On mids: 1,000,000 - 4,712 - 4,741.1028 - 4,741.1028 = 985,805.7944 < 987,677.57088: call, C = 1,871.77648. Deadline Thu 09:00 UTC.",
+            "Thu 03:00 bars: mids back at the entry (E on mids 999,542 >= 988,440); nothing closed: no cure.",
+            "Thu 09:00, the deadline: USD/JPY's bar ending 09:00 (08:55) has bid 149.948, mid 149.950; every pair has a bar opening at 09:00 (bid opens 149.958, 1.07960, 0.65960). USD/JPY's 09:00 bar then rises to close at mid 150.200 (it reaches its own TP1 inside: the trade's own exit, 09:05).",
+            "  Each closed at its bar's open; a dollar pair turned into yen at USD/JPY's mid of the last grid time at or before the open, 09:00: 149.950 (D2).",
+            "  USD/JPY 76,000 x (149.958 - 150.002) = -3,344 (996,656); EUR/USD 51,000 x (1.07960 - 1.08002) x 149.950 = -3,211.929 (993,444.071); AUD/USD the same (990,232.142).",
+            "  (At the deadline bar's end, USD/JPY 150.200, each dollar pair would be -3,217.284.)",
+            "  The trades' own exits: USD/JPY TP1 at 09:05; EUR/USD its stop 1.07870 at 10:05 (bid low 1.07860); AUD/USD TP1 0.66040 at 10:05. The account no longer holds them.",
+            "Win rates (D1): all three taken went out at the deadline: win_all 0/3 = 0, win_resolved 0/3 = 0.",
+            "Worst week and day (D5): the span runs from 12:00 (the close at the entry) to the end of the deadline's bar, 09:05 (the deadline rows carry its open, 09:00).",
+            "  Days from 21:00 UTC: Tue 21:00-Wed 21:00 holds 12:00 and 12:05: 999,084 - 1,000,000 = -916; Wed 21:00-Thu 21:00 holds 21:55, 03:05, 09:00, 09:05: 990,232.142 - 999,084 = -8,851.858 (the worst).",
+            "  One week (from Sun 2024-02-04 21:00): 990,232.142 - 1,000,000 = -9,767.858. (Ending the span at 09:00, the positions still marked at 149.948 and the 03:00 bids, would give -4,715.796 and -3,799.796.)",
+            "row_zero_FF1_C0: δ from the three TP1-whole trades' R: (3.8 - 13.2 + 3.8) pips / 3 / 13 = -0.143590, so δR = 5.6 / 39 = 0.143590.",
+            "  In yen a position, at T: USD/JPY δR x 76,000 x 0.13 = 1,418.6667; EUR/USD δR x 51,000 x 0.0013 x 150.000 = 1,428; AUD/USD 1,428.",
+            "  The grid G: 12:00, 12:05, 21:55, 03:05, 09:00, 09:05, 10:05, 10:10 (then the flush). Each trade's closes, (T, x]: USD/JPY 5 (to 09:05), EUR/USD and AUD/USD 6 (to 10:05).",
+            "  The sizes at T are the same (nothing open). At 21:55 (2 closes in): shifts 1,418.6667 x 2/5 + 1,428 x 2/6 x 2 = 1,519.4667; E on mids 987,325.2611 < 987,677.57088: call, C = 352.30981.",
+            "  At the deadline the share is taken at 09:00, the last grid time at or before the bars' open (4 closes in, D2): USD/JPY -3,344 + 1,418.6667 x 4/5 = -2,209.0667 (997,790.9333);",
+            "    EUR/USD -3,211.929 + 1,428 x 4/6 = -2,259.929 (995,531.0043); AUD/USD the same (993,271.0753).",
+            "  (Taken at 09:05, 5 closes in, with USD/JPY 150.200: -1,925.3333 and -2,027.284 each.)",
+            "  Worst: 12:05 is 999,084 + 1,418.6667 / 5 + 1,428 / 6 x 2 = 999,843.7333; days -156.2667 and 993,271.0753 - 999,843.7333 = -6,572.658 (the worst); the week -6,728.9247.",
+            "Plants: usdentry turns the dollar pairs at USD/JPY 150.000 (C = 1,875.57088; the deadline closes -3,213 each). marginentry (the margin at the fills and USD/JPY 150, 988,458.32) gives C = 2,652.5256 in FF1_C0.",
+            "  callexitside gives C = 987,677.57088 - 985,347.9168 = 2,329.65408. curemove cures at 03:05 (E on mids 999,542 >= 988,440), so nothing is closed at 09:00.",
+        ],
+        "pairs": ["USD/JPY", "EUR/USD", "AUD/USD"],
+        "bars": {
+            "USD/JPY": [flat("2024-02-07 11:55", 149.998), flat("2024-02-07 21:50", 149.938), flat("2024-02-08 03:00", 149.998), flat("2024-02-08 08:55", 149.948),
+                        ohlc("2024-02-08 09:00", 149.958, 150.210, 149.958, 150.198)],
+            "EUR/USD": [flat("2024-02-07 11:55", 1.07998, 0.00004), flat("2024-02-07 21:50", 1.07938, 0.00004), flat("2024-02-08 03:00", 1.07998, 0.00004),
+                        ohlc("2024-02-08 09:00", 1.07960, 1.07970, 1.07950, 1.07960, 0.00004), ohlc("2024-02-08 10:00", 1.07950, 1.07950, 1.07860, 1.07870, 0.00004),
+                        flat("2024-02-08 10:05", 1.07870, 0.00004)],
+            "AUD/USD": [flat("2024-02-07 11:55", 0.65998, 0.00004), flat("2024-02-07 21:50", 0.65938, 0.00004), flat("2024-02-08 03:00", 0.65998, 0.00004),
+                        ohlc("2024-02-08 09:00", 0.65960, 0.65970, 0.65950, 0.65960, 0.00004), ohlc("2024-02-08 10:00", 0.65960, 0.66045, 0.65960, 0.66040, 0.00004),
+                        flat("2024-02-08 10:05", 0.66040, 0.00004)],
+        },
+        "signals": [("USD/JPY", "2024-02-07 08:00", "BUY"), ("EUR/USD", "2024-02-07 08:00", "BUY"), ("AUD/USD", "2024-02-07 08:00", "BUY")],
+        "runs": [run("FF1_C0", "FF1"), run("row_zero_FF1_C0", "FF1", row="zero")],
+        "expect": {
+            "FF1_C0": {"ledger": ff.rows, "summary": summary(fin, taken=3, calls=1, deadlines=1, win=(0.0, 0.0), worst=(fin - 1_000_000, fin - e_1205))},
+            "row_zero_FF1_C0": {"ledger": zr.rows, "summary": summary(zfin, taken=3, calls=1, deadlines=1, win=(0.0, 0.0), worst=(zfin - 1_000_000, zfin - z_1205))},
+        },
+        "plants": ["usdentry", "marginentry", "callexitside", "curemove"],
+    }
+
+
+FIXTURES.append(deadline_usd_zero)
+
+
+# ---- late_nobar_at_T: a late email whose pair has no bar opening at T (D9) --------------------
+
+
+def late_nobar_at_T():
+    uj, ej = tid("USD/JPY", "2024-02-09 16:00", "BUY"), tid("EUR/JPY", "2024-02-09 16:00", "BUY")
+    f10 = Ledger()
+    f10.enter("2024-02-09 20:05", uj, 10_000, 150.002)
+    f10.exit("2024-02-09 21:05", uj, 10_000, 150.040, 10_000 * (150.040 - 150.002), 380, "tp")
+    f10.enter("2024-02-11 22:05", ej, 10_000, 160.002)
+    f10.exit("2024-02-12 01:05", ej, 10_000, 160.040, 10_000 * (160.040 - 160.002), 760, "tp")
+    ff = Ledger()
+    ff.enter("2024-02-09 20:05", uj, 76_000, 150.002)
+    ff.exit("2024-02-09 21:05", uj, 76_000, 150.040, 76_000 * (150.040 - 150.002), 1_002_888, "tp")
+    ff.enter("2024-02-11 22:05", ej, 76_000, 160.002)
+    ff.exit("2024-02-12 01:05", ej, 76_000, 160.040, 76_000 * (160.040 - 160.002), 1_005_776, "tp")
+    es = estar(order=(0.04 * 10_000 * (150.000 + 160.000), "2024-02-09 20:00"), nyclose=(-380.0, "2024-02-09 21:10"),
+               losscut=(0.5 * 0.04 * 10_000 * 160.000 - (380 - 40), "2024-02-11 22:05"), loss=(40.0, "2024-02-09 20:05"), binding="order", lost=0.0)
+
+    def row(id_, variant, fill, entry_g, x, exit_px, hold, cal, weekend, nights):
+        return {"id": id_, "variant": variant, "fill": fill, "entry_g": iso(at(entry_g)), "exit_kind": "tp", "x": iso(at(x)), "exit_px": exit_px,
+                "hold_grid": hold, "cal_ms": cal, "weekend": weekend, "nights_ny": nights}
+
+    return {
+        "name": "late_nobar_at_T",
+        "what": "decisions D9: the told row 'late' with an email whose pair has no 5-minute bar opening at T (its next bar opens after the weekend) while the other pair's does; the trade columns counted from T, the late path its own",
+        "hand": [
+            "Runs row_late_F10k_C0 (start 0) and row_late_FF1_C0 (1,000,000). JPY pairs, spread 0.4 pip. Winter: the NY close is 21:55 UTC.",
+            "T Fri 2024-02-09 20:00 (bar 16:00), in admission order: USD/JPY BUY (mid 150.000, TP1 150.040, stop 149.870), EUR/JPY BUY (mid 160.000, TP1 160.040, stop 159.870). Both have a bar ending at T (bids 149.998, 159.998).",
+            "  USD/JPY has a bar opening at T (20:00-20:05, flat). EUR/JPY has none (no_bar_at_T): its next bar opens Sun 2024-02-11 22:00, the week's first.",
+            "Both judged at T: F10k admits both (order term: 0.04 x 10,000 x 150.000 = 60,000, then + 0.04 x 10,000 x 160.000 = 124,000, P/L 0).",
+            "  FF1: E = 1,000,000, 76,000 units each; margin after 456,000, then 456,000 + 486,400 = 942,400 <= 1,000,000: both admitted (slots and margin held from T).",
+            "USD/JPY's first bar (20:00-20:05) bid close 149.998, ask 150.002: not past a level: in at 150.002 at 20:05. Its 21:00 bar bid high 150.045: out at TP1 150.040 (21:05): F10k 380; FF1 76,000 x 0.038 = 2,888 (1,002,888).",
+            "EUR/JPY's first bar at or after T is Sun 22:00-22:05 (bid close 159.998, ask 160.002): not past a level: in at 160.002, its enter row at Sun 22:05 (the bar's end).",
+            "  Its Mon 01:00 bar bid high 160.045: out at TP1 160.040 (01:05): F10k 380 (760); FF1 2,888 (1,005,776).",
+            "Fri's NY close 21:55: no bar ends then; the stand-in is 21:10 (USD/JPY's 21:05 bar). Nothing is open (EUR/JPY is not yet in): no call; F10k's term 0 - 380 = -380.",
+            "F10k E*: order 124,000 (Fri 20:00); NY close -380 (Fri 21:10; the later ones, after every exit, -760); loss-cut term: 20:05 30,000 + 40 = 30,040, Sun 22:05 32,000 - (380 - 40) = 31,660 (the largest); loss 40 at 20:05.",
+            "  E* = 124,000 from the order term: lost 0, margin 124,000.",
+            "Trade columns (money-trades.csv, in expect_trades), counted from T for every variant (D9). The grid G: Fri 20:00, 20:05, 21:05, 21:10, Sun 22:05, Mon 01:05, 01:10 (then the flush, 02:10, 02:15).",
+            "  EUR/JPY late (entry_g Sun 22:05, fill 160.002) and main (from T, fill 160.002, followed from the Sun 22:00 bar) both out at Mon 01:05:",
+            "    hold_grid = #(Fri 20:00, Mon 01:05] = 20:05, 21:05, 21:10, 22:05, 01:05 = 5; cal_ms = 53 h 5 min = 191,100,000;",
+            "    weekend = 1 (Fri in the week from Sun 2024-02-04 21:00, Mon in the week from Sun 2024-02-11 21:00); nights_ny = 1 (Fri 21:55 is between T and the exit).",
+            "    Counted from the late trade's first bar's open (Sun 22:00) instead: 2, 11,100,000, 0 and 0.",
+            "  USD/JPY (a bar at T) main and late, out at Fri 21:05: hold_grid 2 (20:05, 21:05), cal_ms 3,900,000, weekend 0, nights_ny 0 (21:55 is after the exit).",
+            "Plants: exitlate (USD/JPY out at 21:10, EUR/JPY at 01:10, each the pair's next bar).",
+        ],
+        "pairs": ["USD/JPY", "EUR/JPY"],
+        "bars": {
+            "USD/JPY": [flat("2024-02-09 19:55", 149.998), ohlc("2024-02-09 21:00", 150.000, 150.045, 150.000, 150.040), flat("2024-02-09 21:05", 150.040)],
+            "EUR/JPY": [flat("2024-02-09 19:55", 159.998), flat("2024-02-11 22:00", 159.998), ohlc("2024-02-12 01:00", 160.000, 160.045, 160.000, 160.040),
+                        flat("2024-02-12 01:05", 160.040)],
+        },
+        "no_bar_at_T": [("EUR/JPY", "2024-02-09 16:00")],
+        "signals": [("USD/JPY", "2024-02-09 16:00", "BUY"), ("EUR/JPY", "2024-02-09 16:00", "BUY")],
+        "runs": [run("row_late_F10k_C0", "F10k", row="late"), run("row_late_FF1_C0", "FF1", row="late")],
+        "expect": {
+            "row_late_F10k_C0": {"ledger": f10.rows, "summary": summary(760.0, taken=2, estar=es)},
+            "row_late_FF1_C0": {"ledger": ff.rows, "summary": summary(1_005_776.0, taken=2)},
+        },
+        "expect_trades": [
+            row(uj, "main", 150.002, "2024-02-09 20:00", "2024-02-09 21:05", 150.040, 2, 65 * MIN, 0, 0),
+            row(uj, "late", 150.002, "2024-02-09 20:05", "2024-02-09 21:05", 150.040, 2, 65 * MIN, 0, 0),
+            row(ej, "main", 160.002, "2024-02-09 20:00", "2024-02-12 01:05", 160.040, 5, 53 * HOUR + 5 * MIN, 1, 1),
+            row(ej, "late", 160.002, "2024-02-11 22:05", "2024-02-12 01:05", 160.040, 5, 53 * HOUR + 5 * MIN, 1, 1),
+        ],
+        "plants": ["exitlate"],
+    }
+
+
+FIXTURES.append(late_nobar_at_T)
+
+
+# ---- worst_week_up: every week and day rises; the worst is the smallest rise (D5) -------------
+
+
+def worst_week_up():
+    a, b, c = tid("USD/JPY", "2024-02-12 08:00", "BUY"), tid("EUR/JPY", "2024-02-14 08:00", "BUY"), tid("GBP/JPY", "2024-02-19 08:00", "BUY")
+    f10 = Ledger()
+    f10.enter("2024-02-12 12:00", a, 10_000, 150.002)
+    f10.exit("2024-02-12 22:05", a, 10_000, 150.040, 10_000 * (150.040 - 150.002), 380, "tp")
+    f10.enter("2024-02-14 12:00", b, 10_000, 160.002)
+    f10.exit("2024-02-14 14:05", b, 10_000, 160.064, 10_000 * (160.064 - 160.002), 1_000, "tp")
+    f10.enter("2024-02-19 12:00", c, 10_000, 190.002)
+    f10.exit("2024-02-19 13:05", c, 10_000, 190.047, 10_000 * (190.047 - 190.002), 1_450, "tp")
+    ff = Ledger()
+    ff.enter("2024-02-12 12:00", a, 76_000, 150.002)
+    ff.exit("2024-02-12 22:05", a, 76_000, 150.040, 76_000 * (150.040 - 150.002), 1_002_888, "tp")
+    ff.enter("2024-02-14 12:00", b, 77_000, 160.002)
+    ff.exit("2024-02-14 14:05", b, 77_000, 160.064, 77_000 * (160.064 - 160.002), 1_007_662, "tp")
+    ff.enter("2024-02-19 12:00", c, 77_000, 190.002)
+    ff.exit("2024-02-19 13:05", c, 77_000, 190.047, 77_000 * (190.047 - 190.002), 1_011_127, "tp")
+    m10, m1 = 10_000 * (150.030 - 150.002), 76_000 * (150.030 - 150.002)
+    return {
+        "name": "worst_week_up",
+        "what": "decisions D5: a run in which every week and every day rises, so the worst week and the worst day are the smallest rises (not 0); days start 21:00 UTC",
+        "hand": [
+            "Runs F10k_C0 (start 0) and FF1_C0 (1,000,000). JPY pairs, spread 0.4 pip, all BUY; each 4-hour close mid is bid + 0.002.",
+            "A USD/JPY, T Mon 2024-02-12 12:00 (mid 150.000, fill 150.002, TP1 150.040, stop 149.870): bid 150.030 at Mon 20:55 (the 20:50 bar, the day's last close); the 22:00 bar's bid high 150.045: out at TP1 150.040 (22:05).",
+            "B EUR/JPY, T Wed 2024-02-14 12:00 (mid 160.000, fill 160.002, TP1 160.040): the 14:00 bar opens at bid 160.064, past TP1: out at that open (14:05).",
+            "C GBP/JPY, T Mon 2024-02-19 12:00 (mid 190.000, fill 190.002, TP1 190.040): the 13:00 bar opens at bid 190.047: out at that open (13:05).",
+            "F10k: A 10,000 x 0.038 = 380 (marked 10,000 x 0.028 = 280 at Mon 20:55); B 10,000 x 0.062 = 620 (1,000); C 10,000 x 0.045 = 450 (1,450).",
+            "FF1: A 76,000 (marked 2,128 at Mon 20:55), out +2,888 (1,002,888). B: 0.01 x 1,002,888 / 0.13 = 77,145 -> 77,000 (margin 492,800): +4,774 (1,007,662).",
+            "  C: 0.01 x 1,007,662 / 0.13 = 77,512 -> 77,000 (margin 585,200): +3,465 (1,011,127). Mon 12's NY close (21:55; the stand-in 20:55): E on mids 1,002,280 >= 456,097.28: no call.",
+            "The span: from Mon 12 12:00 (the close at A's entry) to C's exit, Mon 19 13:05. A close is in the period of its bar's open; no close here ends at exactly 21:00.",
+            "Days from 21:00 UTC. F10k: Sun 11 21:00-Mon 12 21:00 ends at 20:55: +280; Mon 21:00-Tue 21:00 (A out at 22:05): 380 - 280 = +100; Tue 21:00-Wed 21:00: 1,000 - 380 = +620; Sun 18 21:00-Mon 19 21:00: 1,450 - 1,000 = +450.",
+            "  Worst day +100. Weeks from Sunday 21:00: from Feb 11 +1,000, from Feb 18 +450: worst week +450.",
+            "FF1: days +2,128, 2,888 - 2,128 = +760, +4,774, +3,465: worst day +760; weeks +7,662 and +3,465: worst week +3,465.",
+            "Nothing fell, so the worst week and day are the smallest rises, not 0 (D5). (Days from 00:00 UTC would put A's whole +380 / +2,888 in one day: worst day +380 / +2,888.)",
+            "  (USD/JPY's 23:00 bar, bid high 150.170, takes A's TP2 and TP3 variants within its 30 bars; the account holds nothing then, so no day moves.)",
+            "Plants: pipplus (A out 1 pip better, 150.050: F10k +480, the worst day +200). roundlot (FF1: A 76.9 -> 77,000). exitlate (each exit a bar later; the ledger's times move).",
+        ],
+        "pairs": ["USD/JPY", "EUR/JPY", "GBP/JPY"],
+        "bars": {
+            "USD/JPY": [flat("2024-02-12 11:55", 149.998), flat("2024-02-12 20:50", 150.030), ohlc("2024-02-12 22:00", 150.030, 150.045, 150.030, 150.040), flat("2024-02-12 22:05", 150.040),
+                        ohlc("2024-02-12 23:00", 150.040, 150.170, 150.040, 150.160)],
+            "EUR/JPY": [flat("2024-02-14 11:55", 159.998), ohlc("2024-02-14 14:00", 160.064, 160.070, 160.060, 160.066), flat("2024-02-14 14:05", 160.066)],
+            "GBP/JPY": [flat("2024-02-19 11:55", 189.998), ohlc("2024-02-19 13:00", 190.047, 190.050, 190.045, 190.048), flat("2024-02-19 13:05", 190.048)],
+        },
+        "signals": [("USD/JPY", "2024-02-12 08:00", "BUY"), ("EUR/JPY", "2024-02-14 08:00", "BUY"), ("GBP/JPY", "2024-02-19 08:00", "BUY")],
+        "runs": [run("F10k_C0", "F10k"), run("FF1_C0", "FF1")],
+        "expect": {
+            "F10k_C0": {"ledger": f10.rows, "summary": summary(1_450.0, taken=3, worst=(1_450 - 1_000, 380 - m10))},
+            "FF1_C0": {"ledger": ff.rows, "summary": summary(1_011_127.0, taken=3, worst=(1_011_127 - 1_007_662, 2_888 - m1))},
+        },
+        "plants": ["pipplus", "roundlot", "exitlate"],
+    }
+
+
+FIXTURES.append(worst_week_up)
+
+
 # ---- the files ------------------------------------------------------------------------------
 
 
@@ -1064,16 +1311,25 @@ def write(fx):
             raise SystemExit(f"{fx['name']} {pair}: two bars at one time")
         bars[pair] = out
     # the bar opening at T (the email's first followed bar), flat at the close
-    # of the bar ending at T, where none is written
+    # of the bar ending at T, where none is written; a fixture may leave a pair
+    # without it ("no_bar_at_T": its trade starts at the pair's next bar), and
+    # then another pair's bar must open at T, so the union grid has the email
+    gap = {(pair, bar_open) for pair, bar_open in fx.get("no_bar_at_T", [])}
     for pair, bar_open, side in fx["signals"]:
         T = at(bar_open) + STEP4
         rows = bars[pair]
+        if (pair, bar_open) in gap:
+            continue
         if not any(r[0] == T for r in rows):
             last = [r for r in rows if r[0] + FINE == T]
             if not last:
                 raise SystemExit(f"{fx['name']} {pair} {bar_open}: no 5-minute bar ends at T")
             rows.append((T, (last[0][1][3],) * 4, (last[0][2][3],) * 4))
             rows.sort()
+    for pair, bar_open in gap:
+        T = at(bar_open) + STEP4
+        if any(r[0] == T for r in bars[pair]) or not any(r[0] == T for rs in bars.values() for r in rs):
+            raise SystemExit(f"{fx['name']} {pair} {bar_open}: no_bar_at_T needs the pair without a bar at T and another pair with one")
     # the flush: an hour after the last bar written (the next open hour), one
     # wide bar a pair that every level still waiting is inside, then a flat bar
     t = max(rows[-1][0] for rows in bars.values()) + HOUR
@@ -1147,6 +1403,10 @@ def write(fx):
         "digits": {p: 3 if p.endswith("/JPY") else 5 for p in fx["pairs"]},
         "runs": fx["runs"],
         "expect": fx["expect"],
+        # money-trades.csv's rows, where a fixture gives them (recompute.py works
+        # them out again; both programs' fixture modes compare them with their
+        # own trades table, as they compare "expect" with their ledgers)
+        **({"expect_trades": fx["expect_trades"]} if "expect_trades" in fx else {}),
         "plants": fx["plants"],
     }
     with open(os.path.join(d, "fixture.json"), "w") as f:
@@ -1163,7 +1423,11 @@ def main():
         d = write(fx)
         _, got = recompute.recompute(d)
         miss = recompute.diff(fx["expect"], got)
-        print(f"{fx['name']}: the hand and the second calculation {'AGREE' if not miss else 'DIFFER'} ({sum(len(v['ledger']) for v in fx['expect'].values())} ledger rows, {len(fx['runs'])} runs)")
+        rows = ""
+        if "expect_trades" in fx:
+            miss += recompute.diff_trades(fx["expect_trades"], recompute.recompute_trades(d)[1])
+            rows = f", {len(fx['expect_trades'])} trade rows"
+        print(f"{fx['name']}: the hand and the second calculation {'AGREE' if not miss else 'DIFFER'} ({sum(len(v['ledger']) for v in fx['expect'].values())} ledger rows, {len(fx['runs'])} runs{rows})")
         for m in miss[:20]:
             print("    ", m)
         bad += bool(miss)

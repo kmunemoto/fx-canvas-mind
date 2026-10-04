@@ -8,8 +8,16 @@ the runs in fixture.json) and walks the account bar by bar as §8.99 says, so a
 slip in the hand's arithmetic, or a file written wrong, shows up as a
 difference. It is NOT research/money-check.py (that one checks the study on
 the real data); it does only what the fixtures use: the nine pairs' JPY and
-USD pairs, the 25× course, F10k and FFk sizing, the caps, and the rows late,
-thirds, net and turtle.
+USD pairs, the 25× course, F10k and FFk sizing, the caps, the rows late,
+thirds, net, turtle and zero, the win rates and the worst week and day of a
+run, and (trade_rows) money-trades.csv's columns of each trade.
+
+The rules the lead decided after the programs' review (scratchpad
+decisions.md, written into §8.99) are the ones read here where they bear: D1
+(win rates), D2 (a deadline's USD/JPY and the zero row's share at the bar's
+open), D5 (the span, and a worst week or day not floored at 0), D9 (the trade
+columns from T), D10 (no call with nothing open) and D12 (units floored after
+adding 1e-9).
 
 It also puts each planted error (interface.md §8) into its OWN reading, so
 make.py can show that every plant moves at least one number a fixture expects.
@@ -27,6 +35,7 @@ import glob
 import json
 import math
 import os
+from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
@@ -34,9 +43,15 @@ from zoneinfo import ZoneInfo
 MIN = 60_000
 HOUR = 60 * MIN
 DAY = 24 * HOUR
+WEEK = 7 * DAY
 FINE = 5 * MIN
 STEP4 = 4 * HOUR
 NY = ZoneInfo("America/New_York")
+# weeks start Sunday 21:00 UTC (stop2n weekOf: the epoch is a Thursday, so the
+# first such Sunday is 3 days 21 hours after it); days for the worst day start
+# 21:00 UTC (interface.md §2)
+WEEK0 = 3 * DAY + 21 * HOUR
+DAY0 = 21 * HOUR
 # the admission order (LIVE_PAIRS' order restricted to the pairs in play)
 ORDER = ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY"]
 SYMBOL = {p: p.replace("/", "_") for p in ORDER}
@@ -70,6 +85,14 @@ def iso(ms):
 def to_fixed(x, d):
     """Number(x.toFixed(d)): the exact binary value, halves up."""
     return float(Decimal(x).quantize(Decimal(1).scaleb(-d), rounding=ROUND_HALF_UP))
+
+
+def week_of(t):
+    return (t - WEEK0) // WEEK
+
+
+def day_of(t):
+    return (t - DAY0) // DAY
 
 
 # ---- the files -----------------------------------------------------------------------------
@@ -174,6 +197,33 @@ def build_trades(fx, gmo, signals, plants):
     return trades, fine
 
 
+def trade_rows(fx, trades, fine, plants):
+    """money-trades.csv's rows (interface.md §4.2) of each trade × variant.
+    hold_grid, cal_ms, weekend and nights_ny are counted from T for every
+    variant, the late one too (decisions D9: hold_grid = #{g in G : T < g ≤ x},
+    cal_ms = x − T, weekend = weekOf(x) − weekOf(T), the NY closes τ with
+    T < τ < x), while the late trade keeps its own path: in at the close of
+    the pair's first 5-minute bar opening at or after T, so where the pair has
+    no bar opening at T that bar, and entry_g, come later."""
+    grid = sorted({q[0] + FINE for p in fx["pairs"] for q in fine[p]})
+    taus = ny_closes(grid[0], grid[-1], plants)
+    rows = []
+    for tr in trades:
+        for v in ("main", "tp2", "tp3", "late"):
+            late = v == "late"
+            r = {"id": tr.id, "variant": v, "fill": tr.late_fill if late else tr.fill, "entry_g": iso(tr.late_g if late else tr.T)}
+            out = tr.exits[v]
+            if out is None:
+                r.update(exit_kind="passed", x=None, exit_px=None, hold_grid=None, cal_ms=None, weekend=None, nights_ny=None)
+            else:
+                kind, j, xp = out
+                x = fine[tr.pair][j][0] + FINE
+                r.update(exit_kind=kind, x=iso(x), exit_px=xp, hold_grid=bisect_right(grid, x) - bisect_right(grid, tr.T),
+                         cal_ms=x - tr.T, weekend=week_of(x) - week_of(tr.T), nights_ny=sum(tr.T < t < x for t in taus))
+            rows.append(r)
+    return rows
+
+
 # ---- the account -------------------------------------------------------------------------
 
 
@@ -211,6 +261,43 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
     ends = {p: [q[0] + FINE for q in fine[p]] for p in pairs}
     grid = sorted({g for p in pairs for g in ends[p]})
     last = {p: -1 for p in pairs}
+    # the grid time the marks stand at: while ① and ② are done, the last one at
+    # or before s (the closes are not yet moved to g); from the closes at g on, g
+    clock = [None]
+    # the grid time being worked on: the bar a ledger row is written in (D5)
+    proc = [None]
+    zero = row == "zero"
+    hold, delta = {}, 0.0
+    if zero:
+        # §8.99 損益ゼロ: each position's P/L path moved by δ × (closes since T ÷
+        # its TP1-whole trade's closes), both counted as hold_grid, (T, g];
+        # δ from every email's TP1-whole trade (the fixture's table stands for
+        # the 3,958): −(the mean yen at 10,000 units, a USD pair at USD/JPY's
+        # mid at its exit's g) for F10k, −(the mean pips ÷ 13) for k%, there
+        # turned into yen a position as δ × units × 13 pips at T. Marks, mids
+        # and closes move; the margin does not.
+        each = []
+        for tr in trades:
+            _, j, xp = tr.exits["main"]
+            x = fine[tr.pair][j][0] + FINE
+            hold[tr.id] = bisect_right(grid, x) - bisect_right(grid, tr.T)
+            if f10k:
+                c = 1.0
+                if tr.usd:
+                    uj = fine["USD/JPY"]
+                    _, b, a = uj[bisect_right([q[0] + FINE for q in uj], x) - 1]
+                    c = (b[3] + a[3]) / 2
+                each.append(10_000 * (xp - tr.fill) * tr.dir * c)
+            else:
+                each.append((xp - tr.fill) * tr.dir / tr.unit / SL)
+        delta = -sum(each) / len(each)
+
+    def share(q, units):
+        """The part of δ a position's `units` have taken in by the clock's time."""
+        if not zero or clock[0] is None:
+            return 0.0
+        n = bisect_right(grid, clock[0]) - bisect_right(grid, q["T"])
+        return q["shift_u"] * units * n / q["hold"]
 
     def px(p, how):
         j = last[p]
@@ -223,7 +310,8 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
         return px("USD/JPY", "mid") if not p.endswith("/JPY") else 1.0
 
     led = []
-    st = {"balance": start, "taken": set(), "skipped": {"call": 0, "cap": 0, "lot": 0, "margin": 0, "passed": 0}, "calls": 0, "cures": 0, "deadlines": 0, "losscuts": 0, "shortfall": 0.0}
+    row_at = []  # the bar each ledger row is written in (its grid time)
+    st = {"balance": start, "taken": set(), "kinds": {}, "skipped": {"call": 0, "cap": 0, "lot": 0, "margin": 0, "passed": 0}, "calls": 0, "cures": 0, "deadlines": 0, "losscuts": 0, "shortfall": 0.0}
     pos = []  # open positions, in admission order
     pending = []  # late emails admitted at T, filled at the first bar's close
     call = None
@@ -234,11 +322,12 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
     def add(**r):
         seq[0] += 1
         led.append({"seq": seq[0], **r})
+        row_at.append(proc[0])
 
     def mark(q, how):
         side = how if how == "mid" else ("bid" if q["dir"] > 0 else "ask")
         c = q["conv_entry"] if "usdentry" in plants and q["usd"] else conv(q["pair"])
-        return (px(q["pair"], side) - q["fill"]) * q["dir"] * q["units"] * c
+        return (px(q["pair"], side) - q["fill"]) * q["dir"] * q["units"] * c + share(q, q["units"])
 
     def equity(how="exit"):
         return st["balance"] + sum(mark(q, how) for q in pos)
@@ -260,8 +349,15 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
         return tot
 
     def close(q, units, price, g, reason):
+        # at ① (a deadline) the clock and the closes are still the last grid
+        # time at or before s: a USD pair is turned into yen at USD/JPY's mid
+        # then, and the zero row's share is taken then (decisions D2)
         c = q["conv_entry"] if "usdentry" in plants and q["usd"] else conv(q["pair"])
-        pnl = (price - q["fill"]) * q["dir"] * units * c
+        pnl = (price - q["fill"]) * q["dir"] * units * c + share(q, units)
+        # the email's way out, for the win rates (D1); one netted in any part
+        # stays 'net'
+        if st["kinds"].get(q["trade"]) != "net":
+            st["kinds"][q["trade"]] = reason
         st["balance"] += pnl
         q["units"] -= units
         if q["units"] == 0:
@@ -297,7 +393,9 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
             if m >= 1:
                 base = min(e_at, start * 0.8**m)
         q = k * base / (SL * tr.unit * conv(tr.pair)) / 1000
-        return (math.floor(q + 0.5) if "roundlot" in plants else math.floor(q)) * 1000
+        # 1e-9 of a lot added before the floor, so an exact lot is not lost to
+        # the float error (D12)
+        return (math.floor(q + 0.5) if "roundlot" in plants else math.floor(q + 1e-9)) * 1000
 
     def legs_of(u):
         if row != "thirds":
@@ -317,6 +415,9 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
         kind, j, xp = out
         q = {"id": tr.id + (f"#{leg}" if leg else ""), "trade": tr.id, "pair": tr.pair, "dir": tr.dir, "usd": tr.usd, "units": units, "fill": fill,
              "kind": kind, "x": fine[tr.pair][j][0] + FINE, "exit_open": fine[tr.pair][j][0], "xpx": xp, "admit": admitted[0], "conv_entry": conv(tr.pair)}
+        if zero:
+            # δ a unit: F10k's yen is for the 10,000; k%'s R is 13 pips at T
+            q.update(T=tr.T, hold=hold[tr.id], shift_u=delta / 10_000 if f10k else delta * SL * tr.unit * conv(tr.pair))
         admitted[0] += 1
         pos.append(q)
         return q
@@ -336,6 +437,7 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
     prev_g = None
     for g in grid:
         s = g - FINE
+        clock[0], proc[0] = prev_g, g
         gap = prev_g is not None and g - prev_g > DAY
         if ei < len(emails) and emails[ei].T < s:
             raise SystemExit(f"{emails[ei].id}: no union bar opens at T (the fixtures keep one)")
@@ -415,6 +517,7 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
         for p in pairs:
             while last[p] + 1 < len(ends[p]) and ends[p][last[p] + 1] <= g:
                 last[p] += 1
+        clock[0] = g
         # ③ the exits inside this bar, in admission order; then the late fills
         for q in sorted([q for q in pos if q["x"] == g], key=lambda q: q["admit"]):
             close(q, q["units"], q["xpx"], g, q["kind"])
@@ -459,7 +562,8 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
             if call:
                 continue
             e_test = equity() if "callexitside" in plants else e_mid
-            if e_test < m:
+            # nothing open (margin 0): no call, whatever the balance (D10)
+            if m > 0 and e_test < m:
                 C = m - e_test
                 mids = {q["pair"]: px(q["pair"], "mid") * conv(q["pair"]) for q in pos}
                 call = {"C": C, "d": next_weekday_9(tau), "units": {q["id"]: q["units"] for q in pos}, "mids": mids, "m_tau": m}
@@ -476,6 +580,40 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
         raise SystemExit("an email, a late fill or a position is left after the last bar")
     summary = {"final_balance": st["balance"], "final_equity": st["balance"], "taken": len(st["taken"]), "skipped": st["skipped"],
                "calls": st["calls"], "cures": st["cures"], "deadlines": st["deadlines"], "losscuts": st["losscuts"], "shortfall_yen": st["shortfall"]}
+    if row != "thirds":
+        # D1: of the emails taken, the share out at TP1; "of those resolved"
+        # leaves out only the 30-bar time-outs, so a netting, a loss-cut or a
+        # deadline is in both denominators and never a win (not for the thirds
+        # row, whose parts go out apart)
+        ks = [st["kinds"][t] for t in st["taken"]]
+        wins = sum(x == "tp" for x in ks)
+        resolved = sum(x != "time" for x in ks)
+        summary["win_all"] = wins / len(ks) if ks else None
+        summary["win_resolved"] = wins / resolved if resolved else None
+    first = next((r for r in led if r["kind"] == "enter"), None)
+    if first:
+        # D5: the span runs from the last close at or before the first entry
+        # to the end of the last bar a row was written in (a deadline's or a
+        # netting's row carries the bar's open, but its bar is in); a close is
+        # in the period of its bar's open; a period's change is its last
+        # equity less the period before's (the start for the first); the
+        # worst is the smallest change, a rise when nothing fell
+        a = grid[max(bisect_right(grid, ms_of(first["g"])) - 1, 0)]
+        b = row_at[-1]
+
+        def worst(period):
+            ends_of = {}
+            for t, e in st["path"]:
+                if a <= t <= b:
+                    ends_of[period(t - FINE)] = e
+            out, before = [], start
+            for e in ends_of.values():
+                out.append(e - before)
+                before = e
+            return min(out)
+
+        summary["worst_week_yen"] = worst(week_of)
+        summary["worst_day_yen"] = worst(day_of)
     if f10k:
         tl = [terms[n] for n in ("order", "nyclose", "losscut", "loss")]
         top = max(tl, key=lambda t: t["value"])
@@ -486,7 +624,7 @@ def run_account(fx, run, trades, fine, plants, e_clean=None):
 
 # ---- the comparison ------------------------------------------------------------------------
 
-TOL = {"px": 1e-9, "pnl_yen": 1e-6, "balance": 1e-6, "equity": 1e-6, "margin": 1e-6, "value": 1e-6,
+TOL = {"px": 1e-9, "fill": 1e-9, "exit_px": 1e-9, "pnl_yen": 1e-6, "balance": 1e-6, "equity": 1e-6, "margin": 1e-6, "value": 1e-6,
        "final_balance": 1e-6, "final_equity": 1e-6, "shortfall_yen": 1e-6, "lost": 1e-6}
 
 
@@ -544,12 +682,34 @@ def recompute(fixdir, plants=()):
     return fx, out
 
 
+def recompute_trades(fixdir, plants=()):
+    """money-trades.csv's rows for a fixture's trades (trade_rows)."""
+    with open(os.path.join(fixdir, "fixture.json")) as f:
+        fx = json.load(f)
+    signals = read_signals(os.path.join(fixdir, "signals.csv"))
+    trades, fine = build_trades(fx, os.path.join(fixdir, "gmo"), signals, set(plants))
+    return fx, trade_rows(fx, trades, fine, set(plants))
+
+
+def diff_trades(want, got):
+    """fixture.json's "expect_trades" against trade_rows, row by row by id and
+    variant (every key a wanted row gives, the fixture's tolerances)."""
+    have = {(r["id"], r["variant"]): r for r in got}
+    out = []
+    for w in want:
+        g = have.get((w["id"], w["variant"]))
+        out += [f"trades {w['id']} {w['variant']}: missing"] if g is None else diff(w, g, f"trades {w['id']} {w['variant']}")
+    return out
+
+
 if __name__ == "__main__":
     import sys
 
     for d in sys.argv[1:]:
         fx, got = recompute(d)
         bad = diff(fx["expect"], got)
+        if "expect_trades" in fx:
+            bad += diff_trades(fx["expect_trades"], recompute_trades(d)[1])
         print(f"{fx['name']}: {'PASS' if not bad else 'FAIL'}")
         for b in bad[:20]:
             print("   ", b)

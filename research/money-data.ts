@@ -4,15 +4,17 @@
 //     as research/stop2n.ts reads them: only on GitHub's runners, which can
 //     reach GMO;
 //   * SYNTHETIC=1: stop2n.ts's seeded walk on 5 minutes (copied), every pair
-//     independent, the coarser bars built from it; DUMPDIR writes it out as
-//     GMO's files are, for research/money-check.py;
+//     independent, on GMO's week (Sunday 22:00 UTC to Friday 20:00 UTC in US
+//     daylight time, 21:00 otherwise: decisions R8), the coarser bars built
+//     from it; DUMPDIR writes it out as GMO's files are, for
+//     research/money-check.py;
 //   * FIXTURE=<dir>: only that folder's gmo/ files (a hand example's), never
 //     the network.
 // The weekend's bars are left out as #182 does (WEEKEND=inside: a bar out only
 // when it lies wholly inside the closure), the only way §8.99 reads them.
 
 import { GMO_INTERVALS, GMO_SYMBOLS, dateKeys, jstDayKey, jstYearKey, klineUrl, mergeSides, parseKlines, type QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
-import { barInsideClosure, isMarketClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { barInsideClosure, nyOffsetMs } from "../supabase/functions/_shared/market-hours.ts";
 import type { Candle } from "../supabase/functions/analyze/indicators.ts";
 import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { LIVE_STEP_MS } from "../supabase/functions/live-chart/logic.ts";
@@ -137,9 +139,26 @@ export interface Loaded {
 // #182's weekend rule: a bar out only when it lies wholly inside the closure
 const weekendOut = (openMs: number, stepMs: number): boolean => barInsideClosure(openMs, stepMs);
 
+// GMO's trading week (decisions R8): from Sunday 22:00 UTC (Monday 07:00 JST)
+// to Friday 20:00 UTC while US daylight time is in force (Saturday 05:00
+// JST), 21:00 UTC otherwise (Saturday 06:00 JST); a 5-minute bar is in the
+// week when it opens inside it (US daylight time by market-hours.ts
+// nyOffsetMs: on a Friday it is the same all day)
+export const gmoWeekShut = (ms: number): boolean => {
+  const d = new Date(ms);
+  const day = d.getUTCDay();
+  const hour = d.getUTCHours();
+  if (day === 6) return true;
+  if (day === 0) return hour < 22;
+  if (day === 5) return hour >= (nyOffsetMs(ms) === -4 * HOUR ? 20 : 21);
+  return false;
+};
+
 // a seeded random walk on 5 minutes (stop2n.ts's synthetic5, copied): "path"
 // (100 small steps, the high and low the path's own; "drift" and "against"
-// walk the same, the signals' prices moved later) or "wicks"
+// walk the same, the signals' prices moved later) or "wicks"; its bars on
+// GMO's week (gmoWeekShut; stop2n.ts's walked Sunday 21:00 to Friday 22:00
+// UTC), the 4-hour and daily bars made from them
 const synthetic5 = (cfg: Config, pair: string, fromMs: number): QuoteCandle[] => {
   let seed = [...pair].reduce((a, ch) => (Math.imul(a, 31) + ch.charCodeAt(0)) | 0, cfg.seed);
   const rnd = () => {
@@ -155,7 +174,7 @@ const synthetic5 = (cfg: Config, pair: string, fromMs: number): QuoteCandle[] =>
   const bars: QuoteCandle[] = [];
   let px = jpy ? 150 : 1.2;
   for (let ms = Math.floor(fromMs / FINE) * FINE; ms + FINE <= cfg.now; ms += FINE) {
-    if (isMarketClosed(ms)) continue;
+    if (gmoWeekShut(ms)) continue;
     const o = px;
     let h: number;
     let l: number;

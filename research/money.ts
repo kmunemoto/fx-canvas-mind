@@ -44,7 +44,7 @@
 import { configFromEnv } from "./money-data.ts";
 import { C3, CALL9, type Check, VARIANTS, WANT, admissionOrder, bookOf, concurrencyOf, holdOn, iso, loadStudy, newCheck, rakutenSpread, type Signal, statsOf, tally, type Trade, type TradeStats } from "./money-trades.ts";
 import { HOUR, MINUTE } from "./lib.ts";
-import { runFixture } from "./money-fixture.ts";
+import { runFixture, type TradeRow } from "./money-fixture.ts";
 import { runAccountPart } from "./money-cells.ts";
 import { runExtras } from "./money-extras.ts";
 import { clustered, statOf } from "./money-stats.ts";
@@ -103,8 +103,11 @@ const more = {
 };
 // (u) a dollar pair's trade is marked in yen at USD/JPY's mid: at T and at
 // each g it is held where its own pair has a bar, USD/JPY's last bar is at
-// most an hour old (the reading of §8.99 「ドルのペアの取引の間、ドル円の5分足
-// があること」: a missing bar is carried forward and counted, a gap is not)
+// most 12 closes of G old — an hour of the market's own time: a weekend or a
+// holiday shut has no closes, so USD/JPY's week opening a bar after the
+// dollar pair's is 1 close old, not two days (§8.99 足が無い時刻: a shorter
+// gap is carried forward and counted; a longer one fails the data's run)
+const USD_MAX_CLOSES = 12;
 let usdStale = 0;
 let usdStaleMax = 0;
 const books = VARIANTS.map((v) => bookOf(study, v, "CALL9"));
@@ -124,10 +127,12 @@ for (const book of books) {
       if (gi !== book.giAt(t.sig.T) && !book.grid.own[t.pi][gi]) continue;
       const f = book.grid.last[U][gi];
       const pdU = study.pairs.get("USD/JPY")!;
-      const age = f >= 0 ? g[gi] - (pdU.fine.t[f] + 5 * MINUTE) : Infinity;
+      const lastEnd = f >= 0 ? pdU.fine.t[f] + 5 * MINUTE : Number.NaN;
+      // the closes of G after USD/JPY's last bar's end, up to this g (0: its own bar ends here)
+      const age = f >= 0 ? gi - book.giAt(lastEnd) : Infinity;
       if (age > 0) usdStale++;
       usdStaleMax = Math.max(usdStaleMax, age);
-      tally(more.usdjpy, age <= HOUR, () => `${t.sig.id} at ${iso(g[gi])}: USD/JPY's last bar ${Number.isFinite(age) ? `${age / MINUTE} minutes` : "none"} old`);
+      tally(more.usdjpy, age <= USD_MAX_CLOSES, () => `${t.sig.id} at ${iso(g[gi])}: USD/JPY's last bar ${Number.isFinite(age) ? `${age} closes of G (${(g[gi] - lastEnd) / MINUTE} minutes)` : "none"} old`);
     }
   }
 }
@@ -142,33 +147,46 @@ for (const [k, c] of Object.entries(allChecks)) console.log(checkLine(k, c));
 console.log(`(g) GMO reads that failed: ${study.failedReads}`);
 const differ = Object.values(allChecks).reduce((a, c) => a + c.mismatched, 0) + study.failedReads;
 console.log(differ === 0 ? "EVERY CHECK 0 DIFFER" : `CHECKS DIFFER (${differ}): the numbers below are not to be read`);
-console.log(`G (CALL9): ${grid9.g.length} closes, ${iso(grid9.g[0])} .. ${iso(grid9.g[grid9.g.length - 1])}${study.grids.P12 ? `; G (12 pairs): ${study.grids.P12.g.length}` : ""}. Carried forward on the main trades' paths (its pair without a bar at that g): ${pathStale} of ${holdSum}; USD/JPY's at the dollar pairs' times: ${usdStale} (at most ${(usdStaleMax / MINUTE).toFixed(0)} minutes old)`);
+console.log(`G (CALL9): ${grid9.g.length} closes, ${iso(grid9.g[0])} .. ${iso(grid9.g[grid9.g.length - 1])}${study.grids.P12 ? `; G (12 pairs): ${study.grids.P12.g.length}` : ""}. Carried forward on the main trades' paths (its pair without a bar at that g): ${pathStale} of ${holdSum}; USD/JPY's at the dollar pairs' times: ${usdStale} (at most ${usdStaleMax} closes of G old; the data's run fails past ${USD_MAX_CLOSES})`);
 
 // ---- FIXTURE: the hand example's runs against its expectations (interface.md §6) ------------
 
-const writeTables = async () => {
-  await Deno.mkdir(cfg.out, { recursive: true });
-  const sigRows = signals.map((s) => [s.id, s.pair, s.group, iso(s.barOpen), iso(s.T), s.side, s.rules].join(","));
-  await Deno.writeTextFile(`${cfg.out}/money-signals.csv`, ["id,pair,group,bar_open,T,side,rules", ...sigRows].join("\n") + "\n");
-  const rows: string[] = [];
+// the trades table (money-trades.csv, interface.md §4.2): a row a signal and
+// variant; hold_grid, cal_ms, weekend and nights_ny all from T (a late
+// trade's too); a late trade not in (a level passed) without its exit's
+// columns. Times in ms here, written as ISO; a fixture's expect_trades rows
+// are compared with these (decisions R7)
+const TRADE_COLS = ["id", "variant", "fill", "mid_close", "sl", "tp", "entry_g", "exit_kind", "exit_open", "x", "exit_px", "pips", "hold_grid", "cal_ms", "weekend", "nights_ny"] as const;
+const TRADE_TIMES = new Set<string>(["entry_g", "exit_open", "x"]);
+const tradeTable = (): TradeRow[] => {
+  const rows: TradeRow[] = [];
   for (let k = 0; k < signals.length; k++) {
     for (const v of VARIANTS) {
       const t = study.trades[v][k];
       const out = t.exit !== "passed";
-      const cell = (x: number) => (out ? String(x) : "");
-      rows.push([t.sig.id, v, t.fill, t.sig.close, t.sl, t.tp, iso(t.entryG), t.exit, out ? iso(t.exitOpen) : "", out ? iso(t.x) : "", cell(t.exitPx), cell(t.pips), out ? holdOn(gridFor(t.sig), t.t0, t.x) : "", cell(t.calMs), out ? t.weekend : "", out ? t.nightsNy : ""].join(","));
+      const ifOut = (x: number) => (out ? x : null);
+      rows.push({ id: t.sig.id, variant: v, fill: t.fill, mid_close: t.sig.close, sl: t.sl, tp: t.tp, entry_g: t.entryG, exit_kind: t.exit, exit_open: ifOut(t.exitOpen), x: ifOut(t.x), exit_px: ifOut(t.exitPx), pips: ifOut(t.pips), hold_grid: out ? holdOn(gridFor(t.sig), t.sig.T, t.x) : null, cal_ms: ifOut(t.calMs), weekend: ifOut(t.weekend), nights_ny: ifOut(t.nightsNy) });
     }
   }
-  await Deno.writeTextFile(`${cfg.out}/money-trades.csv`, ["id,variant,fill,mid_close,sl,tp,entry_g,exit_kind,exit_open,x,exit_px,pips,hold_grid,cal_ms,weekend,nights_ny", ...rows].join("\n") + "\n");
+  return rows;
+};
+const writeTables = async (trades: TradeRow[]) => {
+  await Deno.mkdir(cfg.out, { recursive: true });
+  const sigRows = signals.map((s) => [s.id, s.pair, s.group, iso(s.barOpen), iso(s.T), s.side, s.rules].join(","));
+  await Deno.writeTextFile(`${cfg.out}/money-signals.csv`, ["id,pair,group,bar_open,T,side,rules", ...sigRows].join("\n") + "\n");
+  const cell = (c: string, x: string | number | null) => (x === null ? "" : TRADE_TIMES.has(c) ? iso(x as number) : String(x));
+  const rows = trades.map((r) => TRADE_COLS.map((c) => cell(c, r[c])).join(","));
+  await Deno.writeTextFile(`${cfg.out}/money-trades.csv`, [TRADE_COLS.join(","), ...rows].join("\n") + "\n");
 };
 if (cfg.fixture) {
-  await writeTables();
+  const trades = tradeTable();
+  await writeTables(trades);
   console.log(`\nFIXTURE: ${signals.length} signals followed (money-trades.csv in ${cfg.out})`);
-  const fx = await runFixture(study, cfg);
+  const fx = await runFixture(study, cfg, trades);
   // a hand example is not the data: the data's gates (the count, the repro,
-  // USD/JPY's bars at most an hour old) are told, not judged (interface.md §6)
+  // USD/JPY's bars at most 12 closes of G old) are told, not judged (interface.md §6)
   const fxDiffer = Object.entries(allChecks).reduce((a, [k, c]) => a + (k === "usdjpy" ? 0 : c.mismatched), 0) + study.failedReads;
-  if (allChecks.usdjpy?.mismatched) console.log(`  (usdjpy: ${allChecks.usdjpy.mismatched} of ${allChecks.usdjpy.compared} past an hour old: told, not judged in a fixture)`);
+  if (allChecks.usdjpy?.mismatched) console.log(`  (usdjpy: ${allChecks.usdjpy.mismatched} of ${allChecks.usdjpy.compared} past ${USD_MAX_CLOSES} closes of G old: told, not judged in a fixture)`);
   const ok = fx.pass && fxDiffer === 0;
   await Deno.writeTextFile(`${cfg.out}/money.json`, JSON.stringify({ meta: { fixture: cfg.fixture, plant: cfg.plant || null }, checks: { ...allChecks, ...fx.checks }, fixture: fx.results, pass: ok }));
   console.log(ok ? "FIXTURE PASS" : `FIXTURE FAIL${fxDiffer ? ` (the trades' checks differ: ${fxDiffer})` : ""}`);
@@ -218,7 +236,7 @@ const below = [stats.main, ...stats.halves].map((s) => ({ high: s.high_end, belo
 console.log(`\n== BELOW 0? the 9 pairs at 13 and 4, a trade, the higher high end (by week, by four weeks): the whole period ${num(below[0].high)} → ${below[0].below ? "YES" : "not shown"}; first half ${num(below[1].high)} → ${below[1].below ? "yes" : "not shown"}; second half ${num(below[2].high)} → ${below[2].below ? "yes" : "not shown"}`);
 
 const hs = stats.main;
-console.log(`\n== HELD (main): 5-minute closes of G (t0, x]: median ${hs.hold_grid.median}, 95% ${hs.hold_grid.p95}, most ${hs.hold_grid.max}; calendar: median ${((hs.cal_ms.median ?? 0) / HOUR).toFixed(2)} h, 95% ${((hs.cal_ms.p95 ?? 0) / HOUR).toFixed(2)} h, most ${((hs.cal_ms.max ?? 0) / HOUR).toFixed(2)} h; over a weekend ${hs.weekend.trades} trades (${hs.weekend.total} weekends); through Rakuten's NY close ${hs.ny.trades} trades (${hs.ny.total} closes), swap days ${hs.ny.swap_days} (${num(hs.ny.swap_days_mean, 3)} a trade): a swap of ¥${hs.swap_for_100 === null ? "-" : hs.swap_for_100.toFixed(0)} a day at 10,000 units would move the yen a trade by ¥100`);
+console.log(`\n== HELD (main): 5-minute closes of G (T, x]: median ${hs.hold_grid.median}, 95% ${hs.hold_grid.p95}, most ${hs.hold_grid.max}; calendar: median ${((hs.cal_ms.median ?? 0) / HOUR).toFixed(2)} h, 95% ${((hs.cal_ms.p95 ?? 0) / HOUR).toFixed(2)} h, most ${((hs.cal_ms.max ?? 0) / HOUR).toFixed(2)} h; over a weekend ${hs.weekend.trades} trades (${hs.weekend.total} weekends); through Rakuten's NY close ${hs.ny.trades} trades (${hs.ny.total} closes), swap days ${hs.ny.swap_days} (${num(hs.ny.swap_days_mean, 3)} a trade): a swap of ¥${hs.swap_for_100 === null ? "-" : hs.swap_for_100.toFixed(0)} a day at 10,000 units would move the yen a trade by ¥100`);
 console.log(`== OPEN TOGETHER (main, CALL9, at each close of G from the first entry to the last exit, ${conc.span_g} closes): most ${conc.max} (${conc.max_at}); 1 or more ${pct(conc.share_1)}, 3 or more ${pct(conc.share_3)}, 5 or more ${pct(conc.share_5)} of the time; mean ${num(conc.mean, 3)}; yen pairs one way at most ${conc.jpy_same_way_max}; each pair at most ${Object.entries(conc.pair_max).map(([p, m]) => `${p} ${m}`).join(", ")}; hedges ${conc.hedges} (a pair both ways ${pct(conc.share_1 === null ? null : conc.hedge_time_share)} of the time); emails a close ${Object.entries(conc.emails_per_bar).map(([k, m]) => `${k}: ${m}`).join(", ")}; yen pairs one way in one close at most ${conc.same_bar_jpy_way_max}; Σ hold_grid ${holdSum} = Σ open ${conc.sum_all_g}`);
 
 // the look-ahead to look for before reporting (§8.99 先読みを疑うとき, the trades' part)
@@ -246,7 +264,7 @@ const seWeek = statOf(clustered(main.map((t) => ({ x: t.pips, week: t.sig.week }
 
 // ---- the files ------------------------------------------------------------------------------------
 
-await writeTables();
+await writeTables(tradeTable());
 const runtimeMs = performance.now() - started;
 const json: Record<string, unknown> = {
   meta: { start: cfg.start, split: cfg.split, end: iso(cfg.now), synthetic: cfg.synthetic, synth: cfg.synth, seed: cfg.seed, drift: cfg.drift || null, levels: { sl: 13, tp: [4, 10, 16] }, pairs: { CALL9, C3, admission: admissionOrder("P12") }, grid: { CALL9: grid9.g.length, P12: study.grids.P12?.g.length ?? null }, runtime_ms: runtimeMs, counts: extras.json.counts, version: "parts 1 to 3: the trades, the account, the windows, orders, thinning, kept and rearranged weeks" },
@@ -270,7 +288,7 @@ const json: Record<string, unknown> = {
     h_mean: hMean,
     se_week: Number.isFinite(seWeek) ? seWeek : null,
     concurrency: conc,
-    carried: { path_uses: pathStale, path_g: holdSum, usdjpy_uses: usdStale, usdjpy_most_ms: Number.isFinite(usdStaleMax) ? usdStaleMax : null },
+    carried: { path_uses: pathStale, path_g: holdSum, usdjpy_uses: usdStale, usdjpy_most_closes: Number.isFinite(usdStaleMax) ? usdStaleMax : null },
     cover: study.cover,
   },
   suspect,

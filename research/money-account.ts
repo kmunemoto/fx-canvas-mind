@@ -19,8 +19,10 @@
 //     13 pips in yen at T, floored to 1,000; under 1,000 not taken); the
 //     emails of one close sized on the same equity.
 //   * admission, in this order of reasons: an open call; the cap (C0 none, T1
-//     one open, T3 three, P1 one a pair, J2 two yen buys and two yen sells);
-//     under 1,000 units; the margin after the order over the equity.
+//     one open, T3 three, P1 one a pair, J2 two yen buys and two yen sells;
+//     a late order holds its slot from its T until its fill, at every close
+//     it is still waiting at); under 1,000 units; the margin after the order
+//     over the equity.
 //   * margin: per pair the larger of its buys' and its sells' units × mid
 //     (MAX), 4% (25×) or 10% (10×), at each g's mids; a dollar pair's in yen at
 //     USD/JPY's mid there. The loss-cut: the equity on the exit side's closes
@@ -39,10 +41,12 @@
 //
 // THE LEDGER (interface.md §4.3; where it leaves a choice, as
 // research/money-check.py writes it too): one row an event in the order
-// processed; `g` the event's time (an email's T; a late order's fill, T + 5
-// minutes, after that bar's own exits; an exit's x; a deadline's bar open; a
-// call's judged g), balance the realised, equity and margin right after it on
-// the closes of that time. A skip has no price, and units only once the
+// processed; `g` the event's time (an email's T, a bar of any pair opening
+// there or not; a late order's fill, its first bar's end — T + 5 minutes
+// where its pair has a bar opening at T —, after that bar's own exits, every
+// late order due by then in the order taken; an exit's x; a deadline's bar
+// open; a call's judged g), balance the realised, equity and margin right
+// after it on the closes of that time. A skip has no price, and units only once the
 // sizing came to them (the call and the cap are judged first). Thirds: 4,000,
 // 3,000 and 3,000 at 10,000 units; a k% order dealt out 1,000 at a time to
 // TP1, TP2, TP3 in turn (the larger parts first).
@@ -313,7 +317,8 @@ export interface Pos {
   leg: Leg;
   order: Order;
   // the ledger's id (thirds: the email's id with #1, #2, #3) and the leg's
-  // number (0: the only leg); one position a trade counts against a cap
+  // number (0: the only leg); a cap and the trades open at an entry count
+  // each email once, while any of its positions is open
   id: string;
   part: number;
   units0: number;
@@ -325,8 +330,10 @@ export interface Pos {
   // the zero row: the whole δ in yen for units0, added as the trade is held
   shift: number;
   // its closes: the units, price, USD/JPY, yen, why, when (g), at which g's
-  // closes it was counted, the bar it was closed in and the ledger's seq
-  closes: Array<{ units: number; px: number; conv: number; pnl: number; kind: string; g: number; gi: number; bar: number; seq: number }>;
+  // closes it was counted, the index of G its zero-row share of δ was taken
+  // at (`gi`, but at a deadline the g its USD/JPY came from, decisions R4),
+  // the bar it was closed in and the ledger's seq
+  closes: Array<{ units: number; px: number; conv: number; pnl: number; kind: string; g: number; gi: number; share: number; bar: number; seq: number }>;
   // the AS netting closed some of it
   netted: boolean;
 }
@@ -361,7 +368,8 @@ export interface Entry {
   seq: number;
   id: string;
   T: number;
-  // trades open with it in (itself too), of its pair, yen ones its way
+  // trades open with it in (itself too; a late order still waiting for its
+  // fill counted as the cap counts it), of its pair, yen ones its way
   open: number;
   pairOpen: number;
   jpyWay: number;
@@ -369,12 +377,17 @@ export interface Entry {
   jpySell: number;
   marginAfter: number;
   equity: number;
-  // the latest time a sizing input came from (the marks, USD/JPY)
+  // the equity its units were sized on (before the Turtles' cut), and the
+  // latest time a sizing input came from (the marks, USD/JPY)
+  sizedOn: number;
   inputAt: number;
   units: number;
   inCall: boolean;
   // a late order a level passed before its fill: taken, never in
   passed: boolean;
+  // when it is (or would be) in: T, or a late order's fill (its first bar's
+  // end); the summaries' span starts at the first of those in (decisions R2)
+  fillAt: number;
 }
 
 export interface Run {
@@ -412,6 +425,10 @@ export interface Run {
   happened: number;
   negatives: number;
   estar: EstarTerm[] | null;
+  // the bar (index of G) of the ledger's last row (−1: none): the summaries'
+  // span ends with it (a deadline's or a netting's row is stamped with its
+  // bar's open, its bar still in the span)
+  lastBar: number;
 }
 
 const LOT_EPS = 1e-9;
@@ -430,6 +447,7 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
     entries: [], skipped: { call: 0, cap: 0, lot: 0, margin: 0, passed: 0 }, firstLot: null,
     calls: [], callsWhileOpen: 0, losscuts: [], deadlines: [], shortfalls: [], nyLog: [], netOnly: 0, stale: 0, staleUsd: 0, happened: 0, negatives: 0,
     estar: spec.estar ? (["order", "nyclose", "losscut", "negative"] as const).map((name) => ({ name, value: -Infinity, g: null, lost: 0, margin: 0 })) : null,
+    lastBar: -1,
   };
   let seq = 0;
   let balance = start;
@@ -481,18 +499,22 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
     return spec.rate * m;
   };
   const marginAt = (gi: number, extra: Array<{ pi: number; dir: number; value: number }> = []): number => marginOf([...open.map((p) => ({ pi: p.leg.pi, dir: p.leg.dir, value: valueOf(p, gi) })), ...extra]);
-  // one ledger row; the equity and margin after it, on the closes of g[gi]
+  // one ledger row; the equity and margin after it, on the closes of g[gi];
+  // the bar it was written in (the span's end, summarize)
   const row = (g: number, kind: string, id: string, units: number | null, px: number | null, pnl: number | null, gi: number, reason = "") => {
     ledger.push([++seq, g, kind, id, units, px, pnl, balance, equityAt(gi, 0), marginAt(gi), reason]);
+    run.lastBar = curBar;
   };
-  // `units` of p out at px (USD/JPY conv), counted on g[gi]'s closes
-  const closePos = (p: Pos, units: number, px: number, conv: number, kind: string, g: number, gi: number) => {
-    const pnl = yenOf(p, units, px, conv, gi);
+  // `units` of p out at px (USD/JPY conv), counted on g[gi]'s closes; the
+  // zero row's share of δ at g[share] (gi, but at a deadline the g its
+  // USD/JPY is taken at, decisions R4)
+  const closePos = (p: Pos, units: number, px: number, conv: number, kind: string, g: number, gi: number, share = gi) => {
+    const pnl = yenOf(p, units, px, conv, share);
     balance += pnl;
     p.units -= units;
     if (p.units <= 0) open = open.filter((q) => q !== p);
     row(g, "exit", p.id, units, px, pnl, gi, kind);
-    p.closes.push({ units, px, conv: plant === "usdentry" ? p.leg.convT : conv, pnl, kind, g, gi, bar: curBar, seq });
+    p.closes.push({ units, px, conv: plant === "usdentry" ? p.leg.convT : conv, pnl, kind, g, gi, share, bar: curBar, seq });
     if (p.units <= 0) {
       p.closeSeq = seq;
       run.closed.push(p);
@@ -504,9 +526,20 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
     row(g, "shortfall", "", null, null, -balance, gi);
   };
   const giAt = (ms: number) => upperBound(G, ms) - 1;
-  // the trades a cap counts (one position a trade); the planted slotearly
-  // frees the slot of a trade going out in this bar already
-  const counted = (k: number) => open.filter((p) => p.part <= 1 && !(plant === "slotearly" && p.leg.giX === k));
+  // one position an email: an email is one trade, open while any of its
+  // positions is (thirds: TP2's and TP3's legs after TP1's is out too); its
+  // legs share its pair and side
+  const perOrder = (ps: Pos[]) => {
+    const seen = new Set<Order>();
+    return ps.filter((p) => {
+      if (seen.has(p.order)) return false;
+      seen.add(p.order);
+      return true;
+    });
+  };
+  // the trades a cap counts; the planted slotearly frees the slot of a trade
+  // going out in this bar already
+  const counted = (k: number) => perOrder(open.filter((p) => !(plant === "slotearly" && p.leg.giX === k)));
 
   // an order's positions (one a leg with units) opened, each with its enter
   // row at `at` (T; a late one's fill) on the closes of the bar it is in by
@@ -569,7 +602,11 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
       for (const p of [...open]) {
         const o = p.leg.openAt(c.deadline);
         if (!o) throw new Error(`${p.id}: no bar after the deadline ${iso(c.deadline)}`);
-        closePos(p, p.units, o.px, convAt(p.leg, giAt(o.at)), "deadline", s, gs);
+        // a dollar pair in yen at USD/JPY's mid of the last g at or before
+        // its own forced bar's open (D2), the zero row's share of δ taken
+        // at that same g (R4); the row on the closes at s
+        const gConv = giAt(o.at);
+        closePos(p, p.units, o.px, convAt(p.leg, gConv), "deadline", s, gs, gConv);
       }
       c.outcome = "deadline";
       c.at = s;
@@ -597,6 +634,8 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
         for (const p of open) sizeOn += plAt(p, Math.min(gf, p.leg.giX), 0);
         inputAt = G[gf];
       }
+      // what the units come from, for runChecks to recompute
+      const sizedOn = sizeOn;
       if (spec.turtle) {
         // §8.95's Turtles as §8.99 reads them: m steps of 10% of the start
         // below it, the sizing on min(equity, start × 0.8^m)
@@ -604,8 +643,10 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
         if (m >= 1) sizeOn = Math.min(sizeOn, start * 0.8 ** m);
       }
       // late orders taken in this close: not in until their first bar's
-      // close, they hold their slot and margin for the close's later emails
-      // (none judged again, a passed one's included)
+      // close, they hold their margin for the close's later emails (none
+      // judged again, a passed one's included), not for a later close's
+      // (decisions T2); their slot, as every late order's still waiting for
+      // its fill, is counted from lateQ (below; decisions T1)
       const pendingNow: Array<{ leg: Leg; units: number }> = [];
       for (const o of group) {
         const L = o.legs[0];
@@ -636,13 +677,21 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
             continue;
           }
         }
-        // the cap: the trades open (this close's earlier ones in, the late ones not yet filled too)
+        // the cap: the trades open (this close's earlier ones in) and every
+        // late order still waiting for its fill, whatever close it was taken
+        // at (decisions T1: its slot held from its T until its first bar
+        // ends, or until it is found passed then; this close's taken so far
+        // among them). lateQ holds just those here: one whose first bar ended
+        // by the last g was filled or found passed at that bar's ③
         const cnt = counted(k);
-        const nOpen = cnt.length + pendingNow.length;
-        const nPair = cnt.filter((p) => p.leg.pi === L.pi).length + pendingNow.filter((x) => x.leg.pi === L.pi).length;
-        const nJpyWay = cnt.filter((p) => p.leg.jpy && p.leg.dir === L.dir).length + pendingNow.filter((x) => x.leg.jpy && x.leg.dir === L.dir).length;
+        const waiting = lateQ.map((q) => q.o.legs[0]);
+        const nOpen = cnt.length + waiting.length;
+        const nPair = cnt.filter((p) => p.leg.pi === L.pi).length + waiting.filter((x) => x.pi === L.pi).length;
+        const nJpyWay = cnt.filter((p) => p.leg.jpy && p.leg.dir === L.dir).length + waiting.filter((x) => x.jpy && x.dir === L.dir).length;
         const capFull = spec.cap === "T1" ? nOpen >= 1 : spec.cap === "T3" ? nOpen >= 3 : spec.cap === "P1" ? nPair >= 1 : spec.cap === "J2" ? L.jpy && nJpyWay >= 2 : false;
-        // the legs' units (thirds: 1,000s dealt TP1 first); the margin after the order at T's mids
+        // the legs' units (thirds: 1,000s dealt TP1 first); the margin after
+        // the order at T's mids, with this close's late orders taken so far
+        // but not one still waiting from an earlier close (decisions T2)
         const split = spec.thirds ? splitThirds(rest, spec.k === null) : [rest];
         const items = o.legs.map((leg, j) => ({ pi: leg.pi, dir: leg.dir, value: split[j] * leg.midT * leg.convT })).filter((x) => x.value > 0);
         const pendingItems = pendingNow.map((x) => ({ pi: x.leg.pi, dir: x.leg.dir, value: x.units * x.leg.midT * x.leg.convT }));
@@ -664,23 +713,27 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
         if (spec.estar) term(0, marginAfter - (eqT - start), T, eqT - start, marginAfter);
         const late = L.entryG !== L.T;
         if (!late) newPositions(o, split, k);
-        const now = open.filter((p) => p.part <= 1 && p.order !== o);
+        // the trades open with it: each email once, while any of its legs is,
+        // and every late order still waiting, as the cap counts them (T1)
+        const now = perOrder(open.filter((p) => p.order !== o));
         run.entries.push({
           // the ledger's seq of its (last) enter row; a late one's not yet written
           seq: late ? -1 : seq,
           id: o.id,
           T,
-          open: now.length + pendingNow.length + 1,
-          pairOpen: now.filter((p) => p.leg.pi === L.pi).length + pendingNow.filter((x) => x.leg.pi === L.pi).length + 1,
-          jpyWay: L.jpy ? now.filter((p) => p.leg.jpy && p.leg.dir === L.dir).length + pendingNow.filter((x) => x.leg.jpy && x.leg.dir === L.dir).length + 1 : 0,
-          jpyBuy: now.filter((p) => p.leg.jpy && p.leg.dir === 1).length + pendingNow.filter((x) => x.leg.jpy && x.leg.dir === 1).length + (L.jpy && L.dir === 1 ? 1 : 0),
-          jpySell: now.filter((p) => p.leg.jpy && p.leg.dir === -1).length + pendingNow.filter((x) => x.leg.jpy && x.leg.dir === -1).length + (L.jpy && L.dir === -1 ? 1 : 0),
+          open: now.length + waiting.length + 1,
+          pairOpen: now.filter((p) => p.leg.pi === L.pi).length + waiting.filter((x) => x.pi === L.pi).length + 1,
+          jpyWay: L.jpy ? now.filter((p) => p.leg.jpy && p.leg.dir === L.dir).length + waiting.filter((x) => x.jpy && x.dir === L.dir).length + 1 : 0,
+          jpyBuy: now.filter((p) => p.leg.jpy && p.leg.dir === 1).length + waiting.filter((x) => x.jpy && x.dir === 1).length + (L.jpy && L.dir === 1 ? 1 : 0),
+          jpySell: now.filter((p) => p.leg.jpy && p.leg.dir === -1).length + waiting.filter((x) => x.jpy && x.dir === -1).length + (L.jpy && L.dir === -1 ? 1 : 0),
           marginAfter,
           equity: eqT,
+          sizedOn,
           inputAt,
           units: rest,
           inCall: call !== null,
           passed: L.exit === "passed",
+          fillAt: L.entryG,
         });
         if (late) {
           // five minutes late: in at its first bar's close, after that bar's
@@ -693,14 +746,25 @@ export const runAccount = (tape: Tape, orders: Order[], spec: RunSpec): Run => {
 
     // ③ the exits inside the bar, in the order the trades were taken
     for (const p of [...open]) if (p.leg.giX === k) closePos(p, p.units, p.leg.exitPx, convAt(p.leg, k), p.leg.exit, g, k);
-    // then the late orders in at this bar's close (T + 5 minutes), in the order taken
-    while (lateQ.length && lateQ[0].o.legs[0].entryG <= g) {
-      const { o, split } = lateQ.shift()!;
-      const L = o.legs[0];
-      if (L.exit === "passed") {
-        run.skipped.passed++;
-        row(L.entryG, "skip", o.id, split[0], null, null, k, "passed");
-      } else newPositions(o, split, k, L.entryG);
+    // then every late order whose first bar has ended by g (its fill: that
+    // bar's close, T + 5 minutes where its pair has a bar opening at T), in
+    // the order the orders were taken; one whose pair's first bar opens later
+    // waits without holding up those behind it (decisions R5)
+    if (lateQ.length) {
+      let keep = 0;
+      const due: typeof lateQ = [];
+      for (const q of lateQ) {
+        if (q.o.legs[0].entryG <= g) due.push(q);
+        else lateQ[keep++] = q;
+      }
+      lateQ.length = keep;
+      for (const { o, split } of due) {
+        const L = o.legs[0];
+        if (L.exit === "passed") {
+          run.skipped.passed++;
+          row(L.entryG, "skip", o.id, split[0], null, null, k, "passed");
+        } else newPositions(o, split, k, L.entryG);
+      }
     }
 
     // ④ the loss-cut on the exit side's closes (lcworst: every position at its
@@ -822,9 +886,16 @@ export const hashOrder = async (orders: Order[], r: number): Promise<Order[]> =>
 const dayOf = (t: number) => Math.floor((t - 21 * HOUR) / DAY);
 const isoOrNull = (t: number | null) => (t === null || !Number.isFinite(t) ? null : iso(t));
 
+// peaks and troughs move only by more than this (decisions R3): a new peak
+// when the equity is over the peak by more than 1e-6 yen, a new deepest fall
+// when it is deeper than the deepest by more than 1e-6 yen, made up when the
+// equity is back to the peak less 1e-6 yen or more (every fall, both programs)
+const MOVE_EPS = 1e-6;
+
 // the largest fall of xs over the clock's indices from..to (the peak from
 // `peaks`, by default xs itself), in yen and against the account then
-// (`base` + the peak); its peak, trough and the time it was made up (null: not)
+// (`base` + the peak); its peak, trough and the time it was made up ("not
+// made up": not yet); all three null when nothing fell (decisions R6a)
 const fallOf = (G: Float64Array, xs: Float64Array, from: number, to: number, base: number, start: number, keep: (k: number) => boolean = () => true, peaks: Float64Array = xs) => {
   let peak = start;
   let peakAt = from >= 0 ? G[from] : Number.NaN;
@@ -835,22 +906,23 @@ const fallOf = (G: Float64Array, xs: Float64Array, from: number, to: number, bas
   let recovered: number | null = null;
   for (let k = Math.max(from, 0); k <= to; k++) {
     if (!keep(k)) continue;
-    if (peaks[k] > peak) {
+    if (peaks[k] > peak + MOVE_EPS) {
       peak = peaks[k];
       peakAt = G[k];
     }
     const d = peak - xs[k];
-    if (d > dd) {
+    if (d > dd + MOVE_EPS) {
       dd = d;
       at = { peak: peakAt, trough: G[k], peakV: peak };
       open = true;
       recovered = null;
     }
-    if (open && recovered === null && xs[k] >= at.peakV) recovered = G[k];
+    if (open && recovered === null && xs[k] >= at.peakV - MOVE_EPS) recovered = G[k];
     const den = base + peak;
     if (den > 0 && d / den > pct) pct = d / den;
   }
-  return { yen: dd, pct, peak: isoOrNull(at.peak), trough: isoOrNull(at.trough), recovered: dd > 0 ? isoOrNull(recovered) ?? "not made up" : null };
+  const fell = dd > 0;
+  return { yen: dd, pct, peak: fell ? isoOrNull(at.peak) : null, trough: fell ? isoOrNull(at.trough) : null, recovered: fell ? isoOrNull(recovered) ?? "not made up" : null };
 };
 
 // one run's numbers: the account (from `start`: the k% cells' 1,000,000; the
@@ -862,21 +934,30 @@ export const summarize = (run: Run, splitMs: number) => {
   const f10k = spec.k === null;
   const start = spec.start;
   // E* and its terms (F10k)
-  let estar: { value: number; set_by: string; g: string | null; lost: number; margin: number; terms: Array<{ name: string; value: number; g: string | null; lost: number; margin: number }> } | null = null;
+  // (a term never set — the NY-close term with no NY close on the clock, the
+  // order term with no order taken — is null in money.json, decisions R6b)
+  let estar: { value: number; set_by: string; g: string | null; lost: number; margin: number; terms: Array<{ name: string; value: number | null; g: string | null; lost: number | null; margin: number | null }> } | null = null;
   if (run.estar) {
     const best = run.estar.reduce((a, t) => (t.value > a.value ? t : a));
-    estar = { value: best.value, set_by: best.name, g: isoOrNull(best.g), lost: best.lost, margin: best.margin, terms: run.estar.map((t) => ({ name: t.name, value: t.value, g: isoOrNull(t.g), lost: t.lost, margin: t.margin })) };
+    const set = (t: EstarTerm) => Number.isFinite(t.value);
+    estar = { value: best.value, set_by: best.name, g: isoOrNull(best.g), lost: best.lost, margin: best.margin, terms: run.estar.map((t) => ({ name: t.name, value: set(t) ? t.value : null, g: isoOrNull(t.g), lost: set(t) ? t.lost : null, margin: set(t) ? t.margin : null })) };
   }
   // the account the ratios are on: the F10k cells' own E*
   const base = f10k ? (estar?.value ?? 0) : 0;
   // the orders in (a late one a level passed before its fill was never in)
   const ins = run.entries.filter((e) => !e.passed);
   const taken = ins.length;
-  const firstT = taken ? ins[0].T : null;
+  // the first fill: the first entry's T, or on the late row the first late
+  // entry's fill, its first bar's end (decisions R2: a late order taken first
+  // may be filled after one taken later, its pair's first bar opening later)
+  const firstIn = taken ? ins.reduce((a, e) => Math.min(a, e.fillAt), Infinity) : null;
   const lastX = run.closed.reduce((a, p) => Math.max(a, ...p.closes.map((c) => c.g)), -Infinity);
-  // the span: the closes of G from the last before the first entry to the last exit
-  const k0 = firstT === null ? 0 : Math.max(0, upperBound(G, firstT) - 1);
-  const k1 = Number.isFinite(lastX) ? upperBound(G, lastX) - 1 : n - 1;
+  // the span: the closes of G from the last at or before the first fill to
+  // the end of the last bar anything happened in (the ledger's last row: a
+  // deadline's or a netting's close, stamped with its bar's open, keeps its
+  // bar); to the clock's end where nothing happened or a position was left open
+  const k0 = firstIn === null ? 0 : Math.max(0, upperBound(G, firstIn) - 1);
+  const k1 = run.lastBar < 0 || run.leftOpen > 0 ? n - 1 : run.lastBar;
   const span = Math.max(0, k1 - k0 + 1);
   const finalB = n ? run.B[n - 1] : start;
   const finalE = n ? run.E[n - 1] : start;
@@ -889,16 +970,18 @@ export const summarize = (run: Run, splitMs: number) => {
   const dd4 = fallOf(G, run.E, k0, k1, base, start, four);
   const ddX = fallOf(G, run.B, k0, k1, base, start);
   const ddW = fallOf(G, run.W, k0, k1, base, start, undefined, run.E);
+  // the most under the start: as a fall, deeper only by more than 1e-6 yen (R3)
   let belowStart = 0;
-  for (let k = k0; k <= k1; k++) belowStart = Math.max(belowStart, start - run.E[k]);
+  for (let k = k0; k <= k1; k++) if (start - run.E[k] > belowStart + MOVE_EPS) belowStart = start - run.E[k];
 
   // the worst week (Sunday 21:00 UTC) and day (21:00 UTC): the equity at the
-  // end of each less the end of the one before (a bar counted by its open)
+  // end of each less the end of the one before (a bar counted by its open);
+  // the smallest change, over 0 where no period fell (not floored at 0)
   const worstOf = (key: (t: number) => number) => {
     let prev = start;
     let cur = Number.NaN;
     let curKey = Number.NaN;
-    let worst = { yen: 0, pct: 0, from: null as string | null };
+    let worst = { yen: Infinity, pct: 0, from: null as string | null };
     const close = () => {
       if (Number.isNaN(curKey)) return;
       const d = cur - prev;
@@ -914,25 +997,28 @@ export const summarize = (run: Run, splitMs: number) => {
       cur = run.E[k];
     }
     close();
-    return worst;
+    // no period at all (an empty clock): 0
+    return Number.isFinite(worst.yen) ? worst : { yen: 0, pct: 0, from: null };
   };
   const worstWeek = worstOf(weekOf);
   const worstDay = worstOf(dayOf);
 
-  // the longest time under the peak (the 5-minute closes), and the share of the span under it
+  // the longest time under the peak (the 5-minute closes), and the share of
+  // the span under it; at the peak again from the peak less 1e-6 yen, a new
+  // peak only by more than 1e-6 yen (as the falls, R3)
   let peak = start;
   let peakAt = k0 < n ? G[k0] : 0;
   let longest = { ms: 0, from: null as string | null, to: null as string | null, made_up: true };
   let under = 0;
   for (let k = k0; k <= k1; k++) {
-    if (run.E[k] >= peak) {
+    if (run.E[k] >= peak - MOVE_EPS) {
       const ms = G[k] - peakAt;
-      if (ms > longest.ms && k > k0 && run.E[k - 1] < peak) longest = { ms, from: iso(peakAt), to: iso(G[k]), made_up: true };
-      peak = run.E[k];
+      if (ms > longest.ms && k > k0 && run.E[k - 1] < peak - MOVE_EPS) longest = { ms, from: iso(peakAt), to: iso(G[k]), made_up: true };
+      if (run.E[k] > peak + MOVE_EPS) peak = run.E[k];
       peakAt = G[k];
     } else under++;
   }
-  if (k1 >= k0 && run.E[k1] < peak && G[k1] - peakAt > longest.ms) longest = { ms: G[k1] - peakAt, from: iso(peakAt), to: iso(G[k1]), made_up: false };
+  if (k1 >= k0 && run.E[k1] < peak - MOVE_EPS && G[k1] - peakAt > longest.ms) longest = { ms: G[k1] - peakAt, from: iso(peakAt), to: iso(G[k1]), made_up: false };
   const wholeMs = k1 >= k0 ? G[k1] - G[k0] : 0;
 
   // margin over equity at each close of the span, the leverage used (the
@@ -966,7 +1052,8 @@ export const summarize = (run: Run, splitMs: number) => {
       years[String(y)] = b - a;
     }
   }
-  const spanYears = firstT !== null && Number.isFinite(lastX) ? (lastX - firstT) / (365.25 * DAY) : Number.NaN;
+  // a year: from the first fill (最初の入り, as the span) to the last exit
+  const spanYears = firstIn !== null && Number.isFinite(lastX) ? (lastX - firstIn) / (365.25 * DAY) : Number.NaN;
 
   // the trades it took: each email's positions together (thirds' legs one
   // trade); TP1 first counted on the TP1 leg; one netted by the other side's
@@ -974,8 +1061,6 @@ export const summarize = (run: Run, splitMs: number) => {
   const byOrder = new Map<string, Pos[]>();
   for (const p of run.closed) byOrder.set(p.order.id, [...(byOrder.get(p.order.id) ?? []), p]);
   let tp = 0;
-  let sl = 0;
-  let amb = 0;
   let pipsSum = 0;
   let yenSum = 0;
   let kinds: Record<string, number> = {};
@@ -984,8 +1069,6 @@ export const summarize = (run: Run, splitMs: number) => {
     const kind = ps.some((p) => p.netted) ? "net" : first.closes[first.closes.length - 1].kind;
     kinds[kind] = (kinds[kind] ?? 0) + 1;
     if (kind === "tp") tp++;
-    if (kind === "sl") sl++;
-    if (kind === "amb") amb++;
     // pips weighted by units (thirds: 0.4, 0.3, 0.3 of 10,000), the yen in all
     let u = 0;
     let pu = 0;
@@ -1000,6 +1083,10 @@ export const summarize = (run: Run, splitMs: number) => {
   }
   const nT = byOrder.size;
   kinds = Object.fromEntries(Object.entries(kinds).sort());
+  // "of those resolved": every trade taken but the time-outs (§8.99 反対で
+  // 決済: a netting in the denominator, never a win; a loss-cut and a
+  // deadline the same), as research/money-check.py counts them
+  const resolved = nT - (kinds.time ?? 0);
   const opens = ins.map((e) => e.open);
 
   return {
@@ -1048,7 +1135,7 @@ export const summarize = (run: Run, splitMs: number) => {
     trades: nT,
     exits: kinds,
     win_all: nT ? tp / nT : null,
-    win_resolved: tp + sl + amb ? tp / (tp + sl + amb) : null,
+    win_resolved: resolved ? tp / resolved : null,
     mean_pips: nT ? pipsSum / nT : null,
     mean_r: nT ? pipsSum / nT / SL : null,
     mean_yen: nT ? yenSum / nT : null,
@@ -1097,15 +1184,11 @@ export const runChecks = (run: Run, checks: Record<string, Check>, drifting: boo
   const bal = new Float64Array(n);
   const eq = new Float64Array(n);
   for (const p of run.closed) {
-    const L = p.leg;
     let units = p.units0;
     let from = p.openBar;
     for (const c of p.closes) {
       // the close's yen, again
-      const conv = spec.plant === "usdentry" ? L.convT : c.conv;
-      let y = c.units * L.dir * (c.px - L.fill) * conv;
-      if (p.shift !== 0) y += p.shift * (c.units / p.units0) * (c.gi < L.gi0 ? 0 : Math.min(1, (c.gi - L.gi0 + 1) / L.hold));
-      bal[c.bar] += y;
+      bal[c.bar] += closeYen(p, c, spec.plant);
       // held through the bars before this close's (at their closes)
       for (let k = from; k < c.bar; k++) eq[k] += markYen(p, units, k, spec.plant);
       units -= c.units;
@@ -1153,11 +1236,42 @@ export const runChecks = (run: Run, checks: Record<string, Check>, drifting: boo
     }
   }
 
-  // (A4) every entry: its sizing inputs from T or before; the cap kept; the
+  // (A4) every entry: its sizing inputs from T or before — the time each came
+  // from, and the equity it was sized on again by another loop (1e-6 yen):
+  // the balance after the closes made before its close's emails were judged
+  // and every position open then on its marks at the closes of the bars
+  // ending at T (G's last at or before T), so a sizing on anything later
+  // fails here (§8.99 量の入力の時刻がすべて入る時刻以前); the cap kept; the
   // margin after it within the equity (the account's rules on); not in a call;
   // its units in 1,000s from 1,000 to 5,000,000 (F10k: 10,000)
+  // "before" in the bar order ①–⑥, as [the bar, its step, the time]: a close
+  // at ① (a deadline) 0, at ② (a netting, at its email's T) 1, at ③/④ 2; a
+  // position in at ② (at its T) 1, a late one in at ③ 2; a close's emails
+  // are judged at [the bar of the first g after T, 1, T]
+  type At = [number, number, number];
+  const earlier = (a: At, b: At) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  const outs = run.closed.flatMap((p) => p.closes.map((c) => ({ p, c, at: [c.bar, c.kind === "deadline" ? 0 : c.kind === "net" ? 1 : 2, c.g] as At }))).sort((a, b) => earlier(a.at, b.at));
+  const lateIn = (p: Pos) => p.leg.entryG !== p.leg.T;
+  const ins = run.closed.map((p) => ({ p, at: [p.openBar, lateIn(p) ? 2 : 1, lateIn(p) ? p.leg.entryG : p.order.T] as At })).sort((a, b) => earlier(a.at, b.at));
+  const openNow = new Map<Pos, number>();
+  let balNow = spec.start;
+  let io = 0;
+  let ii = 0;
   for (const e of run.entries) {
-    tally(ck("acct_inputs_time"), e.inputAt <= e.T, () => `${key} ${e.id}: sized on ${iso(e.inputAt)}, after T ${iso(e.T)}`);
+    const k = upperBound(G, e.T);
+    const judged: At = [k, 1, e.T];
+    while (ii < ins.length && earlier(ins[ii].at, judged) < 0) openNow.set(ins[ii].p, ins[ii++].p.units0);
+    while (io < outs.length && earlier(outs[io].at, judged) < 0) {
+      const { p, c } = outs[io++];
+      balNow += closeYen(p, c, spec.plant);
+      const u = (openNow.get(p) ?? 0) - c.units;
+      if (u > 1e-9) openNow.set(p, u);
+      else openNow.delete(p);
+    }
+    let eqAgain = balNow;
+    for (const [p, u] of openNow) eqAgain += markYen(p, u, k - 1, spec.plant);
+    const sameEquity = Math.abs(eqAgain - e.equity) <= tolY(eqAgain) && Math.abs(eqAgain - e.sizedOn) <= tolY(eqAgain);
+    tally(ck("acct_inputs_time"), e.inputAt <= e.T && sameEquity, () => `${key} ${e.id}: inputs at ${iso(e.inputAt)} (T ${iso(e.T)}); sized on ${e.sizedOn} (the equity at T ${e.equity}), again ${eqAgain}`);
     const capOk = spec.cap === "T1" ? e.open <= 1 : spec.cap === "T3" ? e.open <= 3 : spec.cap === "P1" ? e.pairOpen <= 1 : spec.cap === "J2" ? e.jpyWay <= 2 : true;
     tally(ck("acct_caps"), capOk, () => `${key} ${e.id}: ${e.open} open (its pair ${e.pairOpen}, yen its way ${e.jpyWay}) under ${spec.cap}`);
     if (spec.rules) tally(ck("acct_margin_order"), e.marginAfter <= e.equity, () => `${key} ${e.id}: margin after ${e.marginAfter} over the equity ${e.equity}`);
@@ -1190,8 +1304,10 @@ export const runChecks = (run: Run, checks: Record<string, Check>, drifting: boo
   flatAfterForced();
 
   // (A6) the fall on the 5-minute closes is at least the 4-hour closes' one
+  // (each peak and fall moving only by more than MOVE_EPS, R3, the two may
+  // part by up to twice that: a 4-hour close a hair over a 5-minute peak)
   const s = summarize(run, 0);
-  tally(ck("acct_mdd"), s.mdd_yen >= s.mdd_4h.yen - 1e-9, () => `${key}: 5-minute fall ${s.mdd_yen} under the 4-hour ${s.mdd_4h.yen}`);
+  tally(ck("acct_mdd"), s.mdd_yen >= s.mdd_4h.yen - 2 * MOVE_EPS - 1e-9, () => `${key}: 5-minute fall ${s.mdd_yen} under the 4-hour ${s.mdd_4h.yen}`);
 
   // (A7) the margin again, from the positions the ledger had open, at each
   // entry (after it) and at each NY close: per pair the larger side (MAX)
@@ -1233,6 +1349,17 @@ export const runChecks = (run: Run, checks: Record<string, Check>, drifting: boo
   }
 };
 
+// the yen of one of p's closes from its price (units × dir × (price − fill) ×
+// USD/JPY; the zero row's share of δ by then: at the close's share index,
+// a deadline's the g of its USD/JPY, R4), the second loop's own
+const closeYen = (p: Pos, c: Pos["closes"][number], plant: string): number => {
+  const L = p.leg;
+  const conv = plant === "usdentry" ? L.convT : c.conv;
+  let y = c.units * L.dir * (c.px - L.fill) * conv;
+  if (p.shift !== 0) y += p.shift * (c.units / p.units0) * (c.share < L.gi0 ? 0 : Math.min(1, (c.share - L.gi0 + 1) / L.hold));
+  return y;
+};
+
 // the yen of `units` of p at the close of g[k] (the second loop's own mark)
 const markYen = (p: Pos, units: number, k: number, plant: string): number => {
   const L = p.leg;
@@ -1247,13 +1374,22 @@ const markYen = (p: Pos, units: number, k: number, plant: string): number => {
 // (A8) E* exactly (§8.99 確かめ): an account of E* × (1 + 1e-9) under the
 // full rules (margin admission, the loss-cut, calls) goes the path's way —
 // no margin skip, loss-cut or call, and never under 0 —, one of E* × (1 − 1e-6)
-// does not (one of them at least happens)
+// does not (one of them at least happens). A run whose E* is 0 (nothing was
+// ever needed: no email taken, and the P/L never under 0) has no "just
+// below": the check does not apply there and is counted apart, in
+// acct_estar_na (decisions R6d)
 export const estarCheck = (tape: Tape, orders: Order[], spec: RunSpec, value: number, checks: Record<string, Check>) => {
+  if (value === 0) {
+    const na = (checks.acct_estar_na ??= newCheck());
+    na.compared++;
+    if (na.examples.length < 10) na.examples.push(`${spec.key}: E* 0, just above / just below not applicable`);
+    return { above: null, below: null, below_first: null, applicable: false };
+  }
   const full = (start: number) => runAccount(tape, orders, { ...spec, key: `${spec.key} at ${start}`, rules: true, start, estar: false });
   const above = full(value * (1 + 1e-9));
   const below = full(value * (1 - 1e-6));
   tally((checks.acct_estar ??= newCheck()), value > 0 && above.happened === 0 && below.happened >= 1, () => `${spec.key}: E* ${value}: just above ${above.happened} happened (margin skips ${above.skipped.margin}, loss-cuts ${above.losscuts.length}, calls ${above.calls.length}, under 0 ${above.negatives}); just below ${below.happened}`);
-  return { above: above.happened, below: below.happened, below_first: below.ledger.find((r) => r[2] === "losscut" || r[2] === "call" || (r[2] === "skip" && r[10] === "margin")) ?? null };
+  return { above: above.happened, below: below.happened, below_first: below.ledger.find((r) => r[2] === "losscut" || r[2] === "call" || (r[2] === "skip" && r[10] === "margin")) ?? null, applicable: true };
 };
 
 // (A9) caps and margin off (the nomargin row): the run's yen is Σ units ×
