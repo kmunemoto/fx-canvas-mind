@@ -1,0 +1,95 @@
+# #187: the email's stop at 2N (twice the Turtles' N) or 2A (twice the
+# signal bar's 4-hour ATR) in place of 30 pips, TP1 20 kept, on the email's
+# signals now, the same trades compared (research/stop2n.ts, docs §8.97).
+#
+# Run by hand, once: the random walks are run before it, so the data is not
+# read before the walks have been looked at. A push of this file only lets
+# GitHub know the workflow (its job is skipped on a push: nothing is read).
+# One run does, in order, and stops at the first that fails:
+#   1. §8.83's numbers again (WEEKEND=stamp, §8.83's END, A+B): now's halves
+#      must come out as §8.83's, and nothing else is printed;
+#   2. the study (END fixed, so a run again reads the same bars);
+#   3. research/stop2n-check.py: every trade of the call worked out again
+#      from GMO's raw files (the run's cache), apart from the study's code.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research the stop at 2N
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/stop2n.yml
+  workflow_dispatch:
+    inputs:
+      end:
+        description: "The data's end, UTC (fixed in docs §8.97)"
+        default: "2026-10-02T21:00:00Z"
+permissions:
+  contents: read
+
+jobs:
+  stop2n:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled: the files the
+      # other studies kept, so only the rest is fetched
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-none
+          restore-keys: gmo-5min-
+      - name: "1. §8.83's numbers again"
+        env:
+          WEEKEND: stamp
+          END: "2026-09-29T14:16:25Z"
+          PAIRS: "USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,NZD/JPY,CAD/JPY,CHF/JPY,EUR/USD,AUD/USD,GBP/USD,NZD/USD"
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,END,SYNTHETIC,SEED,SYNTH,OUTDIR,WEEKEND,DRIFT,LOOKAHEAD,DUMPDIR
+          research/stop2n.ts
+      - name: "2. The study"
+        env:
+          END: ${{ inputs.end || '2026-10-02T21:00:00Z' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=PAIRS,START,SPLIT,END,SYNTHETIC,SEED,SYNTH,OUTDIR,WEEKEND,DRIFT,LOOKAHEAD,DUMPDIR
+          research/stop2n.ts
+      - name: "3. The independent check"
+        run: python3 research/stop2n-check.py --end "${{ inputs.end || '2026-10-02T21:00:00Z' }}"
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stop2n-out
+          path: research/out/
+          retention-days: 30
