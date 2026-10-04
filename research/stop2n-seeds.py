@@ -150,7 +150,8 @@ def main():
         runs.setdefault(r["synth"], []).append(r)
     for synth in runs:
         runs[synth].sort(key=lambda r: r["seed"])
-    print(f"runs: {', '.join(f'{k} {len(v)} (seeds {v[0]['seed']} .. {v[-1]['seed']})' for k, v in runs.items())}")
+    told = [f"{k} {len(v)} (seeds {v[0]['seed']} .. {v[-1]['seed']})" for k, v in runs.items()]
+    print(f"runs: {', '.join(told)}")
     bad = [(r["synth"], r["seed"], r["allDiffer"]) for v in runs.values() for r in v if r["allDiffer"] != 0]
     first = next(iter(runs.values()))[0]
     compared = {k: sum(r["checks"][k]["compared"] for v in runs.values() for r in v) for k in first["checks"]}
