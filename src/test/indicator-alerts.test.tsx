@@ -15,6 +15,7 @@ import {
   ALERT_TWELVE_CAP,
   FAST_START_MS,
   INDICATOR_INTERVALS,
+  INDICATOR_MEASURED,
   QTREND_RULE_ID,
   STALE_RETRY_MS,
   STALE_TRIES,
@@ -45,6 +46,8 @@ import {
 import { LIVE_PAIRS as SERVER_PAIRS, TWELVE_CAPS, TWELVE_CAP_REST, TWELVE_DAILY_LIMIT, TWELVE_FX_PAIRS } from "../../supabase/functions/live-chart/logic";
 import { klineUrl } from "../../supabase/functions/track-outcomes/quotes";
 import { pipSize } from "../lib/candleTime";
+import { ja } from "../lib/i18n/ja";
+import { en } from "../lib/i18n/en";
 
 const render = (ui: ReactElement): RenderResult => rtlRender(<LocaleProvider initial="ja">{ui}</LocaleProvider>);
 
@@ -605,6 +608,36 @@ describe("#155 what the sweep reads, and when", () => {
     expect(ul4.text).toContain("ULTRA is built from F-INVEST's video (its code is not published), and its signals are that video's. Its stop and targets follow the chart of a second F-INVEST video (its premium version, on gold, whose table shows TP1 reached 80–82% of the time; its signals have filters this app does not have): the stop 13 and the targets 4, 10 and 16, pips on currency pairs. Measured on past 4-hour bars");
     expect(ul4.text).toContain("74.5% of the time");
     expect(ul4.text).toContain("lost about 0.94 pips a trade");
+  });
+});
+
+// #192: the chart's notes carry the emails' measured figures, copied by
+// hand: every one of them (40, in each language) as the tables hold them
+describe("#192 the chart's notes state the emails' measured figures", () => {
+  const TFS = ["5min", "15min", "1h", "4h", "1day"] as const;
+  const JA_TF = ["5分足", "15分足", "1時間足", "4時間足", "日足"];
+  const EN_TF = ["5-minute bars", "15-minute", "1-hour", "4-hour", "daily"];
+  const andList = (xs: string[]) => `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+  it("each timeframe's share of TP1 first and loss a trade, FX and gold, Q-Trend and ULTRA, in Japanese and English", () => {
+    for (const [rule, key] of [["qtrend", "qTrendNote"], ["ultra", "ultraNote"]] as const) {
+      const fx = TFS.map((tf) => INDICATOR_MEASURED[rule][tf]);
+      const gold = TFS.map((tf) => GOLD_MEASURED[rule][tf]);
+      // every figure a loss now, as the notes word them
+      expect([...fx.map((m) => m.pips), ...gold.map((g) => g.usd)].every((v) => v < 0)).toBe(true);
+      const jaWins = (ws: number[]) => ws.map((w, k) => `${JA_TF[k]} ${w.toFixed(1)}%`).join("・");
+      expect(ja.chart[key]).toContain(`届いたのは ${jaWins(fx.map((m) => m.win))} でした`);
+      expect(ja.chart[key]).toContain(`届いたのは ${jaWins(gold.map((g) => g.win))} でした`);
+      expect(ja.chart[key]).toContain(`1回あたり平均で ${fx.map((m) => Math.abs(m.pips).toFixed(2)).join("・")} pips の負けです`);
+      expect(ja.chart[key]).toContain(`1回あたり平均で ${gold.map((g) => Math.abs(g.usd).toFixed(2)).join("・")} ドルの負けです`);
+      const enWins = (ws: number[]) => andList(ws.map((w, k) => `${w.toFixed(1)}%${k === 0 ? " of the time" : ""} on ${EN_TF[k]}`));
+      expect(en.chart[key]).toContain(`TP1 came before the stop ${enWins(fx.map((m) => m.win))}`);
+      expect(en.chart[key]).toContain(`reached TP1 before the stop ${enWins(gold.map((g) => g.win))}`);
+      expect(en.chart[key]).toContain(`lost ${andList(fx.map((m) => Math.abs(m.pips).toFixed(2)))} pips a trade on average`);
+      expect(en.chart[key]).toContain(`losing ${andList(gold.map((g) => `$${Math.abs(g.usd).toFixed(2)}`))} a trade on average`);
+    }
+    // the break-even share the notes give, as the emails work it out
+    expect(ja.chart.qTrendNote).toContain(`損益ゼロには${breakEvenPct(false)}%より上`);
+    expect(en.chart.qTrendNote).toContain(`breaking even needs more than ${breakEvenPct(true)}%`);
   });
 });
 

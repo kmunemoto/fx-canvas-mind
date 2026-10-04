@@ -232,6 +232,14 @@ describe("#151 ULTRA on the chart", () => {
     expect([box.getAttribute("data-side"), box.getAttribute("data-open")]).toEqual(["BUY", "false"]);
     expect(box.querySelector("title")!.textContent).toBe("ULTRA 買い: エントリー 4257.39・損切り 4244.39・TP1 4261.39・TP2 4267.39・TP3 4273.39");
     expect(document.querySelector("[data-testid^='chart-ultra-tag-']")).toBeNull();
+    // ended, it leaves no room right of the newest candle: the plot ends
+    // within a bar of it (open, the room is checked on EUR/GBP below)
+    const candles = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const [prevBody, lastBody] = [candles[candles.length - 2], candles[candles.length - 1]];
+    const barStep = Number(lastBody.getAttribute("x")) - Number(prevBody.getAttribute("x"));
+    const plot = document.querySelector("clipPath rect")!;
+    const plotRight = Number(plot.getAttribute("x")) + Number(plot.getAttribute("width"));
+    expect(plotRight - (Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width")))).toBeLessThan(barStep);
     // the table: every signal from bar 0, the ones before the chart too
     expect(screen.getByTestId("chart-ultra-row-tp1").textContent).toBe("TP1 10 100%");
     expect(screen.getByTestId("chart-ultra-row-tp2").textContent).toBe("TP2 9 90%");
@@ -336,6 +344,14 @@ describe("#151 ULTRA on the chart", () => {
     // the stop at the top edge, the targets at the bottom
     expect(order[0].y0 - top).toBeLessThan(3);
     expect(bottom - order[4].y1).toBeLessThan(3);
+    // ULTRA alone and its newest trade open: its prices sit in room left
+    // right of the newest candle, not over it (#152)
+    const bodies = screen.getByTestId("chart-candles").querySelectorAll("rect");
+    const lastBody = bodies[bodies.length - 1];
+    const newestRight = Number(lastBody.getAttribute("x")) + Number(lastBody.getAttribute("width"));
+    for (const k of ["sl", "entry", "tp1", "tp2", "tp3"]) {
+      expect(Number(screen.getByTestId(`chart-ultra-tag-${k}`).querySelector("rect")!.getAttribute("x"))).toBeGreaterThan(newestRight);
+    }
   });
 
   it("#173: a level at or below zero is no price — a yen pair at about 0.13, a sell's TP3 16 pips (0.16) below", () => {

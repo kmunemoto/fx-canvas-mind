@@ -381,9 +381,12 @@ export const keepableKlines = (body: unknown): boolean =>
 // ---- the email --------------------------------------------------------------------------
 //
 // What fired and on which bar, the numbers that made it fire, the stop and
-// targets (ULTRA's, the video's settings; #156: Q-Trend's the same numbers,
-// the owner's choice), where the prices come from, and — as plainly as the
-// other alerts — what these levels did on the email's own timeframe.
+// targets (ULTRA's for the chart's pair, ultraParamsFor: since #192 the stop
+// 13 and the targets 4, 10 and 16, dollars on gold and pips on a pair, from a
+// second F-INVEST video's chart lines rather than its settings dialog; #156:
+// Q-Trend's the same numbers, the owner's choice), where the prices come
+// from, and — as plainly as the other alerts — what these levels did on the
+// email's own timeframe.
 
 // #157: what the emails' own levels did (research/tf-winrate.ts, docs §8.69):
 // GMO's FX pairs, 2024-01-01 to 2026-09-29, each signal the sweep would mail
