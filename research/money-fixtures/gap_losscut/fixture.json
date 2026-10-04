@@ -1,0 +1,261 @@
+{
+ "name": "gap_losscut",
+ "what": "the margin full on Friday (a third email skipped 'margin'), Sunday's opening gap through a USD/JPY SELL's stop, and the loss-cut on that first bar of the week of the EUR/USD left, its yen margin risen with USD/JPY",
+ "hand": [
+  "Runs FF1_C0 (1,000,000) and F10k_C0 (start 0). Spread 0.4 pip (USD/JPY, NZD/JPY 0.004; EUR/USD 0.00004).",
+  "T Fri 2024-01-12 16:00 (bar 12:00), in admission order: USD/JPY SELL (mid 150.000; sells at the bid 149.998; TP1 149.960, stop 150.130), EUR/USD BUY (bid 1.09998 / ask 1.10002, mid 1.10000; fill 1.10002, TP1 1.10040, stop 1.09870), NZD/JPY BUY (mid 80.000, fill 80.002, TP1 80.040).",
+  "  FF1: E = 1,000,000. USD/JPY 0.01 x 1,000,000 / 0.13 -> 76,000; EUR/USD: 13 pips = 0.0013 x 150.000 (USD/JPY mid at T) = 0.195 yen a unit -> 51,282 -> 51,000; NZD/JPY 76,000.",
+  "  Margin after USD/JPY 0.04 x 76,000 x 150 = 456,000; after EUR/USD + 0.04 x 51,000 x 1.1 x 150 = 336,600 -> 792,600; after NZD/JPY + 0.04 x 76,000 x 80 = 243,200 -> 1,035,800 > 1,000,000: NZD/JPY skipped 'margin'.",
+  "Fri 20:55 bars (end 21:00, GMO's last of the week): unchanged. Friday's NY close is 21:55 (winter): no bar ends then, 21:00 stands in.",
+  "  FF1 on mids: 1,000,000 - 76,000 x 0.002 - 51,000 x 0.00002 x 150 = 999,695 >= 792,600: no call.",
+  "Sun 2024-01-14 22:00 bars, the week's first: USD/JPY bid opens 160.848, ask 160.852, past the SELL's stop 150.130: out at the ask open 160.852 (x = 22:05). EUR/USD unchanged (bid 1.09998), NZD/JPY 79.998.",
+  "  FF1: -76,000 x (160.852 - 149.998) = -824,904 -> balance 175,096.",
+  "  Loss-cut test at 22:05, on the exit side, EUR/USD turned at USD/JPY's mid then, 160.850: E = 175,096 + 51,000 x (1.09998 - 1.10002) x 160.85 = 175,096 - 328.134 = 174,767.866.",
+  "  Margin 0.04 x 51,000 x 1.1 x 160.85 = 360,947.4 (it rose with USD/JPY); half 180,473.7 > E: loss-cut, EUR/USD closed at 1.09998: -328.134 -> 174,767.866.",
+  "  With the margin fixed at the entry (USD/JPY 150), half would be 168,300 (168,303.06 at the fill) < 174,767.866: no loss-cut.",
+  "F10k: all three enter, 10,000 each. USD/JPY -10,000 x 10.854 = -108,540 (Sun 22:05). Mon 01:00: EUR/USD bid high 1.10045, out at TP1 1.10040: 10,000 x 0.00038 x 160.85 = 611.23; NZD/JPY at TP1 80.040: 380. Balance -107,548.77.",
+  "F10k E*: order: 60,000, + 66,000, + 32,000 = 158,000 (Fri 16:00, P/L 0).",
+  "  NY close (stand-in Fri 21:00): P/L on mids -20 - 30 - 20 = -70; margin 158,000; 158,070.",
+  "  Loss-cut term: Fri 16:05 and 21:00 79,000 + 140; Sun 22:05 (P/L -108,540 - 64.34 - 40 = -108,644.34; margin 0.04 x 10,000 x 1.1 x 160.85 + 32,000 = 102,774) 51,387 + 108,644.34 = 160,031.34;",
+  "    Sun 22:10 (EUR/USD bid 1.09990: P/L -108,540 - 193.02 - 40 = -108,773.02; margin 0.04 x 10,000 x 1.09992 x 160.85 + 32,000 = 102,768.8528) 51,384.4264 + 108,773.02 = 160,157.4464 (the largest).",
+  "  Loss term: 108,773.02 at Sun 22:10 (the end, flat: 107,548.77). E* = 160,157.4464 from the loss-cut term: lost 108,773.02, margin 51,384.4264.",
+  "Plants: skipgaplc skips Sunday's first test: the loss-cut comes at 22:10 (EUR/USD at 1.09990). marginentry keeps EUR/USD (no loss-cut; it later reaches TP1). usdentry turns EUR/USD at 150: -306, not -328.134.",
+  "  exitlate moves USD/JPY's exit to 22:10; pipplus (USD/JPY, the first trade) 1 pip better."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-01-12",
+ "end": "2024-02-09T04:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "EUR/USD",
+  "NZD/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "EUR/USD": 5,
+  "NZD/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 1000000,
+   "order": 0
+  },
+  {
+   "key": "F10k_C0",
+   "sizing": "F10k",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 0,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-12T16:00:00.000Z|SELL",
+     "units": 76000,
+     "px": 149.998
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/USD|2024-01-12T16:00:00.000Z|BUY",
+     "units": 51000,
+     "px": 1.10002
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "skip",
+     "id": "NZD/JPY|2024-01-12T16:00:00.000Z|BUY",
+     "reason": "margin"
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-14T22:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-12T16:00:00.000Z|SELL",
+     "units": 76000,
+     "px": 160.852,
+     "pnl_yen": -824904.000000001,
+     "balance": 175095.99999999895,
+     "reason": "sl"
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-14T22:05:00.000Z",
+     "kind": "losscut",
+     "equity": 174767.8659999986
+    },
+    {
+     "seq": 6,
+     "g": "2024-01-14T22:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/USD|2024-01-12T16:00:00.000Z|BUY",
+     "units": 51000,
+     "px": 1.09998,
+     "pnl_yen": -328.1340000003282,
+     "balance": 174767.8659999986,
+     "reason": "losscut"
+    }
+   ],
+   "summary": {
+    "final_balance": 174767.8659999986,
+    "final_equity": 174767.8659999986,
+    "taken": 2,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 1,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 1,
+    "shortfall_yen": 0.0
+   }
+  },
+  "F10k_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-12T16:00:00.000Z|SELL",
+     "units": 10000,
+     "px": 149.998
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/USD|2024-01-12T16:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 1.10002
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-12T16:00:00.000Z",
+     "kind": "enter",
+     "id": "NZD/JPY|2024-01-12T16:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 80.002
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-14T22:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-12T16:00:00.000Z|SELL",
+     "units": 10000,
+     "px": 160.852,
+     "pnl_yen": -108540.00000000013,
+     "balance": -108540.00000000013,
+     "reason": "sl"
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-15T01:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/USD|2024-01-12T16:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 1.1004,
+     "pnl_yen": 611.2300000000755,
+     "balance": -107928.77000000006,
+     "reason": "tp"
+    },
+    {
+     "seq": 6,
+     "g": "2024-01-15T01:05:00.000Z",
+     "kind": "exit",
+     "id": "NZD/JPY|2024-01-12T16:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 80.04,
+     "pnl_yen": 380.0,
+     "balance": -107548.77000000006,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": -107548.77000000006,
+    "final_equity": -107548.77000000006,
+    "taken": 3,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0,
+    "estar": {
+     "value": 160157.44639999996,
+     "terms": [
+      {
+       "name": "order",
+       "value": 158000.0,
+       "g": "2024-01-12T16:00:00.000Z"
+      },
+      {
+       "name": "nyclose",
+       "value": 158070.0,
+       "g": "2024-01-12T21:00:00.000Z"
+      },
+      {
+       "name": "losscut",
+       "value": 160157.44639999996,
+       "g": "2024-01-14T22:10:00.000Z"
+      },
+      {
+       "name": "loss",
+       "value": 108773.01999999996,
+       "g": "2024-01-14T22:10:00.000Z"
+      }
+     ],
+     "lost": 108773.01999999996,
+     "margin": 51384.4264
+    }
+   }
+  }
+ },
+ "plants": [
+  "skipgaplc",
+  "marginentry",
+  "usdentry",
+  "exitlate",
+  "pipplus"
+ ]
+}

@@ -1,0 +1,232 @@
+{
+ "name": "turtle_cap",
+ "what": "the told row 'turtle': the sizing base cut 20% for each 10% lost (m steps), and capped at the equity once start x 0.8^m is above it (equity under ~21% of the start)",
+ "hand": [
+  "Runs row_turtle_FF1_C0 and row_turtle_FF05_C0, from 1,000,000. m = floor((1,000,000 - E) / 100,000); if m >= 1 the base = min(E, 1,000,000 x 0.8^m), else E. Units = floor(k x base / 0.13 / 1000) x 1000.",
+  "Mon 2024-02-05, three JPY BUYs, each with its gap through the stop (out at the bar's open) or its TP1:",
+  "  USD/JPY, T 08:00 (mid 150.000, fill 150.002); the 09:00 bar opens at bid 143.752, past the stop 149.870: out at 143.752 (09:05), -6.25 a unit.",
+  "  EUR/JPY, T 12:00 (mid 160.000, fill 160.002); the 13:00 bar opens at 148.002, past the stop 159.870: out at 148.002 (13:05), -12 a unit.",
+  "  AUD/JPY, T 16:00 (mid 100.000, fill 100.002); the 17:00 bar's high 100.050: out at TP1 100.040 (17:05), +0.038 a unit.",
+  "FF1: USD/JPY E 1,000,000, m 0, base 1,000,000 -> 76,923 -> 76,000 (margin 456,000); -475,000 -> 525,000.",
+  "  EUR/JPY: m = floor(475,000 / 100,000) = 4; 0.8^4 = 0.4096: base min(525,000, 409,600) = 409,600 -> 31,507 -> 31,000; 31,000 x -12 = -372,000 -> 153,000.",
+  "  AUD/JPY: m = floor(847,000 / 100,000) = 8; 1,000,000 x 0.8^8 = 167,772.16 > 153,000: the base is capped at the equity, 153,000 -> 11,769 -> 11,000 (uncapped it would be 12,905 -> 12,000); 11,000 x 0.038 = 418 -> 153,418.",
+  "FF05: USD/JPY 0.005 x 1,000,000 / 0.13 = 38,461 -> 38,000; -237,500 -> 762,500.",
+  "  EUR/JPY: m = 2, base min(762,500, 640,000) = 640,000 -> 24,615 -> 24,000; -288,000 -> 474,500.",
+  "  AUD/JPY: m = floor(525,500 / 100,000) = 5, 0.8^5 = 0.32768: base min(474,500, 327,680) = 327,680 -> 12,603 -> 12,000; 456 -> 474,956.",
+  "Nothing open at a NY close; no loss-cut (each gap closes the only position at \u2462).",
+  "Plants: roundlot (31,507.7 -> 32,000; 11,769 -> 12,000), pipplus (USD/JPY out at 143.762, and every size after), exitlate (each exit 5 minutes later)."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-02-05",
+ "end": "2024-03-04T04:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "EUR/JPY",
+  "AUD/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "EUR/JPY": 3,
+  "AUD/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "row_turtle_FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": "turtle",
+   "start_equity": 1000000,
+   "order": 0
+  },
+  {
+   "key": "row_turtle_FF05_C0",
+   "sizing": "FF05",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": "turtle",
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "row_turtle_FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-02-05T08:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-02-05T08:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 150.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-02-05T09:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-02-05T08:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 143.752,
+     "pnl_yen": -475000.0,
+     "balance": 525000,
+     "reason": "sl"
+    },
+    {
+     "seq": 3,
+     "g": "2024-02-05T12:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-02-05T12:00:00.000Z|BUY",
+     "units": 31000,
+     "px": 160.002
+    },
+    {
+     "seq": 4,
+     "g": "2024-02-05T13:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-02-05T12:00:00.000Z|BUY",
+     "units": 31000,
+     "px": 148.002,
+     "pnl_yen": -372000.0,
+     "balance": 153000,
+     "reason": "sl"
+    },
+    {
+     "seq": 5,
+     "g": "2024-02-05T16:00:00.000Z",
+     "kind": "enter",
+     "id": "AUD/JPY|2024-02-05T16:00:00.000Z|BUY",
+     "units": 11000,
+     "px": 100.002
+    },
+    {
+     "seq": 6,
+     "g": "2024-02-05T17:05:00.000Z",
+     "kind": "exit",
+     "id": "AUD/JPY|2024-02-05T16:00:00.000Z|BUY",
+     "units": 11000,
+     "px": 100.04,
+     "pnl_yen": 418.0,
+     "balance": 153418,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 153418.0,
+    "final_equity": 153418.0,
+    "taken": 3,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  },
+  "row_turtle_FF05_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-02-05T08:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-02-05T08:00:00.000Z|BUY",
+     "units": 38000,
+     "px": 150.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-02-05T09:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-02-05T08:00:00.000Z|BUY",
+     "units": 38000,
+     "px": 143.752,
+     "pnl_yen": -237500.0,
+     "balance": 762500,
+     "reason": "sl"
+    },
+    {
+     "seq": 3,
+     "g": "2024-02-05T12:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-02-05T12:00:00.000Z|BUY",
+     "units": 24000,
+     "px": 160.002
+    },
+    {
+     "seq": 4,
+     "g": "2024-02-05T13:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-02-05T12:00:00.000Z|BUY",
+     "units": 24000,
+     "px": 148.002,
+     "pnl_yen": -288000.0,
+     "balance": 474500,
+     "reason": "sl"
+    },
+    {
+     "seq": 5,
+     "g": "2024-02-05T16:00:00.000Z",
+     "kind": "enter",
+     "id": "AUD/JPY|2024-02-05T16:00:00.000Z|BUY",
+     "units": 12000,
+     "px": 100.002
+    },
+    {
+     "seq": 6,
+     "g": "2024-02-05T17:05:00.000Z",
+     "kind": "exit",
+     "id": "AUD/JPY|2024-02-05T16:00:00.000Z|BUY",
+     "units": 12000,
+     "px": 100.04,
+     "pnl_yen": 456.0,
+     "balance": 474956,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 474956.0,
+    "final_equity": 474956.0,
+    "taken": 3,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "roundlot",
+  "pipplus",
+  "exitlate"
+ ]
+}

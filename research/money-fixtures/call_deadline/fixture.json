@@ -1,0 +1,132 @@
+{
+ "name": "call_deadline",
+ "what": "a call not cured: the equity comes back over the margin overnight (not a cure), and every position is closed at the deadline (next weekday 09:00 UTC) at its bar's open",
+ "hand": [
+  "Run FF1_C0 from 1,000,000. JPY pairs, spread 0.4 pip.",
+  "T Wed 2024-01-24 12:00: USD/JPY BUY (mid 140.000, fill 140.002, TP1 140.040, stop 139.870), GBP/JPY BUY (mid 188.000, fill 188.002, TP1 188.040, stop 187.870). 76,000 each; margin 425,600 + 571,520 = 997,120: both enter.",
+  "NY close Wed 21:55: bids 139.938 and 187.948 (mids 139.940, 187.950).",
+  "  Loss-cut: E = 1,000,000 + 76,000 x (139.938 - 140.002) + 76,000 x (187.948 - 188.002) = 991,032: none.",
+  "  On mids: 1,000,000 - 4,712 - 3,952 = 991,336; margin 0.04 x 76,000 x (139.940 + 187.950) = 996,785.6: call, C = 5,449.6. Deadline Thu 09:00 UTC.",
+  "Thu 03:00 bars: mids back at 140.000 and 188.000 (E on mids 999,696 >= 997,120). Nothing closed: no cure.",
+  "Thu 09:00 (the first bars opening at the deadline): close everything at each bar's open on the exit side.",
+  "  USD/JPY bid open 139.960: 76,000 x (139.960 - 140.002) = -3,192 (996,808). GBP/JPY bid open 187.980: 76,000 x (187.980 - 188.002) = -1,672 (995,136).",
+  "  (The trades' own exits come later: USD/JPY's stop and GBP/JPY's TP1 at 10:05; the account no longer holds them.)",
+  "Plants: curemove cures at Thu 03:05 and nothing is closed at 09:00. callexitside: C = 996,785.6 - 991,032 = 5,753.6. marginentry: the margin fixed at the entry (997,120 at the entry mids, 997,132.16 at the fills) gives C = 5,784 or 5,796.16."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-01-24",
+ "end": "2024-02-21T00:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "GBP/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "GBP/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-24T12:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-24T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 140.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-24T12:00:00.000Z",
+     "kind": "enter",
+     "id": "GBP/JPY|2024-01-24T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 188.002
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-24T21:55:00.000Z",
+     "kind": "call",
+     "pnl_yen": 5449.600000002538,
+     "margin": 996785.6
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-25T09:00:00.000Z",
+     "kind": "deadline"
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-25T09:00:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-24T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 139.96,
+     "pnl_yen": -3192.000000000121,
+     "balance": 996808,
+     "reason": "deadline"
+    },
+    {
+     "seq": 6,
+     "g": "2024-01-25T09:00:00.000Z",
+     "kind": "exit",
+     "id": "GBP/JPY|2024-01-24T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 187.98,
+     "pnl_yen": -1672.0000000015034,
+     "balance": 995136,
+     "reason": "deadline"
+    }
+   ],
+   "summary": {
+    "final_balance": 995136.0,
+    "final_equity": 995136.0,
+    "taken": 2,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 1,
+    "cures": 0,
+    "deadlines": 1,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "curemove",
+  "callexitside",
+  "marginentry"
+ ]
+}

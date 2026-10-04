@@ -1,0 +1,146 @@
+{
+ "name": "call_cured_by_exit",
+ "what": "a call at the NY close on mids, an email skipped while it is open, equity back over the margin (not a cure), then cured by a take-profit releasing the call's margin",
+ "hand": [
+  "Run FF1_C0 from 1,000,000. JPY pairs, spread 0.4 pip.",
+  "T Tue 2024-01-23 12:00: EUR/JPY BUY (mid 160.000, fill 160.002, TP1 160.040, stop 159.870), CHF/JPY BUY (mid 168.000, fill 168.002, TP1 168.040, stop 167.870). 76,000 each.",
+  "  Margin after EUR/JPY 0.04 x 76,000 x 160 = 486,400; after CHF/JPY + 510,720 = 997,120 <= 1,000,000: both enter.",
+  "NY close Tue 21:55 (winter): bids 159.948 and 167.948, mids 159.950 and 167.950.",
+  "  Loss-cut: E = 1,000,000 - 76,000 x 0.054 x 2 = 991,792 >= half of 996,816: none.",
+  "  On mids: E = 1,000,000 - 76,000 x 0.052 x 2 = 992,096; margin 0.04 x 76,000 x (159.950 + 167.950) = 996,816: call, C = 4,720. Deadline Wed 09:00.",
+  "Wed 00:00 (bars 23:55-00:00 end): mids back at 160.000 and 168.000: E on mids 999,696 >= margin 997,120, but a move back is not a cure (nothing was closed).",
+  "  T Wed 00:00: AUD/JPY BUY (bar Tue 20:00, mid 100.000): the call is open: skip 'call'.",
+  "Wed 01:00 CHF/JPY bid high 168.045: out at TP1 168.040 (01:05): 76,000 x 0.038 = 2,888 (1,002,888).",
+  "  Cure test at the call's mids: EUR/JPY still held, 0.04 x 76,000 x 159.950 = 486,248; released 996,816 - 486,248 = 510,568 >= 4,720: cure at 01:05.",
+  "Wed 02:00 EUR/JPY bid low 159.860: out at the stop 159.870 (02:05): 76,000 x -0.132 = -10,032 (992,856).",
+  "Plants: callexitside: C on the exit side 996,816 - 991,792 = 5,024. marginentry: the margin at the entry prices (997,120, or 997,132.16 at the fills) gives another C.",
+  "  curemove cures at Wed 00:00 when the mids come back, so the AUD/JPY email is judged as if no call were open (then 'margin', 1,301,120 > 999,392). exitlate, pipplus (EUR/JPY's stop 1 pip better) move the exits."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-01-23",
+ "end": "2024-02-20T12:00:00Z",
+ "pairs": [
+  "EUR/JPY",
+  "AUD/JPY",
+  "CHF/JPY"
+ ],
+ "digits": {
+  "EUR/JPY": 3,
+  "AUD/JPY": 3,
+  "CHF/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-23T12:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-01-23T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 160.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-23T12:00:00.000Z",
+     "kind": "enter",
+     "id": "CHF/JPY|2024-01-23T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 168.002
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-23T21:55:00.000Z",
+     "kind": "call",
+     "pnl_yen": 4720.000000003143,
+     "margin": 996815.9999999999
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-24T00:00:00.000Z",
+     "kind": "skip",
+     "id": "AUD/JPY|2024-01-24T00:00:00.000Z|BUY",
+     "reason": "call"
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-24T01:05:00.000Z",
+     "kind": "exit",
+     "id": "CHF/JPY|2024-01-23T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 168.04,
+     "pnl_yen": 2887.9999999986694,
+     "balance": 1002888,
+     "reason": "tp"
+    },
+    {
+     "seq": 6,
+     "g": "2024-01-24T01:05:00.000Z",
+     "kind": "cure"
+    },
+    {
+     "seq": 7,
+     "g": "2024-01-24T02:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-01-23T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 159.87,
+     "pnl_yen": -10032.00000000038,
+     "balance": 992856,
+     "reason": "sl"
+    }
+   ],
+   "summary": {
+    "final_balance": 992856.0,
+    "final_equity": 992856.0,
+    "taken": 2,
+    "skipped": {
+     "call": 1,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 1,
+    "cures": 1,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "callexitside",
+  "marginentry",
+  "curemove",
+  "exitlate",
+  "pipplus"
+ ]
+}

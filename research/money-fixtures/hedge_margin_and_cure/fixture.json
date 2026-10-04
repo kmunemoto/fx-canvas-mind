@@ -1,0 +1,162 @@
+{
+ "name": "hedge_margin_and_cure",
+ "what": "a hedge's margin on the larger side only (MAX), a call, the larger side closed first (releasing only the difference: no cure), then the other (cure)",
+ "hand": [
+  "Run FF1_C0 from 1,000,000. JPY pairs, spread 0.4 pip. Units = floor(E / 13,000) x 1,000 at 1%.",
+  "T Mon 2024-01-22 12:00: S1 USD/JPY BUY (mid 138.000, fill 138.002, TP1 138.040, stop 137.870) and S2 GBP/JPY BUY (mid 190.000, fill 190.002, TP1 190.040, stop 189.870). E = 1,000,000: 76,000 each.",
+  "  Margin after S1 0.04 x 76,000 x 138 = 419,520; after S2 + 0.04 x 76,000 x 190 = 577,600 -> 997,120 <= 1,000,000: both enter.",
+  "T 16:00: S3 USD/JPY SELL (close bid 138.028 / ask 138.032, mid 138.030; TP1 137.990, stop 138.160; sells at 138.028). GBP/JPY bid 190.028 (mid 190.030).",
+  "  E = 1,000,000 + 76,000 x (138.028 - 138.002) + 76,000 x (190.028 - 190.002) = 1,003,952 -> 77,000 units.",
+  "  Margin after, MAX a pair: USD/JPY max(76,000 long, 77,000 short) x 138.030 x 0.04 = 425,132.4; GBP/JPY 76,000 x 190.030 x 0.04 = 577,691.2; total 1,002,823.6 <= 1,003,952: enter (longs plus shorts would be 1,422,434.8: skip).",
+  "NY close Mon 21:55: USD/JPY bid 138.028 (mid 138.030), GBP/JPY bid 189.928 (mid 189.930).",
+  "  Loss-cut first: E = 1,000,000 + 1,976 (S1) - 308 (S3: (138.032 - 138.028) x 77,000) - 5,624 (S2) = 996,044 >= half the margin: none.",
+  "  On mids: 1,000,000 + 76,000 x 0.028 - 77,000 x 0.002 + 76,000 x (189.930 - 190.002) = 1,000,000 + 2,128 - 154 - 5,472 = 996,502.",
+  "  Margin 0.04 x (77,000 x 138.030 + 76,000 x 189.930) = 425,132.4 + 577,387.2 = 1,002,519.6 > 996,502: call, C = 6,017.6. Deadline Tue 09:00.",
+  "Tue 00:00 bar: USD/JPY ask low 137.986 <= S3's TP1 137.990: S3 (the larger side) out at 137.990 (00:05): 77,000 x 0.038 = 2,926 (1,002,926).",
+  "  Cure test at the call's mids: the positions held at the call still open, S1 76,000 long and S2: 0.04 x (76,000 x 138.030 + 76,000 x 189.930) = 996,998.4. Released 1,002,519.6 - 996,998.4 = 5,521.2 (only the 1,000 difference) < 6,017.6: no cure.",
+  "Tue 01:00 bar: USD/JPY bid high 138.045: S1 out at TP1 138.040 (01:05): 76,000 x 0.038 = 2,888 (1,005,814). Now only S2: 577,387.2 held; released 425,132.4 >= C: cure at 01:05.",
+  "Tue 02:00 bar: GBP/JPY bid high 190.050: S2 out at 190.040 (02:05): 2,888 (1,008,702).",
+  "Plants: hedgesum skips S3 for margin (1,422,434.8 > 1,003,952). callexitside makes C 1,002,519.6 - 996,044 = 6,475.6. marginentry fixes the margin at the entry prices, so C is not 6,017.6.",
+  "  exitlate: S3 out at 01:05 (its next bar), the cure then; pipplus: S1's exit 1 pip better."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-01-22",
+ "end": "2024-02-19T04:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "GBP/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "GBP/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-22T12:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-22T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 138.002,
+     "margin": 419520.0
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-22T12:00:00.000Z",
+     "kind": "enter",
+     "id": "GBP/JPY|2024-01-22T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 190.002,
+     "margin": 997120.0
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-22T16:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-22T16:00:00.000Z|SELL",
+     "units": 77000,
+     "px": 138.028,
+     "margin": 1002823.6
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-22T21:55:00.000Z",
+     "kind": "call",
+     "pnl_yen": 6017.60000000149,
+     "margin": 1002519.6
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-23T00:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-22T16:00:00.000Z|SELL",
+     "units": 77000,
+     "px": 137.99,
+     "pnl_yen": 2925.999999998652,
+     "balance": 1002926,
+     "reason": "tp"
+    },
+    {
+     "seq": 6,
+     "g": "2024-01-23T01:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-22T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 138.04,
+     "pnl_yen": 2887.9999999986694,
+     "balance": 1005814,
+     "reason": "tp"
+    },
+    {
+     "seq": 7,
+     "g": "2024-01-23T01:05:00.000Z",
+     "kind": "cure"
+    },
+    {
+     "seq": 8,
+     "g": "2024-01-23T02:05:00.000Z",
+     "kind": "exit",
+     "id": "GBP/JPY|2024-01-22T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 190.04,
+     "pnl_yen": 2887.9999999986694,
+     "balance": 1008702,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 1008702.0,
+    "final_equity": 1008702.0,
+    "taken": 3,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 1,
+    "cures": 1,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "hedgesum",
+  "callexitside",
+  "marginentry",
+  "exitlate",
+  "pipplus"
+ ]
+}

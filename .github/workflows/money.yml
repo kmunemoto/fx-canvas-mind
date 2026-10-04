@@ -1,0 +1,101 @@
+# #188: had every email of the 4-hour Q-Trend and ULTRA signals been taken,
+# what the account would have done — at 10,000 units always and at 0.25, 0.5,
+# 1 and 2% of the account, with no cap and four caps on the trades open
+# together, under Rakuten FX's margin, calls and loss-cut — and the account
+# the path needed (E*) (research/money.ts, docs §8.99).
+#
+# Run by hand, once: the random walks and the hand examples are run before
+# it, so the data is not read before they have been looked at. A push of this
+# file only lets GitHub know the workflow (its job is skipped on a push:
+# nothing is read). One run does, in order, and stops at the first that fails
+# (the study fails when its own checks differ or #187's 3,958 trades are not
+# these; the check when anything differs):
+#   1. #187's now again (LEVELS=old: the same trades at the stop 30 and TP1
+#      20): the three means (first half −0.6018, second half −0.8298, the whole
+#      period −0.7117) must come out to 4 decimals, and nothing else is printed;
+#   2. the study (END fixed, so a run again reads the same bars);
+#   3. research/money-check.py: the trades, the 25 cells and the told rows'
+#      ledgers, the 20 orders, the first thinning draws and the kept and
+#      skipped worked out again from GMO's raw files (the run's cache), apart
+#      from the study's code.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints a report to the job log and uploads the same numbers as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research the account (money)
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/money.yml
+  workflow_dispatch:
+    inputs:
+      end:
+        description: "The data's end, UTC (fixed in docs §8.99)"
+        default: "2026-10-02T21:00:00Z"
+permissions:
+  contents: read
+
+jobs:
+  money:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled: the files the
+      # other studies kept, so only the rest is fetched
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-5min-none
+          restore-keys: gmo-5min-
+      - name: "1. #187's now again (the stop 30, TP1 20)"
+        env:
+          LEVELS: old
+          END: ${{ inputs.end || '2026-10-02T21:00:00Z' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=START,SPLIT,END,SYNTHETIC,SEED,SYNTH,DRIFT,DUMPDIR,FIXTURE,OUTDIR,LEVELS,PLANT,BOOT,THIN
+          research/money.ts
+      - name: "2. The study"
+        env:
+          END: ${{ inputs.end || '2026-10-02T21:00:00Z' }}
+        run: >
+          deno run
+          --v8-flags=--max-old-space-size=6144
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/.cache,research/out
+          --allow-env=START,SPLIT,END,SYNTHETIC,SEED,SYNTH,DRIFT,DUMPDIR,FIXTURE,OUTDIR,LEVELS,PLANT,BOOT,THIN
+          research/money.ts
+      - name: "3. The independent check"
+        run: python3 research/money-check.py --end "${{ inputs.end || '2026-10-02T21:00:00Z' }}"
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-${{ github.run_id }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: money-out
+          path: research/out/
+          retention-days: 30

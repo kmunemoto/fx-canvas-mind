@@ -1,0 +1,177 @@
+{
+ "name": "dst_week",
+ "what": "the NY close moves with US daylight time (from 2024-03-10): Thursday 7 March judged at 21:55 UTC (no call, though 20:55 is under the margin), Monday 11 March at 20:55 UTC (call, though 21:55 is over it)",
+ "hand": [
+  "Run FF1_C0 from 1,000,000. JPY pairs, spread 0.4 pip. Rakuten's NY close is 16:55 New York time: 21:55 UTC in US standard time, 20:55 UTC in daylight time (from Sun 2024-03-10 02:00 New York).",
+  "T Thu 2024-03-07 12:00: USD/JPY BUY (mid 140.000, fill 140.002, TP1 140.040, stop 139.870) and GBP/JPY BUY (mid 186.000, fill 186.002, TP1 186.040, stop 185.870): 76,000 each; margin 425,600 + 565,440 = 991,040: both enter.",
+  "  Thu 20:55 bars: bids 139.928 and 185.928 (mids 139.930, 185.930): E on mids 1,000,000 - 76,000 x 0.072 x 2 = 989,056 < margin 0.04 x 76,000 x 325.86 = 990,614.4, but 20:55 is not Thursday's NY close (winter): nothing.",
+  "  Thu 21:55 (the NY close): back at 139.998 and 185.998: E on mids 999,696 >= 991,040: no call.",
+  "  Fri 01:00 bars: bid highs 140.045 and 186.045: both out at TP1 (01:05): 76,000 x 0.038 = 2,888 each: 1,002,888, then 1,005,776. Nothing open at Friday's NY close.",
+  "T Mon 2024-03-11 12:00: USD/JPY BUY (mid 147.000, fill 147.002, TP1 147.040) and GBP/JPY BUY (mid 179.000, fill 179.002, TP1 179.040). E = 1,005,776: floor(1,005,776 / 13,000) = 77 -> 77,000 each.",
+  "  Margin after 0.04 x 77,000 x 147 = 452,760; + 0.04 x 77,000 x 179 = 551,320 -> 1,004,080 <= 1,005,776: both enter.",
+  "  Mon 20:55 (the NY close, summer): bids 146.968 and 178.968 (mids 146.970, 178.970). Loss-cut: E = 1,005,776 - 77,000 x 0.034 x 2 = 1,000,540: none.",
+  "  On mids: 1,005,776 - 77,000 x 0.032 x 2 = 1,000,848; margin 0.04 x 77,000 x (146.970 + 178.970) = 1,003,895.2: call, C = 3,047.2. Deadline Tue 09:00.",
+  "  Mon 21:55: back at 146.998 and 178.998 (E on mids 1,005,468 >= 1,004,080): not a cure, and not a NY close now.",
+  "  Tue 01:00 USD/JPY bid high 147.045: out at 147.040 (01:05): 77,000 x 0.038 = 2,926 (1,008,702). Cure test: GBP/JPY still held, 0.04 x 77,000 x 178.970 = 551,227.6; released 452,667.6 >= 3,047.2: cure at 01:05.",
+  "  Tue 02:00 GBP/JPY bid high 179.045: out at 179.040 (02:05): 2,926 (1,011,628).",
+  "Plants: nysummer judges Monday at 21:55, where E on mids is over the margin: no call, no cure. A reader with the switch on the wrong Sunday calls on Thursday at 20:55 instead.",
+  "  curemove cures at 21:55. callexitside: C = 1,003,895.2 - 1,000,540 = 3,355.2. marginentry: C on the entry prices. exitlate and pipplus move exits."
+ ],
+ "conventions": [
+  "g of a row decided at a bar's open s (an email's enter or skip at T, a deadline and its exits, an AS netting close) is s; rows of exits inside the bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end, T + 5 min.",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at s before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at s, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at s (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T).",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then."
+ ],
+ "start": "2024-03-07",
+ "end": "2024-04-08T00:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "GBP/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "GBP/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-03-07T12:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-03-07T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 140.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-03-07T12:00:00.000Z",
+     "kind": "enter",
+     "id": "GBP/JPY|2024-03-07T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 186.002
+    },
+    {
+     "seq": 3,
+     "g": "2024-03-08T01:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-03-07T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 140.04,
+     "pnl_yen": 2888.0,
+     "balance": 1002888,
+     "reason": "tp"
+    },
+    {
+     "seq": 4,
+     "g": "2024-03-08T01:05:00.000Z",
+     "kind": "exit",
+     "id": "GBP/JPY|2024-03-07T12:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 186.04,
+     "pnl_yen": 2888.0,
+     "balance": 1005776,
+     "reason": "tp"
+    },
+    {
+     "seq": 5,
+     "g": "2024-03-11T12:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-03-11T12:00:00.000Z|BUY",
+     "units": 77000,
+     "px": 147.002
+    },
+    {
+     "seq": 6,
+     "g": "2024-03-11T12:00:00.000Z",
+     "kind": "enter",
+     "id": "GBP/JPY|2024-03-11T12:00:00.000Z|BUY",
+     "units": 77000,
+     "px": 179.002
+    },
+    {
+     "seq": 7,
+     "g": "2024-03-11T20:55:00.000Z",
+     "kind": "call",
+     "pnl_yen": 3047.2000000015832,
+     "margin": 1003895.2
+    },
+    {
+     "seq": 8,
+     "g": "2024-03-12T01:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-03-11T12:00:00.000Z|BUY",
+     "units": 77000,
+     "px": 147.04,
+     "pnl_yen": 2926.0,
+     "balance": 1008702,
+     "reason": "tp"
+    },
+    {
+     "seq": 9,
+     "g": "2024-03-12T01:05:00.000Z",
+     "kind": "cure"
+    },
+    {
+     "seq": 10,
+     "g": "2024-03-12T02:05:00.000Z",
+     "kind": "exit",
+     "id": "GBP/JPY|2024-03-11T12:00:00.000Z|BUY",
+     "units": 77000,
+     "px": 179.04,
+     "pnl_yen": 2926.0,
+     "balance": 1011628,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 1011628.0,
+    "final_equity": 1011628.0,
+    "taken": 4,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 1,
+    "cures": 1,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "nysummer",
+  "curemove",
+  "callexitside",
+  "marginentry",
+  "exitlate",
+  "pipplus"
+ ]
+}
