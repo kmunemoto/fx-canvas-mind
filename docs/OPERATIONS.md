@@ -5588,6 +5588,11 @@ select rule, count(*) from public.signal_alert_subscriptions group by 1;
   - 成績の記録（track-outcomes）は RSI+SAR・GA型のもので、Q-Trend・ULTRA には無い（#155）。変わらない。
   - Twelve Data の銘柄（金を除く）は測っていない。
   - #188（資金管理）は、新しい水準で測り方を決め直す。
+- **本番への反映**（2026-10-04）:
+  1. PR #165 をマージした（10:25 UTC、ab5cd74）。
+  2. 関数: `deploy-functions.yml` run 37195344093 が成功した（10:26 UTC）。本番のメールの巡回は 10:27:00 UTC から版名 `signal-alerts-v20-2026-10-04T10:00:00Z`（`net._http_response` で確かめた。日曜なので `market_closed` で判定は飛ばしている）。
+  3. 画面: Lovable にマージのコミット（ab5cd74）が届いたのを見てから公開した（`deploy_project`、10:28 UTC 頃）。返事は pending（deployment f0659692）。公開が終わったかは確かめていない。
+  4. 新しい水準のメールが最初に出るのは、市場が開いてからの合図（月曜）。§8.93 の月曜 00:00 UTC の確かめ（v19 と v20 のどちらでも拾う）で、あわせて見る。
 
 ## 9. 次の実データで確かめること
 
