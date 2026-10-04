@@ -5,7 +5,8 @@
 # Run by hand, once: the random walks are run before it, so the data is not
 # read before the walks have been looked at. A push of this file only lets
 # GitHub know the workflow (its job is skipped on a push: nothing is read).
-# One run does, in order, and stops at the first that fails:
+# One run does, in order, and stops at the first that fails (the study fails
+# when its own checks differ, the check when anything differs):
 #   1. §8.83's numbers again (WEEKEND=stamp, §8.83's END, A+B): now's halves
 #      must come out as §8.83's, and nothing else is printed;
 #   2. the study (END fixed, so a run again reads the same bars);

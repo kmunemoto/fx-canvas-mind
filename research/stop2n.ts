@@ -533,12 +533,16 @@ interface Agg {
   mae: number[];
   maeR: number[];
   maeWin: number[];
+  maeWinR: number[];
+  // the wins at TP1 whose same trade under now went out at its stop (or both):
+  // the wins the stop 30 would have cut, counted on the trades themselves
+  winsCut: number;
   weeks: Map<number, { n: number; s: number }>;
   blocks: Map<number, { n: number; s: number }>;
   all: number[];
 }
-const newAgg = (): Agg => ({ n: 0, sum: 0, wins: 0, winSum: 0, lossSum: 0, exits: { tp: 0, sl: 0, amb: 0, time: 0 }, exitSum: { tp: 0, sl: 0, amb: 0, time: 0 }, be: 0, beN: 0, th: 0, nights: 0, stops: [], held: [], mae: [], maeR: [], maeWin: [], weeks: new Map(), blocks: new Map(), all: [] });
-const addTo = (a: Agg, week: number, x: number, t?: Trade, tails = false) => {
+const newAgg = (): Agg => ({ n: 0, sum: 0, wins: 0, winSum: 0, lossSum: 0, exits: { tp: 0, sl: 0, amb: 0, time: 0 }, exitSum: { tp: 0, sl: 0, amb: 0, time: 0 }, be: 0, beN: 0, th: 0, nights: 0, stops: [], held: [], mae: [], maeR: [], maeWin: [], maeWinR: [], winsCut: 0, weeks: new Map(), blocks: new Map(), all: [] });
+const addTo = (a: Agg, week: number, x: number, t?: Trade, tails = false, cut = false) => {
   a.n++;
   a.sum += x;
   if (tails) a.all.push(x);
@@ -562,7 +566,11 @@ const addTo = (a: Agg, week: number, x: number, t?: Trade, tails = false) => {
     if (tails) {
       a.held.push(t.ms);
       a.mae.push(t.mae);
-      if (t.exit === "tp") a.maeWin.push(t.mae);
+      if (t.exit === "tp") {
+        a.maeWin.push(t.mae);
+        if (t.stop !== null) a.maeWinR.push(t.mae / t.stop);
+        if (cut) a.winsCut++;
+      }
     }
   }
   for (const [m, k] of [[a.weeks, week], [a.blocks, Math.floor(week / 4)]] as const) {
@@ -595,6 +603,8 @@ const mergeAgg = (xs: Array<Agg | undefined>): Agg | undefined => {
     a.mae = a.mae.concat(y.mae);
     a.maeR = a.maeR.concat(y.maeR);
     a.maeWin = a.maeWin.concat(y.maeWin);
+    a.maeWinR = a.maeWinR.concat(y.maeWinR);
+    a.winsCut += y.winsCut;
     a.all = a.all.concat(y.all);
     for (const by of ["weeks", "blocks"] as const) {
       for (const [k, g] of y[by]) {
@@ -949,7 +959,7 @@ for (const pair of PAIRS) {
   let staleMax = 0;
   const stale: string[] = [];
   const staleSeen = new Set<number>();
-  const widthsAt: Record<string, number[]> = { [R2N.key]: [], [R2A.key]: [] };
+  const widthsAt: Record<string, number[]> = Object.fromEntries(L30_STOPPED.filter((r) => r.stop === "N" || r.stop === "A").map((r) => [r.key, []]));
   // every rule on one trade; null when the data does not hold it
   const recordAt = (i: number, side: Side, keys: string[], signal: boolean, either: boolean): Map<string, Trade> | null => {
     const drift = DRIFTING && signal;
@@ -1048,7 +1058,7 @@ for (const pair of PAIRS) {
       for (const kk of [...new Set(full)]) {
         const tails = !kk.startsWith("coin");
         for (const [rk, t] of got) {
-          addTo(aggOf(kk, half, rk), week, t.pips, t, tails);
+          addTo(aggOf(kk, half, rk), week, t.pips, t, tails, t.exit === "tp" && (now.exit === "sl" || now.exit === "amb"));
           if (t.stop !== null) addTo(aggOf(kk, half, R_ + rk), week, t.pips / t.stop);
           if (rk !== NOW_RULE && RULE_KEYS.has(rk)) addTo(aggOf(kk, half, rk + DIFF), week, t.pips - now.pips);
         }
@@ -1057,7 +1067,7 @@ for (const pair of PAIRS) {
         }
       }
     }
-    if (either) for (const rk of [R2N.key, R2A.key]) widthsAt[rk].push(got.get(rk)!.stop!);
+    if (either) for (const rk of Object.keys(widthsAt)) widthsAt[rk].push(got.get(rk)!.stop!);
     if (either && grp === "CALL") {
       for (const [rk, t] of got) {
         if (!RULE_KEYS.has(rk)) continue;
@@ -1259,8 +1269,8 @@ const ownerLine = (key: string, period: 0 | 1 | "full", rk: string, K: number) =
   return [
     `  ${rk.padEnd(16)} ${String(a.n).padStart(5)} trades. WIN RATE (TP1 first of all) ${pct(a.exits.tp, a.n)}${coin ? ` (the coin's ${pct(coin.exits.tp, coin.n)})` : ""}; pips over 0 ${pct(a.wins, a.n)}. ${num(a.sum / a.n)} pips a trade ${ciText(a, K)}${d ? `; less now ${num(d.sum / d.n)} ${ciText(d, K)}` : ""}`,
     `  ${"".padEnd(16)} TP1 first of those ended ${pct(a.exits.tp, done)} (time-outs left out: it rises with a wider stop with no edge at all); timed out ${pct(a.exits.time, a.n)} (those ${num(a.exits.time ? a.exitSum.time / a.exits.time : null, 1)} pips); TP1 first with no edge and nothing timed out (the mean of S/(S+20); not a break-even: the pips a trade answer that) ${pct(a.be, a.beN)}; out: tp ${pct(a.exits.tp, a.n)}, sl ${pct(a.exits.sl, a.n)}, both ${pct(a.exits.amb, a.n)}`,
-    `  ${"".padEnd(16)} median ${num(medianOf(a.all), 1)}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}; the stop ${num(medianOf(a.stops), 1)} pips (median); held ${days(medianOf(a.held))} d (median), nights ${(a.nights / a.n).toFixed(2)} a trade${r ? `; R ${num(r.sum / r.n, 3)} ${ciText(r)}` : ""}${tp23 ? `; TP2 ${reach(tp23[0])}, TP3 ${reach(tp23[1])}` : ""}`,
-    `  ${"".padEnd(16)} the most against: median ${num(medianOf(a.mae), 1)}, 95% ${num(quantile(a.mae, 0.95), 1)}, worst ${num(a.mae.length ? Math.max(...a.mae) : null, 1)} pips${a.maeR.length ? ` (R ${num(medianOf(a.maeR), 2)}, ${num(quantile(a.maeR, 0.95), 2)}, ${num(Math.max(...a.maeR), 2)})` : ""}; the wins at TP1 (${wins.length}): median ${num(medianOf(wins), 1)}, 95% ${num(quantile(wins, 0.95), 1)}, worst ${num(wins.length ? Math.max(...wins) : null, 1)}, 30 pips or more ${pct(wins.filter((x) => x >= 30).length, wins.length)}, 100 or more ${pct(wins.filter((x) => x >= 100).length, wins.length)}`,
+    `  ${"".padEnd(16)} median ${num(medianOf(a.all), 1)}, avg win ${num(a.wins ? a.winSum / a.wins : null, 1)}, avg loss ${num(a.n - a.wins ? a.lossSum / (a.n - a.wins) : null, 1)}, worst ${num(t.worst, 1)}, worst 5% from ${num(t.p5, 1)}; the stop ${num(medianOf(a.stops), 1)} pips (median); held ${days(medianOf(a.held))} d (median), nights ${(a.nights / a.n).toFixed(2)} a trade${r ? `; R ${num(r.sum / r.n, 3)} a trade` : ""}${tp23 ? `; TP2 ${reach(tp23[0])}, TP3 ${reach(tp23[1])}` : ""}`,
+    `  ${"".padEnd(16)} the most against: median ${num(medianOf(a.mae), 1)}, 95% ${num(quantile(a.mae, 0.95), 1)}, worst ${num(a.mae.length ? Math.max(...a.mae) : null, 1)} pips${a.maeR.length ? ` (R ${num(medianOf(a.maeR), 2)}, ${num(quantile(a.maeR, 0.95), 2)}, ${num(Math.max(...a.maeR), 2)})` : ""}; the wins at TP1 (${wins.length}): median ${num(medianOf(wins), 1)}, 95% ${num(quantile(wins, 0.95), 1)}, worst ${num(wins.length ? Math.max(...wins) : null, 1)}${a.maeWinR.length ? ` (R ${num(medianOf(a.maeWinR), 2)}, ${num(quantile(a.maeWinR, 0.95), 2)}, ${num(Math.max(...a.maeWinR), 2)})` : ""}, 30 pips or more ${pct(wins.filter((x) => x >= 30).length, wins.length)}, 100 or more ${pct(wins.filter((x) => x >= 100).length, wins.length)}; wins the stop 30 cut on the same trade ${pct(a.winsCut, wins.length)}`,
   ].join("\n");
 };
 const OWNER_ROWS = RULES.map((r) => r.key);
@@ -1289,7 +1299,7 @@ for (const rk of OWNER_ROWS) {
 // told beside the call
 const TOLD_CUTS = ["either BUY|CALL", "either SELL|CALL", "qtrend|CALL", "ultra|CALL", "strong|CALL", "either|AB", "either|C", "either|all", "coin|CALL", "coin|all"];
 if (groups.has(KEY)) {
-  const K = CANDIDATES.length * (SLIPS.length + TOLD_CUTS.length + CALL.length);
+  const K = CANDIDATES.length * (SLIPS.length + TOLD_CUTS.length + PAIRS.length);
   console.log(`\n== TOLD, the whole period, "rule less now" (not called on; ${K} looks in this table: Bonferroni over ${K} beside each 95%; a cut that looks good is only a candidate, to be fixed beforehand and measured on the data from 2026-10-05)`);
   for (const key of CANDIDATES) {
     for (const s of SLIPS) {
@@ -1301,9 +1311,10 @@ if (groups.has(KEY)) {
       const h = [0, 1].map((p) => aggAt(k, p as 0 | 1, key + DIFF));
       console.log(`  ${key} ${k.padEnd(16)} ${num(d ? d.sum / d.n : null)} ${ciText(d, K)} of ${d?.n ?? 0} (halves ${h.map((x) => num(x ? x.sum / x.n : null)).join(", ")})`);
     }
-    const per = CALL.map((p) => ({ p, d: aggFull(`either|pair ${p}`, key + DIFF) })).filter((x) => x.d && x.d.n > 0) as Array<{ p: string; d: Agg }>;
-    for (const x of per) console.log(`  ${key} ${x.p.padEnd(16)} ${num(x.d.sum / x.d.n)} ${ciText(x.d, K)} of ${x.d.n}`);
-    if (per.length) console.log(`  ${key} the pairs weighted alike: ${num(per.reduce((a, x) => a + x.d.sum / x.d.n, 0) / per.length)} (${per.length} pairs)`);
+    const per = PAIRS.map((p) => ({ p, d: aggFull(`either|pair ${p}`, key + DIFF) })).filter((x) => x.d && x.d.n > 0) as Array<{ p: string; d: Agg }>;
+    for (const x of per) console.log(`  ${key} ${x.p.padEnd(16)} ${num(x.d.sum / x.d.n)} ${ciText(x.d, K)} of ${x.d.n}${CALL.includes(x.p) ? "" : ` (${groupOf(x.p)})`}`);
+    const inCall = per.filter((x) => CALL.includes(x.p));
+    if (inCall.length) console.log(`  ${key} CALL's pairs weighted alike: ${num(inCall.reduce((a, x) => a + x.d.sum / x.d.n, 0) / inCall.length)} (${inCall.length} pairs)`);
     const nights = (k: string) => {
       const a = aggFull(KEY.replace("either", k), key);
       const b = aggFull(KEY.replace("either", k), NOW_RULE);
@@ -1403,11 +1414,12 @@ const aggOut = (a: Agg | undefined) => {
     nights: a.nights,
     stop: medianOf(a.stops),
     mae: a.mae.length ? { med: medianOf(a.mae), p95: quantile(a.mae, 0.95), worst: Math.max(...a.mae) } : null,
-    maeWin: a.maeWin.length ? { n: a.maeWin.length, med: medianOf(a.maeWin), p95: quantile(a.maeWin, 0.95), worst: Math.max(...a.maeWin), over30: a.maeWin.filter((x) => x >= 30).length, over100: a.maeWin.filter((x) => x >= 100).length } : null,
+    maeWin: a.maeWin.length ? { n: a.maeWin.length, med: medianOf(a.maeWin), p95: quantile(a.maeWin, 0.95), worst: Math.max(...a.maeWin), over30: a.maeWin.filter((x) => x >= 30).length, over100: a.maeWin.filter((x) => x >= 100).length, cutByNow: a.winsCut } : null,
+    maeWinR: a.maeWinR.length ? { med: medianOf(a.maeWinR), p95: quantile(a.maeWinR, 0.95), worst: Math.max(...a.maeWinR) } : null,
     ...tailOf(a),
   };
 };
-const OUT_KEYS = ["either|CALL", "either|AB", "either|C", "either|all", "coin|CALL", "coin|all"];
+const OUT_KEYS = ["either|CALL", "either|AB", "either|C", "either|all", "coin|CALL", "coin|all", ...PAIRS.map((p) => `either|pair ${p}`)];
 await Deno.writeTextFile(
   `${OUT}/stop2n${tag}.json`,
   JSON.stringify({
@@ -1442,3 +1454,6 @@ await Deno.writeTextFile(
 // the call's trades, for research/stop2n-check.py
 const cols = (p: string) => ["sl", "exit", "at", "px", "pips"].map((c) => `${p}_${c}`);
 await Deno.writeTextFile(`${OUT}/stop2n-trades${tag}.csv`, ["pair", "side", "bar", "t", "close", "fill", "unit", "digits", "A", "N", "day", "tp", ...cols("now"), ...cols("n2"), ...cols("a2")].join(",") + "\n" + csvRows.join("\n") + "\n");
+// the data's run fails when its own checks differ (the outputs kept for
+// looking into it): its numbers are not to be read
+if (allDiffer !== 0 && !SYNTHETIC) Deno.exit(1);

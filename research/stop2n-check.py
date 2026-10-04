@@ -200,6 +200,10 @@ def main():
                 break
 
     wrong = []
+    # the run's own checks first: a run whose checks differ is not to be read,
+    # whatever the trades below say
+    if run.get("allDiffer", 1) != 0 or run.get("failedReads", 1) != 0:
+        wrong.append(f"the run's own checks differ ({run.get('allDiffer')}) or GMO reads failed ({run.get('failedReads')})")
     checked = 0
     differ_rows = 0
     by_pair = {}

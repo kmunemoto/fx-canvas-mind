@@ -148,6 +148,9 @@ def main():
         if not r.get("synthetic"):
             continue
         runs.setdefault(r["synth"], []).append(r)
+    if not runs:
+        print(f"no runs in {folder}")
+        sys.exit(1)
     for synth in runs:
         runs[synth].sort(key=lambda r: r["seed"])
     told = [f"{k} {len(v)} (seeds {v[0]['seed']} .. {v[-1]['seed']})" for k, v in runs.items()]
@@ -238,6 +241,14 @@ def main():
                 if s and s["se"] is not None:
                     sds.append(s["se"] * math.sqrt(s["n"]))
             print(f"    {k}: clearly better {', '.join(row)} of {len(rs)}; the smallest difference it could find {sum(mdes) / max(1, len(mdes)):.2f} pips (mean of the runs); the per-trade sd of less now (by week) {sum(sds) / max(1, len(sds)):.1f}")
+
+    # the runs §8.97 fixes, and all on the same pairs and period
+    want = {"path": list(range(7, 57)), "drift": list(range(7, 17)), "against": list(range(7, 17))}
+    for synth, seeds in want.items():
+        got = [r["seed"] for r in runs.get(synth, [])]
+        gates.append((f"{synth}: the runs of seeds {seeds[0]} .. {seeds[-1]} ({len(got)} found)", got == seeds))
+    shapes = {(tuple(c["pair"] for c in r["coverage"]), r["start"], r["split"], r["now"], r.get("weekend")) for v in runs.values() for r in v}
+    gates.append((f"every run on the same pairs, period and weekend rule ({len(shapes)} kinds)", len(shapes) == 1))
 
     print("\n== THE GATES")
     for what, ok in gates:
