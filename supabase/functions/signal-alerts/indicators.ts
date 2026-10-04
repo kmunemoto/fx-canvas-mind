@@ -37,7 +37,8 @@ export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
 // signal from being mailed twice, and each row keeps the stop it was mailed
-// with (signal_alerts.stop; 30 pips on a currency pair since #166).
+// with (signal_alerts.stop; 30 pips on a currency pair from #166, 13 on
+// gold and the pairs since #192, which left the id as it was too).
 export const QTREND_RULE_ID = `qtrend_${QT_DEFAULTS.period}_${QT_DEFAULTS.atrPeriod}_${QT_DEFAULTS.mult}_v1`;
 export const ULTRA_RULE_ID =
   `ultra_rsi${ULTRA_DEFAULTS.rsiLength}_${ULTRA_DEFAULTS.oversold}_${ULTRA_DEFAULTS.overbought}` +
@@ -121,9 +122,9 @@ export const indicatorSignals = (
     return age >= 0 && age <= freshMs ? open : null;
   };
   const out: IndicatorSignal[] = [];
-  // #166: a currency pair's stop 30 pips; #168: gold's targets $30, $60 and
-  // $90 (its stop the video's $10); #173: a currency pair's targets 20, 40
-  // and 60 pips
+  // #192: the stop 13 and the targets 4, 10 and 16, dollars on gold and pips
+  // on a currency pair (before it #166's stop of 30 pips, #168's gold targets
+  // of $30, $60 and $90, #173's pair targets of 20, 40 and 60 pips)
   const levels = ultraParamsFor(isGold(pair));
   const qt = qTrend(bars, QT_DEFAULTS, bars.length - 1);
   const atr = pineAtr(bars, QT_DEFAULTS.atrPeriod);
@@ -402,48 +403,62 @@ export const keepableKlines = (body: unknown): boolean =>
 // 2026-09-30T14:40:11Z, GitHub Actions run 37134322956, docs §8.93; the other
 // timeframes came out the same to the trade). Before: Q-Trend 58.3 / -1.47,
 // ULTRA 60.1 / -0.54 (run 37133903888, WEEKEND=stamp, repeating 36730814776).
+// #192: measured again at the levels since, the stop 13 and TP1 4 (TP2 10,
+// TP3 16): tf-winrate with SL=13, TP1=4, TP2=10, TP3=16, the same end and
+// WEEKEND=inside (GitHub Actions run 37191488441, docs §8.98); the same
+// program at #173's levels (run 37191489765) came out as the numbers then,
+// every one. Those were: Q-Trend 58.0 / -2.03, 58.4 / -1.8, 59.2 / -1.33,
+// 59.1 / -1.17, 55.1 / -6.92; ULTRA 58.2 / -1.81, 58.0 / -1.79, 58.4 /
+// -1.87, 60.8 / -0.37, 50.0 / -9.5 (5min to 1day).
 export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
-    "5min": { win: 58.0, pips: -2.03 },
-    "15min": { win: 58.4, pips: -1.8 },
-    "1h": { win: 59.2, pips: -1.33 },
-    "4h": { win: 59.1, pips: -1.17 },
-    "1day": { win: 55.1, pips: -6.92 },
+    "5min": { win: 70.3, pips: -2.03 },
+    "15min": { win: 70.5, pips: -1.9 },
+    "1h": { win: 72.6, pips: -1.46 },
+    "4h": { win: 73.6, pips: -1.07 },
+    "1day": { win: 50.8, pips: -8.88 },
   },
   ultra: {
-    "5min": { win: 58.2, pips: -1.81 },
-    "15min": { win: 58.0, pips: -1.79 },
-    "1h": { win: 58.4, pips: -1.87 },
-    "4h": { win: 60.8, pips: -0.37 },
-    "1day": { win: 50.0, pips: -9.5 },
+    "5min": { win: 71.9, pips: -1.62 },
+    "15min": { win: 72.0, pips: -1.51 },
+    "1h": { win: 72.8, pips: -1.6 },
+    "4h": { win: 74.5, pips: -0.94 },
+    "1day": { win: 53.0, pips: -8.79 },
   },
 };
-// #168: gold's, at its levels since (TP1 $30, the stop $10): research/gold.ts
+// #168: gold's, at its levels then (TP1 $30, the stop $10): research/gold.ts
 // on Dukascopy's gold, bid and ask, cut into bars as the app holds Twelve
 // Data's (docs §8.79, §8.80; the "Study gold" run 36678229867), 2024-01-01
 // to 2026-09-28, each signal the sweep would mail entered at its bar's close
 // on the side it fills on and followed on 5-minute bid/ask, as the pairs'
 // above. `usd`: dollars a trade.
+// #192: measured again at the levels since, TP1 $4 and the stop $13 (the
+// same program, prices and period: the "Study gold" run 37191490950, its job
+// "4h tw, daily tw, fill twelve", the lines "MAIL #192"; its lines "MAIL
+// #168" came out as #168's to the digit, docs §8.98). #168's: Q-Trend 25.5 /
+// -0.09, 25.6 / -0.01, 25.6 / -0.03, 27.2 / +0.59, 26.5 / +0.21; ULTRA 22.8 /
+// -1.14, 21.4 / -1.68, 23.9 / -0.74, 20.8 / -1.97, 15.4 / -4.45 (5min to 1day).
 export const GOLD_MEASURED: Record<IndicatorRule, Record<string, { win: number; usd: number }>> = {
   qtrend: {
-    "5min": { win: 25.5, usd: -0.09 },
-    "15min": { win: 25.6, usd: -0.01 },
-    "1h": { win: 25.6, usd: -0.03 },
-    "4h": { win: 27.2, usd: 0.59 },
-    "1day": { win: 26.5, usd: 0.21 },
+    "5min": { win: 74.3, usd: -0.66 },
+    "15min": { win: 74.3, usd: -0.65 },
+    "1h": { win: 75.3, usd: -0.5 },
+    "4h": { win: 73.9, usd: -0.68 },
+    "1day": { win: 78.0, usd: -0.19 },
   },
   ultra: {
-    "5min": { win: 22.8, usd: -1.14 },
-    "15min": { win: 21.4, usd: -1.68 },
-    "1h": { win: 23.9, usd: -0.74 },
-    "4h": { win: 20.8, usd: -1.97 },
-    "1day": { win: 15.4, usd: -4.45 },
+    "5min": { win: 73.0, usd: -0.87 },
+    "15min": { win: 73.6, usd: -0.78 },
+    "1h": { win: 72.1, usd: -1.05 },
+    "4h": { win: 72.5, usd: -1.02 },
+    "1day": { win: 42.3, usd: -6.41 },
   },
 };
 
 // the sentence saying so, on this email's timeframe. The share of TP1
 // before the stop that breaks even, spread aside: the stop over the stop and
-// TP1 (30 pips against 20: 60%, #173; gold's $10 against $30: 25%).
+// TP1 (#192: 13 against 4 on gold and the pairs both, 76%; before it 30 pips
+// against 20, 60%, and gold's $10 against $30, 25%).
 export const breakEvenPct = (gold: boolean): number => {
   const o = ultraParamsFor(gold);
   return Math.round((100 * o.sl) / (o.sl + o.tp1));
@@ -488,7 +503,9 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const twelve = isTwelvePair(s.pair);
   const r1 = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(1));
   // #173: a target at or below zero (a sell's TP3 on HUF/JPY, about 0.49
-  // yen: 60 pips is 0.60) is no price, and is said to be none
+  // yen, when TP3 was 60 pips: 0.60) is no price, and is said to be none.
+  // #192's 16 pips (0.16) reach none on the pairs mailed now; kept for a
+  // level or a pair to come
   const tpLine = (k: number, v: number) =>
     v > 0
       ? lang === "en" ? `  TP${k + 1} ${px(v)} (${dist(v)})` : `  利確${k + 1} ${px(v)}（${dist(v)}）`
@@ -531,12 +548,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)} (${cross})`,
       ].join("\n"),
       [
-        gold ? "ULTRA's levels (the video's stop; the targets $30, $60 and $90):" : "ULTRA's levels (the targets 20, 40 and 60 pips; the stop 30 pips):",
+        gold ? "ULTRA's levels (the stop $13; the targets $4, $10 and $16):" : "ULTRA's levels (the stop 13 pips; the targets 4, 10 and 16 pips):",
         `  Entry ≈ ${px(s.close)}`,
         `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
         ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
-      `ULTRA is built from F-INVEST's video (its code is not published). The video shows a 79–80% win rate (on gold), with a stop of 10.${gold ? " On gold this app sets the targets at $30, $60 and $90 (the video's are 5, 10 and 15), chosen after measuring them." : " On currency pairs this app sets the stop at 30 pips (from its own measurements) and the targets at 20, 40 and 60 pips (the video's are 5, 10 and 15)."} ${measuredLine(s, "en")}`,
+      `ULTRA is built from F-INVEST's video (its code is not published), and its signals are that video's. Its stop and targets follow the chart of a second F-INVEST video (its premium version, on gold, whose table shows TP1 reached 80–82% of the time; its signals have filters this app does not have): the stop 13 and the targets 4, 10 and 16, ${gold ? "dollars on gold" : "pips on currency pairs"}. ${measuredLine(s, "en")}`,
       ...footer,
     ]);
   }
@@ -574,12 +591,12 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     `${s.pair} の${tf}で、ULTRA の${sideU}のサインが出ました。`,
     [`判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`, `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)}（${cross}）`].join("\n"),
     [
-      gold ? "ULTRA の目安（損切りは動画の設定、利確は30・60・90ドル）:" : "ULTRA の目安（利確は20・40・60pips、損切りは30pips）:",
+      gold ? "ULTRA の目安（損切りは13ドル、利確は4・10・16ドル）:" : "ULTRA の目安（損切りは13pips、利確は4・10・16pips）:",
       `  エントリー ≈ ${px(s.close)}`,
       `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
       ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
     ].join("\n"),
-    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。動画（金）の勝率は79〜80%で、損切りは10です。${gold ? "金では、このアプリで測ったうえで、利確を30・60・90ドルにしています（動画は5・10・15）。" : "FX では、損切りを30pips（このアプリで測った結果から）、利確を20・40・60pips（動画は5・10・15）にしています。"}${measuredLine(s, "ja")}`,
+    `ULTRA は F-INVEST の動画の設定と印から作ったものです（コードは公開されていません）。サインの出し方はその動画のままです。損切り・利確は、F-INVEST のもう一つの動画（上位版・金。表では利確1に届いたのが80〜82%。サインには、このアプリにない絞り込みがあります）のチャートの線に合わせて、損切り13・利確4・10・16（${gold ? "金はドル" : "FX は pips"}）にしています。${measuredLine(s, "ja")}`,
     ...footer,
   ]);
 };

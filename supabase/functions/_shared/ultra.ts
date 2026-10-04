@@ -32,16 +32,20 @@
 // SL in the video); each signal is followed on its own, whatever came
 // before it. On a currency pair the same numbers are pips (10 pips, 5/10/15
 // pips): $10 on gold taken as a currency's price would be ten yen on USD/JPY.
-// #166: on a currency pair the stop is 30 pips (ULTRA_PAIRS below); gold
-// keeps the video's $10. #168: gold's targets are $30, $60 and $90
-// (ULTRA_GOLD below). #173: a currency pair's targets are 20, 40 and 60 pips
-// (ULTRA_PAIRS).
+// #166: on a currency pair the stop was 30 pips; #168: gold's targets $30,
+// $60 and $90 (its stop the video's $10); #173: a currency pair's targets
+// 20, 40 and 60 pips. #192: gold and the currency pairs both at a second
+// video's levels, the stop 13 and the targets 4, 10 and 16 (ULTRA_PAIRS and
+// ULTRA_GOLD below); the signals are still this video's.
 //
 // Shown on the chart, and #155: the email alerts (signal-alerts) judge on
 // its signals too, from this same code (moved here from src/lib/ultra.ts,
 // which re-exports it). No record is kept of them. #157: the video's
 // 79–80% is on gold; on GMO's FX pairs, spread paid, TP1 came before the
-// stop 61–64% of the time on 5-minute to 4-hour bars (docs §8.69).
+// stop 61–64% of the time on 5-minute to 4-hour bars (docs §8.69), at the
+// stop 10 and TP1 5. #192: at the stop 13 and TP1 4, 70–75% on GMO's FX
+// pairs and 72–75% on gold, 5-minute to 4-hour bars, every one losing on
+// average (breaking even needs about 76%; docs §8.98).
 
 import { pineRma, type Series } from "./pine.ts";
 
@@ -50,22 +54,25 @@ type Bar = { high: number; low: number; close: number };
 export const ULTRA_DEFAULTS = { rsiLength: 14, overbought: 70, oversold: 30, sl: 10, tp1: 5, tp2: 10, tp3: 15 };
 export type UltraParams = typeof ULTRA_DEFAULTS;
 
-// #166: the stop on a currency pair. The owner (2026-09-29), shown the stops
-// 10 to 100 pips measured on the emails' 4-hour signals (docs §8.77), chose
-// 30 pips (「2で」). The signals themselves do not depend on it.
-// #173: the targets on a currency pair. The owner (2026-09-30): 「利確幅、
-// 狭すぎる」, then 「利確を広げてください」 and, offered TP1 10, 20 or 30 pips or
-// waiting for the measurement of 10 to 90 (research/widetp.ts, not yet run
-// on the data then), chose TP1 20 pips; TP2 and TP3 twice and three times it,
-// as the video's 5, 10 and 15. The stop stays 30. The signals themselves do
-// not depend on them.
-export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 30, tp1: 20, tp2: 40, tp3: 60 };
-// #168: gold's targets. The owner (2026-09-30), shown gold measured with
-// targets of $5 to $50 and stops of $10 up (docs §8.79: none clearly better
-// than now), chose wider targets (「2で」): TP1 $30, and TP2 and TP3 twice and
-// three times it, as the video's 5, 10 and 15; the stop stays the video's
-// $10. The signals themselves do not depend on them.
-export const ULTRA_GOLD: UltraParams = { ...ULTRA_DEFAULTS, tp1: 30, tp2: 60, tp3: 90 };
+// Before #192: #166, the stop on a currency pair 30 pips (the owner
+// 2026-09-29, shown the stops 10 to 100 pips measured on the emails' 4-hour
+// signals, docs §8.77: 「2で」); #173, a currency pair's targets 20, 40 and 60
+// pips (the owner 2026-09-30: 「利確幅、狭すぎる」, 「利確を広げてください」);
+// #168, gold's targets $30, $60 and $90 with the video's stop of $10 (the
+// owner 2026-09-30, docs §8.79: 「2で」).
+// #192: the owner (2026-10-04), with a second video of F-INVEST's (its
+// "F_INVEST_PREMIUM_EN", the table headed "F-INVEST PREMIUM", on gold):
+// 「利確と損切り、これに合わせて」, for gold and the currency pairs both
+// (「金とFXの両方」). The video's settings dialog reads SL 15 and TP 4, 10 and
+// 15; its chart's lines are 4, 10 and 16 above an entry and the stop about 13
+// below it. The owner chose the chart's (「16（チャートの線どおり）」,
+// 「13（チャートの線どおり）」): the stop 13, the targets 4, 10 and 16, dollars
+// on gold and pips on a currency pair (as #151). Only the levels: that
+// indicator's signals (its filters) are not built, the signals are still
+// ULTRA EN's above, and they do not depend on the levels. ULTRA_DEFAULTS
+// stays the first video's: the emails' rule id is made from it.
+export const ULTRA_PAIRS: UltraParams = { ...ULTRA_DEFAULTS, sl: 13, tp1: 4, tp2: 10, tp3: 16 };
+export const ULTRA_GOLD: UltraParams = { ...ULTRA_DEFAULTS, sl: 13, tp1: 4, tp2: 10, tp3: 16 };
 // the settings a chart's levels are drawn and mailed at
 export const ultraParamsFor = (gold: boolean): UltraParams => (gold ? ULTRA_GOLD : ULTRA_PAIRS);
 

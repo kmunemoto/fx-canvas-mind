@@ -889,7 +889,9 @@ const PriceChart = ({
   const qtOpen = qtTrade && qtTrade.end === null ? qtTrade : null;
   const ulTagFsz = (narrow ? 7 : 8) * (full ? 1.25 : 1);
   // #173: a level at or below zero (a sell's TP3 on HUF/JPY, about 0.49
-  // yen: 60 pips is 0.60) is no price: neither drawn nor tagged
+  // yen, when TP3 was 60 pips: 0.60) is no price: neither drawn nor tagged.
+  // #192's 16 pips (0.16) reach none on the pairs charted now; kept for a
+  // level or a pair to come
   const planLevels = (tr: { entry: number; sl: number; tps: [number, number, number] }, dash: string) =>
     [
       { key: "tp3", text: "TP3", v: tr.tps[2], color: ULTRA_COLORS.tp, dash },
