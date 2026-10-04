@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "prepare, synthetic or real"
+        description: "prepare, synthetic, real or check (real again from the kept day files, then research/gotobi-check.py)"
         default: "prepare"
       first:
         description: "real: GMO's first 1-minute day file with both sides (from prepare, committed in docs §8.96)"
@@ -95,7 +95,7 @@ jobs:
           retention-days: 30
 
   real:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'real'
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'real' || inputs.mode == 'check')
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -121,6 +121,10 @@ jobs:
           --allow-write=research/.cache,research/out
           --allow-env=MODE,FIRST,END,BOOT,NULLS,NEFFECT,HOLIDAYS_FILE
           research/gotobi.ts
+      # the independent check of every trade from the raw day files
+      - if: inputs.mode == 'check'
+        name: Check every trade again from the raw files
+        run: python3 research/gotobi-check.py
       # kept even when the run fails, so the files fetched are not fetched again
       - if: always()
         uses: actions/cache/save@v4
