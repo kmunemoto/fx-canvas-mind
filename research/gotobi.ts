@@ -112,6 +112,13 @@ const readHolidays = async () => {
   return { list, hash, source: local ?? HOLIDAY_URL };
 };
 
+/** the calendar years from one date to another */
+const yearsOf = (from: string, to: string) => {
+  const out: number[] = [];
+  for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) out.push(y);
+  return out;
+};
+
 // ---- GMO's day files ---------------------------------------------------------------------
 type Rows = Array<{ t: number; o: number; h: number; l: number; c: number }>;
 const fileKeyOf = (t: number) => dateOf(Math.floor((t + 3 * HOUR) / DAY) * DAY); // GMO's day starts 06:00 JST
@@ -150,7 +157,9 @@ if (MODE === "prepare") {
   console.log(`holidays: ${source} rows ${list.rows} sha256 ${hash}`);
   const years = [];
   for (let y = 2007; y <= 2026; y++) years.push(y);
-  const problems = checkHolidays(list, years.filter((y) => y !== 2019 && y >= 2007));
+  // the known days now; the 16-21 a year rule (§8.96) for the measured years, once the first day is known
+  // (Kobe's years are only counted: 2011 has 15, no substitute holiday that year; 2019 has 22)
+  const problems = checkHolidays(list, []);
   for (const y of years) console.log(`  ${y}: ${[...list.days.keys()].filter((d) => d.startsWith(`${y}-`)).length} holidays`);
   if (problems.length) {
     console.log(`HOLIDAY LIST PROBLEMS: ${problems.join("; ")}`);
@@ -192,8 +201,12 @@ if (MODE === "prepare") {
   console.log(`FIRST GMO 1-minute day file with both sides: ${first}`);
   if (first) {
     const end = Deno.env.get("END") ?? "2026-10-02";
+    const measured = yearsOf(first, end);
+    const p2 = checkHolidays(list, measured);
+    console.log(`holiday list, the measured years ${measured.join(", ")}: ${p2.length ? "PROBLEMS " + p2.join("; ") : "16 to 21 each, known days present"}`);
     const cal = buildCalendar(addDays(first, 1), end, list.days);
     reportCalendar(cal, list.days);
+    if (p2.length) Deno.exit(1);
   }
   console.log(`requests ${requests}`);
 }
@@ -509,7 +522,7 @@ if (MODE === "real") {
   if (!FIRST || !END) throw new Error("FIRST and END are required (docs §8.96)");
   const { list, hash, source } = await readHolidays();
   console.log(`holidays: ${source} rows ${list.rows} sha256 ${hash}`);
-  const problems = checkHolidays(list, [2023, 2024, 2025, 2026]);
+  const problems = checkHolidays(list, yearsOf(FIRST, END));
   if (problems.length) throw new Error(`holiday list: ${problems.join("; ")}`);
   const cal = buildCalendar(addDays(FIRST, 1), END, list.days);
   reportCalendar(cal, list.days);
