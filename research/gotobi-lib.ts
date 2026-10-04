@@ -63,6 +63,10 @@ export const yearEndShut = (date: string): boolean => {
   return md === "12-31" || md === "01-01" || md === "01-02" || md === "01-03";
 };
 
+/** why a Monday-to-Friday date is not a business day (the holiday's name, or 12/31-1/3), or null */
+export const excludedWhy = (date: string, holidays: Map<string, string>): string | null =>
+  holidays.has(date) ? `holiday ${holidays.get(date)}` : yearEndShut(date) ? "12/31-1/3" : null;
+
 // ---- the calendar ------------------------------------------------------------------
 
 export type DayKind = "gotobi" | "control" | "ambiguous";

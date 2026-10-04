@@ -25,7 +25,6 @@ import {
   addDays,
   addFile,
   autocorr1,
-  type Bar,
   buildCalendar,
   type Calendar,
   checkHolidays,
@@ -33,11 +32,13 @@ import {
   dateOf,
   decide,
   entryAt,
+  excludedWhy,
   exitAt,
   HOUR,
   hourEntryAt,
   joinSides,
   legs,
+  matchedCi,
   matchedDiff,
   mean,
   milli,
@@ -106,9 +107,8 @@ const readHolidays = async () => {
   const text = local ? new TextDecoder().decode(bytes) : new TextDecoder("shift_jis").decode(bytes);
   const list = parseHolidayCsv(text);
   const hash = await sha256(bytes);
-  if (!local) {
-    await Deno.writeFile(`${OUT}/syukujitsu.csv`, bytes);
-  }
+  await Deno.writeFile(`${OUT}/syukujitsu.csv`, bytes);
+  await Deno.writeTextFile(`${OUT}/syukujitsu.txt`, `source ${local ?? HOLIDAY_URL}\nrows ${list.rows}\nsha256 ${hash}\n`);
   return { list, hash, source: local ?? HOLIDAY_URL };
 };
 
@@ -120,6 +120,26 @@ const yearsOf = (from: string, to: string) => {
 };
 
 // ---- GMO's day files ---------------------------------------------------------------------
+/** a GMO kline answer that can be used and kept: status 0 and a data list (a maintenance answer is status 5) */
+const goodBody = (text: string): boolean => {
+  try {
+    const b = JSON.parse(text);
+    return b?.status === 0 && Array.isArray(b?.data);
+  } catch {
+    return false;
+  }
+};
+/** a day file's text, "null" for a 404; an answer that is not usable is read again, three times, then the run stops */
+const fetchDayFile = async (side: "bid" | "ask", date: string): Promise<string> => {
+  for (let attempt = 1; ; attempt++) {
+    const r = await getBytes(klineUrl("USD_JPY", side, "1min", compact(date)));
+    const text = r.status === 404 ? "null" : new TextDecoder().decode(r.bytes);
+    if (text === "null" || goodBody(text)) return text;
+    if (attempt >= 4) throw new Error(`GMO ${side} ${date}: no usable answer after ${attempt} tries: ${text.slice(0, 200)}`);
+    await sleep(1000 * attempt);
+  }
+};
+
 type Rows = Array<{ t: number; o: number; h: number; l: number; c: number }>;
 const fileKeyOf = (t: number) => dateOf(Math.floor((t + 3 * HOUR) / DAY) * DAY); // GMO's day starts 06:00 JST
 const compact = (date: string) => date.replaceAll("-", "");
@@ -134,10 +154,11 @@ const readDayFile = async (side: "bid" | "ask", date: string, useCache: boolean)
     } catch {
       text = null;
     }
+    // a file an older run kept that is not usable (cut short): read it again
+    if (text !== null && text !== "null" && !goodBody(text)) text = null;
   }
   if (text === null) {
-    const r = await getBytes(klineUrl("USD_JPY", side, "1min", compact(date)));
-    text = r.status === 404 ? "null" : new TextDecoder().decode(r.bytes);
+    text = await fetchDayFile(side, date);
     if (useCache) {
       await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
       await Deno.writeTextFile(path, text);
@@ -170,13 +191,13 @@ if (MODE === "prepare") {
   const kg = kobe.days.filter((d) => d.kind === "gotobi").length;
   const kc = kobe.days.filter((d) => d.kind === "control").length;
   const ka = kobe.days.filter((d) => d.kind === "ambiguous").length;
-  console.log(`Kobe's period 2007-01-01..2020-01-31 by this calendar: gotobi ${kg} (paper 900), not gotobi Mon-Fri business days ${kc + ka} (control ${kc}, ambiguous ${ka}; paper 2,513)`);
+  let monFri = 0;
+  for (let d = "2007-01-01"; utcOf(d) <= utcOf("2020-01-31"); d = addDays(d, 1)) if (weekday(d) >= 1 && weekday(d) <= 5) monFri++;
+  console.log(`Kobe's period 2007-01-01..2020-01-31 by this calendar: gotobi ${kg} (paper 900); not gotobi Mon-Fri days ${monFri - kg} of ${monFri} Mon-Fri days, holidays and 12/31-1/3 included (paper 2,513); of them business days ${kc + ka} (control ${kc}, ambiguous ${ka})`);
   // GMO's first 1-minute day file: the first of each month, then each day of the month before it
   const has = async (side: "bid" | "ask", date: string) => {
-    const r = await getBytes(klineUrl("USD_JPY", side, "1min", compact(date)));
-    if (r.status === 404) return 0;
-    const body = JSON.parse(new TextDecoder().decode(r.bytes));
-    return Array.isArray(body?.data) ? body.data.length : 0;
+    const text = await fetchDayFile(side, date);
+    return text === "null" ? 0 : JSON.parse(text).data.length as number;
   };
   let firstMonth: string | null = null;
   for (let y = 2019; y <= 2026 && !firstMonth; y++) {
@@ -192,14 +213,26 @@ if (MODE === "prepare") {
   }
   if (!firstMonth) throw new Error("no 1-minute day file found");
   let first: string | null = null;
-  for (let d = addDays(firstMonth, -40); utcOf(d) <= utcOf(firstMonth) + 7 * DAY && !first; d = addDays(d, 1)) {
+  const scanFrom = addDays(firstMonth, -40);
+  for (let d = scanFrom; utcOf(d) <= utcOf(firstMonth) + 7 * DAY && !first; d = addDays(d, 1)) {
     const b = await has("bid", d);
     const a = b > 0 ? await has("ask", d) : 0;
     if (b > 0 || a > 0) console.log(`  ${d} (${WEEKDAY_NAMES[weekday(d)]}): bid ${b} ask ${a}`);
     if (b > 0 && a > 0) first = d;
   }
   console.log(`FIRST GMO 1-minute day file with both sides: ${first}`);
-  if (first) {
+  if (!first) {
+    console.log("NO FIRST DAY FOUND");
+    Deno.exit(1);
+  }
+  // the days scanned before it read no bid bar: at least 14 of them, or an earlier file could have been missed
+  const zeros = Math.round((utcOf(first) - utcOf(scanFrom)) / DAY);
+  console.log(`  days scanned before it with no bid bar: ${zeros} (from ${scanFrom})`);
+  if (zeros < 14) {
+    console.log("FEWER THAN 14 EMPTY DAYS BEFORE THE FIRST DAY: scan further back");
+    Deno.exit(1);
+  }
+  {
     const end = Deno.env.get("END") ?? "2026-10-02";
     const measured = yearsOf(first, end);
     const p2 = checkHolidays(list, measured);
@@ -216,7 +249,11 @@ function reportCalendar(cal: Calendar, holidays: Map<string, string>) {
   const byW = (kind: string) => [2, 3, 4, 5].map((w) => main.filter((d) => d.kind === kind && d.weekday === w).length);
   console.log(`calendar ${cal.days[0]?.date}..${cal.days.at(-1)?.date}: business days ${cal.days.length}; gotobi ${cal.days.filter((d) => d.kind === "gotobi").length} (Mondays ${cal.days.filter((d) => d.kind === "gotobi" && d.weekday === 1).length}), ambiguous ${cal.days.filter((d) => d.kind === "ambiguous").length}`);
   console.log(`  main (Tue-Fri): gotobi Tue/Wed/Thu/Fri ${byW("gotobi").join("/")}; control ${byW("control").join("/")}`);
-  for (const x of cal.dropped) console.log(`  no gotobi day for ${x.nominal} (${x.reason}); ambiguous ${x.ambiguous}`);
+  for (const x of cal.dropped) {
+    const k = cal.days.find((d) => d.date === x.ambiguous)?.kind;
+    console.log(`  no gotobi day for ${x.nominal} (${x.reason}); ${k === "ambiguous" ? `ambiguous ${x.ambiguous}` : `no ambiguous day (${x.ambiguous} is ${k ?? "outside the range"})`}`);
+  }
+  console.log(`  Mondays out of the main: gotobi ${cal.days.filter((d) => d.kind === "gotobi" && d.weekday === 1).length}, control ${cal.days.filter((d) => d.kind === "control" && d.weekday === 1).length}`);
   for (const d of cal.days.filter((d) => d.kind === "ambiguous")) console.log(`  ambiguous ${d.date} (${WEEKDAY_NAMES[d.weekday]})`);
   const g = main.filter((d) => d.kind === "gotobi");
   if (g.length) console.log(`  halves split at ${g[Math.floor(g.length / 2)].date} (the first gotobi day of the second half; ${Math.floor(g.length / 2)} before it)`);
@@ -312,13 +349,22 @@ if (MODE === "synthetic") {
   check("calendar 2024-02 has no gotobi day for the 30th or the 29th", !cal.days.some((x) => x.date === "2024-02-29" && x.kind === "gotobi"));
   check("2025-09-12 trade times", new Date(entryAt("2025-09-12")).toISOString() === "2025-09-11T14:00:00.000Z" && new Date(exitAt("2025-09-12")).toISOString() === "2025-09-12T00:55:00.000Z");
   check("2024-03-01 enters 2024-02-29 23:00 JST", new Date(entryAt("2024-03-01")).toISOString() === "2024-02-29T14:00:00.000Z");
-  const seen = new Set<string>();
-  let dup = 0;
-  for (const d of cal.days) {
-    if (seen.has(d.date)) dup++;
-    seen.add(d.date);
+  // every Mon-Fri day exactly once: gotobi, control or ambiguous in the calendar, or left out with a reason
+  const placed = new Map<string, number>();
+  for (const d of cal.days) placed.set(d.date, (placed.get(d.date) ?? 0) + 1);
+  let wrong = 0;
+  let leftOut = 0;
+  for (let d = "2023-10-30"; utcOf(d) <= utcOf("2026-10-02"); d = addDays(d, 1)) {
+    if (weekday(d) === 0 || weekday(d) === 6) {
+      if (placed.has(d)) wrong++;
+      continue;
+    }
+    const n = placed.get(d) ?? 0;
+    const reason = excludedWhy(d, list.days);
+    if (n + (reason ? 1 : 0) !== 1) wrong++;
+    if (reason) leftOut++;
   }
-  check("every business day in exactly one kind", dup === 0 && cal.days.every((d) => ["gotobi", "control", "ambiguous"].includes(d.kind)));
+  check("every Mon-Fri day in exactly one of gotobi / control / ambiguous / left out with a reason", wrong === 0 && cal.days.every((d) => ["gotobi", "control", "ambiguous"].includes(d.kind)), `${cal.days.length} in the calendar, ${leftOut} left out, ${wrong} wrong`);
   // ⑨ the hourly table's times
   check("⑨ hourly entries: 0-9 on the day, 22 and 23 the evening before",
     new Date(hourEntryAt("2025-09-12", 0)).toISOString() === "2025-09-11T15:00:00.000Z" &&
@@ -391,8 +437,8 @@ if (MODE === "synthetic") {
   check("the right sides: buy at the 23:00 ask, sell at the 9:55 bid", all(t9, (t) => t.pl === -6 && t.spreadIn === 10 && t.spreadOut === 2));
 
   // ---- the statistics, on made-up daily results ----
-  const FIRST = Deno.env.get("FIRST") ?? "2023-10-30";
-  const END = Deno.env.get("END") ?? "2026-10-02";
+  const FIRST = Deno.env.get("FIRST") || "2023-10-27";
+  const END = Deno.env.get("END") || "2026-10-02";
   const scal = buildCalendar(addDays(FIRST, 1), END, list.days).days.filter((d) => d.weekday !== 1 && d.kind !== "ambiguous");
   const nG = scal.filter((d) => d.kind === "gotobi").length;
   const nC = scal.length - nG;
@@ -401,7 +447,11 @@ if (MODE === "synthetic") {
   console.log(`made-up results on the calendar ${FIRST}..${END}: gotobi ${nG}, control ${nC}; Friday share ${pctf(friG)} / ${pctf(friC)}`);
   const REPS = Number(Deno.env.get("BOOT") ?? "2000");
   const COST = 6; // the spread paid in the made-up results, in tenths of a sen (0.6 sen)
-  const simulate = (seed: number, sigma: number, effect: (d: { kind: string; weekday: number }) => number, rough = true): Row[] => {
+  // the jumps' variance: 4 a year (of 250 days) of 200-500 sen, E[J^2] = (500^3 - 200^3) / (3 x 300)
+  const JUMP_VAR = (4 / 250) * ((500 ** 3 - 200 ** 3) / 900);
+  // total: the whole noise scaled so its standard deviation is sigma (as built, sigma is the part before the jumps)
+  const simulate = (seed: number, sigma: number, effect: (d: { kind: string; weekday: number }) => number, rough = true, total = false): Row[] => {
+    const k = total ? sigma / Math.sqrt(sigma * sigma + JUMP_VAR) : 1;
     const r = rng(seed);
     const gauss = () => {
       const u = Math.max(r(), 1e-12);
@@ -417,15 +467,16 @@ if (MODE === "synthetic") {
     const v = lv.map((z) => Math.exp(z));
     const norm = Math.sqrt(mean(v.map((z) => z * z)));
     return scal.map((d, i) => {
-      let y = -COST / 10 + effect(d) + sigma * (v[i] / norm) * gauss();
-      if (rough && r() < 4 / 250) y += (r() < 0.5 ? -1 : 1) * (200 + 300 * r());
+      let noise = sigma * (v[i] / norm) * gauss();
+      if (rough && r() < 4 / 250) noise += (r() < 0.5 ? -1 : 1) * (200 + 300 * r());
+      const y = -COST / 10 + effect(d) + k * noise;
       return { date: d.date, month: d.date.slice(0, 7), w: d.weekday, kind: d.kind as "gotobi" | "control", x: y };
     });
   };
-  const sims = (name: string, n: number, sigma: number, effect: (d: { kind: string; weekday: number }) => number, seed0: number) => {
+  const sims = (_name: string, n: number, sigma: number, effect: (d: { kind: string; weekday: number }) => number, seed0: number, total = false) => {
     const out = [];
     for (let i = 0; i < n; i++) {
-      const v = decide(simulate(seed0 + i, sigma, effect), REPS, 1_000_000 + seed0 + i, KOBE_DIFF);
+      const v = decide(simulate(seed0 + i, sigma, effect, true, total), REPS, 1_000_000 + seed0 + i, KOBE_DIFF);
       if (v) out.push(v);
     }
     return out;
@@ -494,21 +545,29 @@ if (MODE === "synthetic") {
   const pFri = mean(fri.map((v) => v.plain));
   check("Friday +10: matched difference 0±1", Math.abs(mFri) <= 1, fmt(mFri));
   check(`Friday +10: plain difference (${fmt(friG - friC, 3)}×10)±1`, Math.abs(pFri - (friG - friC) * 10) <= 1, fmt(pFri));
-  console.log("power table (share of runs reading 'candidate'; mean matched estimate):");
-  console.log("  sigma | +5 | +10 | +20 | Kobe (+8.3 / -0.7)");
-  for (const sigma of [50, 60, 70]) {
-    const cells: string[] = [];
-    for (const [i, eff] of [5, 10, 20].entries()) {
-      const s = sims(`+${eff}`, N2, sigma, (d) => (d.kind === "gotobi" ? eff : 0), 40_000 + sigma * 1000 + i * 300);
-      const m = mean(s.map((v) => v.matched));
-      check(`sigma ${sigma}, +${eff}: matched estimate within ±2`, Math.abs(m - eff) <= 2, fmt(m));
-      cells.push(`${pctf(share(s.map((v) => v.candidate)))} (${fmt(m, 1)})`);
+  // the standard deviation of a made-up day's result, within a run, averaged over 200 runs
+  const sdOf = (sigma: number, total: boolean) =>
+    mean(Array.from({ length: 200 }, (_, i) => Math.sqrt(variance(simulate(90_000 + i, sigma, () => 0, true, total).map((r) => r.x)))));
+  for (const total of [false, true]) {
+    console.log(total
+      ? "power table B, the whole noise (spells and jumps) scaled to the sd named (share of runs reading 'candidate'; mean matched estimate):"
+      : "power table A, as §8.96 built it: sigma is the part before the jumps (share of runs reading 'candidate'; mean matched estimate):");
+    console.log("  sigma (sd measured) | +5 | +10 | +20 | Kobe (+8.3 / -0.7)");
+    for (const sigma of [50, 60, 70]) {
+      const cells: string[] = [];
+      const tag = `${total ? "B" : "A"} sigma ${sigma}`;
+      for (const [i, eff] of [5, 10, 20].entries()) {
+        const s = sims(`+${eff}`, N2, sigma, (d) => (d.kind === "gotobi" ? eff : 0), 40_000 + sigma * 1000 + i * 300 + (total ? 500_000 : 0), total);
+        const m = mean(s.map((v) => v.matched));
+        check(`${tag}, +${eff}: matched estimate within ±2`, Math.abs(m - eff) <= 2, fmt(m));
+        cells.push(`${pctf(share(s.map((v) => v.candidate)))} (${fmt(m, 1)})`);
+      }
+      const k = sims("Kobe", N2, sigma, (d) => (d.kind === "gotobi" ? 8.3 : -0.7), 50_000 + sigma * 1000 + (total ? 500_000 : 0), total);
+      const km = mean(k.map((v) => v.matched));
+      check(`${tag}, Kobe's shape: matched estimate within ±2 of 9.0`, Math.abs(km - 9) <= 2, fmt(km));
+      cells.push(`${pctf(share(k.map((v) => v.candidate)))} (${fmt(km, 1)})`);
+      console.log(`  ${sigma} (${fmt(sdOf(sigma, total), 1)}) | ${cells.join(" | ")}`);
     }
-    const k = sims("Kobe", N2, sigma, (d) => (d.kind === "gotobi" ? 8.3 : -0.7), 50_000 + sigma * 1000);
-    const km = mean(k.map((v) => v.matched));
-    check(`sigma ${sigma}, Kobe's shape: matched estimate within ±2 of 9.0`, Math.abs(km - 9) <= 2, fmt(km));
-    cells.push(`${pctf(share(k.map((v) => v.candidate)))} (${fmt(km, 1)})`);
-    console.log(`  ${sigma} | ${cells.join(" | ")}`);
   }
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length} checks, ${failed.length} failed${failed.length ? ": " + failed.map((f) => f.name).join("; ") : ""}`);
@@ -531,13 +590,16 @@ if (MODE === "real") {
   const bid: SideBars = new Map();
   const ask: SideBars = new Map();
   const missing = new Set<string>();
+  const weekend404: string[] = [];
   const fileLines: string[] = ["date\tside\tbars\tsha256"];
   for (let d = FIRST; utcOf(d) <= utcOf(END); d = addDays(d, 1)) {
     for (const side of ["bid", "ask"] as const) {
       const f = await readDayFile(side, d, true);
       fileLines.push(`${d}\t${side}\t${f.rows?.length ?? "404"}\t${f.hash}`);
       if (!f.rows) {
-        if (weekday(d) !== 0) missing.add(`${side}|${d}`);
+        // a Saturday or Sunday file holds no bar a trade uses (GMO's week ends Friday 21:00/22:00 UTC)
+        if (weekday(d) === 0 || weekday(d) === 6) weekend404.push(`${side}|${d}`);
+        else missing.add(`${side}|${d}`);
         continue;
       }
       addFile(side === "bid" ? bid : ask, f.rows);
@@ -546,12 +608,12 @@ if (MODE === "real") {
   await Deno.writeTextFile(`${OUT}/gotobi-files.tsv`, fileLines.join("\n") + "\n");
   const bars = joinSides(bid, ask);
   const missingAt = (t: number) => missing.has(`bid|${fileKeyOf(t)}`) || missing.has(`ask|${fileKeyOf(t)}`);
-  console.log(`bars: bid ${bid.size}, ask ${ask.size}, both ${bars.size}; day files missing (not Sunday): ${[...missing].join(" ") || "none"}; requests ${requests}`);
+  console.log(`bars: bid ${bid.size}, ask ${ask.size}, both ${bars.size}; Monday-Friday day files missing (404): ${[...missing].join(" ") || "none"}; Saturday/Sunday 404s: ${weekend404.length}; requests ${requests}`);
 
-  // gaps inside trading hours (Monday 07:00 JST to Saturday 06:00 JST), before any result
+  // gaps inside trading hours (Monday 08:00 JST to Saturday 05:00 JST) over the files read, before any result
   let gaps = 0;
   const gapDays = new Map<string, number>();
-  for (let t = utcOf(addDays(FIRST, 1)); t <= utcOf(END) + DAY; t += MIN) {
+  for (let t = utcOf(FIRST) - 3 * HOUR; t < utcOf(END) + 21 * HOUR; t += MIN) {
     const w = new Date(t).getUTCDay();
     const hm = (t % DAY) / MIN;
     const open = (w >= 1 && w <= 4) || (w === 5 && hm < 20 * 60) || (w === 0 && hm >= 23 * 60);
@@ -563,16 +625,24 @@ if (MODE === "real") {
   const bigGaps = [...gapDays].filter(([, n]) => n >= 30).sort();
   console.log(`minute bars missing in trading hours (Mon 08:00 JST to Sat 05:00 JST): ${gaps}; days missing 30+: ${bigGaps.map(([d, n]) => `${d}:${n}`).join(" ") || "none"}`);
 
-  // holidays: is there a bar at 23:00 JST on each?
-  const hs = [...list.days.keys()].filter((d) => utcOf(d) >= utcOf(FIRST) && utcOf(d) <= utcOf(END));
-  console.log(`holidays with a 23:00 JST bar: ${hs.filter((d) => usable(bars, utcOf(d) + 14 * HOUR)).length} of ${hs.length} (${hs.filter((d) => !usable(bars, utcOf(d) + 14 * HOUR)).join(" ") || "all have one"})`);
+  // holidays Monday to Thursday (their 23:00 JST is a trade's entry): is there a bar?
+  const hs = [...list.days.keys()].filter((d) => utcOf(d) >= utcOf(FIRST) && utcOf(d) <= utcOf(END) && weekday(d) >= 1 && weekday(d) <= 4).sort();
+  console.log(`Monday-Thursday holidays with a usable 23:00 JST bar: ${hs.filter((d) => usable(bars, utcOf(d) + 14 * HOUR)).length} of ${hs.length} (without: ${hs.filter((d) => !usable(bars, utcOf(d) + 14 * HOUR)).join(" ") || "none"})`);
 
-  // the trades
+  // the trades: every Monday-Friday day, in one of the calendar's kinds or left out with a reason
   type Done = { day: (typeof cal.days)[number]; trade: Trade };
+  const byDate = new Map(cal.days.map((d) => [d.date, d]));
   const done: Done[] = [];
-  const excluded: string[] = [];
+  const excluded: Array<{ date: string; kind: string; leg: string; reason: string }> = [];
   const csv: string[] = ["date,weekday,kind,why,entry_utc,buy,exit_utc,sell,exit_late_min,pl_sen,pl_mid_sen,spread_in_sen,spread_out_sen,mae_sen"];
-  for (const day of cal.days) {
+  for (let d = addDays(FIRST, 1); utcOf(d) <= utcOf(END); d = addDays(d, 1)) {
+    const wd = weekday(d);
+    if (wd === 0 || wd === 6) continue;
+    const day = byDate.get(d);
+    if (!day) {
+      csv.push(`${d},${WEEKDAY_NAMES[wd]},not a business day,${excludedWhy(d, list.days) ?? "?"},,,,,,,,,,`);
+      continue;
+    }
     if (day.kind === "ambiguous") {
       csv.push(`${day.date},${WEEKDAY_NAMES[day.weekday]},ambiguous,,,,,,,,,,,`);
       continue;
@@ -583,7 +653,7 @@ if (MODE === "real") {
     }
     const r = tradeDay(day.date, bars, bid, ask, missingAt);
     if (!r.ok) {
-      excluded.push(`${day.date} ${day.kind} ${r.leg}: ${r.reason}`);
+      excluded.push({ date: day.date, kind: day.kind, leg: r.leg, reason: r.reason });
       csv.push(`${day.date},${WEEKDAY_NAMES[day.weekday]},${day.kind},${r.leg}: ${r.reason},,,,,,,,,,`);
       continue;
     }
@@ -594,14 +664,33 @@ if (MODE === "real") {
   }
   await Deno.writeTextFile(`${OUT}/gotobi-days.csv`, csv.join("\n") + "\n");
   console.log(`main trades: gotobi ${done.filter((x) => x.day.kind === "gotobi").length}, control ${done.filter((x) => x.day.kind === "control").length}; left out ${excluded.length}`);
-  for (const e of excluded) console.log(`  out: ${e}`);
+  for (const kind of ["gotobi", "control"]) {
+    for (const reason of ["market shut", "gap", "one side or ask below bid", "no file"]) {
+      const xs = excluded.filter((e) => e.kind === kind && e.reason === reason);
+      console.log(`  out, ${kind}, ${reason}: ${xs.length}${xs.length ? ` (${xs.map((e) => `${e.date} ${e.leg}`).join(", ")})` : ""}`);
+    }
+  }
   const late = done.filter((x) => x.trade.exitLate > 0);
   console.log(`sold after 9:55 (no usable 9:55 bar): ${late.length} (${late.map((x) => `${x.day.date}+${x.trade.exitLate}m`).join(" ") || "none"})`);
 
+  // every group's win rate of 65% or more, description tables included (look-ahead to be checked before reporting)
+  const winList: string[] = [];
+  const noteRate = (label: string, xs: number[]) => {
+    if (xs.length && xs.filter((z) => z > 0).length / xs.length >= 0.65) winList.push(`${label}: ${pctf(xs.filter((z) => z > 0).length / xs.length)} of ${xs.length}${xs.length < 100 ? " (fewer than 100)" : ""}`);
+  };
+  const plOf = (xs: Done[]) => xs.map((x) => sen(x.trade.pl));
   const rowsOf = (xs: Done[], f: (x: Done) => number): Row[] =>
     xs.map((x) => ({ date: x.day.date, month: x.day.date.slice(0, 7), w: x.day.weekday, kind: x.day.kind as "gotobi" | "control", x: f(x) }));
+  /** the gotobi mean and the matched difference with their t intervals, for a description line */
+  const brief = (rows: Row[]) => {
+    const g = rows.filter((r) => r.kind === "gotobi").map((r) => r.x);
+    const c = rows.filter((r) => r.kind === "control").map((r) => r.x);
+    const m = matchedDiff(rows.filter((r) => r.kind === "gotobi"), rows.filter((r) => r.kind === "control"));
+    return `gotobi ${g.length} mean ${fmt(g.length ? mean(g) : NaN)} ${g.length > 2 ? ci(tMeanCi(g)) : "-"}, control ${c.length} mean ${fmt(c.length ? mean(c) : NaN)} ${c.length > 2 ? ci(tMeanCi(c)) : "-"}, matched difference ${fmt(m?.diff ?? NaN)} ${m ? ci(matchedCi(m)) : "-"}`;
+  };
   const describe = (label: string, xs: Done[]) => {
-    const pl = xs.map((x) => sen(x.trade.pl));
+    const pl = plOf(xs);
+    noteRate(label, pl);
     if (pl.length < 2) {
       console.log(`${label}: n ${pl.length}`);
       return;
@@ -632,47 +721,57 @@ if (MODE === "real") {
   if (v) {
     console.log(`gotobi mean ${fmt(v.gotobiMean)} sen: t ${ci(v.gotobiCis.t)} days ${ci(v.gotobiCis.days)} months ${ci(v.gotobiCis.months)} -> lowest low ${fmt(v.gotobiLow)}`);
     console.log(`weekday-matched difference ${fmt(v.matched)} sen: t ${ci(v.matchedCis.t)} days ${ci(v.matchedCis.days)} months ${ci(v.matchedCis.months)} -> lowest low ${fmt(v.matchedLow)}, highest high ${fmt(v.matchedHigh)}`);
-    const wc = welchCi(G.map((x) => sen(x.trade.pl)), C.map((x) => sen(x.trade.pl)));
+    console.log("  (the days and months bootstraps came out narrower than 95% on the made-up results, §8.96; the decision takes the lowest low and the highest high)");
+    const wc = welchCi(plOf(G), plOf(C));
     console.log(`plain difference (Kobe's way, not weekday-matched) ${fmt(wc.diff)} sen ${ci(wc)}`);
     console.log(`smallest difference findable (2.8 x the widest interval's se): ${fmt(v.minDetectable)} sen`);
     console.log(`VERDICT: ${v.candidate ? "(a) a candidate" : v.reading === "b" ? "(b) Kobe's size (+9 sen) not seen in this period" : "(c) too few to decide"}`);
     console.log(`  if the extra cost a trade (Rakuten's spread, slippage) is below ${fmt(v.gotobiLow)} sen, the gotobi mean stays above 0 at the interval's low end`);
   }
+  console.log(`standard deviation of a day's result: gotobi ${fmt(Math.sqrt(variance(plOf(G))))}, control ${fmt(Math.sqrt(variance(plOf(C))))} sen (the power tables of §8.96 are by this)`);
+
+  console.log(`\n== description (not used to decide; each interval is a single 95% interval unless named)`);
+  // sold at 9:55 exactly
+  const onTime = done.filter((x) => x.trade.exitLate === 0);
+  describe("gotobi, sold at 9:55 exactly", onTime.filter((x) => x.day.kind === "gotobi"));
+  describe("control, sold at 9:55 exactly", onTime.filter((x) => x.day.kind === "control"));
+  console.log(`sold at 9:55 exactly: ${brief(rowsOf(onTime, (x) => sen(x.trade.pl)))}`);
   // weekday cells
-  console.log("by weekday (gotobi n / mean | control n / mean | difference):");
+  console.log("by weekday, 4 rows looked at (gotobi n / mean | control n / mean | difference and its Welch interval):");
   for (const w of [2, 3, 4, 5]) {
-    const g = G.filter((x) => x.day.weekday === w).map((x) => sen(x.trade.pl));
-    const c = C.filter((x) => x.day.weekday === w).map((x) => sen(x.trade.pl));
-    console.log(`  ${WEEKDAY_NAMES[w]}: ${g.length} / ${fmt(g.length ? mean(g) : NaN)} | ${c.length} / ${fmt(c.length ? mean(c) : NaN)} | ${fmt(g.length && c.length ? mean(g) - mean(c) : NaN)}`);
+    const g = plOf(G.filter((x) => x.day.weekday === w));
+    const c = plOf(C.filter((x) => x.day.weekday === w));
+    noteRate(`${WEEKDAY_NAMES[w]} gotobi`, g);
+    noteRate(`${WEEKDAY_NAMES[w]} control`, c);
+    const wc = g.length > 1 && c.length > 1 ? welchCi(g, c) : null;
+    console.log(`  ${WEEKDAY_NAMES[w]}: ${g.length} / ${fmt(g.length ? mean(g) : NaN)} | ${c.length} / ${fmt(c.length ? mean(c) : NaN)} | ${fmt(wc?.diff ?? NaN)} ${wc ? ci(wc) : "-"}`);
   }
-  // halves and years (description)
-  const gDates = G.map((x) => x.day.date).sort();
+  // halves and years
   const mainG = cal.days.filter((d) => d.kind === "gotobi" && d.weekday !== 1);
-  const split = mainG[Math.floor(mainG.length / 2)]?.date ?? gDates[0];
-  console.log(`\n== description (not used to decide; each interval is a single 95% interval)`);
+  const split = mainG[Math.floor(mainG.length / 2)]?.date ?? END;
   for (const [name, part] of [["first half", (d: string) => d < split], ["second half", (d: string) => d >= split]] as const) {
     const sub = done.filter((x) => part(x.day.date));
-    const vv = decide(rowsOf(sub, (x) => sen(x.trade.pl)), 2000, 7, KOBE_DIFF);
-    console.log(`${name} (split ${split}): gotobi ${sub.filter((x) => x.day.kind === "gotobi").length} mean ${fmt(vv?.gotobiMean ?? NaN)}, matched difference ${fmt(vv?.matched ?? NaN)} t ${vv ? ci(vv.matchedCis.t) : "-"}`);
+    noteRate(`${name} gotobi`, plOf(sub.filter((x) => x.day.kind === "gotobi")));
+    noteRate(`${name} control`, plOf(sub.filter((x) => x.day.kind === "control")));
+    console.log(`${name} (split ${split}): ${brief(rowsOf(sub, (x) => sen(x.trade.pl)))}`);
   }
   for (const y of [...new Set(done.map((x) => x.day.date.slice(0, 4)))].sort()) {
     const sub = done.filter((x) => x.day.date.startsWith(y));
-    const g = sub.filter((x) => x.day.kind === "gotobi").map((x) => sen(x.trade.pl));
-    const m = matchedDiff(sub.filter((x) => x.day.kind === "gotobi").map((x) => ({ w: x.day.weekday, x: sen(x.trade.pl) })), sub.filter((x) => x.day.kind === "control").map((x) => ({ w: x.day.weekday, x: sen(x.trade.pl) })));
-    console.log(`  ${y}: gotobi ${g.length}, won ${g.length ? pctf(g.filter((z) => z > 0).length / g.length) : "-"}, mean ${fmt(g.length ? mean(g) : NaN)}, matched difference ${fmt(m?.diff ?? NaN)}`);
+    const g = plOf(sub.filter((x) => x.day.kind === "gotobi"));
+    const c = plOf(sub.filter((x) => x.day.kind === "control"));
+    noteRate(`${y} gotobi`, g);
+    noteRate(`${y} control`, c);
+    console.log(`  ${y}: gotobi won ${g.length ? pctf(g.filter((z) => z > 0).length / g.length) : "-"}, control won ${c.length ? pctf(c.filter((z) => z > 0).length / c.length) : "-"}; ${brief(rowsOf(sub, (x) => sen(x.trade.pl)))}`);
   }
-  // the hourly table (Kobe's table 11), Bonferroni over its 12 rows
+  // the hourly table (Kobe's table 11): a single 95% interval and Bonferroni over its 12 rows
   const bonf = (xs: number[], k: number) => {
     const m = mean(xs);
     const se = Math.sqrt(variance(xs) / xs.length);
     const q = tQuantile(1 - 0.025 / k, xs.length - 1);
     return { lo: m - q * se, hi: m + q * se };
   };
-  const winList: string[] = [];
-  const noteRate = (label: string, xs: number[]) => {
-    if (xs.length && xs.filter((z) => z > 0).length / xs.length >= 0.65) winList.push(`${label}: ${pctf(xs.filter((z) => z > 0).length / xs.length)} of ${xs.length}${xs.length < 100 ? " (fewer than 100)" : ""}`);
-  };
-  console.log("entry hour (JST) -> 9:55, 12 rows looked at: gotobi n / mean / cumulative / Bonferroni | control n / mean | paid spread median (gotobi)");
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  console.log("entry hour (JST) -> 9:55, 12 rows looked at: gotobi n / mean / cumulative / 95% / Bonferroni | control n / mean / cumulative / 95% | paid spread median (gotobi; half the entry spread + half the 9:55 spread)");
   for (const h of [22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
     const gx: number[] = [];
     const cx: number[] = [];
@@ -684,14 +783,15 @@ if (MODE === "real") {
       (x.day.kind === "gotobi" ? gx : cx).push(sen(p));
       if (x.day.kind === "gotobi") {
         const b = usable(bars, at)!;
-        sp.push(sen(b.ao - b.bo));
+        const e = usable(bars, exitAt(x.day.date))!;
+        sp.push(sen((b.ao - b.bo) / 2 + (e.ao - e.bo) / 2));
       }
     }
     noteRate(`hour ${h} gotobi`, gx);
     noteRate(`hour ${h} control`, cx);
-    console.log(`  ${String(h).padStart(2)}:00${h === 6 || h === 7 ? " (day roll)" : ""} | ${gx.length} / ${fmt(gx.length ? mean(gx) : NaN)} / ${fmt(gx.reduce((a, b) => a + b, 0), 0)} / ${gx.length > 2 ? ci(bonf(gx, 12)) : "-"} | ${cx.length} / ${fmt(cx.length ? mean(cx) : NaN)} | ${fmt(sp.length ? quantile(sp, 0.5) : NaN)}`);
+    console.log(`  ${String(h).padStart(2)}:00${h === 6 || h === 7 ? " (day roll)" : ""} | ${gx.length} / ${fmt(gx.length ? mean(gx) : NaN)} / ${fmt(sum(gx), 0)} / ${gx.length > 2 ? ci(tMeanCi(gx)) : "-"} / ${gx.length > 2 ? ci(bonf(gx, 12)) : "-"} | ${cx.length} / ${fmt(cx.length ? mean(cx) : NaN)} / ${fmt(sum(cx), 0)} / ${cx.length > 2 ? ci(tMeanCi(cx)) : "-"} | ${fmt(sp.length ? quantile(sp, 0.5) : NaN)}`);
   }
-  console.log("Kobe's trade B (sell 9:55 at the bid, buy back at h:00 JST at the ask), 12 rows: gotobi n / mean / Bonferroni | control n / mean");
+  console.log("Kobe's trade B (sell 9:55 at the bid, buy back at h:00 JST at the ask), 12 rows looked at: gotobi n / mean / 95% / Bonferroni | control n / mean / 95%");
   for (let h = 11; h <= 22; h++) {
     const gx: number[] = [];
     const cx: number[] = [];
@@ -700,47 +800,56 @@ if (MODE === "real") {
       if (p !== null) (x.day.kind === "gotobi" ? gx : cx).push(sen(p));
     }
     noteRate(`trade B ${h}:00 gotobi`, gx);
-    console.log(`  ${h}:00 | ${gx.length} / ${fmt(gx.length ? mean(gx) : NaN)} / ${gx.length > 2 ? ci(bonf(gx, 12)) : "-"} | ${cx.length} / ${fmt(cx.length ? mean(cx) : NaN)}`);
+    noteRate(`trade B ${h}:00 control`, cx);
+    console.log(`  ${h}:00 | ${gx.length} / ${fmt(gx.length ? mean(gx) : NaN)} / ${gx.length > 2 ? ci(tMeanCi(gx)) : "-"} / ${gx.length > 2 ? ci(bonf(gx, 12)) : "-"} | ${cx.length} / ${fmt(cx.length ? mean(cx) : NaN)} / ${cx.length > 2 ? ci(tMeanCi(cx)) : "-"}`);
   }
   // Friday gotobi only
-  const fg = G.filter((x) => x.day.weekday === 5).map((x) => sen(x.trade.pl));
-  const fc = C.filter((x) => x.day.weekday === 5).map((x) => sen(x.trade.pl));
+  const fg = plOf(G.filter((x) => x.day.weekday === 5));
+  const fc = plOf(C.filter((x) => x.day.weekday === 5));
   noteRate("Friday gotobi", fg);
-  if (fg.length > 2 && fc.length > 2) console.log(`Friday gotobi only: ${fg.length}, won ${pctf(fg.filter((z) => z > 0).length / fg.length)}, mean ${fmt(mean(fg))} vs Friday control ${fc.length} mean ${fmt(mean(fc))}: ${ci(welchCi(fg, fc))}`);
-  // Mondays, entered at 08:00 JST (Sunday 23:00 UTC)
-  const mon = cal.days.filter((d) => d.weekday === 1 && d.kind !== "ambiguous");
-  const mg: number[] = [];
-  const mc: number[] = [];
-  for (const d of mon) {
+  noteRate("Friday control", fc);
+  if (fg.length > 2 && fc.length > 2) console.log(`Friday gotobi only: ${fg.length}, won ${pctf(fg.filter((z) => z > 0).length / fg.length)}, mean ${fmt(mean(fg))} ${ci(tMeanCi(fg))} vs Friday control ${fc.length} mean ${fmt(mean(fc))}: difference ${ci(welchCi(fg, fc))}`);
+  // Mondays, bought at 08:00 JST (Sunday 23:00 UTC), alone and added to the main as a fifth weekday
+  const monRows: Row[] = [];
+  for (const d of cal.days.filter((x) => x.weekday === 1 && x.kind !== "ambiguous")) {
     const p = legs(bars, utcOf(d.date) - HOUR, exitAt(d.date), "buy");
-    if (p !== null) (d.kind === "gotobi" ? mg : mc).push(sen(p));
+    if (p !== null) monRows.push({ date: d.date, month: d.date.slice(0, 7), w: 1, kind: d.kind as "gotobi" | "control", x: sen(p) });
   }
-  console.log(`Mondays (bought 08:00 JST): gotobi ${mg.length} mean ${fmt(mg.length ? mean(mg) : NaN)}; control ${mc.length} mean ${fmt(mc.length ? mean(mc) : NaN)}`);
-  // month-end left out of the control
+  const mg = monRows.filter((r) => r.kind === "gotobi").map((r) => r.x);
+  const mc = monRows.filter((r) => r.kind === "control").map((r) => r.x);
+  noteRate("Monday gotobi", mg);
+  noteRate("Monday control", mc);
+  console.log(`Mondays alone (bought 08:00 JST): gotobi ${mg.length} mean ${fmt(mg.length ? mean(mg) : NaN)} ${mg.length > 2 ? ci(tMeanCi(mg)) : "-"}; control ${mc.length} mean ${fmt(mc.length ? mean(mc) : NaN)} ${mc.length > 2 ? ci(tMeanCi(mc)) : "-"}`);
+  console.log(`with the Mondays added (Mon-Fri, five weekday cells): ${brief([...rowsOf(done, (x) => sen(x.trade.pl)), ...monRows])}`);
+  // the month's last business day left out of the control (the month's end from a calendar to the end of END's month)
+  const endY = Number(END.slice(0, 4));
+  const endM = Number(END.slice(5, 7));
+  const monthEnd = dateOf(Date.UTC(endY, endM, 0));
   const lastBiz = new Set<string>();
   const byMonth = new Map<string, string>();
-  for (const d of cal.days) byMonth.set(d.date.slice(0, 7), d.date);
+  for (const d of buildCalendar(addDays(FIRST, 1), monthEnd, list.days).days) byMonth.set(d.date.slice(0, 7), d.date);
   for (const d of byMonth.values()) lastBiz.add(d);
   const cNoEnd = done.filter((x) => !(x.day.kind === "control" && lastBiz.has(x.day.date)));
-  const vNoEnd = decide(rowsOf(cNoEnd, (x) => sen(x.trade.pl)), 2000, 11, KOBE_DIFF);
-  console.log(`control without the month's last business day: matched difference ${fmt(vNoEnd?.matched ?? NaN)} t ${vNoEnd ? ci(vNoEnd.matchedCis.t) : "-"}`);
+  noteRate("control without month-end", plOf(cNoEnd.filter((x) => x.day.kind === "control")));
+  console.log(`control without the month's last business day (${done.filter((x) => x.day.kind === "control" && lastBiz.has(x.day.date)).length} left out): ${brief(rowsOf(cNoEnd, (x) => sen(x.trade.pl)))}`);
   // fake gotobi: the business day after each gotobi day
   const nextOf = new Set<string>();
   for (const d of cal.days.filter((x) => x.kind === "gotobi")) {
     const i = cal.days.findIndex((x) => x.date === d.date);
     if (cal.days[i + 1]) nextOf.add(cal.days[i + 1].date);
   }
-  const fake = done.filter((x) => x.day.kind === "control").map((x) => ({ ...x, day: { ...x.day, kind: (nextOf.has(x.day.date) ? "gotobi" : "control") as "gotobi" | "control" } }));
-  const vf = decide(rowsOf(fake as Done[], (x) => sen(x.trade.pl)), 2000, 13, KOBE_DIFF);
-  console.log(`fake gotobi (the business day after): matched difference ${fmt(vf?.matched ?? NaN)} t ${vf ? ci(vf.matchedCis.t) : "-"} (expected near 0)`);
+  const fake = C.map((x) => ({ ...x, day: { ...x.day, kind: (nextOf.has(x.day.date) ? "gotobi" : "control") as "gotobi" | "control" } }));
+  noteRate("fake gotobi", plOf(fake.filter((x) => x.day.kind === "gotobi")));
+  console.log(`fake gotobi (the business day after, among the control days; expected near 0): ${brief(rowsOf(fake as Done[], (x) => sen(x.trade.pl)))}`);
   // a minute late
   const lateRows: Done[] = [];
   for (const x of done) {
     const p = legs(bars, entryAt(x.day.date) + MIN, exitAt(x.day.date) + MIN, "buy");
     if (p !== null) lateRows.push({ day: x.day, trade: { ...x.trade, pl: p } });
   }
-  const vl = decide(rowsOf(lateRows, (x) => sen(x.trade.pl)), 2000, 17, KOBE_DIFF);
-  console.log(`a minute late (23:01 -> 9:56): gotobi mean ${fmt(vl?.gotobiMean ?? NaN)}, matched ${fmt(vl?.matched ?? NaN)}`);
+  noteRate("a minute late gotobi", plOf(lateRows.filter((x) => x.day.kind === "gotobi")));
+  noteRate("a minute late control", plOf(lateRows.filter((x) => x.day.kind === "control")));
+  console.log(`a minute late (23:01 -> 9:56): ${brief(rowsOf(lateRows, (x) => sen(x.trade.pl)))}`);
   // spreads by US daylight saving (second Sunday of March to first Sunday of November, by the date)
   const usDst = (date: string) => {
     const y = Number(date.slice(0, 4));
@@ -756,25 +865,27 @@ if (MODE === "real") {
   for (const [name, xs] of [["gotobi", G], ["control", C]] as const) {
     const s = [...xs].sort((a, b) => b.trade.pl - a.trade.pl);
     console.log(`${name} best 5: ${s.slice(0, 5).map((x) => `${x.day.date} ${fmt(sen(x.trade.pl), 1)}`).join(", ")}; worst 5: ${s.slice(-5).map((x) => `${x.day.date} ${fmt(sen(x.trade.pl), 1)}`).join(", ")}`);
-    const pl = xs.map((x) => sen(x.trade.pl)).sort((a, b) => a - b);
+    const pl = plOf(xs).sort((a, b) => a - b);
     const k = Math.ceil(pl.length * 0.01);
     if (pl.length > 2 * k) console.log(`  ${name} mean leaving out the top and bottom 1% (${k} each): ${fmt(mean(pl.slice(k, pl.length - k)))}`);
   }
   // the Ministry of Finance's published intervention days (2024; later years not checked here)
   const INTERVENTIONS = ["2024-04-29", "2024-05-01", "2024-07-11", "2024-07-12"];
-  const touches = (x: Done) => INTERVENTIONS.some((d) => d === dateOf(Math.floor((x.trade.entryT + 9 * HOUR) / DAY) * DAY) || d === x.day.date);
-  const vi = decide(rowsOf(done.filter((x) => !touches(x)), (x) => sen(x.trade.pl)), 2000, 19, KOBE_DIFF);
-  console.log(`leaving out trades touching the 2024 intervention days (${done.filter(touches).map((x) => x.day.date).join(" ") || "none"}): gotobi mean ${fmt(vi?.gotobiMean ?? NaN)}, matched ${fmt(vi?.matched ?? NaN)}`);
-  const ye = done.filter((x) => { const md = x.day.date.slice(5); return (md >= "12-24" && md <= "12-27") || md >= "12-30" || md <= "01-05"; });
-  console.log(`year-end trades (kept): ${ye.map((x) => `${x.day.date} ${x.day.kind} ${fmt(sen(x.trade.pl), 1)}`).join(", ") || "none"}`);
+  const entryDate = (x: Done) => dateOf(Math.floor((x.trade.entryT + 9 * HOUR) / DAY) * DAY);
+  const touches = (x: Done) => INTERVENTIONS.some((d) => d === entryDate(x) || d === x.day.date);
+  const noInt = done.filter((x) => !touches(x));
+  noteRate("without intervention days gotobi", plOf(noInt.filter((x) => x.day.kind === "gotobi")));
+  noteRate("without intervention days control", plOf(noInt.filter((x) => x.day.kind === "control")));
+  console.log(`leaving out trades touching the 2024 intervention days (${done.filter(touches).map((x) => x.day.date).join(" ") || "none"}): ${brief(rowsOf(noInt, (x) => sen(x.trade.pl)))}`);
+  const inYearEnd = (date: string) => { const md = date.slice(5); return (md >= "12-24" && md <= "12-27") || md >= "12-30" || md <= "01-05"; };
+  const ye = done.filter((x) => inYearEnd(x.day.date) || inYearEnd(entryDate(x)));
+  console.log(`year-end trades, entering or leaving 12/24-12/27 or 12/30-1/5 (kept): ${ye.map((x) => `${x.day.date} ${x.day.kind} ${fmt(sen(x.trade.pl), 1)}`).join(", ") || "none"}`);
   const sp = [...done].sort((a, b) => b.trade.paid - a.trade.paid).slice(0, 10);
   console.log(`largest spreads paid: ${sp.map((x) => `${x.day.date} ${fmt(sen(x.trade.paid), 1)}`).join(", ")}`);
   for (const [name, xs] of [["gotobi", G], ["control", C], ["all", done]] as const) {
-    const pl = [...xs].sort((a, b) => a.day.date.localeCompare(b.day.date)).map((x) => sen(x.trade.pl));
+    const pl = plOf([...xs].sort((a, b) => a.day.date.localeCompare(b.day.date)));
     console.log(`autocorrelation lag 1 (${name}): ${fmt(autocorr1(pl), 3)}, of the squares ${fmt(autocorr1(pl.map((z) => z * z)), 3)}`);
   }
-  noteRate("main gotobi", G.map((x) => sen(x.trade.pl)));
-  noteRate("main control", C.map((x) => sen(x.trade.pl)));
   console.log(`\nwin rates of 65% or more (look-ahead to be checked before reporting): ${winList.length ? "\n  " + winList.join("\n  ") : "none"}`);
   const midG = G.length ? mean(G.map((x) => sen(x.trade.plMid))) : 0;
   if (midG >= 17) console.log(`LOOK-AHEAD CHECK NEEDED: gotobi mid-to-mid ${fmt(midG)} sen is 17 or more`);

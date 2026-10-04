@@ -79,6 +79,7 @@ jobs:
       - name: The made-up checks
         env:
           MODE: synthetic
+          FIRST: ${{ inputs.first }}
         run: >
           deno run
           --allow-net=www8.cao.go.jp
