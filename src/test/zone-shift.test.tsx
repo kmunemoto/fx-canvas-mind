@@ -248,7 +248,7 @@ describe("#124 the live chart's history", () => {
   it("is not read while Zone Shift is off (#143, #145, #150, #151: and the others that read it)", async () => {
     localStorage.setItem(
       CHART_PREFS_KEY,
-      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false, ultra: false } }),
+      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, ema50: false, ema200: false, ma3: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false, ultra: false } }),
     );
     const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
     const loadHistory = vi.fn(async () => historyFor());

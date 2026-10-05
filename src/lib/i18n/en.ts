@@ -216,6 +216,19 @@ export const en: Dict = {
       reset: "Back to the defaults (14, 1, 3)",
       note: "Calculated as TradingView's Stochastic (%K = where the close sits in the recent high–low range, %D = its moving average, 80/20). #132's first-period best (21, 5, 3; 70/30) did worse on the second period (28.7% won; this setting 29.1%), so these were put back. Shown only: no signal is judged on it.",
     },
+    // #200: the three moving averages' numbers and kinds
+    ma: {
+      settings: "Moving average settings",
+      line: (n: number) => `Line ${n}`,
+      period: "Length",
+      type: "Kind",
+      typeNames: { EMA: "EMA (exponential)", SMA: "SMA (simple)" } as Record<string, string>,
+      presets: "Common lengths",
+      range: (max: number) => `a whole number from 1 to ${max}`,
+      reset: "Back to the defaults (EMA 50, 200, 20)",
+      colorNames: ["orange", "purple", "cyan"] as ReadonlyArray<string>,
+      named: (label: string, color: string) => `${label} (${color})`,
+    },
     // #140: the indicators, a paid feature
     lockedHint: "Available with the Light plan",
     lockedNote: "The indicators marked 🔒 come with the Light plan (¥2,980 a month). The signals, RSI and the Parabolic SAR are free.",
@@ -252,13 +265,14 @@ export const en: Dict = {
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "Dow theory",
       gainzPro: "Pro-style score",
-      ema: (length: number) => `EMA ${length}`,
+      // #200: each moving average by its kind and number (EMA 50)
+      ma: (type: string, period: number) => `${type} ${period}`,
       // #145
       qTrend: (period: number, atr: number, mult: number) => `Q-Trend ${period} ${atr} ${mult}`,
       qtBlsh: "Q-Trend × BLSH (triple confirmation)",
       // #150
       autoTrend: "Trend lines",
-      maCross: "GC / DC (EMA 50 × 200)",
+      maCross: (fast: string, slow: string) => `GC / DC (${fast} × ${slow})`,
       ichimoku: (conv: number, base: number, span2: number) => `Ichimoku ${conv} ${base} ${span2}`,
       // #151
       ultra: (gold: boolean): string => (gold ? "ULTRA (RSI 14, SL $13, TP $4/10/16)" : "ULTRA (RSI 14, SL 13, TP 4/10/16 pips)"),
@@ -334,8 +348,13 @@ export const en: Dict = {
     // #150: the trend tools of the owner's note
     autoTrendNote:
       "Trend lines: rising, the line through the lows; falling, through the highs. Of the swings Dow theory reads (a bar higher or lower than the 4 on each side, known 4 bars later), the line through the latest two rising swing lows (green) and through the latest two falling swing highs (red), drawn on to the right. When a close goes clearly through one (a close, not a wick) it stops there, marked 'break': a sign the flow is changing. Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
-    maCrossNote:
-      "GC / DC: GC (golden cross) on the closed bar where EMA 50 crosses above EMA 200, DC (dead cross) where it crosses below; marked even when the lines are hidden. A crossing of averages, so it comes after the flow has turned. Not measured on past data. Shown only: no signal or email uses it.",
+    maCrossNote: (fast: string, slow: string, none: boolean, samePeriod: boolean) =>
+      none
+        ? "GC / DC: lines 1 and 2 are the same moving average, so they never cross (change line 1's or line 2's length or kind to see the crosses)."
+        : (samePeriod
+          ? `GC / DC: lines 1 and 2 are of one length, so the EMA (${fast}), which turns first, is the fast one and ${slow} the slow one: GC (golden cross) on the closed bar where the fast one crosses above the slow one, DC (dead cross) where it crosses below. `
+          : `GC / DC: GC (golden cross) on the closed bar where the shorter of lines 1 and 2 (${fast}) crosses above the longer (${slow}), DC (dead cross) where it crosses below. `) +
+          "Lines 1 and 2 swapped give the same marks. Marked even when the lines are hidden. A crossing of averages, so it comes after the flow has turned. Not measured on past data. Shown only: no signal or email uses it.",
     ichimokuNote:
       "Ichimoku (as TradingView's built-in computes it, its defaults 9, 26, 52 and displacement 26): the conversion line (blue, the middle of the last 9 highs and lows), the base line (dark red, 26), the cloud of the leading spans (the average of the two lines, and the middle of 52) drawn 25 bars ahead (green while span 1 is on top, red otherwise), and the lagging span (green, the close drawn 25 bars back). The price over the cloud leans up, under it down, inside it neither; the chart's top left says which. This chart has no room to the right of its newest bar, so the cloud's part ahead of it is not drawn. Not measured on past data. Shown only: no signal or email uses it.",
     ichimokuSide: { above: "over the cloud (leaning up)", inside: "in the cloud", below: "under the cloud (leaning down)" } as Record<string, string>,
@@ -355,7 +374,8 @@ export const en: Dict = {
     // #156: Q-Trend's newest signal with ULTRA's numbers
     qtPlanTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[]): string =>
       `Q-Trend ${side === "BUY" ? "buy" : "sell"} (ULTRA's stop and targets): entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]}, TP3 ${tps[2]}`,
-    maCrossTitle: (side: "GC" | "DC"): string => (side === "GC" ? "Golden cross (EMA 50 crossed above EMA 200)" : "Dead cross (EMA 50 crossed below EMA 200)"),
+    maCrossTitle: (side: "GC" | "DC", fast: string, slow: string): string =>
+      side === "GC" ? `Golden cross (${fast} crossed above ${slow})` : `Dead cross (${fast} crossed below ${slow})`,
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. Shown only: no signal uses it.",
@@ -365,15 +385,44 @@ export const en: Dict = {
       note: "ADX and DMI (as TradingView's built-in 'Directional Movement Index' computes it, its defaults 14, 14): the pink line is ADX (how strong the trend is, not its direction), blue +DI (the move up), orange −DI (the move down). ADX over 25 (dotted) is a trend being there: up while +DI is on top, down while −DI is. Under 25 is a sideways market. Shown only: no signal uses it.",
     },
     // #143
-    emaNote: (bars: number | null, status: "loading" | "ready" | "error") =>
-      "EMA 50 (orange) and EMA 200 (purple): exponential moving averages of the close (TradingView's arithmetic). A close above the line is an upward flow, below it a downward one. " +
+    emaNote: (
+      lines: ReadonlyArray<string>,
+      others: ReadonlyArray<string>,
+      bars: number | null,
+      status: "loading" | "ready" | "error" | "deepLoading" | "deepShort",
+      short: ReadonlyArray<{ label: string; need: number } & ({ kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null })>,
+      canSet: boolean,
+      deepFrom: number | null,
+    ) =>
+      `Moving averages ${lines.join(", ")}: averages of the close (EMA exponential, SMA simple; TradingView's arithmetic). ` +
+      (canSet ? "Each line's length and kind are chosen at its ⚙. " : "With a plan that has the indicators, each line's length and kind are chosen at its ⚙. ") +
+      "A close above the line is an upward flow, below it a downward one. " +
       "#142 compared 31 indicators on past charts (11 pairs, 15min/1h/4h, 2024-01 to 2026-09): the flow across the chart's 120 bars (about 3–4 weeks on 4h) was read best by the close above or below EMA 50 (71.6% on the later period; the stochastic 68.3%), and a larger flow (about 2–3 months on 4h) by the 200-bar averages. " +
       "They read where the flow has been: over the next 48 bars the price went the reading's way about half the time. On 4h alone, the later period could not tell EMA 50 from the stochastic. " +
+      (others.length > 0 ? `#142 measured only SMA 25, 75, 200 and EMA 50, 200 of the moving averages; ${others.join(", ")} not. ` : "") +
+      "An EMA keeps some of its first value (the average of its first n closes), so it is TradingView's only with some three times its length of bars. " +
+      (deepFrom !== null
+        ? `While a line longer than ${deepFrom}, or one the bars the chart always reads are too few for, is on (the GC / DC's lines too), the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). `
+        : "") +
       (status === "loading"
         ? "Loading the bars before the chart's. "
         : status === "error"
           ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
-          : `Computed over ${bars ?? 0} bars (including those before the chart's). `) +
+          : (status === "deepLoading"
+            ? "Reading deep into the bars before the chart's (until then, drawn over the bars it always reads). "
+            : status === "deepShort"
+              ? "The deep bars could not all be read, so drawn over the bars it always reads (tried again on the next bar). "
+              : "") +
+            `Computed over ${bars ?? 0} bars (including those before the chart's). ` +
+            short
+              .map((x) => {
+                if (x.kind === "none") return `${x.label} needs ${x.need} bars, and ${bars ?? 0} could be used, so it is not drawn. `;
+                const off = x.rough ? `may differ ${x.rough === "much" ? "a lot" : "a little"} from TradingView's` : "";
+                return x.late
+                  ? `${x.label} starts within the chart: too few bars before its first${off ? `, and ${off}` : ""}. `
+                  : `${x.label} ${off}: too few bars to compute it over. `;
+              })
+              .join("")) +
       "Shown only: no signal or email uses them.",
     // #136
     supertrendNote:

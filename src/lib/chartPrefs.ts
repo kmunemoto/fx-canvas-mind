@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { STOCH_132_DEFAULTS, STOCH_DEFAULTS, normalizeStochParams, type StochParams } from "./stochastic";
 import { DRAWING_COLORS, DRAWING_WIDTHS, LINE_STYLES, type LineStyle, type MagnetMode } from "./drawings";
+import { MA_DEFAULTS, normalizeMaLines, type MaLine } from "./emaLines";
 
 // #117: which indicator strips the charts show under the price, and the
 // stochastic's lengths (#118: the background; #119: what is drawn over the
@@ -42,9 +43,13 @@ export interface ChartOverlays {
   // Pro configuration)
   gainzPro: boolean;
   // #143: EMA 50 and EMA 200, the lines #142 found read the big flow best
-  // (the flow across the chart, and the larger one) — on unless switched off
+  // (the flow across the chart, and the larger one) — on unless switched off.
+  // #200: the switches of the first two of three moving averages, whatever
+  // numbers they are set to (ChartPrefs.maLines), and the third's (EMA 20
+  // until set otherwise); on unless switched off
   ema50: boolean;
   ema200: boolean;
+  ma3: boolean;
   // #145: the two indicators of the owner's video — tarasenko_'s Q-Trend
   // over the price, and where it, the BLSH line and the BLSH area agree
   // (the video's "triple confirmation"); on unless switched off
@@ -81,6 +86,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   gainzPro: false,
   ema50: true,
   ema200: true,
+  ma3: true,
   qTrend: true,
   qtBlsh: true,
   autoTrend: true,
@@ -146,6 +152,9 @@ export interface ChartPrefs {
   rsi: boolean;
   stoch: boolean;
   stochParams: StochParams;
+  // #200: the three moving averages' numbers and kinds (EMA or SMA), in the
+  // order of their switches (ema50, ema200, ma3)
+  maLines: MaLine[];
   // #135: Bollinger %b and RCI strips (TradingView's built-ins), off until
   // switched on
   pctB: boolean;
@@ -175,6 +184,7 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   rsi: true,
   stoch: true,
   stochParams: STOCH_DEFAULTS,
+  maLines: [...MA_DEFAULTS],
   pctB: false,
   rci: false,
   blsh: true,
@@ -201,6 +211,7 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
       const p = normalizeStochParams(v.stochParams);
       return v.stochDefaults === STOCH_132_MARK && sameStoch(p, STOCH_132_DEFAULTS) ? STOCH_DEFAULTS : p;
     })(),
+    maLines: normalizeMaLines(v.maLines),
     pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
     rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
     blsh: typeof v.blsh === "boolean" ? v.blsh : CHART_PREFS_DEFAULTS.blsh,
@@ -234,6 +245,7 @@ export const setChartPrefs = (patch: Partial<ChartPrefs>): void => {
   current = {
     ...next,
     stochParams: normalizeStochParams(next.stochParams),
+    maLines: normalizeMaLines(next.maLines),
     theme: next.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(next.overlays),
     live: livePrefsOf(next.live),

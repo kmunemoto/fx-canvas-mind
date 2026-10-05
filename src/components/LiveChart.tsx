@@ -4,6 +4,7 @@ import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
+import { maNeedsDeep } from "@/lib/emaLines";
 import type { NumericCandle } from "@/lib/types";
 import {
   INTERVAL_STEP_MS,
@@ -305,13 +306,14 @@ const LiveChart = ({
   const chartPrefs = useChartPrefs();
   const overlays = chartPrefs.overlays;
   const zoneShiftOn = overlays.zoneShift;
-  // #131: the Pro-style score reads the same history, #143: the EMA lines,
+  // #131: the Pro-style score reads the same history, #143: the EMA lines
+  // (#200: the three moving averages),
   // and #145: Q-Trend (200 closes before its line) and BLSH (#140: none of
   // them while the indicators are locked)
   // #150: and the trend tools (their averages and ranges settle on it)
   const historyOn =
     indicatorsAllowed &&
-    (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
+    (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
       overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
@@ -344,7 +346,14 @@ const LiveChart = ({
   // the chart has moved past it. The reading under way is called off when
   // the indicator is turned off, on another pair or timeframe, and when
   // the chart is left; "loading" is only believed while it goes on.
-  const zltOn = indicatorsAllowed && overlays.zlTema;
+  // #200: and while a moving average on (or one of the crosses', when on)
+  // is longer than MA_DEEP_FROM, or the history above is too few bars for
+  // it (an EMA needs about three times its length; GMO's daily history is
+  // this year's and last year's files only) — unless the deep read for this
+  // pair and timeframe came back whole with no more bars than the history
+  // above (GMO's weekly and monthly: that history is every bar there is).
+  // Decided here, once, and told to the chart (`deepForMa`)
+  const commonBefore = gmoRead && history?.key === historyKey ? historyBefore(history.bars, gmoRead.candles) : null;
   const [deepHistory, setDeepHistory] = useState<{
     key: string;
     readAt: string;
@@ -352,12 +361,25 @@ const LiveChart = ({
     status: "loading" | "ready" | "error";
     complete: boolean;
   } | null>(null);
+  const deepNoMore =
+    commonBefore !== null &&
+    gmoRead !== null &&
+    deepHistory?.key === historyKey &&
+    deepHistory.status === "ready" &&
+    deepHistory.complete &&
+    // (still joined to the chart: one it has moved past is read again)
+    (historyBefore(deepHistory.bars, gmoRead.candles)?.length ?? Infinity) <= commonBefore.length;
+  const maDeep =
+    indicatorsAllowed &&
+    !deepNoMore &&
+    maNeedsDeep(overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
+  const deepOn = indicatorsAllowed && (overlays.zlTema || maDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;
-  }, [zltOn, historyKey]);
+  }, [deepOn, historyKey]);
   useEffect(() => {
-    if (!zltOn || !gmoRead) return;
+    if (!deepOn || !gmoRead) return;
     const h = deepHistory;
     const live = deepRun.current !== null && !deepRun.current.off && deepRun.current.key === historyKey;
     const fresh = h && h.key === historyKey && (
@@ -395,7 +417,7 @@ const LiveChart = ({
       }
       setDeepHistory({ key: historyKey, readAt, bars: last.bars, status: "ready", complete: last.complete });
     })();
-  }, [zltOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
+  }, [deepOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
 
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on
@@ -863,6 +885,7 @@ const LiveChart = ({
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
         deepHistory={zltHistory}
+        deepForMa={maDeep}
         dow={dowChart}
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}
