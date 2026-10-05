@@ -40,7 +40,7 @@ import { ZLT_DEFAULTS, ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
-import { EMA_LINES, emaLine } from "@/lib/emaLines";
+import { MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maValues, measuredMa } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
@@ -213,7 +213,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
@@ -663,13 +663,21 @@ const PriceChart = ({
   }, [ov.gainzPro, gpListed, zsPast, candles, tail]);
   // #143: EMA 50 and EMA 200 over the same history and the candles, the
   // forming one too (as TradingView draws them). Given a history that is
-  // still loading, nothing yet: the line would move when it came.
-  const emaOn = EMA_LINES.filter((l) => ov[l.key]).map((l) => l.key).join(" ");
+  // still loading, nothing yet: the line would move when it came. #200:
+  // three lines, each at the number and kind chosen (prefs.maLines), the
+  // ones on as "key:EMA:50" (a string, so a change elsewhere in the
+  // preferences does not compute them again)
+  const maLines = prefs.maLines;
+  const emaOn = MA_SLOTS.map((s, i) => (ov[s.key] ? `${s.key}:${maLines[i].type}:${maLines[i].period}` : "")).filter(Boolean).join(" ");
   const emas = useMemo(() => {
-    const on = EMA_LINES.filter((l) => emaOn.split(" ").includes(l.key));
-    if (on.length === 0 || candles.length === 0 || zsPast === null) return null;
+    if (emaOn === "" || candles.length === 0 || zsPast === null) return null;
     const closes = [...zsPast.map((b) => b.close), ...candles.map((c) => c.close)];
-    return { off: zsPast.length, total: closes.length, lines: on.map((l) => ({ ...l, values: emaLine(closes, l.length) })) };
+    const lines = emaOn.split(" ").map((s) => {
+      const [key, type, period] = s.split(":");
+      const line: MaLine = { type: type as MaLine["type"], period: Number(period) };
+      return { key, color: MA_SLOTS.find((m) => m.key === key)?.color ?? "#FF9800", label: maLabel(line), values: maValues(closes, line) };
+    });
+    return { off: zsPast.length, total: closes.length, lines };
   }, [emaOn, zsPast, candles]);
   // #145: Q-Trend and BLSH over the same history and the candles (Q-Trend's
   // line needs 200 closes before its first); the triple confirmation needs
@@ -748,15 +756,23 @@ const PriceChart = ({
     return { plus: r.plus.slice(histOff), minus: r.minus.slice(histOff), adx: r.adx.slice(histOff) };
   }, [prefs.adx, histAll, histOff]);
   // golden and dead crosses of EMA 50 and 200 (whether the lines are drawn
-  // or not), on closed bars
+  // or not), on closed bars. #200: of lines 1 and 2 at their numbers, the
+  // shorter as the fast one (none when the two are the same line)
+  const pair2 = crossPair(maLines);
+  // as "EMA:50 EMA:200" (fast, slow), for the same reason
+  const pairKey = pair2 ? `${pair2.fast.type}:${pair2.fast.period} ${pair2.slow.type}:${pair2.slow.period}` : "";
   const maCrosses = useMemo(() => {
-    if (!ov.maCross || !histAll) return null;
+    if (!ov.maCross || !histAll || pairKey === "") return null;
+    const [fastLine, slowLine] = pairKey.split(" ").map((s): MaLine => {
+      const [type, period] = s.split(":");
+      return { type: type as MaLine["type"], period: Number(period) };
+    });
     const closes = histAll.map((b) => b.close);
-    const fast = emaLine(closes, 50);
-    return crossesOf(fast, emaLine(closes, 200), histAll.length - 1 - tail)
+    const fast = maValues(closes, fastLine);
+    return crossesOf(fast, maValues(closes, slowLine), histAll.length - 1 - tail)
       .map((c) => ({ ...c, i: c.i - histOff, price: fast[c.i] as number }))
       .filter((c) => c.i >= 0);
-  }, [ov.maCross, histAll, histOff, tail]);
+  }, [ov.maCross, histAll, histOff, tail, pairKey]);
   // the trend lines, on closed bars; indices on the chart's candles (a
   // swing before the first is off to the left)
   const autoLines = useMemo(() => {
@@ -820,6 +836,8 @@ const PriceChart = ({
     return { swings, events, key, higher };
   }, [dow, ov.dow, candles]);
   const [stochSettings, setStochSettings] = useState(false);
+  // #200: the moving averages' numbers, opened from a line's gear
+  const [maSettings, setMaSettings] = useState(false);
   // #144: the indicator whose ⓘ is open in the settings list
   const [infoOpen, setInfoOpen] = useState<string | null>(null);
   const showRsi = hasRsi && prefs.rsi;
@@ -1285,11 +1303,18 @@ const PriceChart = ({
   // behind an ⓘ. Only what this chart has is listed.
   const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
   const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
-  const emaNoteText = t.chart.emaNote(emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready");
+  const openMaSettings = () => (full ? setSheet("settings") : setMaSettings((v) => !v));
+  // #200: the three lines as named in the notes ("EMA 50（オレンジ）"), and
+  // the numbers among them #142 did not measure
+  const maNamed = MA_SLOTS.map((_, i) => t.chart.ma.named(maLabel(maLines[i]), t.chart.ma.colorNames[i]));
+  const maUnmeasured = [...new Set(maLines.filter((l) => !measuredMa(l)).map(maLabel))];
+  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready");
+  const crossNames = pair2 ? [maLabel(pair2.fast), maLabel(pair2.slow)] : [maLabel(maLines[0]), maLabel(maLines[1])];
   const noteOf: Partial<Record<string, ReactNode>> = {
     signals: signalLegend ?? t.chart.signalLegend,
     ema50: emaNoteText,
     ema200: emaNoteText,
+    ma3: emaNoteText,
     kalman: t.chart.kalmanNote,
     supertrend: t.chart.supertrendNote,
     utBot: t.chart.utBotNote,
@@ -1306,7 +1331,7 @@ const PriceChart = ({
     qtBlsh: t.chart.qtBlshNote,
     // #150
     autoTrend: t.chart.autoTrendNote,
-    maCross: t.chart.maCrossNote,
+    maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
     adx: t.chart.adx.note,
@@ -1314,7 +1339,7 @@ const PriceChart = ({
     ultra: t.chart.ultraNote,
   };
   type Group = "signals" | "trend" | "oscillator";
-  const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; locked?: true; swatch?: string }> = [
+  const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; settingsOpen?: boolean; settingsLabel?: string; locked?: true; swatch?: string }> = [
     ...(flags.length > 0 ? [{ key: "signals", group: "signals" as const, name: signalName ?? t.chart.overlayNames.signals, on: ov.signals, toggle: flip("signals") }] : []),
     ...(positions && flags.length > 0 ? [{ key: "positions", group: "signals" as const, name: t.chart.overlayNames.positions, on: ov.positions, toggle: flip("positions") }] : []),
     ...(trendLines.length > 0 ? [{ key: "trendLines", group: "signals" as const, name: t.chart.overlayNames.trendLines, on: ov.trendLines, toggle: flip("trendLines") }] : []),
@@ -1324,10 +1349,28 @@ const PriceChart = ({
     { key: "ultra", group: "signals" as const, name: t.chart.overlayNames.ultra(isGoldPair(pair)), on: ov.ultra, toggle: flip("ultra") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
-    // #143: each with its line's colour
-    ...EMA_LINES.map((l) => ({ key: l.key, group: "trend" as const, name: t.chart.overlayNames.ema(l.length), on: ov[l.key], toggle: flip(l.key), swatch: l.color })),
-    // #150: the golden and dead crosses of those two lines
-    { key: "maCross", group: "trend" as const, name: t.chart.overlayNames.maCross, on: ov.maCross, toggle: flip("maCross") },
+    // #143: each with its line's colour; #200: three, each with its gear
+    // (the numbers and kinds of all three)
+    ...MA_SLOTS.map((s, i) => ({
+      key: s.key,
+      group: "trend" as const,
+      name: t.chart.overlayNames.ma(maLines[i].type, maLines[i].period),
+      on: ov[s.key],
+      toggle: flip(s.key),
+      swatch: s.color,
+      settings: openMaSettings,
+      settingsOpen: maSettings,
+      settingsLabel: t.chart.ma.settings,
+    })),
+    // #150: the golden and dead crosses of those two lines (#200: lines 1 and 2)
+    {
+      key: "maCross",
+      group: "trend" as const,
+      // the second's kind left out when both are of one ("EMA 50×200")
+      name: t.chart.overlayNames.maCross(crossNames[0], crossNames[1].split(" ")[0] === crossNames[0].split(" ")[0] ? crossNames[1].split(" ")[1] : crossNames[1]),
+      on: ov.maCross,
+      toggle: flip("maCross"),
+    },
     { key: "autoTrend", group: "trend" as const, name: t.chart.overlayNames.autoTrend, on: ov.autoTrend, toggle: flip("autoTrend") },
     { key: "ichimoku", group: "trend" as const, name: t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2), on: ov.ichimoku, toggle: flip("ichimoku") },
     { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
@@ -1348,6 +1391,8 @@ const PriceChart = ({
       on: prefs.stoch,
       toggle: () => setChartPrefs({ stoch: !prefs.stoch }),
       settings: openStochSettings,
+      settingsOpen: stochSettings,
+      settingsLabel: t.chart.stoch.settings,
     },
     // #135: off until switched on
     { key: "pctB", group: "oscillator" as const, name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
@@ -1413,11 +1458,11 @@ const PriceChart = ({
                       {item.settings && (
                         <button
                           type="button"
-                          aria-expanded={stochSettings}
-                          aria-label={t.chart.stoch.settings}
-                          title={t.chart.stoch.settings}
+                          aria-expanded={item.settingsOpen}
+                          aria-label={`${item.name}: ${item.settingsLabel}`}
+                          title={item.settingsLabel}
                           onClick={item.settings}
-                          data-testid="chart-stoch-settings"
+                          data-testid={item.key === "stoch" ? "chart-stoch-settings" : `chart-settings-${item.key}`}
                           className="p-1 rounded text-muted-foreground hover:text-foreground"
                         >
                           <Settings2 className="h-4 w-4" />
@@ -1489,6 +1534,73 @@ const PriceChart = ({
       <p className="w-full text-muted-foreground">{t.chart.stoch.note}</p>
     </div>
   );
+  // #200: the three moving averages — for each, a number from the buttons
+  // (the common ones) or typed (1 to MA_MAX), and EMA or SMA; and back to
+  // EMA 50, 200 and 20
+  const chip = (on: boolean) =>
+    `min-w-[2rem] px-1.5 py-0.5 rounded border font-mono ${on ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`;
+  const maForm = (
+    <div className="space-y-2 rounded border border-border p-2 text-[11px]" data-testid="chart-ma-form">
+      <p className="font-semibold text-foreground">{t.chart.ma.settings}</p>
+      {MA_SLOTS.map((s, i) => {
+        const line = maLines[i];
+        const n = i + 1;
+        const set = (patch: Partial<MaLine>) => setChartPrefs({ maLines: maLines.map((l, k) => (k === i ? { ...l, ...patch } : l)) });
+        return (
+          <div key={s.key} className="space-y-1 border-t border-border pt-1.5 first-of-type:border-t-0" data-testid={`chart-ma-row-${n}`}>
+            <div className="flex items-center gap-1.5">
+              <span aria-hidden="true" className="inline-block h-0.5 w-3 shrink-0 rounded" style={{ background: s.color }} />
+              <span className="font-semibold text-foreground">{t.chart.ma.line(n)}</span>
+              <span className="font-mono text-foreground" data-testid={`chart-ma-${n}-label`}>{maLabel(line)}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.presets}`}>
+              {MA_PRESETS.map((p) => (
+                <button key={p} type="button" aria-pressed={line.period === p} onClick={() => set({ period: p })} data-testid={`chart-ma-${n}-preset-${p}`} className={chip(line.period === p)}>
+                  {p}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col gap-0.5 text-muted-foreground">
+                {t.chart.ma.period}
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={MA_MAX}
+                  step={1}
+                  value={line.period}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isInteger(v) && v >= 1 && v <= MA_MAX) set({ period: v });
+                  }}
+                  aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.period}`}
+                  data-testid={`chart-ma-${n}-period`}
+                  className="w-16 rounded border border-border bg-background px-1 py-0.5 font-mono text-foreground"
+                />
+              </label>
+              <div className="flex gap-1" role="group" aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.type}`}>
+                {MA_TYPES.map((ty) => (
+                  <button key={ty} type="button" aria-pressed={line.type === ty} onClick={() => set({ type: ty })} data-testid={`chart-ma-${n}-type-${ty}`} className={chip(line.type === ty)}>
+                    {t.chart.ma.typeNames[ty]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      <p className="text-muted-foreground">{t.chart.ma.range(MA_MAX)}</p>
+      <button
+        type="button"
+        onClick={() => setChartPrefs({ maLines: [...MA_DEFAULTS] })}
+        data-testid="chart-ma-reset"
+        className="px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+      >
+        {t.chart.ma.reset}
+      </button>
+    </div>
+  );
   const switchBtn = (on: boolean) =>
     `px-3 py-1.5 rounded-lg border text-sm ${on ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`;
 
@@ -1513,6 +1625,7 @@ const PriceChart = ({
             <section className="space-y-2">
               {indicatorList({ toggle: "chart-sheet", lock: "chart-sheet-lock" })}
               {!indicatorsLocked && stochForm}
+              {!indicatorsLocked && maForm}
             </section>
             <section className="space-y-2">
               <h4 className="text-xs text-muted-foreground">{t.chart.background}</h4>
@@ -2755,7 +2868,7 @@ const PriceChart = ({
             const v = l.values[legendAt + emas.off];
             return (
               <span key={l.key} style={{ color: l.color }} data-testid={`chart-legend-${l.key}`}>
-                {`EMA ${l.length} ${v === null || v === undefined ? "—" : v.toFixed(decimals)}`}
+                {`${l.label} ${v === null || v === undefined ? "—" : v.toFixed(decimals)}`}
               </span>
             );
           })}
@@ -3707,7 +3820,8 @@ const PriceChart = ({
           </g>
         )}
 
-        {/* #143: EMA 50 (orange) and EMA 200 (purple) over the candles */}
+        {/* #143: EMA 50 (orange) and EMA 200 (purple) over the candles;
+            #200: three lines at the numbers chosen (the third cyan) */}
         {emas && (
           <g data-testid="chart-ema" clipPath={`url(#${clipId})`}>
             {emas.lines.map((l) => {
@@ -3786,7 +3900,8 @@ const PriceChart = ({
             })}
           </g>
         )}
-        {/* #150: EMA 50 × 200 — GC over the crossing, DC under it */}
+        {/* #150: EMA 50 × 200 — GC over the crossing, DC under it (#200: the
+            shorter of lines 1 and 2 × the longer) */}
         {maCrosses && (
           <g data-testid="chart-macross">
             {maCrosses.filter((c) => onScreen(c.i)).map((c) => {
@@ -3796,7 +3911,7 @@ const PriceChart = ({
               const cy = y(c.price);
               return (
                 <g key={`mx-${c.i}`} data-testid={`chart-macross-${c.side}`}>
-                  <title>{t.chart.maCrossTitle(c.side)}</title>
+                  <title>{t.chart.maCrossTitle(c.side, crossNames[0], crossNames[1])}</title>
                   <circle cx={x(c.i)} cy={cy} r={3 * fs} fill={color} stroke="hsl(var(--background))" strokeWidth={1} />
                   <text x={x(c.i)} y={gc ? cy - 6 * fs : cy + fsz + 5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}>
                     {c.side}
@@ -4168,6 +4283,8 @@ const PriceChart = ({
       {/* #117: the stochastic's lengths, opened from its gear in the list
           (#119; in full screen the gear opens the settings sheet) */}
       {!full && stochSettings && <div className="px-1 pt-1">{stochForm}</div>}
+      {/* #200: the moving averages' numbers, opened from a line's gear */}
+      {!full && maSettings && !indicatorsLocked && <div className="px-1 pt-1">{maForm}</div>}
       {/* #104: RSI under the price, on the same x scale so a bar here is the
           bar above it. The two outer lines are the rule's levels (#132: 25/75) */}
       {showRsi && rsi && strip({

@@ -412,7 +412,7 @@ describe("#151 the live chart reads the bars before its own for ULTRA", () => {
   it("with only ULTRA on", async () => {
     localStorage.setItem(
       CHART_PREFS_KEY,
-      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false, ultra: true } }),
+      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, ma3: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false, ultra: true } }),
     );
     resetChartPrefsCache();
     const M15 = 15 * 60_000;

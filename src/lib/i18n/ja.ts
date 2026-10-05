@@ -256,6 +256,19 @@ export const ja = {
       reset: "既定（14・1・3）に戻す",
       note: "TradingView の「ストキャスティクス」と同じ計算（%K=直近の高値・安値の中での終値の位置、%D=%K の移動平均、80/20）。#132 で総当たりして前半で1位だった 21・5・3、70/30 は、後半で元の設定より悪かった（勝率28.7%、元の設定は29.1%）ため元に戻しました。表示のみで、サインの判定には使っていません。",
     },
+    // #200: the three moving averages' numbers and kinds
+    ma: {
+      settings: "移動平均線の設定",
+      line: (n: number) => `線${n}`,
+      period: "数字（期間）",
+      type: "種類",
+      typeNames: { EMA: "EMA（指数）", SMA: "SMA（単純）" } as Record<string, string>,
+      presets: "よく使う数字",
+      range: (max: number) => `1〜${max} の整数`,
+      reset: "初期設定（EMA 50・200・20）に戻す",
+      colorNames: ["オレンジ", "紫", "水色"] as ReadonlyArray<string>,
+      named: (label: string, color: string) => `${label}（${color}）`,
+    },
     // #140: the indicators, a paid feature
     lockedHint: "Light プランで使えます",
     lockedNote: "🔒 のインジケーターは Light プラン（月額2,980円）で使えます。売買サインと RSI・パラボリックSAR は無料で表示できます。",
@@ -294,13 +307,14 @@ export const ja = {
       zoneShift: (length: number) => `Zone Shift ${length}`,
       dow: "ダウ理論",
       gainzPro: "Pro型（点数）",
-      ema: (length: number) => `EMA ${length}`,
+      // #200: each moving average by its kind and number (EMA 50)
+      ma: (type: string, period: number) => `${type} ${period}`,
       // #145
       qTrend: (period: number, atr: number, mult: number) => `Q-Trend ${period} ${atr} ${mult}`,
       qtBlsh: "Q-Trend × BLSH（3つの確認）",
       // #150
       autoTrend: "トレンドライン",
-      maCross: "GC・DC（EMA 50×200）",
+      maCross: (fast: string, slow: string) => `GC・DC（${fast}×${slow}）`,
       ichimoku: (conv: number, base: number, span2: number) => `一目均衡表 ${conv} ${base} ${span2}`,
       // #151
       ultra: (gold: boolean): string => (gold ? "ULTRA（RSI 14・SL $13・TP $4/10/16）" : "ULTRA（RSI 14・SL 13・TP 4/10/16 pips）"),
@@ -376,8 +390,10 @@ export const ja = {
     // #150: the trend tools of the owner's note
     autoTrendNote:
       "トレンドライン: 上昇中は安値同士、下降中は高値同士を結んだ線。ダウ理論と同じ山・谷（左右4本より高い・安い足、4本あとに分かる）のうち、直近の「切り上がった2つの谷」を結ぶ線（緑）と、直近の「切り下がった2つの山」を結ぶ線（赤）を右へ延ばします。終値が線をはっきり割ったら（ヒゲではなく終値）そこで線を止め、「割れ」「抜け」と書きます。流れが変わりつつある目安です。確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
-    maCrossNote:
-      "GC・DC: EMA 50 が EMA 200 を下から上に抜けた確定足に GC（ゴールデンクロス）、上から下に抜けた確定足に DC（デッドクロス）。線が表示されていなくても印は出ます。移動平均の交差なので、流れが変わったあとで遅れて出ます。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
+    maCrossNote: (fast: string, slow: string, none: boolean) =>
+      none
+        ? "GC・DC: 線1と線2が同じ移動平均なので、交差はありません（線1か線2の数字・種類を変えると出ます）。"
+        : `GC・DC: 線1と線2のうち短い方（${fast}）が長い方（${slow}）を下から上に抜けた確定足に GC（ゴールデンクロス）、上から下に抜けた確定足に DC（デッドクロス）。線が表示されていなくても印は出ます。移動平均の交差なので、流れが変わったあとで遅れて出ます。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。`,
     ichimokuNote:
       "一目均衡表（TradingView の標準インジケーターと同じ計算・初期設定 9・26・52、ずらし26）: 転換線（青、9本の高値と安値の中間）、基準線（濃い赤、26本）、先行スパン1・2（転換線と基準線の平均、52本の中間）を25本先にずらして描いた「雲」（先行1が上なら緑、下なら赤）、遅行スパン（緑、終値を25本前にずらした線）。価格が雲より上なら上昇優勢、下なら下落優勢、中なら様子見の目安で、チャートの左上に「雲の上・中・下」を出します。このチャートは最新の足より右に余白がないため、25本先の雲（未来の部分）は描いていません。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
     ichimokuSide: { above: "雲の上（上昇優勢）", inside: "雲の中", below: "雲の下（下落優勢）" } as Record<string, string>,
@@ -397,7 +413,8 @@ export const ja = {
     // #156: Q-Trend's newest signal with ULTRA's numbers
     qtPlanTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[]): string =>
       `Q-Trend ${side === "BUY" ? "買い" : "売り"}（損切り・利確は ULTRA と同じ数字）: エントリー ${entry}・損切り ${sl}・TP1 ${tps[0]}・TP2 ${tps[1]}・TP3 ${tps[2]}`,
-    maCrossTitle: (side: "GC" | "DC"): string => (side === "GC" ? "ゴールデンクロス（EMA 50 が EMA 200 を上に抜けた）" : "デッドクロス（EMA 50 が EMA 200 を下に抜けた）"),
+    maCrossTitle: (side: "GC" | "DC", fast: string, slow: string): string =>
+      side === "GC" ? `ゴールデンクロス（${fast} が ${slow} を上に抜けた）` : `デッドクロス（${fast} が ${slow} を下に抜けた）`,
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD（TradingView の標準インジケーターと同じ計算・初期設定 12・26・9）: 青の線＝EMA 12 − EMA 26、オレンジの線＝その9本 EMA（シグナル）、棒＝その差（ヒストグラム。0より上で増えていると濃い緑、減っていると薄い緑、0より下で減っていると濃い赤、増えていると薄い赤）。線が0より上なら上向き、シグナルを上に抜けると勢いが上向きに変わった目安です。表示のみで、サインの判定には使っていません。",
@@ -406,11 +423,13 @@ export const ja = {
       name: (di: number, adx: number) => `ADX ${di} ${adx}`,
       note: "ADX と DMI（TradingView の標準インジケーター「Directional Movement Index」と同じ計算・初期設定 14・14）: ピンクの線が ADX（トレンドの強さ。方向は表しません）、青が +DI（上への動き）、オレンジが −DI（下への動き）。ADX が25（点線）を超えるとトレンドが出ている目安で、そのとき +DI が上なら上昇、−DI が上なら下降のトレンドです。25未満は横ばいの目安。表示のみで、サインの判定には使っていません。",
     },
-    // #143
-    emaNote: (bars: number | null, status: "loading" | "ready" | "error") =>
-      "EMA 50（オレンジ）・EMA 200（紫）: 終値の指数移動平均（TradingView と同じ計算）。終値が線より上なら上向き、下なら下向きの流れです。" +
+    // #143, #200: the three lines (each "EMA 50（オレンジ）"), and those of them
+    // #142 did not measure (it measured SMA 25, 75, 200 and EMA 50, 200)
+    emaNote: (lines: ReadonlyArray<string>, others: ReadonlyArray<string>, bars: number | null, status: "loading" | "ready" | "error") =>
+      `移動平均線 ${lines.join("・")}: 終値の移動平均（EMA は指数、SMA は単純。TradingView と同じ計算）。数字と種類は、各線の ⚙ で選べます。終値が線より上なら上向き、下なら下向きの流れです。` +
       "#142 で31個のインジケーターを過去のチャート（11ペア・15分/1時間/4時間、2024-01〜2026-09）で比べたところ、画面の120本くらいの流れ（4時間足で約3〜4週間）は EMA 50 の上か下かが最もよく読め（後半 71.6%、ストキャスは 68.3%）、それより大きな流れ（4時間足で約2〜3か月）は200本の移動平均が最もよく読めました。" +
       "ただし読めるのはこれまでの流れで、その後48本の値動きが読みと同じ向きだったのは約半分です。4時間足だけで見ると、後半のストキャスとの差は見分けられませんでした。" +
+      (others.length > 0 ? `#142 で測った移動平均は SMA 25・75・200 と EMA 50・200 だけで、${others.join("・")} は測っていません。` : "") +
       (status === "loading"
         ? "画面より前の足を読み込み中です。"
         : status === "error"

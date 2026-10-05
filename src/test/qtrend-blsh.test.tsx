@@ -498,7 +498,7 @@ describe("#145 the live chart reads the bars before its own for them", () => {
   it("with only BLSH on", async () => {
     localStorage.setItem(
       CHART_PREFS_KEY,
-      JSON.stringify({ blsh: true, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false } }),
+      JSON.stringify({ blsh: true, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, ma3: false, qTrend: false, qtBlsh: false } }),
     );
     const now = T0 + 259 * M15 + 60_000;
     const readFor = (pair: string, interval: string): LiveRead => {

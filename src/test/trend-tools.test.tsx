@@ -193,7 +193,7 @@ describe("#150 the live chart reads the bars before its own for them", () => {
   it("with only the golden and dead crosses on", async () => {
     localStorage.setItem(
       CHART_PREFS_KEY,
-      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: true, ichimoku: false } }),
+      JSON.stringify({ blsh: false, macd: false, adx: false, overlays: { zoneShift: false, gainzPro: false, ema50: false, ema200: false, ma3: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: true, ichimoku: false } }),
     );
     resetChartPrefsCache();
     const M15 = 15 * 60_000;
