@@ -1,0 +1,279 @@
+{
+ "name": "late_nobar_at_T",
+ "what": "decisions D9: the told row 'late' with an email whose pair has no 5-minute bar opening at T (its next bar opens after the weekend) while the other pair's does; the trade columns counted from T, the late path its own",
+ "hand": [
+  "Runs row_late_F10k_C0 (start 0) and row_late_FF1_C0 (1,000,000). JPY pairs, spread 0.4 pip. Winter: the NY close is 21:55 UTC.",
+  "T Fri 2024-02-09 20:00 (bar 16:00), in admission order: USD/JPY BUY (mid 150.000, TP1 150.040, stop 149.870), EUR/JPY BUY (mid 160.000, TP1 160.040, stop 159.870). Both have a bar ending at T (bids 149.998, 159.998).",
+  "  USD/JPY has a bar opening at T (20:00-20:05, flat). EUR/JPY has none (no_bar_at_T): its next bar opens Sun 2024-02-11 22:00, the week's first.",
+  "Both judged at T: F10k admits both (order term: 0.04 x 10,000 x 150.000 = 60,000, then + 0.04 x 10,000 x 160.000 = 124,000, P/L 0).",
+  "  FF1: E = 1,000,000, 76,000 units each; margin after 456,000, then 456,000 + 486,400 = 942,400 <= 1,000,000: both admitted (slots and margin held from T).",
+  "USD/JPY's first bar (20:00-20:05) bid close 149.998, ask 150.002: not past a level: in at 150.002 at 20:05. Its 21:00 bar bid high 150.045: out at TP1 150.040 (21:05): F10k 380; FF1 76,000 x 0.038 = 2,888 (1,002,888).",
+  "EUR/JPY's first bar at or after T is Sun 22:00-22:05 (bid close 159.998, ask 160.002): not past a level: in at 160.002, its enter row at Sun 22:05 (the bar's end).",
+  "  Its Mon 01:00 bar bid high 160.045: out at TP1 160.040 (01:05): F10k 380 (760); FF1 2,888 (1,005,776).",
+  "Fri's NY close 21:55: no bar ends then; the stand-in is 21:10 (USD/JPY's 21:05 bar). Nothing is open (EUR/JPY is not yet in): no call; F10k's term 0 - 380 = -380.",
+  "F10k E*: order 124,000 (Fri 20:00); NY close -380 (Fri 21:10; the later ones, after every exit, -760); loss-cut term: 20:05 30,000 + 40 = 30,040, Sun 22:05 32,000 - (380 - 40) = 31,660 (the largest); loss 40 at 20:05.",
+  "  E* = 124,000 from the order term: lost 0, margin 124,000.",
+  "Trade columns (money-trades.csv, in expect_trades), counted from T for every variant (D9). The grid G: Fri 20:00, 20:05, 21:05, 21:10, Sun 22:05, Mon 01:05, 01:10 (then the flush, 02:10, 02:15).",
+  "  EUR/JPY late (entry_g Sun 22:05, fill 160.002) and main (from T, fill 160.002, followed from the Sun 22:00 bar) both out at Mon 01:05:",
+  "    hold_grid = #(Fri 20:00, Mon 01:05] = 20:05, 21:05, 21:10, 22:05, 01:05 = 5; cal_ms = 53 h 5 min = 191,100,000;",
+  "    weekend = 1 (Fri in the week from Sun 2024-02-04 21:00, Mon in the week from Sun 2024-02-11 21:00); nights_ny = 1 (Fri 21:55 is between T and the exit).",
+  "    Counted from the late trade's first bar's open (Sun 22:00) instead: 2, 11,100,000, 0 and 0.",
+  "  USD/JPY (a bar at T) main and late, out at Fri 21:05: hold_grid 2 (20:05, 21:05), cal_ms 3,900,000, weekend 0, nights_ny 0 (21:55 is after the exit).",
+  "Plants: exitlate (USD/JPY out at 21:10, EUR/JPY at 01:10, each the pair's next bar)."
+ ],
+ "conventions": [
+  "the rows an email's admission writes (its enter or skip, and the AS netting closes of the told row 'net') carry g = T, the 4-hour close the email belongs to, even where no 5-minute bar of any pair opens at T (decisions R1; in every fixture some pair's bar opens at T, so T is also that bar's open s); a deadline and its exits carry the forced bar's open s; rows of exits inside a bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end: T + 5 min where its pair has a bar opening at T (in late_nobar_at_T one pair has none, and its first bar is the next it has).",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at T before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at T, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at T (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T), except for a pair a fixture names in no_bar_at_T (late_nobar_at_T): its trade starts at its next bar, while another pair's bar opens at T.",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then.",
+  "the zero row's \u03b4 comes from the fixture's own trades (every signal's TP1-whole trade stands for \u00a78.99's 3,958): F10k \u2212(their mean yen at 10,000 units, a USD pair at USD/JPY's mid at its exit's g), FFk \u2212(their mean pips \u00f7 13), there turned into yen a position as \u03b4 \u00d7 units \u00d7 13 pips at T; a position's share at a grid time g is #(T, g] \u00f7 its trade's hold_grid, both counted on the union grid.",
+  "worst_week_yen and worst_day_yen: weeks from Sunday 21:00 UTC, days from 21:00 UTC; a close is in the period of its bar's open (no close in the fixtures that expect them ends at exactly 21:00, so this decides nothing there); a period's change is its last equity in the span less the last of the period before, the start for the first.",
+  "expect_trades rows are money-trades.csv's (interface.md \u00a74.2), matched by id and variant; a late row's entry_g and fill are its first bar's end and close. Both programs' fixture modes compare them with their own trades table (every column a row gives: hold_grid, cal_ms, weekend, nights_ny and the rest) at the same tolerances as expect (decisions R7), as make.py does with recompute.py's."
+ ],
+ "start": "2024-02-09",
+ "end": "2024-03-08T08:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "EUR/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "EUR/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "row_late_F10k_C0",
+   "sizing": "F10k",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": "late",
+   "start_equity": 0,
+   "order": 0
+  },
+  {
+   "key": "row_late_FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": "late",
+   "start_equity": 1000000,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "row_late_F10k_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-02-09T20:05:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 150.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-02-09T21:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 150.04,
+     "pnl_yen": 379.9999999998249,
+     "balance": 380,
+     "reason": "tp"
+    },
+    {
+     "seq": 3,
+     "g": "2024-02-11T22:05:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 160.002
+    },
+    {
+     "seq": 4,
+     "g": "2024-02-12T01:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 160.04,
+     "pnl_yen": 379.9999999998249,
+     "balance": 760,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 760.0,
+    "final_equity": 760.0,
+    "taken": 2,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0,
+    "estar": {
+     "value": 124000.0,
+     "terms": [
+      {
+       "name": "order",
+       "value": 124000.0,
+       "g": "2024-02-09T20:00:00.000Z"
+      },
+      {
+       "name": "nyclose",
+       "value": -380.0,
+       "g": "2024-02-09T21:10:00.000Z"
+      },
+      {
+       "name": "losscut",
+       "value": 31660.0,
+       "g": "2024-02-11T22:05:00.000Z"
+      },
+      {
+       "name": "loss",
+       "value": 40.0,
+       "g": "2024-02-09T20:05:00.000Z"
+      }
+     ],
+     "lost": 0.0,
+     "margin": 124000.0
+    }
+   }
+  },
+  "row_late_FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-02-09T20:05:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 150.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-02-09T21:05:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 150.04,
+     "pnl_yen": 2887.9999999986694,
+     "balance": 1002888,
+     "reason": "tp"
+    },
+    {
+     "seq": 3,
+     "g": "2024-02-11T22:05:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 160.002
+    },
+    {
+     "seq": 4,
+     "g": "2024-02-12T01:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+     "units": 76000,
+     "px": 160.04,
+     "pnl_yen": 2887.9999999986694,
+     "balance": 1005776,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 1005776.0,
+    "final_equity": 1005776.0,
+    "taken": 2,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 0,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "expect_trades": [
+  {
+   "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+   "variant": "main",
+   "fill": 150.002,
+   "entry_g": "2024-02-09T20:00:00.000Z",
+   "exit_kind": "tp",
+   "x": "2024-02-09T21:05:00.000Z",
+   "exit_px": 150.04,
+   "hold_grid": 2,
+   "cal_ms": 3900000,
+   "weekend": 0,
+   "nights_ny": 0
+  },
+  {
+   "id": "USD/JPY|2024-02-09T20:00:00.000Z|BUY",
+   "variant": "late",
+   "fill": 150.002,
+   "entry_g": "2024-02-09T20:05:00.000Z",
+   "exit_kind": "tp",
+   "x": "2024-02-09T21:05:00.000Z",
+   "exit_px": 150.04,
+   "hold_grid": 2,
+   "cal_ms": 3900000,
+   "weekend": 0,
+   "nights_ny": 0
+  },
+  {
+   "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+   "variant": "main",
+   "fill": 160.002,
+   "entry_g": "2024-02-09T20:00:00.000Z",
+   "exit_kind": "tp",
+   "x": "2024-02-12T01:05:00.000Z",
+   "exit_px": 160.04,
+   "hold_grid": 5,
+   "cal_ms": 191100000,
+   "weekend": 1,
+   "nights_ny": 1
+  },
+  {
+   "id": "EUR/JPY|2024-02-09T20:00:00.000Z|BUY",
+   "variant": "late",
+   "fill": 160.002,
+   "entry_g": "2024-02-11T22:05:00.000Z",
+   "exit_kind": "tp",
+   "x": "2024-02-12T01:05:00.000Z",
+   "exit_px": 160.04,
+   "hold_grid": 5,
+   "cal_ms": 191100000,
+   "weekend": 1,
+   "nights_ny": 1
+  }
+ ],
+ "plants": [
+  "exitlate"
+ ]
+}

@@ -1,0 +1,136 @@
+{
+ "name": "lot_floor",
+ "what": "FF1 from 13,100 yen: 1,000 units, then under 1,000 after a stop whose bar ends at the next email's T (skip 'lot'); the size taken at T, not 4 hours later",
+ "hand": [
+  "Run FF1_C0 from 13,100 yen (k = 1%). A JPY pair's 13 pips are 0.13 yen a unit, so units = floor(0.01 x E / 0.13 / 1000) x 1000.",
+  "Mon 2024-01-08 12:00 (T of USD/JPY BUY, bar 08:00): its 4-hour close bid 149.998 / ask 150.002, mid 150.000; TP1 150.040, stop 149.870; fill (ask) 150.002.",
+  "  Nothing open: E = 13,100; 0.01 x 13,100 / 0.13 = 1,007.7 units -> 1,000. Margin after 0.04 x 1,000 x 150.000 = 6,000 <= 13,100: enter 1,000 at 150.002.",
+  "16:00 (T of EUR/JPY BUY, bar 12:00; mid 160.000, fill 160.002, TP1 160.040, stop 159.870): USD/JPY marked at the bid close of its bar ending 16:00, 149.950: E = 13,100 + 1,000 x (149.950 - 150.002) = 13,048.",
+  "  0.01 x 13,048 / 0.13 = 1,003.7 -> 1,000. Margin after 0.04 x 1,000 x 149.952 + 0.04 x 1,000 x 160.000 = 5,998.08 + 6,400 = 12,398.08 <= 13,048: enter 1,000 at 160.002.",
+  "19:55 bar of USD/JPY (19:55-20:00): bid low 149.860 <= stop 149.870 (open 149.950 not past it; it closes back at 149.950): out at 149.870, the bar's end 20:00. P/L 1,000 x (149.870 - 150.002) = -132; balance 12,968.",
+  "20:00 (T of AUD/JPY BUY, bar 16:00; mid 100.000): USD/JPY's exit bar ended at 20:00 = T, so it is closed (not marked at its close 149.950). E = 12,968 + EUR/JPY 1,000 x (159.998 - 160.002) = 12,964; 0.01 x 12,964 / 0.13 = 997.2 -> 0 < 1,000: skip 'lot'.",
+  "  (Had USD/JPY still been counted open at T, marked at 149.950, E would be 13,100 - 52 - 4 = 13,044 -> 1,003.4 -> 1,000 units, and AUD/JPY would be skipped 'margin' instead: 0.04 x 1,000 x (149.952 + 160.000 + 100.000) = 16,398.08 > 13,044.)",
+  "21:00 bar of EUR/JPY: bid high 160.045 >= TP1 160.040: out at 160.040 (21:05). P/L 1,000 x 0.038 = 38; balance 13,006. Nothing open at the NY close (21:55; no bar then, the stand-in is the last grid time, flat): no call.",
+  "Plants: roundlot rounds 997.2 up to 1,000 and enters AUD/JPY at 20:00 (margin 6,400 + 4,000 = 10,400 <= 12,964), so the 'lot' skip becomes an entry and an AUD/JPY exit (TP 100.040 at 20:35) appears.",
+  "  sizefuture sizes EUR/JPY (T 16:00) on the equity at 20:00, after USD/JPY's stop: 12,964 (or 12,968 without EUR/JPY's own mark) -> 0 units: a skip where 1,000 were entered.",
+  "  pipplus (the first trade, USD/JPY, 1 pip better): its exit 149.880, P/L -122, every later balance 10 more.",
+  "  exitlate: USD/JPY out at 20:05, so at 20:00 it is still open (E 13,044, 1,000 units) and AUD/JPY is skipped 'margin', not 'lot'; EUR/JPY out at 21:10."
+ ],
+ "conventions": [
+  "the rows an email's admission writes (its enter or skip, and the AS netting closes of the told row 'net') carry g = T, the 4-hour close the email belongs to, even where no 5-minute bar of any pair opens at T (decisions R1; in every fixture some pair's bar opens at T, so T is also that bar's open s); a deadline and its exits carry the forced bar's open s; rows of exits inside a bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end: T + 5 min where its pair has a bar opening at T (in late_nobar_at_T one pair has none, and its first bar is the next it has).",
+  "seq counts from 1 in each run; rows in processing order (\u2460\u2013\u2465), exits of one bar and the positions closed by one loss-cut or deadline in the admission order of their entries.",
+  "a call, or E*'s NY-close term, judged at the stand-in (no 5-minute bar ends at \u03c4) carries the stand-in grid time as its g, not \u03c4.",
+  "E* terms are named order, nyclose, losscut, loss; a term's g is the first time its largest value is reached; lost = \u2212(P/L) at the binding term's time (order: the state at T before the order; nyclose: on mids), margin = value \u2212 lost (for the loss-cut term, half the margin held).",
+  "the emails of one bar are sized on the equity at T, and the margin test compares the margin after the order (with the bar's earlier admitted orders, all at T's mids) with that same equity at T (the earlier orders' spread not taken off).",
+  "F10k runs start at 0 yen, so balance and equity are the P/L; course 25 is the 25x course (4% margin), losscut 0.5, order 0 the fixed admission order.",
+  "the losscut event row's equity is E(g) at the test (the same after closing at g's closes).",
+  "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
+  "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
+  "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
+  "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T), except for a pair a fixture names in no_bar_at_T (late_nobar_at_T): its trade starts at its next bar, while another pair's bar opens at T.",
+  "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then.",
+  "the zero row's \u03b4 comes from the fixture's own trades (every signal's TP1-whole trade stands for \u00a78.99's 3,958): F10k \u2212(their mean yen at 10,000 units, a USD pair at USD/JPY's mid at its exit's g), FFk \u2212(their mean pips \u00f7 13), there turned into yen a position as \u03b4 \u00d7 units \u00d7 13 pips at T; a position's share at a grid time g is #(T, g] \u00f7 its trade's hold_grid, both counted on the union grid.",
+  "worst_week_yen and worst_day_yen: weeks from Sunday 21:00 UTC, days from 21:00 UTC; a close is in the period of its bar's open (no close in the fixtures that expect them ends at exactly 21:00, so this decides nothing there); a period's change is its last equity in the span less the last of the period before, the start for the first.",
+  "expect_trades rows are money-trades.csv's (interface.md \u00a74.2), matched by id and variant; a late row's entry_g and fill are its first bar's end and close. Both programs' fixture modes compare them with their own trades table (every column a row gives: hold_grid, cal_ms, weekend, nights_ny and the rest) at the same tolerances as expect (decisions R7), as make.py does with recompute.py's."
+ ],
+ "start": "2024-01-08",
+ "end": "2024-02-05T08:00:00Z",
+ "pairs": [
+  "USD/JPY",
+  "EUR/JPY",
+  "AUD/JPY"
+ ],
+ "digits": {
+  "USD/JPY": 3,
+  "EUR/JPY": 3,
+  "AUD/JPY": 3
+ },
+ "runs": [
+  {
+   "key": "FF1_C0",
+   "sizing": "FF1",
+   "cap": "C0",
+   "course": 25,
+   "losscut": 0.5,
+   "row": null,
+   "start_equity": 13100,
+   "order": 0
+  }
+ ],
+ "expect": {
+  "FF1_C0": {
+   "ledger": [
+    {
+     "seq": 1,
+     "g": "2024-01-08T12:00:00.000Z",
+     "kind": "enter",
+     "id": "USD/JPY|2024-01-08T12:00:00.000Z|BUY",
+     "units": 1000,
+     "px": 150.002
+    },
+    {
+     "seq": 2,
+     "g": "2024-01-08T16:00:00.000Z",
+     "kind": "enter",
+     "id": "EUR/JPY|2024-01-08T16:00:00.000Z|BUY",
+     "units": 1000,
+     "px": 160.002
+    },
+    {
+     "seq": 3,
+     "g": "2024-01-08T20:00:00.000Z",
+     "kind": "exit",
+     "id": "USD/JPY|2024-01-08T12:00:00.000Z|BUY",
+     "units": 1000,
+     "px": 149.87,
+     "pnl_yen": -132.000000000005,
+     "balance": 12968,
+     "reason": "sl"
+    },
+    {
+     "seq": 4,
+     "g": "2024-01-08T20:00:00.000Z",
+     "kind": "skip",
+     "id": "AUD/JPY|2024-01-08T20:00:00.000Z|BUY",
+     "reason": "lot"
+    },
+    {
+     "seq": 5,
+     "g": "2024-01-08T21:05:00.000Z",
+     "kind": "exit",
+     "id": "EUR/JPY|2024-01-08T16:00:00.000Z|BUY",
+     "units": 1000,
+     "px": 160.04,
+     "pnl_yen": 37.99999999998249,
+     "balance": 13006,
+     "reason": "tp"
+    }
+   ],
+   "summary": {
+    "final_balance": 13006,
+    "final_equity": 13006,
+    "taken": 2,
+    "skipped": {
+     "call": 0,
+     "cap": 0,
+     "lot": 1,
+     "margin": 0,
+     "passed": 0
+    },
+    "calls": 0,
+    "cures": 0,
+    "deadlines": 0,
+    "losscuts": 0,
+    "shortfall_yen": 0.0
+   }
+  }
+ },
+ "plants": [
+  "roundlot",
+  "sizefuture",
+  "pipplus",
+  "exitlate"
+ ]
+}
