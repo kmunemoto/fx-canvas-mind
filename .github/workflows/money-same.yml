@@ -1,0 +1,65 @@
+# #188: the real data's run 1 (37245830575, its check failed) and run 2
+# (37248350037, every step passed) ran the same research/money.ts on the same
+# END, so the study's files must be the same (docs §8.99). The development
+# container cannot reach the artifacts' store, so this compares them here, by
+# fingerprint only (sha256; money.json without its run times): it prints the
+# file names and whether each is the same, and no number from inside them.
+#
+# Read-only: it downloads the two runs' artifacts and writes nothing to the
+# repository.
+name: Compare the money runs (fingerprints)
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/money-same.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  same:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: money-out
+          run-id: 37245830575
+          github-token: ${{ github.token }}
+          path: run1
+      - uses: actions/download-artifact@v4
+        with:
+          name: money-out
+          run-id: 37248350037
+          github-token: ${{ github.token }}
+          path: run2
+      - name: Fingerprints
+        shell: python3 {0}
+        run: |
+          import hashlib, json, os, sys
+          def fp(path):
+              if os.path.basename(path) == "money.json":
+                  d = json.load(open(path))
+                  d.pop("times_ms", None)
+                  if isinstance(d.get("meta"), dict):
+                      d["meta"].pop("runtime_ms", None)
+                  return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
+              return hashlib.sha256(open(path, "rb").read()).hexdigest()
+          def names(d):
+              return sorted(os.path.relpath(os.path.join(r, f), d) for r, _, fs in os.walk(d) for f in fs)
+          a, b = names("run1"), names("run2")
+          print(f"files: run 1 {len(a)}, run 2 {len(b)}; " + ("the same names" if a == b else f"names differ: {sorted(set(a) ^ set(b))}"))
+          same = differ = 0
+          for f in sorted(set(a) & set(b)):
+              s = os.path.getsize(os.path.join("run1", f)), os.path.getsize(os.path.join("run2", f))
+              if fp(os.path.join("run1", f)) == fp(os.path.join("run2", f)):
+                  same += 1
+                  print(f"  same    {f} ({s[0]} bytes)")
+              else:
+                  differ += 1
+                  print(f"  DIFFERS {f} ({s[0]} / {s[1]} bytes)")
+          print(f"identical {same}, differ {differ}")
+          sys.exit(0 if differ == 0 and a == b else 1)
