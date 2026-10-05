@@ -1,19 +1,18 @@
 {
- "name": "call_deadline",
- "what": "a call not cured: the equity comes back over the margin overnight (not a cure), and every position is closed at the deadline (next weekday 09:00 UTC) at its bar's open",
+ "name": "timeout_closure",
+ "what": "a trade neither TP nor stop reaches: out on time at the close of its last 5-minute bar before the end of its 30th 4-hour bar, that end inside the weekend's closure (no 5-minute bar ends at it), for every variant, Rakuten's spread's too",
  "hand": [
-  "Run FF1_C0 from 1,000,000. JPY pairs, spread 0.4 pip.",
-  "T Wed 2024-01-24 12:00: USD/JPY BUY (mid 140.000, fill 140.002, TP1 140.040, stop 139.870), GBP/JPY BUY (mid 188.000, fill 188.002, TP1 188.040, stop 187.870). 76,000 each; margin 425,600 + 571,520 = 997,120: both enter.",
-  "NY close Wed 21:55: bids 139.938 and 187.948 (mids 139.940, 187.950).",
-  "  Loss-cut: E = 1,000,000 + 76,000 x (139.938 - 140.002) + 76,000 x (187.948 - 188.002) = 991,032: none.",
-  "  On mids: 1,000,000 - 4,712 - 3,952 = 991,336; margin 0.04 x 76,000 x (139.940 + 187.950) = 996,785.6: call, C = 5,449.6. Deadline Thu 09:00 UTC.",
-  "Thu 03:00 bars: mids back at 140.000 and 188.000 (E on mids 999,696 >= 997,120). Nothing closed: no cure.",
-  "Thu 09:00 (the first bars opening at the deadline): close everything at each bar's open on the exit side.",
-  "  USD/JPY bid open 139.960: 76,000 x (139.960 - 140.002) = -3,192 (996,808). GBP/JPY bid open 187.980: 76,000 x (187.980 - 188.002) = -1,672 (995,136).",
-  "  (The trades' own exits come later: USD/JPY's stop and GBP/JPY's TP1 at 10:05; the account no longer holds them.)",
-  "Win rates (decisions D1): both taken trades went out at the deadline ('deadline': in both denominators, never a win): win_all 0/2 = 0, win_resolved 0/2 = 0.",
-  "  (Counting only tp, sl and amb would leave no denominator.)",
-  "Plants: curemove cures at Thu 03:05 and nothing is closed at 09:00. callexitside: C = 996,785.6 - 991,032 = 5,753.6. marginentry: the margin fixed at the entry (997,120 at the entry mids, 997,132.16 at the fills) gives C = 5,784 or 5,796.16."
+  "Run F10k_C0 (start 0). GBP/JPY, spread 0.4 pip; GBP/JPY has no Rakuten spread (advertised '-'), so its Rakuten variant is on GMO's own prices. Winter: the NY close is 21:55 UTC.",
+  "Signal GBP/JPY BUY, bar Sun 2024-01-07 20:00 (the week's first 4-hour bar; its only 5-minute bar 23:55, bid 189.998): T Mon 2024-01-08 00:00. Mid close 190.000, fill (ask) 190.002, TP1 190.040, TP2 190.100, TP3 190.160, stop 189.870.",
+  "The 4-hour bars of the week (the fixtures' closure is Fri 22:00 to Sun 21:00 UTC): Sun 20:00, Mon to Thu 6 a day, Fri 00:00 to 20:00 (6): 31. The 30th after the signal bar is Fri 20:00, so the trades end at Sat 2024-01-13 00:00, inside the closure.",
+  "The 5-minute bars: Mon 00:00 (flat at the close of the bar ending at T, bid 189.998) and Fri 21:55 (flat, bid 190.018), then the flush at Sun 2024-01-14 21:55 and 22:00, after the end.",
+  "No bar reaches a level (bids 189.998 and 190.018, between the stop 189.870 and TP1 190.040). Every variant goes out on time at the close of the last bar before the end, Fri 21:55 (bid 190.018), at that bar's end Fri 22:00: P/L 0.016 x 10,000 = 160 yen, +1.6 pips.",
+  "  Five minutes late: in at the close of the bar opening at T (ask 190.002; its bid 189.998 is past no level), entry_g Mon 00:05, followed from the next bar: out the same.",
+  "  Rakuten's spread: GMO's own prices (no Rakuten spread for GBP/JPY): the same as main. The last bar before the end ends at Fri 22:00, two hours before the end; the data goes on after the end (the flush), so this is a time-out, not data that ran out.",
+  "Ledger F10k_C0: enter Mon 00:00 10,000 at 190.002; exit Fri 22:00 10,000 at 190.018, P/L 160, balance 160, reason 'time'. Final 160, taken 1.",
+  "Trade columns (counted from T): the grid G is the bar ends Mon 00:00, 00:05, Fri 22:00, Sun 22:00, 22:05. hold_grid = #(Mon 00:00, Fri 22:00] = 00:05, Fri 22:00 = 2; cal_ms = 118 h = 424,800,000;",
+  "  weekend 0 (both in the week from Sun 2024-01-07 21:00); nights_ny 5 (the NY closes Mon to Fri 21:55, all between T and Fri 22:00).",
+  "Plants: pipplus (out at 190.028: P/L 260); exitlate (out at the next bar, the flush's Sun 21:55, its end Sun 22:00)."
  ],
  "conventions": [
   "the rows an email's admission writes (its enter or skip, and the AS netting closes of the told row 'net') carry g = T, the 4-hour close the email belongs to, even where no 5-minute bar of any pair opens at T (decisions R1; in every fixture some pair's bar opens at T, so T is also that bar's open s); a deadline and its exits carry the forced bar's open s; rows of exits inside a bar, the loss-cut, the cure and the call carry the bar's end g; a late email's enter row (or its skip 'passed') carries its first bar's end: T + 5 min where its pair has a bar opening at T (in late_nobar_at_T one pair has none, and its first bar is the next it has).",
@@ -34,86 +33,53 @@
   "worst_week_yen and worst_day_yen: weeks from Sunday 21:00 UTC, days from 21:00 UTC; a close is in the period of its bar's open (no close in the fixtures that expect them ends at exactly 21:00, so this decides nothing there); a period's change is its last equity in the span less the last of the period before, the start for the first.",
   "expect_trades rows are money-trades.csv's (interface.md \u00a74.2), matched by id and variant; a late row's entry_g and fill are its first bar's end and close. Both programs' fixture modes compare them with their own trades table (every column a row gives: hold_grid, cal_ms, weekend, nights_ny and the rest) at the same tolerances as expect (decisions R7), as make.py does with recompute.py's."
  ],
- "start": "2024-01-24",
- "end": "2024-02-21T00:00:00Z",
+ "start": "2024-01-07",
+ "end": "2024-02-02T16:00:00Z",
  "pairs": [
-  "USD/JPY",
   "GBP/JPY"
  ],
  "digits": {
-  "USD/JPY": 3,
   "GBP/JPY": 3
  },
  "runs": [
   {
-   "key": "FF1_C0",
-   "sizing": "FF1",
+   "key": "F10k_C0",
+   "sizing": "F10k",
    "cap": "C0",
    "course": 25,
    "losscut": 0.5,
    "row": null,
-   "start_equity": 1000000,
+   "start_equity": 0,
    "order": 0
   }
  ],
  "expect": {
-  "FF1_C0": {
+  "F10k_C0": {
    "ledger": [
     {
      "seq": 1,
-     "g": "2024-01-24T12:00:00.000Z",
+     "g": "2024-01-08T00:00:00.000Z",
      "kind": "enter",
-     "id": "USD/JPY|2024-01-24T12:00:00.000Z|BUY",
-     "units": 76000,
-     "px": 140.002
+     "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 190.002
     },
     {
      "seq": 2,
-     "g": "2024-01-24T12:00:00.000Z",
-     "kind": "enter",
-     "id": "GBP/JPY|2024-01-24T12:00:00.000Z|BUY",
-     "units": 76000,
-     "px": 188.002
-    },
-    {
-     "seq": 3,
-     "g": "2024-01-24T21:55:00.000Z",
-     "kind": "call",
-     "pnl_yen": 5449.600000002538,
-     "margin": 996785.6
-    },
-    {
-     "seq": 4,
-     "g": "2024-01-25T09:00:00.000Z",
-     "kind": "deadline"
-    },
-    {
-     "seq": 5,
-     "g": "2024-01-25T09:00:00.000Z",
+     "g": "2024-01-12T22:00:00.000Z",
      "kind": "exit",
-     "id": "USD/JPY|2024-01-24T12:00:00.000Z|BUY",
-     "units": 76000,
-     "px": 139.96,
-     "pnl_yen": -3192.000000000121,
-     "balance": 996808,
-     "reason": "deadline"
-    },
-    {
-     "seq": 6,
-     "g": "2024-01-25T09:00:00.000Z",
-     "kind": "exit",
-     "id": "GBP/JPY|2024-01-24T12:00:00.000Z|BUY",
-     "units": 76000,
-     "px": 187.98,
-     "pnl_yen": -1672.0000000015034,
-     "balance": 995136,
-     "reason": "deadline"
+     "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+     "units": 10000,
+     "px": 190.018,
+     "pnl_yen": 159.99999999991132,
+     "balance": 159.99999999991132,
+     "reason": "time"
     }
    ],
    "summary": {
-    "final_balance": 995136.0,
-    "final_equity": 995136.0,
-    "taken": 2,
+    "final_balance": 160.0,
+    "final_equity": 160.0,
+    "taken": 1,
     "skipped": {
      "call": 0,
      "cap": 0,
@@ -121,19 +87,70 @@
      "margin": 0,
      "passed": 0
     },
-    "calls": 1,
+    "calls": 0,
     "cures": 0,
-    "deadlines": 1,
+    "deadlines": 0,
     "losscuts": 0,
-    "shortfall_yen": 0.0,
-    "win_all": 0.0,
-    "win_resolved": 0.0
+    "shortfall_yen": 0.0
    }
   }
  },
+ "expect_trades": [
+  {
+   "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+   "variant": "main",
+   "fill": 190.002,
+   "entry_g": "2024-01-08T00:00:00.000Z",
+   "exit_kind": "time",
+   "x": "2024-01-12T22:00:00.000Z",
+   "exit_px": 190.018,
+   "hold_grid": 2,
+   "cal_ms": 424800000,
+   "weekend": 0,
+   "nights_ny": 5
+  },
+  {
+   "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+   "variant": "tp2",
+   "fill": 190.002,
+   "entry_g": "2024-01-08T00:00:00.000Z",
+   "exit_kind": "time",
+   "x": "2024-01-12T22:00:00.000Z",
+   "exit_px": 190.018,
+   "hold_grid": 2,
+   "cal_ms": 424800000,
+   "weekend": 0,
+   "nights_ny": 5
+  },
+  {
+   "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+   "variant": "tp3",
+   "fill": 190.002,
+   "entry_g": "2024-01-08T00:00:00.000Z",
+   "exit_kind": "time",
+   "x": "2024-01-12T22:00:00.000Z",
+   "exit_px": 190.018,
+   "hold_grid": 2,
+   "cal_ms": 424800000,
+   "weekend": 0,
+   "nights_ny": 5
+  },
+  {
+   "id": "GBP/JPY|2024-01-08T00:00:00.000Z|BUY",
+   "variant": "late",
+   "fill": 190.002,
+   "entry_g": "2024-01-08T00:05:00.000Z",
+   "exit_kind": "time",
+   "x": "2024-01-12T22:00:00.000Z",
+   "exit_px": 190.018,
+   "hold_grid": 2,
+   "cal_ms": 424800000,
+   "weekend": 0,
+   "nights_ny": 5
+  }
+ ],
  "plants": [
-  "curemove",
-  "callexitside",
-  "marginentry"
+  "pipplus",
+  "exitlate"
  ]
 }

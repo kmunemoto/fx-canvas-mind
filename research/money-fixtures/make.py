@@ -67,7 +67,7 @@ CONVENTIONS = [
     "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after ③ at its first bar's close, and is in E and the margin from that bar's end.",
     "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
     "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
-    "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+    "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole, but timeout_closure's, which no level reaches: it goes out on time at the close of its last 5-minute bar before the end of its 30th 4-hour bar, that end inside the closure; each pair held at a deadline has a bar opening exactly at the deadline.",
     "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
     "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T), except for a pair a fixture names in no_bar_at_T (late_nobar_at_T): its trade starts at its next bar, while another pair's bar opens at T.",
     "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then.",
@@ -1263,6 +1263,51 @@ def worst_week_up():
 
 
 FIXTURES.append(worst_week_up)
+
+
+# ---- timeout_closure: out on time where the 30th 4-hour bar ends in the closure ---------------
+# The real run (run 37245830575) found the check cutting the Rakuten variant's
+# bars at the end before following them, so a trade that timed out with no
+# 5-minute bar ending at the end (its last bar before the weekend) was taken
+# for one whose data ran out first (§8.99).
+
+def timeout_closure():
+    g = tid("GBP/JPY", "2024-01-07 20:00", "BUY")
+    led = Ledger()
+    led.enter("2024-01-08 00:00", g, 10_000, 190.002)
+    led.exit("2024-01-12 22:00", g, 10_000, 190.018, 10_000 * (190.018 - 190.002), 10_000 * (190.018 - 190.002), "time")
+
+    def row(variant, entry_g):
+        return {"id": g, "variant": variant, "fill": 190.002, "entry_g": iso(at(entry_g)), "exit_kind": "time", "x": iso(at("2024-01-12 22:00")),
+                "exit_px": 190.018, "hold_grid": 2, "cal_ms": 118 * HOUR, "weekend": 0, "nights_ny": 5}
+
+    return {
+        "name": "timeout_closure",
+        "what": "a trade neither TP nor stop reaches: out on time at the close of its last 5-minute bar before the end of its 30th 4-hour bar, that end inside the weekend's closure (no 5-minute bar ends at it), for every variant, Rakuten's spread's too",
+        "hand": [
+            "Run F10k_C0 (start 0). GBP/JPY, spread 0.4 pip; GBP/JPY has no Rakuten spread (advertised '-'), so its Rakuten variant is on GMO's own prices. Winter: the NY close is 21:55 UTC.",
+            "Signal GBP/JPY BUY, bar Sun 2024-01-07 20:00 (the week's first 4-hour bar; its only 5-minute bar 23:55, bid 189.998): T Mon 2024-01-08 00:00. Mid close 190.000, fill (ask) 190.002, TP1 190.040, TP2 190.100, TP3 190.160, stop 189.870.",
+            "The 4-hour bars of the week (the fixtures' closure is Fri 22:00 to Sun 21:00 UTC): Sun 20:00, Mon to Thu 6 a day, Fri 00:00 to 20:00 (6): 31. The 30th after the signal bar is Fri 20:00, so the trades end at Sat 2024-01-13 00:00, inside the closure.",
+            "The 5-minute bars: Mon 00:00 (flat at the close of the bar ending at T, bid 189.998) and Fri 21:55 (flat, bid 190.018), then the flush at Sun 2024-01-14 21:55 and 22:00, after the end.",
+            "No bar reaches a level (bids 189.998 and 190.018, between the stop 189.870 and TP1 190.040). Every variant goes out on time at the close of the last bar before the end, Fri 21:55 (bid 190.018), at that bar's end Fri 22:00: P/L 0.016 x 10,000 = 160 yen, +1.6 pips.",
+            "  Five minutes late: in at the close of the bar opening at T (ask 190.002; its bid 189.998 is past no level), entry_g Mon 00:05, followed from the next bar: out the same.",
+            "  Rakuten's spread: GMO's own prices (no Rakuten spread for GBP/JPY): the same as main. The last bar before the end ends at Fri 22:00, two hours before the end; the data goes on after the end (the flush), so this is a time-out, not data that ran out.",
+            "Ledger F10k_C0: enter Mon 00:00 10,000 at 190.002; exit Fri 22:00 10,000 at 190.018, P/L 160, balance 160, reason 'time'. Final 160, taken 1.",
+            "Trade columns (counted from T): the grid G is the bar ends Mon 00:00, 00:05, Fri 22:00, Sun 22:00, 22:05. hold_grid = #(Mon 00:00, Fri 22:00] = 00:05, Fri 22:00 = 2; cal_ms = 118 h = 424,800,000;",
+            "  weekend 0 (both in the week from Sun 2024-01-07 21:00); nights_ny 5 (the NY closes Mon to Fri 21:55, all between T and Fri 22:00).",
+            "Plants: pipplus (out at 190.028: P/L 260); exitlate (out at the next bar, the flush's Sun 21:55, its end Sun 22:00).",
+        ],
+        "pairs": ["GBP/JPY"],
+        "bars": {"GBP/JPY": [flat("2024-01-07 23:55", 189.998), flat("2024-01-12 21:55", 190.018)]},
+        "signals": [("GBP/JPY", "2024-01-07 20:00", "BUY")],
+        "runs": [run("F10k_C0", "F10k")],
+        "expect": {"F10k_C0": {"ledger": led.rows, "summary": summary(160.0, taken=1)}},
+        "expect_trades": [row("main", "2024-01-08 00:00"), row("tp2", "2024-01-08 00:00"), row("tp3", "2024-01-08 00:00"), row("late", "2024-01-08 00:05")],
+        "plants": ["pipplus", "exitlate"],
+    }
+
+
+FIXTURES.append(timeout_closure)
 
 
 # ---- the files ------------------------------------------------------------------------------

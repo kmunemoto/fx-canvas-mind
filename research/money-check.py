@@ -484,7 +484,12 @@ def build_trade(sg, f, four, wrong):
     f.rakuten(unit)
     f1 = bisect.bisect_left(f.t, end) if end is not None else len(f.t)
     ro, rh, rl, rc = rakuten_slice(f, f0, f1, buy)
-    out["rakuten"] = make("rakuten", rk_fill, tp1, follow(f.t[:f1], ro, rh, rl, rc, f0, buy, sl, tp1, end, base=f0), T)
+    # the prices only to the end (f1), the times all of them: follow stops at
+    # the first bar at or after the end, and only where there is none has the
+    # data run out first (the real run found the times cut at f1 too, so a
+    # time-out whose last bar ended before an end in the closure was taken for
+    # that: timeout_closure)
+    out["rakuten"] = make("rakuten", rk_fill, tp1, follow(f.t, ro, rh, rl, rc, f0, buy, sl, tp1, end, base=f0), T)
     sg.tv = out
 
 
