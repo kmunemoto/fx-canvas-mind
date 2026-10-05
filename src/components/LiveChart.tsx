@@ -349,13 +349,11 @@ const LiveChart = ({
   // #200: and while a moving average on (or one of the crosses', when on)
   // is longer than MA_DEEP_FROM, or the history above is too few bars for
   // it (an EMA needs about three times its length; GMO's daily history is
-  // this year's and last year's files only). Decided here, once, and told
-  // to the chart (`deepForMa`)
+  // this year's and last year's files only) — unless the deep read for this
+  // pair and timeframe came back whole with no more bars than the history
+  // above (GMO's weekly and monthly: that history is every bar there is).
+  // Decided here, once, and told to the chart (`deepForMa`)
   const commonBefore = gmoRead && history?.key === historyKey ? historyBefore(history.bars, gmoRead.candles) : null;
-  const maDeep =
-    indicatorsAllowed &&
-    maNeedsDeep(overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
-  const deepOn = indicatorsAllowed && (overlays.zlTema || maDeep);
   const [deepHistory, setDeepHistory] = useState<{
     key: string;
     readAt: string;
@@ -363,6 +361,19 @@ const LiveChart = ({
     status: "loading" | "ready" | "error";
     complete: boolean;
   } | null>(null);
+  const deepNoMore =
+    commonBefore !== null &&
+    gmoRead !== null &&
+    deepHistory?.key === historyKey &&
+    deepHistory.status === "ready" &&
+    deepHistory.complete &&
+    // (still joined to the chart: one it has moved past is read again)
+    (historyBefore(deepHistory.bars, gmoRead.candles)?.length ?? Infinity) <= commonBefore.length;
+  const maDeep =
+    indicatorsAllowed &&
+    !deepNoMore &&
+    maNeedsDeep(overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
+  const deepOn = indicatorsAllowed && (overlays.zlTema || maDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;

@@ -442,6 +442,22 @@ describe("#200 three moving averages, each at the number chosen", () => {
     expect(screen.queryByTestId("chart-ma3-line")).toBeNull();
   });
 
+  it("say the same in English: the deep read, the bars not all read, and a line that starts within the chart and differs a lot", () => {
+    setChartPrefs({ maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period: 500, type: "EMA" }] });
+    const all = walk(600);
+    rtlRender(
+      <LocaleProvider initial="en">
+        <PriceChart candles={all.slice(480)} pair="USD/JPY" zoneShiftHistory={{ bars: all.slice(0, 480), status: "ready" }} deepHistory={{ bars: null, status: "error" }} deepForMa />
+      </LocaleProvider>,
+    );
+    fireEvent.click(screen.getByTestId("chart-info-ma3"));
+    const note = screen.getByTestId("chart-info-text-ma3").textContent!;
+    expect(note).toContain("While a line longer than 200, or one the bars the chart always reads are too few for, is on (the GC / DC's lines too), the chart reads deep into the bars before its own");
+    expect(note).toContain("The deep bars could not all be read, so drawn over the bars it always reads (tried again on the next bar).");
+    expect(note).toContain("Computed over 600 bars");
+    expect(note).toContain("EMA 500 starts within the chart: too few bars before its first, and may differ a lot from TradingView's.");
+  });
+
   it("the live chart reads the bars before its own with the third line alone on (none with it off too)", async () => {
     const off = { zoneShift: false, gainzPro: false, ema50: false, ema200: false, qTrend: false, qtBlsh: false, autoTrend: false, maCross: false, ichimoku: false, ultra: false, zlTema: false };
     const NOW = T0 + 259 * M15 + 60_000;
@@ -528,6 +544,36 @@ describe("#200 three moving averages, each at the number chosen", () => {
     }
   });
 
+  it("the live chart reads the deep history once where it brings no more bars (as GMO's weekly and monthly), then says nothing of it", async () => {
+    const NOW = T0 + 259 * M15 + 60_000;
+    const read = normalizeLiveRead(liveRead("USD/JPY", "15min", quotes(260), NOW))!;
+    const readFor = (pair: string, interval: string): LiveRead => ({ ...read, pair, interval, nextClose: new Date(Date.now() + 600_000).toISOString() });
+    const firstAt = (Date.parse(read.candles[0].datetime.replace(" ", "T") + "Z") - T0) / M15;
+    // every bar there is: 76 before the chart's, too few for the defaults' EMA 200
+    const every: NumericCandle[] = [...walk(76, 37).map((c, k) => ({ ...c, datetime: stamp(firstAt - 76 + k) })), ...read.candles.slice(0, -1)];
+    const loadDeepHistory = vi.fn(async () => ({ bars: every, complete: true }));
+    render(
+      <LiveChart
+        defaultInterval="15min"
+        loadBars={async (pair: string, interval: string) => readFor(pair, interval)}
+        loadTicks={async () => ({})}
+        loadHistory={async () => every}
+        loadDeepHistory={loadDeepHistory}
+        loadDow={async () => []}
+        indicatorsAllowed
+      />,
+    );
+    await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId("chart-ema50-line")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-info-ema200"));
+    await waitFor(() => expect(screen.getByTestId("chart-info-text-ema200").textContent).not.toContain("深く読み込み中"));
+    const note = screen.getByTestId("chart-info-text-ema200").textContent!;
+    expect(note).not.toContain("読み切れなかった");
+    expect(note).toContain(`EMA 200は200本の足が要りますが、計算に使えた足が${76 + read.candles.length}本のため引けません。`);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(loadDeepHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("the live chart draws the line over the history it always reads while the deep one loads (and says so), then over the deep bars", async () => {
     const NOW = T0 + 259 * M15 + 60_000;
     const read = normalizeLiveRead(liveRead("USD/JPY", "15min", quotes(260), NOW))!;
@@ -577,6 +623,7 @@ describe("#200 three moving averages, each at the number chosen", () => {
     );
     fireEvent.click(screen.getByTestId("chart-info-ma3"));
     let note = screen.getByTestId("chart-info-text-ma3").textContent!;
+    expect(note).toContain("200より長い線か、ふだん読む足では足りない線（GC・DC に使う線を含む）がオンの間は、画面より前の足を深く読みます");
     expect(note).toContain("画面より前の足を深く読み込み中です");
     expect(note).toContain("計算に使った足: 600本");
     expect(note).toContain("EMA 300は計算に使えた足が少ないため、TradingView の値と少しずれることがあります。");
@@ -605,6 +652,18 @@ describe("#200 three moving averages, each at the number chosen", () => {
       expect(note).toContain("深く読み切れなかったため、ふだん読む足で引いています");
       expect(note).toContain("計算に使った足: 600本");
       expect(legend()).toBeCloseTo(maValues(closes(common), { period: 300, type: "EMA" }).at(-1) as number, 3);
+    }
+    // read for the Zero-lag TEMA alone (not for these lines): nothing said of its loading or failing
+    for (const deepHistory of [{ bars: null, status: "loading" as const }, { bars: null, status: "error" as const }]) {
+      rerender(
+        <LocaleProvider initial="ja">
+          <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={deepHistory} />
+        </LocaleProvider>,
+      );
+      note = screen.getByTestId("chart-info-text-ma3").textContent!;
+      expect(note).not.toContain("深く読み込み中");
+      expect(note).not.toContain("読み切れなかった");
+      expect(note).toContain("計算に使った足: 600本");
     }
     // a chart that does not read it says nothing of it
     rerender(

@@ -673,8 +673,9 @@ const PriceChart = ({
   const maLines = prefs.maLines;
   // over the deep history where it has more bars than the one every chart
   // reads (read for these lines, or for the Zero-lag TEMA); else over that
-  // one — while the deep one loads, if it fails, or if it stopped short
-  // (the note says which)
+  // one — while the deep one loads, if it fails, or if it stopped short.
+  // The note says which only when it is read for these lines (`deepForMa`):
+  // read for the Zero-lag TEMA alone, the lines have enough without it
   const deepBars = deepHistory ? deepHistory.bars : null;
   const maPast = deepBars && (zsPast === null || deepBars.length > zsPast.length) ? deepBars : zsPast;
   const emaOn = MA_SLOTS.map((s, i) => (ov[s.key] ? `${s.key}:${maLines[i].type}:${maLines[i].period}` : "")).filter(Boolean).join(" ");
