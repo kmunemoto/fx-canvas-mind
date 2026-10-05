@@ -90,6 +90,8 @@ const Index = () => {
         )}
 
         {user && <LiveChart indicatorsAllowed={indicatorsAllowed} onLockedIndicator={() => navigate("/pricing")} />}
+        {/* #201: the moving averages alone, on a pair and timeframe of its own */}
+        {user && <LiveChart mode="ma" indicatorsAllowed={indicatorsAllowed} onLockedIndicator={() => navigate("/pricing")} />}
       </main>
 
       <footer className="border-t border-border py-3 px-4">

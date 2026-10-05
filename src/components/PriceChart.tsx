@@ -194,6 +194,11 @@ interface Props {
   // #200: whether that deep history is being read for the moving averages
   // (LiveChart decides: a line longer than MA_DEEP_FROM, or too few bars)
   deepForMa?: boolean;
+  // #201: the moving averages and nothing else — the three lines (their
+  // numbers, kinds and switches shared with every chart), no other
+  // indicator, strip or crosses whatever is saved on, and only the three in
+  // the settings list
+  maOnly?: boolean;
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
   // of them), `higher` those above it. Given, it is listed; drawn: the
@@ -218,6 +223,8 @@ interface Props {
 // #140: what the lock covers — every indicator added to the chart (#117 on)
 const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
+// #201: the three moving averages' switches
+const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -354,7 +361,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, deepHistory, deepForMa = false, dow, indicatorsLocked = false, onLockedIndicator,
+  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, deepHistory, deepForMa = false, maOnly = false, dow, indicatorsLocked = false, onLockedIndicator,
   landscapeFullscreen = false, drawable = false,
 }: Props) => {
   // #149: the newest candles left out of every indicator's judging
@@ -585,13 +592,21 @@ const PriceChart = ({
   // stochastic, each as chosen (for every chart, kept in this browser)
   const saved = useChartPrefs();
   // #140: while the indicators are locked, every one of them is off here,
-  // whatever this browser saved (the saved choice comes back with a plan)
+  // whatever this browser saved (the saved choice comes back with a plan).
+  // #201: on the moving averages' own chart, all but the three lines are
+  // off here too (and saved as they were)
   const prefs = useMemo(() => {
-    if (!indicatorsLocked) return saved;
-    const overlays = { ...saved.overlays };
+    let p = saved;
+    if (maOnly) {
+      const overlays = { ...saved.overlays };
+      for (const k of Object.keys(overlays) as Array<keyof ChartOverlays>) if (!MA_KEYS.has(k)) overlays[k] = false;
+      p = { ...saved, rsi: false, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
+    }
+    if (!indicatorsLocked) return p;
+    const overlays = { ...p.overlays };
     for (const k of LOCKED_OVERLAYS) overlays[k] = false;
-    return { ...saved, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
-  }, [saved, indicatorsLocked]);
+    return { ...p, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
+  }, [saved, indicatorsLocked, maOnly]);
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
   // #135: Bollinger %b and RCI, computed only while switched on
   const pctB = useMemo(() => (prefs.pctB ? percentB(candles) : null), [prefs.pctB, candles]);
@@ -1456,7 +1471,9 @@ const PriceChart = ({
   ].map((item) => (indicatorsLocked && LOCKED_KEYS.has(item.key)
     // #140: listed, so what a plan adds is in sight, but off and locked
     ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
-    : item));
+    : item))
+    // #201: the moving averages' own chart lists the three lines only
+    .filter((item) => !maOnly || MA_KEYS.has(item.key));
   const onCount = overlayItems.filter((i) => i.on).length;
   // #144: the settings list, grouped — in the card (folded under its
   // button) and in full screen's settings sheet; `ids` names its switches
@@ -1700,7 +1717,7 @@ const PriceChart = ({
           <div className="space-y-4" data-testid="chart-settings">
             <section className="space-y-2">
               {indicatorList({ toggle: "chart-sheet", lock: "chart-sheet-lock" })}
-              {!indicatorsLocked && stochForm}
+              {!indicatorsLocked && !maOnly && stochForm}
               {!indicatorsLocked && maForm}
             </section>
             <section className="space-y-2">

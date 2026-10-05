@@ -168,6 +168,9 @@ export interface ChartPrefs {
   theme: ChartTheme;
   overlays: ChartOverlays;
   live: LivePrefs;
+  // #201: the moving averages' own chart's pair and timeframe (its lines
+  // are the ones above, shared)
+  maLive: LivePrefs;
   drawing: DrawingPrefs;
 }
 
@@ -193,6 +196,7 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   theme: "dark",
   overlays: OVERLAY_DEFAULTS,
   live: LIVE_PREFS_DEFAULTS,
+  maLive: LIVE_PREFS_DEFAULTS,
   drawing: DRAWING_PREFS_DEFAULTS,
 };
 
@@ -220,6 +224,7 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
     theme: v.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(v.overlays),
     live: livePrefsOf(v.live),
+    maLive: livePrefsOf(v.maLive),
     drawing: drawingPrefsOf(v.drawing),
   };
 };
@@ -249,6 +254,7 @@ export const setChartPrefs = (patch: Partial<ChartPrefs>): void => {
     theme: next.theme === "light" ? "light" : "dark",
     overlays: overlaysOf(next.overlays),
     live: livePrefsOf(next.live),
+    maLive: livePrefsOf(next.maLive),
     drawing: drawingPrefsOf(next.drawing),
   };
   save();

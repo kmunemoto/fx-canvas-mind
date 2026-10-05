@@ -602,6 +602,14 @@ export const en: Dict = {
   },
 
   live: {
+    // #201: the moving averages' own chart, under the live chart
+    maTitle: "Moving averages chart",
+    maNote: (allowed: boolean) =>
+      "The candles and the moving averages only (no signal marks, strips or other indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
+      (allowed
+        ? "The three lines' lengths, kinds and switches are the live chart's above: a change on either is made on both. "
+        : "The moving averages are drawn with a plan that has the indicators (Light and up). ") +
+      "The prices come as on the chart above (GMO Coin's public rates for its pairs; for the other pairs and gold, Twelve Data's bars and Swissquote's prices). Shown only: no signal or email uses it.",
     title: "Live chart",
     connecting: "Connecting…",
     updated: (clock: string) => `Updated ${clock}`,

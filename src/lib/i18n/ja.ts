@@ -649,6 +649,14 @@ export const ja = {
   // #113: リアルタイムチャート（5通貨ペア）
   live: {
     title: "リアルタイムチャート",
+    // #201: the moving averages' own chart, under the live chart
+    maTitle: "移動平均線チャート",
+    maNote: (allowed: boolean) =>
+      "ローソク足と移動平均線だけのチャートです（サインの印・下の帯・ほかのインジケーターは出しません）。ペアと時間足は、このチャートで別に選べます。" +
+      (allowed
+        ? "移動平均線3本の数字・種類・表示のオンオフは、上のリアルタイムチャートと共通です（どちらで変えても両方に効きます）。"
+        : "移動平均線は、インジケーターを使えるプラン（Light 以上）で表示されます。") +
+      "価格の取り方は上のチャートと同じです（GMOコインのペアは GMO の公開レート、ほかのペアと金は Twelve Data の足と Swissquote の価格）。表示のみで、サインの判定・メールには使っていません。",
     connecting: "接続中…",
     updated: (clock: string) => `更新 ${clock}`,
     pairsLabel: "通貨ペア",

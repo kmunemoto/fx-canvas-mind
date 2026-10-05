@@ -286,22 +286,48 @@ describe("#154 those pairs on the live chart", () => {
     // #175: the row's last pair before gold is CZK/JPY now (USD/HKD was)
     localStorage.setItem("sextant.chart.prefs.v1", JSON.stringify({ live: { pair: "CZK/JPY", interval: "1min", view: "gainz" } }));
     resetChartPrefsCache();
-    const seen: string[] = [];
-    const had = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function (this: Element) {
-      seen.push(this.getAttribute("data-testid") ?? "");
+    // #201: the row is scrolled sideways only (scrollIntoView moved the page as well, to a chart
+    // lower on it): a row 300 wide, the pair 900 along it, 120 further once its price shows
+    const left = new WeakMap<Element, number>();
+    let widened = false;
+    const rect = (l: number, r: number) => ({ left: l, right: r, top: 0, bottom: 20, width: r - l, height: 20, x: l, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const hadRect = Element.prototype.getBoundingClientRect;
+    const hadInto = Element.prototype.scrollIntoView;
+    const into = vi.fn();
+    Element.prototype.scrollIntoView = into;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this.getAttribute("data-testid") === "live-pairs") return rect(0, 300);
+      if (this.getAttribute("data-testid") === "live-pair-CZK/JPY") {
+        const at = 900 + (widened ? 120 : 0) - (left.get(this.parentElement!) ?? 0);
+        return rect(at, at + 60);
+      }
+      return hadRect.call(this);
     };
+    Object.defineProperty(HTMLElement.prototype, "scrollLeft", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return left.get(this) ?? 0;
+      },
+      set(this: HTMLElement, v: number) {
+        left.set(this, v);
+      },
+    });
     try {
       let answer: ((v: Record<string, Tick>) => void) | null = null;
       const loadTicks = vi.fn(() => new Promise<Record<string, Tick>>((res) => (answer ??= res)));
       render(<LiveChart loadBars={async (p, i) => readFor(p, i)} loadTicks={loadTicks} loadHistory={async () => []} loadDow={async () => []} />);
-      await waitFor(() => expect(seen).toContain("live-pair-CZK/JPY"));
-      const before = seen.length;
+      const row = screen.getByTestId("live-pairs");
+      expect(screen.getByTestId("live-pair-CZK/JPY").parentElement).toBe(row);
+      // its right edge at the row's: 900 + 60 - 300
+      await waitFor(() => expect(row.scrollLeft).toBe(660));
+      widened = true;
       answer!({ "CZK/JPY": { bid: 6.845, ask: 6.851, mid: 6.848, time: new Date().toISOString(), open: true } });
-      await waitFor(() => expect(seen.length).toBeGreaterThan(before));
-      expect(seen.at(-1)).toBe("live-pair-CZK/JPY");
+      await waitFor(() => expect(row.scrollLeft).toBe(780));
+      expect(into).not.toHaveBeenCalled();
     } finally {
-      Element.prototype.scrollIntoView = had;
+      Element.prototype.getBoundingClientRect = hadRect;
+      Element.prototype.scrollIntoView = hadInto;
+      delete (HTMLElement.prototype as { scrollLeft?: number }).scrollLeft;
     }
   });
 
