@@ -1,0 +1,35 @@
+# #205: the first GMO 1-minute day file of each of the five pairs of the
+# owner's 15-minute ULTRA emails (research/min1-start.ts, the look before the
+# study, docs §8.102). Counts bars only; no price is computed.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public files and
+# prints a report to the job log. It writes nothing to the repository and
+# holds no secret.
+name: Research 1-minute first days
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/min1-start.ts
+      - .github/workflows/min1-start.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  min1-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The five pairs' first 1-minute day files (no price read)
+        run: >
+          deno run
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          research/min1-start.ts
