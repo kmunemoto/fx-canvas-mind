@@ -5,6 +5,9 @@
 # fingerprint only (sha256; money.json without its run times): it prints the
 # file names and whether each is the same, and no number from inside them.
 #
+# Then research/money-look.py looks into the rows run 2 told to look into
+# before reporting (docs §8.99 先読みを疑うとき) from run 2's own files.
+#
 # Read-only: it downloads the two runs' artifacts and writes nothing to the
 # repository.
 name: Compare the money runs (fingerprints)
@@ -14,6 +17,7 @@ on:
       - claude/app-confirmation-jvmk03
     paths:
       - .github/workflows/money-same.yml
+      - research/money-look.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: money-out
@@ -63,3 +68,5 @@ jobs:
                   print(f"  DIFFERS {f} ({s[0]} / {s[1]} bytes)")
           print(f"identical {same}, differ {differ}")
           sys.exit(0 if differ == 0 and a == b else 1)
+      - name: Look into the told rows (run 2)
+        run: python3 research/money-look.py run2
