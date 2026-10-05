@@ -40,7 +40,7 @@ import { ZLT_DEFAULTS, ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
-import { MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maValues, measuredMa } from "@/lib/emaLines";
+import { MA_DEEP_FROM, MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maNeedsDeep, maShortfall, maValues, measuredMa } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
@@ -668,17 +668,23 @@ const PriceChart = ({
   // ones on as "key:EMA:50" (a string, so a change elsewhere in the
   // preferences does not compute them again)
   const maLines = prefs.maLines;
+  // a line longer than MA_DEEP_FROM (or the crosses of one) over the deep
+  // history once it is there; until then, and if it cannot be read, over
+  // the history every chart reads (the note says which)
+  const maDeep = maNeedsDeep(ov, maLines);
+  const maDeepBars = maDeep && deepHistory ? deepHistory.bars : null;
+  const maPast = maDeepBars ?? zsPast;
   const emaOn = MA_SLOTS.map((s, i) => (ov[s.key] ? `${s.key}:${maLines[i].type}:${maLines[i].period}` : "")).filter(Boolean).join(" ");
   const emas = useMemo(() => {
-    if (emaOn === "" || candles.length === 0 || zsPast === null) return null;
-    const closes = [...zsPast.map((b) => b.close), ...candles.map((c) => c.close)];
+    if (emaOn === "" || candles.length === 0 || maPast === null) return null;
+    const closes = [...maPast.map((b) => b.close), ...candles.map((c) => c.close)];
     const lines = emaOn.split(" ").map((s) => {
       const [key, type, period] = s.split(":");
       const line: MaLine = { type: type as MaLine["type"], period: Number(period) };
-      return { key, color: MA_SLOTS.find((m) => m.key === key)?.color ?? "#FF9800", label: maLabel(line), values: maValues(closes, line) };
+      return { key, color: MA_SLOTS.find((m) => m.key === key)?.color ?? "#FF9800", line, label: maLabel(line), values: maValues(closes, line) };
     });
-    return { off: zsPast.length, total: closes.length, lines };
-  }, [emaOn, zsPast, candles]);
+    return { off: maPast.length, total: closes.length, lines };
+  }, [emaOn, maPast, candles]);
   // #145: Q-Trend and BLSH over the same history and the candles (Q-Trend's
   // line needs 200 closes before its first); the triple confirmation needs
   // both, whichever of them is drawn
@@ -756,23 +762,25 @@ const PriceChart = ({
     return { plus: r.plus.slice(histOff), minus: r.minus.slice(histOff), adx: r.adx.slice(histOff) };
   }, [prefs.adx, histAll, histOff]);
   // golden and dead crosses of EMA 50 and 200 (whether the lines are drawn
-  // or not), on closed bars. #200: of lines 1 and 2 at their numbers, the
-  // shorter as the fast one (none when the two are the same line)
+  // or not), on closed bars. #200: of lines 1 and 2 at their numbers (the
+  // fast one as crossPair picks it; none when the two are the same line),
+  // over the same bars as the lines
   const pair2 = crossPair(maLines);
   // as "EMA:50 EMA:200" (fast, slow), for the same reason
   const pairKey = pair2 ? `${pair2.fast.type}:${pair2.fast.period} ${pair2.slow.type}:${pair2.slow.period}` : "";
   const maCrosses = useMemo(() => {
-    if (!ov.maCross || !histAll || pairKey === "") return null;
+    if (!ov.maCross || candles.length === 0 || maPast === null || pairKey === "") return null;
     const [fastLine, slowLine] = pairKey.split(" ").map((s): MaLine => {
       const [type, period] = s.split(":");
       return { type: type as MaLine["type"], period: Number(period) };
     });
-    const closes = histAll.map((b) => b.close);
+    const closes = [...maPast.map((b) => b.close), ...candles.map((c) => c.close)];
+    const off = maPast.length;
     const fast = maValues(closes, fastLine);
-    return crossesOf(fast, maValues(closes, slowLine), histAll.length - 1 - tail)
-      .map((c) => ({ ...c, i: c.i - histOff, price: fast[c.i] as number }))
+    return crossesOf(fast, maValues(closes, slowLine), closes.length - 1 - tail)
+      .map((c) => ({ ...c, i: c.i - off, price: fast[c.i] as number }))
       .filter((c) => c.i >= 0);
-  }, [ov.maCross, histAll, histOff, tail, pairKey]);
+  }, [ov.maCross, maPast, candles, tail, pairKey]);
   // the trend lines, on closed bars; indices on the chart's candles (a
   // swing before the first is off to the left)
   const autoLines = useMemo(() => {
@@ -836,8 +844,21 @@ const PriceChart = ({
     return { swings, events, key, higher };
   }, [dow, ov.dow, candles]);
   const [stochSettings, setStochSettings] = useState(false);
-  // #200: the moving averages' numbers, opened from a line's gear
+  // #200: the moving averages' numbers, opened from a line's gear; the form
+  // brought into view and its first number focused each time the gear opens
+  // it (in full screen it is in the settings sheet, with the list the gear
+  // is in); a number as typed until it is a whole number from 1 to MA_MAX
+  // (so it can be cleared and typed again), back to the saved one on leaving
   const [maSettings, setMaSettings] = useState(false);
+  const [maFocus, setMaFocus] = useState(0);
+  const maFormRef = useRef<HTMLDivElement>(null);
+  const [maDraft, setMaDraft] = useState<Partial<Record<number, string>>>({});
+  useEffect(() => {
+    const el = maFocus > 0 ? maFormRef.current : null;
+    if (!el) return;
+    el.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    el.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }, [maFocus]);
   // #144: the indicator whose ⓘ is open in the settings list
   const [infoOpen, setInfoOpen] = useState<string | null>(null);
   const showRsi = hasRsi && prefs.rsi;
@@ -1301,14 +1322,38 @@ const PriceChart = ({
   // the trend ones drawn over the price, the oscillators under it — in the
   // settings list (the card's, and full screen's sheet), each with its note
   // behind an ⓘ. Only what this chart has is listed.
-  const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...ov, [k]: !ov[k] } });
+  // from the saved switches: while the indicators are locked, `ov` has them
+  // off, and saving it would lose the ones saved on (#140: they come back
+  // with a plan)
+  const flip = (k: keyof ChartOverlays) => () => setChartPrefs({ overlays: { ...saved.overlays, [k]: !ov[k] } });
   const openStochSettings = () => (full ? setSheet("settings") : setStochSettings((v) => !v));
-  const openMaSettings = () => (full ? setSheet("settings") : setMaSettings((v) => !v));
+  const openMaSettings = () => {
+    if (!full && maSettings) {
+      setMaSettings(false);
+      return;
+    }
+    if (full) setSheet("settings");
+    else setMaSettings(true);
+    setMaFocus((k) => k + 1);
+  };
   // #200: the three lines as named in the notes ("EMA 50（オレンジ）"), and
   // the numbers among them #142 did not measure
   const maNamed = MA_SLOTS.map((_, i) => t.chart.ma.named(maLabel(maLines[i]), t.chart.ma.colorNames[i]));
   const maUnmeasured = [...new Set(maLines.filter((l) => !measuredMa(l)).map(maLabel))];
-  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, zoneShiftHistory ? (emas ? "ready" : zoneShiftHistory.status) : "ready");
+  // what the bars are, and each line on that cannot be drawn whole or as
+  // TradingView's with them (maShortfall)
+  const maStatus = !emas
+    ? (zoneShiftHistory ? zoneShiftHistory.status : "ready")
+    : maDeep && deepHistory && !maDeepBars
+      ? (deepHistory.status === "error" ? "deepError" : "deepLoading")
+      : "ready";
+  const maShort = emas
+    ? emas.lines.flatMap((l) => {
+        const kind = maShortfall(l.line, emas.off, emas.total);
+        return kind ? [{ label: l.label, kind, need: l.line.period }] : [];
+      })
+    : [];
+  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, maStatus, maShort, !indicatorsLocked, MA_DEEP_FROM);
   const crossNames = pair2 ? [maLabel(pair2.fast), maLabel(pair2.slow)] : [maLabel(maLines[0]), maLabel(maLines[1])];
   const noteOf: Partial<Record<string, ReactNode>> = {
     signals: signalLegend ?? t.chart.signalLegend,
@@ -1331,7 +1376,7 @@ const PriceChart = ({
     qtBlsh: t.chart.qtBlshNote,
     // #150
     autoTrend: t.chart.autoTrendNote,
-    maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2),
+    maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
     adx: t.chart.adx.note,
@@ -1359,7 +1404,8 @@ const PriceChart = ({
       toggle: flip(s.key),
       swatch: s.color,
       settings: openMaSettings,
-      settingsOpen: maSettings,
+      // in full screen the form is always in the sheet the gear is in
+      settingsOpen: full ? undefined : maSettings,
       settingsLabel: t.chart.ma.settings,
     })),
     // #150: the golden and dead crosses of those two lines (#200: lines 1 and 2)
@@ -1540,12 +1586,20 @@ const PriceChart = ({
   const chip = (on: boolean) =>
     `min-w-[2rem] px-1.5 py-0.5 rounded border font-mono ${on ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`;
   const maForm = (
-    <div className="space-y-2 rounded border border-border p-2 text-[11px]" data-testid="chart-ma-form">
+    <div ref={maFormRef} className="space-y-2 rounded border border-border p-2 text-[11px]" data-testid="chart-ma-form">
       <p className="font-semibold text-foreground">{t.chart.ma.settings}</p>
       {MA_SLOTS.map((s, i) => {
         const line = maLines[i];
         const n = i + 1;
         const set = (patch: Partial<MaLine>) => setChartPrefs({ maLines: maLines.map((l, k) => (k === i ? { ...l, ...patch } : l)) });
+        const draft = maDraft[i];
+        const valid = (raw: string) => raw.trim() !== "" && Number.isInteger(Number(raw)) && Number(raw) >= 1 && Number(raw) <= MA_MAX;
+        const dropDraft = () =>
+          setMaDraft((d) => {
+            const r = { ...d };
+            delete r[i];
+            return r;
+          });
         return (
           <div key={s.key} className="space-y-1 border-t border-border pt-1.5 first-of-type:border-t-0" data-testid={`chart-ma-row-${n}`}>
             <div className="flex items-center gap-1.5">
@@ -1555,7 +1609,17 @@ const PriceChart = ({
             </div>
             <div className="flex flex-wrap items-center gap-1" role="group" aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.presets}`}>
               {MA_PRESETS.map((p) => (
-                <button key={p} type="button" aria-pressed={line.period === p} onClick={() => set({ period: p })} data-testid={`chart-ma-${n}-preset-${p}`} className={chip(line.period === p)}>
+                <button
+                  key={p}
+                  type="button"
+                  aria-pressed={line.period === p}
+                  onClick={() => {
+                    dropDraft();
+                    set({ period: p });
+                  }}
+                  data-testid={`chart-ma-${n}-preset-${p}`}
+                  className={chip(line.period === p)}
+                >
                   {p}
                 </button>
               ))}
@@ -1569,14 +1633,17 @@ const PriceChart = ({
                   min={1}
                   max={MA_MAX}
                   step={1}
-                  value={line.period}
+                  value={draft ?? String(line.period)}
                   onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isInteger(v) && v >= 1 && v <= MA_MAX) set({ period: v });
+                    const raw = e.target.value;
+                    setMaDraft((d) => ({ ...d, [i]: raw }));
+                    if (valid(raw)) set({ period: Number(raw) });
                   }}
+                  onBlur={dropDraft}
+                  aria-invalid={draft !== undefined && !valid(draft)}
                   aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.period}`}
                   data-testid={`chart-ma-${n}-period`}
-                  className="w-16 rounded border border-border bg-background px-1 py-0.5 font-mono text-foreground"
+                  className={`w-16 rounded border bg-background px-1 py-0.5 font-mono text-foreground ${draft !== undefined && !valid(draft) ? "border-destructive" : "border-border"}`}
                 />
               </label>
               <div className="flex gap-1" role="group" aria-label={`${t.chart.ma.line(n)}: ${t.chart.ma.type}`}>
@@ -1593,7 +1660,10 @@ const PriceChart = ({
       <p className="text-muted-foreground">{t.chart.ma.range(MA_MAX)}</p>
       <button
         type="button"
-        onClick={() => setChartPrefs({ maLines: [...MA_DEFAULTS] })}
+        onClick={() => {
+          setMaDraft({});
+          setChartPrefs({ maLines: [...MA_DEFAULTS] });
+        }}
         data-testid="chart-ma-reset"
         className="px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
       >
@@ -3903,7 +3973,7 @@ const PriceChart = ({
         {/* #150: EMA 50 × 200 — GC over the crossing, DC under it (#200: the
             shorter of lines 1 and 2 × the longer) */}
         {maCrosses && (
-          <g data-testid="chart-macross">
+          <g data-testid="chart-macross" clipPath={`url(#${clipId})`}>
             {maCrosses.filter((c) => onScreen(c.i)).map((c) => {
               const gc = c.side === "GC";
               const color = gc ? "#F9A825" : "#78909C";

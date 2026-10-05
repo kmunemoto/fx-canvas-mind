@@ -4,6 +4,7 @@ import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
+import { maNeedsDeep } from "@/lib/emaLines";
 import type { NumericCandle } from "@/lib/types";
 import {
   INTERVAL_STEP_MS,
@@ -345,7 +346,9 @@ const LiveChart = ({
   // the chart has moved past it. The reading under way is called off when
   // the indicator is turned off, on another pair or timeframe, and when
   // the chart is left; "loading" is only believed while it goes on.
-  const zltOn = indicatorsAllowed && overlays.zlTema;
+  // #200: and while a moving average longer than MA_DEEP_FROM is on (or
+  // the crosses of one), which needs about three times its length
+  const deepOn = indicatorsAllowed && (overlays.zlTema || maNeedsDeep(overlays, chartPrefs.maLines));
   const [deepHistory, setDeepHistory] = useState<{
     key: string;
     readAt: string;
@@ -356,9 +359,9 @@ const LiveChart = ({
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;
-  }, [zltOn, historyKey]);
+  }, [deepOn, historyKey]);
   useEffect(() => {
-    if (!zltOn || !gmoRead) return;
+    if (!deepOn || !gmoRead) return;
     const h = deepHistory;
     const live = deepRun.current !== null && !deepRun.current.off && deepRun.current.key === historyKey;
     const fresh = h && h.key === historyKey && (
@@ -396,7 +399,7 @@ const LiveChart = ({
       }
       setDeepHistory({ key: historyKey, readAt, bars: last.bars, status: "ready", complete: last.complete });
     })();
-  }, [zltOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
+  }, [deepOn, gmoRead, deepHistory, historyKey, pair, interval, loadDeepHistory]);
 
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on

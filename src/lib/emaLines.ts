@@ -15,8 +15,14 @@
 // TradingView's EMA (Pine's ta.ema: the simple average of the first n
 // closes, then alpha = 2 / (n + 1)) — the same arithmetic the study read
 // (analyze/indicators.ts emaSeries) — and SMA (ta.sma: the mean of the last
-// n closes). The live chart computes them over the 600 closed bars before
-// its own as well, so a line on its first bar has settled.
+// n closes). The live chart computes them over the closed bars before its
+// own as well: its history is the newest 600 closed bars, of which the
+// chart's 120 are a part, so about 480 come before its first bar (about
+// 680 for the pairs read from Twelve Data). A line longer than
+// MA_DEEP_FROM reads the deep history instead (DEEP_HISTORY_BARS, as the
+// Zero-lag TEMA does): an EMA starts from the average of its first n
+// closes, whose weight fades as (1 − 2/(n + 1)) a bar, so a long one needs
+// some three times its length to come to TradingView's value.
 //
 // Shown on the chart only: they read where the flow has been, not where it
 // goes (after a reading, the next 48 bars went its way about half the
@@ -47,9 +53,16 @@ export const MA_DEFAULTS: ReadonlyArray<MaLine> = [
   { period: 20, type: "EMA" },
 ];
 
-// the longest: the live chart reads 600 closed bars before its own, so a
-// line of up to 500 starts before the chart's first bar on a chart of 100
+// the longest that can be chosen; a line longer than MA_DEEP_FROM is
+// computed over the deep history (about 1,280 bars before the chart's
+// first on a GMO pair), where one of 500 starts before the chart's first
+// bar and its EMA's start is down to a few hundredths. Weekly and monthly
+// bars, and pairs with less history, may still have too few (maShortfall)
 export const MA_MAX = 500;
+
+// lines up to this (the first defaults' EMA 200 among them) use the history
+// every chart reads; a longer one, the deep one
+export const MA_DEEP_FROM = 200;
 
 // the numbers offered as buttons (any whole number from 1 to MA_MAX can be
 // typed): the short, middle and long lines traders draw most
@@ -90,11 +103,39 @@ export const emaLine = (closes: ReadonlyArray<number>, length: number): Array<nu
 export const maValues = (closes: ReadonlyArray<number>, l: MaLine): Array<number | null> =>
   l.type === "SMA" ? sma(closes, l.period) : ema(closes, l.period);
 
-// #150, #200: the golden and dead crosses are of the first two lines, the
-// shorter as the fast one (the longer's crossing it from below is a GC);
-// none when the two are the same line
-export const crossPair = (lines: ReadonlyArray<MaLine>): { fast: MaLine; slow: MaLine } | null => {
+// #150, #200: the golden and dead crosses are of the first two lines: the
+// fast one crossing the slow one from below is a GC, from above a DC. The
+// fast one is the shorter; of two of one length (an EMA and an SMA), the
+// EMA, which turns first — so the order of lines 1 and 2 does not change
+// which is which. None when the two are the same line
+export const crossPair = (lines: ReadonlyArray<MaLine>): { fast: MaLine; slow: MaLine; samePeriod: boolean } | null => {
   const [a, b] = lines;
   if (!a || !b || sameMaLine(a, b)) return null;
-  return a.period <= b.period ? { fast: a, slow: b } : { fast: b, slow: a };
+  const aFast = a.period < b.period || (a.period === b.period && a.type === "EMA");
+  return aFast ? { fast: a, slow: b, samePeriod: a.period === b.period } : { fast: b, slow: a, samePeriod: a.period === b.period };
+};
+
+type Switches = Partial<Record<MaKey | "maCross", boolean>>;
+
+// whether the lines on (and the crosses, when on) need the deep history
+export const maNeedsDeep = (on: Switches, lines: ReadonlyArray<MaLine>): boolean => {
+  if (MA_SLOTS.some((s, i) => on[s.key] && (lines[i]?.period ?? 0) > MA_DEEP_FROM)) return true;
+  const pair = on.maCross ? crossPair(lines) : null;
+  return pair !== null && pair.slow.period > MA_DEEP_FROM;
+};
+
+// an EMA's start (the average of its first n closes) left in its newest
+// value above this is told as "may differ a little from TradingView's"
+export const MA_ROUGH_SEED = 0.05;
+
+// what a line cannot do with the bars there are: "none" — fewer than its
+// length, so no line; "late" — not enough before the chart's first bar, so
+// it starts on the chart; "rough" — an EMA whose start still weighs more
+// than MA_ROUGH_SEED in its newest value. `before`: the bars before the
+// chart's first, `total`: all computed over
+export const maShortfall = (l: MaLine, before: number, total: number): "none" | "late" | "rough" | null => {
+  if (total < l.period) return "none";
+  if (before < l.period - 1) return "late";
+  if (l.type === "EMA" && Math.pow(1 - 2 / (l.period + 1), total - l.period) > MA_ROUGH_SEED) return "rough";
+  return null;
 };
