@@ -347,6 +347,20 @@ describe("#200 three moving averages, each at the number chosen", () => {
     expect(getChartPrefs().maLines[2]).toEqual({ period: 35, type: "EMA" });
     fireEvent.blur(box);
     expect(box.value).toBe("35");
+    // a draft left when the form closes without a blur (the gear, Esc on
+    // full screen's sheet) is gone when it opens again
+    fireEvent.change(screen.getByTestId("chart-ma-3-period"), { target: { value: "0" } });
+    fireEvent.click(screen.getByTestId("chart-settings-ma3"));
+    fireEvent.click(screen.getByTestId("chart-settings-ma3"));
+    expect((screen.getByTestId("chart-ma-3-period") as HTMLInputElement).value).toBe("35");
+    fireEvent.click(screen.getByTestId("chart-fullscreen"));
+    const overlay = screen.getByTestId("chart-fullscreen-overlay");
+    fireEvent.click(within(overlay).getByTestId("chart-sheet-settings-open"));
+    fireEvent.change(within(overlay).getByTestId("chart-ma-3-period"), { target: { value: "" } });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(within(overlay).queryByTestId("chart-ma-form")).toBeNull();
+    fireEvent.click(within(overlay).getByTestId("chart-sheet-settings-open"));
+    expect((within(overlay).getByTestId("chart-ma-3-period") as HTMLInputElement).value).toBe("35");
   });
 
   it("the gear brings the numbers into view: the first number is focused, on the card and in full screen", () => {
@@ -398,13 +412,21 @@ describe("#200 three moving averages, each at the number chosen", () => {
     // lines 1 and 2 off, their crosses on
     expect(maNeedsDeep({ maCross: true }, [MA_DEFAULTS[0], { period: 300, type: "EMA" }, MA_DEFAULTS[2]])).toBe(true);
     expect(maNeedsDeep({}, [MA_DEFAULTS[0], { period: 300, type: "EMA" }, MA_DEFAULTS[2]])).toBe(false);
+    // once the history every chart reads is there: enough for the defaults on
+    // 600 bars; not on GMO's daily (this year's and last year's files), where
+    // EMA 200 keeps too much of its start
+    expect(maNeedsDeep(on, MA_DEFAULTS, { before: 480, total: 601 })).toBe(false);
+    expect(maNeedsDeep(on, MA_DEFAULTS, { before: 337, total: 457 })).toBe(true);
+    expect(maNeedsDeep({ ...on, ema200: false, maCross: false }, MA_DEFAULTS, { before: 337, total: 457 })).toBe(false);
   });
 
   it("says what a line cannot do with the bars there are: none, starting within the chart, or not yet TradingView's", () => {
-    expect(maShortfall({ period: 200, type: "EMA" }, 0, 120)).toBe("none");
-    expect(maShortfall({ period: 150, type: "SMA" }, 100, 220)).toBe("late");
+    expect(maShortfall({ period: 200, type: "EMA" }, 0, 120)).toEqual({ kind: "none" });
+    expect(maShortfall({ period: 150, type: "SMA" }, 100, 220)).toEqual({ kind: "short", late: true, rough: null });
     // EMA 300 over the 601 bars every chart reads: its start still ~13% of it
-    expect(maShortfall({ period: 300, type: "EMA" }, 480, 601)).toBe("rough");
+    expect(maShortfall({ period: 300, type: "EMA" }, 480, 601)).toEqual({ kind: "short", late: false, rough: "little" });
+    // EMA 500 over them: starts within the chart, and ~67% of its start left
+    expect(maShortfall({ period: 500, type: "EMA" }, 480, 600)).toEqual({ kind: "short", late: true, rough: "much" });
     expect(maShortfall({ period: 300, type: "SMA" }, 480, 601)).toBeNull();
     // the first defaults over the same bars: nothing to say
     for (const l of MA_DEFAULTS) expect(maShortfall(l, 480, 601)).toBeNull();
@@ -415,7 +437,7 @@ describe("#200 three moving averages, each at the number chosen", () => {
     fireEvent.click(screen.getByTestId("chart-info-ema50"));
     const note = screen.getByTestId("chart-info-text-ema50").textContent!;
     expect(note).toContain("SMA 150は画面より前の足が足りないため、画面の途中から引いています。");
-    expect(note).toContain("EMA 200は画面より前の足が足りないため、画面の途中から引いています。");
+    expect(note).toContain("EMA 200は画面より前の足が足りないため、画面の途中から引いています（TradingView の値と大きくずれることがあります）。");
     expect(note).toContain("EMA 300は300本の足が要りますが、計算に使えた足が220本のため引けません。");
     expect(screen.queryByTestId("chart-ma3-line")).toBeNull();
   });
@@ -471,6 +493,79 @@ describe("#200 three moving averages, each at the number chosen", () => {
     }
   });
 
+  it("the live chart reads the deep history when the history every chart reads is too few bars for a line (as on GMO's daily), not when it is enough", async () => {
+    const NOW = T0 + 259 * M15 + 60_000;
+    const read = normalizeLiveRead(liveRead("USD/JPY", "15min", quotes(260), NOW))!;
+    const readFor = (pair: string, interval: string): LiveRead => ({ ...read, pair, interval, nextClose: new Date(Date.now() + 600_000).toISOString() });
+    const firstAt = (Date.parse(read.candles[0].datetime.replace(" ", "T") + "Z") - T0) / M15;
+    const common = (n: number): NumericCandle[] => [...walk(n, 31).map((c, k) => ({ ...c, datetime: stamp(firstAt - n + k) })), ...read.candles.slice(0, -1)];
+    // the defaults (EMA 50, 200, 20 and their crosses): 180 bars before the
+    // chart's are too few for EMA 200; 580 are enough
+    for (const [n, deep] of [[180, true], [580, false]] as const) {
+      localStorage.clear();
+      resetChartPrefsCache();
+      const loadHistory = vi.fn(async () => common(n));
+      const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
+      const { unmount } = render(
+        <LiveChart
+          defaultInterval="15min"
+          loadBars={async (pair: string, interval: string) => readFor(pair, interval)}
+          loadTicks={async () => ({})}
+          loadHistory={loadHistory}
+          loadDeepHistory={loadDeepHistory}
+          loadDow={async () => []}
+          indicatorsAllowed
+        />,
+      );
+      await waitFor(() => expect(loadHistory).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByTestId("chart-ema200-line")).toBeTruthy());
+      if (deep) await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledWith("USD/JPY", "15min"));
+      else {
+        await new Promise((r) => setTimeout(r, 50));
+        expect(loadDeepHistory).not.toHaveBeenCalled();
+      }
+      unmount();
+    }
+  });
+
+  it("the live chart draws the line over the history it always reads while the deep one loads (and says so), then over the deep bars", async () => {
+    const NOW = T0 + 259 * M15 + 60_000;
+    const read = normalizeLiveRead(liveRead("USD/JPY", "15min", quotes(260), NOW))!;
+    const readFor = (pair: string, interval: string): LiveRead => ({ ...read, pair, interval, nextClose: new Date(Date.now() + 600_000).toISOString() });
+    const firstAt = (Date.parse(read.candles[0].datetime.replace(" ", "T") + "Z") - T0) / M15;
+    // 1,280 bars before the chart's first, then the chart's own (each read reaches them);
+    // the history every chart reads has the newest 480 of them
+    const before: NumericCandle[] = walk(1280, 29).map((c, k) => ({ ...c, datetime: stamp(firstAt - 1280 + k) }));
+    const own = read.candles.slice(0, -1);
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period: 300, type: "EMA" }] }));
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const loadDeepHistory = vi.fn(async () => {
+      await gate;
+      return { bars: [...before, ...own], complete: true };
+    });
+    render(
+      <LiveChart
+        defaultInterval="15min"
+        loadBars={async (pair: string, interval: string) => readFor(pair, interval)}
+        loadTicks={async () => ({})}
+        loadHistory={async () => [...before.slice(-480), ...own]}
+        loadDeepHistory={loadDeepHistory}
+        loadDow={async () => []}
+        indicatorsAllowed
+      />,
+    );
+    const ema300 = (past: NumericCandle[]) => (maValues([...past, ...read.candles].map((c) => c.close), { period: 300, type: "EMA" }).at(-1) as number).toFixed(3);
+    await waitFor(() => expect(screen.getByTestId("chart-legend-ma3").textContent).toBe(`EMA 300 ${ema300(before.slice(-480))}`));
+    await waitFor(() => expect(loadDeepHistory).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId("chart-info-ma3"));
+    expect(screen.getByTestId("chart-info-text-ma3").textContent).toContain("画面より前の足を深く読み込み中です");
+    release();
+    await waitFor(() => expect(screen.getByTestId("chart-legend-ma3").textContent).toBe(`EMA 300 ${ema300(before)}`));
+    expect(screen.getByTestId("chart-info-text-ma3").textContent).not.toContain("深く読み込み中");
+    expect(screen.getByTestId("chart-info-text-ma3").textContent).toContain(`計算に使った足: ${1280 + read.candles.length}本`);
+  });
+
   it("over the deep history once it is there; the history every chart reads meanwhile, and the note says which", () => {
     setChartPrefs({ maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period: 300, type: "EMA" }] });
     const all = walk(1400);
@@ -478,7 +573,7 @@ describe("#200 three moving averages, each at the number chosen", () => {
     const common = all.slice(800, 1280);
     const deep = all.slice(0, 1280);
     const { rerender } = render(
-      <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={{ bars: null, status: "loading" }} />,
+      <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={{ bars: null, status: "loading" }} deepForMa />,
     );
     fireEvent.click(screen.getByTestId("chart-info-ma3"));
     let note = screen.getByTestId("chart-info-text-ma3").textContent!;
@@ -490,7 +585,7 @@ describe("#200 three moving averages, each at the number chosen", () => {
     expect(legend()).toBeCloseTo(maValues(closes(common), { period: 300, type: "EMA" }).at(-1) as number, 3);
     rerender(
       <LocaleProvider initial="ja">
-        <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={{ bars: deep, status: "ready" }} />
+        <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={{ bars: deep, status: "ready" }} deepForMa />
       </LocaleProvider>,
     );
     note = screen.getByTestId("chart-info-text-ma3").textContent!;
@@ -498,13 +593,26 @@ describe("#200 three moving averages, each at the number chosen", () => {
     expect(note).not.toContain("少しずれる");
     expect(note).not.toContain("深く読み込み中");
     expect(legend()).toBeCloseTo(maValues(closes(deep), { period: 300, type: "EMA" }).at(-1) as number, 3);
-    // and the deep read failed: drawn over the common one, said so
+    // and the deep read failed, or stopped short with fewer bars than the
+    // common one: drawn over the common one, said so
+    for (const deepHistory of [{ bars: null, status: "error" as const }, { bars: all.slice(1000, 1280), status: "ready" as const }]) {
+      rerender(
+        <LocaleProvider initial="ja">
+          <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={deepHistory} deepForMa />
+        </LocaleProvider>,
+      );
+      note = screen.getByTestId("chart-info-text-ma3").textContent!;
+      expect(note).toContain("深く読み切れなかったため、ふだん読む足で引いています");
+      expect(note).toContain("計算に使った足: 600本");
+      expect(legend()).toBeCloseTo(maValues(closes(common), { period: 300, type: "EMA" }).at(-1) as number, 3);
+    }
+    // a chart that does not read it says nothing of it
     rerender(
       <LocaleProvider initial="ja">
-        <PriceChart candles={shown} pair="USD/JPY" zoneShiftHistory={{ bars: common, status: "ready" }} deepHistory={{ bars: null, status: "error" }} />
+        <PriceChart candles={shown} pair="USD/JPY" />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId("chart-info-text-ma3").textContent).toContain("深く読めなかったため、ふだん読む足で引いています");
+    expect(screen.getByTestId("chart-info-text-ma3").textContent).not.toContain("深く読みます");
   });
 
   it("in full screen, the numbers are in the settings sheet", () => {

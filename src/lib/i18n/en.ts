@@ -389,10 +389,10 @@ export const en: Dict = {
       lines: ReadonlyArray<string>,
       others: ReadonlyArray<string>,
       bars: number | null,
-      status: "loading" | "ready" | "error" | "deepLoading" | "deepError",
-      short: ReadonlyArray<{ label: string; kind: "none" | "late" | "rough"; need: number }>,
+      status: "loading" | "ready" | "error" | "deepLoading" | "deepShort",
+      short: ReadonlyArray<{ label: string; need: number } & ({ kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null })>,
       canSet: boolean,
-      deepFrom: number,
+      deepFrom: number | null,
     ) =>
       `Moving averages ${lines.join(", ")}: averages of the close (EMA exponential, SMA simple; TradingView's arithmetic). ` +
       (canSet ? "Each line's length and kind are chosen at its ⚙. " : "With a plan that has the indicators, each line's length and kind are chosen at its ⚙. ") +
@@ -400,25 +400,28 @@ export const en: Dict = {
       "#142 compared 31 indicators on past charts (11 pairs, 15min/1h/4h, 2024-01 to 2026-09): the flow across the chart's 120 bars (about 3–4 weeks on 4h) was read best by the close above or below EMA 50 (71.6% on the later period; the stochastic 68.3%), and a larger flow (about 2–3 months on 4h) by the 200-bar averages. " +
       "They read where the flow has been: over the next 48 bars the price went the reading's way about half the time. On 4h alone, the later period could not tell EMA 50 from the stochastic. " +
       (others.length > 0 ? `#142 measured only SMA 25, 75, 200 and EMA 50, 200 of the moving averages; ${others.join(", ")} not. ` : "") +
-      `An EMA keeps some of its first value (the average of its first bars), so it is TradingView's only with some three times its length of bars. While a line longer than ${deepFrom} is on (the GC / DC's lines too), the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). ` +
+      "An EMA keeps some of its first value (the average of its first n closes), so it is TradingView's only with some three times its length of bars. " +
+      (deepFrom !== null
+        ? `While a line longer than ${deepFrom}, or one the bars the chart always reads are too few for, is on (the GC / DC's lines too), the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). `
+        : "") +
       (status === "loading"
         ? "Loading the bars before the chart's. "
         : status === "error"
           ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
           : (status === "deepLoading"
             ? "Reading deep into the bars before the chart's (until then, drawn over the bars it always reads). "
-            : status === "deepError"
-              ? "The deep bars could not be read, so drawn over the bars it always reads (tried again on the next bar). "
+            : status === "deepShort"
+              ? "The deep bars could not all be read, so drawn over the bars it always reads (tried again on the next bar). "
               : "") +
             `Computed over ${bars ?? 0} bars (including those before the chart's). ` +
             short
-              .map((x) =>
-                x.kind === "none"
-                  ? `${x.label} needs ${x.need} bars, and ${bars ?? 0} could be used, so it is not drawn. `
-                  : x.kind === "late"
-                    ? `${x.label} starts within the chart: too few bars before its first. `
-                    : `${x.label} may differ a little from TradingView's: too few bars to compute it over. `,
-              )
+              .map((x) => {
+                if (x.kind === "none") return `${x.label} needs ${x.need} bars, and ${bars ?? 0} could be used, so it is not drawn. `;
+                const off = x.rough ? `may differ ${x.rough === "much" ? "a lot" : "a little"} from TradingView's` : "";
+                return x.late
+                  ? `${x.label} starts within the chart: too few bars before its first${off ? `, and ${off}` : ""}. `
+                  : `${x.label} ${off}: too few bars to compute it over. `;
+              })
               .join("")) +
       "Shown only: no signal or email uses them.",
     // #136

@@ -40,7 +40,7 @@ import { ZLT_DEFAULTS, ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
-import { MA_DEEP_FROM, MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maNeedsDeep, maShortfall, maValues, measuredMa } from "@/lib/emaLines";
+import { MA_DEEP_FROM, MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maShortfall, maValues, measuredMa } from "@/lib/emaLines";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/lib/qTrend";
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
@@ -191,6 +191,9 @@ interface Props {
   // it computes over the candles alone and says the slow line and the marks
   // may be far from TradingView's.
   deepHistory?: { bars: ReadonlyArray<{ datetime?: string; open: number; high: number; low: number; close: number }> | null; status: "loading" | "ready" | "error" };
+  // #200: whether that deep history is being read for the moving averages
+  // (LiveChart decides: a line longer than MA_DEEP_FROM, or too few bars)
+  deepForMa?: boolean;
   // #129: Dow theory as the live-chart function reads it on 4h, 1h, 15min
   // and 5min — `current` the chart's own timeframe (null when it is not one
   // of them), `higher` those above it. Given, it is listed; drawn: the
@@ -351,7 +354,7 @@ const PriceChart = ({
   candles, entry, stopLoss, takeProfits = [], pair, markers = [], heading, subtitle,
   overlays = [], band = null, marks = [], lines = [], rsi, sar, sarBelow, gaStyle = "outline", signalLegend,
   positions = false, sarStyle = "dots", interactive = true, fullscreenMenus, fullscreenStatus, seriesKey, emptyText,
-  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, deepHistory, dow, indicatorsLocked = false, onLockedIndicator,
+  formingLast = false, unjudged = 0, signalName, zoneShiftHistory, deepHistory, deepForMa = false, dow, indicatorsLocked = false, onLockedIndicator,
   landscapeFullscreen = false, drawable = false,
 }: Props) => {
   // #149: the newest candles left out of every indicator's judging
@@ -668,12 +671,12 @@ const PriceChart = ({
   // ones on as "key:EMA:50" (a string, so a change elsewhere in the
   // preferences does not compute them again)
   const maLines = prefs.maLines;
-  // a line longer than MA_DEEP_FROM (or the crosses of one) over the deep
-  // history once it is there; until then, and if it cannot be read, over
-  // the history every chart reads (the note says which)
-  const maDeep = maNeedsDeep(ov, maLines);
-  const maDeepBars = maDeep && deepHistory ? deepHistory.bars : null;
-  const maPast = maDeepBars ?? zsPast;
+  // over the deep history where it has more bars than the one every chart
+  // reads (read for these lines, or for the Zero-lag TEMA); else over that
+  // one — while the deep one loads, if it fails, or if it stopped short
+  // (the note says which)
+  const deepBars = deepHistory ? deepHistory.bars : null;
+  const maPast = deepBars && (zsPast === null || deepBars.length > zsPast.length) ? deepBars : zsPast;
   const emaOn = MA_SLOTS.map((s, i) => (ov[s.key] ? `${s.key}:${maLines[i].type}:${maLines[i].period}` : "")).filter(Boolean).join(" ");
   const emas = useMemo(() => {
     if (emaOn === "" || candles.length === 0 || maPast === null) return null;
@@ -853,6 +856,7 @@ const PriceChart = ({
   const [maFocus, setMaFocus] = useState(0);
   const maFormRef = useRef<HTMLDivElement>(null);
   const [maDraft, setMaDraft] = useState<Partial<Record<number, string>>>({});
+  useEffect(() => setMaDraft((d) => (Object.keys(d).length > 0 ? {} : d)), [full, sheet, maSettings]);
   useEffect(() => {
     const el = maFocus > 0 ? maFormRef.current : null;
     if (!el) return;
@@ -1344,16 +1348,17 @@ const PriceChart = ({
   // TradingView's with them (maShortfall)
   const maStatus = !emas
     ? (zoneShiftHistory ? zoneShiftHistory.status : "ready")
-    : maDeep && deepHistory && !maDeepBars
-      ? (deepHistory.status === "error" ? "deepError" : "deepLoading")
+    : deepForMa && deepHistory && maPast !== deepBars
+      ? (deepHistory.status === "loading" ? "deepLoading" : "deepShort")
       : "ready";
   const maShort = emas
     ? emas.lines.flatMap((l) => {
-        const kind = maShortfall(l.line, emas.off, emas.total);
-        return kind ? [{ label: l.label, kind, need: l.line.period }] : [];
+        const sh = maShortfall(l.line, emas.off, emas.total);
+        return sh ? [{ label: l.label, need: l.line.period, ...sh }] : [];
       })
     : [];
-  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, maStatus, maShort, !indicatorsLocked, MA_DEEP_FROM);
+  // the deep history said of on the live chart only (it reads it)
+  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, maStatus, maShort, !indicatorsLocked, deepHistory ? MA_DEEP_FROM : null);
   const crossNames = pair2 ? [maLabel(pair2.fast), maLabel(pair2.slow)] : [maLabel(maLines[0]), maLabel(maLines[1])];
   const noteOf: Partial<Record<string, ReactNode>> = {
     signals: signalLegend ?? t.chart.signalLegend,

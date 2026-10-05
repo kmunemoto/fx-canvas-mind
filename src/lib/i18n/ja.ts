@@ -432,10 +432,10 @@ export const ja = {
       lines: ReadonlyArray<string>,
       others: ReadonlyArray<string>,
       bars: number | null,
-      status: "loading" | "ready" | "error" | "deepLoading" | "deepError",
-      short: ReadonlyArray<{ label: string; kind: "none" | "late" | "rough"; need: number }>,
+      status: "loading" | "ready" | "error" | "deepLoading" | "deepShort",
+      short: ReadonlyArray<{ label: string; need: number } & ({ kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null })>,
       canSet: boolean,
-      deepFrom: number,
+      deepFrom: number | null,
     ) =>
       `移動平均線 ${lines.join("・")}: 終値の移動平均（EMA は指数、SMA は単純。TradingView と同じ計算）。` +
       (canSet ? "数字と種類は、各線の ⚙ で選べます。" : "数字と種類は、インジケーターを使えるプランで各線の ⚙ から選べます。") +
@@ -443,25 +443,28 @@ export const ja = {
       "#142 で31個のインジケーターを過去のチャート（11ペア・15分/1時間/4時間、2024-01〜2026-09）で比べたところ、画面の120本くらいの流れ（4時間足で約3〜4週間）は EMA 50 の上か下かが最もよく読め（後半 71.6%、ストキャスは 68.3%）、それより大きな流れ（4時間足で約2〜3か月）は200本の移動平均が最もよく読めました。" +
       "ただし読めるのはこれまでの流れで、その後48本の値動きが読みと同じ向きだったのは約半分です。4時間足だけで見ると、後半のストキャスとの差は見分けられませんでした。" +
       (others.length > 0 ? `#142 で測った移動平均は SMA 25・75・200 と EMA 50・200 だけで、${others.join("・")} は測っていません。` : "") +
-      `EMA は最初の値（初めの数本の平均）の影響が残るため、期間の約3倍の足がないと TradingView の値とずれます。${deepFrom}より長い線（GC・DC に使う線を含む）がオンの間は、画面より前の足を深く読みます（1時間足などは、最初に開くとき時間がかかります）。` +
+      "EMA は最初の値（初めの期間ぶん〈n 本〉の足の平均）の影響が残るため、期間の約3倍の足がないと TradingView の値とずれます。" +
+      (deepFrom !== null
+        ? `${deepFrom}より長い線か、ふだん読む足では足りない線（GC・DC に使う線を含む）がオンの間は、画面より前の足を深く読みます（1時間足などは、最初に開くとき時間がかかります）。`
+        : "") +
       (status === "loading"
         ? "画面より前の足を読み込み中です。"
         : status === "error"
           ? "画面より前の足を読めなかったため表示していません（次の足で読み直します）。"
           : (status === "deepLoading"
             ? "画面より前の足を深く読み込み中です（読み終わるまでは、ふだん読む足で引いています）。"
-            : status === "deepError"
-              ? "画面より前の足を深く読めなかったため、ふだん読む足で引いています（次の足で読み直します）。"
+            : status === "deepShort"
+              ? "画面より前の足を深く読み切れなかったため、ふだん読む足で引いています（次の足で読み直します）。"
               : "") +
             `計算に使った足: ${bars ?? 0}本（画面より前の足を含む）。` +
             short
-              .map((x) =>
-                x.kind === "none"
-                  ? `${x.label}は${x.need}本の足が要りますが、計算に使えた足が${bars ?? 0}本のため引けません。`
-                  : x.kind === "late"
-                    ? `${x.label}は画面より前の足が足りないため、画面の途中から引いています。`
-                    : `${x.label}は計算に使えた足が少ないため、TradingView の値と少しずれることがあります。`,
-              )
+              .map((x) => {
+                if (x.kind === "none") return `${x.label}は${x.need}本の足が要りますが、計算に使えた足が${bars ?? 0}本のため引けません。`;
+                const off = x.rough ? `TradingView の値と${x.rough === "much" ? "大きく" : "少し"}ずれることがあります` : "";
+                return x.late
+                  ? `${x.label}は画面より前の足が足りないため、画面の途中から引いています${off ? `（${off}）` : ""}。`
+                  : `${x.label}は計算に使えた足が少ないため、${off}。`;
+              })
               .join("")) +
       "表示のみで、サインの判定・メールには使っていません。",
     // #136

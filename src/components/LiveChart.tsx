@@ -346,9 +346,16 @@ const LiveChart = ({
   // the chart has moved past it. The reading under way is called off when
   // the indicator is turned off, on another pair or timeframe, and when
   // the chart is left; "loading" is only believed while it goes on.
-  // #200: and while a moving average longer than MA_DEEP_FROM is on (or
-  // the crosses of one), which needs about three times its length
-  const deepOn = indicatorsAllowed && (overlays.zlTema || maNeedsDeep(overlays, chartPrefs.maLines));
+  // #200: and while a moving average on (or one of the crosses', when on)
+  // is longer than MA_DEEP_FROM, or the history above is too few bars for
+  // it (an EMA needs about three times its length; GMO's daily history is
+  // this year's and last year's files only). Decided here, once, and told
+  // to the chart (`deepForMa`)
+  const commonBefore = gmoRead && history?.key === historyKey ? historyBefore(history.bars, gmoRead.candles) : null;
+  const maDeep =
+    indicatorsAllowed &&
+    maNeedsDeep(overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
+  const deepOn = indicatorsAllowed && (overlays.zlTema || maDeep);
   const [deepHistory, setDeepHistory] = useState<{
     key: string;
     readAt: string;
@@ -867,6 +874,7 @@ const LiveChart = ({
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
         deepHistory={zltHistory}
+        deepForMa={maDeep}
         dow={dowChart}
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}

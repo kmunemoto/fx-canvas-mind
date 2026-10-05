@@ -18,8 +18,10 @@
 // n closes). The live chart computes them over the closed bars before its
 // own as well: its history is the newest 600 closed bars, of which the
 // chart's 120 are a part, so about 480 come before its first bar (about
-// 680 for the pairs read from Twelve Data). A line longer than
-// MA_DEEP_FROM reads the deep history instead (DEEP_HISTORY_BARS, as the
+// 680 for the pairs read from Twelve Data; on GMO's daily bars, only this
+// year's and last year's files, so fewer, and fewest in January). A line
+// longer than MA_DEEP_FROM, or one those bars are too few for
+// (maShortfall), reads the deep history instead (DEEP_HISTORY_BARS, as the
 // Zero-lag TEMA does): an EMA starts from the average of its first n
 // closes, whose weight fades as (1 − 2/(n + 1)) a bar, so a long one needs
 // some three times its length to come to TradingView's value.
@@ -61,7 +63,7 @@ export const MA_DEFAULTS: ReadonlyArray<MaLine> = [
 export const MA_MAX = 500;
 
 // lines up to this (the first defaults' EMA 200 among them) use the history
-// every chart reads; a longer one, the deep one
+// every chart reads where it is enough; a longer one, the deep one
 export const MA_DEEP_FROM = 200;
 
 // the numbers offered as buttons (any whole number from 1 to MA_MAX can be
@@ -117,25 +119,33 @@ export const crossPair = (lines: ReadonlyArray<MaLine>): { fast: MaLine; slow: M
 
 type Switches = Partial<Record<MaKey | "maCross", boolean>>;
 
-// whether the lines on (and the crosses, when on) need the deep history
-export const maNeedsDeep = (on: Switches, lines: ReadonlyArray<MaLine>): boolean => {
-  if (MA_SLOTS.some((s, i) => on[s.key] && (lines[i]?.period ?? 0) > MA_DEEP_FROM)) return true;
-  const pair = on.maCross ? crossPair(lines) : null;
-  return pair !== null && pair.slow.period > MA_DEEP_FROM;
-};
-
 // an EMA's start (the average of its first n closes) left in its newest
-// value above this is told as "may differ a little from TradingView's"
+// value above MA_ROUGH_SEED is told as "may differ a little from
+// TradingView's", above MA_MUCH_SEED "a lot"
 export const MA_ROUGH_SEED = 0.05;
+export const MA_MUCH_SEED = 0.25;
 
 // what a line cannot do with the bars there are: "none" — fewer than its
-// length, so no line; "late" — not enough before the chart's first bar, so
-// it starts on the chart; "rough" — an EMA whose start still weighs more
-// than MA_ROUGH_SEED in its newest value. `before`: the bars before the
+// length, so no line; else whether it starts within the chart (`late`: not
+// enough before the chart's first bar) and, for an EMA, how much its start
+// still weighs in its newest value (`rough`). `before`: the bars before the
 // chart's first, `total`: all computed over
-export const maShortfall = (l: MaLine, before: number, total: number): "none" | "late" | "rough" | null => {
-  if (total < l.period) return "none";
-  if (before < l.period - 1) return "late";
-  if (l.type === "EMA" && Math.pow(1 - 2 / (l.period + 1), total - l.period) > MA_ROUGH_SEED) return "rough";
-  return null;
+export type MaShort = { kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null };
+export const maShortfall = (l: MaLine, before: number, total: number): MaShort | null => {
+  if (total < l.period) return { kind: "none" };
+  const late = before < l.period - 1;
+  const seed = l.type === "EMA" ? Math.pow(1 - 2 / (l.period + 1), total - l.period) : 0;
+  const rough = seed > MA_MUCH_SEED ? "much" : seed > MA_ROUGH_SEED ? "little" : null;
+  return late || rough ? { kind: "short", late, rough } : null;
+};
+
+// whether the lines on (and the crosses' two, when on) need the deep
+// history: longer than MA_DEEP_FROM, or — once the history every chart
+// reads is there (`common`: the bars before the chart's first in it, and
+// all with the chart's) — too few bars for one of them
+export const maNeedsDeep = (on: Switches, lines: ReadonlyArray<MaLine>, common?: { before: number; total: number } | null): boolean => {
+  const used = MA_SLOTS.flatMap((s, i) => (on[s.key] && lines[i] ? [lines[i]] : []));
+  const pair = on.maCross ? crossPair(lines) : null;
+  if (pair) used.push(pair.fast, pair.slow);
+  return used.some((l) => l.period > MA_DEEP_FROM || (common != null && maShortfall(l, common.before, common.total) !== null));
 };
