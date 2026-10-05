@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, LayoutGrid, Radio } from "lucide-react";
+import { Check, LayoutGrid, LineChart, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
 import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
-import { getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
+import { type ChartPrefs, getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import { maNeedsDeep } from "@/lib/emaLines";
 import type { NumericCandle } from "@/lib/types";
 import {
@@ -82,7 +82,24 @@ interface Props {
   // score), and a tap on a locked one calls `onLockedIndicator`
   indicatorsAllowed?: boolean;
   onLockedIndicator?: () => void;
+  // #201: "ma" — the moving averages' own chart: the candles and the three
+  // lines only (their numbers, kinds and switches shared with the full
+  // chart), no signals, strips, Dow or other indicator, its own pair and
+  // timeframe (kept as `maLive`)
+  mode?: "full" | "ma";
 }
+
+// #153, #181: the chosen pair's or timeframe's button brought into sight
+// within its row, which scrolls sideways — the row alone: #201, the page
+// is not scrolled to a chart below the first as it opens
+const showInRow = (row: HTMLElement | null, testid: string) => {
+  const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === testid) : undefined;
+  if (!row || !el) return;
+  const r = row.getBoundingClientRect();
+  const b = el.getBoundingClientRect();
+  if (b.left < r.left) row.scrollLeft -= r.left - b.left;
+  else if (b.right > r.right) row.scrollLeft += b.right - r.right;
+};
 
 // "19:15:07" in Japan time
 const jstClock = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(11, 19);
@@ -102,19 +119,23 @@ const LiveChart = ({
   loadDow = fetchDow,
   indicatorsAllowed = true,
   onLockedIndicator,
+  mode = "full",
 }: Props) => {
   const t = useT();
   const l = t.live;
+  const maMode = mode === "ma";
+  // where its pair and timeframe are kept
+  const keptOf = (p: ChartPrefs) => (maMode ? p.maLive : p.live);
   // #141: the pair, timeframe and signals chosen last (kept with the chart's
   // other settings, in this browser and with the account), each only if the
   // chart still offers it; a timeframe given by the page comes first
-  const [pair, setPairOnly] = useState<string>(() => savedPair(getChartPrefs().live.pair) ?? LIVE_PAIRS[0]);
+  const [pair, setPairOnly] = useState<string>(() => savedPair(keptOf(getChartPrefs()).pair) ?? LIVE_PAIRS[0]);
   const [interval, setIntervalTf] = useState<string>(() =>
     defaultInterval && LIVE_INTERVALS.includes(defaultInterval)
       ? defaultInterval
-      : savedInterval(getChartPrefs().live.interval, savedPair(getChartPrefs().live.pair) ?? LIVE_PAIRS[0]) ?? BASE_INTERVAL,
+      : savedInterval(keptOf(getChartPrefs()).interval, savedPair(keptOf(getChartPrefs()).pair) ?? LIVE_PAIRS[0]) ?? BASE_INTERVAL,
   );
-  const [view, setViewOnly] = useState<LiveView>(() => savedView(getChartPrefs().live.view) ?? "gainz");
+  const [view, setViewOnly] = useState<LiveView>(() => savedView(keptOf(getChartPrefs()).view) ?? "gainz");
   // what is chosen on the chart is kept
   const choose = (next: { pair?: string; interval?: string; view?: LiveView }) => {
     const p = next.pair ?? pair;
@@ -126,7 +147,7 @@ const LiveChart = ({
     setPairOnly(p);
     setIntervalTf(iv);
     setViewOnly(v);
-    setChartPrefs({ live: { pair: p, interval: iv, view: v } });
+    setChartPrefs(maMode ? { maLive: { pair: p, interval: iv, view: null } } : { live: { pair: p, interval: iv, view: v } });
   };
   const setPair = (p: string) => choose({ pair: p });
   const chooseInterval = (iv: string) => choose({ interval: iv });
@@ -140,7 +161,7 @@ const LiveChart = ({
   const setView = (v: LiveView) => choose({ view: v });
   // and the account's, when it arrives after the chart opened (or another
   // chart changes them), is shown
-  const livePrefs = useChartPrefs().live;
+  const livePrefs = keptOf(useChartPrefs());
   const liveKey = `${livePrefs.pair}|${livePrefs.interval}|${livePrefs.view}`;
   const seenLiveKey = useRef(liveKey);
   useEffect(() => {
@@ -161,16 +182,8 @@ const LiveChart = ({
   // are in, which widen every button, so a saved pair far along the row is
   // still in sight when the chart opens on it
   const pricesIn = Object.keys(ticks).length > 0;
-  useEffect(() => {
-    const row = pairRowRef.current;
-    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-pair-${pair}`) : undefined;
-    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [pair, pricesIn]);
-  useEffect(() => {
-    const row = intervalRowRef.current;
-    const el = row ? Array.from(row.querySelectorAll<HTMLElement>("button")).find((b) => b.getAttribute("data-testid") === `live-interval-${interval}`) : undefined;
-    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [interval]);
+  useEffect(() => showInRow(pairRowRef.current, `live-pair-${pair}`), [pair, pricesIn]);
+  useEffect(() => showInRow(intervalRowRef.current, `live-interval-${interval}`), [interval]);
   const [tickError, setTickError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -189,7 +202,7 @@ const LiveChart = ({
       // read of this same chart is new: say so once
       const newest = [r.latest.rsiSar, r.latest.gainz].filter((m): m is NonNullable<typeof m> => m !== null && m.barsAgo === 0);
       const key = `${p}|${iv}|${newest.map((m) => `${m.rule}:${m.side}:${m.datetime}`).join(",")}`;
-      if (!seen.current.initial && newest.length > 0 && key !== seen.current.key) {
+      if (!maMode && !seen.current.initial && newest.length > 0 && key !== seen.current.key) {
         setFresh(newest.map((m) => `${m.rule === "gainz" ? l.ruleGa : l.ruleRsiSar} ${l.sides[m.side]}`).join(" / "));
       }
       seen.current = { key, initial: false };
@@ -201,7 +214,7 @@ const LiveChart = ({
       setError(err instanceof Error ? err.message : "error");
       if (err instanceof LiveChartError) setReopens(err.reopens);
     }
-  }, [loadBars, l]);
+  }, [loadBars, l, maMode]);
 
   // The bars: now, on a new pair or timeframe, and again when each bar closes
   useEffect(() => {
@@ -311,10 +324,14 @@ const LiveChart = ({
   // and #145: Q-Trend (200 closes before its line) and BLSH (#140: none of
   // them while the indicators are locked)
   // #150: and the trend tools (their averages and ranges settle on it)
+  // (#201: the moving averages' own chart, for its three lines only)
+  const maSwitches = { ema50: overlays.ema50, ema200: overlays.ema200, ma3: overlays.ma3 };
   const historyOn =
     indicatorsAllowed &&
-    (zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
-      overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
+    (maMode
+      ? overlays.ema50 || overlays.ema200 || overlays.ma3
+      : zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
+        overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars; #154: or a pair's GMO does not serve)
@@ -372,8 +389,8 @@ const LiveChart = ({
   const maDeep =
     indicatorsAllowed &&
     !deepNoMore &&
-    maNeedsDeep(overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
-  const deepOn = indicatorsAllowed && (overlays.zlTema || maDeep);
+    maNeedsDeep(maMode ? maSwitches : overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
+  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;
@@ -422,7 +439,7 @@ const LiveChart = ({
   // #129: Dow theory on 4h, 1h, 15min and 5min for the pair on screen —
   // read while it is on, now and once a minute while the page is on
   // screen. A read that fails keeps the last one of the same pair.
-  const dowOn = indicatorsAllowed && overlays.dow;
+  const dowOn = indicatorsAllowed && !maMode && overlays.dow;
   const [dowRead, setDowRead] = useState<{ pair: string; tfs: DowTf[]; status: "loading" | "ready" | "error" } | null>(null);
   useEffect(() => {
     if (!dowOn) return;
@@ -512,9 +529,10 @@ const LiveChart = ({
   }, [gmoRead, firstCandle, deepHistory, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
   // #114: the signals of the rule on screen, and the newest of them
-  const marks = read ? read.marks.filter((m) => view === "both" || m.rule === view) : [];
+  // (#201: none on the moving averages' own chart)
+  const marks = read && !maMode ? read.marks.filter((m) => view === "both" || m.rule === view) : [];
   const latest = (() => {
-    if (!read) return null;
+    if (!read || maMode) return null;
     const own = [read.latest.gainz, read.latest.rsiSar].filter((m): m is NonNullable<typeof m> => m !== null && (view === "both" || m.rule === view));
     return own.sort((a, b) => (a.datetime < b.datetime ? 1 : -1))[0] ?? null;
   })();
@@ -628,23 +646,25 @@ const LiveChart = ({
         ))}
       </div>
 
-      <div className={row} role="tablist" aria-label={l.viewLabel} data-testid="live-views">
-        {VIEWS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={v === view}
-            onClick={() => setView(v)}
-            data-testid={`live-view-${v}`}
-            className={`px-2 py-0.5 rounded border text-[11px] ${
-              v === view ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
-            }`}
-          >
-            {l.views[v]}
-          </button>
-        ))}
-      </div>
+      {!maMode && (
+        <div className={row} role="tablist" aria-label={l.viewLabel} data-testid="live-views">
+          {VIEWS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={v === view}
+              onClick={() => setView(v)}
+              data-testid={`live-view-${v}`}
+              className={`px-2 py-0.5 rounded border text-[11px] ${
+                v === view ? "border-primary/60 bg-primary/10 text-primary" : "border-border text-muted-foreground"
+              }`}
+            >
+              {l.views[v]}
+            </button>
+          ))}
+        </div>
+      )}
     </>
     );
   };
@@ -715,6 +735,7 @@ const LiveChart = ({
             </button>
           ))}
         </div>
+        {!maMode && (
         <section className="space-y-2">
           <h4 className="text-xs text-muted-foreground">{l.viewLabel}</h4>
           <div className="grid grid-cols-3 gap-2">
@@ -736,6 +757,7 @@ const LiveChart = ({
           </div>
           {view === "gainz" && <p className="text-[11px] text-muted-foreground">{l.recommended}</p>}
         </section>
+        )}
       </div>
     ),
   };
@@ -808,10 +830,10 @@ const LiveChart = ({
   ) : null;
 
   return (
-    <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid="live-chart">
+    <div className="glass rounded-xl border border-border p-4 space-y-3" data-testid={maMode ? "ma-chart" : "live-chart"}>
       <div className="flex items-center gap-2">
-        <Radio className="h-4 w-4 text-primary" />
-        <h3 className="text-sm font-semibold text-foreground">{l.title}</h3>
+        {maMode ? <LineChart className="h-4 w-4 text-primary" /> : <Radio className="h-4 w-4 text-primary" />}
+        <h3 className="text-sm font-semibold text-foreground">{maMode ? l.maTitle : l.title}</h3>
         <span className="ml-auto text-[10px] text-muted-foreground font-mono" data-testid="live-updated">
           {tickError === "maintenance" ? l.maintenanceShort : tickAt !== null ? l.updated(jstClock(tickAt)) : l.connecting}
         </span>
@@ -863,17 +885,18 @@ const LiveChart = ({
         pair={pair}
         marks={marks}
         // the GA view is the clean chart the reference draws: candles
-        // and the rule's labels, no RSI strip or SAR dots
-        rsi={view === "gainz" ? undefined : read?.rsi}
-        sar={read?.sar}
-        sarBelow={read?.sarBelow}
+        // and the rule's labels, no RSI strip or SAR dots (#201: and the
+        // moving averages' own chart, none of the signals' drawing)
+        rsi={view === "gainz" || maMode ? undefined : read?.rsi}
+        sar={maMode ? undefined : read?.sar}
+        sarBelow={maMode ? undefined : read?.sarBelow}
         // #115: the scalping indicator's drawing — each signal's
         // position box with an × where it settled, and the SAR as a band
         // (in the GA view, the band only: the rule does not read it)
-        positions
+        positions={!maMode}
         sarStyle={view === "gainz" ? "cloud" : "both"}
         gaStyle={view === "gainz" ? "filled" : "outline"}
-        signalLegend={view === "gainz" ? l.gaLegend : l.rsiSarLegend}
+        signalLegend={maMode ? undefined : view === "gainz" ? l.gaLegend : l.rsiSarLegend}
         heading={`${pair} · ${intervals[interval] ?? interval}`}
         seriesKey={`${pair}|${interval}`}
         // #119: the newest candle is still forming while a close is due
@@ -881,18 +904,22 @@ const LiveChart = ({
         // #149: indicators judge on the feed's bars only, not on those the
         // prices made since the last read
         unjudged={read ? unjudgedOf(read.candles.length, formingOpen !== null, candles.length) : 0}
-        signalName={l.signalNames[view]}
+        signalName={maMode ? undefined : l.signalNames[view]}
         emptyText={error === "maintenance" ? l.maintenance : error ? l.error : l.loading}
         zoneShiftHistory={zoneShiftHistory}
         deepHistory={zltHistory}
         deepForMa={maDeep}
-        dow={dowChart}
+        maOnly={maMode}
+        dow={maMode ? undefined : dowChart}
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
-        landscapeFullscreen
-        // #160: lines drawn by hand, kept per pair (on every timeframe)
-        drawable
+        // #201: the live chart alone opens on a phone turned sideways (two
+        // would open over each other, and the page's scroll lock be left on)
+        landscapeFullscreen={!maMode}
+        // #160: lines drawn by hand, kept per pair (on every timeframe;
+        // #201: on the full chart only)
+        drawable={!maMode}
         fullscreenStatus={
           priceLine || freshLine || dowLine ? (
             <>
@@ -903,7 +930,18 @@ const LiveChart = ({
           ) : undefined
         }
       />
-      {read && (
+      {/* #201: the moving averages' own chart says when the bar closes and what it is */}
+      {read && maMode && (
+        <div className="space-y-0.5 text-xs" data-testid="ma-chart-info">
+          {nextCloseMs !== null && nextCloseMs > now && (
+            <p className="text-muted-foreground font-mono" data-testid="live-next-close">
+              {l.nextClose(nextCloseMs - now >= 86_400_000 ? jstDay(nextCloseMs) : jstClock(nextCloseMs).slice(0, 5), remainText)}
+            </p>
+          )}
+          <p className="text-[10px] text-muted-foreground" data-testid="ma-chart-note">{l.maNote(indicatorsAllowed)}</p>
+        </div>
+      )}
+      {read && !maMode && (
         <>
           {latest && (
             <div className="rounded-lg border border-border p-2 space-y-0.5" data-testid="live-latest">

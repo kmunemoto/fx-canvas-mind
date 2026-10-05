@@ -232,6 +232,8 @@ export const en: Dict = {
     // #140: the indicators, a paid feature
     lockedHint: "Available with the Light plan",
     lockedNote: "The indicators marked 🔒 come with the Light plan (¥2,980 a month). The signals, RSI and the Parabolic SAR are free.",
+    // #201: on the moving averages' own chart (no signals, RSI or SAR on it)
+    maLockedNote: "The moving averages marked 🔒 come with the Light plan (¥2,980 a month).",
     // #135: Bollinger %b and RCI, TradingView's built-ins
     pctB: {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
@@ -393,6 +395,8 @@ export const en: Dict = {
       short: ReadonlyArray<{ label: string; need: number } & ({ kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null })>,
       canSet: boolean,
       deepFrom: number | null,
+      // #201: whether the GC / DC are on this chart (not on the moving averages' own)
+      crosses: boolean,
     ) =>
       `Moving averages ${lines.join(", ")}: averages of the close (EMA exponential, SMA simple; TradingView's arithmetic). ` +
       (canSet ? "Each line's length and kind are chosen at its ⚙. " : "With a plan that has the indicators, each line's length and kind are chosen at its ⚙. ") +
@@ -402,7 +406,7 @@ export const en: Dict = {
       (others.length > 0 ? `#142 measured only SMA 25, 75, 200 and EMA 50, 200 of the moving averages; ${others.join(", ")} not. ` : "") +
       "An EMA keeps some of its first value (the average of its first n closes), so it is TradingView's only with some three times its length of bars. " +
       (deepFrom !== null
-        ? `While a line longer than ${deepFrom}, or one the bars the chart always reads are too few for, is on (the GC / DC's lines too), the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). `
+        ? `While a line longer than ${deepFrom}, or one the bars the chart always reads are too few for, is on${crosses ? " (the GC / DC's lines too)" : ""}, the chart reads deep into the bars before its own (on the hourly chart and the like, the first time takes a while). `
         : "") +
       (status === "loading"
         ? "Loading the bars before the chart's. "
@@ -463,8 +467,10 @@ export const en: Dict = {
     ohlc: (o: string, h: string, l: string, c: string) => `O ${o} H ${h} L ${l} C ${c}`,
     priceAuto: "Auto",
     priceAutoHint: "Fit the price scale again",
-    gestureHint:
-      "Long-press for the crosshair (it follows the finger; tap again to hide it). Drag the price scale on the right up or down to stretch it (Auto puts it back), the time scale at the bottom sideways to zoom. Turn the phone on its side for full screen.",
+    // #201: the last sentence only on a chart that opens so
+    gestureHint: (landscape: boolean) =>
+      "Long-press for the crosshair (it follows the finger; tap again to hide it). Drag the price scale on the right up or down to stretch it (Auto puts it back), the time scale at the bottom sideways to zoom." +
+      (landscape ? " Turn the phone on its side for full screen." : ""),
     tabsLabel: "Timeframe",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -602,6 +608,14 @@ export const en: Dict = {
   },
 
   live: {
+    // #201: the moving averages' own chart, under the live chart
+    maTitle: "Moving averages chart",
+    maNote: (allowed: boolean) =>
+      "The candles and the moving averages only (no signal marks, strips or other indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
+      (allowed
+        ? "The three lines' lengths, kinds and switches are the live chart's above: a change on either is made on both. "
+        : "The moving averages are drawn with a plan that has the indicators (Light and up). ") +
+      "The prices come as on the chart above (GMO Coin's public rates for its pairs; for the other pairs and gold, Twelve Data's bars and Swissquote's prices). Shown only: no signal or email uses it.",
     title: "Live chart",
     connecting: "Connecting…",
     updated: (clock: string) => `Updated ${clock}`,

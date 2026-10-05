@@ -272,6 +272,8 @@ export const ja = {
     // #140: the indicators, a paid feature
     lockedHint: "Light プランで使えます",
     lockedNote: "🔒 のインジケーターは Light プラン（月額2,980円）で使えます。売買サインと RSI・パラボリックSAR は無料で表示できます。",
+    // #201: on the moving averages' own chart (no signals, RSI or SAR on it)
+    maLockedNote: "🔒 の移動平均線は Light プラン（月額2,980円）で使えます。",
     // #135: Bollinger %b and RCI, TradingView's built-ins
     pctB: {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
@@ -436,6 +438,8 @@ export const ja = {
       short: ReadonlyArray<{ label: string; need: number } & ({ kind: "none" } | { kind: "short"; late: boolean; rough: "little" | "much" | null })>,
       canSet: boolean,
       deepFrom: number | null,
+      // #201: whether the GC / DC are on this chart (not on the moving averages' own)
+      crosses: boolean,
     ) =>
       `移動平均線 ${lines.join("・")}: 終値の移動平均（EMA は指数、SMA は単純。TradingView と同じ計算）。` +
       (canSet ? "数字と種類は、各線の ⚙ で選べます。" : "数字と種類は、インジケーターを使えるプランで各線の ⚙ から選べます。") +
@@ -445,7 +449,7 @@ export const ja = {
       (others.length > 0 ? `#142 で測った移動平均は SMA 25・75・200 と EMA 50・200 だけで、${others.join("・")} は測っていません。` : "") +
       "EMA は最初の値（初めの期間ぶん〈n 本〉の足の平均）の影響が残るため、期間の約3倍の足がないと TradingView の値とずれます。" +
       (deepFrom !== null
-        ? `${deepFrom}より長い線か、ふだん読む足では足りない線（GC・DC に使う線を含む）がオンの間は、画面より前の足を深く読みます（1時間足などは、最初に開くとき時間がかかります）。`
+        ? `${deepFrom}より長い線か、ふだん読む足では足りない線${crosses ? "（GC・DC に使う線を含む）" : ""}がオンの間は、画面より前の足を深く読みます（1時間足などは、最初に開くとき時間がかかります）。`
         : "") +
       (status === "loading"
         ? "画面より前の足を読み込み中です。"
@@ -506,8 +510,10 @@ export const ja = {
     ohlc: (o: string, h: string, l: string, c: string) => `始 ${o} 高 ${h} 安 ${l} 終 ${c}`,
     priceAuto: "自動",
     priceAutoHint: "価格の目盛りを自動に戻す",
-    gestureHint:
-      "長押しで十字カーソル（指を動かすと追従、もう一度タップで消える）。右の価格の目盛りを上下にドラッグで縦の拡大・縮小（「自動」で戻す）、下の時間の目盛りを左右にドラッグで横の拡大・縮小。スマホを横にすると全画面で開きます。",
+    // #201: the last sentence only on a chart that opens so
+    gestureHint: (landscape: boolean) =>
+      "長押しで十字カーソル（指を動かすと追従、もう一度タップで消える）。右の価格の目盛りを上下にドラッグで縦の拡大・縮小（「自動」で戻す）、下の時間の目盛りを左右にドラッグで横の拡大・縮小。" +
+      (landscape ? "スマホを横にすると全画面で開きます。" : ""),
     tabsLabel: "時間足",
     // A timeframe the control bar does not offer (the higher rungs of a chain)
     tf: (tf: string) => tf,
@@ -649,6 +655,14 @@ export const ja = {
   // #113: リアルタイムチャート（5通貨ペア）
   live: {
     title: "リアルタイムチャート",
+    // #201: the moving averages' own chart, under the live chart
+    maTitle: "移動平均線チャート",
+    maNote: (allowed: boolean) =>
+      "ローソク足と移動平均線だけのチャートです（サインの印・下の帯・ほかのインジケーターは出しません）。ペアと時間足は、このチャートで別に選べます。" +
+      (allowed
+        ? "移動平均線3本の数字・種類・表示のオンオフは、上のリアルタイムチャートと共通です（どちらで変えても両方に効きます）。"
+        : "移動平均線は、インジケーターを使えるプラン（Light 以上）で表示されます。") +
+      "価格の取り方は上のチャートと同じです（GMOコインのペアは GMO の公開レート、ほかのペアと金は Twelve Data の足と Swissquote の価格）。表示のみで、サインの判定・メールには使っていません。",
     connecting: "接続中…",
     updated: (clock: string) => `更新 ${clock}`,
     pairsLabel: "通貨ペア",
