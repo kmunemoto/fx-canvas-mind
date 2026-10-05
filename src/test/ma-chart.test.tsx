@@ -183,6 +183,57 @@ describe("#201 the chart with the moving averages alone", () => {
     expect(screen.getByTestId("chart-info-text-ema50").textContent).not.toContain("読み込み中");
   });
 
+  it("two full screens open at once give the page its scroll back however they close, each leaving the browser's full screen of its own only", () => {
+    const proto = HTMLElement.prototype as unknown as { requestFullscreen?: () => Promise<void> };
+    const had = { request: proto.requestFullscreen, exit: document.exitFullscreen };
+    const native: { el: Element | null } = { el: null };
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => native.el });
+    proto.requestFullscreen = function (this: HTMLElement) {
+      native.el = this;
+      return Promise.resolve();
+    };
+    const exit = vi.fn(() => {
+      native.el = null;
+      return Promise.resolve();
+    });
+    document.exitFullscreen = exit;
+    try {
+      document.body.style.overflow = "auto";
+      render(
+        <>
+          <div data-testid="a"><PriceChart candles={walk(120)} pair="USD/JPY" /></div>
+          <div data-testid="b"><PriceChart candles={walk(120)} pair="EUR/JPY" maOnly /></div>
+        </>,
+      );
+      fireEvent.click(within(screen.getByTestId("a")).getByTestId("chart-fullscreen"));
+      const first = screen.getByTestId("chart-fullscreen-overlay");
+      expect(native.el).toBe(first);
+      fireEvent.click(within(screen.getByTestId("b")).getByTestId("chart-fullscreen"));
+      expect(screen.getAllByTestId("chart-fullscreen-overlay")).toHaveLength(2);
+      expect(document.body.style.overflow).toBe("hidden");
+      // the second closed first: the first's browser full screen stays
+      fireEvent.click(screen.getAllByTestId("chart-fullscreen-close")[1]);
+      expect(exit).not.toHaveBeenCalled();
+      expect(native.el).toBe(first);
+      expect(document.body.style.overflow).toBe("hidden");
+      fireEvent.click(screen.getByTestId("chart-fullscreen-close"));
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(document.body.style.overflow).toBe("auto");
+      // and in the other order
+      fireEvent.click(within(screen.getByTestId("a")).getByTestId("chart-fullscreen"));
+      fireEvent.click(within(screen.getByTestId("b")).getByTestId("chart-fullscreen"));
+      fireEvent.click(screen.getAllByTestId("chart-fullscreen-close")[0]);
+      expect(document.body.style.overflow).toBe("hidden");
+      fireEvent.click(screen.getByTestId("chart-fullscreen-close"));
+      expect(document.body.style.overflow).toBe("auto");
+    } finally {
+      proto.requestFullscreen = had.request;
+      document.exitFullscreen = had.exit;
+      delete (document as unknown as { fullscreenElement?: Element }).fullscreenElement;
+      document.body.style.overflow = "";
+    }
+  });
+
   it("locked: the three listed with 🔒 and none drawn, nothing else listed", () => {
     const onLocked = vi.fn();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked onLockedIndicator={onLocked} />);
@@ -427,6 +478,23 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       // the live chart's (it has the drawing tools; the moving averages' chart has none)
       expect(within(overlays[0]).queryByTestId("chart-draw-open")).toBeTruthy();
       expect(document.body.style.overflow).toBe("hidden");
+      side.on = false;
+      act(() => listeners.forEach((f) => f()));
+      expect(screen.queryByTestId("chart-fullscreen-overlay")).toBeNull();
+      expect(document.body.style.overflow).toBe("");
+
+      // the moving averages' chart opened by hand, then the phone turned:
+      // the live chart does not open over it, and the page scrolls after
+      fireEvent.click(within(screen.getByTestId("ma-chart")).getByTestId("chart-fullscreen"));
+      expect(screen.getAllByTestId("chart-fullscreen-overlay")).toHaveLength(1);
+      side.on = true;
+      act(() => listeners.forEach((f) => f()));
+      const open = screen.getAllByTestId("chart-fullscreen-overlay");
+      expect(open).toHaveLength(1);
+      expect(within(open[0]).queryByTestId("chart-draw-open")).toBeNull();
+      fireEvent.click(screen.getByTestId("chart-fullscreen-close"));
+      expect(screen.queryByTestId("chart-fullscreen-overlay")).toBeNull();
+      expect(document.body.style.overflow).toBe("");
       side.on = false;
       act(() => listeners.forEach((f) => f()));
       expect(screen.queryByTestId("chart-fullscreen-overlay")).toBeNull();

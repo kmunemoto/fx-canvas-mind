@@ -238,6 +238,11 @@ const GP_MIN_BARS = 2 * GP_DEFAULTS.window + GP_DEFAULTS.emaLength + GP_DEFAULTS
 const LONG_PRESS_MS = 350;
 const TOUCH_MOUSE_MS = 800;
 const LANDSCAPE_PHONE = "(orientation: landscape) and (pointer: coarse) and (max-height: 540px)";
+// #201: the full screens open on the page (the live chart and the moving
+// averages' own can both be), so the page's scroll is stopped while any is
+// open and given back as it was when the last closes, in whatever order
+let openFulls = 0;
+let overflowBefore = "";
 const PRICE_ZOOM_MIN = 0.25;
 const PRICE_ZOOM_MAX = 4;
 // #124: no history (one array, so the memo that reads it holds)
@@ -501,8 +506,10 @@ const PriceChart = ({
   // iPhone: there the layer is the full screen)
   useEffect(() => {
     if (!full) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (openFulls++ === 0) {
+      overflowBefore = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
     // Esc closes an open sheet first, then full screen
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -524,10 +531,11 @@ const PriceChart = ({
     }
     return () => {
       setSheet(null);
-      document.body.style.overflow = prev;
+      if (--openFulls === 0) document.body.style.overflow = overflowBefore;
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onChange);
-      if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      // (the browser's full screen of this chart only, not another's)
+      if (document.fullscreenElement && document.fullscreenElement === el && typeof document.exitFullscreen === "function") {
         document.exitFullscreen().catch(() => undefined);
       }
     };
@@ -552,7 +560,8 @@ const PriceChart = ({
     const mq = window.matchMedia(LANDSCAPE_PHONE);
     const apply = () => {
       if (mq.matches) {
-        if (!fullNow.current) {
+        // (#201: not over another chart's full screen, opened by hand)
+        if (!fullNow.current && openFulls === 0) {
           autoFull.current = true;
           setFull(true);
         }
