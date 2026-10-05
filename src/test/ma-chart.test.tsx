@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render as rtlRender, screen, fireEvent, waitFor, within, type RenderResult } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, within, act, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 
@@ -83,6 +83,7 @@ const OTHERS = [
   "chart-zltema",
   "chart-trendlines",
   "chart-stoch-form",
+  "chart-stoch-reading",
   "chart-pctb-legend",
   "chart-rci-legend",
   "chart-blsh-legend",
@@ -153,6 +154,33 @@ describe("#201 the chart with the moving averages alone", () => {
     expect(listed).toEqual(["chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"]);
     expect(within(sheet).getByTestId("chart-ma-form")).toBeTruthy();
     expect(within(sheet).queryByTestId("chart-stoch-form")).toBeNull();
+  });
+
+  it("its notes say nothing of what it does not draw: no GC / DC lines read deep, no free signals, RSI or SAR", () => {
+    const deep = { bars: null, status: "loading" as const };
+    const full = render(<PriceChart candles={walk(300)} pair="USD/JPY" deepHistory={deep} />);
+    fireEvent.click(screen.getByTestId("chart-info-ema50"));
+    expect(screen.getByTestId("chart-info-text-ema50").textContent).toContain("（GC・DC に使う線を含む）");
+    full.unmount();
+    const ma = render(<PriceChart candles={walk(300)} pair="USD/JPY" deepHistory={deep} maOnly />);
+    fireEvent.click(screen.getByTestId("chart-info-ema50"));
+    const note = screen.getByTestId("chart-info-text-ema50").textContent!;
+    expect(note).toContain("ふだん読む足では足りない線がオンの間は、画面より前の足を深く読みます");
+    expect(note).not.toContain("GC・DC");
+    ma.unmount();
+    // locked
+    const lockedFull = render(<PriceChart candles={walk(300)} pair="USD/JPY" indicatorsLocked />);
+    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toContain("売買サインと RSI・パラボリックSAR は無料で表示できます");
+    lockedFull.unmount();
+    render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked />);
+    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toBe("🔒 の移動平均線は Light プラン（月額2,980円）で使えます。");
+  });
+
+  it("with the three lines off, says nothing is being read for them", () => {
+    setChartPrefs({ overlays: { ...getChartPrefs().overlays, ema50: false, ema200: false, ma3: false } });
+    render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly zoneShiftHistory={{ bars: null, status: "loading" }} />);
+    fireEvent.click(screen.getByTestId("chart-info-ema50"));
+    expect(screen.getByTestId("chart-info-text-ema50").textContent).not.toContain("読み込み中");
   });
 
   it("locked: the three listed with 🔒 and none drawn, nothing else listed", () => {
@@ -363,6 +391,103 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       }
       unmount();
     }
+  });
+
+  it("a phone turned on its side opens the live chart alone in full screen; upright again, the page scrolls", async () => {
+    const original = window.matchMedia;
+    const side = { on: false };
+    const listeners = new Set<() => void>();
+    window.matchMedia = ((query: string) => ({
+      get matches() {
+        return query.includes("landscape") && side.on;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, f: () => void) => listeners.add(f),
+      removeEventListener: (_: string, f: () => void) => listeners.delete(f),
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => true,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(
+        <>
+          {chart("full", { defaultInterval: "15min" })}
+          {chart("ma", { defaultInterval: "15min" })}
+        </>,
+      );
+      await waitFor(() => expect(within(screen.getByTestId("ma-chart")).getByTestId("chart-ema50-line")).toBeTruthy());
+      // the sideways sentence on the live chart's note only
+      expect(within(screen.getByTestId("live-chart")).getByTestId("chart-gesture-note").textContent).toContain("スマホを横にすると全画面で開きます");
+      expect(within(screen.getByTestId("ma-chart")).getByTestId("chart-gesture-note").textContent).not.toContain("横にすると");
+      side.on = true;
+      act(() => listeners.forEach((f) => f()));
+      const overlays = screen.getAllByTestId("chart-fullscreen-overlay");
+      expect(overlays).toHaveLength(1);
+      // the live chart's (it has the drawing tools; the moving averages' chart has none)
+      expect(within(overlays[0]).queryByTestId("chart-draw-open")).toBeTruthy();
+      expect(document.body.style.overflow).toBe("hidden");
+      side.on = false;
+      act(() => listeners.forEach((f) => f()));
+      expect(screen.queryByTestId("chart-fullscreen-overlay")).toBeNull();
+      expect(document.body.style.overflow).toBe("");
+    } finally {
+      window.matchMedia = original;
+      document.body.style.overflow = "";
+    }
+  });
+
+  it("says no new signal when a bar closes and the read has one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const base = marked();
+      const sig = { ...base.marks[1], datetime: base.candles[base.candles.length - 1].datetime, barsAgo: 0, rule: "gainz", side: "SELL" as const };
+      let calls = 0;
+      const loadBars = vi.fn(async () =>
+        ++calls === 1
+          ? { ...base, latest: { rsiSar: null, gainz: null }, nextClose: new Date(Date.now() + 10_000).toISOString() }
+          : { ...base, latest: { rsiSar: null, gainz: sig }, nextClose: new Date(Date.now() + 900_000).toISOString() },
+      );
+      // the live chart says it (so its absence below is the mode's doing)
+      const full = render(chart("full", { defaultInterval: "15min", loadBars }));
+      await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByTestId("live-fresh")).toBeTruthy());
+      full.unmount();
+      calls = 0;
+      loadBars.mockClear();
+      render(chart("ma", { defaultInterval: "15min", loadBars }));
+      await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      await waitFor(() => expect(loadBars).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(screen.queryByTestId("live-fresh")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says when the bar closes, and its full screen's timeframe sheet has no choice of signals", async () => {
+    // (the read's own close 10 minutes away, no forming bar of days ago)
+    render(chart("ma", { defaultInterval: "15min", loadBars: async (p: string, i: string) => ({ ...readFor(p, i), formingOpen: null }) }));
+    await waitFor(() => expect(within(screen.getByTestId("ma-chart-info")).getByTestId("live-next-close")).toBeTruthy());
+    expect(screen.getByTestId("live-next-close").textContent).toContain("次の足の確定");
+    fireEvent.click(screen.getByTestId("chart-fullscreen"));
+    fireEvent.click(screen.getByTestId("chart-sheet-interval-open"));
+    expect(screen.getByTestId("live-sheet-interval-15min")).toBeTruthy();
+    for (const v of ["gainz", "rsi_sar", "both"]) expect(screen.queryByTestId(`live-sheet-view-${v}`)).toBeNull();
+    // and its settings sheet does not say a phone on its side opens it (it does not)
+    fireEvent.click(screen.getByTestId("chart-sheet-close"));
+    fireEvent.click(screen.getByTestId("chart-sheet-settings-open"));
+    expect(screen.getByTestId("chart-gesture-hint").textContent).toContain("長押しで十字カーソル");
+    expect(screen.getByTestId("chart-gesture-hint").textContent).not.toContain("横にすると");
   });
 
   it("locked: the candles, the three lines with 🔒, no bars read before its own, and the note says the plan", async () => {

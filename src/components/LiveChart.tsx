@@ -914,7 +914,9 @@ const LiveChart = ({
         indicatorsLocked={!indicatorsAllowed}
         onLockedIndicator={onLockedIndicator}
         fullscreenMenus={{ symbol: symbolMenu, interval: intervalMenu }}
-        landscapeFullscreen
+        // #201: the live chart alone opens on a phone turned sideways (two
+        // would open over each other, and the page's scroll lock be left on)
+        landscapeFullscreen={!maMode}
         // #160: lines drawn by hand, kept per pair (on every timeframe;
         // #201: on the full chart only)
         drawable={!maMode}

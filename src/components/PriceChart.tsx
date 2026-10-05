@@ -1362,8 +1362,9 @@ const PriceChart = ({
   const maUnmeasured = [...new Set(maLines.filter((l) => !measuredMa(l)).map(maLabel))];
   // what the bars are, and each line on that cannot be drawn whole or as
   // TradingView's with them (maShortfall)
+  // (#201: with no line on, nothing is read for them: not "loading")
   const maStatus = !emas
-    ? (zoneShiftHistory ? zoneShiftHistory.status : "ready")
+    ? (emaOn !== "" && zoneShiftHistory ? zoneShiftHistory.status : "ready")
     : deepForMa && deepHistory && maPast !== deepBars
       ? (deepHistory.status === "loading" ? "deepLoading" : "deepShort")
       : "ready";
@@ -1374,7 +1375,7 @@ const PriceChart = ({
       })
     : [];
   // the deep history said of on the live chart only (it reads it)
-  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, maStatus, maShort, !indicatorsLocked, deepHistory ? MA_DEEP_FROM : null);
+  const emaNoteText = t.chart.emaNote(maNamed, maUnmeasured, emas ? emas.total : null, maStatus, maShort, !indicatorsLocked, deepHistory ? MA_DEEP_FROM : null, !maOnly);
   const crossNames = pair2 ? [maLabel(pair2.fast), maLabel(pair2.slow)] : [maLabel(maLines[0]), maLabel(maLines[1])];
   const noteOf: Partial<Record<string, ReactNode>> = {
     signals: signalLegend ?? t.chart.signalLegend,
@@ -1561,7 +1562,7 @@ const PriceChart = ({
           </section>
         );
       })}
-      {indicatorsLocked && <p className="text-[11px] text-muted-foreground" data-testid="chart-sheet-locked-note">{t.chart.lockedNote}</p>}
+      {indicatorsLocked && <p className="text-[11px] text-muted-foreground" data-testid="chart-sheet-locked-note">{maOnly ? t.chart.maLockedNote : t.chart.lockedNote}</p>}
     </div>
   );
 
@@ -1738,7 +1739,7 @@ const PriceChart = ({
                   {t.chart.zoomReset}
                 </button>
                 <p className="text-[11px] text-muted-foreground" data-testid="chart-zoom-hint">{t.chart.zoomHint}</p>
-                <p className="text-[11px] text-muted-foreground" data-testid="chart-gesture-hint">{t.chart.gestureHint}</p>
+                <p className="text-[11px] text-muted-foreground" data-testid="chart-gesture-hint">{t.chart.gestureHint(landscapeFullscreen)}</p>
               </section>
             )}
           </div>
@@ -2568,7 +2569,7 @@ const PriceChart = ({
       {/* #144: how the chart is worked, first */}
       {interactive && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-gesture-note">
-          {t.chart.gestureHint}
+          {t.chart.gestureHint(landscapeFullscreen)}
         </p>
       )}
       {/* Said once, under the chart, so the two registers can be told apart
