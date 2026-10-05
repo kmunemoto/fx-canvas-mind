@@ -27,7 +27,7 @@
   "a late email is judged at T (the order term too, margin at T's mids with the late orders before it), fills after \u2462 at its first bar's close, and is in E and the margin from that bar's end.",
   "taken counts emails that opened a position (a thirds email once; an AS email that only closed, zero).",
   "FF thirds: the 1,000-unit lots dealt to TP1, TP2, TP3 in turn (the larger first); the fixtures use 10 lots or fewer, where 0.4/0.3/0.3 with the largest remainders splits the same.",
-  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole; each pair held at a deadline has a bar opening exactly at the deadline.",
+  "every trade has its own exit (TP or stop) inside the bars written, after any forced close, so the trade is whole, but timeout_closure's, which no level reaches: it goes out on time at the close of its last 5-minute bar before the end of its 30th 4-hour bar, that end inside the closure; each pair held at a deadline has a bar opening exactly at the deadline.",
   "a skip row carries no units; an exit row's units are the units closed; px is the price in the pair's own currency.",
   "each trade's first 5-minute bar opens at T: where a fixture writes none, a flat bar at the signal bar's close is written (bid and ask of the bar ending at T), except for a pair a fixture names in no_bar_at_T (late_nobar_at_T): its trade starts at its next bar, while another pair's bar opens at T.",
   "after the last bar that matters, each pair has one wide 'flush' bar (1 yen, or 0.01 on a dollar pair, either side of its last close) and one flat bar after it, so every variant of every trade (TP2, TP3, five minutes late, Rakuten's spread) ends inside the data; no run holds anything then.",
