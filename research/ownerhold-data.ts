@@ -50,6 +50,8 @@ export interface M1 {
 export interface LoadStats {
   requests: number;
   cached: number;
+  // kept files read again: answered before their day's file had ended (or a 404 kept without its time)
+  partial: number;
   failed: number;
   files: number;
   // bars left out: on one side only, an ask close under the bid's, inside the weekend's closure, a repeated time
@@ -58,7 +60,7 @@ export interface LoadStats {
   closure: number;
   repeated: number;
 }
-export const newLoadStats = (): LoadStats => ({ requests: 0, cached: 0, failed: 0, files: 0, oneSide: 0, crossed: 0, closure: 0, repeated: 0 });
+export const newLoadStats = (): LoadStats => ({ requests: 0, cached: 0, partial: 0, failed: 0, files: 0, oneSide: 0, crossed: 0, closure: 0, repeated: 0 });
 
 // ---- GMO's day files ----------------------------------------------------------------------
 
@@ -97,6 +99,16 @@ export interface Source {
   fetch: boolean;
 }
 
+// A kept GMO day file is taken only if GMO answered it after the day's file had ended: the key's day at
+// 22:00 UTC (the next day's 07:00 JST, the later of GMO's two day rolls, 06:00 and 07:00 JST). A file
+// kept by another study while its day was going on, or a 404 kept without the time it was asked, is
+// read again (a kept file of the walks, which GMO never answered, is not judged: src.fetch false).
+export const dayFileEnd = (key: string): number => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)), 22, 0, 0);
+export const wholeDayFile = (body: unknown, key: string): boolean => {
+  const at = Date.parse(String((body as { responsetime?: unknown }).responsetime ?? ""));
+  return Number.isFinite(at) && at >= dayFileEnd(key);
+};
+
 // one side of one day file, its bars (null: it could not be read)
 const readSide = async (src: Source, symbol: string, interval: string, side: "bid" | "ask", key: string, fresh: boolean, st: LoadStats) => {
   const path = `${src.dir}/${symbol}/${interval}/${side}/${key}.json`;
@@ -108,11 +120,16 @@ const readSide = async (src: Source, symbol: string, interval: string, side: "bi
       body = undefined;
     }
     if (body !== undefined && !sound(body)) body = undefined;
+    if (body !== undefined && src.fetch && !wholeDayFile(body, key)) {
+      st.partial++;
+      body = undefined;
+    }
   }
   if (body === undefined && src.fetch) {
     const r = await getJson(klineUrl(symbol, side, interval, key));
     st.requests++;
-    body = r.status === 404 ? { status: 404, data: [] } : r.body;
+    // a 404 kept with the time it was asked (GMO's own answers carry responsetime)
+    body = r.status === 404 ? { status: 404, data: [], responsetime: new Date().toISOString() } : r.body;
     if (r.status === 0 || !sound(body)) {
       st.failed++;
       return null;
@@ -464,6 +481,10 @@ export interface SignalRead {
   // the check against the emails' own function (indicatorSignals): sampled bars and every 7th signal; every late one
   check: Probe;
   checkLate: Probe;
+  // the look-ahead check (§8.102 確かめ A, B(3)): every bar judged, and every late window, rebuilt from only the
+  // quotes closed when the sweep read it, through historyRead and indicatorSignals; the side of every bar and the
+  // E and TP2 of every mailed signal compared (null: not run, the ③-only walks)
+  cut: Probe | null;
 }
 
 const isoOf = (ms: number) => new Date(ms).toISOString();
@@ -473,7 +494,8 @@ const isoOf = (ms: number) => new Date(ms).toISOString();
 // (tf-winrate.ts, the same steps); a bar's signal found only in the next bar's
 // window (where the anchor moved) is mailed when that bar is read, if still
 // inside the 20 minutes indicatorSignals keeps a signal fresh.
-export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], startMs: number, endMs: number): SignalRead => {
+// `plant` "signalNextBar" (確かめ A 仕込んだ誤り): E read from the bar after the signal's, which the cut check must catch
+export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], startMs: number, endMs: number, cutCheck = false, plant = ""): SignalRead => {
   const unit = unitOf(pair);
   const candles = historyRead(pair, "15min", quotes, endMs).candles;
   const n = candles.length;
@@ -543,7 +565,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
   let lateUnmailed = 0;
   let late = 0;
   const mk = (i: number, side: Side, base: number | null): Sig => {
-    const E = candles[i].close;
+    const E = plant === "signalNextBar" && i + 1 < n ? candles[i + 1].close : candles[i].close;
     const q = byOpen.get(times[i]);
     if (!q) throw new Error(`${pair} ${isoOf(times[i])}: a chart bar without its quote`);
     return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + STEP15, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: base !== null, base: base ?? times[i] + STEP15, bidC: q.bid.close, askC: q.ask.close };
@@ -603,6 +625,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
       if (checkLate.examples.length < 10) checkLate.examples.push(`${pair} ${isoOf(times[i])} window+1 mine=${ns ?? "-"} theirs=${theirs || "-"}`);
     }
   }
+  const cut = cutCheck ? cutCheckOf(pair, quotes, times, own, nextSide, signals, anchorOf, inPeriod) : null;
   return {
     pair,
     bars: n,
@@ -616,7 +639,72 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     late,
     check,
     checkLate,
+    cut,
   };
+};
+
+// The look-ahead check of the signals: each judgement made again from the quotes alone, cut where the
+// sweep's read could have seen them — the bars that closed by a minute after bar i's close (on time), or
+// by a minute after bar i+1's (a late one) — through the chart's historyRead and the newest WINDOW of its
+// bars into indicatorSignals. No quote past the cut is handed in.
+const cutCheckOf = (
+  pair: string,
+  quotes: QuoteCandle[],
+  times: Float64Array,
+  own: Map<number, Side>,
+  nextSide: Map<number, Side | null>,
+  signals: Sig[],
+  anchorOf: (i: number) => { ws: number; s: number } | null,
+  inPeriod: (i: number) => boolean,
+): Probe => {
+  const pr: Probe = { compared: 0, mismatched: 0, examples: [] };
+  const qOpen = Float64Array.from(quotes.map((q) => barOpenMs(q.datetime)));
+  for (let k = 1; k < qOpen.length; k++) if (!(qOpen[k] > qOpen[k - 1])) throw new Error(`${pair}: the 15-minute quotes are not in order`);
+  const bad = (what: string) => {
+    pr.mismatched++;
+    if (pr.examples.length < 10) pr.examples.push(`${pair} ${what}`);
+  };
+  // the WINDOW newest bars closed by `now` (whose newest must be `lastOpen`), from the quotes opened by then
+  const windowAt = (lastOpen: number, now: number): Candle[] | null => {
+    const k = upperBoundF(qOpen, lastOpen);
+    for (let back = WINDOW + 200; ; back *= 2) {
+      const from = Math.max(0, k - back);
+      const candles = historyRead(pair, "15min", quotes.slice(from, k), now).candles;
+      if (candles.length >= WINDOW || from === 0) {
+        const w = candles.slice(-WINDOW);
+        return w.length === WINDOW && barOpenMs(w[WINDOW - 1].datetime) === lastOpen ? w : null;
+      }
+    }
+  };
+  const mailed = new Map<string, Sig>(signals.map((s) => [`${s.open}|${s.late ? 1 : 0}`, s]));
+  const judge = (i: number, lastBar: number, ours: Side | "", late: boolean) => {
+    const now = times[lastBar] + STEP15 + MINUTE;
+    const w = windowAt(times[lastBar], now);
+    pr.compared++;
+    if (!w) return bad(`${isoOf(times[i])}${late ? " late" : ""}: the cut read does not end at its bar`);
+    const theirs = indicatorSignals(pair, "15min", w, now, now - (times[i] + STEP15)).filter((x) => x.rule === "ultra" && Date.parse(x.barTime) === times[i]);
+    const side = theirs.map((x) => x.side).join(",");
+    if (side !== ours) return bad(`${isoOf(times[i])}${late ? " late" : ""}: mine=${ours || "-"} cut=${side || "-"}`);
+    const s = mailed.get(`${times[i]}|${late ? 1 : 0}`);
+    if (s && (theirs[0].close !== s.E || theirs[0].tps?.[1] !== s.tp)) bad(`${isoOf(times[i])}${late ? " late" : ""}: E ${s.E} / ${theirs[0].close}, TP2 ${s.tp} / ${theirs[0].tps?.[1]}`);
+  };
+  for (let i = 0; i < times.length; i++) {
+    if (!inPeriod(i) || !anchorOf(i)) continue;
+    judge(i, i, own.get(i) ?? "", false);
+  }
+  for (const [i, ns] of nextSide) judge(i, i + 1, ns ?? "", true);
+  return pr;
+};
+
+const upperBoundF = (a: Float64Array, x: number): number => {
+  let lo = 0;
+  let hi = a.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (a[mid] <= x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 };
 
 // the time an email's order is sent (P): `delay` minutes after its base (T, or T + 15 for a late one)

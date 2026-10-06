@@ -494,6 +494,60 @@ def compute_path(pr, P0, dirn, E, tp, end, taus):
     return r
 
 
+def email_values(pr, r, dirn):
+    """メールごとの P＋24時間と P＋1週の値（§8.102 比べるもの: 利確の足がその時刻までに終われば利確の pips、
+    その時刻までに入っていれば、その時刻以前に終わる最後の足の決済する側の終値で評価、入っていなければ 0）と、
+    P＋24時間ちょうどに終わる足が無いか（値段の無い時間）。r['none'] のメールは None。"""
+    if r['none']:
+        return None
+    P = r['P']
+    t = pr.t
+    fk = r['fillK']
+    out = {}
+    for name, H in (('d1', P + H24), ('w1', P + WEEK)):
+        v = 0.0
+        if r['filled']:
+            if r['tpd'] and int(t[r['tpK']]) + MIN <= H:
+                v = dirn * (r['exit'] - r['fill']) / pr.unit
+            elif (fk >= 0 and int(t[fk]) + MIN <= H) or (fk == -1 and P <= H):
+                kh = pr.ended(H)
+                if kh >= 0:
+                    px = float(pr.bc[kh]) if dirn > 0 else float(pr.ac[kh])
+                    v = dirn * (px - r['fill']) / pr.unit
+        out[name] = v
+    kh = pr.ended(P + H24)
+    out['gap1'] = int(not (kh >= 0 and int(t[kh]) + MIN == P + H24))
+    return out
+
+
+def compare_emails(C, W, dump):
+    """emails.csv: メールごとの1日後・1週後の値（合図の向きと逆向き）と、1日後の値段の無い時間を全件比べる"""
+    rows = read_csv(os.path.join(dump, 'emails.csv'))
+    name = 'emails'
+    if rows is None:
+        C.bad(name, 'file', 'missing', None, None)
+        return
+    byi = {int(r['i']): r for r in rows}
+    C.count(name, 'all', len(W.sigs), len(rows))
+    for s, a, b in zip(W.sigs, W.path_sig, W.path_opp):
+        i = s['i']
+        d = byi.get(i)
+        if d is None:
+            C.bad(name, i, 'row missing', None, None)
+            continue
+        pr = W.pairs[s['p']]
+        va = email_values(pr, a, s['dir'])
+        vb = email_values(pr, b, -s['dir'])
+        for horizon, keys in (('d1', (('d1', 'd1', va), ('d1o', 'd1', vb))), ('w1', (('w1', 'w1', va), ('w1o', 'w1', vb)))):
+            H = a['P'] + (H24 if horizon == 'd1' else WEEK)
+            inside = va is not None and H <= W.end
+            for col, k, v in keys:
+                C.check(name, i, col, v[k] if inside else None, d[col], 'pips')
+        inside1 = va is not None and a['P'] + H24 <= W.end
+        C.check(name, i, 'gap1', va['gap1'] if inside1 else None, d['gap1'], 'exact')
+        C.check(name, i, 'gap1o', vb['gap1'] if inside1 else None, d['gap1o'], 'exact')
+
+
 # ---------------------------------------------------------------- 全体（足・時計・合図）
 class World:
     def __init__(self, gmo, dump, rates_spec, log):
@@ -1480,6 +1534,9 @@ def main():
     ap.add_argument('--mine', default=None, help='自分の計算を、dump と同じ形のファイルでこのフォルダに書き出す（調べる用）')
     ap.add_argument('--e-round', choices=['exact', 'mathround'], default='exact',
                     help='E の丸めの確かめ方（既定 exact = チャートの toFixed。mathround は調べる用）')
+    ap.add_argument('--quiet', action='store_true',
+                    help='実データ用: 計算した数（追証・ロスカット・入金の回数、E*、比べた件数、食い違いの例）を出さず、'
+                         '食い違いの合計と、食い違いのあった種類の名前だけを出す（§8.102 確かめ B (5)）')
     args = ap.parse_args()
     t0 = time.time()
 
@@ -1504,15 +1561,18 @@ def main():
     for row, cfg in ACCOUNT_ROWS.items():
         t1 = time.time()
         accs[row] = Account(W, cfg['swap'], cfg['worst'], cfg['dep'], False).run()
-        log(f'account {row}: {time.time() - t1:.1f}s, calls {len(accs[row].calls)}, lcs {len(accs[row].lcs)}, '
-            f'deposits {len(accs[row].deposits)}')
+        if args.quiet:
+            log(f'account {row}: {time.time() - t1:.1f}s')
+        else:
+            log(f'account {row}: {time.time() - t1:.1f}s, calls {len(accs[row].calls)}, lcs {len(accs[row].lcs)}, '
+                f'deposits {len(accs[row].deposits)}')
     unl = {}
     for row in UNLIMITED_ROWS:
         cfg = ACCOUNT_ROWS[row]
         t1 = time.time()
         unl[row] = Account(W, cfg['swap'], cfg['worst'], cfg['dep'], True).run()
         e = unl[row].summary['estar']
-        log(f'unlimited-{row}: {time.time() - t1:.1f}s, E* {e}')
+        log(f'unlimited-{row}: {time.time() - t1:.1f}s' + ('' if args.quiet else f', E* {e}'))
     elapsed = time.time() - t0
 
     if args.mine:
@@ -1526,6 +1586,7 @@ def main():
             C.bad('load', 'gmo', msg, None, None)
         check_inputs(C, W, pairs15, args.e_round, C.notes)
         compare_paths(C, W, dump)
+        compare_emails(C, W, dump)
         compare_third(C, th, dump)
         for row in ACCOUNT_ROWS:
             compare_account(C, accs[row], dump, row, False)
@@ -1550,6 +1611,12 @@ def main():
         C = compare(d)
         res = write(C, (args.out or d) if n == 0 else d, d)
         tot_c, tot_m = sum(res['compared'].values()), sum(res['mismatched'].values())
+        if args.quiet:
+            names = ', '.join(k for k, v in res['mismatched'].items() if v)
+            print(f'{"main" if n == 0 else "also"} dump: mismatched {tot_m}' + (f' (in: {names})' if names else ''))
+            if n == 0:
+                main_rc = 0 if tot_m == 0 else 1
+            continue
         if n == 0:
             print('kind'.ljust(34), 'compared'.rjust(9), 'mismatched'.rjust(10))
             for k in res['compared']:

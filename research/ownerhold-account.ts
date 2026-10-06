@@ -158,6 +158,11 @@ export interface AccountOut {
   poisoned: number;
   swapNights: number;
   orders: number;
+  // Rakuten's US-dollar minus balance rule, not applied (§8.102: counted): at each week's first NY close (the
+  // first after a gap of over two days), the dollar balance under 0 and the net assets (mid) ÷ its yen value
+  // at most 50%; the closes judged and those it would have applied at
+  usdNegJudged: number;
+  usdNeg: Array<{ tau: number; ratio: number }>;
 }
 
 interface Pos {
@@ -274,7 +279,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   const units = mk.books.map((m) => unitOf(m.pair));
   const usd = mk.books.map((m) => isUsdPair(m.pair));
   const taus = Float64Array.from(mk.closes.map((c) => c.tau));
-  const out: AccountOut = { fates: orders.map(() => "none" as Fate), trades: [], calls: [], lcs: [], deposits: [], naSplit: NaN, inSplit: NaN, naEnd: NaN, inEnd: NaN, maxDrawdown: 0, maxHeld: 0, maxHeldMargin: 0, maxPending: 0, estar: null, estarBy: {}, mSplit: NaN, mEnd: NaN, poisoned: 0, swapNights: 0, orders: orders.length };
+  const out: AccountOut = { fates: orders.map(() => "none" as Fate), trades: [], calls: [], lcs: [], deposits: [], naSplit: NaN, inSplit: NaN, naEnd: NaN, inEnd: NaN, maxDrawdown: 0, maxHeld: 0, maxHeldMargin: 0, maxPending: 0, estar: null, estarBy: {}, mSplit: NaN, mEnd: NaN, poisoned: 0, swapNights: 0, orders: orders.length, usdNegJudged: 0, usdNeg: [] };
   const fateIdx = new Map<number, number>();
   orders.forEach((x, k) => fateIdx.set(x.sig, k));
   const setFate = (sig: number, f: Fate) => (out.fates[fateIdx.get(sig)!] = f);
@@ -284,14 +289,16 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   const next = new Int32Array(np);
   const lastK = new Int32Array(np).fill(-1);
   for (let p = 0; p < np; p++) next[p] = lowerBound(mk.books[p].t, mk.from - MINUTE * 0);
-  // the minute being judged and how much of it may be read ("open": its open only)
+  // the time being judged and how much of the bar starting then may be read: "open" its open only (①②),
+  // "full" all of it (③④, the minute being judged), "ended" none (⑤ at the minute's end, the events at their
+  // time: only bars ended by then)
   let clockS = -Infinity;
-  let clockPart: "open" | "full" = "full";
+  let clockPart: "open" | "full" | "ended" = "ended";
   const poison = (p: number) => o.poisonPips * units[p];
   const rd = (p: number, xs: Float64Array, k: number, isOpen: boolean): number => {
     const m = mk.books[p];
     const t = m.t[k];
-    const ok = t < clockS || (t === clockS && (clockPart === "full" || isOpen));
+    const ok = t < clockS || (t === clockS && (clockPart === "full" || (clockPart === "open" && isOpen)));
     if (ok || o.poisonPips === 0) return xs[k];
     out.poisoned++;
     return xs[k] + poison(p);
@@ -497,6 +504,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
 
   // ---- an order ------------------------------------------------------------------------------
   let lastNyPoint = "";
+  let lastNyTau = -Infinity;
   const take = (x: OrderIn, s: number, k0: number | null) => {
     const p = x.pi;
     const m = mk.books[p];
@@ -649,6 +657,15 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     const point = Array.from(lastK).join(",");
     const samePoint = point === lastNyPoint;
     lastNyPoint = point;
+    const weekFirst = !(c.tau - lastNyTau <= 2 * 86_400_000);
+    lastNyTau = c.tau;
+    if (!o.unlimited && weekFirst) {
+      out.usdNegJudged++;
+      if (dollars < 0) {
+        const ratio = netAssets("mid") / (-dollars * usdJpy());
+        if (ratio <= 0.5) out.usdNeg.push({ tau: c.tau, ratio });
+      }
+    }
     if (o.unlimited) {
       term("close", required() - (netAssets("mid") - 0), c.tau);
       term("loss", -netAssets("exit"), c.tau);
@@ -679,10 +696,16 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   const worst = new Float64Array(2 * np);
   const runEvent = (e: Ev) => {
     clockS = e.t;
-    clockPart = "full";
+    clockPart = "ended";
     switch (e.kind) {
       case "ny":
-        nyClose(e.ny!);
+        if (o.plant === "nyTauBar") {
+          // planted: the NY close judged on the bars starting at τ (not ended by then)
+          const keep = Int32Array.from(lastK);
+          for (let p = 0; p < np; p++) if (next[p] < mk.books[p].n && mk.books[p].t[next[p]] === e.t) lastK[p] = next[p];
+          nyClose(e.ny!);
+          lastK.set(keep);
+        } else nyClose(e.ny!);
         break;
       case "swap":
         if (!(o.swapBeforeCall && !o.unlimited)) addSwap(e.ny!);
@@ -807,7 +830,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
       }
     }
     clockS = g;
-    clockPart = "full";
+    clockPart = "ended";
     // ⑤ the loss-cut, and a call cured by the margin freed
     const lcMinute = (judged || (o.unlimited && o.plant === "estarMaint")) && (o.lc !== "m5" || g % (5 * MINUTE) === 0);
     if (lcMinute) {
@@ -863,6 +886,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   while (ei < evs.length) runEvent(evs[ei++]);
   // still held at END: the exit side's last close
   clockS = mk.end;
+  clockPart = "ended";
   for (let p = 0; p < np; p++) {
     for (const pos of allPositions(p)) {
       const price = pos.dir === 1 ? bid(p) : ask(p);

@@ -145,7 +145,7 @@ const firstReach = (xs: Float64Array, bx: Float64Array, from: number, v: number,
 };
 
 // the lowest (high = false) or highest value of `xs` over [a, b]
-const rangeExt = (xs: Float64Array, bx: Float64Array, a: number, b: number, high: boolean, cut: Cut): number => {
+export const rangeExt = (xs: Float64Array, bx: Float64Array, a: number, b: number, high: boolean, cut: Cut): number => {
   let v = high ? -Infinity : Infinity;
   const take = (x: number) => (v = high ? Math.max(v, x) : Math.min(v, x));
   const at = (j: number) => (j < cut.k || (j === cut.k && cut.full) ? xs[j] : xs[j] + cut.poison);
@@ -235,7 +235,7 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
     path.none = true;
     return path;
   }
-  let k0 = lowerBound(m.t, P);
+  const k0 = lowerBound(m.t, P);
   const noBar = !(k0 < m.n && m.t[k0] === P);
   path.noBar = noBar;
   // the order's price at P: the bar's open, or the last close ended by P

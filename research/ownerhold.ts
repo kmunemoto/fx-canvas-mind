@@ -22,10 +22,11 @@ import { lowerBound } from "./money-data.ts";
 import { weekOf } from "./money-stats.ts";
 import { type NyClose, nyClosesBetween, rakutenSpread, tausOf } from "./money-trades.ts";
 import { csvCells, parseBisPolicy, rateBefore } from "./longhist-lib.ts";
-import { LEAD15, type LoadStats, type M1, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, writeGmoFiles } from "./ownerhold-data.ts";
+import { LEAD15, type LoadStats, type M1, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
+import { GMO_SYMBOLS, dateKeys } from "../supabase/functions/track-outcomes/quotes.ts";
 import { type Book, type Fill, type FollowOpts, NO_CUT, type Path, follow, lastEnded, lookAhead, makeBook, maintOf, rakutenM1, valueAt } from "./ownerhold-trades.ts";
 import { type AccountOpts, type AccountOut, MAIN_OPTS, type Market, type OrderIn, type SwapFn, runAccount } from "./ownerhold-account.ts";
-import { type AccountLine, DAY_MS, type DRow, type PerEmail, type Third, accountLineOf, perEmailOf, thirdOf, usdJpyAt } from "./ownerhold-report.ts";
+import { type AccountLine, DAY_MS, type DRow, type PerEmailSplit, type Third, accountLineOf, perEmailSplitOf, thirdOf, usdJpyAt } from "./ownerhold-report.ts";
 import { ULTRA_PAIRS } from "../supabase/functions/_shared/ultra.ts";
 import { FIXTURES } from "./ownerhold-fixture.ts";
 
@@ -93,12 +94,34 @@ export interface DataSet {
   load: LoadStats;
   src: Source | null;
   rates: Rates;
+  // the 15-minute slots in [START, END) holding 1-minute bars (both sides) but no 15-minute bar taken: what
+  // the emails were judged without (listed, not a failure: the sweep read the same GMO files; a file kept
+  // while its day was going on is read again by the loader, wholeDayFile)
+  m15Gaps?: Array<{ pair: string; slots: number; examples: string[] }>;
 }
+
+const m15GapsOf = (m1: M1, q15: Array<{ datetime: string }>): { pair: string; slots: number; examples: string[] } => {
+  const have = new Set(q15.map((q) => Date.parse(q.datetime)));
+  const out = { pair: m1.pair, slots: 0, examples: [] as string[] };
+  let last = NaN;
+  for (let k = 0; k < m1.n; k++) {
+    const t = m1.t[k];
+    if (t < START_MS || t >= END_MS) continue;
+    const slot = t - (t % (15 * MINUTE));
+    if (slot === last) continue;
+    last = slot;
+    if (have.has(slot)) continue;
+    out.slots++;
+    if (out.examples.length < 20) out.examples.push(iso(slot));
+  }
+  return out;
+};
 
 const dataSetOf = async (name: string, src: Source | null, walk: { set: string; seed: number } | null): Promise<DataSet> => {
   const load = newLoadStats();
   const m1s: M1[] = [];
   const reads: SignalRead[] = [];
+  const m15Gaps: NonNullable<DataSet["m15Gaps"]> = [];
   for (const [pi, pair] of PAIRS.entries()) {
     let m1: M1;
     let q15;
@@ -121,12 +144,14 @@ const dataSetOf = async (name: string, src: Source | null, walk: { set: string; 
       q15 = await load15(src!, pair, START_MS - LEAD15, END_MS, load);
     }
     m1s.push(m1);
-    reads.push(signalsOf(pair, pi, q15, START_MS, END_MS));
+    if (src) m15Gaps.push(m15GapsOf(m1, q15));
+    // the look-ahead check of the signals on the walks written out (FULL) and the real data
+    reads.push(signalsOf(pair, pi, q15, START_MS, END_MS, src !== null));
   }
   const sigs = reads.flatMap((r) => r.signals);
   // by P, then Rakuten's pair order, BUY first (the order a minute's emails are taken in)
   sigs.sort((a, b) => pOf(a, DELAY) - pOf(b, DELAY) || a.pi - b.pi || b.dir - a.dir);
-  return { name, m1s, sigs, reads, load, src, rates: walk ? synRates : await bisRates(env("BIS_CSV")) };
+  return { name, m1s, sigs, reads, load, src, rates: walk ? synRates : await bisRates(env("BIS_CSV")), m15Gaps };
 };
 
 // ---- the analysis of one data set -----------------------------------------------------------
@@ -157,7 +182,7 @@ interface Analysis {
   name: string;
   signals: Record<string, unknown>;
   third: { main: Third; week: Third; weekCells: Third; plain: Third; gaps24: { signal: number; opposite: number }; outside: number; rows: number };
-  perEmail: Record<string, PerEmail>;
+  perEmail: Record<string, PerEmailSplit>;
   accounts: Record<string, AccountLine>;
   estar: Record<string, unknown>;
   m: Record<string, { M1: number; M2: number }>;
@@ -171,6 +196,41 @@ interface Analysis {
 }
 
 const fx = (x: number, d = 9) => (Number.isFinite(x) ? x.toFixed(d) : "NaN");
+
+// The rows §8.102 counts each planted error's changes on (確かめ A 仕込んだ誤り: 「数える行」): (主) the main row
+// with its paths, ③ and its E*; (スワップ込み) the main swap row; (補足の行) the 08:59 row; the dollar's P/L fixed
+// in yen, the main row and M; ③'s planted errors, ③. A change elsewhere is listed but not counted.
+const PLANT_ROWS: Record<string, string[]> = {
+  swapSellSign: ["mainSwap"],
+  swapBeforeCall: ["mainSwap"],
+  swapAfterOrder: ["mainSwap"],
+  deposit0859WhenCured: ["dep0859"],
+  deposit0859Full: ["dep0859"],
+  usdFixed: ["main", "m"],
+  weekCells: ["third"],
+  plain: ["third"],
+};
+export const countedFor = (plant: string, line: string): boolean => {
+  const rows = PLANT_ROWS[plant] ?? ["main"];
+  const [kind, name] = line.split("|");
+  if (kind === "third") return rows.includes("main") || rows.includes("third");
+  if (kind === "d" || kind === "w") return rows.includes("main");
+  if (kind === "m") return rows.includes("main") || rows.includes("mainSwap") || rows.includes("m");
+  if (kind === "path") return rows.includes("main") && name === "main";
+  if (["estar", "estarBy", "acct", "fate", "trade", "call", "lc"].includes(kind)) return rows.includes(name);
+  return false;
+};
+const changedOf = (before: string[], after: string[], plant: string) => {
+  const was = new Set(before);
+  let all = 0;
+  let counted = 0;
+  for (const x of after) {
+    if (was.has(x)) continue;
+    all++;
+    if (countedFor(plant, x)) counted++;
+  }
+  return { all, counted };
+};
 
 export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = ""): Analysis => {
   const closes = nyClosesBetween(ctx.start - DAY_MS, ctx.end);
@@ -208,12 +268,15 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   let gapS = 0;
   let gapO = 0;
   let outside = 0;
+  // each email's values a day and a week after P, the signal's side and the opposite (emails.csv, for the Python)
+  const vals = sigs.map(() => ({ d1: "", d1o: "", g1: "", g1o: "", w1: "", w1o: "" }));
   sigs.forEach((s, i) => {
     const P = paths.main[i].P;
     const H = P + DAY_MS;
     if (H <= ctx.end) {
       const a = valueAt(booksMain[s.pi], paths.main[i], s.dir, H);
       const b = valueAt(booksMain[s.pi], paths.opposite[i], (-s.dir) as 1 | -1, H);
+      Object.assign(vals[i], { d1: String(a.v), d1o: String(b.v), g1: a.gap ? "1" : "0", g1o: b.gap ? "1" : "0" });
       if (a.gap) gapS++;
       if (b.gap) gapO++;
       rows.push({ pi: s.pi, dir: s.dir, T: s.T, d: a.v - b.v });
@@ -227,6 +290,8 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     if (H7 <= ctx.end) {
       const a = valueAt(booksMain[s.pi], paths.main[i], s.dir, H7);
       const b = valueAt(booksMain[s.pi], paths.opposite[i], (-s.dir) as 1 | -1, H7);
+      Object.assign(vals[i], { w1: String(a.v), w1o: String(b.v) });
+      decisions.push(`w|${i}|${fx(a.v)}|${fx(b.v)}`);
       rowsW.push({ pi: s.pi, dir: s.dir, T: s.T, d: a.v - b.v });
     }
   });
@@ -250,13 +315,17 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   };
   checks.signalProbe = { ok: signals.probe.mismatched === 0 && signals.probeLate.mismatched === 0, detail: { probe: signals.probe, probeLate: signals.probeLate } };
   checks.loads = { ok: ds.load.failed === 0, detail: ds.load };
+  if (ds.reads.some((r) => r.cut)) {
+    const cuts = ds.reads.map((r) => ({ pair: r.pair, ...(r.cut ?? { compared: 0, mismatched: 0, examples: ["not run"] }) }));
+    checks.signalCut = { ok: cuts.every((c) => c.compared > 0 && c.mismatched === 0), detail: cuts };
+  }
   const out: Analysis = { name: ds.name, signals, third, perEmail: {}, accounts: {}, estar: {}, m: {}, extra: {}, checks, decisions, dump: {} };
   if (parts === "third") return out;
 
   // ---- the per-email view ----
   for (const v of variants) {
     const ems = sigs.map((s) => ({ pi: s.pi, ...orderOf(s, v) }));
-    out.perEmail[v.name] = perEmailOf(ems, paths[v.name], booksOf(v), usdjpy, ctx.end);
+    out.perEmail[v.name] = perEmailSplitOf(ems, sigs.map((s) => s.T), paths[v.name], booksOf(v), usdjpy, ctx.end, ctx.split);
   }
   // look-ahead: every decision of the main paths, both ways
   let laCompared = 0;
@@ -272,6 +341,20 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     });
   }
   checks.lookAheadPaths = { ok: laMoved.length === 0, detail: { compared: laCompared, moved: laMoved.slice(0, 20) } };
+  // checks: no TP in the bar a trade came in on (§8.102: the entry bar's TP is not counted), every path of every variant
+  // (the look-ahead check above cuts after the bar it judges, so a TP read from the entry bar itself passes it)
+  const tpAfter = { compared: 0, bad: 0, examples: [] as string[] };
+  for (const v of variants) {
+    paths[v.name].forEach((p, i) => {
+      if (p.none || p.fillK === -2 || p.tpK < 0) return;
+      tpAfter.compared++;
+      if (!(p.x > p.t0)) {
+        tpAfter.bad++;
+        if (tpAfter.examples.length < 5) tpAfter.examples.push(`${v.name} ${i} ${sigs[i].pair} ${iso(sigs[i].T)}`);
+      }
+    });
+  }
+  checks.tpAfterEntryPaths = { ok: tpAfter.bad === 0, detail: tpAfter };
 
   // ---- the accounts ----
   const mk = (books: M1[], from = ctx.start): Market => ({ books, closes, split: ctx.split, end: ctx.end, from });
@@ -324,7 +407,9 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     // the fates of the emails the row took, the others "none"
     const fates = sigs.map(() => "none");
     r.orders.forEach((o, k) => (fates[o.sig] = a.fates[k]));
-    const line = accountLineOf({ ...a, fates: fates as AccountOut["fates"] }, r.o.start, Ts, ctx.split, units);
+    const Ps = sigs.map(() => NaN);
+    for (const o of r.orders) Ps[o.sig] = o.P;
+    const line = accountLineOf({ ...a, fates: fates as AccountOut["fates"] }, r.o.start, Ts, ctx.split, units, { books: r.books ? booksRak : booksMain, usdjpy, P: Ps, end: ctx.end }, r.decide === true || r.name === "dep0859");
     out.accounts[r.name] = line;
     {
       decisions.push(`acct|${r.name}|${fx(a.naSplit, 6)}|${fx(a.naEnd, 6)}|${fx(a.inEnd, 6)}|${a.lcs.length}|${a.calls.length}`);
@@ -343,9 +428,15 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     unlOut[name] = u;
     out.estar[name] = { estar: u.estar, by: u.estarBy, over1m: (u.estar?.value ?? 0) > ctx.cap };
     decisions.push(`estar|${name}|${fx(u.estar?.value ?? NaN, 6)}|${u.estar?.kind}|${u.estar?.at}`);
+    for (const [kind, t] of Object.entries(u.estarBy)) decisions.push(`estarBy|${name}|${kind}|${fx(t.value, 6)}|${t.at}`);
   }
   out.m.none = { M1: unlOut.main.mSplit, M2: unlOut.main.mEnd - unlOut.main.mSplit };
   out.m.swap = { M1: unlOut.mainSwap.mSplit, M2: unlOut.mainSwap.mEnd - unlOut.mainSwap.mSplit };
+  // the supplement (§8.102 ②: not judged on): the dollar pairs' P/L fixed in yen when settled, without and with the main swap
+  for (const [name, o] of [["fixed", { usd: "fixed" }], ["fixedSwap", { usd: "fixed", swap: swapMain }]] as const) {
+    const u = unl(o as Partial<AccountOpts>);
+    out.m[name] = { M1: u.mSplit, M2: u.mEnd - u.mSplit };
+  }
   decisions.push(`m|${fx(out.m.none.M1, 6)}|${fx(out.m.none.M2, 6)}|${fx(out.m.swap.M1, 6)}|${fx(out.m.swap.M2, 6)}`);
   // checks: the all-accepted path's fills and TPs are the paths' (signal side, and the opposite on its own path)
   const vsPaths = (u: AccountOut, ps: Path[]) => {
@@ -366,6 +457,19 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   const vp = vsPaths(unlOut.main, paths.main);
   const vo = vsPaths(runAccount(mk(ds.m1s), ordersOf(VARIANTS[1]), { ...base, unlimited: true }), paths.opposite);
   checks.engineVsPaths = { ok: vp.mismatched === 0 && vo.mismatched === 0, detail: { signal: vp, opposite: vo } };
+  // checks: no TP in the minute a trade came in on, every account row and the all-accepted paths
+  const tpAfterA = { compared: 0, bad: 0, examples: [] as string[] };
+  for (const [name, a] of [...Object.entries(outs), ...Object.entries(unlOut).map(([k, u]) => [`unlimited-${k}`, u] as const)]) {
+    for (const t of a.trades) {
+      if (t.how !== "tp") continue;
+      tpAfterA.compared++;
+      if (!(t.x > t.t0)) {
+        tpAfterA.bad++;
+        if (tpAfterA.examples.length < 5) tpAfterA.examples.push(`${name} ${t.sig} ${sigs[t.sig].pair} ${iso(sigs[t.sig].T)}`);
+      }
+    }
+  }
+  checks.tpAfterEntryAccount = { ok: tpAfterA.bad === 0, detail: tpAfterA };
   // checks: the engine's cut mode (what the clock has not reached rewritten) changes nothing, on the decision rows and the all-accepted path
   const cut: Record<string, unknown> = {};
   let cutOk = true;
@@ -416,6 +520,59 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   const nightsEngine = unlOut.mainSwap.swapNights;
   const nightsTrades = Object.values(swapDays).reduce((s, c) => s + c.nights, 0);
   checks.swapNights = { ok: nightsEngine === nightsTrades, detail: { engine: nightsEngine, trades: nightsTrades } };
+  // checks: the swap's rule (§8.102 確かめ A) on every NY close and pair, both markups: a buy's and a sell's
+  // together −2 × the markup × the amount × the days ÷ 365, the days tausOf's (a Wednesday's three), a buy's
+  // the rates' difference less the markup, and a USD/JPY sell paying while the dollar's rate is over the yen's
+  const rule = { compared: 0, bad: 0, usdJpySellsPaying: 0, examples: [] as string[] };
+  const midAtTau = (pi: number, tau: number) => {
+    const m = ds.m1s[pi];
+    const j = lastEnded(m, tau);
+    return j >= 0 ? (m.bc[j] + m.ac[j]) / 2 : NaN;
+  };
+  for (const c of closes) {
+    if (c.tau < ctx.start || c.tau > ctx.end) continue;
+    const days = between(c.tau - 1, c.tau + 1).swap;
+    for (const [pi, pair] of PAIRS.entries()) {
+      const mid = midAtTau(pi, c.tau);
+      if (!Number.isFinite(mid)) continue;
+      const [ba, qa] = AREAS[pair];
+      const rb = ds.rates(ba, c.tau)!;
+      const rq = ds.rates(qa, c.tau)!;
+      for (const [fn, markup] of [[swapMain, 0.5], [swap10, 1.0]] as const) {
+        const buy = fn(pair, 1, c.tau, mid);
+        const sell = fn(pair, -1, c.tau, mid);
+        const per = (10_000 * mid * days) / 365 / 100;
+        const near = (x: number, y: number) => Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(y));
+        rule.compared++;
+        const ok = near(buy + sell, -2 * markup * per) && near(buy, (rb - rq - markup) * per) && (pair !== "USD/JPY" || !(rb > rq) || sell < 0);
+        if (pair === "USD/JPY" && rb > rq && sell < 0) rule.usdJpySellsPaying++;
+        if (!ok) {
+          rule.bad++;
+          if (rule.examples.length < 5) rule.examples.push(`${pair} ${iso(c.tau)} markup ${markup}`);
+        }
+      }
+    }
+  }
+  // (none compared only where no close with prices falls in the period: a short hand example)
+  const closesIn = closes.filter((c) => c.tau >= ctx.start && c.tau <= ctx.end && PAIRS.some((_p, pi) => Number.isFinite(midAtTau(pi, c.tau)))).length;
+  checks.swapRule = { ok: rule.bad === 0 && (rule.compared > 0 || closesIn === 0), detail: { ...rule, closesIn } };
+  // checks: each trade's swap in the all-accepted path with the main swap, made again from the closes it was held
+  // over (entered before τ, still held at τ + 15 minutes, or at END) at each τ's mid — the engine's own sum
+  const again = { compared: 0, bad: 0, examples: [] as string[] };
+  for (const t of unlOut.mainSwap.trades) {
+    const until = Number.isFinite(t.x) ? t.x : ctx.end;
+    let q = 0;
+    for (const c of closes) {
+      if (!(t.t0 < c.tau) || c.tau + 15 * MINUTE > until || c.tau < ctx.start) continue;
+      q += swapMain(PAIRS[t.pi], t.dir, c.tau, midAtTau(t.pi, c.tau));
+    }
+    again.compared++;
+    if (Math.abs(q - t.swapQuote) > 1e-6 * Math.max(1, Math.abs(q))) {
+      again.bad++;
+      if (again.examples.length < 5) again.examples.push(`${PAIRS[t.pi]} ${t.dir === 1 ? "BUY" : "SELL"} ${iso(sigs[t.sig].T)}`);
+    }
+  }
+  checks.swapAgain = { ok: again.bad === 0, detail: again };
   const mainLine = out.accounts.main;
   // the main account's trades' swap days, for the swap that would bring it to 0 a day
   let mainDays = 0;
@@ -462,6 +619,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     shifted: paths.main.filter((p) => p.shifted).length,
     late: { signals: sigs.filter((s) => s.late).length },
     ifMarket: ifMarket(paths.market, outs.main, sigs, booksMain),
+    m15Gaps: ds.m15Gaps ?? null,
   };
   void maintOf;
   void NO_CUT;
@@ -469,6 +627,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   void usdJpyAt;
   // ---- the files for the Python check ----
   out.dump = dumpOf(ds, paths, outs, unlOut, third);
+  out.dump["emails.csv"] = ["i,d1,d1o,gap1,gap1o,w1,w1o", ...vals.map((v, i) => [i, v.d1, v.d1o, v.g1, v.g1o, v.w1, v.w1o].join(","))].join("\n");
   out.raw = { outs, unl: unlOut };
   void ctx;
   return out;
@@ -583,22 +742,31 @@ if (MODE === "synthetic") {
         log(`  CHECK ${k} FAILED: ${JSON.stringify(c.detail).slice(0, 2000)}`);
       }
       if (isFull) {
+        // what each planted error changed and which own checks failed (the plants job sums these with the hand examples')
+        const plantsFull: Record<string, { changed: number; all?: number; checks: string[] }> = {};
         await writeJson(`${dir}/analysis.json`, { ...a, dump: undefined, decisions: undefined, raw: undefined });
         await writeDump(`${dir}/dump`, a, CTX);
         await Deno.writeTextFile(`${dir}/decisions.txt`, a.decisions.join("\n"));
         log(`  full: ${JSON.stringify({ accounts: Object.fromEntries(["main", "mainSwap", "worst", "worstSwap"].map((n) => [n, { S: a.accounts[n].S, lcs: a.accounts[n].lcs, deadlines: a.accounts[n].deadlines, capped: a.accounts[n].capped, calls: a.accounts[n].calls, win: a.accounts[n].winRate, pips: a.accounts[n].pips }])), estar: Object.fromEntries(Object.entries(a.estar).map(([k, v]) => [k, (v as { estar: { value: number } }).estar?.value])), m: a.m })}`);
+        // the planted signal error: E from the bar after (look-ahead), which the cut check must catch on every pair
+        if (plants.includes("signalNextBar")) {
+          const qs = await Promise.all(PAIRS.map((pair) => load15({ dir: `${dir}/gmo`, fetch: false }, pair, START_MS - LEAD15, END_MS, newLoadStats())));
+          const caught = PAIRS.map((pair, pi) => signalsOf(pair, pi, qs[pi], START_MS, END_MS, true, "signalNextBar").cut!).map((c) => c.mismatched);
+          log(`  planted signalNextBar: the cut check's mismatches by pair ${caught.join(",")}`);
+          if (caught.some((m) => m === 0)) pass = false;
+          plantsFull.signalNextBar = { changed: caught.reduce((a2, m) => a2 + m, 0), checks: caught.every((m) => m > 0) ? ["signalCut"] : [] };
+        }
         // the planted errors on this walk: what each one changes, and which checks see it
-        for (const plant of plants) {
+        for (const plant of plants.filter((x: string) => x !== "signalNextBar")) {
           const b = analyse(ds, CTX, "all", plant);
-          const before = new Set(a.decisions);
-          const after = new Set(b.decisions);
-          let changed = 0;
-          for (const x of after) if (!before.has(x)) changed++;
+          const ch = changedOf(a.decisions, b.decisions, plant);
           const failed = Object.entries(b.checks).filter(([, c]) => !c.ok).map(([k]) => k);
-          log(`  planted ${plant}: ${changed} decisions or numbers changed; own checks failing: ${failed.join(",") || "none"}`);
+          log(`  planted ${plant}: ${ch.all} decisions or numbers changed, ${ch.counted} on its rows; own checks failing: ${failed.join(",") || "none"}`);
+          plantsFull[plant] = { changed: ch.counted, all: ch.all, checks: failed };
           await Deno.writeTextFile(`${dir}/decisions-${plant}.txt`, b.decisions.join("\n"));
           await writeDump(`${dir}/dump-${plant}`, b, CTX);
         }
+        await writeJson(`${dir}/plants-full.json`, plantsFull);
       }
     }
     // gate (i): L over 0 in at most 2 of 20; gate (ii): the mean within 3.88 × SD ÷ √20 of 0
@@ -646,7 +814,7 @@ if (MODE === "fixtures") {
   const plants = env("PLANTS", "").split(",").filter(Boolean);
   const only = env("ONLY", "");
   let pass = true;
-  const byPlant: Record<string, { changed: number; flagged: string[]; checks: string[] }> = {};
+  const byPlant: Record<string, { changed: number; all: number; flagged: string[]; checks: string[] }> = {};
   for (const f of FIXTURES) {
     if (only && !only.split(",").includes(f.name)) continue;
     const ds: DataSet = { name: f.name, m1s: f.m1s, sigs: f.sigs, reads: [], load: newLoadStats(), src: null, rates: synRates };
@@ -662,21 +830,54 @@ if (MODE === "fixtures") {
     await Deno.writeTextFile(`${dir}/decisions.txt`, a.decisions.join("\n"));
     for (const plant of plants) {
       const b = analyse(ds, f.ctx, "all", plant);
-      const before = new Set(a.decisions);
-      let changed = 0;
-      for (const x of b.decisions) if (!before.has(x)) changed++;
+      const ch = changedOf(a.decisions, b.decisions, plant);
+      const changed = ch.counted;
       const pf = f.check(b.raw!.outs, b.raw!.unl);
       const pb = Object.entries(b.checks).filter(([, c]) => !c.ok).map(([k]) => k);
-      const e = (byPlant[plant] ??= { changed: 0, flagged: [], checks: [] });
+      const e = (byPlant[plant] ??= { changed: 0, all: 0, flagged: [], checks: [] });
       e.changed += changed;
+      e.all += ch.all;
       if (pf.length) e.flagged.push(f.name);
       for (const k of pb) if (!e.checks.includes(k)) e.checks.push(k);
-      if (changed) await writeDump(`${dir}/dump-${plant}`, b, f.ctx);
+      if (ch.all) await writeDump(`${dir}/dump-${plant}`, b, f.ctx);
     }
   }
-  for (const [plant, e] of Object.entries(byPlant)) log(`planted ${plant}: ${e.changed} decisions or numbers changed over the hand examples; their worked-out checks fail in ${e.flagged.join(",") || "none"}; own checks failing: ${e.checks.join(",") || "none"}`);
+  for (const [plant, e] of Object.entries(byPlant)) log(`planted ${plant}: ${e.all} decisions or numbers changed over the hand examples, ${e.changed} on its rows; their worked-out checks fail in ${e.flagged.join(",") || "none"}; own checks failing: ${e.checks.join(",") || "none"}`);
+  await writeJson(`${OUT}/fixtures/plants-fixtures.json`, byPlant);
   log(`hand examples: ${pass ? "all as worked out" : "NOT ALL AS WORKED OUT"}`);
   if (!pass) Deno.exit(1);
+}
+
+// Before tf-winrate (the real job's first step): the kept day files (1-, 5- and 15-minute) answered
+// before their day's file had ended — kept by a study that ran while the day was going on — or kept
+// without the time they were answered (a 404) are removed, so tf-winrate and this program both read them again
+if (MODE === "cache") {
+  const keys = dateKeys(START_MS - LEAD15 - 2 * DAY_MS, END_MS, "day");
+  const c = { whole: 0, removed: 0, notKept: 0, byInterval: {} as Record<string, number> };
+  for (const pair of PAIRS) {
+    for (const iv of ["1min", "5min", "15min"]) {
+      for (const side of ["bid", "ask"]) {
+        for (const key of keys) {
+          const path = `${CACHE}/${GMO_SYMBOLS[pair]}/${iv}/${side}/${key}.json`;
+          let body: unknown;
+          try {
+            body = JSON.parse(await Deno.readTextFile(path));
+          } catch {
+            c.notKept++;
+            continue;
+          }
+          if (wholeDayFile(body, key)) {
+            c.whole++;
+            continue;
+          }
+          await Deno.remove(path);
+          c.removed++;
+          c.byInterval[iv] = (c.byInterval[iv] ?? 0) + 1;
+        }
+      }
+    }
+  }
+  log(`kept day files: ${c.whole} whole, ${c.removed} removed (${JSON.stringify(c.byInterval)}), ${c.notKept} not kept`);
 }
 
 if (MODE === "real") {
@@ -684,6 +885,8 @@ if (MODE === "real") {
   const src: Source = { dir: CACHE, fetch: true };
   const ds = await dataSetOf("real", src, null);
   log(`loaded: ${JSON.stringify(ds.load)}; signals ${ds.sigs.length} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  // the data's own gaps (no measured number): 15-minute slots without a bar beside 1-minute bars
+  for (const g of ds.m15Gaps ?? []) log(`${g.pair}: 15-minute slots without a bar beside 1-minute bars ${g.slots}${g.examples.length ? " (" + g.examples.slice(0, 5).join(", ") + ")" : ""}`);
   const a = analyse(ds, CTX, "all");
   // B(2): the email rule reproduced on 5-minute bars against tf-winrate's own JSON
   checks: {
@@ -733,9 +936,11 @@ async function reproduce(ds: DataSet, tfw: Record<string, unknown>): Promise<{ o
   const MAX_HOLD = 1440;
   const recs: Array<{ T: number; kind: string; pips: number }> = [];
   const perPair: Record<string, number> = {};
+  const failed5: Record<string, number> = {};
   for (const [pi, pair] of PAIRS.entries()) {
     const st = newLoadStats();
     const q5 = await loadQuotes(ds.src!, pair, "5min", STEP5, START_MS - 5 * DAY_MS, END_MS, st);
+    failed5[pair] = st.failed;
     const t = Float64Array.from(q5.map((q) => Date.parse(q.datetime)));
     const unit = unitOf(pair);
     const own = ds.sigs.filter((s) => s.pi === pi && !s.late);
@@ -796,6 +1001,24 @@ async function reproduce(ds: DataSet, tfw: Record<string, unknown>): Promise<{ o
     if (th.pips !== null && me.pips !== null && Math.abs(th.pips - me.pips) > 1e-9) diffs.push(`${per} pips differ by more than 1e-9`);
   }
   for (const c of cov) if (perPair[c.pair] !== c.ultra) diffs.push(`${c.pair} ULTRA signals: tf-winrate ${c.ultra}, here ${perPair[c.pair]}`);
+  // B(2'): tf-winrate's own check of its 15-minute signals against indicatorSignals, and the JSON being this run's settings
+  const ck = (tfw.check as Record<string, { compared: number; mismatched: number }> | undefined)?.["15min"];
+  if (!ck) diffs.push("tf-winrate check 15min missing");
+  else {
+    if (ck.mismatched !== 0) diffs.push(`tf-winrate check 15min: ${ck.mismatched} of ${ck.compared} differ`);
+    if (!(ck.compared > 0)) diffs.push("tf-winrate check 15min compared nothing");
+  }
+  if (Date.parse(String(tfw.now)) !== END_MS) diffs.push(`tf-winrate now ${tfw.now}, END ${END}`);
+  if (tfw.start !== START) diffs.push(`tf-winrate start ${tfw.start}, here ${START}`);
+  if (tfw.split !== SPLIT) diffs.push(`tf-winrate split ${tfw.split}, here ${SPLIT}`);
+  if (tfw.sl !== 13) diffs.push(`tf-winrate sl ${tfw.sl}, not 13`);
+  if (tfw.weekend !== "inside") diffs.push(`tf-winrate weekend ${tfw.weekend}, not inside`);
+  if (tfw.synthetic) diffs.push("tf-winrate ran on synthetic data");
+  if (JSON.stringify(tfw.pairs) !== JSON.stringify(PAIRS)) diffs.push(`tf-winrate pairs ${JSON.stringify(tfw.pairs)}`);
+  // every GMO read made: tf-winrate's own (its coverage) and the 5-minute bars read here
+  const tfFailed = (tfw.coverage as Array<{ failed?: number }>).reduce((a, c) => a + (c.failed ?? 0), 0);
+  if (tfFailed !== 0) diffs.push(`tf-winrate GMO reads failed: ${tfFailed}`);
+  for (const [pair, f] of Object.entries(failed5)) if (f !== 0) diffs.push(`${pair} 5-minute reads failed: ${f}`);
   return { ok: diffs.length === 0, detail: { diffs } };
 }
 
