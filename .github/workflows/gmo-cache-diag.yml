@@ -3,6 +3,12 @@ name: GMO cache diag
 # #205 (docs §8.102): why the study's own kept GMO day files are judged not whole, and what GMO
 # answers for a past day now (research/gmo-cache-diag.ts). Read only; no measured number of the study.
 on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/gmo-cache-diag.yml
+      - research/gmo-cache-diag.ts
   workflow_dispatch:
     inputs:
       cache:
@@ -25,8 +31,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: research/.cache
-          key: ${{ inputs.cache }}-none
-          restore-keys: ${{ inputs.cache }}-
+          key: ${{ inputs.cache || 'gmo-1min' }}-none
+          restore-keys: ${{ inputs.cache || 'gmo-1min' }}-
       - name: The kept files and a few live reads
         env:
           START: "2024-01-01T00:00:00Z"
