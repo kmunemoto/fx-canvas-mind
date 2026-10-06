@@ -245,6 +245,27 @@ export interface Market {
   from: number;
 }
 
+// every minute any of the pairs has a bar at, sorted, without repeats (a run's rows share it)
+const minutesCache = new WeakMap<M1[], Float64Array>();
+const minutesOf = (books: M1[]): Float64Array => {
+  const hit = minutesCache.get(books);
+  if (hit) return hit;
+  let n = 0;
+  for (const m of books) n += m.n;
+  const all = new Float64Array(n);
+  let k = 0;
+  for (const m of books) {
+    all.set(m.t.subarray(0, m.n), k);
+    k += m.n;
+  }
+  all.sort();
+  let u = 0;
+  for (let i = 0; i < n; i++) if (i === 0 || all[i] !== all[i - 1]) all[u++] = all[i];
+  const out = all.slice(0, u);
+  minutesCache.set(books, out);
+  return out;
+};
+
 // The account. `orders` sorted by P, then Rakuten's pair order, BUY first.
 export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): AccountOut => {
   const np = mk.books.length;
@@ -535,10 +556,9 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   // bar at P, then the NY close (orders up to τ come before it), then the split's and END's records
   type Ev = { t: number; rank: number; kind: "swap" | "notice" | "m0859" | "order" | "ny" | "split" | "end"; ny?: NyClose; order?: OrderIn };
   const evs: Ev[] = [];
+  // every minute any pair has a bar at (kept per set of bars: the same for every row of a run)
+  const allT = minutesOf(mk.books);
   // the first minute of any pair at or after a time
-  const allT: number[] = [];
-  for (const m of mk.books) for (let k = 0; k < m.n; k++) allT.push(m.t[k]);
-  allT.sort((a, b) => a - b);
   const firstBarFrom = (ms: number) => {
     const k = lowerBound(allT, ms);
     return k < allT.length ? allT[k] : Infinity;
@@ -696,14 +716,8 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
         break;
     }
   };
-  // the minutes of all pairs, in time order
-  const minutes: number[] = [];
-  {
-    const set = new Set<number>();
-    for (const m of mk.books) for (let k = lowerBound(m.t, mk.from); k < m.n && m.t[k] < mk.end; k++) set.add(m.t[k]);
-    minutes.push(...set);
-    minutes.sort((a, b) => a - b);
-  }
+  // the minutes of all pairs from `from` to END, in time order
+  const minutes = allT.subarray(lowerBound(allT, mk.from), lowerBound(allT, mk.end));
   let ei = 0;
   for (const s of minutes) {
     while (ei < evs.length && evs[ei].t <= s) runEvent(evs[ei++]);
