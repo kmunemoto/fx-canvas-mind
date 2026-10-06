@@ -211,15 +211,19 @@ export const loadM1 = async (src: Source, pair: string, fromMs: number, toMs: nu
 
 // GMO's 15-minute bars of a pair (tf-winrate.ts load, 15min, WEEKEND inside):
 // both sides, opened at or after `fromMs`, closed by `toMs`
-export const load15 = async (src: Source, pair: string, fromMs: number, toMs: number, st: LoadStats): Promise<QuoteCandle[]> => {
+export const load15 = (src: Source, pair: string, fromMs: number, toMs: number, st: LoadStats): Promise<QuoteCandle[]> => loadQuotes(src, pair, "15min", STEP15, fromMs, toMs, st);
+
+// the same for any of GMO's day-file timeframes (the 5-minute bars of the email rule's reproduction)
+export const loadQuotes = async (src: Source, pair: string, interval: string, step: number, fromMs: number, toMs: number, st: LoadStats): Promise<QuoteCandle[]> => {
+  const STEP15 = step;
   const symbol = GMO_SYMBOLS[pair];
   if (!symbol) throw new Error(`${pair}: not a GMO symbol`);
   const { keys, fresh } = keysOf(fromMs, toMs);
   const bid: Array<{ t: number; c: Candle }> = [];
   const ask: typeof bid = [];
   await pool(keys, 8, async (key) => {
-    const b = await readSide(src, symbol, "15min", "bid", key, fresh.has(key), st);
-    const a = await readSide(src, symbol, "15min", "ask", key, fresh.has(key), st);
+    const b = await readSide(src, symbol, interval, "bid", key, fresh.has(key), st);
+    const a = await readSide(src, symbol, interval, "ask", key, fresh.has(key), st);
     if (b) bid.push(...b);
     if (a) ask.push(...a);
   });
@@ -276,28 +280,25 @@ const rng = (seed: number) => {
   };
 };
 
-// the forex week of the walk: shut from Friday 21:00 UTC (22:00 outside the
-// US summer) to Sunday 21:00 (22:00), New York's offset (market-hours nyOffsetMs)
+// the forex week of the walk, GMO's (Monday 07:00 JST to Saturday 06:00 JST,
+// 05:00 in the US summer): from Sunday 22:00 UTC to Friday 21:00 UTC (20:00 in
+// the summer, New York's offset as market-hours nyOffsetMs reads it)
 export const synthOpen = (ms: number): boolean => {
   const d = new Date(ms);
   const day = d.getUTCDay();
   const h = d.getUTCHours();
-  const roll = nyOffsetMs(ms) === -4 * HOUR ? 21 : 22;
   if (day === 6) return false;
-  if (day === 5 && h >= roll) return false;
-  if (day === 0 && h < roll) return false;
+  if (day === 5 && h >= (nyOffsetMs(ms) === -4 * HOUR ? 20 : 21)) return false;
+  if (day === 0 && h < 22) return false;
   return true;
 };
 
-const fixed = (x: number, d: number) => x.toFixed(d);
-
-// The walk of one pair, minute by minute from `fromMs` to `toMs`, written as
-// GMO's 1-minute and 15-minute day files (both sides) under `dir`. A minute
+// The walk of one pair, minute by minute from `fromMs` to `toMs`: a minute
 // is four steps of the mid; the bid and ask are the mid ∓ half the spread,
 // rounded to GMO's digits. After the weekend the mid jumps (three 15-minute
-// moves' worth).
-export const writeSynthetic = async (dir: string, pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number) => {
-  const symbol = GMO_SYMBOLS[pair];
+// moves' worth). Its 15-minute bars are the minutes' (open, high, low, close
+// by side). Both kept as GMO's files would give them back (loadM1, load15).
+export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number): { m1: M1; q15: QuoteCandle[] } => {
   const p = SYN[pair];
   const unit = unitOf(pair);
   const dg = digitsOf(pair);
@@ -305,9 +306,9 @@ export const writeSynthetic = async (dir: string, pair: string, pi: number, spec
   let spare: number | null = null;
   const gauss = () => {
     if (spare !== null) {
-      const s = spare;
+      const v = spare;
       spare = null;
-      return s;
+      return v;
     }
     let u = 0;
     while (u === 0) u = rnd();
@@ -319,11 +320,13 @@ export const writeSynthetic = async (dir: string, pair: string, pi: number, spec
   const mu = spec.trend * (pi % 2 === 0 ? 1 : -1);
   let x = spec.startPips ?? p.start;
   let shut = false;
-  type Row = { openTime: string; open: string; high: string; low: string; close: string };
-  const files = new Map<string, { bid: Row[]; ask: Row[] }>();
-  const q15 = new Map<string, Map<number, { bid: number[]; ask: number[] }>>();
   const half = p.spread / 2;
-  for (let t = Math.floor(fromMs / MINUTE) * MINUTE; t + MINUTE <= toMs; t += MINUTE) {
+  const from = Math.floor(fromMs / MINUTE) * MINUTE;
+  const cap = Math.ceil((toMs - from) / MINUTE) + 1;
+  const m: M1 = { pair, n: 0, t: new Float64Array(cap), bo: new Float64Array(cap), bh: new Float64Array(cap), bl: new Float64Array(cap), bc: new Float64Array(cap), ao: new Float64Array(cap), ah: new Float64Array(cap), al: new Float64Array(cap), ac: new Float64Array(cap) };
+  const r = (v: number) => Number((v * unit).toFixed(dg));
+  let k = 0;
+  for (let t = from; t + MINUTE <= toMs; t += MINUTE) {
     if (!synthOpen(t)) {
       shut = true;
       continue;
@@ -335,57 +338,83 @@ export const writeSynthetic = async (dir: string, pair: string, pi: number, spec
     const o = x;
     let h = x;
     let l = x;
-    for (let s = 0; s < 4; s++) {
+    for (let st = 0; st < 4; st++) {
       x += mu / 4 + (p.sigma / 2) * gauss();
       if (x > h) h = x;
       if (x < l) l = x;
     }
     if (l - half <= 0) throw new Error(`${pair} seed ${spec.seed}: the walk reached 0`);
-    const side = (sgn: number) => {
-      const r = (v: number) => Number(((v + sgn * half) * unit).toFixed(dg));
-      const [ro, rc] = [r(o), r(x)];
-      return { o: ro, h: Math.max(r(h), ro, rc), l: Math.min(r(l), ro, rc), c: rc };
-    };
-    const b = side(-1);
-    const a = side(1);
-    const key = gmoDayKey(t);
-    let f = files.get(key);
-    if (!f) files.set(key, (f = { bid: [], ask: [] }));
-    const row = (s: { o: number; h: number; l: number; c: number }): Row => ({ openTime: String(t), open: fixed(s.o, dg), high: fixed(s.h, dg), low: fixed(s.l, dg), close: fixed(s.c, dg) });
-    f.bid.push(row(b));
-    f.ask.push(row(a));
-    // the 15-minute bar it is in, kept under the day key of the bar's open
-    const t15 = Math.floor(t / STEP15) * STEP15;
-    const k15 = gmoDayKey(t15);
-    let m15 = q15.get(k15);
-    if (!m15) q15.set(k15, (m15 = new Map()));
-    const g = m15.get(t15);
-    if (!g) m15.set(t15, { bid: [b.o, b.h, b.l, b.c], ask: [a.o, a.h, a.l, a.c] });
-    else {
-      for (const [arr, s] of [[g.bid, b], [g.ask, a]] as const) {
-        arr[1] = Math.max(arr[1], s.h);
-        arr[2] = Math.min(arr[2], s.l);
-        arr[3] = s.c;
-      }
+    m.t[k] = t;
+    for (const [sgn, O, H, L, C] of [[-1, m.bo, m.bh, m.bl, m.bc], [1, m.ao, m.ah, m.al, m.ac]] as const) {
+      const ro = r(o + sgn * half);
+      const rc = r(x + sgn * half);
+      O[k] = ro;
+      H[k] = Math.max(r(h + sgn * half), ro, rc);
+      L[k] = Math.min(r(l + sgn * half), ro, rc);
+      C[k] = rc;
     }
+    k++;
   }
-  // every day key a read of the window asks for, a day without bars an empty list (as GMO answers a weekend)
-  for (const key of keysOf(fromMs, toMs).keys) {
-    const f = files.get(key) ?? { bid: [], ask: [] };
-    for (const side of ["bid", "ask"] as const) {
-      const path = `${dir}/${symbol}/1min/${side}/${key}.json`;
-      await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-      await Deno.writeTextFile(path, JSON.stringify({ status: 0, data: f[side] }));
+  const cut = (xs: Float64Array) => xs.subarray(0, k);
+  const m1: M1 = { pair, n: k, t: cut(m.t), bo: cut(m.bo), bh: cut(m.bh), bl: cut(m.bl), bc: cut(m.bc), ao: cut(m.ao), ah: cut(m.ah), al: cut(m.al), ac: cut(m.ac) };
+  // the 15-minute bars
+  const q15: QuoteCandle[] = [];
+  let j = 0;
+  while (j < k) {
+    const t15 = Math.floor(m1.t[j] / STEP15) * STEP15;
+    let e = j;
+    while (e + 1 < k && m1.t[e + 1] < t15 + STEP15) e++;
+    if (t15 + STEP15 <= toMs && !barInsideClosure(t15, STEP15)) {
+      const side = (O: Float64Array, H: Float64Array, L: Float64Array, C: Float64Array): Candle => {
+        let hi = -Infinity;
+        let lo = Infinity;
+        for (let i = j; i <= e; i++) {
+          hi = Math.max(hi, H[i]);
+          lo = Math.min(lo, L[i]);
+        }
+        return { datetime: new Date(t15).toISOString(), open: O[j], high: hi, low: lo, close: C[e] };
+      };
+      q15.push({ datetime: new Date(t15).toISOString(), bid: side(m1.bo, m1.bh, m1.bl, m1.bc), ask: side(m1.ao, m1.ah, m1.al, m1.ac) });
     }
-    const m15 = q15.get(key) ?? new Map<number, { bid: number[]; ask: number[] }>();
-    for (const side of ["bid", "ask"] as const) {
-      const data = [...m15.entries()].sort((u, v) => u[0] - v[0]).map(([t15, g]) => {
-        const s = g[side];
-        return { openTime: String(t15), open: fixed(s[0], dg), high: fixed(s[1], dg), low: fixed(s[2], dg), close: fixed(s[3], dg) };
-      });
-      const path = `${dir}/${symbol}/15min/${side}/${key}.json`;
-      await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-      await Deno.writeTextFile(path, JSON.stringify({ status: 0, data }));
+    j = e + 1;
+  }
+  return { m1, q15 };
+};
+
+// A walk written as GMO's 1-minute and 15-minute day files (both sides) under
+// `dir`, every day key a read of [fromMs, toMs) asks for (a day without bars
+// an empty list, as GMO answers a weekend)
+export const writeGmoFiles = async (dir: string, pair: string, w: { m1: M1; q15: QuoteCandle[] }, fromMs: number, toMs: number) => {
+  const symbol = GMO_SYMBOLS[pair];
+  const dg = digitsOf(pair);
+  type Row = { openTime: string; open: string; high: string; low: string; close: string };
+  const f = (v: number) => v.toFixed(dg);
+  const m1 = new Map<string, { bid: Row[]; ask: Row[] }>();
+  const m = w.m1;
+  for (let k = 0; k < m.n; k++) {
+    const key = gmoDayKey(m.t[k]);
+    let d = m1.get(key);
+    if (!d) m1.set(key, (d = { bid: [], ask: [] }));
+    const ot = String(m.t[k]);
+    d.bid.push({ openTime: ot, open: f(m.bo[k]), high: f(m.bh[k]), low: f(m.bl[k]), close: f(m.bc[k]) });
+    d.ask.push({ openTime: ot, open: f(m.ao[k]), high: f(m.ah[k]), low: f(m.al[k]), close: f(m.ac[k]) });
+  }
+  const q = new Map<string, { bid: Row[]; ask: Row[] }>();
+  for (const c of w.q15) {
+    const t = Date.parse(c.datetime);
+    const key = gmoDayKey(t);
+    let d = q.get(key);
+    if (!d) q.set(key, (d = { bid: [], ask: [] }));
+    for (const side of ["bid", "ask"] as const) d[side].push({ openTime: String(t), open: f(c[side].open), high: f(c[side].high), low: f(c[side].low), close: f(c[side].close) });
+  }
+  for (const key of keysOf(fromMs, toMs).keys) {
+    for (const [iv, map] of [["1min", m1], ["15min", q]] as const) {
+      const d = map.get(key) ?? { bid: [], ask: [] };
+      for (const side of ["bid", "ask"] as const) {
+        const path = `${dir}/${symbol}/${iv}/${side}/${key}.json`;
+        await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+        await Deno.writeTextFile(path, JSON.stringify({ status: 0, data: d[side] }));
+      }
     }
   }
 };
@@ -407,6 +436,9 @@ export interface Sig {
   // first seen in the next bar's window: its email goes when that bar is read (base T + 15 min)
   late: boolean;
   base: number;
+  // the 15-minute bar's bid and ask closes (the email rule's entry, tf-winrate's)
+  bidC: number;
+  askC: number;
 }
 
 export interface Probe {
@@ -447,6 +479,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
   const n = candles.length;
   const times = new Float64Array(n);
   candles.forEach((c, i) => (times[i] = barOpenMs(c.datetime)));
+  const byOpen = new Map(quotes.map((q) => [barOpenMs(q.datetime), q]));
   const windowStart = (i: number): number | null => (i >= WINDOW - 1 ? i - WINDOW + 1 : null);
   const anchorOf = (i: number): { ws: number; s: number } | null => {
     const ws = windowStart(i);
@@ -511,7 +544,9 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
   let late = 0;
   const mk = (i: number, side: Side, base: number | null): Sig => {
     const E = candles[i].close;
-    return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + STEP15, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: base !== null, base: base ?? times[i] + STEP15 };
+    const q = byOpen.get(times[i]);
+    if (!q) throw new Error(`${pair} ${isoOf(times[i])}: a chart bar without its quote`);
+    return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + STEP15, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: base !== null, base: base ?? times[i] + STEP15, bidC: q.bid.close, askC: q.ask.close };
   };
   for (let i = 0; i < n; i++) {
     if (!inPeriod(i)) continue;

@@ -56,6 +56,8 @@ export interface AccountOpts {
   pendingMargin: boolean;
   // the cut mode (先読みの確かめ): reads past the clock are moved by this many pips (0: off)
   poisonPips: number;
+  // a planted error (確かめ A 仕込んだ誤り), "" for none
+  plant: string;
 }
 
 export const MAIN_OPTS: AccountOpts = {
@@ -74,6 +76,7 @@ export const MAIN_OPTS: AccountOpts = {
   redeposit: false,
   pendingMargin: true,
   poisonPips: 0,
+  plant: "",
 };
 
 export interface OrderIn {
@@ -368,7 +371,8 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
       nS[p]++;
       sumS[p] += price;
     }
-    if (defer) fresh.push({ p, pos });
+    // planted: a position's TP judged in the minute it entered
+    if (defer && o.plant !== "tpInFillBar") fresh.push({ p, pos });
     else (x.dir === 1 ? posB : posS)[p].push(pos);
     setFate(x.sig, "held");
   };
@@ -378,8 +382,10 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     if (pos.dir === 1) call.nBt[p]--;
     else call.nSt[p]--;
     const freed = (before - Math.max(call.nBt[p], call.nSt[p])) * call.unitMargin[p];
-    call.U -= freed;
     call.rec.credits += freed;
+    // planted: deposits and credits each against D, not added together
+    if (o.plant === "noCreditSum") call.U = Math.min(call.rec.D - call.rec.deposits, call.rec.D - call.rec.credits);
+    else call.U -= freed;
   };
   const close = (p: number, pos: Pos, price: number, at: number, how: TradeRec["how"], gap: boolean) => {
     if (pos.dir === 1) {
@@ -451,16 +457,18 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   const callDeposit = (at: number, all: boolean) => {
     if (!call || call.deposited) return;
     call.deposited = true;
-    const room = Math.max(0, o.cap - moneyIn);
+    const room = o.plant === "overCap" ? Infinity : Math.max(0, o.cap - moneyIn);
     if (call.U > 0) {
-      const want = call.U;
+      const want = o.plant === "deposit0859Full" && o.deposit === "m0859" ? call.rec.D : call.U;
       const amt = all ? (want <= room ? want : 0) : Math.min(want, room);
       deposit(amt, at, "call");
-      call.U -= amt;
       call.rec.deposits += amt;
+      if (o.plant === "noCreditSum") call.U = Math.min(call.rec.D - call.rec.deposits, call.rec.D - call.rec.credits);
+      else call.U -= amt;
     }
     call.rec.uAfterDeposit = call.U;
-    if (call.U <= 0) endCall("deposit", at);
+    // planted: still refusing orders after the deposit cured it, until the deadline
+    if (call.U <= 0 && o.plant !== "callBlockAfterDeposit") endCall("deposit", at);
   };
 
   // ---- an order ------------------------------------------------------------------------------
@@ -524,11 +532,21 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   // bar at P, then the NY close (orders up to τ come before it), then the split's and END's records
   type Ev = { t: number; rank: number; kind: "swap" | "notice" | "m0859" | "order" | "ny" | "split" | "end"; ny?: NyClose; order?: OrderIn };
   const evs: Ev[] = [];
+  // the first minute of any pair at or after a time
+  const allT: number[] = [];
+  for (const m of mk.books) for (let k = 0; k < m.n; k++) allT.push(m.t[k]);
+  allT.sort((a, b) => a - b);
+  const firstBarFrom = (ms: number) => {
+    const k = lowerBound(allT, ms);
+    return k < allT.length ? allT[k] : Infinity;
+  };
   for (const c of mk.closes) {
     if (c.tau < mk.from || c.tau > mk.end) continue;
-    evs.push({ t: c.tau, rank: 3, kind: "ny", ny: c });
-    if (o.swap && c.tau + MAINT <= mk.end) evs.push({ t: c.tau + MAINT, rank: 0, kind: "swap", ny: c });
-    if (!o.unlimited && o.deposit !== "tau" && o.deposit !== "m0859" && c.tau + NOTICE <= mk.end) evs.push({ t: c.tau + NOTICE, rank: 1, kind: "notice", ny: c });
+    // planted: a Friday's close taken after the week's first bar
+    const shift = o.plant === "fridayNyMonday" && new Date(c.tau).getUTCDay() === 5 ? Math.max(0, firstBarFrom(c.tau) + MINUTE - c.tau) : 0;
+    evs.push({ t: c.tau + shift, rank: 3, kind: "ny", ny: c });
+    if (o.swap && c.tau + MAINT <= mk.end) evs.push({ t: c.tau + MAINT + shift + (o.plant === "swapAfterOrder" ? MINUTE : 0), rank: 0, kind: "swap", ny: c });
+    if (!o.unlimited && o.deposit !== "tau" && o.deposit !== "m0859" && c.tau + NOTICE <= mk.end) evs.push({ t: c.tau + NOTICE + shift, rank: 1, kind: "notice", ny: c });
     if (!o.unlimited && o.deposit === "m0859" && c.deadline - MINUTE <= mk.end) evs.push({ t: c.deadline - MINUTE, rank: 1, kind: "m0859", ny: c });
   }
   // the orders: P past the stop where it is kept; one with a bar at P is taken in that minute (②)
@@ -546,7 +564,19 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
       const l = at.get(P) ?? [];
       l.push(x);
       at.set(P, l);
-    } else evs.push({ t: P, rank: 2, kind: "order", order: x });
+    } else {
+      // planted: an order without a bar at P taken after the NY close that falls on the same price point
+      let t = P;
+      let rank = 2;
+      if (o.plant === "noBarOrderAfterNy") {
+        const j = lowerBound(taus, P);
+        if (j < taus.length && firstBarFrom(P) > taus[j]) {
+          t = taus[j];
+          rank = 4;
+        }
+      }
+      evs.push({ t, rank, kind: "order", order: x });
+    }
   }
   evs.push({ t: mk.split, rank: 9, kind: "split" });
   evs.push({ t: mk.end, rank: 10, kind: "end" });
@@ -554,15 +584,20 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   evs.sort((a, b) => a.t - b.t || a.rank - b.rank || (a.order && b.order ? a.order.P - b.order.P || orderRank(a.order) - orderRank(b.order) : 0));
   for (const l of at.values()) l.sort((a, b) => orderRank(a) - orderRank(b));
 
+  // each NY close's mids (the night's swap is at that day's mid, §8.102 スワップ)
+  const tauMids = new Map<number, Float64Array>();
   // the night's swap for the positions held at τ (entered before it)
   const addSwap = (c: NyClose) => {
     if (!o.swap) return;
+    const mids = tauMids.get(c.tau);
     for (let p = 0; p < np; p++) {
       if (!has(p)) continue;
-      const mid = midOf(p);
+      const mid = mids ? mids[p] : midOf(p);
       for (const pos of allPositions(p)) {
         if (!(pos.t0 < c.tau)) continue;
-        const q = o.swap(mk.books[p].pair, pos.dir, c.tau, mid);
+        const q0 = o.swap(mk.books[p].pair, pos.dir, c.tau, mid);
+        // planted: the sells' swap the other way round
+        const q = o.plant === "swapSellSign" && pos.dir === -1 ? -q0 : q0;
         pos.swapQuote += q;
         out.swapNights++;
         if (!usd[p]) yen += q;
@@ -573,6 +608,9 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   };
 
   const nyClose = (c: NyClose) => {
+    const mids = new Float64Array(np);
+    for (let p = 0; p < np; p++) mids[p] = has(p) ? midOf(p) : NaN;
+    tauMids.set(c.tau, mids);
     // the price point: the last bar ended by τ of every pair (two closes on one point are judged once)
     const point = Array.from(lastK).join(",");
     const samePoint = point === lastNyPoint;
@@ -603,6 +641,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
 
   // ---- the minutes ---------------------------------------------------------------------------
   let peak = -Infinity;
+  let noticeLate: number | null = null;
   const worst = new Float64Array(2 * np);
   const runEvent = (e: Ev) => {
     clockS = e.t;
@@ -615,10 +654,18 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
         if (!(o.swapBeforeCall && !o.unlimited)) addSwap(e.ny!);
         break;
       case "notice":
-        if (call && call.rec.tau === e.ny!.tau) callDeposit(e.t, o.deposit === "noPartial");
+        if (call && call.rec.tau === e.ny!.tau) {
+          if (o.plant === "depositAfterDeadline") noticeLate = e.ny!.tau;
+          else callDeposit(e.t, o.deposit === "noPartial");
+        }
         break;
       case "m0859":
         if (call && call.rec.tau === e.ny!.tau) callDeposit(e.t, false);
+        else if (o.plant === "deposit0859WhenCured") {
+          // planted: paid in at 08:59 though already cured
+          const rec = out.calls.find((c) => c.tau === e.ny!.tau && c.end === "settle");
+          if (rec) deposit(Math.min(rec.D, Math.max(0, o.cap - moneyIn)), e.t, "call");
+        }
         break;
       case "order":
         take(e.order!, e.t, null);
@@ -658,10 +705,16 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     clockS = s;
     clockPart = "open";
     // ① the deadline of a call not cured: everything out at the minute's opens
-    if (!o.unlimited && call && call.U > 0 && s >= call.rec.deadline) {
-      const n = closeAll((p, pos) => (kAt[p] >= 0 ? (pos.dir === 1 ? rd(p, mk.books[p].bo, kAt[p], true) : rd(p, mk.books[p].ao, kAt[p], true)) : pos.dir === 1 ? bid(p) : ask(p)), s, "deadline");
-      void n;
-      endCall("deadline", s);
+    if (!o.unlimited && call && s >= call.rec.deadline) {
+      if (call.U > 0) {
+        closeAll((p, pos) => (kAt[p] >= 0 ? (pos.dir === 1 ? rd(p, mk.books[p].bo, kAt[p], true) : rd(p, mk.books[p].ao, kAt[p], true)) : pos.dir === 1 ? bid(p) : ask(p)), s, "deadline");
+        endCall("deadline", s);
+      } else endCall(call.rec.deposits > 0 ? "deposit" : "settle", s);
+    }
+    // planted: the notice's deposit made in the first minute after it, after the deadline's step
+    if (noticeLate !== null) {
+      if (call && call.rec.tau === noticeLate) callDeposit(s, o.deposit === "noPartial");
+      noticeLate = null;
     }
     // ② the orders of this minute
     if (judged) for (const x of at.get(s) ?? []) take(x, s, kAt[x.pi]);
@@ -728,9 +781,19 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     clockS = g;
     clockPart = "full";
     // ⑤ the loss-cut, and a call cured by the margin freed
-    const lcMinute = judged && (o.lc !== "m5" || g % (5 * MINUTE) === 0);
+    const lcMinute = (judged || (o.unlimited && o.plant === "estarMaint")) && (o.lc !== "m5" || g % (5 * MINUTE) === 0);
     if (lcMinute) {
       let w: Float64Array | null = null;
+      if (o.plant === "lcNextBar") {
+        // planted: judged on each pair's next bar's close
+        for (let p = 0; p < np; p++) {
+          if (!has(p)) continue;
+          const k = lastK[p] + 1 < mk.books[p].n ? lastK[p] + 1 : lastK[p];
+          worst[2 * p] = rd(p, mk.books[p].bc, k, false);
+          worst[2 * p + 1] = rd(p, mk.books[p].ac, k, false);
+        }
+        w = worst;
+      }
       if (o.lc === "worst") {
         for (let p = 0; p < np; p++) {
           if (!has(p)) continue;
@@ -754,7 +817,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
         if (o.redeposit) deposit(Math.min(Math.max(0, o.start - netAssets("exit")), Math.max(0, o.cap - moneyIn)), g, "redeposit");
       }
     }
-    if (!o.unlimited && call && call.U <= 0) endCall("settle", g);
+    if (!o.unlimited && call && call.U <= 0 && o.plant !== "blockAfterCure" && o.plant !== "callBlockAfterDeposit") endCall("settle", g);
     // ⑥ the record
     const hn = held();
     if (hn > out.maxHeld) {

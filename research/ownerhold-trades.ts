@@ -210,6 +210,10 @@ export interface Path {
 export interface FollowOpts {
   fill: Fill;
   endMs: number;
+  // a planted error (確かめ A 仕込んだ誤り), "" for none
+  plant?: string;
+  // every order at the market at P (the "if taken at the market" view of the emails not taken)
+  forceMarket?: boolean;
 }
 
 // one order followed to TP or END
@@ -236,7 +240,11 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
   path.noBar = noBar;
   // the order's price at P: the bar's open, or the last close ended by P
   let now: number;
-  if (!noBar) now = buy ? px(m.ao, k0, cut, true) : px(m.bo, k0, cut, true);
+  if (!noBar) {
+    // planted: the order judged on the next bar's open
+    const kk = opts.plant === "orderNextOpen" && k0 + 1 < m.n ? k0 + 1 : k0;
+    now = buy ? px(m.ao, kk, cut, kk === k0) : px(m.bo, kk, cut, kk === k0);
+  }
   else {
     const j = lastEnded(m, P);
     if (j < 0) {
@@ -247,7 +255,7 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
   }
   const through = opts.fill === "through" ? 0.1 * u : 0;
   let fillK: number;
-  if (buy ? now <= o.E : now >= o.E) {
+  if (opts.forceMarket || (buy ? now <= o.E : now >= o.E)) {
     path.market = true;
     path.fill = now;
     if (noBar) {
@@ -265,7 +273,8 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
     fillK = k;
     path.t0 = m.t[k];
     const open = buy ? px(m.ao, k, cut, true) : px(m.bo, k, cut, true);
-    if (opts.fill !== "exact" && (buy ? open < o.E : open > o.E)) {
+    if (opts.plant === "fillNextBar" && k + 1 < m.n) path.fill = buy ? px(m.ao, k + 1, cut) : px(m.bo, k + 1, cut);
+    else if (opts.fill !== "exact" && (buy ? open < o.E : open > o.E)) {
       path.fill = open;
       path.fillGap = true;
     } else path.fill = o.E;
@@ -273,7 +282,7 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
   path.fillK = fillK;
   // TP: from the bar after the entry bar (after P when there was none)
   if (fillK >= 0) path.tpInFill = buy ? px(m.bh, fillK, cut) >= o.tp : px(m.al, fillK, cut) <= o.tp;
-  const tpFrom = fillK >= 0 ? fillK + 1 : k0;
+  const tpFrom = fillK >= 0 ? (opts.plant === "tpInFillBar" ? fillK : fillK + 1) : k0;
   const x = buy ? firstReach(bk.jbh, bk.jbhMax, tpFrom, o.tp, true, cut) : firstReach(bk.jal, bk.jalMin, tpFrom, o.tp, false, cut);
   const lastK = lastEnded(m, opts.endMs);
   if (x >= 0 && x <= lastK) {
