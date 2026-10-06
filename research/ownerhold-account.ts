@@ -151,6 +151,8 @@ export interface AccountOut {
   // the all-accepted path only: E* and its four terms' largest values
   estar: EstarTerm | null;
   estarBy: Record<string, EstarTerm>;
+  // the terms that were not numbers (none expected)
+  estarBad: number;
   // the all-accepted path: the profit (net assets − start) at the split and at END
   mSplit: number;
   mEnd: number;
@@ -279,7 +281,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   const units = mk.books.map((m) => unitOf(m.pair));
   const usd = mk.books.map((m) => isUsdPair(m.pair));
   const taus = Float64Array.from(mk.closes.map((c) => c.tau));
-  const out: AccountOut = { fates: orders.map(() => "none" as Fate), trades: [], calls: [], lcs: [], deposits: [], naSplit: NaN, inSplit: NaN, naEnd: NaN, inEnd: NaN, maxDrawdown: 0, maxHeld: 0, maxHeldMargin: 0, maxPending: 0, estar: null, estarBy: {}, mSplit: NaN, mEnd: NaN, poisoned: 0, swapNights: 0, orders: orders.length, usdNegJudged: 0, usdNeg: [] };
+  const out: AccountOut = { fates: orders.map(() => "none" as Fate), trades: [], calls: [], lcs: [], deposits: [], naSplit: NaN, inSplit: NaN, naEnd: NaN, inEnd: NaN, maxDrawdown: 0, maxHeld: 0, maxHeldMargin: 0, maxPending: 0, estar: null, estarBy: {}, estarBad: 0, mSplit: NaN, mEnd: NaN, poisoned: 0, swapNights: 0, orders: orders.length, usdNegJudged: 0, usdNeg: [] };
   const fateIdx = new Map<number, number>();
   orders.forEach((x, k) => fateIdx.set(x.sig, k));
   const setFate = (sig: number, f: Fate) => (out.fates[fateIdx.get(sig)!] = f);
@@ -370,7 +372,8 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     }
     return r;
   };
-  const cash = () => yen + dollars * usdJpy();
+  // a zero dollar balance is worth 0 yen, before USD/JPY's first bar too (as the Python counts it)
+  const cash = () => (dollars !== 0 ? yen + dollars * usdJpy() : yen);
   const netAssets = (how: "exit" | "mid", worst: Float64Array | null = null) => cash() + unrealized(how, worst);
   const held = () => {
     let n = 0;
@@ -385,6 +388,11 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
 
   // ---- E* (the all-accepted path) ----------------------------------------------------------
   const term = (kind: EstarTerm["kind"], value: number, at: number) => {
+    // a term that is not a number is counted (the E* check fails on it), not kept: it would stop the largest there
+    if (!Number.isFinite(value)) {
+      out.estarBad++;
+      return;
+    }
     const t: EstarTerm = { kind, value, at };
     const cur = out.estarBy[kind];
     if (!cur || value > cur.value) out.estarBy[kind] = t;
@@ -667,8 +675,11 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
       }
     }
     if (o.unlimited) {
-      term("close", required() - (netAssets("mid") - 0), c.tau);
-      term("loss", -netAssets("exit"), c.tau);
+      // the terms only at the closes a row judges: a close on the previous one's price point is not
+      if (!samePoint) {
+        term("close", required() - (netAssets("mid") - 0), c.tau);
+        term("loss", -netAssets("exit"), c.tau);
+      }
       return;
     }
     if (o.swapBeforeCall) addSwap(c);

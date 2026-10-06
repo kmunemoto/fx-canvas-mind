@@ -863,10 +863,12 @@ class Account:
         prev = self.prev_pp
         self.prev_pp = pp
         if self.unl:
-            nam, req = self.na_req(ix, 'mid')
-            nax, _ = self.na_req(ix, 'exit')
-            self.offer('close', req - nam, tau)
-            self.offer('loss', -nax, tau)
+            # 項は行が判定する引けだけ: 前の引けと同じ値段の点の引けでは数えない
+            if pp != prev:
+                nam, req = self.na_req(ix, 'mid')
+                nax, _ = self.na_req(ix, 'exit')
+                self.offer('close', req - nam, tau)
+                self.offer('loss', -nax, tau)
             return
         if self.call is not None or pp == prev:
             return

@@ -451,3 +451,63 @@ export const FIXTURES: Fixture[] = [];
     },
   });
 }
+
+// ---- 13. E*: the period starts on a day without bars (2024-01-01): that night's close comes before any bar ----
+{
+  // the first bars at 22:00 UTC, after Monday's close (21:55); a buy at 150.001 (00:17), the mid 149.000 at Tuesday's close
+  const knots: Array<[string, number]> = [["2024-01-01T22:00", 150], ["2024-01-02T01:00", 150], ["2024-01-02T20:00", 149], ["2024-01-03T12:00", 149]];
+  const sigs = [email("2024-01-02T00:15", "BUY", 150.01)];
+  // Tuesday's close: required um(149) − P/L (mid) 10,000 × (149 − 150.001) = 59,600 + 10,010; the order's term 400 × 150.01 = 60,004
+  const E = um(149) + 10_000 * (150.001 - 149);
+  FIXTURES.push({
+    name: "estarBeforeBars",
+    what: "期間の始まり（2024-01-01、元日）の NY の引け（21:55）が、どのペアの足よりも前に来る。その引けの項は 0（建玉もドルも無い）で、E* は火曜の引けの項 69,610円",
+    ctx: ctxOf("2024-01-01T00:00", "2024-01-02T00:00", "2024-01-03T12:00", 300_000),
+    m1s: books(usdJpy(knots, "2024-01-01T22:00", "2024-01-03T12:00")),
+    sigs,
+    check: (_rows, unl) => {
+      const out: string[] = [];
+      near(E, 69_610, "E* by hand", out);
+      for (const row of ["main", "mainSwap"]) {
+        const e = unl[row].estar;
+        near(e?.value, E, `${row}: E*`, out);
+        eq(e?.kind, "close", `${row}: set by`, out);
+        eq(e?.at, at("2024-01-02T21:55"), `${row}: at Tuesday's close`, out);
+        for (const [k, t] of Object.entries(unl[row].estarBy)) if (!Number.isFinite(t.value)) out.push(`${row}: the ${k} term ${t.value}`);
+      }
+      return out;
+    },
+  });
+}
+
+// ---- 14. E*: Christmas's two closes on one price point; the swap paid between is not judged at the second ----
+{
+  // a sell at 149.999 (12/23 00:17); the mid 154.000 from 12/24 20:00; no bars from 12/24 21:00 to 12/25 22:00
+  const knots: Array<[string, number]> = [["2024-12-22T22:00", 150], ["2024-12-23T01:00", 150], ["2024-12-24T20:00", 154], ["2024-12-26T12:00", 154]];
+  const sigs = [email("2024-12-23T00:15", "SELL", 149.99)];
+  // a sell's night at the close's mid: (−1 × (5.25 − 0.1) − 0.5) ÷ 100 × 10,000 × mid ÷ 365, paid rounded up (floor);
+  // Monday's mid 151.946 (the line from 150 at 01:00 to 154 at 20:00 the next day, at 21:55)
+  const monday = Math.floor(((-1 * (5.25 - 0.1) - 0.5) / 100) * 10_000 * 151.946 / 365 + 1e-9);
+  // 12/24's close: required um(154) − P/L (mid) 10,000 × (149.999 − 154); the swap row less Monday's night too.
+  // 12/25's close is on the same price point (judged once): its term, larger by 12/24's night, is not counted
+  const E = um(154) + 10_000 * (154 - 149.999);
+  FIXTURES.push({
+    name: "estarSamePoint",
+    what: "12/24 と 12/25 の NY の引けが同じ値段の点（12/25 は GMO の足が無い）。間のスワップ（売りの支払い）で 12/25 の引けの項の方が大きいが、口座はそこを判定しないので、E* はスワップ込みの行でも 12/24 の引けの項",
+    ctx: ctxOf("2024-12-23T00:00", "2024-12-24T00:00", "2024-12-26T12:00", 300_000),
+    m1s: books(usdJpy(knots, "2024-12-22T22:00", "2024-12-26T12:00", [["2024-12-24T21:00", "2024-12-25T22:00"]])),
+    sigs,
+    check: (_rows, unl) => {
+      const out: string[] = [];
+      eq(monday, -236, "Monday's night by hand", out);
+      near(E, 101_610, "E* by hand (no swap)", out);
+      for (const [row, value] of [["main", E], ["mainSwap", E - monday], ["worst", E], ["worstSwap", E - monday]] as const) {
+        const e = unl[row].estar;
+        near(e?.value, value, `${row}: E*`, out);
+        eq(e?.kind, "close", `${row}: set by`, out);
+        eq(e?.at, at("2024-12-24T21:55"), `${row}: at 12/24's close`, out);
+      }
+      return out;
+    },
+  });
+}

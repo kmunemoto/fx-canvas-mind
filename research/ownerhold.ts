@@ -188,7 +188,7 @@ interface Analysis {
   m: Record<string, { M1: number; M2: number }>;
   extra: Record<string, unknown>;
   // each check: passed or not, its detail, and how many mismatches it found (n; §8.102 確かめ A: the planted errors' counts)
-  checks: Record<string, { ok: boolean; detail: unknown; n?: number }>;
+  checks: Record<string, { ok: boolean; detail: unknown; n?: number; why?: string }>;
   // every decision and number, one string each, for the planted errors' diff and the Python's
   decisions: string[];
   dump: Record<string, string>;
@@ -510,11 +510,16 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     const events = (a: AccountOut) => a.fates.filter((f) => f === "refusedMargin" || f === "refusedCall" || f === "cancelCall" || f === "cancelLc").length + a.lcs.length + a.calls.length;
     const up = runAccount(mk(ds.m1s), r.orders, { ...r.o, start: E * (1 + 1e-9), cap: Math.max(ctx.cap, E * 2) });
     const dn = runAccount(mk(ds.m1s), r.orders, { ...r.o, start: E * (1 - 1e-6), cap: E * (1 - 1e-6) });
-    est[name] = { estar: E, over: events(up), under: events(dn) };
-    if (!(E > 0) || events(up) !== 0 || events(dn) === 0) estOk = false;
+    // bad: the all-accepted path's terms that were not numbers
+    const bad = unlOut[name].estarBad;
+    est[name] = { estar: E, over: events(up), under: events(dn), bad };
+    if (!(E > 0) || events(up) !== 0 || events(dn) === 0 || bad !== 0) estOk = false;
   }
-  const estN = Object.values(est as Record<string, { estar: number; over: number; under: number }>).filter((e) => !(e.estar > 0) || e.over !== 0 || e.under === 0).length;
-  checks.estar = { ok: estOk, detail: est, n: estN };
+  const estFails = Object.entries(est as Record<string, { estar: number; over: number; under: number; bad: number }>).filter(([, e]) => !(e.estar > 0) || e.over !== 0 || e.under === 0 || e.bad !== 0);
+  // why, without a measured number (MODE=real prints it): each failing row's four conditions
+  const yn = (b: boolean) => (b ? "yes" : "NO");
+  const estWhy = estFails.map(([k, e]) => `${k}: E* a positive number ${yn(e.estar > 0)}, nothing just over ${yn(e.over === 0)}, something just under ${yn(e.under !== 0)}, every term a number ${yn(e.bad === 0)}`).join("; ");
+  checks.estar = { ok: estOk, detail: est, n: estFails.length, why: estWhy };
 
   // ---- the counts beside them ----
   const between = tausOf(closes);
@@ -928,6 +933,8 @@ if (MODE === "real") {
   for (const [k, c] of Object.entries(a.checks)) {
     // only whether each check passed; a failed one's detail holds no measured number but is not printed either
     log(`check ${k}: ${c.ok ? "ok" : "FAILED"}`);
+    // a check's own reason, written without a measured number (only the E* check has one)
+    if (!c.ok && c.why) log(`  ${c.why}`);
     if (!c.ok) ok = false;
   }
   log(`TypeScript checks: ${ok ? "all passed" : "FAILED"} (${((Date.now() - t0) / 1000).toFixed(0)} s). The numbers are in ${OUT}/real, printed only by MODE=print after the Python check.`);
