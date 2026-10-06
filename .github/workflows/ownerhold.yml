@@ -1,0 +1,293 @@
+# #205 (docs §8.102): the owner's own way with the 15-minute ULTRA emails,
+# measured. research/ownerhold.ts and the Python recomputation written apart
+# from it (research/ownerhold-check.py).
+#
+#   確かめ A (every run, before any real data is read):
+#     third     ③'s gates on the seeded walks: 20 without a trend, 20 with
+#               0.01 and 20 with 0.03 pips a minute; the planted ③ errors
+#     fixtures  the hand examples: the program against the worked-out values,
+#               the planted errors, and the Python on each
+#     full      the first walk run in full (accounts, E*, M, the look-ahead
+#               checks), the planted errors on it (in groups), and the Python
+#     plants    every planted error summed over the hand examples and the walk:
+#               one that changed nothing on either, or changed something
+#               where nothing caught it, fails (research/ownerhold-plants.py)
+#   確かめ B and the numbers (dispatched with real = yes, only after A passed):
+#     real      tf-winrate.ts first (the email rule reproduced), the study on
+#               GMO's 1-minute bars, the Python on the same files, and the
+#               numbers printed only when every check passed
+#
+# GitHub's runners reach GMO's public price API, which the development
+# container cannot. Read-only: public files fetched, a report printed; it
+# writes nothing to the repository and holds no secret.
+name: Research ownerhold
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/ownerhold*.ts
+      - research/ownerhold-check.py
+      - research/ownerhold-plants.py
+      - .github/workflows/ownerhold.yml
+  workflow_dispatch:
+    inputs:
+      real:
+        description: "After 確かめ A passes, run the real data (yes/no)"
+        default: "no"
+      end:
+        description: "END (ISO, UTC)"
+        default: "2026-10-03T00:00:00Z"
+
+permissions:
+  contents: read
+  # the real job lists the repository's Actions caches (which study kept which day files, and how much)
+  actions: read
+
+env:
+  START: "2024-01-01"
+  SPLIT: "2025-05-19"
+  END: ${{ inputs.end || '2026-10-03T00:00:00Z' }}
+
+jobs:
+  third:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        set: [none, t01, t03]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: ③ on 20 walks (${{ matrix.set }})
+        env:
+          MODE: synthetic
+          SETS: ${{ matrix.set }}
+          SEEDS: "1-20"
+          FULL: "0"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples, and the planted errors on them
+        env:
+          MODE: fixtures
+          PLANTS: orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The Python on each hand example (and its planted dumps)
+        run: |
+          pip install -q numpy
+          fail=0
+          for d in research/out/ownerhold/fixtures/*/; do
+            also=""
+            for p in "$d"dump-*/; do [ -d "$p" ] && also="$also --also $p"; done
+            echo "== $(basename "$d")"
+            python3 research/ownerhold-check.py --gmo "${d}gmo" --dump "${d}dump" --rates synthetic $also || fail=1
+          done
+          exit $fail
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-fixtures
+          path: |
+            research/out/ownerhold/fixtures/plants-fixtures.json
+            research/out/ownerhold/fixtures/*/dump-*/pycheck.json
+          if-no-files-found: error
+
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        plants:
+          - orderNextOpen,fillNextBar,tpInFillBar,lcNextBar
+          - swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge
+          - callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured
+          - deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline
+          - usdFixed,swapBeforeCall,swapAfterOrder,nyTauBar
+          - estarMaint,weekCells,plain,signalNextBar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The first walk in full, and the planted errors ${{ matrix.plants }}
+        env:
+          MODE: synthetic
+          SETS: none
+          SEEDS: "1"
+          FULL: "1"
+          PLANTS: ${{ matrix.plants }}
+        run: >
+          deno run --v8-flags=--max-old-space-size=12288
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The Python on the walk (and the planted dumps)
+        run: |
+          pip install -q numpy
+          d=research/out/ownerhold/syn-none-1
+          also=""
+          for p in "$d"/dump-*/; do [ -d "$p" ] && also="$also --also $p"; done
+          python3 research/ownerhold-check.py --gmo "$d/gmo" --dump "$d/dump" --rates synthetic $also
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-full-${{ strategy.job-index }}
+          path: |
+            research/out/ownerhold/syn-none-1/plants-full.json
+            research/out/ownerhold/syn-none-1/dump-*/pycheck.json
+          if-no-files-found: error
+
+  plants:
+    needs: [fixtures, full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: plants-fixtures
+          path: plants/fixtures
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: plants-full-*
+          path: plants
+      - name: Every planted error changed something and was caught where it did
+        run: |
+          for d in plants/plants-full-*; do mv "$d" "plants/full-${d##*-}"; done
+          ls plants
+          python3 research/ownerhold-plants.py plants orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar,signalNextBar
+
+  real:
+    if: ${{ inputs.real == 'yes' }}
+    needs: [third, fixtures, full, plants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The repository's Actions caches (keys and sizes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache list --repo "${{ github.repository }}" --limit 100 || true
+      # GMO's day files never change once the day has rolled: this study's own kept
+      # files (1-minute and 15-minute), or else tf-winrate's (5- and 15-minute)
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - if: steps.own.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      # the kept day files answered before their day had ended (kept by a study run while it went on) are
+      # removed, so tf-winrate and the study both read them again (research/ownerhold.ts MODE=cache)
+      - name: The kept day files that are not whole
+        env:
+          MODE: cache
+        run: >
+          deno run --allow-read=. --allow-write=research/.cache --allow-env
+          research/ownerhold.ts
+      - name: The BIS policy rates (the swap)
+        run: |
+          mkdir -p research/.cache/bis
+          curl -sSfL --connect-timeout 15 --max-time 300 -o /tmp/bis.zip https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip
+          unzip -o -q /tmp/bis.zip -d research/.cache/bis
+          ls -la research/.cache/bis
+      - name: "tf-winrate.ts first (B(2): the email rule, five pairs, the stop 13 and TP1 4)"
+        env:
+          PAIRS: USD/JPY,EUR/JPY,AUD/JPY,EUR/USD,AUD/USD
+          SL: "13"
+          TP1: "4"
+          TP2: "10"
+          TP3: "16"
+          WEEKEND: inside
+        # its log (the email rule's own tables) kept to a file: only the failed reads are printed; ownerhold.ts reads its JSON
+        run: |
+          s=0
+          deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out \
+            --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND \
+            research/tf-winrate.ts > /tmp/tf-winrate.log 2>&1 || s=$?
+          grep -E 'GMO reads that failed' /tmp/tf-winrate.log || true
+          exit $s
+      - name: The study (only whether each check passed is printed)
+        env:
+          MODE: real
+          TFW_JSON: research/out/tf-winrate.json
+        run: |
+          BIS_CSV=$(ls research/.cache/bis/*.csv | head -n 1) deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/ownerhold.ts
+      - name: The Python on the same files
+        run: |
+          pip install -q numpy
+          python3 research/ownerhold-check.py --quiet --expect-real --gmo research/.cache --dump research/out/ownerhold/real/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --out research/out/ownerhold/real
+      # the numbers go to a file (the log's last 5,000 lines are all that can be read back from the session):
+      # here only its size and sha256; the numbers job prints it in parts of 4,500 lines
+      - name: The numbers (every check passed)
+        env:
+          MODE: print
+        run: |
+          deno run --allow-read=. --allow-env research/ownerhold.ts > research/out/ownerhold/real/print.txt
+          wc -l research/out/ownerhold/real/print.txt research/out/ownerhold/real/ultra15-a.csv
+          sha256sum research/out/ownerhold/real/print.txt research/out/ownerhold/real/ultra15-a.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ownerhold-numbers
+          path: |
+            research/out/ownerhold/real/print.txt
+            research/out/ownerhold/real/ultra15-a.csv
+          retention-days: 30
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-${{ github.run_id }}
+
+  # the numbers, printed in parts of 4,500 lines (one job's log each, so every line can be read back)
+  numbers:
+    needs: [real]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ownerhold-numbers
+          path: numbers
+      - name: Part ${{ matrix.part }} of print.txt (lines 4,500 a part)
+        run: |
+          f=numbers/print.txt
+          n=$(wc -l < "$f")
+          a=$(( (${{ matrix.part }} - 1) * 4500 + 1 ))
+          b=$(( ${{ matrix.part }} * 4500 ))
+          echo "print.txt: $n lines, sha256 $(sha256sum "$f" | cut -d' ' -f1); this part: lines $a-$b"
+          if [ "${{ matrix.part }}" = "10" ] && [ "$n" -gt "$b" ]; then echo "print.txt is longer than 10 parts: lines after $b are not printed"; exit 1; fi
+          sed -n "${a},${b}p" "$f"

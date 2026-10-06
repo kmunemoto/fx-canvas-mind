@@ -390,7 +390,7 @@ if (RULES_187.length !== 15) throw new Error("not #187's 15 rules");
 const roundTo = (x: number, d: number) => Math.round(x * 10 ** d) / 10 ** d;
 
 // the weekends, Rakuten's NY closes and the swap days in (t0, x)
-const tausOf = (ny: NyClose[]) => {
+export const tausOf = (ny: NyClose[]) => {
   const taus = Float64Array.from(ny.map((c) => c.tau));
   // swap days to each close: a Wednesday's (UTC) three
   const cum = new Float64Array(taus.length + 1);
