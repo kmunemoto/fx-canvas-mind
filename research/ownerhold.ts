@@ -358,8 +358,10 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
 
   // ---- the accounts ----
   const mk = (books: M1[], from = ctx.start): Market => ({ books, closes, split: ctx.split, end: ctx.end, from });
+  // an email whose path is nothing at all (P at or past END, or past the data: the week's last bars ended before
+  // P, as at END on a Saturday) is not ordered in the accounts either, as in the per-email view and the Python
   const ordersOf = (v: Variant, keep: (s: Sig, i: number) => boolean = () => true): OrderIn[] =>
-    sigs.map((s, i) => ({ sig: i, pi: s.pi, ...orderOf(s, v) })).filter((o, k) => keep(sigs[k], k));
+    sigs.map((s, i) => ({ sig: i, pi: s.pi, ...orderOf(s, v) })).filter((o, k) => keep(sigs[k], k) && !paths[v.name][k].none);
   const swapMain = swapFrom(ds.rates, 0.5);
   const swap10 = swapFrom(ds.rates, 1.0);
   const base: AccountOpts = { ...MAIN_OPTS, start: ctx.startYen, cap: ctx.cap, plant, skipMaint: !maintPlant, usd: plant === "usdFixed" ? "fixed" : "live", deposit: plant === "depositAtTau" ? "tau" : "notice", swapBeforeCall: plant === "swapBeforeCall" };
@@ -618,7 +620,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     gaps: { count: gapCount, list: gaps },
     shifted: paths.main.filter((p) => p.shifted).length,
     late: { signals: sigs.filter((s) => s.late).length },
-    ifMarket: ifMarket(paths.market, outs.main, sigs, booksMain),
+    ifMarket: ifMarket(paths.market, outs.main, oMain, sigs, booksMain),
     m15Gaps: ds.m15Gaps ?? null,
   };
   void maintOf;
@@ -626,7 +628,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   void isUsdPair;
   void usdJpyAt;
   // ---- the files for the Python check ----
-  out.dump = dumpOf(ds, paths, outs, unlOut, third);
+  out.dump = dumpOf(ds, paths, outs, unlOut, third, oMain);
   out.dump["emails.csv"] = ["i,d1,d1o,gap1,gap1o,w1,w1o", ...vals.map((v, i) => [i, v.d1, v.d1o, v.g1, v.g1o, v.w1, v.w1o].join(","))].join("\n");
   out.raw = { outs, unl: unlOut };
   void ctx;
@@ -651,11 +653,11 @@ const rakShare = (a: AccountOut, sigs: Sig[], split: number) => {
 };
 
 // the emails the main account did not take, as if taken at the market at P: by why not
-const ifMarket = (ps: Path[], a: AccountOut, sigs: Sig[], books: Book[]) => {
+const ifMarket = (ps: Path[], a: AccountOut, orders: OrderIn[], sigs: Sig[], books: Book[]) => {
   const groups: Record<string, { n: number; tp: number; pips: number }> = {};
   const fateOf = new Map<number, string>();
-  // a.fates is in the main orders' order, which is the signals' order
-  a.fates.forEach((f, k) => fateOf.set(k, f));
+  // a.fates is in the orders' order: each one's email by its sig
+  a.fates.forEach((f, k) => fateOf.set(orders[k].sig, f));
   ps.forEach((p, i) => {
     if (p.none) return;
     const f = fateOf.get(i) ?? "none";
@@ -671,7 +673,7 @@ const ifMarket = (ps: Path[], a: AccountOut, sigs: Sig[], books: Book[]) => {
 };
 
 // the CSVs the Python check reads (its own inputs: the signals) and compares (the rest)
-const dumpOf = (ds: DataSet, paths: Record<string, Path[]>, outs: Record<string, AccountOut>, unl: Record<string, AccountOut>, third: Analysis["third"]): Record<string, string> => {
+const dumpOf = (ds: DataSet, paths: Record<string, Path[]>, outs: Record<string, AccountOut>, unl: Record<string, AccountOut>, third: Analysis["third"], orders: OrderIn[]): Record<string, string> => {
   const d: Record<string, string> = {};
   d["signals.csv"] = ["i,pair,side,open,T,E,tp,late,base", ...ds.sigs.map((s, i) => `${i},${s.pair},${s.side},${s.open},${s.T},${s.E},${s.tp},${s.late ? 1 : 0},${s.base}`)].join("\n");
   for (const v of ["main", "opposite"]) {
@@ -682,7 +684,10 @@ const dumpOf = (ds: DataSet, paths: Record<string, Path[]>, outs: Record<string,
     d[`acct-${name}-calls.csv`] = ["tau,deadline,D,cancelled,deposits,credits,uAfterDeposit,end,endAt", ...a.calls.map((c) => [c.tau, c.deadline, c.D, c.cancelled, c.deposits, c.credits, c.uAfterDeposit, c.end, c.endAt].join(","))].join("\n");
     d[`acct-${name}-lcs.csv`] = ["at,naBefore,naAfter,closed,cancelled", ...a.lcs.map((l) => [l.at, l.naBefore, l.naAfter, l.closed, l.cancelled].join(","))].join("\n");
     d[`acct-${name}-deposits.csv`] = ["at,amount,total,why", ...a.deposits.map((x) => [x.at, x.amount, x.total, x.why].join(","))].join("\n");
-    d[`acct-${name}-fates.csv`] = ["k,fate", ...a.fates.map((f, k) => `${k},${f}`)].join("\n");
+    // every email's fate by its index ("none": not ordered — its path is nothing at all); the rows written use the main orders
+    const bySig = ds.sigs.map(() => "none");
+    a.fates.forEach((f, k) => (bySig[orders[k].sig] = f));
+    d[`acct-${name}-fates.csv`] = ["k,fate", ...bySig.map((f, k) => `${k},${f}`)].join("\n");
     d[`acct-${name}-summary.json`] = JSON.stringify({ naSplit: a.naSplit, inSplit: a.inSplit, naEnd: a.naEnd, inEnd: a.inEnd, estar: a.estar, estarBy: a.estarBy, mSplit: a.mSplit, mEnd: a.mEnd, swapNights: a.swapNights });
   };
   for (const n of ["main", "mainSwap", "worst", "worstSwap", "dep0859"]) acct(n, outs[n]);
