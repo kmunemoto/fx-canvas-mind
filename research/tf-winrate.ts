@@ -131,21 +131,32 @@ const CHECK_EVERY: Record<Tf, number> = { "5min": 661, "15min": 223, "1h": 53, "
 
 // ---- GMO's files ---------------------------------------------------------------------
 
-const getJson = async (url: string): Promise<{ status: number; body: unknown }> => {
+// GMO's answer, asked again (five tries, the waits doubling from 0.5 s) on HTTP 429 or 5xx, on an answer
+// that is not GMO's bars (GMO's own error status, such as too many requests or its maintenance) and on a
+// failed connection; `why` is what the last try got when every try failed (counted in failWhy)
+const failWhy: Record<string, number> = {};
+const getJson = async (url: string): Promise<{ status: number; body: unknown; why: string }> => {
+  let why = "";
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const r = await fetch(url);
-      if (r.status === 404) return { status: 404, body: null };
+      if (r.status === 404) return { status: 404, body: null, why: "" };
       if (r.status === 429 || r.status >= 500) {
-        await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
-        continue;
+        await r.body?.cancel();
+        why = `HTTP ${r.status}`;
+      } else {
+        const body = await r.json();
+        if (sound(body)) return { status: r.status, body, why: "" };
+        const b = (typeof body === "object" && body !== null ? body : {}) as { status?: unknown; messages?: unknown };
+        const codes = Array.isArray(b.messages) ? b.messages.map((m) => String((m as { message_code?: unknown })?.message_code ?? "")).filter(Boolean) : [];
+        why = `HTTP ${r.status}, GMO status ${String(b.status)}${codes.length ? ` ${codes.join(",")}` : ""}`;
       }
-      return { status: r.status, body: await r.json() };
-    } catch {
-      await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
+    } catch (e) {
+      why = e instanceof Error ? e.name : "error";
     }
+    await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
   }
-  return { status: 0, body: null };
+  return { status: 0, body: null, why };
 };
 
 // GMO's answer with its bars (a day without any, a weekend's, is an empty
@@ -258,6 +269,7 @@ const load = async (pair: string, tf: Tf, fromMs: number): Promise<Loaded> => {
           body = r.status === 404 ? { status: 404, data: [] } : r.body;
           if (r.status === 0 || !sound(body)) {
             failed++;
+            failWhy[r.why] = (failWhy[r.why] ?? 0) + 1;
             continue;
           }
           await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
@@ -687,7 +699,7 @@ for (const tf of TFS) {
   console.log(`check against indicatorSignals, ${tf}: ${c.mismatched} of ${c.compared} differ${c.examples.length ? ": " + c.examples.join("; ") : ""}`);
 }
 const fails = coverage.reduce((a, c) => a + c.failed, 0);
-console.log(`GMO reads that failed: ${fails}`);
+console.log(`GMO reads that failed: ${fails}${fails ? ` (the last try's answer: ${JSON.stringify(failWhy)})` : ""}`);
 for (const tf of TFS) {
   const cs = coverage.filter((c) => c.tf === tf);
   const same = cs.reduce((a, c) => a + c.closeSame, 0);

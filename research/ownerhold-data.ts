@@ -53,6 +53,10 @@ export interface LoadStats {
   // kept files read again: answered before their day's file had ended (or a 404 kept without its time)
   partial: number;
   failed: number;
+  // what the last try of each failed read got (HTTP status, GMO's status and message codes, a failed
+  // connection), how many of each, and the first few reads that failed
+  failedWhy: Record<string, number>;
+  failedExamples: string[];
   files: number;
   // bars left out: on one side only, an ask close under the bid's, inside the weekend's closure, a repeated time
   oneSide: number;
@@ -60,29 +64,44 @@ export interface LoadStats {
   closure: number;
   repeated: number;
 }
-export const newLoadStats = (): LoadStats => ({ requests: 0, cached: 0, partial: 0, failed: 0, files: 0, oneSide: 0, crossed: 0, closure: 0, repeated: 0 });
+export const newLoadStats = (): LoadStats => ({ requests: 0, cached: 0, partial: 0, failed: 0, failedWhy: {}, failedExamples: [], files: 0, oneSide: 0, crossed: 0, closure: 0, repeated: 0 });
 
 // ---- GMO's day files ----------------------------------------------------------------------
 
-const getJson = async (url: string): Promise<{ status: number; body: unknown }> => {
+// GMO's answer, asked again (six tries, the waits doubling from 0.5 s) on HTTP 429 or 5xx, on an answer that
+// is not GMO's bars (GMO's own error status, such as too many requests or its maintenance) and on a failed
+// connection; `why` is what the last try got when every try failed
+const getJson = async (url: string): Promise<{ status: number; body: unknown; why: string }> => {
+  let why = "";
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(30_000) });
       if (r.status === 404) {
         await r.body?.cancel();
-        return { status: 404, body: null };
+        return { status: 404, body: null, why: "" };
       }
       if (r.status === 429 || r.status >= 500) {
         await r.body?.cancel();
-        await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
-        continue;
+        why = `HTTP ${r.status}`;
+      } else {
+        const body = await r.json();
+        if (sound(body)) return { status: r.status, body, why: "" };
+        why = `HTTP ${r.status}, ${gmoWhy(body)}`;
       }
-      return { status: r.status, body: await r.json() };
-    } catch {
-      await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
+    } catch (e) {
+      why = e instanceof Error ? e.name : "error";
     }
+    await new Promise((res) => setTimeout(res, 500 * 2 ** attempt));
   }
-  return { status: 0, body: null };
+  return { status: 0, body: null, why };
+};
+
+// GMO's status and message codes in an answer that is not its bars
+const gmoWhy = (body: unknown): string => {
+  if (typeof body !== "object" || body === null) return "not GMO's answer";
+  const b = body as { status?: unknown; messages?: unknown };
+  const codes = Array.isArray(b.messages) ? b.messages.map((m) => String((m as { message_code?: unknown })?.message_code ?? "")).filter(Boolean) : [];
+  return `GMO status ${String(b.status)}${codes.length ? ` ${codes.join(",")}` : ""}`;
 };
 
 // GMO's answer with its bars (a day without any is an empty list), or the 404 of a day it has no file for
@@ -99,14 +118,20 @@ export interface Source {
   fetch: boolean;
 }
 
-// A kept GMO day file is taken only if GMO answered it after the day's file had ended: the key's day at
-// 22:00 UTC (the next day's 07:00 JST, the later of GMO's two day rolls, 06:00 and 07:00 JST). A file
-// kept by another study while its day was going on, or a 404 kept without the time it was asked, is
-// read again (a kept file of the walks, which GMO never answered, is not judged: src.fetch false).
-export const dayFileEnd = (key: string): number => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)), 22, 0, 0);
+// A kept GMO day file is taken only if GMO made it when the day's file had ended: the key's day at 21:00 UTC
+// (06:00 JST), in US summer and winter alike. GMO's past day files say so themselves (research/gmo-cache-diag.ts,
+// run 37470964060): the last bar at 20:59 UTC, made (responsetime) at 21:00:00-21:00:03 UTC, and a day without
+// bars (a weekend, a holiday) made at 20:59:57-20:59:59 UTC; so a file without bars made in the day's last
+// minute is whole too. A file kept by another study while its day was going on, or a 404 kept without the
+// time it was asked, is read again (a kept file of the walks, which GMO never answered, is not judged:
+// src.fetch false). (Before: 22:00 UTC, which took GMO's own day files for unfinished ones.)
+export const dayFileEnd = (key: string): number => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)), 21, 0, 0);
 export const wholeDayFile = (body: unknown, key: string): boolean => {
-  const at = Date.parse(String((body as { responsetime?: unknown }).responsetime ?? ""));
-  return Number.isFinite(at) && at >= dayFileEnd(key);
+  const b = body as { responsetime?: unknown; data?: unknown };
+  const at = Date.parse(String(b.responsetime ?? ""));
+  if (!Number.isFinite(at)) return false;
+  const empty = !Array.isArray(b.data) || b.data.length === 0;
+  return at >= dayFileEnd(key) - (empty ? MINUTE : 0);
 };
 
 // one side of one day file, its bars (null: it could not be read)
@@ -132,6 +157,8 @@ const readSide = async (src: Source, symbol: string, interval: string, side: "bi
     body = r.status === 404 ? { status: 404, data: [], responsetime: new Date().toISOString() } : r.body;
     if (r.status === 0 || !sound(body)) {
       st.failed++;
+      st.failedWhy[r.why] = (st.failedWhy[r.why] ?? 0) + 1;
+      if (st.failedExamples.length < 5) st.failedExamples.push(`${symbol} ${interval} ${side} ${key}: ${r.why}`);
       return null;
     }
     await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
