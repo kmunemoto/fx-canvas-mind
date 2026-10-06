@@ -1,0 +1,36 @@
+name: GMO cache diag
+
+# #205 (docs §8.102): why the study's own kept GMO day files are judged not whole, and what GMO
+# answers for a past day now (research/gmo-cache-diag.ts). Read only; no measured number of the study.
+on:
+  workflow_dispatch:
+    inputs:
+      cache:
+        description: "the Actions cache to read: gmo-1min (the study's) or gmo-tf (tf-winrate's)"
+        default: "gmo-1min"
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: ${{ inputs.cache }}-none
+          restore-keys: ${{ inputs.cache }}-
+      - name: The kept files and a few live reads
+        env:
+          START: "2024-01-01T00:00:00Z"
+          END: "2026-10-03T00:00:00Z"
+        run: |
+          echo "cache: ${{ steps.cache.outputs.cache-matched-key }}"
+          deno run --allow-net=forex-api.coin.z.com --allow-read=. --allow-env research/gmo-cache-diag.ts
