@@ -225,11 +225,15 @@ jobs:
           TP2: "10"
           TP3: "16"
           WEEKEND: inside
-        run: >
-          deno run --v8-flags=--max-old-space-size=6144
-          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out
-          --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND
-          research/tf-winrate.ts > /tmp/tf-winrate.log 2>&1; s=$?; grep -E 'GMO reads that failed' /tmp/tf-winrate.log; exit $s
+        # its log (the email rule's own tables) kept to a file: only the failed reads are printed; ownerhold.ts reads its JSON
+        run: |
+          s=0
+          deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out \
+            --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND \
+            research/tf-winrate.ts > /tmp/tf-winrate.log 2>&1 || s=$?
+          grep -E 'GMO reads that failed' /tmp/tf-winrate.log || true
+          exit $s
       - name: The study (only whether each check passed is printed)
         env:
           MODE: real
