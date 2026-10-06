@@ -109,6 +109,8 @@ export interface TradeRec {
   quote: number;
   yen: number;
   swapQuote: number;
+  // the swap it got, in yen as credited
+  swapYen: number;
 }
 
 export interface CallRec {
@@ -171,6 +173,7 @@ interface Pos {
   s0: number;
   heldCall: number;
   swapQuote: number;
+  swapYen: number;
 }
 interface Pend {
   sig: number;
@@ -363,7 +366,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   // ---- opening and closing ------------------------------------------------------------------
   // `defer`: entered inside a minute (its TP judged from the next minute on); not: at a P without a bar
   const open = (p: number, x: { sig: number; dir: 1 | -1; E: number; tp: number }, price: number, gap: boolean, market: boolean, t0: number, s0: number, defer: boolean) => {
-    const pos: Pos = { sig: x.sig, dir: x.dir, E: x.E, tp: x.tp, fill: price, fillGap: gap, market, t0, s0, heldCall: -1, swapQuote: 0 };
+    const pos: Pos = { sig: x.sig, dir: x.dir, E: x.E, tp: x.tp, fill: price, fillGap: gap, market, t0, s0, heldCall: -1, swapQuote: 0, swapYen: 0 };
     if (x.dir === 1) {
       nB[p]++;
       sumB[p] += price;
@@ -409,7 +412,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
       y = quote * usdJpy();
       yen += y;
     }
-    out.trades.push({ sig: pos.sig, pi: p, dir: pos.dir, market: pos.market, t0: pos.t0, fill: pos.fill, fillGap: pos.fillGap, x: at, exit: price, how, tpGap: gap, quote, yen: y, swapQuote: pos.swapQuote });
+    out.trades.push({ sig: pos.sig, pi: p, dir: pos.dir, market: pos.market, t0: pos.t0, fill: pos.fill, fillGap: pos.fillGap, x: at, exit: price, how, tpGap: gap, quote, yen: y, swapQuote: pos.swapQuote, swapYen: pos.swapYen });
     setFate(pos.sig, how);
     credit(p, pos);
   };
@@ -584,8 +587,9 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   evs.sort((a, b) => a.t - b.t || a.rank - b.rank || (a.order && b.order ? a.order.P - b.order.P || orderRank(a.order) - orderRank(b.order) : 0));
   for (const l of at.values()) l.sort((a, b) => orderRank(a) - orderRank(b));
 
-  // each NY close's mids (the night's swap is at that day's mid, §8.102 スワップ)
+  // each NY close's mids (the night's swap is at that day's mid, §8.102 スワップ) and USD/JPY's bid and ask
   const tauMids = new Map<number, Float64Array>();
+  const tauUsd = new Map<number, [number, number]>();
   // the night's swap for the positions held at τ (entered before it)
   const addSwap = (c: NyClose) => {
     if (!o.swap) return;
@@ -600,9 +604,18 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
         const q = o.plant === "swapSellSign" && pos.dir === -1 ? -q0 : q0;
         pos.swapQuote += q;
         out.swapNights++;
-        if (!usd[p]) yen += q;
-        else if (o.usd === "live") dollars += q;
-        else yen += q * usdJpy();
+        // Rakuten's page (rule/swap): a yen pair's to the yen, received rounded down and paid rounded up (both
+        // floor); a dollar pair's to the cent the same way, then to yen at USD/JPY's close, the bid when
+        // received and the ask when paid, rounded the same way
+        let y: number;
+        if (!usd[p]) y = Math.floor(q + 1e-9);
+        else {
+          const cents = Math.floor(q * 100 + 1e-9) / 100;
+          const [b, a] = tauUsd.get(c.tau) ?? [bid(usdjpy), ask(usdjpy)];
+          y = Math.floor(cents * (cents >= 0 ? b : a) + 1e-9);
+        }
+        pos.swapYen += y;
+        yen += y;
       }
     }
   };
@@ -611,6 +624,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     const mids = new Float64Array(np);
     for (let p = 0; p < np; p++) mids[p] = has(p) ? midOf(p) : NaN;
     tauMids.set(c.tau, mids);
+    if (has(usdjpy)) tauUsd.set(c.tau, [bid(usdjpy), ask(usdjpy)]);
     // the price point: the last bar ended by τ of every pair (two closes on one point are judged once)
     const point = Array.from(lastK).join(",");
     const samePoint = point === lastNyPoint;
@@ -839,7 +853,7 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
     for (const pos of allPositions(p)) {
       const price = pos.dir === 1 ? bid(p) : ask(p);
       const quote = UNITS * pos.dir * (price - pos.fill);
-      out.trades.push({ sig: pos.sig, pi: p, dir: pos.dir, market: pos.market, t0: pos.t0, fill: pos.fill, fillGap: pos.fillGap, x: NaN, exit: price, how: "held", tpGap: false, quote, yen: toYen(p, quote), swapQuote: pos.swapQuote });
+      out.trades.push({ sig: pos.sig, pi: p, dir: pos.dir, market: pos.market, t0: pos.t0, fill: pos.fill, fillGap: pos.fillGap, x: NaN, exit: price, how: "held", tpGap: false, quote, yen: toYen(p, quote), swapQuote: pos.swapQuote, swapYen: pos.swapYen });
     }
   }
   if (call) {

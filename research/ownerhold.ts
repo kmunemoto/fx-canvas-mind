@@ -329,7 +329,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     {
       decisions.push(`acct|${r.name}|${fx(a.naSplit, 6)}|${fx(a.naEnd, 6)}|${fx(a.inEnd, 6)}|${a.lcs.length}|${a.calls.length}`);
       a.fates.forEach((f, k) => decisions.push(`fate|${r.name}|${r.orders[k].sig}|${f}`));
-      for (const t of a.trades) decisions.push(`trade|${r.name}|${t.sig}|${t.t0}|${fx(t.fill)}|${t.x}|${fx(t.exit)}|${t.how}|${fx(t.swapQuote, 6)}`);
+      for (const t of a.trades) decisions.push(`trade|${r.name}|${t.sig}|${t.t0}|${fx(t.fill)}|${t.x}|${fx(t.exit)}|${t.how}|${fx(t.swapQuote, 6)}|${t.swapYen}`);
       for (const c of a.calls) decisions.push(`call|${r.name}|${c.tau}|${fx(c.D, 6)}|${fx(c.deposits, 6)}|${fx(c.credits, 6)}|${c.end}|${c.endAt}`);
       for (const l of a.lcs) decisions.push(`lc|${r.name}|${l.at}|${fx(l.naBefore, 6)}`);
     }
@@ -519,7 +519,7 @@ const dumpOf = (ds: DataSet, paths: Record<string, Path[]>, outs: Record<string,
     d[`paths-${v}.csv`] = ["i,P,shifted,noBar,none,market,fillK,t0,fill,fillGap,tpK,x,exit,tpGap,tpInFill,mae,endPx", ...paths[v].map((p, i) => [i, p.P, +p.shifted, +p.noBar, +p.none, +p.market, p.fillK, p.t0, p.fill, +p.fillGap, p.tpK, p.x, p.exit, +p.tpGap, +p.tpInFill, p.mae, p.endPx].join(","))].join("\n");
   }
   const acct = (name: string, a: AccountOut) => {
-    d[`acct-${name}-trades.csv`] = ["sig,pi,dir,market,t0,fill,fillGap,x,exit,how,tpGap,quote,yen,swapQuote", ...a.trades.map((t) => [t.sig, t.pi, t.dir, +t.market, t.t0, t.fill, +t.fillGap, t.x, t.exit, t.how, +t.tpGap, t.quote, t.yen, t.swapQuote].join(","))].join("\n");
+    d[`acct-${name}-trades.csv`] = ["sig,pi,dir,market,t0,fill,fillGap,x,exit,how,tpGap,quote,yen,swapQuote,swapYen", ...a.trades.map((t) => [t.sig, t.pi, t.dir, +t.market, t.t0, t.fill, +t.fillGap, t.x, t.exit, t.how, +t.tpGap, t.quote, t.yen, t.swapQuote, t.swapYen].join(","))].join("\n");
     d[`acct-${name}-calls.csv`] = ["tau,deadline,D,cancelled,deposits,credits,uAfterDeposit,end,endAt", ...a.calls.map((c) => [c.tau, c.deadline, c.D, c.cancelled, c.deposits, c.credits, c.uAfterDeposit, c.end, c.endAt].join(","))].join("\n");
     d[`acct-${name}-lcs.csv`] = ["at,naBefore,naAfter,closed,cancelled", ...a.lcs.map((l) => [l.at, l.naBefore, l.naAfter, l.closed, l.cancelled].join(","))].join("\n");
     d[`acct-${name}-deposits.csv`] = ["at,amount,total,why", ...a.deposits.map((x) => [x.at, x.amount, x.total, x.why].join(","))].join("\n");
@@ -606,8 +606,10 @@ if (MODE === "synthetic") {
     const mean = mains.reduce((s, x) => s + x, 0) / n;
     const sd = Math.sqrt(mains.reduce((s, x) => s + (x - mean) ** 2, 0) / (n - 1));
     const se = sd / Math.sqrt(n);
+    // judged on the 20 walks a set (a run of fewer, a part of 確かめ A run elsewhere, is not judged)
+    const judgedGates = n >= 20;
     const g1 = lowOver <= 2;
-    const g2 = Math.abs(mean) <= T_999 * se;
+    const g2 = judgedGates ? Math.abs(mean) <= T_999 * se : true;
     const pm = (xs: number[]) => {
       const m = xs.reduce((s, x) => s + x, 0) / xs.length;
       const s = Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1)) / Math.sqrt(xs.length);
@@ -616,14 +618,23 @@ if (MODE === "synthetic") {
     gates[set] = { runs: n, lowOver, gateI: g1, mean, se, t: mean / se, gateII: g2, planted: { weekCells: { lowOver: planted.weekCells.lowOver, caughtByI: planted.weekCells.lowOver > 2, ...pm(planted.weekCells.mains) }, plain: { lowOver: planted.plain.lowOver, ...pm(planted.plain.mains), caughtByII: !pm(planted.plain.mains).within } } };
     log(`\n== ${set}: ③ L > 0 in ${lowOver} of ${n} (gate (i): ${g1 ? "ok" : "FAIL"}); mean ${mean.toFixed(4)} ± ${se.toFixed(4)} (t ${(mean / se).toFixed(2)}; gate (ii) |t| ≤ ${T_999}: ${g2 ? "ok" : "FAIL"})`);
     log(`   planted week cells: L > 0 in ${planted.weekCells.lowOver} of ${n}; plain: mean ${pm(planted.plain.mains).mean.toFixed(4)} ± ${pm(planted.plain.mains).se.toFixed(4)}`);
-    if (!g1 || !g2) pass = false;
+    if (judgedGates && (!g1 || !g2)) pass = false;
+    if (!judgedGates) log(`   (gates not judged: ${n} walks)`);
   }
-  // the planted ③ errors must be caught: week cells by (i), the plain mean by (ii) on a trend set
-  const gp = gates as Record<string, { planted: { weekCells: { caughtByI: boolean }; plain: { caughtByII: boolean } } }>;
-  const caughtWC = Object.values(gp).some((g) => g.planted.weekCells.caughtByI);
-  const caughtPlain = ["t01", "t03"].some((s) => gp[s]?.planted.plain.caughtByII);
-  log(`planted ③ errors: week cells caught by (i) ${caughtWC ? "yes" : "NO"}; plain mean caught by (ii) on a trend set ${caughtPlain ? "yes" : "NO"}`);
-  if (sets.includes("t01") || sets.includes("t03")) if (!caughtWC || !caughtPlain) pass = false;
+  // the planted ③ errors must be caught (§8.102 確かめ A): the week cells by (i) on every set, the plain mean by
+  // (ii) on the trend sets — judged once 20 walks a set were run
+  const gp = gates as Record<string, { runs: number; planted: { weekCells: { caughtByI: boolean }; plain: { caughtByII: boolean } } }>;
+  for (const set of sets) {
+    const g = gp[set];
+    if (g.runs < 20) {
+      log(`planted ③ errors on ${set}: not judged (${g.runs} walks)`);
+      continue;
+    }
+    const wc = g.planted.weekCells.caughtByI;
+    const pl = set === "none" ? true : g.planted.plain.caughtByII;
+    log(`planted ③ errors on ${set}: week cells caught by (i) ${wc ? "yes" : "NO"}${set === "none" ? "" : `; plain mean caught by (ii) ${pl ? "yes" : "NO"}`}`);
+    if (!wc || !pl) pass = false;
+  }
   result.gates = gates;
   result.pass = pass;
   await writeJson(`${OUT}/synthetic.json`, result);
@@ -708,6 +719,11 @@ if (MODE === "print") {
     Deno.exit(1);
   }
   log(await Deno.readTextFile(`${dir}/analysis.json`));
+  // (a)'s per-email values, to be committed as research/ledger/ultra15-a.csv (with its sha256 to check the copy)
+  const csv = await Deno.readTextFile(`${dir}/ultra15-a.csv`);
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(csv)))).map((b) => b.toString(16).padStart(2, "0")).join("");
+  log(`== ultra15-a.csv sha256 ${hash}, ${csv.split("\n").length - 1} rows`);
+  log(csv);
 }
 
 // ---- B(2): the email rule on 5-minute bars, against tf-winrate.ts ---------------------------------

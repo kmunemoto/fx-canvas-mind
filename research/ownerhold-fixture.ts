@@ -374,6 +374,7 @@ export const FIXTURES: Fixture[] = [];
       const out: string[] = [];
       const t = rows.mainSwap.trades[0];
       near(t?.swapQuote, night, "the Friday night's swap", out);
+      eq(t?.swapYen, Math.floor(night), "credited in yen (rounded down: −233)", out);
       eq(t?.how, "tp", "out at TP", out);
       eq(t?.x, at("2024-01-21T22:00"), "on Monday's first bar", out);
       near(t?.exit, 149.501, "at its open (the ask)", out);
@@ -391,8 +392,9 @@ export const FIXTURES: Fixture[] = [];
   // a buy's night: (5.25 − 0.1 − 0.5) ÷ 100 × 10,000 × 150 ÷ 365; Monday's and Tuesday's one day, Wednesday's three
   const night = ((5.25 - 0.1 - 0.5) / 100) * 10_000 * 150 / 365;
   const om = 400 * 150.01;
-  // before Wednesday's swap the effective margin is the order's margin less 1,000 yen; after it, more
-  const start = om - 1_000 + 5 * 60_000 + 5 * 20 - 5 * 2 * night;
+  // before Wednesday's swap the effective margin is the order's margin less 1,000 yen; after it (5 × 573 yen), more.
+  // Each position's night is credited rounded down to the yen (Rakuten's page)
+  const start = om - 1_000 + 5 * 60_000 + 5 * 20 - 5 * 2 * Math.floor(night);
   FIXTURES.push({
     name: "stopOrderSwap",
     what: "楽天が止まる時間の合図（T 22:00、P は 22:10 に動く）。余力ぎりぎりで、その夜（水曜、3日分）のスワップを入れてから受け付けるので受け付ける（スワップ無しの行では断る）",
