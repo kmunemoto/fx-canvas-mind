@@ -21,6 +21,9 @@ on:
       images:
         description: "OCR the pages' images too (yes/no)"
         default: "yes"
+      links:
+        description: "A regular expression: print each link whose text or URL matches it (empty: none)"
+        default: ""
 
 permissions:
   contents: read
@@ -39,6 +42,7 @@ jobs:
         env:
           URLS: ${{ inputs.urls || 'https://ispeed.jp/fx/howto/chart/ https://ispeed.jp/fx/howto/trading-chart/ https://www.rakuten-sec.co.jp/web/fx/demo_sp/chart.html https://www.rakuten-bank.co.jp/assets/fx/ispeedfx/feature/chart/ https://prtimes.jp/main/html/rd/p/000000706.000011088.html https://fx-quicknavi.com/fxapp/rakuten-fx-app/' }}
           IMAGES: ${{ inputs.images || 'yes' }}
+          LINKS: ${{ inputs.links || '' }}
         run: |
           python3 - <<'PY'
           import os, re, subprocess, urllib.parse, urllib.request
@@ -66,6 +70,14 @@ jobs:
               text = "\n".join(l for l in lines if l)
               print("--- TEXT ---")
               print(text[:30000])
+              if os.environ.get("LINKS"):
+                  pat = re.compile(os.environ["LINKS"])
+                  print("--- LINKS ---")
+                  for a in soup.find_all("a", href=True):
+                      label = re.sub(r"\s+", " ", a.get_text(" ")).strip()
+                      href = urllib.parse.urljoin(url, a["href"])
+                      if pat.search(label) or pat.search(href):
+                          print(f"  {label[:80]} -> {href}")
               if os.environ.get("IMAGES", "yes") != "yes":
                   continue
               seen = set()
