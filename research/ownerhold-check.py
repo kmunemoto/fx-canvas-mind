@@ -13,6 +13,11 @@ dep0859）・すべてを受け付けた4つの行（unlimited-*: E* と M）を
          [--out DIR] [--also DUMP2 --also DUMP3 ...]
   --also: 同じ GMO・同じ signals.csv・meta.json の別の dump（仕込んだ誤りの dump など）。計算は1回で、
           それぞれと比べ、それぞれの中に pycheck.json を書く。終了コードは --dump（主）だけで決まる。
+  --out: 主の dump の pycheck.json を書くフォルダ（既定は --dump）。
+  --e-round exact|mathround: E と15分足の確かめの丸め。既定 exact = double の正確な値を、ちょうど半分なら
+          上へ丸める（チャートの丸め Number(v.toFixed(d))、supabase/functions/live-chart/logic.ts と同じ）。
+          mathround = Math.round(x*10^d)/10^d（仕様に初め書いた形。チャートの丸めとは違う。調べる用）。
+  --mine DIR: 自分の計算を dump と同じ形のファイルで DIR に書き出す（食い違いを調べる用）。
 終了コード: 0 = 主の dump と全件一致、1 = 主の dump に食い違いがある、2 = 入力の誤り。
 """
 import argparse
@@ -58,8 +63,10 @@ BLK = 1024
 NAN = float('nan')
 
 
-def isnan(v):
-    return v is None or (isinstance(v, float) and math.isnan(v))
+def die(msg):
+    """入力の誤り: 理由を出して終了コード 2 で止める。"""
+    print('ERROR: ' + msg, file=sys.stderr)
+    sys.exit(2)
 
 
 # ---------------------------------------------------------------- t 分布（scipy なし）
@@ -140,11 +147,6 @@ def days_from_civil(y, m, d):
 def year_of(ms):
     import datetime
     return (datetime.date(1970, 1, 1) + datetime.timedelta(days=ms // DAY)).year
-
-
-def weekday(ms):
-    """月曜 = 0 … 日曜 = 6（UTC）。1970-01-01 は木曜。"""
-    return (ms // DAY + 3) % 7
 
 
 _DST = {}
@@ -367,7 +369,7 @@ class Rates:
 
             def col(name):
                 if name not in codes:
-                    raise SystemExit(f'BIS CSV: column {name} not found in header {header}')
+                    die(f'BIS CSV: column {name} not found in header {header}')
                 return codes.index(name)
             i_f, i_a, i_t, i_v = col('FREQ'), col('REF_AREA'), col('TIME_PERIOD'), col('OBS_VALUE')
             for r in rd:
@@ -390,11 +392,11 @@ class Rates:
         import datetime
         d = datetime.date(1970, 1, 1) + datetime.timedelta(days=tau // DAY)
         mi = d.year * 12 + (d.month - 1) - 1          # τ の月の前の月
-        for back in range(0, 5):                      # 最大4か月まで持ち越す
+        for back in range(0, 4):                      # τ の月の1〜4か月前（longhist-lib の rateBefore と同じ）
             v = self.table.get((area, mi - back))
             if v is not None:
                 return v
-        raise SystemExit(f'BIS: no {area} rate for the month before {d} (carried at most 4 months)')
+        die(f'BIS: no {area} rate in the 1-4 months before {d}')
 
 
 # ---------------------------------------------------------------- 1本の注文の道筋（取引ごとの見方）
@@ -1388,8 +1390,8 @@ def compare_account(C, acc, dump, row, unlimited):
 
 
 def round_chart(x, dec, mode):
-    """E の丸め。mathround: Math.round(x*10^d)/10^d（仕様の書いた形）。
-    exact: x（double）の正確な値を、半分は上へ丸める（JS の toFixed と同じ考え方）。"""
+    """E の丸め。exact: x（double）の正確な値を、半分は上へ丸める（チャートの Number(v.toFixed(d))）。
+    mathround: Math.round(x*10^d)/10^d（調べる用）。"""
     if mode == 'mathround':
         return math.floor(x * 10 ** dec + 0.5) / 10 ** dec
     from decimal import Decimal, ROUND_HALF_UP
@@ -1424,6 +1426,50 @@ def check_inputs(C, W, pairs15, e_mode, notes):
     notes['E_mismatches_that_the_other_rounding_matches'] = n_other
 
 
+def _fmt(v):
+    if v is None:
+        return 'NaN'
+    if isinstance(v, bool):
+        return str(int(v))
+    if isinstance(v, float):
+        if math.isnan(v):
+            return 'NaN'
+        if v == int(v) and abs(v) < 1e15:
+            return str(int(v))
+        return repr(v)
+    return str(v)
+
+
+def write_mine(d, W, th, accs, unl):
+    os.makedirs(d, exist_ok=True)
+
+    def wcsv(name, cols, rows):
+        with open(os.path.join(d, name), 'w', newline='') as f:
+            w = csv.writer(f, lineterminator='\n')
+            w.writerow(cols)
+            for r in rows:
+                w.writerow([_fmt(r.get(c)) for c in cols])
+    pcols = ['i', 'P', 'shifted', 'noBar', 'none', 'market', 'filled', 't0', 'fill', 'fillGap', 'tpd', 'x', 'exit',
+             'tpGap', 'tpInFill', 'mae', 'endPx', 'value']
+    for name, paths in (('paths-main.csv', W.path_sig), ('paths-opposite.csv', W.path_opp)):
+        wcsv(name, pcols, [dict(r, i=s['i']) for s, r in zip(W.sigs, paths)])
+    with open(os.path.join(d, 'third.json'), 'w') as f:
+        json.dump(dict(main=th), f, default=jsonable)
+    for prefix, group in (('', accs), ('unlimited-', unl)):
+        for row, a in group.items():
+            b = f'acct-{prefix}{row}-'
+            wcsv(b + 'fates.csv', ['k', 'fate'], [dict(k=k, fate=f) for k, f in enumerate(a.fate)])
+            wcsv(b + 'trades.csv', [c for c, _ in [('sig', 0)] + TRADE_FIELDS], a.trades)
+            wcsv(b + 'calls.csv', ['tau', 'deadline', 'D', 'cancelled', 'deposits', 'credits', 'uAfterDeposit', 'end',
+                                   'endAt'],
+                 [dict(tau=c.tau, deadline=c.deadline, D=c.D, cancelled=c.cancelled, deposits=c.deposits,
+                       credits=c.credits, uAfterDeposit=c.uAfter, end=c.end, endAt=c.endAt) for c in a.calls])
+            wcsv(b + 'lcs.csv', ['at', 'naBefore', 'naAfter', 'closed', 'cancelled'], a.lcs)
+            wcsv(b + 'deposits.csv', ['at', 'amount', 'total', 'why'], a.deposits)
+            with open(os.path.join(d, b + 'summary.json'), 'w') as f:
+                json.dump(a.summary, f, default=jsonable)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--gmo', required=True)
@@ -1431,8 +1477,9 @@ def main():
     ap.add_argument('--also', action='append', default=[])
     ap.add_argument('--out', default=None)
     ap.add_argument('--rates', default='synthetic')
-    ap.add_argument('--e-round', choices=['mathround', 'exact'], default='mathround',
-                    help='E の丸めの確かめ方（既定は仕様の Math.round。exact は double の正確な値を半分は上へ）')
+    ap.add_argument('--mine', default=None, help='自分の計算を、dump と同じ形のファイルでこのフォルダに書き出す（調べる用）')
+    ap.add_argument('--e-round', choices=['exact', 'mathround'], default='exact',
+                    help='E の丸めの確かめ方（既定 exact = チャートの toFixed。mathround は調べる用）')
     args = ap.parse_args()
     t0 = time.time()
 
@@ -1447,8 +1494,7 @@ def main():
     main_in = inputs_of(args.dump)
     for d in args.also:
         if inputs_of(d) != main_in:
-            print(f'ERROR: {d}: signals.csv or meta.json differs from {args.dump}', file=sys.stderr)
-            sys.exit(2)
+            die(f'{d}: signals.csv or meta.json differs from {args.dump}')
 
     W = World(args.gmo, args.dump, args.rates, log)
     pairs15 = [pr.load15(args.gmo) for pr in W.pairs]
@@ -1468,6 +1514,10 @@ def main():
         e = unl[row].summary['estar']
         log(f'unlimited-{row}: {time.time() - t1:.1f}s, E* {e}')
     elapsed = time.time() - t0
+
+    if args.mine:
+        write_mine(args.mine, W, th, accs, unl)
+        log(f'my own tables written to {args.mine}')
 
     def compare(dump):
         C = Cmp()
