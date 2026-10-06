@@ -56,17 +56,18 @@ def main():
                 die(f'{k}: in two full runs')
             full[k] = (v, d)
     bad = []
-    print(f'{"planted error":24} {"hand ex. changed":>16} {"caught by":32} {"walk changed":>12} {"caught by":32}')
+    print(f'{"planted error":24} {"hand ex. changed":>16} {"caught by (mismatches)":40} {"walk changed":>12} caught by (mismatches)')
     for p in plants:
         f = fx.get(p, {'changed': 0, 'flagged': [], 'checks': []})
         g, gd = full.get(p, ({'changed': 0, 'checks': []}, None))
         py_f = py_mismatches(glob.glob(os.path.join(root, 'fixtures', '*', f'dump-{p}', 'pycheck.json')))
         py_g = py_mismatches(glob.glob(os.path.join(gd, f'dump-{p}', 'pycheck.json'))) if gd else 0
-        by_f = (['worked-out'] if f.get('flagged') else []) + list(f.get('checks', [])) + (['python'] if py_f else [])
-        by_g = list(g.get('checks', [])) + (['python'] if py_g else [])
+        # each check that found it, with how many mismatches it found (§8.102: それぞれ食い違いを何件出したか)
+        by_f = ([f'worked-out {f.get("workedOut", 0)}'] if f.get('flagged') else []) + \
+            [f'{k} {v}' for k, v in f.get('checks', {}).items()] + ([f'python {py_f}'] if py_f else [])
+        by_g = [f'{k} {v}' for k, v in g.get('checks', {}).items()] + ([f'python {py_g}'] if py_g else [])
         ch_f, ch_g = f.get('changed', 0), g.get('changed', 0)
-        print(f'{p:24} {ch_f:>16} {",".join(by_f) + (f" (python {py_f})" if py_f else "") or "-":32} '
-              f'{ch_g:>12} {",".join(by_g) + (f" (python {py_g})" if py_g else "") or "-":32}')
+        print(f'{p:24} {ch_f:>16} {", ".join(by_f) or "-":40} {ch_g:>12} {", ".join(by_g) or "-"}')
         if ch_f + ch_g == 0:
             bad.append(f'{p}: changed nothing on its rows, on the hand examples or the walk')
         if not by_f and not by_g:

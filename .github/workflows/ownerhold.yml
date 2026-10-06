@@ -240,7 +240,7 @@ jobs:
       - name: The Python on the same files
         run: |
           pip install -q numpy
-          python3 research/ownerhold-check.py --quiet --gmo research/.cache --dump research/out/ownerhold/real/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --out research/out/ownerhold/real
+          python3 research/ownerhold-check.py --quiet --expect-real --gmo research/.cache --dump research/out/ownerhold/real/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --out research/out/ownerhold/real
       - name: The numbers (every check passed)
         env:
           MODE: print

@@ -412,7 +412,9 @@ def compute_path(pr, P0, dirn, E, tp, end, taus):
     r['P'] = P
     t = pr.t
     n = pr.n
-    if P >= end or n == 0 or P >= int(t[-1]) + MIN:
+    # 何もしない: P が END 以後か、足が1本も無い（データの最後の足より後で END より前の P は、足の無い P として
+    # 最後の終値で判定する。§8.102 注文の時点。P より前に足が無いときは下で何もしない）
+    if P >= end or n == 0:
         r['none'] = 1
         return r
     kk = int(np.searchsorted(t, P, 'left'))
@@ -555,7 +557,10 @@ class World:
         self.meta = json.load(open(os.path.join(dump, 'meta.json')))
         m = self.meta
         self.start, self.end, self.split = int(m['start']), int(m['end']), int(m['split'])
-        self.delay = int(m.get('delay', 2))
+        # P は §8.102 の決まり（T＋2分、遅れた合図は窓 i+1 の確定＋2分＝T＋17分）から自分で出す。meta の delay は
+        # 照らすだけ（check_inputs の 'meta'）
+        self.delay = 2
+        self.meta_delay = m.get('delay')
         self.startYen = float(m['startYen'])
         self.cap = float(m['cap'])
         self.rates = Rates(rates_spec)
@@ -597,7 +602,8 @@ class World:
                 self.sigs.append(dict(i=int(r['i']), pair=r['pair'], p=PAIRS.index(r['pair']),
                                       dir=1 if r['side'] == 'BUY' else -1, side=r['side'],
                                       open=int(r['open']), T=int(r['T']), E=float(r['E']), tpIn=float(r['tp']),
-                                      late=r['late'], base=int(r['base'])))
+                                      late=r['late'], lateN=(1 if str(r['late']).strip() == '1' else 0),
+                                      base=int(r['base'])))
 
     def g_of(self, s):
         g = int(np.searchsorted(self.G, s, 'left'))
@@ -609,7 +615,7 @@ class World:
         self.path_sig, self.path_opp = [], []
         for s in self.sigs:
             pr = self.pairs[s['p']]
-            P0 = s['base'] + self.delay * MIN
+            P0 = s['T'] + (15 * s['lateN'] + self.delay) * MIN
             for dirn, out in ((s['dir'], self.path_sig), (-s['dir'], self.path_opp)):
                 tp = s['E'] + dirn * TP_PIPS * pr.unit
                 r = compute_path(pr, P0, dirn, s['E'], tp, self.end, self.taus)
@@ -1452,6 +1458,25 @@ def round_chart(x, dec, mode):
     return float(Decimal(x).quantize(Decimal(1).scaleb(-dec), ROUND_HALF_UP))
 
 
+EXPECT_REAL = dict(startYen=300000.0, cap=1000000.0, start='2024-01-01T00:00:00Z', split='2025-05-19T00:00:00Z')
+
+
+def check_meta(C, W, expect_real):
+    """注文の時刻の元（§8.102: P＝T＋2分。遅れた合図は窓 i+1 の確定 T＋15分の2分後）と、実データの run の決まった値"""
+    C.check('meta', 'delay', 'delay', W.meta_delay, 2, 'exact')
+    for s in W.sigs:
+        C.check('signals.time', s['i'], 'T', s['T'], s['open'] + 15 * MIN, 'exact')
+        C.check('signals.time', s['i'], 'late', str(s['late']).strip() in ('0', '1'), True, 'str')
+        C.check('signals.time', s['i'], 'base', s['base'], s['T'] + 15 * MIN * s['lateN'], 'exact')
+    if expect_real:
+        import datetime
+        iso = lambda ms: datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        C.check('meta', 'real', 'startYen', W.startYen, EXPECT_REAL['startYen'], 'exact')
+        C.check('meta', 'real', 'cap', W.cap, EXPECT_REAL['cap'], 'exact')
+        C.check('meta', 'real', 'start', iso(W.start), EXPECT_REAL['start'], 'str')
+        C.check('meta', 'real', 'split', iso(W.split), EXPECT_REAL['split'], 'str')
+
+
 def check_inputs(C, W, pairs15, e_mode, notes):
     # E と 15分足（合図の足の中値の終値、チャートと同じ丸め）
     n_skip = n_other = 0
@@ -1534,6 +1559,8 @@ def main():
     ap.add_argument('--mine', default=None, help='自分の計算を、dump と同じ形のファイルでこのフォルダに書き出す（調べる用）')
     ap.add_argument('--e-round', choices=['exact', 'mathround'], default='exact',
                     help='E の丸めの確かめ方（既定 exact = チャートの toFixed。mathround は調べる用）')
+    ap.add_argument('--expect-real', action='store_true',
+                    help='実データの run: meta の startYen・cap・start・split が §8.102 の値（30万円・100万円・2024-01-01・2025-05-19）と同じかも照らす')
     ap.add_argument('--quiet', action='store_true',
                     help='実データ用: 計算した数（追証・ロスカット・入金の回数、E*、比べた件数、食い違いの例）を出さず、'
                          '食い違いの合計と、食い違いのあった種類の名前だけを出す（§8.102 確かめ B (5)）')
@@ -1585,6 +1612,7 @@ def main():
         for msg in W.problems:
             C.bad('load', 'gmo', msg, None, None)
         check_inputs(C, W, pairs15, args.e_round, C.notes)
+        check_meta(C, W, args.expect_real)
         compare_paths(C, W, dump)
         compare_emails(C, W, dump)
         compare_third(C, th, dump)

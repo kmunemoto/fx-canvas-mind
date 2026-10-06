@@ -687,6 +687,8 @@ const cutCheckOf = (
     if (side !== ours) return bad(`${isoOf(times[i])}${late ? " late" : ""}: mine=${ours || "-"} cut=${side || "-"}`);
     const s = mailed.get(`${times[i]}|${late ? 1 : 0}`);
     if (s && (theirs[0].close !== s.E || theirs[0].tps?.[1] !== s.tp)) bad(`${isoOf(times[i])}${late ? " late" : ""}: E ${s.E} / ${theirs[0].close}, TP2 ${s.tp} / ${theirs[0].tps?.[1]}`);
+    // and when: T the bar's close, the order's base the close of the bar whose read found it (P = base + 2 minutes)
+    if (s && (s.T !== times[i] + STEP15 || s.base !== times[lastBar] + STEP15)) bad(`${isoOf(times[i])}${late ? " late" : ""}: T ${isoOf(s.T)}, base ${isoOf(s.base)}, read at ${isoOf(times[lastBar] + STEP15)}`);
   };
   for (let i = 0; i < times.length; i++) {
     if (!inPeriod(i) || !anchorOf(i)) continue;

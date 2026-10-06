@@ -187,7 +187,8 @@ interface Analysis {
   estar: Record<string, unknown>;
   m: Record<string, { M1: number; M2: number }>;
   extra: Record<string, unknown>;
-  checks: Record<string, { ok: boolean; detail: unknown }>;
+  // each check: passed or not, its detail, and how many mismatches it found (n; §8.102 確かめ A: the planted errors' counts)
+  checks: Record<string, { ok: boolean; detail: unknown; n?: number }>;
   // every decision and number, one string each, for the planted errors' diff and the Python's
   decisions: string[];
   dump: Record<string, string>;
@@ -298,7 +299,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   const thirdHow = plant === "weekCells" ? "weekCells" : plant === "plain" ? "plain" : "main";
   const third = { main: thirdOf(rows, thirdHow), week: thirdOf(rowsW), weekCells: thirdOf(rows, "weekCells"), plain: thirdOf(rows, "plain"), gaps24: { signal: gapS, opposite: gapO }, outside, rows: rows.length };
   decisions.push(`third|${fx(third.main.main ?? NaN)}|${fx(third.main.L ?? NaN)}`);
-  checks.dOutside = { ok: outside === 0, detail: outside };
+  checks.dOutside = { ok: outside === 0, detail: outside, n: outside };
 
   // the paths, each decision a line
   for (const v of variants) {
@@ -313,11 +314,11 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     probe: ds.reads.reduce((a, r) => ({ compared: a.compared + r.check.compared, mismatched: a.mismatched + r.check.mismatched, examples: [...a.examples, ...r.check.examples].slice(0, 10) }), { compared: 0, mismatched: 0, examples: [] as string[] }),
     probeLate: ds.reads.reduce((a, r) => ({ compared: a.compared + r.checkLate.compared, mismatched: a.mismatched + r.checkLate.mismatched, examples: [...a.examples, ...r.checkLate.examples].slice(0, 10) }), { compared: 0, mismatched: 0, examples: [] as string[] }),
   };
-  checks.signalProbe = { ok: signals.probe.mismatched === 0 && signals.probeLate.mismatched === 0, detail: { probe: signals.probe, probeLate: signals.probeLate } };
-  checks.loads = { ok: ds.load.failed === 0, detail: ds.load };
+  checks.signalProbe = { ok: signals.probe.mismatched === 0 && signals.probeLate.mismatched === 0, detail: { probe: signals.probe, probeLate: signals.probeLate }, n: signals.probe.mismatched + signals.probeLate.mismatched };
+  checks.loads = { ok: ds.load.failed === 0, detail: ds.load, n: ds.load.failed };
   if (ds.reads.some((r) => r.cut)) {
     const cuts = ds.reads.map((r) => ({ pair: r.pair, ...(r.cut ?? { compared: 0, mismatched: 0, examples: ["not run"] }) }));
-    checks.signalCut = { ok: cuts.every((c) => c.compared > 0 && c.mismatched === 0), detail: cuts };
+    checks.signalCut = { ok: cuts.every((c) => c.compared > 0 && c.mismatched === 0), detail: cuts, n: cuts.reduce((a2, c) => a2 + c.mismatched, 0) };
   }
   const out: Analysis = { name: ds.name, signals, third, perEmail: {}, accounts: {}, estar: {}, m: {}, extra: {}, checks, decisions, dump: {} };
   if (parts === "third") return out;
@@ -330,17 +331,19 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   // look-ahead: every decision of the main paths, both ways
   let laCompared = 0;
   const laMoved: string[] = [];
+  let laMovedAll = 0;
   for (const v of [VARIANTS[0], VARIANTS[1]]) {
     sigs.forEach((s, i) => {
       const p = paths[v.name][i];
       const hs = [p.P + DAY_MS, p.P + WEEK].filter((h) => h <= ctx.end);
       const r = lookAhead(booksMain[s.pi], orderOf(s, v), opts(v), p, hs);
       laCompared += r.compared;
+      laMovedAll += r.moved.length;
       for (const m of r.moved) if (laMoved.length < 20) laMoved.push(`${v.name} ${i} ${s.pair} ${iso(s.T)} ${m}`);
       if (r.moved.length && laMoved.length >= 20) laMoved.push("…");
     });
   }
-  checks.lookAheadPaths = { ok: laMoved.length === 0, detail: { compared: laCompared, moved: laMoved.slice(0, 20) } };
+  checks.lookAheadPaths = { ok: laMoved.length === 0, detail: { compared: laCompared, movedAll: laMovedAll, moved: laMoved.slice(0, 20) }, n: laMovedAll };
   // checks: no TP in the bar a trade came in on (§8.102: the entry bar's TP is not counted), every path of every variant
   // (the look-ahead check above cuts after the bar it judges, so a TP read from the entry bar itself passes it)
   const tpAfter = { compared: 0, bad: 0, examples: [] as string[] };
@@ -354,12 +357,12 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
       }
     });
   }
-  checks.tpAfterEntryPaths = { ok: tpAfter.bad === 0, detail: tpAfter };
+  checks.tpAfterEntryPaths = { ok: tpAfter.bad === 0, detail: tpAfter, n: tpAfter.bad };
 
   // ---- the accounts ----
   const mk = (books: M1[], from = ctx.start): Market => ({ books, closes, split: ctx.split, end: ctx.end, from });
-  // an email whose path is nothing at all (P at or past END, or past the data: the week's last bars ended before
-  // P, as at END on a Saturday) is not ordered in the accounts either, as in the per-email view and the Python
+  // an email whose path is nothing at all (P at or past END, or no bar before P) is not ordered in the accounts
+  // either, as in the per-email view and the Python
   const ordersOf = (v: Variant, keep: (s: Sig, i: number) => boolean = () => true): OrderIn[] =>
     sigs.map((s, i) => ({ sig: i, pi: s.pi, ...orderOf(s, v) })).filter((o, k) => keep(sigs[k], k) && !paths[v.name][k].none);
   const swapMain = swapFrom(ds.rates, 0.5);
@@ -441,14 +444,17 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   }
   decisions.push(`m|${fx(out.m.none.M1, 6)}|${fx(out.m.none.M2, 6)}|${fx(out.m.swap.M1, 6)}|${fx(out.m.swap.M2, 6)}`);
   // checks: the all-accepted path's fills and TPs are the paths' (signal side, and the opposite on its own path)
-  const vsPaths = (u: AccountOut, ps: Path[]) => {
+  const vsPaths = (u: AccountOut, ps: Path[], orders: OrderIn[]) => {
     const by = new Map(u.trades.map((t) => [t.sig, t]));
+    // each email's fate in the all-accepted path ("none": not ordered, or the engine found no price before P)
+    const fateBy = ps.map(() => "none");
+    u.fates.forEach((f, k) => (fateBy[orders[k].sig] = f));
     let bad = 0;
     const ex: string[] = [];
     ps.forEach((p, i) => {
       const t = by.get(i);
       const pf = !p.none && p.fillK !== -2;
-      const ok = pf ? !!t && t.t0 === p.t0 && t.fill === p.fill && (p.tpK >= 0 ? t.how === "tp" && t.x === p.x && t.exit === p.exit : t.how === "held" && t.exit === p.endPx) : !t;
+      const ok = (p.none === (fateBy[i] === "none")) && (pf ? !!t && t.t0 === p.t0 && t.fill === p.fill && (p.tpK >= 0 ? t.how === "tp" && t.x === p.x && t.exit === p.exit : t.how === "held" && t.exit === p.endPx) : !t);
       if (!ok) {
         bad++;
         if (ex.length < 5) ex.push(`${i} ${sigs[i].pair} ${iso(sigs[i].T)}`);
@@ -456,9 +462,12 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     });
     return { compared: ps.length, mismatched: bad, examples: ex };
   };
-  const vp = vsPaths(unlOut.main, paths.main);
-  const vo = vsPaths(runAccount(mk(ds.m1s), ordersOf(VARIANTS[1]), { ...base, unlimited: true }), paths.opposite);
-  checks.engineVsPaths = { ok: vp.mismatched === 0 && vo.mismatched === 0, detail: { signal: vp, opposite: vo } };
+  // the orders handed in leave out the emails whose path is nothing at all: the all-accepted path must then leave
+  // exactly those unordered — and an email the engine finds no price for must be one the path left out
+  const vp = vsPaths(unlOut.main, paths.main, oMain);
+  const oOpp = ordersOf(VARIANTS[1]);
+  const vo = vsPaths(runAccount(mk(ds.m1s), oOpp, { ...base, unlimited: true }), paths.opposite, oOpp);
+  checks.engineVsPaths = { ok: vp.mismatched === 0 && vo.mismatched === 0, detail: { signal: vp, opposite: vo }, n: vp.mismatched + vo.mismatched };
   // checks: no TP in the minute a trade came in on, every account row and the all-accepted paths
   const tpAfterA = { compared: 0, bad: 0, examples: [] as string[] };
   for (const [name, a] of [...Object.entries(outs), ...Object.entries(unlOut).map(([k, u]) => [`unlimited-${k}`, u] as const)]) {
@@ -471,7 +480,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
       }
     }
   }
-  checks.tpAfterEntryAccount = { ok: tpAfterA.bad === 0, detail: tpAfterA };
+  checks.tpAfterEntryAccount = { ok: tpAfterA.bad === 0, detail: tpAfterA, n: tpAfterA.bad };
   // checks: the engine's cut mode (what the clock has not reached rewritten) changes nothing, on the decision rows and the all-accepted path
   const cut: Record<string, unknown> = {};
   let cutOk = true;
@@ -489,7 +498,9 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     cut[`unlimited ${pp}`] = { poisoned: c.poisoned, same };
     if (c.poisoned !== 0 || !same) cutOk = false;
   }
-  checks.lookAheadAccount = { ok: cutOk, detail: cut };
+  // n: the reads rewritten (each one a look ahead), and the rows whose run changed under the rewriting
+  const cutN = Object.values(cut as Record<string, { poisoned: number; same: boolean }>).reduce((a2, c) => a2 + c.poisoned + (c.same ? 0 : 1), 0);
+  checks.lookAheadAccount = { ok: cutOk, detail: cut, n: cutN };
   // checks: E* just over runs clean, just under does not (each decision row)
   const est: Record<string, unknown> = {};
   let estOk = true;
@@ -502,7 +513,8 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     est[name] = { estar: E, over: events(up), under: events(dn) };
     if (!(E > 0) || events(up) !== 0 || events(dn) === 0) estOk = false;
   }
-  checks.estar = { ok: estOk, detail: est };
+  const estN = Object.values(est as Record<string, { estar: number; over: number; under: number }>).filter((e) => !(e.estar > 0) || e.over !== 0 || e.under === 0).length;
+  checks.estar = { ok: estOk, detail: est, n: estN };
 
   // ---- the counts beside them ----
   const between = tausOf(closes);
@@ -521,7 +533,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   }
   const nightsEngine = unlOut.mainSwap.swapNights;
   const nightsTrades = Object.values(swapDays).reduce((s, c) => s + c.nights, 0);
-  checks.swapNights = { ok: nightsEngine === nightsTrades, detail: { engine: nightsEngine, trades: nightsTrades } };
+  checks.swapNights = { ok: nightsEngine === nightsTrades, detail: { engine: nightsEngine, trades: nightsTrades }, n: Math.abs(nightsEngine - nightsTrades) };
   // checks: the swap's rule (§8.102 確かめ A) on every NY close and pair, both markups: a buy's and a sell's
   // together −2 × the markup × the amount × the days ÷ 365, the days tausOf's (a Wednesday's three), a buy's
   // the rates' difference less the markup, and a USD/JPY sell paying while the dollar's rate is over the yen's
@@ -557,7 +569,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   }
   // (none compared only where no close with prices falls in the period: a short hand example)
   const closesIn = closes.filter((c) => c.tau >= ctx.start && c.tau <= ctx.end && PAIRS.some((_p, pi) => Number.isFinite(midAtTau(pi, c.tau)))).length;
-  checks.swapRule = { ok: rule.bad === 0 && (rule.compared > 0 || closesIn === 0), detail: { ...rule, closesIn } };
+  checks.swapRule = { ok: rule.bad === 0 && (rule.compared > 0 || closesIn === 0), detail: { ...rule, closesIn }, n: rule.bad };
   // checks: each trade's swap in the all-accepted path with the main swap, made again from the closes it was held
   // over (entered before τ, still held at τ + 15 minutes, or at END) at each τ's mid — the engine's own sum
   const again = { compared: 0, bad: 0, examples: [] as string[] };
@@ -574,7 +586,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
       if (again.examples.length < 5) again.examples.push(`${PAIRS[t.pi]} ${t.dir === 1 ? "BUY" : "SELL"} ${iso(sigs[t.sig].T)}`);
     }
   }
-  checks.swapAgain = { ok: again.bad === 0, detail: again };
+  checks.swapAgain = { ok: again.bad === 0, detail: again, n: again.bad };
   const mainLine = out.accounts.main;
   // the main account's trades' swap days, for the swap that would bring it to 0 a day
   let mainDays = 0;
@@ -748,7 +760,7 @@ if (MODE === "synthetic") {
       }
       if (isFull) {
         // what each planted error changed and which own checks failed (the plants job sums these with the hand examples')
-        const plantsFull: Record<string, { changed: number; all?: number; checks: string[] }> = {};
+        const plantsFull: Record<string, { changed: number; all?: number; checks: Record<string, number> }> = {};
         await writeJson(`${dir}/analysis.json`, { ...a, dump: undefined, decisions: undefined, raw: undefined });
         await writeDump(`${dir}/dump`, a, CTX);
         await Deno.writeTextFile(`${dir}/decisions.txt`, a.decisions.join("\n"));
@@ -759,14 +771,16 @@ if (MODE === "synthetic") {
           const caught = PAIRS.map((pair, pi) => signalsOf(pair, pi, qs[pi], START_MS, END_MS, true, "signalNextBar").cut!).map((c) => c.mismatched);
           log(`  planted signalNextBar: the cut check's mismatches by pair ${caught.join(",")}`);
           if (caught.some((m) => m === 0)) pass = false;
-          plantsFull.signalNextBar = { changed: caught.reduce((a2, m) => a2 + m, 0), checks: caught.every((m) => m > 0) ? ["signalCut"] : [] };
+          const cutAll = caught.reduce((a2, m) => a2 + m, 0);
+          plantsFull.signalNextBar = { changed: cutAll, checks: caught.every((m) => m > 0) ? { signalCut: cutAll } : {} };
         }
         // the planted errors on this walk: what each one changes, and which checks see it
         for (const plant of plants.filter((x: string) => x !== "signalNextBar")) {
           const b = analyse(ds, CTX, "all", plant);
           const ch = changedOf(a.decisions, b.decisions, plant);
-          const failed = Object.entries(b.checks).filter(([, c]) => !c.ok).map(([k]) => k);
-          log(`  planted ${plant}: ${ch.all} decisions or numbers changed, ${ch.counted} on its rows; own checks failing: ${failed.join(",") || "none"}`);
+          // the own checks that failed, each with how many mismatches it found
+          const failed = Object.fromEntries(Object.entries(b.checks).filter(([, c]) => !c.ok).map(([k, c]) => [k, c.n ?? 1]));
+          log(`  planted ${plant}: ${ch.all} decisions or numbers changed, ${ch.counted} on its rows; own checks failing: ${Object.entries(failed).map(([k, v]) => `${k} ${v}`).join(",") || "none"}`);
           plantsFull[plant] = { changed: ch.counted, all: ch.all, checks: failed };
           await Deno.writeTextFile(`${dir}/decisions-${plant}.txt`, b.decisions.join("\n"));
           await writeDump(`${dir}/dump-${plant}`, b, CTX);
@@ -819,7 +833,7 @@ if (MODE === "fixtures") {
   const plants = env("PLANTS", "").split(",").filter(Boolean);
   const only = env("ONLY", "");
   let pass = true;
-  const byPlant: Record<string, { changed: number; all: number; flagged: string[]; checks: string[] }> = {};
+  const byPlant: Record<string, { changed: number; all: number; flagged: string[]; workedOut: number; checks: Record<string, number> }> = {};
   for (const f of FIXTURES) {
     if (only && !only.split(",").includes(f.name)) continue;
     const ds: DataSet = { name: f.name, m1s: f.m1s, sigs: f.sigs, reads: [], load: newLoadStats(), src: null, rates: synRates };
@@ -838,16 +852,18 @@ if (MODE === "fixtures") {
       const ch = changedOf(a.decisions, b.decisions, plant);
       const changed = ch.counted;
       const pf = f.check(b.raw!.outs, b.raw!.unl);
-      const pb = Object.entries(b.checks).filter(([, c]) => !c.ok).map(([k]) => k);
-      const e = (byPlant[plant] ??= { changed: 0, all: 0, flagged: [], checks: [] });
+      const pb = Object.entries(b.checks).filter(([, c]) => !c.ok);
+      const e = (byPlant[plant] ??= { changed: 0, all: 0, flagged: [], workedOut: 0, checks: {} });
       e.changed += changed;
       e.all += ch.all;
+      // the worked-out values that did not hold, and each own check's mismatches, summed over the hand examples
       if (pf.length) e.flagged.push(f.name);
-      for (const k of pb) if (!e.checks.includes(k)) e.checks.push(k);
+      e.workedOut += pf.length;
+      for (const [k, c] of pb) e.checks[k] = (e.checks[k] ?? 0) + (c.n ?? 1);
       if (ch.all) await writeDump(`${dir}/dump-${plant}`, b, f.ctx);
     }
   }
-  for (const [plant, e] of Object.entries(byPlant)) log(`planted ${plant}: ${e.all} decisions or numbers changed over the hand examples, ${e.changed} on its rows; their worked-out checks fail in ${e.flagged.join(",") || "none"}; own checks failing: ${e.checks.join(",") || "none"}`);
+  for (const [plant, e] of Object.entries(byPlant)) log(`planted ${plant}: ${e.all} decisions or numbers changed over the hand examples, ${e.changed} on its rows; their worked-out checks fail in ${e.flagged.join(",") || "none"} (${e.workedOut} values); own checks failing: ${Object.entries(e.checks).map(([k, v]) => `${k} ${v}`).join(",") || "none"}`);
   await writeJson(`${OUT}/fixtures/plants-fixtures.json`, byPlant);
   log(`hand examples: ${pass ? "all as worked out" : "NOT ALL AS WORKED OUT"}`);
   if (!pass) Deno.exit(1);

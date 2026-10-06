@@ -231,7 +231,9 @@ export const follow = (bk: Book, o: Order, opts: FollowOpts, cut: Cut = NO_CUT):
     }
   }
   const path: Path = { P, shifted, noBar: false, none: false, market: false, fillK: -2, t0: NaN, fill: NaN, fillGap: false, tpK: -1, x: NaN, exit: NaN, tpGap: false, tpInFill: false, mae: NaN, endPx: NaN };
-  if (P >= opts.endMs || m.n === 0 || P >= m.t[m.n - 1] + MINUTE) {
+  // nothing at all: P at or past END, or no bar at all (P past the data's last bar but before END — the week's
+  // last bars ended, END on a Saturday — is a P without a bar: judged on the last close, §8.102 注文の時点)
+  if (P >= opts.endMs || m.n === 0) {
     path.none = true;
     return path;
   }
