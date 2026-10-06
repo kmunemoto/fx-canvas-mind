@@ -58,8 +58,8 @@ def main():
     bad = []
     print(f'{"planted error":24} {"hand ex. changed":>16} {"caught by (mismatches)":40} {"walk changed":>12} caught by (mismatches)')
     for p in plants:
-        f = fx.get(p, {'changed': 0, 'flagged': [], 'checks': []})
-        g, gd = full.get(p, ({'changed': 0, 'checks': []}, None))
+        f = fx.get(p, {'changed': 0, 'flagged': [], 'workedOut': 0, 'checks': {}})
+        g, gd = full.get(p, ({'changed': 0, 'checks': {}}, None))
         py_f = py_mismatches(glob.glob(os.path.join(root, 'fixtures', '*', f'dump-{p}', 'pycheck.json')))
         py_g = py_mismatches(glob.glob(os.path.join(gd, f'dump-{p}', 'pycheck.json'))) if gd else 0
         # each check that found it, with how many mismatches it found (§8.102: それぞれ食い違いを何件出したか)
