@@ -29,6 +29,7 @@ on:
     paths:
       - research/ownerhold*.ts
       - research/ownerhold-check.py
+      - research/ownerhold-plants.py
       - .github/workflows/ownerhold.yml
   workflow_dispatch:
     inputs:
