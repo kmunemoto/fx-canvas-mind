@@ -491,7 +491,7 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   }
   if (!m) return "この時間足は測っていません。";
   return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(m.pips).toFixed(2)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。` +
-    (unmeasured ? `${pairJa(s.pair)} そのものは測っていません（GMO の FX の値です）。` : "");
+    (unmeasured ? `${pairJa(s.pair)}そのものは測っていません（GMO の FX の値です）。` : "");
 };
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
@@ -565,7 +565,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   // Q-Trend's STRONG in the same brackets: 買い（BUY・STRONG）
   const qtSide = `${s.side === "BUY" ? "買い" : "売り"}（${s.side}${s.strong ? "・STRONG" : ""}）`;
   const source = twelve
-    ? `足は Twelve Data のもの（${pairJa(s.pair)} は GMOコインにないため）で、アプリのチャートと同じです。`
+    ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）で、アプリのチャートと同じです。`
     : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。";
   const footer = [
     `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
@@ -574,7 +574,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   if (s.rule === "qtrend") {
     const how = s.side === "BUY" ? "上" : "下";
     return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${qtSide}のサイン（Q-Trend）`, [
-      `${pairJa(s.pair)} の${tf}で、Q-Trend の${qtSide}のサインが出ました。`,
+      `${pairJa(s.pair)}の${tf}で、Q-Trend の${qtSide}のサインが出ました。`,
       [
         `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
         `終値 ${px(s.close)} が Q-Trend の線 ${px(s.line)} を、ε（ATR(14)×1 = ${px(s.eps)}）より大きく${how}に抜けました`,
@@ -593,7 +593,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const sideU = s.side === "BUY" ? "買い（Buy ☆）" : "売り（Sell ☆）";
   const cross = s.side === "BUY" ? "30 を下から上に抜けました" : "70 を上から下に抜けました";
   return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideU}のサイン（ULTRA）`, [
-    `${pairJa(s.pair)} の${tf}で、ULTRA の${sideU}のサインが出ました。`,
+    `${pairJa(s.pair)}の${tf}で、ULTRA の${sideU}のサインが出ました。`,
     [`判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`, `RSI(14): ${r1(s.rsiPrev)} → ${r1(s.rsi)}（${cross}）`].join("\n"),
     [
       gold ? "ULTRA の目安（損切りは13ドル、利確は4・10・16ドル）:" : "ULTRA の目安（損切りは13pips、利確は4・10・16pips）:",

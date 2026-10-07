@@ -512,7 +512,7 @@ describe("#155 what the sweep reads, and when", () => {
     const ja = renderIndicatorMail(sig, "ja");
     // #211: the Japanese email names the pair as 楽天FX does; the English one keeps the code
     expect(ja.subject).toBe("【Sextant】ドル/円 5分足 売り（SELL・STRONG）のサイン（Q-Trend）");
-    expect(ja.text.split("\n\n")[0]).toBe("ドル/円 の5分足で、Q-Trend の売り（SELL・STRONG）のサインが出ました。");
+    expect(ja.text.split("\n\n")[0]).toBe("ドル/円の5分足で、Q-Trend の売り（SELL・STRONG）のサインが出ました。");
     expect(ja.text).not.toContain("USD/JPY");
     for (const part of [
       "損切り・利確の目安（ULTRA と同じ数字）:",
@@ -546,8 +546,8 @@ describe("#155 what the sweep reads, and when", () => {
     // pair now; this was EUR/CHF)
     const twelve = renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h", close: 19.123, sl: 19.253, tps: [19.083, 19.023, 18.963] }, "ja");
     expect(twelve.text).toContain("  損切り 19.253（13.0pips）");
-    expect(twelve.text).toContain("香港ドル/円 そのものは測っていません（GMO の FX の値です）。");
-    expect(twelve.text).toContain("足は Twelve Data のもの（香港ドル/円 は GMOコインにないため）");
+    expect(twelve.text).toContain("香港ドル/円そのものは測っていません（GMO の FX の値です）。");
+    expect(twelve.text).toContain("足は Twelve Data のもの（香港ドル/円は GMOコインにないため）");
     expect(twelve.text).not.toContain("HKD/JPY");
     expect(renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h" }, "en").text).toContain("HKD/JPY itself was not measured; these are GMO's FX pairs' figures.");
     expect(h4.text).not.toContain("そのものは測っていません");
@@ -607,9 +607,9 @@ describe("#155 what the sweep reads, and when", () => {
     // #211: the owner's 15-minute ULTRA email on EUR/JPY, as 楽天FX names the pair (ユーロ/円), and gold (金)
     const ulEj = renderIndicatorMail({ ...sig, rule: "ultra", pair: "EUR/JPY", interval: "15min", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
     expect(ulEj.subject).toBe("【Sextant】ユーロ/円 15分足 売り（Sell ☆）のサイン（ULTRA）");
-    expect(ulEj.text.split("\n\n")[0]).toBe("ユーロ/円 の15分足で、ULTRA の売り（Sell ☆）のサインが出ました。");
+    expect(ulEj.text.split("\n\n")[0]).toBe("ユーロ/円の15分足で、ULTRA の売り（Sell ☆）のサインが出ました。");
     expect(ulEj.text).not.toContain("EUR/JPY");
-    expect(ulEj.html).toContain("ユーロ/円 の15分足で");
+    expect(ulEj.html).toContain("ユーロ/円の15分足で");
     expect(goldUl.subject).toBe("【Sextant】金 1時間足 売り（Sell ☆）のサイン（ULTRA）");
     const ulEjEn = renderIndicatorMail({ ...sig, rule: "ultra", pair: "EUR/JPY", interval: "15min", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "en");
     expect(ulEjEn.subject).toContain("EUR/JPY");

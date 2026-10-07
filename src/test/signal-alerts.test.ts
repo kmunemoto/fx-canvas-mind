@@ -282,7 +282,7 @@ describe("the email", () => {
     const m = renderSignalMail(sample(), "ja");
     // #211: the pair as 楽天FX names it
     expect(m.subject).toBe("【Sextant】ドル/円 15分足 買い（BUY）のサイン（RSI＋パラボリックSAR）");
-    expect(m.text.split("\n\n")[0]).toBe("ドル/円 の15分足で買い（BUY）のサインが出ました。");
+    expect(m.text.split("\n\n")[0]).toBe("ドル/円の15分足で買い（BUY）のサインが出ました。");
     expect(m.subject).toContain("15分足");
     expect(m.subject).toContain("買い（BUY）");
     expect(m.text).toContain("2026-09-24 19:00（日本時間）に確定した足");

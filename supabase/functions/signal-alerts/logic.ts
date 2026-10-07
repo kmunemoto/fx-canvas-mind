@@ -401,7 +401,7 @@ const renderGainzMail = (s: FiredSignal, lang: Lang): Mail => {
   const thenCond = s.side === "BUY" ? "安い" : "高い";
   const scope = ev?.measured ? "この時間足のサイン" : `検証した時間足の合計のサイン（${tf}は検証していません）`;
   return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${side}のサイン（GA型）`, [
-    `${pairJa(s.pair)} の${tf}で、GA型（GainzAlgo V2 Alpha 型）の${side}のサインが出ました。`,
+    `${pairJa(s.pair)}の${tf}で、GA型（GainzAlgo V2 Alpha 型）の${side}のサインが出ました。`,
     [
       `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
       `包み足・実体が足の値幅の ${body}%`,
@@ -465,7 +465,7 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
     ? `過去のチャートでの検証（${RSI_SAR_EVIDENCE.period}・${RSI_SAR_EVIDENCE.pairs}通貨ペア）: この時間足のサインの勝率は ${pct(ev.win)}%（${ev.winN}回）。損益ゼロに必要な勝率は ${be}% で、このルールだけでは届いていません。`
     : `${tf}は検証していません。検証した時間足の合計（${RSI_SAR_EVIDENCE.period}・${RSI_SAR_EVIDENCE.pairs}通貨ペア）では勝率 ${pct(all.win)}%（${all.winN}回）で、損益ゼロに必要な ${be}% に届いていません。`;
   return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${side}のサイン（RSI＋パラボリックSAR）`, [
-    `${pairJa(s.pair)} の${tf}で${side}のサインが出ました。`,
+    `${pairJa(s.pair)}の${tf}で${side}のサインが出ました。`,
     [
       `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
       `RSI(${RSI_PERIOD}): ${(s.rsiPrev ?? s.rsi).toFixed(1)} → ${s.rsi.toFixed(1)}（${cross}）`,

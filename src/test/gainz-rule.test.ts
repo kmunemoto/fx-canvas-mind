@@ -170,7 +170,7 @@ describe("#112 the GA-style alert", () => {
     const ja = renderSignalMail(s, "ja");
     // #211: as 楽天FX names the pair
     expect(ja.subject).toBe("【Sextant】ドル/円 4時間足 売り（SELL）のサイン（GA型）");
-    expect(ja.text.split("\n\n")[0]).toBe("ドル/円 の4時間足で、GA型（GainzAlgo V2 Alpha 型）の売り（SELL）のサインが出ました。");
+    expect(ja.text.split("\n\n")[0]).toBe("ドル/円の4時間足で、GA型（GainzAlgo V2 Alpha 型）の売り（SELL）のサインが出ました。");
     expect(ja.text).toContain("実体が足の値幅の 72%");
     expect(ja.text).toContain("RSI(14): 62.4（60超）");
     expect(ja.text).toContain("終値 150.000 は5本前の終値（149.800）より高い");

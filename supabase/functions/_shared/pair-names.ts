@@ -15,4 +15,5 @@ export const PAIR_JA: Readonly<Record<string, string>> = {
   "USD/HKD": "ドル/香港ドル",
 };
 
-export const pairJa = (pair: string): string => PAIR_JA[pair] ?? pair;
+// own keys only: a name such as "toString" is not a pair and stays as it is
+export const pairJa = (pair: string): string => (Object.prototype.hasOwnProperty.call(PAIR_JA, pair) ? PAIR_JA[pair] : pair);
