@@ -48,12 +48,15 @@ export const ULTRA_RULE_ID =
 export const indicatorRuleId = (rule: IndicatorRule): string => (rule === "qtrend" ? QTREND_RULE_ID : ULTRA_RULE_ID);
 
 // Every pair the live chart has, on these timeframes; those read from
-// Twelve Data on 1 hour and up only
+// Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
+// owner 2026-10-07: gold's 15-minute ULTRA emails; one more Twelve Data read
+// a 15-minute close, within the day's 800 shared with the chart)
 export const INDICATOR_PAIRS: readonly string[] = LIVE_PAIRS;
 export const INDICATOR_INTERVALS = ["5min", "15min", "1h", "4h", "1day"] as const;
 export const TWELVE_ALERT_INTERVALS = ["1h", "4h", "1day"] as const;
+export const GOLD_ALERT_INTERVALS = ["15min", "1h", "4h", "1day"] as const;
 export const indicatorIntervalsFor = (pair: string): readonly string[] =>
-  isTwelvePair(pair) ? TWELVE_ALERT_INTERVALS : INDICATOR_INTERVALS;
+  isGold(pair) ? GOLD_ALERT_INTERVALS : isTwelvePair(pair) ? TWELVE_ALERT_INTERVALS : INDICATOR_INTERVALS;
 export const isIndicatorChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && INDICATOR_PAIRS.includes(pair) &&
   indicatorIntervalsFor(pair).includes(interval);
@@ -289,6 +292,21 @@ export const twelveCloseDue = (interval: string, nowMs: number, phaseMs = 0): nu
   const age = nowMs - close;
   // a minute after the close at the earliest (Twelve Data has the bar)
   return age >= 60_000 && age <= freshFor(interval) ? close : null;
+};
+
+// #212: whether a Twelve Data chart is looked at in this minute. Where its
+// bars' phase is known, by its own close (twelveCloseDue). Where it is not —
+// and a sweep mostly runs on a fresh instance (docs §8.81, §8.105), so mostly
+// it is not — a timeframe shorter than an hour by its own UTC grid (Twelve
+// Data's 15-minute bars sit on the quarter hours), an hour and longer in the
+// first half hour of every hour, when its stored bars tell. (Before #212 only
+// the latter: every Twelve Data chart was an hour or longer, and gold's 15
+// minutes would have been looked at only in :01-:29, its :30 close lost.)
+export const twelveChartDue = (interval: string, nowMs: number, phaseMs: number | undefined): boolean => {
+  if (phaseMs !== undefined) return twelveCloseDue(interval, nowMs, phaseMs) !== null;
+  const step = LIVE_STEP_MS[interval];
+  if (step !== undefined && step < 3_600_000) return twelveCloseDue(interval, nowMs, 0) !== null;
+  return twelveCloseDue("1h", nowMs) !== null;
 };
 
 // Where a timeframe's bars start within its length, from the bars

@@ -256,7 +256,10 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
     // #180: USD/CAD again, from 1 hour as the others read from Twelve Data
     expect(indicatorChartOffered(s, "USD/CAD", "5min")).toBe(false);
     expect(indicatorChartOffered(s, "USD/CAD", "1h")).toBe(true);
-    expect(indicatorChartOffered(s, "XAU/USD", "15min")).toBe(false);
+    // #212: gold on 15 minutes too, not on 5
+    expect(indicatorChartOffered(s, "XAU/USD", "15min")).toBe(true);
+    expect(indicatorChartOffered(s, "XAU/USD", "5min")).toBe(false);
+    expect(indicatorChartOffered(s, "HKD/JPY", "15min")).toBe(false);
     expect(indicatorChartOffered(s, "XAU/USD", "1h")).toBe(true);
     // a server that does not send them yet: nothing offered
     expect(indicatorChartOffered(settings(), "USD/JPY", "5min")).toBe(false);
@@ -278,7 +281,10 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
     // #180: USD/CAD from 1 hour, as the others read from Twelve Data
     expect(screen.getByTestId("signal-alert-qtrend-USD/CAD-1h")).toBeTruthy();
     expect(screen.getByTestId("signal-alert-qtrend-USD/CAD-5min-none").textContent).toBe("—");
-    expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-15min-none")).toBeTruthy();
+    // #212: gold on 15 minutes too, not on 5
+    expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-15min")).toBeTruthy();
+    expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-5min-none").textContent).toBe("—");
+    expect(screen.getByTestId("signal-alert-qtrend-XAU/USD-5min-none").getAttribute("title")).toContain("金は15分足も");
     fireEvent.click(screen.getByTestId("signal-alert-qtrend-HKD/JPY-1h"));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "HKD/JPY", interval: "1h", on: true, rule: "qtrend", lang: "ja" }));
     await waitFor(() => expect((screen.getByTestId("signal-alert-qtrend-HKD/JPY-1h") as HTMLInputElement).checked).toBe(true));

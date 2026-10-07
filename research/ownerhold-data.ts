@@ -175,7 +175,7 @@ const readSide = async (src: Source, symbol: string, interval: string, side: "bi
 
 // the day keys a window touches (dateKeys, padded a day each way), none past END's own day;
 // the last three read again from GMO (a file kept while its day was going on is not whole)
-const keysOf = (fromMs: number, toMs: number) => {
+export const keysOf = (fromMs: number, toMs: number) => {
   const last = jstDayKey(toMs);
   const keys = dateKeys(fromMs, toMs, "day").filter((k) => k <= last);
   return { keys, fresh: new Set(keys.slice(-3)) };
@@ -307,6 +307,11 @@ export interface SynthSpec {
   trend: number;
   // every pair starts here (pips) instead of SYN's (100,000 for the trend sets)
   startPips: number | null;
+  // #206 (docs §8.103 7 (1)): pips added to the pair's spread in the minute starting at t (none: 0). In a
+  // minute it widens, the bid is the mid less half the whole spread, rounded, and the ask the bid plus the
+  // whole spread, so the spread is exactly what was set; the mid's walk and the random numbers are as they
+  // were, and a minute it does not widen is written as before.
+  extraSpread?: (pi: number, t: number) => number;
 }
 
 // the key of GMO's day file a bar is in: its day starts at 06:00 JST (21:00 UTC; research/gotobi.ts fileKeyOf)
@@ -389,6 +394,25 @@ export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: nu
     }
     if (l - half <= 0) throw new Error(`${pair} seed ${spec.seed}: the walk reached 0`);
     m.t[k] = t;
+    const extra = spec.extraSpread ? spec.extraSpread(pi, t) : 0;
+    if (extra !== 0) {
+      const whole = p.spread + extra;
+      const wh = whole / 2;
+      if (l - wh <= 0) throw new Error(`${pair} seed ${spec.seed}: the walk reached 0`);
+      const ro = r(o - wh);
+      const rc = r(x - wh);
+      m.bo[k] = ro;
+      m.bh[k] = Math.max(r(h - wh), ro, rc);
+      m.bl[k] = Math.min(r(l - wh), ro, rc);
+      m.bc[k] = rc;
+      const up = (v: number) => Number((v + whole * unit).toFixed(dg));
+      m.ao[k] = up(m.bo[k]);
+      m.ah[k] = up(m.bh[k]);
+      m.al[k] = up(m.bl[k]);
+      m.ac[k] = up(m.bc[k]);
+      k++;
+      continue;
+    }
     for (const [sgn, O, H, L, C] of [[-1, m.bo, m.bh, m.bl, m.bc], [1, m.ao, m.ah, m.al, m.ac]] as const) {
       const ro = r(o + sgn * half);
       const rc = r(x + sgn * half);
