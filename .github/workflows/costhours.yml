@@ -1,0 +1,114 @@
+# #206 (docs §8.103): ② — the slots of wide spread, chosen from GMO's 2024-2026 spreads only (stage 1),
+# then tested on data the rule was not chosen on (stage 2). The rule was fixed before any of it was read.
+#
+#   push (every run): the synthetic checks only, before any real data is read
+#     s1syn     stage 1 on the planted walks (7 (1)): the slots against the list written beforehand; the
+#               planted errors (7 (9)) — those that change the computing caught by the list and by the
+#               Python, the two that read other bars stopped by the checks of 2; the Python
+#               (research/spreadhours-check.py) on the same files, every value the same (7 (2))
+#   dispatch stage1 = yes (and only then; after s1syn passed in the same run):
+#     s1real    stage 1 on GMO's real 1-minute bars, 2024-01-01 to 2026-10-03: the spreads only, no signal and
+#               no move after one; the Python on the same files; the file printed only when both agree
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only:
+# public files fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research costhours
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/spreadhours*.ts
+      - research/spreadhours-check.py
+      - research/ownerhold-data.ts
+      - .github/workflows/costhours.yml
+  workflow_dispatch:
+    inputs:
+      stage1:
+        description: "Stage 1 on the real 1-minute bars, after the synthetic checks pass (yes/no)"
+        default: "no"
+
+permissions:
+  contents: read
+
+jobs:
+  s1syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Stage 1 on the planted walks (7 (1), and the planted errors that change the computing)
+        env:
+          MODE: synthetic
+          OUT: research/out/spreadhours/syn
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/spreadhours.ts
+      - name: The planted errors that read other bars stop (a bar before 2024; a day file outside the list)
+        env:
+          MODE: synthetic
+          OUT: research/out/spreadhours/syn
+        run: |
+          for p in prestart keys; do
+            s=0
+            PLANT=$p deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/spreadhours.ts > /tmp/plant-$p.log 2>&1 || s=$?
+            tail -n 1 /tmp/plant-$p.log
+            if [ "$s" != "3" ]; then echo "::error::PLANT $p: exit $s, not stopped by the checks"; exit 1; fi
+          done
+      - name: The Python on the same files (every value the same; each planted error differs; a day file outside the list stops it)
+        run: |
+          pip install -q numpy
+          d=research/out/spreadhours/syn
+          python3 research/spreadhours-check.py --gmo $d/gmo --dump $d/dump \
+            --also $d/plant-mean --also $d/plant-season --also $d/plant-strict --also $d/plant-baseMean --also $d/plant-usdUnit
+          s=0
+          python3 research/spreadhours-check.py --gmo $d/gmo --dump $d/dump --plant keys > /tmp/py-keys.log 2>&1 || s=$?
+          tail -n 2 /tmp/py-keys.log
+          if [ "$s" != "3" ]; then echo "::error::the Python with a day file outside the list: exit $s, not stopped"; exit 1; fi
+
+  s1real:
+    if: ${{ inputs.stage1 == 'yes' }}
+    needs: [s1syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled: the 1-minute files kept by §8.102 (opened only
+      # for the keys of the list, 2); this run's own are saved under gmo-spread-* only
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - name: Stage 1 on GMO's 1-minute bars (only the checks are printed)
+        env:
+          MODE: real
+          OUT: research/out/spreadhours/real
+        run: >
+          deno run --v8-flags=--max-old-space-size=12288
+          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
+          research/spreadhours.ts
+      - name: The Python on the same files (every value the same)
+        run: |
+          pip install -q numpy
+          python3 research/spreadhours-check.py --gmo research/.cache --dump research/out/spreadhours/real/dump
+      - name: The file (both agreed)
+        env:
+          MODE: print
+          OUT: research/out/spreadhours/real
+        run: |
+          deno run --allow-read=. --allow-env research/spreadhours.ts
+          sha256sum research/out/spreadhours/real/spread-hours.csv
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-spread-${{ github.run_id }}
