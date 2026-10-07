@@ -12,10 +12,18 @@
 #     plants    every planted error summed over the hand examples and the walk:
 #               one that changed nothing on either, or changed something
 #               where nothing caught it, fails (research/ownerhold-plants.py)
+#     bsyn      (b) on a walk: its own signals as the emails (with an email
+#               record's differences planted), three END_b, the Python on
+#               each, and the planted (b) errors each caught on some END_b
 #   確かめ B and the numbers (dispatched with real = yes, only after A passed):
 #     real      tf-winrate.ts first (the email rule reproduced), the study on
 #               GMO's 1-minute bars, the Python on the same files, and the
 #               numbers printed only when every check passed
+#   (b), every week (dispatched with end_b = the Saturday 00:00 UTC before; 確かめ A
+#   is not run again — it ran on the push of the program):
+#     weekly    the emails sent (research/ledger/ultra15.csv) on GMO's bars to
+#               END_b, the Python on the same files, the numbers printed only
+#               when every check (but the recomputed signals' own) passed
 #
 # GitHub's runners reach GMO's public price API, which the development
 # container cannot. Read-only: public files fetched, a report printed; it
@@ -39,6 +47,9 @@ on:
       end:
         description: "END (ISO, UTC)"
         default: "2026-10-03T00:00:00Z"
+      end_b:
+        description: "(b) every week: END_b, the Saturday 00:00 UTC before the run (ISO). Empty: 確かめ A (and real)"
+        default: ""
 
 permissions:
   contents: read
@@ -52,6 +63,7 @@ env:
 
 jobs:
   third:
+    if: ${{ !inputs.end_b }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -75,6 +87,7 @@ jobs:
           research/ownerhold.ts
 
   fixtures:
+    if: ${{ !inputs.end_b }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -111,6 +124,7 @@ jobs:
           if-no-files-found: error
 
   full:
+    if: ${{ !inputs.end_b }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
@@ -156,6 +170,7 @@ jobs:
           if-no-files-found: error
 
   plants:
+    if: ${{ !inputs.end_b }}
     needs: [fixtures, full]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -175,8 +190,61 @@ jobs:
           ls plants
           python3 research/ownerhold-plants.py plants orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar,signalNextBar
 
+  # (b) on a walk (確かめ for the weekly part): the walk's signals as the emails, sent a few seconds to a
+  # minute after their send time, with one dropped, one that no bar made, one entry changed, one sent late;
+  # and the hard start (the first two emails' P in Rakuten's stop, one a dollar pair, both at the market)
+  bsyn:
+    if: ${{ !inputs.end_b }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: (b) on a walk, three END_b, and the planted (b) errors
+        env:
+          MODE: bsyn
+          SEED: "1"
+          PLANTS: pFloor,windowNo24h,compareEvery
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The Python on each END_b, and each planted error caught on some END_b
+        run: |
+          pip install -q numpy
+          B=research/out/ownerhold/bsyn-1
+          fail=0
+          caught=""
+          for d in $B/end-*/; do
+            e=$(basename "$d"); e="${e#end-}T00:00:00Z"
+            echo "== END_b $e"
+            python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}dump" --rates synthetic --ledger $B/ultra15.csv --end-b "$e" || fail=1
+            for pl in pFloor windowNo24h compareEvery; do
+              r=0
+              rm -f "${d}plant-$pl/pycheck.json"
+              python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}plant-$pl/dump" --out "${d}plant-$pl" --rates synthetic --ledger $B/ultra15.csv --end-b "$e" > /tmp/pl.out 2>&1 || r=$?
+              echo "  planted $pl: $(grep -E '^main dump' /tmp/pl.out || tail -n 1 /tmp/pl.out)"
+              # caught: the Python finished (its pycheck.json written) and found mismatches; a crash is not a catch
+              if [ "$r" = 1 ] && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if (not j['ok'] and sum(j['mismatched'].values()) > 0) else 1)" "${d}plant-$pl/pycheck.json"; then
+                caught="$caught $pl"
+              elif [ "$r" != 0 ]; then echo "  the Python did not finish on $pl"; cat /tmp/pl.out; fail=1; fi
+            done
+          done
+          # the hard start (the first two emails' P in Rakuten's stop, priced from the bars before S_b)
+          for d in $B/edge-*/; do
+            e=$(basename "$d"); e="${e#edge-}T00:00:00Z"
+            echo "== the hard start, END_b $e"
+            python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}dump" --rates synthetic --ledger "${d}ultra15.csv" --end-b "$e" || fail=1
+          done
+          for pl in pFloor windowNo24h compareEvery; do
+            case " $caught " in *" $pl "*) echo "planted $pl: caught";; *) echo "planted $pl: NOT caught"; fail=1;; esac
+          done
+          exit $fail
+
   real:
-    if: ${{ inputs.real == 'yes' }}
+    if: ${{ inputs.real == 'yes' && !inputs.end_b }}
     needs: [third, fixtures, full, plants]
     runs-on: ubuntu-latest
     timeout-minutes: 340
@@ -281,6 +349,88 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ownerhold-numbers
+          path: numbers
+      - name: Part ${{ matrix.part }} of print.txt (lines 4,500 a part)
+        run: |
+          f=numbers/print.txt
+          n=$(wc -l < "$f")
+          a=$(( (${{ matrix.part }} - 1) * 4500 + 1 ))
+          b=$(( ${{ matrix.part }} * 4500 ))
+          echo "print.txt: $n lines, sha256 $(sha256sum "$f" | cut -d' ' -f1); this part: lines $a-$b"
+          if [ "${{ matrix.part }}" = "10" ] && [ "$n" -gt "$b" ]; then echo "print.txt is longer than 10 parts: lines after $b are not printed"; exit 1; fi
+          sed -n "${a},${b}p" "$f"
+
+  # (b), every week: the emails sent to END_b (§8.102 (b), 「(b) のプログラムの細部」). The ledger is the branch's
+  # research/ledger/ultra15.csv (written from the database by Claude and committed before the dispatch)
+  weekly:
+    if: ${{ inputs.end_b != '' && inputs.end_b != null }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      END_B: ${{ inputs.end_b }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The ledger (rows and sha256)
+        run: |
+          wc -l research/ledger/ultra15.csv
+          sha256sum research/ledger/ultra15.csv research/ledger/ultra15-a.csv
+      - id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - name: The BIS policy rates (the swap)
+        run: |
+          mkdir -p research/.cache/bis
+          curl -sSfL --connect-timeout 15 --max-time 300 -o /tmp/bis.zip https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip
+          unzip -o -q /tmp/bis.zip -d research/.cache/bis
+          ls -la research/.cache/bis
+      - name: (b) to END_b (the emails against the recomputed signals listed; only whether each check passed)
+        env:
+          MODE: b
+        run: |
+          BIS_CSV=$(ls research/.cache/bis/*.csv | head -n 1) deno run --v8-flags=--max-old-space-size=8192 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/ownerhold.ts
+      - name: The Python on the same files
+        run: |
+          pip install -q numpy
+          python3 research/ownerhold-check.py --quiet --gmo research/.cache --dump research/out/ownerhold/b/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --ledger research/ledger/ultra15.csv --end-b "$END_B" --out research/out/ownerhold/b
+      - name: The numbers of (b) (every check passed)
+        env:
+          MODE: printb
+        run: |
+          deno run --allow-read=. --allow-env research/ownerhold.ts > research/out/ownerhold/b/print.txt
+          wc -l research/out/ownerhold/b/print.txt
+          sha256sum research/out/ownerhold/b/print.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ownerhold-b-numbers
+          path: research/out/ownerhold/b/print.txt
+          retention-days: 30
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-${{ github.run_id }}
+
+  # (b)'s numbers, printed in parts of 4,500 lines (one job's log each, so every line can be read back)
+  numbersb:
+    needs: [weekly]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ownerhold-b-numbers
           path: numbers
       - name: Part ${{ matrix.part }} of print.txt (lines 4,500 a part)
         run: |

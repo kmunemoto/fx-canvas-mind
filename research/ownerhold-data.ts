@@ -483,6 +483,8 @@ export interface Sig {
   // the 15-minute bar's bid and ask closes (the email rule's entry, tf-winrate's)
   bidC: number;
   askC: number;
+  // (b) only: the time the email was sent (ms; research/ledger/ultra15.csv), base its minute rounded up
+  sent?: number;
 }
 
 export interface Probe {
