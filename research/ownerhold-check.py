@@ -18,10 +18,16 @@ dep0859）・すべてを受け付けた4つの行（unlimited-*: E* と M）を
           上へ丸める（チャートの丸め Number(v.toFixed(d))、supabase/functions/live-chart/logic.ts と同じ）。
           mathround = Math.round(x*10^d)/10^d（仕様に初め書いた形。チャートの丸めとは違う。調べる用）。
   --mine DIR: 自分の計算を dump と同じ形のファイルで DIR に書き出す（食い違いを調べる用）。
+  --ledger CSV --end-b ISO [--a-csv CSV]: (b)（§8.102 (b) と「(b) のプログラムの細部」）。合図は signals.csv から
+          ではなく、ledger（research/ledger/ultra15.csv）の END_b より前に送った行から自分で作り（P＝sentAt を分に
+          切り上げた時刻＋1分）、TS の signals.csv・meta（S_b・END_b）と照らす。送るまでの時間と、比べる窓
+          （ultra15-a.csv との1回の比べ）も自分で計算し、dump の delays.json・window.json と比べる。
 終了コード: 0 = 主の dump と全件一致、1 = 主の dump に食い違いがある、2 = 入力の誤り。
 """
 import argparse
 import csv
+import datetime
+import hashlib
 import heapq
 import itertools
 import json
@@ -59,6 +65,30 @@ ACCOUNT_ROWS = {
     'dep0859': dict(swap=False, worst=False, dep='0859'),
 }
 UNLIMITED_ROWS = ['main', 'mainSwap', 'worst', 'worstSwap']
+# (b): the ledger, the comparison's week start W0 (日曜 21:00 UTC), (a) の期間とファイル、比べる件数
+B_LEDGER_HEADER = 'pair,side,open,T,E,sentAt'
+B_A_HEADER = 'T,pair,side,P,week,v1d'
+B_A_SHA256 = 'ce4c6acee90bdef30f616b6a018ae34864d4e48d3c443dcfc7e6d27988be70c2'
+B_COMPARE_AT = 30
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def ms_of(text):
+    """UTC の ISO の文字列（Z 付き、ミリ秒まで）をミリ秒の整数に。"""
+    d = datetime.datetime.fromisoformat(text.strip().replace('Z', '+00:00'))
+    if d.tzinfo is None:
+        raise ValueError(f'no time zone: {text}')
+    return (d - _EPOCH) // datetime.timedelta(milliseconds=1)
+
+
+def ceil_min(ms):
+    return -(-ms // MIN) * MIN
+
+
+B_W0 = ms_of('2026-10-04T21:00:00Z')
+B_A_START = ms_of('2024-01-01T00:00:00Z')
+B_A_END = ms_of('2026-10-03T00:00:00Z')
+B_LEDGER_FROM = ms_of('2026-10-05T16:17:00Z')
 BLK = 1024
 NAN = float('nan')
 
@@ -552,7 +582,7 @@ def compare_emails(C, W, dump):
 
 # ---------------------------------------------------------------- 全体（足・時計・合図）
 class World:
-    def __init__(self, gmo, dump, rates_spec, log):
+    def __init__(self, gmo, dump, rates_spec, log, ledger=None, end_b=None):
         t_start = time.time()
         self.meta = json.load(open(os.path.join(dump, 'meta.json')))
         m = self.meta
@@ -561,6 +591,9 @@ class World:
         # 照らすだけ（check_inputs の 'meta'）
         self.delay = 2
         self.meta_delay = m.get('delay')
+        # (b): 合図は ledger から自分で作る（P＝sentAt を分に切り上げた時刻＋1分）
+        self.mode_b = ledger is not None
+        self.end_b = end_b
         self.startYen = float(m['startYen'])
         self.cap = float(m['cap'])
         self.rates = Rates(rates_spec)
@@ -591,6 +624,9 @@ class World:
         jj = np.maximum(j, 0)
         self.stopG = (j >= 0) & (G < self.taus[jj] + STOP_LEN) if self.taus.size else np.zeros(G.size, bool)
         self.read_signals(dump)
+        if self.mode_b:
+            self.sigs_ts = self.sigs
+            self.read_ledger(ledger)
         t1 = time.time()
         self.compute_paths()
         log(f'paths for {len(self.sigs)} signals x 2 sides in {time.time() - t1:.1f}s')
@@ -603,7 +639,53 @@ class World:
                                       dir=1 if r['side'] == 'BUY' else -1, side=r['side'],
                                       open=int(r['open']), T=int(r['T']), E=float(r['E']), tpIn=float(r['tp']),
                                       late=r['late'], lateN=(1 if str(r['late']).strip() == '1' else 0),
-                                      base=int(r['base'])))
+                                      base=int(r['base']),
+                                      sent=int(r['sent']) if r.get('sent') not in (None, '') else None))
+
+    def read_ledger(self, path):
+        """(b) の合図: ledger の END_b より前に送った行。E はメールの値、利確2は E ± 10 pips、base は sentAt を
+        分に切り上げた時刻（P＝base＋1分）。並びは P、楽天の一覧の順、買いが先、足の始まりの順。"""
+        with open(path, newline='') as f:
+            lines = [l.rstrip('\r\n') for l in f if l.strip() != '']
+        if not lines or lines[0] != B_LEDGER_HEADER:
+            die(f'{path}: the header is not {B_LEDGER_HEADER}')
+        self.ledger = []
+        seen = set()
+        for n, l in enumerate(lines[1:], 1):
+            c = l.split(',')
+            if len(c) != 6 or c[0] not in PAIRS or c[1] not in ('BUY', 'SELL'):
+                die(f'{path} row {n}: {l}')
+            r = dict(pair=c[0], side=c[1], open=ms_of(c[2]), T=ms_of(c[3]), E=float(c[4]), sent=ms_of(c[5]))
+            if r['open'] % (15 * MIN) != 0 or r['T'] != r['open'] + 15 * MIN or r['sent'] < r['T'] or not r['E'] > 0:
+                die(f'{path} row {n}: {l}')
+            key = (r['pair'], r['side'], r['open'])
+            if key in seen:
+                die(f'{path} row {n}: twice')
+            seen.add(key)
+            if self.ledger and r['sent'] < self.ledger[-1]['sent']:
+                die(f'{path} row {n}: not in sentAt order')
+            self.ledger.append(r)
+        own = []
+        for r in self.ledger:
+            if r['sent'] >= self.end_b:
+                continue
+            p = PAIRS.index(r['pair'])
+            unit = 0.0001 if r['pair'].endswith('/USD') else 0.01
+            d = 1 if r['side'] == 'BUY' else -1
+            own.append(dict(pair=r['pair'], p=p, dir=d, side=r['side'], open=r['open'], T=r['T'], E=r['E'],
+                            tpIn=r['E'] + d * TP_PIPS * unit, late='0', lateN=0, base=ceil_min(r['sent']),
+                            sent=r['sent']))
+        own.sort(key=lambda x: (x['base'], x['p'], -x['dir'], x['open']))
+        for i, x in enumerate(own):
+            x['i'] = i
+        self.sigs = own
+        # S_b: 一番早い P（楽天が止まる時間に入れば、止まる時間の終わりに動かす）
+        taus = ny_closes(min(x['base'] for x in own) - DAY, self.end_b)[0] if own else np.array([], np.int64)
+
+        def moved(P):
+            j = int(np.searchsorted(taus, P, 'right')) - 1
+            return int(taus[j]) + STOP_LEN if j >= 0 and P < int(taus[j]) + STOP_LEN else P
+        self.own_sb = min(moved(x['base'] + MIN) for x in own) if own else None
 
     def g_of(self, s):
         g = int(np.searchsorted(self.G, s, 'left'))
@@ -615,7 +697,8 @@ class World:
         self.path_sig, self.path_opp = [], []
         for s in self.sigs:
             pr = self.pairs[s['p']]
-            P0 = s['T'] + (15 * s['lateN'] + self.delay) * MIN
+            # (a): T＋2分（遅れた合図は T＋17分）。(b): sentAt を分に切り上げた時刻＋1分
+            P0 = s['base'] + MIN if self.mode_b else s['T'] + (15 * s['lateN'] + self.delay) * MIN
             for dirn, out in ((s['dir'], self.path_sig), (-s['dir'], self.path_opp)):
                 tp = s['E'] + dirn * TP_PIPS * pr.unit
                 r = compute_path(pr, P0, dirn, s['E'], tp, self.end, self.taus)
@@ -1465,6 +1548,9 @@ EXPECT_REAL = dict(startYen=300000.0, cap=1000000.0, start='2024-01-01T00:00:00Z
 
 def check_meta(C, W, expect_real):
     """注文の時刻の元（§8.102: P＝T＋2分。遅れた合図は窓 i+1 の確定 T＋15分の2分後）と、実データの run の決まった値"""
+    if W.mode_b:
+        check_meta_b(C, W)
+        return
     C.check('meta', 'delay', 'delay', W.meta_delay, 2, 'exact')
     for s in W.sigs:
         C.check('signals.time', s['i'], 'T', s['T'], s['open'] + 15 * MIN, 'exact')
@@ -1479,6 +1565,132 @@ def check_meta(C, W, expect_real):
         C.check('meta', 'real', 'split', iso(W.split), EXPECT_REAL['split'], 'str')
 
 
+def check_meta_b(C, W):
+    """(b): meta（P の元の1分・S_b・END_b・境＝END_b・30万円・100万円）と、TS の signals.csv を、ledger から
+    自分で作った合図と1件ずつ照らす（並び・ペア・向き・足・E・利確2・sentAt・base）"""
+    m = W.meta
+    C.check('meta', 'b', 'delay', W.meta_delay, 1, 'exact')
+    C.check('meta', 'b', 'mode', m.get('mode'), 'b', 'str')
+    C.check('meta', 'b', 'start (S_b)', W.start, W.own_sb, 'exact')
+    C.check('meta', 'b', 'end', W.end, W.end_b, 'exact')
+    C.check('meta', 'b', 'endB', m.get('endB'), W.end_b, 'exact')
+    C.check('meta', 'b', 'split', W.split, W.end_b, 'exact')
+    C.check('meta', 'b', 'startYen', W.startYen, 300000.0, 'exact')
+    C.check('meta', 'b', 'cap', W.cap, 1000000.0, 'exact')
+    C.count('signals.b', 'all', len(W.sigs), len(W.sigs_ts))
+    for own, ts in zip(W.sigs, W.sigs_ts):
+        i = own['i']
+        C.check('signals.b', i, 'i', own['i'], ts['i'], 'exact')
+        C.check('signals.b', i, 'pair', own['pair'], ts['pair'], 'str')
+        C.check('signals.b', i, 'side', own['side'], ts['side'], 'str')
+        for f in ('open', 'T', 'base'):
+            C.check('signals.b', i, f, own[f], ts[f], 'exact')
+        C.check('signals.b', i, 'E', own['E'], ts['E'], 'price')
+        C.check('signals.b', i, 'tp', own['tpIn'], ts['tpIn'], 'price')
+        C.check('signals.b', i, 'late', str(ts['late']).strip(), '0', 'str')
+        C.check('signals.b', i, 'sent', own['sent'], ts.get('sent'), 'exact')
+
+
+def b_quantile(xs, q):
+    """小さい順の floor(q ×（個数 − 1）) 番目（money-stats.ts の quantile と同じ）"""
+    s = sorted(xs)
+    return s[min(len(s) - 1, math.floor(q * (len(s) - 1)))]
+
+
+def b_median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if not n:
+        return None
+    return s[(n - 1) // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def compare_b(C, W, dump, a_csv):
+    """(b): 送るまでの時間（delays.json）と、比べる窓（window.json）を自分で計算して比べる"""
+    # 送るまでの時間: END_b より前に送った全行の sentAt − T（秒）
+    xs = [(r['sent'] - r['T']) / 1000 for r in W.ledger if r['sent'] < W.end_b]
+    p = os.path.join(dump, 'delays.json')
+    if not os.path.exists(p):
+        C.bad('b.delays', 'file', 'missing', None, None)
+    else:
+        d = json.load(open(p))
+        C.check('b.delays', 'all', 'n', len(xs), d.get('n'), 'exact')
+        C.check('b.delays', 'all', 'median', b_median(xs), d.get('median'), 'price')
+        C.check('b.delays', 'all', 'max', max(xs) if xs else None, d.get('max'), 'price')
+    # (a) のファイル: commit したものそのものか
+    raw = open(a_csv, 'rb').read()
+    C.check('b.acsv', 'sha256', 'sha256', hashlib.sha256(raw).hexdigest(), B_A_SHA256, 'str')
+    lines = [l for l in raw.decode('utf-8').split('\n') if l != '']
+    if not lines or lines[0] != B_A_HEADER:
+        die(f'{a_csv}: the header is not {B_A_HEADER}')
+    arows = []
+    for l in lines[1:]:
+        c = l.split(',')
+        arows.append((ms_of(c[3]), float(c[5])))
+    # 数える行: 道筋が何もしないでなく、P＋24時間 ≦ END_b（P は止まる時間で動かした後）。値は P から1日後
+    vals = []
+    for sg, r in zip(W.sigs, W.path_sig):
+        if r['none'] or r['P'] + H24 > W.end_b:
+            continue
+        vals.append((r['P'], email_values(W.pairs[sg['p']], r, sg['dir'])['d1']))
+    n = sum(1 for P, _ in vals if P + H24 <= W.end_b)
+    n_prev = sum(1 for P, _ in vals if P + H24 <= W.end_b - WEEK)
+    due = n >= B_COMPARE_AT and n_prev < B_COMPARE_AT
+    p = os.path.join(dump, 'window.json')
+    if not os.path.exists(p):
+        C.bad('b.window', 'file', 'missing', None, None)
+        return
+    d = json.load(open(p))
+    C.check('b.window', 'all', 'n', n, d.get('n'), 'exact')
+    C.check('b.window', 'all', 'nPrev', n_prev, d.get('nPrev'), 'exact')
+    C.check('b.window', 'all', 'due', int(due), int(bool(d.get('due'))), 'exact')
+    if not due or not d.get('due'):
+        return
+    sb = W.own_sb
+    o1 = sb - B_W0
+    o2 = W.end_b - H24 - B_W0
+    C.check('b.window', 'all', 'o1', o1, d.get('o1'), 'exact')
+    C.check('b.window', 'all', 'o2', o2, d.get('o2'), 'exact')
+    bs = [v for P, v in vals if sb <= P <= W.end_b - H24]
+    bv = sum(bs) / len(bs)
+    db = d.get('b') or {}
+    C.check('b.window', 'b', 'n', len(bs), db.get('n'), 'exact')
+    C.check('b.window', 'b', 'value', bv, db.get('value'), 'pips')
+    lst, empty, k = [], 0, 1
+    while True:
+        w = B_W0 - k * WEEK
+        k += 1
+        if w + o1 < B_A_START:
+            break
+        if w + o2 + H24 > B_A_END:
+            continue
+        ys = [v for P, v in arows if w + o1 <= P <= w + o2]
+        if not ys:
+            empty += 1
+            continue
+        lst.append((w, len(ys), sum(ys) / len(ys)))
+    values = [x[2] for x in lst]
+    q05, q95 = b_quantile(values, 0.05), b_quantile(values, 0.95)
+    da = d.get('a') or {}
+    C.check('b.window', 'a', 'values', len(values), da.get('values'), 'exact')
+    C.check('b.window', 'a', 'empty', empty, da.get('empty'), 'exact')
+    C.check('b.window', 'a', 'q05', q05, da.get('q05'), 'pips')
+    C.check('b.window', 'a', 'q95', q95, da.get('q95'), 'pips')
+    ns = [x[1] for x in lst]
+    dc = da.get('counts') or {}
+    C.check('b.window', 'a', 'counts.min', min(ns), dc.get('min'), 'exact')
+    C.check('b.window', 'a', 'counts.median', b_median(ns), dc.get('median'), 'exact')
+    C.check('b.window', 'a', 'counts.max', max(ns), dc.get('max'), 'exact')
+    dl = da.get('list') or []
+    C.count('b.window', 'a.list', len(lst), len(dl))
+    for (w, nn, v), e in zip(lst, dl):
+        C.check('b.window', w, 'W', w, ms_of(e['W']), 'exact')
+        C.check('b.window', w, 'n', nn, e.get('n'), 'exact')
+        C.check('b.window', w, 'value', v, e.get('value'), 'pips')
+    verdict = 'above' if bv > q95 else 'below' if bv < q05 else 'inside'
+    C.check('b.window', 'all', 'verdict', verdict, d.get('verdict'), 'str')
+
+
 def check_inputs(C, W, pairs15, e_mode, notes):
     # E と 15分足（合図の足の中値の終値、チャートと同じ丸め）
     n_skip = n_other = 0
@@ -1490,10 +1702,16 @@ def check_inputs(C, W, pairs15, e_mode, notes):
         else:
             b = p15['bid'].get(s['open'])
             a = p15['ask'].get(s['open'])
-            C.compared['E'] += 1
-            if a is None or b is None:
+            if W.mode_b:
+                # (b): E はメールの値。15分足から作り直した値との違いは数えるだけ（TS の照合の一覧に出る）
+                x = (b + a) / 2 if a is not None and b is not None else None
+                if x is None or abs(round_chart(x, pr.dec, e_mode) - s['E']) > 1e-12:
+                    notes['b_E_differs_from_15min_bars'] = notes.get('b_E_differs_from_15min_bars', 0) + 1
+            elif a is None or b is None:
+                C.compared['E'] += 1
                 C.bad('E', s['i'], 'no 15min bar at open', None, s['E'])
             else:
+                C.compared['E'] += 1
                 x = (b + a) / 2
                 r = round_chart(x, pr.dec, e_mode)
                 if abs(r - s['E']) > 1e-12:
@@ -1563,6 +1781,9 @@ def main():
                     help='E の丸めの確かめ方（既定 exact = チャートの toFixed。mathround は調べる用）')
     ap.add_argument('--expect-real', action='store_true',
                     help='実データの run: meta の startYen・cap・start・split が §8.102 の値（30万円・100万円・2024-01-01・2025-05-19）と同じかも照らす')
+    ap.add_argument('--ledger', default=None, help='(b): research/ledger/ultra15.csv（合図をここから自分で作る）')
+    ap.add_argument('--end-b', default=None, help='(b): END_b（UTC の ISO。土曜 00:00）')
+    ap.add_argument('--a-csv', default='research/ledger/ultra15-a.csv', help='(b): (a) のメールごとの値')
     ap.add_argument('--quiet', action='store_true',
                     help='実データ用: 計算した数（追証・ロスカット・入金の回数、E*、比べた件数、食い違いの例）を出さず、'
                          '食い違いの合計と、食い違いのあった種類の名前だけを出す（§8.102 確かめ B (5)）')
@@ -1582,7 +1803,10 @@ def main():
         if inputs_of(d) != main_in:
             die(f'{d}: signals.csv or meta.json differs from {args.dump}')
 
-    W = World(args.gmo, args.dump, args.rates, log)
+    if (args.ledger is None) != (args.end_b is None):
+        die('--ledger and --end-b go together')
+    end_b = ms_of(args.end_b) if args.end_b else None
+    W = World(args.gmo, args.dump, args.rates, log, ledger=args.ledger, end_b=end_b)
     pairs15 = [pr.load15(args.gmo) for pr in W.pairs]
     th = third(W)
     log('third done')
@@ -1615,6 +1839,8 @@ def main():
             C.bad('load', 'gmo', msg, None, None)
         check_inputs(C, W, pairs15, args.e_round, C.notes)
         check_meta(C, W, args.expect_real)
+        if W.mode_b:
+            compare_b(C, W, dump, args.a_csv)
         compare_paths(C, W, dump)
         compare_emails(C, W, dump)
         compare_third(C, th, dump)

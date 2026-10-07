@@ -22,13 +22,14 @@ import { lowerBound } from "./money-data.ts";
 import { weekOf } from "./money-stats.ts";
 import { type NyClose, nyClosesBetween, rakutenSpread, tausOf } from "./money-trades.ts";
 import { csvCells, parseBisPolicy, rateBefore } from "./longhist-lib.ts";
-import { LEAD15, type LoadStats, type M1, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
+import { LEAD15, type LoadStats, type M1, MAINT, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
 import { GMO_SYMBOLS, dateKeys } from "../supabase/functions/track-outcomes/quotes.ts";
 import { type Book, type Fill, type FollowOpts, NO_CUT, type Path, follow, lastEnded, lookAhead, makeBook, maintOf, rakutenM1, valueAt } from "./ownerhold-trades.ts";
 import { type AccountOpts, type AccountOut, MAIN_OPTS, type Market, type OrderIn, type SwapFn, runAccount } from "./ownerhold-account.ts";
 import { type AccountLine, DAY_MS, type DRow, type PerEmailSplit, type Third, accountLineOf, perEmailSplitOf, thirdOf, usdJpyAt } from "./ownerhold-report.ts";
 import { ULTRA_PAIRS } from "../supabase/functions/_shared/ultra.ts";
 import { FIXTURES } from "./ownerhold-fixture.ts";
+import { A_SHA256, type ARow, type BValue, LEDGER_FROM, LEDGER_HEADER, type LedgerRow, compareRecompute, delaysOf, ledgerSigs, parseACsv, parseLedger, windowOf } from "./ownerhold-b.ts";
 
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "synthetic");
@@ -100,13 +101,13 @@ export interface DataSet {
   m15Gaps?: Array<{ pair: string; slots: number; examples: string[] }>;
 }
 
-const m15GapsOf = (m1: M1, q15: Array<{ datetime: string }>): { pair: string; slots: number; examples: string[] } => {
+const m15GapsOf = (m1: M1, q15: Array<{ datetime: string }>, from = START_MS, to = END_MS): { pair: string; slots: number; examples: string[] } => {
   const have = new Set(q15.map((q) => Date.parse(q.datetime)));
   const out = { pair: m1.pair, slots: 0, examples: [] as string[] };
   let last = NaN;
   for (let k = 0; k < m1.n; k++) {
     const t = m1.t[k];
-    if (t < START_MS || t >= END_MS) continue;
+    if (t < from || t >= to) continue;
     const slot = t - (t % (15 * MINUTE));
     if (slot === last) continue;
     last = slot;
@@ -177,6 +178,20 @@ const VARIANTS: Variant[] = [
   V("rakuten", { rakuten: true }),
   V("market", { forceMarket: true }),
 ];
+// (b) (§8.102 (b)): P is the email's sentAt + 1 minute rounded up to the minute (base: sentAt rounded up, then
+// 1 minute), its supplement sentAt + 5 minutes rounded up (base + 5); no T + 1 row (it is the main P here)
+const B_DELAY = 1;
+const VB = (name: string, o: Partial<Variant> = {}): Variant => V(name, { delay: B_DELAY, ...o });
+const VARIANTS_B: Variant[] = [
+  VB("main"),
+  VB("opposite", { opposite: true }),
+  VB("delay5", { delay: 5 }),
+  VB("through", { fill: "through" }),
+  VB("exact", { fill: "exact" }),
+  VB("judgeMaint", { skipMaint: false }),
+  VB("rakuten", { rakuten: true }),
+  VB("market", { forceMarket: true }),
+];
 
 interface Analysis {
   name: string;
@@ -233,7 +248,14 @@ const changedOf = (before: string[], after: string[], plant: string) => {
   return { all, counted };
 };
 
-export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = ""): Analysis => {
+export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "", mode: "a" | "b" = "a"): Analysis => {
+  // the variants of this part: (a)'s (P = T + 2 minutes) or (b)'s (P from the email's sentAt)
+  const VS = mode === "b" ? VARIANTS_B : VARIANTS;
+  const vOf = (name: string): Variant => {
+    const v = VS.find((x) => x.name === name);
+    if (!v) throw new Error(`no variant ${name} in (${mode})`);
+    return v;
+  };
   const closes = nyClosesBetween(ctx.start - DAY_MS, ctx.end);
   const taus = Float64Array.from(closes.map((c) => c.tau));
   const usdjpy = ds.m1s[0];
@@ -259,7 +281,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     const dir = (v.opposite ? -s.dir : s.dir) as 1 | -1;
     return { dir, E: s.E, tp: v.opposite ? s.E + dir * 10 * unitOf(s.pair) : s.tp, P: pOf(s, v.delay) };
   };
-  const variants = parts === "all" ? VARIANTS : VARIANTS.slice(0, 2);
+  const variants = parts === "all" ? VS : VS.slice(0, 2);
   const paths: Record<string, Path[]> = {};
   for (const v of variants) paths[v.name] = sigs.map((s) => follow(booksOf(v)[s.pi], orderOf(s, v), opts(v)));
 
@@ -332,7 +354,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   let laCompared = 0;
   const laMoved: string[] = [];
   let laMovedAll = 0;
-  for (const v of [VARIANTS[0], VARIANTS[1]]) {
+  for (const v of [vOf("main"), vOf("opposite")]) {
     sigs.forEach((s, i) => {
       const p = paths[v.name][i];
       const hs = [p.P + DAY_MS, p.P + WEEK].filter((h) => h <= ctx.end);
@@ -376,7 +398,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     from?: number;
     decide?: boolean;
   }
-  const oMain = ordersOf(VARIANTS[0]);
+  const oMain = ordersOf(vOf("main"));
   const rowsA: Row[] = [
     { name: "main", orders: oMain, o: base, decide: true },
     { name: "mainSwap", orders: oMain, o: { ...base, swap: swapMain }, decide: true },
@@ -384,8 +406,9 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     { name: "worstSwap", orders: oMain, o: { ...base, lc: "worst", swap: swapMain }, decide: true },
     { name: "m5", orders: oMain, o: { ...base, lc: "m5" } },
     { name: "start50", orders: oMain, o: { ...base, start: 500_000 } },
-    { name: "delay1", orders: ordersOf(VARIANTS[2]), o: base },
-    { name: "delay5", orders: ordersOf(VARIANTS[3]), o: base },
+    // (b) has no T + 1 row: its main P is sentAt + 1 minute rounded up
+    ...(mode === "a" ? [{ name: "delay1", orders: ordersOf(vOf("delay1")), o: base }] : []),
+    { name: "delay5", orders: ordersOf(vOf("delay5")), o: base },
     { name: "through", orders: oMain, o: { ...base, fill: "through" } },
     { name: "exact", orders: oMain, o: { ...base, fill: "exact" } },
     { name: "judgeMaint", orders: oMain, o: { ...base, skipMaint: false } },
@@ -399,10 +422,11 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     { name: "swapBeforeCall", orders: oMain, o: { ...base, swap: swapMain, swapBeforeCall: true } },
     { name: "swap10", orders: oMain, o: { ...base, swap: swap10 } },
     { name: "redeposit", orders: oMain, o: { ...base, redeposit: true } },
-    { name: "restartB", orders: ordersOf(VARIANTS[0], (s, i) => paths.main[i].P >= ctx.split), o: base, from: ctx.split },
-    { name: "noBarOut", orders: ordersOf(VARIANTS[0], (_s, i) => !paths.main[i].noBar), o: base },
-    { name: "opposite", orders: ordersOf(VARIANTS[1]), o: base },
-    ...PAIRS.flatMap((pair, pi) => [300_000, 500_000].map((st) => ({ name: `pair ${pair} ${st / 10_000}`, orders: ordersOf(VARIANTS[0], (s) => s.pi === pi), o: { ...base, start: st } }))),
+    // (b) has no halves (its split is END_b): no second half started again
+    ...(mode === "a" ? [{ name: "restartB", orders: ordersOf(vOf("main"), (_s, i) => paths.main[i].P >= ctx.split), o: base, from: ctx.split }] : []),
+    { name: "noBarOut", orders: ordersOf(vOf("main"), (_s, i) => !paths.main[i].noBar), o: base },
+    { name: "opposite", orders: ordersOf(vOf("opposite")), o: base },
+    ...PAIRS.flatMap((pair, pi) => [300_000, 500_000].map((st) => ({ name: `pair ${pair} ${st / 10_000}`, orders: ordersOf(vOf("main"), (s) => s.pi === pi), o: { ...base, start: st } }))),
   ];
   const Ts = sigs.map((s) => s.T);
   const outs: Record<string, AccountOut> = {};
@@ -465,7 +489,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   // the orders handed in leave out the emails whose path is nothing at all: the all-accepted path must then leave
   // exactly those unordered — and an email the engine finds no price for must be one the path left out
   const vp = vsPaths(unlOut.main, paths.main, oMain);
-  const oOpp = ordersOf(VARIANTS[1]);
+  const oOpp = ordersOf(vOf("opposite"));
   const vo = vsPaths(runAccount(mk(ds.m1s), oOpp, { ...base, unlimited: true }), paths.opposite, oOpp);
   checks.engineVsPaths = { ok: vp.mismatched === 0 && vo.mismatched === 0, detail: { signal: vp, opposite: vo }, n: vp.mismatched + vo.mismatched };
   // checks: no TP in the minute a trade came in on, every account row and the all-accepted paths
@@ -692,7 +716,9 @@ const ifMarket = (ps: Path[], a: AccountOut, orders: OrderIn[], sigs: Sig[], boo
 // the CSVs the Python check reads (its own inputs: the signals) and compares (the rest)
 const dumpOf = (ds: DataSet, paths: Record<string, Path[]>, outs: Record<string, AccountOut>, unl: Record<string, AccountOut>, third: Analysis["third"], orders: OrderIn[]): Record<string, string> => {
   const d: Record<string, string> = {};
-  d["signals.csv"] = ["i,pair,side,open,T,E,tp,late,base", ...ds.sigs.map((s, i) => `${i},${s.pair},${s.side},${s.open},${s.T},${s.E},${s.tp},${s.late ? 1 : 0},${s.base}`)].join("\n");
+  // (b): the email's sent time beside them (the Python makes P from it on its own)
+  const withSent = ds.sigs.some((s) => s.sent !== undefined);
+  d["signals.csv"] = [`i,pair,side,open,T,E,tp,late,base${withSent ? ",sent" : ""}`, ...ds.sigs.map((s, i) => `${i},${s.pair},${s.side},${s.open},${s.T},${s.E},${s.tp},${s.late ? 1 : 0},${s.base}${withSent ? `,${s.sent}` : ""}`)].join("\n");
   for (const v of ["main", "opposite"]) {
     d[`paths-${v}.csv`] = ["i,P,shifted,noBar,none,market,fillK,t0,fill,fillGap,tpK,x,exit,tpGap,tpInFill,mae,endPx", ...paths[v].map((p, i) => [i, p.P, +p.shifted, +p.noBar, +p.none, +p.market, p.fillK, p.t0, p.fill, +p.fillGap, p.tpK, p.x, p.exit, +p.tpGap, +p.tpInFill, p.mae, p.endPx].join(","))].join("\n");
   }
@@ -724,10 +750,10 @@ const writeJson = async (path: string, x: unknown) => {
   await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
   await Deno.writeTextFile(path, JSON.stringify(x, null, 1));
 };
-export const writeDump = async (dir: string, a: Analysis, ctx: Ctx) => {
+export const writeDump = async (dir: string, a: Analysis, ctx: Ctx, extra: Record<string, unknown> = {}) => {
   await Deno.mkdir(dir, { recursive: true });
   for (const [k, v] of Object.entries(a.dump)) await Deno.writeTextFile(`${dir}/${k}`, v);
-  await Deno.writeTextFile(`${dir}/meta.json`, JSON.stringify({ start: ctx.start, end: ctx.end, split: ctx.split, delay: DELAY, startYen: ctx.startYen, cap: ctx.cap }));
+  await Deno.writeTextFile(`${dir}/meta.json`, JSON.stringify({ start: ctx.start, end: ctx.end, split: ctx.split, delay: DELAY, startYen: ctx.startYen, cap: ctx.cap, ...extra }));
 };
 
 const T_999 = 3.8834; // t(19), two-sided 99.9% (§8.102 確かめ A (ii))
@@ -955,6 +981,186 @@ if (MODE === "print") {
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(csv)))).map((b) => b.toString(16).padStart(2, "0")).join("");
   log(`== ultra15-a.csv sha256 ${hash}, ${csv.split("\n").length - 1} rows`);
   log(csv);
+}
+
+// ---- (b): the emails sent (§8.102 (b) and 「(b) のプログラムの細部」) ------------------------------------
+
+// END_b: the Saturday 00:00 UTC before the run; the ledger and (a)'s per-email values (read, never recomputed)
+const END_B_MS = Date.parse(env("END_B", ""));
+const LEDGER = env("LEDGER", "research/ledger/ultra15.csv");
+const A_CSV = env("A_CSV", "research/ledger/ultra15-a.csv");
+const OUT_B = `${OUT}/b`;
+// the checks a weekly run does not fail on: the recomputed signals' own (they serve the comparison with the emails only)
+const B_SOFT = new Set(["signalProbe", "signalCut"]);
+const sha256Of = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))).map((b) => b.toString(16).padStart(2, "0")).join("");
+const readACsv = async (): Promise<ARow[]> => {
+  const text = await Deno.readTextFile(A_CSV);
+  const hash = await sha256Of(text);
+  if (hash !== A_SHA256) throw new Error(`${A_CSV}: sha256 ${hash}, not the committed ${A_SHA256}`);
+  return parseACsv(text);
+};
+const isSaturdayMidnight = (ms: number) => Number.isFinite(ms) && ms % DAY_MS === 0 && new Date(ms).getUTCDay() === 6;
+
+// One (b) run on a set of day files: the rows sent before END_b as the signals, the 1-minute bars from a day
+// before S_b, the 15-minute bars for the recomputed signals; the accounts and the per-email view as (a)'s,
+// and beside them the recomputed signals, the times to the send and the one comparison
+async function runB(name: string, src: Source, rows: LedgerRow[], endB: number, rates: Rates, aRows: ARow[], plant = "") {
+  const sigs = ledgerSigs(rows, endB, plant);
+  if (!sigs.length) throw new Error(`(b) ${name}: no email sent before ${iso(endB)}`);
+  // S_b: the first P, moved past Rakuten's stop as the paths move it
+  const stopTaus = Float64Array.from(nyClosesBetween(sigs[0].base - DAY_MS, endB).map((c) => c.tau));
+  const moved = (P: number) => {
+    const tau = maintOf(stopTaus, P);
+    return tau === null ? P : tau + MAINT;
+  };
+  const sB = Math.min(...sigs.map((s) => moved(pOf(s, B_DELAY))));
+  const load = newLoadStats();
+  const m1s: M1[] = [];
+  const reads: SignalRead[] = [];
+  const m15Gaps: NonNullable<DataSet["m15Gaps"]> = [];
+  // the recomputed signals: bars closed from half an hour before the ledger's first send (a late one's base is T + 15)
+  const from15 = LEDGER_FROM - 30 * MINUTE;
+  for (const [pi, pair] of PAIRS.entries()) {
+    const m1 = await loadM1(src, pair, sB - DAY_MS, endB, load);
+    const q15 = await load15(src, pair, from15 - LEAD15, endB, load);
+    m1s.push(m1);
+    m15Gaps.push(m15GapsOf(m1, q15, sB, endB));
+    reads.push(signalsOf(pair, pi, q15, from15, endB, true));
+  }
+  const ds: DataSet = { name, m1s, sigs, reads, load, src, rates, m15Gaps };
+  // (b) has no halves: the split at END_b
+  const ctx: Ctx = { start: sB, end: endB, split: endB, startYen: START_YEN, cap: CAP };
+  const a = analyse(ds, ctx, "all", plant, "b");
+  // checks: P is sentAt + 1 minute rounded up to the minute, the supplement's sentAt + 5 minutes rounded up
+  // (§8.102 (b), written as the docs say it; the paths take pOf, made from base)
+  const pBad = sigs.filter((s) => pOf(s, B_DELAY) !== Math.ceil((s.sent! + MINUTE) / MINUTE) * MINUTE || pOf(s, 5) !== Math.ceil((s.sent! + 5 * MINUTE) / MINUTE) * MINUTE);
+  a.checks.bP = { ok: pBad.length === 0, detail: { compared: sigs.length, bad: pBad.slice(0, 5).map((s) => `${s.pair} ${s.side} ${iso(s.open)} sent ${iso(s.sent!)}`) }, n: pBad.length };
+  // each email's value a day after P, made as (a)'s ultra15-a.csv (the main path on GMO's bars, touch)
+  const taus = Float64Array.from(nyClosesBetween(sB - DAY_MS, endB).map((c) => c.tau));
+  const books = m1s.map((m) => makeBook(m, taus, true));
+  const vals: BValue[] = [];
+  for (const s of sigs) {
+    const p = follow(books[s.pi], { dir: s.dir, E: s.E, tp: s.tp, P: pOf(s, B_DELAY) }, { fill: "touch", endMs: endB });
+    if (p.none || p.P + DAY_MS > endB) continue;
+    vals.push({ P: p.P, v: valueAt(books[s.pi], p, s.dir, p.P + DAY_MS).v });
+  }
+  const b = { sB: iso(sB), endB: iso(endB), ledgerRows: rows.length, sentBefore: sigs.length, recompute: compareRecompute(rows, reads.flatMap((r) => r.signals), endB), delays: delaysOf(rows, endB), window: windowOf(vals, sB, endB, aRows, plant) };
+  // for the Python: the comparison and the times to the send, each made again there from the ledger and its own paths
+  a.dump["window.json"] = JSON.stringify(b.window);
+  a.dump["delays.json"] = JSON.stringify(b.delays);
+  return { a, ctx, b };
+}
+
+// a (b) run's files: the checks, the numbers (not printed here), the Python's inputs
+const writeB = async (dir: string, r: Awaited<ReturnType<typeof runB>>, endB: number) => {
+  await writeJson(`${dir}/checks.json`, r.a.checks);
+  await writeJson(`${dir}/analysis.json`, { ...r.a, dump: undefined, decisions: undefined, raw: undefined, b: r.b });
+  await writeDump(`${dir}/dump`, r.a, r.ctx, { delay: B_DELAY, mode: "b", endB });
+  await Deno.writeTextFile(`${dir}/decisions.txt`, r.a.decisions.join("\n"));
+};
+// whether each check passed (no measured number), and whether the run fails (the soft ones never fail it)
+const judgeB = (checks: Analysis["checks"]): boolean => {
+  let ok = true;
+  for (const [k, c] of Object.entries(checks)) {
+    log(`check ${k}: ${c.ok ? "ok" : "FAILED"}${B_SOFT.has(k) ? " (not failing the run)" : ""}`);
+    if (!c.ok && c.why) log(`  ${c.why}`);
+    if (!c.ok && !B_SOFT.has(k)) ok = false;
+  }
+  return ok;
+};
+const recomputeLines = (rc: ReturnType<typeof compareRecompute>) => [
+  `emails ${rc.emails}, recomputed ${rc.recomputed}, matched ${rc.matched}; only emails ${rc.emailOnly.length}, only recomputed ${rc.recomputeOnly.length}, entry differs ${rc.eDiff.length}, late differs ${rc.lateDiff.length}`,
+  ...rc.emailOnly.map((x) => `  only an email: ${x}`),
+  ...rc.recomputeOnly.map((x) => `  only recomputed: ${x}`),
+  ...rc.eDiff.map((x) => `  entry differs: ${x}`),
+  ...rc.lateDiff.map((x) => `  late differs: ${x}`),
+];
+
+if (MODE === "b") {
+  if (!isSaturdayMidnight(END_B_MS)) throw new Error(`END_B ${env("END_B")}: not a Saturday 00:00 UTC`);
+  const t0 = Date.now();
+  const rows = parseLedger(await Deno.readTextFile(LEDGER));
+  const r = await runB("b", { dir: CACHE, fetch: true }, rows, END_B_MS, await bisRates(env("BIS_CSV")), await readACsv());
+  log(`ledger ${LEDGER}: ${rows.length} rows, ${r.b.sentBefore} sent before END_b ${r.b.endB}; S_b ${r.b.sB}`);
+  log(`loaded: ${JSON.stringify(r.a.checks.loads.detail)} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  for (const g of (r.a.extra.m15Gaps as DataSet["m15Gaps"]) ?? []) log(`${g.pair}: 15-minute slots without a bar beside 1-minute bars ${g.slots}${g.examples.length ? " (" + g.examples.slice(0, 5).join(", ") + ")" : ""}`);
+  // the emails against the recomputed signals: listed in every run (the emails' own rows, no measured number)
+  for (const l of recomputeLines(r.b.recompute)) log(l);
+  await writeB(OUT_B, r, END_B_MS);
+  const ok = judgeB(r.a.checks);
+  log(`TypeScript checks of (b): ${ok ? "all passed" : "FAILED"}. The numbers are in ${OUT_B}, printed only by MODE=printb after the Python check.`);
+  if (!ok) Deno.exit(1);
+}
+
+if (MODE === "printb") {
+  const checks = JSON.parse(await Deno.readTextFile(`${OUT_B}/checks.json`)) as Analysis["checks"];
+  const py = JSON.parse(await Deno.readTextFile(env("PYCHECK", `${OUT_B}/pycheck.json`))) as { ok: boolean };
+  if (!Object.entries(checks).every(([k, c]) => c.ok || B_SOFT.has(k)) || !py.ok) {
+    log("a check failed: the numbers of (b) are not printed (§8.102 確かめ B (5), (b) の毎週の run)");
+    Deno.exit(1);
+  }
+  log(await Deno.readTextFile(`${OUT_B}/analysis.json`));
+}
+
+// 確かめ for (b) on a walk: the walk's own signals as the emails (sent a few seconds to a minute after their
+// send time, one exactly on a minute), with the differences an email record can have planted (one dropped,
+// one that no bar made, one entry changed, one sent late); run on each END_b of ENDS_B, the planted (b)
+// errors (PLANTS) beside it for the Python
+if (MODE === "bsyn") {
+  const seed = Number(env("SEED", "1"));
+  const endBs = env("ENDS_B", "2026-10-10T00:00:00Z,2026-10-17T00:00:00Z,2026-10-24T00:00:00Z").split(",").map((x: string) => Date.parse(x));
+  if (!endBs.every(isSaturdayMidnight)) throw new Error(`ENDS_B ${env("ENDS_B")}: not every one a Saturday 00:00 UTC`);
+  const plants = env("PLANTS", "").split(",").filter(Boolean);
+  const last = Math.max(...endBs);
+  const dir = `${OUT}/bsyn-${seed}`;
+  const from = LEDGER_FROM - 30 * MINUTE - LEAD15 - 2 * DAY_MS;
+  for (const [pi, pair] of PAIRS.entries()) {
+    const w = synthesize(pair, pi, { seed, trend: 0, startPips: null }, from, last);
+    await writeGmoFiles(`${dir}/gmo`, pair, w, from, last);
+  }
+  const src: Source = { dir: `${dir}/gmo`, fetch: false };
+  const recs: Sig[] = [];
+  for (const [pi, pair] of PAIRS.entries()) {
+    const q15 = await load15(src, pair, LEDGER_FROM - 30 * MINUTE - LEAD15, last, newLoadStats());
+    recs.push(...signalsOf(pair, pi, q15, LEDGER_FROM - 30 * MINUTE, last).signals);
+  }
+  const pool = recs.filter((s) => s.base >= LEDGER_FROM && s.base < last).sort((x, y) => x.base - y.base || x.pi - y.pi || y.dir - x.dir);
+  if (pool.length < 40) throw new Error(`bsyn: ${pool.length} signals on the walk, too few`);
+  const OFFS = [3_824, 0, 59_999, 60_000, 1, 4_500, 30_000];
+  let rows: LedgerRow[] = pool.map((s, k) => ({ pair: s.pair, side: s.side, open: s.open, T: s.T, E: s.E, sent: s.base + OFFS[k % OFFS.length] }));
+  const planted = { dropped: rows[5], changed: rows[7], fake: rows[9], late: rows[11] };
+  // the dropped email's signal: in the recomputed ones from its send time (base) on
+  const droppedBase = pool[5].base;
+  rows = rows.filter((x) => x !== planted.dropped);
+  const ix = (x: LedgerRow) => rows.indexOf(x);
+  rows[ix(planted.changed)] = { ...planted.changed, E: Number((planted.changed.E + unitOf(planted.changed.pair)).toFixed(planted.changed.pair.includes("JPY") ? 3 : 5)) };
+  rows[ix(planted.late)] = { ...planted.late, sent: planted.late.T + 15 * MINUTE + 2_000 };
+  rows.push({ ...planted.fake, side: planted.fake.side === "BUY" ? "SELL" : "BUY", sent: planted.fake.sent + 1 });
+  rows.sort((x, y) => x.sent - y.sent);
+  const text = [LEDGER_HEADER, ...rows.map((x) => `${x.pair},${x.side},${iso(x.open)},${iso(x.T)},${x.E},${iso(x.sent)}`)].join("\n") + "\n";
+  await Deno.writeTextFile(`${dir}/ultra15.csv`, text);
+  const back = parseLedger(text);
+  const aRows = await readACsv();
+  let pass = true;
+  for (const endB of endBs) {
+    const out = `${dir}/end-${iso(endB).slice(0, 10)}`;
+    const r = await runB(`bsyn ${seed} ${iso(endB)}`, src, back, endB, synRates, aRows);
+    await writeB(out, r, endB);
+    const rc = r.b.recompute;
+    // the planted differences, as many as were sent before this END_b
+    const want = { emailOnly: Number(planted.fake.sent + 1 < endB), recomputeOnly: Number(droppedBase < endB), eDiff: Number(planted.changed.sent < endB), lateDiff: Number(planted.late.T + 15 * MINUTE + 2_000 < endB) };
+    const got = { emailOnly: rc.emailOnly.length, recomputeOnly: rc.recomputeOnly.length, eDiff: rc.eDiff.length, lateDiff: rc.lateDiff.length };
+    const same = JSON.stringify(want) === JSON.stringify(got);
+    const ok = judgeB(r.a.checks) && same;
+    log(`${iso(endB)}: emails ${r.b.sentBefore}, S_b ${r.b.sB}; recompute ${JSON.stringify(got)} (planted ${JSON.stringify(want)}) ${same ? "ok" : "NOT AS PLANTED"}; delays ${JSON.stringify(r.b.delays)}; window n ${r.b.window.n} (a week before ${r.b.window.nPrev}) ${r.b.window.due ? `compared: b ${r.b.window.b!.value.toFixed(3)} (n ${r.b.window.b!.n}), a 5-95% ${r.b.window.a!.q05.toFixed(3)}..${r.b.window.a!.q95.toFixed(3)} of ${r.b.window.a!.values} (empty ${r.b.window.a!.empty}), ${r.b.window.verdict}` : "not compared"}; ${ok ? "ok" : "FAILED"}`);
+    if (!ok) pass = false;
+    for (const plant of plants) {
+      const q = await runB(`bsyn ${seed} ${iso(endB)} ${plant}`, src, back, endB, synRates, aRows, plant);
+      await writeB(`${out}/plant-${plant}`, q, endB);
+    }
+  }
+  log(`(b) on the walk: ${pass ? "PASSED" : "FAILED"}`);
+  if (!pass) Deno.exit(1);
 }
 
 // ---- B(2): the email rule on 5-minute bars, against tf-winrate.ts ---------------------------------
