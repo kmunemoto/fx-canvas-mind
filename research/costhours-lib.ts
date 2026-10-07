@@ -34,10 +34,10 @@ export const ENOUGH_EMAILS = 30;
 export const ENOUGH_WEEKS = 5;
 // 7 (4): the interval's side (0.975 two-sided 95%; 0.995 only if the synthetic walks of (4) say so)
 export const INTERVAL_P = 0.975;
-// 7 (0): research/ledger/spread-hours.csv's sha256, written here once stage 1's file is committed (step 3).
-// Empty: the 2023 mode stops before it reads GMO, and the weekly (b) run writes no ② row.
+// 7 (0): research/ledger/spread-hours.csv's sha256 (step 3: stage 1's real run 37634829079, whose file the Python
+// agreed with). Were it empty, the 2023 mode would stop before it reads GMO and the weekly (b) run write no ② row.
 export const SPREAD_HOURS_PATH = "research/ledger/spread-hours.csv";
-export const SPREAD_HOURS_SHA256 = "";
+export const SPREAD_HOURS_SHA256 = "2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93";
 
 // 7 (0), (6): the provisional slots the synthetic modes alone read (never research/ledger/spread-hours.csv):
 // every pair, New York's 17:00 hour (summer 21:00-21:59 UTC, winter 22:00-22:59), and (6)'s wide one, four

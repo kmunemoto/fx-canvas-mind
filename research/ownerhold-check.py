@@ -1821,7 +1821,7 @@ def write_mine(d, W, th, accs, unl):
 
 from zoneinfo import ZoneInfo
 
-C_SPREAD_SHA256 = ''                                   # 段1のファイルを commit したら書く（TS とは別に持つ）
+C_SPREAD_SHA256 = '2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93'  # 段1の実データの run 37634829079（TS とは別に持つ）
 C_SPREAD_PATH = 'research/ledger/spread-hours.csv'
 C_HEADER = 'pair,season,slot,utc,bars,median,mean,p90,base,threshold,avoid'
 C_Y23_START = ms_of('2023-11-08T00:00:00Z')
