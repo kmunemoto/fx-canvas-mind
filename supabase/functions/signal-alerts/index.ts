@@ -130,7 +130,10 @@ import type { Candle } from "../analyze/indicators.ts";
 // v21 (#211): the Japanese emails name the pair as 楽天FX does (ユーロ/円, in
 // the subject and the body; _shared/pair-names.ts). The English emails, the
 // signals, the rule ids and what is recorded (the pair's code) are as they were.
-const FUNCTION_VERSION = "signal-alerts-v21-2026-10-07T10:00:00Z";
+// v22 (#212): gold's Q-Trend and ULTRA on 15 minutes too (indicators.ts
+// GOLD_ALERT_INTERVALS): its bars read from Twelve Data at each 15-minute close
+// as the hourly ones are; the other Twelve Data pairs stay on 1 hour and up.
+const FUNCTION_VERSION = "signal-alerts-v22-2026-10-07T12:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -928,7 +931,8 @@ Deno.serve(async (req: Request) => {
         pairs: ALERT_PAIRS,
         intervals: ALERT_INTERVALS,
         // #155: Q-Trend's and ULTRA's charts: every pair of the live chart,
-        // those read from Twelve Data on 1 hour and up
+        // those read from Twelve Data on 1 hour and up (#212: gold on 15
+        // minutes too)
         indicator: {
           rules: INDICATOR_RULES,
           pairs: INDICATOR_PAIRS,

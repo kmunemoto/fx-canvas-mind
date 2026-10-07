@@ -48,12 +48,15 @@ export const ULTRA_RULE_ID =
 export const indicatorRuleId = (rule: IndicatorRule): string => (rule === "qtrend" ? QTREND_RULE_ID : ULTRA_RULE_ID);
 
 // Every pair the live chart has, on these timeframes; those read from
-// Twelve Data on 1 hour and up only
+// Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
+// owner 2026-10-07: gold's 15-minute ULTRA emails; one more Twelve Data read
+// a 15-minute close, within the day's 800 shared with the chart)
 export const INDICATOR_PAIRS: readonly string[] = LIVE_PAIRS;
 export const INDICATOR_INTERVALS = ["5min", "15min", "1h", "4h", "1day"] as const;
 export const TWELVE_ALERT_INTERVALS = ["1h", "4h", "1day"] as const;
+export const GOLD_ALERT_INTERVALS = ["15min", "1h", "4h", "1day"] as const;
 export const indicatorIntervalsFor = (pair: string): readonly string[] =>
-  isTwelvePair(pair) ? TWELVE_ALERT_INTERVALS : INDICATOR_INTERVALS;
+  isGold(pair) ? GOLD_ALERT_INTERVALS : isTwelvePair(pair) ? TWELVE_ALERT_INTERVALS : INDICATOR_INTERVALS;
 export const isIndicatorChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && INDICATOR_PAIRS.includes(pair) &&
   indicatorIntervalsFor(pair).includes(interval);

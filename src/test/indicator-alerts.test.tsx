@@ -250,11 +250,11 @@ describe("#155 the email's signal is the chart's label", () => {
 });
 
 describe("#155 what the sweep reads, and when", () => {
-  it("every pair the chart has, on 5 minutes to daily; those read from Twelve Data on 1 hour and up only", () => {
+  it("every pair the chart has, on 5 minutes to daily; those read from Twelve Data on 1 hour and up only (#212: gold on 15 minutes too)", () => {
     expect(INDICATOR_INTERVALS).toEqual(["5min", "15min", "1h", "4h", "1day"]);
     for (const p of SERVER_PAIRS) {
       const twelve = p === "XAU/USD" || (TWELVE_FX_PAIRS as readonly string[]).includes(p);
-      expect(indicatorIntervalsFor(p), p).toEqual(twelve ? ["1h", "4h", "1day"] : ["5min", "15min", "1h", "4h", "1day"]);
+      expect(indicatorIntervalsFor(p), p).toEqual(p === "XAU/USD" ? ["15min", "1h", "4h", "1day"] : twelve ? ["1h", "4h", "1day"] : ["5min", "15min", "1h", "4h", "1day"]);
       expect(isGmoChartPair(p), p).toBe(!twelve);
     }
     // #175: the yen pairs and gold; #177: and EUR/USD, #178: and AUD/USD, from GMO;
@@ -273,7 +273,10 @@ describe("#155 what the sweep reads, and when", () => {
       expect(isIndicatorChart("GBP/USD", iv)).toBe(false);
       expect(isIndicatorChart("USD/CHF", iv)).toBe(false);
     }
-    expect(isIndicatorChart("XAU/USD", "15min")).toBe(false);
+    // #212: gold on 15 minutes too (not on 5)
+    expect(isIndicatorChart("XAU/USD", "15min")).toBe(true);
+    expect(isIndicatorChart("XAU/USD", "5min")).toBe(false);
+    expect(isIndicatorChart("HKD/JPY", "15min")).toBe(false);
     expect(isIndicatorChart("USD/JPY", "1min")).toBe(false);
     expect(isIndicatorChart("CNH/JPY", "1h")).toBe(false);
     // the settings each alert was judged at
