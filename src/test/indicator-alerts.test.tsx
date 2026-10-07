@@ -38,6 +38,7 @@ import {
   staleForClose,
   startWaitMs,
   TWELVE_RETRY_MS,
+  twelveChartDue,
   twelveCloseDue,
   twelvePhase,
   twelveReadDue,
@@ -383,6 +384,28 @@ describe("#155 what the sweep reads, and when", () => {
     expect(startWaitMs(m - 2_100)).toBe(0);
   });
 
+  // #212: a sweep mostly runs on a fresh instance, which has not learned any
+  // chart's phase; gold's 15 minutes are then looked at by their own grid, so
+  // the :30 and :45 closes are judged as soon as the :00 and :15 ones
+  it("#212 which Twelve Data charts a sweep looks at in a minute, on a fresh instance and on one that has seen the bars", () => {
+    const h = Date.UTC(2026, 9, 7, 11, 0, 1);
+    const minutes = (iv: string, phase: number | undefined) =>
+      Array.from({ length: 60 }, (_, m) => m).filter((m) => twelveChartDue(iv, h + m * 60_000, phase));
+    const quarter = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    const every = [...quarter, ...quarter.map((m) => m + 15), ...quarter.map((m) => m + 30), ...quarter.map((m) => m + 45)];
+    // 15 minutes: every quarter hour's close, from a minute after it to its 20 minutes' freshness or the next close
+    expect(minutes("15min", undefined)).toEqual(every);
+    expect(minutes("15min", 0)).toEqual(every);
+    expect(twelveChartDue("15min", h + 31 * 60_000, undefined)).toBe(true);
+    expect(twelveChartDue("15min", h + 46 * 60_000, undefined)).toBe(true);
+    // an hour and longer, its phase not known: the first half hour of every hour (as before)
+    expect(minutes("1h", undefined)).toEqual(Array.from({ length: 29 }, (_, m) => m + 1));
+    expect(minutes("4h", undefined)).toEqual(Array.from({ length: 29 }, (_, m) => m + 1));
+    // the 4-hour chart, its phase known (bars from 01:00 UTC): only where its own bar closed
+    expect(minutes("4h", H)).toEqual([]);
+    expect(twelveChartDue("4h", Date.UTC(2026, 9, 7, 13, 1, 1), H)).toBe(true);
+  });
+
   it("Twelve Data's bars from a minute after their close, within their freshness", () => {
     const h = Date.UTC(2026, 8, 29, 10, 0, 0);
     expect(twelveCloseDue("1h", h + 30_000)).toBeNull();
@@ -671,7 +694,9 @@ describe("#155 the two sweeps keep to their own rules", () => {
     expect(fn).toContain("if (indicatorSweepRunning) return json(");
   });
   it("Twelve Data's charts are read by where their own bars close, twice a close at most", () => {
-    expect(fn).toContain("return phase === undefined ? anHourClosed : twelveCloseDue(c.interval, nowMs, phase) !== null;");
+    // #212: chosen by twelveChartDue (tested above), its phase when this instance knows it
+    expect(fn).toContain("isTwelvePair(c.pair) && twelveChartDue(c.interval, nowMs, twelvePhaseOf.get(`${c.pair}|${c.interval}`))");
+    expect(fn).not.toContain("anHourClosed");
     expect(fn).toContain("if (!twelveReadDue(close, stored ? Date.parse(stored.fetchedAt) : Number.NaN, nowMs)) {");
     expect(fn).not.toContain("twelveCloseDue(c.interval, nowMs) as number");
   });

@@ -83,6 +83,7 @@ import {
   renderIndicatorMail,
   staleForClose,
   startWaitMs,
+  twelveChartDue,
   twelveCloseDue,
   twelvePhase,
   twelveReadDue,
@@ -131,8 +132,10 @@ import type { Candle } from "../analyze/indicators.ts";
 // the subject and the body; _shared/pair-names.ts). The English emails, the
 // signals, the rule ids and what is recorded (the pair's code) are as they were.
 // v22 (#212): gold's Q-Trend and ULTRA on 15 minutes too (indicators.ts
-// GOLD_ALERT_INTERVALS): its bars read from Twelve Data at each 15-minute close
-// as the hourly ones are; the other Twelve Data pairs stay on 1 hour and up.
+// GOLD_ALERT_INTERVALS): its bars read from Twelve Data after each 15-minute
+// close, as the hourly ones after theirs; a chart whose bars' phase this
+// instance has not learned is looked at by its own grid when under an hour
+// (twelveChartDue). The other Twelve Data pairs stay on 1 hour and up.
 const FUNCTION_VERSION = "signal-alerts-v22-2026-10-07T12:00:00Z";
 
 const MIN = 60_000;
@@ -362,15 +365,12 @@ Deno.serve(async (req: Request) => {
       });
       const order = (iv: string) => (INDICATOR_INTERVALS as readonly string[]).indexOf(iv);
       const gmoCharts = followed.filter((c) => isGmoChartPair(c.pair) && gmoDue.includes(c.interval)).sort((a, b) => order(a.interval) - order(b.interval));
-      // Twelve Data's by where their own bars close: a chart whose bars have
-      // not been seen by this instance is looked at in the first half hour
-      // of every hour, when its stored bars tell
-      const anHourClosed = twelveCloseDue("1h", nowMs) !== null;
-      const twelveCharts = followed.filter((c) => {
-        if (!isTwelvePair(c.pair)) return false;
-        const phase = twelvePhaseOf.get(`${c.pair}|${c.interval}`);
-        return phase === undefined ? anHourClosed : twelveCloseDue(c.interval, nowMs, phase) !== null;
-      }).sort((a, b) => order(a.interval) - order(b.interval));
+      // Twelve Data's by where their own bars close (#212: twelveChartDue; a
+      // chart whose bars this instance has not seen, by its own UTC grid under
+      // an hour, else in the first half hour of every hour)
+      const twelveCharts = followed.filter((c) =>
+        isTwelvePair(c.pair) && twelveChartDue(c.interval, nowMs, twelvePhaseOf.get(`${c.pair}|${c.interval}`))
+      ).sort((a, b) => order(a.interval) - order(b.interval));
       const deadline = Date.now() + FETCH_BUDGET_MS;
       const reads: JsonRecord[] = [];
       const fired: IndicatorSignal[] = [];
