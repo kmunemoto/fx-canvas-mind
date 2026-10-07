@@ -191,7 +191,8 @@ jobs:
           python3 research/ownerhold-plants.py plants orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar,signalNextBar
 
   # (b) on a walk (確かめ for the weekly part): the walk's signals as the emails, sent a few seconds to a
-  # minute after their send time, with one dropped, one that no bar made, one entry changed, one sent late
+  # minute after their send time, with one dropped, one that no bar made, one entry changed, one sent late;
+  # and the hard start (the first two emails' P in Rakuten's stop, one a dollar pair, both at the market)
   bsyn:
     if: ${{ !inputs.end_b }}
     runs-on: ubuntu-latest
@@ -222,10 +223,20 @@ jobs:
             python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}dump" --rates synthetic --ledger $B/ultra15.csv --end-b "$e" || fail=1
             for pl in pFloor windowNo24h compareEvery; do
               r=0
+              rm -f "${d}plant-$pl/pycheck.json"
               python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}plant-$pl/dump" --out "${d}plant-$pl" --rates synthetic --ledger $B/ultra15.csv --end-b "$e" > /tmp/pl.out 2>&1 || r=$?
-              echo "  planted $pl: $(tail -n 2 /tmp/pl.out | head -n 1)"
-              if [ "$r" = 1 ]; then caught="$caught $pl"; elif [ "$r" != 0 ]; then echo "  the Python failed on $pl"; cat /tmp/pl.out; fail=1; fi
+              echo "  planted $pl: $(grep -E '^main dump' /tmp/pl.out || tail -n 1 /tmp/pl.out)"
+              # caught: the Python finished (its pycheck.json written) and found mismatches; a crash is not a catch
+              if [ "$r" = 1 ] && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if (not j['ok'] and sum(j['mismatched'].values()) > 0) else 1)" "${d}plant-$pl/pycheck.json"; then
+                caught="$caught $pl"
+              elif [ "$r" != 0 ]; then echo "  the Python did not finish on $pl"; cat /tmp/pl.out; fail=1; fi
             done
+          done
+          # the hard start (the first two emails' P in Rakuten's stop, priced from the bars before S_b)
+          for d in $B/edge-*/; do
+            e=$(basename "$d"); e="${e#edge-}T00:00:00Z"
+            echo "== the hard start, END_b $e"
+            python3 research/ownerhold-check.py --quiet --gmo $B/gmo --dump "${d}dump" --rates synthetic --ledger "${d}ultra15.csv" --end-b "$e" || fail=1
           done
           for pl in pFloor windowNo24h compareEvery; do
             case " $caught " in *" $pl "*) echo "planted $pl: caught";; *) echo "planted $pl: NOT caught"; fail=1;; esac

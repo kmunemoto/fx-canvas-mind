@@ -290,11 +290,17 @@ export const runAccount = (mk: Market, orders: OrderIn[], o: AccountOpts): Accou
   // the next bar of each pair, and the last one ended (the price rule)
   const next = new Int32Array(np);
   const lastK = new Int32Array(np).fill(-1);
-  for (let p = 0; p < np; p++) next[p] = lowerBound(mk.books[p].t, mk.from - MINUTE * 0);
+  // the price rule from the start on: the last bar ended by `from` (a bar before it, when the bars loaded hold one —
+  // (b) starts at S_b with the day before loaded; (a)'s 2024-01-01 has none before it)
+  for (let p = 0; p < np; p++) {
+    next[p] = lowerBound(mk.books[p].t, mk.from - MINUTE * 0);
+    lastK[p] = next[p] - 1;
+  }
   // the time being judged and how much of the bar starting then may be read: "open" its open only (①②),
   // "full" all of it (③④, the minute being judged), "ended" none (⑤ at the minute's end, the events at their
   // time: only bars ended by then)
-  let clockS = -Infinity;
+  // before the first minute: at `from`, every bar that started before it has ended
+  let clockS = mk.from;
   let clockPart: "open" | "full" | "ended" = "ended";
   const poison = (p: number) => o.poisonPips * units[p];
   const rd = (p: number, xs: Float64Array, k: number, isOpen: boolean): number => {

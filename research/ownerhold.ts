@@ -399,6 +399,10 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     decide?: boolean;
   }
   const oMain = ordersOf(vOf("main"));
+  // the rows that judge in Rakuten's stop keep P unmoved: they start at the earliest P if that is before the start
+  // ((b): the first email's P in the stop, S_b moved past it; in (a) every P is after START)
+  let fromJudge = ctx.start;
+  for (const x of oMain) if (x.P < fromJudge) fromJudge = x.P;
   const rowsA: Row[] = [
     { name: "main", orders: oMain, o: base, decide: true },
     { name: "mainSwap", orders: oMain, o: { ...base, swap: swapMain }, decide: true },
@@ -411,7 +415,7 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     { name: "delay5", orders: ordersOf(vOf("delay5")), o: base },
     { name: "through", orders: oMain, o: { ...base, fill: "through" } },
     { name: "exact", orders: oMain, o: { ...base, fill: "exact" } },
-    { name: "judgeMaint", orders: oMain, o: { ...base, skipMaint: false } },
+    { name: "judgeMaint", orders: oMain, o: { ...base, skipMaint: false }, from: fromJudge },
     { name: "rakuten", books: rakM1s, orders: oMain, o: base },
     { name: "noCancel", orders: oMain, o: { ...base, cancelOnCall: false } },
     { name: "depTau", orders: oMain, o: { ...base, deposit: "tau" } },
@@ -449,11 +453,11 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
     }
   }
   // the all-accepted path: E* and M (swap none and the main swap; the loss-cut on closes and on the worst; the stop judged; no pending margin)
-  const unl = (o: Partial<AccountOpts>, books: M1[] = ds.m1s) => runAccount(mk(books), oMain, { ...base, ...o, unlimited: true });
+  const unl = (o: Partial<AccountOpts>, books: M1[] = ds.m1s, from = ctx.start) => runAccount(mk(books, from), oMain, { ...base, ...o, unlimited: true });
   const estarRows: Record<string, Partial<AccountOpts>> = { main: {}, mainSwap: { swap: swapMain }, worst: { lc: "worst" }, worstSwap: { lc: "worst", swap: swapMain }, judgeMaint: { skipMaint: false }, noPending: { pendingMargin: false } };
   const unlOut: Record<string, AccountOut> = {};
   for (const [name, o] of Object.entries(estarRows)) {
-    const u = unl(o);
+    const u = unl(o, ds.m1s, name === "judgeMaint" ? fromJudge : ctx.start);
     unlOut[name] = u;
     out.estar[name] = { estar: u.estar, by: u.estarBy, over1m: (u.estar?.value ?? 0) > ctx.cap };
     decisions.push(`estar|${name}|${fx(u.estar?.value ?? NaN, 6)}|${u.estar?.kind}|${u.estar?.at}`);
@@ -492,6 +496,21 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   const oOpp = ordersOf(vOf("opposite"));
   const vo = vsPaths(runAccount(mk(ds.m1s), oOpp, { ...base, unlimited: true }), paths.opposite, oOpp);
   checks.engineVsPaths = { ok: vp.mismatched === 0 && vo.mismatched === 0, detail: { signal: vp, opposite: vo }, n: vp.mismatched + vo.mismatched };
+  // checks ((b)): the rows that keep P unmoved (judged in the stop) order every email whose own path is not nothing —
+  // none left out for a P before the account's start
+  if (mode === "b") {
+    const dropped: string[] = [];
+    let nDrop = 0;
+    for (const [name, a2] of [["judgeMaint", outs.judgeMaint], ["unlimited-judgeMaint", unlOut.judgeMaint]] as const) {
+      a2.fates.forEach((f, k) => {
+        const i = oMain[k].sig;
+        if (f !== "none" || paths.judgeMaint[i].none) return;
+        nDrop++;
+        if (dropped.length < 5) dropped.push(`${name} ${sigs[i].pair} ${iso(sigs[i].T)}`);
+      });
+    }
+    checks.judgeMaintOrders = { ok: nDrop === 0, detail: { dropped }, n: nDrop };
+  }
   // checks: no TP in the minute a trade came in on, every account row and the all-accepted paths
   const tpAfterA = { compared: 0, bad: 0, examples: [] as string[] };
   for (const [name, a] of [...Object.entries(outs), ...Object.entries(unlOut).map(([k, u]) => [`unlimited-${k}`, u] as const)]) {
@@ -1158,6 +1177,38 @@ if (MODE === "bsyn") {
       const q = await runB(`bsyn ${seed} ${iso(endB)} ${plant}`, src, back, endB, synRates, aRows, plant);
       await writeB(`${out}/plant-${plant}`, q, endB);
     }
+  }
+  // the hard start: the first two emails sent at 20:53 UTC on 2026-10-05 (US summer), so both P (20:55) fall in
+  // Rakuten's stop and move to 21:10 = S_b, in one minute: EUR/JPY sold and EUR/USD bought at the market (E 5 pips
+  // past 21:10's open). The account must price that first minute from the bars before S_b (USD/JPY for the dollar
+  // pair's margin, EUR/JPY's own position), and the rows judged in the stop must take both at 20:55
+  {
+    const endB = endBs[0];
+    const at = Date.parse("2026-10-05T21:10:00Z");
+    const openAt = async (pair: string) => {
+      const m = await loadM1(src, pair, at - DAY_MS, at + DAY_MS, newLoadStats());
+      const k = lowerBound(m.t, at);
+      if (!(k < m.n && m.t[k] === at)) throw new Error(`bsyn edge: no ${pair} bar at ${iso(at)}`);
+      return { bo: m.bo[k], ao: m.ao[k] };
+    };
+    const ej = await openAt("EUR/JPY");
+    const eu = await openAt("EUR/USD");
+    const open = Date.parse("2026-10-05T20:30:00Z");
+    const first: LedgerRow[] = [
+      { pair: "EUR/JPY", side: "SELL", open, T: open + 15 * MINUTE, E: Number((ej.bo - 0.05).toFixed(3)), sent: Date.parse("2026-10-05T20:53:30.000Z") },
+      { pair: "EUR/USD", side: "BUY", open, T: open + 15 * MINUTE, E: Number((eu.ao + 0.0005).toFixed(5)), sent: Date.parse("2026-10-05T20:53:40.000Z") },
+    ];
+    const edgeRows = [...first, ...back.filter((x) => x.sent >= Date.parse("2026-10-05T21:12:00Z"))];
+    const edgeText = [LEDGER_HEADER, ...edgeRows.map((x) => `${x.pair},${x.side},${iso(x.open)},${iso(x.T)},${x.E},${iso(x.sent)}`)].join("\n") + "\n";
+    const out = `${dir}/edge-${iso(endB).slice(0, 10)}`;
+    await Deno.mkdir(out, { recursive: true });
+    await Deno.writeTextFile(`${out}/ultra15.csv`, edgeText);
+    const r = await runB(`bsyn ${seed} edge`, src, parseLedger(edgeText), endB, synRates, aRows);
+    await writeB(out, r, endB);
+    const sOk = r.b.sB === iso(at);
+    const ok = judgeB(r.a.checks) && sOk;
+    log(`the hard start: S_b ${r.b.sB} (${sOk ? "21:10 as built" : "NOT 21:10"}), emails ${r.b.sentBefore}; ${ok ? "ok" : "FAILED"}`);
+    if (!ok) pass = false;
   }
   log(`(b) on the walk: ${pass ? "PASSED" : "FAILED"}`);
   if (!pass) Deno.exit(1);

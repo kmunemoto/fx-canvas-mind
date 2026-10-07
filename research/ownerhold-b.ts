@@ -109,7 +109,8 @@ export const compareRecompute = (rows: LedgerRow[], rec: Sig[], endB: number): R
     out.matched++;
     const d = digitsOf(r.pair);
     if (Number(r.E.toFixed(d)) !== Number(s.E.toFixed(d))) out.eDiff.push(`${what}: email ${r.E}, recomputed ${s.E}`);
-    const lateEmail = r.sent - r.T >= STEP15;
+    // on time: sent within 15 minutes of the close (以内: 15 minutes exactly is on time)
+    const lateEmail = r.sent - r.T > STEP15;
     if (lateEmail !== s.late) out.lateDiff.push(`${what}: email sent ${Math.round((r.sent - r.T) / 1000)} s after the close, recomputed ${s.late ? "late (in the next bar's window only)" : "on time"}`);
   }
   for (const s of recIn) if (!byRow.has(key(s.pair, s.side, s.open))) out.recomputeOnly.push(`${s.pair} ${s.side} ${iso(s.open)} (E ${s.E}${s.late ? ", late" : ""})`);

@@ -1870,6 +1870,9 @@ def main():
         if args.quiet:
             names = ', '.join(k for k, v in res['mismatched'].items() if v)
             print(f'{"main" if n == 0 else "also"} dump: mismatched {tot_m}' + (f' (in: {names})' if names else ''))
+            if W.mode_b and n == 0:
+                # (b): the entries that differ from the 15-minute bars' (counted, not a mismatch: the email's own E)
+                print(f'(b) E differs from the 15-minute bars: {C.notes.get("b_E_differs_from_15min_bars", 0)} of {len(W.sigs)}')
             if n == 0:
                 main_rc = 0 if tot_m == 0 else 1
             continue
