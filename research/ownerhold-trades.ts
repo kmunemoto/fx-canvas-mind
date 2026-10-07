@@ -318,8 +318,11 @@ export const pipsOf = (p: Path, dir: 1 | -1, unit: number): number | null => {
 // The trade's value at `H` (1 day or 1 week after P; §8.102 比べるもの):
 // the TP's pips if its bar ended by H, the exit side's close of the last bar
 // ended by H if it was filled by then, 0 if not filled. `gap`: no bar ends at
-// H itself (H falls in a time without prices).
-export const valueAt = (bk: Book, p: Path, dir: 1 | -1, H: number, cut: Cut = NO_CUT): { v: number; gap: boolean } => {
+// H itself (H falls in a time without prices). `price` "mid" (#206, docs
+// §8.103 5「1日後の値 v」): a trade still held is valued at that bar's mid
+// close (the bid's and the ask's closes averaged) instead of its exit side's;
+// the entry and the TP are the same either way.
+export const valueAt = (bk: Book, p: Path, dir: 1 | -1, H: number, cut: Cut = NO_CUT, price: "exit" | "mid" = "exit"): { v: number; gap: boolean } => {
   const m = bk.m;
   const j = lastEnded(m, H);
   const gap = !(j >= 0 && m.t[j] + MINUTE === H);
@@ -327,7 +330,7 @@ export const valueAt = (bk: Book, p: Path, dir: 1 | -1, H: number, cut: Cut = NO
   if (p.tpK >= 0 && p.x + MINUTE <= H) return { v: (dir * (p.exit - p.fill)) / bk.unit, gap };
   const filledBy = p.fillK >= 0 ? m.t[p.fillK] + MINUTE <= H : p.t0 <= H;
   if (!filledBy || j < 0) return { v: 0, gap };
-  const close = dir === 1 ? px(m.bc, j, cut) : px(m.ac, j, cut);
+  const close = price === "mid" ? (px(m.bc, j, cut) + px(m.ac, j, cut)) / 2 : dir === 1 ? px(m.bc, j, cut) : px(m.ac, j, cut);
   return { v: (dir * (close - p.fill)) / bk.unit, gap };
 };
 

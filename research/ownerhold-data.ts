@@ -312,6 +312,10 @@ export interface SynthSpec {
   // whole spread, so the spread is exactly what was set; the mid's walk and the random numbers are as they
   // were, and a minute it does not widen is written as before.
   extraSpread?: (pi: number, t: number) => number;
+  // #206 (docs §8.103 7 (4), (6)): GMO day keys (gmoDayKey: the day from 21:00 UTC before) the walk makes no bar
+  // in, as a holiday GMO is shut (12/25, 1/1); none: every day as before. A day shut is a closure like the
+  // weekend's (the mid jumps after it); a walk without it is written as before.
+  closedKeys?: readonly string[];
 }
 
 // the key of GMO's day file a bar is in: its day starts at 06:00 JST (21:00 UTC; research/gotobi.ts fileKeyOf)
@@ -374,9 +378,15 @@ export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: nu
   const cap = Math.ceil((toMs - from) / MINUTE) + 1;
   const m: M1 = { pair, n: 0, t: new Float64Array(cap), bo: new Float64Array(cap), bh: new Float64Array(cap), bl: new Float64Array(cap), bc: new Float64Array(cap), ao: new Float64Array(cap), ah: new Float64Array(cap), al: new Float64Array(cap), ac: new Float64Array(cap) };
   const r = (v: number) => Number((v * unit).toFixed(dg));
+  // a key's day: from 21:00 UTC the day before the key's date to 21:00 UTC on it
+  const shutDays = (spec.closedKeys ?? []).map((key) => {
+    const end = Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)), 21);
+    return [end - DAY, end] as const;
+  });
+  const holiday = (t: number) => shutDays.some(([a, b]) => t >= a && t < b);
   let k = 0;
   for (let t = from; t + MINUTE <= toMs; t += MINUTE) {
-    if (!synthOpen(t)) {
+    if (!synthOpen(t) || (shutDays.length > 0 && holiday(t))) {
       shut = true;
       continue;
     }
@@ -525,6 +535,8 @@ export interface SignalRead {
   // bars closed in [START, END) judged, and those whose window the data did not hold
   judged: number;
   noWindow: number;
+  // #206 (docs §8.103 5): when the read's 600th bar closed (the first with a whole window), from the bar times only
+  bar600: string | null;
   signals: Sig[];
   // found but not mailed: closed while the market may be shut (isPossiblyClosed), on time and late
   unmailed: number;
@@ -686,6 +698,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     last: n ? isoOf(times[n - 1]) : null,
     judged,
     noWindow,
+    bar600: n >= WINDOW ? isoOf(times[WINDOW - 1] + STEP15) : null,
     signals,
     unmailed,
     lateUnmailed,

@@ -1,0 +1,46 @@
+{
+  "about": "#206 docs §8.103 7 (3): the hand examples of stage 2 and their answers, written before the programs that check them (research/ownerhold.ts MODE=costhand, research/ownerhold-check.py --cost-hand). The slots avoided are the provisional ones (every pair, summer 21:00-21:59 UTC = slots 84-87, winter 22:00-22:59 = slots 88-91). P: T + 2 minutes, or with sent (as (b)) the sent minute rounded up + 1 minute; then moved past Rakuten's stop (summer 20:55-21:10 UTC, winter 21:55-22:10). E is the open of the order's side in P's bar (taken at the market there), TP E ± tpPips (10 unless given). R is 2026-10-08.",
+  "walk": {
+    "seed": 1,
+    "from": "2026-10-09T00:00:00Z",
+    "to": "2027-01-02T00:00:00Z",
+    "closedKeys": ["20261225", "20270101"],
+    "wide": [{ "pair": "USD/JPY", "from": "2026-11-18T10:00:00Z", "to": "2026-11-18T10:15:00Z", "pips": 12 }]
+  },
+  "runs": [
+    {
+      "name": "A",
+      "start": "2026-10-12T00:00:00Z",
+      "end": "2027-01-02T00:00:00Z",
+      "emails": [
+        { "id": "b-stop", "what": "(b): sent 20:53:30 UTC on Monday 2026-10-12 (summer), P 20:55 moved to 21:10 by the stop: slot 21:00 (84), avoided, counted", "pair": "EUR/JPY", "side": "SELL", "T": "2026-10-12T20:45:00Z", "sent": "2026-10-12T20:53:30Z", "want": { "P": "2026-10-12T21:10:00Z", "season": "summer", "slot": 84, "avoided": true, "reason": null, "aligned": true, "ruleOrdered": false } },
+        { "id": "b-stop-k", "what": "a kept email in b-stop's cell (the same week, pair and side)", "pair": "EUR/JPY", "side": "SELL", "T": "2026-10-13T10:00:00Z", "want": { "P": "2026-10-13T10:02:00Z", "season": "summer", "slot": 40, "avoided": false, "reason": null, "ruleOrdered": true } },
+        { "id": "dst-summer", "what": "Thursday 2026-10-29 before the US summer ends (2026-11-01): summer slot 85, avoided; its evaluation cut by the weekend's start only (counted)", "pair": "USD/JPY", "side": "BUY", "T": "2026-10-29T21:15:00Z", "want": { "P": "2026-10-29T21:17:00Z", "season": "summer", "slot": 85, "avoided": true, "reason": null, "aligned": true } },
+        { "id": "dst-summer-k", "what": "a kept email in dst-summer's cell", "pair": "USD/JPY", "side": "BUY", "T": "2026-10-28T09:00:00Z", "want": { "season": "summer", "slot": 36, "avoided": false, "reason": null } },
+        { "id": "dst-winter", "what": "Monday 2026-11-02 after the switch: the same UTC slot 85 is winter's, not avoided", "pair": "USD/JPY", "side": "BUY", "T": "2026-11-02T21:15:00Z", "want": { "P": "2026-11-02T21:17:00Z", "season": "winter", "slot": 85, "avoided": false, "reason": null } },
+        { "id": "dst-winter-a", "what": "the same Monday, winter slot 90 (22:30), avoided, aligned with dst-winter", "pair": "USD/JPY", "side": "BUY", "T": "2026-11-02T22:30:00Z", "want": { "P": "2026-11-02T22:32:00Z", "season": "winter", "slot": 90, "avoided": true, "reason": null, "aligned": true, "keptMates": ["dst-winter"] } },
+        { "id": "week-open", "what": "the week's first signal: Sunday 22:15 UTC close, P 22:17; its week starts that Sunday 21:00 UTC", "pair": "AUD/JPY", "side": "SELL", "T": "2026-10-18T22:15:00Z", "want": { "P": "2026-10-18T22:17:00Z", "season": "summer", "slot": 89, "avoided": false, "reason": null, "weekStart": "2026-10-18T21:00:00Z" } },
+        { "id": "friday", "what": "P on a Friday: not counted, ordered by the rule's account row (not avoided); TP 1,000 pips away so its v is not eu-kept's (a cell mean taking it in would move eu-avoid's x)", "pair": "EUR/USD", "side": "BUY", "T": "2026-10-16T10:00:00Z", "tpPips": 1000, "want": { "P": "2026-10-16T10:02:00Z", "season": "summer", "slot": 40, "avoided": false, "reason": "friday", "ruleOrdered": true } },
+        { "id": "eu-kept", "what": "the only counted kept email in eu-avoid's cell (friday is in the same week, pair and side, not counted)", "pair": "EUR/USD", "side": "BUY", "T": "2026-10-13T09:00:00Z", "want": { "season": "summer", "slot": 36, "avoided": false, "reason": null } },
+        { "id": "eu-avoid", "what": "avoided (summer slot 85); x = its v − eu-kept's v (the Friday email not in the mean)", "pair": "EUR/USD", "side": "BUY", "T": "2026-10-14T21:15:00Z", "want": { "P": "2026-10-14T21:17:00Z", "season": "summer", "slot": 85, "avoided": true, "reason": null, "aligned": true, "keptMates": ["eu-kept"] } },
+        { "id": "xmas-thu", "what": "P on Thursday 2026-12-24 with 12/25 shut (GMO day 20261225: 12-24 21:00 to 12-25 21:00 UTC): the evaluation came over 60 minutes early, not counted", "pair": "AUD/USD", "side": "SELL", "T": "2026-12-24T10:00:00Z", "want": { "P": "2026-12-24T10:02:00Z", "season": "winter", "slot": 40, "avoided": false, "reason": "evalEarly" } },
+        { "id": "xmas-wed", "what": "P at 21:30 UTC on Wednesday 2026-12-23: its evaluation only 30 minutes early, counted", "pair": "AUD/USD", "side": "SELL", "T": "2026-12-23T21:15:00Z", "sent": "2026-12-23T21:28:30Z", "want": { "P": "2026-12-23T21:30:00Z", "season": "winter", "slot": 86, "avoided": false, "reason": null } },
+        { "id": "summer-thu", "what": "summer Thursday: P 21:02 moved by the stop to 21:10, its evaluation cut by GMO's Friday 20:00 UTC only, counted; avoided (slot 84)", "pair": "USD/JPY", "side": "SELL", "T": "2026-10-22T21:00:00Z", "want": { "P": "2026-10-22T21:10:00Z", "season": "summer", "slot": 84, "avoided": true, "reason": null, "aligned": true, "keptMates": ["summer-thu-k"] } },
+        { "id": "summer-thu-k", "what": "a kept email in summer-thu's cell", "pair": "USD/JPY", "side": "SELL", "T": "2026-10-20T09:00:00Z", "want": { "season": "summer", "slot": 36, "avoided": false, "reason": null } },
+        { "id": "nokept", "what": "avoided (winter slot 90) with no counted kept email in its cell: not used (noKept)", "pair": "AUD/JPY", "side": "BUY", "T": "2026-11-10T22:30:00Z", "want": { "P": "2026-11-10T22:32:00Z", "season": "winter", "slot": 90, "avoided": true, "reason": "noKept", "aligned": false } },
+        { "id": "nokept-other", "what": "an AUD/JPY BUY kept in another week (a cell without the week would take it as nokept's)", "pair": "AUD/JPY", "side": "BUY", "T": "2026-11-03T10:00:00Z", "want": { "season": "winter", "slot": 40, "avoided": false, "reason": null } },
+        { "id": "held-wide", "what": "entered at P, TP 1,000 pips away (still held a day later), valued at the bar ended at P + 24 hours whose spread was set 12 pips wider (12.2 pips): the exit side's value is the mid value less half the spread (6.1 pips); the main v is the mid's", "pair": "USD/JPY", "side": "BUY", "T": "2026-11-17T10:00:00Z", "tpPips": 1000, "want": { "P": "2026-11-17T10:02:00Z", "season": "winter", "slot": 40, "avoided": false, "reason": null, "in1d": true, "tp1d": false, "midMinusExit": 6.1 } }
+      ]
+    },
+    {
+      "name": "B",
+      "start": "2026-10-12T00:00:00Z",
+      "end": "2026-10-21T00:00:00Z",
+      "emails": [
+        { "id": "pastend", "what": "END on a Wednesday 00:00: P Tuesday 12:02, P + 24 hours after END, not counted (pastEnd)", "pair": "EUR/JPY", "side": "BUY", "T": "2026-10-20T12:00:00Z", "want": { "P": "2026-10-20T12:02:00Z", "season": "summer", "slot": 48, "avoided": false, "reason": "pastEnd" } },
+        { "id": "pastend-ok", "what": "P Monday 12:02, P + 24 hours before END, counted", "pair": "EUR/JPY", "side": "BUY", "T": "2026-10-19T12:00:00Z", "want": { "P": "2026-10-19T12:02:00Z", "season": "summer", "slot": 48, "avoided": false, "reason": null } }
+      ]
+    }
+  ],
+  "shift": { "what": "run A with 5 pips taken from every avoided email's v: Δ and the avoided emails' mean each exactly 5 pips lower, the kept emails' mean the same", "pips": 5 }
+}
