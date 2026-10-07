@@ -127,7 +127,10 @@ import type { Candle } from "../analyze/indicators.ts";
 // 10 and 16 (dollars on gold, pips on a pair; _shared/ultra.ts ULTRA_PAIRS and
 // ULTRA_GOLD), and the emails' measured figures at them (indicators.ts). The
 // signals and the rule ids are as they were.
-const FUNCTION_VERSION = "signal-alerts-v20-2026-10-04T10:00:00Z";
+// v21 (#211): the Japanese emails name the pair as 楽天FX does (ユーロ/円, in
+// the subject and the body; _shared/pair-names.ts). The English emails, the
+// signals, the rule ids and what is recorded (the pair's code) are as they were.
+const FUNCTION_VERSION = "signal-alerts-v21-2026-10-07T10:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

@@ -280,7 +280,9 @@ const sample = (over: Partial<FiredSignal> = {}): FiredSignal => ({
 describe("the email", () => {
   it("says what fired, when, the plan and what the rule was measured at", () => {
     const m = renderSignalMail(sample(), "ja");
-    expect(m.subject).toContain("USD/JPY");
+    // #211: the pair as 楽天FX names it
+    expect(m.subject).toBe("【Sextant】ドル/円 15分足 買い（BUY）のサイン（RSI＋パラボリックSAR）");
+    expect(m.text.split("\n\n")[0]).toBe("ドル/円の15分足で買い（BUY）のサインが出ました。");
     expect(m.subject).toContain("15分足");
     expect(m.subject).toContain("買い（BUY）");
     expect(m.text).toContain("2026-09-24 19:00（日本時間）に確定した足");
@@ -316,7 +318,8 @@ describe("the email", () => {
     expect(m.html).toContain('<a href="https://fx-tactical.jp/">');
     expect(m.html).not.toContain("<script");
     const t = renderTestMail([{ pair: "USD/JPY", interval: "1h" }], "ja");
-    expect(t.text).toContain("USD/JPY 1時間足");
+    expect(t.text).toContain("ドル/円 1時間足（RSI＋SAR）");
+    expect(renderTestMail([{ pair: "USD/JPY", interval: "1h" }], "en").text).toContain("USD/JPY 1-hour");
     expect(renderTestMail([], "en").text).toContain("none yet");
   });
 });

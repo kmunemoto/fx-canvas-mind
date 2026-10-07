@@ -510,7 +510,10 @@ describe("#155 what the sweep reads, and when", () => {
       close: 149.749, line: 149.8, eps: 0.02, rsi: null, rsiPrev: null, sl: 149.879, tps: [149.709, 149.649, 149.589] as [number, number, number],
     };
     const ja = renderIndicatorMail(sig, "ja");
-    expect(ja.subject).toBe("【Sextant】USD/JPY 5分足 売り（SELL・STRONG）のサイン（Q-Trend）");
+    // #211: the Japanese email names the pair as 楽天FX does; the English one keeps the code
+    expect(ja.subject).toBe("【Sextant】ドル/円 5分足 売り（SELL・STRONG）のサイン（Q-Trend）");
+    expect(ja.text.split("\n\n")[0]).toBe("ドル/円の5分足で、Q-Trend の売り（SELL・STRONG）のサインが出ました。");
+    expect(ja.text).not.toContain("USD/JPY");
     for (const part of [
       "損切り・利確の目安（ULTRA と同じ数字）:",
       "  エントリー ≈ 149.749",
@@ -543,7 +546,9 @@ describe("#155 what the sweep reads, and when", () => {
     // pair now; this was EUR/CHF)
     const twelve = renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h", close: 19.123, sl: 19.253, tps: [19.083, 19.023, 18.963] }, "ja");
     expect(twelve.text).toContain("  損切り 19.253（13.0pips）");
-    expect(twelve.text).toContain("HKD/JPY そのものは測っていません（GMO の FX の値です）。");
+    expect(twelve.text).toContain("香港ドル/円そのものは測っていません（GMO の FX の値です）。");
+    expect(twelve.text).toContain("足は Twelve Data のもの（香港ドル/円は GMOコインにないため）");
+    expect(twelve.text).not.toContain("HKD/JPY");
     expect(renderIndicatorMail({ ...sig, pair: "HKD/JPY", interval: "4h" }, "en").text).toContain("HKD/JPY itself was not measured; these are GMO's FX pairs' figures.");
     expect(h4.text).not.toContain("そのものは測っていません");
     // gold in dollars: #192's $13 stop and targets of $4, $10 and $16, and
@@ -599,6 +604,16 @@ describe("#155 what the sweep reads, and when", () => {
     expect(breakEvenPct(false)).toBe(76);
     // ULTRA's email: where its levels come from beside what was measured on its own timeframe
     const ul = renderIndicatorMail({ ...sig, rule: "ultra", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
+    // #211: the owner's 15-minute ULTRA email on EUR/JPY, as 楽天FX names the pair (ユーロ/円), and gold (金)
+    const ulEj = renderIndicatorMail({ ...sig, rule: "ultra", pair: "EUR/JPY", interval: "15min", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "ja");
+    expect(ulEj.subject).toBe("【Sextant】ユーロ/円 15分足 売り（Sell ☆）のサイン（ULTRA）");
+    expect(ulEj.text.split("\n\n")[0]).toBe("ユーロ/円の15分足で、ULTRA の売り（Sell ☆）のサインが出ました。");
+    expect(ulEj.text).not.toContain("EUR/JPY");
+    expect(ulEj.html).toContain("ユーロ/円の15分足で");
+    expect(goldUl.subject).toBe("【Sextant】金 1時間足 売り（Sell ☆）のサイン（ULTRA）");
+    const ulEjEn = renderIndicatorMail({ ...sig, rule: "ultra", pair: "EUR/JPY", interval: "15min", strong: false, line: null, eps: null, rsi: 69.2, rsiPrev: 71.5 }, "en");
+    expect(ulEjEn.subject).toContain("EUR/JPY");
+    expect(ulEjEn.subject + ulEjEn.text).not.toContain("ユーロ");
     expect(ul.text).toContain("ULTRA の目安（損切りは13pips、利確は4・10・16pips）:");
     expect(ul.text).toContain("のチャートの線に合わせて、損切り13・利確4・10・16（FX は pips）にしています。過去の5分足（2024年1月〜2026年9月、GMO の FX、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは 71.9%");
     expect(ul.text).toContain("約1.62 pips の負けでした。");
