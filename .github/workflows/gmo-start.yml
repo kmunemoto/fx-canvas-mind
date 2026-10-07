@@ -1,0 +1,37 @@
+# #206 (②, the look before the rule): how far back GMO's 15-minute and 5-minute day files go for the five
+# pairs of the owner's 15-minute ULTRA emails (research/gmo-start.ts). Counts bars only; no price is read.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and the development container
+# cannot. Read-only: it fetches public files and prints a report to the job log. It writes nothing to the
+# repository and holds no secret.
+name: Research GMO first days (15 and 5 minutes)
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/gmo-start.ts
+      - .github/workflows/gmo-start.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  gmo-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The five pairs' first 15- and 5-minute day files (no price read)
+        env:
+          INTERVALS: 15min,5min
+          FROM_YEAR: "2010"
+        run: >
+          deno run
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-env=INTERVALS,FROM_YEAR
+          research/gmo-start.ts
