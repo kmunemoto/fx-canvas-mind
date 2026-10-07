@@ -114,8 +114,8 @@ export interface RuleAccounts {
   notOrdered: number;
   ruleOrdered: boolean[];
   lines: Record<"none" | "rule", ReturnType<typeof ruleLineOf>>;
-  // lookAheadAccount on both rows: what the clock had not reached rewritten changes nothing
-  cut: { ok: boolean; poisoned: number; changed: number };
+  // lookAheadAccount on both rows: what the clock had not reached rewritten changes nothing (4 runs: 2 rows × ±)
+  cut: { ok: boolean; compared: number; poisoned: number; changed: number };
 }
 
 const PLACED = new Set(["tp", "lc", "deadline", "held", "unfilled", "cancelCall", "cancelLc"]);
@@ -143,8 +143,10 @@ export const ruleAccounts = (m1s: M1[], ms: Mails, paths: Path[], js: readonly J
   const Ts = ms.sigs.map((s) => s.T);
   let poisoned = 0;
   let changed = 0;
+  let compared = 0;
   for (const [orders, base] of [[oNone, none], [oRule, rule]] as const) {
     for (const pp of [777.7, -777.7]) {
+      compared++;
       const c = runAccount(mk, orders, { ...o, poisonPips: pp });
       poisoned += c.poisoned;
       if (JSON.stringify({ ...c, poisoned: 0 }) !== JSON.stringify({ ...base, poisoned: 0 })) changed++;
@@ -160,7 +162,7 @@ export const ruleAccounts = (m1s: M1[], ms: Mails, paths: Path[], js: readonly J
       return by;
     })(),
     lines: { none: ruleLineOf(none, oNone, 300_000, Ts, end), rule: ruleLineOf(rule, oRule, 300_000, Ts, end) },
-    cut: { ok: poisoned === 0 && changed === 0, poisoned, changed },
+    cut: { ok: poisoned === 0 && changed === 0, compared, poisoned, changed },
   };
 };
 
@@ -194,7 +196,8 @@ export const spreadsOf = (m1s: M1[], avoid: ReadonlySet<string>, thr2: ReadonlyM
       const season = SEASONS[c < SLOTS ? 0 : 1];
       const slot = c % SLOTS;
       const a = avoid.has(avoidKey(m.pair, season, slot));
-      if (a) hasAvoided = true;
+      // a slot avoided with bars in the period (2023: winter's only; a summer slot holds none)
+      if (a && xs.length > 0) hasAvoided = true;
       (a ? av : kp).push(...xs);
       if (xs.length) slots.push({ season, slot, bars: xs.length, med2: twiceMedian([...xs].sort((x, y) => x - y)), avoided: a });
     });

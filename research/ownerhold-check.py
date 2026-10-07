@@ -346,6 +346,8 @@ class Pair:
         ta, (ao, ah, al, ac) = read_side(os.path.join(base, 'ask'), problems, keys, self.opened)
         common, ib, ia = np.intersect1d(tb, ta, assume_unique=True, return_indices=True)
         t = common
+        # §8.103 5: every bar of the opened files (both sides), before the period's filter
+        self.raw = (int(t[0]), int(t[-1])) if t.size else None
         bo, bh, bl, bc = bo[ib], bh[ib], bl[ib], bc[ib]
         ao, ah, al, ac = ao[ia], ah[ia], al[ia], ac[ia]
         keep = (ac >= bc) & ~(in_closure(t) & in_closure(t + MIN - 1)) & (t >= start - DAY) & (t + MIN <= end)
@@ -391,6 +393,9 @@ class Pair:
                     for r in j.get('data') or []:
                         m.setdefault(int(r['openTime']), float(r['close']))
             out[side] = m
+        ts = sorted(set(out['bid']) & set(out['ask']))
+        self.raw15 = (ts[0], ts[-1]) if ts else None
+        self.t15 = ts
         return out
 
 
@@ -2127,8 +2132,8 @@ def c_spreads(W, avoid, thr2, start, end):
         for season in ('summer', 'winter'):
             for slot in range(96):
                 a = (pr.name, season, slot) in avoid
-                has = has or a
                 xs = cells.get((season, slot), [])
+                has = has or (a and len(xs) > 0)
                 (av if a else kp).extend(xs)
                 if xs:
                     slots.append(dict(season=season, slot=slot, bars=len(xs), med2=c_med2(xs), avoided=a))
@@ -2157,6 +2162,7 @@ def c_compare(C, rows, s, dump, acc_lines=None, not_ordered=None, spreads=None):
         for r, x in zip(rows, d):
             k = r['i']
             C.check(name, k, 'P', r['P'], x['P'], 'exact')
+            C.check(name, k, 'cell', f"{r['cell'][0]}|{r['cell'][1]}|{r['cell'][2]}", x['cell'], 'str')
             C.check(name, k, 'season', r['season'], x['season'], 'str')
             C.check(name, k, 'slot', r['slot'], x['slot'], 'exact')
             C.check('cost.avoided', k, 'avoided', int(r['avoided']), x['avoided'], 'exact')
@@ -2461,8 +2467,24 @@ def main():
         if (k1[0], k1[-1]) != C_Y23_KEYS_M1 or (k15[0], k15[-1]) != C_Y23_KEYS_M15:
             die(f'the key lists {k1[0]}..{k1[-1]}, {k15[0]}..{k15[-1]}')
         keys1, keys15 = set(k1), set(k15)
+    if args.cost and args.ledger:
+        # §8.103 7 (7): (b)'s ② also opens only its own key list — the 1-minute files from S_b − 1 day, the 15-minute
+        # ones from the ledger's start less half an hour and 12 days, to END_b (as the TS reads them)
+        meta0 = json.load(open(os.path.join(args.dump, 'meta.json')))
+        keys1 = set(c_keys(int(meta0['start']) - DAY, end_b))
+        keys15 = set(c_keys(B_LEDGER_FROM - 30 * MIN - 12 * DAY, end_b))
+        # §8.103 6: the weekly run's END_b is a Saturday already past (a later one would compare early)
+        if not args.cost_provisional and end_b > time.time() * 1000:
+            die(f'--end-b {args.end_b} is in the future')
     W = World(args.gmo, args.dump, args.rates, log, ledger=args.ledger, end_b=end_b, keys=keys1)
     pairs15 = [pr.load15(args.gmo, keys15) for pr in W.pairs]
+    if args.cost_2023:
+        # §8.103 5: the day files opened and the bars' times (keys and times only, no price), in the log
+        for pr in W.pairs:
+            f = lambda r: (c_iso(r[0]), c_iso(r[1])) if r else ('-', '-')
+            print(f'{pr.name}: day files opened 1-minute {min(pr.opened, default="-")}..{max(pr.opened, default="-")}, '
+                  f'15-minute {min(pr.opened15, default="-")}..{max(pr.opened15, default="-")}; bars in them 1-minute '
+                  f'{f(pr.raw)[0]}..{f(pr.raw)[1]}, 15-minute {f(pr.raw15)[0]}..{f(pr.raw15)[1]}', flush=True)
     cost = None
     if args.cost:
         avoid, bars, thr2 = c_read_slots(args.cost, args.cost_provisional)
@@ -2525,11 +2547,16 @@ def main():
                 C.check('cost.meta', '2023', 'start', W.start, C_Y23_START, 'exact')
                 C.check('cost.meta', '2023', 'end', W.end, C_Y23_END, 'exact')
                 C.check('cost.meta', '2023', 'split', W.split, C_Y23_END, 'exact')
+                from15 = C_Y23_START - 12 * DAY
                 for pr in W.pairs:
                     for kind_, op in (('m1', pr.opened), ('m15', pr.opened15)):
                         lim = C_Y23_KEYS_M1 if kind_ == 'm1' else C_Y23_KEYS_M15
                         C.check('cost.keys', pr.name, kind_, str(bool(op) and min(op) >= lim[0] and max(op) <= lim[1]), 'True', 'str')
-                    C.check('cost.keys', pr.name, 'bars', str(pr.n == 0 or int(pr.t[-1]) + MIN <= C_Y23_END), 'True', 'str')
+                    # every bar in the files opened ends by END (1- and 15-minute); the bars kept start in the period
+                    C.check('cost.bars', pr.name, 'm1 raw end', str(pr.raw is not None and pr.raw[1] + MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm1 kept', str(pr.n > 0 and int(pr.t[0]) >= C_Y23_START - DAY and int(pr.t[-1]) + MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm15 raw end', str(pr.raw15 is not None and pr.raw15[1] + 15 * MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm15 kept', str(any(from15 <= x and x + 15 * MIN <= C_Y23_END for x in pr.t15)), 'True', 'str')
         if args.cost_only:
             return C
         check_inputs(C, W, pairs15, args.e_round, C.notes)

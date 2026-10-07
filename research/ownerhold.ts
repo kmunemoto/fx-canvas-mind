@@ -19,7 +19,7 @@
 
 import { MINUTE, WEEK, WEEK_OFFSET } from "./lib.ts";
 import { lowerBound } from "./money-data.ts";
-import { weekOf } from "./money-stats.ts";
+import { medianOf, weekOf } from "./money-stats.ts";
 import { type NyClose, nyClosesBetween, rakutenSpread, tausOf } from "./money-trades.ts";
 import { csvCells, parseBisPolicy, rateBefore } from "./longhist-lib.ts";
 import { LEAD15, type LoadStats, type M1, MAINT, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, keysOf, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
@@ -33,7 +33,7 @@ import { A_SHA256, type ARow, type BValue, LEDGER_FROM, LEDGER_HEADER, type Ledg
 import {
   COMPARE_AT, END_B_DEADLINE, INTERVAL_P, PROVISIONAL_1H, PROVISIONAL_4H, PrintItemsError, R_MS, REASONS, RuleFileError, SPREAD_HOURS_PATH, SPREAD_HOURS_SHA256,
   type SlotsFile, Y23_END, Y23_FROM15, Y23_KEYS_M1, Y23_KEYS_M15, Y23_START, bStatusOf, checkItems, deltaOf, DONE_ITEMS, firstSaturdayAfter, judge, provisionalCsv,
-  readSlotsFile, ruleFileOf, summaryOf, WEEKLY_ITEMS,
+  readSlotsFile, ruleFileOf, type Summary, summaryOf, WEEKLY_ITEMS,
 } from "./costhours-lib.ts";
 import {
   type Item, type Mails, type RuleAccounts, booksOf, costDumpOf, csv2023Of, emailsOf, midLookAhead, printItemsOf, printTextOf, ruleAccounts, spreadsOf, weekOutside,
@@ -1197,16 +1197,28 @@ const y23Of = (ds: DataSet, slots: SlotsFile, rg: Range, plant = "") => {
   return { a, c, spreads, checks, ms, ctx };
 };
 
-// 5「数字の後の調べ」 from the TS's own numbers (the Python's are added by the print)
-const afterOf = (r: ReturnType<typeof y23Of>): string[] => {
-  const s = r.c.s;
+// 5「数字の後の調べ」 from the TS's own numbers (the Python's are added by the print): the counts reconciled, each
+// look-ahead check's compared and moved counts, the 1-day win rate's counts, and what was hit. `checks`: the run's
+// §8.102 checks (lookAheadPaths, lookAheadAccount, signalCut; (b): its own run's, or none) and ②'s
+const afterLinesOf = (s: Summary, checks: Analysis["checks"]): string[] => {
   const sumNot = REASONS.filter((x) => x !== "noKept").reduce((a2, x) => a2 + s.notCounted[x], 0);
+  const cmp = (k: string): string => {
+    const c = checks[k];
+    if (!c) return "（この run では無し）";
+    const d = c.detail as Record<string, unknown> | Array<{ compared: number }> | null;
+    let compared: number | string = "-";
+    if (k === "lookAheadPaths" || k === "lookAheadMid") compared = (d as { compared: number }).compared;
+    else if (k === "signalCut") compared = (d as Array<{ compared: number }>).reduce((a2, x) => a2 + x.compared, 0);
+    else if (k === "lookAheadAccount") compared = Object.keys(d as object).length;
+    else if (k === "lookAheadAccountRule") compared = (d as { compared: number }).compared;
+    return `比べた ${compared}・食い違い ${c.n ?? 0}`;
+  };
   const lines = [
     `件数: すべて ${s.emails} ＝ 数えた ${s.counted} ＋ 数えなかった ${sumNot}（${REASONS.filter((x) => x !== "noKept").map((x) => `${x} ${s.notCounted[x]}`).join("・")}）: ${s.emails === s.counted + sumNot ? "合う" : "合わない"}`,
     `数えた ${s.counted} ＝ 避けた ${s.countedAvoided} ＋ 残した ${s.kept}: ${s.counted === s.countedAvoided + s.kept ? "合う" : "合わない"}`,
     `数えた避けた ${s.countedAvoided} ＝ そろえた ${s.aligned} ＋ 同じますに残したメールが無い ${s.notCounted.noKept}: ${s.countedAvoided === s.aligned + s.notCounted.noKept ? "合う" : "合わない"}`,
-    `先読みの確かめ: lookAheadPaths ${JSON.stringify({ compared: (r.checks.lookAheadPaths?.detail as { compared?: number })?.compared, moved: r.checks.lookAheadPaths?.n })}・中値の v ${JSON.stringify({ compared: (r.c.checks.lookAheadMid.detail as { compared: number }).compared, moved: r.c.checks.lookAheadMid.n })}・lookAheadAccount ${r.checks.lookAheadAccount?.n}・ルールの行 ${r.c.checks.lookAheadAccountRule?.n}・signalCut ${r.checks.signalCut?.n}`,
-    `1日以内の勝率の分母と分子: 避けた ${s.win1d.avoided.tp}/${s.win1d.avoided.of}（まだ持っている ${s.win1d.avoided.held}、入らなかった ${s.win1d.avoided.notIn}）・残した ${s.win1d.kept.tp}/${s.win1d.kept.of}（${s.win1d.kept.held}・${s.win1d.kept.notIn}）`,
+    `先読みの確かめ: lookAheadPaths ${cmp("lookAheadPaths")}／中値の v ${cmp("lookAheadMid")}／lookAheadAccount ${cmp("lookAheadAccount")}／ルールの行の口座 ${cmp("lookAheadAccountRule")}／signalCut ${cmp("signalCut")}`,
+    `1日以内の勝率の分母と分子: 避けた ${s.win1d.avoided.tp}/${s.win1d.avoided.of}（まだ持っている ${s.win1d.avoided.held}、入らなかった ${s.win1d.avoided.notIn}。${s.win1d.avoided.tp + s.win1d.avoided.held === s.win1d.avoided.of && s.win1d.avoided.of + s.win1d.avoided.notIn === s.countedAvoided ? "合う" : "合わない"}）・残した ${s.win1d.kept.tp}/${s.win1d.kept.of}（${s.win1d.kept.held}・${s.win1d.kept.notIn}。${s.win1d.kept.tp + s.win1d.kept.held === s.win1d.kept.of && s.win1d.kept.of + s.win1d.kept.notIn === s.kept ? "合う" : "合わない"}）`,
   ];
   const flags: string[] = [];
   if (s.win1d.avoided.rate === 1 || s.win1d.kept.rate === 1) flags.push("1日以内の勝率のどれかが100%");
@@ -1215,6 +1227,7 @@ const afterOf = (r: ReturnType<typeof y23Of>): string[] => {
   lines.push(flags.length ? `当たったもの（調べる項目は同じ）: ${flags.join("・")}` : "100%・|Δ|>10・0をまたがない区間: どれも無し");
   return lines;
 };
+const afterOf = (r: ReturnType<typeof y23Of>): string[] => afterLinesOf(r.c.s, r.checks);
 
 const y23Files = async (dir: string, r: ReturnType<typeof y23Of>, plant = "") => {
   await writeJson(`${dir}/checks.json`, r.checks);
@@ -1268,7 +1281,8 @@ const T_999_99 = 3.39; // t(99), two-sided 99.9% (§8.103 7 (4))
 // ---- (b)'s weekly ② (6): the counts every week, the one comparison -----------------------------------------
 
 // The emails sent from R before END_b: ② on them (P, v, the cells as 2023's); which run this is; its output
-const bCostOf = (m1s: M1[], all: Sig[], endB: number, slots: SlotsFile, plant = "") => {
+// `aChecks`: the (b) run's own §8.102 checks (its look-ahead counts go into the comparing run's「数字の後の調べ」)
+const bCostOf = (m1s: M1[], all: Sig[], endB: number, slots: SlotsFile, plant = "", aChecks: Analysis["checks"] | null = null) => {
   const sigs = all.filter((s) => s.sent! >= R_MS);
   const before = all.length - sigs.length;
   const P0 = sigs.map((s) => pOf(s, B_DELAY));
@@ -1296,14 +1310,14 @@ const bCostOf = (m1s: M1[], all: Sig[], endB: number, slots: SlotsFile, plant = 
     acc = ruleAccounts(m1s, ms, c.paths, c.js, sR, endB, plant);
     c.checks.lookAheadAccountRule = { ok: acc.cut.ok, detail: acc.cut, n: acc.cut.poisoned + acc.cut.changed };
     spreads = spreadsOf(m1s, slots.avoid, slots.thr2, R_MS, endB);
-    print = printItemsOf({ where: `これからのメール（R〜END_b ＝ ${iso(R_MS).slice(0, 10)}〜${iso(endB).slice(0, 10)}）`, kind: "b", s: c.s, spreads, acc, after: [], checks: Object.fromEntries(Object.entries(c.checks).map(([k, x]) => [k, x.ok])), sha256: {}, weeks: Math.round((endB - R_MS) / WEEK) }, plant);
+    print = printItemsOf({ where: `これからのメール（R〜END_b ＝ ${iso(R_MS).slice(0, 10)}〜${iso(endB).slice(0, 10)}）`, kind: "b", s: c.s, spreads, acc, after: afterLinesOf(c.s, { ...(aChecks ?? {}), ...c.checks }), checks: Object.fromEntries(Object.entries(c.checks).map(([k, x]) => [k, x.ok])), sha256: {}, weeks: Math.round((endB - R_MS) / WEEK) }, plant);
   }
   return { c, ms, acc, spreads, status, items, print, before, sR };
 };
 
 // The weekly run's ② (MODE=b): only with the rule's file whose sha256 the program holds (`want`; the weekly run
 // passes SPREAD_HOURS_SHA256 and nothing else), written apart from (b)'s own files (b/costhours.json)
-const bCostWeekly = async (dir: string, m1s: M1[], sigs: Sig[], endB: number, text: string | null, want: string, plant = "") => {
+const bCostWeekly = async (dir: string, m1s: M1[], sigs: Sig[], endB: number, text: string | null, want: string, plant = "", aChecks: Analysis["checks"] | null = null) => {
   if (!want) {
     log("② (§8.103 6): the sha256 of spread-hours.csv is not written in the program yet: no ② row this week");
     return null;
@@ -1318,7 +1332,7 @@ const bCostWeekly = async (dir: string, m1s: M1[], sigs: Sig[], endB: number, te
     await writeJson(`${dir}/costhours.json`, { ok: false, why: e.message });
     return null;
   }
-  const x = bCostOf(m1s, sigs, endB, slots, plant);
+  const x = bCostOf(m1s, sigs, endB, slots, plant, aChecks);
   log(`② : ledger rows sent before R ${x.before} (counted only, not used)`);
   const ok = Object.values(x.c.checks).every((c) => c.ok);
   for (const [k, c] of Object.entries(x.c.checks)) log(`② check ${k}: ${c.ok ? "ok" : "FAILED"}`);
@@ -1422,6 +1436,8 @@ const recomputeLines = (rc: ReturnType<typeof compareRecompute>) => [
 
 if (MODE === "b") {
   if (!isSaturdayMidnight(END_B_MS)) throw new Error(`END_B ${env("END_B")}: not a Saturday 00:00 UTC`);
+  // §8.103 6: a Saturday already past (a later END_b — the deadline above all — would make this the comparing run early)
+  if (END_B_MS > Date.now()) throw new Error(`END_B ${env("END_B")}: in the future`);
   const t0 = Date.now();
   const rows = parseLedger(await Deno.readTextFile(LEDGER));
   const r = await runB("b", { dir: CACHE, fetch: true }, rows, END_B_MS, await bisRates(env("BIS_CSV")), await readACsv());
@@ -1432,7 +1448,7 @@ if (MODE === "b") {
   for (const l of recomputeLines(r.b.recompute)) log(l);
   await writeB(OUT_B, r, END_B_MS);
   // §8.103 6: ②'s weekly row, apart from (b)'s files, only with the rule's file the program's sha256 names
-  await bCostWeekly(OUT_B, r.ds.m1s, r.ds.sigs, END_B_MS, await Deno.readTextFile(SPREAD_HOURS_PATH).catch(() => null), SPREAD_HOURS_SHA256);
+  await bCostWeekly(OUT_B, r.ds.m1s, r.ds.sigs, END_B_MS, await Deno.readTextFile(SPREAD_HOURS_PATH).catch(() => null), SPREAD_HOURS_SHA256, "", r.a.checks);
   const ok = judgeB(r.a.checks);
   log(`TypeScript checks of (b): ${ok ? "all passed" : "FAILED"}. The numbers are in ${OUT_B}, printed only by MODE=printb after the Python check.`);
   if (!ok) Deno.exit(1);
@@ -1449,13 +1465,17 @@ if (MODE === "printb") {
   // §8.103 6: ②'s row — the five items (or that the comparison was done), and the comparing run's sentences —
   // only when its own checks and the Python's ② part passed, and only the items listed
   const cost = await Deno.readTextFile(`${OUT_B}/costhours.json`).then((t) => JSON.parse(t) as { ok: boolean; why?: string; items: Item[]; print: Item[] | null }).catch(() => null);
-  const pyCost = (py as { cost?: { ok: boolean } }).cost;
+  const pyCost = (py as { cost?: { ok: boolean; avoidedCompared?: number; avoidedDiffer?: number } }).cost;
   if (!cost) log("== ② (§8.103 6): no row this week (the sha256 of spread-hours.csv is not written in the program yet)");
   else if (!cost.ok || !pyCost?.ok) log(`== ② (§8.103 6): not printed (${cost.why ?? "a check of ② failed, the TS's or the Python's"})`);
   else {
     checkItems(cost.items, (cost.items.length === 1 ? DONE_ITEMS : WEEKLY_ITEMS) as unknown as string[]);
     log(`== ② (§8.103 6)\n${cost.items.map((x) => `${x.item}: ${x.text}`).join("\n")}`);
-    if (cost.print) log(printTextOf(cost.print));
+    if (cost.print) {
+      // 5「数字の後の調べ」: the Python's own judgment of every email's avoidance, read back
+      for (const x of cost.print) if (x.item === "after") x.text += `\n避けたかの判定（Python が P だけから作り直した判定）: ${pyCost.avoidedCompared ?? "-"} 件を比べ、食い違い ${pyCost.avoidedDiffer ?? "-"} 件`;
+      log(printTextOf(cost.print));
+    }
   }
 }
 
@@ -1632,6 +1652,9 @@ if (MODE === "y2023") {
   const t0 = Date.now();
   const ds = await dataSetOf("2023", { dir: CACHE, fetch: true }, null, Y23_RANGE);
   log(`loaded (${((Date.now() - t0) / 1000).toFixed(0)} s); signals ${ds.sigs.length}`);
+  // 5: the day files opened and the bars kept (keys and times only, no price)
+  log(`day files opened: 1-minute ${ds.opened?.m1.join("..")}, 15-minute ${ds.opened?.m15.join("..")}`);
+  for (const [k, m] of ds.m1s.entries()) log(`${m.pair}: 1-minute bars kept ${m.n ? `${iso(m.t[0])}..${iso(m.t[m.n - 1] + MINUTE)}` : "none"}; 15-minute ${ds.reads[k].first ?? "-"}..${ds.reads[k].last ? iso(Date.parse(ds.reads[k].last!) + 15 * MINUTE) : "-"}`);
   const r = y23Of(ds, slots!, Y23_RANGE);
   await y23Files(`${COST_OUT}/y2023`, r);
   const ok = judgedChecks(r.checks);
@@ -1660,7 +1683,13 @@ if (MODE === "costsyn") {
   const seeds = range(env("SEEDS", "1-100"));
   const full = new Set(range(env("FULL", "1")));
   const plants = env("PLANTS", "").split(",").filter(Boolean);
-  const slots = await provisional("1h");
+  // 7 (4), (5): stage 1's slots once the program holds the file's sha256 (順番 4), the provisional ones before
+  const provisional1h = await provisional("1h");
+  const slotsPath = SPREAD_HOURS_SHA256 ? SPREAD_HOURS_PATH : `${PROVISIONAL_DIR}/provisional-1h.csv`;
+  const slots = SPREAD_HOURS_SHA256 ? await ruleFileOf(await Deno.readTextFile(SPREAD_HOURS_PATH), PAIRS, SPREAD_HOURS_SHA256) : provisional1h;
+  await Deno.mkdir(COST_OUT, { recursive: true });
+  await Deno.writeTextFile(`${COST_OUT}/slots-used.txt`, slotsPath);
+  log(`the slots avoided: ${slotsPath}${SPREAD_HOURS_SHA256 ? " (stage 1's, its sha256 checked)" : " (provisional: stage 1's file not committed yet)"}`);
   const rg: Range = { ...Y23_RANGE, closedKeys: ["20231225"] };
   let pass = true;
   const result: Record<string, unknown> = { sets, seeds: seeds.length, full: [...full], intervalP: INTERVAL_P };
@@ -1764,13 +1793,13 @@ if (MODE === "costsyn") {
       const worse99 = xs.filter((x) => x.hi99 !== null && x.hi99 < 0).length;
       const better99 = xs.filter((x) => x.lo99 !== null && x.lo99 > 0).length;
       const noInterval = xs.filter((x) => x.lo === null).length;
-      const sortedA = xs.map((x) => x.aligned).sort((a2, b2) => a2 - b2);
+      const alignedMedian = medianOf(xs.map((x) => x.aligned));
       const exits = xs.map((x) => x.mExit).filter((x): x is number => x !== null);
       const limit = INTERVAL_P === 0.975 ? 7 : 3;
       const judged = xs.length >= 100;
       const line1 = !judged || effect || (worse <= limit && better <= limit);
       const line2 = !judged || (effect ? mean < -T_999_99 * se : Math.abs(mean) <= T_999_99 * se);
-      return { runs: xs.length, withDelta: n, noInterval, worse, better, worse99, better99, mean, sd, se, line1, line2, judged, alignedMedian: sortedA[Math.floor((sortedA.length - 1) / 2)], meanExit: exits.reduce((a2, x) => a2 + x, 0) / exits.length };
+      return { runs: xs.length, withDelta: n, noInterval, worse, better, worse99, better99, mean, sd, se, line1, line2, judged, alignedMedian, meanExit: exits.reduce((a2, x) => a2 + x, 0) / exits.length };
     };
     const j4 = judgeSet(rows, false);
     lines[set] = j4;
