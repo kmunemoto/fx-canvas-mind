@@ -213,7 +213,7 @@ jobs:
           s=0
           deno run --allow-read=. --allow-write=research/out --allow-env research/ownerhold.ts > /tmp/empty.log 2>&1 || s=$?
           cat /tmp/empty.log
-          if [ "$s" != "3" ] || ! grep -q "stopped before GMO is read" /tmp/empty.log; then echo "::error::emptyConst: exit $s, not stopped before GMO"; exit 1; fi
+          if [ "$s" != "3" ] || ! grep -q "stopped before GMO is read: the sha256 of spread-hours.csv is not written" /tmp/empty.log; then echo "::error::emptyConst: exit $s, not stopped before GMO by the empty constant"; exit 1; fi
 
   s2b:
     needs: [inputs]

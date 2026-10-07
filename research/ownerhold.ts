@@ -1617,10 +1617,13 @@ if (MODE === "y2023") {
   // 7 (0): the rule's file against the sha256 written in the program, before anything is read from GMO
   let slots: SlotsFile;
   try {
+    // the constant first (an empty one stops here, the file not even read), then the file against it
+    const want = PLANT_ENV === "emptyConst" ? "" : SPREAD_HOURS_SHA256;
+    if (!want) throw new RuleFileError("the sha256 of spread-hours.csv is not written in the program yet (stage 1 not committed)");
     const text = await Deno.readTextFile(SPREAD_HOURS_PATH).catch(() => {
       throw new RuleFileError(`${SPREAD_HOURS_PATH}: not there`);
     });
-    slots = await ruleFileOf(text, PAIRS, PLANT_ENV === "emptyConst" ? "" : SPREAD_HOURS_SHA256);
+    slots = await ruleFileOf(text, PAIRS, want);
   } catch (e) {
     if (!(e instanceof RuleFileError)) throw e;
     log(`2023: stopped before GMO is read: ${e.message}`);
