@@ -399,7 +399,10 @@ jobs:
       - name: The Python on the same files
         run: |
           pip install -q numpy
-          python3 research/ownerhold-check.py --quiet --gmo research/.cache --dump research/out/ownerhold/b/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --ledger research/ledger/ultra15.csv --end-b "$END_B" --out research/out/ownerhold/b
+          # §8.103 6: ②'s row too, when the TS wrote one (the program holds the sha256 of spread-hours.csv)
+          COST=""
+          if [ -f research/out/ownerhold/b/costhours.json ] && grep -q '"ok": true' research/out/ownerhold/b/costhours.json; then COST="--cost research/ledger/spread-hours.csv"; fi
+          python3 research/ownerhold-check.py --quiet --gmo research/.cache --dump research/out/ownerhold/b/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --ledger research/ledger/ultra15.csv --end-b "$END_B" --out research/out/ownerhold/b $COST
       - name: The numbers of (b) (every check passed)
         env:
           MODE: printb

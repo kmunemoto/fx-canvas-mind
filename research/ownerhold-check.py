@@ -223,12 +223,18 @@ def in_closure(t):
 
 
 # ---------------------------------------------------------------- GMO の読み込み
-def read_side(d, problems):
+def read_side(d, problems, keys=None, opened=None):
+    """keys: 開いてよい日の鍵（'YYYYMMDD' の集合。§8.103 5・7 (7): 一覧の鍵のファイルだけを開く）。None はすべて。
+    opened: 開いた鍵を足す集合。"""
     T, O, Hh, Ll, C = [], [], [], [], []
     if os.path.isdir(d):
         for fn in sorted(os.listdir(d)):
             if not fn.endswith('.json'):
                 continue
+            if keys is not None and fn[:-5] not in keys:
+                continue
+            if opened is not None:
+                opened.add(fn[:-5])
             path = os.path.join(d, fn)
             try:
                 with open(path, 'rb') as f:
@@ -333,12 +339,15 @@ class Pair:
         self.unit = 0.0001 if self.usd else 0.01
         self.dec = 5 if self.usd else 3
 
-    def load(self, gmo, start, end, problems):
+    def load(self, gmo, start, end, problems, keys=None):
         base = os.path.join(gmo, self.sym, '1min')
-        tb, (bo, bh, bl, bc) = read_side(os.path.join(base, 'bid'), problems)
-        ta, (ao, ah, al, ac) = read_side(os.path.join(base, 'ask'), problems)
+        self.opened = set()
+        tb, (bo, bh, bl, bc) = read_side(os.path.join(base, 'bid'), problems, keys, self.opened)
+        ta, (ao, ah, al, ac) = read_side(os.path.join(base, 'ask'), problems, keys, self.opened)
         common, ib, ia = np.intersect1d(tb, ta, assume_unique=True, return_indices=True)
         t = common
+        # §8.103 5: every bar of the opened files (both sides), before the period's filter
+        self.raw = (int(t[0]), int(t[-1])) if t.size else None
         bo, bh, bl, bc = bo[ib], bh[ib], bl[ib], bc[ib]
         ao, ah, al, ac = ao[ia], ah[ia], al[ia], ac[ia]
         keep = (ac >= bc) & ~(in_closure(t) & in_closure(t + MIN - 1)) & (t >= start - DAY) & (t + MIN <= end)
@@ -366,8 +375,9 @@ class Pair:
         """値段の決まり: T 以前に終わる最後の足（open + 1分 ≦ T）の番号。無ければ −1。"""
         return int(np.searchsorted(self.t, T - MIN, 'right')) - 1
 
-    def load15(self, gmo):
+    def load15(self, gmo, keys=None):
         out = {}
+        self.opened15 = set()
         for side in ('bid', 'ask'):
             d = os.path.join(gmo, self.sym, '15min', side)
             m = {}
@@ -375,11 +385,17 @@ class Pair:
                 for fn in sorted(os.listdir(d)):
                     if not fn.endswith('.json'):
                         continue
+                    if keys is not None and fn[:-5] not in keys:
+                        continue
+                    self.opened15.add(fn[:-5])
                     with open(os.path.join(d, fn), 'rb') as f:
                         j = json.loads(f.read())
                     for r in j.get('data') or []:
                         m.setdefault(int(r['openTime']), float(r['close']))
             out[side] = m
+        ts = sorted(set(out['bid']) & set(out['ask']))
+        self.raw15 = (ts[0], ts[-1]) if ts else None
+        self.t15 = ts
         return out
 
 
@@ -582,7 +598,7 @@ def compare_emails(C, W, dump):
 
 # ---------------------------------------------------------------- 全体（足・時計・合図）
 class World:
-    def __init__(self, gmo, dump, rates_spec, log, ledger=None, end_b=None):
+    def __init__(self, gmo, dump, rates_spec, log, ledger=None, end_b=None, keys=None):
         t_start = time.time()
         self.meta = json.load(open(os.path.join(dump, 'meta.json')))
         m = self.meta
@@ -598,10 +614,36 @@ class World:
         self.cap = float(m['cap'])
         self.rates = Rates(rates_spec)
         self.problems = []
+        self.bars(gmo, log, keys, t_start)
+        self.read_signals(dump)
+        if self.mode_b:
+            self.sigs_ts = self.sigs
+            self.read_ledger(ledger)
+        t1 = time.time()
+        self.compute_paths()
+        log(f'paths for {len(self.sigs)} signals x 2 sides in {time.time() - t1:.1f}s')
+
+    @classmethod
+    def of_signals(cls, gmo, start, end, sigs, log, keys=None):
+        """§8.103 の手の例: dump を読まずに、自分で作った合図（P0 付き）と期間から作る（30万円・100万円・作り物の金利）"""
+        W = cls.__new__(cls)
+        W.meta = {}
+        W.start, W.end, W.split = start, end, end
+        W.delay, W.meta_delay = 2, None
+        W.mode_b, W.end_b = False, None
+        W.startYen, W.cap = 300000.0, 1000000.0
+        W.rates = Rates('synthetic')
+        W.problems = []
+        W.bars(gmo, log, keys, time.time())
+        W.sigs = sigs
+        W.compute_paths()
+        return W
+
+    def bars(self, gmo, log, keys, t_start):
         self.taus, self.deads, self.days = ny_closes(self.start, self.end)
         self.pairs = [Pair(i, n) for i, n in enumerate(PAIRS)]
         for pr in self.pairs:
-            pr.load(gmo, self.start, self.end, self.problems)
+            pr.load(gmo, self.start, self.end, self.problems, keys)
             pr.setup(self.taus)
         log(f'bars loaded in {time.time() - t_start:.1f}s: ' +
             ', '.join(f'{pr.name} {pr.n}' for pr in self.pairs))
@@ -623,13 +665,6 @@ class World:
         j = np.searchsorted(self.taus, G, 'right') - 1
         jj = np.maximum(j, 0)
         self.stopG = (j >= 0) & (G < self.taus[jj] + STOP_LEN) if self.taus.size else np.zeros(G.size, bool)
-        self.read_signals(dump)
-        if self.mode_b:
-            self.sigs_ts = self.sigs
-            self.read_ledger(ledger)
-        t1 = time.time()
-        self.compute_paths()
-        log(f'paths for {len(self.sigs)} signals x 2 sides in {time.time() - t1:.1f}s')
 
     def read_signals(self, dump):
         self.sigs = []
@@ -697,10 +732,14 @@ class World:
         self.path_sig, self.path_opp = [], []
         for s in self.sigs:
             pr = self.pairs[s['p']]
-            # (a): T＋2分（遅れた合図は T＋17分）。(b): sentAt を分に切り上げた時刻＋1分
-            P0 = s['base'] + MIN if self.mode_b else s['T'] + (15 * s['lateN'] + self.delay) * MIN
+            # (a): T＋2分（遅れた合図は T＋17分）。(b): sentAt を分に切り上げた時刻＋1分。§8.103 の手の例: 自分で出した P0
+            if 'P0' in s:
+                P0 = s['P0']
+            else:
+                P0 = s['base'] + MIN if self.mode_b else s['T'] + (15 * s['lateN'] + self.delay) * MIN
             for dirn, out in ((s['dir'], self.path_sig), (-s['dir'], self.path_opp)):
-                tp = s['E'] + dirn * TP_PIPS * pr.unit
+                # §8.103 の手の例: 合図の向きの利確は、例ごとに決めた値（E ± tpPips を丸めたもの）
+                tp = s['tpHand'] if 'tpHand' in s and dirn == s['dir'] else s['E'] + dirn * TP_PIPS * pr.unit
                 r = compute_path(pr, P0, dirn, s['E'], tp, self.end, self.taus)
                 r['tp'] = tp
                 out.append(r)
@@ -745,8 +784,10 @@ class Call:
 
 
 class Account:
-    def __init__(self, W, swap, worst, dep, unlimited):
+    def __init__(self, W, swap, worst, dep, unlimited, skip=frozenset()):
         self.W = W
+        # §8.103 5「口座（参考）」: 注文しないメール（ルールで避けたメール、(b) の R より前のメール）
+        self.skip = skip
         self.swap, self.worst, self.dep, self.unl = swap, worst, dep, unlimited
         self.yen = 0.0 if unlimited else W.startYen
         self.moneyIn = self.yen
@@ -1123,6 +1164,8 @@ class Account:
         if olist:
             ix0 = [int(W.e0[p][g]) for p in range(len(PAIRS))]
             for k in olist:
+                if k in self.skip:
+                    continue
                 self.take_order(k, s, ix0)
         # ③ 指値の約定（置いた順）
         flist = W.fill_at.get(g)
@@ -1212,12 +1255,14 @@ class Account:
             if self.dep == 'notice' and not self.unl:
                 heap.append((tau + NOTICE_AFTER, 1, next(seq), 'notice', ti))
         for P, _, k in W.nobar_orders:
+            if k in self.skip:
+                continue
             heap.append((P, 2, next(seq), 'order', k))
         heap.append((W.split, 9, next(seq), 'split', None))
         heap.append((W.end, 10, next(seq), 'end', None))
         heapq.heapify(heap)
         for k, a in enumerate(W.sacc):
-            if a['none']:
+            if a['none'] or k in self.skip:
                 self.fate[k] = 'none'
         G, nG, busy = W.G, W.nG, W.busy
         g = 0
@@ -1769,10 +1814,606 @@ def write_mine(d, W, th, accs, unl):
                 json.dump(a.summary, f, default=jsonable)
 
 
+# ================================================================ §8.103 ② 段2（5・6・7 (7)）
+# research/costhours*.ts は読まずに、§8.103 の決まりだけから書いた。避けたかは P と固定したファイルだけで決め、
+# 季節は zoneinfo の America/New_York で TS とは別に出す。数えなかった理由は上から1つだけ。中値の1日後の値・
+# ます（週・ペア・向き）・Δ・週ごとの t(C−1) の区間・1日以内の勝率・ルールの行の口座・期間のスプレッドを自分で作る。
+
+from zoneinfo import ZoneInfo
+
+C_SPREAD_SHA256 = ''                                   # 段1のファイルを commit したら書く（TS とは別に持つ）
+C_SPREAD_PATH = 'research/ledger/spread-hours.csv'
+C_HEADER = 'pair,season,slot,utc,bars,median,mean,p90,base,threshold,avoid'
+C_Y23_START = ms_of('2023-11-08T00:00:00Z')
+C_Y23_END = ms_of('2023-12-30T00:00:00Z')
+C_Y23_KEYS_M1 = ('20231106', '20231230')
+C_Y23_KEYS_M15 = ('20231026', '20231230')
+C_R = ms_of('2026-10-08T00:00:00Z')
+C_DEADLINE = ms_of('2027-03-13T00:00:00Z')
+C_COMPARE_AT = 100
+C_ENOUGH = (30, 5)
+C_INTERVAL_P = 0.975
+C_PROVISIONAL = {'1h': {'summer': range(84, 88), 'winter': range(88, 92)},
+                 '4h': {'summer': range(72, 88), 'winter': range(76, 92)}}
+C_REASONS = ['none', 'friday', 'pastEnd', 'evalEarly', 'noKept']
+C_PRINT_ITEMS = ['checks', 'sha256', 'verdict', 'means', 'win1d', 'spread', 'spreadSlots', 'account', 'closing',
+                 'notCounted', 'evalEarlyDates', 'underBars', 'byPair', 'byWeek', 'deltaExit', 'delta4', 'after']
+C_WEEKLY_ITEMS = ['alignedAvoided', 'weeks', 'kept', 'enough', 'compareRun']
+C_DONE_ITEMS = ['done']
+_NY = ZoneInfo('America/New_York')
+
+
+def c_season(ms):
+    d = datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).astimezone(_NY)
+    return 'summer' if d.utcoffset() == datetime.timedelta(hours=-4) else 'winter'
+
+
+def c_slot(ms):
+    return (ms % DAY) // (15 * MIN)
+
+
+def c_hhmm(slot):
+    return f'{slot // 4:02d}:{slot % 4 * 15:02d}'
+
+
+def c_week(ms):
+    return (ms - WEEK_OFFSET) // WEEK
+
+
+def c_wd(ms):
+    """UTC の曜日（0 = 月曜）"""
+    return (ms // DAY + 3) % 7
+
+
+def c_iso(ms):
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.') + f'{ms % 1000:03d}Z'
+
+
+def c_keys(from_ms, to_ms):
+    """JST の日付の鍵（'YYYYMMDD'）を、from の日の前日から to の日まで（to の日より後は無し）"""
+    jst = lambda ms: datetime.datetime.fromtimestamp((ms + 9 * HOUR) / 1000, datetime.timezone.utc).date()
+    a, b = jst(from_ms) - datetime.timedelta(days=1), jst(to_ms)
+    out = []
+    while a <= b:
+        out.append(a.strftime('%Y%m%d'))
+        a += datetime.timedelta(days=1)
+    return out
+
+
+def c_provisional_text(which):
+    lines = [C_HEADER]
+    for pair in PAIRS:
+        for season in ('summer', 'winter'):
+            for slot in range(96):
+                av = slot in C_PROVISIONAL[which][season]
+                lines.append(','.join([pair, season, str(slot), c_hhmm(slot), '5000', '9.00' if av else '1.00',
+                                       '9.0000' if av else '1.0000', '9.0' if av else '1.0', '1.00', '3.00',
+                                       'yes' if av else 'no']))
+    return '\n'.join(lines) + '\n'
+
+
+def c_read_slots(path, provisional):
+    """固定したファイル。実データ: sha256 を自分の定数と照らす（空なら止める）。作り物: 自分で作った仮のファイルと
+    1字まで同じか。戻り値: (避ける枠の集合, 枠ごとの本数, ペアごとのしきい値の2倍（0.1 pips）)"""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    text = raw.decode('utf-8')
+    if provisional:
+        if text != c_provisional_text(provisional):
+            die(f'{path}: not the provisional file {provisional} this program makes')
+    else:
+        if not C_SPREAD_SHA256:
+            die('the sha256 of spread-hours.csv is not written in this program yet')
+        h = hashlib.sha256(raw).hexdigest()
+        if h != C_SPREAD_SHA256:
+            die(f'{path}: sha256 {h}, not {C_SPREAD_SHA256}')
+    rows = [l for l in text.split('\n') if l != '']
+    if rows[0] != C_HEADER:
+        die(f'{path}: header {rows[0]}')
+    avoid, bars, thr2, seen = set(), {}, {}, set()
+    for l in rows[1:]:
+        c = l.split(',')
+        if len(c) != 11 or c[0] not in PAIRS or c[1] not in ('summer', 'winter') or c[10] not in ('yes', 'no'):
+            die(f'{path}: {l}')
+        slot = int(c[2])
+        if not 0 <= slot < 96 or c[3] != c_hhmm(slot):
+            die(f'{path}: {l}')
+        key = (c[0], c[1], slot)
+        if key in seen:
+            die(f'{path}: {key} twice')
+        seen.add(key)
+        bars[key] = int(c[4])
+        if c[10] == 'yes':
+            avoid.add(key)
+        t = round(float(c[9]) * 20)
+        if thr2.setdefault(c[0], t) != t:
+            die(f'{path}: {c[0]} has two thresholds')
+    if len(seen) != len(PAIRS) * 192:
+        die(f'{path}: {len(seen)} rows')
+    return avoid, bars, thr2
+
+
+def c_weekend_after(P):
+    """P の後の最初の GMO の週末の始まり: 金曜 20:00 UTC（米国の夏）・21:00 UTC（冬）。夏冬は zoneinfo"""
+    d0 = P // DAY
+    for k in range(8):
+        d = d0 + k
+        if c_wd(d * DAY) != 4:
+            continue
+        at20 = d * DAY + 20 * HOUR
+        ws = at20 if c_season(at20) == 'summer' else d * DAY + 21 * HOUR
+        if ws > P:
+            return ws
+    die(f'no Friday after {P}')
+
+
+def c_tq(p, df):
+    """t 分布の p 点（p > 0.5）を二分法で（t975 と同じ作り）"""
+    def upper(t):
+        return 0.5 * _betai(0.5 * df, 0.5, df / (df + t * t))
+    lo, hi = 0.0, 1.0
+    while upper(hi) > 1 - p:
+        hi *= 2.0
+    for _ in range(300):
+        mid = 0.5 * (lo + hi)
+        if mid <= lo or mid >= hi:
+            break
+        if upper(mid) > 1 - p:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def c_interval(xs, by_block=False, p=C_INTERVAL_P):
+    """xs: (x, 週)。平均と、週（by_block: 4週）でまとめた標準誤差の t(C−1) の区間（§8.102 の作りと同じ式）"""
+    n = len(xs)
+    if not n:
+        return dict(n=0, weeks=0, m=None, lo=None, hi=None, C=0)
+    m = math.fsum(x for x, _ in xs) / n
+    g = defaultdict(lambda: [0, 0.0])
+    for x, w in xs:
+        k = w // 4 if by_block else w
+        g[k][0] += 1
+        g[k][1] += x
+    C = len(g)
+    weeks = len(set(w for _, w in xs))
+    if C < 2:
+        return dict(n=n, weeks=weeks, m=m, lo=None, hi=None, C=C)
+    se = math.sqrt(C / (C - 1) * math.fsum((s - m * k) ** 2 for k, s in g.values())) / n
+    w = c_tq(p, C - 1) * se
+    return dict(n=n, weeks=weeks, m=m, lo=m - w, hi=m + w, C=C)
+
+
+def c_values(W, i):
+    """メール i の、P＋24時間の値（中値と決済する側）、入ったか・利確したか、評価の足の終わり"""
+    s, r = W.sigs[i], W.path_sig[i]
+    pr = W.pairs[s['p']]
+    d = s['dir']
+    P = r['P']
+    H = P + H24
+    kh = pr.ended(H)
+    last_end = int(pr.t[kh]) + MIN if kh >= 0 else -math.inf
+    out = dict(P=P, none=bool(r['none']), lastEnd=last_end, vMid=0.0, vExit=0.0, in1d=False, tp1d=False)
+    if r['none'] or not r['filled']:
+        return out
+    fk = r['fillK']
+    t = pr.t
+    filled = (fk >= 0 and int(t[fk]) + MIN <= H) or (fk == -1 and P <= H)
+    out['in1d'] = bool(filled)
+    if r['tpd'] and int(t[r['tpK']]) + MIN <= H:
+        v = d * (r['exit'] - r['fill']) / pr.unit
+        out.update(vMid=v, vExit=v, tp1d=True)
+    elif filled and kh >= 0:
+        mid = (float(pr.bc[kh]) + float(pr.ac[kh])) / 2
+        ex = float(pr.bc[kh]) if d > 0 else float(pr.ac[kh])
+        out.update(vMid=d * (mid - r['fill']) / pr.unit, vExit=d * (ex - r['fill']) / pr.unit)
+    return out
+
+
+def c_judge(W, idx, end, avoid):
+    """idx のメールの判定（§8.103 5「数えるメール」の順）と x"""
+    rows = []
+    for i in idx:
+        s = W.sigs[i]
+        v = c_values(W, i)
+        P = v['P']
+        season, slot = c_season(P), c_slot(P)
+        av = (s['pair'], season, slot) in avoid
+        if v['none']:
+            reason = 'none'
+        elif c_wd(P) == 4:
+            reason = 'friday'
+        elif P + H24 > end:
+            reason = 'pastEnd'
+        elif v['lastEnd'] <= min(P + H24, c_weekend_after(P)) - 60 * MIN:
+            reason = 'evalEarly'
+        else:
+            reason = None
+        rows.append(dict(i=i, pair=s['pair'], dir=s['dir'], T=s['T'], sent=s.get('sent'), season=season, slot=slot,
+                         avoided=av, reason=reason, counted=reason is None, aligned=False,
+                         cell=(c_week(s['T']), s['pair'], s['dir']), x=None, xExit=None, **v))
+    kept = defaultdict(list)
+    for r in rows:
+        if r['counted'] and not r['avoided']:
+            kept[r['cell']].append(r)
+    for r in rows:
+        if r['avoided'] and r['counted']:
+            ks = kept.get(r['cell'])
+            if not ks:
+                r['reason'] = 'noKept'
+                continue
+            r['aligned'] = True
+            r['x'] = r['vMid'] - math.fsum(k['vMid'] for k in ks) / len(ks)
+            r['xExit'] = r['vExit'] - math.fsum(k['vExit'] for k in ks) / len(ks)
+    return rows
+
+
+def c_summary(rows, bars):
+    al = [r for r in rows if r['aligned']]
+    d = c_interval([(r['x'], c_week(r['T'])) for r in al])
+    d4 = [r['x'] for r in al if r['pair'] != 'USD/JPY']
+    cnt = [r for r in rows if r['counted']]
+    ca = [r for r in cnt if r['avoided']]
+
+    def grp(xs):
+        v = [r['vMid'] for r in xs]
+        return dict(n=len(v), mean=(math.fsum(v) / len(v)) if v else None, sum=math.fsum(v))
+
+    def win(xs):
+        ent = [r for r in xs if r['in1d']]
+        tp = sum(1 for r in ent if r['tp1d'])
+        return dict(of=len(ent), tp=tp, held=len(ent) - tp, notIn=len(xs) - len(ent),
+                    rate=(tp / len(ent)) if ent else None,
+                    pips=(math.fsum(r['vMid'] for r in ent) / len(ent)) if ent else None)
+    by_pair, by_week = {}, {}
+    for r in cnt:
+        k = 'avoided' if r['avoided'] else 'kept'
+        by_pair.setdefault(r['pair'], dict(avoided=0, kept=0))[k] += 1
+        by_week.setdefault(c_iso(c_week(r['T']) * WEEK + WEEK_OFFSET), dict(avoided=0, kept=0))[k] += 1
+    return dict(
+        emails=len(rows), notCounted={x: sum(1 for r in rows if r['reason'] == x) for x in C_REASONS},
+        counted=len(cnt), countedAvoided=len(ca), aligned=d['n'], kept=len(cnt) - len(ca), weeks=d['weeks'],
+        enough=d['n'] >= C_ENOUGH[0] and d['weeks'] >= C_ENOUGH[1], delta=d,
+        deltaExit=(math.fsum(r['xExit'] for r in al) / len(al)) if al else None,
+        delta4=dict(n=len(d4), m=(math.fsum(d4) / len(d4)) if d4 else None),
+        means=dict(avoided=grp(ca), kept=grp([r for r in cnt if not r['avoided']]), all=grp(cnt)),
+        win1d=dict(avoided=win(ca), kept=win([r for r in cnt if not r['avoided']])),
+        evalEarlyDates=[c_iso(r['P']) for r in rows if r['reason'] == 'evalEarly'],
+        underBars=(sum(1 for r in rows if not r['none'] and bars.get((r['pair'], r['season'], r['slot']), 0) < 1000)
+                   if bars is not None else 0),
+        byPair=by_pair, byWeek=by_week)
+
+
+def c_verdict(s):
+    if not s['enough']:
+        return 'short'
+    d = s['delta']
+    if d['hi'] is not None and d['hi'] < 0:
+        return 'worse'
+    if d['lo'] is not None and d['lo'] > 0:
+        return 'better'
+    return 'neither'
+
+
+C_PLACED = ('tp', 'lc', 'deadline', 'held', 'unfilled', 'cancelCall', 'cancelLc')
+
+
+def c_line(acc, n_emails):
+    """ルールの行の口座のまとめ（入金を引いた損益・ロスカット・期限・上限で入金し切れなかった追証・入れたお金・
+    置けた割合・勝率・1回あたり・終わり方）。メールごとの行き先も"""
+    tr = acc.trades
+    outc = defaultdict(int)
+    for t in tr:
+        outc[t['how']] += 1
+    pips = [t['dir'] * (t['exit'] - t['fill']) / (0.0001 if PAIRS[t['pi']].endswith('/USD') else 0.01) for t in tr]
+    placed = sum(1 for f in acc.fate if f in C_PLACED)
+    return dict(fatesBy=list(acc.fate), S=acc.summary['naEnd'] - acc.summary['inEnd'], lcs=len(acc.lcs),
+                deadlines=sum(1 for c in acc.calls if c.end == 'deadline'),
+                capped=sum(1 for c in acc.calls if c.uAfter is not None and c.uAfter > 0),
+                depositTotal=math.fsum(d['amount'] for d in acc.deposits), placed=placed, emails=n_emails,
+                placedShare=placed / n_emails if n_emails else None,
+                winRate=(outc.get('tp', 0) / len(tr)) if tr else None,
+                pips=(math.fsum(pips) / len(tr)) if tr else None,
+                yen=(math.fsum(t['yen'] for t in tr) / len(tr)) if tr else None, outcomes=dict(outc))
+
+
+def c_spreads(W, avoid, thr2, start, end):
+    out = []
+    for pr in W.pairs:
+        sc = 1000 if pr.name.endswith('JPY') else 100000
+        keep = (pr.t >= start) & (pr.t < end)
+        t = pr.t[keep]
+        s2 = np.rint((pr.ac[keep] - pr.bc[keep]) * sc).astype(np.int64)
+        cells = defaultdict(list)
+        for tt, x in zip(t.tolist(), s2.tolist()):
+            cells[(c_season(tt), c_slot(tt))].append(x)
+        av, kp, slots, has = [], [], [], False
+        for season in ('summer', 'winter'):
+            for slot in range(96):
+                a = (pr.name, season, slot) in avoid
+                xs = cells.get((season, slot), [])
+                has = has or (a and len(xs) > 0)
+                (av if a else kp).extend(xs)
+                if xs:
+                    slots.append(dict(season=season, slot=slot, bars=len(xs), med2=c_med2(xs), avoided=a))
+        out.append(dict(pair=pr.name, avoided2=c_med2(av), kept2=c_med2(kp), avoidedBars=len(av), hasAvoided=has,
+                        thr2=thr2.get(pr.name), slots=slots))
+    return out
+
+
+def c_med2(xs):
+    """中央値の2倍（整数）"""
+    s = sorted(xs)
+    n = len(s)
+    if not n:
+        return None
+    return 2 * s[(n - 1) // 2] if n % 2 else s[n // 2 - 1] + s[n // 2]
+
+
+def c_compare(C, rows, s, dump, acc_lines=None, not_ordered=None, spreads=None):
+    """TS の cost-*.json・csv と全件"""
+    name = 'cost.emails'
+    d = read_csv(os.path.join(dump, 'cost-emails.csv'))
+    if d is None:
+        C.bad(name, 'file', 'missing', None, None)
+    else:
+        C.count(name, 'all', len(rows), len(d))
+        for r, x in zip(rows, d):
+            k = r['i']
+            C.check(name, k, 'P', r['P'], x['P'], 'exact')
+            C.check(name, k, 'cell', f"{r['cell'][0]}|{r['cell'][1]}|{r['cell'][2]}", x['cell'], 'str')
+            C.check(name, k, 'season', r['season'], x['season'], 'str')
+            C.check(name, k, 'slot', r['slot'], x['slot'], 'exact')
+            C.check('cost.avoided', k, 'avoided', int(r['avoided']), x['avoided'], 'exact')
+            C.check(name, k, 'reason', r['reason'] or '', x['reason'], 'str')
+            C.check(name, k, 'counted', int(r['counted']), x['counted'], 'exact')
+            C.check(name, k, 'aligned', int(r['aligned']), x['aligned'], 'exact')
+            C.check(name, k, 'x', r['x'], x['x'] if x['x'] != '' else None, 'pips')
+            C.check(name, k, 'xExit', r['xExit'], x['xExit'] if x['xExit'] != '' else None, 'pips')
+            C.check(name, k, 'vMid', r['vMid'], x['vMid'], 'pips')
+            C.check(name, k, 'vExit', r['vExit'], x['vExit'], 'pips')
+            le = x['lastEnd']
+            C.check(name, k, 'lastEnd', None if r['lastEnd'] == -math.inf else r['lastEnd'],
+                    None if le in ('-Infinity', '') else le, 'exact')
+            C.check(name, k, 'in1d', int(r['in1d']), x['in1d'], 'exact')
+            C.check(name, k, 'tp1d', int(r['tp1d']), x['tp1d'], 'exact')
+    name = 'cost.summary'
+    p = os.path.join(dump, 'cost-summary.json')
+    if not os.path.exists(p):
+        C.bad(name, 'file', 'missing', None, None)
+    else:
+        t = json.load(open(p))
+        for f in ('emails', 'counted', 'countedAvoided', 'aligned', 'kept', 'weeks', 'underBars'):
+            C.check(name, f, f, s[f], t.get(f), 'exact')
+        C.check(name, 'enough', 'enough', str(s['enough']), str(t.get('enough')), 'str')
+        C.check(name, 'verdict', 'verdict', c_verdict(s), t.get('verdict'), 'str')
+        C.check(name, 'intervalP', 'intervalP', C_INTERVAL_P, t.get('intervalP'), 'exact')
+        for x in C_REASONS:
+            C.check(name, 'notCounted', x, s['notCounted'][x], (t.get('notCounted') or {}).get(x), 'exact')
+        for f in ('n', 'weeks', 'C'):
+            C.check(name, 'delta', f, s['delta'][f], t['delta'].get(f), 'exact')
+        for f in ('m', 'lo', 'hi'):
+            C.check(name, 'delta', f, s['delta'][f], t['delta'].get(f), 'pips')
+        C.check(name, 'deltaExit', 'm', s['deltaExit'], t.get('deltaExit'), 'pips')
+        C.check(name, 'delta4', 'n', s['delta4']['n'], t['delta4'].get('n'), 'exact')
+        C.check(name, 'delta4', 'm', s['delta4']['m'], t['delta4'].get('m'), 'pips')
+        for g in ('avoided', 'kept', 'all'):
+            C.check(name, 'means.' + g, 'n', s['means'][g]['n'], t['means'][g].get('n'), 'exact')
+            for f in ('mean', 'sum'):
+                C.check(name, 'means.' + g, f, s['means'][g][f], t['means'][g].get(f), 'pips')
+        for g in ('avoided', 'kept'):
+            for f in ('of', 'tp', 'held', 'notIn'):
+                C.check(name, 'win1d.' + g, f, s['win1d'][g][f], t['win1d'][g].get(f), 'exact')
+            for f in ('rate', 'pips'):
+                C.check(name, 'win1d.' + g, f, s['win1d'][g][f], t['win1d'][g].get(f), 'pips')
+        C.check(name, 'evalEarlyDates', 'list', json.dumps(s['evalEarlyDates']), json.dumps(t.get('evalEarlyDates')), 'str')
+        C.check(name, 'byPair', 'all', json.dumps(s['byPair'], sort_keys=True), json.dumps(t.get('byPair'), sort_keys=True), 'str')
+        C.check(name, 'byWeek', 'all', json.dumps(s['byWeek'], sort_keys=True), json.dumps(t.get('byWeek'), sort_keys=True), 'str')
+    if acc_lines is not None:
+        name = 'cost.accounts'
+        p = os.path.join(dump, 'cost-accounts.json')
+        if not os.path.exists(p):
+            C.bad(name, 'file', 'missing', None, None)
+        else:
+            t = json.load(open(p))
+            C.check(name, 'notOrdered', 'n', not_ordered, t.get('notOrdered'), 'exact')
+            for row in ('none', 'rule'):
+                mine, ts = acc_lines[row], (t.get('lines') or {}).get(row) or {}
+                C.check(name, row, 'fatesBy', json.dumps(mine['fatesBy']), json.dumps(ts.get('fatesBy')), 'str')
+                for f in ('S', 'depositTotal', 'yen'):
+                    C.check(name, row, f, mine[f], ts.get(f), 'yen')
+                for f in ('lcs', 'deadlines', 'capped', 'placed', 'emails'):
+                    C.check(name, row, f, mine[f], ts.get(f), 'exact')
+                for f in ('placedShare', 'winRate', 'pips'):
+                    C.check(name, row, f, mine[f], ts.get(f), 'pips')
+                C.check(name, row, 'outcomes', json.dumps(mine['outcomes'], sort_keys=True), json.dumps(ts.get('outcomes'), sort_keys=True), 'str')
+    if spreads is not None:
+        name = 'cost.spreads'
+        p = os.path.join(dump, 'cost-spreads.json')
+        if not os.path.exists(p):
+            C.bad(name, 'file', 'missing', None, None)
+        else:
+            t = json.load(open(p))
+            C.count(name, 'pairs', len(spreads), len(t))
+            for a, b in zip(spreads, t):
+                C.check(name, a['pair'], 'json', json.dumps(a, sort_keys=True), json.dumps(b, sort_keys=True), 'str')
+
+
+def c_rule_accounts(W, rows, skip_extra=frozenset()):
+    """ルールなし・あり（避けたメールを注文しない）の口座（§8.102 の判断の道筋の作り）"""
+    av = frozenset(r['i'] for r in rows if r['avoided'])
+    base = frozenset(skip_extra)
+    none_acc = Account(W, False, False, 'notice', False, skip=base).run()
+    rule_acc = Account(W, False, False, 'notice', False, skip=base | av).run()
+    n = len(W.sigs) - len(base)
+    lines = {}
+    for name, acc in (('none', none_acc), ('rule', rule_acc)):
+        ln = c_line(acc, n)
+        # (b): R より前のメールは数えない（TS は R 以後のメールだけで口座を作る）
+        if base:
+            keep = [k for k in range(len(W.sigs)) if k not in base]
+            ln['fatesBy'] = [acc.fate[k] for k in keep]
+            ln['placed'] = sum(1 for k in keep if acc.fate[k] in C_PLACED)
+            ln['placedShare'] = ln['placed'] / n if n else None
+        lines[name] = ln
+    not_ordered = sum(1 for r in rows if r['avoided'] and not r['none'])
+    return lines, not_ordered
+
+
+def c_b_status(rows_all, end_b, avoid, W):
+    """(b): END_b ＝ e の run が数える、そろえた避けたメール（e より前に送ったメール、END e）で、比べる run を決める"""
+    def aligned_at(e):
+        if e == end_b:
+            return sum(1 for r in rows_all if r['aligned'])
+        idx = [r['i'] for r in rows_all if r['sent'] < e]
+        return sum(1 for r in c_judge(W, idx, e, avoid) if r['aligned'])
+    d = (C_R // DAY + 1) * DAY
+    while c_wd(d) != 5:
+        d += DAY
+    e = d
+    while e <= end_b:
+        if aligned_at(e) >= C_COMPARE_AT or e == C_DEADLINE:
+            return ('compare' if e == end_b else 'done'), e
+        e += WEEK
+    return 'before', None
+
+
+def c_items_ok(items, allowed):
+    return all(x.get('item') in allowed for x in items)
+
+
+def c_run(C, W, idx, end, avoid, bars, thr2, dump, accounts, spreads_from=None, skip_extra=frozenset()):
+    rows = c_judge(W, idx, end, avoid)
+    s = c_summary(rows, bars)
+    lines = not_ordered = sp = None
+    if accounts:
+        lines, not_ordered = c_rule_accounts(W, rows, skip_extra)
+    if spreads_from is not None:
+        sp = c_spreads(W, avoid, thr2, spreads_from, end)
+    c_compare(C, rows, s, dump, lines, not_ordered, sp)
+    return rows, s
+
+
+def c_hand(args, log):
+    """§8.103 7 (3): research/costhours-hand.json の手の例を、自分で合図から作って計算し、先に書いた答えと TS の
+    書き出しの両方と照らす。仕込んだ誤りの書き出し（plant-*）は、どれも食い違いが出ること"""
+    hand = json.load(open(args.cost_hand))
+    d = args.cost_hand_dir
+    avoid, bars, thr2 = c_read_slots(args.cost, args.cost_provisional)
+    fails = []
+    plants_caught = {}
+    for run in hand['runs']:
+        start, end = ms_of(run['start']), ms_of(run['end'])
+        taus = ny_closes(start, end)[0]
+        # 合図: P0 は T＋2分（sent があれば sent を分に切り上げて＋1分）。E は止まる時間の後に動かした P の足の、
+        # 注文する側の始値。利確2は E ± tpPips（既定10）を、チャートの丸めで
+        tmp = World.of_signals(d + '/gmo', start, end, [], log)
+        sigs = []
+        for n, h in enumerate(run['emails']):
+            p = PAIRS.index(h['pair'])
+            pr = tmp.pairs[p]
+            T = ms_of(h['T'])
+            P0 = ceil_min(ms_of(h['sent'])) + MIN if h.get('sent') else T + 2 * MIN
+            j = int(np.searchsorted(taus, P0, 'right')) - 1
+            P = int(taus[j]) + STOP_LEN if j >= 0 and P0 < int(taus[j]) + STOP_LEN else P0
+            k = int(np.searchsorted(pr.t, P, 'left'))
+            if not (k < pr.n and int(pr.t[k]) == P):
+                die(f'hand {h["id"]}: no bar at P')
+            dirn = 1 if h['side'] == 'BUY' else -1
+            E = float(pr.ao[k]) if dirn > 0 else float(pr.bo[k])
+            tp = round_chart(E + dirn * h.get('tpPips', 10) * pr.unit, pr.dec, 'exact')
+            sigs.append(dict(i=n, pair=h['pair'], p=p, dir=dirn, side=h['side'], open=T - 15 * MIN, T=T, E=E, tpIn=tp,
+                             tpHand=tp, late='0', lateN=0, base=T, sent=ms_of(h['sent']) if h.get('sent') else None,
+                             P0=P0))
+        W = World.of_signals(d + '/gmo', start, end, sigs, log)
+        rows = c_judge(W, range(len(sigs)), end, avoid)
+        lines, _ = c_rule_accounts(W, rows)
+        rule_ordered = [lines['rule']['fatesBy'][k] != 'none' for k in range(len(sigs))]
+        byid = {h['id']: n for n, h in enumerate(run['emails'])}
+        for n, h in enumerate(run['emails']):
+            r, w = rows[n], h['want']
+            got = dict(P=r['P'], season=r['season'], slot=r['slot'], avoided=r['avoided'], reason=r['reason'],
+                       aligned=r['aligned'], in1d=r['in1d'], tp1d=r['tp1d'], ruleOrdered=rule_ordered[n],
+                       weekStart=c_week(r['T']) * WEEK + WEEK_OFFSET)
+            for k, v in w.items():
+                if k in ('P', 'weekStart'):
+                    if ms_of(v) != got[k]:
+                        fails.append(f'{run["name"]} {h["id"]} {k}')
+                elif k == 'midMinusExit':
+                    if not abs(r['vMid'] - r['vExit'] - v) < 1e-9:
+                        fails.append(f'{run["name"]} {h["id"]} {k}')
+                elif k == 'keptMates':
+                    want = r['vMid'] - math.fsum(rows[byid[m]]['vMid'] for m in v) / len(v)
+                    if r['x'] is None or not abs(r['x'] - want) < 1e-9:
+                        fails.append(f'{run["name"]} {h["id"]} x')
+                elif got.get(k) != v:
+                    fails.append(f'{run["name"]} {h["id"]} {k}: want {v}, got {got.get(k)}')
+        s = c_summary(rows, bars)
+        out = os.path.join(d, 'run-' + run['name'])
+        Cm = Cmp()
+        c_compare(Cm, rows, s, out, lines, sum(1 for r in rows if r['avoided'] and not r['none']))
+        for k, v in Cm.mism.items():
+            if v:
+                fails.append(f'{run["name"]} the TS differs: {k} {v}')
+        # 5 pips を避けたメールの v から引く
+        if run['name'] == 'A':
+            k5 = hand['shift']['pips']
+            rows2 = [dict(r, vMid=r['vMid'] - k5) if r['avoided'] else dict(r) for r in rows]
+            kept = defaultdict(list)
+            for r in rows2:
+                if r['counted'] and not r['avoided']:
+                    kept[r['cell']].append(r['vMid'])
+            for r in rows2:
+                if r['aligned']:
+                    r['x'] = r['vMid'] - math.fsum(kept[r['cell']]) / len(kept[r['cell']])
+            s2 = c_summary(rows2, bars)
+            if not (abs(s2['delta']['m'] - (s['delta']['m'] - k5)) < 1e-9 and abs(s2['means']['avoided']['mean'] - (s['means']['avoided']['mean'] - k5)) < 1e-9 and abs(s2['means']['kept']['mean'] - s['means']['kept']['mean']) < 1e-9):
+                fails.append('shift')
+        for pd in sorted(os.listdir(out)):
+            if not pd.startswith('plant-'):
+                continue
+            Cp = Cmp()
+            c_compare(Cp, rows, s, os.path.join(out, pd), lines, sum(1 for r in rows if r['avoided'] and not r['none']))
+            plants_caught[pd[6:]] = plants_caught.get(pd[6:], 0) + sum(Cp.mism.values())
+    for f in fails:
+        print('NOT AS WORKED OUT: ' + f)
+    for k, v in sorted(plants_caught.items()):
+        print(f'planted {k}: the Python differs from its dump in {v} values over the hand examples')
+    print(f'hand examples of ② (Python): {"all as worked out" if not fails else "NOT ALL AS WORKED OUT"}')
+    sys.exit(0 if not fails else 1)
+
+
+def c_compare_b(C, cost, outdir):
+    """(b) の毎週の ② の行: 比べる run かどうか・5つの出力（とその名前）・比べる run の出力の名前"""
+    p = os.path.join(outdir, 'costhours.json')
+    if not os.path.exists(p):
+        C.bad('cost.status', 'file', 'missing', None, None)
+        return
+    t = json.load(open(p))
+    st = t.get('status') or {}
+    C.check('cost.status', 'kind', 'kind', cost['kind'], st.get('kind'), 'str')
+    C.check('cost.status', 'compareEnd', 'compareEnd', cost['compareEnd'], st.get('compareEnd'), 'exact')
+    items = t.get('items') or []
+    allowed = C_DONE_ITEMS if cost['kind'] == 'done' else C_WEEKLY_ITEMS
+    C.check('cost.items', 'names', 'allowed', str(c_items_ok(items, allowed) and len(items) == len(allowed)), 'True', 'str')
+    if cost['kind'] != 'done':
+        s = cost['s']
+        want = dict(alignedAvoided=str(s['aligned']), weeks=str(s['weeks']), kept=str(s['kept']),
+                    enough='yes' if s['enough'] else 'no', compareRun='yes' if cost['kind'] == 'compare' else 'no')
+        got = {x.get('item'): x.get('text') for x in items}
+        for k, v in want.items():
+            C.check('cost.items', k, 'text', v, got.get(k), 'str')
+    pr = t.get('print')
+    C.check('cost.items', 'print', 'present', str(cost['kind'] == 'compare'), str(pr is not None), 'str')
+    if pr is not None:
+        C.check('cost.items', 'print', 'allowed', str(c_items_ok(pr, C_PRINT_ITEMS)), 'True', 'str')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--gmo', required=True)
-    ap.add_argument('--dump', required=True)
+    ap.add_argument('--gmo', default=None)
+    ap.add_argument('--dump', default=None)
     ap.add_argument('--also', action='append', default=[])
     ap.add_argument('--out', default=None)
     ap.add_argument('--rates', default='synthetic')
@@ -1787,11 +2428,24 @@ def main():
     ap.add_argument('--quiet', action='store_true',
                     help='実データ用: 計算した数（追証・ロスカット・入金の回数、E*、比べた件数、食い違いの例）を出さず、'
                          '食い違いの合計と、食い違いのあった種類の名前だけを出す（§8.102 確かめ B (5)）')
+    ap.add_argument('--cost', default=None, help='§8.103 ②: 固定したファイル（spread-hours.csv。作り物の run では仮のファイル）')
+    ap.add_argument('--cost-provisional', choices=['1h', '4h'], default=None,
+                    help='作り物の run: --cost はこのプログラムが作る仮のファイルと同じであること（sha256 の定数は使わない）')
+    ap.add_argument('--cost-2023', action='store_true', help='2023年の run: 鍵の一覧の日のファイルだけを開き、meta の期間を照らす')
+    ap.add_argument('--cost-only', action='store_true', help='② だけを照らす（§8.102 の行は計算しない。7 (6) の作り物）')
+    ap.add_argument('--cost-also', action='append', default=[], help='仕込んだ誤りの ② の書き出し: どれも食い違いが出ること')
+    ap.add_argument('--cost-hand', default=None, help='7 (3): research/costhours-hand.json')
+    ap.add_argument('--cost-hand-dir', default=None, help='7 (3): MODE=costhand の書き出し（gmo・run-*）')
     args = ap.parse_args()
     t0 = time.time()
 
     def log(m):
         print(f'[{time.time() - t0:7.1f}s] {m}', flush=True)
+
+    if args.cost_hand:
+        c_hand(args, log)
+    if not args.gmo or not args.dump:
+        die('--gmo and --dump are needed')
 
     # --also の入力（signals.csv・meta.json）が主と同じか
     def inputs_of(d):
@@ -1806,12 +2460,59 @@ def main():
     if (args.ledger is None) != (args.end_b is None):
         die('--ledger and --end-b go together')
     end_b = ms_of(args.end_b) if args.end_b else None
-    W = World(args.gmo, args.dump, args.rates, log, ledger=args.ledger, end_b=end_b)
-    pairs15 = [pr.load15(args.gmo) for pr in W.pairs]
-    th = third(W)
-    log('third done')
+    # §8.103 5・7 (7): 2023年は、自分で作った鍵の一覧の日のファイルだけを開く
+    keys1 = keys15 = None
+    if args.cost_2023:
+        k1, k15 = c_keys(C_Y23_START - DAY, C_Y23_END), c_keys(C_Y23_START - 12 * DAY, C_Y23_END)
+        if (k1[0], k1[-1]) != C_Y23_KEYS_M1 or (k15[0], k15[-1]) != C_Y23_KEYS_M15:
+            die(f'the key lists {k1[0]}..{k1[-1]}, {k15[0]}..{k15[-1]}')
+        keys1, keys15 = set(k1), set(k15)
+    if args.cost and args.ledger:
+        # §8.103 7 (7): (b)'s ② also opens only its own key list — the 1-minute files from S_b − 1 day, the 15-minute
+        # ones from the ledger's start less half an hour and 12 days, to END_b (as the TS reads them)
+        meta0 = json.load(open(os.path.join(args.dump, 'meta.json')))
+        keys1 = set(c_keys(int(meta0['start']) - DAY, end_b))
+        keys15 = set(c_keys(B_LEDGER_FROM - 30 * MIN - 12 * DAY, end_b))
+        # §8.103 6: the weekly run's END_b is a Saturday already past (a later one would compare early)
+        if not args.cost_provisional and end_b > time.time() * 1000:
+            die(f'--end-b {args.end_b} is in the future')
+    W = World(args.gmo, args.dump, args.rates, log, ledger=args.ledger, end_b=end_b, keys=keys1)
+    pairs15 = [pr.load15(args.gmo, keys15) for pr in W.pairs]
+    if args.cost_2023:
+        # §8.103 5: the day files opened and the bars' times (keys and times only, no price), in the log
+        for pr in W.pairs:
+            f = lambda r: (c_iso(r[0]), c_iso(r[1])) if r else ('-', '-')
+            print(f'{pr.name}: day files opened 1-minute {min(pr.opened, default="-")}..{max(pr.opened, default="-")}, '
+                  f'15-minute {min(pr.opened15, default="-")}..{max(pr.opened15, default="-")}; bars in them 1-minute '
+                  f'{f(pr.raw)[0]}..{f(pr.raw)[1]}, 15-minute {f(pr.raw15)[0]}..{f(pr.raw15)[1]}', flush=True)
+    cost = None
+    if args.cost:
+        avoid, bars, thr2 = c_read_slots(args.cost, args.cost_provisional)
+        if W.mode_b:
+            idx = [i for i, x in enumerate(W.sigs) if x['sent'] >= C_R]
+            pre = frozenset(i for i, x in enumerate(W.sigs) if x['sent'] < C_R)
+            rows = c_judge(W, idx, W.end, avoid)
+            kind, cend = c_b_status(rows, W.end, avoid, W)
+            cost = dict(rows=rows, s=c_summary(rows, bars), kind=kind, compareEnd=cend, lines=None, notOrdered=None,
+                        spreads=None)
+            if kind == 'compare':
+                cost['lines'], cost['notOrdered'] = c_rule_accounts(W, rows, pre)
+                cost['spreads'] = c_spreads(W, avoid, thr2, C_R, W.end)
+        else:
+            rows = c_judge(W, range(len(W.sigs)), W.end, avoid)
+            lines, no = c_rule_accounts(W, rows)
+            cost = dict(rows=rows, s=c_summary(rows, bars), lines=lines, notOrdered=no,
+                        spreads=c_spreads(W, avoid, thr2, W.start, W.end))
+        log('② done')
+    th = None
+    if args.cost_only:
+        if cost is None:
+            die('--cost-only goes with --cost')
+    else:
+        th = third(W)
+        log('third done')
     accs = {}
-    for row, cfg in ACCOUNT_ROWS.items():
+    for row, cfg in ([] if args.cost_only else ACCOUNT_ROWS.items()):
         t1 = time.time()
         accs[row] = Account(W, cfg['swap'], cfg['worst'], cfg['dep'], False).run()
         if args.quiet:
@@ -1820,7 +2521,7 @@ def main():
             log(f'account {row}: {time.time() - t1:.1f}s, calls {len(accs[row].calls)}, lcs {len(accs[row].lcs)}, '
                 f'deposits {len(accs[row].deposits)}')
     unl = {}
-    for row in UNLIMITED_ROWS:
+    for row in ([] if args.cost_only else UNLIMITED_ROWS):
         cfg = ACCOUNT_ROWS[row]
         t1 = time.time()
         unl[row] = Account(W, cfg['swap'], cfg['worst'], cfg['dep'], True).run()
@@ -1837,8 +2538,28 @@ def main():
         C.notes = {}
         for msg in W.problems:
             C.bad('load', 'gmo', msg, None, None)
-        check_inputs(C, W, pairs15, args.e_round, C.notes)
         check_meta(C, W, args.expect_real)
+        if cost is not None:
+            c_compare(C, cost['rows'], cost['s'], dump, cost['lines'], cost['notOrdered'], cost['spreads'])
+            if W.mode_b:
+                c_compare_b(C, cost, os.path.dirname(os.path.normpath(dump)))
+            if args.cost_2023:
+                C.check('cost.meta', '2023', 'start', W.start, C_Y23_START, 'exact')
+                C.check('cost.meta', '2023', 'end', W.end, C_Y23_END, 'exact')
+                C.check('cost.meta', '2023', 'split', W.split, C_Y23_END, 'exact')
+                from15 = C_Y23_START - 12 * DAY
+                for pr in W.pairs:
+                    for kind_, op in (('m1', pr.opened), ('m15', pr.opened15)):
+                        lim = C_Y23_KEYS_M1 if kind_ == 'm1' else C_Y23_KEYS_M15
+                        C.check('cost.keys', pr.name, kind_, str(bool(op) and min(op) >= lim[0] and max(op) <= lim[1]), 'True', 'str')
+                    # every bar in the files opened ends by END (1- and 15-minute); the bars kept start in the period
+                    C.check('cost.bars', pr.name, 'm1 raw end', str(pr.raw is not None and pr.raw[1] + MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm1 kept', str(pr.n > 0 and int(pr.t[0]) >= C_Y23_START - DAY and int(pr.t[-1]) + MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm15 raw end', str(pr.raw15 is not None and pr.raw15[1] + 15 * MIN <= C_Y23_END), 'True', 'str')
+                    C.check('cost.bars', pr.name, 'm15 kept', str(any(from15 <= x and x + 15 * MIN <= C_Y23_END for x in pr.t15)), 'True', 'str')
+        if args.cost_only:
+            return C
+        check_inputs(C, W, pairs15, args.e_round, C.notes)
         if W.mode_b:
             compare_b(C, W, dump, args.a_csv)
         compare_paths(C, W, dump)
@@ -1852,7 +2573,13 @@ def main():
 
     def write(C, outdir, dump):
         kinds = sorted(set(C.compared) | set(C.mism))
-        res = dict(ok=sum(C.mism.values()) == 0, dump=os.path.abspath(dump),
+        ck = [k for k in kinds if k.startswith('cost.')]
+        cost_res = None if cost is None else dict(
+            ok=sum(C.mism.get(k, 0) for k in ck) == 0 and not W.problems,
+            avoidedCompared=C.compared.get('cost.avoided', 0), avoidedDiffer=C.mism.get('cost.avoided', 0),
+            opened=None if not args.cost_2023 else {pr.name: [min(pr.opened, default=None), max(pr.opened, default=None),
+                                                             min(pr.opened15, default=None), max(pr.opened15, default=None)] for pr in W.pairs})
+        res = dict(ok=sum(C.mism.values()) == 0, dump=os.path.abspath(dump), cost=cost_res,
                    compared={k: C.compared.get(k, 0) for k in kinds},
                    mismatched={k: C.mism.get(k, 0) for k in kinds},
                    examples={k: v for k, v in C.ex.items() if v},
@@ -1863,6 +2590,15 @@ def main():
         return res
 
     main_rc = 0
+    # §8.103 7 (9): 仕込んだ誤りの ② の書き出しは、どれも食い違いが出ること
+    for d in args.cost_also:
+        Cp = Cmp()
+        c_compare(Cp, cost['rows'], cost['s'], d, cost['lines'], cost['notOrdered'], cost['spreads'])
+        nm = sum(Cp.mism.values())
+        names = ', '.join(k for k, v in Cp.mism.items() if v)
+        print(f'cost also {d}: mismatched {nm}' + (f' (in: {names})' if names else ' — NOT CAUGHT'))
+        if nm == 0:
+            main_rc = 1
     for n, d in enumerate([args.dump] + args.also):
         C = compare(d)
         res = write(C, (args.out or d) if n == 0 else d, d)
@@ -1874,7 +2610,7 @@ def main():
                 # (b): the entries that differ from the 15-minute bars' (counted, not a mismatch: the email's own E)
                 print(f'(b) E differs from the 15-minute bars: {C.notes.get("b_E_differs_from_15min_bars", 0)} of {len(W.sigs)}')
             if n == 0:
-                main_rc = 0 if tot_m == 0 else 1
+                main_rc = main_rc if tot_m == 0 else 1
             continue
         if n == 0:
             print('kind'.ljust(34), 'compared'.rjust(9), 'mismatched'.rjust(10))
@@ -1884,7 +2620,7 @@ def main():
                 print(f'--- {k}: first {len(ex)} of {res["mismatched"][k]} mismatches')
                 for e in ex:
                     print('   ', json.dumps(e, default=jsonable))
-            main_rc = 0 if tot_m == 0 else 1
+            main_rc = main_rc if tot_m == 0 else 1
         bad = ', '.join(f'{k} {v}' for k, v in res['mismatched'].items() if v)
         print(f'{d}: compared {tot_c}, mismatched {tot_m}' + (f' ({bad})' if bad else ''))
     log('done')

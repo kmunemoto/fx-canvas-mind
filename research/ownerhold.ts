@@ -17,12 +17,12 @@
 // (one order followed alone), ownerhold-account.ts (the account minute by
 // minute; the all-accepted path, E* and M), ownerhold-report.ts (the lines).
 
-import { MINUTE, WEEK } from "./lib.ts";
+import { MINUTE, WEEK, WEEK_OFFSET } from "./lib.ts";
 import { lowerBound } from "./money-data.ts";
-import { weekOf } from "./money-stats.ts";
+import { medianOf, weekOf } from "./money-stats.ts";
 import { type NyClose, nyClosesBetween, rakutenSpread, tausOf } from "./money-trades.ts";
 import { csvCells, parseBisPolicy, rateBefore } from "./longhist-lib.ts";
-import { LEAD15, type LoadStats, type M1, MAINT, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
+import { LEAD15, type LoadStats, type M1, MAINT, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, keysOf, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
 import { GMO_SYMBOLS, dateKeys } from "../supabase/functions/track-outcomes/quotes.ts";
 import { type Book, type Fill, type FollowOpts, NO_CUT, type Path, follow, lastEnded, lookAhead, makeBook, maintOf, rakutenM1, valueAt } from "./ownerhold-trades.ts";
 import { type AccountOpts, type AccountOut, MAIN_OPTS, type Market, type OrderIn, type SwapFn, runAccount } from "./ownerhold-account.ts";
@@ -30,9 +30,21 @@ import { type AccountLine, DAY_MS, type DRow, type PerEmailSplit, type Third, ac
 import { ULTRA_PAIRS } from "../supabase/functions/_shared/ultra.ts";
 import { FIXTURES } from "./ownerhold-fixture.ts";
 import { A_SHA256, type ARow, type BValue, LEDGER_FROM, LEDGER_HEADER, type LedgerRow, compareRecompute, delaysOf, ledgerSigs, parseACsv, parseLedger, windowOf } from "./ownerhold-b.ts";
+import {
+  COMPARE_AT, END_B_DEADLINE, INTERVAL_P, PROVISIONAL_1H, PROVISIONAL_4H, PrintItemsError, R_MS, REASONS, RuleFileError, SPREAD_HOURS_PATH, SPREAD_HOURS_SHA256,
+  type SlotsFile, Y23_END, Y23_FROM15, Y23_KEYS_M1, Y23_KEYS_M15, Y23_START, bStatusOf, checkItems, deltaOf, DONE_ITEMS, firstSaturdayAfter, judge, provisionalCsv,
+  readSlotsFile, ruleFileOf, type Summary, summaryOf, WEEKLY_ITEMS,
+} from "./costhours-lib.ts";
+import {
+  type Item, type Mails, type RuleAccounts, booksOf, costDumpOf, csv2023Of, emailsOf, midLookAhead, printItemsOf, printTextOf, ruleAccounts, spreadsOf, weekOutside,
+  weeklyItemsOf,
+} from "./costhours.ts";
+import { avoidKey, seasonOf, sha256Hex, slotOf } from "./spreadhours-lib.ts";
 
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "synthetic");
+// §8.103 7 (9): a planted error that stops a run (emptyConst: the 2023 mode with an empty sha256 constant)
+const PLANT_ENV = env("PLANT", "");
 const START = env("START", "2024-01-01");
 const END = env("END", "2026-10-03T00:00:00Z");
 const SPLIT = env("SPLIT", "2025-05-19");
@@ -99,6 +111,8 @@ export interface DataSet {
   // the emails were judged without (listed, not a failure: the sweep read the same GMO files; a file kept
   // while its day was going on is read again by the loader, wholeDayFile)
   m15Gaps?: Array<{ pair: string; slots: number; examples: string[] }>;
+  // #206 (docs §8.103 5): the day keys the reads opened (keysOf, as loadM1 and load15 open them), first and last
+  opened?: { m1: [string, string]; m15: [string, string] };
 }
 
 const m15GapsOf = (m1: M1, q15: Array<{ datetime: string }>, from = START_MS, to = END_MS): { pair: string; slots: number; examples: string[] } => {
@@ -118,7 +132,19 @@ const m15GapsOf = (m1: M1, q15: Array<{ datetime: string }>, from = START_MS, to
   return out;
 };
 
-const dataSetOf = async (name: string, src: Source | null, walk: { set: string; seed: number } | null): Promise<DataSet> => {
+// the bars a data set reads: (a)'s START..END, its 15-minute bars from START − LEAD15; 2023's (§8.103 5) its own;
+// the walks' holidays (§8.103 7 (4): none in (a)'s)
+interface Range {
+  start: number;
+  end: number;
+  from15: number;
+  closedKeys?: string[];
+  // where the reads stop (planted "pastEndBar", §8.103 7 (9): a bar after END read; the checks of 5 must stop it)
+  readEnd?: number;
+}
+const RANGE_A: Range = { start: START_MS, end: END_MS, from15: START_MS - LEAD15 };
+
+const dataSetOf = async (name: string, src: Source | null, walk: { set: string; seed: number } | null, rg: Range = RANGE_A): Promise<DataSet> => {
   const load = newLoadStats();
   const m1s: M1[] = [];
   const reads: SignalRead[] = [];
@@ -128,31 +154,36 @@ const dataSetOf = async (name: string, src: Source | null, walk: { set: string; 
     let q15;
     if (walk) {
       const trend = walk.set === "t01" ? 0.01 : walk.set === "t03" ? 0.03 : 0;
-      const w = synthesize(pair, pi, { seed: walk.seed, trend, startPips: trend ? 100_000 : null }, START_MS - LEAD15 - DAY_MS, END_MS);
+      // (a)'s walks end at END; 2023's (written out) go on 4 days past it, so a read past END finds bars
+      const to = rg === RANGE_A ? rg.end : rg.end + 4 * DAY_MS;
+      const w = synthesize(pair, pi, { seed: walk.seed, trend, startPips: trend ? 100_000 : null, ...(rg.closedKeys ? { closedKeys: rg.closedKeys } : {}) }, rg.from15 - DAY_MS, src ? to : rg.end);
       if (src) {
         // written out and read back: the Python check reads the same files
-        await writeGmoFiles(src.dir, pair, w, START_MS - LEAD15 - DAY_MS, END_MS);
-        m1 = await loadM1(src, pair, START_MS - DAY_MS, END_MS, load);
-        q15 = await load15(src, pair, START_MS - LEAD15, END_MS, load);
+        await writeGmoFiles(src.dir, pair, w, rg.from15 - DAY_MS, to);
+        m1 = await loadM1(src, pair, rg.start - DAY_MS, rg.readEnd ?? rg.end, load);
+        q15 = await load15(src, pair, rg.from15, rg.readEnd ?? rg.end, load);
       } else {
-        const k = lowerBound(w.m1.t, START_MS - DAY_MS);
+        const k = lowerBound(w.m1.t, rg.start - DAY_MS);
         const cut = (xs: Float64Array) => xs.subarray(k);
         m1 = { pair, n: w.m1.n - k, t: cut(w.m1.t), bo: cut(w.m1.bo), bh: cut(w.m1.bh), bl: cut(w.m1.bl), bc: cut(w.m1.bc), ao: cut(w.m1.ao), ah: cut(w.m1.ah), al: cut(w.m1.al), ac: cut(w.m1.ac) };
-        q15 = w.q15.filter((q) => Date.parse(q.datetime) >= START_MS - LEAD15);
+        q15 = w.q15.filter((q) => Date.parse(q.datetime) >= rg.from15);
       }
     } else {
-      m1 = await loadM1(src!, pair, START_MS - DAY_MS, END_MS, load);
-      q15 = await load15(src!, pair, START_MS - LEAD15, END_MS, load);
+      m1 = await loadM1(src!, pair, rg.start - DAY_MS, rg.readEnd ?? rg.end, load);
+      q15 = await load15(src!, pair, rg.from15, rg.readEnd ?? rg.end, load);
     }
     m1s.push(m1);
-    if (src) m15Gaps.push(m15GapsOf(m1, q15));
+    if (src) m15Gaps.push(m15GapsOf(m1, q15, rg.start, rg.end));
     // the look-ahead check of the signals on the walks written out (FULL) and the real data
-    reads.push(signalsOf(pair, pi, q15, START_MS, END_MS, src !== null));
+    reads.push(signalsOf(pair, pi, q15, rg.start, rg.end, src !== null));
   }
   const sigs = reads.flatMap((r) => r.signals);
   // by P, then Rakuten's pair order, BUY first (the order a minute's emails are taken in)
   sigs.sort((a, b) => pOf(a, DELAY) - pOf(b, DELAY) || a.pi - b.pi || b.dir - a.dir);
-  return { name, m1s, sigs, reads, load, src, rates: walk ? synRates : await bisRates(env("BIS_CSV")), m15Gaps };
+  const k1 = keysOf(rg.start - DAY_MS, rg.readEnd ?? rg.end).keys;
+  const k15 = keysOf(rg.from15, rg.readEnd ?? rg.end).keys;
+  const opened = src ? { m1: [k1[0], k1[k1.length - 1]] as [string, string], m15: [k15[0], k15[k15.length - 1]] as [string, string] } : undefined;
+  return { name, m1s, sigs, reads, load, src, rates: walk ? synRates : await bisRates(env("BIS_CSV")), m15Gaps, opened };
 };
 
 // ---- the analysis of one data set -----------------------------------------------------------
@@ -1002,6 +1033,314 @@ if (MODE === "print") {
   log(csv);
 }
 
+// ---- §8.103 ② stage 2 (5, 6, 7): the slots avoided tested on data the rule was not chosen on ------------------
+
+// the planted errors of 7 (9) that change the computing (the others stop a run: below)
+const COST_PLANTS = ["slotFromOpen", "vExit", "noWeekCell", "fridayIn", "holidayIn", "keptMeanAll", "pastEndIn", "blocks4", "ruleOrdersAvoided", "midAhead"];
+const Y23_RANGE: Range = { start: Y23_START, end: Y23_END, from15: Y23_FROM15 };
+// 7 (11): (a)'s fourteen checks less tf-winrate's
+const Y23_CHECKS = ["loads", "signalProbe", "signalCut", "lookAheadPaths", "tpAfterEntryPaths", "engineVsPaths", "tpAfterEntryAccount", "lookAheadAccount", "estar", "swapNights", "swapRule", "swapAgain", "dOutside"];
+const COST_OUT = `${OUT}/cost`;
+const PROVISIONAL_DIR = "research/out/costhours";
+
+// the provisional files (7 (0)): written where only the synthetic modes read them, and read back as the real file is
+const provisional = async (which: "1h" | "4h"): Promise<SlotsFile> => {
+  const text = provisionalCsv(PAIRS, which === "1h" ? PROVISIONAL_1H : PROVISIONAL_4H);
+  await Deno.mkdir(PROVISIONAL_DIR, { recursive: true });
+  await Deno.writeTextFile(`${PROVISIONAL_DIR}/provisional-${which}.csv`, text);
+  return readSlotsFile(await Deno.readTextFile(`${PROVISIONAL_DIR}/provisional-${which}.csv`), PAIRS);
+};
+
+// One run's ② on its bars and emails (5): the values, the judgments, the summary, the checks of 7 (8)
+const costOf = (m1s: M1[], ms: Mails, slots: SlotsFile, start: number, end: number, plant = "", accounts = true) => {
+  const books = booksOf(m1s, start, end);
+  const { es, paths } = emailsOf(books, ms, end, plant);
+  const js = judge(es, slots.avoid, { end, plant });
+  const s = summaryOf(es, js, slots.bars, plant);
+  const mid = midLookAhead(books, ms, paths, end, plant);
+  const wk = weekOutside(es, js);
+  const acc = accounts ? ruleAccounts(m1s, ms, paths, js, start, end, plant) : null;
+  const checks: Analysis["checks"] = {
+    lookAheadMid: { ok: mid.moved === 0 && (mid.compared > 0 || es.every((e) => e.none)), detail: mid, n: mid.moved },
+    weekOutside: { ok: wk.n === 0, detail: wk, n: wk.n },
+  };
+  if (acc) checks.lookAheadAccountRule = { ok: acc.cut.ok, detail: acc.cut, n: acc.cut.poisoned + acc.cut.changed };
+  return { es, js, s, paths, acc, checks };
+};
+
+// 5「2024年の足を読まない」: the day files opened and the bars kept, inside the period's own; every 15-minute
+// window whole (noWindow 0) — a stop's log shows only each pair's 600th bar's close (bar times only)
+const readChecksOf = (ds: DataSet, rg: Range, keys: { m1: readonly [string, string]; m15: readonly [string, string] }): Analysis["checks"] => {
+  const bad: string[] = [];
+  const o = ds.opened;
+  if (!o) bad.push("no day file opened");
+  else {
+    if (!(o.m1[0] >= keys.m1[0] && o.m1[1] <= keys.m1[1])) bad.push(`1-minute day files ${o.m1[0]}..${o.m1[1]}, outside ${keys.m1[0]}..${keys.m1[1]}`);
+    if (!(o.m15[0] >= keys.m15[0] && o.m15[1] <= keys.m15[1])) bad.push(`15-minute day files ${o.m15[0]}..${o.m15[1]}, outside ${keys.m15[0]}..${keys.m15[1]}`);
+  }
+  for (const m of ds.m1s) {
+    if (!m.n) bad.push(`${m.pair}: no 1-minute bar`);
+    else if (!(m.t[0] >= rg.start - DAY_MS && m.t[m.n - 1] + MINUTE <= rg.end)) bad.push(`${m.pair}: 1-minute bars ${iso(m.t[0])}..${iso(m.t[m.n - 1] + MINUTE)}`);
+  }
+  for (const r of ds.reads) {
+    if (r.first === null || r.last === null) bad.push(`${r.pair}: no 15-minute bar`);
+    else if (!(Date.parse(r.first) >= rg.from15 && Date.parse(r.last) + 15 * MINUTE <= rg.end)) bad.push(`${r.pair}: 15-minute bars ${r.first}..${r.last}`);
+  }
+  const noWindow = ds.reads.map((r) => ({ pair: r.pair, noWindow: r.noWindow, bar600: r.bar600 }));
+  const nw = noWindow.reduce((a2, r) => a2 + r.noWindow, 0);
+  return {
+    readsInPeriod: { ok: bad.length === 0, detail: { opened: o, bad }, n: bad.length, why: bad.length ? `${bad.length} reads outside the period` : undefined },
+    noWindow: { ok: nw === 0, detail: noWindow, n: nw, why: nw ? `each pair's 600th 15-minute bar closed at: ${noWindow.map((r) => `${r.pair} ${r.bar600}`).join(", ")}` : undefined },
+  };
+};
+
+const writeCost = async (dir: string, files: Record<string, string>) => {
+  await Deno.mkdir(dir, { recursive: true });
+  for (const [k, v] of Object.entries(files)) await Deno.writeTextFile(`${dir}/${k}`, v);
+};
+const judgedChecks = (checks: Analysis["checks"]): boolean => {
+  let ok = true;
+  for (const [k, c] of Object.entries(checks)) {
+    log(`check ${k}: ${c.ok ? "ok" : "FAILED"}`);
+    if (!c.ok && c.why) log(`  ${c.why}`);
+    if (!c.ok) ok = false;
+  }
+  return ok;
+};
+
+// ---- the hand examples (7 (3)): research/costhours-hand.json, its answers written before this was run ----
+
+interface HandEmail {
+  id: string;
+  pair: string;
+  side: "BUY" | "SELL";
+  T: string;
+  sent?: string;
+  tpPips?: number;
+  want: Record<string, unknown>;
+}
+interface HandRun {
+  name: string;
+  start: string;
+  end: string;
+  emails: HandEmail[];
+}
+interface Hand {
+  walk: { seed: number; from: string; to: string; closedKeys: string[]; wide: Array<{ pair: string; from: string; to: string; pips: number }> };
+  runs: HandRun[];
+  shift: { pips: number };
+}
+const HAND_PATH = "research/costhours-hand.json";
+
+// the hand emails as signals: P0 T + 2 minutes, or (b)'s from sent; E the open of the order's side in the bar at
+// P (moved past the stop), TP E ± tpPips
+const handMails = (run: HandRun, m1s: M1[], books: Book[]): Mails => {
+  const sigs: Sig[] = [];
+  const P0: number[] = [];
+  for (const h of run.emails) {
+    const pi = PAIRS.indexOf(h.pair as (typeof PAIRS)[number]);
+    const T = Date.parse(h.T);
+    const sent = h.sent ? Date.parse(h.sent) : undefined;
+    const p0 = sent !== undefined ? Math.ceil(sent / MINUTE) * MINUTE + MINUTE : T + DELAY * MINUTE;
+    const tau = maintOf(books[pi].taus, p0);
+    const P = tau === null ? p0 : tau + MAINT;
+    const m = m1s[pi];
+    const k = lowerBound(m.t, P);
+    if (!(k < m.n && m.t[k] === P)) throw new Error(`hand ${h.id}: no ${h.pair} bar at ${iso(P)}`);
+    const dir = h.side === "BUY" ? 1 : -1;
+    const E = dir === 1 ? m.ao[k] : m.bo[k];
+    const tp = Number((E + dir * (h.tpPips ?? 10) * unitOf(h.pair)).toFixed(h.pair.includes("JPY") ? 3 : 5));
+    sigs.push({ pair: h.pair, pi, side: h.side, dir, open: T - 15 * MINUTE, T, E, tp, late: false, base: T, bidC: NaN, askC: NaN, ...(sent !== undefined ? { sent } : {}) });
+    P0.push(p0);
+  }
+  return { sigs, P0 };
+};
+
+// the worked-out answers against one run's numbers: each mismatch a line
+const handFails = (run: HandRun, c: ReturnType<typeof costOf>): string[] => {
+  const fails: string[] = [];
+  const at = new Map(run.emails.map((h, i) => [h.id, i]));
+  run.emails.forEach((h, i) => {
+    const e = c.es[i];
+    const j = c.js[i];
+    const w = h.want;
+    // times as ms (the answers write them as ISO without milliseconds)
+    const got: Record<string, unknown> = { P: e.P, season: j.season, slot: j.slot, avoided: j.avoided, reason: j.reason, aligned: j.aligned, in1d: e.in1d, tp1d: e.tp1d, ruleOrdered: c.acc?.ruleOrdered[i], weekStart: weekOf(e.T) * WEEK + WEEK_OFFSET };
+    for (const k of ["P", "season", "slot", "avoided", "reason", "aligned", "in1d", "tp1d", "ruleOrdered", "weekStart"]) {
+      const want = k === "P" || k === "weekStart" ? (k in w ? Date.parse(w[k] as string) : undefined) : w[k];
+      if (k in w && want !== got[k]) fails.push(`${run.name} ${h.id} ${k}: want ${JSON.stringify(w[k])}, got ${k === "P" || k === "weekStart" ? iso(got[k] as number) : JSON.stringify(got[k])}`);
+    }
+    if ("midMinusExit" in w && !(Math.abs(e.vMid - e.vExit - (w.midMinusExit as number)) < 1e-9)) fails.push(`${run.name} ${h.id} midMinusExit: want ${w.midMinusExit}, got ${e.vMid - e.vExit}`);
+    if ("keptMates" in w) {
+      const mates = (w.keptMates as string[]).map((id) => c.es[at.get(id)!].vMid);
+      const want = e.vMid - mates.reduce((s2, v) => s2 + v, 0) / mates.length;
+      if (!(j.x !== null && Math.abs(j.x - want) < 1e-9)) fails.push(`${run.name} ${h.id} x: want ${want}, got ${j.x}`);
+    }
+  });
+  return fails;
+};
+
+
+// ---- 2023-11/12 (5): one run's numbers, from the bars of a data set (real, or a walk written out) ----------
+
+const y23Of = (ds: DataSet, slots: SlotsFile, rg: Range, plant = "") => {
+  const ctx: Ctx = { start: rg.start, end: rg.end, split: rg.end, startYen: START_YEN, cap: CAP };
+  const a = analyse(ds, ctx, "all");
+  const ms: Mails = { sigs: ds.sigs, P0: ds.sigs.map((s) => pOf(s, DELAY)) };
+  const c = costOf(ds.m1s, ms, slots, rg.start, rg.end, plant);
+  const spreads = spreadsOf(ds.m1s, slots.avoid, slots.thr2, rg.start, rg.end);
+  const checks: Analysis["checks"] = {};
+  for (const k of Y23_CHECKS) checks[k] = a.checks[k] ?? { ok: false, detail: "not run", why: `${k} was not run` };
+  Object.assign(checks, readChecksOf(ds, rg, { m1: Y23_KEYS_M1, m15: Y23_KEYS_M15 }), c.checks);
+  // the rule's row without the rule is §8.102's main row, run again
+  checks.ruleNoneIsMain = { ok: JSON.stringify(c.acc!.none) === JSON.stringify(a.raw!.outs.main), detail: null };
+  return { a, c, spreads, checks, ms, ctx };
+};
+
+// 5「数字の後の調べ」 from the TS's own numbers (the Python's are added by the print): the counts reconciled, each
+// look-ahead check's compared and moved counts, the 1-day win rate's counts, and what was hit. `checks`: the run's
+// §8.102 checks (lookAheadPaths, lookAheadAccount, signalCut; (b): its own run's, or none) and ②'s
+const afterLinesOf = (s: Summary, checks: Analysis["checks"]): string[] => {
+  const sumNot = REASONS.filter((x) => x !== "noKept").reduce((a2, x) => a2 + s.notCounted[x], 0);
+  const cmp = (k: string): string => {
+    const c = checks[k];
+    if (!c) return "（この run では無し）";
+    const d = c.detail as Record<string, unknown> | Array<{ compared: number }> | null;
+    let compared: number | string = "-";
+    if (k === "lookAheadPaths" || k === "lookAheadMid") compared = (d as { compared: number }).compared;
+    else if (k === "signalCut") compared = (d as Array<{ compared: number }>).reduce((a2, x) => a2 + x.compared, 0);
+    else if (k === "lookAheadAccount") compared = Object.keys(d as object).length;
+    else if (k === "lookAheadAccountRule") compared = (d as { compared: number }).compared;
+    return `比べた ${compared}・食い違い ${c.n ?? 0}`;
+  };
+  const lines = [
+    `件数: すべて ${s.emails} ＝ 数えた ${s.counted} ＋ 数えなかった ${sumNot}（${REASONS.filter((x) => x !== "noKept").map((x) => `${x} ${s.notCounted[x]}`).join("・")}）: ${s.emails === s.counted + sumNot ? "合う" : "合わない"}`,
+    `数えた ${s.counted} ＝ 避けた ${s.countedAvoided} ＋ 残した ${s.kept}: ${s.counted === s.countedAvoided + s.kept ? "合う" : "合わない"}`,
+    `数えた避けた ${s.countedAvoided} ＝ そろえた ${s.aligned} ＋ 同じますに残したメールが無い ${s.notCounted.noKept}: ${s.countedAvoided === s.aligned + s.notCounted.noKept ? "合う" : "合わない"}`,
+    `先読みの確かめ: lookAheadPaths ${cmp("lookAheadPaths")}／中値の v ${cmp("lookAheadMid")}／lookAheadAccount ${cmp("lookAheadAccount")}／ルールの行の口座 ${cmp("lookAheadAccountRule")}／signalCut ${cmp("signalCut")}`,
+    `1日以内の勝率の分母と分子: 避けた ${s.win1d.avoided.tp}/${s.win1d.avoided.of}（まだ持っている ${s.win1d.avoided.held}、入らなかった ${s.win1d.avoided.notIn}。${s.win1d.avoided.tp + s.win1d.avoided.held === s.win1d.avoided.of && s.win1d.avoided.of + s.win1d.avoided.notIn === s.countedAvoided ? "合う" : "合わない"}）・残した ${s.win1d.kept.tp}/${s.win1d.kept.of}（${s.win1d.kept.held}・${s.win1d.kept.notIn}。${s.win1d.kept.tp + s.win1d.kept.held === s.win1d.kept.of && s.win1d.kept.of + s.win1d.kept.notIn === s.kept ? "合う" : "合わない"}）`,
+  ];
+  const flags: string[] = [];
+  if (s.win1d.avoided.rate === 1 || s.win1d.kept.rate === 1) flags.push("1日以内の勝率のどれかが100%");
+  if (s.delta.m !== null && Math.abs(s.delta.m) > 10) flags.push("|Δ| が10 pips を超えた");
+  if (s.delta.lo !== null && s.delta.hi !== null && (s.delta.hi < 0 || s.delta.lo > 0)) flags.push("区間が0をまたがない");
+  lines.push(flags.length ? `当たったもの（調べる項目は同じ）: ${flags.join("・")}` : "100%・|Δ|>10・0をまたがない区間: どれも無し");
+  return lines;
+};
+const afterOf = (r: ReturnType<typeof y23Of>): string[] => afterLinesOf(r.c.s, r.checks);
+
+const y23Files = async (dir: string, r: ReturnType<typeof y23Of>, plant = "") => {
+  await writeJson(`${dir}/checks.json`, r.checks);
+  await writeJson(`${dir}/analysis.json`, { ...r.a, dump: undefined, decisions: undefined, raw: undefined, cost: r.c.s, spreads: r.spreads, accounts: r.c.acc!.lines });
+  await writeDump(`${dir}/dump`, r.a, r.ctx);
+  await writeCost(`${dir}/dump`, { ...costDumpOf(r.c.es, r.c.js, r.c.s, r.c.acc, r.spreads), "cost-meta.json": JSON.stringify({ start: r.ctx.start, end: r.ctx.end, delay: DELAY }) });
+  await Deno.writeTextFile(`${dir}/ultra15-2023.csv`, csv2023Of(r.c.es, r.c.js));
+  const items = printItemsOf({ where: "2023年11〜12月", kind: "2023", s: r.c.s, spreads: r.spreads, acc: r.c.acc!, after: afterOf(r), checks: Object.fromEntries(Object.entries(r.checks).map(([k, c]) => [k, c.ok])), sha256: {}, weeks: 8 }, plant);
+  await writeJson(`${dir}/items.json`, items);
+};
+
+// the Python's facts and the sha256s, then the print (only the listed items; a planted item stops it)
+const y23Print = async (dir: string): Promise<string> => {
+  const items = JSON.parse(await Deno.readTextFile(`${dir}/items.json`)) as Item[];
+  const py = JSON.parse(await Deno.readTextFile(env("PYCHECK", `${dir}/pycheck.json`))) as { ok: boolean; cost?: { avoidedCompared: number; avoidedDiffer: number } };
+  const shaOfDir = async (d: string) => {
+    const names: string[] = [];
+    for await (const e of Deno.readDir(d)) if (e.isFile) names.push(e.name);
+    names.sort();
+    const parts: string[] = [];
+    for (const n of names) parts.push(`${n} ${await sha256Hex(await Deno.readTextFile(`${d}/${n}`))}`);
+    return sha256Hex(parts.join("\n"));
+  };
+  const sha = { "analysis.json": await sha256Hex(await Deno.readTextFile(`${dir}/analysis.json`)), dump: await shaOfDir(`${dir}/dump`), "pycheck.json": await sha256Hex(await Deno.readTextFile(env("PYCHECK", `${dir}/pycheck.json`))) };
+  for (const x of items) {
+    if (x.item === "sha256") x.text = Object.entries(sha).map(([k, h]) => `${k} ${h}`).join("\n");
+    if (x.item === "after") {
+      x.text += `\n避けたかの判定（Python が P だけから作り直した判定）: ${py.cost?.avoidedCompared ?? "-"} 件を比べ、食い違い ${py.cost?.avoidedDiffer ?? "-"} 件`;
+      x.text += `\n手の例（7 の (3)）: 同じ run の作り物の job（同じ commit）で ${env("HAND_JOB", "-")}`;
+    }
+  }
+  return printTextOf(items);
+};
+
+const stops = async (f: () => Promise<unknown>): Promise<boolean> => {
+  try {
+    await f();
+    return false;
+  } catch (e) {
+    if (e instanceof RuleFileError || e instanceof PrintItemsError) return true;
+    throw e;
+  }
+};
+
+
+
+// 7 (4), (5): the walks on 2023's calendar (12/25 shut), seeds 1-100 on three sets; the planted errors and the
+// files for the Python on the FULL seeds; the stops of 7 (0) and (9) that read no price
+const T_999_99 = 3.39; // t(99), two-sided 99.9% (§8.103 7 (4))
+
+// ---- (b)'s weekly ② (6): the counts every week, the one comparison -----------------------------------------
+
+// The emails sent from R before END_b: ② on them (P, v, the cells as 2023's); which run this is; its output
+// `aChecks`: the (b) run's own §8.102 checks (its look-ahead counts go into the comparing run's「数字の後の調べ」)
+const bCostOf = (m1s: M1[], all: Sig[], endB: number, slots: SlotsFile, plant = "", aChecks: Analysis["checks"] | null = null) => {
+  const sigs = all.filter((s) => s.sent! >= R_MS);
+  const before = all.length - sigs.length;
+  const P0 = sigs.map((s) => pOf(s, B_DELAY));
+  const ms: Mails = { sigs, P0, sent: sigs.map((s) => s.sent!) };
+  const taus = Float64Array.from(nyClosesBetween((P0.length ? Math.min(...P0) : endB) - DAY_MS, endB).map((c) => c.tau));
+  const moved = (P: number) => {
+    const tau = maintOf(taus, P);
+    return tau === null ? P : tau + MAINT;
+  };
+  // the accounts' start: the first P moved past the stop (S_b's way)
+  const sR = P0.length ? Math.min(...P0.map(moved)) : endB;
+  const c = costOf(m1s, ms, slots, sR, endB, plant, false);
+  // the aligned avoided emails as a run with END_b = e would count them: the emails sent before e, END e
+  const alignedAt = (e: number): number => {
+    if (e === endB) return c.s.aligned;
+    const es2 = c.es.filter((x) => x.sent! < e);
+    return judge(es2, slots.avoid, { end: e, plant }).filter((j) => j.aligned).length;
+  };
+  const status = bStatusOf(endB, alignedAt, plant);
+  const items = weeklyItemsOf(c.s, status.kind, status.compareEnd, plant);
+  let print: Item[] | null = null;
+  let acc: RuleAccounts | null = null;
+  let spreads: ReturnType<typeof spreadsOf> | null = null;
+  if (status.kind === "compare") {
+    acc = ruleAccounts(m1s, ms, c.paths, c.js, sR, endB, plant);
+    c.checks.lookAheadAccountRule = { ok: acc.cut.ok, detail: acc.cut, n: acc.cut.poisoned + acc.cut.changed };
+    spreads = spreadsOf(m1s, slots.avoid, slots.thr2, R_MS, endB);
+    print = printItemsOf({ where: `これからのメール（R〜END_b ＝ ${iso(R_MS).slice(0, 10)}〜${iso(endB).slice(0, 10)}）`, kind: "b", s: c.s, spreads, acc, after: afterLinesOf(c.s, { ...(aChecks ?? {}), ...c.checks }), checks: Object.fromEntries(Object.entries(c.checks).map(([k, x]) => [k, x.ok])), sha256: {}, weeks: Math.round((endB - R_MS) / WEEK) }, plant);
+  }
+  return { c, ms, acc, spreads, status, items, print, before, sR };
+};
+
+// The weekly run's ② (MODE=b): only with the rule's file whose sha256 the program holds (`want`; the weekly run
+// passes SPREAD_HOURS_SHA256 and nothing else), written apart from (b)'s own files (b/costhours.json)
+const bCostWeekly = async (dir: string, m1s: M1[], sigs: Sig[], endB: number, text: string | null, want: string, plant = "", aChecks: Analysis["checks"] | null = null) => {
+  if (!want) {
+    log("② (§8.103 6): the sha256 of spread-hours.csv is not written in the program yet: no ② row this week");
+    return null;
+  }
+  let slots: SlotsFile;
+  try {
+    if (text === null) throw new RuleFileError(`${SPREAD_HOURS_PATH}: not there`);
+    slots = await ruleFileOf(text, PAIRS, want);
+  } catch (e) {
+    if (!(e instanceof RuleFileError)) throw e;
+    log(`② (§8.103 6): stopped: ${e.message}`);
+    await writeJson(`${dir}/costhours.json`, { ok: false, why: e.message });
+    return null;
+  }
+  const x = bCostOf(m1s, sigs, endB, slots, plant, aChecks);
+  log(`② : ledger rows sent before R ${x.before} (counted only, not used)`);
+  const ok = Object.values(x.c.checks).every((c) => c.ok);
+  for (const [k, c] of Object.entries(x.c.checks)) log(`② check ${k}: ${c.ok ? "ok" : "FAILED"}`);
+  await writeJson(`${dir}/costhours.json`, { ok, endB: iso(endB), status: x.status, items: x.items, print: x.print, checks: x.c.checks });
+  await writeCost(`${dir}/dump`, { ...costDumpOf(x.c.es, x.c.js, x.c.s, x.acc, x.spreads), "cost-status.json": JSON.stringify({ endB, status: x.status, before: x.before, sR: x.sR }) });
+  return x;
+};
+
 // ---- (b): the emails sent (§8.102 (b) and 「(b) のプログラムの細部」) ------------------------------------
 
 // END_b: the Saturday 00:00 UTC before the run; the ledger and (a)'s per-email values (read, never recomputed)
@@ -1067,7 +1406,7 @@ async function runB(name: string, src: Source, rows: LedgerRow[], endB: number, 
   // for the Python: the comparison and the times to the send, each made again there from the ledger and its own paths
   a.dump["window.json"] = JSON.stringify(b.window);
   a.dump["delays.json"] = JSON.stringify(b.delays);
-  return { a, ctx, b };
+  return { a, ctx, b, ds };
 }
 
 // a (b) run's files: the checks, the numbers (not printed here), the Python's inputs
@@ -1097,6 +1436,8 @@ const recomputeLines = (rc: ReturnType<typeof compareRecompute>) => [
 
 if (MODE === "b") {
   if (!isSaturdayMidnight(END_B_MS)) throw new Error(`END_B ${env("END_B")}: not a Saturday 00:00 UTC`);
+  // §8.103 6: a Saturday already past (a later END_b — the deadline above all — would make this the comparing run early)
+  if (END_B_MS > Date.now()) throw new Error(`END_B ${env("END_B")}: in the future`);
   const t0 = Date.now();
   const rows = parseLedger(await Deno.readTextFile(LEDGER));
   const r = await runB("b", { dir: CACHE, fetch: true }, rows, END_B_MS, await bisRates(env("BIS_CSV")), await readACsv());
@@ -1106,6 +1447,8 @@ if (MODE === "b") {
   // the emails against the recomputed signals: listed in every run (the emails' own rows, no measured number)
   for (const l of recomputeLines(r.b.recompute)) log(l);
   await writeB(OUT_B, r, END_B_MS);
+  // §8.103 6: ②'s weekly row, apart from (b)'s files, only with the rule's file the program's sha256 names
+  await bCostWeekly(OUT_B, r.ds.m1s, r.ds.sigs, END_B_MS, await Deno.readTextFile(SPREAD_HOURS_PATH).catch(() => null), SPREAD_HOURS_SHA256, "", r.a.checks);
   const ok = judgeB(r.a.checks);
   log(`TypeScript checks of (b): ${ok ? "all passed" : "FAILED"}. The numbers are in ${OUT_B}, printed only by MODE=printb after the Python check.`);
   if (!ok) Deno.exit(1);
@@ -1119,6 +1462,21 @@ if (MODE === "printb") {
     Deno.exit(1);
   }
   log(await Deno.readTextFile(`${OUT_B}/analysis.json`));
+  // §8.103 6: ②'s row — the five items (or that the comparison was done), and the comparing run's sentences —
+  // only when its own checks and the Python's ② part passed, and only the items listed
+  const cost = await Deno.readTextFile(`${OUT_B}/costhours.json`).then((t) => JSON.parse(t) as { ok: boolean; why?: string; items: Item[]; print: Item[] | null }).catch(() => null);
+  const pyCost = (py as { cost?: { ok: boolean; avoidedCompared?: number; avoidedDiffer?: number } }).cost;
+  if (!cost) log("== ② (§8.103 6): no row this week (the sha256 of spread-hours.csv is not written in the program yet)");
+  else if (!cost.ok || !pyCost?.ok) log(`== ② (§8.103 6): not printed (${cost.why ?? "a check of ② failed, the TS's or the Python's"})`);
+  else {
+    checkItems(cost.items, (cost.items.length === 1 ? DONE_ITEMS : WEEKLY_ITEMS) as unknown as string[]);
+    log(`== ② (§8.103 6)\n${cost.items.map((x) => `${x.item}: ${x.text}`).join("\n")}`);
+    if (cost.print) {
+      // 5「数字の後の調べ」: the Python's own judgment of every email's avoidance, read back
+      for (const x of cost.print) if (x.item === "after") x.text += `\n避けたかの判定（Python が P だけから作り直した判定）: ${pyCost.avoidedCompared ?? "-"} 件を比べ、食い違い ${pyCost.avoidedDiffer ?? "-"} 件`;
+      log(printTextOf(cost.print));
+    }
+  }
 }
 
 // 確かめ for (b) on a walk: the walk's own signals as the emails (sent a few seconds to a minute after their
@@ -1211,6 +1569,370 @@ if (MODE === "bsyn") {
     if (!ok) pass = false;
   }
   log(`(b) on the walk: ${pass ? "PASSED" : "FAILED"}`);
+  if (!pass) Deno.exit(1);
+}
+
+// ---- §8.103 ② stage 2: the runs ---------------------------------------------------------------------
+
+if (MODE === "costhand") {
+  const hand = JSON.parse(await Deno.readTextFile(HAND_PATH)) as Hand;
+  const plants = env("PLANTS", "").split(",").filter(Boolean);
+  const slots = await provisional("1h");
+  const from = Date.parse(hand.walk.from);
+  const to = Date.parse(hand.walk.to);
+  const wide = hand.walk.wide.map((x) => ({ pi: PAIRS.indexOf(x.pair as (typeof PAIRS)[number]), from: Date.parse(x.from), to: Date.parse(x.to), pips: x.pips }));
+  const dir = `${COST_OUT}/hand`;
+  const src: Source = { dir: `${dir}/gmo`, fetch: false };
+  for (const [pi, pair] of PAIRS.entries()) {
+    const extra = (p: number, t: number) => wide.reduce((s2, x) => s2 + (x.pi === p && t >= x.from && t < x.to ? x.pips : 0), 0);
+    const w = synthesize(pair, pi, { seed: hand.walk.seed, trend: 0, startPips: null, closedKeys: hand.walk.closedKeys, extraSpread: extra }, from, to);
+    await writeGmoFiles(src.dir, pair, w, from, to);
+  }
+  let pass = true;
+  const byPlant: Record<string, { workedOut: number; checks: Record<string, number> }> = {};
+  for (const run of hand.runs) {
+    const start = Date.parse(run.start);
+    const end = Date.parse(run.end);
+    const m1s: M1[] = [];
+    for (const pair of PAIRS) m1s.push(await loadM1(src, pair, start - DAY_MS, end, newLoadStats()));
+    const ms = handMails(run, m1s, booksOf(m1s, start, end));
+    const c = costOf(m1s, ms, slots, start, end);
+    const fails = handFails(run, c);
+    const bad = Object.entries(c.checks).filter(([, x]) => !x.ok).map(([k]) => k);
+    log(`hand run ${run.name}: ${fails.length ? "NOT AS WORKED OUT: " + fails.join("; ") : "as worked out"} (${run.emails.length} emails); checks ${bad.length ? "FAILED " + bad.join(",") : "ok"}`);
+    if (fails.length || bad.length) pass = false;
+    const out = `${dir}/run-${run.name}`;
+    await writeCost(out, { ...costDumpOf(c.es, c.js, c.s, c.acc, null), "signals.csv": ms.sigs.map((s2, i) => `${run.emails[i].id},${s2.pair},${s2.side},${s2.T},${ms.P0[i]},${s2.E},${s2.tp}`).join("\n"), "meta.json": JSON.stringify({ start, end, slots: "1h" }) });
+    // 7 (3): 5 pips taken from every avoided email's v (the main value, at the mid)
+    if (run.name === "A") {
+      const k = hand.shift.pips;
+      const es2 = c.es.map((e, i) => (c.js[i].avoided ? { ...e, vMid: e.vMid - k } : e));
+      const s2 = summaryOf(es2, judge(es2, slots.avoid, { end }), slots.bars);
+      const near = (x: number | null, y: number | null) => x !== null && y !== null && Math.abs(x - y) < 1e-9;
+      const ok = near(s2.delta.m, c.s.delta.m! - k) && near(s2.means.avoided.mean, c.s.means.avoided.mean! - k) && near(s2.means.kept.mean, c.s.means.kept.mean);
+      log(`hand shift ${k} pips: Δ ${c.s.delta.m?.toFixed(6)} → ${s2.delta.m?.toFixed(6)}, avoided mean ${c.s.means.avoided.mean?.toFixed(6)} → ${s2.means.avoided.mean?.toFixed(6)}, kept mean the same ${near(s2.means.kept.mean, c.s.means.kept.mean) ? "yes" : "NO"}: ${ok ? "as worked out" : "NOT AS WORKED OUT"}`);
+      if (!ok) pass = false;
+    }
+    for (const plant of plants) {
+      const q = costOf(m1s, ms, slots, start, end, plant);
+      let pf = handFails(run, q).length;
+      if (run.name === "A") {
+        const es2 = q.es.map((e, i) => (q.js[i].avoided ? { ...e, vMid: e.vMid - hand.shift.pips } : e));
+        const s2 = summaryOf(es2, judge(es2, slots.avoid, { end, plant }), slots.bars, plant);
+        if (!(s2.delta.m !== null && q.s.delta.m !== null && Math.abs(s2.delta.m - (q.s.delta.m - hand.shift.pips)) < 1e-9)) pf++;
+      }
+      const e2 = (byPlant[plant] ??= { workedOut: 0, checks: {} });
+      e2.workedOut += pf;
+      for (const [k, x] of Object.entries(q.checks)) if (!x.ok) e2.checks[k] = (e2.checks[k] ?? 0) + (x.n ?? 1);
+      await writeCost(`${out}/plant-${plant}`, costDumpOf(q.es, q.js, q.s, q.acc, null));
+    }
+  }
+  for (const [plant, e2] of Object.entries(byPlant)) log(`planted ${plant}: worked-out answers failing ${e2.workedOut}; own checks failing: ${Object.entries(e2.checks).map(([k, v]) => `${k} ${v}`).join(",") || "none"}`);
+  await writeJson(`${dir}/plants-hand.json`, byPlant);
+  log(`hand examples of ②: ${pass ? "all as worked out" : "NOT ALL AS WORKED OUT"}`);
+  if (!pass) Deno.exit(1);
+}
+
+if (MODE === "y2023") {
+  // 7 (0): the rule's file against the sha256 written in the program, before anything is read from GMO
+  let slots: SlotsFile;
+  try {
+    // the constant first (an empty one stops here, the file not even read), then the file against it
+    const want = PLANT_ENV === "emptyConst" ? "" : SPREAD_HOURS_SHA256;
+    if (!want) throw new RuleFileError("the sha256 of spread-hours.csv is not written in the program yet (stage 1 not committed)");
+    const text = await Deno.readTextFile(SPREAD_HOURS_PATH).catch(() => {
+      throw new RuleFileError(`${SPREAD_HOURS_PATH}: not there`);
+    });
+    slots = await ruleFileOf(text, PAIRS, want);
+  } catch (e) {
+    if (!(e instanceof RuleFileError)) throw e;
+    log(`2023: stopped before GMO is read: ${e.message}`);
+    Deno.exit(3);
+  }
+  const t0 = Date.now();
+  const ds = await dataSetOf("2023", { dir: CACHE, fetch: true }, null, Y23_RANGE);
+  log(`loaded (${((Date.now() - t0) / 1000).toFixed(0)} s); signals ${ds.sigs.length}`);
+  // 5: the day files opened and the bars kept (keys and times only, no price)
+  log(`day files opened: 1-minute ${ds.opened?.m1.join("..")}, 15-minute ${ds.opened?.m15.join("..")}`);
+  for (const [k, m] of ds.m1s.entries()) log(`${m.pair}: 1-minute bars kept ${m.n ? `${iso(m.t[0])}..${iso(m.t[m.n - 1] + MINUTE)}` : "none"}; 15-minute ${ds.reads[k].first ?? "-"}..${ds.reads[k].last ? iso(Date.parse(ds.reads[k].last!) + 15 * MINUTE) : "-"}`);
+  const r = y23Of(ds, slots!, Y23_RANGE);
+  await y23Files(`${COST_OUT}/y2023`, r);
+  const ok = judgedChecks(r.checks);
+  log(`2023 TypeScript checks: ${ok ? "all passed" : "FAILED"}. The numbers are in ${COST_OUT}/y2023, printed only by MODE=y2023print after the Python check.`);
+  if (!ok) Deno.exit(1);
+}
+
+if (MODE === "y2023print") {
+  const dir = `${COST_OUT}/y2023`;
+  const checks = JSON.parse(await Deno.readTextFile(`${dir}/checks.json`)) as Analysis["checks"];
+  const py = JSON.parse(await Deno.readTextFile(env("PYCHECK", `${dir}/pycheck.json`))) as { ok: boolean };
+  if (!Object.values(checks).every((c) => c.ok) || !py.ok) {
+    log("a check failed: the numbers of 2023 are not printed (§8.103 5)");
+    Deno.exit(1);
+  }
+  const text = await y23Print(dir);
+  await Deno.writeTextFile(`${dir}/print.txt`, text);
+  log(text);
+  const csv = await Deno.readTextFile(`${dir}/ultra15-2023.csv`);
+  log(`== ultra15-2023.csv sha256 ${await sha256Hex(csv)}, ${csv.split("\n").length - 2} rows`);
+  log(csv);
+}
+
+if (MODE === "costsyn") {
+  const sets = env("SETS", "none,t01,t03").split(",");
+  const seeds = range(env("SEEDS", "1-100"));
+  const full = new Set(range(env("FULL", "1")));
+  const plants = env("PLANTS", "").split(",").filter(Boolean);
+  // 7 (4), (5): stage 1's slots once the program holds the file's sha256 (順番 4), the provisional ones before
+  const provisional1h = await provisional("1h");
+  const slotsPath = SPREAD_HOURS_SHA256 ? SPREAD_HOURS_PATH : `${PROVISIONAL_DIR}/provisional-1h.csv`;
+  const slots = SPREAD_HOURS_SHA256 ? await ruleFileOf(await Deno.readTextFile(SPREAD_HOURS_PATH), PAIRS, SPREAD_HOURS_SHA256) : provisional1h;
+  await Deno.mkdir(COST_OUT, { recursive: true });
+  await Deno.writeTextFile(`${COST_OUT}/slots-used.txt`, slotsPath);
+  log(`the slots avoided: ${slotsPath}${SPREAD_HOURS_SHA256 ? " (stage 1's, its sha256 checked)" : " (provisional: stage 1's file not committed yet)"}`);
+  const rg: Range = { ...Y23_RANGE, closedKeys: ["20231225"] };
+  let pass = true;
+  const result: Record<string, unknown> = { sets, seeds: seeds.length, full: [...full], intervalP: INTERVAL_P };
+  // 7 (0), (9): the rule's file stops where it must, and passes where it must
+  {
+    const prov = await Deno.readTextFile(`${PROVISIONAL_DIR}/provisional-1h.csv`);
+    const provSha = await sha256Hex(prov);
+    const changed = prov.replace(/^(USD\/JPY,summer,40,10:00,5000,[^\n]*,)no$/m, "$1yes");
+    if (changed === prov) throw new Error("the planted slot was not changed");
+    const r0 = {
+      // the file as it is, against its own sha256: read (the check does not refuse everything)
+      sameFileReads: !(await stops(() => ruleFileOf(prov, PAIRS, provSha))),
+      // one slot changed (fileSlot): stopped
+      fileSlotStops: await stops(() => ruleFileOf(changed, PAIRS, provSha)),
+      // the provisional file at the real path (provisionalAtProd), against the program's constant: stopped
+      provisionalAtProdStops: await stops(() => ruleFileOf(prov, PAIRS, SPREAD_HOURS_SHA256)),
+      // an empty constant (emptyConst): stopped
+      emptyConstStops: await stops(() => ruleFileOf(prov, PAIRS, "")),
+    };
+    log(`the rule's file: ${JSON.stringify(r0)}`);
+    if (!Object.values(r0).every(Boolean)) pass = false;
+    result.ruleFile = r0;
+  }
+  const lines: Record<string, unknown> = {};
+  for (const set of sets) {
+    const rows: Array<{ seed: number; m: number | null; lo: number | null; hi: number | null; lo99: number | null; hi99: number | null; aligned: number; weeks: number; mExit: number | null }> = [];
+    const wideRows: typeof rows = [];
+    for (const seed of seeds) {
+      const t0 = Date.now();
+      const isFull = set === "none" && full.has(seed);
+      const dir = `${COST_OUT}/syn-${set}-${seed}`;
+      const src: Source | null = isFull ? { dir: `${dir}/gmo`, fetch: false } : null;
+      const ds = await dataSetOf(`2023 ${set} ${seed}`, src, { set, seed }, rg);
+      const ms: Mails = { sigs: ds.sigs, P0: ds.sigs.map((s) => pOf(s, DELAY)) };
+      const r23 = isFull ? y23Of(ds, slots, rg) : null;
+      const c = r23 ? r23.c : costOf(ds.m1s, ms, slots, rg.start, rg.end, "", false);
+      const d99 = deltaOf(c.es, c.js, "", 0.995);
+      const row = { seed, m: c.s.delta.m, lo: c.s.delta.lo, hi: c.s.delta.hi, lo99: d99.lo, hi99: d99.hi, aligned: c.s.aligned, weeks: c.s.weeks, mExit: c.s.deltaExit };
+      rows.push(row);
+      const bad = Object.entries(c.checks).filter(([, x]) => !x.ok);
+      if (bad.length) {
+        pass = false;
+        for (const [k, x] of bad) log(`  ${set} ${seed} CHECK ${k} FAILED: ${JSON.stringify(x.detail).slice(0, 1000)}`);
+      }
+      // (5): the same walk, the winter's avoided slots 12 pips wider (the mid as it is); the signals and E of the
+      // walk without it
+      if (set === "none") {
+        const wide = (pi: number, t: number) => (seasonOf(t) === "winter" && slots.avoid.has(avoidKey(PAIRS[pi], "winter", slotOf(t))) ? 12 : 0);
+        const m1w = PAIRS.map((pair, pi) => {
+          const w = synthesize(pair, pi, { seed, trend: 0, startPips: null, closedKeys: rg.closedKeys, extraSpread: wide }, rg.from15 - DAY_MS, rg.end);
+          const k = lowerBound(w.m1.t, rg.start - DAY_MS);
+          const cut = (xs: Float64Array) => xs.subarray(k);
+          return { pair, n: w.m1.n - k, t: cut(w.m1.t), bo: cut(w.m1.bo), bh: cut(w.m1.bh), bl: cut(w.m1.bl), bc: cut(w.m1.bc), ao: cut(w.m1.ao), ah: cut(w.m1.ah), al: cut(w.m1.al), ac: cut(w.m1.ac) } as M1;
+        });
+        const cw = costOf(m1w, ms, slots, rg.start, rg.end, "", false);
+        const dw99 = deltaOf(cw.es, cw.js, "", 0.995);
+        wideRows.push({ seed, m: cw.s.delta.m, lo: cw.s.delta.lo, hi: cw.s.delta.hi, lo99: dw99.lo, hi99: dw99.hi, aligned: cw.s.aligned, weeks: cw.s.weeks, mExit: cw.s.deltaExit });
+      }
+      log(`${set} seed ${seed}: signals ${ds.sigs.length}, aligned ${c.s.aligned} (${c.s.weeks} weeks), Δ ${c.s.delta.m?.toFixed(3)} [${c.s.delta.lo?.toFixed(3)}, ${c.s.delta.hi?.toFixed(3)}]${set === "none" ? `; wide Δ ${wideRows[wideRows.length - 1].m?.toFixed(3)}` : ""} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+      if (r23) {
+        const r = r23;
+        await y23Files(dir, r);
+        const okFull = judgedChecks(r.checks);
+        if (!okFull) pass = false;
+        // the print on the walk: the items allowed, and the planted ③ d stopping it (printD)
+        const printed = !(await stops(async () => printTextOf(JSON.parse(await Deno.readTextFile(`${dir}/items.json`)) as Item[])));
+        const items2 = printItemsOf({ where: "2023年11〜12月", kind: "2023", s: r.c.s, spreads: r.spreads, acc: r.c.acc!, after: [], checks: {}, sha256: {}, weeks: 8 }, "printD");
+        const printDStops = await stops(async () => printTextOf(items2));
+        log(`  FULL ${seed}: print with the allowed items ${printed ? "made" : "NOT MADE"}; planted printD ${printDStops ? "stopped" : "NOT STOPPED"}`);
+        if (!printed || !printDStops) pass = false;
+        // pastEndBar: the reads go one bar past END (the first bar after the weekend): the checks of 5 must stop it
+        const dsPast = await dataSetOf(`2023 ${set} ${seed} pastEndBar`, src, { set, seed }, { ...rg, readEnd: rg.end + 70 * 3_600_000 + MINUTE });
+        const rc = readChecksOf(dsPast, rg, { m1: Y23_KEYS_M1, m15: Y23_KEYS_M15 });
+        const pastStops = !rc.readsInPeriod.ok;
+        log(`  FULL ${seed}: planted pastEndBar ${pastStops ? "stopped" : "NOT STOPPED"} (${rc.readsInPeriod.why ?? "-"})`);
+        if (!pastStops) pass = false;
+        // the planted errors that change the computing: each one's numbers for the Python, and its own checks
+        const byPlant: Record<string, { changed: number; checks: Record<string, number> }> = {};
+        const base = costDumpOf(r.c.es, r.c.js, r.c.s, r.c.acc, r.spreads);
+        for (const plant of plants) {
+          const q = costOf(ds.m1s, ms, slots, rg.start, rg.end, plant);
+          const qd = costDumpOf(q.es, q.js, q.s, q.acc, r.spreads);
+          const lines0 = new Set(base["cost-emails.csv"].split("\n"));
+          const changed = qd["cost-emails.csv"].split("\n").filter((l) => !lines0.has(l)).length + (qd["cost-summary.json"] !== base["cost-summary.json"] ? 1 : 0) + (qd["cost-accounts.json"] !== base["cost-accounts.json"] ? 1 : 0);
+          byPlant[plant] = { changed, checks: Object.fromEntries(Object.entries(q.checks).filter(([, x]) => !x.ok).map(([k, x]) => [k, x.n ?? 1])) };
+          log(`  planted ${plant}: ${changed} rows or numbers changed; own checks failing: ${Object.entries(byPlant[plant].checks).map(([k, v]) => `${k} ${v}`).join(",") || "none"}`);
+          await writeCost(`${dir}/dump-${plant}`, { ...qd, "cost-meta.json": JSON.stringify({ start: rg.start, end: rg.end, delay: DELAY }) });
+        }
+        await writeJson(`${dir}/plants-cost.json`, byPlant);
+      }
+    }
+    // line 1: the interval's misses each way at most 7 of 100 (99%: 3); line 2: the mean Δ within 3.39 × SD ÷ 10 of 0
+    const judgeSet = (xs: typeof rows, effect: boolean) => {
+      const ms2 = xs.map((x) => x.m).filter((x): x is number => x !== null);
+      const n = ms2.length;
+      const mean = ms2.reduce((a2, x) => a2 + x, 0) / n;
+      const sd = Math.sqrt(ms2.reduce((a2, x) => a2 + (x - mean) ** 2, 0) / (n - 1));
+      const se = sd / Math.sqrt(n);
+      const worse = xs.filter((x) => x.hi !== null && x.hi < 0).length;
+      const better = xs.filter((x) => x.lo !== null && x.lo > 0).length;
+      const worse99 = xs.filter((x) => x.hi99 !== null && x.hi99 < 0).length;
+      const better99 = xs.filter((x) => x.lo99 !== null && x.lo99 > 0).length;
+      const noInterval = xs.filter((x) => x.lo === null).length;
+      const alignedMedian = medianOf(xs.map((x) => x.aligned));
+      const exits = xs.map((x) => x.mExit).filter((x): x is number => x !== null);
+      const limit = INTERVAL_P === 0.975 ? 7 : 3;
+      const judged = xs.length >= 100;
+      const line1 = !judged || effect || (worse <= limit && better <= limit);
+      const line2 = !judged || (effect ? mean < -T_999_99 * se : Math.abs(mean) <= T_999_99 * se);
+      return { runs: xs.length, withDelta: n, noInterval, worse, better, worse99, better99, mean, sd, se, line1, line2, judged, alignedMedian, meanExit: exits.reduce((a2, x) => a2 + x, 0) / exits.length };
+    };
+    const j4 = judgeSet(rows, false);
+    lines[set] = j4;
+    log(`\n== (4) ${set}: worse ${j4.worse}, better ${j4.better} of ${j4.runs} (95%; 99%: ${j4.worse99}, ${j4.better99}; no interval ${j4.noInterval}) — line 1 ${j4.line1 ? "ok" : "FAIL"}; mean Δ ${j4.mean.toFixed(4)} ± ${j4.se.toFixed(4)} — line 2 ${j4.line2 ? "ok" : "FAIL"}${j4.judged ? "" : " (not judged: under 100 walks)"}`);
+    if (!j4.line1 || !j4.line2) pass = false;
+    if (set === "none") {
+      const j5 = judgeSet(wideRows, true);
+      lines.wide = j5;
+      log(`== (5) the winter's avoided slots 12 pips wider: mean Δ ${j5.mean.toFixed(4)} ± ${j5.se.toFixed(4)} — the line (under −3.39 × SE) ${j5.line2 ? "ok" : "FAIL"}; shown only: worse in ${j5.worse} of ${j5.runs}, the aligned median ${j5.alignedMedian}, the mean Δ on the exit side ${j5.meanExit.toFixed(4)}`);
+      if (!j5.line2) pass = false;
+    }
+  }
+  result.lines = lines;
+  result.pass = pass;
+  await writeJson(`${COST_OUT}/costsyn.json`, result);
+  log(`\n§8.103 7 (4), (5) (this run): ${pass ? "PASSED" : "FAILED"}`);
+  if (!pass) Deno.exit(1);
+}
+
+// 7 (6): (b)'s comparing run on a walk from R to the deadline (12/25 and 1/1 shut): the wide provisional slots
+// reach 100 before the deadline (that END_b compares, the week before does not, the week after says it was
+// done); the 1-hour ones never reach it (the deadline compares); the planted (b) errors
+if (MODE === "bcostsyn") {
+  const seed = Number(env("SEED", "1"));
+  const plants = env("PLANTS", "").split(",").filter(Boolean);
+  const closedKeys = ["20261225", "20270101"];
+  const dir = `${COST_OUT}/bcost-${seed}`;
+  const from = R_MS - 30 * MINUTE - LEAD15 - 2 * DAY_MS;
+  const last = END_B_DEADLINE + WEEK;
+  const src: Source = { dir: `${dir}/gmo`, fetch: false };
+  for (const [pi, pair] of PAIRS.entries()) {
+    const w = synthesize(pair, pi, { seed, trend: 0, startPips: null, closedKeys }, from, last);
+    await writeGmoFiles(src.dir, pair, w, from, last);
+  }
+  // the walk's signals as the emails, sent a few seconds to a minute after their send time (bsyn's offsets)
+  const recs: Sig[] = [];
+  for (const [pi, pair] of PAIRS.entries()) {
+    const q15 = await load15(src, pair, R_MS - 30 * MINUTE - LEAD15, last, newLoadStats());
+    recs.push(...signalsOf(pair, pi, q15, R_MS - 30 * MINUTE, last).signals);
+  }
+  const pool = recs.filter((s) => s.base >= R_MS - 30 * MINUTE && s.base < last).sort((x, y) => x.base - y.base || x.pi - y.pi || y.dir - x.dir);
+  const OFFS = [3_824, 0, 59_999, 60_000, 1, 4_500, 30_000];
+  const rows: LedgerRow[] = pool.map((s, k) => ({ pair: s.pair, side: s.side, open: s.open, T: s.T, E: s.E, sent: s.base + OFFS[k % OFFS.length] }));
+  rows.sort((x, y) => x.sent - y.sent);
+  const text = [LEDGER_HEADER, ...rows.map((x) => `${x.pair},${x.side},${iso(x.open)},${iso(x.T)},${x.E},${iso(x.sent)}`)].join("\n") + "\n";
+  await Deno.mkdir(dir, { recursive: true });
+  await Deno.writeTextFile(`${dir}/ultra15.csv`, text);
+  const back = parseLedger(text);
+  const files = { "1h": await provisional("1h"), "4h": await provisional("4h") };
+  const texts = { "1h": await Deno.readTextFile(`${PROVISIONAL_DIR}/provisional-1h.csv`), "4h": await Deno.readTextFile(`${PROVISIONAL_DIR}/provisional-4h.csv`) };
+  // one END_b, as the weekly run reads it: the 1-minute bars from a day before the first email's P
+  const runAt = async (endB: number, which: "1h" | "4h", plant = "", out: string | null = null) => {
+    const sigs = ledgerSigs(back, endB);
+    const first = Math.min(...sigs.filter((s) => s.sent! >= R_MS).map((s) => pOf(s, B_DELAY)));
+    const m1s: M1[] = [];
+    for (const pair of PAIRS) m1s.push(await loadM1(src, pair, first - 2 * DAY_MS, endB, newLoadStats()));
+    if (out) {
+      await Deno.mkdir(out, { recursive: true });
+      const x = await bCostWeekly(out, m1s, sigs, endB, texts[which], await sha256Hex(texts[which]), plant);
+      // the inputs the Python's (b) reading takes (as MODE=b's dump holds them): S_b, END_b, the emails sent before it
+      const stopTaus = Float64Array.from(nyClosesBetween(sigs[0].base - DAY_MS, endB).map((c) => c.tau));
+      const sB = Math.min(...sigs.map((s) => {
+        const P = pOf(s, B_DELAY);
+        const tau = maintOf(stopTaus, P);
+        return tau === null ? P : tau + MAINT;
+      }));
+      await writeCost(`${out}/dump`, {
+        "meta.json": JSON.stringify({ start: sB, end: endB, split: endB, delay: B_DELAY, startYen: START_YEN, cap: CAP, mode: "b", endB }),
+        "signals.csv": ["i,pair,side,open,T,E,tp,late,base,sent", ...sigs.map((s, i) => `${i},${s.pair},${s.side},${s.open},${s.T},${s.E},${s.tp},${s.late ? 1 : 0},${s.base},${s.sent}`)].join("\n"),
+      });
+      return { x, m1s, sigs };
+    }
+    return { x: bCostOf(m1s, sigs, endB, files[which], plant), m1s, sigs };
+  };
+  // the counts every Saturday (from the deadline's bars: what each END_b's run counts, 7 (6))
+  const counts: Record<string, Array<{ endB: string; aligned: number }>> = { "1h": [], "4h": [] };
+  let reach: number | null = null;
+  for (const which of ["4h", "1h"] as const) {
+    const r = await runAt(END_B_DEADLINE, which);
+    const all = r.x!.c;
+    for (let e = firstSaturdayAfter(R_MS); e <= END_B_DEADLINE; e += WEEK) {
+      const n = judge(all.es.filter((x) => x.sent! < e), files[which].avoid, { end: e }).filter((j) => j.aligned).length;
+      counts[which].push({ endB: iso(e).slice(0, 10), aligned: n });
+      if (which === "4h" && reach === null && n >= COMPARE_AT) reach = e;
+    }
+    log(`${which}: aligned avoided by END_b ${counts[which].map((c) => `${c.endB.slice(5)} ${c.aligned}`).join(", ")}`);
+  }
+  let pass = true;
+  const under1h = counts["1h"][counts["1h"].length - 1].aligned < COMPARE_AT;
+  log(`the wide slots reach ${COMPARE_AT} before the deadline: ${reach !== null && reach < END_B_DEADLINE ? `yes (${iso(reach).slice(0, 10)})` : "NO"}; the 1-hour slots stay under ${COMPARE_AT} to the deadline: ${under1h ? "yes" : "NO"}`);
+  if (reach === null || !(reach < END_B_DEADLINE) || !under1h) pass = false;
+  const RUNS: Array<{ name: string; which: "1h" | "4h"; endB: number; want: "before" | "compare" | "done" }> = reach === null ? [] : [
+    { name: "wide-before", which: "4h", endB: reach - WEEK, want: "before" },
+    { name: "wide-reach", which: "4h", endB: reach, want: "compare" },
+    ...(reach + WEEK <= END_B_DEADLINE ? [{ name: "wide-after", which: "4h" as const, endB: reach + WEEK, want: "done" as const }] : []),
+    { name: "deadline-1h", which: "1h", endB: END_B_DEADLINE, want: "compare" },
+  ];
+  const result: Record<string, unknown> = { seed, reach: reach === null ? null : iso(reach), counts, runs: {} };
+  for (const run of RUNS) {
+    const out = `${dir}/${run.name}`;
+    const r = await runAt(run.endB, run.which, "", out);
+    const x = r.x!;
+    const ok = x.status.kind === run.want && Object.values(x.c.checks).every((c) => c.ok) && (run.want !== "compare" || x.print !== null);
+    let printOk = true;
+    if (x.print) printOk = !(await stops(async () => printTextOf(x.print!)));
+    log(`${run.name} (END_b ${iso(run.endB).slice(0, 10)}, ${run.which}): ${x.status.kind} (want ${run.want}); aligned ${x.c.s.aligned} (${x.c.s.weeks} weeks), kept ${x.c.s.kept}, enough ${x.c.s.enough ? "yes" : "no"}; evaluation early ${x.c.s.notCounted.evalEarly}; ${x.print ? `Δ ${x.c.s.delta.m?.toFixed(3)} [${x.c.s.delta.lo?.toFixed(3)}, ${x.c.s.delta.hi?.toFixed(3)}], print ${printOk ? "made" : "NOT MADE"}` : x.items.map((i) => `${i.item} ${i.text}`).join(", ")}; ${ok && printOk ? "ok" : "FAILED"}`);
+    if (!ok || !printOk) pass = false;
+    await Deno.writeTextFile(`${out}/meta.json`, JSON.stringify({ endB: run.endB, which: run.which, want: run.want }));
+    (result.runs as Record<string, unknown>)[run.name] = { status: x.status, aligned: x.c.s.aligned };
+    // the planted (b) errors: compare at every run of 100 or more, the deadline ignored, Δ in the weekly output
+    for (const plant of plants) {
+      let caught: boolean;
+      try {
+        const q = await runAt(run.endB, run.which, plant);
+        caught = q.x!.status.kind !== x.status.kind;
+      } catch (e) {
+        if (!(e instanceof PrintItemsError)) throw e;
+        caught = true;
+      }
+      log(`  planted ${plant} on ${run.name}: ${caught ? "caught" : "not caught here"}`);
+      const k = `plant ${plant}`;
+      result[k] = ((result[k] as number) ?? 0) + (caught ? 1 : 0);
+    }
+  }
+  for (const plant of plants) {
+    if (!result[`plant ${plant}`]) {
+      log(`planted ${plant}: NOT CAUGHT on any run`);
+      pass = false;
+    }
+  }
+  result.pass = pass;
+  await writeJson(`${dir}/bcostsyn.json`, result);
+  log(`\n§8.103 7 (6) (this run): ${pass ? "PASSED" : "FAILED"}`);
   if (!pass) Deno.exit(1);
 }
 

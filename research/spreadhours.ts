@@ -210,8 +210,14 @@ const synthetic = async () => {
     const bad: string[] = [];
     for (const pair of PAIRS) {
       const { m, st, keys } = await loadPair(src, pair, from, S1_END);
-      bad.push(...checksOf(tableOf(m, st, keys)));
+      // keys: the day files before the list opened, their bars before 2024 then left out — so only the check of the
+      // keys opened can stop it (the bars kept stay inside the period)
+      const k = PLANT === "keys" ? m.t.findIndex((t) => t >= S1_START) : 0;
+      const cut = (xs: Float64Array) => xs.subarray(k);
+      const mk: M1 = k > 0 ? { pair: m.pair, n: m.n - k, t: cut(m.t), bo: cut(m.bo), bh: cut(m.bh), bl: cut(m.bl), bc: cut(m.bc), ao: cut(m.ao), ah: cut(m.ah), al: cut(m.al), ac: cut(m.ac) } : m;
+      bad.push(...checksOf(tableOf(mk, st, keys)));
     }
+    for (const b of bad) log(`  PLANT ${PLANT} check failed: ${b}`);
     log(bad.length ? `PLANT ${PLANT}: stopped (${bad.length} checks failed; first: ${bad[0]})` : `PLANT ${PLANT}: NOT STOPPED`);
     Deno.exit(bad.length ? 3 : 0);
   }

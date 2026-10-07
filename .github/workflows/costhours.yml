@@ -6,9 +6,23 @@
 #               planted errors (7 (9)) — those that change the computing caught by the list and by the
 #               Python, the two that read other bars stopped by the checks of 2; the Python
 #               (research/spreadhours-check.py) on the same files, every value the same (7 (2))
+#     s2hand    stage 2's hand examples (7 (3), research/costhours-hand.json): the TS and the Python each
+#               against the answers written beforehand and against each other; the planted errors (7 (9))
+#     s2syn     7 (4), (5): the walks on 2023's calendar (12/25 shut), seeds 1-100 on three sets, with the
+#               provisional slots (7 (0)); on the first walk in full: the 13 checks of 7 (11), the Python on
+#               every value (7 (7)), the planted errors, and the stops (a bar past END, ③'s d in the print, an
+#               empty sha256 constant, a slot changed, the provisional file at the real path)
+#     s2b       7 (6): (b)'s comparing run on a walk from R to the deadline, the wide and the 1-hour
+#               provisional slots, the Python on each END_b, the planted (b) errors
+#     unchanged 7 (10): (a)'s and (b)'s outputs the same before and after (the program of main before stage 2)
 #   dispatch stage1 = yes (and only then; after s1syn passed in the same run):
 #     s1real    stage 1 on GMO's real 1-minute bars, 2024-01-01 to 2026-10-03: the spreads only, no signal and
 #               no move after one; the Python on the same files; the file printed only when both agree
+#   dispatch y2023 = yes (and only then; not with stage1; after s2hand, s2syn and s2b passed in the same run):
+#     y2023     stage 2 on GMO's bars of 2023-11-08 to 2023-12-30 (the day files of 2023-11-06 to 2023-12-30
+#               only; its own cache, gmo-2023-*): it stops before GMO is read while the program holds no
+#               sha256 of research/ledger/spread-hours.csv; the Python on the same files; only the items of
+#               §8.103 5 printed (print.txt), with research/ledger/ultra15-2023.csv, once every check passed
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only:
 # public files fetched, a report printed; it writes nothing to the repository and holds no secret.
@@ -21,19 +35,34 @@ on:
     paths:
       - research/spreadhours*.ts
       - research/spreadhours-check.py
-      - research/ownerhold-data.ts
+      - research/costhours*
+      - research/ownerhold*.ts
+      - research/ownerhold-check.py
       - .github/workflows/costhours.yml
   workflow_dispatch:
     inputs:
       stage1:
         description: "Stage 1 on the real 1-minute bars, after the synthetic checks pass (yes/no)"
         default: "no"
+      y2023:
+        description: "Stage 2 on 2023-11/12's real bars, after the synthetic checks pass (yes/no; not with stage1)"
+        default: "no"
 
 permissions:
   contents: read
 
 jobs:
+  # 7 (0): one real run at a time
+  inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: stage1 and y2023 not both
+        run: |
+          if [ "${{ inputs.stage1 }}" = "yes" ] && [ "${{ inputs.y2023 }}" = "yes" ]; then echo "::error::stage1 and y2023 in one run"; exit 1; fi
+
   s1syn:
+    needs: [inputs]
+    if: ${{ inputs.y2023 != 'yes' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -54,11 +83,16 @@ jobs:
           MODE: synthetic
           OUT: research/out/spreadhours/syn
         run: |
+          # each stopped by its own check: prestart by the bars kept (one per pair), keys by the day files opened only
           for p in prestart keys; do
             s=0
             PLANT=$p deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/spreadhours.ts > /tmp/plant-$p.log 2>&1 || s=$?
-            tail -n 1 /tmp/plant-$p.log
+            grep "PLANT $p" /tmp/plant-$p.log
             if [ "$s" != "3" ]; then echo "::error::PLANT $p: exit $s, not stopped by the checks"; exit 1; fi
+            if [ "$p" = "prestart" ]; then want="the bars kept"; else want="the day files opened"; fi
+            n=$(grep -c "PLANT $p check failed: .*: $want" /tmp/plant-$p.log || true)
+            all=$(grep -c "PLANT $p check failed:" /tmp/plant-$p.log || true)
+            if [ "$n" != "5" ] || [ "$all" != "5" ]; then echo "::error::PLANT $p: $all checks failed, $n of them '$want' (want 5 and 5)"; exit 1; fi
           done
       - name: The Python on the same files (every value the same; each planted error differs; a day file outside the list stops it)
         run: |
@@ -112,3 +146,210 @@ jobs:
         with:
           path: research/.cache
           key: gmo-spread-${{ github.run_id }}
+
+  s2hand:
+    needs: [inputs]
+    if: ${{ inputs.stage1 != 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples (TS) and the planted errors on them
+        env:
+          MODE: costhand
+          OUT: research/out/ownerhold
+          PLANTS: slotFromOpen,vExit,noWeekCell,fridayIn,holidayIn,keptMeanAll,pastEndIn,blocks4,ruleOrdersAvoided,midAhead
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The hand examples (the Python), against the answers and the TS; each planted error differs
+        run: |
+          pip install -q numpy
+          s=0
+          python3 research/ownerhold-check.py --cost-hand research/costhours-hand.json --cost-hand-dir research/out/ownerhold/cost/hand \
+            --cost research/out/costhours/provisional-1h.csv --cost-provisional 1h > /tmp/hand.log 2>&1 || s=$?
+          cat /tmp/hand.log
+          if [ "$s" != "0" ]; then echo "::error::the Python's hand examples: exit $s"; exit 1; fi
+          grep -q "hand examples of ② (Python): all as worked out" /tmp/hand.log
+          for p in slotFromOpen vExit noWeekCell fridayIn holidayIn keptMeanAll pastEndIn blocks4 ruleOrdersAvoided midAhead; do
+            n=$(grep "^planted $p: the Python differs from its dump in" /tmp/hand.log | sed 's/.* in \([0-9]*\) values.*/\1/')
+            if [ -z "$n" ] || [ "$n" = "0" ]; then echo "::error::planted $p: the Python finds no difference"; exit 1; fi
+          done
+
+  s2syn:
+    needs: [inputs]
+    if: ${{ inputs.stage1 != 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        set: [none, t01, t03]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: 7 (4), (5) on 100 walks (${{ matrix.set }}); the first walk in full and its planted errors
+        env:
+          MODE: costsyn
+          OUT: research/out/ownerhold
+          SETS: ${{ matrix.set }}
+          SEEDS: "1-100"
+          FULL: "1"
+          PLANTS: slotFromOpen,vExit,noWeekCell,fridayIn,holidayIn,keptMeanAll,pastEndIn,blocks4,ruleOrdersAvoided,midAhead
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - if: matrix.set == 'none'
+        name: The Python on the first walk (every value of §8.102 and of ②); each planted error that changes 2023's numbers differs
+        run: |
+          pip install -q numpy
+          d=research/out/ownerhold/cost/syn-none-1
+          # the slots the TS used: stage 1's file (its sha256 checked by both) once the programs hold it, else the provisional one
+          F=$(cat research/out/ownerhold/cost/slots-used.txt)
+          if [ "$F" = "research/ledger/spread-hours.csv" ]; then SLOTS="--cost $F"; else SLOTS="--cost $F --cost-provisional 1h"; fi
+          echo "slots: $SLOTS"
+          python3 research/ownerhold-check.py --gmo $d/gmo --dump $d/dump $SLOTS --cost-2023 \
+            $(for p in slotFromOpen vExit noWeekCell fridayIn keptMeanAll blocks4 ruleOrdersAvoided midAhead; do echo --cost-also $d/dump-$p; done)
+      - if: matrix.set == 'none'
+        name: The 2023 run with an empty sha256 constant stops before GMO is read (no network given)
+        env:
+          MODE: y2023
+          PLANT: emptyConst
+          OUT: research/out/ownerhold
+        run: |
+          s=0
+          deno run --allow-read=. --allow-write=research/out --allow-env research/ownerhold.ts > /tmp/empty.log 2>&1 || s=$?
+          cat /tmp/empty.log
+          if [ "$s" != "3" ] || ! grep -q "stopped before GMO is read: the sha256 of spread-hours.csv is not written" /tmp/empty.log; then echo "::error::emptyConst: exit $s, not stopped before GMO by the empty constant"; exit 1; fi
+
+  s2b:
+    needs: [inputs]
+    if: ${{ inputs.stage1 != 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: 7 (6) (b)'s comparing run on a walk, and the planted (b) errors
+        env:
+          MODE: bcostsyn
+          OUT: research/out/ownerhold
+          SEED: "1"
+          PLANTS: bCompareEvery,bNoDeadline,bWeeklyDelta
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The Python on each END_b (the counts, which run compares, the comparing run's numbers)
+        run: |
+          pip install -q numpy
+          d=research/out/ownerhold/cost/bcost-1
+          for r in wide-before wide-reach wide-after deadline-1h; do
+            if [ ! -d $d/$r ]; then echo "::error::$r was not run"; exit 1; fi
+            eb=$(python3 -c "import json,datetime;m=json.load(open('$d/$r/meta.json'));print(datetime.datetime.fromtimestamp(m['endB']/1000,datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+            w=$(python3 -c "import json;print(json.load(open('$d/$r/meta.json'))['which'])")
+            echo "== $r $eb $w"
+            python3 research/ownerhold-check.py --gmo $d/gmo --dump $d/$r/dump --ledger $d/ultra15.csv --end-b $eb \
+              --cost research/out/costhours/provisional-$w.csv --cost-provisional $w --cost-only
+          done
+
+  # 7 (10): (a)'s and (b)'s outputs the same as before ② was added — the hand examples, the first walk in full (and
+  # one walk of each trend set) and bsyn (with their planted errors' files), run by the program of main before ②'s
+  # stage 2 (0f9953a) and by this one, every file's sha256 compared
+  unchanged:
+    needs: [inputs]
+    if: ${{ inputs.stage1 != 'yes' && inputs.y2023 != 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [fixtures, bsyn, synthetic]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: new
+      - uses: actions/checkout@v4
+        with:
+          ref: 0f9953af24e9e680d8cc26c12f3f4707126cd49d
+          path: base
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The same run by both programs (${{ matrix.part }})
+        run: |
+          case "${{ matrix.part }}" in
+            fixtures) ENVS="MODE=fixtures PLANTS=orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar" ;;
+            bsyn) ENVS="MODE=bsyn SEED=1 PLANTS=pFloor,windowNo24h,compareEvery" ;;
+            synthetic) ENVS="MODE=synthetic SETS=none,t01,t03 SEEDS=1 FULL=1" ;;
+          esac
+          for v in base new; do
+            ( cd $v && env $ENVS OUT=$GITHUB_WORKSPACE/out-$v deno run --v8-flags=--max-old-space-size=12288 --allow-read=.,$GITHUB_WORKSPACE/out-$v --allow-write=$GITHUB_WORKSPACE/out-$v --allow-env research/ownerhold.ts > $GITHUB_WORKSPACE/log-$v.txt 2>&1 ) || { tail -n 30 $GITHUB_WORKSPACE/log-$v.txt; echo "::error::$v exited non-zero"; exit 1; }
+            ( cd $GITHUB_WORKSPACE/out-$v && find . -type f | sort | xargs sha256sum ) > $GITHUB_WORKSPACE/sha-$v.txt
+          done
+          echo "files: base $(wc -l < sha-base.txt), new $(wc -l < sha-new.txt)"
+          if ! diff sha-base.txt sha-new.txt > /tmp/d.txt; then head -n 40 /tmp/d.txt; echo "::error::${{ matrix.part }}: outputs differ before and after"; exit 1; fi
+          echo "${{ matrix.part }}: every file's sha256 the same"
+
+  y2023:
+    if: ${{ inputs.y2023 == 'yes' }}
+    needs: [inputs, s2hand, s2syn, s2b]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # §8.103 5: its own cache only (no day file of 2024 or later at hand; 2023's not put in the shared one)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-2023-none
+          restore-keys: gmo-2023-
+      - name: The BIS policy rates (the swap)
+        run: |
+          mkdir -p research/.cache/bis
+          curl -sSfL --connect-timeout 15 --max-time 300 -o /tmp/bis.zip https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip
+          unzip -o -q /tmp/bis.zip -d research/.cache/bis
+      - name: 2023-11/12 (only whether each check passed)
+        env:
+          MODE: y2023
+          OUT: research/out/ownerhold
+        run: |
+          BIS_CSV=$(ls research/.cache/bis/*.csv | head -n 1) deno run --v8-flags=--max-old-space-size=8192 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/ownerhold.ts
+      - name: The Python on the same files (the names of what differs only)
+        run: |
+          pip install -q numpy
+          python3 research/ownerhold-check.py --quiet --gmo research/.cache --dump research/out/ownerhold/cost/y2023/dump \
+            --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --cost research/ledger/spread-hours.csv --cost-2023 \
+            --out research/out/ownerhold/cost/y2023
+      - name: The numbers of §8.103 5 (every check passed)
+        env:
+          MODE: y2023print
+          OUT: research/out/ownerhold
+          HAND_JOB: ${{ needs.s2hand.result }}
+        run: deno run --allow-read=. --allow-write=research/out --allow-env research/ownerhold.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: costhours-2023
+          path: |
+            research/out/ownerhold/cost/y2023/print.txt
+            research/out/ownerhold/cost/y2023/ultra15-2023.csv
+          retention-days: 30
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-2023-${{ github.run_id }}
