@@ -14,11 +14,13 @@
 #     oldest the chart's walk reads (day files: the JST day of now - (span + 1) days, span the days the
 #     walk may look back for 301 bars; 4-hour: last JST year's file).
 #   * the state: the Dow reading of _shared/dow.ts (written again here from its comment and rules).
-#   * unreadable: fewer than 300 closed bars (1), a hole of 30 minutes or more among them that neither
-#     the market's hours nor GMO's own closures (a stamp most of the five pairs miss) explain (2).
+#   * unreadable: fewer than 300 closed bars (1), a hole of 30 minutes or more among them, or among the
+#     bars that should have closed between the newest of them and C, that neither the market's hours nor
+#     GMO's own closures (a stamp most of the five pairs miss) explain (2).
 #
-# Then the halves (§8.106 5: the follow of 1,440 5-minute bars from T inside the half) and the four
-# candidates' counts (§8.106 2, 6) against the run's counts.json. Exit 1 on any difference.
+# Then the halves (§8.106 5: the follow of 1,440 5-minute bars from C inside the half), the four
+# candidates' counts, the floors (§8.106 2, 6) and the whole period's counts against the run's
+# counts.json. Exit 1 on any difference; a count that differs is named, never printed (§8.106 11).
 
 import argparse
 import json
@@ -345,7 +347,7 @@ def oldest_key(tf, now):
     return int(jst_day(now - (span + 1) * DAY))
 
 
-def label(b, gp, tf, C):
+def label(b, gp, tf, C, holes):
     step = STEP[tf]
     # the newest bar closed by C
     lo, hi = 0, b.n
@@ -371,8 +373,38 @@ def label(b, gp, tf, C):
     if start > i:
         return "-", 9
     state = dow_state(b.mid[start:i + 1])
-    x = (1 if i - start + 1 < WINDOW else 0) | (2 if gp[i] - gp[start] > 0 else 0)
+    # the bars that should have closed after the newest one by C
+    trail = 0
+    s = b.t[i] + step
+    while s + step <= C:
+        if should_exist(s, step) and s not in holes:
+            trail += step
+        s += step
+    x = (1 if i - start + 1 < WINDOW else 0) | (2 if gp[i] - gp[start] > 0 or trail >= 30 * MIN else 0)
     return state, x
+
+
+# ---- the floors -------------------------------------------------------------------------------
+
+def floor_miss(n, k, o, u, wk, wo, kb, ks, wkb, wks):
+    """§8.106 6 for one candidate in one half: the floors it misses, in the run's order and words"""
+    return [m for m, short in (
+        ("kept<300", k < 300), ("out<300", o < 300), ("keptWeeks<30", wk < 30), ("outWeeks<30", wo < 30),
+        ("BUY<50", kb < 50), ("SELL<50", ks < 50), ("BUYWeeks<40", wkb < 40), ("SELLWeeks<40", wks < 40),
+        ("unread>2%", 50 * u > n),
+    ) if short]
+
+
+def floors_hand():
+    """hand-made counts: all at the line meet the floors; each one short (the unreadable one over) misses it alone"""
+    line = dict(n=5000, k=300, o=300, u=100, wk=30, wo=30, kb=50, ks=50, wkb=40, wks=40)
+    bad = [] if not floor_miss(**line) else ["hand: at the line"]
+    for key, v, want in (("k", 299, "kept<300"), ("o", 299, "out<300"), ("wk", 29, "keptWeeks<30"), ("wo", 29, "outWeeks<30"),
+                         ("kb", 49, "BUY<50"), ("ks", 49, "SELL<50"), ("wkb", 39, "BUYWeeks<40"), ("wks", 39, "SELLWeeks<40"),
+                         ("u", 101, "unread>2%")):
+        if floor_miss(**{**line, key: v}) != [want]:
+            bad.append(f"hand: {key} {v}")
+    return bad
 
 
 # ---- the run ----------------------------------------------------------------------------------
@@ -424,7 +456,7 @@ def main():
             bad.append(f"{r['T']} {r['pair']} {r['side']}: C {r['C']}, not {iso(C)}")
         mine = {}
         for tf, s_col, x_col in (("15min", "s15", "x15"), ("1h", "s1h", "x1h"), ("4h", "s4h", "x4h")):
-            st, x = label(bars[r["pair"]][tf], gps[r["pair"]][tf], tf, C)
+            st, x = label(bars[r["pair"]][tf], gps[r["pair"]][tf], tf, C, holes[tf])
             mine[tf] = (st, x)
             if st != r[s_col] or str(x) != r[x_col]:
                 bad.append(f"{r['T']} {r['pair']} {r['side']} {tf}: run {r[s_col]}/{r[x_col]}, here {st}/{x}")
@@ -433,7 +465,7 @@ def main():
     for b in bad[:10]:
         print(f"  {b}")
 
-    # the halves: the 1,440th 5-minute bar from T closed by the split (or END), near the edges
+    # the halves: the 1,440th 5-minute bar from C closed by the split (or END), near the edges
     edge = 21 * DAY
     half_bad = []
     my_half = {}
@@ -464,21 +496,21 @@ def main():
                 if T < split - edge:
                     h = "H1"
                 else:
-                    e = end_of(T, split)
+                    e = end_of(C, split)
                     if e:
                         longest = max(longest, e - T)
                     h = "H1" if e is not None and e <= split else "-"
             elif T < end - edge:
                 h = "H2"
             else:
-                e = end_of(T, end)
+                e = end_of(C, end)
                 if e:
                     longest = max(longest, e - T)
                 h = "H2" if e is not None and e <= end else "-"
             my_half[id(r)] = h
             if h != r["half"]:
                 half_bad.append(f"{r['T']} {p} {r['side']}: run {r['half']}, here {h}")
-    print(f"halves: {len(half_bad)} different; the longest follow near an edge {longest / DAY:.2f} days")
+    print(f"halves: {len(half_bad)} different; the longest follow near an edge {longest / DAY:.2f} days; files missing {len(missing)} (with the 5-minute ones)")
     for b in half_bad[:10]:
         print(f"  {b}")
 
@@ -519,21 +551,57 @@ def main():
                     len({week(T) for x, T in sel if x == 1}),
                     len({week(T) for x, T in sel if x == -1}),
                 )
+    # (a count that differs is named, not printed: §8.106 11, no number leaves a run that failed)
+    fields = ("kept", "out", "unread", "weeksKept", "weeksOut")
     with open(a.counts) as f:
         theirs = json.load(f)
     count_bad = []
     for c in theirs["counts"]:
         k = (c["half"], c["cand"], c["side"])
         got = mine_counts.get(k)
-        want = (c["kept"], c["out"], c["unread"], c["weeksKept"], c["weeksOut"])
-        if got != want:
-            count_bad.append(f"{k}: run {want}, here {got}")
+        want = tuple(c[x] for x in fields)
+        if got is None:
+            count_bad.append(f"{k}: not counted here")
+        elif got != want:
+            count_bad.append(f"{k}: {', '.join(x for x, g, w in zip(fields, got, want) if g != w)} differ")
     if len(theirs["counts"]) != len(mine_counts):
-        count_bad.append(f"{len(theirs['counts'])} counts in the run, {len(mine_counts)} here")
+        count_bad.append("the number of counts differs")
     print(f"counts: {len(theirs['counts'])} compared, {len(count_bad)} different")
     for b in count_bad[:10]:
         print(f"  {b}")
-    ok = not bad and not half_bad and not count_bad and not problems and not missing
+
+    # the floors (§8.106 6), from the counts here: in a half, kept and left out 300 or more each, over 30
+    # weeks or more each; BUY and SELL each kept 50 or more over 40 weeks or more; unreadable 2% or less.
+    # First on hand-made counts (the walk never meets them: its second half is 10 weeks)
+    floor_bad = floors_hand()
+    for h in ("H1", "H2"):
+        n_h = sum(1 for r, T, C, mine in rows if my_half[id(r)] == h)
+        for name in names:
+            k, o, u, wk, wo = mine_counts[(h, name, "all")]
+            kb, _, _, wkb, _ = mine_counts[(h, name, "BUY")]
+            ks, _, _, wks, _ = mine_counts[(h, name, "SELL")]
+            miss = floor_miss(n_h, k, o, u, wk, wo, kb, ks, wkb, wks)
+            if theirs["floors"].get(f"{h}|{name}") is not (not miss) or theirs.get("misses", {}).get(f"{h}|{name}") != miss:
+                floor_bad.append(f"{h} {name}")
+    if len(theirs["floors"]) != 2 * len(names) or len(theirs.get("misses", {})) != 2 * len(names):
+        floor_bad.append("the number of floors differs")
+    # the weeks the run divides by (§8.106 12 の2): each half's length, and the whole's
+    my_weeks = {"all": (end - start) / (7 * DAY), "H1": (split - start) / (7 * DAY), "H2": (end - split) / (7 * DAY)}
+    for k, w in my_weeks.items():
+        got = theirs.get("weeks", {}).get(k)
+        if not isinstance(got, (int, float)) or abs(got - w) > 1e-9:
+            floor_bad.append(f"weeks {k}")
+    print(f"floors: {2 * len(names)} compared, and the weeks; {len(floor_bad)} different{': ' + ', '.join(floor_bad) if floor_bad else ''}")
+
+    # the whole of (a), both halves and the edges (§8.106 12 の2)
+    whole_bad = []
+    theirs_whole = {w["cand"]: (w["kept"], w["out"], w["unread"]) for w in theirs.get("whole", [])}
+    for c, name in enumerate(names):
+        v = [verdict(c, r["side"], mine) for r, T, C, mine in rows]
+        if theirs_whole.get(name) != (v.count(1), v.count(-1), v.count(0)):
+            whole_bad.append(name)
+    print(f"whole period: {len(names)} compared, {len(whole_bad)} different{': ' + ', '.join(whole_bad) if whole_bad else ''}")
+    ok = not bad and not half_bad and not count_bad and not floor_bad and not whole_bad and not problems and not missing
     print("PYTHON CHECK", "OK" if ok else "FAILED")
     sys.exit(0 if ok else 1)
 

@@ -12,7 +12,6 @@
 // MODE=real reads GMO (Actions); MODE=syn reads a walk's folder (OUT of trend.ts MODE=syn) with the emails
 // made up from its signals, to try the program here.
 
-import { GMO_SYMBOLS } from "../supabase/functions/track-outcomes/quotes.ts";
 import { DAY, HOUR, MINUTE, iso } from "./lib.ts";
 import { LEAD15, PAIRS, type Sig, type Source, load15, newLoadStats, signalsOf, unitOf } from "./ownerhold-data.ts";
 import { type Bars, DIR_OF, FINE, LAG, STATE_NAMES, chartRead, fileFetcher, gapsOf, labelsOf, lowerBound, seriesOf, weekendOutOf } from "./trend-labels.ts";
@@ -160,7 +159,7 @@ const main = async () => {
       const C = sig ? sig.base : e.T;
       const lab = {} as Row["lab"];
       for (const tf of TFS) {
-        const s = seriesOf(tf, bars[pair][tf], holes[tf], GAPS);
+        const s = seriesOf(tf, bars[pair][tf], holes[tf], GAPS, true);
         const L = labelsOf(s, Float64Array.of(C - FINE));
         const c = await chartRead(pair, tf, C + LAG, fetcher);
         lab[tf] = { state: L.state[0], excl: L.state[0] >= 0 ? L.excl[0] : 9, chart: c.state };

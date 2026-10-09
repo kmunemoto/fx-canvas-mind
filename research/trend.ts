@@ -23,8 +23,9 @@
 // shows it a minute later. Up and toUp point up, down and toDown down, none
 // nowhere. Unreadable: fewer than 300 closed bars, or a hole the market's
 // hours and GMO's own closures (a stamp most of the five pairs miss) do not
-// explain. A candidate leaves an email out when its line points against the
-// email; it compares only the emails it can read.
+// explain, among the window's bars or between its newest and C. A candidate
+// leaves an email out when its line points against the email; it compares
+// only the emails it can read (③: both labels read, whatever the verdict).
 
 import { GMO_SYMBOLS } from "../supabase/functions/track-outcomes/quotes.ts";
 import { DAY, HOUR, MINUTE, WEEK, WEEK_OFFSET, iso } from "./lib.ts";
@@ -38,7 +39,6 @@ import {
   type Labels,
   STATE_NAMES,
   type Series,
-  type Tf,
   WINDOW,
   chartRead,
   fileFetcher,
@@ -56,9 +56,10 @@ const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "syn");
 if (MODE !== "stage0" && MODE !== "syn") throw new Error(`MODE ${MODE}: stage0 or syn`);
 const SYN = MODE === "syn";
-export const PLANTS = ["formingInWindow", "hourMidPrice", "oneBarAhead", "readAtTminus15", "lateFromT", "buySellSwap", "hintSwap", "keyFromJst", "weekendStamp", "keepEdge"] as const;
+export const PLANTS = ["formingInWindow", "hourMidPrice", "oneBarAhead", "readAtTminus15", "lateFromT", "buySellSwap", "hintSwap", "keyFromJst", "weekendStamp", "keepEdge", "lostFile"] as const;
 const PLANT = env("PLANT", "");
 if (PLANT && !(PLANTS as readonly string[]).includes(PLANT)) throw new Error(`PLANT ${PLANT}: not one of ${PLANTS.join(", ")}`);
+if (PLANT && !SYN) throw new Error(`PLANT ${PLANT}: on the walk only (MODE=syn)`);
 const OUT = env("OUT", "research/out/trend");
 const CACHE = env("CACHE_DIR", "research/.cache");
 const SEED = Number(env("SEED", "1"));
@@ -103,7 +104,12 @@ const say = (s = "") => {
   lines.push(s);
   console.log(s);
 };
-const sayOut = say;
+// the counts and the examples' verdicts (stage0): print.txt only, never stdout (the job shows print.txt only
+// once every check and the Python passed). Nothing here writes to stderr: the job shows stderr when the run
+// fails, so no number may ever go there (nor into a thrown error's message)
+const sayOut = SYN ? say : (s = "") => {
+  lines.push(s);
+};
 const isoMs = (ms: number) => new Date(ms).toISOString();
 const weekOf = (ms: number) => Math.floor((ms - WEEK_OFFSET) / WEEK);
 
@@ -123,7 +129,7 @@ const check = (name: string, ok: boolean, n: number, detail: string, examples: s
 // ---- the walk (MODE=syn) ---------------------------------------------------------------------
 
 // a 1-hour day file of USD/JPY written empty (a weekday): GMO losing a file, the hole the labels must call unreadable
-const SYN_HOLE = { pair: "USD/JPY", tf: "1h" as Tf, key: "20250212" };
+const SYN_HOLE = { pair: "USD/JPY", tf: "1h" as LTf, key: "20250212" };
 
 const writeTheWalk = async () => {
   const from = START_MS - 100 * DAY;
@@ -220,7 +226,7 @@ const labelPair = (p: PairRun, holes: Record<LTf, Set<number>>) => {
   const Cs = Float64Array.from(p.moments.map((m) => m.C));
   const fineT = Cs.map((C) => C - FINE);
   for (const tf of TFS) {
-    const s = seriesOf(tf, p.bars[tf], holes[tf], GAPS);
+    const s = seriesOf(tf, p.bars[tf], holes[tf], GAPS, true);
     const L = labelsOf(s, fineT);
     plantLabels(s, L, Cs);
     p.series[tf] = s;
@@ -268,8 +274,9 @@ const chartCheck = async (runs: PairRun[]) => {
 
 // Each signal's label rebuilt from the bars around its window only, the bars not closed by C changed:
 // "cut" their prices emptied (NaN), "poison" moved ±777.7 pips (times and the 300/301 counting kept);
-// the label (state, window, unreadable) must not move. And the walk only: with the past moved instead,
-// the label must move somewhere (the check can see).
+// the label (state, window, unreadable) must not move. That the checks can see a label move is shown by
+// the planted runs formingInWindow, hourMidPrice and oneBarAhead (trend.yml wants lookAhead.poison among
+// the checks that catch each: §8.106 11 「毒の確かめで見つかること」).
 const lookAhead = (runs: PairRun[], holes: Record<LTf, Set<number>>) => {
   for (const mode of ["cut", "poison"] as const) {
     let n = 0;
@@ -296,7 +303,7 @@ const lookAhead = (runs: PairRun[], holes: Record<LTf, Set<number>>) => {
               for (const a of [b.bo, b.bh, b.bl, b.bc, b.ao, b.ah, b.al, b.ac]) a[j] += d;
             }
           }
-          const s2 = seriesOf(tf, b, holes[tf], GAPS);
+          const s2 = seriesOf(tf, b, holes[tf], GAPS, true);
           const L2 = labelsOf(s2, Float64Array.of(C - FINE));
           plantLabels(s2, L2, Float64Array.of(C));
           n++;
@@ -338,31 +345,51 @@ const joinA = async (sigs: Sig[]) => {
     else rowBad.push(`${k} rows ${c} signals ${h}`);
   }
   const without = sigs.filter((s) => !want.has(`${s.T}|${s.pair}|${s.side}`));
-  const whys = without.map((s) => `${isoMs(s.T)} ${s.pair} ${s.side} P ${isoMs(s.base + DELAY * MINUTE)}${s.base + DELAY * MINUTE + DAY > END_MS ? " (P + 1 day past END)" : " (no P bar?)"}`);
-  check("aFile", hash === A_SHA256 && rowBad.length === 0 && rowOnce === rows.length - 1 && without.length === 8, rowBad.length,
+  // (a)'s writer leaves a signal out only without P, or when P + 1 day passes END (ownerhold.ts aCsv). The second
+  // is computed here, exactly (the maintenance shift only moves P later); the 8 must all be it, and one left out
+  // for another reason stops the run, to be looked at by hand (§8.106 11 「ちょうど同じ」)
+  const pastEnd = (s: Sig) => s.base + DELAY * MINUTE + DAY > END_MS;
+  const whys = without.map((s) => `${isoMs(s.T)} ${s.pair} ${s.side} P ${isoMs(s.base + DELAY * MINUTE)}${pastEnd(s) ? " (P + 1 day past END)" : " (NOT explained: P + 1 day before END)"}`);
+  check("aFile", hash === A_SHA256 && rowBad.length === 0 && rowOnce === rows.length - 1 && without.length === 8 && without.every(pastEnd), rowBad.length,
     `sha256 ${hash === A_SHA256 ? "as fixed" : `${hash} (not ${A_SHA256})`}; rows ${rows.length - 1}, each one signal ${rowOnce}; signals ${sigs.length}, without a row ${without.length}`, [...rowBad, ...whys]);
   return whys;
 };
 
 // ---- which half an email is in (§8.106 5) -----------------------------------------------------------
 
-// the end of each signal's follow (the 1,440th 5-minute bar from T, its close) where a half's edge is near;
-// elsewhere the window is days long and inside its half
+// the end of each signal's follow (the 1,440th 5-minute bar from C, its close: T, or T + 15 minutes for a
+// late signal, §8.106 1) where a half's edge is near; elsewhere the window is days long and inside its half
 const halvesOf = async (runs: PairRun[], st: ReturnType<typeof newLoadStats>) => {
   const half = new Map<Sig, "H1" | "H2" | "-">();
   let measured = 0;
   let longest = 0;
+  // 手の例 (the late path): each pair's last 15-minute close before each edge whose follow from T ends by the
+  // edge and from T + 15 minutes does not; on time it is in its half, late (C = T + 15 minutes) in neither
+  let lateFound = 0;
+  const lateBad: string[] = [];
   for (const p of runs) {
     const ranges = [[SPLIT_MS - EDGE, SPLIT_MS + 14 * DAY], [END_MS - EDGE, END_MS]];
     const times: number[] = [];
     for (const [a, b] of ranges) for (const q of await loadQuotes(src, p.pair, "5min", 5 * MINUTE, a, b, st)) times.push(Date.parse(q.datetime));
     times.sort((x, y) => x - y);
     const T5 = Float64Array.from(times);
-    const endOf = (T: number, limit: number): number => {
-      const i = lowerBound(T5, T);
+    const endOf = (from: number, limit: number): number => {
+      const i = lowerBound(T5, from);
       const j = i + TRACK_BARS - 1;
       if (j >= T5.length || T5[j] + 5 * MINUTE > limit) return Infinity;
       return T5[j] + 5 * MINUTE;
+    };
+    // the half of an email closing at T, followed from C; the follow's reach is measured from T, as the
+    // 21-day shortcut is (NaN: not counted bar by bar)
+    const halfOf = (T: number, C: number): { h: "H1" | "H2" | "-"; reach: number } => {
+      if (T < SPLIT_MS) {
+        if (T < SPLIT_MS - EDGE) return { h: "H1", reach: NaN };
+        const e = endOf(C, SPLIT_MS);
+        return { h: e <= SPLIT_MS ? "H1" : "-", reach: Number.isFinite(e) ? e - T : NaN };
+      }
+      if (T < END_MS - EDGE) return { h: "H2", reach: NaN };
+      const e = endOf(C, END_MS);
+      return { h: e <= END_MS ? "H2" : "-", reach: Number.isFinite(e) ? e - T : NaN };
     };
     for (const s of p.sigs) {
       if (PLANT === "keepEdge") {
@@ -370,29 +397,30 @@ const halvesOf = async (runs: PairRun[], st: ReturnType<typeof newLoadStats>) =>
         half.set(s, s.T < SPLIT_MS ? "H1" : "H2");
         continue;
       }
-      if (s.T < SPLIT_MS) {
-        if (s.T < SPLIT_MS - EDGE) half.set(s, "H1");
-        else {
-          measured++;
-          const e = endOf(s.T, SPLIT_MS);
-          if (Number.isFinite(e)) longest = Math.max(longest, e - s.T);
-          half.set(s, e <= SPLIT_MS ? "H1" : "-");
-        }
-      } else if (s.T < END_MS - EDGE) half.set(s, "H2");
-      else {
-        measured++;
-        const e = endOf(s.T, END_MS);
-        if (Number.isFinite(e)) longest = Math.max(longest, e - s.T);
-        half.set(s, e <= END_MS ? "H2" : "-");
+      const r = halfOf(s.T, s.base);
+      if (s.T >= SPLIT_MS - EDGE && (s.T < SPLIT_MS || s.T >= END_MS - EDGE)) measured++;
+      if (Number.isFinite(r.reach)) longest = Math.max(longest, r.reach);
+      half.set(s, r.h);
+    }
+    for (const [edge, want] of [[SPLIT_MS, "H1"], [END_MS, "H2"]] as const) {
+      for (let k = lowerBound(T5, edge) - 1; k >= 0 && T5[k] >= edge - EDGE; k--) {
+        const T = T5[k] + 5 * MINUTE;
+        if (T % (15 * MINUTE) !== 0 || T >= edge || !(endOf(T, edge) <= edge) || endOf(T + 15 * MINUTE, edge) <= edge) continue;
+        lateFound++;
+        const on = halfOf(T, T).h;
+        const late = halfOf(T, T + 15 * MINUTE).h;
+        if (on !== want || late !== "-") lateBad.push(`${p.pair} T ${isoMs(T)}: on time ${on} (want ${want}), late ${late} (want -)`);
+        break;
       }
     }
   }
   // 手の例: an email closing within 3 days of the split or of END follows 1,440 bars (5 days of open market)
   // past it, so it is in neither half's comparison
   const edgeBad = runs.flatMap((p) => p.sigs).filter((s) => ((s.T < SPLIT_MS && SPLIT_MS - s.T < 3 * DAY) || END_MS - s.T < 3 * DAY) && half.get(s) !== "-");
-  check("halves", (PLANT === "keepEdge" || (longest > 0 && longest < EDGE - DAY)) && edgeBad.length === 0, edgeBad.length,
-    `windows counted bar by bar near the edges: ${measured}; the longest ${(longest / DAY).toFixed(2)} days (under ${(EDGE / DAY - 1).toFixed(0)} days, so the others are inside their half); emails within 3 days of an edge kept in a half: ${edgeBad.length}`,
-    edgeBad.slice(0, 5).map((s) => `${isoMs(s.T)} ${s.pair} ${s.side} in ${half.get(s)}`));
+  const lateWant = 2 * runs.length;
+  check("halves", (PLANT === "keepEdge" || (longest > 0 && longest < EDGE - DAY)) && edgeBad.length === 0 && lateBad.length === 0 && (!SYN || lateFound === lateWant), edgeBad.length + lateBad.length,
+    `windows counted bar by bar near the edges: ${measured}; the longest ${(longest / DAY).toFixed(2)} days (under ${(EDGE / DAY - 1).toFixed(0)} days, so the others are inside their half); emails within 3 days of an edge kept in a half: ${edgeBad.length}; a late email at the edge (made, ${lateFound} of ${lateWant} found): ${lateBad.length} wrong`,
+    [...edgeBad.slice(0, 5).map((s) => `${isoMs(s.T)} ${s.pair} ${s.side} in ${half.get(s)}`), ...lateBad]);
   return half;
 };
 
@@ -448,18 +476,63 @@ export interface Count {
   weeksKept: number;
   weeksOut: number;
 }
-const countsOf = (rows: Row[], quiet = false): { floors: Record<string, boolean>; counts: Count[] } => {
+// the whole of (a), both halves and the edges, each candidate: §8.106 12 の2 「①なら週 約__通」 (an email the
+// candidate cannot read is sent: §8.106 1)
+export interface Whole {
+  cand: string;
+  kept: number;
+  out: number;
+  unread: number;
+}
+// the floors of §8.106 6 for one candidate in one half, from its counts: what it misses (none: it meets
+// them). An unreadable share over 2% is not a drop but a stop: find the reason before any outcome is read.
+interface FloorIn {
+  n: number; // the half's emails
+  kept: number;
+  out: number;
+  unread: number;
+  wK: number; // weeks with a kept email
+  wO: number; // weeks with one left out
+  kB: number; // BUY kept
+  kS: number; // SELL kept
+  wKB: number; // weeks with a BUY kept
+  wKS: number; // weeks with a SELL kept
+}
+const UNREAD_STOP = "unread>2%";
+const floorMiss = (f: FloorIn): string[] =>
+  [
+    f.kept < 300 ? "kept<300" : "",
+    f.out < 300 ? "out<300" : "",
+    f.wK < 30 ? "keptWeeks<30" : "",
+    f.wO < 30 ? "outWeeks<30" : "",
+    f.kB < 50 ? "BUY<50" : "",
+    f.kS < 50 ? "SELL<50" : "",
+    f.wKB < 40 ? "BUYWeeks<40" : "",
+    f.wKS < 40 ? "SELLWeeks<40" : "",
+    50 * f.unread > f.n ? UNREAD_STOP : "",
+  ].filter((m) => m !== "");
+
+const countsOf = (rows: Row[], quiet = false) => {
   const say = quiet ? (_s = "") => {} : sayOut;
   const counts: Count[] = [];
-  const weeksIn = (h: "H1" | "H2") => h === "H1" ? weekOf(SPLIT_MS - 1) - weekOf(START_MS) + 1 : weekOf(END_MS - 1) - weekOf(SPLIT_MS) + 1;
+  // a half's length in weeks (2024-01-01 and the split are Mondays 00:00 UTC; END is a Saturday 00:00 UTC)
+  const weeksIn = (h: "H1" | "H2") => (h === "H1" ? SPLIT_MS - START_MS : END_MS - SPLIT_MS) / WEEK;
   const all = rows.length;
-  const allWeeks = weekOf(END_MS - 1) - weekOf(START_MS) + 1;
-  say(`emails ${all} over ${allWeeks} weeks: ${(all / allWeeks).toFixed(1)} a week (both halves and the edges)`);
+  const allWeeks = (END_MS - START_MS) / WEEK;
+  const weeks = { all: allWeeks, H1: weeksIn("H1"), H2: weeksIn("H2") };
+  const inHalf = (h: string) => rows.filter((r) => r.half === h).length;
+  say(`emails ${all} over ${allWeeks.toFixed(1)} weeks: ${(all / allWeeks).toFixed(1)} a week (H1 ${inHalf("H1")}, H2 ${inHalf("H2")}, in neither half ${inHalf("-")})`);
+  const whole: Whole[] = CANDS.map((name, c) => {
+    const v = rows.map((r) => verdictOf(c, r.s, r.lab));
+    return { cand: name, kept: v.filter((x) => x === 1).length, out: v.filter((x) => x === -1).length, unread: v.filter((x) => x === 0).length };
+  });
+  for (const w of whole) say(`${w.cand}: sent ${((w.kept + w.unread) / allWeeks).toFixed(1)} a week (kept ${w.kept}, unreadable ${w.unread}, sent as now), left out ${w.out} (${(w.out / allWeeks).toFixed(1)} a week)`);
   const floors: Record<string, boolean> = {};
+  const misses: Record<string, string[]> = {};
   for (const h of ["H1", "H2"] as const) {
     const inH = rows.filter((r) => r.half === h);
-    const W = weeksIn(h);
-    say(`\n-- ${h}: ${inH.length} emails, ${W} weeks, ${(inH.length / W).toFixed(1)} a week (BUY ${inH.filter((r) => r.s.side === "BUY").length}, SELL ${inH.filter((r) => r.s.side === "SELL").length})`);
+    const W = weeks[h];
+    say(`\n-- ${h}: ${inH.length} emails, ${W.toFixed(1)} weeks, ${(inH.length / W).toFixed(1)} a week (BUY ${inH.filter((r) => r.s.side === "BUY").length}, SELL ${inH.filter((r) => r.s.side === "SELL").length})`);
     CANDS.forEach((name, c) => {
       const v = inH.map((r) => verdictOf(c, r.s, r.lab));
       const cnt = (want: number, side?: string) => inH.filter((r, i) => v[i] === want && (!side || r.s.side === side)).length;
@@ -472,37 +545,71 @@ const countsOf = (rows: Row[], quiet = false): { floors: Record<string, boolean>
         const sd = side === "all" ? undefined : side;
         counts.push({ half: h, cand: name, side, kept: cnt(1, sd), out: cnt(-1, sd), unread: cnt(0, sd), weeksKept: weeks(1, sd), weeksOut: weeks(-1, sd) });
       }
-      const pass = kept >= 300 && out >= 300 && wK >= 30 && wO >= 30 && kB >= 50 && kS >= 50 && wKB >= 40 && wKS >= 40 && unreadShare <= 0.02;
-      floors[`${h}|${name}`] = pass;
+      const miss = floorMiss({ n: inH.length, kept, out, unread, wK, wO, kB, kS, wKB, wKS });
+      floors[`${h}|${name}`] = miss.length === 0;
+      misses[`${h}|${name}`] = miss;
       say(`${name}: kept ${kept} (${(kept / W).toFixed(1)} a week; BUY ${kB}, SELL ${kS}), left out ${out} (BUY ${oB}, SELL ${oS}), unreadable ${unread} (${(100 * unreadShare).toFixed(2)}%; BUY ${uB}, SELL ${uS})`);
-      say(`   weeks with a kept email ${wK} (BUY ${wKB}, SELL ${wKS}), with one left out ${wO} -> floors ${pass ? "met" : "NOT met"}${unreadShare > 0.02 ? " (unreadable over 2%: stop and look before any outcome)" : ""}`);
+      say(`   weeks with a kept email ${wK} (BUY ${wKB}, SELL ${wKS}), with one left out ${wO} -> floors ${miss.length ? `NOT met: ${miss.join(", ")}` : "met"}`);
+      // ③ reads an email only when both its labels are read (kept and left out compared on the same emails,
+      // whatever the verdict): what its unreadable are made of
+      if (c === 2) {
+        const rd = (r: Row, tf: LTf) => r.lab[tf].state >= 0 && r.lab[tf].excl === 0;
+        const by = (h1: boolean, h4: boolean) => inH.filter((r) => rd(r, "1h") === h1 && rd(r, "4h") === h4).length;
+        say(`   its unreadable by label: 1H alone ${by(false, true)}, 4H alone ${by(true, false)}, both ${by(false, false)}`);
+      }
     });
   }
-  say(`\nfloors (§8.106 6; a candidate must meet them in both halves): ${CANDS.map((n) => `${n} ${floors[`H1|${n}`] && floors[`H2|${n}`] ? "passes" : "drops"}`).join(", ")}`);
-  return { floors, counts };
+  // a candidate meets the floors in both halves (passes), misses one (drops, §8.106 6: 落とした理由と数), or
+  // has over 2% unreadable in a half (stop: the reason is found before stage 1)
+  const fate = (n: string) => {
+    const m = [...misses[`H1|${n}`].map((x) => `H1 ${x}`), ...misses[`H2|${n}`].map((x) => `H2 ${x}`)];
+    if (m.some((x) => x.endsWith(UNREAD_STOP))) return `${n} STOP (unreadable over 2%: find the reason before any outcome; ${m.join(", ")})`;
+    return m.length ? `${n} drops (${m.join(", ")})` : `${n} passes`;
+  };
+  say(`\nfloors (§8.106 6; a candidate must meet them in both halves): ${CANDS.map(fate).join(", ")}`);
+  return { weeks, floors, misses, counts, whole };
 };
 
 // ---- the data's own checks ----------------------------------------------------------------------
 
-const dataChecks = (runs: PairRun[], st: ReturnType<typeof newLoadStats>, holes: Record<LTf, Set<number>>) => {
+// every file read, taken after the last read (the halves' 5-minute bars, the examples' files)
+const loadsCheck = (st: ReturnType<typeof newLoadStats>) =>
   check("loads", st.failed === 0, st.failed, `requests ${st.requests}, kept files ${st.cached}, read again ${st.partial}, failed ${st.failed}${st.failed ? ` (${Object.entries(st.failedWhy).map(([k, v]) => `${k} ${v}`).join("; ")})` : ""}`, st.failedExamples);
+
+// the longest run of stamps, a run going on over the stamps no bar should be in (the weekend, a closed hour)
+const longestRun = (stamps: Set<number>, step: number): number => {
+  const ts = [...stamps].sort((a, b) => a - b);
+  let best = 0;
+  let run = 0;
+  let prev = NaN;
+  for (const t of ts) {
+    let joined = Number.isFinite(prev);
+    for (let s = prev + step; joined && s < t; s += step) if (GAPS.shouldExist(s, step)) joined = false;
+    run = joined ? run + step : step;
+    best = Math.max(best, run);
+    prev = t;
+  }
+  return best;
+};
+
+const dataChecks = (runs: PairRun[], holes: Record<LTf, Set<number>>) => {
   let keyBad = 0;
   const keyEx: string[] = [];
   for (const p of runs) {
     for (const tf of TFS) {
       const d = p.diags[tf];
-      keyBad += d.keyMismatch;
-      keyEx.push(...d.keyMismatchEx.map((e) => `${p.pair} ${tf} ${e}`));
       say(`${p.pair} ${tf}: ${d.bars} bars ${d.bars ? `${iso(d.first)} .. ${iso(d.last)}` : ""}; files ${d.files}; in two files ${d.repeated}, one side only ${d.oneSide}, ask under bid ${d.crossed}; 15:00-20:59 UTC bars ${d.lateUtc}; Friday files made before 21:00 UTC ${d.fridayEarly.length}`);
     }
   }
-  // a bar's file is the one GMO's rule names (the day from 21:00 UTC, or that day's year): §8.106 11 手の例
-  if (PLANT === "keyFromJst") {
-    for (const p of runs) for (const tf of TFS) for (let i = 0; i < p.bars[tf].n; i++) {
-      const t = p.bars[tf].t[i];
-      const rule = tf === "4h" ? Number(gmoYearKey(t)) : Number(gmoDayKey(t));
-      if (p.bars[tf].key[i] !== rule) keyBad++;
-    }
+  // a bar's file is the one GMO's rule names (the day from 21:00 UTC, or that day's year): §8.106 11 手の例.
+  // Every run, each bar once, with the key the labels use (without a plant, loadTf's keyMismatch on the same
+  // bars; PLANT=keyFromJst sets the keys after loadTf, whose own count would miss it)
+  for (const p of runs) for (const tf of TFS) for (let i = 0; i < p.bars[tf].n; i++) {
+    const t = p.bars[tf].t[i];
+    const rule = tf === "4h" ? Number(gmoYearKey(t)) : Number(gmoDayKey(t));
+    if (p.bars[tf].key[i] === rule) continue;
+    keyBad++;
+    if (keyEx.length < 8) keyEx.push(`${p.pair} ${tf} ${isoMs(t)} in ${p.bars[tf].key[i]}, rule ${rule}`);
   }
   check("fileKeys", keyBad === 0, keyBad, `bars in another file than GMO's rule names: ${keyBad}`, keyEx);
   // the 1-hour and 4-hour bars against the 15-minute bars inside them
@@ -524,6 +631,15 @@ const dataChecks = (runs: PairRun[], st: ReturnType<typeof newLoadStats>, holes:
     for (const s of holes[tf]) days.set(isoMs(s).slice(0, 10), (days.get(isoMs(s).slice(0, 10)) ?? 0) + 1);
     say(`GMO's own closures ${tf}: ${holes[tf].size} stamps on ${days.size} days${days.size ? `: ${[...days].slice(0, 40).map(([d, n]) => `${d}(${n})`).join(" ")}` : ""}`);
   }
+  // GMO's own closures are short (a holiday, a maintenance). A file GMO lost for every pair would be one too,
+  // and the labels after it would read a stale window as readable: the longest run of closure stamps (joined
+  // over the hours no bar should be in) must be under 4 days. Shown able to fail on a made-up run of 5 days
+  const longest = TFS.map((tf) => [tf, longestRun(holes[tf], STEP_OF[tf])] as const);
+  const made = new Set<number>();
+  for (let t = Date.parse("2025-02-11T00:00:00Z"); t < Date.parse("2025-02-18T00:00:00Z"); t += HOUR) if (GAPS.shouldExist(t, HOUR)) made.add(t);
+  const madeRun = longestRun(made, HOUR);
+  check("closures", longest.every(([, r]) => r < 4 * DAY) && madeRun >= 4 * DAY, longest.filter(([, r]) => r >= 4 * DAY).length,
+    `the longest run of GMO's own closures: ${longest.map(([tf, r]) => `${tf} ${(r / HOUR).toFixed(2)} h`).join(", ")} (under 4 days); a made-up week from Tuesday ${(madeRun / HOUR).toFixed(2)} h (4 days or more)`);
   for (const p of runs) say(`${p.pair} unexplained holes: ${TFS.map((tf) => `${tf} ${p.series[tf].gap[p.series[tf].bars.n]}`).join(", ")}`);
   // the week's last 15-minute bar of each pair, by the US summer (how GMO's week ends)
   for (const p of runs) {
@@ -573,7 +689,18 @@ const handExamples = (runs: PairRun[]) => {
       }
     }
   }
-  check("hand", bad === 0, bad, `bars against GMO's file rule and grid: ${bad} wrong`, out);
+  // the walk's lost file (SYN_HOLE, a GMO day from 21:00 UTC): the hour bars missing after the newest one by C
+  // make the label unreadable (§8.106 1), from when the first of them has closed, not before
+  if (SYN) {
+    const s = runs.find((r) => r.pair === SYN_HOLE.pair)?.series[SYN_HOLE.tf];
+    const cases: Array<[string, number]> = [["2025-02-11T21:30:00Z", 0], ["2025-02-11T22:00:00Z", 2], ["2025-02-12T14:00:00Z", 2]];
+    for (const [c, want] of cases) {
+      const got = s ? labelsOf(s, Float64Array.of(Date.parse(c) - FINE)).excl[0] & 2 : -1;
+      if (got !== want) bad++;
+      out.push(`${SYN_HOLE.pair} ${SYN_HOLE.tf} at ${c}: the hole bit ${got} (want ${want})`);
+    }
+  }
+  check("hand", bad === 0, bad, `bars against GMO's file rule and grid, and the walk's lost file: ${bad} wrong`, out);
   return out;
 };
 
@@ -581,7 +708,7 @@ const handExamples = (runs: PairRun[]) => {
 // none never leaves an email out; a label not read leaves the candidate out of the comparison)
 const verdictHand = () => {
   const sig = (side: "BUY" | "SELL") => ({ side, dir: side === "BUY" ? 1 : -1 }) as Sig;
-  const lab = (a: number, b: number, c: number, xb = 0): Row["lab"] => ({ "15min": { state: a, excl: a < 0 ? 9 : 0 }, "1h": { state: b, excl: xb }, "4h": { state: c, excl: 0 } });
+  const lab = (a: number, b: number, c: number, xb = 0, xc = 0): Row["lab"] => ({ "15min": { state: a, excl: a < 0 ? 9 : 0 }, "1h": { state: b, excl: xb }, "4h": { state: c, excl: xc } });
   // states: 0 none, 1 up, 2 down, 3 toUp, 4 toDown; expected ① ② ③ ④ (1 kept, -1 left out, 0 unreadable)
   const cases: Array<[string, Sig, Row["lab"], number[]]> = [
     ["BUY 15M up, 1H down, 4H toUp", sig("BUY"), lab(1, 2, 3), [-1, 1, 1, 1]],
@@ -590,6 +717,8 @@ const verdictHand = () => {
     ["SELL 15M down, 1H up (short), 4H down", sig("SELL"), lab(2, 1, 2, 1), [0, 1, 0, 1]],
     ["BUY 15M not read, 1H up, 4H down", sig("BUY"), lab(-1, 1, 2), [1, -1, 1, 0]],
     ["SELL 15M none, 1H down, 4H toDown", sig("SELL"), lab(0, 2, 4), [1, 1, 1, 1]],
+    // ③ with one label not read: unreadable even when the other already keeps the email (§8.106 段0の作り)
+    ["BUY 15M up, 1H up, 4H down (a hole)", sig("BUY"), lab(1, 1, 2, 0, 2), [1, 0, 0, 1]],
   ];
   const bad: string[] = [];
   for (const [name, s, l, want] of cases) {
@@ -599,15 +728,42 @@ const verdictHand = () => {
   check("verdicts", bad.length === 0, bad.length, `${cases.length} hand-made emails through the four candidates`, bad);
 };
 
+// the floors (§8.106 6) on hand-made counts: all at the line meets them; each one short (the unreadable one
+// over) misses that one alone. The walk never meets them (its second half is 10 weeks), so this is the only
+// run of the meeting side before the real data.
+const floorsHand = () => {
+  const line: FloorIn = { n: 5000, kept: 300, out: 300, unread: 100, wK: 30, wO: 30, kB: 50, kS: 50, wKB: 40, wKS: 40 };
+  const short: Array<[keyof FloorIn, number, string]> = [
+    ["kept", 299, "kept<300"],
+    ["out", 299, "out<300"],
+    ["wK", 29, "keptWeeks<30"],
+    ["wO", 29, "outWeeks<30"],
+    ["kB", 49, "BUY<50"],
+    ["kS", 49, "SELL<50"],
+    ["wKB", 39, "BUYWeeks<40"],
+    ["wKS", 39, "SELLWeeks<40"],
+    ["unread", 101, UNREAD_STOP],
+  ];
+  const bad: string[] = [];
+  const atLine = floorMiss(line);
+  if (atLine.length) bad.push(`at the line: ${atLine.join(", ")} (want none)`);
+  for (const [k, v, want] of short) {
+    const got = floorMiss({ ...line, [k]: v }).join(", ");
+    if (got !== want) bad.push(`${k} ${v}: ${got || "none"} (want ${want})`);
+  }
+  check("floors", bad.length === 0, bad.length, `the floors on ${short.length + 1} hand-made counts (at the line, and each one short)`, bad);
+};
+
 // ---- the examples of 10/7 and 10/9 (§8.106 12 の5) ------------------------------------------------------
 
-const examples = async (st: ReturnType<typeof newLoadStats>, holes: Record<LTf, Set<number>>) => {
+const examples = async (st: ReturnType<typeof newLoadStats>, holes: Record<LTf, Set<number>>): Promise<string[]> => {
+  const out: string[] = [];
   const text = await Deno.readTextFile(EXAMPLES);
   const rows = text.split("\n").filter((l) => l !== "").slice(1).map((l) => {
     const c = l.split(",");
     return { pair: c[0], side: c[1], open: Date.parse(c[2]), T: Date.parse(c[3]), E: Number(c[4]), sent: Date.parse(c[5]) };
   });
-  say(`\n== the examples (§8.106 12 の5; labels only, no outcome): ${rows.length} emails of 10/7 and 10/9 JST`);
+  out.push(`\n== the examples (§8.106 12 の5; labels only, no outcome): ${rows.length} emails of 10/7 and 10/9 JST`);
   const from = Date.parse("2026-10-06T00:00:00Z");
   for (const [pi, pair] of PAIRS.entries()) {
     const mine = rows.filter((r) => r.pair === pair);
@@ -621,14 +777,14 @@ const examples = async (st: ReturnType<typeof newLoadStats>, holes: Record<LTf, 
     const labs = {} as Record<LTf, Labels>;
     const sers = {} as Record<LTf, Series>;
     for (const tf of TFS) {
-      sers[tf] = seriesOf(tf, bars[tf], holes[tf], GAPS);
+      sers[tf] = seriesOf(tf, bars[tf], holes[tf], GAPS, true);
       labs[tf] = labelsOf(sers[tf], Float64Array.from(moments.map((C) => C - FINE)));
     }
     let k = 0;
     for (const f of found) {
       const jst = new Date(f.r.T + 9 * HOUR).toISOString().slice(5, 16).replace("T", " ");
       if (!f.s) {
-        say(`${jst} JST ${pair} ${f.r.side} ${f.r.E}: no signal found at this bar (not labelled)`);
+        out.push(`${jst} JST ${pair} ${f.r.side} ${f.r.E}: no signal found at this bar (not labelled)`);
         continue;
       }
       const lab = {} as Row["lab"];
@@ -640,10 +796,11 @@ const examples = async (st: ReturnType<typeof newLoadStats>, holes: Record<LTf, 
         parts.push(`${tf} ${labs[tf].state[k] >= 0 ? STATE_NAMES[labs[tf].state[k]] : "-"}${lab[tf].excl ? `(x${lab[tf].excl})` : ""}${same ? "" : " [chart differs]"}`);
       }
       const v = CANDS.map((n, c) => `${n} ${["unreadable", "kept", "left out"][verdictOf(c, f.s!, lab) === 1 ? 1 : verdictOf(c, f.s!, lab) === -1 ? 2 : 0]}`);
-      say(`${jst} JST ${pair} ${f.r.side} ${f.r.E}${f.s.late ? " (late)" : ""}: ${parts.join(", ")} | ${v.join(", ")}`);
+      out.push(`${jst} JST ${pair} ${f.r.side} ${f.r.E}${f.s.late ? " (late)" : ""}: ${parts.join(", ")} | ${v.join(", ")}`);
       k++;
     }
   }
+  return out;
 };
 
 // ---- the run ------------------------------------------------------------------------------------
@@ -653,6 +810,9 @@ const main = async () => {
   await Deno.mkdir(OUT, { recursive: true });
   say(`MODE ${MODE}${PLANT ? ` PLANT ${PLANT}` : ""}${SYN ? ` SEED ${SEED}` : ""}; ${isoMs(START_MS)} .. ${isoMs(END_MS)}, split ${isoMs(SPLIT_MS)}, bars read to ${isoMs(LABEL_END_MS)}; window ${WINDOW} bars; weekend ${PLANT === "weekendStamp" ? "stamp" : "inside"}`);
   if (SYN) await writeTheWalk();
+  // planted: a 5-minute file the halves read (near the split) lost after the walk was written: the loads check,
+  // taken after the last read, must stop the run
+  if (PLANT === "lostFile") await Deno.remove(`${src.dir}/${GMO_SYMBOLS["USD/JPY"]}/5min/bid/20250515.json`);
   const st = newLoadStats();
   const runs: PairRun[] = [];
   for (const [pi, pair] of PAIRS.entries()) {
@@ -667,13 +827,16 @@ const main = async () => {
   say(`signals ${sigs.length} (late ${sigs.filter((s) => s.late).length})`);
 
   say("\n== data");
-  dataChecks(runs, st, holes);
+  dataChecks(runs, holes);
   if (!SYN) await joinA(sigs);
   handExamples(runs);
   verdictHand();
+  floorsHand();
   await chartCheck(runs);
   lookAhead(runs, holes);
   const half = await halvesOf(runs, st);
+  const exLines = SYN ? [] : await examples(st, holes);
+  loadsCheck(st);
   const rows = rowsOf(runs, half);
   const csv = csvOf(rows);
   const hash = await sha256Hex(csv);
@@ -693,14 +856,14 @@ const main = async () => {
     await Deno.writeTextFile(`${OUT}/print.txt`, lines.join("\n") + "\n");
     if (!PLANT) Deno.exit(1);
     // a planted error on the walk: the counts written (not printed) for the Python to compare
-    const { floors, counts } = countsOf(rows, true);
-    await Deno.writeTextFile(`${OUT}/counts.json`, JSON.stringify({ labelsSha256: hash, floors, counts }, null, 1));
+    const { weeks, floors, misses, counts, whole } = countsOf(rows, true);
+    await Deno.writeTextFile(`${OUT}/counts.json`, JSON.stringify({ labelsSha256: hash, weeks, floors, misses, counts, whole }, null, 1));
     return;
   }
   say("\n== counts (stage 0: no outcome read)");
-  const { floors, counts } = countsOf(rows);
-  await Deno.writeTextFile(`${OUT}/counts.json`, JSON.stringify({ labelsSha256: hash, floors, counts }, null, 1));
-  if (!SYN) await examples(st, holes);
+  const { weeks, floors, misses, counts, whole } = countsOf(rows);
+  await Deno.writeTextFile(`${OUT}/counts.json`, JSON.stringify({ labelsSha256: hash, weeks, floors, misses, counts, whole }, null, 1));
+  for (const l of exLines) sayOut(l);
   await Deno.writeTextFile(`${OUT}/print.txt`, lines.join("\n") + "\n");
 };
 

@@ -229,19 +229,28 @@ export interface Series {
   // Wilder ATR(14) of the mids at each bar (NaN before it has one)
   atr: Float64Array;
   gap: Int32Array;
+  // #250 (§8.106 1): whether the bars that should have closed between bar i's close and C leave a hole
+  // as unexplainedGap's (GAP or more the market's hours and GMO's own closures do not explain); null:
+  // not looked at (dow-hit, §8.90, as it was measured)
+  trail: ((i: number, C: number) => boolean) | null;
 }
-export const seriesOf = (tf: Tf, bars: Bars, holes: Set<number> | null, gaps: Gaps): Series => {
+export const seriesOf = (tf: Tf, bars: Bars, holes: Set<number> | null, gaps: Gaps, trailing = false): Series => {
   const step = LIVE_STEP_MS[tf];
   const mids = Array.from({ length: bars.n }, (_, i) => ({ high: midHigh(bars, i), low: midLow(bars, i), close: midClose(bars, i) }));
   const a = atrSeriesOf(mids as unknown as Candle[]);
   const atr = Float64Array.from(a, (v) => (v === null ? Number.NaN : v));
-  return { tf, step, bars, mids, atr, gap: gaps.gapPrefix(bars, step, holes) };
+  const trail = (i: number, C: number): boolean => {
+    let missing = 0;
+    for (let s = bars.t[i] + step; s + step <= C; s += step) if (gaps.shouldExist(s, step) && !(holes !== null && holes.has(s))) missing += step;
+    return missing >= GAP;
+  };
+  return { tf, step, bars, mids, atr, gap: gaps.gapPrefix(bars, step, holes), trail: trailing ? trail : null };
 };
 
 export interface Labels {
   // 0 none, 1 up, 2 down, 3 toUp, 4 toDown; -1 nothing to read
   state: Int8Array;
-  // 1: fewer than DOW_BARS closed bars; 2: an unexplained hole among them
+  // 1: fewer than DOW_BARS closed bars; 2: an unexplained hole among them (or, s.trail, after them by C)
   excl: Uint8Array;
   // the newest closed bar and the window's first (-1 none)
   bar: Int32Array;
@@ -299,7 +308,7 @@ export const labelsOf = (s: Series, fineT: Float64Array, k0 = 0, k1 = fineT.leng
     L.bar[k] = i;
     L.first[k] = start;
     L.age[k] = lastSince === null ? -1 : i - start - lastSince;
-    L.excl[k] = (i - start + 1 < WINDOW ? 1 : 0) | (holeIn(s.gap, start, i) ? 2 : 0);
+    L.excl[k] = (i - start + 1 < WINDOW ? 1 : 0) | (holeIn(s.gap, start, i) || (s.trail !== null && s.trail(i, C)) ? 2 : 0);
   }
   return L;
 };
