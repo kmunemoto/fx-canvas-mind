@@ -128,3 +128,27 @@ jobs:
             research/out/trend/real/counts.json
             research/out/trend/real/print.txt
           retention-days: 30
+
+  # trend-labels.csv in parts of 4,500 lines, each in its own job (a job's log is read from its end: the
+  # file is written out from the parts and checked against the sha256 the run printed)
+  labels:
+    needs: [stage0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        part: [1, 2, 3]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: trend-stage0
+          path: out
+      - name: trend-labels.csv, part ${{ matrix.part }}
+        run: |
+          sha256sum out/trend-labels.csv
+          wc -l out/trend-labels.csv
+          from=$(( (${{ matrix.part }} - 1) * 4500 + 1 ))
+          to=$(( ${{ matrix.part }} * 4500 ))
+          echo "== part ${{ matrix.part }}: lines $from..$to"
+          sed -n "${from},${to}p" out/trend-labels.csv
+          echo "== end of part ${{ matrix.part }}"
