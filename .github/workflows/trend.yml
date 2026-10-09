@@ -23,6 +23,7 @@ on:
       - research/trend*.ts
       - research/trend-check.py
       - research/ledger/trend-examples.csv
+      - research/ledger/trend-labels.csv
       - .github/workflows/trend.yml
   workflow_dispatch:
     inputs:
@@ -45,6 +46,14 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
+      # §8.106 6: the stage-0 labels file is the one the TS and the Python name
+      - name: The stage-0 labels (research/ledger/trend-labels.csv) against the constants
+        run: |
+          got=$(sha256sum research/ledger/trend-labels.csv | cut -d' ' -f1)
+          ts=$(grep -oE 'TREND_LABELS_SHA256 = "[0-9a-f]{64}"' research/trend-labels.ts | grep -oE '[0-9a-f]{64}')
+          py=$(grep -oE 'TREND_LABELS_SHA256 = "[0-9a-f]{64}"' research/trend-check.py | grep -oE '[0-9a-f]{64}')
+          echo "the file $got; the TS $ts; the Python $py"
+          if [ "$got" != "$ts" ] || [ "$got" != "$py" ]; then echo "::error::research/ledger/trend-labels.csv is not the stage-0 labels"; exit 1; fi
       - name: The walks (seeds 1 and 2) — every check, then the Python on the same files
         run: |
           mkdir -p research/out/trend
