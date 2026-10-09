@@ -24,6 +24,9 @@ export const FINE = 5 * MINUTE;
 export const LAG = 60_000;
 export const GAP = 30 * MINUTE;
 export const WINDOW = DOW_BARS;
+// #250 (§8.106 6): stage 0's labels, research/ledger/trend-labels.csv (run 37947773957, 9,510 rows). Stages 1
+// and 2 compute nothing when the file's sha256 is another (trend.yml checks the file against it on every push)
+export const TREND_LABELS_SHA256 = "897b76cfdf2d0acd0a7337f802efbfd095f3570aeaec8d8dec614bd5ad73b64a";
 const JST = 9 * HOUR;
 
 // day-file walk of fetchRecentQuotes (analyze/price-source.ts), sized for

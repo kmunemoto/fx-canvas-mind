@@ -37,6 +37,9 @@ STEP = {"15min": 15 * MIN, "1h": HOUR, "4h": 4 * HOUR, "5min": 5 * MIN}
 FILE = {"15min": "15min", "1h": "1hour", "4h": "4hour", "5min": "5min"}
 PAIRS = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"]
 STATES = ["none", "up", "down", "toUp", "toDown"]
+# §8.106 6: stage 0's labels, research/ledger/trend-labels.csv (run 37947773957, 9,510 rows). Stages 1 and 2
+# compute nothing when the file's sha256 is another (trend.yml checks the file against it on every push)
+TREND_LABELS_SHA256 = "897b76cfdf2d0acd0a7337f802efbfd095f3570aeaec8d8dec614bd5ad73b64a"
 DIR = {"none": 0, "up": 1, "toUp": 1, "down": -1, "toDown": -1}
 
 
