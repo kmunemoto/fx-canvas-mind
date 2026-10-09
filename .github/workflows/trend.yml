@@ -1,0 +1,188 @@
+# #250 (docs §8.106): would a condition on the chart's Dow line raise the win rate of the 15-minute
+# ULTRA emails? Stage 0 (§8.106 6): each email's Dow labels and the four candidates' counts only — no
+# outcome is read (research/trend.ts imports no outcome code).
+#
+#   push (every run): the walks only, before any real data is read
+#     syn      research/trend.ts on two walks written as GMO's files (seeds 1, 2): every check of
+#              §8.106 11 that touches the labels; the Python (research/trend-check.py) on the same files,
+#              every label, half and count the same; the planted errors, each caught by a check of the TS
+#   dispatch stage0 = yes (and only then; after syn passed in the same run):
+#     stage0   GMO's real bars: (a)'s emails labelled; the checks; the Python on the same files; the
+#              counts (print.txt) printed, and the files kept, only once every check and the Python passed
+#     labels   then the labels committed to this branch as research/ledger/trend-labels.csv (§8.106 6)
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Public files
+# fetched, a report printed; the labels job alone writes, that one file; no secret is held.
+name: Research trend (stage 0)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/trend*.ts
+      - research/trend-check.py
+      - research/ledger/trend-examples.csv
+      - .github/workflows/trend.yml
+  workflow_dispatch:
+    inputs:
+      stage0:
+        description: "Stage 0 on GMO's real bars, after the walks pass (yes/no)"
+        default: "no"
+      label_end:
+        description: "The bars are read to this UTC time (the run starts an hour after it at least)"
+        default: "2026-10-09T12:00:00Z"
+
+permissions:
+  contents: read
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The walks (seeds 1 and 2) — every check, then the Python on the same files
+        run: |
+          mkdir -p research/out/trend
+          for seed in 1 2; do
+            d=research/out/trend/syn$seed
+            s=0
+            MODE=syn SEED=$seed OUT=$d deno run --v8-flags=--max-old-space-size=8192 \
+              --allow-read=. --allow-write=research/out --allow-env research/trend.ts > $d.log 2>&1 || s=$?
+            grep -E "^(ok  |FAIL)|sha256|^signals|^read " $d.log || true
+            if [ "$s" != "0" ]; then tail -n 60 $d.log; echo "::error::walk $seed: exit $s"; exit 1; fi
+            python3 -I research/trend-check.py --gmo $d/gmo --labels $d/trend-labels.csv --counts $d/counts.json --mode syn
+          done
+      - name: The planted errors (each caught by its own check of the TS; the Python's verdict shown)
+        run: |
+          # plant:the check that must catch it (the look-ahead ones by the poison check, §8.106 11)
+          for pw in formingInWindow:lookAhead.poison hourMidPrice:lookAhead.poison oneBarAhead:lookAhead.poison \
+            readAtTminus15:chart lateFromT:chart buySellSwap:verdicts hintSwap:verdicts keyFromJst:fileKeys \
+            weekendStamp:chart keepEdge:halves lostFile:loads; do
+            p=${pw%%:*}
+            want=${pw#*:}
+            d=research/out/trend/plant-$p
+            s=0
+            MODE=syn SEED=1 PLANT=$p OUT=$d deno run --v8-flags=--max-old-space-size=8192 \
+              --allow-read=. --allow-write=research/out --allow-env research/trend.ts > $d.log 2>&1 || s=$?
+            if [ "$s" != "0" ]; then tail -n 40 $d.log; echo "::error::PLANT $p: exit $s"; exit 1; fi
+            f=$(python3 -c "import json; print(','.join(json.load(open('$d/checks.json'))['failed']))")
+            case ",$f," in *",$want,"*) ;; *) echo "::error::PLANT $p: not caught by $want (failed: ${f:-none})"; exit 1;; esac
+            py=OK
+            python3 -I research/trend-check.py --gmo $d/gmo --labels $d/trend-labels.csv --counts $d/counts.json --mode syn > $d.py.log 2>&1 || py=FAILED
+            echo "PLANT $p: caught by $f; the Python $py"
+          done
+
+  stage0:
+    if: ${{ inputs.stage0 == 'yes' }}
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's past day files never change once their day has ended: the files §8.102's (a) run kept (1min,
+      # 15min, and tf-winrate's 5min, 1hour, 4hour), then §8.90's (dow-hit); only the rest is fetched
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      # and a stage-0 run's own (a run again reads its files from here, not GMO)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - name: Stage 0 on GMO's bars (only the checks are printed here)
+        env:
+          MODE: stage0
+          OUT: research/out/trend/real
+          LABEL_END: ${{ inputs.label_end }}
+          NO_COLOR: "1"
+        run: |
+          mkdir -p research/out/trend
+          s=0
+          # real.log (stdout): the TS's lines, the checks among them; the counts go to print.txt alone, never here.
+          # real.err: Deno's own messages only (an uncaught error and its stack; the TS writes nothing there), shown
+          # when the run fails. The timeout leaves the step time to say so before the job's limit.
+          timeout 285m deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/trend.ts > research/out/trend/real.log 2> research/out/trend/real.err || s=$?
+          grep -E "^(MODE|read |signals |ok  |FAIL|       |trend-labels|checks failed)" research/out/trend/real.log || true
+          if [ "$s" != "0" ]; then tail -n 60 research/out/trend/real.err; echo "::error::stage 0: exit $s"; exit 1; fi
+      - name: The Python on the same files (every label, half and count the same)
+        run: |
+          python3 -I research/trend-check.py --gmo research/.cache --labels research/out/trend/real/trend-labels.csv \
+            --counts research/out/trend/real/counts.json --mode stage0 --label-end "${{ inputs.label_end }}"
+      - name: The counts and the examples (every check and the Python passed)
+        run: cat research/out/trend/real/print.txt
+      # kept even when the run fails, so the files fetched are not fetched again
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-${{ github.run_id }}
+      # the labels and the counts only when every check and the Python passed (§8.106 11: no number leaves a
+      # run that failed; the labels would give the counts); a failed run keeps its checks alone
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trend-stage0
+          path: |
+            research/out/trend/real/trend-labels.csv
+            research/out/trend/real/checks.json
+            research/out/trend/real/counts.json
+            research/out/trend/real/print.txt
+          retention-days: 30
+          overwrite: true
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-stage0-checks
+          path: research/out/trend/real/checks.json
+          if-no-files-found: ignore
+          retention-days: 30
+          overwrite: true
+
+  # research/ledger/trend-labels.csv (§8.106 6), only when every check and the Python passed: the run's
+  # file, its sha256 checked against the run's own, committed to this branch (the artifacts cannot be read
+  # where the constants are written; the constants are committed after it, by hand)
+  labels:
+    needs: [stage0]
+    if: ${{ github.ref_name == 'claude/app-confirmation-jvmk03' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: trend-stage0
+          path: out
+      - name: Commit research/ledger/trend-labels.csv
+        run: |
+          want=$(python3 -c "import json; print(json.load(open('out/checks.json'))['labels']['sha256'])")
+          got=$(sha256sum out/trend-labels.csv | cut -d' ' -f1)
+          echo "trend-labels.csv: $(($(wc -l < out/trend-labels.csv) - 1)) rows, sha256 $got (the run printed $want)"
+          if [ "$got" != "$want" ]; then echo "::error::the file's sha256 is not the run's"; exit 1; fi
+          if [ -e research/ledger/trend-labels.csv ]; then echo "::error::research/ledger/trend-labels.csv is already there"; exit 1; fi
+          cp out/trend-labels.csv research/ledger/trend-labels.csv
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/ledger/trend-labels.csv
+          git commit -m "#250 段0のラベル research/ledger/trend-labels.csv（run ${{ github.run_id }}、sha256 $got）"
+          git push origin HEAD:${{ github.ref_name }}
