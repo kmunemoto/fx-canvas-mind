@@ -1,0 +1,48 @@
+# #250 (docs §8.106), at the owner's asking on 2026-10-09 (「今日出してた判断とこれを考慮した場合で」): one
+# day's 15-minute ULTRA emails (a ledger CSV, research/ledger/trend-day-*.csv), each with the chart's Dow
+# line at its time (15M, 1H, 4H, as stage 0 reads it) and what followed on GMO's 5-minute bars, and the
+# four candidates' split of them (research/trend-day.ts). A look at one day, not evidence: the day is in
+# neither half of §8.106 nor in the check after R_trend.
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only:
+# public files fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research trend (one day)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/trend-day.ts
+      - research/ledger/trend-day-*.csv
+      - .github/workflows/trend-day.yml
+  workflow_dispatch:
+    inputs:
+      emails:
+        description: "The day's emails (a ledger CSV: pair,side,open,T,E,sentAt)"
+        default: "research/ledger/trend-day-20261009.csv"
+      end:
+        description: "The bars are read to this UTC time (empty: the run's own time)"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The day's emails on GMO's bars
+        env:
+          MODE: real
+          EMAILS: ${{ inputs.emails || 'research/ledger/trend-day-20261009.csv' }}
+          END: ${{ inputs.end }}
+        run: |
+          deno run --v8-flags=--max-old-space-size=4096 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache --allow-env \
+            research/trend-day.ts
