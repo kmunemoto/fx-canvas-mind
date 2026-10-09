@@ -71,7 +71,7 @@ export const newLoadStats = (): LoadStats => ({ requests: 0, cached: 0, partial:
 // GMO's answer, asked again (six tries, the waits doubling from 0.5 s) on HTTP 429 or 5xx, on an answer that
 // is not GMO's bars (GMO's own error status, such as too many requests or its maintenance) and on a failed
 // connection; `why` is what the last try got when every try failed
-const getJson = async (url: string): Promise<{ status: number; body: unknown; why: string }> => {
+export const getJson = async (url: string): Promise<{ status: number; body: unknown; why: string }> => {
   let why = "";
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
@@ -105,7 +105,7 @@ const gmoWhy = (body: unknown): string => {
 };
 
 // GMO's answer with its bars (a day without any is an empty list), or the 404 of a day it has no file for
-const sound = (body: unknown): boolean => {
+export const sound = (body: unknown): boolean => {
   if (typeof body !== "object" || body === null) return false;
   const b = body as { status?: unknown; data?: unknown };
   return (b.status === 0 || b.status === 404) && Array.isArray(b.data);
@@ -181,7 +181,7 @@ export const keysOf = (fromMs: number, toMs: number) => {
   return { keys, fresh: new Set(keys.slice(-3)) };
 };
 
-const pool = async <T>(items: T[], n: number, f: (x: T) => Promise<void>) => {
+export const pool = async <T>(items: T[], n: number, f: (x: T) => Promise<void>) => {
   let cursor = 0;
   await Promise.all(Array.from({ length: n }, async () => {
     while (cursor < items.length) await f(items[cursor++]);
