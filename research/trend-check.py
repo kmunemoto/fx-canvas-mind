@@ -962,30 +962,43 @@ def _tr_signed(x, dec):
     return ("+" if x >= 0 else "") + js_fixed(x, dec)
 
 
-def triggers_of(stats):
-    """§8.106 段1の作り 6 調べる合図, one per (candidate, sign, cell). The yardstick's δ is not one. The names are
-    written as 段2の作り 5 「数の書き方の細部」 fixes them (they fill the cannot sentence)"""
+_COL_JA = {"all": "全部のメール", "kept": "残したメール", "out": "外したメール"}
+_SIDE_JA = {"all": "", "BUY": "の買い", "SELL": "の売り"}
+
+
+def trigger_pairs_of(stats):
+    """§8.106 段1の作り 6 調べる合図, one (english name, japanese name) per (candidate, sign, cell), in the order of
+    段2の作り 5 「数の書き方の細部」: the english name is the one counted (condition 5: it starts with the
+    candidate's name), the japanese one fills the cannot sentence the owner reads"""
     out = []
     for st in stats:
         raw = st["raw"]
         name = st["cand"]
         if raw["W2"]["kept.all"]["n"] and raw["W2"]["kept.all"]["mean"] >= 0.8:
-            out.append(f"{name}: kept W2 {_tr_pct(raw['W2']['kept.all']['mean'])} (80% or more)")
+            v = raw["W2"]["kept.all"]["mean"]
+            out.append((f"{name}: kept W2 {_tr_pct(v)} (80% or more)", f"残したメールの W2 が80%以上（{f_pct(v)}%）"))
         if raw["W1"]["kept.all"]["n"] and raw["W1"]["kept.all"]["mean"] >= 0.9:
-            out.append(f"{name}: kept W1 {_tr_pct(raw['W1']['kept.all']['mean'])} (90% or more)")
+            v = raw["W1"]["kept.all"]["mean"]
+            out.append((f"{name}: kept W1 {_tr_pct(v)} (90% or more)", f"残したメールの W1 が90%以上（{f_pct(v)}%）"))
         d = st["delta"]["W2"]["d"]
         if abs(d) >= 0.10:
-            out.append(f"{name}: |δ W2| {_tr_signed(100 * d, 2)} points (10 or more)")
+            out.append((f"{name}: |δ W2| {_tr_signed(100 * d, 2)} points (10 or more)", f"|δ_W2| が10ポイント以上（{f_pts(d)}ポイント）"))
         for key, x in raw["PL2"].items():
             if x["n"] and x["mean"] >= 3:
                 col, side = key.split(".")
-                out.append(f"{name}: PL2 {col} {side} {_tr_signed(x['mean'], 2)} (+3 or more)")
+                out.append((f"{name}: PL2 {col} {side} {_tr_signed(x['mean'], 2)} (+3 or more)",
+                            f"{_COL_JA[col]}{_SIDE_JA[side]}の PL2 が +3 pips 以上（{f_pips(x['mean'])} pips）"))
         for m in ("W1", "W2", "W3", "B30"):
             for key, x in raw.get(m, {}).items():
                 if x["n"] and x["mean"] == 1:
                     col, side = key.split(".")
-                    out.append(f"{name}: {m} {col} {side} 100%")
+                    out.append((f"{name}: {m} {col} {side} 100%", f"{_COL_JA[col]}{_SIDE_JA[side]}の {m} が100%"))
     return out
+
+
+def triggers_of(stats):
+    """the english names alone (段1 and the counts)"""
+    return [en for en, _ in trigger_pairs_of(stats)]
 
 
 # ---- the random removals (§8.106 段1の作り 4) --------------------------------------------------------
@@ -1776,19 +1789,19 @@ def s2_sentence_hand():
     if got["bad"] != "後半では、外したメールの方が良い結果でした（差 +6.3ポイント、95%の幅 -3.0〜+9.7）。このルールは良いメールを外す側でした。使いません。":
         bad.append("A bad")
     # B: cannot with t over the line: the kept W2 not over all's, and a sign hit (two reasons, 「。また、」)
-    b = dict(base, kW2=0.5, kPL2=0.1, triggers=["④15M: kept W1 93.8% (90% or more)"])
+    b = dict(base, kW2=0.5, kPL2=0.1, triggers=["残したメールの W1 が90%以上（93.8%）"])
     want_b = ("後半では、" + r + "を付けても、勝率が上がるとは言えませんでした（残した 50.0%・+0.10 pips、全部 55.0%・-0.50 pips、"
               "外した 54.5%・-0.63 pips）。t は 2.60 で、ランダムの線 2.50 を越えましたが、生の数で、残したメールの W2 が全部以下でした。"
-              "また、調べる合図（④15M: kept W1 93.8% (90% or more)）に当たりました。そのため、決めた条件を満たしません。差が無いという意味では"
+              "また、調べる合図（残したメールの W1 が90%以上（93.8%））に当たりました。そのため、決めた条件を満たしません。差が無いという意味では"
               "ありません。9.7ポイントくらいの差は、この数では見分けられません。メールは今のままです。")
     got = s2_fill(b)
     if got["cannot"] != want_b or s2_conditions(b)["sentence"] != "cannot":
         bad.append("B cannot, t over the line")
     # C: cannot with t over the line and a sign hit alone (1 met, 5 not)
-    c = dict(base, triggers=["④15M: kept W2 81.3% (80% or more)", "④15M: PL2 kept all +3.10 (+3 or more)"], c5=False)
+    c = dict(base, triggers=["残したメールの W2 が80%以上（81.3%）", "残したメールの PL2 が +3 pips 以上（+3.10 pips）"], c5=False)
     want_c = ("後半では、" + r + "を付けても、勝率が上がるとは言えませんでした（残した 60.0%・+1.00 pips、全部 55.0%・-0.50 pips、"
-              "外した 54.5%・-0.63 pips）。t は 2.60 で、ランダムの線 2.50 を越えましたが、調べる合図（④15M: kept W2 81.3% (80% or more)、"
-              "④15M: PL2 kept all +3.10 (+3 or more)）に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。"
+              "外した 54.5%・-0.63 pips）。t は 2.60 で、ランダムの線 2.50 を越えましたが、調べる合図（残したメールの W2 が80%以上（81.3%）、"
+              "残したメールの PL2 が +3 pips 以上（+3.10 pips））に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。"
               "9.7ポイントくらいの差は、この数では見分けられません。メールは今のままです。")
     if s2_fill(c)["cannot"] != want_c or s2_conditions(c)["sentence"] != "cannot":
         bad.append("C cannot, a sign hit")
@@ -1830,6 +1843,17 @@ def s2_sentence_hand():
                                "④15M: |δ W2| -12.34 points (10 or more)", "④15M: PL2 out SELL +3.00 (+3 or more)",
                                "④15M: W3 out BUY 100%"]:
         bad.append("H the signs' names")
+    if [ja for _, ja in trigger_pairs_of([hand])] != ["残したメールの W2 が80%以上（81.3%）", "残したメールの W1 が90%以上（93.8%）",
+                                                     "|δ_W2| が10ポイント以上（-12.3ポイント）",
+                                                     "外したメールの売りの PL2 が +3 pips 以上（+3.00 pips）",
+                                                     "外したメールの買いの W3 が100%"]:
+        bad.append("H the signs' japanese names")
+    # I: t over the line, the kept W2 over all's, no sign: the cannot sentence has no reason and partBad no item;
+    # both are left empty (数の書き方の細部), and the name is adopt
+    got = s2_fill(base)
+    if ("t は 2.60 で、ランダムの線 2.50 を越えましたが、。そのため、決めた条件を満たしません。" not in got["cannot"]
+            or got["partBad"] != "勝率は上がりましたが、が悪くなったので、使いません（）。"):
+        bad.append("I empty reasons")
     return bad
 
 
@@ -1944,6 +1968,16 @@ def s2_hold_hand(OH):
     r = OH.compute_path(pr, T21 + S2_DELAY, -1, 150.100, 150.000, end, taus)
     if r["filled"]:
         bad.append("never filled")
+    # late: fewer than 1,440 five-minute bars from P's (the bars read stop before) — late whether filled or not;
+    # with all of them, the one never filled is never
+    rn = r
+    rf = OH.compute_path(pr, T21 + S2_DELAY, 1, 150.002, 150.102, end, taus)
+    i0 = bisect.bisect_left(t5, rf["P"])
+    t5short = t5[:i0 + FOLLOW_BARS - 1]
+    if s2_hold(pr, rf, 1, t5short)[1] != "late" or s2_hold(pr, rn, -1, t5short)[1] != "late":
+        bad.append("1,439 bars: late")
+    if s2_hold(pr, rn, -1, t5)[1] != "never":
+        bad.append("never filled, H5 inside: never")
     # a SELL at the market (bid 150.000 >= E 150.000) whose TP 149.900 is passed at 06:00 Tuesday: out at the
     # ask's open 149.702
     r = OH.compute_path(pr, T21 + S2_DELAY, -1, 150.000, 149.900, end, taus)
@@ -2212,10 +2246,11 @@ def main2(a):
     ln = random_line(em, ver, w0, base_seed)
     C.rec("this file's removal δ against its δ (④'s own split)", ln["selfOk"], "H2 ④15M")
     say(f"H2: the random line ({time.time() - t_start:.0f}s)")
-    trig = triggers_of([st])
+    pairs = trigger_pairs_of([st])
+    trig = [en for en, _ in pairs]
     failed = K.get("failed")
     c5 = isinstance(failed, list) and not failed and not trig
-    nums = s2_numbers(st, ln["line"], trig, c5)
+    nums = s2_numbers(st, ln["line"], [ja for _, ja in pairs], c5)
     cond = s2_conditions(nums)
     sentences = s2_fill(nums)
 

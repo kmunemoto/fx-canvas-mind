@@ -25,7 +25,7 @@ import { LEAD15, type M1, PAIRS, type Sig, type Source, load15, loadM1, loadQuot
 import { type Mails, booksOf, emailsOf, ruleAccounts } from "./costhours.ts";
 import type { Judged } from "./costhours-lib.ts";
 import { follow as followM1 } from "./ownerhold-trades.ts";
-import { type Hold, SENTENCE_NAMES, type SentenceIn, type SentenceName, type Side3, holdLookAhead, holdOf, sentencesOf } from "./trend2-lib.ts";
+import { type Hold, SENTENCE_NAMES, type SentenceIn, type SentenceName, type Side3, holdLookAhead, holdOf, pctOf, pipsOf2, ptsOf, sentencesOf } from "./trend2-lib.ts";
 import { A_SHA256 } from "./ownerhold-b.ts";
 import { sha256Hex } from "./spreadhours-lib.ts";
 import { type Bars, DIR_OF, FINE, type Labels, STATE_CODE, STATE_NAMES, TREND_CHOICE_SHA256, TREND_LABELS_SHA256, type Series, gapsOf, holeIn, labelsOf, seriesOf, weekendOutOf } from "./trend-labels.ts";
@@ -625,19 +625,32 @@ const printCand = (st: CandStat, half: Half, withV1d: boolean) => {
   if (half === "H1") sayOut(`  can be chosen: ${st.eligible ? "yes" : `no (${st.misses.join(", ")})`}`);
 };
 
-// §8.106 11 数字の後: the signs to look for look-ahead before any report
-const triggersOf = (stats: CandStat[]): string[] => {
-  const out: string[] = [];
+// §8.106 11 数字の後: the signs to look for look-ahead before any report. Each sign has two names: en for print.txt,
+// result.json and condition 5 (it starts with the candidate's name), ja for the cannot sentence's 〈名前〉 that the
+// owner reads (段2の作り 5 数の書き方の細部)
+const COL_JA: Record<string, string> = { all: "全部のメール", kept: "残したメール", out: "外したメール" };
+const SIDE_JA: Record<string, string> = { all: "", BUY: "の買い", SELL: "の売り" };
+const triggerPairsOf = (stats: CandStat[]): Array<{ en: string; ja: string }> => {
+  const out: Array<{ en: string; ja: string }> = [];
   for (const st of stats) {
     const k = (m: string, col = "kept", side = "all") => st.raw[m]?.[`${col}.${side}`]?.mean ?? Number.NaN;
-    if (k("W2") >= 0.8) out.push(`${st.cand}: kept W2 ${pct(k("W2"))} (80% or more)`);
-    if (k("W1") >= 0.9) out.push(`${st.cand}: kept W1 ${pct(k("W1"))} (90% or more)`);
-    if (Math.abs(st.delta.W2.d) >= 0.1) out.push(`${st.cand}: |δ W2| ${pts(st.delta.W2.d)} points (10 or more)`);
-    for (const col of ["all", "kept", "out"]) for (const side of ["all", "BUY", "SELL"]) if (k("PL2", col, side) >= 3) out.push(`${st.cand}: PL2 ${col} ${side} ${pips(k("PL2", col, side))} (+3 or more)`);
-    for (const m of ["W1", "W2", "W3", "B30"]) for (const col of ["all", "kept", "out"]) for (const side of ["all", "BUY", "SELL"]) if (st.raw[m] && k(m, col, side) === 1) out.push(`${st.cand}: ${m} ${col} ${side} 100%`);
+    if (k("W2") >= 0.8) out.push({ en: `${st.cand}: kept W2 ${pct(k("W2"))} (80% or more)`, ja: `残したメールの W2 が80%以上（${pctOf(k("W2"))}%）` });
+    if (k("W1") >= 0.9) out.push({ en: `${st.cand}: kept W1 ${pct(k("W1"))} (90% or more)`, ja: `残したメールの W1 が90%以上（${pctOf(k("W1"))}%）` });
+    if (Math.abs(st.delta.W2.d) >= 0.1) out.push({ en: `${st.cand}: |δ W2| ${pts(st.delta.W2.d)} points (10 or more)`, ja: `|δ_W2| が10ポイント以上（${ptsOf(st.delta.W2.d)}ポイント）` });
+    for (const col of ["all", "kept", "out"]) {
+      for (const side of ["all", "BUY", "SELL"]) {
+        if (k("PL2", col, side) >= 3) out.push({ en: `${st.cand}: PL2 ${col} ${side} ${pips(k("PL2", col, side))} (+3 or more)`, ja: `${COL_JA[col]}${SIDE_JA[side]}の PL2 が +3 pips 以上（${pipsOf2(k("PL2", col, side))} pips）` });
+      }
+    }
+    for (const m of ["W1", "W2", "W3", "B30"]) {
+      for (const col of ["all", "kept", "out"]) {
+        for (const side of ["all", "BUY", "SELL"]) if (st.raw[m] && k(m, col, side) === 1) out.push({ en: `${st.cand}: ${m} ${col} ${side} 100%`, ja: `${COL_JA[col]}${SIDE_JA[side]}の ${m} が100%` });
+      }
+    }
   }
   return out;
 };
+const triggersOf = (stats: CandStat[]): string[] => triggerPairsOf(stats).map((x) => x.en);
 
 // ---- a half's analysis --------------------------------------------------------------------------------
 
@@ -910,10 +923,17 @@ const tfWinrateCheck = async (h1: HalfRun) => {
   TPS.forEach((tp, k) => {
     const th = tables?.[h2 ? "second" : "all"]?.["15min"]?.[`ultra-tp${k + 1}`];
     const me = { n: h1.ems.length, tp: 0, sl: 0, amb: 0, open: 0, pips: 0 };
+    let none = 0;
     for (const e of h1.ems) {
-      me[e.res[k].kind]++;
-      me.pips += e.res[k].pips;
+      const r = e.res[k];
+      if (!r) {
+        none++;
+        continue;
+      }
+      me[r.kind]++;
+      me.pips += r.pips;
     }
+    if (none) bad.push(`TP${tp}: ${none} emails without an outcome`);
     me.pips /= me.n;
     if (!th) return void bad.push(`TP${tp}: no table`);
     for (const f of ["n", "tp", "sl", "amb", "open"] as const) if (th[f] !== me[f]) bad.push(`TP${tp} ${f}: tf-winrate and here differ`);
@@ -1000,7 +1020,20 @@ const holdHand = () => {
   // (3) −30 at H5 (the bid 149.703 against the fill 150.003): −30 or worse within 1e-9
   const c = run(mk((t) => (t >= H5a - 30 * MINUTE ? 149.703 : 150)), 150.01);
   if (c.h.kind !== "held" || c.h.v === null || Math.abs(c.h.v - -30) > 1e-9 || !c.h.b30) bad.push(`−30: ${c.h.kind} ${c.h.v} ${c.h.b30}`);
-  check("holdHand", bad.length === 0, bad.length, "3 hand-made held values (the 21:00 signal's P and H5, filled after H5, −30 at H5)", bad);
+  // (4) fewer than 1,440 five-minute bars from P's (the bars read stop before): late although filled, H5 none
+  const k21 = f5t.indexOf(Date.parse("2025-07-01T21:10:00Z"));
+  const f5short = f5t.slice(0, k21 + TRACK - 1);
+  const d = holdOf(a.bk, a.p, 1, f5short, end);
+  if (d.kind !== "late" || Number.isFinite(d.H5) || d.v !== null) bad.push(`1,439 bars: ${d.kind} ${d.H5}`);
+  // (5) never filled (the limit 149.000 is not reached by the end): never when H5 is inside, late when it is not
+  const e = run(mk(() => 150), 149.0);
+  const e1 = holdOf(e.bk, e.p, 1, f5short, end);
+  if (e.h.kind !== "never" || e1.kind !== "late") bad.push(`never filled: ${e.h.kind}, short ${e1.kind}`);
+  // (6) H5 just at END is counted; END a millisecond before H5 is late
+  const f1 = holdOf(a.bk, a.p, 1, f5t, H5a);
+  const f2 = holdOf(a.bk, a.p, 1, f5t, H5a - 1);
+  if (f1.kind !== "held" || f2.kind !== "late") bad.push(`H5 at END: ${f1.kind}, END before H5: ${f2.kind}`);
+  check("holdHand", bad.length === 0, bad.length, "6 hand-made held values (the 21:00 signal's P and H5, filled after H5, −30 at H5, 1,439 bars, never filled, H5 at END)", bad);
 };
 
 // the hand-made sentences (段2の作り 8 sentenceHand): made-up numbers filled into the four sentences, and the cannot
@@ -1037,16 +1070,23 @@ const sentenceHand2 = () => {
     cannot: "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 53.9%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。ランダムに同じ数を外した場合と区別できませんでした。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。",
   };
   for (const n of SENTENCE_NAMES) if (s[n] !== want[n]) bad.push(`${n}: ${s[n]}`);
-  const over = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, W2: { ...SENTENCE_HAND_IN.W2, kept: 0.52 }, triggers: ["④15M: |δ W2| +10.20 points (10 or more)"] }).cannot;
-  const wantOver = "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 52.0%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。t は 3.10 で、ランダムの線 2.54 を越えましたが、生の数で、残したメールの W2 が全部以下でした。また、調べる合図（④15M: |δ W2| +10.20 points (10 or more)）に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。";
+  const over = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, W2: { ...SENTENCE_HAND_IN.W2, kept: 0.52 }, triggers: ["|δ_W2| が10ポイント以上（+10.2ポイント）"] }).cannot;
+  const wantOver = "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 52.0%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。t は 3.10 で、ランダムの線 2.54 を越えましたが、生の数で、残したメールの W2 が全部以下でした。また、調べる合図（|δ_W2| が10ポイント以上（+10.2ポイント））に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。";
   if (over !== wantOver) bad.push(`cannot over the line: ${over}`);
+  // t over the line, the kept W2 over all's and no sign hit: the cannot sentence (not picked then) has no reason,
+  // and the partBad one (no item missed) none either: both left empty (数の書き方の細部)
+  const none = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, dW2Sell: 0.001, dB30: { ...SENTENCE_HAND_IN.dB30, d: 0 } });
+  if (!none.cannot.includes("t は 3.10 で、ランダムの線 2.54 を越えましたが、。そのため、決めた条件を満たしません。")) bad.push(`cannot with no reason: ${none.cannot}`);
+  if (none.partBad !== "勝率は上がりましたが、が悪くなったので、使いません（）。") bad.push(`partBad with nothing missed: ${none.partBad}`);
   // the signs' names (数の書き方の細部), which fill the cannot sentence: 81.25 and 93.75 are ties (up), 3.005 is
   // 3.00499… in double ("+3.00")
   const cell = (hit: Record<string, number>) => Object.fromEntries(["all", "kept", "out"].flatMap((c) => ["all", "BUY", "SELL"].map((sd) => [`${c}.${sd}`, { n: 10, mean: hit[`${c}.${sd}`] ?? 0.5 }])));
   const hand = { cand: CANDS[C4], raw: { W2: cell({ "kept.all": 0.8125 }), W1: cell({ "kept.all": 0.9375 }), W3: cell({ "out.BUY": 1 }), PL2: cell({ "out.SELL": 3.005 }) }, delta: { W2: { d: -0.1234 } } } as unknown as CandStat;
-  const names = triggersOf([hand]).join(" | ");
+  const names = triggerPairsOf([hand]);
   const wantNames = ["④15M: kept W2 81.3% (80% or more)", "④15M: kept W1 93.8% (90% or more)", "④15M: |δ W2| -12.34 points (10 or more)", "④15M: PL2 out SELL +3.00 (+3 or more)", "④15M: W3 out BUY 100%"].join(" | ");
-  if (names !== wantNames) bad.push(`the signs' names: ${names}`);
+  const wantJa = ["残したメールの W2 が80%以上（81.3%）", "残したメールの W1 が90%以上（93.8%）", "|δ_W2| が10ポイント以上（-12.3ポイント）", "外したメールの売りの PL2 が +3 pips 以上（+3.00 pips）", "外したメールの買いの W3 が100%"].join(" | ");
+  if (names.map((x) => x.en).join(" | ") !== wantNames) bad.push(`the signs' names: ${names.map((x) => x.en).join(" | ")}`);
+  if (names.map((x) => x.ja).join(" | ") !== wantJa) bad.push(`the signs' Japanese names: ${names.map((x) => x.ja).join(" | ")}`);
   check("sentenceHand2", bad.length === 0, bad.length, "the four sentences filled from hand-made numbers, the cannot sentence with t over the line, the signs' names", bad);
 };
 
@@ -1055,7 +1095,7 @@ const h2Csv = (ems: Em[], holds: Hold[]) =>
   ["T,pair,side,late,C,v4,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,a4,P,H5,holdKind,hold"].concat(ems.map((e, i) => {
     const h = holds[i];
     return [isoMs(e.row.T), e.row.pair, e.row.side, e.row.late ? 1 : 0, isoMs(e.row.C), e.verdict[C4], e.E, e.bidC, e.askC, ...e.res.flatMap((r) => [r.kind, r.pips]), e.v1d ?? "",
-      e.ahead ? e.ahead[C4] : "", isoMs(h.P), Number.isFinite(h.H5) ? isoMs(h.H5) : "", h.kind, h.v ?? ""].join(",");
+      e.ahead ? e.ahead[C4] : "", Number.isFinite(h.P) ? isoMs(h.P) : "", Number.isFinite(h.H5) ? isoMs(h.H5) : "", h.kind, h.v ?? ""].join(",");
   })).join("\n") + "\n";
 
 const main2 = async () => {
@@ -1108,12 +1148,13 @@ const main2 = async () => {
     m1s.push(m);
   }
   // h2Only sees every bar read (the 1-minute ones too); the emails not followed for 1,440 bars have failed it (the run
-  // stops there) and leave the lists from here (a planted run goes on without them)
+  // writes checks.json and stops after the checks) and leave the lists from here, before tf-winrate is compared (as in
+  // stage 1; a planted run goes on without them)
   h2OnlyCheck(h2, rows);
   fiveHolesCheck(h2);
   lookBehindCheck(h2);
-  if (!WALK2) await tfWinrateCheck(h2);
   h2.ems = h2.ems.filter((e) => e.res.every((r) => r !== null));
+  if (!WALK2) await tfWinrateCheck(h2);
   const books = booksOf(m1s, SPLIT_MS, END_MS);
 
   // the orders' P: (a)'s P column on real data (the time moved past Rakuten's stop); T + 2 minutes on the walk path
@@ -1151,7 +1192,10 @@ const main2 = async () => {
   const line = lines2[cands.indexOf(C4)];
   const triggers = triggersOf(stats2);
   check("randomCounts.H2", lines2.every((l) => l.missed === 0), lines2.reduce((a, l) => a + l.missed, 0), `${KINDS.length} kinds × 500 removals: a stratum's count missed`);
-  check("onlyChosen", stats2.length === 1 && stats2[0].cand === CANDS[C4] && lines2.length === 1, stats2.length - 1, `H2's stats, lines and signs computed for ${CANDS[C4]} alone`);
+  const h2Head = h2Csv([], []).trim();
+  const onlyOk = stats2.length === 1 && stats2[0].cand === CANDS[C4] && lines2.length === 1 && triggers.every((x) => x.startsWith(`${CANDS[C4]}:`)) &&
+    h2Head === "T,pair,side,late,C,v4,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,a4,P,H5,holdKind,hold";
+  check("onlyChosen", onlyOk, onlyOk ? 0 : 1, `H2's stats, lines and signs computed for ${CANDS[C4]} alone; trend-h2.csv's columns ④'s only (print.txt: the Python)`);
 
   // the accounts (7): all H2 emails, and ④'s kept + unreadable (the left-out not ordered); lookAheadAccount
   const js = h2.ems.map((e) => ({ avoided: e.verdict[C4] === -1 }) as unknown as Judged);
@@ -1222,7 +1266,7 @@ const main2 = async () => {
     nAll: st4.counts.all.all,
     nKeptUnread: st4.counts.all.kept + st4.counts.all.unread,
     line: line.line,
-    triggers,
+    triggers: triggerPairsOf(stats2).map((x) => x.ja),
   };
   const sentences = sentencesOf(sIn, PLANT);
   const picked = sentences[j.sentence as SentenceName];
