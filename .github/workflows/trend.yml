@@ -182,6 +182,11 @@ jobs:
       # accounts, the held values, the four sentences, trend-h2.csv), then the Python --mode stage2 on the same files
       - name: Stage 2's walk path on the same two walks (seeds 101 and 102), then the Python on the same files
         run: |
+          # the stage-2 Python reads research/ownerhold-check.py (the accounts and the follow), which needs numpy:
+          # a venv of its own (python -I skips the user site a plain pip install may write to); it stays for the
+          # planted errors' step of this job
+          python3 -m venv /tmp/py2env
+          /tmp/py2env/bin/pip install -q numpy
           for seed in 101 102; do
             d=research/out/trend1/w$seed
             printf '{\n "stage": 1,\n "chosen": "④15M"\n}\n' > $d/walk-choice.json
@@ -191,7 +196,7 @@ jobs:
               deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > $d.s2.log 2>&1 || s=$?
             grep -E "^(ok  |FAIL)" $d.s2.log || true
             if [ "$s" != "0" ]; then tail -n 40 $d.s2.log; echo "::error::stage 2 on the walk $seed: exit $s"; exit 1; fi
-            python3 -I research/trend-check.py --mode stage2 --walk --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv \
+            /tmp/py2env/bin/python -I research/trend-check.py --mode stage2 --walk --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv \
               --choice $d/walk-choice.json --choice-sha $sha --ts $d/s2 --seed $seed
           done
       - name: Stage 2's planted errors (each caught by its own check of the TS, or by the Python)
@@ -212,7 +217,7 @@ jobs:
               py:*)
                 want=${rest#py:}
                 py=0
-                python3 -I research/trend-check.py --mode stage2 --walk --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv \
+                /tmp/py2env/bin/python -I research/trend-check.py --mode stage2 --walk --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv \
                   --choice $d/walk-choice.json --choice-sha $sha --ts $o --seed 101 > $o.py.log 2>&1 || py=$?
                 # caught only when the Python ran to its end, failed, and the named item differs (not an exception)
                 if [ "$py" = "0" ] || ! grep -q "^PYTHON CHECK FAILED" $o.py.log || ! grep -q "^DIFFER $want" $o.py.log; then
@@ -484,8 +489,10 @@ jobs:
           if [ "$s" != "0" ]; then echo "::error::stage 2: exit $s"; exit 1; fi
       - name: The Python on the same files (every row of trend-h2.csv, δ, the line, the conditions, the four sentences, the accounts, the held values)
         run: |
+          python3 -m venv /tmp/py2env
+          /tmp/py2env/bin/pip install -q numpy
           s=0
-          python3 -I research/trend-check.py --mode stage2 --gmo research/.cache --labels research/ledger/trend-labels.csv \
+          /tmp/py2env/bin/python -I research/trend-check.py --mode stage2 --gmo research/.cache --labels research/ledger/trend-labels.csv \
             --a-csv research/ledger/ultra15-a.csv --choice research/ledger/trend-choice.json --ts research/out/trend1/real2 > /tmp/py2.log 2>&1 || s=$?
           grep -E "^(same |DIFFER |PYTHON )" /tmp/py2.log || true
           if [ "$s" != "0" ]; then echo "::error::the Python: exit $s"; exit 1; fi
