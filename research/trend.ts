@@ -61,12 +61,20 @@ const PLANT = env("PLANT", "");
 if (PLANT && !(PLANTS as readonly string[]).includes(PLANT)) throw new Error(`PLANT ${PLANT}: not one of ${PLANTS.join(", ")}`);
 if (PLANT && !SYN) throw new Error(`PLANT ${PLANT}: on the walk only (MODE=syn)`);
 const OUT = env("OUT", "research/out/trend");
+// #250 段1の作り 8: the walk's period and effect (unset: stage 0's walk, 2024-10-01 .. 2025-07-26, no effect), and
+// LIGHT=1 for the many walks stage 1 runs: the chart's and the look-ahead checks left out (said in checks.json)
+const WALK_KIND = env("WALK_KIND", "none");
+if (!["none", "on", "back", "drift"].includes(WALK_KIND)) throw new Error(`WALK_KIND ${WALK_KIND}: none, on, back or drift`);
+const WALK_STRENGTH = Number(env("WALK_STRENGTH", "0"));
+const WALK_HOURS = Number(env("WALK_HOURS", "0"));
+const LIGHT = env("LIGHT", "") === "1";
+if ((WALK_KIND !== "none" || LIGHT || env("SYN_START") || env("SYN_END")) && MODE !== "syn") throw new Error("WALK_KIND, LIGHT, SYN_START and SYN_END: on the walk only (MODE=syn)");
 const CACHE = env("CACHE_DIR", "research/.cache");
 const SEED = Number(env("SEED", "1"));
 
 // (a)'s period and §8.106 5's split; the walk's (MODE=syn) holds New Year, the clocks changing and the split
-const START_MS = Date.parse(SYN ? "2024-10-01T00:00:00Z" : "2024-01-01T00:00:00Z");
-const END_MS = Date.parse(SYN ? "2025-07-26T00:00:00Z" : "2026-10-03T00:00:00Z");
+const START_MS = Date.parse(SYN ? env("SYN_START", "2024-10-01T00:00:00Z") : "2024-01-01T00:00:00Z");
+const END_MS = Date.parse(SYN ? env("SYN_END", "2025-07-26T00:00:00Z") : "2026-10-03T00:00:00Z");
 const SPLIT_MS = Date.parse("2025-05-19T00:00:00Z");
 // the bars are read to here, so that the bar after every C (counted, not read: §8.106 1) is in the files
 // (stage0: 10/9 12:00 UTC, when the bars after the last example of 10/9 JST, 08:45 UTC, have closed:
@@ -134,7 +142,7 @@ const SYN_HOLE = { pair: "USD/JPY", tf: "1h" as LTf, key: "20250212" };
 const writeTheWalk = async () => {
   const from = START_MS - 100 * DAY;
   for (const [pi, pair] of PAIRS.entries()) {
-    const f = walk5(pair, pi, { seed: SEED }, from, LABEL_END_MS);
+    const f = walk5(pair, pi, WALK_KIND === "none" ? { seed: SEED } : { seed: SEED, kind: WALK_KIND as "on" | "back" | "drift", strength: WALK_STRENGTH, hours: WALK_HOURS }, from, LABEL_END_MS);
     const bars = { "5min": f, "15min": coarsen(f, "15min"), "1h": coarsen(f, "1h"), "4h": coarsen(f, "4h") };
     await writeWalk(src.dir, pair, bars, from, LABEL_END_MS, pair === SYN_HOLE.pair ? [{ tf: SYN_HOLE.tf, key: SYN_HOLE.key }] : []);
   }
@@ -167,6 +175,7 @@ const momentsOf = (sigs: Sig[]): Moment[] => {
   const out: Moment[] = [];
   const cOf = (s: Sig) => (PLANT === "readAtTminus15" ? s.base - 15 * MINUTE : PLANT === "lateFromT" && s.late ? s.T : s.base);
   for (const s of sigs) out.push({ C: cOf(s), sig: s, why: s.late ? "late" : "email" });
+  if (LIGHT) return out.sort((a, b) => a.C - b.C);
   // the walk: every 50th on-time signal also as a late one (read at T + 15 minutes), for the checks only
   if (SYN) {
     sigs.filter((s) => !s.late).forEach((s, k) => {
@@ -832,8 +841,10 @@ const main = async () => {
   handExamples(runs);
   verdictHand();
   floorsHand();
-  await chartCheck(runs);
-  lookAhead(runs, holes);
+  if (!LIGHT) {
+    await chartCheck(runs);
+    lookAhead(runs, holes);
+  }
   const half = await halvesOf(runs, st);
   const exLines = SYN ? [] : await examples(st, holes);
   loadsCheck(st);
@@ -849,7 +860,7 @@ const main = async () => {
     for (const e of c.examples) say(`       ${e}`);
   }
   const failed = Object.entries(checks).filter(([, c]) => !c.ok).map(([k]) => k);
-  await Deno.writeTextFile(`${OUT}/checks.json`, JSON.stringify({ mode: MODE, plant: PLANT, seed: SEED, failed, checks, labels: { rows: rows.length, sha256: hash } }, null, 1));
+  await Deno.writeTextFile(`${OUT}/checks.json`, JSON.stringify({ mode: MODE, plant: PLANT, seed: SEED, walk: { kind: WALK_KIND, strength: WALK_STRENGTH, hours: WALK_HOURS, start: isoMs(START_MS), end: isoMs(END_MS) }, light: LIGHT ? "the chart's and the look-ahead checks not run" : "", failed, checks, labels: { rows: rows.length, sha256: hash } }, null, 1));
   say(`\ntrend-labels.csv: ${rows.length} rows, sha256 ${hash}`);
   if (failed.length) {
     say(`\nchecks failed: ${failed.join(", ")} — no counts are printed`);

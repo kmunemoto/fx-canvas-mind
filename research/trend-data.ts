@@ -271,7 +271,20 @@ const rng = (seed: number) => {
 
 export interface WalkSpec {
   seed: number;
+  // #250 段1の作り 8: an effect added to the walk's moves (none, or absent: stage 0's walk, unchanged). The
+  // effect draws from a stream of its own, so the walk's own moves are those of the walk without it.
+  //   on     each pair has a direction (up or down) that turns with chance 5 / (60 × hours) at each 5-minute
+  //          bar; a minute moves direction × strength × the pair's minute (the trend goes on)
+  //   back   the mid is pulled to a centre at ln 2 / (60 × hours) of the distance a minute (hours: the
+  //          half-life); the centre moves strength × the pair's minute a minute at random (the trend turns back)
+  //   drift  a minute moves strength × the pair's minute, up or down by pair (DRIFT_SIGN): the same all along
+  kind?: "none" | "on" | "back" | "drift";
+  strength?: number;
+  hours?: number;
 }
+// the drift walks' direction of each pair (PAIRS' order): up, all five (a drift down strong enough to tell BUY from
+// SELL would take the lower starts to 0 within the period)
+export const DRIFT_SIGN = [1, 1, 1, 1, 1];
 
 // One pair's walk as 5-minute bars (both sides, GMO's digits) from fromMs to toMs: a minute is four steps
 // of the mid, a 5-minute bar five minutes; after a closure the mid jumps (three 15-minute moves' worth)
@@ -281,6 +294,28 @@ export const walk5 = (pair: string, pi: number, spec: WalkSpec, fromMs: number, 
   const unit = unitOf(pair);
   const dg = digitsOf(pair);
   const rnd = rng(spec.seed * 1009 + pi * 7919 + 250);
+  const kind = spec.kind ?? "none";
+  const strength = spec.strength ?? 0;
+  const hours = spec.hours ?? 0;
+  if (kind !== "none" && !(strength >= 0 && (kind === "drift" || hours > 0))) throw new Error(`${pair}: walk ${kind} strength ${strength} hours ${hours}`);
+  const eff = rng(spec.seed * 1009 + pi * 7919 + 250 + 500_000);
+  let effSpare: number | null = null;
+  const effGauss = () => {
+    if (effSpare !== null) {
+      const v = effSpare;
+      effSpare = null;
+      return v;
+    }
+    let u = 0;
+    while (u === 0) u = eff();
+    const v = eff();
+    const rr = Math.sqrt(-2 * Math.log(u));
+    effSpare = rr * Math.sin(2 * Math.PI * v);
+    return rr * Math.cos(2 * Math.PI * v);
+  };
+  let way = kind === "on" ? (eff() < 0.5 ? 1 : -1) : 0;
+  let centre = p.start;
+  const pull = kind === "back" ? Math.log(2) / (60 * hours) : 0;
   let spare: number | null = null;
   const gauss = () => {
     if (spare !== null) {
@@ -312,11 +347,17 @@ export const walk5 = (pair: string, pi: number, spec: WalkSpec, fromMs: number, 
       x += 3 * p.sigma * Math.sqrt(15) * gauss();
       shut = false;
     }
+    if (kind === "on" && eff() < 5 / (60 * hours)) way = -way;
+    if (kind === "back") centre += strength * p.sigma * Math.sqrt(5) * effGauss();
     const o = x;
     let h = x;
     let l = x;
     for (let st = 0; st < 20; st++) {
       x += (p.sigma / 2) * gauss();
+      // a step is a quarter of a minute
+      if (kind === "on") x += (way * strength * p.sigma) / 4;
+      else if (kind === "drift") x += (DRIFT_SIGN[pi] * strength * p.sigma) / 4;
+      else if (kind === "back") x -= (pull / 4) * (x - centre);
       if (x > h) h = x;
       if (x < l) l = x;
     }
