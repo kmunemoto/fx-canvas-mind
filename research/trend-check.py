@@ -52,6 +52,8 @@ STATES = ["none", "up", "down", "toUp", "toDown"]
 # §8.106 6: stage 0's labels, research/ledger/trend-labels.csv (run 37947773957, 9,510 rows). Stages 1 and 2
 # compute nothing when the file's sha256 is another (trend.yml checks the file against it on every push)
 TREND_LABELS_SHA256 = "897b76cfdf2d0acd0a7337f802efbfd095f3570aeaec8d8dec614bd5ad73b64a"
+# #250 stage 1 (docs §8.106 段1の結果): research/ledger/trend-choice.json; stage 2 refuses to run unless the file hashes to this
+TREND_CHOICE_SHA256 = "db4b2078ea55bb8bf64e41002c53b4fe3b38d3c09add3d91a25ffba81038b7c6"
 DIR = {"none": 0, "up": 1, "toUp": 1, "down": -1, "toDown": -1}
 
 
