@@ -712,6 +712,8 @@ const main = async () => {
   h1OnlyCheck(h1, rows);
   fiveHolesCheck(h1);
   lookBehindCheck(h1);
+  // an email not followed for 1,440 bars has failed h1Only (the run stops there); a planted run goes on without it
+  h1.ems = h1.ems.filter((e) => e.res.every((r) => r !== null));
   const o1 = analyse(h1, !SYN, usable);
   const chosen = chooseOf(o1.stats);
   // H1's random line: the chosen candidate's (described); on the walks every candidate's, for the Python
@@ -731,6 +733,7 @@ const main = async () => {
     if (ANSWER) answerLabels(h2);
     h2Check(h2, rows);
     fiveHolesCheck(h2);
+    h2.ems = h2.ems.filter((e) => e.res.every((r) => r !== null));
     o2 = analyse(h2, false, usable);
     for (let c = 0; c < CANDS.length; c++) {
       const l = lineFor(h2.ems, c, "H2");
