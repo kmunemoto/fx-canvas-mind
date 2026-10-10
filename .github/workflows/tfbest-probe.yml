@@ -1,0 +1,91 @@
+# #264-2 (docs §8.107 14 の 2): how Dukascopy's FX feed and GMO's 30-minute, 8-hour and day files can be read from
+# here, before anything is fetched for good. Numbers only (statuses, counts, seconds, times): a price is read to be
+# checked against the pair's band and is never printed. research/tfbest-probe.py says what each part asks.
+#
+# dispatch only (a new workflow is on main first, so that it can be dispatched):
+#   part: all | duka-speed | duka-first | duka-sunday | gmo
+
+name: Research tfbest probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: "all / duka-speed / duka-first / duka-sunday / gmo"
+        default: "all"
+
+permissions:
+  contents: read
+
+jobs:
+  duka-speed:
+    if: ${{ inputs.part == 'all' || inputs.part == 'duka-speed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - name: The reading itself (hand-made file)
+        run: python3 -I research/tfbest-probe.py --selftest
+      - name: 300 files with 3 workers, then 100 with 8
+        run: python3 -I research/tfbest-probe.py --part duka-speed --workers 3
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: tfbest-probe-duka-speed
+          path: research/out/tfbest-probe/duka-speed.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  duka-first:
+    if: ${{ inputs.part == 'all' || inputs.part == 'duka-first' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - name: The reading itself (hand-made file)
+        run: python3 -I research/tfbest-probe.py --selftest
+      - name: The first day with a file, each pair and side
+        run: python3 -I research/tfbest-probe.py --part duka-first --workers 3
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: tfbest-probe-duka-first
+          path: research/out/tfbest-probe/duka-first.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  duka-sunday:
+    if: ${{ inputs.part == 'all' || inputs.part == 'duka-sunday' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: The reading itself (hand-made file)
+        run: python3 -I research/tfbest-probe.py --selftest
+      - name: The weekend's edges (Sunday's first candle, Friday's last)
+        run: python3 -I research/tfbest-probe.py --part duka-sunday --workers 3
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: tfbest-probe-duka-sunday
+          path: research/out/tfbest-probe/duka-sunday.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  gmo:
+    if: ${{ inputs.part == 'all' || inputs.part == 'gmo' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: The reading itself (hand-made file)
+        run: python3 -I research/tfbest-probe.py --selftest
+      - name: GMO's 30-minute, 1-hour, 4-hour, 8-hour and day files, and the closures of 2024 and 2025
+        run: python3 -I research/tfbest-probe.py --part gmo --workers 4
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: tfbest-probe-gmo
+          path: research/out/tfbest-probe/gmo.txt
+          if-no-files-found: ignore
+          retention-days: 30
