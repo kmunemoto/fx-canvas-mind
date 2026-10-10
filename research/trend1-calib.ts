@@ -62,11 +62,17 @@ export const calib = async (dir: string) => {
     }
     return got;
   };
-  const f = (x: number) => (Number.isFinite(x) ? `${(100 * x).toFixed(2)}` : "-");
+  // summary.json is written without a replacer, so a value that could not be computed (NaN) reads as null: it is
+  // never counted as meeting a condition (an interval that was not computed does not hold 0, nor leave it out)
+  const fin = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+  const f = (x: unknown) => (fin(x) ? `${(100 * x).toFixed(2)}` : "-");
+  const f2 = (x: unknown) => (fin(x) ? x.toFixed(2) : "-");
 
   const none = await need("none");
   // each candidate on its own 20 walks
   const per = none.flatMap((x) => x.H2.filter((_, c) => NONE_OF[c].includes(x.seed)));
+  const lost = per.filter((q) => !(fin(q.d) && fin(q.lo) && fin(q.hi)));
+  if (lost.length) fails.push(`none: ${lost.length} intervals not computed`);
   NONE_OF.forEach((seeds, c) => {
     const mine = none.filter((x) => seeds.includes(x.seed)).map((x) => x.H2[c]);
     say(`  candidate ${c + 1}: ${mine.length} walks, intervals without 0 ${mine.filter((q) => q.lo > 0 || q.hi < 0).length}, adopted ${mine.filter((q) => q.adopt).length}`);
@@ -79,23 +85,23 @@ export const calib = async (dir: string) => {
   for (const x of none) {
     const c = NONE_OF.findIndex((s) => s.includes(x.seed));
     const q = x.H2[c];
-    say(`  seed ${x.seed} (candidate ${c + 1}): ${q.cand} ${f(q.d)} [${f(q.lo)}, ${f(q.hi)}] t ${q.t.toFixed(2)} line ${q.line.toFixed(2)} ${q.sentence}`);
+    say(`  seed ${x.seed} (candidate ${c + 1}): ${q.cand} ${f(q.d)} [${f(q.lo)}, ${f(q.hi)}] t ${f2(q.t)} line ${f2(q.line)} ${q.sentence}`);
   }
   if (!(per.length === 80 && upper <= 0.1 && adopted <= 4)) fails.push("none");
 
   for (const [g, want] of [["on", 1], ["back", -1]] as const) {
     const xs = await need(g);
-    const right = xs.filter((x) => (want > 0 ? x.H2[0].d > 0 : x.H2[0].d < 0)).length;
+    const right = xs.filter((x) => fin(x.H2[0].d) && (want > 0 ? x.H2[0].d > 0 : x.H2[0].d < 0)).length;
     say(`${g}: ①'s H2 δ W2 ${want > 0 ? "over" : "under"} 0 in ${right} of ${xs.length} (want 8 or more of 10): ${xs.map((x) => f(x.H2[0].d)).join(", ")}`);
     if (!(xs.length === 10 && right >= 8)) fails.push(g);
   }
   const drift = await need("drift");
-  const holds = drift.filter((x) => x.H2[0].lo <= 0 && x.H2[0].hi >= 0).length;
+  const holds = drift.filter((x) => fin(x.H2[0].lo) && fin(x.H2[0].hi) && x.H2[0].lo <= 0 && x.H2[0].hi >= 0).length;
   say(`drift: ①'s H2 interval holding 0 in ${holds} of ${drift.length} (want 3 or more of 4)`);
   for (const x of drift) say(`  seed ${x.seed}: ① ${f(x.H2[0].d)} [${f(x.H2[0].lo)}, ${f(x.H2[0].hi)}]; raw W2 kept − left out BUY ${f(x.H2[0].rawBuy.kept - x.H2[0].rawBuy.out)}, SELL ${f(x.H2[0].rawSell.kept - x.H2[0].rawSell.out)}`);
   if (!(drift.length === 4 && holds >= 3)) fails.push("drift");
   const ans = await need("answer");
-  const big = ans.filter((x) => x.answer && x.H2[0].d > 0.3).length;
+  const big = ans.filter((x) => x.answer && fin(x.H2[0].d) && x.H2[0].d > 0.3).length;
   say(`answer: ①'s H2 δ W2 over 30 points in ${big} of ${ans.length} (want all 4): ${ans.map((x) => f(x.H2[0].d)).join(", ")}`);
   if (!(ans.length === 4 && big === 4)) fails.push("answer");
 

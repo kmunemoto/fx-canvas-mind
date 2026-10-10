@@ -204,6 +204,8 @@ interface Em {
   verdict: number[]; // per candidate
   // the yardstick's verdicts (the labels one bar further, 段1の作り 5), H1 only
   ahead: number[] | null;
+  // the yardstick's labels themselves (each timeframe's state and unreadable code), H1 only, for the Python
+  aheadLab: Record<LTf, Lab> | null;
 }
 
 const fineOf = (qs: Array<{ datetime: string; bid: { open: number; high: number; low: number; close: number }; ask: { open: number; high: number; low: number; close: number } }>): Fine => {
@@ -289,7 +291,7 @@ const readHalf = async (half: Half, rows: Row[], st: ReturnType<typeof newLoadSt
       if (r.late && !cq) sigBad.push(`${pair} ${isoMs(r.T)} ${r.side}: late, no 15-minute bar closing at C`);
       const x = { T: r.T, C: r.C, buy, E: s.E, unit, bidC: cq ? cq.bid.close : s.bidC, askC: cq ? cq.ask.close : s.askC };
       const res = TPS.map((tp) => tradeOf(f, x, tp));
-      ems.push({ row: r, buy, s: stratumOf(pi, buy), week: weekOf(r.T), day: dayOf(r.T), E: s.E, bidC: x.bidC, askC: x.askC, res: res as Res[], v1d: null, verdict: CANDS.map((_, c) => verdictOf(c, buy, r.lab)), ahead: null });
+      ems.push({ row: r, buy, s: stratumOf(pi, buy), week: weekOf(r.T), day: dayOf(r.T), E: s.E, bidC: x.bidC, askC: x.askC, res: res as Res[], v1d: null, verdict: CANDS.map((_, c) => verdictOf(c, buy, r.lab)), ahead: null, aheadLab: null });
       if (res.some((x) => x === null)) (ems[ems.length - 1] as Em & { short?: boolean }).short = true;
     }
   }
@@ -419,9 +421,12 @@ const labelsAgain = async (run: HalfRun, st: ReturnType<typeof newLoadStats>) =>
           if (ex.length < 6) ex.push(`${pair} ${tf} C ${isoMs(e.row.C)}: file ${STATE_NAMES[want.state] ?? "-"}/${want.excl}, again ${STATE_NAMES[got.state] ?? "-"}/${got.excl}`);
         }
         // one bar further: the window when the next bar in the data after the newest one closed by C has closed
-        // (trend.ts's planted oneBarAhead); a label not read at C (no window, or unreadable) stays as it is
+        // (trend.ts's planted oneBarAhead); a label not read at C (no window, or unreadable) stays as it is; with
+        // no next bar in the data the label cannot be read one bar further (段1の作り 5: 読めなくなった). An H1
+        // email's C is 5 days or more before the split (h1Only), so a next bar is there on every timeframe
         const i = L.bar[k];
-        if (i < 0 || L.state[k] < 0 || L.excl[k] !== 0 || i + 1 >= s.bars.n) ahead[k][tf] = got;
+        if (i < 0 || L.state[k] < 0 || L.excl[k] !== 0) ahead[k][tf] = got;
+        else if (i + 1 >= s.bars.n) ahead[k][tf] = { state: -1, excl: 9 };
         else {
           const r = labelsOf(s, Float64Array.of(s.bars.t[i + 1] + s.step - FINE));
           ahead[k][tf] = { state: r.state[0], excl: r.state[0] >= 0 ? r.excl[0] : 9 };
@@ -430,6 +435,7 @@ const labelsAgain = async (run: HalfRun, st: ReturnType<typeof newLoadStats>) =>
     }
     mine.forEach((e, k) => {
       e.ahead = CANDS.map((_, c) => verdictOf(c, e.buy, ahead[k]));
+      e.aheadLab = ahead[k];
     });
   }
   check(`labelsAgain.${run.half}`, differ === 0 && same === run.ems.length * TFS.length, differ, `labels computed again ${same + differ}: the file's ${same}, another ${differ}`, ex);
@@ -584,7 +590,9 @@ const printCand = (st: CandStat, half: Half, withV1d: boolean) => {
     sayOut(`    ${row("pips/trade (TP16, described)", "PL3", false)}`);
   }
   sayOut(`  ${dLine("δ W2", st.delta.W2, true)}`);
-  sayOut(`  ${dLine("δ W2 BUY", st.delta["W2.BUY"], true)}; ${dLine("δ W2 SELL", st.delta["W2.SELL"], true)}`);
+  // the sides' δ W2 as points only (段1の作り 6 lists 「δ_W2 の買い・売り」 without an interval)
+  const dropped = (d: Delta) => (d.outDropped ? ` (left out of δ: ${d.outDropped} left-out emails)` : "");
+  sayOut(`  δ W2 BUY ${pts(st.delta["W2.BUY"].d)}${dropped(st.delta["W2.BUY"])}; δ W2 SELL ${pts(st.delta["W2.SELL"].d)}${dropped(st.delta["W2.SELL"])}`);
   sayOut(`  ${dLine("δ PL2", st.delta.PL2, false)}`);
   sayOut(`  ${dLine("δ W1", st.delta.W1, true)}; ${dLine("δ PL1", st.delta.PL1, false)}`);
   if (withV1d) sayOut(`  ${dLine("δ v1d", st.delta.V1D, false)}; ${dLine("δ B30 (left out − kept)", st.delta.B30, true)}`);
@@ -645,15 +653,36 @@ const judgeH2 = (st: CandStat, line: Line, checksOk: boolean, triggers: string[]
   const c3 = withV1d ? st.delta.V1D.d >= 0 && st.delta.B30.d >= 0 : true;
   const c4 = st.delta["W2.BUY"].d > 0 && st.delta["W2.SELL"].d > 0;
   const c5 = checksOk && triggers.filter((x) => x.startsWith(st.cand)).length === 0;
-  const sentence = c1 && c2 && c3 && c4 && c5 ? "adopt" : st.delta.W2.hi < 0 ? "bad" : c1 && !(c2 && c3 && c4) ? "partBad" : "cannot";
-  return { c1, c2, c3, c4, c5, sentence };
+  return { c1, c2, c3, c4, c5, sentence: sentenceOf(c1, c2, c3, c4, c5, st.delta.W2.hi) };
+};
+// §8.106 8's sentences in its order: 採用 adopt, 悪い bad, 一部が悪い partBad, 言えない cannot (the Python uses the
+// same four names)
+export const sentenceOf = (c1: boolean, c2: boolean, c3: boolean, c4: boolean, c5: boolean, hi: number) =>
+  c1 && c2 && c3 && c4 && c5 ? "adopt" : hi < 0 ? "bad" : c1 && !(c2 && c3 && c4) ? "partBad" : "cannot";
+const sentenceHand = () => {
+  const T = true;
+  const F = false;
+  const cases: Array<[boolean, boolean, boolean, boolean, boolean, number, string]> = [
+    [T, T, T, T, T, 0.01, "adopt"],
+    [T, T, T, T, T, -0.01, "adopt"],
+    [F, T, T, T, T, -0.01, "bad"],
+    [T, F, T, T, T, -0.01, "bad"],
+    [T, F, T, T, T, 0.02, "partBad"],
+    [T, T, T, F, T, 0.02, "partBad"],
+    [T, T, T, T, F, 0.02, "cannot"],
+    [F, F, F, F, F, 0.02, "cannot"],
+  ];
+  const bad = cases.filter(([a, b, c, d, e, hi, want]) => sentenceOf(a, b, c, d, e, hi) !== want).map((x) => x.join(" "));
+  check("sentenceHand", bad.length === 0, bad.length, `${cases.length} hand-made conditions`, bad);
 };
 
 // ---- the run ------------------------------------------------------------------------------------------
 
+// ys/yx: the yardstick's label one bar further per timeframe (its state's name or "-", and its unreadable code)
 const emailsCsv = (ems: Em[]) =>
-  ["T,pair,side,late,C,half,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,v1,v2,v3,v4,a1,a2,a3,a4"].concat(ems.map((e) =>
-    [isoMs(e.row.T), e.row.pair, e.row.side, e.row.late ? 1 : 0, isoMs(e.row.C), e.row.half, e.E, e.bidC, e.askC, ...e.res.flatMap((r) => [r.kind, r.pips]), e.v1d ?? "", ...e.verdict, ...(e.ahead ?? ["", "", "", ""])].join(",")
+  ["T,pair,side,late,C,half,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,v1,v2,v3,v4,a1,a2,a3,a4,ys15,yx15,ys1h,yx1h,ys4h,yx4h"].concat(ems.map((e) =>
+    [isoMs(e.row.T), e.row.pair, e.row.side, e.row.late ? 1 : 0, isoMs(e.row.C), e.row.half, e.E, e.bidC, e.askC, ...e.res.flatMap((r) => [r.kind, r.pips]), e.v1d ?? "", ...e.verdict, ...(e.ahead ?? ["", "", "", ""]),
+      ...TFS.flatMap((tf) => (e.aheadLab ? [e.aheadLab[tf].state >= 0 ? STATE_NAMES[e.aheadLab[tf].state] : "-", e.aheadLab[tf].excl] : ["", ""]))].join(",")
   )).join("\n") + "\n";
 
 const main = async () => {
@@ -679,6 +708,7 @@ const main = async () => {
   const dh = deltaHand();
   check("deltaHand", dh.bad.length === 0, dh.bad.length, `${dh.n} hand-made sums (δ, its error, kept − all, the clusters, t, mulberry32)`, dh.bad);
   verdictHand();
+  sentenceHand();
   const floors = floorsOf(rows);
   const usable = CANDS.map((n) => floors[`H1|${n}`].length === 0 && floors[`H2|${n}`].length === 0);
   check("floors", SYN || usable.every(Boolean), usable.filter((u) => !u).length, `§8.106 6 from the labels file: ${CANDS.map((n, c) => `${n} ${usable[c] ? "met" : `not met (${[...floors[`H1|${n}`].map((x) => `H1 ${x}`), ...floors[`H2|${n}`].map((x) => `H2 ${x}`)].join(", ")})`}`).join("; ")}`);
@@ -716,12 +746,28 @@ const main = async () => {
   h1.ems = h1.ems.filter((e) => e.res.every((r) => r !== null));
   const o1 = analyse(h1, !SYN, usable);
   const chosen = chooseOf(o1.stats);
-  // H1's random line: the chosen candidate's (described); on the walks every candidate's, for the Python
-  const lines1: Array<Line | null> = CANDS.map((_, c) => (c === chosen || SYN ? lineFor(h1.ems, c, "H1") : null));
+  // H1's random lines: every candidate's, on real data too, so that no check's name, count or time tells whether
+  // or which candidate was chosen (the choice is a print.txt item, 段1の作り 6; the checks reach the log and a
+  // failed run's checks.json, 7). print.txt describes the chosen one's only
+  const lines1: Line[] = CANDS.map((_, c) => lineFor(h1.ems, c, "H1"));
   const line1 = chosen >= 0 ? lines1[chosen] : null;
-  lines1.forEach((l, c) => {
-    if (l) check(`randomCounts.H1.${c + 1}`, l.missed === 0, l.missed, `${CANDS[c]}: ${KINDS.length} kinds × 500 removals, missing a stratum's count ${l.missed}; standard error not over 0 ${l.noSe}`);
-  });
+  if (SYN) {
+    lines1.forEach((l, c) => {
+      check(`randomCounts.H1.${c + 1}`, l.missed === 0, l.missed, `${CANDS[c]}: ${KINDS.length} kinds × 500 removals, missing a stratum's count ${l.missed}; standard error not over 0 ${l.noSe}`);
+    });
+  } else {
+    const missed = lines1.reduce((a, l) => a + l.missed, 0);
+    check("randomCounts.H1", missed === 0, missed, `the four candidates' random removals (${KINDS.length} kinds × 500 each): a stratum's count missed ${missed}`);
+  }
+  // the counts' reconciliation (段1の作り 6, §8.106 11 数字の後): each part counted on its own, against the labels
+  // file's H1 rows; the numbers go to print.txt, the check's words carry none
+  const fileH1 = rows.filter((r) => r.half === "H1").length;
+  const nOf = (f: (e: Em) => boolean) => h1.ems.filter(f).length;
+  const recon = CANDS.map((_, c) => ({ kept: nOf((e) => e.verdict[c] === 1), out: nOf((e) => e.verdict[c] === -1), unread: nOf((e) => e.verdict[c] === 0) }));
+  const decided = nOf((e) => e.res[1].kind === "tp" || e.res[1].kind === "sl" || e.res[1].kind === "amb");
+  const undecided = nOf((e) => e.res[1].kind === "open");
+  const reconOk = recon.every((r) => r.kept + r.out + r.unread === fileH1) && decided + undecided === fileH1;
+  check("counts.H1", reconOk, reconOk ? 0 : 1, "the labels file's H1 rows = compared + unreadable for each candidate, compared = kept + left out, TP10 decided + undecided = the H1 rows");
   if (!SYN) await tfWinrateCheck(h1);
 
   // ---- H2 (the walks only) ----
@@ -757,9 +803,9 @@ const main = async () => {
   }
 
   sayOut(`\n== H1 (${isoMs(START_MS)} .. ${isoMs(SPLIT_MS)}, ${WEEKS.H1.toFixed(1)} weeks): ${h1.ems.length} emails`);
-  const unread = (c: number) => h1.ems.filter((e) => e.verdict[c] === 0).length;
-  const decided = h1.ems.filter((e) => e.res[1].kind !== "open").length;
-  sayOut(`counts: H1 emails ${h1.ems.length} = compared + unreadable (${CANDS.map((n, c) => `${n} ${h1.ems.length - unread(c)} + ${unread(c)}`).join(", ")}); TP10 decided ${decided} + undecided ${h1.ems.length - decided}`);
+  sayOut(`counts: the labels file's H1 rows ${fileH1}; followed ${h1.ems.length}`);
+  for (const [c, r] of recon.entries()) sayOut(`  ${CANDS[c]}: compared ${r.kept + r.out} (kept ${r.kept} + left out ${r.out}) + unreadable ${r.unread} = ${r.kept + r.out + r.unread}${r.kept + r.out + r.unread === fileH1 ? "" : ` — not the H1 rows`}`);
+  sayOut(`  TP10: decided ${decided} + undecided ${undecided} = ${decided + undecided}${decided + undecided === fileH1 ? "" : " — not the H1 rows"}`);
   for (const s of o1.stats) printCand(s, "H1", !SYN);
   sayOut(`\nchosen: ${chosen >= 0 ? CANDS[chosen] : "none"}`);
   sayOut(chosen >= 0 ? SENTENCE_CHOSEN(NAME_JA[chosen]) : SENTENCE_NONE);

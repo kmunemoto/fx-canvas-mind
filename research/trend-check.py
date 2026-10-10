@@ -430,7 +430,8 @@ A_CSV_SHA256 = "ce4c6acee90bdef30f616b6a018ae34864d4e48d3c443dcfc7e6d27988be70c2
 A_HEADER = ["T", "pair", "side", "P", "week", "v1d"]
 LABEL_HEAD = ["T", "pair", "side", "late", "C", "half", "s15", "x15", "s1h", "x1h", "s4h", "x4h"]
 EMAIL_HEAD = ["T", "pair", "side", "late", "C", "half", "E", "bidC", "askC", "k4", "p4", "k10", "p10", "k16", "p16",
-              "v1d", "v1", "v2", "v3", "v4", "a1", "a2", "a3", "a4"]
+              "v1d", "v1", "v2", "v3", "v4", "a1", "a2", "a3", "a4", "ys15", "yx15", "ys1h", "yx1h", "ys4h", "yx4h"]
+YARD_COLS = {"15min": ("ys15", "yx15"), "1h": ("ys1h", "yx1h"), "4h": ("ys4h", "yx4h")}   # the yardstick's labels
 S1_START = ms_of("2024-01-01T00:00:00Z")
 S1_SPLIT = ms_of("2025-05-19T00:00:00Z")
 S1_END = ms_of("2026-10-03T00:00:00Z")
@@ -1195,6 +1196,25 @@ class Cmp:
         return ok
 
 
+def sentence_of(c1, c2, c3, c4, c5, hi):
+    """§8.106 8's sentences in its order: 採用 adopt, 悪い bad, 一部が悪い partBad, 言えない cannot (the TS's names)"""
+    if c1 and c2 and c3 and c4 and c5:
+        return "adopt"
+    if hi < 0:
+        return "bad"
+    if c1 and not (c2 and c3 and c4):
+        return "partBad"
+    return "cannot"
+
+
+def sentence_hand():
+    T, F = True, False
+    cases = [((T, T, T, T, T, 0.01), "adopt"), ((T, T, T, T, T, -0.01), "adopt"), ((F, T, T, T, T, -0.01), "bad"),
+             ((T, F, T, T, T, -0.01), "bad"), ((T, F, T, T, T, 0.02), "partBad"), ((T, T, T, F, T, 0.02), "partBad"),
+             ((T, T, T, T, F, 0.02), "cannot"), ((F, F, F, F, F, 0.02), "cannot")]
+    return [str(x) for x, want in cases if sentence_of(*x) != want]
+
+
 def read_ts_emails(path):
     with open(path) as f:
         lines = [l.rstrip("\n") for l in f if l.strip()]
@@ -1338,15 +1358,17 @@ def main1(a):
             st["eligible"] = not miss
             st["misses"] = miss
             stats.append(st)
-            # the counts' reconciliation (§8.106 11 数字の後)
-            cn = st["counts"]
-            for side in ("all",) + SIDES:
-                x = cn[side]
-                C.rec(f"{h}: counts reconcile", x["all"] == x["kept"] + x["out"] + x["unread"], f"{NAMES[c]} {side}")
-            for n in TPS:
-                dec_n = sum(1 for e in em if e.res and e.res[n] and e.res[n][0] != "open")
-                und = sum(1 for e in em if e.res and e.res[n] and e.res[n][0] == "open")
-                C.rec(f"{h}: counts reconcile", dec_n + und == len(em), f"TP{n} decided + undecided")
+            # the counts' reconciliation (§8.106 11 数字の後, 段1の作り 6): each part counted on its own, against the
+            # labels file's rows of the half (not the emails followed)
+            file_n = sum(1 for e in emails if e.half == h)
+            kept_n = sum(1 for e in em if e.ver[c] == 1)
+            out_n = sum(1 for e in em if e.ver[c] == -1)
+            unread_n = sum(1 for e in em if e.ver[c] == 0)
+            C.rec(f"{h}: counts reconcile", kept_n + out_n + unread_n == file_n, f"{NAMES[c]}: kept + left out + unreadable")
+        for n in TPS:
+            dec_n = sum(1 for e in em if e.res and e.res[n] and e.res[n][0] in ("tp", "sl", "amb"))
+            und = sum(1 for e in em if e.res and e.res[n] and e.res[n][0] == "open")
+            C.rec(f"{h}: counts reconcile", dec_n + und == sum(1 for e in emails if e.half == h), f"TP{n} decided + undecided")
         chosen = -1
         if h == "H1":
             best = None
@@ -1357,12 +1379,10 @@ def main1(a):
                 if best is None or key > best[0]:
                     best = (key, c)
             chosen = best[1] if best else -1
-        # the random lines: on a walk every candidate's, in stage1 the chosen one's
+        # the random lines: every candidate's, in stage1 as well, so that nothing printed here (an item, its count,
+        # the time) tells whether or which candidate was chosen; print.txt describes the chosen one's
         lines = []
         for c in range(4):
-            if stage1 and c != chosen:
-                lines.append(None)
-                continue
             base = 250_000 + 10_000 * seed + 1_000 * (1 if h == "H1" else 2) + 100 * (c + 1)
             ln = random_line(em, [e.ver[c] for e in em], w0, base)
             C.rec("this file's removal δ against its δ (the candidate's own split)", ln["selfOk"], f"{h} {NAMES[c]}")
@@ -1381,7 +1401,17 @@ def main1(a):
             C.eq(f"{h}.stats.misses", f"{st['cand']} misses", set(st["misses"]), miss_tags(ts_st.get("misses") or []))
         if h == "H1":
             C.eq("H1.chosen", "chosen", chosen, RH.get("chosen"))
-            C.num("H1.line", "line", lines[chosen]["line"] if chosen >= 0 else None, RH.get("line"))
+            # the run's H1.line is the chosen candidate's whole line (or null). One record either way, so that the
+            # item's count does not tell whether a candidate was chosen
+            tl1 = RH.get("line")
+            if chosen >= 0 and isinstance(tl1, dict):
+                sub = Cmp(False)
+                for key in ("kinds", "line", "noSe", "missed", "ts"):
+                    sub.tree("line", key, lines[chosen][key], tl1.get(key))
+                ok1 = all(not bad for _, bad in sub.items.values())
+            else:
+                ok1 = chosen < 0 and tl1 is None
+            C.rec("H1.line", ok1, "line")
         ts_lines = RH.get("lines") or [None] * 4
         for c, ln in enumerate(lines):
             tl = ts_lines[c] if c < len(ts_lines) else None
@@ -1407,6 +1437,9 @@ def main1(a):
             for c in range(4):
                 row[f"v{c + 1}"] = e.ver[c]
                 row[f"a{c + 1}"] = e.yard[c] if e.yard is not None else None
+            for tf, (cs, cx) in YARD_COLS.items():
+                row[cs] = e.yardLab[tf][0] if e.yardLab is not None else None
+                row[cx] = e.yardLab[tf][1] if e.yardLab is not None else None
             mine_rows.append(row)
         say(f"{h}: compared ({time.time() - t0:.0f}s)")
 
@@ -1433,6 +1466,11 @@ def main1(a):
         for col in ("v1", "v2", "v3", "v4", "a1", "a2", "a3", "a4"):
             mine, theirs = r[col], t.get(col)
             C.eq(f"emails.csv {col}", where, "" if mine is None else str(mine), theirs)
+        # the yardstick's labels themselves (段1の作り 7 「物差しのラベル」), not only the verdicts made from them
+        for cs, cx in YARD_COLS.values():
+            for col in (cs, cx):
+                mine, theirs = r[col], t.get(col)
+                C.eq("emails.csv yardstick labels", f"{where} {col}", "" if mine is None else str(mine), theirs)
 
     # a walk: stage 2's sentence for every candidate as if chosen (§8.106 8; summary.json)
     if not stage1 and os.path.exists(os.path.join(a.ts, "summary.json")):
@@ -1451,14 +1489,7 @@ def main1(a):
             c3 = True   # a walk has no 1-day values: counted as met (§8.106 段1の作り 8)
             c4 = st["delta"]["W2.BUY"]["d"] > 0 and st["delta"]["W2.SELL"]["d"] > 0
             c5 = not failed and not [x for x in h2["triggers"] if x.startswith(NAMES[c] + " ")]
-            if c1 and c2 and c3 and c4 and c5:
-                sentence = "adopt"
-            elif dw["hi"] < 0:
-                sentence = "bad"
-            elif c1 and not (c2 and c3 and c4):
-                sentence = "partly"
-            else:
-                sentence = "cannot"
+            sentence = sentence_of(c1, c2, c3, c4, c5, dw["hi"])
             h1_ok = h1["stats"][c]["eligible"]
             mine = {"cand": NAMES[c], "d": dw["d"], "lo": dw["lo"], "hi": dw["hi"], "t": dw["t"], "line": ln["line"],
                     "h1Eligible": h1_ok, "floors": floors_ok[c], "c1": c1, "c2": c2, "c3": c3, "c4": c4, "c5": c5,
@@ -1474,6 +1505,7 @@ def main1(a):
     C.rec("GMO files read without a failure", not problems and not lost,
           f"problems {len(problems)}, files missing {len(lost)}" if verbose else "read failures or missing files")
     C.rec("this file's own follow on hand-made bars", not follow_hand(), ", ".join(follow_hand()))
+    C.rec("this file's sentences on hand-made conditions", not sentence_hand(), ", ".join(sentence_hand()))
     r = Mulberry32(251_101)
     first3 = [r(), r(), r()]
     C.rec("this file's mulberry32 (seed 251,101)", all(abs(x - y) < 1e-15 for x, y in zip(

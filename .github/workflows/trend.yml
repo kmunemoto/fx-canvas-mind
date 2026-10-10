@@ -112,19 +112,25 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - name: Stage 1 on one walk (seed 101) — the whole procedure, then the Python on the same files
+      # seed 101 chooses no candidate on H1, seed 102 chooses one: both paths of the choice, the random line and
+      # the Python's comparison of them run on every push (段1のプログラムの見直し)
+      - name: Stage 1 on two walks (seeds 101 and 102) — the whole procedure, then the Python on the same files
         run: |
-          d=research/out/trend1/w101
-          mkdir -p $d
-          MODE=syn SEED=101 LIGHT=1 SYN_START=2024-01-01T00:00:00Z SYN_END=2026-10-03T00:00:00Z OUT=$d/walk \
-            deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend.ts > $d.walk.log 2>&1 \
-            || { tail -n 40 $d.walk.log; echo "::error::the walk: research/trend.ts failed"; exit 1; }
-          s=0
-          MODE=syn SEED=101 WALK_DIR=$d/walk OUT=$d/s1 \
-            deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > $d.s1.log 2>&1 || s=$?
-          grep -E "^(ok  |FAIL)" $d.s1.log || true
-          if [ "$s" != "0" ]; then tail -n 40 $d.s1.log; echo "::error::stage 1 on the walk: exit $s"; exit 1; fi
-          python3 -I research/trend-check.py --mode syn1 --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv --ts $d/s1 --seed 101
+          for seed in 101 102; do
+            d=research/out/trend1/w$seed
+            mkdir -p $d
+            MODE=syn SEED=$seed LIGHT=1 SYN_START=2024-01-01T00:00:00Z SYN_END=2026-10-03T00:00:00Z OUT=$d/walk \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend.ts > $d.walk.log 2>&1 \
+              || { tail -n 40 $d.walk.log; echo "::error::the walk $seed: research/trend.ts failed"; exit 1; }
+            s=0
+            MODE=syn SEED=$seed WALK_DIR=$d/walk OUT=$d/s1 \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > $d.s1.log 2>&1 || s=$?
+            grep -E "^(ok  |FAIL)" $d.s1.log || true
+            if [ "$s" != "0" ]; then tail -n 40 $d.s1.log; echo "::error::stage 1 on the walk $seed: exit $s"; exit 1; fi
+            python3 -c "import json; c=json.load(open('$d/s1/summary.json'))['H1chosen']; print('seed $seed: H1 chose', c)"
+            python3 -I research/trend-check.py --mode syn1 --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv --ts $d/s1 --seed $seed
+          done
+          python3 -c "import json,sys; a=json.load(open('research/out/trend1/w101/s1/summary.json'))['H1chosen']; b=json.load(open('research/out/trend1/w102/s1/summary.json'))['H1chosen']; sys.exit(0 if a < 0 <= b else 'seed 101 should choose none and seed 102 one: %s, %s' % (a, b))"
       - name: The planted errors (each caught by its own check)
         run: |
           d=research/out/trend1/w101

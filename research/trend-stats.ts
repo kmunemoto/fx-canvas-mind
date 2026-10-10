@@ -438,6 +438,11 @@ export const followHand = (): { n: number; bad: string[] } => {
   cases.push(["SELL opens past TP", mk([[150.0, 150.05, 149.95, 150.0, 0], [149.7, 149.75, 149.65, 149.7, 0]]), sell, 10, "tp", 29]);
   cases.push(["BUY TP4", mk([[150.0, 150.045, 149.95, 150.02, 0]]), buy, 4, "tp", 3.5]);
   cases.push(["BUY TP16 open, out at the last close", mk([[150.0, 150.05, 149.95, 150.03, 0]]), buy, 16, "open", -0.5]);
+  cases.push(["BUY TP16 after passing TP10", mk([[150.0, 150.05, 149.95, 150.02, 0], [150.02, 150.12, 150.0, 150.1, 0], [150.1, 150.17, 150.05, 150.15, 0]]), buy, 16, "tp", 15.5]);
+  // undecided: out at the 1,440th bar's own close; exactly 1,440 bars are enough, and a 1,441st is not read
+  const lastRow: [number, number, number, number, number] = [150.0, 150.04, 149.98, 150.03, 0];
+  cases.push(["BUY undecided, exactly 1,440 bars: out at the 1,440th close", fineOf([...flat(TRACK - 1), lastRow], sp, T0), buy, 10, "open", 2.5]);
+  cases.push(["BUY undecided: the 1,441st bar is not read", fineOf([...flat(TRACK - 1), lastRow, [150.0, 150.07, 149.98, 150.06, 0]], sp, T0), buy, 10, "open", 2.5]);
   // late: C = T + 15 minutes; the stop is touched before C, TP after it
   const late: Trade = { ...buy, C: T0 + 15 * MINUTE };
   cases.push(["late BUY followed from C", mk([[150.0, 150.05, 149.86, 149.9, 0], [149.9, 149.95, 149.88, 149.92, 0], [149.92, 149.98, 149.9, 149.95, 0], [149.95, 150.11, 149.9, 150.1, 0]]), late, 10, "tp", 9.5]);
