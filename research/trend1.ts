@@ -10,17 +10,25 @@
 //                then H2 with every candidate taken through §8.106 8 as if chosen (OUT/summary.json);
 //                PLANT=<name> one planted error (段1の作り 8), which a check must catch
 //   MODE=calib   the walks' summaries (CALIB_DIR/*/summary.json) against 段1の作り 8's conditions
-//   MODE=stage2  stops: stage 2 runs only with the choice's constant (§8.106 7), not written yet
+//   MODE=stage2  (段2の作り) the second half (H2) for the chosen candidate ④ alone: research/ledger/trend-choice.json
+//                first (its sha256 the constant's, chosen ④15M), then H2's emails followed, δ, the random line, the
+//                conditions and the four sentences of 12 の4, the reference rows (two accounts, each email's held
+//                value), OUT/trend-h2.csv; with WALK_DIR (and WALK_CHOICE, WALK_CHOICE_SHA256) the same functions on a
+//                walk (the 5-minute bars passed as the 1-minute ones, v1d valued as (a) values it), for the CI
 //
 // The pieces (the follow, δ, the interval, the random removals) are research/trend-stats.ts.
 
 import { GMO_SYMBOLS } from "../supabase/functions/track-outcomes/quotes.ts";
 import { ULTRA_PAIRS } from "../supabase/functions/_shared/ultra.ts";
 import { DAY, HOUR, MINUTE } from "./lib.ts";
-import { LEAD15, PAIRS, type Sig, type Source, load15, loadQuotes, newLoadStats, signalsOf, unitOf } from "./ownerhold-data.ts";
+import { LEAD15, type M1, PAIRS, type Sig, type Source, load15, loadM1, loadQuotes, newLoadStats, pOf, signalsOf, unitOf } from "./ownerhold-data.ts";
+import { type Mails, booksOf, emailsOf, ruleAccounts } from "./costhours.ts";
+import type { Judged } from "./costhours-lib.ts";
+import { follow as followM1 } from "./ownerhold-trades.ts";
+import { type Hold, SENTENCE_NAMES, type SentenceIn, type SentenceName, type Side3, holdLookAhead, holdOf, pctOf, pipsOf2, ptsOf, sentencesOf } from "./trend2-lib.ts";
 import { A_SHA256 } from "./ownerhold-b.ts";
 import { sha256Hex } from "./spreadhours-lib.ts";
-import { type Bars, DIR_OF, FINE, type Labels, STATE_CODE, STATE_NAMES, TREND_LABELS_SHA256, type Series, gapsOf, holeIn, labelsOf, seriesOf, weekendOutOf } from "./trend-labels.ts";
+import { type Bars, DIR_OF, FINE, type Labels, STATE_CODE, STATE_NAMES, TREND_CHOICE_SHA256, TREND_LABELS_SHA256, type Series, gapsOf, holeIn, labelsOf, seriesOf, weekendOutOf } from "./trend-labels.ts";
 import { STEP_OF, loadTf } from "./trend-data.ts";
 import {
   type Delta, type Fine, type Item, KINDS, type Line, type REm, type Res, TPS, TRACK, dayOf, deltaHand, deltaOf, followHand, lineOf, lowerBound, removalSeed, setPlant, stratumOf, tradeOf, weekOf,
@@ -29,20 +37,29 @@ import {
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "syn");
 if (!["stage1", "syn", "calib", "stage2"].includes(MODE)) throw new Error(`MODE ${MODE}: stage1, syn, calib or stage2`);
-if (MODE === "stage2") throw new Error("stage 2 runs only with research/ledger/trend-choice.json's sha256 constant (§8.106 7), not written yet");
 const SYN = MODE === "syn";
+const WALK_DIR = env("WALK_DIR", "");
+// stage 2's walk path (段2の作り プログラム): MODE=stage2 on a walk, the same functions as on real data
+const WALK2 = MODE === "stage2" && WALK_DIR !== "";
+// a walk of either kind: its files, its seed, the numbers on stdout too, the planted errors allowed
+const WALK = SYN || WALK2;
 export const PLANTS = ["exitSideSwap", "hintSwap", "lateFromT", "noSideStratum", "noMeanError", "randomTotal", "trackH2", "keepEdge", "lostFive"] as const;
+// 段2の作り 9: stage 2's planted errors (stage 2's walk path only)
+export const PLANTS2 = ["h2TrackH1", "h2KeepEdge", "m1PastEnd", "allCandsH2", "holdAhead", "ruleOrdersAvoided", "h2SeedHalf1", "adoptDeltaW2"] as const;
 const PLANT = env("PLANT", "");
-if (PLANT && !(PLANTS as readonly string[]).includes(PLANT)) throw new Error(`PLANT ${PLANT}: not one of ${PLANTS.join(", ")}`);
-if (PLANT && !SYN) throw new Error(`PLANT ${PLANT}: on the walk only (MODE=syn)`);
-setPlant(PLANT);
+if (PLANT && !(SYN ? (PLANTS as readonly string[]) : (PLANTS2 as readonly string[])).includes(PLANT)) throw new Error(`PLANT ${PLANT}: not one of ${(SYN ? PLANTS : PLANTS2).join(", ")}`);
+if (PLANT && !WALK) throw new Error(`PLANT ${PLANT}: on a walk only (MODE=syn, or MODE=stage2 with WALK_DIR)`);
+setPlant(SYN ? PLANT : "");
 const OUT = env("OUT", "research/out/trend1");
 const CACHE = env("CACHE_DIR", "research/.cache");
-const WALK_DIR = env("WALK_DIR", "");
-const SEED = SYN ? Number(env("SEED", "0")) : 0;
+const SEED = WALK ? Number(env("SEED", "0")) : 0;
 const ANSWER = SYN && env("ANSWER", "") === "1";
-if (SYN && (!WALK_DIR || !(SEED > 0))) throw new Error("MODE=syn: WALK_DIR (the folder research/trend.ts wrote) and SEED (the walk's seed)");
-const LABELS = SYN ? `${WALK_DIR}/trend-labels.csv` : env("LABELS", "research/ledger/trend-labels.csv");
+if (WALK && (!WALK_DIR || !(SEED > 0))) throw new Error(`MODE=${MODE}: WALK_DIR (the folder research/trend.ts wrote) and SEED (the walk's seed)`);
+const LABELS = WALK ? `${WALK_DIR}/trend-labels.csv` : env("LABELS", "research/ledger/trend-labels.csv");
+// the choice (段2の作り プログラム): the committed file and its constant on real data; the walk's own file and the sha256
+// given with it on the walk path
+const CHOICE = WALK2 ? env("WALK_CHOICE", "") : env("CHOICE", "research/ledger/trend-choice.json");
+const CHOICE_SHA256 = WALK2 ? env("WALK_CHOICE_SHA256", "") : TREND_CHOICE_SHA256;
 const A_CSV = env("A_CSV", "research/ledger/ultra15-a.csv");
 const TFW_JSON = env("TFW_JSON", "research/out/tf-winrate.json");
 
@@ -59,7 +76,7 @@ type LTf = (typeof TFS)[number];
 const CANDS = ["①1H", "②4H", "③1H+4H", "④15M"] as const;
 const weekendOut = weekendOutOf("inside");
 const GAPS = gapsOf(weekendOut);
-const src: Source = SYN ? { dir: `${WALK_DIR}/gmo`, fetch: false } : { dir: CACHE, fetch: true };
+const src: Source = WALK ? { dir: `${WALK_DIR}/gmo`, fetch: false } : { dir: CACHE, fetch: true };
 const fromOf = (tf: LTf): number => (tf === "15min" ? START_MS - 12 * DAY : tf === "1h" ? START_MS - 45 * DAY : Date.UTC(new Date(START_MS).getUTCFullYear() - 1, 0, 1));
 
 const lines: string[] = [];
@@ -69,7 +86,7 @@ const say = (s = "") => {
 };
 // the numbers: print.txt only on real data (never stdout or stderr; the job shows print.txt only once every
 // check and the Python passed)
-const sayOut = SYN ? say : (s = "") => {
+const sayOut = WALK ? say : (s = "") => {
   lines.push(s);
 };
 const isoMs = (ms: number) => new Date(ms).toISOString();
@@ -206,6 +223,8 @@ interface Em {
   ahead: number[] | null;
   // the yardstick's labels themselves (each timeframe's state and unreadable code), H1 only, for the Python
   aheadLab: Record<LTf, Lab> | null;
+  // the signal made again (stage 2's accounts and held values order from it)
+  sig: Sig;
 }
 
 const fineOf = (qs: Array<{ datetime: string; bid: { open: number; high: number; low: number; close: number }; ask: { open: number; high: number; low: number; close: number } }>): Fine => {
@@ -238,8 +257,12 @@ interface HalfRun {
 const readHalf = async (half: Half, rows: Row[], st: ReturnType<typeof newLoadStats>): Promise<HalfRun> => {
   // the bars end where the half ends (H1: the split; H2: END). Planted trackH2: H1's read runs to END
   const barsEnd = half === "H1" && PLANT !== "trackH2" ? SPLIT_MS : END_MS;
-  // the emails followed: the half's rows. Planted: H2's rows too (trackH2), or every row before the split (keepEdge)
-  const mine = rows.filter((r) => (half === "H1" ? (PLANT === "trackH2" ? r.half !== "-" : PLANT === "keepEdge" ? r.T < SPLIT_MS : r.half === "H1") : r.half === "H2"));
+  // the emails followed: the half's rows. Planted: H2's rows too (trackH2), or every row before the split (keepEdge);
+  // on stage 2's walk path, H1's rows too (h2TrackH1), or every row from the split (h2KeepEdge)
+  const mine = rows.filter((r) =>
+    half === "H1"
+      ? (PLANT === "trackH2" ? r.half !== "-" : PLANT === "keepEdge" ? r.T < SPLIT_MS : r.half === "H1")
+      : (PLANT === "h2TrackH1" ? r.half !== "-" : PLANT === "h2KeepEdge" ? r.T >= SPLIT_MS : r.half === "H2"));
   let newest = -Infinity;
   const ems: Em[] = [];
   const fines: Fine[] = [];
@@ -291,7 +314,7 @@ const readHalf = async (half: Half, rows: Row[], st: ReturnType<typeof newLoadSt
       if (r.late && !cq) sigBad.push(`${pair} ${isoMs(r.T)} ${r.side}: late, no 15-minute bar closing at C`);
       const x = { T: r.T, C: r.C, buy, E: s.E, unit, bidC: cq ? cq.bid.close : s.bidC, askC: cq ? cq.ask.close : s.askC };
       const res = TPS.map((tp) => tradeOf(f, x, tp));
-      ems.push({ row: r, buy, s: stratumOf(pi, buy), week: weekOf(r.T), day: dayOf(r.T), E: s.E, bidC: x.bidC, askC: x.askC, res: res as Res[], v1d: null, verdict: CANDS.map((_, c) => verdictOf(c, buy, r.lab)), ahead: null, aheadLab: null });
+      ems.push({ row: r, buy, s: stratumOf(pi, buy), week: weekOf(r.T), day: dayOf(r.T), E: s.E, bidC: x.bidC, askC: x.askC, res: res as Res[], v1d: null, verdict: CANDS.map((_, c) => verdictOf(c, buy, r.lab)), ahead: null, aheadLab: null, sig: s });
       if (res.some((x) => x === null)) (ems[ems.length - 1] as Em & { short?: boolean }).short = true;
     }
   }
@@ -549,7 +572,7 @@ const candStat = (ems: Em[], c: number, half: Half, withV1d: boolean): CandStat 
 };
 
 // the random line of candidate c in a half (段1の作り 4)
-const lineFor = (ems: Em[], c: number, half: Half): Line => {
+const lineFor = (ems: Em[], c: number, half: Half, seedHalf: 1 | 2 = half === "H1" ? 1 : 2): Line => {
   const comp = ems.filter((e) => e.verdict[c] !== 0);
   const rems: REm[] = comp.map((e) => ({ s: e.s, side: e.buy ? 0 : 1, pi: e.row.pi, day: e.day, week: e.week }));
   const target = new Array<number>(PAIRS.length * 2).fill(0);
@@ -558,7 +581,7 @@ const lineFor = (ems: Em[], c: number, half: Half): Line => {
     const y = yOf(e, "W2");
     return y === null ? null : { y };
   });
-  return lineOf(rems, PAIRS.length, target, w2, W0[half], (k) => removalSeed(SEED, half === "H1" ? 1 : 2, c + 1, k));
+  return lineOf(rems, PAIRS.length, target, w2, W0[half], (k) => removalSeed(SEED, seedHalf, c + 1, k));
 };
 
 // ---- the printing -----------------------------------------------------------------------------------------
@@ -599,22 +622,35 @@ const printCand = (st: CandStat, half: Half, withV1d: boolean) => {
   sayOut(`  kept − all (W2, by stratum): ${pts(st.keptMinusAll.d)} [${pts(st.keptMinusAll.lo)}, ${pts(st.keptMinusAll.hi)}] (× ${st.keptMinusAll.factor.toFixed(4)} of δ)`);
   sayOut(`  δ W2 by week × pair × side (described; the point only) ${pts(st.weekAdj.d)}; left-out emails in the cells used ${pct(st.weekAdj.share)}`);
   if (st.ahead) sayOut(`  yardstick: δ W2 with the labels one bar further ${pts(st.ahead.d)} (verdicts changed ${pct(st.aheadChanged)}; look-ahead would look like this)`);
-  sayOut(`  can be chosen: ${st.eligible ? "yes" : `no (${st.misses.join(", ")})`}`);
+  if (half === "H1") sayOut(`  can be chosen: ${st.eligible ? "yes" : `no (${st.misses.join(", ")})`}`);
 };
 
-// §8.106 11 数字の後: the signs to look for look-ahead before any report
-const triggersOf = (stats: CandStat[]): string[] => {
-  const out: string[] = [];
+// §8.106 11 数字の後: the signs to look for look-ahead before any report. Each sign has two names: en for print.txt,
+// result.json and condition 5 (it starts with the candidate's name), ja for the cannot sentence's 〈名前〉 that the
+// owner reads (段2の作り 5 数の書き方の細部)
+const COL_JA: Record<string, string> = { all: "全部のメール", kept: "残したメール", out: "外したメール" };
+const SIDE_JA: Record<string, string> = { all: "", BUY: "の買い", SELL: "の売り" };
+const triggerPairsOf = (stats: CandStat[]): Array<{ en: string; ja: string }> => {
+  const out: Array<{ en: string; ja: string }> = [];
   for (const st of stats) {
     const k = (m: string, col = "kept", side = "all") => st.raw[m]?.[`${col}.${side}`]?.mean ?? Number.NaN;
-    if (k("W2") >= 0.8) out.push(`${st.cand}: kept W2 ${pct(k("W2"))} (80% or more)`);
-    if (k("W1") >= 0.9) out.push(`${st.cand}: kept W1 ${pct(k("W1"))} (90% or more)`);
-    if (Math.abs(st.delta.W2.d) >= 0.1) out.push(`${st.cand}: |δ W2| ${pts(st.delta.W2.d)} points (10 or more)`);
-    for (const col of ["all", "kept", "out"]) for (const side of ["all", "BUY", "SELL"]) if (k("PL2", col, side) >= 3) out.push(`${st.cand}: PL2 ${col} ${side} ${pips(k("PL2", col, side))} (+3 or more)`);
-    for (const m of ["W1", "W2", "W3", "B30"]) for (const col of ["all", "kept", "out"]) for (const side of ["all", "BUY", "SELL"]) if (st.raw[m] && k(m, col, side) === 1) out.push(`${st.cand}: ${m} ${col} ${side} 100%`);
+    if (k("W2") >= 0.8) out.push({ en: `${st.cand}: kept W2 ${pct(k("W2"))} (80% or more)`, ja: `残したメールの W2 が80%以上（${pctOf(k("W2"))}%）` });
+    if (k("W1") >= 0.9) out.push({ en: `${st.cand}: kept W1 ${pct(k("W1"))} (90% or more)`, ja: `残したメールの W1 が90%以上（${pctOf(k("W1"))}%）` });
+    if (Math.abs(st.delta.W2.d) >= 0.1) out.push({ en: `${st.cand}: |δ W2| ${pts(st.delta.W2.d)} points (10 or more)`, ja: `|δ_W2| が10ポイント以上（${ptsOf(st.delta.W2.d)}ポイント）` });
+    for (const col of ["all", "kept", "out"]) {
+      for (const side of ["all", "BUY", "SELL"]) {
+        if (k("PL2", col, side) >= 3) out.push({ en: `${st.cand}: PL2 ${col} ${side} ${pips(k("PL2", col, side))} (+3 or more)`, ja: `${COL_JA[col]}${SIDE_JA[side]}の PL2 が +3 pips 以上（${pipsOf2(k("PL2", col, side))} pips）` });
+      }
+    }
+    for (const m of ["W1", "W2", "W3", "B30"]) {
+      for (const col of ["all", "kept", "out"]) {
+        for (const side of ["all", "BUY", "SELL"]) if (st.raw[m] && k(m, col, side) === 1) out.push({ en: `${st.cand}: ${m} ${col} ${side} 100%`, ja: `${COL_JA[col]}${SIDE_JA[side]}の ${m} が100%` });
+      }
+    }
   }
   return out;
 };
+const triggersOf = (stats: CandStat[]): string[] => triggerPairsOf(stats).map((x) => x.en);
 
 // ---- a half's analysis --------------------------------------------------------------------------------
 
@@ -866,27 +902,38 @@ const answerLabels = (run: HalfRun) => {
 };
 
 // tfWinrate (段1の作り 2): tf-winrate.ts run to the split on the same bars — its 15-minute ULTRA trades at TP 4,
-// 10 and 16 the same as H1's emails' (counts the same, the mean pips to 1e-9), its signals per pair the same
+// 10 and 16 the same as H1's emails' (counts the same, the mean pips to 1e-9), its signals per pair the same.
+// tfWinrate.H2 (段2の作り 2): run to END, its second half's table against H2's emails
 const tfWinrateCheck = async (h1: HalfRun) => {
+  const h2 = h1.half === "H2";
+  const name = h2 ? "tfWinrate.H2" : "tfWinrate";
+  const upTo = h2 ? END_MS : SPLIT_MS;
   const bad: string[] = [];
   let tfw: Record<string, unknown>;
   try {
     tfw = JSON.parse(await Deno.readTextFile(TFW_JSON));
   } catch {
-    check("tfWinrate", false, 1, `no ${TFW_JSON}`);
+    check(name, false, 1, `no ${TFW_JSON}`);
     return;
   }
-  if (Date.parse(String(tfw.now).replace(" ", "T") + "Z") !== SPLIT_MS) bad.push(`tf-winrate now ${tfw.now} (want the split)`);
+  if (Date.parse(String(tfw.now).replace(" ", "T") + "Z") !== upTo) bad.push(`tf-winrate now ${tfw.now} (want ${h2 ? "END" : "the split"})`);
   if (tfw.start !== "2024-01-01" || tfw.split !== "2025-05-19" || tfw.sl !== 13 || tfw.weekend !== "inside" || tfw.synthetic) bad.push(`tf-winrate settings ${JSON.stringify({ start: tfw.start, split: tfw.split, sl: tfw.sl, weekend: tfw.weekend, synthetic: tfw.synthetic })}`);
   if (JSON.stringify(tfw.pairs) !== JSON.stringify(PAIRS)) bad.push(`tf-winrate pairs ${JSON.stringify(tfw.pairs)}`);
   const tables = tfw.tables as Record<string, Record<string, Record<string, { n: number; tp: number; sl: number; amb: number; open: number; pips: number | null }>>>;
   TPS.forEach((tp, k) => {
-    const th = tables?.all?.["15min"]?.[`ultra-tp${k + 1}`];
+    const th = tables?.[h2 ? "second" : "all"]?.["15min"]?.[`ultra-tp${k + 1}`];
     const me = { n: h1.ems.length, tp: 0, sl: 0, amb: 0, open: 0, pips: 0 };
+    let none = 0;
     for (const e of h1.ems) {
-      me[e.res[k].kind]++;
-      me.pips += e.res[k].pips;
+      const r = e.res[k];
+      if (!r) {
+        none++;
+        continue;
+      }
+      me[r.kind]++;
+      me.pips += r.pips;
     }
+    if (none) bad.push(`TP${tp}: ${none} emails without an outcome`);
     me.pips /= me.n;
     if (!th) return void bad.push(`TP${tp}: no table`);
     for (const f of ["n", "tp", "sl", "amb", "open"] as const) if (th[f] !== me[f]) bad.push(`TP${tp} ${f}: tf-winrate and here differ`);
@@ -902,8 +949,378 @@ const tfWinrateCheck = async (h1: HalfRun) => {
   if (!ck || ck.mismatched !== 0 || !(ck.compared > 0)) bad.push("tf-winrate's own check of its 15-minute signals");
   const tfFailed = (tfw.coverage as Array<{ failed?: number }>).reduce((a, c) => a + (c.failed ?? 0), 0);
   if (tfFailed !== 0) bad.push(`tf-winrate GMO reads failed: ${tfFailed}`);
-  check("tfWinrate", bad.length === 0, bad.length, `tf-winrate (to the split) against H1's ${h1.ems.length} emails at TP 4, 10 and 16`, bad);
+  check(name, bad.length === 0, bad.length, `tf-winrate (to ${h2 ? "END, its second half" : "the split"}) against ${h1.half}'s ${h1.ems.length} emails at TP 4, 10 and 16`, bad);
+};
+
+// ---- stage 2 (段2の作り): H2 for ④ alone ------------------------------------------------------------------------------
+
+const C4 = 3; // ④15M, the candidate stage 1 chose (research/ledger/trend-choice.json)
+
+// choiceFile (段2の作り プログラム): the choice file's sha256 the constant's (on the walk path, the one given with it),
+// chosen ④15M; else the run stops before anything is read
+const readChoice = async (): Promise<string> => {
+  if (!CHOICE || !CHOICE_SHA256) throw new Error("stage 2: no choice file, or no sha256 to check it by: nothing read");
+  const text = await Deno.readTextFile(CHOICE);
+  const hash = await sha256Hex(text);
+  if (hash !== CHOICE_SHA256) throw new Error(`${CHOICE}: sha256 ${hash}, not ${CHOICE_SHA256}: nothing read`);
+  const c = JSON.parse(text);
+  if (c.stage !== 1 || c.chosen !== CANDS[C4]) throw new Error(`${CHOICE}: stage ${c.stage}, chosen ${c.chosen}, not stage 1 and ${CANDS[C4]}: nothing read`);
+  return hash;
+};
+
+// h2Only (段2の作り 2): every bar read (the 1-minute ones of the accounts and the held values too) closed by END, the
+// emails followed the labels file's H2 rows, each followed for 1,440 bars inside the bars read
+const h2OnlyCheck = (run: HalfRun, rows: Row[]) => {
+  const k = (r: Row) => `${keyOf(r.T, r.pair, r.side)}|${r.late ? 1 : 0}`;
+  const want = new Set(rows.filter((r) => r.half === "H2").map(k));
+  const got = new Set(run.ems.map((e) => k(e.row)));
+  const extra = [...got].filter((x) => !want.has(x));
+  const missing = [...want].filter((x) => !got.has(x));
+  const short = run.ems.filter((e) => (e as Em & { short?: boolean }).short);
+  const ok = run.newest <= END_MS && extra.length === 0 && missing.length === 0 && short.length === 0;
+  check("h2Only", ok, extra.length + missing.length + short.length + (run.newest <= END_MS ? 0 : 1),
+    `the newest bar read closes ${isoMs(run.newest)} (END ${isoMs(END_MS)}); emails followed ${got.size}, H2 rows ${want.size}, not H2 ${extra.length}, H2 not followed ${missing.length}, not followed for 1,440 bars inside the bars read ${short.length}`,
+    [...extra.slice(0, 3), ...missing.slice(0, 3), ...short.slice(0, 3).map((e) => `${isoMs(e.row.T)} ${e.row.pair} ${e.row.side}: short`)]);
+};
+
+// the hand-made held values (段2の作り 8「持ち値の手の例」): one minute bars of a flat USD/JPY (bid 150.000, ask 150.003)
+// from Tuesday 2025-07-01 00:00 UTC for nine days; NY's summer close τ 20:55 UTC (Rakuten stops to 21:10)
+const holdHand = () => {
+  const bad: string[] = [];
+  const t0 = Date.parse("2025-07-01T00:00:00Z");
+  const n = 9 * 24 * 60;
+  const mk = (bidAt: (t: number) => number): M1 => {
+    const m: M1 = { pair: "USD/JPY", n, t: new Float64Array(n), bo: new Float64Array(n), bh: new Float64Array(n), bl: new Float64Array(n), bc: new Float64Array(n), ao: new Float64Array(n), ah: new Float64Array(n), al: new Float64Array(n), ac: new Float64Array(n) };
+    for (let i = 0; i < n; i++) {
+      const t = t0 + i * MINUTE;
+      const b = bidAt(t);
+      m.t[i] = t;
+      m.bo[i] = m.bh[i] = m.bl[i] = m.bc[i] = b;
+      m.ao[i] = m.ah[i] = m.al[i] = m.ac[i] = Number((b + 0.003).toFixed(3));
+    }
+    return m;
+  };
+  const f5t = Array.from({ length: n / 5 }, (_, i) => t0 + i * 5 * MINUTE);
+  const T = Date.parse("2025-07-01T21:00:00Z");
+  const end = t0 + n * MINUTE;
+  const run = (m: M1, E: number) => {
+    const bk = booksOf([m], t0 + DAY, end)[0];
+    const o = { dir: 1 as const, E, tp: E + 10 * 0.01, P: T + 2 * MINUTE };
+    const p = followM1(bk, o, { fill: "touch", endMs: end });
+    return { bk, o, p, h: holdOf(bk, p, 1, f5t, end) };
+  };
+  // (1) the summer's 21:00 signal: P moved past the stop to 21:10, H5 counted from the 21:10 bar; filled at once
+  // (E above the ask), held flat: the bid's close less the fill
+  const a = run(mk(() => 150), 150.01);
+  const H5a = Date.parse("2025-07-01T21:10:00Z") + TRACK * 5 * MINUTE;
+  if (a.h.P !== Date.parse("2025-07-01T21:10:00Z") || a.h.H5 !== H5a || a.h.kind !== "held" || a.h.v === null || Math.abs(a.h.v - -0.3) > 1e-9) bad.push(`21:00: P ${isoMs(a.h.P)} H5 ${isoMs(a.h.H5)} ${a.h.kind} ${a.h.v}`);
+  // (2) filled only after H5 (the limit 149.900 reached ten minutes past it): not counted
+  const b = run(mk((t) => (t >= H5a + 10 * MINUTE ? 149.88 : 150)), 149.9);
+  if (b.h.kind !== "notFilled" || b.h.v !== null) bad.push(`after H5: ${b.h.kind} ${b.h.v}`);
+  // (3) −30 at H5 (the bid 149.703 against the fill 150.003): −30 or worse within 1e-9
+  const c = run(mk((t) => (t >= H5a - 30 * MINUTE ? 149.703 : 150)), 150.01);
+  if (c.h.kind !== "held" || c.h.v === null || Math.abs(c.h.v - -30) > 1e-9 || !c.h.b30) bad.push(`−30: ${c.h.kind} ${c.h.v} ${c.h.b30}`);
+  // (4) fewer than 1,440 five-minute bars from P's (the bars read stop before): late although filled, H5 none
+  const k21 = f5t.indexOf(Date.parse("2025-07-01T21:10:00Z"));
+  const f5short = f5t.slice(0, k21 + TRACK - 1);
+  const d = holdOf(a.bk, a.p, 1, f5short, end);
+  if (d.kind !== "late" || Number.isFinite(d.H5) || d.v !== null) bad.push(`1,439 bars: ${d.kind} ${d.H5}`);
+  // (5) never filled (the limit 149.000 is not reached by the end): never when H5 is inside, late when it is not
+  const e = run(mk(() => 150), 149.0);
+  const e1 = holdOf(e.bk, e.p, 1, f5short, end);
+  if (e.h.kind !== "never" || e1.kind !== "late") bad.push(`never filled: ${e.h.kind}, short ${e1.kind}`);
+  // (6) H5 just at END is counted; END a millisecond before H5 is late
+  const f1 = holdOf(a.bk, a.p, 1, f5t, H5a);
+  const f2 = holdOf(a.bk, a.p, 1, f5t, H5a - 1);
+  if (f1.kind !== "held" || f2.kind !== "late") bad.push(`H5 at END: ${f1.kind}, END before H5: ${f2.kind}`);
+  check("holdHand", bad.length === 0, bad.length, "6 hand-made held values (the 21:00 signal's P and H5, filled after H5, −30 at H5, 1,439 bars, never filled, H5 at END)", bad);
+};
+
+// the hand-made sentences (段2の作り 8 sentenceHand): made-up numbers filled into the four sentences, and the cannot
+// sentence once more with t over the line
+export const SENTENCE_HAND_IN: SentenceIn = {
+  rule: NAME_JA[3],
+  weeks: (END_MS - SPLIT_MS) / (7 * DAY),
+  W2: { all: 0.5271, kept: 0.5394, out: 0.5262 },
+  PL2: { all: -1.4012, kept: -1.0444, out: -1.4333 },
+  W1: { all: 0.715, kept: 0.72, out: 0.7146 },
+  PL1: { all: -1.3604, kept: -1.2049, out: -1.3758 },
+  B30all: 0.1031,
+  V1Dall: -0.8712,
+  dW2: { d: 0.0182, lo: -0.0363, hi: 0.0728, t: 0.706 },
+  dW2Buy: 0.0118,
+  // −0.0045 × 100 is −0.44999999999999996 in double: "-0.4" (the rounding of the exact binary value)
+  dW2Sell: -0.0045,
+  dPL2: 0.53,
+  dV1D: { d: 0.04, nOut: 4228, nAll: 4653 },
+  dB30: { d: -0.004, nOut: 4228, nAll: 4653 },
+  keptMinusAll: { d: 0.0166, lo: -0.033, hi: 0.0662 },
+  nAll: 4653,
+  nKeptUnread: 425,
+  line: 2.539,
+  triggers: [],
+};
+const sentenceHand2 = () => {
+  const bad: string[] = [];
+  const s = sentencesOf(SENTENCE_HAND_IN);
+  const want: Record<SentenceName, string> = {
+    adopt: "選ぶのに使っていない後半（71.7週）で、④（15分足のダウが逆向きなら出さない）で残したメールは、利確10が先 53.9%・1回あたり -1.04 pips でした。全部のメールでは 52.7%・-1.40 pips、外したメールは 52.6%・-1.43 pips です。\nペアと向きをそろえると、受け取るメールの勝率は +1.7ポイント（95%の幅 -3.3〜+6.6）。ランダムに同じ数を外した場合より良い結果でした。メールは週 約65通から約6通になります。\n損切りなしで持った場合も、1日後に −30 pips 以下の割合は 10.3% から 10.7% になり、1日後の平均は -0.87 pips から -0.83 pips で、悪くなっていません。\nこれからのメールで8週たった所で、悪くなっていないかを1回だけ確かめます（良くなったことの確かめにはなりません）。そのあと、メールを変えるかを決めてもらいます。",
+    bad: "後半では、外したメールの方が良い結果でした（差 +1.8ポイント、95%の幅 -3.6〜+7.3）。このルールは良いメールを外す側でした。使いません。",
+    partBad: "勝率は上がりましたが、損切りなしの1日後、買いか売りの片方が悪くなったので、使いません（δ_B30 -0.4ポイント、売りの δ_W2 -0.4ポイント）。",
+    cannot: "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 53.9%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。ランダムに同じ数を外した場合と区別できませんでした。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。",
+  };
+  for (const n of SENTENCE_NAMES) if (s[n] !== want[n]) bad.push(`${n}: ${s[n]}`);
+  const over = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, W2: { ...SENTENCE_HAND_IN.W2, kept: 0.52 }, triggers: ["|δ_W2| が10ポイント以上（+10.2ポイント）"] }).cannot;
+  const wantOver = "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 52.0%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。t は 3.10 で、ランダムの線 2.54 を越えましたが、生の数で、残したメールの W2 が全部以下でした。また、調べる合図（|δ_W2| が10ポイント以上（+10.2ポイント））に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。";
+  if (over !== wantOver) bad.push(`cannot over the line: ${over}`);
+  // t over the line, the kept W2 over all's and no sign hit: the cannot sentence (not picked then) has no reason,
+  // and the partBad one (no item missed) none either: both left empty (数の書き方の細部)
+  const none = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, dW2Sell: 0.001, dB30: { ...SENTENCE_HAND_IN.dB30, d: 0 } });
+  if (!none.cannot.includes("t は 3.10 で、ランダムの線 2.54 を越えましたが、。そのため、決めた条件を満たしません。")) bad.push(`cannot with no reason: ${none.cannot}`);
+  if (none.partBad !== "勝率は上がりましたが、が悪くなったので、使いません（）。") bad.push(`partBad with nothing missed: ${none.partBad}`);
+  // the signs' names (数の書き方の細部), which fill the cannot sentence: 81.25 and 93.75 are ties (up), 3.005 is
+  // 3.00499… in double ("+3.00")
+  const cell = (hit: Record<string, number>) => Object.fromEntries(["all", "kept", "out"].flatMap((c) => ["all", "BUY", "SELL"].map((sd) => [`${c}.${sd}`, { n: 10, mean: hit[`${c}.${sd}`] ?? 0.5 }])));
+  const hand = { cand: CANDS[C4], raw: { W2: cell({ "kept.all": 0.8125 }), W1: cell({ "kept.all": 0.9375 }), W3: cell({ "out.BUY": 1 }), PL2: cell({ "out.SELL": 3.005 }) }, delta: { W2: { d: -0.1234 } } } as unknown as CandStat;
+  const names = triggerPairsOf([hand]);
+  const wantNames = ["④15M: kept W2 81.3% (80% or more)", "④15M: kept W1 93.8% (90% or more)", "④15M: |δ W2| -12.34 points (10 or more)", "④15M: PL2 out SELL +3.00 (+3 or more)", "④15M: W3 out BUY 100%"].join(" | ");
+  const wantJa = ["残したメールの W2 が80%以上（81.3%）", "残したメールの W1 が90%以上（93.8%）", "|δ_W2| が10ポイント以上（-12.3ポイント）", "外したメールの売りの PL2 が +3 pips 以上（+3.00 pips）", "外したメールの買いの W3 が100%"].join(" | ");
+  if (names.map((x) => x.en).join(" | ") !== wantNames) bad.push(`the signs' names: ${names.map((x) => x.en).join(" | ")}`);
+  if (names.map((x) => x.ja).join(" | ") !== wantJa) bad.push(`the signs' Japanese names: ${names.map((x) => x.ja).join(" | ")}`);
+  check("sentenceHand2", bad.length === 0, bad.length, "the four sentences filled from hand-made numbers, the cannot sentence with t over the line, the signs' names", bad);
+};
+
+// trend-h2.csv (段2の作り 5): each H2 email's row, ④'s columns only
+const h2Csv = (ems: Em[], holds: Hold[]) =>
+  ["T,pair,side,late,C,v4,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,a4,P,H5,holdKind,hold"].concat(ems.map((e, i) => {
+    const h = holds[i];
+    return [isoMs(e.row.T), e.row.pair, e.row.side, e.row.late ? 1 : 0, isoMs(e.row.C), e.verdict[C4], e.E, e.bidC, e.askC, ...e.res.flatMap((r) => [r.kind, r.pips]), e.v1d ?? "",
+      e.ahead ? e.ahead[C4] : "", Number.isFinite(h.P) ? isoMs(h.P) : "", Number.isFinite(h.H5) ? isoMs(h.H5) : "", h.kind, h.v ?? ""].join(",");
+  })).join("\n") + "\n";
+
+const main2 = async () => {
+  await Deno.mkdir(OUT, { recursive: true });
+  // the choice, the labels file and (a) first: another sha256 stops the run before any bar is read
+  const choiceHash = await readChoice();
+  check("choiceFile", true, 0, `the choice file's sha256 ${WALK2 ? "the one given (the walk path)" : "the constant's"}, chosen ${CANDS[C4]}`);
+  const labelsText = await Deno.readTextFile(LABELS);
+  const labelsHash = await sha256Hex(labelsText);
+  if (!WALK2 && labelsHash !== TREND_LABELS_SHA256) throw new Error(`${LABELS}: sha256 ${labelsHash}, not the stage-0 labels' ${TREND_LABELS_SHA256}: nothing computed`);
+  let aText = "";
+  if (!WALK2) {
+    aText = await Deno.readTextFile(A_CSV);
+    const aHash = await sha256Hex(aText);
+    if (aHash !== A_SHA256) throw new Error(`${A_CSV}: sha256 ${aHash}, not (a)'s ${A_SHA256}: nothing computed`);
+  }
+  if (ULTRA_PAIRS.sl !== 13 || ULTRA_PAIRS.tp1 !== 4 || ULTRA_PAIRS.tp2 !== 10 || ULTRA_PAIRS.tp3 !== 16) throw new Error("ULTRA_PAIRS is not the stop 13 and TP 4/10/16 (§8.106 3)");
+  if (!WALK2 && Date.now() < END_MS) throw new Error("END is in the future");
+  const rows = parseLabels(labelsText);
+  say(`MODE ${MODE}${PLANT ? ` PLANT ${PLANT}` : ""}${WALK2 ? ` SEED ${SEED} (${WALK_DIR})` : ""}; labels ${rows.length} rows, sha256 ${labelsHash}; choice sha256 ${choiceHash}; H2 ${rows.filter((r) => r.half === "H2").length}`);
+
+  // hand-made checks of the pieces
+  const fh = followHand();
+  check("followHand", fh.bad.length === 0, fh.bad.length, `${fh.n} hand-made trades`, fh.bad);
+  const dh = deltaHand();
+  check("deltaHand", dh.bad.length === 0, dh.bad.length, `${dh.n} hand-made sums (δ, its error, kept − all, the clusters, t, mulberry32)`, dh.bad);
+  verdictHand();
+  sentenceHand();
+  sentenceHand2();
+  holdHand();
+  const floors = floorsOf(rows);
+  check("floors", WALK2 || (floors[`H1|${CANDS[C4]}`].length === 0 && floors[`H2|${CANDS[C4]}`].length === 0), 0, `§8.106 6 from the labels file for ${CANDS[C4]}`);
+
+  const st = newLoadStats();
+  const h2 = await readHalf("H2", rows, st);
+  await labelsAgain(h2, st);
+
+  // the 1-minute bars of the accounts and the held values: GMO's; on the walk path the walk's 5-minute bars passed as
+  // the 1-minute ones. Planted m1PastEnd: read to END + 3 days (END is a Saturday 00:00 UTC; the next bar opens on
+  // the Sunday at 22:00, so a day more would read nothing)
+  const m1End = PLANT === "m1PastEnd" ? END_MS + 3 * DAY : END_MS;
+  const m1s: M1[] = [];
+  for (const [pi, pair] of PAIRS.entries()) {
+    let m: M1;
+    if (WALK2) {
+      const f = m1End === END_MS ? h2.fines[pi] : fineOf(await loadQuotes(src, pair, "5min", 5 * MINUTE, SPLIT_MS - 2 * DAY, m1End, st));
+      m = { pair, n: f.n, t: f.t, bo: f.bo, bh: f.bh, bl: f.bl, bc: f.bc, ao: f.ao, ah: f.ah, al: f.al, ac: f.ac };
+    } else m = await loadM1(src, pair, SPLIT_MS - DAY, m1End, st);
+    if (m.n) h2.newest = Math.max(h2.newest, m.t[m.n - 1] + (WALK2 ? 5 * MINUTE : MINUTE));
+    m1s.push(m);
+  }
+  // h2Only sees every bar read (the 1-minute ones too); the emails not followed for 1,440 bars have failed it (the run
+  // writes checks.json and stops after the checks) and leave the lists from here, before tf-winrate is compared (as in
+  // stage 1; a planted run goes on without them)
+  h2OnlyCheck(h2, rows);
+  fiveHolesCheck(h2);
+  lookBehindCheck(h2);
+  h2.ems = h2.ems.filter((e) => e.res.every((r) => r !== null));
+  if (!WALK2) await tfWinrateCheck(h2);
+  const books = booksOf(m1s, SPLIT_MS, END_MS);
+
+  // the orders' P: (a)'s P column on real data (the time moved past Rakuten's stop); T + 2 minutes on the walk path
+  // (follow moves it as it moved (a)'s)
+  const aOf = new Map<string, Array<{ P: number; v: number }>>();
+  if (!WALK2) {
+    const aRows = aText.split("\n").filter((l) => l !== "").slice(1).map((l) => l.split(","));
+    for (const c of aRows) {
+      const k = keyOf(Date.parse(c[0]), c[1], c[2]);
+      aOf.set(k, [...(aOf.get(k) ?? []), { P: Date.parse(c[3]), v: Number(c[5]) }]);
+    }
+    let bad = 0;
+    let late = 0;
+    for (const e of h2.ems) {
+      const v = aOf.get(keyOf(e.row.T, e.row.pair, e.row.side)) ?? [];
+      if (v.length !== 1 || !Number.isFinite(v[0].v) || !Number.isFinite(v[0].P)) bad++;
+      else {
+        e.v1d = v[0].v;
+        if (!(v[0].P + DAY <= END_MS)) late++;
+      }
+    }
+    check("aFile.H2", bad === 0 && late === 0, bad + late, `(a)'s rows: ${aRows.length}; H2 emails without exactly one row ${bad}; with P + 24 hours after END ${late} (the file was written to END, so this part cannot fail by construction)`);
+  }
+  const P0 = h2.ems.map((e) => (WALK2 ? pOf(e.sig, 2) : (aOf.get(keyOf(e.row.T, e.row.pair, e.row.side))?.[0]?.P ?? Number.NaN)));
+  const ms: Mails = { sigs: h2.ems.map((e) => e.sig), P0 };
+  const { es, paths } = emailsOf(books, ms, END_MS);
+  // the walk path's v1d: (a)'s own formula (the exit side's value at the moved P + 24 hours)
+  if (WALK2) h2.ems.forEach((e, i) => (e.v1d = paths[i].none || paths[i].P + DAY > END_MS ? null : es[i].vExit));
+
+  // ④ alone (段2の作り): its stat, line and signs; planted allCandsH2: all four (onlyChosen must catch it)
+  const cands = PLANT === "allCandsH2" ? CANDS.map((_, c) => c) : [C4];
+  const stats2 = cands.map((c) => candStat(h2.ems, c, "H2", true));
+  const lines2 = cands.map((c) => lineFor(h2.ems, c, "H2", PLANT === "h2SeedHalf1" ? 1 : 2));
+  const st4 = stats2[cands.indexOf(C4)];
+  const line = lines2[cands.indexOf(C4)];
+  const triggers = triggersOf(stats2);
+  check("randomCounts.H2", lines2.every((l) => l.missed === 0), lines2.reduce((a, l) => a + l.missed, 0), `${KINDS.length} kinds × 500 removals: a stratum's count missed`);
+  const h2Head = h2Csv([], []).trim();
+  const onlyOk = stats2.length === 1 && stats2[0].cand === CANDS[C4] && lines2.length === 1 && triggers.every((x) => x.startsWith(`${CANDS[C4]}:`)) &&
+    h2Head === "T,pair,side,late,C,v4,E,bidC,askC,k4,p4,k10,p10,k16,p16,v1d,a4,P,H5,holdKind,hold";
+  check("onlyChosen", onlyOk, onlyOk ? 0 : 1, `H2's stats, lines and signs computed for ${CANDS[C4]} alone; trend-h2.csv's columns ④'s only (print.txt: the Python)`);
+
+  // the accounts (7): all H2 emails, and ④'s kept + unreadable (the left-out not ordered); lookAheadAccount
+  const js = h2.ems.map((e) => ({ avoided: e.verdict[C4] === -1 }) as unknown as Judged);
+  const acc = ruleAccounts(m1s, ms, paths, js, SPLIT_MS, END_MS, PLANT === "ruleOrdersAvoided" ? "ruleOrdersAvoided" : "");
+  check("lookAheadAccount", acc.cut.ok, acc.cut.poisoned + acc.cut.changed, `2 rows × ±777.7 pips: ${acc.cut.compared} runs, poisoned ${acc.cut.poisoned}, changed ${acc.cut.changed}`);
+  // each email's held value at H5 (7); lookAheadHold
+  const holds = paths.map((p, i) => holdOf(books[ms.sigs[i].pi], p, ms.sigs[i].dir, h2.fines[ms.sigs[i].pi].t, END_MS, PLANT));
+  let hc = 0;
+  let hm = 0;
+  holds.forEach((h, i) => {
+    const s = ms.sigs[i];
+    const r = holdLookAhead(books[s.pi], { dir: s.dir, E: s.E, tp: s.tp, P: P0[i] }, s.dir, h, END_MS, PLANT);
+    hc += r.compared;
+    hm += r.moved;
+  });
+  // the number of values compared depends on the fills (a reference row's outcome): print.txt only, not the check
+  check("lookAheadHold", hm === 0, hm, `each counted email's value at H5 again with the 1-minute bars after it moved ±777.7 pips: moved ${hm}`);
+
+  // counts.H2: the labels file's H2 rows against each part counted on its own
+  const fileH2 = rows.filter((r) => r.half === "H2").length;
+  const nOf = (f: (e: Em) => boolean) => h2.ems.filter(f).length;
+  const kept = nOf((e) => e.verdict[C4] === 1);
+  const out = nOf((e) => e.verdict[C4] === -1);
+  const unread = nOf((e) => e.verdict[C4] === 0);
+  const decided = nOf((e) => e.res[1].kind === "tp" || e.res[1].kind === "sl" || e.res[1].kind === "amb");
+  const undecided = nOf((e) => e.res[1].kind === "open");
+  const reconOk = kept + out + unread === fileH2 && decided + undecided === fileH2;
+  check("counts.H2", reconOk, reconOk ? 0 : 1, "the labels file's H2 rows = compared + unreadable, compared = kept + left out, TP10 decided + undecided = the H2 rows");
+  check("loads", st.failed === 0, st.failed, `requests ${st.requests}, kept files ${st.cached}, failed ${st.failed}`, st.failedExamples);
+
+  // trend-h2.csv before the checks are written: its sha256 goes in checks.json (the commit job checks it)
+  const csv = h2Csv(h2.ems, holds);
+  const csvHash = await sha256Hex(csv);
+
+  say("\n== checks");
+  for (const [k, c] of Object.entries(checks)) {
+    say(`${c.ok ? "ok  " : "FAIL"} ${k}: ${c.detail}`);
+    for (const e of c.examples) say(`       ${e}`);
+  }
+  const failed = Object.entries(checks).filter(([, c]) => !c.ok).map(([k]) => k);
+  const light = WALK2 ? ["aFile.H2", "tfWinrate.H2"] : [];
+  await Deno.writeTextFile(`${OUT}/checks.json`, JSON.stringify({ mode: MODE, plant: PLANT, seed: SEED, failed, notRun: light, checks, labels: { rows: rows.length, sha256: labelsHash }, choiceSha256: choiceHash, h2CsvSha256: csvHash }, null, 1));
+  if (failed.length && !PLANT) {
+    say(`\nchecks failed: ${failed.join(", ")} — no numbers are written`);
+    Deno.exit(1);
+  }
+
+  // the conditions, the four sentences and the one picked (§8.106 8, 12 の4)
+  const j = judgeH2(st4, line, failed.length === 0, triggers, true);
+  const raw = (m: string, col: string) => st4.raw[m][`${col}.all`].mean;
+  const side3 = (m: string): Side3 => ({ all: raw(m, "all"), kept: raw(m, "kept"), out: raw(m, "out") });
+  const sIn: SentenceIn = {
+    rule: NAME_JA[C4],
+    weeks: WEEKS.H2,
+    W2: side3("W2"),
+    PL2: side3("PL2"),
+    W1: side3("W1"),
+    PL1: side3("PL1"),
+    B30all: raw("B30", "all"),
+    V1Dall: raw("V1D", "all"),
+    dW2: { d: st4.delta.W2.d, lo: st4.delta.W2.lo, hi: st4.delta.W2.hi, t: st4.delta.W2.t },
+    dW2Buy: st4.delta["W2.BUY"].d,
+    dW2Sell: st4.delta["W2.SELL"].d,
+    dPL2: st4.delta.PL2.d,
+    dV1D: { d: st4.delta.V1D.d, nOut: st4.delta.V1D.nOut, nAll: st4.delta.V1D.nAll },
+    dB30: { d: st4.delta.B30.d, nOut: st4.delta.B30.nOut, nAll: st4.delta.B30.nAll },
+    keptMinusAll: { d: st4.keptMinusAll.d, lo: st4.keptMinusAll.lo, hi: st4.keptMinusAll.hi },
+    nAll: st4.counts.all.all,
+    nKeptUnread: st4.counts.all.kept + st4.counts.all.unread,
+    line: line.line,
+    triggers: triggerPairsOf(stats2).map((x) => x.ja),
+  };
+  const sentences = sentencesOf(sIn, PLANT);
+  const picked = sentences[j.sentence as SentenceName];
+
+  // the held values' summary (7): all and ④'s kept
+  const holdSum = (keep: (e: Em) => boolean) => {
+    const hs = h2.ems.map((e, i) => ({ e, h: holds[i] })).filter((x) => keep(x.e)).map((x) => x.h);
+    const c = hs.filter((h) => h.v !== null);
+    const n = c.length;
+    const mean = n ? c.reduce((a, h) => a + (h.v as number), 0) / n : Number.NaN;
+    return { n, mean, tp: n ? c.filter((h) => h.kind === "tp").length / n : Number.NaN, b30: n ? c.filter((h) => h.b30).length / n : Number.NaN, notFilled: hs.filter((h) => h.kind === "notFilled" || h.kind === "never").length, never: hs.filter((h) => h.kind === "never").length, late: hs.filter((h) => h.kind === "late").length };
+  };
+  const holdAll = holdSum(() => true);
+  const holdKept = holdSum((e) => e.verdict[C4] === 1);
+
+  // kept − all for v1d and B30 (by stratum: (N_out ÷ N_all) × δ; B30's δ is left out − kept)
+  const kma = (d: Delta, sign: 1 | -1) => {
+    const f = d.nAll > 0 ? d.nOut / d.nAll : Number.NaN;
+    const a = sign * f * d.lo;
+    const b = sign * f * d.hi;
+    return { d: sign * f * d.d, lo: Math.min(a, b), hi: Math.max(a, b) };
+  };
+  const kV = kma(st4.delta.V1D, 1);
+  const kB = kma(st4.delta.B30, -1);
+
+  sayOut(`\n== H2 (${isoMs(SPLIT_MS)} .. ${isoMs(END_MS)}, ${WEEKS.H2.toFixed(1)} weeks): ${h2.ems.length} emails; ${CANDS[C4]} alone`);
+  sayOut(`counts: the labels file's H2 rows ${fileH2}; followed ${h2.ems.length}; compared ${kept + out} (kept ${kept} + left out ${out}) + unreadable ${unread} = ${kept + out + unread}; TP10 decided ${decided} + undecided ${undecided} = ${decided + undecided}`);
+  printCand(st4, "H2", true);
+  sayOut(`  kept − all (v1d, by stratum): ${pips(kV.d)} [${pips(kV.lo)}, ${pips(kV.hi)}]; kept − all (B30, by stratum): ${pts(kB.d)} [${pts(kB.lo)}, ${pts(kB.hi)}]`);
+  sayOut(`\nits t ${Number.isFinite(st4.delta.W2.t) ? st4.delta.W2.t.toFixed(3) : "-"}; H2's random line ${line.line.toFixed(3)} (each kind's 97.5% point: ${KINDS.map((k, i) => `${k} ${line.kinds[i].toFixed(3)}`).join(", ")})`);
+  sayOut(`§8.106 8: 1 ${j.c1} 2 ${j.c2} 3 ${j.c3} 4 ${j.c4} 5 ${j.c5} -> ${j.sentence}`);
+  sayOut(picked);
+  sayOut(`signs to look into before a report (§8.106 11): ${triggers.length ? triggers.join("; ") : "none"}`);
+  sayOut(`\nreference rows (§8.106 3; not used to decide); lookAheadHold compared ${hc} values`);
+  for (const [name, l] of [["all H2 emails", acc.lines.none], [`${CANDS[C4]} kept + unreadable (the left-out not ordered)`, acc.lines.rule]] as const) {
+    sayOut(`  account, 300,000 yen from ${isoMs(SPLIT_MS)}, ${name}: P/L ${Math.round(l.S)} yen; stop-outs ${l.lcs}; deadlines ${l.deadlines}; deposits ${Math.round(l.depositTotal)} yen; ordered ${l.placed} of ${l.emails} (${pct(l.placedShare ?? Number.NaN)}); win rate ${pct(l.winRate ?? Number.NaN)}; pips ${l.pips === null ? "-" : pips(l.pips)}; yen ${l.yen === null ? "-" : Math.round(l.yen)}`);
+  }
+  for (const [name, h] of [["all H2 emails", holdAll], [`${CANDS[C4]} kept`, holdKept]] as const) {
+    sayOut(`  held without a stop to TP10 or H5 (5 trading days), ${name}: counted ${h.n}, mean ${pips(h.mean)} pips, TP reached ${pct(h.tp)} (high by construction: no stop), −30 pips or worse ${pct(h.b30)}; not counted: not filled by H5 ${h.notFilled} (never by END ${h.never}), H5 after END ${h.late}`);
+  }
+
+  const result = {
+    mode: MODE,
+    seed: SEED,
+    plant: PLANT,
+    labelsSha256: labelsHash,
+    choiceSha256: choiceHash,
+    H2: { stats: stats2, lines: lines2, triggers, conditions: j, sentences, picked, accounts: acc.lines, notOrdered: acc.notOrdered, holds: { all: holdAll, kept: holdKept }, keptMinusAll: { V1D: kV, B30: kB }, counts: { fileH2, kept, out, unread, decided, undecided } },
+  };
+  await Deno.writeTextFile(`${OUT}/result.json`, JSON.stringify(result, (_, v) => (typeof v === "number" && !Number.isFinite(v) ? String(v) : v), 1));
+  await Deno.writeTextFile(`${OUT}/trend-h2.csv`, csv);
+  await Deno.writeTextFile(`${OUT}/print.txt`, lines.join("\n") + "\n");
 };
 
 if (MODE === "calib") await (await import("./trend1-calib.ts")).calib(env("CALIB_DIR", "research/out/trend1/calib"));
+else if (MODE === "stage2") await main2();
 else await main();
