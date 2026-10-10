@@ -1,0 +1,47 @@
+# #272 (docs §8.109): the MACD of the three 5-minute charts the owner marked
+# (green: a cross near the pane's top or bottom, judged on; purple: near 0,
+# not judged on), with each cross on the screen, in pips (research/macdx-labels.ts).
+# It reads GMO's 5-minute bars of 2026-10-01 .. 10-09 only (the measured
+# period ends before them), and sets nothing: the rule's numbers are chosen
+# from what it prints and written in the docs before the measurement runs.
+#
+# Runs on GitHub's runners because they can reach GMO's public price API and
+# the development container cannot. Read-only: it fetches public prices,
+# prints MACD values (no prices) to the job log and uploads the same as an
+# artifact. It writes nothing to the repository and holds no secret.
+name: Research MACD marks
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macdx-labels.ts
+      - .github/workflows/macdx-labels.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  marks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Read GMO's bars and print the crosses
+        run: >
+          deno run
+          --allow-net=forex-api.coin.z.com
+          --allow-read=.
+          --allow-write=research/out
+          --allow-env
+          research/macdx-labels.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macdx-labels
+          path: research/out/macdx-labels
+          if-no-files-found: ignore
+          retention-days: 30
