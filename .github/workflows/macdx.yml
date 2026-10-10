@@ -4,12 +4,17 @@
 #   push      the hand examples (確かめ 4) and three random walks (確かめ 2), each
 #             with the Python re-computation (確かめ 3) when it is in the repository
 #   dispatch  mode=walk (seeds), mode=repro (確かめ 5: ULTRA alone on the 21 pairs,
-#             against run 37191488441; no MACD number is computed) or mode=real
-#             (the 5 pairs, 2024-01-01 .. 2026-10-09 00:00 UTC, once)
+#             against run 37191488441; no MACD number is computed), mode=real
+#             (the 5 pairs, 2024-01-01 .. 2026-10-09 00:00 UTC, once) or
+#             mode=real21 (the same on the 21 pairs of the 71.9%: a reference
+#             only, (a)(b)(c) not judged)
 #
 # On real data the study's report goes to a file first; it is printed only after
 # the look-ahead check (inside the TS) and the Python re-computation have both
-# passed, so no result is read before the checks (§8.109 確かめ).
+# passed, so no result is read before the checks (§8.109 確かめ). The outputs are
+# uploaded whole only when every step passed; when a step failed, only
+# bars.csv and decisions.csv go up (to find the mismatch), never trades.csv,
+# report.json or the report, which hold the results.
 #
 # Runs on GitHub's runners because they can reach GMO's public price API and the
 # development container cannot. Read-only: it fetches public prices, prints to
@@ -29,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "walk / repro / real"
+        description: "walk / repro / real / real21"
         default: "walk"
       seeds:
         description: "walk seeds (JSON list)"
@@ -134,9 +139,9 @@ jobs:
 
   real:
     needs: hand
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'real' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'real' || inputs.mode == 'real21') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -156,7 +161,7 @@ jobs:
           restore-keys: gmo-5min-
       - name: The study on GMO's bars (the report to a file only)
         env:
-          MODE: real
+          MODE: ${{ inputs.mode }}
         run: |
           mkdir -p research/out/macdx
           deno run \
@@ -173,13 +178,30 @@ jobs:
           path: research/.cache
           key: gmo-tf-${{ github.run_id }}
       - name: The Python re-computation (確かめ 3)
-        run: python3 -I research/macdx-check.py --bars research/.cache --ts research/out/macdx --start 2024-01-01 --end 2026-10-09T00:00:00Z
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          # real: the 5 pairs (the Python's default); real21: the 21 pairs of research/lib.ts GMO_STUDY_PAIRS
+          PAIRS="USD/JPY,EUR/JPY,AUD/JPY,EUR/USD,AUD/USD"
+          if [ "$MODE" = "real21" ]; then
+            PAIRS="USD/JPY,EUR/JPY,GBP/JPY,AUD/JPY,EUR/USD,GBP/USD,AUD/USD,MXN/JPY,NZD/JPY,ZAR/JPY,CAD/JPY,CHF/JPY,TRY/JPY,NZD/USD,EUR/GBP,AUD/NZD,HUF/JPY,SEK/JPY,NOK/SEK,AUD/CAD,NZD/CAD"
+          fi
+          python3 -I research/macdx-check.py --bars research/.cache --ts research/out/macdx --start 2024-01-01 --split 2025-05-19 --end 2026-10-09T00:00:00Z --pairs "$PAIRS"
       - name: The report (printed only after the checks)
         run: cat research/out/macdx/print.txt
-      - if: always()
+      - if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: macdx-real
+          name: macdx-${{ inputs.mode }}
           path: research/out/macdx
+          if-no-files-found: ignore
+          retention-days: 30
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macdx-${{ inputs.mode }}-failed-checks-only
+          path: |
+            research/out/macdx/bars.csv
+            research/out/macdx/decisions.csv
           if-no-files-found: ignore
           retention-days: 30

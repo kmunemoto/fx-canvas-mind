@@ -14,6 +14,8 @@
 //
 // MODE (§8.109 確かめ):
 //   real   the 5 pairs, 2024-01-01 .. 2026-10-09 00:00 UTC (dispatch only)
+//   real21 the same on the 21 pairs of the 71.9%, a reference only: (a)(b)(c)
+//          are printed but not judged, and no sentence is given
 //   walk   the same on a seeded random walk (SEED), for 確かめ 2; also writes
 //          the walk as GMO-shaped files for the Python re-computation
 //   repro  ULTRA alone on the 21 pairs to 2026-09-30 14:40:11 UTC, compared
@@ -34,12 +36,16 @@ import { QT_DEFAULTS, anchoredStart, barStepMs } from "../supabase/functions/_sh
 import { ULTRA_PAIRS, ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
 import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
 import { DAY, GMO_STUDY_PAIRS, MINUTE, WEEK, WEEK_OFFSET, clusterRate, iso } from "./lib.ts";
+import { wholeDayFile } from "./ownerhold-data.ts";
 import { WINDOW, c2Variant, decide, decideOnWindow, prepare, type Decision } from "./macdx-lib.ts";
 
 const MODE = Deno.env.get("MODE") || "walk";
-if (!["real", "walk", "repro"].includes(MODE)) throw new Error(`MODE ${MODE}: real, walk or repro`);
+if (!["real", "real21", "walk", "repro"].includes(MODE)) throw new Error(`MODE ${MODE}: real, real21, walk or repro`);
+// real21: the same study on the 21 pairs of the 71.9% (§8.109 測り方 ペア: a reference only;
+// (a)(b)(c) and the sentence are not judged on it)
+const REFERENCE = MODE === "real21";
 const FIVE = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"];
-const PAIRS = (Deno.env.get("PAIRS") || (MODE === "repro" ? GMO_STUDY_PAIRS.join(",") : FIVE.join(","))).split(",").map((s) => s.trim()).filter(Boolean);
+const PAIRS = (Deno.env.get("PAIRS") || (MODE === "repro" || MODE === "real21" ? GMO_STUDY_PAIRS.join(",") : FIVE.join(","))).split(",").map((s) => s.trim()).filter(Boolean);
 const START = Deno.env.get("START") || "2024-01-01";
 const SPLIT = Deno.env.get("SPLIT") || "2025-05-19";
 const END = Deno.env.get("END") || (MODE === "repro" ? "2026-09-30T14:40:11Z" : "2026-10-09T00:00:00Z");
@@ -64,7 +70,10 @@ const CHECK_EVERY = 661;
 // §8.109 合図の決まり 9: the sweep reads a 5-minute chart 0, 1 and 3 minutes after the close
 const READ_AFTER = [0, 1, 3];
 const mailed = (closeMs: number): boolean => READ_AFTER.some((m) => !isPossiblyClosed(closeMs + m * MINUTE));
-// run 37191488441's whole-period ULTRA 5-minute row (docs §8.98; 確かめ 5)
+// run 37191488441's whole-period ULTRA 5-minute row (確かめ 5), as its job log prints it
+// (job 111404429207, "== the whole period, entered at the close": "5min ultra n= 79554 TP1
+// first 71.9% [ 71.2%, 72.6%] of 75086 (tp 53978 sl 20590 amb 518 open 4468) pips/trade -1.62
+// [-1.76, -1.49]"); docs §8.98 gives its 71.9% and -1.62
 const REPRO_EXPECT = { n: 79554, resolved: 75086, tp: 53978, sl: 20590, amb: 518, open: 4468, win: "71.9", winLo: "71.2", winHi: "72.6", pips: "-1.62", pipsLo: "-1.76", pipsHi: "-1.49" };
 
 // ---- GMO's files (as tf-winrate) -----------------------------------------------------------
@@ -132,6 +141,7 @@ interface Loaded {
   requests: number;
   cached: number;
   failed: number;
+  partial: number;
 }
 const load = async (pair: string, fromMs: number): Promise<Loaded> => {
   if (SYNTHETIC) {
@@ -144,7 +154,7 @@ const load = async (pair: string, fromMs: number): Promise<Loaded> => {
       const data = fine.map((q) => ({ openTime: String(barOpenMs(q.datetime)), open: String(q[side].open), high: String(q[side].high), low: String(q[side].low), close: String(q[side].close) }));
       await Deno.writeTextFile(`${dir}/all.json`, JSON.stringify({ status: 0, data }));
     }
-    return { quotes: fine, requests: 0, cached: 0, failed: 0 };
+    return { quotes: fine, requests: 0, cached: 0, failed: 0, partial: 0 };
   }
   const symbol = GMO_SYMBOLS[pair];
   const spec = GMO_INTERVALS["5min"];
@@ -157,6 +167,7 @@ const load = async (pair: string, fromMs: number): Promise<Loaded> => {
   let requests = 0;
   let cached = 0;
   let failed = 0;
+  let partial = 0;
   let cursor = 0;
   const worker = async () => {
     while (cursor < keys.length) {
@@ -171,11 +182,18 @@ const load = async (pair: string, fromMs: number): Promise<Loaded> => {
             body = undefined;
           }
           if (body !== undefined && !sound(body)) body = undefined;
+          // on real data, a kept file GMO made before its day had ended (another study read it
+          // while the day was going on) is read again (research/ownerhold-data.ts wholeDayFile);
+          // repro reads the cache as tf-winrate did
+          if (body !== undefined && MODE !== "repro" && !wholeDayFile(body, key)) {
+            partial++;
+            body = undefined;
+          }
         }
         if (body === undefined) {
           const r = await getJson(klineUrl(symbol, side, spec.name, key));
           requests++;
-          body = r.status === 404 ? { status: 404, data: [] } : r.body;
+          body = r.status === 404 ? { status: 404, data: [], responsetime: new Date().toISOString() } : r.body;
           if (r.status === 0 || !sound(body)) {
             failed++;
             failWhy[r.why] = (failWhy[r.why] ?? 0) + 1;
@@ -197,7 +215,7 @@ const load = async (pair: string, fromMs: number): Promise<Loaded> => {
     const t = Date.parse(q.datetime);
     return Number.isFinite(t) && t >= fromMs && !barInsideClosure(t, STEP) && t + STEP <= NOW;
   });
-  return { quotes, requests, cached, failed };
+  return { quotes, requests, cached, failed, partial };
 };
 
 // ---- the 5-minute bars trades are followed on ------------------------------------------------
@@ -457,11 +475,12 @@ for (const [pi, pair] of PAIRS.entries()) {
   if (MODE !== "repro") {
     const p = prepare(candles);
     const fires: Array<{ i: number; dec: Decision }> = [];
+    const crossAt: number[] = [];
     const lastFireRun = new Map<number, true>();
     let lastGap = -Infinity;
-    for (let i = Math.max(1, i0); i < n; i++) {
+    for (let i = Math.max(1, i0 - 36); i < n; i++) {
       if (times[i] - times[i - 1] > FINE) lastGap = i;
-      if (!judged(i)) continue;
+      if (i < i0 || !judged(i)) continue;
       const short = i < WINDOW - 1;
       const dec = short ? null : decide(p.m, p.sides, p.ms, p.tr, i, 0);
       if (short) {
@@ -472,6 +491,7 @@ for (const [pi, pair] of PAIRS.entries()) {
       }
       if (!dec) continue;
       d.crosses++;
+      crossAt.push(i);
       const isMailed = mailed(times[i] + STEP);
       decisionsCsv.push(`${pair},${iso(times[i] + STEP)},${dec.dir},${isMailed ? 1 : 0},${dec.x},${dec.S},${dec.P},${dec.c0 ? 1 : 0},${dec.c1 ? 1 : 0},${dec.c2 ? 1 : 0},${dec.fire ? 1 : 0}`);
       if (!isMailed) {
@@ -509,14 +529,12 @@ for (const [pi, pair] of PAIRS.entries()) {
       enter(i, "blind", "BUY", [1], false);
       enter(i, "blind", "SELL", [1], false);
     }
-    // 確かめ 1: the decision on the sweep's own 600-bar window, at about 300
-    // bars and at every 7th fire and every 7th cross
+    // 確かめ 1: the decision on the sweep's own 600-bar window (MACD on those bars alone, as the
+    // email would compute it) against the whole-series shortcut, at every cross judged and at
+    // about 300 evenly spaced bars (where both must find no cross or the same one)
     const every = Math.max(1, Math.floor((n - i0) / 300));
-    const probeAt = new Set<number>();
+    const probeAt = new Set<number>(crossAt);
     for (let i = Math.max(WINDOW - 1, i0); i < n; i += every) probeAt.add(i);
-    fires.forEach((f, k) => {
-      if (k % 7 === 0) probeAt.add(f.i);
-    });
     for (const i of probeAt) {
       if (!judged(i) || i < WINDOW - 1) continue;
       const a = decide(p.m, p.sides, p.ms, p.tr, i, 0);
@@ -531,7 +549,7 @@ for (const [pi, pair] of PAIRS.entries()) {
     }
   }
   diags.push(d);
-  console.log(`${pair}: ${n} bars ${d.first ?? "-"} .. ${d.last ?? "-"}; GMO ${got.requests} read, ${got.cached} cached, ${got.failed} failed`);
+  console.log(`${pair}: ${n} bars ${d.first ?? "-"} .. ${d.last ?? "-"}; GMO ${got.requests} read, ${got.cached} cached, ${got.failed} failed, ${got.partial} kept before their day ended (read again); ULTRA ${d.ultra} mailed, ${d.ultraUnmailed} not mailed`);
 }
 
 // ---- the numbers -----------------------------------------------------------------------------
@@ -611,8 +629,8 @@ const diffCi = (a: Rec[], b: Rec[], v: (x: Rec) => number) => {
 };
 const pct = (x: number | null) => (x === null ? "   -  " : `${(100 * x).toFixed(1).padStart(5)}%`);
 const num = (x: number | null, dg = 2) => (x === null || !Number.isFinite(x) ? "-" : x.toFixed(dg));
-const row = (label: string, s: Summary) =>
-  `${label.padEnd(22)} n=${String(s.n).padStart(7)}  TP1 first ${pct(s.win)} [${pct(s.winLo)},${pct(s.winHi)}] of ${String(s.resolved).padStart(7)}` +
+const row = (label: string, s: Summary, k = 1) =>
+  `${label.padEnd(22)} n=${String(s.n).padStart(7)}  TP${k} first ${pct(s.win)} [${pct(s.winLo)},${pct(s.winHi)}] of ${String(s.resolved).padStart(7)}` +
   `  (tp ${s.tp} sl ${s.sl} amb ${s.amb} open ${s.open}; at an open ${s.gap})  pips/trade ${num(s.pips)} [${num(s.pipsLo)}, ${num(s.pipsHi)}]  spread ${num(s.spread)}  held ${num(s.held, 0)} bars`;
 const sel = (f: (x: Rec) => boolean) => recs.filter(f);
 const k1 = (rule: Rule, more: (x: Rec) => boolean = () => true) => sel((x) => x.rule === rule && x.entry === "close" && x.k === 1 && more(x));
@@ -664,25 +682,34 @@ console.log(`d (pips a trade, main - ULTRA): whole ${num(dWhole?.d ?? null)} [${
 console.log(`win-rate difference (TP1 first, main - ULTRA): ${dWin ? `${num(100 * dWin.d, 1)} points [${num(100 * dWin.lo, 1)}, ${num(100 * dWin.hi, 1)}]` : "-"}`);
 console.log(row("main 5 min late", lateMain) + `  (skipped: a level already passed ${lateSkipped["macd"] ?? 0})`);
 console.log(row("(イ) 5 min late", lateUltra) + `  (skipped: a level already passed ${lateSkipped["ultra"] ?? 0})`);
-console.log(`(a) whole-period d's interval above 0: ${a ? "yes" : "no"}; (b) d above 0 in both halves: ${b ? "yes" : "no"}; (c) five minutes late, main's pips a trade >= ULTRA's: ${c ? "yes" : "no"}`);
+const refNote = REFERENCE ? " (not judged: real21 is a reference only)" : "";
+console.log(`(a) whole-period d's interval above 0: ${a ? "yes" : "no"}; (b) d above 0 in both halves: ${b ? "yes" : "no"}; (c) five minutes late, main's pips a trade >= ULTRA's: ${c ? "yes" : "no"}${refNote}`);
 const mainPips = main["macd"];
-const stillLosing = mainPips.pips === null || mainPips.pips <= 0 || (mainPips.pipsLo !== null && mainPips.pipsLo <= 0);
+// §8.109 勧め方 M7: the sentence says what main's own pips a trade are, besides the comparison
+//   mean <= 0                    1回あたりはマイナス
+//   mean > 0, the interval to 0  1回あたりがプラスとは言えない (95% の幅が 0 をまたぐ)
+//   mean > 0, the interval > 0   1回あたりはプラス
+const own = mainPips.pips === null || mainPips.pips <= 0 ? "minus" : mainPips.pipsLo === null || mainPips.pipsLo <= 0 ? "unsure" : "plus";
+const ownText = { minus: "1回あたりはマイナス", unsure: "1回あたりがプラスとは言えない（95%の幅が0をまたぐ）", plus: "1回あたりはプラス" }[own];
+const mainText = `主の1回あたり ${num(mainPips.pips)} pips [${num(mainPips.pipsLo)}, ${num(mainPips.pipsHi)}]`;
 const sentence = a && b && c
-  ? `MACD の山・谷に替えるのがよい（3つの条件を満たした）。主の1回あたり ${num(mainPips.pips)} pips [${num(mainPips.pipsLo)}, ${num(mainPips.pipsHi)}]` + (stillLosing ? "。ただし ULTRA より負けが小さいだけで、1回あたりはまだマイナス。" : "。")
-  : `ULTRA より良いとは言えない（(a) ${a ? "満たす" : "満たさない"}・(b) ${b ? "満たす" : "満たさない"}・(c) ${c ? "満たす" : "満たさない"}）。主の1回あたり ${num(mainPips.pips)} pips [${num(mainPips.pipsLo)}, ${num(mainPips.pipsHi)}]` + (stillLosing ? "、1回あたりはマイナス。" : "。");
-console.log(`THE SENTENCE (§8.109 勧め方): ${sentence}`);
+  ? `MACD の山・谷に替えるのがよい（3つの条件を満たした）。${mainText}。` + (own === "plus" ? `${ownText}。` : `ただし ULTRA より負けが小さいだけで、${ownText}。`)
+  : `ULTRA より良いとは言えない（(a) ${a ? "満たす" : "満たさない"}・(b) ${b ? "満たす" : "満たさない"}・(c) ${c ? "満たす" : "満たさない"}）。${mainText}、${ownText}。`;
+console.log(REFERENCE ? `THE SENTENCE: not judged on real21 (a reference only); main's own: ${mainText}、${ownText}` : `THE SENTENCE (§8.109 勧め方): ${sentence}`);
 for (const r of ["macd", "ultra", "all", "blind"] as Rule[]) {
   const w = main[r].win;
   if (w !== null && w >= 0.9) console.log(`SUSPICIOUS: ${r} wins ${pct(w)} — check for look-ahead before reading anything else (CLAUDE.md, docs §8.84)`);
 }
-report.comparison = { dWhole, dFirst, dSecond, dWin, lateMain, lateUltra, a, b, c, sentence };
+report.comparison = { dWhole, dFirst, dSecond, dWin, lateMain, lateUltra, a, b, c, own, judged: !REFERENCE, sentence: REFERENCE ? null : sentence };
 
 // reporting only
 console.log(`\n== reporting only (not used to choose)`);
 const weeks = (NOW - START_MS) / WEEK;
 for (const r of ["macd", "ultra"] as Rule[]) {
   const s = main[r];
-  console.log(`${r}: ${num(s.n / weeks, 1)} a week over ${weeks} weeks (all pairs); pips a week ${num(((s.pips ?? 0) * s.n) / weeks, 1)}; dropped at the data's end ${dropped[r] ?? 0}`);
+  // the signals a week count the ones dropped at the data's end too (they were mailed)
+  const sent = s.n + (dropped[r] ?? 0);
+  console.log(`${r}: ${num(sent / weeks, 1)} signals a week over ${weeks.toFixed(1)} weeks (all pairs; ${sent} = ${s.n} traded + ${dropped[r] ?? 0} dropped at the data's end); pips a week ${num(((s.pips ?? 0) * s.n) / weeks, 1)} (the traded ones)`);
 }
 const dNoOpen = diffCi(k1("macd", resolved), k1("ultra", resolved), pipsOf);
 console.log(`d without the open trades: ${num(dNoOpen?.d ?? null)} [${num(dNoOpen?.lo ?? null)}, ${num(dNoOpen?.hi ?? null)}]`);
@@ -713,8 +740,10 @@ const xs = diags.flatMap((x) => x.xPips);
 const as = diags.flatMap((x) => x.aPips);
 console.log(`at the fires, x (pips) 10/50/90%: ${num(q(xs, 0.1))} / ${num(q(xs, 0.5))} / ${num(q(xs, 0.9))}; the mean range S/288 (pips): ${num(q(as, 0.1))} / ${num(q(as, 0.5))} / ${num(q(as, 0.9))}`);
 for (const k of [2, 3]) {
-  const s = summarize(sel((x) => x.rule === "macd" && x.entry === "close" && x.k === k));
-  console.log(row(`main, all held to TP${k}`, s));
+  for (const [label, rule] of [["main", "macd"], ["(イ) ULTRA", "ultra"]] as Array<[string, Rule]>) {
+    const s = summarize(sel((x) => x.rule === rule && x.entry === "close" && x.k === k));
+    console.log(row(`${label}, all held to TP${k}`, s, k));
+  }
 }
 console.log(`break-even: TP 4 against the stop 13 needs more than 13/17 = 76.5% TP1 first, and more to pay the spread`);
 report.diags = diags.map((x) => ({ ...x, xPips: undefined, aPips: undefined }));

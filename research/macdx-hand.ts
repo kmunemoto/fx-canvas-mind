@@ -43,7 +43,10 @@ eq("sides", sidesOf([0, 2, 0, -1, 0, 0, 3, null, 0]), [null, 1, 1, -1, -1, -1, 1
 {
   const s = series({ h: { [I - 1]: 0, [I]: -0.2 } });
   eq("h[i-1] == 0: cross at i", at(s)?.dir, "DOWN");
-  eq("h[i-1] == 0: no cross at i-1", at(s, I - 1), null);
+  // judged on a full 600-bar window ending at i-1 (first = -1), so the null
+  // below is the side rule's, not the short-window guard's
+  eq("h[i-1] == 0: no cross at i-1", at(s, I - 1, -1), null);
+  eq("h[i-1] == 0: a cross at i-1 would be seen", at(series({ h: { [I - 1]: -0.2 } }), I - 1, -1)?.dir, "DOWN");
 }
 
 // 4. h[i] == 0: the side stays, no cross at i
