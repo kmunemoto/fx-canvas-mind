@@ -1031,7 +1031,7 @@ const sentenceHand2 = () => {
   const bad: string[] = [];
   const s = sentencesOf(SENTENCE_HAND_IN);
   const want: Record<SentenceName, string> = {
-    adopt: "選ぶのに使っていない後半（71.7週）で、④（15分足のダウが逆向きなら出さない）で残したメールは、利確10が先 53.9%・-1.04 pipsでした。全部のメールでは 52.7%・-1.40 pips、外したメールは 52.6%・-1.43 pipsです。ペアと向きをそろえると、受け取るメールの勝率は +1.7ポイント（95%の幅 -3.3〜+6.6）。ランダムに同じ数を外した場合より良い結果でした。メールは週 約65通から約6通になります。損切りなしで持った場合も、1日後に −30 pips 以下の割合は 10.3% から 10.7% になり、1日後の平均は -0.87 pips から -0.83 pips で、悪くなっていません。これからのメールで8週たった所で、悪くなっていないかを1回だけ確かめます（良くなったことの確かめにはなりません）。そのあと、メールを変えるかを決めてもらいます。",
+    adopt: "選ぶのに使っていない後半（71.7週）で、④（15分足のダウが逆向きなら出さない）で残したメールは、利確10が先 53.9%・1回あたり -1.04 pips でした。全部のメールでは 52.7%・-1.40 pips、外したメールは 52.6%・-1.43 pips です。\nペアと向きをそろえると、受け取るメールの勝率は +1.7ポイント（95%の幅 -3.3〜+6.6）。ランダムに同じ数を外した場合より良い結果でした。メールは週 約65通から約6通になります。\n損切りなしで持った場合も、1日後に −30 pips 以下の割合は 10.3% から 10.7% になり、1日後の平均は -0.87 pips から -0.83 pips で、悪くなっていません。\nこれからのメールで8週たった所で、悪くなっていないかを1回だけ確かめます（良くなったことの確かめにはなりません）。そのあと、メールを変えるかを決めてもらいます。",
     bad: "後半では、外したメールの方が良い結果でした（差 +1.8ポイント、95%の幅 -3.6〜+7.3）。このルールは良いメールを外す側でした。使いません。",
     partBad: "勝率は上がりましたが、損切りなしの1日後、買いか売りの片方が悪くなったので、使いません（δ_B30 -0.4ポイント、売りの δ_W2 -0.4ポイント）。",
     cannot: "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 53.9%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。ランダムに同じ数を外した場合と区別できませんでした。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。",
@@ -1040,7 +1040,14 @@ const sentenceHand2 = () => {
   const over = sentencesOf({ ...SENTENCE_HAND_IN, dW2: { ...SENTENCE_HAND_IN.dW2, t: 3.1 }, W2: { ...SENTENCE_HAND_IN.W2, kept: 0.52 }, triggers: ["④15M: |δ W2| +10.20 points (10 or more)"] }).cannot;
   const wantOver = "後半では、④（15分足のダウが逆向きなら出さない）を付けても、勝率が上がるとは言えませんでした（残した 52.0%・-1.04 pips、全部 52.7%・-1.40 pips、外した 52.6%・-1.43 pips）。t は 3.10 で、ランダムの線 2.54 を越えましたが、生の数で、残したメールの W2 が全部以下でした。また、調べる合図（④15M: |δ W2| +10.20 points (10 or more)）に当たりました。そのため、決めた条件を満たしません。差が無いという意味ではありません。7.3ポイントくらいの差は、この数では見分けられません。メールは今のままです。";
   if (over !== wantOver) bad.push(`cannot over the line: ${over}`);
-  check("sentenceHand2", bad.length === 0, bad.length, "the four sentences filled from hand-made numbers, and the cannot sentence with t over the line", bad);
+  // the signs' names (数の書き方の細部), which fill the cannot sentence: 81.25 and 93.75 are ties (up), 3.005 is
+  // 3.00499… in double ("+3.00")
+  const cell = (hit: Record<string, number>) => Object.fromEntries(["all", "kept", "out"].flatMap((c) => ["all", "BUY", "SELL"].map((sd) => [`${c}.${sd}`, { n: 10, mean: hit[`${c}.${sd}`] ?? 0.5 }])));
+  const hand = { cand: CANDS[C4], raw: { W2: cell({ "kept.all": 0.8125 }), W1: cell({ "kept.all": 0.9375 }), W3: cell({ "out.BUY": 1 }), PL2: cell({ "out.SELL": 3.005 }) }, delta: { W2: { d: -0.1234 } } } as unknown as CandStat;
+  const names = triggersOf([hand]).join(" | ");
+  const wantNames = ["④15M: kept W2 81.3% (80% or more)", "④15M: kept W1 93.8% (90% or more)", "④15M: |δ W2| -12.34 points (10 or more)", "④15M: PL2 out SELL +3.00 (+3 or more)", "④15M: W3 out BUY 100%"].join(" | ");
+  if (names !== wantNames) bad.push(`the signs' names: ${names}`);
+  check("sentenceHand2", bad.length === 0, bad.length, "the four sentences filled from hand-made numbers, the cannot sentence with t over the line, the signs' names", bad);
 };
 
 // trend-h2.csv (段2の作り 5): each H2 email's row, ④'s columns only

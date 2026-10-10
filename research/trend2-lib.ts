@@ -57,15 +57,16 @@ export type SentenceName = (typeof SENTENCE_NAMES)[number];
 export const partBadOf = (s: SentenceIn): { kinds: string[]; items: string[] } => {
   const items: string[] = [];
   const kinds: string[] = [];
-  const pl = s.dPL2 < 0 || s.PL2.kept < s.PL2.all;
-  if (s.dPL2 < 0) items.push(`δ_PL2 ${pipsOf2(s.dPL2)} pips`);
-  if (s.PL2.kept < s.PL2.all) items.push(`残した PL2 ${pipsOf2(s.PL2.kept)}・全部 ${pipsOf2(s.PL2.all)} pips`);
-  const tp4 = s.W1.kept < s.W1.all || s.PL1.kept < s.PL1.all;
-  if (s.W1.kept < s.W1.all) items.push(`残した W1 ${pctOf(s.W1.kept)}%・全部 ${pctOf(s.W1.all)}%`);
-  if (s.PL1.kept < s.PL1.all) items.push(`残した PL1 ${pipsOf2(s.PL1.kept)}・全部 ${pipsOf2(s.PL1.all)} pips`);
-  const hold = s.dV1D.d < 0 || s.dB30.d < 0;
-  if (s.dV1D.d < 0) items.push(`δ_v1d ${pipsOf2(s.dV1D.d)} pips`);
-  if (s.dB30.d < 0) items.push(`δ_B30 ${ptsOf(s.dB30.d)}ポイント`);
+  // a miss is a condition not met (8): a number that is not a number misses too, as in the conditions
+  const pl = !(s.dPL2 >= 0) || !(s.PL2.kept >= s.PL2.all);
+  if (!(s.dPL2 >= 0)) items.push(`δ_PL2 ${pipsOf2(s.dPL2)} pips`);
+  if (!(s.PL2.kept >= s.PL2.all)) items.push(`残した PL2 ${pipsOf2(s.PL2.kept)}・全部 ${pipsOf2(s.PL2.all)} pips`);
+  const tp4 = !(s.W1.kept >= s.W1.all) || !(s.PL1.kept >= s.PL1.all);
+  if (!(s.W1.kept >= s.W1.all)) items.push(`残した W1 ${pctOf(s.W1.kept)}%・全部 ${pctOf(s.W1.all)}%`);
+  if (!(s.PL1.kept >= s.PL1.all)) items.push(`残した PL1 ${pipsOf2(s.PL1.kept)}・全部 ${pipsOf2(s.PL1.all)} pips`);
+  const hold = !(s.dV1D.d >= 0) || !(s.dB30.d >= 0);
+  if (!(s.dV1D.d >= 0)) items.push(`δ_v1d ${pipsOf2(s.dV1D.d)} pips`);
+  if (!(s.dB30.d >= 0)) items.push(`δ_B30 ${ptsOf(s.dB30.d)}ポイント`);
   const side = !(s.dW2Buy > 0) || !(s.dW2Sell > 0);
   if (!(s.dW2Buy > 0)) items.push(`買いの δ_W2 ${ptsOf(s.dW2Buy)}ポイント`);
   if (!(s.dW2Sell > 0)) items.push(`売りの δ_W2 ${ptsOf(s.dW2Sell)}ポイント`);
@@ -83,20 +84,22 @@ export const sentencesOf = (s: SentenceIn, plant = ""): Record<SentenceName, str
   const perWeek = (n: number) => (n / s.weeks).toFixed(0);
   // planted adoptDeltaW2: the adopt sentence's points take δ W2 in place of kept − all (the Python must catch it)
   const kma = plant === "adoptDeltaW2" ? s.dW2 : s.keptMinusAll;
-  const adopt =
-    `選ぶのに使っていない後半（${s.weeks.toFixed(1)}週）で、${s.rule}で残したメールは、利確10が先 ${raw3(s.W2, s.PL2, "kept")}でした。` +
-    `全部のメールでは ${raw3(s.W2, s.PL2, "all")}、外したメールは ${raw3(s.W2, s.PL2, "out")}です。` +
+  // 12 の4 writes the adopt sentence as four lines in one 「」: joined by a line break (数の書き方の細部)
+  const adopt = [
+    `選ぶのに使っていない後半（${s.weeks.toFixed(1)}週）で、${s.rule}で残したメールは、利確10が先 ${pctOf(s.W2.kept)}%・1回あたり ${pipsOf2(s.PL2.kept)} pips でした。` +
+    `全部のメールでは ${raw3(s.W2, s.PL2, "all")}、外したメールは ${raw3(s.W2, s.PL2, "out")} です。`,
     `ペアと向きをそろえると、受け取るメールの勝率は ${ptsOf(kma.d)}ポイント（95%の幅 ${ptsOf(kma.lo)}〜${ptsOf(kma.hi)}）。ランダムに同じ数を外した場合より良い結果でした。` +
-    `メールは週 約${perWeek(s.nAll)}通から約${perWeek(s.nKeptUnread)}通になります。` +
-    `損切りなしで持った場合も、1日後に −30 pips 以下の割合は ${pctOf(s.B30all)}% から ${pctOf(s.B30all + kmaB30)}% になり、1日後の平均は ${pipsOf2(s.V1Dall)} pips から ${pipsOf2(s.V1Dall + kmaV1D)} pips で、悪くなっていません。` +
-    `これからのメールで8週たった所で、悪くなっていないかを1回だけ確かめます（良くなったことの確かめにはなりません）。そのあと、メールを変えるかを決めてもらいます。`;
+    `メールは週 約${perWeek(s.nAll)}通から約${perWeek(s.nKeptUnread)}通になります。`,
+    `損切りなしで持った場合も、1日後に −30 pips 以下の割合は ${pctOf(s.B30all)}% から ${pctOf(s.B30all + kmaB30)}% になり、1日後の平均は ${pipsOf2(s.V1Dall)} pips から ${pipsOf2(s.V1Dall + kmaV1D)} pips で、悪くなっていません。`,
+    `これからのメールで8週たった所で、悪くなっていないかを1回だけ確かめます（良くなったことの確かめにはなりません）。そのあと、メールを変えるかを決めてもらいます。`,
+  ].join("\n");
   const over = Number.isFinite(s.dW2.t) && s.dW2.t > s.line;
   const reasons = [
-    ...(s.W2.kept <= s.W2.all ? ["生の数で、残したメールの W2 が全部以下でした"] : []),
+    ...(!(s.W2.kept > s.W2.all) ? ["生の数で、残したメールの W2 が全部以下でした"] : []),
     ...(s.triggers.length ? [`調べる合図（${s.triggers.join("、")}）に当たりました`] : []),
   ];
   const randomLine = over
-    ? `t は ${tOf(s.dW2.t)} で、ランダムの線 ${tOf(s.line)} を越えましたが、${reasons.length ? reasons.join("。また、") : "-"}。そのため、決めた条件を満たしません。`
+    ? `t は ${tOf(s.dW2.t)} で、ランダムの線 ${tOf(s.line)} を越えましたが、${reasons.join("。また、")}。そのため、決めた条件を満たしません。`
     : "ランダムに同じ数を外した場合と区別できませんでした。";
   const far = Math.max(Math.abs(s.dW2.lo), Math.abs(s.dW2.hi));
   const cannot =
