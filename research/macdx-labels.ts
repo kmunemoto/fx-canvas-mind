@@ -99,6 +99,13 @@ for (const pair of ["USD/JPY", "AUD/USD", "EUR/USD"]) {
   // the series, for any rule to be tried on them afterwards
   const csv = ["openUtc,jst,macd,signal,hist,tr", ...candles.map((_, i) => `${new Date(t[i]).toISOString()},${jstOf(t[i])},${fmt(M[i], 4)},${fmt(S[i], 4)},${fmt(H[i], 4)},${fmt(TR[i], 2)}`)];
   await Deno.writeTextFile(`${OUT}/${pair.replace("/", "")}.csv`, csv.join("\n") + "\n");
+  // the same series in the log from 10/07 21:00 UTC (two days before the
+  // screen, for windows up to 288 bars), as the artifact cannot be read
+  // from the development container: "S pair jst macd signal hist tr" in pips
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] < Date.UTC(2026, 9, 7, 21, 0)) continue;
+    console.log(`S ${pair.replace("/", "")} ${jstOf(t[i]).replace(" ", "T")} ${fmt(M[i], 3)} ${fmt(S[i], 3)} ${fmt(H[i], 3)} ${fmt(TR[i], 2)}`);
+  }
   const trail = (i: number, n: number) => {
     let maxM = -Infinity, minM = Infinity, top = -Infinity, bottom = Infinity, ok = true;
     for (let k = i - n + 1; k <= i; k++) {
