@@ -1,11 +1,21 @@
 # #250 (docs §8.106): would a condition on the chart's Dow line raise the win rate of the 15-minute
 # ULTRA emails? Stage 0 (§8.106 6): each email's Dow labels and the four candidates' counts only — no
-# outcome is read (research/trend.ts imports no outcome code).
+# outcome is read (research/trend.ts imports no outcome code). Stage 1 (§8.106 7, 段1の作り): the first half's
+# outcomes, one candidate chosen (research/trend1.ts).
 #
 #   push (every run): the walks only, before any real data is read
 #     syn      research/trend.ts on two walks written as GMO's files (seeds 1, 2): every check of
 #              §8.106 11 that touches the labels; the Python (research/trend-check.py) on the same files,
 #              every label, half and count the same; the planted errors, each caught by a check of the TS
+#     syn1     stage 1 on one walk over (a)'s period (seed 101): the whole procedure, the Python
+#              (research/trend-check.py --mode syn1) on the same files, the planted errors of 段1の作り 8, and
+#              the labels file's sha256 stopping a real run before anything is read
+#   dispatch stage1 = yes (after syn and syn1 passed in the same run):
+#     calib    the 108 walks of 段1の作り 8 (12 jobs), calib-sum their conditions; only when every one is met:
+#     stage1   GMO's real bars to the split (2025-05-19 00:00 UTC): tf-winrate to the split (its numbers kept
+#              off the log), stage 1 on H1, the Python; print.txt printed and the files kept only once every
+#              check and the Python passed
+#     choice   then research/ledger/trend-choice.json committed to this branch (§8.106 7)
 #   dispatch stage0 = yes (and only then; after syn passed in the same run):
 #     stage0   GMO's real bars: (a)'s emails labelled; the checks; the Python on the same files; the
 #              counts (print.txt) printed, and the files kept, only once every check and the Python passed
@@ -13,7 +23,7 @@
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Public files
 # fetched, a report printed; the labels job alone writes, that one file; no secret is held.
-name: Research trend (stage 0)
+name: Research trend (stages 0 and 1)
 
 on:
   push:
@@ -24,6 +34,7 @@ on:
       - research/trend-check.py
       - research/ledger/trend-examples.csv
       - research/ledger/trend-labels.csv
+      - research/trend1-walk.sh
       - .github/workflows/trend.yml
   workflow_dispatch:
     inputs:
@@ -33,6 +44,9 @@ on:
       label_end:
         description: "The bars are read to this UTC time (the run starts an hour after it at least)"
         default: "2026-10-09T12:00:00Z"
+      stage1:
+        description: "Stage 1 on GMO's real bars to the split, after the 108 walks pass (yes/no)"
+        default: "no"
 
 permissions:
   contents: read
@@ -65,6 +79,10 @@ jobs:
             grep -E "^(ok  |FAIL)|sha256|^signals|^read " $d.log || true
             if [ "$s" != "0" ]; then tail -n 60 $d.log; echo "::error::walk $seed: exit $s"; exit 1; fi
             python3 -I research/trend-check.py --gmo $d/gmo --labels $d/trend-labels.csv --counts $d/counts.json --mode syn
+            # stage 0's walks unchanged by the walk's options added for stage 1 (段1の作り 8)
+            want=$([ "$seed" = 1 ] && echo adcdc64a0ae4dd9dd35de341e6ee43bffbde5181872b6dcfd94a42fcc6922e75 || echo 68410751)
+            got=$(sha256sum $d/trend-labels.csv | cut -d' ' -f1)
+            case "$got" in "$want"*) echo "walk $seed: labels sha256 $got (as before)";; *) echo "::error::walk $seed: labels sha256 $got, not $want…"; exit 1;; esac
           done
       - name: The planted errors (each caught by its own check of the TS; the Python's verdict shown)
         run: |
@@ -85,6 +103,242 @@ jobs:
             python3 -I research/trend-check.py --gmo $d/gmo --labels $d/trend-labels.csv --counts $d/counts.json --mode syn > $d.py.log 2>&1 || py=FAILED
             echo "PLANT $p: caught by $f; the Python $py"
           done
+
+  syn1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # seed 101 chooses no candidate on H1, seed 102 chooses one: both paths of the choice, the random line and
+      # the Python's comparison of them run on every push (段1のプログラムの見直し)
+      - name: Stage 1 on two walks (seeds 101 and 102) — the whole procedure, then the Python on the same files
+        run: |
+          for seed in 101 102; do
+            d=research/out/trend1/w$seed
+            mkdir -p $d
+            MODE=syn SEED=$seed LIGHT=1 SYN_START=2024-01-01T00:00:00Z SYN_END=2026-10-03T00:00:00Z OUT=$d/walk \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend.ts > $d.walk.log 2>&1 \
+              || { tail -n 40 $d.walk.log; echo "::error::the walk $seed: research/trend.ts failed"; exit 1; }
+            s=0
+            MODE=syn SEED=$seed WALK_DIR=$d/walk OUT=$d/s1 \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > $d.s1.log 2>&1 || s=$?
+            grep -E "^(ok  |FAIL)" $d.s1.log || true
+            if [ "$s" != "0" ]; then tail -n 40 $d.s1.log; echo "::error::stage 1 on the walk $seed: exit $s"; exit 1; fi
+            python3 -c "import json; c=json.load(open('$d/s1/summary.json'))['H1chosen']; print('seed $seed: H1 chose', c)"
+            python3 -I research/trend-check.py --mode syn1 --gmo $d/walk/gmo --labels $d/walk/trend-labels.csv --ts $d/s1 --seed $seed
+          done
+          python3 -c "import json,sys; a=json.load(open('research/out/trend1/w101/s1/summary.json'))['H1chosen']; b=json.load(open('research/out/trend1/w102/s1/summary.json'))['H1chosen']; sys.exit(0 if a < 0 <= b else 'seed 101 should choose none and seed 102 one: %s, %s' % (a, b))"
+      - name: The planted errors (each caught by its own check)
+        run: |
+          d=research/out/trend1/w101
+          for pw in exitSideSwap:followHand hintSwap:verdicts lateFromT:followHand noSideStratum:deltaHand noMeanError:deltaHand \
+            randomTotal:randomCounts.H1.1 trackH2:h1Only keepEdge:h1Only lostFive:fiveHoles.H1; do
+            p=${pw%%:*}
+            want=${pw#*:}
+            o=research/out/trend1/plant-$p
+            s=0
+            MODE=syn SEED=101 WALK_DIR=$d/walk PLANT=$p OUT=$o \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > $o.log 2>&1 || s=$?
+            if [ "$s" != "0" ]; then tail -n 30 $o.log; echo "::error::PLANT $p: exit $s"; exit 1; fi
+            f=$(python3 -c "import json; print(','.join(json.load(open('$o/checks.json'))['failed']))")
+            case ",$f," in *",$want,"*) echo "PLANT $p: caught by $f";; *) echo "::error::PLANT $p: not caught by $want (failed: ${f:-none})"; exit 1;; esac
+          done
+      - name: The labels file's sha256 (one letter changed) stops a real run before anything is read
+        run: |
+          mkdir -p research/out/trend1/badsha
+          sed '2s/AUD\/JPY,BUY/AUD\/JPY,SELL/' research/ledger/trend-labels.csv > research/out/trend1/badsha/labels.csv
+          s=0
+          MODE=stage1 LABELS=research/out/trend1/badsha/labels.csv OUT=research/out/trend1/badsha/out \
+            deno run --allow-read=. --allow-write=research/out --allow-env research/trend1.ts > research/out/trend1/badsha/log 2>&1 || s=$?
+          if [ "$s" = "0" ] || ! grep -q "nothing computed" research/out/trend1/badsha/log || [ -n "$(ls -A research/out/trend1/badsha/out)" ]; then
+            cat research/out/trend1/badsha/log; echo "::error::a changed labels file did not stop the run"; exit 1
+          fi
+          echo "a changed labels file stopped the run before anything was read (exit $s)"
+
+  calib:
+    if: ${{ inputs.stage1 == 'yes' }}
+    needs: [syn, syn1]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # 段1の作り 8: 108 runs (no effect 101..180, the trend going on 201..210, turning back 301..310, a drift
+      # 401..404, and the answer-knowing label on 101..104), every 12th to this job
+      - name: The walks of this group
+        env:
+          CALIB_DIR: research/out/trend1/calib
+        run: |
+          runs="$(seq 101 180) $(seq 201 210) $(seq 301 310) $(seq 401 404) 101:answer 102:answer 103:answer 104:answer"
+          i=0
+          bad=0
+          for r in $runs; do
+            if [ $((i % 12)) -eq ${{ matrix.group }} ]; then
+              seed=${r%%:*}
+              a=""
+              case "$r" in *:answer) a=answer;; esac
+              research/trend1-walk.sh $seed $a || bad=1
+            fi
+            i=$((i + 1))
+          done
+          exit $bad
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trend1-calib-${{ matrix.group }}
+          path: |
+            research/out/trend1/calib/*/summary.json
+            research/out/trend1/calib/*/checks.json
+          retention-days: 30
+
+  calib-sum:
+    needs: [calib]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: trend1-calib-*
+          path: research/out/trend1/calib
+          merge-multiple: true
+      - name: The walks against 段1の作り 8's conditions
+        env:
+          MODE: calib
+          CALIB_DIR: research/out/trend1/calib
+        run: deno run --allow-read=. --allow-write=research/out --allow-env research/trend1.ts
+
+  stage1:
+    if: ${{ inputs.stage1 == 'yes' }}
+    needs: [calib-sum]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      # 段1の作り 2: tf-winrate to the split on the same bars. It prints H1's outcomes: its output goes to a file that
+      # is never printed nor kept; only its failed reads are shown
+      - name: tf-winrate to the split (five pairs, the stop 13, TP 4/10/16; its numbers kept off the log)
+        env:
+          PAIRS: USD/JPY,EUR/JPY,AUD/JPY,EUR/USD,AUD/USD
+          START: "2024-01-01"
+          SPLIT: "2025-05-19"
+          END: "2025-05-19T00:00:00Z"
+          SL: "13"
+          TP1: "4"
+          TP2: "10"
+          TP3: "16"
+          WEEKEND: inside
+        run: |
+          s=0
+          deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out \
+            --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND \
+            research/tf-winrate.ts > /tmp/tf-winrate.log 2>&1 || s=$?
+          grep -E '^GMO reads that failed' /tmp/tf-winrate.log || true
+          if [ "$s" != "0" ]; then echo "::error::tf-winrate: exit $s"; exit 1; fi
+      - name: Stage 1 on GMO's bars to the split (only the checks are printed here)
+        env:
+          MODE: stage1
+          OUT: research/out/trend1/real
+          TFW_JSON: research/out/tf-winrate.json
+          NO_COLOR: "1"
+        run: |
+          mkdir -p research/out/trend1
+          s=0
+          # real.log (stdout): the checks; the numbers go to print.txt alone. real.err: Deno's own messages only
+          timeout 280m deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/trend1.ts > research/out/trend1/real.log 2> research/out/trend1/real.err || s=$?
+          grep -E "^(MODE|ok  |FAIL|       |checks failed)" research/out/trend1/real.log || true
+          if [ "$s" != "0" ]; then tail -n 60 research/out/trend1/real.err; echo "::error::stage 1: exit $s"; exit 1; fi
+      - name: The Python on the same files (every outcome, δ, interval, line and the choice the same)
+        run: |
+          python3 -I research/trend-check.py --mode stage1 --gmo research/.cache --labels research/ledger/trend-labels.csv \
+            --a-csv research/ledger/ultra15-a.csv --ts research/out/trend1/real
+      - name: The numbers (every check and the Python passed)
+        run: cat research/out/trend1/real/print.txt
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trend-stage1
+          path: |
+            research/out/trend1/real/print.txt
+            research/out/trend1/real/checks.json
+            research/out/trend1/real/trend-choice.json
+            research/out/trend1/real/result.json
+            research/out/trend1/real/emails.csv
+          retention-days: 30
+          overwrite: true
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-stage1-checks
+          path: research/out/trend1/real/checks.json
+          if-no-files-found: ignore
+          retention-days: 30
+          overwrite: true
+
+  # research/ledger/trend-choice.json (§8.106 7), only when every check and the Python passed; its sha256 constant is
+  # written after it, by hand (stage 2 does not run without it)
+  choice:
+    needs: [stage1]
+    if: ${{ github.ref_name == 'claude/app-confirmation-jvmk03' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: trend-stage1
+          path: out
+      - name: Commit research/ledger/trend-choice.json
+        run: |
+          python3 -c "import json; c=json.load(open('out/trend-choice.json')); assert c['stage'] == 1; print('chosen:', c['chosen'])"
+          if [ -e research/ledger/trend-choice.json ]; then echo "::error::research/ledger/trend-choice.json is already there"; exit 1; fi
+          cp out/trend-choice.json research/ledger/trend-choice.json
+          echo "trend-choice.json sha256 $(sha256sum research/ledger/trend-choice.json | cut -d' ' -f1)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/ledger/trend-choice.json
+          git commit -m "#250 段1の選び方 research/ledger/trend-choice.json（run ${{ github.run_id }}）"
+          git push origin HEAD:${{ github.ref_name }}
 
   stage0:
     if: ${{ inputs.stage0 == 'yes' }}
