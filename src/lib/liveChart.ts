@@ -108,6 +108,9 @@ export interface LiveRead {
   // #147: gold's bars from this one on are made from the prices recorded
   // since Twelve Data was last read (ISO), or null
   ticksFrom: string | null;
+  // #291: the bars are the minutes recorded from Swissquote's prices all day
+  // (gold's 1-minute chart), not a read of Twelve Data's; false from an older function
+  recorded: boolean;
   // when the market reopens, while it may be shut
   reopens: string | null;
 }
@@ -195,6 +198,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
     limited: r.limited === true,
     ticksFrom: typeof r.ticks_from === "string" ? r.ticks_from : null,
+    recorded: r.recorded === true,
     reopens: typeof r.reopens === "string" ? r.reopens : null,
   };
 };

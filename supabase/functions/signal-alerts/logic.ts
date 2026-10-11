@@ -315,8 +315,9 @@ const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)}`
 
 // #155: the 5-minute chart too (Q-Trend's and ULTRA's alerts)
 const TF_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { "5min": "5分足", "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
-  en: { "5min": "5-minute", "15min": "15-minute", "1h": "1-hour", "4h": "4-hour", "1day": "daily" },
+  // #291: gold's 1-minute chart (the video's way)
+  ja: { "1min": "1分足", "5min": "5分足", "15min": "15分足", "1h": "1時間足", "4h": "4時間足", "1day": "日足" },
+  en: { "1min": "1-minute", "5min": "5-minute", "15min": "15-minute", "1h": "1-hour", "4h": "4-hour", "1day": "daily" },
 };
 export const tfLabel = (lang: Lang, interval: string) => TF_LABEL[lang][interval] ?? interval;
 
@@ -485,9 +486,10 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
 };
 
 // #155: and Q-Trend's and ULTRA's; #275: and the MACD peak-and-valley rule's
+// #291: and the owner's video's way on gold's 1-minute chart
 const RULE_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷" },
-  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley" },
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷", sweepx: "流動性狩り＋EMAクロス" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross" },
 };
 
 export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: string }>, lang: Lang): Mail => {
@@ -498,14 +500,14 @@ export const renderTestMail = (subs: Array<{ pair: string; interval: string; rul
   if (lang === "en") {
     const list = subs.length === 0 ? "none yet" : subs.map(label).join(", ");
     return assemble("[Sextant] Test email alert", [
-      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
+      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend, ULTRA, MACD peak/valley or Liquidity sweep + EMA cross) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
       `Charts you follow: ${list}`,
       `Settings → Email alerts in the app:\n${APP_URL}`,
     ]);
   }
   const list = subs.length === 0 ? "まだありません" : subs.map(label).join("、");
   return assemble("【Sextant】メール通知のテスト", [
-    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA、MACD の山・谷）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
+    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA、MACD の山・谷、流動性狩り＋EMAクロス）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
     `登録中のチャート: ${list}`,
     `アプリの「設定」→「メール通知」:\n${APP_URL}`,
   ]);

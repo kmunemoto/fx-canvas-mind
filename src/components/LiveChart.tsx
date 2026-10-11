@@ -5,6 +5,7 @@ import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { type ChartPrefs, getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import { maNeedsDeep } from "@/lib/emaLines";
+import { SWEEPX } from "@/lib/sweepCross";
 import type { NumericCandle } from "@/lib/types";
 import {
   INTERVAL_STEP_MS,
@@ -329,7 +330,7 @@ const LiveChart = ({
   const historyOn =
     indicatorsAllowed &&
     (maMode
-      ? overlays.ema50 || overlays.ema200 || overlays.ma3
+      ? overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.sweepx
       : zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
         overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
@@ -390,7 +391,13 @@ const LiveChart = ({
     indicatorsAllowed &&
     !deepNoMore &&
     maNeedsDeep(maMode ? maSwitches : overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
-  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep);
+  // #291: and on the moving averages' chart while the video's way's marks are
+  // on and the history above has fewer bars before the chart's first than
+  // the email's window needs (SWEEPX.window - 1), so each of the chart's
+  // bars is judged on its 600 closed bars, as the email judges (whatever
+  // the three lines are set to). Not told to the chart as the lines' (`deepForMa`)
+  const sweepDeep = indicatorsAllowed && !deepNoMore && maMode && overlays.sweepx && commonBefore !== null && commonBefore.length < SWEEPX.window - 1;
+  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep || sweepDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;
@@ -515,18 +522,22 @@ const LiveChart = ({
   // (joined by the chart's first candle only, so the price moving the
   // forming one does not make it anew)
   const firstCandle = candles[0] ?? null;
+  // (#291: on bars not the pair's own feed's — GMO unreadable, Twelve Data's
+  // drawn meanwhile — no history is read: said as not read, not as loading)
   const zoneShiftHistory = useMemo(() => {
     const past = gmoRead && firstCandle && history?.key === historyKey ? historyBefore(history.bars, [firstCandle]) : null;
     if (past) return { bars: past, status: "ready" as const };
+    if (read && !gmoRead) return { bars: null, status: "error" as const };
     return { bars: null, status: history?.key === historyKey && history.status === "error" ? ("error" as const) : ("loading" as const) };
-  }, [gmoRead, firstCandle, history, historyKey]);
+  }, [read, gmoRead, firstCandle, history, historyKey]);
   // #176: the same for the Zero-lag TEMA, from its deep history (bars
   // kept while a short read is read again are drawn meanwhile)
   const zltHistory = useMemo(() => {
     const past = gmoRead && firstCandle && deepHistory?.key === historyKey ? historyBefore(deepHistory.bars, [firstCandle]) : null;
     if (past && deepHistory?.status !== "error") return { bars: past, status: "ready" as const };
+    if (read && !gmoRead) return { bars: null, status: "error" as const };
     return { bars: null, status: deepHistory?.key === historyKey && deepHistory.status === "error" ? ("error" as const) : ("loading" as const) };
-  }, [gmoRead, firstCandle, deepHistory, historyKey]);
+  }, [read, gmoRead, firstCandle, deepHistory, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
   // #114: the signals of the rule on screen, and the newest of them
   // (#201: none on the moving averages' own chart)
@@ -864,6 +875,10 @@ const LiveChart = ({
             read.feed !== "gold",
           )}
         </p>
+      )}
+      {/* #291: gold's 1-minute bars, the minutes recorded from Swissquote's prices all day */}
+      {read?.recorded && (
+        <p className="text-[11px] text-muted-foreground" data-testid="live-recorded">{l.recordedNote}</p>
       )}
       {reopens && (
         <p className="text-[11px] text-muted-foreground" data-testid="live-reopens">{l.reopens(jstDay(Date.parse(reopens)))}</p>

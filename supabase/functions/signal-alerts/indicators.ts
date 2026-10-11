@@ -29,18 +29,23 @@ import { ULTRA_DEFAULTS, ultra, ultraLevels, ultraParamsFor } from "../_shared/u
 import { MACD_DEFAULTS } from "../_shared/macd.ts";
 import { N_TR as MACDX_N_TR, WINDOW as MACDX_WINDOW, decideOnWindow } from "../_shared/macd-extreme.ts";
 import { pineAtr } from "../_shared/pine.ts";
+// #291: the owner's video's way (docs §8.112), the code the chart's marks are drawn with
+import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
 
-export const INDICATOR_RULES = ["qtrend", "ultra", "macdx"] as const;
+// #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
+// low or high taken, then the cross of EMA 20 and EMA 80; docs §8.112)
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
-export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra" || v === "macdx";
+export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
-// (the measured figures below are kept for these; the MACD rule's are its own)
-export type ChartRule = Exclude<IndicatorRule, "macdx">;
+// (the measured figures below are kept for these; the MACD rule's are its own;
+// #291: the video's way is not measured)
+export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -58,8 +63,15 @@ export const ULTRA_RULE_ID =
 // mailed twice, so it must differ from ULTRA's.
 export const MACDX_RULE_ID =
   `macdx_${MACD_DEFAULTS.fast}_${MACD_DEFAULTS.slow}_${MACD_DEFAULTS.signal}_w${MACDX_WINDOW}_n${MACDX_N_TR}_k4_2_v1`;
+// #291: the video's way (docs §8.112, _shared/sweep-cross.ts): EMA 20 and EMA
+// 80, judged on the 600 closed bars ending at the bar, crosses counted from
+// its 241st, the stop a pip beyond the last five bars, the targets 15 and 20
+// pips
+export const SWEEPX_RULE_ID =
+  `sweepx_ema${SWEEPX.fast}_${SWEEPX.slow}_w${SWEEPX.window}_from${SWEEPX.warm}` +
+  `_sl${SWEEPX.slBars}b${SWEEPX.slPips}p_tp${SWEEPX.tp1Pips}_${SWEEPX.tp2Pips}_v1`;
 export const indicatorRuleId = (rule: IndicatorRule): string =>
-  rule === "qtrend" ? QTREND_RULE_ID : rule === "macdx" ? MACDX_RULE_ID : ULTRA_RULE_ID;
+  rule === "qtrend" ? QTREND_RULE_ID : rule === "macdx" ? MACDX_RULE_ID : rule === "sweepx" ? SWEEPX_RULE_ID : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
 // Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
@@ -86,9 +98,18 @@ export const MACDX_PAIRS: readonly string[] = INDICATOR_PAIRS.filter((p) => isGm
 export const isMacdxChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && MACDX_PAIRS.includes(pair) &&
   (MACDX_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
+// #291: the video's way is mailed on gold's 1-minute chart only (the owner:
+// 「1分足のゴールド専用のゴールドの売買のメールだけはこれで判断して」), whose bars
+// are the minutes recorded from Swissquote's prices (gold-minutes.ts); the
+// chart draws its marks on every pair and timeframe
+export const SWEEPX_PAIRS = ["XAU/USD"] as const;
+export const SWEEPX_INTERVALS = ["1min"] as const;
+export const isSweepxChart = (pair: unknown, interval: unknown): boolean =>
+  typeof pair === "string" && typeof interval === "string" && (SWEEPX_PAIRS as readonly string[]).includes(pair) &&
+  (SWEEPX_INTERVALS as readonly string[]).includes(interval);
 // Whether a chart can be followed under a rule
 export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unknown): boolean =>
-  rule === "macdx" ? isMacdxChart(pair, interval) : isIndicatorChart(pair, interval);
+  rule === "macdx" ? isMacdxChart(pair, interval) : rule === "sweepx" ? isSweepxChart(pair, interval) : isIndicatorChart(pair, interval);
 
 // ULTRA's numbers are dollars on gold, pips on a currency pair (the chart's
 // `isGoldPair(pair) ? 1 : pipSize(pair)`)
@@ -99,8 +120,9 @@ export const ultraUnit = (pair: string): number => (isGold(pair) ? 1 : pair.toUp
 // hourly and slower ones wait longer: those read from Twelve Data are read
 // a few a minute (TWELVE_READS_PER_RUN), up to 48 at midnight UTC (#175:
 // 18, six of them on three timeframes; #180: 21, seven).
+// #291: gold's 1-minute bars, two minutes (docs §8.112)
 export const freshFor = (interval: string): number =>
-  interval === "5min" ? 10 * 60_000 : interval === "15min" ? 20 * 60_000 : 30 * 60_000;
+  interval === "1min" ? 2 * 60_000 : interval === "5min" ? 10 * 60_000 : interval === "15min" ? 20 * 60_000 : 30 * 60_000;
 
 export interface IndicatorSignal {
   rule: IndicatorRule;
@@ -118,13 +140,30 @@ export interface IndicatorSignal {
   line: number | null;
   eps: number | null;
   // ULTRA: RSI(14) at the bar and the bar before, the entry (the close), the
-  // stop and three targets
+  // stop and three targets (#291: the video's way, two)
   rsi: number | null;
   rsiPrev: number | null;
   sl: number | null;
-  tps: [number, number, number] | null;
+  tps: number[] | null;
   // #275: the MACD rule's numbers at the bar (absent on the other rules')
   macd?: MacdxFacts | null;
+  // #291: the video's way's (absent on the other rules')
+  sweep?: SweepxFacts | null;
+}
+
+// #291: what made the video's way fire: the last wave's low (BUY) or high
+// (SELL) that was taken and the bar it was on, how far the leg went past it
+// and the bar, the two crosses before the bar's (the leg's start and the
+// wave's), each bar by its close (ISO), and the two lines at the bar
+export interface SweepxFacts {
+  level: number;
+  levelClosedAt: string;
+  extreme: number;
+  extremeClosedAt: string;
+  legFromClosedAt: string;
+  waveFromClosedAt: string;
+  fast: number;
+  slow: number;
 }
 
 // #275: what made the MACD rule fire, in price units: m the MACD line at the
@@ -274,6 +313,67 @@ export const macdxSignals = (
     // x is MACD on a down cross and minus MACD on an up cross (price units)
     macd: { dir: d.dir, m: d.dir === "DOWN" ? d.x : -d.x, x: d.x, avgRange: d.S / MACDX_N_TR, peak: d.P },
   }];
+};
+
+// #291: the owner's video's way (docs §8.112) on gold's 1-minute chart. Each
+// of the newest closed bars still fresh (two minutes: the minute just closed,
+// and one a run that was missed did not judge) is judged on the SWEEPX.window
+// closed bars ending at it and on nothing else — sweepCrossOnWindow, the
+// code the moving-average chart draws its marks with, on the same bars (the
+// minutes recorded, rounded as the chart's history is): a mark drawn on a
+// bar the chart holds a full window before is the one mailed. Not on a
+// history shorter than the window, nor on a chart the rule is not offered
+// on. `closed`: those bars, oldest first.
+export const sweepxSignals = (
+  pair: string,
+  interval: string,
+  closed: ReadonlyArray<Candle>,
+  nowMs: number,
+  freshMs: number = freshFor(interval),
+): IndicatorSignal[] => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !isSweepxChart(pair, interval) || closed.length < SWEEPX.window) return [];
+  const pip = sweepPip(pair);
+  const closeOf = (k: number) => new Date(barOpenMs(closed[k].datetime) + step).toISOString();
+  const out: IndicatorSignal[] = [];
+  // the bars that can still be fresh: a minute's, at most every few
+  const first = Math.max(SWEEPX.window - 1, closed.length - 1 - Math.ceil(freshMs / step));
+  for (let i = first; i < closed.length; i++) {
+    const open = barOpenMs(closed[i].datetime);
+    if (!Number.isFinite(open)) continue;
+    const age = nowMs - (open + step);
+    if (age < 0 || age > freshMs) continue;
+    const start = i - SWEEPX.window + 1;
+    const d = sweepCrossOnWindow(closed.slice(start, i + 1), pip);
+    if (d === null) continue;
+    out.push({
+      rule: "sweepx",
+      pair,
+      interval,
+      side: d.side,
+      strong: false,
+      barTime: new Date(open).toISOString(),
+      closedAt: new Date(open + step).toISOString(),
+      close: d.entry,
+      line: null,
+      eps: null,
+      rsi: null,
+      rsiPrev: null,
+      sl: d.sl,
+      tps: [...d.tps],
+      sweep: {
+        level: d.level,
+        levelClosedAt: closeOf(start + d.levelAt),
+        extreme: d.extreme,
+        extremeClosedAt: closeOf(start + d.extremeAt),
+        legFromClosedAt: closeOf(start + d.legFrom),
+        waveFromClosedAt: closeOf(start + d.waveFrom),
+        fast: d.fast,
+        slow: d.slow,
+      },
+    });
+  }
+  return out;
 };
 
 // ---- when each chart is read ---------------------------------------------------------
@@ -581,7 +681,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = s.rule === "macdx" ? undefined : GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" || s.rule === "sweepx" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -619,8 +719,14 @@ const macdxMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
   return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年10月8日、GMO の${five ? `5ペア（${MACDX_MEASURED.five.map(pairJa).join("・")}）` : "21ペア（参考として測ったもの。うち7ペアは2026年5月17日から）"}、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${loss(m.pips)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。同じ期間の ULTRA の${tfLabel("ja", s.interval)}は ${m.ultraWin.toFixed(1)}%・1回あたり約${loss(m.ultraPips)} pips の${m.ultraPips < 0 ? "負け" : "勝ち"}で、この決まりのほうが良いとは言えませんでした。` +
     (five ? "" : `${pairJa(s.pair)}そのものを主に測ったわけではありません（上の数字は21ペア全体のものです）。`);
 };
+// #291: the video's way has not been measured (docs §8.112)
+const sweepxMeasuredLine = (lang: Lang): string =>
+  lang === "en"
+    ? "This rule's win rate and its profit or loss a trade have not been measured."
+    : "この決まりの勝率と1回あたりの損益は、まだ測っていません。";
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   if (s.rule === "macdx") return macdxMeasuredLine(s, lang);
+  if (s.rule === "sweepx") return sweepxMeasuredLine(lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
@@ -656,7 +762,47 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     v > 0
       ? lang === "en" ? `  TP${k + 1} ${px(v)} (${dist(v)})` : `  利確${k + 1} ${px(v)}（${dist(v)}）`
       : lang === "en" ? `  TP${k + 1} — (it would be below zero, so there is none)` : `  利確${k + 1} —（0より下になるため、この目安はありません）`;
+  // #291: a bar of the video's way by its close, in the language's time
+  // (the day said only when it is not the signal's bar's day)
+  const whenClosed = (iso: string, offsetHours: number) => {
+    const c = clock(Date.parse(iso), offsetHours);
+    return c.slice(0, 10) === clock(closeMs, offsetHours).slice(0, 10) ? c.slice(11) : c;
+  };
+  // #291: how far beyond the last bars' extreme the stop goes, a pip as the
+  // rule counts it ($0.10 on gold)
+  const slStep = SWEEPX.slPips * sweepPip(s.pair);
+  const slBeyond = gold
+    ? lang === "en" ? `$${slStep.toFixed(2)}` : `${slStep}ドル`
+    : `${SWEEPX.slPips} pip`;
   if (lang === "en") {
+    if (s.rule === "sweepx") {
+      const f = s.sweep;
+      const buy = s.side === "BUY";
+      const side = buy ? "BUY" : "SELL";
+      return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (liquidity sweep + EMA cross)`, [
+        `A ${side} signal of the video's way (a liquidity sweep, then the EMA cross) fired on ${s.pair}, ${tf} chart.`,
+        [
+          `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
+          ...(f
+            ? [
+              buy
+                ? `Low taken: the last wave's low ${px(f.level)} (the bar closed ${whenClosed(f.levelClosedAt, 0)} UTC) was broken, down to ${px(f.extreme)} (the bar closed ${whenClosed(f.extremeClosedAt, 0)} UTC)`
+                : `High taken: the last wave's high ${px(f.level)} (the bar closed ${whenClosed(f.levelClosedAt, 0)} UTC) was broken, up to ${px(f.extreme)} (the bar closed ${whenClosed(f.extremeClosedAt, 0)} UTC)`,
+              `EMA cross: EMA 20 (${px(f.fast)}) crossed ${buy ? "above" : "below"} EMA 80 (${px(f.slow)})`,
+            ]
+            : []),
+        ].join("\n"),
+        [
+          `Stop and targets (the video's "15 to 20 pips"${gold ? ", a pip being $0.10 on gold" : ""}):`,
+          `  Entry ≈ ${px(s.close)}`,
+          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)}): ${slBeyond} beyond the ${buy ? "lowest low" : "highest high"} of the last ${SWEEPX.slBars} bars`,
+          ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
+        ].join("\n"),
+        `This is the way shown in a gold trader's Instagram video, made into a rule by this app (docs §8.112): the last wave's ${buy ? "low" : "high"} taken once (a liquidity sweep), then the entry on EMA 20 crossing EMA 80; the break of structure is not waited for. The video gives no numbers but "15 to 20 pips", so the window it is judged on (${SWEEPX.window} closed bars), where the stop goes and the like are this app's. ${measuredLine(s, "en")}`,
+        `The bars are 1-minute bars made from Swissquote's gold prices (the mid, recorded every few seconds; the minutes before the recording began are Twelve Data's), the same as the app's gold 1-minute chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
+        "To stop these emails, open Settings → Email alerts in the app and untick \"Liquidity sweep + EMA cross\".\nThis is reference information, not investment advice. Every trading decision is your own.",
+      ]);
+    }
     const side = s.side === "BUY" ? "BUY" : "SELL";
     const source = twelve
       ? `The bars are Twelve Data's (GMO Coin does not carry ${s.pair}), as the app's chart draws them.`
@@ -728,6 +874,34 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ].join("\n"),
       `ULTRA is built from F-INVEST's video (its code is not published), and its signals are that video's. Its stop and targets follow the chart of a second F-INVEST video (its premium version, on gold, whose table shows TP1 reached 80–82% of the time; its signals have filters this app does not have): the stop 13 and the targets 4, 10 and 16, ${gold ? "dollars on gold" : "pips on currency pairs"}. ${measuredLine(s, "en")}`,
       ...footer,
+    ]);
+  }
+  if (s.rule === "sweepx") {
+    const f = s.sweep;
+    const buy = s.side === "BUY";
+    const sideS = `${buy ? "買い" : "売り"}（${s.side}）`;
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideS}のサイン（流動性狩り＋EMAクロス）`, [
+      `${pairJa(s.pair)}の${tf}で、動画のやり方（流動性狩り → EMAクロス）の${sideS}のサインが出ました。`,
+      [
+        `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
+        ...(f
+          ? [
+            buy
+              ? `安値を狩った: ${whenClosed(f.levelClosedAt, 9)} に確定した足の安値 ${px(f.level)}（一つ前の波の谷）を、${whenClosed(f.extremeClosedAt, 9)} に確定した足で ${px(f.extreme)} まで下回りました（Low taken）`
+              : `高値を狩った: ${whenClosed(f.levelClosedAt, 9)} に確定した足の高値 ${px(f.level)}（一つ前の波の山）を、${whenClosed(f.extremeClosedAt, 9)} に確定した足で ${px(f.extreme)} まで上回りました（High taken）`,
+            `EMAクロス: EMA20（${px(f.fast)}）が EMA80（${px(f.slow)}）を${buy ? "下から上に" : "上から下に"}抜けました`,
+          ]
+          : []),
+      ].join("\n"),
+      [
+        `損切り・利確の目安（動画の「15〜20ピップス」${gold ? "。金の1 pip は0.1ドル" : ""}）:`,
+        `  エントリー ≈ ${px(s.close)}`,
+        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}。直近${SWEEPX.slBars}本の${buy ? "安値の最安値より" : "高値の最高値より"}${slBeyond}${buy ? "下" : "上"}）`,
+        ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
+      ].join("\n"),
+      `この合図は、Instagram の金のトレーダーの動画のやり方（一つ前の波の${buy ? "安値" : "高値"}を一度抜ける「流動性狩り」のあと、EMA20 と EMA80 のクロスで入る）を、このアプリで決まりにしたものです（docs §8.112）。構造の崩壊（BOS）は待ちません。動画には「15〜20ピップス」のほかに数字がないため、判断する範囲（確定足${SWEEPX.window}本）や損切りの置き方などはこのアプリで決めました。${measuredLine(s, "ja")}`,
+      `足は Swissquote の金の値段（約3秒ごとに記録した中値）から作った1分足（記録を始める前の分は Twelve Data の1分足）で、アプリのチャートの金の1分足と同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+      "この通知を止めるには、アプリの「設定」→「メール通知」の「流動性狩り＋EMAクロス」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
   // Q-Trend's STRONG in the same brackets: 買い（BUY・STRONG）

@@ -26,6 +26,9 @@
 // #182: a GMO bar is thrown away only when the market was shut for all of it
 // (quotes.ts usableBars, market-hours.ts barInsideClosure), so the 4-hour bar
 // stamped Sunday 20:00 UTC, the week's first two hours, is drawn (docs §8.93).
+// #291: gold's 1-minute bars are the minutes recorded from Swissquote's
+// prices all day by the signal-alerts function (docs §8.112), not Twelve
+// Data's.
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -77,6 +80,10 @@ import {
   twelveDataUrl,
   extendWithTicks,
   parseTickMinutes,
+  readTickPages,
+  TICK_PAGE_ROWS,
+  isGoldMinute,
+  tickMinuteCandles,
   CHART_GMO,
   isChartGmoInterval,
   chartDaySpan,
@@ -98,7 +105,14 @@ import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/mark
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
 import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
 
-const FUNCTION_VERSION = "live-chart-v17-2026-10-03T16:00:00Z";
+// v18 (#291): gold's 1-minute bars are the minutes recorded from Swissquote's
+// prices all day (public.gold_tick_bars; logic.ts, "gold's 1-minute bars,
+// recorded all day"), the bars the gold 1-minute email judges, and the read
+// says so (`recorded`); the ticker records gold's price in the hours the
+// minute-by-minute recording does, no others. Every other chart's bars are
+// as they were, but for the minutes recorded for a pair read as gold is,
+// now read whole past the REST API's thousand rows (withTicks).
+const FUNCTION_VERSION = "live-chart-v18-2026-10-11T12:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -310,21 +324,54 @@ Deno.serve(async (req: Request) => {
     // prices recorded in live_tick_bars; gold's in gold_tick_bars).
     // #176: GOLD_BARS are read and kept, and the newest `depth` of them are
     // used: TWELVE_CHART_BARS, all of them for the deep history
-    type TwelveBars = { bars: Candle[]; fetchedAt: string; limited?: boolean; ticksFrom?: string | null };
+    type TwelveBars = { bars: Candle[]; fetchedAt: string; limited?: boolean; ticksFrom?: string | null; recorded?: boolean };
+    // #291: gold's 1-minute bars, the minutes recorded from Swissquote's
+    // prices all day (logic.ts, "gold's 1-minute bars, recorded all day"):
+    // the newest `depth` closed ones and the one forming, as of now. No
+    // Twelve Data read is taken for them
+    const goldMinuteBars = async (depth: number): Promise<TwelveBars | null> => {
+      try {
+        const res = await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: depth + 1 }) });
+        if (!res.ok) {
+          console.error("gold minutes read failed:", res.status, await res.text().catch(() => ""));
+          return null;
+        }
+        const bars = tickMinuteCandles(parseTickMinutes(await res.json().catch(() => null)));
+        return bars.length > 0 ? { bars, fetchedAt: new Date(nowMs).toISOString(), recorded: true } : null;
+      } catch (err) {
+        console.error("gold minutes read failed:", err);
+        return null;
+      }
+    };
     // #147: bars read at `fb.fetchedAt` that could not be read again, gone on
     // with the prices recorded since (#181: on the timeframe read, before a
     // longer one is made of them)
     const withTicks = async (pair: string, interval: string, fb: TwelveBars): Promise<TwelveBars> => {
       try {
         const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
-        const cols = "select=minute,open,high,low,close,last_at&order=minute.asc&limit=5000";
-        const res = await rest(
-          isGold(pair)
-            ? `gold_tick_bars?minute=gte.${encodeURIComponent(from)}&${cols}`
-            : `live_tick_bars?pair=eq.${encodeURIComponent(pair)}&minute=gte.${encodeURIComponent(from)}&${cols}`,
-        );
-        if (!res.ok) return fb;
-        const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(await res.json().catch(() => null)));
+        // #291: gold's, a row every minute all day now, through the function
+        // that answers them all as one; any other pair's a page at a time
+        // until an empty one (the REST API answers a limited number of rows,
+        // a thousand by default: some 17 hours of them; logic.ts readTickPages)
+        let rows: unknown = null;
+        if (isGold(pair)) {
+          const res = await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: 20_000, p_from: from }) });
+          if (!res.ok) {
+            await res.body?.cancel();
+            return fb;
+          }
+          rows = await res.json().catch(() => null);
+        } else {
+          const base = `live_tick_bars?pair=eq.${encodeURIComponent(pair)}&select=minute,open,high,low,close,last_at&order=minute.asc&limit=${TICK_PAGE_ROWS}`;
+          rows = await readTickPages(async (after) => {
+            const res = await rest(`${base}&minute=${after === null ? `gte.${encodeURIComponent(from)}` : `gt.${encodeURIComponent(after)}`}`);
+            const got = res.ok ? await res.json().catch(() => null) : null;
+            if (!res.ok) await res.body?.cancel();
+            return Array.isArray(got) ? got : null;
+          });
+          if (rows === null) return fb;
+        }
+        const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(rows));
         return { ...fb, ...ext };
       } catch (err) {
         console.error("ticks read failed:", pair, err);
@@ -354,6 +401,7 @@ Deno.serve(async (req: Request) => {
       room = 0,
       depth = TWELVE_CHART_BARS,
     ): Promise<TwelveBars | null> => {
+      if (isGoldMinute(pair, interval)) return goldMinuteBars(depth);
       if (isChartGmoInterval(interval)) return twelveAddedBars(pair, interval, room, depth);
       const fresh = (t: number) => goldFresh(t, nowMs, interval, isPossiblyClosed(nowMs));
       // (#181: the 1-minute bars, more of them: twelveReadBars)
@@ -499,8 +547,11 @@ Deno.serve(async (req: Request) => {
         const [raw, gold] = await Promise.all([fetcher(TICKER_URL), goldQuote()]);
         const ticks = { ...parseTicker(raw), ...(gold ? { [GOLD]: gold } : {}) };
         // #147: gold's price kept, a minute at a time, for its bars between
-        // Twelve Data's reads (only a price from a market trading now)
-        if (gold && gold.open && gold.time) {
+        // Twelve Data's reads (only a price from a market trading now). #291:
+        // and, as the minute-by-minute recording takes it (signal-alerts
+        // goldTicks), none stamped while gold may be shut: whether somebody
+        // watched a winter Friday's 21:00-22:00 UTC must not change the bars
+        if (gold && gold.open && gold.time && !isPossiblyClosedFor(GOLD, Date.parse(gold.time))) {
           try {
             const r = await rest("rpc/record_gold_tick", { method: "POST", body: JSON.stringify({ p_at: gold.time, p_mid: gold.mid }) });
             if (!r.ok) console.error("gold tick record failed:", r.status, await r.text().catch(() => ""));
@@ -548,7 +599,12 @@ Deno.serve(async (req: Request) => {
       if (isTwelvePair(pair)) {
         const fb = await twelveBars(pair, interval);
         if (!fb) return json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
-        const out = { ok: true, version: FUNCTION_VERSION, reopens, read: twelveRead(pair, fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true, fb.ticksFrom ?? null) };
+        const out = {
+          ok: true,
+          version: FUNCTION_VERSION,
+          reopens,
+          read: twelveRead(pair, fb.bars, interval, nowMs, fb.fetchedAt, fb.limited === true, fb.ticksFrom ?? null, fb.recorded === true),
+        };
         if (barsCache.size > CACHE_KEYS) barsCache.clear();
         barsCache.set(key, { at: nowMs, body: out });
         return json(out);

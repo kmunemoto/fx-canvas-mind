@@ -45,6 +45,7 @@ import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/l
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ultra";
+import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -221,10 +222,15 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
+// #291: and the owner's video's way, on the moving averages' own chart only
+const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx"]);
+// #291: how many bars to the right of its bar a mark's boxes reach (the video's
+// TradingView position tool was drawn some twenty bars wide)
+const SWEEP_BOX_BARS = 20;
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -608,8 +614,11 @@ const PriceChart = ({
     let p = saved;
     if (maOnly) {
       const overlays = { ...saved.overlays };
-      for (const k of Object.keys(overlays) as Array<keyof ChartOverlays>) if (!MA_KEYS.has(k)) overlays[k] = false;
+      for (const k of Object.keys(overlays) as Array<keyof ChartOverlays>) if (!MA_CHART_KEYS.has(k)) overlays[k] = false;
       p = { ...saved, rsi: false, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
+    } else if (saved.overlays.sweepx) {
+      // #291: the video's way is the moving averages' chart's own
+      p = { ...saved, overlays: { ...saved.overlays, sweepx: false } };
     }
     if (!indicatorsLocked) return p;
     const overlays = { ...p.overlays };
@@ -809,6 +818,26 @@ const PriceChart = ({
       .map((c) => ({ ...c, i: c.i - off, price: fast[c.i] as number }))
       .filter((c) => c.i >= 0);
   }, [ov.maCross, maPast, candles, tail, pairKey]);
+  // #291: the owner's video's way (docs §8.112; src/lib/sweepCross.ts, the
+  // code the gold 1-minute email decides with), over the same history as the
+  // lines and the closed candles: each candle judged on the SWEEPX.window
+  // closed bars ending at it (fewer where the chart holds fewer, and then
+  // marked so: `full` false). Indices on the chart's candles, a level before
+  // the first one off to the left
+  const sweepMarks = useMemo(() => {
+    if (!ov.sweepx || candles.length === 0 || maPast === null) return null;
+    const all = [...maPast, ...candles];
+    const closed = all.slice(0, all.length - tail);
+    const off = maPast.length;
+    return sweepCrossMarks(closed, sweepPip(pair), off).map((m) => ({
+      ...m,
+      at: m.at - off,
+      levelAt: m.levelAt - off,
+      extremeAt: m.extremeAt - off,
+      legFrom: m.legFrom - off,
+      waveFrom: m.waveFrom - off,
+    }));
+  }, [ov.sweepx, maPast, candles, tail, pair]);
   // the trend lines, on closed bars; indices on the chart's candles (a
   // swing before the first is off to the left)
   const autoLines = useMemo(() => {
@@ -1026,11 +1055,16 @@ const PriceChart = ({
         }
       }
     }
+    // #291: the video's way's boxes are not in it either, as the levels
+    // above: its 20 pips are half the price of a yen pair priced under a yen
+    // (HUF/JPY), and every candle would be a flat line. A box reaching past
+    // the plot is cut at its edge; its numbers are in its title.
     // #104: signal labels and their TP/SL boxes stand above the highs and
     // hang below the lows, so a chart that has any gets more room at both
     // ends — otherwise a signal at the window's extreme is pushed onto the
-    // candles it points at.
-    const pad = (max - min) * (marks.length > 0 ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // candles it points at (#291: the video's way's labels too, in view).
+    const sweepInView = sweepMarks !== null && sweepMarks.some((m) => m.at >= from && m.at < to);
+    const pad = (max - min) * (marks.length > 0 || sweepInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1053,7 +1087,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1413,6 +1447,20 @@ const PriceChart = ({
     adx: t.chart.adx.note,
     // #151
     ultra: t.chart.ultraNote,
+    // #291 (and why no mark may be drawn: the bars before the chart still
+    // read, or not read, or too few bars for a cross to count)
+    sweepx: t.chart.sweepxNote(
+      isGoldPair(pair),
+      sweepMarks ? sweepMarks.some((m) => !m.full && m.at >= 0) : false,
+      !ov.sweepx || candles.length === 0
+        ? "ready"
+        : maPast === null
+          ? (zoneShiftHistory?.status === "error" ? "error" : "loading")
+          : maPast.length + candles.length - tail < SWEEPX_MIN_WINDOW
+            ? "few"
+            : "ready",
+      SWEEPX_MIN_WINDOW,
+    ),
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; settingsOpen?: boolean; settingsLabel?: string; locked?: true; swatch?: string }> = [
@@ -1423,6 +1471,8 @@ const PriceChart = ({
     { key: "qtBlsh", group: "signals" as const, name: t.chart.overlayNames.qtBlsh, on: ov.qtBlsh, toggle: flip("qtBlsh") },
     // #151: the video's ULTRA
     { key: "ultra", group: "signals" as const, name: t.chart.overlayNames.ultra(isGoldPair(pair)), on: ov.ultra, toggle: flip("ultra") },
+    // #291: the owner's video's way (the moving averages' chart only, below)
+    { key: "sweepx", group: "signals" as const, name: t.chart.overlayNames.sweepx, on: ov.sweepx, toggle: flip("sweepx") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
     ...(hasSar && sarStyle !== "cloud" ? [{ key: "sarDots", group: "trend" as const, name: t.chart.overlayNames.sarDots, on: ov.sarDots, toggle: flip("sarDots") }] : []),
     // #143: each with its line's colour; #200: three, each with its gear
@@ -1482,8 +1532,9 @@ const PriceChart = ({
     // #140: listed, so what a plan adds is in sight, but off and locked
     ? { ...item, on: false, locked: true as const, settings: undefined, toggle: () => onLockedIndicator?.() }
     : item))
-    // #201: the moving averages' own chart lists the three lines only
-    .filter((item) => !maOnly || MA_KEYS.has(item.key));
+    // #201: the moving averages' own chart lists the three lines only (#291:
+    // and the video's way, which the other chart does not list)
+    .filter((item) => (maOnly ? MA_CHART_KEYS.has(item.key) : item.key !== "sweepx"));
   const onCount = overlayItems.filter((i) => i.on).length;
   // #144: the settings list, grouped — in the card (folded under its
   // button) and in full screen's settings sheet; `ids` names its switches
@@ -4018,6 +4069,73 @@ const PriceChart = ({
                   <circle cx={x(c.i)} cy={cy} r={3 * fs} fill={color} stroke="hsl(var(--background))" strokeWidth={1} />
                   <text x={x(c.i)} y={gc ? cy - 6 * fs : cy + fsz + 5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill={color}>
                     {c.side}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* #291: the owner's video's way — BUY under the cross bar (SELL over
+            it), the boxes from the entry to the second target (blue, the first
+            dashed in it) and to the stop (gray), SWEEP_BOX_BARS wide, and the
+            last wave's low (high) that was taken, dashed from where it was made
+            to where the leg went past it. A bar judged on fewer bars than the
+            email's window is drawn fainter. Each is drawn while any of it is in
+            view, from the level's bar to the boxes' end (the cross bar itself
+            may be past the right edge, its level and "taken" in view) */}
+        {sweepMarks && (
+          <g data-testid="chart-sweepx" clipPath={`url(#${clipId})`}>
+            {sweepMarks.filter((m) => m.at >= 0 && m.at + SWEEP_BOX_BARS >= from && m.levelAt < to).map((m) => {
+              const buy = m.side === "BUY";
+              const c = candles[m.at];
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const x0 = x(m.at);
+              const x1 = x(Math.min(m.at + SWEEP_BOX_BARS, candles.length - 1)) + slot / 2;
+              const w = Math.max(1, x1 - x0);
+              const yEntry = y(m.entry);
+              const yTp2 = y(m.tps[1]);
+              const yTp1 = y(m.tps[0]);
+              const ySl = y(m.sl);
+              const color = buy ? "#2962FF" : "#F23645";
+              const fmt = (v: number) => v.toFixed(decimals);
+              const labelW = 26 * fs;
+              const labelH = fsz + 5 * fs;
+              const labelY = buy ? y(c.low) + 5 * fs : y(c.high) - 5 * fs - labelH;
+              return (
+                <g key={`sx-${m.at}`} data-testid={`chart-sweepx-${m.side}`} opacity={m.full ? 1 : 0.55}>
+                  <title>{t.chart.sweepxTitle(m.side, fmt(m.entry), fmt(m.sl), [fmt(m.tps[0]), fmt(m.tps[1])], fmt(m.level), m.full)}</title>
+                  <rect
+                    x={x0} y={Math.min(yEntry, yTp2)} width={w} height={Math.max(1, Math.abs(yTp2 - yEntry))}
+                    fill="rgba(41,98,255,0.14)" stroke="rgba(41,98,255,0.55)" strokeWidth={0.8}
+                    data-testid="chart-sweepx-tp-box"
+                  />
+                  <line x1={x0} x2={x0 + w} y1={yTp1} y2={yTp1} stroke="rgba(41,98,255,0.7)" strokeWidth={0.8} strokeDasharray="3 2" />
+                  <rect
+                    x={x0} y={Math.min(yEntry, ySl)} width={w} height={Math.max(1, Math.abs(ySl - yEntry))}
+                    fill="rgba(120,144,156,0.2)" stroke="rgba(120,144,156,0.65)" strokeWidth={0.8}
+                    data-testid="chart-sweepx-sl-box"
+                  />
+                  {m.levelAt < m.extremeAt && (
+                    <line
+                      x1={x(m.levelAt)} x2={x(m.extremeAt)} y1={y(m.level)} y2={y(m.level)}
+                      stroke="#FFB300" strokeWidth={1.1} strokeDasharray="4 3"
+                      data-testid="chart-sweepx-level"
+                    />
+                  )}
+                  {m.extremeAt >= 0 && (
+                    <text
+                      x={x(m.extremeAt)} y={buy ? y(m.extreme) + fsz + 3 * fs : y(m.extreme) - 4 * fs}
+                      fontSize={fsz} fontWeight="700" textAnchor="middle" fill="#FFB300"
+                      stroke="hsl(var(--background))" strokeWidth={2} paintOrder="stroke"
+                      data-testid="chart-sweepx-taken"
+                    >
+                      {t.chart.sweepxTaken(m.side)}
+                    </text>
+                  )}
+                  <rect x={x0 - labelW / 2} y={labelY} width={labelW} height={labelH} rx={2 * fs} fill={color} />
+                  <text x={x0} y={labelY + labelH - 3.5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill="#FFFFFF">
+                    {m.side}
                   </text>
                 </g>
               );

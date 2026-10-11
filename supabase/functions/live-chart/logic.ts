@@ -414,7 +414,9 @@ export const twelveRead = (
   fetchedAt: string,
   limited = false,
   ticksFrom: string | null = null,
-) => fallbackRead(pair, interval, bars, nowMs, { source: "twelvedata", feed: isGold(pair) ? "gold" : "twelve", fetchedAt, limited, ticksFrom });
+  // #291: gold's 1-minute bars, the minutes recorded (isGoldMinute)
+  recorded = false,
+) => fallbackRead(pair, interval, bars, nowMs, { source: "twelvedata", feed: isGold(pair) ? "gold" : "twelve", fetchedAt, limited, ticksFrom, recorded });
 export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false, ticksFrom: string | null = null) =>
   twelveRead(GOLD, bars, interval, nowMs, fetchedAt, limited, ticksFrom);
 
@@ -513,6 +515,38 @@ export const parseTickMinutes = (rows: unknown): TickMinute[] => {
   return out.sort((a, b) => Date.parse(a.minute) - Date.parse(b.minute));
 };
 
+// #291 (docs §8.112, the third review): a pair's recorded minutes read
+// through the REST API, which answers a limited number of rows at a time
+// (a thousand by Supabase's default; asked for TICK_PAGE_ROWS at most) — a
+// page at a time, each after the last minute of the one before (not by
+// offset: the oldest rows are deleted meanwhile), until a page comes back
+// empty: a short page is not taken for the end, so a lower limit on the
+// API's side reads whole too. Two days are kept, 2,880 rows: TICK_MAX_PAGES
+// is a bound. `page(after)`: the rows after the minute `after` (from the
+// start when null), oldest first; null when the read failed. The answer is
+// null when a page failed, when the bound was reached, and when a page's
+// last row has no minute: a part of them would end the bars early
+export const TICK_PAGE_ROWS = 1_000;
+export const TICK_MAX_PAGES = 10;
+export const readTickPages = async (
+  page: (after: string | null) => Promise<unknown[] | null>,
+  maxPages = TICK_MAX_PAGES,
+): Promise<unknown[] | null> => {
+  const rows: unknown[] = [];
+  let after: string | null = null;
+  for (let n = 0; n < maxPages; n++) {
+    const got = await page(after);
+    if (got === null) return null;
+    if (got.length === 0) return rows;
+    rows.push(...got);
+    const last = got[got.length - 1];
+    const minute = typeof last === "object" && last !== null ? (last as Record<string, unknown>).minute : null;
+    if (typeof minute !== "string") return null;
+    after = minute;
+  }
+  return null;
+};
+
 const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 // The bars read at `fetchedAt`, and after them the bars made from the
@@ -567,6 +601,27 @@ export const extendWithTicks = (
     ticksFrom: new Date(added[0][0]).toISOString(),
   };
 };
+
+// ---- #291: gold's 1-minute bars, recorded all day ------------------------------------------
+//
+// The request (2026-10-11): the owner's video's way on the moving-average
+// chart, and gold's 1-minute email judged by it (docs §8.112). Asked where
+// gold's 1-minute bars should come from — Twelve Data's free key allows 800
+// reads a day, and reading them after every 1-minute close takes some 1,380
+// — the owner chose 「Swissquoteで、チャートもそろえる」. So the signal-alerts
+// function reads Swissquote's gold price every few seconds all day (its
+// "gold-ticks" run, every minute) into public.gold_tick_bars, beside the
+// ticker's while a live chart is open (#147), and gold's 1-minute chart is
+// those minutes: the bars the email judges. The minutes before the recording
+// began were filled once from Twelve Data's 1-minute bars (the table's
+// source 'twelvedata'). A minute in which no price was recorded is no bar.
+// The 2-, 3- and 4-minute charts are still made of Twelve Data's.
+export const isGoldMinute = (pair: string, interval: string): boolean => isGold(pair) && interval === "1min";
+
+// The recorded minutes (parseTickMinutes, oldest first) as the chart's
+// candles, stamped as Twelve Data's are ("YYYY-MM-DD HH:mm:ss", UTC)
+export const tickMinuteCandles = (minutes: ReadonlyArray<TickMinute>): Candle[] =>
+  minutes.map((m) => ({ datetime: utcStamp(Date.parse(m.minute)), open: m.open, high: m.high, low: m.low, close: m.close }));
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 const round = (v: number | null | undefined, d: number): number | null =>
@@ -628,6 +683,9 @@ export interface ReadSource {
   // #147: the first bar built from the prices recorded since (gold's
   // extendWithTicks), ISO
   ticksFrom?: string | null;
+  // #291: the bars are the minutes recorded in public.gold_tick_bars (gold's
+  // 1-minute chart: isGoldMinute), not a read of Twelve Data's
+  recorded?: boolean;
 }
 const GMO_SOURCE: ReadSource = { source: "gmo", feed: null, fetchedAt: null };
 
@@ -710,6 +768,7 @@ export const readBars = (
     fetched_at: from.fetchedAt,
     limited: from.limited === true,
     ticks_from: from.ticksFrom ?? null,
+    recorded: from.recorded === true,
   };
 };
 

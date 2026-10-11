@@ -58,6 +58,9 @@ const firstAt = (Date.parse(read.candles[0].datetime.replace(" ", "T") + "Z") - 
 const before = (n: number): NumericCandle[] => [...walk(n, 31).map((c, k) => ({ ...c, datetime: stamp(firstAt - n + k) })), ...read.candles.slice(0, -1)];
 // the switches listed (not the list, its fold or legend)
 const LISTED = /^chart-overlay-(?!list$|fold$|legend$)[a-zA-Z0-9]+$/;
+// what the moving averages' chart lists: the three lines (#291: and the
+// owner's video's way, among the signals, listed first)
+const MA_LISTED = ["chart-overlay-sweepx", "chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"];
 
 // every indicator, strip and drawing saved on
 const ALL_ON = {
@@ -117,7 +120,7 @@ describe("#201 the chart with the moving averages alone", () => {
     const listed = within(screen.getByTestId("chart-overlay-list"))
       .queryAllByTestId(LISTED)
       .map((el) => el.getAttribute("data-testid"));
-    expect(listed).toEqual(["chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"]);
+    expect(listed).toEqual(MA_LISTED);
     // the saved choices are as they were, for the full chart
     const kept = chartPrefsFrom(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!));
     expect(kept.stoch && kept.macd && kept.overlays.qTrend && kept.overlays.ultra && kept.overlays.zoneShift).toBe(true);
@@ -151,7 +154,7 @@ describe("#201 the chart with the moving averages alone", () => {
     const listed = within(sheet)
       .queryAllByTestId(LISTED)
       .map((el) => el.getAttribute("data-testid"));
-    expect(listed).toEqual(["chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"]);
+    expect(listed).toEqual(MA_LISTED);
     expect(within(sheet).getByTestId("chart-ma-form")).toBeTruthy();
     expect(within(sheet).queryByTestId("chart-stoch-form")).toBeNull();
   });
@@ -173,7 +176,7 @@ describe("#201 the chart with the moving averages alone", () => {
     expect(screen.getByTestId("chart-sheet-locked-note").textContent).toContain("売買サインと RSI・パラボリックSAR は無料で表示できます");
     lockedFull.unmount();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked />);
-    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toBe("🔒 の移動平均線は Light プラン（月額2,980円）で使えます。");
+    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toBe("🔒 の移動平均線と流動性狩り＋EMAクロスの印は Light プラン（月額2,980円）で使えます。");
   });
 
   it("with the three lines off, says nothing is being read for them", () => {
@@ -238,10 +241,12 @@ describe("#201 the chart with the moving averages alone", () => {
     const onLocked = vi.fn();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked onLockedIndicator={onLocked} />);
     expect(screen.queryByTestId("chart-ema")).toBeNull();
+    expect(screen.queryByTestId("chart-sweepx")).toBeNull();
+    expect(screen.getByTestId("chart-lock-sweepx")).toBeTruthy();
     const listed = within(screen.getByTestId("chart-overlay-list"))
       .queryAllByTestId(LISTED)
       .map((el) => el.getAttribute("data-testid"));
-    expect(listed).toEqual(["chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"]);
+    expect(listed).toEqual(MA_LISTED);
     for (const k of ["ema50", "ema200", "ma3"]) expect(screen.queryByTestId(`chart-settings-${k}`)).toBeNull();
     fireEvent.click(screen.getByTestId("chart-lock-ma3"));
     expect(onLocked).toHaveBeenCalledTimes(1);
@@ -284,7 +289,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     const listed = within(screen.getByTestId("chart-overlay-list"))
       .queryAllByTestId(LISTED)
       .map((el) => el.getAttribute("data-testid"));
-    expect(listed).toEqual(["chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"]);
+    expect(listed).toEqual(MA_LISTED);
     expect(screen.queryAllByTestId(/^chart-(signal|position|marker|exit)-/)).toEqual([]);
     expect(screen.getByTestId("chart-ema50-line")).toBeTruthy();
     expect(screen.getByTestId("live-pairs")).toBeTruthy();
@@ -379,11 +384,16 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     await waitFor(() => expect(within(ma).queryByTestId("chart-ma3-line")).toBeNull());
   });
 
-  it("reads the bars before its own for its lines alone: not for the others saved on, nor Dow theory", async () => {
-    const off = { ema50: false, ema200: false, ma3: false };
-    for (const linesOn of [true, false]) {
+  it("reads the bars before its own for its lines alone (#291: or the video's way's marks): not for the others saved on, nor Dow theory", async () => {
+    const off = { ema50: false, ema200: false, ma3: false, sweepx: false };
+    const cases: Array<[string, Record<string, boolean>, boolean]> = [
+      ["all on", {}, true],
+      ["the lines and the marks off", off, false],
+      ["the marks alone on", { ...off, sweepx: true }, true],
+    ];
+    for (const [, over, linesOn] of cases) {
       localStorage.clear();
-      localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ ...ALL_ON, overlays: { ...ALL_ON.overlays, ...(linesOn ? {} : off) } }));
+      localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ ...ALL_ON, overlays: { ...ALL_ON.overlays, ...over } }));
       resetChartPrefsCache();
       const loadBars = vi.fn(async (pair: string, interval: string) => readFor(pair, interval));
       const loadHistory = vi.fn(async (): Promise<NumericCandle[]> => []);
@@ -406,7 +416,8 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       localStorage.clear();
       localStorage.setItem(
         CHART_PREFS_KEY,
-        JSON.stringify({ overlays: { zlTema: true }, maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period, type: "SMA" }] }),
+        // (#291: the video's way's marks off; they read deep of their own, below)
+        JSON.stringify({ overlays: { zlTema: true, sweepx: false }, maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period, type: "SMA" }] }),
       );
       resetChartPrefsCache();
       // enough bars before the chart's for the defaults' EMA 200
@@ -429,7 +440,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       localStorage.clear();
       localStorage.setItem(
         CHART_PREFS_KEY,
-        JSON.stringify({ overlays: { maCross: true, ema50: false }, maLines: [{ period: MA_DEEP_FROM + 100, type: "EMA" }, MA_DEFAULTS[1], MA_DEFAULTS[2]] }),
+        JSON.stringify({ overlays: { maCross: true, ema50: false, sweepx: false }, maLines: [{ period: MA_DEEP_FROM + 100, type: "EMA" }, MA_DEFAULTS[1], MA_DEFAULTS[2]] }),
       );
       resetChartPrefsCache();
       const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
@@ -439,6 +450,28 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       else {
         await new Promise((r) => setTimeout(r, 50));
         expect(loadDeepHistory).not.toHaveBeenCalled();
+      }
+      unmount();
+    }
+  });
+
+  it("#291: reads the deep history for the video's way's marks while fewer than 599 bars are before the chart's first (the email judges on 600), whatever the lines", async () => {
+    for (const [sweepx, n, deep] of [
+      [true, 580, true],
+      [true, 700, false],
+      [false, 580, false],
+    ] as const) {
+      localStorage.clear();
+      localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { sweepx } }));
+      resetChartPrefsCache();
+      const common = before(n);
+      const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
+      const { unmount } = render(chart("ma", { defaultInterval: "15min", loadHistory: async () => common, loadDeepHistory }));
+      await waitFor(() => expect(screen.getByTestId("chart-ema200-line")).toBeTruthy());
+      if (deep) await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledWith("USD/JPY", "15min"));
+      else {
+        await new Promise((r) => setTimeout(r, 50));
+        expect(loadDeepHistory, `${sweepx} ${n}`).not.toHaveBeenCalled();
       }
       unmount();
     }
@@ -571,6 +604,50 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     expect(onLocked).toHaveBeenCalledTimes(1);
     await new Promise((r) => setTimeout(r, 50));
     expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("#291: on the other feed's bars while GMO is down, the video's way's note says the bars before the chart were not read, not that they are loading", async () => {
+    localStorage.clear();
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { sweepx: true } }));
+    resetChartPrefsCache();
+    const loadHistory = vi.fn(async () => before(580));
+    const down = render(
+      chart("ma", {
+        defaultInterval: "15min",
+        loadBars: async (p: string, i: string) => ({ ...readFor(p, i), source: "twelvedata", feed: "maintenance", fetchedAt: "2026-09-26T01:00:00.000Z" }),
+        loadHistory,
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId("live-fallback")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-info-sweepx"));
+    const note = screen.getByTestId("chart-info-text-sweepx").textContent!;
+    expect(note).toContain("チャートより前の足を読めなかったため、いまは印を出していません。");
+    expect(note).not.toContain("読み込み中");
+    expect(loadHistory).not.toHaveBeenCalled();
+    down.unmount();
+    // on GMO's own bars the history is read, and the note says nothing of it
+    render(chart("ma", { defaultInterval: "15min", loadHistory }));
+    await waitFor(() => expect(loadHistory).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("chart-info-sweepx")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-info-sweepx"));
+    await waitFor(() => expect(screen.getByTestId("chart-info-text-sweepx").textContent).not.toContain("読めなかった"));
+    expect(screen.getByTestId("chart-info-text-sweepx").textContent).not.toContain("読み込み中");
+  });
+
+  it("#291: says when its bars are the minutes recorded from Swissquote's prices (gold's 1-minute), and not otherwise", async () => {
+    const shown = render(chart("ma", { loadBars: async (p: string, i: string) => ({ ...readFor(p, i), recorded: true }) }));
+    await waitFor(() => expect(screen.getByTestId("live-recorded")).toBeTruthy());
+    expect(screen.getByTestId("live-recorded").textContent).toContain("Swissquote の金の価格をサーバーが約3秒ごとに記録して作った足");
+    shown.unmount();
+    const full = render(chart("full", { loadBars: async (p: string, i: string) => ({ ...readFor(p, i), recorded: true }) }));
+    await waitFor(() => expect(screen.getByTestId("live-recorded")).toBeTruthy());
+    full.unmount();
+    render(chart("ma"));
+    await waitFor(() => expect(screen.getByTestId("chart-candles")).toBeTruthy());
+    expect(screen.queryByTestId("live-recorded")).toBeNull();
+    // (a read from an older function says nothing of it)
+    expect(normalizeLiveRead({ ...JSON.parse(JSON.stringify(liveRead("USD/JPY", "15min", quotes(260), NOW))) })!.recorded).toBe(false);
+    expect(normalizeLiveRead({ ...JSON.parse(JSON.stringify(liveRead("USD/JPY", "15min", quotes(260), NOW))), recorded: true })!.recorded).toBe(true);
   });
 
   it("says the same in English", async () => {

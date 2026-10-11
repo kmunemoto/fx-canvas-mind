@@ -42,6 +42,8 @@ const jst = (iso: string) => {
 // (a row to follow a timeframe on all of them at once).
 // #275: and the MACD peak-and-valley rule's, on its own charts (the server
 // sends them: the 5-minute chart of GMO's currency pairs).
+// #291: and the owner's video's way (liquidity sweep + EMA cross), on its own
+// chart (gold's 1-minute).
 const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const { t, locale } = useLocale();
   const a = t.alerts;
@@ -193,12 +195,13 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           {isIndicatorAlertRule(rule) ? (
             settings.indicator ? (
               (() => {
-                // #275: the MACD rule has its own charts; the other two share the live chart's.
-                // A server that does not send them (older than v23, or not yet deployed) has
-                // nothing to tick: say so rather than draw an empty table
-                const ind = rule === "macdx" ? settings.indicator.macdx : settings.indicator;
+                // #275: the MACD rule has its own charts; the other two share the live chart's
+                // (#291: and the video's way has its own, gold's 1-minute).
+                // A server that does not send them (older than v23, v24 for the video's way,
+                // or not yet deployed) has nothing to tick: say so rather than draw an empty table
+                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : settings.indicator;
                 if (!ind || ind.pairs.length === 0) {
-                  return <p className="text-xs text-warning" data-testid="signal-alerts-macdx-unavailable">{a.macdxUnavailable}</p>;
+                  return <p className="text-xs text-warning" data-testid={`signal-alerts-${rule}-unavailable`}>{a.macdxUnavailable}</p>;
                 }
                 const offered = (iv: string) => ind.pairs.filter((p) => indicatorChartOffered(settings, p, iv, rule));
                 return (
@@ -212,6 +215,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                       </tr>
                     </thead>
                     <tbody>
+                      {/* (#291: not for a rule offered on one chart) */}
+                      {ind.pairs.length > 1 && (
                       <tr className="border-t border-border/50" data-testid="signal-alerts-all-row">
                         <td className="py-1 text-foreground font-semibold">{a.allPairs}</td>
                         {ind.intervals.map((iv) => {
@@ -237,6 +242,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                           );
                         })}
                       </tr>
+                      )}
                       {ind.pairs.map((pair) => (
                         <tr key={pair} className="border-t border-border/50">
                           <td className="py-1 font-mono text-foreground">{pair}</td>
@@ -312,7 +318,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(rule === "macdx" ? a.macdxNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button
