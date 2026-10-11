@@ -34,6 +34,13 @@
 // 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
 // 5-minute chart of GMO's pairs). Not recorded or settled (signal_events is
 // the two rules' record).
+//
+// #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
+// Swissquote's gold price every few seconds all minute, recorded into
+// public.gold_tick_bars (gold's 1-minute bars, the chart's too), and the
+// minute that closed judged by the owner's video's way, mailed to the charts
+// subscribed with rule = 'sweepx' (gold's 1-minute chart). Not recorded or
+// settled either.
 
 import {
   ALERT_INTERVALS,
@@ -84,6 +91,10 @@ import {
   klinePreloadDays,
   latestCloseMs,
   macdxSignals,
+  SWEEPX_INTERVALS,
+  SWEEPX_PAIRS,
+  isSweepxChart,
+  sweepxSignals,
   renderIndicatorMail,
   staleForClose,
   startWaitMs,
@@ -107,11 +118,14 @@ import {
   historyRead,
   isTwelvePair,
   parseSwissquote,
+  parseTickMinutes,
   parseTwelveData,
+  tickMinuteCandles,
   twelveDataUrl,
   type Tick,
 } from "../live-chart/logic.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, nextTickAt } from "./gold-minutes.ts";
+import { SWEEPX } from "../_shared/sweep-cross.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
@@ -152,7 +166,14 @@ import type { Candle } from "../analyze/indicators.ts";
 // only. Judged on the same closed bars as ULTRA, with the code the rule was
 // measured with (_shared/macd-extreme.ts). Q-Trend's and ULTRA's signals, the
 // rule ids and what is recorded are as they were.
-const FUNCTION_VERSION = "signal-alerts-v23-2026-10-11T09:00:00Z";
+// v24 (#291): gold's price from Swissquote recorded all day (a fourth caller,
+// pg_cron every minute with {"mode": "gold-ticks"}; gold-minutes.ts), the
+// minutes before it filled once from Twelve Data ({"mode": "gold-seed"}), and
+// a fourth rule, the owner's video's way (indicators.ts sweepxSignals; docs
+// §8.112), judged by that run on the minutes recorded and mailed to the
+// charts subscribed with rule = 'sweepx': gold's 1-minute chart only. The
+// other rules' signals, ids and what is recorded are as they were.
+const FUNCTION_VERSION = "signal-alerts-v24-2026-10-11T12:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -206,6 +227,16 @@ interface Subscription {
   interval: string;
   lang: string;
   rule: RuleKey;
+}
+
+// #155: a chart followed under Q-Trend, ULTRA, the MACD rule (#275) or the
+// video's way (#291)
+interface IndicatorSub {
+  user_id: string;
+  pair: string;
+  interval: string;
+  lang: string;
+  rule: IndicatorRule;
 }
 
 // ---- #155: what the "indicators" sweep keeps between its runs ----------------------------
@@ -360,6 +391,56 @@ Deno.serve(async (req: Request) => {
       }
     };
 
+    // #155: each fresh signal of Q-Trend, ULTRA (#275: the MACD rule; #291:
+    // the video's way) to each of `subs` following its chart under its rule,
+    // once (the claim's unique key); what happened, counted into `counts`
+    const mailerFor = (subs: IndicatorSub[], counts: Record<string, number>) => {
+      const access = new Map<string, { allowed: boolean; email: string | null }>();
+      return async (sigs: IndicatorSignal[]) => {
+        for (const sig of sigs) {
+          for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
+            let who = access.get(sub.user_id);
+            if (!who) {
+              const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
+              who = { allowed: alertsAllowed(plan, email), email };
+              access.set(sub.user_id, who);
+            }
+            if (!who.allowed) {
+              counts.not_allowed = (counts.not_allowed ?? 0) + 1;
+              continue;
+            }
+            const id = await claimRow({
+              user_id: sub.user_id,
+              kind: "signal",
+              pair: sig.pair,
+              interval: sig.interval,
+              bar_time: sig.barTime,
+              closed_at: sig.closedAt,
+              side: sig.side,
+              entry: sig.close,
+              stop: sig.sl,
+              target: sig.tps ? sig.tps[0] : null,
+              rsi: sig.rsi,
+              rsi_prev: sig.rsiPrev,
+              sar: null,
+              atr: sig.eps,
+              rule: indicatorRuleId(sig.rule),
+              strong: sig.rule === "qtrend" ? sig.strong : null,
+              event_id: null,
+              status: "pending",
+            });
+            if (id === null) {
+              counts.duplicate = (counts.duplicate ?? 0) + 1;
+              continue;
+            }
+            const lang: Lang = isLang(sub.lang) ? sub.lang : "ja";
+            const outcome = await deliver(id, who.email, renderIndicatorMail(sig, lang));
+            counts[outcome] = (counts[outcome] ?? 0) + 1;
+          }
+        }
+      };
+    };
+
     const nowMs = Date.now();
     const bodyRaw = await req.json().catch(() => null);
     const body: JsonRecord = isRecord(bodyRaw) ? bodyRaw : {};
@@ -387,8 +468,11 @@ Deno.serve(async (req: Request) => {
         const res = await rest(`gmo_kline_files?fetched_at=lt.${encodeURIComponent(new Date(nowMs - 60 * 24 * 60 * MIN).toISOString())}`, { method: "DELETE" });
         if (!res.ok) console.error("kline purge failed:", res.status, await res.text().catch(() => ""));
       }
-      const subs = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule"))
-        .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
+      // (#291: not the video's way, 'sweepx': gold's 1-minute chart is judged by
+      // the "gold-ticks" run on the minutes it records, and read here it would
+      // be a Twelve Data chart read every minute)
+      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && r.rule !== "sweepx" && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
       summary.subscriptions = subs.length;
       if (subs.length === 0) return summary;
@@ -488,50 +572,7 @@ Deno.serve(async (req: Request) => {
       // Each fresh signal to each follower of its chart, once (the claim's
       // unique key)
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
-      const access = new Map<string, { allowed: boolean; email: string | null }>();
-      const mailSignals = async (sigs: IndicatorSignal[]) => {
-        for (const sig of sigs) {
-          for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
-            let who = access.get(sub.user_id);
-            if (!who) {
-              const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
-              who = { allowed: alertsAllowed(plan, email), email };
-              access.set(sub.user_id, who);
-            }
-            if (!who.allowed) {
-              counts.not_allowed++;
-              continue;
-            }
-            const id = await claimRow({
-              user_id: sub.user_id,
-              kind: "signal",
-              pair: sig.pair,
-              interval: sig.interval,
-              bar_time: sig.barTime,
-              closed_at: sig.closedAt,
-              side: sig.side,
-              entry: sig.close,
-              stop: sig.sl,
-              target: sig.tps ? sig.tps[0] : null,
-              rsi: sig.rsi,
-              rsi_prev: sig.rsiPrev,
-              sar: null,
-              atr: sig.eps,
-              rule: indicatorRuleId(sig.rule),
-              strong: sig.rule === "qtrend" ? sig.strong : null,
-              event_id: null,
-              status: "pending",
-            });
-            if (id === null) {
-              counts.duplicate++;
-              continue;
-            }
-            const lang: Lang = isLang(sub.lang) ? sub.lang : "ja";
-            const outcome = await deliver(id, who.email, renderIndicatorMail(sig, lang));
-            counts[outcome] = (counts[outcome] ?? 0) + 1;
-          }
-        }
-      };
+      const mailSignals = mailerFor(subs, counts);
       // #171: a chart's signals are mailed as soon as it is judged, before
       // the other charts due are read
       const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
@@ -745,17 +786,61 @@ Deno.serve(async (req: Request) => {
         return null;
       }
     };
+    // #291: the minutes just closed, judged for the gold 1-minute email
+    // (indicators.ts sweepxSignals) on the minutes recorded by now, rounded as
+    // the chart's history is (historyOfBars): the bars the chart draws its
+    // marks on. Only when somebody follows the chart
+    const goldJudge = async (): Promise<JsonRecord> => {
+      try {
+        const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=eq.sweepx&select=user_id,pair,interval,lang,rule"))
+          .filter((r) => typeof r.user_id === "string" && r.rule === "sweepx" && isSweepxChart(r.pair, r.interval) && typeof r.lang === "string")
+          .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: "sweepx" as const }));
+        if (subs.length === 0) return { subscriptions: 0 };
+        // the window, and the few newest bars that may still be fresh beyond it
+        const res = await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: SWEEPX.window + 4 }) });
+        if (!res.ok) {
+          console.error("gold minutes read failed:", res.status, await res.text().catch(() => ""));
+          return { subscriptions: subs.length, error: "read_failed" };
+        }
+        const minutes = parseTickMinutes(await res.json().catch(() => null));
+        const now = Date.now();
+        const closed = historyOfBars(GOLD, "1min", tickMinuteCandles(minutes), now, new Date(now).toISOString()).candles;
+        const sigs = sweepxSignals(GOLD, "1min", closed, now);
+        const counts: Record<string, number> = {};
+        if (sigs.length > 0) await mailerFor(subs, counts)(sigs);
+        return {
+          subscriptions: subs.length,
+          bars: closed.length,
+          newest: closed.length > 0 ? closed[closed.length - 1].datetime : null,
+          signals: sigs.map((s) => `${s.side}@${s.barTime}`),
+          // how long after the bar closed it was judged, ms
+          judged_after_ms: closed.length > 0 ? now - (barOpenMs(closed[closed.length - 1].datetime) + MIN) : null,
+          ...counts,
+        };
+      } catch (err) {
+        console.error("gold judge failed:", err);
+        return { error: "failed" };
+      }
+    };
     const goldTicks = async (): Promise<JsonRecord> => {
       const plan = goldTickPlan(Date.now());
       const summary: JsonRecord = { ok: true, mode: "gold-ticks", version: FUNCTION_VERSION, minute: new Date(plan.minuteStart).toISOString() };
       // a second call for the minute this instance is already reading
       if (goldTicksMinute === plan.minuteStart) return { ...summary, skipped: "busy" };
-      if (isPossiblyClosedFor(GOLD, Date.now())) return { ...summary, skipped: "market_closed" };
+      if (isPossiblyClosedFor(GOLD, Date.now())) {
+        // the minute before gold shut (its daily hour, the week's end) is
+        // judged still; the others while it is shut have no bar
+        const last = !isPossiblyClosedFor(GOLD, plan.minuteStart - MIN);
+        return { ...summary, skipped: "market_closed", ...(last ? { judged: await goldJudge() } : {}) };
+      }
       goldTicksMinute = plan.minuteStart;
       const tally = { reads: 0, recorded: 0, stale: 0, failed: 0, record_failed: 0 };
+      let judged: JsonRecord | null = null;
       try {
         let lastAt = Number.NEGATIVE_INFINITY;
         for (;;) {
+          // the minute that closed, once its last prices are in
+          if (judged === null && Date.now() >= plan.judgeAt) judged = await goldJudge();
           const at = nextTickAt(lastAt, Date.now());
           if (at >= plan.stopAt) break;
           await sleep(at - Date.now());
@@ -783,10 +868,15 @@ Deno.serve(async (req: Request) => {
             console.error("gold tick record failed:", err);
           }
         }
+        // a run that began late, or stopped at a quote left standing
+        if (judged === null) {
+          await sleep(plan.judgeAt - Date.now());
+          judged = await goldJudge();
+        }
       } finally {
         if (goldTicksMinute === plan.minuteStart) goldTicksMinute = null;
       }
-      return { ...summary, ...tally };
+      return { ...summary, ...tally, judged };
     };
     // Once, by hand: the minutes before the recording began, from Twelve
     // Data's newest 1-minute bars (gold-minutes.ts goldSeedRows), within the
@@ -1079,6 +1169,8 @@ Deno.serve(async (req: Request) => {
           limited_intervals: TWELVE_ALERT_INTERVALS,
           // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs on 5 minutes
           macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },
+          // #291: the video's way's: gold's 1-minute chart
+          sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
         },
         subscriptions: subs.map((s) => ({
           pair: s.pair,

@@ -929,7 +929,8 @@ describe("#275 the MACD peak-and-valley rule in the emails", () => {
     // a chart is followed under a rule only where that rule is offered
     expect(fn).toContain("const chartOk = indicator ? isIndicatorChartFor(body.rule, body.pair, body.interval)");
     expect(fn).toContain("if (!charts.every((c) => isIndicatorChartFor(rule, c.pair, c.interval)))");
-    expect(fn).toContain("isIndicatorRule(r.rule) && isIndicatorChartFor(r.rule, r.pair, r.interval)");
+    // (#291: the video's way, 'sweepx', is the gold-ticks run's own, never this sweep's)
+    expect(fn).toContain('isIndicatorRule(r.rule) && r.rule !== "sweepx" && isIndicatorChartFor(r.rule, r.pair, r.interval)');
     expect(fn).not.toMatch(/\bisIndicatorChart\(/);
     // judged beside indicatorSignals, mailed with the rule's own id
     expect(fn).toContain("const sigs = indicatorSignals(pair, interval, closed, nowMs);");
@@ -940,7 +941,8 @@ describe("#275 the MACD peak-and-valley rule in the emails", () => {
     expect(fn).toContain("strong: sig.rule === \"qtrend\" ? sig.strong : null,");
     // the app is told which charts the rule may be followed on
     expect(fn).toContain("macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },");
-    expect(fn).toContain("signal-alerts-v23");
+    // (v23 brought the rule; #291's v24 kept it as it was)
+    expect(fn).toContain("signal-alerts-v24");
   });
 
   it("the migration lets a subscription name the rule, and changes nothing else", () => {
