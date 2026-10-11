@@ -329,7 +329,7 @@ const LiveChart = ({
   const historyOn =
     indicatorsAllowed &&
     (maMode
-      ? overlays.ema50 || overlays.ema200 || overlays.ma3
+      ? overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.sweepx
       : zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
         overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
@@ -864,6 +864,10 @@ const LiveChart = ({
             read.feed !== "gold",
           )}
         </p>
+      )}
+      {/* #291: gold's 1-minute bars, the minutes recorded from Swissquote's prices all day */}
+      {read?.recorded && (
+        <p className="text-[11px] text-muted-foreground" data-testid="live-recorded">{l.recordedNote}</p>
       )}
       {reopens && (
         <p className="text-[11px] text-muted-foreground" data-testid="live-reopens">{l.reopens(jstDay(Date.parse(reopens)))}</p>

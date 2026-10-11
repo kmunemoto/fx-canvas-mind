@@ -273,7 +273,7 @@ export const ja = {
     lockedHint: "Light プランで使えます",
     lockedNote: "🔒 のインジケーターは Light プラン（月額2,980円）で使えます。売買サインと RSI・パラボリックSAR は無料で表示できます。",
     // #201: on the moving averages' own chart (no signals, RSI or SAR on it)
-    maLockedNote: "🔒 の移動平均線は Light プラン（月額2,980円）で使えます。",
+    maLockedNote: "🔒 の移動平均線と流動性狩り＋EMAクロスの印は Light プラン（月額2,980円）で使えます。",
     // #135: Bollinger %b and RCI, TradingView's built-ins
     pctB: {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
@@ -320,6 +320,8 @@ export const ja = {
       ichimoku: (conv: number, base: number, span2: number) => `一目均衡表 ${conv} ${base} ${span2}`,
       // #151
       ultra: (gold: boolean): string => (gold ? "ULTRA（RSI 14・SL $13・TP $4/10/16）" : "ULTRA（RSI 14・SL 13・TP 4/10/16 pips）"),
+      // #291
+      sweepx: "流動性狩り＋EMAクロス（EMA20×80）",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -420,6 +422,18 @@ export const ja = {
       `Q-Trend ${side === "BUY" ? "買い" : "売り"}（損切り・利確は ULTRA と同じ数字）: エントリー ${entry}・損切り ${sl}・TP1 ${tps[0]}・TP2 ${tps[1]}・TP3 ${tps[2]}`,
     maCrossTitle: (side: "GC" | "DC", fast: string, slow: string): string =>
       side === "GC" ? `ゴールデンクロス（${fast} が ${slow} を上に抜けた）` : `デッドクロス（${fast} が ${slow} を下に抜けた）`,
+    // #291: the owner's video's way on the moving averages' chart (docs §8.112)
+    sweepxNote: (gold: boolean, partial: boolean): string =>
+      "流動性狩り＋EMAクロス（Instagram の金のトレーダーの動画のやり方を、このアプリで決まりにしたもの。docs §8.112）: " +
+      "EMA20 が EMA80 を下から上に抜けた確定足で、直前の下落（EMA20 が EMA80 を下に抜けた足から）の安値が、一つ前の波の谷（その前の下抜けから、直前の下抜けの1本前までの最安値）を下回っていたら BUY（前の安値を一度割った「流動性狩り」のあとのクロス）。SELL はその裏返し（前の高値を一度上抜いたあとの、EMA20 の下抜け）。" +
+      `入る値はその足の終値、損切りは直近5本の安値の最安値より1 pip 下（SELL は高値の最高値より1 pip 上）、利確は15 pips と20 pips（${gold ? "金は1 pip を0.1ドルとして、1.5ドルと2.0ドル" : "円のペアは0.15円と0.20円、ほかのペアは0.0015と0.0020。金は1.5ドルと2.0ドル"}）。青の箱が利確2まで（点線が利確1）、灰色の箱が損切りまで、黄色の点線が割られた前の安値（高値）です。構造の崩壊（BOS）は待ちません（オーナーの選択）。` +
+      "EMA の数字は 20 と 80 で固定です（上の移動平均線の数字を変えても、この印は変わりません）。各足は、その足までの確定足600本で判断します（メールと同じ。クロスは600本のうち241本目以降のものだけ数えます）" +
+      (partial ? "。このチャートで600本に満たない所の印は、ある分だけで判断したもので、薄く描いています（メールは600本の所だけ）。" : "。") +
+      "金の1分足では、この印と同じ判定でメールを送れます（設定 → メール通知 →「流動性狩り＋EMAクロス」）。この決まりの勝率と1回あたりの損益は、まだ測っていません。",
+    sweepxTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[], level: string, full: boolean): string =>
+      `流動性狩り＋EMAクロス ${side === "BUY" ? "買い" : "売り"}: エントリー ${entry}・損切り ${sl}・利確1 ${tps[0]}・利確2 ${tps[1]}（割った前の${side === "BUY" ? "安値" : "高値"} ${level}）` +
+      (full ? "" : "。600本に満たない足で判断した印です"),
+    sweepxTaken: (side: "BUY" | "SELL"): string => (side === "BUY" ? "安値を割った" : "高値を抜いた"),
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD（TradingView の標準インジケーターと同じ計算・初期設定 12・26・9）: 青の線＝EMA 12 − EMA 26、オレンジの線＝その9本 EMA（シグナル）、棒＝その差（ヒストグラム。0より上で増えていると濃い緑、減っていると薄い緑、0より下で減っていると濃い赤、増えていると薄い赤）。線が0より上なら上向き、シグナルを上に抜けると勢いが上向きに変わった目安です。チャートの印には使っていません。メール通知の「MACD の山・谷」だけが、この MACD（12・26・9）を使います。",
@@ -658,11 +672,11 @@ export const ja = {
     // #201: the moving averages' own chart, under the live chart
     maTitle: "移動平均線チャート",
     maNote: (allowed: boolean) =>
-      "ローソク足と移動平均線だけのチャートです（サインの印・下の帯・ほかのインジケーターは出しません）。ペアと時間足は、このチャートで別に選べます。" +
+      "ローソク足と移動平均線、それと動画のやり方（流動性狩り＋EMAクロス）の印のチャートです（ほかのサインの印・下の帯・ほかのインジケーターは出しません）。ペアと時間足は、このチャートで別に選べます。" +
       (allowed
         ? "移動平均線3本の数字・種類・表示のオンオフは、上のリアルタイムチャートと共通です（どちらで変えても両方に効きます）。"
-        : "移動平均線は、インジケーターを使えるプラン（Light 以上）で表示されます。") +
-      "価格の取り方は上のチャートと同じです（GMOコインのペアは GMO の公開レート、ほかのペアと金は Twelve Data の足と Swissquote の価格）。表示のみで、サインの判定・メールには使っていません。",
+        : "移動平均線と印は、インジケーターを使えるプラン（Light 以上）で表示されます。") +
+      "価格の取り方は上のチャートと同じです（GMOコインのペアは GMO の公開レート、ほかのペアと金は Twelve Data の足と Swissquote の価格。金の1分足は Swissquote の価格を約3秒ごとに記録して作った足）。移動平均線は表示のみです。流動性狩り＋EMAクロスの印は、金の1分足ではメール通知と同じ判定です（設定 → メール通知）。",
     connecting: "接続中…",
     updated: (clock: string) => `更新 ${clock}`,
     pairsLabel: "通貨ペア",
@@ -756,6 +770,8 @@ export const ja = {
     fallback: (maintenance: boolean, fetched: string) =>
       `${maintenance ? "GMOコインの価格配信がメンテナンス中" : "GMOコインの価格配信が読めない"}ため、別の配信（Twelve Data）の直近の足を表示しています（${fetched} 取得）。価格は動きません。GMO が戻ると自動で切り替わります。`,
     reopens: (at: string) => `市場の再開は ${at}（日本時間）の予定です。`,
+    // #291
+    recordedNote: "金の1分足は、Swissquote の金の価格をサーバーが約3秒ごとに記録して作った足です（金の1分足のメール通知と同じ足。記録を始める前の分は Twelve Data の1分足）。",
     ruleRsiSar: "RSI＋SAR",
     ruleGa: "GA型",
     sides: { BUY: "買い（BUY）", SELL: "売り（SELL）" },
@@ -784,9 +800,9 @@ export const ja = {
     dowTfError: "読めませんでした",
     dowHint: "1回目=兆し、2回目=確定（詳しくはチャートの下の説明）。表示のみで、売買サインには使っていません。",
     dowCompact: "ダウ",
-    // #127
+    // #127; #291: gold's 1-minute bars recorded from Swissquote's prices (the email's too)
     goldNote:
-      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示します。メール通知は Q-Trend・ULTRA の印が対象で、15分足・1時間足・4時間足・日足から選べます（GA型・RSI＋SAR は対象外。成績の記録は付けていません）。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、1分足・5分足から先に上限に達します。2・3・4分足は1分足、10分足は5分足、30分足は15分足、2時間足は1時間足、8時間足は4時間足を Twelve Data から読んでまとめた足で、読み込みの回数と上限はその足のものです。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。",
+      "金（XAU/USD、金スポットの米ドル建て）は GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。ただし1分足は、Swissquote の価格をサーバーが約3秒ごとに記録して作った足です（金の1分足のメール通知と同じ足。記録を始める前の分は Twelve Data の1分足です。高値・安値は約3秒ごとの記録の中の値なので、ヒゲの先が欠けることがあります）。TradingView の「金CFD」とは提供元が違うので、数ドルずれることがあります。サインの印は表示します。メール通知は Q-Trend・ULTRA の印が対象で、15分足・1時間足・4時間足・日足から選べます。1分足は、移動平均線チャートの「流動性狩り＋EMAクロス」の印が対象です（GA型・RSI＋SAR は対象外。成績の記録は付けていません）。Twelve Data の無料枠（1日800回）を守るため、1日の読み込み回数に時間足ごとの上限があり、5分足と、2・3・4分足のもとになる1分足から先に上限に達します。2・3・4分足は Twelve Data の1分足、10分足は5分足、30分足は15分足、2時間足は1時間足、8時間足は4時間足を Twelve Data から読んでまとめた足で、読み込みの回数と上限はその足のものです。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。",
     // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's
     // last read; #154: a pair's GMO does not serve too (its prices recorded
     // only while its own chart is open)
@@ -1927,18 +1943,18 @@ export const ja = {
   alerts: {
     title: "メール通知（売買サイン）",
     intro: (email: string) =>
-      `チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA・MACD の山・谷）の買い（BUY）・売り（SELL）のサインが出たら、${email} にメールでお知らせします。足が確定してから数分で届きます。`,
+      `チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA・MACD の山・谷・流動性狩り＋EMAクロス）の買い（BUY）・売り（SELL）のサインが出たら、${email} にメールでお知らせします。足が確定してから数分で届きます。`,
     introNoEmail:
-      "チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA・MACD の山・谷）の買い（BUY）・売り（SELL）のサインが出たら、ログイン中のメールアドレスにお知らせします。",
+      "チェックしたチャートで、下で選んだ種類（RSI＋SAR・GA型・Q-Trend・ULTRA・MACD の山・谷・流動性狩り＋EMAクロス）の買い（BUY）・売り（SELL）のサインが出たら、ログイン中のメールアドレスにお知らせします。",
     proOnly: "メール通知は Light プラン（月額2,980円）の機能です。",
     notConfigured: "メールの送信設定がまだ済んでいません。サインは下の履歴に記録されますが、今はメールが届きません。",
     loading: "読み込み中…",
     loadFailed: "通知の設定を読み込めませんでした",
     saveFailed: "保存できませんでした",
     pairHeader: "通貨ペア",
-    intervals: { "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
-    // #112: どちらのルールの通知か。#155: Q-Trend と ULTRA も
-    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷" } as Record<string, string>,
+    intervals: { "1min": "1分", "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
+    // #112: どちらのルールの通知か。#155: Q-Trend と ULTRA も。#291: 動画のやり方（金の1分足）も
+    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷", sweepx: "流動性狩り＋EMAクロス" } as Record<string, string>,
     ruleTabsLabel: "通知するサインの種類",
     gainzIntro:
       "GA型は GainzAlgo V2 Alpha 型のサインです（包み足・実体が大きい・RSI 40・5本前との比較、損切り ATR×1・利確はその2倍）。GainzAlgo Suite の画面の設定に合わせた再現を、#132 で過去のチャートで勝率が最も高かった数字（実体7割・RSI 40・5本前）に変えたもので、中身は公開されていないため同じサインになるとは限りません。",
@@ -1947,13 +1963,15 @@ export const ja = {
       "15分足で1ペアあたり2〜3日に1回ほど出ます（#132 の設定で、以前の約6分の1）。",
       "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインはメールしません（履歴には残ります）。",
     ],
-    ruleTag: { rsi_sar: "", gainz: "（GA型）", qtrend: "（Q-Trend）", ultra: "（ULTRA）", macdx: "（MACD の山・谷）" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: "（GA型）", qtrend: "（Q-Trend）", ultra: "（ULTRA）", macdx: "（MACD の山・谷）", sweepx: "（流動性狩り＋EMAクロス）" } as Record<string, string>,
     // #155
     strongTag: "・STRONG",
     indicatorIntro: {
       qtrend: "Q-Trend（tarasenko_ の公開コードを移植、設定 200・14・1）の BUY・SELL・STRONG のサインです。リアルタイムチャートに出る印と同じものが届きます。",
       ultra: "ULTRA（F-INVEST の動画の設定と印から作ったもの）の Buy ☆・Sell ☆ のサインです。リアルタイムチャートに出る印と同じもので、メールに損切り（FX は13pips、金は13ドル）と利確1〜3（FX は 4・10・16pips、金は 4・10・16ドル）の目安が入ります。",
       macdx: "MACD(12・26・9)の青線がオレンジ線とクロスしたうち、0から遠い山・谷の近くで起きたものだけの買い・売りのサインです（売りは0より上、買いは0より下）。5分足の、GMOコインの通貨ペアだけです。Sextant 独自の決まりで、チャートには印を出しません。過去の測定では ULTRA の5分足より良いとは言えず、1回あたりの損益もマイナスでした（下の注意を見てください）。メールには ULTRA と同じ損切り13pips・利確 4・10・16pips の目安が入ります。",
+      // #291
+      sweepx: "Instagram の金のトレーダーの動画のやり方を、このアプリで決まりにしたサインです（流動性狩り → EMAクロス）。一つ前の波の安値を一度割ったあと EMA20 が EMA80 を上に抜けたら買い、前の高値を一度抜いたあと EMA20 が EMA80 を下に抜けたら売りです。金の1分足だけです。移動平均線チャートに出る印と同じもので、メールに損切り（直近5本の安値・高値より0.1ドル外）と利確1・2（1.5ドル・2.0ドル）の目安が入ります。この決まりの勝率と1回あたりの損益は、まだ測っていません。",
     } as Record<string, string>,
     // #275: shown instead of the table when the server sends no charts for the rule
     macdxUnavailable: "この通知は、まだ使えません（更新の途中のことがあります）。少し待ってから、開き直してください。",
@@ -1964,6 +1982,14 @@ export const ja = {
       "ULTRA の5分足とは別に届きます。両方をオンにすると、同じ足で2通届くことがあります。",
       "損切りなしで持った場合は測っていません。通知は注文の指示ではありません。届いたサインの勝ち負けの記録は付けていません。",
       "市場が閉まっている時間（週末など）は判定しません。",
+    ],
+    // #291: the video's way's notes (its own chart: gold, 1 minute)
+    sweepxNotes: [
+      "金の1分足だけで判定します。足は、Swissquote の金の価格をサーバーが約3秒ごとに記録して作った1分足です（チャートの金の1分足と同じ。記録を始める前の分は Twelve Data の1分足）。高値・安値は約3秒ごとの記録の中の値なので、ヒゲの先が欠けることがあります（どのくらい欠けるかは、まだ測っていません）。",
+      "足が確定した5秒後から判定して送ります（実際に何秒で届くかは、まだ確かめていません）。確定から2分を過ぎた足は送りません。",
+      "1分足なので、1日に何通も届くことがあります。メールの送信サービス（Resend）の無料プランは1日100通・月3,000通までで、超えた分は「送信失敗」になります。",
+      "この決まりの勝率と1回あたりの損益は、まだ測っていません。動画の作者の EMA の数字と時間足は動画に出ていないため、EMA20・EMA80 と、判断する範囲（確定足600本）・損切りの置き方などはこのアプリで決めたものです。通知は注文の指示ではありません。届いたサインの勝ち負けの記録は付けていません。",
+      "金の市場が閉まっている時間（週末と、毎日の休み1時間）は判定しません。",
     ],
     allPairs: "すべての銘柄",
     indicatorHourOnly: "GMOコインにない銘柄は、1時間足・4時間足・日足だけです（金は15分足も）",

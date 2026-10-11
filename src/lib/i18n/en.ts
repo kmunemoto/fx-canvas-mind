@@ -233,7 +233,7 @@ export const en: Dict = {
     lockedHint: "Available with the Light plan",
     lockedNote: "The indicators marked 🔒 come with the Light plan (¥2,980 a month). The signals, RSI and the Parabolic SAR are free.",
     // #201: on the moving averages' own chart (no signals, RSI or SAR on it)
-    maLockedNote: "The moving averages marked 🔒 come with the Light plan (¥2,980 a month).",
+    maLockedNote: "The moving averages and the liquidity sweep + EMA cross marks marked 🔒 come with the Light plan (¥2,980 a month).",
     // #135: Bollinger %b and RCI, TradingView's built-ins
     pctB: {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
@@ -278,6 +278,8 @@ export const en: Dict = {
       ichimoku: (conv: number, base: number, span2: number) => `Ichimoku ${conv} ${base} ${span2}`,
       // #151
       ultra: (gold: boolean): string => (gold ? "ULTRA (RSI 14, SL $13, TP $4/10/16)" : "ULTRA (RSI 14, SL 13, TP 4/10/16 pips)"),
+      // #291
+      sweepx: "Liquidity sweep + EMA cross (EMA 20×80)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -378,6 +380,18 @@ export const en: Dict = {
       `Q-Trend ${side === "BUY" ? "buy" : "sell"} (ULTRA's stop and targets): entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]}, TP3 ${tps[2]}`,
     maCrossTitle: (side: "GC" | "DC", fast: string, slow: string): string =>
       side === "GC" ? `Golden cross (${fast} crossed above ${slow})` : `Dead cross (${fast} crossed below ${slow})`,
+    // #291: the owner's video's way on the moving averages' chart (docs §8.112)
+    sweepxNote: (gold: boolean, partial: boolean): string =>
+      "Liquidity sweep + EMA cross (a gold trader's Instagram video's way, made into a rule by this app; docs §8.112): " +
+      "BUY on the closed bar where EMA 20 crosses above EMA 80, when the lows since the last cross down went below the last wave's trough (the lowest low from the cross down before it to the bar before the last one): the cross after the last low was taken once, a \"liquidity sweep\". SELL the mirror (EMA 20 crossing below after the last high was taken). " +
+      `Entered at the bar's close; the stop a pip beyond the lowest low of the last 5 bars (a SELL's, the highest high); the targets 15 and 20 pips (${gold ? "a pip being $0.10 on gold: $1.50 and $2.00" : "0.15 and 0.20 yen on a yen pair, 0.0015 and 0.0020 on another; $1.50 and $2.00 on gold"}). The blue box reaches the second target (the first dashed in it), the gray one the stop; the dotted yellow line is the low (high) that was taken. The break of structure is not waited for (the owner's choice). ` +
+      "The lines are EMA 20 and EMA 80 whatever the moving averages above are set to. Each bar is judged on the 600 closed bars ending at it, as the email is (crosses counted from the 241st of them on)" +
+      (partial ? "; where this chart holds fewer, on what it holds, drawn fainter (the email only where it has 600). " : ". ") +
+      "On gold's 1-minute chart the same decision can be emailed (Settings → Email alerts → \"Liquidity sweep + EMA cross\"). This rule's win rate and its profit or loss a trade have not been measured.",
+    sweepxTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[], level: string, full: boolean): string =>
+      `Liquidity sweep + EMA cross ${side}: entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]} (the ${side === "BUY" ? "low" : "high"} taken ${level})` +
+      (full ? "" : "; judged on fewer than 600 bars"),
+    sweepxTaken: (side: "BUY" | "SELL"): string => (side === "BUY" ? "Low taken" : "High taken"),
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. No chart mark uses it; only the \"MACD peak/valley\" email alert does.",
@@ -611,11 +625,11 @@ export const en: Dict = {
     // #201: the moving averages' own chart, under the live chart
     maTitle: "Moving averages chart",
     maNote: (allowed: boolean) =>
-      "The candles and the moving averages only (no signal marks, strips or other indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
+      "The candles, the moving averages and the marks of the video's way (liquidity sweep + EMA cross) only (no other signal marks, strips or indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
       (allowed
         ? "The three lines' lengths, kinds and switches are the live chart's above: a change on either is made on both. "
-        : "The moving averages are drawn with a plan that has the indicators (Light and up). ") +
-      "The prices come as on the chart above (GMO Coin's public rates for its pairs; for the other pairs and gold, Twelve Data's bars and Swissquote's prices). Shown only: no signal or email uses it.",
+        : "The moving averages and the marks are drawn with a plan that has the indicators (Light and up). ") +
+      "The prices come as on the chart above (GMO Coin's public rates for its pairs; for the other pairs and gold, Twelve Data's bars and Swissquote's prices; gold's 1-minute bars are made of Swissquote's prices recorded every 3 seconds or so). The moving averages are shown only. On gold's 1-minute chart the liquidity sweep + EMA cross marks are judged as the email alerts are (Settings → Email alerts).",
     title: "Live chart",
     connecting: "Connecting…",
     updated: (clock: string) => `Updated ${clock}`,
@@ -706,6 +720,8 @@ export const en: Dict = {
     fallback: (maintenance: boolean, fetched: string) =>
       `${maintenance ? "GMO Coin's price feed is down for maintenance" : "GMO Coin's price feed cannot be read"}, so these are the latest bars from another feed (Twelve Data, fetched ${fetched} JST). Prices do not move. It switches back to GMO automatically.`,
     reopens: (at: string) => `The market is due to reopen at ${at} JST.`,
+    // #291
+    recordedNote: "Gold's 1-minute bars are made of Swissquote's gold prices recorded by the server every 3 seconds or so (the bars gold's 1-minute email is judged on; the minutes before the recording began are Twelve Data's).",
     ruleRsiSar: "RSI + SAR",
     ruleGa: "GA style",
     sides: { BUY: "BUY", SELL: "SELL" },
@@ -736,7 +752,7 @@ export const en: Dict = {
     dowCompact: "Dow",
     // #127
     goldNote:
-      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn; Q-Trend's and ULTRA's can be emailed on the 15-minute, 1-hour, 4-hour and daily charts (not the GA-style or RSI + SAR signals), and no outcome record is kept. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, reached first by the 1- and 5-minute charts. The 2, 3 and 4-minute bars are made of the 1-minute ones read from Twelve Data, the 10-minute of the 5-minute, the 30-minute of the 15-minute, the 2-hour of the hourly and the 8-hour of the 4-hour, and their reads and caps are those timeframes'. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST).",
+      "Gold (XAU/USD, spot gold in US dollars) is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). Its 1-minute bars, though, are made of Swissquote's prices recorded by the server every 3 seconds or so (the same bars gold's 1-minute email is judged on; the minutes before the recording began are Twelve Data's; a bar's high and low are those of the prices recorded, so a wick's tip can be missed). It is a different source from TradingView's gold CFD, so the two can differ by a few dollars. The signal marks are drawn; Q-Trend's and ULTRA's can be emailed on the 15-minute, 1-hour, 4-hour and daily charts, and on the 1-minute chart the moving averages chart's \"Liquidity sweep + EMA cross\" marks (not the GA-style or RSI + SAR signals), and no outcome record is kept. To stay within Twelve Data's free allowance (800 reads a day), each timeframe has a cap on the day's reads, reached first by the 5-minute chart and the 1-minute bars the 2, 3 and 4-minute charts are made of. The 2, 3 and 4-minute bars are made of Twelve Data's 1-minute ones, the 10-minute of the 5-minute, the 30-minute of the 15-minute, the 2-hour of the hourly and the 8-hour of the 4-hour, and their reads and caps are those timeframes'. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST).",
     // #146, #147: gold's bars made from Swissquote's prices after Twelve Data's
     // last read; #154: a pair's GMO does not serve too
     fromTicks: (name: string, tf: string, limited: boolean, from: string | null, ownChart: boolean) =>
@@ -1825,16 +1841,16 @@ export const en: Dict = {
   alerts: {
     title: "Email alerts (buy/sell signals)",
     intro: (email: string) =>
-      `When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
-    introNoEmail: "When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
+      `When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA, MACD peak/valley or Liquidity sweep + EMA cross) fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
+    introNoEmail: "When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA, MACD peak/valley or Liquidity sweep + EMA cross) fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
     proOnly: "Email alerts are a Light plan feature (¥2,980 a month).",
     notConfigured: "Email sending is not set up yet. Signals are logged below, but no email can be delivered for now.",
     loading: "Loading…",
     loadFailed: "Could not load your alert settings",
     saveFailed: "Could not save",
     pairHeader: "Pair",
-    intervals: { "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley" } as Record<string, string>,
+    intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1843,13 +1859,15 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
       qtrend: "Q-Trend's BUY, SELL and STRONG signals (tarasenko_'s open-source script, at 200, 14, 1): the same marks the live chart draws.",
       ultra: "ULTRA's Buy ☆ and Sell ☆ signals (built from F-INVEST's video): the same marks the live chart draws, with a stop (13 pips on a currency pair, $13 on gold) and targets 1 to 3 (4, 10, 16 pips on a currency pair; $4, $10, $16 on gold) in the email.",
       macdx: "BUY and SELL signals where MACD(12, 26, 9)'s blue line crosses the orange line near a peak or a valley far from zero (a SELL above zero, a BUY below it). On the 5-minute chart of GMO Coin's currency pairs only. Sextant's own rule; the chart draws no mark for it. On past charts it was not shown to be better than ULTRA's 5-minute signals, and it lost on average per trade (see the notes below). The email carries ULTRA's stop of 13 pips and targets of 4, 10 and 16 pips.",
+      // #291
+      sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
     } as Record<string, string>,
     // #275: shown instead of the table when the server sends no charts for the rule
     macdxUnavailable: "This alert is not available yet (an update may be in progress). Please wait a little and reopen this.",
@@ -1860,6 +1878,14 @@ export const en: Dict = {
       "It arrives apart from ULTRA's 5-minute emails: with both on, one bar can send two emails.",
       "Holding with no stop was not measured. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
       "Nothing is judged while the market is shut (weekends and the like).",
+    ],
+    // #291: the video's way's notes (its own chart: gold, 1 minute)
+    sweepxNotes: [
+      "Judged on gold's 1-minute chart only, whose bars are made of Swissquote's gold prices recorded by the server every 3 seconds or so (the chart's gold 1-minute bars; the minutes before the recording began are Twelve Data's). A bar's high and low are those of the prices recorded, so a wick's tip can be missed (by how much has not been measured).",
+      "Judged and sent from 5 seconds after the bar closes (how many seconds it actually takes to arrive has not been checked yet). A bar closed more than 2 minutes ago is not sent.",
+      "On the 1-minute chart several emails a day can arrive. The mail service's (Resend's) free plan sends 100 a day and 3,000 a month; the rest show as failed.",
+      "This rule's win rate and its profit or loss a trade have not been measured. The video does not show its author's EMA lengths or timeframe, so EMA 20 and EMA 80, the window it is judged on (600 closed bars), where the stop goes and the like are this app's. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
+      "Nothing is judged while gold is shut (weekends and its daily hour).",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",

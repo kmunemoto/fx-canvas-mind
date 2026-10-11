@@ -69,6 +69,10 @@ export interface ChartOverlays {
   // it paints the candles, and reads deep into the bars before the chart;
   // off until switched on
   zlTema: boolean;
+  // #291: the owner's video's way on the moving averages' own chart — the
+  // low (high) taken, then EMA 20 crossing EMA 80: BUY / SELL, the boxes to
+  // the targets and the stop, and the level taken; on unless switched off
+  sweepx: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -94,6 +98,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   ichimoku: false,
   ultra: true,
   zlTema: false,
+  sweepx: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

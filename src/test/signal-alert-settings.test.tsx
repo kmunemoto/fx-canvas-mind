@@ -11,7 +11,17 @@ import SignalAlertSettings from "../components/SignalAlertSettings";
 import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
 import { AlertRequestError, indicatorChartOffered, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
-import { INDICATOR_INTERVALS, INDICATOR_PAIRS, MACDX_INTERVALS, MACDX_MEASURED, MACDX_PAIRS, indicatorIntervalsFor } from "../../supabase/functions/signal-alerts/indicators";
+import {
+  INDICATOR_INTERVALS,
+  INDICATOR_PAIRS,
+  MACDX_INTERVALS,
+  MACDX_MEASURED,
+  MACDX_PAIRS,
+  SWEEPX_INTERVALS,
+  SWEEPX_PAIRS,
+  SWEEPX_RULE_ID,
+  indicatorIntervalsFor,
+} from "../../supabase/functions/signal-alerts/indicators";
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
@@ -499,5 +509,125 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain("72.3% of the time");
     expect(notes).toContain("This rule was not shown to be better.");
     expect(notes).toContain("with both on, one bar can send two emails");
+  });
+});
+
+// #291: the owner's video's way (liquidity sweep + EMA cross), on its own chart (gold, 1 minute)
+describe("#291 the video's way in the email-alert card", () => {
+  const twelve = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).length < INDICATOR_INTERVALS.length);
+  const indicator = {
+    rules: ["qtrend", "ultra", "macdx", "sweepx"],
+    pairs: INDICATOR_PAIRS,
+    intervals: INDICATOR_INTERVALS,
+    limited: Object.fromEntries(twelve.map((p) => [p, indicatorIntervalsFor(p)])),
+    macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },
+    sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
+  };
+  const withSweepx = (over: Record<string, unknown> = {}) => settings({ indicator, ...over });
+
+  it("reads its one chart (gold, 1 minute), and offers nothing when the server sends none", () => {
+    const s = withSweepx({ subscriptions: [{ pair: "XAU/USD", interval: "1min", rule: "sweepx" }, { pair: "XAU/USD", interval: "15min", rule: "ultra" }] });
+    expect(s.indicator!.sweepx).toEqual({ pairs: ["XAU/USD"], intervals: ["1min"] });
+    expect(s.subscriptions.map((x) => x.rule)).toEqual(["sweepx", "ultra"]);
+    expect(indicatorChartOffered(s, "XAU/USD", "1min", "sweepx")).toBe(true);
+    for (const [pair, iv] of [["XAU/USD", "5min"], ["XAU/USD", "15min"], ["USD/JPY", "1min"], ["USD/JPY", "5min"]]) {
+      expect(indicatorChartOffered(s, pair, iv, "sweepx"), `${pair} ${iv}`).toBe(false);
+    }
+    // the others' are as they were: no rule but this one has gold's 1-minute chart
+    expect(indicatorChartOffered(s, "XAU/USD", "15min", "ultra")).toBe(true);
+    expect(indicatorChartOffered(s, "XAU/USD", "1min", "ultra")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "1min", "macdx")).toBe(false);
+    // a server that does not send it yet (older than v24): nothing offered for the rule, the others still are
+    const old = settings({ indicator: { ...indicator, sweepx: undefined } });
+    expect(old.indicator!.sweepx).toBeNull();
+    expect(indicatorChartOffered(old, "XAU/USD", "1min", "sweepx")).toBe(false);
+    expect(indicatorChartOffered(old, "USD/JPY", "5min", "macdx")).toBe(true);
+  });
+
+  it("has its own tab with one tick (gold, 1 minute), no all-symbols row, and saves the tick under its own rule", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set" ? withSweepx({ subscriptions: [{ pair: "XAU/USD", interval: "1min", rule: "sweepx" }] }) : withSweepx()
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-sweepx"));
+    expect(screen.getByTestId("signal-alerts-rule-sweepx").textContent).toBe("流動性狩り＋EMAクロス");
+    const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
+    expect(intro).toContain("EMA20 が EMA80 を上に抜けたら買い");
+    expect(intro).toContain("金の1分足だけです");
+    expect(intro).toContain("まだ測っていません");
+    const grid = screen.getByTestId("signal-alerts-grid");
+    expect(grid.querySelectorAll("thead th")).toHaveLength(2);
+    expect(grid.querySelectorAll("thead th")[1].textContent).toBe("1分");
+    expect(grid.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(screen.queryByTestId("signal-alerts-all-row")).toBeNull();
+    expect(screen.queryByTestId("signal-alert-sweepx-all-1min")).toBeNull();
+    expect(grid.querySelector("[data-testid$='-none']")).toBeNull();
+    expect(screen.getAllByRole("checkbox").filter((el) => grid.contains(el))).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("signal-alert-sweepx-XAU/USD-1min"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "XAU/USD", interval: "1min", on: true, rule: "sweepx", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-sweepx-XAU/USD-1min") as HTMLInputElement).checked).toBe(true));
+    // the other rules' tables keep their all-symbols rows, and have no 1-minute column
+    for (const k of ["ultra", "macdx"]) {
+      fireEvent.click(screen.getByTestId(`signal-alerts-rule-${k}`));
+      expect(screen.getByTestId("signal-alerts-all-row"), k).toBeTruthy();
+      expect(screen.queryByTestId(`signal-alert-${k}-XAU/USD-1min`), k).toBeNull();
+    }
+    // no record is kept of these signals
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-sweepx"));
+    expect(screen.queryByTestId("signal-alerts-record")).toBeNull();
+  });
+
+  it("its notes say what its bars are, when it is sent, and that it has not been measured", async () => {
+    render(<SignalAlertSettings call={async () => withSweepx()} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-sweepx"));
+    const notes = screen.getByTestId("signal-alerts-notes").textContent!;
+    expect(notes).toContain("Swissquote の金の価格をサーバーが約3秒ごとに記録して作った1分足");
+    expect(notes).toContain("確定から2分を過ぎた足は送りません");
+    expect(notes).toContain("実際に何秒で届くかは、まだ確かめていません");
+    expect(notes).toContain("1日100通");
+    expect(notes).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません");
+    // not the MACD rule's, nor Q-Trend's and ULTRA's
+    expect(notes).not.toContain("GMOコインの通貨ペアだけで判定します");
+    expect(notes).not.toContain("Twelve Data の無料枠");
+    // the card's intro names all six kinds
+    expect(ja.alerts.intro("a@b.c")).toContain("流動性狩り＋EMAクロス");
+    expect(ja.alerts.introNoEmail).toContain("流動性狩り＋EMAクロス");
+    expect(en.alerts.intro("a@b.c")).toContain("Liquidity sweep + EMA cross");
+    expect(en.alerts.introNoEmail).toContain("Liquidity sweep + EMA cross");
+  });
+
+  it("against a server that sends no chart for the rule, says so instead of drawing an empty table", async () => {
+    render(<SignalAlertSettings call={async () => settings({ indicator: { ...indicator, sweepx: undefined } })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-sweepx"));
+    expect(screen.getByTestId("signal-alerts-sweepx-unavailable").textContent).toContain("まだ使えません");
+    expect(screen.queryByTestId("signal-alerts-grid")).toBeNull();
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-macdx"));
+    expect(screen.queryByTestId("signal-alerts-sweepx-unavailable")).toBeNull();
+    expect(screen.getByTestId("signal-alert-macdx-USD/JPY-5min")).toBeTruthy();
+  });
+
+  it("names its alert in the recent list, with its stop and first target", async () => {
+    const call = vi.fn(async () =>
+      withSweepx({
+        alerts: [
+          { id: "s1", kind: "signal", rule: SWEEPX_RULE_ID, pair: "XAU/USD", interval: "1min", side: "BUY", closed_at: "2026-10-12T01:23:00.000Z", entry: 4021.35, stop: 4019.85, target: 4022.85, status: "sent", created_at: "2026-10-12T01:24:06.000Z" },
+        ],
+      })
+    );
+    render(<SignalAlertSettings call={call} />);
+    const rows = await screen.findAllByTestId("signal-alert-row");
+    expect(rows[0].textContent).toContain("XAU/USD 1分 買い（流動性狩り＋EMAクロス）");
+    expect(rows[0].textContent).toContain("目安 4021.35 / 損切り 4019.85 / 利確 4022.85");
+  });
+
+  it("is in English too", async () => {
+    render(<SignalAlertSettings call={async () => withSweepx()} />, "en");
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-sweepx"));
+    expect(screen.getByTestId("signal-alerts-rule-sweepx").textContent).toBe("Liquidity sweep + EMA cross");
+    expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("On gold's 1-minute chart only");
+    expect(screen.getByTestId("signal-alerts-grid").querySelectorAll("thead th")[1].textContent).toBe("1m");
+    const notes = screen.getByTestId("signal-alerts-notes").textContent!;
+    expect(notes).toContain("recorded by the server every 3 seconds or so");
+    expect(notes).toContain("have not been measured");
   });
 });
