@@ -45,7 +45,7 @@ import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend, qTrendTrades } from "@/l
 import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ultra";
-import { sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
+import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -1055,23 +1055,16 @@ const PriceChart = ({
         }
       }
     }
-    // #291: the video's way's boxes (to the second target and to the stop),
-    // for the marks whose boxes reach into view
-    if (sweepMarks) {
-      for (const m of sweepMarks) {
-        if (m.at + SWEEP_BOX_BARS < from || m.at >= to) continue;
-        for (const v of [m.sl, m.tps[1]]) {
-          if (!Number.isFinite(v)) continue;
-          min = Math.min(min, v);
-          max = Math.max(max, v);
-        }
-      }
-    }
+    // #291: the video's way's boxes are not in it either, as the levels
+    // above: its 20 pips are half the price of a yen pair priced under a yen
+    // (HUF/JPY), and every candle would be a flat line. A box reaching past
+    // the plot is cut at its edge; its numbers are in its title.
     // #104: signal labels and their TP/SL boxes stand above the highs and
     // hang below the lows, so a chart that has any gets more room at both
     // ends — otherwise a signal at the window's extreme is pushed onto the
-    // candles it points at.
-    const pad = (max - min) * (marks.length > 0 || (sweepMarks?.length ?? 0) > 0 ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // candles it points at (#291: the video's way's labels too, in view).
+    const sweepInView = sweepMarks !== null && sweepMarks.some((m) => m.at >= from && m.at < to);
+    const pad = (max - min) * (marks.length > 0 || sweepInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1454,8 +1447,20 @@ const PriceChart = ({
     adx: t.chart.adx.note,
     // #151
     ultra: t.chart.ultraNote,
-    // #291
-    sweepx: t.chart.sweepxNote(isGoldPair(pair), sweepMarks ? sweepMarks.some((m) => !m.full && m.at >= 0) : false),
+    // #291 (and why no mark may be drawn: the bars before the chart still
+    // read, or not read, or too few bars for a cross to count)
+    sweepx: t.chart.sweepxNote(
+      isGoldPair(pair),
+      sweepMarks ? sweepMarks.some((m) => !m.full && m.at >= 0) : false,
+      !ov.sweepx || candles.length === 0
+        ? "ready"
+        : maPast === null
+          ? (zoneShiftHistory?.status === "error" ? "error" : "loading")
+          : maPast.length + candles.length - tail < SWEEPX_MIN_WINDOW
+            ? "few"
+            : "ready",
+      SWEEPX_MIN_WINDOW,
+    ),
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; settingsOpen?: boolean; settingsLabel?: string; locked?: true; swatch?: string }> = [
@@ -4076,10 +4081,12 @@ const PriceChart = ({
             dashed in it) and to the stop (gray), SWEEP_BOX_BARS wide, and the
             last wave's low (high) that was taken, dashed from where it was made
             to where the leg went past it. A bar judged on fewer bars than the
-            email's window is drawn fainter */}
+            email's window is drawn fainter. Each is drawn while any of it is in
+            view, from the level's bar to the boxes' end (the cross bar itself
+            may be past the right edge, its level and "taken" in view) */}
         {sweepMarks && (
           <g data-testid="chart-sweepx" clipPath={`url(#${clipId})`}>
-            {sweepMarks.filter((m) => m.at >= 0 && m.at + SWEEP_BOX_BARS >= from && m.at < to).map((m) => {
+            {sweepMarks.filter((m) => m.at >= 0 && m.at + SWEEP_BOX_BARS >= from && m.levelAt < to).map((m) => {
               const buy = m.side === "BUY";
               const c = candles[m.at];
               const fsz = (narrow ? 7.5 : 8.5) * fs;

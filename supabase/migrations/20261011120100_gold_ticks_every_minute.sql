@@ -1,13 +1,15 @@
 -- #291 (docs §8.112): the "gold-ticks" run every minute (signal-alerts,
--- gold-minutes.ts): Swissquote's gold price every few seconds until just
--- before the next minute, recorded into public.gold_tick_bars. While gold is
--- shut (the FX weekend at its widest, gold's daily hour) a run reads nothing
--- and ends at once.
+-- gold-minutes.ts): Swissquote's gold price every few seconds until 25
+-- seconds past the minute, recorded into public.gold_tick_bars. The function
+-- answers at once and reads in the background (pg_net sends nothing else
+-- while a request it sent is open: measured on this project, docs §8.112).
+-- While gold is shut (the FX weekend at its widest, gold's daily hour) a run
+-- reads nothing.
 --
 -- Applied after the function that knows the mode is deployed: before it, the
 -- function took a sweep call it did not know for the RSI + SAR sweep, which
--- would then run every minute. Its own minute's reads take the run some 58
--- seconds, so the call waits up to two minutes for its answer.
+-- would then run every minute. The answer comes at once (the two minutes
+-- allowed for it are only a generous bound).
 
 select cron.unschedule(jobid) from cron.job where jobname = 'signal-alerts-gold-ticks';
 select cron.schedule(

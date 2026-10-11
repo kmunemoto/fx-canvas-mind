@@ -276,7 +276,10 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     expect(fn).toContain('historyOfBars(GOLD, "1min", tickMinuteCandles(minutes), now, new Date(now).toISOString()).candles');
     expect(fn).toContain('const sigs = sweepxSignals(GOLD, "1min", closed, now);');
     expect(fn).toContain("await mailerFor(subs, counts)(sigs);");
-    expect(fn).toContain('if (body.mode === "gold-ticks") return json(await goldTicks());');
+    // in the background, the request answered at once: pg_net sends nothing
+    // else while a request it sent is open, and the run takes the minute and more
+    expect(fn).toMatch(/if \(body\.mode === "gold-ticks"\) \{[\s\S]{0,700}runtime\.waitUntil\(\s*goldTicks\(\)\.then\(/);
+    expect(fn).not.toContain("json(await goldTicks())");
     expect(fn).toContain("sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },");
     expect(fn).toContain("signal-alerts-v24");
   });
@@ -284,5 +287,10 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     const sql = readFileSync("supabase/migrations/20261011120000_gold_minutes_all_day.sql", "utf8");
     expect(sql).toContain("check (\"interval\" = any (array['1min', '5min', '15min', '1h', '4h', '1day']));");
     expect(sql).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx']));");
+    // every row recorded before the recording all day is removed, and the
+    // minutes are read as one answer, from a time on when asked
+    expect(sql).toContain("delete from public.gold_tick_bars;");
+    expect(sql).toContain("create or replace function public.gold_tick_minutes(p_count integer, p_from timestamptz default null)");
+    expect(sql).toContain("where p_from is null or minute >= p_from");
   });
 });

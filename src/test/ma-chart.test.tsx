@@ -416,7 +416,8 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       localStorage.clear();
       localStorage.setItem(
         CHART_PREFS_KEY,
-        JSON.stringify({ overlays: { zlTema: true }, maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period, type: "SMA" }] }),
+        // (#291: the video's way's marks off; they read deep of their own, below)
+        JSON.stringify({ overlays: { zlTema: true, sweepx: false }, maLines: [MA_DEFAULTS[0], MA_DEFAULTS[1], { period, type: "SMA" }] }),
       );
       resetChartPrefsCache();
       // enough bars before the chart's for the defaults' EMA 200
@@ -439,7 +440,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       localStorage.clear();
       localStorage.setItem(
         CHART_PREFS_KEY,
-        JSON.stringify({ overlays: { maCross: true, ema50: false }, maLines: [{ period: MA_DEEP_FROM + 100, type: "EMA" }, MA_DEFAULTS[1], MA_DEFAULTS[2]] }),
+        JSON.stringify({ overlays: { maCross: true, ema50: false, sweepx: false }, maLines: [{ period: MA_DEEP_FROM + 100, type: "EMA" }, MA_DEFAULTS[1], MA_DEFAULTS[2]] }),
       );
       resetChartPrefsCache();
       const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
@@ -449,6 +450,28 @@ describe("#201 the moving averages' chart beside the live chart", () => {
       else {
         await new Promise((r) => setTimeout(r, 50));
         expect(loadDeepHistory).not.toHaveBeenCalled();
+      }
+      unmount();
+    }
+  });
+
+  it("#291: reads the deep history for the video's way's marks while fewer than 599 bars are before the chart's first (the email judges on 600), whatever the lines", async () => {
+    for (const [sweepx, n, deep] of [
+      [true, 580, true],
+      [true, 700, false],
+      [false, 580, false],
+    ] as const) {
+      localStorage.clear();
+      localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { sweepx } }));
+      resetChartPrefsCache();
+      const common = before(n);
+      const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
+      const { unmount } = render(chart("ma", { defaultInterval: "15min", loadHistory: async () => common, loadDeepHistory }));
+      await waitFor(() => expect(screen.getByTestId("chart-ema200-line")).toBeTruthy());
+      if (deep) await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledWith("USD/JPY", "15min"));
+      else {
+        await new Promise((r) => setTimeout(r, 50));
+        expect(loadDeepHistory, `${sweepx} ${n}`).not.toHaveBeenCalled();
       }
       unmount();
     }

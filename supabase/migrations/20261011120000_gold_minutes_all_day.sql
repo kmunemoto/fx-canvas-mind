@@ -20,12 +20,15 @@
 --    them. A price stamped more than five minutes ahead of the database's
 --    clock, or a day behind it, is not recorded: one bad stamp from the
 --    future would otherwise have every row before it deleted.
--- 3. The rows kept so far are removed. They were recorded only while
---    somebody watched, hours apart; as a history they would be drawn, and
---    judged, as if each ran on from the last.
--- 4. public.gold_tick_minutes(count): the newest `count` minutes, oldest
---    first, as one JSON array (the REST API answers a thousand rows at most,
---    and the chart's deep history asks for 1,400).
+-- 3. The rows kept so far are removed, all of them: until the recording
+--    begins (after this migration) a row was recorded only while somebody
+--    watched, hours apart, and as a history they would be drawn, and judged,
+--    as if each ran on from the last.
+-- 4. public.gold_tick_minutes(count, from): the newest `count` minutes (from
+--    `from` on, when given), oldest first, as one JSON array — the REST API
+--    answers a thousand rows at most, and the chart's deep history asks for
+--    1,400; a read of Twelve Data's, gone on with the minutes recorded since
+--    (live-chart withTicks), may ask for days of them.
 -- 5. Subscriptions: the 1-minute chart, and the rule 'sweepx'. The function
 --    says which chart the rule may be followed on (gold's 1-minute only);
 --    the checks here only bound what can be stored. Nothing is changed in a
@@ -39,7 +42,7 @@ alter table public.gold_tick_bars drop constraint if exists gold_tick_bars_sourc
 alter table public.gold_tick_bars add constraint gold_tick_bars_source_check
   check (source = any (array['swissquote', 'twelvedata']));
 
-delete from public.gold_tick_bars where minute < '2026-10-11T00:00:00Z';
+delete from public.gold_tick_bars;
 
 create or replace function public.record_gold_tick(p_at timestamptz, p_mid numeric)
 returns void
@@ -75,7 +78,7 @@ $$;
 revoke all on function public.record_gold_tick(timestamptz, numeric) from public, anon, authenticated;
 grant execute on function public.record_gold_tick(timestamptz, numeric) to service_role;
 
-create or replace function public.gold_tick_minutes(p_count integer)
+create or replace function public.gold_tick_minutes(p_count integer, p_from timestamptz default null)
 returns jsonb
 language sql
 stable
@@ -94,13 +97,14 @@ as $$
   )
   from (
     select * from public.gold_tick_bars
+    where p_from is null or minute >= p_from
     order by minute desc
     limit greatest(0, least(coalesce(p_count, 0), 20000))
   ) x;
 $$;
 
-revoke all on function public.gold_tick_minutes(integer) from public, anon, authenticated;
-grant execute on function public.gold_tick_minutes(integer) to service_role;
+revoke all on function public.gold_tick_minutes(integer, timestamptz) from public, anon, authenticated;
+grant execute on function public.gold_tick_minutes(integer, timestamptz) to service_role;
 
 alter table public.signal_alert_subscriptions drop constraint if exists signal_alert_subscriptions_interval_check;
 alter table public.signal_alert_subscriptions add constraint signal_alert_subscriptions_interval_check

@@ -5,6 +5,7 @@ import { useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { type ChartPrefs, getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import { maNeedsDeep } from "@/lib/emaLines";
+import { SWEEPX } from "@/lib/sweepCross";
 import type { NumericCandle } from "@/lib/types";
 import {
   INTERVAL_STEP_MS,
@@ -390,7 +391,13 @@ const LiveChart = ({
     indicatorsAllowed &&
     !deepNoMore &&
     maNeedsDeep(maMode ? maSwitches : overlays, chartPrefs.maLines, commonBefore && gmoRead ? { before: commonBefore.length, total: commonBefore.length + gmoRead.candles.length } : null);
-  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep);
+  // #291: and on the moving averages' chart while the video's way's marks are
+  // on and the history above has fewer bars before the chart's first than
+  // the email's window needs (SWEEPX.window - 1), so each of the chart's
+  // bars is judged on its 600 closed bars, as the email judges (whatever
+  // the three lines are set to). Not told to the chart as the lines' (`deepForMa`)
+  const sweepDeep = indicatorsAllowed && !deepNoMore && maMode && overlays.sweepx && commonBefore !== null && commonBefore.length < SWEEPX.window - 1;
+  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep || sweepDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;

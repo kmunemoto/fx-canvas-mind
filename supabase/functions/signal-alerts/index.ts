@@ -768,12 +768,13 @@ Deno.serve(async (req: Request) => {
 
     // ---- #291: gold's 1-minute bars, recorded all day (gold-minutes.ts) -------------------
     //
-    // Every minute (pg_cron): Swissquote's gold price every GOLD_TICK_EVERY_MS
-    // until just before the next minute, each one open now recorded into
+    // Every minute (pg_cron), in the background: Swissquote's gold price every
+    // GOLD_TICK_EVERY_MS until GOLD_TICK_OVERLAP_MS past the minute, each one
+    // open now and stamped in a minute gold trades recorded into
     // public.gold_tick_bars. While gold is shut (the FX weekend at its
     // widest, gold's daily hour) nothing is read; a quote left standing
     // (older than GOLD_QUOTE_STALE_MS: a break the hours above do not know,
-    // a holiday) ends the minute's reads.
+    // a holiday, the first reads after a reopening) is not recorded.
     const goldQuote = async (): Promise<Tick | null> => {
       try {
         const r = await fetch(GOLD_QUOTE_URL, { signal: AbortSignal.timeout(GOLD_TICK_EVERY_MS - 500) });
@@ -823,25 +824,40 @@ Deno.serve(async (req: Request) => {
       }
     };
     const goldTicks = async (): Promise<JsonRecord> => {
-      const plan = goldTickPlan(Date.now());
-      const summary: JsonRecord = { ok: true, mode: "gold-ticks", version: FUNCTION_VERSION, minute: new Date(plan.minuteStart).toISOString() };
+      const started = Date.now();
+      const plan = goldTickPlan(started);
+      const summary: JsonRecord = {
+        ok: true,
+        mode: "gold-ticks",
+        version: FUNCTION_VERSION,
+        minute: new Date(plan.minuteStart).toISOString(),
+        started: new Date(started).toISOString(),
+      };
       // a second call for the minute this instance is already reading
       if (goldTicksMinute === plan.minuteStart) return { ...summary, skipped: "busy" };
-      if (isPossiblyClosedFor(GOLD, Date.now())) {
+      if (isPossiblyClosedFor(GOLD, plan.minuteStart)) {
         // the minute before gold shut (its daily hour, the week's end) is
-        // judged still; the others while it is shut have no bar
-        const last = !isPossiblyClosedFor(GOLD, plan.minuteStart - MIN);
-        return { ...summary, skipped: "market_closed", ...(last ? { judged: await goldJudge() } : {}) };
+        // judged still, GOLD_JUDGE_AFTER_MS after it closed as every minute
+        // is (the run before this one may still be recording its last
+        // prices); the others while it is shut have no bar
+        if (isPossiblyClosedFor(GOLD, plan.minuteStart - MIN)) return { ...summary, skipped: "market_closed" };
+        await sleep(plan.judgeAt - Date.now());
+        return { ...summary, skipped: "market_closed", judged: await goldJudge() };
       }
       goldTicksMinute = plan.minuteStart;
-      const tally = { reads: 0, recorded: 0, stale: 0, failed: 0, record_failed: 0 };
-      let judged: JsonRecord | null = null;
+      const tally = { reads: 0, recorded: 0, stale: 0, shut: 0, failed: 0, record_failed: 0 };
+      // the judge runs beside the reads (its mails may take seconds), not
+      // between them
+      let judging: Promise<JsonRecord> | null = null;
       try {
         let lastAt = Number.NEGATIVE_INFINITY;
         for (;;) {
-          // the minute that closed, once its last prices are in
-          if (judged === null && Date.now() >= plan.judgeAt) judged = await goldJudge();
           const at = nextTickAt(lastAt, Date.now());
+          // the minute that closed, once its last prices are in
+          if (judging === null && plan.judgeAt <= at) {
+            await sleep(plan.judgeAt - Date.now());
+            judging = goldJudge();
+          }
           if (at >= plan.stopAt) break;
           await sleep(at - Date.now());
           lastAt = at;
@@ -853,7 +869,12 @@ Deno.serve(async (req: Request) => {
           }
           if (!tick.open || !tick.time) {
             tally.stale++;
-            break;
+            continue;
+          }
+          // (a price stamped while gold is shut makes no bar)
+          if (isPossiblyClosedFor(GOLD, Date.parse(tick.time))) {
+            tally.shut++;
+            continue;
           }
           try {
             const rec = await rest("rpc/record_gold_tick", { method: "POST", body: JSON.stringify({ p_at: tick.time, p_mid: tick.mid }) });
@@ -868,15 +889,14 @@ Deno.serve(async (req: Request) => {
             console.error("gold tick record failed:", err);
           }
         }
-        // a run that began late, or stopped at a quote left standing
-        if (judged === null) {
+        if (judging === null) {
           await sleep(plan.judgeAt - Date.now());
-          judged = await goldJudge();
+          judging = goldJudge();
         }
       } finally {
         if (goldTicksMinute === plan.minuteStart) goldTicksMinute = null;
       }
-      return { ...summary, ...tally, judged };
+      return { ...summary, ...tally, ended: new Date().toISOString(), judged: await judging };
     };
     // Once, by hand: the minutes before the recording began, from Twelve
     // Data's newest 1-minute bars (gold-minutes.ts goldSeedRows), within the
@@ -936,8 +956,23 @@ Deno.serve(async (req: Request) => {
           indicatorSweepRunning = false;
         }
       }
-      // #291: every minute, gold's price from Swissquote all minute long
-      if (body.mode === "gold-ticks") return json(await goldTicks());
+      // #291: every minute, gold's price from Swissquote all minute long — in
+      // the background (EdgeRuntime.waitUntil), the request answered at once:
+      // pg_net sends nothing else while a request it sent is open, and this
+      // run takes the minute and more. Its summary goes to the function's log
+      if (body.mode === "gold-ticks") {
+        const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+        if (typeof runtime?.waitUntil !== "function") {
+          return json({ ok: false, mode: "gold-ticks", version: FUNCTION_VERSION, error: "no_background" }, 500);
+        }
+        runtime.waitUntil(
+          goldTicks().then(
+            (s) => console.log(JSON.stringify(s)),
+            (err) => console.error("gold ticks failed:", err),
+          ),
+        );
+        return json({ ok: true, mode: "gold-ticks", version: FUNCTION_VERSION, background: true, at: new Date().toISOString() });
+      }
       // #291: once, by hand: the minutes before that recording began
       if (body.mode === "gold-seed") return json(await goldSeed());
       const summary: JsonRecord = { ok: true, mode: "sweep", version: FUNCTION_VERSION, email_configured: emailConfigured };

@@ -381,13 +381,22 @@ export const en: Dict = {
     maCrossTitle: (side: "GC" | "DC", fast: string, slow: string): string =>
       side === "GC" ? `Golden cross (${fast} crossed above ${slow})` : `Dead cross (${fast} crossed below ${slow})`,
     // #291: the owner's video's way on the moving averages' chart (docs §8.112)
-    sweepxNote: (gold: boolean, partial: boolean): string =>
+    // (`status`: why no mark may be drawn — the bars before the chart still
+    // read or not read, or fewer bars on the chart than `minBars`)
+    sweepxNote: (gold: boolean, partial: boolean, status: "ready" | "loading" | "error" | "few", minBars: number): string =>
       "Liquidity sweep + EMA cross (a gold trader's Instagram video's way, made into a rule by this app; docs §8.112): " +
       "BUY on the closed bar where EMA 20 crosses above EMA 80, when the lows since the last cross down went below the last wave's trough (the lowest low from the cross down before it to the bar before the last one): the cross after the last low was taken once, a \"liquidity sweep\". SELL the mirror (EMA 20 crossing below after the last high was taken). " +
       `Entered at the bar's close; the stop a pip beyond the lowest low of the last 5 bars (a SELL's, the highest high); the targets 15 and 20 pips (${gold ? "a pip being $0.10 on gold: $1.50 and $2.00" : "0.15 and 0.20 yen on a yen pair, 0.0015 and 0.0020 on another; $1.50 and $2.00 on gold"}). The blue box reaches the second target (the first dashed in it), the gray one the stop; the dotted yellow line is the low (high) that was taken. The break of structure is not waited for (the owner's choice). ` +
       "The lines are EMA 20 and EMA 80 whatever the moving averages above are set to. Each bar is judged on the 600 closed bars ending at it, as the email is (crosses counted from the 241st of them on)" +
       (partial ? "; where this chart holds fewer, on what it holds, drawn fainter (the email only where it has 600). " : ". ") +
-      "On gold's 1-minute chart the same decision can be emailed (Settings → Email alerts → \"Liquidity sweep + EMA cross\"). This rule's win rate and its profit or loss a trade have not been measured.",
+      "On gold's 1-minute chart the same decision can be emailed (Settings → Email alerts → \"Liquidity sweep + EMA cross\"). This rule's win rate and its profit or loss a trade have not been measured." +
+      (status === "loading"
+        ? " The bars before the chart are being read; no mark is drawn until they are in."
+        : status === "error"
+          ? " The bars before the chart could not be read, so no mark is drawn for now."
+          : status === "few"
+            ? ` This chart has fewer than ${minBars} bars, so no mark is drawn (crosses count from the 241st bar judged on).`
+            : ""),
     sweepxTitle: (side: "BUY" | "SELL", entry: string, sl: string, tps: string[], level: string, full: boolean): string =>
       `Liquidity sweep + EMA cross ${side}: entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]} (the ${side === "BUY" ? "low" : "high"} taken ${level})` +
       (full ? "" : "; judged on fewer than 600 bars"),
@@ -1883,9 +1892,9 @@ export const en: Dict = {
     sweepxNotes: [
       "Judged on gold's 1-minute chart only, whose bars are made of Swissquote's gold prices recorded by the server every 3 seconds or so (the chart's gold 1-minute bars; the minutes before the recording began are Twelve Data's). A bar's high and low are those of the prices recorded, so a wick's tip can be missed (by how much has not been measured).",
       "Judged and sent from 5 seconds after the bar closes (how many seconds it actually takes to arrive has not been checked yet). A bar closed more than 2 minutes ago is not sent.",
-      "On the 1-minute chart several emails a day can arrive. The mail service's (Resend's) free plan sends 100 a day and 3,000 a month; the rest show as failed.",
-      "This rule's win rate and its profit or loss a trade have not been measured. The video does not show its author's EMA lengths or timeframe, so EMA 20 and EMA 80, the window it is judged on (600 closed bars), where the stop goes and the like are this app's. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
-      "Nothing is judged while gold is shut (weekends and its daily hour).",
+      "On the 1-minute chart several emails a day can arrive (how many a day has not been counted yet). If the mail service (Resend) is on its free plan, those past 100 a day or 3,000 a month, counted with the other alerts, show as failed.",
+      "This rule's win rate and its profit or loss a trade have not been measured. The video does not show its author's EMA lengths or timeframe: EMA 20 and EMA 80 are the owner's choice, and the window it is judged on (600 closed bars), where the stop goes and the like are this app's. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
+      "Nothing is judged while gold is shut (its daily hour, and the weekend, taken wide: Friday 21:00 to Sunday 22:00 UTC). The last bar before it shuts is judged 5 seconds after it closes, so that email arrives while gold cannot be traded until it reopens.",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",

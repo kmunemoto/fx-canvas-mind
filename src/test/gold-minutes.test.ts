@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  GOLD_EARLY_START_MS,
   GOLD_JUDGE_AFTER_MS,
   GOLD_TICK_EVERY_MS,
-  GOLD_TICK_STOP_MS,
+  GOLD_TICK_OVERLAP_MS,
   closedMinutes,
   goldSeedRows,
   goldTickPlan,
@@ -24,14 +25,26 @@ const T0 = Date.parse("2026-10-12T01:00:00Z");
 const stamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 describe("#291 the gold-ticks run's minute", () => {
-  it("reads from its start until GOLD_TICK_STOP_MS before the next minute, and judges GOLD_JUDGE_AFTER_MS into it", () => {
+  it("reads from its start until GOLD_TICK_OVERLAP_MS past its minute (beside the next run), and judges GOLD_JUDGE_AFTER_MS into it", () => {
     const p = goldTickPlan(T0 + 700);
     expect(p.minuteStart).toBe(T0);
-    expect(p.stopAt).toBe(T0 + M1 - GOLD_TICK_STOP_MS);
+    expect(p.stopAt).toBe(T0 + M1 + GOLD_TICK_OVERLAP_MS);
     expect(p.judgeAt).toBe(T0 + GOLD_JUDGE_AFTER_MS);
-    // a run begun late in its minute is still that minute's
-    expect(goldTickPlan(T0 + 59_999).minuteStart).toBe(T0);
+    // the next minute's run, sent late behind the minute's other requests,
+    // still begins inside this one's reading: no part of a minute unread
+    const next = goldTickPlan(T0 + M1 + 18_000);
+    expect(next.minuteStart).toBe(T0 + M1);
+    expect(T0 + M1 + 18_000).toBeLessThan(p.stopAt);
+    // a run begun late in its minute is still that minute's; one begun in its
+    // last GOLD_EARLY_START_MS (the cron's clock a little ahead) is the next one's
+    expect(GOLD_EARLY_START_MS).toBe(2_000);
+    expect(goldTickPlan(T0 + M1 - GOLD_EARLY_START_MS - 1).minuteStart).toBe(T0);
+    expect(goldTickPlan(T0 + M1 - GOLD_EARLY_START_MS).minuteStart).toBe(T0 + M1);
+    expect(goldTickPlan(T0 + M1 - 20).minuteStart).toBe(T0 + M1);
     expect(goldTickPlan(T0 + M1).minuteStart).toBe(T0 + M1);
+    // a run lasts its minute and the overlap: within a worker's 150 seconds
+    // with room for a late start
+    expect(p.stopAt - p.minuteStart).toBe(85_000);
   });
 
   it("reads every GOLD_TICK_EVERY_MS, at once after a late read, and begins none from stopAt on", () => {
@@ -51,10 +64,12 @@ describe("#291 the gold-ticks run's minute", () => {
       last = at;
       now = at;
     }
-    expect(reads).toHaveLength(20);
+    // 0.7 s to 84.7 s: 29 reads, the last 9 of them inside the next minute
+    expect(reads).toHaveLength(29);
     expect(reads[0]).toBe(T0 + 700);
-    expect(reads.at(-1)).toBe(T0 + 700 + 19 * GOLD_TICK_EVERY_MS);
-    expect(reads.every((t) => t < T0 + M1 - GOLD_TICK_STOP_MS)).toBe(true);
+    expect(reads.at(-1)).toBe(T0 + 700 + 28 * GOLD_TICK_EVERY_MS);
+    expect(reads.every((t) => t < T0 + M1 + GOLD_TICK_OVERLAP_MS)).toBe(true);
+    expect(reads.filter((t) => t >= T0 + M1)).toHaveLength(9);
   });
 
   it("the minutes closed by a time: a minute's whole length gone by", () => {

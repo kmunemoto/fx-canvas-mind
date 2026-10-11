@@ -345,11 +345,12 @@ Deno.serve(async (req: Request) => {
       try {
         const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
         const cols = "select=minute,open,high,low,close,last_at&order=minute.asc&limit=5000";
-        const res = await rest(
-          isGold(pair)
-            ? `gold_tick_bars?minute=gte.${encodeURIComponent(from)}&${cols}`
-            : `live_tick_bars?pair=eq.${encodeURIComponent(pair)}&minute=gte.${encodeURIComponent(from)}&${cols}`,
-        );
+        // #291: gold's, a row every minute all day now, through the function
+        // that answers them all as one (the REST API answers a thousand rows
+        // at most: some 17 hours of them)
+        const res = isGold(pair)
+          ? await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: 20_000, p_from: from }) })
+          : await rest(`live_tick_bars?pair=eq.${encodeURIComponent(pair)}&minute=gte.${encodeURIComponent(from)}&${cols}`);
         if (!res.ok) return fb;
         const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(await res.json().catch(() => null)));
         return { ...fb, ...ext };

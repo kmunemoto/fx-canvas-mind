@@ -7,10 +7,13 @@
 // (Twelve Data's free key allows 800 reads a day; reading gold's 1-minute bars
 // after every close takes some 1,380): 「Swissquoteで、チャートもそろえる」. So
 // pg_cron starts the signal-alerts function every minute with {"mode":
-// "gold-ticks"}; the run reads Swissquote's gold price every GOLD_TICK_EVERY_MS
-// until GOLD_TICK_STOP_MS before the next minute (the next run's), and each
-// price open now (younger than GOLD_QUOTE_STALE_MS, as the live chart takes
-// it) goes into public.gold_tick_bars, a row a minute (record_gold_tick). The
+// "gold-ticks"}; the function answers at once and the run goes on in the
+// background (EdgeRuntime.waitUntil: a request held for the run would hold
+// every other request pg_net sends meanwhile), reading Swissquote's gold
+// price every GOLD_TICK_EVERY_MS until GOLD_TICK_OVERLAP_MS past its minute
+// (into the next run's), and each price open now (younger than
+// GOLD_QUOTE_STALE_MS, as the live chart takes it, and stamped in a minute
+// gold trades) goes into public.gold_tick_bars, a row a minute (record_gold_tick). The
 // live chart's ticker records gold's price there too, every two seconds
 // while a chart is open (#147). GOLD_JUDGE_AFTER_MS after a minute has
 // closed, the run judges it for the gold 1-minute email, on the prices
@@ -28,9 +31,20 @@ const MIN = 60_000;
 // How often the run reads Swissquote's gold price (the live chart's ticker
 // reads it every two seconds while a chart is open)
 export const GOLD_TICK_EVERY_MS = 3_000;
-// The run reads no more from this long before the next minute begins: the
-// next minute's run reads from then
-export const GOLD_TICK_STOP_MS = 1_500;
+// The run reads on this long past the end of its minute, beside the next
+// minute's run: pg_cron starts every run at the minute, but pg_net sends the
+// minute's requests one batch after another (measured 2026-10-11 on this
+// project's pg_net 0.20.0: a request queued behind a 15-second one was sent
+// when that one ended), so the next run may begin some seconds late — behind
+// the minute's other functions, the indicators' sweep among them (at most
+// 9.8 s on 2026-10-09). The two read together meanwhile; no part of a
+// minute goes unread. (Each run is its own worker, booted for its request,
+// so a run of 85 s is well inside the 150 s a worker may live)
+export const GOLD_TICK_OVERLAP_MS = 25_000;
+// A run started this close to a minute's end (pg_cron's clock a little
+// ahead of the function's) is the next minute's, as the indicators' sweep
+// takes it (indicators.ts startWaitMs)
+export const GOLD_EARLY_START_MS = 2_000;
 // How long after a minute has closed it is judged for the email: the run's
 // first reads of the new minute have been recorded by then, and a price
 // stamped within the minute that closed, read late, with them
@@ -45,10 +59,11 @@ export interface GoldTickPlan {
   judgeAt: number;
 }
 
-// The run started at `startMs`: the minute it is in
+// The run started at `startMs`: the minute it is in (or the next one, in a
+// minute's last GOLD_EARLY_START_MS)
 export const goldTickPlan = (startMs: number): GoldTickPlan => {
-  const minuteStart = Math.floor(startMs / MIN) * MIN;
-  return { minuteStart, stopAt: minuteStart + MIN - GOLD_TICK_STOP_MS, judgeAt: minuteStart + GOLD_JUDGE_AFTER_MS };
+  const minuteStart = Math.floor((startMs + GOLD_EARLY_START_MS) / MIN) * MIN;
+  return { minuteStart, stopAt: minuteStart + MIN + GOLD_TICK_OVERLAP_MS, judgeAt: minuteStart + GOLD_JUDGE_AFTER_MS };
 };
 
 // When the next read is begun, the last one having begun at `lastAt`: a
