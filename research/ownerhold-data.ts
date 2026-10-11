@@ -13,7 +13,8 @@ import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs } from "../supabase/functions/_shared/qtrend.ts";
 import { ULTRA_PAIRS, ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
-import { freshFor, indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { freshFor, indicatorSignals, macdxSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { WINDOW as MACD_WINDOW, decide, decideOnWindow, prepare } from "../supabase/functions/_shared/macd-extreme.ts";
 import { DAY, HOUR, MINUTE } from "./lib.ts";
 
 // the five pairs, in Rakuten's list order (the order orders of one minute are taken in)
@@ -26,11 +27,25 @@ const STEP15 = 15 * MINUTE;
 const WINDOW = 600;
 // 15-minute bars read before START for the first bar's window (tf-winrate LEAD_DAYS)
 export const LEAD15 = 12 * DAY;
-// when the sweep reads a 15-minute chart, minutes after its close (indicators.ts gmoIntervalsDue)
-const READ_AFTER = [1, 3];
-const FRESH = freshFor("15min");
-// bars checked against indicatorSignals (tf-winrate CHECK_EVERY on 15min), and every 7th signal
-const CHECK_EVERY = 223;
+
+// The chart a signal source is read from (docs §8.111): the 15-minute chart of §8.102 is the default of every
+// function below, so a run without SIGS reads and writes what it always did.
+export interface IvCfg {
+  interval: "5min" | "15min";
+  step: number;
+  // minutes after a bar's close the sweep reads the chart at (indicators.ts gmoIntervalsDue)
+  readAfter: number[];
+  // how long after its close a signal is still mailed (indicators.ts freshFor)
+  fresh: number;
+  // bars checked against indicatorSignals (tf-winrate CHECK_EVERY), and every 7th signal
+  checkEvery: number;
+  // bars read before START for the first bar's window (tf-winrate LEAD_DAYS)
+  lead: number;
+}
+export const IV15: IvCfg = { interval: "15min", step: STEP15, readAfter: [1, 3], fresh: freshFor("15min"), checkEvery: 223, lead: LEAD15 };
+// 5 minutes: read 0, 1 and 3 minutes after the close (docs §8.109 合図の決まり 9, §8.111), 5 days before START
+export const STEP5 = 5 * MINUTE;
+export const IV5: IvCfg = { interval: "5min", step: STEP5, readAfter: [0, 1, 3], fresh: freshFor("5min"), checkEvery: 661, lead: 5 * DAY };
 
 export interface M1 {
   pair: string;
@@ -316,6 +331,8 @@ export interface SynthSpec {
   // in, as a holiday GMO is shut (12/25, 1/1); none: every day as before. A day shut is a closure like the
   // weekend's (the mid jumps after it); a walk without it is written as before.
   closedKeys?: readonly string[];
+  // docs §8.111: also make the walk's 5-minute bars (q5); the 15-minute runs do not, and write no 5-minute files
+  withFive?: boolean;
 }
 
 // the key of GMO's day file a bar is in: its day starts at 06:00 JST (21:00 UTC; research/gotobi.ts fileKeyOf)
@@ -351,7 +368,7 @@ export const synthOpen = (ms: number): boolean => {
 // rounded to GMO's digits. After the weekend the mid jumps (three 15-minute
 // moves' worth). Its 15-minute bars are the minutes' (open, high, low, close
 // by side). Both kept as GMO's files would give them back (loadM1, load15).
-export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number): { m1: M1; q15: QuoteCandle[] } => {
+export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number): { m1: M1; q15: QuoteCandle[]; q5?: QuoteCandle[] } => {
   const p = SYN[pair];
   const unit = unitOf(pair);
   const dg = digitsOf(pair);
@@ -435,34 +452,38 @@ export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: nu
   }
   const cut = (xs: Float64Array) => xs.subarray(0, k);
   const m1: M1 = { pair, n: k, t: cut(m.t), bo: cut(m.bo), bh: cut(m.bh), bl: cut(m.bl), bc: cut(m.bc), ao: cut(m.ao), ah: cut(m.ah), al: cut(m.al), ac: cut(m.ac) };
-  // the 15-minute bars
-  const q15: QuoteCandle[] = [];
-  let j = 0;
-  while (j < k) {
-    const t15 = Math.floor(m1.t[j] / STEP15) * STEP15;
-    let e = j;
-    while (e + 1 < k && m1.t[e + 1] < t15 + STEP15) e++;
-    if (t15 + STEP15 <= toMs && !barInsideClosure(t15, STEP15)) {
-      const side = (O: Float64Array, H: Float64Array, L: Float64Array, C: Float64Array): Candle => {
-        let hi = -Infinity;
-        let lo = Infinity;
-        for (let i = j; i <= e; i++) {
-          hi = Math.max(hi, H[i]);
-          lo = Math.min(lo, L[i]);
-        }
-        return { datetime: new Date(t15).toISOString(), open: O[j], high: hi, low: lo, close: C[e] };
-      };
-      q15.push({ datetime: new Date(t15).toISOString(), bid: side(m1.bo, m1.bh, m1.bl, m1.bc), ask: side(m1.ao, m1.ah, m1.al, m1.ac) });
+  // the 15-minute bars (and the 5-minute bars, the same way: docs §8.111)
+  const barsOf = (stepMs: number): QuoteCandle[] => {
+    const out: QuoteCandle[] = [];
+    let j = 0;
+    while (j < k) {
+      const tBar = Math.floor(m1.t[j] / stepMs) * stepMs;
+      let e = j;
+      while (e + 1 < k && m1.t[e + 1] < tBar + stepMs) e++;
+      if (tBar + stepMs <= toMs && !barInsideClosure(tBar, stepMs)) {
+        const side = (O: Float64Array, H: Float64Array, L: Float64Array, C: Float64Array): Candle => {
+          let hi = -Infinity;
+          let lo = Infinity;
+          for (let i = j; i <= e; i++) {
+            hi = Math.max(hi, H[i]);
+            lo = Math.min(lo, L[i]);
+          }
+          return { datetime: new Date(tBar).toISOString(), open: O[j], high: hi, low: lo, close: C[e] };
+        };
+        out.push({ datetime: new Date(tBar).toISOString(), bid: side(m1.bo, m1.bh, m1.bl, m1.bc), ask: side(m1.ao, m1.ah, m1.al, m1.ac) });
+      }
+      j = e + 1;
     }
-    j = e + 1;
-  }
-  return { m1, q15 };
+    return out;
+  };
+  const q15 = barsOf(STEP15);
+  return spec.withFive ? { m1, q15, q5: barsOf(STEP5) } : { m1, q15 };
 };
 
 // A walk written as GMO's 1-minute and 15-minute day files (both sides) under
 // `dir`, every day key a read of [fromMs, toMs) asks for (a day without bars
 // an empty list, as GMO answers a weekend)
-export const writeGmoFiles = async (dir: string, pair: string, w: { m1: M1; q15: QuoteCandle[] }, fromMs: number, toMs: number) => {
+export const writeGmoFiles = async (dir: string, pair: string, w: { m1: M1; q15: QuoteCandle[]; q5?: QuoteCandle[] }, fromMs: number, toMs: number) => {
   const symbol = GMO_SYMBOLS[pair];
   const dg = digitsOf(pair);
   type Row = { openTime: string; open: string; high: string; low: string; close: string };
@@ -477,16 +498,23 @@ export const writeGmoFiles = async (dir: string, pair: string, w: { m1: M1; q15:
     d.bid.push({ openTime: ot, open: f(m.bo[k]), high: f(m.bh[k]), low: f(m.bl[k]), close: f(m.bc[k]) });
     d.ask.push({ openTime: ot, open: f(m.ao[k]), high: f(m.ah[k]), low: f(m.al[k]), close: f(m.ac[k]) });
   }
-  const q = new Map<string, { bid: Row[]; ask: Row[] }>();
-  for (const c of w.q15) {
-    const t = Date.parse(c.datetime);
-    const key = gmoDayKey(t);
-    let d = q.get(key);
-    if (!d) q.set(key, (d = { bid: [], ask: [] }));
-    for (const side of ["bid", "ask"] as const) d[side].push({ openTime: String(t), open: f(c[side].open), high: f(c[side].high), low: f(c[side].low), close: f(c[side].close) });
-  }
+  const dayMap = (bars: QuoteCandle[]) => {
+    const out = new Map<string, { bid: Row[]; ask: Row[] }>();
+    for (const c of bars) {
+      const t = Date.parse(c.datetime);
+      const key = gmoDayKey(t);
+      let d = out.get(key);
+      if (!d) out.set(key, (d = { bid: [], ask: [] }));
+      for (const side of ["bid", "ask"] as const) d[side].push({ openTime: String(t), open: f(c[side].open), high: f(c[side].high), low: f(c[side].low), close: f(c[side].close) });
+    }
+    return out;
+  };
+  const q = dayMap(w.q15);
+  // the 5-minute files only for a run that reads them (docs §8.111); the 15-minute run's folder stays as it was
+  const files: Array<readonly [string, Map<string, { bid: Row[]; ask: Row[] }>]> = [["1min", m1], ["15min", q]];
+  if (w.q5) files.push(["5min", dayMap(w.q5)]);
   for (const key of keysOf(fromMs, toMs).keys) {
-    for (const [iv, map] of [["1min", m1], ["15min", q]] as const) {
+    for (const [iv, map] of files) {
       const d = map.get(key) ?? { bid: [], ask: [] };
       for (const side of ["bid", "ask"] as const) {
         const path = `${dir}/${symbol}/${iv}/${side}/${key}.json`;
@@ -550,6 +578,8 @@ export interface SignalRead {
   // quotes closed when the sweep read it, through historyRead and indicatorSignals; the side of every bar and the
   // E and TP2 of every mailed signal compared (null: not run, the ③-only walks)
   cut: Probe | null;
+  // MACD reads only (docs §8.111): the decision on the 600-bar window against the whole series' (macdx.ts 確かめ 1)
+  ahead?: Probe;
 }
 
 const isoOf = (ms: number) => new Date(ms).toISOString();
@@ -560,9 +590,10 @@ const isoOf = (ms: number) => new Date(ms).toISOString();
 // window (where the anchor moved) is mailed when that bar is read, if still
 // inside the 20 minutes indicatorSignals keeps a signal fresh.
 // `plant` "signalNextBar" (確かめ A 仕込んだ誤り): E read from the bar after the signal's, which the cut check must catch
-export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], startMs: number, endMs: number, cutCheck = false, plant = ""): SignalRead => {
+export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], startMs: number, endMs: number, cutCheck = false, plant = "", iv: IvCfg = IV15): SignalRead => {
+  const step = iv.step;
   const unit = unitOf(pair);
-  const candles = historyRead(pair, "15min", quotes, endMs).candles;
+  const candles = historyRead(pair, iv.interval, quotes, endMs).candles;
   const n = candles.length;
   const times = new Float64Array(n);
   candles.forEach((c, i) => (times[i] = barOpenMs(c.datetime)));
@@ -576,7 +607,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     const firstShown = Math.max(0, last - (CHART_BARS - 1));
     return { ws, s: ws + anchoredStart(w, barStepMs(w.slice(firstShown)), firstShown, QT_DEFAULTS.period, last) };
   };
-  const inPeriod = (i: number) => times[i] + STEP15 >= startMs && times[i] + STEP15 < endMs;
+  const inPeriod = (i: number) => times[i] + step >= startMs && times[i] + step < endMs;
   // on-time: bar i in its own window, one run of ultra() for every bar an anchor serves
   const own = new Map<number, Side>();
   let seg: { s: number; from: number; to: number } | null = null;
@@ -601,7 +632,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
       continue;
     }
     judged++;
-    if (i % CHECK_EVERY === 0) sample.push(i);
+    if (i % iv.checkEvery === 0) sample.push(i);
     if (seg && seg.s === a.s && seg.to === i - 1) seg.to = i;
     else {
       flush();
@@ -621,9 +652,12 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     const hit = ultra(bars, bars.length - 1, unit).trades.find((tr) => tr.i === i - a1.s);
     nextSide.set(i, hit ? hit.side : null);
   }
-  const mailedAt = (readBase: number, T: number) => READ_AFTER.some((m) => {
+  // strictly inside the freshness: the sweep skips a signal whose age is over it, and a read exactly `fresh` after the
+  // close (a one-bar gap, the read at +0) is always a few seconds past it (docs §8.111). The 15-minute chart has no read
+  // exactly 20 minutes after a close (its reads are 16, 18, 31, 33 ... minutes), so nothing there changes.
+  const mailedAt = (readBase: number, T: number) => iv.readAfter.some((m) => {
     const at = readBase + m * MINUTE;
-    return at - T >= 0 && at - T <= FRESH && !isPossiblyClosed(at);
+    return at - T >= 0 && at - T < iv.fresh && !isPossiblyClosed(at);
   });
   const signals: Sig[] = [];
   let unmailed = 0;
@@ -633,11 +667,11 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     const E = plant === "signalNextBar" && i + 1 < n ? candles[i + 1].close : candles[i].close;
     const q = byOpen.get(times[i]);
     if (!q) throw new Error(`${pair} ${isoOf(times[i])}: a chart bar without its quote`);
-    return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + STEP15, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: base !== null, base: base ?? times[i] + STEP15, bidC: q.bid.close, askC: q.ask.close };
+    return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + step, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: base !== null, base: base ?? times[i] + step, bidC: q.bid.close, askC: q.ask.close };
   };
   for (let i = 0; i < n; i++) {
     if (!inPeriod(i)) continue;
-    const T = times[i] + STEP15;
+    const T = times[i] + step;
     const side = own.get(i);
     if (side) {
       if (mailedAt(T, T)) signals.push(mk(i, side, null));
@@ -647,7 +681,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     if (ns && ns !== side) {
       late++;
       // window i+1 is read at its own close; a gap before bar i+1 leaves the signal stale
-      if (i + 1 < n && mailedAt(times[i + 1] + STEP15, T)) signals.push(mk(i, ns, times[i + 1] + STEP15));
+      if (i + 1 < n && mailedAt(times[i + 1] + step, T)) signals.push(mk(i, ns, times[i + 1] + step));
       else lateUnmailed++;
     }
   }
@@ -656,7 +690,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
   const probe = (i: number) => {
     const a = anchorOf(i);
     if (!a) return;
-    const theirs = indicatorSignals(pair, "15min", candles.slice(a.ws, i + 1), times[i] + STEP15 + 60_000, 120_000)
+    const theirs = indicatorSignals(pair, iv.interval, candles.slice(a.ws, i + 1), times[i] + step + 60_000, 120_000)
       .filter((x) => x.rule === "ultra" && Date.parse(x.barTime) === times[i])
       .map((x) => x.side)
       .join(",");
@@ -679,8 +713,8 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     // every anchor move with a signal either way, and every 7th without
     if (!ns && !own.get(i) && i % 7 !== 0) continue;
     // fresh enough to hold bar i whatever the gap before bar i+1: this compares what the window finds, not when
-    const now = times[i + 1] + STEP15 + 60_000;
-    const theirs = indicatorSignals(pair, "15min", candles.slice(a1.ws, i + 2), now, now - (times[i] + STEP15))
+    const now = times[i + 1] + step + 60_000;
+    const theirs = indicatorSignals(pair, iv.interval, candles.slice(a1.ws, i + 2), now, now - (times[i] + step))
       .filter((x) => x.rule === "ultra" && Date.parse(x.barTime) === times[i])
       .map((x) => x.side)
       .join(",");
@@ -690,7 +724,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
       if (checkLate.examples.length < 10) checkLate.examples.push(`${pair} ${isoOf(times[i])} window+1 mine=${ns ?? "-"} theirs=${theirs || "-"}`);
     }
   }
-  const cut = cutCheck ? cutCheckOf(pair, quotes, times, own, nextSide, signals, anchorOf, inPeriod) : null;
+  const cut = cutCheck ? cutCheckOf(iv, pair, quotes, times, own, nextSide, signals, anchorOf, inPeriod) : null;
   return {
     pair,
     bars: n,
@@ -698,7 +732,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     last: n ? isoOf(times[n - 1]) : null,
     judged,
     noWindow,
-    bar600: n >= WINDOW ? isoOf(times[WINDOW - 1] + STEP15) : null,
+    bar600: n >= WINDOW ? isoOf(times[WINDOW - 1] + step) : null,
     signals,
     unmailed,
     lateUnmailed,
@@ -714,6 +748,7 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
 // by a minute after bar i+1's (a late one) — through the chart's historyRead and the newest WINDOW of its
 // bars into indicatorSignals. No quote past the cut is handed in.
 const cutCheckOf = (
+  iv: IvCfg,
   pair: string,
   quotes: QuoteCandle[],
   times: Float64Array,
@@ -723,6 +758,7 @@ const cutCheckOf = (
   anchorOf: (i: number) => { ws: number; s: number } | null,
   inPeriod: (i: number) => boolean,
 ): Probe => {
+  const step = iv.step;
   const pr: Probe = { compared: 0, mismatched: 0, examples: [] };
   const qOpen = Float64Array.from(quotes.map((q) => barOpenMs(q.datetime)));
   for (let k = 1; k < qOpen.length; k++) if (!(qOpen[k] > qOpen[k - 1])) throw new Error(`${pair}: the 15-minute quotes are not in order`);
@@ -735,7 +771,7 @@ const cutCheckOf = (
     const k = upperBoundF(qOpen, lastOpen);
     for (let back = WINDOW + 200; ; back *= 2) {
       const from = Math.max(0, k - back);
-      const candles = historyRead(pair, "15min", quotes.slice(from, k), now).candles;
+      const candles = historyRead(pair, iv.interval, quotes.slice(from, k), now).candles;
       if (candles.length >= WINDOW || from === 0) {
         const w = candles.slice(-WINDOW);
         return w.length === WINDOW && barOpenMs(w[WINDOW - 1].datetime) === lastOpen ? w : null;
@@ -744,23 +780,168 @@ const cutCheckOf = (
   };
   const mailed = new Map<string, Sig>(signals.map((s) => [`${s.open}|${s.late ? 1 : 0}`, s]));
   const judge = (i: number, lastBar: number, ours: Side | "", late: boolean) => {
-    const now = times[lastBar] + STEP15 + MINUTE;
+    const now = times[lastBar] + step + MINUTE;
     const w = windowAt(times[lastBar], now);
     pr.compared++;
     if (!w) return bad(`${isoOf(times[i])}${late ? " late" : ""}: the cut read does not end at its bar`);
-    const theirs = indicatorSignals(pair, "15min", w, now, now - (times[i] + STEP15)).filter((x) => x.rule === "ultra" && Date.parse(x.barTime) === times[i]);
+    const theirs = indicatorSignals(pair, iv.interval, w, now, now - (times[i] + step)).filter((x) => x.rule === "ultra" && Date.parse(x.barTime) === times[i]);
     const side = theirs.map((x) => x.side).join(",");
     if (side !== ours) return bad(`${isoOf(times[i])}${late ? " late" : ""}: mine=${ours || "-"} cut=${side || "-"}`);
     const s = mailed.get(`${times[i]}|${late ? 1 : 0}`);
     if (s && (theirs[0].close !== s.E || theirs[0].tps?.[1] !== s.tp)) bad(`${isoOf(times[i])}${late ? " late" : ""}: E ${s.E} / ${theirs[0].close}, TP2 ${s.tp} / ${theirs[0].tps?.[1]}`);
     // and when: T the bar's close, the order's base the close of the bar whose read found it (P = base + 2 minutes)
-    if (s && (s.T !== times[i] + STEP15 || s.base !== times[lastBar] + STEP15)) bad(`${isoOf(times[i])}${late ? " late" : ""}: T ${isoOf(s.T)}, base ${isoOf(s.base)}, read at ${isoOf(times[lastBar] + STEP15)}`);
+    if (s && (s.T !== times[i] + step || s.base !== times[lastBar] + step)) bad(`${isoOf(times[i])}${late ? " late" : ""}: T ${isoOf(s.T)}, base ${isoOf(s.base)}, read at ${isoOf(times[lastBar] + step)}`);
   };
   for (let i = 0; i < times.length; i++) {
     if (!inPeriod(i) || !anchorOf(i)) continue;
     judge(i, i, own.get(i) ?? "", false);
   }
   for (const [i, ns] of nextSide) judge(i, i + 1, ns ?? "", true);
+  return pr;
+};
+
+// A bar that closed at T is mailed if the sweep's read at any of the minutes it reads after the close is not in the time the
+// market may be shut (macdx.ts `mailed`, docs §8.111 変えるところ 2)
+export const mailedFor = (iv: IvCfg) => (T: number): boolean => iv.readAfter.some((m) => !isPossiblyClosed(T + m * MINUTE));
+
+// The MACD peak and valley signals the sweep mails from GMO's 5-minute bars (docs §8.111, the rule of §8.109):
+// each closed bar judged by `decide` on the MACD of the whole series (research/macdx.ts's way); a fire is mailed
+// if the sweep's read at 0, 1 or 3 minutes after the close is not in the time the market may be shut (macdx.ts
+// `mailed`). Compared with the sweep's own decision (macdxSignals on the 600 closed bars ending at the bar) at
+// every cross and at about 300 bars a pair (`check`), and the window's decision (decideOnWindow, what the sweep
+// runs) with the whole series' there (`ahead`); and, with `cutCheck`, every judged bar rebuilt from only the
+// quotes closed a minute after it (`cut`). A fire is never late: the decision is the newest bar's only.
+// `plant` "signalNextBar": E from the bar after the signal's; "macdWindowAhead": bar i takes bar i+1's decision.
+export const macdxReadOf = (pair: string, pi: number, quotes: QuoteCandle[], startMs: number, endMs: number, cutCheck = false, plant = "", iv: IvCfg = IV5): SignalRead => {
+  const step = iv.step;
+  const unit = unitOf(pair);
+  const candles = historyRead(pair, iv.interval, quotes, endMs).candles;
+  const n = candles.length;
+  const times = new Float64Array(n);
+  candles.forEach((c, i) => (times[i] = barOpenMs(c.datetime)));
+  const byOpen = new Map(quotes.map((q) => [barOpenMs(q.datetime), q]));
+  const inPeriod = (i: number) => times[i] + step >= startMs && times[i] + step < endMs;
+  const mailed = mailedFor(iv);
+  const p = prepare(candles);
+  const fire = new Map<number, Side>();
+  const crossAt: number[] = [];
+  const judgedAt: number[] = [];
+  let judged = 0;
+  let noWindow = 0;
+  for (let i = 0; i < n; i++) {
+    if (!inPeriod(i)) continue;
+    if (i < MACD_WINDOW - 1) {
+      noWindow++;
+      continue;
+    }
+    judged++;
+    judgedAt.push(i);
+    const dec = decide(p.m, p.sides, p.ms, p.tr, plant === "macdWindowAhead" && i + 1 < n ? i + 1 : i, 0);
+    if (!dec) continue;
+    crossAt.push(i);
+    if (dec.fire) fire.set(i, dec.side);
+  }
+  const mk = (i: number, side: Side): Sig => {
+    const E = plant === "signalNextBar" && i + 1 < n ? candles[i + 1].close : candles[i].close;
+    const q = byOpen.get(times[i]);
+    if (!q) throw new Error(`${pair} ${isoOf(times[i])}: a chart bar without its quote`);
+    return { pair, pi, side, dir: side === "BUY" ? 1 : -1, open: times[i], T: times[i] + step, E, tp: ultraLevels(side, E, unit, ULTRA_PAIRS).tps[1], late: false, base: times[i] + step, bidC: q.bid.close, askC: q.ask.close };
+  };
+  const signals: Sig[] = [];
+  let unmailed = 0;
+  for (const [i, side] of fire) {
+    if (mailed(times[i] + step)) signals.push(mk(i, side));
+    else unmailed++;
+  }
+  // the checks: the sweep's decision at every cross and at about 300 evenly spaced judged bars
+  const check: Probe = { compared: 0, mismatched: 0, examples: [] };
+  const ahead: Probe = { compared: 0, mismatched: 0, examples: [] };
+  const every = Math.max(1, Math.floor(judgedAt.length / 300));
+  const probeAt = new Set<number>(crossAt);
+  for (let k = 0; k < judgedAt.length; k += every) probeAt.add(judgedAt[k]);
+  for (const i of [...probeAt].sort((a, b) => a - b)) {
+    const theirs = macdxSignals(pair, iv.interval, candles.slice(i - MACD_WINDOW + 1, i + 1), times[i] + step + 60_000, 120_000)
+      .filter((x) => x.rule === "macdx" && Date.parse(x.barTime) === times[i])
+      .map((x) => x.side)
+      .join(",");
+    const ours = fire.get(i) ?? "";
+    check.compared++;
+    if (theirs !== ours) {
+      check.mismatched++;
+      if (check.examples.length < 10) check.examples.push(`${pair} ${isoOf(times[i])} mine=${ours || "-"} theirs=${theirs || "-"}`);
+    }
+    const whole = decide(p.m, p.sides, p.ms, p.tr, i, 0);
+    const win = decideOnWindow(candles, i);
+    const ka = whole ? `${whole.dir}:${whole.fire}` : "-";
+    const kb = win ? `${win.dir}:${win.fire}` : "-";
+    ahead.compared++;
+    if (ka !== kb) {
+      ahead.mismatched++;
+      if (ahead.examples.length < 10) ahead.examples.push(`${pair} ${isoOf(times[i])} whole=${ka} window=${kb}`);
+    }
+  }
+  const cut = cutCheck ? macdxCutCheck(iv, pair, quotes, times, judgedAt, fire, signals) : null;
+  return {
+    pair,
+    bars: n,
+    first: n ? isoOf(times[0]) : null,
+    last: n ? isoOf(times[n - 1]) : null,
+    judged,
+    noWindow,
+    bar600: n >= MACD_WINDOW ? isoOf(times[MACD_WINDOW - 1] + step) : null,
+    signals,
+    unmailed,
+    lateUnmailed: 0,
+    late: 0,
+    check,
+    checkLate: { compared: 0, mismatched: 0, examples: [] },
+    cut,
+    ahead,
+  };
+};
+
+// The look-ahead check of the MACD signals: each judged bar's decision made again from only the quotes closed by
+// a minute after it, through the chart's historyRead and the newest MACD_WINDOW bars into macdxSignals, as the
+// sweep's read at +1 minute would; the side of every bar, and the E and TP2 of every mailed signal, compared.
+const macdxCutCheck = (iv: IvCfg, pair: string, quotes: QuoteCandle[], times: Float64Array, judgedAt: number[], fire: Map<number, Side>, signals: Sig[]): Probe => {
+  const step = iv.step;
+  const pr: Probe = { compared: 0, mismatched: 0, examples: [] };
+  const qOpen = Float64Array.from(quotes.map((q) => barOpenMs(q.datetime)));
+  for (let k = 1; k < qOpen.length; k++) if (!(qOpen[k] > qOpen[k - 1])) throw new Error(`${pair}: the ${iv.interval} quotes are not in order`);
+  const bad = (what: string) => {
+    pr.mismatched++;
+    if (pr.examples.length < 10) pr.examples.push(`${pair} ${what}`);
+  };
+  const mailedBy = new Map<number, Sig>(signals.map((s) => [s.open, s]));
+  for (const i of judgedAt) {
+    const now = times[i] + step + MINUTE;
+    const k = upperBoundF(qOpen, times[i]);
+    let w: Candle[] | null = null;
+    for (let back = MACD_WINDOW + 200; ; back *= 2) {
+      const from = Math.max(0, k - back);
+      const candles = historyRead(pair, iv.interval, quotes.slice(from, k), now).candles;
+      if (candles.length >= MACD_WINDOW || from === 0) {
+        const t = candles.slice(-MACD_WINDOW);
+        w = t.length === MACD_WINDOW && barOpenMs(t[MACD_WINDOW - 1].datetime) === times[i] ? t : null;
+        break;
+      }
+    }
+    pr.compared++;
+    if (!w) {
+      bad(`${isoOf(times[i])}: the cut read does not end at its bar`);
+      continue;
+    }
+    const theirs = macdxSignals(pair, iv.interval, w, now, now - (times[i] + step)).filter((x) => x.rule === "macdx" && Date.parse(x.barTime) === times[i]);
+    const side = theirs.map((x) => x.side).join(",");
+    const ours = fire.get(i) ?? "";
+    if (side !== ours) {
+      bad(`${isoOf(times[i])}: mine=${ours || "-"} cut=${side || "-"}`);
+      continue;
+    }
+    const s = mailedBy.get(times[i]);
+    if (s && (theirs[0].close !== s.E || theirs[0].tps?.[1] !== s.tp)) bad(`${isoOf(times[i])}: E ${s.E} / ${theirs[0].close}, TP2 ${s.tp} / ${theirs[0].tps?.[1]}`);
+    if (s && (s.T !== times[i] + step || s.base !== times[i] + step)) bad(`${isoOf(times[i])}: T ${isoOf(s.T)}, base ${isoOf(s.base)}`);
+  }
   return pr;
 };
 

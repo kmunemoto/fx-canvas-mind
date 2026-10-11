@@ -1,0 +1,351 @@
+# #276 (docs §8.111): the owner's own way (§8.102) with the 5-minute MACD peak/valley emails (SIGS=macdx5) and,
+# beside them, the 5-minute ULTRA emails (SIGS=ultra5). research/ownerhold.ts with a signal source, and the
+# Python recomputation written apart from it (research/ownerhold-check.py). The 15-minute ULTRA study
+# (ownerhold.yml) keeps running as it was; this file only adds the 5-minute signals.
+#
+#   確かめ A (every run, before any real data is read):
+#     hand      the hand examples of the signals' reading (research/ownerhold5-hand.ts: which closes are mailed, a short
+#               series, a 20-day walk judged window by window, and the planted errors seen)
+#     third     ③'s gates on the seeded walks (20 without a trend, 20 with 0.01 and 20 with 0.03 pips a
+#               minute), for each signal source
+#     fixtures  the hand examples (they do not depend on the signals' source: the same as ownerhold.yml's)
+#     full      the first walk in full for each source (accounts, E*, the look-ahead checks), the planted
+#               errors on it (in groups; the MACD source's own: macdWindowAhead), and the Python
+#     plants    every planted error summed over the hand examples and the walk (research/ownerhold-plants.py)
+#   確かめ B and the numbers (dispatched with real = yes, only after A passed):
+#     real      the rule's own study first (macdx.ts for MACD: its list of fires; tf-winrate.ts for ULTRA: its
+#               5-minute table), the study on GMO's 1-minute bars, the Python on the same files, and the
+#               numbers printed only when every check passed
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public
+# files fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research ownerhold5
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/ownerhold*.ts
+      - research/ownerhold-check.py
+      - research/ownerhold-plants.py
+      - supabase/functions/_shared/macd-extreme.ts
+      - supabase/functions/signal-alerts/indicators.ts
+      - .github/workflows/ownerhold5.yml
+  workflow_dispatch:
+    inputs:
+      real:
+        description: "After 確かめ A passes, run the real data (yes/no)"
+        default: "no"
+      end:
+        description: "END (ISO, UTC)"
+        default: "2026-10-10T00:00:00Z"
+
+permissions:
+  contents: read
+  # the real job lists the repository's Actions caches (which study kept which day files, and how much)
+  actions: read
+
+env:
+  START: "2024-01-01"
+  SPLIT: "2025-05-19"
+  END: ${{ inputs.end || '2026-10-10T00:00:00Z' }}
+
+jobs:
+  hand:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples of the signals' reading (no permission needed)
+        run: deno run research/ownerhold5-hand.ts
+
+  third:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        sigs: [macdx5, ultra5]
+        set: [none, t01, t03]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: ③ on 20 walks (${{ matrix.sigs }}, ${{ matrix.set }})
+        env:
+          MODE: synthetic
+          SIGS: ${{ matrix.sigs }}
+          SETS: ${{ matrix.set }}
+          SEEDS: "1-20"
+          FULL: "0"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples, and the planted errors on them
+        env:
+          MODE: fixtures
+          PLANTS: orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      - name: The Python on each hand example (and its planted dumps)
+        run: |
+          pip install -q numpy
+          fail=0
+          for d in research/out/ownerhold/fixtures/*/; do
+            also=""
+            for p in "$d"dump-*/; do [ -d "$p" ] && also="$also --also $p"; done
+            echo "== $(basename "$d")"
+            python3 research/ownerhold-check.py --gmo "${d}gmo" --dump "${d}dump" --rates synthetic $also || fail=1
+          done
+          exit $fail
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-fixtures
+          path: |
+            research/out/ownerhold/fixtures/plants-fixtures.json
+            research/out/ownerhold/fixtures/*/dump-*/pycheck.json
+          if-no-files-found: error
+
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sigs: macdx5, group: 1, plants: "orderNextOpen,fillNextBar,tpInFillBar,lcNextBar" }
+          - { sigs: macdx5, group: 2, plants: "swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge" }
+          - { sigs: macdx5, group: 3, plants: "callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured" }
+          - { sigs: macdx5, group: 4, plants: "deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline" }
+          - { sigs: macdx5, group: 5, plants: "usdFixed,swapBeforeCall,swapAfterOrder,nyTauBar" }
+          - { sigs: macdx5, group: 6, plants: "estarMaint,weekCells,plain,signalNextBar,macdWindowAhead" }
+          - { sigs: ultra5, group: 1, plants: "signalNextBar" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The first walk in full, and the planted errors ${{ matrix.plants }} (${{ matrix.sigs }})
+        env:
+          MODE: synthetic
+          SIGS: ${{ matrix.sigs }}
+          SETS: none
+          SEEDS: "1"
+          FULL: "1"
+          PLANTS: ${{ matrix.plants }}
+        run: >
+          deno run --v8-flags=--max-old-space-size=12288
+          --allow-read=. --allow-write=research/out --allow-env
+          research/ownerhold.ts
+      # docs §8.111 出すもの 2・4: heldSummary (the real run's print) counted on this walk's dump against the account line it
+      # comes from, so the real run does not meet that code for the first time
+      - name: The trades still held and how long they were held, against the account lines (${{ matrix.sigs }})
+        if: ${{ matrix.group == 1 }}
+        env:
+          MODE: heldprint
+          SIGS: ${{ matrix.sigs }}
+          DUMP: research/out/ownerhold/syn-none-1/dump
+          ANALYSIS: research/out/ownerhold/syn-none-1/analysis.json
+        run: deno run --allow-read=. --allow-env research/ownerhold.ts
+      - name: The Python on the walk (and the planted dumps)
+        run: |
+          pip install -q numpy
+          d=research/out/ownerhold/syn-none-1
+          also=""
+          for p in "$d"/dump-*/; do [ -d "$p" ] && also="$also --also $p"; done
+          python3 research/ownerhold-check.py --gmo "$d/gmo" --dump "$d/dump" --rates synthetic $also
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-full-${{ matrix.sigs }}-${{ matrix.group }}
+          path: |
+            research/out/ownerhold/syn-none-1/plants-full.json
+            research/out/ownerhold/syn-none-1/dump-*/pycheck.json
+          if-no-files-found: error
+
+  plants:
+    needs: [fixtures, full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sigs: macdx5
+            list: orderNextOpen,fillNextBar,tpInFillBar,lcNextBar,swapSellSign,fridayNyMonday,noBarOrderAfterNy,maintJudge,callBlockAfterDeposit,overCap,blockAfterCure,deposit0859WhenCured,deposit0859Full,noCreditSum,depositAtTau,depositAfterDeadline,usdFixed,swapBeforeCall,swapAfterOrder,estarMaint,weekCells,plain,nyTauBar,signalNextBar,macdWindowAhead
+          - sigs: ultra5
+            list: signalNextBar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: plants-fixtures
+          path: plants/fixtures
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: plants-full-${{ matrix.sigs }}-*
+          path: plants
+      - name: Every planted error changed something and was caught where it did (${{ matrix.sigs }})
+        run: |
+          for d in plants/plants-full-${{ matrix.sigs }}-*; do mv "$d" "plants/full-${d##*-}"; done
+          ls plants
+          python3 research/ownerhold-plants.py plants ${{ matrix.list }}
+
+  real:
+    if: ${{ inputs.real == 'yes' }}
+    needs: [hand, third, fixtures, full, plants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        sigs: [macdx5, ultra5]
+    env:
+      OUT: research/out/ownerhold-${{ matrix.sigs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The repository's Actions caches (keys and sizes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache list --repo "${{ github.repository }}" --limit 100 || true
+      # GMO's day files never change once the day has rolled: ownerhold's own kept files (1-minute and 15-minute)
+      # and tf-winrate's / macdx's (5- and 15-minute); each restore only adds files
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      # the kept day files answered before their day had ended are removed, so the rule's study and this one both read them again
+      - name: The kept day files that are not whole
+        env:
+          MODE: cache
+          SIGS: ${{ matrix.sigs }}
+        run: >
+          deno run --allow-read=. --allow-write=research/.cache --allow-env
+          research/ownerhold.ts
+      - name: The BIS policy rates (the swap)
+        run: |
+          mkdir -p research/.cache/bis
+          curl -sSfL --connect-timeout 15 --max-time 300 -o /tmp/bis.zip https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip
+          unzip -o -q /tmp/bis.zip -d research/.cache/bis
+          ls -la research/.cache/bis
+      # 確かめ B 2 (MACD): macdx.ts (docs §8.109's program) on the same START and END; its list of fires is read by the study,
+      # its report only for the comparisons. Its log is kept to a file: here only its check lines and the failed reads.
+      - name: "macdx.ts first (B 2: the MACD fires listed, the same START and END)"
+        if: ${{ matrix.sigs == 'macdx5' }}
+        env:
+          MODE: real
+        run: |
+          mkdir -p research/out/macdx
+          s=0
+          deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out \
+            --allow-env=MODE,PAIRS,START,SPLIT,END,SEED \
+            research/macdx.ts > /tmp/macdx.log 2>&1 || s=$?
+          # whole lines: a check that stopped it names itself and says how many differed; the study's tables come after them and are not matched
+          grep -E "^(確かめ|ULTRA against|GMO reads|error|Error)" /tmp/macdx.log || true
+          ls -la research/out/macdx
+          exit $s
+      # 確かめ B 3 (ULTRA): tf-winrate.ts (the email rule, five pairs, the stop 13 and TP1 4), the 5-minute table
+      - name: "tf-winrate.ts first (B 3: the email rule, five pairs, the stop 13 and TP1 4)"
+        if: ${{ matrix.sigs == 'ultra5' }}
+        env:
+          PAIRS: USD/JPY,EUR/JPY,AUD/JPY,EUR/USD,AUD/USD
+          SL: "13"
+          TP1: "4"
+          TP2: "10"
+          TP3: "16"
+          WEEKEND: inside
+        run: |
+          s=0
+          deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out \
+            --allow-env=PAIRS,START,SPLIT,SYNTHETIC,SL,TP1,TP2,TP3,END,WEEKEND \
+            research/tf-winrate.ts > /tmp/tf-winrate.log 2>&1 || s=$?
+          grep -E 'GMO reads that failed' /tmp/tf-winrate.log || true
+          exit $s
+      - name: The study (only whether each check passed is printed)
+        env:
+          MODE: real
+          SIGS: ${{ matrix.sigs }}
+          TFW_JSON: ${{ matrix.sigs == 'ultra5' && 'research/out/tf-winrate.json' || '' }}
+          MACDX_DIR: ${{ matrix.sigs == 'macdx5' && 'research/out/macdx' || '' }}
+        run: |
+          BIS_CSV=$(ls research/.cache/bis/*.csv | head -n 1) deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/ownerhold.ts
+      - name: The Python on the same files
+        run: |
+          pip install -q numpy
+          python3 research/ownerhold-check.py --quiet --expect-real --gmo research/.cache --dump $OUT/real/dump --rates "$(ls research/.cache/bis/*.csv | head -n 1)" --out $OUT/real
+      # the numbers go to a file (the log's last 5,000 lines are all that can be read back from the session):
+      # here only its size and sha256; the numbers job prints it in parts of 4,500 lines
+      - name: The numbers (every check passed)
+        env:
+          MODE: print
+          SIGS: ${{ matrix.sigs }}
+        run: |
+          deno run --allow-read=. --allow-env research/ownerhold.ts > $OUT/real/print.txt
+          wc -l $OUT/real/print.txt
+          sha256sum $OUT/real/print.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ownerhold5-numbers-${{ matrix.sigs }}
+          path: ${{ env.OUT }}/real/print.txt
+          retention-days: 30
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-5m-${{ matrix.sigs }}-${{ github.run_id }}
+
+  # the numbers, printed in parts of 4,500 lines (one job's log each, so every line can be read back)
+  numbers:
+    needs: [real]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sigs: [macdx5, ultra5]
+        part: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ownerhold5-numbers-${{ matrix.sigs }}
+          path: numbers
+      - name: Part ${{ matrix.part }} of print.txt (${{ matrix.sigs }}; lines 4,500 a part)
+        run: |
+          f=numbers/print.txt
+          n=$(wc -l < "$f")
+          a=$(( (${{ matrix.part }} - 1) * 4500 + 1 ))
+          b=$(( ${{ matrix.part }} * 4500 ))
+          echo "print.txt: $n lines, sha256 $(sha256sum "$f" | cut -d' ' -f1); this part: lines $a-$b"
+          if [ "${{ matrix.part }}" = "14" ] && [ "$n" -gt "$b" ]; then echo "print.txt is longer than 14 parts: lines after $b are not printed"; exit 1; fi
+          sed -n "${a},${b}p" "$f"

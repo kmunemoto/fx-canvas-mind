@@ -375,11 +375,11 @@ class Pair:
         """値段の決まり: T 以前に終わる最後の足（open + 1分 ≦ T）の番号。無ければ −1。"""
         return int(np.searchsorted(self.t, T - MIN, 'right')) - 1
 
-    def load15(self, gmo, keys=None):
+    def load15(self, gmo, keys=None, interval='15min'):
         out = {}
         self.opened15 = set()
         for side in ('bid', 'ask'):
-            d = os.path.join(gmo, self.sym, '15min', side)
+            d = os.path.join(gmo, self.sym, interval, side)
             m = {}
             if os.path.isdir(d):
                 for fn in sorted(os.listdir(d)):
@@ -607,6 +607,10 @@ class World:
         # 照らすだけ（check_inputs の 'meta'）
         self.delay = 2
         self.meta_delay = m.get('delay')
+        # §8.111: the signals' chart is 5 minutes in the MACD / ULTRA 5-minute runs (the TS writes `step` only then); 15 otherwise
+        self.step = int(m.get('step', 15))
+        if self.step not in (5, 15):
+            die(f'meta step {self.step}: 5 or 15')
         # (b): 合図は ledger から自分で作る（P＝sentAt を分に切り上げた時刻＋1分）
         self.mode_b = ledger is not None
         self.end_b = end_b
@@ -736,7 +740,7 @@ class World:
             if 'P0' in s:
                 P0 = s['P0']
             else:
-                P0 = s['base'] + MIN if self.mode_b else s['T'] + (15 * s['lateN'] + self.delay) * MIN
+                P0 = s['base'] + MIN if self.mode_b else s['T'] + (self.step * s['lateN'] + self.delay) * MIN
             for dirn, out in ((s['dir'], self.path_sig), (-s['dir'], self.path_opp)):
                 # §8.103 の手の例: 合図の向きの利確は、例ごとに決めた値（E ± tpPips を丸めたもの）
                 tp = s['tpHand'] if 'tpHand' in s and dirn == s['dir'] else s['E'] + dirn * TP_PIPS * pr.unit
@@ -1598,9 +1602,9 @@ def check_meta(C, W, expect_real):
         return
     C.check('meta', 'delay', 'delay', W.meta_delay, 2, 'exact')
     for s in W.sigs:
-        C.check('signals.time', s['i'], 'T', s['T'], s['open'] + 15 * MIN, 'exact')
+        C.check('signals.time', s['i'], 'T', s['T'], s['open'] + W.step * MIN, 'exact')
         C.check('signals.time', s['i'], 'late', str(s['late']).strip() in ('0', '1'), True, 'str')
-        C.check('signals.time', s['i'], 'base', s['base'], s['T'] + 15 * MIN * s['lateN'], 'exact')
+        C.check('signals.time', s['i'], 'base', s['base'], s['T'] + W.step * MIN * s['lateN'], 'exact')
     if expect_real:
         import datetime
         iso = lambda ms: datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -1754,7 +1758,7 @@ def check_inputs(C, W, pairs15, e_mode, notes):
                     notes['b_E_differs_from_15min_bars'] = notes.get('b_E_differs_from_15min_bars', 0) + 1
             elif a is None or b is None:
                 C.compared['E'] += 1
-                C.bad('E', s['i'], 'no 15min bar at open', None, s['E'])
+                C.bad('E', s['i'], f'no {W.step}min bar at open', None, s['E'])
             else:
                 C.compared['E'] += 1
                 x = (b + a) / 2
@@ -2477,7 +2481,7 @@ def main():
         if not args.cost_provisional and end_b > time.time() * 1000:
             die(f'--end-b {args.end_b} is in the future')
     W = World(args.gmo, args.dump, args.rates, log, ledger=args.ledger, end_b=end_b, keys=keys1)
-    pairs15 = [pr.load15(args.gmo, keys15) for pr in W.pairs]
+    pairs15 = [pr.load15(args.gmo, keys15, f'{W.step}min') for pr in W.pairs]
     if args.cost_2023:
         # §8.103 5: the day files opened and the bars' times (keys and times only, no price), in the log
         for pr in W.pairs:
@@ -2560,6 +2564,9 @@ def main():
         if args.cost_only:
             return C
         check_inputs(C, W, pairs15, args.e_round, C.notes)
+        if args.expect_real:
+            # a real run has the bar files of every pair; E not checked for want of them would be a hole (docs §8.111 B 5)
+            C.check('inputs', 'E', 'pairs without bar files', C.notes.get('E_not_checked_no_15min_files', 0), 0, 'exact')
         if W.mode_b:
             compare_b(C, W, dump, args.a_csv)
         compare_paths(C, W, dump)
