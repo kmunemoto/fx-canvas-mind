@@ -8,18 +8,19 @@ export const SIGNAL_ALERTS_URL = "https://endcqzewujdvimdlazhj.supabase.co/funct
 export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "skipped";
 
 // #112: RSI + SAR, or the GA-style rule beside it; #155: Q-Trend's and
-// ULTRA's signals, on every pair of the live chart
-export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra";
-export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra"];
-export type IndicatorAlertRule = "qtrend" | "ultra";
-export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule => r === "qtrend" || r === "ultra";
-const ruleOf = (v: unknown): AlertRule => (v === "gainz" || v === "qtrend" || v === "ultra" ? v : "rsi_sar");
+// ULTRA's signals, on every pair of the live chart; #275: and the MACD
+// peak-and-valley rule, on the 5-minute chart of GMO's currency pairs
+export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx";
+export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx"];
+export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx";
+export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule => r === "qtrend" || r === "ultra" || r === "macdx";
+const ruleOf = (v: unknown): AlertRule => (v === "gainz" || v === "qtrend" || v === "ultra" || v === "macdx" ? v : "rsi_sar");
 // signal_alerts / signal_events store the rule's full id (analyze/gainz.ts
 // GA_RULE_ID starts with "gainz", signal-alerts/indicators.ts's with
-// "qtrend" and "ultra"); anything else is RSI + SAR's
+// "qtrend", "ultra" and "macdx"); anything else is RSI + SAR's
 const ruleOfId = (v: unknown): AlertRule => {
   if (typeof v !== "string") return "rsi_sar";
-  for (const r of ["gainz", "qtrend", "ultra"] as const) if (v.startsWith(r)) return r;
+  for (const r of ["gainz", "qtrend", "ultra", "macdx"] as const) if (v.startsWith(r)) return r;
   return "rsi_sar";
 };
 
@@ -86,7 +87,14 @@ export interface AlertSettings {
   intervals: string[];
   // #155: Q-Trend's and ULTRA's charts: every pair of the live chart on
   // these timeframes, some pairs (those read from Twelve Data) on fewer
-  indicator: { pairs: string[]; intervals: string[]; limited: Record<string, string[]> } | null;
+  // #275: and the charts the MACD peak-and-valley rule may be followed on
+  // (GMO's currency pairs, 5 minutes), null from a server that does not send them
+  indicator: {
+    pairs: string[];
+    intervals: string[];
+    limited: Record<string, string[]>;
+    macdx: { pairs: string[]; intervals: string[] } | null;
+  } | null;
   subscriptions: Array<{ pair: string; interval: string; rule: AlertRule }>;
   alerts: AlertRow[];
   // the outcome of a test send, when the call was one
@@ -203,7 +211,14 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
     email: str(s.email),
     pairs: strings(s.pairs),
     intervals: strings(s.intervals),
-    indicator: ind ? { pairs: strings(ind.pairs), intervals: strings(ind.intervals), limited } : null,
+    indicator: ind
+      ? {
+        pairs: strings(ind.pairs),
+        intervals: strings(ind.intervals),
+        limited,
+        macdx: rec(ind.macdx) ? { pairs: strings(rec(ind.macdx)!.pairs), intervals: strings(rec(ind.macdx)!.intervals) } : null,
+      }
+      : null,
     subscriptions: subs,
     alerts: Array.isArray(s.alerts) ? s.alerts.map(alertRow).filter((x): x is AlertRow => x !== null) : [],
     test: statusOf(s.test),
@@ -214,9 +229,12 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
 export const isFollowing = (settings: AlertSettings, pair: string, interval: string, rule: AlertRule = "rsi_sar"): boolean =>
   settings.subscriptions.some((s) => s.pair === pair && s.interval === interval && s.rule === rule);
 
-// #155: whether Q-Trend's and ULTRA's alerts can be had on this chart
-export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string): boolean => {
+// #155: whether Q-Trend's and ULTRA's alerts can be had on this chart;
+// #275: with `rule` "macdx", the MACD peak-and-valley rule's, which has its
+// own charts (the server sends them)
+export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string, rule?: AlertRule): boolean => {
   const ind = settings.indicator;
+  if (rule === "macdx") return !!ind?.macdx && ind.macdx.pairs.includes(pair) && ind.macdx.intervals.includes(interval);
   if (!ind || !ind.pairs.includes(pair) || !ind.intervals.includes(interval)) return false;
   const only = ind.limited[pair];
   return !only || only.includes(interval);

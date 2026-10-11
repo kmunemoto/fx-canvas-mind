@@ -484,10 +484,10 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
   ]);
 };
 
-// #155: and Q-Trend's and ULTRA's
+// #155: and Q-Trend's and ULTRA's; #275: and the MACD peak-and-valley rule's
 const RULE_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA" },
-  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA" },
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley" },
 };
 
 export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: string }>, lang: Lang): Mail => {
@@ -498,14 +498,14 @@ export const renderTestMail = (subs: Array<{ pair: string; interval: string; rul
   if (lang === "en") {
     const list = subs.length === 0 ? "none yet" : subs.map(label).join(", ");
     return assemble("[Sextant] Test email alert", [
-      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend or ULTRA) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
+      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
       `Charts you follow: ${list}`,
       `Settings → Email alerts in the app:\n${APP_URL}`,
     ]);
   }
   const list = subs.length === 0 ? "まだありません" : subs.map(label).join("、");
   return assemble("【Sextant】メール通知のテスト", [
-    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
+    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA、MACD の山・谷）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
     `登録中のチャート: ${list}`,
     `アプリの「設定」→「メール通知」:\n${APP_URL}`,
   ]);

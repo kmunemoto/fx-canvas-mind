@@ -34,7 +34,7 @@ import { barOpenMs } from "../supabase/functions/analyze/state.ts";
 import { CHART_BARS, LIVE_STEP_MS, historyRead } from "../supabase/functions/live-chart/logic.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs } from "../supabase/functions/_shared/qtrend.ts";
 import { ULTRA_PAIRS, ultra, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
-import { indicatorSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
+import { indicatorSignals, isMacdxChart, macdxSignals, ultraUnit } from "../supabase/functions/signal-alerts/indicators.ts";
 import { DAY, GMO_STUDY_PAIRS, MINUTE, WEEK, WEEK_OFFSET, clusterRate, iso } from "./lib.ts";
 import { wholeDayFile } from "./ownerhold-data.ts";
 import { WINDOW, c2Variant, decide, decideOnWindow, prepare, type Decision } from "./macdx-lib.ts";
@@ -345,6 +345,10 @@ interface Diag {
 }
 const diags: Diag[] = [];
 const ahead = { compared: 0, mismatched: 0, examples: [] as string[] };
+// #275 (確かめ 6): what the email sweep decides (macdxSignals, on the 600 closed bars ending at the bar)
+// against this study's own decision on the whole series, at the bars of 確かめ 1; a pair the emails do not
+// offer the rule on is not compared (macdxSignals gives nothing there)
+const sweepCheck = { compared: 0, mismatched: 0, notOffered: 0, examples: [] as string[] };
 const ultraCheck = { compared: 0, mismatched: 0, examples: [] as string[] };
 const decisionsCsv: string[] = ["pair,closeUtc,dir,mailed,x,S,P,c0,c1,c2,fire"];
 const tradesCsv: string[] = ["rule,pair,closeUtc,side,entry,k,kind,pips,bars"];
@@ -546,6 +550,21 @@ for (const [pi, pair] of PAIRS.entries()) {
         ahead.mismatched++;
         if (ahead.examples.length < 10) ahead.examples.push(`${pair} ${iso(times[i])} whole=${ka} window=${kb}`);
       }
+      // 確かめ 6: the sweep's decision at the bar, read a minute after it closed
+      if (!isMacdxChart(pair, "5min")) {
+        sweepCheck.notOffered++;
+        continue;
+      }
+      const want = a && a.fire ? a.side : "";
+      const got = macdxSignals(pair, "5min", candles.slice(i - WINDOW + 1, i + 1), times[i] + STEP + 60_000, 120_000)
+        .filter((x) => Date.parse(x.barTime) === times[i] && x.rule === "macdx")
+        .map((x) => x.side)
+        .join(",");
+      sweepCheck.compared++;
+      if (want !== got) {
+        sweepCheck.mismatched++;
+        if (sweepCheck.examples.length < 10) sweepCheck.examples.push(`${pair} ${iso(times[i])} study=${want || "-"} sweep=${got || "-"}`);
+      }
     }
   }
   diags.push(d);
@@ -565,6 +584,8 @@ if (ultraCheck.mismatched > 0) throw new Error("ULTRA differs from indicatorSign
 if (MODE !== "repro") {
   console.log(`確かめ 1 (look-ahead): the decision on the 600-bar window against the whole series: ${ahead.mismatched} of ${ahead.compared} differ${ahead.examples.length ? ": " + ahead.examples.join("; ") : ""}`);
   if (ahead.mismatched > 0 || ahead.compared === 0) throw new Error("look-ahead check failed: stopped before any result");
+  console.log(`確かめ 6 (#275, the email sweep): macdxSignals against this study's decision: ${sweepCheck.mismatched} of ${sweepCheck.compared} differ${sweepCheck.examples.length ? ": " + sweepCheck.examples.join("; ") : ""} (${sweepCheck.notOffered} bars of pairs the emails do not offer the rule on, not compared)`);
+  if (sweepCheck.mismatched > 0 || sweepCheck.compared === 0) throw new Error("the email sweep's decision differs from the study's: stopped before any result");
 }
 
 const weekOf = (t: number) => Math.floor((t - WEEK_OFFSET) / WEEK);

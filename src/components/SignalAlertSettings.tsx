@@ -40,6 +40,8 @@ const jst = (iso: string) => {
 // only copy of the choice; this card asks it and shows the answer.
 // #155: and Q-Trend's and ULTRA's signals, on every pair of the live chart
 // (a row to follow a timeframe on all of them at once).
+// #275: and the MACD peak-and-valley rule's, on its own charts (the server
+// sends them: the 5-minute chart of GMO's currency pairs).
 const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const { t, locale } = useLocale();
   const a = t.alerts;
@@ -191,8 +193,9 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           {isIndicatorAlertRule(rule) ? (
             settings.indicator ? (
               (() => {
-                const ind = settings.indicator;
-                const offered = (iv: string) => ind.pairs.filter((p) => indicatorChartOffered(settings, p, iv));
+                // #275: the MACD rule has its own charts; the other two share the live chart's
+                const ind = rule === "macdx" ? settings.indicator.macdx ?? { pairs: [], intervals: [] } : settings.indicator;
+                const offered = (iv: string) => ind.pairs.filter((p) => indicatorChartOffered(settings, p, iv, rule));
                 return (
                   <table className="w-full text-xs" data-testid="signal-alerts-grid">
                     <thead>
@@ -233,7 +236,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                         <tr key={pair} className="border-t border-border/50">
                           <td className="py-1 font-mono text-foreground">{pair}</td>
                           {ind.intervals.map((iv) => {
-                            if (!indicatorChartOffered(settings, pair, iv)) {
+                            if (!indicatorChartOffered(settings, pair, iv, rule)) {
                               return (
                                 <td key={iv} className="py-1 text-center text-muted-foreground" title={a.indicatorHourOnly} data-testid={`signal-alert-${rule}-${pair}-${iv}-none`}>
                                   —
@@ -304,7 +307,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(rule === "macdx" ? a.macdxNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button

@@ -1834,7 +1834,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1843,13 +1843,22 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
       qtrend: "Q-Trend's BUY, SELL and STRONG signals (tarasenko_'s open-source script, at 200, 14, 1): the same marks the live chart draws.",
       ultra: "ULTRA's Buy ☆ and Sell ☆ signals (built from F-INVEST's video): the same marks the live chart draws, with a stop (13 pips on a currency pair, $13 on gold) and targets 1 to 3 (4, 10, 16 pips on a currency pair; $4, $10, $16 on gold) in the email.",
+      macdx: "BUY and SELL signals where MACD(12, 26, 9)'s blue line crosses the orange line near a peak or a valley far from zero (a SELL above zero, a BUY below it). On the 5-minute chart of GMO Coin's currency pairs only. Sextant's own rule; the chart draws no mark for it. On past charts it was not shown to be better than ULTRA's 5-minute signals, and it lost on average per trade (see the notes below). The email carries ULTRA's stop of 13 pips and targets of 4, 10 and 16 pips.",
     } as Record<string, string>,
+    // #275: the MACD peak-and-valley rule's notes (its own charts: 5 minutes, GMO's currency pairs)
+    macdxNotes: [
+      "Judged on the 5-minute chart of GMO Coin's currency pairs only (not gold, and not the symbols GMO Coin does not carry). An email is sent some ten seconds after the bar closes.",
+      "On past 5-minute bars (January 2024 to 8 October 2026, spread paid), on the emails' five pairs (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD) TP1 came before the stop 72.3% of the time, and a trade lost about 1.28 pips on average. ULTRA's 5-minute signals over the same period: 72.9% and about 1.18 pips lost a trade. This rule was not shown to be better. Breaking even needs more than 76%.",
+      "It arrives apart from ULTRA's 5-minute emails: with both on, one bar can send two emails.",
+      "Holding with no stop was not measured. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
+      "Nothing is judged while the market is shut (weekends and the like).",
+    ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",
     indicatorNotes: [

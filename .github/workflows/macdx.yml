@@ -28,6 +28,7 @@ on:
     paths:
       - research/macdx.ts
       - research/macdx-lib.ts
+      - supabase/functions/_shared/macd-extreme.ts
       - research/macdx-hand.ts
       - research/macdx-check.py
       - .github/workflows/macdx.yml

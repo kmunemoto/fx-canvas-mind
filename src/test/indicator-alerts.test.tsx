@@ -16,6 +16,10 @@ import {
   FAST_START_MS,
   INDICATOR_INTERVALS,
   INDICATOR_MEASURED,
+  MACDX_INTERVALS,
+  MACDX_MEASURED,
+  MACDX_PAIRS,
+  MACDX_RULE_ID,
   QTREND_RULE_ID,
   STALE_RETRY_MS,
   STALE_TRIES,
@@ -27,13 +31,18 @@ import {
   gmoMadeAt,
   hourCloseOf,
   indicatorIntervalsFor,
+  indicatorRuleId,
   indicatorSignals,
   isGmoChartPair,
   isIndicatorChart,
+  isIndicatorChartFor,
+  isIndicatorRule,
+  isMacdxChart,
   keepableKlines,
   klineFileEnded,
   klineFileOf,
   latestCloseMs,
+  macdxSignals,
   renderIndicatorMail,
   staleForClose,
   startWaitMs,
@@ -46,6 +55,8 @@ import {
 } from "../../supabase/functions/signal-alerts/indicators";
 import { LIVE_PAIRS as SERVER_PAIRS, TWELVE_CAPS, TWELVE_CAP_REST, TWELVE_DAILY_LIMIT, TWELVE_FX_PAIRS } from "../../supabase/functions/live-chart/logic";
 import { klineUrl } from "../../supabase/functions/track-outcomes/quotes";
+import { WINDOW as MACDX_WINDOW, decideOnWindow } from "../../supabase/functions/_shared/macd-extreme";
+import { ULTRA_PAIRS, ultraLevels } from "../../supabase/functions/_shared/ultra";
 import { pipSize } from "../lib/candleTime";
 import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
@@ -688,8 +699,9 @@ describe("#155 the two sweeps keep to their own rules", () => {
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(rsi_sar,gainz)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('typeof r.lang === "string" && isRuleKey(r.rule))');
   });
-  it("the indicators sweep reads Q-Trend's and ULTRA's, runs on its own mode, and one at a time", () => {
-    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra)&select=user_id,pair,interval,lang,rule")');
+  it("the indicators sweep reads Q-Trend's, ULTRA's and the MACD rule's, runs on its own mode, and one at a time", () => {
+    // #275: the MACD peak-and-valley rule beside the two
+    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('if (body.mode === "indicators") {');
     expect(fn).toContain("if (indicatorSweepRunning) return json(");
   });
@@ -699,5 +711,240 @@ describe("#155 the two sweeps keep to their own rules", () => {
     expect(fn).not.toContain("anHourClosed");
     expect(fn).toContain("if (!twelveReadDue(close, stored ? Date.parse(stored.fetchedAt) : Number.NaN, nowMs)) {");
     expect(fn).not.toContain("twelveCloseDue(c.interval, nowMs) as number");
+  });
+});
+
+// #275: the MACD peak-and-valley rule (docs §8.109) in the emails
+describe("#275 the MACD peak-and-valley rule in the emails", () => {
+  const FIVE = 300_000;
+  // 2,400 five-minute bars of a pair: a slow wave, a quicker one, a quicker
+  // still and noise, so that crosses far from zero and near it both happen
+  // (40 fire over bars 599 to 2,399: 18 BUYs and 22 SELLs)
+  const M0 = Date.UTC(2026, 8, 1);
+  const m5 = Array.from({ length: 2400 }, (_, i) => {
+    const base = 150 + 0.9 * Math.sin(i / 90) + 0.35 * Math.sin(i / 23) + 0.12 * Math.sin(i / 7) + 0.03 * Math.sin(i * 1.9) + 0.0004 * i;
+    const open = base + 0.02 * Math.sin(i * 2.3);
+    const close = base;
+    return {
+      datetime: stamp(M0 + i * FIVE),
+      open,
+      high: Math.max(open, close) + 0.03 + 0.01 * Math.abs(Math.sin(i * 0.9)),
+      low: Math.min(open, close) - 0.03 - 0.01 * Math.abs(Math.cos(i * 1.1)),
+      close,
+    };
+  });
+  const closeMsOf = (i: number) => M0 + (i + 1) * FIVE;
+  const fireBars = () => {
+    const out: number[] = [];
+    for (let i = MACDX_WINDOW - 1; i < m5.length; i++) if (decideOnWindow(m5, i)?.fire) out.push(i);
+    return out;
+  };
+  const windowAt = (i: number) => m5.slice(i - MACDX_WINDOW + 1, i + 1);
+
+  it("is a rule of its own: its id differs from ULTRA's and Q-Trend's, and the app reads it back from the id", () => {
+    expect(isIndicatorRule("macdx")).toBe(true);
+    expect(isIndicatorRule("macd")).toBe(false);
+    expect(indicatorRuleId("macdx")).toBe(MACDX_RULE_ID);
+    expect(MACDX_RULE_ID).toBe("macdx_12_26_9_w600_n288_k4_2_v1");
+    expect(new Set([MACDX_RULE_ID, ULTRA_RULE_ID, QTREND_RULE_ID]).size).toBe(3);
+    // src/lib/signalAlerts.ts ruleOfId reads the rule from the start of the id
+    expect(MACDX_RULE_ID.startsWith("macdx")).toBe(true);
+    expect(ULTRA_RULE_ID.startsWith("macdx")).toBe(false);
+  });
+
+  it("is offered on the 5-minute chart of GMO's currency pairs, and nowhere else", () => {
+    expect([...MACDX_INTERVALS]).toEqual(["5min"]);
+    for (const p of ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "GBP/JPY", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY", "HUF/JPY", "SEK/JPY"]) {
+      expect(isMacdxChart(p, "5min")).toBe(true);
+      expect(isIndicatorChartFor("macdx", p, "5min")).toBe(true);
+      expect(isMacdxChart(p, "15min")).toBe(false);
+      expect(isMacdxChart(p, "1h")).toBe(false);
+    }
+    // gold and the pairs read from Twelve Data (GMO has no such bars): not offered (Q-Trend's and ULTRA's still are, on their own timeframes)
+    for (const p of ["XAU/USD", "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
+      expect(isMacdxChart(p, "5min")).toBe(false);
+      expect(isIndicatorChartFor("macdx", p, "5min")).toBe(false);
+    }
+    expect(isIndicatorChartFor("ultra", "USD/CAD", "1h")).toBe(true);
+    expect(isIndicatorChartFor("ultra", "USD/JPY", "5min")).toBe(true);
+    expect(isIndicatorChartFor("qtrend", "XAU/USD", "15min")).toBe(true);
+    expect(isIndicatorChartFor("macdx", "XAU/USD", "15min")).toBe(false);
+    expect(isMacdxChart(undefined, "5min")).toBe(false);
+    expect(isMacdxChart("USD/JPY", 5)).toBe(false);
+    expect(MACDX_PAIRS.every((p) => isGmoChartPair(p))).toBe(true);
+    expect(MACDX_PAIRS).not.toContain("XAU/USD");
+    // every pair of the five the study measured is among them
+    for (const p of MACDX_MEASURED.five) expect(MACDX_PAIRS).toContain(p);
+  });
+
+  it("mails what the study decides, on the newest bar's 600 closed bars: one signal where the rule fires, none where it does not", () => {
+    const fires = fireBars();
+    const sides = new Set(fires.map((i) => decideOnWindow(m5, i)!.side));
+    expect(fires.length).toBeGreaterThan(20);
+    expect(sides).toEqual(new Set(["BUY", "SELL"]));
+    for (let i = MACDX_WINDOW - 1; i < m5.length; i++) {
+      const d = decideOnWindow(m5, i);
+      const sigs = macdxSignals("USD/JPY", "5min", windowAt(i), closeMsOf(i) + 30_000);
+      if (d?.fire) {
+        expect(sigs, `bar ${i}`).toHaveLength(1);
+        const g = sigs[0];
+        expect(g.rule).toBe("macdx");
+        expect(g.side).toBe(d.side);
+        expect(g.pair).toBe("USD/JPY");
+        expect(g.interval).toBe("5min");
+        expect(g.barTime).toBe(new Date(M0 + i * FIVE).toISOString());
+        expect(g.closedAt).toBe(new Date(closeMsOf(i)).toISOString());
+        expect(g.close).toBe(m5[i].close);
+        // ULTRA's stop 13 and targets 4, 10 and 16 pips from the close
+        const lv = ultraLevels(d.side, m5[i].close, 0.01, ULTRA_PAIRS);
+        expect(g.sl).toBe(lv.sl);
+        expect(g.tps).toEqual(lv.tps);
+        expect(g.macd).toEqual({ dir: d.dir, m: d.dir === "DOWN" ? d.x : -d.x, x: d.x, avgRange: d.S / 288, peak: d.P });
+        // the three conditions, as the rule states them
+        expect(g.macd!.x).toBeGreaterThan(0);
+        expect(g.macd!.x / g.macd!.avgRange).toBeGreaterThanOrEqual(0.25);
+        expect(g.macd!.x / g.macd!.peak).toBeGreaterThanOrEqual(0.5);
+        expect(g.strong).toBe(false);
+        expect(g.rsi).toBeNull();
+      } else {
+        expect(sigs, `bar ${i}`).toEqual([]);
+      }
+    }
+  });
+
+  it("a longer history gives the same decision (the rule reads the newest 600 bars), a shorter one none", () => {
+    const i = fireBars()[5];
+    const want = macdxSignals("USD/JPY", "5min", windowAt(i), closeMsOf(i) + 30_000);
+    expect(want).toHaveLength(1);
+    expect(macdxSignals("USD/JPY", "5min", m5.slice(0, i + 1), closeMsOf(i) + 30_000)).toEqual(want);
+    expect(macdxSignals("USD/JPY", "5min", windowAt(i).slice(1), closeMsOf(i) + 30_000)).toEqual([]);
+    expect(macdxSignals("USD/JPY", "5min", [], closeMsOf(i))).toEqual([]);
+  });
+
+  it("is mailed while its bar is fresh (it closed at most freshFor ago, and not before it closed)", () => {
+    const i = fireBars()[3];
+    const w = windowAt(i);
+    const at = closeMsOf(i);
+    expect(freshFor("5min")).toBe(10 * 60_000);
+    expect(macdxSignals("USD/JPY", "5min", w, at - 1)).toEqual([]);
+    expect(macdxSignals("USD/JPY", "5min", w, at)).toHaveLength(1);
+    expect(macdxSignals("USD/JPY", "5min", w, at + 10 * 60_000)).toHaveLength(1);
+    expect(macdxSignals("USD/JPY", "5min", w, at + 10 * 60_000 + 1)).toEqual([]);
+  });
+
+  it("is not judged on a chart it is not offered on, even on bars where it fires", () => {
+    const i = fireBars()[3];
+    const w = windowAt(i);
+    const at = closeMsOf(i) + 30_000;
+    expect(macdxSignals("USD/JPY", "5min", w, at)).toHaveLength(1);
+    expect(macdxSignals("USD/JPY", "15min", w, at)).toEqual([]);
+    expect(macdxSignals("USD/JPY", "1h", w, at)).toEqual([]);
+    expect(macdxSignals("XAU/USD", "5min", w, at)).toEqual([]);
+    expect(macdxSignals("USD/CAD", "5min", w, at)).toEqual([]);
+    expect(macdxSignals("HKD/JPY", "5min", w, at)).toEqual([]);
+  });
+
+  it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
+    for (const i of fireBars().slice(0, 8)) {
+      const sigs = indicatorSignals("USD/JPY", "5min", windowAt(i), closeMsOf(i) + 30_000);
+      expect(sigs.every((x) => x.rule === "qtrend" || x.rule === "ultra")).toBe(true);
+    }
+  });
+
+  const sample = (side: "BUY" | "SELL", pair = "USD/JPY") => {
+    const i = fireBars().find((k) => decideOnWindow(m5, k)!.side === side)!;
+    return macdxSignals(pair === "USD/JPY" ? pair : "USD/JPY", "5min", windowAt(i), closeMsOf(i) + 30_000).map((g) => ({ ...g, pair }))[0];
+  };
+
+  it("the Japanese email: what crossed, the three numbers, ULTRA's levels, the measured figures against ULTRA's, how to stop it", () => {
+    const g = sample("SELL");
+    const mail = renderIndicatorMail(g, "ja");
+    expect(mail.subject).toBe("【Sextant】ドル/円 5分足 売り（SELL）のサイン（MACD の山・谷）");
+    const t = mail.text;
+    expect(t).toContain("ドル/円の5分足で、MACD の山・谷のクロスの売り（SELL）のサインが出ました。");
+    expect(t).toContain("MACD(12・26・9)の青線がオレンジ線を上から下に抜けました（山の近く）");
+    expect(t).toContain("0から遠い: 直近24時間（288本）の平均の値幅の");
+    expect(t).toContain("倍（0.25 倍以上が条件）");
+    expect(t).toContain("波の頂点に近い: 今の波の頂点の");
+    expect(t).toContain("%（50%以上が条件）");
+    expect(t).toContain("損切り・利確の目安（ULTRA と同じ数字）:");
+    expect(t).toContain("（13.0pips）");
+    expect(t).toContain("利確1");
+    expect(t).toContain("Sextant 独自のもので、公開されているインジケーターではありません");
+    // the measured figures, the five pairs', and the plain statement against ULTRA
+    expect(t).toContain("過去の5分足（2024年1月〜2026年10月8日、GMO の5ペア（ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドル）、スプレッド込み）で測ると");
+    expect(t).toContain("損切りより先に利確1に届いたのは 72.3%");
+    expect(t).toContain("1回あたり平均で約1.28 pips の負けでした。");
+    expect(t).toContain("同じ期間の ULTRA の5分足は 72.9%・1回あたり約1.18 pips の負けで、この決まりのほうが良いとは言えませんでした。");
+    expect(t).toContain(`損益ゼロには${breakEvenPct(false)}%より上`);
+    expect(t).toContain("「MACD の山・谷」でチェックを外してください");
+    expect(t).not.toContain("Q-Trend または");
+    const buy = renderIndicatorMail(sample("BUY"), "ja");
+    expect(buy.subject).toBe("【Sextant】ドル/円 5分足 買い（BUY）のサイン（MACD の山・谷）");
+    expect(buy.text).toContain("MACD(12・26・9)の青線がオレンジ線を下から上に抜けました（谷の近く）");
+    expect(buy.text).toContain("（0の下、0から");
+    expect(t).toContain("（0の上、0から");
+  });
+
+  it("the English email says the same", () => {
+    const g = sample("BUY");
+    const mail = renderIndicatorMail(g, "en");
+    expect(mail.subject).toBe("[Sextant] USD/JPY 5-minute BUY signal (MACD peak/valley)");
+    const t = mail.text;
+    expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 5-minute chart.");
+    expect(t).toContain("the MACD line (blue) crossed above its signal line (orange), near a valley");
+    expect(t).toContain("the rule needs at least 0.25");
+    expect(t).toContain("the rule needs at least 50%");
+    expect(t).toContain("Stop and targets (ULTRA's numbers):");
+    expect(t).toContain("GMO's five pairs (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD)");
+    expect(t).toContain("these levels reached TP1 before the stop 72.3% of the time");
+    expect(t).toContain("lost about 1.28 pips a trade on average");
+    expect(t).toContain("ULTRA's 5-minute signals over the same period: 72.9% and about 1.18 pips lost a trade; this rule was not shown to be better than ULTRA.");
+    expect(t).toContain("untick the chart under MACD peak/valley");
+    expect(renderIndicatorMail(sample("SELL"), "en").text).toContain("crossed below its signal line (orange), near a peak");
+  });
+
+  it("a pair beyond the five the emails measure gets the 21-pair reference figures, said to be so", () => {
+    const g = sample("SELL", "GBP/JPY");
+    const ja5 = renderIndicatorMail(g, "ja").text;
+    expect(ja5).toContain("GMO の21ペア（参考として測ったもの）");
+    expect(ja5).toContain("損切りより先に利確1に届いたのは 71.7%");
+    expect(ja5).toContain("1回あたり平均で約1.67 pips の負けでした。");
+    expect(ja5).toContain("同じ期間の ULTRA の5分足は 71.9%・1回あたり約1.62 pips の負け");
+    expect(ja5).toContain("ポンド/円そのものを主に測ったわけではありません（上の数字は21ペア全体のものです）。");
+    const en = renderIndicatorMail(g, "en").text;
+    expect(en).toContain("GMO's 21 pairs, measured as a reference");
+    expect(en).toContain("GBP/JPY itself was not the main subject of the measurement; these are the 21 pairs' figures.");
+    // and the five pairs' own say nothing of the kind
+    expect(renderIndicatorMail(sample("SELL"), "ja").text).not.toContain("そのものを主に測ったわけではありません");
+  });
+
+  it("the sweep reads, follows and mails the rule through the same paths as the other two", () => {
+    const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    // a chart is followed under a rule only where that rule is offered
+    expect(fn).toContain("const chartOk = indicator ? isIndicatorChartFor(body.rule, body.pair, body.interval)");
+    expect(fn).toContain("if (!charts.every((c) => isIndicatorChartFor(rule, c.pair, c.interval)))");
+    expect(fn).toContain("isIndicatorRule(r.rule) && isIndicatorChartFor(r.rule, r.pair, r.interval)");
+    expect(fn).not.toMatch(/\bisIndicatorChart\(/);
+    // judged beside indicatorSignals, mailed with the rule's own id
+    expect(fn).toContain("const sigs = indicatorSignals(pair, interval, closed, nowMs);");
+    expect(fn).toContain("sigs.push(...macdxSignals(pair, interval, closed, nowMs));");
+    // a failure of the MACD rule costs the other two no email
+    expect(fn).toMatch(/try \{\s+sigs\.push\(\.\.\.macdxSignals\(pair, interval, closed, nowMs\)\);\s+\} catch \(err\) \{\s+console\.error\("macdx failed:"/);
+    expect(fn).toContain("rule: indicatorRuleId(sig.rule),");
+    expect(fn).toContain("strong: sig.rule === \"qtrend\" ? sig.strong : null,");
+    // the app is told which charts the rule may be followed on
+    expect(fn).toContain("macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },");
+    expect(fn).toContain("signal-alerts-v23");
+  });
+
+  it("the migration lets a subscription name the rule, and changes nothing else", () => {
+    const sql = readFileSync("supabase/migrations/20261011090000_macdx_alerts.sql", "utf8");
+    const code = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    expect(code).toContain("drop constraint if exists signal_alert_subscriptions_rule_check");
+    expect(code).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx']));");
+    // only the one constraint: no row is touched, nothing is dropped
+    expect(code).not.toMatch(/\b(delete|update|insert|truncate)\b/i);
+    expect((code.match(/drop constraint/gi) ?? []).length).toBe(1);
   });
 });

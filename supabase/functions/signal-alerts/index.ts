@@ -31,8 +31,9 @@
 // (indicators.ts): a third caller, pg_cron every minute with the same token
 // and {"mode": "indicators"}. Judged on the bars the live chart holds, with
 // the chart's own code, and mailed to the charts subscribed with rule =
-// 'qtrend' or 'ultra'. Not recorded or settled (signal_events is the two
-// rules' record).
+// 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
+// 5-minute chart of GMO's pairs). Not recorded or settled (signal_events is
+// the two rules' record).
 
 import {
   ALERT_INTERVALS,
@@ -61,6 +62,8 @@ import {
   INDICATOR_INTERVALS,
   INDICATOR_PAIRS,
   INDICATOR_RULES,
+  MACDX_INTERVALS,
+  MACDX_PAIRS,
   STALE_RETRY_MS,
   STALE_TRIES,
   TWELVE_ALERT_INTERVALS,
@@ -72,7 +75,7 @@ import {
   indicatorRuleId,
   indicatorSignals,
   isGmoChartPair,
-  isIndicatorChart,
+  isIndicatorChartFor,
   isIndicatorRule,
   keepableKlines,
   klineFileEnded,
@@ -80,6 +83,7 @@ import {
   klineFileOf,
   klinePreloadDays,
   latestCloseMs,
+  macdxSignals,
   renderIndicatorMail,
   staleForClose,
   startWaitMs,
@@ -136,7 +140,13 @@ import type { Candle } from "../analyze/indicators.ts";
 // close, as the hourly ones after theirs; a chart whose bars' phase this
 // instance has not learned is looked at by its own grid when under an hour
 // (twelveChartDue). The other Twelve Data pairs stay on 1 hour and up.
-const FUNCTION_VERSION = "signal-alerts-v22-2026-10-07T12:00:00Z";
+// v23 (#275): a third rule beside Q-Trend and ULTRA, the MACD peak-and-valley
+// rule (indicators.ts macdxSignals; docs §8.109), mailed to the charts
+// subscribed with rule = 'macdx': the 5-minute chart of GMO's currency pairs
+// only. Judged on the same closed bars as ULTRA, with the code the rule was
+// measured with (_shared/macd-extreme.ts). Q-Trend's and ULTRA's signals, the
+// rule ids and what is recorded are as they were.
+const FUNCTION_VERSION = "signal-alerts-v23-2026-10-11T09:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -350,8 +360,8 @@ Deno.serve(async (req: Request) => {
         const res = await rest(`gmo_kline_files?fetched_at=lt.${encodeURIComponent(new Date(nowMs - 60 * 24 * 60 * MIN).toISOString())}`, { method: "DELETE" });
         if (!res.ok) console.error("kline purge failed:", res.status, await res.text().catch(() => ""));
       }
-      const subs = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra)&select=user_id,pair,interval,lang,rule"))
-        .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && isIndicatorChart(r.pair, r.interval) && typeof r.lang === "string")
+      const subs = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
       summary.subscriptions = subs.length;
       if (subs.length === 0) return summary;
@@ -498,7 +508,14 @@ Deno.serve(async (req: Request) => {
       // #171: a chart's signals are mailed as soon as it is judged, before
       // the other charts due are read
       const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
+        // #275: the MACD peak-and-valley rule beside Q-Trend's and ULTRA's. Its
+        // failure must never cost the other two their emails
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
+        try {
+          sigs.push(...macdxSignals(pair, interval, closed, nowMs));
+        } catch (err) {
+          console.error("macdx failed:", pair, interval, err);
+        }
         judgedBar.set(`${pair}|${interval}`, newest);
         fired.push(...sigs);
         const read = {
@@ -939,6 +956,8 @@ Deno.serve(async (req: Request) => {
           intervals: INDICATOR_INTERVALS,
           limited: Object.fromEntries(INDICATOR_PAIRS.filter((p) => isTwelvePair(p)).map((p) => [p, indicatorIntervalsFor(p)])),
           limited_intervals: TWELVE_ALERT_INTERVALS,
+          // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs on 5 minutes
+          macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },
         },
         subscriptions: subs.map((s) => ({
           pair: s.pair,
@@ -956,7 +975,7 @@ Deno.serve(async (req: Request) => {
     if (action === "set") {
       // #155: Q-Trend's and ULTRA's on their own charts
       const indicator = isIndicatorRule(body.rule);
-      const chartOk = indicator ? isIndicatorChart(body.pair, body.interval) : isAlertPair(body.pair) && isAlertInterval(body.interval);
+      const chartOk = indicator ? isIndicatorChartFor(body.rule, body.pair, body.interval) : isAlertPair(body.pair) && isAlertInterval(body.interval);
       if (!chartOk || typeof body.pair !== "string" || typeof body.interval !== "string" || typeof body.on !== "boolean") {
         return json({ ok: false, error: "invalid_request" }, 400);
       }
@@ -997,7 +1016,7 @@ Deno.serve(async (req: Request) => {
       }
       const rule = body.rule;
       const charts = body.charts.map((c) => (isRecord(c) ? { pair: c.pair, interval: c.interval } : { pair: null, interval: null }));
-      if (!charts.every((c) => isIndicatorChart(c.pair, c.interval))) return json({ ok: false, error: "invalid_request" }, 400);
+      if (!charts.every((c) => isIndicatorChartFor(rule, c.pair, c.interval))) return json({ ok: false, error: "invalid_request" }, 400);
       const list = charts as Array<{ pair: string; interval: string }>;
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);

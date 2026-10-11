@@ -1938,7 +1938,7 @@ export const ja = {
     pairHeader: "通貨ペア",
     intervals: { "5min": "5分", "15min": "15分", "1h": "1時間", "4h": "4時間", "1day": "日足" } as Record<string, string>,
     // #112: どちらのルールの通知か。#155: Q-Trend と ULTRA も
-    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷" } as Record<string, string>,
     ruleTabsLabel: "通知するサインの種類",
     gainzIntro:
       "GA型は GainzAlgo V2 Alpha 型のサインです（包み足・実体が大きい・RSI 40・5本前との比較、損切り ATR×1・利確はその2倍）。GainzAlgo Suite の画面の設定に合わせた再現を、#132 で過去のチャートで勝率が最も高かった数字（実体7割・RSI 40・5本前）に変えたもので、中身は公開されていないため同じサインになるとは限りません。",
@@ -1947,13 +1947,22 @@ export const ja = {
       "15分足で1ペアあたり2〜3日に1回ほど出ます（#132 の設定で、以前の約6分の1）。",
       "15分足・1時間足で日本時間 2:00〜8:59 に確定したサインはメールしません（履歴には残ります）。",
     ],
-    ruleTag: { rsi_sar: "", gainz: "（GA型）", qtrend: "（Q-Trend）", ultra: "（ULTRA）" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: "（GA型）", qtrend: "（Q-Trend）", ultra: "（ULTRA）", macdx: "（MACD の山・谷）" } as Record<string, string>,
     // #155
     strongTag: "・STRONG",
     indicatorIntro: {
       qtrend: "Q-Trend（tarasenko_ の公開コードを移植、設定 200・14・1）の BUY・SELL・STRONG のサインです。リアルタイムチャートに出る印と同じものが届きます。",
       ultra: "ULTRA（F-INVEST の動画の設定と印から作ったもの）の Buy ☆・Sell ☆ のサインです。リアルタイムチャートに出る印と同じもので、メールに損切り（FX は13pips、金は13ドル）と利確1〜3（FX は 4・10・16pips、金は 4・10・16ドル）の目安が入ります。",
+      macdx: "MACD(12・26・9)の青線がオレンジ線とクロスしたうち、0から遠い山・谷の近くで起きたものだけの買い・売りのサインです（売りは0より上、買いは0より下）。5分足の、GMOコインの通貨ペアだけです。Sextant 独自の決まりで、チャートには印を出しません。過去の測定では ULTRA の5分足より良いとは言えず、1回あたりの損益もマイナスでした（下の注意を見てください）。メールには ULTRA と同じ損切り13pips・利確 4・10・16pips の目安が入ります。",
     } as Record<string, string>,
+    // #275: the MACD peak-and-valley rule's notes (its own charts: 5 minutes, GMO's currency pairs)
+    macdxNotes: [
+      "5分足の、GMOコインの通貨ペアだけで判定します（金と、GMOコインにない銘柄は対象外です）。足が確定してから十数秒ほどで送ります。",
+      "過去の5分足（2024年1月〜2026年10月8日、スプレッド込み）で測ると、メールの5ペア（ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドル）で損切りより先に利確1に届いたのは 72.3%、1回あたり平均で約1.28 pips の負けでした。同じ期間の ULTRA の5分足は 72.9%・約1.18 pips の負けで、この決まりのほうが良いとは言えない結果でした。損益ゼロには76%より上が要ります。",
+      "ULTRA の5分足とは別に届きます。両方をオンにすると、同じ足で2通届くことがあります。",
+      "損切りなしで持った場合は測っていません。通知は注文の指示ではありません。届いたサインの勝ち負けの記録は付けていません。",
+      "市場が閉まっている時間（週末など）は判定しません。",
+    ],
     allPairs: "すべての銘柄",
     indicatorHourOnly: "GMOコインにない銘柄は、1時間足・4時間足・日足だけです（金は15分足も）",
     indicatorNotes: [

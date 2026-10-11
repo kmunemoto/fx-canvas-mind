@@ -25,6 +25,9 @@ import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { QT_DEFAULTS, anchoredStart, barStepMs, qTrend } from "../_shared/qtrend.ts";
 import { ULTRA_DEFAULTS, ultra, ultraLevels, ultraParamsFor } from "../_shared/ultra.ts";
+// #275: the MACD peak-and-valley rule (docs §8.109), the very code it was measured with
+import { MACD_DEFAULTS } from "../_shared/macd.ts";
+import { N_TR as MACDX_N_TR, WINDOW as MACDX_WINDOW, decideOnWindow } from "../_shared/macd-extreme.ts";
 import { pineAtr } from "../_shared/pine.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
@@ -32,9 +35,12 @@ import { CHART_BARS, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../l
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
 
-export const INDICATOR_RULES = ["qtrend", "ultra"] as const;
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
-export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra";
+export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra" || v === "macdx";
+// #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
+// (the measured figures below are kept for these; the MACD rule's are its own)
+export type ChartRule = Exclude<IndicatorRule, "macdx">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -45,7 +51,15 @@ export const QTREND_RULE_ID = `qtrend_${QT_DEFAULTS.period}_${QT_DEFAULTS.atrPer
 export const ULTRA_RULE_ID =
   `ultra_rsi${ULTRA_DEFAULTS.rsiLength}_${ULTRA_DEFAULTS.oversold}_${ULTRA_DEFAULTS.overbought}` +
   `_sl${ULTRA_DEFAULTS.sl}_tp${ULTRA_DEFAULTS.tp1}_${ULTRA_DEFAULTS.tp2}_${ULTRA_DEFAULTS.tp3}_v1`;
-export const indicatorRuleId = (rule: IndicatorRule): string => (rule === "qtrend" ? QTREND_RULE_ID : ULTRA_RULE_ID);
+// #275: the MACD peak-and-valley rule (docs §8.109): MACD(12, 26, 9) crossing
+// its signal line, judged on the 600 closed bars ending at the bar, with the
+// three conditions' numbers (C1 a quarter of the mean range over 288 bars, C2
+// a half of the wave's peak). The id is the key that keeps a signal from being
+// mailed twice, so it must differ from ULTRA's.
+export const MACDX_RULE_ID =
+  `macdx_${MACD_DEFAULTS.fast}_${MACD_DEFAULTS.slow}_${MACD_DEFAULTS.signal}_w${MACDX_WINDOW}_n${MACDX_N_TR}_k4_2_v1`;
+export const indicatorRuleId = (rule: IndicatorRule): string =>
+  rule === "qtrend" ? QTREND_RULE_ID : rule === "macdx" ? MACDX_RULE_ID : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
 // Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
@@ -62,6 +76,19 @@ export const isIndicatorChart = (pair: unknown, interval: unknown): boolean =>
   indicatorIntervalsFor(pair).includes(interval);
 // Read from GMO (its free public bars), or from Twelve Data
 export const isGmoChartPair = (pair: string): boolean => GMO_SYMBOLS[pair] !== undefined && !isTwelvePair(pair);
+
+// #275: the MACD rule is read on the 5-minute chart only (the rule was frozen
+// and measured there, §8.109) and on GMO's currency pairs only (the 600
+// closed bars it judges on are GMO's own, mid of bid and ask; gold and the
+// pairs read from Twelve Data are not offered)
+export const MACDX_INTERVALS = ["5min"] as const;
+export const MACDX_PAIRS: readonly string[] = INDICATOR_PAIRS.filter((p) => isGmoChartPair(p) && !isGold(p));
+export const isMacdxChart = (pair: unknown, interval: unknown): boolean =>
+  typeof pair === "string" && typeof interval === "string" && MACDX_PAIRS.includes(pair) &&
+  (MACDX_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
+// Whether a chart can be followed under a rule
+export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unknown): boolean =>
+  rule === "macdx" ? isMacdxChart(pair, interval) : isIndicatorChart(pair, interval);
 
 // ULTRA's numbers are dollars on gold, pips on a currency pair (the chart's
 // `isGoldPair(pair) ? 1 : pipSize(pair)`)
@@ -96,6 +123,20 @@ export interface IndicatorSignal {
   rsiPrev: number | null;
   sl: number | null;
   tps: [number, number, number] | null;
+  // #275: the MACD rule's numbers at the bar (absent on the other rules')
+  macd?: MacdxFacts | null;
+}
+
+// #275: what made the MACD rule fire, in price units: m the MACD line at the
+// bar, x its distance from zero on the side the cross happened (C0: x > 0),
+// avgRange the mean true range over the last 288 bars (C1: x at least a
+// quarter of it), peak the wave's largest |MACD| (C2: x at least half of it)
+export interface MacdxFacts {
+  dir: "UP" | "DOWN";
+  m: number;
+  x: number;
+  avgRange: number;
+  peak: number;
 }
 
 // Every signal of either indicator whose bar closed inside `freshMs`, judged
@@ -181,6 +222,55 @@ export const indicatorSignals = (
     });
   }
   return out;
+};
+
+// #275: the MACD peak-and-valley rule (docs §8.109) at the newest closed bar.
+// The sweep calls it beside indicatorSignals, not inside it: that one gives
+// what the live chart labels (Q-Trend's and ULTRA's; src/test/indicator-
+// alerts.test.tsx holds the two to each other), and the chart draws no
+// MACD peak/valley label. It is judged as the study judged it: on the 600 closed bars ending at the
+// bar and on nothing else (decideOnWindow, the code the rule was measured
+// with), so the chart's `closed` — the 600 closed bars the sweep reads — gives
+// exactly one decision, the newest bar's. Not on a short history, not on a
+// chart the rule is not offered on, and only while the bar is fresh. Its
+// stop and targets are ULTRA's (the rule has none of its own; the study
+// followed these, docs §8.109 測り方).
+export const macdxSignals = (
+  pair: string,
+  interval: string,
+  closed: ReadonlyArray<Candle>,
+  nowMs: number,
+  freshMs: number = freshFor(interval),
+): IndicatorSignal[] => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !isMacdxChart(pair, interval) || closed.length < MACDX_WINDOW) return [];
+  const i = closed.length - 1;
+  const open = barOpenMs(closed[i].datetime);
+  if (!Number.isFinite(open)) return [];
+  const age = nowMs - (open + step);
+  if (age < 0 || age > freshMs) return [];
+  const d = decideOnWindow(closed, i);
+  if (d === null || !d.fire) return [];
+  const close = closed[i].close;
+  const lv = ultraLevels(d.side, close, ultraUnit(pair), ultraParamsFor(false));
+  return [{
+    rule: "macdx",
+    pair,
+    interval,
+    side: d.side,
+    strong: false,
+    barTime: new Date(open).toISOString(),
+    closedAt: new Date(open + step).toISOString(),
+    close,
+    line: null,
+    eps: null,
+    rsi: null,
+    rsiPrev: null,
+    sl: lv.sl,
+    tps: lv.tps,
+    // x is MACD on a down cross and minus MACD on an up cross (price units)
+    macd: { dir: d.dir, m: d.dir === "DOWN" ? d.x : -d.x, x: d.x, avgRange: d.S / MACDX_N_TR, peak: d.P },
+  }];
 };
 
 // ---- when each chart is read ---------------------------------------------------------
@@ -433,7 +523,7 @@ export const keepableKlines = (body: unknown): boolean =>
 // every one. Those were: Q-Trend 58.0 / -2.03, 58.4 / -1.8, 59.2 / -1.33,
 // 59.1 / -1.17, 55.1 / -6.92; ULTRA 58.2 / -1.81, 58.0 / -1.79, 58.4 /
 // -1.87, 60.8 / -0.37, 50.0 / -9.5 (5min to 1day).
-export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: number; pips: number }>> = {
+export const INDICATOR_MEASURED: Record<ChartRule, Record<string, { win: number; pips: number }>> = {
   qtrend: {
     "5min": { win: 70.3, pips: -2.03 },
     "15min": { win: 70.5, pips: -1.9 },
@@ -461,7 +551,7 @@ export const INDICATOR_MEASURED: Record<IndicatorRule, Record<string, { win: num
 // #168" came out as #168's to the digit, docs §8.98). #168's: Q-Trend 25.5 /
 // -0.09, 25.6 / -0.01, 25.6 / -0.03, 27.2 / +0.59, 26.5 / +0.21; ULTRA 22.8 /
 // -1.14, 21.4 / -1.68, 23.9 / -0.74, 20.8 / -1.97, 15.4 / -4.45 (5min to 1day).
-export const GOLD_MEASURED: Record<IndicatorRule, Record<string, { win: number; usd: number }>> = {
+export const GOLD_MEASURED: Record<ChartRule, Record<string, { win: number; usd: number }>> = {
   qtrend: {
     "5min": { win: 74.3, usd: -0.66 },
     "15min": { win: 74.3, usd: -0.65 },
@@ -488,7 +578,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -497,7 +587,37 @@ const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
   if (!g) return "この時間足は測っていません。";
   return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${g.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(g.usd).toFixed(2)}ドルの${g.usd < 0 ? "負け" : "勝ち"}でした。`;
 };
+// #275: the MACD peak-and-valley rule's own figures (docs §8.109,
+// research/macdx.ts; the "Research MACD extreme crosses" workflow): GMO's
+// bars, 2024-01-01 to 2026-10-08 (the signals up to 2026-10-09 00:00 UTC),
+// each signal entered at its bar's close on the side it fills on (spread
+// paid) and followed on 5-minute bid/ask, the stop 13 and TP1 4 (the same as
+// ULTRA's, the rule has none of its own), all of it closed at TP1 or the
+// stop, or after five trading days where neither was reached. `five`: the
+// emails' five pairs (31,624 signals; run 38068838023); `ref`: the 21 GMO
+// pairs of the reference run (94,819; run 38070630317). `ultraWin`,
+// `ultraPips`: the ULTRA 5-minute signals over the same pairs and period. The
+// rule was not shown to be better than ULTRA (d = -0.10 pips a trade, 95%
+// interval -0.24 to 0.04, on the five).
+export const MACDX_MEASURED = {
+  five: ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"] as readonly string[],
+  fiveFigures: { win: 72.3, pips: -1.28, ultraWin: 72.9, ultraPips: -1.18 },
+  refFigures: { win: 71.7, pips: -1.67, ultraWin: 71.9, ultraPips: -1.62 },
+};
+const macdxMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  const five = MACDX_MEASURED.five.includes(s.pair);
+  const m = five ? MACDX_MEASURED.fiveFigures : MACDX_MEASURED.refFigures;
+  const even = breakEvenPct(false);
+  const loss = (v: number) => Math.abs(v).toFixed(2);
+  if (lang === "en") {
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–8 October 2026, GMO's ${five ? `five pairs (${MACDX_MEASURED.five.join(", ")})` : "21 pairs, measured as a reference"}, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${loss(m.pips)} pips a trade on average. ULTRA's ${tfLabel("en", s.interval)} signals over the same period: ${m.ultraWin.toFixed(1)}% and about ${loss(m.ultraPips)} pips ${m.ultraPips < 0 ? "lost" : "made"} a trade; this rule was not shown to be better than ULTRA.` +
+      (five ? "" : ` ${s.pair} itself was not the main subject of the measurement; these are the 21 pairs' figures.`);
+  }
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年10月8日、GMO の${five ? `5ペア（${MACDX_MEASURED.five.map(pairJa).join("・")}）` : "21ペア（参考として測ったもの）"}、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${loss(m.pips)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。同じ期間の ULTRA の${tfLabel("ja", s.interval)}は ${m.ultraWin.toFixed(1)}%・1回あたり約${loss(m.ultraPips)} pips の${m.ultraPips < 0 ? "負け" : "勝ち"}で、この決まりのほうが良いとは言えませんでした。` +
+    (five ? "" : `${pairJa(s.pair)}そのものを主に測ったわけではありません（上の数字は21ペア全体のものです）。`);
+};
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  if (s.rule === "macdx") return macdxMeasuredLine(s, lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
@@ -563,6 +683,33 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...footer,
       ]);
     }
+    if (s.rule === "macdx") {
+      const f = s.macd;
+      const buy = s.side === "BUY";
+      return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (MACD peak/valley)`, [
+        `A MACD peak/valley ${side} signal fired on ${s.pair}, ${tf} chart.`,
+        [
+          `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
+          `MACD(12, 26, 9): the MACD line (blue) crossed ${buy ? "above" : "below"} its signal line (orange), ${buy ? "near a valley" : "near a peak"}`,
+          ...(f
+            ? [
+              `  MACD = ${px(f.m)}, ${(f.x / unit).toFixed(1)} pips from zero on the ${buy ? "negative" : "positive"} side`,
+              `  Far from zero: ${(f.x / f.avgRange).toFixed(2)} × the mean range of the last 24 hours (288 bars); the rule needs at least 0.25`,
+              `  Near the wave's extreme: ${(100 * f.x / f.peak).toFixed(0)}% of the current wave's peak; the rule needs at least 50%`,
+            ]
+            : []),
+        ].join("\n"),
+        [
+          "Stop and targets (ULTRA's numbers):",
+          `  Entry ≈ ${px(s.close)}`,
+          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
+          ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
+        ].join("\n"),
+        `This is Sextant's own rule, not a published indicator (docs §8.109): of the MACD(12, 26, 9) crosses it mails only those that happen on the far side of zero (a SELL above zero, a BUY below it), at least a quarter of the mean range away from zero, and before MACD has come back past half of the wave's peak. It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
+        `${source} Check the latest state in the app before you place an order:\n${APP_URL}`,
+        "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD peak/valley.\nThis is reference information, not investment advice. Every trading decision is your own.",
+      ]);
+    }
     const cross = s.side === "BUY" ? "back above 30" : "back below 70";
     return assemble(`[Sextant] ${s.pair} ${tf} ${s.side === "BUY" ? "Buy ☆" : "Sell ☆"} signal (ULTRA)`, [
       `An ULTRA ${s.side === "BUY" ? "Buy ☆" : "Sell ☆"} signal fired on ${s.pair}, ${tf} chart.`,
@@ -606,6 +753,34 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ].join("\n"),
       `Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       ...footer,
+    ]);
+  }
+  if (s.rule === "macdx") {
+    const f = s.macd;
+    const buy = s.side === "BUY";
+    const sideM = `${buy ? "買い" : "売り"}（${s.side}）`;
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideM}のサイン（MACD の山・谷）`, [
+      `${pairJa(s.pair)}の${tf}で、MACD の山・谷のクロスの${sideM}のサインが出ました。`,
+      [
+        `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
+        `MACD(12・26・9)の青線がオレンジ線を${buy ? "下から上に" : "上から下に"}抜けました（${buy ? "谷" : "山"}の近く）`,
+        ...(f
+          ? [
+            `  MACD = ${px(f.m)}（0の${buy ? "下" : "上"}、0から ${(f.x / unit).toFixed(1)}pips 離れています）`,
+            `  0から遠い: 直近24時間（288本）の平均の値幅の ${(f.x / f.avgRange).toFixed(2)} 倍（0.25 倍以上が条件）`,
+            `  波の頂点に近い: 今の波の頂点の ${(100 * f.x / f.peak).toFixed(0)}%（50%以上が条件）`,
+          ]
+          : []),
+      ].join("\n"),
+      [
+        "損切り・利確の目安（ULTRA と同じ数字）:",
+        `  エントリー ≈ ${px(s.close)}`,
+        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
+        ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
+      ].join("\n"),
+      `この決まりは Sextant 独自のもので、公開されているインジケーターではありません（docs §8.109）。MACD(12・26・9)のクロスのうち、売りは0より上・買いは0より下で、0から直近24時間の平均の値幅の4分の1以上離れていて、MACD が今の波の頂点の半分より0に近づく前のものだけを送ります。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
+      `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+      "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の山・谷」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
   const sideU = s.side === "BUY" ? "買い（Buy ☆）" : "売り（Sell ☆）";
