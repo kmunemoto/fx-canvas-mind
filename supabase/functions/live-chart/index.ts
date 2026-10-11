@@ -350,13 +350,16 @@ Deno.serve(async (req: Request) => {
       try {
         const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
         // #291: gold's, a row every minute all day now, through the function
-        // that answers them all as one; any other pair's a thousand rows at a
-        // time (the REST API answers a thousand at most: some 17 hours of
-        // them; logic.ts readTickPages)
+        // that answers them all as one; any other pair's a page at a time
+        // until an empty one (the REST API answers a limited number of rows,
+        // a thousand by default: some 17 hours of them; logic.ts readTickPages)
         let rows: unknown = null;
         if (isGold(pair)) {
           const res = await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: 20_000, p_from: from }) });
-          if (!res.ok) return fb;
+          if (!res.ok) {
+            await res.body?.cancel();
+            return fb;
+          }
           rows = await res.json().catch(() => null);
         } else {
           const base = `live_tick_bars?pair=eq.${encodeURIComponent(pair)}&select=minute,open,high,low,close,last_at&order=minute.asc&limit=${TICK_PAGE_ROWS}`;

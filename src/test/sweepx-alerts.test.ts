@@ -298,10 +298,17 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     expect(sql).toContain("create extension if not exists http with schema extensions;");
     expect(sql.indexOf("create extension if not exists http")).toBeLessThan(sql.indexOf("select cron.schedule("));
     expect(job).toContain("'signal-alerts-gold-ticks',\n  '* * * * *',");
-    expect(job).toContain("select extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS', '10000');");
-    expect(job).toContain("select status from extensions.http((\n    'POST',\n    'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/signal-alerts',");
+    // a connection 5 seconds (the extension's own is 1), the whole call 10
+    expect(job).toContain("perform extensions.http_set_curlopt('CURLOPT_CONNECTTIMEOUT_MS', '5000');");
+    expect(job).toContain("perform extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS', '10000');");
+    expect(job).toContain("select status into st from extensions.http((\n          'POST',\n          'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/signal-alerts',");
     expect(job).toContain("array[extensions.http_header('x-sweep-token', (select decrypted_secret from vault.decrypted_secrets where name = 'track_outcomes_sweep_token'))],");
-    expect(job).toContain("'{\"mode\":\"gold-ticks\"}'\n  )::extensions.http_request);");
+    expect(job).toContain("'{\"mode\":\"gold-ticks\"}'\n        )::extensions.http_request);");
+    // made twice at most: once more after a failure on the way or a 5xx
+    expect(job).toContain("for attempt in 1..2 loop");
+    expect(job).toMatch(/exception when others then\s+if attempt = 2 then\s+raise;\s+end if;\s+st := null;\s+end;\s+exit when st is not null and st < 500;\s+end loop;/);
+    // an answer other than 200 fails the job, its status logged
+    expect(job).toContain("if st is distinct from 200 then\n      raise exception 'signal-alerts gold-ticks answered %', st;");
     expect(job).not.toContain("net.http_post");
     // (scheduled once: an earlier job of the name is taken away first)
     expect(sql).toContain("select cron.unschedule(jobid) from cron.job where jobname = 'signal-alerts-gold-ticks';");

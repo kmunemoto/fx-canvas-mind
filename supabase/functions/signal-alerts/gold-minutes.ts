@@ -7,8 +7,9 @@
 // (Twelve Data's free key allows 800 reads a day; reading gold's 1-minute bars
 // after every close takes some 1,380): 「Swissquoteで、チャートもそろえる」. So
 // pg_cron calls the signal-alerts function every minute with {"mode":
-// "gold-ticks"} (through the http extension, which waits for the answer and
-// gives it up after 10 seconds: migration 20261011120100); the function
+// "gold-ticks"} (through the http extension, which waits for the answer —
+// 5 seconds for a connection, 10 for the whole call, and once more after a
+// failure on the way or a 5xx: migration 20261011120100); the function
 // answers at once and the run goes on in the background
 // (EdgeRuntime.waitUntil), reading Swissquote's gold
 // price every GOLD_TICK_EVERY_MS until GOLD_TICK_OVERLAP_MS past its minute

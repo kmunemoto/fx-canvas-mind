@@ -516,31 +516,35 @@ export const parseTickMinutes = (rows: unknown): TickMinute[] => {
 };
 
 // #291 (docs §8.112, the third review): a pair's recorded minutes read
-// through the REST API, which answers a thousand rows at most — a page at a
-// time, each after the last minute of the one before (not by offset: the
-// oldest rows are deleted meanwhile), until a page comes back short. Two days
-// are kept, 2,880 rows: `maxPages` is a bound, not a limit met. `page(after)`:
-// the rows after the minute `after` (from the start when null), oldest first,
-// at most TICK_PAGE_ROWS of them; null when the read failed (and then so is
-// the answer: a part of them would end the bars early)
+// through the REST API, which answers a limited number of rows at a time
+// (a thousand by Supabase's default; asked for TICK_PAGE_ROWS at most) — a
+// page at a time, each after the last minute of the one before (not by
+// offset: the oldest rows are deleted meanwhile), until a page comes back
+// empty: a short page is not taken for the end, so a lower limit on the
+// API's side reads whole too. Two days are kept, 2,880 rows: TICK_MAX_PAGES
+// is a bound. `page(after)`: the rows after the minute `after` (from the
+// start when null), oldest first; null when the read failed. The answer is
+// null when a page failed, when the bound was reached, and when a page's
+// last row has no minute: a part of them would end the bars early
 export const TICK_PAGE_ROWS = 1_000;
+export const TICK_MAX_PAGES = 10;
 export const readTickPages = async (
   page: (after: string | null) => Promise<unknown[] | null>,
-  maxPages = 5,
+  maxPages = TICK_MAX_PAGES,
 ): Promise<unknown[] | null> => {
   const rows: unknown[] = [];
   let after: string | null = null;
   for (let n = 0; n < maxPages; n++) {
     const got = await page(after);
     if (got === null) return null;
+    if (got.length === 0) return rows;
     rows.push(...got);
-    if (got.length < TICK_PAGE_ROWS) return rows;
     const last = got[got.length - 1];
     const minute = typeof last === "object" && last !== null ? (last as Record<string, unknown>).minute : null;
-    if (typeof minute !== "string") return rows;
+    if (typeof minute !== "string") return null;
     after = minute;
   }
-  return rows;
+  return null;
 };
 
 const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");

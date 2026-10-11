@@ -920,6 +920,7 @@ Deno.serve(async (req: Request) => {
       if (!twelveKey) return { ...summary, ok: false, error: "no_key" };
       const firstRes = await rest("gold_tick_bars?source=eq.swissquote&select=minute&order=minute.asc&limit=1");
       const first = firstRes.ok ? await firstRes.json().catch(() => null) : null;
+      if (!firstRes.ok) await firstRes.body?.cancel();
       if (!Array.isArray(first)) return { ...summary, ok: false, error: "read_failed", status: firstRes.status };
       if (first.length > 0) {
         return { ...summary, ok: false, error: "recording_started", first_recorded: isRecord(first[0]) ? first[0].minute ?? null : null };

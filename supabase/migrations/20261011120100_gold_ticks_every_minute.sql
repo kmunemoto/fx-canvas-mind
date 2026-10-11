@@ -11,9 +11,17 @@
 -- ended (their budgets reach 90 to 130 seconds), and a minute could go partly
 -- unread. pg_cron starts its jobs at the minute (within 0.53 s, every run of
 -- 2026-10-08 to 10-11), and the call is answered in some 0.2 s (an
--- unauthenticated probe, 2026-10-11: 0.14 to 0.19 s). One not answered in 10
--- seconds is given up (the run may go on); the job is then logged as failed
--- in cron.job_run_details.
+-- unauthenticated probe, 2026-10-11: 0.14 to 0.19 s).
+--
+-- The extension gives a connection 1 second unless told otherwise (measured
+-- 2026-10-11: a host that never answers failed after 1,001 ms), so the job
+-- gives it 5 seconds and the whole call 10. A call that fails on the way
+-- (no connection, no answer in time) or is answered 5xx is made once more;
+-- a minute's run is begun by this call alone, and one lost leaves the
+-- minute read by the run before for its first 25 seconds only. An answer
+-- other than 200 fails the job, its status in cron.job_run_details (a
+-- statement that returns a row is logged there as succeeded, whatever the
+-- status: pg_cron 1.6.4).
 --
 -- The extension's functions are owned by supabase_admin, and every role may
 -- execute them, as Supabase installs it (a revoke run as postgres takes
@@ -31,13 +39,33 @@ select cron.schedule(
   'signal-alerts-gold-ticks',
   '* * * * *',
   $$
-  select extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS', '10000');
-  select status from extensions.http((
-    'POST',
-    'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/signal-alerts',
-    array[extensions.http_header('x-sweep-token', (select decrypted_secret from vault.decrypted_secrets where name = 'track_outcomes_sweep_token'))],
-    'application/json',
-    '{"mode":"gold-ticks"}'
-  )::extensions.http_request);
+  do $job$
+  declare
+    st integer;
+  begin
+    perform extensions.http_set_curlopt('CURLOPT_CONNECTTIMEOUT_MS', '5000');
+    perform extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS', '10000');
+    for attempt in 1..2 loop
+      begin
+        select status into st from extensions.http((
+          'POST',
+          'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/signal-alerts',
+          array[extensions.http_header('x-sweep-token', (select decrypted_secret from vault.decrypted_secrets where name = 'track_outcomes_sweep_token'))],
+          'application/json',
+          '{"mode":"gold-ticks"}'
+        )::extensions.http_request);
+      exception when others then
+        if attempt = 2 then
+          raise;
+        end if;
+        st := null;
+      end;
+      exit when st is not null and st < 500;
+    end loop;
+    if st is distinct from 200 then
+      raise exception 'signal-alerts gold-ticks answered %', st;
+    end if;
+  end
+  $job$;
   $$
 );

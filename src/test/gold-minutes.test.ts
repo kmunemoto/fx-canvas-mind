@@ -93,7 +93,7 @@ describe("#291 the gold-ticks run's minute", () => {
       expect(isPossiblyClosedFor("XAU/USD", shut - M1)).toBe(false);
       expect(isPossiblyClosedFor("XAU/USD", shut)).toBe(true);
       expect(judgesWhileShut(shut)).toBe(true);
-      // a run begun a minute late (behind pg_net's other requests) is this one
+      // a run begun a minute late (its call made again, or slow) is this one
       expect(judgesWhileShut(shut + M1)).toBe(true);
       expect(judgesWhileShut(shut + 2 * M1)).toBe(false);
       expect(judgesWhileShut(shut + 59 * M1)).toBe(false);
