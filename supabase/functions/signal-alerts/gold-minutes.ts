@@ -6,10 +6,11 @@
 // The owner (2026-10-11), asked where gold's 1-minute bars should come from
 // (Twelve Data's free key allows 800 reads a day; reading gold's 1-minute bars
 // after every close takes some 1,380): 「Swissquoteで、チャートもそろえる」. So
-// pg_cron starts the signal-alerts function every minute with {"mode":
-// "gold-ticks"}; the function answers at once and the run goes on in the
-// background (EdgeRuntime.waitUntil: a request held for the run would hold
-// every other request pg_net sends meanwhile), reading Swissquote's gold
+// pg_cron calls the signal-alerts function every minute with {"mode":
+// "gold-ticks"} (through the http extension, which waits for the answer and
+// gives it up after 10 seconds: migration 20261011120100); the function
+// answers at once and the run goes on in the background
+// (EdgeRuntime.waitUntil), reading Swissquote's gold
 // price every GOLD_TICK_EVERY_MS until GOLD_TICK_OVERLAP_MS past its minute
 // (into the next run's), and each price open now (younger than
 // GOLD_QUOTE_STALE_MS, as the live chart takes it, and stamped in a minute
@@ -24,7 +25,8 @@
 
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
-import { GOLD_QUOTE_STALE_MS } from "../live-chart/logic.ts";
+import { isPossiblyClosedFor } from "../_shared/market-hours.ts";
+import { GOLD, GOLD_QUOTE_STALE_MS } from "../live-chart/logic.ts";
 
 const MIN = 60_000;
 
@@ -32,14 +34,17 @@ const MIN = 60_000;
 // reads it every two seconds while a chart is open)
 export const GOLD_TICK_EVERY_MS = 3_000;
 // The run reads on this long past the end of its minute, beside the next
-// minute's run: pg_cron starts every run at the minute, but pg_net sends the
-// minute's requests one batch after another (measured 2026-10-11 on this
-// project's pg_net 0.20.0: a request queued behind a 15-second one was sent
-// when that one ended), so the next run may begin some seconds late — behind
-// the minute's other functions, the indicators' sweep among them (at most
-// 9.8 s on 2026-10-09). The two read together meanwhile; no part of a
-// minute goes unread. (Each run is its own worker, booted for its request,
-// so a run of 85 s is well inside the 150 s a worker may live)
+// minute's run: pg_cron starts every run at the minute (within 0.53 s on
+// every run of 2026-10-08 to 10-11), and its call goes out at once — through
+// the http extension, not pg_net, which sends no request while one it sent
+// is open (measured 2026-10-11 on this project's pg_net 0.20.0: a request
+// queued behind a 15-second one was sent when that one ended), so behind the
+// minute's other jobs a run could begin up to their budgets late (90 to 130
+// s). A run may still begin a few seconds late (a worker booting, the
+// gateway); the two read together meanwhile, and no part of a minute goes
+// unread. (Each run is its own worker, booted for its request — every
+// request of 2026-10-09 booted one — so a run of 85 s is well inside the
+// 150 s a worker may live)
 export const GOLD_TICK_OVERLAP_MS = 25_000;
 // A run started this close to a minute's end (pg_cron's clock a little
 // ahead of the function's) is the next minute's, as the indicators' sweep
@@ -65,6 +70,16 @@ export const goldTickPlan = (startMs: number): GoldTickPlan => {
   const minuteStart = Math.floor((startMs + GOLD_EARLY_START_MS) / MIN) * MIN;
   return { minuteStart, stopAt: minuteStart + MIN + GOLD_TICK_OVERLAP_MS, judgeAt: minuteStart + GOLD_JUDGE_AFTER_MS };
 };
+
+// While gold is shut (its daily hour, the week's end), the run for the
+// minute at `minuteStart` judges only while the last minute gold traded may
+// still be fresh (indicators.ts freshFor: two minutes): GOLD_JUDGE_AFTER_MS
+// after that minute closed, and once more a minute later, as every minute
+// is judged twice — the first run after gold shut may begin late, or not at
+// all, and a run begun a minute late is the next minute's. The other minutes
+// while gold is shut have no bar to judge.
+export const judgesWhileShut = (minuteStart: number): boolean =>
+  !isPossiblyClosedFor(GOLD, minuteStart - MIN) || !isPossiblyClosedFor(GOLD, minuteStart - 2 * MIN);
 
 // When the next read is begun, the last one having begun at `lastAt`: a
 // read late by more than the gap is followed at once, not twice as fast

@@ -106,7 +106,9 @@ import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../si
 // v18 (#291): gold's 1-minute bars are the minutes recorded from Swissquote's
 // prices all day (public.gold_tick_bars; logic.ts, "gold's 1-minute bars,
 // recorded all day"), the bars the gold 1-minute email judges, and the read
-// says so (`recorded`). Every other chart's bars are as they were.
+// says so (`recorded`); the ticker records gold's price in the hours the
+// minute-by-minute recording does, no others. Every other chart's bars are
+// as they were.
 const FUNCTION_VERSION = "live-chart-v18-2026-10-11T12:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
@@ -528,8 +530,11 @@ Deno.serve(async (req: Request) => {
         const [raw, gold] = await Promise.all([fetcher(TICKER_URL), goldQuote()]);
         const ticks = { ...parseTicker(raw), ...(gold ? { [GOLD]: gold } : {}) };
         // #147: gold's price kept, a minute at a time, for its bars between
-        // Twelve Data's reads (only a price from a market trading now)
-        if (gold && gold.open && gold.time) {
+        // Twelve Data's reads (only a price from a market trading now). #291:
+        // and, as the minute-by-minute recording takes it (signal-alerts
+        // goldTicks), none stamped while gold may be shut: whether somebody
+        // watched a winter Friday's 21:00-22:00 UTC must not change the bars
+        if (gold && gold.open && gold.time && !isPossiblyClosedFor(GOLD, Date.parse(gold.time))) {
           try {
             const r = await rest("rpc/record_gold_tick", { method: "POST", body: JSON.stringify({ p_at: gold.time, p_mid: gold.mid }) });
             if (!r.ok) console.error("gold tick record failed:", r.status, await r.text().catch(() => ""));

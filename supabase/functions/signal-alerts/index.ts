@@ -124,7 +124,7 @@ import {
   twelveDataUrl,
   type Tick,
 } from "../live-chart/logic.ts";
-import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, nextTickAt } from "./gold-minutes.ts";
+import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
 import { SWEEPX } from "../_shared/sweep-cross.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -836,11 +836,12 @@ Deno.serve(async (req: Request) => {
       // a second call for the minute this instance is already reading
       if (goldTicksMinute === plan.minuteStart) return { ...summary, skipped: "busy" };
       if (isPossiblyClosedFor(GOLD, plan.minuteStart)) {
-        // the minute before gold shut (its daily hour, the week's end) is
-        // judged still, GOLD_JUDGE_AFTER_MS after it closed as every minute
-        // is (the run before this one may still be recording its last
-        // prices); the others while it is shut have no bar
-        if (isPossiblyClosedFor(GOLD, plan.minuteStart - MIN)) return { ...summary, skipped: "market_closed" };
+        // the last minute before gold shut (its daily hour, the week's end)
+        // is judged still, GOLD_JUDGE_AFTER_MS after it closed (the run
+        // before this one may still be recording its last prices) and a
+        // minute later, as every minute is (judgesWhileShut); the others
+        // while it is shut have no bar
+        if (!judgesWhileShut(plan.minuteStart)) return { ...summary, skipped: "market_closed" };
         await sleep(plan.judgeAt - Date.now());
         return { ...summary, skipped: "market_closed", judged: await goldJudge() };
       }
@@ -958,8 +959,9 @@ Deno.serve(async (req: Request) => {
       }
       // #291: every minute, gold's price from Swissquote all minute long — in
       // the background (EdgeRuntime.waitUntil), the request answered at once:
-      // pg_net sends nothing else while a request it sent is open, and this
-      // run takes the minute and more. Its summary goes to the function's log
+      // the job's call (the http extension) waits for the answer and gives it
+      // up after 10 seconds, and this run takes the minute and more. Its
+      // summary goes to the function's log
       if (body.mode === "gold-ticks") {
         const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
         if (typeof runtime?.waitUntil !== "function") {

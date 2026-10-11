@@ -78,6 +78,10 @@ $$;
 revoke all on function public.record_gold_tick(timestamptz, numeric) from public, anon, authenticated;
 grant execute on function public.record_gold_tick(timestamptz, numeric) to service_role;
 
+-- (none was on the project on 2026-10-11; a one-argument one left beside the
+-- function below would make every call naming p_count alone ambiguous)
+drop function if exists public.gold_tick_minutes(integer);
+
 create or replace function public.gold_tick_minutes(p_count integer, p_from timestamptz default null)
 returns jsonb
 language sql

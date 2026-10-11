@@ -1894,7 +1894,7 @@ export const en: Dict = {
       "Judged and sent from 5 seconds after the bar closes (how many seconds it actually takes to arrive has not been checked yet). A bar closed more than 2 minutes ago is not sent.",
       "On the 1-minute chart several emails a day can arrive (how many a day has not been counted yet). If the mail service (Resend) is on its free plan, those past 100 a day or 3,000 a month, counted with the other alerts, show as failed.",
       "This rule's win rate and its profit or loss a trade have not been measured. The video does not show its author's EMA lengths or timeframe: EMA 20 and EMA 80 are the owner's choice, and the window it is judged on (600 closed bars), where the stop goes and the like are this app's. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
-      "Nothing is judged while gold is shut (its daily hour, and the weekend, taken wide: Friday 21:00 to Sunday 22:00 UTC). The last bar before it shuts is judged 5 seconds after it closes, so that email arrives while gold cannot be traded until it reopens.",
+      "Nothing is recorded or judged while gold is shut (its daily hour, and the weekend, taken wide: Friday 21:00 to Sunday 22:00 UTC). The last bar before it shuts is judged 5 seconds after it closes (before the daily hour and a summer weekend, that email arrives while gold cannot be traded until it reopens). In US winter time (early November to mid-March) gold trades on Fridays until 22:00 UTC, but its hour from 21:00 UTC is neither recorded nor judged.",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",

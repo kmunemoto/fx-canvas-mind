@@ -276,13 +276,31 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     expect(fn).toContain('historyOfBars(GOLD, "1min", tickMinuteCandles(minutes), now, new Date(now).toISOString()).candles');
     expect(fn).toContain('const sigs = sweepxSignals(GOLD, "1min", closed, now);');
     expect(fn).toContain("await mailerFor(subs, counts)(sigs);");
-    // in the background, the request answered at once: pg_net sends nothing
-    // else while a request it sent is open, and the run takes the minute and more
+    // in the background, the request answered at once: the job's call waits
+    // for the answer (10 seconds at most), and the run takes the minute and more
     expect(fn).toMatch(/if \(body\.mode === "gold-ticks"\) \{[\s\S]{0,700}runtime\.waitUntil\(\s*goldTicks\(\)\.then\(/);
     expect(fn).not.toContain("json(await goldTicks())");
+    // while gold is shut, only the runs that can still find its last minute
+    // fresh judge (gold-minutes.ts judgesWhileShut)
+    expect(fn).toContain('if (!judgesWhileShut(plan.minuteStart)) return { ...summary, skipped: "market_closed" };');
     expect(fn).toContain("sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },");
     expect(fn).toContain("signal-alerts-v24");
   });
+  it("the job calls the run every minute through the http extension, not pg_net (which sends nothing while a request it sent is open)", () => {
+    const sql = readFileSync("supabase/migrations/20261011120100_gold_ticks_every_minute.sql", "utf8");
+    const job = sql.slice(sql.indexOf("select cron.schedule("));
+    expect(sql).toContain("create extension if not exists http with schema extensions;");
+    expect(sql.indexOf("create extension if not exists http")).toBeLessThan(sql.indexOf("select cron.schedule("));
+    expect(job).toContain("'signal-alerts-gold-ticks',\n  '* * * * *',");
+    expect(job).toContain("select extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS', '10000');");
+    expect(job).toContain("select status from extensions.http((\n    'POST',\n    'https://endcqzewujdvimdlazhj.supabase.co/functions/v1/signal-alerts',");
+    expect(job).toContain("array[extensions.http_header('x-sweep-token', (select decrypted_secret from vault.decrypted_secrets where name = 'track_outcomes_sweep_token'))],");
+    expect(job).toContain("'{\"mode\":\"gold-ticks\"}'\n  )::extensions.http_request);");
+    expect(job).not.toContain("net.http_post");
+    // (scheduled once: an earlier job of the name is taken away first)
+    expect(sql).toContain("select cron.unschedule(jobid) from cron.job where jobname = 'signal-alerts-gold-ticks';");
+  });
+
   it("the migration lets a subscription name the rule and the 1-minute chart", () => {
     const sql = readFileSync("supabase/migrations/20261011120000_gold_minutes_all_day.sql", "utf8");
     expect(sql).toContain("check (\"interval\" = any (array['1min', '5min', '15min', '1h', '4h', '1day']));");
@@ -291,6 +309,10 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     // minutes are read as one answer, from a time on when asked
     expect(sql).toContain("delete from public.gold_tick_bars;");
     expect(sql).toContain("create or replace function public.gold_tick_minutes(p_count integer, p_from timestamptz default null)");
+    // (and no one-argument function beside it: a call naming p_count alone
+    // would be ambiguous)
+    expect(sql.indexOf("drop function if exists public.gold_tick_minutes(integer);")).toBeGreaterThan(-1);
+    expect(sql.indexOf("drop function if exists public.gold_tick_minutes(integer);")).toBeLessThan(sql.indexOf("create or replace function public.gold_tick_minutes("));
     expect(sql).toContain("where p_from is null or minute >= p_from");
   });
 });

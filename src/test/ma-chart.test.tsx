@@ -606,6 +606,34 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("#291: on the other feed's bars while GMO is down, the video's way's note says the bars before the chart were not read, not that they are loading", async () => {
+    localStorage.clear();
+    localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { sweepx: true } }));
+    resetChartPrefsCache();
+    const loadHistory = vi.fn(async () => before(580));
+    const down = render(
+      chart("ma", {
+        defaultInterval: "15min",
+        loadBars: async (p: string, i: string) => ({ ...readFor(p, i), source: "twelvedata", feed: "maintenance", fetchedAt: "2026-09-26T01:00:00.000Z" }),
+        loadHistory,
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId("live-fallback")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-info-sweepx"));
+    const note = screen.getByTestId("chart-info-text-sweepx").textContent!;
+    expect(note).toContain("チャートより前の足を読めなかったため、いまは印を出していません。");
+    expect(note).not.toContain("読み込み中");
+    expect(loadHistory).not.toHaveBeenCalled();
+    down.unmount();
+    // on GMO's own bars the history is read, and the note says nothing of it
+    render(chart("ma", { defaultInterval: "15min", loadHistory }));
+    await waitFor(() => expect(loadHistory).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("chart-info-sweepx")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-info-sweepx"));
+    await waitFor(() => expect(screen.getByTestId("chart-info-text-sweepx").textContent).not.toContain("読めなかった"));
+    expect(screen.getByTestId("chart-info-text-sweepx").textContent).not.toContain("読み込み中");
+  });
+
   it("#291: says when its bars are the minutes recorded from Swissquote's prices (gold's 1-minute), and not otherwise", async () => {
     const shown = render(chart("ma", { loadBars: async (p: string, i: string) => ({ ...readFor(p, i), recorded: true }) }));
     await waitFor(() => expect(screen.getByTestId("live-recorded")).toBeTruthy());

@@ -522,18 +522,22 @@ const LiveChart = ({
   // (joined by the chart's first candle only, so the price moving the
   // forming one does not make it anew)
   const firstCandle = candles[0] ?? null;
+  // (#291: on bars not the pair's own feed's — GMO unreadable, Twelve Data's
+  // drawn meanwhile — no history is read: said as not read, not as loading)
   const zoneShiftHistory = useMemo(() => {
     const past = gmoRead && firstCandle && history?.key === historyKey ? historyBefore(history.bars, [firstCandle]) : null;
     if (past) return { bars: past, status: "ready" as const };
+    if (read && !gmoRead) return { bars: null, status: "error" as const };
     return { bars: null, status: history?.key === historyKey && history.status === "error" ? ("error" as const) : ("loading" as const) };
-  }, [gmoRead, firstCandle, history, historyKey]);
+  }, [read, gmoRead, firstCandle, history, historyKey]);
   // #176: the same for the Zero-lag TEMA, from its deep history (bars
   // kept while a short read is read again are drawn meanwhile)
   const zltHistory = useMemo(() => {
     const past = gmoRead && firstCandle && deepHistory?.key === historyKey ? historyBefore(deepHistory.bars, [firstCandle]) : null;
     if (past && deepHistory?.status !== "error") return { bars: past, status: "ready" as const };
+    if (read && !gmoRead) return { bars: null, status: "error" as const };
     return { bars: null, status: deepHistory?.key === historyKey && deepHistory.status === "error" ? ("error" as const) : ("loading" as const) };
-  }, [gmoRead, firstCandle, deepHistory, historyKey]);
+  }, [read, gmoRead, firstCandle, deepHistory, historyKey]);
   const sideText = (s: "BUY" | "SELL" | null) => (s === null ? l.none : l.sides[s]);
   // #114: the signals of the rule on screen, and the newest of them
   // (#201: none on the moving averages' own chart)

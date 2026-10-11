@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   GOLD_EARLY_START_MS,
   GOLD_JUDGE_AFTER_MS,
@@ -7,8 +8,11 @@ import {
   closedMinutes,
   goldSeedRows,
   goldTickPlan,
+  judgesWhileShut,
   nextTickAt,
 } from "../../supabase/functions/signal-alerts/gold-minutes";
+import { freshFor } from "../../supabase/functions/signal-alerts/indicators";
+import { isPossiblyClosedFor } from "../../supabase/functions/_shared/market-hours";
 import {
   GOLD_QUOTE_STALE_MS,
   isGoldMinute,
@@ -30,7 +34,7 @@ describe("#291 the gold-ticks run's minute", () => {
     expect(p.minuteStart).toBe(T0);
     expect(p.stopAt).toBe(T0 + M1 + GOLD_TICK_OVERLAP_MS);
     expect(p.judgeAt).toBe(T0 + GOLD_JUDGE_AFTER_MS);
-    // the next minute's run, sent late behind the minute's other requests,
+    // the next minute's run, begun late (a worker booting, the gateway),
     // still begins inside this one's reading: no part of a minute unread
     const next = goldTickPlan(T0 + M1 + 18_000);
     expect(next.minuteStart).toBe(T0 + M1);
@@ -78,6 +82,46 @@ describe("#291 the gold-ticks run's minute", () => {
     expect(closedMinutes(ms, T0)).toHaveLength(2);
     expect(closedMinutes(ms, T0 - 1)).toHaveLength(1);
     expect(closedMinutes(ms, T0 + M1)).toHaveLength(3);
+  });
+
+  it("while gold is shut, the runs of its first two minutes judge the last minute it traded, as every minute is judged twice, and no other run does", () => {
+    // the week's end in US summer time: Friday 2026-10-09 21:00 UTC; gold's
+    // daily hour: 17:00 New York, 21:00 UTC in summer (Tuesday 2026-10-13)
+    // and 22:00 UTC in winter (Tuesday 2026-11-10)
+    for (const at of ["2026-10-09T21:00:00Z", "2026-10-13T21:00:00Z", "2026-11-10T22:00:00Z"]) {
+      const shut = Date.parse(at);
+      expect(isPossiblyClosedFor("XAU/USD", shut - M1)).toBe(false);
+      expect(isPossiblyClosedFor("XAU/USD", shut)).toBe(true);
+      expect(judgesWhileShut(shut)).toBe(true);
+      // a run begun a minute late (behind pg_net's other requests) is this one
+      expect(judgesWhileShut(shut + M1)).toBe(true);
+      expect(judgesWhileShut(shut + 2 * M1)).toBe(false);
+      expect(judgesWhileShut(shut + 59 * M1)).toBe(false);
+      // the last minute, closed at `shut`, is still fresh for the second run's
+      // judging and no longer for a third's
+      expect(shut + M1 + GOLD_JUDGE_AFTER_MS - shut).toBeLessThanOrEqual(freshFor("1min"));
+      expect(shut + 2 * M1 + GOLD_JUDGE_AFTER_MS - shut).toBeGreaterThan(freshFor("1min"));
+    }
+    // the whole weekend, minute by minute: two judging runs
+    const fri = Date.parse("2026-10-09T21:00:00Z");
+    const sun = Date.parse("2026-10-11T22:00:00Z");
+    let judging = 0;
+    for (let t = fri; t < sun; t += M1) if (isPossiblyClosedFor("XAU/USD", t) && judgesWhileShut(t)) judging++;
+    expect(judging).toBe(2);
+  });
+});
+
+describe("#291 both recorders of gold's price take the same hours", () => {
+  it("the minute-by-minute run and the live chart's ticker each leave out a price stamped while gold may be shut", () => {
+    const run = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    const chart = readFileSync("supabase/functions/live-chart/index.ts", "utf8");
+    expect(run.match(/rpc\/record_gold_tick/g)).toHaveLength(1);
+    expect(chart.match(/rpc\/record_gold_tick/g)).toHaveLength(1);
+    expect(run).toContain("if (isPossiblyClosedFor(GOLD, Date.parse(tick.time))) {");
+    expect(chart).toContain("if (gold && gold.open && gold.time && !isPossiblyClosedFor(GOLD, Date.parse(gold.time))) {");
+    // a winter Friday's last hour: gold trades till 22:00 UTC, the FX week
+    // at its widest is shut from 21:00 — neither records it
+    expect(isPossiblyClosedFor("XAU/USD", Date.parse("2026-11-06T21:30:00Z"))).toBe(true);
   });
 });
 
