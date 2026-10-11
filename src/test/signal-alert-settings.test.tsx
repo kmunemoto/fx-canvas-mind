@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, screen, fireEvent, waitFor, type RenderResult } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, cleanup, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 
@@ -8,8 +8,10 @@ vi.mock("sonner", () => ({ toast }));
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import SignalAlertSettings from "../components/SignalAlertSettings";
+import { ja } from "../lib/i18n/ja";
+import { en } from "../lib/i18n/en";
 import { AlertRequestError, indicatorChartOffered, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
-import { INDICATOR_INTERVALS, INDICATOR_PAIRS, indicatorIntervalsFor } from "../../supabase/functions/signal-alerts/indicators";
+import { INDICATOR_INTERVALS, INDICATOR_PAIRS, MACDX_INTERVALS, MACDX_MEASURED, MACDX_PAIRS, indicatorIntervalsFor } from "../../supabase/functions/signal-alerts/indicators";
 
 const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult =>
   rtlRender(<LocaleProvider initial={locale}>{ui}</LocaleProvider>);
@@ -344,5 +346,158 @@ describe("#155 Q-Trend and ULTRA in the email-alert card", () => {
     expect(rows[0].textContent).not.toContain("損切り");
     expect(rows[1].textContent).toContain("XAU/USD 1時間 買い（ULTRA）");
     expect(rows[1].textContent).toContain("目安 4139.89 / 損切り 4129.89 / 利確 4144.89");
+  });
+});
+
+// #275: the MACD peak-and-valley rule, on its own charts (5 minutes, GMO's currency pairs)
+describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
+  const twelve = INDICATOR_PAIRS.filter((p) => indicatorIntervalsFor(p).length < INDICATOR_INTERVALS.length);
+  const indicator = {
+    rules: ["qtrend", "ultra", "macdx"],
+    pairs: INDICATOR_PAIRS,
+    intervals: INDICATOR_INTERVALS,
+    limited: Object.fromEntries(twelve.map((p) => [p, indicatorIntervalsFor(p)])),
+    macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },
+  };
+  const withMacdx = (over: Record<string, unknown> = {}) => settings({ indicator, ...over });
+
+  it("reads the charts the rule is offered on, and offers nothing when the server sends none", () => {
+    const s = withMacdx({ subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "macdx" }, { pair: "USD/JPY", interval: "5min", rule: "ultra" }] });
+    expect(s.indicator!.macdx).toEqual({ pairs: [...MACDX_PAIRS], intervals: ["5min"] });
+    expect(s.subscriptions.map((x) => x.rule)).toEqual(["macdx", "ultra"]);
+    // its own charts: the 5-minute chart of GMO's pairs
+    expect(indicatorChartOffered(s, "USD/JPY", "5min", "macdx")).toBe(true);
+    expect(indicatorChartOffered(s, "EUR/USD", "5min", "macdx")).toBe(true);
+    expect(indicatorChartOffered(s, "USD/JPY", "15min", "macdx")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "5min", "macdx")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "15min", "macdx")).toBe(false);
+    expect(indicatorChartOffered(s, "HKD/JPY", "1h", "macdx")).toBe(false);
+    // the others' are as they were
+    expect(indicatorChartOffered(s, "XAU/USD", "15min", "ultra")).toBe(true);
+    expect(indicatorChartOffered(s, "HKD/JPY", "1h")).toBe(true);
+    // a server that does not send them yet: nothing offered for the rule, the others still are
+    const old = settings({ indicator: { ...indicator, macdx: undefined } });
+    expect(old.indicator!.macdx).toBeNull();
+    expect(indicatorChartOffered(old, "USD/JPY", "5min", "macdx")).toBe(false);
+    expect(indicatorChartOffered(old, "USD/JPY", "5min", "ultra")).toBe(true);
+  });
+
+  it("has its own tab, with only the 5-minute column and GMO's pairs, and saves a tick under its own rule", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set" ? withMacdx({ subscriptions: [{ pair: "USD/JPY", interval: "5min", rule: "macdx" }] }) : withMacdx()
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD の山・谷");
+    expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("0から遠い山・谷の近く");
+    const grid = screen.getByTestId("signal-alerts-grid");
+    // one timeframe, the all-symbols row and the 14 GMO pairs
+    expect(grid.querySelectorAll("thead th")).toHaveLength(2);
+    expect(grid.querySelectorAll("thead th")[1].textContent).toBe("5分");
+    expect(grid.querySelectorAll("tbody tr")).toHaveLength(1 + MACDX_PAIRS.length);
+    expect(MACDX_PAIRS).toHaveLength(14);
+    expect(screen.getByTestId("signal-alert-macdx-USD/JPY-5min")).toBeTruthy();
+    expect(screen.queryByTestId("signal-alert-macdx-XAU/USD-5min")).toBeNull();
+    expect(screen.queryByTestId("signal-alert-macdx-HKD/JPY-1h")).toBeNull();
+    expect(grid.querySelector("[data-testid$='-none']")).toBeNull();
+    fireEvent.click(screen.getByTestId("signal-alert-macdx-USD/JPY-5min"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "USD/JPY", interval: "5min", on: true, rule: "macdx", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-macdx-USD/JPY-5min") as HTMLInputElement).checked).toBe(true));
+    // ULTRA's tick on the same chart is its own
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
+    expect((screen.getByTestId("signal-alert-ultra-USD/JPY-5min") as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByTestId("signal-alerts-grid").querySelectorAll("thead th")).toHaveLength(1 + INDICATOR_INTERVALS.length);
+  });
+
+  it("shows RSI + SAR's record on its own tab only: not under the MACD tab, nor ULTRA's or Q-Trend's (a fixture that has a record, so the check can fail)", async () => {
+    const big = { n: 40, wins: 14, losses: 24, expired: 2, open: 0, winRate: 0.35, meanR: -0.1, ciR: 0.4, sumR: -4 };
+    const performance = { days: 365, mine: big, all: big, costly: big, byTf: {}, backtest: null, gainz: null };
+    render(<SignalAlertSettings call={async () => withMacdx({ performance })} />);
+    // RSI + SAR first: its record is there
+    expect(await screen.findByTestId("signal-alerts-record")).toBeTruthy();
+    for (const k of ["macdx", "ultra", "qtrend"]) {
+      fireEvent.click(screen.getByTestId(`signal-alerts-rule-${k}`));
+      expect(screen.queryByTestId("signal-alerts-record"), k).toBeNull();
+    }
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-rsi_sar"));
+    expect(screen.getByTestId("signal-alerts-record")).toBeTruthy();
+  });
+
+  it("against a server that sends no charts for the rule, says so instead of drawing an empty table (the other tabs still work)", async () => {
+    render(<SignalAlertSettings call={async () => settings({ indicator: { ...indicator, macdx: undefined } })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-macdx-unavailable").textContent).toContain("まだ使えません");
+    expect(screen.queryByTestId("signal-alerts-grid")).toBeNull();
+    // the others are as they were
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
+    expect(screen.queryByTestId("signal-alerts-macdx-unavailable")).toBeNull();
+    expect(screen.getByTestId("signal-alert-ultra-USD/JPY-5min")).toBeTruthy();
+    // and a server that sends the rule an empty list is told the same
+    cleanup();
+    render(<SignalAlertSettings call={async () => settings({ indicator: { ...indicator, macdx: { pairs: [], intervals: ["5min"] } } })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-macdx-unavailable")).toBeTruthy();
+  });
+
+  it("the MACD pane's note on the chart no longer says that no signal uses MACD, and the card's intro names all five kinds", async () => {
+    expect(ja.chart.macd.note).not.toContain("サインの判定には使っていません");
+    expect(ja.chart.macd.note).toContain("メール通知の「MACD の山・谷」だけが、この MACD（12・26・9）を使います");
+    expect(en.chart.macd.note).not.toContain("no signal uses it");
+    expect(en.chart.macd.note).toContain("only the \"MACD peak/valley\" email alert does");
+    expect(ja.alerts.intro("a@b.c")).toContain("MACD の山・谷");
+    expect(ja.alerts.introNoEmail).toContain("MACD の山・谷");
+    expect(en.alerts.intro("a@b.c")).toContain("MACD peak/valley");
+    expect(en.alerts.introNoEmail).toContain("MACD peak/valley");
+  });
+
+  it("states what the rule did on past charts against ULTRA's, in the notes, as the emails' figures hold them", async () => {
+    render(<SignalAlertSettings call={async () => withMacdx()} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    const notes = screen.getByTestId("signal-alerts-notes").textContent!;
+    const f = MACDX_MEASURED.fiveFigures;
+    expect(notes).toContain(`損切りより先に利確1に届いたのは ${f.win.toFixed(1)}%、1回あたり平均で約${Math.abs(f.pips).toFixed(2)} pips の負け`);
+    expect(notes).toContain(`同じ期間の ULTRA の5分足は ${f.ultraWin.toFixed(1)}%・約${Math.abs(f.ultraPips).toFixed(2)} pips の負け`);
+    expect(notes).toContain("この決まりのほうが良いとは言えない結果でした");
+    expect(notes).toContain("同じ足で2通届くことがあります");
+    expect(notes).not.toContain("1日100通");
+  });
+
+  it("the all-symbols row follows the 5-minute chart of every GMO pair under the rule, at once", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set_many" ? withMacdx({ subscriptions: body.on ? MACDX_PAIRS.map((pair) => ({ pair, interval: "5min", rule: "macdx" })) : [] }) : withMacdx()
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    fireEvent.click(screen.getByTestId("signal-alert-macdx-all-5min"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "macdx", on: true, lang: "ja" })));
+    const sent = call.mock.calls.find((c) => c[0].action === "set_many")![0] as { charts: Array<{ pair: string; interval: string }> };
+    expect(sent.charts.map((c) => c.pair)).toEqual([...MACDX_PAIRS]);
+    expect(new Set(sent.charts.map((c) => c.interval))).toEqual(new Set(["5min"]));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-macdx-all-5min") as HTMLInputElement).checked).toBe(true));
+  });
+
+  it("names a MACD alert in the recent list, whatever the rule id's tail", async () => {
+    const call = vi.fn(async () =>
+      withMacdx({
+        alerts: [
+          { id: "m1", kind: "signal", rule: "macdx_12_26_9_w600_n288_k4_2_v1", pair: "USD/JPY", interval: "5min", side: "SELL", closed_at: "2026-10-11T02:50:00.000Z", entry: 157.209, stop: 157.339, target: 157.169, status: "sent", created_at: "2026-10-11T02:50:20.000Z" },
+        ],
+      })
+    );
+    render(<SignalAlertSettings call={call} />);
+    const rows = await screen.findAllByTestId("signal-alert-row");
+    expect(rows[0].textContent).toContain("USD/JPY 5分 売り（MACD の山・谷）");
+    expect(rows[0].textContent).toContain("目安 157.209 / 損切り 157.339 / 利確 157.169");
+  });
+
+  it("is in English too", async () => {
+    render(<SignalAlertSettings call={async () => withMacdx()} />, "en");
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD peak/valley");
+    expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("near a peak or a valley far from zero");
+    const notes = screen.getByTestId("signal-alerts-notes").textContent!;
+    expect(notes).toContain("72.3% of the time");
+    expect(notes).toContain("This rule was not shown to be better.");
+    expect(notes).toContain("with both on, one bar can send two emails");
   });
 });

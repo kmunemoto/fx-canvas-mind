@@ -380,7 +380,7 @@ export const en: Dict = {
       side === "GC" ? `Golden cross (${fast} crossed above ${slow})` : `Dead cross (${fast} crossed below ${slow})`,
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
-      note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. Shown only: no signal uses it.",
+      note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. No chart mark uses it; only the \"MACD peak/valley\" email alert does.",
     },
     adx: {
       name: (di: number, adx: number) => `ADX ${di} ${adx}`,
@@ -1770,7 +1770,7 @@ export const en: Dict = {
       { q: "How is it different from other tools?", a: "It does not hide the record. How each rule did on past charts, and whether each signal emailed reached its stop or its target first, are shown as they are, losing ones included. Signals are judged on closed bars only and never vanish or move afterwards." },
       { q: "What is the win rate?", a: "On past charts (11 pairs, spread paid), none of the signals reached the win rate needed to break even. The numbers are in the app's notes. Please do not take them as a reason to expect to win." },
       { q: "Is this investment advice?", a: "No. The service provides a chart and signals as information, and is not an investment advisory business. Every trading decision and its outcome are your own." },
-      { q: "Which currency pairs are covered?", a: "17 yen pairs (USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY and more), EUR/USD, AUD/USD, USD/CAD and gold (XAU/USD). Email alerts can be set for Q-Trend's and ULTRA's signals on every one of them, 5-minute to daily bars (1-hour to daily for those GMO Coin does not carry, and 15-minute too for gold), and for the GA-style and RSI + SAR signals on USD/JPY, EUR/USD, EUR/JPY, GBP/JPY, AUD/USD and AUD/JPY, 15-minute, 1-hour, 4-hour and daily bars." },
+      { q: "Which currency pairs are covered?", a: "17 yen pairs (USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY and more), EUR/USD, AUD/USD, USD/CAD and gold (XAU/USD). Email alerts can be set for Q-Trend's and ULTRA's signals on every one of them, 5-minute to daily bars (1-hour to daily for those GMO Coin does not carry, and 15-minute too for gold), and for the GA-style and RSI + SAR signals on USD/JPY, EUR/USD, EUR/JPY, GBP/JPY, AUD/USD and AUD/JPY, 15-minute, 1-hour, 4-hour and daily bars, and for the MACD peak/valley signals on the 5-minute bars of GMO Coin's currency pairs." },
       { q: "Can I use it for free?", a: "Yes. With an account the live chart and its signals are free. The indicators and email alerts for signals come with the Light plan (¥2,980 a month)." },
       { q: "When do the emails arrive?", a: "Within minutes of the bar closing. Signals on 15-minute and 1-hour bars closing 17:00–23:59 UTC are not emailed, as those hours lost most on past charts (they stay in the app's log)." },
       { q: "Which technical indicators are used?", a: "Two kinds of signal: GA style (engulfing, a large body, RSI(14), against the close 5 bars back) and RSI(9) with the Parabolic SAR (0.02, 0.2) (RSI back from 25 or 75, the SAR on the same side). Stops and targets use ATR(14). With the Light plan the chart can also show the stochastic, Bollinger %b, RCI, SuperTrend, UT Bot, Dow theory and more (shown only, no signal uses them)." },
@@ -1825,8 +1825,8 @@ export const en: Dict = {
   alerts: {
     title: "Email alerts (buy/sell signals)",
     intro: (email: string) =>
-      `When the kind chosen below (RSI + SAR, GA style, Q-Trend or ULTRA) fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
-    introNoEmail: "When the kind chosen below (RSI + SAR, GA style, Q-Trend or ULTRA) fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
+      `When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you tick, we email ${email}. It arrives a few minutes after the bar closes.`,
+    introNoEmail: "When the kind chosen below (RSI + SAR, GA style, Q-Trend, ULTRA or MACD peak/valley) fires a BUY or SELL on a chart you tick, we email the address you signed in with.",
     proOnly: "Email alerts are a Light plan feature (¥2,980 a month).",
     notConfigured: "Email sending is not set up yet. Signals are logged below, but no email can be delivered for now.",
     loading: "Loading…",
@@ -1834,7 +1834,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1843,13 +1843,24 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
       qtrend: "Q-Trend's BUY, SELL and STRONG signals (tarasenko_'s open-source script, at 200, 14, 1): the same marks the live chart draws.",
       ultra: "ULTRA's Buy ☆ and Sell ☆ signals (built from F-INVEST's video): the same marks the live chart draws, with a stop (13 pips on a currency pair, $13 on gold) and targets 1 to 3 (4, 10, 16 pips on a currency pair; $4, $10, $16 on gold) in the email.",
+      macdx: "BUY and SELL signals where MACD(12, 26, 9)'s blue line crosses the orange line near a peak or a valley far from zero (a SELL above zero, a BUY below it). On the 5-minute chart of GMO Coin's currency pairs only. Sextant's own rule; the chart draws no mark for it. On past charts it was not shown to be better than ULTRA's 5-minute signals, and it lost on average per trade (see the notes below). The email carries ULTRA's stop of 13 pips and targets of 4, 10 and 16 pips.",
     } as Record<string, string>,
+    // #275: shown instead of the table when the server sends no charts for the rule
+    macdxUnavailable: "This alert is not available yet (an update may be in progress). Please wait a little and reopen this.",
+    // #275: the MACD peak-and-valley rule's notes (its own charts: 5 minutes, GMO's currency pairs)
+    macdxNotes: [
+      "Judged on the 5-minute chart of GMO Coin's currency pairs only (not gold, and not the symbols GMO Coin does not carry). An email is sent some ten seconds after the bar closes (a few minutes later where the first read failed).",
+      "On past 5-minute bars (January 2024 to 8 October 2026, spread paid), on the emails' five pairs (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD) TP1 came before the stop 72.3% of the time, and a trade lost about 1.28 pips on average. ULTRA's 5-minute signals over the same period: 72.9% and about 1.18 pips lost a trade. This rule was not shown to be better. Breaking even needs more than 76%.",
+      "It arrives apart from ULTRA's 5-minute emails: with both on, one bar can send two emails.",
+      "Holding with no stop was not measured. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
+      "Nothing is judged while the market is shut (weekends and the like).",
+    ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",
     indicatorNotes: [
