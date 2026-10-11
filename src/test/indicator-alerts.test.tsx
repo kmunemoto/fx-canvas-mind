@@ -863,7 +863,9 @@ describe("#275 the MACD peak-and-valley rule in the emails", () => {
     const t = mail.text;
     expect(t).toContain("ドル/円の5分足で、MACD の山・谷のクロスの売り（SELL）のサインが出ました。");
     expect(t).toContain("MACD(12・26・9)の青線がオレンジ線を上から下に抜けました（山の近く）");
-    expect(t).toContain("0から遠い: 直近24時間（288本）の平均の値幅の");
+    expect(t).toContain("0から遠い: 直近288本（途切れがなければ約24時間）の平均の値幅の");
+    expect(t).toContain("0から直近288本の平均の値幅の4分の1以上離れていて");
+    expect(t).not.toContain("直近24時間（288本）");
     expect(t).toContain("倍（0.25 倍以上が条件）");
     expect(t).toContain("波の頂点に近い: 今の波の頂点の");
     expect(t).toContain("%（50%以上が条件）");
@@ -894,6 +896,9 @@ describe("#275 the MACD peak-and-valley rule in the emails", () => {
     expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 5-minute chart.");
     expect(t).toContain("the MACD line (blue) crossed above its signal line (orange), near a valley");
     expect(t).toContain("the rule needs at least 0.25");
+    expect(t).toContain("× the mean range of the last 288 bars (about 24 hours when the market was open without a break)");
+    expect(t).toContain("at least a quarter of the last 288 bars' mean range away from zero");
+    expect(t).not.toContain("last 24 hours");
     expect(t).toContain("the rule needs at least 50%");
     expect(t).toContain("Stop and targets (ULTRA's numbers):");
     expect(t).toContain("GMO's five pairs (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD)");
@@ -907,13 +912,13 @@ describe("#275 the MACD peak-and-valley rule in the emails", () => {
   it("a pair beyond the five the emails measure gets the 21-pair reference figures, said to be so", () => {
     const g = sample("SELL", "GBP/JPY");
     const ja5 = renderIndicatorMail(g, "ja").text;
-    expect(ja5).toContain("GMO の21ペア（参考として測ったもの）");
+    expect(ja5).toContain("GMO の21ペア（参考として測ったもの。うち7ペアは2026年5月17日から）");
     expect(ja5).toContain("損切りより先に利確1に届いたのは 71.7%");
     expect(ja5).toContain("1回あたり平均で約1.67 pips の負けでした。");
     expect(ja5).toContain("同じ期間の ULTRA の5分足は 71.9%・1回あたり約1.62 pips の負け");
     expect(ja5).toContain("ポンド/円そのものを主に測ったわけではありません（上の数字は21ペア全体のものです）。");
     const en = renderIndicatorMail(g, "en").text;
-    expect(en).toContain("GMO's 21 pairs, measured as a reference");
+    expect(en).toContain("GMO's 21 pairs, measured as a reference — 7 of them only from 17 May 2026");
     expect(en).toContain("GBP/JPY itself was not the main subject of the measurement; these are the 21 pairs' figures.");
     // and the five pairs' own say nothing of the kind
     expect(renderIndicatorMail(sample("SELL"), "ja").text).not.toContain("そのものを主に測ったわけではありません");

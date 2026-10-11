@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, screen, fireEvent, waitFor, type RenderResult } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, cleanup, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 
@@ -8,6 +8,8 @@ vi.mock("sonner", () => ({ toast }));
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
 import SignalAlertSettings from "../components/SignalAlertSettings";
+import { ja } from "../lib/i18n/ja";
+import { en } from "../lib/i18n/en";
 import { AlertRequestError, indicatorChartOffered, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
 import { INDICATOR_INTERVALS, INDICATOR_PAIRS, MACDX_INTERVALS, MACDX_MEASURED, MACDX_PAIRS, indicatorIntervalsFor } from "../../supabase/functions/signal-alerts/indicators";
 
@@ -405,7 +407,47 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
     expect((screen.getByTestId("signal-alert-ultra-USD/JPY-5min") as HTMLInputElement).checked).toBe(false);
     expect(screen.getByTestId("signal-alerts-grid").querySelectorAll("thead th")).toHaveLength(1 + INDICATOR_INTERVALS.length);
-    expect(screen.queryByTestId("signal-alerts-record")).toBeNull();
+  });
+
+  it("shows RSI + SAR's record on its own tab only: not under the MACD tab, nor ULTRA's or Q-Trend's (a fixture that has a record, so the check can fail)", async () => {
+    const big = { n: 40, wins: 14, losses: 24, expired: 2, open: 0, winRate: 0.35, meanR: -0.1, ciR: 0.4, sumR: -4 };
+    const performance = { days: 365, mine: big, all: big, costly: big, byTf: {}, backtest: null, gainz: null };
+    render(<SignalAlertSettings call={async () => withMacdx({ performance })} />);
+    // RSI + SAR first: its record is there
+    expect(await screen.findByTestId("signal-alerts-record")).toBeTruthy();
+    for (const k of ["macdx", "ultra", "qtrend"]) {
+      fireEvent.click(screen.getByTestId(`signal-alerts-rule-${k}`));
+      expect(screen.queryByTestId("signal-alerts-record"), k).toBeNull();
+    }
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-rsi_sar"));
+    expect(screen.getByTestId("signal-alerts-record")).toBeTruthy();
+  });
+
+  it("against a server that sends no charts for the rule, says so instead of drawing an empty table (the other tabs still work)", async () => {
+    render(<SignalAlertSettings call={async () => settings({ indicator: { ...indicator, macdx: undefined } })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-macdx-unavailable").textContent).toContain("まだ使えません");
+    expect(screen.queryByTestId("signal-alerts-grid")).toBeNull();
+    // the others are as they were
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
+    expect(screen.queryByTestId("signal-alerts-macdx-unavailable")).toBeNull();
+    expect(screen.getByTestId("signal-alert-ultra-USD/JPY-5min")).toBeTruthy();
+    // and a server that sends the rule an empty list is told the same
+    cleanup();
+    render(<SignalAlertSettings call={async () => settings({ indicator: { ...indicator, macdx: { pairs: [], intervals: ["5min"] } } })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-macdx-unavailable")).toBeTruthy();
+  });
+
+  it("the MACD pane's note on the chart no longer says that no signal uses MACD, and the card's intro names all five kinds", async () => {
+    expect(ja.chart.macd.note).not.toContain("サインの判定には使っていません");
+    expect(ja.chart.macd.note).toContain("メール通知の「MACD の山・谷」だけが、この MACD（12・26・9）を使います");
+    expect(en.chart.macd.note).not.toContain("no signal uses it");
+    expect(en.chart.macd.note).toContain("only the \"MACD peak/valley\" email alert does");
+    expect(ja.alerts.intro("a@b.c")).toContain("MACD の山・谷");
+    expect(ja.alerts.introNoEmail).toContain("MACD の山・谷");
+    expect(en.alerts.intro("a@b.c")).toContain("MACD peak/valley");
+    expect(en.alerts.introNoEmail).toContain("MACD peak/valley");
   });
 
   it("states what the rule did on past charts against ULTRA's, in the notes, as the emails' figures hold them", async () => {

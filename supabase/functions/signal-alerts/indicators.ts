@@ -234,7 +234,10 @@ export const indicatorSignals = (
 // exactly one decision, the newest bar's. Not on a short history, not on a
 // chart the rule is not offered on, and only while the bar is fresh. Its
 // stop and targets are ULTRA's (the rule has none of its own; the study
-// followed these, docs §8.109 測り方).
+// followed these, docs §8.109 測り方). Only the newest bar is judged, so a bar
+// GMO publishes after the reads at +0, +1 and +3 minutes (and not in time for
+// the next close) is not judged late, as ULTRA's older bars are within their
+// freshness window; the study's "mailed" is the same (docs §8.110).
 export const macdxSignals = (
   pair: string,
   interval: string,
@@ -610,10 +613,10 @@ const macdxMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
   const even = breakEvenPct(false);
   const loss = (v: number) => Math.abs(v).toFixed(2);
   if (lang === "en") {
-    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–8 October 2026, GMO's ${five ? `five pairs (${MACDX_MEASURED.five.join(", ")})` : "21 pairs, measured as a reference"}, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${loss(m.pips)} pips a trade on average. ULTRA's ${tfLabel("en", s.interval)} signals over the same period: ${m.ultraWin.toFixed(1)}% and about ${loss(m.ultraPips)} pips ${m.ultraPips < 0 ? "lost" : "made"} a trade; this rule was not shown to be better than ULTRA.` +
+    return `Measured on past ${tfLabel("en", s.interval)} bars (January 2024–8 October 2026, GMO's ${five ? `five pairs (${MACDX_MEASURED.five.join(", ")})` : "21 pairs, measured as a reference — 7 of them only from 17 May 2026"}, spread paid), these levels reached TP1 before the stop ${m.win.toFixed(1)}% of the time (breaking even needs more than ${even}%, and more to pay the spread); closing all of it at TP1 or the stop (or after five days, where neither was reached) ${m.pips < 0 ? "lost" : "made"} about ${loss(m.pips)} pips a trade on average. ULTRA's ${tfLabel("en", s.interval)} signals over the same period: ${m.ultraWin.toFixed(1)}% and about ${loss(m.ultraPips)} pips ${m.ultraPips < 0 ? "lost" : "made"} a trade; this rule was not shown to be better than ULTRA.` +
       (five ? "" : ` ${s.pair} itself was not the main subject of the measurement; these are the 21 pairs' figures.`);
   }
-  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年10月8日、GMO の${five ? `5ペア（${MACDX_MEASURED.five.map(pairJa).join("・")}）` : "21ペア（参考として測ったもの）"}、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${loss(m.pips)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。同じ期間の ULTRA の${tfLabel("ja", s.interval)}は ${m.ultraWin.toFixed(1)}%・1回あたり約${loss(m.ultraPips)} pips の${m.ultraPips < 0 ? "負け" : "勝ち"}で、この決まりのほうが良いとは言えませんでした。` +
+  return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年10月8日、GMO の${five ? `5ペア（${MACDX_MEASURED.five.map(pairJa).join("・")}）` : "21ペア（参考として測ったもの。うち7ペアは2026年5月17日から）"}、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${m.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${loss(m.pips)} pips の${m.pips < 0 ? "負け" : "勝ち"}でした。同じ期間の ULTRA の${tfLabel("ja", s.interval)}は ${m.ultraWin.toFixed(1)}%・1回あたり約${loss(m.ultraPips)} pips の${m.ultraPips < 0 ? "負け" : "勝ち"}で、この決まりのほうが良いとは言えませんでした。` +
     (five ? "" : `${pairJa(s.pair)}そのものを主に測ったわけではありません（上の数字は21ペア全体のものです）。`);
 };
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
@@ -694,7 +697,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           ...(f
             ? [
               `  MACD = ${px(f.m)}, ${(f.x / unit).toFixed(1)} pips from zero on the ${buy ? "negative" : "positive"} side`,
-              `  Far from zero: ${(f.x / f.avgRange).toFixed(2)} × the mean range of the last 24 hours (288 bars); the rule needs at least 0.25`,
+              `  Far from zero: ${(f.x / f.avgRange).toFixed(2)} × the mean range of the last 288 bars (about 24 hours when the market was open without a break); the rule needs at least 0.25`,
               `  Near the wave's extreme: ${(100 * f.x / f.peak).toFixed(0)}% of the current wave's peak; the rule needs at least 50%`,
             ]
             : []),
@@ -705,7 +708,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
           ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
         ].join("\n"),
-        `This is Sextant's own rule, not a published indicator (docs §8.109): of the MACD(12, 26, 9) crosses it mails only those that happen on the far side of zero (a SELL above zero, a BUY below it), at least a quarter of the mean range away from zero, and before MACD has come back past half of the wave's peak. It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
+        `This is Sextant's own rule, not a published indicator (docs §8.109): of the MACD(12, 26, 9) crosses it mails only those that happen on the far side of zero (a SELL above zero, a BUY below it), at least a quarter of the last 288 bars' mean range away from zero, and before MACD has come back past half of the wave's peak. It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
         `${source} Check the latest state in the app before you place an order:\n${APP_URL}`,
         "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD peak/valley.\nThis is reference information, not investment advice. Every trading decision is your own.",
       ]);
@@ -767,7 +770,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...(f
           ? [
             `  MACD = ${px(f.m)}（0の${buy ? "下" : "上"}、0から ${(f.x / unit).toFixed(1)}pips 離れています）`,
-            `  0から遠い: 直近24時間（288本）の平均の値幅の ${(f.x / f.avgRange).toFixed(2)} 倍（0.25 倍以上が条件）`,
+            `  0から遠い: 直近288本（途切れがなければ約24時間）の平均の値幅の ${(f.x / f.avgRange).toFixed(2)} 倍（0.25 倍以上が条件）`,
             `  波の頂点に近い: 今の波の頂点の ${(100 * f.x / f.peak).toFixed(0)}%（50%以上が条件）`,
           ]
           : []),
@@ -778,7 +781,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
         ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
-      `この決まりは Sextant 独自のもので、公開されているインジケーターではありません（docs §8.109）。MACD(12・26・9)のクロスのうち、売りは0より上・買いは0より下で、0から直近24時間の平均の値幅の4分の1以上離れていて、MACD が今の波の頂点の半分より0に近づく前のものだけを送ります。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
+      `この決まりは Sextant 独自のもので、公開されているインジケーターではありません（docs §8.109）。MACD(12・26・9)のクロスのうち、売りは0より上・買いは0より下で、0から直近288本の平均の値幅の4分の1以上離れていて、MACD が今の波の頂点の半分より0に近づく前のものだけを送ります。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
       "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の山・谷」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
