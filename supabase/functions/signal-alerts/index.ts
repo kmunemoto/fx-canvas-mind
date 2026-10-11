@@ -56,7 +56,7 @@ import {
 import { GA_RULE_ID, isRuleKey, type RuleKey } from "../analyze/gainz.ts";
 import type { Fetcher, QuoteCandle } from "../track-outcomes/quotes.ts";
 import { BACKTEST, GA_BACKTEST, fillAt, settleEvent, summarize, type EventRow, type OpenEvent } from "./record.ts";
-import { isPossiblyClosed } from "../_shared/market-hours.ts";
+import { isPossiblyClosed, isPossiblyClosedFor } from "../_shared/market-hours.ts";
 import {
   ALERT_TWELVE_CAP,
   INDICATOR_INTERVALS,
@@ -96,16 +96,22 @@ import {
   type KlineFile,
 } from "./indicators.ts";
 import {
+  GOLD,
   GOLD_BARS,
+  GOLD_QUOTE_URL,
   HISTORY_BARS,
   LIVE_STEP_MS,
+  TWELVE_1MIN_BARS,
   fetchLiveQuotes,
   historyOfBars,
   historyRead,
   isTwelvePair,
+  parseSwissquote,
   parseTwelveData,
   twelveDataUrl,
+  type Tick,
 } from "../live-chart/logic.ts";
+import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, nextTickAt } from "./gold-minutes.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import type { Candle } from "../analyze/indicators.ts";
@@ -225,6 +231,10 @@ const GMO_GAP_MS = 200;
 // a sweep that runs past the minute is not joined by the next one in the
 // same instance (it would read the same charts again)
 let indicatorSweepRunning = false;
+// #291: the minute (its start, ms) this instance's "gold-ticks" run is
+// reading, so a second call for the same minute does not read it twice (the
+// next minute's run may begin while this one ends)
+let goldTicksMinute: number | null = null;
 // Resend allows two requests a second
 let sendNextAt = 0;
 const SEND_GAP_MS = 600;
@@ -331,6 +341,23 @@ Deno.serve(async (req: Request) => {
       console.error("send failed:", sent.error);
       await patchRow(id, { status: "failed", error: sent.error });
       return "failed";
+    };
+
+    // One more Twelve Data read counted for the UTC day, unless the day's
+    // count has reached `cap` (live-chart's own, the same table); counting
+    // that fails lets the read go ahead
+    const takeTwelveRead = async (cap: number): Promise<boolean> => {
+      try {
+        const r = await rest("rpc/take_twelve_data_credit", { method: "POST", body: JSON.stringify({ p_cap: cap }) });
+        if (!r.ok) {
+          console.error("twelve data count failed:", r.status, await r.text().catch(() => ""));
+          return true;
+        }
+        return (await r.json().catch(() => true)) !== false;
+      } catch (err) {
+        console.error("twelve data count failed:", err);
+        return true;
+      }
     };
 
     const nowMs = Date.now();
@@ -535,19 +562,6 @@ Deno.serve(async (req: Request) => {
       // otherwise leave no time for
       let twelveLeft = TWELVE_READS_PER_RUN;
       const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
-      const takeTwelveRead = async (cap: number): Promise<boolean> => {
-        try {
-          const r = await rest("rpc/take_twelve_data_credit", { method: "POST", body: JSON.stringify({ p_cap: cap }) });
-          if (!r.ok) {
-            console.error("twelve data count failed:", r.status, await r.text().catch(() => ""));
-            return true;
-          }
-          return (await r.json().catch(() => true)) !== false;
-        } catch (err) {
-          console.error("twelve data count failed:", err);
-          return true;
-        }
-      };
       for (const c of twelveCharts) {
         const key = `${c.pair}|${c.interval}`;
         const step = LIVE_STEP_MS[c.interval];
@@ -711,6 +725,109 @@ Deno.serve(async (req: Request) => {
       return { ...summary, ...counts };
     };
 
+    // ---- #291: gold's 1-minute bars, recorded all day (gold-minutes.ts) -------------------
+    //
+    // Every minute (pg_cron): Swissquote's gold price every GOLD_TICK_EVERY_MS
+    // until just before the next minute, each one open now recorded into
+    // public.gold_tick_bars. While gold is shut (the FX weekend at its
+    // widest, gold's daily hour) nothing is read; a quote left standing
+    // (older than GOLD_QUOTE_STALE_MS: a break the hours above do not know,
+    // a holiday) ends the minute's reads.
+    const goldQuote = async (): Promise<Tick | null> => {
+      try {
+        const r = await fetch(GOLD_QUOTE_URL, { signal: AbortSignal.timeout(GOLD_TICK_EVERY_MS - 500) });
+        if (!r.ok) {
+          await r.body?.cancel();
+          return null;
+        }
+        return parseSwissquote(await r.json().catch(() => null), Date.now());
+      } catch {
+        return null;
+      }
+    };
+    const goldTicks = async (): Promise<JsonRecord> => {
+      const plan = goldTickPlan(Date.now());
+      const summary: JsonRecord = { ok: true, mode: "gold-ticks", version: FUNCTION_VERSION, minute: new Date(plan.minuteStart).toISOString() };
+      // a second call for the minute this instance is already reading
+      if (goldTicksMinute === plan.minuteStart) return { ...summary, skipped: "busy" };
+      if (isPossiblyClosedFor(GOLD, Date.now())) return { ...summary, skipped: "market_closed" };
+      goldTicksMinute = plan.minuteStart;
+      const tally = { reads: 0, recorded: 0, stale: 0, failed: 0, record_failed: 0 };
+      try {
+        let lastAt = Number.NEGATIVE_INFINITY;
+        for (;;) {
+          const at = nextTickAt(lastAt, Date.now());
+          if (at >= plan.stopAt) break;
+          await sleep(at - Date.now());
+          lastAt = at;
+          tally.reads++;
+          const tick = await goldQuote();
+          if (!tick) {
+            tally.failed++;
+            continue;
+          }
+          if (!tick.open || !tick.time) {
+            tally.stale++;
+            break;
+          }
+          try {
+            const rec = await rest("rpc/record_gold_tick", { method: "POST", body: JSON.stringify({ p_at: tick.time, p_mid: tick.mid }) });
+            const said = await rec.text().catch(() => "");
+            if (rec.ok) tally.recorded++;
+            else {
+              tally.record_failed++;
+              console.error("gold tick record failed:", rec.status, said);
+            }
+          } catch (err) {
+            tally.record_failed++;
+            console.error("gold tick record failed:", err);
+          }
+        }
+      } finally {
+        if (goldTicksMinute === plan.minuteStart) goldTicksMinute = null;
+      }
+      return { ...summary, ...tally };
+    };
+    // Once, by hand: the minutes before the recording began, from Twelve
+    // Data's newest 1-minute bars (gold-minutes.ts goldSeedRows), within the
+    // day's reads. A minute already in the table is left as it is.
+    const goldSeed = async (): Promise<JsonRecord> => {
+      const summary: JsonRecord = { ok: true, mode: "gold-seed", version: FUNCTION_VERSION };
+      const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
+      if (!twelveKey) return { ...summary, ok: false, error: "no_key" };
+      const first = await readRows("gold_tick_bars?source=eq.swissquote&select=minute&order=minute.asc&limit=1");
+      const firstRecorded = first.length > 0 && typeof first[0].minute === "string" ? Date.parse(first[0].minute) : null;
+      if (!(await takeTwelveRead(ALERT_TWELVE_CAP))) return { ...summary, ok: false, error: "day_spent" };
+      let bars: Candle[] | null = null;
+      try {
+        const r = await fetch(twelveDataUrl(GOLD, "1min", twelveKey, TWELVE_1MIN_BARS), { signal: AbortSignal.timeout(20_000) });
+        bars = r.ok ? parseTwelveData(await r.json().catch(() => null), "1min") : null;
+        if (!r.ok) await r.body?.cancel();
+      } catch (err) {
+        console.error("twelve data read failed:", err);
+      }
+      if (!bars) return { ...summary, ok: false, error: "twelve_unavailable" };
+      const rows = goldSeedRows(bars, Date.now(), firstRecorded);
+      const out: JsonRecord = {
+        ...summary,
+        read: bars.length,
+        first_recorded: firstRecorded === null ? null : new Date(firstRecorded).toISOString(),
+        rows: rows.length,
+      };
+      if (rows.length === 0) return { ...out, inserted: 0 };
+      const res = await rest("gold_tick_bars?on_conflict=minute&select=minute", {
+        method: "POST",
+        headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
+        body: JSON.stringify(rows),
+      });
+      const got = res.ok ? await res.json().catch(() => null) : null;
+      if (!res.ok) {
+        console.error("gold seed store failed:", res.status, await res.text().catch(() => ""));
+        return { ...out, ok: false, error: "store_failed", status: res.status };
+      }
+      return { ...out, inserted: Array.isArray(got) ? got.length : null, from: rows[0].minute, to: rows[rows.length - 1].minute };
+    };
+
     // ---- the sweep ---------------------------------------------------------------
     const sweepToken = req.headers.get("x-sweep-token");
     if (sweepToken) {
@@ -729,6 +846,10 @@ Deno.serve(async (req: Request) => {
           indicatorSweepRunning = false;
         }
       }
+      // #291: every minute, gold's price from Swissquote all minute long
+      if (body.mode === "gold-ticks") return json(await goldTicks());
+      // #291: once, by hand: the minutes before that recording began
+      if (body.mode === "gold-seed") return json(await goldSeed());
       const summary: JsonRecord = { ok: true, mode: "sweep", version: FUNCTION_VERSION, email_configured: emailConfigured };
       // "Enter now" is not an available action while the market may be shut,
       // which is when analyze refuses too

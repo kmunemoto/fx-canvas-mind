@@ -414,7 +414,9 @@ export const twelveRead = (
   fetchedAt: string,
   limited = false,
   ticksFrom: string | null = null,
-) => fallbackRead(pair, interval, bars, nowMs, { source: "twelvedata", feed: isGold(pair) ? "gold" : "twelve", fetchedAt, limited, ticksFrom });
+  // #291: gold's 1-minute bars, the minutes recorded (isGoldMinute)
+  recorded = false,
+) => fallbackRead(pair, interval, bars, nowMs, { source: "twelvedata", feed: isGold(pair) ? "gold" : "twelve", fetchedAt, limited, ticksFrom, recorded });
 export const goldRead = (bars: Candle[], interval: string, nowMs: number, fetchedAt: string, limited = false, ticksFrom: string | null = null) =>
   twelveRead(GOLD, bars, interval, nowMs, fetchedAt, limited, ticksFrom);
 
@@ -568,6 +570,27 @@ export const extendWithTicks = (
   };
 };
 
+// ---- #291: gold's 1-minute bars, recorded all day ------------------------------------------
+//
+// The request (2026-10-11): the owner's video's way on the moving-average
+// chart, and gold's 1-minute email judged by it (docs §8.112). Asked where
+// gold's 1-minute bars should come from — Twelve Data's free key allows 800
+// reads a day, and reading them after every 1-minute close takes some 1,380
+// — the owner chose 「Swissquoteで、チャートもそろえる」. So the signal-alerts
+// function reads Swissquote's gold price every few seconds all day (its
+// "gold-ticks" run, every minute) into public.gold_tick_bars, beside the
+// ticker's while a live chart is open (#147), and gold's 1-minute chart is
+// those minutes: the bars the email judges. The minutes before the recording
+// began were filled once from Twelve Data's 1-minute bars (the table's
+// source 'twelvedata'). A minute in which no price was recorded is no bar.
+// The 2-, 3- and 4-minute charts are still made of Twelve Data's.
+export const isGoldMinute = (pair: string, interval: string): boolean => isGold(pair) && interval === "1min";
+
+// The recorded minutes (parseTickMinutes, oldest first) as the chart's
+// candles, stamped as Twelve Data's are ("YYYY-MM-DD HH:mm:ss", UTC)
+export const tickMinuteCandles = (minutes: ReadonlyArray<TickMinute>): Candle[] =>
+  minutes.map((m) => ({ datetime: utcStamp(Date.parse(m.minute)), open: m.open, high: m.high, low: m.low, close: m.close }));
+
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 const round = (v: number | null | undefined, d: number): number | null =>
   v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d));
@@ -628,6 +651,9 @@ export interface ReadSource {
   // #147: the first bar built from the prices recorded since (gold's
   // extendWithTicks), ISO
   ticksFrom?: string | null;
+  // #291: the bars are the minutes recorded in public.gold_tick_bars (gold's
+  // 1-minute chart: isGoldMinute), not a read of Twelve Data's
+  recorded?: boolean;
 }
 const GMO_SOURCE: ReadSource = { source: "gmo", feed: null, fetchedAt: null };
 
@@ -710,6 +736,7 @@ export const readBars = (
     fetched_at: from.fetchedAt,
     limited: from.limited === true,
     ticks_from: from.ticksFrom ?? null,
+    recorded: from.recorded === true,
   };
 };
 
