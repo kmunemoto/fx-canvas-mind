@@ -280,6 +280,12 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     // for the answer (10 seconds at most), and the run takes the minute and more
     expect(fn).toMatch(/if \(body\.mode === "gold-ticks"\) \{[\s\S]{0,700}runtime\.waitUntil\(\s*goldTicks\(\)\.then\(/);
     expect(fn).not.toContain("json(await goldTicks())");
+    // the judgment is logged as soon as it is made (a run cut short after its
+    // minute still leaves it); the end summary is the reads'
+    expect(fn).toContain("console.log(JSON.stringify({ ...summary, judged }));");
+    expect(fn.match(/judging = judge\(\);/g)).toHaveLength(2);
+    expect(fn).not.toContain("judging = goldJudge()");
+    expect(fn).toContain("return { ...summary, ...tally, ended };");
     // while gold is shut, only the runs that can still find its last minute
     // fresh judge (gold-minutes.ts judgesWhileShut)
     expect(fn).toContain('if (!judgesWhileShut(plan.minuteStart)) return { ...summary, skipped: "market_closed" };');

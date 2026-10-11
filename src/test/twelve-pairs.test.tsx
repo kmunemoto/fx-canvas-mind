@@ -20,8 +20,10 @@ import {
   isTwelvePair,
   parseSwissquote,
   parseSwissquoteFx,
+  readTickPages,
   swissquoteDue,
   swissquoteUrl,
+  TICK_PAGE_ROWS,
   twelveDataUrl,
   twelveRead,
 } from "../../supabase/functions/live-chart/logic";
@@ -208,7 +210,56 @@ describe("#154 the broker's pairs GMO does not serve, in the live-chart function
     const fn = readFileSync("supabase/functions/live-chart/index.ts", "utf8");
     expect(fn).toContain('rest("rpc/record_live_tick"');
     expect(fn).toContain("p_pair: p, p_at: tick.time, p_mid: tick.mid");
-    expect(fn).toContain("live_tick_bars?pair=eq.${encodeURIComponent(pair)}&minute=gte.");
+    expect(fn).toContain("live_tick_bars?pair=eq.${encodeURIComponent(pair)}&select=minute,open,high,low,close,last_at&order=minute.asc&limit=${TICK_PAGE_ROWS}");
+    // (#291: a thousand rows at a time, from the read's minute on, then after
+    // the last minute of the page before: logic.ts readTickPages)
+    expect(fn).toContain("`${base}&minute=${after === null ? `gte.${encodeURIComponent(from)}` : `gt.${encodeURIComponent(after)}`}`");
+    expect(fn).not.toContain("limit=5000");
+  });
+});
+
+describe("#291 a pair's recorded minutes read a thousand rows at a time (the REST API's most)", () => {
+  // the table as the REST API answers it: the rows after `after`, oldest
+  // first, a thousand at most
+  const table = (n: number) => {
+    const t0 = Date.parse("2026-10-09T00:00:00Z");
+    const rows = Array.from({ length: n }, (_, k) => ({ minute: new Date(t0 + k * 60_000).toISOString(), close: k }));
+    const asked: Array<string | null> = [];
+    const page = async (after: string | null) => {
+      asked.push(after);
+      const from = after === null ? 0 : rows.findIndex((r) => r.minute > after);
+      return from < 0 ? [] : rows.slice(from, from + TICK_PAGE_ROWS);
+    };
+    return { rows, asked, page };
+  };
+
+  it("reads two days of a pair's minutes (2,880 rows) whole, each page after the last minute of the one before", async () => {
+    expect(TICK_PAGE_ROWS).toBe(1_000);
+    const t = table(2_880);
+    const got = await readTickPages(t.page);
+    expect(got).toEqual(t.rows);
+    expect(t.asked).toEqual([null, t.rows[999].minute, t.rows[1999].minute]);
+  });
+
+  it("asks once more after a full last page, and stops at an empty one", async () => {
+    const t = table(1_000);
+    expect(await readTickPages(t.page)).toEqual(t.rows);
+    expect(t.asked).toEqual([null, t.rows[999].minute]);
+    const none = table(0);
+    expect(await readTickPages(none.page)).toEqual([]);
+    expect(none.asked).toEqual([null]);
+  });
+
+  it("answers nothing when a page cannot be read (a part would end the bars early), and stops at its bound", async () => {
+    const t = table(2_500);
+    let n = 0;
+    expect(await readTickPages(async (after) => (++n === 2 ? null : t.page(after)))).toBeNull();
+    const many = table(9_000);
+    expect(await readTickPages(many.page, 3)).toEqual(many.rows.slice(0, 3_000));
+    expect(many.asked).toHaveLength(3);
+    // a full page whose last row has no minute is not asked after again
+    const odd = await readTickPages(async () => Array.from({ length: TICK_PAGE_ROWS }, () => ({ close: 1 })));
+    expect(odd).toHaveLength(TICK_PAGE_ROWS);
   });
 });
 

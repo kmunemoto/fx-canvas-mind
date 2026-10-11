@@ -130,7 +130,7 @@ describe("#291 the fill of the minutes before the recording began", () => {
 
   it("keeps Twelve Data's ended minutes, as 'twelvedata' rows with no samples", () => {
     const bars = [bar(T0 - 10 * M1, 4000), bar(T0 - 9 * M1, 4001)];
-    const rows = goldSeedRows(bars, T0, null);
+    const rows = goldSeedRows(bars, T0);
     expect(rows).toEqual([
       {
         minute: new Date(T0 - 10 * M1).toISOString(),
@@ -147,17 +147,27 @@ describe("#291 the fill of the minutes before the recording began", () => {
     ]);
   });
 
-  it("leaves out a minute not ended GOLD_QUOTE_STALE_MS before now, and any from the first recorded minute on", () => {
+  it("leaves out a minute not ended GOLD_QUOTE_STALE_MS before now", () => {
     const now = T0;
     const ended = now - GOLD_QUOTE_STALE_MS - M1;
     // `ended` ends exactly GOLD_QUOTE_STALE_MS before now (kept); ended + 30 s
     // is not on a minute; ended + M1 and now - M1 end later than that
     const bars = [bar(ended - M1, 1), bar(ended, 2), bar(ended + 30_000, 3), bar(ended + M1, 4), bar(now - M1, 5)];
-    const rows = goldSeedRows(bars, now, null);
+    const rows = goldSeedRows(bars, now);
     expect(rows.map((r) => r.close)).toEqual([1, 2]);
-    // the first recorded minute and after are Swissquote's
-    expect(goldSeedRows(bars, now, ended).map((r) => r.close)).toEqual([1]);
-    expect(goldSeedRows(bars, now, ended - M1)).toEqual([]);
+  });
+
+  it("the run fills only before the recording has begun: it refuses once a Swissquote price is in the table, and when that cannot be read, before any Twelve Data read is spent", () => {
+    const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    const seed = fn.slice(fn.indexOf("const goldSeed = async"), fn.indexOf("// ---- the sweep"));
+    expect(seed).toContain('rest("gold_tick_bars?source=eq.swissquote&select=minute&order=minute.asc&limit=1")');
+    expect(seed).toContain('if (!Array.isArray(first)) return { ...summary, ok: false, error: "read_failed", status: firstRes.status };');
+    expect(seed).toContain('error: "recording_started"');
+    expect(seed.indexOf('error: "recording_started"')).toBeGreaterThan(-1);
+    expect(seed.indexOf('error: "recording_started"')).toBeLessThan(seed.indexOf("takeTwelveRead("));
+    expect(seed).toContain("goldSeedRows(bars, Date.now())");
+    // (a failed read is not taken for an empty table)
+    expect(seed).not.toContain("readRows(");
   });
 
   it("leaves out a malformed bar, and a minute given twice after its first", () => {
@@ -169,7 +179,7 @@ describe("#291 the fill of the minutes before the recording began", () => {
       bar(T0 - 7 * M1, 7),
       bar(T0 - 7 * M1, 8),
     ];
-    expect(goldSeedRows(bars, T0, null).map((r) => r.close)).toEqual([7]);
+    expect(goldSeedRows(bars, T0).map((r) => r.close)).toEqual([7]);
   });
 });
 

@@ -515,6 +515,34 @@ export const parseTickMinutes = (rows: unknown): TickMinute[] => {
   return out.sort((a, b) => Date.parse(a.minute) - Date.parse(b.minute));
 };
 
+// #291 (docs §8.112, the third review): a pair's recorded minutes read
+// through the REST API, which answers a thousand rows at most — a page at a
+// time, each after the last minute of the one before (not by offset: the
+// oldest rows are deleted meanwhile), until a page comes back short. Two days
+// are kept, 2,880 rows: `maxPages` is a bound, not a limit met. `page(after)`:
+// the rows after the minute `after` (from the start when null), oldest first,
+// at most TICK_PAGE_ROWS of them; null when the read failed (and then so is
+// the answer: a part of them would end the bars early)
+export const TICK_PAGE_ROWS = 1_000;
+export const readTickPages = async (
+  page: (after: string | null) => Promise<unknown[] | null>,
+  maxPages = 5,
+): Promise<unknown[] | null> => {
+  const rows: unknown[] = [];
+  let after: string | null = null;
+  for (let n = 0; n < maxPages; n++) {
+    const got = await page(after);
+    if (got === null) return null;
+    rows.push(...got);
+    if (got.length < TICK_PAGE_ROWS) return rows;
+    const last = got[got.length - 1];
+    const minute = typeof last === "object" && last !== null ? (last as Record<string, unknown>).minute : null;
+    if (typeof minute !== "string") return rows;
+    after = minute;
+  }
+  return rows;
+};
+
 const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 // The bars read at `fetchedAt`, and after them the bars made from the

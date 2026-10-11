@@ -91,12 +91,15 @@ export const closedMinutes = <T extends { minute: string }>(minutes: ReadonlyArr
 
 // ---- the fill of the minutes before the recording began -------------------------------------
 //
-// Once, by hand, through the run {"mode": "gold-seed"}: Twelve Data's newest
-// 1-minute bars, those before the first minute recorded from Swissquote's
-// prices (`firstRecorded`, the oldest 'swissquote' row; null when there is
-// none), and none that has not ended GOLD_QUOTE_STALE_MS before now (a
-// minute Swissquote may still be recording). A minute already in the table
-// is left as it is; a minute Twelve Data gave twice, its first.
+// Once, by hand, through the run {"mode": "gold-seed"}, while gold is shut
+// and before the recording has begun — the run refuses once a 'swissquote'
+// row is in the table: rows a chart's ticker recorded before the recording,
+// hours apart, would end the fill, and the minutes between them and the
+// recording would be drawn and judged as if they ran on (the third review,
+// docs §8.112): Twelve Data's newest 1-minute bars, none that has not ended
+// GOLD_QUOTE_STALE_MS before now (a minute Swissquote may still be
+// recording). A minute already in the table is left as it is; a minute
+// Twelve Data gave twice, its first.
 export interface SeedRow {
   minute: string;
   open: number;
@@ -108,14 +111,13 @@ export interface SeedRow {
   samples: number;
   source: "twelvedata";
 }
-export const goldSeedRows = (bars: ReadonlyArray<Candle>, nowMs: number, firstRecorded: number | null): SeedRow[] => {
+export const goldSeedRows = (bars: ReadonlyArray<Candle>, nowMs: number): SeedRow[] => {
   const out: SeedRow[] = [];
   const seen = new Set<number>();
   for (const b of bars) {
     const open = barOpenMs(b.datetime);
     if (!Number.isFinite(open) || open % MIN !== 0 || seen.has(open)) continue;
     if (open + MIN > nowMs - GOLD_QUOTE_STALE_MS) continue;
-    if (firstRecorded !== null && open >= firstRecorded) continue;
     if (![b.open, b.high, b.low, b.close].every((v) => Number.isFinite(v) && v > 0) || b.high < b.low) continue;
     seen.add(open);
     const at = new Date(open).toISOString();

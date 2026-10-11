@@ -848,7 +848,14 @@ Deno.serve(async (req: Request) => {
       goldTicksMinute = plan.minuteStart;
       const tally = { reads: 0, recorded: 0, stale: 0, shut: 0, failed: 0, record_failed: 0 };
       // the judge runs beside the reads (its mails may take seconds), not
-      // between them
+      // between them, and its result goes to the log as soon as it is made:
+      // a run cut short after its minute (were it given a worker booted for
+      // an earlier request, which lives 150 s from its boot) still leaves it
+      const judge = (): Promise<JsonRecord> =>
+        goldJudge().then((judged) => {
+          console.log(JSON.stringify({ ...summary, judged }));
+          return judged;
+        });
       let judging: Promise<JsonRecord> | null = null;
       try {
         let lastAt = Number.NEGATIVE_INFINITY;
@@ -857,7 +864,7 @@ Deno.serve(async (req: Request) => {
           // the minute that closed, once its last prices are in
           if (judging === null && plan.judgeAt <= at) {
             await sleep(plan.judgeAt - Date.now());
-            judging = goldJudge();
+            judging = judge();
           }
           if (at >= plan.stopAt) break;
           await sleep(at - Date.now());
@@ -892,22 +899,31 @@ Deno.serve(async (req: Request) => {
         }
         if (judging === null) {
           await sleep(plan.judgeAt - Date.now());
-          judging = goldJudge();
+          judging = judge();
         }
       } finally {
         if (goldTicksMinute === plan.minuteStart) goldTicksMinute = null;
       }
-      return { ...summary, ...tally, ended: new Date().toISOString(), judged: await judging };
+      // (the reads' summary; the judgment was logged when it was made)
+      const ended = new Date().toISOString();
+      await judging;
+      return { ...summary, ...tally, ended };
     };
     // Once, by hand: the minutes before the recording began, from Twelve
     // Data's newest 1-minute bars (gold-minutes.ts goldSeedRows), within the
-    // day's reads. A minute already in the table is left as it is.
+    // day's reads. A minute already in the table is left as it is. Refused
+    // once a Swissquote price is in the table (gold-minutes.ts, "the fill of
+    // the minutes before the recording began"), and when that cannot be read
     const goldSeed = async (): Promise<JsonRecord> => {
       const summary: JsonRecord = { ok: true, mode: "gold-seed", version: FUNCTION_VERSION };
       const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
       if (!twelveKey) return { ...summary, ok: false, error: "no_key" };
-      const first = await readRows("gold_tick_bars?source=eq.swissquote&select=minute&order=minute.asc&limit=1");
-      const firstRecorded = first.length > 0 && typeof first[0].minute === "string" ? Date.parse(first[0].minute) : null;
+      const firstRes = await rest("gold_tick_bars?source=eq.swissquote&select=minute&order=minute.asc&limit=1");
+      const first = firstRes.ok ? await firstRes.json().catch(() => null) : null;
+      if (!Array.isArray(first)) return { ...summary, ok: false, error: "read_failed", status: firstRes.status };
+      if (first.length > 0) {
+        return { ...summary, ok: false, error: "recording_started", first_recorded: isRecord(first[0]) ? first[0].minute ?? null : null };
+      }
       if (!(await takeTwelveRead(ALERT_TWELVE_CAP))) return { ...summary, ok: false, error: "day_spent" };
       let bars: Candle[] | null = null;
       try {
@@ -918,13 +934,8 @@ Deno.serve(async (req: Request) => {
         console.error("twelve data read failed:", err);
       }
       if (!bars) return { ...summary, ok: false, error: "twelve_unavailable" };
-      const rows = goldSeedRows(bars, Date.now(), firstRecorded);
-      const out: JsonRecord = {
-        ...summary,
-        read: bars.length,
-        first_recorded: firstRecorded === null ? null : new Date(firstRecorded).toISOString(),
-        rows: rows.length,
-      };
+      const rows = goldSeedRows(bars, Date.now());
+      const out: JsonRecord = { ...summary, read: bars.length, rows: rows.length };
       if (rows.length === 0) return { ...out, inserted: 0 };
       const res = await rest("gold_tick_bars?on_conflict=minute&select=minute", {
         method: "POST",

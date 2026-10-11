@@ -80,6 +80,8 @@ import {
   twelveDataUrl,
   extendWithTicks,
   parseTickMinutes,
+  readTickPages,
+  TICK_PAGE_ROWS,
   isGoldMinute,
   tickMinuteCandles,
   CHART_GMO,
@@ -108,7 +110,8 @@ import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../si
 // recorded all day"), the bars the gold 1-minute email judges, and the read
 // says so (`recorded`); the ticker records gold's price in the hours the
 // minute-by-minute recording does, no others. Every other chart's bars are
-// as they were.
+// as they were, but for the minutes recorded for a pair read as gold is,
+// now read whole past the REST API's thousand rows (withTicks).
 const FUNCTION_VERSION = "live-chart-v18-2026-10-11T12:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
@@ -346,15 +349,26 @@ Deno.serve(async (req: Request) => {
     const withTicks = async (pair: string, interval: string, fb: TwelveBars): Promise<TwelveBars> => {
       try {
         const from = new Date(Math.floor(Date.parse(fb.fetchedAt) / 60_000) * 60_000).toISOString();
-        const cols = "select=minute,open,high,low,close,last_at&order=minute.asc&limit=5000";
         // #291: gold's, a row every minute all day now, through the function
-        // that answers them all as one (the REST API answers a thousand rows
-        // at most: some 17 hours of them)
-        const res = isGold(pair)
-          ? await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: 20_000, p_from: from }) })
-          : await rest(`live_tick_bars?pair=eq.${encodeURIComponent(pair)}&minute=gte.${encodeURIComponent(from)}&${cols}`);
-        if (!res.ok) return fb;
-        const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(await res.json().catch(() => null)));
+        // that answers them all as one; any other pair's a thousand rows at a
+        // time (the REST API answers a thousand at most: some 17 hours of
+        // them; logic.ts readTickPages)
+        let rows: unknown = null;
+        if (isGold(pair)) {
+          const res = await rest("rpc/gold_tick_minutes", { method: "POST", body: JSON.stringify({ p_count: 20_000, p_from: from }) });
+          if (!res.ok) return fb;
+          rows = await res.json().catch(() => null);
+        } else {
+          const base = `live_tick_bars?pair=eq.${encodeURIComponent(pair)}&select=minute,open,high,low,close,last_at&order=minute.asc&limit=${TICK_PAGE_ROWS}`;
+          rows = await readTickPages(async (after) => {
+            const res = await rest(`${base}&minute=${after === null ? `gte.${encodeURIComponent(from)}` : `gt.${encodeURIComponent(after)}`}`);
+            const got = res.ok ? await res.json().catch(() => null) : null;
+            if (!res.ok) await res.body?.cancel();
+            return Array.isArray(got) ? got : null;
+          });
+          if (rows === null) return fb;
+        }
+        const ext = extendWithTicks(fb.bars, interval, fb.fetchedAt, parseTickMinutes(rows));
         return { ...fb, ...ext };
       } catch (err) {
         console.error("ticks read failed:", pair, err);
