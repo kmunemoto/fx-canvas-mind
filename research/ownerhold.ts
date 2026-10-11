@@ -19,7 +19,7 @@
 
 import { MINUTE, WEEK, WEEK_OFFSET } from "./lib.ts";
 import { lowerBound } from "./money-data.ts";
-import { medianOf, weekOf } from "./money-stats.ts";
+import { medianOf, quantile, weekOf } from "./money-stats.ts";
 import { type NyClose, nyClosesBetween, rakutenSpread, tausOf } from "./money-trades.ts";
 import { csvCells, parseBisPolicy, rateBefore } from "./longhist-lib.ts";
 import { IV15, IV5, type IvCfg, LEAD15, type LoadStats, type M1, MAINT, PAIRS, type Sig, type SignalRead, type Source, isUsdPair, keysOf, load15, loadM1, loadQuotes, macdxReadOf, newLoadStats, pOf, signalsOf, synthesize, unitOf, wholeDayFile, writeGmoFiles } from "./ownerhold-data.ts";
@@ -57,13 +57,15 @@ const OUT = env("OUT", "research/out/ownerhold");
 // modes) are the 15-minute ULTRA emails' only.
 const SIGS = env("SIGS", "ultra15");
 if (!["ultra15", "ultra5", "macdx5"].includes(SIGS)) throw new Error(`SIGS ${SIGS}: ultra15, ultra5 or macdx5`);
-if (SIGS !== "ultra15" && !["synthetic", "fixtures", "cache", "real", "print"].includes(MODE)) throw new Error(`SIGS ${SIGS} is not for MODE ${MODE}`);
+if (SIGS !== "ultra15" && !["synthetic", "cache", "real", "print", "heldprint"].includes(MODE)) throw new Error(`SIGS ${SIGS} is not for MODE ${MODE}`);
 const IV: IvCfg = SIGS === "ultra15" ? IV15 : IV5;
 const CACHE = env("CACHE_DIR", "research/.cache");
 const DELAY = 2;
 const START_YEN = 300_000;
 const CAP = 1_000_000;
 if (![START_MS, END_MS, SPLIT_MS].every(Number.isFinite) || !(START_MS < SPLIT_MS && SPLIT_MS < END_MS)) throw new Error(`START ${START}, SPLIT ${SPLIT}, END ${END}: not in order`);
+// docs §8.111 変えるところ 4: the 5-minute real runs take only the period fixed before any data was read
+if (SIGS !== "ultra15" && MODE === "real" && (START !== "2024-01-01" || SPLIT !== "2025-05-19" || END_MS !== Date.parse("2026-10-10T00:00:00Z"))) throw new Error(`SIGS ${SIGS}: the real run is START 2024-01-01, SPLIT 2025-05-19, END 2026-10-10T00:00:00Z (docs §8.111), not ${START}, ${SPLIT}, ${END}`);
 if (ULTRA_PAIRS.tp2 !== 10) throw new Error("the emails' TP2 is not 10 pips (§8.102 fixes it)");
 
 // a run's times and money: the study's (START..END, the split, 300,000 yen, the cap), or a hand example's
@@ -163,18 +165,18 @@ const dataSetOf = async (name: string, src: Source | null, walk: { set: string; 
       const trend = walk.set === "t01" ? 0.01 : walk.set === "t03" ? 0.03 : 0;
       // (a)'s walks end at END; 2023's (written out) go on 4 days past it, so a read past END finds bars
       const to = rg === RANGE_A ? rg.end : rg.end + 4 * DAY_MS;
-      const w = synthesize(pair, pi, { seed: walk.seed, trend, startPips: trend ? 100_000 : null, ...(rg.closedKeys ? { closedKeys: rg.closedKeys } : {}) }, rg.from15 - DAY_MS, src ? to : rg.end);
+      const w = synthesize(pair, pi, { seed: walk.seed, trend, startPips: trend ? 100_000 : null, ...(rg.closedKeys ? { closedKeys: rg.closedKeys } : {}), ...(IV === IV15 ? {} : { withFive: true }) }, rg.from15 - DAY_MS, src ? to : rg.end);
       if (src) {
         // written out and read back: the Python check reads the same files
         // the 5-minute files only when the signals are read from them: the 15-minute run's folder stays as it was
-        await writeGmoFiles(src.dir, pair, IV === IV15 ? { m1: w.m1, q15: w.q15 } : w, rg.from15 - DAY_MS, to);
+        await writeGmoFiles(src.dir, pair, w, rg.from15 - DAY_MS, to);
         m1 = await loadM1(src, pair, rg.start - DAY_MS, rg.readEnd ?? rg.end, load);
         q15 = await loadQuotes(src, pair, IV.interval, IV.step, rg.from15, rg.readEnd ?? rg.end, load);
       } else {
         const k = lowerBound(w.m1.t, rg.start - DAY_MS);
         const cut = (xs: Float64Array) => xs.subarray(k);
         m1 = { pair, n: w.m1.n - k, t: cut(w.m1.t), bo: cut(w.m1.bo), bh: cut(w.m1.bh), bl: cut(w.m1.bl), bc: cut(w.m1.bc), ao: cut(w.m1.ao), ah: cut(w.m1.ah), al: cut(w.m1.al), ac: cut(w.m1.ac) };
-        q15 = (IV === IV15 ? w.q15 : w.q5).filter((q) => Date.parse(q.datetime) >= rg.from15);
+        q15 = (IV === IV15 ? w.q15 : w.q5!).filter((q) => Date.parse(q.datetime) >= rg.from15);
       }
     } else {
       m1 = await loadM1(src!, pair, rg.start - DAY_MS, rg.readEnd ?? rg.end, load);
@@ -379,7 +381,9 @@ export const analyse = (ds: DataSet, ctx: Ctx, parts: "third" | "all", plant = "
   const aheadReads = ds.reads.filter((r) => r.ahead);
   const ahead = aheadReads.reduce((a, r) => ({ compared: a.compared + r.ahead!.compared, mismatched: a.mismatched + r.ahead!.mismatched, examples: [...a.examples, ...r.ahead!.examples].slice(0, 10) }), { compared: 0, mismatched: 0, examples: [] as string[] });
   if (aheadReads.length) Object.assign(signals, { ahead });
-  checks.signalProbe = { ok: signals.probe.mismatched === 0 && signals.probeLate.mismatched === 0 && ahead.mismatched === 0, detail: { probe: signals.probe, probeLate: signals.probeLate, ...(aheadReads.length ? { ahead } : {}) }, n: signals.probe.mismatched + signals.probeLate.mismatched + ahead.mismatched };
+  // the 5-minute runs also need the probes to have compared something (docs §8.111 確かめ B 1); the 15-minute check is as it was
+  const looked = SIGS === "ultra15" || (signals.probe.compared > 0 && (!aheadReads.length || ahead.compared > 0));
+  checks.signalProbe = { ok: looked && signals.probe.mismatched === 0 && signals.probeLate.mismatched === 0 && ahead.mismatched === 0, detail: { probe: signals.probe, probeLate: signals.probeLate, ...(aheadReads.length ? { ahead } : {}) }, n: signals.probe.mismatched + signals.probeLate.mismatched + ahead.mismatched };
   checks.loads = { ok: ds.load.failed === 0, detail: ds.load, n: ds.load.failed };
   if (ds.reads.some((r) => r.cut)) {
     const cuts = ds.reads.map((r) => ({ pair: r.pair, ...(r.cut ?? { compared: 0, mismatched: 0, examples: ["not run"] }) }));
@@ -1042,6 +1046,9 @@ if (MODE === "real") {
     log(`check ${k}: ${c.ok ? "ok" : "FAILED"}`);
     // a check's own reason, written without a measured number (only the E* check has one)
     if (!c.ok && c.why) log(`  ${c.why}`);
+    // the two reproductions' differences name the pair, the time and the side of a signal, or a tally of the rule's own
+    // study (docs §8.109, §8.98); they hold no number of the owner's way, so they are printed to find what differed
+    if (!c.ok && (k === "macdxStudy" || k === "tfWinrate")) log(`  ${JSON.stringify(c.detail).slice(0, 4000)}`);
     if (!c.ok) ok = false;
   }
   log(`TypeScript checks: ${ok ? "all passed" : "FAILED"} (${((Date.now() - t0) / 1000).toFixed(0)} s). The numbers are in ${OUT}/real, printed only by MODE=print after the Python check.`);
@@ -1055,14 +1062,8 @@ const csvRowsOf = (text: string): Array<Record<string, string>> => {
   const cols = h.split(",");
   return rows.filter((r) => r !== "").map((r) => Object.fromEntries(r.split(",").map((v, i) => [cols[i], v])));
 };
-const quantileOf = (xs: number[], q: number): number | null => {
-  if (!xs.length) return null;
-  const a = [...xs].sort((u, v) => u - v);
-  const k = (a.length - 1) * q;
-  const lo = Math.floor(k);
-  const hi = Math.ceil(k);
-  return a[lo] + (a[hi] - a[lo]) * (k - lo);
-};
+// the report's own point (money-stats quantile: the sorted value at floor(q × (n − 1))), so one number means one thing
+const quantileOf = (xs: number[], q: number): number | null => quantile(xs, q);
 const heldSummary = async (dump: string) => {
   const meta = JSON.parse(await Deno.readTextFile(`${dump}/meta.json`)) as { end: number };
   const paths = csvRowsOf(await Deno.readTextFile(`${dump}/paths-main.csv`));
@@ -1080,8 +1081,10 @@ const heldSummary = async (dump: string) => {
       byHow: { tp: by("tp").length, lc: by("lc").length, deadline: by("deadline").length, held: held.length },
       heldAtEnd: {
         n: held.length,
-        floatingYenSum: heldYen.reduce((a, b) => a + b, 0),
-        floatingYenWorst: heldYen.length ? Math.min(...heldYen) : null,
+        // the price's profit and loss at END in yen; the swap they got is the next number (the account's own `swapYen`)
+        floatingYenNoSwapSum: heldYen.reduce((a, b) => a + b, 0),
+        floatingYenNoSwapWorst: heldYen.length ? Math.min(...heldYen) : null,
+        swapYenSum: held.reduce((a, t) => a + Number(t.swapYen), 0),
         inLoss: heldYen.filter((v) => v < 0).length,
         heldDays: { median: quantileOf(heldDays, 0.5), p90: quantileOf(heldDays, 0.9), max: heldDays.length ? Math.max(...heldDays) : null },
       },
@@ -1112,6 +1115,31 @@ if (MODE === "print") {
   log(`== ultra15-a.csv sha256 ${hash}, ${csv.split("\n").length - 1} rows`);
   log(csv);
   }
+}
+
+// docs §8.111: heldSummary on a walk's dump, beside the account line it is counted from (run in the full job, before the real run
+// prints it for the first time): each row's trades by how they ended must be the analysis' own counts
+if (MODE === "heldprint") {
+  const held = (await heldSummary(env("DUMP"))) as Record<string, { byHow: Record<string, number>; trades: number }>;
+  const analysis = JSON.parse(await Deno.readTextFile(env("ANALYSIS"))) as { accounts: Record<string, { outcomes: Record<string, number> }> };
+  let bad = 0;
+  for (const row of ["main", "mainSwap"]) {
+    const o = analysis.accounts[row].outcomes;
+    for (const how of ["tp", "lc", "deadline", "held"]) {
+      if ((o[how] ?? 0) !== held[row].byHow[how]) {
+        bad++;
+        log(`heldprint ${row} ${how}: account line ${o[how] ?? 0}, dump ${held[row].byHow[how]}`);
+      }
+    }
+    const sum = Object.values(held[row].byHow).reduce((a, b) => a + b, 0);
+    if (sum !== held[row].trades) {
+      bad++;
+      log(`heldprint ${row}: ${sum} by how, ${held[row].trades} trades`);
+    }
+  }
+  log(JSON.stringify(held, null, 1));
+  log(bad ? `heldprint: ${bad} differences` : "heldprint: the counts are the account lines' own");
+  if (bad) Deno.exit(1);
 }
 
 // ---- §8.103 ② stage 2 (5, 6, 7): the slots avoided tested on data the rule was not chosen on ------------------

@@ -331,6 +331,8 @@ export interface SynthSpec {
   // in, as a holiday GMO is shut (12/25, 1/1); none: every day as before. A day shut is a closure like the
   // weekend's (the mid jumps after it); a walk without it is written as before.
   closedKeys?: readonly string[];
+  // docs §8.111: also make the walk's 5-minute bars (q5); the 15-minute runs do not, and write no 5-minute files
+  withFive?: boolean;
 }
 
 // the key of GMO's day file a bar is in: its day starts at 06:00 JST (21:00 UTC; research/gotobi.ts fileKeyOf)
@@ -366,7 +368,7 @@ export const synthOpen = (ms: number): boolean => {
 // rounded to GMO's digits. After the weekend the mid jumps (three 15-minute
 // moves' worth). Its 15-minute bars are the minutes' (open, high, low, close
 // by side). Both kept as GMO's files would give them back (loadM1, load15).
-export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number): { m1: M1; q15: QuoteCandle[]; q5: QuoteCandle[] } => {
+export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: number, toMs: number): { m1: M1; q15: QuoteCandle[]; q5?: QuoteCandle[] } => {
   const p = SYN[pair];
   const unit = unitOf(pair);
   const dg = digitsOf(pair);
@@ -475,8 +477,7 @@ export const synthesize = (pair: string, pi: number, spec: SynthSpec, fromMs: nu
     return out;
   };
   const q15 = barsOf(STEP15);
-  const q5 = barsOf(STEP5);
-  return { m1, q15, q5 };
+  return spec.withFive ? { m1, q15, q5: barsOf(STEP5) } : { m1, q15 };
 };
 
 // A walk written as GMO's 1-minute and 15-minute day files (both sides) under
@@ -651,9 +652,12 @@ export const signalsOf = (pair: string, pi: number, quotes: QuoteCandle[], start
     const hit = ultra(bars, bars.length - 1, unit).trades.find((tr) => tr.i === i - a1.s);
     nextSide.set(i, hit ? hit.side : null);
   }
+  // strictly inside the freshness: the sweep skips a signal whose age is over it, and a read exactly `fresh` after the
+  // close (a one-bar gap, the read at +0) is always a few seconds past it (docs §8.111). The 15-minute chart has no read
+  // exactly 20 minutes after a close (its reads are 16, 18, 31, 33 ... minutes), so nothing there changes.
   const mailedAt = (readBase: number, T: number) => iv.readAfter.some((m) => {
     const at = readBase + m * MINUTE;
-    return at - T >= 0 && at - T <= iv.fresh && !isPossiblyClosed(at);
+    return at - T >= 0 && at - T < iv.fresh && !isPossiblyClosed(at);
   });
   const signals: Sig[] = [];
   let unmailed = 0;

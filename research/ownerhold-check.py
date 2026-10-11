@@ -2564,6 +2564,9 @@ def main():
         if args.cost_only:
             return C
         check_inputs(C, W, pairs15, args.e_round, C.notes)
+        if args.expect_real:
+            # a real run has the bar files of every pair; E not checked for want of them would be a hole (docs §8.111 B 5)
+            C.check('inputs', 'E', 'pairs without bar files', C.notes.get('E_not_checked_no_15min_files', 0), 0, 'exact')
         if W.mode_b:
             compare_b(C, W, dump, args.a_csv)
         compare_paths(C, W, dump)
