@@ -182,7 +182,13 @@ import type { Candle } from "../analyze/indicators.ts";
 // (MACDH_RULE_ID). The 5-minute rule is no longer mailed (its subscriptions
 // are not followed); its code stays for the studies. The other rules'
 // signals, ids and what is recorded are as they were.
-const FUNCTION_VERSION = "signal-alerts-v25-2026-10-12T13:00:00Z";
+// v26 (#339): the MACD email's level each pair's own (indicators.ts
+// macdhSignals, _shared/macd-level.ts decideScaledOnWindow; docs §8.116):
+// MACDH_K (0.8) times the pair's usual hourly move, the mean move from one
+// close to the next over the 600 bars judged on, in place of v25's 8.5 pips;
+// recorded under a new rule id (MACDH_RULE_ID). The charts (the five pairs'
+// 1-hour), the subscriptions and the other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v26-2026-10-13T00:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
