@@ -153,6 +153,8 @@ export const LEDGER = {
   stage2: { path: "research/ledger/chartbest-stage2.json", sha256: "" },
 } as const;
 export const SPREAD_HOURS = { path: "research/ledger/spread-hours.csv", sha256: "2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93" } as const;
+// the real stages' kept GMO day files (dir/SYM/interval/side/YYYYMMDD.json; the yml caches research/.cache)
+export const REAL_CACHE_DIR = "research/.cache/chartbest";
 
 // ---- SPEC: the spec questions' resolutions ---------------------------------------------------------
 

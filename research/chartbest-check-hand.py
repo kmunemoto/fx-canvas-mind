@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 chartbest-check-hand.py — the Python's own hand examples for docs/OPERATIONS.md §8.113 (20 (g)), written from the
-docs (19, 8, 2, 6, 7, 11, 12, 14, 21) and never from the TS or research/chartbest/hand.json:
+docs (19, 8, 2, 6, 7, 11, 12, 14, 21) and never from the TS or research/chartbest/hand.json (hand.json's own cases
+run through the Python's functions in chartbest-check-handjson.py, `--mode hand --hand research/chartbest/hand.json`):
   * c1.docs / c1.exact            19 C1 (n = 3, the 12 bars; the line exactly touched: no break)
   * k1.docs / k1.exact            19 K1 (2025-01-15 / 07-16 / 03-12; a bar at 02:50 and 03:00 but none at 02:55)
   * time.dst                      20 (g) 時刻: the switch dates and the breedon T of the plan's list
