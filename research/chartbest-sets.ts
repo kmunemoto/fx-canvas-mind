@@ -266,7 +266,10 @@ export const tieStretches = (def: ItemDef, orig: PairBars[], flip: PairBars[]): 
   }
   return { onsets, tieOnsets, stretches };
 };
-const inStretch = (list: Array<[number, number]> | undefined, i: number): boolean => !!list && list.some(([a, b]) => i >= a && i <= b);
+// inside a stretch the two targets are equal (not mirrored), so neither run changes and no signal falls there: the
+// unmatched signals of a tie are the onset bar's (one run decided the line) and the end bar's (the other run catches
+// up). Only those two bars are excepted; an unmatched signal strictly inside a stretch differs.
+const atStretchEdge = (list: Array<[number, number]> | undefined, i: number): boolean => !!list && list.some(([a, b]) => i === a || i === b);
 const readCsv = async (path: string): Promise<{ head: string[]; rows: string[][] }> => {
   const lines = (await Deno.readTextFile(path)).split("\n").filter((x) => x.length);
   return { head: lines[0].split(","), rows: lines.slice(1).map((l) => l.split(",")) };
@@ -358,7 +361,7 @@ export const flipCompare = async (orig: string, flip: string, origBars: PairBars
       const x: FlipItem = { compared: ma.size, differ: 0, tieExcepted: 0, onsets, tieOnsets, share: 0, examples: [] };
       const unmatched = (key: string) => {
         const [pair, i] = key.split("|");
-        if (inStretch(stretches.get(PAIRS.indexOf(pair as Pair)), Number(i))) x.tieExcepted++;
+        if (atStretchEdge(stretches.get(PAIRS.indexOf(pair as Pair)), Number(i))) x.tieExcepted++;
         else {
           x.differ++;
           if (x.examples.length < 5) x.examples.push(key);

@@ -173,7 +173,7 @@ def stage0(bars, sigs, both, holes, period, blind, wide, n_summary=None):
         if src in D.MEASURES:
             rec['floor'] = None                           # 11: the floor is the items' (build-py.md)
         else:
-            ok = all(rec[h]['counted'] >= D.FLOOR_N and rec[h]['weeks'] >= D.FLOOR_WEEKS for h in ('H1', 'H2'))
+            ok = floor_of(*((rec[h]['counted'], rec[h]['weeks']) for h in ('H1', 'H2')))
             rec['floor'] = ok
             floor_ok[src] = ok
         out[src] = rec
@@ -215,6 +215,13 @@ def overlap_groups(passing, by_src):
                 if j < arr.size and arr[j] <= s.T + OVERLAP_MS:
                     hit += 1
             share[f'{a}>{b}'] = (hit / len(lst)) if lst else None
+    return share, groups_of(passing, share)
+
+
+def groups_of(passing, share):
+    """11: the overlap groups of the floor-passing items from the shares {'A>B': share or None}: joined when
+    max(A->B, B->A) >= 0.5 (links only between the items given; an item outside them is never passed through),
+    plus the forced joins (same candidate, ledger ⑨) among them; union-find. Group id = the smallest table order."""
     parent = {x: x for x in passing}
 
     def find(x):
@@ -231,7 +238,7 @@ def overlap_groups(passing, by_src):
     for a in passing:
         for b in passing:
             if D.ORDER[a] < D.ORDER[b]:
-                ab, ba = share[f'{a}>{b}'], share[f'{b}>{a}']
+                ab, ba = share.get(f'{a}>{b}'), share.get(f'{b}>{a}')
                 m = max(x for x in (ab, ba, 0.0) if x is not None)
                 if m >= OVERLAP_JOIN:
                     join(a, b)
@@ -244,7 +251,12 @@ def overlap_groups(passing, by_src):
         r = find(x)
         members = [y for y in passing if find(y) == r]
         groups[x] = min(D.ORDER[y] for y in members)
-    return share, groups
+    return groups
+
+
+def floor_of(h1, h2):
+    """11 床: counted >= 300 and signal weeks >= 30 in both halves; h1 / h2 = (counted, weeks)."""
+    return all(n >= D.FLOOR_N and w >= D.FLOOR_WEEKS for n, w in (h1, h2))
 
 
 def projections(passing, counts, blind, n_summary):

@@ -1,6 +1,6 @@
 // #318 (docs §8.113; plan §5): the modes of research/chartbest.ts.
 
-import { AMOUNTS, type Group, type Half, ITEM_TABLE, MEASURES, PAIRS, type Period, SETS, SPEC, SPREAD_HOURS } from "./chartbest-const.ts";
+import { AMOUNTS, type Group, type Half, ITEM_TABLE, LEDGER, MEASURES, PAIRS, type Period, SETS, SPEC, SPREAD_HOURS } from "./chartbest-const.ts";
 import { Checks, Log, Printer } from "./chartbest-checks.ts";
 import { generatePair, gmoWeekBreaks, bandBreaks, parseSpreadTable, writeTickFiles, type GenSet } from "./chartbest-gen.ts";
 import { sha256Hex } from "./chartbest-data.ts";
@@ -268,7 +268,30 @@ const summaryOf = (st: RunState) => {
 };
 import { tcdf as tcdfOf } from "./chartbest-stats.ts";
 
+// a run that crashes still leaves checks.json: the checks made so far and run.crash (a planted error's run lists
+// what failed before the crash; CI keeps the file), then the crash goes on to the CLI (exit 3)
 export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise<number> => {
+  const checks = new Checks();
+  const printer = new Printer();
+  try {
+    return await modeRunBody(cfg, mode, plant, checks, printer);
+  } catch (e) {
+    if (e instanceof Refused) throw e;
+    checks.set("run.crash", { ok: false, n: 1, detail: e instanceof Error ? e.message : String(e) });
+    const head = { mode, set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, plant, full: cfg.full };
+    try {
+      await Deno.mkdir(cfg.out, { recursive: true });
+      await Deno.writeTextFile(`${cfg.out}/checks.json`, checks.json(head));
+      // 20 (i): no numbers from a run that did not finish (an older print.txt in the folder goes too)
+      await Deno.remove(`${cfg.out}/print.txt`).catch(() => {});
+    } catch {
+      // the folder cannot be written: the crash itself is reported by the CLI
+    }
+    throw e;
+  }
+};
+
+const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Checks, printer: Printer): Promise<number> => {
   Log.mode(mode, `set=${cfg.set} seed=${cfg.seed} flip=${cfg.flip ? 1 : 0} period=${cfg.period.name} full=${cfg.full ? 1 : 0}${plant ? ` plant=${plant}` : ""}`);
   if (cfg.data === "real") {
     if (mode === "run") throw new Refused("CB_MODE=run is made-up only; the real stages are stage0, stage1, stage2");
@@ -279,8 +302,6 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
   if (plant && cfg.data === "real") throw new Refused("a planted error never runs on real data");
   if (!cfg.data) throw new Refused("CB_DATA (the day files' folder) is not given");
   if (mode === "stage0") return modeStage0(cfg, plant);
-  const checks = new Checks();
-  const printer = new Printer();
   const w: WalkLedger = { dir: `${cfg.out}/walk-ledger` };
   await Deno.mkdir(cfg.out, { recursive: true });
   const head = { mode, set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, plant, full: cfg.full };
@@ -289,9 +310,19 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
     if (st && st.s0 && mode === "run") await Deno.writeTextFile(`${cfg.out}/summary.json`, JSON.stringify(summaryOf(st as RunState), dump.jsonReplacer, 1) + "\n");
     return c;
   };
-  // the walk ledger is read against its sha256 before any bar: a changed file stops the stage (exit 2)
-  const ledgerCounts = mode === "stage1" ? await ledgerRead<Record<string, unknown>>(w, "counts.json", envOf("CB_WALK_COUNTS_SHA256")) : null;
-  const ledgerChoice = mode === "stage2" ? await ledgerRead<{ chosen: Record<Group, string[]> }>(w, "choice.json", envOf("CB_WALK_CHOICE_SHA256")) : null;
+  // the ledger is read against its sha256 before any bar: a changed file stops the stage (exit 2). Made-up: the walk
+  // ledger in the run's folder (CB_WALK_*_SHA256); real: research/ledger/chartbest-*.json against LEDGER's constants
+  const real = cfg.data === "real";
+  const readLedger = <T>(name: "counts" | "choice"): Promise<{ v: T; sha: string }> => {
+    if (!real) return ledgerRead<T>(w, `${name}.json`, envOf(name === "counts" ? "CB_WALK_COUNTS_SHA256" : "CB_WALK_CHOICE_SHA256"));
+    const l = LEDGER[name];
+    const cut = l.path.lastIndexOf("/");
+    return ledgerRead<T>({ dir: l.path.slice(0, cut) }, l.path.slice(cut + 1), l.sha256);
+  };
+  // what a stage hands on: the walk ledger (made-up), or a file to commit by hand (real: out/ledger/chartbest-*.json)
+  const writeLedger = (name: "choice" | "stage2", v: unknown) => (real ? ledgerWrite({ dir: `${cfg.out}/ledger` }, `chartbest-${name}.json`, v) : ledgerWrite(w, `${name}.json`, v));
+  const ledgerCounts = mode === "stage1" ? await readLedger<Record<string, unknown>>("counts") : null;
+  const ledgerChoice = mode === "stage2" ? await readLedger<{ chosen: Record<Group, string[]> }>("choice") : null;
   // ---- the gates and stage 0 (research/chartbest-stage0.ts)
   const z = await stage0Part(cfg, mode, plant, checks, printer, head);
   if (!z) return 2;
@@ -334,7 +365,7 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
     // pipeline rehearsal computes those items); stage 1's own choice is kept beside it and printed as it is
     const forced = cfg.forceChoice && madeUp ? { chart: cfg.forceChoice.filter((id) => groupOfItem(id) === "chart"), cal: cfg.forceChoice.filter((id) => groupOfItem(id) === "cal") } : null;
     const choice = { chosen: forced ?? s1.chosen, forced: forced !== null, stage1Chosen: s1.chosen, kTotal: s1.kTotal, groups, floor };
-    await ledgerWrite(w, "choice.json", choice);
+    await writeLedger("choice", choice);
     st.sentences.push(...stage1Text(s1, { m1: s0.M1, rows: h1.items, kTotal: s1.kTotal }, groupOfItem));
     st.sentences.push(alwaysText("always.s1", alwaysRowsOf(h1.items, MEASURES.map((id) => h1.emails[id].chart), h1.blind, "前半"), null));
     if (dumps) {
@@ -375,6 +406,8 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
       const holdText = new Map<string, string>();
       st.sentences.push(...stage2Text(s2, { kTotal: s2.kTotal, m1: s0.M1.chart + s0.M1.cal, rows: new Map(rows2.map((r) => [r.src, r])), ultra: h2.emails.ultra5[groupOfItem(chosen[0])], macd: h2.emails.macdx5[groupOfItem(chosen[0])], hold: holdText }));
       st.sentences.push(alwaysText("always.s2", alwaysRowsOf(rows2, MEASURES.map((id) => h2.emails[id].chart), h2.blind, "後半"), null));
+      // 14's record of the one stage-2 run (real: committed by hand with its sha256, after which stage 2 refuses)
+      await writeLedger("stage2", stage2Json(s2, hits2.length > 0));
       if (dumps) {
         await dump.writeBlind(tsDir, h2.bt, rb.bars);
         await dump.writeJson(tsDir, "stage2.json", stage2Json(s2, hits2.length > 0));
@@ -382,6 +415,9 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
     } else checks.skip("lookahead.followFixed2", "no item chosen");
   }
   reconcile(checks, sig, s0, [st.h1, st.h2].filter((x): x is HalfRows => x !== null));
+  // 9: the owner's way (research/chartbest-hold.ts) is not built in step 2; a full run that asks for it says so
+  // (CB_HOLD=0 does not ask)
+  if (cfg.full && cfg.hold) checks.skip("hold.owner", "not built in step 2");
   if (dumps) {
     const halves = [st.h1, st.h2].filter((x): x is HalfRows => x !== null);
     await dump.writeJson(tsDir, "stats.json", statsJson(halves));
@@ -454,6 +490,11 @@ export const mode_plant_sum = async (): Promise<number> => {
 };
 
 export const plantInfo = plantDef;
+
+// 20 (c)'s rehearsal (plan §5.1: macdx.ts's walk against the emails' measures; ownerhold.ts's synthetic run against
+// the owner's way) is not built in step 2: the modes say so and stop (exit 2) instead of passing silently
+export const mode_repro_walk = (): Promise<number> => Promise.reject(new Refused("repro-walk (20 (c)'s rehearsal on macdx.ts's walk) is not built in step 2"));
+export const mode_hold_xcheck = (): Promise<number> => Promise.reject(new Refused("hold-xcheck (the owner's way against ownerhold.ts) is not built in step 2"));
 
 // the real stages' gates alone (plan §5.4), the first step of each real job in the yml, before any step that reads a
 // real price: exit 0 when every gate passes, 2 when refused (in step 2 they never pass: 55 of the 59 items are not built)

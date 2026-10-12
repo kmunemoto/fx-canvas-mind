@@ -8,7 +8,7 @@
 //   measures' equality and the items' look-ahead checks (full runs) → the counts (stage0Of) → print.txt's s0
 //   lines, counts.json (the walk ledger or, real, its own file) and the stage-0 dumps.
 
-import { AMOUNTS, CANDIDATES, HALVES, ITEM_TABLE, LEDGER, PAIRS, R_CB } from "./chartbest-const.ts";
+import { AMOUNTS, CANDIDATES, HALVES, ITEM_TABLE, LEDGER, PAIRS, R_CB, REAL_CACHE_DIR } from "./chartbest-const.ts";
 import { type Check, Checks, Log, Printer } from "./chartbest-checks.ts";
 import { type RunBars, loadRun } from "./chartbest-core.ts";
 import { type NSummary, type Stage0, countsJson, stage0Of } from "./chartbest-count.ts";
@@ -161,7 +161,7 @@ export const stage0Part = async (cfg: RunCfg, mode: string, plant: string, check
   const madeUp = cfg.data !== "real";
   Log.setMadeUp(madeUp);
   await Deno.writeTextFile(`${cfg.out}/run.json`, JSON.stringify({ ...head, forceChoice: cfg.forceChoice, amounts: AMOUNTS }, null, 1) + "\n");
-  const rb = await loadRun({ dir: cfg.data, real: !madeUp }, cfg.period, madeUp, cfg.full, cfg.full);
+  const rb = await loadRun({ dir: madeUp ? cfg.data : REAL_CACHE_DIR, real: !madeUp }, cfg.period, madeUp, cfg.full, cfg.full);
   dataChecks(checks, rb, cfg.full, madeUp);
   const answerKnowing = cfg.set === "O";
   const sig = signalsOf(rb, plant, answerKnowing);
