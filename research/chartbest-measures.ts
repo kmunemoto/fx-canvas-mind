@@ -93,10 +93,12 @@ export const ultraCands = (pb: PairBars): MeasureCands & { own: Map<number, Dir>
     }
   }
   flush();
-  // late: bar i's signal in window i + 1 where that window's anchor differs from bar i's
+  // late: bar i's signal in window i + 1 where that window's anchor differs from bar i's. §8.107 2 decides a late
+  // signal by comparing window i with window i + 1 only, so bar i needs its own window (i ≥ 599, SQ-P06): bar 598,
+  // the bar before the series' first window, is never late (it has no window to be missing from)
   const nextSide = new Map<number, Dir | 0>();
   const late: LateSig[] = [];
-  for (let i = 0; i + 1 < pb.n; i++) {
+  for (let i = WINDOW - 1; i + 1 < pb.n; i++) {
     const a1 = anchors[i + 1];
     if (!a1 || a1.s > i) continue;
     const a0 = anchors[i];
