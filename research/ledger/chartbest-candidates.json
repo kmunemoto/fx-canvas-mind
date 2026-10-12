@@ -1,0 +1,2496 @@
+{
+ "about": "#318 段階1（2026-10-11、ワークフロー chart-methods-scout wf_954c9456-798）。アプリにないチャート分析のやり方の候補。根拠の数字はほとんどが検索結果の要約から写したもので、出典の本文では確かめていない（WebFetch がこの環境から多く失敗）。成績はまだ一つも測っていない。",
+ "owner_decisions_2026_10_12": {
+  "timeframe": "5分足",
+  "metric": "向きの当たり（同じ時刻の逆向きの取引と比べる）",
+  "calendar_effects": "入れる（別のまとまり）"
+ },
+ "shortlist": [
+  {
+   "id": "session-breedon-ranaldo",
+   "name_ja": "時間帯の向き（Breedon-Ranaldo 型。欧州の時間にユーロを売り、米国の時間にユーロを買う）",
+   "family": "session-time",
+   "definition_final": "本線（1つに固定）: EUR/USD だけ。時刻は America/New_York の現地時刻（夏時間を反映し、IANA の tz で換算）。GMO の1分足 Bid/Ask を使う。月〜金の各日 D に2つの取引をする（『足』はその時刻に始まる1分足）。(1) 03:00 NY の足の始値（Bid）で売り、09:00 NY の足の始値（Ask）で買い戻す（6時間）。(2) 11:00 NY の足の始値（Ask）で買い、15:00 NY の足の始値（Bid）で売る（4時間）。入る足が無いときは、続く4分以内で Bid と Ask の両方がある最初の足の始値で入る。それも無ければその取引はしない。出る足が無いときは、60分以内の最初の使える足の始値で出て、遅れた分数を記録する。60分以内にも無ければ『出られない取引』とし、外さずに数と日付を出す。損切り・利確は置かない。1万通貨で、損益は pips と円で出す。(1)(2) は別々に出し、合計も出す。2つの窓は UTC 21〜23時に触れない（15:00 NY は夏は 19:00 UTC、冬は 20:00 UTC）。価格を見ず時刻だけで決まるので先読みは無い。米国と欧州の夏時間がずれる週は NY 時刻のままにし、印を付けて別に出す。祝日でも Bid・Ask の足があれば取引する（結果を見てから日を外さない）。説明用の別の腕（判定には使わない。窓は検証側の提案）: USD/JPY を 09:00 JST（00:00 UTC）の始値（Ask）で買い 15:00 JST（06:00 UTC）の始値（Bid）で売る。USD/JPY を 11:00 NY の始値（Bid）で売り 15:00 NY の始値（Ask）で買い戻す。",
+   "timeframe_in_source": "原論文は10年分の高頻度データ（足の間隔は未確認）。窓は第三者ブログ（QuantRocket）の再現が使った1時間単位の窓。",
+   "evidence_strength": "moderate",
+   "evidence_summary_ja": "査読つき2本（Breedon-Ranaldo, JMCB 2013 と Ranaldo, JBF 2009）の要旨によれば、通貨は自国の取引時間に下がり外国の取引時間に上がる傾向がある。コストを入れると時間帯の戦略の多くは利益が出ないが、EUR/USD は例外とされる。数字は第三者ブログの Sharpe 0.70・年率6.2%（コスト込み）と、別の再現の 0.88（コスト無し）だけ。勝率の数字はどの出典にも無い。今回はどれも開けず、数字は未確認（要旨の向きは検証者の記憶とも合う）。標本外の確かめと、2024年以降も続いているかは分からない。アプリの §8.18 は方向の検定から時間帯を外していたので（research/tendencies.ts）、時刻で向きを決める売買は測っていない。",
+   "sources": [
+    "Breedon & Ranaldo, Intraday patterns in FX returns and order flow, JMCB 45(5) 953-965, 2013 / SNB WP 2011-04 https://www.snb.ch/en/publications/research/working-papers/2011/working_paper_2011_04（今回開けず、要旨の要約のみ）",
+    "Ranaldo, Segmentation and time-of-day patterns in foreign exchange markets, JBF 33(12) 2199-2206, 2009 / SNB WP 2007-03 https://www.snb.ch/en/publications/research/working-papers/2007/working_paper_2007_03（今回開けず）",
+    "QuantRocket blog, Exploiting Business Day Patterns in Forex Markets https://www.quantrocket.com/blog/business-day-fx-patterns/（ベンダーのブログ、今回開けず）",
+    "docs/OPERATIONS.md §8.18（#100）と research/tendencies.ts（今回読んで確認）"
+   ],
+   "test_notes_ja": "1分足と時刻だけで決まるので、5分・15分足を作る必要はない。ウォームアップは0本。回数は規則から決まり、EUR/USD で営業日ごとに2回（GMO の1分足がある 2023-10-27 以降）。窓は第三者ブログの値で固定し、原論文の窓は未確認と書く。先読みの罠: 夏時間の換算の誤り（IANA で換算し、ずれる週に印を付ける）、GMO の日のファイルの区切り（21:00 UTC）、欠けた足を後から埋めること。session-fixing-dollar の A2（16:05 London 以後のドル売り）と (2) は向きも時間もほぼ重なるので、相関を書く。判定は鏡の取引（同じ時刻・逆向き）との差で行う。時刻の効果であって、チャートの形を読む方法ではないことも書く。"
+  },
+  {
+   "id": "revert-weekend-gap",
+   "name_ja": "週末の窓（ギャップ）の逆行（Dao-McGroarty-Urquhart 型）",
+   "family": "session-time",
+   "definition_final": "5ペア、GMO の1分足 Bid/Ask（Dukascopy で2015年まで延ばすのは別の腕）。週末の詰め物の足（Bid・Ask とも始値＝高値＝安値＝終値で、前の足の終値と同じ値が続く足）は除く。F＝金曜（UTC）20:00 以後で、最後の実際の1分足の Bid の終値（無ければその週は取引しない）。M＝日曜 20:00 UTC〜月曜 01:00 UTC の間で、再開後最初の実際の1分足の Bid の始値。gap＝M−F（pips）。しきい値 G_t＝その週より前の52週の |gap| の80パーセンタイル（線形補間、その週は含めない）。最初の52週は G_t を計算するだけで取引しない。|gap|≥G_t のときだけ取引する。gap>0 なら売り、gap<0 なら買い。入るのは、再開後最初の実際の1分足の、次の1分足の始値（売りは Bid、買いは Ask）。決済は3つの腕を事前に登録する: H1＝入ってから24時間後に始まる1分足の始値（主）、H3＝72時間後、Hf＝その週の金曜 20:00 UTC に始まる1分足の始値。損切り・利確は置かない。入る時刻はスプレッドが開く時間に重なるので、払ったスプレッドを必ず出す。説明用の腕: 月曜 00:00 UTC に始まる1分足の始値で入る（それまでに埋まった分は取れない）。",
+   "timeframe_in_source": "週次の出来事（金曜の終値から月曜の始値までのギャップの後、翌週の複数の期間）。主要8通貨と新興9通貨のスポット FX。",
+   "evidence_strength": "moderate",
+   "evidence_summary_ja": "査読つき1本（Dao, McGroarty & Urquhart, JMFM 2016）の抄録によれば、大半の市場で翌週の複数の期間に逆行し、取引コストと金利を引いても残り、標本外のテストでもリスク調整後の異常な収益が出るとされる。ただし数字、G の定義、標本期間は見ていない。今回は開けず未確認。勝率の数字は無い。アプリで測ったことは無い（§8.96 のゴトー日とは別の現象）。",
+   "sources": [
+    "Dao, McGroarty & Urquhart, A calendar effect: weekend overreaction (and subsequent reversal) in spot FX rates, JMFM 37-38 158-167, 2016 https://ideas.repec.org/a/eee/mulfin/v37-38y2016ip158-167.html（今回開けず、抄録の要約のみ）"
+   ],
+   "test_notes_ja": "ルールは週1回の出来事で、gap と入りは1分足で作る（5分・15分足の作りは要らない）。ウォームアップは52週。回数は規則から決まり、各ペアの週の約20%。GMO（2024-01〜）で取引できるのは約90週で、5ペア合わせて約90回にとどまる（検証者の試算）。勝率の誤差が大きいので Dukascopy（2015〜、未取得）の腕が要る。ただしブローカーによって金曜の終値と月曜の始値が違い、gap も違うことを書く。先読みの罠: G_t にその週を入れること、詰め物の足を実際の足と取り違えること、再開後の最初の足の始値で入ること（次の足で入る）。"
+  },
+  {
+   "id": "session-fixing-dollar",
+   "name_ja": "フィキシングの前のドル高・後のドル安（Krohn-Mueller-Whelan 型。ロンドン16時と東京9:55）",
+   "family": "session-time",
+   "definition_final": "対象: USD/JPY（ドル買い＝BUY）、EUR/USD と AUD/USD（ドル買い＝SELL）。GMO の1分足 Bid/Ask。向きの符号は +1 に固定する（フィックスの前はドルを買い、後はドルを売る）。入るのも出るのも、その時刻に始まる1分足の始値（買いは Ask、売りは Bid）。損切り・利確は置かない。(A) ロンドン WMR 16:00（Europe/London の現地時刻、夏時間を反映）、月〜金: A1（前）＝15:00 London の始値でドルを買い、16:00 London の始値で決済（60分）。A2（後）＝16:05 London の始値でドルを売り、17:05 London の始値で決済（60分。16:05 は2015年以降の計算窓 15:57:30〜16:02:30 の後に入るため。窓の時刻は記憶で未確認）。(B) 東京 9:55 JST、日本の営業日だけ（§8.96 と同じ内閣府の CSV に 12/31〜1/3 を足す）: B1（前）＝08:55 JST（前日 23:55 UTC）の始値でドルを買い、09:55 JST（00:55 UTC）の始値で決済。B2（後）＝10:00 JST（01:00 UTC）の始値でドルを売り、11:00 JST（02:00 UTC）の始値で決済。前後60分は検証側の提案で、出典の値ではない。入る足が無ければ4分以内の最初の使える足、それも無ければ取引しない。出る足が無ければ60分以内の最初の足で出て、遅れた分数を記録する。月末とゴトー日は外さず、別の行でも出す。狭い窓（15:55〜16:05）の腕は作らない。ECB の 14:15 CET は含めない。時刻だけで決まるので先読みは無い。",
+   "timeframe_in_source": "1日の中の高頻度（窓の刻みは未確認）。Krohn ら は主要9通貨・21年間。",
+   "evidence_strength": "moderate（パターンの存在）／weak（売買にした利益）",
+   "evidence_summary_ja": "Krohn ら（Journal of Finance 2024）の要旨: ドルはフィックスに向かって上がり、その後下がる W 字の形を描き、主要9通貨・21年で広く有意。INSEAD 版ではロンドンのフィックス前後のユーロ取引で Sharpe 0.65（保守的なコスト、1999〜2018）とされるが、論文自身が小さな窓の取引はコストでたいてい消えると書いている。Ito-Yamada（JIE 2017）は東京の顧客注文の偏りと公示レートの偏りを示したが、収益の数字は無い。今回はどれも開けず未確認。勝率の数字は無い。§8.96 で東京の窓の一部（前日23時→9:55 の USD/JPY 買い）を測っており、比べる日 402回・勝ち 57.2%・1回 +1.71銭、ゴトー日 171回・55.6%・+6.15銭で、『回数が足りず決められない』だった（検証者が docs で確認）。",
+   "sources": [
+    "Krohn, Mueller & Whelan, Foreign Exchange Fixings and Returns around the Clock, JF 79(1) 541-578, 2024 / Bank of Canada SWP 2021-48 https://www.bankofcanada.ca/2021/10/staff-working-paper-2021-48/（今回開けず）",
+    "Ito & Yamada, Puzzles in the Tokyo fixing in the forex market, JIE 109 214-234, 2017 / NBER w22820 https://www.nber.org/papers/w22820（今回開けず）",
+    "Evans, Forex Trading and the WMR Fix, JBF 2018（記憶の書誌、未読）",
+    "docs/OPERATIONS.md §8.96（#186、今回読んで確認）"
+   ],
+   "test_notes_ja": "1分足と時刻だけで決まる（5分・15分足は使わない）。ウォームアップは0本。回数は規則から決まり、各ペア・各腕で営業日ごとに1回。B1 は §8.96 で測った取引の最後の1時間にあたるので、§8.96 の数字と並べ、すでに見た数字であることを書く。A2 は breedon-ranaldo の (2) と向きも時間も重なる。フィックスのしくみは2013〜2015年に変わったという記憶があり（未確認）、2024年以降も効果が残っているかは別の問題。符号は、原論文を開いて確かめてから固定する（今回は要旨の記憶）。先読みの罠: ロンドンと NY の夏時間の切り替えのずれ、日本の祝日の CSV を後から直すこと。4つの腕は多重比較で数える。"
+  },
+  {
+   "id": "academic-currency-momentum",
+   "name_ja": "通貨モメンタム（通貨を騰落率の順位で並べ、上位を買い下位を売る。Menkhoff 型）",
+   "family": "academic-rule",
+   "definition_final": "USD 以外の7通貨（EUR・GBP・AUD・NZD・CAD・CHF・JPY）の対ドルの値 V_c を、仲値の1分足の終値から作る。EUR・GBP・AUD・NZD は X/USD、JPY は 1/(USD/JPY)、CAD と CHF は (X/JPY)/(USD/JPY)（§8.85 と同じ作り方）。組み替えの時刻: 各暦月（UTC）で7通貨がすべてそろう最後の1分足の確定。形成 J＝1か月（今月の組み替えの足と前月の組み替えの足の ln V_c の差。同じ値はアルファベット順）。上位 k＝2 通貨を対ドルで買い、下位2通貨を対ドルで売る。4つの脚は同じドル額にし、次の組み替えまで（H＝1か月）持つ。約定は組み替えの足の次の1分足の始値（買いは Ask、売りは Bid）。脚の取引: EUR・GBP・AUD・NZD は X/USD、JPY は USD/JPY（円を買う＝USD/JPY を売る）、CAD と CHF は X/JPY と USD/JPY の2本で作り、2本ともスプレッドを払う。スワップ（金利差）は入れない。成績: 1回の組み替えの4脚の損益の合計（ドル額に対する%）をその月の成績とし、勝率＝プラスの月の割合。月あたりの平均損益・最大の下落・月数を一緒に出す。J＝1・H＝1・k＝2 は検証側の事前登録で、出典の値ではない。J＝3・12 は参考として出すが、選ぶのには使わない。主のデータは Dukascopy の長い履歴。",
+   "timeframe_in_source": "月次の組み替え（J・H の詳細は未確認）",
+   "evidence_strength": "moderate（未確認）",
+   "evidence_summary_ja": "Menkhoff ら（JFE 2012）の要旨によれば、過去の勝ち通貨と負け通貨の超過収益の差は年率で最大10%あり、これまでのリスク要因では説明できず、取引コストは一部しか説明しないとされる。ただしこの超過収益は先渡しの割引（金利差）を含むので、価格だけで作る版は同じものにならない。Okunev-White 2003 は書誌だけ確認。今回はどれも開けず未確認。勝率の数字は無い。アプリでは §8.85（4時間足・8通貨の強弱）が判定されず（後半のコイン投げとの差 +0.23 pips、区間 −1.74〜+2.20）、§8.24 の1ペアごとの12か月モメンタムは Sharpe 0.18→0.20 で偶然の範囲だった（どちらも検証者が docs で確認）。",
+   "sources": [
+    "Menkhoff, Sarno, Schmeling & Schrimpf, Currency momentum strategies, JFE 106(3) 660-684, 2012 / BIS WP 366 https://econpapers.repec.org/article/eeejfinec/v_3a106_3ay_3a2012_3ai_3a3_3ap_3a660-684.htm（今回開けず）",
+    "Okunev & White, Do momentum-based strategies still work in foreign currency markets?, JFQA 38(2) 425-448, 2003（書誌のみ）",
+    "docs/OPERATIONS.md §8.85（#174）・§8.24（#109）（今回読んで確認）"
+   ],
+   "test_notes_ja": "5分・15分足の売買ではなく月ごとの持ち方で、オーナーの日中の持ち方とは合わない。チャートの形を読む方法でもない。ウォームアップは1か月。GMO（2024-01〜）では組み替えが約33回しかなく、区間が広すぎるので、Dukascopy（2015〜、未取得）が前提になる。比べる相手は、ランダムな順位（並べ替え）と全通貨を均等に持つ場合。§8.85 と近い領域なので、§8.85 の後半を見たことを書く。先読みの罠: 月末の判断に翌月の足を使うこと。円クロスから CAD・CHF を作るときの時刻のずれ（§8.85 で EUR/USD 39本・GBP/USD 37本が5 pips を超えてずれた）。GMO に CAD・CHF の対ドルのペアがあるかは確かめていない。"
+  },
+  {
+   "id": "breakout-channel-donchian",
+   "name_ja": "n本チャネル抜け（ドンチャン、タートルの 20/10・55/20 を日中足で）",
+   "family": "breakout-volatility",
+   "definition_final": "GMO の1分足（bid/ask）を UTC で区切って15分・1時間・4時間（00/04/08/12/16/20 UTC 始まり）にまとめ、時間足ごとに別々に測る。週末をまたぐ足も続けて数える。判定は bid の高値・安値・終値で、足 i の確定時点だけ。HH_n(i)＝max(H[i−n..i−1])、LL_n(i)＝min(L[i−n..i−1])（足 i は含めない）。抜けは厳密な不等号。約定は足 i+1 の始値（買いは ask、売りは bid）。(A) 学術版（常に持ちドテン）: n＝20 と 55 の2つだけ。C[i]>HH_n なら買い（売り持ちはドテン）、C[i]<LL_n なら売り（買い持ちはドテン）、どちらでもなければ持ち高を保つ。損切りなし。(B) タートル版: System1 は入り n＝20・出口 m＝10、System2 は入り n＝55・出口 m＝20。持ち高が無いとき C>HH_n なら買い、C<LL_n なら売り。買い持ちは C<LL_m、売り持ちは C>HH_m で決済し、決済の足で反対の入りの条件も満たせば同じ約定でドテン。損切りは 買い＝入値−2N、売り＝入値+2N（N は入りの合図の足 i の値。最初は TR の20本の単純平均、以後 N[j]＝(19×N[j−1]+TR[j])/20）。買いは bid の安値≤損切り、売りは ask の高値≥損切りで発動し、損切りの値（越えて始まった足は始値）で約定。損切りと出口の合図が同じ足なら損切りを先に数える。買い増し・スキップ規則は無し、1ペア1建て。データの終わりで持っている取引は最後の終値で評価し、『未決着』として件数を別に出す。",
+   "timeframe_in_source": "日足（タートル、Hsu ら、Dockery-Todorov。為替の学術検定も日次）。Taylor 1994 は通貨先物の例。",
+   "evidence_strength": "moderate-weak",
+   "evidence_summary_ja": "日足の為替では、Hsu-Taylor-Wang（JIE 2016）が30通貨・約45年で21,195のルール（チャネル抜け3,000を含む）をデータ・スヌーピング補正付きで検定し、要約によれば先進国通貨の予測力は1996年までに消え、新興国は控えめ（平均 Sharpe 0.55）。Neely ら（JFQA 2009）は channel などの利益は減ったが完全には消えていないかもしれないとする。日中足の証拠は無い。今回は外部の出典を1つも開けず、数字は未確認（Lukac ら 1988 は題名と URL に誤りの可能性があり、対象も商品先物）。勝率の数字は無い。アプリの §8.24（日足の55/20、ECB 換算の11ペア）は Sharpe 0.06→−0.10 で、ランダムの上位5%（0.54・0.69）に届かなかった（検証者が確認）。#102 の donchian_20 は数字が docs に無い（候補にあった『§8.19（#102）』という書き方は誤りで、§8.19 は #104 の節）。",
+   "sources": [
+    "Hsu, Taylor & Wang, Technical trading: Is it still beating the foreign exchange market?, JIE 102 188-208, 2016 https://hub.hku.hk/handle/10722/229640 と CXO Advisory の要約（今回開けず）",
+    "Neely, Weller & Ulrich, The Adaptive Markets Hypothesis: Evidence from the Foreign Exchange Market, JFQA 44(2) 2009（今回開けず）",
+    "Dockery & Todorov（著者名未確認）, JMFM 69, 2023 https://ideas.repec.org/a/eee/mulfin/v69y2023ics1042444x23000270.html（今回開けず）",
+    "Taylor, Trading futures using a channel rule, JFM 14(2) 1994（書誌のみ）",
+    "Turtle Trading の規則の紹介 https://www.turtletrader.com/turtle-trading/（今回開けず）",
+    "docs/OPERATIONS.md §8.24（#109、確認）と research/indicator-series.ts の donchian_20"
+   ],
+   "test_notes_ja": "15分足では定義どおりに測れる（5分足は定義の外）。ウォームアップは55本と、N のための20本。パラメータは出典の値（20/10・55/20・2N）で固定する。回数は出典に書かれていない（未推定）。原典は場中の逆指値で入るが、ここは終値で判定し次の足の始値で入る別物だと記録する。先読みの罠: HH/LL に足 i を入れること、N を合図の後の足から取ること（§8.97 の日足の罠と同じ）。常に持つ (A) は、向きが変わった足を出来事として共通の物差し（鏡の取引）にかける。dual thrust・ORB・noise area・asia range・新値足・カギ足・P&F と取引が重なるので、重なりの割合を出す。新しく測る意味があるのは、日中足での出口つき（10本・20本の逆抜け）と 55/20 の部分。"
+  },
+  {
+   "id": "sr-round-number",
+   "name_ja": "キリ番（00）での反発と突破継続（Osler 型、2つの腕）",
+   "family": "support-resistance",
+   "definition_final": "GMO の1分足 bid・ask を UTC の :00・:15・:30・:45 区切りの15分足にまとめ、合図は bid の OHLC で決める。ATR14 は bid の15分足のウィルダー ATR(14)（最初は TR 14本の単純平均、以後 (13×前+TR)/14）。格子: 本線 G00＝円ペアは k×1.00（例 150.00）、EUR/USD・AUD/USD は k×0.0100、XAU/USD は k×10.00。感度の G50 は k×0.50・k×0.0050・k×5.00（本線の腕は増やさない）。腕A（反発。ヒゲで突っ込んで戻る）: BUY は C[i−1]>L かつ Low[i]<L−0.1×ATR14[i] かつ C[i]>L。SELL は C[i−1]<L かつ High[i]>L+0.1×ATR14[i] かつ C[i]<L。腕B（突破継続）: BUY は C[i−1]≤L かつ C[i]>L+0.1×ATR14[i]、SELL は C[i−1]≥L かつ C[i]<L−0.1×ATR14[i]。1本で複数の L が条件を満たしたら C[i] に最も近い L を使う。同じ腕で BUY と SELL が同じ足に出たら合図なし。約定は足 i+1 の始値（BUY は ask、SELL は bid）。本線の出口は足 i+8 の終値（BUY は bid、SELL は ask）で、損切りは置かない。同じ腕・同じ L では i+1〜i+8 の間に新しい合図を出さない（別の L・別の腕は出してよく、重なった取引もそれぞれ数える）。足 i−1〜i+8 が15分おきに途切れずに並ばないときは合図なし。主の検定は5ペアをまとめた1回あたりの損益（スプレッド込み）で、2つの腕に Holm の補正をかける。感度（主の判断には使わない）: G50、確認幅0、5分足で保有12本。",
+   "timeframe_in_source": "1分ごとの気配値（Osler 2000、1996〜1998）。注文データは1つのディーラー銀行（Osler 2003）。Aggarwal-Lucey 2007 は金の日足と日中足。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Osler（Journal of Finance 2003、FRBNY SR125）の要旨: 利食い注文はキリ番に強く集まり、損切り注文はその少し先に集まる。これが『水準で反転する』『抜けると加速する』の2つを説明するとされる。Osler 2000（FRBNY EPR）は6社が公表したサポート・レジスタンスが日中の反発を予測したとするが、キリ番そのものの研究ではない。為替でキリ番が壁になる効果は弱いか結果が割れている（JFM 2001、Mitchell-Izan 2006 の要約）。売買ルールの収益・コスト込み・標本外を示した出典は無く、データは1990年代後半。今回は1つも開けず、反発頻度 60.8% 対 56.2%（掲示板経由）や注文の 9.9%・3.8% などの数字は未確認。",
+   "sources": [
+    "Osler, Currency Orders and Exchange Rate Dynamics, JF 58(5) 1791-1819, 2003 / FRBNY Staff Report 125 https://www.newyorkfed.org/research/staff_reports/sr125.html（今回開けず）",
+    "Osler, Support for Resistance: Technical Analysis and Intraday Exchange Rates, FRBNY EPR 6(2) 2000 https://www.newyorkfed.org/research/epr/00v06n2/0007osle.html（今回開けず）",
+    "Osler, Stop-Loss Orders and Price Cascades in Currency Markets, FRBNY Staff Report 150（今回開けず）",
+    "Aggarwal & Lucey, Psychological barriers in gold prices?, RFE 16, 2007（今回開けず）",
+    "Clustering and psychological barriers: the importance of numbers, JFM 21(5) 2001（著者は未確認）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は感度）。ウォームアップは ATR14 の14本。0.1×ATR と保有8本は仮の値で出典の値ではないので、測る前に固定する。回数は出典に書かれていない。腕Aと腕Bは逆の仮説なので別々に測り、Holm をかける。先読みの罠: 水準 L と安値 Low の記号を取り違えること、格子を結果を見てから選び直すこと。pinbar・wyckoff spring・アプリの level_reject とヒゲで戻る足が重なりうるので、同じ足に出た数を数える。"
+  },
+  {
+   "id": "pattern-head-shoulders",
+   "name_ja": "頭と肩（三尊・逆三尊）の自動検出（Chang-Osler 型、確定済みのスイングで）",
+   "family": "chart-pattern",
+   "definition_final": "ペアごとに Bid の OHLC の足を使い、本数で数える。ATR14 はウィルダー ATR(14)（最初の14本の TR の平均から、以後 (13×前+TR)/14）。スイング高値: H[j]>H[j−3..j−1] のすべて、かつ H[j]≥H[j+1..j+3] のすべて。足 j+3 の終値で初めて分かるので、それより前には使わない。スイング安値は鏡像。一覧は dow.ts の addSwing と同じ作り（同じ種類が続いたら極端な方だけ残す。同じ足が両方なら高値を先に足す）。SELL（三尊）: 一覧の最後にスイング高値が新しく入った足 t（＝j5+3、置き換えを含む）でだけ判定する。最後の5点 E1(高)・E2(安)・E3(高)・E4(安)・E5(高)、A＝ATR14[t]。(a) E3>E1 かつ E3>E5、(b) |E1−E5|≤1.0A、(c) |E2−E4|≤1.0A、(d) E3−max(E2,E4)≥2.0A、(f) min(E1,E5)>max(E2,E4)。成立したら首線 N＝(E2+E4)/2 をそこで固定する。t≤i≤t+30 で C[i]<N となる最初の足 i で合図（途中で C>E3 の足が出たらパターンは消える。1パターンから1回）。BUY（逆三尊）は高安と不等号を入れ替えた鏡像。約定は足 i+1 の始値（SELL は Bid、BUY は Ask）、既定の出口は足 i+12 の終値。別の出口: SELL は目標 N−(E3−N)・損切り E3（BUY は鏡像）。i+1..i+12 でどちらに先に届いたかを見て、同じ足で両方なら損切り、届かなければ i+12 の終値。同じペア・同じ向きの取引を持っている間は新しい合図を取らない。数字（3・1.0・2.0・30・12）は仮の値。",
+   "timeframe_in_source": "日足（Chang-Osler: ドル為替 1973〜1994。Savin 他: 米国株 1990〜1999。Lo 他: 米国株 1962〜1996）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Chang-Osler（Economic Journal 1999）の要旨: 三尊のルールは利益が出るが、より単純なルールに劣るので効率的ではない（二次要約では、利益はマルクと円だけ）。Lucke（Applied Economics 2003）は概して利益が出ないとされる。Savin 他（米国株）は条件付きで年5〜7%の超過収益だが、単独の売買としての支持はほとんど無い。Lo 他は追加の情報があるかもしれないとする。どれも否定寄りで、今回は1つも開けず未確認（証拠の一覧に Chang-Osler と Lucke が二重に入っていた。Savin 他の URL は年が抜けた形に見える）。勝率の数字は無い。アプリで測ったことは無い（§8.16 の double_pivot は2点の形で別物）。",
+   "sources": [
+    "Chang & Osler, Methodical Madness: Technical Analysis and the Irrationality of Exchange-rate Forecasts, Economic Journal 109(458) 636-661, 1999 https://ideas.repec.org/a/ecj/econjl/v109y1999i458p636-61.html（今回開けず）",
+    "Lucke, Are technical trading rules profitable? Evidence for head-and-shoulder rules, Applied Economics 35(1) 2003（今回開けず）",
+    "Savin, Weller & Zvingelis, The Predictive Power of Head-and-Shoulders Price Patterns in the U.S. Stock Market, JFEc 5(2) 2007（今回開けず）",
+    "Lo, Mamaysky & Wang, Foundations of Technical Analysis, JF 55, 2000 / NBER w7613（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れるが、出典は日足。ウォームアップは ATR14 とスイングの数十本。出る回数は少ない見込み（出典に回数の記載は無く、未推定）なので、全ペア・複数の時間足で数を確保する。数字の総当たりはしない（探しすぎになる）。先読みの罠: スイングは3本後に確定すること、Lo-Mamaysky-Wang の核回帰は後ろの足を使うので使わないこと、一覧を後から整理し直さないこと。"
+  },
+  {
+   "id": "sr-classic-pivot",
+   "name_ja": "クラシック・ピボット（前日の値から作る P・R1・S1）の反発と逆向きの抜け",
+   "family": "support-resistance",
+   "definition_final": "日 D は前の暦日の 17:00 NY から D の 17:00 NY まで（夏時間を反映）。月曜の日は、週の最初の足から月曜 17:00 NY まで。前日 D−1 の bid の1分足から PH（最高値）・PL（最安値）・PC（最後の1分足の終値）を作る。D−1 の1分足が720本未満なら日 D は合図なし。P＝(PH+PL+PC)/3、R1＝2P−PL、S1＝2P−PH、R2＝P+(PH−PL)、S2＝P−(PH−PL)（PH＝PL なら合図なし）。bid の15分足で、足 i と足 i−1 がどちらも日 D に入るときだけ判断する（その日の最初の足では合図を出さない）。方式A（反発）: SELL は H[i]≥R1 かつ C[i]<R1 かつ C[i−1]<R1。BUY は L[i]≤S1 かつ C[i]>S1 かつ C[i−1]>S1。方式B（逆向き＝抜けを追う）: BUY は C[i]>R1 かつ C[i−1]≤R1、SELL は C[i]<S1 かつ C[i−1]≥S1。（日・水準・方式）ごとに最初の1回だけ。R2・S2 は別の出口の損切りにだけ使う。約定は足 i+1 の始値（BUY は ask、SELL は bid）。足 i が日の最後の足なら合図なし。本線の出口は足 i+8 の終値（i+1..i+8 が途切れずに並ばなければ合図なし。日をまたいでよい）。方式Aの別の出口（感度）: 利確 P、損切り R2（SELL）・S2（BUY）。同じ15分足で両方に届いたら1分足で順番を決め、決まらなければ損切り。どちらにも届かなければ日 D の最後の足の終値で決済。方式AとBは逆向きなので別々に測り、Holm（2つ）。",
+   "timeframe_in_source": "FX の日中（Lund 大学の修士論文、3ペア。時間足と期間は未確認）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "直接の証拠は Lund 大学の修士論文（Johnsson & Frykmer、査読なし）だけ。要約によれば、従来の使い方ではピボットは日中の価格に有用な情報を持たず、2つのペアでは逆向きに使うと収益が出うる（探して見つけた形の結果の疑いがある）。Osler 2000 の反発率 60.8% 対 56.2% は公表された水準の話でピボットの式ではなく、掲示板の引用で論文とは照らし合わせていない。Loginov 他はフィボナッチ比が良かったという決済の研究で、入り方の証拠ではない（掲載先は IEEE CEC ではなく EvoApplications 2015 の可能性があり未確認）。今回は1つも開けず未確認。式は広く知られた標準の式で、出典では確かめていない。",
+   "sources": [
+    "Johnsson & Frykmer, Pivot Point Trading in the Foreign Exchange Market - A Test for Market Efficiency, Lund University master's thesis https://www.lunduniversity.lu.se/lup/publication/8979805（今回開けず）",
+    "Loginov, Wilson & Heywood, Better Trade Exits for Foreign Exchange Currency Trading using FXGP（掲載先未確認） https://cs.dal.ca/~mheywood/OpenAccess/open-loginov15.pdf（今回開けず）",
+    "Osler, Support for Resistance, FRBNY EPR 2000（今回開けず）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は定義の外）。ウォームアップは前日1日分。保有8本は仮の値。回数は出典に書かれていない。方式AとBは逆向きの仮説なので別々に測り、Holm をかける。先読みの罠: 当日の高安を水準に混ぜること、日の区切りの夏時間、その日の最初の足では C[i−1] が前日の足になること（合図を出さない）。カマリラと同じ枠で並べて測る。"
+  },
+  {
+   "id": "japan-heikin-ashi",
+   "name_ja": "平均足の色の反転（影なしの確認つき）",
+   "family": "japanese-chart",
+   "definition_final": "1分足の Bid・Ask から O・H・L・C ごとに仲値＝(Bid+Ask)/2 を作り、UTC で区切って1時間足と4時間足（00/04/08/12/16/20 UTC 始まり、アプリと同じ）にまとめる。HA_C[i]＝(O+H+L+C)/4、HA_O[0]＝(O[0]+C[0])/2、HA_O[i]＝(HA_O[i−1]+HA_C[i−1])/2、HA_H＝max(H,HA_O,HA_C)、HA_L＝min(L,HA_O,HA_C)。データの最初の足から1回だけ計算し、i≥100 から判定する。白＝HA_C>HA_O、黒＝HA_C<HA_O、等しい足は色なし。版A（強い形、本線）: BUY は 白[i] かつ L[i]≥HA_O[i]（元の足の仲値の安値。下ヒゲが無いのと同じ）かつ 黒[i−1]。SELL は 黒[i] かつ H[i]≤HA_O[i] かつ 白[i−1]。入りは次の足の最初の1分足の始値（買いは Ask、売りは Bid）。出口は、入った後に持ち玉と逆の色の平均足が初めて確定した足の、次の足の始値（買いは Bid、売りは Ask）。色なしの足では閉じない。同じ足で逆向きの強い形も成り立てば、決済と同時に逆に入る。1ペアの玉は1つまでで、持っている間の同じ向きの合図は無視する。版B（色の反転だけ、比べる用）: 白[i] かつ 黒[i−1] で BUY、逆で SELL、次の足の始値で常にドテン。スワップは含めず別に書く。",
+   "timeframe_in_source": "1時間足（USD/INR、2018年5〜9月）。ほかの出典に時間足の指定は無い。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Trivedi（MPRA 2018）は、平均足とストキャスを組み合わせた HASTOC を USD/INR の1時間足・約5か月で試し、利益が出たとだけ要約される。IJFE 2022 の版は、選んだ時間足と市場でだけ安定してプラスだったとされる（どちらも平均足だけの規則ではない）。ローソク足一般はランダムな価格と比べて価値が無いという研究（Massey）がある。今回は性能を述べる出典を1つも開けず、未確認。開けた je-suis-tm の README には数字が無く、弱点として反応が遅いことを書いていた。アプリには平均足の計算が無い（UT Bot と ULTRA の平均足の設定は移植していない）。",
+   "sources": [
+    "Trivedi, Technical Analysis Strategies: Development of Heiken Ashi Stochastic, MPRA 89594, 2018 https://mpra.ub.uni-muenchen.de/89594/（今回開けず）",
+    "Technical analysis using Heiken Ashi Stochastic, International Journal of Finance & Economics 27(2) 1836-1847, 2022 https://ideas.repec.org/a/wly/ijfiec/v27y2022i2p1836-1847.html（今回開けず）",
+    "Massey University のローソク足のブートストラップ検定 https://mro.massey.ac.nz/items/edc6c1cf-63d9-4c94-a13d-92ffe1a53481/full（今回開けず）",
+    "je-suis-tm/quant-trading README（今回開いて確認、数字なし）",
+    "Valcu, Using the Heikin-Ashi Technique, TASC 2004（記憶の書誌、未読）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間足・4時間足。5分・15分足でも同じ式で作れるが、平滑なので合図が遅れ、1回の値幅が小さくなってスプレッドに負けやすい心配がある（測っていない）。ウォームアップは100本（始まりの値の影響は 0.5^100）。数値のパラメータは無い。回数は出典に書かれていない。先読みの罠: 平均足の値で約定させること（元の足の Ask/Bid で約定）、再帰の始まりを区間ごとに変えること。SuperTrend・UT Bot・Q-Trend と色が変わる時期の重なりの割合を出す。"
+  },
+  {
+   "id": "session-asia-range-london",
+   "name_ja": "東京時間のレンジをロンドン寄りで抜けたら順張り（アジアレンジ・ブレイクアウト）",
+   "family": "session-time",
+   "definition_final": "本線（breakout 版）: 5ペア、GMO の1分足から5分足を作る。時刻は Europe/London の現地時刻（夏時間を反映）、月〜金。ボックス: 00:00〜06:55 に始まる5分足84本から、側ごとに H_bid・L_bid（Bid の高値の最大・安値の最小）と H_ask・L_ask を作る（1本でも欠ければその日は取引しない）。判定窓: 07:00〜08:25 に始まる5分足18本。Bid の5分足の終値 > H_bid+b となった最初の足 i で買い、Ask の5分足の終値 < L_ask−b となった最初の足 i で売り。先に起きた方の1回だけ（b＝3 pips。円ペア 0.03、ほか 0.0003。仮置き）。約定は足 i の次の5分足の最初の1分足の始値（買いは Ask、売りは Bid）。損切り: 買いは Bid の安値≤L_bid、売りは Ask の高値≥H_ask。利確: R＝|入値−損切りの値|、買いは Bid の高値≥入値+1.5R、売りは Ask の安値≤入値−1.5R。同じ1分足で両方に触れたら損切り、損切りの値を窓で越えたらその1分足の始値。どちらにも届かなければ 16:00 London に始まる1分足の始値で決済（買いは Bid、売りは Ask）。別の腕（je-suis-tm の作り、説明用）: GMT に固定。レンジは 07:00〜07:59 GMT の1分足60本の中値の終値の最高と最安。判定は 08:01〜08:29 GMT の1分足の中値の終値で、その日の最初の突破だけ。突破幅が 0.01 を超えた1分は見送る（その日は取り消さない）。約定は次の1分足の始値。建値±0.005 で決済し、届かなければ 17:00 GMT の始値。0.01 と 0.005 は GBP/USD の単位なので、この腕を回す前に換算の方法を1つ決める。",
+   "timeframe_in_source": "5分足・15分足（EUR/USD、GBP/USD、実務家の記事）。je-suis-tm は1分足（GBP/USD、histdata の Bid/Ask、NY 時間）。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "為替での査読つきの検定は無い。勝率の数字は販売側やブログの主張だけ（50〜60%、50〜55%・PF 1.5超など、未確認）。体系的な検定は先物（MNQ）の5分足の arXiv 2605.04004 の1本で、要約によれば価格だけの日中シグナル14系統のどれも全条件を満たさず、アジア時間のレンジ拡大はコスト後マイナス（未読）。今回開いて確かめた je-suis-tm の README とコードは規則の出典にはなるが、成績を計算していない（main は1日を描くだけ）。",
+   "sources": [
+    "je-suis-tm/quant-trading の README と London Breakout backtest.py https://github.com/je-suis-tm/quant-trading（今回開いて確認、成績なし）",
+    "Strong LO ORB (ProjectSyndicate) TradingView スクリプト（今回開けず）",
+    "newyorkcityservers.com と DailyForex の London Breakout 記事（今回開けず）",
+    "Structural Limits of OHLCV-Based Intraday Signals in MNQ Futures, arXiv 2605.04004（今回開けず）"
+   ],
+   "test_notes_ja": "5分足で定義どおり（約定と損切りは1分足で追う）。ウォームアップはその日のボックス（7時間）だけ。回数は規則から決まり、1日に多くて1回。b＝3 pips、1.5R、16:00 は仮置きで出典の値ではない。先読みの罠: je-suis-tm の元のコードは突破した同じ1分の中値で約定させていて甘い（次の足に直した）、GMT 固定か現地時刻か。ORB・dual thrust・noise area と同じ朝の値動きを取るので、重なりを出す。"
+  },
+  {
+   "id": "session-orb-first-bar",
+   "name_ja": "ORB 5分（セッション最初の5分足の向きに入る、Zarattini-Aziz 型）を FX のセッション始値で",
+   "family": "session-time",
+   "definition_final": "5ペア。GMO の1分足 Bid/Ask から5分足を作り、区切りはセッションの開始時刻 S にそろえる。S は3つで、別々に測る: (a) 08:00 Europe/London、(b) 08:00 America/New_York、(c) 09:00 Asia/Tokyo（どれも現地時刻、夏時間を反映）。月〜金に行い、1セッション1回まで。足 i＝S から S+5分の5分足（1分足5本。1本でも欠ければ取引しない）。向きは Bid の足 i で決める: 終値−始値≥0.5 pip なら買い、≤−0.5 pip なら売り、その間は見送り（pip は円ペア 0.01、ほか 0.0001。0.5 pip は仮置き）。買い: S+5分に始まる1分足の始値（Ask）で入る。損切りは Bid の足 i の安値、R＝入値−損切り（R≤0 なら見送り）、利確＝入値+10R。Bid の安値≤損切りで損切り、Bid の高値≥利確で利確。売り: 同じく Bid で入り、損切りは Ask の足 i の高値、R＝損切り−入値、利確＝入値−10R、Ask の高値・安値で判定。同じ1分足で両方に触れたら損切り、損切りの値を窓で越えたらその足の始値。どちらにも届かなければ S+6時間に始まる1分足の始値で決済（(a) 14:00 London、(b) 14:00 NY、(c) 15:00 JST）。3つのセッションは別の腕で、多重比較の補正をする。出典の資金管理（1%リスク、最大4倍）は入れない。",
+   "timeframe_in_source": "5分足（QQQ、2016〜2023）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Zarattini-Aziz（SSRN 4416622、査読前、米国株の ETF）の要約: 手数料を引いて年33%のアルファ。二次要約では勝率24%・1回あたり +0.13R の低勝率・高倍率の型。MQL5 の個人ブログの追試は、指数 CFD 5種でコスト前は論文と一致したが、コスト後はどれもゼロと区別できず、5つのうち4つがマイナス。Holmberg 他（FRL 2013）は ORB の成功率と収益性の検定（数字は未見）、Lundström 2013 はボラの大きい日ほど成績が違うとする。為替での検定は見つからなかった。今回は1つも開けず未確認。",
+   "sources": [
+    "Zarattini & Aziz, Can Day Trading Really Be Profitable?, SSRN 4416622 https://papers.ssrn.com/abstract=4416622（今回開けず）",
+    "The opening-range breakout paper, replicated on five indices (MQL5 blog) https://www.mql5.com/en/blogs/post/776235（今回開けず）",
+    "Holmberg, Lönnbark & Lundström, Assessing the profitability of intraday opening range breakout strategies, FRL 10(1) 2013（今回開けず）",
+    "Lundström, Day trading returns across volatility states, Umeå Economic Studies 861, 2013（今回開けず）"
+   ],
+   "test_notes_ja": "5分足で定義どおり。ウォームアップは0本。回数は規則から決まり、各ペア・各セッションで営業日ごとに多くて1回（0.5 pip 未満は見送り）。最初の足・10R は出典の二次要約の値、S の時刻・6時間・0.5 pip は仮置き。出典の型は勝率が低く（24%）、勝率を重く見る目的とは性格が違う。損切りの幅が最初の5分足の値幅なのでとても小さく、スプレッドの比重が大きい。先読みの罠: S の夏時間、足 i が確定する前に入ること。ロンドン 08:00 の腕は asia range と時間が重なるので、重なりを出す。"
+  },
+  {
+   "id": "breakout-noise-area",
+   "name_ja": "Noise Area ブレイクアウト（時刻ごとの値幅の帯を抜けたら順張り、Zarattini-Aziz-Barbon 型）",
+   "family": "breakout-volatility",
+   "definition_final": "GMO の1分足の中値 P（bid と ask の中値）。取引日 d は NY 17:00（夏時間を反映）から次の NY 17:00 まで。O_d＝日 d の最初の1分足の始値、C_{d−1}＝前の取引日の最後の1分足の終値（週明けは金曜の最後の終値）。判断の時刻 t は日の始まりから30分ごと（t＝30, 60, …, 1410 分）。P_d(t)＝時刻 t に終わる1分足の終値。move_d(t)＝|P_d(t)/O_d−1|。σ_t＝直前14取引日（日 d は含めない）の move(t) の単純平均（14日そろわない t では判断しない）。UB_t＝max(O_d, C_{d−1})×(1+σ_t)、LB_t＝min(O_d, C_{d−1})×(1−σ_t)。入り: 持ち高が無く、P_d(t)>UB_t なら次の1分足の始値（ask）で買い、P_d(t)<LB_t なら次の1分足の始値（bid）で売り。手仕舞い（本線）: 買いは後の判断の時刻に P_d(t)<UB_t（帯の中に戻った）なら次の1分足の始値で決済、売りは P_d(t)>LB_t で決済。決済した同じ時刻に反対側の帯の外にあれば、続けて反対に入る。感度（別に事前登録）: 手仕舞いを反対側の帯にする版。NY 17:00 の1分前に始まる1分足の終値で全部決済し、持ち越さない。1日の入り直しの回数に上限は無い。VWAP（出来高が要る）と量の調整は使わず、1単位に固定。",
+   "timeframe_in_source": "1分足データ（SPY、2007〜2024）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Zarattini-Aziz-Barbon（Swiss Finance Institute Research Paper 24-97、査読前、SPY の1銘柄）の要約: コスト込みで総収益1,985%・年率19.6%・Sharpe 1.33（2007〜2024年初め）。標本外の検定かは分からない。論文は VWAP を使う版が中心で、価格だけの帯の版の成績は無い。TradingView の利用者の追試は『論文ほど良くなく、Sharpe はとても低い』という一人の感想。為替の検定は無い。今回は開けず未確認（帯の式・N＝14・30分ごとは検証者の記憶で、未確認）。",
+   "sources": [
+    "Zarattini, Aziz & Barbon, Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY), SFI Research Paper 24-97 https://www.sfi.ch/de/publications/n-24-97-beat-the-market-an-effective-intraday-momentum-strategy-for-s-p500-etf-spy（今回開けず）",
+    "Out of the Noise Intraday Strategy with VWAP（TradingView 公開スクリプト）（今回開けず）"
+   ],
+   "test_notes_ja": "1分足と30分ごとの判断で定義される（5分・15分足の作りは要らない。判断の間隔を変えるなら、事前に1つに決める）。ウォームアップは14取引日。N＝14 と30分は記憶にある論文の設定で未確認。回数は出典に書かれていない。先読みの罠: σ_t に当日を入れること、日の区切りの夏時間。為替は24時間で、株の取引時間の中だけの論文とは違う。dual thrust・ORB・asia range と重なりを出す。"
+  },
+  {
+   "id": "revert-td-sequential",
+   "name_ja": "TD Sequential（DeMark のセットアップ9とカウントダウン13）",
+   "family": "other",
+   "definition_final": "GMO の Bid の OHLC（出来高は使わない）。時間足は1分・5分・15分・1時間・4時間・日足の6つ（4時間足と日足の区切りは GMO の取引日の切り替わり。research/confirm.ts と同じ）。実在する足だけを順に並べ、足 t の確定時に t までの足だけで判定する。買いのセットアップ: 足 t を1本目にできるのは close[t]<close[t−4] かつ close[t−1]>close[t−5] のとき（プライスフリップ）。その後 close[k]<close[k−4] が切れずに続く限り数え（等しい場合を含め1本でも満たさなければ終わり）、9本目 t9 で完成。同じ連続の10本目以降は新しい合図を出さず、次は新しいフリップが要る。簡易版の合図は t9 の確定。カウントダウン: 完成し、動いているカウントダウンが無ければ、t9 から（t9 を含めて）close[k]≤low[k−2] を満たす足を連続でなくてよいので1〜13と数え、8番目の足の終値を C8 とする。13番目 k13 で low[k13]≤C8 なら合図（完成版）。満たさなければ、close≤low[k−2] と low≤C8 の両方を満たす最初の足まで持ち越す。合図の前に売りのセットアップが完成したら取り消し、そこから売りのカウントダウンを始める。動くカウントダウンは常に1つで、同じ向きの新しいセットアップでは数え直さない（recycle と TDST の取り消しは使わない）。売りは不等号を逆にする（フリップ close[t]>close[t−4] かつ close[t−1]<close[t−5]、close≥high[k−2]、high[k13]≥C8）。パーフェクト（参考）: 買いは9本目の確定時に min(low[8],low[9])≤min(low[6],low[7])。入口は合図の足の次の足の始値（買いは Ask、売りは Bid）。出口（主）は保有 H＝1・3・5・10・20 本で、足 t+1+H の始値（買いは Bid、売りは Ask）。H ごとに報告する。比べる相手は、同じ数のランダムな入口と、毎本入る場合。",
+   "timeframe_in_source": "日足（商品先物21市場、2004〜2014）。Oxford Strat は先物42市場（通貨を含む、1980〜）。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Lissandrin-Daly-Sornette（Journal of Investment Strategies、SFI RP 15-56）の抄録: 合図はまれで、多くの商品先物で統計的に有意な予測力があるが、多くの指標で限られた保有日数でだけ効き、単独のシステムではなく入口の案として位置づけられる。Oxford Strat（ベンダー）の見出しの数字は見えなかった。FX、特に日中足の数字は1つも無い。今回は開けず未確認。Westpac の『約70%当たる』という逸話は出典を特定できないので証拠に入れない。",
+   "sources": [
+    "Lissandrin, Daly & Sornette, Statistical Testing of DeMark Technical Indicators on Commodity Futures, Journal of Investment Strategies / SFI RP 15-56 https://ideas.repec.org/p/chf/rpseri/rp1556.html（今回開けず）",
+    "TD Sequential 3 (Oxford Strategic Consulting) https://oxfordstrat.com/indicators/td-sequential-3/（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる（出典は日足）。ウォームアップはセットアップに5本、カウントダウンはさらに長い。パラメータは DeMark の一般的な定義（9本・4本前・13・2本前・8本目）で固定する。回数は、出典は合図がまれと書くが数は書いていない。先読みの罠: 合図の足の終値で入ること（次の足の始値で入る）、パーフェクトを後から満たすまで待つこと。H が5つあるので、多重比較の数に入れる。"
+  },
+  {
+   "id": "candle-star",
+   "name_ja": "明けの明星・宵の明星（酒田五法の三川）",
+   "family": "candlestick",
+   "definition_final": "仲値（(bid+ask)/2）の OHLC を1分足から集計した確定足で判定し、足 i 以前の足だけを使う。A＝ATR14[i−3]（ウィルダー ATR(14)、形の3本が始まる前の足までの値）。各系列の最初の60本は判定しない。BUY（明けの明星）は次の4つが全部成り立つとき。(1) O[i−2]−C[i−2]≥0.5×A（長い陰線）。(2) |C[i−1]−O[i−1]|≤0.3×(O[i−2]−C[i−2]) かつ max(O[i−1],C[i−1])≤C[i−2]+0.1×(O[i−2]−C[i−2])（実体の小さい星が1本目の終値の下か、ほぼ同じ高さ）。(3) C[i]>O[i] かつ C[i]>(O[i−2]+C[i−2])/2。(4) C[i−2]<C[i−7]。SELL（宵の明星）は鏡像（(2) は min(O[i−1],C[i−1])≥C[i−2]−0.1×(C[i−2]−O[i−2])）。入口は足 i+1 の始値（BUY は ask、SELL は bid）、出口は足 i+H の終値（BUY は bid、SELL は ask）。H＝5 が本線、H＝1・2・3・10 は感度。勝ちはスプレッド込みの損益が0より大きいもの。勝率と1回あたりの平均損益（pips と ATR14[i] 単位）を一緒に書く。同じペア・同じ足・同じ向きで保有中に出た合図は数えない。30回未満の行は勝率を書かない。japanese_stats 版（10本の平均実体を基準にした版）は測らない。",
+   "timeframe_in_source": "日足（S&P500 株 1992〜1996、DJIA 構成銘柄 1992〜2002 など）。先物の日中足（DAX・Bund 先物 2002〜2003）の研究もある。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "肯定は Caginalp-Laurent（1998、米国株の日足、費用の扱いは不明、2日で約1%と要約）と Lu 2016 の一部だけ。否定は Marshall-Young-Rose（DJIA 構成銘柄でローソク足に価値なし）、Fock 他（先物の日中足で費用なしでもランダム並み）、Duvinage 他（5分足、費用後はどのルールも買い持ちに勝てない）、タイ SET50。CXO の要約と Marshall 他 2006 は同じ研究の可能性が高く、独立した否定を2つと数えない。FX の証拠は無い。今回は1つも開けず未確認。§8.16 の日中足の反発の条件は 35〜46%（損益分岐40%）で、明けの明星は測っていない。",
+   "sources": [
+    "Caginalp & Laurent, The Predictive Power of Price Patterns, Applied Mathematical Finance 1998（今回開けず）",
+    "Marshall, Young & Rose, Candlestick technical trading strategies, JBF 30(8) 2006 と CXO Advisory の要約 https://www.cxoadvisory.com/technical-trading/candlesticks-fiddlesticks/（今回開けず）",
+    "Fock, Klein & Zwergel, Performance of candlestick analysis on intraday futures data, Journal of Derivatives 13(1) 2005（今回開けず）",
+    "Duvinage, Mazza & Petitjean, Quantitative Finance 13(7) 2013（今回開けず）",
+    "Lu, Applied Economics 48(35) 2016（今回開けず）",
+    "docs/OPERATIONS.md §8.16（確認）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる（出典は日足）。ウォームアップは60本。0.5・0.3・0.1・7本は仮の値。回数は出典に書かれておらず少ない見込みなので、全ペア・複数の時間足で数を確保する。先読みの罠: 長さの基準に形の足を混ぜないため ATR14[i−3] を使う、FX は窓が空かないので星の位置の置き換えを固定する。"
+  },
+  {
+   "id": "sr-fib-retracement",
+   "name_ja": "自動スイングの押し・戻しの水準での順張り（フィボナッチ61.8%と非フィボナッチ比の対照）",
+   "family": "support-resistance",
+   "definition_final": "bid の15分足、ATR14 はウィルダー ATR(14)。スイング高値: H[j]>max(H[j−5..j−1]) かつ H[j]≥max(H[j+1..j+5])、足 j+5 の確定で分かり、それより前の判断には使わない（安値は鏡像。同じ足が両方になれば使わない）。確定した順に表に1つずつ足し、同じ種類が続けば、新しい方がより極端なら入れ替え、そうでなければ捨てる。過去は書き換えない。上昇脚の押し目買い: 足 i の時点で表の最後が高値 h（足 b）、1つ前が安値 l（足 a）。h−l≥3×ATR14[i]、足 b+1..i に H>h が無い、足 a+1..i に L<l が無い。F＝h−0.618×(h−l)。i≥b+5 の足で L[i]≤F かつ C[i]>F かつ C[i−1]>F、かつ足 b+1..i−1 のどれも L≤F でない（初めて触れた）なら BUY。初めて触れた足が条件に合わなければその脚は使わない。下降脚の戻り売りは鏡像（F＝l+0.618×(h−l)）。1脚で合図は1回。約定は足 i+1 の始値（BUY は ask、SELL は bid）、本線の出口は足 i+8 の終値。別の出口: BUY は利確 h・損切り l（SELL は逆）、同じ15分足で両方なら1分足で順番、決まらなければ損切り、96本で終値決済。比べるもの（測る前に固定）: 主は比率0.618。副は、フィボナッチ比 {0.382, 0.5, 0.618, 0.786} のまとめと、非フィボナッチ比 {0.30, 0.45, 0.70} のまとめの差。ICT 版（感度）: スイングの幅を前後50本（確定は50本後）にし、上げ波で L[i]≤(SH+SL)/2 かつ C[i]>SL になった最初の足で i+1 の始値で BUY（下げ波は鏡像）。出口は本線と同じで、別の出口は利確 SH・損切り SL−0.1×ATR14[i]・96本。smart-money-concepts のコードはそのまま使わない。",
+   "timeframe_in_source": "株式3市場（ESWA 2021、時間足は未確認）。smart-money-concepts は時間足の指定なし。",
+   "evidence_strength": "weak（否定寄り）",
+   "evidence_summary_ja": "査読つきの ESWA 2021 のハイライトによれば、水準の帯と反発の確率には関係があるが、フィボナッチの帯と非フィボナッチの帯で値動きは統計的に違わない。実務家ブログ（40,243回の押し）と HKUST の学生研究も否定的。今回はどれも開けず未確認。今回開けた smart-money-concepts の README には成績が無く、smc.py には先読みがあることを確かめた（後ろ50本を見るスイング、系列全体での整理、np.roll で1本ずらす癖）。",
+   "sources": [
+    "Automatic identification and evaluation of Fibonacci retracements: Empirical evidence from three equity markets, Expert Systems with Applications 2021, DOI 10.1016/j.eswa.2021.115893（今回開けず）",
+    "Fibonacci Retracement: A Myth or Reality? (forexop.com)（今回開けず）",
+    "Bhattacharya & Kumar, Annals of Economics and Finance 7(1) 2006（今回開けず）",
+    "joshyattridge/smart-money-concepts の README と smc.py（今回開いて確認、成績なし）"
+   ],
+   "test_notes_ja": "15分足で定義（5分足は定義の外）。ウォームアップは ATR14 とスイングの確定5本（ICT 版は50本）。スイング幅5・3×ATR・8本・96本は仮の値。回数は出典に書かれていない。この候補を測る意味は『非フィボナッチ比の対照に勝てるか』にあるので、比べ方を測る前に固定する。先読みの罠: ライブラリの swing_highs_lows と retracements() をそのまま使うこと、表を後から整理すること、確定前の接触を数えること。"
+  },
+  {
+   "id": "pattern-flag",
+   "name_ja": "上昇フラッグ・下降フラッグ（旗）の抜け",
+   "family": "chart-pattern",
+   "definition_final": "Bid の OHLC の足を本数で数え、ATR14 はウィルダー ATR(14)。判定は足 i の終値で、足 i 以前だけを使う。窓はポール P＝足 i−18..i−9（10本）と旗 F＝足 i−8..i−1（8本）。BUY（強気フラッグ）: (1) P の中で L が最小の足 aL、H が最大の足 aH（同じ値なら最も早い足）で aL<aH。Ph＝H[aH]、Pl＝L[aL]、Pg＝Ph−Pl として Pg≥4.0×ATR14[i−9]。(2) maxH(F)≤Ph、minL(F)≥Ph−0.5×Pg、maxH(F)−minL(F)≤0.5×Pg、かつ C[i−1]≤C[i−8]。(3) C[i]>maxH(F)。SELL（弱気フラッグ）: aH<aL かつ Pg≥4.0×ATR14[i−9]、minL(F)≥Pl、maxH(F)≤Pl+0.5×Pg、maxH(F)−minL(F)≤0.5×Pg、C[i−1]≥C[i−8]、C[i]<minL(F)。約定は足 i+1 の始値（BUY は Ask、SELL は Bid）、既定の出口は足 i+12 の終値。別の出口: BUY は目標 maxH(F)+Pg・損切り minL(F)、SELL は目標 minL(F)−Pg・損切り maxH(F)。i+1..i+12 で先に届いた方、同じ足なら損切り、届かなければ i+12 の終値。同じペア・同じ向きで持っている間（12本）は新しい合図を取らない。数字（10・8・4.0・0.5・12）は仮の値。aH を i−11..i−9 に限って締める別案は、測る前に決めた場合だけ使う。",
+   "timeframe_in_source": "日足（NYSE 総合指数）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Leigh 他（Expert Systems with Applications 2002）の要旨は、強気フラッグの2つの型から見つけた売買ルールが標本外で有効だったとするが、対象は1つの株価指数で、数字もコストの扱いも見えていない。FX の検証は見つかっていない。今回は開けず未確認。",
+   "sources": [
+    "Leigh, Modani, Purvis & Roberts, Stock market trading rule discovery using technical charting heuristics, Expert Systems with Applications 23(2) 2002（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる（出典は日足）。ウォームアップは18本と ATR14。数字の自由度が大きいので、測る前に固定する。回数は出典に書かれていない。抜けの部分は8本のドンチャン抜けとほぼ同じなので、ポールと旗の条件が無い8本の抜けと並べて比べないと、旗の形が効いたかどうかが分からない。固定の窓なので先読みは無い。"
+  },
+  {
+   "id": "breakout-nr7",
+   "name_ja": "NR7・IDNR4（値幅の狭い足の後の抜け、Crabel 型）",
+   "family": "breakout-volatility",
+   "definition_final": "日足（NY 17:00 区切り、夏時間を反映）・4時間足・1時間足（UTC 区切り）を別々に測る。bid の OHLC で、確定足だけ。R[j]＝H[j]−L[j]。NR7: R[s]>0 かつ k＝1..6 のすべてで R[s]<R[s−k]（同じ値は NR7 にしない）。IDNR4: H[s]<H[s−1] かつ L[s]>L[s−1]（厳密なインサイド）かつ k＝1..3 のすべてで R[s]<R[s−k]。NR7 と IDNR4 は別々に測る。入り方A（次の1本だけ）: 足 s+1 の確定で C[s+1]>H[s] なら買い、C[s+1]<L[s] なら売り、どちらでもなければその s は見送り。入りは足 s+2 の始値（買いは ask、売りは bid）、出口は入った足を1本目として H 本目の足の終値（H＝1 が本線、H＝3 が感度）。損切り・利確なし。入り方B（5本待つ）: K＝5。足 s+1..s+5 のうち最初に C[j]>H[s] の足 j で買い、C[j]<L[s] の足 j で売り、入りは j+1 の始値。5本以内に無ければ見送り。損切りは買い L[s]・売り H[s]（買いは bid の安値、売りは ask の高値で判定、越えて始まった足は始値）、利確は 入値±2×R[s]、入った足を1本目として5本目の終値で手仕舞い。損切りと利確が同じ足なら損切り。1ペア同時に1取引、持っている間のセットアップは使わない、1つの s から1回。",
+   "timeframe_in_source": "日足（株式・ETF・先物。Crabel 1990 は先物、Oxford Strat は先物42市場で1980年〜）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "パターンの作者 Bulkowski の数字（株・強気相場の上抜けで、損益分岐の失敗率46%、目標到達43%）、再現した Oxford Strat の『コスト後は追加の規則がないと売買に向かない』、Quantified Strategies の数字のない評価があるだけで、査読つきの研究・為替・日中足の検定は無い。今回は1つも開けず未確認。",
+   "sources": [
+    "Bulkowski, NR7 https://www.thepatternsite.com/nr7.html（今回開けず）",
+    "Oxford Strat, narrow range https://oxfordstrat.com/trading-strategies/narrow-range/（今回開けず）",
+    "Crabel, Opening range breakout Part 4, TASC 7:2（今回開けず）",
+    "Quantified Strategies, We Improved The NR7 Trading Strategy（今回開けず）"
+   ],
+   "test_notes_ja": "検証者の本線は日足・4時間足・1時間足。5分・15分足に下げると、狭い足がアジア時間や NY 引け後に集まりやすく（時刻の周期）、コストの比重も上がるので、測るなら時刻ごとの件数も出す。ウォームアップは7本。6本・3本は出典、K＝5・2R は仮置き。回数は出典に書かれていない。先読みは無い（セットアップは足 s の確定で分かる）。ttm squeeze と『ボラが縮んだ後』という考えが重なる。"
+  },
+  {
+   "id": "revert-double7",
+   "name_ja": "Double 7（直近7本の終値の最安値で買い、最高値で手仕舞い。200本平均の上だけ）",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足（アプリの midCandle と同じ）で計算する。判断は確定足 i の終値で、入るのは i+1 本目の始値（買いは Ask、売りは Bid）。手仕舞いは条件の出た足の次の始値（買いは Bid、売りは Ask）。同じペア・同じ向きの玉は1つだけ。時間足は1時間足・4時間足・日足（NY 17:00 区切り）を先に登録する。LL7[i]＝min(close[i−6..i])、HH7[i]＝max(close[i−6..i])（i を含む7本）。SMA200 は直近200本の終値の単純平均。買い: close[i]>SMA200[i] かつ close[i]＝LL7[i]（同じ値の最安値も含める）。手仕舞いは j≥i+1 で最初に close[j]＝HH7[j] となった足。売り（出典に無い対称化）: close<SMA200 かつ close＝HH7、手仕舞いは close＝LL7。損切りと期限は置かない（出典どおり）。",
+   "timeframe_in_source": "日足（SPY・S&P500 ETF）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "StrategyQuant（ベンダー）の SPY 1993〜2026: 333回・PF 2.35・Sharpe 0.85・最大下落約12.5%。The Chartist（個人ブログ）: 勝率77%・119回・年7%。どちらも株の ETF 1銘柄で、標本外もコストの扱いも分からず、件数の差の理由も分からない。FX は無い。今回は開けず未確認。",
+   "sources": [
+    "StrategyQuant, Larry Connors' Double 7 Strategy: Tested on SPY and 8 Other Markets https://strategyquant.com/blog/larry-connors-double-7-strategy-tested-on-spy-and-8-other-markets/（今回開けず）",
+    "The Chartist, Double 7's Strategy https://www.thechartist.com.au/?p=5968（今回開けず）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間・4時間・日足。5分足で SMA200 は約16.7時間で意味が変わるので、5分・15分足は出典から離れた別の腕として登録する場合だけ。ウォームアップは200本。7本と200本は出典の値。回数は、SPY 日足で年に約5〜10回（出典、未確認）。損切りが無いので勝率は高く出やすく、1回あたりの損益・最大の含み損・持った本数を必ず一緒に出す。rsi2・connors-rsi と同じ『上昇の中の押し目買い』の仲間なので、同じ足に出る割合を出す。"
+  },
+  {
+   "id": "revert-cci",
+   "name_ja": "CCI の行き過ぎ（±100）から戻ったら逆張り",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足で計算する。判断は確定足 i の終値、入るのは i+1 本目の始値（買いは Ask、売りは Bid）、手仕舞いは条件の出た足の次の始値（買いは Bid、売りは Ask）。玉は同じペア・同じ向きに1つ。時間足は1時間・4時間・日足（NY 17:00 区切り）を先に登録する。TP＝(H+L+C)/3、M＝直近20本の TP の単純平均、MD＝直近20本の |TP[k]−M[i]| の平均、CCI＝(TP−M)/(0.015×MD)（MD＝0 なら値なし。研究の cciSeries と同じ）。買い: CCI[i−1]<−100 かつ CCI[i]≥−100、手仕舞いは j≥i+1 で最初に CCI≥0。売り: CCI[i−1]>+100 かつ CCI[i]≤+100、手仕舞いは CCI≤0。損切り・期限なし。期間は #102・#103 と比べられるよう20にした。14 を使うなら副の設定として先に登録する。出口の『0 を越えたら』は検証側で決めたもの。",
+   "timeframe_in_source": "日足（SPY、NSE Nifty 50）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Quantified Strategies（ブログ、有料部分あり）の SPY 日足: 643回・勝率73%・PF 1.9・年率8.1%（期間としきい値は要約から分からない）。この数字なら平均の勝ち÷平均の負けは約0.70で、『小さく勝って大きく負ける』形になる（検証者の計算）。Nifty 50（2004〜2014）の論文の要約では、CCI がストキャス・RSI より良かった（数字は未見）。FX は無い。今回は開けず未確認。研究側で、順張り向きの cci_100（#102、数字は docs に無い）と、RSI の戻り＋CCI<−100 の絞り込み（#103）を測っている。",
+   "sources": [
+    "Quantified Strategies, Commodity Channel Indicator (CCI) strategy https://quantifiedstrategies.substack.com/p/commodity-channel-indicator-cci-strategy（今回開けず）",
+    "Profitability of Oscillators Used in Technical Analysis for Financial Market（ResearchGate）（今回開けず）",
+    "research/indicator-series.ts の cciSeries・cci_100、research/rsi-combos.ts の cci"
+   ],
+   "test_notes_ja": "検証者の本線は1時間・4時間・日足（5分・15分足は別の腕として登録する場合だけ）。ウォームアップは20本。回数は SPY 日足で約640回（期間不明、未確認）。損切りが無いので、損益・最大の含み損・持った本数を必ず出す。研究の bb_return（−2σの外から内に戻ったら買い）と式の上で幅だけが違う親戚なので、同じ足に出る割合を出す。証拠が弱く近い形を測っているので、測る順番は後ろでよい。"
+  },
+  {
+   "id": "revert-ibs",
+   "name_ja": "IBS（足の中での終値の位置）で逆張り",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足で計算する。判断は確定足 i の終値、入るのは i+1 本目の始値（買いは Ask、売りは Bid）、手仕舞いは条件の出た足の次の始値（買いは Bid、売りは Ask）。玉は同じペア・同じ向きに1つ。時間足は1時間・4時間・日足（NY 17:00 区切り）を先に登録する。IBS[i]＝(close[i]−low[i])/(high[i]−low[i])。high＝low の足は IBS を持たず、入りにも手仕舞いにも使わない。買い: IBS[i]<0.20、手仕舞いは j≥i+1 で最初に IBS[j]>0.90。売り（出典に無い対称化）: IBS[i]>0.80、手仕舞いは IBS<0.10。トレンドの絞り込みは無し。損切り・期限なし。",
+   "timeframe_in_source": "日足（米国株・ETF）。FX の検証は無い（金の2時間足のコードの掲載だけ）。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "arXiv 2306.12434（各国の ETF の日足）の要約: IBS が0.2未満で引けた翌日は上がる傾向があり、新しいデータでも似た結果だった（数字は未見）。Quantified Strategies は 0.20 で入り 0.90 で出る、平均約9日と書く（数字は未見）。FX の成績は見つからない。今回は開けず未確認。アプリの analyze/structure.ts の closePressure は IBS の20本平均だが、判断には使っていない。",
+   "sources": [
+    "arXiv 2306.12434（IBS on country ETFs） https://arxiv.org/html/2306.12434v1（今回開けず）",
+    "Quantified Strategies, IBS - Internal Bar Strength Trading STRATEGY（今回開けず）",
+    "ProRealCode, Internal Bar Strength Gold XAUUSD 2 hours（今回開けず、成績なし）"
+   ],
+   "test_notes_ja": "1分・5分足では、スプレッドの開き方で足の中の終値の位置が偏り、見かけの逆行が出やすいので、検証者は1時間足以上を本線にした（5分・15分足は別の腕として登録する場合だけ）。ウォームアップは0本（1本で決まる）。0.20・0.90 は出典、売りの 0.80・0.10 は対称化。回数は出典に書かれていない。損切りが無いので、損益・最大の含み損・持った本数を出す。"
+  },
+  {
+   "id": "stat-big-move",
+   "name_ja": "異常に大きな動きの後: 同じ向き（Caporale 他の inertia）と逆張り（ボラで割った z 値）",
+   "family": "statistical-ml",
+   "definition_final": "共通: GMO の1分足の Bid/Ask から足を作り、合図は仲値だけで決める。約定は買いが Ask・売りが Bid で入り、出るときは逆。前の足から60分を超えて空いた所（週末・休日）をまたぐ収益率は、σ にも合図にも使わない。(a-当日、主) 日足は UTC 00:00〜24:00（日曜 UTC の足は月曜の日に入れ、1分足が720本未満の日は使わない）。R_d＝ln(C_d/C_{d−1})（仲値の終値）。σ_D＝日 D より前の100日（D は入れない）の R の標本標準偏差。日 D の UTC 00:00〜19:59 の1分足 t で |ln(C_t/C_{D−1})|≥2×σ_D に初めてなった足を合図とし、符号と同じ向きに次の1分足の始値で入り、同じ日の UTC 20:00 の1分足の始値で出る（1日1回まで）。同じ合図で逆向きの腕も測る。(a-翌日) 日 D の終値で |R_D|≥2×σ_D なら、D+1 の UTC 00:00 の1分足の始値で R_D と同じ向きに入り、D+1 の UTC 20:00 の始値で出る。逆向きの腕も測る。k＝2 が主で、1.5 と 3 は感度として別に出す。(b) 5分足（UTC の5分区切り）。r[t]＝ln(C[t]/C[t−1])、σ[i]＝r[i−288..i−1] の標本標準偏差（使える r が250本以上のときだけ）、z[i]＝ln(C[i]/C[i−6])/(σ[i]×√6)（6つの r がすべて使えるときだけ）。z≤−2 なら買い、z≥+2 なら売り（逆張り）。足 i+1 の始値で入り、足 i+7 の始値で出る（6本）。持っている間は同じペアで向きに関係なく新しい合図を取らない。入る足の始まりが UTC 19:35〜23:55 なら入らない。比べるために順張りの鏡像（z≥+2 で買い）も同じ数値で測る。数字はどれも案で、出典の数字ではない。",
+   "timeframe_in_source": "日足（1日の異常な値動きの後。株・FX・商品）。Brunel の FX 研究は日足と時間足。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Caporale-Gil-Alana-Plastun（Computational Economics 2018、DIW DP 1423）の抄録: 行き過ぎの後に逆向きに入る戦略は FOREX と商品では利益が出ず、同じ向き（inertia）の戦略は FOREX と商品で利益が出る（数字は未見）。Brunel の FX 5ペア（2008〜2018）の研究の要約: 異常な日のうちは同じ向きに動き、翌日は逆向きに動く。このため、案の『翌日に同じ向き』は要約と逆に賭けることになり、検証者は『当日』の腕を主に直した。今回は1つも開けず未確認。アプリの近い測定は否定的: §8.21 の大きく動いた後の反転足（後半 8,638件・29.4%・−0.113R、ブラインドとの差 +0.012R）、§8.18 の方向の特徴（後半 AUC 0.49〜0.51）。",
+   "sources": [
+    "Caporale, Gil-Alana & Plastun, Short-Term Price Overreactions: Identification, Testing, Exploitation, Computational Economics 51(4) 2018 / DIW DP 1423（今回開けず）",
+    "Brunel University の EURUSD・USDJPY・USDCAD・AUDUSD・EURJPY 2008〜2018 の研究（題名未確認） https://bura.brunel.ac.uk/handle/2438/20567（今回開けず）",
+    "Dacorogna ほか, An Introduction to High-Frequency Finance, 2001（記憶の書誌）",
+    "docs/OPERATIONS.md §8.18・§8.21（確認）"
+   ],
+   "test_notes_ja": "(b) は5分足で定義どおり。(a) は日足と1分足で、GMO（2024〜）では1ペア約600日・合図は数十回の見込み（検証者の見込みで数えていない）なので、Dukascopy の長い期間で測るのがよい。ウォームアップは (a) 100日、(b) 288本。k＝2・z±2・6本は案。回数は出典に書かれていない。先読みの罠: 見えた終値でそのまま約定させること（次の足の始値で入る）、σ に今の足を入れること、週末の空きをまたぐ収益率。大きな動きの直後はスプレッドが一時的に開いて仲値だけが動いた見かけの戻りが出やすいので、Ask/Bid で約定させ、スプレッドが開く時間帯を除く。"
+  },
+  {
+   "id": "candle-three-outside",
+   "name_ja": "Three Outside Up / Down（包み足と3本目の確認の足）",
+   "family": "candlestick",
+   "definition_final": "仲値（(bid+ask)/2）の OHLC を1分足から集計した確定足で判定し、足 i 以前の足だけを使う。各系列の最初の60本は判定しない。入口は足 i+1 の始値（BUY は ask、SELL は bid）、出口は足 i+H の終値（BUY は bid、SELL は ask）。H＝5 が本線、H＝1・3・10 は感度。勝ちはスプレッド込みの損益が0より大きいもの。損益は pips と ATR14[i]（ウィルダー ATR(14)）単位の両方で出し、勝率と1回あたりの平均損益を一緒に書く。同じペア・同じ足・同じ向きで、前の合図の保有中（足 i+H まで）に出た合図は数えない。30回未満の行は勝率を書かない。BUY（Three Outside Up）は足 i で次の4つが全部成り立つとき。(1) C[i−2]<O[i−2]。(2) C[i−1]>O[i−1] かつ C[i−1]>O[i−2] かつ (C[i−1]−O[i−1])≥(O[i−2]−C[i−2])。(3) C[i]>O[i] かつ C[i]>C[i−1]。(4) C[i−2]<C[i−7]。SELL（Three Outside Down）は鏡像。(1)〜(4) は厳密な不等号で、実体の比べだけ ≥。比べる相手（同じ出口で並べて数える）: (1)(2)(4) を満たす全件を (3) を問わずに足 i で判定したもの（包み足だけで1本遅れて入る形）。これで3本目の確認が何を足すかを分ける。RSI や実体の比率の条件は付けない。",
+   "timeframe_in_source": "日足（株式。JSE 60銘柄、SET50 など）。FX の包み足は Alanazi 2020 が日足で探し4時間足で検証（24ペア、2000〜2018）。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "JSE 60銘柄の研究（UCT、題名不明）は多数のパターンの中で Three Outside Down だけに予測力があったとされ、選んだ後の当たり（多重検定）の疑いがある。Alanazi（European Journal of Finance 2020）は FX 24ペアで包み足を日足で探して4時間足で標本外に検証し、主要7ペアで利益が出たが取引コストが重要だと述べる（数字とコストの前提は未見。Three Outside そのものではない）。タイ SET50 は多くのパターンの平均収益がゼロと違わない。今回は1つも開けず未確認。アプリの GA型（包み足＋実体＋RSI＋5本前）は §8.25 で後半 10,757件・28.8%・−0.134R でランダムと同じ（ただしこれは #132 より前の設定の数字で、今のアプリの GA型の数字ではない）。",
+   "sources": [
+    "University of Cape Town の JSE 60銘柄のローソク足研究（題名未確認） https://open.uct.ac.za/bitstreams/85e5328d-4d5e-4fcd-83fe-4c6416aeb231/download（今回開けず）",
+    "Alanazi, The bullish and the bearish engulfing, European Journal of Finance 26(15) 2020 https://ideas.repec.org/a/taf/eurjfi/v26y2020i15p1484-1505.html（今回開けず）",
+    "Tharavanij, Siraprapasiri & Rajchamaha, Profitability of candlestick charting patterns in the Stock Exchange of Thailand, SAGE Open 2017（今回開けず）",
+    "docs/OPERATIONS.md §8.25（確認）と supabase/functions/analyze/gainz.ts"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは60本。7本は仮の値。回数は出典に書かれていない。GA型とほぼ同じ土台なので、3本目の確認が足す分を、(3) を外した対照と同じ出口で並べて見る。期待は低い。先読みは無い（足 i−7〜i だけ）。"
+  },
+  {
+   "id": "revert-rsi2",
+   "name_ja": "Connors RSI(2) の押し目買い・戻り売り（200本平均のフィルタ付き）",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足（midCandle）で計算する。判断は確定足 i の終値、入るのは i+1 本目の始値（買いは Ask、売りは Bid）。手仕舞いの条件が確定足 j で出たら j+1 本目の始値で出る（買いは Bid、売りは Ask）。同じペア・同じ向きの玉は1つで、持っている間の合図は数えない。時間足は1時間・4時間・日足（NY 17:00 区切り）を先に登録する。RSI2: 終値の RSI、期間2、Wilder 平滑（最初は2本の上げ幅・下げ幅の単純平均。その後 avg＝(avg×1+今の値)/2。avgLoss＝0 なら100、両方0なら50）。SMA200・SMA5 は i を含む直近200本・5本の終値の単純平均。買い: close[i]>SMA200[i] かつ RSI2[i]<10。手仕舞いは j≥i+1 で最初に close[j]>SMA5[j] か close[j]<SMA200[j] となった足。売り（出典で確かめていない対称化）: close<SMA200 かつ RSI2>90、手仕舞いは close<SMA5 か close>SMA200。損切り・期限なし（出典どおり）。副の設定として、買い<5・売り>95（Backtrex の値）を先に登録する。",
+   "timeframe_in_source": "日足（株・株価指数）。FX は Backtrex の EUR/USD 日足の1件だけ。分足の検証は無い。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "FX の証拠は Backtrex（ブログ）の EUR/USD 日足（2016〜2026、RSI2<5）1件だけで、10年で黒字の年は3年（2019 +0.8%・2022 +4.8%・2023 +0.04%）しかなく、FX では効いていない側の証拠と読める。同じルールの株価指数は S&P500 で勝率71.2%（73回、平均の勝ち1.22%・平均の負け2.10%）、Nasdaq100 で75.38%。この数字なら1回あたり約+0.26%で、高い勝率は『小さく勝って時々大きく負ける』形から来ている（検証者の計算）。分足では掲示板で悪かったという声だけ。今回は1つも開けず未確認。アプリの RSI の測定は RSI＋SAR（§8.19、合計35.4%、損益分岐40%）、ULTRA（1回あたりマイナス）、#103 の RSI＋200本平均の絞り込み（数字は docs に無い）。",
+   "sources": [
+    "Backtrex, Does the RSI(2) strategy work on forex? https://backtrex.com/en/backtests/connors-rsi-2-eur-usd（今回開けず）",
+    "Backtrex, RSI(2) on the S&P 500 / Nasdaq 100（今回開けず）",
+    "LuxAlgo library, rsi 2（今回開けず）",
+    "ProRealCode, RSI-2 Strategy from Larry Connors（掲示板、今回開けず）",
+    "Anderson & Li, An investigation of the relative strength index, Banks and Bank Systems 2015（RSI(14) の参考、今回開けず）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間・4時間・日足（5分・15分足は別の腕として登録する場合だけ。日足は GMO だけだと約700本で少なすぎるので Dukascopy が要る）。ウォームアップは200本。2・10/90・200・5 は出典の値。回数は S&P 日足で73回（出典、未確認）。損切りが無いので勝率は高く出やすく、1回あたりの損益・最大の含み損・持った本数を必ず一緒に出す。connors-rsi・double7 と同じ足に出る割合を出す。"
+  },
+  {
+   "id": "trend-linreg-tstat",
+   "name_ja": "線形回帰の傾きの強さ（相関）がしきい値を越えた間だけ順張り（Baltas-Kosowski 型）",
+   "family": "academic-rule",
+   "definition_final": "足: 主は1時間足、参考は日足（日足は Dukascopy の長い履歴で、出典に近い形）。窓: 主 N＝100本、参考の日足は N＝250本（約12か月）。y_j＝ln(中値の終値)、x_j＝j（j＝0..N−1、足 i までの N 本）。r＝x と y のピアソン相関（t＝r√(N−2)/√(1−r²) と同じ順番）。しきい値 |r|>0.87（正規の増分のランダムウォークで |r| の80%点。N＝50・100・200 でほぼ同じ。N＝100 の t に直すと約17.3）。足 i の確定で r>+0.87 なら買い、r<−0.87 なら売り、その間なら持たない（持っていれば閉じる）。反対側へ直接移ればドテン。約定は次の足の始値（買いは ask、売りは bid）。1回に1つの玉。建玉の大きさの調整（Yang-Zhang のボラ）は最初の測定では使わない。参考として、OLS の t>2（出典に近い形）も並べて出す。",
+   "timeframe_in_source": "日次・月次の先物（為替先物を含む複数資産）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Baltas-Kosowski（EFMA 2012 の作業論文、71先物）の要約: 時系列モメンタムの Sharpe は1.20超。関連する学位論文では、価格に直線をあてはめた信号が標本外の成績を最大にし、回転率を下げたとされる。QuantInsti の教育記事（主要7ペア、2003〜2025、ウォークフォワード）では USDJPY 0.78・EURUSD 0.54・最良の組み合わせ 0.43。今回はどれも開けず未確認。アプリの §8.24 の12か月モメンタムは Sharpe 0.18→0.20 で偶然の範囲、§8.54 の線形回帰(100) は先の48本の向きの当たりが後半45〜50%（検証者が確認）。検証者の試算で、価格の水準を時間に回帰した |t|>2 はランダムウォークでも N＝100 で87.6%の時間成り立つ（見せかけの回帰）とわかったので、しきい値を |r| の80%点に直した。",
+   "sources": [
+    "Baltas & Kosowski, Momentum strategies in futures markets and trend-following funds, EFMA 2012 WP https://efmaefm.org/0EFMAMEETINGS/EFMA%20ANNUAL%20MEETINGS/2012-Barcelona/papers/BK_MOMF_Full.pdf（今回開けず）",
+    "QuantInsti EPAT project, Trend following strategies in major currency markets（今回開けず）",
+    "docs/OPERATIONS.md §8.24（#109）・§8.54（#142）と research/bigflow-lib.ts の linreg100（確認）"
+   ],
+   "test_notes_ja": "主は1時間足。5分・15分足に移すなら別の腕として登録する。ウォームアップは100本（日足は250本）。0.87 は検証者が作り物から決めた値で出典の値ではないので、登録前に固定の種で作り直して書く。回数は出典に書かれていない。直したルールは『RCI(100) が ±87 の外にある間、その向きに順張り』に近く、アプリの RCI(10)±80（表示だけ）と近いので、RCI(100) の同じしきい値との重なりを必ず出す。先読みは無い。"
+  },
+  {
+   "id": "trend-vortex",
+   "name_ja": "Vortex インジケーターのクロス（VI+ と VI−）",
+   "family": "trend-ma",
+   "definition_final": "対象の時間足の bid の OHLC（1分足を集計。1分足が1本も無い時間帯の足は作らず、実際にある足の並びで数える）。n＝14。VM+_j＝|H_j−L_{j−1}|、VM−_j＝|L_j−H_{j−1}|、TR_j＝max(H_j−L_j, |H_j−C_{j−1}|, |L_j−C_{j−1}|)。VI+_i＝Σ_{j=i−13..i}VM+_j ÷ ΣTR_j、VI−_i＝ΣVM−_j ÷ ΣTR_j。最初の値は15本目。ΣTR＝0 の足は値なし。足 i の確定後に、VI+_{i−1}≤VI−_{i−1} かつ VI+_i>VI−_i なら買い、VI+_{i−1}≥VI−_{i−1} かつ VI+_i<VI−_i なら売り（i−1 か i の値が無ければ合図なし）。足 i+1 の始値で建てる（買いは ask、売りは bid）。持っている向きと反対の合図が出たら次の足の始値で決済し、同じ値で反対に建てる（ドテン）。損切り（主の版）: 合図の足 i の Wilder ATR(14) の2倍。買いは bid の安値が 建値−2×ATR 以下、売りは ask の高値が 建値+2×ATR 以上でその値で決済（始値がすでに越えていれば始値）。損切りと反対の合図が同じ足なら損切りが先。損切りの後は次の新しいクロスまで建てない。オーナーの持ち方の版: 損切りを外し、反対のクロスだけで決済・ドテン（CLAUDE.md の項目を必ず並べる）。",
+   "timeframe_in_source": "日足（先物42市場、1980年〜）",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "Oxford Strat（査読なしのブログ、Botes-Siepman 2010 の再現、商品・通貨・金利・株価指数の先物42市場）の要約: 勝ち取引は約29〜32%、平均の勝ち÷負けは約2.1〜2.6、最大下落は約62〜85%（資金の1%を賭け、往復 $100）、結論は『平均的なモメンタムのモデル』。表は一部しか読めておらず、今回は開けず未確認。為替での検定は無い。アプリの §8.54 では Vortex(14) を流れの読み手として測ったが、docs の表に Vortex の行は無く、順位は分からない（先の48本の向きは後半どの候補も45〜50%）。",
+   "sources": [
+    "Oxford Strat, Vortex Indicator の再現検定 https://oxfordstrat.com/?p=17449（今回開けず）",
+    "docs/OPERATIONS.md §8.54（#142、確認）と research/bigflow-lib.ts の vortex()"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる（出典は日足）。ウォームアップは15本と ATR14。n＝14 は TradingView の既定で研究コードとも同じ（出典の値は未確認）。回数は出典に書かれていない。出典どおりなら勝率約3割の低勝率型で、勝率を重く見る目的には向かない見込み（測っていない）。常に持つ型なので、クロスの足を出来事として共通の物差しにかける。DMI（アプリの表示、#102 の dmi_cross）と近いので重なりを出す。"
+  },
+  {
+   "id": "revert-connors-rsi",
+   "name_ja": "ConnorsRSI（3, 2, 100 の合成）の逆張り",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足で計算する。判断は確定足 i の終値、入るのは i+1 本目の始値（買いは Ask、売りは Bid）、手仕舞いは条件の出た足の次の始値（買いは Bid、売りは Ask）。玉は同じペア・同じ向きに1つ。時間足は1時間・4時間・日足（NY 17:00 区切り）を先に登録する。streak[i]: close[i]>close[i−1] なら、streak[i−1]>0 のとき streak[i−1]+1、それ以外は +1。close[i]<close[i−1] なら、streak[i−1]<0 のとき streak[i−1]−1、それ以外は −1。等しければ0。最初の足は0（analyze/state.ts と同じ数え方）。A＝RSI(close,3)、B＝RSI(streak,2)、C＝PercentRank: r[k]＝close[k]/close[k−1]−1 とし、r[i−100..i−1]（今の足を含まない直前100個）のうち r[i] より厳密に小さいものの個数（0〜100）。CRSI＝(A+B+C)/3（RSI はどれも Wilder 平滑。最初は単純平均、avgLoss＝0 なら100、両方0なら50）。SMA200 は直近200本の終値の単純平均。買い: CRSI<10 かつ close>SMA200、手仕舞いは j≥i+1 で最初に CRSI>80。売り（対称化）: CRSI>90 かつ close<SMA200、手仕舞いは CRSI<20。損切り・期限なし。",
+   "timeframe_in_source": "日足（米国株）。FX の検証は無い。",
+   "evidence_strength": "weak",
+   "evidence_summary_ja": "原典の Connors Research のガイドブックは読めていない。QuantConnect の個人投稿（米国株の空売り、CRSI(3,2,10) が90超、2007〜2017）は約500回・勝率73%・1回平均6.5% とされるが、短期の逆張りとしては1回の利益が大きすぎ、要約の読み違いの可能性がある。AskTraders は CRSI 0〜5 の後の5日で平均 +2.15%（標本と方法は不明）。FX の証拠は無い。今回は1つも開けず未確認。部品の RSI と連続数は §8.18 の状態の研究で粗く測り、後半で方向の手がかりは無かった。",
+   "sources": [
+    "Connors Research, ConnorsRSI Pullbacks Guidebook https://www.qmatix.com/ConnorsRSI-Pullbacks-Guidebook.pdf（未読）",
+    "ConnorsRSI slide deck（Google Slides、式の確認、今回開けず）",
+    "QuantConnect embedded backtest（ConnorsRSI short）（今回開けず）",
+    "AskTraders, Connors RSI（今回開けず）",
+    "LuxAlgo library, Connors RSI（今回開けず）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間・4時間・日足（5分・15分足は別の腕として登録する場合だけ）。ウォームアップは200本（SMA200）と PercentRank の100本。PercentRank の窓は標準の100に固定（QuantConnect の例の10は使わない）。出口の80/20は対称化した案。回数は出典で約500回（株、未確認）。損切りが無いので、損益・最大の含み損・持った本数を必ず出す。rsi2 と結果が似る見込みなので、同じ足に出る割合を出す。"
+  },
+  {
+   "id": "breakout-ttm-squeeze",
+   "name_ja": "TTM Squeeze（ボリンジャーバンドがケルトナーの内側に入った後の解放）",
+   "family": "breakout-volatility",
+   "definition_final": "15分・1時間・4時間（UTC 区切り）を別々に測る。bid の OHLC で、確定足だけ。L＝20。BB: 中心 SMA(C,20)、上下＝中心±2.0×SD(C,20)（SD は n で割る母標準偏差）。KC: 中心 SMA(C,20)、上下＝中心±1.5×SMA(TR,20)（TR は真の値幅）。on[i]＝BB下[i]>KC下[i] かつ BB上[i]<KC上[i]。解放＝on[i−1] かつ not on[i]。mom: 各足 j で y[j]＝C[j]−((max(H[j−19..j])+min(L[j−19..j]))/2+SMA(C,20)[j])/2。mom[i]＝y[i−19..i] に x＝0..19 の最小二乗の直線を当てはめた x＝19 での値。合図: 解放の足 i で mom>0 なら買い、mom<0 なら売り、0 なら見送り。入りは足 i+1 の始値（買いは ask、売りは bid）。版2（別に測る）: さらに買いは mom[i]>mom[i−1]、売りは mom[i]<mom[i−1]。損切り: 買いは L[i]−1.5×SMA(TR,20)[i]、売りは H[i]+1.5×SMA(TR,20)[i]（買いは bid の安値、売りは ask の高値で判定、越えて始まった足は始値）。出口: 買いは mom≤0、売りは mom≥0 となった最初の確定足の次の足の始値。損切りと出口が同じ足なら損切りが先。1ペア1建てで、持っている間の解放は使わない。",
+   "timeframe_in_source": "5分〜日足（ベンダーは日足を勧める。統一した検定は無い）",
+   "evidence_strength": "weak-none",
+   "evidence_summary_ja": "販売元・個人の解説とコミュニティのスクリプトだけで、成績の数字は無い。The Right Trader の要約は『信頼できる公表された的中率は無い』、方向を当てるのは苦手で合図が遅れがちと書く。Quantified Strategies のボリンジャーのスクイーズは『どの資産でも特に良くない（生活必需品を除く）』。査読つきの検定も為替の検定も無い。今回は1つも開けず未確認。設定（20・2.0・1.5・回帰20本）は LazyBear の既定として記憶にある値。",
+   "sources": [
+    "TTM Squeeze (The Right Trader)（今回開けず）",
+    "Quantified Strategies, Bollinger Band Squeeze Strategy Backtest（今回開けず）",
+    "NA-GPT TTM Squeeze Strategy（TradingView、今回開けず）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は定義の外）。ウォームアップは39本。パラメータは一般的な既定値で固定し、ケルトナーの中心を指数平均にすると別のシステムになるので変えない。回数は出典に書かれていない。NR7・ORB と同じ『ボラの拡大に乗る』系なので、結果が似る見込みが高く、重なりを出す。先読みは無い。"
+  },
+  {
+   "id": "trend-kama",
+   "name_ja": "KAMA（Kaufman の適応型移動平均）の価格クロスと傾き",
+   "family": "trend-ma",
+   "definition_final": "対象の時間足の bid の OHLC（1分足を集計）、計算は bid の終値 C。n＝10、fast＝2、slow＝30。ER_i＝|C_i−C_{i−10}|÷Σ_{j=i−9..i}|C_j−C_{j−1}|（分母0なら ER＝0）。SC_i＝(ER_i×(2/3−2/31)+2/31)²。KAMA_10＝C_10、i≥11 で KAMA_i＝KAMA_{i−1}+SC_i×(C_i−KAMA_{i−1})。計算は決めたデータの最初の足から途切れずに続け、最初の1,000本は合図を出さない（始まりの値の残りは最悪でも約1.5%）。版A（価格のクロス＋傾き）: C_{i−1}≤KAMA_{i−1} かつ C_i>KAMA_i かつ KAMA_i>KAMA_{i−1} なら買い、逆なら売り。足 i+1 の始値で建てる（買いは ask、売りは bid）。手仕舞い: 買いを持っている時に C_{i−1}≥KAMA_{i−1} かつ C_i<KAMA_i になったら傾きを問わず次の足の始値で決済し、その足が売りの合図（傾きも満たす）でもあれば同じ値で売りを建てる。版B（傾きの転換だけ）: d_i＝KAMA_i−KAMA_{i−1}、d_i>0 かつ d_{i−1}≤0 で買い、d_i<0 かつ d_{i−1}≥0 で売り、反対の合図でドテン。Kaufman のフィルター幅は数値を確かめられなかったので入れない。損切り（主、A・B 共通）: 合図の足の Wilder ATR(14) の2倍（買いは bid、売りは ask で判定）、手仕舞いと同じ足なら損切りが先、損切りの後は次の新しい合図まで建てない。オーナーの持ち方の版は損切りを外す（CLAUDE.md の項目を必ず並べる）。",
+   "timeframe_in_source": "日足・為替（掲示板は EUR/USD の実取引）。論文は株・債券・為替の日次。",
+   "evidence_strength": "weak-none",
+   "evidence_summary_ja": "KAMA の売買の規則そのものを検定した出典は無い。Pomorski-Gorse（arXiv 2208.11574）は KAMA を Markov-switching 回帰と組み合わせて市場を4つの状態に分けたもので、2つの状態で売買すると比較対象より良く、為替はまちまちと要約される（売買の規則の検定ではない）。ProRealCode の掲示板は EUR/USD で良かったがその後効かなくなったという個人の体験談。今回は2つとも開けず未確認。アプリには KAMA が無い（移動平均はどれも速さが決まっている）。",
+   "sources": [
+    "Pomorski & Gorse, Improving on the Markov-Switching Regression Model by the Use of an Adaptive Moving Average, arXiv 2208.11574（今回開けず）",
+    "ProRealCode フォーラム, Kama & Sma - Sistema su valute con settaggio standard（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは1,000本（合図を出さない）。10・2・30 は Kaufman の広く知られた既定値（出典では未確認）。回数は出典に書かれていない。フィルター幅を入れないので、小さな向きの変化でも合図が出ることを承知で測る。先読みの罠: 始まりの値（種）と始まりの時刻を固定すること（Q-Trend の #148・#155-2 と同じ問題）。"
+  },
+  {
+   "id": "candle-pinbar",
+   "name_ja": "ピンバー・ハンマー（直近10本の端での長いヒゲ）",
+   "family": "candlestick",
+   "definition_final": "仲値（(bid+ask)/2）の OHLC を1分足から集計した確定足で判定し、足 i 以前だけを使う。A＝ATR14[i−1]（ウィルダー ATR(14)、前の足までの値）。R＝H[i]−L[i]。各系列の最初の60本は判定しない。入口は足 i+1 の始値（BUY は ask、SELL は bid）。本線の出口は足 i+5 の終値（BUY は bid、SELL は ask）、感度は H＝1・3・10。勝ちはスプレッド込みの損益>0、勝率と1回あたりの平均損益（pips と ATR 単位）を一緒に書く。同じ向きの保有中の合図は数えない。30回未満の行は勝率を書かない。BUY（強気ピンバー・ハンマー）: (1) R≥0.5×A (2) min(O,C)−L≥0.6×R (3) H−max(O,C)≤0.2×R (4) L[i]≤min(L[i−10..i−1])。SELL（シューティングスター）は鏡像（上ヒゲ≥0.6R、下ヒゲ≤0.2R、H[i]≥max(H[i−10..i−1])）。別の出口（本線とは別に書く）: BUY は損切り bid≤L[i]、利確 bid≥入口+2×(入口−L[i])。SELL は損切り ask≥H[i]、利確 ask≤入口−2×(H[i]−入口)。足 i+1 から1分足の bid/ask で順に追い、同じ1分足で両方なら負け、48本で決まらなければ足 i+48 の終値で閉じる。入口が損切りの外（BUY で入口≤L[i]）なら数えない。",
+   "timeframe_in_source": "日足（ハンマーの検証ブログは株）。EUR/USD の学生研究は時間足未確認。",
+   "evidence_strength": "weak-none",
+   "evidence_summary_ja": "査読つきの証拠は無い。販売側のブログ（Liberated Stock Trader）が株で2,219回・正答52.1%・1回 0.18%（期間の分割なし、費用不明、上昇相場の影響を除いていない）、ペトラ大学の学生研究が EUR/USD で良かったとだけ要約、Marshall-Young-Rose の要約は強気の1日のシグナルは正の異常収益を確実には予測しないとする。今回は1つも開けず未確認。アプリの近い親戚 level_reject は §8.16 で15分足 BUY 41% [38-44] n＝1004・SELL 41% [38-44] n＝1138（損益分岐40%）、4時間足 BUY 53% n＝146 だが前半57%→後半49%（検証者が docs で確認）。",
+   "sources": [
+    "Liberated Stock Trader, I Tested 2,219 Hammer Candle Trades（販売側のブログ、今回開けず）",
+    "Petra Christian University, Combination of Candlestick Pattern and Stochastic to Detect Trend Reversal in Forex Market https://repository.petra.ac.id/18706（今回開けず）",
+    "CXO Advisory による Marshall, Young & Rose の要約（今回開けず）",
+    "docs/OPERATIONS.md §8.16 と supabase/functions/analyze/signals.ts の level_reject（確認）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは60本。0.5・0.6・0.2・10本・5本は仮の値。回数は出典で株の2,219回（未確認）。アプリの level_reject と同じ足に出た件数を別に数え、ピンバーの形が level_reject に何を足すかを分ける。sr-round-number の腕A、smc-wyckoff-spring とも重なる。"
+  },
+  {
+   "id": "stat-variance-ratio",
+   "name_ja": "分散比（Variance Ratio）で相場の型を判定し、順張りと逆張りを切り替える",
+   "family": "statistical-ml",
+   "definition_final": "5分足の仲値の終値 C[t]。前の足から60分を超えて空いた所（週末・休日）をまたぐ1本差分は捨て、残った差分 a_k＝ln C[k]−ln C[k−1] をつないだ列を使う。足 i の確定時に、直近 N＝1008 個の a_k で、Z_0＝0、Z_k＝Σa_j、μ＝Z_N/N、σa²＝Σ(a_k−μ)²/(N−1)、σc²＝Σ_{k=q}^{N}(Z_k−Z_{k−q}−qμ)²/m、m＝q(N−q+1)(1−q/N)、q＝12。VR＝σc²/σa²。不均一分散に頑健な z: δ_j＝N×Σ_{k=j+1}^{N}(a_k−μ)²(a_{k−j}−μ)²÷[Σ(a_k−μ)²]²、θ＝Σ_{j=1}^{q−1}[2(q−j)/q]²×δ_j、z*＝√N×(VR−1)/√θ（Lo-MacKinlay 1988 の記憶による書き方なので、実装前に原論文か Python arch の VarianceRatio と照らして確かめる）。しきい値は、測る前に固定の種で作る iid 正規のランダムウォーク（N＝1008、5,000窓以上）の z* の2.5%点と97.5%点（検証者の試算 −1.84・+2.10）。D＝Z_N−Z_{N−12}。z*≥上のしきい値なら『続く型』で D>0 なら買い・D<0 なら売り。z*≤下のしきい値なら『戻る型』で D>0 なら売り・D<0 なら買い。それ以外か D＝0 なら持たない。毎足この目標を出し、今の持ち方と違えば次の足の始値で閉じて開き直す（買いは Ask で入り Bid で出る、売りは逆）。UTC 20:00 以後に始まる最初の足で全部閉じ、UTC 00:00 の足までは開かない。参考に、教科書どおりの ±1.96 の版も同じ数値で出す。",
+   "timeframe_in_source": "株式の週次・日次（Lo-MacKinlay）、為替は日次（Liu-He）。どちらも記憶の書誌で未確認。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "売買ルールとしての成績の出典は確かめられていない。出典は検定の論文（Lo-MacKinlay 1988、Liu-He 1991、どちらも記憶の書誌で未読）で、売買の成績を測ったものではない。検証者が作り物で確かめたところ、±1.96 のままだと何も無い値動きでも『続く型』（3.4%）が『戻る型』（1.6%）の約2倍出る偏りがあったので、しきい値を作り物の分位点に直した。アプリの §8.18（後半 AUC 0.49〜0.51）は分散比を含まない。",
+   "sources": [
+    "Lo & MacKinlay, Stock Market Prices Do Not Follow Random Walks, RFS 1(1) 41-66, 1988（記憶の書誌、未読）",
+    "Liu & He, A variance-ratio test of random walks in foreign exchange rates, JF 46(2) 773-785, 1991（記憶の書誌、未読）",
+    "docs/OPERATIONS.md §8.18（確認）"
+   ],
+   "test_notes_ja": "5分足で定義どおり。ウォームアップは1,008本の差分（約3.5日）。しきい値は、登録前に固定の種で作り直して書く。回数は作りの上で決まり、何も無い値動きなら持つ時間は両側合わせて約5%。先読みの罠: 週末の空きの差分を捨てること、i までの差分だけを使うこと。仲値を使うので Bid/Ask の跳ね返りは小さくなるが、残る分は確かめていない。stat-hurst と考えが同じなので、1回の実験の2つの腕として測り Holm をかける。"
+  },
+  {
+   "id": "stat-hurst",
+   "name_ja": "ハースト指数（R/S）で相場の型を判定し、順張りと逆張りを切り替える",
+   "family": "statistical-ml",
+   "definition_final": "5分足の仲値の終値 C[t]。r[t]＝ln(C[t]/C[t−1])、前の足から60分を超えて空いた所をまたぐ r は捨てる。足 i の確定時に、使える r の直近 W＝256 個を取る。n∈{8,16,32,64,128,256} ごとに、古い方から 256/n 個の重ならない区間に分け、各区間で平均 m を引いた累積和 Y_k＝Σ_{j≤k}(r_j−m)（k＝1..n）を作り、R＝maxY−minY、S＝√(Σ(r_j−m)²/n)（n で割る）。S＝0 の区間は除き、R/S を区間で平均する。ln(R/S の平均) を ln n に最小二乗で当てた傾きを H とする。しきい値は、測る前に固定の種で作る iid 正規の作り物（同じ W と n、20,000窓以上）の H の2.5%点 H_lo と97.5%点 H_hi（検証者の試算 0.441・0.685）。D＝ln(C[i]/C[i−12])。H≥H_hi なら『続く型』で D>0 なら買い・D<0 なら売り。H≤H_lo なら『戻る型』で D>0 なら売り・D<0 なら買い。それ以外か D＝0 なら持たない。約定・持ち方・時間帯は分散比と同じ（毎足目標を出し、違えば次の足の始値で閉じて開き直す。UTC 20:00 以後の最初の足で全部閉じ、UTC 00:00 まで開かない）。",
+   "timeframe_in_source": "株価指数などの日次（Qian & Rasheed、記憶の書誌で未確認）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "FX の日中足で、標本外・コスト込みで測った出典は確かめられていない。唯一の出典（Qian & Rasheed 2004、会議論文）は記憶の書誌で、今回も開けなかった。検証者の作り物の計算では、R/S の H は小さい標本で0.5より高めに出て（中央値0.564）、案のしきい値 0.55/0.45 のままだと何も無い値動きでも約6割の時間が順張りになるので、作り物の分位点に直した。",
+   "sources": [
+    "Qian & Rasheed, Hurst exponent and financial market predictability, IASTED Conference on Financial Engineering and Applications 2004（記憶の書誌、未読）",
+    "検証者の作り物の計算 scratchpad/stat318/null_check.py（試算、実データではない）"
+   ],
+   "test_notes_ja": "5分足で定義どおり。ウォームアップは256本の収益率。しきい値は登録前に固定の種で作り直して書く。回数は作りの上で決まり、何も無い値動きなら両側合わせて約5%。先読みは無い（i までの r だけ、約定は次の足）。stat-variance-ratio と1回の実験の2つの腕として測り、Holm をかける（同じ当たり外れを二重に数えないため）。"
+  },
+  {
+   "id": "japan-point-figure",
+   "name_ja": "ポイント・アンド・フィギュア（3枠転換）の二重天井・二重底の抜け",
+   "family": "japanese-chart",
+   "definition_final": "仲値の1時間足の終値 C[i]（本線）。4時間足でも同じ規則で測る。ボックス X はペアごとに1つ決めて全期間で固定する: 測り始める日の前の、UTC の平日20日分の仲値1時間足の真の値幅（TR）の平均。比べる版として、測り始める前の最後の確定足の1時間足 ATR(14) も、事前に決めた場合だけ使う。転換 r＝3。上の列では floor(C/X)、下の列では ceil(C/X) を使う。始まり: 基準 R＝最初の終値。floor(C/X)−floor(R/X)≥3 なら最初の列は X 列（頂点 T＝floor(C/X)）、ceil(R/X)−ceil(C/X)≥3 なら O 列（底 Bt＝ceil(C/X)）。X 列のとき floor(C/X)>T なら T を更新、そうでなく C≤(T−3)×X なら新しい O 列（Bt＝ceil(C/X)）。O 列のとき ceil(C/X)<Bt なら Bt を更新、そうでなく C≥(Bt+3)×X なら新しい X 列（T＝floor(C/X)）。終値1つで起きるのは延長か転換のどちらか一方だけ。BUY（二重天井の上抜け）: 今の列が X で、前に X 列が1つ以上あり、この列の T が直前の X 列の最後の頂点を初めて上回った足（列ができた足も含む、1列1回）。SELL（二重底の下抜け）は鏡像。次の足の最初の1分足の始値で入る（買いは Ask、売りは Bid）。反対の合図が出たら次の足の始値で決済し、逆に入る（ドテン）。",
+   "timeframe_in_source": "S&P500 先物（Anderson-Faff、記憶で未確認）。FX での時間足の指定は無い。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "FX の証拠は無い。Anderson-Faff（IRFA 2008、S&P500 先物）は記憶の書誌で、今回も開けていない。今回開けた mplfinance のノートは描き方の説明だけで成績は無く、既定の転換は3ではなく1、ボックスの既定は『atr』（最後の14本）と確かめた。",
+   "sources": [
+    "Anderson & Faff, Point and figure charting: A computational methodology and trading rule performance in the S&P 500 futures market, IRFA 17(1) 198-217, 2008（記憶の書誌、未読）",
+    "mplfinance examples/price-movement_plots.ipynb（今回開いて確認、成績なし）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間足・4時間足（5分・15分足に移すなら X の決め方を別に登録する）。ウォームアップは測り始める前の20日。X と r が成績を大きく動かすので、1つに決めて固定する。回数は出典に書かれていない。先読みの罠: mplfinance の既定（ボックスに最後の14本の ATR、転換1）をそのまま使うこと、上下で floor/ceil をそろえないと売りに偏ること。常に持つ型なので、合図の足を出来事として共通の物差しにかける。チャネル抜けとの重なりが大きい見込み。"
+  },
+  {
+   "id": "breakout-dual-thrust",
+   "name_ja": "Dual Thrust（日の始値 ± 0.5×直近の値幅を抜けたら売買しドテン。ウィリアムズの値幅ブレイクアウトを含む）",
+   "family": "breakout-volatility",
+   "definition_final": "本線（日の始値版）: 取引日は NY 17:00（夏時間を反映）区切り。日足は1分足の中値から作る。前の確定した5取引日 d−5..d−1（日 d は含めない）で HH＝高値の最大、LL＝安値の最小、HC＝終値の最大、LC＝終値の最小、Range＝max(HH−LC, HC−LL)。O_d＝日 d の最初の1分足の始値（中値）。上側＝O_d+0.5×Range、下側＝O_d−0.5×Range。5分足の確定時点で中値の終値を見て、終値>上側で持ち高が買いでなければ次の5分足の始値（ask）で買い（売り持ちはドテン）、終値<下側で持ち高が売りでなければ次の始値（bid）で売り（買い持ちはドテン）。持ち高は −1・0・+1 のどれか。反転の回数に上限なし。損切り・利確なし。NY 17:00 の5分前に始まる5分足の終値で全部決済。15分足でも同じ形で別に測る。感度1（ロンドン版、je-suis-tm）: その日の 08:00〜17:00 UTC の窓の1分足（中値）だけで窓の OHLC を作り、Range は前の5営業日の窓（当日の窓は含めない）から同じ式で作る。P0＝08:00 UTC の始値、上側＝P0+0.5×Range、下側＝P0−0.5×Range。判定と約定は本線と同じで窓の中だけ、17:00 UTC の始値で全部決済。感度2（ウィリアムズ型）: Range＝前日の高値−安値、上下＝O_d±0.5×Range（k＝0.5 は仮置き）。",
+   "timeframe_in_source": "日中足（株の例）。je-suis-tm は分足データを日中の窓にまとめる（GBP/USD）。ウィリアムズ版は5分足で売買するとの紹介。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "成績の数字はどの出典にも無い（教材、販売元の紹介、個人の公開コード）。今回開いた je-suis-tm の README とコードは、式（範囲＝max(HH−LC, HC−LL)、param＝0.5、損切りなし、日の終わりに全決済）を確かめたが、成績は計算していない。さらに、元のコードは rolling(5) の範囲にその日の高値・安値・終値を含めて 03:00 に使っており、当日の値を使う先読みがあると検証者が見つけた（定義では d−5..d−1 だけに直した）。QuantConnect の式と K1＝K2＝0.5、ウィリアムズの k<1 は今回は未確認。",
+   "sources": [
+    "je-suis-tm/quant-trading の README と Dual Thrust backtest.py https://github.com/je-suis-tm/quant-trading（今回開いて確認、成績なし、先読みあり）",
+    "QuantConnect tutorial, Dual Thrust Trading Algorithm（今回開けず）",
+    "WH SelfInvest, Larry Williams Volatility Break-out（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足で定義どおり。ウォームアップは5取引日。K＝0.5 は出典の値。回数は出典に書かれていない（閾値が『5日の値幅の半分』と遠く、少ない可能性があるが未測定）。先読みの罠: 元のコードの当日を含む rolling をそのまま移すこと。常に持つ型なので、ドテンの足を出来事として共通の物差しにかける。ORB・ドンチャン・noise area と取引が重なりやすいので、重なりを数える。"
+  },
+  {
+   "id": "sr-camarilla",
+   "name_ja": "カマリラ・ピボット（H3/L3 で逆張り、H4/L4 を抜けたら順張り）",
+   "family": "support-resistance",
+   "definition_final": "日の区切りと前日の値はクラシック・ピボットと同じ（NY 17:00 区切り、夏時間を反映、bid の1分足から PH・PL・PC、1分足が720本未満の前日は飛ばす）。r＝PH−PL（r＝0 なら合図なし）。H3＝PC+1.1×r/4、L3＝PC−1.1×r/4、H4＝PC+1.1×r/2、L4＝PC−1.1×r/2。日 D の間は変えない。bid の15分足で、足 i と i−1 がどちらも日 D に入るときだけ判断する。方式A（H3・L3 で逆張り）: SELL は H[i]≥H3 かつ C[i]<H3 かつ H[i]<H4。BUY は L[i]≤L3 かつ C[i]>L3 かつ L[i]>L4。方式B（H4・L4 を抜けたら順張り）: BUY は C[i]>H4 かつ C[i−1]≤H4、SELL は C[i]<L4 かつ C[i−1]≥L4。（日・水準・方式）ごとに最初の1回だけ。約定は足 i+1 の始値（BUY は ask、SELL は bid）、足 i が日の最後なら合図なし。本線の出口は足 i+8 の終値（i+1..i+8 が途切れずに並ばなければ合図なし）。方式Aの別の出口（感度）: 利確 PC、損切り H4（SELL）・L4（BUY）、同じ15分足で両方なら1分足で順番、決まらなければ損切り、届かなければ日 D の最後の足の終値。方式AとBは別々に測り、Holm（2つ）。",
+   "timeframe_in_source": "検証結果なし（日足から水準を作り、日中足で使う実務の方法）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "成績の検証は無い。査読つきの検証も、勝率を数えた検証も見つかっていない。NexusFi の数字（H3 を越えた日 63.15%・L3 60.84%・H4 38.98%・L4 39.41%）は水準を越えた日の割合で勝率ではなく、データが FX か、期間がいつかも分からない。今回は開けず未確認。係数 1.1/4・1.1/2 も出典で確かめていない。",
+   "sources": [
+    "NexusFi, Camarilla Pivot Points https://nexusfi.com/a/indicators/camarilla-pivot-points（今回開けず）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は定義の外）。ウォームアップは前日1日分。係数は標準の式として固定、保有8本は仮の値。回数は出典に書かれていない。クラシック・ピボットと同じ決まりにそろえてあるので、同じ枠で並べて測る。先読みの罠は sr-classic-pivot と同じ（当日の値を混ぜない、その日の最初の足では合図を出さない）。"
+  },
+  {
+   "id": "japan-renko",
+   "name_ja": "練行足（Renko、ATR の煉瓦）の色の反転",
+   "family": "japanese-chart",
+   "definition_final": "仲値の1時間足の終値 C[i]（本線）。4時間足でも同じ規則で測る。煉瓦の大きさ B_d: UTC の日 d ごとに、同じ時間足の仲値の足で計算した Wilder ATR(14)（アプリの pineAtr と同じ作り）の、日 d の 00:00 UTC より前の最後の確定足の値。日の途中では変えず、月曜は金曜の最後の値を使う。状態は最後の煉瓦の終わりの値 c と向き d（+1 か −1）。始まり: 基準 A＝ATR が初めて出た後の最初の足の終値。煉瓦が無い間、C−A≥B なら上の煉瓦を k＝floor((C−A)/B) 個（c＝A+k×B、d＝+1）、A−C≥B なら下の煉瓦を積む。最初の煉瓦はサインにしない。更新: d＝+1 のとき、C≥c+B なら floor((C−c)/B) 個の上の煉瓦（c を更新）。そうでなく C≤c−2B なら反転し、最初の下の煉瓦の終わりを c−2B にし、さらに C≤c'−B の間下の煉瓦を足して d＝−1。d＝−1 は上下を逆にする（継続は C≤c−B、反転は C≥c+2B）。等号は成立に含める。BUY: 足 i で反転が起き、d が −1 から +1 になった。SELL はその逆。次の足の最初の1分足の始値で入り（買いは Ask、売りは Bid）、反対のサインが出たら次の足の始値で決済して逆に入る（ドテン）。",
+   "timeframe_in_source": "不明（読めた出典に時間足の指定は無い）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "作り方の定義だけで、成績の証拠は無い。今回開けた mplfinance のノートで、煉瓦の大きさの既定が『atr』（描いたデータの最後の14本の ATR）で、『total』は全期間の ATR を使うと確かめた。どちらも過去を測るときは先の足を使うことになるので、前日までの値に固定した。FX の練行足の売買を標本外・コスト込みで検証した文献は確かめられていない。",
+   "sources": [
+    "mplfinance examples/price-movement_plots.ipynb https://raw.githubusercontent.com/matplotlib/mplfinance/master/examples/price-movement_plots.ipynb（今回開いて確認、成績なし）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間足・4時間足（5分・15分足に移すなら別の腕として登録）。ウォームアップは ATR の14本と前日1日。B を固定 pips にする版は比べる場合だけ。回数は出典に書かれていない。先読みの罠: mplfinance の既定 B をそのまま使うこと、日の途中で B を変えること。時間の無い足なので、サインは確定足 i の時点に戻して約定させる。UT Bot・SuperTrend とかなり似た動きになる可能性があるので重なりを出す。"
+  },
+  {
+   "id": "japan-three-line-break",
+   "name_ja": "新値足（3本新値・Three-Line Break）の反転",
+   "family": "japanese-chart",
+   "definition_final": "仲値の1時間足と4時間足の終値 C[i]（本線）。日足は Dukascopy の長い履歴で参考に測る。各線は（色、lo、hi）。始まり: 基準 R＝最初の終値。終値が R と違う最初の足で最初の線を引く（C>R なら白で lo＝R・hi＝C、C<R なら黒で hi＝R・lo＝C）。更新: 足 i で最後の線を Lt、直近 m＝min(3, 線の本数) 本を見る。Lt が白のとき、C>Lt.hi なら白線を足す（lo＝Lt.hi、hi＝C、継続）。そうでなく C<（直近 m 本の lo の最小）なら黒線を足す（hi＝Lt.lo、lo＝C、反転）。どちらでもなければ何もしない。Lt が黒のときは上下を逆にする（継続は C<Lt.lo で hi＝Lt.lo、反転は C>直近 m 本の hi の最大で lo＝Lt.hi）。不等号は厳密。終値1つで引ける線は1本だけ。BUY: 足 i で白の反転線が足された（直前の最後の線が黒）。SELL: 黒の反転線が足された。次の足の最初の1分足の始値で入り（買いは Ask、売りは Bid）、反対のサインで次の足の始値で決済して逆に入る（ドテン）。反転線を直前の線の反対の端から引くこの作りと、候補の元の作り（直前の線の終値から引き重なる）のどちらかを、測る前に1つに決める。",
+   "timeframe_in_source": "不明（日本の足種として日足が中心。読めた範囲に指定は無い）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "FX で標本外・コスト込みに検証した文献は見つかっていない。Nison（1994）は記憶の書誌で未読。今回開けた mplfinance のノートは、足の種類として『Line Break』の名前を挙げているだけで、対応していない。",
+   "sources": [
+    "Nison, Beyond Candlesticks: New Japanese Charting Techniques Revealed, Wiley 1994（記憶の書誌、未読）",
+    "mplfinance examples/price-movement_plots.ipynb（今回開いて確認、名前だけ）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間足・4時間足（5分・15分足に移すなら別の腕）。ウォームアップは数本（線が3本そろうまで）。n＝3 で固定。回数は出典に書かれていない。反転の条件は価格のブレイクアウトなので、ダウ理論（§8.43・§8.90 でランダムと同じ）と似た動きになる見込みで、重なりを出す。常に持つ型なので反転の足を出来事として共通の物差しにかける。"
+  },
+  {
+   "id": "japan-kagi",
+   "name_ja": "カギ足の肩・腰の抜け（太線と細線の切り替え）",
+   "family": "japanese-chart",
+   "definition_final": "仲値の1時間足の終値 C[i]（本線）。4時間足でも同じ規則で測る。反転幅 R_d＝3×（同じ時間足の仲値の足で計算した Wilder ATR(14) の、日 d の 00:00 UTC より前の最後の確定足の値）。日の途中では変えず、月曜は金曜の値を使う。状態は向き（上・下・未定）、今の線の極値 E、最後の肩 S、最後の腰 W、太さ（未定・太・細）。始まり: 基準 A＝最初の終値。C−A≥R なら上・E＝C、A−C≥R なら下・E＝C。毎本の手順1（向き）: 上のとき C>E なら E＝C、そうでなく C≤E−R なら S＝E（新しい肩）、向き＝下、E＝C。下のとき C<E なら E＝C、そうでなく C≥E+R なら W＝E（新しい腰）、向き＝上、E＝C。手順2（太さ。手順1の後）: 太でなく、向きが上で S があり C>S なら太。細でなく、向きが下で W があり C<W なら細。BUY: 足 i で細から太に変わった。SELL: 太から細に変わった。未定から最初に太さが決まったときはサインにしない。次の足の最初の1分足の始値で入り（買いは Ask、売りは Bid）、反対のサインで次の足の始値で決済して逆に入る（ドテン）。",
+   "timeframe_in_source": "不明（読めた出典に指定なし）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "FX でカギ足を検証した文献は見つかっていない。Nison（1994）は記憶の書誌で未読。今回開けた mplfinance のノートでは、カギ足は一覧に名前があるだけで対応していない。",
+   "sources": [
+    "Nison, Beyond Candlesticks, Wiley 1994（記憶の書誌、未読）",
+    "mplfinance examples/price-movement_plots.ipynb（今回開いて確認、名前だけ）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間足・4時間足（日足の ATR×3 を1時間足に使うと線がほとんどできないので、同じ時間足の ATR にした。検証者の選び方で出典には無い）。ウォームアップは ATR の14本と前日1日。回数は出典に書かれていない。肩・腰を抜ける動きは直近のスイング高値・安値の抜けと同じなので、ダウ理論（§8.43・§8.90 でランダムと同じ）に近い結果になる見込み。重なりが大きければ測る価値は薄いので、優先度は低い。"
+  },
+  {
+   "id": "candle-three-soldiers",
+   "name_ja": "赤三兵・黒三羽烏（酒田五法の三兵、反転版）",
+   "family": "candlestick",
+   "definition_final": "仲値（(bid+ask)/2）の OHLC を1分足から集計した確定足で判定し、足 i 以前だけを使う。A＝ATR14[i−3]（ウィルダー ATR(14)、形の3本の前の足までの値）。body[k]＝|C[k]−O[k]|。各系列の最初の60本は判定しない。入口は足 i+1 の始値（BUY は ask、SELL は bid）、出口は足 i+H の終値（BUY は bid、SELL は ask）。H＝5 が本線、H＝1・3・10・12 は感度。勝ちはスプレッド込みの損益>0、勝率と1回あたりの平均損益（pips と ATR 単位）を一緒に書く。同じ向きの保有中の合図は数えない（4本以上続いても1回）。30回未満の行は勝率を書かない。BUY（赤三兵）: ① C[k]>O[k]（k＝i−2, i−1, i）② C[i−2]<C[i−1]<C[i] ③ O[i−2]≤O[i−1]≤C[i−2]+0.1×body[i−2] かつ O[i−1]≤O[i]≤C[i−1]+0.1×body[i−1] ④ body[k]≥0.5×A（3本とも）⑤ H[k]−C[k]≤0.3×body[k]（3本とも）⑥ C[i−3]<C[i−13]。SELL（黒三羽烏）は鏡像（①陰線、②下げ、③ O[i−2]≥O[i−1]≥C[i−2]−0.1×body[i−2] など、⑤ C[k]−L[k]≤0.3×body[k]、⑥ C[i−3]>C[i−13]）。続伸版（⑥を外したもの）は本線にせず、測るなら別の候補として数える。",
+   "timeframe_in_source": "日足の株式（記憶で未確認）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "確かめられた証拠は1つも無い。出典は記憶による書誌2つ（Marshall-Young-Rose 2006、Fock-Klein-Zwergel 2005）だけで、三兵がその研究に含まれるかも確かめていない。Caginalp-Laurent 1998 が三兵も調べたという記憶もあるが未確認なので数えない。アプリにも過去の測定にも無い。",
+   "sources": [
+    "Marshall, Young & Rose, Candlestick technical trading strategies, JBF 30(8) 2006（記憶の書誌）",
+    "Fock, Klein & Zwergel, Performance of Candlestick Analysis on Intraday Futures Data, Journal of Derivatives 13(1) 2005（記憶の書誌）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは60本。0.5・0.3・0.1・10本は仮の値。回数は出典に書かれておらず、3本そろう回数は少ない見込みで足の種類によって大きく変わる。30回未満の行は勝率を書かない。先読みは無い（足 i−13〜i だけ）。"
+  },
+  {
+   "id": "revert-fisher",
+   "name_ja": "Ehlers の Fisher Transform（Fisher と1本前の Fisher の交差）",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "確定した足だけを使い、指標は Bid の足で計算する。売買は BUY を Ask、SELL を Bid で約定させる。n＝9。hl2＝(High+Low)/2。HH＝hl2[i−8..i] の最大、LL＝hl2[i−8..i] の最小（高値・安値ではなく hl2 の高安）。HH＝LL なら r＝0、それ以外は r＝(hl2−LL)/(HH−LL)−0.5。v[i]＝0.66×r[i]+0.67×v[i−1]、そのあと v>0.99 なら 0.999、v<−0.99 なら −0.999 に置き換える（置き換えた値を次の足で使う）。fish[i]＝0.5×ln((1+v)/(1−v))+0.5×fish[i−1]。9本目より前は v＝0、fish＝0。系列の始めから50本は合図を出さない。週末などの空白は無視して足の並びのまま続ける。BUY: fish[i−1]≤fish[i−2] かつ fish[i]>fish[i−1]。SELL: fish[i−1]≥fish[i−2] かつ fish[i]<fish[i−1]。等しいときは合図なし。入るのは足 i の終値（BUY は Ask の終値、SELL は Bid の終値）。出口は共通の出口に合わせるか、Fisher 自身の出口で測るなら逆向きの合図の足の終値でドテンと先に固定する。係数 0.66・0.67・0.5 と 0.999 の置き換えは記憶にある公開コードの値で、出典では確かめていない。",
+   "timeframe_in_source": "原典は2002年11月の Stocks & Commodities の記事（先物・株を想定）。FX は掲示板の投稿1件だけ。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "出典は計算の説明（eSignal の掲示板、Length 9）と、futures.io の会員投稿（FX クロスで短い期間の方が良さそうだった、勝率の数字なし、標本が小さい）だけで、査読も標本外もコスト込みの検証も無い。今回はどちらも開けず未確認。アプリにも過去の測定にも無い。",
+   "sources": [
+    "eSignal forum, 2002 Nov Fisher EFS（Ehlers, Using The Fisher Transform, TASC 2002年11月 を参照）（今回開けず）",
+    "NexusFi / futures.io の会員投稿（Fisher Transform on FX crosses）（今回開けず）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは50本。n＝9 で固定し、5・14 などへの探索はしない。回数は出典に書かれていないが、作りの上で平らにした線の向きが変わるたびに出るので、1分足・5分足ではとても多くなる見込み。極端な水準でだけ取る案は、測る前に1つだけ登録する場合に限る。注意: この定義は足 i の終値で入る形なので、他の候補と同じく次の足の始値で入る形にそろえるかを、測る前に決める。Stochastic と同じく高安の中の位置を見るので、重なりを確かめる。"
+  },
+  {
+   "id": "revert-demarker",
+   "name_ja": "DeMarker が 0.3・0.7 から戻ったら逆張り",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "確定した足だけを使い、指標は Bid の足の高値・安値で計算する。売買は BUY を Ask、SELL を Bid で約定させる。n＝14。DeMax[i]＝max(High[i]−High[i−1], 0)、DeMin[i]＝max(Low[i−1]−Low[i], 0)。S1＝DeMax[i−13..i] の合計、S2＝DeMin[i−13..i] の合計（SMA で割っても比は同じ）。S1+S2＝0 なら DeM なし、それ以外は DeM＝S1/(S1+S2)。DeM[i−1] と DeM[i] の両方があるときだけ判定する。BUY: DeM[i−1]<0.3 かつ DeM[i]≥0.3。SELL: DeM[i−1]>0.7 かつ DeM[i]≤0.7。入るのは足 i の終値（BUY は Ask、SELL は Bid）。出口は共通の出口に合わせるか、DeMarker 自身の出口で測るなら、入った次の足以降で BUY は DeM≥0.5、SELL は DeM≤0.5 になった最初の足の終値で決済と先に固定する。DeMax・DeMin の式は記憶どおりで出典の本文では確かめていない。",
+   "timeframe_in_source": "FX の解説では1時間足以上でないと信頼しにくいとある（意見）。検証の数字は無い。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "教育ページの解説（Capital.com の 0.3/0.7 の使い方、ForexTester の『FX では1時間足が最低』という意見）と、題名だけバックテストの有料記事だけで、検証の数字は1つも見つかっていない。今回はどれも開けず未確認。アプリにも過去の測定にも無い。",
+   "sources": [
+    "Capital.com, DeMarker indicator（今回開けず）",
+    "ForexTester blog, DeMarker（今回開けず）",
+    "Quantified Strategies, DEMARKER TRADING STRATEGY (BACKTEST)（今回開けず、数字未見）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる（解説者は1時間足以上を勧めるが、測った数字ではない）。ウォームアップは15本。n＝14、0.3・0.7 は固定し、動かして探さない。回数は出典に書かれていない。この定義も足 i の終値で入る形なので、次の足の始値にそろえるかを測る前に決める。合図の形は ULTRA の RSI 30/70 の戻りと同じで情報も近いので、重なりを出す。優先度は低い。"
+  },
+  {
+   "id": "osc-psych-line",
+   "name_ja": "サイコロジカルライン（直近12本のうち上がった本数）",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "確定した足だけを使い、C[k] は Bid の終値。売買は BUY を Ask、SELL を Bid で約定させる。U[i]＝k＝i−11..i のうち C[k]>C[k−1] となる本数（同じ値は上昇に数えない）。PL＝100×U/12 なので、PL≤25 は U≤3、PL≥75 は U≥9 と同じ。i≥12 から計算する。BUY: U[i]≤3 かつ U[i−1]≥4（25%以下に下がった最初の足）。SELL: U[i]≥9 かつ U[i−1]≤8（75%以上に上がった最初の足）。入るのは足 i の終値（BUY は Ask、SELL は Bid）。出口は共通の出口に合わせるか、自分の出口で測るなら、次の足以降で BUY は U≥6（PL≥50）、SELL は U≤6 になった最初の足の終値か、入って12本目の足の終値の、早い方で決済と先に固定する。12本・25%・75% は日本の解説で一般に言われる値（出典では未確認）で、動かして探さない。",
+   "timeframe_in_source": "日足が中心（記憶で未確認）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "直接の証拠は無い。近い情報の特徴（RSI・モメンタム・連続足）はアプリの §8.18 で標本外・コスト込みに測り、方向の手がかりは無かった（後半 AUC 0.49〜0.51。前半だけでは 0.55〜0.62 に見えた）。検証者が確かめたところ、§8.18 は15分・1時間・4時間足の5ペア（AUD/USD は含まない）だった。候補の『アプリに近いものなし』は不十分で、BLSH の部品の unitMfi(14)（出来高を1にした MFI）が上昇本数の割合にほぼ等しい近い親戚としてアプリにある（BLSH は §8.70・§8.71 で測り入れなかった）。",
+   "sources": [
+    "docs/OPERATIONS.md §8.18（#100、確認）",
+    "supabase/functions/_shared/blsh.ts の unitMfi（確認）"
+   ],
+   "test_notes_ja": "5分・15分足でも定義どおり測れる。ウォームアップは13本。回数は出典に書かれていない。短い足では同じ値の終値が多く、その分 PL が下がって BUY に偏るので、同じ値の割合も一緒に出す。BLSH の unitMfi(14) との相関を出す。この定義も足 i の終値で入る形なので、次の足の始値にそろえるかを測る前に決める。"
+  },
+  {
+   "id": "stat-knn",
+   "name_ja": "k 近傍法（kNN）で直近の値動きの形を過去と照らし合わせる（ロジスティック回帰の版を含む）",
+   "family": "statistical-ml",
+   "definition_final": "5分足の仲値の終値 C[t]。r[t]＝ln(C[t]/C[t−1])（前の足から60分を超えて空いた所をまたぐ r は使えない）。σ[t]＝r[t−288..t−1] の標本標準偏差（使える r が250本以上のときだけ）。形 x[t]＝(r[t], r[t−1], r[t−2], r[t−3], r[t−4])/σ[t]（5つの r が使えて σ>0 のときだけ）。足 i の確定時に、ライブラリを j∈[i−5000, i−1] の組 (x[j], y[j]＝r[j+1]) にする（x[j] と r[j+1] の両方が使えるものだけ）。x[i] とのユークリッド距離が近い順に k＝20 個（同じ距離なら新しい j を先）を取り、ŷ＝その20個の y の平均。c[i]＝ln(Ask の終値[i]/Bid の終値[i])。ŷ>c なら買い、ŷ<−c なら売り、それ以外は何もしない。足 i+1 の始値で入り（買いは Ask、売りは Bid）、足 i+2 の始値で出る（1本持つ）。入る足の始まりが UTC 20:00〜23:55 のものは入らない。ライブラリは毎足1本ずつずらす。別の腕（ロジスティック回帰）: 特徴は r[t−k]/σ[t]（k＝0..9）と切片、ラベルは r[t+1]>0 なら1・<0 なら0（0 の行は除く）。UTC 00:00 ごとに、その時点でラベルが分かっている直近2,000行で学び直す（L2 罰則 λ＝1、切片は除く、ニュートン法12回）。p≥0.55 で買い、p≤0.45 で売り。約定と時間帯は kNN と同じ。対照として、同じ長さのランダムウォークの作り物で合図の成績が『損益ゼロ−スプレッド』の近くに来ることを先に確かめる。数字はどれも案。",
+   "timeframe_in_source": "為替の日次・日中（記憶で未確認）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "外の出典（Fernández-Rodríguez 他の最近傍法、Kuan-Liu 1995 のニューラルネット）は記憶の書誌で、今回も開けず数字も書かない。アプリの §8.18 では、同じ『過去の特徴で先を当てる』型（状態の特徴とロジスティック回帰）が、前半だけなら AUC 0.55〜0.62 に見えたが後半は 0.49〜0.51 で当てずっぽうと同じだった。正しいランダムウォークでは見つかる傾向0件・後半 AUC 0.49〜0.53（検証者が docs で確認）。この候補にとっては効かないことを示す強い材料になる。",
+   "sources": [
+    "Fernández-Rodríguez, Sosvilla-Rivero & Andrada-Félix, Nearest-neighbour predictions in foreign exchange markets, 2003（記憶の書誌、掲載先未確認）",
+    "Kuan & Liu, Forecasting exchange rates using feedforward and recurrent neural networks, JAE 10(4) 1995（記憶の書誌）",
+    "docs/OPERATIONS.md §8.18（確認）"
+   ],
+   "test_notes_ja": "5分足で定義どおり。ウォームアップはライブラリの5,000本と σ の288本。回数は出典に書かれていない（ŷ がスプレッドを超える回数は少ない見込み）。先読みの罠: 未来の足を学習に入れること（ラベル r[j+1] は j≤i−1 なので i の確定で分かっている）、σ に今の足を入れること。ラベルは終値から終値、取引は始値から始値なので1本ずれる（5分足の FX ではほぼ同じとして許す）。研究の fitLogistic は0/1の特徴専用なので、続いた値を扱う版を新しく書く必要がある。"
+  },
+  {
+   "id": "revert-kairi",
+   "name_ja": "移動平均乖離率（25本）の行き過ぎで逆張り",
+   "family": "oscillator-mean-reversion",
+   "definition_final": "仲値の足で計算する。判断は確定足 i の終値、入るのは i+1 本目の始値（買いは Ask、売りは Bid）、手仕舞いは条件の出た足の次の始値（買いは Bid、売りは Ask）。玉は同じペア・同じ向きに1つ。時間足は1時間・4時間・日足（NY 17:00 区切り）を先に登録する。SMA25＝直近25本の終値の単純平均。K[i]＝(close[i]−SMA25[i])/SMA25[i]×100。T_low[i]＝K[i−500..i−1]（今の足を含まない直前500個）を小さい順に並べた25番目の値（下位5%）、T_high[i]＝大きい順に並べた25番目の値（上位5%）。最初の合図は0から数えて524本目以降。買い: K[i]≤T_low[i]、手仕舞いは j≥i+1 で最初に K[j]≥0（終値が SMA25 以上）。売り: K[i]≥T_high[i]、手仕舞いは K[j]≤0。損切り・期限なし。しきい値は出典に固定値が無いので、検証側の案（直前500本だけで決める分位点）。",
+   "timeframe_in_source": "解説は日足が中心。OANDA JAPAN の例は金 CFD の日足。",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "勝率や期待値を測った出典は、日本語でも英語でも見つからなかった（式と使い方の解説、金 CFD の逆張りのアイデア、TradingView の指標の説明だけ）。今回はどれも開けず未確認。式は一般的な定義と合う。アプリでは近い形として、#106 の rev_stretch（SMA20 から2ATR の行き過ぎの後の反転足。15分足で −0.12〜−0.14R で、毎本入るのと同じ）と #102 の bb_return を測っている。analyze/situation.ts に『SMA20 乖離（ATR 倍）』があるが、状況の説明の値で売買の判断ではない。",
+   "sources": [
+    "stock-marketdata.com, 乖離率 https://stock-marketdata.com/kairiritsu.html（今回開けず）",
+    "OANDA JAPAN, 金CFDのトレードアイデア｜移動平均線、移動平均乖離率、RSIを利用して逆張りする方法（今回開けず）",
+    "KAIRI RELATIVE INDEX（TradingView 公開スクリプト）（今回開けず）"
+   ],
+   "test_notes_ja": "検証者の本線は1時間・4時間・日足（5分・15分足は別の腕として登録する場合だけ）。ウォームアップは524本。25本は日本の解説でよく使われる値（出典では未確認）。回数は作りの上で、各側おおよそ5%の足が条件を満たすが、合図は玉が1つなので少なくなる。損切りが無いので、損益・最大の含み損・持った本数を出す。ATR で割る situation.ts の形と結果が違うかを副の比べとして見る。近い形をすでに測っていて証拠も無いので、測る順番は逆張りの中で最後でよい。"
+  },
+  {
+   "id": "smc-order-block",
+   "name_ja": "ICT オーダーブロック（価格だけの版。スイング高値を終値で抜いた衝動の前の最安値の足のゾーンへ戻ったら順張り）",
+   "family": "market-structure",
+   "definition_final": "主は15分足、比べに1時間足（測る前に固定）。判定は仲値の OHLC、約定は BUY が ask・SELL が bid。(1) スイング高値: 足 s の高値が足 s−49〜s+50 の100本の高値の最大と等しく、s+1〜s+50 に同じ高値が無いもの。足 s+50 の確定で初めて分かる。安値は反転。ライブラリの『同じ種類が続いたら間引く』処理と、最初と最後の足に入れる偽のスイングは先の足を見るので使わない。(2) 強気 OB の発生: 足 k の確定時に、確定済み（s+50≤k）で最も新しいスイング高値 s について close[k]>high[s] で、s が未使用なら使用済みにして発生とする。OB の足 b＝足 s+1〜k−1 で安値が最も低い足（同じ値なら後の足）。ゾーン＝[low[b], high[b]]、日付は足 k。弱気は反転（最も新しい確定スイング安値 s について close[k]<low[s]、b は s+1〜k−1 で高値が最も高い足）。(3) 無効化: 強気ゾーンは後の足で low<下端 になったら無効。発生から100本（k+1〜k+100）で入口が来なければ無効。ライブラリの『無効化の後に上端を超えたら出力から消す』処理は使わない。(4) 入口: k+1〜k+100 で最初に low[m]≤上端 となった足 m で、low[m]≥下端 なら足 m+1 の始値で BUY（その足で下端を割れば入らない）。1ゾーン1回。弱気は鏡像。(5) 出口（アプリの反発の測定と同じ数字）: 損切り＝下端−0.1×ATR(14)（足 m の Wilder）、R＝入値−損切り、R<0.6×ATR なら損切りを 入値−0.6×ATR に広げ、R>1.2×ATR の取引と入値が損切り以下の取引は『入れない』として別に数える。利確＝入値+1.5R、48本で届かなければ48本目の終値（期限切れ）。同じ足で両方なら1分足、分からなければ負け。損益分岐の勝率は40%（コスト抜き）。(6) ゾーンはそれぞれ独立に数え、同じペアで同時に持つことも許す。比べるために『同じ向きで建玉中は新しい入口を見送る』版も並べる。出来高（OBVolume・Percentage）は使わない。",
+   "timeframe_in_source": "指定なし（任意の OHLC）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "定義のコードだけで、成績・標本外・コストの根拠は無い。今回開いた smart-money-concepts の smc.py（0.0.27）で定義を確かめ、同時に先読みを5つ見つけた（未確定のスイングを使う、後のスイングで間引く、偽のスイング、OB の日付が衝動の前の足、後の足で過去の OB を消す）。乱歩（3つの種、各20,000本）では、ライブラリが作った強気 OB 43・54・55 個のうち、出力に残るのは 3・23・6 個だけで、残りは後の足で消されていた。ライブラリの出力をそのまま数えると生き残りだけを数えることになり、成績が良く見える。README の『大口の注文がある価格帯』という説明は、注文データが無いので確かめられない。",
+   "sources": [
+    "joshyattridge/smart-money-concepts の smc.py（0.0.27、sha256 6dd994e6…）と README https://github.com/joshyattridge/smart-money-concepts（今回開いて確認、成績なし）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は定義の外）。ウォームアップはスイングの確定に50本以上と ATR14。有効期限100本は提案の数字で固定。回数は出典に書かれていない。先読みの罠: ライブラリの ob() の出力をそのまま使うこと（必ず因果的に書き直した版で測る）。ob() は volume 列を直接読むので、ライブラリと照合するときは0の列を入れる。アプリの FVG Crossfire（§8.45、後半の1回あたりはマイナス）と Zone Shift の再テスト（§8.38、ランダムとの差は誤差の範囲）と並べて比べる。"
+  },
+  {
+   "id": "smc-wyckoff-spring",
+   "name_ja": "ワイコフのスプリング・アップスラスト（直近20本の端のダマシの抜けから戻ったら逆張り）",
+   "family": "market-structure",
+   "definition_final": "主は15分足、1時間足は別に走らせる（測る前に固定）。判定は仲値の OHLC、約定は BUY が ask・SELL が bid。足 i の確定時に RL＝min(low[i−20..i−1])、RH＝max(high[i−20..i−1])（足 i は含めない）。A＝Wilder ATR(14) の足 i−1 の値（アプリの atrSeries と同じ）。レンジの条件: RH−RL≤4×A。スプリング（BUY）: レンジの条件を満たし、low[i]<RL かつ RL<close[i]<RH なら足 i+1 の始値で BUY、損切り low[i]（余白なし）、利確 RH。アップスラスト（SELL）: high[i]>RH かつ RL<close[i]<RH なら SELL、損切り high[i]、利確 RL。同じ足で low<RL と high>RH が両方なら入らない（数える）。入値が損切りや利確の外から始まる（窓）ときも入らない（数える）。48本以内に届かなければ48本目の終値で決済し『期限切れ』と数える。同じ足で両方なら1分足、分からなければ負け。同じペアで建玉中は新しい合図を見送る。1回ごとに利確幅÷損切り幅が変わるので、勝率と一緒に1回あたりの損益（R と pips、スプレッド込み）と利確幅÷損切り幅の分布を出す。level_reject との違いを分けるため、同じ足・同じ期間で (i) スプリングのうち level_reject の条件（抜け≤0.5A、下ヒゲ≥0.35）も満たす足、(ii) 満たさない足、(iii) レンジの条件を外した版、を並べて出す。別案（前日の高安）: NY 17:00 区切りの前日の高値・安値を RH・RL にし、レンジの条件を外し、各日・各向きで最初の1回だけ。N＝20・ATR14・4×ATR は提案の数字で固定。",
+   "timeframe_in_source": "不明（出典を読めていない）",
+   "evidence_strength": "none",
+   "evidence_summary_ja": "根拠の資料は1つも開けていない（stockcharts・investopedia・Wikipedia・thepatternsite はプロキシで断られた）。確かめられたのは、smart-money-concepts に previous_high_low があることだけ（暦の日で区切る、成績なし）。価格だけの近い決まりとして Raschke-Connors の『Turtle Soup』（20日の安値を一度抜けて戻る）があるが、記憶によるもので確かめていない。ワイコフ本来の出来高と2回目の押しの確認は使わない、価格だけの読み替え。アプリの level_reject（§8.16、15分足 BUY 40.9%・SELL 41.0%、損益分岐40%）と合図の足がかなり重なる（検証者の分析で、測ってはいない）。",
+   "sources": [
+    "joshyattridge/smart-money-concepts の smc.py の previous_high_low（今回開いて確認、成績なし）",
+    "Raschke & Connors, Street Smarts, 1995 の Turtle Soup（記憶、未確認）",
+    "docs/OPERATIONS.md §8.16 と supabase/functions/analyze/signals.ts の level_reject（確認）"
+   ],
+   "test_notes_ja": "15分足で定義どおり（5分足は定義の外）。ウォームアップは20本と ATR14。数字は提案のまま固定し、結果を見てから選ばない。回数は出典に書かれていない。新しいのはレンジの条件・反対側での利確・深い抜けを許すことの3点だけなので、level_reject と同じ足で差を分けて測れる形（(i)〜(iii)）でだけ測る価値がある。単独の勝率だけでは新しいことは分からない。pinbar・キリ番の腕Aとも重なる。優先度は最も低い。"
+  }
+ ],
+ "excluded": [
+  {
+   "name": "x%逆行フィルター（Sweeney 型フィルタールール、academic-filter-rule）",
+   "reason_ja": "アプリの UT Bot（src/lib/utBot.ts）と状態の動きが同じで、違うのは追随の幅（ATR(10)×1 か、x×終値か）の決め方だけ。アプリの指標の数の違いだけのものはアプリにあるとみなす決まりに当たる。日中足で x を ATR の倍数で決めれば UT Bot そのものになる。UT Bot の売買の勝率はまだ測っていない（§8.54 で流れの読み手として測っただけ）ので、測るならアプリの UT Bot として別に登録するのが筋。出典は日足で今回1つも開けず、日中足は Neely-Weller 2003 が負の結果と伝えられ、日足の利益も1990年代初めに消えたという報告がある。"
+  },
+  {
+   "name": "ボリンジャーバンドの逆張り（外で引けたら逆張りし中心線で手仕舞い、revert-bollinger）",
+   "reason_ja": "バンドはアプリのボリンジャー %b（20本、2倍、母標準偏差）と同じ数で、入り（%b<0）と出口（%b が0.5を越える）はアプリが %b に引いている線そのもの。アプリには同じ逆張りを1本遅れて入る band_reentry もあり、§8.16 で測ってある（日中足は35〜42%で損益分岐40%の前後、4時間足の BUY は19%）。出典は株価指数が中心で FX の数字は1つも見られず、今回開けなかった。"
+  },
+  {
+   "name": "スイング構造の BOS / CHoCH（ICT・スマートマネー）",
+   "reason_ja": "アプリのダウ理論（supabase/functions/_shared/dow.ts、4つの時間足）がすでに同じ出来事を計算している（BOS は update、CHoCH は break1 にあたる）。違うのはスイングの幅だけ。§8.43（#130）の売買、§8.45（#132）の幅の総当たり（前半と後半の順位相関 0.10）、§8.90・§8.94 の表示の当たり（45.0〜51.4%、ランダム 48.3〜51.8%）で、どれもランダムと同じだった。"
+  },
+  {
+   "name": "Hull MA（遅れを減らした移動平均）",
+   "reason_ja": "候補づくりの段で KAMA にまとめられていたが、検証者の確認では重みの決まった移動平均で KAMA とは別物。独立した検定の出典が見つからず、定義も作られていないので今回の一覧には入れない。必要なら別の候補として事前登録する（アプリに Hull MA が無いことは確認済み）。"
+  },
+  {
+   "name": "十字線（Doji）の反転",
+   "reason_ja": "候補づくりの段で規則に挙げられなかった。2025年の ECTI-CIT 論文が FOREX で反転の信頼できる指標ではないとしたという検索要約があるだけで、今回は確かめていない。"
+  },
+  {
+   "name": "月末のヘッジ需要の為替の流れ（Melvin-Prins 2015）",
+   "reason_ja": "株式の月間リターンに依存し、為替の価格の足だけでは作れない。"
+  },
+  {
+   "name": "ECB の 14:15 CET 参照レートのフィックス、ロンドン 15:55〜16:05 の狭い窓",
+   "reason_ja": "検証者が fixing 候補から外した。狭い窓はフィックスをまたいで前と後の向きが混ざり、出典自身が小さな窓の取引はコストで消えると書いている。ECB の窓を測るなら別の候補として事前登録する。"
+  },
+  {
+   "name": "Lo-Mamaysky-Wang の核回帰によるパターン認識",
+   "reason_ja": "平滑化に後ろの足を使うので、そのままでは先読みになる。三尊の候補は確定済みのスイングに置き換えて残した。"
+  },
+  {
+   "name": "Noise Area の VWAP 版、ワイコフの出来高版、オーダーブロックの出来高の強さ",
+   "reason_ja": "GMO の FX の足には出来高が無い。価格だけの版を残した。"
+  }
+ ],
+ "framework_notes_ja": "【並べ方】検証者が残した45件をすべて入れた。根拠の強さの段（moderate → moderate-weak → weak → weak-none → none）で並べ、同じ段の中では、アプリに無く過去にも測っていないものを先に、近い親戚がある・近い形を測ったものを後にした。それでも同じなら FX の証拠があるものを先にした。根拠が弱くても落とさず下に置いた。規則が同じ重複は残っていなかった。ただし結果が強く相関するまとまりがあるので、下の⑨に書いた。上位の時刻の候補（Breedon-Ranaldo・フィキシング・週末の窓）は時刻やカレンダーの効果で、チャートの形を読む方法ではない。報告では別のまとまりとして出すのがよい。\n\n【過去の枠組みの使い方】(1) データ: GMO の公開 klines を GitHub Actions で取り、actions/cache に置いて件数と sha256 を記録する（開発環境から GMO に届かないため）。1分足は 2023-10-27 から。日足・週・月の候補（通貨モメンタム、週末の窓、big-move の日足、RSI2 などの日足の腕）は Dukascopy の長い履歴が要るが、§8.107 の時点で取得していない。(2) 約定とコスト: tf-winrate.ts の作りをそのまま使う。実際の Bid/Ask を毎回払い、同じ足で両方に届いたら損切り、窓で越えたら始値、5取引日で決着しなければ未決着、送られない時間の足は数えない。中値は Decimal の ROUND_HALF_UP。(3) 各候補は macdx-lib.ts と同じく research/<id>-lib.ts の純関数にする。手で出した例と照らし、TS を読まずに定義の文だけから書いた Python で全件を照合する。(4) 先読みの確かめは §8.84 の教訓どおり、作りの上で必ず通る確かめにしない。『t で切った足だけから作り直して同じか』『未確定の足を ±777.7 pips 動かしても判断が変わらないか』を使い、わざと先読みを入れた版で確かめが落ちることを先に見る。(5) 作り物のランダムウォーク: 効果が無いとき偽陽性が約5%か、効果を仕込んだとき見つかるかを確かめる。誤りも仕込んで、どれかの確かめが必ず見つけることを見る。(6) run では checks.json（GMO 読み込みの失敗0、先読み0、Python 一致）を先に読み、全部通ってから print.txt の数字を読む。(7) 使える既存のコード: strength-lib.ts（通貨の対ドルの値）、gotobi-lib.ts（日本の祝日の CSV）、stop2n の『T を含む日足を使わない』確かめ、longhist-lib.ts（donchian55x20）、indicator-series.ts（donchian_20・cciSeries・bb_return・プラセボ指標）、bigflow-lib.ts（vortex・linreg100・utbot）、reversal.ts（rev_stretch）、signals.ts の LONG_RUN（level_reject と比べる）、dow.ts の addSwing、costhours（時間帯の除外）、ownerhold（オーナーの持ち方の副の測定）。\n\n【データを読む前に決めること】\n① 『正確さ』の定義。オーナーの問いは『どのやり方の判断が一番正確か』。勧め（決めるのは次の段）: 主の物差しは合図の向きの当たりにし、同じ時刻・同じ出口で向きだけ逆にした鏡の取引との差 a＝(p−p_鏡)/2 で測る（§8.107）。出口は全候補で共通の対称の出口にする（例: 利確＝損切り＝合図の時間足の ATR14×1、期限 H 本、先に届いた方）。こうすると、利確と損切りの距離の比で勝率が機械的に変わる分（13/4 pips でランダムでも約76%）、2024〜2026年の円安の一方向の偏り、スプレッドの大部分が消える。副の物差しは、各候補の定義どおりの出口でのスプレッド込みの1回あたり損益（pips・R）と勝率。参考として、オーナーの持ち方（指値・利確10・損切りなし）でも測り、CLAUDE.md の項目（1回あたりの損益・含み損の大きさ・持った期間・ロスカットと期限の数・入金の合計・まだ含み損の取引）を必ず並べる。常に持つ型（ドンチャン(A)・dual thrust・平均足・練行足・新値足・カギ足・P&F・Vortex・KAMA・linreg・VR・Hurst）は、向きが変わった足を出来事として同じ物差しにかける。\n② 時間足。この段の想定は GMO の5分・15分足だが、検証者は定義を1時間・4時間・日足に置いた候補が多い（RSI2・ConnorsRSI・Double7・IBS・CCI・Kairi・NR7・平均足・練行足・新値足・P&F・カギ足・linreg）。1分足の時刻で決まる候補（Breedon・フィキシング・週末・ORB・アジアレンジ・noise area）と、月次の候補（通貨モメンタム）もある。候補ごとに主の時間足を1つ決め、5分・15分足に移すなら『出典から離れた別の腕』として数に入れる。5分足はスプレッド÷ATR が 0.42〜0.69（4時間足は 0.04〜0.08）で、保有の短い候補ほど不利になることを先に書いておく。\n③ 合図に使う値段。検証者の定義で仲値と Bid が混ざっている（ローソク足・逆張りは仲値、ドンチャン・三尊・旗・ピボット・TD・Vortex・Fisher・DeMarker などは Bid）。アプリのチャートと §8.16 は仲値なので、合図は仲値にそろえ、約定だけ Ask/Bid にするのを勧める。Fisher・DeMarker・サイコロジカルラインの定義は『足 i の終値で入る』形なので、ほかと同じく次の足の始値にそろえるかも決める。\n④ ペアと期間。主は5ペア（USD/JPY・EUR/JPY・AUD/JPY・EUR/USD・AUD/USD）、21ペアは参考。Breedon は EUR/USD だけ、フィキシングは3ペア、通貨モメンタムは7通貨。前半は 2024-01-01〜2025-05-18、後半は 2025-05-19〜（tf-winrate 以降と同じ）で、データの終わりは登録の時に固定する。Dukascopy 2016〜2023（まだ見ていないデータ）を選ぶ側と確かめる側のどちらに使うかも決める。\n⑤ 選び方。前半で全候補の主の物差しを1回ずつ計算し、95%区間の下端で順位を付けて、上位を1つ（または事前に決めた数 K）選ぶ。後半ではその候補だけを1回確かめる（選ばなかった候補は後半で計算しない）。前半の1位の値は『多数から選んだので良く見える』と添える（§8.39・§8.106 で崩れた例）。\n⑥ 多重比較。前半で見る区間の数を先に数えて書く。腕が多い候補（キリ番 A/B、ピボット A/B、カマリラ A/B、フィキシング4腕、Breedon 2腕、big-move の当日・翌日・(b) とその逆向き、TD の H 5つ、NR7 の入り方 A/B と NR7/IDNR4、ドンチャンの (A)(B)×n、平均足 A/B、KAMA A/B、ORB の3セッションなど）があり、全体で100前後の区間になる見込み（正確な数は登録の時に数える）。後半で確かめる K 個には Holm をかける。\n⑦ 物差しの具体: ブラインド（同じペア・時間足・向き・UTC の時間帯で毎本入る）、鏡の取引、同じ数のランダムな入口、理論値 損切り/(損切り+利確)、作り物（効果なし・効果あり）、プラセボ指標。VR と Hurst のしきい値（検証者の試算 −1.84/+2.10、0.441/0.685）と linreg の 0.87 は、登録前に固定の種で作り直して書く。\n⑧ 見つけられる最小の差。候補ごとの合図の数が分からないので、数字を読まずに件数だけを数える段を先に作るかを決める。差が見つけられる最小の差より小さければ『差が無い』ではなく『言えない』と書く。\n⑨ 重なりのまとまり（同じ足に出る割合を数えて書く）: フィキシング A2 と Breedon (2)／RSI2・ConnorsRSI・Double7／VR と Hurst（1回の実験の2腕にする）／ピンバー・ワイコフ・キリ番の腕A・アプリの level_reject／ドンチャン・dual thrust・ORB・noise area・アジアレンジ・新値足・カギ足・P&F・旗の抜け（8本の抜けとの比べ）／平均足・練行足と UT Bot・SuperTrend／Fisher とストキャス、DeMarker と RSI、サイコロジカルラインと BLSH の unitMfi、CCI と bb_return、乖離率と rev_stretch／Three Outside と GA型／オーダーブロックと FVG・Zone Shift／linreg と RCI。\n⑩ 共通の約束で定義に書かれていない所: 決着しない取引を見出しの勝率の分母に入れる（すべての取引の中の勝率、§8.97）、週末の足の扱い、スプレッドが開く時間（UTC 20〜23時）を全候補で除くか候補の定義どおりにするか、30回未満の行は勝率を書かない。\n⑪ 事前登録: すべての定義・物差し・結果の文の型を docs に書いて main にマージし、その時刻 R を記録してから実データの run を回す。マージの後に決まりを変えたら R を置き直す。\n⑫ 進め方: CLAUDE.md の『順番に丁寧に』に合わせ、まず1〜2候補（例: 時刻だけで決まり作りが簡単な Breedon と週末の窓）で確かめ①〜⑪の流れが通るかを試してから広げる。45候補の実装・Python 照合・反証は Workflow に向く作業なので、始める前に『ワークフロー向き』と伝え、理由と規模（エージェント数の目安）を添えてオーナーの確認を取る。",
+ "honest_caveats_ja": "【勝率100%について文献が言うこと】今回の候補の出典のどれにも、勝率100%やそれに近い数字は無い。§8.95 の調査でも、勝率100%のプロは読めた資料に一人もいなかった。勝率を書いている出典は少なく、書いていても（どれも今回確かめられなかった検索要約の数字）、ORB 24%（1回 +0.13R）、Vortex 約29〜32%、NR7 の目標到達43%、ハンマー52.1%、ロンドン・ブレイクアウト50〜60%（販売側の主張）程度。70%台（RSI2・CCI・Double7・ConnorsRSI、どれも株）は損切りが無く、平均の負けが平均の勝ちより大きい『小さく勝って大きく負ける』形から来ている。これは §8.98（13/4 pips ならでたらめでも約76%）や §8.102（損切りなしなら逆向きでも98.8%）と同じしくみで、判断が正確だという意味ではない。\n\n【学術の結論（要約で読んだもので、今回は原文を開けていない）】為替のテクニカルルールには過去に予測力があったが、主要通貨では1990年代以降に消えたか減った（Neely ら 2009、Hsu ら 2016）。日中足では、コストと取引時間を入れると超過収益が無い（Neely-Weller 2003）。ローソク足はランダムと同じ程度か、コスト後に買い持ちに勝てない（Fock 他、Duvinage 他、Marshall 他）。フィボナッチ比は非フィボナッチ比と違わない（ESWA 2021）。肯定的な出典も、Sharpe や年率の小さな超過収益を言っているだけで、『当たる割合』の順位は出していない。市場・期間・物差しがそれぞれ違うので、文献からはどのやり方が一番正確かは言えない。オーナーのデータで測るしかない。\n\n【今回の調べの限界】外の出典はほとんど開けなかった（WebFetch の名前解決の失敗、プロキシの 403、WebSearch の上限200回）。開いて確かめたのは、je-suis-tm の README とコード、smart-money-concepts の README と smc.py、mplfinance のノート、この repo の docs とコードだけ。証拠の要約の数字は、どれも候補を集めた段が検索要約から写したもので、確かめていない。書誌の細部（Lukac 他の題名、Loginov 他の掲載先、Savin 他の URL、Dockery-Todorov の著者名）に誤りの可能性がある。いくつかの書誌は記憶だけ。\n\n【定義について】多くの定義は出典そのものではない（FX 向けの置き換え、逆指値の代わりに終値で判定、検証者が置いた仮の数字）。測った結果は『この版』についてのもので、方法そのものが効く・効かないとは言えない（§8.22 と同じ）。\n\n【予想（測っていない）】アプリのこれまでの40件以上の測定（RSI＋SAR、GA型、SPECTRA、Zone Shift、ダウ、Pro型、ULTRA、MACD など）は、どれも鏡やランダムとの差が誤差の範囲だった。今回の候補もほとんどが『言えない』で終わる見込みが高い。45候補から1位を選べば、効果が無くても良い数字の1位が出る（§8.71 では作り物でも68.3%が1位になった）。後半で1回だけ確かめるのはこのため。\n\n【100%に見えたら】まず先読み（§8.84 で照合の作りの誤りから予告の当たりが100%に見えた）、決着しない取引を外していないか（§8.97）、利確と損切りの距離の比、損切りなしの作りを疑い、何を調べたかを書いてから報告する。\n\n【オーナーの持ち方】『損切りをしない、必ず戻る』はオーナーの考えとして記録する。測定（§8.76・§8.102・§8.111）では戻らない取引が残り、30万円の口座は入れた100万円のうち約97万円を失った。『必ず戻る』はこの測定からは言えない。勝率は、1回あたりの損益と含み損の大きさと一緒でなければ意味がない。",
+ "app_inventory": [
+  {
+   "name": "RSI + Parabolic SAR rule (rsi_sar)",
+   "aliases": [
+    "RSI＋SAR",
+    "RSI+SAR",
+    "rsi9_25_75_psar_v2 (RULE_ID)",
+    "RSI(9) 25/75 + PSAR(0.02,0.2)",
+    "RSI・パラボリックSAR",
+    "bounce + psar"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/rsisar.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/logic.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/logic.ts",
+    "/home/user/fx-canvas-mind/src/lib/rsiSar.ts",
+    "/home/user/fx-canvas-mind/src/components/RsiSarPanel.tsx",
+    "/home/user/fx-canvas-mind/src/components/TechnicalDataCard.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.19, §8.20)"
+   ],
+   "what_it_judges": "BUY/SELL signal: on a closed bar BUY when RSI(9) closes back above 25 (bar before <=25) with the SAR under price, SELL mirrored at 75; plan = stop 0.8 ATR, TP1 1.5x; docs §8.19 measured 35.4% win vs 40% break-even (mid, 15m/1h/4h, 11 pairs, 2025-07..2026-09). Mailed on 15m/1h/4h/1day for 6 pairs (ALERT_PAIRS)."
+  },
+  {
+   "name": "WAIT trigger prices (closeForRsi / nextSar / triggerFor)",
+   "aliases": [
+    "WAIT時の注文の目安",
+    "次の足の終値がいくらなら条件がそろうか",
+    "next-close trigger",
+    "RSI逆算"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/rsisar.ts",
+    "/home/user/fx-canvas-mind/src/components/RsiSarPanel.tsx",
+    "/home/user/fx-canvas-mind/src/lib/types.ts"
+   ],
+   "what_it_judges": "Level: back-solves the close that would put RSI exactly on 25/75 on the next bar and the next bar's SAR level, i.e. the price at which RSI+SAR would fire (shown on a WAIT)."
+  },
+  {
+   "name": "GA型 (GainzAlgo V2 [Alpha]-style rule, gainz)",
+   "aliases": [
+    "GA型",
+    "GainzAlgo V2 Alpha型",
+    "gainz_v2a_070_40_5_atr1_v2 (GA_RULE_ID)",
+    "Gainz",
+    "engulfing + stability + RSI40 + delta5"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/gainz.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/logic.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/logic.ts",
+    "/home/user/fx-canvas-mind/src/components/GainzPanel.tsx",
+    "/home/user/fx-canvas-mind/src/lib/rsiSar.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.21, §8.22, §8.25, §8.45)"
+   ],
+   "what_it_judges": "BUY/SELL signal on a closed bar: engulfing bar + body > 0.7 of true range + RSI(14) < 40 (SELL > 60) + close below (above) the close 5 bars earlier; plan = stop 1 ATR, TP 2x. Docs: ~30% win vs 33.3% break-even in the later period, about -0.09R a trade, no better than random entry. Default chart view on the live chart (view=gainz)."
+  },
+  {
+   "name": "Q-Trend (qtrend)",
+   "aliases": [
+    "Q-Trend",
+    "Qトレンド",
+    "tarasenko_ Q-Trend port",
+    "qtrend_200_14_1_v1 (QTREND_RULE_ID)",
+    "Q-Trend STRONG / ☆",
+    "トレンドライン(Q-Trend)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/qtrend.ts",
+    "/home/user/fx-canvas-mind/src/lib/qTrend.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.57, §8.60, §8.67, §8.68)"
+   ],
+   "what_it_judges": "BUY/SELL (and STRONG) signal plus trend-state line: a line starts at the middle of the 200-bar close range and steps by ATR(14) when a close breaks it by one ATR; first break of a run = signal; STRONG if the bar opened in the extreme eighth. Mailed (stop 13 / TP 4,10,16, ULTRA levels); docs measured TP1-before-stop 70-74% on 5m-4h vs 76% break-even, negative pips a trade."
+  },
+  {
+   "name": "ULTRA (ULTRA EN, F-INVEST)",
+   "aliases": [
+    "ULTRA",
+    "ULTRA EN",
+    "F-INVEST ULTRA",
+    "F-INVEST PREMIUM levels",
+    "ultra_rsi14_30_70_sl10_tp5_10_15_v1 (ULTRA_RULE_ID)",
+    "Buy ☆ / Sell ☆",
+    "ULTRA_PAIRS / ULTRA_GOLD"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/ultra.ts",
+    "/home/user/fx-canvas-mind/src/lib/ultra.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.63, §8.64, §8.69, §8.98)"
+   ],
+   "what_it_judges": "BUY/SELL signal: RSI(14) leaving the oversold zone (crossing back over 30) = Buy, leaving overbought (under 70) = Sell, entered at the bar close with stop 13 and TP1/2/3 = 4/10/16 (pips; dollars on gold) and a hit-count table. Mailed on 5m/15m/1h/4h/1day (owner now on 15m and 5m); docs: TP1-before-stop 72-75% on GMO FX vs ~76% break-even, every timeframe losing on average (negative pips)."
+  },
+  {
+   "name": "Q-Trend x BLSH triple confirmation (qtBlsh, 3✓)",
+   "aliases": [
+    "3✓",
+    "3つの確認",
+    "triple confirmation",
+    "tripleConfirm",
+    "Q-Trend × BLSH（3つの確認）",
+    "青丸の3✓"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/blsh.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/qtrend.ts",
+    "/home/user/fx-canvas-mind/src/lib/blsh.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.57, §8.70, §8.71)"
+   ],
+   "what_it_judges": "BUY/SELL confirmation mark on the chart: first closed bar of a Q-Trend leg where the Q-Trend signal, BLSH line colour (MACD >= signal) and BLSH area colour (composite > 0) all agree; chart only (not mailed); a Stoch/BLSH/MACD-agreement filter on signals was measured and not adopted (§8.70-71)."
+  },
+  {
+   "name": "BLSH composite (Buy Low Sell High Composite)",
+   "aliases": [
+    "BLSH",
+    "Buy Low Sell High Composite",
+    "zacmcc BLSH",
+    "複合インジケーター(RSI+EMA差+MACD+MFI)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/blsh.ts",
+    "/home/user/fx-canvas-mind/src/lib/blsh.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx"
+   ],
+   "what_it_judges": "Momentum/trend-state strip: RSI(14), EMA5-EMA35, MACD histogram (both scaled by 2xATR(9)) and a unit-volume MFI(14) each scaled to -1..+1, summed/4 as a green/red area plus a MACD-signal line; display only (volume is faked as 1 per bar)."
+  },
+  {
+   "name": "MACD peak-and-valley cross (macdx)",
+   "aliases": [
+    "MACDの山・谷クロス",
+    "macdx",
+    "MACD extreme cross",
+    "macdx_12_26_9_w600_n288_k4_2_v1 (MACDX_RULE_ID)",
+    "decideOnWindow"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/macd-extreme.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/macd.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.109, §8.110, §8.111)"
+   ],
+   "what_it_judges": "BUY/SELL signal (email only, 5-minute GMO pairs, no chart mark): MACD(12,26,9) crossing its signal line far from zero (x >= 1/4 of the 288-bar mean range and >= 1/2 of the wave's peak |MACD|); docs: 72.3% TP1-first, -1.28 pips a trade, not shown better than ULTRA 5m (72.9%, -1.18)."
+  },
+  {
+   "name": "Liquidity sweep + EMA20/80 cross (sweepx)",
+   "aliases": [
+    "流動性狩り＋EMAクロス",
+    "流動性狩り → EMAクロス",
+    "sweepx",
+    "sweep-cross",
+    "SWEEPX",
+    "EMA20×EMA80",
+    "sweepx_ema20_80_w600_from240_sl5b1p_tp15_20_v1 (SWEEPX_RULE_ID)",
+    "Instagram gold trader video rule"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/sweep-cross.ts",
+    "/home/user/fx-canvas-mind/src/lib/sweepCross.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/gold-minutes.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/logic.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.112)"
+   ],
+   "what_it_judges": "BUY/SELL signal: EMA20 crossing EMA80 up (down) after the leg's low (high) went below (above) the previous wave's trough (crest); entry = close, stop 1 pip beyond the last 5 bars' extreme, TP 15/20 pips; drawn on the moving-average-only chart for all pairs, mailed on gold 1-minute only; NOT measured (no win rate or P&L exists)."
+  },
+  {
+   "name": "Pro型 score (gainzPro)",
+   "aliases": [
+    "Pro型（点数）",
+    "GainzAlgo Pro型",
+    "gainzPro",
+    "GP_DEFAULTS",
+    "点数方式"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/gainzPro.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.44, §8.45)"
+   ],
+   "what_it_judges": "Chart-only BUY/SELL mark (P): candle shape, RSI(14) acceleration, true-range/ATR expansion and EMA(50) slope each percentile-ranked over the last 50 bars, averaged; signals when the score is in the top 5% on a reversal candle; docs: ~29.5% win, -0.114R vs 33.3% break-even (11 pairs, later period). Off by default, not mailed."
+  },
+  {
+   "name": "SPECTRA型 Kalman Supertrend (kalman)",
+   "aliases": [
+    "SPECTRA型",
+    "カルマン・スーパートレンド",
+    "Kalman Supertrend",
+    "kalmanSupertrend",
+    "KST_DEFAULTS",
+    "SentioEdge SPECTRA-style"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/kalmanSupertrend.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.32, §8.33)"
+   ],
+   "what_it_judges": "Trend state + flip marks: Supertrend (ATR10, factor 3) on Kalman-smoothed HL2 and ATR, flips marked when RSI(14) agrees (>50 / <50); chart only, off by default; docs: ~29.4% win, -0.116R later period, no edge over random entry."
+  },
+  {
+   "name": "SuperTrend (KivancOzbilgic)",
+   "aliases": [
+    "SuperTrend",
+    "スーパートレンド",
+    "supertrend",
+    "ST_DEFAULTS (ATR10 x3)",
+    "KivancOzbilgic SuperTrend"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/supertrend.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/pine.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.48)"
+   ],
+   "what_it_judges": "Trend state + Buy/Sell flip labels: hl2 +/- 3 x ATR(10) bands that only tighten in-trend; trend flips when a close crosses the opposite band; chart only (off by default); also scored as a trend-reading candidate in §8.54 (69.3% flow label)."
+  },
+  {
+   "name": "UT Bot Alerts (QuantNomad)",
+   "aliases": [
+    "UT Bot",
+    "UT Bot Alerts",
+    "utBot",
+    "UT_DEFAULTS (key 1, ATR 10)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/utBot.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.49)"
+   ],
+   "what_it_judges": "BUY/SELL flip: ATR(10) x 1 trailing stop from the close; Buy when the close crosses over the stop, Sell under; candles coloured by side; chart only (off by default); no outcome measurement found."
+  },
+  {
+   "name": "Zero-lag TEMA Crosses (Loxx)",
+   "aliases": [
+    "Zero-lag TEMA Crosses",
+    "ZL TEMA",
+    "zlTema",
+    "ZLT_DEFAULTS (22/144)",
+    "L/S marks",
+    "ゼロラグTEMAクロス"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/zlTema.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.87)"
+   ],
+   "what_it_judges": "Trend state + L/S cross marks: fast (22) and slow (144) zero-lag TEMA crossing; candles green while fast > slow; needs ~1,200 bars of deep history; chart only (off by default); no outcome measurement found."
+  },
+  {
+   "name": "Zone Shift (ChartPrime)",
+   "aliases": [
+    "Zone Shift",
+    "ゾーンシフト",
+    "zoneShift",
+    "ZS_DEFAULTS (length 100)",
+    "retest ◆"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/zoneShift.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.37, §8.38)"
+   ],
+   "what_it_judges": "Trend state + level + retest: midline = avg(EMA100, HMA60) +/- 200-bar avg range; trend flips when a low (high) closes beyond the band; trend-start level and retest diamonds; candles coloured by trend; docs: flip entries 29.7% win / -0.109R, retest 30.4% / -0.085R, no better than random entry; chart only (default on)."
+  },
+  {
+   "name": "FVG Crossfire (Flux Charts)",
+   "aliases": [
+    "FVG Crossfire",
+    "フェアバリューギャップ",
+    "FVG",
+    "Fair Value Gap crossfire zones",
+    "fvgCrossfire",
+    "FVG Crossfire + Volume Profile (fvgProfile)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/fvgCrossfire.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.34, §8.36, §8.45)"
+   ],
+   "what_it_judges": "Zone/level + retest marks: unfilled 3-bar gaps (>=0.05% of price) overlapped by an opposite gap form crossfire zones that flip and narrow; retest arrows when a candle touches a live zone; zone ends on a close through the far side; chart only (default on, one switch with the volume profile)."
+  },
+  {
+   "name": "Weighted Volume Profile / POC (Flux Charts)",
+   "aliases": [
+    "Weighted Volume Profile",
+    "WVP",
+    "ボリュームプロファイル",
+    "POC",
+    "Point of Control",
+    "weightedVolumeProfile"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/weightedVolumeProfile.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.35, §8.36)"
+   ],
+   "what_it_judges": "Level: 30 price rows over the last 200 candles counting how many candles traded through each (every bar weighs 1 because FX bars have no volume, so it is a time-at-price/TPO profile), bull/bear split, and the highest row (POC) line; display only. No real volume data exists anywhere in the app."
+  },
+  {
+   "name": "Moving average lines (3 lines, EMA/SMA, configurable)",
+   "aliases": [
+    "移動平均線",
+    "EMA50",
+    "EMA200",
+    "EMA20",
+    "MA 3本",
+    "emaLines",
+    "MA_DEFAULTS (EMA50, EMA200, EMA20)",
+    "移動平均線チャート (maOnly / mode=ma)",
+    "ema50 ema200 ma3"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/emaLines.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/pine.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/src/lib/chartPrefs.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.54, §8.55, §8.100, §8.101)"
+   ],
+   "what_it_judges": "Trend state (close above/below each line): three user-set lines (1-500, EMA or SMA, defaults 50/200/20, TradingView arithmetic) on the main chart and on the separate moving-average-only chart; display only; §8.54 found EMA50 reads the past flow best (71.6%) but the next 48 bars move its way only ~48%."
+  },
+  {
+   "name": "Golden cross / dead cross (GC/DC, maCross)",
+   "aliases": [
+    "GC・DC",
+    "ゴールデンクロス",
+    "デッドクロス",
+    "golden cross",
+    "dead cross",
+    "crossPair",
+    "EMA50×EMA200 cross"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/trendTools.ts",
+    "/home/user/fx-canvas-mind/src/lib/emaLines.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.62)"
+   ],
+   "what_it_judges": "Trend-change mark: the faster of moving-average lines 1 and 2 crossing the slower on a closed bar (GC up, DC down); chart only, lagging, never measured."
+  },
+  {
+   "name": "Ichimoku Kinko Hyo (chart)",
+   "aliases": [
+    "一目均衡表",
+    "Ichimoku",
+    "ichimoku",
+    "雲 (kumo)",
+    "転換線/基準線/先行スパン/遅行スパン",
+    "ICHIMOKU_DEFAULTS 9/26/52/26"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/trendTools.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.62)"
+   ],
+   "what_it_judges": "Trend state + level: price above/inside/below the cloud (cloudSide), conversion/base lines, lagging span, displaced by 25 bars; chart only (off by default), never measured."
+  },
+  {
+   "name": "MACD strip (chart)",
+   "aliases": [
+    "MACD",
+    "MACD 12 26 9",
+    "ヒストグラム",
+    "macd",
+    "MACD_DEFAULTS",
+    "histColors"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/macd.ts",
+    "/home/user/fx-canvas-mind/src/lib/trendTools.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.62)"
+   ],
+   "what_it_judges": "Momentum/trend state: TradingView MACD (EMA12-EMA26, 9-EMA signal, histogram in 4 colours); display strip (off by default) and the base for macdx and the Stoch/BLSH/MACD agreement test."
+  },
+  {
+   "name": "ADX / DMI strip",
+   "aliases": [
+    "ADX",
+    "DMI",
+    "ADX 14 14",
+    "+DI -DI",
+    "dmi",
+    "ADX_TREND_LEVEL 25"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/trendTools.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/state.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.62)"
+   ],
+   "what_it_judges": "Trend-strength filter: ADX(14) above 25 = trend present, +DI/-DI for direction; chart strip (off by default); the server also computes adx() for the regime read."
+  },
+  {
+   "name": "Stochastic strip (STOCH)",
+   "aliases": [
+    "ストキャス",
+    "ストキャスティクス",
+    "Stochastic",
+    "STOCH 14 1 3",
+    "stochastic",
+    "STOCH_DEFAULTS",
+    "80/20 lines"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/stochastic.ts",
+    "/home/user/fx-canvas-mind/src/lib/stochastic.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.30, §8.45, §8.46)"
+   ],
+   "what_it_judges": "Overbought/oversold oscillator (%K 14, smoothing 1, %D 3, lines 80/50/20, settings editable); display strip (default on), not used for any signal; §8.54 found it reads small waves, not the big flow."
+  },
+  {
+   "name": "Bollinger %b strip",
+   "aliases": [
+    "BB %b",
+    "ボリンジャー %b",
+    "percentB",
+    "PCTB_DEFAULTS (20, 2)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/percentB.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.47)"
+   ],
+   "what_it_judges": "Where the close sits inside 20-bar +/-2 sigma bands (1 = upper band, 0 = lower); display strip (off by default); no signal."
+  },
+  {
+   "name": "RCI (Rank Correlation Index) strip",
+   "aliases": [
+    "RCI",
+    "順位相関指数",
+    "rci",
+    "RCI 10 + SMA14"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/rci.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.47)"
+   ],
+   "what_it_judges": "Trend steadiness oscillator: rank correlation of the last 10 closes with time (+100 steadily rising, -100 steadily falling, lines +/-80); display strip (off by default); no signal."
+  },
+  {
+   "name": "RSI strip with rule levels",
+   "aliases": [
+    "RSI",
+    "RSI(9)",
+    "RSIの帯",
+    "RSI_SAR_LEVELS 25/75",
+    "rsi strip"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/lib/rsiSar.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/logic.ts"
+   ],
+   "what_it_judges": "Oscillator state: RSI(9) Wilder with the rule's 25/75 lines under the price (default on); shown with the RSI+SAR view, hidden in GA-only view."
+  },
+  {
+   "name": "Parabolic SAR dots and SAR cloud (sarDots / sarCloud)",
+   "aliases": [
+    "パラボリックSAR",
+    "Parabolic SAR",
+    "PSAR",
+    "SAR の帯",
+    "SAR cloud",
+    "SAR_STEP 0.02 SAR_MAX 0.2",
+    "sarStyle"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/rsisar.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/lib/rsiSar.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.27, §8.28)"
+   ],
+   "what_it_judges": "Trend-side state + ATR-based level: SAR(0.02, 0.2) dots (green under price, red over) and a band reaching away from price by 1 x ATR(14) of the candles on screen (CLOUD_ATR); the band is only a drawing aid, the dots are part of RSI+SAR."
+  },
+  {
+   "name": "Dow theory on 4 timeframes (dow)",
+   "aliases": [
+    "ダウ理論",
+    "Dow theory",
+    "dowTheory",
+    "DOW_PIVOT 4",
+    "押し安値",
+    "戻り高値",
+    "転換の兆し",
+    "確定",
+    "HH HL LH LL",
+    "DOW_TFS 4h 1h 15min 5min",
+    "dow display"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/dow.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/logic.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/live-chart/index.ts",
+    "/home/user/fx-canvas-mind/src/lib/liveChart.ts",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.42, §8.43, §8.45, §8.90, §8.94)"
+   ],
+   "what_it_judges": "Trend state per timeframe (up / down / toDown / toUp / none): 4-bar fractal swings, close through the last swing = trend update, close through the 押し安値/戻り高値 = first break (兆し), second break after a lower high/low = confirm; draws HH/HL/LH/LL labels, key levels and higher-timeframe dashed lines; chart only; §8.90: hit rate 45-51% = same as random entry."
+  },
+  {
+   "name": "Automatic trend lines (autoTrend)",
+   "aliases": [
+    "トレンドライン",
+    "autoTrend",
+    "trendLines (trendTools)",
+    "TREND_PIVOT 4",
+    "安値同士/高値同士を結ぶ線"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/trendTools.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.62)"
+   ],
+   "what_it_judges": "Level/trend line + break: a line through the latest two rising swing lows (up) and latest two falling swing highs (down), extended right, with the first close through it marked as its break; chart only (default on), never measured."
+  },
+  {
+   "name": "Swing high/low lines of the analysis chart (trendLines overlay, 高値線・安値線)",
+   "aliases": [
+    "高値線・安値線",
+    "trendLines",
+    "ChartTrendLine",
+    "lines through the last two swings",
+    "安値線",
+    "高値線"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/lib/types.ts",
+    "/home/user/fx-canvas-mind/src/components/AnalysisResultView.tsx"
+   ],
+   "what_it_judges": "Level: line through the last two confirmed swing lows (and highs) of the analysis window with its slope and current value; drawn on the legacy analysis page (src/pages/Analysis.tsx, not routed since #139)."
+  },
+  {
+   "name": "Signal position boxes, x marks and ★TP1-3 hits (positions / Pro Scalper style drawing)",
+   "aliases": [
+    "建玉の箱",
+    "positions",
+    "Pro Scalper風",
+    "TP/SL box",
+    "×印",
+    "★TP1 ★TP2 ★TP3",
+    "縦線",
+    "LEVEL_BOXES",
+    "POSITION_BOXES"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.28, §8.63)"
+   ],
+   "what_it_judges": "Drawing aid that shows each signal's entry/stop/target as a box running to the bar that settled it (green to target, red to stop), an x where it settled, a faint vertical line on the signal bar, and ULTRA/Q-Trend tags for the newest open trade."
+  },
+  {
+   "name": "Chart label placement and badges (edge labels, Q-Trend BUY/SELL/STRONG, 3✓ badges)",
+   "aliases": [
+    "placeEdgeLabels",
+    "edgeLabels",
+    "BUY/SELL/STRONG labels",
+    "ラベルの配置"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/edgeLabels.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx"
+   ],
+   "what_it_judges": "Drawing aid only: puts candle labels under (buy) or over (sell) the candle and moves overlapping ones out so they do not cover candles or each other."
+  },
+  {
+   "name": "Plan level pills and lines (ENTRY / SL / TP1-3; computed vs cited overlays)",
+   "aliases": [
+    "ENTRY SL TP",
+    "ChartOverlay",
+    "computed / cited",
+    "ChartBand",
+    "level pills",
+    "price levels"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/AnalysisResultView.tsx"
+   ],
+   "what_it_judges": "Level display: the published plan's entry/stop/targets as lines and pills, plus optional server-computed (dashed) or model-cited (dotted, dimmer) levels and a band; used by the legacy analysis page."
+  },
+  {
+   "name": "Indicator snapshot (computeSnapshot)",
+   "aliases": [
+    "computeSnapshot",
+    "IndicatorSnapshot",
+    "SMA20/50/200",
+    "Bollinger (20,2)",
+    "MACD",
+    "Stoch slow 14/3/3",
+    "ADX(14)",
+    "ATR(14) / atrPct",
+    "Ichimoku cloudNow / cloudAhead / cloudAheadTwisted",
+    "テクニカル指標表"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/index.ts"
+   ],
+   "what_it_judges": "Computed server-side on each analysis: SMA 20/50/200, Bollinger(20,2), MACD(12,26,9), slow stochastic(14,3,3), Wilder ADX(14), ATR(14), Ichimoku with the cloud standing now vs projected/twisted, and range high/low position; since analyze v68 (#104) these are stored in context but no longer shown or used for the decision."
+  },
+  {
+   "name": "Fractal swing levels (swingLevels / 2-bar pivots)",
+   "aliases": [
+    "swingLevels",
+    "fractal swing points",
+    "直近の高値・安値",
+    "swingHighs / swingLows",
+    "ピボット (swing pivots)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/structure.ts"
+   ],
+   "what_it_judges": "Level: confirmed highs/lows with 2 bars each side (newest first, up to 4 distinct levels at least 0.05% apart). Note: there are NO classic daily floor-trader pivot points (P/R1/S1) anywhere in the app; 'pivot' always means a swing fractal."
+  },
+  {
+   "name": "Market structure read (computeStructure: pivots, label, breaks, next level, ranges)",
+   "aliases": [
+    "構造",
+    "structure",
+    "pivots()",
+    "PIVOT_BARS 2",
+    "uptrend/downtrend/range/expanding/contracting label",
+    "Structure",
+    "上値余地/下値余地",
+    "netAtr",
+    "range20 range100",
+    "closePressure",
+    "mergeLevels"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/structure.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/index.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.13)"
+   ],
+   "what_it_judges": "Trend state and levels from closed bars: last-two-swing label (uptrend, downtrend, range, expanding, contracting), net move in ATR, merged support/resistance levels, nearest standing level above/below with room in ATR, 20/100-bar range position and close pressure; tolerances all in ATR (break 0.10, flat 0.25, near 0.25, merge 0.5). Computed and stored, but off the prompt/decision since v68."
+  },
+  {
+   "name": "Level break state and stop-hunt proxy (LevelBreak: held / broken / reclaimed, wickOnly)",
+   "aliases": [
+    "ブレイク判定",
+    "held broken reclaimed",
+    "wickOnly",
+    "stop hunt zone",
+    "ストップ狩り(ヒゲ抜け回数)",
+    "lastBreak"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/structure.ts",
+    "/home/user/fx-canvas-mind/src/lib/marketContext.ts"
+   ],
+   "what_it_judges": "Level filter/state: whether a swing level was settled through on a close (by 0.10 ATR), reclaimed, or only pierced by wicks (wickOnly count = the only computable stop-hunt evidence); used for structure bias and turn facts."
+  },
+  {
+   "name": "RSI divergence (detectDivergence)",
+   "aliases": [
+    "ダイバージェンス",
+    "divergence",
+    "bullish/bearish divergence",
+    "RSI divergence"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/divergence.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "Reversal hint: regular RSI(14) divergence between the last two pivot closes of one kind (price >=0.25 ATR lower/higher, RSI >3 points the other way, 5-60 bars apart); computed and stored, no longer in the prompt."
+  },
+  {
+   "name": "Turn evidence (computeTurn, 7 facts)",
+   "aliases": [
+    "転換の証拠",
+    "turn",
+    "TURN_FACTS",
+    "failed_break",
+    "stale_break",
+    "hist_run",
+    "rsi_recovery",
+    "mean_cross",
+    "counter_break",
+    "TURN_BLOCK 3"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/turn.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/entry.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.13)"
+   ],
+   "what_it_judges": "Trend-turning filter: counts, for a turn up and a turn down, how many of seven facts hold (reclaimed break, stale break, 3-bar MACD histogram run, RSI recovery from <30/>70 by 8 points, fresh SMA20 cross, counter-break, divergence); 3 or more = 'turning'. Gates removed from decisions since analyze v68; still computed."
+  },
+  {
+   "name": "Bounce conditions framework (computeSignals / signal-backtest)",
+   "aliases": [
+    "反発の条件",
+    "bounce conditions",
+    "SIGNAL_RULES",
+    "level_reject etc.",
+    "computeSignals",
+    "signal-backtest",
+    "反発の実績"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-backtest/index.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.16)"
+   ],
+   "what_it_judges": "BUY/SELL marks for 8 mirrored conditions priced as the app prices a plan (entry = close, stop = rejected extreme + 0.1 ATR floor 0.6 / cap 1.2 ATR, TP 1.5x, 48-bar horizon, 3-bar cooldown); §8.16 measured 35-46% hit vs 40% break-even on 15m/1h (4h BUY level_reject 53%, n=146, not stable across halves). Drawn on the legacy analysis chart."
+  },
+  {
+   "name": "Bounce rule: level_reject (rejection wick at a swing low/high)",
+   "aliases": [
+    "level_reject",
+    "確定安値/高値での反発",
+    "support/resistance bounce"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "BUY/SELL: a bar with a wick >=35% of its range touching a standing confirmed swing low (within 0.15 ATR above / 0.5 ATR pierce) and closing back above; SELL mirrored at highs."
+  },
+  {
+   "name": "Bounce rule: ma200_reject",
+   "aliases": [
+    "ma200_reject",
+    "SMA200での反発",
+    "200-bar average rejection"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "BUY/SELL: the same rejection wick at the 200-bar simple average."
+  },
+  {
+   "name": "Bounce rule: ma20_pullback",
+   "aliases": [
+    "ma20_pullback",
+    "SMA20 押し目/戻り",
+    "20-bar average pullback"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "BUY/SELL: the rejection wick at a 20-bar average that has been rising (falling for SELL) over 5 bars, i.e. the pullback in a trend."
+  },
+  {
+   "name": "Bounce rule: band_reentry",
+   "aliases": [
+    "band_reentry",
+    "BB 復帰",
+    "Bollinger re-entry"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "BUY/SELL: the previous close was outside the lower (upper) Bollinger(20,2) band and this close is back inside."
+  },
+  {
+   "name": "Bounce rule: cloud_reject",
+   "aliases": [
+    "cloud_reject",
+    "雲での反発",
+    "Ichimoku cloud rejection"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/indicators.ts"
+   ],
+   "what_it_judges": "BUY/SELL: rejection wick at the top (bottom) of the Ichimoku cloud standing at the bar (spans from 26 bars earlier) without having closed through it."
+  },
+  {
+   "name": "Bounce rule: divergence (confirmed)",
+   "aliases": [
+    "divergence",
+    "ダイバージェンス確定",
+    "bullish divergence confirmed"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/divergence.ts"
+   ],
+   "what_it_judges": "BUY/SELL fired two bars after the second low is confirmed (no repaint): lower closing low with higher RSI(14), 5-60 bars apart."
+  },
+  {
+   "name": "Bounce rule: double_pivot (double bottom / top)",
+   "aliases": [
+    "double_pivot",
+    "ダブルボトム",
+    "ダブルトップ",
+    "double bottom"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts"
+   ],
+   "what_it_judges": "BUY/SELL fired at confirmation of the second pivot: two lows within 0.25 ATR with a swing between them of at least 1 ATR."
+  },
+  {
+   "name": "Bounce rule: engulfing at a level",
+   "aliases": [
+    "engulfing",
+    "包み足",
+    "bullish/bearish engulfing",
+    "ローソク足の包み足"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/gainz.ts"
+   ],
+   "what_it_judges": "BUY/SELL candle pattern: engulfing body >=0.5 ATR at a standing low, the 200-bar average or the cloud top. The only candlestick pattern recognised in the app besides the engulfing leg of the GA rule and Pro-type structure (down candle then up candle); there is no pin bar / doji / star detector."
+  },
+  {
+   "name": "Chart state features (ownStateSeries / stateNow, 17 binned features)",
+   "aliases": [
+    "状態",
+    "chart state",
+    "OWN_FEATURES",
+    "ma50 slope50 ma200 mom rsi adx di bb vol session dow struct pos20 streak bar h1 h2",
+    "tendencies",
+    "analyze/state.ts"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/state.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.18)"
+   ],
+   "what_it_judges": "Trend/volatility/session state in coarse bins (MA50 and MA200 side, slope, 20-bar momentum, RSI, ADX, DI side, Bollinger position, ATR14/ATR100 volatility, UTC session, weekday, swing structure, 20-bar range third, 3-close streak, bar size, two higher-timeframe trend words); at runtime only used by research/tendencies (state helpers atrSeriesOf/barOpenMs are used elsewhere); §8.18: no directional edge found (AUC 0.49-0.51)."
+  },
+  {
+   "name": "Rule fit / situation footprint (learned rules)",
+   "aliases": [
+    "RuleFit",
+    "situation",
+    "footprintOf",
+    "situationFor",
+    "学習ルール",
+    "rulebook",
+    "LearnedRules",
+    "RuleFitPanel"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/situation.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/rules.ts",
+    "/home/user/fx-canvas-mind/src/components/RuleFitPanel.tsx",
+    "/home/user/fx-canvas-mind/src/components/LearnedRules.tsx"
+   ],
+   "what_it_judges": "Filter: compares today's ADX/RSI/ATR-type readings with the range spanned by the plans a learned rule was drawn from (match / off / unknown); legacy analysis page, learned rules not read since v68."
+  },
+  {
+   "name": "Regime derivation (deriveRegime: ADX 25/20 + SMA20/50 stack)",
+   "aliases": [
+    "regime",
+    "deriveRegime",
+    "TREND_ADX 25",
+    "RANGE_ADX 20",
+    "相場環境 (トレンド/レンジ)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/entry.ts"
+   ],
+   "what_it_judges": "Trend-state filter: ADX < 20 = range; ADX >= 25 with price > SMA20 > SMA50 (or mirror) = trend Up/Down; else unclear; used to forbid waiting for a pullback in a trend."
+  },
+  {
+   "name": "Entry plan gate (evaluateEntry, structure_conflict, turn_conflict)",
+   "aliases": [
+    "evaluateEntry",
+    "entry gate",
+    "structure_conflict",
+    "turn_conflict",
+    "stop_too_tight",
+    "poor_rr",
+    "target_too_close",
+    "too_far",
+    "should_be_market",
+    "MIN_STOP_ATR 0.6",
+    "MIN_RISK_REWARD 1.2",
+    "MAX_RISK_REWARD 6"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/entry.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/locale.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.12, §8.14, §8.19)"
+   ],
+   "what_it_judges": "Filter on a published plan: stop >=0.6 ATR, first target >=0.6 ATR, risk/reward 1.2-6, limit entry <=0.5 ATR / stop entry <=1.0 ATR away, no plan against the higher rung's last close-break or against a turning entry rung; structure/turn gates and confidence floor removed from decisions in analyze v68, ATR geometry kept."
+  },
+  {
+   "name": "ATR-based stop/target templates",
+   "aliases": [
+    "ATR×0.8 / 1.5倍",
+    "STOP_ATR",
+    "REWARD_RATIO",
+    "GA_STOP_ATR 1 / GA_REWARD 2",
+    "bounce stop",
+    "ATR14 Wilder",
+    "atrSeriesOf",
+    "pineAtr"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/rsisar.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/gainz.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/state.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/pine.ts"
+   ],
+   "what_it_judges": "Level: Wilder ATR(14)-based stops/targets (RSI+SAR 0.8 ATR/1.5x, GA 1 ATR/2x, bounce rules rejected-extreme +0.1 ATR within 0.6-1.2 ATR/1.5x); Q-Trend's break threshold and the SAR band also use ATR. The only ATR-multiple level tool; no Keltner/ATR-channel indicator exists."
+  },
+  {
+   "name": "Fixed-distance stop/target followers (ultraLevels, followTrade, ultraParamsFor)",
+   "aliases": [
+    "ULTRA_PAIRS",
+    "ULTRA_GOLD",
+    "stop 13 / TP 4,10,16",
+    "followTrade",
+    "qTrendTrades",
+    "SL/TP1/TP2/TP3"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/ultra.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/qtrend.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts"
+   ],
+   "what_it_judges": "Level + outcome: entry at the signal bar's close, stop 13 and TP 4/10/16 (pips on pairs, dollars on gold), followed on closed bars; a bar reaching both counts the stop; used for Q-Trend, ULTRA, macdx emails and chart tags."
+  },
+  {
+   "name": "Costly-hours filter (timing.ts, costly_hours)",
+   "aliases": [
+    "costly_hours",
+    "損失の大きい時間帯",
+    "COSTLY_HOURS_UTC",
+    "UTC 17-23時",
+    "ロールオーバー前後",
+    "costlyHourAt"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/timing.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/logic.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.18, §8.103)"
+   ],
+   "what_it_judges": "Time filter: RSI+SAR/GA emails and analyses on 15m/1h (UTC 17-23, JST 2:00-8:59) and 1m (UTC 20-23) are skipped because the New York-close spread (median 12.5 pips on USD/JPY) eats the plan; the Q-Trend/ULTRA/macdx/sweepx emails do not use it."
+  },
+  {
+   "name": "Market-closed and freshness filters (isMarketClosed, isPossiblyClosed, freshFor, staleForClose)",
+   "aliases": [
+    "市場休止",
+    "weekend filter",
+    "isMarketClosed",
+    "isPossiblyClosed",
+    "freshFor",
+    "FRESH_MS",
+    "staleForClose",
+    "日曜20:00UTCの4時間足"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/market-hours.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/logic.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/gold-minutes.ts"
+   ],
+   "what_it_judges": "Time filter: no judgement while the market may be shut (Saturday, Friday from 21/22 UTC, Sunday until 21/22 UTC, gold's daily break) and a signal is mailed only if its bar closed within freshFor (1m 2 min, 5m 10, 15m 20, others 30 min); answers made before the close are re-read."
+  },
+  {
+   "name": "Economic calendar events (econ-calendar)",
+   "aliases": [
+    "経済指標カレンダー",
+    "econ_events",
+    "Forex Factory calendar",
+    "news window",
+    "High impact events"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/econ-calendar/events.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/econ-calendar/index.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§5.1, §8.10)"
+   ],
+   "what_it_judges": "Event filter: scheduled releases (impact High/Medium/Low/Holiday, forecast, previous, no actuals) around a plan's horizon so the analyst and post-mortem do not treat news as a surprise; feeds the legacy analysis only."
+  },
+  {
+   "name": "LLM analyst with news web search (analyze, technical_only / technical_fallback)",
+   "aliases": [
+    "AI分析",
+    "analyze function",
+    "Claude analysis",
+    "web_search news allowlist",
+    "NEWS_DOMAINS",
+    "market_context",
+    "support_levels / resistance_levels (model-cited)",
+    "stop_hunt_zone (model-cited)",
+    "smart money (inference)",
+    "isInference"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/index.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/websearch.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/locale.ts",
+    "/home/user/fx-canvas-mind/src/lib/inference.ts",
+    "/home/user/fx-canvas-mind/src/lib/marketContext.ts",
+    "/home/user/fx-canvas-mind/src/components/MarketContextCard.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.19, §8.51)"
+   ],
+   "what_it_judges": "Model-written market context, cited levels and trade rationale (with allowlisted news search); since analyze v68 the BUY/SELL/WAIT signal, stop and target are overwritten by the server's RSI+SAR rule, so the model's output is a note; analysis screen unrouted since #139 though the function still runs."
+  },
+  {
+   "name": "Conditional WAIT and WAIT plan scoring (conditional_wait, waitPlanFor)",
+   "aliases": [
+    "条件付きWAIT",
+    "conditional_wait variant",
+    "waitPlanFor",
+    "WAIT_SCORER",
+    "triggered_right",
+    "not_triggered",
+    "wait_plan"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/conditional-wait.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/entry.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/track-outcomes/waits.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/variants.ts"
+   ],
+   "what_it_judges": "Verification of a WAIT: records a named trigger level/side/expiry and scores it against what the market did (never an order); admin-only candidate arm along with the lower-timeframe variant (lower_tf)."
+  },
+  {
+   "name": "Plan horizon table (PLAN_HORIZON_BARS / horizon.ts)",
+   "aliases": [
+    "計画の期間",
+    "horizon",
+    "PLAN_HORIZON_BARS",
+    "within period",
+    "ends_at",
+    "planHorizon"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/horizon.ts",
+    "/home/user/fx-canvas-mind/src/lib/planHorizon.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.8, §8.11)"
+   ],
+   "what_it_judges": "Time frame of a plan in bars per timeframe (15m 24, 1h 12, 4h 12, 1day 5), kept beside the win/loss record as 'settled within the period' rather than as a cutoff; legacy analysis only."
+  },
+  {
+   "name": "Held-position review (position-review / review.ts)",
+   "aliases": [
+    "保有ポジションのレビュー",
+    "position-review",
+    "HeldPositionCard",
+    "mechanicalFacts",
+    "ChangeSinceLastCard",
+    "positions"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/position-review/index.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/review.ts",
+    "/home/user/fx-canvas-mind/src/lib/positions.ts",
+    "/home/user/fx-canvas-mind/src/components/HeldPositionCard.tsx",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§2.3, §8.9)"
+   ],
+   "what_it_judges": "Hold/exit judgement for a position already held: server-measured touches of its stop/TP on the mid series plus a separate model verdict; legacy (analysis screen unrouted since #139)."
+  },
+  {
+   "name": "Drawing tools: lines (trend, ray, extended, hline, hray, vline, channel)",
+   "aliases": [
+    "トレンドライン(手描き)",
+    "レイ",
+    "延長線",
+    "水平線",
+    "水平レイ",
+    "垂直線",
+    "平行チャネル",
+    "DRAWING_TOOLS",
+    "drawings"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/drawings.ts",
+    "/home/user/fx-canvas-mind/src/components/DrawingLayer.tsx",
+    "/home/user/fx-canvas-mind/src/components/DrawingToolbar.tsx",
+    "/home/user/fx-canvas-mind/src/lib/drawingsStore.ts",
+    "/home/user/fx-canvas-mind/src/lib/drawingsSync.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§8.72)"
+   ],
+   "what_it_judges": "Manual drawing aid (not a signal): lines kept per pair in time/price coordinates, on every timeframe, saved in the browser and to the account."
+  },
+  {
+   "name": "Drawing tools: Fibonacci (retracement, time zone, fan, arc)",
+   "aliases": [
+    "フィボナッチ・リトレースメント",
+    "フィボナッチ・タイムゾーン",
+    "フィボナッチ・ファン",
+    "フィボナッチ・アーク",
+    "fib",
+    "fibTime",
+    "fibFan",
+    "fibArc",
+    "FIB_LEVELS 0..4.236"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/drawings.ts",
+    "/home/user/fx-canvas-mind/src/components/DrawingLayer.tsx"
+   ],
+   "what_it_judges": "Manual drawing aid for levels (0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618, 3.618, 4.236); there are no automatic Fibonacci levels in the app."
+  },
+  {
+   "name": "Drawing tools: rectangle, text, arrows, measure",
+   "aliases": [
+    "長方形",
+    "テキスト",
+    "上向き矢印",
+    "下向き矢印",
+    "値幅・期間の計測",
+    "rect",
+    "text",
+    "arrowUp",
+    "arrowDown",
+    "measure"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/drawings.ts",
+    "/home/user/fx-canvas-mind/src/components/DrawingLayer.tsx",
+    "/home/user/fx-canvas-mind/src/components/DrawingToolbar.tsx"
+   ],
+   "what_it_judges": "Manual drawing aid: zones, notes, markers and a price/bar-count/percentage measure between two points."
+  },
+  {
+   "name": "Drawing tools: long / short position tool",
+   "aliases": [
+    "ロングポジション（買い）",
+    "ショートポジション（売り）",
+    "long",
+    "short",
+    "position box tool"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/drawings.ts",
+    "/home/user/fx-canvas-mind/src/components/DrawingLayer.tsx"
+   ],
+   "what_it_judges": "Manual risk/reward aid: an entry with draggable target and stop showing the reward-to-risk ratio."
+  },
+  {
+   "name": "Drawing magnet and drawing preferences",
+   "aliases": [
+    "マグネット",
+    "magnet weak/strong",
+    "stay in drawing mode",
+    "DrawingPrefs",
+    "snap to candle OHLC"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/drawings.ts",
+    "/home/user/fx-canvas-mind/src/lib/chartPrefs.ts",
+    "/home/user/fx-canvas-mind/src/components/DrawingToolbar.tsx"
+   ],
+   "what_it_judges": "Drawing aid: snaps points to nearby candle highs/lows/opens/closes (weak/strong), keeps a tool active, remembers colour/width/line style."
+  },
+  {
+   "name": "Chart interaction aids (zoom/pan, crosshair, price-scale zoom, full screen, theme, bar countdown, spread/price now)",
+   "aliases": [
+    "拡大・縮小・移動",
+    "クロスヘア",
+    "全画面",
+    "白背景",
+    "chartView",
+    "visibleRange",
+    "zoomView",
+    "panView",
+    "next_close",
+    "spread",
+    "TICK_MS"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/chartView.ts",
+    "/home/user/fx-canvas-mind/src/components/PriceChart.tsx",
+    "/home/user/fx-canvas-mind/src/components/LiveChart.tsx",
+    "/home/user/fx-canvas-mind/src/lib/liveChart.ts",
+    "/home/user/fx-canvas-mind/src/lib/chartPrefs.ts"
+   ],
+   "what_it_judges": "Viewing aids, not judgements: zoom 15-all bars, room past the newest bar, crosshair with OHLC, price-axis stretch, dark/white theme, live bid/ask, spread and countdown to the next bar close."
+  },
+  {
+   "name": "Spread cost and loss-per-10k helpers",
+   "aliases": [
+    "SPREAD_SHARE_OF_STOP",
+    "lossPer10k",
+    "formatLoss",
+    "スプレッド負担",
+    "1万通貨あたり損失"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/src/lib/costs.ts",
+    "/home/user/fx-canvas-mind/src/components/AnalysisResultView.tsx"
+   ],
+   "what_it_judges": "Cost display: spread as share of the stop per timeframe (15m 14%, 1h 8%, 4h 6%) and the loss in yen/dollars per 10,000 units if the stop is hit."
+  },
+  {
+   "name": "Data health check (seriesHealth, coherentBar, parseCandles)",
+   "aliases": [
+    "seriesHealth",
+    "データの健全性",
+    "coherentBar",
+    "stale:Nmin"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/indicators.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/price-source.ts"
+   ],
+   "what_it_judges": "Data filter: drops incoherent bars and flags short, gapped or stale series before any indicator is computed."
+  },
+  {
+   "name": "Signal outcome tracking (track-outcomes evaluate / signal_events record)",
+   "aliases": [
+    "track-outcomes",
+    "evaluate",
+    "win/loss/untriggered/ambiguous/expired",
+    "通知の成績",
+    "signal_alerts record",
+    "signal_events",
+    "settle()",
+    "TP1 before stop"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/track-outcomes/evaluate.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/track-outcomes/quotes.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/signal-alerts/record.ts",
+    "/home/user/fx-canvas-mind/src/lib/outcomeStats.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§3, §8.23)"
+   ],
+   "what_it_judges": "Verification: settles each published plan or RSI+SAR/GA signal on bid/ask (TP before SL = win, SL first = loss, both in one bar = ambiguous, none in 48 bars = expired); recorded and shown as win rate with the break-even rate. Q-Trend/ULTRA/macdx/sweepx mail signals are not recorded."
+  },
+  {
+   "name": "Win-rate statistics (Wilson 95% interval, break-even, expectancy R, separated scores, confidence calibration)",
+   "aliases": [
+    "wilson",
+    "Wilson区間",
+    "損益ゼロ勝率",
+    "期待値R",
+    "SeparatedScores",
+    "ConfidenceGauge",
+    "ConfidenceCalibration",
+    "separated_scores",
+    "confidence_calibration",
+    "episodes (独立した状況)"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/analyze/signals.ts",
+    "/home/user/fx-canvas-mind/src/lib/outcomeStats.ts",
+    "/home/user/fx-canvas-mind/src/components/SeparatedScores.tsx",
+    "/home/user/fx-canvas-mind/src/components/ConfidenceCalibration.tsx",
+    "/home/user/fx-canvas-mind/src/components/ConfidenceGauge.tsx",
+    "/home/user/fx-canvas-mind/supabase/functions/_shared/episodes.ts",
+    "/home/user/fx-canvas-mind/docs/CONFIDENCE_CALIBRATION.md",
+    "/home/user/fx-canvas-mind/docs/SEPARATED_SCORES.md"
+   ],
+   "what_it_judges": "Quality of the signals themselves: rates with Wilson 95% intervals, break-even win rate for the plan's R:R, direction/timing/placement scored apart, whether stated confidence moved with outcomes, and independent-situation counts (4-hour episodes)."
+  },
+  {
+   "name": "Post-mortem facts and cause diagnosis (postmortem)",
+   "aliases": [
+    "postmortem",
+    "事後診断",
+    "computeFacts",
+    "MFE/MAE excursions",
+    "what-if wider stop / nearer target",
+    "cause",
+    "lessons",
+    "rulebook revision"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/postmortem/facts.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/postmortem/index.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/postmortem/prompt.ts",
+    "/home/user/fx-canvas-mind/docs/OPERATIONS.md (§4)"
+   ],
+   "what_it_judges": "Verification: excursions after the signal and how the same plan would have fared entered at market, with a wider stop or a nearer target, then a model-written cause and lesson constrained to those facts; legacy loop."
+  },
+  {
+   "name": "Replay harnesses (noise-floor, version-compare)",
+   "aliases": [
+    "noise-floor",
+    "version-compare",
+    "ノイズ床",
+    "candidate vs live rulebook",
+    "McNemar"
+   ],
+   "files": [
+    "/home/user/fx-canvas-mind/supabase/functions/noise-floor/index.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/version-compare/index.ts",
+    "/home/user/fx-canvas-mind/supabase/functions/version-compare/mcnemar.ts",
+    "/home/user/fx-canvas-mind/docs/NOISE_FLOOR_PREREGISTRATION.md",
+    "/home/user/fx-canvas-mind/docs/VERSION_COMPARISON.md"
+   ],
+   "what_it_judges": "Verification of the LLM analyst itself: how often it disagrees with itself on identical input (noise floor) and whether a candidate rulebook beats the live one (McNemar on paired outcomes); not chart analysis methods."
+  }
+ ],
+ "past_research": {
+  "measured": [
+   {
+    "name": "条件付き WAIT（analyze の候補版）の採点規則の帰無シミュレーション",
+    "section": "§8.7",
+    "in_app": true,
+    "timeframe": "1時間足・窓6本の模擬（実データではない）、1セル4万パス",
+    "result_summary": "窓の中の drift（ATR/足）が 0.00 / 0.10 / 0.20 のとき、流れに沿う主張は 51.6% / 63.7% / 73.9%、流れに逆らう主張は 48.0% / 36.3% / 25.6%。帰無は 50% ではなく、ありふれた弱いトレンドだけで 64% が出る。50% に対し 60% を見分けるには決着した主張が約 194 件必要。",
+    "verdict": "実成績ではなく採点規則の落とし穴の記録。trend_at_call で分けずに比率を読んではいけない、と明記。"
+   },
+   {
+    "name": "転換の証拠ゲート（turn_conflict）・構造ゲートの根拠（AI分析の公開プランの分解）",
+    "section": "§8.13（§8.12）",
+    "in_app": true,
+    "timeframe": "USD/JPY 9/8〜9/19 の全84回、全ペアの決着済み SELL 55 件（2026-09）",
+    "result_summary": "下抜けから2本以内の SELL は 6勝2敗、戻された下抜けの後の SELL は 9勝13敗、6本以上前の古い下抜けは 3勝5敗、抜け無しは 5勝9敗。「余地 0.5ATR 未満」は 5勝5敗、「上位足の売られ過ぎ」は 21勝23敗でどちらも分けない。点値の転換スコアは 0: 14勝16敗、1: 4勝10敗、3: 5勝2敗で勝敗をきれいに分けない。",
+    "verdict": "ゲートは事後に見つけた型に合わせたもので効果は測っていないと本文が明記。教訓の「余地 0.5ATR 未満は見送る」はデータが支持せず不採用。その後 §8.19（#104）で AI 分析は RSI＋SAR のみとなり、§8.51 で画面から外れた。"
+   },
+   {
+    "name": "損切り・利確1の ATR×0.6 下限（MIN_STOP_ATR 0.4→0.6）",
+    "section": "§8.14",
+    "in_app": true,
+    "timeframe": "公開済みプラン 57 件（stop_atr あり）、1h/4h/1day（2026-09）",
+    "result_summary": "0.4〜0.6 に入っていたのは 3 件（1day 0.50 勝ち・1day 0.57 負け・4h 0.59 負け）で 1勝2敗。tp1_atr を持つ 47 件の最小は 0.71 ATR で、利確側の床は何も落とさない。",
+    "verdict": "n=3 で何の証拠でもない、と本文が明記。床が何を落とすかの事実として記録しただけ。"
+   },
+   {
+    "name": "反発の条件8種（確定安値/高値・SMA200・SMA20 押し目・BB 復帰・雲・ダイバージェンス・ダブルボトム/トップ・包み足）の的中率",
+    "section": "§8.16（#99）",
+    "in_app": true,
+    "timeframe": "USD/JPY GMO 仲値・確定足・RR1.5・48本。1分(2026-08-24〜09-25, 33,434本)・15分(2025-09-23〜2026-09-25, 24,780本)・1h(同, 6,195本)・4h/1day(2024-01-01〜2026-09-25)",
+    "result_summary": "日中足はどの条件も的中率 35〜46% で損益分岐 40% の前後。15分の確定安値/高値の反発は BUY 41% [38-44] n=1004・SELL 41% [38-44] n=1138。1分の SMA200 SELL は 50% [43-57] n=192。4h の確定安値反発 BUY は 53% [45-61] n=146（+0.34R）だが前半57%→後半49%、4h の BB 復帰 BUY は 19% [10-33] n=47、1day は 55% [34-74] n=20。利確1.0R でも 48〜55%（損益分岐50%の前後）。",
+    "verdict": "精度を完璧に上げることはできなかった。4h/日足の BUY 側は期間がほぼ円安・ドル高の一方向で切り分け不能。条件が本当に何回反発したかを数字付きで AI と画面に出す仕組みだけを採用。"
+   },
+   {
+    "name": "状態ごとの傾向（MA/モメンタム/RSI/構造/上位足など）と時間帯コスト",
+    "section": "§8.18（#100）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 Bid/Ask 2024-01〜2026-09（約67,500本）、USD/JPY・EUR/USD・EUR/JPY・GBP/JPY・AUD/JPY、15分・1h・4h。前半〜2025-06／後半2025-07〜",
+    "result_summary": "方向の手がかりは無く、後半の AUC は 0.49〜0.51（前半だけだと 0.55〜0.62 に見える）。USD/JPY 15分足の終値スプレッド中央値は UTC21時台 12.5 pips・22時台 12.1・23時台 2.9、ほかは 0.2〜0.4。その時間に入ったプランの勝率は 15分足 1.5〜4.6%・1時間足 13〜18%。「UTC17〜23時は出さない」で後半の勝率が 4〜6 ポイント上がった（USD/JPY 15分足 BUY 33.9→38.9%・SELL 30.4→35.3%、1h BUY 36.3→39.8%・SELL 32.2→35.6%）が、損益分岐 40% には届かない。",
+    "verdict": "方向の予測力なし。時間帯コストだけが効いた（costly_hours として採用）。対照実験（正しいランダムウォーク）では傾向0件・AUC 0.49〜0.53。"
+   },
+   {
+    "name": "17 の定番テクニカルルールの比較（RSI30/70・RSI50・MACD・SMA3種・BB2種・Stoch・一目2種・SAR・DMI・CCI・ドンチャン・RCI）",
+    "section": "§8.19・§8.30・§8.106 の言及（#102。結果表は docs に無く、研究プログラム research/indicators.ts のみ）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 2024-01〜、11ペア、15分・1h・4h。前半で1つ選び後半で判定",
+    "result_summary": "docs には「#102 で RSI が17ルール中1位」「ストキャスのルールは1位の RSI に及ばなかった」という言及のみで、順位表の数字は docs に無い。プラセボ（ランダム発火の偽指標5つ）と同じ土俵で比較する設計。",
+    "verdict": "RSI を残して分析を RSI＋SAR にした根拠。数字そのものは docs に書かれていないため未確認として扱う。"
+   },
+   {
+    "name": "RSI の相方探し（RSI に足す指標ごとの的中）と、上位足 SMA50 の絞り込み",
+    "section": "§8.19・§8.106 の言及（#103。run 36106114155 のログ）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 2024-01〜、11ペア、15分・1h・4h。前半2024-01〜・後半2025-07〜2026-09",
+    "result_summary": "「SAR が前半も後半も RSI に足してプラスだった唯一の相手」（§8.19 の言及）。RSI 30/70 の合図に「1つ上の時間足の終値が SMA50 の上（買い）・下（売り）」を足すと残るのは約13%で、後半 +1.5 ポイント（−2.0〜+5.0）、効くとは言えなかった（§8.106 の言及。docs 本体に無く、ログから拾った数字）。",
+    "verdict": "RSI＋SAR を採用した根拠だが、後の測定（§8.19 の表）で損益ゼロに届かず。"
+   },
+   {
+    "name": "RSI＋SAR（RSI(14)30/70 戻り＋パラボリックSAR）",
+    "section": "§8.19（#104）",
+    "in_app": true,
+    "timeframe": "後半 2025-07〜2026-09、11ペア、スプレッド込み。損切り0.8ATR・利確1.5倍（損益ゼロ勝率40%）",
+    "result_summary": "15分足 勝率35.0%（885回）・当たり46.2%、1時間足 34.0%（247回）・44.0%、4時間足 42.1%（107回）・49.5%、合計 35.4%（1,239回）・46.0%、毎回入った場合 35.0%・44.8%。",
+    "verdict": "損益ゼロ（勝率40%・当たり50%）に届いていない。画面にもそう出す。1分足と日足は未測定。"
+   },
+   {
+    "name": "GainzAlgo 風「大きく動いたあとの反転足」と RSI＋SAR の利確2倍",
+    "section": "§8.21（#106）",
+    "in_app": false,
+    "timeframe": "GMO 15分足 11ペア。前半〜2025-06／後半2025-07〜2026-09。15分足・損切り1.0ATR・利確2倍（損益ゼロ勝率33.3%）",
+    "result_summary": "反転足（RSI70/30 版、前半1位）の後半は 8,638 件で勝率 29.4%・−0.113R・ブラインドとの差 +0.012R（誤差の範囲）、11ペア中プラスは 0。RSI＋SAR（アプリの出口）は 1,255 件 35.0%（損益ゼロ40%）・−0.125R・差 +0.008R。0.8ATR・2倍は 29.2%・−0.122R、1.0ATR・2倍は 30.3%・−0.087R（前半は −0.142R と逆）。4時間足は後半 +0.150R（n=107）だが前半 −0.427R。スプレッドだけで 15分足は1回約 −0.13R、4時間足は約 −0.06R。",
+    "verdict": "ランダムに毎本入るのと同じでスプレッド分だけ負け。一貫した改善が無く出口は変えず。金は未試験。"
+   },
+   {
+    "name": "報告されている GainzAlgo V2 [Alpha] の条件の再現（3通りの読み方）",
+    "section": "§8.22（#107）",
+    "in_app": false,
+    "timeframe": "GMO 11ペア 15分足中心・損切り1.0ATR・利確2倍。後半 2025-07〜2026-09",
+    "result_summary": "gz_atr50（前半1位）6,903 件 28.9%・−0.129R・差 −0.001R、gz_atr80 9,583 件 29.4%・−0.113R・差 +0.015R、gz_range80 7,958 件 30.2%・−0.090R・差 +0.037R。gz_atr50 は11ペア中プラス0。アプリの出口でも 34.3%（損益ゼロ40%）・−0.142R。1時間足の gz_atr50 は前半 +0.040R（ブラインド比 +0.108R）が後半 −0.098R で続かず。",
+    "verdict": "公式の勝率75%超に近い数字はどの読み方・足・出口でも出ず（1:2 なら29〜30%）。第三者報告の条件の再現であり本物の中身ではないと明記。"
+   },
+   {
+    "name": "25年分の日足のトレンドフォロー（12か月モメンタム・200日線・50/200日線・55/20日ブレイクアウト）",
+    "section": "§8.24（#109）",
+    "in_app": false,
+    "timeframe": "日足 1999〜（ECB 参照レート換算の11ペア、1ペア年率10%値動きに揃え、1pip スプレッド込み、11ペア均等）。選定1999〜2012・確認2013〜",
+    "result_summary": "1999〜2012の Sharpe → 2013〜の Sharpe: 12か月モメンタム 0.18→0.20（年率 +1.2%、最大下落 −18.0%、14年中7年プラス、11ペア中7ペアで後半プラス）、200日線 0.11→0.09、50/200日線 0.10→0.04、55/20ブレイクアウト 0.06→−0.10。ランダム売買20通りは中央値 0.07→0.01、上位5%が 0.54→0.69。",
+    "verdict": "前半1位のモメンタムも Sharpe 0.20 はランダム上位5%（0.69）より下で偶然の範囲。数か月〜年単位の保有でアプリの売買サインとは別物。入れず。"
+   },
+   {
+    "name": "キャリー（金利の高い通貨を買い続ける）とトレンド併用・スワップ込み",
+    "section": "§8.24（#109）",
+    "in_app": false,
+    "timeframe": "日足 1999〜（BIS 政策金利で測定、取り分 −0.5%/年は仮）。2013〜が確認期間",
+    "result_summary": "キャリー Sharpe 0.45→0.35（2013〜年率 +1.6%、最大下落 −11.0%、14年中9年プラス）、キャリー＋トレンド 0.50→0.24、12か月モメンタム＋スワップ 0.49→0.06、200日線＋スワップ 0.40→0.05。キャリーは 2008年10月の1か月で −8.8%、2024年8月 −1.5%（トレンド併用で −0.1% / −0.5%）。",
+    "verdict": "両期間プラスはキャリーだけだが 0.35 もランダム上位5%（0.69）より下で偶然の範囲。急な巻き戻しに弱い。アプリには入れず。"
+   },
+   {
+    "name": "SAR で利を伸ばす出口（SAR 追従・シャンデリア）と固定出口",
+    "section": "§8.24（#110）",
+    "in_app": false,
+    "timeframe": "GMO 15分足から作った 1h・4h・日足、アプリの RSI＋SAR の入り。前半〜2025-06・後半2025-07〜",
+    "result_summary": "4時間足: SAR 追従（前半1位）は前半 n=116 で −0.193（ブラインド差 −0.055）、後半 n=107 で +0.540（差 +0.541 [−0.191〜+1.274]）。固定（今のアプリ）は −0.283 / +0.041。シャンデリアは前半最下位 −0.492 で後半 +0.981（差 +1.216 [+0.102〜+2.330]）。1時間足は後半どの出口もアプリの入りがブラインド以下（−0.05〜−0.13）。日足は前半21件・後半3〜5件で判断不能。",
+    "verdict": "向きが期間で入れ替わり一貫した改善なし。出口は変えず。採用の4ルール（先に固定→前半で選び後半の差の95%幅が0より上→実記録30回→測ったものだけ表示）を明文化。"
+   },
+   {
+    "name": "GA型（GainzAlgo V2 Alpha 型：包み足・実体が値幅の半分超・RSI50未満・終値が5本前より安い、損切り1ATR・利確2倍）",
+    "section": "§8.25（#112）・§8.27",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h。前半2024-01〜2025-06・後半2025-07〜",
+    "result_summary": "前半 12,880 件 勝率30.4%・−0.086R（毎本入り −0.097R、差 +0.011R）、後半 10,757 件 28.8%・−0.134R（毎本 −0.118R、差 −0.015R [−0.047,+0.016]）。後半の時間足別は 15分 28.2%・−0.150R（8,317件）、1h 30.6%・−0.080R（1,791件）、4h 30.7%・−0.080R（649件）。後半11ペア中プラス0。ランダムとの差は 1時間足が +0.068R / +0.006R、15分 +0.006R / −0.020R、4時間 −0.086R / −0.012R。",
+    "verdict": "ランダムに入るのと変わらずスプレッド分だけ負け。採用ルールを満たしたからではなく利用者の指示でチャートとメールに追加。"
+   },
+   {
+    "name": "GA型（#132設定）の4時間足の成績",
+    "section": "§8.50",
+    "in_app": true,
+    "timeframe": "GMO 4時間足、前半 2024-01〜2025-06、後半 2025-07〜",
+    "result_summary": "前半 106回・勝率30.2%・−0.094R、後半 102回・39.2%・+0.176R。",
+    "verdict": "回数が少なく期間によるばらつきが大きいと本文が明記。勝てる根拠とは書いていない。"
+   },
+   {
+    "name": "SPECTRA 型（カルマン・スーパートレンド＋RSI50 フィルター）",
+    "section": "§8.33（#120）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h。前半 2024-01〜2025-06・後半 2025-07〜2026-09。損切り1ATR・利確2倍(r2w)",
+    "result_summary": "前半 8,515 回 31.2%・−0.062R [−0.103〜−0.022]・ランダムとの差 +0.030R [−0.010〜+0.070]、後半 7,164 回 29.4%・−0.116R [−0.166〜−0.066]・差 −0.002R [−0.052〜+0.048]。1時間足は −0.048R・差 +0.023 / −0.031R・差 +0.052 [−0.048〜+0.151]。プラスのペアは前半1/11・後半0/11。RSI フィルターが外したのは各期間1回だけ。分割利確でも変わらず（46.1% / 44.1% が最初の利確に到達）。",
+    "verdict": "どの時間足・期間でもスプレッド込みマイナス。サイン・メールには使わず表示のみ。"
+   },
+   {
+    "name": "Zone Shift（ChartPrime）の転換と再テスト ◆",
+    "section": "§8.38（#125）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h。前半・後半、r2w",
+    "result_summary": "転換: 前半 6,981 回 30.7%・−0.076R・差 +0.015R、後半 5,687 回 29.7%・−0.109R・差 +0.006R。再テスト◆: 前半 10,965 回 30.4%・−0.087R・差 +0.006R、後半 9,028 回 30.4%・−0.085R・差 +0.026R。転換の1時間足は後半 +0.003R・差 +0.087 [−0.025〜+0.198]。◆ の4時間足は前半 +0.087R（差 +0.112）が後半 −0.065R。前半だけ幅が0をまたがない組は後半で消えた。",
+    "verdict": "スプレッド込みでマイナス、ランダムとの差は誤差の範囲。サイン・メールには使わず表示のみ。"
+   },
+   {
+    "name": "GA型のあと、ストキャスが80（70〜90）を抜けるまで待つ",
+    "section": "§8.39（#126）",
+    "in_app": false,
+    "timeframe": "GMO 1時間足中心・11ペア・r2w。しきい値は前半で1つ選び後半で判定",
+    "result_summary": "前半で選ばれた 70 は前半 +0.029R・差 +0.096 [+0.019〜+0.173] だったが、後半は 1,808 回 29.9%・−0.101R・差 −0.017 [−0.083〜+0.050] で GA型そのまま（−0.080R）より悪く、11ペア全部マイナス。80 は両期間とも GA型そのままとほぼ同じ（差 +0.021 / +0.004）。",
+    "verdict": "待っても良くならず。前半1位が後半で崩れた例。GA型・メールは変えず。"
+   },
+   {
+    "name": "ダウ理論の出来事で入る（更新・1回目・確定、上位足一致）",
+    "section": "§8.43（#130）・§8.90 の言及",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h、2024-01-01〜2025-09-25。前半・後半。山谷は左右5本、r2w",
+    "result_summary": "更新 6,542回 −0.081R（差 +0.007）/ 5,434回 −0.062R（差 +0.042）、1回目 3,755回 −0.058R / 3,094回 −0.101R、確定 2,409回 −0.108R（差 −0.011）/ 2,059回 −0.139R（差 −0.026）、確定＋上位足 571回 −0.222R（差 −0.120）/ 472回 −0.074R。ランダムに入った場合は前半 −0.094R・後半 −0.114R。確定＋上位足の1時間足前半は 113回・勝率12.4%・−0.628R（差 −0.572）、後半は 110回・33.9%・+0.029R。",
+    "verdict": "2回目で確定まで待っても良くならず。極端な前半の値は56週に散らばり実装の誤りではなく、多くの組を見たときの偏りとして扱う。サイン・メールには使わず。"
+   },
+   {
+    "name": "チャートのダウ表示が出ている間の当たり（5分ごとに数える）",
+    "section": "§8.90（#179）・§8.94（#183 で測り直し）",
+    "in_app": true,
+    "timeframe": "GMO 14ペア（判定は両期間にデータのある12ペア）、5分・15分・1h・4h、2024-01-01〜2026-10-02 00:00 UTC。前半〜2025-06-30・後半2025-07-01〜",
+    "result_summary": "24の組（4つの表示×4つの時間足、と「4つそろった」）のうち「予測力がある」0・「勝てる」0・「逆に外れやすい」は5分足の上昇の1つだけ（差 −0.48 / −0.72 ポイント）。先に届いた方の当たりは 45.0〜51.4%（ランダムは 48.3〜51.8%）。スプレッド込みで損切り・利確とも ATR×1 だと勝率30〜45%・1回あたり 5分足 −0.61〜−0.70R、15分 −0.42〜−0.60R、1h −0.29〜−0.38R、4h −0.11〜−0.34R。オーナーの画面の形（4H・1Hが下降、15M・5Mが逆）は 87,125か所で 50.2%（ランダム 49.0%）、差 +1.2ポイント [−1.4〜+3.8]、1回あたり −0.36R。見つけられる最小の差は 5分 約1.1・15分 約1.8・1h 約3.7・4h 約7.2 ポイント。",
+    "verdict": "ランダムとほぼ同じ（約48〜52%）。スプレッドを払うとどれもマイナス。ダウの説明文にこの結果を書き足した。"
+   },
+   {
+    "name": "Pro型（GainzAlgo Pro の説明文から作った点数方式）",
+    "section": "§8.44（#131）",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h。前半・後半、r2w",
+    "result_summary": "4部品の gp_score: 前半 51,811 回 30.2%・−0.093R・差 −0.001R、後半 43,665 回 29.3%・−0.118R・差 −0.005R。傾きなし gp_rev: −0.083R / −0.117R。GA型（Standard 4条件）は −0.086R / −0.134R。プラスのペアは両期間とも 0/11。",
+    "verdict": "ランダムと区別がつかず、スプレッド分だけ負け。式は変えず、サイン・メールにも使わない。本物の Pro の式は非公開で独自の読み方。"
+   },
+   {
+    "name": "各インジケーターの数字設定の総当たり（GA型・RSI＋SAR・SPECTRA・Zone Shift・ダウ・Pro型・ストキャス・FVG）",
+    "section": "§8.45（#132）・#133",
+    "in_app": true,
+    "timeframe": "GMO 15分足 11ペア。前半で300回以上の設定のうち勝率最大を選び、後半で確認",
+    "result_summary": "前半の順位と後半の順位の順位相関は GA型 0.18、RSI＋SAR −0.23、SPECTRA −0.10、Zone Shift −0.48、ダウ 0.10、Pro型 −0.25、ストキャス −0.25、FVG 0.99。後半の1回あたりは全てマイナスで、ランダムとの差の95%幅は全てゼロをまたぐ。例: GA型 後半 −0.134R→−0.093R（差 −0.015→+0.025R）、SPECTRA型 −0.116R→−0.121R、Zone Shift −0.102R→−0.122R。",
+    "verdict": "勝てる設定は見つからず。SPECTRA型・Zone Shift・ストキャスは後半で悪化したため #133 で元に戻した。"
+   },
+   {
+    "name": "ストキャスのダマシを見分ける判定（ADX・上位足ダウ・張り付き・確認待ち）",
+    "section": "§8.46（#134）",
+    "in_app": false,
+    "timeframe": "GMO 15分足 11ペア、15分・1h・4h、後半（ストキャス 14・1・3 の 80/20 クロス、r2w）",
+    "result_summary": "ADX は通した 28.3% 対 外した 30.6%（差 −2.3 [−3.7〜−0.9]）と逆向き。上位足ダウ −0.9 [−2.3〜+0.4]、張り付き −0.7 [−2.2〜+0.7]、警告なしだけ −1.7、2つ以上でダマシ −2.2。前半で選ばれた確認待ちは後半 29.0%（全サイン比 −0.1 [−0.7〜+0.5]）で効かず。",
+    "verdict": "見分ける判定は作れず。チャートに載せない。結果を見てから分かった逆向きの傾向は使わない。"
+   },
+   {
+    "name": "チャートの大きな流れを最もよく読むインジケーター（31候補）",
+    "section": "§8.54（#142）",
+    "in_app": true,
+    "timeframe": "GMO 15分・1h・4h 11ペア、前半2024-01〜2025-06・後半2025-07〜。答えは事後に作った波(K=6)",
+    "result_summary": "EMA50 の上か下かが後半 71.6% [70.4〜72.9] で1位、ストキャス %K50 は 68.3%（12位）。ストキャスとの差 +3.3 ポイント [+1.9〜+4.7]（4時間足だけだと +1.4 [−1.7〜+4.6] で見分けられない）。ランダムな値動きでも同じ順位（EMA50 74.9%、ストキャス 68.6%）。その後48本の値動きが読みと同じ向きになった割合は後半どの候補も 45〜50%（EMA50 は 48.1% [46.6〜49.7]、−0.29 ATR [−0.50〜−0.07]、4時間足は −0.85 ATR）。",
+    "verdict": "過去の流れを今どちらか読むだけで先は当たらない。EMA50/200 の線を表示に追加（#143）。売買サイン・メールには入れず。"
+   },
+   {
+    "name": "動画の ULTRA の「勝率79〜80%」と数え方",
+    "section": "§8.63（#151）",
+    "in_app": true,
+    "timeframe": "金 1時間足 2026-08-25〜09-28（585本）の画面確認のみ",
+    "result_summary": "動画の表は TP1 489回＋SL133回＝622回で WIN RATE 79%。TP1（5）が SL（10）の半分の幅なので、偏りの無い値動きでもでたらめに入って約 67%（10÷(5+10)）は TP1 に先に届く数え方。画面確認の金1時間足は 18回中 TP1 が 8回（44%）。",
+    "verdict": "動画の勝率はこのアプリでは測っていないと明記。後の §8.69 で SL10・TP1 5pips の21ペアを正式に測定。"
+   },
+   {
+    "name": "Q-Trend の TP・損切りの決め方3通り（線・ULTRA同数・ATR）",
+    "section": "§8.68（#156）",
+    "in_app": true,
+    "timeframe": "GMO 5分足の Bid/Ask、メールの21ペア、2026-01-05〜2026-09-29（合図 76,594 回、TP1 決済）",
+    "result_summary": "A（線）: TP到達 26.9%（損益ゼロに50%）・平均 −0.54R・1回 −2.22 pips（損切り幅中央値 4.6 pips）。B（ULTRA同数・損切り10 pips/TP 5・10・15）: 43.5%（要る率 66.7%）・−0.23R・−2.34 pips。C（ATR）: 30.4%（要る率 60%）・−1.50R・−2.21 pips。TP2・TP3 でも1回あたりは −2.2〜−2.4 pips。UTC21〜23時は払ったスプレッド中央値 4.9 pips で1回あたり −7.3〜−7.6 pips。",
+    "verdict": "どの決め方でも負け越し。同じトレンド向きに6本ごとに入る物差しより合図の足で入る方がよくもない。オーナーの選択で B を採用。"
+   },
+   {
+    "name": "メールを送る時間足ごとの勝率（Q-Trend＋ULTRA、損切り10・TP1 5pips）",
+    "section": "§8.69（#157）",
+    "in_app": true,
+    "timeframe": "GMO 21ペア、5分・15分・1h・4h・日足、2024-01-01〜2026-09-29。前半・後半の境 2025-05-19",
+    "result_summary": "TP1 が先の割合・1回あたり・物差し: 5分足 59.4%（59.0〜59.8）・307,686回・−1.99 pips・59.9%、15分足 60.0%・98,775回・−1.81・60.0%、1時間足 61.8%（60.9〜62.7）・23,726回・−1.52・59.9%、4時間足 62.2%（60.5〜64.0）・5,850回・−1.20・60.2%、日足 35.3%・725回・−9.34・41.8%。4時間足の内訳は Q-Trend 61.4%（4,109回）、ULTRA 64.2%（1,741回）。損益ゼロに要る勝率は約67%以上。",
+    "verdict": "どの足も負け越し。区間の下端を使う選び方で1時間足がわずかに上、4時間足は勝率そのものが最大だが差は誤差。オーナーが測定結果の前に 4時間足を選択。日足の悪さは 21:00 UTC 確定のスプレッド中央値 7.9 pips が原因。"
+   },
+   {
+    "name": "損切り30（TP1 5pips）での時間足別成績の測り直し",
+    "section": "§8.78（#166）",
+    "in_app": true,
+    "timeframe": "GMO 21ペア、2024-01-01〜2026-09-29（run 36587276263）",
+    "result_summary": "TP1 が先・1回あたり（Q-Trend / ULTRA）: 5分足 84.1%・−1.90 / 84.9%・−1.49、15分足 84.1%・−1.80 / 84.6%・−1.47、1時間足 85.3%・−1.31 / 85.5%・−1.39、4時間足 86.0%・−0.87 / 86.6%・−0.46、日足 75.8%・−8.07 / 77.0%・−8.10。損益ゼロには 86% より上が必要。値段の低い円ペア（MXN/JPY・ZAR/JPY・TRY/JPY・SEK/JPY）は5日で決着せず 89〜98% に偏る。",
+    "verdict": "どの足も1回あたりマイナス（損切り10のときより負けは少し小さい）。"
+   },
+   {
+    "name": "Stoch・BLSH・MACD の3つが同じ向きの合図だけに絞る",
+    "section": "§8.70（#158）",
+    "in_app": false,
+    "timeframe": "GMO 21ペア（4時間足は14ペア）、5分〜日足、損切り10・TP1 5pips、2024-01-01〜",
+    "result_summary": "全部→そろった合図（残る割合）: 5分足 59.4→58.2%（25%）差 −1.2 [−1.6〜−0.8]、15分足 60.0→59.0% 差 −1.0 [−1.7〜−0.3]、1時間足 61.8→61.2% 差 −0.6 [−1.9〜+0.7]、4時間足 62.3→61.1%（23%）差 −1.1 [−4.0〜+1.7]、日足 35.3→44.5% 差 +9.2 [+2.3〜+16.2]（作り物でも日足は上がった）。ULTRA は 4時間足で 1,811回中0回しかそろわない。",
+    "verdict": "良くならず、ULTRA のメールが来なくなる。オーナーの選択で「入れない」。"
+   },
+   {
+    "name": "合図×Stoch・BLSH・MACD の全パターン（1,224通り）総当たり",
+    "section": "§8.71（#159）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、損切り10・TP1 5pips。前半（2025-05-19 より前）で選び後半で判定",
+    "result_summary": "今のメール: 前半 61.2%（58.8〜63.7%、2,939回、−1.28 pips）／後半 63.2%（61.0〜65.3%、2,724回、−1.08 pips）。物差し 59.3% / 61.4%。前半で選ばれたパターンは 64.9%（下の端 61.7%、1,036回）→後半 64.7%（61.2〜68.2%、921回）で、下の端が物差し 61.4% に届かず不採用。作り物（全パターン効果なし）でも同じパターンが 68.3%（今のメール 64.9%）で一番になった。",
+    "verdict": "決めた選び方で「今のまま」。損益ゼロに要る約67%にも届かない。"
+   },
+   {
+    "name": "合図の後に Stoch が20（買いは80）へ届くか（見分ける条件探し）",
+    "section": "§8.73（#161）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、損切り10 pips が先なら失敗。前半/後半 2025-05-19",
+    "result_summary": "今のメール 前半 29.8%（偶然との差 −1.7）／後半 34.9%（+0.5）、Q-Trend 32.7%（−3.3）/38.9%（−0.7）、ULTRA 21.4%（+1.7）/24.6%（+3.4）、物差し 30.0% / 33.9%。前半で選ばれた条件は後半 +2.2（−3.0〜+7.3、202回）で、メールの +0.5 に届かず。前半で選ばれなかった条件の 1,611 中 170（10.6%）が後半で下の端がメールを上回った（作り物では 1.9% と 0%）。",
+    "verdict": "見分ける条件は見つからず「今のまま」。後半を見て選ぶのは後知恵。"
+   },
+   {
+    "name": "「Stoch が20/80 に届いたら利確」（損切りあり）と今の決済の比較",
+    "section": "§8.74（#162）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、損切り10 pips、2024-01-01〜（前半/後半 2025-05-19）",
+    "result_summary": "1回あたり: 今の決済（TP1 5 pips）前半 −1.28（勝ち60.0%）・後半 −1.06 に対し、Stoch 決済は前半 −2.44（23.7%）・後半 −1.66（26.7%）。差 前半 −1.16（−2.22〜−0.11）、後半 −0.60（−1.51〜+0.30）。勝つときは平均 +20〜+22 pips だが損切りが約7割。物差しでは2つの決済はほぼ同じ（差 +0.04 / −0.12）。",
+    "verdict": "「はっきり良い」基準を満たさず（両方の半分で今より悪い）。入れず。"
+   },
+   {
+    "name": "損切りを置かない Stoch 決済（30本/120本上限）",
+    "section": "§8.75（#163）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、2024-01-01〜（前半/後半 2025-05-19）",
+    "result_summary": "1回あたり（今のメール 前半/後半）: 今の決済 −1.28 / −1.06、損切りなし30本 −1.98（−9.11〜+5.15）/ +3.72（+0.07〜+7.38）、120本 −0.40（−7.67〜+6.86）/ +5.55（+2.07〜+9.04）。勝率は64〜66%だが平均の負けが前半 −66〜−68・後半 −40〜−44 pips。最悪の1回は 30本で −1,025.8 pips・120本で −1,121.9 pips（クロス円1万通貨で約10〜11万円）、途中で逆に行った最大は 1,723 pips。後半の良さの半分ほどは物差し（すべての足で入る、+3.54 / +3.17）にも出ており合図の強みと言えない。買い +8.07・売り +3.32（後半120本）。",
+    "verdict": "120本は基準上「はっきり良い」だが、相場による分と1,000 pips超の負けがあるため入れず。入れるかはオーナーが決める。スワップは未計上。"
+   },
+   {
+    "name": "損切りせず利確（TP1）まで待った場合（オーナー「待てば利確に行くのでは」の検証）",
+    "section": "§8.76（#164）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、TP1 5 pips・損切りなし。前半・後半",
+    "result_summary": "今の決済で損切りになった取引（前半1,139件=38.0%、後半1,003件=34.6%）のうち 5日以内に TP1 に届いたのは 78.7% / 80.3%、4週間以内は 89.3% / 89.7%。届かなかった取引の5日後は平均 −54.3・最悪 −422.0 pips（前半）、−70.2・−587.1（後半）、4週間後は平均 −98.4・最悪 −1,067.7 / −111.8・−555.8。全取引の1回あたり: 今の決済 −1.28 / −1.06、待つ5日 −0.33 / −0.84、待つ4週間 +0.25 / +0.06（差は区間がゼロをまたぐ）。勝率は約9割に上がるが負けの平均は 5日で −43〜−45、4週間で −63〜−73 pips。",
+    "verdict": "オーナーの考えのとおり約8〜9割は戻るが、戻らない1〜2割が大きく負ける。基準上「はっきり良いとは言えない」。入れず。"
+   },
+   {
+    "name": "損切りの幅を広げた場合（15〜100 pips・なし）",
+    "section": "§8.77（#165）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足 14ペア、TP1 5 pips、前半/後半",
+    "result_summary": "1回あたり（前半・後半）: 10 pips −1.28・−1.07（勝ち60%・61%）、30 −0.61・−0.99（81%・79%）、50 −0.74・−0.43、100 −0.40・−0.57（89%・88%）、なし −0.33・−0.80（最悪 −422・−587 pips）。前半1位の S100・5日は後半 −0.57 で今 −1.07 との差 +0.51（−0.40〜+1.41）。物差し（すべての足で入る）でも同様に良くなる。",
+    "verdict": "基準上「はっきり良いとは言えない」。合図ではなく決済のしかたの差。FX の損切りは §8.78 でオーナーの選択により 30 pips に変更。"
+   },
+   {
+    "name": "金（XAU/USD）の利確・損切り組み合わせ（TP5〜50ドル×SL10〜100ドル・ATR連動）",
+    "section": "§8.79（#167）",
+    "in_app": true,
+    "timeframe": "Dukascopy 金（1分足 2023-12-18〜・1時間足 2021-01〜）から作った 5分〜日足、2024-01-01〜2026-09-28",
+    "result_summary": "今の決済（TP1 5ドル・損切り10ドル）: 5分足 19,649回 TP1先64% −0.77ドル、15分 6,481回 64% −0.74、1時間 1,816回 64% −0.69、4時間 459回 63% −0.77（−1.43〜−0.11）、日足 72回 61% −1.36。損益ゼロには67%が必要。4時間足の TP50・SL50 は全期間 +1.13 だが前半 −3.44・後半 +6.13。選ばれた TP50・SL10・4週間は後半 −0.33（今 −0.80、差 +0.47、下の端 −3.10）。BUY +4.63 / SELL −3.54 で金の上昇相場の影響。区切りを変えた3通りでは選ばれる組が全て違った。",
+    "verdict": "4通りの区切りすべてで「はっきり良いとは言えない」。利確50・損切り50 のような良い数字は足を1時間ずらすだけで −0.16〜+1.36 に動く。"
+   },
+   {
+    "name": "金の利確30/60/90ドル・損切り10ドル（#168）とその後の13ドル水準",
+    "section": "§8.80・§8.98",
+    "in_app": true,
+    "timeframe": "Dukascopy 金、2024-01-01〜2026-09-28、5分〜日足",
+    "result_summary": "§8.80（TP1 30ドル・SL10ドル）TP1先・1回あたり（Q-Trend / ULTRA）: 5分足 25.5%・−0.09ドル / 22.8%・−1.14、15分 25.6%・−0.01 / 21.4%・−1.68、1時間 25.6%・−0.03 / 23.9%・−0.74、4時間 27.2%・+0.59 / 20.8%・−1.97、日足 26.5%・+0.21 / 15.4%・−4.45（損益ゼロに25%超）。§8.98（SL13ドル・TP1 4ドル）は Q-Trend 5分 74.3%・−0.66、15分 74.3%・−0.65、1時間 75.3%・−0.50、4時間 73.9%・−0.68、日足 78.0%・−0.19（50回、95%区間 −2.16〜+1.78）、ULTRA 4時間 72.5%・−1.02、日足 42.3%・−6.41（26回）。",
+    "verdict": "損益ゼロ（4ドル/13ドル水準では76%）を上回るのは日足 Q-Trend 78.0%（50回）だけで、それもスプレッドを払って −0.19ドル。動画の80〜82%は絞り込み付きの別サインで比べられない。"
+   },
+   {
+    "name": "FX の利確幅を同じ取引で比較（5〜90 pips・ATR連動）と利確20・40・60の時間足別成績",
+    "section": "§8.82（#173）・§8.83（#172）",
+    "in_app": true,
+    "timeframe": "GMO 4時間足・5分足（Bid/Ask）、A+B 11ペア、前半 2,416回・後半 2,216回（比較）／21ペア5〜日足（再測定）。2024-01-01〜2026-09-29/30",
+    "result_summary": "§8.83 の1回あたり（前半・後半）: T5 −0.48・−1.20（TP1先 84.7%）、T10 −0.90・−1.10、T20 −1.35・−1.27（58.3%、損益ゼロに60.0%）、T30 −1.77・−0.96、T45 −1.41・−0.58、T60 −1.82・−0.91、T90 −2.91・−0.85、ATR×1 −2.53・−1.18。前半で一番ましな T45 は後半差 +0.62（−1.33〜+2.57）。利確20と5の差は全期間 −0.49（−1.24〜+0.26）。§8.82（利確20）: 4時間足 Q-Trend 58.3%・−1.47 / ULTRA 60.1%・−0.54（§8.93 後は 59.1%・−1.17 / 60.8%・−0.37）、5分足 58.0% / 58.2%、日足 55.1%・−6.92 / 50.0%・−9.50。5日で決着しない取引が4時間足で 17%（6,097回中1,018回、ほぼ値段の低い円ペア）。",
+    "verdict": "基準上「はっきり良いとは言えない」。オーナーは測定の結果を待たずに利確20・40・60にし、結果を見たうえで §8.83 後もそのまま維持。"
+   },
+   {
+    "name": "確定の前に送る予告メール（5〜120分前）",
+    "section": "§8.84（#171-5）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足・A+B 11ペア（144週）、2024-01-01〜2026-09-29。利確20・損切り30",
+    "result_summary": "一度だけ・X分前の 当たり / 拾えた割合 / 予告で入った取引の1回あたり: 5分前 92.7% / 93.1% / −1.34 pips、10分前 89.7 / 90.7 / −1.74、15分前 88.4 / 87.8 / −2.09、30分前 86.2 / 81.9 / −1.66、60分前 80.2 / 69.8 / −1.34、120分前 72.2 / 50.8 / −2.47。メールで入った取引は −1.36 pips（4,742回）。見張り方式は拾える割合が高い（94.8〜97.9%）が当たりが下がる（88.1〜63.5%）。",
+    "verdict": "予告で入った取引はどの時刻でもメール（−1.36）より良くなかった。当たった予告だけ見た早入りの得（30分前 +1.37、120分前 +7.49）は外れで失う見かけの得。オーナーが「作らない」を選択。"
+   },
+   {
+    "name": "通貨の強弱（8通貨、L=6本/30本）を買い売りの合図にする",
+    "section": "§8.85（#174）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足、A+B 11ペア、2024-01-01〜2026-09-29（前半〜2025-05-18）",
+    "result_summary": "前半で選ばれた L6 は後半の e（コイン投げとの差）が +0.23 pips（1,859回、区間 −1.74〜+2.20）で判定されず、L30 は +0.09（−1.79〜+1.97）。スプレッド込みの全期間は L6 −1.66 pips（3,866回）、L30 −1.93、コイン投げ −1.63、今のメール −1.36。TP1先 57.7% / 57.1%（損益分岐 60%）。翌日の強弱の順位相関 −0.022 / −0.002。強弱と同じ向きの今のメールは −2.95 pips、逆向き −0.82（後半差 −3.98 [−8.72〜+0.77]）。",
+    "verdict": "コイン投げよりはっきり良いとは言えず、スプレッド込みで負け。オーナーが「入れない」を選択。"
+   },
+   {
+    "name": "ゴトー日の朝のドル円（前日23時JSTに買い→9:55JSTに売り）",
+    "section": "§8.96（#186）",
+    "in_app": false,
+    "timeframe": "GMO USD/JPY 1分足 Bid/Ask、2023-10-27〜2026-10-02。火〜金のゴトー日171回、比べる日402回、損切りなし、スワップ除く",
+    "result_summary": "ゴトー日 勝った割合 55.6%（48.1〜62.8%）・1回あたり +6.15銭（−1.40〜+13.70）・中央値 +7.00・最大の落ち込み −372.1銭・最悪の1回 −174.2銭。比べる日は 57.2%・+1.71銭（−3.58〜+6.99）・最悪 −282.0銭。曜日をそろえた差 +7.51銭（t −2.83〜+17.86、日ごと −2.61〜+17.57、月ごと −4.36〜+19.38）。前半 +13.65（−3.16〜+30.46）、後半 −0.03（−12.26〜+12.20）。見つけられる最小の差 16.96銭（神戸大は9銭）。2026年の比べる日は66.3%（101回）だけが65%以上で、Python で573回すべてを計算し直して先読みではないと確認。",
+    "verdict": "読み方 (c)「回数が足りず決められない」。神戸大並みの効果が有るとも無いとも言えない。使える候補にはせず、2026-10-05 以降のデータで別に決めてから測る。"
+   },
+   {
+    "name": "損切りを値幅の2倍（2N、タートル）／ATRの2倍（2A）にする",
+    "section": "§8.97（#187）",
+    "in_app": false,
+    "timeframe": "GMO 4時間足・5分足・日足、9ペア 3,958回、2024-01-01〜2026-10-02 21:00 UTC（前半〜2025-05-18）、TP20、5日",
+    "result_summary": "今(30pips): 勝率59.6%（物差し57.9%）・1回あたり −0.71（−1.76〜+0.34）・最悪 −149.0、2N（中央値204 pips）: 86.9%（物差し85.9%）・+1.22（−1.18〜+3.62）・今との差 +1.93（−0.80〜+4.67）・最悪 −443.6・負けの平均 −124.3、2A（73 pips）: 77.7%（75.8%）・−0.07（−1.86〜+1.72）・差 +0.64（−0.95〜+2.23）。決済で数えた落ち込みは 今 −3,242.6、2N −5,670.5（一番悪い週 −1,632.6）。累計は 今 −2,817・2N +4,833・2A −279 pips。見つけられる最小の差は 2N 3.72・2A 2.18 pips。",
+    "verdict": "2N・2A とも「決められない」。勝率86.9%は損切りを遠くしたことによる機械的な上昇（物差し85.9%、合図の分は約1ポイント）。勝率100%に近づくように見えるが負けが大きくなっただけ、と本文が明記。"
+   },
+   {
+    "name": "損切り13・利確4/10/16 pips（動画 F-INVEST PREMIUM の線）での時間足別成績",
+    "section": "§8.98（#192）",
+    "in_app": true,
+    "timeframe": "GMO 21ペア（FX）／Dukascopy 金、5分〜日足、2024-01-01〜2026-09-30（金は〜09-28）、WEEKEND=inside",
+    "result_summary": "FX の TP1先・1回あたり（Q-Trend / ULTRA）: 5分足 70.3%・−2.03 / 71.9%・−1.62、15分足 70.5%・−1.90 / 72.0%・−1.51、1時間足 72.6%・−1.46 / 72.8%・−1.60、4時間足 73.6%・−1.07 [−1.36〜−0.79] / 74.5%・−0.94 [−1.30〜−0.58]、日足 50.8%・−8.88 / 53.0%・−8.79。損益ゼロに 76% 超が必要。物差し（4時間足）71.6%・−1.55 pips、合図は +2.3 ポイント（0.9〜3.7）。4時間足で TP2 まで持つと 54.3%・−1.07、TP3 まで 42.2%・−1.15。",
+    "verdict": "どの足も届かず1回あたり全てマイナス（95%区間も0より下）。70〜75%は利確が損切りより近い数え方の見かけで、でたらめに入っても約76%。"
+   },
+   {
+    "name": "資金管理と同時保有数の試算（25倍・ロスカット50%・追証入金）",
+    "section": "§8.99（#188）",
+    "in_app": false,
+    "timeframe": "GMO 9ペア 3,958回（4時間足の合図、13/4 pips）、2024-01-01〜2026-10-02 21:00 UTC。口座は100万円始まり",
+    "result_summary": "取引ごと: 勝率73.3%（打ち切り0）・1回あたり −1.06 pips（週 [−1.40,−0.72]）・1万通貨で −111円、1年 −163,872円。前半 73.8%・−0.96、後半 72.8%・−1.17。損益ゼロに要る勝率 76.5%。物差し 70.5%・−1.65 pips。口座（1万通貨・上限なし）は円の合計 −439,237円、最大の落ち込み 455,501円、E*（全メールを受けて追証もロスカットも無いのに要る最初の口座）901,483円。資金の% の口座: 0.25% 457,013円(−54.3%)、0.5% 215,175円(−78.5%)、1% 84,670円(−91.5%)、2% 83,779円(−91.6%)。同時保有は最大9本、1本以上14.4%。25マスで追証・ロスカット0回。上限（1つずつ・3つまで等）で損が減るのは取る数が減ったためで、残した取引の質の差は −0.009〜+0.022R（幅の内）。",
+    "verdict": "量・上限・減らし方で変えられるのは減る速さだけで、1回あたりマイナスならプラスにならない（ケリーは「賭けない」）。夜中を見送る行は +0.49 pips [−0.19,+1.13] で先読みでないことを確認。"
+   },
+   {
+    "name": "オーナーの実際の持ち方（15分足 ULTRA・指値・利確10・損切りなし・30万円・25倍）の成績 (a)",
+    "section": "§8.102（#205）",
+    "in_app": true,
+    "timeframe": "GMO 1分足 Bid/Ask 5ペア、15分足の合図 9,510件（遅れた合図0）、2024-01-01〜2026-10-03 0:00 UTC、前半〜2025-05-18。run 37478579946",
+    "result_summary": "取引ごとの見方（資金の限りなし）: 勝率98.8%（利確9,391・END でまだ持っている110）・1回あたり +4.86 pips・+577円。逆向きでも勝率98.8%・+2.65 pips。30万円の口座（追証は入金で解消、入れる合計100万円まで）: 勝率91.8%（利確1,334・ロスカット3・期限の決済116）・1回あたり −6.0 pips・−671円。ロスカット1回、期限の決済24回、上限で入金し切れなかった追証28回。口座の損益 前半 −918,895円・後半 −71,244円・全期間 −990,139円。置けたメールは15.3%（有効証拠金で断られた7,868件）。入れたお金は100万円（2024-06-20 に上限）、E* 5,968,075円。全メールを数えた損益は前半 +2,214,086円・後半 +3,465,092円（資金の限りなし）。③ 合図の向きが逆向きより良いか: 主の数字 +0.39 pips、区間下端 −0.89 pips。",
+    "verdict": "①口座が守れなかった（欠けた）・②前半後半とも増えなかった・③合図が逆向きより良いとは言えない。高い勝率は損切りなし・利確10・END まで持つ作りで高く出る。この持ち方がうまくいく証拠ではない。"
+   },
+   {
+    "name": "コストの悪い時間帯を避けるルール（UTC20:30〜23:45 の14枠）",
+    "section": "§8.103（#206 ②）",
+    "in_app": false,
+    "timeframe": "段1: GMO 1分足 5ペア 2024-01〜2026-10（枠決め）、段2: 2023年11〜12月（合図491件、数えた416件=避けた43・残した373）",
+    "result_summary": "段1: 5ペア・夏冬とも同じ14枠（UTC 20:30〜23:45）、1分足の約13.8%。避けた枠のスプレッド中央値は USD/JPY 夏 1.40〜10.10・冬 3.00〜19.20 pips、残した枠は最大 0.5〜0.7 pips。段2（2023年11〜12月・約8週）: 避けたメール 43通の1日後の値の平均 −14.02 pips、残したメール 373通 −2.82 pips、同じ週・ペア・向きでそろえた差 Δ = −6.11 pips（95%区間 −25.82〜13.60）。1日以内の勝率 避けた 69.0%（29/42）・残した 82.0%（301/367）。2023年のスプレッド中央値は避けた枠 USD/JPY 11.70・EUR/JPY 10.50・AUD/JPY 4.90・EUR/USD 4.70・AUD/USD 3.30 pips。",
+    "verdict": "「避けた時間帯のメールが悪いとも良いとも言えない」（区間が広い）。ルールの効果は「言えない」で、(b) の毎週の記録（100通または 2027-03-13）で1回だけ再確認する予定。"
+   },
+   {
+    "name": "15分足 ULTRA メールにダウの流れ（1h/4h/15分の逆向きなら出さない）を足す4候補",
+    "section": "§8.106（#250）",
+    "in_app": false,
+    "timeframe": "GMO 5ペア、メール 9,510件（前半 4,725通 〜2025-05-19／後半 4,653通）、勝ちは利確10が損切り13より先（損益ゼロ 56.5%）。段2は run 38047806808 で1回だけ",
+    "result_summary": "段0: ULTRA の合図は15分足のダウと逆向きが91%、1時間足68%、4時間足54%、両方42%。段1（前半）: 全部 52.7%・−1.40 pips、選ばれた④(15分足逆なら出さない)の残す 425通 δ_W2 +1.82（−3.63〜+7.28、t 0.706、ランダムの線 2.539）。段2（後半）: 全部 4,653通 55.2%・−0.78 pips／④で残す 430通 53.7%・−1.13 pips／④で外す 4,223通 55.3%・−0.74 pips。δ_W2 −2.40 ポイント（−8.29〜+3.48、t −0.861、ランダムの線 2.454）。10/9 の1日の見比べ（証拠ではない）では外す側が残す側より勝っていた。",
+    "verdict": "「言えない」。メールは今のまま。前半の +1.82 は4つから選んだ運で、後半 −2.40 に反転。残したメールの方が後半では勝率も1回あたりも低かった。"
+   },
+   {
+    "name": "何分足・何時間足の ULTRA が最も当たるか（鏡の取引との差、Dukascopy 2016〜2023）",
+    "section": "§8.107（#264）",
+    "in_app": true,
+    "timeframe": "Dukascopy 1分足 Bid/Ask 2015-03〜2023-12（合図は2016-01-04〜2023-09）、5ペア、5/30分・1/2/4/8時間 vs 15分",
+    "result_summary": "まだ測っていない（段0〜段2は未実施。Dukascopy の取得も未了）。決まりのみ固定済み。これまでの参考: 損切り13・TP1 4 pips の ULTRA（GMO 21ペア）は 5分足 71.9%・−1.62、15分足 72.0%・−1.51、1時間足 72.8%・−1.60、4時間足 74.5%・−0.94、日足 53.0%・−8.79。でたらめに入っても約76%になるので差は小さく出る。検出できる差の見込みは 5分足 約1.4、30分 約2.1、1時間 約2.7、2時間 約3.6、4時間 約4.9、8時間 約6.8 ポイント。",
+    "verdict": "結果なし。「言えない」で終わる見込みが高いと本文が先に書いている。GMO 2024〜2026年で一番を選ぶことはしない（見たことのあるデータのため）。"
+   },
+   {
+    "name": "MACD の山・谷クロス（青線がオレンジ線を0から遠い所でクロス）を合図にする",
+    "section": "§8.109（#272）・§8.110",
+    "in_app": true,
+    "timeframe": "GMO 5分足 5ペア、2024-01-01〜2026-10-09 0:00 UTC（前半〜2025-05-18）、損切り13・TP1 4 pips。run 38068838023 で1回",
+    "result_summary": "主（MACD）31,624回 勝率72.3%（71.6〜72.9）・1回あたり −1.28 pips（−1.40〜−1.16）。ULTRA 5分足 27,175回 72.9%（72.1〜73.7）・−1.18（−1.34〜−1.03）。MACD の全クロス 81,782回 71.2%・−1.63、目をつぶった入り方 20,078回 71.9%・−1.51。主−ULTRA の d = −0.10 pips（−0.24〜+0.04）、前半 −0.13・後半 −0.07、勝率差 −0.6 ポイント（−1.4〜0.2）。5分遅れで 69.3%・−1.21（ULTRA 69.4%・−1.12）。TP2まで 52.8%・−1.45、TP3まで 41.9%・−1.46。21ペア参考 94,819回 71.7%・−1.67（ULTRA 71.9%・−1.62）。",
+    "verdict": "「ULTRA より良いとは言えない」（(a)(b)(c) を満たさず）。損益ゼロに要る 76.5% にどれも届かず1回あたりマイナス。選択はオーナーの印を見たあとの事後選択だったと明記。オーナーは結果を知ったうえで 5分足メールに追加（ULTRA は残す）。"
+   },
+   {
+    "name": "MACD の山・谷／ULTRA 5分足を、オーナーの持ち方（指値・利確10・損切りなし・30万円）で受けた場合",
+    "section": "§8.111（#276）",
+    "in_app": true,
+    "timeframe": "GMO 1分足 5ペア、2024-01-01〜2026-10-10 0:00 UTC（前半〜2025-05-18）。run 38118549874 で1回",
+    "result_summary": "MACD: 合図 31,886・入った 2,319（7.27%）・勝率 93.32%（利確2,164・ロスカット0・期限の決済155）・1回あたり −4.21 pips・−409円、追証77回、口座損益 前半 −919,297円・後半 −47,595円・全期間 −966,892円、終わりの純資産 33,108円、E* 25,754,184円。ULTRA 5分足: 27,405・1,048（3.82%）・93.80%（利確983・ロスカット11・期限の決済54）・−7.77 pips・−890円、追証62回、全期間 −969,922円、終わりの純資産 30,078円、E* 15,653,854円。取引ごと（資金の限りなし）は MACD 98.66%（END でまだ持っている427件、+3.23 pips）、ULTRA 98.86%（313件、+5.01 pips）。逆向きのみの口座でも MACD 92.59%・ULTRA 92.19%。利確に届かなかった取引の最大の逆行は MACD で最大 3,249.2 pips（1件で 324,920円）。",
+    "verdict": "①口座が守れなかった、②前半後半とも増えなかった、③合図の向きが逆向きより良いとは言えない（MACD +0.304 pips・下端 −0.361、ULTRA +0.448・−0.634）。入れた100万円のうち約97万円を失った。どちらが良いとは書かない。「必ず戻る」はこの測定から言えない。"
+   },
+   {
+    "name": "動画の流動性狩り→EMAクロス（EMA20×80）で金の1分足にメール",
+    "section": "§8.112（#291）",
+    "in_app": true,
+    "timeframe": "金 XAU/USD 1分足（Swissquote 記録）。測定なし",
+    "result_summary": "この決まりの勝率と1回あたりの損益は測っていない（メールにもそう書く）。動画に数字は無く、EMA20/80 はオーナーが保存した値、600本・241本目・直近5本・1 pip などは作る側が決めた。Swissquote の値と Twelve Data・楽天の差、ヒゲの欠け方も未測定。",
+    "verdict": "未測定。市場が開いた後に記録の抜け・チャート・メールを本番で確かめる予定。"
+   },
+   {
+    "name": "プロトレーダーのやり方の調査（勝率・資金管理・ゴトー日など）",
+    "section": "§8.95（#185）",
+    "in_app": false,
+    "timeframe": "文献調査（19本は本文を読めた・4本は要旨のみ・3本は 403 で未確認）",
+    "result_summary": "勝率100%のプロは読めた資料に一人もいない。FundedNext の勝率の中央値は CFD 50.0%・先物 63.0%、支払いを受けた CFD 口座の41%は勝率5割未満。ジュン氏は「勝率は上級者でも50％をわずかに上回る程度」。タートルは「most of the trades that the Turtles made resulted in losses」、損切りは 2N、1回のリスクは口座の2%まで。ESMA は CFD 口座の 74-89% が損。Topstep の審査合格 16.8%・実資金への昇格 0.71%。AQR のトレンド戦略は 1985〜2009年に年率 17.8%（コスト引き前、最大の落ち込み −13.3%）、CFM は3日ほどの短期トレンドが2003年以降ほぼ消えた。神戸大の紀要のゴトー日 900日で累計 +56.838円（スプレッド2銭控除後、1回約 +6.3銭）。ザイFX!の金曜ゴトー日は 58日で数えると 74.1%、約240日だと 58%。",
+    "verdict": "調査のみ（アプリの測定ではない）。ケリー基準の答えは「賭けない」。Krohn ら・Chague ら・Virtu の数字は読めず使っていない。これを受けて §8.96（ゴトー日）・§8.97（2N）・§8.99（資金管理）を順に測定。"
+   }
+  ],
+  "framework": {
+   "data_source": "GMO コインFX の公開 klines（Bid と Ask を別々のファイルで取得。1分・5分・15分・30分・1時間は日のファイル、GMO の日は 21:00 UTC 区切りで日曜 22:00 UTC に週が始まる。4時間・8時間・日・週・月は年のファイル）。この開発環境からは GMO に届かないため、すべて GitHub Actions（deno と python）で実行し、日のファイルは actions/cache に保存して件数と sha256 を記録する。1分足は 2023-10-27 から。金は Dukascopy（1分足 2023-12-18〜、1時間足 2021-01〜）と Twelve Data・Swissquote、25年の日足は ECB 参照レートを GMO の11ペアに換算し金利は FRED/BIS 政策金利。足りない昔の値段として Dukascopy FX（2015-03〜2023-12、約2.7万ファイル）を取得予定だが §8.107 時点で未取得。実行結果は研究用の ledger CSV（research/ledger/*.csv）と sha256 定数で固定。",
+   "coverage": "主なデータは GMO の21ペア（GMO_STUDY_PAIRS）、古い測定(#99〜#132)は11ペア、メール系の最近の測定(§8.102〜§8.111)は USD/JPY・EUR/JPY・AUD/JPY・EUR/USD・AUD/USD の5ペア。期間は 2024-01-01 から最新は 2026-10-10 0:00 UTC まで（約2年9か月）。時間足は1分〜日足。HUF/JPY・SEK/JPY などは GMO の足が 2026-05 からしかなく別扱い。金・Twelve Data の銘柄は別データで一部のみ。長期は 1999 年からの日足（11ペア）。TRY/JPY・ZAR/JPY・MXN/JPY など値段の低いペアは 1 pip の重さが違うため別集計にしている。",
+   "entry_exit": "合図の足の終値で入る（買いは Ask、売りは Bid）。損切り・利確は足の中値の終値（チャートと同じ丸め）から pips で置く。最近の水準は損切り13・利確 4/10/16 pips（§8.98）、その前は 損切り30・利確 20/40/60、さらに前は 10・5/10/15。追う足は5分足（オーナーの持ち方は1分足）の決済する側（買い=Bid・売り=Ask）。同じ足で両方に届いたら損切り（ambiguous）、足が水準を越えて始まったらその始値で決済。5取引日（5分足1,440本）決着しなければ未決着として勝率の分母から外し、pips はその時点の決済側の値段で数える。「勝ち」は TP1 が損切りより先（損益ゼロ勝率は 損切り/(損切り+利確)、例 13/17=76.5%・13/23=56.5%）。オーナーの持ち方は、メールの E に指値で入り、すでに有利なら成行、利確は E から10 pips、損切り・期限なし、1万通貨、楽天25倍コース・ロスカット50%、追証は入金で解消（合計100万円まで）。送られない時間（金曜 21:00 UTC〜日曜 22:00 UTC の確定足）の合図は数えない。巡回は確定の 0/1/3 分後に読む作りに合わせる。",
+   "cost_model": "スプレッドはモデルではなく実際の Bid/Ask の差を毎回払う（買い Ask/売り Bid）。中値は (Bid+Ask)/2 を double で出して小数3桁（円ペア）または5桁に ROUND_HALF_UP（Python は round() を使わず Decimal）。Bid が Ask より上になる行や片側だけの足は捨てる。週末の閉まる時間の足は barInsideClosure で捨てる（#182 で日曜 20:00 UTC の4時間足は残す）。スワップは多くの測定で未計上（枠のみ）で、§8.102 の口座だけ BIS 政策金利から取り分0.5%の仮の目安を行として並べる。すべり・窓開けは、窓で損切りを越えた始値決済と、損切りを0.5/1 pip悪化させた感度だけ。楽天の広告スプレッドで入りと決済を追い直す行は補足で、楽天FXの値段そのものではない。Dukascopy では GMO の時間帯別スプレッド中央値の半分を中値に上下に足す（D-G）。",
+   "baselines": "①ブラインド（同じペア・時間足・向き・時刻にすべての足で毎本入る。UTC の時間帯もそろえる）との差（lift）。②鏡の取引（同じ時刻・同じ E で向きだけ逆。当たり a=(合図勝率−鏡勝率)/2）§8.107。③コイン投げ（§8.85）。④逆向きの取引だけで回した口座（§8.102・§8.111）。⑤プラセボ指標（ランダムに発火する偽の指標5つ、indicators.ts）。⑥作り物の効果なしランダムウォークと、効果ありの作り物（drift・against・答えを知ったラベル）。⑦ランダムな外し方（層ごとの外す数に合わせた並べ替え検定 2,000通り、§8.106）。⑧でたらめに入っても 損切り/(損切り+利確) の勝率になる理論値。",
+   "ci_and_split": "前半・後半で分ける：古い測定は 前半 2024-01〜2025-06・後半 2025-07〜2026-09、tf-winrate 以降は 2025-05-19 で分ける（§8.107 の Dukascopy 版は 2016-01-04〜2023-09 を 202 週ずつ）。前半で候補を1つ選び後半で1回だけ確かめる（選んだ候補以外は後半で計算しない）。95% 区間は暦の週（日曜 21:00 UTC 始まり）ごとと4週ごとのまとまりで作る cluster-robust（影響関数、t(C−1)）で、広い方（または下端の低い方）を使う。多重比較は Holm / Bonferroni、見た区間の数を先に書く。物差し（ブラインド）との差で判定し、見つけられる最小の差（標準誤差×2.8 など）を併記して「差が無い」とは書かず「言えない」と書く。作り物の効果なしで偽陽性の割合（約5%）が出るかを線にして確かめる。勝率は必ず1回あたり pips と並べ、100%に近い時は逆向き取引でも同じ率かを先に見る。",
+   "programs": [
+    "research/tf-winrate.ts（時間足別勝率、SL/TP を入力）",
+    "research/macdx.ts・research/macdx-lib.ts（→ supabase/functions/_shared/macd-extreme.ts）・research/macdx-check.py・research/macdx-hand.ts・research/macdx-labels.ts",
+    "research/ownerhold.ts・ownerhold-data.ts・ownerhold-trades.ts・ownerhold-account.ts・ownerhold-report.ts・ownerhold-fixture.ts・ownerhold-b.ts・ownerhold-check.py・ownerhold-plants.py・ownerhold5-hand.ts",
+    "research/trend.ts・trend1.ts・trend-stats.ts・trend-labels.ts・trend-data.ts・trend2-lib.ts・trend-check.py・trend1-calib.ts・trend1-walk.sh",
+    "research/costhours.ts・costhours-lib.ts・spreadhours.ts・spreadhours-lib.ts・spreadhours-check.py・costhours-hand.json",
+    "research/tfbest-probe.py（§8.107 の取得下調べ。tfbest.ts 等は未作成）・dukascopy.py",
+    "research/stop2n.ts・stop2n-check.py・stop2n-seeds.py",
+    "research/money.ts・money-account.ts・money-trades.ts・money-data.ts・money-stats.ts・money-check.py・money-look.py・money-seeds.py",
+    "research/gotobi.ts・gotobi-lib.ts・gotobi-check.py",
+    "research/gold.ts・dukascopy.py",
+    "research/prewarn.ts・prewarn-seeds.py",
+    "research/strength.ts・strength-lib.ts・strength-seeds.py",
+    "research/widetp.ts・widestop.ts・tphold.ts・stochfree.ts・stochexit.ts・stochgood.ts・stochfake.ts・patterns.ts・confirm.ts・qtrend-tp.ts",
+    "research/dow-hit.ts・bigflow.ts・bigflow-lib.ts・gainz.ts・reversal.ts・tune.ts・longhist.ts・longhist-lib.ts・exits.ts・exits-lib.ts・tendencies.ts・indicators.ts・indicator-series.ts・rsi-combos.ts・rsi-pairs.ts・lib.ts",
+    "ledger: research/ledger/*.csv（ultra15-a.csv・ultra15-2023.csv・spread-hours.csv・trend-labels.csv・trend-h2.csv・ownerhold5-real.txt など）",
+    "Actions: .github/workflows/*.yml（tf-winrate・macdx・ownerhold・ownerhold5・trend・costhours・stop2n・money・gotobi など）"
+   ],
+   "verification_practice": "①測り方・合図・候補・文言（結果を読んだあとに書く文まで）を、結果を見る前に docs に書いて main にマージし、そのマージ時刻を R（R_trend・R_tf・R_macd・R_own5 など）として記録。決まりをマージ後に変えたら R を置き直し、後半を『選ぶのに使っていないデータ』と呼ばない。②独立した見直し（Claude の Workflow で指摘を探し、指摘ごとに別のエージェントが反証。例: §8.107 は75件→30件→7件、§8.106 は大きな指摘5つ）。③作り物のランダムウォーク（効果なし／効果あり／逆向き／答えを知ったラベル）で、効果なしで誤検出が約5%以下、効果ありで検出できることを確かめる。④別言語の再計算（Python を TS を読まずに docs と共有コードだけから書き、足・合図・取引・口座・E*・追証・ロスカットを全件照合。例: 4,359,181件で食い違い0、macdx では判断82,388・取引31,624が一致）。⑤先読みの確かめ：全判断を『その時刻までに確定した足だけ』（600本の窓、前後8本）で作り直して同じか、未確定の足の値段を ±777.7 pips 動かしても判断が変わらないか、T より前の5分足を書き換えても結果が変わらないか、入った足の中で利確を数えていないか（macdx 0/83,742、trend 28,530か所で動き0）。⑥仕込んだ誤り（例: 25個）を作り物と手の例に入れ、どれかの確かめが必ず見つけること、見つからなければ止める。⑦手の例（26個など）を手で出した答えと両プログラムで照合。⑧tf-winrate など既存の run の行を再現（例: ULTRA 5分足 71.9% [71.2,72.6]・−1.62 pips が run 37191488441 と一致）。⑨実データの run は『確かめ B の行（GMO 読み込み失敗0、indicatorSignals との照合0件違い、先読み0件、Python 一致）を先に読み、全部通ってから数字を読む』。数字は print.txt にだけ書き、確かめが落ちたら checks.json だけ残す。⑩原因探しで見てしまった数字は『見てしまった数字』として docs に書き、同じデータで条件を足さない（採用の4ルール）。⑪先読みを疑う条件（勝率65%以上・100%近い・逆向きでも同率）が出たら報告前に中を調べて何を調べたかを書く。"
+  },
+  "pitfalls": [
+   "先読み（予告メール §8.84）: 最初の先読み確認が作りの上で必ず通る形だけで、先の5分足を値段に使っても見つけられず、予告の当たりが100%に見えた。t の時点で切った5分足から値段と約定を出し直す照合に作り直し、わざと変えた版が約19万6千件・2万3千件の食い違いを出すことを確かめてから実データを走らせた。CLAUDE.md の「一度、照合の作りの誤りで予告メールの当たりが100%に見えた」はこれ。",
+   "先読み（確認待ち §8.46）: 作り物のランダムな値動きで『確認されなかったサイン』の勝率が2%になった。確認されなかったかどうかはサインの後にしか分からず、逆に行ったものが集まるため。確認待ちは全サインと比べる方式に直した。ダウ表示でも1本先の表示は +0.28〜+1.08 ポイント上乗せされるだけ（§8.90）。",
+   "N や ATR の日足は『T を含む日足』を使うと先読み（§8.97）。始まり+24時間 ≦ T の最新の日足だけを使い、わざと T を含む日足を使うと確かめが 9,764件の違いを出すことを確認。年末年始の休みで N が古い日足から取られた14件（2024-01-02）は先読みではない。",
+   "勝率100%に見える幻: 損切りなしの取引ごとの勝率は 98.8%（逆向きに入っても 98.8%）、口座でも 91.8〜93.8%（§8.102・§8.111）。負けが確定しない作りで高く出るだけで合図の力ではない。損切りを遠くした2Nは勝率59.6%→86.9%（物差し85.9%）、損切り13・TP1 4 は でたらめに入っても約76%、動画の79〜80%は SL10・TP1 5 なら偶然でも約67%。勝率は必ず1回あたり pips・含み損の大きさ・保有期間・ロスカット/期限の数・入金合計と並べる（CLAUDE.md）。",
+   "損切りなしの危険の実測: 最悪の1回 −1,025.8 / −1,121.9 pips（§8.75）、利確に届かなかった取引の最大の逆行は 1,913.0〜3,249.2 pips（1件で 191,300〜324,920円）、30万円の口座は入れたお金100万円のうち約97万円を失った（§8.111）。戻った割合が約8〜9割でも、戻らない1〜2割が平均 −54〜−112 pips（§8.76）。『必ず戻る』は測定から言えない。",
+   "小標本の幻: GA型4時間足 106回 30.2%・−0.094R が 102回 39.2%・+0.176R（§8.50）、確定＋上位足 1時間足 113回の勝率12.4%・−0.628R が後半 110回で 33.9%（§8.43）、日足は 72〜725回で数字が不安定、ザイFX! の金曜ゴトー日 74.1%（58日）対 58%（約240日）、フォリント/円・Sクローナ/円（データ4.5か月）だけが65%以上の組を作った（§8.90）。",
+   "前半で選んだ1位が後半で崩れる: Stoch待ちしきい値 70 は前半 +0.029R→後半 −0.101R（§8.39）、設定総当たりの順位相関はほぼ0〜負（Zone Shift −0.48、§8.45）、ダウ④は前半 +1.82→後半 −2.40 ポイント（§8.106）。後半を見てから別の候補を選ぶのは後知恵。選んだ値の前半の数字は『4つから選んだので良く見えやすい』と添える。",
+   "効果が無い作り物でも偶然の1位が出る: 最高勝率で選ぶと回数が最少の日足が選ばれた（30回で83%、379回で68%。§8.69）ため、95%区間の下端で選ぶ方式に変更。全パターン総当たりでは効果なしの作り物でも同じパターンが68.3%で1位（§8.71）。流れを読むインジケーターの点数もランダムな値動きで 74.9% に達する（§8.54）。",
+   "区間が狭すぎる／幅の作り: ブートストラップの幅が作り物で95%より狭く（日ごと7.5〜8.0%・月ごと9.2〜9.3%外れ、§8.96）、重なる取引を独立とみなすと甘くなる（§8.16、§8.75）。週・4週のまとまり、影響関数、ランダムな外し方の並べ替え検定（§8.106）を採用し、判定は幅のうち厳しい側を使う。",
+   "多重比較: 24の組（§8.90）、52区間（§8.97）、236区間（§8.99）、1,224通り（§8.71）、31候補（§8.54）。良く見えたものは『次に測る候補』にとどまる。Bonferroni で0をまたぐものが多い（例: CHF/JPY +6.21 の95%は +1.22〜+11.21 だが Bonferroni は −3.89〜+16.31）。",
+   "市場全体の偏りを合図の力と取り違える: 2024〜2026年は円安・ドル高でほぼ一方向（§8.16）。損切りなし120本の後半の良さの半分は物差しにも出た（BUY +7.77 / SELL −1.44、§8.75）、金も BUY +4.63 / SELL −3.54（§8.79）、2026年の比べる日が66.3%（§8.96）。物差しや鏡の取引との差で判定する。",
+   "スプレッド・時間帯の偽の差: 日足は 21:00 UTC 確定で払ったスプレッド中央値 7.9〜8.7 pips（§8.69・§8.98）、00:00 UTC 確定は平均 4.61 pips（§8.99）、UTC21〜23時は 4.9 pips（§8.68）。5分足でスプレッド÷ATR 0.42〜0.69（4時間足 0.04〜0.08）。時間足を替える比較では広い枠に入る割合が足で違うので、鏡の取引で差を消す設計（§8.107）。",
+   "『決着した中の割合』の罠: 損切りを広げたり利確を遠くすると、5日で決着しない取引が除かれて勝率が機械的に上がる。見出しの勝率は『すべての取引の中』に直した（§8.97）。値段の低い円ペア（MXN/JPY・ZAR/JPY・TRY/JPY）は決着した取引だけで数えると勝率が高く出る（74.7%・71.1%）、HUF/JPY は5日で1回も決着しない（§8.82）。",
+   "比べ方の不公平: 期間の終わりが1日違う数字どうしは同じ取引の比較でない（§8.82）。同じ取引で比べるためにブラインドやランダムな外し方、同じ時刻の鏡を用いる。メールの水準が変わった測定は、そのときの水準でしか再現できない（stop2n・widetp は今の版で走らせると止まる）。",
+   "データ処理の誤り: 日曜 20:00 UTC の4時間足を捨てていた（#182、2,158本）ため 4時間足の数字が変わった（Q-Trend 58.3%→59.1%・−1.47→−1.17 pips）。GMO の日のファイルの終わりを 22:00 UTC と誤認し（本当は 21:00 UTC）、取っておいたファイルを毎回読み直して失敗が出た（§8.102）。GMO の週末の詰め物（始値=高値=安値=終値の足）。GMO と Twelve Data で4時間足の区切りが違う（0/4/8… 対 1/5/9… UTC）。三角関係のずれ（EUR/USD 39本・GBP/USD 37本が5 pips超、§8.85）。2時間足は GMO に無い。",
+   "乱数・テスト自体の誤り: 試運転用の乱数が倍精度で 2^53 を超えて壊れ、偽の傾向が出た（§8.18）。mulberry32 の平均が 1/2 よりわずかに小さく、作り物の値動きが4時間あたり約 −0.10 pips 下へ動く（§8.99）。反射（鏡）テストはバグも対称に反射するため、SELL 側の SMA が全時間足で0件になる誤りを捕まえられず（§8.16）、長い系列で全ルールが両方向に出るテストを足した。money-check.py が打ち切りまで追わない誤りを実データの run だけが見つけた（§8.99）。",
+   "『確認の行』を読む前に数字を読まない: GMO の読み込み失敗0・ULTRA と indicatorSignals の照合・先読みの違い0・Python 全件一致を先に読み、1つでも違えば数字を出さない。ログが長すぎて確かめの行も数字も読めなかった run があり（§8.102 の3回目）、数字の段はファイル出力にした。直す前後で変わらないはずの出力は sha256 で同じか確かめる。",
+   "言い間違いの訂正を残す: 『線を越える分では説明できない』と伝えたのは誤りだった（種を替えると 74.80〜74.99% で、20万回の試算 75.24% がたまたま高かった、§8.99）。『2023年の足は…読んでいない』の文を2回訂正（§8.103）。『4時間足で +4〜11 ポイント』は1通りの短い作り物の値で先読みの大きさではなかった（§8.90）。見てしまった数字は docs に『見てしまった数字』として書く。",
+   "検出力が足りない時は『言えない』と書く: 見つけられる最小の差を併記する（2N で 3.72 pips、ゴトー日で 16.96 銭＝神戸大の9銭より大きい、5分足 約1.4 〜 8時間足 約6.8 ポイントなど）。作り物では ±1〜2 pips の差を見落とすことが多い（§8.83: T20 に +1 pip を足しても50回中23回）。『差が無い』とは書かない。",
+   "オーナーの事後選択と印の取り方: MACD の印（青丸・緑丸・紫丸）は値動きを見たあとにオーナーが付けた（§8.109）。11個の印すべてに合う決まりを選ぶと事後選択になるため、設計の候補3案と余裕、取り下げた案を残し、結果は『ULTRA より良いとは言えない』となった。動画の例（1例だけ）や SNS の高勝率は、後から選んだ場面の可能性が高い。",
+   "第三者のインジケーター再現は本物ではない: GainzAlgo の条件は第三者報告の再現、Pro型は説明文から作った独自の式、SPECTRA は販売側説明の再現。『GainzAlgo が効かない』とは言えず『再現した条件がランダムと変わらない』までしか言えない（§8.22・§8.44）。金・Twelve Data の銘柄・楽天の値段は未測定が多い。",
+   "スワップ・すべり・約定の遅れの未計上: 多くの測定でスワップは数えず、メールが届く時刻やオーナーが注文するまでの遅れ（T+2分は仮定）、楽天FXの実際のスプレッド・約定は測っていない。5分足はこの遅れの影響が大きいと思われるが、補足の行（T+1分・T+5分）でしか見ていない。"
+  ]
+ }
+}
