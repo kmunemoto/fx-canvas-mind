@@ -58,7 +58,9 @@ export const newFollowCtx = (plant: string, readEnd: number): FollowCtx => ({ pl
 
 // tf-winrate's follow (TRACK bars), on the side the trade leaves on; null when the data ends first
 export const follow = (f: Sides, from: number, buy: boolean, sl: number, tp: number, ctx: FollowCtx): Fol | null => {
-  const last = from + TRACK - 1;
+  // the plant "followLate1" starts one bar late; its window is cut at the data's end, so its run completes and the
+  // checks that should catch it (lookahead.followFirst) speak instead of a crash on the last rows
+  const last = ctx.plant === "followLate1" ? Math.min(from + TRACK - 1, f.n - 1) : from + TRACK - 1;
   if (from < 0 || last > f.n - 1) return null;
   // a SELL leaves on the ask, a BUY on the bid (the plant "buyExitAsk" takes the BUY out on the ask too)
   const exitAsk = !buy || ctx.plant === "buyExitAsk";

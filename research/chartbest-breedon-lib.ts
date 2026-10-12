@@ -51,7 +51,10 @@ const def = (which: BreedonWhich): ItemDef => ({
   mark600: false,
   bothDirs: false,
   symmetric: false,
-  symmetricWhy: "the side is fixed by the clock: the flip keeps a SELL at 03:00 New York a SELL",
+  // 20 (e) 裏返し: the reason printed with the non-symmetric items (each item its own side and hour)
+  symmetricWhy: which === 1
+    ? "the side is fixed by the clock: the flip keeps a SELL at 03:00 New York a SELL"
+    : "the side is fixed by the clock: the flip keeps a BUY at 11:00 New York a BUY",
   compute: (v, ctx) => breedonOut(v, which, ctx.plant),
 });
 export const ITEM_BREEDON_1 = def(1);

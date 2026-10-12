@@ -83,7 +83,7 @@ def stage1(rows, groups, counts_only=False):
     lbpos = {}
     for g in ('chart', 'cal'):
         items = [s for s in rows if D.GROUP_OF[s] == g and ST.gt0(rows[s]['delta']['lb'])]
-        lbpos[g] = {'items': len(items), 'groups': len({groups.get(s) for s in items})}
+        lbpos[g] = {'items': item_count(items), 'groups': group_count(items, groups)}
     out = {
         'eligible': eligible,
         'notEligible': reasons,
@@ -95,6 +95,34 @@ def stage1(rows, groups, counts_only=False):
     }
     out.update(shift_counts(rows, groups))
     return out
+
+
+# 10, 12: kama-A and kama-B give the same signals (3, C24), so they count as one item among the items above 0
+SAME_SIGNAL_ITEMS = (('kama-A', 'kama-B'),)
+
+
+def item_count(ids):
+    """10/12「0を超えた項目の数」: distinct items, kama-A and kama-B counted once."""
+    xs = set(ids)
+    n = len(xs)
+    for grp in SAME_SIGNAL_ITEMS:
+        k = sum(1 for x in grp if x in xs)
+        if k > 1:
+            n -= k - 1
+    return n
+
+
+def group_count(ids, groups):
+    """10/12: the number of overlap groups (11) the items fall in."""
+    return len({groups.get(s, s) for s in ids})
+
+
+def p95_of(xs):
+    """10: the 95% point, the floor(0.95 x (n - 1))-th of the ascending list (None for an empty list)."""
+    if not xs:
+        return None
+    s = sorted(xs)
+    return s[int(math.floor(0.95 * (len(s) - 1)))]
 
 
 def not_eligible_count(sel, group):
@@ -121,8 +149,8 @@ def shift_counts(rows, groups):
     for k in sorted(by_k):
         xs = by_k[k]
         above = [s for s, v in xs if ST.gt0(v)]
-        items.append(len(above))
-        grps.append(len({groups.get(s) for s in above}))
+        items.append(item_count(above))
+        grps.append(group_count(above, groups))
         best.append(max(v for _, v in xs))
 
     def mean(v):
@@ -131,11 +159,7 @@ def shift_counts(rows, groups):
             acc += x
         return acc / len(v) if v else None
 
-    def q95(v):
-        if not v:
-            return None
-        s = sorted(v)
-        return s[int(math.floor(0.95 * (len(s) - 1)))]
+    q95 = p95_of
     return {'shift95': {'items': {'mean': mean(items), 'q95': q95(items)},
                         'groups': {'mean': mean(grps), 'q95': q95(grps)}, 'k': len(items)},
             'chanceLb': q95(best)}
@@ -172,19 +196,21 @@ def p_of(est):
 
 
 def holm(items, rows, plant=''):
-    """14: p ascending (then t descending, e-signals descending, the table's order); the k-th passes while
-    p <= 0.025 / (K - k + 1); the first failure stops it."""
-    K = len(items)
+    """14: Holm over the K_total items, p from each item's own t (p_of)."""
+    return holm_order([(s, p_of(rows[s]['delta']), rows[s]['delta']['t'], rows[s]['nE']) for s in items], plant)
 
-    def key(s):
-        d = rows[s]['delta']
-        t = d['t'] if d['t'] is not None else -math.inf
-        return (p_of(d), -t, -rows[s]['nE'], D.ORDER[s])
-    order = sorted(items, key=key)
+
+def holm_order(entries, plant=''):
+    """14: entries (src, p, t or None, e-signals). p ascending (then t descending, e-signals descending, the table's
+    order); the k-th passes while p <= 0.025 / (K - k + 1); the first failure stops it."""
+    K = len(entries)
+
+    def key(e):
+        s, p, t, ne = e
+        return (p, -(t if t is not None else -math.inf), -ne, D.ORDER[s])
     out = {}
     going = True
-    for k, s in enumerate(order, start=1):
-        p = p_of(rows[s]['delta'])
+    for k, (s, p, _, _) in enumerate(sorted(entries, key=key), start=1):
         lim = D.ALPHA / (K - k + 1) if plant != 'noHolm' else D.ALPHA
         ok = going and p <= lim
         if plant != 'noHolm' and not ok:

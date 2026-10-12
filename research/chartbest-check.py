@@ -13,7 +13,7 @@ integers and strings exactly, reals within 1e-9, sentences character for charact
 error (nothing compared). The helper files research/chartbest-check-*.py are loaded by path (CI runs python3 -I).
 
 Usage:
-  python3 -I research/chartbest-check.py --mode hand [--plant NAME]
+  python3 -I research/chartbest-check.py --mode hand [--hand research/chartbest/hand.json] [--plant NAME]
   python3 -I research/chartbest-check.py --mode run --gmo OUT/gmo --ts OUT/ts --out OUT/py [--period main|mini]
          [--full] [--o-mode] [--force-choice id,id] [--stages 0,1,2] [--n-summary FILE] [--counts-only-suspicion]
          [--plant NAME] [--no-compare] [--strict-format] [--hold [--hold-dir DIR]]
@@ -219,6 +219,11 @@ def run(a):
         select = SEL.stage1(rows, counts['groups'], counts_only=a.counts_only_suspicion)
         hits = SEL.yardstick_hits(mrows, blind)
         select['yardstickHit'] = SEL.yardstick_hit(mrows, blind)
+        # 13「物差し（ブラインド・ULTRA・MACD）が当たったら、すべて止める」: nothing is chosen, so the second half is not
+        # opened either (12); the made-up set H only counts the suspicion (20 (e) H)
+        if hits and not a.counts_only_suspicion:
+            select['chosen'] = {'chart': [], 'cal': []}
+            select['Ktotal'] = 0
         select['intervalsSeen'] = SEL.intervals_seen(1, M1=len(floor_items))
         log(f'stage 1: yardstick hits {hits}{" (13: stops everything)" if hits and not a.counts_only_suspicion else ""}')
         CMP.write_json(os.path.join(out, 'select.json'), select)
@@ -234,6 +239,12 @@ def run(a):
         bad = [x for x in chosen if x not in D.TRIAL_ITEMS]
         if bad:
             die(f'--force-choice names items outside the trial: {bad}')
+        # 12「どちらのまとまりにも選べる項目が無ければ、ここで終える…後半は開けない」: K_total = 0 opens no second half
+        # (neither the blind table's nor the emails' second-half rows)
+        if not chosen:
+            stages = stages - {2}
+            log('stage 2: nothing chosen at stage 1: the second half is not opened (12)')
+    if 2 in stages:
         rows, mrows, blind, table = rows_of_half('H2', chosen)
         stage2 = SEL.stage2(chosen, rows, mrows, both_dirs, counts_only=a.counts_only_suspicion, plant=a.plant)
         hits2 = SEL.yardstick_hits(mrows, blind)
@@ -351,7 +362,8 @@ def compare_all(out, ts, bars, stages, extra=None, strict=False):
 def main():
     ap = argparse.ArgumentParser(description='§8.113 independent Python re-computation')
     ap.add_argument('--mode', choices=('hand', 'run'), required=True)
-    ap.add_argument('--hand', default=None, help='hand.json (not read: the Python runs its own docs-derived cases)')
+    ap.add_argument('--hand', default=None, help="research/chartbest/hand.json: its cases run too (the Python's own "
+                    'docs-derived cases always run)')
     ap.add_argument('--plant', default='')
     ap.add_argument('--gmo')
     ap.add_argument('--ts')
@@ -371,7 +383,13 @@ def main():
                          'chartbest-check-canon.py and the CSV column tolerance')
     a = ap.parse_args()
     if a.mode == 'hand':
-        sys.exit(_mod('hand').main(a.plant))
+        code = _mod('hand').main(a.plant)
+        # 20 (g): every hand example of research/chartbest/hand.json through the Python's own functions too (a
+        # planted error's run judges the Python's own cases only, as PLANT_EXPECT names them)
+        if a.hand and not a.plant:
+            code_json = _mod('handjson').main(a.hand)
+            code = 2 if 2 in (code, code_json) else max(code, code_json)
+        sys.exit(code)
     if not (a.gmo and a.out and (a.ts or a.no_compare)):
         die('--mode run needs --gmo, --out and --ts (or --no-compare)')
     sys.exit(run(a))

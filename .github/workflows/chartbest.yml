@@ -1,0 +1,940 @@
+# #318 (docs §8.113, 22 の 2: 試し): which of the chart methods the app does not have reads the direction best. Step 2
+# runs on made-up data only: research/chartbest.ts (TS) and research/chartbest-check.py (the Python written apart from
+# it), the made-up sets of 20 (e), the planted errors of 20 (f) and the hand examples of 20 (g). No made-up job has
+# --allow-net: nothing here reads a real price.
+#
+#   on push (made-up only):
+#     checks       deno check; the hand examples (TS and the Python's own); stage 0's import graph holds no follow,
+#                  statistics, selection or owner-hold module (11); console. only in chartbest-checks.ts; the
+#                  candidates ledger's sha256 against the TS and the Python constants; the real stages refused
+#                  (exit 2, no print.txt)
+#     full         N 101 in the main period, every check and the dumps (CB_FULL=1, the forced choice
+#                  donchian-A20 + breedon-1), then the pipeline rehearsal (stage 0 / 1 / 2 as separate processes on
+#                  one folder: the same printed lines as the one-process run; a changed walk ledger stops the next
+#                  stage with exit 2), then the Python. E 601 the same once E's amount is written (20 (e) 強さ).
+#     flip         seeds 101–105 and their flips (light runs with the dumps), flip-cmp; flip-sum judges set.flip
+#     answer       O 801–804 (the answer-knowing donchian-A20), full runs, the Python's --o-mode on 801; answer-sum
+#                  judges set.O
+#     plants-*     every planted error of the trial: the hand ones on the hand examples (and the Python's twins),
+#                  the run ones each on its own full N 101 main-period run, the gate and print ones on light runs;
+#                  plant-sum (20 (f): one of the named checks must fail, for every plant)
+#   on dispatch:
+#     calib        one set's trial seeds 901–920 at one amount (calib = "<set>:<amount>"); prints the targets
+#     sets         the formal seeds (N, D, H, E, E3, Q; light runs); sets-sum → sets-pass.json, n-summary.json
+#                  (D, H, E, E3, Q are refused until their amounts are written in docs and chartbest-const.ts)
+#     stage0/1/2   the real stages. Written only: their first step is the program's gate (§5.4 of the plan), which
+#                  refuses until step 3 is complete (55 of the 59 items are not built), so no real price is read.
+#   not built in step 2 (the yml has no job for them): the rehearsal of 20 (c) (repro-walk on macdx.ts's walk,
+#   hold-xcheck on ownerhold.ts's synthetic run) and the owner's way (chartbest-hold.ts).
+#
+# Read-only: it writes nothing to the repository and holds no secret.
+name: Research chartbest
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/chartbest*.ts
+      - research/chartbest*.py
+      - research/chartbest/**
+      - research/ledger/chartbest-*.json
+      - research/ledger/spread-hours.csv
+      - .github/workflows/chartbest.yml
+  workflow_dispatch:
+    inputs:
+      calib:
+        description: "A set's trial seeds at one amount, <set>:<amount> (e.g. D:0.5); empty: none"
+        default: ""
+      sets:
+        description: "The formal seeds of the made-up sets (yes/no)"
+        default: "no"
+      stage0:
+        description: "The real stage 0 (yes/no; refused until step 3)"
+        default: "no"
+      stage1:
+        description: "The real stage 1 (yes/no; refused until step 3)"
+        default: "no"
+      stage2:
+        description: "The real stage 2 (yes/no; refused until step 3)"
+        default: "no"
+
+permissions:
+  contents: read
+
+env:
+  # every made-up run: no --allow-net; --sloppy-imports for research/bigflow-lib.ts's computed import (donchianState)
+  DENO_MADEUP: deno run --sloppy-imports --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-write=research/out --allow-env
+  HAND: research/out/chartbest/hand/hand-results.json
+  FORCE: donchian-A20,breedon-1
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # the repository's tsconfig is the app's (vitest types from node_modules), so the research files are checked without it
+      - name: Types (deno check)
+        run: deno check --sloppy-imports --no-config research/chartbest*.ts
+      - name: The hand examples (TS)
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The hand examples (the Python's own, from docs)
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          /tmp/py/bin/python -I research/chartbest-check.py --mode hand --hand research/chartbest/hand.json
+      - name: Stage 0's program loads no follow code (11)
+        run: |
+          deno info --sloppy-imports --no-config --json research/chartbest-stage0.ts > /tmp/stage0.json
+          deno info --sloppy-imports --no-config --json research/chartbest.ts > /tmp/run.json
+          python3 - <<'EOF'
+          import json, sys
+          def names(p):
+              return {m['specifier'].rsplit('/', 1)[-1] for m in json.load(open(p))['modules']}
+          s0, run = names('/tmp/stage0.json'), names('/tmp/run.json')
+          banned = ['chartbest-follow.ts', 'chartbest-stats.ts', 'chartbest-select.ts', 'chartbest-hold.ts', 'ownerhold-trades.ts',
+                    'ownerhold-account.ts', 'trend-stats.ts', 'chartbest-lookfollow.ts', 'chartbest-rows.ts']
+          bad = [b for b in banned if b in s0]
+          # the graph read is a real one: stage 0's own modules are in it, and the whole program's graph has the follow
+          real = {'chartbest-stage0.ts', 'chartbest-count.ts', 'chartbest-events.ts'} <= s0 and 'chartbest-follow.ts' in run
+          print(f'stage 0: {len(s0)} modules; follow, statistics, selection, owner-hold: {bad or "none"}; graph read: {real}')
+          sys.exit(0 if real and not bad else 1)
+          EOF
+      - name: The log is the only writer to stdout (console. in chartbest-checks.ts only)
+        run: |
+          # chartbest-thresholds.ts is step 1's own program (its JSON on stdout), not part of these runs
+          bad=$(grep -l "console\." research/chartbest*.ts | grep -v -x -e research/chartbest-checks.ts -e research/chartbest-thresholds.ts || true)
+          if [ -n "$bad" ]; then echo "console. outside research/chartbest-checks.ts: $bad"; exit 1; fi
+          echo "none outside research/chartbest-checks.ts"
+      - name: The candidates ledger's sha256 against the TS and the Python constants
+        run: |
+          got=$(sha256sum research/ledger/chartbest-candidates.json | cut -d' ' -f1)
+          ts=$(grep -A2 "export const CANDIDATES" research/chartbest-const.ts | grep -oE '[0-9a-f]{64}')
+          py=$(grep -E "^CANDIDATES_SHA256 = " research/chartbest-check-data.py | grep -oE '[0-9a-f]{64}')
+          echo "file $got"; echo "TS   $ts"; echo "Py   $py"
+          [ "$got" = "$ts" ] && [ "$got" = "$py" ]
+      # §5.4: without the gates, the real stages stop before anything is read (exit 2, nothing but checks.json);
+      # no --allow-net is given, so a read that slipped past the gate would crash (exit 3) instead of passing
+      - name: The real stages are refused
+        run: |
+          fail=0
+          for st in stage0 stage1 stage2; do
+            out=research/out/chartbest/refuse-$st
+            s=0
+            if [ "$st" = stage0 ]; then
+              CB_MODE=stage0 CB_DATA=real CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest-stage0.ts || s=$?
+            else
+              CB_MODE=$st CB_DATA=real CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || s=$?
+            fi
+            g=0
+            CB_MODE=guard CB_STAGE=$st CB_DATA=real CB_OUT=$out-guard CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || g=$?
+            echo "$st: exit $s, guard exit $g, print.txt $([ -f $out/print.txt ] && echo written || echo none)"
+            if [ "$s" != 2 ] || [ "$g" != 2 ] || [ -f $out/print.txt ]; then fail=1; fi
+          done
+          exit $fail
+
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { set: N, seed: 101, force: "donchian-A20,breedon-1" }
+          - { set: E, seed: 601, force: "" }
+    env:
+      CB_SET: ${{ matrix.set }}
+      CB_SEED: ${{ matrix.seed }}
+      DATA: research/out/chartbest/gen/${{ matrix.set }}-${{ matrix.seed }}
+      OUT: research/out/chartbest/${{ matrix.set }}-${{ matrix.seed }}
+      WALK: research/out/chartbest/${{ matrix.set }}-${{ matrix.seed }}-walk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Whether this set runs (E once its amount is written; 20 (e) 強さ)
+        id: go
+        run: |
+          if [ "${{ matrix.set }}" = N ]; then echo "run=yes" >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'export const AMOUNTS.*[{ ]E: null' research/chartbest-const.ts; then
+            echo "E's amount is not written yet: nothing runs for E 601"; echo "run=no" >> "$GITHUB_OUTPUT"
+          else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: The hand examples (their results gate every run)
+        if: steps.go.outputs.run == 'yes'
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The made-up day files (with the 1-minute ones)
+        if: steps.go.outputs.run == 'yes'
+        env:
+          CB_MODE: gen
+          CB_FULL: "1"
+          CB_OUT: ${{ env.DATA }}
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The run, every check and the dumps
+        if: steps.go.outputs.run == 'yes'
+        env:
+          CB_MODE: run
+          CB_FULL: "1"
+          CB_HOLD: "0"
+          CB_DATA: ${{ env.DATA }}/gmo
+          CB_OUT: ${{ env.OUT }}
+          CB_FORCE_CHOICE: ${{ matrix.force }}
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: $DENO_MADEUP research/chartbest.ts
+      # the stages as separate processes on one folder (the walk ledger stands in for research/ledger/chartbest-*.json):
+      # each reads the ledger file only against its sha256, and their printed lines are the one-process run's
+      - name: The pipeline rehearsal (stage 0 / 1 / 2 as separate processes)
+        if: steps.go.outputs.run == 'yes'
+        env:
+          CB_DATA: ${{ env.DATA }}/gmo
+          CB_OUT: ${{ env.WALK }}
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: |
+          CB_MODE=stage0 $DENO_MADEUP research/chartbest-stage0.ts
+          cp $WALK/print.txt $WALK/print-stage0.txt
+          CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$(cat $WALK/walk-ledger/counts.json.sha256) CB_FORCE_CHOICE="${{ matrix.force }}" $DENO_MADEUP research/chartbest.ts
+          cp $WALK/print.txt $WALK/print-stage1.txt
+          CB_MODE=stage2 CB_WALK_CHOICE_SHA256=$(cat $WALK/walk-ledger/choice.json.sha256) $DENO_MADEUP research/chartbest.ts
+          cp $WALK/print.txt $WALK/print-stage2.txt
+          for p in s0 s1 s2; do
+            diff <(grep "^$p\." $OUT/print.txt) <(grep "^$p\." $WALK/print-stage${p#s}.txt)
+            echo "$p: $(grep -c "^$p\." $OUT/print.txt) lines, the same in the separate process"
+          done
+          diff <(grep '^text\.' $OUT/print.txt) <(cat $WALK/print-stage1.txt $WALK/print-stage2.txt | grep '^text\.')
+          echo "text: the same"
+      - name: A changed walk ledger stops the next stage (exit 2, no print.txt)
+        if: steps.go.outputs.run == 'yes'
+        env:
+          CB_DATA: ${{ env.DATA }}/gmo
+          CB_OUT: ${{ env.WALK }}
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: |
+          fail=0
+          sha=$(cat $WALK/walk-ledger/choice.json.sha256)
+          printf ' ' >> $WALK/walk-ledger/choice.json
+          rm -f $WALK/print.txt
+          s=0; CB_MODE=stage2 CB_WALK_CHOICE_SHA256=$sha $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "changed choice.json: stage 2 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ]; then fail=1; fi
+          sha=$(cat $WALK/walk-ledger/counts.json.sha256)
+          printf ' ' >> $WALK/walk-ledger/counts.json
+          s=0; CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$sha $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "changed counts.json: stage 1 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ]; then fail=1; fi
+          exit $fail
+      - name: The Python on the same day files
+        if: steps.go.outputs.run == 'yes'
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          extra=""
+          if [ -n "${{ matrix.force }}" ]; then extra="--force-choice ${{ matrix.force }}"
+          elif ! python3 -c "import json,sys; c=json.load(open('$OUT/ts/select.json'))['chosen']; sys.exit(0 if c['chart'] or c['cal'] else 1)"; then
+            # 12: when neither group has an item to choose, the second half is not opened
+            extra="--stages 0,1"; echo "nothing chosen at stage 1: the second half is not opened (12); the Python compares stages 0 and 1"
+          fi
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo $DATA/gmo --ts $OUT/ts --out $OUT/py --full $extra
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ matrix.set }}-${{ matrix.seed }}
+          path: |
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}/py/pycheck.json
+            ${{ env.WALK }}/checks.json
+          if-no-files-found: ignore
+
+  flip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [101, 102, 103, 104, 105]
+    env:
+      CB_SET: N
+      CB_SEED: ${{ matrix.seed }}
+      ORIG: research/out/chartbest/N-${{ matrix.seed }}
+      FLIP: research/out/chartbest/N-${{ matrix.seed }}-flip
+      CMP: research/out/chartbest/sets/flip-${{ matrix.seed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      # light runs with the dumps; the forced choice opens the second half, so both halves' blind tables are compared
+      - name: The original (light, with the dumps)
+        run: |
+          CB_MODE=gen CB_OUT=$ORIG $DENO_MADEUP research/chartbest.ts
+          CB_MODE=run CB_DUMPS=1 CB_HOLD=0 CB_DATA=$ORIG/gmo CB_OUT=$ORIG CB_FORCE_CHOICE=$FORCE CB_HAND_RESULTS=$HAND $DENO_MADEUP research/chartbest.ts
+      - name: The flip (the moves mirrored about the first mid; Bid and Ask swapped)
+        run: |
+          CB_MODE=gen CB_FLIP=1 CB_OUT=$FLIP $DENO_MADEUP research/chartbest.ts
+          CB_MODE=run CB_FLIP=1 CB_HOLD=0 CB_DATA=$FLIP/gmo CB_OUT=$FLIP CB_FORCE_CHOICE=$FORCE CB_HAND_RESULTS=$HAND $DENO_MADEUP research/chartbest.ts
+      - name: flip-cmp (the blind table exactly but SQ-02's counted exceptions; the symmetric items with SQ-37's)
+        env:
+          CB_MODE: flip-cmp
+          CB_ORIG: ${{ env.ORIG }}/ts
+          CB_FLIPPED: ${{ env.FLIP }}/ts
+          CB_ORIG_DATA: ${{ env.ORIG }}/gmo
+          CB_FLIPPED_DATA: ${{ env.FLIP }}/gmo
+          CB_OUT: ${{ env.CMP }}
+        run: $DENO_MADEUP research/chartbest.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sets-flip-${{ matrix.seed }}
+          path: |
+            research/out/chartbest/sets/flip-*/checks.json
+            research/out/chartbest/sets/flip-*/flip-cmp.json
+          if-no-files-found: error
+
+  flip-sum:
+    needs: flip
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sets-flip-*
+          merge-multiple: true
+          path: research/out/chartbest/sets
+      - name: set.flip (flip-cmp passed on seeds 101–105)
+        env:
+          CB_MODE: sets-sum
+          CB_SETS_ONLY: flip
+          CB_SETS_DIR: research/out/chartbest/sets
+        run: $DENO_MADEUP research/chartbest.ts
+
+  answer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [801, 802, 803, 804]
+    env:
+      CB_SET: O
+      CB_SEED: ${{ matrix.seed }}
+      DATA: research/out/chartbest/gen/O-${{ matrix.seed }}
+      OUT: research/out/chartbest/sets/O-${{ matrix.seed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The made-up day files (with the 1-minute ones)
+        env:
+          CB_MODE: gen
+          CB_FULL: "1"
+          CB_OUT: ${{ env.DATA }}
+        run: $DENO_MADEUP research/chartbest.ts
+      # the answer-knowing donchian-A20 must fail the cut and the poison and hit a suspicious line: exit 1 is this
+      # run's expected end; set.O (answer-sum) judges which checks failed. A refusal (2) or a crash (3) fails here.
+      - name: The run (full; its look-ahead checks are meant to fail)
+        env:
+          CB_MODE: run
+          CB_FULL: "1"
+          CB_HOLD: "0"
+          CB_DATA: ${{ env.DATA }}/gmo
+          CB_OUT: ${{ env.OUT }}
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: |
+          s=0; $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "exit $s"; [ "$s" = 0 ] || [ "$s" = 1 ]
+      # the TS run stops at its failed look-ahead checks (20 (b) 止まる: nothing is chosen, the second half is not
+      # opened); the Python, which does not run those checks, would go on choosing, so it compares stage 0 here: the
+      # day files, the answer-knowing signals, the prefilter, the holes and the counts
+      - name: The Python (--o-mode) on 801
+        if: matrix.seed == 801
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          stages=0,1,2
+          if python3 -c "import json,sys; sys.exit(0 if json.load(open('$OUT/checks.json'))['failed'] else 1)"; then stages=0
+          elif ! python3 -c "import json,sys; c=json.load(open('$OUT/ts/select.json'))['chosen']; sys.exit(0 if c['chart'] or c['cal'] else 1)"; then stages=0,1; fi
+          echo "the Python compares stages $stages"
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo $DATA/gmo --ts $OUT/ts --out $OUT/py --full --o-mode --stages $stages
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sets-O-${{ matrix.seed }}
+          path: |
+            research/out/chartbest/sets/O-*/summary.json
+            research/out/chartbest/sets/O-*/checks.json
+            research/out/chartbest/sets/O-*/py/pycheck.json
+          if-no-files-found: error
+
+  answer-sum:
+    needs: answer
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sets-O-*
+          merge-multiple: true
+          path: research/out/chartbest/sets
+      - name: set.O (all 4 — the cut and the poison fail, a suspicious line hits, nothing else fails)
+        env:
+          CB_MODE: sets-sum
+          CB_SETS_ONLY: O
+          CB_SETS_DIR: research/out/chartbest/sets
+        run: $DENO_MADEUP research/chartbest.ts
+
+  plants-list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.list.outputs.run }}
+      hand: ${{ steps.list.outputs.hand }}
+      other: ${{ steps.list.outputs.other }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The planted errors of the trial (by hook)
+        id: list
+        env:
+          CB_MODE: plants-list
+        run: |
+          $DENO_MADEUP research/chartbest.ts > /tmp/plants.txt
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json
+          plants = json.loads(next(line for line in open('/tmp/plants.txt') if line.startswith('[')))
+          print('run=' + json.dumps([p['name'] for p in plants if p['hook'] == 'run']))
+          print('hand=' + ','.join(p['name'] for p in plants if p['hook'] == 'hand'))
+          print('other=' + ','.join(p['name'] for p in plants if p['hook'] in ('gate', 'print')))
+          EOF
+          cat "$GITHUB_OUTPUT"
+
+  plants-hand:
+    needs: plants-list
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Each hand plant on the hand examples (TS), and the Python's twin where it has one
+        env:
+          PLANTS: ${{ needs.plants-list.outputs.hand }}
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          fail=0; none=""
+          for p in ${PLANTS//,/ }; do
+            s=0
+            CB_MODE=hand CB_PLANT=$p CB_OUT=research/out/chartbest/plants/$p $DENO_MADEUP research/chartbest.ts > /tmp/hand-$p.txt || s=$?
+            echo "$p: TS exit $s, failed $(grep -c '^FAIL' /tmp/hand-$p.txt)"
+            [ "$s" = 0 ] || fail=1
+            s=0; /tmp/py/bin/python -I research/chartbest-check.py --mode hand --plant "$p" > /tmp/py-$p.txt || s=$?
+            if [ "$s" = 2 ]; then none="$none $p"
+            elif [ "$s" != 0 ]; then echo "  the Python's twin did not catch $p"; tail -n 1 /tmp/py-$p.txt; fail=1
+            else echo "  Python: $(tail -n 1 /tmp/py-$p.txt)"; fi
+          done
+          if [ -n "$none" ]; then echo "::notice::no Python twin for:$none"; fi
+          exit $fail
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-hand
+          path: |
+            research/out/chartbest/plants/*/hand-results.json
+            research/out/chartbest/plants/*/checks.json
+          if-no-files-found: error
+
+  plants-gate:
+    needs: plants-list
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CB_SET: N
+      CB_SEED: "101"
+      DATA: research/out/chartbest/gen/N-101-light
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The made-up day files (N 101, main period, 5-minute files)
+        env:
+          CB_MODE: gen
+          CB_OUT: ${{ env.DATA }}
+        run: $DENO_MADEUP research/chartbest.ts
+      # a plant run completes (exit 0) or is refused before reading (2: badSha); plant-sum reads which checks failed
+      - name: The gate and print plants (light runs; the forced choice opens the second half)
+        env:
+          PLANTS: ${{ needs.plants-list.outputs.other }}
+        run: |
+          fail=0
+          for p in ${PLANTS//,/ }; do
+            s=0
+            CB_MODE=run CB_PLANT=$p CB_HOLD=0 CB_DATA=$DATA/gmo CB_OUT=research/out/chartbest/plants/$p CB_FORCE_CHOICE=$FORCE CB_HAND_RESULTS=$HAND \
+              $DENO_MADEUP research/chartbest.ts > /tmp/run-$p.txt || s=$?
+            echo "$p: exit $s; $(grep -E '^FAIL' /tmp/run-$p.txt | tr '\n' ' ')"
+            case "$s" in 0|2) ;; *) fail=1 ;; esac
+          done
+          exit $fail
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plants-gate
+          path: research/out/chartbest/plants/*/checks.json
+          if-no-files-found: error
+
+  plants-run:
+    needs: plants-list
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        plant: ${{ fromJSON(needs.plants-list.outputs.run) }}
+    env:
+      CB_SET: N
+      CB_SEED: "101"
+      DATA: research/out/chartbest/gen/N-101
+      OUT: research/out/chartbest/plants/${{ matrix.plant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The made-up day files (N 101, main period, with the 1-minute ones)
+        env:
+          CB_MODE: gen
+          CB_FULL: "1"
+          CB_OUT: ${{ env.DATA }}
+        run: $DENO_MADEUP research/chartbest.ts
+      # the look-ahead checks run only in full runs, and plant-sum refuses a run-hook plant's mini run
+      - name: The full run with ${{ matrix.plant }} planted
+        env:
+          CB_MODE: run
+          CB_PLANT: ${{ matrix.plant }}
+          CB_FULL: "1"
+          CB_HOLD: "0"
+          CB_DATA: ${{ env.DATA }}/gmo
+          CB_OUT: ${{ env.OUT }}
+          CB_FORCE_CHOICE: ${{ env.FORCE }}
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: |
+          s=0; $DENO_MADEUP research/chartbest.ts > /tmp/run.txt || s=$?
+          grep -E '^(FAIL|EXIT)' /tmp/run.txt || true
+          [ "$s" = 0 ]
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plant-${{ matrix.plant }}
+          path: research/out/chartbest/plants/*/checks.json
+          if-no-files-found: error
+
+  plant-sum:
+    needs: [plants-hand, plants-gate, plants-run]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: plant*
+          merge-multiple: true
+          path: research/out/chartbest/plants
+      - name: Every planted error was caught by one of its named checks (20 (f))
+        env:
+          CB_MODE: plant-sum
+          CB_PLANT_DIR: research/out/chartbest/plants
+        run: |
+          $DENO_MADEUP research/chartbest.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plant-sum
+          path: research/out/chartbest/plants/plant-sum.json
+          if-no-files-found: ignore
+
+  calib:
+    if: ${{ inputs.calib != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        from: [901, 906, 911, 916]
+    env:
+      CALIB: ${{ inputs.calib }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: Five trial seeds at the amount (light runs)
+        run: |
+          [[ "$CALIB" =~ ^(D|H|E|E3|Q):[0-9]+(\.[0-9]+)?$ ]] || { echo "calib must be <set>:<amount>, a set of D, H, E, E3, Q"; exit 1; }
+          set=${CALIB%%:*}; amount=${CALIB#*:}
+          for seed in $(seq ${{ matrix.from }} $(( ${{ matrix.from }} + 4 ))); do
+            CB_MODE=gen CB_SET=$set CB_SEED=$seed CB_AMOUNT=$amount CB_OUT=research/out/chartbest/gen/$set-$seed $DENO_MADEUP research/chartbest.ts
+            s=0
+            CB_MODE=run CB_SET=$set CB_SEED=$seed CB_AMOUNT=$amount CB_HOLD=0 CB_DATA=research/out/chartbest/gen/$set-$seed/gmo \
+              CB_OUT=research/out/chartbest/calib/$set-$seed CB_HAND_RESULTS=$HAND $DENO_MADEUP research/chartbest.ts || s=$?
+            echo "$set $seed: exit $s"; [ "$s" = 0 ] || [ "$s" = 1 ]
+            rm -rf research/out/chartbest/gen/$set-$seed
+          done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: calib-${{ matrix.from }}
+          path: research/out/chartbest/calib/*/summary.json
+          if-no-files-found: error
+
+  calib-sum:
+    needs: calib
+    if: ${{ !cancelled() && inputs.calib != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CALIB: ${{ inputs.calib }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: calib-*
+          merge-multiple: true
+          path: research/out/chartbest/calib
+      - name: The targets at this amount (judges nothing; docs takes the amount)
+        run: |
+          [[ "$CALIB" =~ ^(D|H|E|E3|Q):[0-9]+(\.[0-9]+)?$ ]] || exit 1
+          CB_MODE=calib CB_SET=${CALIB%%:*} CB_AMOUNT=${CALIB#*:} CB_SETS_DIR=research/out/chartbest/calib $DENO_MADEUP research/chartbest.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calib-summary
+          path: research/out/chartbest/calib/calib-*.json
+
+  sets:
+    if: ${{ inputs.sets == 'yes' || inputs.stage0 == 'yes' || inputs.stage1 == 'yes' || inputs.stage2 == 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { set: N, from: 101 }
+          - { set: N, from: 111 }
+          - { set: N, from: 121 }
+          - { set: N, from: 131 }
+          - { set: N, from: 141 }
+          - { set: D, from: 201 }
+          - { set: D, from: 211 }
+          - { set: D, from: 221 }
+          - { set: H, from: 301 }
+          - { set: H, from: 311 }
+          - { set: H, from: 321 }
+          - { set: E, from: 601 }
+          - { set: E3, from: 611 }
+          - { set: Q, from: 701 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      # a set whose amount is not written is refused (exit 2) and fails here; a run whose checks failed (exit 1) is
+      # recorded in its summary.json for sets-sum
+      - name: Ten formal seeds of ${{ matrix.set }} from ${{ matrix.from }} (light runs)
+        run: |
+          set=${{ matrix.set }}
+          for seed in $(seq ${{ matrix.from }} $(( ${{ matrix.from }} + 9 ))); do
+            CB_MODE=gen CB_SET=$set CB_SEED=$seed CB_OUT=research/out/chartbest/gen/$set-$seed $DENO_MADEUP research/chartbest.ts
+            s=0
+            CB_MODE=run CB_SET=$set CB_SEED=$seed CB_HOLD=0 CB_DATA=research/out/chartbest/gen/$set-$seed/gmo \
+              CB_OUT=research/out/chartbest/sets/$set-$seed CB_HAND_RESULTS=$HAND $DENO_MADEUP research/chartbest.ts || s=$?
+            echo "$set $seed: exit $s"; [ "$s" = 0 ] || [ "$s" = 1 ]
+            rm -rf research/out/chartbest/gen/$set-$seed
+          done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sets-${{ matrix.set }}-${{ matrix.from }}
+          path: |
+            research/out/chartbest/sets/*/summary.json
+            research/out/chartbest/sets/*/checks.json
+          if-no-files-found: error
+
+  sets-sum:
+    needs: [sets, flip, answer]
+    if: ${{ !cancelled() && (inputs.sets == 'yes' || inputs.stage0 == 'yes' || inputs.stage1 == 'yes' || inputs.stage2 == 'yes') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sets-*
+          merge-multiple: true
+          path: research/out/chartbest/sets
+      - name: 20 (e)'s conditions over every formal seed (sets-pass.json, n-summary.json)
+        env:
+          CB_MODE: sets-sum
+          CB_SETS_DIR: research/out/chartbest/sets
+        run: $DENO_MADEUP research/chartbest.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sets-pass
+          path: |
+            research/out/chartbest/sets/sets-pass.json
+            research/out/chartbest/sets/n-summary.json
+            research/out/chartbest/sets/checks.json
+          if-no-files-found: ignore
+
+  # The real stages (dispatch only). Their first step is the program's own gate (§5.4 of the plan: the 59 items built,
+  # R_cb passed, CB_REAL_CONFIRM, the candidates ledger's sha256, sets-pass.json with every condition passed, the
+  # stage's ledger constants), run with no network permission; it refuses until step 3 is complete, so nothing after
+  # it runs and no real price is read. Step 3 reviews these jobs (and writes 20 (c)'s reproduction) before the first
+  # dispatch.
+  stage0:
+    if: ${{ inputs.stage0 == 'yes' }}
+    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      OUT: research/out/chartbest/real-stage0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          name: sets-pass
+          path: research/out/chartbest/sets
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The gates (§5.4), before anything real
+        env:
+          CB_MODE: guard
+          CB_STAGE: stage0
+          CB_DATA: real
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_OUT: ${{ env.OUT }}-guard
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: 20 (c) the reproduction of §8.109 / §8.111 (written in step 3)
+        run: |
+          echo "20 (c) is not written in step 2"; exit 1
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-none
+          restore-keys: chartbest-gmo-
+      - name: Stage 0 on GMO's day files (counts only; this program loads no follow code)
+        env:
+          CB_MODE: stage0
+          CB_DATA: real
+          CB_FULL: "1"
+          CB_OUT: ${{ env.OUT }}
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_NSUMMARY: research/out/chartbest/sets/n-summary.json
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: >
+          deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
+          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
+          research/chartbest-stage0.ts
+      - name: The Python on the same day files (stage 0)
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full --stages 0
+      - name: The stage-0 lines (every check passed)
+        run: cat $OUT/print.txt
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-${{ github.run_id }}
+
+  stage1:
+    if: ${{ inputs.stage1 == 'yes' }}
+    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      OUT: research/out/chartbest/real-stage1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          name: sets-pass
+          path: research/out/chartbest/sets
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The gates (§5.4), before anything real
+        env:
+          CB_MODE: guard
+          CB_STAGE: stage1
+          CB_DATA: real
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_OUT: ${{ env.OUT }}-guard
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: 20 (c) the reproduction of §8.109 / §8.111 (written in step 3)
+        run: |
+          echo "20 (c) is not written in step 2"; exit 1
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-none
+          restore-keys: chartbest-gmo-
+      - name: Stage 1 on GMO's day files (the first half; the counts ledger read against its sha256)
+        env:
+          CB_MODE: stage1
+          CB_DATA: real
+          CB_FULL: "1"
+          CB_OUT: ${{ env.OUT }}
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_NSUMMARY: research/out/chartbest/sets/n-summary.json
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: >
+          deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
+          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
+          research/chartbest.ts
+      - name: The Python on the same day files (stages 0 and 1)
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full --stages 0,1
+      - name: The stage-1 lines (every check passed)
+        run: cat $OUT/print.txt
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-${{ github.run_id }}
+
+  stage2:
+    if: ${{ inputs.stage2 == 'yes' }}
+    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      OUT: research/out/chartbest/real-stage2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/download-artifact@v4
+        with:
+          name: sets-pass
+          path: research/out/chartbest/sets
+      - name: The hand examples
+        env:
+          CB_MODE: hand
+          CB_OUT: research/out/chartbest/hand
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: The gates (§5.4), before anything real
+        env:
+          CB_MODE: guard
+          CB_STAGE: stage2
+          CB_DATA: real
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_OUT: ${{ env.OUT }}-guard
+        run: $DENO_MADEUP research/chartbest.ts
+      - name: 20 (c) the reproduction of §8.109 / §8.111 (written in step 3)
+        run: |
+          echo "20 (c) is not written in step 2"; exit 1
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-none
+          restore-keys: chartbest-gmo-
+      - name: Stage 2 on GMO's day files (the chosen items only; the choice ledger read against its sha256; once)
+        env:
+          CB_MODE: stage2
+          CB_DATA: real
+          CB_FULL: "1"
+          CB_OUT: ${{ env.OUT }}
+          CB_REAL_CONFIRM: §8.113
+          CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
+          CB_NSUMMARY: research/out/chartbest/sets/n-summary.json
+          CB_HAND_RESULTS: ${{ env.HAND }}
+        run: >
+          deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
+          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
+          research/chartbest.ts
+      - name: The Python on the same day files
+        run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full
+      - name: The stage-2 lines (every check passed)
+        run: cat $OUT/print.txt
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: chartbest-gmo-${{ github.run_id }}

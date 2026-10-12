@@ -222,6 +222,39 @@ def events_of(tri_buy, tri_sell, plant=''):
     return cands, cnt
 
 
+def events_named(named_buy, named_sell, plant=''):
+    """5 for an item with names (no trial item has names; the 20 (g) hand example 名前ごと): per direction and per
+    name, a name holding at i that does not hold at i-1 rises (a name absent at i-1 does not hold there: 「成り立た
+    ない」, not 「無し」); several names rising at the same bar and direction give one candidate. 「初めて決まった
+    足」 is the item's per direction, never per name: a name list is never 'none', so the first determined bar is
+    bar 0 (counted in firstSkipped when a name holds there). Then (i) with both directions: neither.
+    named_buy / named_sell: one collection of names per bar. Returns (cands [(i, dir)], counts) as events_of."""
+    out = {}
+    cnt = {'bothSuppressed': 0, 'firstSkipped': 0, 'nullPrevSkipped': 0, 'bothAt': []}
+    for d, named in ((BUY, named_buy), (SELL, named_sell)):
+        if not named:
+            continue
+        if named[0]:
+            cnt['firstSkipped'] += 1
+        for i in range(1, len(named)):
+            prev = set(named[i - 1])
+            if plant == 'noRiseEdge':
+                rose = bool(named[i])
+            else:
+                rose = any(x not in prev for x in named[i])
+            if rose:
+                out.setdefault(i, []).append(d)
+    cands = []
+    for i in sorted(out):
+        ds = out[i]
+        if len(ds) > 1:
+            cnt['bothSuppressed'] += 1
+            cnt['bothAt'].append(i)
+            continue
+        cands.append((i, ds[0]))
+    return cands, cnt
+
+
 def answer_knowing(pb, cands):
     """Set O (SQ-11): each donchian-A20 candidate's direction re-set from mc of the newest bar closed by T + 60 min
     against mc[i]; equal (or no newer bar) -> removed."""
