@@ -71,7 +71,7 @@ import {
   INDICATOR_PAIRS,
   INDICATOR_RULES,
   MACDH_INTERVALS,
-  MACDX_PAIRS,
+  MACDH_PAIRS,
   STALE_RETRY_MS,
   STALE_TRIES,
   TWELVE_ALERT_INTERVALS,
@@ -1227,8 +1227,9 @@ Deno.serve(async (req: Request) => {
           limited: Object.fromEntries(INDICATOR_PAIRS.filter((p) => isTwelvePair(p)).map((p) => [p, indicatorIntervalsFor(p)])),
           limited_intervals: TWELVE_ALERT_INTERVALS,
           // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs
-          // (#324: on 1 hour from v25, the rule mailed in place of the 5-minute one)
-          macdx: { pairs: MACDX_PAIRS, intervals: MACDH_INTERVALS },
+          // (#324: from v25 the 1-hour rule's, mailed in place of the 5-minute one,
+          // on the owner's five pairs)
+          macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },
           // #291: the video's way's: gold's 1-minute chart
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
         },

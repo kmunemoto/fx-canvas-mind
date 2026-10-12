@@ -45,8 +45,8 @@ export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
 export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
-// (the measured figures below are kept for these; the MACD rule's are its own;
-// #291: the video's way is not measured)
+// (the measured figures below are kept for these; #324: the MACD rule, now the
+// 1-hour one, is not measured; #291: nor is the video's way)
 export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
@@ -118,10 +118,14 @@ export const isMacdxChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && MACDX_PAIRS.includes(pair) &&
   (MACDX_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
 // #324: the charts the MACD email ('macdx') is followed on from v25: the
-// 1-hour chart of the same pairs, GMO's (the owner follows five of them)
+// 1-hour chart of the five pairs the owner chose (「今の5ペア」). The level is
+// the owner's number on USD/JPY's chart, so the other GMO pairs are not
+// offered (on the cheap yen pairs — HUF/JPY is some 0.4 yen — 0.085 is
+// another thing altogether)
 export const MACDH_INTERVALS = ["1h"] as const;
+export const MACDH_PAIRS: readonly string[] = MACDX_PAIRS.filter((p) => ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"].includes(p));
 export const isMacdhChart = (pair: unknown, interval: unknown): boolean =>
-  typeof pair === "string" && typeof interval === "string" && MACDX_PAIRS.includes(pair) &&
+  typeof pair === "string" && typeof interval === "string" && MACDH_PAIRS.includes(pair) &&
   (MACDH_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
 // #291: the video's way is mailed on gold's 1-minute chart only (the owner:
 // 「1分足のゴールド専用のゴールドの売買のメールだけはこれで判断して」), whose bars
@@ -898,6 +902,8 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       const f = s.macdh;
       const buy = s.side === "BUY";
       const lvl = f ? px(f.level) : "—";
+      // the minus as the level's (U+2212), not toFixed's hyphen
+      const mx = (v: number) => px(v).replace(/^-/, "−");
       return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (MACD peak/valley)`, [
         `A MACD peak/valley ${side} signal fired on ${s.pair}, ${tf} chart.`,
         [
@@ -905,7 +911,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           `MACD(12, 26, 9): the MACD line (blue) crossed ${buy ? "above" : "below"} its signal line (orange), ${buy ? "low" : "high"} in the pane`,
           ...(f
             ? [
-              `  MACD = ${px(f.m)}, signal = ${px(f.signal)}`,
+              `  MACD = ${mx(f.m)}, signal = ${mx(f.signal)}`,
               `  A ${buy ? "BUY" : "SELL"} needs MACD at the cross ${buy ? `at or below −${lvl}` : `at or above +${lvl}`} (${MACDH_PIPS} pips)`,
             ]
             : []),
@@ -1000,6 +1006,8 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     const buy = s.side === "BUY";
     const sideM = `${buy ? "買い" : "売り"}（${s.side}）`;
     const lvl = f ? px(f.level) : "—";
+    // the minus as the level's (U+2212), not toFixed's hyphen
+    const mx = (v: number) => px(v).replace(/^-/, "−");
     return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideM}のサイン（MACD の山・谷）`, [
       `${pairJa(s.pair)}の${tf}で、MACD の山・谷のクロスの${sideM}のサインが出ました。`,
       [
@@ -1007,7 +1015,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `MACD(12・26・9)の青線がオレンジ線を${buy ? "下から上に" : "上から下に"}抜けました（${buy ? "低い位置" : "高い位置"}）`,
         ...(f
           ? [
-            `  MACD = ${px(f.m)}、シグナル = ${px(f.signal)}`,
+            `  MACD = ${mx(f.m)}、シグナル = ${mx(f.signal)}`,
             `  ${buy ? "買い" : "売り"}の条件: クロスした時の MACD が ${buy ? `−${lvl} 以下` : `+${lvl} 以上`}（${MACDH_PIPS} pips）`,
           ]
           : []),

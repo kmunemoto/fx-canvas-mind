@@ -91,7 +91,8 @@ export interface AlertSettings {
   // #155: Q-Trend's and ULTRA's charts: every pair of the live chart on
   // these timeframes, some pairs (those read from Twelve Data) on fewer
   // #275: and the charts the MACD peak-and-valley rule may be followed on
-  // (GMO's currency pairs, 5 minutes), null from a server that does not send them;
+  // (#324: the owner's five pairs on 1 hour, from signal-alerts v25; before
+  // it GMO's currency pairs on 5 minutes), null from a server that does not send them;
   // #291: and the video's way's (gold, 1 minute), likewise
   indicator: {
     pairs: string[];

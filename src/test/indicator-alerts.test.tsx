@@ -17,6 +17,7 @@ import {
   INDICATOR_INTERVALS,
   INDICATOR_MEASURED,
   MACDH_INTERVALS,
+  MACDH_PAIRS,
   MACDH_PIPS,
   MACDH_RULE_ID,
   MACDX_INTERVALS,
@@ -768,7 +769,7 @@ describe("#275 the 5-minute MACD peak-and-valley rule (mailed in v23 and v24, ke
     for (const p of ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "GBP/JPY", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY", "HUF/JPY", "SEK/JPY"]) {
       expect(isMacdxChart(p, "5min")).toBe(true);
       expect(isIndicatorChartFor("macdx", p, "5min")).toBe(false);
-      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(true);
+      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(MACDH_PAIRS.includes(p));
       expect(isMacdxChart(p, "15min")).toBe(false);
       expect(isMacdxChart(p, "1h")).toBe(false);
     }
@@ -930,10 +931,11 @@ describe("#324 the 1-hour MACD rule (the owner's levels), the MACD email from v2
     return out;
   };
 
-  it("is what the subscriptions under 'macdx' follow from v25: the 1-hour chart of GMO's currency pairs, under its own id", () => {
+  it("is what the subscriptions under 'macdx' follow from v25: the 1-hour chart of the owner's five pairs, under its own id", () => {
     expect([...MACDH_INTERVALS]).toEqual(["1h"]);
-    expect(MACDX_PAIRS).toHaveLength(14);
-    for (const p of MACDX_PAIRS) {
+    // 「今の5ペア」, in the app's order
+    expect([...MACDH_PAIRS]).toEqual(["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"]);
+    for (const p of MACDH_PAIRS) {
       expect(isMacdhChart(p, "1h")).toBe(true);
       expect(isIndicatorChartFor("macdx", p, "1h")).toBe(true);
       for (const iv of ["1min", "5min", "15min", "4h", "1day"]) {
@@ -941,9 +943,11 @@ describe("#324 the 1-hour MACD rule (the owner's levels), the MACD email from v2
         expect(isIndicatorChartFor("macdx", p, iv), `${p} ${iv}`).toBe(false);
       }
     }
-    // the owner's five are among them; gold and the pairs read from Twelve Data are not
-    for (const p of ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"]) expect(MACDX_PAIRS).toContain(p);
-    for (const p of ["XAU/USD", "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
+    // the other GMO pairs are not offered (the level is the owner's number on USD/JPY's chart),
+    // nor gold and the pairs read from Twelve Data
+    const others = MACDX_PAIRS.filter((p) => !MACDH_PAIRS.includes(p));
+    expect(others).toHaveLength(9);
+    for (const p of [...others, "XAU/USD", "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
       expect(isMacdhChart(p, "1h")).toBe(false);
       expect(isIndicatorChartFor("macdx", p, "1h")).toBe(false);
     }
@@ -1078,7 +1082,7 @@ describe("#324 the 1-hour MACD rule (the owner's levels), the MACD email from v2
     const at = closeMsOf(i) + 30_000;
     expect(macdhSignals("USD/JPY", "1h", w, at)).toHaveLength(1);
     for (const iv of ["5min", "15min", "4h"]) expect(macdhSignals("USD/JPY", iv, w, at), iv).toEqual([]);
-    for (const p of ["XAU/USD", "USD/CAD", "HKD/JPY"]) expect(macdhSignals(p, "1h", w, at), p).toEqual([]);
+    for (const p of ["XAU/USD", "USD/CAD", "HKD/JPY", "GBP/JPY", "HUF/JPY"]) expect(macdhSignals(p, "1h", w, at), p).toEqual([]);
     // the 5-minute rule's function gives nothing on the hourly chart (the studies call it on 5 minutes)
     expect(macdxSignals("USD/JPY", "1h", w, at)).toEqual([]);
   });
@@ -1121,7 +1125,10 @@ describe("#324 the 1-hour MACD rule (the owner's levels), the MACD email from v2
     const t = mail.text;
     expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 1-hour chart.");
     expect(t).toContain("the MACD line (blue) crossed above its signal line (orange), low in the pane");
-    expect(t).toContain(`MACD = ${g.macdh!.m.toFixed(3)}, signal = ${g.macdh!.signal.toFixed(3)}`);
+    // a BUY's MACD and signal line are below zero: the minus is the level's (U+2212), not a hyphen
+    expect(g.macdh!.m).toBeLessThan(0);
+    expect(t).toContain(`MACD = −${(-g.macdh!.m).toFixed(3)}, signal = −${(-g.macdh!.signal).toFixed(3)}`);
+    expect(t).not.toContain("MACD = -");
     expect(t).toContain("A BUY needs MACD at the cross at or below −0.085 (8.5 pips)");
     expect(t).toContain("Stop and targets (ULTRA's numbers):");
     expect(t).toContain("of the 1-hour chart's MACD(12, 26, 9) crosses it mails only a SELL where MACD is at or above +8.5 pips and a BUY where it is at or below −8.5 pips (0.085 on a yen pair, 0.00085 on EUR/USD and AUD/USD)");
@@ -1158,7 +1165,7 @@ describe("#324 the 1-hour MACD rule (the owner's levels), the MACD email from v2
     expect(fn).toContain("rule: indicatorRuleId(sig.rule),");
     expect(fn).toContain("strong: sig.rule === \"qtrend\" ? sig.strong : null,");
     // the app is told which charts the rule may be followed on
-    expect(fn).toContain("macdx: { pairs: MACDX_PAIRS, intervals: MACDH_INTERVALS },");
+    expect(fn).toContain("macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },");
     expect(fn).toContain("signal-alerts-v25");
   });
 
