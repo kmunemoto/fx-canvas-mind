@@ -63,6 +63,13 @@ CANDIDATES_PATH = 'research/ledger/chartbest-candidates.json'
 CANDIDATES_SHA256 = '710814487a58f0228e70b2f7f15eae9d878b52701cf7f72d3a5ceb3bfffc5436'
 SPREAD_HOURS_PATH = 'research/ledger/spread-hours.csv'
 SPREAD_HOURS_SHA256 = '2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93'
+# §8.113 12: stage 1's choice, committed with its sha256 (written by hand after the real stage 1, beside the TS
+# constant; empty: not yet). On real data the Python opens the second half only for the items of this file, read
+# against this constant (review fix lookahead-05/06; a gate written by the integrator, not part of the recomputation)
+CHOICE_LEDGER_PATH = 'research/ledger/chartbest-choice.json'
+CHOICE_LEDGER_SHA256 = ''
+# the real jobs keep GMO's day files under this folder (a made-up --gmo is never under it)
+REAL_CACHE = 'research/.cache'
 
 # §8.113 3: the 59 items in the table's order ("表の順"); group chart (0-51) or cal (52-58), and the candidate
 # each belongs to (11: "同じ候補の項目" are always one overlap group)

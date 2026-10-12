@@ -153,6 +153,9 @@ export const LEDGER = {
   stage2: { path: "research/ledger/chartbest-stage2.json", sha256: "" },
 } as const;
 export const SPREAD_HOURS = { path: "research/ledger/spread-hours.csv", sha256: "2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93" } as const;
+// 9, 14「段2で、オーナーの持ち方（9）も測る」: research/chartbest-hold.ts is built (step 3 sets this when it is). While it
+// is false, the real stage 2 is refused (realGuard) and a real run's hold.owner fails; made-up runs say SKIP
+export const HOLD_BUILT = false;
 // the real stages' kept GMO day files (dir/SYM/interval/side/YYYYMMDD.json; the yml caches research/.cache)
 export const REAL_CACHE_DIR = "research/.cache/chartbest";
 
@@ -199,6 +202,9 @@ export const SPEC = {
   wideSlotOf: "T",
   // SQ-22: a late ULTRA signal is outside the measure's 全部の合図
   lateOutsideAll: true,
+  // SQ-R1: stage 0's late ULTRA count per half (s0.ultra5.<half>.late) by the signal's T; "shown": by the close of
+  // the bar where it first shows (bar i + 1, the window i + 1)
+  lateHalfBy: "T" as "T" | "shown",
   // SQ-23: the cut points before τ (NY 17:00) and the item's own day bounds
   cutDayBounds: "tau+own",
   // SQ-25: only H counts the suspicious signal without stopping

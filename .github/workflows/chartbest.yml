@@ -6,12 +6,14 @@
 #   on push (made-up only):
 #     checks       deno check; the hand examples (TS, and the Python: its own and hand.json's); stage 0's import graph holds no follow,
 #                  statistics, selection or owner-hold module (11); console. only in chartbest-checks.ts; the
-#                  candidates ledger's sha256 against the TS and the Python constants; the real stages refused
-#                  (exit 2, no print.txt)
+#                  candidates ledger's sha256 against the TS and the Python constants (and the choice ledger's); the
+#                  real stages refused (exit 2, no print.txt); a made-up run refuses a folder without gen's manifest
+#                  and research/.cache, and the Python refuses real data's second half without the choice ledger
 #     full         N 101 in the main period, every check and the dumps (CB_FULL=1, the forced choice
 #                  donchian-A20 + breedon-1), then the pipeline rehearsal (stage 0 / 1 / 2 as separate processes on
-#                  one folder: the same printed lines as the one-process run; a changed walk ledger stops the next
-#                  stage with exit 2), then the Python. E 601 the same once E's amount is written (20 (e) 強さ).
+#                  one folder, each with the dumps and the Python on them as its real job runs it: the same printed
+#                  lines as the one-process run; a changed walk ledger stops the next stage with exit 2), then the
+#                  Python on the one-process run. E 601 the same once E's amount is written (20 (e) 強さ).
 #     flip         seeds 101–105 and their flips (light runs with the dumps), flip-cmp; flip-sum judges set.flip
 #     answer       O 801–804 (the answer-knowing donchian-A20), full runs, the Python's --o-mode on 801; answer-sum
 #                  judges set.O
@@ -24,6 +26,7 @@
 #                  (D, H, E, E3, Q are refused until their amounts are written in docs and chartbest-const.ts)
 #     stage0/1/2   the real stages. Written only: their first step is the program's gate (§5.4 of the plan), which
 #                  refuses until step 3 is complete (55 of the 59 items are not built), so no real price is read.
+#                  A stage that passes keeps print.txt and its ledger file (with the sha256) as an artifact.
 #   not built in step 2 (the yml has no job for them): the rehearsal of 20 (c) (repro-walk on macdx.ts's walk,
 #   hold-xcheck on ownerhold.ts's synthetic run) and the owner's way (chartbest-hold.ts).
 #
@@ -129,16 +132,43 @@ jobs:
             out=research/out/chartbest/refuse-$st
             s=0
             if [ "$st" = stage0 ]; then
-              CB_MODE=stage0 CB_DATA=real CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest-stage0.ts || s=$?
+              CB_MODE=stage0 CB_DATA=real CB_FULL=1 CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest-stage0.ts || s=$?
             else
-              CB_MODE=$st CB_DATA=real CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || s=$?
+              CB_MODE=$st CB_DATA=real CB_FULL=1 CB_OUT=$out CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || s=$?
             fi
             g=0
-            CB_MODE=guard CB_STAGE=$st CB_DATA=real CB_OUT=$out-guard CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || g=$?
+            CB_MODE=guard CB_STAGE=$st CB_DATA=real CB_FULL=1 CB_OUT=$out-guard CB_REAL_CONFIRM=§8.113 $DENO_MADEUP research/chartbest.ts || g=$?
             echo "$st: exit $s, guard exit $g, print.txt $([ -f $out/print.txt ] && echo written || echo none)"
             if [ "$s" != 2 ] || [ "$g" != 2 ] || [ -f $out/print.txt ]; then fail=1; fi
           done
           exit $fail
+      # lookahead-05: a made-up run reads only a folder gen wrote (its manifest), never research/.cache; the Python opens
+      # real data's second half only from the choice ledger (12)
+      - name: Made-up runs read only gen's folders; the Python's stage gate
+        run: |
+          fail=0
+          mkdir -p research/.cache/chartbest research/out/chartbest/nomanifest
+          # each refusal for its own reason (exit 2 and the reason in checks.json / the Python's ERROR line)
+          for d in research/.cache/chartbest research/out/chartbest/nomanifest; do
+            rm -rf research/out/chartbest/refuse-data
+            s=0; CB_MODE=run CB_DATA=$d CB_OUT=research/out/chartbest/refuse-data $DENO_MADEUP research/chartbest.ts || s=$?
+            why=$(grep -c "made-up data refused" research/out/chartbest/refuse-data/checks.json || true)
+            echo "CB_DATA=$d: exit $s, refused for the data: ${why:-0}"; if [ "$s" != 2 ] || [ "${why:-0}" = 0 ]; then fail=1; fi
+          done
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          s=0; /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts /tmp/none --out /tmp/py-none --stages 0,2 > /tmp/py-gate.txt 2>&1 || s=$?
+          cat /tmp/py-gate.txt
+          echo "the Python, real data's second half without the choice ledger: exit $s"; if [ "$s" != 2 ] || ! grep -q "opened only with --choice-ledger" /tmp/py-gate.txt; then fail=1; fi
+          rmdir research/.cache/chartbest research/.cache 2>/dev/null || true
+          exit $fail
+      - name: The choice ledger's sha256 constant, the TS's and the Python's
+        run: |
+          ts=$(grep -E '^  choice: \{ path: "research/ledger/chartbest-choice.json", sha256: "[0-9a-f]*" \}' research/chartbest-const.ts | grep -oE 'sha256: "[0-9a-f]*"' | cut -d'"' -f2)
+          py=$(grep -E "^CHOICE_LEDGER_SHA256 = '[0-9a-f]*'" research/chartbest-check-data.py | cut -d"'" -f2)
+          grep -qE '^  choice: \{ path: "research/ledger/chartbest-choice.json", sha256: "[0-9a-f]*" \}' research/chartbest-const.ts
+          grep -qE "^CHOICE_LEDGER_SHA256 = '[0-9a-f]*'" research/chartbest-check-data.py
+          echo "TS '$ts'"; echo "Py '$py'"
+          [ "$ts" = "$py" ]
 
   full:
     runs-on: ubuntu-latest
@@ -192,20 +222,31 @@ jobs:
           CB_HAND_RESULTS: ${{ env.HAND }}
         run: $DENO_MADEUP research/chartbest.ts
       # the stages as separate processes on one folder (the walk ledger stands in for research/ledger/chartbest-*.json):
-      # each reads the ledger file only against its sha256, and their printed lines are the one-process run's
-      - name: The pipeline rehearsal (stage 0 / 1 / 2 as separate processes)
+      # each reads the ledger files only against their sha256 (stage 2 the counts and the choice), and their printed
+      # lines are the one-process run's. Each process writes its dumps (CB_DUMPS=1) and the Python checks them before
+      # the next process overwrites them, with the arguments of that stage's real job (lookahead-06: stage 2 from the
+      # choice ledger alone)
+      - name: The pipeline rehearsal (stage 0 / 1 / 2 as separate processes, the Python after each)
         if: steps.go.outputs.run == 'yes'
         env:
           CB_DATA: ${{ env.DATA }}/gmo
           CB_OUT: ${{ env.WALK }}
           CB_HAND_RESULTS: ${{ env.HAND }}
+          CB_DUMPS: "1"
         run: |
+          python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
+          PY="/tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo $DATA/gmo --ts $WALK/ts"
           CB_MODE=stage0 $DENO_MADEUP research/chartbest-stage0.ts
           cp $WALK/print.txt $WALK/print-stage0.txt
-          CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$(cat $WALK/walk-ledger/counts.json.sha256) CB_FORCE_CHOICE="${{ matrix.force }}" $DENO_MADEUP research/chartbest.ts
+          $PY --out $WALK/py0 --stages 0
+          csha=$(cat $WALK/walk-ledger/counts.json.sha256)
+          CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$csha CB_FORCE_CHOICE="${{ matrix.force }}" $DENO_MADEUP research/chartbest.ts
           cp $WALK/print.txt $WALK/print-stage1.txt
-          CB_MODE=stage2 CB_WALK_CHOICE_SHA256=$(cat $WALK/walk-ledger/choice.json.sha256) $DENO_MADEUP research/chartbest.ts
+          $PY --out $WALK/py1 --stages 0,1
+          chsha=$(cat $WALK/walk-ledger/choice.json.sha256)
+          CB_MODE=stage2 CB_WALK_COUNTS_SHA256=$csha CB_WALK_CHOICE_SHA256=$chsha $DENO_MADEUP research/chartbest.ts
           cp $WALK/print.txt $WALK/print-stage2.txt
+          $PY --out $WALK/py2 --stages 0,2 --choice-ledger $WALK/walk-ledger/choice.json --choice-sha256 $chsha
           for p in s0 s1 s2; do
             diff <(grep "^$p\." $OUT/print.txt) <(grep "^$p\." $WALK/print-stage${p#s}.txt)
             echo "$p: $(grep -c "^$p\." $OUT/print.txt) lines, the same in the separate process"
@@ -220,15 +261,20 @@ jobs:
           CB_HAND_RESULTS: ${{ env.HAND }}
         run: |
           fail=0
-          sha=$(cat $WALK/walk-ledger/choice.json.sha256)
+          csha=$(cat $WALK/walk-ledger/counts.json.sha256)
+          chsha=$(cat $WALK/walk-ledger/choice.json.sha256)
+          cp $WALK/walk-ledger/choice.json /tmp/choice.json; cp $WALK/walk-ledger/counts.json /tmp/counts.json
+          refused() { grep -q "$1: sha256" $WALK/checks.json; }
           printf ' ' >> $WALK/walk-ledger/choice.json
           rm -f $WALK/print.txt
-          s=0; CB_MODE=stage2 CB_WALK_CHOICE_SHA256=$sha $DENO_MADEUP research/chartbest.ts || s=$?
-          echo "changed choice.json: stage 2 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ]; then fail=1; fi
-          sha=$(cat $WALK/walk-ledger/counts.json.sha256)
+          s=0; CB_MODE=stage2 CB_WALK_COUNTS_SHA256=$csha CB_WALK_CHOICE_SHA256=$chsha $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "changed choice.json: stage 2 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ] || ! refused choice.json; then fail=1; fi
+          cp /tmp/choice.json $WALK/walk-ledger/choice.json
           printf ' ' >> $WALK/walk-ledger/counts.json
-          s=0; CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$sha $DENO_MADEUP research/chartbest.ts || s=$?
-          echo "changed counts.json: stage 1 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ]; then fail=1; fi
+          s=0; CB_MODE=stage2 CB_WALK_COUNTS_SHA256=$csha CB_WALK_CHOICE_SHA256=$chsha $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "changed counts.json: stage 2 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ] || ! refused counts.json; then fail=1; fi
+          s=0; CB_MODE=stage1 CB_WALK_COUNTS_SHA256=$csha $DENO_MADEUP research/chartbest.ts || s=$?
+          echo "changed counts.json: stage 1 exit $s"; if [ "$s" != 2 ] || [ -f $WALK/print.txt ] || ! refused counts.json; then fail=1; fi
           exit $fail
       - name: The Python on the same day files
         if: steps.go.outputs.run == 'yes'
@@ -744,10 +790,15 @@ jobs:
           if-no-files-found: ignore
 
   # The real stages (dispatch only). Their first step is the program's own gate (§5.4 of the plan: the 59 items built,
-  # R_cb passed, CB_REAL_CONFIRM, the candidates ledger's sha256, sets-pass.json with every condition passed, the
-  # stage's ledger constants), run with no network permission; it refuses until step 3 is complete, so nothing after
-  # it runs and no real price is read. Step 3 reviews these jobs (and writes 20 (c)'s reproduction) before the first
-  # dispatch.
+  # R_cb passed, CB_REAL_CONFIRM, the candidates ledger's sha256, sets-pass.json as the whole sets-sum with every set's
+  # conditions passed, the configuration of a real stage — main period, no made-up set, CB_FULL=1, the owner's way, no
+  # forced choice or plant — and the stage's ledger constants; stage 2 also the counts ledger and the owner's way built),
+  # run with no network permission; it refuses until step 3 is complete, so nothing after it runs and no real price is
+  # read. Step 3 reviews these jobs (and writes 20 (c)'s reproduction) before the first dispatch.
+  # 20 (i): the numbers go to print.txt only, kept in the job's artifact with the stage's ledger file and its sha256
+  # (committed by hand with its constant, 11, 12, 14) only when the TS and the Python both passed; on a failure only
+  # checks.json is kept. The log carries the checks' names and verdicts, the read lines and sha256s: the Python's
+  # stdout goes to a file, of which only its verdict lines are echoed.
   stage0:
     if: ${{ inputs.stage0 == 'yes' }}
     needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
@@ -774,6 +825,7 @@ jobs:
           CB_MODE: guard
           CB_STAGE: stage0
           CB_DATA: real
+          CB_FULL: "1"
           CB_REAL_CONFIRM: §8.113
           CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
           CB_OUT: ${{ env.OUT }}-guard
@@ -800,12 +852,36 @@ jobs:
           deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
           --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
           research/chartbest-stage0.ts
+      # the same n-summary as the TS (11's projections); stdout to a file, only the verdict lines echoed (20 (i))
       - name: The Python on the same day files (stage 0)
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
-          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full --stages 0
-      - name: The stage-0 lines (every check passed)
-        run: cat $OUT/print.txt
+          mkdir -p $OUT/py
+          s=0
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py \
+            --full --n-summary research/out/chartbest/sets/n-summary.json --stages 0 > $OUT/py/stdout.txt 2>&1 || s=$?
+          grep -E '^(PYTHON CHECK|compared |DIFFER |ERROR)' $OUT/py/stdout.txt || true
+          exit $s
+      - name: The stage's numbers and ledger file (every check and the Python passed)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage0
+          path: |
+            ${{ env.OUT }}/print.txt
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}/ledger/chartbest-counts.json
+            ${{ env.OUT }}/ledger/chartbest-counts.json.sha256
+          if-no-files-found: error
+      - name: On a failure, the checks only
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage0-checks
+          path: |
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}-guard/checks.json
+          if-no-files-found: ignore
       - if: always()
         uses: actions/cache/save@v4
         with:
@@ -838,6 +914,7 @@ jobs:
           CB_MODE: guard
           CB_STAGE: stage1
           CB_DATA: real
+          CB_FULL: "1"
           CB_REAL_CONFIRM: §8.113
           CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
           CB_OUT: ${{ env.OUT }}-guard
@@ -864,12 +941,36 @@ jobs:
           deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
           --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
           research/chartbest.ts
+      # the same n-summary as the TS (11's projections); stdout to a file, only the verdict lines echoed (20 (i))
       - name: The Python on the same day files (stages 0 and 1)
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
-          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full --stages 0,1
-      - name: The stage-1 lines (every check passed)
-        run: cat $OUT/print.txt
+          mkdir -p $OUT/py
+          s=0
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py \
+            --full --n-summary research/out/chartbest/sets/n-summary.json --stages 0,1 > $OUT/py/stdout.txt 2>&1 || s=$?
+          grep -E '^(PYTHON CHECK|compared |DIFFER |ERROR)' $OUT/py/stdout.txt || true
+          exit $s
+      - name: The stage's numbers and ledger file (every check and the Python passed)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage1
+          path: |
+            ${{ env.OUT }}/print.txt
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}/ledger/chartbest-choice.json
+            ${{ env.OUT }}/ledger/chartbest-choice.json.sha256
+          if-no-files-found: error
+      - name: On a failure, the checks only
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage1-checks
+          path: |
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}-guard/checks.json
+          if-no-files-found: ignore
       - if: always()
         uses: actions/cache/save@v4
         with:
@@ -902,6 +1003,7 @@ jobs:
           CB_MODE: guard
           CB_STAGE: stage2
           CB_DATA: real
+          CB_FULL: "1"
           CB_REAL_CONFIRM: §8.113
           CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
           CB_OUT: ${{ env.OUT }}-guard
@@ -914,7 +1016,7 @@ jobs:
           path: research/.cache
           key: chartbest-gmo-none
           restore-keys: chartbest-gmo-
-      - name: Stage 2 on GMO's day files (the chosen items only; the choice ledger read against its sha256; once)
+      - name: Stage 2 on GMO's day files (the chosen items only; the counts and choice ledgers read against their sha256; once)
         env:
           CB_MODE: stage2
           CB_DATA: real
@@ -928,12 +1030,36 @@ jobs:
           deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
           --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
           research/chartbest.ts
-      - name: The Python on the same day files
+      # the same n-summary as the TS (11's projections); stdout to a file, only the verdict lines echoed (20 (i))
+      - name: The Python on the same day files (stages 0 and 2, the second half from the choice ledger read against its sha256)
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
-          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py --full
-      - name: The stage-2 lines (every check passed)
-        run: cat $OUT/print.txt
+          mkdir -p $OUT/py
+          s=0
+          /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py \
+            --full --n-summary research/out/chartbest/sets/n-summary.json --stages 0,2 --choice-ledger research/ledger/chartbest-choice.json > $OUT/py/stdout.txt 2>&1 || s=$?
+          grep -E '^(PYTHON CHECK|compared |DIFFER |ERROR)' $OUT/py/stdout.txt || true
+          exit $s
+      - name: The stage's numbers and ledger file (every check and the Python passed)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage2
+          path: |
+            ${{ env.OUT }}/print.txt
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}/ledger/chartbest-stage2.json
+            ${{ env.OUT }}/ledger/chartbest-stage2.json.sha256
+          if-no-files-found: error
+      - name: On a failure, the checks only
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chartbest-real-stage2-checks
+          path: |
+            ${{ env.OUT }}/checks.json
+            ${{ env.OUT }}-guard/checks.json
+          if-no-files-found: ignore
       - if: always()
         uses: actions/cache/save@v4
         with:

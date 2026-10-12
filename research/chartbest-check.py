@@ -15,10 +15,13 @@ error (nothing compared). The helper files research/chartbest-check-*.py are loa
 Usage:
   python3 -I research/chartbest-check.py --mode hand [--hand research/chartbest/hand.json] [--plant NAME]
   python3 -I research/chartbest-check.py --mode run --gmo OUT/gmo --ts OUT/ts --out OUT/py [--period main|mini]
-         [--full] [--o-mode] [--force-choice id,id] [--stages 0,1,2] [--n-summary FILE] [--counts-only-suspicion]
-         [--plant NAME] [--no-compare] [--strict-format] [--hold [--hold-dir DIR]]
+         [--full] [--o-mode] [--force-choice id,id | --choice-ledger FILE [--choice-sha256 HEX]] [--stages 0,1,2]
+         [--n-summary FILE] [--counts-only-suspicion] [--plant NAME] [--no-compare] [--strict-format]
+         [--hold [--hold-dir DIR]]
 Never reads real prices by itself: --gmo is a folder of day files written by the made-up generator (the real stage
-modes of the TS feed it real files only after their own gates, 22).
+modes of the TS feed it real files only after their own gates, 22). A --gmo under research/.cache is real data: the
+second half is then opened only from --choice-ledger read against CHOICE_LEDGER_SHA256 (12, 14), and the made-up
+options are refused.
 """
 import argparse
 import hashlib
@@ -145,12 +148,57 @@ def clean_row(row):
     return out
 
 
+# ---------------------------------------------------------------- the gates of the stages (review fixes lookahead-05/06;
+# written by the integrator, who had read the TS: they decide which days and items are opened, never a number)
+def under_real_cache(path):
+    """the real jobs' GMO day files (research/.cache): a --gmo there is real data"""
+    root = os.path.realpath(os.path.join(REPO, D.REAL_CACHE))
+    p = os.path.realpath(path)
+    return p == root or p.startswith(root + os.sep)
+
+
+def choice_from_ledger(a, real):
+    """12: stage 1's choice ledger, read against its sha256 (real: the constant; made-up: --choice-sha256); the
+    second half is opened for its chart + cal items only"""
+    want = D.CHOICE_LEDGER_SHA256 if real else a.choice_sha256
+    if not want:
+        die('--choice-ledger: its sha256 is not given (real: CHOICE_LEDGER_SHA256 is empty; made-up: --choice-sha256)')
+    if sha256_of(a.choice_ledger) != want:
+        die(f'{a.choice_ledger}: sha256 differs from the one given (nothing opened)')
+    with open(a.choice_ledger, encoding='utf-8') as f:
+        c = json.load(f)['chosen']
+    return list(c['chart']) + list(c['cal'])
+
+
+def stage_gate(a, stages):
+    """real data (--gmo under research/.cache): the second half only from the choice ledger read against the
+    constant (12, 14), never with stage 1 in the same run, no made-up option; the ledger stands for stage 1 and is
+    read against its sha256 here, before any bar. Returns (real, the ledger's items or None)"""
+    real = under_real_cache(a.gmo)
+    if a.choice_ledger:
+        if 1 in stages:
+            die('--choice-ledger stands for stage 1: --stages must not hold 1')
+        if a.force_choice:
+            die('--choice-ledger and --force-choice: one choice only')
+    if real:
+        if a.force_choice:
+            die('--force-choice is for made-up runs only')
+        if a.choice_sha256:
+            die('real data: the choice ledger is read against CHOICE_LEDGER_SHA256 only')
+        if a.o_mode or a.counts_only_suspicion or a.plant or a.period != 'main':
+            die('real data: --o-mode, --counts-only-suspicion, --plant and --period mini are made-up only')
+        if 2 in stages and not a.choice_ledger:
+            die('real data: the second half is opened only with --choice-ledger (12: 段2は、この定数が無いと走らない)')
+    return real, (choice_from_ledger(a, real) if a.choice_ledger else None)
+
+
 # ---------------------------------------------------------------- the stages
 def run(a):
     period = D.PERIODS[a.period]
     out = a.out
-    os.makedirs(out, exist_ok=True)
     stages = {int(x) for x in a.stages.split(',') if x}
+    real, ledger_chosen = stage_gate(a, stages)
+    os.makedirs(out, exist_ok=True)
     # 20 (a): the ledger's sha256 against the constant, before reading anything else
     cand = os.path.join(REPO, D.CANDIDATES_PATH)
     if not os.path.exists(cand) or sha256_of(cand) != D.CANDIDATES_SHA256:
@@ -165,7 +213,7 @@ def run(a):
     bars, diags = D.load_all(a.gmo, period)
     for pb, dg in zip(bars, diags):
         log(f'read {pb.pair} 5min files={dg.files} failed={len(dg.failed)} oneSide={dg.one_side} crossed={dg.crossed} '
-            f'dup={dg.dup} ohlc={dg.ohlc} closure={dg.closure} bars={pb.n}')
+            f'dup={dg.dup} ohlc={dg.ohlc} closure={dg.closure} nan={dg.nan} bars={pb.n}')
         if dg.failed:
             die(f'{pb.pair}: {len(dg.failed)} day files could not be read')
         if pb.n == 0:
@@ -230,7 +278,9 @@ def run(a):
         sentences += TX.stage1_sentences(select, rows, counts, mrows, blind)
         log(f'stage 1: floor {floor_items}, chosen {select["chosen"]}, {time.time() - t0:.1f}s')
     if 2 in stages:
-        if a.force_choice:
+        if ledger_chosen is not None:
+            chosen = list(ledger_chosen)
+        elif a.force_choice:
             chosen = [x for x in a.force_choice.split(',') if x]
         elif select is not None:
             chosen = select['chosen']['chart'] + select['chosen']['cal']
@@ -372,6 +422,10 @@ def main():
     ap.add_argument('--full', action='store_true')
     ap.add_argument('--o-mode', action='store_true')
     ap.add_argument('--force-choice', default='')
+    ap.add_argument('--choice-ledger', default='', help="stage 1's choice (chartbest-choice.json, or a walk ledger's "
+                    'choice.json), read against its sha256; the second half is opened for its items (no stage 1)')
+    ap.add_argument('--choice-sha256', default='', help='the sha256 of --choice-ledger (made-up only; real data uses '
+                    'the constant CHOICE_LEDGER_SHA256)')
     ap.add_argument('--stages', default='0,1,2')
     ap.add_argument('--n-summary', default=None)
     ap.add_argument('--counts-only-suspicion', action='store_true')

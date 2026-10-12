@@ -8,7 +8,7 @@
 import type { QuoteCandle } from "../supabase/functions/track-outcomes/quotes.ts";
 import { type PairBars, digitsOf, indexAt, midOf, pairBarsFromSides, pairBarsOf, pipOf, pointsOf } from "./chartbest-bars.ts";
 import { type Dir, type Group, type Half, MINI_PERIOD, PAIRS, type Pair, type Period, STEP, TP_MAIL, TP_MAIN, dirName } from "./chartbest-const.ts";
-import { type Holes, type ItemDef, type ItemOut, type Named, classify, eventsOf, holeOverlaps, holesOf } from "./chartbest-events.ts";
+import { type Holes, type ItemDef, type ItemOut, type Named, classify, eOf, eventsOf, holeOverlaps, holesOf } from "./chartbest-events.ts";
 import { ITEM_DONCHIAN_A20, donchianTarget } from "./chartbest-donchian-lib.ts";
 import { ITEM_BREEDON_1, ITEM_BREEDON_2 } from "./chartbest-breedon-lib.ts";
 import { type BlindPair, type BlindTable, CODE_KIND, KIND_CODE, type Kind, NO_E, blindTableOf, newFollowCtx, tradeOf } from "./chartbest-follow.ts";
@@ -169,7 +169,7 @@ const followOne = (c: HandCase, f: FollowSpec, plant: string): string | null => 
   const pb = barsFromBids(pair, times, bids, spreads);
   const dir: Dir = c.dir === "BUY" ? 1 : -1;
   const tp = (c.tp as number) === 4 ? TP_MAIL : TP_MAIN;
-  const tr = tradeOf(pb, 0, dir, tp, 1, newFollowCtx(plant, Infinity));
+  const tr = tradeOf(pb, 0, dir, tp, 1, newFollowCtx(plant, Infinity), eOf(pb, 0, plant));
   const want = f.expect;
   if (want.kind === null) return tr === null ? null : `followed (${tr.kind}), want not followed`;
   if (!tr) return `not followed (want ${want.kind})`;

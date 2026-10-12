@@ -13,12 +13,13 @@
 // the SELL row's e the negative. A signal's trade is its row's; its mirror the other direction of the row.
 //
 // The planted errors acting here (20 (f)): "followFromSignalBar", "followLate1", "ambAsTp", "buyExitAsk",
-// "usdPip001", "entryMid", "mirrorSameDir", "stage1FollowH2".
+// "usdPip001", "entryMid", "mirrorSameDir" ("eNextBar" through eOf; "stage1FollowH2" acts in the follow checks of
+// research/chartbest-modes.ts).
 
 import { ULTRA_PAIRS, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
 import type { PairBars } from "./chartbest-bars.ts";
 import { type Dir, type Half, type Period, STEP, TP_MAIL, TP_MAIN, TRACK } from "./chartbest-const.ts";
-import { type Holes, classify } from "./chartbest-events.ts";
+import { type Holes, classify, eOf } from "./chartbest-events.ts";
 import { block4, seasonOf, wk } from "./chartbest-time.ts";
 
 export type Kind = "tp" | "sl" | "amb" | "open";
@@ -97,8 +98,9 @@ export const yOf = (k: Kind): 0 | 1 | null => (k === "tp" ? 1 : k === "open" ? n
 // the levels of a trade at E (ultraLevels: the stop 13, TP4 tps[0], TP10 tps[1])
 export const levelsOf = (dir: Dir, E: number, pip: number) => ultraLevels(dir === 1 ? "BUY" : "SELL", E, pip, ULTRA_PAIRS);
 
-// the trade of direction `dir` entered at bar i's close, followed from bar `from`, to TP4 or TP10
-export const tradeOf = (f: PairBars, i: number, dir: Dir, tpPips: 4 | 10, from: number, ctx: FollowCtx, E = f.mc[i]): Trade | null => {
+// the trade of direction `dir` entered at bar i's close, followed from bar `from`, to TP4 or TP10. E is always the
+// caller's (6: events.ts eOf, the one function every record, blind row and trade takes it from; no default here)
+export const tradeOf = (f: PairBars, i: number, dir: Dir, tpPips: 4 | 10, from: number, ctx: FollowCtx, E: number): Trade | null => {
   const pip = ctx.plant === "usdPip001" ? 0.01 : f.unit;
   const lv = levelsOf(dir, E, pip);
   const tp = tpPips === TP_MAIL ? lv.tps[0] : lv.tps[1];
@@ -155,7 +157,7 @@ export const rowE = (bp: BlindPair, r: number, dir: Dir): number | null => {
 };
 
 export const blindTableOf = (bars: PairBars[], holes: Holes, half: Half, p: Period, plant: string, readEnd: number, seasonPlant = ""): BlindTable => {
-  const ctx = newFollowCtx(plant === "stage1FollowH2" && half === "H1" ? "" : plant, readEnd);
+  const ctx = newFollowCtx(plant, readEnd);
   const weekSet = new Set<number>();
   const pairs: BlindPair[] = [];
   for (const pb of bars) {
@@ -178,7 +180,9 @@ export const blindTableOf = (bars: PairBars[], holes: Holes, half: Half, p: Peri
       const T = pb.t[k] + STEP;
       bp.rowOfK[k] = r;
       bp.T[r] = T;
-      bp.E[r] = pb.mc[k];
+      // 6: the row's E from the same function as every signal's record (the plant "eNextBar" acts there, so it moves
+      // the trades' levels too, and the poison, which compares eOf, guards the E the outcomes use)
+      bp.E[r] = eOf(pb, k, plant);
       bp.hour[r] = new Date(T).getUTCHours();
       bp.season[r] = seasonOf(T, seasonPlant);
       bp.week[r] = wk(T);
@@ -186,7 +190,7 @@ export const blindTableOf = (bars: PairBars[], holes: Holes, half: Half, p: Peri
       weekSet.add(bp.week[r]);
       for (const key of TRADE_KEYS) {
         const dir: Dir = key[0] === "b" ? 1 : -1;
-        const tr = tradeOf(pb, k, dir, key.endsWith("10") ? TP_MAIN : TP_MAIL, k + 1, ctx);
+        const tr = tradeOf(pb, k, dir, key.endsWith("10") ? TP_MAIN : TP_MAIL, k + 1, ctx, bp.E[r]);
         if (!tr) throw new Error(`${pb.pair} bar ${k}: a blind row without its ${TRACK} bars`);
         bp.kind[key][r] = { tp: 1, sl: 2, amb: 3, open: 4 }[tr.kind];
         bp.pips[key][r] = tr.pips;
@@ -199,18 +203,6 @@ export const blindTableOf = (bars: PairBars[], holes: Holes, half: Half, p: Peri
       bp.eBuy[r] = yb === null || ys === null ? NO_E : plant === "mirrorSameDir" ? 0 : yb - ys;
     });
     pairs.push(bp);
-  }
-  // the plant "stage1FollowH2": stage 1 also follows the second half's bars (h1Only must catch it)
-  if (plant === "stage1FollowH2" && half === "H1") {
-    for (const pb of bars) {
-      for (let k = 0; k < pb.n; k++) {
-        const c = classify(pb, pb.pi, k, true, holes, p);
-        if (c.reason === "counted" && c.half === "H2") {
-          tradeOf(pb, k, 1, TP_MAIN, k + 1, ctx);
-          break;
-        }
-      }
-    }
   }
   return { half, pairs, weeks: [...weekSet].sort((a, b) => a - b), maxReadClose: ctx.maxReadClose, pastReadEnd: ctx.pastReadEnd };
 };
