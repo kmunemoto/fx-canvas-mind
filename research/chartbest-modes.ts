@@ -1,21 +1,24 @@
 // #318 (docs §8.113; plan §5): the modes of research/chartbest.ts.
 
-import { AMOUNTS, type Group, type Half, ITEM_TABLE, LEDGER, MEASURES, PAIRS, type Period, SETS, SPEC, SPREAD_HOURS } from "./chartbest-const.ts";
-import { Checks, Log, Printer } from "./chartbest-checks.ts";
+import { AMOUNTS, type Group, type Half, HOLD_BUILT, ITEM_TABLE, LEDGER, MEASURES, PAIRS, type Period, SETS, SPEC, SPREAD_HOURS } from "./chartbest-const.ts";
+import { type Check, Checks, Log, Printer } from "./chartbest-checks.ts";
 import { generatePair, gmoWeekBreaks, bandBreaks, parseSpreadTable, writeTickFiles, type GenSet } from "./chartbest-gen.ts";
 import { sha256Hex } from "./chartbest-data.ts";
-import { type RunCfg, Refused, type HalfRows, type Signals, envOf, halfRowsOf, reconcile, statsJson, yardstickHits } from "./chartbest-run.ts";
+import { type FileHash, madeUpDataProblems, underRealCache, writeManifest } from "./chartbest-manifest.ts";
+import { type RunCfg, Refused, type HalfRows, type Signals, envOf, halfRowsOf, reconcile, sameECheck, statsJson, unselectedCheck, yardstickHits } from "./chartbest-run.ts";
 import type { RunBars } from "./chartbest-core.ts";
 import { type Stage0, floorFromCounts } from "./chartbest-count.ts";
 import { NOT_ELIGIBLE_ORDER, type Stage1, type Stage2, chooseStage1, groupOfItem, intervalsSeen1, stage2Of } from "./chartbest-select.ts";
 import { alwaysRowsOf, alwaysText, fmt, stage1Text, stage2Text } from "./chartbest-text.ts";
 import * as dump from "./chartbest-dump.ts";
 import { followFirstCheck, followFixedCheck, followSample, h1OnlyCheck } from "./chartbest-lookfollow.ts";
+import { type FollowCtx, newFollowCtx } from "./chartbest-follow.ts";
+import type { SigRec } from "./chartbest-events.ts";
 import { mergeProbes } from "./chartbest-lookahead.ts";
 import type { Probe } from "./chartbest-measures.ts";
 import { PLANTS, plant as currentPlant, plantDef } from "./chartbest-plants.ts";
 import { type HandCase, handPath, runHand } from "./chartbest-hand.ts";
-import { usedCand } from "./chartbest-stats.ts";
+import { type WinPl, usedCand } from "./chartbest-stats.ts";
 import { type WalkLedger, exists, finishRun, ledgerRead, ledgerWrite, modeStage0, realGuard, stage0Part } from "./chartbest-stage0.ts";
 import { calibTargets, condD, condE, condH, condN, condO, condQ, flipCompare, nSummaryOf, readSums } from "./chartbest-sets.ts";
 import { loadRun } from "./chartbest-core.ts";
@@ -43,6 +46,10 @@ export const genSet = async (cfg: RunCfg, dir: string, checks: Checks): Promise<
   const set = cfg.set as GenSet;
   if (!["N", "D", "H", "E", "E3", "Q", "O"].includes(set)) throw new Refused(`CB_SET ${cfg.set}: N, D, H, E, E3, Q or O`);
   const amount = amountFor(set, cfg.seed, cfg.period);
+  // gen writes into a folder of its own only (a manifest lists what it wrote; never research/.cache)
+  await Deno.mkdir(dir, { recursive: true });
+  if (await underRealCache(dir)) throw new Refused(`${dir} is under research/.cache, the real jobs' GMO day files`);
+  const written: FileHash[] = [];
   const text = await Deno.readTextFile(SPREAD_HOURS.path);
   const sha = await sha256Hex(new TextEncoder().encode(text));
   Log.sha(SPREAD_HOURS.path, sha);
@@ -56,17 +63,20 @@ export const genSet = async (cfg: RunCfg, dir: string, checks: Checks): Promise<
     weekBad += gmoWeekBreaks(gp.five, 5 * 60_000);
     bandBad += bandBreaks(gp.five, pair);
     bars += gp.five.n;
-    await writeTickFiles(dir, pair, "5min", gp.five, cfg.period);
+    written.push(...(await writeTickFiles(dir, pair, "5min", gp.five, cfg.period)));
     if (gp.minutes) {
       weekBad += gmoWeekBreaks(gp.minutes, 60_000);
       bandBad += bandBreaks(gp.minutes, pair);
-      await writeTickFiles(dir, pair, "1min", gp.minutes, cfg.period);
+      written.push(...(await writeTickFiles(dir, pair, "1min", gp.minutes, cfg.period)));
     }
     Log.madeup(`gen.${pair.replace("/", "")}.pushes`, gp.diag.pushes);
     Log.madeup(`gen.${pair.replace("/", "")}.bounces`, gp.diag.bounces);
   }
   checks.count("gen.gmoWeek", weekBad, bars);
   checks.count("gen.band", bandBad, bars);
+  // lookahead-05: the manifest a made-up run reads the folder against (research/chartbest-manifest.ts)
+  const m = await writeManifest(dir, { set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, amount, minutes: cfg.full }, written);
+  Log.sha("gmo/manifest.json", m.sha256);
 };
 
 export const modeGen = async (cfg: RunCfg): Promise<number> => {
@@ -94,33 +104,53 @@ export interface RunState {
   chosen: string[];
 }
 
-const followChecks = (checks: Checks, rb: RunBars, sig: Signals, half: Half, which: string[], plant: string, name: string) => {
+// 20 (b) 追う足: 100 counted signals per item and pair of the half (seed 319), every follow through `ctx` (stage 1: one
+// monitor whose readEnd is SPLIT, read by h1Only with the blind table's); returns the T of every signal followed.
+// The plant "stage1FollowH2": stage 1's sample also takes the second half's counted signals (h1Only must catch it).
+const followChecks = (checks: Checks, rb: RunBars, sig: Signals, half: Half, which: string[], plant: string, name: string, ctx: FollowCtx): number[] => {
   const fixed: Probe[] = [];
   const first: Probe[] = [];
+  const followedT: number[] = [];
+  const inHalf = (r: SigRec) => r.half === half || (plant === "stage1FollowH2" && half === "H1" && r.half === "H2");
   for (const s of sig.items) {
     if (!which.includes(s.src)) continue;
-    const counted = s.recs.filter((r) => r.reason === "counted" && r.half === half);
+    const counted = s.recs.filter((r) => r.reason === "counted" && inHalf(r));
     for (const pb of rb.bars) {
       const sample = followSample(counted, pb.pi);
       if (!sample.length) continue;
-      fixed.push(followFixedCheck(pb, sample, plant));
-      first.push(followFirstCheck(pb, sample, plant));
+      for (const x of sample) followedT.push(x.T);
+      fixed.push(followFixedCheck(pb, sample, plant, ctx));
+      first.push(followFirstCheck(pb, sample, plant, ctx));
     }
   }
   const f = mergeProbes(fixed);
   const g = mergeProbes(first);
   checks.count(`lookahead.followFixed${name}`, f.mismatched, f.compared, f.examples.length ? f.examples.slice(0, 3) : undefined);
   checks.count(`lookahead.followFirst${name}`, g.mismatched, g.compared, g.examples.length ? g.examples.slice(0, 3) : undefined);
+  return followedT;
 };
 
 // 15: what each stage prints. Stage 1: the 95% interval of Δ and a (items, the emails in both layers) and the
 // blind's pair × direction a; W, PL and Δ_late as points. Stage 2: every interval of 14 and 10 (the chosen
 // items' Δ, Δ_late, a, W/PL, D_U, D_M; the emails' Δ, a, Δ_late per layer and W/PL; the blind's pair ×
 // direction a and W/PL). The count of the printed intervals is checked against intervalsSeen (print.intervals).
+// Points and counts printed besides (they open no interval, so 15's count is unchanged): 9's W1/W2 (すべての中) and
+// the unresolved and amb counts of every row; the signals dropped for a stratum with no blind e (8) and those left
+// out of Δ_late; the blind-weighted W1/PL1 (9); each chart-layer row's week-shift summary (10: Δ_k's mean, 2.5% and
+// 97.5% points, the real Δ's rank; per k the dropped and the season-crossing signals, ';'-joined, k = 1, 2, …);
+// stage 2's Δ by direction and by pair and the non-overlapping Δ (14); stage 1's LB > 0 counts, the shift's 95%
+// points and the chance low end (12, 10) whatever K_total is; and stage 0's counts per pair × direction, warm-up
+// dates, overlap groups, n26 and ULTRA's late signals (11, 10).
 const pairKey = (pair: string) => pair.replace("/", "_");
-const winPl = (pr: Printer, k: string, w: { wRes: number | null; pl: number | null; wLo: number | null; wHi: number | null; plLo: number | null; plHi: number | null }, n: "1" | "2", lohi: boolean) => {
+const num2 = (x: number | null): string => (x === null ? "-" : x.toFixed(2));
+const listOf = (xs: ReadonlyArray<number | null>): string => xs.map((x) => (x === null ? "-" : String(x))).join(";");
+const winPl = (pr: Printer, k: string, w: WinPl, n: "1" | "2", lohi: boolean) => {
+  const tp = n === "1" ? 4 : 10;
   pr.line(`${k}.w${n}`, fmt.pct(w.wRes));
+  pr.line(`${k}.w${n}All`, fmt.pct(w.wAll));
   pr.line(`${k}.pl${n}`, fmt.pips(w.pl));
+  pr.line(`${k}.open${tp}`, w.open);
+  pr.line(`${k}.amb${tp}`, w.amb);
   if (!lohi) return;
   pr.line(`${k}.w${n}Lo`, fmt.pct(w.wLo));
   pr.line(`${k}.w${n}Hi`, fmt.pct(w.wHi));
@@ -144,7 +174,42 @@ const printRow = (pr: Printer, stage: "s1" | "s2", hr: HalfRows, r: (typeof hr.i
   }
   winPl(pr, k, r.w4, "1", s2 && winPlIntervals);
   winPl(pr, k, r.w10, "2", s2 && winPlIntervals);
+  pr.line(`${k}.dropped`, r.delta.dropped);
+  pr.line(`${k}.lateExcluded`, r.lateExcluded);
+  pr.line(`${k}.blindW1`, fmt.pct(r.blindW1));
+  pr.line(`${k}.blindPl1`, fmt.pips(r.blindPl1));
+  if (r.layer === "chart" && r.shift) {
+    const sh = r.shift.delta;
+    pr.line(`${k}.shiftMean`, fmt.pts(sh.mean));
+    pr.line(`${k}.shiftQ025`, fmt.pts(sh.q025));
+    pr.line(`${k}.shiftQ975`, fmt.pts(sh.q975));
+    pr.line(`${k}.shiftRank`, sh.rank === null ? "-" : `${sh.rank}/${sh.n + 1}`);
+    pr.line(`${k}.shiftDropped`, listOf(sh.dropped));
+    pr.line(`${k}.shiftSeasonCross`, listOf(sh.seasonCross));
+  }
+  if (s2) {
+    pr.line(`${k}.dirBUY`, fmt.pts(r.byDir.BUY.est));
+    pr.line(`${k}.dirSELL`, fmt.pts(r.byDir.SELL.est));
+    for (const pair of PAIRS) if (r.byPair[pair]) pr.line(`${k}.pair.${pairKey(pair)}`, fmt.pts(r.byPair[pair].est));
+    pr.line(`${k}.nonOverlap`, fmt.pts(r.nonOverlap));
+  }
   pr.line(`${k}.suspicious`, r.suspicious.join(";"));
+};
+// stage 1's lines (12): the choice, and always the descriptive counts of 12 and 10 (the s1.none sentence of 21 has
+// no place for them)
+const printStage1 = (pr: Printer, s1: Stage1) => {
+  for (const g of ["chart", "cal"] as const) pr.line(`s1.chosen.${g}`, s1.chosen[g].join(";"));
+  pr.line("s1.kTotal", s1.kTotal);
+  for (const g of ["chart", "cal"] as const) {
+    pr.line(`s1.lbPositive.${g}.items`, s1.lbPositive[g].items);
+    pr.line(`s1.lbPositive.${g}.groups`, s1.lbPositive[g].groups);
+  }
+  for (const x of ["items", "groups"] as const) {
+    pr.line(`s1.shift95.${x}.mean`, num2(s1.shift95[x].mean));
+    pr.line(`s1.shift95.${x}.p95`, s1.shift95[x].p95 ?? "-");
+  }
+  pr.line("s1.shift95.k", s1.shift95.k);
+  pr.line("s1.chanceLb", fmt.pts(s1.chanceLb));
 };
 const printRows = (pr: Printer, stage: "s1" | "s2", hr: HalfRows, s2?: Stage2) => {
   for (const r of hr.items) {
@@ -264,21 +329,21 @@ const summaryOf = (st: RunState) => {
     confirmedChart: confirmed.filter((id) => groupOfItem(id) === "chart"),
     confirmedCal: confirmed.filter((id) => groupOfItem(id) === "cal"),
     m1: st.s0.M1,
+    groups: st.s0.groups,
   };
 };
 import { tcdf as tcdfOf } from "./chartbest-stats.ts";
 
 // a run that crashes still leaves checks.json: the checks made so far and run.crash (a planted error's run lists
-// what failed before the crash; CI keeps the file), then the crash goes on to the CLI (exit 3)
+// what failed before the crash; CI keeps the file), then the crash goes on to the CLI (exit 3). A refusal (a gate
+// before reading, or the second half's gate during the run) keeps the checks made so far too, with gate.refused,
+// and ends here with exit 2 (nothing printed).
 export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise<number> => {
   const checks = new Checks();
   const printer = new Printer();
-  try {
-    return await modeRunBody(cfg, mode, plant, checks, printer);
-  } catch (e) {
-    if (e instanceof Refused) throw e;
-    checks.set("run.crash", { ok: false, n: 1, detail: e instanceof Error ? e.message : String(e) });
-    const head = { mode, set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, plant, full: cfg.full };
+  const head = { mode, set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, plant, full: cfg.full };
+  const keep = async (name: string, c: Check) => {
+    checks.set(name, c);
     try {
       await Deno.mkdir(cfg.out, { recursive: true });
       await Deno.writeTextFile(`${cfg.out}/checks.json`, checks.json(head));
@@ -287,32 +352,41 @@ export const modeRun = async (cfg: RunCfg, mode: string, plant: string): Promise
     } catch {
       // the folder cannot be written: the crash itself is reported by the CLI
     }
+  };
+  try {
+    return await modeRunBody(cfg, mode, plant, checks, printer);
+  } catch (e) {
+    if (e instanceof Refused) {
+      await keep("gate.refused", { ok: false, n: 1, detail: e.message });
+      return 2;
+    }
+    await keep("run.crash", { ok: false, n: 1, detail: e instanceof Error ? e.message : String(e) });
     throw e;
   }
 };
 
 const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Checks, printer: Printer): Promise<number> => {
   Log.mode(mode, `set=${cfg.set} seed=${cfg.seed} flip=${cfg.flip ? 1 : 0} period=${cfg.period.name} full=${cfg.full ? 1 : 0}${plant ? ` plant=${plant}` : ""}`);
-  if (cfg.data === "real") {
+  const real = cfg.data === "real";
+  if (real) {
     if (mode === "run") throw new Refused("CB_MODE=run is made-up only; the real stages are stage0, stage1, stage2");
     // 11: the real stage 0 runs from research/chartbest-stage0.ts, whose program loads no follow code
     if (mode === "stage0") throw new Refused("the real stage 0 runs from research/chartbest-stage0.ts (no follow code loaded)");
     await realGuard(mode);
   }
-  if (plant && cfg.data === "real") throw new Refused("a planted error never runs on real data");
+  if (plant && real) throw new Refused("a planted error never runs on real data");
   if (!cfg.data) throw new Refused("CB_DATA (the day files' folder) is not given");
   if (mode === "stage0") return modeStage0(cfg, plant);
   const w: WalkLedger = { dir: `${cfg.out}/walk-ledger` };
   await Deno.mkdir(cfg.out, { recursive: true });
   const head = { mode, set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, plant, full: cfg.full };
   const finish = async (code: number, st?: Partial<RunState>): Promise<number> => {
-    const c = await finishRun(cfg.out, head, checks, printer, code, plant);
+    const c = await finishRun(cfg.out, head, checks, printer, code, plant, real);
     if (st && st.s0 && mode === "run") await Deno.writeTextFile(`${cfg.out}/summary.json`, JSON.stringify(summaryOf(st as RunState), dump.jsonReplacer, 1) + "\n");
     return c;
   };
   // the ledger is read against its sha256 before any bar: a changed file stops the stage (exit 2). Made-up: the walk
   // ledger in the run's folder (CB_WALK_*_SHA256); real: research/ledger/chartbest-*.json against LEDGER's constants
-  const real = cfg.data === "real";
   const readLedger = <T>(name: "counts" | "choice"): Promise<{ v: T; sha: string }> => {
     if (!real) return ledgerRead<T>(w, `${name}.json`, envOf(name === "counts" ? "CB_WALK_COUNTS_SHA256" : "CB_WALK_CHOICE_SHA256"));
     const l = LEDGER[name];
@@ -321,25 +395,28 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
   };
   // what a stage hands on: the walk ledger (made-up), or a file to commit by hand (real: out/ledger/chartbest-*.json)
   const writeLedger = (name: "choice" | "stage2", v: unknown) => (real ? ledgerWrite({ dir: `${cfg.out}/ledger` }, `chartbest-${name}.json`, v) : ledgerWrite(w, `${name}.json`, v));
-  const ledgerCounts = mode === "stage1" ? await readLedger<Record<string, unknown>>("counts") : null;
+  // 11「M_1・床・重なりの組は、ここで決まり、後で変えない」: stage 1 and stage 2 both read the counts stage 0 fixed
+  const ledgerCounts = mode === "stage1" || mode === "stage2" ? await readLedger<Record<string, unknown>>("counts") : null;
   const ledgerChoice = mode === "stage2" ? await readLedger<{ chosen: Record<Group, string[]> }>("choice") : null;
   // ---- the gates and stage 0 (research/chartbest-stage0.ts)
   const z = await stage0Part(cfg, mode, plant, checks, printer, head);
   if (!z) return 2;
   const { rb, sig, s0, counts, madeUp, dumps, tsDir } = z;
   const st: RunState = { cfg, checks, printer, rb, sig, s0, h1: null, s1: null, h2: null, s2: null, sentences: [], chosen: [] };
-  // ---- stage 1 (the counts as stage 0 fixed them)
+  // ---- the counts as stage 0 fixed them (the one-process run: its own stage 0)
   let floor = s0.floorItems;
   let groups = s0.groups;
+  let m1 = s0.M1;
   if (ledgerCounts) {
-    const c = ledgerCounts;
-    const f = floorFromCounts(c.v);
+    const f = floorFromCounts(ledgerCounts.v);
     floor = f.floor;
     groups = f.groups;
+    m1 = f.m1;
     // the counts stage 0 fixed must be the counts these bars give (the same data, the same program)
-    const same = JSON.stringify(c.v, dump.jsonReplacer) === JSON.stringify(counts, dump.jsonReplacer);
+    const same = JSON.stringify(ledgerCounts.v, dump.jsonReplacer) === JSON.stringify(counts, dump.jsonReplacer);
     checks.count("gate.counts", same ? 0 : 1, 1);
   }
+  // ---- stage 1
   if (mode === "run" || mode === "stage1") {
     const h1 = halfRowsOf(rb, sig, "H1", floor, plant, cfg.period.split);
     st.h1 = h1;
@@ -347,16 +424,17 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
     const countsOnly = SPEC.suspicionCountsOnly.includes(cfg.set);
     checks.count("suspect.yardstick", hits.length && !countsOnly ? hits.length : 0, MEASURES.length * 2 + 2, hits.length ? hits : undefined);
     if (cfg.full) {
-      followChecks(checks, rb, sig, "H1", sig.items.map((s) => s.src), plant, "");
-      const followedT = h1.bt.pairs.flatMap((bp) => Array.from(bp.T));
-      const h1p = h1OnlyCheck(h1.bt.maxReadClose, h1.bt.pastReadEnd, followedT, cfg.period.split);
+      // 20 (b) h1Only: every follow of stage 1 — the blind table's and the follow checks' (one monitor, readEnd SPLIT)
+      const fctx = newFollowCtx(plant, cfg.period.split);
+      const followT = followChecks(checks, rb, sig, "H1", sig.items.map((s) => s.src), plant, "", fctx);
+      const blindT = h1.bt.pairs.flatMap((bp) => Array.from(bp.T));
+      const h1p = h1OnlyCheck(Math.max(h1.bt.maxReadClose, fctx.maxReadClose), h1.bt.pastReadEnd + fctx.pastReadEnd, [...blindT, ...followT], cfg.period.split);
       checks.count("lookahead.h1Only", h1p.mismatched, h1p.compared, h1p.examples.length ? h1p.examples : undefined);
     } else for (const n of ["lookahead.followFixed", "lookahead.followFirst", "lookahead.h1Only"]) checks.skip(n, "light run");
     const s1 = chooseStage1({ rows: h1.items, groups, checksOk: checks.ok(), plant, countsOnly, yardstickHits: hits });
     st.s1 = s1;
     printRows(printer, "s1", h1);
-    for (const g of ["chart", "cal"] as const) printer.line(`s1.chosen.${g}`, s1.chosen[g].join(";"));
-    printer.line("s1.kTotal", s1.kTotal);
+    printStage1(printer, s1);
     const seen1 = intervalsSeen1(floor.length);
     printer.line("s1.intervalsSeen", seen1.total);
     const printed1 = printer.intervals("s1.");
@@ -366,7 +444,7 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
     const forced = cfg.forceChoice && madeUp ? { chart: cfg.forceChoice.filter((id) => groupOfItem(id) === "chart"), cal: cfg.forceChoice.filter((id) => groupOfItem(id) === "cal") } : null;
     const choice = { chosen: forced ?? s1.chosen, forced: forced !== null, stage1Chosen: s1.chosen, kTotal: s1.kTotal, groups, floor };
     await writeLedger("choice", choice);
-    st.sentences.push(...stage1Text(s1, { m1: s0.M1, rows: h1.items, kTotal: s1.kTotal }, groupOfItem));
+    st.sentences.push(...stage1Text(s1, { m1, rows: h1.items, kTotal: s1.kTotal }, groupOfItem));
     st.sentences.push(alwaysText("always.s1", alwaysRowsOf(h1.items, MEASURES.map((id) => h1.emails[id].chart), h1.blind, "前半"), null));
     if (dumps) {
       await dump.writeBlind(tsDir, h1.bt, rb.bars);
@@ -383,14 +461,15 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
     } else chosen = cfg.forceChoice ?? [...(st.s1?.chosen.chart ?? []), ...(st.s1?.chosen.cal ?? [])];
     if (cfg.forceChoice && !madeUp) throw new Refused("CB_FORCE_CHOICE is for made-up runs only");
     chosen = ITEM_TABLE.filter((r) => chosen.includes(r.id)).map((r) => r.id);
-    // the gate (14): stage 2 computes the chosen items only (the plant computes one more, which the gate catches)
-    const computed = plant === "stage2Unselected" ? [...chosen, ...sig.items.map((s) => s.src).filter((id) => !chosen.includes(id)).slice(0, 1)] : chosen;
-    const extra = computed.filter((id) => !chosen.includes(id));
-    checks.count("gate.unselected", extra.length, computed.length, extra.length ? extra : undefined);
     st.chosen = chosen;
     if (chosen.length) {
-      const h2 = halfRowsOf(rb, sig, "H2", computed, plant, cfg.period.end);
+      // the gate (12, 14) stands in halfRowsOf, where an item's second half would be computed: only the chosen items
+      // (and the emails) pass it. The plant "stage2Unselected" asks it for one item more, which it refuses (exit 2)
+      const which = plant === "stage2Unselected" ? [...chosen, ...sig.items.map((s) => s.src).filter((id) => !chosen.includes(id)).slice(0, 1)] : chosen;
+      const h2 = halfRowsOf(rb, sig, "H2", which, plant, cfg.period.end, { allowed: new Set(chosen), checks });
       st.h2 = h2;
+      // and on what the second half produced: its rows and trades hold the chosen items and the emails only
+      unselectedCheck(checks, h2, chosen);
       const rows2 = h2.items.filter((r) => chosen.includes(r.src));
       const countsOnly = SPEC.suspicionCountsOnly.includes(cfg.set);
       // 13: the yardsticks' second-half rows; a hit stops everything (the made-up H only counts it)
@@ -398,13 +477,20 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
       checks.count("suspect.yardstick2", hits2.length && !countsOnly ? hits2.length : 0, MEASURES.length * 2 + 2, hits2.length ? hits2 : undefined);
       const s2 = stage2Of({ rows: rows2, ultra: h2.emails.ultra5, macd: h2.emails.macdx5, plant, countsOnly });
       st.s2 = s2;
-      if (cfg.full) followChecks(checks, rb, sig, "H2", chosen, plant, "2");
+      if (cfg.full) followChecks(checks, rb, sig, "H2", chosen, plant, "2", newFollowCtx(plant, Infinity));
+      else for (const n of ["lookahead.followFixed2", "lookahead.followFirst2"]) checks.skip(n, "light run");
       printRows(printer, "s2", h2, s2);
       printStage2(printer, s2);
       const printed2 = printer.intervals("s2.");
       checks.count("print.intervals2", printed2 === s2.intervalsSeen.total ? 0 : 1, printed2, printed2 === s2.intervalsSeen.total ? undefined : { printed: printed2, counted: s2.intervalsSeen.total });
+      // 9, 14「段2で、オーナーの持ち方（9）も測る」: research/chartbest-hold.ts is not built in step 2 (HOLD_BUILT false). A
+      // made-up full run that asks for it says so (CB_HOLD=0 does not ask); a real one fails (realGuard refuses it first)
+      if (cfg.full && cfg.hold && !HOLD_BUILT) {
+        if (madeUp) checks.skip("hold.owner", "not built in step 2");
+        else checks.set("hold.owner", { ok: false, n: 1, detail: "the owner's way (research/chartbest-hold.ts) is not built" });
+      }
       const holdText = new Map<string, string>();
-      st.sentences.push(...stage2Text(s2, { kTotal: s2.kTotal, m1: s0.M1.chart + s0.M1.cal, rows: new Map(rows2.map((r) => [r.src, r])), ultra: h2.emails.ultra5[groupOfItem(chosen[0])], macd: h2.emails.macdx5[groupOfItem(chosen[0])], hold: holdText }));
+      st.sentences.push(...stage2Text(s2, { kTotal: s2.kTotal, m1: m1.chart + m1.cal, rows: new Map(rows2.map((r) => [r.src, r])), ultra: h2.emails.ultra5[groupOfItem(chosen[0])], macd: h2.emails.macdx5[groupOfItem(chosen[0])], hold: holdText }));
       st.sentences.push(alwaysText("always.s2", alwaysRowsOf(rows2, MEASURES.map((id) => h2.emails[id].chart), h2.blind, "後半"), null));
       // 14's record of the one stage-2 run (real: committed by hand with its sha256, after which stage 2 refuses)
       await writeLedger("stage2", stage2Json(s2, hits2.length > 0));
@@ -412,14 +498,12 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
         await dump.writeBlind(tsDir, h2.bt, rb.bars);
         await dump.writeJson(tsDir, "stage2.json", stage2Json(s2, hits2.length > 0));
       }
-    } else checks.skip("lookahead.followFixed2", "no item chosen");
+    } else for (const n of ["lookahead.followFixed2", "lookahead.followFirst2"]) checks.skip(n, "no item chosen");
   }
-  reconcile(checks, sig, s0, [st.h1, st.h2].filter((x): x is HalfRows => x !== null));
-  // 9: the owner's way (research/chartbest-hold.ts) is not built in step 2; a full run that asks for it says so
-  // (CB_HOLD=0 does not ask)
-  if (cfg.full && cfg.hold) checks.skip("hold.owner", "not built in step 2");
+  const halves = [st.h1, st.h2].filter((x): x is HalfRows => x !== null);
+  reconcile(checks, sig, s0, halves);
+  sameECheck(checks, halves);
   if (dumps) {
-    const halves = [st.h1, st.h2].filter((x): x is HalfRows => x !== null);
     await dump.writeJson(tsDir, "stats.json", statsJson(halves));
     await dump.writeTrades(tsDir, halves.flatMap((hr) => dump.tradeRows(hr.trades, plant)));
     await dump.writeShift(tsDir, halves.flatMap((hr) => [...hr.items, ...MEASURES.map((id) => hr.emails[id].chart)].flatMap((r) => dump.shiftRows(r))));
@@ -522,6 +606,13 @@ export const mode_flip_cmp = async (): Promise<number> => {
   if (!orig || !flip || !data || !flipData) throw new Refused("flip-cmp needs CB_ORIG, CB_FLIPPED (the runs' ts/ folders), CB_ORIG_DATA and CB_FLIPPED_DATA (their day files)");
   const period = periodOf(envOf("CB_PERIOD", "main"));
   Log.mode("flip-cmp", `period=${period.name}`);
+  // lookahead-05: both folders are gen's, of one set and seed, the original and its flip (never research/.cache)
+  const set = envOf("CB_SET", "N");
+  const seed = Number(envOf("CB_SEED", "101"));
+  for (const [dir, flipped] of [[data, false], [flipData, true]] as const) {
+    const m = await madeUpDataProblems(dir, { set, seed, flip: flipped, period: period.name, minutes: false, amount: null });
+    if (m.problems.length) throw new Refused(`flip-cmp: made-up data refused: ${m.problems.join("; ")}`);
+  }
   const rb = await loadRun({ dir: data, real: false }, period, true, false, false);
   const rf = await loadRun({ dir: flipData, real: false }, period, true, false, false);
   const symmetricDefs = itemsOf(false).filter((d) => d.symmetric);

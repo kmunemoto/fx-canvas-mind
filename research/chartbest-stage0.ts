@@ -8,7 +8,8 @@
 //   measures' equality and the items' look-ahead checks (full runs) → the counts (stage0Of) → print.txt's s0
 //   lines, counts.json (the walk ledger or, real, its own file) and the stage-0 dumps.
 
-import { AMOUNTS, CANDIDATES, HALVES, ITEM_TABLE, LEDGER, PAIRS, R_CB, REAL_CACHE_DIR } from "./chartbest-const.ts";
+import { AMOUNTS, CANDIDATES, HALVES, type Half, HOLD_BUILT, ITEM_TABLE, LEDGER, PAIRS, type Period, R_CB, REAL_CACHE_DIR, SPEC, STEP } from "./chartbest-const.ts";
+import type { PairBars } from "./chartbest-bars.ts";
 import { type Check, Checks, Log, Printer } from "./chartbest-checks.ts";
 import { type RunBars, loadRun } from "./chartbest-core.ts";
 import { type NSummary, type Stage0, countsJson, stage0Of } from "./chartbest-count.ts";
@@ -16,6 +17,8 @@ import { fileSha, openRealGate, sha256Hex } from "./chartbest-data.ts";
 import * as dump0 from "./chartbest-dump0.ts";
 import { fmt } from "./chartbest-fmt.ts";
 import { allImplemented, tableProblems } from "./chartbest-items.ts";
+import { madeUpDataProblems } from "./chartbest-manifest.ts";
+import type { LateSig } from "./chartbest-measures.ts";
 import { plant as currentPlant } from "./chartbest-plants.ts";
 import { type RunCfg, Refused, type Signals, cfgFromEnv, dataChecks, donchianStateCheck, envOf, gateCandidates, gateHand, gateSpread, lookaheadChecks, measureChecks, reconcile0, signalsOf } from "./chartbest-run0.ts";
 import { parseSpreadHours } from "./spreadhours-lib.ts";
@@ -31,11 +34,46 @@ export const exists = async (p: string): Promise<boolean> => {
 
 // ---- the real-data guard (plan §5.4; never passes in step 2) ------------------------------------------------------
 
+// the configuration of a real stage, from the environment (the guard mode has no RunCfg): the fixed dates of 1, no
+// made-up set's semantics (O's answer-knowing item, H's counted-only suspicion), every check of 20 (CB_FULL=1), the
+// owner's way (14), and none of the made-up knobs
+export const realConfigProblems = (env: (k: string) => string = (k) => envOf(k)): string[] => {
+  const out: string[] = [];
+  const period = env("CB_PERIOD");
+  if (period !== "" && period !== "main") out.push(`CB_PERIOD=${period}: a real stage uses the fixed dates of 1 (main)`);
+  const set = env("CB_SET");
+  if (set !== "" && set !== "N") out.push(`CB_SET=${set}: a real stage carries no made-up set's semantics`);
+  if (env("CB_FULL") !== "1") out.push("CB_FULL is not 1: a real stage runs every check of 20");
+  if (env("CB_HOLD") === "0") out.push("CB_HOLD=0: a real stage does not leave out the owner's way (14)");
+  for (const k of ["CB_FORCE_CHOICE", "CB_PLANT", "CB_AMOUNT"]) if (env(k) !== "") out.push(`${k} is set: made-up runs only`);
+  if (env("CB_FLIP") === "1") out.push("CB_FLIP=1: made-up runs only");
+  return out;
+};
+// 20 (e)「dispatch では、作り物がすべて通った時だけ実データを走らせる」: sets-pass.json is the whole sets-sum (no
+// CB_SETS_ONLY part), every set's own conditions passed, and E3's counts are there
+export const SETS_PASS_OK = [
+  "set.N.runs", "set.N.1", "set.N.2", "set.N.3", "set.N.4", "set.N.5", "set.D.runs", "set.D.1", "set.D.tooth", "set.H.runs", "set.H.1", "set.H.2",
+  "set.E.runs", "set.E", "set.E3.runs", "set.Q.runs", "set.Q", "set.O.runs", "set.O", "set.flip",
+] as const;
+export const SETS_PASS_PRESENT = ["set.E3.counts"] as const;
+export const setsPassProblems = (sp: { ok?: unknown; only?: unknown; conditions?: Record<string, { ok?: unknown } | undefined> }): string[] => {
+  const out: string[] = [];
+  if (sp.ok !== true) out.push("sets-pass.json does not say every condition passed");
+  if (sp.only !== null) out.push("sets-pass.json is not the whole sets-sum (only is not null)");
+  const c = sp.conditions ?? {};
+  const notPassed = SETS_PASS_OK.filter((k) => c[k]?.ok !== true);
+  if (notPassed.length) out.push(`sets-pass.json has no passed ${notPassed.join(", ")}`);
+  const absent = SETS_PASS_PRESENT.filter((k) => c[k] === undefined);
+  if (absent.length) out.push(`sets-pass.json has no ${absent.join(", ")}`);
+  return out;
+};
+
 export const realGuard = async (stage: string): Promise<void> => {
   const why: string[] = [];
   if (!allImplemented()) why.push(`${ITEM_TABLE.filter((r) => !r.implemented).length} of the 59 items are not built (22: step 3 first)`);
   if (Date.now() < R_CB) why.push("before R_cb");
   if (envOf("CB_REAL_CONFIRM") !== "§8.113") why.push("CB_REAL_CONFIRM is not §8.113");
+  why.push(...realConfigProblems());
   try {
     if ((await fileSha(CANDIDATES.path)) !== CANDIDATES.sha256) why.push("the candidates ledger's sha256 differs");
   } catch {
@@ -45,8 +83,7 @@ export const realGuard = async (stage: string): Promise<void> => {
   if (!setsPass) why.push("CB_SETS_PASS (sets-pass.json) is not given");
   else {
     try {
-      const sp = JSON.parse(await Deno.readTextFile(setsPass)) as { ok?: boolean };
-      if (sp.ok !== true) why.push("sets-pass.json does not say every condition passed");
+      why.push(...setsPassProblems(JSON.parse(await Deno.readTextFile(setsPass))));
     } catch {
       why.push("sets-pass.json cannot be read");
     }
@@ -55,8 +92,12 @@ export const realGuard = async (stage: string): Promise<void> => {
   if (stage === "stage0" && LEDGER.counts.sha256 !== "") why.push("stage 0 has run (the counts ledger's sha256 is written)");
   if (stage === "stage1" && !(await ledgerOk(LEDGER.counts))) why.push("stage 0's counts ledger is not written with its sha256");
   if (stage === "stage2") {
+    // 11: stage 2 too reads the counts stage 0 fixed (gate.counts, M_1)
+    if (!(await ledgerOk(LEDGER.counts))) why.push("stage 0's counts ledger is not written with its sha256");
     if (!(await ledgerOk(LEDGER.choice))) why.push("stage 1's choice ledger is not written with its sha256");
     if (LEDGER.stage2.sha256 !== "") why.push("stage 2 has run once (its ledger's sha256 is written)");
+    // 14「段2で、オーナーの持ち方（9）も測る」
+    if (!HOLD_BUILT) why.push("the owner's way (research/chartbest-hold.ts) is not built");
   }
   if (why.length) throw new Refused(`real ${stage} refused: ${why.join("; ")}`);
   openRealGate(stage);
@@ -87,7 +128,29 @@ export const ledgerRead = async <T>(w: WalkLedger, name: string, wantSha: string
 
 // ---- print.txt's stage-0 lines --------------------------------------------------------------------------------
 
-export const printStage0 = (pr: Printer, s0: Stage0) => {
+// 11 出すもの: per source and half the counts, the reasons ①〜④, the counts per pair × direction; per pair the
+// warm-up date; the floor, the overlap group (floor items), the projections (with n26); ULTRA's late signals per half
+// (10「遅れた合図は数だけ出して外す」; SQ-R1: by T in [START, SPLIT) and [SPLIT, END), or by the close of the bar
+// where the signal shows, SPEC.lateHalfBy)
+export const lateAt = (l: LateSig, bars: PairBars[]): number => {
+  if (SPEC.lateHalfBy === "T") return l.T;
+  const pb = bars[l.pi];
+  return l.i + 1 < pb.n ? pb.t[l.i + 1] + STEP : l.T + STEP;
+};
+export const ultraLateOf = (sig: Signals, p: Period, bars: PairBars[]): Record<Half, number> => {
+  const out: Record<Half, number> = { H1: 0, H2: 0 };
+  for (const m of sig.measures) {
+    if (m.measure !== "ultra5") continue;
+    for (const l of m.late) {
+      const at = lateAt(l, bars);
+      if (at < p.start || at >= p.end) continue;
+      out[at < p.split ? "H1" : "H2"]++;
+    }
+  }
+  return out;
+};
+const isoMin = (t: number | null): string => (t === null ? "-" : `${new Date(t).toISOString().slice(0, 16)}Z`);
+export const printStage0 = (pr: Printer, s0: Stage0, ultraLate: Record<Half, number> | null = null) => {
   for (const [src, c] of Object.entries(s0.sources)) {
     for (const h of HALVES) {
       const x = c[h];
@@ -100,8 +163,15 @@ export const printStage0 = (pr: Printer, s0: Stage0) => {
       if (x.wideShare !== null) pr.line(`s0.${src}.${h}.wideShare`, (100 * x.wideShare).toFixed(1));
       if (typeof x.extra.missingDays === "number") pr.line(`s0.${src}.${h}.missingDays`, x.extra.missingDays);
       if (typeof x.extra.shiftedWeek === "number") pr.line(`s0.${src}.${h}.shifted`, x.extra.shiftedWeek);
+      for (const [key, n] of Object.entries(x.byPairDir)) {
+        const [pair, dir] = key.split(" ");
+        pr.line(`s0.${src}.${h}.${pair.replace("/", "_")}.${dir}`, n);
+      }
+      if (src === "ultra5" && ultraLate) pr.line(`s0.${src}.${h}.late`, ultraLate[h]);
     }
+    for (const [pair, t] of Object.entries(c.warmDate)) pr.line(`s0.${src}.warmDate.${pair.replace("/", "_")}`, isoMin(t));
     if (c.kind === "item") pr.line(`s0.${src}.floor`, c.floor ? "yes" : "no");
+    if (s0.groups[src]) pr.line(`s0.${src}.group`, s0.groups[src]);
   }
   pr.line("s0.M1.chart", s0.M1.chart);
   pr.line("s0.M1.cal", s0.M1.cal);
@@ -113,14 +183,21 @@ export const printStage0 = (pr: Printer, s0: Stage0) => {
     pr.line(`s0.${id}.passMin`, fmt.pts(pj.passMin));
     pr.line(`s0.${id}.size`, fmt.pts(pj.size));
     pr.line(`s0.${id}.marks`, pj.marks.join(";"));
+    pr.line(`s0.${id}.n26`, pj.n26.toFixed(1));
   }
 };
 
 // ---- the end of a run: checks.json, print.txt only when every check passed -------------------------------------
 
-export const finishRun = async (out: string, head: Record<string, unknown>, checks: Checks, printer: Printer, code: number, plant: string): Promise<number> => {
+export const finishRun = async (out: string, head: Record<string, unknown>, checks: Checks, printer: Printer, code: number, plant: string, real = false): Promise<number> => {
   const pc: Check = printer.check();
   checks.set("print.items", pc);
+  // 20「1つでも外れたら、その段の数字を出さない」: on real data a check that did not run (SKIP) is no pass, so a real
+  // run prints only when nothing was skipped (made-up light runs may skip, and say so)
+  if (real) {
+    const sk = checks.skipped();
+    checks.count("print.noSkip", sk.length, checks.names().length, sk.length ? sk : undefined);
+  }
   await Deno.writeTextFile(`${out}/checks.json`, checks.json(head));
   const ok = checks.ok();
   if (ok && code === 0) await Deno.writeTextFile(`${out}/print.txt`, printer.text());
@@ -160,6 +237,14 @@ export const stage0Part = async (cfg: RunCfg, mode: string, plant: string, check
   // the bars
   const madeUp = cfg.data !== "real";
   Log.setMadeUp(madeUp);
+  // lookahead-05: a made-up run reads only a folder gen wrote for this set, seed, flip and period (its manifest and
+  // files agree), never research/.cache, where the real jobs keep GMO's day files (refused before any bar)
+  if (madeUp) {
+    const m = await madeUpDataProblems(cfg.data, { set: cfg.set, seed: cfg.seed, flip: cfg.flip, period: cfg.period.name, minutes: cfg.full, amount: cfg.amount });
+    if (m.problems.length) throw new Refused(`made-up data refused: ${m.problems.join("; ")}`);
+    Log.sha("CB_DATA/manifest.json", m.sha256);
+    checks.count("data.manifest", 0, m.files);
+  }
   await Deno.writeTextFile(`${cfg.out}/run.json`, JSON.stringify({ ...head, forceChoice: cfg.forceChoice, amounts: AMOUNTS }, null, 1) + "\n");
   const rb = await loadRun({ dir: madeUp ? cfg.data : REAL_CACHE_DIR, real: !madeUp }, cfg.period, madeUp, cfg.full, cfg.full);
   dataChecks(checks, rb, cfg.full, madeUp);
@@ -179,7 +264,7 @@ export const stage0Part = async (cfg: RunCfg, mode: string, plant: string, check
   const ns = envOf("CB_NSUMMARY");
   if (ns) nSummary = JSON.parse(await Deno.readTextFile(ns)) as NSummary;
   const s0 = stage0Of(rb, sig.all, avoid, nSummary, plant);
-  printStage0(printer, s0);
+  printStage0(printer, s0, ultraLateOf(sig, cfg.period, rb.bars));
   const counts = countsJson(s0);
   if (mode === "stage0" || mode === "run") {
     if (madeUp) await ledgerWrite({ dir: `${cfg.out}/walk-ledger` }, "counts.json", counts);
@@ -209,7 +294,7 @@ export const modeStage0 = async (cfg: RunCfg, plant: string): Promise<number> =>
   const s = await stage0Part(cfg, "stage0", plant, checks, printer, head);
   if (!s) return 2;
   reconcile0(checks, s.sig, s.s0);
-  return finishRun(cfg.out, head, checks, printer, 0, plant);
+  return finishRun(cfg.out, head, checks, printer, 0, plant, cfg.data === "real");
 };
 
 if (import.meta.main) {

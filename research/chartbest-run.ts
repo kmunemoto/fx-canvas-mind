@@ -7,12 +7,13 @@
 
 import { type Group, type Half, MEASURES, type MeasureId, SPEC } from "./chartbest-const.ts";
 import type { Checks } from "./chartbest-checks.ts";
+import type { Probe } from "./chartbest-measures.ts";
 import type { RunBars } from "./chartbest-core.ts";
 import { type BlindTable, CODE_KIND, blindTableOf } from "./chartbest-follow.ts";
 import { type BlindRow, type Row, type SigTrade, blindObsOf, blindRowsOf, rowOf, tradesOf } from "./chartbest-rows.ts";
 import { suspectOfBlind, suspectOfRow } from "./chartbest-select.ts";
 import * as dump from "./chartbest-dump.ts";
-import { type Signals, reconcileCounts } from "./chartbest-run0.ts";
+import { Refused, type Signals, reconcileCounts } from "./chartbest-run0.ts";
 import type { Stage0 } from "./chartbest-count.ts";
 
 export * from "./chartbest-run0.ts";
@@ -27,16 +28,33 @@ export interface HalfRows {
   emails: Record<MeasureId, Record<Group, Row>>;
   blind: BlindRow[];
   trades: SigTrade[];
+  // count.sameE: the counted signals' record E against their blind rows' E
+  sameE: Probe;
 }
-export const halfRowsOf = (rb: RunBars, sig: Signals, half: Half, which: string[], plant: string, readEnd: number): HalfRows => {
+// the second half's gate (12「選ばなかった項目は、後半で何も計算しない（プログラムが断る）」, 14): the items stage 2 may
+// compute (the choice ledger's, or the made-up forced choice); the checks record gate.unselected before the refusal
+export interface H2Gate {
+  allowed: ReadonlySet<string>;
+  checks: Checks;
+}
+export const halfRowsOf = (rb: RunBars, sig: Signals, half: Half, which: string[], plant: string, readEnd: number, gate?: H2Gate): HalfRows => {
   const p = rb.period;
+  // no second half without its gate
+  if (half === "H2" && !gate) throw new Error("the second half is computed only through its gate (12, 14)");
   const bt = blindTableOf(rb.bars, rb.holes, half, p, plant, readEnd);
   const obs = { chart: blindObsOf(bt, "chart", p, plant), cal: blindObsOf(bt, "cal", p, plant) };
   const trades: SigTrade[] = [];
   const items: Row[] = [];
+  const sameE: Probe = { compared: 0, mismatched: 0, examples: [] };
   for (const s of sig.items) {
     if (!which.includes(s.src)) continue;
-    const tr = tradesOf(s.recs, half, bt, rb.bars);
+    // the gate stands where an item's second half would be computed: an item outside the choice is refused here,
+    // before any of its trades or numbers (a list that names more items, or a loop that ignores the list, stops)
+    if (gate && !gate.allowed.has(s.src)) {
+      gate.checks.count("gate.unselected", 1, 1, { refused: s.src, allowed: [...gate.allowed] });
+      throw new Refused(`stage 2: ${s.src} was not chosen (12: an item not chosen is not computed in the second half)`);
+    }
+    const tr = tradesOf(s.recs, half, bt, rb.bars, sameE);
     trades.push(...tr);
     const g = s.def!.group;
     const r = rowOf(s.src, tr, g, half, bt, rb.bars, obs[g], p, { plant, shift: g === "chart" });
@@ -45,7 +63,7 @@ export const halfRowsOf = (rb: RunBars, sig: Signals, half: Half, which: string[
   }
   const emails = {} as HalfRows["emails"];
   for (const m of sig.measures) {
-    const tr = tradesOf(m.recs, half, bt, rb.bars);
+    const tr = tradesOf(m.recs, half, bt, rb.bars, sameE);
     trades.push(...tr);
     emails[m.measure!] = {} as Record<Group, Row>;
     for (const g of ["chart", "cal"] as const) {
@@ -57,7 +75,26 @@ export const halfRowsOf = (rb: RunBars, sig: Signals, half: Half, which: string[
   // the lines are written for every blind row (stats.json); only the direction rows are examined (SQ-16)
   const blind = blindRowsOf(bt, p);
   for (const b of blind) b.suspicious = suspectOfBlind(b);
-  return { half, bt, items, emails, blind, trades };
+  return { half, bt, items, emails, blind, trades, sameE };
+};
+
+// 8 (count.sameE): one E — each counted signal's record E is its blind row's E, in every half computed
+export const sameECheck = (checks: Checks, halves: HalfRows[]) => {
+  const m: Probe = { compared: 0, mismatched: 0, examples: [] };
+  for (const hr of halves) {
+    m.compared += hr.sameE.compared;
+    m.mismatched += hr.sameE.mismatched;
+    for (const e of hr.sameE.examples) if (m.examples.length < 5) m.examples.push(`${hr.half} ${e}`);
+  }
+  checks.count("count.sameE", m.mismatched, m.compared, m.examples.length ? m.examples : undefined);
+};
+
+// 12, 14: after stage 2, the sources the second half actually produced (its rows and trades) are the chosen items and
+// the two emails only (gate.unselected, on what was computed rather than on the list asked for)
+export const unselectedCheck = (checks: Checks, h2: HalfRows, chosen: readonly string[]) => {
+  const srcs = [...new Set([...h2.items.map((r) => r.src), ...h2.trades.map((t) => t.src)])];
+  const extra = srcs.filter((src) => !chosen.includes(src) && !(MEASURES as readonly string[]).includes(src));
+  checks.count("gate.unselected", extra.length, srcs.length, extra.length ? { computed: extra } : undefined);
 };
 
 // the yardsticks' suspicious hits (13): the blind's direction rows (SQ-16: the pair × direction rows are not
