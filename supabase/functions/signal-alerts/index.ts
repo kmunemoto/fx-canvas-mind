@@ -32,7 +32,8 @@
 // and {"mode": "indicators"}. Judged on the bars the live chart holds, with
 // the chart's own code, and mailed to the charts subscribed with rule =
 // 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
-// 5-minute chart of GMO's pairs). Not recorded or settled (signal_events is
+// 5-minute chart of GMO's pairs; #324: on their 1-hour chart from v25, the
+// owner's levels). Not recorded or settled (signal_events is
 // the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
@@ -69,8 +70,8 @@ import {
   INDICATOR_INTERVALS,
   INDICATOR_PAIRS,
   INDICATOR_RULES,
-  MACDX_INTERVALS,
-  MACDX_PAIRS,
+  MACDH_INTERVALS,
+  MACDH_PAIRS,
   STALE_RETRY_MS,
   STALE_TRIES,
   TWELVE_ALERT_INTERVALS,
@@ -90,7 +91,7 @@ import {
   klineFileOf,
   klinePreloadDays,
   latestCloseMs,
-  macdxSignals,
+  macdhSignals,
   SWEEPX_INTERVALS,
   SWEEPX_PAIRS,
   isSweepxChart,
@@ -173,7 +174,15 @@ import type { Candle } from "../analyze/indicators.ts";
 // §8.112), judged by that run on the minutes recorded and mailed to the
 // charts subscribed with rule = 'sweepx': gold's 1-minute chart only. The
 // other rules' signals, ids and what is recorded are as they were.
-const FUNCTION_VERSION = "signal-alerts-v24-2026-10-11T12:00:00Z";
+// v25 (#324): the MACD email ('macdx') judged by the owner's rule on the
+// 1-hour chart in place of the 5-minute one (indicators.ts macdhSignals,
+// _shared/macd-level.ts; docs §8.114): a SELL where MACD crosses below its
+// signal line at or above +8.5 pips (0.085 on a yen pair), a BUY where it
+// crosses above at or below -8.5 pips, recorded under its own rule id
+// (MACDH_RULE_ID). The 5-minute rule is no longer mailed (its subscriptions
+// are not followed); its code stays for the studies. The other rules'
+// signals, ids and what is recorded are as they were.
+const FUNCTION_VERSION = "signal-alerts-v25-2026-10-12T13:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -577,10 +586,11 @@ Deno.serve(async (req: Request) => {
       // the other charts due are read
       const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
         // #275: the MACD peak-and-valley rule beside Q-Trend's and ULTRA's. Its
-        // failure must never cost the other two their emails
+        // failure must never cost the other two their emails. #324: from v25
+        // the 1-hour rule's (macdhSignals; nothing on another chart)
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         try {
-          sigs.push(...macdxSignals(pair, interval, closed, nowMs));
+          sigs.push(...macdhSignals(pair, interval, closed, nowMs));
         } catch (err) {
           console.error("macdx failed:", pair, interval, err);
         }
@@ -1216,8 +1226,10 @@ Deno.serve(async (req: Request) => {
           intervals: INDICATOR_INTERVALS,
           limited: Object.fromEntries(INDICATOR_PAIRS.filter((p) => isTwelvePair(p)).map((p) => [p, indicatorIntervalsFor(p)])),
           limited_intervals: TWELVE_ALERT_INTERVALS,
-          // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs on 5 minutes
-          macdx: { pairs: MACDX_PAIRS, intervals: MACDX_INTERVALS },
+          // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs
+          // (#324: from v25 the 1-hour rule's, mailed in place of the 5-minute one,
+          // on the owner's five pairs)
+          macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },
           // #291: the video's way's: gold's 1-minute chart
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
         },

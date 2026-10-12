@@ -9,7 +9,8 @@ export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "sk
 
 // #112: RSI + SAR, or the GA-style rule beside it; #155: Q-Trend's and
 // ULTRA's signals, on every pair of the live chart; #275: and the MACD
-// peak-and-valley rule, on the 5-minute chart of GMO's currency pairs; #291:
+// peak-and-valley rule, on GMO's currency pairs (5 minutes; #324: 1 hour
+// from signal-alerts v25, the charts the server sends); #291:
 // and the owner's video's way (liquidity sweep + EMA cross), on gold's
 // 1-minute chart
 export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx";
@@ -90,7 +91,8 @@ export interface AlertSettings {
   // #155: Q-Trend's and ULTRA's charts: every pair of the live chart on
   // these timeframes, some pairs (those read from Twelve Data) on fewer
   // #275: and the charts the MACD peak-and-valley rule may be followed on
-  // (GMO's currency pairs, 5 minutes), null from a server that does not send them;
+  // (#324: the owner's five pairs on 1 hour, from signal-alerts v25; before
+  // it GMO's currency pairs on 5 minutes), null from a server that does not send them;
   // #291: and the video's way's (gold, 1 minute), likewise
   indicator: {
     pairs: string[];
