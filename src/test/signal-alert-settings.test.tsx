@@ -402,9 +402,13 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD の山・谷");
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("高い位置（MACD が +0.085 以上）で下に抜けたものを売り、低い位置（−0.085 以下）で上に抜けたものを買い");
+    expect(intro).toContain("高い位置で下に抜けたものを売り、低い位置で上に抜けたものを買いとするサインです");
+    // #339: each pair's own level
+    expect(intro).toContain("高い・低いは、ペアごとに、そのペアの1時間のふだんの動きの 0.8倍で決めます（売りは MACD がその値以上、買いはその値のマイナス以下）");
+    expect(intro).not.toContain("0.085");
     expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足だけです");
     expect(intro).toContain("勝率と1回あたりの損益は、まだ測っていません");
+    expect(intro).toContain("この決まり自体には損切り・利確がないため、メールには ULTRA と同じ損切り13pips・利確 4・10・16pips の目安を付けます");
     expect(intro).not.toContain("0から遠い山・谷の近く");
     const grid = screen.getByTestId("signal-alerts-grid");
     // one timeframe, the all-symbols row and the owner's five pairs
@@ -476,11 +480,14 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
     expect(notes).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足だけで判定します（オーナーが選んだ5ペア）");
     expect(notes).toContain("ほかのペアは選べません");
-    expect(notes).toContain("MACD は丸めない値で比べます");
-    expect(notes).toContain("売りは、クロスした足の MACD が +0.085 以上、買いは −0.085 以下の時だけです（円のペア。ユーロ/ドル・豪ドル/ドルは ±0.00085。どちらも 8.5pips）");
-    expect(notes).toContain("0.085 は、オーナーがドル/円の1時間足のチャートを見て決めた数字");
+    expect(notes).toContain("MACD と水準は丸めない値で比べます");
+    expect(notes).toContain("売りは、クロスした足の MACD が、そのペアの1時間のふだんの動きの 0.8倍以上、買いはその値のマイナス以下の時だけです");
+    expect(notes).toContain("ふだんの動きは、判定する足で終わる600本の、終値から次の終値までの値動きの幅（上げ下げを問わない大きさ）の平均で、足ごとに計算し直します");
+    expect(notes).toContain("0.8倍は、オーナーが豪ドル/ドルのチャートで示した高さ・低さ（ふだんの動きの約1.2倍と約0.9倍）が入る数字として、オーナーが選んだもの");
+    expect(notes).toContain("ドル/円では、前に決めた 0.085（約0.75倍）より少し高くなります");
     expect(notes).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません");
-    expect(notes).toContain("その測定の数字はこの決まりには当てはまりません");
+    expect(notes).toContain("5分足の決まりの測った数字は、この決まりには当てはまりません");
+    expect(notes).toContain("±0.085 の決まりは、測っていません");
     expect(notes).toContain("同じ時刻に2通届くことがあります");
     expect(notes).toContain("1時間足で実際に何秒で届くかは、まだ確かめていません");
     // the 5-minute rule's figures are not given as this rule's
@@ -525,14 +532,17 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD peak/valley");
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("a SELL where it crosses below with MACD at or above +0.085, a BUY where it crosses above with MACD at or below −0.085");
+    expect(intro).toContain("a SELL where it crosses below with MACD at or above 0.8 times the pair's usual hourly move, a BUY where it crosses above with MACD at or below minus that, each pair on its own scale");
+    expect(intro).not.toContain("0.085");
     expect(intro).toContain("On the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD only.");
     expect(intro).toContain("have not been measured");
+    expect(intro).toContain("The rule has no stop or target of its own, so the email carries ULTRA's stop of 13 pips");
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
-    expect(notes).toContain("±0.00085 on EUR/USD and AUD/USD; 8.5 pips either way");
+    expect(notes).toContain("The usual move is the mean size of the move from one close to the next, up or down, over the 600 bars ending at the bar judged, worked out again at every bar");
+    expect(notes).toContain("the ±0.085 rule mailed after it was not measured");
     expect(notes).toContain("This rule's win rate and its profit or loss a trade have not been measured");
     expect(notes).toContain("The other pairs are not offered.");
-    expect(notes).toContain("MACD is compared unrounded.");
+    expect(notes).toContain("MACD and the level are compared unrounded.");
     expect(notes).toContain("with both on, two emails can come at the same time");
     expect(notes).not.toContain("72.3%");
   });
