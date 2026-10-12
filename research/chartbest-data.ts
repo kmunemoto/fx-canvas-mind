@@ -29,11 +29,37 @@ export interface LoadDiag {
   ohlc: number;
   closure: number;
   band: number;
+  // 18 C1「中値が NaN の足は、番号を付ける前に取り除いて数を出す」: bar times removed because a side's row there had
+  // a price that is not a finite number (both sides having a row), plus rows whose openTime is not a number
+  nan: number;
   kept: number;
   // SQ-29: rows read (bid rows, before any drop) and crossed rows, by the UTC year of the bar's open
   byYear: Record<string, { rows: number; crossed: number }>;
 }
-export const newDiag = (pair: Pair, interval: Interval): LoadDiag => ({ pair, interval, files: 0, failed: 0, oneSide: 0, crossed: 0, dup: 0, ohlc: 0, closure: 0, band: 0, kept: 0, byYear: {} });
+export const newDiag = (pair: Pair, interval: Interval): LoadDiag => ({ pair, interval, files: 0, failed: 0, oneSide: 0, crossed: 0, dup: 0, ohlc: 0, closure: 0, band: 0, nan: 0, kept: 0, byYear: {} });
+
+// the rows of a day file that parseKlines (quotes.ts, which drops them without a count) leaves out because a value is
+// not a finite number, by the same test: { t } when the openTime is a number (a price is not), { t: null } when not
+const numOf = (v: unknown): number => {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : NaN;
+};
+export const nonFiniteRows = (body: unknown): Array<{ t: number | null }> => {
+  const data = typeof body === "object" && body !== null ? (body as { data?: unknown }).data : undefined;
+  if (!Array.isArray(data)) return [];
+  const out: Array<{ t: number | null }> = [];
+  for (const row of data) {
+    if (typeof row !== "object" || row === null) {
+      out.push({ t: null });
+      continue;
+    }
+    const r = row as Record<string, unknown>;
+    const t = numOf(r.openTime);
+    if (!Number.isFinite(t)) out.push({ t: null });
+    else if (![r.open, r.high, r.low, r.close].map(numOf).every(Number.isFinite)) out.push({ t });
+  }
+  return out;
+};
 
 // the folder the day files are in: a made-up set's own (`dir/SYM/interval/side/YYYYMMDD.json`), or real
 export interface Src {
@@ -92,6 +118,8 @@ export const loadBars = async (src: Src, pair: Pair, interval: Interval, period:
   const { keys } = keysOf(period.s0, period.end);
   const bid = new Map<number, Candle>();
   const ask = new Map<number, Candle>();
+  // the times of a side's rows with a price that is not a finite number (spec-nan-count: counted, then dropped)
+  const nanAt = { bid: new Set<number>(), ask: new Set<number>() };
   const rowsSeen = new Map<number, boolean>();
   for (const key of keys) {
     for (const side of ["bid", "ask"] as const) {
@@ -103,12 +131,17 @@ export const loadBars = async (src: Src, pair: Pair, interval: Interval, period:
       diag.files++;
       const m = side === "bid" ? bid : ask;
       for (const r of parseKlines(body)) {
-        if (m.has(r.t)) {
+        if (m.has(r.t) || nanAt[side].has(r.t)) {
           diag.dup++;
           continue;
         }
         m.set(r.t, r.c);
         if (side === "bid") rowsSeen.set(r.t, true);
+      }
+      for (const r of nonFiniteRows(body)) {
+        if (r.t === null) diag.nan++;
+        else if (m.has(r.t) || nanAt[side].has(r.t)) diag.dup++;
+        else nanAt[side].add(r.t);
       }
     }
   }
@@ -116,13 +149,18 @@ export const loadBars = async (src: Src, pair: Pair, interval: Interval, period:
     const y = yearOf(t);
     (diag.byYear[y] ??= { rows: 0, crossed: 0 }).rows++;
   }
-  const times = [...new Set([...bid.keys(), ...ask.keys()])].sort((a, b) => a - b);
+  const times = [...new Set([...bid.keys(), ...ask.keys(), ...nanAt.bid, ...nanAt.ask])].sort((a, b) => a - b);
   const quotes: QuoteCandle[] = [];
   for (const t of times) {
     const b = bid.get(t);
     const a = ask.get(t);
-    if (!b || !a) {
+    // a side with no row at all: one side; both sides with a row, one of them not finite: NaN (before any number)
+    if (!(b || nanAt.bid.has(t)) || !(a || nanAt.ask.has(t))) {
       diag.oneSide++;
+      continue;
+    }
+    if (!b || !a) {
+      diag.nan++;
       continue;
     }
     if (a.close < b.close) {
@@ -187,7 +225,7 @@ export const crossedOk = (d: LoadDiag): boolean => (crossedWorst(d)?.share ?? 0)
 
 // the log line of a read (20 (i))
 export const readLine = (d: LoadDiag): string =>
-  `read ${d.pair} ${d.interval} files=${d.files} failed=${d.failed} oneSide=${d.oneSide} crossed=${d.crossed} dup=${d.dup} ohlc=${d.ohlc} closure=${d.closure} band=${d.band}`;
+  `read ${d.pair} ${d.interval} files=${d.files} failed=${d.failed} oneSide=${d.oneSide} crossed=${d.crossed} dup=${d.dup} ohlc=${d.ohlc} closure=${d.closure} band=${d.band} nan=${d.nan}`;
 
 export const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)))).map((b) => b.toString(16).padStart(2, "0")).join("");

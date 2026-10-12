@@ -18,7 +18,7 @@ export interface PlantDef {
 
 export const PLANTS: readonly PlantDef[] = [
   { name: "formingBar", hook: "run", expect: ["lookahead.cut.donchian-A20"], status: "trial", note: "確定していない足を使う → 切り取り (donchian-A20 reads the next bar's close)" },
-  { name: "eNextBar", hook: "run", expect: ["lookahead.poison.donchian-A20", "lookahead.poison.donchian-A55", "lookahead.poison.breedon-1", "lookahead.poison.breedon-2"], status: "trial", note: "E を次の足から取る → 毒" },
+  { name: "eNextBar", hook: "run", expect: ["lookahead.poison.donchian-A20", "lookahead.poison.donchian-A55", "lookahead.poison.breedon-1", "lookahead.poison.breedon-2"], status: "trial", note: "E を次の足から取る → 毒 (events.ts eOf, the one E of the records, the blind rows and so every trade's levels)" },
   { name: "hhIncludesI", hook: "hand", expect: ["hand.c1.docs", "lookahead.cut.donchian-A20"], status: "trial", note: "donchian の HH に足 i を入れる → 切り取り・手の例 (the window i−n+1..i holds bar i's own high, so no close ever breaks it: the hand example catches it; a cut finds nothing to differ)" },
   { name: "followFromSignalBar", hook: "run", expect: ["lookahead.followFixed"], status: "trial", note: "追う足を合図の足から始める → 追う足の (i)" },
   { name: "followLate1", hook: "run", expect: ["lookahead.followFirst"], status: "trial", note: "追い始めを1本遅らせる → 追う足の (ii)" },
@@ -46,8 +46,8 @@ export const PLANTS: readonly PlantDef[] = [
   { name: "countUnsent", hook: "hand", expect: ["hand.sent"], status: "trial", note: "送られない時刻の合図を数える → 手の例（送られる合図）" },
   { name: "noRiseEdge", hook: "hand", expect: ["hand.events.condition", "hand.c1.docs"], status: "trial", note: "立ち上がりを見ない → 手の例 (pinbar・round in step 3; the event framework's condition case and C1's in step 2: SQ-13)" },
   { name: "dropAdverse1h", hook: "run", expect: ["lookahead.poison.donchian-A20"], status: "trial", note: "donchian-A20 で「T＋1時間までに中値が E から逆向きに13 pips 動く合図を消す」→ 毒" },
-  { name: "stage2Unselected", hook: "gate", expect: ["gate.unselected"], status: "trial", note: "選ばなかった項目の後半を計算する → 段2の門" },
-  { name: "stage1FollowH2", hook: "run", expect: ["lookahead.h1Only"], status: "trial", note: "段1で後半の取引を追う → h1Only" },
+  { name: "stage2Unselected", hook: "gate", expect: ["gate.unselected"], status: "trial", note: "選ばなかった項目の後半を計算する → 段2の門 (one unchosen item more in the second half's list; halfRowsOf refuses it before computing it, exit 2)" },
+  { name: "stage1FollowH2", hook: "run", expect: ["lookahead.h1Only"], status: "trial", note: "段1で後半の取引を追う → h1Only (stage 1's follow checks also sample the second half's counted signals)" },
   { name: "printExtraItem", hook: "print", expect: ["print.items"], status: "trial", note: "出してよい項目に無い数を出す → 出してよい項目" },
   { name: "printToLog", hook: "print", expect: ["print.items"], status: "trial", note: "成績を print.txt 以外に出す → 出してよい項目" },
   { name: "badSha", hook: "gate", expect: ["data.candidatesSha"], status: "trial", note: "sha256 を間違える → 何も読まずに止まる (exit 2)" },

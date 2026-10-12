@@ -29,6 +29,7 @@ import { type Pair, PAIRS, P90_SHARE, type Period, SHUT_FACTOR, SIGMA_TICKS, STA
 import { gmoDayKey, gmoWeekShut, nyLocal } from "./chartbest-time.ts";
 import { seasonOf as spreadSeason, slotOf } from "./spreadhours-lib.ts";
 import { chartRound, digitsOf, isJpy } from "./chartbest-bars.ts";
+import { type FileHash, textHash } from "./chartbest-manifest.ts";
 
 // ---- random numbers ------------------------------------------------------------------------------------
 
@@ -334,7 +335,8 @@ export const tickText = (v: number, d: number): string => {
   return `${neg ? "-" : ""}${s.slice(0, s.length - d)}.${s.slice(s.length - d)}`;
 };
 
-export const writeTickFiles = async (dir: string, pair: Pair, interval: "5min" | "1min", b: TickBars, period: Period): Promise<number> => {
+// returns each file written, relative to dir, with its sha256 (gen's manifest, research/chartbest-manifest.ts)
+export const writeTickFiles = async (dir: string, pair: Pair, interval: "5min" | "1min", b: TickBars, period: Period): Promise<FileHash[]> => {
   const symbol = GMO_SYMBOLS[pair];
   const d = digitsOf(pair);
   const byKey = new Map<string, { bid: string[]; ask: string[] }>();
@@ -346,13 +348,15 @@ export const writeTickFiles = async (dir: string, pair: Pair, interval: "5min" |
     e.bid.push(`{"openTime":"${ot}","open":"${tickText(b.bo[k], d)}","high":"${tickText(b.bh[k], d)}","low":"${tickText(b.bl[k], d)}","close":"${tickText(b.bc[k], d)}"}`);
     e.ask.push(`{"openTime":"${ot}","open":"${tickText(b.ao[k], d)}","high":"${tickText(b.ah[k], d)}","low":"${tickText(b.al[k], d)}","close":"${tickText(b.ac[k], d)}"}`);
   }
-  let files = 0;
+  const files: FileHash[] = [];
   for (const side of ["bid", "ask"] as const) await Deno.mkdir(`${dir}/${symbol}/${interval}/${side}`, { recursive: true });
   for (const key of keysOf(period.s0, period.end).keys) {
     const e = byKey.get(key) ?? { bid: [], ask: [] };
     for (const side of ["bid", "ask"] as const) {
-      await Deno.writeTextFile(`${dir}/${symbol}/${interval}/${side}/${key}.json`, `{"status":0,"data":[${e[side].join(",")}]}`);
-      files++;
+      const rel = `${symbol}/${interval}/${side}/${key}.json`;
+      const text = `{"status":0,"data":[${e[side].join(",")}]}`;
+      await Deno.writeTextFile(`${dir}/${rel}`, text);
+      files.push([rel, await textHash(text)]);
     }
   }
   return files;

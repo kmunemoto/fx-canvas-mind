@@ -32,6 +32,8 @@ export interface RunSum {
   confirmed: string[];
   confirmedChart: string[];
   confirmedCal: string[];
+  // the run's overlap groups (11; floor-passing items → their group)
+  groups?: Record<string, string>;
 }
 export interface Cond {
   ok: boolean;
@@ -162,9 +164,15 @@ export const condH = (runs: RunSum[]): Record<string, Cond> => {
     "set.H.2": { ok: tooth >= 20, value: tooth, need: "runs choosing breedon-1 or -2 with C1 in the second half ≥ 20" },
   };
 };
+// 20 (e) E「重なりの組が違う項目が確かめられた run の数も出す（説明）」: a confirmed item counts when its overlap group in
+// that run (11) is not donchian-A20's (an item outside the floor is its own group)
+export const otherGroupRuns = (runs: RunSum[], id = "donchian-A20"): number => {
+  const groupOf = (r: RunSum, x: string) => r.groups?.[x] ?? x;
+  return runs.filter((r) => r.confirmed.some((x) => groupOf(r, x) !== groupOf(r, id))).length;
+};
 export const condE = (runs: RunSum[]): Cond => {
   const n = runs.filter((r) => r.confirmed.includes("donchian-A20")).length;
-  return { ok: n >= 6, value: { runs: n, otherGroups: runs.filter((r) => r.confirmed.some((x) => x !== "donchian-A20")).length }, need: "donchian-A20 confirmed in ≥ 6 of 10" };
+  return { ok: n >= 6, value: { runs: n, otherGroups: otherGroupRuns(runs) }, need: "donchian-A20 confirmed in ≥ 6 of 10" };
 };
 export const condQ = (runs: RunSum[]): Cond => {
   if (Q_ITEM === null) return { ok: false, value: null, need: "Q's item is named in docs with its amount (SQ-12, SQ-28): not yet" };

@@ -9,6 +9,7 @@ import { type Dir, type Half, type Layer, PAIRS, type Period, STEP, TP_MAIN, dir
 import { WEEK as WEEK_MS } from "./lib.ts";
 import type { SigRec } from "./chartbest-events.ts";
 import { type BlindPair, type BlindTable, type Kind, rowE, rowKind } from "./chartbest-follow.ts";
+import type { Probe } from "./chartbest-measures.ts";
 import { type Est, type Obs, type ShiftSummary, type WinPl, aOf, deltaOf, emptyEst, meanOf, shiftSummary, winPlOf } from "./chartbest-stats.ts";
 import { stratumOf } from "./chartbest-strata.ts";
 import { block4, seasonOf, wk } from "./chartbest-time.ts";
@@ -47,13 +48,22 @@ export const pairTable = (bt: BlindTable, pi: number): BlindPair => {
   return bp;
 };
 
-export const tradesOf = (recs: SigRec[], half: Half, bt: BlindTable, bars: PairBars[]): SigTrade[] => {
+// sameE (8「同じ足・同じ E・同じ追い方」; count.sameE): every counted signal's record E against its blind row's E — the
+// trade is the row's, so its levels are the row's E; the two must be one value (events.ts eOf)
+export const tradesOf = (recs: SigRec[], half: Half, bt: BlindTable, bars: PairBars[], sameE?: Probe): SigTrade[] => {
   const out: SigTrade[] = [];
   for (const s of recs) {
     if (s.reason !== "counted" || s.half !== half) continue;
     const bp = pairTable(bt, s.pi);
     const r = bp.rowOfK[s.i];
     if (r < 0) throw new Error(`${s.src} ${PAIRS[s.pi]} bar ${s.i}: a counted signal not in the blind table`);
+    if (sameE) {
+      sameE.compared++;
+      if (s.E !== bp.E[r]) {
+        sameE.mismatched++;
+        if (sameE.examples.length < 5) sameE.examples.push(`${s.src} ${PAIRS[s.pi]} bar ${s.i}: the record's E differs from its blind row's`);
+      }
+    }
     const pb = bars[s.pi];
     const other: Dir = s.dir === 1 ? -1 : 1;
     const nextOk = s.i + 1 < pb.n && pb.t[s.i + 1] === s.T && bp.rowOfK[s.i + 1] >= 0;

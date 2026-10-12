@@ -17,7 +17,7 @@ const LOG_SHAPES: RegExp[] = [
   /^ok {3}[A-Za-z0-9_.:-]+( n=\d+)?$/,
   /^FAIL [A-Za-z0-9_.:-]+ n=\d+$/,
   /^SKIP [A-Za-z0-9_.:-]+ \([^\n]*\)$/,
-  /^read [A-Z]{3}\/[A-Z]{3} (5min|1min) files=\d+ failed=\d+ oneSide=\d+ crossed=\d+ dup=\d+ ohlc=\d+ closure=\d+ band=\d+$/,
+  /^read [A-Z]{3}\/[A-Z]{3} (5min|1min) files=\d+ failed=\d+ oneSide=\d+ crossed=\d+ dup=\d+ ohlc=\d+ closure=\d+ band=\d+ nan=\d+$/,
   /^sha256 [A-Za-z0-9_./-]+ [0-9a-f]{64}$/,
   /^MADEUP [A-Za-z0-9_.:-]+ [^\n]*$/,
   /^EXIT \d$/,
@@ -109,15 +109,21 @@ export class Checks {
 }
 
 // 20 (i): the items print.txt may hold (a key matches one of these), and nothing else
+// (a key ending ".lo" or "Lo" is an interval of 15: the points and counts added by the review — W (すべての中), the
+// unresolved / amb counts, the shift summary, Δ by direction and pair — never end so)
 export const PRINT_ITEMS: RegExp[] = [
   /^run\.(set|seed|period|flip|plant|full)$/,
-  /^s0\.[A-Za-z0-9-]+\.(H1|H2)\.(counted|weeks|r1|r2|r3|r4|both|noBlind|perWeek|wideShare|warmDate|missingDays|shifted)$/,
+  /^s0\.[A-Za-z0-9-]+\.(H1|H2)\.(counted|weeks|r1|r2|r3|r4|both|noBlind|perWeek|wideShare|warmDate|missingDays|shifted|late)$/,
+  /^s0\.[A-Za-z0-9-]+\.(H1|H2)\.[A-Z]{3}_[A-Z]{3}\.(BUY|SELL)$/,
+  /^s0\.[A-Za-z0-9-]+\.warmDate\.[A-Z]{3}_[A-Z]{3}$/,
   /^s0\.[A-Za-z0-9-]+\.(floor|group|g|df|passMin|size|marks|n26)$/,
   /^s0\.(M1|Wh)\.[A-Za-z0-9]+$/,
-  /^s[12]\.[A-Za-z0-9-]+\.(H1|H2)\.(chart|cal)\.(delta|lo|hi|lb|se|df|t|nE|counted|a|aLo|aHi|late|lateLo|lateHi|w1|pl1|w2|pl2|w1Lo|w1Hi|pl1Lo|pl1Hi|w2Lo|w2Hi|pl2Lo|pl2Hi|dU|dULo|dUHi|dM|dMLo|dMHi|open4|open10|amb4|amb10|suspicious)$/,
-  /^s[12]\.blind\.(H1|H2)\.(BUY|SELL)\.(a|w1|pl1|w2|pl2|suspicious)$/,
-  /^s[12]\.blind\.(H1|H2)\.[A-Z]{3}_[A-Z]{3}\.(BUY|SELL)\.(a|aLo|aHi|w1|w1Lo|w1Hi|pl1|pl1Lo|pl1Hi|w2|w2Lo|w2Hi|pl2|pl2Lo|pl2Hi)$/,
-  /^s1\.(chosen|kTotal|lbPositive|shift95|chanceLb|intervalsSeen)(\.[A-Za-z0-9-]+)?$/,
+  /^s[12]\.[A-Za-z0-9-]+\.(H1|H2)\.(chart|cal)\.(delta|lo|hi|lb|se|df|t|nE|counted|a|aLo|aHi|late|lateLo|lateHi|w1|pl1|w2|pl2|w1All|w2All|w1Lo|w1Hi|pl1Lo|pl1Hi|w2Lo|w2Hi|pl2Lo|pl2Hi|dU|dULo|dUHi|dM|dMLo|dMHi|open4|open10|amb4|amb10|dropped|lateExcluded|blindW1|blindPl1|shiftMean|shiftQ025|shiftQ975|shiftRank|shiftDropped|shiftSeasonCross|suspicious)$/,
+  /^s2\.[A-Za-z0-9-]+\.(H1|H2)\.(chart|cal)\.(dirBUY|dirSELL|nonOverlap)$/,
+  /^s2\.[A-Za-z0-9-]+\.(H1|H2)\.(chart|cal)\.pair\.[A-Z]{3}_[A-Z]{3}$/,
+  /^s[12]\.blind\.(H1|H2)\.(BUY|SELL)\.(a|w1|pl1|w2|pl2|w1All|w2All|open4|open10|amb4|amb10|suspicious)$/,
+  /^s[12]\.blind\.(H1|H2)\.[A-Z]{3}_[A-Z]{3}\.(BUY|SELL)\.(a|aLo|aHi|w1|w1Lo|w1Hi|pl1|pl1Lo|pl1Hi|w2|w2Lo|w2Hi|pl2|pl2Lo|pl2Hi|w1All|w2All|open4|open10|amb4|amb10)$/,
+  /^s1\.(chosen|kTotal|lbPositive|shift95|chanceLb|intervalsSeen)(\.[A-Za-z0-9-]+){0,2}$/,
   /^s2\.[A-Za-z0-9-]+\.(p|holm|c1|c2|c3|c4|c5|judgment|form|mde|simLb|dU|dM|dULb|dMLb)$/,
   /^s2\.(promote|intervalsSeen)(\.[A-Za-z0-9-]+)?$/,
   /^s2\.dAB\.[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.(est|lo|hi)$/,
