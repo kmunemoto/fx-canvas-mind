@@ -1,0 +1,448 @@
+{
+  "about": "docs/OPERATIONS.md §8.113 19 (C1, K1) and 20 (g): the hand examples of step 2 (試し). Inputs are made-up bars and numbers; every answer below was derived by hand from the rule (the 'why' of each case), not by running the program. research/chartbest-hand.ts runs each case through the program's own functions (CB_MODE=hand) and writes hand-results.json; a planted error of hook 'hand' (20 (f)) must make at least one of its named cases fail. Prices are mids unless a case says bid/ask. Times are UTC.",
+  "version": 1,
+  "cases": [
+    {
+      "id": "c1.docs", "kind": "c1", "source": "19 C1 (n = 3), 5, SQ-01",
+      "why": "i3: HH = max(100.100, 100.200, 100.150) = 100.200 < C 100.250 → s = +1 (BUY). i4 and i7 break upwards again but s is already +1. i8: LL = min(100.100, 99.980, 100.040) = 99.980 > C 99.850 → s = −1 (SELL). i9 breaks again: no signal. Target 0 from bar 0 (SQ-01); bar 0 is the first determined bar.",
+      "pair": "USD/JPY", "start": "2025-01-06T01:00:00Z", "n": 3,
+      "bars": [
+        [100.000, 100.100, 99.900, 100.000], [100.000, 100.200, 99.950, 100.100], [100.100, 100.150, 99.950, 100.050],
+        [100.050, 100.300, 100.000, 100.250], [100.250, 100.400, 100.200, 100.350], [100.350, 100.360, 100.100, 100.120],
+        [100.120, 100.150, 99.980, 100.050], [100.050, 100.450, 100.040, 100.420], [100.420, 100.430, 99.800, 99.850],
+        [99.850, 99.900, 99.700, 99.750], [99.750, 99.950, 99.740, 99.930], [99.930, 100.000, 99.900, 99.980]
+      ],
+      "expect": { "signals": [[3, "BUY"], [8, "SELL"]], "target": [0, 0, 0, 1, 1, 1, 1, 1, -1, -1, -1, -1] }
+    },
+    {
+      "id": "c1.exact", "kind": "c1", "source": "18 C1 (C = HH or C = LL is no breakout), 20 (g) 線ちょうどで出ない例",
+      "why": "i3: C 100.200 = HH = max(100.100, 100.200, 100.150): not above → no BUY. i4: LL = min(99.950, 99.950, 100.000) = 99.950 = C 99.950: not below → no SELL. i5: HH 100.200, LL 99.950, C 100.000 → nothing. The target stays 0.",
+      "pair": "USD/JPY", "start": "2025-01-07T01:00:00Z", "n": 3,
+      "bars": [
+        [100.000, 100.100, 99.900, 100.000], [100.000, 100.200, 99.950, 100.100], [100.100, 100.150, 99.950, 100.050],
+        [100.050, 100.200, 100.000, 100.200], [100.200, 100.200, 99.950, 99.950], [99.950, 100.050, 99.960, 100.000]
+      ],
+      "expect": { "signals": [], "target": [0, 0, 0, 0, 0, 0] }
+    },
+    {
+      "id": "k1.docs", "kind": "k1", "source": "19 K1, SQ-14 (bars 07:55 and 15:55 UTC added on 2025-07-16)",
+      "why": "New York: 2025-01-15 EST (UTC−5), 2025-03-12 and 2025-07-16 EDT (UTC−4). 02:55 NY = 07:55 UTC in winter, 06:55 in summer; 10:55 NY = 15:55 / 14:55 UTC. 03-12: NY summer, London winter (London switches 03-30) → shiftedWeek. 03-12 has no 14:55 bar; the 15:00 bar (11:00 NY) is not used. 07-16 07:55 UTC is 03:55 NY and 15:55 is 11:55 NY: nothing. The first bar (2025-01-14 12:00 UTC, 07:00 NY) is context: bar 0 can never rise.",
+      "pair": "EUR/USD",
+      "bars": ["2025-01-14T12:00:00Z", "2025-01-15T07:55:00Z", "2025-01-15T15:55:00Z", "2025-03-12T06:55:00Z", "2025-03-12T15:00:00Z", "2025-07-16T06:55:00Z", "2025-07-16T07:55:00Z", "2025-07-16T14:55:00Z", "2025-07-16T15:55:00Z"],
+      "expect": {
+        "breedon-1": [["2025-01-15T08:00:00Z", "SELL", []], ["2025-03-12T07:00:00Z", "SELL", ["shiftedWeek"]], ["2025-07-16T07:00:00Z", "SELL", []]],
+        "breedon-2": [["2025-01-15T16:00:00Z", "BUY", []], ["2025-07-16T15:00:00Z", "BUY", []]]
+      }
+    },
+    {
+      "id": "k1.exact", "kind": "k1", "source": "18 K1 (足が無ければ、その日は合図なし。次の足に回さない)",
+      "why": "2025-01-16 (EST): bars open at 02:50 and 03:00 NY (07:50, 08:00 UTC) and at 10:50 and 11:00 NY (15:50, 16:00 UTC), none at 02:55 or 10:55 → no signal; the 03:00 / 11:00 bars are not used instead.",
+      "pair": "EUR/USD",
+      "bars": ["2025-01-16T06:00:00Z", "2025-01-16T07:50:00Z", "2025-01-16T08:00:00Z", "2025-01-16T15:50:00Z", "2025-01-16T16:00:00Z"],
+      "expect": { "breedon-1": [], "breedon-2": [] }
+    },
+    {
+      "id": "time.dst", "kind": "dst", "source": "2 (America/New_York, Europe/London), 8 (season groups), 18 K1, 20 (g) 時刻",
+      "why": "NY summer 2024-03-10..11-03 and 2025-03-09..11-02; London summer 2024-03-31..10-27 and 2025-03-30..10-26 (both switch at 01:00 UTC on the last Sunday). Each day has bars at 06:55, 07:55, 14:55 and 15:55 UTC; breedon-1 takes the 02:55 NY one (T 08:00 in NY winter, 07:00 in NY summer), breedon-2 the 10:55 NY one (T 16:00 / 15:00). Season at T, New York first: WW, SW (NY summer, London winter: the shifted weeks), SS.",
+      "context": "2024-03-07T12:00:00Z",
+      "days": [
+        ["2024-03-08", "2024-03-08T08:00:00Z", "2024-03-08T16:00:00Z", "WW"],
+        ["2024-03-11", "2024-03-11T07:00:00Z", "2024-03-11T15:00:00Z", "SW"],
+        ["2024-03-29", "2024-03-29T07:00:00Z", "2024-03-29T15:00:00Z", "SW"],
+        ["2024-04-01", "2024-04-01T07:00:00Z", "2024-04-01T15:00:00Z", "SS"],
+        ["2024-10-25", "2024-10-25T07:00:00Z", "2024-10-25T15:00:00Z", "SS"],
+        ["2024-10-28", "2024-10-28T07:00:00Z", "2024-10-28T15:00:00Z", "SW"],
+        ["2024-11-01", "2024-11-01T07:00:00Z", "2024-11-01T15:00:00Z", "SW"],
+        ["2024-11-04", "2024-11-04T08:00:00Z", "2024-11-04T16:00:00Z", "WW"],
+        ["2025-03-07", "2025-03-07T08:00:00Z", "2025-03-07T16:00:00Z", "WW"],
+        ["2025-03-10", "2025-03-10T07:00:00Z", "2025-03-10T15:00:00Z", "SW"],
+        ["2025-03-28", "2025-03-28T07:00:00Z", "2025-03-28T15:00:00Z", "SW"],
+        ["2025-03-31", "2025-03-31T07:00:00Z", "2025-03-31T15:00:00Z", "SS"],
+        ["2025-10-24", "2025-10-24T07:00:00Z", "2025-10-24T15:00:00Z", "SS"],
+        ["2025-10-27", "2025-10-27T07:00:00Z", "2025-10-27T15:00:00Z", "SW"],
+        ["2025-10-31", "2025-10-31T07:00:00Z", "2025-10-31T15:00:00Z", "SW"],
+        ["2025-11-03", "2025-11-03T08:00:00Z", "2025-11-03T16:00:00Z", "WW"]
+      ]
+    },
+    {
+      "id": "round.1", "kind": "round", "source": "2 (150.0625 → 150.063)",
+      "why": "(150.060 + 150.065) ÷ 2 = 150.0625, exactly a binary value; the tie goes up (toFixed): 150.063.",
+      "pair": "USD/JPY", "bid": 150.060, "ask": 150.065, "expect": "150.063"
+    },
+    {
+      "id": "round.2", "kind": "round", "source": "2 (150.10249999… → 150.102)",
+      "why": "(150.100 + 150.105) ÷ 2 is the double 150.10249999999999…, below the tie: 150.102 (rounding the shortest string 150.1025 would give 150.103).",
+      "pair": "USD/JPY", "bid": 150.100, "ask": 150.105, "expect": "150.102"
+    },
+    {
+      "id": "points", "kind": "points", "source": "2 (1.08445 → 108445)",
+      "why": "1.08445 × 100,000 is the double 108444.99999999999; rounded to the nearest whole number 108445 (cut down it would be 108444). 150.063 × 1,000 = 150063.",
+      "items": [["EUR/USD", 1.08445, 108445], ["USD/JPY", 150.063, 150063]]
+    },
+    {
+      "id": "follow.upFirst", "kind": "follow", "source": "7",
+      "why": "BUY at E 150.000: the fill is the ask close 150.005, the stop 149.870 and TP10 150.100 on the bid. Bar 2's bid high 150.110 reaches TP first: exit 150.100, (150.100 − 150.005) ÷ 0.01 = +9.5 pips, 2 bars.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.050, 149.950, 150.020], [150.020, 150.110, 149.990, 150.080]],
+      "expect": { "kind": "tp", "pips": 9.5, "bars": 2 }
+    },
+    {
+      "id": "follow.downFirst", "kind": "follow", "source": "7",
+      "why": "Bar 2's bid low 149.860 reaches the stop 149.870 first: exit 149.870, −13.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.050, 149.950, 150.020], [150.020, 150.050, 149.860, 149.900]],
+      "expect": { "kind": "sl", "pips": -13.5, "bars": 2 }
+    },
+    {
+      "id": "follow.openPastStop", "kind": "follow", "source": "7 (始値で越える)",
+      "why": "Bar 2 opens at 149.800, past the stop: out at the open, (149.800 − 150.005) ÷ 0.01 = −20.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.050, 149.950, 150.020], [149.800, 149.850, 149.750, 149.800]],
+      "expect": { "kind": "sl", "pips": -20.5, "bars": 2 }
+    },
+    {
+      "id": "follow.openPastTp", "kind": "follow", "source": "7 (始値で越える)",
+      "why": "Bar 2 opens at 150.200, past TP: out at the open, +19.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.050, 149.950, 150.020], [150.200, 150.250, 150.150, 150.200]],
+      "expect": { "kind": "tp", "pips": 19.5, "bars": 2 }
+    },
+    {
+      "id": "follow.amb", "kind": "follow", "source": "7 (1本で両方 → 損切り)",
+      "why": "One bar reaches both 150.100 and 149.870: amb, counted at the stop, −13.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.120, 149.860, 150.000]],
+      "expect": { "kind": "amb", "pips": -13.5, "bars": 1 }
+    },
+    {
+      "id": "follow.exactTouch", "kind": "follow", "source": "7 (水準ちょうど: 等号で決まる)",
+      "why": "The bid high is exactly 150.100 = TP10: reached (comparisons with equality), +9.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.100, 149.950, 150.050]],
+      "expect": { "kind": "tp", "pips": 9.5, "bars": 1 }
+    },
+    {
+      "id": "follow.sellExactStop", "kind": "follow", "source": "7 (SELL: the ask; 水準ちょうど)",
+      "why": "SELL at E 150.000: the fill is the bid close 149.995, the stop 150.130 and TP10 149.900 on the ask (bid + 0.005). The bid high 150.125 makes the ask high exactly 150.130: the stop, (149.995 − 150.130) ÷ 0.01 = −13.5 pips.",
+      "pair": "USD/JPY", "dir": "SELL", "tp": 10,
+      "rows": [[150.000, 150.125, 149.950, 150.000]],
+      "expect": { "kind": "sl", "pips": -13.5, "bars": 1 }
+    },
+    {
+      "id": "follow.sellTp", "kind": "follow", "source": "7",
+      "why": "SELL: bar 2's ask low 149.890 reaches TP 149.900: (149.995 − 149.900) ÷ 0.01 = +9.5 pips.",
+      "pair": "USD/JPY", "dir": "SELL", "tp": 10,
+      "rows": [[150.000, 150.050, 149.950, 150.000], [150.000, 150.020, 149.885, 149.900]],
+      "expect": { "kind": "tp", "pips": 9.5, "bars": 2 }
+    },
+    {
+      "id": "follow.tp4", "kind": "follow", "source": "7 (利確4)",
+      "why": "TP4 is 150.040; the bid high 150.045 reaches it: +3.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 4,
+      "rows": [[150.000, 150.045, 149.950, 150.020]],
+      "expect": { "kind": "tp", "pips": 3.5, "bars": 1 }
+    },
+    {
+      "id": "follow.askBuyTp", "kind": "follow", "source": "7 (BUY leaves on the bid)",
+      "why": "The ask high 150.101 passes 150.100 but the bid high 150.096 does not: no TP for a BUY. Nothing is reached in 1,440 bars: out at the 1,440th bid close 150.000, −0.5 pips.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [[150.000, 150.096, 149.950, 150.000]],
+      "expect": { "kind": "open", "pips": -0.5, "bars": 1440 }
+    },
+    {
+      "id": "follow.unresolved", "kind": "follow", "source": "7 (未決着: 1,440本目の終値で出る。1,441本目は読まない)",
+      "why": "Exactly 1,440 follow bars reach nothing; the 1,440th closes at 150.030: +2.5 pips. A 1,441st bar reaching 150.150 is there but not read.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [], "count": 1440, "tail": [[150.000, 150.040, 149.980, 150.030]], "after": [[150.000, 150.150, 149.980, 150.120]],
+      "expect": { "kind": "open", "pips": 2.5, "bars": 1440 }
+    },
+    {
+      "id": "follow.short", "kind": "follow", "source": "7 (1,440本が無ければ追わない)",
+      "why": "Only 1,439 follow bars: the trade is not followed (④ keeps such a signal out).",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10,
+      "rows": [], "count": 1439,
+      "expect": { "kind": null }
+    },
+    {
+      "id": "follow.weekendGap", "kind": "follow", "source": "7 (休みの後: 次の始値で決まる)",
+      "why": "The signal bar opens Friday 2025-01-10 20:55 (T 21:00); the next bar opens Sunday 22:00 at 149.800, past the stop: out at that open, −20.5 pips, 1 bar.",
+      "pair": "USD/JPY", "dir": "BUY", "tp": 10, "signalAt": "2025-01-10T20:55:00Z", "followAt": "2025-01-12T22:00:00Z",
+      "rows": [[149.800, 149.850, 149.750, 149.800]],
+      "expect": { "kind": "sl", "pips": -20.5, "bars": 1 }
+    },
+    {
+      "id": "follow.usdExact", "kind": "follow", "source": "7, ultraLevels (trend-stats followHand)",
+      "why": "EUR/USD, bid close 1.16425 and ask close 1.16429: E 1.16427. The stop E − 13 pips is the double 1.1629699999999998, so a bid low of 1.16297 does not reach it (open, out at the 1,440th bid close 1.16430: +0.1 pips) and 1.16296 does (−13.2 pips). With a pip of 0.01 the stop would be 1.03427 and neither low reaches it.",
+      "pair": "EUR/USD", "dir": "BUY", "tp": 10, "signalBid": 1.16425, "signalAsk": 1.16429, "spread": 0.00004,
+      "filler": [1.16430, 1.16450, 1.16400, 1.16430],
+      "subcases": [
+        { "rows": [[1.16430, 1.16450, 1.16297, 1.16420]], "expect": { "kind": "open", "pips": 0.1, "bars": 1440 } },
+        { "rows": [[1.16430, 1.16450, 1.16296, 1.16420]], "expect": { "kind": "sl", "pips": -13.2, "bars": 1 } }
+      ]
+    },
+    {
+      "id": "mirror", "kind": "mirror", "source": "8 (鏡と e)",
+      "why": "A blind-table row at 2024-01-08 00:00 USD/JPY (E 150.000) in the mini period's first half. A: BUY reaches TP 150.100 (bar 1), SELL its stop 150.130 on the ask (bar 2) → e = 1 − 0 = +1. B: BUY TP (bar 1), then SELL TP 149.900 on the ask (bar 2, its stop never reached) → e = 1 − 1 = 0. C: one bar takes BUY to its stop 149.870 and SELL to TP → e = 0 − 1 = −1. The SELL row's e is the negative.",
+      "worlds": [
+        { "rows": [[150.000, 150.110, 149.990, 150.100], [150.100, 150.140, 150.090, 150.130]], "e": 1 },
+        { "rows": [[150.000, 150.105, 149.990, 150.100], [150.100, 150.100, 149.880, 149.890]], "e": 0 },
+        { "rows": [[150.000, 150.010, 149.860, 149.870]], "e": -1 }
+      ]
+    },
+    {
+      "id": "sent", "kind": "sent", "source": "6 ② (T, T + 1 and T + 3 minutes all isPossiblyClosed → not sent)",
+      "why": "isPossiblyClosed: Friday from 21:00, Saturday, Sunday before 22:00 (UTC). Friday 20:55: open → sent. 21:00, 21:01, 21:03 all closed → not. Sunday 21:55, 21:56, 21:58 closed → not; 22:00 open → sent. Saturday: not.",
+      "items": [
+        ["2025-01-10T20:55:00Z", true], ["2025-01-10T21:00:00Z", false], ["2025-01-12T21:55:00Z", false], ["2025-01-12T22:00:00Z", true],
+        ["2025-01-11T12:00:00Z", false], ["2025-07-11T20:55:00Z", true], ["2025-07-11T21:00:00Z", false]
+      ]
+    },
+    {
+      "id": "events.always", "kind": "events", "source": "5 (常に持つ型: 0→+1、+1→−1、+1→0→+1、最初に決まった足)",
+      "why": "Target 0,0,+1,+1,−1,−1,0,+1,+1: BUY at the rise to +1 (k2), SELL at k4, BUY again at k7 after 0. Second series none,none,+1,+1,−1: k2 is the first determined bar → no BUY (counted as skipped); SELL at k4.",
+      "seqs": [
+        { "type": "always", "target": [0, 0, 1, 1, -1, -1, 0, 1, 1], "expect": { "signals": [[2, "BUY"], [4, "SELL"], [7, "BUY"]], "firstSkipped": 0, "nullPrevSkipped": 0, "bothSuppressed": 0 } },
+        { "type": "always", "target": [null, null, 1, 1, -1], "expect": { "signals": [[4, "SELL"]], "firstSkipped": 1, "nullPrevSkipped": 0, "bothSuppressed": 0 } }
+      ]
+    },
+    {
+      "id": "events.condition", "kind": "events", "source": "5 (条件型: 続けて成り立つ時は最初の1本だけ)",
+      "why": "BUY condition 0,1,1,1,0,1: rises at k1 and k5 only.",
+      "seqs": [{ "type": "condition", "buy": [0, 1, 1, 1, 0, 1], "sell": [0, 0, 0, 0, 0, 0], "expect": { "signals": [[1, "BUY"], [5, "BUY"]], "firstSkipped": 0, "nullPrevSkipped": 0, "bothSuppressed": 0 } }]
+    },
+    {
+      "id": "events.named", "kind": "events", "source": "5 (名前ごと: 名前がまだ無い足 i−1 は成り立たない)",
+      "why": "BUY names per bar: {}, {A}, {A,B}, {B}, {A}. k1: A new → BUY. k2: B new (absent at k1 = false) → BUY. k3: B was true at k2 → none. k4: A absent at k3 → BUY.",
+      "seqs": [{ "type": "named", "namedBuy": [[], ["A"], ["A", "B"], ["B"], ["A"]], "expect": { "signals": [[1, "BUY"], [2, "BUY"], [4, "BUY"]], "firstSkipped": 0, "nullPrevSkipped": 0, "bothSuppressed": 0 } }]
+    },
+    {
+      "id": "events.both", "kind": "events", "source": "5 ④ (両向きの足は出さない。数える)",
+      "why": "Both conditions rise at k1: neither is a signal; 1 bar counted as suppressed.",
+      "seqs": [{ "type": "condition", "buy": [0, 1, 0], "sell": [0, 1, 0], "expect": { "signals": [], "firstSkipped": 0, "nullPrevSkipped": 0, "bothSuppressed": 1 } }]
+    },
+    {
+      "id": "events.afterUndecided", "kind": "events", "source": "5 (判断しない足の次の足)",
+      "why": "BUY condition none, 0 (a bar not judged: 成り立たない), 1: k1 is the first determined bar; k2 rises from false → BUY.",
+      "seqs": [{ "type": "condition", "buy": [-1, 0, 1], "sell": [-1, 0, 0], "expect": { "signals": [[2, "BUY"]], "firstSkipped": 0, "nullPrevSkipped": 0, "bothSuppressed": 0 } }]
+    },
+    {
+      "id": "events.nullPrev", "kind": "events", "source": "5 (足 i−1 の条件が無い足は合図にしない)",
+      "why": "BUY condition 0,1,none,1: k1 rises → BUY; k3's bar i−1 is none → no signal (counted).",
+      "seqs": [{ "type": "condition", "buy": [0, 1, -1, 1], "sell": [0, 0, -1, 0], "expect": { "signals": [[1, "BUY"]], "firstSkipped": 0, "nullPrevSkipped": 1, "bothSuppressed": 0 } }]
+    },
+    {
+      "id": "hole", "kind": "hole", "source": "6 ③ (6枠と5枠、開いていない枠で切れる)",
+      "why": "Five pairs with a bar every 5 minutes from 2024-01-08 23:00 to 2024-01-09 03:00 (a slot is open when ≥ 3 pairs have a bar, inside GMO's week). USD/JPY misses 00:30–00:55 (6 open slots → a hole [00:30, 01:00)), 01:30–01:50 (5 → none), 02:10–02:20 and 02:30–02:40 with 02:25 not open (EUR/JPY, AUD/JPY and EUR/USD also miss it) → runs of 3, none. USD/JPY signal bars: 01:05 (window from its 9th bar back, 23:50, to T 01:10 → overlaps the hole), 02:50 (from 01:05 to 02:55 → none).",
+      "start": "2024-01-08T23:00:00Z", "end": "2024-01-09T03:00:00Z",
+      "missing": {
+        "USD/JPY": ["2024-01-09T00:30:00Z", "2024-01-09T00:35:00Z", "2024-01-09T00:40:00Z", "2024-01-09T00:45:00Z", "2024-01-09T00:50:00Z", "2024-01-09T00:55:00Z",
+          "2024-01-09T01:30:00Z", "2024-01-09T01:35:00Z", "2024-01-09T01:40:00Z", "2024-01-09T01:45:00Z", "2024-01-09T01:50:00Z",
+          "2024-01-09T02:10:00Z", "2024-01-09T02:15:00Z", "2024-01-09T02:20:00Z", "2024-01-09T02:25:00Z", "2024-01-09T02:30:00Z", "2024-01-09T02:35:00Z", "2024-01-09T02:40:00Z"],
+        "EUR/JPY": ["2024-01-09T02:25:00Z"], "AUD/JPY": ["2024-01-09T02:25:00Z"], "EUR/USD": ["2024-01-09T02:25:00Z"]
+      },
+      "expect": {
+        "holes": { "USD/JPY": [["2024-01-09T00:30:00Z", "2024-01-09T01:00:00Z"]], "EUR/JPY": [], "AUD/JPY": [], "EUR/USD": [], "AUD/USD": [] },
+        "overlap": [["2024-01-09T01:05:00Z", true], ["2024-01-09T02:50:00Z", false]]
+      }
+    },
+    {
+      "id": "half", "kind": "half", "source": "1, 6 ④ (SPLIT の直前と直後、追う窓が SPLIT をまたぐ合図)",
+      "why": "Mini period: SPLIT 2024-02-26 00:00. USD/JPY bars every 5 minutes from 2024-02-20 23:55 to 2024-03-02 00:10. Bar 02-20 23:55: its 1,440th follow bar closes at 23:55 + 1,441 × 5 min = SPLIT → counted, H1. Bar 02-21 00:00: closes 5 minutes after SPLIT → ④. Bar 02-25 23:50 (T SPLIT − 5 min, H1): its window crosses SPLIT → ④. Bar 02-25 23:55 (T = SPLIT) → H2, counted.",
+      "from": "2024-02-20T23:55:00Z", "to": "2024-03-02T00:10:00Z",
+      "expect": [["2024-02-20T23:55:00Z", "counted", "H1"], ["2024-02-21T00:00:00Z", "r4", null], ["2024-02-25T23:50:00Z", "r4", null], ["2024-02-25T23:55:00Z", "counted", "H2"]]
+    },
+    {
+      "id": "delta.one", "kind": "delta", "source": "20 (g) Δ（合図が1件だけの層）",
+      "why": "Strata A (0), B (1), weeks 1–3. Signals (A,1,+0.5), (B,2,+0.5), (B,3,−0.5); blind (A,1,0), (A,2,−0.5), (B,2,0), (B,3,−0.5). Blind means −1/4 and −1/4. Δ = 1/3 × 0.75 + 2/3 × 0.25 = 5/12. Influence: signals 1/9, 1/9, −2/9; blind −1/24, +1/24, −1/12, +1/12. S_g = 5/72, 5/72, −5/36. SE = √(3/2 × 25/864) = 5/24 (the stratum-mean form would give √(7/192) = 0.1909407).",
+      "sig": [[0, 1, 0, 0.5], [1, 2, 0, 0.5], [1, 3, 0, -0.5]],
+      "blind": [[0, 1, 0, 0], [0, 2, 0, -0.5], [1, 2, 0, 0], [1, 3, 0, -0.5]],
+      "expect": { "est": 0.4166666666666667, "N": 3, "strata": 2, "dropped": 0, "use": "week", "se": 0.20833333333333334, "C": 3, "df": 2, "kinds": ["week"] }
+    },
+    {
+      "id": "delta.strata", "kind": "deltaT", "source": "8 (層・重み・ブラインドの項), 20 (g) Δ・ブラインドに e が無い層",
+      "why": "USD/JPY BUY, chart layer, January 2024 (both winter). Strata by the hour of T: h7 signals +0.5 (wk A), −0.5 (wk B) / blind 0 (A), −0.5 (B); h8 signal +0.5 (B) / blind +0.5 (A), −0.5 (C); h9 signal +0.5 (C) has no blind → dropped. N = 3, weights 2/3 and 1/3; Δ = 2/3 × (0 + 0.25) + 1/3 × (0.5 − 0) = 1/3. Influence: signals 5/36, −7/36, 2/36; blind −3/36, +3/36 (h7), −3/36, +3/36 (h8). Weeks A −1/36, B −2/36, C +3/36 (C gets the blind term only). SE = √(3/2 × 14/1296) = √21/36.",
+      "pair": "USD/JPY", "dir": "BUY", "layer": "chart",
+      "sig": [["2024-01-09T07:05:00Z", 0.5], ["2024-01-16T07:05:00Z", -0.5], ["2024-01-17T08:05:00Z", 0.5], ["2024-01-23T09:05:00Z", 0.5]],
+      "blind": [["2024-01-10T07:30:00Z", 0], ["2024-01-17T07:30:00Z", -0.5], ["2024-01-11T08:30:00Z", 0.5], ["2024-01-24T08:30:00Z", -0.5]],
+      "expect": { "est": 0.3333333333333333, "N": 3, "strata": 2, "dropped": 1, "use": "week", "se": 0.1272937693043289, "C": 3, "df": 2, "kinds": ["week"] }
+    },
+    {
+      "id": "delta.season", "kind": "deltaT", "source": "8 (時と季節の組), 20 (g) Δ の季節",
+      "why": "EUR/USD BUY. The 2025-07-16 07:05 signal (both summer, h7) meets only the SS h7 blind bar of 07-15 (the winter h7 bar of 01-15 and the SS h8 bar are other strata). The 2025-03-12 07:05 signal (NY summer, London winter: SW) meets only the SW h7 bar of 03-11. Strata 2, one blind row each; Δ = 1/2 × (0.5 − 0) + 1/2 × (0.5 − 0.5) = 0.25.",
+      "pair": "EUR/USD", "dir": "BUY", "layer": "chart",
+      "sig": [["2025-07-16T07:05:00Z", 0.5], ["2025-03-12T07:05:00Z", 0.5]],
+      "blind": [["2025-07-15T07:30:00Z", 0], ["2025-01-15T07:30:00Z", -0.5], ["2025-03-11T07:30:00Z", 0.5], ["2025-07-17T08:30:00Z", -0.5]],
+      "expect": { "est": 0.25, "N": 2, "strata": 2, "dropped": 0, "blindPerStratum": [1, 1], "seasons": ["SS", "SW"] }
+    },
+    {
+      "id": "clusters", "kind": "clusters", "source": "8 (週と4週。4週の塊が10に足りなければ週だけ)",
+      "why": "One stratum; one signal and one blind observation in each of 12 weeks spread one per 4-week block (blocks 0–11): candidates week (C 12) and 4 weeks (C 12). The same with 9 weeks in 9 blocks: the week only.",
+      "sets": [
+        { "weeks": [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44], "blocks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "kinds": ["week", "4w"], "C": [12, 12] },
+        { "weeks": [0, 4, 8, 12, 16, 20, 24, 28, 32], "blocks": [0, 1, 2, 3, 4, 5, 6, 7, 8], "kinds": ["week"], "C": [9] }
+      ]
+    },
+    {
+      "id": "shift", "kind": "shift", "source": "8, 10 (週ずらし: 輪・落とす合図・SD)",
+      "why": "USD/JPY blind rows (bar open, e of BUY): Tue 01-09 07:00 +1, Wed 01-10 08:00 −1, Tue 01-16 07:00 0, Wed 01-17 08:00 +1, Tue 01-23 07:00 −1 (no Wednesday in week 3). Blind means per stratum h7 0, h8 0. BUY signals at 01-09 07:05 (row +1) and 01-17 08:05 (row +1): Δ = 0.5. k = 1: 01-16 07:05 (e 0) and 01-24 08:05 (no row: dropped) → Δ_1 = 0. k = 2: 01-23 07:05 (−1) and, round the ring, 01-10 08:05 (−1) → Δ_2 = −0.5. SD √0.125, mean −0.25, the real Δ above both: rank 3.",
+      "rows": [["2024-01-09T07:00:00Z", 1], ["2024-01-10T08:00:00Z", -1], ["2024-01-16T07:00:00Z", 0], ["2024-01-17T08:00:00Z", 1], ["2024-01-23T07:00:00Z", -1]],
+      "signals": [["2024-01-09T07:05:00Z", "BUY"], ["2024-01-17T08:05:00Z", "BUY"]],
+      "expect": { "k": [1, 2], "delta": [0, -0.5], "dropped": [1, 0], "sd": 0.3535533905932738, "mean": -0.25, "rank": 3, "real": 0.5 }
+    },
+    {
+      "id": "se.pick", "kind": "sepick", "source": "8 (使う SE: 幅の半分が広い方。同じなら週、4週、ずらし)",
+      "why": "Halves 1.0 / 1.0 / 0.9 → the week (tie, first). 1.0 / 1.2 / 1.2 → 4 weeks. 0.8 / 0.9 / 1.1 → the shift.",
+      "items": [[[["week", 1.0], ["4w", 1.0], ["shift", 0.9]], "week"], [[["week", 1.0], ["4w", 1.2], ["shift", 1.2]], "4w"], [[["week", 0.8], ["4w", 0.9], ["shift", 1.1]], "shift"]]
+    },
+    {
+      "id": "t.q", "kind": "tq", "source": "8 (t(0.975, 自由度))",
+      "why": "Student's t 97.5% points (tables): df 1 12.7062047, 9 2.2621572, 17 2.1098156, 71 1.9939434.",
+      "items": [[1, 12.7062047], [9, 2.2621572], [17, 2.1098156], [71, 1.9939434]], "tol": 5e-7
+    },
+    {
+      "id": "lbCount", "kind": "lbcount", "source": "10, 12 (kama-A・kama-B は1項目、組の数、95%点)",
+      "why": "kama-A, kama-B and hs: 2 items (kama counted once); groups kama-A (both kama) and hs: 2. The 95% point is the floor(0.95 × (n − 1))th of the ascending list: of 0,1,1,2,3 the 3rd (0-based) = 2; of 1…20 the 18th = 19.",
+      "ids": ["kama-A", "kama-B", "hs"], "groups": { "kama-A": "kama-A", "kama-B": "kama-A", "hs": "hs" },
+      "expect": { "items": 2, "groups": 2 },
+      "p95": [[[0, 1, 1, 2, 3], 2], [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], 19]]
+    },
+    {
+      "id": "select", "kind": "select", "source": "12 (下の端の順・同じ値・重なりの組で飛ばす・選べる項目が足りない)",
+      "why": "a: by LB td9 0.030, cci 0.025, hs 0.020 (star 0.010 fourth; by the point it would be star first) → chart td9, cci, hs; calendar breedon-1. b: equal LB → more signals first (td9, star 600), then the table order (td9 before star). c: td9 shares hs's group → skipped → hs, star, cci. d: td9 has no t, star Δ ≤ 0, cci suspicious → hs alone.",
+      "sets": [
+        { "rows": [["hs", 0.05, 0.020, 500, []], ["td9", 0.04, 0.030, 400, []], ["star", 0.06, 0.010, 300, []], ["cci", 0.03, 0.025, 600, []], ["breedon-1", 0.02, 0.005, 300, []], ["breedon-2", 0.03, 0.004, 300, []]],
+          "groups": { "hs": "hs", "td9": "td9", "star": "star", "cci": "cci", "breedon-1": "breedon-1", "breedon-2": "breedon-1" },
+          "expect": { "chart": ["td9", "cci", "hs"], "cal": ["breedon-1"], "notEligible": {} } },
+        { "rows": [["hs", 0.05, 0.020, 500, []], ["td9", 0.05, 0.020, 600, []], ["star", 0.05, 0.020, 600, []]],
+          "groups": { "hs": "hs", "td9": "td9", "star": "star" },
+          "expect": { "chart": ["td9", "star", "hs"], "cal": [], "notEligible": {} } },
+        { "rows": [["hs", 0.05, 0.030, 500, []], ["td9", 0.05, 0.020, 500, []], ["star", 0.05, 0.010, 500, []], ["cci", 0.05, 0.005, 500, []]],
+          "groups": { "hs": "hs", "td9": "hs", "star": "star", "cci": "cci" },
+          "expect": { "chart": ["hs", "star", "cci"], "cal": [], "notEligible": {} } },
+        { "rows": [["hs", 0.05, 0.020, 500, []], ["td9", 0.05, null, 500, []], ["star", -0.01, -0.03, 500, []], ["cci", 0.12, 0.08, 500, ["delta"]]],
+          "groups": { "hs": "hs", "td9": "td9", "star": "star", "cci": "cci" },
+          "expect": { "chart": ["hs"], "cal": [], "notEligible": { "td9": "noT", "star": "nonPositive", "cci": "suspicious" } } }
+      ]
+    },
+    {
+      "id": "holm", "kind": "holm", "source": "14 (Holm: p の順・同じ値・t が無い項目・止まり方)",
+      "why": "a: p 0.004, 0.006, 0.010 pass 0.025/4, /3, /2; 0.030 > 0.025 fails. b: 0.004 ≤ 0.00625 passes, 0.009 > 0.00833 fails and stops: 0.010 and 0.011 fail although each is under its own limit. c: equal p → the larger t first; no t: p = 1, last.",
+      "sets": [
+        { "items": [["hs", 0.010, 2.5, 300], ["td9", 0.004, 3.0, 300], ["star", 0.006, 2.8, 300], ["breedon-1", 0.030, 2.0, 300]], "expect": { "td9": [1, true], "star": [2, true], "hs": [3, true], "breedon-1": [4, false] } },
+        { "items": [["hs", 0.004, 3.0, 300], ["td9", 0.009, 2.6, 300], ["star", 0.010, 2.5, 300], ["cci", 0.011, 2.4, 300]], "expect": { "hs": [1, true], "td9": [2, false], "star": [3, false], "cci": [4, false] } },
+        { "items": [["hs", 0.005, 3.0, 300], ["td9", 0.005, 3.2, 300], ["cci", 1, null, 300]], "expect": { "td9": [1, true], "hs": [2, true], "cci": [3, false] } }
+      ]
+    },
+    {
+      "id": "groups", "kind": "groups", "source": "11 (重なりの組: 床を通った項目どうしだけでたどる。同じ候補・⑨は同じ組)",
+      "why": "a: hs–star 0.6 and star–td9 0.55 but hs–td9 0.3, star under the floor → hs and td9 apart. b: star passes the floor → hs, star, td9 one group (named hs, first in table order). c: donchian-A20/A55 (one candidate, no overlap) → one group. d: breedon-2 and fix-A2 (ledger ⑨) → one group named breedon-2.",
+      "overlap": { "hs>star": 0.6, "star>hs": 0.2, "star>td9": 0.55, "td9>star": 0.1, "hs>td9": 0.3, "td9>hs": 0.2 },
+      "sets": [
+        { "items": ["hs", "td9"], "expect": { "hs": "hs", "td9": "td9" } },
+        { "items": ["hs", "td9", "star"], "expect": { "hs": "hs", "star": "hs", "td9": "hs" } },
+        { "items": ["donchian-A20", "donchian-A55"], "expect": { "donchian-A20": "donchian-A20", "donchian-A55": "donchian-A20" } },
+        { "items": ["breedon-2", "fix-A2"], "expect": { "breedon-2": "breedon-2", "fix-A2": "breedon-2" } }
+      ]
+    },
+    {
+      "id": "floor", "kind": "floor", "source": "11 (床: 前半と後半のどちらでも 300件以上・30週以上)",
+      "why": "300/30 in both halves passes; 299 or 29 in either half fails.",
+      "items": [[[300, 30], [300, 30], true], [[299, 30], [300, 30], false], [[300, 29], [300, 30], false], [[300, 30], [299, 30], false], [[300, 30], [300, 29], false]]
+    },
+    {
+      "id": "suspect", "kind": "suspect", "source": "13 (線ちょうどと1つ下), SQ-15, SQ-16, SQ-31",
+      "why": "Each line at its value hits, just under it does not: |Δ| 0.10, |a| 0.10, W2 0.80, W1 0.90, PL1 1.00, PL2 3.00, a win rate printed 0.0% or 100.0%, |Δ − Δ_late| 0.05 (Δ_late equals Δ unless a case gives it). Under 100 resolved TP10 trades nothing is examined. The blind's rows skip the Δ lines.",
+      "base": { "delta": 0, "a": 0, "late": null, "w4": [200, 0.7, 0.7, -1.0], "w10": [200, 0.5, 0.5, -1.0] },
+      "items": [
+        [{ "delta": 0.10 }, ["delta"]], [{ "delta": 0.0999 }, []], [{ "delta": -0.10 }, ["delta"]],
+        [{ "a": 0.10 }, ["a"]], [{ "a": -0.0999 }, []],
+        [{ "w10": [200, 0.80, 0.80, -1.0] }, ["w2"]], [{ "w10": [200, 0.7999, 0.7999, -1.0] }, []],
+        [{ "w4": [200, 0.90, 0.90, -1.0] }, ["w1"]], [{ "w4": [200, 0.8999, 0.8999, -1.0] }, []],
+        [{ "w4": [200, 0.7, 0.7, 1.00] }, ["pl1"]], [{ "w4": [200, 0.7, 0.7, 0.99] }, []],
+        [{ "w10": [200, 0.5, 0.5, 3.00] }, ["pl2"]], [{ "w10": [200, 0.5, 0.5, 2.99] }, []],
+        [{ "w10": [200, 0.0004, 0.0004, -1.0] }, ["zeroHundred"]], [{ "w10": [200, 0.0006, 0.0006, -1.0] }, []],
+        [{ "delta": 0.05, "late": 0 }, ["lateGap"]], [{ "delta": 0.0499, "late": 0 }, []],
+        [{ "delta": 0.2, "w10": [99, 0.5, 0.5, -1.0] }, []], [{ "delta": 0.2, "w10": [100, 0.5, 0.5, -1.0] }, ["delta"]],
+        [{ "delta": 0.2, "blind": true }, []], [{ "a": 0.12, "blind": true }, ["a"]]
+      ]
+    },
+    {
+      "id": "text.numbers", "kind": "textNumbers", "source": "21 数字の書き方, SQ-32",
+      "why": "Points and % one decimal, pips two; a sign on points and pips, none on win rates; the exact binary value half up (1.005 is the double 1.00499…: +1.00; 1.25 points: +1.3); an all-zero result +0.0 / +0.00 whatever its sign; negatives with U+2212; yen whole with commas.",
+      "items": [["pts", 0.0004, "+0.0"], ["pts", -0.0004, "+0.0"], ["pips", -0.004, "+0.00"], ["pts", -0.0123, "−1.2"], ["pts", 0.0125, "+1.3"], ["pct", 0.5, "50.0%"], ["pips", 1.005, "+1.00"], ["yen", -966892.4, "−966,892"]]
+    },
+    {
+      "id": "text.winDenominator", "kind": "winDenominator", "source": "9 (決着の中), 20 (g) 文の勝率の分母と目をつぶった場合の層の重み",
+      "why": "TP4 trades tp, tp, sl, amb, open: resolved 4, W (決着の中) 2/4 = 50%, of all 2/5. Blind weights: BUY signals in h7 (1) and h8 (2) of USD/JPY; the h7 blind TP4 rows tp (+3.5), sl (−13.5): W1 1/2, PL1 −5; h8 tp, tp, amb (+3.5, +3.5, −13.5): W1 2/3, PL1 −6.5/3. Weighted: W1 = 1/3 × 1/2 + 2/3 × 2/3 = 11/18; PL1 = 1/3 × (−5) + 2/3 × (−6.5/3) = −28/9.",
+      "trades": ["tp", "tp", "sl", "amb", "open"], "expectW": { "n": 5, "resolved": 4, "wRes": 0.5, "wAll": 0.4 },
+      "rows": [["2024-01-09T07:00:00Z", "tp", 3.5], ["2024-01-10T07:00:00Z", "sl", -13.5], ["2024-01-09T08:00:00Z", "tp", 3.5], ["2024-01-10T08:00:00Z", "tp", 3.5], ["2024-01-11T08:00:00Z", "amb", -13.5]],
+      "signals": ["2024-01-09T07:05:00Z", "2024-01-09T08:05:00Z", "2024-01-10T08:05:00Z"],
+      "expect": { "blindW1": 0.6111111111111112, "blindPl1": -3.111111111111111 }
+    },
+    {
+      "id": "text.judgments", "kind": "text", "source": "14 判定, 21 段2の文 (4つの判定、時刻と暦の頭の文、MDE の文、マイナスの文)",
+      "why": "K_total 4, df 51. hs Δ +4.0 (SE 1.0, Holm passes, Δ_late's low end > 0, nothing suspicious) → confirmed. star Δ −5.0 (SE 1.0: the high end < 0) → bad. cci Δ +1.0 (SE 2.0) → cannot, MDE (t(1 − 0.025/4) + t(0.80)) × 2.0 ≈ 6.9 < 10. breedon-1 (calendar) Δ +1.0 (SE 4.0) → cannot with the MDE above 10 → the extra sentence, and the calendar head. hs has PL1 −0.50 and PL2 +0.30 → the minus sentence names TP4 only.",
+      "df": 51, "m1": 10,
+      "items": [
+        { "id": "hs", "delta": [0.04, 0.01], "late": [0.04, 0.02, 0.06], "a": [0.02, 0.01], "w4": [0.7, -0.5], "w10": [0.56, 0.3] },
+        { "id": "star", "delta": [-0.05, 0.01], "late": [-0.05, -0.07, -0.03], "a": [-0.02, 0.01], "w4": [0.7, -1.5], "w10": [0.5, -1.0] },
+        { "id": "cci", "delta": [0.01, 0.02], "late": [0.01, -0.03, 0.05], "a": [0.01, 0.01], "w4": [0.7, -1.0], "w10": [0.5, -1.0] },
+        { "id": "breedon-1", "delta": [0.01, 0.04], "late": [0.01, -0.07, 0.09], "a": [0.01, 0.02], "w4": [0.7, -1.0], "w10": [0.5, -1.0] }
+      ],
+      "expect": {
+        "judgments": { "hs": "confirmed", "star": "bad", "cci": "cannot", "breedon-1": "cannot" },
+        "text": {
+          "s2.item.hs": { "contains": ["で、hsの判断は、目をつぶって入った場合（同じペア・同じ向き・同じ時間帯）より、向きの当たりが +4.0ポイント高く", "4個を確かめた分を直しても、0より大きいと言えます。", "当たりは0より上でも、損切り13・利確4の1回あたりの損益はマイナスです。", "これからの足で、明らかに悪くなっていないかを1回だけ確かめてから（段3）"], "absent": ["損切り13・利確4と利確10"] },
+          "s2.item.star": { "contains": ["後半で、starの判断は、目をつぶって入った場合（同じペア・同じ向き・同じ時間帯）より当たりが低い結果でした（差 −5.0ポイント"] },
+          "s2.item.cci": { "contains": ["当たるとも、当たらないとも言えませんでした（差 +1.0ポイント", "差が無いという意味ではありません。この数では、+6.9ポイントより小さい差は、8割の確かさでは見分けられません。"], "absent": ["疑う合図の線（10ポイント）より大きいので"] },
+          "s2.item.breedon-1": { "startsWith": "これはチャートの形を読むやり方ではなく、時刻や暦の効果です。後半で、breedon-1が、目をつぶって入った場合（同じペア・同じ向き）より", "contains": ["この +13.8ポイントは、疑う合図の線（10ポイント）より大きいので、この数では、疑う合図に当たらずに確かめられる差はほとんどありませんでした。"] },
+          "s2.final": { "contains": ["前半で選び、後半で確かめても当たると言えたのはhsでした。", "チャートの形ではhs、時刻と暦では無しです。", "hsは、目をつぶって入った場合より当たると確かめられましたが、ほかのやり方より正確かは確かめていません（後半で確かめたのは4個だけで、ほかの6項目は後半を計算していません）。"] }
+        }
+      }
+    },
+    {
+      "id": "text.forms", "kind": "text", "source": "14 一部 (イ)(ロ)(ハ), 21 〈理由〉",
+      "why": "K_total 3, df 51; all three pass Holm. donchian-A20 signals both ways: BUY +1.0, SELL −2.0 (both ≥ 30 signals) → C2 fails alone → (イ). hs |Δ| 12.0 ≥ 10 → suspicious → C5 fails → (ロ), never offered to the owner; its pass-min t(1 − 0.025/3) × 5.0 ≥ 10 → the Holm sentence. td9's Δ_late +0.5 with the low end −1.0 → C4 fails → (ハ).",
+      "df": 51, "m1": 10,
+      "items": [
+        { "id": "donchian-A20", "delta": [0.03, 0.005], "late": [0.03, 0.01, 0.05], "a": [0.02, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5], "byDir": { "BUY": [0.01, 40], "SELL": [-0.02, 40] } },
+        { "id": "hs", "delta": [0.12, 0.05], "late": [0.12, 0.05, 0.19], "a": [0.02, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5] },
+        { "id": "td9", "delta": [0.03, 0.005], "late": [0.005, -0.01, 0.02], "a": [0.02, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5] }
+      ],
+      "expect": {
+        "judgments": { "donchian-A20": "partial", "hs": "partial", "td9": "partial" },
+        "forms": { "donchian-A20": "i", "hs": "ro", "td9": "ha" },
+        "text": {
+          "s2.item.donchian-A20": { "contains": ["しかし、買いか売りの片方で、当たりが0以下だった（買い +1.0・売り −2.0ポイント）ので、決めた条件を満たしません。", "それでも使うかは、オーナーが決めてください"] },
+          "s2.item.hs": { "contains": ["後半で、hsの数字は、疑う合図（|Δ| ≧ 10ポイント）に当たりました", "この数では、Holm を通る差は、疑う合図の線より大きくなります。", "決めた条件（疑う合図（|Δ| ≧ 10ポイント）に当たった）を満たさないので、メールは変えません。"], "absent": ["それでも使うかは", "確かめた分を直しても言えました"] },
+          "s2.item.td9": { "contains": ["しかし、5分遅れて入ると、当たりが0より大きいとは言えませんでした（+0.5ポイント、95%の幅 −1.0〜+2.0）。"], "absent": ["それでも使うかは"] }
+        }
+      }
+    },
+    {
+      "id": "text.email", "kind": "text", "source": "14 今のメールとの比べ, 21 〈今のメールとの比べ〉の3つの形",
+      "why": "One item a scenario (K_total 1), df 51: Δ +8.0, SE 1.0 → confirmed; the emails' Δ with SE 1.0 on clusters uncorrelated with the item's, so D has SE √2 and the simultaneous low end D − t(0.975, 51) × 1.414: +8.0 → +5.2 > 0, +1.0 and +2.0 → below 0. hs: ULTRA 0, MACD 0 → both simultaneous low ends > 0 → 「言えます」. td9: ULTRA +7.0, MACD +6.0 → points > 0, low ends ≤ 0 → 「点では高いですが」. star: only D_U's low end > 0 (MACD +7.0) → still the second form. cci: ULTRA +9.0 → D_U −1.0 → 「今のメール（ULTRA 5分足）より当たりが高くありませんでした（差 −1.0ポイント）」. The emails' rows differ per item here (one scenario each).",
+      "df": 51, "m1": 10,
+      "scenarios": [
+        { "item": "hs", "ultra": 0, "macd": 0, "contains": ["今のメール2つ（ULTRA 5分足・MACD の山・谷）と比べても、当たりが高いと言えます（差 +8.0・+8.0ポイント"] },
+        { "item": "td9", "ultra": 0.07, "macd": 0.06, "contains": ["今のメール2つより点では高いですが、今のメールより当たると言えるほどの差ではありません（差 +1.0・+2.0ポイント"] },
+        { "item": "star", "ultra": 0, "macd": 0.07, "contains": ["今のメール2つより点では高いですが", "（差 +8.0・+1.0ポイント"] },
+        { "item": "cci", "ultra": 0.09, "macd": 0, "contains": ["今のメール（ULTRA 5分足）より当たりが高くありませんでした（差 −1.0ポイント）。"] }
+      ]
+    },
+    {
+      "id": "text.dabLower", "kind": "dab", "source": "20 (g) 下の端で選んだ A の点が B より低い例",
+      "why": "K_total 4, df 99,999 (t(1 − 0.025/4) ≈ 2.4977). A (hs) Δ 3.0 SE 0.5 → low end 1.75; B (td9) Δ 6.0 SE 1.8 → 1.50: A is promoted. D_AB = −3.0, SE √(0.5² + 1.8²) = 1.868 (A and B on uncorrelated clusters), interval −6.7〜+0.7 → 「決められない」.",
+      "df": 99999,
+      "items": [["hs", 0.030, 0.005], ["td9", 0.060, 0.018], ["star", 0.001, 0.010], ["cci", 0.001, 0.010]],
+      "expect": { "promote": "hs", "confirmed": ["hs", "td9"], "se": 0.018681541692269404, "contains": ["後半で確かめられたチャートの形の項目の中で、どれが一番当たるかは、この数では決められません（hsとtd9の差 −3.0ポイント、幅 −6.7〜+0.7）。"] }
+    },
+    {
+      "id": "text.dabBBetter", "kind": "dab", "source": "20 (g) B の方が当たると言える例",
+      "why": "A (hs) Δ 1.5 SE 0.3 → low end 0.75; B (td9) Δ 5.7 SE 2.0 → 0.70: A is promoted. D_AB = −4.2, SE √(0.3² + 2.0²) = 2.022, interval −8.2〜−0.2 (high end < 0) → 「td9の方がhsより当たると言えます」.",
+      "df": 99999,
+      "items": [["hs", 0.015, 0.003], ["td9", 0.057, 0.020], ["star", 0.001, 0.010], ["cci", 0.001, 0.010]],
+      "expect": { "promote": "hs", "confirmed": ["hs", "td9"], "se": 0.020223748416156685, "contains": ["後半で確かめられたチャートの形の項目の中では、td9の方がhsより当たると言えます（差 −4.2ポイント、直していない95%の幅 −8.2〜−0.2）。hsを段3に進めるのは、前もって決めた選び方（直した下の端）によるもので、hsの方が当たるという意味ではありません。"] }
+    }
+  ]
+}
