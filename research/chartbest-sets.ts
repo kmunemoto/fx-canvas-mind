@@ -172,16 +172,19 @@ export const condQ = (runs: RunSum[]): Cond => {
   return { ok: n <= 1, value: { runs: n, others: runs.filter((r) => r.confirmed.some((x) => x !== Q_ITEM)).length }, need: `${Q_ITEM} confirmed in ≤ 1 run` };
 };
 // O (801–804), from each run's checks: the cut and the poison of donchian-A20 fail, a suspicious line hits, the
-// other checks pass
+// other checks pass (20 (e) O「ほかの確かめは通る」). The answer-knowing donchian-A20 reads the bar of T + 60 min, so
+// its own presence checks (有無の毒) fail by construction and are not counted (20 (b) shows that check failing with
+// (f)'s plant, not with O; SQ-I3); every other item's presence checks and print.items must pass
+const O_EXPECTED = ["cut", "poison", "presence1", "presence2"].map((k) => `lookahead.${k}.donchian-A20`);
 export const condO = (runs: RunSum[]): Cond => {
   const per = runs.map((r) => {
     const cut = r.failed.some((f) => f.startsWith("lookahead.cut.donchian-A20"));
     const poison = r.failed.some((f) => f.startsWith("lookahead.poison.donchian-A20"));
     const sus = (r.items["donchian-A20"]?.H1?.suspicious.length ?? 0) > 0;
-    const others = r.failed.filter((f) => !f.startsWith("lookahead.cut.donchian-A20") && !f.startsWith("lookahead.poison.donchian-A20") && !f.startsWith("lookahead.presence") && f !== "print.items");
+    const others = r.failed.filter((f) => !O_EXPECTED.includes(f));
     return { seed: r.seed, cut, poison, suspicious: sus, others };
   });
-  return { ok: per.length === SETS.O.length && per.every((x) => x.cut && x.poison && x.suspicious && x.others.length === 0), value: per, need: "all 4: the cut and the poison fail, a suspicious line hits, nothing else fails" };
+  return { ok: per.length === SETS.O.length && per.every((x) => x.cut && x.poison && x.suspicious && x.others.length === 0), value: per, need: "all 4: the cut and the poison fail, a suspicious line hits, nothing else fails (donchian-A20's presence checks aside)" };
 };
 
 // the trial seeds' targets (calib): what each set's amount moves (20 (e) 強さ)

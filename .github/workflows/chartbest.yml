@@ -4,7 +4,7 @@
 # --allow-net: nothing here reads a real price.
 #
 #   on push (made-up only):
-#     checks       deno check; the hand examples (TS and the Python's own); stage 0's import graph holds no follow,
+#     checks       deno check; the hand examples (TS, and the Python: its own and hand.json's); stage 0's import graph holds no follow,
 #                  statistics, selection or owner-hold module (11); console. only in chartbest-checks.ts; the
 #                  candidates ledger's sha256 against the TS and the Python constants; the real stages refused
 #                  (exit 2, no print.txt)
@@ -85,7 +85,8 @@ jobs:
           CB_MODE: hand
           CB_OUT: research/out/chartbest/hand
         run: $DENO_MADEUP research/chartbest.ts
-      - name: The hand examples (the Python's own, from docs)
+      # the Python runs its own docs-derived cases and then every case of hand.json through its own functions (20 (g))
+      - name: The hand examples (the Python's own and hand.json's)
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
           /tmp/py/bin/python -I research/chartbest-check.py --mode hand --hand research/chartbest/hand.json
