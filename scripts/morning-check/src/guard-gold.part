@@ -1,0 +1,66 @@
+-- ===== GUARDS (gold): is the stored row there, does it reach the end of the range, is the history long enough =====
+-- the hours of the range whose bar production can judge (its close time is not in isPossiblyClosed: Fri >= 21:00, Sat, Sun < 22:00 UTC)
+hj as (
+  select h as ot_h
+  from pp, generate_series(pp.start_ms, pp.end_ms - 3600000, 3600000::bigint) h
+  cross join lateral (select extract(dow from to_timestamp((h + 3600000) / 1000.0) at time zone 'UTC') as cdw,
+                             extract(hour from to_timestamp((h + 3600000) / 1000.0) at time zone 'UTC') as chh) c
+  where not ((c.cdw = 5 and c.chh >= 21) or c.cdw = 6 or (c.cdw = 0 and c.chh < 22))
+),
+gchk as (
+  select count(*) filter (where lag_ot is not null and ot <= lag_ot) as non_ascending
+  from (select ot, lag(ot) over (order by pos) as lag_ot from bgold2 where ok) q
+),
+gg as (
+  select (select count(*) from grow0) as row_found,
+         (select fetched_at from grow0) as fetched_at,
+         (select count(*) from braw) as row_bars,
+         (select count(*) from bgold2 where not ok) as unparsable_rows,
+         (select count(*) from bgold2 where ok and ot + 3600000 > fetched_ms) as forming_in_row,
+         (select count(*) from us) as closed_bars,
+         (select max(ot) from us) as newest_closed_ot,
+         (select max(ot_h) from hj) as last_judgeable_ot,
+         (select count(*) from hj h where not exists (select 1 from us where us.ot = h.ot_h)) as missing_judgeable_hours,
+         (select non_ascending from gchk) as non_ascending
+),
+gd as (
+  select y.symbol,
+         case when g.row_found = 0 or ss.day_bars = 0 or g.last_judgeable_ot is null then 'NO_DATA'
+              when g.newest_closed_ot < g.last_judgeable_ot then 'STALE_ROW'
+              when not pp.range_ok then 'BAD_RANGE'
+              else 'ok' end as status,
+         case when g.row_found = 0 then 'no XAU/USD 1h row in public.live_chart_fallback: nothing was recounted'
+              when ss.day_bars = 0 then 'the stored row holds no closed bar in the range: nothing to recount'
+              when g.last_judgeable_ot is null then 'no hour of the range can be judged by production (a Saturday key: its bars all close in the weekend window): nothing to recount'
+              when g.newest_closed_ot < g.last_judgeable_ot then 'the stored row (read ' || to_char(g.fetched_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') || ' UTC) ends before the range does: its newest closed bar opened '
+                   || to_char(to_timestamp(g.newest_closed_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || ', the last bar production could judge opened '
+                   || to_char(to_timestamp(g.last_judgeable_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || ': "no fire" cannot be told from "not read yet"'
+              when not pp.range_ok then 'the range is not one whole GMO day (24 h from 21:00 UTC): check START_MS / END_MS'
+              else null end as why,
+         concat_ws('; ',
+           case when g.non_ascending > 0 then 'row_not_ascending=' || g.non_ascending end,
+           case when g.unparsable_rows > 0 then 'unparsable_rows=' || g.unparsable_rows end,
+           case when g.missing_judgeable_hours > 0 then 'judgeable_hours_without_a_bar=' || g.missing_judgeable_hours end,
+           case when ss.day_bars > 0 and ss.first_day_rank < 600 then 'history_shorter_than_600_before_day' end,
+           case when coalesce(sb.n, 0) = 0 then 'no_subscription_row' end,
+           case when coalesce(ot.n, 0) > 0 then 'other_macdx_1h_rule_rows=' || ot.n end) as warn,
+         json_build_object(
+           'row_read_utc', to_char(g.fetched_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'), 'row_bars', g.row_bars, 'closed_bars', g.closed_bars, 'forming_bars_left_out', g.forming_in_row,
+           'newest_closed_open_utc', to_char(to_timestamp(g.newest_closed_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
+           'last_judgeable_open_utc', to_char(to_timestamp(g.last_judgeable_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
+           'judgeable_hours_without_a_bar', g.missing_judgeable_hours, 'non_ascending', g.non_ascending, 'unparsable_rows', g.unparsable_rows,
+           'bars_before_day', ss.first_day_rank - 1, 'history_ok', coalesce(ss.first_day_rank >= 600, false),
+           'subscriptions', coalesce(sb.n, 0), 'other_macdx_1h_rows', coalesce(ot.n, 0),
+           'note', 'latest stored row: production judged each bar on the row as it was about 1 minute after the close') as guard
+  from syms y cross join pp cross join gg g
+  join sstat ss on ss.symbol = y.symbol
+  left join subs sb on sb.pair = y.pair
+  left join othr ot on ot.pair = y.pair
+),
+-- gold only: Twelve Data's daily credit cap (the sweep reads only while the UTC day's count is below 780); a fire on a day that reached it may have been blocked
+extra_reasons as (
+  select 'XAU/USD'::text as pair, f.ot, 'twelve_daily_cap'::text as reason
+  from fx2 f
+  join public.twelve_data_usage u on u.day = (to_timestamp((f.ot + 3600000) / 1000.0) at time zone 'UTC')::date
+  where u.used >= 780
+),

@@ -1,0 +1,22 @@
+-- ===== TAIL of debug-closes-gold.sql: the rounded closes the gold recount used, as compact strings =====
+-- Parameter besides the day's range: {{CHUNK}} = 0, 1, 2 ... (one piece of about 250 bars) or -1 (the list of pieces with their md5, no strings).
+-- The series is the CLOSED bars of the latest stored row (row_read_utc says which version of the row): from 599 bars before the day's first judged bar
+-- to the day's last bar. A piece is "open_ms:close;open_ms:close;..." with the close rounded as the app rounds it (JS Number(c.toFixed(2))), 2 decimals.
+need as (select symbol, greatest(1, min(jr) - 599) as r_from, max(jr) as r_to from w group by symbol),
+sel as (
+  select s.symbol, s.d, s.rn, s.ot, s.cn, (s.rn - n.r_from) / 250 as chunk
+  from s join need n on n.symbol = s.symbol and s.rn between n.r_from and n.r_to
+),
+ch as (
+  select symbol, d, chunk, count(*) as n_bars, min(rn) as first_rank, min(ot) as first_ot, max(ot) as last_ot,
+         string_agg(ot::text || ':' || round(cn, d)::text, ';' order by rn) as closes
+  from sel group by symbol, d, chunk
+)
+select ch.symbol, ch.d as decimals, ch.chunk, (select max(c2.chunk) + 1 from ch c2 where c2.symbol = ch.symbol) as chunks, ch.n_bars, ch.first_rank,
+       to_char(to_timestamp(ch.first_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as first_open_utc,
+       to_char(to_timestamp(ch.last_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as last_open_utc,
+       (select to_char(fetched_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') from grow0) as row_read_utc,
+       md5(ch.closes) as md5, case when {{CHUNK}} < 0 then null else ch.closes end as closes
+from ch
+where {{CHUNK}} < 0 or ch.chunk = {{CHUNK}}
+order by ch.symbol, ch.chunk

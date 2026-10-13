@@ -1,0 +1,67 @@
+-- ===== ENGINE (the same text in pairs.sql and gold.sql): rounded closes -> ranks -> MACD / usual move / cross / fire =====
+-- Input: us(symbol, ot, seq, m8, d)  = the unrounded mid close m8 (a double) of every usable bar, ot = bar OPEN (epoch ms), seq = its place in the order production keeps
+-- (pairs: the merged list's arrival order; gold: the row's order), d = decimals (JPY 3, other pairs 5, gold 2).
+-- 1. Rounding: JS  Number(m.toFixed(d))  of the EXACT double m8 (half up on the exact binary value), done with the double's 52-bit mantissa:
+--    m8 = mant / 2^(52-k) exactly, k = floor(log2(m8)); n = round_half_up(mant * 10^d / 2^(52-k)); close = n / 10^d. bad = mant outside [2^52, 2^53), or a close that
+--    is zero / absurdly small or large (nothing is dropped for it: production keeps such a bar, and bad_mantissas makes it visible; the statement must not stop on it).
+kk as (select symbol, ot, seq, m8, d, case when m8 > 0 then floor(ln(m8) / ln(2::float8))::int else 0 end as k0 from us),
+k1 as (
+  select symbol, ot, seq, m8, d,
+         case when m8 >= power(2::float8, k0 + 1) then k0 + 1 when m8 < power(2::float8, k0) then k0 - 1 else k0 end as k
+  from kk
+),
+fx as (select symbol, ot, seq, d, k, (least(m8, 1e15::float8) * power(2::float8, 52 - k))::bigint as mant from k1),
+r0 as (select symbol, ot, seq, d, k, mant, (10::float8 ^ d)::numeric as p10, (1::bigint << least(greatest(52 - k, 0), 62))::numeric as den from fx),
+r1 as (select symbol, ot, seq, d, k, mant, p10, mant::numeric * p10 as num, den from r0),
+r as (
+  select symbol, ot, seq, d,
+         (div(num, den) + case when 2 * mod(num, den) >= den then 1 else 0 end) / p10 as cn,
+         (mant < 4503599627370496 or mant >= 9007199254740992 or 52 - k < 0 or 52 - k > 62) as bad
+  from r1
+),
+-- 2. The series, in the order production keeps (seq), rank rn = 1, 2, ... per symbol. A window is the 600 ENTRIES ending at a bar (not 600 hours).
+s as (select symbol, ot, d, row_number() over (partition by symbol order by seq) as rn, cn, cn::float8 as c, bad from r),
+-- 3. The judged bars: open in [START_MS, END_MS) with a full window (rank >= 600). closes = each symbol's whole series as one array, so that the
+--    recursion below looks a close up by its rank (arr[rn]) and never joins the series again (a join inside a recursion can be planned badly).
+w as (select symbol, rn as jr, ot from s where rn >= 600 and ot >= (select start_ms from pp) and ot < (select end_ms from pp)),
+closes as (select symbol, array_agg(c order by rn) as arr from s group by symbol),
+-- 4. MACD(12, 26, 9) of each window as Pine / _shared/pine.ts computes it, on that window's 600 closes alone: SMA seed, then alpha*v + (1-alpha)*prev,
+--    same order of double operations as the TypeScript. t = index inside the window (0..599; the close at t has rank jr - 599 + t); acc = running seed sums;
+--    side = sign of h (0 keeps the side).
+rec(symbol, jr, ot, t, c, acc12, e12, acc26, e26, m, acc9, sg, side, side_p, sabs) as (
+  select w.symbol, w.jr, w.ot, 0, cl.arr[w.jr - 599], cl.arr[w.jr - 599], null::float8, cl.arr[w.jr - 599], null::float8, null::float8, null::float8, null::float8, null::int, null::int, 0::float8
+  from w join closes cl on cl.symbol = w.symbol
+  union all
+  select r.symbol, r.jr, r.ot, r.t + 1, sn.c,
+         case when r.t + 1 <= 11 then r.acc12 + sn.c else r.acc12 end,
+         x.ne12,
+         case when r.t + 1 <= 25 then r.acc26 + sn.c else r.acc26 end,
+         x.ne26,
+         y.nm,
+         z.nacc9,
+         z.nsg,
+         case when r.t + 1 < 33 then null when (y.nm - z.nsg) > 0 then 1 when (y.nm - z.nsg) < 0 then -1 else r.side end,
+         r.side,
+         r.sabs + abs(sn.c - r.c)
+  from rec r join closes cl on cl.symbol = r.symbol
+  cross join lateral (select cl.arr[r.jr - 598 + r.t] as c) sn
+  cross join lateral (select
+      case when r.t + 1 < 11 then null::float8 when r.t + 1 = 11 then (r.acc12 + sn.c) / 12.0::float8
+           else (2.0::float8 / 13.0::float8) * sn.c + (1 - (2.0::float8 / 13.0::float8)) * r.e12 end as ne12,
+      case when r.t + 1 < 25 then null::float8 when r.t + 1 = 25 then (r.acc26 + sn.c) / 26.0::float8
+           else (2.0::float8 / 27.0::float8) * sn.c + (1 - (2.0::float8 / 27.0::float8)) * r.e26 end as ne26) x
+  cross join lateral (select case when r.t + 1 >= 25 then x.ne12 - x.ne26 end as nm) y
+  cross join lateral (select
+      case when r.t + 1 < 25 then null::float8 when r.t + 1 = 25 then y.nm when r.t + 1 <= 33 then r.acc9 + y.nm else r.acc9 end as nacc9,
+      case when r.t + 1 < 33 then null::float8 when r.t + 1 = 33 then (r.acc9 + y.nm) / 9.0::float8
+           else (2.0::float8 / 10.0::float8) * y.nm + (1 - (2.0::float8 / 10.0::float8)) * r.sg end as nsg) z
+  where r.t < 599
+),
+-- 5. The decision at the last bar of each window (decideScaledOnWindow): usual move = mean |close step| over the 599 steps added in order,
+--    level = 0.8 x usual move (not rounded); cross = the side changed from the bar before; SELL needs macd >= level, BUY needs macd <= -level (equality fires).
+--    clo = the judged bar's own (rounded) close, the last of its 600: the mail's `entry` must be this.
+fin as materialized (
+  select symbol, ot, jr, m, sg, (m - sg) as h, side_p, side, sabs / 599 as scale, 0.8::float8 * (sabs / 599) as lvl, c as clo,
+         (side_p is not null and side is not null and side_p <> side) as cross_
+  from rec where t = 599
+),

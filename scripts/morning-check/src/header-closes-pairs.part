@@ -1,0 +1,4 @@
+-- debug-closes.sql  (task #352)  -  the rounded closes of the five pairs that pairs.sql used, as compact strings, for Deno / Python replays.
+-- ONE read-only statement. Markers to replace: {{START_MS}} {{END_MS}} (the day's range, as in pairs.sql), {{SYMBOL}} (USD_JPY | EUR_JPY | AUD_JPY | EUR_USD | AUD_USD | *)
+-- and {{CHUNK}} (-1 = the list of pieces with their md5 and no strings; 0, 1, 2 ... = one piece of about 250 bars). The chain before the last CTE is the very text of pairs.sql.
+-- A piece is "open_ms:close;open_ms:close;..." (close with its decimals, e.g. 158.612); take the pieces of a symbol in chunk order and join them.

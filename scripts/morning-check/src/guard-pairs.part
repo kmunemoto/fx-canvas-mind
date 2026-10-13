@@ -1,0 +1,89 @@
+-- ===== GUARDS (five pairs): is the data there, is it whole, is the history long enough =====
+-- the dates (not Sundays: a JST-Sunday key is never stored) the 40-day load should hold, 2 files each (BID, ASK)
+dates as (
+  select to_char(d, 'YYYYMMDD') as dk
+  from pp, generate_series(to_date(pp.from_key, 'YYYYMMDD')::timestamp, to_date(pp.k_last, 'YYYYMMDD')::timestamp, interval '1 day') d
+  where extract(dow from d) <> 0
+),
+-- the files that are missing (all of them are counted; only the first 6 are named, so that a far-away key does not print 70 names)
+gmiss as (
+  select q.symbol, count(*) as n,
+         string_agg(q.dk || '/' || q.t, ' ' order by q.dk, q.t) filter (where q.r <= 6) || case when count(*) > 6 then ' ... (+' || (count(*) - 6) || ' more)' else '' end as keys
+  from (
+    select y.symbol, dt.dk, pt.t, row_number() over (partition by y.symbol order by dt.dk, pt.t) as r
+    from syms y cross join dates dt cross join (values ('BID'), ('ASK')) pt(t)
+    where not exists (select 1 from files f where f.symbol = y.symbol and f.date_key = dt.dk and f.price_type = pt.t)
+  ) q
+  group by q.symbol
+),
+gfile as (
+  select y.symbol,
+         count(f.date_key) filter (where f.price_type = 'BID' and f.date_key between pp.k_first and pp.k_last) as files_bid,
+         count(f.date_key) filter (where f.price_type = 'ASK' and f.date_key between pp.k_first and pp.k_last) as files_ask,
+         coalesce(sum(f.nbars) filter (where f.price_type = 'BID' and f.date_key between pp.k_first and pp.k_last), 0) as bars_bid,
+         coalesce(sum(f.nbars) filter (where f.price_type = 'ASK' and f.date_key between pp.k_first and pp.k_last), 0) as bars_ask,
+         count(f.date_key) as files_loaded,
+         -- a non-empty file whose answer was made before its GMO day had ended is a cut copy (its last bar may be unfinished)
+         count(f.date_key) filter (where f.nbars > 0 and f.resp < (to_date(f.date_key, 'YYYYMMDD') + interval '21 hours') at time zone 'UTC' and f.date_key between pp.k_first and pp.k_last) as early_key_files,
+         count(f.date_key) filter (where f.nbars > 0 and f.resp < (to_date(f.date_key, 'YYYYMMDD') + interval '21 hours') at time zone 'UTC') as early_files_all
+  from syms y cross join pp left join files f on f.symbol = y.symbol
+  group by y.symbol
+),
+grow as (
+  select y.symbol, count(r.symbol) filter (where not r.ok) as unparsable_rows,
+         count(r.symbol) filter (where r.ok and r.date_key between pp.k_first and pp.k_last and (r.ot < r.key_start_ms or r.ot >= r.key_start_ms + 86400000)) as rows_outside_day
+  from syms y cross join pp left join parsed r on r.symbol = y.symbol
+  group by y.symbol
+),
+-- merge_dropped = the bars (openTimes) mergeSides leaves out: a BID bar with no ASK bar or with an ask below its bid, and an ASK bar with no BID bar;
+-- closure_dropped = the merged bars usableBars leaves out (the market was shut for the whole bar); dup_ots = openTimes present more than once on one side
+gmerge as (
+  select y.symbol,
+         (select count(*) from (select distinct b.symbol, b.ot from bid b where b.symbol = y.symbol) q) - (select count(*) from mg where mg.symbol = y.symbol)
+           + (select count(*) from ask a where a.symbol = y.symbol and not exists (select 1 from bid b where b.symbol = a.symbol and b.ot = a.ot)) as merge_dropped,
+         (select count(*) from mg where mg.symbol = y.symbol) - (select count(*) from us where us.symbol = y.symbol) as closure_dropped,
+         (select count(*) from (select 1 from parsed pr where pr.symbol = y.symbol and pr.ok group by pr.price_type, pr.ot having count(*) > 1) q) as dup_ots
+  from syms y
+),
+-- the guard row of each pair: status says whether the recount could be made at all
+gd as (
+  select y.symbol,
+         case when gf.files_bid = 0 or gf.files_ask = 0 then 'NO_DATA'
+              when ss.day_bars = 0 then 'NO_DATA'
+              when not pp.range_ok then 'BAD_RANGE'
+              else 'ok' end as status,
+         case when gf.files_bid = 0 or gf.files_ask = 0 then 'no BID/ASK 1hour file for key ' || pp.k_first || '..' || pp.k_last || ' in public.gmo_kline_files (a day not over yet, not stored yet, or no trading): nothing was recounted'
+              when ss.day_bars = 0 then 'files found but 0 bars in the range (a Saturday key, a holiday): nothing to recount'
+              when not pp.range_ok then 'the range is not one whole GMO day (24 h from 21:00 UTC): check START_MS / END_MS'
+              else null end as why,
+         concat_ws('; ',
+           case when gf.files_bid <> gf.files_ask or gf.bars_bid <> gf.bars_ask then 'bid_ask_files_or_bars_differ' end,
+           case when gf.early_key_files > 0 then 'key_file_answered_before_day_end(cut copy?)=' || gf.early_key_files end,
+           case when coalesce(gm.n, 0) > 0 then 'history_files_missing=' || gm.n end,
+           case when gr.unparsable_rows > 0 then 'unparsable_rows=' || gr.unparsable_rows end,
+           case when gx.merge_dropped > 0 then 'merge_dropped=' || gx.merge_dropped end,
+           case when gx.closure_dropped > 0 then 'closure_dropped=' || gx.closure_dropped end,
+           case when gr.rows_outside_day > 0 then 'rows_outside_key_day(day roll moved?)=' || gr.rows_outside_day end,
+           case when gx.dup_ots > 0 then 'duplicate_bars=' || gx.dup_ots end,
+           case when ss.day_bars > 0 and ss.first_day_rank < 600 then 'history_shorter_than_600_before_day' end,
+           case when coalesce(sb.n, 0) = 0 then 'no_subscription_row' end,
+           case when coalesce(ot.n, 0) > 0 then 'other_macdx_1h_rule_rows=' || ot.n end) as warn,
+         json_build_object(
+           'files_bid', gf.files_bid, 'files_ask', gf.files_ask, 'bars_in_files_bid', gf.bars_bid, 'bars_in_files_ask', gf.bars_ask,
+           'files_loaded', gf.files_loaded, 'files_expected', (select count(*) * 2 from dates), 'missing_files', gm.keys,
+           'early_key_files', gf.early_key_files, 'early_files_all', gf.early_files_all,
+           'bars_before_day', ss.first_day_rank - 1, 'history_ok', coalesce(ss.first_day_rank >= 600, false),
+           'unparsable_rows', gr.unparsable_rows, 'rows_outside_day', gr.rows_outside_day,
+           'merge_dropped', gx.merge_dropped, 'closure_dropped', gx.closure_dropped, 'duplicate_bars', gx.dup_ots,
+           'subscriptions', coalesce(sb.n, 0), 'other_macdx_1h_rows', coalesce(ot.n, 0)) as guard
+  from syms y cross join pp
+  join gfile gf on gf.symbol = y.symbol
+  join grow gr on gr.symbol = y.symbol
+  join gmerge gx on gx.symbol = y.symbol
+  join sstat ss on ss.symbol = y.symbol
+  left join gmiss gm on gm.symbol = y.symbol
+  left join subs sb on sb.pair = y.pair
+  left join othr ot on ot.pair = y.pair
+),
+-- reasons beyond the weekend window / go-live / subscription that make a fire unmailable: none for the pairs
+extra_reasons as (select null::text as pair, null::bigint as ot, null::text as reason where false),
