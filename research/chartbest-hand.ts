@@ -18,10 +18,12 @@ import { type BlindPair, type BlindTable, CODE_KIND, KIND_CODE, type Kind, NO_E,
 import { type Est, type Inf, type Obs, type SeCand, type SeKind, type WinPl, deltaOf, finish, pickSe, tq, winPlOf } from "./chartbest-stats.ts";
 import { stratumOf } from "./chartbest-strata.ts";
 import { SEASON_NAMES, block4, seasonOf, sent, wk } from "./chartbest-time.ts";
-import { type Row, type SigTrade, blindObsOf, rowOf, shiftOf } from "./chartbest-rows.ts";
+import { type Row, type SigTrade, blindObsOf, rowOf } from "./chartbest-rows.ts";
 import { chooseStage1, groupCount, holmOf, itemCount, p95Of, stage2Of, suspectOfRow, suspiciousOf } from "./chartbest-select.ts";
 import { floorOf, groupsOf } from "./chartbest-count.ts";
-import { type HoldFacts, type HoldRowFacts, ROWS4, fmt, holdRangeText, holdText, stage2Text } from "./chartbest-text.ts";
+import { type HoldFacts, type HoldRowFacts, ROWS4, fmt, holdRangeText, holdText, holdVerdictOf, isoMin, stage2Text } from "./chartbest-text.ts";
+import { type OhCall, cappedCallsOf, deadlineAtOf, holdSigsOf, pOfSig } from "./chartbest-hold.ts";
+import type { LateSig } from "./chartbest-measures.ts";
 
 export interface HandCase {
   id: string;
@@ -353,6 +355,8 @@ const runHole: Runner = (c, _plant, bad, L) => {
     return flatBars(pair, times, perPair(flat, pair, "hole.flatMid"), halfSpreadOf(c, L, pair));
   });
   const p: Period = { ...periodOfLayout(c, L, L.get<string>(c, "hole", "period")), s0: a, end: b };
+  // 5「温め…」 / 6 ①: the warm-up the case's signals have (conventions.hole.warmup; the run's recordsOf: i ≥ warmup)
+  const warmup = L.get<number>(c, "hole", "warmup");
   const holes = holesOf(bars, p);
   const ex = c.expect as { holes: Record<string, Array<[string, string]>>; overlap: Array<[string, boolean]> };
   PAIRS.forEach((pair, pi) => {
@@ -371,7 +375,7 @@ const runHole: Runner = (c, _plant, bad, L) => {
     }
     const got = holeOverlaps(holes, 0, uj.t[Math.max(0, i - 9)], uj.t[i] + STEP);
     if (got !== want) bad.push(`overlap at ${open}: ${got} (want ${want})`);
-    const cl = classify(uj, 0, i, true, holes, p);
+    const cl = classify(uj, 0, i, i >= warmup, holes, p);
     if ((cl.reason === "r3") !== want) bad.push(`reason at ${open}: ${cl.reason}`);
   }
 };
@@ -383,9 +387,11 @@ const runHalf: Runner = (c, plant, bad, L) => {
   const times: number[] = [];
   for (let t = ms(c.from as string); t <= ms(c.to as string); t += STEP) times.push(t);
   const pb = flatBars(pair, times, L.get<number>(c, "half", "flatMid"), halfSpreadOf(c, L, pair));
+  // the warm-up of the case's signals (conventions.half.warmup; the run's recordsOf: i ≥ warmup)
+  const warmup = L.get<number>(c, "half", "warmup");
   for (const [open, reason, half] of c.expect as Array<[string, string, string | null]>) {
     const i = indexAt(pb.t, ms(open));
-    const cl = classify(pb, piOf(pair), i, true, noHoles(), p, plant);
+    const cl = classify(pb, piOf(pair), i, i >= warmup, noHoles(), p, plant);
     if (cl.reason !== reason || cl.half !== half) bad.push(`${open}: ${cl.reason} ${cl.half ?? "-"} (want ${reason} ${half ?? "-"})`);
   }
 };
@@ -499,7 +505,9 @@ const sigTradeAt = (bt: BlindTable, pb: PairBars, T: number, dir: Dir): SigTrade
   };
 };
 
-// 8, 10: the week shift on a manual blind table
+// 8, 10: the week shift on a manual blind table, through the run's own row (rowOf with the chart group's shift): the
+// real Δ it computes from the case's signals is checked against expect.real (an answer, 20 (g) 週ずらし) and is the one
+// it ranks among the shifts (rowOf hands it to shiftOf)
 const runShift: Runner = (c, plant, bad, L) => {
   const tl = tableOf(c, L);
   const rows = (c.rows as Array<[string, number]>).map(([open, e]) => ({ open: ms(open), eBuy: e }));
@@ -507,7 +515,11 @@ const runShift: Runner = (c, plant, bad, L) => {
   const tr = (c.signals as Array<[string, string]>).map(([T, d]) => sigTradeAt(bt, pb, ms(T), dirOf(d)));
   const blind = blindObsOf(bt, tl.layer, tl.p, plant);
   const ex = c.expect as { k: number[]; delta: number[]; dropped: number[]; sd: number; mean: number; rank: number; real: number };
-  const sh = shiftOf(tr, bt, worldOf(pb), blind, tl.half, tl.p, plant, { delta: ex.real, late: null }).delta;
+  if (tl.layer !== "chart") throw new Error(`the week shift is the chart group's (conventions.table.layer ${tl.layer})`);
+  const row = rowOf("hand", tr, tl.layer, tl.half, bt, worldOf(pb), blind, tl.p, { plant, shift: true });
+  if (!near(row.delta.est, ex.real, 1e-12)) bad.push(`real Δ ${row.delta.est} (want ${ex.real})`);
+  if (!row.shift) throw new Error("rowOf made no shift for the chart layer");
+  const sh = row.shift.delta;
   if (sh.k.join(",") !== ex.k.join(",")) bad.push(`k ${sh.k.join(",")} (want ${ex.k.join(",")})`);
   if (sh.delta.length !== ex.delta.length || sh.delta.some((d, j) => !near(d, ex.delta[j], 1e-12))) bad.push(`Δ_k ${sh.delta.join(",")} (want ${ex.delta.join(",")})`);
   if (sh.dropped.join(",") !== ex.dropped.join(",")) bad.push(`dropped ${sh.dropped.join(",")} (want ${ex.dropped.join(",")})`);
@@ -824,9 +836,58 @@ const firstDiff = (got: string, want: string): string => {
   return `differs at ${k} (length ${got.length}, want ${want.length}): 「…${win(got)}…」 want 「…${win(want)}…」`;
 };
 const runHoldText: Runner = (c, _plant, bad) => {
-  const got = holdText(holdFactsOf(c.facts as Rec));
+  const f = holdFactsOf(c.facts as Rec);
+  // ①②③ as the run derives them from its facts (holdVerdictOf, which factsOf uses): the case's facts.verdict must be
+  // what its own numbers give (indep-06: the branches only the hand cases reach are the run's code too)
+  if (!f.timedOut) {
+    const v = holdVerdictOf(f);
+    for (const k of ["one", "twoAccounts", "twoM", "three"] as const) if (v[k] !== f.verdict[k]) bad.push(`verdict.${k}: the facts give ${v[k]}, the case says ${f.verdict[k]}`);
+  }
+  const got = holdText(f);
   const want = (c.expect as { text: string }).text;
   if (got !== want) bad.push(firstDiff(got, want));
+};
+// §8.102 ①: a row's call records written by hand as research/ownerhold's (τ the NY close, the ending and its time, U after
+// the notice's deposit, null when no notice's deposit came) → the calls the sentences list, through the functions
+// factsOf uses (cappedCallsOf, deadlineAtOf), their times as the sentences write them (SQ-PF1: the call's τ)
+const runHoldCalls: Runner = (c, _plant, bad) => {
+  const calls: OhCall[] = (c.calls as Array<{ tau: string; end: string; endAt: string | null; uAfterDeposit: number | null }>).map((x) => ({
+    tau: ms(x.tau), end: x.end, endAt: x.endAt === null ? NaN : ms(x.endAt), uAfterDeposit: x.uAfterDeposit,
+  }));
+  const ex = c.expect as { capped: Array<[string, number, string]>; deadlineAt: string[] };
+  const got = cappedCallsOf(calls).map((x) => `${isoMin(x.tau)}・${x.short}・${x.end}`).join(" | ");
+  const want = ex.capped.map(([at, short, end]) => `${at}・${short}・${end}`).join(" | ");
+  if (got !== want) bad.push(`capped calls ${got || "none"} (want ${want || "none"})`);
+  const gotD = deadlineAtOf(calls).map(isoMin).join(", ");
+  if (gotD !== ex.deadlineAt.join(", ")) bad.push(`deadline close-outs ${gotD || "none"} (want ${ex.deadlineAt.join(", ") || "none"})`);
+};
+// §8.111 2・3 (with its review fix 2) and 9: one late ULTRA signal (window i + 1) put into the owner-hold list of the full
+// account (holdSigsOf, the list a run makes; conventions.holdLate): listed only when a read at the next bar's close
+// + 0, 1, 3 min is under 10 minutes after T and outside isPossiblyClosed; base = the next bar's close, P = base + 2 min
+const runHoldLate: Runner = (c, _plant, bad, L) => {
+  const pair = L.get<Pair>(c, "holdLate", "pair");
+  const p = periodOfLayout(c, L, L.get<string>(c, "holdLate", "period"));
+  (c.subcases as Rec[]).forEach((s, j) => {
+    const tag = `${String(s.name ?? `#${j + 1}`)}: `;
+    const pb = flatBars(pair, (s.opens as string[]).map(ms), L.get<number>(c, "holdLate", "flatMid", s), halfSpreadOf(c, L, pair));
+    const i = s.i as number;
+    if (!(i >= 0 && i < pb.n)) throw new Error(`${tag}bar ${i} is not one of the subcase's bars`);
+    const late: LateSig = { pi: pb.pi, i, T: pb.t[i] + STEP, dir: dirOf(L.get<string>(c, "holdLate", "dir", s)) };
+    const list = holdSigsOf([], [late], worldOf(pb), p.start, p.end);
+    const ex = s.expect as { listed: boolean; T?: string; base?: string; P?: string };
+    if (!ex.listed) {
+      if (list.length) bad.push(`${tag}listed (base ${iso(list[0].base)}), want not listed`);
+      return;
+    }
+    if (list.length !== 1) {
+      bad.push(`${tag}${list.length} rows (want the late signal)`);
+      return;
+    }
+    const r = list[0];
+    const got = `T ${iso(r.T)} base ${iso(r.base)} P ${iso(pOfSig(r))} late ${r.late}`;
+    const want = `T ${ex.T} base ${ex.base} P ${ex.P} late true`;
+    if (got !== want) bad.push(`${tag}${got} (want ${want})`);
+  });
 };
 const runHoldRange: Runner = (c, _plant, bad) => {
   const fs = (c.facts as Rec[]).map((x) => x as unknown as HoldFacts);
@@ -840,7 +901,7 @@ const RUNNERS: Record<string, Runner> = {
   events: runEvents, hole: runHole, half: runHalf, delta: runDelta, deltaT: runDeltaT, clusters: runClusters, shift: runShift,
   sepick: runSePick, tq: runTq, lbcount: runLbCount, select: runSelect, holm: runHolm, groups: runGroups, floor: runFloor,
   suspect: runSuspect, textNumbers: runTextNumbers, winDenominator: runWinDenominator, text: runText, dab: runDab,
-  holdText: runHoldText, holdRange: runHoldRange,
+  holdText: runHoldText, holdRange: runHoldRange, holdCalls: runHoldCalls, holdLate: runHoldLate,
 };
 
 // every case of hand.json with its conventions; a case that throws fails with the error's first line

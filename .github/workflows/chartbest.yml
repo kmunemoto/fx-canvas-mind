@@ -35,7 +35,12 @@
 #                  refuses until step 3 is complete (55 of the 59 items are not built), so no real price is read.
 #                  A stage that passes keeps print.txt and its ledger file (with the sha256) as an artifact.
 #   not written yet (step 3): the real reproduction steps of 20 (c) in the stage jobs, and the BIS policy rates the
-#   real stage 2's owner's way needs for its swap rows (CB_BIS_CSV, SQ-H6; the guard refuses without it).
+#   real stage 2's owner's way needs for its swap rows (CB_BIS_CSV, SQ-H6; the guard refuses without it). The real
+#   stage 2's Python step already carries --hold (the checks job greps it); step 3 also passes it the same BIS file as
+#   CB_BIS_CSV (the Python's rates input, read against its sha256; until then the Python's --hold is made-up only), and
+#   sizes CB_HOLD_BUDGET_MIN against the measured times of 20 (c), the stage and the Python (a started account cannot be
+#   stopped: ownerhold.ts's analyse() is synchronous). A timed-out item account leaves hold/<src>-<acct>/timed-out.json
+#   (SQ-PF4), which the Python must accept before the real stage 2.
 #
 # Read-only: it writes nothing to the repository and holds no secret.
 name: Research chartbest
@@ -171,6 +176,19 @@ jobs:
           echo "the Python, real data's second half without the choice ledger: exit $s"; if [ "$s" != 2 ] || ! grep -q "opened only with --choice-ledger" /tmp/py-gate.txt; then fail=1; fi
           rmdir research/.cache/chartbest research/.cache 2>/dev/null || true
           exit $fail
+      # gates-02: the real stage 2 recomputes the owner's way in the Python too (20 (d)「すべての段」)
+      - name: The real stage 2's Python step carries --hold
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          y = open('.github/workflows/chartbest.yml', encoding='utf-8').read()
+          job = y[y.index('\n  stage2:\n'):]
+          step = job[job.index('- name: The Python on the same day files'):]
+          step = step[:step.index('\n      - ')]
+          ok = re.search(r'research/chartbest-check\.py .*--hold', step.replace('\\\n', ' ')) is not None
+          print(f"the real stage 2's Python step: --hold {'given' if ok else 'MISSING'}")
+          sys.exit(0 if ok else 1)
+          EOF
       - name: The choice ledger's sha256 constant, the TS's and the Python's
         run: |
           ts=$(grep -E '^  choice: \{ path: "research/ledger/chartbest-choice.json", sha256: "[0-9a-f]*" \}' research/chartbest-const.ts | grep -oE 'sha256: "[0-9a-f]*"' | cut -d'"' -f2)
@@ -196,6 +214,9 @@ jobs:
       OUT: research/out/chartbest/${{ matrix.set }}-${{ matrix.seed }}
       WALK: research/out/chartbest/${{ matrix.set }}-${{ matrix.seed }}-walk
     steps:
+      # 9's budget (CB_HOLD_BUDGET_MIN) counts from the job's start (research/chartbest-run0.ts CB_JOB_START_MS)
+      - name: The job's start
+        run: echo "CB_JOB_START_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
         with:
@@ -225,7 +246,8 @@ jobs:
         env:
           CB_MODE: run
           CB_FULL: "1"
-          # the owner's way (9) is in the full run; an account its budget does not reach is 「出せなかった」
+          # the owner's way (9) is in the full run; an item's account not started within the budget (from the job's
+          # start) is 「出せなかった」; the two emails run first and are never left out
           CB_HOLD_BUDGET_MIN: "150"
           CB_DATA: ${{ env.DATA }}/gmo
           CB_OUT: ${{ env.OUT }}
@@ -1086,6 +1108,9 @@ jobs:
     env:
       OUT: research/out/chartbest/real-stage2
     steps:
+      # 9's budget (CB_HOLD_BUDGET_MIN) counts from the job's start (research/chartbest-run0.ts CB_JOB_START_MS)
+      - name: The job's start
+        run: echo "CB_JOB_START_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
         with:
@@ -1129,6 +1154,11 @@ jobs:
           CB_SETS_PASS: research/out/chartbest/sets/sets-pass.json
           CB_NSUMMARY: research/out/chartbest/sets/n-summary.json
           CB_HAND_RESULTS: ${{ env.HAND }}
+          # 9: an item's owner's way not started within 200 minutes of the job's start is 「出せなかった」 (the emails run
+          # first and are never left out). The rest of the 340: an account started just before (about 11 minutes each on
+          # main made-up N 101), the sentences and the ledger, the Python (21 minutes there) and a margin; step 3 sizes it
+          # again with 20 (c)'s steps and the real timings (SQ-TF3)
+          CB_HOLD_BUDGET_MIN: "200"
         run: >
           deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
           --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
@@ -1140,7 +1170,7 @@ jobs:
           mkdir -p $OUT/py
           s=0
           /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts $OUT/ts --out $OUT/py \
-            --full --n-summary research/out/chartbest/sets/n-summary.json --stages 0,2 --choice-ledger research/ledger/chartbest-choice.json > $OUT/py/stdout.txt 2>&1 || s=$?
+            --full --n-summary research/out/chartbest/sets/n-summary.json --stages 0,2 --choice-ledger research/ledger/chartbest-choice.json --hold > $OUT/py/stdout.txt 2>&1 || s=$?
           grep -E '^(PYTHON CHECK|compared |DIFFER |ERROR)' $OUT/py/stdout.txt || true
           exit $s
       - name: The stage's numbers and ledger file (every check and the Python passed)
@@ -1148,11 +1178,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chartbest-real-stage2
+          # print.txt carries 9 の 1〜8 (hold.<src>.<acct>.*); 13 ②'s trades of the suspicious rows are their own files
           path: |
             ${{ env.OUT }}/print.txt
             ${{ env.OUT }}/checks.json
             ${{ env.OUT }}/ledger/chartbest-stage2.json
             ${{ env.OUT }}/ledger/chartbest-stage2.json.sha256
+            ${{ env.OUT }}/hold/*/suspect-trades.csv
           if-no-files-found: error
       - name: On a failure, the checks only
         if: failure()

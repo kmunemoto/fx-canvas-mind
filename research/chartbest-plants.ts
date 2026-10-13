@@ -50,6 +50,8 @@ export const PLANTS: readonly PlantDef[] = [
   { name: "stage1FollowH2", hook: "run", expect: ["lookahead.h1Only"], status: "trial", note: "段1で後半の取引を追う → h1Only (stage 1's follow checks also sample the second half's counted signals)" },
   { name: "printExtraItem", hook: "print", expect: ["print.items"], status: "trial", note: "出してよい項目に無い数を出す → 出してよい項目" },
   { name: "printToLog", hook: "print", expect: ["print.items"], status: "trial", note: "成績を print.txt 以外に出す → 出してよい項目" },
+  { name: "printHoldExtra", hook: "print", expect: ["print.items"], status: "trial", note: "オーナーの持ち方の、出してよい項目に無い数を出す → 出してよい項目 (gates-05: hold.<src>.<acct>.* is listed key by key; the plant prints hold.ultra5.full.main.E)" },
+  { name: "printTextExtra", hook: "print", expect: ["print.items"], status: "trial", note: "決めていない文を出す → 出してよい項目 (gates-05: text.* is listed id by id; the plant prints text.s2.note)" },
   { name: "badSha", hook: "gate", expect: ["data.candidatesSha"], status: "trial", note: "sha256 を間違える → 何も読まずに止まる (exit 2)" },
   // deferred (SQ-12, SQ-13): their checks need items or data step 2 does not build
   { name: "c4ByLatePoint", hook: "run", expect: ["set.Q"], status: "deferred", note: "C4 を Δ_late の点で見る → Q (no in-scope item gets a spurious positive Δ under Q: SQ-12)" },

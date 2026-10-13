@@ -180,9 +180,18 @@ export const SPEC = {
   reproOnMadeUp: "rehearse",
   // SQ-08: the owner-hold sentence conventions
   holdTextVersion: 1,
-  // SQ-H1: 置けた割合 = the sum of the four parts §8.102 lists after 「うち」 (entered, placed but not filled, cancelled
-  // by a call, cancelled by a loss-cut); "entered": the entered share alone (what §8.111's hand-filled 7.27% was)
-  holdPlacedShare: "sum" as "sum" | "entered",
+  // SQ-RC1 (settled by the step-2b review, finding hold-placed-share): 置けた割合 = the entered share alone (入った件数 ÷
+  // メール), as §8.111 defined and printed it (「前半・後半の置けた割合（入った件数 ÷ その半分のメール）」「置けた割合 MACD
+  // 7.27%（入った 7.27%・…）」): 9「§8.111 の決まりのまま」「違う所は §8.111 が先」「今のメール2つの数字は、§8.111 の数字を再現
+  // して並べる（20 の (c)）」. "sum": the sum of the four parts §8.102 lists after 「うち」 (SQ-H1 3's first reading)
+  holdPlacedShare: "entered" as "sum" | "entered",
+  // SQ-PF1 (settled by the step-2b review, findings indep-02 / hold-capped-call-time): the 日時 written for a call whose
+  // U stayed over 0 after the notice's deposit (①「入金で解消し切れない追証が __ 回あった（日時・不足額・どう終わったか）」)
+  // is the call's own time, the NY close τ: §8.102 identifies a call by τ (楽天の決まり「取引日の終わりの中値で…100%を
+  // 下回ると出る。判定の時刻は…21:55／20:55 UTC」; 出すもの「追証ごとの日時・不足額 D・どう終わったか」; its detail「追証（τ・
+  // 期限・D・終わり方とその時刻・…・知らせの入金の後の U）」), as research/ownerhold's call records do. "notice": τ + 35 min
+  // (楽天の知らせの時刻), the alternative
+  holdCappedCallTime: "tau" as "tau" | "notice",
   // SQ-09: a made-up minute: one latent step, O = the previous written mid, C = this one
   minuteBar: "oneStepOC",
   // SQ-10: light runs for the sets (5-minute files only, no look-ahead, no owner's way)
@@ -291,3 +300,61 @@ export const MEASURE_NAMES: Record<MeasureId, string> = { ultra5: "ULTRA 5分足
 // the order sources are listed in (dumps, sentences): the items in table order, then ULTRA, then MACD
 export const srcOrder = (src: string): number =>
   src === "ultra5" ? 1000 : src === "macdx5" ? 1001 : orderOf(src);
+
+// ---- 9 の 1〜8: the owner's way's print.txt lines (hold-1to8-not-output) ------------------------------
+//
+// 9「必ず並べるもの（§8.111 の「出すもの」の 1〜8。…§8.111 の文の中身をすべて出す。違う所は §8.111 が先）」「1〜8 は、
+// 前半・後半に分けても並べる」「1〜8 は、この口座でも出す」; §8.111 出すもの「全体・前半・後半。5ペアまとめてと、ペアごと」.
+// Every value is one research/ownerhold.ts's analyse() and its heldSummary already make (nothing new is computed):
+// hold.<src>.<acct>.<key> for each key below (research/chartbest-hold.ts holdLines writes exactly these, a missing value
+// as "-"; chartbest-checks.ts PRINT_ITEMS allows exactly these; the check hold.<src>.<acct>.printed compares them).
+const QS = ["median", "p90", "p99", "max"] as const;
+const WITHIN = ["1d", "1w", "4w", "end"] as const;
+const maeKeys = (pre: string): string[] => ["tp", "notTp"].flatMap((k) => [`${pre}mae.${k}.n`, ...QS.map((q) => `${pre}mae.${k}.${q}`), ...QS.map((q) => `${pre}maeYen.${k}.${q}`)]);
+const withinKeys = (pre: string): string[] => WITHIN.flatMap((h) => [`${pre}tpWithin.${h}.share`, `${pre}tpWithin.${h}.tp`, `${pre}tpWithin.${h}.of`]);
+export const HOLD_PRINT = {
+  // the account rows: §8.102's four rows of ①② and the opposite-only account (8)
+  rows: ["main", "mainSwap", "worst", "worstSwap", "opposite"],
+  // the rows heldSummary counts (§8.111 2・4: END でまだ持っている取引の含み損益、持った期間)
+  heldRows: ["main", "mainSwap"],
+  account: ["signals", "estar", "third.main", "third.L", "third.plain", "third.n", "v1", "v2", "v3", "suspicious"],
+  accountFull: ["M1", "M2", "M1swap", "M2swap"],
+  accountH2: ["Mh", "MhSwap"],
+  // 1 (win rate, its endings, pips and yen per trade), 2 (endings, held at END), 5 (loss-cuts, calls, deposits, the
+  // 500,000 / 1,000,000 yen dates), 6 (placed and the refused / cancelled by reason), 7 (A, B, S), 3 (MAE, the drawdown),
+  // 4 (TP within 1 day / 1 week / 4 weeks / by END)
+  row: [
+    "win", "tp", "lc", "deadline", "held", "pips", "yen", "A", "B", "S", "lcs", "deadlines", "capped", "calls", "callEnds", "deposits", "depositTotal",
+    "in", "lcAt", "deadlineAt", "cappedAt", "reached50", "reached100", "placed", "notPlaced", "unfilled", "cancelCall", "cancelLc", "maxDrawdown",
+    ...maeKeys(""), ...withinKeys(""),
+  ],
+  // the full account's rows by half (the signal's T before SPLIT or not) and every account's rows by pair
+  half: ["n", "win", "tp", "lc", "deadline", "held", "pips", "yen", "placed"],
+  pair: ["n", "win", "tp", "lc", "deadline", "held", "pips", "yen"],
+  // heldSummary (main, mainSwap): the trades held at END, their price P/L in yen (swap apart), how long they were held,
+  // how long the take profits took
+  held: ["heldEnd.n", "heldEnd.yen", "heldEnd.worstYen", "heldEnd.swapYen", "heldEnd.inLoss", "heldDays.median", "heldDays.p90", "heldDays.max", "tpHours.n", "tpHours.median", "tpHours.p90", "tpHours.max"],
+  // the per-trade view (every email apart; main = the signal's direction, opposite = reversed): whole and halves,
+  // and by pair
+  emailParts: ["all", "first", "second"],
+  email: ["emails", "filled", "unfilled", "win", "tp", "held", "pips", "yen", ...maeKeys(""), ...withinKeys("")],
+  emailPair: ["win", "tp", "held", "pips", "yen"],
+} as const;
+// the five pairs as print keys (USD_JPY …)
+export const pairKeyOf = (pair: string): string => pair.replace("/", "_");
+// every key one account prints, relative to hold.<src>.<acct>.
+export const holdPrintKeys = (account: "full" | "h2"): string[] => {
+  const P = HOLD_PRINT;
+  const out: string[] = [...P.account, ...(account === "full" ? P.accountFull : P.accountH2)];
+  for (const r of P.rows) {
+    out.push(...P.row.map((k) => `${r}.${k}`));
+    if (account === "full") for (const h of ["H1", "H2"]) out.push(...P.half.map((k) => `${r}.${h}.${k}`));
+    for (const pair of PAIRS) out.push(...P.pair.map((k) => `${r}.${pairKeyOf(pair)}.${k}`));
+  }
+  for (const r of P.heldRows) out.push(...P.held.map((k) => `${r}.${k}`));
+  for (const side of ["main", "opposite"]) {
+    for (const part of P.emailParts) out.push(...P.email.map((k) => `email.${side}.${part}.${k}`));
+    for (const pair of PAIRS) out.push(...P.emailPair.map((k) => `email.${side}.${pairKeyOf(pair)}.${k}`));
+  }
+  return out;
+};
