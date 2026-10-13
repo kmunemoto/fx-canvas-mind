@@ -8,7 +8,9 @@ chartbest-check-handjson.py — every hand example of research/chartbest/hand.js
 Written 2026-10-12 by the step-2b Python author from §8.113 (19, 20 (g) and the sections each case names), from
 hand.json version 2 (its 'conventions' and 'fields') and from the Python modules' interfaces, without reading any TS
 (20 (d); spec questions SQ-I1, SQ-I2; py-brief 1.1). It replaces the earlier version of this file, whose layout
-values had been copied from the TS runner (SQ-I2).
+values had been copied from the TS runner (SQ-I2). The holdText / holdRange runners were added by the step-2b Python
+fixer (PI-2); the holdCalls / holdLate runners and the warm-up of hole / half read from conventions (PR-4, PR-5) by the
+step-2b Python review fixer, for hand.json versions 3 and 4 — neither had read any TS.
 
 The layout (SQ-I2). A case gives its inputs and its answer; whatever else lays it out (bar times, spreads, filler bars,
 periods, the made-up rows of the sentences) is read from hand.json's 'conventions', never carried here. For a case
@@ -53,9 +55,6 @@ CNT = _mod('count')
 TX = _mod('text')
 
 TOL = 1e-9                     # plan 4.4: reals within 1e-9 (a case's own 'tol' where it gives one: t.q)
-# 6 ①「温めが足りない」 belongs to an item's warm-up (5「温め: 項目の表の温めがそろうまで、合図は出さない」); the
-# signals of the cases hole and half belong to no item, so none is applied (a spec question asks hand.json to say so)
-NO_ITEM_WARMUP = 0
 DIRS = {'BUY': S.BUY, 'SELL': S.SELL}
 KINDS = {'tp': ST.KIND_TP, 'sl': ST.KIND_SL, 'amb': ST.KIND_AMB, 'open': ST.KIND_OPEN}
 KIND_NAMES = {v: k for k, v in KINDS.items()}
@@ -305,6 +304,10 @@ def run_events(case, conv):
 
 
 # ---------------------------------------------------------------- 6 ③ holes, 1 / 6 ④ halves
+# 6 ①「T が期間（1）の外、または温めが足りない」: a signal on bar i is past the warm-up when i >= warmup. The cases' signals
+# belong to no item, and hand.json version 3 writes their warm-up in conventions.hole / .half (warmup 0, with 19「例を
+# 小さくするため、本数や温めを縮めたものは、そう書いた。」), so no runner carries it (PR-5; SQ-PB1 resolved; the earlier
+# constant NO_ITEM_WARMUP is gone). Changed 2026-10-13 by the step-2b Python review fixer (who has not read any TS).
 def run_hole(case, conv):
     L = Layout(conv, case)
     start, end = ms(case['start']), ms(case['end'])
@@ -317,6 +320,7 @@ def run_hole(case, conv):
         opens = [t for t in range(start, end, D.STEP) if t not in missing.get(pair, set())]
         bars.append(mid_bars(L, pair, opens, [flat(mids[pair])] * len(opens)))
     holes, _ = S.holes_of(bars, period)
+    warmup = L.get('warmup')                # conventions.hole (PR-5, SQ-PB1): 6 ① "温め" read from the layout
     for pair, want in case['expect']['holes'].items():
         got = [[a, b] for a, b in holes[D.PAIRS.index(pair)]]
         want = [[ms(a), ms(b)] for a, b in want]
@@ -328,13 +332,14 @@ def run_hole(case, conv):
         need(i is not None, f'no USD/JPY bar opens at {t_open}')
         got = S.in_hole(holes[pi], int(pb.t[max(0, i - S.HOLE_LOOKBACK)]), pb.T(i))
         need(got == want, f'{t_open}: the window overlaps a hole {got}, expected {want}')
-        reason, _ = S.classify(pb, i, NO_ITEM_WARMUP, holes[pi], period)
+        reason, _ = S.classify(pb, i, warmup, holes[pi], period)
         need((reason == 'r3') == want, f'{t_open}: reason {reason}, expected {"r3" if want else "not r3"}')
 
 
 def run_half(case, conv):
     L = Layout(conv, case)
     period, pair, m = period_of(L), L.get('pair'), L.get('flatMid')
+    warmup = L.get('warmup')                # conventions.half (PR-5, SQ-PB1): 6 ① "温め" read from the layout
     a, b = ms(case['from']), ms(case['to'])
     opens = list(range(a, b + D.STEP, D.STEP))                     # both ends included
     pb = mid_bars(L, pair, opens, [flat(m)] * len(opens))
@@ -343,7 +348,7 @@ def run_half(case, conv):
     for t_open, reason, half in case['expect']:
         i = pb.index_of.get(ms(t_open))
         need(i is not None, f'no bar opens at {t_open}')
-        got = list(S.classify(pb, i, NO_ITEM_WARMUP, holes[0], period))
+        got = list(S.classify(pb, i, warmup, holes[0], period))
         need(got == [reason, half], f'{t_open}: {got}, expected {[reason, half]}')
 
 
@@ -859,6 +864,68 @@ def run_hold_range(case, conv):
     same_text(HT.hold_range_text([hold_facts(a) for a in case['facts']]), case['expect']['text'])
 
 
+# ---------------------------------------------------------------- holdCalls, holdLate (python-issues PR-4)
+# Added 2026-10-13 by the step-2b Python review fixer, who has not read any TS. Both run the case through the same
+# functions a run uses (research/chartbest-check-hold.py): holdCalls through call_facts / calls_of (an account row's
+# call records → the facts ① writes), holdLate through hold_rows / late_mailed (the owner-hold list of the full account).
+def run_hold_calls(case, conv):
+    """fields.holdCalls: one account row's call records as research/ownerhold records them → expect.capped (the calls ①
+    lists as 「上限で入金し切れなかった追証」, in the records' order: [the time written, U, the ending]) and
+    expect.deadlineAt (the close-outs of the calls ended by the deadline, as written). §8.102 ① and 書く文 ①「入金で解消
+    し切れない追証が __ 回あった（日時・不足額・どう終わったか）」; SQ-PF1 (the time written is the call's NY close τ)."""
+    HD = _mod('hold')
+    OH = HD.ownerhold()
+    calls = []
+    for r in case['calls']:
+        c = OH.Call()
+        c.tau = ms(r['tau'])
+        c.end = r['end']
+        c.endAt = None if r['endAt'] is None else ms(r['endAt'])
+        c.uAfter = None if r['uAfterDeposit'] is None else float(r['uAfterDeposit'])
+        calls.append(c)
+
+    class Row:
+        pass
+    row = Row()
+    row.calls = calls
+    f = HD.call_facts(row, OH)
+    got = [[HT.when(c['tau']), c['short'], c['end']] for c in f['cappedCalls']]
+    want = case['expect']['capped']
+    need(len(got) == len(want) and all(g[0] == w[0] and close(g[1], float(w[1])) and g[2] == w[2]
+                                       for g, w in zip(got, want)), f'capped {got}, expected {want}')
+    need(f['capped'] == len(want), f"capped count {f['capped']}, expected {len(want)}")
+    got_d = [HT.when(t) for t in f['deadlineAt']]
+    need(got_d == case['expect']['deadlineAt'], f"deadlineAt {got_d}, expected {case['expect']['deadlineAt']}")
+    need(f['deadlines'] == len(case['expect']['deadlineAt']),
+         f"deadlines {f['deadlines']}, expected {len(case['expect']['deadlineAt'])}")
+
+
+def run_hold_late(case, conv):
+    """fields.holdLate / conventions.holdLate: per subcase, the pair's flat bars at `opens` only, one late ULTRA signal
+    of direction dir on bar i (T = its open + 5 min) and no on-time signal, through the owner-hold list of the full
+    account of the period (hold_rows): listed or not, and when listed late 1, T, base and P = base + 2 min (§8.111 2・3,
+    its 実データを読む前の直し 2; 9)."""
+    HD = _mod('hold')
+    for sub in case['subcases']:
+        L = Layout(conv, case, sub)
+        period, pair, m, d = period_of(L), L.get('pair'), L.get('flatMid'), L.get('dir')
+        need(d in DIRS, f"{sub['name']}: dir {d}")
+        opens = [ms(x) for x in L.get('opens')]
+        pb = mid_bars(L, pair, opens, [flat(m)] * len(opens))
+        i = int(L.get('i'))
+        need(0 <= i < pb.n, f"{sub['name']}: no bar {i}")
+        rows = HD.hold_rows('ultra5', [], {pair: [(i, DIRS[d])]}, [pb], period, 'full')
+        exp = sub['expect']
+        need(len(rows) == (1 if exp['listed'] else 0),
+             f"{sub['name']}: {len(rows)} rows in the list, expected {'1' if exp['listed'] else 'none'}")
+        if exp['listed']:
+            r = rows[0]
+            P = r['base'] + HD.DELAY_MIN * D.MIN
+            got = [r['late'], r['T'], r['base'], P, r['side'], r['open']]
+            want = [1, ms(exp['T']), ms(exp['base']), ms(exp['P']), d, opens[i]]
+            need(got == want, f"{sub['name']}: late, T, base, P, side, open {got}, expected {want}")
+
+
 RUNNERS = {
     'c1': run_c1, 'k1': run_k1, 'dst': run_dst, 'round': run_round, 'points': run_points, 'follow': run_follow,
     'mirror': run_mirror, 'sent': run_sent, 'events': run_events, 'hole': run_hole, 'half': run_half,
@@ -866,7 +933,7 @@ RUNNERS = {
     'tq': run_tq, 'lbcount': run_lbcount, 'select': run_select, 'holm': run_holm, 'groups': run_groups,
     'floor': run_floor, 'suspect': run_suspect, 'textNumbers': run_text_numbers,
     'winDenominator': run_win_denominator, 'text': run_text, 'dab': run_dab,
-    'holdText': run_hold_text, 'holdRange': run_hold_range,
+    'holdText': run_hold_text, 'holdRange': run_hold_range, 'holdCalls': run_hold_calls, 'holdLate': run_hold_late,
 }
 
 
