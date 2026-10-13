@@ -820,6 +820,45 @@ def run_dab(case, conv):
     check_text(stage2_texts(st2, rows, mrows, m1, chosen), {'s2.final': {'contains': exp['contains']}})
 
 
+# ---------------------------------------------------------------- holdText, holdRange (21 オーナーの持ち方の文; §8.102 書く文)
+# Added 2026-10-13 by the step-2b Python fixer (python-issues.md PI-2), who has not read the TS: each case's facts
+# (fields.holdText / fields.holdRange; times as ISO strings) go through the Python's own sentence builder
+# (research/chartbest-check-holdtext.py, written from 21, §8.102 and SQ-08 / SQ-H1), and the sentence must equal
+# expect.text character for character. The case's verdict must also be the one the facts give (§8.102 ①②③, 9).
+HT = _mod('holdtext')
+
+
+def hold_facts(f):
+    """A copy of one account's facts with its times (lcAt, deadlineAt, cappedCalls[].tau) as integer ms."""
+    g = json.loads(json.dumps(f))
+    for r in (g.get('rows') or {}).values():
+        r['lcAt'] = [ms(x) for x in r.get('lcAt') or []]
+        r['deadlineAt'] = [ms(x) for x in r.get('deadlineAt') or []]
+        for c in r.get('cappedCalls') or []:
+            c['tau'] = ms(c['tau'])
+    return g
+
+
+def same_text(got, want):
+    if got == want:
+        return
+    k = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+    need(False, f'text differs from expect.text at character {k} (expected 「{want[max(0, k - 20):k + 30]}」, '
+                f'got 「{got[max(0, k - 20):k + 30]}」)')
+
+
+def run_hold_text(case, conv):
+    f = hold_facts(case['facts'])
+    if not f.get('timedOut'):
+        v = HT.verdict_of(f)
+        need(v == f['verdict'], f"the facts give the verdict {v}, the case says {f['verdict']}")
+    same_text(HT.hold_text(f), case['expect']['text'])
+
+
+def run_hold_range(case, conv):
+    same_text(HT.hold_range_text([hold_facts(a) for a in case['facts']]), case['expect']['text'])
+
+
 RUNNERS = {
     'c1': run_c1, 'k1': run_k1, 'dst': run_dst, 'round': run_round, 'points': run_points, 'follow': run_follow,
     'mirror': run_mirror, 'sent': run_sent, 'events': run_events, 'hole': run_hole, 'half': run_half,
@@ -827,6 +866,7 @@ RUNNERS = {
     'tq': run_tq, 'lbcount': run_lbcount, 'select': run_select, 'holm': run_holm, 'groups': run_groups,
     'floor': run_floor, 'suspect': run_suspect, 'textNumbers': run_text_numbers,
     'winDenominator': run_win_denominator, 'text': run_text, 'dab': run_dab,
+    'holdText': run_hold_text, 'holdRange': run_hold_range,
 }
 
 
