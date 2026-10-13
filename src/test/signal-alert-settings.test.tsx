@@ -402,9 +402,13 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD の山・谷");
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("高い位置で下に抜けたものを売り、低い位置で上に抜けたものを買いとするサインです");
-    // #339: each pair's own level
-    expect(intro).toContain("高い・低いは、銘柄ごとに、その銘柄の1時間のふだんの動きの 0.8倍で決めます（売りは MACD がその値以上、買いはその値のマイナス以下）");
+    // #353 (v28): the blue line at 90% of the newest 120 bars' top or bottom, no cross (#339's level, 0.8 times the
+    // usual move, and #324's 0.085 are gone)
+    expect(intro).toContain(
+      "1時間足の MACD(12・26・9)の青い線が、新しい120本（チャートを開いた時に見える範囲）で一番高かった所の90%以上（0の線から測って）まで上がったら売り、一番低かった所の90%以上まで下がったら買いとするサインです",
+    );
+    expect(intro).toContain("一つの山・谷では、届いた時に1通だけ送ります");
+    for (const no of ["クロス", "ふだんの動き", "0.8倍", "高い位置で下に抜けた"]) expect(intro, no).not.toContain(no);
     expect(intro).not.toContain("0.085");
     expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルと金（XAU/USD）の1時間足だけです");
     expect(intro).toContain("勝率と1回あたりの損益は、まだ測っていません");
@@ -499,25 +503,32 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain("週末は、判定しない時間を広めに取っています。金曜 21:00 UTC");
     expect(notes).toContain("週末の前の最後の足は判定されません（米国の夏時間は金曜 20:00〜21:00 UTC の足、冬時間は金曜 20:00〜22:00 UTC の2本）");
     expect(notes).toContain("金は、毎日の休み（1時間）の足と、日曜に市場が開く前の足（日曜 22:00 UTC 以後に確定するもの）にも、Twelve Data がほとんど動かない足を返すので、それらの足は判定します");
-    expect(notes).toContain("金曜の引け後の1本と、日曜の市場が開く前の数時間の足（日曜 22:00 UTC より前に確定するもの）は、判定はしませんが、ふだんの動きの平均には入ります");
-    expect(notes).toContain("ふだんの動きは、ほとんど動かない足の分だけ小さく計られます");
+    // #353 (v28): the quiet bars count in MACD and in the newest 120 bars (no usual move any more)
+    expect(notes).toContain("金曜の引け後の1本と、日曜の市場が開く前の数時間の足（日曜 22:00 UTC より前に確定するもの）は、判定はしませんが、MACD の計算と、新しい120本には入ります");
     expect(notes).toContain("これは、保存された足（2026年8月16日〜10月12日、米国の夏時間）で見たことです。冬時間（11月1日から）の足と、祝日の足の動きは、まだ見ていません");
     expect(notes).toContain("毎日の休みの頭に確定する足（米国の夏時間は 21:00 UTC、日本時間 6:00）のメールは、休みの間に届きます。休みの間に注文が通るかは、確かめていません");
-    expect(notes).toContain("金 約6.2ドル");
     expect(notes).toContain("ほかのペアは選べません");
-    expect(notes).toContain("MACD と水準は丸めない値で比べます");
-    expect(notes).toContain("売りは、クロスした足の MACD が、その銘柄の1時間のふだんの動きの 0.8倍以上、買いはその値のマイナス以下の時だけです");
-    expect(notes).toContain("ふだんの動きは、判定する足で終わる600本の、終値から次の終値までの値動きの幅（上げ下げを問わない大きさ）の平均で、足ごとに計算し直します");
-    expect(notes).toContain("0.8倍は、オーナーが豪ドル/ドルのチャートで示した高さ・低さ（ふだんの動きの約1.2倍と約0.9倍）が入る数字として、オーナーが選んだもの");
-    expect(notes).toContain("ドル/円では、前に決めた 0.085（約0.75倍）より少し高くなります");
+    // #353 (v28): the rule, the one email to a peak or valley, the band's edge cases, the zoom, unrounded
+    expect(notes).toContain(
+      "売りは、確定した足で、青い線（MACD）が、その足までの新しい120本の中で一番高かった値の90%以上に届いた時、買いは、一番低かった値の90%以上に届いた時です（どちらも0の線から測ります。一番高かった値が 0.200 なら、0.180 以上に届いた時に売り）",
+    );
+    expect(notes).toContain("120本は、チャートを開いた時に見える足の数です。MACD は、判定する足で終わる600本の足から計算します。オレンジの線（シグナル）とのクロスは待ちません");
+    expect(notes).toContain("一つの山・谷では、届いた足で1通だけ送ります。青い線が90%の所より内側に戻るまでは、次は送りません。戻ってからまた届けば、もう1通送ります（90%の所のすぐそばで出入りを繰り返すと、そのたびに送ります）");
+    expect(notes).toContain("届いた足を判定できなかった時（読み込みの失敗など）は、次の足では「一つ前の足でもう届いていた」ことになるので、そのメールは送りません（あとから送ることはしません）");
+    expect(notes).toContain("新しい120本の青い線がずっと0以下の時は、上の90%の所が無いので、売りは出ません（買いも同じで、ずっと0以上の時は出ません）");
+    expect(notes).toContain("一番高かった足（買いは一番低かった足）が120本の外に出ると、90%の所が0の線に近づくので、青い線が動かなくても届くことがあります（チャートの MACD の枠が縮むのと同じです）");
+    expect(notes).toContain("チャートを拡大・縮小すると MACD の枠の高さは変わりますが、メールはいつも新しい120本で決めます");
+    expect(notes).toContain("チャートの MACD は、チャートが読んだ足から計算するので、メールの600本で出した値とわずかに違うことがあります");
+    expect(notes).toContain("青い線と90%の所は、丸めない値で比べます");
     expect(notes).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません");
     expect(notes).toContain("5分足の決まりの測った数字は、この決まりには当てはまりません");
-    expect(notes).toContain("±0.085 の決まりは、測っていません");
+    expect(notes).toContain("その後に送っていたクロスの決まり〈±0.085 と、ペアごとの水準〉も、測っていません");
     expect(notes).toContain("同じ時刻に2通届くことがあります");
     expect(notes).toContain("1時間足で実際に何秒で届くかは、まだ確かめていません");
-    // the 5-minute rule's figures are not given as this rule's
+    // the 5-minute rule's figures are not given as this rule's; #353: nor is anything of the cross rule of v26 and v27
     expect(notes).not.toContain("72.3%");
     expect(notes).not.toContain("1日100通");
+    for (const no of ["ふだんの動き", "0.8倍", "約6.2ドル", "MACD と水準"]) expect(notes, no).not.toContain(no);
   });
 
   it("the all-symbols row follows the 1-hour chart of every pair offered under the rule (the owner's five and gold), at once", async () => {
@@ -629,15 +640,31 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD peak/valley");
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("a SELL where it crosses below with MACD at or above 0.8 times the instrument's usual hourly move, a BUY where it crosses above with MACD at or below minus that, each on its own scale");
+    // #353 (v28)
+    expect(intro).toContain(
+      "BUY and SELL signals from the 1-hour chart's MACD(12, 26, 9) blue line: a SELL when it comes up to 90% or more of the highest it reached over the newest 120 bars (what the chart shows when it is opened), measured from the zero line, and a BUY when it comes down to 90% or more of the lowest.",
+    );
+    expect(intro).toContain("One email per peak or valley, when the line gets there.");
+    for (const no of ["cross", "usual", "0.8 times"]) expect(intro, no).not.toContain(no);
     expect(intro).not.toContain("0.085");
     expect(intro).toContain("On the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only.");
     expect(intro).toContain("have not been measured");
     expect(intro).toContain("The rule has no stop or target of its own, so the email carries ULTRA's stop and targets (13 pips and 4, 10 and 16 pips on a currency pair; $13 and $4, $10 and $16 on gold)");
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
-    expect(notes).toContain("The usual move is the mean size of the move from one close to the next, up or down, over the 600 bars ending at the bar judged, worked out again at every bar");
-    expect(notes).toContain("the ±0.085 rule mailed after it was not measured");
+    // #353 (v28): the rule, the one email to a peak or valley, the band's edge cases, the zoom, unrounded
+    expect(notes).toContain(
+      "A SELL is sent at a closed bar where the blue line (MACD) has come to 90% or more of the highest it reached over the newest 120 bars up to that bar, a BUY where it has come to 90% or more of the lowest (both measured from the zero line: with a highest of 0.200, a SELL from 0.180).",
+    );
+    expect(notes).toContain("The 120 bars are as many as the chart shows when it is opened. MACD is worked out on the 600 bars ending at the bar judged. No cross with the orange line (the signal) is waited for.");
+    expect(notes).toContain("One email per peak or valley, at the bar that gets there: no next one until the blue line has gone back inside the 90% mark; if it then comes back to the mark, another is sent (going in and out right at the mark sends one each time).");
+    expect(notes).toContain("If the bar that got there could not be judged (a failed read, say), at the next bar the line counts as having been there already, and that email is not sent (nothing is sent late).");
+    expect(notes).toContain("While the blue line stays at or below zero over the newest 120 bars there is no 90% mark above, and no SELL (likewise no BUY while it stays at or above zero).");
+    expect(notes).toContain("When the bar of the highest (for a BUY, the lowest) leaves the 120, the mark moves toward the zero line, so the line can reach it without moving (as the chart's MACD pane shrinks).");
+    expect(notes).toContain("Zooming the chart in or out changes the height of its MACD pane, but the email always goes by the newest 120 bars.");
+    expect(notes).toContain("The chart works MACD out from the bars it has read, so it can differ a little from the email's, worked out on 600 bars.");
+    expect(notes).toContain("the cross rules mailed after it, ±0.085 and each pair's own level, were not measured either");
     expect(notes).toContain("This rule's win rate and its profit or loss a trade have not been measured");
+    for (const no of ["usual move", "0.8 times", "about $6.2", "MACD and the level"]) expect(notes, no).not.toContain(no);
     expect(notes).toContain("The other pairs are not offered.");
     expect(notes).toContain("Gold's bars are Twelve Data's (GMO Coin does not carry gold;");
     expect(notes).toContain("A bar more than half an hour after its close is not sent.");
@@ -653,16 +680,16 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain("The chart shows MACD rounded (to 3 decimals on the yen pairs, to 2 on gold)");
     expect(notes).toContain("a bar that closes at or after Friday 21:00 UTC (Saturday 6:00 Japan time) and before Sunday 22:00 UTC (Monday 7:00 Japan time) is not judged, so the last bar before the weekend is not judged either (in US summer time the bar 20:00–21:00 UTC on Friday, in winter time the two bars 20:00–22:00 UTC)");
     expect(notes).toContain("On gold, Twelve Data returns a bar that barely moves for the daily break (one hour) and for the hour before the market opens on Sunday (a bar that closes from 22:00 UTC on Sunday), and those bars are judged");
-    expect(notes).toContain("are not judged, but they count in the usual move");
-    expect(notes).toContain("so it comes out smaller than it would without them");
+    // #353 (v28): the quiet bars count in MACD and in the newest 120 bars (no usual move any more)
+    expect(notes).toContain("are not judged, but they count in MACD and in the newest 120 bars.");
     expect(notes).toContain("The time over the weekend when nothing is judged is drawn wide: a bar that closes at or after Friday 21:00 UTC");
     expect(notes).toContain("the stored bars of 16 August to 12 October 2026 (US summer time) show");
     expect(notes).toContain("winter-time bars (from 1 November) and the bars of holidays have not been looked at yet");
     expect(notes).toContain("(21:00 UTC, 6:00 Japan time, in US summer time) arrives during the break; whether an order goes through during the break has not been checked");
-    expect(notes).toContain("about $6.2 on gold");
-    expect(notes).toContain("MACD and the level are compared unrounded.");
+    expect(notes).toContain("The blue line and the 90% mark are compared unrounded.");
     expect(notes).toContain("with both on, two emails can come at the same time");
     expect(notes).not.toContain("72.3%");
+    expect(notes).not.toContain("comes out smaller than it would without them");
   });
 });
 

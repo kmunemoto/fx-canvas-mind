@@ -15,9 +15,22 @@
 // #345 (docs §8.118): from v27 gold (XAU/USD) is on it as well, 2026-10-13,
 // the owner's 「金も1時間足でmacdのクロスでメールを送るようにして」: the same
 // rule, in dollars (gold's bars are Twelve Data's, not GMO's).
+// #353 (docs §8.119): from v28 the MACD email is no cross any more. The
+// owner, 2026-10-13: 「やっぱりめーるですが、macdの青い線が上か下の90%以上の所
+// までいったら売買のメールを送る様にしてください。意味わかりますか？」. Asked
+// three things, the owner chose: the 90% is of the way from the zero line to
+// the highest (lowest) the blue line reached over the newest 120 bars (what
+// the chart shows when it is opened), not the outer tenth of the pane from
+// its bottom to its top; the email goes as soon as a closed bar gets there
+// (no cross with the orange line waited for), one to a peak or valley, the
+// next not before the line has gone back inside the 90% mark; and it takes
+// the cross email's place (the five pairs and gold, 1 hour). The cross rule
+// below stays (decideScaledOnWindow): the morning check's SQL v3
+// (scripts/morning-check) mirrors it.
 //
-// THE RULE: at a closed 1-hour bar i, judged on the 600 closed bars ending at
-// i (the chart's history; MACD from those bars alone, as decideOnWindow does),
+// THE RULE (v25 to v27): at a closed 1-hour bar i, judged on the 600 closed
+// bars ending at i (the chart's history; MACD from those bars alone, as
+// decideOnWindow does),
 //   cross   the sides of h = MACD - signal as _shared/macd-extreme.ts sidesOf
 //           takes them (h == 0 keeps the side before); a cross when the sides
 //           at i-1 and i are both defined and differ: UP to +1, DOWN to -1
@@ -26,11 +39,39 @@
 // level is in price units, unrounded MACD against it (equality fires): a
 // number given (decideLevelOnWindow, v25), or from v26 k times the window's
 // mean |close[j] - close[j-1]| over its 599 steps (decideScaledOnWindow).
+//
+// THE ZONE RULE (v28 on; decideZoneOnWindow): at a closed 1-hour bar i, on
+// the same 600 closed bars ending at i,
+//   m       the MACD line (EMA 12 - EMA 26) of those 600 closes (macd(), the
+//           chart's arithmetic), unrounded
+//   top     H(i), the highest m over the ZONE_BARS (120) bars ending at i, i
+//           among them (i-119 to i); bottom L(i), the lowest
+//   bands   in the top band:    H(i) > 0 and m[i] >= ZONE_SHARE * H(i)
+//           in the bottom band: L(i) < 0 and m[i] <= ZONE_SHARE * L(i)
+//           (equality is in; the product held against as it comes, unrounded)
+//   SELL    in the top band at i and not at i-1
+//   BUY     in the bottom band at i and not at i-1
+// i-1 is read from the same m (the 600 bars ending at i), on the 120 bars
+// ending at it (i-120 to i-1). So a bar that is the highest of its 120 is in
+// the band; staying in it mails nothing more; going out and in again mails
+// again (no gap is kept between, the owner's 「90%より内側に戻るまで」 as it
+// stands). With no m of the 120 above zero there is no top band (no SELL;
+// the bottom likewise), and a top just above zero puts the band just above
+// zero. An old top leaving the 120 lowers it: the line can come into the band
+// without moving (as the chart's pane shrinks).
 
 import { macd } from "./macd.ts";
 import { sidesOf } from "./macd-extreme.ts";
 
 export const LEVEL_WINDOW = 600;
+// #353: the newest bars the band is taken on (the chart draws CHART_BARS,
+// live-chart/logic.ts, 120: what it shows when opened), and how far from the
+// zero line toward their top or bottom the band starts, in percent (a whole
+// number: the rule id says it) and as the share held against (90 / 100, the
+// double 0.9 is)
+export const ZONE_BARS = 120;
+export const ZONE_PCT = 90;
+export const ZONE_SHARE = ZONE_PCT / 100;
 
 export interface LevelDecision {
   dir: "UP" | "DOWN";
@@ -87,4 +128,71 @@ export const decideScaledOnWindow = (bars: ReadonlyArray<{ close: number }>, i: 
   const level = k * scale;
   const d = decideOnCloses(closes, level);
   return d ? { ...d, scale, level } : null;
+};
+
+// #353: where the MACD line stands at index k of `ms` (a window's MACD line)
+// against the ZONE_BARS values of it ending at k, k among them, price units
+export interface ZoneRead {
+  m: number;
+  // the highest and lowest of those, and ZONE_SHARE times each: where the
+  // top and bottom bands start
+  top: number;
+  bottom: number;
+  topMark: number;
+  bottomMark: number;
+  inTop: boolean;
+  inBottom: boolean;
+}
+// Null when there are fewer than ZONE_BARS values up to k, or one of them is
+// no number (a MACD line with a gap)
+export const zoneAt = (ms: ReadonlyArray<number | null>, k: number): ZoneRead | null => {
+  if (k + 1 < ZONE_BARS || k >= ms.length) return null;
+  let top = -Infinity;
+  let bottom = Infinity;
+  for (let j = k - ZONE_BARS + 1; j <= k; j++) {
+    const v = ms[j];
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    if (v > top) top = v;
+    if (v < bottom) bottom = v;
+  }
+  const m = ms[k] as number;
+  const topMark = ZONE_SHARE * top;
+  const bottomMark = ZONE_SHARE * bottom;
+  return { m, top, bottom, topMark, bottomMark, inTop: top > 0 && m >= topMark, inBottom: bottom < 0 && m <= bottomMark };
+};
+
+// #353: what made the zone rule fire: the side, the MACD line at the bar,
+// the highest and lowest of the ZONE_BARS ending at it, and the mark the
+// side's band starts at (ZONE_SHARE times the top for a SELL, the bottom for
+// a BUY), price units. Only an entry is a decision, so `fire` is always true.
+export interface ZoneDecision {
+  side: "BUY" | "SELL";
+  m: number;
+  top: number;
+  bottom: number;
+  mark: number;
+  fire: true;
+}
+// #353: the entry at index k of a MACD line: into the top band (a SELL) or
+// the bottom band (a BUY) at k, out of it at k-1 (on the ZONE_BARS ending at
+// k-1). The two cannot both be: the top band is above zero, the bottom below.
+// Null when there is no entry, or fewer than ZONE_BARS + 1 values up to k, or
+// one of them is no number.
+export const zoneEntryAt = (ms: ReadonlyArray<number | null>, k: number): ZoneDecision | null => {
+  const now = zoneAt(ms, k);
+  const before = zoneAt(ms, k - 1);
+  if (now === null || before === null) return null;
+  if (now.inTop && !before.inTop) return { side: "SELL", m: now.m, top: now.top, bottom: now.bottom, mark: now.topMark, fire: true };
+  if (now.inBottom && !before.inBottom) return { side: "BUY", m: now.m, top: now.top, bottom: now.bottom, mark: now.bottomMark, fire: true };
+  return null;
+};
+
+// #353 (docs §8.119): the decision at bar i of `bars` (at least LEVEL_WINDOW
+// of them ending at i), from those LEVEL_WINDOW bars alone: the MACD line of
+// their closes, and the entry at their newest. Null when there are fewer, or
+// a bar past the end, or no entry at i.
+export const decideZoneOnWindow = (bars: ReadonlyArray<{ close: number }>, i: number): ZoneDecision | null => {
+  if (i + 1 < LEVEL_WINDOW || i >= bars.length) return null;
+  const ms = macd(bars.slice(i - LEVEL_WINDOW + 1, i + 1).map((b) => b.close)).macd;
+  return zoneEntryAt(ms, LEVEL_WINDOW - 1);
 };

@@ -34,7 +34,8 @@
 // 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
 // 5-minute chart of GMO's pairs; #324: on their 1-hour chart from v25, the
 // owner's levels; #345: and on gold's 1-hour chart from v27, read from
-// Twelve Data). Not recorded or settled (signal_events is
+// Twelve Data; #353: from v28 the blue line at 90% of the newest 120 bars'
+// top or bottom, no cross). Not recorded or settled (signal_events is
 // the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
@@ -195,7 +196,18 @@ import type { Candle } from "../analyze/indicators.ts";
 // charts are), the level in dollars (MACDH_K times gold's usual hourly move),
 // the stop and targets ULTRA's. The five pairs' emails, the subscriptions and
 // the other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v27-2026-10-13T12:00:00Z";
+// v28 (#353): the MACD email ('macdx') is no cross any more (indicators.ts
+// macdhSignals, _shared/macd-level.ts decideZoneOnWindow; docs §8.119): a
+// SELL at the bar where MACD's blue line comes to 90% or more of the highest
+// it reached over the newest 120 bars (from the zero line), a BUY likewise
+// toward the lowest, once as it gets there (the owner: 「macdの青い線が上か下の
+// 90%以上の所までいったら売買のメールを送る様に」), in place of v26's cross;
+// recorded under a new rule id (MACDH_RULE_ID). The charts (the five pairs'
+// and gold's 1-hour), the bars, the window, the freshness, the read times,
+// the stop and targets, the subscriptions and the other rules are as they
+// were. Put out after GMO's day rolls (21:30-21:50 UTC), so a morning check
+// counts each day under one rule.
+const FUNCTION_VERSION = "signal-alerts-v28-2026-10-14T21:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -600,7 +612,8 @@ Deno.serve(async (req: Request) => {
       const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
         // #275: the MACD peak-and-valley rule beside Q-Trend's and ULTRA's. Its
         // failure must never cost the other two their emails. #324: from v25
-        // the 1-hour rule's (macdhSignals; nothing on another chart)
+        // the 1-hour rule's (macdhSignals; nothing on another chart); #353:
+        // from v28 the zone rule's (docs §8.119)
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         try {
           sigs.push(...macdhSignals(pair, interval, closed, nowMs));

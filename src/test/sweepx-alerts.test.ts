@@ -290,8 +290,8 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     // fresh judge (gold-minutes.ts judgesWhileShut)
     expect(fn).toContain('if (!judgesWhileShut(plan.minuteStart)) return { ...summary, skipped: "market_closed" };');
     expect(fn).toContain("sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },");
-    // (v24 brought the rule; #324's v25, #339's v26 and #345's v27 kept it as it was)
-    expect(fn).toContain("signal-alerts-v27");
+    // (v24 brought the rule; #324's v25, #339's v26, #345's v27 and #353's v28 kept it as it was)
+    expect(fn).toContain("signal-alerts-v28");
   });
   it("the job calls the run every minute through the http extension, not pg_net (which sends nothing while a request it sent is open)", () => {
     const sql = readFileSync("supabase/migrations/20261011120100_gold_ticks_every_minute.sql", "utf8");
