@@ -173,7 +173,8 @@ def stage0(bars, sigs, both, holes, period, blind, wide, n_summary=None):
         if src in D.MEASURES:
             rec['floor'] = None                           # 11: the floor is the items' (build-py.md)
         else:
-            ok = floor_of(*((rec[h]['counted'], rec[h]['weeks']) for h in ('H1', 'H2')))
+            # 11「床…: 前半と後半のどちらでも、数えた合図が300件以上で、合図のある週が30週以上」 (py-brief 1.6)
+            ok = floor_of((rec['H1']['counted'], rec['H1']['weeks']), (rec['H2']['counted'], rec['H2']['weeks']))
             rec['floor'] = ok
             floor_ok[src] = ok
         out[src] = rec
@@ -215,47 +216,61 @@ def overlap_groups(passing, by_src):
                 if j < arr.size and arr[j] <= s.T + OVERLAP_MS:
                     hit += 1
             share[f'{a}>{b}'] = (hit / len(lst)) if lst else None
-    return share, groups_of(passing, share)
+    # 11: the groups among the floor-passing items only (groups_of; py-brief 1.5)
+    groups = groups_of(passing, share)
+    return share, groups
+
+
+# 11: a share that is missing or None (A without first-half counted signals: 0 ÷ 0) cannot be 「0.5以上」, so that
+# direction joins nothing (the other direction still may). Never met for floor-passing items (each has 300 or more).
+SHARE_MISSING_JOINS = False
 
 
 def groups_of(passing, share):
-    """11: the overlap groups of the floor-passing items from the shares {'A>B': share or None}: joined when
-    max(A->B, B->A) >= 0.5 (links only between the items given; an item outside them is never passed through),
-    plus the forced joins (same candidate, ledger ⑨) among them; union-find. Group id = the smallest table order."""
-    parent = {x: x for x in passing}
+    """11「A→B と B→A の大きい方が0.5以上なら同じ組。つながりは、床を通った項目どうしの間だけで、順にたどってまとめる
+    （床を通らない項目を間にはさまない）。次も、いつも同じ組にする（床を通った項目にだけ当てる）: 同じ候補の項目（…）。
+    ledger の⑨のまとまり: (…)。」 passing: the floor-passing items; share: {'A>B': share(A→B) or None}. A union of the
+    floor-passing items only: pairs whose larger share reaches OVERLAP_JOIN, then the floor-passing members of each
+    candidate (D.SAME_CANDIDATE) and of each ledger ⑨ group (D.LEDGER_GROUPS). Returns {item: the smallest table order
+    among its group's members} for every item of passing (the dumps compare the groups as a partition).
+    (Rewritten from 11 by the step-2b Python author, py-brief 1.5.)"""
+    items = sorted(set(passing), key=D.ORDER.get)
+    root = {s: s for s in items}
 
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
+    def find(s):
+        while root[s] != s:
+            root[s] = root[root[s]]
+            s = root[s]
+        return s
 
-    def join(x, y):
-        rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[max(rx, ry, key=D.ORDER.get)] = min(rx, ry, key=D.ORDER.get)
+    def join(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if D.ORDER[rb] < D.ORDER[ra]:
+            ra, rb = rb, ra
+        root[rb] = ra                    # the root of a group is always its member first in the table's order
 
-    for a in passing:
-        for b in passing:
-            if D.ORDER[a] < D.ORDER[b]:
-                ab, ba = share.get(f'{a}>{b}'), share.get(f'{b}>{a}')
-                m = max(x for x in (ab, ba, 0.0) if x is not None)
-                if m >= OVERLAP_JOIN:
-                    join(a, b)
-    for grp in D.SAME_CANDIDATE + D.LEDGER_GROUPS:
-        mem = [x for x in grp if x in parent]
-        for x in mem[1:]:
-            join(mem[0], x)
-    groups = {}
-    for x in passing:
-        r = find(x)
-        members = [y for y in passing if find(y) == r]
-        groups[x] = min(D.ORDER[y] for y in members)
-    return groups
+    def reaches(a, b):
+        x = share.get(f'{a}>{b}')
+        if x is None:
+            return SHARE_MISSING_JOINS
+        return x >= OVERLAP_JOIN
+    for k, a in enumerate(items):
+        for b in items[k + 1:]:
+            if reaches(a, b) or reaches(b, a):
+                join(a, b)
+    for fixed in D.SAME_CANDIDATE + D.LEDGER_GROUPS:
+        members = [s for s in fixed if s in root]
+        for b in members[1:]:
+            join(members[0], b)
+    return {s: D.ORDER[find(s)] for s in items}
 
 
 def floor_of(h1, h2):
-    """11 床: counted >= 300 and signal weeks >= 30 in both halves; h1 / h2 = (counted, weeks)."""
+    """11「床（成績を見ずに決める）: 前半と後半のどちらでも、数えた合図が300件以上で、合図のある週が30週以上。」
+    h1, h2: (counted signals, weeks holding a counted signal) of the first and the second half.
+    (Rewritten from 11 by the step-2b Python author, py-brief 1.6.)"""
     return all(n >= D.FLOOR_N and w >= D.FLOOR_WEEKS for n, w in (h1, h2))
 
 

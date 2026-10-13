@@ -178,6 +178,9 @@ export const SPEC = {
   reproOnMadeUp: "rehearse",
   // SQ-08: the owner-hold sentence conventions
   holdTextVersion: 1,
+  // SQ-H1: 置けた割合 = the sum of the four parts §8.102 lists after 「うち」 (entered, placed but not filled, cancelled
+  // by a call, cancelled by a loss-cut); "entered": the entered share alone (what §8.111's hand-filled 7.27% was)
+  holdPlacedShare: "sum" as "sum" | "entered",
   // SQ-09: a made-up minute: one latent step, O = the previous written mid, C = this one
   minuteBar: "oneStepOC",
   // SQ-10: light runs for the sets (5-minute files only, no look-ahead, no owner's way)
