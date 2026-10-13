@@ -851,6 +851,22 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
+// #353 (docs §8.119): how the MACD email writes its three numbers (the blue
+// line, the newest 120 bars' top or bottom, and 90% of it), the minus as the
+// chart's (U+2212), not toFixed's hyphen. In the price's decimals, as the
+// chart's MACD pane shows them, or more where the 120 bars' end on the
+// signal's side (the top for a SELL, the bottom for a BUY) would come out
+// with fewer than two significant digits in those (a top of 0.0000125 on
+// EUR/USD is written 0.000013, not 0.00001, and its 90% 0.000011); the three
+// in the same decimals, at most 20
+const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
+  const d = decimalsOf(s.pair);
+  const f = s.macdh;
+  const end = f ? (s.side === "BUY" ? f.bottom : f.top) : NaN;
+  const md = Number.isFinite(end) && end !== 0 ? Math.min(20, Math.max(d, 1 - Math.floor(Math.log10(Math.abs(end))))) : d;
+  return (v: number) => (Number.isFinite(v) ? v.toFixed(md).replace(/^-/, "−") : "—");
+};
+
 export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const d = decimalsOf(s.pair);
   const px = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(d));
@@ -945,13 +961,15 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       // #353: from v28 the blue line at ZONE_PCT% of the newest ZONE_BARS bars' highest or lowest (§8.119)
       const f = s.macdh;
       const buy = s.side === "BUY";
-      // the minus as the chart's (U+2212), not toFixed's hyphen
-      const mx = (v: number) => px(v).replace(/^-/, "−");
+      // the minus as the chart's (U+2212); more decimals for a tiny top or bottom (macdNumbers)
+      const mx = macdNumbers(s);
       return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (MACD peak/valley)`, [
         `A MACD peak/valley ${side} signal fired on ${s.pair}, ${tf} chart.`,
         [
           `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
-          `MACD(12, 26, 9): the MACD line (blue) reached the ${buy ? "bottom" : "top"} band of the newest ${ZONE_BARS} bars: at or ${buy ? "below" : "above"} ${ZONE_PCT}% of their ${buy ? "lowest" : "highest"} (from the zero line)`,
+          // "or more of the way", as the rule paragraph below and the Japanese 「以上（0の線から測って）」 say it: "at or
+          // below 90% of the lowest" could be read as a distance from zero, which turns it round
+          `MACD(12, 26, 9): the MACD line (blue) reached the ${buy ? "bottom" : "top"} band of the newest ${ZONE_BARS} bars: ${ZONE_PCT}% or more of the way from the zero line to their ${buy ? "lowest" : "highest"}`,
           ...(f
             ? [`  MACD = ${mx(f.m)}; ${buy ? "lowest" : "highest"} of the ${ZONE_BARS} bars = ${mx(buy ? f.bottom : f.top)}; ${ZONE_PCT}% of it = ${mx(f.mark)}`]
             : []),
@@ -1049,8 +1067,8 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     const buy = s.side === "BUY";
     const sideM = `${buy ? "買い" : "売り"}（${s.side}）`;
     const end = buy ? "一番下" : "一番上";
-    // the minus as the chart's (U+2212), not toFixed's hyphen
-    const mx = (v: number) => px(v).replace(/^-/, "−");
+    // the minus as the chart's (U+2212); more decimals for a tiny top or bottom (macdNumbers)
+    const mx = macdNumbers(s);
     return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideM}のサイン（MACD の山・谷）`, [
       `${pairJa(s.pair)}の${tf}で、MACD の山・谷の${sideM}のサインが出ました。`,
       [

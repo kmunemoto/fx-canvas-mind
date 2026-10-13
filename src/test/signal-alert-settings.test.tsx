@@ -407,7 +407,10 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(intro).toContain(
       "1時間足の MACD(12・26・9)の青い線が、新しい120本（チャートを開いた時に見える範囲）で一番高かった所の90%以上（0の線から測って）まで上がったら売り、一番低かった所の90%以上まで下がったら買いとするサインです",
     );
-    expect(intro).toContain("一つの山・谷では、届いた時に1通だけ送ります");
+    // one email as the line gets there, and another after it has gone back inside the 90% mark and come back (not
+    // "only one": the notes and the email say the same)
+    expect(intro).toContain("一つの山・谷では、届いた時に1通送ります（90%の所より内側に戻ってから、また届けばもう1通）");
+    expect(intro).not.toContain("1通だけ");
     for (const no of ["クロス", "ふだんの動き", "0.8倍", "高い位置で下に抜けた"]) expect(intro, no).not.toContain(no);
     expect(intro).not.toContain("0.085");
     expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルと金（XAU/USD）の1時間足だけです");
@@ -516,8 +519,15 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain("一つの山・谷では、届いた足で1通だけ送ります。青い線が90%の所より内側に戻るまでは、次は送りません。戻ってからまた届けば、もう1通送ります（90%の所のすぐそばで出入りを繰り返すと、そのたびに送ります）");
     expect(notes).toContain("届いた足を判定できなかった時（読み込みの失敗など）は、次の足では「一つ前の足でもう届いていた」ことになるので、そのメールは送りません（あとから送ることはしません）");
     expect(notes).toContain("新しい120本の青い線がずっと0以下の時は、上の90%の所が無いので、売りは出ません（買いも同じで、ずっと0以上の時は出ません）");
-    expect(notes).toContain("一番高かった足（買いは一番低かった足）が120本の外に出ると、90%の所が0の線に近づくので、青い線が動かなくても届くことがあります（チャートの MACD の枠が縮むのと同じです）");
+    expect(notes).toContain("一番高かった足（買いは一番低かった足）が120本の外に出ると、90%の所が0の線に近づくので、青い線が動かなくても届くことがあります。");
     expect(notes).toContain("チャートを拡大・縮小すると MACD の枠の高さは変わりますが、メールはいつも新しい120本で決めます");
+    // the 90% mark is the blue line's alone; the chart's MACD pane takes its edges from the orange line and the bars too,
+    // and adds a margin (PriceChart.tsx), so the two are not said to be the same (docs §8.119: on the stored bars the
+    // line was under 90% of the drawn edge at 144 of 147 entries)
+    expect(notes).toContain(
+      "90%の所は、青い線だけで決めます。チャートの MACD の枠の上と下の端は、オレンジの線と棒も入れて決まり、少し余白も足して描くので、メールが届いた時に、画面では青い線が枠の端の90%より下に見えることがほとんどです（長く0の反対側にいた青い線が0の線を越えたばかりの時は、0の線の近くに見えます）",
+    );
+    expect(notes).not.toContain("枠が縮むのと同じ");
     expect(notes).toContain("チャートの MACD は、チャートが読んだ足から計算するので、メールの600本で出した値とわずかに違うことがあります");
     expect(notes).toContain("青い線と90%の所は、丸めない値で比べます");
     expect(notes).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません");
@@ -644,7 +654,8 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(intro).toContain(
       "BUY and SELL signals from the 1-hour chart's MACD(12, 26, 9) blue line: a SELL when it comes up to 90% or more of the highest it reached over the newest 120 bars (what the chart shows when it is opened), measured from the zero line, and a BUY when it comes down to 90% or more of the lowest.",
     );
-    expect(intro).toContain("One email per peak or valley, when the line gets there.");
+    expect(intro).toContain("One email when the line gets there; another only after it has gone back inside the 90% mark and come back to it.");
+    expect(intro).not.toContain("One email per peak or valley");
     for (const no of ["cross", "usual", "0.8 times"]) expect(intro, no).not.toContain(no);
     expect(intro).not.toContain("0.085");
     expect(intro).toContain("On the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only.");
@@ -659,8 +670,12 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain("One email per peak or valley, at the bar that gets there: no next one until the blue line has gone back inside the 90% mark; if it then comes back to the mark, another is sent (going in and out right at the mark sends one each time).");
     expect(notes).toContain("If the bar that got there could not be judged (a failed read, say), at the next bar the line counts as having been there already, and that email is not sent (nothing is sent late).");
     expect(notes).toContain("While the blue line stays at or below zero over the newest 120 bars there is no 90% mark above, and no SELL (likewise no BUY while it stays at or above zero).");
-    expect(notes).toContain("When the bar of the highest (for a BUY, the lowest) leaves the 120, the mark moves toward the zero line, so the line can reach it without moving (as the chart's MACD pane shrinks).");
+    expect(notes).toContain("When the bar of the highest (for a BUY, the lowest) leaves the 120, the mark moves toward the zero line, so the line can reach it without moving.");
     expect(notes).toContain("Zooming the chart in or out changes the height of its MACD pane, but the email always goes by the newest 120 bars.");
+    expect(notes).toContain(
+      "The 90% mark is set by the blue line alone. The top and bottom edges of the chart's MACD pane take in the orange line and the bars as well, and a little margin is added, so when an email comes the blue line nearly always looks short of 90% of the way to the pane's edge on the screen (when it has just crossed the zero line after a long time on the other side, it looks close to the zero line).",
+    );
+    expect(notes).not.toContain("pane shrinks");
     expect(notes).toContain("The chart works MACD out from the bars it has read, so it can differ a little from the email's, worked out on 600 bars.");
     expect(notes).toContain("the cross rules mailed after it, ±0.085 and each pair's own level, were not measured either");
     expect(notes).toContain("This rule's win rate and its profit or loss a trade have not been measured");

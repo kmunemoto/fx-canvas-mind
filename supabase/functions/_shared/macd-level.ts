@@ -58,7 +58,12 @@
 // stands). With no m of the 120 above zero there is no top band (no SELL;
 // the bottom likewise), and a top just above zero puts the band just above
 // zero. An old top leaving the 120 lowers it: the line can come into the band
-// without moving (as the chart's pane shrinks).
+// without moving. The band is the blue line's alone: the chart's MACD pane
+// (PriceChart.tsx) takes its edges from the signal line and the histogram as
+// well, and adds a margin, so on the screen the line is nearly always short
+// of 90% of the pane's edge when it fires (docs §8.119: at 144 of the 147
+// entries on the stored bars); just past zero after a long stretch on the
+// other side, the histogram stands far above it.
 
 import { macd } from "./macd.ts";
 import { sidesOf } from "./macd-extreme.ts";

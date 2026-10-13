@@ -1415,7 +1415,7 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
     expect(mail.subject).toBe("[Sextant] XAU/USD 1-hour BUY signal (MACD peak/valley)");
     const t = mail.text;
     expect(t).toContain("A MACD peak/valley BUY signal fired on XAU/USD, 1-hour chart.");
-    expect(t).toContain("MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the newest 120 bars: at or below 90% of their lowest (from the zero line)");
+    expect(t).toContain("MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the newest 120 bars: 90% or more of the way from the zero line to their lowest");
     expect(f.m).toBeLessThan(0);
     expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(2)}; lowest of the 120 bars = −${(-f.bottom).toFixed(2)}; 90% of it = −${(-f.mark).toFixed(2)}`);
     expect(t).toContain("($13.00)");
@@ -1863,7 +1863,10 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(mail.subject).toBe("[Sextant] USD/JPY 1-hour BUY signal (MACD peak/valley)");
     const t = mail.text;
     expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 1-hour chart.");
-    expect(t).toContain("MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the newest 120 bars: at or below 90% of their lowest (from the zero line)");
+    // "90% or more of the way from the zero line", as the rule paragraph says it (not "at or below 90% of the lowest",
+    // which could be read as a distance from zero, the other way round)
+    expect(t).toContain("MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the newest 120 bars: 90% or more of the way from the zero line to their lowest");
+    expect(t).not.toContain("at or below 90%");
     expect(f.m).toBeLessThan(0);
     expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(3)}; lowest of the 120 bars = −${(-f.bottom).toFixed(3)}; 90% of it = −${(-f.mark).toFixed(3)}`);
     expect(t).not.toContain("= -");
@@ -1882,7 +1885,8 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     const sell = sample("SELL");
     const fs = sell.macdh!;
     const st = renderIndicatorMail(sell, "en").text;
-    expect(st).toContain("MACD(12, 26, 9): the MACD line (blue) reached the top band of the newest 120 bars: at or above 90% of their highest (from the zero line)");
+    expect(st).toContain("MACD(12, 26, 9): the MACD line (blue) reached the top band of the newest 120 bars: 90% or more of the way from the zero line to their highest");
+    expect(st).not.toContain("at or above 90%");
     expect(st).toContain(`\n  MACD = ${fs.m.toFixed(3)}; highest of the 120 bars = ${fs.top.toFixed(3)}; 90% of it = ${fs.mark.toFixed(3)}`);
   });
 
@@ -1898,5 +1902,50 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(renderIndicatorMail(sample("BUY", "EUR/USD"), "en").text).toContain(
       `\n  MACD = −${(-b.m).toFixed(5)}; lowest of the 120 bars = −${(-b.bottom).toFixed(5)}; 90% of it = −${(-b.mark).toFixed(5)}`,
     );
+  });
+
+  // a top (bottom) so small that the price's decimals leave it fewer than two significant digits (the line's first bar
+  // past zero after a long stretch on the other side) is written with more decimals, the three numbers alike. The
+  // numbers are real entries of the rule on GMO's stored 1-hour bars (the implementation's count, 147 entries from
+  // 2026-05-27 to 10-12; 9 had such an end): in the price's 5 decimals EUR/USD's SELL read 0.00001 three times
+  it("a tiny top or bottom is written to two significant digits, the three numbers alike; an ordinary one keeps the price's decimals", () => {
+    const withFacts = (g: ReturnType<typeof sample>, macdh: NonNullable<ReturnType<typeof sample>["macdh"]>) => ({ ...g, macdh });
+    // EUR/USD, the bar that opened 2026-09-21 00:00 UTC: a SELL at the line's own new top, just above zero
+    const top = 1.2519827838231024e-5;
+    expect(ZONE_SHARE * top).toBe(1.1267845054407922e-5);
+    const sell = withFacts(sample("SELL", "EUR/USD"), { m: top, top, bottom: -0.002224448448828964, mark: ZONE_SHARE * top });
+    expect(renderIndicatorMail(sell, "ja").text).toContain("\n  MACD = 0.000013、120本の一番上 = 0.000013（その90% = 0.000011）");
+    expect(renderIndicatorMail(sell, "en").text).toContain("\n  MACD = 0.000013; highest of the 120 bars = 0.000013; 90% of it = 0.000011");
+    // AUD/USD, the bar that opened 2026-09-09 19:00 UTC: a BUY at the line's own new bottom, just below zero
+    const bottom = -2.7212390874331582e-5;
+    expect(ZONE_SHARE * bottom).toBe(-2.4491151786898425e-5);
+    const buy = withFacts(sample("BUY", "AUD/USD"), { m: bottom, top: 0.0011648807783815052, bottom, mark: ZONE_SHARE * bottom });
+    expect(buy.pair).toBe("AUD/USD");
+    expect(renderIndicatorMail(buy, "ja").text).toContain("\n  MACD = −0.000027、120本の一番下 = −0.000027（その90% = −0.000024）");
+    expect(renderIndicatorMail(buy, "en").text).toContain("\n  MACD = −0.000027; lowest of the 120 bars = −0.000027; 90% of it = −0.000024");
+    // USD/JPY, the bar that opened 2026-07-27 01:00 UTC: a BUY, the yen's 3 decimals made 4 (they read −0.010, −0.010, −0.009)
+    const low = -0.009667768969592316;
+    const yenBuy = withFacts(sample("BUY"), { m: low, top: 0.20580689070584413, bottom: low, mark: ZONE_SHARE * low });
+    expect(renderIndicatorMail(yenBuy, "ja").text).toContain("\n  MACD = −0.0097、120本の一番下 = −0.0097（その90% = −0.0087）");
+    // the decimals follow the end on the signal's side only (a SELL's tiny bottom changes nothing), and two significant
+    // digits at the price's decimals keep them: 0.010 on a yen pair is 3 decimals, 0.0099 is 4
+    const yenSell = sample("SELL");
+    const f = yenSell.macdh!;
+    expect(renderIndicatorMail(withFacts(yenSell, { ...f, bottom: -1e-9 }), "ja").text).toContain(
+      `\n  MACD = ${f.m.toFixed(3)}、120本の一番上 = ${f.top.toFixed(3)}（その90% = ${f.mark.toFixed(3)}）`,
+    );
+    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.01, top: 0.01, bottom: -1, mark: 0.009 }), "ja").text).toContain(
+      "\n  MACD = 0.010、120本の一番上 = 0.010（その90% = 0.009）",
+    );
+    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.0099, top: 0.0099, bottom: -1, mark: 0.00891 }), "ja").text).toContain(
+      "\n  MACD = 0.0099、120本の一番上 = 0.0099（その90% = 0.0089）",
+    );
+    // gold keeps its 2 decimals on its ordinary numbers (the #345 block's gold emails); a top of a few cents gets more
+    const goldSell = withFacts(sample("SELL"), { m: 0.04, top: 0.04, bottom: -9, mark: 0.036 });
+    expect(renderIndicatorMail({ ...goldSell, pair: "XAU/USD" }, "ja").text).toContain("\n  MACD = 0.040、120本の一番上 = 0.040（その90% = 0.036）");
+    // nothing throws on a top far below any price's digits (at most 20 decimals), and a number that is none is a dash
+    const far = withFacts(yenSell, { m: 1e-30, top: 1e-30, bottom: -1, mark: 9e-31 });
+    expect(renderIndicatorMail(far, "en").text).toContain(`\n  MACD = ${(1e-30).toFixed(20)}; highest of the 120 bars = ${(1e-30).toFixed(20)}; 90% of it = ${(9e-31).toFixed(20)}`);
+    expect(renderIndicatorMail(withFacts(yenSell, { ...f, mark: Number.NaN }), "ja").text).toContain("（その90% = —）");
   });
 });
