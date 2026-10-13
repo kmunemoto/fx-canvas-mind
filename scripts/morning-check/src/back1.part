@@ -1,0 +1,56 @@
+-- ===== BACK 1 (the same text in pairs.sql and gold.sql): facts per judged bar, per instrument, and the mails =====
+-- one row per judged bar: the numbers of its window. g = how far past the level macd is in the direction of the bar's side (>= 0 reaches it:
+-- SELL macd - level, BUY -macd - level). tick = one unit of the last decimal. fire = cross and level reached (decideScaledOnWindow).
+-- clo = the bar's own rounded close (a mail's `entry` is this).
+fin2 as (
+  select f.symbol, f.ot, f.jr, y.pair, y.d, f.m, f.sg, f.h, f.side_p, f.side, f.scale, f.lvl, f.clo, f.cross_,
+         case when f.side = 1 then 'BUY' else 'SELL' end as sd,
+         case when f.side = 1 then -f.m - f.lvl else f.m - f.lvl end as g,
+         power(10::float8, -y.d) as tick
+  from fin f join syms y on y.symbol = f.symbol
+),
+-- How far the judged bar's OWN close (the last of its 600) would have to differ from the table's to turn the sign of h (cross_edge_ticks) or to move macd
+-- across the level (level_edge_ticks), in ticks: production read the live file 2-6 s after the close, the table holds the final one. d(h)/d(close) = 0.0638,
+-- d(macd - level)/d(close) <= 0.0811. A distance of 2 ticks or less is flagged near_edge.
+fx2 as (
+  select *, (cross_ and g >= 0) as fire, abs(h) / 0.0638 / tick as cross_edge_ticks, abs(g) / 0.0811 / tick as level_edge_ticks from fin2
+),
+-- the series per instrument: its length, the bars of the day (first / last open: a whole day ends with the bar that opened 1 h before the range ends; hours missing
+-- between the first and the last bar of the day mean a hole in the data), bad closes, and the rank of the day's first bar
+sstat as (
+  select y.symbol, count(s.rn) as history_bars,
+         count(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as day_bars,
+         count(s.rn) filter (where s.bad) as bad_mantissas,
+         min(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_rank,
+         min(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_ot,
+         max(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as last_day_ot
+  from syms y cross join pp left join s on s.symbol = y.symbol
+  group by y.symbol
+),
+wstat as (
+  select y.symbol, count(f.ot) as windows, count(f.ot) filter (where f.cross_) as crosses, count(f.ot) filter (where f.fire) as exp_fires
+  from syms y left join fx2 f on f.symbol = y.symbol
+  group by y.symbol
+),
+-- the mails: public.signal_alerts rows of THIS rule on the 1-hour chart, grouped per signal (pair, side, bar); no user_id / event_id is read
+mails as (
+  select a.pair, a.side, (extract(epoch from a.bar_time) * 1000)::bigint as ot,
+         count(*) as n_rows, count(*) filter (where a.status = 'sent') as n_sent, string_agg(distinct a.status, ',') as statuses,
+         min(extract(epoch from (a.sent_at - a.closed_at))) as lag_min, max(extract(epoch from (a.sent_at - a.closed_at))) as lag_max,
+         min(a.entry) as entry, max(a.entry) as entry_max
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule = 'macdx_12_26_9_w600_1h_k0.8mv_v3'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair, a.side, a.bar_time
+),
+-- subscriptions now (count only) and rows of ANOTHER 1-hour macdx rule id in the range (a renamed rule would make every mail look "missing")
+subs as (select pair, count(*) as n from public.signal_alert_subscriptions where interval = '1h' and rule = 'macdx' group by pair),
+othr as (
+  select a.pair, count(*) as n
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule like 'macdx%' and a.rule <> 'macdx_12_26_9_w600_1h_k0.8mv_v3'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair
+),

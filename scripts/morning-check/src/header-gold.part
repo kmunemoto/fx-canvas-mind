@@ -1,0 +1,8 @@
+-- gold.sql  (task #352)  -  the morning check of the 1-hour MACD e-mails for GOLD (XAU/USD).
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited.
+-- It recounts the rule macdx_12_26_9_w600_1h_k0.8mv_v3 from the closed bars of the ONE stored row public.live_chart_fallback (XAU/USD, 1h; Twelve Data),
+-- and compares the expected fires with public.signal_alerts (pair XAU/USD, kind signal, interval 1h, that rule id).
+-- The row is the LATEST read: production judged each bar on the row as it was about a minute after the close. No user_id / event_id / e-mail is read; nothing is written.
+-- Result: the same columns as pairs.sql: row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md.

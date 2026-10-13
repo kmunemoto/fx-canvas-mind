@@ -1,0 +1,13 @@
+with recursive
+-- The ONLY two inputs: bar OPEN time in [START_MS, END_MS), epoch milliseconds (the Routine writes the numbers in place of the two markers).
+p as (select {{START_MS}}::bigint as start_ms, {{END_MS}}::bigint as end_ms),
+-- GMO's day starts at 21:00 UTC (06:00 JST), so START_MS + 3 h falls on the key's date. k_first / k_last = the keys of the first and the last instant of the range;
+-- from_key = 40 days before (production's own reach back); range_ok = the range is one whole GMO day (24 h, starting at 21:00 UTC).
+pp as (
+  select start_ms, end_ms,
+         to_char(to_timestamp((start_ms + 10800000) / 1000.0) at time zone 'UTC', 'YYYYMMDD') as k_first,
+         to_char(to_timestamp((end_ms - 1 + 10800000) / 1000.0) at time zone 'UTC', 'YYYYMMDD') as k_last,
+         to_char((to_timestamp((start_ms + 10800000) / 1000.0) at time zone 'UTC')::date - 40, 'YYYYMMDD') as from_key,
+         (end_ms - start_ms = 86400000 and start_ms % 86400000 = 75600000) as range_ok
+  from p
+),

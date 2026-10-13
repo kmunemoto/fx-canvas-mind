@@ -1,0 +1,4 @@
+-- debug-closes-gold.sql  (task #352)  -  the rounded closes of gold that gold.sql used, as compact strings, for Deno / Python replays.
+-- ONE read-only statement. Markers to replace: {{START_MS}} {{END_MS}} (the day's range, as in gold.sql) and {{CHUNK}} (-1 = the list of pieces with their md5 and no strings;
+-- 0, 1, 2 ... = one piece of about 250 bars). The chain before the last CTE is the very text of gold.sql. row_read_utc says which version of the stored row was used.
+-- A piece is "open_ms:close;open_ms:close;..." (close with 2 decimals, e.g. 4193.21); take the pieces in chunk order and join them.
