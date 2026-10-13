@@ -26,18 +26,36 @@ export interface RunCfg {
   forceChoice: string[] | null;
   handResults: string;
   hold: boolean;
+  // 9「計算が Actions の1 job（6時間）に収まらない時は…「出せなかった」」: the owner's way starts an item's account only
+  // before jobStartMs + holdBudgetMin minutes (CB_HOLD_BUDGET_MIN, default 300; CB_JOB_START_MS, the job's start the yml
+  // sets, else this process's start)
+  holdBudgetMin: number;
+  jobStartMs: number;
   // the dumps for the Python / the flip in a light run (CB_DUMPS=1; full and flipped runs always write them)
   dumps: boolean;
   amount: number | null;
 }
 
 export const envOf = (k: string, d = ""): string => Deno.env.get(k) ?? d;
+// gates-04: a set CB_HOLD_BUDGET_MIN that is not a finite number of minutes above 0 ("0" or "" would leave every item
+// out, a word would turn the budget off), or a set CB_JOB_START_MS that is not a time
+export const HOLD_BUDGET_DEFAULT_MIN = 300;
+export const holdBudgetProblems = (get: (k: string) => string | undefined = (k) => Deno.env.get(k)): string[] => {
+  const out: string[] = [];
+  const b = get("CB_HOLD_BUDGET_MIN");
+  if (b !== undefined && !(b.trim() !== "" && Number.isFinite(Number(b)) && Number(b) > 0)) out.push(`CB_HOLD_BUDGET_MIN=${JSON.stringify(b)}: not a number of minutes above 0`);
+  const j = get("CB_JOB_START_MS");
+  if (j !== undefined && !(/^\d{12,14}$/.test(j.trim()))) out.push(`CB_JOB_START_MS=${JSON.stringify(j)}: not a time in ms since 1970`);
+  return out;
+};
 export const cfgFromEnv = (): RunCfg => {
   const set = envOf("CB_SET", "N");
   const force = envOf("CB_FORCE_CHOICE", "");
   const forceChoice = force ? force.split(",").map((s) => s.trim()).filter(Boolean) : null;
   const unknown = (forceChoice ?? []).filter((id) => !ITEM_TABLE.some((r) => r.id === id));
   if (unknown.length) throw new Refused(`CB_FORCE_CHOICE: ${unknown.join(", ")} not an item of the table`);
+  const budget = holdBudgetProblems();
+  if (budget.length) throw new Refused(budget.join("; "));
   return {
     mode: envOf("CB_MODE", "run"),
     set,
@@ -50,6 +68,8 @@ export const cfgFromEnv = (): RunCfg => {
     forceChoice,
     handResults: envOf("CB_HAND_RESULTS", ""),
     hold: envOf("CB_HOLD", "1") !== "0",
+    holdBudgetMin: Number(envOf("CB_HOLD_BUDGET_MIN", String(HOLD_BUDGET_DEFAULT_MIN))),
+    jobStartMs: envOf("CB_JOB_START_MS") ? Number(envOf("CB_JOB_START_MS")) : Math.floor(performance.timeOrigin),
     dumps: envOf("CB_DUMPS") === "1",
     amount: envOf("CB_AMOUNT") ? Number(envOf("CB_AMOUNT")) : null,
   };

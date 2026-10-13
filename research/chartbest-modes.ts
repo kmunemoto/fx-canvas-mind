@@ -348,7 +348,10 @@ const ownerWay = async (st: RunState, chosen: string[], madeUp: boolean) => {
   ];
   const rates = madeUp ? synthRates : await bisRates(envOf("CB_BIS_CSV"));
   const outDir = `${cfg.out}/hold`;
-  const res = await holdRun({ bars: rb.bars, m1: rb.m1, diags: rb.diags, period: cfg.period, sources, rates, outDir, budgetMin: Number(envOf("CB_HOLD_BUDGET_MIN", "300")) });
+  // 9's budget, counted from the job's start (CB_JOB_START_MS, else this process's start): the emails run first and are
+  // never left out; an item's account not started by the deadline is 「出せなかった」 (research/chartbest-hold.ts holdRun)
+  const deadlineMs = cfg.jobStartMs + cfg.holdBudgetMin * 60_000;
+  const res = await holdRun({ bars: rb.bars, m1: rb.m1, diags: rb.diags, period: cfg.period, sources, rates, outDir, deadlineMs });
   const sentences: Array<[string, string]> = [];
   for (const h of res) {
     const key = `hold.${h.src}.${h.account}`;
@@ -544,6 +547,9 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
   // the planted errors of the printer (20 (f)): a number not in the list, a number to the log
   if (plant === "printExtraItem") printer.line("delta.raw", "0.123");
   if (plant === "printToLog") Log.raw(`delta ${fmt.pts(0.0123)}`);
+  // gates-05: a number under hold.* and a sentence under text.* that the list does not name
+  if (plant === "printHoldExtra") printer.line("hold.ultra5.full.main.E", "150.123");
+  if (plant === "printTextExtra") printer.line("text.s2.note", "これは決めていない文です。");
   return finish(0, st);
 };
 

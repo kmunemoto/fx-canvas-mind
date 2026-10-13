@@ -305,7 +305,8 @@ export interface HoldRowFacts {
   capped: number;
   lcAt: number[];
   deadlineAt: number[];
-  // a capped call: its τ, U after the notice's deposit (yen), how it ended (settle, lc, deadline, deposit, open)
+  // a capped call: its time (SQ-PF1: the NY close τ, SPEC.holdCappedCallTime), U after the notice's deposit (yen), how it
+  // ended (settle, lc, deadline, deposit, open)
   cappedCalls: Array<{ tau: number; short: number; end: string }>;
   A: number;
   B: number;
@@ -336,6 +337,18 @@ export interface HoldFacts {
   verdict: { one: boolean; twoAccounts: boolean; twoM: boolean; three: boolean };
 }
 
+// ①②③ from the facts (§8.102 決まり ①②③; 9 for the second-half account: ② on its four S and M_h, ③ on its own L): the
+// one derivation the run's facts carry (research/chartbest-hold.ts factsOf) and the hand cases text.hold.* are checked
+// with (indep-06)
+export const holdVerdictOf = (f: Omit<HoldFacts, "verdict">): HoldFacts["verdict"] => {
+  const r = f.rows;
+  const one = ROWS4.every((k) => r[k].lcs === 0 && r[k].deadlines === 0 && r[k].capped === 0);
+  const twoAccounts = f.account === "full" ? ROWS4.every((k) => r[k].A > 0 && r[k].B > 0) : ROWS4.every((k) => r[k].S > 0);
+  const twoM = f.account === "full" ? f.m.none[0] > 0 && f.m.none[1] > 0 && f.m.swap[0] > 0 && f.m.swap[1] > 0 : f.mh !== null && f.mh[0] > 0 && f.mh[1] > 0;
+  const L = f.third.L;
+  return { one, twoAccounts, twoM, three: L !== null && L > 0 };
+};
+
 export const HOLD_ROW_NAME: Record<Row4, string> = {
   main: "主の行（スワップ無し・1分足の終値）",
   mainSwap: "スワップ込み・1分足の終値",
@@ -352,7 +365,8 @@ const pctH = (x: number | null): string => (x === null ? "—" : `${(100 * x).to
 const shareH = (k: number, n: number): string => pctH(n ? k / n : null);
 const yenS = (x: number | null): string => (x === null ? "— 円" : `${fmt.yen(x)} 円`);
 const yenU = (x: number | null): string => (x === null ? "— 円" : `${fmt.yen(x, false)} 円`);
-const isoMin = (t: number): string => `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+// a time as the owner-hold sentences write it (SQ-08: "YYYY-MM-DD HH:MM UTC")
+export const isoMin = (t: number): string => `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 const listTen = (xs: string[]): string => (xs.length > 10 ? `${xs.slice(0, 10).join("、")}、ほか ${xs.length - 10}件` : xs.join("、"));
 const datesOf = (ts: readonly number[]): string => listTen([...ts].sort((a, b) => a - b).map(isoMin));
 const ENDING: Record<string, string> = { settle: "決済の充当で解消", deadline: "期限の決済", lc: "ロスカット", deposit: "入金で解消", open: "END の時点で未解消" };

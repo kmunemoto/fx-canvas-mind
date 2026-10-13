@@ -7,8 +7,10 @@
 //   CB_MODE=hand        the hand examples (research/chartbest/hand.json) → hand-results.json
 //   CB_MODE=gen         a made-up set's day files (CB_SET, CB_SEED, CB_FLIP, CB_PERIOD; CB_FULL=1 the 1-minute ones)
 //   CB_MODE=run         one run, end to end (CB_DATA the day files' folder; CB_FULL=1 every check and the dumps, and
-//                       stage 2's owner's way (9, research/chartbest-hold.ts: $CB_OUT/hold/; CB_HOLD=0 leaves it out,
-//                       CB_HOLD_BUDGET_MIN its wall-clock minutes, default 300; a real stage 2 reads CB_BIS_CSV))
+//                       stage 2's owner's way (9, research/chartbest-hold.ts: $CB_OUT/hold/; CB_HOLD=0 leaves it out;
+//                       an item's account not started within CB_HOLD_BUDGET_MIN minutes, default 300, of the job's
+//                       start CB_JOB_START_MS (ms; else this process's start) is 「出せなかった」, the two emails never;
+//                       a real stage 2 reads CB_BIS_CSV))
 //   CB_MODE=stage0|stage1|stage2   the stages as separate processes on one folder (walk-ledger/), or real (refused)
 //   CB_MODE=flip-cmp    an original run's dumps against its flip's (CB_ORIG, CB_FLIPPED)
 //   CB_MODE=calib       a set's trial seeds at CB_AMOUNT (light runs; prints the targets, judges nothing)

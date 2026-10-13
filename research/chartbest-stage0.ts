@@ -20,7 +20,7 @@ import { allImplemented, tableProblems } from "./chartbest-items.ts";
 import { madeUpDataProblems } from "./chartbest-manifest.ts";
 import type { LateSig } from "./chartbest-measures.ts";
 import { plant as currentPlant } from "./chartbest-plants.ts";
-import { type RunCfg, Refused, type Signals, cfgFromEnv, dataChecks, donchianStateCheck, envOf, gateCandidates, gateHand, gateSpread, lookaheadChecks, measureChecks, reconcile0, signalsOf } from "./chartbest-run0.ts";
+import { type RunCfg, Refused, type Signals, cfgFromEnv, dataChecks, donchianStateCheck, envOf, gateCandidates, gateHand, gateSpread, holdBudgetProblems, lookaheadChecks, measureChecks, reconcile0, signalsOf } from "./chartbest-run0.ts";
 import { parseSpreadHours } from "./spreadhours-lib.ts";
 
 export const exists = async (p: string): Promise<boolean> => {
@@ -47,6 +47,8 @@ export const realConfigProblems = (env: (k: string) => string = (k) => envOf(k))
   if (env("CB_HOLD") === "0") out.push("CB_HOLD=0: a real stage does not leave out the owner's way (14)");
   for (const k of ["CB_FORCE_CHOICE", "CB_PLANT", "CB_AMOUNT"]) if (env(k) !== "") out.push(`${k} is set: made-up runs only`);
   if (env("CB_FLIP") === "1") out.push("CB_FLIP=1: made-up runs only");
+  // 9's budget (gates-04): "0" or "" would leave every item's owner's way out (as CB_HOLD=0), a word would turn it off
+  out.push(...holdBudgetProblems());
   return out;
 };
 // 20 (e)「dispatch では、作り物がすべて通った時だけ実データを走らせる」: sets-pass.json is the whole sets-sum (no
