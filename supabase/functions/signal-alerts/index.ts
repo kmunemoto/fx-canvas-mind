@@ -33,7 +33,8 @@
 // the chart's own code, and mailed to the charts subscribed with rule =
 // 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
 // 5-minute chart of GMO's pairs; #324: on their 1-hour chart from v25, the
-// owner's levels). Not recorded or settled (signal_events is
+// owner's levels; #345: and on gold's 1-hour chart from v27, read from
+// Twelve Data). Not recorded or settled (signal_events is
 // the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
@@ -188,7 +189,13 @@ import type { Candle } from "../analyze/indicators.ts";
 // close to the next over the 600 bars judged on, in place of v25's 8.5 pips;
 // recorded under a new rule id (MACDH_RULE_ID). The charts (the five pairs'
 // 1-hour), the subscriptions and the other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v26-2026-10-13T00:00:00Z";
+// v27 (#345): gold's 1-hour chart too for the MACD email (indicators.ts
+// MACDH_PAIRS; docs §8.118): the same rule and rule id on gold's bars, which
+// are Twelve Data's (read after each hourly close as gold's other Twelve Data
+// charts are), the level in dollars (MACDH_K times gold's usual hourly move),
+// the stop and targets ULTRA's. The five pairs' emails, the subscriptions and
+// the other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v27-2026-10-13T12:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -703,7 +710,9 @@ Deno.serve(async (req: Request) => {
           }
         }
         const closed = closedOfStored(stored!);
-        reads.push({ ...(await judge(c.pair, c.interval, closed, expected)), twelve: true });
+        // #345: when the bars judged were read (the record of a gold judgment shows it: a read before the close
+        // would not have the bar)
+        reads.push({ ...(await judge(c.pair, c.interval, closed, expected)), twelve: true, fetched_at: stored!.fetchedAt, close: closed[closed.length - 1].close });
       }
       // #171: the 4-hour and daily charts' newest closed bar this hour (its
       // open), once the first of them read tells (hourCloseOf); null when
@@ -1234,7 +1243,7 @@ Deno.serve(async (req: Request) => {
           limited_intervals: TWELVE_ALERT_INTERVALS,
           // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs
           // (#324: from v25 the 1-hour rule's, mailed in place of the 5-minute one,
-          // on the owner's five pairs)
+          // on the owner's five pairs; #345: and gold from v27)
           macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },
           // #291: the video's way's: gold's 1-minute chart
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },

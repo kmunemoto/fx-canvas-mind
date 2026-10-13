@@ -35,7 +35,7 @@ import { pineAtr } from "../_shared/pine.ts";
 import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
-import { CHART_BARS, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
+import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
 
@@ -131,8 +131,16 @@ export const isMacdxChart = (pair: unknown, interval: unknown): boolean =>
 // offered (on the cheap yen pairs — HUF/JPY is some 0.4 yen — 0.085 is
 // another thing altogether). #339: the level is each pair's own from v26,
 // and the owner kept the five pairs (「今の5ペア」)
+// #345 (docs §8.118): and gold, from v27 (the owner: 「金も1時間足でmacdのクロス
+// でメールを送るようにして」). Its bars are Twelve Data's, not GMO's (GMO has no
+// gold), kept by the live chart and read by the sweep as gold's other Twelve
+// Data charts are; the level is the same rule's, MACDH_K times gold's usual
+// hourly move (dollars), so nothing in the rule is gold's own.
 export const MACDH_INTERVALS = ["1h"] as const;
-export const MACDH_PAIRS: readonly string[] = MACDX_PAIRS.filter((p) => ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"].includes(p));
+export const MACDH_PAIRS: readonly string[] = [
+  ...MACDX_PAIRS.filter((p) => ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"].includes(p)),
+  GOLD,
+];
 export const isMacdhChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && MACDH_PAIRS.includes(pair) &&
   (MACDH_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
@@ -378,6 +386,10 @@ export const macdxSignals = (
 // +3 and +5 minutes), and with ULTRA's stop and targets (the rule has none).
 // #339 (docs §8.116): from v26 against the pair's own level, MACDH_K times
 // the usual hourly move on those same bars (decideScaledOnWindow).
+// #345 (docs §8.118): from v27 gold's too. Its bars are Twelve Data's (the
+// sweep reads them in the first half hour of the hour, a minute and more
+// after the close: twelveCloseDue), in dollars, and the stop and targets are
+// gold's (ULTRA_GOLD).
 export const macdhSignals = (
   pair: string,
   interval: string,
@@ -395,7 +407,7 @@ export const macdhSignals = (
   const d = decideScaledOnWindow(closed, i, MACDH_K);
   if (d === null || !d.fire) return [];
   const close = closed[i].close;
-  const lv = ultraLevels(d.side, close, ultraUnit(pair), ultraParamsFor(false));
+  const lv = ultraLevels(d.side, close, ultraUnit(pair), ultraParamsFor(isGold(pair)));
   return [{
     rule: "macdx",
     pair,
@@ -920,7 +932,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           ...(f
             ? [
               `  MACD = ${mx(f.m)}, signal = ${mx(f.signal)}`,
-              `  A ${buy ? "BUY" : "SELL"} needs MACD at the cross ${buy ? `at or below −${lvl}` : `at or above +${lvl}`}: ${MACDH_K} times this pair's usual hourly move, ${px(f.scale)} (${(f.scale / ultraUnit(s.pair)).toFixed(1)} pips)`,
+              `  A ${buy ? "BUY" : "SELL"} needs MACD at the cross ${buy ? `at or below −${lvl}` : `at or above +${lvl}`}: ${MACDH_K} times ${gold ? "gold's" : "this pair's"} usual hourly move, ${gold ? `$${px(f.scale)}` : `${px(f.scale)} (${(f.scale / ultraUnit(s.pair)).toFixed(1)} pips)`}`,
             ]
             : []),
         ].join("\n"),
@@ -930,7 +942,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
           ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
         ].join("\n"),
-        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.116): of the 1-hour chart's MACD(12, 26, 9) crosses it mails only a SELL where MACD is at or above ${MACDH_K} times the pair's usual hourly move and a BUY where it is at or below minus that. The usual move is the mean size of the move from one close to the next, up or down, over the 600 bars ending at the bar judged, worked out again at every bar. It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
+        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.116): of the 1-hour chart's MACD(12, 26, 9) crosses it mails only a SELL where MACD is at or above ${MACDH_K} times ${gold ? "gold's" : "the pair's"} usual hourly move and a BUY where it is at or below minus that. The usual move is the mean size of the move from one close to the next, up or down, over the 600 bars ending at the bar judged, worked out again at every bar. It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
         `${source} Check the latest state in the app before you place an order:\n${APP_URL}`,
         "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD peak/valley.\nThis is reference information, not investment advice. Every trading decision is your own.",
       ]);
@@ -1024,7 +1036,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...(f
           ? [
             `  MACD = ${mx(f.m)}、シグナル = ${mx(f.signal)}`,
-            `  ${buy ? "買い" : "売り"}の条件: クロスした時の MACD が ${buy ? `−${lvl} 以下` : `+${lvl} 以上`}（このペアの1時間のふだんの動き ${px(f.scale)}〈${(f.scale / ultraUnit(s.pair)).toFixed(1)} pips〉の ${MACDH_K}倍）`,
+            `  ${buy ? "買い" : "売り"}の条件: クロスした時の MACD が ${buy ? `−${lvl} 以下` : `+${lvl} 以上`}（${gold ? "金" : "このペア"}の1時間のふだんの動き ${gold ? `${px(f.scale)}ドル` : `${px(f.scale)}〈${(f.scale / ultraUnit(s.pair)).toFixed(1)} pips〉`}の ${MACDH_K}倍）`,
           ]
           : []),
       ].join("\n"),
@@ -1034,7 +1046,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
         ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
-      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.116）。1時間足の MACD(12・26・9)のクロスのうち、売りは MACD がそのペアの1時間のふだんの動きの ${MACDH_K}倍以上、買いはその値のマイナス以下の所で起きたものだけを送ります。ふだんの動きは、判定した足で終わる600本の、終値から次の終値までの値動きの幅（上げ下げを問わない大きさ）の平均で、足ごとに計算し直します。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
+      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.116）。1時間足の MACD(12・26・9)のクロスのうち、売りは MACD が${gold ? "金" : "そのペア"}の1時間のふだんの動きの ${MACDH_K}倍以上、買いはその値のマイナス以下の所で起きたものだけを送ります。ふだんの動きは、判定した足で終わる600本の、終値から次の終値までの値動きの幅（上げ下げを問わない大きさ）の平均で、足ごとに計算し直します。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
       "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の山・谷」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);

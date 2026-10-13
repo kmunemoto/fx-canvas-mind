@@ -63,7 +63,7 @@ import { klineUrl } from "../../supabase/functions/track-outcomes/quotes";
 import { WINDOW as MACDX_WINDOW, decideOnWindow, sidesOf } from "../../supabase/functions/_shared/macd-extreme";
 import { LEVEL_WINDOW, decideLevelOnWindow, decideScaledOnWindow, meanMoveOf } from "../../supabase/functions/_shared/macd-level";
 import { macd } from "../../supabase/functions/_shared/macd";
-import { ULTRA_PAIRS, ultraLevels } from "../../supabase/functions/_shared/ultra";
+import { ULTRA_GOLD, ULTRA_PAIRS, ultraLevels } from "../../supabase/functions/_shared/ultra";
 import { pipSize } from "../lib/candleTime";
 import { ja } from "../lib/i18n/ja";
 import { en } from "../lib/i18n/en";
@@ -719,6 +719,10 @@ describe("#155 the two sweeps keep to their own rules", () => {
     expect(fn).toContain("if (!twelveReadDue(close, stored ? Date.parse(stored.fetchedAt) : Number.NaN, nowMs)) {");
     expect(fn).not.toContain("twelveCloseDue(c.interval, nowMs) as number");
   });
+  it("the record of a judgment on Twelve Data's bars says when they were read and what the closed bar's close was (docs §9 L)", () => {
+    // #345: the whole statement, so that the same words left in a comment would not satisfy it
+    expect(fn).toContain("reads.push({ ...(await judge(c.pair, c.interval, closed, expected)), twelve: true, fetched_at: stored!.fetchedAt, close: closed[closed.length - 1].close });");
+  });
 });
 
 // #275: the MACD peak-and-valley rule (docs §8.109) in the emails
@@ -943,10 +947,10 @@ describe("#339 the 1-hour MACD rule (each pair's own level, 0.8 times its usual 
     return out;
   };
 
-  it("is what the subscriptions under 'macdx' follow: the 1-hour chart of the owner's five pairs, under its own id from v26", () => {
+  it("is what the subscriptions under 'macdx' follow: the 1-hour chart of the owner's five pairs and gold (v27), under its own id from v26", () => {
     expect([...MACDH_INTERVALS]).toEqual(["1h"]);
-    // 「今の5ペア」, in the app's order (kept on #339: 「今の5ペア」)
-    expect([...MACDH_PAIRS]).toEqual(["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"]);
+    // 「今の5ペア」, in the app's order (kept on #339: 「今の5ペア」), and (#345, v27) gold, last
+    expect([...MACDH_PAIRS]).toEqual(["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "XAU/USD"]);
     for (const p of MACDH_PAIRS) {
       expect(isMacdhChart(p, "1h")).toBe(true);
       expect(isIndicatorChartFor("macdx", p, "1h")).toBe(true);
@@ -955,10 +959,10 @@ describe("#339 the 1-hour MACD rule (each pair's own level, 0.8 times its usual 
         expect(isIndicatorChartFor("macdx", p, iv), `${p} ${iv}`).toBe(false);
       }
     }
-    // the other GMO pairs are not offered, nor gold and the pairs read from Twelve Data
+    // the other GMO pairs are not offered, nor the pairs read from Twelve Data (gold is, from v27)
     const others = MACDX_PAIRS.filter((p) => !MACDH_PAIRS.includes(p));
     expect(others).toHaveLength(9);
-    for (const p of [...others, "XAU/USD", "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
+    for (const p of [...others, "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
       expect(isMacdhChart(p, "1h")).toBe(false);
       expect(isIndicatorChartFor("macdx", p, "1h")).toBe(false);
     }
@@ -1131,7 +1135,7 @@ describe("#339 the 1-hour MACD rule (each pair's own level, 0.8 times its usual 
     const at = closeMsOf(i) + 30_000;
     expect(macdhSignals("USD/JPY", "1h", w, at)).toHaveLength(1);
     for (const iv of ["5min", "15min", "4h"]) expect(macdhSignals("USD/JPY", iv, w, at), iv).toEqual([]);
-    for (const p of ["XAU/USD", "USD/CAD", "HKD/JPY", "GBP/JPY", "HUF/JPY"]) expect(macdhSignals(p, "1h", w, at), p).toEqual([]);
+    for (const p of ["USD/CAD", "HKD/JPY", "GBP/JPY", "HUF/JPY"]) expect(macdhSignals(p, "1h", w, at), p).toEqual([]);
     // the 5-minute rule's function gives nothing on the hourly chart (the studies call it on 5 minutes)
     expect(macdxSignals("USD/JPY", "1h", w, at)).toEqual([]);
   });
@@ -1224,7 +1228,7 @@ describe("#339 the 1-hour MACD rule (each pair's own level, 0.8 times its usual 
     expect(fn).toContain("strong: sig.rule === \"qtrend\" ? sig.strong : null,");
     // the app is told which charts the rule may be followed on
     expect(fn).toContain("macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },");
-    expect(fn).toContain("signal-alerts-v26");
+    expect(fn).toContain("signal-alerts-v27");
   });
 
   it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
@@ -1232,5 +1236,225 @@ describe("#339 the 1-hour MACD rule (each pair's own level, 0.8 times its usual 
       const sigs = indicatorSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000);
       expect(sigs.every((x) => x.rule === "qtrend" || x.rule === "ultra")).toBe(true);
     }
+  });
+});
+
+// the crosses over bars 599 to 2,399 of gold's bars by the rule told below: the #339 block's counts (the bars have the
+// same waves at gold's size, a usual hourly move of some $8, checked below; rounding them to cents moves none of the 82
+// crosses, and the counts do not change with the size: the same 82, 23, 22 and 37 came out at sizes from 200 to 260)
+const N_GOLD = { cross: 82, BUY: 23, SELL: 22, no: 37 };
+
+describe("#345 gold on the 1-hour MACD email (from v27): the same rule on Twelve Data's bars, the level in dollars", () => {
+  // 2,400 hourly bars of gold, the waves of the #339 block's bars at gold's size (a usual hourly move of some $8,
+  // as gold's stored 1-hour bars have), rounded to the two decimals the chart rounds gold to
+  const H0 = Date.UTC(2026, 6, 1);
+  const wave = (i: number) => 0.9 * Math.sin(i / 90) + 0.35 * Math.sin(i / 23) + 0.12 * Math.sin(i / 7) + 0.03 * Math.sin(i * 1.9) + 0.0004 * i;
+  const r2 = (v: number) => Number(v.toFixed(2));
+  const SIZE = 240;
+  const gold = Array.from({ length: 2400 }, (_, i) => {
+    const close = 4150 + SIZE * wave(i);
+    const open = close + SIZE * 0.02 * Math.sin(i * 2.3);
+    return {
+      datetime: stamp(H0 + i * H),
+      open: r2(open),
+      high: r2(Math.max(open, close) + SIZE * (0.03 + 0.01 * Math.abs(Math.sin(i * 0.9)))),
+      low: r2(Math.min(open, close) - SIZE * (0.03 + 0.01 * Math.abs(Math.cos(i * 1.1)))),
+      close: r2(close),
+    };
+  });
+  const closeMsOf = (i: number) => H0 + (i + 1) * H;
+  const windowOf = (i: number) => gold.slice(i - LEVEL_WINDOW + 1, i + 1);
+  // the rule told again here, apart from _shared/macd-level.ts (as the #339 block's)
+  const moveOf = (i: number) => {
+    const w = windowOf(i);
+    let s = 0;
+    for (let k = 1; k < w.length; k++) s += Math.abs(w[k].close - w[k - 1].close);
+    return s / (w.length - 1);
+  };
+  const told = (i: number): "BUY" | "SELL" | "no" | null => {
+    const r = macd(windowOf(i).map((b) => b.close));
+    let before: number | null = null;
+    let side: number | null = null;
+    for (let k = 0; k < LEVEL_WINDOW; k++) {
+      before = side;
+      const m = r.macd[k];
+      const g = r.signal[k];
+      if (m === null || g === null) side = null;
+      else if (m - g > 0) side = 1;
+      else if (m - g < 0) side = -1;
+    }
+    if (before === null || side === null || before === side) return null;
+    const m = r.macd[LEVEL_WINDOW - 1] as number;
+    const level = 0.8 * moveOf(i);
+    if (side === -1) return m >= level ? "SELL" : "no";
+    return m <= -level ? "BUY" : "no";
+  };
+  const fires = () => {
+    const out: number[] = [];
+    for (let i = LEVEL_WINDOW - 1; i < gold.length; i++) {
+      const t = told(i);
+      if (t === "BUY" || t === "SELL") out.push(i);
+    }
+    return out;
+  };
+
+  it("the bars are the size of gold's stored ones: a usual hourly move of some $8 (the stored bars' 7.70 to 8.96)", () => {
+    for (const i of [LEVEL_WINDOW - 1, 1200, 2399]) {
+      expect(moveOf(i)).toBeGreaterThan(7.5);
+      expect(moveOf(i)).toBeLessThan(8.5);
+    }
+  });
+
+  it("is offered on gold's 1-hour chart and on no other of gold's, under the same rule id as the pairs'", () => {
+    expect(isMacdhChart("XAU/USD", "1h")).toBe(true);
+    expect(isIndicatorChartFor("macdx", "XAU/USD", "1h")).toBe(true);
+    // gold's other charts (the 15-minute and 4-hour and daily ones are Q-Trend's and ULTRA's) are not the MACD rule's
+    for (const iv of ["1min", "5min", "15min", "4h", "1day"]) {
+      expect(isMacdhChart("XAU/USD", iv), iv).toBe(false);
+      expect(isIndicatorChartFor("macdx", "XAU/USD", iv), iv).toBe(false);
+    }
+    // gold's 1-minute chart is the video's way's ('sweepx'), not this rule's
+    expect(isIndicatorChartFor("sweepx", "XAU/USD", "1min")).toBe(true);
+    expect(isIndicatorChartFor("sweepx", "XAU/USD", "1h")).toBe(false);
+    // the rule is the same rule: its id is the pairs' (the claim key holds the pair)
+    expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_k0.8mv_v3");
+    // the level is in the bars' own units: gold's, dollars (the stop and targets are dollars too)
+    expect(ultraUnit("XAU/USD")).toBe(1);
+  });
+
+  it("mails exactly the crosses at or beyond the level on gold's bars, against the rule told again here", () => {
+    const n = { cross: 0, BUY: 0, SELL: 0, no: 0 };
+    for (let i = LEVEL_WINDOW - 1; i < gold.length; i++) {
+      const want = told(i);
+      const d = decideScaledOnWindow(windowOf(i), LEVEL_WINDOW - 1, MACDH_K);
+      expect(d === null, `bar ${i}`).toBe(want === null);
+      const sigs = macdhSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000);
+      if (want !== null) n.cross++;
+      if (want === "BUY" || want === "SELL") {
+        n[want]++;
+        expect(sigs, `bar ${i}`).toHaveLength(1);
+        const g = sigs[0];
+        expect(g.rule).toBe("macdx");
+        expect(g.side).toBe(want);
+        expect(g.pair).toBe("XAU/USD");
+        expect(g.interval).toBe("1h");
+        expect(g.barTime).toBe(new Date(H0 + i * H).toISOString());
+        expect(g.closedAt).toBe(new Date(closeMsOf(i)).toISOString());
+        expect(g.close).toBe(gold[i].close);
+        // ULTRA's stop $13 and targets $4, $10 and $16 from the close, in dollars
+        const lv = ultraLevels(want, gold[i].close, 1, ULTRA_GOLD);
+        expect(g.sl).toBe(lv.sl);
+        expect(g.tps).toEqual(lv.tps);
+        expect(Math.abs((g.sl as number) - g.close)).toBeCloseTo(13, 9);
+        expect((g.tps as number[]).map((v) => Math.abs(v - g.close))).toEqual([4, 10, 16].map((x) => expect.closeTo(x, 9)));
+        const r = macd(windowOf(i).map((b) => b.close));
+        const move = moveOf(i);
+        expect(g.macdh).toEqual({ dir: want === "SELL" ? "DOWN" : "UP", m: r.macd[LEVEL_WINDOW - 1], signal: r.signal[LEVEL_WINDOW - 1], level: 0.8 * move, scale: move });
+        expect(want === "SELL" ? g.macdh!.m >= g.macdh!.level : g.macdh!.m <= -g.macdh!.level).toBe(true);
+      } else {
+        if (want === "no") n.no++;
+        expect(sigs, `bar ${i}`).toEqual([]);
+      }
+    }
+    // both sides fire, and crosses that do not fire are there for the check to fail on
+    expect(n.cross).toBe(n.BUY + n.SELL + n.no);
+    expect(n.BUY).toBeGreaterThan(5);
+    expect(n.SELL).toBeGreaterThan(5);
+    expect(n.no).toBeGreaterThan(5);
+    expect(n).toEqual(N_GOLD);
+  });
+
+  it("is mailed while its bar is fresh (half an hour), and is not judged on another chart of gold's", () => {
+    const i = fires()[3];
+    const w = windowOf(i);
+    const at = closeMsOf(i);
+    expect(macdhSignals("XAU/USD", "1h", w, at - 1)).toEqual([]);
+    expect(macdhSignals("XAU/USD", "1h", w, at)).toHaveLength(1);
+    expect(macdhSignals("XAU/USD", "1h", w, at + 30 * 60_000)).toHaveLength(1);
+    expect(macdhSignals("XAU/USD", "1h", w, at + 30 * 60_000 + 1)).toEqual([]);
+    for (const iv of ["1min", "5min", "15min", "4h", "1day"]) expect(macdhSignals("XAU/USD", iv, w, at + 30_000), iv).toEqual([]);
+    // fewer bars than the window: none
+    expect(macdhSignals("XAU/USD", "1h", w.slice(1), at + 30_000)).toEqual([]);
+  });
+
+  it("indicatorSignals stays what the live chart labels on gold: Q-Trend's and ULTRA's, not the MACD rule's", () => {
+    for (const i of fires().slice(0, 8)) {
+      const sigs = indicatorSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000);
+      expect(sigs.every((x) => x.rule === "qtrend" || x.rule === "ultra")).toBe(true);
+    }
+  });
+
+  const sample = (side: "BUY" | "SELL") => {
+    const i = fires().find((k) => told(k) === side)!;
+    return macdhSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000)[0];
+  };
+
+  it("the Japanese email says the level and the usual move in dollars, names gold, and speaks of no pips", () => {
+    const g = sample("SELL");
+    const f = g.macdh!;
+    const mail = renderIndicatorMail(g, "ja");
+    expect(mail.subject).toBe("【Sextant】金 1時間足 売り（SELL）のサイン（MACD の山・谷）");
+    const t = mail.text;
+    expect(t).toContain("金の1時間足で、MACD の山・谷のクロスの売り（SELL）のサインが出ました。");
+    expect(t).toContain("MACD(12・26・9)の青線がオレンジ線を上から下に抜けました（高い位置）");
+    expect(t).toContain(`MACD = ${f.m.toFixed(2)}、シグナル = ${f.signal.toFixed(2)}`);
+    expect(t).toContain(`売りの条件: クロスした時の MACD が +${f.level.toFixed(2)} 以上（金の1時間のふだんの動き ${f.scale.toFixed(2)}ドルの 0.8倍）`);
+    expect(t).toContain("損切り・利確の目安（ULTRA と同じ数字）:");
+    expect(t).toContain("（$13.00）");
+    expect(t).toContain("利確1");
+    expect(t).toContain("売りは MACD が金の1時間のふだんの動きの 0.8倍以上、買いはその値のマイナス以下の所で起きたものだけを送ります。");
+    expect(t).toContain("足は Twelve Data のもの（金は GMOコインにないため）");
+    expect(t).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません。");
+    expect(t).toContain("「MACD の山・谷」でチェックを外してください");
+    expect(t).not.toContain("pips");
+    expect(t).not.toContain("このペア");
+    const buy = renderIndicatorMail(sample("BUY"), "ja");
+    const fb = sample("BUY").macdh!;
+    expect(buy.subject).toBe("【Sextant】金 1時間足 買い（BUY）のサイン（MACD の山・谷）");
+    expect(buy.text).toContain(`買いの条件: クロスした時の MACD が −${fb.level.toFixed(2)} 以下（金の1時間のふだんの動き ${fb.scale.toFixed(2)}ドルの 0.8倍）`);
+  });
+
+  it("the English email says the same in dollars", () => {
+    const g = sample("BUY");
+    const f = g.macdh!;
+    const mail = renderIndicatorMail(g, "en");
+    expect(mail.subject).toBe("[Sextant] XAU/USD 1-hour BUY signal (MACD peak/valley)");
+    const t = mail.text;
+    expect(t).toContain("A MACD peak/valley BUY signal fired on XAU/USD, 1-hour chart.");
+    expect(f.m).toBeLessThan(0);
+    expect(t).toContain(`MACD = −${(-f.m).toFixed(2)}, signal = −${(-f.signal).toFixed(2)}`);
+    expect(t).toContain(`A BUY needs MACD at the cross at or below −${f.level.toFixed(2)}: 0.8 times gold's usual hourly move, $${f.scale.toFixed(2)}`);
+    expect(t).toContain("($13.00)");
+    expect(t).toContain("it mails only a SELL where MACD is at or above 0.8 times gold's usual hourly move and a BUY where it is at or below minus that.");
+    expect(t).toContain("The bars are Twelve Data's (GMO Coin does not carry XAU/USD)");
+    expect(t).toContain("This rule's win rate and its profit or loss a trade have not been measured.");
+    expect(t).not.toContain("pips");
+    expect(t).not.toContain("this pair");
+  });
+
+  it("the pairs' emails are as they were: pips, the pair's usual move", () => {
+    // (the #339 block checks them to the word; here only that gold's wording did not leak into them)
+    const bars = Array.from({ length: 2400 }, (_, i) => {
+      const close = 150 + wave(i);
+      return { datetime: stamp(H0 + i * H), open: close, high: close + 0.05, low: close - 0.05, close };
+    });
+    const i = (() => {
+      for (let k = LEVEL_WINDOW - 1; k < bars.length; k++) {
+        if (macdhSignals("USD/JPY", "1h", bars.slice(k - LEVEL_WINDOW + 1, k + 1), H0 + (k + 1) * H + 30_000).length) return k;
+      }
+      return -1;
+    })();
+    expect(i).toBeGreaterThan(0);
+    const g = macdhSignals("USD/JPY", "1h", bars.slice(i - LEVEL_WINDOW + 1, i + 1), H0 + (i + 1) * H + 30_000)[0];
+    const ja = renderIndicatorMail(g, "ja").text;
+    const en = renderIndicatorMail(g, "en").text;
+    expect(ja).toContain("このペアの1時間のふだんの動き");
+    expect(ja).toContain("pips〉の 0.8倍");
+    expect(ja).toContain("そのペアの1時間のふだんの動きの 0.8倍以上");
+    expect(en).toContain("times this pair's usual hourly move");
+    expect(en).toContain(" pips)");
+    expect(ja).not.toContain("ドルの 0.8倍");
+    expect(en).not.toContain("gold's");
   });
 });
