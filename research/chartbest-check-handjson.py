@@ -1,31 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-chartbest-check-handjson.py — the hand examples of research/chartbest/hand.json (docs/OPERATIONS.md §8.113 19 C1 and
-K1, 20 (g)) run through the independent Python's own functions, so that every hand example is checked on both sides
-(20 (g)「TS と Python の両方」). hand.json holds made-up inputs and answers derived by hand from the rule; this file
-only lays out each case's inputs as the case describes them and compares the Python's results with the written
-answers. It reads no TS file. The Python's own docs-derived cases (chartbest-check-hand.py) run as well.
+chartbest-check-handjson.py — every hand example of research/chartbest/hand.json (docs/OPERATIONS.md §8.113 19 and
+20 (g)) run through the independent Python's own functions: 20 (g)「手の例〔どの run でも走る。TS と Python の両方。
+…〕」.
 
-How a case's inputs are laid out (hand.json's conventions, stated in its "why" texts):
-  * mids: a bar whose bid and ask are the mid (the chart's mid is the mid itself);
-  * follow: the signal bar's bid / ask closes 149.995 / 150.005 (E 150.000) unless the case gives signalBid /
-    signalAsk; the bars after it from the case's bid rows, the ask a fixed spread above (0.005 for a yen pair,
-    0.00004 otherwise, or the case's spread); 1,441 bars after the signal bar unless the case gives a count, padded
-    with a filler bar (150.000 / 150.020 / 149.980 / 150.000 for a yen pair, 1.16430 / 1.16450 / 1.16400 / 1.16430
-    otherwise, or the case's filler), then the case's tail and after; the signal bar opens 2025-01-06 01:00 UTC
-    (or signalAt), the next one 5 minutes later (or followAt);
-  * the made-up rows of the selection, Holm and the sentences: an estimate with standard error se on df + 1 week
-    clusters (influence sums ± se·√(C−1)/C in the "alt" pattern +,−,+,−… or the "pairs" pattern +,+,−,−…, which
-    are uncorrelated), N = 100 e-signals, 200 resolved trades, the blind's W1 70% and PL1 −1.00 pips.
+Written 2026-10-12 by the step-2b Python author from §8.113 (19, 20 (g) and the sections each case names), from
+hand.json version 2 (its 'conventions' and 'fields') and from the Python modules' interfaces, without reading any TS
+(20 (d); spec questions SQ-I1, SQ-I2; py-brief 1.1). It replaces the earlier version of this file, whose layout
+values had been copied from the TS runner (SQ-I2).
+
+The layout (SQ-I2). A case gives its inputs and its answer; whatever else lays it out (bar times, spreads, filler bars,
+periods, the made-up rows of the sentences) is read from hand.json's 'conventions', never carried here. For a case
+of kind K and a key: the subcase's field (follow.usdExact's subcases), else the case's own field of that name, else
+the field of the conventions group whose 'usedBy' names K (a key found in two groups of one kind is an error). A value
+found nowhere fails the case with a message naming the key and the groups looked in. The only values of this file
+are the rule's (8's zero, 7's 1,440 bars through the modules' constants) and the comparison's tolerance (TOL).
+
+main(path) -> 0 when every case passed, 1 when one failed, 2 when the file cannot be read. It prints
+'sha256 <path> <hex>' (of the file's bytes), then one 'ok   handjson.<id>' or 'FAIL handjson.<id> (<what differed>)'
+line per case in the file's order (a case that raises fails; its message is the problem), then
+'hand.json: <passed> of <total> passed'. Called by chartbest-check.py --mode hand --hand FILE (no --plant).
 """
 import calendar
+import hashlib
 import importlib.util
+import json
 import math
 import os
 import sys
-import time
-import types
 
 import numpy as np
 
@@ -46,623 +49,775 @@ D = _mod('data')
 S = _mod('signals')
 ST = _mod('stats')
 SEL = _mod('select')
-TX = _mod('text')
 CNT = _mod('count')
+TX = _mod('text')
 
-MINI = D.PERIODS['mini']
-DEFAULT_START = '2025-01-06T01:00:00Z'
-SIGNAL_BID, SIGNAL_ASK = 149.995, 150.005
-SPREAD = {True: 0.005, False: 0.00004}
-FILLER = {True: [150.0, 150.02, 149.98, 150.0], False: [1.1643, 1.1645, 1.164, 1.1643]}
-FOLLOW_COUNT = 1441
-KIND_OF = {'tp': ST.KIND_TP, 'sl': ST.KIND_SL, 'amb': ST.KIND_AMB, 'open': ST.KIND_OPEN}
-NAME_OF_KIND = {v: k for k, v in KIND_OF.items()}
+TOL = 1e-9                     # plan 4.4: reals within 1e-9 (a case's own 'tol' where it gives one: t.q)
+# 6 ①「温めが足りない」 belongs to an item's warm-up (5「温め: 項目の表の温めがそろうまで、合図は出さない」); the
+# signals of the cases hole and half belong to no item, so none is applied (a spec question asks hand.json to say so)
+NO_ITEM_WARMUP = 0
 DIRS = {'BUY': S.BUY, 'SELL': S.SELL}
+KINDS = {'tp': ST.KIND_TP, 'sl': ST.KIND_SL, 'amb': ST.KIND_AMB, 'open': ST.KIND_OPEN}
+KIND_NAMES = {v: k for k, v in KINDS.items()}
 
 
-# ---------------------------------------------------------------- helpers
-def ms(iso):
-    return calendar.timegm(time.strptime(iso, '%Y-%m-%dT%H:%M:%SZ')) * 1000
+class CaseFail(Exception):
+    pass
 
 
-def iso(t):
-    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(int(t) // 1000))
+def need(cond, msg):
+    if not cond:
+        raise CaseFail(msg)
 
 
-def near(a, b, tol=1e-9):
-    return a is not None and b is not None and abs(a - b) <= tol
+def close(x, y, tol=TOL):
+    return x is not None and y is not None and abs(x - y) <= tol
 
 
-def bars_mids(pair, times, mids):
-    cols = [[m[k] for m in mids] for k in range(4)]
-    return D.PairBars(pair, D.PAIRS.index(pair), times, cols, cols)
+def ms(text):
+    """'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ' (UTC) -> integer ms."""
+    day, _, clock = text.rstrip('Z').partition('T')
+    y, mo, d = (int(x) for x in day.split('-'))
+    h, mi, sec = (int(x) for x in (clock or '00:00:00').split(':'))
+    return calendar.timegm((y, mo, d, h, mi, sec)) * 1000
 
 
-def bars_bids(pair, times, bids, spreads):
-    bid = [[b[k] for b in bids] for k in range(4)]
-    ask = [[b[k] + s for b, s in zip(bids, spreads)] for k in range(4)]
-    return D.PairBars(pair, D.PAIRS.index(pair), times, bid, ask)
+# ---------------------------------------------------------------- SQ-I2: the layout of a case
+class Layout:
+    def __init__(self, conv, case, sub=None):
+        self.conv, self.case, self.sub = conv, case, sub
+        self.kind = case['kind']
+        self.groups = [g for g, v in conv.items() if isinstance(v, dict) and self.kind in (v.get('usedBy') or [])]
+
+    def get(self, key):
+        if self.sub is not None and key in self.sub:
+            return self.sub[key]
+        if key in self.case:
+            return self.case[key]
+        found = [g for g in self.groups if key in self.conv[g]]
+        need(len(found) < 2, f"conventions: '{key}' is in the groups {', '.join(found)}, all used by kind {self.kind}")
+        need(found, f"conventions: no '{key}' for kind {self.kind} (looked in the case and in the group(s) "
+                    f"{', '.join(self.groups) or 'none'})")
+        return self.conv[found[0]][key]
 
 
-def flat(pair, times, mid):
-    return bars_mids(pair, times, [(mid, mid, mid, mid)] * len(times))
+def period_of(L):
+    """1's dates of the period the layout names (conventions.periods: S0, START, SPLIT, END and w0 of each half)."""
+    name = L.get('period')
+    periods = L.get('periods')
+    need(name in periods, f"conventions.periods: no period '{name}'")
+    p = periods[name]
+    return {'name': name, 's0': ms(p['S0']), 'start': ms(p['START']), 'split': ms(p['SPLIT']), 'end': ms(p['END']),
+            'w0': {h: int(w) for h, w in p['w0'].items()}}
 
 
-def dname(d):
-    return S.DIR_NAME[d]
+def mid_bars(L, pair, opens, mids):
+    """conventions.midBars: a bar given by its mids [O, H, L, C] has bid = mid − h and ask = mid + h on each of O, H, L
+    and C (h = halfSpread of the pair), so that the chart's mid (2) is the given mid; checked here."""
+    h = L.get('halfSpread')
+    need(pair in h, f"conventions.midBars.halfSpread: no '{pair}'")
+    h = h[pair]
+    bid = [[m[k] - h for m in mids] for k in range(4)]
+    ask = [[m[k] + h for m in mids] for k in range(4)]
+    pb = D.PairBars(pair, D.PAIRS.index(pair), list(opens), bid, ask)
+    for k, arr in enumerate((pb.mo, pb.mh, pb.ml, pb.mc)):
+        for i, m in enumerate(mids):
+            need(float(arr[i]) == m[k], f'layout: the chart mid of bar {i} is {arr[i]}, not the given {m[k]}')
+    return pb
 
 
-# ---------------------------------------------------------------- 19 C1 / K1, 20 (g) 時刻
-def run_c1(c, bad):
-    t0 = ms(c['start'])
-    pb = bars_mids(c['pair'], [t0 + k * D.STEP for k in range(len(c['bars']))], c['bars'])
-    buy, sell, s = S.donchian_tri(pb, c['n'])
-    ex = c['expect']
-    if s.tolist() != ex['target']:
-        bad.append(f'target {s.tolist()} (want {ex["target"]})')
+def flat(m):
+    return (m, m, m, m)
+
+
+def one_pair_bars(pair, opens, bid_rows, ask_rows):
+    """A PairBars from explicit bid / ask [O, H, L, C] rows."""
+    bid = [[r[k] for r in bid_rows] for k in range(4)]
+    ask = [[r[k] for r in ask_rows] for k in range(4)]
+    return D.PairBars(pair, D.PAIRS.index(pair), list(opens), bid, ask)
+
+
+# ---------------------------------------------------------------- c1, k1, dst (19 C1 / K1, 5, 2, 8)
+def run_c1(case, conv):
+    L = Layout(conv, case)
+    pair, n, bars = L.get('pair'), L.get('n'), case['bars']
+    t0 = ms(L.get('start'))
+    pb = mid_bars(L, pair, [t0 + k * D.STEP for k in range(len(bars))], bars)
+    buy, sell, s = S.donchian_tri(pb, n)
     cands, _ = S.events_of(buy, sell)
-    got = [[i, dname(d)] for i, d in cands]
-    if got != ex['signals']:
-        bad.append(f'signals {got} (want {ex["signals"]})')
+    exp = case['expect']
+    need(s.tolist() == exp['target'], f'target {s.tolist()}, expected {exp["target"]}')
+    got = [[i, S.DIR_NAME[d]] for i, d in cands]
+    need(got == exp['signals'], f'signals {got}, expected {exp["signals"]}')
 
 
-def _breedon(pb, item):
+def breedon_signals(pb, item):
+    """K1 through the Python's functions: the condition per bar, 5's events, the mark of the shifted weeks."""
     b, s = S.breedon_tri(pb, item)
     cands, _ = S.events_of(b, s)
-    return [(int(pb.t[i]) + D.STEP, d, S.breedon_marks(int(pb.t[i]) + D.STEP)) for i, d in cands]
+    return [[pb.T(i), S.DIR_NAME[d], S.breedon_marks(pb.T(i))] for i, d in cands]
 
 
-def run_k1(c, bad):
-    times = [ms(x) for x in c['bars']]
-    pb = flat('EUR/USD', times, 1.03)
-    for item in ('breedon-1', 'breedon-2'):
-        got = [[iso(T), dname(d), m] for T, d, m in _breedon(pb, item)]
-        want = c['expect'].get(item, [])
-        if got != want:
-            bad.append(f'{item}: {got} (want {want})')
+def run_k1(case, conv):
+    L = Layout(conv, case)
+    pair, m = L.get('pair'), L.get('flatMid')
+    opens = [ms(x) for x in case['bars']]
+    need(opens == sorted(set(opens)), 'the bars are not in time order')
+    pb = mid_bars(L, pair, opens, [flat(m)] * len(opens))
+    for item, want in case['expect'].items():
+        got = breedon_signals(pb, item)
+        want = [[ms(T), d, list(marks)] for T, d, marks in want]
+        need(got == want, f'{item}: {got}, expected {want}')
 
 
-def run_dst(c, bad):
-    days = c['days']
-    times = [ms(c['context'])]
-    for d, *_ in days:
-        for hm in ('06:55', '07:55', '14:55', '15:55'):
-            times.append(ms(f'{d}T{hm}:00Z'))
-    pb = flat('EUR/USD', times, 1.08)
-    s1, s2 = _breedon(pb, 'breedon-1'), _breedon(pb, 'breedon-2')
-    if len(s1) != len(days) or len(s2) != len(days):
-        bad.append(f'signals {len(s1)}/{len(s2)} (want {len(days)} each)')
-        return
-    for (d, T1, T2, season), a, b in zip(days, s1, s2):
-        if iso(a[0]) != T1 or a[1] != S.SELL:
-            bad.append(f'{d} breedon-1 {iso(a[0])} {dname(a[1])} (want {T1} SELL)')
-        if iso(b[0]) != T2 or b[1] != S.BUY:
-            bad.append(f'{d} breedon-2 {iso(b[0])} {dname(b[1])} (want {T2} BUY)')
-        for x, T in ((a, T1), (b, T2)):
-            got = D.SEASON_NAMES[D.season_of(ms(T))]
-            if got != season:
-                bad.append(f'{d} season at {T}: {got} (want {season})')
-            if ('shiftedWeek' in x[2]) != (season == 'SW'):
-                bad.append(f'{d} mark at {T}: {x[2]}')
+def run_dst(case, conv):
+    L = Layout(conv, case)
+    pair, times, m = L.get('pair'), L.get('barTimes'), L.get('flatMid')
+    opens = [ms(case['context'])] + [ms(f'{day}T{hm}:00Z') for day, *_ in case['days'] for hm in times]
+    need(opens == sorted(set(opens)), 'the bars are not in time order')
+    pb = mid_bars(L, pair, opens, [flat(m)] * len(opens))
+    got1, got2 = breedon_signals(pb, 'breedon-1'), breedon_signals(pb, 'breedon-2')
+    want1, want2 = [], []
+    for day, t1, t2, season in case['days']:
+        marks = ['shiftedWeek'] if season == 'SW' else []          # 18 K1 印 (fields: the mark shiftedWeek)
+        want1.append([ms(t1), 'SELL', marks])
+        want2.append([ms(t2), 'BUY', marks])
+        for T in (ms(t1), ms(t2)):
+            got = D.SEASON_NAMES[D.season_of(T)]
+            need(got == season, f'{day}: the season at {T} is {got}, expected {season}')
+    need(got1 == want1, f'breedon-1 {got1}, expected {want1}')
+    need(got2 == want2, f'breedon-2 {got2}, expected {want2}')
 
 
-# ---------------------------------------------------------------- 2 rounding and points
-def run_round(c, bad):
-    d = D.digits_of(c['pair'])
-    got = D.price_str(D.chart_round((c['bid'] + c['ask']) / 2.0, d), d)
-    if got != c['expect']:
-        bad.append(f'mid {got} (want {c["expect"]})')
-    pb = D.PairBars(c['pair'], D.PAIRS.index(c['pair']), [ms(DEFAULT_START)], [[c['bid']]] * 4, [[c['ask']]] * 4)
-    got2 = D.price_str(float(pb.mc[0]), d)
-    if got2 != c['expect']:
-        bad.append(f'bars mid {got2} (want {c["expect"]})')
+# ---------------------------------------------------------------- 2 the mid and the points
+def run_round(case, conv):
+    L = Layout(conv, case)
+    pair, bid, ask = L.get('pair'), L.get('bid'), L.get('ask')
+    at, read_at = ms(L.get('at')), ms(L.get('readAt'))
+    need(read_at >= at + D.STEP, 'layout: the bar is not closed at readAt (2「確定した足だけを使う」)')
+    pb = one_pair_bars(pair, [at], [flat(bid)], [flat(ask)])
+    got = [D.price_str(float(x[0]), pb.digits) for x in (pb.mo, pb.mh, pb.ml, pb.mc)]
+    need(got == [case['expect']] * 4, f'mid {got}, expected {case["expect"]}')
 
 
-def run_points(c, bad):
-    for pair, v, want in c['items']:
-        got = D.points_of(v, pair)
-        if got != want:
-            bad.append(f'{pair} {v}: {got} (want {want})')
+def run_points(case, conv):
+    for pair, mid, want in case['items']:
+        got = D.points_of(mid, pair)
+        need(got == want, f'{pair} {mid}: {got}, expected {want}')
 
 
-# ---------------------------------------------------------------- 7 follow, 8 mirror, 6 ② sent
-def _follow_one(c, spec):
-    pair = c['pair']
-    jpy = D.is_jpy(pair)
-    t0 = ms(c.get('signalAt', DEFAULT_START))
-    tf = ms(c['followAt']) if 'followAt' in c else t0 + D.STEP
-    sb, sa = c.get('signalBid', SIGNAL_BID), c.get('signalAsk', SIGNAL_ASK)
-    spread = c.get('spread', SPREAD[jpy])
-    filler = c.get('filler', FILLER[jpy])
-    count = spec.get('count') or FOLLOW_COUNT
-    tail = spec.get('tail') or []
-    rows = list(spec['rows'])
-    while len(rows) < count - len(tail):
-        rows.append(filler)
-    rows += tail + (spec.get('after') or [])
-    times = [t0] + [tf + k * D.STEP for k in range(len(rows))]
-    pb = bars_bids(pair, times, [[sb] * 4] + rows, [sa - sb] + [spread] * len(rows))
-    # 6 ④ / 7: a trade is followed only when its 1,440 bars after the signal bar are there
-    if D.TRACK > pb.n - 1:
+# ---------------------------------------------------------------- 7 the follow, 8 the mirror
+def follow_bars(L, rows):
+    """conventions.follow / .mirror: the signal bar (four bids signalBid, four asks signalAsk) at signalAt, then from
+    followAt every 5 minutes the rows (bid O, H, L, C), the filler repeated until count − (tail bars) bars stand after
+    the signal bar, the tail (its last bar is bar number count) and 'after'; ask = bid + spread after the signal bar."""
+    pair = L.get('pair')
+    t_sig, t_fol = ms(L.get('signalAt')), ms(L.get('followAt'))
+    need(t_fol >= t_sig + D.STEP, 'layout: followAt is before the signal bar closes')
+    sb, sa, spread = L.get('signalBid'), L.get('signalAsk'), L.get('spread')
+    filler, count = L.get('filler'), L.get('count')
+    tail = L.get('tail') if L.kind == 'follow' else []
+    after = L.get('after') if L.kind == 'follow' else []
+    n_fill = count - len(tail) - len(rows)
+    need(n_fill >= 0, f'layout: {len(rows)} rows and {len(tail)} tail bars do not fit in count {count}')
+    after_bars = list(rows) + [filler] * n_fill + list(tail) + list(after)
+    opens = [t_sig] + [t_fol + k * D.STEP for k in range(len(after_bars))]
+    bid_rows = [flat(sb)] + [list(r) for r in after_bars]
+    ask_rows = [flat(sa)] + [[x + spread for x in r] for r in after_bars]
+    return one_pair_bars(pair, opens, bid_rows, ask_rows)
+
+
+def follow_trade(pb, d, n_tp):
+    """6 / 7 for the signal at bar 0: E = its mid close; the levels (ST.levels); followed from bar 1 on the exit side
+    (ST.follow_many) when the 1,440th follow bar exists (6 ④: i + 1,440 <= the last bar, as S.classify); the pips
+    from the fill (BUY the ask close, SELL the bid close). Returns (kind, pips, bars) or None when not followed."""
+    if 0 + D.TRACK > pb.n - 1:
         return None
-    d = DIRS[c['dir']]
+    E = float(pb.mc[0])
+    sl, tp = ST.levels(np.array([E]), d, n_tp, pb.pip)
     buy = d == S.BUY
-    sl, tp = ST.levels(np.array([pb.mc[0]]), d, 4 if c['tp'] == 4 else 10, pb.pip)
     kind, ex, nb, _ = ST.follow_many(pb, np.array([1]), buy, sl, tp)
-    fill = pb.ac[0] if buy else pb.bc[0]
-    pips = (ex[0] - fill) / pb.pip if buy else (fill - ex[0]) / pb.pip
-    return NAME_OF_KIND[int(kind[0])], float(pips), int(nb[0])
+    fill = float(pb.ac[0]) if buy else float(pb.bc[0])
+    pips = (float(ex[0]) - fill) / pb.pip if buy else (fill - float(ex[0])) / pb.pip
+    return int(kind[0]), pips, int(nb[0])
 
 
-def run_follow(c, bad):
-    subs = c.get('subcases') or [{'rows': c['rows'], 'count': c.get('count'), 'tail': c.get('tail'),
-                                  'after': c.get('after'), 'expect': c['expect']}]
-    for j, sp in enumerate(subs):
-        tag = f'#{j + 1} ' if len(subs) > 1 else ''
-        got = _follow_one(c, sp)
-        want = sp['expect']
-        if want['kind'] is None:
-            if got is not None:
-                bad.append(f'{tag}followed ({got[0]}), want not followed')
+def run_follow(case, conv):
+    subs = case.get('subcases') or [None]
+    for k, sub in enumerate(subs):
+        L = Layout(conv, case, sub)
+        where = f'subcase {k}: ' if sub is not None else ''
+        exp = (sub if sub is not None else case)['expect']
+        pb = follow_bars(L, L.get('rows'))
+        got = follow_trade(pb, DIRS[L.get('dir')], L.get('tp'))
+        if exp['kind'] is None:
+            need(got is None, f'{where}followed ({got and KIND_NAMES[got[0]]}), expected not followed (6 ④)')
             continue
-        if got is None:
-            bad.append(f'{tag}not followed (want {want["kind"]})')
-            continue
-        k, p, n = got
-        if k != want['kind']:
-            bad.append(f'{tag}kind {k} (want {want["kind"]})')
-        if 'pips' in want and not near(p, want['pips'], 1e-6):
-            bad.append(f'{tag}pips {p} (want {want["pips"]})')
-        if 'bars' in want and n != want['bars']:
-            bad.append(f'{tag}bars {n} (want {want["bars"]})')
+        need(got is not None, f'{where}not followed, expected {exp["kind"]}')
+        kind, pips, bars = got
+        need(KIND_NAMES[kind] == exp['kind'], f'{where}kind {KIND_NAMES[kind]}, expected {exp["kind"]}')
+        need(close(pips, exp['pips']), f'{where}pips {pips}, expected {exp["pips"]}')
+        need(bars == exp['bars'], f'{where}bars {bars}, expected {exp["bars"]}')
 
 
-def run_mirror(c, bad):
-    """8: e of a blind-table row (the mirror) on a one-row world of the mini period's first half."""
-    t0 = D.utc(2024, 1, 8)
-    for j, w in enumerate(c['worlds']):
-        rows = list(w['rows'])
-        while len(rows) < D.TRACK:
-            rows.append([150.0, 150.02, 149.98, 150.0])
-        times = [t0] + [t0 + (k + 1) * D.STEP for k in range(len(rows))]
-        pb = bars_bids('USD/JPY', times, [[149.995] * 4] + rows, [0.01] + [0.005] * len(rows))
-        ks = np.nonzero(S.blind_mask(pb, [], 'H1', MINI))[0]
-        if ks.tolist() != [0]:
-            bad.append(f'world {j + 1}: blind rows {ks.tolist()} (want [0])')
-            continue
-        bp = ST.BlindPair(pb, ks, 'H1', MINI)
-        e = bp.e(0, S.BUY)
-        if e != w['e']:
-            bad.append(f'world {j + 1}: e {e} (want {w["e"]})')
+def run_mirror(case, conv):
+    L = Layout(conv, case)
+    period, half = period_of(L), L.get('half')
+    for k, world in enumerate(case['worlds']):
+        pb = follow_bars(L, world['rows'])
+        holes, _ = S.holes_of([pb], period)
+        need(holes == [[]], f'world {k}: holes {holes} (one pair has no open slot)')
+        ks = np.nonzero(S.blind_mask(pb, holes[0], half, period))[0]
+        need(ks.tolist() == [0], f'world {k}: blind rows {ks.tolist()}, the layout gives the signal bar only')
+        bp = ST.BlindPair(pb, ks, half, period)
+        got = (bp.e(0, S.BUY), bp.e(0, S.SELL))
+        need(got == (world['e'], -world['e']), f'world {k}: e (BUY, SELL) {got}, expected ({world["e"]}, {-world["e"]})')
 
 
-def run_sent(c, bad):
-    for T, want in c['items']:
-        if D.sent(ms(T)) != want:
-            bad.append(f'{T}: {not want} (want {want})')
+# ---------------------------------------------------------------- 6 ② sent, 5 events
+def run_sent(case, conv):
+    for T, want in case['items']:
+        got = D.sent(ms(T))
+        need(got == want, f'{T}: sent {got}, expected {want}')
 
 
-# ---------------------------------------------------------------- 5 the event framework
-def run_events(c, bad):
-    seqs = c['seqs']
-    for j, sq in enumerate(seqs):
-        tag = f'#{j + 1} ' if len(seqs) > 1 else ''
-        if sq['type'] == 'named':
-            n = len(sq['namedBuy'])
-            cands, cnt = S.events_named(sq['namedBuy'], [[] for _ in range(n)])
+def run_events(case, conv):
+    for k, seq in enumerate(case['seqs']):
+        typ = seq['type']
+        if typ == 'always':
+            # 5「常に持つ型…条件は「持ち高の目標が d」」; a target null is 無し for both directions
+            tg = seq['target']
+            buy = np.array([-1 if x is None else int(x == 1) for x in tg], dtype=np.int8)
+            sell = np.array([-1 if x is None else int(x == -1) for x in tg], dtype=np.int8)
+            cands, cnt = S.events_of(buy, sell)
+        elif typ == 'condition':
+            cands, cnt = S.events_of(np.array(seq['buy'], dtype=np.int8), np.array(seq['sell'], dtype=np.int8))
+        elif typ == 'named':
+            nb = seq['namedBuy']
+            cands, cnt = S.events_named(nb, [[] for _ in nb])        # fields.events: no SELL name holds
         else:
-            if sq['type'] == 'always':
-                tg = sq['target']
-                buy = [-1 if x is None else (1 if x == 1 else 0) for x in tg]
-                sell = [-1 if x is None else (1 if x == -1 else 0) for x in tg]
-            else:
-                buy, sell = sq['buy'], sq['sell']
-            cands, cnt = S.events_of(np.array(buy, dtype=np.int8), np.array(sell, dtype=np.int8))
-        ex = sq['expect']
-        got = [[i, dname(d)] for i, d in cands]
-        if got != ex['signals']:
-            bad.append(f'{tag}signals {got} (want {ex["signals"]})')
-        for k in ('firstSkipped', 'nullPrevSkipped', 'bothSuppressed'):
-            if cnt[k] != ex[k]:
-                bad.append(f'{tag}{k} {cnt[k]} (want {ex[k]})')
+            raise CaseFail(f'seq {k}: unknown type {typ}')
+        exp = seq['expect']
+        got = [[i, S.DIR_NAME[d]] for i, d in cands]
+        need(got == exp['signals'], f'seq {k}: signals {got}, expected {exp["signals"]}')
+        for key in ('firstSkipped', 'nullPrevSkipped', 'bothSuppressed'):
+            need(cnt[key] == exp[key], f'seq {k}: {key} {cnt[key]}, expected {exp[key]}')
 
 
 # ---------------------------------------------------------------- 6 ③ holes, 1 / 6 ④ halves
-def run_hole(c, bad):
-    a, b = ms(c['start']), ms(c['end'])
-    period = dict(MINI, s0=a, end=b)
+def run_hole(case, conv):
+    L = Layout(conv, case)
+    start, end = ms(case['start']), ms(case['end'])
+    period = dict(period_of(L), s0=start, end=end)
+    mids = L.get('flatMid')
+    missing = {pair: {ms(x) for x in v} for pair, v in case['missing'].items()}
     bars = []
     for pair in D.PAIRS:
-        miss = {ms(x) for x in c['missing'].get(pair, [])}
-        times = [t for t in range(a, b, D.STEP) if t not in miss]
-        bars.append(flat(pair, times, 150.0 if D.is_jpy(pair) else 1.1))
+        need(pair in mids, f"conventions.hole.flatMid: no '{pair}'")
+        opens = [t for t in range(start, end, D.STEP) if t not in missing.get(pair, set())]
+        bars.append(mid_bars(L, pair, opens, [flat(mids[pair])] * len(opens)))
     holes, _ = S.holes_of(bars, period)
-    ex = c['expect']
-    for pi, pair in enumerate(D.PAIRS):
-        got = [[iso(x), iso(y)] for x, y in holes[pi]]
-        want = ex['holes'].get(pair, [])
-        if got != want:
-            bad.append(f'{pair} holes {got} (want {want})')
-    uj = bars[0]
-    for open_, want in ex['overlap']:
-        i = uj.index_of.get(ms(open_))
-        if i is None:
-            bad.append(f'no USD/JPY bar at {open_}')
-            continue
-        got = S.in_hole(holes[0], int(uj.t[max(0, i - S.HOLE_LOOKBACK)]), int(uj.t[i]) + D.STEP)
-        if got != want:
-            bad.append(f'overlap at {open_}: {got} (want {want})')
-        reason, _ = S.classify(uj, i, 0, holes[0], period)
-        if (reason == 'r3') != want:
-            bad.append(f'reason at {open_}: {reason}')
+    for pair, want in case['expect']['holes'].items():
+        got = [[a, b] for a, b in holes[D.PAIRS.index(pair)]]
+        want = [[ms(a), ms(b)] for a, b in want]
+        need(got == want, f'{pair}: holes {got}, expected {want}')
+    pi = D.PAIRS.index('USD/JPY')                                   # fields.hole: a USD/JPY bar's open
+    pb = bars[pi]
+    for t_open, want in case['expect']['overlap']:
+        i = pb.index_of.get(ms(t_open))
+        need(i is not None, f'no USD/JPY bar opens at {t_open}')
+        got = S.in_hole(holes[pi], int(pb.t[max(0, i - S.HOLE_LOOKBACK)]), pb.T(i))
+        need(got == want, f'{t_open}: the window overlaps a hole {got}, expected {want}')
+        reason, _ = S.classify(pb, i, NO_ITEM_WARMUP, holes[pi], period)
+        need((reason == 'r3') == want, f'{t_open}: reason {reason}, expected {"r3" if want else "not r3"}')
 
 
-def run_half(c, bad):
-    times = list(range(ms(c['from']), ms(c['to']) + D.STEP, D.STEP))
-    pb = flat('USD/JPY', times, 150.0)
-    for open_, reason, half in c['expect']:
-        r, h = S.classify(pb, pb.index_of[ms(open_)], 0, [], MINI)
-        if r != reason or h != half:
-            bad.append(f'{open_}: {r} {h} (want {reason} {half})')
+def run_half(case, conv):
+    L = Layout(conv, case)
+    period, pair, m = period_of(L), L.get('pair'), L.get('flatMid')
+    a, b = ms(case['from']), ms(case['to'])
+    opens = list(range(a, b + D.STEP, D.STEP))                     # both ends included
+    pb = mid_bars(L, pair, opens, [flat(m)] * len(opens))
+    holes, _ = S.holes_of([pb], period)
+    need(holes == [[]], f'holes {holes} (the layout has none)')
+    for t_open, reason, half in case['expect']:
+        i = pb.index_of.get(ms(t_open))
+        need(i is not None, f'no bar opens at {t_open}')
+        got = list(S.classify(pb, i, NO_ITEM_WARMUP, holes[0], period))
+        need(got == [reason, half], f'{t_open}: {got}, expected {[reason, half]}')
 
 
-# ---------------------------------------------------------------- 8 Δ, its SE, the clusters, the shift
+# ---------------------------------------------------------------- 8 Δ, its SE candidates, the week shift
 def bstr_of(blind_obs):
-    """The blind strata of the stats module's layout: {stratum: (m, mean, {week: (sum, n)}, {block: (sum, n)})},
-    the sums oldest first."""
-    by = {}
+    """The blind strata in the stats module's layout (ST.BlindTable.strata): {stratum: (m, mean v, {week: (sum v,
+    count)}, {block: (sum v, count)})}, the sums taken in the given order."""
+    acc = {}
     for s, w, b, v in blind_obs:
-        by.setdefault(s, []).append((w, b, v))
-    out = {}
-    for s, rows in by.items():
-        acc = 0.0
-        wk, bk = {}, {}
-        for w, b, v in rows:
-            acc += v
-            x = wk.get(w)
-            wk[w] = (v, 1) if x is None else (x[0] + v, x[1] + 1)
-            x = bk.get(b)
-            bk[b] = (v, 1) if x is None else (x[0] + v, x[1] + 1)
-        out[s] = (len(rows), acc / len(rows), wk, bk)
+        a = acc.setdefault(s, [0, 0.0, {}, {}])
+        a[0] += 1
+        a[1] += v
+        x = a[2].get(w)
+        a[2][w] = (v, 1) if x is None else (x[0] + v, x[1] + 1)
+        x = a[3].get(b)
+        a[3][b] = (v, 1) if x is None else (x[0] + v, x[1] + 1)
+    return {s: (a[0], a[1] / a[0], a[2], a[3]) for s, a in acc.items()}
+
+
+def check_delta(est, exp):
+    """fields.delta: est, N, strata, dropped, use, se / C / df of the SE used, kinds (the candidates in order)."""
+    used = next((c for c in est['cands'] if c['kind'] == est['use']), None)
+    for key, want in exp.items():
+        if key in ('blindPerStratum', 'seasons'):
+            continue
+        if key == 'est':
+            need(close(est['est'], want), f'Δ {est["est"]}, expected {want}')
+        elif key in ('N', 'strata', 'dropped', 'use'):
+            need(est[key] == want, f'{key} {est[key]}, expected {want}')
+        elif key == 'kinds':
+            got = [c['kind'] for c in est['cands']]
+            need(got == want, f'kinds {got}, expected {want}')
+        elif key in ('se', 'C', 'df'):
+            need(used is not None, f'no SE used, expected {key} {want}')
+            ok = close(used[key], want) if key == 'se' else used[key] == want
+            need(ok, f'{key} {used[key]}, expected {want}')
+        else:
+            raise CaseFail(f'expect.{key}: not a field of kind delta')
+
+
+def run_delta(case, conv):
+    sig = [tuple(o) for o in case['sig']]
+    est = ST.delta_est(sig, bstr_of([tuple(o) for o in case['blind']]))
+    check_delta(est, case['expect'])
+
+
+def run_delta_t(case, conv):
+    L = Layout(conv, case)
+    period, half = period_of(L), L.get('half')
+    pair, d, layer = L.get('pair'), DIRS[L.get('dir')], L.get('layer')
+    pi = D.PAIRS.index(pair)
+
+    def obs(T, v):          # 8: the stratum of the layer, pair, direction and T; 1: the week and the 4-week block
+        return (ST.stratum_of(layer, pi, d, T), D.wk(T), D.block_of(T, half, period), v)
+    sig = [obs(ms(T), v) for T, v in case['sig']]
+    bstr = bstr_of([obs(ms(T), v) for T, v in case['blind']])
+    est = ST.delta_est(sig, bstr)
+    exp = case['expect']
+    check_delta(est, exp)
+    if 'blindPerStratum' in exp:
+        got = [bstr[s][0] for s in sorted(est['_ns'])]
+        need(got == exp['blindPerStratum'], f'blind rows per stratum {got}, expected {exp["blindPerStratum"]}')
+    if 'seasons' in exp:
+        got = [D.SEASON_NAMES[D.season_of(ms(T))] for T, _ in case['sig']]
+        need(got == exp['seasons'], f'seasons {got}, expected {exp["seasons"]}')
+
+
+def run_clusters(case, conv):
+    L = Layout(conv, case)
+    st, sv, bv = L.get('stratum'), L.get('sigVCycle'), L.get('blindVCycle')
+    for k, cs in enumerate(case['sets']):
+        wb = list(zip(cs['weeks'], cs['blocks']))
+        sig = [(st, w, b, sv[j % len(sv)]) for j, (w, b) in enumerate(wb)]
+        blind = [(st, w, b, bv[j % len(bv)]) for j, (w, b) in enumerate(wb)]
+        est = ST.delta_est(sig, bstr_of(blind))
+        kinds = [c['kind'] for c in est['cands']]
+        Cs = [c['C'] for c in est['cands']]
+        need(kinds == cs['kinds'] and Cs == cs['C'], f'set {k}: kinds {kinds} C {Cs}, expected {cs["kinds"]} {cs["C"]}')
+
+
+def hand_table(L, rows):
+    """conventions.table: a blind table of one pair written by hand, in the stats module's own classes. rows:
+    [(bar open, {leg: (kind, pips)})] — a leg not given is conventions.table.legs. The pair's bars are flat at mid at
+    those opens only (midBars), the other pairs have none; every row is a blind row (T = open + 5 min, E = mid) of
+    half 'half' of period 'period'; e of a BUY row = y10(BUY) − y10(SELL) (8, ST.y_of). Returns (table, pb)."""
+    pair, mid, legs = L.get('pair'), L.get('mid'), L.get('legs')
+    period, half = period_of(L), L.get('half')
+    rows = sorted(rows, key=lambda r: r[0])
+    opens = [t for t, _ in rows]
+    need(len(set(opens)) == len(opens), 'layout: two rows open at the same time')
+    pb = mid_bars(L, pair, opens, [flat(mid)] * len(opens))
+    ks = np.arange(pb.n, dtype=np.int64)
+    bp = object.__new__(ST.BlindPair)
+    bp.pi, bp.pair, bp.k = pb.pi, pair, ks
+    bp.T = pb.t[ks] + D.STEP
+    bp.E = pb.mc[ks]
+    bp.hour, bp.season, bp.week = S.hour_arr(bp.T), S.season_arr(bp.T), S.wk_arr(bp.T)
+    bp.block = (bp.week - period['w0'][half]) // 4
+    default = (KINDS[legs['kind']], legs['pips'])
+    bp.kind, bp.pips, bp.nbars, bp.exi = {}, {}, {}, {}
+    for name, _, _ in ST.LEGS:
+        vals = [given.get(name, default) for _, given in rows]
+        bp.kind[name] = np.array([v[0] for v in vals], dtype=np.int8)
+        bp.pips[name] = np.array([v[1] for v in vals], dtype=np.float64)
+        bp.nbars[name] = np.full(ks.size, legs['bars'], dtype=np.int32)
+        bp.exi[name] = ks + bp.nbars[name]
+    e = []
+    for kb, ks_ in zip(bp.kind['b10'].tolist(), bp.kind['s10'].tolist()):
+        yb, ys = ST.y_of(kb), ST.y_of(ks_)
+        e.append(ST.NO_E if yb is None or ys is None else yb - ys)
+    bp.eBuy = np.array(e, dtype=np.int8)
+    bp.row_of = {int(k): r for r, k in enumerate(ks.tolist())}
+    bp.row_of_t = {int(pb.t[k]): r for r, k in enumerate(ks.tolist())}
+    pairs = []
+    for pi, p in enumerate(D.PAIRS):
+        if pi == pb.pi:
+            pairs.append(bp)
+            continue
+        z = object.__new__(ST.BlindPair)
+        z.pi, z.pair = pi, p
+        z.k = z.T = z.week = z.block = z.hour = z.season = np.zeros(0, dtype=np.int64)
+        z.E = np.zeros(0)
+        z.eBuy = np.zeros(0, dtype=np.int8)
+        z.kind = {name: np.zeros(0, dtype=np.int8) for name, _, _ in ST.LEGS}
+        z.pips = {name: np.zeros(0) for name, _, _ in ST.LEGS}
+        z.nbars = {name: np.zeros(0, dtype=np.int32) for name, _, _ in ST.LEGS}
+        z.exi = {name: np.zeros(0, dtype=np.int64) for name, _, _ in ST.LEGS}
+        z.row_of, z.row_of_t = {}, {}
+        pairs.append(z)
+    table = object.__new__(ST.BlindTable)
+    table.half, table.period, table.pairs = half, period, pairs
+    table.weeks = sorted(set(bp.week.tolist()))
+    table._strata = {}
+    return table, pb
+
+
+def legs_for_e(e):
+    """The TP10 legs a BUY row's e gives (8: e = y10(BUY) − y10(SELL)): +1 the BUY takes its TP, −1 the SELL does;
+    the others are conventions.table.legs. The pips of a TP leg are not laid out (NaN: nothing here reads them)."""
+    if e == 1:
+        return {'b10': (ST.KIND_TP, float('nan'))}
+    if e == -1:
+        return {'s10': (ST.KIND_TP, float('nan'))}
+    return {}
+
+
+def table_trades(L, table, pb, times, d, src):
+    """The signals at the bars closing at the times given, as counted trades from the hand table (ST.Trade)."""
+    half = L.get('half')
+    out = []
+    for T in times:
+        i = pb.index_of.get(T - D.STEP)
+        need(i is not None, f'no row of the table closes at {T}')
+        sig = S.Sig(src, pb, i, d, 'counted', half, [])
+        out.append(ST.Trade(sig, table.pairs[pb.pi], pb))
     return out
 
 
-def est_check(e, ex, bad, tag=''):
-    if not near(e['est'], ex['est'], 1e-12):
-        bad.append(f'{tag}Δ {e["est"]} (want {ex["est"]})')
-    for k in ('N', 'strata', 'dropped', 'use'):
-        if k in ex and e[k] != ex[k]:
-            bad.append(f'{tag}{k} {e[k]} (want {ex[k]})')
-    if 'kinds' in ex and [x['kind'] for x in e['cands']] != ex['kinds']:
-        bad.append(f'{tag}candidates {[x["kind"] for x in e["cands"]]} (want {ex["kinds"]})')
-    used = next((x for x in e['cands'] if x['kind'] == e['use']), None)
-    if 'se' in ex and not near(used['se'] if used else None, ex['se'], 1e-12):
-        bad.append(f'{tag}SE {used["se"] if used else None} (want {ex["se"]})')
-    for k in ('C', 'df'):
-        if k in ex and (used or {}).get(k) != ex[k]:
-            bad.append(f'{tag}{k} {(used or {}).get(k)} (want {ex[k]})')
+def run_shift(case, conv):
+    L = Layout(conv, case)
+    period, half, layer = period_of(L), L.get('half'), L.get('layer')
+    rows = [(ms(t), legs_for_e(e)) for t, e in case['rows']]
+    table, pb = hand_table(L, rows)
+    bp = table.pairs[pb.pi]
+    for t, e in case['rows']:
+        r = bp.row_of_t[ms(t)]
+        need(bp.e(r, S.BUY) == e, f'layout: the row {t} gives e {bp.e(r, S.BUY)}, not {e}')
+    trades = []
+    for T, dname in case['signals']:
+        trades += table_trades(L, table, pb, [ms(T)], DIRS[dname], case['id'])
+    real = ST.delta_est(ST.obs_of(trades, layer, period, half), table.strata(layer))['est']
+    shifts = ST.shift_deltas(trades, table, layer)
+    summ = ST.shift_summary(shifts, real)
+    exp = case['expect']
+    got = {'k': [x[0] for x in shifts], 'dropped': [x[2] for x in shifts]}
+    for key in ('k', 'dropped'):
+        need(got[key] == exp[key], f'{key} {got[key]}, expected {exp[key]}')
+    dk = [x[1] for x in shifts]
+    need(len(dk) == len(exp['delta']) and all(close(x, y) for x, y in zip(dk, exp['delta'])),
+         f'Δ_k {dk}, expected {exp["delta"]}')
+    need(close(real, exp['real']), f'real Δ {real}, expected {exp["real"]}')
+    need(close(summ['sd'], exp['sd']), f'SD_shift {summ["sd"]}, expected {exp["sd"]}')
+    need(close(summ['mean'], exp['mean']), f'mean {summ["mean"]}, expected {exp["mean"]}')
+    need(summ['rank'] == exp['rank'], f'rank {summ["rank"]}, expected {exp["rank"]}')
 
 
-def run_delta(c, bad):
-    sig = [tuple(x) for x in c['sig']]
-    est_check(ST.delta_est(sig, bstr_of([tuple(x) for x in c['blind']])), c['expect'], bad)
+def run_sepick(case, conv):
+    L = Layout(conv, case)
+    C, df, per = L.get('C'), L.get('df'), L.get('sePerHalf')
+    for k, (cands, want) in enumerate(case['items']):
+        cs = [{'kind': kind, 'half': h, 'se': h * per, 'C': C, 'df': df} for kind, h in cands]
+        got = ST.pick(cs)['kind']
+        need(got == want, f'item {k}: {got}, expected {want}')
 
 
-def _obs_t(pair, d, layer, T, v):
-    w = D.wk(T)
-    return (ST.stratum_of(layer, D.PAIRS.index(pair), d, T), w, (w - MINI['w0']['H1']) // 4, v)
-
-
-def run_delta_t(c, bad):
-    d = DIRS[c['dir']]
-    sig = [_obs_t(c['pair'], d, c['layer'], ms(T), v) for T, v in c['sig']]
-    bl = [_obs_t(c['pair'], d, c['layer'], ms(T), v) for T, v in c['blind']]
-    est_check(ST.delta_est(sig, bstr_of(bl)), c['expect'], bad)
-    ex = c['expect']
-    if 'blindPerStratum' in ex:
-        used = sorted({o[0] for o in sig if any(b[0] == o[0] for b in bl)})
-        got = [sum(1 for b in bl if b[0] == s) for s in used]
-        if got != ex['blindPerStratum']:
-            bad.append(f'blind rows per stratum {got} (want {ex["blindPerStratum"]})')
-    if 'seasons' in ex:
-        got = [D.SEASON_NAMES[D.season_of(ms(T))] for T, _ in c['sig']]
-        if got != ex['seasons']:
-            bad.append(f'seasons {got} (want {ex["seasons"]})')
-
-
-def run_clusters(c, bad):
-    for j, st in enumerate(c['sets']):
-        sig = [(0, w, st['blocks'][k], 0.5 if k % 2 == 0 else 0.0) for k, w in enumerate(st['weeks'])]
-        bl = [(0, w, st['blocks'][k], -0.5 if k % 3 == 0 else 0.0) for k, w in enumerate(st['weeks'])]
-        e = ST.delta_est(sig, bstr_of(bl))
-        kinds = [x['kind'] for x in e['cands']]
-        Cs = [x['C'] for x in e['cands']]
-        if kinds != st['kinds'] or Cs != st['C']:
-            bad.append(f'#{j + 1}: {kinds} C {Cs} (want {st["kinds"]} C {st["C"]})')
-
-
-def manual_table(rows, half, period):
-    """A blind table of one pair (USD/JPY) from rows (bar open, e of BUY, TP4 kind and pips of BUY); the other legs
-    are stops at −13.5 pips. Built as the stats module's own BlindPair / BlindTable objects."""
-    rows = sorted(rows, key=lambda r: r[0])
-    n = len(rows)
-    t = np.array([r[0] for r in rows], dtype=np.int64)
-    bp = object.__new__(ST.BlindPair)
-    bp.pi, bp.pair = 0, 'USD/JPY'
-    bp.k = np.arange(n, dtype=np.int64)
-    bp.T = t + D.STEP
-    bp.E = np.full(n, 150.0)
-    bp.hour, bp.season, bp.week = S.hour_arr(bp.T), S.season_arr(bp.T), S.wk_arr(bp.T)
-    bp.block = (bp.week - period['w0'][half]) // 4
-    stop = np.full(n, ST.KIND_SL, dtype=np.int8)
-    bp.kind = {'b4': np.array([KIND_OF[r[2]] for r in rows], dtype=np.int8), 's4': stop.copy(), 'b10': stop.copy(),
-               's10': stop.copy()}
-    bp.pips = {'b4': np.array([r[3] for r in rows], dtype=np.float64), 's4': np.full(n, -13.5),
-               'b10': np.full(n, -13.5), 's10': np.full(n, -13.5)}
-    bp.nbars = {k: np.ones(n, dtype=np.int32) for k in ('b4', 's4', 'b10', 's10')}
-    bp.exi = {k: np.arange(n, dtype=np.int64) for k in ('b4', 's4', 'b10', 's10')}
-    bp.eBuy = np.array([r[1] for r in rows], dtype=np.int8)
-    bp.row_of = {k: k for k in range(n)}
-    bp.row_of_t = {int(t[k]): k for k in range(n)}
-    tb = object.__new__(ST.BlindTable)
-    tb.half, tb.period, tb.pairs = half, period, [bp]
-    tb.weeks = sorted(set(bp.week.tolist()))
-    tb._strata = {}
-    return tb
-
-
-def _trade(tb, T, d):
-    bp = tb.pairs[0]
-    r = bp.row_of_t[T - D.STEP]
-    sig = types.SimpleNamespace(T=T, pi=0, dir=d, pair='USD/JPY', src='hand', i=r)
-    return types.SimpleNamespace(sig=sig, e=bp.e(r, d), e_late=None, next_T=None)
-
-
-def run_shift(c, bad):
-    tb = manual_table([(ms(o), e, 'sl', -13.5) for o, e in c['rows']], 'H1', MINI)
-    trades = [_trade(tb, ms(T), DIRS[d]) for T, d in c['signals']]
-    ex = c['expect']
-    real = ST.delta_est(ST.obs_of(trades, 'chart', MINI, 'H1'), tb.strata('chart'))['est']
-    if not near(real, ex['real'], 1e-12):
-        bad.append(f'real Δ {real} (want {ex["real"]})')
-    sh = ST.shift_deltas(trades, tb, 'chart')
-    ks, ds, dr = [k for k, _, _, _ in sh], [x for _, x, _, _ in sh], [x for _, _, x, _ in sh]
-    if ks != ex['k']:
-        bad.append(f'k {ks} (want {ex["k"]})')
-    if len(ds) != len(ex['delta']) or any(not near(x, y, 1e-12) for x, y in zip(ds, ex['delta'])):
-        bad.append(f'Δ_k {ds} (want {ex["delta"]})')
-    if dr != ex['dropped']:
-        bad.append(f'dropped {dr} (want {ex["dropped"]})')
-    sm = ST.shift_summary(sh, real)
-    if not near(sm['sd'], ex['sd'], 1e-12):
-        bad.append(f'SD {sm["sd"]} (want {ex["sd"]})')
-    if not near(sm['mean'], ex['mean'], 1e-12):
-        bad.append(f'mean {sm["mean"]} (want {ex["mean"]})')
-    if sm['rank'] != ex['rank']:
-        bad.append(f'rank {sm["rank"]} (want {ex["rank"]})')
-
-
-def run_sepick(c, bad):
-    for cands, want in c['items']:
-        got = ST.pick([{'kind': k, 'se': h, 'C': 20, 'df': 19, 'half': h} for k, h in cands])['kind']
-        if got != want:
-            bad.append(f'{cands}: {got} (want {want})')
-
-
-def run_tq(c, bad):
-    for df, want in c['items']:
+def run_tq(case, conv):
+    for df, want in case['items']:
         got = ST.tq(0.975, df)
-        if not near(got, want, c['tol']):
-            bad.append(f'df {df}: {got} (want {want})')
+        need(abs(got - want) <= case['tol'], f't(0.975, {df}) = {got}, expected {want}')
 
 
-# ---------------------------------------------------------------- 10-14 counting, selection, Holm, groups, floor
-def run_lbcount(c, bad):
-    ni, ng = SEL.item_count(c['ids']), SEL.group_count(c['ids'], c['groups'])
-    if (ni, ng) != (c['expect']['items'], c['expect']['groups']):
-        bad.append(f'items {ni}, groups {ng} (want {c["expect"]["items"]}, {c["expect"]["groups"]})')
-    for xs, want in c['p95']:
-        if SEL.p95_of(xs) != want:
-            bad.append(f'95% point of {len(xs)} values: {SEL.p95_of(xs)} (want {want})')
+# ---------------------------------------------------------------- 10, 12 counts and the choice; 14 Holm; 11
+def run_lbcount(case, conv):
+    exp = case['expect']
+    got = SEL.item_count(case['ids'])
+    need(got == exp['items'], f'items {got}, expected {exp["items"]}')
+    got = SEL.group_count(case['ids'], case['groups'])
+    need(got == exp['groups'], f'groups {got}, expected {exp["groups"]}')
+    for xs, want in case['p95']:
+        got = SEL.p95_of(xs)
+        need(got == want, f'95% point of {xs}: {got}, expected {want}')
 
 
-def run_select(c, bad):
-    for j, st in enumerate(c['sets']):
-        rows = {}
-        for src, est, lb, ne, sus in st['rows']:
-            rows[src] = {'delta': {'est': est, 'lb': lb, 'lo': lb, 'hi': None, 't': None if lb is None else 3.0,
-                                   'N': ne, 'cands': [], 'use': None},
-                         'nE': ne, 'suspicious': list(sus)}
-        s1 = SEL.stage1(rows, st['groups'])
-        ex = st['expect']
-        if s1['chosen'] != {'chart': ex['chart'], 'cal': ex['cal']}:
-            bad.append(f'#{j + 1}: {s1["chosen"]} (want chart {ex["chart"]}, cal {ex["cal"]})')
-        if s1['notEligible'] != ex['notEligible']:
-            bad.append(f'#{j + 1}: not eligible {s1["notEligible"]} (want {ex["notEligible"]})')
-
-
-def run_holm(c, bad):
-    for j, st in enumerate(c['sets']):
-        h = SEL.holm_order([tuple(x) for x in st['items']])
-        for src, (rank, ok) in st['expect'].items():
-            g = h.get(src)
-            if g is None or g['holmRank'] != rank or g['holmPass'] != ok:
-                bad.append(f'#{j + 1} {src}: {g} (want {rank} {ok})')
-
-
-def run_groups(c, bad):
-    ov = c['overlap']
-    for j, st in enumerate(c['sets']):
-        share = {f'{a}>{b}': ov.get(f'{a}>{b}') for a in st['items'] for b in st['items'] if a != b}
-        g = CNT.groups_of(st['items'], share)
-        got = {x: D.ITEM_ORDER[k] for x, k in g.items()}
-        if got != st['expect']:
-            bad.append(f'#{j + 1}: {got} (want {st["expect"]})')
-
-
-def run_floor(c, bad):
-    for h1, h2, want in c['items']:
-        got = CNT.floor_of(tuple(h1), tuple(h2))
-        if got != want:
-            bad.append(f'{h1}, {h2}: {got} (want {want})')
-
-
-def run_suspect(c, bad):
-    base = c['base']
-
-    def wp(x):
-        return {'n': x[0], 'resolved': x[0], 'wRes': x[1], 'wAll': x[2], 'pl': x[3]}
-    for over, want in c['items']:
-        x = dict(base, **over)
-        late = x['late'] if x.get('late') is not None else x['delta']
-        row = {'delta': {'est': x['delta']}, 'a': {'est': x['a']}, 'late': {'est': late}, 'w4': wp(x['w4']),
-               'w10': wp(x['w10'])}
-        got = ST.suspicious(row, blind=bool(x.get('blind')))
-        if got != want:
-            bad.append(f'{over}: {got} (want {want})')
-
-
-# ---------------------------------------------------------------- 9, 21 numbers, win rates and sentences
-def run_text_numbers(c, bad):
-    f = {'pts': TX.pts, 'pct': TX.pct, 'pips': TX.pips, 'yen': TX.yen}
-    for name, v, want in c['items']:
-        got = f[name](v)
-        if got != want:
-            bad.append(f'{name}({v}): {got} (want {want})')
-
-
-def run_win_denominator(c, bad):
-    w = ST.winpl([(D.utc(2024, 1, 9) + k * D.STEP, KIND_OF[k_], 0.0) for k, k_ in enumerate(c['trades'])])
-    ew = c['expectW']
-    if w['n'] != ew['n'] or w['resolved'] != ew['resolved'] or not near(w['wRes'], ew['wRes']) or \
-            not near(w['wAll'], ew['wAll']):
-        bad.append(f'W n {w["n"]} resolved {w["resolved"]} wRes {w["wRes"]} wAll {w["wAll"]}')
-    tb = manual_table([(ms(o), 0, k4, p4) for o, k4, p4 in c['rows']], 'H1', MINI)
-    trades = [_trade(tb, ms(T), S.BUY) for T in c['signals']]
-    delta = ST.delta_est(ST.obs_of(trades, 'chart', MINI, 'H1'), tb.strata('chart'))
-    w1, pl1 = ST.blind_weighted(delta, tb, 'chart')
-    ex = c['expect']
-    if not near(w1, ex['blindW1'], 1e-12) or not near(pl1, ex['blindPl1'], 1e-12):
-        bad.append(f'blind W1 {w1}, PL1 {pl1} (want {ex["blindW1"]}, {ex["blindPl1"]})')
-
-
-C_PATTERN = {'alt': lambda g: 1 if g % 2 == 0 else -1, 'pairs': lambda g: 1 if (g >> 1) % 2 == 0 else -1}
-
-
-def est_of(est, se, df, pattern='alt', N=100):
-    """A made-up estimate: week influence sums a·f(g) on C = df + 1 clusters, a = se·√(C−1)/C, so that the week SE
-    √(C/(C−1)·Σ S_g²) is se (no 4-week blocks)."""
-    wk = {}
-    cands = []
-    if se is not None:
-        C = df + 1
-        a = se * math.sqrt(C - 1) / C
-        f = C_PATTERN[pattern]
-        for g in range(C):
-            wk[g] = a * f(g)
-        cands.append(ST._cand('week', ST._se(wk, C), C))
-    r = ST.finish(est, N, 1, 0, cands)
+def made_est(L, est, se, df, pattern, N):
+    """conventions.rows: an estimate [Δ, SE] on df: C = df + 1 week clusters, cluster g carrying a × p[g mod len(p)]
+    with a = SE × √(C − 1) ÷ C (the week SE of 8 is then SE), no 4-week block; SE null: no cluster, no t. Built with
+    the stats module's own candidate, SE and Est functions."""
+    if se is None:
+        r = ST.finish(est, N, 1, 0, [])
+        r['_if'] = ({}, {})
+        r['_ns'] = {}
+        return r
+    patterns = L.get('patterns')
+    need(pattern in patterns, f"conventions.rows.patterns: no '{pattern}'")
+    p = patterns[pattern]
+    C = df + 1
+    amp = se * math.sqrt(C - 1) / C
+    wk = {g: amp * p[g % len(p)] for g in range(C)}
+    r = ST.finish(est, N, 1, 0, [ST._cand('week', ST._se(wk, C), C)])
     r['_if'] = (wk, {})
+    r['_ns'] = {0: N}
     return r
 
 
-def win_of(w_res, pl, resolved=200):
-    tp = int(round(w_res * resolved))
-    return {'n': resolved, 'resolved': resolved, 'tp': tp, 'sl': resolved - tp, 'amb': 0, 'open': 0, 'wAll': w_res,
-            'wRes': w_res, 'pl': pl, 'wLo': None, 'wHi': None, 'plLo': None, 'plHi': None}
+def point_est(late, N):
+    """conventions.rows: Δ_late [Δ_late, low end, high end] is a point with its interval and no SE."""
+    est, lo, hi = late
+    return {'est': est, 'N': N, 'strata': 1, 'dropped': 0, 'cands': [], 'use': None, 't': None, 'lo': lo, 'hi': hi,
+            'lb': lo}
 
 
-def row_from(sp, df):
-    late = sp['late']
-    bd = sp.get('byDir') or {}
-    row = {'delta': est_of(sp['delta'][0], sp['delta'][1], df, sp.get('pattern', 'alt')),
-           'a': est_of(sp['a'][0], sp['a'][1], df),
-           'late': {'est': late[0], 'N': 100, 'strata': 1, 'dropped': 0, 'cands': [], 'use': None, 't': None,
-                    'lo': late[1], 'hi': late[2], 'lb': None},
-           'w4': win_of(*sp['w4']), 'w10': win_of(*sp['w10']), 'blindW1': 0.7, 'blindPl1': -1.0,
-           'byDir': {k: {'est': bd[k][0] if k in bd else None, 'N': bd[k][1] if k in bd else 0, 'strata': 1,
-                         'dropped': 0} for k in ('BUY', 'SELL')},
-           'byPair': {}, 'nonOverlap': None, 'perWeek': None, 'counted': 100, 'nE': 100}
+def made_winpl(w, resolved):
+    """conventions.rows: [W of the resolved, PL]; n = resolved, tp = W × resolved to the nearest whole number, sl =
+    resolved − tp, no amb, none open, W of all = W of the resolved, no interval."""
+    W, pl = w
+    tp = int(math.floor(W * resolved + 0.5))
+    return {'n': resolved, 'resolved': resolved, 'tp': tp, 'sl': resolved - tp, 'amb': 0, 'open': 0,
+            'wAll': W, 'wRes': W, 'pl': pl, 'wLo': None, 'wHi': None, 'plLo': None, 'plHi': None}
+
+
+def made_row(L, delta, late, a, w4, w10, df, pattern, by_dir=None, n_e=None):
+    """A made-up row of a half (conventions.rows): Δ on its pattern, a on itemPattern, Δ_late a point, W1 / PL1 /
+    W2 / PL2 all resolved, N e-signals in one stratum, the blind's W1 / PL1, no pair row, a direction not given
+    without e-signals; its suspicious lines from its own numbers (13, ST.suspicious)."""
+    N = L.get('N') if n_e is None else n_e
+    resolved = L.get('resolved')
+    by = {}
+    for dn in ('BUY', 'SELL'):
+        x = (by_dir or {}).get(dn)
+        by[dn] = ({'est': x[0], 'N': x[1], 'strata': 1, 'dropped': 0} if x is not None else
+                  {'est': None, 'N': 0, 'strata': 0, 'dropped': 0})
+    row = {'delta': made_est(L, delta[0], delta[1], df, pattern, N),
+           'a': made_est(L, a[0], a[1], df, L.get('itemPattern'), N),
+           'late': point_est(late, N), 'w4': made_winpl(w4, resolved), 'w10': made_winpl(w10, resolved),
+           'blindW1': L.get('blindW1'), 'blindPl1': L.get('blindPl1'), 'byDir': by, 'byPair': dict(L.get('byPair')),
+           'counted': L.get('counted') if n_e is None else n_e, 'nE': L.get('nE') if n_e is None else n_e,
+           '_unresolved': L.get('unresolved'), '_lateExcluded': L.get('lateExcluded')}
+    need(row['_unresolved'] == 0 and row['_lateExcluded'] == 0, 'conventions.rows: unresolved / lateExcluded other '
+         'than 0 cannot be laid out on these rows')
     row['suspicious'] = ST.suspicious(row)
     return row
 
 
-def email_rows(est, se, df, pattern):
-    r = row_from({'delta': [est, 0], 'late': [est, est, est], 'a': [0, 0.01], 'w4': [0.7, -1.0],
-                  'w10': [0.55, -0.5]}, df)
-    r['delta'] = est_of(est, se, df, pattern)
-    return {'chart': r, 'cal': r}
+def run_select(case, conv):
+    L = Layout(conv, case)
+    t_lb, checks, counts_only = L.get('tWhenLb'), L.get('checksPass'), L.get('countsOnlySuspicion')
+    hits, fill = L.get('yardstickHits'), L.get('fill')
+    need(checks is True, 'conventions.select.checksPass false: SEL.stage1 takes the checks as passed (12「確かめ（20）'
+         'がすべて通る」 is the run\'s)')
+    for k, st in enumerate(case['sets']):
+        rows = {}
+        for item, delta, lb, n_e, lines in st['rows']:
+            row = made_row(L, [delta, fill['deltaSe']], [delta] + list(fill['lateLoHi']), fill['a'], fill['w4'],
+                           fill['w10'], fill['df'], L.get('itemPattern'), n_e=n_e)
+            d = row['delta']
+            d['t'] = t_lb if lb is not None else None              # select: an LB has t = tWhenLb; null: no t
+            d['lb'] = d['lo'] = lb
+            if lb is None:
+                d['hi'] = None
+            row['suspicious'] = list(lines)
+            rows[item] = row
+        sel = SEL.stage1(rows, st['groups'], counts_only=counts_only)
+        SEL.stop_on_yardsticks(sel, hits, counts_only)
+        exp = st['expect']
+        for g in ('chart', 'cal'):
+            need(sel['chosen'][g] == exp[g], f'set {k}: {g} {sel["chosen"][g]}, expected {exp[g]}')
+        need(sel['notEligible'] == exp['notEligible'], f'set {k}: not eligible {sel["notEligible"]}, '
+             f'expected {exp["notEligible"]}')
 
 
-def stage2_world(specs, df, ultra, macd, m1):
-    rows = {sp['id']: row_from(sp, df) for sp in specs}
-    chosen = [sp['id'] for sp in specs]
-    mrows = {'ultra5': ultra, 'macdx5': macd}
-    st2 = SEL.stage2(chosen, rows, mrows, {s: s.startswith('donchian') for s in chosen})
-    blind = {d: {'w4': win_of(0.7, -1.0, 0), 'w10': win_of(0.55, -0.5, 0)} for d in ('BUY', 'SELL')}
-    sentences = dict(TX.stage2_sentences(st2, rows, mrows, blind, {'M1': {'chart': m1, 'cal': 0}}, chosen))
-    return rows, st2, sentences
+def run_holm(case, conv):
+    for k, st in enumerate(case['sets']):
+        got = SEL.holm_order([tuple(x) for x in st['items']])
+        for item, (rank, ok) in st['expect'].items():
+            g = got[item]
+            need((g['holmRank'], g['holmPass']) == (rank, ok),
+                 f'set {k}: {item} rank {g["holmRank"]} pass {g["holmPass"]}, expected {rank} {ok}')
 
 
-def check_text(sentences, ex, bad):
-    for sid, e in (ex or {}).items():
-        s = sentences.get(sid)
-        if s is None:
-            bad.append(f'{sid}: no sentence')
-            continue
-        for frag in e.get('contains', []):
-            if frag not in s:
-                bad.append(f'{sid}: missing「{frag[:40]}…」')
-        for frag in e.get('absent', []):
-            if frag in s:
-                bad.append(f'{sid}: has「{frag[:40]}…」')
-        if 'startsWith' in e and not s.startswith(e['startsWith']):
-            bad.append(f'{sid}: does not start「{e["startsWith"][:40]}…」')
+def run_groups(case, conv):
+    L = Layout(conv, case)
+    missing = L.get('missingShare')
+    for k, st in enumerate(case['sets']):
+        items = st['items']
+        share = {f'{a}>{b}': case['overlap'].get(f'{a}>{b}', missing) for a in items for b in items if a != b}
+        ids = CNT.groups_of(items, share)
+        need(set(ids) == set(items), f'set {k}: groups of {sorted(ids)}, expected {sorted(items)}')
+        got = {s: min((x for x in items if ids[x] == ids[s]), key=D.ORDER.get) for s in items}
+        need(got == st['expect'], f'set {k}: {got}, expected {st["expect"]}')
 
 
-def run_text(c, bad):
-    df, m1 = c['df'], c['m1']
-    if 'scenarios' in c:
-        for sc in c['scenarios']:
-            sp = {'id': sc['item'], 'delta': [0.08, 0.01], 'late': [0.08, 0.06, 0.1], 'a': [0.02, 0.01],
-                  'w4': [0.7, -1.0], 'w10': [0.55, -0.5]}
-            _, st2, sent = stage2_world([sp], df, email_rows(sc['ultra'], 0.01, df, 'pairs'),
-                                        email_rows(sc['macd'], 0.01, df, 'pairs'), m1)
-            if st2['items'][sc['item']]['judgment'] != 'confirmed':
-                bad.append(f'{sc["item"]}: {st2["items"][sc["item"]]["judgment"]} (want confirmed)')
-            check_text(sent, {f's2.item.{sc["item"]}': {'contains': sc['contains']}}, bad)
+def run_floor(case, conv):
+    for h1, h2, want in case['items']:
+        got = CNT.floor_of(tuple(h1), tuple(h2))
+        need(got == want, f'{h1} {h2}: {got}, expected {want}')
+
+
+# ---------------------------------------------------------------- 13 suspicious lines
+def run_suspect(case, conv):
+    L = Layout(conv, case)
+    wf, other, late_null, blind0 = L.get('wFields'), L.get('otherCounts'), L.get('lateWhenNull'), L.get('blind')
+
+    def wp(arr):
+        d = dict(zip(wf, arr))
+        d['n'] = d['resolved']
+        d.update(other)
+        return d
+    for k, (over, want) in enumerate(case['items']):
+        f = dict(case['base'])
+        f.update(over)
+        blind = f.pop('blind', blind0)
+        late = f['late'] if f['late'] is not None else f[late_null]
+        row = {'delta': {'est': f['delta']}, 'a': {'est': f['a']}, 'late': {'est': late},
+               'w4': wp(f['w4']), 'w10': wp(f['w10'])}
+        got = ST.suspicious(row, blind=blind)
+        need(got == want, f'item {k} {over}: {got}, expected {want}')
+
+
+# ---------------------------------------------------------------- 21 numbers and sentences, 9 the win rates
+def run_text_numbers(case, conv):
+    fmt = {'pts': TX.pts, 'pct': TX.pct, 'pips': TX.pips, 'yen': TX.yen}
+    for f, v, want in case['items']:
+        need(f in fmt, f'unknown format {f}')
+        got = fmt[f](v)
+        need(got == want, f'{f}({v}) = {got}, expected {want}')
+
+
+def run_win_denominator(case, conv):
+    L = Layout(conv, case)
+    t0, pips = ms(L.get('tradesFrom')), L.get('tradePips')
+    w = ST.winpl([(t0 + k * D.STEP, KINDS[x], pips) for k, x in enumerate(case['trades'])])
+    for key, want in case['expectW'].items():
+        ok = close(w[key], want) if isinstance(want, float) else w[key] == want
+        need(ok, f'{key} {w[key]}, expected {want}')
+    period, half, layer = period_of(L), L.get('half'), L.get('layer')
+    e = L.get('rowE')
+    rows = []
+    for t, kind, p in case['rows']:
+        given = legs_for_e(e)
+        given['b4'] = (KINDS[kind], p)
+        rows.append((ms(t), given))
+    table, pb = hand_table(L, rows)
+    bp = table.pairs[pb.pi]
+    need(all(bp.e(r, S.BUY) == e for r in range(bp.k.size)), f'layout: the rows do not give e {e}')
+    trades = table_trades(L, table, pb, [ms(T) for T in case['signals']], DIRS[L.get('signalDir')], case['id'])
+    delta = ST.delta_est(ST.obs_of(trades, layer, period, half), table.strata(layer))
+    w1, pl1 = ST.blind_weighted(delta, table, layer)
+    exp = case['expect']
+    need(close(w1, exp['blindW1']), f'blind W1 {w1}, expected {exp["blindW1"]}')
+    need(close(pl1, exp['blindPl1']), f'blind PL1 {pl1}, expected {exp["blindPl1"]}')
+
+
+def email_rows(L, ultra, macd, se, pattern, df):
+    """conventions.rows: an email's row takes Δ from its case's group (text, dab), Δ_late one point (low = high = Δ),
+    a, w4 and w10 from rows.email; its chart and calendar layers are the same row."""
+    em = L.get('email')
+    out = {}
+    for src, d in (('ultra5', ultra), ('macdx5', macd)):
+        row = made_row(L, [d, se], [d, d, d], em['a'], em['w4'], em['w10'], df, pattern)
+        out[src] = {'chart': row, 'cal': row}
+    return out
+
+
+def stage2_texts(st2, rows, mrows, m1, chosen):
+    """21 段2: each item's sentence and the last sentence, as TX.stage2_sentences writes them (its いつも添える文
+    needs the blind's rows, which no case lays out)."""
+    K = len(chosen)
+    out = {}
+    for s in sorted(chosen, key=D.ORDER.get):
+        g = D.GROUP_OF[s]
+        out[f's2.item.{s}'] = TX.stage2_item(s, rows[s], st2['items'][s], K, mrows, st2['promote'][g], g)
+    out['s2.final'] = TX.stage2_final(st2, m1, K)
+    return out
+
+
+def check_text(texts, want, where=''):
+    for sid, cond in want.items():
+        need(sid in texts, f'{where}no sentence {sid}')
+        t = texts[sid]
+        for frag in cond.get('contains', []):
+            need(frag in t, f'{where}{sid} lacks 「{frag}」 (text: {t})')
+        for frag in cond.get('absent', []):
+            need(frag not in t, f'{where}{sid} holds 「{frag}」')
+        if 'startsWith' in cond:
+            need(t.startswith(cond['startsWith']), f'{where}{sid} does not start with 「{cond["startsWith"]}」 (text: {t})')
+
+
+def run_text(case, conv):
+    L = Layout(conv, case)
+    df, m1 = L.get('df'), L.get('m1')
+    item_pat = L.get('itemPattern')
+    if 'scenarios' in case:
+        base = L.get('scenarioItem')
+        for k, sc in enumerate(case['scenarios']):
+            item = sc['item']
+            rows = {item: made_row(L, base['delta'], base['late'], base['a'], base['w4'], base['w10'], df,
+                                   base.get('pattern', item_pat), base.get('byDir'))}
+            mrows = email_rows(L, sc['ultra'], sc['macd'], L.get('emailSe'), L.get('emailPattern'), df)
+            st2 = SEL.stage2([item], rows, mrows, {item: set(base.get('byDir') or {}) == {'BUY', 'SELL'}})
+            texts = stage2_texts(st2, rows, mrows, m1, [item])
+            check_text(texts, {f's2.item.{item}': {'contains': sc['contains']}}, f'scenario {k}: ')
         return
-    _, st2, sent = stage2_world(c['items'], df, email_rows(0, 0.01, df, 'pairs'), email_rows(0, 0.01, df, 'pairs'),
-                                m1)
-    ex = c['expect']
-    for src, j in (ex.get('judgments') or {}).items():
-        got = st2['items'].get(src, {}).get('judgment')
-        if got != j:
-            bad.append(f'{src}: {got} (want {j})')
-    for src, f in (ex.get('forms') or {}).items():
-        got = st2['items'].get(src, {}).get('form')
-        if got != f:
-            bad.append(f'{src}: form {got} (want {f})')
-    check_text(sent, ex.get('text'), bad)
+    rows, both = {}, {}
+    for it in case['items']:
+        rows[it['id']] = made_row(L, it['delta'], it['late'], it['a'], it['w4'], it['w10'], df,
+                                  it.get('pattern', item_pat), it.get('byDir'))
+        both[it['id']] = set(it.get('byDir') or {}) == {'BUY', 'SELL'}     # 14 C2: an item giving both directions
+    chosen = [it['id'] for it in case['items']]
+    e_delta, e_se, e_pat = L.get('emailDelta'), L.get('emailSe'), L.get('emailPattern')
+    mrows = email_rows(L, e_delta, e_delta, e_se, e_pat, df)
+    st2 = SEL.stage2(chosen, rows, mrows, both)
+    exp = case['expect']
+    for s, want in exp.get('judgments', {}).items():
+        got = st2['items'][s]['judgment']
+        need(got == want, f'{s}: judgment {got}, expected {want}')
+    for s, want in exp.get('forms', {}).items():
+        got = st2['items'][s]['form']
+        need(got == want, f'{s}: form {got}, expected {want}')
+    check_text(stage2_texts(st2, rows, mrows, m1, chosen), exp.get('text', {}))
 
 
-def run_dab(c, bad):
-    df = c['df']
-    specs = [{'id': src, 'delta': [est, se], 'late': [est, 0.0005, est + 0.01], 'a': [0.01, 0.01],
-              'w4': [0.7, -1.0], 'w10': [0.55, -0.5], 'pattern': 'pairs' if k == 1 else 'alt'}
-             for k, (src, est, se) in enumerate(c['items'])]
-    _, st2, sent = stage2_world(specs, df, email_rows(0, None, df, 'alt'), email_rows(0, None, df, 'alt'), 10)
-    ex = c['expect']
-    conf = [s for s, _, _ in c['items'] if st2['items'][s]['judgment'] == 'confirmed']
-    if conf != ex['confirmed']:
-        bad.append(f'confirmed {conf} (want {ex["confirmed"]})')
-    if st2['promote']['chart'] != ex['promote']:
-        bad.append(f'promoted {st2["promote"]["chart"]} (want {ex["promote"]})')
-    d = st2['dAB'][0] if st2['dAB'] else None
-    used = next((x for x in d['est']['cands'] if x['kind'] == d['est']['use']), None) if d else None
-    if used is None or not near(used['se'], ex['se'], 1e-9):
-        bad.append(f'D_AB SE {used["se"] if used else None} (want {ex["se"]})')
-    check_text(sent, {'s2.final': {'contains': ex['contains']}}, bad)
+def run_dab(case, conv):
+    L = Layout(conv, case)
+    df, m1, pats, it = L.get('df'), L.get('m1'), L.get('patternByIndex'), L.get('item')
+    rows = {}
+    chosen = []
+    for k, (item, d, se) in enumerate(case['items']):
+        need(k < len(pats), f'conventions.dab.patternByIndex has no entry {k}')
+        rows[item] = made_row(L, [d, se], [d, it['lateLo'], d + it['lateHiAboveEst']], it['a'], it['w4'], it['w10'],
+                              df, pats[k])
+        chosen.append(item)
+    e_delta, e_se, e_pat = L.get('emailDelta'), L.get('emailSe'), L.get('emailPattern')
+    mrows = email_rows(L, e_delta, e_delta, e_se, e_pat, df)
+    st2 = SEL.stage2(chosen, rows, mrows, {})
+    exp = case['expect']
+    g = D.GROUP_OF[chosen[0]]
+    need(st2['promote'][g] == exp['promote'], f'promoted {st2["promote"][g]}, expected {exp["promote"]}')
+    conf = [s for s in chosen if st2['items'][s]['judgment'] == 'confirmed']
+    need(conf == exp['confirmed'], f'confirmed {conf}, expected {exp["confirmed"]}')
+    dab = [x for x in st2['dAB'] if x['A'] == exp['promote']]
+    need(len(dab) == 1, f'D_AB rows {[(x["A"], x["B"]) for x in st2["dAB"]]}')
+    used = next((c for c in dab[0]['est']['cands'] if c['kind'] == dab[0]['est']['use']), None)
+    need(used is not None and close(used['se'], exp['se']), f'D_AB SE {used and used["se"]}, expected {exp["se"]}')
+    check_text(stage2_texts(st2, rows, mrows, m1, chosen), {'s2.final': {'contains': exp['contains']}})
 
 
 RUNNERS = {
@@ -675,38 +830,36 @@ RUNNERS = {
 }
 
 
-def run_cases(cases):
-    """Every case of hand.json: {id: [problems]} (an empty list when the case passed)."""
-    out = {}
-    for c in cases:
-        bad = []
-        fn = RUNNERS.get(c['kind'])
-        try:
-            if fn is None:
-                raise ValueError(f'no runner for kind {c["kind"]}')
-            fn(c, bad)
-        except Exception as e:  # noqa: BLE001 — a crash of a case is its failure
-            bad.append(f'crash {e!r}')
-        out[c['id']] = bad
-    return out
-
-
 def main(path):
-    """Run every case of hand.json; prints "ok   handjson.<id>" or "FAIL handjson.<id> (…)"; 0 when all passed,
-    1 when one failed, 2 when the file cannot be read."""
-    import hashlib
-    import json
     try:
         with open(path, 'rb') as f:
             raw = f.read()
-        cases = json.loads(raw)['cases']
+        hand = json.loads(raw)
+        cases, conv = hand['cases'], hand['conventions']
+        if not isinstance(cases, list) or not isinstance(conv, dict):
+            raise ValueError('cases is not a list or conventions is not an object')
     except (OSError, ValueError, KeyError, TypeError) as e:
-        print(f'hand.json: cannot read {path} ({e!r})')
+        print(f'ERROR: {path} cannot be read as hand.json ({e!r})', file=sys.stderr)
         return 2
     print(f'sha256 {path} {hashlib.sha256(raw).hexdigest()}')
-    res = run_cases(cases)
-    for cid, bad in res.items():
-        print(f'ok   handjson.{cid}' if not bad else f'FAIL handjson.{cid} ({"; ".join(bad[:4])})')
-    failed = [k for k, v in res.items() if v]
-    print(f'hand.json: {len(res) - len(failed)} of {len(res)} passed')
-    return 0 if not failed else 1
+    passed = 0
+    for case in cases:
+        cid = case.get('id', '?') if isinstance(case, dict) else '?'
+        try:
+            need(isinstance(case, dict), 'not an object')
+            runner = RUNNERS.get(case.get('kind'))
+            need(runner is not None, f'no runner for the kind {case.get("kind")!r}')
+            runner(case, conv)
+            passed += 1
+            print(f'ok   handjson.{cid}')
+        except CaseFail as e:
+            print(f'FAIL handjson.{cid} ({e})')
+        except Exception as e:  # noqa: BLE001 — a case that raises fails; its message is the problem
+            print(f'FAIL handjson.{cid} (crash {e!r})')
+    print(f'hand.json: {passed} of {len(cases)} passed')
+    return 0 if passed == len(cases) else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                     'chartbest', 'hand.json')))

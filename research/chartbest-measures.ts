@@ -197,7 +197,7 @@ export const readerOf = (id: MeasureId, pb: PairBars, quotes: QuoteCandle[], p: 
   id === "ultra5" ? signalsOf(pb.pair, pb.pi, quotes, p.start, p.end, false, "", IV5) : macdxReadOf(pb.pair, pb.pi, quotes, p.start, p.end, false, "", IV5);
 
 // a late ULTRA signal is mailed when the read of window i + 1 (at its close + 0, 1, 3 minutes) is fresh and open
-const lateMailed = (pb: PairBars, l: LateSig): boolean => {
+export const lateMailed = (pb: PairBars, l: LateSig): boolean => {
   if (l.i + 1 >= pb.n) return false;
   const base = pb.t[l.i + 1] + STEP;
   return IV5.readAfter.some((m) => {

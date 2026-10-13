@@ -148,47 +148,91 @@ def clean_row(row):
     return out
 
 
-# ---------------------------------------------------------------- the gates of the stages (review fixes lookahead-05/06;
-# written by the integrator, who had read the TS: they decide which days and items are opened, never a number)
+# ---------------------------------------------------------------- the gates of the stages (1, 12, 14, 17, 22, 20 (d)-(f))
+# Rewritten 2026-10-12 from the rule by the step-2b Python author, who has not read the TS (py-brief 1.8). They decide
+# which data and which items are opened, never a number; every refusal exits 2 (die) before any bar is read.
+REFUSE_H2 = 'the second half (stage 2) is opened only with --choice-ledger'
+
+
 def under_real_cache(path):
-    """the real jobs' GMO day files (research/.cache): a --gmo there is real data"""
-    root = os.path.realpath(os.path.join(REPO, D.REAL_CACHE))
-    p = os.path.realpath(path)
-    return p == root or p.startswith(root + os.sep)
+    """1「GMO はこの開発環境から届かないので、すべて GitHub Actions で取る。日のファイルは actions/cache に置き」: the real
+    jobs restore GMO's day files under <repo>/research/.cache (D.REAL_CACHE) and pass a --gmo inside it, so such a
+    --gmo is real data. Decided from the resolved paths alone (the folder need not exist), before anything is read."""
+    cache = os.path.realpath(os.path.join(REPO, D.REAL_CACHE))
+    gmo = os.path.realpath(path)
+    return os.path.commonpath([cache, gmo]) == cache
 
 
 def choice_from_ledger(a, real):
-    """12: stage 1's choice ledger, read against its sha256 (real: the constant; made-up: --choice-sha256); the
-    second half is opened for its chart + cal items only"""
-    want = D.CHOICE_LEDGER_SHA256 if real else a.choice_sha256
+    """12「research/ledger/chartbest-choice.json と、その sha256 の定数を commit する。段2は、この定数が無いと走らない。
+    選ばなかった項目は、後半で何も計算しない（プログラムが断る）。」 The ledger's bytes are hashed before anything in it
+    is read: the sha256 must equal D.CHOICE_LEDGER_SHA256 on real data, --choice-sha256 on made-up data (a walk
+    ledger); an empty expected value, an unreadable file or another sha256 refuses. The file is JSON whose top-level
+    'chosen' is {'chart': [...], 'cal': [...]} (select.json's 'chosen'); every item must be a trial item of that
+    group, none twice, at most K_CHART chart and K_CAL calendar items (12). Returns the chart items, then the
+    calendar ones: the only items the second half is opened for."""
+    want = ((D.CHOICE_LEDGER_SHA256 if real else a.choice_sha256) or '').strip().lower()
     if not want:
-        die('--choice-ledger: its sha256 is not given (real: CHOICE_LEDGER_SHA256 is empty; made-up: --choice-sha256)')
-    if sha256_of(a.choice_ledger) != want:
-        die(f'{a.choice_ledger}: sha256 differs from the one given (nothing opened)')
-    with open(a.choice_ledger, encoding='utf-8') as f:
-        c = json.load(f)['chosen']
-    return list(c['chart']) + list(c['cal'])
+        die(f'{REFUSE_H2} read against its sha256: ' +
+            ('CHOICE_LEDGER_SHA256 is empty (12「段2は、この定数が無いと走らない」)' if real else '--choice-sha256 is not given'))
+    try:
+        got = sha256_of(a.choice_ledger)
+    except OSError as e:
+        die(f'--choice-ledger {a.choice_ledger} cannot be read ({e.__class__.__name__}); nothing opened')
+    if got != want:
+        die(f'sha256 {a.choice_ledger} {got} is not the expected {want}: nothing in it read, nothing opened (12)')
+    try:
+        with open(a.choice_ledger, encoding='utf-8') as f:
+            ch = json.load(f)['chosen']
+        chart, cal = list(ch['chart']), list(ch['cal'])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        die(f'--choice-ledger {a.choice_ledger}: not a choice ledger ({e.__class__.__name__})')
+    items = chart + cal
+    wrong = ([x for x in chart if D.GROUP_OF.get(x) != 'chart'] + [x for x in cal if D.GROUP_OF.get(x) != 'cal'] +
+             [x for x in items if x not in D.TRIAL_ITEMS])
+    if wrong or len(set(items)) != len(items) or len(chart) > D.K_CHART or len(cal) > D.K_CAL:
+        die(f'--choice-ledger {a.choice_ledger}: not a choice of 12 for the trial items (items {items})')
+    return items
 
 
 def stage_gate(a, stages):
-    """real data (--gmo under research/.cache): the second half only from the choice ledger read against the
-    constant (12, 14), never with stage 1 in the same run, no made-up option; the ledger stands for stage 1 and is
-    read against its sha256 here, before any bar. Returns (real, the ledger's items or None)"""
+    """Called first in run(a), before any bar is read. Returns (real, the ledger's items or None).
+    * --choice-ledger stands for stage 1 (12: the choice is made once, at stage 1, and committed): never with 1 in
+      --stages, never with --force-choice, only with 2 in --stages; --choice-sha256 only with it.
+    * Real data (--gmo under research/.cache): none of the made-up options (20 (e)/(f): --force-choice,
+      --choice-sha256, --o-mode, --counts-only-suspicion, --plant; --period mini is the development period); the
+      second half only through --choice-ledger read against CHOICE_LEDGER_SHA256 (12, 14, 22「段2（後半、選んだ
+      K_total 個だけ…）」); not before R_cb (17; the rules are fixed before real data is read); never without the
+      comparison (20 (d)「Python の計算し直し〔すべての段〕」).
+    * Made-up data: a second half without stage 1 needs --choice-ledger (a walk ledger) or --force-choice.
+    Every reason found is printed; any one refuses (exit 2)."""
     real = under_real_cache(a.gmo)
+    why = []
     if a.choice_ledger:
         if 1 in stages:
-            die('--choice-ledger stands for stage 1: --stages must not hold 1')
+            why.append('--choice-ledger stands for stage 1: --stages must not hold 1 with it')
+        if 2 not in stages:
+            why.append('--choice-ledger opens the second half: --stages must hold 2 with it')
         if a.force_choice:
-            die('--choice-ledger and --force-choice: one choice only')
+            why.append('--choice-ledger and --force-choice: one choice only')
+    elif a.choice_sha256:
+        why.append('--choice-sha256 without --choice-ledger')
     if real:
-        if a.force_choice:
-            die('--force-choice is for made-up runs only')
-        if a.choice_sha256:
-            die('real data: the choice ledger is read against CHOICE_LEDGER_SHA256 only')
-        if a.o_mode or a.counts_only_suspicion or a.plant or a.period != 'main':
-            die('real data: --o-mode, --counts-only-suspicion, --plant and --period mini are made-up only')
+        made_up = [name for name, on in (('--force-choice', a.force_choice), ('--choice-sha256', a.choice_sha256),
+                                         ('--o-mode', a.o_mode), ('--counts-only-suspicion', a.counts_only_suspicion),
+                                         ('--plant', a.plant), ('--period mini', a.period != 'main')) if on]
+        if made_up:
+            why.append(f'real data (--gmo under {D.REAL_CACHE}): {", ".join(made_up)} only on made-up data')
         if 2 in stages and not a.choice_ledger:
-            die('real data: the second half is opened only with --choice-ledger (12: 段2は、この定数が無いと走らない)')
+            why.append(f'real data: {REFUSE_H2} read against CHOICE_LEDGER_SHA256 (12「段2は、この定数が無いと走らない」)')
+        if time.time() * 1000 < D.R_CB:
+            why.append('real data before R_cb (17: 2026-10-13 00:00 UTC)')
+        if a.no_compare:
+            why.append('real data: --no-compare (20 (d): every stage is compared)')
+    elif 2 in stages and 1 not in stages and not a.choice_ledger and not a.force_choice:
+        why.append(f'stage 2 without stage 1: {REFUSE_H2} (a walk ledger) or --force-choice')
+    if why:
+        die('; '.join(why))
     return real, (choice_from_ledger(a, real) if a.choice_ledger else None)
 
 
@@ -262,38 +306,44 @@ def run(a):
         rows_by_half[half] = (rows, mrows, blind, table)
         return rows, mrows, blind, table
 
+    # ---- the stage control flow of 12 and 13 (rewritten from the rule by the step-2b Python author, py-brief 1.7)
     if 1 in stages:
         rows, mrows, blind, table = rows_of_half('H1', floor_items)
         select = SEL.stage1(rows, counts['groups'], counts_only=a.counts_only_suspicion)
         hits = SEL.yardstick_hits(mrows, blind)
         select['yardstickHit'] = SEL.yardstick_hit(mrows, blind)
-        # 13「物差し（ブラインド・ULTRA・MACD）が当たったら、すべて止める」: nothing is chosen, so the second half is not
-        # opened either (12); the made-up set H only counts the suspicion (20 (e) H)
-        if hits and not a.counts_only_suspicion:
-            select['chosen'] = {'chart': [], 'cal': []}
-            select['Ktotal'] = 0
+        # 13「物差し（ブラインド・ULTRA・MACD）が当たったら、すべて止める」: the choice is emptied (K_total = 0), so 12
+        # opens no second half; 20 (e) H「作り物では、疑う合図は数えて出すだけで、選ぶのを止めない」 keeps it
+        stopped = SEL.stop_on_yardsticks(select, hits, a.counts_only_suspicion)
         select['intervalsSeen'] = SEL.intervals_seen(1, M1=len(floor_items))
-        log(f'stage 1: yardstick hits {hits}{" (13: stops everything)" if hits and not a.counts_only_suspicion else ""}')
+        if stopped:
+            log(f'stage 1: yardstick hits {hits}: 13 stops everything, nothing is chosen (K_total 0)')
+        elif hits:
+            log(f'stage 1: yardstick hits {hits}: counted only (--counts-only-suspicion, 20 (e) H), the choice stands')
+        else:
+            log('stage 1: yardstick hits []')
         CMP.write_json(os.path.join(out, 'select.json'), select)
         sentences += TX.stage1_sentences(select, rows, counts, mrows, blind)
         log(f'stage 1: floor {floor_items}, chosen {select["chosen"]}, {time.time() - t0:.1f}s')
     if 2 in stages:
+        # the items the second half is opened for (12「選ばなかった項目は、後半で何も計算しない」): the committed choice
+        # (--choice-ledger, read by stage_gate), else the made-up --force-choice, else this run's stage 1
         if ledger_chosen is not None:
-            chosen = list(ledger_chosen)
+            chosen, source = list(ledger_chosen), '--choice-ledger'
         elif a.force_choice:
-            chosen = [x for x in a.force_choice.split(',') if x]
+            chosen, source = [x for x in a.force_choice.split(',') if x], '--force-choice'
         elif select is not None:
-            chosen = select['chosen']['chart'] + select['chosen']['cal']
+            chosen, source = select['chosen']['chart'] + select['chosen']['cal'], 'stage 1'
         else:
-            chosen = []
-        bad = [x for x in chosen if x not in D.TRIAL_ITEMS]
-        if bad:
-            die(f'--force-choice names items outside the trial: {bad}')
-        # 12「どちらのまとまりにも選べる項目が無ければ、ここで終える…後半は開けない」: K_total = 0 opens no second half
-        # (neither the blind table's nor the emails' second-half rows)
+            chosen, source = [], 'no choice given'      # stage_gate refuses this; kept for safety
+        outside = [x for x in chosen if x not in D.TRIAL_ITEMS]
+        if outside:
+            die(f'{source} names items outside the trial: {outside}')
         if not chosen:
+            # 12「どちらのまとまりにも選べる項目が無ければ、ここで終える（21 の文）。後半は開けない。」: no second-half
+            # blind table, no item or email row of the second half, no stage2.json, no stage-2 sentence
             stages = stages - {2}
-            log('stage 2: nothing chosen at stage 1: the second half is not opened (12)')
+            log(f'stage 2: no item chosen ({source}): the second half is not opened (12)')
     if 2 in stages:
         rows, mrows, blind, table = rows_of_half('H2', chosen)
         stage2 = SEL.stage2(chosen, rows, mrows, both_dirs, counts_only=a.counts_only_suspicion, plant=a.plant)
@@ -437,9 +487,12 @@ def main():
                          'chartbest-check-canon.py and the CSV column tolerance')
     a = ap.parse_args()
     if a.mode == 'hand':
+        # 20 (g)「手の例〔どの run でも走る。TS と Python の両方。…〕」: the Python's own docs-derived cases
+        # (chartbest-check-hand.py) first, then, with --hand, every case of that file (hand.json) through the Python's
+        # own functions (chartbest-check-handjson.py). With --plant (20 (f)) only the own cases run, judged by their
+        # PLANT_EXPECT. The exit: 2 when either returned 2 (an unreadable file, an unknown plant), else the larger.
+        # (Rewritten by the step-2b Python author, py-brief 1.1.)
         code = _mod('hand').main(a.plant)
-        # 20 (g): every hand example of research/chartbest/hand.json through the Python's own functions too (a
-        # planted error's run judges the Python's own cases only, as PLANT_EXPECT names them)
         if a.hand and not a.plant:
             code_json = _mod('handjson').main(a.hand)
             code = 2 if 2 in (code, code_json) else max(code, code_json)

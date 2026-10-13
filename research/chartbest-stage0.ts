@@ -96,8 +96,9 @@ export const realGuard = async (stage: string): Promise<void> => {
     if (!(await ledgerOk(LEDGER.counts))) why.push("stage 0's counts ledger is not written with its sha256");
     if (!(await ledgerOk(LEDGER.choice))) why.push("stage 1's choice ledger is not written with its sha256");
     if (LEDGER.stage2.sha256 !== "") why.push("stage 2 has run once (its ledger's sha256 is written)");
-    // 14「段2で、オーナーの持ち方（9）も測る」
+    // 14「段2で、オーナーの持ち方（9）も測る」: built, and the swap's BIS policy rates given (§8.102 スワップ)
     if (!HOLD_BUILT) why.push("the owner's way (research/chartbest-hold.ts) is not built");
+    if (!envOf("CB_BIS_CSV")) why.push("CB_BIS_CSV (the BIS policy rates of the owner's way's swap) is not given");
   }
   if (why.length) throw new Refused(`real ${stage} refused: ${why.join("; ")}`);
   openRealGate(stage);

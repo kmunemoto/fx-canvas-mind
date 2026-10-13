@@ -223,30 +223,50 @@ def events_of(tri_buy, tri_sell, plant=''):
 
 
 def events_named(named_buy, named_sell, plant=''):
-    """5 for an item with names (no trial item has names; the 20 (g) hand example 名前ごと): per direction and per
-    name, a name holding at i that does not hold at i-1 rises (a name absent at i-1 does not hold there: 「成り立た
-    ない」, not 「無し」); several names rising at the same bar and direction give one candidate. 「初めて決まった
-    足」 is the item's per direction, never per name: a name list is never 'none', so the first determined bar is
-    bar 0 (counted in firstSkipped when a name holds there). Then (i) with both directions: neither.
-    named_buy / named_sell: one collection of names per bar. Returns (cands [(i, dir)], counts) as events_of."""
-    out = {}
+    """5 for an item with names (the round number L, the pivot / Camarilla levels, the order-block zones, the fib
+    legs, the head-and-shoulders patterns, the s of NR7 / IDNR4). Written from 5 by the step-2b Python author, who has
+    not read the TS (py-brief 1.2); its only caller is chartbest-check-handjson.py (case events.named).
+
+    Input, per direction: one entry per bar. An entry is the collection of the names whose condition holds at that
+    bar; a name not in it does not hold there - a name that does not exist yet at that bar, and a name the item's
+    table does not judge at that bar, are both 「成り立たない」, never 「無し」 (5「名前ごとの項目で、足 i−1 にその名前が
+    まだ無い時…は…「成り立たない」とする（「無し」ではない）。足 i−1 にその名前はあるが、項目の表がその足を判定しない時
+    …も「成り立たない」とする」). The entry None is the item's condition of that direction being 無し at that bar
+    (5「「無し」は、値が計算できない足（温めの前、割り算の分母が0など…）だけ」): 無し belongs to the item and its
+    direction, not to one name, so it is the whole entry.
+
+    A candidate of direction d at bar i (5 ① ②): a name holds at i and does not hold at i−1 (the rise, per name: 5
+    「名前ごとに「足 i−1 で成り立たない」を見る」); bar i−1's entry is not None (5「足 i−1 の条件が無い（値が出ない）
+    足は、合図にしない」); i is not the first bar whose entry is not None (5「初めて決まった足」is the item's, per
+    direction:「名前ごとには当てない」). Several names rising at the same bar and direction are one candidate (5「同じ
+    足・同じ向きで複数の名前で出たら1件」). Then a bar left with both directions gives neither and is counted (5 ④).
+
+    Returns (cands, counts) as events_of does: cands [(i, BUY | SELL)] in bar order; counts firstSkipped (a name holds
+    at the first determined bar of a direction), nullPrevSkipped (a name holds at a later bar whose bar i−1 is 無し),
+    bothSuppressed and bothAt. plant 'noRiseEdge' (20 (f)「立ち上がりを見ない」): a name that holds counts at every bar,
+    whether or not it held at i−1 (5's 無し and first-bar rules still apply)."""
+    per_bar = {}
     cnt = {'bothSuppressed': 0, 'firstSkipped': 0, 'nullPrevSkipped': 0, 'bothAt': []}
-    for d, named in ((BUY, named_buy), (SELL, named_sell)):
-        if not named:
-            continue
-        if named[0]:
+    for d, seq in ((BUY, named_buy), (SELL, named_sell)):
+        entries = [None if x is None else frozenset(x) for x in seq]
+        first = next((i for i, x in enumerate(entries) if x is not None), None)
+        if first is None:
+            continue                                   # 無し at every bar: never determined
+        if entries[first]:
             cnt['firstSkipped'] += 1
-        for i in range(1, len(named)):
-            prev = set(named[i - 1])
-            if plant == 'noRiseEdge':
-                rose = bool(named[i])
-            else:
-                rose = any(x not in prev for x in named[i])
-            if rose:
-                out.setdefault(i, []).append(d)
+        for i in range(first + 1, len(entries)):
+            now, prev = entries[i], entries[i - 1]
+            if not now:
+                continue                               # nothing holds at i (or 無し)
+            if prev is None:
+                cnt['nullPrevSkipped'] += 1
+                continue
+            risen = now if plant == 'noRiseEdge' else now - prev
+            if risen:
+                per_bar.setdefault(i, []).append(d)
     cands = []
-    for i in sorted(out):
-        ds = out[i]
+    for i in sorted(per_bar):
+        ds = per_bar[i]
         if len(ds) > 1:
             cnt['bothSuppressed'] += 1
             cnt['bothAt'].append(i)
