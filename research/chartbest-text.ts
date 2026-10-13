@@ -364,7 +364,7 @@ const endingsOf = (cs: ReadonlyArray<{ end: string }>): string => {
   return parts.join("・");
 };
 // 置けた: §8.102「置けた割合 __%（うち、入った・置いたが入らなかった・追証で取り消された・ロスカットで取り消された）」 (SQ-H1, SPEC.holdPlacedShare)
-const placedOf = (p: Placed): number => (SPEC.holdPlacedShare === "entered" ? p.entered : p.entered + p.unfilled + p.cancelCall + p.cancelLc);
+export const placedCountOf = (p: Placed): number => (SPEC.holdPlacedShare === "entered" ? p.entered : p.entered + p.unfilled + p.cancelCall + p.cancelLc);
 const mailOf = (f: HoldFacts): string => (f.email ? "メール" : "合図");
 const dataOf = (f: HoldFacts): string => (f.account === "h2" ? "後半（2025-05-19〜2026-10-10）のデータ" : "2024〜2026年のデータ");
 const rowFailsOne = (r: HoldRowFacts): boolean => r.lcs > 0 || r.deadlines > 0 || r.capped > 0;
@@ -434,7 +434,7 @@ const holdTwoText = (f: HoldFacts): string => {
   }
   // the account's four rows grew; the all-emails view did not
   const p = main.placed;
-  const placed = shareH(placedOf(p), p.n);
+  const placed = shareH(placedCountOf(p), p.n);
   const mHalves = [...(M1 <= 0 || M1s <= 0 ? [["前半", M1, M1s] as const] : []), ...(M2 <= 0 || M2s <= 0 ? [["後半", M2, M2s] as const] : [])];
   const mv = mHalves.map(([h, x, y]) => `${h}は ${yenS(Math.min(x, y))}で0以下だった（スワップ無し ${yenS(x)}・主のスワップ込み ${yenS(y)}）`).join("。");
   return `口座は前半・後半とも増えた（置けた割合 ${placed}）。すべての${mail}を数えると、${mv}。` +
@@ -461,7 +461,7 @@ const holdThreeText = (f: HoldFacts): string => {
 
 // 添える文
 const placedText = (p: Placed, mail: string): string =>
-  `置けた割合 ${shareH(placedOf(p), p.n)}（うち、入った ${shareH(p.entered, p.n)}・置いたが入らなかった ${shareH(p.unfilled, p.n)}・追証で取り消された ${shareH(p.cancelCall, p.n)}・ロスカットで取り消された ${shareH(p.cancelLc, p.n)}。どれも全${mail}に対する割合）`;
+  `置けた割合 ${shareH(placedCountOf(p), p.n)}（うち、入った ${shareH(p.entered, p.n)}・置いたが入らなかった ${shareH(p.unfilled, p.n)}・追証で取り消された ${shareH(p.cancelCall, p.n)}・ロスカットで取り消された ${shareH(p.cancelLc, p.n)}。どれも全${mail}に対する割合）`;
 const holdAddText = (f: HoldFacts): string => {
   const mail = mailOf(f);
   const r = f.rows;
