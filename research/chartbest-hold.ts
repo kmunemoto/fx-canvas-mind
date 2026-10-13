@@ -30,7 +30,7 @@ import { type Dir, PAIRS, type Period, SPEC, STEP, SYNTH_RATES } from "./chartbe
 import type { SigRec } from "./chartbest-events.ts";
 import { type LateSig, lateMailed } from "./chartbest-measures.ts";
 import type { LoadDiag } from "./chartbest-data.ts";
-import { type HoldFacts, type HoldRowFacts, type Placed, ROWS4, type Row4 } from "./chartbest-text.ts";
+import { type HoldFacts, type HoldRowFacts, type Placed, ROWS4, type Row4, placedCountOf } from "./chartbest-text.ts";
 
 // ---- the shapes of research/ownerhold.ts used here (structural; ownerhold.ts's own types are not imported) ----------
 
@@ -370,6 +370,34 @@ export const factsOf = (a: OhAnalysis, src: string, account: Account, email: boo
   };
 };
 
+// the sentences' facts against the account lines they are read from: every email has one of the fates the sentences
+// count (none left without one, none unknown), the halves add up to the account's emails, and each row's dates and
+// capped calls are as many as its counts (the sentences list them)
+const FATES = ["tp", "lc", "deadline", "held", "unfilled", "cancelCall", "cancelLc", "refusedMargin", "refusedCall"];
+export const factsProblems = (f: HoldFacts, a: OhAnalysis, n: number): string[] => {
+  const bad: string[] = [];
+  const fatesOk = (fa: Record<string, number>, want: number | null, what: string) => {
+    const odd = Object.keys(fa).filter((k) => !FATES.includes(k) && fa[k] > 0);
+    if (odd.length) bad.push(`${what}: fates ${odd.join(",")}`);
+    const sum = Object.values(fa).reduce((x, y) => x + y, 0);
+    if (want !== null && sum !== want) bad.push(`${what}: ${sum} fates for ${want} emails`);
+  };
+  for (const k of ROWS4) {
+    const r = f.rows[k];
+    fatesOk(a.accounts[k].fates, n, k);
+    if (r.lcAt.length !== r.lcs) bad.push(`${k}: ${r.lcAt.length} loss-cut times for ${r.lcs}`);
+    if (r.deadlineAt.length !== r.deadlines) bad.push(`${k}: ${r.deadlineAt.length} deadline times for ${r.deadlines}`);
+    if (r.cappedCalls.length !== r.capped) bad.push(`${k}: ${r.cappedCalls.length} capped calls listed for ${r.capped}`);
+  }
+  if (f.placedHalves) {
+    const [h1, h2] = a.accounts.main.fatesHalves;
+    fatesOk(h1, null, "main H1");
+    fatesOk(h2, null, "main H2");
+    if (f.placedHalves[0].n + f.placedHalves[1].n !== n) bad.push(`main: halves ${f.placedHalves[0].n} + ${f.placedHalves[1].n} for ${n} emails`);
+  }
+  return bad;
+};
+
 // ---- 13: the owner's way's suspicious rows (a win rate printed as 100.00% or 0.00%) --------------------------------
 
 export const pct2 = (x: number | null): string => (x === null ? "—" : `${(100 * x).toFixed(SPEC.holdPctDigits)}%`);
@@ -507,7 +535,7 @@ export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdi
     put(`${row}.depositTotal`, fmtNum(l.depositTotal, 0));
     put(`${row}.in`, fmtNum(l.inEnd, 0));
     const p = placedOf(l.fates, n);
-    put(`${row}.placed`, pct2(n ? (p.entered + p.unfilled + p.cancelCall + p.cancelLc) / n : null));
+    put(`${row}.placed`, pct2(n ? placedCountOf(p) / n : null));
     put(`${row}.notPlaced`, `${p.refusedMargin};${p.refusedCall}`);
   }
   for (const side of ["main", "opposite"]) {
@@ -584,6 +612,8 @@ export const holdOne = async (oh: OwnerHold, x: HoldOneSpec): Promise<HoldOne> =
   const meta = JSON.parse(await Deno.readTextFile(`${dir}/dump/meta.json`)) as { step?: unknown; delay?: unknown };
   const sp = step5Problems(meta, x.sigs);
   checks.step5 = { ok: sp.length === 0, n: sp.length || x.sigs.length, ...(sp.length ? { detail: sp } : {}) };
+  const fp = factsProblems(facts, a, x.sigs.length);
+  checks.facts = { ok: fp.length === 0, n: fp.length || x.sigs.length, ...(fp.length ? { detail: fp.slice(0, 5) } : {}) };
   const lines = holdLines(`hold.${x.src}.${x.account}`, a, x.account, verdict, suspects, x.sigs.length);
   return { src: x.src, account: x.account, email: x.email, dir, signals: x.sigs.length, timedOut: false, seconds: (Date.now() - t0) / 1000, checks, verdict, suspects, facts, lines };
 };

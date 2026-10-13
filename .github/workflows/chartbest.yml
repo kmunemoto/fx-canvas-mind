@@ -10,10 +10,17 @@
 #                  real stages refused (exit 2, no print.txt); a made-up run refuses a folder without gen's manifest
 #                  and research/.cache, and the Python refuses real data's second half without the choice ledger
 #     full         N 101 in the main period, every check and the dumps (CB_FULL=1, the forced choice
-#                  donchian-A20 + breedon-1), then the pipeline rehearsal (stage 0 / 1 / 2 as separate processes on
-#                  one folder, each with the dumps and the Python on them as its real job runs it: the same printed
-#                  lines as the one-process run; a changed walk ledger stops the next stage with exit 2), then the
-#                  Python on the one-process run. E 601 the same once E's amount is written (20 (e) 強さ).
+#                  donchian-A20 + breedon-1) with the owner's way (9: research/chartbest-hold.ts through ownerhold.ts,
+#                  both accounts of every chosen item and both emails, CB_HOLD_BUDGET_MIN), then the pipeline
+#                  rehearsal (stage 0 / 1 / 2 as separate processes on one folder, each with the dumps and the
+#                  Python on them as its real job runs it: the same printed lines as the one-process run; a changed
+#                  walk ledger stops the next stage with exit 2), then the
+#                  Python on the one-process run (with --hold: hold/ against its lists and research/ownerhold-check.py).
+#                  E 601 the same once E's amount is written (20 (e) 強さ).
+#     rehearse     20 (c) on made-up files (SQ-06, SQ-H5; the mini period): research/macdx.ts MODE=walk → repro-walk
+#                  (ULTRA's whole row and the MACD mails against report.json / decisions.csv); research/ownerhold.ts
+#                  SIGS=ultra5 / macdx5 MODE=synthetic FULL=1 → hold-xcheck (dump/signals.csv, decisions.txt); each
+#                  comparison passes, then fails on a planted copy (one changed line or number)
 #     flip         seeds 101–105 and their flips (light runs with the dumps), flip-cmp; flip-sum judges set.flip
 #     answer       O 801–804 (the answer-knowing donchian-A20), full runs, the Python's --o-mode on 801; answer-sum
 #                  judges set.O
@@ -27,8 +34,8 @@
 #     stage0/1/2   the real stages. Written only: their first step is the program's gate (§5.4 of the plan), which
 #                  refuses until step 3 is complete (55 of the 59 items are not built), so no real price is read.
 #                  A stage that passes keeps print.txt and its ledger file (with the sha256) as an artifact.
-#   not built in step 2 (the yml has no job for them): the rehearsal of 20 (c) (repro-walk on macdx.ts's walk,
-#   hold-xcheck on ownerhold.ts's synthetic run) and the owner's way (chartbest-hold.ts).
+#   not written yet (step 3): the real reproduction steps of 20 (c) in the stage jobs, and the BIS policy rates the
+#   real stage 2's owner's way needs for its swap rows (CB_BIS_CSV, SQ-H6; the guard refuses without it).
 #
 # Read-only: it writes nothing to the repository and holds no secret.
 name: Research chartbest
@@ -41,6 +48,9 @@ on:
       - research/chartbest*.ts
       - research/chartbest*.py
       - research/chartbest/**
+      - research/ownerhold*.ts
+      - research/ownerhold-check.py
+      - research/macdx.ts
       - research/ledger/chartbest-*.json
       - research/ledger/spread-hours.csv
       - .github/workflows/chartbest.yml
@@ -215,7 +225,8 @@ jobs:
         env:
           CB_MODE: run
           CB_FULL: "1"
-          CB_HOLD: "0"
+          # the owner's way (9) is in the full run; an account its budget does not reach is 「出せなかった」
+          CB_HOLD_BUDGET_MIN: "150"
           CB_DATA: ${{ env.DATA }}/gmo
           CB_OUT: ${{ env.OUT }}
           CB_FORCE_CHOICE: ${{ matrix.force }}
@@ -280,12 +291,13 @@ jobs:
         if: steps.go.outputs.run == 'yes'
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy
-          extra=""
-          if [ -n "${{ matrix.force }}" ]; then extra="--force-choice ${{ matrix.force }}"
+          extra="--hold"
+          if [ -n "${{ matrix.force }}" ]; then extra="--force-choice ${{ matrix.force }} --hold"
           elif ! python3 -c "import json,sys; c=json.load(open('$OUT/ts/select.json'))['chosen']; sys.exit(0 if c['chart'] or c['cal'] else 1)"; then
-            # 12: when neither group has an item to choose, the second half is not opened
+            # 12: when neither group has an item to choose, the second half is not opened (and the owner's way not run)
             extra="--stages 0,1"; echo "nothing chosen at stage 1: the second half is not opened (12); the Python compares stages 0 and 1"
           fi
+          # --hold: the owner-hold lists against hold/<src>-<acct>/dump/ and research/ownerhold-check.py on every dump
           /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo $DATA/gmo --ts $OUT/ts --out $OUT/py --full $extra
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -295,6 +307,95 @@ jobs:
             ${{ env.OUT }}/checks.json
             ${{ env.OUT }}/py/pycheck.json
             ${{ env.WALK }}/checks.json
+          if-no-files-found: ignore
+
+  # 20 (c) rehearsed on made-up files (SQ-06, SQ-H5): the comparisons the real stages make with macdx.ts MODE=real and
+  # ownerhold.ts SIGS=ultra5|macdx5 MODE=real, run here on the reference programs' own made-up runs in the mini period;
+  # each must pass, and fail on a planted copy (one changed line or number). The numbers go to files only (20 (c)).
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RH: research/out/chartbest/rehearse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # its relative research/.cache-walk and research/out/macdx land in the working folder (never research/.cache)
+      - name: research/macdx.ts on a seeded walk (MODE=walk, the mini period), in a folder under research/out
+        run: |
+          mkdir -p $RH/walk && cd $RH/walk
+          MODE=walk SEED=1 START=2024-01-01 SPLIT=2024-02-26 END=2024-04-20T00:00:00Z deno run --v8-flags=--max-old-space-size=6144 \
+            --allow-read=. --allow-write=research/out,research/.cache-walk --allow-env=MODE,PAIRS,START,SPLIT,END,SEED \
+            "$GITHUB_WORKSPACE/research/macdx.ts" > macdx-print.txt 2>&1 || { tail -30 macdx-print.txt; exit 1; }
+          ls research/out/macdx/report.json research/out/macdx/decisions.csv research/.cache-walk/seed1
+      - name: repro-walk, then a planted copy (the whole ULTRA row's TP + 1, one mailed MACD fire removed) must fail it
+        run: |
+          W=$RH/walk/research
+          CB_MODE=repro-walk CB_WALK=$W/.cache-walk/seed1 CB_MACDX_OUT=$W/out/macdx CB_OUT=$RH/repro-walk $DENO_MADEUP research/chartbest.ts
+          P=$RH/repro-plant/macdx
+          mkdir -p $P
+          python3 -I - "$W/out/macdx" "$P" <<'EOF'
+          import json, sys
+          src, dst = sys.argv[1], sys.argv[2]
+          r = json.load(open(f'{src}/report.json'))
+          r['tables']['whole']['ultra']['tp'] += 1
+          json.dump(r, open(f'{dst}/report.json', 'w'), indent=1)
+          lines = open(f'{src}/decisions.csv').read().rstrip('\n').split('\n')
+          col = {c: k for k, c in enumerate(lines[0].split(','))}
+          k = next(k for k in range(1, len(lines)) if lines[k].split(',')[col['mailed']] == '1' and lines[k].split(',')[col['fire']] == '1')
+          del lines[k]
+          open(f'{dst}/decisions.csv', 'w').write('\n'.join(lines) + '\n')
+          EOF
+          s=0
+          CB_MODE=repro-walk CB_WALK=$W/.cache-walk/seed1 CB_MACDX_OUT=$P CB_OUT=$RH/repro-plant/out $DENO_MADEUP research/chartbest.ts > /tmp/repro-plant.txt 2>&1 || s=$?
+          cat /tmp/repro-plant.txt
+          if [ "$s" != 1 ] || ! grep -q '^FAIL repro.ultra' /tmp/repro-plant.txt || ! grep -q '^FAIL repro.macd' /tmp/repro-plant.txt; then
+            echo "the planted copy was not caught by repro.ultra and repro.macd"; exit 1
+          fi
+          echo "the planted copy failed repro.ultra and repro.macd, as it must"
+      - name: research/ownerhold.ts's synthetic runs (SIGS=ultra5 and macdx5, FULL=1, the mini period), hold-xcheck on each
+        run: |
+          for s in ultra5 macdx5; do
+            SIGS=$s MODE=synthetic SETS=none SEEDS=1 FULL=1 START=2024-01-01 SPLIT=2024-02-26 END=2024-04-20T00:00:00Z OUT=$RH/oh5x-$s \
+              deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/ownerhold.ts \
+              > $RH/oh5x-$s.txt 2>&1 || { tail -30 $RH/oh5x-$s.txt; exit 1; }
+            grep -q 'PASSED' $RH/oh5x-$s.txt || { echo "ownerhold.ts's own checks did not pass ($s)"; tail -30 $RH/oh5x-$s.txt; exit 1; }
+            CB_MODE=hold-xcheck CB_OH_DIR=$RH/oh5x-$s/syn-none-1 CB_OUT=$RH/xcheck-$s $DENO_MADEUP research/chartbest.ts
+          done
+      - name: hold-xcheck on a planted copy (one signal's late flag, one decision line) must fail it
+        run: |
+          O=$RH/oh5x-ultra5/syn-none-1
+          P=$RH/xcheck-plant/oh
+          mkdir -p $P/dump && cp $O/dump/meta.json $P/dump/
+          python3 -I - "$O" "$P" <<'EOF'
+          import sys
+          o, p = sys.argv[1], sys.argv[2]
+          rows = open(f'{o}/dump/signals.csv').read().rstrip('\n').split('\n')
+          c = rows[100].split(',')
+          c[7] = '1' if c[7] == '0' else '0'
+          rows[100] = ','.join(c)
+          open(f'{p}/dump/signals.csv', 'w').write('\n'.join(rows) + '\n')
+          d = open(f'{o}/decisions.txt').read().split('\n')
+          d[4999] += ' planted'
+          open(f'{p}/decisions.txt', 'w').write('\n'.join(d))
+          EOF
+          s=0
+          CB_MODE=hold-xcheck CB_OH_DIR=$P CB_OH_DATA=$O/gmo CB_OUT=$RH/xcheck-plant/out $DENO_MADEUP research/chartbest.ts > /tmp/xcheck-plant.txt 2>&1 || s=$?
+          cat /tmp/xcheck-plant.txt
+          if [ "$s" != 1 ] || ! grep -q '^FAIL xcheck.sigs' /tmp/xcheck-plant.txt || ! grep -q '^FAIL xcheck.decisions' /tmp/xcheck-plant.txt; then
+            echo "the planted copy was not caught by xcheck.sigs and xcheck.decisions"; exit 1
+          fi
+          echo "the planted copy failed xcheck.sigs and xcheck.decisions, as it must"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rehearse
+          path: |
+            ${{ env.RH }}/*/checks.json
+            ${{ env.RH }}/*.txt
+            ${{ env.RH }}/walk/macdx-print.txt
           if-no-files-found: ignore
 
   flip:
@@ -801,7 +902,7 @@ jobs:
   # stdout goes to a file, of which only its verdict lines are echoed.
   stage0:
     if: ${{ inputs.stage0 == 'yes' }}
-    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    needs: [checks, full, rehearse, flip-sum, answer-sum, plant-sum, sets-sum]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:
@@ -890,7 +991,7 @@ jobs:
 
   stage1:
     if: ${{ inputs.stage1 == 'yes' }}
-    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    needs: [checks, full, rehearse, flip-sum, answer-sum, plant-sum, sets-sum]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:
@@ -979,7 +1080,7 @@ jobs:
 
   stage2:
     if: ${{ inputs.stage2 == 'yes' }}
-    needs: [checks, full, flip-sum, answer-sum, plant-sum, sets-sum]
+    needs: [checks, full, rehearse, flip-sum, answer-sum, plant-sum, sets-sum]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:
@@ -998,6 +1099,8 @@ jobs:
           CB_MODE: hand
           CB_OUT: research/out/chartbest/hand
         run: $DENO_MADEUP research/chartbest.ts
+      # the owner's way's swap rows read the BIS policy rates (CB_BIS_CSV, SQ-H6): step 3 adds the step that stores them
+      # (as ownerhold5.yml does) and passes CB_BIS_CSV here and to the stage; until then the guard refuses for it too
       - name: The gates (§5.4), before anything real
         env:
           CB_MODE: guard
