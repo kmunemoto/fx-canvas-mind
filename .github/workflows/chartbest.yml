@@ -37,10 +37,14 @@
 #   not written yet (step 3): the real reproduction steps of 20 (c) in the stage jobs, and the BIS policy rates the
 #   real stage 2's owner's way needs for its swap rows (CB_BIS_CSV, SQ-H6; the guard refuses without it). The real
 #   stage 2's Python step already carries --hold (the checks job greps it); step 3 also passes it the same BIS file as
-#   CB_BIS_CSV (the Python's rates input, read against its sha256; until then the Python's --hold is made-up only), and
-#   sizes CB_HOLD_BUDGET_MIN against the measured times of 20 (c), the stage and the Python (a started account cannot be
-#   stopped: ownerhold.ts's analyse() is synchronous). A timed-out item account leaves hold/<src>-<acct>/timed-out.json
-#   (SQ-PF4), which the Python must accept before the real stage 2.
+#   CB_BIS_CSV with `--bis-csv FILE --bis-sha256 HEX` (the Python's rates input, hashed before anything is read; the
+#   Python refuses a real stage 2 without --hold and a real --hold without both, exit 2, as the checks job tests;
+#   SQ-PR8), and sizes CB_HOLD_BUDGET_MIN against the measured times of 20 (c), the stage and the Python (a started
+#   account cannot be stopped: ownerhold.ts's analyse() is synchronous). A timed-out item account leaves
+#   hold/<src>-<acct>/timed-out.json (SQ-PF4), which the Python accepts for an item without a dump (python-issues PR-9).
+#   The Python compares the owner's way's print lines hold.<src>.<acct>.* by key (PR-8); the MAE medians (SQ-PR6), an
+#   account row's TP MAE yen (SQ-PR3) and, on one made-up seed, `suspicious` of a second-half account (SQ-PR5) still
+#   differ on made-up data and must be settled first (python-issues TS-2, TS-3).
 #
 # Read-only: it writes nothing to the repository and holds no secret.
 name: Research chartbest
@@ -174,6 +178,13 @@ jobs:
           s=0; /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts /tmp/none --out /tmp/py-none --stages 0,2 > /tmp/py-gate.txt 2>&1 || s=$?
           cat /tmp/py-gate.txt
           echo "the Python, real data's second half without the choice ledger: exit $s"; if [ "$s" != 2 ] || ! grep -q "opened only with --choice-ledger" /tmp/py-gate.txt; then fail=1; fi
+          # PR-7: a real stage 2 recomputes the owner's way (--hold), whose swap rows read the BIS file read against its sha256
+          s=0; /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts /tmp/none --out /tmp/py-none --stages 0,2 --choice-ledger research/ledger/chartbest-choice.json > /tmp/py-gate2.txt 2>&1 || s=$?
+          cat /tmp/py-gate2.txt
+          echo "the Python, real data's stage 2 without --hold: exit $s"; if [ "$s" != 2 ] || ! grep -q "stage 2 without --hold" /tmp/py-gate2.txt; then fail=1; fi
+          s=0; /tmp/py/bin/python -I research/chartbest-check.py --mode run --gmo research/.cache/chartbest --ts /tmp/none --out /tmp/py-none --stages 0,2 --choice-ledger research/ledger/chartbest-choice.json --hold > /tmp/py-gate3.txt 2>&1 || s=$?
+          cat /tmp/py-gate3.txt
+          echo "the Python, real data's --hold without the BIS file: exit $s"; if [ "$s" != 2 ] || ! grep -q -- "--hold without --bis-csv and --bis-sha256" /tmp/py-gate3.txt; then fail=1; fi
           rmdir research/.cache/chartbest research/.cache 2>/dev/null || true
           exit $fail
       # gates-02: the real stage 2 recomputes the owner's way in the Python too (20 (d)「すべての段」)
@@ -1163,7 +1174,9 @@ jobs:
           deno run --sloppy-imports --v8-flags=--max-old-space-size=12288
           --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
           research/chartbest.ts
-      # the same n-summary as the TS (11's projections); stdout to a file, only the verdict lines echoed (20 (i))
+      # the same n-summary as the TS (11's projections); stdout to a file, only the verdict lines echoed (20 (i)).
+      # Step 3 adds `--bis-csv <the file of CB_BIS_CSV> --bis-sha256 <its sha256>` to the line below (SQ-PR8): without
+      # them the Python refuses --hold on real data (exit 2, before anything is read)
       - name: The Python on the same day files (stages 0 and 2, the second half from the choice ledger read against its sha256)
         run: |
           python3 -m venv /tmp/py && /tmp/py/bin/pip install -q numpy

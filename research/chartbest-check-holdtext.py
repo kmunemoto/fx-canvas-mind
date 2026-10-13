@@ -16,7 +16,10 @@ Written 2026-10-13 by the step-2b Python fixer, who has not read any TypeScript 
   * §8.102 決まり「書く文」(① ② ③ and「どの場合も、次を添える」) and「勝率の書き方」;
   * §8.113 9 (the two L sentences; 「出せなかった」);
   * the resolutions of the free parts SQ-08 and SQ-H1 (as python-issues.md's appendix A1 / A2 quotes them), with
-    SQ-RC1 open (PLACED_SHARE below), and SQ-32 (U+2212 minus), SQ-P18 (counts without separators).
+    SQ-RC1 settled as the entered share (PLACED_SHARE below; python-issues PR-2), a missing rate 「—」 (MISSING), and
+    SQ-32 (U+2212 minus), SQ-P18 (counts without separators).
+Reviewed and changed 2026-10-13 by the step-2b Python review fixer (who has not read any TS): PLACED_SHARE 'entered',
+pct(None) 「—」.
 
 The facts of one account are the dict hand.json's `fields.holdText` describes (rows main / mainSwap / worst /
 worstSwap, placedHalves, m, mh, third, win, opposite, perTrade, perTradeParts, src, account, email, timedOut);
@@ -62,12 +65,18 @@ ENDING = {'settle': '決済の充当で解消', 'deadline': '期限の決済', '
           'deposit': '入金で解消', 'open': 'END の時点で未解消'}                                 # SQ-H1 7
 ENDINGS_ALWAYS = ('settle', 'deadline', 'lc')          # SQ-08's three, always written
 ENDINGS_IF_ANY = ('deposit', 'open')                   # SQ-H1 7: only when not zero
-# SQ-H1 3 / SQ-RC1 (open): 置けた割合 = the four parts of §8.102's 「うち」 (入った + 置いたが入らなかった + 追証で取り消された
-# + ロスカットで取り消された) ÷ all the account's emails ('sum'); the alternative 'entered' is §8.111's 「入った件数 ÷ その
-# 半分のメール」. A printed share only; nothing else moves.
-PLACED_SHARE = 'sum'
+# 置けた割合 (SQ-RC1, settled; python-issues PR-2, finding hold-placed-share): the entered share, 入った件数 ÷ the
+# account's emails. §8.113 9「オーナーの持ち方（段2だけ。§8.111 の決まりのまま）」「必ず並べるもの（§8.111 の「出すもの」の
+# 1〜8。…違う所は §8.111 が先）」「今のメール2つの数字は、§8.111 の数字を再現して並べる（20 の (c)）」 and 21「§8.102 の ①②③ の
+# 文と添える文（§8.111 でもそのまま使ったもの）」 with §8.111's own definition and use「前半・後半の置けた割合（入った件数 ÷
+# その半分のメール）」「置けた割合 MACD 7.27%（入った 7.27%・置いたが入らなかった 0%・追証で取り消された 0.03%・…）」
+# (OPERATIONS.md 8964, 8975; the four parts' sum would be 7.30%). The four parts stay in the parenthesis (§8.102's
+# 「うち、入った __%・置いたが入らなかった __%・…」). The previous Python reading 'sum' is not offered any more.
+PLACED_SHARE = 'entered'
 HOLD_PCT_DIGITS = 2                                    # SQ-H1 12 (as §8.111 wrote the owner's way's %)
-MISSING = '—'                                          # SQ-H1 11 / 14: a number that does not exist
+# SQ-H1 11 / 14: a number that does not exist is printed 「—」 — a rate too (no 「%」 after it: finding
+# hold-null-rate-dash; SQ-PF3 4's 「—%」 is withdrawn), a pips or yen value, and a whole range of 21's range sentence.
+MISSING = '—'
 TIMED_OUT = 'のオーナーの持ち方は出せなかった（計算が Actions の1 job の時間に収まらなかった）。'   # 9, SQ-H1 13
 NO_STOP = '損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。'          # §8.102 勝率の書き方
 B_SENTENCE = ('(b) のこれからのメールで比べるのは、取引ごとの P から1日後の1回あたりが、過去の見込みの範囲に入るかだけ。'
@@ -77,9 +86,10 @@ B_UNCHANGED = '(b) の結果で、この判断は変わらない（(b) では口
 
 # ---------------------------------------------------------------- numbers (21「数字の書き方」, SQ-H1 12)
 def pct(x):
-    """The owner's way's % (two decimals, no sign); the exact binary value of 100 x rounded half up."""
+    """The owner's way's % (two decimals, no sign); the exact binary value of 100 x rounded half up. A rate that does
+    not exist (an account, or one side of the per-trade view, with no entered trade) is 「—」 (SQ-H1 11)."""
     if x is None:
-        return MISSING + '%'
+        return MISSING
     return TX.fixed(100 * x, HOLD_PCT_DIGITS) + '%'
 
 
@@ -297,8 +307,9 @@ def part_three(f, v, word):
 
 
 def placed_share(p):
-    if PLACED_SHARE == 'sum':
-        return share(p['n'], p['entered'] + p['unfilled'] + p['cancelCall'] + p['cancelLc'])
+    """置けた割合 (PLACED_SHARE): 入った件数 ÷ the emails of p."""
+    if PLACED_SHARE != 'entered':
+        raise ValueError(f'PLACED_SHARE {PLACED_SHARE!r}: only the entered share (SQ-RC1, settled)')
     return share(p['n'], p['entered'])
 
 

@@ -17,11 +17,12 @@ Usage:
   python3 -I research/chartbest-check.py --mode run --gmo OUT/gmo --ts OUT/ts --out OUT/py [--period main|mini]
          [--full] [--o-mode] [--force-choice id,id | --choice-ledger FILE [--choice-sha256 HEX]] [--stages 0,1,2]
          [--n-summary FILE] [--counts-only-suspicion] [--plant NAME] [--no-compare] [--strict-format]
-         [--hold [--hold-dir DIR]]
+         [--hold [--hold-dir DIR] [--bis-csv FILE --bis-sha256 HEX]]
 Never reads real prices by itself: --gmo is a folder of day files written by the made-up generator (the real stage
 modes of the TS feed it real files only after their own gates, 22). A --gmo under research/.cache is real data: the
-second half is then opened only from --choice-ledger read against CHOICE_LEDGER_SHA256 (12, 14), and the made-up
-options are refused.
+second half is then opened only from --choice-ledger read against CHOICE_LEDGER_SHA256 (12, 14), only with --hold,
+whose swap rows read the BIS file --bis-csv against --bis-sha256 (the TS's CB_BIS_CSV), and the made-up options are
+refused.
 """
 import argparse
 import hashlib
@@ -152,6 +153,11 @@ def clean_row(row):
 # Rewritten 2026-10-12 from the rule by the step-2b Python author, who has not read the TS (py-brief 1.8). They decide
 # which data and which items are opened, never a number; every refusal exits 2 (die) before any bar is read.
 REFUSE_H2 = 'the second half (stage 2) is opened only with --choice-ledger'
+# Added 2026-10-13 by the step-2b Python review fixer (who has not read any TS): python-issues PR-7.
+REFUSE_HOLD = ("stage 2 without --hold (14「段2で、オーナーの持ち方（9）も測る」; 20 (d)「Python の計算し直し〔すべての段〕」: "
+               "the owner's way is recomputed and compared too)")
+REFUSE_RATES = ("--hold without --bis-csv and --bis-sha256 (the swap rows' BIS policy rates: the same file as the TS's "
+                "CB_BIS_CSV, read against its sha256, SQ-H6; the Python's rates are otherwise the made-up synthetic ones)")
 
 
 def under_real_cache(path):
@@ -203,8 +209,12 @@ def stage_gate(a, stages):
       --choice-sha256, --o-mode, --counts-only-suspicion, --plant; --period mini is the development period); the
       second half only through --choice-ledger read against CHOICE_LEDGER_SHA256 (12, 14, 22「段2（後半、選んだ
       K_total 個だけ…）」); not before R_cb (17; the rules are fixed before real data is read); never without the
-      comparison (20 (d)「Python の計算し直し〔すべての段〕」).
-    * Made-up data: a second half without stage 1 needs --choice-ledger (a walk ledger) or --force-choice.
+      comparison (20 (d)「Python の計算し直し〔すべての段〕」); a stage 2 only with --hold (14, 20 (d): the owner's
+      way is recomputed too), and --hold only with --bis-csv and --bis-sha256 (the swap rows' BIS rates, the same file
+      as the TS's CB_BIS_CSV, hashed before anything is read; SQ-H6). PR-7, added by the step-2b Python review fixer.
+    * Made-up data: a second half without stage 1 needs --choice-ledger (a walk ledger) or --force-choice; no
+      --bis-csv / --bis-sha256 (the made-up runs' rates are the synthetic ones of plan §3.12).
+    * --bis-csv / --bis-sha256 only with --hold.
     Every reason found is printed; any one refuses (exit 2)."""
     real = under_real_cache(a.gmo)
     why = []
@@ -229,10 +239,34 @@ def stage_gate(a, stages):
             why.append('real data before R_cb (17: 2026-10-13 00:00 UTC)')
         if a.no_compare:
             why.append('real data: --no-compare (20 (d): every stage is compared)')
-    elif 2 in stages and 1 not in stages and not a.choice_ledger and not a.force_choice:
-        why.append(f'stage 2 without stage 1: {REFUSE_H2} (a walk ledger) or --force-choice')
+        # PR-7 (findings gates-02, hold-real-stage2-no-hold): 14「段2で、オーナーの持ち方（9）も測る」 and 20 (d)「Python の
+        # 計算し直し〔すべての段〕」「照らすもの…判定、文」: a real stage 2 recomputes the owner's way too
+        if 2 in stages and not a.hold:
+            why.append(f'real data: {REFUSE_HOLD}')
+        # its swap rows read the BIS policy rates (§8.102 スワップ「BIS の政策金利（月次、1か月遅れ）から目安を作る」,
+        # §8.111「§8.102 のまま」): the same file as the TS's CB_BIS_CSV, read against its sha256 (SQ-H6)
+        if a.hold and not (a.bis_csv and a.bis_sha256):
+            why.append(f'real data: {REFUSE_RATES}')
+    else:
+        if 2 in stages and 1 not in stages and not a.choice_ledger and not a.force_choice:
+            why.append(f'stage 2 without stage 1: {REFUSE_H2} (a walk ledger) or --force-choice')
+        if a.bis_csv or a.bis_sha256:
+            why.append('made-up data: --bis-csv / --bis-sha256 only on real data (the made-up runs use the synthetic '
+                       "rates of plan §3.12, research/ownerhold-check.py's SYNTH_RATES, as the TS's made-up runs do)")
+    if (a.bis_csv or a.bis_sha256) and not a.hold:
+        why.append("--bis-csv / --bis-sha256 are the owner's way's rates input: only with --hold")
     if why:
         die('; '.join(why))
+    if real and a.hold:
+        # the rates file is hashed before anything in it (or any bar) is read
+        want = a.bis_sha256.strip().lower()
+        try:
+            got = sha256_of(a.bis_csv)
+        except OSError as e:
+            die(f'--bis-csv {a.bis_csv} cannot be read ({e.__class__.__name__}); nothing opened')
+        if got != want:
+            die(f'sha256 {a.bis_csv} {got} is not --bis-sha256 {want}: nothing in it read, nothing opened (SQ-H6)')
+        log(f'sha256 {a.bis_csv} {got} (the BIS policy rates of the swap rows)')
     return real, (choice_from_ledger(a, real) if a.choice_ledger else None)
 
 
@@ -373,8 +407,11 @@ def run(a):
         hold_dir = a.hold_dir or os.path.join(os.path.dirname(os.path.abspath(a.ts)), 'hold')
         HD = _mod('hold')
 
+        rates = a.bis_csv if real else HD.RATES          # stage_gate: real --hold has the BIS file (read against its sha256)
+
         def extra(rep):
-            HD.compare_hold(rep, out, hold_dir, a.gmo, list(chosen) + list(D.MEASURES), sigs, late, bars, period, log)
+            HD.compare_hold(rep, out, hold_dir, a.gmo, list(chosen) + list(D.MEASURES), sigs, late, bars, period, log,
+                            rates=rates, real=real)
     return compare_all(out, a.ts, bars, stages, extra, strict=a.strict_format)
 
 
@@ -481,6 +518,9 @@ def main():
     ap.add_argument('--counts-only-suspicion', action='store_true')
     ap.add_argument('--hold', action='store_true', help='also the owner-hold dumps (hold/<src>-<acct>/dump/)')
     ap.add_argument('--hold-dir', default=None, help='the hold/ folder (default: next to --ts)')
+    ap.add_argument('--bis-csv', default='', help="real data with --hold only: the BIS policy rates of the swap rows, "
+                    "the same file as the TS's CB_BIS_CSV (research/ownerhold-check.py's --rates format)")
+    ap.add_argument('--bis-sha256', default='', help='the sha256 --bis-csv is read against (real data with --hold only)')
     ap.add_argument('--no-compare', action='store_true')
     ap.add_argument('--strict-format', action='store_true',
                     help="compare the dumps' layouts as written (the plan's 4.4: headers and keys equal), without "
