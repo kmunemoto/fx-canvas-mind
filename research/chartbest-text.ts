@@ -276,3 +276,244 @@ export const alwaysText = (id: string, xs: AlwaysRow[], holdRange: string | null
 
 export const lbOf = (e: Est) => e.lb;
 export const SUSPECT_LINES = SUSPECT;
+
+// ---- 〈オーナーの持ち方の文〉 (21; §8.102 書く文 through SQ-08 and SQ-H1) ----------------------------------------------
+//
+// One sentence per source and account: the head of 21 (the second-half account, the full account of an item, the
+// full account of an email), §8.102's ① → ② → ③ in the branch the numbers fall in, its 添える文, then 9's L sentence
+// with the per-trade view's win rates. Every free part follows SQ-08 / SQ-H1 (spec-questions.md): the rows' order and
+// names, dates "YYYY-MM-DD HH:MM UTC" oldest first (at most 10, then 「、ほか ○件」), the capped calls' endings, yen
+// with thousands separators (a sign on P/L), the owner's way's % with two decimals; "メール" → "合図" for an item.
+// No (b) sentence for an item (21). The second-half account's ② is 21's own form (numbers only, SQ-H1).
+
+export const ROWS4 = ["main", "mainSwap", "worst", "worstSwap"] as const;
+export type Row4 = (typeof ROWS4)[number];
+// the account's emails by what became of them (counts; n all of the account's emails)
+export interface Placed {
+  n: number;
+  entered: number;
+  unfilled: number;
+  cancelCall: number;
+  cancelLc: number;
+  refusedMargin: number;
+  refusedCall: number;
+}
+export interface HoldRowFacts {
+  // the loss-cut events, the calls ended by the deadline's close-out, the calls with U left after the notice's deposit
+  lcs: number;
+  deadlines: number;
+  capped: number;
+  lcAt: number[];
+  deadlineAt: number[];
+  // a capped call: its τ, U after the notice's deposit (yen), how it ended (settle, lc, deadline, deposit, open)
+  cappedCalls: Array<{ tau: number; short: number; end: string }>;
+  A: number;
+  B: number;
+  S: number;
+  // the money put in by END (the start and the deposits)
+  inTotal: number;
+  placed: Placed;
+}
+export interface HoldFacts {
+  src: string;
+  account: "full" | "h2";
+  email: boolean;
+  timedOut: boolean;
+  rows: Record<Row4, HoldRowFacts>;
+  // the full account's main row by the emails' halves (T < SPLIT, T ≥ SPLIT); null for the second-half account
+  placedHalves: [Placed, Placed] | null;
+  // M (the all-emails view): full M1, M2 (none and the main swap); h2 M_h (none, swap)
+  m: { none: [number, number]; swap: [number, number] };
+  mh: [number, number] | null;
+  third: { main: number | null; L: number | null; plain: number | null; n: number };
+  // the main row: its win rate, endings, per trade, loss-cut events, E*
+  win: { rate: number | null; tp: number; lc: number; deadline: number; held: number; pips: number | null; yen: number | null; lcEvents: number; estar: number | null };
+  opposite: { rate: number | null; tp: number; lc: number; deadline: number; held: number; pips: number | null; yen: number | null; lcs: number; deadlines: number; capped: number; S: number };
+  // the per-trade view (every email alone), this account's signals, and its opposite
+  perTrade: { rate: number | null; tp: number; held: number; pips: number | null; yen: number | null; oppRate: number | null; oppPips: number | null; oppYen: number | null };
+  // 21 いつも添える文's range: the five-pair rows (full: the whole period, the first and the second half; h2: its own)
+  perTradeParts: Array<{ rate: number | null; pips: number | null; oppRate: number | null; oppPips: number | null }>;
+  verdict: { one: boolean; twoAccounts: boolean; twoM: boolean; three: boolean };
+}
+
+export const HOLD_ROW_NAME: Record<Row4, string> = {
+  main: "主の行（スワップ無し・1分足の終値）",
+  mainSwap: "スワップ込み・1分足の終値",
+  worst: "スワップ無し・一番悪い値",
+  worstSwap: "スワップ込み・一番悪い値",
+};
+const HOLD_MAIN = "主の行（1分足の終値・スワップ無し）";
+export const HOLD_HEAD = {
+  h2: "選ぶのに使っていない後半（2025年5月19日〜）だけで、30万円から始めた口座では、",
+  fullItem: "選ぶのに使った前半を含む全期間（良く見えやすい）では、",
+  fullEmail: "全期間では、",
+} as const;
+const pctH = (x: number | null): string => (x === null ? "—" : `${(100 * x).toFixed(SPEC.holdPctDigits)}%`);
+const shareH = (k: number, n: number): string => pctH(n ? k / n : null);
+const yenS = (x: number | null): string => (x === null ? "— 円" : `${fmt.yen(x)} 円`);
+const yenU = (x: number | null): string => (x === null ? "— 円" : `${fmt.yen(x, false)} 円`);
+const isoMin = (t: number): string => `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+const listTen = (xs: string[]): string => (xs.length > 10 ? `${xs.slice(0, 10).join("、")}、ほか ${xs.length - 10}件` : xs.join("、"));
+const datesOf = (ts: readonly number[]): string => listTen([...ts].sort((a, b) => a - b).map(isoMin));
+const ENDING: Record<string, string> = { settle: "決済の充当で解消", deadline: "期限の決済", lc: "ロスカット", deposit: "入金で解消", open: "END の時点で未解消" };
+const countEnds = (cs: ReadonlyArray<{ end: string }>, end: string) => cs.filter((c) => c.end === end).length;
+// SQ-08: 「決済の充当で解消 ○・期限の決済 ○・ロスカット ○」 (SQ-H1: then 入金で解消 / END の時点で未解消 when there are any)
+const endingsOf = (cs: ReadonlyArray<{ end: string }>): string => {
+  const parts = ["settle", "deadline", "lc"].map((e) => `${ENDING[e]} ${countEnds(cs, e)}`);
+  for (const e of ["deposit", "open"]) if (countEnds(cs, e)) parts.push(`${ENDING[e]} ${countEnds(cs, e)}`);
+  return parts.join("・");
+};
+// 置けた: §8.102「置けた割合 __%（うち、入った・置いたが入らなかった・追証で取り消された・ロスカットで取り消された）」 (SQ-H1, SPEC.holdPlacedShare)
+const placedOf = (p: Placed): number => (SPEC.holdPlacedShare === "entered" ? p.entered : p.entered + p.unfilled + p.cancelCall + p.cancelLc);
+const mailOf = (f: HoldFacts): string => (f.email ? "メール" : "合図");
+const dataOf = (f: HoldFacts): string => (f.account === "h2" ? "後半（2025-05-19〜2026-10-10）のデータ" : "2024〜2026年のデータ");
+const rowFailsOne = (r: HoldRowFacts): boolean => r.lcs > 0 || r.deadlines > 0 || r.capped > 0;
+const rowFailsTwo = (f: HoldFacts, r: HoldRowFacts): boolean => (f.account === "full" ? r.A <= 0 || r.B <= 0 : r.S <= 0);
+// a row's three counts, and (detail) the dates and the capped calls' endings
+const rowDetail = (r: HoldRowFacts): string => {
+  const parts: string[] = [];
+  if (r.lcs) parts.push(`ロスカットの日時 ${datesOf(r.lcAt)}`);
+  if (r.deadlines) parts.push(`期限の決済の日時 ${datesOf(r.deadlineAt)}`);
+  if (r.capped) parts.push(`入金し切れなかった追証の日時 ${datesOf(r.cappedCalls.map((c) => c.tau))}、終わり方 ${endingsOf(r.cappedCalls)}`);
+  return parts.length ? `（${parts.join("。")}）` : "";
+};
+const rowCounts = (r: HoldRowFacts): string => `ロスカット ${r.lcs}回・期限の決済 ${r.deadlines}回・上限で入金し切れなかった追証 ${r.capped}回`;
+// the caveats of a failing row (§8.102 書く文 ①)
+const caveatOf = (rows: readonly Row4[]): string => {
+  const parts: string[] = [];
+  if (rows.some((k) => k === "worst" || k === "worstSwap")) parts.push("両建ての買いと売りが同時に一番悪い値にいる、実際には起きない形も含む");
+  if (rows.some((k) => k === "mainSwap" || k === "worstSwap")) parts.push("スワップは目安で、取り分は仮の値");
+  return parts.length ? `（${parts.join("。")}）` : "";
+};
+
+// ①
+const holdOneText = (f: HoldFacts): string => {
+  const d = dataOf(f);
+  const main = f.rows.main;
+  if (f.verdict.one) return `30万円の口座で、${d}では、ロスカットも、追証の期限の決済も、上限で入金し切れなかった追証も0回で、入れたお金の合計は ${yenU(main.inTotal)}だった（4つの行すべて）。`;
+  if (main.lcs > 0 || main.deadlines > 0) return `この持ち方では、${d}で口座が守れなかった。` + ROWS4.map((k) => `${HOLD_ROW_NAME[k]}: ${rowCounts(f.rows[k])}${rowDetail(f.rows[k])}`).join("。") + "。";
+  if (main.capped > 0) {
+    const cs = [...main.cappedCalls].sort((a, b) => a.tau - b.tau);
+    const list = listTen(cs.map((c) => `${isoMin(c.tau)}・不足 ${yenU(c.short)}・${ENDING[c.end] ?? c.end}`));
+    const settled = countEnds(cs, "settle");
+    const others = cs.filter((c) => c.end !== "settle");
+    const how = others.length === 0 ? "決済の充当で期限の前に解消した" : `決済の充当で期限の前に解消したのは ${settled}回だった（ほかは ${listTen(["deadline", "lc", "deposit", "open"].filter((e) => countEnds(others, e)).map((e) => `${ENDING[e]} ${countEnds(others, e)}`))}）`;
+    return `${HOLD_MAIN}では、ロスカットも期限の決済も0回だった。ただ、オーナーの決まり（追証は入金で解消・入れるのは合計100万円まで）では、入金で解消し切れない追証が ${main.capped} 回あった（${list}）。その間は新しい${mailOf(f)}を受けず、${how}。決めた持ち方のままで口座を守れたとは言えない。` +
+      ROWS4.map((k) => `${HOLD_ROW_NAME[k]}: ${rowCounts(f.rows[k])}`).join("。") + "。";
+  }
+  const bad = ROWS4.filter((k) => k !== "main" && rowFailsOne(f.rows[k]));
+  return `${HOLD_MAIN}では、ロスカット・期限の決済・上限で入金し切れなかった追証は、どれも0回。` +
+    bad.map((k) => `${HOLD_ROW_NAME[k]}では、${rowCounts(f.rows[k])}${rowDetail(f.rows[k])}`).join("。") + `。口座が守れたとは言えない${caveatOf(bad)}。`;
+};
+
+// ② (the full account: §8.102's halves; the second-half account: 21's form)
+const holdTwoText = (f: HoldFacts): string => {
+  const r = f.rows;
+  const mail = mailOf(f);
+  if (f.account === "h2") {
+    const [mn, ms] = f.mh!;
+    return `口座の損益は ${ROWS4.map((k) => yenS(r[k].S)).join("・")}（入金を引いた額。4つの行それぞれ）、後半の合図すべてを数えた損益 M_h は ${yenS(mn)}・${yenS(ms)}（スワップ無し・主のスワップ込み）。`;
+  }
+  const main = r.main;
+  const [M1, M2] = f.m.none;
+  const [M1s, M2s] = f.m.swap;
+  const mText = `すべての${mail}を数えると、前半 ${yenS(M1)}・後半 ${yenS(M2)}（主のスワップ込みは前半 ${yenS(M1s)}・後半 ${yenS(M2s)}）。`;
+  if (f.verdict.twoAccounts && f.verdict.twoM) {
+    return `前半・後半とも、口座は増えた（前半 ${yenS(main.A)}・後半 ${yenS(main.B)}・全期間 ${yenS(main.S)}。入金を引いた額。4つの行すべて）。すべての${mail}を数えても、前半・後半とも0より上だった（前半 ${yenS(M1)}・後半 ${yenS(M2)}。主のスワップ込みは前半 ${yenS(M1s)}・後半 ${yenS(M2s)}）。`;
+  }
+  const halves = (x: HoldRowFacts) => [...(x.A <= 0 ? [["前半", x.A] as const] : []), ...(x.B <= 0 ? [["後半", x.B] as const] : [])];
+  if (main.A <= 0 || main.B <= 0) {
+    const hs = halves(main);
+    return `この持ち方では、${hs.map(([h]) => h).join("・")}の口座は増えなかった（${hs.map(([h, v]) => `${h} ${yenS(v)}`).join("・")}、全期間では ${yenS(main.S)}）。` +
+      ROWS4.map((k) => `${HOLD_ROW_NAME[k]}: 前半 ${yenS(r[k].A)}・後半 ${yenS(r[k].B)}・全期間 ${yenS(r[k].S)}`).join("。") + "。" + mText;
+  }
+  const bad = ROWS4.filter((k) => k !== "main" && (r[k].A <= 0 || r[k].B <= 0));
+  if (bad.length) {
+    return `${HOLD_MAIN}では、前半 ${yenS(main.A)}・後半 ${yenS(main.B)}・全期間 ${yenS(main.S)}。` +
+      bad.map((k) => `${HOLD_ROW_NAME[k]}では${halves(r[k]).map(([h, v]) => `${h} ${yenS(v)}`).join("・")}（全期間 ${yenS(r[k].S)}）`).join("。") + `。口座が増えたとは言えない${caveatOf(bad)}。` + mText;
+  }
+  // the account's four rows grew; the all-emails view did not
+  const p = main.placed;
+  const placed = shareH(placedOf(p), p.n);
+  const mHalves = [...(M1 <= 0 || M1s <= 0 ? [["前半", M1, M1s] as const] : []), ...(M2 <= 0 || M2s <= 0 ? [["後半", M2, M2s] as const] : [])];
+  const mv = mHalves.map(([h, x, y]) => `${h}は ${yenS(Math.min(x, y))}で0以下だった（スワップ無し ${yenS(x)}・主のスワップ込み ${yenS(y)}）`).join("。");
+  return `口座は前半・後半とも増えた（置けた割合 ${placed}）。すべての${mail}を数えると、${mv}。` +
+    `口座の道筋では、置けなかった${mail} ${p.refusedMargin + p.refusedCall} 件（有効証拠金 ${p.refusedMargin}・追証の間 ${p.refusedCall}）、追証で取り消された指値 ${p.cancelCall} 件、ロスカットで取り消された指値 ${p.cancelLc} 件を取らず、ロスカット・期限で ${f.win.lc + f.win.deadline} 件を途中で決済した。` +
+    `すべての${mail}の見方では、これらも最後まで数えた。この持ち方で増えるとは言えない。`;
+};
+
+// ③
+const holdThreeText = (f: HoldFacts): string => {
+  const t = f.third;
+  const mail = mailOf(f);
+  if (f.verdict.three) {
+    let s = `P から1日後の時点で、ペアと向きごとの平均をそろえた数字（主の数字 ${fmt.pips(t.main)} pips、区間の下の端 ${fmt.pips(t.L)} pips）では、合図の向きは逆向きより良かった。利確まで持った全体での比べではない。` +
+      `${mail}ごとの単純な d の平均は ${fmt.pips(t.plain)} pips（${t.n} 件）。`;
+    if (t.plain === null || t.plain <= 0) s += `すべての${mail}をそのまま平均すると ${fmt.pips(t.plain)} pips で、合図の向きは逆向きより良くなかった。主の数字が除くのは、ペアごとに期間を通して一定のトレンドの分だけ。`;
+    return s;
+  }
+  let s = "P から1日後の時点で取引ごとに比べると、合図の向きが逆向きより良いとは言えない。";
+  if (f.verdict.twoAccounts && f.verdict.twoM) s += "口座が増えた分を、合図の力とは言えない（損切りなし・利確だけという持ち方の作りで増えた分と、区別できない）。";
+  const o = f.opposite;
+  return s + `逆向きの取引だけで回した同じ口座では、勝率 ${pctH(o.rate)}（利確 ${o.tp}・ロスカット ${o.lc}・期限の決済 ${o.deadline}・END でまだ持っている ${o.held}）、1回あたり ${fmt.pips(o.pips)} pips・${yenS(o.yen)}、` +
+    `ロスカット ${o.lcs} 回・期限の決済 ${o.deadlines} 回・上限で入金し切れなかった追証 ${o.capped} 回、口座の損益 S ${yenS(o.S)}。`;
+};
+
+// 添える文
+const placedText = (p: Placed, mail: string): string =>
+  `置けた割合 ${shareH(placedOf(p), p.n)}（うち、入った ${shareH(p.entered, p.n)}・置いたが入らなかった ${shareH(p.unfilled, p.n)}・追証で取り消された ${shareH(p.cancelCall, p.n)}・ロスカットで取り消された ${shareH(p.cancelLc, p.n)}。どれも全${mail}に対する割合）`;
+const holdAddText = (f: HoldFacts): string => {
+  const mail = mailOf(f);
+  const r = f.rows;
+  let s = `30万円の口座で、${placedText(r.main.placed, mail)}。`;
+  if (f.placedHalves) s += `前半は${placedText(f.placedHalves[0], mail)}、後半は${placedText(f.placedHalves[1], mail)}。`;
+  s += `入れたお金の合計 ${yenU(r.main.inTotal)}。`;
+  for (const k of ROWS4) if (k !== "main" && (rowFailsOne(r[k]) || rowFailsTwo(f, r[k]))) s += `${HOLD_ROW_NAME[k]}では、${placedText(r[k].placed, mail)}、入れたお金の合計 ${yenU(r[k].inTotal)}。`;
+  const w = f.win;
+  s += `勝率 ${pctH(w.rate)}（利確 ${w.tp}・ロスカット ${w.lc}・期限の決済 ${w.deadline}・END でまだ持っている ${w.held}。1回あたり ${fmt.pips(w.pips)} pips・${yenS(w.yen)}、ロスカット ${w.lcEvents} 回、E* ${yenU(w.estar)}。` +
+    `逆向きの取引だけの同じ口座では ${pctH(f.opposite.rate)}）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。`;
+  const both = f.verdict.one && f.verdict.twoAccounts && f.verdict.twoM;
+  if (both) s += `これは${dataOf(f)}での結果で、これからも口座が増えるとは言えない。`;
+  if (f.email) {
+    if (!both) s += "(b) の結果で、この判断は変わらない（(b) では口座の①②を見ない）。";
+    s += "(b) のこれからのメールで比べるのは、取引ごとの P から1日後の1回あたりが、過去の見込みの範囲に入るかだけ。範囲に入っても、勝てるとも、口座の①②を確かめたとも言えない。";
+  }
+  return s;
+};
+
+// 9's L sentence, with the per-trade view's win rates and their endings (§8.102 勝率の書き方)
+const holdLText = (f: HoldFacts): string => {
+  const pt = f.perTrade;
+  const t = f.third;
+  let s = `取引ごとの見方では、勝率 ${pctH(pt.rate)}（利確 ${pt.tp}・END でまだ持っている ${pt.held}。1回あたり ${fmt.pips(pt.pips)} pips・${yenS(pt.yen)}）、逆向きでは ${pctH(pt.oppRate)}（1回あたり ${fmt.pips(pt.oppPips)} pips・${yenS(pt.oppYen)}）。`;
+  if (t.L !== null && t.L > 0) {
+    const diff = pt.rate !== null && pt.oppRate !== null ? signed(100 * (pt.rate - pt.oppRate), SPEC.holdPctDigits) : "—";
+    s += `勝率の高さは、逆向きでも ${pctH(pt.oppRate)} になる作り（損切りなし・利確10・END まで持つ）で出ている。合図の向きと逆向きの差は、P から1日後の比べで主の数字 ${fmt.pips(t.main)} pips・下の端 ${fmt.pips(t.L)} pips で、勝率の差（${diff}ポイント）を合図の力の大きさとは読まない。`;
+  } else {
+    s += `この高い勝率は、損切りなし・利確10・END まで持つ作りで高く出ている。合図の力による分があるとは言えない（逆向きでも ${pctH(pt.oppRate)}。P から1日後の比べは、主の数字 ${fmt.pips(t.main)} pips、下の端 ${fmt.pips(t.L)} pips）。`;
+  }
+  return s + "損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。";
+};
+
+export const holdHeadOf = (account: "full" | "h2", email: boolean): string => (account === "h2" ? HOLD_HEAD.h2 : email ? HOLD_HEAD.fullEmail : HOLD_HEAD.fullItem);
+// one account's sentence (9「出せなかった」 when the budget ran out before it)
+export const holdText = (f: Pick<HoldFacts, "src" | "account" | "email" | "timedOut"> & Partial<HoldFacts>): string => {
+  const head = holdHeadOf(f.account, f.email);
+  if (f.timedOut) return `${head}${NAME(f.src)}のオーナーの持ち方は出せなかった（計算が Actions の1 job の時間に収まらなかった）。`;
+  const g = f as HoldFacts;
+  return head + holdOneText(g) + holdTwoText(g) + holdThreeText(g) + holdAddText(g) + holdLText(g);
+};
+// 21 いつも添える文 (段2でオーナーの持ち方の数字を並べる時): the ranges over the K_total items and the two emails
+const rangeOf = (xs: Array<number | null>, f: (x: number) => string): string => {
+  const ys = xs.filter((x): x is number => x !== null && Number.isFinite(x));
+  return ys.length ? `${f(Math.min(...ys))}〜${f(Math.max(...ys))}` : "—";
+};
+export const holdRangeText = (fs: ReadonlyArray<Pick<HoldFacts, "timedOut" | "account"> & Partial<HoldFacts>>): string | null => {
+  const done = fs.filter((f) => !f.timedOut) as HoldFacts[];
+  if (!done.length) return null;
+  const parts = done.filter((f) => f.account === "full").flatMap((f) => f.perTradeParts);
+  const pct = (x: number) => pctH(x);
+  const pips = (x: number) => fmt.pips(x);
+  return `この報告の、損切りなしの持ち方の勝率は、取引ごとの見方で ${rangeOf(parts.map((p) => p.rate), pct)}（1回あたり ${rangeOf(parts.map((p) => p.pips), pips)} pips。逆向きでは ${rangeOf(parts.map((p) => p.oppRate), pct)}・${rangeOf(parts.map((p) => p.oppPips), pips)} pips）、` +
+    `口座では ${rangeOf(done.map((f) => f.win.rate), pct)}（1回あたり ${rangeOf(done.map((f) => f.win.pips), pips)} pips）です。END でまだ持っている取引・最大の逆行・持った期間・ロスカットと期限の決済の回数・入金の合計は、項目ごとに下に並べます。`;
+};

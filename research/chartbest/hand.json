@@ -1,6 +1,212 @@
 {
-  "about": "docs/OPERATIONS.md §8.113 19 (C1, K1) and 20 (g): the hand examples of step 2 (試し). Inputs are made-up bars and numbers; every answer below was derived by hand from the rule (the 'why' of each case), not by running the program. research/chartbest-hand.ts runs each case through the program's own functions (CB_MODE=hand) and writes hand-results.json; a planted error of hook 'hand' (20 (f)) must make at least one of its named cases fail. Prices are mids unless a case says bid/ask. Times are UTC.",
-  "version": 1,
+  "about": "docs/OPERATIONS.md §8.113 19 (C1, K1) and 20 (g): the hand examples of step 2 (試し). Inputs are made-up bars and numbers; every answer below was derived by hand from the rule (the 'why' of each case), not by running the program. research/chartbest-hand.ts runs each case through the program's own functions (CB_MODE=hand) and writes hand-results.json; the Python runs every case through its own functions (chartbest-check.py --mode hand --hand); a planted error of hook 'hand' (20 (f)) must make at least one of its named cases fail. Prices are mids unless a case says bid/ask. Times are UTC. Version 2 (SQ-I2): every layout a case leaves to its runner is written in 'conventions' (read by both runners; no runner carries a layout value of its own), and 'fields' says what each case's fields hold. No case and no answer changed from version 1.",
+  "version": 2,
+  "conventions": {
+    "about": "SQ-I2. The layout of the cases: values a case does not write itself but its answer was derived with. A runner of kind K takes a layout value from the subcase (follow.usdExact), else from the case itself (a case field of the same name overrides: follow.usdExact signalBid, signalAsk, spread, filler; follow.weekendGap signalAt, followAt; follow.unresolved count, tail, after; follow.short count), else from the group below whose usedBy names K (no key appears in two groups of one kind). A value found nowhere is an error of the case (it fails); a runner has no fallback of its own. None of these values is an answer: every answer is in a case's expect. Bars are 5-minute bars (1, 2): consecutive bars open 5 minutes apart and close 5 minutes after their open (T, 5). Each group's why quotes the example of 19 / 20 (g) it lays out.",
+    "midBars": {
+      "usedBy": ["c1", "k1", "dst", "events", "hole", "half", "shift", "winDenominator"],
+      "why": "19「足は O/H/L/C（中値）。書いていない時刻の足は無い。」 and 2「中値: 四本値ごとに (Bid＋Ask)÷2 を double で出し、その double の正確な値を、ちょうど半分なら上へ丸める」: a bar given by its mids (or a flat bar of one mid) gets bid = mid − h and ask = mid + h on each of O, H, L and C, so that the chart's mid (2) is the given mid; h is two ticks of the pair.",
+      "halfSpread": { "USD/JPY": 0.002, "EUR/JPY": 0.002, "AUD/JPY": 0.002, "EUR/USD": 0.00002, "AUD/USD": 0.00002 }
+    },
+    "periods": {
+      "usedBy": ["mirror", "hole", "half", "deltaT", "shift", "winDenominator"],
+      "why": "1 fixes S0, START, SPLIT, END and the weeks of the halves (w0 = wk of START and of SPLIT); the hand cases that need a period use the plan's short development period 'mini' (made-up data only), whose dates the cases' whys count with (e.g. half: 「Mini period: SPLIT 2024-02-26 00:00」). A group names its period here.",
+      "periods": {
+        "mini": { "S0": "2023-10-27T00:00:00Z", "START": "2024-01-01T00:00:00Z", "SPLIT": "2024-02-26T00:00:00Z", "END": "2024-04-20T00:00:00Z", "w0": { "H1": 2817, "H2": 2825 } }
+      }
+    },
+    "k1": {
+      "usedBy": ["k1"],
+      "why": "19 K1「ユーロドル。見る日は次の3日だけ: 日1 2025-01-15（冬）は 07:55 と 15:55 UTC に始まる足がある。日2 2025-07-16（夏）は 06:55 と 14:55 UTC。日3 2025-03-12 …は 06:55 UTC だけ」 gives the bars' open times only; breedon reads the clock alone (18 K1), so every bar of the case's pair is flat at flatMid (midBars).",
+      "flatMid": 1.03
+    },
+    "dst": {
+      "usedBy": ["dst"],
+      "why": "20 (g)「時刻: ロンドン・NY・東京の夏時間の切り替わり（2024-03-10・2024-03-31・2024-10-27・2024-11-03・2025-03-09・2025-03-30・2025-10-26・2025-11-02）と、NY とロンドンがずれる週の各項目の T。」 breedon is EUR/USD only (1). The bars: the case's context bar first (bar 0, which never signals, 5), then on each listed day a bar opening at each of barTimes (19 K1's bars of both seasons: 02:55 and 10:55 New York are 07:55 / 15:55 UTC in NY winter, 06:55 / 14:55 in NY summer), all flat at flatMid (midBars).",
+      "pair": "EUR/USD",
+      "barTimes": ["06:55", "07:55", "14:55", "15:55"],
+      "flatMid": 1.08
+    },
+    "round": {
+      "usedBy": ["round"],
+      "why": "20 (g)「丸め（150.0625 → 150.063、150.10249999… → 150.102）」 and 2「例: Bid 150.060・Ask 150.065 → double でちょうど 150.0625 → 150.063。Bid 150.100・Ask 150.105 → … → 150.102」: one bar opening at 'at' whose four bid prices are the case's bid and four ask prices its ask; the chart reads it at readAt, after its close (2「確定した足だけを使う」).",
+      "at": "2025-01-06T01:00:00Z",
+      "readAt": "2025-01-06T01:10:00Z"
+    },
+    "follow": {
+      "usedBy": ["follow"],
+      "why": "20 (g)「追い方: 上に先・下に先・始値で越える・1本で両方（amb）・水準ちょうど・未決着・休みの後。」 with 6「E ＝ 合図の足の中値の終値（2 の丸めの後）。入りは合図の足の終値（買いは Ask、売りは Bid）」 and 7「追う足: 始まりが T 以後の最初の5分足から、決済する側（買いは Bid、売りは Ask）で、ある足を1,440本（約5取引日）まで」. The signal bar opens at signalAt; its four bid prices are signalBid and its four ask prices signalAsk (E 150.000: a BUY fills at the ask 150.005, a SELL at the bid 149.995, as the cases' whys say). The bars after it open at followAt, followAt + 5 min, …: first the case's rows (bid O, H, L, C), then the filler bar repeated until count − (number of tail bars) bars stand after the signal bar, then the tail (its last bar is bar number count), then 'after' (bars beyond count). Every bar after the signal bar has ask = bid + spread on O, H, L and C. The filler reaches no level of a trade at E 150.000 (BUY on the bid: stop 149.870, TP4 150.040, TP10 150.100; SELL on the ask: stop 150.130, TP4 149.960, TP10 149.900). count 1,441 is one bar more than the 1,440 followed (7: the 1,441st is never read). These are the yen cases' values (USD/JPY near 150); a case on another pair gives its own (follow.usdExact).",
+      "signalAt": "2025-01-06T01:00:00Z",
+      "followAt": "2025-01-06T01:05:00Z",
+      "signalBid": 149.995,
+      "signalAsk": 150.005,
+      "spread": 0.005,
+      "filler": [150.000, 150.020, 149.980, 150.000],
+      "count": 1441,
+      "tail": [],
+      "after": []
+    },
+    "mirror": {
+      "usedBy": ["mirror"],
+      "why": "20 (g)「鏡と e（+1・0・−1）。」 with 8「鏡: 同じ T・同じ E で、向きだけ逆の取引。」「ブラインドの表: 各ペア・各半分の、①〜④を通ったすべての5分足の確定で、買いとその鏡（売り）を同じ作りで追う（利確4と10の両方）。」 Each world holds one pair only (no other pair has a bar, so no 5-minute slot is open and there is no hole, 6 ③), in the half 'half' of the period 'period' (its table read to SPLIT, 12): a bar opening at signalAt with its four bid prices signalBid and four ask prices signalAsk (E 150.000), then from followAt the world's rows (bid O, H, L, C; ask = bid + spread) and the filler up to count bars after it, exactly the 1,440 the row follows (7), so that this bar is the world's only blind row (④ drops every later bar).",
+      "pair": "USD/JPY",
+      "signalAt": "2024-01-08T00:00:00Z",
+      "followAt": "2024-01-08T00:05:00Z",
+      "signalBid": 149.995,
+      "signalAsk": 150.005,
+      "spread": 0.005,
+      "filler": [150.000, 150.020, 149.980, 150.000],
+      "count": 1440,
+      "period": "mini",
+      "half": "H1"
+    },
+    "events": {
+      "usedBy": ["events"],
+      "why": "20 (g)「出来事: 常に持つ型（0→+1、+1→−1、+1→0→+1、最初に決まった足）、条件型、名前ごと、両向きの足、判断しない足の次の足…」 with 5: a made-up item of the seq's type with no warm-up, no retained rule (置6) and no mark, whose conditions are the seq's values, one bar per value: the pair's bars open at start, start + 5 min, … and are flat at flatMid (midBars). Only the event framework (5 ① ② ④ and its counts) is judged, not the reasons ①〜④ of 6.",
+      "pair": "USD/JPY",
+      "start": "2025-01-06T01:00:00Z",
+      "flatMid": 150.000
+    },
+    "hole": {
+      "usedBy": ["hole"],
+      "why": "20 (g)「窓の穴（6枠と5枠、開いていない枠で切れる）。」 with 6 ③: each of the five pairs has a flat bar (flatMid, midBars) every 5 minutes from the case's start up to but not including its end, except the case's missing opens; the period is 'period' with its S0 and END replaced by the case's start and end (the 5-minute slots looked at are those of [S0, END)), its START and SPLIT kept, so the signal bars' T lie inside START..END.",
+      "period": "mini",
+      "flatMid": { "USD/JPY": 150.000, "EUR/JPY": 150.000, "AUD/JPY": 150.000, "EUR/USD": 1.10000, "AUD/USD": 1.10000 }
+    },
+    "half": {
+      "usedBy": ["half"],
+      "why": "20 (g)「半分（SPLIT の直前と直後、追う窓が SPLIT をまたぐ合図）。」 with 1 and 6 ④: the pair's flat bars (flatMid, midBars) every 5 minutes from the case's from to its to, both included, with no hole, in the period 'period' (its SPLIT 2024-02-26 00:00 is the one the case's why counts with).",
+      "pair": "USD/JPY",
+      "period": "mini",
+      "flatMid": 150.000
+    },
+    "deltaT": {
+      "usedBy": ["deltaT"],
+      "why": "20 (g)「Δ（層・重み・ブラインドの項を手で出した値と）、ブラインドに e が無い層」「Δ の季節: … 層の数と、各層のブラインドの数を、手で出した値と比べる。」 with 8 and 1: each observation's stratum comes from the case's layer, pair and direction and its T (8), its week is wk(T) and its 4-week block floor((wk(T) − w0) ÷ 4) with the w0 of half 'half' of period 'period' (1).",
+      "period": "mini",
+      "half": "H1"
+    },
+    "clusters": {
+      "usedBy": ["clusters"],
+      "why": "20 (g)「塊（週・4週・10に足りない時）」 with 8「塊: 週（wk(T)）と4週（1）。4週の塊が10に足りなければ週だけ。」: in each set, position k holds one signal and one blind observation, both in stratum 'stratum', in week weeks[k] and 4-week block blocks[k]; their values v (e ÷ 2) are sigVCycle[k mod its length] and blindVCycle[k mod its length]. The answers (the SE candidates' kinds and their C) depend on the weeks and blocks only.",
+      "stratum": 0,
+      "sigVCycle": [0.5, 0],
+      "blindVCycle": [-0.5, 0, 0]
+    },
+    "table": {
+      "usedBy": ["shift", "winDenominator"],
+      "why": "20 (g)「週ずらし（輪・落とす合図・SD）」 and 「文の勝率の分母（決着の中）と、目をつぶった場合の層の重みの手の例。」 with 8「ブラインドの表…」: a blind table of one pair written by hand: one row per bar open the case gives (T = open + 5 min, E = mid; the pair's bars are flat at mid (midBars) at those opens only, the other four pairs have no bar), in half 'half' of period 'period' (4-week blocks from its w0), layer 'layer' (strata of 8). Each row has the four legs BUY / SELL × TP4 / TP10 (8); a leg the case does not give is 'legs': a stop decided on the first bar after the row's bar, at −13.5 pips (7: E − 13 pips, filled half a pip away).",
+      "pair": "USD/JPY",
+      "mid": 150.000,
+      "legs": { "kind": "sl", "pips": -13.5, "bars": 1 },
+      "period": "mini",
+      "half": "H1",
+      "layer": "chart"
+    },
+    "winDenominator": {
+      "usedBy": ["winDenominator"],
+      "why": "20 (g)「文の勝率の分母（決着の中）と、目をつぶった場合の層の重みの手の例。」 with 9: the case's trades are TP4 outcomes at tradesFrom, tradesFrom + 5 min, …, each with tradePips pips (W and its denominators do not read the pips); the case's signals are signalDir signals on the rows of the hand-written table (group table) whose BUY e is rowE for every row, so every signal and every blind row has e and enters Δ's strata (8), whose weights the blind W1 and PL1 take.",
+      "tradesFrom": "2024-01-09T00:00:00Z",
+      "tradePips": 0,
+      "rowE": 0,
+      "signalDir": "BUY"
+    },
+    "sepick": {
+      "usedBy": ["sepick"],
+      "why": "20 (g)「使う SE の選び方」 with 8「幅の半分 t(0.975, 自由度) × 標準誤差 が一番広いものを使う（同じなら週・4週・週ずらしの順）」: each candidate is given by its half-width; its C and df are these (the same for all, so they decide nothing) and its SE is the half-width × sePerHalf (the choice compares the half-widths only).",
+      "C": 20,
+      "df": 19,
+      "sePerHalf": 1
+    },
+    "select": {
+      "usedBy": ["select"],
+      "why": "20 (g)「選び方（下の端の順・同じ値・重なりの組で飛ばす・選べる項目が足りない）」 with 12「選べる項目（すべて満たす）: 床を通る。確かめ（20）がすべて通る。前半の t が作れて、Δ が0より大きい（点）。疑う合図（13）に当たっていない。」: every row's item passed the floor; the run's checks all passed (checksPass); suspicion is not counted only (countsOnlySuspicion false: not set H); no yardstick was hit (yardstickHits empty, 13). A row with an LB has t = tWhenLb (12 needs only that t exists), a row with LB null has no t. fill lays out the rest of a row (on the made-up rows of group rows), which 12 does not read: Δ's SE deltaSe on df, Δ_late [Δ, lateLoHi], a, w4 and w10 as [W of the resolved, PL].",
+      "tWhenLb": 3,
+      "checksPass": true,
+      "countsOnlySuspicion": false,
+      "yardstickHits": [],
+      "fill": { "deltaSe": 0.01, "df": 20, "lateLoHi": [0, 0], "a": [0, 0.01], "w4": [0.7, -1.0], "w10": [0.5, -1.0] }
+    },
+    "groups": {
+      "usedBy": ["groups"],
+      "why": "20 (g)「重なりの組: A と C、C と B の重なりが0.5以上で、A と B は0.5未満、C が床を通らない時、A と B は別の組（C をはさんでつながない）。」 with 11「A→B と B→A の大きい方が0.5以上なら同じ組。」: the case's overlap gives share(A→B) under the key 'A>B'; a key not given is missingShare (so a pair of items without entries is joined only by 11's forced joins). The answers name each group by its member first in the table's order (3「表の順」).",
+      "missingShare": 0
+    },
+    "suspect": {
+      "usedBy": ["suspect"],
+      "why": "20 (g)「床と疑う合図（線ちょうどと1つ下）。」 with 13: each item overrides fields of the case's base row. A W array (w4 for TP4, w10 for TP10) holds the values named by wFields in that order; the row's trade count n equals its resolved count, and its other counts are otherCounts (13 reads none of them). late null means Δ_late is the field named by lateWhenNull (Δ); an item without 'blind' is an item's row (blind true: a blind row, where the Δ lines are not applied, SQ-16).",
+      "wFields": ["resolved", "wRes", "wAll", "pl"],
+      "otherCounts": { "tp": 0, "sl": 0, "amb": 0, "open": 0 },
+      "lateWhenNull": "delta",
+      "blind": false
+    },
+    "rows": {
+      "usedBy": ["select", "text", "dab"],
+      "why": "20 (g)「判定と文（4つの判定、一部の3つの形〈C5 を含む・C4 を含み C5 を含まない・C2・C3 だけ〉…今のメールとの比べの3つの形…）」 and the D_AB examples「D_AB ＝ −3.0・SE 1.87〈A と B が無関係とした時の √(0.5²＋1.8²)〉」: a made-up row of a half. An estimate [Δ, SE] on df has C = df + 1 week clusters (8: 自由度 C − 1) and no 4-week block; cluster g (0 … C − 1) carries the influence sum a × p[g mod length of p] with p its pattern and a = SE × √(C − 1) ÷ C, so that the week SE √(C ÷ (C − 1) × Σ S_g²) of 8 equals the given SE; the patterns alt (+, −, …) and pairs (+, +, −, −, …) are uncorrelated, so the difference of two estimates on the two patterns has SE √(SE_A² + SE_B²), as the examples assume. SE null: no cluster, no t. An item's Δ is on its own pattern (itemPattern unless it gives one), its a on itemPattern. Δ_late [Δ_late, low end, high end] is a point with its interval and no SE. Each row has N e-signals in one stratum (none dropped), counted and nE as below, no unresolved trade and no signal without a Δ_late term; all its TP4 and TP10 trades are resolved (n = resolved; tp = round(W × resolved), sl = resolved − tp, no amb, none open; W of all = W of the resolved, intervals none); the blind's W1 and PL1 under its strata are blindW1 and blindPl1; it has no pair row (byPair: C3 not applied, q = 0 < 3) and a direction it does not give has no e-signals (C2 sees nothing there). Its suspicious lines come from its own numbers (13). The emails' rows (ULTRA 5分足, MACD) take Δ as their case's group says (text, dab), Δ_late as one point (low = high = Δ), a, w4 and w10 from email; their chart and calendar layers are the same row. No owner's-way row is given to the sentences.",
+      "N": 100,
+      "counted": 100,
+      "nE": 100,
+      "unresolved": 0,
+      "lateExcluded": 0,
+      "resolved": 200,
+      "blindW1": 0.7,
+      "blindPl1": -1.0,
+      "byPair": {},
+      "patterns": { "alt": [1, -1], "pairs": [1, 1, -1, -1] },
+      "itemPattern": "alt",
+      "email": { "a": [0, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5] }
+    },
+    "text": {
+      "usedBy": ["text"],
+      "why": "20 (g)「今のメールとの比べの同時の下の端（t(1 − 0.025÷K_total, 自由度)）の手の例。片方だけが下の端0を超える例。」 with 14: K_total is the number of the case's items (one per scenario); both emails' Δ are emailDelta (a scenario gives the ULTRA and MACD Δ itself) with SE emailSe on the pattern emailPattern, uncorrelated with an item's alt, so D_U and D_M have SE √(SE_item² + emailSe²). A scenario's single item is scenarioItem (Δ, Δ_late, a, w4, w10 as in an item of the case).",
+      "emailDelta": 0,
+      "emailSe": 0.01,
+      "emailPattern": "pairs",
+      "scenarioItem": { "delta": [0.08, 0.01], "late": [0.08, 0.06, 0.1], "a": [0.02, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5] }
+    },
+    "dab": {
+      "usedBy": ["dab"],
+      "why": "20 (g)「下の端で選んだ A の点が B より低い例（K_total ＝ 4、自由度が大きい時の t ≈ 2.498 …）」「B の方が当たると言える例（同じ t …）」 with 14: the case's items [id, Δ, SE] in its order (A first, B second); item k is on the pattern patternByIndex[k] (B on pairs, the others on alt: A and B uncorrelated, D_AB's SE √(SE_A² + SE_B²)); each item's Δ_late is [Δ, item.lateLo, Δ + item.lateHiAboveEst] (low end above 0: C4 passes) and its a, w4, w10 are item's; both emails' Δ are emailDelta with SE emailSe (null: no t, no interval); M_1 is m1.",
+      "m1": 10,
+      "patternByIndex": ["alt", "pairs", "alt", "alt"],
+      "item": { "lateLo": 0.0005, "lateHiAboveEst": 0.01, "a": [0.01, 0.01], "w4": [0.7, -1.0], "w10": [0.55, -0.5] },
+      "emailDelta": 0,
+      "emailSe": null,
+      "emailPattern": "alt"
+    }
+  },
+  "fields": {
+    "about": "What the case fields of each kind hold (read with the case's why and the conventions above). Indices of bars start at 0; T is a bar's close (open + 5 min, 5); directions are \"BUY\" / \"SELL\"; Δ, a, SE and W are fractions (0.04 = 4.0 points, 0.7 = 70%), pips are pips.",
+    "c1": "pair; start: bar 0's open; n: donchian's n (19 C1 shortens it); bars: each bar's mid [O, H, L, C]; expect.signals: [bar index, direction] in bar order; expect.target: donchian's target s per bar (0, +1, −1; 18 C1, SQ-01).",
+    "k1": "pair; bars: the open times of the only bars there are (flat, conventions.k1); expect: per item (breedon-1, breedon-2) its signals [T, direction, marks] in time order.",
+    "dst": "context: the open of the first bar; days: [day, breedon-1's signal T (a SELL), breedon-2's signal T (a BUY), the season group at both T: WW both winter, SS both summer, SW New York summer and London winter (the shifted weeks; the mark shiftedWeek)].",
+    "round": "pair; bid, ask: the bar's four bid / ask prices; expect: the chart's mid written with the pair's decimals.",
+    "points": "items: [pair, mid, its points].",
+    "follow": "pair; dir; tp: 10 (TP10) or 4 (TP4); rows, count, tail, after: see conventions.follow; subcases: layouts that share the case's other fields, each with its own rows (and count, tail, after) and expect; expect.kind: tp, sl, amb or open (unresolved), null: not followed (6 ④); expect.pips: the trade's pips; expect.bars: the follow bar on which the trade ended (1 = the first bar after the signal bar; 1440 when unresolved).",
+    "mirror": "worlds: [{rows: the bid [O, H, L, C] of the bars after the row's bar, e: the e of the BUY row (the SELL row's is its negative)}].",
+    "sent": "items: [T, whether a signal with this T is sent (6 ②)].",
+    "events": "seqs: [{type: always, condition or named; target (always): the target per bar, 0, 1, −1 or null (none); buy, sell (condition): per bar 1 holds, 0 does not hold, −1 none; namedBuy (named): per bar the BUY names that hold (no SELL name); expect: {signals: [bar, direction], firstSkipped, nullPrevSkipped, bothSuppressed: the counts of 5}}].",
+    "hole": "start, end: see conventions.hole; missing: per pair the opens without a bar; expect.holes: per pair the holes [from, to) (6 ③); expect.overlap: [a USD/JPY bar's open, whether the window of a signal on it (6 ③: from the open of the 10th newest bar, the signal bar being the newest, to T) overlaps a hole, which is also whether its reason is ③].",
+    "half": "from, to: see conventions.half; expect: [a bar's open, its reason (counted, r1 … r4 for ①〜④), its half or null].",
+    "delta": "sig, blind: observations [stratum, week, 4-week block, v = e ÷ 2]; expect: est (Δ), N, strata, dropped (signals in strata without a blind e), use (the SE used), se, C, df (of the SE used), kinds (the SE candidates in the order week, 4w, shift).",
+    "deltaT": "pair, dir, layer (chart or cal); sig, blind: [T, v = e ÷ 2], strata and clusters as conventions.deltaT says; expect: as delta, plus blindPerStratum (the blind rows of each stratum that holds a signal and a blind row, strata in ascending order) and seasons (the season group of each signal's T, in the case's order).",
+    "clusters": "sets: [{weeks, blocks: one position per signal / blind observation, see conventions.clusters; kinds: the SE candidates' kinds; C: their cluster counts}].",
+    "shift": "rows: [bar open, e of the BUY row] of the hand-written table (conventions.table); signals: [T, direction]; expect: k (the shifts tried, 1 … W_h − 1), delta (Δ_k), dropped (signals dropped at each k), sd (SD_shift), mean (of Δ_k), rank (of the real Δ among them), real (the real Δ of the signals).",
+    "sepick": "items: [[[candidate kind, its half-width], …], the kind used].",
+    "tq": "items: [df, t(0.975, df)]; tol: the tolerance.",
+    "lbcount": "ids: items above 0; groups: {item: its overlap group}; expect: {items, groups}: their counts (12); p95: [values, their 95% point (10)].",
+    "select": "sets: [{rows: [item, Δ, LB (null: no t), e-signals, suspicious lines], groups: {item: its overlap group (11)}, expect: {chart, cal: the items chosen in order of choice, notEligible: {item: suspicious | noT | nonPositive}}}].",
+    "holm": "sets: [{items: [item, p, t (null: none), e-signals], expect: {item: [Holm rank, passes]}}].",
+    "groups": "overlap: {'A>B': share(A→B)}; sets: [{items: the floor-passing items, expect: {item: its group's name}}].",
+    "floor": "items: [[first half's counted signals, weeks], [second half's counted signals, weeks], passes the floor].",
+    "suspect": "base: a row {delta, a, late, w4, w10}; items: [fields that override base (blind: true for a blind row), the suspicious lines expected, named delta, a, w2, w1, pl1, pl2, zeroHundred, lateGap and listed in the order of 13's list of lines].",
+    "textNumbers": "items: [format (pts: points, pct: a win rate, pips, yen), value, the text].",
+    "winDenominator": "trades: TP4 outcomes (tp, sl, amb, open); expectW: {n, resolved, wRes (W of the resolved), wAll (W of all)}; rows: [bar open, kind of its BUY TP4 leg, that leg's pips] of the hand-written table (conventions.table); signals: the T of the signals (conventions.winDenominator); expect: {blindW1, blindPl1}: the blind's W1 and PL1 weighted by the signals' strata (9).",
+    "text": "df, m1 (M_1); items: [{id, delta: [Δ, SE], late: [Δ_late, low end, high end], a: [a, SE], w4: [W1 of the resolved, PL1], w10: [W2, PL2], byDir (optional): {BUY: [Δ, e-signals], SELL: …}, pattern (optional)}] (conventions.rows); or scenarios: [{item, ultra and macd: the emails' Δ, contains}]; expect: {judgments: {item: confirmed | bad | partial | cannot}, forms: {item: i | ro | ha}, text: {sentence id: {contains, absent, startsWith}}}; the sentence ids are s2.item.<item> and s2.final (21).",
+    "dab": "df; items: [item, Δ, SE] (conventions.dab); expect: {promote: the item promoted to stage 3, confirmed: the confirmed items, se: D_AB's SE, contains: fragments of s2.final}.",
+    "holdText": "facts: one account's owner-hold facts (9, §8.102): src, account (full or h2), email, timedOut (true: only these four); rows: main, mainSwap, worst, worstSwap (SQ-08's rows), each {lcs, deadlines, capped: the loss-cut events, the calls ended by the deadline's close-out, the calls with U left after the notice's deposit; lcAt, deadlineAt: their times (ISO, UTC); cappedCalls: [{tau: the call's notice time (ISO), short: U after the notice's deposit (yen), end: settle, deadline, lc, deposit or open (still open at END)}]; A, B, S: the account's P/L of the first half, the second half and the whole, deposits taken off (yen; h2: A 0, B = S); inTotal: the start and the deposits by END (yen); placed: the account's emails {n: all, entered, unfilled, cancelCall, cancelLc, refusedMargin, refusedCall}}; placedHalves: the main row's placed by the emails' halves [first, second] (full) or null (h2); m: {none: [M1, M2], swap: [M1, M2]} (full); mh: [M_h none, M_h swap] (h2) or null; third: ③ {main, L, plain, n} in pips (null: none); win: the main row's account {rate, tp, lc, deadline, held, pips, yen, lcEvents: its loss-cut events, estar: E*}; opposite: the opposite-only account {rate, tp, lc, deadline, held, pips, yen, lcs, deadlines, capped, S}; perTrade: the per-trade view {rate, tp, held, pips, yen, oppRate, oppPips, oppYen}; perTradeParts: [{rate, pips, oppRate, oppPips}] (full: the whole period, the first and the second half); verdict: {one: ①, twoAccounts: ② on the account's four rows, twoM: ② on M (full) or M_h (h2), three: ③}. Rates are fractions (0.95 = 95.00%), money in yen. expect.text: the whole sentence (〈オーナーの持ち方の文〉 of 21), character for character.",
+    "holdRange": "facts: [{account, timedOut, win: {rate, pips}, perTradeParts}] (as holdText; a timed-out account only account and timedOut); expect.text: 21's range sentence, character for character."
+  },
   "cases": [
     {
       "id": "c1.docs", "kind": "c1", "source": "19 C1 (n = 3), 5, SQ-01",
@@ -443,6 +649,162 @@
       "df": 99999,
       "items": [["hs", 0.015, 0.003], ["td9", 0.057, 0.020], ["star", 0.001, 0.010], ["cci", 0.001, 0.010]],
       "expect": { "promote": "hs", "confirmed": ["hs", "td9"], "se": 0.020223748416156685, "contains": ["後半で確かめられたチャートの形の項目の中では、td9の方がhsより当たると言えます（差 −4.2ポイント、直していない95%の幅 −8.2〜−0.2）。hsを段3に進めるのは、前もって決めた選び方（直した下の端）によるもので、hsの方が当たるという意味ではありません。"] }
+    },
+    {
+      "id": "text.hold.fullEmailAll", "kind": "holdText", "source": "21 オーナーの持ち方の文; §8.102 書く文 ①②③がそろう・添える文・(b) の文; 9 の L の文 (L > 0); SQ-08, SQ-H1",
+      "why": "ULTRA 5分足, the full account (head 「全期間では、」; an email, so 「メール」 and (b)'s sentences). ① all four rows 0 / 0 / 0 → the ① sentence with the main row's money put in (400,000). ② every row's A, B > 0 and M1, M2 > 0 for none and the main swap → the ② sentence with the main row's A, B, S, then M (none; the main swap after it, SQ-H1). ③ L +0.50 > 0 → the ③ sentence, then the plain mean +2.50 with its count; it is > 0, so no 「そのまま平均すると」. 添える文: 置けた割合 (900 + 50 + 20 + 0) ÷ 1,000 = 97.00%, halves 490 ÷ 500 = 98.00% and 480 ÷ 500 = 96.00%; no row fails, so no other row's placing. ①② hold → 「これは2024〜2026年のデータでの結果で…」 and (b)'s second sentence only. L > 0 → 9's second form, 勝率の差 96.00 − 92.00 = +4.00ポイント (two decimals, as the owner's way's %).",
+      "facts": {
+        "src": "ultra5", "account": "full", "email": true, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 120000, "B": 80000, "S": 200000, "inTotal": 400000, "placed": {"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 0, "refusedMargin": 20, "refusedCall": 10}},
+          "mainSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 110000, "B": 70000, "S": 180000, "inTotal": 400000, "placed": {"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 0, "refusedMargin": 20, "refusedCall": 10}},
+          "worst": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 100000, "B": 60000, "S": 160000, "inTotal": 450000, "placed": {"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 0, "refusedMargin": 20, "refusedCall": 10}},
+          "worstSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 90000, "B": 50000, "S": 140000, "inTotal": 450000, "placed": {"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 0, "refusedMargin": 20, "refusedCall": 10}}
+        },
+        "placedHalves": [{"n": 500, "entered": 460, "unfilled": 20, "cancelCall": 10, "cancelLc": 0, "refusedMargin": 6, "refusedCall": 4}, {"n": 500, "entered": 440, "unfilled": 30, "cancelCall": 10, "cancelLc": 0, "refusedMargin": 14, "refusedCall": 6}],
+        "m": {"none": [300000, 150000], "swap": [280000, 140000]},
+        "mh": null,
+        "third": {"main": 1.25, "L": 0.5, "plain": 2.5, "n": 980},
+        "win": {"rate": 0.95, "tp": 855, "lc": 0, "deadline": 0, "held": 45, "pips": 3.5, "yen": 400, "lcEvents": 0, "estar": 2500000},
+        "opposite": {"rate": 0.9, "tp": 810, "lc": 0, "deadline": 0, "held": 90, "pips": 1.25, "yen": 150, "lcs": 0, "deadlines": 0, "capped": 0, "S": 50000},
+        "perTrade": {"rate": 0.96, "tp": 960, "held": 40, "pips": 4.25, "yen": 480, "oppRate": 0.92, "oppPips": 2.5, "oppYen": 300},
+        "perTradeParts": [{"rate": 0.96, "pips": 4.25, "oppRate": 0.92, "oppPips": 2.5}, {"rate": 0.97, "pips": 5, "oppRate": 0.93, "oppPips": 3}, {"rate": 0.95, "pips": 3.5, "oppRate": 0.91, "oppPips": 2}],
+        "verdict": {"one": true, "twoAccounts": true, "twoM": true, "three": true}
+      },
+      "expect": { "text": "全期間では、30万円の口座で、2024〜2026年のデータでは、ロスカットも、追証の期限の決済も、上限で入金し切れなかった追証も0回で、入れたお金の合計は 400,000 円だった（4つの行すべて）。前半・後半とも、口座は増えた（前半 +120,000 円・後半 +80,000 円・全期間 +200,000 円。入金を引いた額。4つの行すべて）。すべてのメールを数えても、前半・後半とも0より上だった（前半 +300,000 円・後半 +150,000 円。主のスワップ込みは前半 +280,000 円・後半 +140,000 円）。P から1日後の時点で、ペアと向きごとの平均をそろえた数字（主の数字 +1.25 pips、区間の下の端 +0.50 pips）では、合図の向きは逆向きより良かった。利確まで持った全体での比べではない。メールごとの単純な d の平均は +2.50 pips（980 件）。30万円の口座で、置けた割合 97.00%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）。前半は置けた割合 98.00%（うち、入った 92.00%・置いたが入らなかった 4.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）、後半は置けた割合 96.00%（うち、入った 88.00%・置いたが入らなかった 6.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）。入れたお金の合計 400,000 円。勝率 95.00%（利確 855・ロスカット 0・期限の決済 0・END でまだ持っている 45。1回あたり +3.50 pips・+400 円、ロスカット 0 回、E* 2,500,000 円。逆向きの取引だけの同じ口座では 90.00%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。これは2024〜2026年のデータでの結果で、これからも口座が増えるとは言えない。(b) のこれからのメールで比べるのは、取引ごとの P から1日後の1回あたりが、過去の見込みの範囲に入るかだけ。範囲に入っても、勝てるとも、口座の①②を確かめたとも言えない。取引ごとの見方では、勝率 96.00%（利確 960・END でまだ持っている 40。1回あたり +4.25 pips・+480 円）、逆向きでは 92.00%（1回あたり +2.50 pips・+300 円）。勝率の高さは、逆向きでも 92.00% になる作り（損切りなし・利確10・END まで持つ）で出ている。合図の向きと逆向きの差は、P から1日後の比べで主の数字 +1.25 pips・下の端 +0.50 pips で、勝率の差（+4.00ポイント）を合図の力の大きさとは読まない。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.fullItemMainFails", "kind": "holdText", "source": "21 オーナーの持ち方の文 (新しい項目: 「合図」, (b) の文なし); §8.102 書く文 ①②が主の行で欠けた・③が欠けた; 9 の L の文 (L ≦ 0); SQ-08, SQ-H1",
+      "why": "donchian-A20, the full account of an item (head 「選ぶのに使った前半を含む全期間（良く見えやすい）では、」; メール → 合図; no (b) sentence). ① the main row has loss-cuts → 「この持ち方では、2024〜2026年のデータで口座が守れなかった。」, then the four rows in SQ-08's order with their three counts, the dates oldest first (lcAt is given out of order) and the capped call's endings (決済の充当で解消 0・期限の決済 0・ロスカット 1); スワップ込み・一番悪い値 has nothing and gets no parentheses. ② the main row's A −50,000 ≤ 0 (B > 0) → 「この持ち方では、前半の口座は増えなかった（前半 −50,000 円、全期間では −20,000 円）。」, the four rows' halves and whole, then M. ③ fails and ② does not hold → no 「口座が増えた分」; the opposite account's line. 添える文: (300 + 20 + 10 + 10) ÷ 400 = 85.00% (10 ÷ 400 = 2.50% each cancelled), halves 180 ÷ 200 = 90.00% and 160 ÷ 200 = 80.00%; the rows failing ① or ② other than the main row (スワップ込み・1分足の終値, スワップ無し・一番悪い値; not スワップ込み・一番悪い値, which passes both) repeat their placing and money. ①② fail and it is an item → neither 「これは…」 nor (b). L −1.75 ≤ 0 → 9's first form.",
+      "facts": {
+        "src": "donchian-A20", "account": "full", "email": false, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 2, "deadlines": 1, "capped": 1, "lcAt": ["2024-08-05T06:04:00Z", "2024-03-01T12:30:00Z"], "deadlineAt": ["2025-01-10T21:00:00Z"], "cappedCalls": [{"tau": "2024-07-31T14:20:00Z", "short": 12345, "end": "lc"}], "A": -50000, "B": 30000, "S": -20000, "inTotal": 1000000, "placed": {"n": 400, "entered": 300, "unfilled": 20, "cancelCall": 10, "cancelLc": 10, "refusedMargin": 40, "refusedCall": 20}},
+          "mainSwap": {"lcs": 2, "deadlines": 1, "capped": 1, "lcAt": ["2024-08-05T06:04:00Z", "2024-03-01T12:30:00Z"], "deadlineAt": ["2025-01-10T21:00:00Z"], "cappedCalls": [{"tau": "2024-07-31T14:20:00Z", "short": 12345, "end": "lc"}], "A": -60000, "B": 25000, "S": -35000, "inTotal": 1000000, "placed": {"n": 400, "entered": 300, "unfilled": 20, "cancelCall": 10, "cancelLc": 10, "refusedMargin": 40, "refusedCall": 20}},
+          "worst": {"lcs": 3, "deadlines": 0, "capped": 0, "lcAt": ["2024-08-05T06:00:00Z", "2024-03-01T12:25:00Z", "2025-02-03T00:10:00Z"], "deadlineAt": [], "cappedCalls": [], "A": -70000, "B": 20000, "S": -50000, "inTotal": 900000, "placed": {"n": 400, "entered": 300, "unfilled": 20, "cancelCall": 10, "cancelLc": 10, "refusedMargin": 40, "refusedCall": 20}},
+          "worstSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 10000, "B": 5000, "S": 15000, "inTotal": 800000, "placed": {"n": 400, "entered": 300, "unfilled": 20, "cancelCall": 10, "cancelLc": 10, "refusedMargin": 40, "refusedCall": 20}}
+        },
+        "placedHalves": [{"n": 200, "entered": 160, "unfilled": 10, "cancelCall": 5, "cancelLc": 5, "refusedMargin": 15, "refusedCall": 5}, {"n": 200, "entered": 140, "unfilled": 10, "cancelCall": 5, "cancelLc": 5, "refusedMargin": 25, "refusedCall": 15}],
+        "m": {"none": [-100000, 50000], "swap": [-120000, 40000]},
+        "mh": null,
+        "third": {"main": -0.5, "L": -1.75, "plain": -0.25, "n": 390},
+        "win": {"rate": 0.9, "tp": 270, "lc": 20, "deadline": 5, "held": 5, "pips": -2.5, "yen": -300, "lcEvents": 2, "estar": 1500000},
+        "opposite": {"rate": 0.875, "tp": 280, "lc": 10, "deadline": 10, "held": 20, "pips": -1.5, "yen": -180, "lcs": 1, "deadlines": 2, "capped": 0, "S": -40000},
+        "perTrade": {"rate": 0.9375, "tp": 375, "held": 25, "pips": -0.75, "yen": -90, "oppRate": 0.95, "oppPips": 0.25, "oppYen": 30},
+        "perTradeParts": [{"rate": 0.9375, "pips": -0.75, "oppRate": 0.95, "oppPips": 0.25}, {"rate": 0.94, "pips": -0.5, "oppRate": 0.955, "oppPips": 0.5}, {"rate": 0.935, "pips": -1, "oppRate": 0.945, "oppPips": 0}],
+        "verdict": {"one": false, "twoAccounts": false, "twoM": false, "three": false}
+      },
+      "expect": { "text": "選ぶのに使った前半を含む全期間（良く見えやすい）では、この持ち方では、2024〜2026年のデータで口座が守れなかった。主の行（スワップ無し・1分足の終値）: ロスカット 2回・期限の決済 1回・上限で入金し切れなかった追証 1回（ロスカットの日時 2024-03-01 12:30 UTC、2024-08-05 06:04 UTC。期限の決済の日時 2025-01-10 21:00 UTC。入金し切れなかった追証の日時 2024-07-31 14:20 UTC、終わり方 決済の充当で解消 0・期限の決済 0・ロスカット 1）。スワップ込み・1分足の終値: ロスカット 2回・期限の決済 1回・上限で入金し切れなかった追証 1回（ロスカットの日時 2024-03-01 12:30 UTC、2024-08-05 06:04 UTC。期限の決済の日時 2025-01-10 21:00 UTC。入金し切れなかった追証の日時 2024-07-31 14:20 UTC、終わり方 決済の充当で解消 0・期限の決済 0・ロスカット 1）。スワップ無し・一番悪い値: ロスカット 3回・期限の決済 0回・上限で入金し切れなかった追証 0回（ロスカットの日時 2024-03-01 12:25 UTC、2024-08-05 06:00 UTC、2025-02-03 00:10 UTC）。スワップ込み・一番悪い値: ロスカット 0回・期限の決済 0回・上限で入金し切れなかった追証 0回。この持ち方では、前半の口座は増えなかった（前半 −50,000 円、全期間では −20,000 円）。主の行（スワップ無し・1分足の終値）: 前半 −50,000 円・後半 +30,000 円・全期間 −20,000 円。スワップ込み・1分足の終値: 前半 −60,000 円・後半 +25,000 円・全期間 −35,000 円。スワップ無し・一番悪い値: 前半 −70,000 円・後半 +20,000 円・全期間 −50,000 円。スワップ込み・一番悪い値: 前半 +10,000 円・後半 +5,000 円・全期間 +15,000 円。すべての合図を数えると、前半 −100,000 円・後半 +50,000 円（主のスワップ込みは前半 −120,000 円・後半 +40,000 円）。P から1日後の時点で取引ごとに比べると、合図の向きが逆向きより良いとは言えない。逆向きの取引だけで回した同じ口座では、勝率 87.50%（利確 280・ロスカット 10・期限の決済 10・END でまだ持っている 20）、1回あたり −1.50 pips・−180 円、ロスカット 1 回・期限の決済 2 回・上限で入金し切れなかった追証 0 回、口座の損益 S −40,000 円。30万円の口座で、置けた割合 85.00%（うち、入った 75.00%・置いたが入らなかった 5.00%・追証で取り消された 2.50%・ロスカットで取り消された 2.50%。どれも全合図に対する割合）。前半は置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 5.00%・追証で取り消された 2.50%・ロスカットで取り消された 2.50%。どれも全合図に対する割合）、後半は置けた割合 80.00%（うち、入った 70.00%・置いたが入らなかった 5.00%・追証で取り消された 2.50%・ロスカットで取り消された 2.50%。どれも全合図に対する割合）。入れたお金の合計 1,000,000 円。スワップ込み・1分足の終値では、置けた割合 85.00%（うち、入った 75.00%・置いたが入らなかった 5.00%・追証で取り消された 2.50%・ロスカットで取り消された 2.50%。どれも全合図に対する割合）、入れたお金の合計 1,000,000 円。スワップ無し・一番悪い値では、置けた割合 85.00%（うち、入った 75.00%・置いたが入らなかった 5.00%・追証で取り消された 2.50%・ロスカットで取り消された 2.50%。どれも全合図に対する割合）、入れたお金の合計 900,000 円。勝率 90.00%（利確 270・ロスカット 20・期限の決済 5・END でまだ持っている 5。1回あたり −2.50 pips・−300 円、ロスカット 2 回、E* 1,500,000 円。逆向きの取引だけの同じ口座では 87.50%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。取引ごとの見方では、勝率 93.75%（利確 375・END でまだ持っている 25。1回あたり −0.75 pips・−90 円）、逆向きでは 95.00%（1回あたり +0.25 pips・+30 円）。この高い勝率は、損切りなし・利確10・END まで持つ作りで高く出ている。合図の力による分があるとは言えない（逆向きでも 95.00%。P から1日後の比べは、主の数字 −0.50 pips、下の端 −1.75 pips）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.fullItemCappedOnly", "kind": "holdText", "source": "21 オーナーの持ち方の文 (新しい項目); §8.102 書く文 ①が主の行で欠けた（上限で入金し切れなかった追証だけ）・②が主の行ではそろいほかの行だけで欠けた・③がそろう（単純な平均が0以下）; 9 の L の文 (L > 0); SQ-08, SQ-H1",
+      "why": "breedon-1, the full account of an item. ① the main row: no loss-cut, no deadline close-out, 2 capped calls → §8.102's third ① sentence; the calls oldest first, each with τ, U (23,456.4 → 23,456) and its ending; one settled and one still open at END → 「決済の充当で期限の前に解消したのは 1回だった（ほかは END の時点で未解消 1）」 (SQ-H1: the rule's 「決済の充当で期限の前に解消した」 holds only when every capped call settled), then each row's three counts. ② the main row grows in both halves; スワップ込み・1分足の終値 (後半 −5,000) and スワップ込み・一番悪い値 (both halves) do not → §8.102's third ② sentence (each failing row with its failing halves and its whole) with both caveats (a 一番悪い値 row and スワップ込み rows), then M. ③ L +0.25 > 0 → the ③ sentence; the plain mean −0.50 ≤ 0 → 「すべての合図をそのまま平均すると −0.50 pips で…」. 添える文: (80 + 4 + 6 + 0) ÷ 100 = 90.00%, both halves (40 + 2 + 3) ÷ 50 = 90.00%; the two failing rows: (82 + 4 + 4) ÷ 100 = 90.00% with their money (スワップ無し・一番悪い値 passes ① and ②: not listed). Not all hold, an item → no 「これは…」, no (b). L > 0 → 9's second form, 90.00 − 85.00 = +5.00ポイント.",
+      "facts": {
+        "src": "breedon-1", "account": "full", "email": false, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 0, "deadlines": 0, "capped": 2, "lcAt": [], "deadlineAt": [], "cappedCalls": [{"tau": "2025-03-04T10:15:00Z", "short": 23456.4, "end": "open"}, {"tau": "2024-11-20T08:05:00Z", "short": 5000, "end": "settle"}], "A": 40000, "B": 20000, "S": 60000, "inTotal": 1000000, "placed": {"n": 100, "entered": 80, "unfilled": 4, "cancelCall": 6, "cancelLc": 0, "refusedMargin": 2, "refusedCall": 8}},
+          "mainSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 35000, "B": -5000, "S": 30000, "inTotal": 900000, "placed": {"n": 100, "entered": 82, "unfilled": 4, "cancelCall": 4, "cancelLc": 0, "refusedMargin": 2, "refusedCall": 8}},
+          "worst": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 30000, "B": 10000, "S": 40000, "inTotal": 1000000, "placed": {"n": 100, "entered": 80, "unfilled": 4, "cancelCall": 6, "cancelLc": 0, "refusedMargin": 2, "refusedCall": 8}},
+          "worstSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": -1000, "B": -2000, "S": -3000, "inTotal": 950000, "placed": {"n": 100, "entered": 82, "unfilled": 4, "cancelCall": 4, "cancelLc": 0, "refusedMargin": 2, "refusedCall": 8}}
+        },
+        "placedHalves": [{"n": 50, "entered": 40, "unfilled": 2, "cancelCall": 3, "cancelLc": 0, "refusedMargin": 1, "refusedCall": 4}, {"n": 50, "entered": 40, "unfilled": 2, "cancelCall": 3, "cancelLc": 0, "refusedMargin": 1, "refusedCall": 4}],
+        "m": {"none": [70000, 30000], "swap": [60000, 20000]},
+        "mh": null,
+        "third": {"main": 0.75, "L": 0.25, "plain": -0.5, "n": 95},
+        "win": {"rate": 0.875, "tp": 70, "lc": 0, "deadline": 0, "held": 10, "pips": 1.5, "yen": 170, "lcEvents": 0, "estar": 1200000},
+        "opposite": {"rate": 0.8, "tp": 64, "lc": 0, "deadline": 0, "held": 16, "pips": -3, "yen": -340, "lcs": 0, "deadlines": 0, "capped": 1, "S": -10000},
+        "perTrade": {"rate": 0.9, "tp": 90, "held": 10, "pips": 2, "yen": 225, "oppRate": 0.85, "oppPips": -1.25, "oppYen": -140},
+        "perTradeParts": [{"rate": 0.9, "pips": 2, "oppRate": 0.85, "oppPips": -1.25}, {"rate": 0.92, "pips": 2.5, "oppRate": 0.86, "oppPips": -1}, {"rate": 0.88, "pips": 1.5, "oppRate": 0.84, "oppPips": -1.5}],
+        "verdict": {"one": false, "twoAccounts": false, "twoM": true, "three": true}
+      },
+      "expect": { "text": "選ぶのに使った前半を含む全期間（良く見えやすい）では、主の行（1分足の終値・スワップ無し）では、ロスカットも期限の決済も0回だった。ただ、オーナーの決まり（追証は入金で解消・入れるのは合計100万円まで）では、入金で解消し切れない追証が 2 回あった（2024-11-20 08:05 UTC・不足 5,000 円・決済の充当で解消、2025-03-04 10:15 UTC・不足 23,456 円・END の時点で未解消）。その間は新しい合図を受けず、決済の充当で期限の前に解消したのは 1回だった（ほかは END の時点で未解消 1）。決めた持ち方のままで口座を守れたとは言えない。主の行（スワップ無し・1分足の終値）: ロスカット 0回・期限の決済 0回・上限で入金し切れなかった追証 2回。スワップ込み・1分足の終値: ロスカット 0回・期限の決済 0回・上限で入金し切れなかった追証 0回。スワップ無し・一番悪い値: ロスカット 0回・期限の決済 0回・上限で入金し切れなかった追証 0回。スワップ込み・一番悪い値: ロスカット 0回・期限の決済 0回・上限で入金し切れなかった追証 0回。主の行（1分足の終値・スワップ無し）では、前半 +40,000 円・後半 +20,000 円・全期間 +60,000 円。スワップ込み・1分足の終値では後半 −5,000 円（全期間 +30,000 円）。スワップ込み・一番悪い値では前半 −1,000 円・後半 −2,000 円（全期間 −3,000 円）。口座が増えたとは言えない（両建ての買いと売りが同時に一番悪い値にいる、実際には起きない形も含む。スワップは目安で、取り分は仮の値）。すべての合図を数えると、前半 +70,000 円・後半 +30,000 円（主のスワップ込みは前半 +60,000 円・後半 +20,000 円）。P から1日後の時点で、ペアと向きごとの平均をそろえた数字（主の数字 +0.75 pips、区間の下の端 +0.25 pips）では、合図の向きは逆向きより良かった。利確まで持った全体での比べではない。合図ごとの単純な d の平均は −0.50 pips（95 件）。すべての合図をそのまま平均すると −0.50 pips で、合図の向きは逆向きより良くなかった。主の数字が除くのは、ペアごとに期間を通して一定のトレンドの分だけ。30万円の口座で、置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）。前半は置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）、後半は置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）。入れたお金の合計 1,000,000 円。スワップ込み・1分足の終値では、置けた割合 90.00%（うち、入った 82.00%・置いたが入らなかった 4.00%・追証で取り消された 4.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）、入れたお金の合計 900,000 円。スワップ込み・一番悪い値では、置けた割合 90.00%（うち、入った 82.00%・置いたが入らなかった 4.00%・追証で取り消された 4.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）、入れたお金の合計 950,000 円。勝率 87.50%（利確 70・ロスカット 0・期限の決済 0・END でまだ持っている 10。1回あたり +1.50 pips・+170 円、ロスカット 0 回、E* 1,200,000 円。逆向きの取引だけの同じ口座では 80.00%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。取引ごとの見方では、勝率 90.00%（利確 90・END でまだ持っている 10。1回あたり +2.00 pips・+225 円）、逆向きでは 85.00%（1回あたり −1.25 pips・−140 円）。勝率の高さは、逆向きでも 85.00% になる作り（損切りなし・利確10・END まで持つ）で出ている。合図の向きと逆向きの差は、P から1日後の比べで主の数字 +0.75 pips・下の端 +0.25 pips で、勝率の差（+5.00ポイント）を合図の力の大きさとは読まない。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.fullEmailOtherRows", "kind": "holdText", "source": "21 オーナーの持ち方の文; §8.102 書く文 ①が主の行ではそろいほかの行だけで欠けた・②が口座の4つの行ではそろいすべてのメールの見方だけで欠けた・③が欠けた; 9 の L の文 (L ≦ 0); SQ-08, SQ-H1",
+      "why": "MACD の山・谷, the full account of an email. ① the main row holds; スワップ無し・一番悪い値 (1 loss-cut) and スワップ込み・一番悪い値 (1 loss-cut, 1 capped call ended by it) fail → §8.102's fourth ① sentence with both caveats. ② every row's A, B > 0, but M1 −200,000 (none) / −250,000 (swap) and M2 +100,000 / −10,000 → §8.102's last ② sentence: 置けた割合 (1,800 + 100 + 40 + 10) ÷ 2,000 = 97.50%, each failing half with the lower of its two values and both values (SQ-H1), 置けなかったメール 30 + 20 = 50, 追証で取り消された 40, ロスカットで取り消された 10, ロスカット・期限で決済した 0 + 0. ③ fails and ② does not hold → no 「口座が増えた分」; the opposite account's line. 添える文: 97.50% (10 ÷ 2,000 = 0.50%), halves 975 ÷ 1,000 = 97.50%; the two 一番悪い値 rows (① fails) repeat their placing and money. ① fails → both (b) sentences. L −1.00 ≤ 0 → 9's first form.",
+      "facts": {
+        "src": "macdx5", "account": "full", "email": true, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 50000, "B": 40000, "S": 90000, "inTotal": 300000, "placed": {"n": 2000, "entered": 1800, "unfilled": 100, "cancelCall": 40, "cancelLc": 10, "refusedMargin": 30, "refusedCall": 20}},
+          "mainSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 45000, "B": 35000, "S": 80000, "inTotal": 300000, "placed": {"n": 2000, "entered": 1800, "unfilled": 100, "cancelCall": 40, "cancelLc": 10, "refusedMargin": 30, "refusedCall": 20}},
+          "worst": {"lcs": 1, "deadlines": 0, "capped": 0, "lcAt": ["2024-08-05T06:04:00Z"], "deadlineAt": [], "cappedCalls": [], "A": 20000, "B": 10000, "S": 30000, "inTotal": 350000, "placed": {"n": 2000, "entered": 1800, "unfilled": 100, "cancelCall": 40, "cancelLc": 10, "refusedMargin": 30, "refusedCall": 20}},
+          "worstSwap": {"lcs": 1, "deadlines": 0, "capped": 1, "lcAt": ["2024-08-05T06:04:00Z"], "deadlineAt": [], "cappedCalls": [{"tau": "2024-08-05T05:10:00Z", "short": 80000, "end": "lc"}], "A": 15000, "B": 5000, "S": 20000, "inTotal": 1000000, "placed": {"n": 2000, "entered": 1800, "unfilled": 100, "cancelCall": 40, "cancelLc": 10, "refusedMargin": 30, "refusedCall": 20}}
+        },
+        "placedHalves": [{"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 5, "refusedMargin": 15, "refusedCall": 10}, {"n": 1000, "entered": 900, "unfilled": 50, "cancelCall": 20, "cancelLc": 5, "refusedMargin": 15, "refusedCall": 10}],
+        "m": {"none": [-200000, 100000], "swap": [-250000, -10000]},
+        "mh": null,
+        "third": {"main": -0.25, "L": -1, "plain": 0.5, "n": 1990},
+        "win": {"rate": 0.95, "tp": 1710, "lc": 0, "deadline": 0, "held": 90, "pips": -1.25, "yen": -150, "lcEvents": 0, "estar": 3000000},
+        "opposite": {"rate": 0.9, "tp": 1620, "lc": 0, "deadline": 0, "held": 180, "pips": -2, "yen": -240, "lcs": 0, "deadlines": 0, "capped": 0, "S": 10000},
+        "perTrade": {"rate": 0.96, "tp": 1920, "held": 80, "pips": 0.5, "yen": 60, "oppRate": 0.955, "oppPips": 0.25, "oppYen": 28},
+        "perTradeParts": [{"rate": 0.96, "pips": 0.5, "oppRate": 0.955, "oppPips": 0.25}, {"rate": 0.97, "pips": 1, "oppRate": 0.96, "oppPips": 0.5}, {"rate": 0.95, "pips": 0, "oppRate": 0.95, "oppPips": 0}],
+        "verdict": {"one": false, "twoAccounts": true, "twoM": false, "three": false}
+      },
+      "expect": { "text": "全期間では、主の行（1分足の終値・スワップ無し）では、ロスカット・期限の決済・上限で入金し切れなかった追証は、どれも0回。スワップ無し・一番悪い値では、ロスカット 1回・期限の決済 0回・上限で入金し切れなかった追証 0回（ロスカットの日時 2024-08-05 06:04 UTC）。スワップ込み・一番悪い値では、ロスカット 1回・期限の決済 0回・上限で入金し切れなかった追証 1回（ロスカットの日時 2024-08-05 06:04 UTC。入金し切れなかった追証の日時 2024-08-05 05:10 UTC、終わり方 決済の充当で解消 0・期限の決済 0・ロスカット 1）。口座が守れたとは言えない（両建ての買いと売りが同時に一番悪い値にいる、実際には起きない形も含む。スワップは目安で、取り分は仮の値）。口座は前半・後半とも増えた（置けた割合 97.50%）。すべてのメールを数えると、前半は −250,000 円で0以下だった（スワップ無し −200,000 円・主のスワップ込み −250,000 円）。後半は −10,000 円で0以下だった（スワップ無し +100,000 円・主のスワップ込み −10,000 円）。口座の道筋では、置けなかったメール 50 件（有効証拠金 30・追証の間 20）、追証で取り消された指値 40 件、ロスカットで取り消された指値 10 件を取らず、ロスカット・期限で 0 件を途中で決済した。すべてのメールの見方では、これらも最後まで数えた。この持ち方で増えるとは言えない。P から1日後の時点で取引ごとに比べると、合図の向きが逆向きより良いとは言えない。逆向きの取引だけで回した同じ口座では、勝率 90.00%（利確 1620・ロスカット 0・期限の決済 0・END でまだ持っている 180）、1回あたり −2.00 pips・−240 円、ロスカット 0 回・期限の決済 0 回・上限で入金し切れなかった追証 0 回、口座の損益 S +10,000 円。30万円の口座で、置けた割合 97.50%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.50%。どれも全メールに対する割合）。前半は置けた割合 97.50%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.50%。どれも全メールに対する割合）、後半は置けた割合 97.50%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.50%。どれも全メールに対する割合）。入れたお金の合計 300,000 円。スワップ無し・一番悪い値では、置けた割合 97.50%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.50%。どれも全メールに対する割合）、入れたお金の合計 350,000 円。スワップ込み・一番悪い値では、置けた割合 97.50%（うち、入った 90.00%・置いたが入らなかった 5.00%・追証で取り消された 2.00%・ロスカットで取り消された 0.50%。どれも全メールに対する割合）、入れたお金の合計 1,000,000 円。勝率 95.00%（利確 1710・ロスカット 0・期限の決済 0・END でまだ持っている 90。1回あたり −1.25 pips・−150 円、ロスカット 0 回、E* 3,000,000 円。逆向きの取引だけの同じ口座では 90.00%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。(b) の結果で、この判断は変わらない（(b) では口座の①②を見ない）。(b) のこれからのメールで比べるのは、取引ごとの P から1日後の1回あたりが、過去の見込みの範囲に入るかだけ。範囲に入っても、勝てるとも、口座の①②を確かめたとも言えない。取引ごとの見方では、勝率 96.00%（利確 1920・END でまだ持っている 80。1回あたり +0.50 pips・+60 円）、逆向きでは 95.50%（1回あたり +0.25 pips・+28 円）。この高い勝率は、損切りなし・利確10・END まで持つ作りで高く出ている。合図の力による分があるとは言えない（逆向きでも 95.50%。P から1日後の比べは、主の数字 −0.25 pips、下の端 −1.00 pips）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.h2Item", "kind": "holdText", "source": "21 オーナーの持ち方の文（後半だけの口座: 頭の文、「後半（2025-05-19〜2026-10-10）のデータ」、② の形）; §8.102 書く文 ①がそろう・③が欠けた（②がそろった）; 9 の L の文 (L が無い); SQ-27, SQ-H1",
+      "why": "donchian-A20, the second-half account (21: head 「選ぶのに使っていない後半（2025年5月19日〜）だけで、30万円から始めた口座では、」, 「2024〜2026年のデータ」 → 「後半（2025-05-19〜2026-10-10）のデータ」 in every sentence of the account, ② in 21's numbers-only form with 「後半の合図すべて」). ① holds (money put in 300,000). ② S > 0 on the four rows and M_h > 0 (none, swap) → holds. ③ has no main number and no L (null, printed 「—」), so it fails, and ② holding → 「口座が増えた分を、合図の力とは言えない…」, then the opposite account's line. 添える文: no halves in this account; (50 + 4) ÷ 60 = 90.00%, 50 ÷ 60 = 83.33%, 4 ÷ 60 = 6.67%. ①② hold → 「これは後半（2025-05-19〜2026-10-10）のデータでの結果で…」; an item → no (b). L null → 9's first form with 「—」.",
+      "facts": {
+        "src": "donchian-A20", "account": "h2", "email": false, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 0, "B": 25000, "S": 25000, "inTotal": 300000, "placed": {"n": 60, "entered": 50, "unfilled": 4, "cancelCall": 0, "cancelLc": 0, "refusedMargin": 6, "refusedCall": 0}},
+          "mainSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 0, "B": 27000, "S": 27000, "inTotal": 300000, "placed": {"n": 60, "entered": 50, "unfilled": 4, "cancelCall": 0, "cancelLc": 0, "refusedMargin": 6, "refusedCall": 0}},
+          "worst": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 0, "B": 20000, "S": 20000, "inTotal": 300000, "placed": {"n": 60, "entered": 50, "unfilled": 4, "cancelCall": 0, "cancelLc": 0, "refusedMargin": 6, "refusedCall": 0}},
+          "worstSwap": {"lcs": 0, "deadlines": 0, "capped": 0, "lcAt": [], "deadlineAt": [], "cappedCalls": [], "A": 0, "B": 22000, "S": 22000, "inTotal": 300000, "placed": {"n": 60, "entered": 50, "unfilled": 4, "cancelCall": 0, "cancelLc": 0, "refusedMargin": 6, "refusedCall": 0}}
+        },
+        "placedHalves": null,
+        "m": {"none": [0, 0], "swap": [0, 0]},
+        "mh": [30000, 33000],
+        "third": {"main": null, "L": null, "plain": null, "n": 0},
+        "win": {"rate": 0.9, "tp": 45, "lc": 0, "deadline": 0, "held": 5, "pips": 2.25, "yen": 260, "lcEvents": 0, "estar": 400000},
+        "opposite": {"rate": 0.8, "tp": 40, "lc": 0, "deadline": 0, "held": 10, "pips": -5.5, "yen": -600, "lcs": 0, "deadlines": 0, "capped": 0, "S": -15000},
+        "perTrade": {"rate": 0.95, "tp": 57, "held": 3, "pips": 3, "yen": 330, "oppRate": 0.75, "oppPips": -8, "oppYen": -880},
+        "perTradeParts": [{"rate": 0.95, "pips": 3, "oppRate": 0.75, "oppPips": -8}],
+        "verdict": {"one": true, "twoAccounts": true, "twoM": true, "three": false}
+      },
+      "expect": { "text": "選ぶのに使っていない後半（2025年5月19日〜）だけで、30万円から始めた口座では、30万円の口座で、後半（2025-05-19〜2026-10-10）のデータでは、ロスカットも、追証の期限の決済も、上限で入金し切れなかった追証も0回で、入れたお金の合計は 300,000 円だった（4つの行すべて）。口座の損益は +25,000 円・+27,000 円・+20,000 円・+22,000 円（入金を引いた額。4つの行それぞれ）、後半の合図すべてを数えた損益 M_h は +30,000 円・+33,000 円（スワップ無し・主のスワップ込み）。P から1日後の時点で取引ごとに比べると、合図の向きが逆向きより良いとは言えない。口座が増えた分を、合図の力とは言えない（損切りなし・利確だけという持ち方の作りで増えた分と、区別できない）。逆向きの取引だけで回した同じ口座では、勝率 80.00%（利確 40・ロスカット 0・期限の決済 0・END でまだ持っている 10）、1回あたり −5.50 pips・−600 円、ロスカット 0 回・期限の決済 0 回・上限で入金し切れなかった追証 0 回、口座の損益 S −15,000 円。30万円の口座で、置けた割合 90.00%（うち、入った 83.33%・置いたが入らなかった 6.67%・追証で取り消された 0.00%・ロスカットで取り消された 0.00%。どれも全合図に対する割合）。入れたお金の合計 300,000 円。勝率 90.00%（利確 45・ロスカット 0・期限の決済 0・END でまだ持っている 5。1回あたり +2.25 pips・+260 円、ロスカット 0 回、E* 400,000 円。逆向きの取引だけの同じ口座では 80.00%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。これは後半（2025-05-19〜2026-10-10）のデータでの結果で、これからも口座が増えるとは言えない。取引ごとの見方では、勝率 95.00%（利確 57・END でまだ持っている 3。1回あたり +3.00 pips・+330 円）、逆向きでは 75.00%（1回あたり −8.00 pips・−880 円）。この高い勝率は、損切りなし・利確10・END まで持つ作りで高く出ている。合図の力による分があるとは言えない（逆向きでも 75.00%。P から1日後の比べは、主の数字 — pips、下の端 — pips）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.h2EmailDeadlines", "kind": "holdText", "source": "21 オーナーの持ち方の文（後半だけの口座）; §8.102 書く文 ①が主の行で欠けた（期限の決済）・③がそろう; SQ-08 の日時（10件まで、「ほか ○件」）; 9 の L の文 (L > 0); SQ-H1",
+      "why": "ULTRA 5分足, the second-half account of an email. ① the main row has 12 deadline close-outs → 「この持ち方では、後半（2025-05-19〜2026-10-10）のデータで口座が守れなかった。」 and each row with its dates oldest first (the main row's first given date is its latest), the first 10, then 「、ほか 2件」 (11 dates: 「ほか 1件」; SQ-08). ② 21's form with the four S and M_h. ③ L +0.50 > 0, the plain mean +1.50 > 0. 添える文: (400 + 20 + 30 + 0) ÷ 500 = 90.00%; the three other rows fail ① and repeat their placing and money. ① fails → both (b) sentences. L > 0 → 9's second form, 90.00 − 88.00 = +2.00ポイント.",
+      "facts": {
+        "src": "ultra5", "account": "h2", "email": true, "timedOut": false,
+        "rows": {
+          "main": {"lcs": 0, "deadlines": 12, "capped": 0, "lcAt": [], "deadlineAt": ["2025-08-18T21:00:00Z", "2025-06-02T21:00:00Z", "2025-06-09T21:00:00Z", "2025-06-16T21:00:00Z", "2025-06-23T21:00:00Z", "2025-06-30T21:00:00Z", "2025-07-07T21:00:00Z", "2025-07-14T21:00:00Z", "2025-07-21T21:00:00Z", "2025-07-28T21:00:00Z", "2025-08-04T21:00:00Z", "2025-08-11T21:00:00Z"], "cappedCalls": [], "A": 0, "B": -30000, "S": -30000, "inTotal": 700000, "placed": {"n": 500, "entered": 400, "unfilled": 20, "cancelCall": 30, "cancelLc": 0, "refusedMargin": 10, "refusedCall": 40}},
+          "mainSwap": {"lcs": 0, "deadlines": 11, "capped": 0, "lcAt": [], "deadlineAt": ["2025-06-02T21:00:00Z", "2025-06-09T21:00:00Z", "2025-06-16T21:00:00Z", "2025-06-23T21:00:00Z", "2025-06-30T21:00:00Z", "2025-07-07T21:00:00Z", "2025-07-14T21:00:00Z", "2025-07-21T21:00:00Z", "2025-07-28T21:00:00Z", "2025-08-04T21:00:00Z", "2025-08-11T21:00:00Z"], "cappedCalls": [], "A": 0, "B": -35000, "S": -35000, "inTotal": 700000, "placed": {"n": 500, "entered": 400, "unfilled": 20, "cancelCall": 30, "cancelLc": 0, "refusedMargin": 10, "refusedCall": 40}},
+          "worst": {"lcs": 1, "deadlines": 12, "capped": 0, "lcAt": ["2025-09-01T03:00:00Z"], "deadlineAt": ["2025-08-18T21:00:00Z", "2025-06-02T21:00:00Z", "2025-06-09T21:00:00Z", "2025-06-16T21:00:00Z", "2025-06-23T21:00:00Z", "2025-06-30T21:00:00Z", "2025-07-07T21:00:00Z", "2025-07-14T21:00:00Z", "2025-07-21T21:00:00Z", "2025-07-28T21:00:00Z", "2025-08-04T21:00:00Z", "2025-08-11T21:00:00Z"], "cappedCalls": [], "A": 0, "B": -40000, "S": -40000, "inTotal": 750000, "placed": {"n": 500, "entered": 400, "unfilled": 20, "cancelCall": 30, "cancelLc": 0, "refusedMargin": 10, "refusedCall": 40}},
+          "worstSwap": {"lcs": 1, "deadlines": 11, "capped": 0, "lcAt": ["2025-09-01T03:00:00Z"], "deadlineAt": ["2025-06-02T21:00:00Z", "2025-06-09T21:00:00Z", "2025-06-16T21:00:00Z", "2025-06-23T21:00:00Z", "2025-06-30T21:00:00Z", "2025-07-07T21:00:00Z", "2025-07-14T21:00:00Z", "2025-07-21T21:00:00Z", "2025-07-28T21:00:00Z", "2025-08-04T21:00:00Z", "2025-08-11T21:00:00Z"], "cappedCalls": [], "A": 0, "B": -45000, "S": -45000, "inTotal": 750000, "placed": {"n": 500, "entered": 400, "unfilled": 20, "cancelCall": 30, "cancelLc": 0, "refusedMargin": 10, "refusedCall": 40}}
+        },
+        "placedHalves": null,
+        "m": {"none": [0, 0], "swap": [0, 0]},
+        "mh": [-50000, -60000],
+        "third": {"main": 2, "L": 0.5, "plain": 1.5, "n": 480},
+        "win": {"rate": 0.85, "tp": 340, "lc": 0, "deadline": 40, "held": 20, "pips": -4, "yen": -450, "lcEvents": 0, "estar": 900000},
+        "opposite": {"rate": 0.825, "tp": 330, "lc": 5, "deadline": 30, "held": 35, "pips": -6, "yen": -700, "lcs": 1, "deadlines": 10, "capped": 0, "S": -90000},
+        "perTrade": {"rate": 0.9, "tp": 450, "held": 50, "pips": -1, "yen": -120, "oppRate": 0.88, "oppPips": -2, "oppYen": -230},
+        "perTradeParts": [{"rate": 0.9, "pips": -1, "oppRate": 0.88, "oppPips": -2}],
+        "verdict": {"one": false, "twoAccounts": false, "twoM": false, "three": true}
+      },
+      "expect": { "text": "選ぶのに使っていない後半（2025年5月19日〜）だけで、30万円から始めた口座では、この持ち方では、後半（2025-05-19〜2026-10-10）のデータで口座が守れなかった。主の行（スワップ無し・1分足の終値）: ロスカット 0回・期限の決済 12回・上限で入金し切れなかった追証 0回（期限の決済の日時 2025-06-02 21:00 UTC、2025-06-09 21:00 UTC、2025-06-16 21:00 UTC、2025-06-23 21:00 UTC、2025-06-30 21:00 UTC、2025-07-07 21:00 UTC、2025-07-14 21:00 UTC、2025-07-21 21:00 UTC、2025-07-28 21:00 UTC、2025-08-04 21:00 UTC、ほか 2件）。スワップ込み・1分足の終値: ロスカット 0回・期限の決済 11回・上限で入金し切れなかった追証 0回（期限の決済の日時 2025-06-02 21:00 UTC、2025-06-09 21:00 UTC、2025-06-16 21:00 UTC、2025-06-23 21:00 UTC、2025-06-30 21:00 UTC、2025-07-07 21:00 UTC、2025-07-14 21:00 UTC、2025-07-21 21:00 UTC、2025-07-28 21:00 UTC、2025-08-04 21:00 UTC、ほか 1件）。スワップ無し・一番悪い値: ロスカット 1回・期限の決済 12回・上限で入金し切れなかった追証 0回（ロスカットの日時 2025-09-01 03:00 UTC。期限の決済の日時 2025-06-02 21:00 UTC、2025-06-09 21:00 UTC、2025-06-16 21:00 UTC、2025-06-23 21:00 UTC、2025-06-30 21:00 UTC、2025-07-07 21:00 UTC、2025-07-14 21:00 UTC、2025-07-21 21:00 UTC、2025-07-28 21:00 UTC、2025-08-04 21:00 UTC、ほか 2件）。スワップ込み・一番悪い値: ロスカット 1回・期限の決済 11回・上限で入金し切れなかった追証 0回（ロスカットの日時 2025-09-01 03:00 UTC。期限の決済の日時 2025-06-02 21:00 UTC、2025-06-09 21:00 UTC、2025-06-16 21:00 UTC、2025-06-23 21:00 UTC、2025-06-30 21:00 UTC、2025-07-07 21:00 UTC、2025-07-14 21:00 UTC、2025-07-21 21:00 UTC、2025-07-28 21:00 UTC、2025-08-04 21:00 UTC、ほか 1件）。口座の損益は −30,000 円・−35,000 円・−40,000 円・−45,000 円（入金を引いた額。4つの行それぞれ）、後半の合図すべてを数えた損益 M_h は −50,000 円・−60,000 円（スワップ無し・主のスワップ込み）。P から1日後の時点で、ペアと向きごとの平均をそろえた数字（主の数字 +2.00 pips、区間の下の端 +0.50 pips）では、合図の向きは逆向きより良かった。利確まで持った全体での比べではない。メールごとの単純な d の平均は +1.50 pips（480 件）。30万円の口座で、置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）。入れたお金の合計 700,000 円。スワップ込み・1分足の終値では、置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）、入れたお金の合計 700,000 円。スワップ無し・一番悪い値では、置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）、入れたお金の合計 750,000 円。スワップ込み・一番悪い値では、置けた割合 90.00%（うち、入った 80.00%・置いたが入らなかった 4.00%・追証で取り消された 6.00%・ロスカットで取り消された 0.00%。どれも全メールに対する割合）、入れたお金の合計 750,000 円。勝率 85.00%（利確 340・ロスカット 0・期限の決済 40・END でまだ持っている 20。1回あたり −4.00 pips・−450 円、ロスカット 0 回、E* 900,000 円。逆向きの取引だけの同じ口座では 82.50%）。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。(b) の結果で、この判断は変わらない（(b) では口座の①②を見ない）。(b) のこれからのメールで比べるのは、取引ごとの P から1日後の1回あたりが、過去の見込みの範囲に入るかだけ。範囲に入っても、勝てるとも、口座の①②を確かめたとも言えない。取引ごとの見方では、勝率 90.00%（利確 450・END でまだ持っている 50。1回あたり −1.00 pips・−120 円）、逆向きでは 88.00%（1回あたり −2.00 pips・−230 円）。勝率の高さは、逆向きでも 88.00% になる作り（損切りなし・利確10・END まで持つ）で出ている。合図の向きと逆向きの差は、P から1日後の比べで主の数字 +2.00 pips・下の端 +0.50 pips で、勝率の差（+2.00ポイント）を合図の力の大きさとは読まない。損切りが無いので、作りの上で高く出る。この持ち方がうまくいく証拠ではない。" }
+    },
+    {
+      "id": "text.hold.timedOut", "kind": "holdText", "source": "9 「計算が Actions の1 job（6時間）に収まらない時は、その項目のオーナーの持ち方は「出せなかった」と書く。数字は作らない。」; SQ-H1",
+      "why": "MACD の山・谷, the second-half account, not reached within the budget: the account's head, the source by its name (an email: 「MACD の山・谷」), 「のオーナーの持ち方は出せなかった（計算が Actions の1 job の時間に収まらなかった）。」 and no number.",
+      "facts": {"src": "macdx5", "account": "h2", "email": true, "timedOut": true},
+      "expect": { "text": "選ぶのに使っていない後半（2025年5月19日〜）だけで、30万円から始めた口座では、MACD の山・谷のオーナーの持ち方は出せなかった（計算が Actions の1 job の時間に収まらなかった）。" }
+    },
+    {
+      "id": "text.hold.range", "kind": "holdRange", "source": "21 「段2でオーナーの持ち方の数字を並べる時は、損切りなしの文の後に「この報告の、損切りなしの持ち方の勝率は、…」を足す。範囲は、…取引ごとの見方は5ペアまとめの全期間・前半・後半の行から、口座は全期間の口座の全期間の行と後半だけの口座の行から取る。」",
+      "why": "Five accounts: two finished full accounts (their per-trade whole / first / second-half rows: rates 0.96, 0.97, 0.95, 0.9375, 0.94, 0.935 → 93.50%〜97.00%; pips +4.25, +5.00, +3.50, −0.75, −0.50, −1.00 → −1.00〜+5.00; opposite 0.92, 0.93, 0.91, 0.95, 0.955, 0.945 → 91.00%〜95.50%, pips +2.50, +3.00, +2.00, +0.25, +0.50, 0 → +0.00〜+3.00, the zero written +0.00 (SQ-32)), one finished second-half account (its per-trade row is not one of the ranges' rows), and two accounts the budget did not reach (left out). The account ranges over the three finished accounts: rates 0.95, 0.90, 0.85 → 85.00%〜95.00%; pips +3.50, −2.50, −4.00 → −4.00〜+3.50.",
+      "facts": [
+        {"account": "full", "timedOut": false, "win": {"rate": 0.95, "pips": 3.5}, "perTradeParts": [{"rate": 0.96, "pips": 4.25, "oppRate": 0.92, "oppPips": 2.5}, {"rate": 0.97, "pips": 5, "oppRate": 0.93, "oppPips": 3}, {"rate": 0.95, "pips": 3.5, "oppRate": 0.91, "oppPips": 2}]},
+        {"account": "full", "timedOut": false, "win": {"rate": 0.9, "pips": -2.5}, "perTradeParts": [{"rate": 0.9375, "pips": -0.75, "oppRate": 0.95, "oppPips": 0.25}, {"rate": 0.94, "pips": -0.5, "oppRate": 0.955, "oppPips": 0.5}, {"rate": 0.935, "pips": -1, "oppRate": 0.945, "oppPips": 0}]},
+        {"account": "h2", "timedOut": false, "win": {"rate": 0.85, "pips": -4}, "perTradeParts": [{"rate": 0.99, "pips": 9, "oppRate": 0.5, "oppPips": -9}]},
+        {"account": "h2", "timedOut": true},
+        {"account": "full", "timedOut": true}
+      ],
+      "expect": { "text": "この報告の、損切りなしの持ち方の勝率は、取引ごとの見方で 93.50%〜97.00%（1回あたり −1.00〜+5.00 pips。逆向きでは 91.00%〜95.50%・+0.00〜+3.00 pips）、口座では 85.00%〜95.00%（1回あたり −4.00〜+3.50 pips）です。END でまだ持っている取引・最大の逆行・持った期間・ロスカットと期限の決済の回数・入金の合計は、項目ごとに下に並べます。" }
     }
   ]
 }

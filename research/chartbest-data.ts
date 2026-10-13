@@ -181,6 +181,49 @@ export const loadBars = async (src: Src, pair: Pair, interval: Interval, period:
   return { quotes, diag };
 };
 
+// 20 (c)'s rehearsal only (SQ-06, plan §1.1 readAllJsonLayout): research/macdx.ts MODE=walk keeps its walk as one file a
+// side (dir/SYM/5min/side/all.json, GMO's shape). Its 5-minute bars read the way macdx.ts reads them (mergeSides: a time
+// with both sides, an ask closing under its bid left out; opened at or after S0, closed by END, not inside the closure),
+// so the chart and the measures are made from the very bars macdx.ts made its own from. Made-up files only.
+export const loadAllJsonLayout = async (dir: string, pair: Pair, period: Period): Promise<{ quotes: QuoteCandle[]; diag: LoadDiag }> => {
+  const diag = newDiag(pair, "5min");
+  const symbol = GMO_SYMBOLS[pair];
+  const side = async (s: "bid" | "ask") => {
+    const body = JSON.parse(await Deno.readTextFile(`${dir}/${symbol}/5min/${s}/all.json`)) as unknown;
+    if (!sound(body)) throw new Error(`${dir}/${symbol}/5min/${s}/all.json: not GMO's shape`);
+    diag.files++;
+    return parseKlines(body);
+  };
+  const bid = await side("bid");
+  const ask = new Map((await side("ask")).map((x) => [x.t, x.c]));
+  const seen = new Set<number>();
+  const quotes: QuoteCandle[] = [];
+  for (const b of bid.sort((x, y) => x.t - y.t)) {
+    if (seen.has(b.t)) {
+      diag.dup++;
+      continue;
+    }
+    seen.add(b.t);
+    const a = ask.get(b.t);
+    if (!a) {
+      diag.oneSide++;
+      continue;
+    }
+    if (a.close < b.c.close) {
+      diag.crossed++;
+      continue;
+    }
+    if (b.t < period.s0 || b.t + STEP > period.end) continue;
+    if (barInsideClosure(b.t, STEP)) {
+      diag.closure++;
+      continue;
+    }
+    quotes.push({ datetime: b.c.datetime, bid: b.c, ask: a });
+  }
+  diag.kept = quotes.length;
+  return { quotes, diag };
+};
+
 // The 1-minute bars as ownerhold-data's M1 (the owner's way reads them)
 export const m1Of = (pair: Pair, quotes: QuoteCandle[]): M1 => {
   const n = quotes.length;

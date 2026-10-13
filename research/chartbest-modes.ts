@@ -9,7 +9,9 @@ import { type RunCfg, Refused, type HalfRows, type Signals, envOf, halfRowsOf, r
 import type { RunBars } from "./chartbest-core.ts";
 import { type Stage0, floorFromCounts } from "./chartbest-count.ts";
 import { NOT_ELIGIBLE_ORDER, type Stage1, type Stage2, chooseStage1, groupOfItem, intervalsSeen1, stage2Of } from "./chartbest-select.ts";
-import { alwaysRowsOf, alwaysText, fmt, stage1Text, stage2Text } from "./chartbest-text.ts";
+import { alwaysRowsOf, alwaysText, fmt, holdRangeText, holdText, stage1Text, stage2Text } from "./chartbest-text.ts";
+import { type HoldSource, bisRates, holdRun, synthRates } from "./chartbest-hold.ts";
+import { modeHoldXcheck, modeReproWalk } from "./chartbest-rehearse.ts";
 import * as dump from "./chartbest-dump.ts";
 import { followFirstCheck, followFixedCheck, followSample, h1OnlyCheck } from "./chartbest-lookfollow.ts";
 import { type FollowCtx, newFollowCtx } from "./chartbest-follow.ts";
@@ -17,7 +19,7 @@ import type { SigRec } from "./chartbest-events.ts";
 import { mergeProbes } from "./chartbest-lookahead.ts";
 import type { Probe } from "./chartbest-measures.ts";
 import { PLANTS, plant as currentPlant, plantDef } from "./chartbest-plants.ts";
-import { type HandCase, handPath, runHand } from "./chartbest-hand.ts";
+import { type HandDoc, handPath, runHand } from "./chartbest-hand.ts";
 import { type WinPl, usedCand } from "./chartbest-stats.ts";
 import { type WalkLedger, exists, finishRun, ledgerRead, ledgerWrite, modeStage0, realGuard, stage0Part } from "./chartbest-stage0.ts";
 import { calibTargets, condD, condE, condH, condN, condO, condQ, flipCompare, nSummaryOf, readSums } from "./chartbest-sets.ts";
@@ -334,6 +336,34 @@ const summaryOf = (st: RunState) => {
 };
 import { tcdf as tcdfOf } from "./chartbest-stats.ts";
 
+// 9 (plan §3.12): the owner's way on the K_total chosen items and the two emails, both accounts each; its checks
+// (hold.<src>.<acct>.<check>), its numbers (hold.<src>.<acct>.…) and its sentences (hold/sentences.tsv: hold.<src>.<acct>
+// and always.s2.hold, SQ-H1; print.txt: hold.text.<id>)
+const ownerWay = async (st: RunState, chosen: string[], madeUp: boolean) => {
+  const { cfg, rb, sig, checks, printer } = st;
+  if (!rb.m1) throw new Error("the owner's way reads the 1-minute bars: a full run only");
+  const sources: HoldSource[] = [
+    ...chosen.map((id) => ({ src: id, email: false, recs: sig.items.find((s) => s.src === id)!.recs, late: [] })),
+    ...sig.measures.map((m) => ({ src: m.src, email: true, recs: m.recs, late: m.late })),
+  ];
+  const rates = madeUp ? synthRates : await bisRates(envOf("CB_BIS_CSV"));
+  const outDir = `${cfg.out}/hold`;
+  const res = await holdRun({ bars: rb.bars, m1: rb.m1, diags: rb.diags, period: cfg.period, sources, rates, outDir, budgetMin: Number(envOf("CB_HOLD_BUDGET_MIN", "300")) });
+  const sentences: Array<[string, string]> = [];
+  for (const h of res) {
+    const key = `hold.${h.src}.${h.account}`;
+    printer.line(`${key}.done`, h.timedOut ? "no" : "yes");
+    for (const [k, c] of Object.entries(h.checks)) checks.set(`${key}.${k}`, c);
+    for (const [k, v] of h.lines) printer.line(k, v);
+    sentences.push([key, holdText(h.facts ?? { src: h.src, account: h.account, email: h.email, timedOut: true })]);
+  }
+  const range = holdRangeText(res.map((h) => h.facts ?? { timedOut: true, account: h.account }));
+  if (range) sentences.push(["always.s2.hold", range]);
+  for (const [id, text] of sentences) printer.line(`hold.text.${id}`, text);
+  await Deno.mkdir(outDir, { recursive: true });
+  await Deno.writeTextFile(`${outDir}/sentences.tsv`, ["id\ttext", ...sentences.map(([id, t]) => `${id}\t${t.replace(/[\t\n]/g, " ")}`)].join("\n") + "\n");
+};
+
 // a run that crashes still leaves checks.json: the checks made so far and run.crash (a planted error's run lists
 // what failed before the crash; CI keeps the file), then the crash goes on to the CLI (exit 3). A refusal (a gate
 // before reading, or the second half's gate during the run) keeps the checks made so far too, with gate.refused,
@@ -483,14 +513,15 @@ const modeRunBody = async (cfg: RunCfg, mode: string, plant: string, checks: Che
       printStage2(printer, s2);
       const printed2 = printer.intervals("s2.");
       checks.count("print.intervals2", printed2 === s2.intervalsSeen.total ? 0 : 1, printed2, printed2 === s2.intervalsSeen.total ? undefined : { printed: printed2, counted: s2.intervalsSeen.total });
-      // 9, 14「段2で、オーナーの持ち方（9）も測る」: research/chartbest-hold.ts is not built in step 2 (HOLD_BUILT false). A
-      // made-up full run that asks for it says so (CB_HOLD=0 does not ask); a real one fails (realGuard refuses it first)
-      if (cfg.full && cfg.hold && !HOLD_BUILT) {
-        if (madeUp) checks.skip("hold.owner", "not built in step 2");
-        else checks.set("hold.owner", { ok: false, n: 1, detail: "the owner's way (research/chartbest-hold.ts) is not built" });
+      // 9, 14「段2で、オーナーの持ち方（9）も測る」 (research/chartbest-hold.ts), in full runs; CB_HOLD=0 leaves it out of a
+      // made-up run (realGuard refuses it on real data). Real data also needs HOLD_BUILT (realGuard refuses it first)
+      if (cfg.full && cfg.hold) {
+        if (!madeUp && !HOLD_BUILT) checks.set("hold.owner", { ok: false, n: 1, detail: "the owner's way (research/chartbest-hold.ts) is not built" });
+        else await ownerWay(st, chosen, madeUp);
       }
-      const holdText = new Map<string, string>();
-      st.sentences.push(...stage2Text(s2, { kTotal: s2.kTotal, m1: m1.chart + m1.cal, rows: new Map(rows2.map((r) => [r.src, r])), ultra: h2.emails.ultra5[groupOfItem(chosen[0])], macd: h2.emails.macdx5[groupOfItem(chosen[0])], hold: holdText }));
+      // SQ-P15: the owner-hold sentences are their own ids (hold/sentences.tsv, SQ-H1), not part of s2.item.<id>
+      const holdInItem = new Map<string, string>();
+      st.sentences.push(...stage2Text(s2, { kTotal: s2.kTotal, m1: m1.chart + m1.cal, rows: new Map(rows2.map((r) => [r.src, r])), ultra: h2.emails.ultra5[groupOfItem(chosen[0])], macd: h2.emails.macdx5[groupOfItem(chosen[0])], hold: holdInItem }));
       st.sentences.push(alwaysText("always.s2", alwaysRowsOf(rows2, MEASURES.map((id) => h2.emails[id].chart), h2.blind, "後半"), null));
       // 14's record of the one stage-2 run (real: committed by hand with its sha256, after which stage 2 refuses)
       await writeLedger("stage2", stage2Json(s2, hits2.length > 0));
@@ -527,8 +558,9 @@ export const mode_hand = async (): Promise<number> => {
   const text = await Deno.readTextFile(path);
   const sha = await sha256Hex(new TextEncoder().encode(text));
   Log.sha(path, sha);
-  const doc = JSON.parse(text) as { cases: HandCase[] };
-  const res = await runHand(doc.cases, plant);
+  // the cases and their layout conventions (SQ-I2)
+  const doc = JSON.parse(text) as HandDoc;
+  const res = await runHand(doc, plant);
   const checks = new Checks();
   for (const [id, r] of Object.entries(res)) checks.set(`hand.${id}`, r.ok ? { ok: true, n: 1 } : { ok: false, n: 1, detail: r.detail });
   const ok = checks.ok();
@@ -575,10 +607,11 @@ export const mode_plant_sum = async (): Promise<number> => {
 
 export const plantInfo = plantDef;
 
-// 20 (c)'s rehearsal (plan §5.1: macdx.ts's walk against the emails' measures; ownerhold.ts's synthetic run against
-// the owner's way) is not built in step 2: the modes say so and stop (exit 2) instead of passing silently
-export const mode_repro_walk = (): Promise<number> => Promise.reject(new Refused("repro-walk (20 (c)'s rehearsal on macdx.ts's walk) is not built in step 2"));
-export const mode_hold_xcheck = (): Promise<number> => Promise.reject(new Refused("hold-xcheck (the owner's way against ownerhold.ts) is not built in step 2"));
+// 20 (c)'s rehearsal on made-up files (SQ-06, plan §5.1; research/chartbest-rehearse.ts): macdx.ts's walk against the
+// emails' measures (repro.ultra, repro.macd); ownerhold.ts's synthetic run against the owner's way (xcheck.sigs,
+// xcheck.decisions)
+export const mode_repro_walk = (): Promise<number> => modeReproWalk();
+export const mode_hold_xcheck = (): Promise<number> => modeHoldXcheck();
 
 // the real stages' gates alone (plan §5.4), the first step of each real job in the yml, before any step that reads a
 // real price: exit 0 when every gate passes, 2 when refused (in step 2 they never pass: 55 of the 59 items are not built)

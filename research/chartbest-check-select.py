@@ -80,10 +80,13 @@ def stage1(rows, groups, counts_only=False):
             continue
         chosen[g].append(src)
         taken.add(groups.get(src))
+    # 12「説明として出す: まとまりごとに、前半で幅の下の端が0を超えた項目の数と、それが入る重なりの組（11）の数
+    # （kama-A・kama-B は1項目と数える）」: over the floor-passing items (the rows given), LB = Δ − t(0.975, df) × SE
+    # above 0 by 8's rule (|x| < 1e-12 is 0; no t, no LB). (Rewritten by the step-2b Python author, py-brief 1.3.)
     lbpos = {}
     for g in ('chart', 'cal'):
-        items = [s for s in rows if D.GROUP_OF[s] == g and ST.gt0(rows[s]['delta']['lb'])]
-        lbpos[g] = {'items': item_count(items), 'groups': group_count(items, groups)}
+        above = [x for x in sorted(rows, key=D.ORDER.get) if D.GROUP_OF[x] == g and ST.gt0(rows[x]['delta']['lb'])]
+        lbpos[g] = {'items': item_count(above), 'groups': group_count(above, groups)}
     out = {
         'eligible': eligible,
         'notEligible': reasons,
@@ -97,32 +100,31 @@ def stage1(rows, groups, counts_only=False):
     return out
 
 
-# 10, 12: kama-A and kama-B give the same signals (3, C24), so they count as one item among the items above 0
+# 3「kama-A と kama-B は、定義を作る段で、数学的に同じ合図になると分かった」; 10 / 12「kama-A・kama-B は1項目と数える」:
+# in the counts of the items above 0, kama-B is counted as kama-A (rewritten by the step-2b Python author, py-brief 1.3)
 SAME_SIGNAL_ITEMS = (('kama-A', 'kama-B'),)
+ONE_ITEM_FOR = {other: first for first, *rest in SAME_SIGNAL_ITEMS for other in rest}
+P95 = 0.95          # 10「95%点（昇順の floor(0.95×(n−1)) 番目）」
 
 
 def item_count(ids):
-    """10/12「0を超えた項目の数」: distinct items, kama-A and kama-B counted once."""
-    xs = set(ids)
-    n = len(xs)
-    for grp in SAME_SIGNAL_ITEMS:
-        k = sum(1 for x in grp if x in xs)
-        if k > 1:
-            n -= k - 1
-    return n
+    """10 / 12: the number of the items given, kama-A and kama-B counted as one item."""
+    return len({ONE_ITEM_FOR.get(s, s) for s in ids})
 
 
 def group_count(ids, groups):
-    """10/12: the number of overlap groups (11) the items fall in."""
-    return len({groups.get(s, s) for s in ids})
+    """10 / 12「それが入る重なりの組（11）の数」: the number of the overlap groups the items given fall in
+    (groups: {item: its group id}, every floor-passing item has one; a missing item is an error)."""
+    return len({groups[s] for s in ids})
 
 
 def p95_of(xs):
-    """10: the 95% point, the floor(0.95 x (n - 1))-th of the ascending list (None for an empty list)."""
+    """10: the floor(0.95 x (n - 1))-th value (0-based) of the ascending list; None for an empty list. (The double
+    0.95 x m and the exact 95m / 100 give the same floor for every m up to 2,000,000, checked 2026-10-12.)"""
     if not xs:
         return None
-    s = sorted(xs)
-    return s[int(math.floor(0.95 * (len(s) - 1)))]
+    ys = sorted(xs)
+    return ys[int(math.floor(P95 * (len(ys) - 1)))]
 
 
 def not_eligible_count(sel, group):
@@ -131,38 +133,70 @@ def not_eligible_count(sel, group):
             for k in NOT_ELIGIBLE_ORDER}
 
 
+# 10: a k at which no floor-passing chart item has a Δ_k − t(0.975, df) × SE (every item without t, or every Δ_k
+# without a signal left) is no observation of the counts and has no maximum: it is not counted ('skip'; never met
+# when an item passed the floor, which needs 300 counted signals in each half)
+SHIFT_K_WITHOUT_ITEMS = 'skip'
+
+
+def _mean(xs):
+    """The mean, summed oldest (smallest k) first (2: no sum / fsum); None for an empty list."""
+    if not xs:
+        return None
+    acc = 0.0
+    for x in xs:
+        acc += x
+    return acc / len(xs)
+
+
 def shift_counts(rows, groups):
-    """10/12: per k, over the floor-passing chart items, Δ_k - t(0.975, df) x SE (the item's own SE and df): the
-    number of items above 0 and of their groups; the max (the chance low end). Their means and 95% points."""
-    chart = [s for s in rows if D.GROUP_OF[s] == 'chart' and rows[s].get('_shifts') is not None]
-    by_k = {}
-    for s in chart:
-        d = rows[s]['delta']
-        use = next((c for c in d['cands'] if c['kind'] == d['use']), None)
-        if use is None or d['t'] is None:
+    """10「チャートの形のまとまりで、k ごとに「床を通った項目の Δ_k − t(0.975, 自由度) × SE の最大」（SE と自由度はその
+    項目の本物のもの）を出し、その95%点（昇順の floor(0.95×(n−1)) 番目）を「偶然の一番の下の端」とする（説明だけ）。同じ
+    k で、床を通った項目のうち Δ_k − t(0.975, 自由度) × SE が0を超えた項目の数と、それが入る重なりの組（11）の数も数える
+    （kama-A・kama-B は1項目と数える）。それぞれの平均と95%点…を出す（12 の説明用）。」 rows: the floor-passing items'
+    first-half rows; a chart row carries its week shift '_shifts' [(k, Δ_k or None, dropped, season-crossing)]; SE and
+    df are the ones the item's own Δ uses (its 'use' candidate); an item without t has none and is left out. Returns
+    {'shift95': {'items': {mean, q95}, 'groups': {mean, q95}, 'k': the number of k counted}, 'chanceLb': the 95% point
+    of the per-k maxima}. (Rewritten from 10 by the step-2b Python author, py-brief 1.3.)"""
+    per_k = {}
+    for src in sorted(rows, key=D.ORDER.get):
+        row = rows[src]
+        if D.GROUP_OF[src] != 'chart' or row.get('_shifts') is None:
             continue
-        for k, dk, _, _ in rows[s]['_shifts']:
-            if dk is None:
-                continue
-            by_k.setdefault(k, []).append((s, dk - use['half']))
-    items, grps, best = [], [], []
-    for k in sorted(by_k):
-        xs = by_k[k]
-        above = [s for s, v in xs if ST.gt0(v)]
-        items.append(item_count(above))
-        grps.append(group_count(above, groups))
-        best.append(max(v for _, v in xs))
+        d = row['delta']
+        c = next((x for x in d['cands'] if x['kind'] == d['use']), None)
+        if d['t'] is None or c is None:
+            continue
+        half = ST.tq(0.975, c['df']) * c['se']
+        for k, dk, _, _ in row['_shifts']:
+            if dk is not None:
+                per_k.setdefault(k, []).append((src, dk - half))
+    n_items, n_groups, best = [], [], []
+    for k in sorted(per_k):
+        xs = per_k[k]
+        above = [src for src, x in xs if ST.gt0(x)]
+        n_items.append(item_count(above))
+        n_groups.append(group_count(above, groups))
+        mx = xs[0][1]
+        for _, x in xs[1:]:
+            if x > mx:
+                mx = x
+        best.append(mx)
+    return {'shift95': {'items': {'mean': _mean(n_items), 'q95': p95_of(n_items)},
+                        'groups': {'mean': _mean(n_groups), 'q95': p95_of(n_groups)}, 'k': len(n_items)},
+            'chanceLb': p95_of(best)}
 
-    def mean(v):
-        acc = 0.0
-        for x in v:
-            acc += x
-        return acc / len(v) if v else None
 
-    q95 = p95_of
-    return {'shift95': {'items': {'mean': mean(items), 'q95': q95(items)},
-                        'groups': {'mean': mean(grps), 'q95': q95(grps)}, 'k': len(items)},
-            'chanceLb': q95(best)}
+def stop_on_yardsticks(sel, hits, counts_only):
+    """13「物差し（ブラインド・ULTRA・MACD）が当たったら、すべて止める（共通の部分の誤りを疑う）。」: a stage-1 result
+    whose yardsticks were hit chooses nothing (K_total = 0), and so opens no second half (12); 20 (e) H「作り物では、疑う
+    合図は数えて出すだけで、選ぶのを止めない」(--counts-only-suspicion, set H; SQ-25: H only) keeps the choice. Returns
+    whether the choice was emptied. (Written by the step-2b Python author from 12, 13 and 20 (e) H, py-brief 1.7.)"""
+    if not hits or counts_only:
+        return False
+    sel['chosen'] = {'chart': [], 'cal': []}
+    sel['Ktotal'] = 0
+    return True
 
 
 def yardstick_hit(measure_rows, blind):
@@ -196,26 +230,37 @@ def p_of(est):
 
 
 def holm(items, rows, plant=''):
-    """14: Holm over the K_total items, p from each item's own t (p_of)."""
+    """14: Holm over the K_total items: p = 1 - T(t, df) (p_of; 1 without t), t and the e-signals of their rows."""
     return holm_order([(s, p_of(rows[s]['delta']), rows[s]['delta']['t'], rows[s]['nE']) for s in items], plant)
 
 
-def holm_order(entries, plant=''):
-    """14: entries (src, p, t or None, e-signals). p ascending (then t descending, e-signals descending, the table's
-    order); the k-th passes while p <= 0.025 / (K - k + 1); the first failure stops it."""
-    K = len(entries)
+# 14「t が作れない項目は p ＝ 1」and「同じなら t の大きい順」: an item without t has no t to be larger, so among equal p it
+# comes after every item with t (True; False would put it first)
+HOLM_T_NONE_LAST = True
 
-    def key(e):
-        s, p, t, ne = e
-        return (p, -(t if t is not None else -math.inf), -ne, D.ORDER[s])
+
+def holm_order(entries, plant=''):
+    """14「Holm（片側、全体で 2.5%。2つのまとまりを合わせた1つの家族）: K_total 個を p の小さい順に並べる（同じなら t の
+    大きい順、e のある合図の多い順、表の順）。k 番目の p が 0.025 ÷ (K_total − k ＋ 1) 以下の間、「0より大きい」とする。
+    1つでも満たさなければそこで止め、後はすべて満たさない。」 entries: [(item, p, t or None, e-signals)]; returns
+    {item: {p, holmRank (1 = first in that order), holmPass}}. An item without t (p = 1) comes after every item with
+    t among equal p (HOLM_T_NONE_LAST). plant 'noHolm' (20 (f)「Holm を使わず1つずつ2.5%で見る」): every item
+    against 0.025, without the stop. (Rewritten from 14 by the step-2b Python author, py-brief 1.4.)"""
+    K = len(entries)
+    no_t = math.inf if HOLM_T_NONE_LAST else -math.inf
+
+    def order(e):
+        item, p, t, n_e = e
+        return (p, -t if t is not None else no_t, -n_e, D.ORDER[item])
     out = {}
-    going = True
-    for k, (s, p, _, _) in enumerate(sorted(entries, key=key), start=1):
-        lim = D.ALPHA / (K - k + 1) if plant != 'noHolm' else D.ALPHA
-        ok = going and p <= lim
-        if plant != 'noHolm' and not ok:
-            going = False
-        out[s] = {'p': p, 'holmRank': k, 'holmPass': bool(ok)}
+    holding = True
+    for k, (item, p, t, n_e) in enumerate(sorted(entries, key=order), start=1):
+        if plant == 'noHolm':
+            ok = p <= D.ALPHA
+        else:
+            holding = holding and p <= D.ALPHA / (K - k + 1)
+            ok = holding
+        out[item] = {'p': p, 'holmRank': k, 'holmPass': ok}
     return out
 
 

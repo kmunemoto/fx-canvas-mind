@@ -63,12 +63,17 @@ CANDIDATES_PATH = 'research/ledger/chartbest-candidates.json'
 CANDIDATES_SHA256 = '710814487a58f0228e70b2f7f15eae9d878b52701cf7f72d3a5ceb3bfffc5436'
 SPREAD_HOURS_PATH = 'research/ledger/spread-hours.csv'
 SPREAD_HOURS_SHA256 = '2b325574297a9891bc4760717ab3f6e3891d073725b01b46b0faa7b89605bb93'
-# §8.113 12: stage 1's choice, committed with its sha256 (written by hand after the real stage 1, beside the TS
-# constant; empty: not yet). On real data the Python opens the second half only for the items of this file, read
-# against this constant (review fix lookahead-05/06; a gate written by the integrator, not part of the recomputation)
+# §8.113 12「記録: 選んだ項目と前半の表を docs に書く。research/ledger/chartbest-choice.json と、その sha256 の定数を
+# commit する。段2は、この定数が無いと走らない。選ばなかった項目は、後半で何も計算しない（プログラムが断る）。」
+# The constant stays empty until the real stage 1 has run; it is then written by hand, beside the TS program's own.
+# On real data, chartbest-check.py opens the second half only for the items of that file, read against this constant
+# (choice_from_ledger). The path is the one the real stage-2 job passes with --choice-ledger.
+# (Rewritten 2026-10-12 by the step-2b Python author, who has not read the TS: py-brief 1.10.)
 CHOICE_LEDGER_PATH = 'research/ledger/chartbest-choice.json'
 CHOICE_LEDGER_SHA256 = ''
-# the real jobs keep GMO's day files under this folder (a made-up --gmo is never under it)
+# §8.113 1「GMO はこの開発環境から届かないので、すべて GitHub Actions で取る。日のファイルは actions/cache に置き」: the
+# real jobs restore that cache under this folder and pass a --gmo inside it, so a --gmo there is real data (the made-up
+# generator writes its day files under research/out/).
 REAL_CACHE = 'research/.cache'
 
 # §8.113 3: the 59 items in the table's order ("表の順"); group chart (0-51) or cal (52-58), and the candidate
@@ -285,8 +290,21 @@ def price_str(v, d):
 
 
 # ---------------------------------------------------------------- the GMO day files
+# SQ-B1 (malformed rows inside a readable day file; never met on made-up data): 'nan' — a day file is a read
+# failure (20 (a)「GMO の読み込みの失敗0」) only when it is not GMO's shape (not JSON, status ≠ 0, no data list); a row
+# inside it that is not an object, or whose openTime is not a finite whole number of ms, is not a bar: it is removed
+# and counted under nan; a price that is not a finite number (NaN, ±inf, a string that is not a number, missing)
+# makes that time's mid not a number (18 C1「中値が NaN の足は、番号を付ける前に取り除いて数を出す」), counted under
+# nan by load_pair. 'readFailure' (the alternative): any malformed row makes its whole file a read failure.
+MALFORMED_ROW = 'nan'
+
+
 class LoadDiag:
-    """What reading one pair's files found (counted, never fatal by itself)."""
+    """What reading one pair's files found (counted, never fatal by itself).
+    nan (18 C1, SQ-B1): the rows removed as not a bar (not an object, openTime not a finite whole number; per row and
+    side, counted by read_side) plus the times whose eight prices (O, H, L, C of both sides) are not all finite
+    numbers although both sides have a row there (per time, counted by load_pair after the one-side test and before
+    the crossed test, so a time is counted under at most one of oneSide, nan and crossed)."""
 
     def __init__(self):
         self.files = 0
@@ -301,8 +319,42 @@ class LoadDiag:
         self.nan = 0
 
 
+def _number(x):
+    """A JSON number, or a string that parses as one, as a float; NaN for anything else (a bool, null, a missing
+    field, a string that is not a number)."""
+    if isinstance(x, bool):
+        return float('nan')
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        try:
+            return float(x)
+        except ValueError:
+            return float('nan')
+    return float('nan')
+
+
+def _open_time(r):
+    """The row's openTime in integer ms, or None when it is not a finite whole number (SQ-B1: not a bar)."""
+    x = r.get('openTime')
+    if isinstance(x, int) and not isinstance(x, bool):
+        return x
+    if isinstance(x, str):
+        try:
+            return int(x)
+        except ValueError:
+            pass
+    v = _number(x)
+    if not np.isfinite(v) or v != int(v):
+        return None
+    return int(v)
+
+
 def read_side(dirpath, diag, side):
-    """Every row of one side's day files: {openTime: (o, h, l, c)} (the first row of a repeated time kept)."""
+    """Every row of one side's day files: {openTime: (o, h, l, c)} (the first row of a repeated time kept).
+    A file is a read failure when it is not GMO's shape (not JSON, status ≠ 0, no data list; 20 (a)); a malformed row
+    inside a readable file is handled as MALFORMED_ROW says (SQ-B1): a row that is not a bar is counted under nan, a
+    price that is not a number is kept as NaN (load_pair removes and counts that time)."""
     rows = {}
     if not os.path.isdir(dirpath):
         return rows
@@ -314,19 +366,26 @@ def read_side(dirpath, diag, side):
         try:
             with open(path, 'rb') as f:
                 j = json.loads(f.read())
-            if not isinstance(j, dict) or j.get('status') != 0 or not isinstance(j.get('data'), list):
-                diag.failed.append((path, 'status/shape'))
-                continue
-            for r in j['data']:
-                t = int(r['openTime'])
-                v = (float(r['open']), float(r['high']), float(r['low']), float(r['close']))
-                diag.rows[side] += 1
-                if t in rows:
-                    diag.dup += 1
-                    continue
-                rows[t] = v
-        except (OSError, ValueError, KeyError, TypeError) as e:
+        except (OSError, ValueError) as e:
             diag.failed.append((path, repr(e)))
+            continue
+        if not isinstance(j, dict) or j.get('status') != 0 or not isinstance(j.get('data'), list):
+            diag.failed.append((path, 'status/shape'))
+            continue
+        for r in j['data']:
+            diag.rows[side] += 1
+            t = _open_time(r) if isinstance(r, dict) else None
+            v = tuple(_number(r.get(k)) for k in ('open', 'high', 'low', 'close')) if t is not None else None
+            if MALFORMED_ROW == 'readFailure' and (t is None or not all(np.isfinite(x) for x in v)):
+                diag.failed.append((path, 'malformed row'))
+                break
+            if t is None:
+                diag.nan += 1                      # not a bar (SQ-B1)
+                continue
+            if t in rows:
+                diag.dup += 1
+                continue
+            rows[t] = v
     return rows
 
 
@@ -368,6 +427,8 @@ def load_pair(gmo_dir, pair, pi, period, diag, interval='5min'):
             diag.one_side += 1
             continue
         b, a = bid[t], ask[t]
+        # 18 C1「中値が NaN の足は、番号を付ける前に取り除いて数を出す」: a price that is not a finite number makes the
+        # time's mid not a number (SQ-B1: after the one-side test, before the crossed test)
         if not all(np.isfinite(x) for x in b + a):
             diag.nan += 1
             continue
