@@ -4,6 +4,8 @@
 // 20 (i): the log carries the checks' names and verdicts, the read lines and sha256s only (and, in made-up
 // modes, MADEUP lines); any other line is refused and fails print.items.
 
+import { ITEM_TABLE, MEASURES, holdPrintKeys } from "./chartbest-const.ts";
+
 export interface Check {
   ok: boolean;
   n: number;
@@ -111,6 +113,11 @@ export class Checks {
 // 20 (i): the items print.txt may hold (a key matches one of these), and nothing else
 // (a key ending ".lo" or "Lo" is an interval of 15: the points and counts added by the review — W (すべての中), the
 // unresolved / amb counts, the shift summary, Δ by direction and pair — never end so)
+// gates-05: the sentences and the owner's way are listed key by key (a source is one of the 59 items or an email; the
+// owner's way's keys are chartbest-const.ts holdPrintKeys, its 1〜8), not by a wildcard
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const SRC_RE = `(?:${[...ITEM_TABLE.map((r) => r.id), ...MEASURES].map(esc).join("|")})`;
+const holdKeysRe = (account: "full" | "h2"): RegExp => new RegExp(`^hold\\.${SRC_RE}\\.${account}\\.(?:${["done", ...holdPrintKeys(account)].map(esc).join("|")})$`);
 export const PRINT_ITEMS: RegExp[] = [
   /^run\.(set|seed|period|flip|plant|full)$/,
   /^s0\.[A-Za-z0-9-]+\.(H1|H2)\.(counted|weeks|r1|r2|r3|r4|both|noBlind|perWeek|wideShare|warmDate|missingDays|shifted|late)$/,
@@ -127,8 +134,10 @@ export const PRINT_ITEMS: RegExp[] = [
   /^s2\.[A-Za-z0-9-]+\.(p|holm|c1|c2|c3|c4|c5|judgment|form|mde|simLb|dU|dM|dULb|dMLb)$/,
   /^s2\.(promote|intervalsSeen)(\.[A-Za-z0-9-]+)?$/,
   /^s2\.dAB\.[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.(est|lo|hi)$/,
-  /^text\.[A-Za-z0-9_.-]+$/,
-  /^hold\.[A-Za-z0-9_.-]+$/,
+  new RegExp(`^text\\.(?:s1\\.(?:none|summary)|s2\\.(?:item\\.${SRC_RE}|final)|always\\.s[12])$`),
+  holdKeysRe("full"),
+  holdKeysRe("h2"),
+  new RegExp(`^hold\\.text\\.(?:hold\\.${SRC_RE}\\.(?:h2|full)|always\\.s2\\.hold)$`),
 ];
 
 export class Printer {

@@ -9,7 +9,9 @@
 // import alone writes no file and prints nothing). The specifier is computed, so `deno check` does not follow it:
 // research/ownerhold-account.ts, which it imports, does not type-check under the CI's Deno (it is never type-checked
 // in its own CI); the shapes used here are written out below (OhAnalysis …) and read back from the files it writes.
-// Its chart follows SIGS at import (the 15-minute chart when SIGS is unset); nothing analyse() computes depends on it.
+// Its chart follows SIGS at import (the 15-minute chart when SIGS is unset); of what analyse() computes, only its own
+// signalProbe check reads SIGS (its 'looked'), and that check compares nothing here (the reads carry no probe): holdOne
+// lists it as SKIP (gates-03).
 // Every place the chart's step matters is given here: the signals' T, base and P (5-minute bars: T = open + 5 min, a
 // late ULTRA signal's base the next bar's close, P = base + 2 min) and the dump's meta.json step 5, by which
 // ownerhold-check.py checks T, base and E against the 5-minute bars (hold.*.step5 checks both here).
@@ -26,11 +28,11 @@ import { quantile } from "./money-stats.ts";
 import { parseBisPolicy, rateBefore } from "./longhist-lib.ts";
 import { ULTRA_PAIRS, ultraLevels } from "../supabase/functions/_shared/ultra.ts";
 import type { PairBars } from "./chartbest-bars.ts";
-import { type Dir, PAIRS, type Period, SPEC, STEP, SYNTH_RATES } from "./chartbest-const.ts";
+import { type Dir, HOLD_PRINT, PAIRS, type Period, SPEC, STEP, SYNTH_RATES, holdPrintKeys, pairKeyOf } from "./chartbest-const.ts";
 import type { SigRec } from "./chartbest-events.ts";
 import { type LateSig, lateMailed } from "./chartbest-measures.ts";
 import type { LoadDiag } from "./chartbest-data.ts";
-import { type HoldFacts, type HoldRowFacts, type Placed, ROWS4, type Row4, placedCountOf } from "./chartbest-text.ts";
+import { type HoldFacts, type HoldRowFacts, type Placed, ROWS4, type Row4, holdVerdictOf, placedCountOf } from "./chartbest-text.ts";
 
 // ---- the shapes of research/ownerhold.ts used here (structural; ownerhold.ts's own types are not imported) ----------
 
@@ -58,6 +60,20 @@ interface OhSub {
   pips: number | null;
   yen: number | null;
 }
+// research/ownerhold-report.ts's quantiles (money-stats quantile) and its TP-within shares
+export interface OhQ {
+  n: number;
+  median: number | null;
+  p90: number | null;
+  p99: number | null;
+  max: number | null;
+}
+export interface OhWithin {
+  of: number;
+  tp: number;
+  share: number | null;
+}
+type OhSubOut = OhSub & { outcomes?: Record<string, number> };
 export interface OhLine {
   inEnd: number;
   A: number;
@@ -67,21 +83,30 @@ export interface OhLine {
   deadlines: number;
   capped: number;
   calls: number;
+  callEnds?: Record<string, number>;
   deposits: number;
   depositTotal: number;
+  // the first deposit after which the money put in reached 500,000 / 1,000,000 yen (−Infinity: the start had it)
+  reached50?: number | null;
+  reached100?: number | null;
+  maxDrawdown?: number;
   fates: Record<string, number>;
   fatesHalves: [Record<string, number>, Record<string, number>];
   winRate: number | null;
   outcomes: Record<string, number>;
   pips: number | null;
   yen: number | null;
-  path?: { byHalf: [OhSub, OhSub]; byPair: Record<string, OhSub> };
+  path?: { byHalf: [OhSubOut, OhSubOut]; byPair: Record<string, OhSubOut>; mae?: { tp: OhQ; notTp: OhQ }; maeYen?: { tp: OhQ; notTp: OhQ }; tpWithin?: Record<string, OhWithin> };
   [k: string]: unknown;
 }
 export interface OhPerEmail extends OhSub {
   emails: number;
   filled: number;
   held: number;
+  unfilled?: number;
+  mae?: { tp: OhQ; notTp: OhQ };
+  maeYen?: { tp: OhQ; notTp: OhQ };
+  tpWithin?: Record<string, OhWithin>;
   [k: string]: unknown;
 }
 export interface OhThird {
@@ -163,6 +188,8 @@ export const ownerholdInert = async (): Promise<OwnerHold> => {
 // ---- the signal lists (9: START ≤ T < END, ① and ② passed, ③ and ④ not applied; SQ-27: the second half by T) ------
 
 export const DELAY = 2;
+// an email's P (9: T + 2 min; a late ULTRA signal's base + 2 min, §8.111 3)
+export const pOfSig = (s: Sig): number => pOf(s, DELAY);
 export const START_YEN = 300_000;
 export const CAP_YEN = 1_000_000;
 export type Account = "full" | "h2";
@@ -318,38 +345,41 @@ export const mViewOf = (a: OhAnalysis, account: Account): MView => {
     mh: account === "h2" ? { none: raw.unl.main.mEnd, swap: raw.unl.mainSwap.mEnd } : null,
   };
 };
-export const verdictOf = (a: OhAnalysis, account: Account): Verdict => {
-  const acc = a.accounts;
-  const one = ROWS4.every((r) => acc[r].lcs === 0 && acc[r].deadlines === 0 && acc[r].capped === 0);
-  const m = mViewOf(a, account);
-  const twoAccounts = account === "full" ? ROWS4.every((r) => acc[r].A > 0 && acc[r].B > 0) : ROWS4.every((r) => acc[r].S > 0);
-  const twoM = account === "full" ? m.none.M1 > 0 && m.none.M2 > 0 && m.swap.M1 > 0 && m.swap.M2 > 0 : m.mh!.none > 0 && m.mh!.swap > 0;
-  const L = a.third.main.L;
-  return { one, twoAccounts, twoM, two: twoAccounts && twoM, three: L !== null && L > 0 };
-};
+// ①②③ come from the facts the sentences are written from (holdVerdictOf, the one derivation the hand cases text.hold.*
+// check too: indep-06); `two` is ② whole (the account rows and the all-emails view)
+export const verdictOfFacts = (f: HoldFacts): Verdict => ({ ...f.verdict, two: f.verdict.twoAccounts && f.verdict.twoM });
 const placedOf = (f: Record<string, number>, n: number): Placed => {
   const g = (k: string) => f[k] ?? 0;
   return { n, entered: g("tp") + g("lc") + g("deadline") + g("held"), unfilled: g("unfilled"), cancelCall: g("cancelCall"), cancelLc: g("cancelLc"), refusedMargin: g("refusedMargin"), refusedCall: g("refusedCall") };
 };
+// §8.102「楽天の知らせの時刻 τ＋35分」 (only for SPEC.holdCappedCallTime "notice"; research/ownerhold-account.ts's own
+// NOTICE is not imported: that file does not pass deno check here, SQ-H3 (a))
+const NOTICE_MS = 35 * MINUTE;
+// a row's calls as the sentences list them (the hand case text.hold.cappedCalls runs these on call records written by
+// hand): ①'s capped calls (U left after the notice's deposit) with the time SPEC.holdCappedCallTime names (SQ-PF1: τ),
+// U and the ending; the close-outs of the calls ended by the deadline, at the time the positions were closed
+export const cappedCallsOf = (calls: readonly OhCall[]): HoldRowFacts["cappedCalls"] =>
+  calls.filter((c) => c.uAfterDeposit !== null && c.uAfterDeposit > 0).map((c) => ({ tau: SPEC.holdCappedCallTime === "notice" ? c.tau + NOTICE_MS : c.tau, short: c.uAfterDeposit!, end: c.end }));
+export const deadlineAtOf = (calls: readonly OhCall[]): number[] => calls.filter((c) => c.end === "deadline").map((c) => c.endAt);
 const rowFactsOf = (a: OhAnalysis, row: Row4, n: number): HoldRowFacts => {
   const l = a.accounts[row];
   const out = a.raw!.outs[row];
   return {
     lcs: l.lcs, deadlines: l.deadlines, capped: l.capped,
     lcAt: out.lcs.map((x) => x.at),
-    deadlineAt: out.calls.filter((c) => c.end === "deadline").map((c) => c.endAt),
-    cappedCalls: out.calls.filter((c) => c.uAfterDeposit !== null && c.uAfterDeposit > 0).map((c) => ({ tau: c.tau, short: c.uAfterDeposit!, end: c.end })),
+    deadlineAt: deadlineAtOf(out.calls),
+    cappedCalls: cappedCallsOf(out.calls),
     A: l.A, B: l.B, S: l.S, inTotal: l.inEnd, placed: placedOf(l.fates, n),
   };
 };
-export const factsOf = (a: OhAnalysis, src: string, account: Account, email: boolean, n: number, v: Verdict): HoldFacts => {
+export const factsOf = (a: OhAnalysis, src: string, account: Account, email: boolean, n: number): HoldFacts => {
   const main = a.accounts.main;
   const opp = a.accounts.opposite;
   const halves = main.fatesHalves;
   const m = mViewOf(a, account);
   const pe = a.perEmail.main.all;
   const po = a.perEmail.opposite.all;
-  return {
+  const f: Omit<HoldFacts, "verdict"> = {
     src, account, email, timedOut: false,
     rows: Object.fromEntries(ROWS4.map((r) => [r, rowFactsOf(a, r, n)])) as Record<Row4, HoldRowFacts>,
     placedHalves: account === "full" ? [placedOf(halves[0], Object.values(halves[0]).reduce((x, y) => x + y, 0)), placedOf(halves[1], Object.values(halves[1]).reduce((x, y) => x + y, 0))] : null,
@@ -366,8 +396,8 @@ export const factsOf = (a: OhAnalysis, src: string, account: Account, email: boo
     perTradeParts: (account === "full" ? (["all", "first", "second"] as const) : (["all"] as const)).map((k) => ({
       rate: a.perEmail.main[k].winRate, pips: a.perEmail.main[k].pips, oppRate: a.perEmail.opposite[k].winRate, oppPips: a.perEmail.opposite[k].pips,
     })),
-    verdict: { one: v.one, twoAccounts: v.twoAccounts, twoM: v.twoM, three: v.three },
   };
+  return { ...f, verdict: holdVerdictOf(f) };
 };
 
 // the sentences' facts against the account lines they are read from: every email has one of the fates the sentences
@@ -483,7 +513,7 @@ export interface HoldOne {
   // the budget (9「計算が Actions の1 job（6時間）に収まらない時は…「出せなかった」」): not run, no numbers
   timedOut: boolean;
   seconds: number;
-  checks: Record<string, { ok: boolean; n: number; detail?: unknown }>;
+  checks: Record<string, { ok: boolean; n: number; detail?: unknown; skipped?: string }>;
   verdict: Verdict | null;
   suspects: SuspectRow[];
   facts: HoldFacts | null;
@@ -507,16 +537,60 @@ export const step5Problems = (meta: { step?: unknown; delay?: unknown }, sigs: r
   return bad;
 };
 
-// 9 の 1〜8 as print.txt lines (hold.<src>.<acct>.…): the win rates with their endings and the per-trade pips and yen,
-// the account's P/L A, B, S, the loss-cuts, calls and deposits, E*, M, ③, the placed shares, the verdicts
-const fmtNum = (x: number | null, d: number): string => (x === null || !Number.isFinite(x) ? "-" : x.toFixed(d));
-export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdict, suspects: SuspectRow[], n: number): Array<[string, string]> => {
+// 9 の 1〜8 as print.txt lines (hold.<src>.<acct>.<key>; the keys are chartbest-const.ts holdPrintKeys(account), every
+// value from analyse() and heldSummary, nothing computed here): 1 the win rates with their endings and the pips and yen
+// per trade, 2 the endings and the trades held at END with their price P/L, 3 the MAE (pips and yen, TP / not TP) and the
+// largest drawdown, 4 the TP-within shares, the hours to the TPs and the days the held ones were held, 5 the loss-cuts,
+// calls and deposits with their dates and the 500,000 / 1,000,000 yen dates, 6 placed and the refused / cancelled by
+// reason, 7 A, B, S and M, 8 the opposite-only account and ③; the full account's rows by half and every row by pair;
+// the per-trade view (main and opposite) whole, by half and by pair; E*, the verdicts and 13's suspicious rows
+const fmtNum = (x: number | null | undefined, d: number): string => (x === null || x === undefined || !Number.isFinite(x) ? "-" : x.toFixed(d));
+const fmtCount = (x: number | null | undefined): string => (x === null || x === undefined || !Number.isFinite(x) ? "-" : String(x));
+const isoKey = (t: number): string => `${new Date(t).toISOString().slice(0, 16)}Z`;
+const datesKey = (ts: readonly number[]): string => (ts.length ? [...ts].sort((x, y) => x - y).map(isoKey).join(";") : "-");
+// the 500,000 / 1,000,000 yen dates: a deposit's time, "start" when the start already had it, "-" when never reached
+const reachedKey = (x: number | null | undefined): string => (x === undefined || x === null ? "-" : x === -Infinity ? "start" : Number.isFinite(x) ? isoKey(x) : "-");
+const CALL_ENDS = ["deposit", "settle", "deadline", "lc", "open"];
+const callEndsKey = (ce: Record<string, number> | undefined): string => {
+  const e = ce ?? {};
+  return [...CALL_ENDS.map((k) => `${k}=${e[k] ?? 0}`), ...Object.keys(e).filter((k) => !CALL_ENDS.includes(k)).sort().map((k) => `${k}=${e[k]}`)].join(";");
+};
+const Q4 = ["median", "p90", "p99", "max"] as const;
+type HeldRow = { heldAtEnd: { n: number; floatingYenNoSwapSum: number; floatingYenNoSwapWorst: number | null; swapYenSum: number; inLoss: number; heldDays: { median: number | null; p90: number | null; max: number | null } }; hoursToTakeProfit: { n: number; median: number | null; p90: number | null; max: number | null } };
+export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdict, suspects: SuspectRow[], n: number, held: Record<string, unknown>): Array<[string, string]> => {
   const out: Array<[string, string]> = [];
   const put = (k: string, x: string | number) => out.push([`${key}.${k}`, String(x)]);
+  const maeOf = (pre: string, mae?: { tp: OhQ; notTp: OhQ }, maeYen?: { tp: OhQ; notTp: OhQ }) => {
+    for (const k of ["tp", "notTp"] as const) {
+      put(`${pre}mae.${k}.n`, fmtCount(mae?.[k]?.n));
+      for (const q of Q4) put(`${pre}mae.${k}.${q}`, fmtNum(mae?.[k]?.[q], 2));
+      for (const q of Q4) put(`${pre}maeYen.${k}.${q}`, fmtNum(maeYen?.[k]?.[q], 0));
+    }
+  };
+  const withinOf = (pre: string, w?: Record<string, OhWithin>) => {
+    for (const h of ["1d", "1w", "4w", "end"]) {
+      put(`${pre}tpWithin.${h}.share`, pct2(w?.[h]?.share ?? null));
+      put(`${pre}tpWithin.${h}.tp`, fmtCount(w?.[h]?.tp));
+      put(`${pre}tpWithin.${h}.of`, fmtCount(w?.[h]?.of));
+    }
+  };
+  const subOf = (pre: string, s: OhSubOut | undefined, placed: string | null) => {
+    const o = s?.outcomes ?? {};
+    put(`${pre}n`, fmtCount(s?.n));
+    put(`${pre}win`, pct2(s?.winRate ?? null));
+    put(`${pre}tp`, fmtCount(s ? o.tp ?? 0 : null));
+    put(`${pre}lc`, fmtCount(s ? o.lc ?? 0 : null));
+    put(`${pre}deadline`, fmtCount(s ? o.deadline ?? 0 : null));
+    put(`${pre}held`, fmtCount(s ? o.held ?? 0 : null));
+    put(`${pre}pips`, fmtNum(s?.pips, 2));
+    put(`${pre}yen`, fmtNum(s?.yen, 0));
+    if (placed !== null) put(`${pre}placed`, placed);
+  };
   put("signals", n);
-  for (const row of ["main", "mainSwap", "worst", "worstSwap", "opposite"]) {
+  for (const row of HOLD_PRINT.rows) {
     const l = a.accounts[row];
     const o = l.outcomes;
+    const r = a.raw!.outs[row];
     put(`${row}.win`, pct2(l.winRate));
     put(`${row}.tp`, o.tp ?? 0);
     put(`${row}.lc`, o.lc ?? 0);
@@ -531,21 +605,77 @@ export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdi
     put(`${row}.deadlines`, l.deadlines);
     put(`${row}.capped`, l.capped);
     put(`${row}.calls`, l.calls);
+    put(`${row}.callEnds`, callEndsKey(l.callEnds));
     put(`${row}.deposits`, l.deposits);
     put(`${row}.depositTotal`, fmtNum(l.depositTotal, 0));
     put(`${row}.in`, fmtNum(l.inEnd, 0));
+    put(`${row}.lcAt`, datesKey(r.lcs.map((x) => x.at)));
+    put(`${row}.deadlineAt`, datesKey(deadlineAtOf(r.calls)));
+    put(`${row}.cappedAt`, datesKey(cappedCallsOf(r.calls).map((c) => c.tau)));
+    put(`${row}.reached50`, reachedKey(l.reached50));
+    put(`${row}.reached100`, reachedKey(l.reached100));
     const p = placedOf(l.fates, n);
     put(`${row}.placed`, pct2(n ? placedCountOf(p) / n : null));
     put(`${row}.notPlaced`, `${p.refusedMargin};${p.refusedCall}`);
+    put(`${row}.unfilled`, p.unfilled);
+    put(`${row}.cancelCall`, p.cancelCall);
+    put(`${row}.cancelLc`, p.cancelLc);
+    put(`${row}.maxDrawdown`, fmtNum(l.maxDrawdown, 0));
+    maeOf(`${row}.`, l.path?.mae, l.path?.maeYen);
+    withinOf(`${row}.`, l.path?.tpWithin);
+    // 9「1〜8 は、前半・後半に分けても並べる」: the full account's rows by the signal's half (the placed share of the half's emails)
+    if (account === "full") {
+      for (const [h, k] of [["H1", 0], ["H2", 1]] as const) {
+        const fh = l.fatesHalves[k];
+        const nh = Object.values(fh).reduce((x, y) => x + y, 0);
+        subOf(`${row}.${h}.`, l.path?.byHalf[k], pct2(nh ? placedCountOf(placedOf(fh, nh)) / nh : null));
+      }
+    }
+    // §8.111 出すもの「5ペアまとめてと、ペアごと」
+    for (const pair of PAIRS) subOf(`${row}.${pairKeyOf(pair)}.`, l.path?.byPair[pair], null);
+  }
+  // §8.111 2・4: the trades still held at END (their price P/L in yen; the swap apart), how long they were held, how long
+  // the take profits took (heldSummary, the main and the main swap rows)
+  for (const row of HOLD_PRINT.heldRows) {
+    const h = held[row] as HeldRow | undefined;
+    const e = h?.heldAtEnd;
+    put(`${row}.heldEnd.n`, fmtCount(e?.n));
+    put(`${row}.heldEnd.yen`, fmtNum(e?.floatingYenNoSwapSum, 0));
+    put(`${row}.heldEnd.worstYen`, fmtNum(e?.floatingYenNoSwapWorst, 0));
+    put(`${row}.heldEnd.swapYen`, fmtNum(e?.swapYenSum, 0));
+    put(`${row}.heldEnd.inLoss`, fmtCount(e?.inLoss));
+    put(`${row}.heldDays.median`, fmtNum(e?.heldDays.median, 2));
+    put(`${row}.heldDays.p90`, fmtNum(e?.heldDays.p90, 2));
+    put(`${row}.heldDays.max`, fmtNum(e?.heldDays.max, 2));
+    const w = h?.hoursToTakeProfit;
+    put(`${row}.tpHours.n`, fmtCount(w?.n));
+    put(`${row}.tpHours.median`, fmtNum(w?.median, 2));
+    put(`${row}.tpHours.p90`, fmtNum(w?.p90, 2));
+    put(`${row}.tpHours.max`, fmtNum(w?.max, 2));
   }
   for (const side of ["main", "opposite"]) {
-    for (const part of ["all", "first", "second"] as const) {
+    for (const part of HOLD_PRINT.emailParts) {
       const e = a.perEmail[side][part];
-      put(`email.${side}.${part}.win`, pct2(e.winRate));
-      put(`email.${side}.${part}.tp`, e.tp);
-      put(`email.${side}.${part}.held`, e.held);
-      put(`email.${side}.${part}.pips`, fmtNum(e.pips, 2));
-      put(`email.${side}.${part}.yen`, fmtNum(e.yen, 0));
+      const pre = `email.${side}.${part}.`;
+      put(`${pre}emails`, e.emails);
+      put(`${pre}filled`, e.filled);
+      put(`${pre}unfilled`, fmtCount(e.unfilled));
+      put(`${pre}win`, pct2(e.winRate));
+      put(`${pre}tp`, e.tp);
+      put(`${pre}held`, e.held);
+      put(`${pre}pips`, fmtNum(e.pips, 2));
+      put(`${pre}yen`, fmtNum(e.yen, 0));
+      maeOf(pre, e.mae, e.maeYen);
+      withinOf(pre, e.tpWithin);
+    }
+    for (const pair of PAIRS) {
+      const e = a.perEmail[side].byPair[pair];
+      const pre = `email.${side}.${pairKeyOf(pair)}.`;
+      put(`${pre}win`, pct2(e?.winRate ?? null));
+      put(`${pre}tp`, fmtCount(e?.tp));
+      put(`${pre}held`, fmtCount(e?.held));
+      put(`${pre}pips`, fmtNum(e?.pips, 2));
+      put(`${pre}yen`, fmtNum(e?.yen, 0));
     }
   }
   put("estar", fmtNum(a.estar.main?.estar?.value ?? null, 0));
@@ -566,8 +696,32 @@ export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdi
   put("v1", v.one ? "yes" : "no");
   put("v2", v.two ? "yes" : "no");
   put("v3", v.three ? "yes" : "no");
-  put("suspicious", suspects.map((s) => `${s.scope}=${s.rate}`).join(";"));
+  // 13: the rows printed 100.00% or 0.00% ("-": none)
+  put("suspicious", suspects.length ? suspects.map((s) => `${s.scope}=${s.rate}`).join(";") : "-");
   return out;
+};
+// the print check of 9 の 1〜8: every key holdPrintKeys promises for the account, once, and nothing else
+export const printedProblems = (lines: ReadonlyArray<[string, string]>, key: string, account: Account): string[] => {
+  const want = new Set(holdPrintKeys(account).map((k) => `${key}.${k}`));
+  const seen = new Map<string, number>();
+  for (const [k] of lines) seen.set(k, (seen.get(k) ?? 0) + 1);
+  const bad: string[] = [];
+  for (const k of want) if (!seen.has(k)) bad.push(`missing ${k}`);
+  for (const [k, c] of seen) {
+    if (!want.has(k)) bad.push(`not promised ${k}`);
+    else if (c > 1) bad.push(`${k} printed ${c} times`);
+  }
+  for (const [k, v] of lines) if (v === "") bad.push(`${k} empty`);
+  return bad;
+};
+
+// ownerhold.ts's own checks that compare nothing here: its signal probes compare the sweep's own readers (§8.111 確かめ
+// B 1, its review fix 6「比べた数が0でも通る穴を塞いだ」), and chartbest's reads carry none (NO_PROBE), so its signalProbe
+// (whose 'looked' also follows its import-time SIGS) and a signalCut would pass on 0 compared. They are listed as SKIP
+// with the checks that cover the signal lists here (gates-03, hold-signalprobe-trivial)
+const NOT_HERE: Record<string, string> = {
+  signalProbe: "the owner's way's reads carry no probe; the signal lists are checked by 20 (b): measure.ultra.indicatorSignals, measure.macd.macdxSignals, measure.ultra.vsSignalsOf, measure.macd.vsReadOf and the items' look-ahead checks",
+  signalCut: "the owner's way's reads carry no cut; the look-ahead of the signal lists is 20 (b)'s (lookahead.* of the items, measure.* of the emails)",
 };
 
 export interface HoldOneSpec {
@@ -595,18 +749,21 @@ export const holdOne = async (oh: OwnerHold, x: HoldOneSpec): Promise<HoldOne> =
   await writeJson(`${dir}/analysis.json`, { ...a, dump: undefined, decisions: undefined, raw: undefined });
   const held = await heldSummary(`${dir}/dump`);
   await writeJson(`${dir}/held.json`, held);
-  const verdict = verdictOf(a, x.account);
   const suspects = suspectsOf(a);
-  const facts = factsOf(a, x.src, x.account, x.email, x.sigs.length, verdict);
+  const facts = factsOf(a, x.src, x.account, x.email, x.sigs.length);
+  const verdict = verdictOfFacts(facts);
   await writeJson(`${dir}/lines.json`, {
     src: x.src, account: x.account, ctx: x.ctx, signals: x.sigs.length,
-    accounts: Object.fromEntries(["main", "mainSwap", "worst", "worstSwap", "opposite"].map((r) => [r, a.accounts[r]])),
+    accounts: Object.fromEntries(HOLD_PRINT.rows.map((r) => [r, a.accounts[r]])),
     perEmail: { main: a.perEmail.main, opposite: a.perEmail.opposite },
     estar: a.estar, m: mViewOf(a, x.account), third: a.third, verdict, suspects, facts,
   });
   await Deno.writeTextFile(`${dir}/suspect-trades.csv`, suspectTradesCsv(a, x.sigs, x.ctx.split, suspects));
   const checks: HoldOne["checks"] = {};
-  for (const [k, c] of Object.entries(a.checks)) checks[k] = { ok: c.ok, n: c.n ?? 1, ...(c.ok ? {} : { detail: c.why || c.detail }) };
+  for (const [k, c] of Object.entries(a.checks)) {
+    if (NOT_HERE[k] !== undefined) checks[k] = { ok: true, n: 0, skipped: NOT_HERE[k] };
+    else checks[k] = { ok: c.ok, n: c.n ?? 1, ...(c.ok ? {} : { detail: c.why || c.detail }) };
+  }
   const hb = heldAgainstLines(held, a);
   checks.held = { ok: hb.length === 0, n: hb.length || 2, ...(hb.length ? { detail: hb.slice(0, 5) } : {}) };
   const meta = JSON.parse(await Deno.readTextFile(`${dir}/dump/meta.json`)) as { step?: unknown; delay?: unknown };
@@ -614,7 +771,10 @@ export const holdOne = async (oh: OwnerHold, x: HoldOneSpec): Promise<HoldOne> =
   checks.step5 = { ok: sp.length === 0, n: sp.length || x.sigs.length, ...(sp.length ? { detail: sp } : {}) };
   const fp = factsProblems(facts, a, x.sigs.length);
   checks.facts = { ok: fp.length === 0, n: fp.length || x.sigs.length, ...(fp.length ? { detail: fp.slice(0, 5) } : {}) };
-  const lines = holdLines(`hold.${x.src}.${x.account}`, a, x.account, verdict, suspects, x.sigs.length);
+  const key = `hold.${x.src}.${x.account}`;
+  const lines = holdLines(key, a, x.account, verdict, suspects, x.sigs.length, held);
+  const pp = printedProblems(lines, key, x.account);
+  checks.printed = { ok: pp.length === 0, n: pp.length || lines.length, ...(pp.length ? { detail: pp.slice(0, 5) } : {}) };
   return { src: x.src, account: x.account, email: x.email, dir, signals: x.sigs.length, timedOut: false, seconds: (Date.now() - t0) / 1000, checks, verdict, suspects, facts, lines };
 };
 
@@ -634,25 +794,38 @@ export interface HoldRunIn {
   sources: readonly HoldSource[];
   rates: Rates;
   outDir: string;
-  // minutes of wall clock for the whole owner's way; a source × account not started by then is 「出せなかった」
-  budgetMin: number;
+  // 9「合図がとても多い項目で、計算が Actions の1 job（6時間）に収まらない時は、その項目のオーナーの持ち方は「出せなかった」
+  // と書く」: an item's account not started by this time (ms since 1970: the job's start + CB_HOLD_BUDGET_MIN, see
+  // research/chartbest-modes.ts) is 「出せなかった」. A started account runs to its end (analyse() is synchronous)
+  deadlineMs: number;
+  // the clock (a test can pass its own)
+  now?: () => number;
 }
+// the marker of an account left out by the budget (SQ-PF4): hold/<src>-<acct>/timed-out.json, and no dump
+export const TIMED_OUT_FILE = "timed-out.json";
+// 9 and 20 (c): the two emails' accounts run first and are never left out (9 names the items: 「その項目のオーナーの持ち方
+// は「出せなかった」」; 「今のメール2つの数字は、§8.111 の数字を再現して並べる」); then the items, each account started only
+// before the deadline. The results come back in the sources' order (the print and the sentences keep their order)
 export const holdRun = async (x: HoldRunIn): Promise<HoldOne[]> => {
   const oh = await ownerholdInert();
-  const t0 = Date.now();
+  const now = x.now ?? Date.now;
   const load = loadStatsOf(x.diags);
-  const out: HoldOne[] = [];
-  for (const s of x.sources) {
+  const order = [...x.sources.filter((s) => s.email), ...x.sources.filter((s) => !s.email)];
+  const done = new Map<string, HoldOne>();
+  for (const s of order) {
     for (const account of ACCOUNTS) {
       const ctx = ctxOf(x.period, account);
       const sigs = holdSigsOf(s.recs, s.late, x.bars, ctx.start, ctx.end);
-      if ((Date.now() - t0) / 60_000 > x.budgetMin) {
-        out.push({ src: s.src, account, email: s.email, dir: "", signals: sigs.length, timedOut: true, seconds: 0, checks: {}, verdict: null, suspects: [], facts: null, lines: [] });
+      if (!s.email && now() > x.deadlineMs) {
+        const dir = `${x.outDir}/${s.src}-${account}`;
+        await Deno.mkdir(dir, { recursive: true });
+        await writeJson(`${dir}/${TIMED_OUT_FILE}`, { src: s.src, account, signals: sigs.length, deadline: new Date(x.deadlineMs).toISOString(), at: new Date(now()).toISOString(), why: "the owner's way's budget (CB_HOLD_BUDGET_MIN from the job's start) ran out before this account started: 9「出せなかった」" });
+        done.set(`${s.src}|${account}`, { src: s.src, account, email: s.email, dir, signals: sigs.length, timedOut: true, seconds: 0, checks: {}, verdict: null, suspects: [], facts: null, lines: [] });
         continue;
       }
       const m1s = x.m1.map((m) => m1Window(m, ctx.start - DAY, ctx.end));
-      out.push(await holdOne(oh, { src: s.src, account, email: s.email, sigs, reads: readsOf(x.bars, sigs, ctx.start, ctx.end), m1s, ctx, rates: x.rates, load, outDir: x.outDir }));
+      done.set(`${s.src}|${account}`, await holdOne(oh, { src: s.src, account, email: s.email, sigs, reads: readsOf(x.bars, sigs, ctx.start, ctx.end), m1s, ctx, rates: x.rates, load, outDir: x.outDir }));
     }
   }
-  return out;
+  return x.sources.flatMap((s) => ACCOUNTS.map((account) => done.get(`${s.src}|${account}`)!));
 };
