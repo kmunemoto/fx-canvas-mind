@@ -547,7 +547,8 @@ export const step5Problems = (meta: { step?: unknown; delay?: unknown }, sigs: r
 const fmtNum = (x: number | null | undefined, d: number): string => (x === null || x === undefined || !Number.isFinite(x) ? "-" : x.toFixed(d));
 const fmtCount = (x: number | null | undefined): string => (x === null || x === undefined || !Number.isFinite(x) ? "-" : String(x));
 const isoKey = (t: number): string => `${new Date(t).toISOString().slice(0, 16)}Z`;
-const datesKey = (ts: readonly number[]): string => (ts.length ? [...ts].sort((x, y) => x - y).map(isoKey).join(";") : "-");
+// a list of times: ISO minutes oldest first, joined by ";" ("" when there is none, as print.txt's other lists)
+const datesKey = (ts: readonly number[]): string => [...ts].sort((x, y) => x - y).map(isoKey).join(";");
 // the 500,000 / 1,000,000 yen dates: a deposit's time, "start" when the start already had it, "-" when never reached
 const reachedKey = (x: number | null | undefined): string => (x === undefined || x === null ? "-" : x === -Infinity ? "start" : Number.isFinite(x) ? isoKey(x) : "-");
 const CALL_ENDS = ["deposit", "settle", "deadline", "lc", "open"];
@@ -696,11 +697,13 @@ export const holdLines = (key: string, a: OhAnalysis, account: Account, v: Verdi
   put("v1", v.one ? "yes" : "no");
   put("v2", v.two ? "yes" : "no");
   put("v3", v.three ? "yes" : "no");
-  // 13: the rows printed 100.00% or 0.00% ("-": none)
-  put("suspicious", suspects.length ? suspects.map((s) => `${s.scope}=${s.rate}`).join(";") : "-");
+  // 13: the rows printed 100.00% or 0.00% ("" when there is none, as s1 / s2's suspicious lines)
+  put("suspicious", suspects.map((s) => `${s.scope}=${s.rate}`).join(";"));
   return out;
 };
-// the print check of 9 の 1〜8: every key holdPrintKeys promises for the account, once, and nothing else
+// the print check of 9 の 1〜8: every key holdPrintKeys promises for the account, once, and nothing else; an empty value
+// only for a list (the suspicious rows, the dates), a missing number is "-"
+const LIST_KEY = /\.(suspicious|lcAt|deadlineAt|cappedAt)$/;
 export const printedProblems = (lines: ReadonlyArray<[string, string]>, key: string, account: Account): string[] => {
   const want = new Set(holdPrintKeys(account).map((k) => `${key}.${k}`));
   const seen = new Map<string, number>();
@@ -711,7 +714,7 @@ export const printedProblems = (lines: ReadonlyArray<[string, string]>, key: str
     if (!want.has(k)) bad.push(`not promised ${k}`);
     else if (c > 1) bad.push(`${k} printed ${c} times`);
   }
-  for (const [k, v] of lines) if (v === "") bad.push(`${k} empty`);
+  for (const [k, v] of lines) if (v === "" && !LIST_KEY.test(k)) bad.push(`${k} empty`);
   return bad;
 };
 
