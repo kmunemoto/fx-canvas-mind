@@ -41,7 +41,8 @@ const jst = (iso: string) => {
 // #155: and Q-Trend's and ULTRA's signals, on every pair of the live chart
 // (a row to follow a timeframe on all of them at once).
 // #275: and the MACD peak-and-valley rule's, on its own charts (the server
-// sends them: GMO's currency pairs, 5 minutes; #324: 1 hour from v25).
+// sends them: GMO's currency pairs, 5 minutes; #324: 1 hour from v25;
+// #345: and gold's 1 hour from v27).
 // #291: and the owner's video's way (liquidity sweep + EMA cross), on its own
 // chart (gold's 1-minute).
 const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {

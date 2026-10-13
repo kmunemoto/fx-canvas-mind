@@ -375,13 +375,13 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     const s = withMacdx({ subscriptions: [{ pair: "USD/JPY", interval: "1h", rule: "macdx" }, { pair: "USD/JPY", interval: "5min", rule: "ultra" }] });
     expect(s.indicator!.macdx).toEqual({ pairs: [...MACDH_PAIRS], intervals: ["1h"] });
     expect(s.subscriptions.map((x) => x.rule)).toEqual(["macdx", "ultra"]);
-    // its own charts: the 1-hour chart of the owner's five pairs (#324; the 5-minute one no longer)
+    // its own charts: the 1-hour chart of the owner's five pairs (#324; the 5-minute one no longer) and gold's (#345, v27)
     expect(indicatorChartOffered(s, "USD/JPY", "1h", "macdx")).toBe(true);
     expect(indicatorChartOffered(s, "EUR/USD", "1h", "macdx")).toBe(true);
     expect(indicatorChartOffered(s, "GBP/JPY", "1h", "macdx")).toBe(false);
     expect(indicatorChartOffered(s, "USD/JPY", "5min", "macdx")).toBe(false);
     expect(indicatorChartOffered(s, "USD/JPY", "15min", "macdx")).toBe(false);
-    expect(indicatorChartOffered(s, "XAU/USD", "1h", "macdx")).toBe(false);
+    expect(indicatorChartOffered(s, "XAU/USD", "1h", "macdx")).toBe(true);
     expect(indicatorChartOffered(s, "XAU/USD", "15min", "macdx")).toBe(false);
     expect(indicatorChartOffered(s, "HKD/JPY", "1h", "macdx")).toBe(false);
     // the others' are as they were
@@ -394,7 +394,7 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(indicatorChartOffered(old, "USD/JPY", "5min", "ultra")).toBe(true);
   });
 
-  it("has its own tab, with only the 1-hour column and GMO's pairs, and saves a tick under its own rule", async () => {
+  it("has its own tab, with only the 1-hour column and its six instruments (the owner's five pairs and gold), and saves a tick under its own rule", async () => {
     const call = vi.fn(async (body: Record<string, unknown>) =>
       body.action === "set" ? withMacdx({ subscriptions: [{ pair: "USD/JPY", interval: "1h", rule: "macdx" }] }) : withMacdx()
     );
@@ -404,22 +404,23 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
     expect(intro).toContain("高い位置で下に抜けたものを売り、低い位置で上に抜けたものを買いとするサインです");
     // #339: each pair's own level
-    expect(intro).toContain("高い・低いは、ペアごとに、そのペアの1時間のふだんの動きの 0.8倍で決めます（売りは MACD がその値以上、買いはその値のマイナス以下）");
+    expect(intro).toContain("高い・低いは、銘柄ごとに、その銘柄の1時間のふだんの動きの 0.8倍で決めます（売りは MACD がその値以上、買いはその値のマイナス以下）");
     expect(intro).not.toContain("0.085");
-    expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足だけです");
+    expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルと金（XAU/USD）の1時間足だけです");
     expect(intro).toContain("勝率と1回あたりの損益は、まだ測っていません");
-    expect(intro).toContain("この決まり自体には損切り・利確がないため、メールには ULTRA と同じ損切り13pips・利確 4・10・16pips の目安を付けます");
+    expect(intro).toContain("この決まり自体には損切り・利確がないため、メールには ULTRA と同じ損切り・利確の目安（ペアは損切り13pips・利確 4・10・16pips、金は損切り13ドル・利確 4・10・16ドル）を付けます");
     expect(intro).not.toContain("0から遠い山・谷の近く");
     const grid = screen.getByTestId("signal-alerts-grid");
-    // one timeframe, the all-symbols row and the owner's five pairs
+    // one timeframe, the all-symbols row, the owner's five pairs and gold
     expect(grid.querySelectorAll("thead th")).toHaveLength(2);
     expect(grid.querySelectorAll("thead th")[1].textContent).toBe("1時間");
     expect(grid.querySelectorAll("tbody tr")).toHaveLength(1 + MACDH_PAIRS.length);
-    expect(MACDH_PAIRS).toHaveLength(5);
+    expect(MACDH_PAIRS).toHaveLength(6);
     expect(screen.queryByTestId("signal-alert-macdx-GBP/JPY-1h")).toBeNull();
     expect(screen.getByTestId("signal-alert-macdx-USD/JPY-1h")).toBeTruthy();
     expect(screen.queryByTestId("signal-alert-macdx-USD/JPY-5min")).toBeNull();
-    expect(screen.queryByTestId("signal-alert-macdx-XAU/USD-1h")).toBeNull();
+    expect(screen.getByTestId("signal-alert-macdx-XAU/USD-1h")).toBeTruthy();
+    expect(screen.queryByTestId("signal-alert-macdx-XAU/USD-15min")).toBeNull();
     expect(screen.queryByTestId("signal-alert-macdx-HKD/JPY-1h")).toBeNull();
     expect(grid.querySelector("[data-testid$='-none']")).toBeNull();
     fireEvent.click(screen.getByTestId("signal-alert-macdx-USD/JPY-1h"));
@@ -478,10 +479,34 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     render(<SignalAlertSettings call={async () => withMacdx()} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
-    expect(notes).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足だけで判定します（オーナーが選んだ5ペア）");
+    expect(notes).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルと金の1時間足だけで判定します（オーナーが選んだ5ペアと、あとから足した金）");
+    // #345: gold's bars are Twelve Data's, rounded to 2 decimals, read from a minute after the close (and not checked against a later
+    // read); its quiet bars (the daily break, the hour before Sunday's open) are judged, and the weekend's last bar is not
+    expect(notes).toContain("金の足は Twelve Data のものです（GMOコインに金がないため。");
+    expect(notes).toContain("足は小数2桁に丸めた値で、MACD もその値で計算します");
+    expect(notes).toContain("確定の1分後から判定します。足は、すでに保存されている足（チャートや、サーバーの前回までの確認が読んで保存したもの）にその足があればそれを使い");
+    expect(notes).toContain("5ペアは足が確定した後、毎時0分・3分・5分の読み込みで判定して送ります");
+    expect(notes).toContain("Twelve Data の1日の読み込み回数は、チャートや金のほかの通知と分け合っています。1日の上限に達した日は、足を読めずに、金のメールが出ないことがあります");
+    expect(notes).not.toContain("巡回");
+    expect(notes).not.toContain("そのあとチャートが保存した足があれば");
+    expect(notes).toContain("金のチャートを開いていると、確定の数秒後に保存されることがあります");
+    expect(notes).toContain("読めたのに足がまだ無い時は、確定の約4分後にもう1回だけ読み、それでも無ければその足は送りません");
+    expect(notes).toContain("読み込みそのものが失敗した時は、確定から30分まで、1〜3分おきに読み直します。確定から30分を過ぎた足は送りません");
+    expect(notes).toContain("確定の直後（数秒後〜1分後）に読んだ足が、あとで読み直した足と同じかは、まだ確かめていません");
+    expect(notes).toContain("金の1時間足を、本番で確定の何秒後に送るかも、まだ見ていません");
+    expect(notes).toContain("チャートは MACD を丸めて見せる（円のペアは小数3桁、金は小数2桁）");
+    expect(notes).toContain("金曜 21:00 UTC（日本時間 土曜 6:00）以後、日曜 22:00 UTC（日本時間 月曜 7:00）より前に確定する足は判定しない");
+    expect(notes).toContain("週末は、判定しない時間を広めに取っています。金曜 21:00 UTC");
+    expect(notes).toContain("週末の前の最後の足は判定されません（米国の夏時間は金曜 20:00〜21:00 UTC の足、冬時間は金曜 20:00〜22:00 UTC の2本）");
+    expect(notes).toContain("金は、毎日の休み（1時間）の足と、日曜に市場が開く前の足（日曜 22:00 UTC 以後に確定するもの）にも、Twelve Data がほとんど動かない足を返すので、それらの足は判定します");
+    expect(notes).toContain("金曜の引け後の1本と、日曜の市場が開く前の数時間の足（日曜 22:00 UTC より前に確定するもの）は、判定はしませんが、ふだんの動きの平均には入ります");
+    expect(notes).toContain("ふだんの動きは、ほとんど動かない足の分だけ小さく計られます");
+    expect(notes).toContain("これは、保存された足（2026年8月16日〜10月12日、米国の夏時間）で見たことです。冬時間（11月1日から）の足と、祝日の足の動きは、まだ見ていません");
+    expect(notes).toContain("毎日の休みの頭に確定する足（米国の夏時間は 21:00 UTC、日本時間 6:00）のメールは、休みの間に届きます。休みの間に注文が通るかは、確かめていません");
+    expect(notes).toContain("金 約6.2ドル");
     expect(notes).toContain("ほかのペアは選べません");
     expect(notes).toContain("MACD と水準は丸めない値で比べます");
-    expect(notes).toContain("売りは、クロスした足の MACD が、そのペアの1時間のふだんの動きの 0.8倍以上、買いはその値のマイナス以下の時だけです");
+    expect(notes).toContain("売りは、クロスした足の MACD が、その銘柄の1時間のふだんの動きの 0.8倍以上、買いはその値のマイナス以下の時だけです");
     expect(notes).toContain("ふだんの動きは、判定する足で終わる600本の、終値から次の終値までの値動きの幅（上げ下げを問わない大きさ）の平均で、足ごとに計算し直します");
     expect(notes).toContain("0.8倍は、オーナーが豪ドル/ドルのチャートで示した高さ・低さ（ふだんの動きの約1.2倍と約0.9倍）が入る数字として、オーナーが選んだもの");
     expect(notes).toContain("ドル/円では、前に決めた 0.085（約0.75倍）より少し高くなります");
@@ -495,7 +520,7 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).not.toContain("1日100通");
   });
 
-  it("the all-symbols row follows the 1-hour chart of every pair offered under the rule (the owner's five), at once", async () => {
+  it("the all-symbols row follows the 1-hour chart of every pair offered under the rule (the owner's five and gold), at once", async () => {
     const call = vi.fn(async (body: Record<string, unknown>) =>
       body.action === "set_many" ? withMacdx({ subscriptions: body.on ? MACDH_PAIRS.map((pair) => ({ pair, interval: "1h", rule: "macdx" })) : [] }) : withMacdx()
     );
@@ -507,6 +532,78 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(sent.charts.map((c) => c.pair)).toEqual([...MACDH_PAIRS]);
     expect(new Set(sent.charts.map((c) => c.interval))).toEqual(new Set(["1h"]));
     await waitFor(() => expect((screen.getByTestId("signal-alert-macdx-all-1h") as HTMLInputElement).checked).toBe(true));
+  });
+
+  // #345: the owner already follows the five pairs when gold is added (docs §8.118): the all-symbols row then
+  // stands for part of them, and a click on it ticks everything (gold too), it does not take the five off
+  it("with the five pairs ticked and gold not, the all-symbols row is part-ticked and a click ticks all six (gold too)", async () => {
+    const five = MACDH_PAIRS.filter((p) => p !== "XAU/USD");
+    expect(five).toHaveLength(5);
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set_many"
+        ? withMacdx({ subscriptions: MACDH_PAIRS.map((pair) => ({ pair, interval: "1h", rule: "macdx" })) })
+        : withMacdx({ subscriptions: five.map((pair) => ({ pair, interval: "1h", rule: "macdx" })) })
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    const before = screen.getByTestId("signal-alert-macdx-all-1h") as HTMLInputElement;
+    expect(before.checked).toBe(false);
+    expect(before.indeterminate).toBe(true);
+    expect((screen.getByTestId("signal-alert-macdx-USD/JPY-1h") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId("signal-alert-macdx-XAU/USD-1h") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(before);
+    await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "set_many", rule: "macdx", on: true, lang: "ja" })));
+    const sent = call.mock.calls.find((c) => c[0].action === "set_many")![0] as { charts: Array<{ pair: string; interval: string }> };
+    expect(sent.charts.map((c) => c.pair)).toEqual([...MACDH_PAIRS]);
+    expect(sent.charts.map((c) => c.pair)).toContain("XAU/USD");
+    expect(new Set(sent.charts.map((c) => c.interval))).toEqual(new Set(["1h"]));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-macdx-XAU/USD-1h") as HTMLInputElement).checked).toBe(true));
+    const after = screen.getByTestId("signal-alert-macdx-all-1h") as HTMLInputElement;
+    expect(after.checked).toBe(true);
+    expect(after.indeterminate).toBe(false);
+  });
+
+  it("gold's own tick saves under the MACD rule on 1 hour, and ULTRA's gold ticks are another rule's", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) =>
+      body.action === "set" ? withMacdx({ subscriptions: [{ pair: "XAU/USD", interval: "1h", rule: "macdx" }] }) : withMacdx()
+    );
+    render(<SignalAlertSettings call={call} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    fireEvent.click(screen.getByTestId("signal-alert-macdx-XAU/USD-1h"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "XAU/USD", interval: "1h", on: true, rule: "macdx", lang: "ja" }));
+    await waitFor(() => expect((screen.getByTestId("signal-alert-macdx-XAU/USD-1h") as HTMLInputElement).checked).toBe(true));
+    // ULTRA's tick on gold's 1-hour chart is its own
+    fireEvent.click(screen.getByTestId("signal-alerts-rule-ultra"));
+    expect((screen.getByTestId("signal-alert-ultra-XAU/USD-1h") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("without Pro gold cannot be newly ticked under the MACD rule (nor the all-symbols row), but a tick already there can be taken off", async () => {
+    render(
+      <SignalAlertSettings
+        call={async () => withMacdx({ allowed: false, subscriptions: [{ pair: "XAU/USD", interval: "1h", rule: "macdx" }] })}
+      />
+    );
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-pro-only")).toBeTruthy();
+    expect((screen.getByTestId("signal-alert-macdx-XAU/USD-1h") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId("signal-alert-macdx-XAU/USD-1h") as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByTestId("signal-alert-macdx-USD/JPY-1h") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId("signal-alert-macdx-all-1h") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("without Pro, with the five pairs ticked and gold not, gold cannot be newly ticked and the all-symbols row is off, while the five ticks can be taken off", async () => {
+    const five = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"];
+    render(<SignalAlertSettings call={async () => withMacdx({ allowed: false, subscriptions: five.map((pair) => ({ pair, interval: "1h", rule: "macdx" })) })} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
+    expect(screen.getByTestId("signal-alerts-pro-only")).toBeTruthy();
+    const box = (id: string) => screen.getByTestId(id) as HTMLInputElement;
+    expect(box("signal-alert-macdx-XAU/USD-1h").checked).toBe(false);
+    expect(box("signal-alert-macdx-XAU/USD-1h").disabled).toBe(true);
+    expect(box("signal-alert-macdx-all-1h").disabled).toBe(true);
+    for (const pair of five) {
+      expect(box(`signal-alert-macdx-${pair}-1h`).checked).toBe(true);
+      expect(box(`signal-alert-macdx-${pair}-1h`).disabled).toBe(false);
+    }
   });
 
   it("names a MACD alert in the recent list, whatever the rule id's tail", async () => {
@@ -532,16 +629,37 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
     expect(screen.getByTestId("signal-alerts-rule-macdx").textContent).toBe("MACD peak/valley");
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("a SELL where it crosses below with MACD at or above 0.8 times the pair's usual hourly move, a BUY where it crosses above with MACD at or below minus that, each pair on its own scale");
+    expect(intro).toContain("a SELL where it crosses below with MACD at or above 0.8 times the instrument's usual hourly move, a BUY where it crosses above with MACD at or below minus that, each on its own scale");
     expect(intro).not.toContain("0.085");
-    expect(intro).toContain("On the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD only.");
+    expect(intro).toContain("On the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only.");
     expect(intro).toContain("have not been measured");
-    expect(intro).toContain("The rule has no stop or target of its own, so the email carries ULTRA's stop of 13 pips");
+    expect(intro).toContain("The rule has no stop or target of its own, so the email carries ULTRA's stop and targets (13 pips and 4, 10 and 16 pips on a currency pair; $13 and $4, $10 and $16 on gold)");
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
     expect(notes).toContain("The usual move is the mean size of the move from one close to the next, up or down, over the 600 bars ending at the bar judged, worked out again at every bar");
     expect(notes).toContain("the ±0.085 rule mailed after it was not measured");
     expect(notes).toContain("This rule's win rate and its profit or loss a trade have not been measured");
     expect(notes).toContain("The other pairs are not offered.");
+    expect(notes).toContain("Gold's bars are Twelve Data's (GMO Coin does not carry gold;");
+    expect(notes).toContain("A bar more than half an hour after its close is not sent.");
+    expect(notes).toContain("Judging starts a minute after the close. The bar is taken from the bars already stored (read and kept by the chart or by the server's earlier checks) if they have it");
+    expect(notes).toContain("The five pairs are judged and sent by the reads at 0, 3 and 5 minutes after the bar closes");
+    expect(notes).toContain("Twelve Data's daily allowance of reads is shared with the chart and gold's other alerts, and on a day it runs out the bar cannot be read and no gold email may come");
+    expect(notes).not.toContain("sweep");
+    expect(notes).not.toContain("if the chart keeps it afterwards");
+    expect(notes).toContain("it is read once more about four minutes after the close, and if it is still not there the bar is not sent");
+    expect(notes).toContain("If the read itself fails, it is tried again every one to three minutes until half an hour after the close.");
+    expect(notes).toContain("The bars are rounded to 2 decimals and MACD is worked out on those.");
+    expect(notes).toContain("Whether a bar read soon after its close (a few seconds to a minute) is the same as one read again later has not been checked, and how many seconds after the close gold's 1-hour alert is sent has not been seen in production yet.");
+    expect(notes).toContain("The chart shows MACD rounded (to 3 decimals on the yen pairs, to 2 on gold)");
+    expect(notes).toContain("a bar that closes at or after Friday 21:00 UTC (Saturday 6:00 Japan time) and before Sunday 22:00 UTC (Monday 7:00 Japan time) is not judged, so the last bar before the weekend is not judged either (in US summer time the bar 20:00–21:00 UTC on Friday, in winter time the two bars 20:00–22:00 UTC)");
+    expect(notes).toContain("On gold, Twelve Data returns a bar that barely moves for the daily break (one hour) and for the hour before the market opens on Sunday (a bar that closes from 22:00 UTC on Sunday), and those bars are judged");
+    expect(notes).toContain("are not judged, but they count in the usual move");
+    expect(notes).toContain("so it comes out smaller than it would without them");
+    expect(notes).toContain("The time over the weekend when nothing is judged is drawn wide: a bar that closes at or after Friday 21:00 UTC");
+    expect(notes).toContain("the stored bars of 16 August to 12 October 2026 (US summer time) show");
+    expect(notes).toContain("winter-time bars (from 1 November) and the bars of holidays have not been looked at yet");
+    expect(notes).toContain("(21:00 UTC, 6:00 Japan time, in US summer time) arrives during the break; whether an order goes through during the break has not been checked");
+    expect(notes).toContain("about $6.2 on gold");
     expect(notes).toContain("MACD and the level are compared unrounded.");
     expect(notes).toContain("with both on, two emails can come at the same time");
     expect(notes).not.toContain("72.3%");

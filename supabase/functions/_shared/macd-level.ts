@@ -12,6 +12,9 @@
 // pairs: it takes in both crosses circled on AUD/USD (some 1.2 and 0.9 times
 // it); on USD/JPY it is a little above the 0.085 chosen there (some 0.75
 // times it when it was chosen, 2026-10-12).
+// #345 (docs §8.118): from v27 gold (XAU/USD) is on it as well, 2026-10-13,
+// the owner's 「金も1時間足でmacdのクロスでメールを送るようにして」: the same
+// rule, in dollars (gold's bars are Twelve Data's, not GMO's).
 //
 // THE RULE: at a closed 1-hour bar i, judged on the 600 closed bars ending at
 // i (the chart's history; MACD from those bars alone, as decideOnWindow does),
