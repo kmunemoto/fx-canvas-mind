@@ -1,0 +1,8 @@
+-- cut = the day's last bar opened BEFORE the last bar production could judge in the range (last_judgeable_ot of the gold guard): the stored row is cut, or has a hole at the end of
+-- the day. Gold's stored row is the latest read of Twelve Data and the sweep stops at the weekend window: on a Saturday the row of a Friday day ends with the 19:00 bar, because
+-- the 20:00 bar closes at Friday 21:00 (weekend window), is never judged and is not in the row yet. v3 compared the last bar with END_MS minus 1 h and flagged that as
+-- last_day_bar_not_at_day_end (review finding F1, 2026-10-13); v4 compares it with the last judgeable bar. A row read later that does hold the 20:00 bar is fine too.
+dayend as (
+  select y.symbol, coalesce(ss.day_bars > 0 and ss.last_day_ot < g.last_judgeable_ot, false) as cut
+  from syms y cross join gg g join sstat ss on ss.symbol = y.symbol
+),

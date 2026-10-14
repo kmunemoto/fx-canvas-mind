@@ -1,0 +1,9 @@
+-- pairs-v4.sql  (task #357)  -  the morning check of the 1-hour MACD e-mails for the FIVE PAIRS (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD), rule v4.
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited. Bars that opened before 2026-10-14 21:00 UTC (1792011600000) were judged by the v3 rule: use pairs.min.sql for those days.
+-- It recounts the rule macdx_12_26_9_w600_1h_z90of120_v4 (signal-alerts v28: the MACD line, the blue line, comes into the top / bottom 90% band of the MACD pane of the newest 120 bars)
+-- from public.gmo_kline_files as production reads the data, and compares the expected entries with public.signal_alerts (kind signal, interval 1h, that rule id).
+-- It reads no user_id / event_id / e-mail address and writes nothing.
+-- Result: columns row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md for every field.
+-- Written to be run in well under a minute (one day: about 1 second).
