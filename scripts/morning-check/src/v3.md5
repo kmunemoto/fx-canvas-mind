@@ -1,0 +1,8 @@
+17fb04aeda4bbdca8c9fb32c94f33dc4  ../pairs.sql
+28a34a48fe80941ac49ea97feefcf09e  ../pairs.min.sql
+affd4c1a32bc79a287461d7d3470e849  ../gold.sql
+f82190d8983574c5063912eaebacd447  ../gold.min.sql
+bb1d959c1d1da9d41336e1a817eff2bf  ../debug-closes.sql
+d34181db004c8c7930a09766d34f9ea6  ../debug-closes.min.sql
+bcc2e23b91974038c19c7a199b778239  ../debug-closes-gold.sql
+d9e5e168f4ec4c4e44ec6c0798166705  ../debug-closes-gold.min.sql

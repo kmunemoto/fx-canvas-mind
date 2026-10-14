@@ -1,0 +1,81 @@
+-- ===== BACK 1 (v4; the same text in pairs-v4.sql and gold-v4.sql): the bands, the decision and near_edge per judged bar, facts per instrument, and the mails =====
+-- one row per judged bar. m = the blue line, sg = the orange line, h = the bars (m - sg); tn / bn = the top / bottom edge of the MACD pane of the 120 positions ending at the
+-- bar (the highest / lowest of 0, m, sg and h); tp / bp / mp = the same one bar earlier (the 120 positions ending at the bar before, from the same 600-bar computation).
+-- The bands (macd-level.ts zoneAt): top band = tn > 0 and m >= 0.9 * tn, bottom band = bn < 0 and m <= 0.9 * bn; 0.9 = the double nearest 0.9 (ZONE_SHARE = 90 / 100 is that
+-- double), the product is held against as it comes, nothing is rounded; only m comes into a band, sg and h only set the edges. in_top / in_bot = in a band at the bar,
+-- p_top / p_bot = in a band one bar earlier. sd = the entry (zoneEntryAt): SELL = in the top band now and not before, BUY = in the bottom band now and not before, null = no
+-- entry (the two cannot both hold: the top band is above zero, the bottom band below). clo = the bar's own rounded close (a mail's `entry` is this).
+fin2 as (
+  select f.symbol, f.ot, f.jr, y.pair, y.d, f.m, f.sg, f.h, f.tn, f.bn, f.clo, f.e12_p, f.e26_p, f.sg_p, f.ta_p, f.tb_p,
+         b.in_top, b.in_bot, b.p_top, b.p_bot,
+         case when b.in_top and not b.p_top then 'SELL' when b.in_bot and not b.p_bot then 'BUY' end as sd
+  from fin f join syms y on y.symbol = f.symbol
+  cross join lateral (select (f.tn > 0 and f.m >= 0.9::float8 * f.tn) as in_top, (f.bn < 0 and f.m <= 0.9::float8 * f.bn) as in_bot,
+                             (f.tp > 0 and f.mp >= 0.9::float8 * f.tp) as p_top, (f.bp < 0 and f.mp <= 0.9::float8 * f.bp) as p_bot) b
+),
+-- near_edge: would moving the judged bar's OWN close (the last of its 600) by 2 ticks, up or down, change the decision at that bar (SELL / BUY / none)? Production read the live
+-- file 2-6 s after the close and the table holds the final one, so a revised last close could flip a fire. One tick = 10^-d (JPY pairs 0.001, other pairs 0.00001, gold 0.01); the
+-- moved close is the rounded price 2 ticks away (exact decimal arithmetic, then the nearest double, like the rounded closes themselves). Only the last step of the recursion
+-- depends on that close, so that step is evaluated again here in closed form from the state one row earlier (e12_p, e26_p, sg_p, ta_p, tb_p), the same double operations
+-- as in the recursion; the bar before (tp, bp, mp, p_top, p_bot) does not depend on it. The decision is monotone in the close (SELL for high closes, BUY for low ones, none
+-- between), so the two end points tell whether any move inside +-2 ticks changes it.
+ne as (
+  select f.symbol, f.jr, bool_or(coalesce(x.sd, '') <> coalesce(f.sd, '')) as near_edge
+  from fin2 f
+  join s on s.symbol = f.symbol and s.rn = f.jr
+  cross join (values (-2), (2)) q(k)
+  cross join lateral (select (s.cn + q.k / (10::float8 ^ s.d)::numeric)::float8 as c2) c
+  cross join lateral (select (2.0::float8 / 13.0::float8) * c.c2 + (1 - (2.0::float8 / 13.0::float8)) * f.e12_p as ne12,
+                             (2.0::float8 / 27.0::float8) * c.c2 + (1 - (2.0::float8 / 27.0::float8)) * f.e26_p as ne26) a
+  cross join lateral (select a.ne12 - a.ne26 as nm) b
+  cross join lateral (select (2.0::float8 / 10.0::float8) * b.nm + (1 - (2.0::float8 / 10.0::float8)) * f.sg_p as nsg) z
+  cross join lateral (select greatest(f.ta_p, b.nm, z.nsg, b.nm - z.nsg) as t2, least(f.tb_p, b.nm, z.nsg, b.nm - z.nsg) as b2) e
+  cross join lateral (select case when e.t2 > 0 and b.nm >= 0.9::float8 * e.t2 and not f.p_top then 'SELL'
+                                  when e.b2 < 0 and b.nm <= 0.9::float8 * e.b2 and not f.p_bot then 'BUY' end as sd) x
+  group by f.symbol, f.jr
+),
+-- fire = the entry (the rule fires at this bar). mk_top / mk_bot = 0.9 * tn / 0.9 * bn, the marks the bands start at (the same products the comparisons above use).
+-- tick = one unit of the last decimal.
+fx2 as (
+  select f.*, (f.sd is not null) as fire, n.near_edge, 0.9::float8 * f.tn as mk_top, 0.9::float8 * f.bn as mk_bot, power(10::float8, -f.d) as tick
+  from fin2 f join ne n on n.symbol = f.symbol and n.jr = f.jr
+),
+-- the series per instrument: its length, the bars of the day (first / last open: a whole day ends with the bar that opened 1 h before the range ends; hours missing
+-- between the first and the last bar of the day mean a hole in the data), bad closes, and the rank of the day's first bar
+sstat as (
+  select y.symbol, count(s.rn) as history_bars,
+         count(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as day_bars,
+         count(s.rn) filter (where s.bad) as bad_mantissas,
+         min(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_rank,
+         min(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_ot,
+         max(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as last_day_ot
+  from syms y cross join pp left join s on s.symbol = y.symbol
+  group by y.symbol
+),
+wstat as (
+  select y.symbol, count(f.ot) as windows, count(f.ot) filter (where f.in_top or f.in_bot) as band_bars, count(f.ot) filter (where f.fire) as exp_fires
+  from syms y left join fx2 f on f.symbol = y.symbol
+  group by y.symbol
+),
+-- the mails: public.signal_alerts rows of THIS rule on the 1-hour chart, grouped per signal (pair, side, bar); no user_id / event_id is read
+mails as (
+  select a.pair, a.side, (extract(epoch from a.bar_time) * 1000)::bigint as ot,
+         count(*) as n_rows, count(*) filter (where a.status = 'sent') as n_sent, string_agg(distinct a.status, ',') as statuses,
+         min(extract(epoch from (a.sent_at - a.closed_at))) as lag_min, max(extract(epoch from (a.sent_at - a.closed_at))) as lag_max,
+         min(a.entry) as entry, max(a.entry) as entry_max
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule = 'macdx_12_26_9_w600_1h_z90of120_v4'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair, a.side, a.bar_time
+),
+-- subscriptions now (count only) and rows of ANOTHER 1-hour macdx rule id in the range: any rule id but the v4 one, so the v3 rule's mails too (a renamed rule would make every mail look "missing")
+subs as (select pair, count(*) as n from public.signal_alert_subscriptions where interval = '1h' and rule = 'macdx' group by pair),
+othr as (
+  select a.pair, count(*) as n
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule like 'macdx%' and a.rule <> 'macdx_12_26_9_w600_1h_z90of120_v4'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair
+),

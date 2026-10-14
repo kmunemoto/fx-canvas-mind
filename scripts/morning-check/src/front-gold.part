@@ -1,8 +1,3 @@
--- ===== FRONT (gold): public.live_chart_fallback (XAU/USD, 1h) -> us(symbol, ot, seq, m8, d), the closed bars production judges on =====
--- instrument table (gold): the live_chart_fallback pair, the app's pair name, display order, the instant from which the rule was live for gold
--- (signal-alerts v27, 2026-10-13 05:31 UTC; the gold subscription was created 05:31:17; the first bar judged by it opened 05:00 UTC = 1791867600000), and the decimals
--- of the chart's rounding for gold (decimalsOf: 2).
-syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, 1791867600000::bigint as live_ms, 2 as d),
 -- gold has ONE stored row (the latest read of Twelve Data); the sweep replaces it at every read, so older versions of the row do not exist
 grow0 as (
   select f.bars, f.fetched_at, floor(extract(epoch from f.fetched_at) * 1000)::bigint as fetched_ms

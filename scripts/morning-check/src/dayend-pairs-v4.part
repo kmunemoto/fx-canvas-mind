@@ -1,0 +1,6 @@
+-- cut = the day's last bar is not the last bar of the GMO day (it opened at END_MS minus 1 h): a cut file, or a day that ends early (a holiday). The pairs' day files hold the
+-- Friday 20:00 bar although its close (Friday 21:00) is in the weekend window and production never judges it, so the same test as in v3 is right for the pairs.
+dayend as (
+  select y.symbol, (ss.day_bars > 0 and ss.last_day_ot <> pp.end_ms - 3600000) as cut
+  from syms y cross join pp join sstat ss on ss.symbol = y.symbol
+),
