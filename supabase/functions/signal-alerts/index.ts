@@ -34,9 +34,10 @@
 // 'qtrend' or 'ultra' (#275: or 'macdx', the MACD peak-and-valley rule on the
 // 5-minute chart of GMO's pairs; #324: on their 1-hour chart from v25, the
 // owner's levels; #345: and on gold's 1-hour chart from v27, read from
-// Twelve Data; #353: from v28 the blue line at 90% of the newest 120 bars'
-// top or bottom, no cross). Not recorded or settled (signal_events is
-// the two rules' record).
+// Twelve Data; #353: from v28 the blue line at 90% of the way from zero to
+// the top or bottom of the newest 120 bars' MACD pane (the highest or lowest
+// of the MACD line, the signal line and the histogram), no cross). Not
+// recorded or settled (signal_events is the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
 // Swissquote's gold price every few seconds all minute, recorded into

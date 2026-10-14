@@ -67,17 +67,26 @@
 // it does while a rise or a fall goes on) a bar where it is the highest of
 // the 120 is the edge itself, in the band; where the orange line or the bars
 // set it, the line is in only at 90% of theirs: just past zero after a long
-// stretch below it the orange line is still below zero, the bars (m - s)
-// stand above the line, and there is no SELL (nor a BUY just below zero
-// after a long stretch above it). Staying in a band mails nothing more;
-// going out and in again mails again (no gap is kept between, the owner's
-// 「90%より内側に戻るまで」 as it stands). With none of the 360 values above
-// zero there is no top band (no SELL; the bottom likewise). An old edge
-// leaving the 120 brings it toward zero, as the chart's pane shrinks: the
-// line can come into the band without moving. The chart adds 8% to the edges
-// as it draws them, takes in the forming bar, and works MACD out from the
-// bars it has read, so on the screen the line sits a little under the drawn
-// edge when it fires (docs §8.119).
+// stretch below it the orange line is mostly still below zero, the bars
+// (m - s) stand above the line, and mostly there is no SELL (nor a BUY just
+// below zero after a long stretch above it). Not always: the top is at least
+// the bar's own h = m - s, so with s below zero the line is in only if
+// m >= 9 * |s| (the orange line within a ninth of the line's height below
+// zero), and then it can be: 2 of the 124 entries on the stored bars (docs
+// §8.119), a SELL on AUD/USD and a BUY on EUR/USD, both at the bar after the
+// line crossed zero; made-up closes give one at the crossing bar itself
+// (src/test/indicator-alerts.test.tsx). Staying in a band mails nothing
+// more; going out and in again mails again (no gap is kept between, the
+// owner's 「90%より内側に戻るまで」 as it stands). With none of the 360 values
+// above zero there is no top band (no SELL; the bottom likewise). An old
+// edge leaving the 120 brings it toward zero, as the chart's pane shrinks:
+// the line can come into the band without moving. The chart pads the pane
+// by 8% of its height (top - bottom) above the top and below the bottom as
+// it draws it, takes in the forming bar, and works MACD out from the bars it
+// has read, so on the screen the line sits under the drawn edge when it
+// fires, mostly short of 90% of the way from zero to it (at the 124 stored
+// entries, on a pane drawn from their 120 closed bars, about 60% to 91%,
+// about 80% in the middle, 90% or more 3 times; docs §8.119).
 
 import { macd } from "./macd.ts";
 import { sidesOf } from "./macd-extreme.ts";

@@ -528,18 +528,38 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain(
       "枠の端が青い線で決まっている時（上げや下げが続いている時のふつうの形）は、青い線が120本の中で一番高くなった足（買いは一番低くなった足）では、青い線そのものが端なので、90%の所に届いています",
     );
+    // just past zero after a long stretch on the other side there is usually no entry, but not by the rule: with the
+    // orange line still on the other side and close to zero (within a ninth of the blue line), the bars stand only a
+    // little beyond the line and it can come to 90% of them (2 of the 124 entries on the stored bars, docs §8.119)
     expect(notes).toContain(
-      "枠の端がオレンジの線か棒で決まっている時は、青い線がその90%まで行かないと届きません。たとえば、長く0より下にいた青い線が0の線を越えたばかりの時は、オレンジの線がまだ0より下にあり、棒（青い線とオレンジの線の差）が青い線より高いので、売りは出ません（買いも同じ）",
+      "枠の端がオレンジの線か棒で決まっている時は、青い線がその90%まで行かないと届きません。たとえば、長く0より下にいた青い線が0の線を越えたばかりの時は、ふつうはオレンジの線がまだ0より下にあり、棒（青い線とオレンジの線の差）が青い線より高いので、売りは出ません（買いも同じ）。",
     );
+    expect(notes).toContain(
+      "ただし、オレンジの線がまだ0より下でも、0の線のすぐ近く（0の線から、青い線の高さの9分の1以内）にある時は、棒が青い線より少ししか高くないので、青い線が棒の90%以上に届いて、売りが出ることがあります（買いも同じ）。",
+    );
+    expect(notes).toContain(
+      "保存した1時間足（2026年5月下旬〜10月中旬。期間はペアにより違います）で、この決まりが出したはずの124回のうち2回がそうでした（豪ドル/ドルの売りとユーロ/ドルの買い。どちらも、青い線が0の線を越えた次の足）。",
+    );
+    // not the flat claim of the first make of the pane rule (that no SELL comes there at all)
+    expect(notes).not.toContain("越えたばかりの時は、オレンジの線がまだ0より下にあり");
+    expect(notes).not.toContain("売りは出ません（買いも同じ）。新しい120本");
     expect(notes).toContain("新しい120本の青い線・オレンジの線・棒がどれも0以下の時は、枠の上の端が0で、上の90%の所が無いので、売りは出ません（買いも同じで、どれも0以上の時は出ません）");
     // the pane's edges are the chart's (PriceChart.tsx, without its margin), so an old edge leaving is as the pane shrinking
     expect(notes).toContain("端を決めていた足が120本の外に出ると、90%の所が0の線に近づくので（チャートの枠が縮むのと同じです）、青い線が動かなくても届くことがあります。");
     expect(notes).toContain("チャートを拡大・縮小すると MACD の枠の高さは変わりますが、メールはいつも新しい120本で決めます");
-    // what the chart does that the email does not: the 8% margin it draws the pane with, and the bar still forming
+    // what the chart does that the email does not: the margin it draws the pane with (8% of its height above and below),
+    // so on the screen the line is usually short of 90% of the way to the drawn edge (measured on the stored bars,
+    // docs §8.119), and the bar still forming
     expect(notes).toContain(
-      "チャートは、MACD の枠を描く時に上下に少し（8%）余白を足しますが、メールの枠の端には、この余白を入れていません。そのため、メールが届いた時、画面では青い線が、描かれた枠の端より少し下に見えます",
+      "チャートは、MACD の枠を描く時に、上と下に枠の高さの8%ずつ余白を足しますが、メールの枠の端には、この余白を入れていません。そのため、メールが届いた時、画面では青い線が、描かれた枠の端より下に見え、0の線から描かれた枠の端までの90%には、ふつう届いていません。",
     );
-    expect(notes).toContain("チャートは作っている途中の足（まだ確定していない足）も入れて枠を決めますが、メールは確定した120本で決めます");
+    expect(notes).toContain(
+      "保存した1時間足（2026年5月下旬〜10月中旬。期間はペアにより違います）で、この決まりが出したはずの124回を、確定した120本で描いた枠で測ると、青い線は0の線から描かれた枠の端までの約60〜91%（中ほどは約80%）にあり、90%以上は3回だけでした。",
+    );
+    expect(notes).toContain(
+      "チャートは作っている途中の足（まだ確定していない足）も入れて枠を決めますが、メールは確定した120本で決めます（作っている足で枠が広がると、画面の青い線は、もっと下に見えます）。",
+    );
+    expect(notes).not.toContain("描かれた枠の端より少し下に見えます");
     // nothing of the first make of v28, never mailed (the 90% mark of the blue line's own highest or lowest)
     for (const no of ["90%の所は、青い線だけで決めます", "一番高かった値の90%", "一番高かった値が 0.200", "一番高かった足（買いは一番低かった足）", "新しい120本の青い線がずっと0以下", "90%より下に見えることがほとんど"]) {
       expect(notes, no).not.toContain(no);
@@ -694,18 +714,34 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     expect(notes).toContain(
       "Where the blue line sets the pane's edge (as it does while a rise or a fall goes on), at a bar where it is the highest of the 120 (for a BUY, the lowest) it is the edge itself, so past the 90% mark.",
     );
+    // just past zero after a long stretch on the other side there is usually no entry, but not by the rule (2 of the
+    // 124 entries on the stored bars, docs §8.119)
     expect(notes).toContain(
-      "Where the orange line or the bars set it, the blue line has to come to 90% of theirs: when the blue line has just crossed the zero line after a long time below it, the orange line is still below zero and the bars (the blue line less the orange one) stand above the blue line, so no SELL is sent (likewise no BUY).",
+      "Where the orange line or the bars set it, the blue line has to come to 90% of theirs: when the blue line has just crossed the zero line after a long time below it, the orange line is usually still below zero and the bars (the blue line less the orange one) stand above the blue line, so usually no SELL is sent (likewise no BUY).",
     );
+    expect(notes).toContain(
+      "But when the orange line, though still below zero, is close to it (within a ninth of the blue line's height from the zero line), the bars stand only a little above the blue line, the blue line can reach 90% of them, and a SELL can be sent (likewise a BUY): 2 of the 124 entries this rule would have made on the stored 1-hour bars (late May to mid-October 2026; the span differs by pair) were such, a SELL on AUD/USD and a BUY on EUR/USD, both at the bar after the blue line crossed the zero line.",
+    );
+    // not the flat claim of the first make of the pane rule (that no SELL is sent there at all)
+    expect(notes).not.toContain("the orange line is still below zero and the bars");
+    expect(notes).not.toContain("so no SELL is sent (likewise no BUY)");
     expect(notes).toContain("While the blue line, the orange line and the bars all stay at or below zero over the newest 120 bars, the pane's top is zero and there is no 90% mark above, and no SELL (likewise no BUY while they all stay at or above zero).");
     // the pane's edges are the chart's (PriceChart.tsx, without its margin), so an old edge leaving is as the pane shrinking
     expect(notes).toContain("When the bar that set the edge leaves the 120, the mark moves toward the zero line (as the chart's pane shrinks), so the line can reach it without moving.");
     expect(notes).toContain("Zooming the chart in or out changes the height of its MACD pane, but the email always goes by the newest 120 bars.");
-    // what the chart does that the email does not: the 8% margin it draws the pane with, and the bar still forming
+    // what the chart does that the email does not: the margin it draws the pane with (8% of its height above and below),
+    // so on the screen the line is usually short of 90% of the way to the drawn edge (measured on the stored bars,
+    // docs §8.119), and the bar still forming
     expect(notes).toContain(
-      "The chart adds a little margin (8%) above and below as it draws the MACD pane; the email's edges do not include it, so when an email comes the blue line looks a little below the drawn edge on the screen.",
+      "The chart adds a margin of 8% of the pane's height above and below as it draws the MACD pane; the email's edges do not include it, so when an email comes the blue line looks below the drawn edge on the screen, and usually short of 90% of the way from the zero line to it.",
     );
-    expect(notes).toContain("The chart also takes the bar still forming (not closed yet) into its pane; the email goes by the 120 closed bars.");
+    expect(notes).toContain(
+      "On the 124 entries this rule would have made on the stored 1-hour bars (late May to mid-October 2026; the span differs by pair), measured on a pane drawn from the 120 closed bars, the blue line stood at about 60% to 91% of that way (about 80% in the middle), and at 90% or more only 3 times.",
+    );
+    expect(notes).toContain(
+      "The chart also takes the bar still forming (not closed yet) into its pane; the email goes by the 120 closed bars (where the forming bar widens the pane, the blue line looks lower still on the screen).",
+    );
+    expect(notes).not.toContain("looks a little below the drawn edge");
     // nothing of the first make of v28, never mailed (the 90% mark of the blue line's own highest or lowest)
     for (const no of [
       "The 90% mark is set by the blue line alone", "of the highest it reached over the newest 120 bars", "with a highest of 0.200",

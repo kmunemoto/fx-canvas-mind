@@ -1608,7 +1608,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(zoneEntryAt(pane(line(200, 0.5, { 199: -1e-12 })), 199)).toEqual({ side: "BUY", m: -1e-12, top: 0.5, bottom: -1e-12, mark: ZONE_SHARE * -1e-12, fire: true });
   });
 
-  it("on closes: just past zero after a long fall the orange line is still below zero and the bars stand above the line, so there is no SELL (by the line's own highest there would be one); the SELL comes where the line has become the pane's top itself", () => {
+  it("on these closes (a long fall, then a rise at the same pace): just past zero the orange line is still below zero, the bars stand well above the line and set the pane's top, and there is no SELL there (by the line's own highest there would be one); the SELL comes where the line has become the pane's top itself", () => {
     // a fall of 0.05 a bar, then a rise at the same pace from bar 500: the MACD line from about -0.35 up through zero
     const closes = Array.from({ length: LEVEL_WINDOW }, (_, j) => (j < 500 ? 150 - 0.05 * j : 125 + 0.05 * (j - 500)));
     const r = macd(closes);
@@ -1639,6 +1639,58 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(decideZoneOnWindow(late.map((close) => ({ close })), LEVEL_WINDOW - 1)).toBeNull();
     // and the mirror: just past zero after a long rise, no BUY
     expect(decideZoneOnWindow(late.map((close) => ({ close: -close })), LEVEL_WINDOW - 1)).toBeNull();
+  });
+
+  it("on closes: just past zero after a long fall the line CAN come into the band with the orange line still below zero (the top is at least the bar's own bars, m - s, so it takes m >= 9 |s|): one bar up gives the SELL at the crossing bar itself, and the mirror a BUY; a smaller bar up gives none", () => {
+    // the notes say there is USUALLY no SELL just past zero, not never: 2 of the 124 entries on the stored bars came
+    // with the orange line still on the other side of zero, both at the bar after the line crossed it (docs §8.119).
+    // Here: flat at 150 (259 bars), a fall of 0.01 a bar (300 bars), flat (40 bars), then the newest bar up by `jump`
+    const closesUp = (jump: number) => {
+      const out: number[] = [];
+      let p = 150;
+      for (let j = 0; j < 259; j++) out.push(p);
+      for (let j = 0; j < 300; j++) out.push((p -= 0.01));
+      for (let j = 0; j < 40; j++) out.push(p);
+      out.push(p + jump);
+      return out;
+    };
+    const k = LEVEL_WINDOW - 1;
+    // up 0.40: the line crosses zero at the newest bar, after 340 bars below it; the orange line still below zero, the
+    // bars above the line and the pane's top; the line at 9 |s| or more, so at 90% of the bars or more: the SELL
+    const up = closesUp(0.4);
+    expect(up).toHaveLength(LEVEL_WINDOW);
+    const r = macd(up);
+    const ms = r.macd as number[];
+    const s = r.signal[k] as number;
+    const h = r.hist[k] as number;
+    expect(ms.slice(259, k).every((v) => v < 0)).toBe(true);
+    expect(ms[k]).toBeGreaterThan(0);
+    expect(s).toBeLessThan(0);
+    expect(h).toBeGreaterThan(ms[k]);
+    expect(zoneAt(r, k)!.top).toBe(h);
+    expect(ms[k]).toBeGreaterThanOrEqual(9 * Math.abs(s));
+    expect(zoneAt(r, k - 1)!.inTop).toBe(false);
+    const d = decideZoneOnWindow(up.map((close) => ({ close })), k);
+    expect(d).toMatchObject({ side: "SELL", m: ms[k], top: h, mark: ZONE_SHARE * h });
+    // the mirror: the closes negated give the BUY at the same bar, the numbers negated
+    expect(decideZoneOnWindow(up.map((close) => ({ close: -close })), k)).toEqual({ side: "BUY", m: -d!.m, top: -d!.bottom, bottom: -d!.top, mark: -d!.mark, fire: true });
+    // up 0.30: the line crosses zero at the newest bar too, but the orange line is further below zero (the line under
+    // 9 |s|): the bars set the top, the line is short of 90% of them, and there is no SELL
+    const small = closesUp(0.3);
+    const rs = macd(small);
+    const ss = rs.signal[k] as number;
+    expect(rs.macd[k - 1]).toBeLessThan(0);
+    expect(rs.macd[k]).toBeGreaterThan(0);
+    expect(ss).toBeLessThan(0);
+    expect(rs.macd[k] as number).toBeLessThan(9 * Math.abs(ss));
+    expect(zoneAt(rs, k)).toMatchObject({ top: rs.hist[k], inTop: false });
+    expect(decideZoneOnWindow(small.map((close) => ({ close })), k)).toBeNull();
+    // up 0.50: the orange line crosses zero at that bar as well, and the line is the pane's top itself: a SELL too
+    const big = closesUp(0.5);
+    const rb = macd(big);
+    expect(rb.macd[k - 1]).toBeLessThan(0);
+    expect(rb.signal[k]).toBeGreaterThan(0);
+    expect(decideZoneOnWindow(big.map((close) => ({ close })), k)).toMatchObject({ side: "SELL", m: rb.macd[k], top: rb.macd[k] });
   });
 
   it("on closes: a market still falling, its MACD line rising to its own 120-bar high below zero, gives no SELL (and the mirror no BUY)", () => {
@@ -1979,7 +2031,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(t).toContain("Stop and targets (ULTRA's numbers):");
     expect(t).toContain("(13.0 pips)");
     expect(t).toContain(
-      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches 90% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line, the orange line and the bars), and a BUY when it first reaches 90% or more of the way to the pane's bottom (the lowest of them).",
+      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches 90% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches 90% or more of the way to the pane's bottom (the lowest of them).",
     );
     expect(t).toContain("The pane's edges are taken without the margin the chart adds as it draws them.");
     expect(t).toContain("One email per peak or valley: no next one until the line has gone back inside the 90% mark (if it then comes back to the mark, another is sent).");
