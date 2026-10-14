@@ -198,10 +198,12 @@ import type { Candle } from "../analyze/indicators.ts";
 // the other rules are as they were.
 // v28 (#353): the MACD email ('macdx') is no cross any more (indicators.ts
 // macdhSignals, _shared/macd-level.ts decideZoneOnWindow; docs §8.119): a
-// SELL at the bar where MACD's blue line comes to 90% or more of the highest
-// it reached over the newest 120 bars (from the zero line), a BUY likewise
-// toward the lowest, once as it gets there (the owner: 「macdの青い線が上か下の
-// 90%以上の所までいったら売買のメールを送る様に」), in place of v26's cross;
+// SELL at the bar where MACD's blue line comes to 90% or more of the way
+// from the zero line to the top of the MACD pane of the newest 120 bars (the
+// highest of the MACD line, the signal line and the histogram there), a BUY
+// likewise toward the pane's bottom, once as it gets there (the owner:
+// 「macdの青い線が上か下の90%以上の所までいったら売買のメールを送る様に」, and
+// 「2で」 for the pane's edge), in place of v26's cross;
 // recorded under a new rule id (MACDH_RULE_ID). The charts (the five pairs'
 // and gold's 1-hour), the bars, the window, the freshness, the read times,
 // the stop and targets, the subscriptions and the other rules are as they
