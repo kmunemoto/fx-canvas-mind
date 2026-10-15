@@ -1,79 +1,12 @@
-# Morning check of the 1-hour MACD e-mails: the SQL toolkit (tasks #352, #357 and #359), versions v3, v4 and v5
+# Morning check of the 1-hour MACD e-mails: the SQL toolkit (tasks #352 and #357), versions v3 and v4
 
-Three versions live here, one per mail rule. **v3** (`pairs.min.sql`, `gold.min.sql`, frozen since 2026-10-13) checks rule `macdx_12_26_9_w600_1h_k0.8mv_v3`; **v4** (`pairs-v4.min.sql`, `gold-v4.min.sql`, 2026-10-14, frozen since 2026-10-15) checks rule `macdx_12_26_9_w600_1h_z90of120_v4`; **v5** (`pairs-v5.min.sql`, `gold-v5.min.sql`, 2026-10-15) checks rule `macdx_12_26_9_w600_1h_x80of120_v5`. Which one to send for which GMO day is the first table of the v5 section. Sections 0a to 9 below describe v3 (the output words, the verdicts and the limits that v4 keeps are the same; what v4 changes is listed in the v4 section); section 10 (constants) and section 12 (rebuild) cover both.
+Two versions live here, one per mail rule. **v3** (`pairs.min.sql`, `gold.min.sql`, frozen since 2026-10-13) checks rule `macdx_12_26_9_w600_1h_k0.8mv_v3`; **v4** (`pairs-v4.min.sql`, `gold-v4.min.sql`, 2026-10-14) checks rule `macdx_12_26_9_w600_1h_z90of120_v4`. Which one to send for which GMO day is the first table of the next section. Sections 0a to 9 below describe v3 (the output words, the verdicts and the limits that v4 keeps are the same; what v4 changes is listed in the v4 section); section 10 (constants) and section 12 (rebuild) cover both.
 
 Built on 2026-10-13: first version about 06:50 to 08:50 UTC, fix round (v3; the `sql` field of the `RUN` row says `pairs.sql v3` / `gold.sql v3`) about 09:50 to 11:00 UTC (DB clock); v4 on 2026-10-14. English, like the inventory documents; the only Japanese is the suggested report wording in section 4 and in the v4 section.
 
 Everything here is **read-only**. Each statement is ONE `WITH ... SELECT` for `mcp__Supabase__execute_sql` (project `endcqzewujdvimdlazhj`). It writes nothing, reads no `user_id`, `event_id` or e-mail address, never touches `cron.job` or the vault, and makes no network call.
 
 **What it checks:** that the e-mails of the rule went out exactly where the rule says they must: v3 = rule `macdx_12_26_9_w600_1h_k0.8mv_v3` (signal-alerts v26 for the five pairs, v27 for gold); v4 = rule `macdx_12_26_9_w600_1h_z90of120_v4` (signal-alerts v28, all six). **What it does NOT measure:** win rate, profit or loss per trade, or whether anybody read a mail. `sent_at` is the moment the mail service accepted the message, not the arrival in an inbox.
-
-## v5. The cross at 80% of the pane's edge (2026-10-15, task #359)
-
-### v5.1 Which files for which GMO day
-
-The owner changed the 1-hour MACD mail again (docs/OPERATIONS.md 8.121): v4 (the blue line entering the band at 90% of the pane's edge) is replaced by v5 (signal-alerts v29), to be deployed at a GMO-day boundary, about 21:30 to 21:50 UTC on 2026-10-15. A GMO day (21:00 UTC to 21:00 UTC) belongs wholly to one rule:
-
-| GMO day K = START_MS .. END_MS | rule that judged its bars | files to send |
-|---|---|---|
-| up to 20261014 (START_MS < 1792011600000) | v3 (signal-alerts v26 / v27) | `pairs.min.sql`, `gold.min.sql` |
-| 20261015 (START_MS = 1792011600000 = 2026-10-14 21:00 UTC) | v4 (signal-alerts v28) | `pairs-v4.min.sql`, `gold-v4.min.sql` |
-| 20261016 and later (START_MS >= 1792098000000 = 2026-10-15 21:00:00 UTC) | v5 (signal-alerts v29) | `pairs-v5.min.sql`, `gold-v5.min.sql` |
-
-Choose by START_MS: `< 1792011600000` -> v3, `< 1792098000000` -> v4, otherwise v5. The run of 2026-10-16 00:16 UTC checks K = 20261015 (v4); the run of 2026-10-17 00:16 UTC checks K = 20261016 (v5). **If v29 goes out on another day, the v4/v5 boundary moves to the start of the GMO day after the deploy: change `live_ms` in `src/syms-pairs-v5.part` and `src/syms-gold-v5.part` (rebuild, section 12) and the boundary in the Routine's picker.** Sending another version's statement for a day gives `CHECK` with `other_macdx_1h_rule_rows=n` where that day has mails (the v5 statement counts every macdx 1h rule id but its own, so v4 and v3 mails too).
-
-### v5.2 The rule that is recounted (rule id `macdx_12_26_9_w600_1h_x80of120_v5`)
-
-Contract: docs/OPERATIONS.md 8.121 and the code `supabase/functions/_shared/macd-level.ts` (`crossZoneAt`, `decideCrossZoneOnWindow`, `zoneAt` with the share 0.8) and `signal-alerts/indicators.ts` (`macdhSignals`). At a closed 1-hour bar i, on the 600 closed bars ending at i:
-
-- `m`, `s`, `h = m - s` of those 600 closes, Pine EMAs, unrounded: the v3 / v4 recursion, unchanged.
-- The side of `h` at each position (+1 above zero, -1 below, 0 keeps the side before; none before position 33, where both lines first exist), as v3 takes it (`sidesOf`). A **cross** at i = the sides at i-1 and i both known and different: DOWN when the side at i is -1, UP when +1.
-- `T(i)`, `B(i)`: as v4 (the highest / lowest of 0 and of `m`, `s`, `h` over positions 480 .. 599, no drawing margin).
-- **SELL** = a DOWN cross with `T(i) > 0` and `m[i] >= 0.8 x T(i)`; **BUY** = an UP cross with `B(i) < 0` and `m[i] <= 0.8 x B(i)`. 0.8 is the double nearest 0.8 (`0.8::float8`, `CROSS_ZONE_SHARE = 80 / 100`), the product is held against as it comes, nothing is rounded; only `m` is held against the mark. An UP cross high in the pane, a DOWN cross low in it, a cross short of the mark: no fire.
-- Everything else as in v3 and v4 (freshness, the weekend window, the data sources, the `signal_alerts` and subscription filters, the v4 day-end tests).
-
-### v5.3 What changed in the statements and in the answer (against v4)
-
-Same layout, markers, verdict words and checks as v4 (section v4.3); the shared parts are untouched.
-
-| where | v4 | v5 |
-|---|---|---|
-| `RUN` | `sql` `pairs.sql v4` / `gold.sql v4`, rule the v4 id, `go_live_utc` `2026-10-14 21:00` | `sql` `pairs.sql v5` / `gold.sql v5`, `rule` `macdx_12_26_9_w600_1h_x80of120_v5`, `go_live_utc` `2026-10-15 21:00` for all six |
-| `SUMMARY` | `band_bars`, `expected_fires` | **`crosses`** (bars of the judged windows with a cross, either way, firing or not) in place of `band_bars`; `expected_fires` = the recount's fires (SELL / BUY) |
-| `SUMMARY.guard.other_macdx_1h_rows` | any macdx 1h rule id but v4's | any macdx 1h rule id but v5's (so v4 and v3 mails are counted, not read as v5 mails) |
-| `LINE` data | `band_before` | **`cross`** (`DOWN` / `UP`: the cross at that bar; absent where there is none) in place of `band_before`; `top` / `bottom`, `mark` (now 0.8 x the edge), `mark_dist_ticks`, `near_edge`, `macd`, `signal` and the rest as in v4 |
-| `LINE.why` of an `extra` line | opposite entry; in the band but already one bar earlier; no top / bottom band; short of the mark | `recount has the OPPOSITE fire (SELL|BUY)`; `recount: no cross here (the bars, macd - signal, did not change side at this bar)`; `recount: the cross here is downward|upward (a BUY|SELL needs it upward|downward)`; `recount has no top|bottom here (no value above|below zero in the 120 bars of the pane)`; `recount: the blue line at the cross is short of 80% of the top|bottom (macd short of the mark)` |
-
-`mark_dist_ticks` keeps its meaning: how far the blue line at the bar is past the mark, in ticks, >= 0 for a fire, negative where it is short.
-
-### v5.4 The engine and the go-live constant
-
-Parts `engine-rec-v5.part` (the v4 recursion with the side of `h` and the side one row earlier, `side` / `side_p`, in place of v4's one-bar-earlier edges `tp` / `bp` / `mp`) and `back1-v5.part` (the decision, `near_edge`, the mails). In the last row: `cross_ = side_p is not null and side is not null and side_p <> side`, `SELL = cross_ and side = -1 and tn > 0 and m >= 0.8::float8 * tn`, `BUY = cross_ and side = 1 and bn < 0 and m <= 0.8::float8 * bn`.
-
-**Go-live constant `live_ms = 1792098000000`** (2026-10-15 21:00:00 UTC; in `syms-pairs-v5.part` and `syms-gold-v5.part`, the same for all six), for the same reason as v4's (section v4.4): v29 goes out after the day change (21:30 to 21:50 UTC), the last v28 judgement is the bar that opened 20:00 UTC, the first v29 judgement the bar that opened 21:00. Check the deploy time against the constant when the first v5 day is read.
-
-### v5.5 `near_edge`
-
-The same question as v4 (would moving the bar's own final close change the decision at that bar), evaluated in closed form from the state one row earlier in the same way, but the v5 decision is **not monotone** in the last close: a SELL needs the close low enough for `h` to turn below zero (the cross) and high enough for `m` to stay at or above the mark, so it holds on a band of closes. The statement therefore tries all four closes -2, -1, +1 and +2 ticks away (the closes lie on that tick grid) instead of v4's two end points. The side at the bar before (`side_p`) does not depend on the last close; at the moved close a bar `h` of exactly 0 keeps `side_p` (no cross).
-
-### v5.6 Parts, rebuild
-
-`bash src/build.sh` rebuilds the eight v3 files, the four v4 files and the four v5 files, then checks the v3 files against `src/v3.md5` and the v4 files against the new `src/v4.md5` (the md5 they had when v5 was made; v4 is frozen like v3). New v5 parts: `header-pairs-v5.part`, `header-gold-v5.part`, `syms-pairs-v5.part`, `syms-gold-v5.part`, `engine-head-v5.part`, `engine-rec-v5.part`, `back1-v5.part`, `back2-v5.part`; shared: `head`, `engine-closes`, `front-pairs`, `front-gold`, `guard-pairs`, `guard-gold`, and v4's `dayend-pairs-v4.part`, `dayend-gold-v4.part`.
-
-### v5.7 How v5 was tested (2026-10-15, against the live database, read only; solo, no helper agents)
-
-Tools and answers in the session folder `scratchpad/morning/v5/` (`LOG.md`, `ref5.py`, `mkexport5.py`, `mkfake5.py`, `EXPECTED.md`), not in the repository. Truth: the production TypeScript of signal-alerts v29 (`decideCrossZoneOnWindow`, branch `work/macd80`, not merged when these tests ran) run over the stored bars of docs 8.119 (8,023 bars; 623 crosses and 61 fires on the bars production judges), and an own Python recount (`ref5.py`, written from docs 8.121, equal to that TypeScript run in every bit of the decision, the cross, m, T and B on all 8,023 bars; `near_edge` by brute force: the whole 600-bar MACD recomputed with the last close moved by -2, -1, +1, +2 ticks).
-
-| test | result |
-|---|---|
-| **Engine, every judged bar.** The shipped `.min.sql` text up to `fx2` (byte-identical, markers replaced) with an own final `select` that hashes per instrument, in time order, the open time, the decision, `near_edge`, the cross and its direction and the IEEE bytes of m, T, B and the close | pairs 2026-05-26 21:00 .. 2026-10-12 21:00 in two runs (7,574 bars) and gold over the 422 bars the stored row still has windows for (read 2026-10-15 04:01 UTC): the md5 equals the own recount for every instrument; crosses, fires and `near_edge` lists equal. 0 differences in 7,996 bars |
-| **Real files, one day** (key 20261009, a Friday) | `pairs-v5.min.sql` (25,159 chars with the markers replaced): `sql_md5` 0edcc5640a14a67da0bf25a6042fbfbb = the file text, 1.57 s, 5 x `OK`, `crosses` 3/1/3/1/2 and the one fire (AUD/JPY 18:00 SELL, `not_mailable` `before_go_live`) equal the recount, its close, macd, top, mark, `mark_dist_ticks` 1.5 and `near_edge` false too. `gold-v5.min.sql` (22,165 chars): `sql_md5` 055ec81eaca768b783efb9d0ea48b292 = the file, 0.18 s, `OK`, 1 cross, 1 fire (12:00 SELL, `before_go_live`) equal; `last_judgeable_open_utc` 19:00 (Friday), no attention |
-| **Fake mail rows**, pairs (key 20260903; only the go-live of three pairs set to 0 and the two table reads replaced by VALUES lists; the expected answer written down first) | every expected verdict, attention text and `why` came out: `ok` with `entry_diff_ticks` 1, `not_sent` (`failed,sent`), `dup` (3 rows, 1 subscription), `missing`, `unchecked` (a mail at 04:30), `extra` with OPPOSITE fire, no cross here, cross downward for a BUY, cross upward for a SELL, short of 80% of the top; a v4-rule row counted in `other_macdx_1h_rule_rows`; `no_subscription_row`; the rows that must be ignored (kind `test`, interval `15m`, another pair, the next day, another rule family) ignored. 1.72 s |
-| **Structure** | the four v5 files: markers once, ASCII, no `;` outside string literals, start with `with recursive`, end with one newline, no forbidden word outside string literals; `strip(X.sql) == X.min.sql`; the v3 and v4 files unchanged (md5) |
-
-Not exercised for v5: the `why` "no top / bottom here" (no real cross produces it; it needs made-up files), the damaged-file and wrong-range cases and `NO_DATA` / `BAD_RANGE` / `STALE_ROW` (the guard parts are the v3 / v4 ones byte for byte, tested then), the run time of wide ranges.
-
-Correction to section v4.7 ("Structure"): the pairs `.min.sql` files of v3, v4 and v5 DO contain one forbidden word inside a string literal: `copy` in the attention text `key_file_answered_before_day_end(cut copy?)=` of `guard-pairs.part`. The Routine's check removes string literals before it looks for the words, so the files pass it, as they have every morning since v3.
 
 ## v4. The new mail rule (2026-10-14, task #357)
 
@@ -155,7 +88,7 @@ The test tools (Python and Deno scripts that build the test statements from the 
 | **Gold edge cases** | Saturday-cut row (key 20261009 with the stored row cut like a Saturday 00:01 read: bars before 2026-10-09 20:00 only): `OK`, `attention` null, `day_bars` 23, last bar 19:00 = `last_judgeable_open_utc` (the F1 fix); today's key 20261014 (real file text, the row ends 2026-10-14 04:00): `STALE_ROW`, `attention` "last_day_bar_not_at_day_end; judgeable_hours_without_a_bar=16", 0.10 s |
 | **Real files, md5** | the real `pairs-v4.min.sql` text for key 20261013 (25,044 chars with the markers replaced): `sql_md5` 3d1f3228686b4965ca58add3aa6b060f and `sql_chars` 25044 equal the md5 and length of the file text; the real `gold-v4.min.sql` text for key 20261014 (22,050 chars): `sql_md5` 07149b38cab063addddbbcc89f326bf3, 22050, equal |
 | **v4 statement on a v3-era day** (key 20261013, real mails of the v3 rule in the table) | `LINE`: 3 entries, all `not_mailable` `before_go_live` (a v3 day has no v4 mail); `SUMMARY` `CHECK` with `other_macdx_1h_rule_rows=1` or `=2` for four pairs: the v3 mails are counted, not read as v4 mails |
-| **Structure** | each of the four files: markers once, ASCII, no `;` outside string literals, starts with `with recursive`, ends with one newline, none of the forbidden words (outside string literals; also none inside them in the `.min.sql` files); `strip(X.sql) == X.min.sql`; `bash src/build.sh` twice gives the same bytes; the eight v3 files equal `git show origin/main:...` byte for byte (md5s in `src/v3.md5`) |
+| **Structure** | each of the four files: markers once, ASCII, no `;` outside string literals, starts with `with recursive`, ends with one newline, none of the forbidden words outside string literals (inside them, the pairs files have one: `copy` in the attention text `key_file_answered_before_day_end(cut copy?)=` of `guard-pairs.part`, in v3 too; the Routine's check removes string literals before it looks for the words, so the files pass it. Corrected 2026-10-15: this row said before that the `.min.sql` files had none inside string literals either); `strip(X.sql) == X.min.sql`; `bash src/build.sh` twice gives the same bytes; the eight v3 files equal `git show origin/main:...` byte for byte (md5s in `src/v3.md5`) |
 | **Performance** | one day: pairs 0.15 to 0.83 s (the statement's `elapsed_s`), gold 0.10 to 0.21 s; the three wide pair ranges 7 to 13 s; an answer for a normal pairs day is 5 to 6.5 KB (the brief's limit was about 12 KB), gold 1.7 to 2.0 KB |
 
 **Second, independent check (the lead, 2026-10-14 05:55 to 06:15 UTC, after the build above; the tools and answers are in `scratchpad/morning/v4/lead/`, `LOG.md`).** The build was done by a helper agent; the lead re-checked the main claims without using its tools:
@@ -405,18 +338,15 @@ Since 2026-10-14 the v3 engine is split into `engine-head.part`, `engine-closes.
 | pairs and symbols | `syms-*.part` | USD_JPY, EUR_JPY, AUD_JPY, EUR_USD, AUD_USD; XAU_USD | `syms-*-v4.part` | the same |
 | cap on `missing_files` | `guard-pairs.part` (`q.r <= 6`) | 6 files | shared | the same |
 
-v5 (section v5.4) has its own `syms-pairs-v5.part` / `syms-gold-v5.part` (`live_ms` 1792098000000 = 2026-10-15 21:00 UTC, all six), `engine-rec-v5.part` (`>= 480`, `r.t + 1 < 33` for the side) and `back1-v5.part` / `back2-v5.part` (rule id `macdx_12_26_9_w600_1h_x80of120_v5`; the share `0.8::float8`, 6 times in `back1-v5.part`; `near_edge` `values (-2), (-1), (1), (2)`); everything else in the table is the same as v4's (shared parts, or v4's `dayend-*-v4.part`).
-
 ## 11. debug-closes (for a Deno or Python replay)
 
 Replace `{{START_MS}}` / `{{END_MS}}` as above, and `{{SYMBOL}}` (`USD_JPY`, `EUR_JPY`, `AUD_JPY`, `EUR_USD`, `AUD_USD` or `*`) and `{{CHUNK}}` in `debug-closes.min.sql`; `{{CHUNK}}` only in `debug-closes-gold.min.sql`. `CHUNK = -1` returns the list of pieces with their md5 and no strings; `0, 1, 2 ...` returns one piece (about 250 bars) as `open_ms:close;open_ms:close;...` with the close written with its decimals (`158.612`, `1.11711`, `4137.60`). Take the pieces of a symbol in order and join them with `;`. The series runs from 599 bars before the day's first judged bar to the day's last bar, which is what the recount used. For gold the column `row_read_utc` says which version of the stored row was used.
 
 ## 12. Rebuild
 
-`bash src/build.sh` (needs `python3`) rewrites the sixteen deliverables from the parts and then checks the eight v3 files against `src/v3.md5` (the md5 they had when v3 went live) and the four v4 files against `src/v4.md5` (the md5 they had when v5 was made); the build exits non-zero if one differs:
+`bash src/build.sh` (needs `python3`) rewrites the twelve deliverables from the parts and then checks the eight v3 files against `src/v3.md5` (the md5 they had when v3 went live; the build exits non-zero if one differs):
 
 - v3 `pairs.sql` / `gold.sql`: header, `head`, `syms-*`, `front-*`, `engine-head`, `engine-closes`, `engine-rec`, `back1`, `guard-*`, `back2`; the debug files: the same up to `engine-rec`, then `tail-closes-*`;
-- v4 `pairs-v4.sql` / `gold-v4.sql`: header (`header-*-v4`), `head`, `syms-*-v4`, `front-*`, `engine-head-v4`, `engine-closes`, `engine-rec-v4`, `back1-v4`, `guard-*`, `dayend-*-v4`, `back2-v4` (frozen since 2026-10-15: `src/v4.md5`);
-- v5 `pairs-v5.sql` / `gold-v5.sql`: header (`header-*-v5`), `head`, `syms-*-v5`, `front-*`, `engine-head-v5`, `engine-closes`, `engine-rec-v5`, `back1-v5`, `guard-*`, `dayend-*-v4`, `back2-v5`.
+- v4 `pairs-v4.sql` / `gold-v4.sql`: header (`header-*-v4`), `head`, `syms-*-v4`, `front-*`, `engine-head-v4`, `engine-closes`, `engine-rec-v4`, `back1-v4`, `guard-*`, `dayend-*-v4`, `back2-v4`.
 
 `src/assemble.py` concatenates parts, replaces `{{NAME}}` given with `--sub NAME=VALUE`, and with `--strip` removes full-line comments, blank lines and leading blanks (the `.min.sql` files). Every comment in a part is a full line starting with `--`. Run the structural checks of section 1 again after a rebuild (markers once each, ASCII, no `;`).
