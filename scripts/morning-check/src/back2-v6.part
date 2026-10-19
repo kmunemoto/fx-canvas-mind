@@ -1,0 +1,128 @@
+-- ===== BACK 2 (v6; the same text in pairs-v6.sql and gold-v6.sql): the comparison, the verdicts, the summaries, the result =====
+-- every signal either side knows (the recount's expected entries and the mail groups), joined on (pair, bar open, side)
+j as (
+  select coalesce(e.pair, m.pair) as pair, coalesce(e.ot, m.ot) as ot, coalesce(e.sd, m.side) as side,
+         (e.ot is not null) as has_exp, (m.ot is not null) as has_mail, m.n_rows, m.n_sent, m.statuses, m.lag_min, m.lag_max, m.entry, m.entry_max
+  from (select f.pair, f.ot, f.sd from fx2 f where f.fire) e
+  full join mails m on m.pair = e.pair and m.ot = e.ot and m.side = e.sd
+),
+-- the facts of the bar's own window (also for a mail whose bar is no expected entry), the bar's close time (Fri >= 21:00, Sat, Sun < 22:00 UTC = production does not judge it)
+j2 as (
+  select j.*, y.symbol, y.ord, y.live_ms, y.d, coalesce(sb.n, 0) as subs,
+         extract(dow from to_timestamp((j.ot + 3600000) / 1000.0) at time zone 'UTC') as cdw,
+         extract(hour from to_timestamp((j.ot + 3600000) / 1000.0) at time zone 'UTC') as chh,
+         x.m as x_m, x.sg as x_sg, x.tn as x_tn, x.bn as x_bn, x.mk_top as x_mk_top, x.mk_bot as x_mk_bot,
+         x.in_top as x_in_top, x.in_bot as x_in_bot, x.p_top as x_p_top, x.p_bot as x_p_bot, x.sd as x_sd,
+         x.near_edge as x_ne, x.tick as x_tick, x.clo as x_clo
+  from j join syms y on y.pair = j.pair
+  left join subs sb on sb.pair = j.pair
+  left join fx2 x on x.symbol = y.symbol and x.ot = j.ot
+),
+-- why production could not have mailed an expected entry (empty = it should have); entry_diff_ticks = how many ticks the mail's entry (its farthest row) lies from the
+-- recount's close of the bar (0 = the same price; production read the live file 2-6 s after the close, the table holds the final one)
+v0 as (
+  select j2.*, concat_ws(';',
+           case when (j2.cdw = 5 and j2.chh >= 21) or j2.cdw = 6 or (j2.cdw = 0 and j2.chh < 22) then 'weekend_window' end,
+           case when j2.ot < j2.live_ms then 'before_go_live' end,
+           case when j2.subs = 0 then 'no_subscription' end,
+           (select string_agg(r.reason, ';') from extra_reasons r where r.pair = j2.pair and r.ot = j2.ot)) as reasons,
+         case when j2.entry is not null and j2.x_clo is not null
+              then round(((case when abs(j2.entry_max - j2.x_clo) > abs(j2.entry - j2.x_clo) then j2.entry_max else j2.entry end) - j2.x_clo) * power(10::float8, j2.d))::int end as entry_diff_ticks
+  from j2
+),
+-- the verdict of each line
+verdicts as (
+  select v0.*,
+         case when has_exp and has_mail then (case when n_rows > n_sent then 'not_sent' when n_rows > greatest(subs, 1) then 'dup' else 'ok' end)
+              when has_exp then (case when reasons <> '' then 'not_mailable' else 'missing' end)
+              when x_m is null then 'unchecked'
+              else 'extra' end as verdict
+  from v0
+),
+cnt as (
+  select y.symbol,
+         count(v.pair) filter (where v.verdict in ('ok', 'not_sent', 'dup')) as matched,
+         count(v.pair) filter (where v.verdict = 'missing') as missing,
+         count(v.pair) filter (where v.verdict = 'extra') as extra,
+         count(v.pair) filter (where v.verdict = 'unchecked') as unchecked,
+         count(v.pair) filter (where v.verdict = 'not_mailable') as not_mailable,
+         count(v.pair) filter (where v.verdict = 'dup') as dups,
+         count(v.pair) filter (where v.entry_diff_ticks <> 0) as entry_diff,
+         coalesce(sum(v.n_rows), 0) as mail_rows, count(v.pair) filter (where v.has_mail) as mail_signals,
+         coalesce(sum(v.n_rows - v.n_sent), 0) as not_sent_rows,
+         min(v.lag_min) as lag_min, max(v.lag_max) as lag_max,
+         count(v.pair) filter (where v.verdict = 'not_mailable' and v.reasons like '%weekend_window%') as nm_weekend,
+         count(v.pair) filter (where v.verdict = 'not_mailable' and v.reasons like '%before_go_live%') as nm_live,
+         count(v.pair) filter (where v.verdict = 'not_mailable' and v.reasons like '%no_subscription%') as nm_subs,
+         count(v.pair) filter (where v.verdict = 'not_mailable' and v.reasons like '%twelve_daily_cap%') as nm_cap
+  from syms y left join verdicts v on v.symbol = y.symbol
+  group by y.symbol
+),
+u as (
+  -- one SUMMARY row per instrument
+  select 1 as o1, y.ord::bigint as o2, 0::bigint as o3, 'SUMMARY'::text as row_type, y.pair as instrument, null::text as bar_open_utc, null::text as side,
+         case when gd.status <> 'ok' then gd.status when att.t <> '' then 'CHECK' else 'OK' end as verdict,
+         json_build_object(
+           'history_bars', ss.history_bars, 'day_bars', ss.day_bars,
+           'first_bar_utc', to_char(to_timestamp(ss.first_day_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
+           'last_bar_utc', to_char(to_timestamp(ss.last_day_ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
+           'windows', ws.windows, 'bad_mantissas', ss.bad_mantissas,
+           'band_bars', ws.band_bars, 'expected_fires', ws.exp_fires,
+           'not_mailable', c.not_mailable,
+           'not_mailable_why', nullif(concat_ws(';', case when c.nm_weekend > 0 then 'weekend_window:' || c.nm_weekend end, case when c.nm_live > 0 then 'before_go_live:' || c.nm_live end,
+                                                    case when c.nm_subs > 0 then 'no_subscription:' || c.nm_subs end, case when c.nm_cap > 0 then 'twelve_daily_cap:' || c.nm_cap end), ''),
+           'mail_rows', c.mail_rows, 'mail_signals', c.mail_signals, 'matched', c.matched, 'missing', c.missing, 'extra', c.extra, 'unchecked', c.unchecked,
+           'not_sent_rows', c.not_sent_rows, 'duplicates', c.dups, 'entry_differs', c.entry_diff,
+           'lag_min_s', round(c.lag_min::numeric, 3), 'lag_max_s', round(c.lag_max::numeric, 3),
+           'attention', nullif(att.t, ''), 'no_data_why', gd.why, 'guard', gd.guard) as data
+  from syms y cross join pp
+  join gd on gd.symbol = y.symbol join sstat ss on ss.symbol = y.symbol join wstat ws on ws.symbol = y.symbol join cnt c on c.symbol = y.symbol join dayend de on de.symbol = y.symbol
+  cross join lateral (select concat_ws('; ',
+      case when c.missing > 0 then 'missing=' || c.missing end, case when c.extra > 0 then 'extra=' || c.extra end,
+      case when c.unchecked > 0 then 'unchecked=' || c.unchecked end, case when c.not_sent_rows > 0 then 'not_sent_rows=' || c.not_sent_rows end,
+      case when c.dups > 0 then 'dup=' || c.dups end, case when c.entry_diff > 0 then 'entry_differs=' || c.entry_diff end,
+      case when ss.bad_mantissas > 0 then 'bad_mantissas=' || ss.bad_mantissas end,
+      case when ws.windows < ss.day_bars then 'bars_without_600_window=' || (ss.day_bars - ws.windows) end,
+      case when de.cut then 'last_day_bar_not_at_day_end' end,
+      case when ss.day_bars > 0 and (ss.last_day_ot - ss.first_day_ot) / 3600000 + 1 > ss.day_bars then 'day_hours_missing=' || ((ss.last_day_ot - ss.first_day_ot) / 3600000 + 1 - ss.day_bars) end,
+      nullif(gd.warn, '')) as t) att
+  union all
+  -- one LINE per expected entry and per mail
+  select 2, f.ot, f.ord::bigint, 'LINE', f.pair, to_char(to_timestamp(f.ot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'), f.side, f.verdict,
+         json_strip_nulls(json_build_object(
+           'mail_rows', f.n_rows, 'mail_status', f.statuses, 'lag_min_s', round(f.lag_min::numeric, 3), 'lag_max_s', round(f.lag_max::numeric, 3), 'entry', f.entry,
+           'close', f.x_clo, 'entry_diff_ticks', f.entry_diff_ticks,
+           'macd', f.x_m, 'signal', f.x_sg,
+           'top', case when f.side = 'SELL' then f.x_tn end, 'bottom', case when f.side = 'BUY' then f.x_bn end,
+           'mark', case f.side when 'SELL' then f.x_mk_top when 'BUY' then f.x_mk_bot end,
+           'mark_dist_ticks', round(((case f.side when 'SELL' then f.x_m - f.x_mk_top when 'BUY' then f.x_mk_bot - f.x_m end) / f.x_tick)::numeric, 1),
+           'band_before', case when (case f.side when 'SELL' then f.x_p_top when 'BUY' then f.x_p_bot end) then true end,
+           'near_edge', f.x_ne,
+           'why', case f.verdict
+                    when 'not_mailable' then f.reasons
+                    when 'missing' then 'no row in signal_alerts for an expected entry that production could mail'
+                    when 'dup' then 'rows ' || f.n_rows || ' > subscriptions ' || f.subs
+                    when 'unchecked' then 'the recount has no window for this bar (bar not in the data, or fewer than 600 bars before it)'
+                    when 'extra' then case when f.x_sd is not null and f.x_sd <> f.side then 'recount has the OPPOSITE entry (' || f.x_sd || ')'
+                                           when case f.side when 'SELL' then f.x_in_top and f.x_p_top else f.x_in_bot and f.x_p_bot end
+                                                then 'recount: the blue line is in the ' || case f.side when 'SELL' then 'top' else 'bottom' end || ' band here but was already in it one bar earlier (no new entry)'
+                                           when case f.side when 'SELL' then f.x_tn <= 0 else f.x_bn >= 0 end
+                                                then 'recount has no ' || case f.side when 'SELL' then 'top' else 'bottom' end || ' band here (no value ' || case f.side when 'SELL' then 'above' else 'below' end || ' zero in the 120 bars of the pane)'
+                                           else 'recount: the blue line is not in the ' || case f.side when 'SELL' then 'top' else 'bottom' end || ' band here (macd short of the mark)' end
+                    when 'ok' then case when f.reasons <> '' then 'mailed although ' || f.reasons end
+                    when 'not_sent' then case when f.reasons <> '' then 'also ' || f.reasons end end))
+  from verdicts f
+  union all
+  -- the run itself (last in this list, so that elapsed_s is read after everything else was done; shown first)
+  select 0, 0, 0, 'RUN', null, null, null, 'info',
+         json_build_object('sql', '{{SQLNAME}} v6', 'rule', 'macdx_12_26_9_w600_1h_z95of120_v6', 'keys', pp.k_first || '..' || pp.k_last,
+           'range_utc', to_char(to_timestamp(pp.start_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || ' .. ' || to_char(to_timestamp(pp.end_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
+           'range_is_one_gmo_day', pp.range_ok, 'db_now_utc', to_char(now() at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+           'go_live_utc', (select to_char(to_timestamp(min(live_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms),
+           'lines', (select count(*) from verdicts), 'elapsed_s', round(extract(epoch from clock_timestamp() - statement_timestamp())::numeric, 2),
+           -- the md5 and length of the statement text AS THE DATABASE RECEIVED IT (the tool appends a comment after a blank line: cut off). The caller compares it with the md5 of the text it meant to send,
+           -- so that a slip made while copying the 20 kB text into the tool call shows (a mismatch means: send again from the file; the numbers of this answer are then not to be trusted)
+           'sql_md5', md5(split_part(current_query(), E'\n\n-- source: POST /mcp', 1)), 'sql_chars', length(split_part(current_query(), E'\n\n-- source: POST /mcp', 1)))
+  from pp
+)
+select row_type, instrument, bar_open_utc, side, verdict, data from u order by o1, o2, o3

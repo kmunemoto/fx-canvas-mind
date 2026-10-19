@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Rebuilds the deliverables in the folder above from the parts in this folder:
 #   v3 (frozen: the Routine uses these for the GMO days up to key 20261014): pairs.sql, gold.sql, debug-closes.sql, debug-closes-gold.sql and their .min.sql
-#   v4 (rule macdx_12_26_9_w600_1h_z90of120_v4, signal-alerts v28, bars opened from 2026-10-14 21:00 UTC on): pairs-v4.sql, gold-v4.sql and their .min.sql
+#   v4 (rule macdx_12_26_9_w600_1h_z90of120_v4, signal-alerts v28, bars opened from 2026-10-14 21:00 to 2026-10-19 20:00 UTC): pairs-v4.sql, gold-v4.sql and their .min.sql
+#   v6 (#362: rule macdx_12_26_9_w600_1h_z95of120_v6, signal-alerts v30, bars opened from 2026-10-19 21:00 UTC on): pairs-v6.sql, gold-v6.sql and their .min.sql
 # The .sql files keep the comments; the .min.sql files are the same statement without comments and indentation (shorter to paste into one tool call).
 # Nothing is edited by hand in the deliverables: change a part, run this, run the tests (see ../README.md).
 #   bash build.sh
@@ -27,6 +28,12 @@ $A $O/pairs-v4.sql           header-pairs-v4.part    head.part syms-pairs-v4.par
 $A $O/pairs-v4.min.sql                               head.part syms-pairs-v4.part front-pairs.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v4.part guard-pairs.part dayend-pairs-v4.part back2-v4.part --sub SQLNAME=pairs.sql --strip
 $A $O/gold-v4.sql            header-gold-v4.part     head.part syms-gold-v4.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v4.part guard-gold.part  dayend-gold-v4.part  back2-v4.part --sub SQLNAME=gold.sql
 $A $O/gold-v4.min.sql                                head.part syms-gold-v4.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v4.part guard-gold.part  dayend-gold-v4.part  back2-v4.part --sub SQLNAME=gold.sql --strip
+
+# ---- v6 (#362: the same rule as v4 with the band from 95%; parts shared with v4 but back1, back2, header and syms) ----
+$A $O/pairs-v6.sql           header-pairs-v6.part    head.part syms-pairs-v6.part front-pairs.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-pairs.part dayend-pairs-v4.part back2-v6.part --sub SQLNAME=pairs.sql
+$A $O/pairs-v6.min.sql                               head.part syms-pairs-v6.part front-pairs.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-pairs.part dayend-pairs-v4.part back2-v6.part --sub SQLNAME=pairs.sql --strip
+$A $O/gold-v6.sql            header-gold-v6.part     head.part syms-gold-v6.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-gold.part  dayend-gold-v4.part  back2-v6.part --sub SQLNAME=gold.sql
+$A $O/gold-v6.min.sql                                head.part syms-gold-v6.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-gold.part  dayend-gold-v4.part  back2-v6.part --sub SQLNAME=gold.sql --strip
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

@@ -985,7 +985,7 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     // its id: the emails are recorded under it (v25's was macdx_12_26_9_w600_1h_lv8.5p_v2, v26 and v27's
     // macdx_12_26_9_w600_1h_k0.8mv_v3; #353: from v28 the zone rule's), and the app reads the rule back from
     // its start
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z90of120_v4");
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v6");
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
     expect(MACDH_RULE_ID.startsWith("macdx")).toBe(true);
     expect(
@@ -1150,8 +1150,8 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     expect(fn.indexOf('if (isPossiblyClosed(nowMs)) return { ...summary, skipped: "market_closed" };')).toBeLessThan(
       fn.indexOf("sigs.push(...macdhSignals(pair, interval, closed, nowMs));"),
     );
-    // #353: the zone rule's version
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v28-2026-10-14T21:00:00Z";');
+    // #353: the zone rule's version; #362: v30, its band from 95%
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v30-2026-10-19T21:00:00Z";');
   });
 
   it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
@@ -1166,9 +1166,9 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
 // ending at the bar (macd(), the chart's arithmetic: the MACD line, the signal line and the histogram); at the bar and
 // at the bar before, on those same three, the MACD pane's top, the highest of the 360 values of the 120 bars ending
 // there and 0 (Math.max of the three slices and 0), and its bottom likewise (Math.min); in the top band when that top
-// is above zero and the line is at or above 0.9 times it, in the bottom band when the bottom is below zero and the
-// line is at or below 0.9 times it; a SELL where the bar is in the top band and the bar before is not, a BUY likewise
-// the bottom band
+// is above zero and the line is at or above 0.95 times it, in the bottom band when the bottom is below zero and the
+// line is at or below 0.95 times it; a SELL where the bar is in the top band and the bar before is not, a BUY likewise
+// the bottom band. #362: 0.95 from v30 (0.9 in v28 and v29, docs §8.122)
 type ZoneTold = { side: "BUY" | "SELL"; m: number; top: number; bottom: number; mark: number };
 type MacdLines = { macd: Array<number | null>; signal: Array<number | null>; hist: Array<number | null> };
 const bandsOf = (r: MacdLines, k: number) => {
@@ -1176,21 +1176,21 @@ const bandsOf = (r: MacdLines, k: number) => {
   const top = Math.max(0, ...w);
   const bottom = Math.min(0, ...w);
   const m = r.macd[k] as number;
-  return { m, top, bottom, up: top > 0 && m >= 0.9 * top, down: bottom < 0 && m <= 0.9 * bottom };
+  return { m, top, bottom, up: top > 0 && m >= 0.95 * top, down: bottom < 0 && m <= 0.95 * bottom };
 };
 const toldZone = (closes: number[]): ZoneTold | null => {
   const r = macd(closes);
   const now = bandsOf(r, closes.length - 1);
   const before = bandsOf(r, closes.length - 2);
-  if (now.up && !before.up) return { side: "SELL", m: now.m, top: now.top, bottom: now.bottom, mark: 0.9 * now.top };
-  if (now.down && !before.down) return { side: "BUY", m: now.m, top: now.top, bottom: now.bottom, mark: 0.9 * now.bottom };
+  if (now.up && !before.up) return { side: "SELL", m: now.m, top: now.top, bottom: now.bottom, mark: 0.95 * now.top };
+  if (now.down && !before.down) return { side: "BUY", m: now.m, top: now.top, bottom: now.bottom, mark: 0.95 * now.bottom };
   return null;
 };
 // the entries over bars 599 to 2,399 of the waves the #339 and #345 blocks' bars have, by the rule told here: 14
-// SELLs and 16 BUYs, at the same bars at the three sizes (USD/JPY's, EUR/USD's a hundredth of it, gold's rounded to
-// cents); and 168 and 179 bars in the top or bottom band as the bar before was (staying: no email), there for the
-// check to fail on
-const N_ZONE = { SELL: 14, BUY: 16, stayTop: 168, stayBottom: 179 };
+// SELLs and 15 BUYs, at the same bars at the three sizes (USD/JPY's, EUR/USD's a hundredth of it, gold's rounded to
+// cents); and 128 and 150 bars in the top or bottom band as the bar before was (staying: no email), there for the
+// check to fail on. (#362: at 95%; at 90% they were 14 and 16, 168 and 179)
+const N_ZONE = { SELL: 14, BUY: 15, stayTop: 128, stayBottom: 150 };
 
 // the crosses over bars 599 to 2,399 of gold's bars by the rule told below: the #339 block's counts (the bars have the
 // same waves at gold's size, a usual hourly move of some $8, checked below; rounding them to cents moves none of the 82
@@ -1274,7 +1274,7 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
     expect(isIndicatorChartFor("sweepx", "XAU/USD", "1h")).toBe(false);
     // the rule is the same rule: its id is the pairs' (the claim key holds the pair); #353: from v28 the zone rule's
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z90of120_v4");
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v6");
     // the numbers are in the bars' own units: gold's, dollars (the stop and targets are dollars too)
     expect(ultraUnit("XAU/USD")).toBe(1);
   });
@@ -1382,16 +1382,16 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
     return macdhSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000)[0];
   };
 
-  it("the Japanese email gives the blue line, the pane's top or bottom and its 90% in gold's digits, names gold, and speaks of no pips", () => {
+  it("the Japanese email gives the blue line, the pane's top or bottom and its 95% in gold's digits, names gold, and speaks of no pips", () => {
     const g = sample("SELL");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "ja");
     expect(mail.subject).toBe("【Sextant】金 1時間足 売り（SELL）のサイン（MACD の山・谷）");
     const t = mail.text;
     expect(t).toContain("金の1時間足で、MACD の山・谷の売り（SELL）のサインが出ました。");
-    expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の90%以上（0の線から測って）に届きました");
+    expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の95%以上（0の線から測って）に届きました");
     expect(f.m).toBeGreaterThan(0);
-    expect(t).toContain(`\n  MACD = ${f.m.toFixed(2)}、枠の上の端 = ${f.top.toFixed(2)}（その90% = ${f.mark.toFixed(2)}）`);
+    expect(t).toContain(`\n  MACD = ${f.m.toFixed(2)}、枠の上の端 = ${f.top.toFixed(2)}（その95% = ${f.mark.toFixed(2)}）`);
     expect(t).toContain("損切り・利確の目安（ULTRA と同じ数字）:");
     expect(t).toContain("（$13.00）");
     expect(t).toContain("利確1");
@@ -1406,9 +1406,9 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
     const fb = buy.macdh!;
     const bt = renderIndicatorMail(buy, "ja");
     expect(bt.subject).toBe("【Sextant】金 1時間足 買い（BUY）のサイン（MACD の山・谷）");
-    expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の90%以上（0の線から測って）に届きました");
+    expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の95%以上（0の線から測って）に届きました");
     expect(fb.m).toBeLessThan(0);
-    expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(2)}、枠の下の端 = −${(-fb.bottom).toFixed(2)}（その90% = −${(-fb.mark).toFixed(2)}）`);
+    expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(2)}、枠の下の端 = −${(-fb.bottom).toFixed(2)}（その95% = −${(-fb.mark).toFixed(2)}）`);
   });
 
   it("the English email says the same in gold's digits", () => {
@@ -1419,10 +1419,10 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
     const t = mail.text;
     expect(t).toContain("A MACD peak/valley BUY signal fired on XAU/USD, 1-hour chart.");
     expect(t).toContain(
-      "MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the MACD pane of the newest 120 bars: 90% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram)",
+      "MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the MACD pane of the newest 120 bars: 95% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram)",
     );
     expect(f.m).toBeLessThan(0);
-    expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(2)}; bottom of the pane = −${(-f.bottom).toFixed(2)}; 90% of it = −${(-f.mark).toFixed(2)}`);
+    expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(2)}; bottom of the pane = −${(-f.bottom).toFixed(2)}; 95% of it = −${(-f.mark).toFixed(2)}`);
     expect(t).toContain("($13.00)");
     expect(t).toContain("The bars are Twelve Data's (GMO Coin does not carry XAU/USD)");
     expect(t).toContain("This rule's win rate and its profit or loss a trade have not been measured.");
@@ -1468,7 +1468,7 @@ describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in 
 // inside the 90% mark; in place of the cross email (the five pairs and gold). Asked again (2026-10-14) what the top
 // is, the owner chose 「2で」: the chart's MACD pane's edge, the highest of the blue line, the orange line and the bars
 // (and the bottom the lowest), not the blue line's own highest
-describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of the top (a SELL) or bottom (a BUY) of the newest 120 bars' MACD pane", () => {
+describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue line at 95% or more of the top (a SELL) or bottom (a BUY) of the newest 120 bars' MACD pane", () => {
   // the #339 block's bars: 2,400 hourly bars of a yen pair, and the same at a hundredth for EUR/USD
   const H0 = Date.UTC(2026, 6, 1);
   const wave = (i: number) => 0.9 * Math.sin(i / 90) + 0.35 * Math.sin(i / 23) + 0.12 * Math.sin(i / 7) + 0.03 * Math.sin(i * 1.9) + 0.0004 * i;
@@ -1524,25 +1524,27 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
   // the negative of a number, with zero kept the zero the rule starts its edges at (not -0)
   const neg = (x: number) => (x === 0 ? 0 : -x);
 
-  it("its numbers: the newest 120 bars (as many as the chart draws), 90%, the 600-bar window, and the rule id that says them", () => {
+  it("its numbers: the newest 120 bars (as many as the chart draws), 95%, the 600-bar window, and the rule id that says them", () => {
     expect(ZONE_BARS).toBe(120);
     expect(ZONE_BARS).toBe(CHART_BARS);
-    expect(ZONE_PCT).toBe(90);
-    // the share held against is 90 / 100, the double 0.9 is (the id is made of ZONE_PCT, a whole number)
-    expect(ZONE_SHARE).toBe(0.9);
+    // #362: 95 from v30 (90 in v28 and v29)
+    expect(ZONE_PCT).toBe(95);
+    // the share held against is 95 / 100, the double 0.95 is (the id is made of ZONE_PCT, a whole number)
+    expect(ZONE_SHARE).toBe(0.95);
     expect(ZONE_SHARE).toBe(ZONE_PCT / 100);
     expect(LEVEL_WINDOW).toBe(600);
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z90of120_v4");
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v6");
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
     // the app reads the rule back from the id's start
     expect(MACDH_RULE_ID.startsWith("macdx")).toBe(true);
   });
 
-  it("on a hand-made MACD whose edge is the line's own: the first bar in the top band is the SELL; staying in it is not; out (back inside the 90% mark) and in again is another", () => {
-    // the line 0 until 129; 0.5 at 130 (the top of its pane: the band from 0.45); 0.8 (a new top), then 0.75 (at or above
-    // 0.72: still in); 0.6 and 0.7 (inside the 90% mark, still above zero); 0.78 (in again, under the top); then 0. The
-    // signal line and the histogram at 0 all along: the pane's top is the line's own highest
-    const r = pane(line(200, 0, { 130: 0.5, 131: 0.8, 132: 0.75, 133: 0.6, 134: 0.7, 135: 0.78 }));
+  it("on a hand-made MACD whose edge is the line's own: the first bar in the top band is the SELL; staying in it is not; out (back inside the 95% mark) and in again is another", () => {
+    // the line 0 until 129; 0.5 at 130 (the top of its pane: the band from 0.475); 0.8 (a new top), then 0.77 (at or
+    // above 0.76: still in); 0.6 and 0.7 (inside the 95% mark, still above zero); 0.78 (in again, under the top); then 0.
+    // The signal line and the histogram at 0 all along: the pane's top is the line's own highest. (#362: at 95%; at 90%
+    // the bar after the new top was 0.75, at or above 0.72)
+    const r = pane(line(200, 0, { 130: 0.5, 131: 0.8, 132: 0.77, 133: 0.6, 134: 0.7, 135: 0.78 }));
     expect(entriesOf(r)).toEqual(["SELL@130", "SELL@135"]);
     expect([130, 131, 132, 133, 134, 135, 136].map((k) => zoneAt(r, k)!.inTop)).toEqual([true, true, true, false, false, true, false]);
     expect(zoneEntryAt(r, 130)).toEqual({ side: "SELL", m: 0.5, top: 0.5, bottom: 0, mark: ZONE_SHARE * 0.5, fire: true });
@@ -1554,40 +1556,43 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(zoneEntryAt(down, 135)).toEqual({ side: "BUY", m: -0.78, top: 0, bottom: -0.8, mark: ZONE_SHARE * -0.8, fire: true });
   });
 
-  it("the orange line (the signal) sets the edge where it is the highest: the line short of 90% of it is not in the band, at 90% of it it is", () => {
-    // the line 0.8 at 130 and 0.95 at 135; the signal line 1.0 at 125, a high above the line's: the pane's top is 1.0
-    // (the band from 0.9), and the line's 0.8 is no SELL (by its own highest, 0.8 would have been the top, and a SELL);
-    // at 0.95 it is in: the SELL
-    const ms = line(200, 0, { 130: 0.8, 135: 0.95 });
+  it("the orange line (the signal) sets the edge where it is the highest: the line short of 95% of it is not in the band, past 95% of it it is", () => {
+    // the line 0.8 at 130 and 0.97 at 135; the signal line 1.0 at 125, a high above the line's: the pane's top is 1.0
+    // (the band from 0.95), and the line's 0.8 is no SELL (by its own highest, 0.8 would have been the top, and a SELL);
+    // at 0.97 it is in: the SELL (#362: 0.95 at 90%, the mark itself now)
+    const ms = line(200, 0, { 130: 0.8, 135: 0.97 });
     const r = pane(ms, line(200, 0, { 125: 1.0 }));
     expect(zoneAt(r, 130)).toMatchObject({ m: 0.8, top: 1.0, topMark: ZONE_SHARE * 1.0, inTop: false });
     expect(zoneAt(pane(ms), 130)).toMatchObject({ m: 0.8, top: 0.8, inTop: true });
     expect(entriesOf(r)).toEqual(["SELL@135"]);
-    expect(zoneEntryAt(r, 135)).toEqual({ side: "SELL", m: 0.95, top: 1.0, bottom: 0, mark: ZONE_SHARE * 1.0, fire: true });
+    expect(zoneEntryAt(r, 135)).toEqual({ side: "SELL", m: 0.97, top: 1.0, bottom: 0, mark: ZONE_SHARE * 1.0, fire: true });
     // the bottom likewise: the signal line's low below the line's
     const down = pane(ms.map((v) => neg(v as number)), line(200, 0, { 125: -1.0 }));
     expect(entriesOf(down)).toEqual(["BUY@135"]);
-    expect(zoneEntryAt(down, 135)).toEqual({ side: "BUY", m: -0.95, top: 0, bottom: -1.0, mark: ZONE_SHARE * -1.0, fire: true });
+    expect(zoneEntryAt(down, 135)).toEqual({ side: "BUY", m: -0.97, top: 0, bottom: -1.0, mark: ZONE_SHARE * -1.0, fire: true });
   });
 
-  it("the bars (the histogram) set the edge where they are the highest; the line at the mark itself is in the band, a hair short of it is not, on both sides; the mark is 0.9 times the edge as it comes, unrounded", () => {
-    const mark = ZONE_SHARE * 0.8;
-    // the bars at 0.8 at 130 (the line 0 there, the signal line -0.8: 0 - (-0.8)), then the line at the mark at 140
-    const high = (m: number) => pane(line(200, 0, { 140: m }), line(200, 0, { 130: -0.8 }), line(200, 0, { 130: 0.8 }));
-    expect(zoneAt(high(mark), 140)).toMatchObject({ m: mark, top: 0.8, bottom: -0.8, topMark: mark, inTop: true });
-    expect(zoneEntryAt(high(mark), 140)).toEqual({ side: "SELL", m: mark, top: 0.8, bottom: -0.8, mark, fire: true });
+  it("the bars (the histogram) set the edge where they are the highest; the line at the mark itself is in the band, a hair short of it is not, on both sides; the mark is 0.95 times the edge as it comes, unrounded", () => {
+    const mark = ZONE_SHARE * 0.7;
+    // the bars at 0.7 at 130 (the line 0 there, the signal line -0.7: 0 - (-0.7)), then the line at the mark at 140
+    const high = (m: number) => pane(line(200, 0, { 140: m }), line(200, 0, { 130: -0.7 }), line(200, 0, { 130: 0.7 }));
+    expect(zoneAt(high(mark), 140)).toMatchObject({ m: mark, top: 0.7, bottom: -0.7, topMark: mark, inTop: true });
+    expect(zoneEntryAt(high(mark), 140)).toEqual({ side: "SELL", m: mark, top: 0.7, bottom: -0.7, mark, fire: true });
     expect(towardZero(mark)).toBeLessThan(mark);
     expect(zoneEntryAt(high(towardZero(mark)), 140)).toBeNull();
-    // 0.9 × 0.8 is not the double 0.72 (0.72 is a hair below it): a line at 0.72 is not in the band
-    expect(mark).not.toBe(0.72);
-    expect(zoneEntryAt(high(0.72), 140)).toBeNull();
-    // the bottom: the bars at -0.8 (the signal line 0.8 over the line's 0)
-    const bmark = ZONE_SHARE * -0.8;
-    const low = (m: number) => pane(line(200, 0, { 140: m }), line(200, 0, { 130: 0.8 }), line(200, 0, { 130: -0.8 }));
-    expect(zoneEntryAt(low(bmark), 140)).toEqual({ side: "BUY", m: bmark, top: 0.8, bottom: -0.8, mark: bmark, fire: true });
+    // 0.95 × 0.7 is not the double 0.665 (it comes out a hair below 0.665, 0.6649999999999999): the band starts there,
+    // so a line at 0.665 is in it, and so is one at the product itself, a hair lower (#362: at 0.9 the edge here was
+    // 0.8, whose 90% came out a hair above 0.72, so a line at 0.72 was not in the band)
+    expect(mark).not.toBe(0.665);
+    expect(mark).toBeLessThan(0.665);
+    expect(zoneEntryAt(high(0.665), 140)).toEqual({ side: "SELL", m: 0.665, top: 0.7, bottom: -0.7, mark, fire: true });
+    // the bottom: the bars at -0.7 (the signal line 0.7 over the line's 0)
+    const bmark = ZONE_SHARE * -0.7;
+    const low = (m: number) => pane(line(200, 0, { 140: m }), line(200, 0, { 130: 0.7 }), line(200, 0, { 130: -0.7 }));
+    expect(zoneEntryAt(low(bmark), 140)).toEqual({ side: "BUY", m: bmark, top: 0.7, bottom: -0.7, mark: bmark, fire: true });
     expect(towardZero(bmark)).toBeGreaterThan(bmark);
     expect(zoneEntryAt(low(towardZero(bmark)), 140)).toBeNull();
-    expect(zoneEntryAt(low(-0.72), 140)).toBeNull();
+    expect(zoneEntryAt(low(-0.665), 140)).toEqual({ side: "BUY", m: -0.665, top: 0.7, bottom: -0.7, mark: bmark, fire: true });
   });
 
   it("no top band while none of the 360 values is above zero (no SELL even at the line's own high), and an edge just above zero has one; the bottom likewise", () => {
@@ -1597,7 +1602,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(zoneAt(rising, 199)).toMatchObject({ m: rising.macd[199], top: 0, topMark: 0, inTop: false });
     expect(Math.max(...(rising.macd.slice(80, 200) as number[]))).toBe(rising.macd[199]);
     expect(entriesOf(rising)).toEqual([]);
-    // at exactly zero the top is 0, not above zero (0.9 × 0 is 0, so without that the line at 0 would be in the band)
+    // at exactly zero the top is 0, not above zero (0.95 × 0 is 0, so without that the line at 0 would be in the band)
     expect(zoneAt(pane(line(200, -0.5, { 199: 0 })), 199)).toMatchObject({ m: 0, top: 0, topMark: 0, inTop: false });
     expect(zoneEntryAt(pane(line(200, -0.5, { 199: 0 })), 199)).toBeNull();
     // an edge just above zero: the band starts just above zero, and the line there is a SELL
@@ -1641,9 +1646,11 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(decideZoneOnWindow(late.map((close) => ({ close: -close })), LEVEL_WINDOW - 1)).toBeNull();
   });
 
-  it("on closes: just past zero after a long fall the line CAN come into the band with the orange line still below zero (the top is at least the bar's own bars, m - s, so it takes m >= 9 |s|): one bar up gives the SELL at the crossing bar itself, and the mirror a BUY; a smaller bar up gives none", () => {
-    // the notes say there is USUALLY no SELL just past zero, not never: 2 of the 124 entries on the stored bars came
-    // with the orange line still on the other side of zero, both at the bar after the line crossed it (docs §8.119).
+  it("on closes: just past zero after a long fall the line CAN come into the band with the orange line still below zero (the top is at least the bar's own bars, m - s, so it takes m >= 19 |s|): one bar up gives the SELL at the crossing bar itself, and the mirror a BUY; a smaller bar up gives none", () => {
+    // the notes say there is USUALLY no SELL just past zero, not never: 2 of the 110 entries on the stored bars came
+    // with the orange line still on the other side of zero, both at the bar after the line crossed it (docs §8.122; at
+    // 90%, 2 of the 124, the same two bars, §8.119). (#362: at 95% it takes m >= 19 |s|, at 90% it took 9 |s|; the
+    // three bars up below give the same answers at both)
     // Here: flat at 150 (259 bars), a fall of 0.01 a bar (300 bars), flat (40 bars), then the newest bar up by `jump`
     const closesUp = (jump: number) => {
       const out: number[] = [];
@@ -1656,7 +1663,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     };
     const k = LEVEL_WINDOW - 1;
     // up 0.40: the line crosses zero at the newest bar, after 340 bars below it; the orange line still below zero, the
-    // bars above the line and the pane's top; the line at 9 |s| or more, so at 90% of the bars or more: the SELL
+    // bars above the line and the pane's top; the line at 19 |s| or more, so at 95% of the bars or more: the SELL
     const up = closesUp(0.4);
     expect(up).toHaveLength(LEVEL_WINDOW);
     const r = macd(up);
@@ -1668,21 +1675,21 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(s).toBeLessThan(0);
     expect(h).toBeGreaterThan(ms[k]);
     expect(zoneAt(r, k)!.top).toBe(h);
-    expect(ms[k]).toBeGreaterThanOrEqual(9 * Math.abs(s));
+    expect(ms[k]).toBeGreaterThanOrEqual(19 * Math.abs(s));
     expect(zoneAt(r, k - 1)!.inTop).toBe(false);
     const d = decideZoneOnWindow(up.map((close) => ({ close })), k);
     expect(d).toMatchObject({ side: "SELL", m: ms[k], top: h, mark: ZONE_SHARE * h });
     // the mirror: the closes negated give the BUY at the same bar, the numbers negated
     expect(decideZoneOnWindow(up.map((close) => ({ close: -close })), k)).toEqual({ side: "BUY", m: -d!.m, top: -d!.bottom, bottom: -d!.top, mark: -d!.mark, fire: true });
     // up 0.30: the line crosses zero at the newest bar too, but the orange line is further below zero (the line under
-    // 9 |s|): the bars set the top, the line is short of 90% of them, and there is no SELL
+    // 19 |s|): the bars set the top, the line is short of 95% of them, and there is no SELL
     const small = closesUp(0.3);
     const rs = macd(small);
     const ss = rs.signal[k] as number;
     expect(rs.macd[k - 1]).toBeLessThan(0);
     expect(rs.macd[k]).toBeGreaterThan(0);
     expect(ss).toBeLessThan(0);
-    expect(rs.macd[k] as number).toBeLessThan(9 * Math.abs(ss));
+    expect(rs.macd[k] as number).toBeLessThan(19 * Math.abs(ss));
     expect(zoneAt(rs, k)).toMatchObject({ top: rs.hist[k], inTop: false });
     expect(decideZoneOnWindow(small.map((close) => ({ close })), k)).toBeNull();
     // up 0.50: the orange line crosses zero at that bar as well, and the line is the pane's top itself: a SELL too
@@ -1719,16 +1726,18 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
 
   it("an old edge leaving the 120 brings it toward zero: the line can come into the band without moving (a hand-made MACD, and the waves' bars)", () => {
     // the line 0 until 99, then 0.6 all along; the signal line 1.0 at 100 (the old top): in the 120 ending at 219 the top
-    // is 1.0 (the band from 0.9); at 220 the old top has left them, the top is the line's 0.6, and the line, not moved,
+    // is 1.0 (the band from 0.95); at 220 the old top has left them, the top is the line's 0.6, and the line, not moved,
     // is in the band
     const r = pane(line(260, 0.6, Object.fromEntries(Array.from({ length: 100 }, (_, j) => [j, 0]))), line(260, 0, { 100: 1.0 }));
     expect(entriesOf(r)).toEqual(["SELL@220"]);
     expect(r.macd[220]).toBe(r.macd[219]);
     expect(zoneAt(r, 219)).toMatchObject({ m: 0.6, top: 1.0, inTop: false });
     expect(zoneEntryAt(r, 220)).toEqual({ side: "SELL", m: 0.6, top: 0.6, bottom: 0, mark: ZONE_SHARE * 0.6, fire: true });
-    // on the waves' bars: the SELL at bar 1,328 came as the line fell, the top of the bar before's pane (the orange line at
-    // its oldest bar, window index 479) gone from the bar's 120; the new top is the orange line's too
-    const i = 1328;
+    // on the waves' bars: the SELL at bar 1,329 came as the line fell, the top of the bar before's pane (the orange line at
+    // its oldest bar, window index 479) gone from the bar's 120; the new top is the line's own, from inside the 120
+    // (two bars back, window index 597).
+    // (#362: at 95%; at 90% the SELL came a bar earlier, at 1,328, the new top the orange line's at window index 480)
+    const i = 1329;
     expect(decideZoneOnWindow(yen, i)!.side).toBe("SELL");
     const w = macd(windowOf(yen, i).map((b) => b.close));
     const lw = w.macd as number[];
@@ -1740,7 +1749,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(now.top).toBeLessThan(before.top);
     expect(before.top).toBe(w.signal[479]);
     expect([...w.macd.slice(480), ...w.signal.slice(480), ...w.hist.slice(480)]).not.toContain(before.top);
-    expect(now.top).toBe(w.signal[480]);
+    expect(now.top).toBe(w.macd[597]);
   });
 
   it("on closes: decides exactly the zone rule's entries on the newest 600 closed bars (against the rule told again here), at both sizes", () => {
@@ -1774,9 +1783,10 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
       const edge = d.side === "SELL" ? d.top : d.bottom;
       by[(["macd", "signal", "hist"] as const).find((k) => r[k].slice(LEVEL_WINDOW - ZONE_BARS).includes(edge))!].push(i);
     }
-    expect(by.macd).toHaveLength(21);
-    expect(by.signal).toEqual([951, 1328, 1526, 1722, 1902, 2100]);
-    expect(by.hist).toEqual([1222, 1822, 2272]);
+    // (#362: at 95%; at 90% the line set it at 21 entries, the orange line at 6 and the bars at 3)
+    expect(by.macd).toHaveLength(24);
+    expect(by.signal).toEqual([1526, 1902]);
+    expect(by.hist).toEqual([1222, 1822, 2274]);
   });
 
   it("on closes: the line going out of the band and in again within the same peak or valley is another entry (the waves' bars)", () => {
@@ -1793,8 +1803,8 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
       const since = ms.slice(j);
       if (d.side === "SELL" ? since.every((v) => v > 0) : since.every((v) => v < 0)) again.push(`${d.side}@${i}`);
     }
-    // 5 BUYs and 3 SELLs of the 30 entries
-    expect(again).toEqual(["BUY@687", "BUY@809", "BUY@1229", "BUY@1253", "BUY@1378", "SELL@1761", "SELL@2203", "SELL@2329"]);
+    // 4 BUYs and 3 SELLs of the 29 entries (#362: at 95%; at 90%, 5 and 3 of 30)
+    expect(again).toEqual(["BUY@690", "BUY@809", "BUY@1253", "BUY@1378", "SELL@1764", "SELL@2204", "SELL@2330"]);
     // and each of them is mailed (the email does not keep a gap after the first)
     for (const k of again) {
       const i = Number(k.split("@")[1]);
@@ -1887,7 +1897,7 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     }
   });
 
-  it("is no longer the cross rule: on the waves' bars the cross rule fires at 45 bars and the email at 30 others, never at the same bar", () => {
+  it("is no longer the cross rule: on the waves' bars the cross rule fires at 45 bars and the email at 29 others, never at the same bar", () => {
     let crossOnly = 0;
     let mailedOnly = 0;
     let both = 0;
@@ -1969,25 +1979,25 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     return macdhSignals(pair, "1h", windowOf(bars, i), closeMsOf(i) + 30_000)[0];
   };
 
-  it("the Japanese email: the blue line, the pane's top or bottom and its 90%, ULTRA's levels, the rule, that it is not measured, how to stop it", () => {
+  it("the Japanese email: the blue line, the pane's top or bottom and its 95%, ULTRA's levels, the rule, that it is not measured, how to stop it", () => {
     const g = sample("SELL");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "ja");
     expect(mail.subject).toBe("【Sextant】ドル/円 1時間足 売り（SELL）のサイン（MACD の山・谷）");
     const t = mail.text;
     expect(t).toContain("ドル/円の1時間足で、MACD の山・谷の売り（SELL）のサインが出ました。");
-    expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の90%以上（0の線から測って）に届きました");
+    expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の95%以上（0の線から測って）に届きました");
     expect(f.m).toBeGreaterThan(0);
-    expect(t).toContain(`\n  MACD = ${f.m.toFixed(3)}、枠の上の端 = ${f.top.toFixed(3)}（その90% = ${f.mark.toFixed(3)}）`);
+    expect(t).toContain(`\n  MACD = ${f.m.toFixed(3)}、枠の上の端 = ${f.top.toFixed(3)}（その95% = ${f.mark.toFixed(3)}）`);
     expect(t).toContain("損切り・利確の目安（ULTRA と同じ数字）:");
     expect(t).toContain("（13.0pips）");
     expect(t).toContain("利確1");
-    expect(t).toContain("この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119）。");
+    expect(t).toContain("この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119・§8.122）。");
     expect(t).toContain(
-      "1時間足の MACD(12・26・9)の青い線が、新しい120本（判定した足までの120本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の90%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の90%以上に届いた足で買いを送ります。",
+      "1時間足の MACD(12・26・9)の青い線が、新しい120本（判定した足までの120本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の95%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の95%以上に届いた足で買いを送ります。",
     );
     expect(t).toContain("枠の端には、チャートが枠を描く時に足す余白は入れていません。");
-    expect(t).toContain("一つの山・谷では1通だけで、青い線が90%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。");
+    expect(t).toContain("一つの山・谷では1通だけで、青い線が95%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。");
     expect(t).toContain("損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。");
     expect(t).toContain("この決まりの勝率と1回あたりの損益は、まだ測っていません。");
     expect(t).toContain("価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。");
@@ -1998,18 +2008,18 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
       expect(t, no).not.toContain(no);
     }
     // nor of the first make of v28, never mailed: the blue line's own highest or lowest of the 120 bars
-    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%"]) expect(t, no).not.toContain(no);
+    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%", "一番高い値の95%", "一番低い値の95%"]) expect(t, no).not.toContain(no);
     const buy = sample("BUY");
     const fb = buy.macdh!;
     const bt = renderIndicatorMail(buy, "ja");
     expect(bt.subject).toBe("【Sextant】ドル/円 1時間足 買い（BUY）のサイン（MACD の山・谷）");
     expect(bt.text).toContain("ドル/円の1時間足で、MACD の山・谷の買い（BUY）のサインが出ました。");
-    expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の90%以上（0の線から測って）に届きました");
+    expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の95%以上（0の線から測って）に届きました");
     // below zero the minus is the chart's (U+2212), not toFixed's hyphen
     expect(fb.m).toBeLessThan(0);
-    expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(3)}、枠の下の端 = −${(-fb.bottom).toFixed(3)}（その90% = −${(-fb.mark).toFixed(3)}）`);
+    expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(3)}、枠の下の端 = −${(-fb.bottom).toFixed(3)}（その95% = −${(-fb.mark).toFixed(3)}）`);
     expect(bt.text).not.toContain("= -");
-    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%"]) expect(bt.text, no).not.toContain(no);
+    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%", "一番高い値の95%", "一番低い値の95%"]) expect(bt.text, no).not.toContain(no);
   });
 
   it("the English email says the same", () => {
@@ -2019,22 +2029,22 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(mail.subject).toBe("[Sextant] USD/JPY 1-hour BUY signal (MACD peak/valley)");
     const t = mail.text;
     expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 1-hour chart.");
-    // "90% or more of the way from the zero line", as the rule paragraph says it (not "at or below 90% of the lowest",
+    // "95% or more of the way from the zero line", as the rule paragraph says it (not "at or below 95% of the lowest",
     // which could be read as a distance from zero, the other way round)
     expect(t).toContain(
-      "MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the MACD pane of the newest 120 bars: 90% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram)",
+      "MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the MACD pane of the newest 120 bars: 95% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram)",
     );
-    expect(t).not.toContain("at or below 90%");
+    expect(t).not.toContain("at or below 95%");
     expect(f.m).toBeLessThan(0);
-    expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(3)}; bottom of the pane = −${(-f.bottom).toFixed(3)}; 90% of it = −${(-f.mark).toFixed(3)}`);
+    expect(t).toContain(`\n  MACD = −${(-f.m).toFixed(3)}; bottom of the pane = −${(-f.bottom).toFixed(3)}; 95% of it = −${(-f.mark).toFixed(3)}`);
     expect(t).not.toContain("= -");
     expect(t).toContain("Stop and targets (ULTRA's numbers):");
     expect(t).toContain("(13.0 pips)");
     expect(t).toContain(
-      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches 90% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches 90% or more of the way to the pane's bottom (the lowest of them).",
+      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119, §8.122): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches 95% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches 95% or more of the way to the pane's bottom (the lowest of them).",
     );
     expect(t).toContain("The pane's edges are taken without the margin the chart adds as it draws them.");
-    expect(t).toContain("One email per peak or valley: no next one until the line has gone back inside the 90% mark (if it then comes back to the mark, another is sent).");
+    expect(t).toContain("One email per peak or valley: no next one until the line has gone back inside the 95% mark (if it then comes back to the mark, another is sent).");
     expect(t).toContain("It has no stop or target of its own, so these are ULTRA's numbers.");
     expect(t).toContain("This rule's win rate and its profit or loss a trade have not been measured.");
     expect(t).toContain("untick the chart under MACD peak/valley");
@@ -2050,10 +2060,10 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     const fs = sell.macdh!;
     const st = renderIndicatorMail(sell, "en").text;
     expect(st).toContain(
-      "MACD(12, 26, 9): the MACD line (blue) reached the top band of the MACD pane of the newest 120 bars: 90% or more of the way from the zero line to the pane's top (the highest of the MACD line, the signal line and the histogram)",
+      "MACD(12, 26, 9): the MACD line (blue) reached the top band of the MACD pane of the newest 120 bars: 95% or more of the way from the zero line to the pane's top (the highest of the MACD line, the signal line and the histogram)",
     );
-    expect(st).not.toContain("at or above 90%");
-    expect(st).toContain(`\n  MACD = ${fs.m.toFixed(3)}; top of the pane = ${fs.top.toFixed(3)}; 90% of it = ${fs.mark.toFixed(3)}`);
+    expect(st).not.toContain("at or above 95%");
+    expect(st).toContain(`\n  MACD = ${fs.m.toFixed(3)}; top of the pane = ${fs.top.toFixed(3)}; 95% of it = ${fs.mark.toFixed(3)}`);
     for (const no of ["highest of the 120 bars", "to their highest"]) expect(st, no).not.toContain(no);
   });
 
@@ -2064,10 +2074,10 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
     expect(f.top / sample("SELL").macdh!.top).toBeCloseTo(0.01, 10);
     const mail = renderIndicatorMail(g, "ja");
     expect(mail.subject).toBe("【Sextant】ユーロ/ドル 1時間足 売り（SELL）のサイン（MACD の山・谷）");
-    expect(mail.text).toContain(`\n  MACD = ${f.m.toFixed(5)}、枠の上の端 = ${f.top.toFixed(5)}（その90% = ${f.mark.toFixed(5)}）`);
+    expect(mail.text).toContain(`\n  MACD = ${f.m.toFixed(5)}、枠の上の端 = ${f.top.toFixed(5)}（その95% = ${f.mark.toFixed(5)}）`);
     const b = sample("BUY", "EUR/USD").macdh!;
     expect(renderIndicatorMail(sample("BUY", "EUR/USD"), "en").text).toContain(
-      `\n  MACD = −${(-b.m).toFixed(5)}; bottom of the pane = −${(-b.bottom).toFixed(5)}; 90% of it = −${(-b.mark).toFixed(5)}`,
+      `\n  MACD = −${(-b.m).toFixed(5)}; bottom of the pane = −${(-b.bottom).toFixed(5)}; 95% of it = −${(-b.mark).toFixed(5)}`,
     );
   });
 
@@ -2076,47 +2086,50 @@ describe("#353 the 1-hour MACD email from v28: the blue line at 90% or more of t
   // or bottom, never mailed) on GMO's stored 1-hour bars, each at the line's first bar past zero (after 63, 31 and 155
   // bars on the other side), where the pane's edge was the bars' (the line at some 3%, 11% and 23% of it: no entry of
   // the pane rule); of the pane rule's 124 entries on the same bars (2026-05-27 to 10-12, the bars production judges)
-  // none had an edge that small. The digits stay for one that comes: in the price's 5 decimals EUR/USD's numbers below
+  // none had an edge that small (#362: nor had its 110 at 95%). The digits stay for one that comes: in the price's 5 decimals EUR/USD's numbers below
   // read 0.00001 three times
   it("a tiny top or bottom is written to two significant digits, the three numbers alike; an ordinary one keeps the price's decimals", () => {
     const withFacts = (g: ReturnType<typeof sample>, macdh: NonNullable<ReturnType<typeof sample>["macdh"]>) => ({ ...g, macdh });
     // EUR/USD, the bar that opened 2026-09-21 00:00 UTC (the first make's SELL at the line's own new top, just above zero)
     const top = 1.2519827838231024e-5;
-    expect(ZONE_SHARE * top).toBe(1.1267845054407922e-5);
+    expect(ZONE_SHARE * top).toBe(1.1893836446319471e-5);
     const sell = withFacts(sample("SELL", "EUR/USD"), { m: top, top, bottom: -0.002224448448828964, mark: ZONE_SHARE * top });
-    expect(renderIndicatorMail(sell, "ja").text).toContain("\n  MACD = 0.000013、枠の上の端 = 0.000013（その90% = 0.000011）");
-    expect(renderIndicatorMail(sell, "en").text).toContain("\n  MACD = 0.000013; top of the pane = 0.000013; 90% of it = 0.000011");
+    expect(renderIndicatorMail(sell, "ja").text).toContain("\n  MACD = 0.000013、枠の上の端 = 0.000013（その95% = 0.000012）");
+    expect(renderIndicatorMail(sell, "en").text).toContain("\n  MACD = 0.000013; top of the pane = 0.000013; 95% of it = 0.000012");
     // AUD/USD, the bar that opened 2026-09-09 19:00 UTC (the first make's BUY at the line's own new bottom, just below zero)
     const bottom = -2.7212390874331582e-5;
-    expect(ZONE_SHARE * bottom).toBe(-2.4491151786898425e-5);
+    expect(ZONE_SHARE * bottom).toBe(-2.5851771330615e-5);
     const buy = withFacts(sample("BUY", "AUD/USD"), { m: bottom, top: 0.0011648807783815052, bottom, mark: ZONE_SHARE * bottom });
     expect(buy.pair).toBe("AUD/USD");
-    expect(renderIndicatorMail(buy, "ja").text).toContain("\n  MACD = −0.000027、枠の下の端 = −0.000027（その90% = −0.000024）");
-    expect(renderIndicatorMail(buy, "en").text).toContain("\n  MACD = −0.000027; bottom of the pane = −0.000027; 90% of it = −0.000024");
+    expect(renderIndicatorMail(buy, "ja").text).toContain("\n  MACD = −0.000027、枠の下の端 = −0.000027（その95% = −0.000026）");
+    expect(renderIndicatorMail(buy, "en").text).toContain("\n  MACD = −0.000027; bottom of the pane = −0.000027; 95% of it = −0.000026");
     // USD/JPY, the bar that opened 2026-07-27 01:00 UTC (the first make's BUY): the yen's 3 decimals made 4 (they read −0.010,
     // −0.010, −0.009)
     const low = -0.009667768969592316;
     const yenBuy = withFacts(sample("BUY"), { m: low, top: 0.20580689070584413, bottom: low, mark: ZONE_SHARE * low });
-    expect(renderIndicatorMail(yenBuy, "ja").text).toContain("\n  MACD = −0.0097、枠の下の端 = −0.0097（その90% = −0.0087）");
+    expect(renderIndicatorMail(yenBuy, "ja").text).toContain("\n  MACD = −0.0097、枠の下の端 = −0.0097（その95% = −0.0092）");
     // the decimals follow the end on the signal's side only (a SELL's tiny bottom changes nothing), and two significant
     // digits at the price's decimals keep them: 0.010 on a yen pair is 3 decimals, 0.0099 is 4
     const yenSell = sample("SELL");
     const f = yenSell.macdh!;
     expect(renderIndicatorMail(withFacts(yenSell, { ...f, bottom: -1e-9 }), "ja").text).toContain(
-      `\n  MACD = ${f.m.toFixed(3)}、枠の上の端 = ${f.top.toFixed(3)}（その90% = ${f.mark.toFixed(3)}）`,
+      `\n  MACD = ${f.m.toFixed(3)}、枠の上の端 = ${f.top.toFixed(3)}（その95% = ${f.mark.toFixed(3)}）`,
     );
-    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.01, top: 0.01, bottom: -1, mark: 0.009 }), "ja").text).toContain(
-      "\n  MACD = 0.010、枠の上の端 = 0.010（その90% = 0.009）",
+    // (#362: the mark is 95% of 0.010, the double nearest 0.0095, which is a hair under 0.0095: 0.009 in 3 decimals)
+    expect(ZONE_SHARE * 0.01).toBe(0.0095);
+    expect((0.0095).toFixed(3)).toBe("0.009");
+    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.01, top: 0.01, bottom: -1, mark: ZONE_SHARE * 0.01 }), "ja").text).toContain(
+      "\n  MACD = 0.010、枠の上の端 = 0.010（その95% = 0.009）",
     );
-    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.0099, top: 0.0099, bottom: -1, mark: 0.00891 }), "ja").text).toContain(
-      "\n  MACD = 0.0099、枠の上の端 = 0.0099（その90% = 0.0089）",
+    expect(renderIndicatorMail(withFacts(yenSell, { m: 0.0099, top: 0.0099, bottom: -1, mark: ZONE_SHARE * 0.0099 }), "ja").text).toContain(
+      "\n  MACD = 0.0099、枠の上の端 = 0.0099（その95% = 0.0094）",
     );
     // gold keeps its 2 decimals on its ordinary numbers (the #345 block's gold emails); a top of a few cents gets more
-    const goldSell = withFacts(sample("SELL"), { m: 0.04, top: 0.04, bottom: -9, mark: 0.036 });
-    expect(renderIndicatorMail({ ...goldSell, pair: "XAU/USD" }, "ja").text).toContain("\n  MACD = 0.040、枠の上の端 = 0.040（その90% = 0.036）");
+    const goldSell = withFacts(sample("SELL"), { m: 0.04, top: 0.04, bottom: -9, mark: ZONE_SHARE * 0.04 });
+    expect(renderIndicatorMail({ ...goldSell, pair: "XAU/USD" }, "ja").text).toContain("\n  MACD = 0.040、枠の上の端 = 0.040（その95% = 0.038）");
     // nothing throws on a top far below any price's digits (at most 20 decimals), and a number that is none is a dash
-    const far = withFacts(yenSell, { m: 1e-30, top: 1e-30, bottom: -1, mark: 9e-31 });
-    expect(renderIndicatorMail(far, "en").text).toContain(`\n  MACD = ${(1e-30).toFixed(20)}; top of the pane = ${(1e-30).toFixed(20)}; 90% of it = ${(9e-31).toFixed(20)}`);
-    expect(renderIndicatorMail(withFacts(yenSell, { ...f, mark: Number.NaN }), "ja").text).toContain("（その90% = —）");
+    const far = withFacts(yenSell, { m: 1e-30, top: 1e-30, bottom: -1, mark: ZONE_SHARE * 1e-30 });
+    expect(renderIndicatorMail(far, "en").text).toContain(`\n  MACD = ${(1e-30).toFixed(20)}; top of the pane = ${(1e-30).toFixed(20)}; 95% of it = ${(ZONE_SHARE * 1e-30).toFixed(20)}`);
+    expect(renderIndicatorMail(withFacts(yenSell, { ...f, mark: Number.NaN }), "ja").text).toContain("（その95% = —）");
   });
 });

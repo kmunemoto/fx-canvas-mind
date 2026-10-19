@@ -83,7 +83,7 @@ export const MACDX_RULE_ID =
 // peak/valley"); this id, which starts as the app reads the rule back from
 // it, tells its emails from the 5-minute rule's and from v25's.
 // #353 (docs §8.119): from v28 no cross and no level: a SELL where the MACD
-// line (the blue line) comes to ZONE_PCT (90)% or more of the way from the
+// line (the blue line) comes to ZONE_PCT (90; 95 from v30)% or more of the way from the
 // zero line to the top of the MACD pane of the newest ZONE_BARS (120) bars
 // (the highest of the MACD line, the signal line and the histogram there), a
 // BUY likewise toward the pane's bottom, once as it gets there
@@ -93,11 +93,16 @@ export const MACDX_RULE_ID =
 // (v26 and v27's was macdx_12_26_9_w600_1h_k0.8mv_v3; the id was made for
 // the blue line's own top, which was never mailed, and is the pane's rule's);
 // the subscriptions are as they were.
+// #362 (docs §8.122): from v30 the band starts at 95% (ZONE_PCT 95), the
+// owner's 「やっぱりメールの判断を95%に設定して」 (2026-10-19), mailed under
+// macdx_12_26_9_w600_1h_z95of120_v6 (not _v5: the 80% cross rule of #359,
+// never put out, was made under macdx_12_26_9_w600_1h_x80of120_v5, docs
+// §8.121); the pane, the bars and the subscriptions are as they were.
 // MACDH_K is v26's k, kept with the rule it belongs to (decideScaledOnWindow,
 // which the morning check's SQL v3 mirrors); no email uses it from v28.
 export const MACDH_K = 0.8;
 export const MACDH_RULE_ID =
-  `macdx_${MACD_DEFAULTS.fast}_${MACD_DEFAULTS.slow}_${MACD_DEFAULTS.signal}_w${LEVEL_WINDOW}_1h_z${ZONE_PCT}of${ZONE_BARS}_v4`;
+  `macdx_${MACD_DEFAULTS.fast}_${MACD_DEFAULTS.slow}_${MACD_DEFAULTS.signal}_w${LEVEL_WINDOW}_1h_z${ZONE_PCT}of${ZONE_BARS}_v6`;
 // #291: the video's way (docs §8.112, _shared/sweep-cross.ts): EMA 20 and EMA
 // 80, judged on the 600 closed bars ending at the bar, crosses counted from
 // its 241st, the stop a pip beyond the last five bars, the targets 15 and 20
@@ -857,13 +862,13 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
 // #353 (docs §8.119): how the MACD email writes its three numbers (the blue
-// line, the top or bottom of the newest 120 bars' MACD pane, and 90% of it),
+// line, the top or bottom of the newest 120 bars' MACD pane, and ZONE_PCT% of it),
 // the minus as the chart's (U+2212), not toFixed's hyphen. In the price's
 // decimals, as the chart's MACD pane shows them, or more where the pane's
 // edge on the signal's side (the top for a SELL, the bottom for a BUY) would
 // come out with fewer than two significant digits in those (a top of
-// 0.0000125 on EUR/USD is written 0.000013, not 0.00001, and its 90%
-// 0.000011); the three in the same decimals, at most 20
+// 0.0000125 on EUR/USD is written 0.000013, not 0.00001, and its 95%
+// 0.000012); the three in the same decimals, at most 20
 const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
   const d = decimalsOf(s.pair);
   const f = s.macdh;
@@ -985,7 +990,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
           `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
           ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
         ].join("\n"),
-        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches ${ZONE_PCT}% or more of the way from the zero line to the top of the MACD pane of the newest ${ZONE_BARS} bars (the ${ZONE_BARS} up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches ${ZONE_PCT}% or more of the way to the pane's bottom (the lowest of them). The pane's edges are taken without the margin the chart adds as it draws them. One email per peak or valley: no next one until the line has gone back inside the ${ZONE_PCT}% mark (if it then comes back to the mark, another is sent). It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
+        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119, §8.122): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches ${ZONE_PCT}% or more of the way from the zero line to the top of the MACD pane of the newest ${ZONE_BARS} bars (the ${ZONE_BARS} up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches ${ZONE_PCT}% or more of the way to the pane's bottom (the lowest of them). The pane's edges are taken without the margin the chart adds as it draws them. One email per peak or valley: no next one until the line has gone back inside the ${ZONE_PCT}% mark (if it then comes back to the mark, another is sent). It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
         `${source} Check the latest state in the app before you place an order:\n${APP_URL}`,
         "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD peak/valley.\nThis is reference information, not investment advice. Every trading decision is your own.",
       ]);
@@ -1067,7 +1072,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
     // #324: the 1-hour rule's (docs §8.114), the MACD email's from v25; #339: its level the pair's own (§8.116);
     // #353: from v28 the blue line at ZONE_PCT% of the top or bottom of the newest ZONE_BARS bars' MACD pane
     // (§8.119). The 90% is said 「以上」 on both sides, as the owner said it (「上か下の90%以上の所」): of the way
-    // from the zero line, so the numbers below it are the signed ones
+    // from the zero line, so the numbers below it are the signed ones; #362: from v30 95% (ZONE_PCT, §8.122)
     const f = s.macdh;
     const buy = s.side === "BUY";
     const sideM = `${buy ? "買い" : "売り"}（${s.side}）`;
@@ -1087,7 +1092,7 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
         ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
       ].join("\n"),
-      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119）。1時間足の MACD(12・26・9)の青い線が、新しい${ZONE_BARS}本（判定した足までの${ZONE_BARS}本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の${ZONE_PCT}%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の${ZONE_PCT}%以上に届いた足で買いを送ります。枠の端には、チャートが枠を描く時に足す余白は入れていません。一つの山・谷では1通だけで、青い線が${ZONE_PCT}%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
+      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119・§8.122）。1時間足の MACD(12・26・9)の青い線が、新しい${ZONE_BARS}本（判定した足までの${ZONE_BARS}本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の${ZONE_PCT}%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の${ZONE_PCT}%以上に届いた足で買いを送ります。枠の端には、チャートが枠を描く時に足す余白は入れていません。一つの山・谷では1通だけで、青い線が${ZONE_PCT}%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
       "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の山・谷」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);

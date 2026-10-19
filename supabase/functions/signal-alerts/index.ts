@@ -36,7 +36,8 @@
 // owner's levels; #345: and on gold's 1-hour chart from v27, read from
 // Twelve Data; #353: from v28 the blue line at 90% of the way from zero to
 // the top or bottom of the newest 120 bars' MACD pane (the highest or lowest
-// of the MACD line, the signal line and the histogram), no cross). Not
+// of the MACD line, the signal line and the histogram), no cross; #362: 95%
+// from v30). Not
 // recorded or settled (signal_events is the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
@@ -210,7 +211,12 @@ import type { Candle } from "../analyze/indicators.ts";
 // the stop and targets, the subscriptions and the other rules are as they
 // were. Put out after GMO's day rolls (21:30-21:50 UTC), so a morning check
 // counts each day under one rule.
-const FUNCTION_VERSION = "signal-alerts-v28-2026-10-14T21:00:00Z";
+// v30 (#362, docs §8.122): the same rule with the band from 95% (ZONE_PCT),
+// the owner's 「やっぱりメールの判断を95%に設定して」 (2026-10-19), recorded
+// under its own rule id (MACDH_RULE_ID, ..._z95of120_v6); nothing else
+// changes. (v29, the 80% cross rule of #359, was never put out, docs §8.121.)
+// Put out after GMO's day rolls, as v28 was.
+const FUNCTION_VERSION = "signal-alerts-v30-2026-10-19T21:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
