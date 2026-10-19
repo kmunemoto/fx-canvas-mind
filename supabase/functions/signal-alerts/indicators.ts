@@ -83,7 +83,7 @@ export const MACDX_RULE_ID =
 // peak/valley"); this id, which starts as the app reads the rule back from
 // it, tells its emails from the 5-minute rule's and from v25's.
 // #353 (docs §8.119): from v28 no cross and no level: a SELL where the MACD
-// line (the blue line) comes to ZONE_PCT (90)% or more of the way from the
+// line (the blue line) comes to ZONE_PCT (90; 95 from v30)% or more of the way from the
 // zero line to the top of the MACD pane of the newest ZONE_BARS (120) bars
 // (the highest of the MACD line, the signal line and the histogram there), a
 // BUY likewise toward the pane's bottom, once as it gets there
@@ -862,13 +862,13 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
 // #353 (docs §8.119): how the MACD email writes its three numbers (the blue
-// line, the top or bottom of the newest 120 bars' MACD pane, and 90% of it),
+// line, the top or bottom of the newest 120 bars' MACD pane, and ZONE_PCT% of it),
 // the minus as the chart's (U+2212), not toFixed's hyphen. In the price's
 // decimals, as the chart's MACD pane shows them, or more where the pane's
 // edge on the signal's side (the top for a SELL, the bottom for a BUY) would
 // come out with fewer than two significant digits in those (a top of
-// 0.0000125 on EUR/USD is written 0.000013, not 0.00001, and its 90%
-// 0.000011); the three in the same decimals, at most 20
+// 0.0000125 on EUR/USD is written 0.000013, not 0.00001, and its 95%
+// 0.000012); the three in the same decimals, at most 20
 const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
   const d = decimalsOf(s.pair);
   const f = s.macdh;

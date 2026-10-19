@@ -36,9 +36,9 @@
 // 2026-10-19: 「やっぱりメールの判断を95%に設定して」. Nothing else of the zone
 // rule changes: the same pane (the newest 120 bars' MACD line, signal line,
 // histogram and 0), measured from the zero line, an email at the bar the
-// line comes in, none more until it has gone back inside the mark. Where the
-// rule below says 90% (0.9, ZONE_SHARE) it is ZONE_PCT's; its counts on the
-// stored bars are the 90% rule's (docs §8.119), the 95% rule's are in §8.122.
+// line comes in, none more until it has gone back inside the mark. The zone
+// rule below is written at 95% with the 95% rule's counts on the stored bars
+// (docs §8.122); the 90% rule's (v28, v29) are in §8.119.
 //
 // THE RULE (v25 to v27): at a closed 1-hour bar i, judged on the 600 closed
 // bars ending at i (the chart's history; MACD from those bars alone, as
@@ -73,27 +73,31 @@
 // 120 bars ending at it (i-120 to i-1). Where the blue line sets the edge (as
 // it does while a rise or a fall goes on) a bar where it is the highest of
 // the 120 is the edge itself, in the band; where the orange line or the bars
-// set it, the line is in only at 90% of theirs: just past zero after a long
+// set it, the line is in only at 95% of theirs: just past zero after a long
 // stretch below it the orange line is mostly still below zero, the bars
 // (m - s) stand above the line, and mostly there is no SELL (nor a BUY just
 // below zero after a long stretch above it). Not always: the top is at least
 // the bar's own h = m - s, so with s below zero the line is in only if
-// m >= 9 * |s| (the orange line within a ninth of the line's height below
-// zero), and then it can be: 2 of the 124 entries on the stored bars (docs
+// m >= 19 * |s| (the orange line within a nineteenth of the line's height
+// below zero; at 90% it was 9 * |s|, a ninth), and then it can be: 2 of the
+// 110 entries on the stored bars (docs §8.122; the same 2 of the 124 at 90%,
 // §8.119), a SELL on AUD/USD and a BUY on EUR/USD, both at the bar after the
 // line crossed zero; made-up closes give one at the crossing bar itself
 // (src/test/indicator-alerts.test.tsx). Staying in a band mails nothing
 // more; going out and in again mails again (no gap is kept between, the
-// owner's 「90%より内側に戻るまで」 as it stands). With none of the 360 values
+// owner's 「90%より内側に戻るまで」, said of the 90% mark, as it stands; at 95%
+// the 95% mark). With none of the 360 values
 // above zero there is no top band (no SELL; the bottom likewise). An old
 // edge leaving the 120 brings it toward zero, as the chart's pane shrinks:
 // the line can come into the band without moving. The chart pads the pane
 // by 8% of its height (top - bottom) above the top and below the bottom as
 // it draws it, takes in the forming bar, and works MACD out from the bars it
 // has read, so on the screen the line sits under the drawn edge when it
-// fires, mostly short of 90% of the way from zero to it (at the 124 stored
-// entries, on a pane drawn from their 120 closed bars, about 60% to 91%,
-// about 80% in the middle, 90% or more 3 times; docs §8.119).
+// fires, never at 95% of the way from zero to it (the margin keeps it under
+// 1 / 1.08 of it, some 92.6%): at the 110 stored entries, on a pane drawn
+// from their 120 closed bars, about 65% to 92%, about 81% in the middle, 90%
+// or more 6 times (docs §8.122; the 124 of the 90% rule, about 60% to 91%,
+// 90% or more 3 times, §8.119).
 
 import { macd } from "./macd.ts";
 import { sidesOf } from "./macd-extreme.ts";
@@ -105,8 +109,7 @@ export const LEVEL_WINDOW = 600;
 // percent (a whole number: the rule id says it) and as the share held
 // against (95 / 100, the double 0.95 is). #362 (docs §8.122): 95 from v30,
 // the owner's 「やっぱりメールの判断を95%に設定して」 (2026-10-19); 90 in v28
-// and v29 (the rule as it is described above was made and measured at 90:
-// the numbers of entries above are 90's)
+// and v29 (the rule was made and first measured at 90, docs §8.119)
 export const ZONE_BARS = 120;
 export const ZONE_PCT = 95;
 export const ZONE_SHARE = ZONE_PCT / 100;

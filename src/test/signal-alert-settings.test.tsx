@@ -409,7 +409,7 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
       "1時間足の MACD(12・26・9)の青い線が、新しい120本（チャートを開いた時に見える範囲）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い所）の95%以上（0の線から測って）まで上がったら売り、枠の下の端（一番低い所）の95%以上まで下がったら買いとするサインです",
     );
     // nothing of the first make of v28, never mailed (the blue line's own highest or lowest)
-    for (const no of ["で一番高かった所の90%", "一番低かった所の90%"]) expect(intro, no).not.toContain(no);
+    for (const no of ["で一番高かった所の90%", "一番低かった所の90%", "で一番高かった所の95%", "一番低かった所の95%"]) expect(intro, no).not.toContain(no);
     // one email as the line gets there, and another after it has gone back inside the 95% mark and come back (not
     // "only one": the notes and the email say the same)
     expect(intro).toContain("一つの山・谷では、届いた時に1通送ります（95%の所より内側に戻ってから、また届けばもう1通）");
@@ -562,7 +562,7 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     );
     expect(notes).not.toContain("描かれた枠の端より少し下に見えます");
     // nothing of the first make of v28, never mailed (the 90% mark of the blue line's own highest or lowest)
-    for (const no of ["90%の所は、青い線だけで決めます", "一番高かった値の90%", "一番高かった値が 0.200", "一番高かった足（買いは一番低かった足）", "新しい120本の青い線がずっと0以下", "90%より下に見えることがほとんど"]) {
+    for (const no of ["90%の所は、青い線だけで決めます", "一番高かった値の90%", "一番高かった値が 0.200", "一番高かった足（買いは一番低かった足）", "新しい120本の青い線がずっと0以下", "90%より下に見えることがほとんど", "95%の所は、青い線だけで決めます", "一番高かった値の95%", "95%より下に見えることがほとんど"]) {
       expect(notes, no).not.toContain(no);
     }
     expect(notes).toContain("チャートの MACD は、チャートが読んだ足から計算するので、メールの600本で出した値とわずかに違うことがあります");
@@ -747,6 +747,7 @@ describe("#275 the MACD peak-and-valley rule in the email-alert card", () => {
     for (const no of [
       "The 90% mark is set by the blue line alone", "of the highest it reached over the newest 120 bars", "with a highest of 0.200",
       "When the bar of the highest", "While the blue line stays at or below zero", "nearly always looks short of 90%",
+      "The 95% mark is set by the blue line alone", "nearly always looks short of 95%",
     ]) {
       expect(notes, no).not.toContain(no);
     }

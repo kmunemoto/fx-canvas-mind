@@ -1734,7 +1734,8 @@ describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue lin
     expect(zoneAt(r, 219)).toMatchObject({ m: 0.6, top: 1.0, inTop: false });
     expect(zoneEntryAt(r, 220)).toEqual({ side: "SELL", m: 0.6, top: 0.6, bottom: 0, mark: ZONE_SHARE * 0.6, fire: true });
     // on the waves' bars: the SELL at bar 1,329 came as the line fell, the top of the bar before's pane (the orange line at
-    // its oldest bar, window index 479) gone from the bar's 120; the new top is the line's own, from inside the 120.
+    // its oldest bar, window index 479) gone from the bar's 120; the new top is the line's own, from inside the 120
+    // (two bars back, window index 597).
     // (#362: at 95%; at 90% the SELL came a bar earlier, at 1,328, the new top the orange line's at window index 480)
     const i = 1329;
     expect(decideZoneOnWindow(yen, i)!.side).toBe("SELL");
@@ -1748,7 +1749,7 @@ describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue lin
     expect(now.top).toBeLessThan(before.top);
     expect(before.top).toBe(w.signal[479]);
     expect([...w.macd.slice(480), ...w.signal.slice(480), ...w.hist.slice(480)]).not.toContain(before.top);
-    expect(w.macd.slice(480)).toContain(now.top);
+    expect(now.top).toBe(w.macd[597]);
   });
 
   it("on closes: decides exactly the zone rule's entries on the newest 600 closed bars (against the rule told again here), at both sizes", () => {
@@ -2007,7 +2008,7 @@ describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue lin
       expect(t, no).not.toContain(no);
     }
     // nor of the first make of v28, never mailed: the blue line's own highest or lowest of the 120 bars
-    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%"]) expect(t, no).not.toContain(no);
+    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%", "一番高い値の95%", "一番低い値の95%"]) expect(t, no).not.toContain(no);
     const buy = sample("BUY");
     const fb = buy.macdh!;
     const bt = renderIndicatorMail(buy, "ja");
@@ -2018,7 +2019,7 @@ describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue lin
     expect(fb.m).toBeLessThan(0);
     expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(3)}、枠の下の端 = −${(-fb.bottom).toFixed(3)}（その95% = −${(-fb.mark).toFixed(3)}）`);
     expect(bt.text).not.toContain("= -");
-    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%"]) expect(bt.text, no).not.toContain(no);
+    for (const no of ["120本の一番上", "120本の一番下", "一番高い値の90%", "一番低い値の90%", "一番高い値の95%", "一番低い値の95%"]) expect(bt.text, no).not.toContain(no);
   });
 
   it("the English email says the same", () => {
