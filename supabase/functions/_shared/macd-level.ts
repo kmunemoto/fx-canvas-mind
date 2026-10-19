@@ -32,6 +32,13 @@
 // was the blue line's own highest). The cross rule below stays
 // (decideScaledOnWindow): the morning check's SQL v3 (scripts/morning-check)
 // mirrors it.
+// #362 (docs §8.122): from v30 the band starts at 95% (ZONE_PCT), the owner,
+// 2026-10-19: 「やっぱりメールの判断を95%に設定して」. Nothing else of the zone
+// rule changes: the same pane (the newest 120 bars' MACD line, signal line,
+// histogram and 0), measured from the zero line, an email at the bar the
+// line comes in, none more until it has gone back inside the mark. Where the
+// rule below says 90% (0.9, ZONE_SHARE) it is ZONE_PCT's; its counts on the
+// stored bars are the 90% rule's (docs §8.119), the 95% rule's are in §8.122.
 //
 // THE RULE (v25 to v27): at a closed 1-hour bar i, judged on the 600 closed
 // bars ending at i (the chart's history; MACD from those bars alone, as
@@ -96,9 +103,12 @@ export const LEVEL_WINDOW = 600;
 // live-chart/logic.ts, 120: what it shows when opened), and how far from the
 // zero line toward the top or bottom of their MACD pane the band starts, in
 // percent (a whole number: the rule id says it) and as the share held
-// against (90 / 100, the double 0.9 is)
+// against (95 / 100, the double 0.95 is). #362 (docs §8.122): 95 from v30,
+// the owner's 「やっぱりメールの判断を95%に設定して」 (2026-10-19); 90 in v28
+// and v29 (the rule as it is described above was made and measured at 90:
+// the numbers of entries above are 90's)
 export const ZONE_BARS = 120;
-export const ZONE_PCT = 90;
+export const ZONE_PCT = 95;
 export const ZONE_SHARE = ZONE_PCT / 100;
 
 export interface LevelDecision {
