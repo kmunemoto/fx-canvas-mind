@@ -37,7 +37,6 @@ alter table public.econ_digest_mails enable row level security;
 revoke all on public.econ_digest_mails from anon, authenticated;
 grant select on public.econ_digest_mails to authenticated;
 grant all on public.econ_digest_mails to service_role;
-drop policy if exists "Users read their own digest mails" on public.econ_digest_mails;
 create policy "Users read their own digest mails"
   on public.econ_digest_mails for select to authenticated
   using (auth.uid() = user_id);
