@@ -7,10 +7,17 @@
 // Callers: pg_cron every hour with the shared sweep token, and an admin with
 // their JWT (to backfill by hand). Forex Factory publishes no `actual`, so
 // this function never claims to know what a release printed.
+//
+// #370: the hourly run that falls in a weekday morning in Japan also mails
+// the big scheduled events, once a day, to those who receive the MACD mails
+// (digest.ts, mailer.ts, docs §8.123).
 
 import { parseEvents, type EconEvent } from "./events.ts";
+import { digestDayOf } from "./digest.ts";
+import { mailDigests, type MailerDeps } from "./mailer.ts";
+import { DEFAULT_FROM, sendMail } from "../signal-alerts/logic.ts";
 
-const FUNCTION_VERSION = "econ-calendar-v3-2026-09-03T22:30:00Z";
+const FUNCTION_VERSION = "econ-calendar-v4-2026-10-21T20:00:00Z";
 const ADMIN_EMAILS = ["k.munemoto@kyoto-salute.com", "munekan2989@gmail.com"];
 
 // Only the current week is published. `ff_calendar_nextweek.json`,
@@ -47,6 +54,12 @@ type JsonRecord = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
+
+// What a failure may leave in the log: the error's name, never its message (a
+// failed request's message carries its URL, and the digest's URLs carry user ids)
+const errName = (err: unknown) => (err instanceof Error ? err.name : "error");
 
 const constantTimeEqual = (a: string, b: string): boolean => {
   if (a.length !== b.length) return false;
@@ -85,6 +98,40 @@ Deno.serve(async (req: Request) => {
     const nowIso = new Date(nowMs).toISOString();
     const bodyRaw = await req.json().catch(() => null);
     const body: JsonRecord = isRecord(bodyRaw) ? bodyRaw : {};
+
+    // #370: what the morning mail's run (mailer.ts) is given. A request that
+    // throws comes back as a 599 so that nothing is decided on it.
+    const resendKey = Deno.env.get("RESEND_API_KEY") ?? "";
+    const from = Deno.env.get("ALERT_FROM") || DEFAULT_FROM;
+    const mailerDeps: MailerDeps = {
+      rest: async (path, init) => {
+        try {
+          return await rest(path, init);
+        } catch (err) {
+          console.error(`digest: request failed: ${errName(err)}`);
+          return new Response(null, { status: 599 });
+        }
+      },
+      emailOf: async (userId) => {
+        try {
+          const res = await fetch(`${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { headers: serviceHeaders });
+          if (!res.ok) {
+            console.error(`digest: user lookup failed: ${res.status}`);
+            await res.text().catch(() => "");
+            return { ok: false, email: null };
+          }
+          const body = await res.json().catch(() => null);
+          return { ok: true, email: isRecord(body) && typeof body.email === "string" && body.email.length > 0 ? body.email : null };
+        } catch (err) {
+          console.error(`digest: user lookup failed: ${errName(err)}`);
+          return { ok: false, email: null };
+        }
+      },
+      send: (to, mail) => sendMail(resendKey, from, to, mail),
+      configured: resendKey.length > 0,
+      sleep,
+      clock: () => Date.now(),
+    };
 
     // ---- who is asking ---------------------------------------------------
     let mode: "sweep" | "admin";
@@ -179,6 +226,22 @@ Deno.serve(async (req: Request) => {
       .then((r) => r.text().catch(() => {}))
       .catch(() => {});
 
+    // ---- #370: the big-events mail (digest.ts, docs §8.123) ---------------
+    // Only the sweep sends it, and only on a weekday morning in Japan. It reads
+    // the stored rows of the last fetch that worked (this one, or an earlier
+    // one when this one failed): a rescheduled event leaves its old row behind,
+    // and only the newest fetch says where it is now.
+    let digest: JsonRecord = { due: false };
+    const day = mode === "sweep" ? digestDayOf(nowMs) : null;
+    if (day !== null) {
+      try {
+        digest = await mailDigests(mailerDeps, day, nowMs);
+      } catch (err) {
+        console.error(`digest error: ${errName(err)}`);
+        digest = { due: true, day, error: "digest_failed" };
+      }
+    }
+
     const summary = {
       ok: errors.length === 0 || upserted > 0,
       mode,
@@ -186,6 +249,7 @@ Deno.serve(async (req: Request) => {
       fetched: events.length,
       upserted,
       errors,
+      digest,
       elapsedMs: Date.now() - startedAt,
       version: FUNCTION_VERSION,
     };
