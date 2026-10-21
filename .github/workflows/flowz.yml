@@ -1,0 +1,125 @@
+# #371 (docs §8.124): would leaving out the 1-hour MACD emails (v6) that go against the big trend make the
+# emails left better? research/flowz.ts, and the Python written apart from it (research/flowz-check.py).
+#
+#   push (every run): the walks only, before any real data is read
+#     syn   the hand examples (research/flowz-hand.ts); research/flowz.ts on two seeded walks (a short period): the
+#           look-ahead check (every price after an email's close rewritten: its email, side and both trends
+#           unchanged), the counts adding up, the halves; then the first walk written as GMO's files, the study
+#           read from them, and the Python on the same files (every row and number the same)
+#   dispatch real = yes (after syn passed in the same run):
+#     real  GMO's real bars (research/.cache, fetched when missing): the study, then the Python on the same files
+#           and the study's rows; the numbers printed only when the Python agreed on every row and number
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research flowz (#371)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/flowz*.ts
+      - research/flowz-check.py
+      - .github/workflows/flowz.yml
+  workflow_dispatch:
+    inputs:
+      real:
+        description: "After the walks pass, run the real data (yes/no)"
+        default: "no"
+
+permissions:
+  contents: read
+
+env:
+  START: "2024-01-01T00:00:00Z"
+  SPLIT: "2025-05-19T00:00:00Z"
+  END: "2026-10-17T00:00:00Z"
+  LOAD_FROM: "2023-10-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The hand examples
+        run: deno run --allow-read=. research/flowz-hand.ts
+      - name: Two walks (the look-ahead check, the counts, the halves)
+        env:
+          MODE: synthetic
+          SEEDS: "1,2"
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          SPLIT: "2024-05-01T00:00:00Z"
+          END: "2024-07-01T00:00:00Z"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/flowz.ts
+      - name: The first walk as GMO's files, the study read from them, and the Python on the same files
+        env:
+          MODE: walkfiles
+          SEEDS: "1"
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          SPLIT: "2024-05-01T00:00:00Z"
+          END: "2024-07-01T00:00:00Z"
+          OUT: research/out/flowz-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/flowz.ts
+          python3 research/flowz-check.py --cache research/out/flowz-walk/gmo --rows research/out/flowz-walk/rows.csv --summary research/out/flowz-walk/summary.json
+
+  real:
+    if: ${{ inputs.real == 'yes' }}
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      OUT: research/out/flowz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled (a kept file made before its day ended is read
+      # again); each restore only adds files: the 1-minute ones (ownerhold's), and the 1-hour and 4-hour ones
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-none
+          restore-keys: gmo-flowz-
+      - name: The study (its numbers go to files; none printed here)
+        env:
+          MODE: real
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/flowz.ts
+          ls -la $OUT
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 research/flowz-check.py --cache research/.cache --rows $OUT/rows.csv --summary $OUT/summary.json
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: deno run --allow-read=. --allow-env research/flowz.ts
