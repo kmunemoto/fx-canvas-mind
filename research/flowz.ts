@@ -298,7 +298,8 @@ const checkWalk = (seed: number) => {
 // ---- main --------------------------------------------------------------------------------------------
 
 if (import.meta.main) {
-  await Deno.mkdir(OUT, { recursive: true });
+  // the print reads what the real run wrote, and writes nothing (it runs without --allow-write)
+  if (MODE !== "print") await Deno.mkdir(OUT, { recursive: true });
   if (MODE === "synthetic") {
     let fail = 0;
     const seeds = env("SEEDS", "1,2").split(",").map(Number);
