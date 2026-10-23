@@ -1,0 +1,96 @@
+# #383 (docs §8.126): the 1-hour MACD emails' trades (the owner's way: a limit at E, TP 10 pips, no stop) that
+# were 50 or 60 pips against at some point — how many came back to the TP by END, how long it took, how many are
+# still held. A descriptive count of the past (nothing judged). research/backz.py (the emails and trades are
+# research/flowz-check.py's), and the Python written apart from it (research/backz-check.py).
+#
+#   push (every run): syn  the walk of research/flowz.ts written as GMO's files, both Pythons on it (every number
+#                          the same)
+#   dispatch real = yes (after syn passed in the same run):
+#                     real GMO's real files (research/.cache, the earlier studies' caches; nothing fetched): both
+#                          Pythons; the numbers printed, and out.json kept as the run's artifact, only when they agree
+#
+# Read-only: public files, a report printed; it writes nothing to the repository and holds no secret.
+name: Research backz (#383)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/backz*.py
+      - .github/workflows/backz.yml
+  workflow_dispatch:
+    inputs:
+      real:
+        description: "After the walk passes, run the real data (yes/no)"
+        default: "no"
+
+permissions:
+  contents: read
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The walk as GMO's files, and both Pythons on it
+        env:
+          MODE: walkfiles
+          SEEDS: "1"
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          SPLIT: "2024-05-01T00:00:00Z"
+          END: "2024-07-01T00:00:00Z"
+          OUT: research/out/flowz-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/flowz.ts
+          python3 research/backz.py --cache research/out/flowz-walk/gmo --start $START --end $END --load-from $LOAD_FROM --out research/out/backz-walk.json
+          python3 research/backz-check.py --cache research/out/flowz-walk/gmo --summary research/out/backz-walk.json
+
+  real:
+    if: ${{ inputs.real == 'yes' }}
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OUT: research/out/backz.json
+    steps:
+      - uses: actions/checkout@v4
+      # the earlier studies' GMO files (1-minute, 1-hour, 4-hour); each restore only adds files
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-none
+          restore-keys: gmo-flowz-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-pbz-none
+          restore-keys: gmo-pbz-
+      - name: The count (its numbers go to a file; none printed here)
+        run: |
+          mkdir -p research/out
+          python3 research/backz.py --cache research/.cache --start 2024-01-01T00:00:00Z --end 2026-10-17T00:00:00Z --load-from 2023-10-01T00:00:00Z --out $OUT
+          sha256sum $OUT
+      - name: The Python written apart, on the same files
+        run: python3 research/backz-check.py --cache research/.cache --summary $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backz-${{ github.run_id }}
+          path: ${{ env.OUT }}
+      - name: The numbers (the two agreed)
+        run: python3 research/backz.py --print $OUT
