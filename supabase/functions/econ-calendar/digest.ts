@@ -420,7 +420,7 @@ export const renderDigestMail = (d: Digest, lang: Lang, nowMs: number): Mail => 
       n > 0 ? [soonHead, ...byDay(d.soon, "ja")].join("\n") : `${soonHead}\n大きな予定はありません。`,
       d.later.length > 0 ? [laterHead, ...byDay(d.later, "ja")].join("\n") : `${laterHead}\nありません。`,
       notes,
-      `このメールは、売買のメール（1時間足の MACD の山・谷）を受け取っている方に、日本時間の平日の朝に1通送っています。選び方: 物価（CPI など）・中央銀行（政策金利・声明・会見・議事要旨・発言）・GDP・中国の景気の数字・Forex Factory の重要度が「高」のもの。このメールだけを止める画面のスイッチはまだありません。止めるには、アプリの「設定」→「メール通知」で1時間足の「MACD の山・谷」のチェックを外してください（売買のメールも止まります）。\n${APP_URL}`,
+      `このメールは、売買のメール（MACD の山・谷）を受け取っている方に、日本時間の平日の朝に1通送っています。選び方: 物価（CPI など）・中央銀行（政策金利・声明・会見・議事要旨・発言）・GDP・中国の景気の数字・Forex Factory の重要度が「高」のもの。このメールだけを止める画面のスイッチはまだありません。止めるには、アプリの「設定」→「メール通知」で「MACD の山・谷」のチェックを外してください（売買のメールも止まります）。\n${APP_URL}`,
       "本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
@@ -449,7 +449,7 @@ export const renderDigestMail = (d: Digest, lang: Lang, nowMs: number): Mail => 
     n > 0 ? [soonHead, ...byDay(d.soon, "en")].join("\n") : `${soonHead}\nNo big events.`,
     d.later.length > 0 ? [laterHead, ...byDay(d.later, "en")].join("\n") : `${laterHead}\nNone.`,
     notes,
-    `This email goes to those who receive the trade emails (1-hour MACD peak/valley), once each weekday morning in Japan. Listed: prices (CPI and the like), central banks (rates, statements, press conferences, minutes, speeches), GDP, China's activity numbers, and what Forex Factory calls high impact. There is no switch for this email alone yet: unticking the 1-hour "MACD peak/valley" under Settings → Email alerts stops it, and the trade emails too.\n${APP_URL}`,
+    `This email goes to those who receive the trade emails (MACD peak/valley), once each weekday morning in Japan. Listed: prices (CPI and the like), central banks (rates, statements, press conferences, minutes, speeches), GDP, China's activity numbers, and what Forex Factory calls high impact. There is no switch for this email alone yet: unticking "MACD peak/valley" under Settings → Email alerts stops it, and the trade emails too.\n${APP_URL}`,
     "This email is for information only and is not investment advice. Every trading decision is your own.",
   ]);
 };
