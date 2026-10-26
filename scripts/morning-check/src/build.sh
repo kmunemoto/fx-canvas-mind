@@ -2,7 +2,8 @@
 # Rebuilds the deliverables in the folder above from the parts in this folder:
 #   v3 (frozen: the Routine uses these for the GMO days up to key 20261014): pairs.sql, gold.sql, debug-closes.sql, debug-closes-gold.sql and their .min.sql
 #   v4 (rule macdx_12_26_9_w600_1h_z90of120_v4, signal-alerts v28, bars opened from 2026-10-14 21:00 to 2026-10-19 20:00 UTC): pairs-v4.sql, gold-v4.sql and their .min.sql
-#   v6 (#362: rule macdx_12_26_9_w600_1h_z95of120_v6, signal-alerts v30, bars opened from 2026-10-19 21:00 UTC on): pairs-v6.sql, gold-v6.sql and their .min.sql
+#   v6 (#362: rule macdx_12_26_9_w600_1h_z95of120_v6, signal-alerts v30, bars opened from 2026-10-19 21:00 to 2026-10-26 20:00 UTC): pairs-v6.sql, gold-v6.sql and their .min.sql
+#   v7 (#384: rule macdx_12_26_9_w600_15min_z95of120_v7, signal-alerts v31, the 15-minute chart, GMO days from key 20261026, the switch day, see ../README.md v7.1): pairs-v7.sql, gold-v7.sql and their .min.sql
 # The .sql files keep the comments; the .min.sql files are the same statement without comments and indentation (shorter to paste into one tool call).
 # Nothing is edited by hand in the deliverables: change a part, run this, run the tests (see ../README.md).
 #   bash build.sh
@@ -34,6 +35,13 @@ $A $O/pairs-v6.sql           header-pairs-v6.part    head.part syms-pairs-v6.par
 $A $O/pairs-v6.min.sql                               head.part syms-pairs-v6.part front-pairs.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-pairs.part dayend-pairs-v4.part back2-v6.part --sub SQLNAME=pairs.sql --strip
 $A $O/gold-v6.sql            header-gold-v6.part     head.part syms-gold-v6.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-gold.part  dayend-gold-v4.part  back2-v6.part --sub SQLNAME=gold.sql
 $A $O/gold-v6.min.sql                                head.part syms-gold-v6.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v6.part guard-gold.part  dayend-gold-v4.part  back2-v6.part --sub SQLNAME=gold.sql --strip
+
+# ---- v7 (#384: the v6 rule on the 15-minute chart, rule macdx_12_26_9_w600_15min_z95of120_v7, signal-alerts v31, GMO days from key 20261026; the engine parts are v4's,
+#      every part that holds an interval-dependent constant has a -v7 copy: header, head, syms, front, back1, guard, dayend (pairs), back2) ----
+$A $O/pairs-v7.sql           header-pairs-v7.part    head-v7.part syms-pairs-v7.part front-pairs-v7.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v7.part guard-pairs-v7.part dayend-pairs-v7.part back2-v7.part --sub SQLNAME=pairs.sql
+$A $O/pairs-v7.min.sql                               head-v7.part syms-pairs-v7.part front-pairs-v7.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v7.part guard-pairs-v7.part dayend-pairs-v7.part back2-v7.part --sub SQLNAME=pairs.sql --strip
+$A $O/gold-v7.sql            header-gold-v7.part     head-v7.part syms-gold-v7.part  front-gold-v7.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v7.part guard-gold-v7.part  dayend-gold-v4.part  back2-v7.part --sub SQLNAME=gold.sql
+$A $O/gold-v7.min.sql                                head-v7.part syms-gold-v7.part  front-gold-v7.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v7.part guard-gold-v7.part  dayend-gold-v4.part  back2-v7.part --sub SQLNAME=gold.sql --strip
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

@@ -1,0 +1,6 @@
+-- ===== FRONT (gold): public.live_chart_fallback (XAU/USD, 15min) -> us(symbol, ot, seq, m8, d), the closed 15-minute bars production judges on =====
+-- instrument table (gold): the live_chart_fallback pair, the app's pair name, display order, the instant from which the v7 rule was live for gold, and the decimals of the
+-- chart's rounding for gold (decimalsOf: 2). live_ms = 1793008800000 = 2026-10-26 10:00 UTC, the open of the first 15-minute bar v31 judged for gold: v31 deployed
+-- 10:23:51.752 UTC (see syms-pairs-v7.part); gold is read from a minute after the close for as long as twelveCloseDue gives that close (the bar opened 10:00 closed 10:15
+-- and was due until 10:30), and the stored 15-minute row was rewritten at 10:25:01 UTC (the sweep's read). It differs from the pairs' 10:15: change both parts together.
+syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, 1793008800000::bigint as live_ms, 2 as d),

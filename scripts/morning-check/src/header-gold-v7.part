@@ -1,0 +1,11 @@
+-- gold-v7.sql  (task #384)  -  the morning check of the 15-minute MACD e-mails for GOLD (XAU/USD), rule v7.
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited. Use it for the GMO days from key 20261026 (START_MS >= 1792962000000 = 2026-10-25 21:00 UTC);
+-- v31 went live in the middle of that day (deployed 2026-10-26 10:23:51 UTC): its 15-minute bars from the go-live open (10:00 UTC, live_ms in syms) are v7, the earlier
+-- ones are before_go_live; its 1-hour bars up to the one opened 09:00 UTC were judged by v6 (README.md v7.1). Key 20261025 and before: gold-v6.min.sql / gold-v4.min.sql / gold.min.sql.
+-- It recounts the rule macdx_12_26_9_w600_15min_z95of120_v7 (signal-alerts v31: on the 15-MINUTE chart, the MACD line, the blue line, comes into the top / bottom 95% band of the
+-- MACD pane of the newest 120 bars; 600-bar window) from the closed bars of the ONE stored row public.live_chart_fallback (XAU/USD, 15min; Twelve Data), and compares the
+-- expected entries with public.signal_alerts (pair XAU/USD, kind signal, interval 15min, that rule id).
+-- The row is the LATEST read: production judged each bar on the row as it was 1 to 15 minutes after the close. No user_id / event_id / e-mail is read; nothing is written.
+-- Result: the same columns as pairs-v7.sql: row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md (section v7).

@@ -1,0 +1,53 @@
+-- the day files of the 13 days up to the last key (15-minute files, interval '15min', BID and ASK; GMO_INTERVALS['15min'].name in track-outcomes/quotes.ts)
+files as (
+  select f.symbol, f.price_type, f.date_key, f.body,
+         case when jsonb_typeof(f.body -> 'data') = 'array' then jsonb_array_length(f.body -> 'data') else 0 end as nbars,
+         case when f.body ->> 'responsetime' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$' then (f.body ->> 'responsetime')::timestamptz end as resp,
+         (extract(epoch from to_date(f.date_key, 'YYYYMMDD'))::bigint - 10800) * 1000 as key_start_ms
+  from public.gmo_kline_files f, pp
+  where f.interval = '15min' and f.price_type in ('BID', 'ASK') and f.symbol in (select symbol from syms)
+    and f.date_key between pp.from_key and pp.k_last
+),
+-- every row of every file, with its place (pos) in the file: parseKlines reads the rows of a file sorted by openTime, equal times keeping their file order
+rows_ as (
+  select f.symbol, f.price_type, f.date_key, f.key_start_ms, e.pos, e.x ->> 'openTime' as ot_s, e.x ->> 'open' as o_s, e.x ->> 'high' as h_s, e.x ->> 'low' as l_s, e.x ->> 'close' as c_s
+  from files f
+  cross join lateral jsonb_array_elements(case when jsonb_typeof(f.body -> 'data') = 'array' then f.body -> 'data' else '[]'::jsonb end) with ordinality as e(x, pos)
+),
+-- a row counts only if openTime/open/high/low/close are plain numbers (production's parseKlines drops the others; a missing field is not a number: ok = false, never NULL)
+rows2 as (
+  select *, coalesce(ot_s ~ '^[0-9]{1,15}$' and o_s ~ '^[0-9]+(\.[0-9]+)?$' and h_s ~ '^[0-9]+(\.[0-9]+)?$' and l_s ~ '^[0-9]+(\.[0-9]+)?$' and c_s ~ '^[0-9]+(\.[0-9]+)?$', false) as ok from rows_
+),
+parsed as (
+  select symbol, price_type, date_key, key_start_ms, pos, ok,
+         case when ok then ot_s::bigint end as ot, case when ok then c_s::float8 end as cl
+  from rows2
+),
+-- mergeSides (track-outcomes/quotes.ts), arrival order = files in ascending key order, inside a file by (openTime, file position):
+--   the ASK of a bar is the LAST ASK row for its openTime (a Map built from the ASK rows in arrival order: the newest key, in one file the last row);
+--   the BID rows are walked in arrival order and the FIRST one that has an ASK and is not above it (ask < bid skips the row without emitting it, so a later
+--   duplicate may still be emitted) is the bar; a bar with no ASK row is dropped (an ASK row with no BID row never appears). Nothing is dropped for a zero close.
+bid as (select symbol, date_key, pos, ot, cl as bc from parsed where price_type = 'BID' and ok),
+ask as (select distinct on (symbol, ot) symbol, ot, cl as ac from parsed where price_type = 'ASK' and ok order by symbol, ot, date_key desc, pos desc),
+mg0 as (
+  select distinct on (b.symbol, b.ot) b.symbol, b.ot, b.date_key, b.pos, (b.bc + a.ac) / 2 as m8
+  from bid b join ask a on a.symbol = b.symbol and a.ot = b.ot
+  where not (a.ac < b.bc)
+  order by b.symbol, b.ot, b.date_key, b.pos
+),
+-- the merged list keeps the BID arrival order (never sorted again by production): seq = the place of the emitted BID row in that order
+mg as (select *, row_number() over (partition by symbol order by date_key, ot, pos) as seq from mg0),
+-- usableBars: drop a bar the market was shut for the whole of (barInsideClosure = isMarketClosed(open) and isMarketClosed(open + 15 min - 1 ms), the bar's length
+-- being intervalMsOf('15min') = 900000 ms;
+-- isMarketClosed = Saturday, Friday from 22:00, Sunday before 21:00, UTC)
+mc as (
+  select symbol, ot, seq, m8,
+         extract(dow from to_timestamp(ot / 1000.0) at time zone 'UTC') as dw0, extract(hour from to_timestamp(ot / 1000.0) at time zone 'UTC') as hr0,
+         extract(dow from to_timestamp((ot + 899999) / 1000.0) at time zone 'UTC') as dw1, extract(hour from to_timestamp((ot + 899999) / 1000.0) at time zone 'UTC') as hr1
+  from mg
+),
+us as (
+  select m.symbol, m.ot, m.seq, m.m8, y.d
+  from mc m join syms y on y.symbol = m.symbol
+  where not ((m.dw0 = 6 or (m.dw0 = 5 and m.hr0 >= 22) or (m.dw0 = 0 and m.hr0 < 21)) and (m.dw1 = 6 or (m.dw1 = 5 and m.hr1 >= 22) or (m.dw1 = 0 and m.hr1 < 21)))
+),
