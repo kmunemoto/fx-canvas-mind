@@ -1,0 +1,75 @@
+# #384 (docs §8.127): counting only. How many MACD emails (v6's zone rule) the 15-minute chart of the five GMO pairs
+# would have given over the last 52 weeks, and the 1-hour chart over the same weeks (research/macd15.ts), and the
+# Python written apart from it on the same files (research/macd15-check.py, on #371's research/flowz-check.py):
+# the numbers are printed only when every row and number agree.
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research macd15 (#384)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macd15*.ts
+      - research/macd15-check.py
+      - .github/workflows/macd15.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2025-10-26T21:00:00Z"
+  END: "2026-10-24T00:00:00Z"
+  LOAD_FROM: "2025-09-01T00:00:00Z"
+  OUT: research/out/macd15
+
+jobs:
+  real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-none
+          restore-keys: gmo-flowz-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd15-none
+          restore-keys: gmo-macd15-
+      - name: The count (its numbers go to files; none printed here)
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macd15.ts
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-macd15-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 -I research/macd15-check.py --cache research/.cache --out $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macd15-${{ github.run_id }}
+          path: research/out/macd15
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: deno run --allow-read=. --allow-env research/macd15.ts

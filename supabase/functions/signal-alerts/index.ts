@@ -216,7 +216,16 @@ import type { Candle } from "../analyze/indicators.ts";
 // under its own rule id (MACDH_RULE_ID, ..._z95of120_v6); nothing else
 // changes. (v29, the 80% cross rule of #359, was never put out, docs §8.121.)
 // Put out after GMO's day rolls, as v28 was.
-const FUNCTION_VERSION = "signal-alerts-v30-2026-10-19T21:00:00Z";
+// v31 (#384, docs §8.127): the same rule judged on the 15-minute chart of the
+// same six (the five pairs' GMO bars, gold's Twelve Data bars) in place of the
+// 1-hour one (indicators.ts MACDH_INTERVALS), the owner's 「メールの判断15分足に
+// 変更して」 (2026-10-26), recorded under its own rule id (MACDH_RULE_ID,
+// ..._15min_z95of120_v7); the owner's subscriptions are moved to the
+// 15-minute chart once it is out. The 600 bars, the 120-bar pane, the 95%,
+// the stop and targets and the other rules are as they were. Put out at once
+// on the owner's 「確かめなくていい、15分足に変更してくれればそれでいい」, in the
+// middle of a GMO day (not after the day rolls, as v28 and v30 were).
+const FUNCTION_VERSION = "signal-alerts-v31-2026-10-26T21:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -622,7 +631,8 @@ Deno.serve(async (req: Request) => {
         // #275: the MACD peak-and-valley rule beside Q-Trend's and ULTRA's. Its
         // failure must never cost the other two their emails. #324: from v25
         // the 1-hour rule's (macdhSignals; nothing on another chart); #353:
-        // from v28 the zone rule's (docs §8.119)
+        // from v28 the zone rule's (docs §8.119); #384: from v31 on the
+        // 15-minute chart (docs §8.127)
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         try {
           sigs.push(...macdhSignals(pair, interval, closed, nowMs));
