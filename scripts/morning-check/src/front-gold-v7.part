@@ -1,0 +1,30 @@
+-- gold has ONE stored row (the latest read of Twelve Data); the sweep replaces it at every read, so older versions of the row do not exist
+grow0 as (
+  select f.bars, f.fetched_at, floor(extract(epoch from f.fetched_at) * 1000)::bigint as fetched_ms
+  from public.live_chart_fallback f where f.pair = 'XAU/USD' and f.interval = '15min'
+),
+-- every bar of the row in the row's own order; datetime = the bar's OPEN, 'YYYY-MM-DD HH:MM:SS' UTC
+braw as (
+  select e.ord as pos, e.x ->> 'datetime' as dt_s, e.x ->> 'close' as c_s, g.fetched_ms
+  from grow0 g
+  cross join lateral jsonb_array_elements(case when jsonb_typeof(g.bars) = 'array' then g.bars else '[]'::jsonb end) with ordinality as e(x, ord)
+),
+bgold as (
+  select pos, fetched_ms, coalesce(dt_s ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$' and c_s ~ '^[0-9]+(\.[0-9]+)?$', false) as ok, dt_s, c_s
+  from braw
+),
+bgold2 as (
+  select pos, fetched_ms, ok,
+         case when ok then floor(extract(epoch from (dt_s::timestamp at time zone 'UTC')) * 1000)::bigint end as ot,
+         case when ok then c_s::float8 end as cl
+  from bgold
+),
+-- closedOf / closedBy: a stored bar counts as closed only when its end (barEndMs: open + 15 min = 900000 ms) is not after the moment the row was read (a bar still forming then
+-- is left out).
+-- seq = the place of the bar in the row: production keeps the row's order (closedOf only filters). The stored bars already passed parseCandles (every price > 0,
+-- coherent bar, sorted, one bar per time), so cl > 0 drops nothing a stored row can hold.
+us as (
+  select y.symbol, b.ot, b.pos as seq, b.cl as m8, y.d
+  from bgold2 b cross join syms y
+  where b.ok and b.ot + 900000 <= b.fetched_ms and b.cl > 0
+),

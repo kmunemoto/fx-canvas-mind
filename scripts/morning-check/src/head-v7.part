@@ -1,0 +1,16 @@
+with recursive
+-- The ONLY two inputs: bar OPEN time in [START_MS, END_MS), epoch milliseconds (the Routine writes the numbers in place of the two markers).
+p as (select {{START_MS}}::bigint as start_ms, {{END_MS}}::bigint as end_ms),
+-- GMO's day starts at 21:00 UTC (06:00 JST), so START_MS + 3 h falls on the key's date (the 15-minute day files are keyed by that GMO day, like the 1-hour ones).
+-- k_first / k_last = the keys of the first and the last instant of the range; range_ok = the range is one whole GMO day (24 h, starting at 21:00 UTC).
+-- from_key = 13 days before k_first: production's own reach back on the 15-minute chart. fetchRecentQuotes (analyze/price-source.ts) walks the day keys newest first
+-- for HISTORY_BARS + 1 = 601 bars: 96 bars a day -> 7 open days -> ceil(7 * 7 / 5) + 2 = 12 days, and dateKeys pads the far end by one day more: 13 days back from the JST day of
+-- the judging moment (that is K or K + 1 for a bar of GMO day K). 600 bars before a Monday key's first bar need the keys back to K - 11 in a normal week.
+pp as (
+  select start_ms, end_ms,
+         to_char(to_timestamp((start_ms + 10800000) / 1000.0) at time zone 'UTC', 'YYYYMMDD') as k_first,
+         to_char(to_timestamp((end_ms - 1 + 10800000) / 1000.0) at time zone 'UTC', 'YYYYMMDD') as k_last,
+         to_char((to_timestamp((start_ms + 10800000) / 1000.0) at time zone 'UTC')::date - 13, 'YYYYMMDD') as from_key,
+         (end_ms - start_ms = 86400000 and start_ms % 86400000 = 75600000) as range_ok
+  from p
+),
