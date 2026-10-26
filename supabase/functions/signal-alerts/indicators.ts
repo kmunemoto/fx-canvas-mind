@@ -34,6 +34,8 @@ import { LEVEL_WINDOW, ZONE_BARS, ZONE_PCT, decideZoneOnWindow } from "../_share
 import { pineAtr } from "../_shared/pine.ts";
 // #291: the owner's video's way (docs §8.112), the code the chart's marks are drawn with
 import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts";
+// #385: WillyAlgoTrader's AMD Po3 (docs §8.128), the code the chart draws it with
+import { AMD_PO3, amdPo3, amdPo3Trades, pineFmt } from "../_shared/amd-po3.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
@@ -42,13 +44,16 @@ import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic
 
 // #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
 // low or high taken, then the cross of EMA 20 and EMA 80; docs §8.112)
-export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx"] as const;
+// #385: and "amdpo3", AMD Po3's DIST (the reference trade opened; docs §8.128)
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
-export const isIndicatorRule = (v: unknown): v is IndicatorRule => v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx";
+export const isIndicatorRule = (v: unknown): v is IndicatorRule =>
+  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
 // (the measured figures below are kept for these; #324: the MACD rule, now the
 // 1-hour one, is not measured; #291: nor is the video's way)
-export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx">;
+// (#385: nor is AMD Po3)
+export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -115,10 +120,20 @@ export const MACDH_RULE_ID =
 export const SWEEPX_RULE_ID =
   `sweepx_ema${SWEEPX.fast}_${SWEEPX.slow}_w${SWEEPX.window}_from${SWEEPX.warm}` +
   `_sl${SWEEPX.slBars}b${SWEEPX.slPips}p_tp${SWEEPX.tp1Pips}_${SWEEPX.tp2Pips}_v1`;
+// #385: AMD Po3 v2.4.0 at its default settings (docs §8.128)
+export const AMDPO3_RULE_ID = `amdpo3_${AMD_PO3.version}_defaults_v1`;
 // The id each rule's emails are recorded under now (#324: 'macdx' under the
 // 1-hour rule's)
 export const indicatorRuleId = (rule: IndicatorRule): string =>
-  rule === "qtrend" ? QTREND_RULE_ID : rule === "macdx" ? MACDH_RULE_ID : rule === "sweepx" ? SWEEPX_RULE_ID : ULTRA_RULE_ID;
+  rule === "qtrend"
+    ? QTREND_RULE_ID
+    : rule === "macdx"
+    ? MACDH_RULE_ID
+    : rule === "sweepx"
+    ? SWEEPX_RULE_ID
+    : rule === "amdpo3"
+    ? AMDPO3_RULE_ID
+    : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
 // Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
@@ -187,7 +202,7 @@ export const isSweepxChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && (SWEEPX_PAIRS as readonly string[]).includes(pair) &&
   (SWEEPX_INTERVALS as readonly string[]).includes(interval);
 // Whether a chart can be followed under a rule (#324: 'macdx' on the 1-hour
-// rule's charts)
+// rule's charts; #385: 'amdpo3' on Q-Trend's and ULTRA's)
 export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unknown): boolean =>
   rule === "macdx" ? isMacdhChart(pair, interval) : rule === "sweepx" ? isSweepxChart(pair, interval) : isIndicatorChart(pair, interval);
 
@@ -231,6 +246,22 @@ export interface IndicatorSignal {
   sweep?: SweepxFacts | null;
   // #324: the 1-hour MACD rule's (the MACD email's from v25; absent on the others'; #384: the 15-minute chart's from v31)
   macdh?: MacdhFacts | null;
+  // #385: AMD Po3's (absent on the other rules')
+  amd?: AmdFacts | null;
+}
+
+// #385: what made AMD Po3 open its reference trade: the accumulation range as
+// it stood (its high and low, and the bar it began on by its close, ISO), the
+// side swept (HIGH: over the range, a SELL; LOW: under it, a BUY) and the
+// sweep's tip, the risk (entry to stop) and the R:R as D's tooltip writes it
+export interface AmdFacts {
+  rangeHigh: number;
+  rangeLow: number;
+  rangeFromClosedAt: string;
+  sweepSide: "HIGH" | "LOW";
+  sweepExtreme: number;
+  riskR: number;
+  rr: string;
 }
 
 // #324: what made the 1-hour MACD rule fire, in price units (v25 to v27:
@@ -529,6 +560,65 @@ export const sweepxSignals = (
         waveFromClosedAt: closeOf(start + d.waveFrom),
         fast: d.fast,
         slow: d.slow,
+      },
+    });
+  }
+  return out;
+};
+
+// #385 (docs §8.128): AMD Po3's DIST — "manipulation confirmed, reference trade
+// opened — the working signal", the alert the original sends at the D bar's
+// close — on the charts Q-Trend and ULTRA are mailed on. Judged with the
+// chart's code (_shared/amd-po3.ts, at its default settings) on the sweep's
+// closed bars, `closed` (the chart's history: 600 on GMO's charts, rounded as
+// drawn — fewer on GMO's daily chart, this year's and last year's: some 280 in
+// January): each DIST whose bar closed inside `freshMs`. Its levels are the
+// original's: the entry the D bar's close, the stop 0.4 × ATR 14 beyond the
+// sweep's tip, the target the 1.5 extension of the sweep. A cycle depends on
+// the bars before it; on 80 random walks the 600 bars ending at a bar opened
+// the run over all of them's trade at every one, 450 bars all but 4 of 1,595,
+// 300 bars all but 264 of 1,740 (docs §8.128). Not on fewer bars than its
+// first cycle needs.
+export const amdpo3Signals = (
+  pair: string,
+  interval: string,
+  closed: ReadonlyArray<Candle>,
+  nowMs: number,
+  freshMs: number = freshFor(interval),
+): IndicatorSignal[] => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !isIndicatorChart(pair, interval) || closed.length <= AMD_PO3.statWindow + AMD_PO3.rangeWin) return [];
+  const times = closed.map((c) => barOpenMs(c.datetime));
+  if (times.some((t) => !Number.isFinite(t))) return [];
+  const run = amdPo3(closed.map((c) => ({ o: c.open, h: c.high, l: c.low, c: c.close })), { mintick: 1 / 10 ** decimalsOf(pair) });
+  const out: IndicatorSignal[] = [];
+  for (const tr of amdPo3Trades(run.events)) {
+    const open = times[tr.bar];
+    const age = nowMs - (open + step);
+    if (age < 0 || age > freshMs) continue;
+    out.push({
+      rule: "amdpo3",
+      pair,
+      interval,
+      side: tr.dir === 1 ? "BUY" : "SELL",
+      strong: false,
+      barTime: new Date(open).toISOString(),
+      closedAt: new Date(open + step).toISOString(),
+      close: tr.entry,
+      line: null,
+      eps: null,
+      rsi: null,
+      rsiPrev: null,
+      sl: tr.stop,
+      tps: [tr.target],
+      amd: {
+        rangeHigh: tr.rangeHigh,
+        rangeLow: tr.rangeLow,
+        rangeFromClosedAt: new Date(times[tr.rangeStart] + step).toISOString(),
+        sweepSide: tr.sweepSide === 1 ? "HIGH" : "LOW",
+        sweepExtreme: tr.sweepExtreme,
+        riskR: tr.riskR,
+        rr: pineFmt(tr.rr, 2),
       },
     });
   }
@@ -840,7 +930,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = s.rule === "macdx" || s.rule === "sweepx" ? undefined : GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -850,7 +940,8 @@ const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
   return `過去の${tfLabel("ja", s.interval)}（2024年1月〜2026年9月、Dukascopy の金の値を Twelve Data と同じ区切りの足にしたもの、スプレッド込み）で測ると、この目安で損切りより先に利確1に届いたのは ${g.win.toFixed(1)}%（損益ゼロには${even}%より上、スプレッドの分さらに上が要ります）で、利確1か損切りで全部決済すると（5日たっても決着しなければその時点で決済）1回あたり平均で約${Math.abs(g.usd).toFixed(2)}ドルの${g.usd < 0 ? "負け" : "勝ち"}でした。`;
 };
 // #291: the video's way has not been measured (docs §8.112); #324: nor has
-// the 1-hour MACD rule (the owner: 「今は測らない」, 2026-10-12; docs §8.114).
+// the 1-hour MACD rule (the owner: 「今は測らない」, 2026-10-12; docs §8.114);
+// #385: nor has AMD Po3 (its table counts the chart's own, §8.128).
 // (The 5-minute MACD rule's measured figures, §8.109, went with its emails:
 // they are another rule's.)
 const notMeasuredLine = (lang: Lang): string =>
@@ -858,7 +949,7 @@ const notMeasuredLine = (lang: Lang): string =>
     ? "This rule's win rate and its profit or loss a trade have not been measured."
     : "この決まりの勝率と1回あたりの損益は、まだ測っていません。";
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  if (s.rule === "macdx" || s.rule === "sweepx") return notMeasuredLine(lang);
+  if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3") return notMeasuredLine(lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
@@ -949,6 +1040,36 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `This is the way shown in a gold trader's Instagram video, made into a rule by this app (docs §8.112): the last wave's ${buy ? "low" : "high"} taken once (a liquidity sweep), then the entry on EMA 20 crossing EMA 80; the break of structure is not waited for. The video gives no numbers but "15 to 20 pips", so the window it is judged on (${SWEEPX.window} closed bars), where the stop goes and the like are this app's. ${measuredLine(s, "en")}`,
         `The bars are 1-minute bars made from Swissquote's gold prices (the mid, recorded every few seconds; the minutes before the recording began are Twelve Data's), the same as the app's gold 1-minute chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
         "To stop these emails, open Settings → Email alerts in the app and untick \"Liquidity sweep + EMA cross\".\nThis is reference information, not investment advice. Every trading decision is your own.",
+      ]);
+    }
+    if (s.rule === "amdpo3") {
+      // #385 (docs §8.128): AMD Po3's DIST, with the original's levels
+      const f = s.amd;
+      const buy = s.side === "BUY";
+      const src = twelve
+        ? `The bars are Twelve Data's (GMO Coin does not carry ${s.pair}), as the app's chart draws them.`
+        : "The bars are the mid of GMO Coin's public bid and ask, as the app's chart draws them.";
+      return assemble(`[Sextant] ${s.pair} ${tf} ${buy ? "BUY (D ▲)" : "SELL (D ▼)"} signal (AMD Po3)`, [
+        `AMD Po3 marked ${buy ? "D ▲ (BUY)" : "D ▼ (SELL)"} on ${s.pair}, ${tf} chart: the manipulation confirmed and its reference trade opened.`,
+        [
+          `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
+          ...(f
+            ? [
+              `Accumulation (the range that narrowed): ${px(f.rangeLow)} – ${px(f.rangeHigh)}, from the bar closed ${whenClosed(f.rangeFromClosedAt, 0)} UTC`,
+              `Manipulation: the price broke ${f.sweepSide === "HIGH" ? "above the range" : "below the range"} to ${px(f.sweepExtreme)}, then this bar closed back inside it`,
+            ]
+            : []),
+        ].join("\n"),
+        [
+          "The original's reference levels (entering at the D bar's close):",
+          `  Entry ≈ ${px(s.close)}`,
+          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)}): 0.4 × ATR 14 beyond the sweep's tip`,
+          ...(s.tps ?? []).map((v) => `  Target ${px(v)} (${dist(v)}): the 1.5 extension of the sweep — where the distribution is expected to reach, not a take-profit`),
+          `  R:R ${f ? f.rr : "—"} (the target's distance over the stop's). Neither reached within ${AMD_PO3.distTimeoutBars} bars: a timeout`,
+        ].join("\n"),
+        `AMD Po3 with Live Edge Stats is the code WillyAlgoTrader published on TradingView (v2.4.0), ported at its default settings; this email is judged with the same code as the "AMD Po3" on the app's chart (docs §8.128), at the bar the original sends its DIST alert on. The target rate and average R in the chart's table count the bars that chart could read, and are not this email's win rate. ${measuredLine(s, "en")}`,
+        `${src} Check the latest state in the app before you place an order:\n${APP_URL}`,
+        "To stop these emails, open Settings → Email alerts in the app and untick the chart under AMD Po3.\nThis is reference information, not investment advice. Every trading decision is your own.",
       ]);
     }
     const side = s.side === "BUY" ? "BUY" : "SELL";
@@ -1053,6 +1174,37 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       `この合図は、Instagram の金のトレーダーの動画のやり方（一つ前の波の${buy ? "安値" : "高値"}を一度抜ける「流動性狩り」のあと、EMA20 と EMA80 のクロスで入る）を、このアプリで決まりにしたものです（docs §8.112）。構造の崩壊（BOS）は待ちません。動画には「15〜20ピップス」のほかに数字がないため、判断する範囲（確定足${SWEEPX.window}本）や損切りの置き方などはこのアプリで決めました。${measuredLine(s, "ja")}`,
       `足は Swissquote の金の値段（約3秒ごとに記録した中値）から作った1分足（記録を始める前の分は Twelve Data の1分足）で、アプリのチャートの金の1分足と同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
       "この通知を止めるには、アプリの「設定」→「メール通知」の「流動性狩り＋EMAクロス」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
+    ]);
+  }
+  if (s.rule === "amdpo3") {
+    // #385 (docs §8.128): AMD Po3's DIST, with the original's levels
+    const f = s.amd;
+    const buy = s.side === "BUY";
+    const sideA = buy ? "買い（BUY・D ▲）" : "売り（SELL・D ▼）";
+    const src = twelve
+      ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）で、アプリのチャートと同じです。`
+      : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。";
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideA}のサイン（AMD Po3）`, [
+      `${pairJa(s.pair)}の${tf}で、AMD Po3 の ${buy ? "D ▲（買い）" : "D ▼（売り）"}が出ました。仕掛けが確定し、基準の売買が始まった足です。`,
+      [
+        `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
+        ...(f
+          ? [
+            `集積（値幅が縮んだ範囲）: ${px(f.rangeLow)} 〜 ${px(f.rangeHigh)}（${whenClosed(f.rangeFromClosedAt, 9)} に確定した足から）`,
+            `仕掛け: 範囲の${f.sweepSide === "HIGH" ? "上" : "下"}を ${px(f.sweepExtreme)} まで抜けたあと、この足の終値で範囲の中に戻りました`,
+          ]
+          : []),
+      ].join("\n"),
+      [
+        "元のインジケーターの基準の値（D の足の終値で入った場合）:",
+        `  エントリー ≈ ${px(s.close)}`,
+        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}。抜けた先端から ATR14 の0.4倍外）`,
+        ...(s.tps ?? []).map((v) => `  目標 ${px(v)}（${dist(v)}。抜けた幅の1.5倍の延長。利確の指示ではなく、分配が届く目安）`),
+        `  R:R ${f ? f.rr : "—"}（目標までの幅 ÷ 損切りまでの幅）。${AMD_PO3.distTimeoutBars}本たっても届かなければ時間切れ`,
+      ].join("\n"),
+      `AMD Po3 with Live Edge Stats（WillyAlgoTrader が TradingView に公開したコード、v2.4.0）を既定の設定のまま移植したもので、アプリのチャートの「AMD Po3」と同じコードで判定しています（docs §8.128）。元のインジケーターが DIST の通知を出す足（仕掛けが確定し、基準の売買が始まった足）で送ります。チャートの表の目標の割合や平均 R は、そのチャートで読めた足の中で数えたもので、このメールの勝率ではありません。${measuredLine(s, "ja")}`,
+      `${src}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+      "この通知を止めるには、アプリの「設定」→「メール通知」の「AMD Po3」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
   // Q-Trend's STRONG in the same brackets: 買い（BUY・STRONG）

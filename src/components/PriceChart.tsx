@@ -38,6 +38,7 @@ import { ST_DEFAULTS, supertrend } from "@/lib/supertrend";
 import { UT_DEFAULTS, utBot } from "@/lib/utBot";
 import { ZLT_DEFAULTS, ZLT_ROUGH_BARS, ZLT_SETTLE_BARS, zlTemaCrosses } from "@/lib/zlTema";
 import { fvgCrossfire, starText } from "@/lib/fvgCrossfire";
+import { AMD_PO3, amdMintick, amdPo3, amdPo3Theme, pineCss, tvPeriodOf, type AmdLabel } from "@/lib/amdPo3";
 import { WVP_DEFAULTS, weightedVolumeProfile } from "@/lib/weightedVolumeProfile";
 import { ZS_DEFAULTS, zoneShift } from "@/lib/zoneShift";
 import { MA_DEEP_FROM, MA_DEFAULTS, MA_MAX, MA_PRESETS, MA_SLOTS, MA_TYPES, type MaLine, crossPair, maLabel, maShortfall, maValues, measuredMa } from "@/lib/emaLines";
@@ -222,7 +223,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -275,6 +276,8 @@ const CLOUD_ATR = 1;
 const FALLBACK_W = 660;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 22;
+// #385: the height of AMD Po3's table folded under its one line (full screen)
+const AMD_FOLD_H = 22;
 const PAD_LEFT = 8;
 // Two separate right-hand lanes: the price axis, then the level pills. They
 // used to share one lane, so a level near a gridline covered its label.
@@ -667,6 +670,26 @@ const PriceChart = ({
       before: off,
     };
   }, [ov.zlTema, zltPast, candles, tail]);
+  // #385: AMD Po3 over the same deep history and the candles (its cycles
+  // need 220 bars to warm up; its table counts every cycle of the bars read).
+  // While that history is loading, nothing. Judged on the closed candles; the
+  // forming one only stretches the live boxes and lines, as on TradingView.
+  // `off`: the bars before the first candle.
+  // Listed on a chart given that history (the live chart), or with enough
+  // candles of its own for a first cycle (not the analysis and outcome
+  // charts' 120: there it would only ever warm up)
+  const amdListed = deepHistory !== undefined || candles.length > AMD_PO3.statWindow + AMD_PO3.rangeWin;
+  const amd = useMemo(() => {
+    if (!ov.amdPo3 || !amdListed || candles.length === 0 || zltPast === null) return null;
+    const all = [...zltPast, ...candles];
+    const r = amdPo3(all.map((b) => ({ o: b.open, h: b.high, l: b.low, c: b.close })), {
+      mintick: amdMintick(pair),
+      theme: prefs.theme === "light" ? "light" : "dark",
+      tf: tvPeriodOf(medianGapMs(candles.slice(-60).map((c) => c.datetime))),
+      confirmed: all.length - tail,
+    });
+    return { ...r, off: zltPast.length, total: all.length };
+  }, [ov.amdPo3, amdListed, zltPast, candles, tail, pair, prefs.theme]);
   // #121: FVG Crossfire, on the closed candles, and #122: the Weighted
   // Volume Profile of the newest candles — the forming one too, as the
   // original recomputes on the chart's last bar. #123: one indicator, on
@@ -940,7 +963,8 @@ const PriceChart = ({
     const avail = measured.h;
     RH = Math.min(160, Math.max(44, Math.round(measured.h * 0.22)));
     if (strips > 0) RH = Math.min(RH, Math.max(36, Math.floor((avail - 120) / strips) - STRIP_GAP));
-    H = Math.max(100, avail - strips * (RH + STRIP_GAP));
+    // (#385: less AMD Po3's table, folded under one line in full screen)
+    H = Math.max(100, avail - strips * (RH + STRIP_GAP) - (amd && amd.dash.length > 0 ? AMD_FOLD_H : 0));
   }
   // #118: larger print in full screen, where it is read at arm's length
   const labelSize = full ? (narrow ? 10.5 : 11.5) : narrow ? 8 : 9;
@@ -1003,6 +1027,22 @@ const PriceChart = ({
   const ulTagW = (label: string) => label.length * ulTagFsz * 0.6 + 6;
   // (wide enough for the arrow a price off the chart is tagged with)
   const ulGap = (ulOpen || qtOpen) && to >= n ? Math.ceil(Math.max(...[...ulLevels, ...qtLevels].map((l) => ulTagW(`${l.label} ↑`))) + 4) : 0;
+  // #385: AMD Po3's price labels — a live trade's entry, stop and target
+  // lines run 5 bars past the newest bar and their labels start a bar
+  // further, as the original draws them (a trade just ended leaves them a
+  // few bars back) — so while one is near the newest bar and that bar is on
+  // screen, the chart keeps the bars they reach and the labels' room to its
+  // right, as TradingView's margin shows them
+  const amdTags = amd && to >= n
+    ? amd.labels.filter((l) => l.style === "label_left" && l.x - amd.off > n - 1 - AMD_PO3.lineUpdateBars - AMD_PO3.labelOffsetBars)
+    : [];
+  const amdAhead = Math.max(0, ...amdTags.map((l) => l.x - (amd ? amd.off : 0) - (n - 1)));
+  // (at most a quarter of the plot: on a phone the labels are cut rather
+  // than the candles squeezed to nothing)
+  const amdGap = Math.min(
+    Math.ceil(Math.max(0, ...amdTags.map((l) => [...l.text].length * labelSize * 0.62 + 12))),
+    Math.floor((W - PAD_LEFT - PAD_RIGHT) / 4),
+  );
 
   // Deliberately NOT part of the price domain below. A confirmed swing well
   // above the window would stretch the scale until every candle was a flat
@@ -1079,15 +1119,15 @@ const PriceChart = ({
     const plotH = H - PAD_TOP - PAD_BOTTOM;
     // the bars' width: the plot, less ULTRA's room (#151); #160: the bars
     // past the newest one, dragged into view, share it
-    const barsW = plotW - ulGap;
-    const slot = barsW / (to - from + ahead);
+    const barsW = plotW - ulGap - amdGap;
+    const slot = barsW / (to - from + ahead + amdAhead);
     // wider candles when zoomed in, up to a point
     const bodyW = Math.max(2, Math.min(interactive && view ? 18 : 9, slot * 0.62));
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, amdGap, amdAhead]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1447,6 +1487,8 @@ const PriceChart = ({
     adx: t.chart.adx.note,
     // #151
     ultra: t.chart.ultraNote,
+    // #385
+    amdPo3: t.chart.amdPo3Note(amd ? amd.total : null, deepHistory ? (amd ? "ready" : deepHistory.status) : "ready", AMD_PO3.statWindow + AMD_PO3.rangeWin),
     // #291 (and why no mark may be drawn: the bars before the chart still
     // read, or not read, or too few bars for a cross to count)
     sweepx: t.chart.sweepxNote(
@@ -1471,6 +1513,8 @@ const PriceChart = ({
     { key: "qtBlsh", group: "signals" as const, name: t.chart.overlayNames.qtBlsh, on: ov.qtBlsh, toggle: flip("qtBlsh") },
     // #151: the video's ULTRA
     { key: "ultra", group: "signals" as const, name: t.chart.overlayNames.ultra(isGoldPair(pair)), on: ov.ultra, toggle: flip("ultra") },
+    // #385: WillyAlgoTrader's AMD Po3
+    ...(amdListed ? [{ key: "amdPo3", group: "signals" as const, name: t.chart.overlayNames.amdPo3, on: ov.amdPo3, toggle: flip("amdPo3") }] : []),
     // #291: the owner's video's way (the moving averages' chart only, below)
     { key: "sweepx", group: "signals" as const, name: t.chart.overlayNames.sweepx, on: ov.sweepx, toggle: flip("sweepx") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
@@ -2027,6 +2071,37 @@ const PriceChart = ({
   }
 
   const { y, x, slot, bodyW, plotW, barsW } = geometry;
+  // #385: a Pine label — a bubble over its point (label_down), under it
+  // (label_up) or to its right (label_left), pointing at it
+  const amdLabel = (lb: AmdLabel, k: number) => {
+    if (!amd) return null;
+    const px = x(lb.x - amd.off);
+    const py = y(lb.y);
+    const fsz = labelSize;
+    const w = [...lb.text].length * fsz * 0.62 + 8;
+    const h = fsz + 6;
+    const tip = 4;
+    // drawn while any of it is over the plot (a bubble to the right of a bar
+    // off the left edge can still reach in)
+    const [l0, l1] = lb.style === "label_left" ? [px, px + tip + w] : [px - w / 2, px + w / 2];
+    if (l1 < PAD_LEFT || l0 > W - PAD_RIGHT) return null;
+    const box = lb.style === "label_down"
+      ? { rx: px - w / 2, ry: py - tip - h, d: `M${px - tip},${py - tip} L${px},${py} L${px + tip},${py - tip} Z` }
+      : lb.style === "label_up"
+        ? { rx: px - w / 2, ry: py + tip, d: `M${px - tip},${py + tip} L${px},${py} L${px + tip},${py + tip} Z` }
+        : { rx: px + tip, ry: py - h / 2, d: `M${px + tip},${py - tip} L${px},${py} L${px + tip},${py + tip} Z` };
+    const fill = pineCss(lb.color);
+    return (
+      <g key={`at-${k}`} data-testid="chart-amdpo3-label" data-text={lb.text} data-bar={lb.x - amd.off}>
+        {lb.tooltip && <title>{lb.tooltip}</title>}
+        <path d={box.d} fill={fill} />
+        <rect x={box.rx} y={box.ry} width={w} height={h} rx="2" fill={fill} />
+        <text x={box.rx + w / 2} y={box.ry + h / 2 + fsz * 0.36} fontSize={fsz} textAnchor="middle" fill={pineCss(lb.textColor)}>
+          {lb.text}
+        </text>
+      </g>
+    );
+  };
   const inDomain = (v: number | null): v is number =>
     v !== null && Number.isFinite(v) && v >= geometry.min && v <= geometry.max;
   // #116: the flags on screen
@@ -2256,7 +2331,8 @@ const PriceChart = ({
   // edges rather than centred on their candle, which would hang half the
   // label off the canvas
   const timeLabelW = 11 * labelSize * 0.6 + 24;
-  const timeSlots = Math.min(8, Math.max(3, Math.floor(plotW / timeLabelW)));
+  // (#385: less the room kept for AMD Po3's price labels, past the newest bar)
+  const timeSlots = Math.min(8, Math.max(3, Math.floor((plotW - amdGap - slot * amdAhead) / timeLabelW)));
   const timeIdx = [...new Set(Array.from({ length: timeSlots }, (_, j) => from + Math.round((j * (count - 1)) / (timeSlots - 1))))];
   // #181: weeks or months: the labels give the year
   const longBars = medianGapMs(candles.slice(-60).map((c) => c.datetime)) >= LONG_BAR_MS;
@@ -2732,6 +2808,11 @@ const PriceChart = ({
       {ov.fvgProfile && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-fvgprofile-legend">
           {noteOf.fvgProfile}
+        </p>
+      )}
+      {ov.amdPo3 && amdListed && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-amdpo3-legend">
+          {noteOf.amdPo3}
         </p>
       )}
       {/* #150 */}
@@ -3329,6 +3410,35 @@ const PriceChart = ({
           </g>
         )}
 
+        {/* #385: AMD Po3's boxes — accumulation (blue, dashed), the sweep
+            (orange; solid once the price came back) and distribution (green),
+            in the original's colours; older cycles outlined, as it does */}
+        {amd && amd.boxes.length > 0 && (
+          <g data-testid="chart-amdpo3-boxes" clipPath={`url(#${clipId})`}>
+            {amd.boxes.map((b, k) => {
+              const l = b.left - amd.off;
+              const r = b.right - amd.off;
+              if (r < from - 1 || l > to + ahead) return null;
+              const x0 = x(l);
+              const top = y(b.top);
+              return (
+                <rect
+                  key={`ab-${k}`}
+                  x={x0}
+                  y={top}
+                  width={Math.max(1, x(r) - x0)}
+                  height={Math.max(1, y(b.bottom) - top)}
+                  fill={pineCss(b.bg)}
+                  stroke={pineCss(b.border)}
+                  strokeWidth={b.borderWidth}
+                  strokeDasharray={b.borderStyle === "dashed" ? "4 3" : b.borderStyle === "dotted" ? "1 2" : undefined}
+                  data-testid="chart-amdpo3-box"
+                />
+              );
+            })}
+          </g>
+        )}
+
         {/* #119: the SPECTRA-style trend cloud — between the smoothed price
             and its Supertrend line, green while up, red while down */}
         {kst && kstRuns.length > 0 && (
@@ -3622,6 +3732,35 @@ const PriceChart = ({
                 </g>
               );
             })}
+          </g>
+        )}
+
+        {/* #385: AMD Po3's reference entry (dotted), stop (red) and target
+            (green, dashed; solid teal once reached), each with its price to
+            the right, and its labels — M at the sweep's tip, D ▲ / D ▼ where
+            the trade opened (its numbers on hover), the outcome in R, and
+            EXPIRED / BREAKOUT / NEWS BAR / 2-SIDE where a range ended */}
+        {amd && (amd.lines.length > 0 || amd.labels.length > 0) && (
+          <g data-testid="chart-amdpo3-marks" clipPath={`url(#${clipId})`}>
+            {amd.lines.map((ln, k) => {
+              const a = ln.x1 - amd.off;
+              const b = ln.x2 - amd.off;
+              if (b < from - 1 || a > to + ahead) return null;
+              return (
+                <line
+                  key={`al-${k}`}
+                  x1={x(a)}
+                  x2={x(b)}
+                  y1={y(ln.y1)}
+                  y2={y(ln.y2)}
+                  stroke={pineCss(ln.color)}
+                  strokeWidth={ln.width}
+                  strokeDasharray={ln.style === "dashed" ? "5 3" : ln.style === "dotted" ? "1.5 2" : undefined}
+                  data-testid="chart-amdpo3-line"
+                />
+              );
+            })}
+            {amd.labels.map((lb, k) => amdLabel(lb, k))}
           </g>
         )}
 
@@ -4471,7 +4610,10 @@ const PriceChart = ({
 
         {/* time axis (JST) */}
         {timeIdx.map((i, k) => {
-          const lastLabel = k === timeIdx.length - 1;
+          // (#385: while AMD Po3 keeps room past the newest bar, the newest
+          // label stays under its candle when it fits)
+          const lastLabel = k === timeIdx.length - 1 &&
+            !((amdGap > 0 || amdAhead > 0) && x(i) + (formatCandleLabel(candles[i].datetime, t.intlLocale, { long: longBars }).length * labelSize * 0.6) / 2 <= W - PAD_RIGHT);
           const anchor = k === 0 ? "start" : lastLabel ? "end" : "middle";
           const tx = k === 0 ? PAD_LEFT : lastLabel ? W - PAD_RIGHT : x(i);
           return (
@@ -4485,6 +4627,20 @@ const PriceChart = ({
             </text>
           );
         })}
+        {/* #385: AMD Po3's watermark, at the bottom centre as the original's */}
+        {amd && (
+          <text
+            x={PAD_LEFT + plotW / 2}
+            y={H - PAD_BOTTOM - 6}
+            fontSize={labelSize + 2}
+            textAnchor="middle"
+            fill={pineCss(amdPo3Theme(prefs.theme !== "light").WM_COLOR)}
+            pointerEvents="none"
+            data-testid="chart-amdpo3-watermark"
+          >
+            WillyAlgoTrader
+          </text>
+        )}
         {/* #118: the crosshair's bar, on the time axis */}
         {hover !== null && hovered && (() => {
           const label = formatCandleLabel(hovered.datetime, t.intlLocale, { long: longBars });
@@ -4501,6 +4657,45 @@ const PriceChart = ({
         })()}
       </svg>
       </div>
+      {/* #385: AMD Po3's table, row for row as the original's (its phase,
+          the live cycle's levels, the cycles counted on the bars read). The
+          original puts it on the chart's top right; here it is under the
+          chart, as ULTRA's tally left the chart (#152), not to cover the
+          newest candles */}
+      {amd && amd.dash.length > 0 && (() => {
+        const table = (
+        <table className="mx-1 mb-1 border-collapse font-mono text-[10px] leading-snug" data-testid="chart-amdpo3-dash" style={{ border: `1px solid ${pineCss(amdPo3Theme(prefs.theme !== "light").TABLE_BORDER)}` }}>
+          <tbody>
+            {amd.dash.map((row, k) => (
+              <tr key={`ad-${k}`} style={{ background: pineCss(row.bg) }} data-testid="chart-amdpo3-dash-row">
+                {row.r === null ? (
+                  <td colSpan={2} className="px-1.5 text-center" style={{ color: pineCss(row.lc) }}>
+                    {row.l}
+                  </td>
+                ) : (
+                  <>
+                    <td className="px-1.5" style={{ color: pineCss(row.lc) }}>
+                      {row.l}
+                    </td>
+                    <td className="px-1.5" style={{ color: pineCss(row.rc) }}>
+                      {row.r}
+                    </td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        );
+        // in full screen, folded under its header line, not to push the
+        // strips below off the screen (AMD_FOLD_H)
+        return full ? (
+          <details className="px-1" data-testid="chart-amdpo3-dash-fold">
+            <summary className="cursor-pointer text-[10px] leading-[22px] text-muted-foreground">{amd.dash[0].l}</summary>
+            {table}
+          </details>
+        ) : table;
+      })()}
       {/* #117: the stochastic's lengths, opened from its gear in the list
           (#119; in full screen the gear opens the settings sheet) */}
       {!full && stochSettings && <div className="px-1 pt-1">{stochForm}</div>}

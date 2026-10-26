@@ -96,6 +96,7 @@ import {
   klinePreloadDays,
   latestCloseMs,
   macdhSignals,
+  amdpo3Signals,
   SWEEPX_INTERVALS,
   SWEEPX_PAIRS,
   isSweepxChart,
@@ -225,7 +226,14 @@ import type { Candle } from "../analyze/indicators.ts";
 // the stop and targets and the other rules are as they were. Put out at once
 // on the owner's 「確かめなくていい、15分足に変更してくれればそれでいい」, in the
 // middle of a GMO day (not after the day rolls, as v28 and v30 were).
-const FUNCTION_VERSION = "signal-alerts-v31-2026-10-26T21:00:00Z";
+// v32 (#385, docs §8.128): a fifth rule beside them, 'amdpo3' — AMD Po3's DIST
+// (WillyAlgoTrader's indicator, _shared/amd-po3.ts, at its default settings:
+// the manipulation confirmed, the reference trade opened at the bar's close),
+// on the charts Q-Trend and ULTRA are mailed on, judged on the same bars
+// (indicators.ts amdpo3Signals), recorded under AMDPO3_RULE_ID; the owner's
+// 「エントリーのタイミングが来たらこれも設定でメールが届く様にもして」. The
+// other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v32-2026-10-26T15:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -523,7 +531,8 @@ Deno.serve(async (req: Request) => {
       // (#291: not the video's way, 'sweepx': gold's 1-minute chart is judged by
       // the "gold-ticks" run on the minutes it records, and read here it would
       // be a Twelve Data chart read every minute)
-      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule"))
+      // (#385: and AMD Po3's, 'amdpo3')
+      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3)&select=user_id,pair,interval,lang,rule"))
         .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && r.rule !== "sweepx" && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
       summary.subscriptions = subs.length;
@@ -638,6 +647,12 @@ Deno.serve(async (req: Request) => {
           sigs.push(...macdhSignals(pair, interval, closed, nowMs));
         } catch (err) {
           console.error("macdx failed:", pair, interval, err);
+        }
+        // #385: AMD Po3's DIST, likewise apart (docs §8.128)
+        try {
+          sigs.push(...amdpo3Signals(pair, interval, closed, nowMs));
+        } catch (err) {
+          console.error("amdpo3 failed:", pair, interval, err);
         }
         judgedBar.set(`${pair}|${interval}`, newest);
         fired.push(...sigs);

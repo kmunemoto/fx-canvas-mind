@@ -267,7 +267,7 @@ describe("#291 what the email says", () => {
 describe("#291 the function judges it in the gold-ticks run only", () => {
   const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
   it("the indicators sweep never reads the rule's subscriptions (gold's 1-minute chart would be a Twelve Data read a minute)", () => {
-    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx)&select=user_id,pair,interval,lang,rule")');
+    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('r.rule !== "sweepx"');
   });
   it("the gold-ticks run reads its subscriptions, the recorded minutes rounded as the chart's history, and mails through the same path", () => {
@@ -290,8 +290,8 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     // fresh judge (gold-minutes.ts judgesWhileShut)
     expect(fn).toContain('if (!judgesWhileShut(plan.minuteStart)) return { ...summary, skipped: "market_closed" };');
     expect(fn).toContain("sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },");
-    // (v24 brought the rule; #324's v25, #339's v26, #345's v27, #353's v28, #362's v30 and #384's v31 kept it as it was)
-    expect(fn).toContain("signal-alerts-v31");
+    // (v24 brought the rule; #324's v25, #339's v26, #345's v27, #353's v28, #362's v30, #384's v31 and #385's v32 kept it as it was)
+    expect(fn).toContain("signal-alerts-v32");
   });
   it("the job calls the run every minute through the http extension, not pg_net (which sends nothing while a request it sent is open)", () => {
     const sql = readFileSync("supabase/migrations/20261011120100_gold_ticks_every_minute.sql", "utf8");

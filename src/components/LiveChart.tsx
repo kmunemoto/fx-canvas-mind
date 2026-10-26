@@ -397,7 +397,9 @@ const LiveChart = ({
   // bars is judged on its 600 closed bars, as the email judges (whatever
   // the three lines are set to). Not told to the chart as the lines' (`deepForMa`)
   const sweepDeep = indicatorsAllowed && !deepNoMore && maMode && overlays.sweepx && commonBefore !== null && commonBefore.length < SWEEPX.window - 1;
-  const deepOn = indicatorsAllowed && ((!maMode && overlays.zlTema) || maDeep || sweepDeep);
+  // #385: and AMD Po3, whose cycles need 220 bars to warm up and whose table
+  // counts the cycles of every bar read (TradingView counts its whole history)
+  const deepOn = indicatorsAllowed && ((!maMode && (overlays.zlTema || overlays.amdPo3)) || maDeep || sweepDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;

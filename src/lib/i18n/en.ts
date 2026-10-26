@@ -280,6 +280,8 @@ export const en: Dict = {
       ultra: (gold: boolean): string => (gold ? "ULTRA (RSI 14, SL $13, TP $4/10/16)" : "ULTRA (RSI 14, SL 13, TP 4/10/16 pips)"),
       // #291
       sweepx: "Liquidity sweep + EMA cross (EMA 20×80)",
+      // #385
+      amdPo3: "AMD Po3 (WillyAlgoTrader)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -454,6 +456,19 @@ export const en: Dict = {
     // #136
     supertrendNote:
       "SuperTrend (a port of the code KivancOzbilgic published on TradingView): a line at the high–low midpoint ± 3 × ATR(10). While the trend is up the lower line shows (green), while down the upper one (red); the line only rises in an uptrend and only falls in a downtrend. When a close crosses the line on the other side the trend turns, marked with a dot and Buy / Sell on the line. The space between the line and the candles' average (open, high, low, close) is tinted. Judged on closed bars only, not drawn on the bar still forming. As its author says, it does not work in a sideways market. Not yet measured on past data (the SPECTRA style, the same mechanism smoothed by a Kalman filter, did no better than entering at random in #120). Shown only: no signal or email uses it.",
+    // #385: WillyAlgoTrader's AMD Po3 with Live Edge Stats
+    amdPo3Note: (total: number | null, status: "loading" | "ready" | "error", warm: number) =>
+      "AMD Po3 with Live Edge Stats (a port of the code WillyAlgoTrader published on TradingView, Pine v6, v2.4.0, at its default settings): " +
+      "where the range has narrowed (the 20-bar high–low width in the bottom 25% of its last 200 values, and at least 0.15% of the price) it draws an accumulation box (blue, dashed), bounded by the pivots (3 bars each side) inside it. " +
+      "Once the box is 12 bars old, a break beyond its top or bottom by more than 10% of its width is a sweep (the orange box); a close back inside within 6 bars marks M (the sweep's tip) and D ▲ (buy) or D ▼ (sell), and a reference trade opens at that bar's close (the green box). " +
+      "Its stop (red) is 0.4 × ATR 14 beyond the sweep's tip, its target (green, dashed) the 1.5 extension of the sweep (0 at the tip, 1 at the opposite edge), its entry dotted. It ends at the target, the stop or after 64 bars, written in R (the entry-to-stop distance as 1) as ✓, ✗ or ◌ (both on one bar counts as the stop, AMB ✗). " +
+      "A sweep that does not come back, a break of both sides, or 96 bars without a sweep end the range: BREAKOUT, 2-SIDE, NEWS BAR, EXPIRED. Judged on closed bars. The table below is the original's, counted over the bars this chart could read (TradingView counts over a longer history). Its target rate and R are the original's counts, not measured by this app. " +
+      "The original's higher-timeframe bias, killzone, liquidity and depth filters (off by default) are not offered. The original lays its table over the chart's top right; here it is under the chart, not to cover the newest candles. " +
+      (status === "loading"
+        ? "Loading the bars before the chart's (drawn after). "
+        : status === "error"
+          ? "Not shown: the bars before the chart's could not be read (tried again on the next bar). "
+          : `Bars read: ${(total ?? 0).toLocaleString("en-US")} (the first ${warm} warm it up and are not judged). `),
     // #176
     zlTemaTitle: (side: "BUY" | "SELL"): string =>
       side === "BUY" ? "Zero-lag TEMA L (the fast line crossed over the slow one)" : "Zero-lag TEMA S (the fast line crossed under the slow one)",
@@ -1859,7 +1874,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1868,7 +1883,7 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
@@ -1876,6 +1891,8 @@ export const en: Dict = {
       ultra: "ULTRA's Buy ☆ and Sell ☆ signals (built from F-INVEST's video): the same marks the live chart draws, with a stop (13 pips on a currency pair, $13 on gold) and targets 1 to 3 (4, 10, 16 pips on a currency pair; $4, $10, $16 on gold) in the email.",
       macdx: "BUY and SELL signals from the 15-minute chart's MACD(12, 26, 9) blue line: a SELL when it comes up to 95% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (what the chart shows when it is opened; the highest of the blue line, the orange line and the bars), and a BUY when it comes down to 95% or more of the way to the pane's bottom (the lowest of them). One email when the line gets there; another only after it has gone back inside the 95% mark and come back to it. On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only (moved from the 1-hour chart on the morning of 27 October 2026, Japan time). Sextant's own rule (its numbers are the app owner's); the chart draws no mark for it. Its win rate and its profit or loss a trade have not been measured. The rule has no stop or target of its own, so the email carries ULTRA's stop and targets (13 pips and 4, 10 and 16 pips on a currency pair; $13 and $4, $10 and $16 on gold).",
       // #291
+      // #385
+      amdpo3: "The D ▲ (BUY) and D ▼ (SELL) of AMD Po3 with Live Edge Stats (a port of the code WillyAlgoTrader published on TradingView, at its default settings): sent at the bar where the price broke above or below a range that had narrowed and closed back inside it within 6 bars (the manipulation confirmed), when the original's reference trade opens at that bar's close (the original's DIST alert). The same D the chart's \"AMD Po3\" draws; the email carries the original's stop (0.4 × ATR 14 beyond the sweep's tip), target (the 1.5 extension of the sweep) and R:R. This rule's win rate and its profit or loss a trade have not been measured.",
       sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
     } as Record<string, string>,
     // #275: shown instead of the table when the server sends no charts for the rule
@@ -1908,6 +1925,15 @@ export const en: Dict = {
       "On the 1-minute chart several emails a day can arrive (how many a day has not been counted yet). If the mail service (Resend) is on its free plan, those past 100 a day or 3,000 a month, counted with the other alerts, show as failed.",
       "This rule's win rate and its profit or loss a trade have not been measured. The video does not show its author's EMA lengths or timeframe: EMA 20 and EMA 80 are the owner's choice, and the window it is judged on (600 closed bars), where the stop goes and the like are this app's. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
       "Nothing is recorded or judged while gold is shut (its daily hour, and the weekend, taken wide: Friday 21:00 to Sunday 22:00 UTC). The last bar before it shuts is judged from 5 seconds after it closes, as every bar is (before the daily hour and a summer weekend, that email arrives while gold cannot be traded until it reopens). In US winter time (early November to mid-March) gold trades on Fridays until 22:00 UTC, but its hour from 21:00 UTC is neither recorded nor judged.",
+    ],
+    // #385: AMD Po3's notes (Q-Trend's and ULTRA's charts; docs §8.128)
+    amdpo3Notes: [
+      "The same symbols and timeframes as Q-Trend and ULTRA. Judged on the live chart's own bars (on GMO Coin's symbols the 600 closed ones, but on the daily chart this year's and last year's only: some 280 in January, some 470 in October; on the others Twelve Data's, as kept: some 700 to 1,400) with the code the chart's \"AMD Po3\" is drawn with.",
+      "Whether a range (an accumulation) forms depends on the bars before it. The chart computes over a longer history (up to some 1,500 bars), so its D and the email's could differ. On 80 random walks the D judged on 600 bars was the D computed over all of them all 1,527 times; on 450 bars 4 of 1,595 and on 300 bars 264 of 1,740 were on one side only or had other levels (not yet counted on real bars). On GMO Coin's daily chart they differ more early in the year, when it has fewer bars.",
+      "Sent once the D bar has closed (on GMO Coin's symbols some ten seconds after; on the others up to about 30 minutes later). A bar closed too long ago (10 minutes on the 5-minute chart, 20 on the 15-minute, 30 on the longer ones) is not sent.",
+      "The original's settings are its defaults (its higher-timeframe bias, killzone, liquidity and depth filters are not used). The original is tuned for the 15-minute chart; the other timeframes are judged too.",
+      "The chart table's Target rate and Avg R count the bars that chart could read; they are not this email's win rate. This rule's win rate and its profit or loss a trade have not been measured, nor has holding without a stop. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
+      "Nothing is judged while the market is shut (weekends and the like). Every symbol on the 5- and 15-minute charts can pass the mail service's (Resend's) free plan (100 a day, 3,000 a month); the rest show as failed.",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",
