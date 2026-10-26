@@ -73,6 +73,11 @@ export interface ChartOverlays {
   // low (high) taken, then EMA 20 crossing EMA 80: BUY / SELL, the boxes to
   // the targets and the stop, and the level taken; on unless switched off
   sweepx: boolean;
+  // #385: WillyAlgoTrader's AMD Po3 with Live Edge Stats (a port of its
+  // open-source code): the accumulation, sweep and distribution boxes, M and
+  // D, the reference entry, stop and target, and its table; it reads deep
+  // into the bars before the chart; off until switched on
+  amdPo3: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -99,6 +104,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   ultra: true,
   zlTema: false,
   sweepx: true,
+  amdPo3: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

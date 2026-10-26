@@ -13,18 +13,20 @@ export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "sk
 // from signal-alerts v25, the charts the server sends; #345: and gold's
 // 1 hour from v27); #291:
 // and the owner's video's way (liquidity sweep + EMA cross), on gold's
-// 1-minute chart
-export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx";
-export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx", "sweepx"];
-export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx" | "sweepx";
-export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule => r === "qtrend" || r === "ultra" || r === "macdx" || r === "sweepx";
-const ruleOf = (v: unknown): AlertRule => (v === "gainz" || v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" ? v : "rsi_sar");
+// 1-minute chart; #385: and AMD Po3's DIST, on Q-Trend's and ULTRA's charts
+export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3";
+export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3"];
+export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3";
+export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule =>
+  r === "qtrend" || r === "ultra" || r === "macdx" || r === "sweepx" || r === "amdpo3";
+const ruleOf = (v: unknown): AlertRule =>
+  v === "gainz" || v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" ? v : "rsi_sar";
 // signal_alerts / signal_events store the rule's full id (analyze/gainz.ts
 // GA_RULE_ID starts with "gainz", signal-alerts/indicators.ts's with
-// "qtrend", "ultra", "macdx" and "sweepx"); anything else is RSI + SAR's
+// "qtrend", "ultra", "macdx", "sweepx" and "amdpo3"); anything else is RSI + SAR's
 const ruleOfId = (v: unknown): AlertRule => {
   if (typeof v !== "string") return "rsi_sar";
-  for (const r of ["gainz", "qtrend", "ultra", "macdx", "sweepx"] as const) if (v.startsWith(r)) return r;
+  for (const r of ["gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3"] as const) if (v.startsWith(r)) return r;
   return "rsi_sar";
 };
 
@@ -241,6 +243,7 @@ export const isFollowing = (settings: AlertSettings, pair: string, interval: str
 // #155: whether Q-Trend's and ULTRA's alerts can be had on this chart;
 // #275: with `rule` "macdx", the MACD peak-and-valley rule's, which has its
 // own charts (the server sends them); #291: "sweepx", the video's way's
+// (#385: "amdpo3" on Q-Trend's and ULTRA's)
 export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string, rule?: AlertRule): boolean => {
   const ind = settings.indicator;
   if (rule === "macdx") return !!ind?.macdx && ind.macdx.pairs.includes(pair) && ind.macdx.intervals.includes(interval);
