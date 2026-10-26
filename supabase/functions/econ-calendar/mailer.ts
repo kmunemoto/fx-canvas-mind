@@ -10,6 +10,7 @@
 import type { EconEvent, Impact } from "./events.ts";
 import { buildDigest, renderDigestMail } from "./digest.ts";
 import { alertsAllowed, isLang, type Lang, type Mail, type SendResult } from "../signal-alerts/logic.ts";
+import { isMacdhChart } from "../signal-alerts/indicators.ts";
 
 // Resend allows two requests a second
 export const SEND_GAP_MS = 600;
@@ -76,8 +77,9 @@ const readRows = async (deps: MailerDeps, what: string, path: string): Promise<J
 export const mailDigests = async (deps: MailerDeps, day: string, nowMs: number): Promise<JsonRecord> => {
   const stop = (error: string) => ({ due: true, day, error });
 
-  // who gets it: everyone with a 1-hour MACD subscription (the mails signal-alerts sends: macdx on 1h);
-  // their currencies come from every pair they follow
+  // who gets it: everyone with a MACD email subscription (the mails signal-alerts sends: macdx on the
+  // charts it follows, isMacdhChart; #384: the 15-minute chart from signal-alerts v31, the 1-hour one
+  // before); their currencies come from every pair they follow
   const subs = await readRows(deps, "subscriptions read", "signal_alert_subscriptions?select=user_id,pair,interval,rule,lang&order=pair.asc");
   if (subs === null) return stop("subscriptions_unread");
   const people = new Map<string, { pairs: string[]; lang: Lang | null; macdx: boolean }>();
@@ -85,7 +87,7 @@ export const mailDigests = async (deps: MailerDeps, day: string, nowMs: number):
     if (typeof r.user_id !== "string" || typeof r.pair !== "string") continue;
     const p = people.get(r.user_id) ?? { pairs: [], lang: null, macdx: false };
     if (!p.pairs.includes(r.pair)) p.pairs.push(r.pair);
-    if (r.rule === "macdx" && r.interval === "1h") {
+    if (r.rule === "macdx" && isMacdhChart(r.pair, r.interval)) {
       p.macdx = true;
       if (p.lang === null && isLang(r.lang)) p.lang = r.lang;
     }
