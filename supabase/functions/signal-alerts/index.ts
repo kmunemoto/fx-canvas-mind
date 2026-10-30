@@ -97,6 +97,9 @@ import {
   latestCloseMs,
   macdhSignals,
   amdpo3Signals,
+  emarmSignals,
+  EMARM_INTERVALS,
+  EMARM_PAIRS,
   SWEEPX_INTERVALS,
   SWEEPX_PAIRS,
   isSweepxChart,
@@ -240,7 +243,16 @@ import type { Candle } from "../analyze/indicators.ts";
 // the owner's subscriptions are moved back to the 1-hour chart once it is out.
 // Put out at once, in the middle of a GMO day, as v31 was. The other rules are
 // as they were.
-const FUNCTION_VERSION = "signal-alerts-v33-2026-10-30T03:00:00Z";
+// v34 (#387, docs §8.130): a sixth rule beside them, 'emarm' — the owner's
+// video's EMA 20 / 200 way (the cross, the candle back to the 200 EMA, the
+// diagonal and horizontal necklines' break, the return move, the bar past
+// its body), on the 15-minute chart of the same six (indicators.ts
+// EMARM_PAIRS, EMARM_INTERVALS), judged on the 600 closed bars ending at the
+// bar with the chart's code (_shared/ema-return.ts; indicators.ts
+// emarmSignals), recorded under EMARM_RULE_ID; the owner's 「この機能追加して」
+// with 「チャートとメール」 and 「今の5ペア＋金の15分足」. The other rules are as
+// they were.
+const FUNCTION_VERSION = "signal-alerts-v34-2026-10-30T07:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -538,8 +550,8 @@ Deno.serve(async (req: Request) => {
       // (#291: not the video's way, 'sweepx': gold's 1-minute chart is judged by
       // the "gold-ticks" run on the minutes it records, and read here it would
       // be a Twelve Data chart read every minute)
-      // (#385: and AMD Po3's, 'amdpo3')
-      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3)&select=user_id,pair,interval,lang,rule"))
+      // (#385: and AMD Po3's, 'amdpo3'; #387: and the EMA 20 / 200 way's, 'emarm')
+      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm)&select=user_id,pair,interval,lang,rule"))
         .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && r.rule !== "sweepx" && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
       summary.subscriptions = subs.length;
@@ -661,6 +673,12 @@ Deno.serve(async (req: Request) => {
           sigs.push(...amdpo3Signals(pair, interval, closed, nowMs));
         } catch (err) {
           console.error("amdpo3 failed:", pair, interval, err);
+        }
+        // #387: the EMA 20 / 200 way, likewise apart (docs §8.130)
+        try {
+          sigs.push(...emarmSignals(pair, interval, closed, nowMs));
+        } catch (err) {
+          console.error("emarm failed:", pair, interval, err);
         }
         judgedBar.set(`${pair}|${interval}`, newest);
         fired.push(...sigs);
@@ -1302,6 +1320,8 @@ Deno.serve(async (req: Request) => {
           macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },
           // #291: the video's way's: gold's 1-minute chart
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
+          // #387: the EMA 20 / 200 way's: the six's 15-minute chart
+          emarm: { pairs: EMARM_PAIRS, intervals: EMARM_INTERVALS },
         },
         subscriptions: subs.map((s) => ({
           pair: s.pair,

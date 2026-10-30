@@ -47,6 +47,7 @@ import { placeEdgeLabels } from "@/lib/edgeLabels";
 import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ultra";
 import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
+import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -223,7 +224,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -232,6 +233,8 @@ const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx"]);
 // #291: how many bars to the right of its bar a mark's boxes reach (the video's
 // TradingView position tool was drawn some twenty bars wide)
 const SWEEP_BOX_BARS = 20;
+// #387: the video's EMA 20 / 200 way's boxes, as wide
+const ER_BOX_BARS = 20;
 
 // #104: up to this many signals carry a TP/SL box beside their label, the
 // way the reference indicator shows them — the newest first, skipping any
@@ -861,6 +864,40 @@ const PriceChart = ({
       waveFrom: m.waveFrom - off,
     }));
   }, [ov.sweepx, maPast, candles, tail, pair]);
+  // #387: the owner's video's EMA 20 / 200 way (docs §8.130; src/lib/
+  // emaReturn.ts, the code the 15-minute email decides with), over the same
+  // history as the lines and the closed candles: each candle judged on the
+  // EMA_RETURN.window closed bars ending at it (fewer where the chart holds
+  // fewer: `full` false), and the setup alive at the newest closed candle
+  // with the two EMAs, on the window ending there. Indices on the chart's
+  // candles, a line's bar before the first one off to the left
+  const er = useMemo(() => {
+    if (!ov.emaReturn || candles.length === 0 || maPast === null) return null;
+    const all = [...maPast, ...candles];
+    const closed: ErBar[] = all.slice(0, all.length - tail).map((b) => ({ o: b.open, h: b.high, l: b.low, c: b.close }));
+    const off = maPast.length;
+    const marks = emaReturnMarks(closed, off).map((m) => ({
+      ...m,
+      at: m.at - off,
+      x: m.x - off,
+      t: m.t - off,
+      aAt: m.aAt - off,
+      b: m.b - off,
+      k: m.k - off,
+      dk: m.dk - off,
+      r: m.r - off,
+    }));
+    const now = emaReturnNow(closed);
+    const sh = (v: number | null) => (v === null ? null : v - off);
+    const s = now?.setup ?? null;
+    return {
+      marks,
+      setup: s ? { ...s, x: s.x - off, aAt: s.aAt - off, t: sh(s.t), b: sh(s.b), k: sh(s.k), r: sh(s.r) } : null,
+      fast: now ? now.fast.slice(off) : [],
+      slow: now ? now.slow.slice(off) : [],
+      total: closed.length,
+    };
+  }, [ov.emaReturn, maPast, candles, tail]);
   // the trend lines, on closed bars; indices on the chart's candles (a
   // swing before the first is off to the left)
   const autoLines = useMemo(() => {
@@ -1095,6 +1132,18 @@ const PriceChart = ({
         }
       }
     }
+    // #387: the video's EMA 20 / 200 way's two lines, as the EMA lines above
+    // (its boxes and necklines not, as the video's way's below)
+    if (er) {
+      for (const xs of [er.fast, er.slow]) {
+        for (let i = from; i < to; i++) {
+          const v = xs[i];
+          if (v === null || v === undefined || !Number.isFinite(v)) continue;
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
+      }
+    }
     // #291: the video's way's boxes are not in it either, as the levels
     // above: its 20 pips are half the price of a yen pair priced under a yen
     // (HUF/JPY), and every candle would be a flat line. A box reaching past
@@ -1104,7 +1153,8 @@ const PriceChart = ({
     // ends — otherwise a signal at the window's extreme is pushed onto the
     // candles it points at (#291: the video's way's labels too, in view).
     const sweepInView = sweepMarks !== null && sweepMarks.some((m) => m.at >= from && m.at < to);
-    const pad = (max - min) * (marks.length > 0 || sweepInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    const erInView = er !== null && er.marks.some((m) => m.at >= from && m.at < to);
+    const pad = (max - min) * (marks.length > 0 || sweepInView || erInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1127,7 +1177,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, amdGap, amdAhead]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, amdAhead]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1503,6 +1553,18 @@ const PriceChart = ({
             : "ready",
       SWEEPX_MIN_WINDOW,
     ),
+    // #387 (and why no mark may be drawn, as the video's way's above)
+    emaReturn: t.chart.emaReturnNote(
+      er ? er.marks.some((m) => !m.full && m.at >= 0) : false,
+      !ov.emaReturn || candles.length === 0
+        ? "ready"
+        : maPast === null
+          ? (zoneShiftHistory?.status === "error" ? "error" : "loading")
+          : maPast.length + candles.length - tail < EMA_RETURN_MIN_WINDOW
+            ? "few"
+            : "ready",
+      EMA_RETURN_MIN_WINDOW,
+    ),
   };
   type Group = "signals" | "trend" | "oscillator";
   const overlayItems: Array<{ key: string; group: Group; name: string; on: boolean; toggle: () => void; settings?: () => void; settingsOpen?: boolean; settingsLabel?: string; locked?: true; swatch?: string }> = [
@@ -1515,6 +1577,8 @@ const PriceChart = ({
     { key: "ultra", group: "signals" as const, name: t.chart.overlayNames.ultra(isGoldPair(pair)), on: ov.ultra, toggle: flip("ultra") },
     // #385: WillyAlgoTrader's AMD Po3
     ...(amdListed ? [{ key: "amdPo3", group: "signals" as const, name: t.chart.overlayNames.amdPo3, on: ov.amdPo3, toggle: flip("amdPo3") }] : []),
+    // #387: the owner's video's EMA 20 / 200 way
+    { key: "emaReturn", group: "signals" as const, name: t.chart.overlayNames.emaReturn, on: ov.emaReturn, toggle: flip("emaReturn") },
     // #291: the owner's video's way (the moving averages' chart only, below)
     { key: "sweepx", group: "signals" as const, name: t.chart.overlayNames.sweepx, on: ov.sweepx, toggle: flip("sweepx") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
@@ -2813,6 +2877,22 @@ const PriceChart = ({
       {ov.amdPo3 && amdListed && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-amdpo3-legend">
           {noteOf.amdPo3}
+        </p>
+      )}
+      {/* #387: the rule, and what the setup at the newest closed candle waits for */}
+      {ov.emaReturn && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-emareturn-legend">
+          {er?.setup && er.setup.phase !== "done" && (
+            <span className="font-semibold text-foreground" data-testid="chart-emareturn-state">
+              {t.chart.emaReturnState(
+                er.setup.side,
+                er.setup.phase,
+                er.setup.a.toFixed(decimals),
+                er.setup.neck === null ? null : er.setup.neck.toFixed(decimals),
+              )}{" "}
+            </span>
+          )}
+          {noteOf.emaReturn}
         </p>
       )}
       {/* #150 */}
@@ -4279,6 +4359,117 @@ const PriceChart = ({
                 </g>
               );
             })}
+          </g>
+        )}
+
+        {/* #387: the owner's video's EMA 20 / 200 way — the two EMAs of the
+            window the newest closed candle is judged on (EMA 20 teal, EMA 200
+            purple, dashed); each entry: BUY under its candle (SELL over it),
+            the diagonal neckline from A to where it was broken (orange), the
+            horizontal one from B to the entry (amber, dashed), the return
+            move's candle (a dot on the horizontal), and the boxes to the first
+            target (blue) and to the stop (gray), ER_BOX_BARS wide; and the
+            setup still forming at the newest closed candle: A, its first
+            target (blue, dotted), and its lines so far. A candle judged on
+            fewer bars than the email's window is drawn fainter */}
+        {er && (
+          <g data-testid="chart-emareturn" clipPath={`url(#${clipId})`}>
+            {([["fast", er.fast, "#26A69A", undefined], ["slow", er.slow, "#AB47BC", "6 3"]] as const).map(([key, xs, color, dash]) => {
+              let d = "";
+              let pen = false;
+              for (let i = Math.max(0, from - 1); i < Math.min(xs.length, to + 1); i++) {
+                const v = xs[i];
+                if (v === null || !Number.isFinite(v)) {
+                  pen = false;
+                  continue;
+                }
+                d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+                pen = true;
+              }
+              return d ? <path key={key} d={d} fill="none" stroke={color} strokeWidth={1.2 * fs} strokeDasharray={dash} opacity="0.9" data-testid={`chart-emareturn-${key}`} /> : null;
+            })}
+            {er.marks.filter((m) => m.at >= 0 && m.at + ER_BOX_BARS >= from && m.aAt < to).map((m) => {
+              const buy = m.side === "BUY";
+              const c = candles[m.at];
+              const fsz = (narrow ? 7.5 : 8.5) * fs;
+              const x0 = x(m.at);
+              const x1 = x(Math.min(m.at + ER_BOX_BARS, candles.length - 1)) + slot / 2;
+              const w = Math.max(1, x1 - x0);
+              const yEntry = y(m.entry);
+              const yTp = y(m.tp1);
+              const ySl = y(m.stop);
+              const color = buy ? "#2962FF" : "#F23645";
+              const fmt = (v: number) => v.toFixed(decimals);
+              const labelW = 26 * fs;
+              const labelH = fsz + 5 * fs;
+              const labelY = buy ? y(c.low) + 5 * fs : y(c.high) - 5 * fs - labelH;
+              const diag = (j: number) => m.a + ((m.neck - m.a) * (j - m.aAt)) / (m.b - m.aAt);
+              return (
+                <g key={`er-${m.at}`} data-testid={`chart-emareturn-${m.side}`} opacity={m.full ? 1 : 0.55}>
+                  <title>{t.chart.emaReturnTitle(m.side, fmt(m.entry), fmt(m.stop), fmt(m.tp1), m.tp2 === null ? null : fmt(m.tp2), m.rr.toFixed(2), fmt(m.neck), m.full)}</title>
+                  <rect
+                    x={x0} y={Math.min(yEntry, yTp)} width={w} height={Math.max(1, Math.abs(yTp - yEntry))}
+                    fill="rgba(41,98,255,0.14)" stroke="rgba(41,98,255,0.55)" strokeWidth={0.8}
+                    data-testid="chart-emareturn-tp-box"
+                  />
+                  <rect
+                    x={x0} y={Math.min(yEntry, ySl)} width={w} height={Math.max(1, Math.abs(ySl - yEntry))}
+                    fill="rgba(120,144,156,0.2)" stroke="rgba(120,144,156,0.65)" strokeWidth={0.8}
+                    data-testid="chart-emareturn-sl-box"
+                  />
+                  <line
+                    x1={x(m.aAt)} x2={x(m.dk)} y1={y(m.a)} y2={y(diag(m.dk))}
+                    stroke="#FF9800" strokeWidth={1.2 * fs}
+                    data-testid="chart-emareturn-diagonal"
+                  />
+                  <line
+                    x1={x(m.b)} x2={x0} y1={y(m.neck)} y2={y(m.neck)}
+                    stroke="#FFB300" strokeWidth={1.2 * fs} strokeDasharray="4 3"
+                    data-testid="chart-emareturn-horizontal"
+                  />
+                  <circle cx={x(m.r)} cy={y(m.neck)} r={2.5 * fs} fill="#FFB300" data-testid="chart-emareturn-retest" />
+                  <rect x={x0 - labelW / 2} y={labelY} width={labelW} height={labelH} rx={2 * fs} fill={color} />
+                  <text x={x0} y={labelY + labelH - 3.5 * fs} fontSize={fsz} fontWeight="800" textAnchor="middle" fill="#FFFFFF">
+                    {m.side}
+                  </text>
+                </g>
+              );
+            })}
+            {er.setup && er.setup.phase !== "done" && (() => {
+              const st = er.setup;
+              const last = candles.length - 1 - tail;
+              const fmt = (v: number) => v.toFixed(decimals);
+              // the diagonal to the break (RETEST) or to the newest closed candle (LINES)
+              const end = st.phase === "retest" && st.k !== null ? st.k : last;
+              const diag = (j: number) => (st.b === null || st.neck === null ? st.a : st.a + ((st.neck - st.a) * (j - st.aAt)) / (st.b - st.aAt));
+              return (
+                <g data-testid="chart-emareturn-setup" data-phase={st.phase}>
+                  <title>{t.chart.emaReturnState(st.side, st.phase, fmt(st.a), st.neck === null ? null : fmt(st.neck))}</title>
+                  <line
+                    x1={x(st.aAt)} x2={x(last)} y1={y(st.a)} y2={y(st.a)}
+                    stroke="rgba(41,98,255,0.7)" strokeWidth={0.9 * fs} strokeDasharray="1 3"
+                    data-testid="chart-emareturn-setup-a"
+                  />
+                  {st.b !== null && st.neck !== null && (
+                    <>
+                      <line
+                        x1={x(st.aAt)} x2={x(end)} y1={y(st.a)} y2={y(diag(end))}
+                        stroke="#FF9800" strokeWidth={1.2 * fs} opacity={0.8}
+                        data-testid="chart-emareturn-setup-diagonal"
+                      />
+                      <line
+                        x1={x(st.b)} x2={x(last)} y1={y(st.neck)} y2={y(st.neck)}
+                        stroke="#FFB300" strokeWidth={1.2 * fs} strokeDasharray="4 3" opacity={0.8}
+                        data-testid="chart-emareturn-setup-horizontal"
+                      />
+                    </>
+                  )}
+                  {st.r !== null && st.neck !== null && (
+                    <circle cx={x(st.r)} cy={y(st.neck)} r={2.5 * fs} fill="#FFB300" opacity={0.8} data-testid="chart-emareturn-setup-retest" />
+                  )}
+                </g>
+              );
+            })()}
           </g>
         )}
 

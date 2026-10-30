@@ -477,6 +477,29 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     }
   });
 
+  it("#387: reads the deep history for the video's EMA 20 / 200 way on the full chart while fewer than 599 bars are before the chart's first, not on the moving averages' chart", async () => {
+    for (const [mode, emaReturn, n, deep] of [
+      ["full", true, 580, true],
+      ["full", true, 700, false],
+      ["full", false, 580, false],
+      ["ma", true, 580, false],
+    ] as const) {
+      localStorage.clear();
+      localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { emaReturn, sweepx: false } }));
+      resetChartPrefsCache();
+      const common = before(n);
+      const loadDeepHistory = vi.fn(async () => ({ bars: [] as NumericCandle[], complete: true }));
+      const { unmount } = render(chart(mode, { defaultInterval: "15min", loadHistory: async () => common, loadDeepHistory }));
+      await waitFor(() => expect(screen.getByTestId("chart-ema200-line")).toBeTruthy());
+      if (deep) await waitFor(() => expect(loadDeepHistory).toHaveBeenCalledWith("USD/JPY", "15min"));
+      else {
+        await new Promise((r) => setTimeout(r, 50));
+        expect(loadDeepHistory, `${mode} ${emaReturn} ${n}`).not.toHaveBeenCalled();
+      }
+      unmount();
+    }
+  });
+
   it("a phone turned on its side opens the live chart alone in full screen; upright again, the page scrolls", async () => {
     const original = window.matchMedia;
     const side = { on: false };

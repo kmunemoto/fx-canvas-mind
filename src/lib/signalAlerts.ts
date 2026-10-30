@@ -14,19 +14,20 @@ export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "sk
 // 1 hour from v27); #291:
 // and the owner's video's way (liquidity sweep + EMA cross), on gold's
 // 1-minute chart; #385: and AMD Po3's DIST, on Q-Trend's and ULTRA's charts
-export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3";
-export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3"];
-export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3";
+// #387: and the owner's video's EMA 20 / 200 way, on the six's 15-minute chart
+export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3" | "emarm";
+export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm"];
+export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3" | "emarm";
 export const isIndicatorAlertRule = (r: AlertRule): r is IndicatorAlertRule =>
-  r === "qtrend" || r === "ultra" || r === "macdx" || r === "sweepx" || r === "amdpo3";
+  r === "qtrend" || r === "ultra" || r === "macdx" || r === "sweepx" || r === "amdpo3" || r === "emarm";
 const ruleOf = (v: unknown): AlertRule =>
-  v === "gainz" || v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" ? v : "rsi_sar";
+  v === "gainz" || v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm" ? v : "rsi_sar";
 // signal_alerts / signal_events store the rule's full id (analyze/gainz.ts
 // GA_RULE_ID starts with "gainz", signal-alerts/indicators.ts's with
-// "qtrend", "ultra", "macdx", "sweepx" and "amdpo3"); anything else is RSI + SAR's
+// "qtrend", "ultra", "macdx", "sweepx", "amdpo3" and "emarm"); anything else is RSI + SAR's
 const ruleOfId = (v: unknown): AlertRule => {
   if (typeof v !== "string") return "rsi_sar";
-  for (const r of ["gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3"] as const) if (v.startsWith(r)) return r;
+  for (const r of ["gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm"] as const) if (v.startsWith(r)) return r;
   return "rsi_sar";
 };
 
@@ -104,6 +105,8 @@ export interface AlertSettings {
     limited: Record<string, string[]>;
     macdx: { pairs: string[]; intervals: string[] } | null;
     sweepx: { pairs: string[]; intervals: string[] } | null;
+    // #387: the EMA 20 / 200 way's (the six, 15 minutes), likewise
+    emarm: { pairs: string[]; intervals: string[] } | null;
   } | null;
   subscriptions: Array<{ pair: string; interval: string; rule: AlertRule }>;
   alerts: AlertRow[];
@@ -228,6 +231,7 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
         limited,
         macdx: rec(ind.macdx) ? { pairs: strings(rec(ind.macdx)!.pairs), intervals: strings(rec(ind.macdx)!.intervals) } : null,
         sweepx: rec(ind.sweepx) ? { pairs: strings(rec(ind.sweepx)!.pairs), intervals: strings(rec(ind.sweepx)!.intervals) } : null,
+        emarm: rec(ind.emarm) ? { pairs: strings(rec(ind.emarm)!.pairs), intervals: strings(rec(ind.emarm)!.intervals) } : null,
       }
       : null,
     subscriptions: subs,
@@ -243,11 +247,12 @@ export const isFollowing = (settings: AlertSettings, pair: string, interval: str
 // #155: whether Q-Trend's and ULTRA's alerts can be had on this chart;
 // #275: with `rule` "macdx", the MACD peak-and-valley rule's, which has its
 // own charts (the server sends them); #291: "sweepx", the video's way's
-// (#385: "amdpo3" on Q-Trend's and ULTRA's)
+// (#385: "amdpo3" on Q-Trend's and ULTRA's; #387: "emarm", its own)
 export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string, rule?: AlertRule): boolean => {
   const ind = settings.indicator;
   if (rule === "macdx") return !!ind?.macdx && ind.macdx.pairs.includes(pair) && ind.macdx.intervals.includes(interval);
   if (rule === "sweepx") return !!ind?.sweepx && ind.sweepx.pairs.includes(pair) && ind.sweepx.intervals.includes(interval);
+  if (rule === "emarm") return !!ind?.emarm && ind.emarm.pairs.includes(pair) && ind.emarm.intervals.includes(interval);
   if (!ind || !ind.pairs.includes(pair) || !ind.intervals.includes(interval)) return false;
   const only = ind.limited[pair];
   return !only || only.includes(interval);

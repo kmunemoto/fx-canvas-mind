@@ -282,6 +282,8 @@ export const en: Dict = {
       sweepx: "Liquidity sweep + EMA cross (EMA 20×80)",
       // #385
       amdPo3: "AMD Po3 (WillyAlgoTrader)",
+      // #387
+      emaReturn: "EMA cross + return move (EMA 20×200)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -403,6 +405,40 @@ export const en: Dict = {
       `Liquidity sweep + EMA cross ${side}: entry ${entry}, stop ${sl}, TP1 ${tps[0]}, TP2 ${tps[1]} (the ${side === "BUY" ? "low" : "high"} taken ${level})` +
       (full ? "" : "; judged on fewer than 600 bars"),
     sweepxTaken: (side: "BUY" | "SELL"): string => (side === "BUY" ? "Low taken" : "High taken"),
+    // #387
+    emaReturnNote: (partial: boolean, status: "ready" | "loading" | "error" | "few", minBars: number): string =>
+      "EMA cross + return move (an Instagram video's way — GBP/JPY scalping on the 15-minute chart — made into a rule by this app; docs §8.130): " +
+      "EMA 20 crossing above EMA 200 (a golden cross) starts a buy, crossing below (a dead cross) a sell. After the cross, a candle reaching the 200 EMA is waited for (a buy: its low at or under it). Among the swing highs made after that touch (higher than the 3 bars on each side) and below A, the highest high since the cross, the highest is B: the horizontal line at B's high and the diagonal line through A and B. " +
+      "Once a close is above both lines, the 1st and 2nd bars after it do not count; from the 3rd, a bar whose low comes back to the horizontal is the return move, and the bar that closes above its body (the higher of its open and close) is the entry (BUY). " +
+      "The stop is the lowest low from the bar that broke the diagonal to the entry, target 1 is A (the latest high), target 2 is wave 1's height (from the touch to B) added to wave 3's start (the lowest low from B to the break; none when not above the entry). A reached before an entry: no trade; a close back under the horizontal: the break failed and the lines are drawn again. A sell is the mirror. " +
+      "The video draws its lines by hand and gives no numbers, so the 3 bars on each side, where the stop goes and the like are this app's. " +
+      "Green is EMA 20, the dashed purple line EMA 200 (on the 600 bars the newest closed bar is judged on; not the moving averages above), orange the diagonal, the dashed amber line the horizontal, the amber dot the return move, the blue box to target 1 and the gray one to the stop. While a setup is forming, its lines so far and A (dotted blue) are drawn. " +
+      "Each bar is judged on the 600 closed bars ending at it (as the email; a cross counts from the 401st of them only, so a setup taking more than some 200 bars from the cross to the entry gets no mark)" +
+      (partial ? ". Marks where this chart holds fewer than 600 bars are judged on what it has, and drawn fainter (the email judges on 600 only). " : ". ") +
+      "On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold, emails are sent on the same decision (Settings → Email alerts → \"EMA cross + return move\"). " +
+      "Measured on the five currency pairs' 15-minute bars (not gold) over the last 52 weeks (2025-10-26 to 2026-10-29): 22 entries; with the stop and target 1, 11 won and 11 lost (50.0%), +18.2 pips a win and −16.7 pips a loss on average, +0.7 pips a trade (spread not paid; the video's 60% cannot be confirmed on so few). Held with no stop until target 1, 20 of the 22 reached it (+21.4 pips on average; 35 bars to it in the middle, 1,894 at most) and 2 have not yet (open at −786.1 and −607.2 pips, held 18,594 and 11,741 bars); counting those at the last close, −964.7 pips in all, −43.9 pips a trade. The price went against the entry 7.7 pips in the middle and 861.2 pips at most. Gold and the other instruments and timeframes are not measured. " +
+      (status === "loading"
+        ? "The bars before the chart are still being read; no mark is drawn until they are."
+        : status === "error"
+          ? "The bars before the chart could not be read, so no mark is drawn now."
+          : status === "few"
+            ? `This chart has fewer than ${minBars} bars, so no mark is drawn (a cross counts from the 401st bar judged on only).`
+            : ""),
+    emaReturnTitle: (side: "BUY" | "SELL", entry: string, stop: string, tp1: string, tp2: string | null, rr: string, neck: string, full: boolean): string =>
+      `EMA cross + return move ${side}: entry ${entry} · stop ${stop} · TP1 ${tp1}${tp2 === null ? "" : ` · TP2 ${tp2}`} (TP1 to stop ${rr} : 1, horizontal ${neck})` +
+      (full ? "" : ". Judged on fewer than 600 bars"),
+    emaReturnState: (side: "BUY" | "SELL", phase: "touch" | "lines" | "retest" | "done", a: string, neck: string | null): string => {
+      const buy = side === "BUY";
+      const head = `Now: a ${buy ? "buy" : "sell"} (after a ${buy ? "golden" : "dead"} cross) — `;
+      const target = ` (the latest ${buy ? "high" : "low"} A ${a})`;
+      if (phase === "touch") return `${head}waiting for a candle to reach the 200 EMA${target}.`;
+      if (phase === "lines")
+        return neck === null
+          ? `${head}the 200 EMA was reached; waiting for a swing ${buy ? "high" : "low"}${target}.`
+          : `${head}waiting for a close ${buy ? "above" : "below"} the horizontal ${neck} and the diagonal${target}.`;
+      if (phase === "retest") return `${head}the lines are broken; waiting for the return move to the horizontal ${neck ?? ""} and a close past that bar's body${target}.`;
+      return "";
+    },
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. No chart mark uses it; only the \"MACD peak/valley\" email alert does.",
@@ -1874,7 +1910,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1883,7 +1919,7 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)", emarm: " (EMA cross + return move)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
@@ -1893,6 +1929,8 @@ export const en: Dict = {
       // #291
       // #385
       amdpo3: "The D ▲ (BUY) and D ▼ (SELL) of AMD Po3 with Live Edge Stats (a port of the code WillyAlgoTrader published on TradingView, at its default settings): sent at the bar where the price broke above or below a range that had narrowed and closed back inside it within 6 bars (the manipulation confirmed), when the original's reference trade opens at that bar's close (the original's DIST alert). The same D the chart's \"AMD Po3\" draws; the email carries the original's stop (0.4 × ATR 14 beyond the sweep's tip), target (the 1.5 extension of the sweep) and R:R. This rule's win rate and its profit or loss a trade have not been measured.",
+      // #387
+      emarm: "An Instagram video's way (GBP/JPY scalping on the 15-minute chart), made into a rule by this app (EMA cross + return move): after EMA 20 crosses above EMA 200, a candle comes back to the 200 EMA, a close breaks the horizontal and diagonal lines drawn from the swing high after it, the price returns to the horizontal from the 3rd bar after the break, and the bar that closes above that bar's body is a BUY (a SELL is the mirror). On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only. The same marks as \"EMA cross + return move\" on the chart; the email carries a stop (the lowest low or highest high from the bar that broke the diagonal), target 1 (the latest high or low) and target 2 (wave 1's height). Measured on the five pairs' 15-minute bars over the last 52 weeks: 22 entries, 11 won and 11 lost with the stop and target 1 (50.0%), +0.7 pips a trade (spread not paid). Gold is not measured.",
       sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
     } as Record<string, string>,
     // #275: shown instead of the table when the server sends no charts for the rule
@@ -1934,6 +1972,15 @@ export const en: Dict = {
       "The original's settings are its defaults (its higher-timeframe bias, killzone, liquidity and depth filters are not used). The original is tuned for the 15-minute chart; the other timeframes are judged too.",
       "The chart table's Target rate and Avg R count the bars that chart could read; they are not this email's win rate. This rule's win rate and its profit or loss a trade have not been measured, nor has holding without a stop. An alert is not an instruction to trade, and no record of the alerts' outcomes is kept.",
       "Nothing is judged while the market is shut (weekends and the like). Every symbol on the 5- and 15-minute charts can pass the mail service's (Resend's) free plan (100 a day, 3,000 a month); the rest show as failed.",
+    ],
+    // #387: the EMA 20 / 200 way's notes (docs §8.130)
+    emarmNotes: [
+      "Judged on the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold only (the owner's choice; the video's is GBP/JPY's 15-minute chart), on the same bars as the chart (the mid of GMO Coin's bid and ask for the five pairs, Twelve Data's bars for gold), on the 600 closed bars ending at the bar.",
+      "A cross counts from the 401st of those 600 bars only, so a setup taking more than some 200 bars (about 50 hours on 15 minutes) from the cross to the entry is not mailed. Over the five pairs' last 52 weeks, judged on from a longer past there were 30 entries: 21 the same as on 600 bars, 1 on 600 bars only and 9 on the longer past only (7 of them more than 200 bars from their cross).",
+      "Sent once the bar has closed (the five pairs judged on the reads 0, 1 and 3 minutes after the close; gold's Twelve Data reads come apart and can be later). A bar closed more than 20 minutes ago is not sent. On the five pairs, a bar none of the three reads could judge is not sent later (by the next bar the 600 bars it is judged on have moved on by one). How many seconds it actually takes has not been checked.",
+      "Measured (the five pairs' 15-minute bars, 2025-10-26 to 2026-10-29, GMO's mid, spread not paid): 22 entries. With the stop and target 1, 11 won and 11 lost (50.0%), +18.2 pips a win and −16.7 pips a loss on average, +0.7 pips a trade. Held with no stop until target 1, 20 of the 22 reached it (+21.4 pips on average; 35 bars to it in the middle, 1,894 at most) and 2 have not yet (open at −786.1 and −607.2 pips, held 18,594 and 11,741 bars); counting those at the last close, −964.7 pips in all, −43.9 pips a trade. The price went against the entry 7.7 pips in the middle and 861.2 pips at most. Too few to confirm the video's 60%. Gold is not measured.",
+      "The video draws its lines by hand, so the swings (3 bars on each side), the 2 bars not counted, where the stop goes and how target 2 is taken are this app's. An alert is not an order. Whether a signal won or lost is not recorded.",
+      "Nothing is judged while the market is closed (weekends and the like).",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",

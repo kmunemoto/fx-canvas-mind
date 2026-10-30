@@ -1,0 +1,103 @@
+# #387 (docs §8.130): the owner's video's way (20 EMA and 200 EMA cross, the return move: research/ema-return-spec.md)
+# on the 15-minute chart of the five GMO pairs over the last 52 weeks: how many entries the email would have given,
+# whether the 600-bar window decides as one long scan would, and what the video's stop and first target (and the
+# owner's way: no stop) came to (research/emarm.ts, on the code the chart and the email decide with), and the
+# Python written apart from it (research/emarm-check.py: its own bars from the same files, a rule written from the
+# spec alone): the numbers are printed only when every row and number agree.
+#
+#   syn   two seeded walks written as GMO's files, the study read from them, and the Python on the same files
+#   real  GMO's real bars (research/.cache, fetched when missing), after syn passed
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research emarm (#387)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/emarm*.ts
+      - research/emarm-check.py
+      - .github/workflows/emarm.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2025-10-26T21:00:00Z"
+  END: "2026-10-29T21:00:00Z"
+  LOAD_FROM: "2025-09-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        seed: ["1", "2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: The walk as GMO's files, the study read from them, and the Python on the same files
+        env:
+          MODE: walkfiles
+          SEED: ${{ matrix.seed }}
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-02-04T21:00:00Z"
+          END: "2024-09-01T21:00:00Z"
+          OUT: research/out/emarm-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/emarm.ts
+          python3 -I research/emarm-check.py --cache $OUT/gmo --out $OUT
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OUT: research/out/emarm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files (macd15's: the
+      # 15-minute ones of the same five pairs)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd15-none
+          restore-keys: gmo-macd15-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-emarm-none
+          restore-keys: gmo-emarm-
+      - name: The study (its numbers go to files; none printed here)
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/emarm.ts
+          sha256sum $OUT/rows.csv $OUT/long.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-emarm-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 -I research/emarm-check.py --cache research/.cache --out $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emarm-${{ github.run_id }}
+          path: research/out/emarm
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: |
+          deno run --allow-read=. --allow-env research/emarm.ts
+          cat $OUT/rows.csv

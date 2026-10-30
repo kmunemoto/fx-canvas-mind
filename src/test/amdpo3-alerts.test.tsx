@@ -131,10 +131,11 @@ describe("#385 the AMD Po3 email (signal-alerts v32)", () => {
 
   it("the sweep reads the rule's subscriptions and judges it beside the others, its failure apart; the database accepts the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3)&select=user_id,pair,interval,lang,rule")');
+    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toMatch(/try \{\s+sigs\.push\(\.\.\.amdpo3Signals\(pair, interval, closed, nowMs\)\);\s+\} catch \(err\) \{\s+console\.error\("amdpo3 failed:", pair, interval, err\);\s+\}/);
-    // (#386: v33 put the MACD email back on the 1-hour chart; AMD Po3 is as v32 brought it)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v33-2026-10-30T03:00:00Z";');
+    // (#386: v33 put the MACD email back on the 1-hour chart; #387: v34 added the EMA 20 / 200 way's;
+    // AMD Po3 is as v32 brought it)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v34-2026-10-30T07:00:00Z";');
     // the test email names the rule (not RSI + SAR)
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "amdpo3" }], "ja").text).toContain("登録中のチャート: ドル/円 15分足（AMD Po3）");
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "amdpo3" }], "en").text).toContain("Charts you follow: USD/JPY 15-minute (AMD Po3)");

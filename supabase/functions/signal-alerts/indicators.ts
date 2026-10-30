@@ -36,6 +36,8 @@ import { pineAtr } from "../_shared/pine.ts";
 import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts";
 // #385: WillyAlgoTrader's AMD Po3 (docs §8.128), the code the chart draws it with
 import { AMD_PO3, amdPo3, amdPo3Trades, pineFmt } from "../_shared/amd-po3.ts";
+// #387: the owner's video's EMA 20 / 200 way (docs §8.130), the code the chart draws it with
+import { EMA_RETURN, emaReturnOnWindow } from "../_shared/ema-return.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
@@ -45,15 +47,18 @@ import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic
 // #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
 // low or high taken, then the cross of EMA 20 and EMA 80; docs §8.112)
 // #385: and "amdpo3", AMD Po3's DIST (the reference trade opened; docs §8.128)
-export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3"] as const;
+// #387: and "emarm", the owner's video's EMA 20 / 200 way (the cross, the
+// candle back to the 200 EMA, the necklines' break and the return move; docs
+// §8.130)
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
 export const isIndicatorRule = (v: unknown): v is IndicatorRule =>
-  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3";
+  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
 // (the measured figures below are kept for these; #324: the MACD rule, now the
 // 1-hour one, is not measured; #291: nor is the video's way)
-// (#385: nor is AMD Po3)
-export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3">;
+// (#385: nor is AMD Po3; #387: the EMA 20 / 200 way has its own figures, below)
+export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3" | "emarm">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -128,6 +133,12 @@ export const SWEEPX_RULE_ID =
   `_sl${SWEEPX.slBars}b${SWEEPX.slPips}p_tp${SWEEPX.tp1Pips}_${SWEEPX.tp2Pips}_v1`;
 // #385: AMD Po3 v2.4.0 at its default settings (docs §8.128)
 export const AMDPO3_RULE_ID = `amdpo3_${AMD_PO3.version}_defaults_v1`;
+// #387: the EMA 20 / 200 way (docs §8.130, research/ema-return-spec.md):
+// judged on the 600 closed bars ending at the bar, crosses counted from its
+// 401st, swings 3 bars on each side, the 1st and 2nd bars after the break no
+// return move
+export const EMARM_RULE_ID =
+  `emarm_ema${EMA_RETURN.fast}_${EMA_RETURN.slow}_w${EMA_RETURN.window}_from${EMA_RETURN.warm}_piv${EMA_RETURN.piv}_skip${EMA_RETURN.skip}_v1`;
 // The id each rule's emails are recorded under now (#324: 'macdx' under the
 // 1-hour rule's)
 export const indicatorRuleId = (rule: IndicatorRule): string =>
@@ -139,6 +150,8 @@ export const indicatorRuleId = (rule: IndicatorRule): string =>
     ? SWEEPX_RULE_ID
     : rule === "amdpo3"
     ? AMDPO3_RULE_ID
+    : rule === "emarm"
+    ? EMARM_RULE_ID
     : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
@@ -210,10 +223,25 @@ export const SWEEPX_INTERVALS = ["1min"] as const;
 export const isSweepxChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && (SWEEPX_PAIRS as readonly string[]).includes(pair) &&
   (SWEEPX_INTERVALS as readonly string[]).includes(interval);
+// #387: the EMA 20 / 200 way is mailed on the 15-minute chart of the five
+// pairs and gold (the owner: 「今の5ペア＋金の15分足」, 2026-10-30; the
+// video's is GBP/JPY's 15-minute chart); the chart draws it on every pair and
+// timeframe
+export const EMARM_PAIRS: readonly string[] = MACDH_PAIRS;
+export const EMARM_INTERVALS = ["15min"] as const;
+export const isEmarmChart = (pair: unknown, interval: unknown): boolean =>
+  typeof pair === "string" && typeof interval === "string" && EMARM_PAIRS.includes(pair) &&
+  (EMARM_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
 // Whether a chart can be followed under a rule (#324: 'macdx' on the 1-hour
-// rule's charts; #385: 'amdpo3' on Q-Trend's and ULTRA's)
+// rule's charts; #385: 'amdpo3' on Q-Trend's and ULTRA's; #387: 'emarm' on its own)
 export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unknown): boolean =>
-  rule === "macdx" ? isMacdhChart(pair, interval) : rule === "sweepx" ? isSweepxChart(pair, interval) : isIndicatorChart(pair, interval);
+  rule === "macdx"
+    ? isMacdhChart(pair, interval)
+    : rule === "sweepx"
+    ? isSweepxChart(pair, interval)
+    : rule === "emarm"
+    ? isEmarmChart(pair, interval)
+    : isIndicatorChart(pair, interval);
 
 // ULTRA's numbers are dollars on gold, pips on a currency pair (the chart's
 // `isGoldPair(pair) ? 1 : pipSize(pair)`)
@@ -258,6 +286,25 @@ export interface IndicatorSignal {
   macdh?: MacdhFacts | null;
   // #385: AMD Po3's (absent on the other rules')
   amd?: AmdFacts | null;
+  // #387: the EMA 20 / 200 way's (absent on the other rules')
+  emarm?: EmarmFacts | null;
+}
+
+// #387: what made the EMA 20 / 200 way enter: the cross, the touch of the
+// 200 EMA, A (the highest high since the cross on a BUY, the lowest low on a
+// SELL: target 1) and its bar, B's bar and the horizontal at its high (low),
+// the break of both lines, the return move, each bar by its close (ISO), and
+// the ratio of the distance to target 1 to the stop's
+export interface EmarmFacts {
+  crossClosedAt: string;
+  touchClosedAt: string;
+  a: number;
+  aClosedAt: string;
+  neck: number;
+  neckClosedAt: string;
+  breakClosedAt: string;
+  retestClosedAt: string;
+  rr: number;
 }
 
 // #385: what made AMD Po3 open its reference trade: the accumulation range as
@@ -636,6 +683,71 @@ export const amdpo3Signals = (
   return out;
 };
 
+// #387 (docs §8.130): the owner's video's EMA 20 / 200 way on the 15-minute
+// chart of the five pairs and gold. Each of the newest closed bars still
+// fresh (the bar just closed, and one a run that was missed did not judge,
+// where `closed` holds the window before it too: gold's kept bars do, GMO's
+// 600 hold the newest's only, so a bar no read judged is not mailed later) is
+// judged on the EMA_RETURN.window closed bars ending at it and on nothing
+// else — emaReturnOnWindow, the code the chart draws its marks with, on the
+// same bars (the chart's history: 600 on GMO's charts, rounded as drawn;
+// gold's Twelve Data bars kept by the live chart): a mark drawn on a bar the
+// chart holds a full window before is the one mailed. Its levels are the
+// rule's: the entry the bar's close, the stop the lowest low (highest high)
+// from the bar that broke the diagonal to the entry, target 1 A, target 2 wave
+// 1's height (when beyond the entry). Not on a history shorter than the
+// window, nor on a chart the rule is not offered on.
+export const emarmSignals = (
+  pair: string,
+  interval: string,
+  closed: ReadonlyArray<Candle>,
+  nowMs: number,
+  freshMs: number = freshFor(interval),
+): IndicatorSignal[] => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !isEmarmChart(pair, interval) || closed.length < EMA_RETURN.window) return [];
+  const closeOf = (k: number) => new Date(barOpenMs(closed[k].datetime) + step).toISOString();
+  const out: IndicatorSignal[] = [];
+  const first = Math.max(EMA_RETURN.window - 1, closed.length - 1 - Math.ceil(freshMs / step));
+  for (let i = first; i < closed.length; i++) {
+    const open = barOpenMs(closed[i].datetime);
+    if (!Number.isFinite(open)) continue;
+    const age = nowMs - (open + step);
+    if (age < 0 || age > freshMs) continue;
+    const start = i - EMA_RETURN.window + 1;
+    const d = emaReturnOnWindow(closed.slice(start, i + 1).map((c) => ({ o: c.open, h: c.high, l: c.low, c: c.close })));
+    if (d === null) continue;
+    out.push({
+      rule: "emarm",
+      pair,
+      interval,
+      side: d.side,
+      strong: false,
+      barTime: new Date(open).toISOString(),
+      closedAt: new Date(open + step).toISOString(),
+      close: d.entry,
+      line: null,
+      eps: null,
+      rsi: null,
+      rsiPrev: null,
+      sl: d.stop,
+      tps: d.tp2 === null ? [d.tp1] : [d.tp1, d.tp2],
+      emarm: {
+        crossClosedAt: closeOf(start + d.x),
+        touchClosedAt: closeOf(start + d.t),
+        a: d.a,
+        aClosedAt: closeOf(start + d.aAt),
+        neck: d.neck,
+        neckClosedAt: closeOf(start + d.b),
+        breakClosedAt: closeOf(start + d.k),
+        retestClosedAt: closeOf(start + d.r),
+        rr: d.rr,
+      },
+    });
+  }
+  return out;
+};
+
 // ---- when each chart is read ---------------------------------------------------------
 //
 // The sweep runs every minute. #171: a GMO chart is read in the minute its
@@ -941,7 +1053,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" ? undefined : GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "emarm" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -959,7 +1071,52 @@ const notMeasuredLine = (lang: Lang): string =>
   lang === "en"
     ? "This rule's win rate and its profit or loss a trade have not been measured."
     : "この決まりの勝率と1回あたりの損益は、まだ測っていません。";
+// #387 (docs §8.130): the EMA 20 / 200 way, measured on the five pairs'
+// 15-minute bars (research/emarm.ts, GMO's mid as the chart draws it, the
+// 52 weeks to 2026-10-29; the Python written apart agreed on every row: the
+// "Research emarm" run 41009164135): 22 entries; with the stop and target 1
+// 11 won and 11 lost, +18.22 pips a win and −16.74 a loss on average, +0.74
+// a trade, spread not paid; held with no stop to target 1 (CLAUDE.md: the
+// profit or loss a trade, how far it went against, how long it was held and
+// the ones still open, all with it), 20 reached it (+21.43 pips on average,
+// the bars to it 35 in the middle and 1,894 at most) and 2 were still open at
+// −786.1 and −607.2 pips (held 18,594 and 11,741 bars), −964.7 pips in all
+// and −43.85 a trade with those two at the last close; the price went
+// against the entry 7.7 pips in the middle and 861.2 at most. Gold not measured
+export const EMARM_MEASURED = {
+  entries: 22,
+  won: 11,
+  lost: 11,
+  avgWin: 18.2,
+  avgLoss: -16.7,
+  perTrade: 0.7,
+  ownerReached: 20,
+  ownerAvgWin: 21.4,
+  ownerBarsMedian: 35,
+  ownerBarsMax: 1894,
+  ownerOpen: [-786.1, -607.2],
+  ownerOpenBars: [18594, 11741],
+  ownerTotal: -964.7,
+  ownerPerTrade: -43.9,
+  maeMedian: 7.7,
+  maeMax: 861.2,
+} as const;
+const emarmMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  const m = EMARM_MEASURED;
+  const pct = ((100 * m.won) / (m.won + m.lost)).toFixed(1);
+  // the minus as the chart's (U+2212)
+  const sg = (v: number) => (v < 0 ? `\u2212${Math.abs(v)}` : `+${v}`);
+  const open = m.ownerOpen.map(sg);
+  const n = (v: number) => v.toLocaleString("en-US");
+  if (lang === "en") {
+    return `Measured on the 15-minute bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD over the 52 weeks to 2026-10-29 (GMO's mid, as the chart draws them): ${m.entries} entries; with this stop and target 1, ${m.won} won and ${m.lost} lost (${pct}%), ${sg(m.avgWin)} pips a win and ${sg(m.avgLoss)} pips a loss on average, ${sg(m.perTrade)} pips a trade (spread not paid; the video's 60% cannot be confirmed on so few). Held with no stop until target 1, ${m.ownerReached} of the ${m.entries} reached it (${sg(m.ownerAvgWin)} pips on average; ${m.ownerBarsMedian} bars to it in the middle, ${n(m.ownerBarsMax)} at most) and ${open.length} have not yet (open at ${open.join(" and ")} pips, held ${m.ownerOpenBars.map(n).join(" and ")} bars); counting those at the last close, ${sg(m.ownerTotal)} pips in all, ${sg(m.ownerPerTrade)} pips a trade. The price went against the entry ${m.maeMedian} pips in the middle and ${m.maeMax} pips at most.` +
+      (isGold(s.pair) ? " Gold itself has not been measured." : "");
+  }
+  return `ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの15分足の過去52週（2026年10月29日まで、GMO の中値、チャートと同じ足）で測ると、エントリーは${m.entries}回、この損切りと利確1では${m.won}勝${m.lost}敗（勝率${pct}%）、平均で勝ち ${sg(m.avgWin)} pips・負け ${sg(m.avgLoss)} pips、1回あたり ${sg(m.perTrade)} pips でした（スプレッドは引いていません。回数が少なく、動画の言う勝率60%は確かめられません）。損切りなしで利確1まで持つと、${m.entries}回のうち${m.ownerReached}回が届き（平均 ${sg(m.ownerAvgWin)} pips、届くまでの足は中ほど${m.ownerBarsMedian}本・最長${n(m.ownerBarsMax)}本）、${open.length}回はまだ届いていません（含み損 ${open.join(" pips と ")} pips、${m.ownerOpenBars.map(n).join("本と")}本持っている）。この2回を最後の終値で数えると、合計 ${sg(m.ownerTotal)} pips、1回あたり ${sg(m.ownerPerTrade)} pips です。持っている間に逆へ動いた幅は、中ほど${m.maeMedian} pips、最大${m.maeMax} pips でした。` +
+    (isGold(s.pair) ? "金そのものは測っていません。" : "");
+};
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
+  if (s.rule === "emarm") return emarmMeasuredLine(s, lang);
   if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3") return notMeasuredLine(lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
@@ -1051,6 +1208,43 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `This is the way shown in a gold trader's Instagram video, made into a rule by this app (docs §8.112): the last wave's ${buy ? "low" : "high"} taken once (a liquidity sweep), then the entry on EMA 20 crossing EMA 80; the break of structure is not waited for. The video gives no numbers but "15 to 20 pips", so the window it is judged on (${SWEEPX.window} closed bars), where the stop goes and the like are this app's. ${measuredLine(s, "en")}`,
         `The bars are 1-minute bars made from Swissquote's gold prices (the mid, recorded every few seconds; the minutes before the recording began are Twelve Data's), the same as the app's gold 1-minute chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
         "To stop these emails, open Settings → Email alerts in the app and untick \"Liquidity sweep + EMA cross\".\nThis is reference information, not investment advice. Every trading decision is your own.",
+      ]);
+    }
+    if (s.rule === "emarm") {
+      // #387 (docs §8.130): the EMA 20 / 200 way's entry, with its levels
+      const f = s.emarm;
+      const buy = s.side === "BUY";
+      const side = buy ? "BUY" : "SELL";
+      const src = twelve
+        ? `The bars are Twelve Data's (GMO Coin does not carry ${s.pair}), as the app's chart draws them.`
+        : "The bars are the mid of GMO Coin's public bid and ask, as the app's chart draws them.";
+      return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (EMA cross + return move)`, [
+        `A ${side} of the video's way (EMA 20 and EMA 200 cross, then the return move) fired on ${s.pair}, ${tf} chart: this bar closed ${buy ? "above" : "below"} the return move's body.`,
+        [
+          `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
+          ...(f
+            ? [
+              `${buy ? "Golden" : "Dead"} cross (EMA 20 ${buy ? "over" : "under"} EMA 200): the bar closed ${whenClosed(f.crossClosedAt, 0)} UTC`,
+              `Back to the 200 EMA: the bar closed ${whenClosed(f.touchClosedAt, 0)} UTC`,
+              `The horizontal neckline ${px(f.neck)} (the ${buy ? "high" : "low"} of the bar closed ${whenClosed(f.neckClosedAt, 0)} UTC) and the diagonal from A ${px(f.a)} (the bar closed ${whenClosed(f.aClosedAt, 0)} UTC): both broken by the bar closed ${whenClosed(f.breakClosedAt, 0)} UTC`,
+              `The return move to the horizontal: the bar closed ${whenClosed(f.retestClosedAt, 0)} UTC`,
+            ]
+            : []),
+        ].join("\n"),
+        [
+          "Stop and targets (the rule's, made from the video's):",
+          `  Entry ≈ ${px(s.close)}`,
+          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)}): the ${buy ? "lowest low" : "highest high"} from the bar that broke the diagonal to this one`,
+          ...(s.tps ?? []).map((v, k) =>
+            k === 0
+              ? `  TP1 ${px(v)} (${dist(v)}): A, the ${buy ? "highest high" : "lowest low"} since the cross`
+              : `  TP2 ${px(v)} (${dist(v)}): wave 1's height from wave 3's start`
+          ),
+          `  TP1's distance over the stop's: ${f ? f.rr.toFixed(2) : "—"}`,
+        ].join("\n"),
+        `This is the way shown in an Instagram video (GBP/JPY scalping on the 15-minute chart), made into a rule by this app (docs §8.130). The video draws its lines by hand, so the swings (3 bars on each side), where the stop goes and the like are this app's. It is judged with the same code as "EMA cross + return move" on the app's chart, on the ${EMA_RETURN.window} closed bars ending at this bar. ${measuredLine(s, "en")}`,
+        `${src} Check the latest state in the app before you place an order:\n${APP_URL}`,
+        "To stop these emails, open Settings → Email alerts in the app and untick the chart under EMA cross + return move.\nThis is reference information, not investment advice. Every trading decision is your own.",
       ]);
     }
     if (s.rule === "amdpo3") {
@@ -1186,6 +1380,43 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       `この合図は、Instagram の金のトレーダーの動画のやり方（一つ前の波の${buy ? "安値" : "高値"}を一度抜ける「流動性狩り」のあと、EMA20 と EMA80 のクロスで入る）を、このアプリで決まりにしたものです（docs §8.112）。構造の崩壊（BOS）は待ちません。動画には「15〜20ピップス」のほかに数字がないため、判断する範囲（確定足${SWEEPX.window}本）や損切りの置き方などはこのアプリで決めました。${measuredLine(s, "ja")}`,
       `足は Swissquote の金の値段（約3秒ごとに記録した中値）から作った1分足（記録を始める前の分は Twelve Data の1分足）で、アプリのチャートの金の1分足と同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
       "この通知を止めるには、アプリの「設定」→「メール通知」の「流動性狩り＋EMAクロス」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
+    ]);
+  }
+  if (s.rule === "emarm") {
+    // #387 (docs §8.130): the EMA 20 / 200 way's entry, with its levels
+    const f = s.emarm;
+    const buy = s.side === "BUY";
+    const sideA = buy ? "買い（BUY）" : "売り（SELL）";
+    const src = twelve
+      ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）で、アプリのチャートと同じです。`
+      : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。";
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideA}のサイン（EMAクロス＋リターンムーブ）`, [
+      `${pairJa(s.pair)}の${tf}で、EMAクロス＋リターンムーブ（動画のやり方）の${sideA}が出ました。リターンムーブの足の実体を、終値で${buy ? "上" : "下"}に抜けた足です。`,
+      [
+        `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
+        ...(f
+          ? [
+            `${buy ? "ゴールデン" : "デッド"}クロス（EMA20 が EMA200 を${buy ? "上" : "下"}に抜けた）: ${whenClosed(f.crossClosedAt, 9)} に確定した足`,
+            `EMA200 へのタッチ: ${whenClosed(f.touchClosedAt, 9)} に確定した足`,
+            `水平線 ${px(f.neck)}（${whenClosed(f.neckClosedAt, 9)} に確定した足の${buy ? "高値" : "安値"}）と、A ${px(f.a)}（${whenClosed(f.aClosedAt, 9)} に確定した足）からの斜めの線: ${whenClosed(f.breakClosedAt, 9)} に確定した足で両方を抜けました`,
+            `水平線へのリターンムーブ: ${whenClosed(f.retestClosedAt, 9)} に確定した足`,
+          ]
+          : []),
+      ].join("\n"),
+      [
+        "損切りと利確の目安（動画をもとに、このアプリで決めたもの）:",
+        `  エントリー ≈ ${px(s.close)}`,
+        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}。斜めの線を抜けた足からこの足までの${buy ? "最安値" : "最高値"}）`,
+        ...(s.tps ?? []).map((v, k) =>
+          k === 0
+            ? `  利確1 ${px(v)}（${dist(v)}。A：クロスからの${buy ? "最高値" : "最安値"}、直近${buy ? "高値" : "安値"}）`
+            : `  利確2 ${px(v)}（${dist(v)}。1波の値幅分）`
+        ),
+        `  利確1までの幅 ÷ 損切りまでの幅: ${f ? f.rr.toFixed(2) : "—"}`,
+      ].join("\n"),
+      `Instagram の動画（GBP/JPY の15分足のスキャルピング）のやり方を、このアプリで決まりにしたものです（docs §8.130）。動画は線を手で引いているため、山・谷（左右3本）や損切りの位置などは、このアプリで決めました。アプリのチャートの「EMAクロス＋リターンムーブ」と同じコードで、この足までの確定足${EMA_RETURN.window}本で判定しています。${measuredLine(s, "ja")}`,
+      `${src}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+      "この通知を止めるには、アプリの「設定」→「メール通知」の「EMAクロス＋リターンムーブ」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
   if (s.rule === "amdpo3") {
