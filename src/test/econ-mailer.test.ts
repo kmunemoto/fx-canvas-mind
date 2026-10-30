@@ -39,7 +39,7 @@ const ev = (country: string, at: string, title: string, impact: string, fetched_
 });
 
 const freshDb = (): Db => ({
-  subs: ["AUD/JPY", "AUD/USD", "EUR/JPY", "EUR/USD", "USD/JPY", "XAU/USD"].map((pair) => ({ user_id: OWNER, pair, interval: "15min", rule: "macdx", lang: "ja" })),
+  subs: ["AUD/JPY", "AUD/USD", "EUR/JPY", "EUR/USD", "USD/JPY", "XAU/USD"].map((pair) => ({ user_id: OWNER, pair, interval: "1h", rule: "macdx", lang: "ja" })),
   mails: [],
   events: [
     ev("AUD", "2026-10-21T23:00:00+00:00", "RBA Gov Bullock Speaks", "Low"),
@@ -153,7 +153,7 @@ describe("mailDigests", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const db = freshDb();
-      db.subs.push({ user_id: OTHER, pair: "USD/JPY", interval: "15min", rule: "macdx", lang: "en" });
+      db.subs.push({ user_id: OTHER, pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "en" });
       db.fail.add("claim");
       const r = await run(db);
       const said = JSON.stringify(r.result) + JSON.stringify(errors.mock.calls);
@@ -242,7 +242,7 @@ describe("mailDigests", () => {
 
   it("someone without a plan is recorded as skipped and not mailed", async () => {
     const db = freshDb();
-    db.subs = [{ user_id: OTHER, pair: "USD/JPY", interval: "15min", rule: "macdx", lang: "ja" }];
+    db.subs = [{ user_id: OTHER, pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "ja" }];
     const r = await run(db);
     expect(r.sent).toHaveLength(0);
     expect(r.result).toMatchObject({ skipped: 1 });
@@ -262,18 +262,18 @@ describe("mailDigests", () => {
     expect(db2.mails[0]).toMatchObject({ status: "failed", error: "no_email" });
   });
 
-  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31) makes a recipient; the other pairs still give the currencies", async () => {
+  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31; #386: the 1-hour chart again from v33) makes a recipient; the other pairs still give the currencies", async () => {
     const db = freshDb();
     db.subs = [
       { user_id: OWNER, pair: "USD/JPY", interval: "5min", rule: "macdx", lang: "ja" },
-      // the 1-hour chart is no longer the MACD email's (v31), nor is a pair it does not follow
-      { user_id: OWNER, pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
-      { user_id: OWNER, pair: "HKD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
+      // the 15-minute chart is no longer the MACD email's (v33), nor is a pair it does not follow
+      { user_id: OWNER, pair: "USD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "HKD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "AUD/JPY", interval: "15min", rule: "ultra", lang: "ja" },
     ];
     const a = await run(db);
     expect(a.result).toMatchObject({ recipients: 0 });
-    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "15min", rule: "macdx", lang: "ja" });
+    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "1h", rule: "macdx", lang: "ja" });
     const b = await run(db);
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0].text).toContain("対象の通貨: 米ドル・円・ユーロ・豪ドル・中国");

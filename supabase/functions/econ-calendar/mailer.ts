@@ -79,7 +79,7 @@ export const mailDigests = async (deps: MailerDeps, day: string, nowMs: number):
 
   // who gets it: everyone with a MACD email subscription (the mails signal-alerts sends: macdx on the
   // charts it follows, isMacdhChart; #384: the 15-minute chart from signal-alerts v31, the 1-hour one
-  // before); their currencies come from every pair they follow
+  // before; #386: the 1-hour one again from v33); their currencies come from every pair they follow
   const subs = await readRows(deps, "subscriptions read", "signal_alert_subscriptions?select=user_id,pair,interval,rule,lang&order=pair.asc");
   if (subs === null) return stop("subscriptions_unread");
   const people = new Map<string, { pairs: string[]; lang: Lang | null; macdx: boolean }>();

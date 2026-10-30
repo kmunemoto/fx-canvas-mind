@@ -82,8 +82,6 @@ import { en } from "../lib/i18n/en";
 const render = (ui: ReactElement): RenderResult => rtlRender(<LocaleProvider initial="ja">{ui}</LocaleProvider>);
 
 const H = 3_600_000;
-// #384: the MACD email's chart from v31, 15 minutes
-const Q = 15 * 60_000;
 // a multiple of 200 hours from 1970-01-01 UTC
 const G = 200 * H * 2475;
 const stamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
@@ -780,13 +778,12 @@ describe("#275 the 5-minute MACD peak-and-valley rule (mailed in v23 and v24, ke
     expect(ULTRA_RULE_ID.startsWith("macdx")).toBe(false);
   });
 
-  it("is read on the 5-minute chart of GMO's currency pairs, and nowhere else (#324: the subscriptions follow the 1-hour rule's chart; #384: the 15-minute one's from v31)", () => {
+  it("is read on the 5-minute chart of GMO's currency pairs, and nowhere else (#324: the subscriptions follow the 1-hour rule's chart)", () => {
     expect([...MACDX_INTERVALS]).toEqual(["5min"]);
     for (const p of ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "GBP/JPY", "MXN/JPY", "NZD/JPY", "ZAR/JPY", "CAD/JPY", "CHF/JPY", "TRY/JPY", "HUF/JPY", "SEK/JPY"]) {
       expect(isMacdxChart(p, "5min")).toBe(true);
       expect(isIndicatorChartFor("macdx", p, "5min")).toBe(false);
-      expect(isIndicatorChartFor("macdx", p, "15min")).toBe(MACDH_PAIRS.includes(p));
-      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(false);
+      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(MACDH_PAIRS.includes(p));
       expect(isMacdxChart(p, "15min")).toBe(false);
       expect(isMacdxChart(p, "1h")).toBe(false);
     }
@@ -798,9 +795,7 @@ describe("#275 the 5-minute MACD peak-and-valley rule (mailed in v23 and v24, ke
     expect(isIndicatorChartFor("ultra", "USD/CAD", "1h")).toBe(true);
     expect(isIndicatorChartFor("ultra", "USD/JPY", "5min")).toBe(true);
     expect(isIndicatorChartFor("qtrend", "XAU/USD", "15min")).toBe(true);
-    // #384: gold's 15-minute chart is the MACD email's from v31 (the 1-hour one before)
-    expect(isIndicatorChartFor("macdx", "XAU/USD", "15min")).toBe(true);
-    expect(isIndicatorChartFor("macdx", "XAU/USD", "1h")).toBe(false);
+    expect(isIndicatorChartFor("macdx", "XAU/USD", "15min")).toBe(false);
     expect(isMacdxChart(undefined, "5min")).toBe(false);
     expect(isMacdxChart("USD/JPY", 5)).toBe(false);
     expect(MACDX_PAIRS.every((p) => isGmoChartPair(p))).toBe(true);
@@ -966,14 +961,14 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     return out;
   };
 
-  it("is what the subscriptions under 'macdx' follow: the 1-hour chart of the owner's five pairs and gold (v27; #384: their 15-minute chart from v31), under its own id (from v28 the zone rule's)", () => {
-    expect([...MACDH_INTERVALS]).toEqual(["15min"]);
+  it("is what the subscriptions under 'macdx' follow: the 1-hour chart of the owner's five pairs and gold (v27), under its own id (from v28 the zone rule's)", () => {
+    expect([...MACDH_INTERVALS]).toEqual(["1h"]);
     // 「今の5ペア」, in the app's order (kept on #339: 「今の5ペア」), and (#345, v27) gold, last
     expect([...MACDH_PAIRS]).toEqual(["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "XAU/USD"]);
     for (const p of MACDH_PAIRS) {
-      expect(isMacdhChart(p, "15min")).toBe(true);
-      expect(isIndicatorChartFor("macdx", p, "15min")).toBe(true);
-      for (const iv of ["1min", "5min", "1h", "4h", "1day"]) {
+      expect(isMacdhChart(p, "1h")).toBe(true);
+      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(true);
+      for (const iv of ["1min", "5min", "15min", "4h", "1day"]) {
         expect(isMacdhChart(p, iv), `${p} ${iv}`).toBe(false);
         expect(isIndicatorChartFor("macdx", p, iv), `${p} ${iv}`).toBe(false);
       }
@@ -982,24 +977,23 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     const others = MACDX_PAIRS.filter((p) => !MACDH_PAIRS.includes(p));
     expect(others).toHaveLength(9);
     for (const p of [...others, "USD/CAD", "HKD/JPY", "SGD/JPY", "NOK/JPY", "PLN/JPY", "CZK/JPY"]) {
-      for (const iv of ["15min", "1h"]) {
-        expect(isMacdhChart(p, iv), `${p} ${iv}`).toBe(false);
-        expect(isIndicatorChartFor("macdx", p, iv), `${p} ${iv}`).toBe(false);
-      }
+      expect(isMacdhChart(p, "1h")).toBe(false);
+      expect(isIndicatorChartFor("macdx", p, "1h")).toBe(false);
     }
-    expect(isMacdhChart(undefined, "15min")).toBe(false);
+    expect(isMacdhChart(undefined, "1h")).toBe(false);
     expect(isMacdhChart("USD/JPY", 1)).toBe(false);
     // its id: the emails are recorded under it (v25's was macdx_12_26_9_w600_1h_lv8.5p_v2, v26 and v27's
     // macdx_12_26_9_w600_1h_k0.8mv_v3; #353: from v28 the zone rule's, v30's macdx_12_26_9_w600_1h_z95of120_v6;
-    // #384: v31's on the 15-minute chart), and the app reads the rule back from its start
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_15min_z95of120_v7");
+    // #384: v31's on the 15-minute chart, ..._15min_z95of120_v7; #386: from v33 the 1-hour chart's again, under its
+    // own id, _v8), and the app reads the rule back from its start
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v8");
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
     expect(MACDH_RULE_ID.startsWith("macdx")).toBe(true);
     expect(
       new Set([
         MACDH_RULE_ID,
+        "macdx_12_26_9_w600_15min_z95of120_v7",
         "macdx_12_26_9_w600_1h_z95of120_v6",
-        "macdx_12_26_9_w600_1h_z90of120_v4",
         "macdx_12_26_9_w600_1h_k0.8mv_v3",
         "macdx_12_26_9_w600_1h_lv8.5p_v2",
         MACDX_RULE_ID,
@@ -1166,8 +1160,9 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     expect(fn.indexOf('if (isPossiblyClosed(nowMs)) return { ...summary, skipped: "market_closed" };')).toBeLessThan(
       fn.indexOf("sigs.push(...macdhSignals(pair, interval, closed, nowMs));"),
     );
-    // #353: the zone rule's version; #362: v30, its band from 95%; #384: v31, on the 15-minute chart; #385: v32, beside AMD Po3's
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v32-2026-10-26T15:00:00Z";');
+    // #353: the zone rule's version; #362: v30, its band from 95%; #384: v31, on the 15-minute chart; #385: v32, beside AMD Po3's;
+    // #386: v33, back on the 1-hour chart
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v33-2026-10-30T03:00:00Z";');
   });
 
   it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
@@ -1215,10 +1210,9 @@ const N_GOLD = { cross: 82, BUY: 23, SELL: 22, no: 37 };
 
 // #353: from v28 gold's MACD email is the zone rule's, as the pairs' is: checked here on gold's bars (its numbers in
 // dollars, its stop and targets gold's); the cross rule's checks on gold's bars stay for the code kept
-describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-minute chart from v31): Twelve Data's bars, in dollars; from v28 the zone rule, as the pairs'", () => {
-  // 2,400 bars of gold, the waves of the #339 block's bars at gold's size (a usual hourly move of some $8,
-  // as gold's stored 1-hour bars have), rounded to the two decimals the chart rounds gold to; #384: a quarter of an
-  // hour apart (Q), the MACD email's chart from v31 (the rule reads closes only: the entries are the same bars)
+describe("#345 gold on the 1-hour MACD email (from v27): Twelve Data's bars, in dollars; from v28 the zone rule, as the pairs'", () => {
+  // 2,400 hourly bars of gold, the waves of the #339 block's bars at gold's size (a usual hourly move of some $8,
+  // as gold's stored 1-hour bars have), rounded to the two decimals the chart rounds gold to
   const H0 = Date.UTC(2026, 6, 1);
   const wave = (i: number) => 0.9 * Math.sin(i / 90) + 0.35 * Math.sin(i / 23) + 0.12 * Math.sin(i / 7) + 0.03 * Math.sin(i * 1.9) + 0.0004 * i;
   const r2 = (v: number) => Number(v.toFixed(2));
@@ -1227,14 +1221,14 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     const close = 4150 + SIZE * wave(i);
     const open = close + SIZE * 0.02 * Math.sin(i * 2.3);
     return {
-      datetime: stamp(H0 + i * Q),
+      datetime: stamp(H0 + i * H),
       open: r2(open),
       high: r2(Math.max(open, close) + SIZE * (0.03 + 0.01 * Math.abs(Math.sin(i * 0.9)))),
       low: r2(Math.min(open, close) - SIZE * (0.03 + 0.01 * Math.abs(Math.cos(i * 1.1)))),
       close: r2(close),
     };
   });
-  const closeMsOf = (i: number) => H0 + (i + 1) * Q;
+  const closeMsOf = (i: number) => H0 + (i + 1) * H;
   const windowOf = (i: number) => gold.slice(i - LEVEL_WINDOW + 1, i + 1);
   // the rule told again here, apart from _shared/macd-level.ts (as the #339 block's)
   const moveOf = (i: number) => {
@@ -1278,20 +1272,20 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     }
   });
 
-  it("is offered on gold's 15-minute chart (#384, v31; the 1-hour one before) and on no other of gold's, under the same rule id as the pairs'", () => {
-    expect(isMacdhChart("XAU/USD", "15min")).toBe(true);
-    expect(isIndicatorChartFor("macdx", "XAU/USD", "15min")).toBe(true);
-    // gold's other charts (the 1-hour and 4-hour and daily ones are Q-Trend's and ULTRA's) are not the MACD rule's
-    for (const iv of ["1min", "5min", "1h", "4h", "1day"]) {
+  it("is offered on gold's 1-hour chart and on no other of gold's, under the same rule id as the pairs'", () => {
+    expect(isMacdhChart("XAU/USD", "1h")).toBe(true);
+    expect(isIndicatorChartFor("macdx", "XAU/USD", "1h")).toBe(true);
+    // gold's other charts (the 15-minute and 4-hour and daily ones are Q-Trend's and ULTRA's) are not the MACD rule's
+    for (const iv of ["1min", "5min", "15min", "4h", "1day"]) {
       expect(isMacdhChart("XAU/USD", iv), iv).toBe(false);
       expect(isIndicatorChartFor("macdx", "XAU/USD", iv), iv).toBe(false);
     }
     // gold's 1-minute chart is the video's way's ('sweepx'), not this rule's
     expect(isIndicatorChartFor("sweepx", "XAU/USD", "1min")).toBe(true);
-    expect(isIndicatorChartFor("sweepx", "XAU/USD", "15min")).toBe(false);
+    expect(isIndicatorChartFor("sweepx", "XAU/USD", "1h")).toBe(false);
     // the rule is the same rule: its id is the pairs' (the claim key holds the pair); #353: from v28 the zone rule's
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_15min_z95of120_v7");
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v8");
     // the numbers are in the bars' own units: gold's, dollars (the stop and targets are dollars too)
     expect(ultraUnit("XAU/USD")).toBe(1);
   });
@@ -1341,7 +1335,7 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
       if (now.up && before.up) n.stayTop++;
       if (now.down && before.down) n.stayBottom++;
       expect(decideZoneOnWindow(windowOf(i), LEVEL_WINDOW - 1), `bar ${i}`).toEqual(want ? { ...want, fire: true } : null);
-      const sigs = macdhSignals("XAU/USD", "15min", windowOf(i), closeMsOf(i) + 30_000);
+      const sigs = macdhSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000);
       if (want === null) {
         expect(sigs, `bar ${i}`).toEqual([]);
         continue;
@@ -1352,8 +1346,8 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
       expect(g.rule).toBe("macdx");
       expect(g.side).toBe(want.side);
       expect(g.pair).toBe("XAU/USD");
-      expect(g.interval).toBe("15min");
-      expect(g.barTime).toBe(new Date(H0 + i * Q).toISOString());
+      expect(g.interval).toBe("1h");
+      expect(g.barTime).toBe(new Date(H0 + i * H).toISOString());
       expect(g.closedAt).toBe(new Date(closeMsOf(i)).toISOString());
       expect(g.close).toBe(gold[i].close);
       // ULTRA's stop $13 and targets $4, $10 and $16 from the close, in dollars
@@ -1374,38 +1368,38 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     expect(body).toContain("const lv = ultraLevels(d.side, close, ultraUnit(pair), ultraParamsFor(isGold(pair)));");
   });
 
-  it("is mailed while its bar is fresh (twenty minutes on the 15-minute chart), and is not judged on another chart of gold's", () => {
+  it("is mailed while its bar is fresh (half an hour), and is not judged on another chart of gold's", () => {
     const i = zoneFires()[3];
     const w = windowOf(i);
     const at = closeMsOf(i);
-    expect(macdhSignals("XAU/USD", "15min", w, at - 1)).toEqual([]);
-    expect(macdhSignals("XAU/USD", "15min", w, at)).toHaveLength(1);
-    expect(macdhSignals("XAU/USD", "15min", w, at + 20 * 60_000)).toHaveLength(1);
-    expect(macdhSignals("XAU/USD", "15min", w, at + 20 * 60_000 + 1)).toEqual([]);
-    for (const iv of ["1min", "5min", "1h", "4h", "1day"]) expect(macdhSignals("XAU/USD", iv, w, at + 30_000), iv).toEqual([]);
+    expect(macdhSignals("XAU/USD", "1h", w, at - 1)).toEqual([]);
+    expect(macdhSignals("XAU/USD", "1h", w, at)).toHaveLength(1);
+    expect(macdhSignals("XAU/USD", "1h", w, at + 30 * 60_000)).toHaveLength(1);
+    expect(macdhSignals("XAU/USD", "1h", w, at + 30 * 60_000 + 1)).toEqual([]);
+    for (const iv of ["1min", "5min", "15min", "4h", "1day"]) expect(macdhSignals("XAU/USD", iv, w, at + 30_000), iv).toEqual([]);
     // fewer bars than the window: none
-    expect(macdhSignals("XAU/USD", "15min", w.slice(1), at + 30_000)).toEqual([]);
+    expect(macdhSignals("XAU/USD", "1h", w.slice(1), at + 30_000)).toEqual([]);
   });
 
   it("indicatorSignals stays what the live chart labels on gold: Q-Trend's and ULTRA's, not the MACD rule's", () => {
     for (const i of zoneFires().slice(0, 8)) {
-      const sigs = indicatorSignals("XAU/USD", "15min", windowOf(i), closeMsOf(i) + 30_000);
+      const sigs = indicatorSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000);
       expect(sigs.every((x) => x.rule === "qtrend" || x.rule === "ultra")).toBe(true);
     }
   });
 
   const sample = (side: "BUY" | "SELL") => {
     const i = zoneFires().find((k) => zoneTold(k)!.side === side)!;
-    return macdhSignals("XAU/USD", "15min", windowOf(i), closeMsOf(i) + 30_000)[0];
+    return macdhSignals("XAU/USD", "1h", windowOf(i), closeMsOf(i) + 30_000)[0];
   };
 
   it("the Japanese email gives the blue line, the pane's top or bottom and its 95% in gold's digits, names gold, and speaks of no pips", () => {
     const g = sample("SELL");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "ja");
-    expect(mail.subject).toBe("【Sextant】金 15分足 売り（SELL）のサイン（MACD の山・谷）");
+    expect(mail.subject).toBe("【Sextant】金 1時間足 売り（SELL）のサイン（MACD の山・谷）");
     const t = mail.text;
-    expect(t).toContain("金の15分足で、MACD の山・谷の売り（SELL）のサインが出ました。");
+    expect(t).toContain("金の1時間足で、MACD の山・谷の売り（SELL）のサインが出ました。");
     expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の95%以上（0の線から測って）に届きました");
     expect(f.m).toBeGreaterThan(0);
     expect(t).toContain(`\n  MACD = ${f.m.toFixed(2)}、枠の上の端 = ${f.top.toFixed(2)}（その95% = ${f.mark.toFixed(2)}）`);
@@ -1422,7 +1416,7 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     const buy = sample("BUY");
     const fb = buy.macdh!;
     const bt = renderIndicatorMail(buy, "ja");
-    expect(bt.subject).toBe("【Sextant】金 15分足 買い（BUY）のサイン（MACD の山・谷）");
+    expect(bt.subject).toBe("【Sextant】金 1時間足 買い（BUY）のサイン（MACD の山・谷）");
     expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の95%以上（0の線から測って）に届きました");
     expect(fb.m).toBeLessThan(0);
     expect(bt.text).toContain(`\n  MACD = −${(-fb.m).toFixed(2)}、枠の下の端 = −${(-fb.bottom).toFixed(2)}（その95% = −${(-fb.mark).toFixed(2)}）`);
@@ -1432,9 +1426,9 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     const g = sample("BUY");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "en");
-    expect(mail.subject).toBe("[Sextant] XAU/USD 15-minute BUY signal (MACD peak/valley)");
+    expect(mail.subject).toBe("[Sextant] XAU/USD 1-hour BUY signal (MACD peak/valley)");
     const t = mail.text;
-    expect(t).toContain("A MACD peak/valley BUY signal fired on XAU/USD, 15-minute chart.");
+    expect(t).toContain("A MACD peak/valley BUY signal fired on XAU/USD, 1-hour chart.");
     expect(t).toContain(
       "MACD(12, 26, 9): the MACD line (blue) reached the bottom band of the MACD pane of the newest 120 bars: 95% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram)",
     );
@@ -1453,16 +1447,16 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
     // (the #353 block checks the pairs' emails to the word; here only that gold's wording did not leak into them)
     const bars = Array.from({ length: 2400 }, (_, i) => {
       const close = 150 + wave(i);
-      return { datetime: stamp(H0 + i * Q), open: close, high: close + 0.05, low: close - 0.05, close };
+      return { datetime: stamp(H0 + i * H), open: close, high: close + 0.05, low: close - 0.05, close };
     });
     const i = (() => {
       for (let k = LEVEL_WINDOW - 1; k < bars.length; k++) {
-        if (macdhSignals("USD/JPY", "15min", bars.slice(k - LEVEL_WINDOW + 1, k + 1), H0 + (k + 1) * Q + 30_000).length) return k;
+        if (macdhSignals("USD/JPY", "1h", bars.slice(k - LEVEL_WINDOW + 1, k + 1), H0 + (k + 1) * H + 30_000).length) return k;
       }
       return -1;
     })();
     expect(i).toBeGreaterThan(0);
-    const g = macdhSignals("USD/JPY", "15min", bars.slice(i - LEVEL_WINDOW + 1, i + 1), H0 + (i + 1) * Q + 30_000)[0];
+    const g = macdhSignals("USD/JPY", "1h", bars.slice(i - LEVEL_WINDOW + 1, i + 1), H0 + (i + 1) * H + 30_000)[0];
     const ja = renderIndicatorMail(g, "ja").text;
     const en = renderIndicatorMail(g, "en").text;
     expect(ja).toContain("（13.0pips）");
@@ -1485,9 +1479,8 @@ describe("#345 gold on the MACD email (from v27, the 1-hour chart; #384: the 15-
 // inside the 90% mark; in place of the cross email (the five pairs and gold). Asked again (2026-10-14) what the top
 // is, the owner chose 「2で」: the chart's MACD pane's edge, the highest of the blue line, the orange line and the bars
 // (and the bottom the lowest), not the blue line's own highest
-describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minute chart from v31): the blue line at 95% or more of the top (a SELL) or bottom (a BUY) of the newest 120 bars' MACD pane", () => {
-  // the #339 block's bars: 2,400 bars of a yen pair, and the same at a hundredth for EUR/USD; #384: a quarter of an
-  // hour apart (Q), the MACD email's chart from v31 (the rule reads closes only: the entries are the same bars)
+describe("#353 the 1-hour MACD email from v28 (#362: 95% from v30): the blue line at 95% or more of the top (a SELL) or bottom (a BUY) of the newest 120 bars' MACD pane", () => {
+  // the #339 block's bars: 2,400 hourly bars of a yen pair, and the same at a hundredth for EUR/USD
   const H0 = Date.UTC(2026, 6, 1);
   const wave = (i: number) => 0.9 * Math.sin(i / 90) + 0.35 * Math.sin(i / 23) + 0.12 * Math.sin(i / 7) + 0.03 * Math.sin(i * 1.9) + 0.0004 * i;
   const barsOf = (mid: number, scale: number) =>
@@ -1495,7 +1488,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
       const close = mid + scale * wave(i);
       const open = close + scale * 0.02 * Math.sin(i * 2.3);
       return {
-        datetime: stamp(H0 + i * Q),
+        datetime: stamp(H0 + i * H),
         open,
         high: Math.max(open, close) + scale * (0.03 + 0.01 * Math.abs(Math.sin(i * 0.9))),
         low: Math.min(open, close) - scale * (0.03 + 0.01 * Math.abs(Math.cos(i * 1.1))),
@@ -1505,7 +1498,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
   const yen = barsOf(150, 1);
   const usd = barsOf(1.1, 0.01);
   type Bars = typeof yen;
-  const closeMsOf = (i: number) => H0 + (i + 1) * Q;
+  const closeMsOf = (i: number) => H0 + (i + 1) * H;
   const windowOf = (bars: Bars, i: number) => bars.slice(i - LEVEL_WINDOW + 1, i + 1);
   const zoneTold = (bars: Bars, i: number) => toldZone(windowOf(bars, i).map((b) => b.close));
   const fired = new Map<Bars, number[]>();
@@ -1551,7 +1544,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     expect(ZONE_SHARE).toBe(0.95);
     expect(ZONE_SHARE).toBe(ZONE_PCT / 100);
     expect(LEVEL_WINDOW).toBe(600);
-    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_15min_z95of120_v7");
+    expect(MACDH_RULE_ID).toBe("macdx_12_26_9_w600_1h_z95of120_v8");
     expect(indicatorRuleId("macdx")).toBe(MACDH_RULE_ID);
     // the app reads the rule back from the id's start
     expect(MACDH_RULE_ID.startsWith("macdx")).toBe(true);
@@ -1826,7 +1819,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     // and each of them is mailed (the email does not keep a gap after the first)
     for (const k of again) {
       const i = Number(k.split("@")[1]);
-      expect(macdhSignals("USD/JPY", "15min", windowOf(yen, i), closeMsOf(i) + 30_000), k).toHaveLength(1);
+      expect(macdhSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000), k).toHaveLength(1);
     }
   });
 
@@ -1885,7 +1878,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
       let n = 0;
       for (let i = LEVEL_WINDOW - 1; i < bars.length; i++) {
         const want = zoneTold(bars, i);
-        const sigs = macdhSignals(pair, "15min", windowOf(bars, i), closeMsOf(i) + 30_000);
+        const sigs = macdhSignals(pair, "1h", windowOf(bars, i), closeMsOf(i) + 30_000);
         if (want === null) {
           expect(sigs, `${pair} bar ${i}`).toEqual([]);
           continue;
@@ -1896,8 +1889,8 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
         expect(g.rule).toBe("macdx");
         expect(g.side).toBe(want.side);
         expect(g.pair).toBe(pair);
-        expect(g.interval).toBe("15min");
-        expect(g.barTime).toBe(new Date(H0 + i * Q).toISOString());
+        expect(g.interval).toBe("1h");
+        expect(g.barTime).toBe(new Date(H0 + i * H).toISOString());
         expect(g.closedAt).toBe(new Date(closeMsOf(i)).toISOString());
         expect(g.close).toBe(bars[i].close);
         // ULTRA's stop 13 and targets 4, 10 and 16 pips from the close
@@ -1921,7 +1914,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     let both = 0;
     for (let i = LEVEL_WINDOW - 1; i < yen.length; i++) {
       const cross = decideScaledOnWindow(windowOf(yen, i), LEVEL_WINDOW - 1, MACDH_K)?.fire === true;
-      const mailed = macdhSignals("USD/JPY", "15min", windowOf(yen, i), closeMsOf(i) + 30_000).length > 0;
+      const mailed = macdhSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000).length > 0;
       if (cross && !mailed) crossOnly++;
       if (mailed && !cross) mailedOnly++;
       if (mailed && cross) both++;
@@ -1932,25 +1925,25 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
 
   it("a longer history gives the same email (the rule reads the newest 600 bars), a shorter one none", () => {
     const i = zoneFires(yen)[5];
-    const want = macdhSignals("USD/JPY", "15min", windowOf(yen, i), closeMsOf(i) + 30_000);
+    const want = macdhSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000);
     expect(want).toHaveLength(1);
-    expect(macdhSignals("USD/JPY", "15min", yen.slice(0, i + 1), closeMsOf(i) + 30_000)).toEqual(want);
-    expect(macdhSignals("USD/JPY", "15min", windowOf(yen, i).slice(1), closeMsOf(i) + 30_000)).toEqual([]);
-    expect(macdhSignals("USD/JPY", "15min", [], closeMsOf(i))).toEqual([]);
+    expect(macdhSignals("USD/JPY", "1h", yen.slice(0, i + 1), closeMsOf(i) + 30_000)).toEqual(want);
+    expect(macdhSignals("USD/JPY", "1h", windowOf(yen, i).slice(1), closeMsOf(i) + 30_000)).toEqual([]);
+    expect(macdhSignals("USD/JPY", "1h", [], closeMsOf(i))).toEqual([]);
   });
 
   it("reads the 600 bars ending at the bar and nothing before them: bars before them, however far off, change no number", () => {
     // (on the waves' bars a MACD line worked out from the first bar comes out the same as the 600 bars' to the last
     // bit, the average's start long forgotten; so these checks put 300 bars at 10^12 before them, which a line
     // worked out from the first bar would still carry at the 600th bar)
-    const far = Array.from({ length: 300 }, (_, j) => ({ ...yen[0], datetime: stamp(H0 - (300 - j) * Q), close: 1e12 }));
+    const far = Array.from({ length: 300 }, (_, j) => ({ ...yen[0], datetime: stamp(H0 - (300 - j) * H), close: 1e12 }));
     const bars = [...far, ...yen];
     for (const i of zoneFires(yen).slice(0, 6)) {
       const d = decideZoneOnWindow(windowOf(yen, i), LEVEL_WINDOW - 1);
       expect(d, `bar ${i}`).not.toBeNull();
       expect(decideZoneOnWindow(bars, i + far.length), `bar ${i}`).toEqual(d);
-      const sigs = macdhSignals("USD/JPY", "15min", bars.slice(0, i + far.length + 1), closeMsOf(i) + 30_000);
-      expect(sigs, `bar ${i}`).toEqual(macdhSignals("USD/JPY", "15min", windowOf(yen, i), closeMsOf(i) + 30_000));
+      const sigs = macdhSignals("USD/JPY", "1h", bars.slice(0, i + far.length + 1), closeMsOf(i) + 30_000);
+      expect(sigs, `bar ${i}`).toEqual(macdhSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000));
       expect(sigs, `bar ${i}`).toHaveLength(1);
     }
     // the far bars do make a difference to a line worked out from the first bar (so the check above can fail)
@@ -1960,33 +1953,33 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     expect(fromFirst[LEVEL_WINDOW - 1]).not.toBe(fromWindow[LEVEL_WINDOW - 1]);
   });
 
-  it("is mailed while its bar is fresh: closed at most twenty minutes ago (#384: the 15-minute reads at +0, +1 and +3 minutes), not before", () => {
+  it("is mailed while its bar is fresh: closed at most half an hour ago (the hourly reads at +0, +3 and +5 minutes), not before", () => {
     const i = zoneFires(yen)[3];
     const w = windowOf(yen, i);
     const at = closeMsOf(i);
-    expect(freshFor("15min")).toBe(20 * 60_000);
-    expect(macdhSignals("USD/JPY", "15min", w, at - 1)).toEqual([]);
-    expect(macdhSignals("USD/JPY", "15min", w, at)).toHaveLength(1);
-    expect(macdhSignals("USD/JPY", "15min", w, at + 20 * 60_000)).toHaveLength(1);
-    expect(macdhSignals("USD/JPY", "15min", w, at + 20 * 60_000 + 1)).toEqual([]);
-    for (const m of [0, 1, 3, 15, 16, 18, 30, 45, 48]) expect(gmoIntervalsDue(Date.UTC(2026, 9, 12, 14, m)), `:${m}`).toContain("15min");
-    for (const m of [2, 4, 5, 6, 14, 17, 29, 59]) expect(gmoIntervalsDue(Date.UTC(2026, 9, 12, 14, m)), `:${m}`).not.toContain("15min");
+    expect(freshFor("1h")).toBe(30 * 60_000);
+    expect(macdhSignals("USD/JPY", "1h", w, at - 1)).toEqual([]);
+    expect(macdhSignals("USD/JPY", "1h", w, at)).toHaveLength(1);
+    expect(macdhSignals("USD/JPY", "1h", w, at + 30 * 60_000)).toHaveLength(1);
+    expect(macdhSignals("USD/JPY", "1h", w, at + 30 * 60_000 + 1)).toEqual([]);
+    for (const m of [0, 3, 5]) expect(gmoIntervalsDue(Date.UTC(2026, 9, 12, 14, m)), `:0${m}`).toContain("1h");
+    for (const m of [1, 2, 4, 6, 30]) expect(gmoIntervalsDue(Date.UTC(2026, 9, 12, 14, m)), `:${m}`).not.toContain("1h");
   });
 
   it("is not judged on a chart it is not offered on, and the two MACD rules keep to their own charts", () => {
     const i = zoneFires(yen)[3];
     const w = windowOf(yen, i);
     const at = closeMsOf(i) + 30_000;
-    expect(macdhSignals("USD/JPY", "15min", w, at)).toHaveLength(1);
-    for (const iv of ["5min", "1h", "4h"]) expect(macdhSignals("USD/JPY", iv, w, at), iv).toEqual([]);
-    for (const p of ["USD/CAD", "HKD/JPY", "GBP/JPY", "HUF/JPY"]) expect(macdhSignals(p, "15min", w, at), p).toEqual([]);
-    // the 5-minute rule's function gives nothing on the 15-minute chart (the studies call it on 5 minutes)
-    expect(macdxSignals("USD/JPY", "15min", w, at)).toEqual([]);
+    expect(macdhSignals("USD/JPY", "1h", w, at)).toHaveLength(1);
+    for (const iv of ["5min", "15min", "4h"]) expect(macdhSignals("USD/JPY", iv, w, at), iv).toEqual([]);
+    for (const p of ["USD/CAD", "HKD/JPY", "GBP/JPY", "HUF/JPY"]) expect(macdhSignals(p, "1h", w, at), p).toEqual([]);
+    // the 5-minute rule's function gives nothing on the hourly chart (the studies call it on 5 minutes)
+    expect(macdxSignals("USD/JPY", "1h", w, at)).toEqual([]);
   });
 
   it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
     for (const i of zoneFires(yen).slice(0, 8)) {
-      const sigs = indicatorSignals("USD/JPY", "15min", windowOf(yen, i), closeMsOf(i) + 30_000);
+      const sigs = indicatorSignals("USD/JPY", "1h", windowOf(yen, i), closeMsOf(i) + 30_000);
       expect(sigs.every((x) => x.rule === "qtrend" || x.rule === "ultra")).toBe(true);
     }
   });
@@ -1994,25 +1987,25 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
   const sample = (side: "BUY" | "SELL", pair = "USD/JPY") => {
     const bars = pair.includes("JPY") ? yen : usd;
     const i = zoneFires(bars).find((k) => zoneTold(bars, k)!.side === side)!;
-    return macdhSignals(pair, "15min", windowOf(bars, i), closeMsOf(i) + 30_000)[0];
+    return macdhSignals(pair, "1h", windowOf(bars, i), closeMsOf(i) + 30_000)[0];
   };
 
   it("the Japanese email: the blue line, the pane's top or bottom and its 95%, ULTRA's levels, the rule, that it is not measured, how to stop it", () => {
     const g = sample("SELL");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "ja");
-    expect(mail.subject).toBe("【Sextant】ドル/円 15分足 売り（SELL）のサイン（MACD の山・谷）");
+    expect(mail.subject).toBe("【Sextant】ドル/円 1時間足 売り（SELL）のサイン（MACD の山・谷）");
     const t = mail.text;
-    expect(t).toContain("ドル/円の15分足で、MACD の山・谷の売り（SELL）のサインが出ました。");
+    expect(t).toContain("ドル/円の1時間足で、MACD の山・谷の売り（SELL）のサインが出ました。");
     expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の95%以上（0の線から測って）に届きました");
     expect(f.m).toBeGreaterThan(0);
     expect(t).toContain(`\n  MACD = ${f.m.toFixed(3)}、枠の上の端 = ${f.top.toFixed(3)}（その95% = ${f.mark.toFixed(3)}）`);
     expect(t).toContain("損切り・利確の目安（ULTRA と同じ数字）:");
     expect(t).toContain("（13.0pips）");
     expect(t).toContain("利確1");
-    expect(t).toContain("この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119・§8.122・§8.127）。");
+    expect(t).toContain("この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119・§8.122・§8.129）。");
     expect(t).toContain(
-      "15分足の MACD(12・26・9)の青い線が、新しい120本（判定した足までの120本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の95%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の95%以上に届いた足で買いを送ります。",
+      "1時間足の MACD(12・26・9)の青い線が、新しい120本（判定した足までの120本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の95%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の95%以上に届いた足で買いを送ります。",
     );
     expect(t).toContain("枠の端には、チャートが枠を描く時に足す余白は入れていません。");
     expect(t).toContain("一つの山・谷では1通だけで、青い線が95%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。");
@@ -2030,8 +2023,8 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     const buy = sample("BUY");
     const fb = buy.macdh!;
     const bt = renderIndicatorMail(buy, "ja");
-    expect(bt.subject).toBe("【Sextant】ドル/円 15分足 買い（BUY）のサイン（MACD の山・谷）");
-    expect(bt.text).toContain("ドル/円の15分足で、MACD の山・谷の買い（BUY）のサインが出ました。");
+    expect(bt.subject).toBe("【Sextant】ドル/円 1時間足 買い（BUY）のサイン（MACD の山・谷）");
+    expect(bt.text).toContain("ドル/円の1時間足で、MACD の山・谷の買い（BUY）のサインが出ました。");
     expect(bt.text).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の95%以上（0の線から測って）に届きました");
     // below zero the minus is the chart's (U+2212), not toFixed's hyphen
     expect(fb.m).toBeLessThan(0);
@@ -2044,9 +2037,9 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     const g = sample("BUY");
     const f = g.macdh!;
     const mail = renderIndicatorMail(g, "en");
-    expect(mail.subject).toBe("[Sextant] USD/JPY 15-minute BUY signal (MACD peak/valley)");
+    expect(mail.subject).toBe("[Sextant] USD/JPY 1-hour BUY signal (MACD peak/valley)");
     const t = mail.text;
-    expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 15-minute chart.");
+    expect(t).toContain("A MACD peak/valley BUY signal fired on USD/JPY, 1-hour chart.");
     // "95% or more of the way from the zero line", as the rule paragraph says it (not "at or below 95% of the lowest",
     // which could be read as a distance from zero, the other way round)
     expect(t).toContain(
@@ -2059,7 +2052,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     expect(t).toContain("Stop and targets (ULTRA's numbers):");
     expect(t).toContain("(13.0 pips)");
     expect(t).toContain(
-      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119, §8.122, §8.127): it mails a SELL when the 15-minute chart's MACD(12, 26, 9) blue line first reaches 95% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches 95% or more of the way to the pane's bottom (the lowest of them).",
+      "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119, §8.122, §8.129): it mails a SELL when the 1-hour chart's MACD(12, 26, 9) blue line first reaches 95% or more of the way from the zero line to the top of the MACD pane of the newest 120 bars (the 120 up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches 95% or more of the way to the pane's bottom (the lowest of them).",
     );
     expect(t).toContain("The pane's edges are taken without the margin the chart adds as it draws them.");
     expect(t).toContain("One email per peak or valley: no next one until the line has gone back inside the 95% mark (if it then comes back to the mark, another is sent).");
@@ -2091,7 +2084,7 @@ describe("#353 the MACD email from v28 (#362: 95% from v30; #384: on the 15-minu
     // the same shape as USD/JPY's at a hundredth: so are the numbers
     expect(f.top / sample("SELL").macdh!.top).toBeCloseTo(0.01, 10);
     const mail = renderIndicatorMail(g, "ja");
-    expect(mail.subject).toBe("【Sextant】ユーロ/ドル 15分足 売り（SELL）のサイン（MACD の山・谷）");
+    expect(mail.subject).toBe("【Sextant】ユーロ/ドル 1時間足 売り（SELL）のサイン（MACD の山・谷）");
     expect(mail.text).toContain(`\n  MACD = ${f.m.toFixed(5)}、枠の上の端 = ${f.top.toFixed(5)}（その95% = ${f.mark.toFixed(5)}）`);
     const b = sample("BUY", "EUR/USD").macdh!;
     expect(renderIndicatorMail(sample("BUY", "EUR/USD"), "en").text).toContain(
