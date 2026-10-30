@@ -233,7 +233,14 @@ import type { Candle } from "../analyze/indicators.ts";
 // (indicators.ts amdpo3Signals), recorded under AMDPO3_RULE_ID; the owner's
 // 「エントリーのタイミングが来たらこれも設定でメールが届く様にもして」. The
 // other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v32-2026-10-26T15:00:00Z";
+// v33 (#386, docs §8.129): the MACD rule back on the 1-hour chart of the same
+// six (indicators.ts MACDH_INTERVALS), the owner's 「やっぱりメールの判断を
+// 1時間にしてください」 (2026-10-30): v30's rule again (600 bars, 120-bar pane,
+// 95%), recorded under its own rule id (MACDH_RULE_ID, ..._1h_z95of120_v8);
+// the owner's subscriptions are moved back to the 1-hour chart once it is out.
+// Put out at once, in the middle of a GMO day, as v31 was. The other rules are
+// as they were.
+const FUNCTION_VERSION = "signal-alerts-v33-2026-10-30T03:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -641,7 +648,8 @@ Deno.serve(async (req: Request) => {
         // failure must never cost the other two their emails. #324: from v25
         // the 1-hour rule's (macdhSignals; nothing on another chart); #353:
         // from v28 the zone rule's (docs §8.119); #384: from v31 on the
-        // 15-minute chart (docs §8.127)
+        // 15-minute chart (docs §8.127); #386: from v33 on the 1-hour chart
+        // again (docs §8.129)
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         try {
           sigs.push(...macdhSignals(pair, interval, closed, nowMs));

@@ -279,7 +279,8 @@ describe("renderDigestMail", () => {
     const lines = m.text.split("\n");
     expect(lines[0]).toBe("今日〜明日の朝と、今週の残りの、大きな予定です（中央銀行・物価・GDP など）。時刻は日本時間です。");
     expect(lines).toContain("対象の通貨: 米ドル・円・ユーロ・豪ドル・中国（売買のメールのペア: 豪ドル/円・豪ドル/ドル・ユーロ/円・ユーロ/ドル・ドル/円・金。中国は、その数字で豪ドルや NZドルが動くことがあるため）");
-    // #384: the MACD email's chart is not named (the 15-minute one from signal-alerts v31, the 1-hour one before)
+    // #384: the MACD email's chart is not named (the 15-minute one from signal-alerts v31, the 1-hour one before;
+    // #386: the 1-hour one again from v33)
     expect(m.text).toContain("止めるには、アプリの「設定」→「メール通知」で「MACD の山・谷」のチェックを外してください（売買のメールも止まります）。");
     expect(m.text).toContain("このメールは、売買のメール（MACD の山・谷）を受け取っている方に");
     expect(m.text).not.toContain("1時間足");
