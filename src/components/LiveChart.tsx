@@ -6,6 +6,7 @@ import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/can
 import { type ChartPrefs, getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import { maNeedsDeep } from "@/lib/emaLines";
 import { SWEEPX } from "@/lib/sweepCross";
+import { EMA_RETURN } from "@/lib/emaReturn";
 import type { NumericCandle } from "@/lib/types";
 import {
   INTERVAL_STEP_MS,
@@ -332,7 +333,7 @@ const LiveChart = ({
     (maMode
       ? overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.sweepx
       : zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
-        overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra);
+        overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra || overlays.emaReturn);
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars; #154: or a pair's GMO does not serve)
@@ -397,9 +398,13 @@ const LiveChart = ({
   // bars is judged on its 600 closed bars, as the email judges (whatever
   // the three lines are set to). Not told to the chart as the lines' (`deepForMa`)
   const sweepDeep = indicatorsAllowed && !deepNoMore && maMode && overlays.sweepx && commonBefore !== null && commonBefore.length < SWEEPX.window - 1;
+  // #387: and on the chart while the video's EMA 20 / 200 way is on and the
+  // history above has fewer bars before the chart's first than the email's
+  // window needs, for the same reason
+  const erDeep = indicatorsAllowed && !deepNoMore && !maMode && overlays.emaReturn && commonBefore !== null && commonBefore.length < EMA_RETURN.window - 1;
   // #385: and AMD Po3, whose cycles need 220 bars to warm up and whose table
   // counts the cycles of every bar read (TradingView counts its whole history)
-  const deepOn = indicatorsAllowed && ((!maMode && (overlays.zlTema || overlays.amdPo3)) || maDeep || sweepDeep);
+  const deepOn = indicatorsAllowed && ((!maMode && (overlays.zlTema || overlays.amdPo3)) || maDeep || sweepDeep || erDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;

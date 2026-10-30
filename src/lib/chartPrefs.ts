@@ -78,6 +78,12 @@ export interface ChartOverlays {
   // D, the reference entry, stop and target, and its table; it reads deep
   // into the bars before the chart; off until switched on
   amdPo3: boolean;
+  // #387: the owner's video's way (20 EMA and 200 EMA cross, the candle back
+  // to the 200 EMA, the diagonal and horizontal necklines, the return move):
+  // the two EMAs, the lines, BUY / SELL and the boxes to the first target and
+  // the stop; it reads the email's 600 bars before the chart's candles; off
+  // until switched on
+  emaReturn: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -105,6 +111,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   zlTema: false,
   sweepx: true,
   amdPo3: false,
+  emaReturn: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
