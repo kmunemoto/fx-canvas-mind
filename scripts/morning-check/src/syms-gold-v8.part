@@ -1,0 +1,5 @@
+-- ===== FRONT (gold): public.live_chart_fallback (XAU/USD, 1h) -> us(symbol, ot, seq, m8, d), the closed bars production judges on =====
+-- instrument table (gold): the live_chart_fallback pair, the app's pair name, display order, the instant from which the v8 rule was live for gold
+-- (signal-alerts v33, #386, live from 2026-10-30 02:51 UTC; the first 1-hour bar judged by it opened 02:00 UTC = 1793325600000, the same instant as for the pairs), and the decimals
+-- of the chart's rounding for gold (decimalsOf: 2).
+syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, 1793325600000::bigint as live_ms, 2 as d),
