@@ -1,0 +1,120 @@
+# #388 (docs §8.131): the 1-hour MACD email sent at the bar's close (now) or the first minute the forming bar reaches
+# the band — which made more? research/macdlive.ts (the rule and output: research/macdlive-spec.md), and the Python
+# written apart from it (research/macdlive-check.py): the numbers are printed only when every row and number agree.
+#
+#   syn   two seeded walks (the live decision against the email's own code, the look-ahead check, the counts); then
+#         the first walk written as GMO's files, the study read from them, and the Python on the same files
+#   real  GMO's real bars (research/.cache, fetched when missing), after syn passed
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research macdlive (#388)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macdlive*.ts
+      - research/macdlive-check.py
+      - .github/workflows/macdlive.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2024-01-01T00:00:00Z"
+  END: "2026-10-29T21:00:00Z"
+  LOAD_FROM: "2023-10-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Two walks (the live decision against the email's code, the look-ahead check, the counts)
+        env:
+          MODE: synthetic
+          SEEDS: "1,2"
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          END: "2024-07-01T00:00:00Z"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/macdlive.ts
+      - name: The first walk as GMO's files, the study read from them, and the Python on the same files
+        env:
+          MODE: walkfiles
+          SEEDS: "1"
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          END: "2024-07-01T00:00:00Z"
+          OUT: research/out/macdlive-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdlive.ts
+          python3 -I research/macdlive-check.py --cache $OUT/gmo --out $OUT
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      OUT: research/out/macdlive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files: the 1-minute ones
+      # (ownerhold's), the 1-hour ones (trend's), and §8.124's (flowz: the same pairs and period to 2026-10-17)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-none
+          restore-keys: gmo-flowz-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdlive-none
+          restore-keys: gmo-macdlive-
+      - name: The study (its numbers go to files; none printed here)
+        env:
+          MODE: real
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macdlive.ts
+          ls -la $OUT
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-macdlive-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 -I research/macdlive-check.py --cache research/.cache --out $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macdlive-${{ github.run_id }}
+          path: research/out/macdlive
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: deno run --allow-read=. --allow-env research/macdlive.ts
