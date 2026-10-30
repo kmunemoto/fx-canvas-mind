@@ -1,12 +1,50 @@
-# Morning check of the MACD e-mails (1-hour, and from v7 the 15-minute chart): the SQL toolkit (tasks #352, #357, #362 and #384), versions v3, v4, v6 and v7
+# Morning check of the MACD e-mails (1-hour; v7 the 15-minute chart; v8 the 1-hour chart again): the SQL toolkit (tasks #352, #357, #362, #384 and #386), versions v3, v4, v6, v7 and v8
 
-Four versions live here, one per mail rule. **v7** (`pairs-v7.min.sql`, `gold-v7.min.sql`, 2026-10-26, task #384) checks rule `macdx_12_26_9_w600_15min_z95of120_v7`: the v6 rule on the **15-minute** chart (section v7 just below; read it first for any GMO day from key 20261026: v31 went live in the middle of that day, v7.1). **v3** (`pairs.min.sql`, `gold.min.sql`, frozen since 2026-10-13) checks rule `macdx_12_26_9_w600_1h_k0.8mv_v3`; **v4** (`pairs-v4.min.sql`, `gold-v4.min.sql`, 2026-10-14) checks rule `macdx_12_26_9_w600_1h_z90of120_v4`; **v6** (`pairs-v6.min.sql`, `gold-v6.min.sql`, 2026-10-19) checks rule `macdx_12_26_9_w600_1h_z95of120_v6` (v4 with the band from 95%). Which one to send for which GMO day is the first table of the v6 section. Sections 0a to 9 below describe v3 (the output words, the verdicts and the limits that v4 keeps are the same; what v4 changes is listed in the v4 section); section 10 (constants) and section 12 (rebuild) cover v3, v4, v6 and v7 (v6 only changes the constants listed in the v6 section; v7 changes the constants listed in v7.2 and the `history_files_missing` count of v7.6).
+Five versions live here, one per mail rule. **v8** (`pairs-v8.min.sql`, `gold-v8.min.sql`, 2026-10-30, task #386) checks rule `macdx_12_26_9_w600_1h_z95of120_v8`: the v6 rule on the **1-hour** chart again (section v8 just below; read it first for any GMO day from key 20261030: v33 went live in the middle of that day, v8.1). **v7** (`pairs-v7.min.sql`, `gold-v7.min.sql`, 2026-10-26, task #384) checks rule `macdx_12_26_9_w600_15min_z95of120_v7`: the v6 rule on the **15-minute** chart (section v7 just below; read it first for any GMO day from key 20261026: v31 went live in the middle of that day, v7.1). **v3** (`pairs.min.sql`, `gold.min.sql`, frozen since 2026-10-13) checks rule `macdx_12_26_9_w600_1h_k0.8mv_v3`; **v4** (`pairs-v4.min.sql`, `gold-v4.min.sql`, 2026-10-14) checks rule `macdx_12_26_9_w600_1h_z90of120_v4`; **v6** (`pairs-v6.min.sql`, `gold-v6.min.sql`, 2026-10-19) checks rule `macdx_12_26_9_w600_1h_z95of120_v6` (v4 with the band from 95%). Which one to send for which GMO day is the first table of the v6 section. Sections 0a to 9 below describe v3 (the output words, the verdicts and the limits that v4 keeps are the same; what v4 changes is listed in the v4 section); section 10 (constants) and section 12 (rebuild) cover v3, v4, v6 and v7 (v6 only changes the constants listed in the v6 section; v7 changes the constants listed in v7.2 and the `history_files_missing` count of v7.6).
 
 Built on 2026-10-13: first version about 06:50 to 08:50 UTC, fix round (v3; the `sql` field of the `RUN` row says `pairs.sql v3` / `gold.sql v3`) about 09:50 to 11:00 UTC (DB clock); v4 on 2026-10-14. English, like the inventory documents; the only Japanese is the suggested report wording in section 4 and in the v4 section.
 
 Everything here is **read-only**. Each statement is ONE `WITH ... SELECT` for `mcp__Supabase__execute_sql` (project `endcqzewujdvimdlazhj`). It writes nothing, reads no `user_id`, `event_id` or e-mail address, never touches `cron.job` or the vault, and makes no network call.
 
 **What it checks:** that the e-mails of the rule went out exactly where the rule says they must: v3 = rule `macdx_12_26_9_w600_1h_k0.8mv_v3` (signal-alerts v26 for the five pairs, v27 for gold); v4 = rule `macdx_12_26_9_w600_1h_z90of120_v4` (signal-alerts v28, all six); v6 = rule `macdx_12_26_9_w600_1h_z95of120_v6` (signal-alerts v30, all six). **What it does NOT measure:** win rate, profit or loss per trade, or whether anybody read a mail. `sent_at` is the moment the mail service accepted the message, not the arrival in an inbox.
+
+## v8. The same rule on the 1-hour chart again (2026-10-30, task #386)
+
+The owner, 2026-10-30: 「やっぱりメールの判断を1時間にしてください」. signal-alerts v33 mails the v6 rule on the **1-hour** chart of the same six instruments again (as v30 did), under rule id **`macdx_12_26_9_w600_1h_z95of120_v8`**, recorded in `public.signal_alerts` with `interval` **`'1h'`**; the owner's subscriptions moved back from `'15min'` to `'1h'` (docs/OPERATIONS.md 8.129). The v8 statements are the v6 statements with three constants changed and nothing else: the rule id (`back1-v8.part` twice, `back2-v8.part` once), the go-live constant (`syms-pairs-v8.part` five times, `syms-gold-v8.part` once) and the `RUN` row's `sql` (`pairs.sql v8` / `gold.sql v8`); the headers say v8 (`header-*-v8.part`). Checked after the build by replacing those constants on both sides: `pairs-v8.min.sql` equals `pairs-v6.min.sql`, `gold-v8.min.sql` equals `gold-v6.min.sql`. The v3, v4, v6 and v7 files did not change (md5 before and after the build equal; v3 also passes `src/v3.md5`).
+
+### v8.1 Which files for which GMO day, and the go-live constant
+
+| GMO day K | rule that judged its bars | files to send |
+|---|---|---|
+| 20261020 to 20261025 (1792443600000 <= START_MS < 1792962000000) | v6 (1-hour chart) | `pairs-v6.min.sql`, `gold-v6.min.sql` (the subscriptions are `'1h'` again from 2026-10-30 02:50 UTC, so a v6 statement run after that no longer shows the `no_subscription_row` of v7.1) |
+| 20261026 to 20261029 (1792962000000 <= START_MS < 1793307600000) | v7 (15-minute chart) | `pairs-v7.min.sql`, `gold-v7.min.sql` (run after 2026-10-30 02:50 UTC they show `no_subscription_row`: the v7 statements count `'15min'` macdx subscriptions, and there are none any more; read them as v7.1 says of the v6 statements after the first switch) |
+| **20261030** (START_MS = 1793307600000 = 2026-10-29 21:00 UTC): the switch day back | v7 for the 15-minute bars up to the one opened 02:30 UTC, v8 for the 1-hour bars from the one opened 02:00 UTC | `pairs-v8.min.sql`, `gold-v8.min.sql`; 1-hour entries before 02:00 UTC are `not_mailable` `before_go_live`; the 15-minute part is not checked |
+| 20261031 and later (START_MS >= 1793394000000 = 2026-10-30 21:00 UTC) | v8 (1-hour chart) | `pairs-v8.min.sql`, `gold-v8.min.sql` |
+
+**Go-live constant `live_ms`: 1793325600000 = 2026-10-30 02:00:00 UTC, all six** (the open of the first 1-hour bar v33 judged). The record:
+- pull request #250 merged at about 02:49:30 UTC (main 3354f5a); the deploy job (run 40993911689) deployed from 02:49:38 to 02:50:21 UTC;
+- the sweep's answers (`net._http_response`): `signal-alerts-v32-...` up to the call of 02:50:00 UTC, `signal-alerts-v33-2026-10-30T03:00:00Z` from the call of 02:51:00 UTC;
+- the six macdx subscriptions were moved from `'15min'` to `'1h'` by one `update` at about 02:50:5x UTC (no other user had a macdx row);
+- from the code (`gmoIntervalsDue`, `freshFor("1h")` 30 minutes, `twelveCloseDue`): the 1-hour bar opened 01:00 closed at 02:00 and was fresh until 02:30, before v33 was out, so the first 1-hour bar v33 could judge is the one opened 02:00 (closed 03:00; the pairs read at 03:00, 03:03 and 03:05, gold from 03:01).
+The last 15-minute bar judged under v7 is the one opened 02:30 UTC (closed 02:45, read by v32 at 02:45 to 02:48; gold's at 02:46 to 02:50); the one opened 02:45 closed at 03:00, when v33 no longer judges the 15-minute chart.
+
+### v8.2 How v8 was tested (2026-10-30, about 02:54 to 02:56 UTC, against the live database, read only)
+
+- `pairs-v8.min.sql` for key 20261023 (a v6 day, START_MS 1792702800000): `sql_md5` 0509f772a20a97a643fd245168dcf177 and `sql_chars` 25052 equal the local text; 0.87 s. One expected entry, EUR/USD BUY on the bar opened 2026-10-23 11:00 UTC, `not_mailable` `before_go_live` (close 1.11903, `mark_dist_ticks` 1, `near_edge` false), and `other_macdx_1h_rule_rows=1` on EUR/USD: the v6 mail of that day is EUR/USD BUY, bar 11:00, entry 1.11903 (read from `signal_alerts`), the same bar, side and price.
+- `gold-v8.min.sql` for the same key, on the gold 1-hour row as stored (read 2026-10-26 10:01:01 UTC, 1,017 bars): `sql_md5` 695cf68ea6422fe376229dc91a0e8d55, `sql_chars` 22058, equal; 0.17 s. One expected entry, BUY on the bar opened 2026-10-23 01:00 UTC (close 3994.9), `before_go_live`, and `other_macdx_1h_rule_rows=1`: the v6 mail of that day is gold BUY, bar 01:00, entry 3994.9.
+- Every pair showed `key_file_answered_before_day_end(cut copy?)=2` on that key (a Friday: the stored 1-hour day files of key 20261023 were answered before 21:00 UTC, with all 24 bars; the bar opened 20:00 closes in the weekend window and is never judged). Not looked into further; a Tuesday run for a Friday may show the same.
+- Not tested: a day with real v8 mails (none existed at the time), the switch day 20261030 (not over).
+
+### v8.3 Files and md5 (2026-10-30)
+
+| file | chars | md5 |
+|---|---|---|
+| `pairs-v8.min.sql` | 25,048 | 2aa693a619a504e5914be88c943f977b |
+| `pairs-v8.sql` | 39,721 | b288efbce39e7a60cf131f00e5322e75 |
+| `gold-v8.min.sql` | 22,054 | 3c75dbc2ad7c92e69fde46ee9c68f7d0 |
+| `gold-v8.sql` | 35,697 | 63bf5f155941506dd477ab96fdd78939 |
+
+(With the two markers replaced by 13-digit numbers, `pairs-v8.min.sql` is 25,052 chars and `gold-v8.min.sql` 22,058, as the `RUN` row's `sql_chars` says.) The limits of v6 (section v6 and 8) hold for v8 as they are; the 1-hour gold row is the latest read, as in v6.
 
 ## v7. The same rule on the 15-minute chart (2026-10-26, task #384)
 
