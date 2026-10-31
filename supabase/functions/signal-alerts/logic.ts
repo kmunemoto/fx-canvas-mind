@@ -487,10 +487,10 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
 
 // #155: and Q-Trend's and ULTRA's; #275: and the MACD peak-and-valley rule's
 // #291: and the owner's video's way on gold's 1-minute chart; #385: and AMD Po3's
-// #387: and the owner's video's EMA 20 / 200 way
+// #387: and the owner's video's EMA 20 / 200 way; #391: and the MACD email on shares
 const RULE_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷", sweepx: "流動性狩り＋EMAクロス", amdpo3: "AMD Po3", emarm: "EMAクロス＋リターンムーブ" },
-  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move" },
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷", sweepx: "流動性狩り＋EMAクロス", amdpo3: "AMD Po3", emarm: "EMAクロス＋リターンムーブ", stockmacd: "株の MACD" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "stock MACD" },
 };
 
 export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: string }>, lang: Lang): Mail => {

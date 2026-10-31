@@ -134,6 +134,8 @@ import {
   type Tick,
 } from "../live-chart/logic.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
+import { STOCKMACD_INTERVALS, STOCKMACD_PAIRS, isStockmacdChart, stockBarsOf, stockCloseDue, stockSweepOf } from "./stocks.ts";
+import { YAHOO_HEADERS, yahooChartUrl } from "../live-chart/stocks.ts";
 import { SWEEPX } from "../_shared/sweep-cross.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -252,7 +254,15 @@ import type { Candle } from "../analyze/indicators.ts";
 // emarmSignals), recorded under EMARM_RULE_ID; the owner's 「この機能追加して」
 // with 「チャートとメール」 and 「今の5ペア＋金の15分足」. The other rules are as
 // they were.
-const FUNCTION_VERSION = "signal-alerts-v34-2026-10-30T07:00:00Z";
+// v35 (#391): the MACD email on shares (stocks.ts; docs §8.134): the MACD
+// email's rule (v8's numbers) on the hourly bars of the 22 US and Japanese
+// shares measured in docs §8.133, read from Yahoo as the live chart reads
+// them, judged by its own run ({"mode": "stocks"}, every minute: a share's
+// bars read only in the half hour after one of its bars closes), mailed to
+// the shares subscribed with rule = 'stockmacd' under STOCKMACD_RULE_ID, with
+// no stop or target (the owner: 「出す、利確幅はいらない、自分で決める」).
+// The other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v35-2026-10-31T16:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -345,6 +355,13 @@ let indicatorSweepRunning = false;
 // reading, so a second call for the same minute does not read it twice (the
 // next minute's run may begin while this one ends)
 let goldTicksMinute: number | null = null;
+// #391: each share's newest closed bar judged (its open), the close whose bar
+// is in (done for that close), and when Yahoo was last read for it, in this
+// instance; and a "stocks" run not joined by the next one
+const stockJudged = new Map<string, number>();
+const stockDone = new Map<string, number>();
+const stockReadAt = new Map<string, number>();
+let stockSweepRunning = false;
 // Resend allows two requests a second
 let sendNextAt = 0;
 const SEND_GAP_MS = 600;
@@ -921,6 +938,71 @@ Deno.serve(async (req: Request) => {
         return { error: "failed" };
       }
     };
+    // ---- #391: the MACD email on shares (stocks.ts) --------------------------------------------
+    //
+    // The shares somebody follows under 'stockmacd' whose bar may have closed
+    // (in the half hour after one of the session's closes, stockCloseDue),
+    // read from Yahoo once a minute at most until that bar is in; the newest
+    // closed bar judged once, its signal mailed to each follower once (the
+    // claim's unique key)
+    const stockSweep = async (): Promise<JsonRecord> => {
+      const nowMs = Date.now();
+      const summary: JsonRecord = { ok: true, mode: "stocks", version: FUNCTION_VERSION, email_configured: emailConfigured };
+      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule"))
+        .filter((r) => typeof r.user_id === "string" && isStockmacdChart(r.pair, r.interval) && typeof r.lang === "string")
+        .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: "stockmacd" as const }));
+      summary.subscriptions = subs.length;
+      if (subs.length === 0) return summary;
+      const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
+      const mail = mailerFor(subs, counts);
+      const reads: JsonRecord[] = [];
+      for (const sym of [...new Set(subs.map((x) => x.pair))]) {
+        const due = stockCloseDue(sym, nowMs);
+        if (due === null || stockDone.get(sym) === due) continue;
+        if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;
+        stockReadAt.set(sym, nowMs);
+        let body: unknown = null;
+        try {
+          const r = await fetch(yahooChartUrl(sym, "1h"), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });
+          body = r.ok ? await r.json().catch(() => null) : null;
+          if (!r.ok) {
+            await r.body?.cancel();
+            reads.push({ pair: sym, error: `yahoo_${r.status}` });
+            continue;
+          }
+        } catch (err) {
+          console.error("yahoo read failed:", sym, err);
+          reads.push({ pair: sym, error: "yahoo_unavailable" });
+          continue;
+        }
+        const got = stockBarsOf(sym, body, nowMs);
+        if (!got) {
+          reads.push({ pair: sym, error: "yahoo_no_bars" });
+          continue;
+        }
+        const step = stockSweepOf(sym, got.bars, due, stockJudged.get(sym), nowMs);
+        if (step.done) stockDone.set(sym, due);
+        if (step.noSession) {
+          reads.push({ pair: sym, due: new Date(due).toISOString(), skipped: "no_session" });
+          continue;
+        }
+        if (step.judge && step.newest) stockJudged.set(sym, step.newest.open_ms);
+        if (step.signals.length > 0) await mail(step.signals);
+        reads.push({
+          pair: sym,
+          due: new Date(due).toISOString(),
+          newest: step.newest ? step.newest.datetime : null,
+          close: step.newest ? step.newest.close : null,
+          market_time: got.marketMs === null ? null : new Date(got.marketMs).toISOString(),
+          judged: step.judge,
+          signals: step.signals.map((x) => `stockmacd:${x.side}`),
+          // how long after the bar closed it was judged, ms
+          judged_after_ms: step.judge && step.newest ? Date.now() - step.newest.end : null,
+        });
+      }
+      return { ...summary, reads, ...counts };
+    };
+
     const goldTicks = async (): Promise<JsonRecord> => {
       const started = Date.now();
       const plan = goldTickPlan(started);
@@ -1087,6 +1169,16 @@ Deno.serve(async (req: Request) => {
       }
       // #291: once, by hand: the minutes before that recording began
       if (body.mode === "gold-seed") return json(await goldSeed());
+      // #391: every minute, the MACD email on shares
+      if (body.mode === "stocks") {
+        if (stockSweepRunning) return json({ ok: true, mode: "stocks", version: FUNCTION_VERSION, skipped: "busy" });
+        stockSweepRunning = true;
+        try {
+          return json(await stockSweep());
+        } finally {
+          stockSweepRunning = false;
+        }
+      }
       const summary: JsonRecord = { ok: true, mode: "sweep", version: FUNCTION_VERSION, email_configured: emailConfigured };
       // "Enter now" is not an available action while the market may be shut,
       // which is when analyze refuses too
@@ -1322,6 +1414,8 @@ Deno.serve(async (req: Request) => {
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
           // #387: the EMA 20 / 200 way's: the six's 15-minute chart
           emarm: { pairs: EMARM_PAIRS, intervals: EMARM_INTERVALS },
+          // #391: the MACD email on shares: the 22 shares' 1-hour chart
+          stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },
         },
         subscriptions: subs.map((s) => ({
           pair: s.pair,

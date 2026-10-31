@@ -43,6 +43,7 @@ import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
+import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.ts";
 
 // #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
 // low or high taken, then the cross of EMA 20 and EMA 80; docs §8.112)
@@ -50,15 +51,17 @@ import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic
 // #387: and "emarm", the owner's video's EMA 20 / 200 way (the cross, the
 // candle back to the 200 EMA, the necklines' break and the return move; docs
 // §8.130)
-export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm"] as const;
+// #391: and "stockmacd", the MACD email's rule on the 22 shares' hourly bars
+// (stocks.ts; docs §8.134), judged by the "stocks" run on Yahoo's bars
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
 export const isIndicatorRule = (v: unknown): v is IndicatorRule =>
-  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm";
+  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm" || v === "stockmacd";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
 // (the measured figures below are kept for these; #324: the MACD rule, now the
 // 1-hour one, is not measured; #291: nor is the video's way)
 // (#385: nor is AMD Po3; #387: the EMA 20 / 200 way has its own figures, below)
-export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3" | "emarm">;
+export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3" | "emarm" | "stockmacd">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -152,6 +155,8 @@ export const indicatorRuleId = (rule: IndicatorRule): string =>
     ? AMDPO3_RULE_ID
     : rule === "emarm"
     ? EMARM_RULE_ID
+    : rule === "stockmacd"
+    ? STOCKMACD_RULE_ID
     : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
@@ -241,6 +246,8 @@ export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unkn
     ? isSweepxChart(pair, interval)
     : rule === "emarm"
     ? isEmarmChart(pair, interval)
+    : rule === "stockmacd"
+    ? isStockmacdChart(pair, interval)
     : isIndicatorChart(pair, interval);
 
 // ULTRA's numbers are dollars on gold, pips on a currency pair (the chart's
@@ -1053,7 +1060,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "emarm" ? undefined : GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "emarm" || s.rule === "stockmacd" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -1117,7 +1124,7 @@ const emarmMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
 };
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   if (s.rule === "emarm") return emarmMeasuredLine(s, lang);
-  if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3") return notMeasuredLine(lang);
+  if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "stockmacd") return notMeasuredLine(lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
@@ -1151,6 +1158,8 @@ const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
 };
 
 export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
+  // #391: a share's MACD email has its own text (stocks.ts)
+  if (s.rule === "stockmacd") return renderStockMail(s, lang);
   const d = decimalsOf(s.pair);
   const px = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(d));
   const gold = isGold(s.pair);
