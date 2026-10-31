@@ -1,3 +1,5 @@
+import { isStock, stockDecimals, stockMarketOf } from "@/lib/stocks";
+
 // Candle timestamps arrive as "YYYY-MM-DD HH:mm:ss" (or a bare date) in UTC
 // and are shown in JST, the zone the whole app reports times in.
 
@@ -57,16 +59,22 @@ export const medianGapMs = (datetimes: readonly string[]): number => {
 // "pip" here is the cent, only so that nothing divides by a currency's pip.
 export const isGoldPair = (pair: string): boolean => pair.toUpperCase() === "XAU/USD";
 
-export const pipSize = (pair: string): number => (isGoldPair(pair) ? 0.01 : pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001);
+// #389: a share's "pip" is its smallest price step here (a cent; a tenth of a
+// yen), likewise only so nothing divides by a currency's pip
+export const pipSize = (pair: string): number =>
+  isStock(pair) ? 10 ** -stockDecimals(pair) : isGoldPair(pair) ? 0.01 : pair.toUpperCase().includes("JPY") ? 0.01 : 0.0001;
 
 export const toPips = (pair: string, priceDiff: number): number => priceDiff / pipSize(pair);
 
-export const priceDecimals = (pair: string): number => (isGoldPair(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
+export const priceDecimals = (pair: string): number =>
+  isStock(pair) ? stockDecimals(pair) : isGoldPair(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5;
 
 // #128: a price distance in the unit it is read in — pips for a currency
-// pair, dollars for gold ("12 pips", "$12.34"); `signed` puts + or − in front
+// pair, dollars for gold ("12 pips", "$12.34"); `signed` puts + or − in front.
+// #389: a share's in its currency ("$1.23", "¥12.3")
 export const formatDistance = (pair: string, diff: number, opts: { signed?: boolean; digits?: number } = {}): string => {
   const sign = opts.signed ? (diff >= 0 ? "+" : "−") : diff < 0 ? "−" : "";
+  if (isStock(pair)) return `${sign}${stockMarketOf(pair) === "jp" ? "¥" : "$"}${Math.abs(diff).toFixed(stockDecimals(pair))}`;
   if (isGoldPair(pair)) return `${sign}$${Math.abs(diff).toFixed(2)}`;
   return `${sign}${Math.abs(toPips(pair, diff)).toFixed(opts.digits ?? 0)}pips`;
 };

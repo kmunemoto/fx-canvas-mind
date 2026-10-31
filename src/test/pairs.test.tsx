@@ -63,7 +63,8 @@ describe("#153 the pairs the live chart offers", () => {
   it("#154: and the broker's other yen pairs but the one with no feed (#175; #180: and USD/CAD), in its order, each read as gold is", () => {
     expect(LIVE_FX_PAIRS).toEqual(BROKER.filter((p) => kept(p) && p !== "CNH/JPY"));
     expect(LIVE_FX_PAIRS).toHaveLength(20);
-    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 20], ["commodities", 1]]);
+    // (#389: and the shares listed, US then Japanese)
+    expect(LIVE_PAIR_GROUPS.map((g) => [g.key, g.pairs.length])).toEqual([["fx", 20], ["commodities", 1], ["usStocks", 8], ["jpStocks", 14]]);
     // those GMO does not serve are those read from Twelve Data and Swissquote
     const notGmo = LIVE_FX_PAIRS.filter((p) => GMO_SYMBOLS[p] === undefined);
     expect(notGmo).toEqual([...SERVER_TWELVE_FX]);

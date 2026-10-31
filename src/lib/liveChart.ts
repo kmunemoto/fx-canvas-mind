@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import type { ChartSignalMark, NumericCandle } from "@/lib/types";
 import { parseUtcCandleTime, priceDecimals } from "@/lib/candleTime";
+import { JP_STOCKS, STOCK_INTERVALS, US_STOCKS, isStock, isStockSymbol, type StockHit } from "@/lib/stocks";
 
 // #113: the live chart's two reads (supabase/functions/live-chart), as the
 // client accepts them. Anything malformed is dropped rather than drawn.
@@ -29,11 +30,17 @@ export const TWELVE_FX_PAIRS = [
 export const isTwelveFx = (pair: string): boolean => TWELVE_FX_PAIRS.includes(pair);
 export const LIVE_COMMODITIES = ["XAU/USD"];
 export const LIVE_PAIRS = [...LIVE_FX_PAIRS, ...LIVE_COMMODITIES];
-// the picker's groups, as the broker's lists are split
-export const LIVE_PAIR_GROUPS: Array<{ key: "fx" | "commodities"; pairs: string[] }> = [
+// the picker's groups, as the broker's lists are split; #389: and the shares
+// listed before any search (src/lib/stocks.ts), US then Japanese
+export const LIVE_PAIR_GROUPS: Array<{ key: "fx" | "commodities" | "usStocks" | "jpStocks"; pairs: string[] }> = [
   { key: "fx", pairs: LIVE_FX_PAIRS },
   { key: "commodities", pairs: LIVE_COMMODITIES },
+  { key: "usStocks", pairs: US_STOCKS.map((s) => s.symbol) },
+  { key: "jpStocks", pairs: JP_STOCKS.map((s) => s.symbol) },
 ];
+// #389: what the chart can show: a pair of its own, or any share Yahoo names
+// (searched for, so not only those listed)
+export const isLiveSymbol = (p: string): boolean => LIVE_PAIRS.includes(p) || isStockSymbol(p);
 // #146: the 5-minute chart too, for every pair. #181: the broker's (楽天FX)
 // bar timeframes, in its menu's order (「足の種類、これだけ追加して」) — as
 // the function lists them (supabase/functions/live-chart/logic.ts)
@@ -71,7 +78,9 @@ export const barEndMs = (interval: string, openMs: number): number => {
 // ones too, within the day's reads the function keeps for each
 export const GOLD_PAIR = "XAU/USD";
 export const GOLD_INTERVALS = LIVE_INTERVALS;
-export const intervalsFor = (pair: string): string[] => (pair === GOLD_PAIR ? GOLD_INTERVALS : LIVE_INTERVALS);
+// #389: a share, the timeframes Yahoo has as they are
+export const intervalsFor = (pair: string): string[] =>
+  isStock(pair) ? [...STOCK_INTERVALS] : pair === GOLD_PAIR ? GOLD_INTERVALS : LIVE_INTERVALS;
 // How often the price is asked for while the chart is on screen
 export const TICK_MS = 5_000;
 
@@ -98,8 +107,9 @@ export interface LiveRead {
   at: string;
   // v3: "twelvedata" while GMO cannot be read, with why ("maintenance" |
   // "unavailable") and when those bars were fetched — or, as the pair's own
-  // feed, "gold" (#127) and "twelve" (#154, a pair GMO does not serve)
-  source: "gmo" | "twelvedata";
+  // feed, "gold" (#127) and "twelve" (#154, a pair GMO does not serve);
+  // #389: "yahoo", a share's own, feed "stock"
+  source: "gmo" | "twelvedata" | "yahoo";
   feed: string | null;
   fetchedAt: string | null;
   // #146: Twelve Data's bars could not be read again: the day's reads for
@@ -193,7 +203,7 @@ export const normalizeLiveRead = (value: unknown): LiveRead | null => {
     nextClose: typeof r.next_close === "string" ? r.next_close : null,
     formingOpen: typeof r.forming_open === "string" && Number.isFinite(Date.parse(r.forming_open)) ? Date.parse(r.forming_open) : null,
     at: typeof r.at === "string" ? r.at : new Date().toISOString(),
-    source: r.source === "twelvedata" ? "twelvedata" : "gmo",
+    source: r.source === "twelvedata" ? "twelvedata" : r.source === "yahoo" ? "yahoo" : "gmo",
     feed: typeof r.feed === "string" ? r.feed : null,
     fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
     limited: r.limited === true,
@@ -323,12 +333,15 @@ export const fetchTicks = async (pair?: string): Promise<Record<string, Tick>> =
 // #154: a read whose bars are the pair's own feed's (GMO's, or Twelve Data's
 // for gold and the pairs GMO does not serve) — not a stand-in while GMO is
 // down — so the price moves them and the history joins them
-export const ownFeed = (r: LiveRead): boolean => r.source === "gmo" || r.feed === "gold" || r.feed === "twelve";
+// (#389: and a share's, Yahoo's)
+export const ownFeed = (r: LiveRead): boolean => r.source === "gmo" || r.feed === "gold" || r.feed === "twelve" || r.feed === "stock";
 
 // #129: Dow theory on four timeframes (supabase/functions/_shared/dow.ts),
 // as the live-chart function reads it — #146: gold's 5-minute one too
 export const DOW_TFS = ["4h", "1h", "15min", "5min"];
-export const dowTfsFor = (_pair: string): string[] => DOW_TFS;
+// #389: a share has no 4-hour bars
+export const STOCK_DOW_TFS = ["1h", "15min", "5min"];
+export const dowTfsFor = (pair: string): string[] => (isStock(pair) ? STOCK_DOW_TFS : DOW_TFS);
 export type DowState = "up" | "down" | "toDown" | "toUp" | "none";
 export interface DowPoint {
   price: number;
@@ -427,3 +440,17 @@ export const historyBefore = (history: ReadonlyArray<NumericCandle> | null, cand
   if (history[history.length - 1].datetime < first) return null;
   return history.filter((h) => h.datetime < first);
 };
+
+// #389: shares found by ticker, code or English name (Yahoo's search, through
+// the function); a word Yahoo will not search for finds none
+export const normalizeHits = (value: unknown): StockHit[] => {
+  if (!Array.isArray(value)) return [];
+  const out: StockHit[] = [];
+  for (const v of value) {
+    const h = rec(v);
+    if (!h || !isStockSymbol(h.symbol) || typeof h.name !== "string" || (h.market !== "us" && h.market !== "jp")) continue;
+    out.push({ symbol: h.symbol, name: h.name, market: h.market });
+  }
+  return out;
+};
+export const searchStocks = async (q: string): Promise<StockHit[]> => normalizeHits((await call({ action: "search", q })).hits);

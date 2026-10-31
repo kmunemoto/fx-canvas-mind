@@ -796,7 +796,7 @@ export const ja = {
     } as Record<string, string>,
     // #153: the pair picker's groups and its button, and each pair as the
     // owner's broker (楽天FX) labels it in its own picker
-    pairGroups: { fx: "FX", commodities: "商品（CFD）" } as Record<string, string>,
+    pairGroups: { fx: "FX", commodities: "商品（CFD）", usStocks: "米国株", jpStocks: "日本株" } as Record<string, string>,
     pairShort: {
       "USD/JPY": "ドル/円", "EUR/JPY": "ユーロ/円", "GBP/JPY": "ポンド/円", "AUD/JPY": "豪ドル/円",
       "EUR/USD": "ユーロ/ドル", "GBP/USD": "ポンド/ドル", "AUD/USD": "豪ドル/ドル", "MXN/JPY": "メキシコペソ/円",
@@ -814,6 +814,16 @@ export const ja = {
     // #154
     pairGridNote:
       "GMOコインにないペア（ドル/カナダドル・香港ドル/円など6ペア）の一覧の価格は Swissquote のもので、表示中のペア以外は1〜3分ほど前のものです。人民元/円は、無料で足を取れる配信が見つからないため、まだありません。",
+    // #389: shares, from Yahoo
+    stockGridNote: "株は Yahoo Finance から読みます。一覧に出る値段は、表示中の銘柄だけです。一覧にない株も、下の検索で探せます。",
+    stockSearchLabel: "株の銘柄を探す",
+    stockSearchPlaceholder: "例: AAPL、7203、sony、トヨタ",
+    stockSearching: "探しています…",
+    stockNoHits:
+      "見つかりませんでした。Yahoo の検索は、ティッカー（AAPL）・4桁のコード（7203）・英語の名前（sony）で探せます。日本語の名前は、上の一覧の中だけから探します。",
+    stockSearchError: "探せませんでした（Yahoo が答えませんでした）。少し後にもう一度お試しください。",
+    stockMarkets: { us: "米国", jp: "東証" } as Record<string, string>,
+    stockPrice: (price: string, market: "us" | "jp") => `値段 ${price}${market === "jp" ? "円" : "ドル"}（最後に約定した値段）`,
     intervalShort: { "1min": "1分", "2min": "2分", "3min": "3分", "4min": "4分", "5min": "5分", "10min": "10分", "15min": "15分", "30min": "30分", "1h": "1時間", "2h": "2時間", "4h": "4時間", "8h": "8時間", "1day": "日足", "1week": "週足", "1month": "月足" } as Record<string, string>,
     signalNames: { gainz: "GA型のサイン", rsi_sar: "RSI＋SAR のサイン", both: "GA型・RSI＋SAR のサイン" } as Record<string, string>,
     views: { gainz: "GA型（おすすめ）", rsi_sar: "RSI＋SAR", both: "両方" } as Record<string, string>,
@@ -869,6 +879,9 @@ export const ja = {
     // only while its own chart is open)
     fromTicks: (name: string, tf: string, limited: boolean, from: string | null, ownChart: boolean) =>
       `${name}の${tf}は、${limited ? "きょうの Twelve Data の読み込み上限（日本時間の朝9時に戻ります）に達した" : "Twelve Data から読み直せなかった"}ため、${from ? `${from} からの足` : "このあとの足"}を Swissquote の価格（数秒ごと）から作っています。価格は${ownChart ? "このペアの" : ""}チャートが開かれている間だけ記録するので、誰も開いていなかった時間の足は抜けます。`,
+    // #389
+    stockNote:
+      "株の足と値段は、Yahoo Finance の公開データから読んでいます（公式の API ではないため、止まったり断られたりすることがあります）。売値・買値はなく、最後に約定した値段を5秒ごとに読みます。取引時間（米国株はニューヨークの 9:30〜16:00、日本株は東京の 9:00〜11:30・12:30〜15:30）の外は動きません（時間外取引は読みません）。時間足は Yahoo にあるもの（1・2・5・15・30分足、1時間足、日足、週足、月足）だけで、1分足は5日分、2・5分足は1か月分、15・30分足は60日分までです。日本株の値段が実際より何分遅れているかは、まだ確かめていません。サインの印とインジケーターは表示しますが、株で成績を確かめたものはありません。株のメール通知は、まだありません。",
     // #154
     twelveNote:
       "このペアは GMOコインにないため、足は Twelve Data（足が確定するたびに読み直し）、動く価格は Swissquote の公開レート（売値と買値の中間、5秒ごと）です。楽天FXとは提供元が違うので、価格が少しずれることがあります。サインの印は表示します。メール通知は Q-Trend・ULTRA の印が対象で、1時間足・4時間足・日足から選べます（GA型・RSI＋SAR は対象外。成績の記録は付けていません）。Twelve Data の無料枠（1日800回）は金と分け合い、1日の読み込み回数に時間足ごとの上限があります（1分足・5分足から先に達します）。2・3・4分足は1分足、10分足は5分足、30分足は15分足、2時間足は1時間足、8時間足は4時間足を Twelve Data から読んでまとめた足で、読み込みの回数と上限はその足のものです。上限に達したあとや Twelve Data が読めないときは、Swissquote の価格から足を作って続けます（その旨を表示します。上限は日本時間の朝9時に戻ります）。GMOコインにないペアや時間足を1分の間に続けていくつも開くと、読み込みの上限（1分に5回）に当たり、チャートが1分ほど後に出ることがあります。",

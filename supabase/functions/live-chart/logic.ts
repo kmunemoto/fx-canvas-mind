@@ -39,6 +39,7 @@ import {
   type QuoteCandle,
 } from "../track-outcomes/quotes.ts";
 import { dowTheory } from "../_shared/dow.ts";
+import { STOCK_INTERVALS, isStock, stockDecimals } from "./stocks.ts";
 
 // #127: and gold (XAU/USD), which GMO does not carry — see "gold" below.
 // #153: every pair GMO serves (all 21 are among the owner's broker's, 楽天FX),
@@ -284,7 +285,9 @@ export const isLiveInterval = (v: unknown): v is string => typeof v === "string"
 export const GOLD = "XAU/USD";
 export const isGold = (pair: string): boolean => pair.toUpperCase() === GOLD;
 export const GOLD_INTERVALS = LIVE_INTERVALS;
-export const intervalsFor = (pair: string): readonly string[] => (isGold(pair) ? GOLD_INTERVALS : LIVE_INTERVALS);
+// #389: a share, the timeframes Yahoo has as they are (stocks.ts)
+export const intervalsFor = (pair: string): readonly string[] =>
+  isStock(pair) ? STOCK_INTERVALS : isGold(pair) ? GOLD_INTERVALS : LIVE_INTERVALS;
 
 // ---- #146: Twelve Data's day ---------------------------------------------------------
 //
@@ -623,7 +626,9 @@ export const isGoldMinute = (pair: string, interval: string): boolean => isGold(
 export const tickMinuteCandles = (minutes: ReadonlyArray<TickMinute>): Candle[] =>
   minutes.map((m) => ({ datetime: utcStamp(Date.parse(m.minute)), open: m.open, high: m.high, low: m.low, close: m.close }));
 
-const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
+// (#389: a share's, stocks.ts)
+const decimalsOf = (pair: string) =>
+  isStock(pair) ? stockDecimals(pair) : isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5;
 const round = (v: number | null | undefined, d: number): number | null =>
   v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d));
 
@@ -668,12 +673,12 @@ export const splitBars = (quotes: QuoteCandle[], interval: string, nowMs: number
 };
 
 // Where a read's bars came from: GMO, or — v3, while GMO cannot be read —
-// Twelve Data's last bars (see fallbackBars below)
+// Twelve Data's last bars (see fallbackBars below); #389: a share's, Yahoo's
 export interface ReadSource {
-  source: "gmo" | "twelvedata";
+  source: "gmo" | "twelvedata" | "yahoo";
   // why GMO was not used: "maintenance" | "unavailable" — or "gold" (#127):
   // Twelve Data is gold's own feed, GMO has none; #154: "twelve", the same
-  // for a pair GMO does not serve
+  // for a pair GMO does not serve; #389: "stock", a share's own (Yahoo's)
   feed: string | null;
   // when the fallback bars were fetched, ISO
   fetchedAt: string | null;
@@ -781,7 +786,9 @@ export type LiveRead = ReturnType<typeof liveRead>;
 // ones' lines. #146: gold's 5-minute one too, now that it has the chart
 // (it had been left out for Twelve Data's allowance).
 export const DOW_TFS = ["4h", "1h", "15min", "5min"] as const;
-export const dowTfsFor = (_pair: string): readonly string[] => DOW_TFS;
+// #389: a share has no 4-hour bars (stocks.ts STOCK_INTERVALS)
+export const STOCK_DOW_TFS = ["1h", "15min", "5min"] as const;
+export const dowTfsFor = (pair: string): readonly string[] => (isStock(pair) ? STOCK_DOW_TFS : DOW_TFS);
 // closed bars read per timeframe (the swings need a few dozen; the state
 // is carried from the first of them)
 export const DOW_BARS = 300;
