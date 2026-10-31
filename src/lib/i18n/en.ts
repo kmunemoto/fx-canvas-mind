@@ -1923,7 +1923,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "Stock MACD" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1932,7 +1932,7 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)", emarm: " (EMA cross + return move)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)", emarm: " (EMA cross + return move)", stockmacd: " (Stock MACD)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
@@ -1944,6 +1944,8 @@ export const en: Dict = {
       amdpo3: "The D ▲ (BUY) and D ▼ (SELL) of AMD Po3 with Live Edge Stats (a port of the code WillyAlgoTrader published on TradingView, at its default settings): sent at the bar where the price broke above or below a range that had narrowed and closed back inside it within 6 bars (the manipulation confirmed), when the original's reference trade opens at that bar's close (the original's DIST alert). The same D the chart's \"AMD Po3\" draws; the email carries the original's stop (0.4 × ATR 14 beyond the sweep's tip), target (the 1.5 extension of the sweep) and R:R. This rule's win rate and its profit or loss a trade have not been measured.",
       // #387
       emarm: "An Instagram video's way (GBP/JPY scalping on the 15-minute chart), made into a rule by this app (EMA cross + return move): after EMA 20 crosses above EMA 200, a candle comes back to the 200 EMA, a close breaks the horizontal and diagonal lines drawn from the swing high after it, the price returns to the horizontal from the 3rd bar after the break, and the bar that closes above that bar's body is a BUY (a SELL is the mirror). On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only. The same marks as \"EMA cross + return move\" on the chart; the email carries a stop (the lowest low or highest high from the bar that broke the diagonal), target 1 (the latest high or low) and target 2 (wave 1's height). Measured on the five pairs' 15-minute bars over the last 52 weeks: 22 entries, 11 won and 11 lost with the stop and target 1 (50.0%), +0.7 pips a trade (spread not paid). Gold is not measured.",
+      // #391
+      stockmacd: "The MACD peak/valley email (the same rule as on the currency pairs) on US and Japanese stocks' 1-hour charts: a SELL when the MACD(12, 26, 9) blue line reaches 95% or more of the way to the top of the newest 120 bars' pane, a BUY when it reaches 95% or more of the way to its bottom. The email gives no stop or target.",
       sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
     } as Record<string, string>,
     // #275: shown instead of the table when the server sends no charts for the rule
@@ -1994,6 +1996,16 @@ export const en: Dict = {
       "Measured (the five pairs' 15-minute bars, 2025-10-26 to 2026-10-29, GMO's mid, spread not paid): 22 entries. With the stop and target 1, 11 won and 11 lost (50.0%), +18.2 pips a win and −16.7 pips a loss on average, +0.7 pips a trade. Held with no stop until target 1, 20 of the 22 reached it (+21.4 pips on average; 35 bars to it in the middle, 1,894 at most) and 2 have not yet (open at −786.1 and −607.2 pips, held 18,594 and 11,741 bars); counting those at the last close, −964.7 pips in all, −43.9 pips a trade. The price went against the entry 7.7 pips in the middle and 861.2 pips at most. Too few to confirm the video's 60%. Gold is not measured.",
       "The video draws its lines by hand, so the swings (3 bars on each side), the 2 bars not counted, where the stop goes and how target 2 is taken are this app's. An alert is not an order. Whether a signal won or lost is not recorded.",
       "Nothing is judged while the market is closed (weekends and the like).",
+    ],
+    // #391: the MACD email on shares' notes (docs §8.134)
+    stockmacdNotes: [
+      "Judged on the 1-hour chart of 8 US stocks (NVIDIA, Intel, Apple, Microsoft, Alphabet, Amazon, Meta, Tesla) and 14 Japanese ones (Toyota, Sony, SoftBank Group, MUFG, Keyence, Fast Retailing, Tokyo Electron, Nintendo, NTT, Hitachi, Honda, Lasertec, Shin-Etsu, Mitsubishi Corporation) only: the ones measured. Other stocks the chart can find cannot be chosen yet.",
+      "The rule is the currency pairs' MACD peak/valley: the MACD(12, 26, 9) blue line, computed on the 600 closed bars ending at the bar, reaching 95% or more of the way to the top of the newest 120 bars' pane (a SELL) or to its bottom (a BUY); one email per peak or valley.",
+      "The bars and the price are Yahoo Finance's public data, the same as the app's stock chart (not an official feed; it may stop). Mailed once the bar has closed: US bars close at :30 past each hour from 10:30 to 15:30 and at 16:00 New York time, Japanese ones at 10:00, 11:00, 11:30, 13:00, 14:00, 15:00 and 15:30 Tokyo time; a bar is judged once Yahoo's last trade is past its close (the session's last bar once the closing price is out). A bar that closed more than 45 minutes ago is not mailed. How long the emails take to arrive, and how far Yahoo's Tokyo prices lag, have not been checked.",
+      "No stop or target is given.",
+      "Measured (the 22 stocks' 1-hour bars, from about March–April 2024 to 2026-10-30, Yahoo's prices, spread not paid): 1,709 emails. Held with no stop, with a take-profit of 0.1%, 1,696 of the 1,707 filled reached it (99.36%) and 11 have not (open at −551.19% in all, the worst −188.93%): +67.72% in all, +0.040% a trade. With 1%, 1,656 reached it (97.01%) and 51 have not (−1,837.40% in all): +583.14% in all, +0.342% a trade. With no stop, the win rate comes out high by construction.",
+      "Not judged at weekends or on a day with no bars (a holiday). On a US half day the last bar is judged 30 minutes after the close.",
+      "Not an order. No record of the signals' wins and losses is kept.",
     ],
     allPairs: "All symbols",
     indicatorHourOnly: "Symbols GMO Coin does not carry are on the 1-hour, 4-hour and daily charts only (gold on the 15-minute too)",

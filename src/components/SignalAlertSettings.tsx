@@ -3,6 +3,7 @@ import { AlertTriangle, Bell, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { useLocale } from "@/lib/i18n";
 import { priceDecimals } from "@/lib/candleTime";
+import { isStock, stockName } from "@/lib/stocks";
 import {
   ALERT_RULES,
   AlertRequestError,
@@ -201,7 +202,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                 // A server that does not send them (older than v23, v24 for the video's way,
                 // or not yet deployed) has nothing to tick: say so rather than draw an empty table
                 // (#387: and the EMA 20 / 200 way has its own, the six's 15 minutes)
-                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : settings.indicator;
+                // (#391: and the MACD email on shares has its own, the 22 shares' 1 hour)
+                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : settings.indicator;
                 if (!ind || ind.pairs.length === 0) {
                   return <p className="text-xs text-warning" data-testid={`signal-alerts-${rule}-unavailable`}>{a.macdxUnavailable}</p>;
                 }
@@ -247,7 +249,11 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                       )}
                       {ind.pairs.map((pair) => (
                         <tr key={pair} className="border-t border-border/50">
-                          <td className="py-1 font-mono text-foreground">{pair}</td>
+                          <td className="py-1 font-mono text-foreground">
+                            {pair}
+                            {/* #391: a share named beside its symbol */}
+                            {isStock(pair) && stockName(pair, locale) && <span className="ml-1 font-sans text-muted-foreground">{stockName(pair, locale)}</span>}
+                          </td>
                           {ind.intervals.map((iv) => {
                             if (!indicatorChartOffered(settings, pair, iv, rule)) {
                               return (
@@ -320,7 +326,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : rule === "stockmacd" ? a.stockmacdNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button
