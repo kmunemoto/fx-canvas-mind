@@ -84,8 +84,8 @@ summary.json:
   `mails, filled, unfilled, tp, held, sameBar, gapExits, win, pctSum, pctMean, pctMedian, heldPctSum, heldPctMin,
   maeMedian, maeMax, holdMedian, holdMax` — `win` = 100 × tp / filled; `gapExits` = exits of mode `open`; sums and
   means over the filled rows in their order above (`pctSum` the TP's and the held rows' together); medians the mean
-  of the two middle values of an even count; `heldPct*` over the held rows; `mae*` and `hold*` over the filled rows;
-  null where there is nothing to take it of.
+  of the two middle values of an even count; `heldPct*` over the held rows; `mae*` and `hold*` (`holdH`) over the
+  filled rows; a sum of nothing is 0 (as research/macdlive-spec.md's), any other number of nothing is null.
 
 A second implementation (research/stockmacd-check.py) parses the same files with its own code, decides with its own
 MACD, follows each email with its own code, and must find the same rows (every column; numbers equal as doubles)
