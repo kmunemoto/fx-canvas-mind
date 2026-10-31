@@ -746,7 +746,7 @@ export const en: Dict = {
       "USD/HKD": "US Dollar / Hong Kong Dollar",
     } as Record<string, string>,
     // #153: the pair picker's groups and its button
-    pairGroups: { fx: "FX", commodities: "Commodities (CFD)" } as Record<string, string>,
+    pairGroups: { fx: "FX", commodities: "Commodities (CFD)", usStocks: "US stocks", jpStocks: "Japanese stocks" } as Record<string, string>,
     // the grid's short names, in English
     pairShort: {
       "USD/JPY": "Dollar/Yen", "EUR/JPY": "Euro/Yen", "GBP/JPY": "Pound/Yen", "AUD/JPY": "Aussie/Yen",
@@ -765,6 +765,16 @@ export const en: Dict = {
     // #154
     pairGridNote:
       "The prices listed for the 6 pairs GMO Coin does not carry (Dollar/Loonie, HK Dollar/Yen and so on) are Swissquote's, and those not on screen are one to three minutes old. CNH/JPY is not here yet: no free feed with its bars was found.",
+    // #389: shares, from Yahoo
+    stockGridNote: "Stocks are read from Yahoo Finance. The list shows a price for the stock on screen only. Stocks not listed can be found with the search below.",
+    stockSearchLabel: "Find a stock",
+    stockSearchPlaceholder: "e.g. AAPL, 7203, sony",
+    stockSearching: "Searching…",
+    stockNoHits:
+      "Nothing found. Yahoo's search finds a ticker (AAPL), a four-digit Tokyo code (7203) or an English name (sony); Japanese names are looked for in the list above only.",
+    stockSearchError: "Could not search (Yahoo did not answer). Please try again in a moment.",
+    stockMarkets: { us: "US", jp: "Tokyo" } as Record<string, string>,
+    stockPrice: (price: string, market: "us" | "jp") => `Price ${market === "jp" ? "¥" : "$"}${price} (last trade)`,
     intervalShort: { "1min": "1m", "2min": "2m", "3min": "3m", "4min": "4m", "5min": "5m", "10min": "10m", "15min": "15m", "30min": "30m", "1h": "1H", "2h": "2H", "4h": "4H", "8h": "8H", "1day": "1D", "1week": "1W", "1month": "1M" } as Record<string, string>,
     signalNames: { gainz: "GA-style signals", rsi_sar: "RSI + SAR signals", both: "GA-style and RSI + SAR signals" } as Record<string, string>,
     views: { gainz: "GA style (recommended)", rsi_sar: "RSI + SAR", both: "Both" } as Record<string, string>,
@@ -817,6 +827,9 @@ export const en: Dict = {
     // last read; #154: a pair's GMO does not serve too
     fromTicks: (name: string, tf: string, limited: boolean, from: string | null, ownChart: boolean) =>
       `${name}'s ${tf} chart ${limited ? "has used today's Twelve Data reads (they come back at 9:00 JST)" : "could not be read again from Twelve Data"}, so its bars ${from ? `from ${from} JST` : "from now"} are made from Swissquote's prices (every few seconds). Prices are recorded only while ${ownChart ? "this pair's" : "a"} chart is open, so a time nobody had one open has no bars.`,
+    // #389
+    stockNote:
+      "A stock's bars and price are read from Yahoo Finance's public data (not an official API, so it may stop or refuse). There is no bid or ask: the last trade's price, every 5 seconds. Outside the regular session (New York 9:30-16:00 for US stocks, Tokyo 9:00-11:30 and 12:30-15:30 for Japanese ones) it does not move (no pre- or after-market). The timeframes are those Yahoo has (1, 2, 5, 15 and 30 minutes, 1 hour, daily, weekly, monthly), the 1-minute bars five days back, the 2- and 5-minute a month, the 15- and 30-minute 60 days. How many minutes Japanese prices lag has not been checked yet. Signal marks and indicators are drawn, but none has been tested on stocks. There are no stock emails yet.",
     // #154
     twelveNote:
       "This pair is not on GMO Coin, so its bars are Twelve Data's (read again as each bar closes) and its moving price is Swissquote's public rate (the mid of bid and ask, every 5 seconds). It is a different source from Rakuten FX's, so prices can differ a little. The signal marks are drawn; Q-Trend's and ULTRA's can be emailed on the 1-hour, 4-hour and daily charts (not the GA-style or RSI + SAR signals), and no outcome record is kept. Twelve Data's free allowance (800 reads a day) is shared with gold, and each timeframe has a cap on the day's reads, reached first by the 1- and 5-minute charts. The 2, 3 and 4-minute bars are made of the 1-minute ones read from Twelve Data, the 10-minute of the 5-minute, the 30-minute of the 15-minute, the 2-hour of the hourly and the 8-hour of the 4-hour, and their reads and caps are those timeframes'. Past it, or while Twelve Data cannot be read, the bars go on from Swissquote's prices (the chart says so; the reads come back at 9:00 JST). Opening several of these pairs or timeframes within a minute can hit the reads' per-minute limit (five), and a chart may then take about a minute to appear.",

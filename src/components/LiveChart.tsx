@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, LayoutGrid, LineChart, Radio } from "lucide-react";
 import PriceChart, { type FullscreenMenu } from "./PriceChart";
-import { useT } from "@/lib/i18n";
+import { useLocale, useT } from "@/lib/i18n";
 import { isGoldPair, parseUtcCandleTime, priceDecimals, toPips } from "@/lib/candleTime";
 import { type ChartPrefs, getChartPrefs, setChartPrefs, useChartPrefs } from "@/lib/chartPrefs";
 import { maNeedsDeep } from "@/lib/emaLines";
@@ -24,8 +24,10 @@ import {
   fetchTicks,
   historyBefore,
   intervalsFor,
+  isLiveSymbol,
   isTwelveFx,
   ownFeed,
+  searchStocks,
   tickLive,
   unjudgedOf,
   withRead,
@@ -34,6 +36,7 @@ import {
   type LiveRead,
   type Tick,
 } from "@/lib/liveChart";
+import { isStock, isStockQuery, learnStockName, matchListed, stockMarketOf, stockName, type StockHit } from "@/lib/stocks";
 
 // #114: which rule's signals the chart shows; GA-style is the recommended
 // view. #138: the chart opens on 4h, the owner's base timeframe (the
@@ -45,9 +48,12 @@ import {
 export type LiveView = "gainz" | "rsi_sar" | "both";
 const VIEWS: LiveView[] = ["gainz", "rsi_sar", "both"];
 export const BASE_INTERVAL = "4h";
+// #389: a share has no 4-hour bars: its chart opens on the hourly
+const baseFor = (pair: string): string => (intervalsFor(pair).includes(BASE_INTERVAL) ? BASE_INTERVAL : "1h");
 
 // #141: a saved choice, if the chart still offers it
-const savedPair = (p: string | null): string | null => (p && LIVE_PAIRS.includes(p) ? p : null);
+// (#389: or a share, any Yahoo names)
+const savedPair = (p: string | null): string | null => (p && isLiveSymbol(p) ? p : null);
 const savedInterval = (iv: string | null, pair: string): string | null => (iv && intervalsFor(pair).includes(iv) ? iv : null);
 const savedView = (v: string | null): LiveView | null => (v && (VIEWS as string[]).includes(v) ? (v as LiveView) : null);
 
@@ -79,6 +85,8 @@ interface Props {
   // #176: the deep history, for the Zero-lag TEMA
   loadDeepHistory?: (pair: string, interval: string) => Promise<{ bars: NumericCandle[]; complete: boolean }>;
   loadDow?: (pair: string) => Promise<DowTf[]>;
+  // #389: shares found by ticker, code or English name (Yahoo's search)
+  loadSearch?: (q: string) => Promise<StockHit[]>;
   // #140: the indicators are a paid feature: without them none is drawn or
   // read (Dow theory's timeframes, the history for Zone Shift and the Pro
   // score), and a tap on a locked one calls `onLockedIndicator`
@@ -103,6 +111,9 @@ const showInRow = (row: HTMLElement | null, testid: string) => {
   else if (b.right > r.right) row.scrollLeft += b.right - r.right;
 };
 
+// #389: how long the search waits for the typing to stop
+const SEARCH_WAIT_MS = 400;
+
 // "19:15:07" in Japan time
 const jstClock = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(11, 19);
 // "09-28 07:00" in Japan time
@@ -119,24 +130,32 @@ const LiveChart = ({
   loadHistory = fetchLiveHistory,
   loadDeepHistory = fetchLiveDeepHistory,
   loadDow = fetchDow,
+  loadSearch = searchStocks,
   indicatorsAllowed = true,
   onLockedIndicator,
   mode = "full",
 }: Props) => {
   const t = useT();
+  const { locale } = useLocale();
   const l = t.live;
   const maMode = mode === "ma";
+  // #389: a share's name in the app's language (one found by a search: as
+  // Yahoo named it), a pair's as before
+  const nameOf = (p: string): string | null => (isStock(p) ? stockName(p, locale) : l.pairNames[p] ?? null);
+  const shortOf = (p: string): string => (isStock(p) ? stockName(p, locale) ?? p : l.pairShort[p] ?? l.pairNames[p] ?? p);
   // where its pair and timeframe are kept
   const keptOf = (p: ChartPrefs) => (maMode ? p.maLive : p.live);
   // #141: the pair, timeframe and signals chosen last (kept with the chart's
   // other settings, in this browser and with the account), each only if the
   // chart still offers it; a timeframe given by the page comes first
   const [pair, setPairOnly] = useState<string>(() => savedPair(keptOf(getChartPrefs()).pair) ?? LIVE_PAIRS[0]);
-  const [interval, setIntervalTf] = useState<string>(() =>
-    defaultInterval && LIVE_INTERVALS.includes(defaultInterval)
+  const [interval, setIntervalTf] = useState<string>(() => {
+    const p = savedPair(keptOf(getChartPrefs()).pair) ?? LIVE_PAIRS[0];
+    // (#389: a timeframe the pair has: a share has fewer)
+    return defaultInterval && LIVE_INTERVALS.includes(defaultInterval) && intervalsFor(p).includes(defaultInterval)
       ? defaultInterval
-      : savedInterval(keptOf(getChartPrefs()).interval, savedPair(keptOf(getChartPrefs()).pair) ?? LIVE_PAIRS[0]) ?? BASE_INTERVAL,
-  );
+      : savedInterval(keptOf(getChartPrefs()).interval, p) ?? baseFor(p);
+  });
   const [view, setViewOnly] = useState<LiveView>(() => savedView(keptOf(getChartPrefs()).view) ?? "gainz");
   // what is chosen on the chart is kept
   const choose = (next: { pair?: string; interval?: string; view?: LiveView }) => {
@@ -144,7 +163,7 @@ const LiveChart = ({
     // #127: a timeframe the pair does not have becomes the base one (#146:
     // every pair has every timeframe now; a saved one from elsewhere may not)
     const want = next.interval ?? interval;
-    const iv = intervalsFor(p).includes(want) ? want : BASE_INTERVAL;
+    const iv = intervalsFor(p).includes(want) ? want : baseFor(p);
     const v = next.view ?? view;
     setPairOnly(p);
     setIntervalTf(iv);
@@ -158,6 +177,36 @@ const LiveChart = ({
   // 21, it may be far along the row; below)
   const [gridOpen, setGridOpen] = useState(false);
   const pairRowRef = useRef<HTMLDivElement>(null);
+  // #389: a share looked for — those listed whose name holds the words (Yahoo
+  // refuses Japanese ones), and Yahoo's own finds for words it takes, once the
+  // typing has stopped
+  const [stockQ, setStockQ] = useState("");
+  const [found, setFound] = useState<{ q: string; hits: StockHit[]; status: "loading" | "ready" | "error" } | null>(null);
+  useEffect(() => {
+    const q = stockQ.trim();
+    // eslint-disable-next-line no-control-regex
+    if (!isStockQuery(q) || /[^\x00-\x7F]/.test(q)) {
+      setFound(null);
+      return;
+    }
+    let stop = false;
+    setFound({ q, hits: [], status: "loading" });
+    const id = window.setTimeout(() => {
+      loadSearch(q).then(
+        (hits) => {
+          if (!stop) setFound({ q, hits, status: "ready" });
+        },
+        () => {
+          if (!stop) setFound({ q, hits: [], status: "error" });
+        },
+      );
+    }, SEARCH_WAIT_MS);
+    return () => {
+      stop = true;
+      window.clearTimeout(id);
+    };
+  }, [stockQ, loadSearch]);
+  const listedFinds = matchListed(stockQ);
   // #181: the timeframes too, 15 of them, in one row that scrolls sideways
   const intervalRowRef = useRef<HTMLDivElement>(null);
   const setView = (v: LiveView) => choose({ view: v });
@@ -171,7 +220,7 @@ const LiveChart = ({
     seenLiveKey.current = liveKey;
     const p = savedPair(livePrefs.pair) ?? pair;
     setPairOnly(p);
-    setIntervalTf(savedInterval(livePrefs.interval, p) ?? (intervalsFor(p).includes(interval) ? interval : BASE_INTERVAL));
+    setIntervalTf(savedInterval(livePrefs.interval, p) ?? (intervalsFor(p).includes(interval) ? interval : baseFor(p)));
     setViewOnly(savedView(livePrefs.view) ?? view);
     // only a change in what is kept moves the chart
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -565,6 +614,64 @@ const LiveChart = ({
     ? hms(remain)
     : `${Math.floor(remain / 60)}:${String(remain % 60).padStart(2, "0")}`;
 
+  // #389: the search for a share, in the card's list and the full-screen
+  // sheet: the listed ones whose name holds the words, then Yahoo's finds
+  const stockSearch = (pick: () => void, where: "grid" | "sheet") => {
+    const q = stockQ.trim();
+    const remote = found && found.q === q ? found : null;
+    const hits: StockHit[] = [
+      ...listedFinds.map((s) => ({ symbol: s.symbol, name: locale === "ja" ? s.ja : s.en, market: stockMarketOf(s.symbol) })),
+      ...(remote?.hits ?? []).filter((h) => !listedFinds.some((s) => s.symbol === h.symbol)),
+    ];
+    return (
+      <section className="space-y-1" data-testid="live-stock-search">
+        <label className="block text-[11px] font-semibold text-muted-foreground" htmlFor={`live-stock-q-${mode}-${where}`}>{l.stockSearchLabel}</label>
+        <input
+          id={`live-stock-q-${mode}-${where}`}
+          type="search"
+          value={stockQ}
+          onChange={(e) => setStockQ(e.target.value)}
+          placeholder={l.stockSearchPlaceholder}
+          maxLength={40}
+          data-testid="live-stock-q"
+          className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+        />
+        {q !== "" && (
+          <>
+            {hits.length > 0 && (
+              <ul className="divide-y divide-border rounded border border-border" data-testid="live-stock-hits">
+                {hits.map((h) => (
+                  <li key={h.symbol}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        learnStockName(h.symbol, h.name);
+                        setPair(h.symbol);
+                        setStockQ("");
+                        pick();
+                      }}
+                      data-testid={`live-stock-hit-${h.symbol}`}
+                      className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-muted/40"
+                    >
+                      <span className="font-mono font-semibold">{h.symbol}</span>
+                      <span className="flex-1 truncate">{h.name}</span>
+                      <span className="text-[10px] text-muted-foreground">{l.stockMarkets[h.market]}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {remote?.status === "loading" && <p className="text-[11px] text-muted-foreground" data-testid="live-stock-searching">{l.stockSearching}</p>}
+            {remote?.status === "error" && <p className="text-[11px] text-destructive" data-testid="live-stock-search-error">{l.stockSearchError}</p>}
+            {hits.length === 0 && remote?.status !== "loading" && remote?.status !== "error" && (
+              <p className="text-[11px] text-muted-foreground" data-testid="live-stock-no-hits">{l.stockNoHits}</p>
+            )}
+          </>
+        )}
+      </section>
+    );
+  };
+
   // #116: the tabs, the price and a new signal's notice — in the card, and
   // over the chart in full screen, so the pair and timeframe can be changed
   // without leaving it
@@ -588,7 +695,8 @@ const LiveChart = ({
         <LayoutGrid className="h-4 w-4" />
       </button>
       <div ref={pairRowRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5" role="tablist" aria-label={l.pairsLabel} data-testid="live-pairs">
-        {LIVE_PAIRS.map((p) => {
+        {/* #389: a share on screen is shown first, the pairs after it */}
+        {(isStock(pair) ? [pair, ...LIVE_PAIRS] : LIVE_PAIRS).map((p) => {
           const tk = ticks[p];
           return (
             <button
@@ -631,7 +739,7 @@ const LiveChart = ({
                         p === pair ? "border-primary/60 bg-primary/10 text-primary" : "border-border"
                       }`}
                     >
-                      <span className="block truncate text-[11px] font-semibold">{l.pairShort[p] ?? l.pairNames[p] ?? p}</span>
+                      <span className="block truncate text-[11px] font-semibold">{shortOf(p)}</span>
                       <span className="flex items-baseline justify-between gap-1 font-mono text-[10px] text-muted-foreground">
                         <span>{p}</span>
                         <span className="text-foreground">{tk ? tk.mid.toFixed(priceDecimals(p)) : ""}</span>
@@ -643,6 +751,8 @@ const LiveChart = ({
             </section>
           ))}
           <p className="text-[10px] text-muted-foreground" data-testid="live-pair-grid-note">{l.pairGridNote}</p>
+          <p className="text-[10px] text-muted-foreground" data-testid="live-stock-grid-note">{l.stockGridNote}</p>
+          {stockSearch(() => setGridOpen(false), "grid")}
         </div>
       )}
       {/* #181: the broker's 15 timeframes in one row that scrolls sideways, as the pairs do */}
@@ -696,6 +806,8 @@ const LiveChart = ({
     // #153: grouped as the card's list is (FX, then the commodities)
     render: (close) => (
       <div className="space-y-3" data-testid="live-sheet-pairs">
+      {/* #389: a share searched for, then the groups */}
+      {stockSearch(close, "sheet")}
       {LIVE_PAIR_GROUPS.map((g) => (
       <section key={g.key} data-testid={`live-sheet-group-${g.key}`}>
       <h4 className="px-2 pb-1 text-xs font-semibold text-muted-foreground">{l.pairGroups[g.key] ?? g.key}</h4>
@@ -716,7 +828,7 @@ const LiveChart = ({
               >
                 <span className="flex-1 min-w-0">
                   <span className="block text-base font-semibold">{p.replace("/", "")}</span>
-                  <span className="block text-xs text-muted-foreground truncate">{l.pairNames[p] ?? p}</span>
+                  <span className="block text-xs text-muted-foreground truncate">{nameOf(p) ?? p}</span>
                 </span>
                 <span className="font-mono text-sm">{tk ? tk.mid.toFixed(priceDecimals(p)) : ""}</span>
                 <Check className={`h-5 w-5 ${p === pair ? "text-primary" : "invisible"}`} />
@@ -781,7 +893,10 @@ const LiveChart = ({
   };
   const priceLine = tick ? (
     <p className="text-xs font-mono" data-testid="live-price">
-      {isGoldPair(pair)
+      {/* #389: a share has one price, the last trade's */}
+      {isStock(pair)
+        ? l.stockPrice(tick.mid.toFixed(d), stockMarketOf(pair))
+        : isGoldPair(pair)
         ? l.bidAskUsd(tick.bid.toFixed(d), tick.ask.toFixed(d), (tick.ask - tick.bid).toFixed(2))
         : l.bidAsk(tick.bid.toFixed(d), tick.ask.toFixed(d), toPips(pair, tick.ask - tick.bid).toFixed(1))}
       {!tick.open && <span className="ml-2 text-warning" data-testid="live-closed">{l.closed}</span>}
@@ -919,7 +1034,7 @@ const LiveChart = ({
         sarStyle={view === "gainz" ? "cloud" : "both"}
         gaStyle={view === "gainz" ? "filled" : "outline"}
         signalLegend={maMode ? undefined : view === "gainz" ? l.gaLegend : l.rsiSarLegend}
-        heading={`${pair} · ${intervals[interval] ?? interval}`}
+        heading={`${isStock(pair) && nameOf(pair) ? `${pair} ${nameOf(pair)}` : pair} · ${intervals[interval] ?? interval}`}
         seriesKey={`${pair}|${interval}`}
         // #119: the newest candle is still forming while a close is due
         formingLast={shown?.formingOpen != null}
@@ -1008,7 +1123,7 @@ const LiveChart = ({
               <p className="pt-1 text-[10px] text-muted-foreground" data-testid="live-recommended">{l.recommended}</p>
             </details>
           )}
-          <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isGoldPair(pair) ? l.goldNote : isTwelveFx(pair) ? l.twelveNote : l.note}</p>
+          <p className="text-[10px] text-muted-foreground" data-testid="live-note">{isStock(pair) ? l.stockNote : isGoldPair(pair) ? l.goldNote : isTwelveFx(pair) ? l.twelveNote : l.note}</p>
         </>
       )}
     </div>

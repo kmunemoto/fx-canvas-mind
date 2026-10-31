@@ -29,6 +29,10 @@
 // #291: gold's 1-minute bars are the minutes recorded from Swissquote's
 // prices all day by the signal-alerts function (docs §8.112), not Twelve
 // Data's.
+// #389: US and Japanese shares, named by Yahoo's symbol (AAPL, 7203.T): their
+// bars and price from Yahoo Finance (stocks.ts), on the timeframes Yahoo has;
+// and {action: "search", q} finds a share by ticker, code or English name
+// (docs §8.132).
 //
 // Signed-in users only, like the analysis. Both answers are kept for a few
 // seconds in this instance, so several people watching one chart cost the
@@ -104,6 +108,19 @@ import { barOpenMs } from "../analyze/state.ts";
 import { isPossiblyClosed, isPossiblyClosedFor, nextOpen } from "../_shared/market-hours.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, type Fetcher } from "../track-outcomes/quotes.ts";
 import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../signal-alerts/indicators.ts";
+import {
+  YAHOO_HEADERS,
+  isStockQuery,
+  isStockSymbol,
+  parseYahooChart,
+  parseYahooQuote,
+  parseYahooSearch,
+  yahooChartUrl,
+  yahooQuoteUrl,
+  yahooSearchUrl,
+  type StockHit,
+  type StockQuote,
+} from "./stocks.ts";
 
 // v18 (#291): gold's 1-minute bars are the minutes recorded from Swissquote's
 // prices all day (public.gold_tick_bars; logic.ts, "gold's 1-minute bars,
@@ -112,7 +129,9 @@ import { keepableKlines, klineFileEnded, klineFileKey, klineFileOf } from "../si
 // minute-by-minute recording does, no others. Every other chart's bars are
 // as they were, but for the minutes recorded for a pair read as gold is,
 // now read whole past the REST API's thousand rows (withTicks).
-const FUNCTION_VERSION = "live-chart-v18-2026-10-11T12:00:00Z";
+// v19 (#389): shares, from Yahoo (stocks.ts; docs §8.132). Every pair's
+// chart is as it was.
+const FUNCTION_VERSION = "live-chart-v19-2026-10-31T15:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
@@ -205,6 +224,17 @@ const clearKlineMemory = () => {
 const DEEP_GMO_GAP_MS = 100;
 let deepGmoNextAt = 0;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+
+// #389: a share's bars as Yahoo answered them, per timeframe, kept a few
+// seconds in this instance (its chart, history and Dow reading are one read;
+// a bar that has closed since is read again: barsCache's next_close), its
+// price a few seconds, and a search ten minutes
+const STOCK_TTL_MS = 20_000;
+const STOCK_QUOTE_TTL_MS = 4_000;
+const STOCK_SEARCH_TTL_MS = 10 * 60_000;
+const stockCache = new Map<string, { at: number; bars: Candle[] }>();
+const stockQuoteCache = new Map<string, { at: number; quote: StockQuote | null }>();
+const stockSearchCache = new Map<string, { at: number; hits: StockHit[] }>();
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -511,9 +541,89 @@ Deno.serve(async (req: Request) => {
         ? json({ ok: false, error: "maintenance", reopens, version: FUNCTION_VERSION }, 503)
         : json({ ok: false, error: "feed_unavailable", reopens, version: FUNCTION_VERSION }, 502);
 
+    // #389: a share's bars from Yahoo (kept STOCK_TTL_MS here), and when
+    // they were read; while Yahoo does not answer with bars, the last ones
+    // this instance read (as of when they were read: one forming then is
+    // left out once its time is up, closedBy), else none
+    const stockBars = async (symbol: string, interval: string): Promise<{ bars: Candle[]; fetchedAt: string } | null> => {
+      const key = `${symbol}|${interval}`;
+      const hit = stockCache.get(key);
+      const kept = hit ? { bars: hit.bars, fetchedAt: new Date(hit.at).toISOString() } : null;
+      if (hit && nowMs - hit.at <= STOCK_TTL_MS) return kept;
+      try {
+        const r = await fetch(yahooChartUrl(symbol, interval), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });
+        const got = r.ok ? parseYahooChart(symbol, await r.json().catch(() => null), interval, nowMs) : null;
+        if (!r.ok) {
+          console.error("yahoo bars failed:", symbol, interval, r.status);
+          await r.body?.cancel();
+        }
+        if (!got || got.bars.length === 0) return kept;
+        if (stockCache.size > CACHE_KEYS) stockCache.clear();
+        stockCache.set(key, { at: nowMs, bars: got.bars });
+        if (got.quote) stockQuoteCache.set(symbol, { at: nowMs, quote: got.quote });
+        return { bars: got.bars, fetchedAt: new Date(nowMs).toISOString() };
+      } catch (err) {
+        console.error("yahoo bars failed:", symbol, interval, err);
+        return kept;
+      }
+    };
+    // #389: a share's price now (kept STOCK_QUOTE_TTL_MS), as a tick: no bid
+    // and ask from Yahoo, so both are the price
+    const stockTick = async (symbol: string): Promise<Tick | null> => {
+      const hit = stockQuoteCache.get(symbol);
+      let quote = hit && nowMs - hit.at <= STOCK_QUOTE_TTL_MS ? hit.quote : undefined;
+      if (quote === undefined) {
+        try {
+          const r = await fetch(yahooQuoteUrl(symbol), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(5_000) });
+          const body = r.ok ? await r.json().catch(() => null) : null;
+          if (!r.ok) await r.body?.cancel();
+          const result = (body as { chart?: { result?: Array<{ meta?: Record<string, unknown> }> } } | null)?.chart?.result?.[0];
+          quote = parseYahooQuote(symbol, result?.meta ?? null, nowMs);
+        } catch (err) {
+          console.error("yahoo price failed:", symbol, err);
+          quote = null;
+        }
+        if (stockQuoteCache.size > CACHE_KEYS) stockQuoteCache.clear();
+        stockQuoteCache.set(symbol, { at: nowMs, quote });
+      }
+      return quote ? { bid: quote.price, ask: quote.price, mid: quote.price, time: quote.time, open: quote.open } : null;
+    };
+
+    // #389: a share found by ticker, code or English name
+    if (action === "search") {
+      const q = body?.q;
+      if (!isStockQuery(q)) return json({ ok: false, error: "invalid_request" }, 400);
+      const key = q.trim().toLowerCase();
+      const hit = stockSearchCache.get(key);
+      if (hit && nowMs - hit.at <= STOCK_SEARCH_TTL_MS) return json({ ok: true, version: FUNCTION_VERSION, hits: hit.hits });
+      try {
+        const r = await fetch(yahooSearchUrl(q.trim()), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(8_000) });
+        // a word Yahoo will not search for (a Japanese one: 400) finds nothing
+        if (r.status === 400) {
+          await r.body?.cancel();
+          return json({ ok: true, version: FUNCTION_VERSION, hits: [] });
+        }
+        if (!r.ok) {
+          console.error("yahoo search failed:", r.status);
+          await r.body?.cancel();
+          return json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
+        }
+        const hits = parseYahooSearch(await r.json().catch(() => null));
+        if (stockSearchCache.size > CACHE_KEYS) stockSearchCache.clear();
+        stockSearchCache.set(key, { at: nowMs, hits });
+        return json({ ok: true, version: FUNCTION_VERSION, hits });
+      } catch (err) {
+        console.error("yahoo search failed:", err);
+        return json({ ok: false, error: "feed_unavailable", version: FUNCTION_VERSION }, 502);
+      }
+    }
+
     if (action === "ticker") {
       // #154: the pair on screen, if it is one read from Swissquote
       const viewed = isLivePair(body?.pair) && isTwelveFx(body.pair) ? body.pair : null;
+      // #389: or a share, whose price is Yahoo's
+      const share = isStockSymbol(body?.pair) ? body.pair : null;
+      const shareRead = share ? stockTick(share) : Promise.resolve(null);
       const due = swissquoteDue(viewed, (p) => sqCache.get(p)?.at, nowMs, TICKER_TTL_MS, SQ_OTHERS_MS, SQ_OTHERS_PER_READ);
       // taken before the reads, so a read at the same moment does not ask again
       for (const p of due) sqCache.set(p, { readAt: 0, tick: null, ...sqCache.get(p), at: nowMs });
@@ -564,6 +674,7 @@ Deno.serve(async (req: Request) => {
         }
       }
       await sqRead;
+      const shareTick = await shareRead;
       const fxTicks: Record<string, Tick> = {};
       for (const p of TWELVE_FX_PAIRS) {
         const hit = sqCache.get(p);
@@ -572,19 +683,19 @@ Deno.serve(async (req: Request) => {
       // GMO's and gold's prices as before: none read (GMO's maintenance)
       // says so, unless the pair on screen is one Swissquote answered for
       const cached = tickerCache && nowMs - tickerCache.at <= TICKER_TTL_MS ? tickerCache.body as { ticks: Record<string, Tick> } : null;
-      if (!cached && !(viewed && fxTicks[viewed])) return unavailable();
+      if (!cached && !(viewed && fxTicks[viewed]) && !shareTick) return unavailable();
       return json({
         ok: true,
         version: FUNCTION_VERSION,
         at: new Date(nowMs).toISOString(),
-        ticks: { ...(cached?.ticks ?? {}), ...fxTicks },
+        ticks: { ...(cached?.ticks ?? {}), ...fxTicks, ...(share && shareTick ? { [share]: shareTick } : {}) },
       });
     }
 
     if (action === "bars") {
       const pair = body?.pair;
       const interval = body?.interval;
-      if (!isLivePair(pair) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
+      if (!(isLivePair(pair) || isStockSymbol(pair)) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
         return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
       }
       const key = `${pair}|${interval}`;
@@ -593,6 +704,23 @@ Deno.serve(async (req: Request) => {
         // a cached read whose forming bar has since closed is stale
         const next = (hit.body as { read?: { next_close?: string | null } }).read?.next_close;
         if (!next || Date.parse(next) > nowMs) return json(hit.body);
+      }
+      // #389: a share, from Yahoo — the newest TWELVE_CHART_BARS of them, as
+      // the pairs read as gold is (no reopening said: the FX week's is not a
+      // share's, and Yahoo does not say the next session's)
+      if (isStockSymbol(pair)) {
+        const got = await stockBars(pair, interval);
+        if (!got) return json({ ok: false, error: "feed_unavailable", reopens: null, version: FUNCTION_VERSION }, 502);
+        const bars = got.bars.length > TWELVE_CHART_BARS ? got.bars.slice(-TWELVE_CHART_BARS) : got.bars;
+        const out = {
+          ok: true,
+          version: FUNCTION_VERSION,
+          reopens: null,
+          read: fallbackRead(pair, interval, bars, nowMs, { source: "yahoo", feed: "stock", fetchedAt: got.fetchedAt }),
+        };
+        if (barsCache.size > CACHE_KEYS) barsCache.clear();
+        barsCache.set(key, { at: nowMs, body: out });
+        return json(out);
       }
       // #127: gold, from Twelve Data (GMO has none); #154: and the pairs GMO
       // does not serve
@@ -636,11 +764,19 @@ Deno.serve(async (req: Request) => {
     if (action === "history") {
       const pair = body?.pair;
       const interval = body?.interval;
-      if (!isLivePair(pair) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
+      if (!(isLivePair(pair) || isStockSymbol(pair)) || !isLiveInterval(interval) || !intervalsFor(pair).includes(interval)) {
         return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS, intervals: LIVE_INTERVALS }, 400);
       }
       // #176: the deep one (DEEP_HISTORY_BARS), for the Zero-lag TEMA
       const deep = body?.deep === true;
+      // #389: a share's, from the same read as its chart (as many as Yahoo keeps)
+      if (isStockSymbol(pair)) {
+        const got = await stockBars(pair, interval);
+        if (!got) return json({ ok: false, error: "feed_unavailable", reopens: null, version: FUNCTION_VERSION }, 502);
+        const depth = deep ? GOLD_BARS : TWELVE_CHART_BARS;
+        const bars = got.bars.length > depth ? got.bars.slice(-depth) : got.bars;
+        return json({ ok: true, version: FUNCTION_VERSION, history: historyOfBars(pair, interval, bars, nowMs, got.fetchedAt), complete: true });
+      }
       // #127: gold's history is the bars it already reads; #154: so is each
       // pair's read as gold is. #176: TWELVE_CHART_BARS of them, as before;
       // the deep one, all GOLD_BARS (one read, the same credit)
@@ -681,6 +817,15 @@ Deno.serve(async (req: Request) => {
     // #129: Dow theory on four timeframes
     if (action === "dow") {
       const pair = body?.pair;
+      // #389: a share's, on its own timeframes (dowTfsFor), from Yahoo
+      if (isStockSymbol(pair)) {
+        const out = await Promise.all(dowTfsFor(pair).map(async (tf) => {
+          const got = await stockBars(pair, tf);
+          const closed = got ? closedOf(got.bars, tf, nowMs, got.fetchedAt) : null;
+          return closed && closed.length > 0 ? dowOf(pair, tf, closed) : { tf, error: "unavailable" };
+        }));
+        return json({ ok: true, version: FUNCTION_VERSION, at: new Date(nowMs).toISOString(), dow: out });
+      }
       if (!isLivePair(pair)) return json({ ok: false, error: "invalid_request", pairs: LIVE_PAIRS }, 400);
       const shut = isPossiblyClosedFor(pair, nowMs);
       // the timeframes at once (each within the same fetch budget)
