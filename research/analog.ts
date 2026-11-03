@@ -102,7 +102,7 @@ interface Flip {
 }
 
 // the video's way: entry at the next bar's open, the target the grey line's end, the stop the band's far side
-const followVideo = (b: Bars, a: number, f: AnalogForecast, pip: number): Video => {
+export const followVideo = (b: Bars, a: number, f: AnalogForecast, pip: number): Video => {
   const d = f.dir;
   const X = b.o[a + 1];
   const TP = f.mid[H];
@@ -127,7 +127,7 @@ const followVideo = (b: Bars, a: number, f: AnalogForecast, pip: number): Video 
 };
 
 // the owner's way: a limit at the anchor's close, 10 pips, no stop, held to the last bar loaded
-const followOwner = (b: Bars, a: number, d: 1 | -1, pip: number): Owner => {
+export const followOwner = (b: Bars, a: number, d: 1 | -1, pip: number): Owner => {
   const E = b.c[a];
   const TP = E + d * 10 * pip;
   const last = b.t.length - 1;

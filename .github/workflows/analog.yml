@@ -43,7 +43,11 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - run: pip install -q numpy
+      # (python3 -I reads only the interpreter's own packages: numpy goes into setup-python's)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q numpy
       - name: The walk as GMO's files, the study read from them, and the Python on the same files
         env:
           MODE: walkfiles
@@ -67,7 +71,11 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - run: pip install -q numpy
+      # (python3 -I reads only the interpreter's own packages: numpy goes into setup-python's)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q numpy
       # GMO's ended files never change; each restore only adds files (the timeframe studies' 15-minute, 1-hour and
       # 4-hour files of the same five pairs)
       - uses: actions/cache/restore@v4

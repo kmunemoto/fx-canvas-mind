@@ -125,7 +125,7 @@ closed in the period, and not null) and its `dir` differs from `a`'s. `side` = B
   BUY `o[j] <= E` fills at `o[j]` (mode `open`), else `l[j] <= E` at `E` (mode `limit`); SELL `o[j] >= E` /
   `h[j] >= E`. The first such `j` is `f`, `F` its price; none: `unfilled`. Take-profit: walk `k` from `f` (mode
   `open`) or `f+1` (mode `limit`; `sameBar` = 1 when the fill bar reached `TP`: BUY `h[f] >= TP`, SELL
-  `l[f] <= TP`) to the last bar: BUY `o[k] >= TP` out at `o[k]`, else `h[k] >= TP` out at `TP` (SELL mirrored).
+  `l[f] <= TP`; else, and for a fill of mode `open` or none, `sameBar` = 0) to the last bar: BUY `o[k] >= TP` out at `o[k]`, else `h[k] >= TP` out at `TP` (SELL mirrored).
   None: `held`, valued at the last bar's close. `pips = dir * (exit - F) / pip`; `mae` = the largest of 0 and
   `dir * (F - adv) / pip` over bars `f ..` the exit bar (the last bar when held), `adv` = `l` for BUY, `h` for
   SELL; `bars` = the exit bar (the last bar when held) minus `f`.
@@ -141,7 +141,8 @@ Rows in the order timeframe, pair, `a`. Numbers as JavaScript's `String(x)` writ
   0, `h = 1, 2, …` in order).
 - flips.csv `tf,pair,open,side,X,TP,SL,vRes,vExit,vPips,vBars,E,oTP,filled,fillMode,F,sameBar,oRes,oExit,oPips,
   mae,oBars`: one per flip. `vRes` one of `tp, stop, both, time, skipped` (`vExit`, `vPips`, `vBars` empty when
-  `both` or `skipped`); `oRes` `tp`, `held` or `unfilled` (the fill and exit columns empty when unfilled).
+  `both` or `skipped`); `oRes` `tp`, `held` or `unfilled` (unfilled: `filled` 0, `sameBar` 0, and `fillMode`,
+  `F`, `oExit`, `oPips`, `mae`, `oBars` empty).
 - summary.json: `meta` (`start`, `end`, `loadFrom`, `params` = the constants, `tfs`, `pairs`); `tfs`: for each
   timeframe, `pairs` (per pair: `bars`, `first`, `last`, `anchors`, `firstAnchor`, `lastAnchor`) and `all`, `byPair`
   (each pair), `byYear` (the anchor's close's UTC year) each holding:
