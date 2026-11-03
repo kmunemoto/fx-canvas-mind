@@ -1,0 +1,110 @@
+# #392 (docs §8.135): the similar-past forecast (似た相場の予測: research/analog-spec.md) measured on the five GMO
+# pairs' 15-minute, 1-hour and 4-hour charts, 2024-01-01 to 2026-10-31 (research/analog.ts, on the code the chart
+# draws with), and the Python written apart from it (research/analog-check.py with research/analog-rule.py: its own
+# bars from the same files, a rule written from the spec alone): the numbers are printed only when every row and
+# number agree.
+#
+#   syn   two seeded walks written as GMO's files, the study read from them, and the Python on the same files
+#   real  GMO's real bars (research/.cache, fetched when missing), after syn passed
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research analog (#392)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/analog*.ts
+      - research/analog-check.py
+      - research/analog-rule.py
+      - supabase/functions/_shared/analog-forecast.ts
+      - .github/workflows/analog.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2024-01-01T00:00:00Z"
+  END: "2026-10-31T00:00:00Z"
+  LOAD_FROM: "2023-01-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        seed: ["1", "2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - run: pip install -q numpy
+      - name: The walk as GMO's files, the study read from them, and the Python on the same files
+        env:
+          MODE: walkfiles
+          SEED: ${{ matrix.seed }}
+          LOAD_FROM: "2024-01-01T00:00:00Z"
+          START: "2024-03-01T00:00:00Z"
+          END: "2025-03-01T00:00:00Z"
+          OUT: research/out/analog-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/analog.ts
+          python3 -I research/analog-check.py --cache $OUT/gmo --out $OUT
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      OUT: research/out/analog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - run: pip install -q numpy
+      # GMO's ended files never change; each restore only adds files (the timeframe studies' 15-minute, 1-hour and
+      # 4-hour files of the same five pairs)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-tf-none
+          restore-keys: gmo-tf-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-15min-none
+          restore-keys: gmo-15min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-analog-none
+          restore-keys: gmo-analog-
+      - name: The study (its numbers go to files; none printed here)
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/analog.ts
+          sha256sum $OUT/rows.csv $OUT/flips.csv $OUT/summary.json
+          wc -l $OUT/rows.csv $OUT/flips.csv
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-analog-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 -I research/analog-check.py --cache research/.cache --out $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: analog-${{ github.run_id }}
+          path: research/out/analog/summary.json
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: deno run --allow-read=. --allow-env research/analog.ts

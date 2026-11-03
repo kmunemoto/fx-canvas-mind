@@ -284,6 +284,8 @@ export const en: Dict = {
       amdPo3: "AMD Po3 (WillyAlgoTrader)",
       // #387
       emaReturn: "EMA cross + return move (EMA 20×200)",
+      // #392
+      analog: "Similar-past forecast (20 bars ahead)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -439,6 +441,24 @@ export const en: Dict = {
       if (phase === "retest") return `${head}the lines are broken; waiting for the return move to the horizontal ${neck ?? ""} and a close past that bar's body${target}.`;
       return "";
     },
+    // #392: the owner's video's similar-past forecast (docs §8.135). `status`:
+    // the deep history still read ("loading"), or too few bars for the places
+    analogNote: (status: "ready" | "loading" | "few", searched: number, window: number, horizon: number): string =>
+      "Similar-past forecast (the indicator of an Instagram video, @KFX024 on TradingView, that \"finds past markets like now and forecasts what comes next from how they went\", made into a fixed rule in this app; the video names neither the indicator nor its maths, so this is not the same one; docs §8.135): " +
+      `the 10 past places in the newest ${window.toLocaleString("en-US")} bars whose last 20 closes moved most like the newest 20 (places at least 20 bars apart), each place's next ${horizon} bars laid on the newest close and drawn to the right. ` +
+      "The grey dotted line is the middle of the 10 (the median), the green line the highest of them and the red line the lowest. The video's way: consider buying when the grey line points up, set the stop by the green and red lines and the target by the grey one. " +
+      "This is a search for similar shapes, not AI; a similar shape need not be followed by a similar move. " +
+      (status === "loading"
+        ? "The bars before the chart are still being read; nothing is drawn until they are."
+        : status === "few"
+          ? "Too few bars to find 10 places; nothing is drawn."
+          : searched < window
+            ? `${searched.toLocaleString("en-US")} bars were searched (fewer than the rule's ${window.toLocaleString("en-US")}).`
+            : ""),
+    analogTitle: (mid: string, up: string, lo: string, horizon: number, near: ReadonlyArray<string>, places: number, searched: number): string =>
+      `Similar-past forecast (${horizon} bars ahead): grey (centre) ${mid}, green (top) ${up}, red (bottom) ${lo}. ${places} similar places` +
+      (near.length > 0 ? ` (nearest first: ${near.join(", ")}, …)` : "") +
+      `, ${searched.toLocaleString("en-US")} bars searched`,
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD (as TradingView's built-in computes it, its defaults 12, 26, 9): the blue line is EMA 12 − EMA 26, the orange line its 9-bar EMA (the signal), the bars their difference (the histogram: over 0 and growing dark green, shrinking light green; under 0 and falling dark red, rising light red). The line over 0 leans up; crossing above the signal is the momentum turning up. No chart mark uses it; only the \"MACD peak/valley\" email alert does.",

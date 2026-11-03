@@ -453,7 +453,9 @@ const LiveChart = ({
   const erDeep = indicatorsAllowed && !deepNoMore && !maMode && overlays.emaReturn && commonBefore !== null && commonBefore.length < EMA_RETURN.window - 1;
   // #385: and AMD Po3, whose cycles need 220 bars to warm up and whose table
   // counts the cycles of every bar read (TradingView counts its whole history)
-  const deepOn = indicatorsAllowed && ((!maMode && (overlays.zlTema || overlays.amdPo3)) || maDeep || sweepDeep || erDeep);
+  // #392: and the similar-past forecast, which searches the newest
+  // ANALOG.window bars (the deep history and the chart's)
+  const deepOn = indicatorsAllowed && ((!maMode && (overlays.zlTema || overlays.amdPo3 || overlays.analog)) || maDeep || sweepDeep || erDeep);
   const deepRun = useRef<{ key: string; off: boolean } | null>(null);
   useEffect(() => () => {
     if (deepRun.current) deepRun.current.off = true;

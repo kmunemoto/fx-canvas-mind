@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, Eye, EyeOff, Info, Lock, Maximize2, Moon, Pencil, RotateCcw, Settings2, SlidersHorizontal, Sun, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChartSignalMark, ChartTrendLine, NumericCandle } from "@/lib/types";
 import { useT } from "@/lib/i18n";
-import { LONG_BAR_MS, formatCandleLabel, formatDistance, isGoldPair, medianGapMs, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
+import { LONG_BAR_MS, formatCandleLabel, formatDistance, formatJst, isGoldPair, medianGapMs, parseUtcCandleTime, pipSize, priceDecimals } from "@/lib/candleTime";
 import { MIN_VISIBLE_BARS, WHEEL_STEP, ZOOM_STEP, aheadOf, panView, visibleRange, zoomView, type ChartView } from "@/lib/chartView";
 import {
   MAX_DRAWINGS_PER_PAIR,
@@ -48,6 +48,7 @@ import { blsh as blshOf, tripleConfirm } from "@/lib/blsh";
 import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ultra";
 import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
+import { ANALOG, analogForecast } from "@/lib/analogForecast";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -224,7 +225,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -296,6 +297,8 @@ const STRIP_GAP = 4;
 // #176: the Zero-lag TEMA's own colours (its greencolor and redcolor, and
 // TradingView's color.yellow and color.fuchsia for L and S)
 const ZLT_COLORS = { up: "#2DD204", down: "#D2042D", long: "#FFEB3B", short: "#E040FB" };
+// #392: the similar-past forecast's centre, grey as in the video
+const ANALOG_MID = "#9ca3af";
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -898,6 +901,31 @@ const PriceChart = ({
       total: closed.length,
     };
   }, [ov.emaReturn, maPast, candles, tail]);
+  // #392: the owner's video's similar-past forecast (docs §8.135; src/lib/
+  // analogForecast.ts, the code the measurement computes with): at the newest
+  // closed candle (the anchor; a forming one is not read), over the newest
+  // ANALOG.window closed bars of the deep history (or, where there is none,
+  // the history every chart reads) and the candles. While the deep history
+  // loads, nothing (the lines would move when it came). `off`: the bars
+  // before the first candle in the closes searched; `searched`: how many
+  const analogPast = deepHistory ? (deepHistory.status === "loading" ? null : deepBars ?? zsPast) : zsPast;
+  const af = useMemo(() => {
+    if (!ov.analog || candles.length === 0 || analogPast === null) return null;
+    const closedN = candles.length - tail;
+    if (closedN <= 0) return null;
+    const past = analogPast.slice(Math.max(0, analogPast.length - Math.max(0, ANALOG.window - closedN)));
+    const closes = [...past.map((b) => b.close), ...candles.slice(0, closedN).map((c) => c.close)];
+    const off = past.length;
+    const f = analogForecast(closes);
+    const at = (j: number): string | null => (j >= off ? candles[j - off].datetime : past[j].datetime ?? null);
+    return {
+      f,
+      anchor: closedN - 1,
+      searched: Math.min(ANALOG.window, closes.length),
+      // the three nearest places' newest bars (the title's)
+      near: f ? f.places.slice(0, 3).map((p) => at(p.j)).filter((d): d is string => d !== null) : [],
+    };
+  }, [ov.analog, analogPast, candles, tail]);
   // the trend lines, on closed bars; indices on the chart's candles (a
   // swing before the first is off to the left)
   const autoLines = useMemo(() => {
@@ -1080,6 +1108,11 @@ const PriceChart = ({
     Math.ceil(Math.max(0, ...amdTags.map((l) => [...l.text].length * labelSize * 0.62 + 12))),
     Math.floor((W - PAD_LEFT - PAD_RIGHT) / 4),
   );
+  // #392: the similar-past forecast's H bars past the anchor: while the
+  // newest bar is on screen, the chart keeps the bar slots they reach to its
+  // right (the video draws them there). Shared with AMD Po3's: the larger
+  const afAhead = af && af.f && to >= n ? Math.max(0, af.anchor + ANALOG.horizon - (n - 1)) : 0;
+  const rightAhead = Math.max(amdAhead, afAhead);
 
   // Deliberately NOT part of the price domain below. A confirmed swing well
   // above the window would stretch the scale until every candle was a flat
@@ -1144,6 +1177,14 @@ const PriceChart = ({
         }
       }
     }
+    // #392: the similar-past forecast's band, while the newest bar is on
+    // screen (the video's chart shows the whole of it)
+    if (af && af.f && to >= candles.length) {
+      for (let h = 0; h <= ANALOG.horizon; h++) {
+        min = Math.min(min, af.f.lo[h]);
+        max = Math.max(max, af.f.up[h]);
+      }
+    }
     // #291: the video's way's boxes are not in it either, as the levels
     // above: its 20 pips are half the price of a yen pair priced under a yen
     // (HUF/JPY), and every candle would be a flat line. A box reaching past
@@ -1170,14 +1211,14 @@ const PriceChart = ({
     // the bars' width: the plot, less ULTRA's room (#151); #160: the bars
     // past the newest one, dragged into view, share it
     const barsW = plotW - ulGap - amdGap;
-    const slot = barsW / (to - from + ahead + amdAhead);
+    const slot = barsW / (to - from + ahead + rightAhead);
     // wider candles when zoomed in, up to a point
     const bodyW = Math.max(2, Math.min(interactive && view ? 18 : 9, slot * 0.62));
     const y = (price: number) => PAD_TOP + ((max - price) / (max - min)) * plotH;
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, amdAhead]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1553,6 +1594,14 @@ const PriceChart = ({
             : "ready",
       SWEEPX_MIN_WINDOW,
     ),
+    // #392 (and why nothing may be drawn: the deep history still read, or
+    // too few bars for the places)
+    analog: t.chart.analogNote(
+      !ov.analog || candles.length === 0 ? "ready" : analogPast === null ? "loading" : af && af.f ? "ready" : "few",
+      af ? af.searched : 0,
+      ANALOG.window,
+      ANALOG.horizon,
+    ),
     // #387 (and why no mark may be drawn, as the video's way's above)
     emaReturn: t.chart.emaReturnNote(
       er ? er.marks.some((m) => !m.full && m.at >= 0) : false,
@@ -1579,6 +1628,8 @@ const PriceChart = ({
     ...(amdListed ? [{ key: "amdPo3", group: "signals" as const, name: t.chart.overlayNames.amdPo3, on: ov.amdPo3, toggle: flip("amdPo3") }] : []),
     // #387: the owner's video's EMA 20 / 200 way
     { key: "emaReturn", group: "signals" as const, name: t.chart.overlayNames.emaReturn, on: ov.emaReturn, toggle: flip("emaReturn") },
+    // #392: the owner's video's similar-past forecast
+    { key: "analog", group: "signals" as const, name: t.chart.overlayNames.analog, on: ov.analog, toggle: flip("analog") },
     // #291: the owner's video's way (the moving averages' chart only, below)
     { key: "sweepx", group: "signals" as const, name: t.chart.overlayNames.sweepx, on: ov.sweepx, toggle: flip("sweepx") },
     ...(hasSar && sarStyle !== "dots" ? [{ key: "sarCloud", group: "trend" as const, name: t.chart.overlayNames.sarCloud, on: ov.sarCloud, toggle: flip("sarCloud") }] : []),
@@ -2396,7 +2447,7 @@ const PriceChart = ({
   // label off the canvas
   const timeLabelW = 11 * labelSize * 0.6 + 24;
   // (#385: less the room kept for AMD Po3's price labels, past the newest bar)
-  const timeSlots = Math.min(8, Math.max(3, Math.floor((plotW - amdGap - slot * amdAhead) / timeLabelW)));
+  const timeSlots = Math.min(8, Math.max(3, Math.floor((plotW - amdGap - slot * rightAhead) / timeLabelW)));
   const timeIdx = [...new Set(Array.from({ length: timeSlots }, (_, j) => from + Math.round((j * (count - 1)) / (timeSlots - 1))))];
   // #181: weeks or months: the labels give the year
   const longBars = medianGapMs(candles.slice(-60).map((c) => c.datetime)) >= LONG_BAR_MS;
@@ -2893,6 +2944,12 @@ const PriceChart = ({
             </span>
           )}
           {noteOf.emaReturn}
+        </p>
+      )}
+      {/* #392: the rule, the lines and what was measured */}
+      {ov.analog && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-analog-legend">
+          {noteOf.analog}
         </p>
       )}
       {/* #150 */}
@@ -3706,6 +3763,38 @@ const PriceChart = ({
                 const d = pathOf(values);
                 return d ? <path key={k} d={d} fill="none" stroke={color} strokeWidth={1.1 * fs} opacity="0.9" data-testid={`chart-ichimoku-${k}`} /> : null;
               })}
+            </g>
+          );
+        })()}
+
+        {/* #392: the owner's video's similar-past forecast — from the newest
+            closed candle's close, one bar slot per bar ahead: the grey
+            dotted centre (the median of the places' paths), the green top and
+            the red bottom (their highest and lowest), green filled between
+            the top and the centre, red between the centre and the bottom, as
+            the video draws them; only while the newest bar is on screen */}
+        {af && af.f && to >= n && (() => {
+          const f = af.f;
+          const pts = (vs: number[]) => vs.map((v, h) => `${x(af.anchor + h).toFixed(1)},${y(v).toFixed(1)}`);
+          const line = (vs: number[]) => `M${pts(vs).join(" L")}`;
+          return (
+            <g data-testid="chart-analog" clipPath={`url(#${clipId})`}>
+              <title>
+                {t.chart.analogTitle(
+                  f.mid[ANALOG.horizon].toFixed(decimals),
+                  f.up[ANALOG.horizon].toFixed(decimals),
+                  f.lo[ANALOG.horizon].toFixed(decimals),
+                  ANALOG.horizon,
+                  af.near.map((d) => formatJst(parseUtcCandleTime(d), t.intlLocale, { withTime: true, withYear: true })),
+                  f.places.length,
+                  af.searched,
+                )}
+              </title>
+              <polygon points={[...pts(f.up), ...pts(f.mid).reverse()].join(" ")} fill={COLORS.up} opacity="0.14" data-testid="chart-analog-up-area" />
+              <polygon points={[...pts(f.mid), ...pts(f.lo).reverse()].join(" ")} fill={COLORS.down} opacity="0.14" data-testid="chart-analog-down-area" />
+              <path d={line(f.up)} fill="none" stroke={COLORS.up} strokeWidth={1.1 * fs} strokeDasharray="4 3" opacity="0.9" data-testid="chart-analog-up" />
+              <path d={line(f.lo)} fill="none" stroke={COLORS.down} strokeWidth={1.1 * fs} strokeDasharray="4 3" opacity="0.9" data-testid="chart-analog-down" />
+              <path d={line(f.mid)} fill="none" stroke={ANALOG_MID} strokeWidth={1.3 * fs} strokeDasharray="1.5 2.5" data-testid="chart-analog-mid" />
             </g>
           );
         })()}
@@ -4804,7 +4893,7 @@ const PriceChart = ({
           // (#385: while AMD Po3 keeps room past the newest bar, the newest
           // label stays under its candle when it fits)
           const lastLabel = k === timeIdx.length - 1 &&
-            !((amdGap > 0 || amdAhead > 0) && x(i) + (formatCandleLabel(candles[i].datetime, t.intlLocale, { long: longBars }).length * labelSize * 0.6) / 2 <= W - PAD_RIGHT);
+            !((amdGap > 0 || rightAhead > 0) && x(i) + (formatCandleLabel(candles[i].datetime, t.intlLocale, { long: longBars }).length * labelSize * 0.6) / 2 <= W - PAD_RIGHT);
           const anchor = k === 0 ? "start" : lastLabel ? "end" : "middle";
           const tx = k === 0 ? PAD_LEFT : lastLabel ? W - PAD_RIGHT : x(i);
           return (

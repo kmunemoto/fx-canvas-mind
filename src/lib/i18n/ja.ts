@@ -326,6 +326,8 @@ export const ja = {
       amdPo3: "AMD Po3（WillyAlgoTrader）",
       // #387
       emaReturn: "EMAクロス＋リターンムーブ（EMA20×200）",
+      // #392
+      analog: "似た相場の予測（20本先）",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -482,6 +484,24 @@ export const ja = {
       if (phase === "retest") return `${head}線を抜けました。水平線 ${neck ?? ""} へのリターンムーブと、その足の実体を抜ける足を待っています${target}。`;
       return "";
     },
+    // #392: the owner's video's similar-past forecast (docs §8.135). `status`:
+    // the deep history still read ("loading"), or too few bars for the places
+    analogNote: (status: "ready" | "loading" | "few", searched: number, window: number, horizon: number): string =>
+      "似た相場の予測（Instagram の動画〈@KFX024、TradingView〉の「今と似た過去の相場を探して、その後どう動いたのかを分析して、この先の値動きを予測する」インジケーターを、このアプリで決まりにしたもの。動画は名前も計算のやり方も明かしていないので、同じ物ではありません。docs §8.135）: " +
+      `いちばん新しい確定足までの直近20本の形（終値の動き方）に一番似ている過去の場所を、直近${window.toLocaleString("ja-JP")}本の中から10か所探し（場所どうしは20本以上離します）、それぞれのその後${horizon}本の動きを、いまの終値に当てはめて右に描きます。` +
+      "灰色の点線が10か所の真ん中（中央値）、緑の線が10か所のうち一番上、赤の線が一番下です。動画の使い方は「灰色の線が上向きなら買いを考え、損切りは緑と赤の線を頼りに、利確は灰色の線を参考にする」です。" +
+      "AI ではなく、似た形を探す計算です。過去に似た形のあとに似た動きが続くとは限りません。" +
+      (status === "loading"
+        ? "いまはチャートより前の足を読み込み中で、読み終わるまで描きません。"
+        : status === "few"
+          ? "足が少なく、似た場所を10か所探せないため、描いていません。"
+          : searched < window
+            ? `いま探した足は${searched.toLocaleString("ja-JP")}本です（決まりの${window.toLocaleString("ja-JP")}本より少ない）。`
+            : ""),
+    analogTitle: (mid: string, up: string, lo: string, horizon: number, near: ReadonlyArray<string>, places: number, searched: number): string =>
+      `似た相場の予測（${horizon}本先）: 灰色（中心） ${mid}・緑（上） ${up}・赤（下） ${lo}。似ていた場所 ${places}か所` +
+      (near.length > 0 ? `（似ていた順に ${near.join("、")} など）` : "") +
+      `、探した足 ${searched.toLocaleString("ja-JP")}本`,
     macd: {
       name: (fast: number, slow: number, signal: number) => `MACD ${fast} ${slow} ${signal}`,
       note: "MACD（TradingView の標準インジケーターと同じ計算・初期設定 12・26・9）: 青の線＝EMA 12 − EMA 26、オレンジの線＝その9本 EMA（シグナル）、棒＝その差（ヒストグラム。0より上で増えていると濃い緑、減っていると薄い緑、0より下で減っていると濃い赤、増えていると薄い赤）。線が0より上なら上向き、シグナルを上に抜けると勢いが上向きに変わった目安です。チャートの印には使っていません。メール通知の「MACD の山・谷」だけが、この MACD（12・26・9）を使います。",

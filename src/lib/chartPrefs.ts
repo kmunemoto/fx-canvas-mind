@@ -84,6 +84,11 @@ export interface ChartOverlays {
   // the stop; it reads the email's 600 bars before the chart's candles; off
   // until switched on
   emaReturn: boolean;
+  // #392: the owner's video's similar-past forecast (似た相場の予測): the
+  // newest bars' shape, the past places most like it, and what came after
+  // each laid on the newest close, H bars past it (a grey centre, a green top
+  // and a red bottom); it reads up to 1,500 bars; off until switched on
+  analog: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -112,6 +117,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   sweepx: true,
   amdPo3: false,
   emaReturn: false,
+  analog: false,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
