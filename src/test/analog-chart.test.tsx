@@ -95,6 +95,10 @@ describe("#392 the similar-past forecast on the chart", () => {
     expect(title).toContain("似ていた場所 10か所");
     expect(title).toContain("探した足 400本");
     expect(screen.getByTestId("chart-analog-legend").textContent).toContain("いま探した足は400本です（決まりの1,500本より少ない）。");
+    // what was measured (docs §8.135): the direction no better than always saying "up"
+    const legend = screen.getByTestId("chart-analog-legend").textContent ?? "";
+    expect(legend).toContain("15分足 50.8%・1時間足 51.5%・4時間足 50.7%");
+    expect(legend).toContain("予測の力は見つかっていません。");
   });
 
   it("does not read a forming candle: the forecast starts at the one before it", () => {
