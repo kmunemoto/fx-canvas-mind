@@ -1,0 +1,126 @@
+# 法則探し（docs §8.136、research/lawsearch-spec.md 6 ⑥・19 の2）: the slots of wide spread, made from the study's
+# first half only — GMO's 1-minute bars opened from 2024-01-01 00:00 UTC, before 2025-05-16 21:00 UTC — with
+# §8.103's rule and program unchanged (research/spreadhours.ts with PERIOD=h1; research/spreadhours-check.py
+# --period h1). Spreads only: no signal, no trade and no move after one is computed.
+#
+#   syn   the planted walks on the first half's period: the slots against the list written beforehand, the
+#         planted errors (caught by the list; the two that read other bars stopped), the Python on the same files
+#   real  after syn passed: GMO's real 1-minute bars; the Python on the same files; the file printed only when both
+#         agree (it becomes research/ledger/spread-hours-h1.csv, its sha256 a constant of the study)
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research lawsearch spread hours (first half)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/spreadhours*.ts
+      - research/spreadhours-check.py
+      - .github/workflows/lawsearch-spread.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PERIOD: h1
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q numpy
+      - name: The planted walks on the first half's period
+        env:
+          MODE: synthetic
+          OUT: research/out/spreadhours/h1syn
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/spreadhours.ts
+      - name: The planted errors that read other bars stop (a bar before 2024; a day file outside the list)
+        env:
+          MODE: synthetic
+          OUT: research/out/spreadhours/h1syn
+        run: |
+          for p in prestart keys; do
+            s=0
+            PLANT=$p deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/spreadhours.ts > /tmp/plant-$p.log 2>&1 || s=$?
+            grep "PLANT $p" /tmp/plant-$p.log
+            if [ "$s" != "3" ]; then echo "::error::PLANT $p: exit $s, not stopped by the checks"; exit 1; fi
+            if [ "$p" = "prestart" ]; then want="the bars kept"; else want="the day files opened"; fi
+            n=$(grep -c "PLANT $p check failed: .*: $want" /tmp/plant-$p.log || true)
+            all=$(grep -c "PLANT $p check failed:" /tmp/plant-$p.log || true)
+            if [ "$n" != "5" ] || [ "$all" != "5" ]; then echo "::error::PLANT $p: $all checks failed, $n of them '$want' (want 5 and 5)"; exit 1; fi
+          done
+      - name: The Python on the same files (every value the same; each planted error differs; a day file outside the list stops it)
+        run: |
+          d=research/out/spreadhours/h1syn
+          python3 research/spreadhours-check.py --period h1 --gmo $d/gmo --dump $d/dump \
+            --also $d/plant-mean --also $d/plant-season --also $d/plant-strict --also $d/plant-baseMean --also $d/plant-usdUnit
+          s=0
+          python3 research/spreadhours-check.py --period h1 --gmo $d/gmo --dump $d/dump --plant keys > /tmp/py-keys.log 2>&1 || s=$?
+          tail -n 2 /tmp/py-keys.log
+          if [ "$s" != "3" ]; then echo "::error::the Python with a day file outside the list: exit $s, not stopped"; exit 1; fi
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q numpy
+      # GMO's ended day files never change: the 1-minute files kept by §8.103 and §8.102 (each restore only adds files)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-spread-none
+          restore-keys: gmo-spread-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - name: The first half's 1-minute bars (only the checks are printed)
+        env:
+          MODE: real
+          OUT: research/out/spreadhours/h1
+        run: >
+          deno run --v8-flags=--max-old-space-size=12288
+          --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env
+          research/spreadhours.ts
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-spreadh1-${{ github.run_id }}
+      - name: The Python on the same files (every value the same)
+        run: python3 research/spreadhours-check.py --period h1 --gmo research/.cache --dump research/out/spreadhours/h1/dump
+      - name: The file (both agreed)
+        env:
+          MODE: print
+          OUT: research/out/spreadhours/h1
+        run: |
+          deno run --allow-read=. --allow-env research/spreadhours.ts
+          sha256sum research/out/spreadhours/h1/spread-hours.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spread-hours-h1-${{ github.run_id }}
+          path: research/out/spreadhours/h1/spread-hours.csv

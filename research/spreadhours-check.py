@@ -244,7 +244,14 @@ def main():
     ap.add_argument('--dump', required=True)
     ap.add_argument('--also', action='append', default=[])
     ap.add_argument('--plant', default='')
+    # s1: §8.103 2's period; h1: the lawsearch study's first half only (research/lawsearch-spec.md 6 ⑥),
+    # the bars opened from 2024-01-01 00:00 UTC, before 2025-05-16 21:00 UTC
+    ap.add_argument('--period', choices=['s1', 'h1'], default='s1')
     a = ap.parse_args()
+    global END, KEY_MAX
+    if a.period == 'h1':
+        END = 1747429200000        # 2025-05-16 21:00 UTC
+        KEY_MAX = '20250517'
     keys = keys_of(START, END, a.plant)
     mine = []
     bad = []
