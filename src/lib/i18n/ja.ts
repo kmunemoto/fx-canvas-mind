@@ -328,6 +328,7 @@ export const ja = {
       emaReturn: "EMAクロス＋リターンムーブ（EMA20×200）",
       // #392
       analog: "似た相場の予測（20本先）",
+      srZones: "水平の帯（何度も止まった所）",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -411,6 +412,15 @@ export const ja = {
       "一目均衡表（TradingView の標準インジケーターと同じ計算・初期設定 9・26・52、ずらし26）: 転換線（青、9本の高値と安値の中間）、基準線（濃い赤、26本）、先行スパン1・2（転換線と基準線の平均、52本の中間）を25本先にずらして描いた「雲」（先行1が上なら緑、下なら赤）、遅行スパン（緑、終値を25本前にずらした線）。価格が雲より上なら上昇優勢、下なら下落優勢、中なら様子見の目安で、チャートの左上に「雲の上・中・下」を出します。このチャートは最新の足より右に余白がないため、25本先の雲（未来の部分）は描いていません。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
     ichimokuSide: { above: "雲の上（上昇優勢）", inside: "雲の中", below: "雲の下（下落優勢）" } as Record<string, string>,
     trendBreak: { up: "割れ", down: "抜け" },
+    // #393: the owner's ③
+    srZonesNote: (pivot: number, lookback: number, width: number, minTouches: number, maxZones: number) =>
+      `水平の帯（青）: 値段が何度も止まった所。ダウ理論と同じ山・谷（左右${pivot}本より高い・安い足、${pivot}本あとに分かる）を、直近${lookback}本の確定足から集め、` +
+      `幅 ATR(14)×${width} の中に山か谷が${minTouches}つ以上ある所を帯にします（山と谷を一緒に数えます。下で支えた所が、後で上の壁になることがあるため）。` +
+      `数が多い所から、重ならないように${maxZones}つまで。帯は最初に止まった足から右へ延ばし、「値段の幅（回数）」を書きます。` +
+      "確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
+    srZoneLabel: (lo: string, hi: string, touches: number) => `${lo}〜${hi}（${touches}回）`,
+    srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
+      `水平の帯 ${lo}〜${hi}: 山 ${highs}回・谷 ${lows}回（${dates.join("、")}）`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
     ultraNote:
       "ULTRA（動画の「ULTRA EN」〈TradingView の F-INVEST〉を、動画に映っている設定と印から作ったもの。招待制で、作者の公開スクリプトは0本〈Telegram で配布〉のためコードは読めず、同じサインになるとは限りません）: " +

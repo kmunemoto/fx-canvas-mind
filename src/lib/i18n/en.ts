@@ -286,6 +286,7 @@ export const en: Dict = {
       emaReturn: "EMA cross + return move (EMA 20×200)",
       // #392
       analog: "Similar-past forecast (20 bars ahead)",
+      srZones: "Horizontal zones (where price stopped again and again)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -369,6 +370,15 @@ export const en: Dict = {
       "Ichimoku (as TradingView's built-in computes it, its defaults 9, 26, 52 and displacement 26): the conversion line (blue, the middle of the last 9 highs and lows), the base line (dark red, 26), the cloud of the leading spans (the average of the two lines, and the middle of 52) drawn 25 bars ahead (green while span 1 is on top, red otherwise), and the lagging span (green, the close drawn 25 bars back). The price over the cloud leans up, under it down, inside it neither; the chart's top left says which. This chart has no room to the right of its newest bar, so the cloud's part ahead of it is not drawn. Not measured on past data. Shown only: no signal or email uses it.",
     ichimokuSide: { above: "over the cloud (leaning up)", inside: "in the cloud", below: "under the cloud (leaning down)" } as Record<string, string>,
     trendBreak: { up: "break", down: "break" },
+    // #393: the owner's ③
+    srZonesNote: (pivot: number, lookback: number, width: number, minTouches: number, maxZones: number) =>
+      `Horizontal zones (blue): where the price stopped again and again. Dow theory's swing highs and lows (higher or lower than ${pivot} bars either side, known ${pivot} bars later) of the latest ${lookback} closed bars; ` +
+      `a zone is a band ATR(14) × ${width} wide holding at least ${minTouches} of them (highs and lows counted together: a level that held the lows may hold the highs later). ` +
+      `The busiest first, up to ${maxZones}, none overlapping, each drawn from its first touch to the right with its price range and count. ` +
+      "Closed bars only. Not tested on past data. Shown only; not used for signals or emails.",
+    srZoneLabel: (lo: string, hi: string, touches: number) => `${lo}–${hi} (${touches}×)`,
+    srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
+      `Horizontal zone ${lo}–${hi}: ${highs} highs, ${lows} lows (${dates.join(", ")})`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
     ultraNote:
       "ULTRA (the video's \"ULTRA EN\" by F-INVEST on TradingView, rebuilt from the settings and marks the video shows. It is invite-only and its author has no published script (it is handed out on Telegram), so its code cannot be read and its signals may differ): " +

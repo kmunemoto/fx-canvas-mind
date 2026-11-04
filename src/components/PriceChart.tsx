@@ -49,6 +49,7 @@ import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ult
 import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
 import { ANALOG, analogForecast } from "@/lib/analogForecast";
+import { SR_ZONES, srZones as srZonesOf } from "@/lib/srZones";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -225,7 +226,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -299,6 +300,8 @@ const STRIP_GAP = 4;
 const ZLT_COLORS = { up: "#2DD204", down: "#D2042D", long: "#FFEB3B", short: "#E040FB" };
 // #392: the similar-past forecast's centre, grey as in the video
 const ANALOG_MID = "#9ca3af";
+// #393: the horizontal zones' blue
+const SR_BLUE = "#2563EB";
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -935,6 +938,17 @@ const PriceChart = ({
       l ? { ...l, a: l.a - histOff, b: l.b - histOff, brokenAt: l.brokenAt === null ? null : l.brokenAt - histOff } : null;
     return { up: onChart(r.up), down: onChart(r.down) };
   }, [ov.autoTrend, histAll, histOff, tail]);
+  // #393: the owner's ③ — the bands where the swings stopped again and again,
+  // on closed bars of the same history and the candles; touches on the
+  // chart's candles (a touch before the first is off to the left)
+  const srBands = useMemo(() => {
+    if (!ov.srZones || !histAll) return null;
+    return srZonesOf(histAll, histAll.length - 1 - tail).map((z) => ({
+      ...z,
+      touches: z.touches.map((tc) => ({ ...tc, i: tc.i - histOff })),
+      dates: z.touches.map((tc) => (histAll[tc.i] as { datetime?: string }).datetime ?? null).filter((d): d is string => d !== null),
+    }));
+  }, [ov.srZones, histAll, histOff, tail]);
   // #151: the video's ULTRA over the same history and the candles, from a
   // fixed time as Q-Trend (#148), so the chart opened again draws the same
   // signals and counts them alike; indices on the chart's candles (a signal
@@ -1572,6 +1586,7 @@ const PriceChart = ({
     qtBlsh: t.chart.qtBlshNote,
     // #150
     autoTrend: t.chart.autoTrendNote,
+    srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.lookback, SR_ZONES.width, SR_ZONES.minTouches, SR_ZONES.maxZones),
     maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
@@ -1658,6 +1673,8 @@ const PriceChart = ({
       toggle: flip("maCross"),
     },
     { key: "autoTrend", group: "trend" as const, name: t.chart.overlayNames.autoTrend, on: ov.autoTrend, toggle: flip("autoTrend") },
+    // #393: the owner's ③
+    { key: "srZones", group: "trend" as const, name: t.chart.overlayNames.srZones, on: ov.srZones, toggle: flip("srZones") },
     { key: "ichimoku", group: "trend" as const, name: t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2), on: ov.ichimoku, toggle: flip("ichimoku") },
     { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
@@ -2952,6 +2969,12 @@ const PriceChart = ({
           {noteOf.analog}
         </p>
       )}
+      {/* #393 */}
+      {ov.srZones && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-srzones-legend">
+          {noteOf.srZones}
+        </p>
+      )}
       {/* #150 */}
       {ov.autoTrend && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-autotrend-legend">
@@ -3720,6 +3743,39 @@ const PriceChart = ({
         {/* candles — #116: those on screen (#124: in Zone Shift's trend
             colour while it is on, as the original paints them; #137: UT
             Bot's green or red first while it is on, as its barcolor) */}
+        {/* #393: the owner's ③ under the candles — each band from its first
+            touch to the right edge, its price range and count over its left end */}
+        {srBands && srBands.length > 0 && (
+          <g data-testid="chart-srzones" clipPath={`url(#${clipId})`}>
+            {srBands.map((z, k) => {
+              const first = z.touches[0].i;
+              if (first >= to) return null;
+              const left = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2);
+              const right = PAD_LEFT + plotW;
+              const top = y(z.hi);
+              const h = Math.max(2 * fs, y(z.lo) - top);
+              const fsz = (narrow ? 7 : 8) * fs;
+              const highs = z.touches.filter((tc) => tc.kind === "high").length;
+              return (
+                <g key={`sr-${k}`} data-testid="chart-srzone">
+                  <title>
+                    {t.chart.srZoneTitle(
+                      z.lo.toFixed(decimals),
+                      z.hi.toFixed(decimals),
+                      highs,
+                      z.touches.length - highs,
+                      z.dates.map((d) => formatJst(parseUtcCandleTime(d), t.intlLocale, { withTime: true })),
+                    )}
+                  </title>
+                  <rect x={left} y={top} width={Math.max(0, right - left)} height={h} fill={SR_BLUE} fillOpacity="0.14" stroke={SR_BLUE} strokeOpacity="0.55" strokeWidth={1 * fs} strokeDasharray="4 3" />
+                  <text x={left + 3 * fs} y={top - 3 * fs} fontSize={fsz} fontWeight="700" fill={SR_BLUE} data-testid="chart-srzone-label">
+                    {t.chart.srZoneLabel(z.lo.toFixed(decimals), z.hi.toFixed(decimals), z.touches.length)}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
         {/* #150: Ichimoku under the candles — the cloud between the leading
             spans (green while span 1 is on top, red otherwise), then its lines */}
         {ichi && (() => {
