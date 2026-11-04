@@ -40,7 +40,7 @@ describe("#393 the horizontal zones on the chart", () => {
   it("is on until switched off, and listed on the chart", () => {
     expect(getChartPrefs().overlays.srZones).toBe(true);
     render(<PriceChart candles={candlesOf(FOUR_LOWS)} pair="EUR/USD" />);
-    expect(screen.getByTestId("chart-overlay-name-srZones").textContent).toBe("水平の帯（何度も止まった所）");
+    expect(screen.getByTestId("chart-overlay-name-srZones").textContent).toBe("水平の帯③（何度も止まった所）");
     expect(screen.getAllByTestId("chart-srzone")).toHaveLength(1);
     fireEvent.click(screen.getByTestId("chart-toggle-srZones"));
     expect(getChartPrefs().overlays.srZones).toBe(false);
@@ -75,11 +75,30 @@ describe("#393 the horizontal zones on the chart", () => {
     expect(screen.queryByTestId("chart-srzones")).toBeNull();
   });
 
+  it("dates its touches with the year, and without a time on daily bars", () => {
+    // daily bars over two years: the four lows land in different years
+    const c = candlesOf(FOUR_LOWS).map((b, i) => ({ ...b, datetime: new Date(Date.UTC(2024, 0, 1) + i * 20 * 86_400_000).toISOString().slice(0, 10) }));
+    render(<PriceChart candles={c} pair="EUR/USD" />);
+    const title = screen.getByTestId("chart-srzone").querySelector("title")?.textContent ?? "";
+    expect(title).toMatch(/2024\/\d\d\/\d\d/);
+    expect(title).toMatch(/2025\/\d\d\/\d\d/);
+    expect(title).not.toContain("09:00");
+  });
+
+  it("draws its labels over the candles, and shows on the moving-averages chart too", () => {
+    const { container } = render(<PriceChart candles={candlesOf(FOUR_LOWS)} pair="EUR/USD" maOnly />);
+    expect(screen.getByTestId("chart-overlay-name-srZones")).toBeTruthy();
+    expect(screen.getByTestId("chart-overlay-name-trendGuide")).toBeTruthy();
+    const order = [...container.querySelectorAll("[data-testid]")].map((e) => e.getAttribute("data-testid"));
+    expect(order.indexOf("chart-srzones")).toBeLessThan(order.indexOf("chart-candles"));
+    expect(order.indexOf("chart-srzone-labels")).toBeGreaterThan(order.indexOf("chart-candles"));
+  });
+
   it("speaks English", () => {
     localStorage.setItem(CHART_PREFS_KEY, JSON.stringify({ overlays: { srZones: true } }));
     resetChartPrefsCache();
     render(<PriceChart candles={candlesOf(FOUR_LOWS)} pair="EUR/USD" />, "en");
-    expect(screen.getByTestId("chart-overlay-name-srZones").textContent).toBe("Horizontal zones (where price stopped again and again)");
+    expect(screen.getByTestId("chart-overlay-name-srZones").textContent).toBe("Horizontal zones ③ (where price stopped again and again)");
     expect(screen.getByTestId("chart-srzone-label").textContent).toBe("0.99950–0.99980 (4×)");
   });
 });

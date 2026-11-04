@@ -328,7 +328,7 @@ export const ja = {
       emaReturn: "EMAクロス＋リターンムーブ（EMA20×200）",
       // #392
       analog: "似た相場の予測（20本先）",
-      srZones: "水平の帯（何度も止まった所）",
+      srZones: "水平の帯③（何度も止まった所）",
       trendGuide: "トレンドライン①②と④（自動）",
     },
     // #131: the Pro-style score
@@ -419,7 +419,7 @@ export const ja = {
       `値段の順に並べ、隣との差が ATR(14)×${gap} 以内なら同じ組にし（幅が ATR(14)×${maxWidth} を超える組は、一番大きいすき間で分けます）、山か谷が${minTouches}つ以上ある組を帯にします（山と谷を一緒に数えます。下で支えた所が、後で上の壁になることがあるため）。` +
       `数が多い順に${maxZones}つまで。帯は最初に止まった足から右へ延ばし、「値段の幅（回数）」を書きます。画面を動かすと、そこに出ている足で引き直します。` +
       "確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
-    srZoneLabel: (lo: string, hi: string, touches: number) => `${lo}〜${hi}（${touches}回）`,
+    srZoneLabel: (lo: string, hi: string, touches: number) => `${lo === hi ? lo : `${lo}〜${hi}`}（${touches}回）`,
     // #394: the owner's ① ② ④
     trendGuideNote: (pivot: number, minBars: number) =>
       "①②④（自動）: 画面に出ている確定足から引きます。一番高い高値が一番安い安値より先なら下げ、後なら上げと見ます。" +

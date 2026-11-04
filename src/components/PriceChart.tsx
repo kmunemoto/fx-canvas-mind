@@ -232,7 +232,8 @@ const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci",
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
 // #291: and the owner's video's way, on the moving averages' own chart only
-const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx"]);
+// #393 and #394: ③ and ① ② ④ on every chart, the moving averages' own too
+const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx", "srZones", "trendGuide"]);
 // #291: how many bars to the right of its bar a mark's boxes reach (the video's
 // TradingView position tool was drawn some twenty bars wide)
 const SWEEP_BOX_BARS = 20;
@@ -1051,9 +1052,17 @@ const PriceChart = ({
   const srBands = useMemo(
     () =>
       ov.srZones && n > 0
-        ? srZonesOf(candles, from, Math.min(to - 1, n - 1 - tail)).map((z) => ({ ...z, dates: z.touches.map((tc) => candles[tc.i].datetime) }))
+        ? srZonesOf(candles, from, Math.min(to - 1, n - 1 - tail)).map((z) => ({
+            ...z,
+            highs: z.touches.filter((tc) => tc.kind === "high").length,
+            // the year always (a daily or weekly chart's touches span years), the time only when the bar has one
+            dates: z.touches.map((tc) => {
+              const d = candles[tc.i].datetime;
+              return formatJst(parseUtcCandleTime(d), t.intlLocale, { withTime: d.includes(":"), withYear: true });
+            }),
+          }))
         : null,
-    [ov.srZones, candles, n, from, to, tail],
+    [ov.srZones, candles, n, from, to, tail, t.intlLocale],
   );
   const guide = useMemo(
     () => (ov.trendGuide && n > 0 ? trendGuideOf(candles, from, Math.min(to - 1, n - 1 - tail)) : null),
@@ -3760,7 +3769,7 @@ const PriceChart = ({
             colour while it is on, as the original paints them; #137: UT
             Bot's green or red first while it is on, as its barcolor) */}
         {/* #393: the owner's ③ under the candles — each band from its first
-            touch to the right edge, its price range and count over its left end */}
+            touch to the right edge (its label over the candles, below) */}
         {srBands && srBands.length > 0 && (
           <g data-testid="chart-srzones" clipPath={`url(#${clipId})`}>
             {srBands.map((z, k) => {
@@ -3768,25 +3777,17 @@ const PriceChart = ({
               if (first >= to) return null;
               const left = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2);
               const right = PAD_LEFT + plotW;
-              const top = y(z.hi);
-              const h = Math.max(2 * fs, y(z.lo) - top);
-              const fsz = (narrow ? 7 : 8) * fs;
-              const highs = z.touches.filter((tc) => tc.kind === "high").length;
+              const yHi = y(z.hi);
+              const yLo = y(z.lo);
+              // a band thinner than 2fs grows around its middle, so it stays on its price
+              const h = Math.max(2 * fs, yLo - yHi);
+              const top = (yHi + yLo) / 2 - h / 2;
               return (
                 <g key={`sr-${k}`} data-testid="chart-srzone">
                   <title>
-                    {t.chart.srZoneTitle(
-                      z.lo.toFixed(decimals),
-                      z.hi.toFixed(decimals),
-                      highs,
-                      z.touches.length - highs,
-                      z.dates.map((d) => formatJst(parseUtcCandleTime(d), t.intlLocale, { withTime: true })),
-                    )}
+                    {t.chart.srZoneTitle(z.lo.toFixed(decimals), z.hi.toFixed(decimals), z.highs, z.touches.length - z.highs, z.dates)}
                   </title>
                   <rect x={left} y={top} width={Math.max(0, right - left)} height={h} fill={SR_BLUE} fillOpacity="0.14" stroke={SR_BLUE} strokeOpacity="0.55" strokeWidth={1 * fs} strokeDasharray="4 3" />
-                  <text x={left + 3 * fs} y={top - 3 * fs} fontSize={fsz} fontWeight="700" fill={SR_BLUE} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid="chart-srzone-label">
-                    {t.chart.srZoneLabel(z.lo.toFixed(decimals), z.hi.toFixed(decimals), z.touches.length)}
-                  </text>
                 </g>
               );
             })}
@@ -4400,6 +4401,34 @@ const PriceChart = ({
           );
         })()}
 
+        {/* #393: the bands' labels over the candles — over each band's left end,
+            "the range (count)"; a label that would overlap one already placed
+            moves right past it */}
+        {srBands && srBands.length > 0 && (() => {
+          const fsz = (narrow ? 7 : 8) * fs;
+          const placed: Array<{ x0: number; x1: number; y: number }> = [];
+          return (
+            <g data-testid="chart-srzone-labels" clipPath={`url(#${clipId})`}>
+              {srBands.map((z, k) => {
+                const first = z.touches[0].i;
+                if (first >= to) return null;
+                const lo = z.lo.toFixed(decimals);
+                const hi = z.hi.toFixed(decimals);
+                const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
+                const w = text.length * fsz * 0.62;
+                let lx = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs;
+                const ly = Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs;
+                for (const p of placed) if (Math.abs(p.y - ly) < fsz + 2 * fs && lx < p.x1 + 6 * fs && lx + w > p.x0) lx = p.x1 + 6 * fs;
+                placed.push({ x0: lx, x1: lx + w, y: ly });
+                return (
+                  <text key={`srl-${k}`} x={lx} y={ly} fontSize={fsz} fontWeight="700" fill={SR_BLUE} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid="chart-srzone-label">
+                    {text}
+                  </text>
+                );
+              })}
+            </g>
+          );
+        })()}
         {/* #394: the owner's ① ② ④ — ① solid and ② dashed from their first
             point to the plot's right edge, a ring on each point they run
             through and on the close that broke them ("①を上抜け"), and ④ at the

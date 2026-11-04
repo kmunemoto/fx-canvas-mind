@@ -278,6 +278,9 @@ const AnalysisResultView = ({
             sarBelow={activeChart?.sar_below}
             heading={activeChart && !entryChart ? `${t.chart.title} · ${tfLabel(activeChart.tf)}` : undefined}
             seriesKey={activeChart?.tf ?? "entry"}
+            // the analysis sends the forming bar too ("so the current price is on
+            // screen"), so it is left out of every indicator's judging (#149)
+            formingLast
           />
         </div>
       )}
