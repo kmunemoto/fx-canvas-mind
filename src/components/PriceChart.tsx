@@ -4407,73 +4407,140 @@ const PriceChart = ({
             over the price tags' column), a ring on each point they run through and
             on the close that broke them ("①を上抜け"), and ④ at the end of the move
             with the line the other way once a higher low (lower high) holds it.
-            Every label sits inside the bars' part of the plot (not over the
-            price tags' column; a number inward from its line's first point) and
-            none overlaps another label or a ring: the guide's first, then the
-            bands' ("③ the range (count)"); one that would is moved a row away
-            from its point, else along its row to the nearest free place, and is
-            drawn from the side it was moved away from, so a wider glyph than
-            estimated runs away from what it avoids */}
+            Every label sits inside the bars' part of the plot (a number inward
+            from its line's first point) and covers no other label, box or price
+            tag on the chart and no ring: each goes to the free place nearest its
+            own (a row or a few away from its point, the other side of it, or a
+            little along the row), ④'s price and its note as one block. With no
+            free place near its point, it may cover the other overlays' labels and
+            boxes (never the guide's own, a ring or a price tag); with none even
+            so, it is left out, its mark still drawn */}
         {(guide || (srBands && srBands.length > 0)) && (() => {
           const fsz = (narrow ? 7.5 : 8.5) * fs;
           const halo = { stroke: "hsl(var(--background))", strokeWidth: 2.5 * fs, strokeLinejoin: "round" as const, paintOrder: "stroke" as const };
-          // the room taken: labels (from their top to just under the baseline) and rings
-          const taken: Array<{ x0: number; x1: number; y0: number; y1: number }> = [];
-          const gap = 6 * fs;
-          const hits = (x0: number, x1: number, y0: number, y1: number) =>
-            taken.find((p) => x0 < p.x1 + gap && x1 + gap > p.x0 && y0 < p.y1 + fs && y1 + fs > p.y0);
+          // soft: another overlay's label or box, covered only when nothing nearer is free
+          type Box = { x0: number; x1: number; y0: number; y1: number; soft?: boolean };
+          // the room taken: the other overlays' labels and boxes, the price tags,
+          // then the guide's rings and each label as it is placed (a text from its
+          // top to just under its last baseline)
+          const taken: Box[] = [];
+          const gap = 5 * fs;
           const xMin = PAD_LEFT + 2 * fs;
           const xMax = PAD_LEFT + barsW - 2 * fs;
           const yMin = PAD_TOP + 2 * fs;
           const yMax = H - PAD_BOTTOM - 2 * fs;
-          // a circled number about 1.4em (Inter's), a full-width glyph (CJK, full-width forms) about 1em, the rest a little over 0.6em
+          // a circled number about 1.5em (Inter's, at a small size), a full-width glyph
+          // (CJK, full-width forms) 1em, a space 0.32em, the rest 0.66em: never less
+          // than drawn (measured in Chromium with Inter, IPA Gothic and DejaVu Sans)
           const textW = (text: string, size: number) =>
             [...text].reduce((s, ch) => {
               const c = ch.codePointAt(0) ?? 0;
-              return s + (c >= 0x2460 && c <= 0x24ff ? 1.4 : (c >= 0x3000 && c <= 0x9fff) || (c >= 0xff00 && c <= 0xffef) ? 1 : 0.64);
+              return s + (c >= 0x2460 && c <= 0x24ff ? 1.5 : (c >= 0x3000 && c <= 0x9fff) || (c >= 0xff00 && c <= 0xffef) ? 1 : c === 0x20 ? 0.32 : 0.66);
             }, 0) * size;
-          // put a label of the given size with its start (or end) at lx and its
-          // baseline at ly; `away` the way (+1 down, −1 up) from the point it marks
-          const place = (text: string, lx: number, ly: number, anchor: "start" | "end", away: 1 | -1, size = fsz) => {
-            const w = textW(text, size);
-            const box = (x0: number, yb: number) => ({ x0, x1: x0 + w, y0: yb - size * 0.8, y1: yb + size * 0.25 });
-            const fits = (x0: number, yb: number) => x0 >= xMin && x0 + w <= xMax && yb - size * 0.8 >= yMin && yb + size * 0.25 <= yMax;
-            const want = anchor === "end" ? lx - w : lx;
-            const clampX = (x0: number) => Math.max(xMin, Math.min(xMax - w, x0));
-            const clampY = (yb: number) => Math.max(yMin + size * 0.8, Math.min(yMax - size * 0.25, yb));
-            const row = size + 2 * fs;
-            const free = (x0: number, yb: number) => {
-              const b = box(x0, yb);
-              return fits(x0, yb) && !hits(b.x0, b.x1, b.y0, b.y1);
-            };
-            // along a row: to the right past whatever it meets, or to the left
-            const slide = (yb: number, dir: 1 | -1): number | null => {
-              let x0 = clampX(want);
-              for (let n = 0; n < taken.length + 1; n++) {
-                const b = box(x0, yb);
-                const p = hits(b.x0, b.x1, b.y0, b.y1);
-                if (!p) return fits(x0, yb) ? x0 : null;
-                x0 = dir > 0 ? p.x1 + gap + 0.01 : p.x0 - gap - w - 0.01;
-                if (!fits(x0, yb)) return null;
+          // the other overlays drawn on the plot (their own layouts, as they are drawn)
+          for (const l of qtLabels) {
+            const sp = qtPlaced.get(l.key);
+            if (!sp) continue;
+            taken.push({ x0: l.x - l.w / 2, x1: l.x + l.w / 2, y0: sp.top - 3, y1: sp.top + l.h + 3, soft: true });
+            // and its pointer to the candle
+            const [a, b] = sp.under ? [l.lowY + 2, sp.top] : [sp.top + l.h, l.highY - 2];
+            if (b > a) taken.push({ x0: l.x - 3, x1: l.x + 3, y0: a, y1: b, soft: true });
+          }
+          for (const box of [ulBox, qtBox])
+            for (const g of box?.tags ?? []) taken.push({ x0: box!.x1 - ulTagW(g.label), x1: box!.x1, y0: g.cy - tagH / 2, y1: g.cy + tagH / 2 });
+          if (ul) {
+            const hf = (narrow ? 6.5 : 7.5) * fs;
+            for (const tr of ul.trades) {
+              tr.tpAt.forEach((at, k) => {
+                if (at === null || !onScreen(at)) return;
+                const w = `★TP${k + 1}`.length * hf * 0.62 + 5;
+                const hh = hf + 4;
+                const cy = Math.min(Math.max(y(tr.tps[k]), plotTop + hh / 2), plotBottom - hh / 2);
+                taken.push({ x0: x(at) - w / 2, x1: x(at) + w / 2, y0: cy - hh / 2, y1: cy + hh / 2, soft: true });
+              });
+              if (tr.result === "SL" && tr.slAt !== null && onScreen(tr.slAt)) {
+                const r = 3 * fs;
+                const cy = Math.min(Math.max(y(tr.sl), plotTop + r), plotBottom - r);
+                taken.push({ x0: x(tr.slAt) - r, x1: x(tr.slAt) + r, y0: cy - r, y1: cy + r, soft: true });
               }
-              return null;
-            };
-            let at: { x0: number; yb: number; anchor: "start" | "end" } | null = null;
-            const x00 = clampX(want);
-            const a0: "start" | "end" = x00 > want + 0.01 ? "start" : x00 < want - 0.01 ? "end" : anchor;
-            for (const yb of [ly, ly + away * row].map(clampY)) if (!at && free(x00, yb)) at = { x0: x00, yb, anchor: a0 };
-            for (const yb of [ly, ly + away * row, ly + 2 * away * row].map(clampY)) {
-              if (at) break;
-              const r = slide(yb, 1);
-              const l = slide(yb, -1);
-              // the nearer of the two
-              if (r !== null && (l === null || r - want <= want - l)) at = { x0: r, yb, anchor: "start" };
-              else if (l !== null) at = { x0: l, yb, anchor: "end" };
             }
-            // no free place: where it wanted to be, inside the plot
-            if (!at) at = { x0: x00, yb: clampY(ly), anchor: a0 };
-            taken.push(box(at.x0, at.yb));
-            return { x: at.anchor === "end" ? at.x0 + w : at.x0, y: at.yb, anchor: at.anchor };
+          }
+          shown.forEach((f, n) => {
+            const o = flagLayout[n];
+            taken.push({ x0: o.left, x1: o.left + o.w, y0: o.top, y1: o.top + labelH, soft: true });
+            const b = boxAt.get(n);
+            if (b) taken.push({ x0: b.left, x1: b.left + boxW, y0: b.top, y1: b.top + boxH, soft: true });
+          });
+          if (autoLines)
+            for (const k of ["up", "down"] as const) {
+              const l = autoLines[k];
+              if (!l || l.brokenAt === null || !onScreen(l.brokenAt)) continue;
+              const tf = (narrow ? 7 : 8) * fs;
+              const w = textW(t.chart.trendBreak[k], tf);
+              const yb = y(lineAt(l, l.brokenAt)) + (k === "up" ? tf + 4 : -4);
+              taken.push({ x0: x(l.brokenAt) - w / 2, x1: x(l.brokenAt) + w / 2, y0: yb - tf * 0.8, y1: yb + tf * 0.25, soft: true });
+            }
+          if (zs)
+            for (const r of zs.retests) {
+              const i = r.i - zs.off;
+              if (!onScreen(i)) continue;
+              const sz = (narrow ? 3.5 : 4) * fs;
+              const cy = r.up ? y(candles[i].low) + sz + 3 : y(candles[i].high) - sz - 3;
+              taken.push({ x0: x(i) - sz, x1: x(i) + sz, y0: cy - sz, y1: cy + sz, soft: true });
+            }
+          if (amd)
+            for (const lb of amd.labels) {
+              const px = x(lb.x - amd.off);
+              const py = y(lb.y);
+              const w = [...lb.text].length * labelSize * 0.62 + 8;
+              const h = labelSize + 6;
+              const rx = lb.style === "label_left" ? px + 4 : px - w / 2;
+              const ry = lb.style === "label_down" ? py - 4 - h : lb.style === "label_up" ? py + 4 : py - h / 2;
+              taken.push({ x0: rx, x1: rx + w, y0: ry, y1: ry + h, soft: true });
+            }
+          // place a label of one line or more (each a row under the one before),
+          // its first baseline wanted at ly (at flip on the other side of its point)
+          // and its start (or end) at lx; `away` the way (+1 down, −1 up) from the
+          // point. Tried: its own row and up to three rows farther, then the other
+          // side and up to two rows farther, each at its own x or just past what is
+          // in the way, along the row by up to `reach`; the nearest free place is
+          // taken (a row costs as much as about 16 px along one); failing that, the
+          // nearest place clear of all but the other overlays' labels and boxes.
+          // Null when none is
+          const place = (texts: string[], lx: number, ly: number, flip: number, anchor: "start" | "end", away: 1 | -1, size = fsz) => {
+            const w = Math.max(...texts.map((s) => textW(s, size)));
+            if (w > xMax - xMin) return null;
+            const row = size + 2 * fs;
+            const down = (texts.length - 1) * row;
+            const boxOf = (x0: number, yb: number): Box => ({ x0, x1: x0 + w, y0: yb - size * 0.8, y1: yb + down + size * 0.25 });
+            const want = anchor === "end" ? lx - w : lx;
+            const here = Math.max(xMin, Math.min(xMax - w, want));
+            const reach = Math.max(30 * fs, Math.min(w, 60 * fs));
+            const rows: Array<[number, number]> = [];
+            for (let k = 0; k <= 3; k++) rows.push([ly + away * k * row, k * row * 1.5]);
+            for (let k = 0; k <= 2; k++) rows.push([flip - away * k * row, (k + 1.5) * row * 1.5]);
+            let best: { x0: number; yb: number; cost: number } | null = null;
+            for (const hardOnly of [false, true]) {
+              for (const [yb, rowCost] of rows) {
+                if (yb - size * 0.8 < yMin || yb + down + size * 0.25 > yMax) continue;
+                // what is in this row (the rest cannot be in the way anywhere along it)
+                const band = boxOf(here, yb);
+                const near = taken.filter((p) => (!hardOnly || !p.soft) && p.y0 < band.y1 + fs && p.y1 + fs > band.y0);
+                const xs = [here];
+                for (const p of near) xs.push(p.x1 + gap + 0.01, p.x0 - gap - w - 0.01);
+                for (const x0 of xs) {
+                  if (x0 < xMin || x0 + w > xMax || (x0 !== here && Math.abs(x0 - here) > reach)) continue;
+                  const cost = rowCost + Math.abs(x0 - here);
+                  if (best && cost >= best.cost) continue;
+                  if (!near.some((p) => x0 < p.x1 + gap && x0 + w + gap > p.x0)) best = { x0, yb, cost };
+                }
+              }
+              if (best) break;
+            }
+            if (!best) return null;
+            taken.push(boxOf(best.x0, best.yb));
+            // drawn from the side it was asked for: the estimate is never narrower than the glyphs drawn
+            return { x: anchor === "end" ? best.x0 + w : best.x0, y: best.yb, anchor, row };
           };
           const edge = from + (barsW - slot / 2) / slot;
           const g = guide;
@@ -4497,40 +4564,53 @@ const PriceChart = ({
             if (ln.l.brokenAt !== null) ringAt(ln.l.brokenAt, guideAt(ln.l, ln.l.brokenAt), 6 * fs);
           }
           if (g) ringAt(g.extreme.i, g.extreme.price, 4 * fs);
-          const numAt = lines.map((ln) => place(ln.num, x(ln.l.a) + 6 * fs, y(ln.l.pa) + (ln.fromHigh ? fsz + 6 * fs : -6 * fs), "start", ln.fromHigh ? 1 : -1));
+          // a line's number by its first point, inward (under a high, over a low)
+          const numAt = lines.map((ln) => {
+            const py = y(ln.l.pa);
+            const [under, over] = [py + fsz + 6 * fs, py - 6 * fs];
+            return ln.fromHigh
+              ? place([ln.num], x(ln.l.a) + 6 * fs, under, over, "start", 1)
+              : place([ln.num], x(ln.l.a) + 6 * fs, over, under, "start", -1);
+          });
           // a line from a high breaks upward: its text under the ring; from a low, over it
-          const brAt = lines.map((ln) => {
+          const brText = lines.map((ln) => t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter));
+          const brAt = lines.map((ln, k) => {
             if (ln.l.brokenAt === null) return null;
             const by = y(guideAt(ln.l, ln.l.brokenAt));
-            return place(t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter), x(ln.l.brokenAt) - 8 * fs, by + (ln.fromHigh ? fsz + 10 * fs : -10 * fs), "end", ln.fromHigh ? 1 : -1);
+            const [under, over] = [by + fsz + 10 * fs, by - 10 * fs];
+            return ln.fromHigh
+              ? place([brText[k]], x(ln.l.brokenAt) - 8 * fs, under, over, "end", 1)
+              : place([brText[k]], x(ln.l.brokenAt) - 8 * fs, over, under, "end", -1);
           });
-          // ④'s price, and while the line from ④ waits a note on the line under it
-          // (over the low of a down move, under the top of an up move: the line
-          // nearer the ring is placed first, the other a row away from it)
+          // ④'s price, and under it while the line from ④ waits a note: one block,
+          // over the low of a down move (under the top of an up move), on the
+          // ring's side; without room for both, the price alone
           const exText = g ? t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals)) : "";
           const waitText = g && g.counter === null ? t.chart.trendGuideWaiting(down) : null;
           const exRight = g ? x(g.extreme.i) > PAD_LEFT + barsW / 2 : false;
-          let exAt: ReturnType<typeof place> | null = null;
-          let waitAt: ReturnType<typeof place> | null = null;
-          if (g) {
+          const exBlock = (() => {
+            if (!g) return null;
             const lx = x(g.extreme.i) + (exRight ? -8 : 8) * fs;
-            const ly = y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs);
-            const row = fsz + 2 * fs;
-            if (waitText && down) {
-              waitAt = place(waitText, lx, ly, exRight ? "end" : "start", -1);
-              exAt = place(exText, waitAt.x, waitAt.y - row, waitAt.anchor, -1);
-            } else {
-              exAt = place(exText, lx, ly, exRight ? "end" : "start", down ? -1 : 1);
-              if (waitText) waitAt = place(waitText, exAt.x, exAt.y + row, exAt.anchor, 1);
+            const py = y(g.extreme.price);
+            const anchor = exRight ? "end" : "start";
+            for (const texts of waitText ? [[exText, waitText], [exText]] : [[exText]]) {
+              const more = (texts.length - 1) * (fsz + 2 * fs);
+              const [over, under] = [py - 8 * fs - more, py + fsz + 8 * fs];
+              const at = down ? place(texts, lx, over, under, anchor, -1) : place(texts, lx, under, over, anchor, 1);
+              if (at) return { ...at, texts };
             }
-          }
+            return null;
+          })();
           const bandAt = (srBands ?? []).map((z) => {
             const first = z.touches[0].i;
             if (first >= to) return null;
             const lo = z.lo.toFixed(decimals);
             const hi = z.hi.toFixed(decimals);
             const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
-            return { text, ...place(text, Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, "start", -1, fsz * 0.94) };
+            const size = fsz * 0.94;
+            const [over, under] = [Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, Math.max(y(z.lo), y(z.hi) + 2 * fs) + size + 3 * fs];
+            const at = place([text], Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, over, under, "start", -1, size);
+            return at ? { text, ...at } : null;
           });
           return (
             <>
@@ -4556,29 +4636,35 @@ const PriceChart = ({
                       />
                       {ring(ln.l.a, ln.l.pa, ln.color, "a")}
                       {ring(ln.l.b, ln.l.pb, ln.color, "b")}
-                      <text x={numAt[k].x} y={numAt[k].y} textAnchor={numAt[k].anchor} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
-                        {ln.num}
-                      </text>
-                      {ln.l.brokenAt !== null && brAt[k] && (
+                      {numAt[k] && (
+                        <text x={numAt[k]!.x} y={numAt[k]!.y} textAnchor={numAt[k]!.anchor} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
+                          {ln.num}
+                        </text>
+                      )}
+                      {ln.l.brokenAt !== null && (
                         <g data-testid={`chart-trendguide-${ln.id}-break`}>
+                          <title>{brText[k]}</title>
                           <circle cx={x(ln.l.brokenAt)} cy={y(guideAt(ln.l, ln.l.brokenAt))} r={6 * fs} fill="none" stroke={ink} strokeWidth={1.6 * fs} />
-                          <text x={brAt[k]!.x} y={brAt[k]!.y} textAnchor={brAt[k]!.anchor} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
-                            {t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter)}
-                          </text>
+                          {brAt[k] && (
+                            <text x={brAt[k]!.x} y={brAt[k]!.y} textAnchor={brAt[k]!.anchor} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
+                              {brText[k]}
+                            </text>
+                          )}
                         </g>
                       )}
                     </g>
                   ))}
                   <g data-testid="chart-trendguide-extreme">
+                    <title>{waitText ? `${exText}${waitText}` : exText}</title>
                     {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
-                    <text x={exAt!.x} y={exAt!.y} textAnchor={exAt!.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}>
-                      {exText}
-                    </text>
-                    {waitText && waitAt && (
-                      <text x={waitAt.x} y={waitAt.y} textAnchor={waitAt.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo} data-testid="chart-trendguide-waiting">
-                        {waitText}
+                    {exBlock?.texts.map((s, k) => (
+                      <text
+                        key={k} x={exBlock.x} y={exBlock.y + k * exBlock.row} textAnchor={exBlock.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}
+                        data-testid={k === 1 ? "chart-trendguide-waiting" : undefined}
+                      >
+                        {s}
                       </text>
-                    )}
+                    ))}
                   </g>
                 </g>
               )}

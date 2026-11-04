@@ -7,19 +7,26 @@
 //
 // Read mechanically from the closed bars on screen (the window the owner looks
 // at, as a person draws on it):
-//   * the move: down when the window's highest high comes before its lowest low,
-//     up otherwise (everything below is mirrored for an up move);
+//   * the move: up when the window's highest high comes after its lowest low,
+//     down otherwise (one bar holding both is read as down; everything below is
+//     mirrored for an up move);
 //   * ① from the highest high (the later of equal ones), the line with the
 //     shallowest fall that every swing high from there to the lowest low stays
 //     under — it touches the swing that sticks up most (a swing high: no higher
-//     high `pivot` bars either side, as the trend lines read them; a bar that is
-//     not a confirmed swing is not held under it and can stand above the line,
-//     most often within `pivot` bars of the low or of the newest bar);
+//     high `pivot` bars either side, known `pivot` bars later, as the trend lines
+//     read them). Only those swings are held under it: any other bar can stand
+//     above the line (through a steady fall, where each high has a higher one
+//     within `pivot` bars before it and so is no swing, and next to the top, the
+//     touch and the low). With no such swing between the top and the low (a
+//     straight fall), no ① and no ②;
 //   * ② the same from the highest swing high after ①'s touch (the last leg),
-//     when it falls more steeply than ①;
-//   * a break: the first close above the line from the lowest low's bar on (the
-//     bar that makes the low may close above it; a close above it before the low
-//     was not a break: the price went on to the low);
+//     when it falls more steeply than ①; none when that swing is within `pivot`
+//     bars of the low (no room for a touch);
+//   * a break: the first bar, counted from the lowest low's bar on, whose close
+//     is above the line (the bar that makes the low may close above it; a close
+//     above it before the low was not a break: the price went on to the low).
+//     A later bar making a lower low moves the low, and the break is looked for
+//     again from there (a mark on the low's own bar often goes so);
 //   * ④ the lowest low (the end of the move, the later of equal ones), and the
 //     rising line from it through the first confirmed higher swing low after it
 //     (「上昇の線は、次の押し安値ができてから引く」), with its break: the first
@@ -101,10 +108,11 @@ const readDown = (hi: number[], lo: number[], cl: number[], from: number, last: 
   const main = k0 < kL ? lineOf(k0) : null;
   let steep: GuideLine | null = null;
   if (main) {
-    // the highest swing high of the last leg: after ①'s touch, with room for a touch before the low
+    // the highest swing high of the last leg (after ①'s touch, up to the low); none
+    // when it is within `pivot` bars of the low (no room for a touch)
     let k1 = -1;
-    for (let k = main.b + 1; k <= kL - pivot; k++) if (isSwing(hi, k, pivot, last) && (k1 < 0 || hi[k] >= hi[k1])) k1 = k;
-    if (k1 >= 0) {
+    for (let k = main.b + 1; k <= kL; k++) if (isSwing(hi, k, pivot, last) && (k1 < 0 || hi[k] >= hi[k1])) k1 = k;
+    if (k1 >= 0 && k1 <= kL - pivot) {
       const l = lineOf(k1);
       if (l && (l.pb - l.pa) / (l.b - l.a) < (main.pb - main.pa) / (main.b - main.a)) steep = l;
     }

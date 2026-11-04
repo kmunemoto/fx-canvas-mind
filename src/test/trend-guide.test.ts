@@ -80,7 +80,7 @@ describe("#394 the owner's ① ② ④ drawn by themselves", () => {
     for (const k of [5, 25, 35, 45, 55]) expect(b[k].high).toBeLessThanOrEqual(guideAt(g.main!, k) + 1e-12);
   });
 
-  it("looks for the break only after the lowest low (a close above the line before it is not a break)", () => {
+  it("does not count a close above the line before the lowest low's bar", () => {
     // bar 37 closes just above ① (its high stays under bar 35's), then the price falls on to the low at bar 60
     const b = zig(DOWN);
     const g0 = trendGuide(b, 0, b.length - 1)!;
@@ -105,6 +105,34 @@ describe("#394 the owner's ① ② ④ drawn by themselves", () => {
     const g1 = trendGuide(b, 0, 60)!;
     expect(g1.extreme.i).toBe(60);
     expect(g1.main!.brokenAt).toBe(60);
+  });
+
+  it("draws no ② when the last leg's highest swing high is within `pivot` bars of the low (no room for a touch)", () => {
+    // after ①'s touch (bar 35): swing highs at 45 (0.9994) and 52 (0.9965), the
+    // line through them falling more steeply than ①; then a spike at bar 58
+    // (1.0005, under ①), two bars before the low at 60
+    const pts = [1.0, 1.02, 1.01, 1.016, 1.006, 1.012, 1.002, 1.009, 0.993, 0.999, 0.99, 0.994, 0.985, 1.008];
+    const without = zig(pts);
+    without[52] = { ...without[52], high: 0.9965 };
+    const g0 = trendGuide(without, 0, without.length - 1)!;
+    expect([g0.main!.a, g0.main!.b]).toEqual([5, 35]);
+    expect([g0.steep!.a, g0.steep!.b]).toEqual([45, 52]);
+    const b = without.map((x) => ({ ...x }));
+    b[58] = { ...b[58], high: 1.0005 };
+    const g = trendGuide(b, 0, b.length - 1)!;
+    expect([g.main!.a, g.main!.b]).toEqual([5, 35]);
+    expect(b[58].high).toBeLessThan(guideAt(g.main!, 58));
+    expect(g.extreme.i).toBe(60);
+    // the line from 45 through 52 would have the spike above it
+    expect(b[58].high).toBeGreaterThan(guideAt(g0.steep!, 58));
+    expect(g.steep).toBeNull();
+  });
+
+  it("reads a window whose highest high and lowest low are on one bar as a down move", () => {
+    const b = zig(DOWN).slice(0, 41);
+    b[40] = { open: 1.0, high: 1.03, low: 0.98, close: 1.0 };
+    expect(trendGuide(b, 0, 40)!.dir).toBe("down");
+    expect(trendGuide(b, 0, 40)!.extreme.i).toBe(40);
   });
 
   it("keeps ④'s line through the first higher low, so a later higher low does not move it or its break", () => {

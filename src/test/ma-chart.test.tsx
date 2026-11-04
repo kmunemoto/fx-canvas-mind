@@ -681,7 +681,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
   });
 
   it("says the same in English", async () => {
-    rtlRender(
+    const locked = rtlRender(
       <LocaleProvider initial="en">
         {chart("ma", { indicatorsAllowed: false })}
       </LocaleProvider>,
@@ -689,5 +689,36 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     expect(within(screen.getByTestId("ma-chart")).getByRole("heading").textContent).toBe("Moving averages chart");
     await waitFor(() => expect(screen.getByTestId("ma-chart-note")).toBeTruthy());
     expect(screen.getByTestId("ma-chart-note").textContent).toContain("Light and up");
+    // #393・#394: ③ and ① ② ④ are locked too, and the notes say so
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("The moving averages, the marks, ③ and ① ② ④ are drawn with a plan that has the indicators (Light and up).");
+    expect(screen.getByTestId("ma-chart-note").textContent).not.toContain("every chart");
+    locked.unmount();
+    rtlRender(
+      <LocaleProvider initial="en">
+        {chart("ma")}
+      </LocaleProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("ma-chart-note")).toBeTruthy());
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("the switches of the moving averages, the horizontal zones ③ and the trend lines ① ② ④, are the live chart's above");
+  });
+
+  it("the ③ and ① ② ④ switches are the live chart's: switched off on this chart, they are off on the live chart too", async () => {
+    const full = render(chart("full"));
+    await waitFor(() => expect(screen.getByTestId("chart-trendguide")).toBeTruthy());
+    expect(screen.getByTestId("chart-srzones")).toBeTruthy();
+    full.unmount();
+    const ma = render(chart("ma"));
+    await waitFor(() => expect(screen.getByTestId("chart-trendguide")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-toggle-srZones"));
+    fireEvent.click(screen.getByTestId("chart-toggle-trendGuide"));
+    expect(screen.queryByTestId("chart-srzones")).toBeNull();
+    expect(screen.queryByTestId("chart-trendguide")).toBeNull();
+    ma.unmount();
+    render(chart("full"));
+    await waitFor(() => expect(screen.getByTestId("chart-candles")).toBeTruthy());
+    expect(getChartPrefs().overlays.srZones).toBe(false);
+    expect(getChartPrefs().overlays.trendGuide).toBe(false);
+    expect(screen.queryByTestId("chart-srzones")).toBeNull();
+    expect(screen.queryByTestId("chart-trendguide")).toBeNull();
   });
 });

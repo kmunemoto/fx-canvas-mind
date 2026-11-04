@@ -96,7 +96,8 @@ describe("#393 the bands where the price stopped again and again", () => {
     expect(srZones(bars, 20, bars.length - 1)).toEqual([]);
   });
 
-  it("is empty when no swing is known with so few bars, or without a bar to measure R", () => {
+  // (the guard on R decides nothing here: a window with a swing always has R > 0)
+  it("is empty when no swing is known (too few bars, or an empty window)", () => {
     // 4 bars: a swing needs 4 bars either side
     const few = zigzag([1.0, 1.01], 3);
     expect(meanTrueRange(few, 0, 3)).not.toBeNull();
