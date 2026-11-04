@@ -26,7 +26,6 @@ import csv
 import datetime as _dt
 import hashlib
 import importlib.util
-import io
 import json
 import math
 import os
@@ -60,10 +59,6 @@ class Stop(Exception):
 
 class Refused(Exception):
     """A refused run (exit 2): no manifest.json, a folder under research/.cache, or a plant given to --run."""
-
-
-class StopDecision(Exception):
-    """A stop of spec 8.5 (lawsearch-dump.md 9.3): exit 6."""
 
 
 class NotBuilt(Exception):
@@ -2975,10 +2970,6 @@ def _h_a25(ex, plant):
     return out
 
 
-for _eid in ("A.2.6", "A.2.8", "A.2.9", "A.2.10", "A.2.11", "A.2.29"):
-    pass
-
-
 @hand("A.2.6", TOL_STATS)
 def _h_a26(ex, plant):
     inp = ex["input"]
@@ -4478,7 +4469,7 @@ class Run:
                     for r in self.sig0[t["id"]]:
                         if r[3] == pair:
                             want.add(r[4])
-                io = self.out(f"ind/{tf}_{SYM_OF[pair]}.csv", ["i"] + names)
+                ind_out = self.out(f"ind/{tf}_{SYM_OF[pair]}.csv", ["i"] + names)
                 arrs = [np.asarray(cols[c]) for c in names]
                 for i in sorted(want):
                     vals = [str(i)]
@@ -4492,7 +4483,7 @@ class Run:
                             vals.append(f_tri(int(v)))
                         else:
                             vals.append(f_real(float(v)))
-                    io.row(vals)
+                    ind_out.row(vals)
 
     # -------------------------------------------------------------------------------------------- tables
     def write_tables(self, bl, tf, half):
@@ -4964,13 +4955,6 @@ def read_lines(path):
     return lines[0].split(","), lines[1:]
 
 
-def read_csv_rows(path):
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        rd = csv.reader(f)
-        rows = list(rd)
-    return rows[0], rows[1:]
-
-
 def list_files(folder):
     out = []
     for dp, dn, fn in os.walk(folder):
@@ -4999,6 +4983,28 @@ class Comparator:
             m = re.match(r"ALLOWED z-border (\S+) (\S+) i=(\d+)", a)
             if m:
                 self.border.add((m.group(1), m.group(2), int(m.group(3))))
+        # z-border bars read from either side's BM_z (lawsearch-dump.md 9.2), and the bar after each
+        for n in names:
+            if not n.startswith("ind/"):
+                continue
+            tf, sym = n[4:-4].split("_", 1)
+            pair = PAIR_OF_SYM.get(sym)
+            for folder in (self.ts, self.py):
+                path = os.path.join(folder, n)
+                if not os.path.exists(path):
+                    continue
+                hd, lines = read_lines(path)
+                if "BM_z" not in hd:
+                    continue
+                zi = hd.index("BM_z")
+                for ln in lines:
+                    f = ln.split(",")
+                    if zi < len(f) and f[zi] != "":
+                        z = float(f[zi])
+                        if abs(z - 2) <= 2e-9 or abs(z + 2) <= 2e-9:
+                            i = int(f[0])
+                            self.border.add((tf, pair, i))
+                            self.border.add((tf, pair, i + 1))
         self.ts_tab = {}
         self.py_tab = {}
         for n in names:
