@@ -77,7 +77,7 @@ the "meaning" columns are the spec's.
 | pair (key), tf (key) | text | |
 | from_ms, to_ms | int | |
 | keys_first, keys_last, keys | text, text, int | the day keys opened: jstDayKey(from − 1 day) … jstDayKey(to), and how many |
-| files_read | int | sides read (2 per key) |
+| files_read | int | side files opened: 2 per key, read or not (11.1) |
 | read_failures | int | files not JSON, not "status 0 or 404 with a data array", or missing |
 | unparseable_rows | int | spec 2 数にできない行 (both sides) |
 | value_stops | int | values of the wrong form that would read as finite (must be 0; the run stops otherwise) |
@@ -85,7 +85,7 @@ the "meaning" columns are the spec's.
 | same_start_bid_rows | int | spec 2 同じ始まりの行の数 |
 | bars | int | bars kept |
 | first_s, last_s | int | first and last kept bar start (empty when none) |
-| ohlc_bad, dup_starts, band_bad | int | spec 15 (each must be 0) |
+| ohlc_bad, dup_starts, band_bad | int | spec 15 (each must be 0), counted in bars (11.2) |
 
 Order: stage (syn0, syn1, syn2), then pair (table order), then tf (m15, h1).
 
@@ -139,7 +139,7 @@ Columns: `i,s,bo,bh,bl,bc,ao,ah,al,ac,O,H,L,C,Po,Ph,Pl,Pc` (types as above). Ord
 | DON20_s | int | exact | E26's target s (−1, 0, 1; never empty) |
 | EMA200 | real | exact | EMA_200 of the mid close |
 | F01_buy, F01_sell | tri | exact | (C − EMA200) > 0, −(C − EMA200) > 0 |
-| BM_r | real | ln | r[i] = ln(C[i] ÷ C[i−1]) |
+| BM_r | real | ln | r[i] = ln(C[i] ÷ C[i−1]); empty where BM_ok is 0 (11.3) |
 | BM_ok | bool | exact | r[i] is usable |
 | BM_sigma | real | ln | σ[i] |
 | BM_z | real | ln | z[i] |
@@ -376,3 +376,76 @@ Key: tf, half. All int. late_end must be 0.
   `suspect.csv`. A file that is in one folder and not the other is a difference.
 - Before comparing, the comparator checks: `manifest.json`'s treeSha256 against the gmo folder; `config.json`'s
   `spreadH1Sha256` against `research/ledger/spread-hours-h1.csv`; and that `plant` is empty.
+
+## 11. Conventions settled in the small trial (TS integrator, round 1)
+
+Each line settles a point the sections above left open (how a count is counted, which rows a file holds, row order).
+Both implementations follow it. None of them is a rule of the spec; the points the spec itself leaves open are listed
+for the lead, not here.
+
+### 11.1 load.csv
+
+- `files_read` = 2 × `keys`: every side file the loader opens, whether it then reads or not; `read_failures` counts
+  the opened files that fail. Reason: "2 per key" above, and a count that does not depend on the failures it sits
+  next to.
+
+### 11.2 Counted in bars
+
+- `ohlc_bad`, `band_bad` and `dup_starts` count bars: a bar with several bad values (or sides) counts once.
+  `dup_starts` counts the bars, after the merge, whose start is not later than the previous bar's start. Reason: spec
+  15 states each check per bar; one number per bar makes the two counts equal however many values are bad.
+
+### 11.3 ind/
+
+- `BM_r` is empty where `BM_ok` is 0 (r may not be used there). Reason: the hand examples write r as null exactly
+  there (A.4.33 bar 16, A.4.36 bar 27, A.4.40 bars 291 and 302).
+
+### 11.4 blind_counts.csv and the late exclusions
+
+- `late_no_entry`, `late_r4` and `late_end` count rows of the base table (2 per bar; both directions of a bar are
+  always left out together, since all three tests read only the pair's bars and the clock). Reason: `rows` and
+  `late_rows` in the same line count rows. The hand examples count bars (`blind_bars`), which is the row count ÷ 2.
+- A base row is counted once, by the first of: no late entry bar → ④ on [T, X + 15 min) → X + 15 min past the
+  period's end. The same order counts a trial's `late_excl.*` in measures.csv and `late_why` in trades/. Reason: the
+  three counts must add up to the rows left out.
+
+### 11.5 measures.csv
+
+- A candidate without a t (8.5) writes `V.<c>.t`, `V.<c>.q975` and `V.<c>.half_width` empty and `V.<c>.p` = 1. A
+  value without a t writes `V.t`, `V.lb`, `V.ub`, `V.use_lb` and `V.use_p` empty and `V.p` = 1. Reason: A.2.11 (the
+  week candidate's t975 and half_width null, p 1).
+- `weeks` counts the weeks with a counted signal, with or without a trade; `counted_dir.*` and `counted_pair.*`
+  count counted signals with or without a trade (design 11 O-7). Reason: `counted` in the same block counts them so.
+- The 20 blind rows write: `counted` … `strata`, then the `a.*` and `pl.*` keys (with their shift candidates), then
+  `pl_ex1w` … `n_sell`. No `delta.*`, `delta_late.*`, `dF.*`, `pl_late` … `nov.pl`. Reason: 8 above ("only the keys of
+  counts, a, pl and the extras").
+- At stage 1, and for `a`, `delta_late` and `dF` at stage 2, `V.kappa` is 1; at stage 2 `delta.kappa` and
+  `pl.kappa` are max(1, κ). Reason: κ belongs to Δ and PL of stage 2 only (spec 11).
+- `dF`'s `V.use_p`, `V.p` and `V.t` come from the candidate with the largest p of its week and 4w candidates (8.5's
+  choice, no shift), and `dF.N` is the (E, F) trial's N.
+
+### 11.6 strata.csv, shift.csv, clusters.csv, trades/
+
+- strata.csv, shift.csv and clusters.csv hold the trials only, never the 20 blind rows. clusters.csv writes the
+  `4w` rows of a value only when its `V.four` is 1. Reason: 8 names the blind rows for measures.csv only, and a 4w
+  candidate that is not used has no rows in measures.csv either.
+- trades/ holds a file for each trial with measures: at stage 1 the floor-passing trials that are not same trials,
+  at stage 2 the chosen trials. A trial whose rows serve only another trial's D_F gets no file of its own there.
+
+### 11.7 stage0.csv and stage0_totals.csv
+
+- `group` is empty for a trial that fails the floor; `groups.<tf>` counts the distinct non-empty groups. Reason:
+  A.2.18 leaves the trials under the floor ungrouped (not_grouped).
+- `first.reason.r1` and `first.reason.r1w` count the ① rows with T < SPLIT, `second.reason.r1` and
+  `second.reason.r1w` those with T ≥ SPLIT; `r1b` is first only. f_none and both go by the half column. Reason: 7
+  above, written for both halves.
+- `g`, `df`, `pass_min`, `mde`, `mark` and `stage3_estimate` are all empty when the trial has no g (7 above, kept).
+
+### 11.8 stage2.csv
+
+- `failed` is empty unless the verdict is 3. Reason: A.2.23 gives the list for verdict 3 and null for the others.
+
+### 11.9 suspect.csv
+
+- `hit_*` are 0 when `looked` is 0 (fewer than 100 counted signals). The blind rows' `hit_delta` and `hit_late`
+  come out 0 by construction (their Δ and Δ_late are 0).

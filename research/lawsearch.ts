@@ -322,8 +322,10 @@ async function pipeline(c: RunCtx): Promise<number> {
     return await finish();
   }
 
-  // ---- stage 2 (spec 11): the chosen trials only; no chosen trial → the second half is not opened
-  if (K === 0) {
+  // ---- stage 2 (spec 11): the chosen trials only; no chosen trial → the second half is not opened. The plant
+  // secondHalfAll (spec 16: the second half of trials not chosen is computed) asks for it whatever K is, so that the
+  // stage-2 gate meets it even when nothing was chosen.
+  if (K === 0 && c.plant !== "secondHalfAll") {
     put("note.stage2", "no trial was chosen: the second half is not opened (spec 10)");
     return await finish();
   }

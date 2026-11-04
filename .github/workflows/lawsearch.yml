@@ -10,7 +10,8 @@
 #           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3) and
 #           secondHalfAll (exit 2), CMP-C 7101 the plant reasonUsesFuture (exit 3, cut or presence failed); O expects
 #           exit 3 with the cut and the poison failed on the E26 trials
-#   flip    FLIP 1001–1005 and their flips; the dumps of each pair are kept as an artifact for the comparison of 10
+#   flip    FLIP 1001–1005 and their flips, then research/lawsearch-flip.ts compares each pair (design 10; the h
+#           differences of 11 O-2 are counted, not failed); the dumps are kept as an artifact
 #   smoke   SMOKE 7001–7004 (D, H, E15, EF): only when the repository variable LS_SMOKE_STRENGTH holds the provisional
 #           amount (the lead's choice; not a formal run, never compared)
 #
@@ -206,6 +207,8 @@ jobs:
             echo "flip $flip: exit $code"
             [ "$code" = 0 ] || exit 1
           done
+      - name: The flip comparison (blind bars' h and PL, the signals of E04, E26 and S01; design 10, 11 O-2)
+        run: deno run --no-config --allow-read=. research/lawsearch-flip.ts research/out/lawsearch/flip-${{ matrix.seed }}-0 research/out/lawsearch/flip-${{ matrix.seed }}-1 | tee research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -213,6 +216,7 @@ jobs:
           path: |
             research/out/lawsearch/flip-${{ matrix.seed }}-*/manifest.json
             research/out/lawsearch/flip-${{ matrix.seed }}-*/ts/
+            research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
           if-no-files-found: ignore
 
   smoke:

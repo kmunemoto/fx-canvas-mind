@@ -413,6 +413,8 @@ export async function loadPairTf(src: Source, pair: Pair, tf: TfKey, fromMs: num
   for (const key of keys) {
     const bodies: Record<"bid" | "ask", unknown> = { bid: null, ask: null };
     for (const side of ["bid", "ask"] as const) {
+      // lawsearch-dump.md 4: files_read counts every side file opened (2 per key), read or not
+      report.filesRead++;
       let body: unknown = undefined;
       try {
         body = JSON.parse(await Deno.readTextFile(`${src.dir}/${symbol}/${interval}/${side}/${key}.json`));
@@ -423,7 +425,6 @@ export async function loadPairTf(src: Source, pair: Pair, tf: TfKey, fromMs: num
         report.readFailures++;
         continue;
       }
-      report.filesRead++;
       const sc = scanBody(body, `${symbol} ${interval} ${side} ${key}`);
       report.unparseableRows += sc.unparseable;
       report.valueStops.push(...sc.stops);

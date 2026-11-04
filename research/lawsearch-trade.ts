@@ -313,8 +313,17 @@ export function blindFromRows(tf: TfKey, half: HalfName, late: boolean, rows: Re
 // What trialRows saw beyond TrialRows' fields (kept per TrialRows object; read by lawsearch-stats.ts measureTrial):
 // the counted signals of the half by pair × direction (index pi × 2 + (d === 1 ? 0 : 1)), with or without a trade
 // (lawsearch-design.md 11 O-7), and the distinct weeks of all counted signals
-const rowsExtra = new WeakMap<TrialRows, { countedByPairDir: Int32Array; countedWeeks: number }>();
-export function trialRowsExtra(tr: TrialRows): { countedByPairDir: Int32Array; countedWeeks: number } | null {
+// noTradeList: the counted signals without an entry bar; lateOut: the Δ rows the late table left out, with why (1 no
+// late entry, 2 ④ at X + 15 min, 3 past the period's end); both in the order the signals were read (the hand examples'
+// lists)
+export interface TrialRowsExtra {
+  countedByPairDir: Int32Array;
+  countedWeeks: number;
+  noTradeList: Array<{ pi: number; T: number; d: Dir }>;
+  lateOut: Array<{ pi: number; T: number; d: Dir; why: 1 | 2 | 3 }>;
+}
+const rowsExtra = new WeakMap<TrialRows, TrialRowsExtra>();
+export function trialRowsExtra(tr: TrialRows): TrialRowsExtra | null {
   return rowsExtra.get(tr) ?? null;
 }
 
@@ -341,6 +350,8 @@ export function trialRows(table: BlindTable, late: BlindTable, sig: TrialSignals
   let counted = 0;
   let noTrade = 0;
   let noBlind = 0;
+  const noTradeList: TrialRowsExtra["noTradeList"] = [];
+  const lateOut: TrialRowsExtra["lateOut"] = [];
   for (const c of sig.pairs) {
     const s = series[c.pi];
     if (s.pi !== c.pi || s.key !== table.tf) throw new Error(`trialRows: series ${c.pi} is ${s.pair} ${s.key}`);
@@ -353,8 +364,10 @@ export function trialRows(table: BlindTable, late: BlindTable, sig: TrialSignals
       weeks.add(wk(T));
       const r = table.index.get(rowKey(c.pi, T, d));
       if (r === undefined) {
-        if (tradeOf(s, T, c.X[q], d, plant) === null) noTrade++;
-        else noBlind++;
+        if (tradeOf(s, T, c.X[q], d, plant) === null) {
+          noTrade++;
+          noTradeList.push({ pi: c.pi, T, d });
+        } else noBlind++;
         continue;
       }
       rows.push(r);
@@ -364,13 +377,24 @@ export function trialRows(table: BlindTable, late: BlindTable, sig: TrialSignals
         continue;
       }
       const w = info ? info.why[r] : null;
-      if (w === LATE_NO_ENTRY) lateExcluded.noEntry++;
-      else if (w === LATE_R4) lateExcluded.r4++;
-      else if (w === LATE_END) lateExcluded.end++;
-      else if (w === null) {
+      if (w === LATE_NO_ENTRY) {
+        lateExcluded.noEntry++;
+        lateOut.push({ pi: c.pi, T, d, why: 1 });
+      } else if (w === LATE_R4) {
+        lateExcluded.r4++;
+        lateOut.push({ pi: c.pi, T, d, why: 2 });
+      } else if (w === LATE_END) {
+        lateExcluded.end++;
+        lateOut.push({ pi: c.pi, T, d, why: 3 });
+      } else if (w === null) {
         // a late table without reasons (blindFromRows): ④ at X + 15 min is the clock's, the rest is no entry
-        if (r4(T, c.X[q] + LATE_MS)) lateExcluded.r4++;
-        else lateExcluded.noEntry++;
+        if (r4(T, c.X[q] + LATE_MS)) {
+          lateExcluded.r4++;
+          lateOut.push({ pi: c.pi, T, d, why: 2 });
+        } else {
+          lateExcluded.noEntry++;
+          lateOut.push({ pi: c.pi, T, d, why: 1 });
+        }
       } else throw new Error(`trialRows: ${sig.trial.id} row ${r} is kept by the late table but not in its index`);
     }
   }
@@ -385,7 +409,7 @@ export function trialRows(table: BlindTable, late: BlindTable, sig: TrialSignals
     lateRows: Int32Array.from(lateRows).sort(),
     lateExcluded,
   };
-  rowsExtra.set(out, { countedByPairDir: byPairDir, countedWeeks: weeks.size });
+  rowsExtra.set(out, { countedByPairDir: byPairDir, countedWeeks: weeks.size, noTradeList, lateOut });
   return out;
 }
 

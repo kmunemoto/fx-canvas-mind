@@ -503,27 +503,37 @@ const candOf = (kind: SeKind, se: number | null, C: number, K: number | null): S
 // table (rowKey; a late table is keyed by the signal's T) is taken, or the signal is dropped when there is none. The
 // stratum is the found row's own (late: of T′ + 15 min). Plant shiftNoWrap: a signal that would wrap is dropped.
 export function shiftRows(t: BlindTable, rows: Int32Array, k: number, plant = ""): { rows: Int32Array; dropped: number } {
+  const m = shiftMap(t, rows, k, plant);
+  const out: number[] = [];
+  let dropped = 0;
+  for (let q = 0; q < m.to.length; q++) {
+    if (m.to[q] < 0) dropped++;
+    else out.push(m.to[q]);
+  }
+  return { rows: Int32Array.from(out).sort(), dropped };
+}
+// shiftRows' moves one by one (for the hand examples' moved / dropped lists; shiftRows is built on it): per signal
+// row rows[q], its T′ (NaN when the plant shiftNoWrap drops it before the lookup) and the row found at T′ (−1 when
+// dropped)
+export function shiftMap(t: BlindTable, rows: Int32Array, k: number, plant = ""): { from: Int32Array; T2: Float64Array; to: Int32Array } {
   const W = t.weeks.length;
   if (!(Number.isInteger(k) && k >= 1 && k < W)) throw new Error(`shiftRows: k ${k} with ${W} weeks`);
   const pos = new Map<number, number>();
   t.weeks.forEach((w, q) => pos.set(w, q));
-  const out: number[] = [];
-  let dropped = 0;
+  const T2s = new Float64Array(rows.length).fill(NaN);
+  const to = new Int32Array(rows.length).fill(-1);
   for (let q = 0; q < rows.length; q++) {
     const r = rows[q];
     const p = pos.get(t.week[r]);
     if (p === undefined) throw new Error(`shiftRows: week ${t.week[r]} is not a week of the table`);
-    if (plant === "shiftNoWrap" && p + k >= W) {
-      dropped++;
-      continue;
-    }
+    if (plant === "shiftNoWrap" && p + k >= W) continue;
     const w2 = t.weeks[(p + k) % W];
     const T2 = t.T[r] + (w2 - t.week[r]) * WEEK;
+    T2s[q] = T2;
     const r2 = t.index.get(rowKey(t.pi[r], T2, t.d[r] as Dir));
-    if (r2 === undefined) dropped++;
-    else out.push(r2);
+    if (r2 !== undefined) to[q] = r2;
   }
-  return { rows: Int32Array.from(out).sort(), dropped };
+  return { from: rows.slice(), T2: T2s, to };
 }
 
 // The shift values of several measures at once (one shiftRows per k): k = 1 … W_h − 1; a k without a signal left is
@@ -674,7 +684,7 @@ export function estDiff(t: BlindTable, rowsA: Int32Array, rowsB: Int32Array, o: 
 
 // Spec 7 / 21.5 重ならない版: per pair and direction, in T order, a signal with T before the X (= T + nBars × step)
 // of the last kept one is dropped (T = X stays); dropped signals are not compared again. Δ and PL of the kept ones.
-export function nonOverlap(t: BlindTable, rows: Int32Array, nBars: number): { N: number; delta: number | null; pl: number | null } {
+export function nonOverlap(t: BlindTable, rows: Int32Array, nBars: number): { N: number; delta: number | null; pl: number | null; rows: Int32Array } {
   checkRows(t, rows);
   const span = nBars * STEP[t.tf];
   const lastX = new Map<number, number>();
@@ -688,7 +698,8 @@ export function nonOverlap(t: BlindTable, rows: Int32Array, nBars: number): { N:
     lastX.set(g, t.T[r] + span);
   }
   const k = Int32Array.from(kept);
-  return { N: k.length, delta: deltaOf(t, k), pl: plOf(t, k) };
+  // rows: the kept rows (for the hand example A.2.28's lists)
+  return { N: k.length, delta: deltaOf(t, k), pl: plOf(t, k), rows: k };
 }
 
 // ---- one trial ---------------------------------------------------------------------------------------------------

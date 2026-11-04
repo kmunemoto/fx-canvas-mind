@@ -168,7 +168,8 @@ const bigmoveItem = (id: string): ItemDefX => {
         cond: [buy, sell],
         keep: [keep, keep],
         warmup: warmupFor(params),
-        columns: { BM_r: bm.r, BM_ok: bm.usable, BM_sigma: bm.sigma, BM_z: bm.z, [`${id}_buy`]: buy, [`${id}_sell`]: sell, [`${id}_keep`]: keep },
+        // lawsearch-dump.md 5: BM_r is written only where r may be used (BM_ok = 1), as the hand examples write r
+        columns: { BM_r: Float64Array.from(bm.r, (v, i) => (bm.usable[i] === 1 ? v : NaN)), BM_ok: bm.usable, BM_sigma: bm.sigma, BM_z: bm.z, [`${id}_buy`]: buy, [`${id}_sell`]: sell, [`${id}_keep`]: keep },
       };
     },
   };

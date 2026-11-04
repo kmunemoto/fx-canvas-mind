@@ -5,6 +5,8 @@
 //   * points, indices, counts, booleans and texts exactly; doubles by === where spec 17.2 asks for the last digit, else
 //     by the class of lawsearch-dump.md 9 (q: |Δ| ≤ 1e−9; p, ln: relative 1e−9);
 //   * null equals NaN or null;
+//   * a "12 significant digits" string (A.2.12, A.2.31) equals the computed double's toPrecision(12) read as a number;
+//   * an explanatory sentence inside a compared object (Prose: A.2.32's shifted_signals) is not compared (listed);
 //   * a key matching ALT_KEY at any depth is an alternative answer or a note: not compared;
 //   * a key whose computation throws NOT BUILT (an item not written yet) is "skip"; a required key skipped or failed
 //     fails the example.
@@ -12,23 +14,23 @@
 // research/out/lawsearch/hand-tmp/<id>/gmo.
 
 import { filterOf, isNotBuilt, itemOf, parseCandidates, sFilterOf, trialWarmup } from "./lawsearch-items.ts";
-import { C6_PARTS, DIRECTIONAL_F, QUESTIONS, S_OF_F, STATUS, W0 } from "./lawsearch-rules.ts";
-import { MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, STEP, wk } from "./lawsearch-const.ts";
-import { coarsenSeries, dayOf, htfIndex, isGmoHoliday, loadPairTf, londonSummer, midOf, nySummer, pointsOf, rawPointsOf, reportOfStop, scanBody, seasonGroupOf, seriesFromMid, seriesOf, tfSetOf } from "./lawsearch-bars.ts";
+import { C6_PARTS, DIRECTIONAL_F, LATE_MS, QUESTIONS, REASONS, S_OF_F, STATUS, W0 } from "./lawsearch-rules.ts";
+import { MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, SPLIT, STEP, wk } from "./lawsearch-const.ts";
+import { coarsenSeries, dayOf, hourOf, htfIndex, isGmoHoliday, loadPairTf, londonSummer, midOf, nySummer, pointsOf, rawPointsOf, reportOfStop, scanBody, seasonGroupOf, seriesFromMid, seriesOf, tfSetOf } from "./lawsearch-bars.ts";
 import { bigmoveDefault, donchianOf, indOf, smaOldest, toF64, xDn, xUp } from "./lawsearch-ind.ts";
 import { applyBoth, candidatesOf, exclCtxOf, halfOf, holesOf, r2, r3, r4, r5, r6, reasonOf } from "./lawsearch-events.ts";
-import { blindFromRows, rowKey, tradeOf } from "./lawsearch-trade.ts";
+import { blindFromRows, blindTable, lateTable, lateTradeOf, rowKey, tradeOf, trialRows, trialRowsExtra } from "./lawsearch-trade.ts";
 import { emptyBars } from "./trend-labels.ts";
 import { keysFor } from "./trend-data.ts";
 import { gmoDayKey } from "./ownerhold-data.ts";
 import { barInsideClosure, isMarketClosed, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import { avoidKey, hhmm, seasonOf, slotOf, SLOTS } from "./spreadhours-lib.ts";
 import { DAY, HOUR, MINUTE, WEEK } from "./lib.ts";
-import { chooseStage1, holm, holmThreshold, skipText, stage1Explain, stage2Rows } from "./lawsearch-select.ts";
+import { chooseStage1, failRuleOf, holm, holmThreshold, skipText, stage1Explain, stage2Rows } from "./lawsearch-select.ts";
 import type { Stage2In } from "./lawsearch-select.ts";
 import { floorPass, gOf, mdeOf, overlapCount, overlapGroups, plEstimate, sameTrials, sigListOf, stage3Estimate } from "./lawsearch-select0.ts";
-import { aOf, deltaOf, estDelta, estPl, kappaOf, plExtras, plOf, point95, strataOf, tq, withKappa } from "./lawsearch-stats.ts";
-import type { Bars, BigmoveParams, BlindTable, ExclCtx, HandExample, HandKeyResult, HandResult, ItemParams, Pair, SeCand, Series, Stage1Cand, TfKey, TrialDef, TrialKind, ValueEst } from "./lawsearch-types.ts";
+import { aOf, choose, deltaOf, estA, estDelta, estDiff, estPl, influenceOf, isZero, kappaOf, measureTrial, nGate, nGateL, nonOverlap, plExtras, plOf, point95, pOneSided, shiftMap, strataOf, tCdf, tq, withKappa, zq } from "./lawsearch-stats.ts";
+import type { Bars, BigmoveParams, BlindTable, ExclCtx, HandExample, HandKeyResult, HandResult, ItemParams, Pair, SeCand, Series, ShiftRun, Stage1Cand, TfKey, TrialDef, TrialKind, ValueEst } from "./lawsearch-types.ts";
 
 // ---- what the trial requires (lawsearch-design.md 9) ------------------------------------------------------------
 
@@ -93,6 +95,18 @@ export class PartialList {
 export class Skip {
   constructor(readonly why: string) {}
 }
+// an explanatory sentence of the example (a prose string inside a compared object): no module makes it, so it is not
+// compared (it must be a string in the example); the runner lists it as not compared
+export class Prose {
+  constructor(readonly what: string) {}
+}
+// a "12 significant digits" string of the example (Python's "%.12g"): equal when the string and the computed double's
+// 12-digit rounding read as the same number (the example's text keeps or drops trailing zeros)
+export class Sig12 {
+  constructor(readonly x: number) {}
+}
+// the Prose keys met in a run (reported, not compared)
+export const proseSeen: string[] = [];
 export type Thunk = () => unknown | Promise<unknown>;
 // e: one example of lawsearch-hand.json (HandExample, read loosely)
 export type Adapter = (e: J, plant: string) => Record<string, Thunk> | Promise<Record<string, Thunk>>;
@@ -121,6 +135,16 @@ const show = (x: unknown): string => {
 // the first difference of got against want (want's ALT keys skipped), or null when equal
 export function diffOf(got: unknown, want: unknown, cls: TolClass = "exact", path = ""): string | null {
   if (got instanceof Tol) return diffOf(got.v, want, got.cls, path);
+  if (got instanceof Prose) {
+    if (typeof want !== "string") return `${path || "."}: prose expected, want ${show(want)}`;
+    proseSeen.push(path || ".");
+    return null;
+  }
+  if (got instanceof Sig12) {
+    if (typeof want !== "string") return `${path || "."}: a 12-digit string expected, want ${show(want)}`;
+    const g = Number.isFinite(got.x) ? Number(got.x.toPrecision(12)) : NaN;
+    return g === Number(want) ? null : `${path || "."}: got ${got.x.toPrecision(12)} (${got.x}), want ${want}`;
+  }
   if (got instanceof PartialList) {
     if (!Array.isArray(want) || want.length !== got.v.length) return `${path || "."}: ${got.v.length} elements, want ${Array.isArray(want) ? want.length : "a list"}`;
     for (let k = 0; k < want.length; k++) {
@@ -512,6 +536,8 @@ const tri = (a: ArrayLike<number>) => Array.from(a, (v) => (v === -1 ? null : v 
 const flatMid = (pair: string) => (pair.endsWith("JPY") ? ["150.000", "150.000", "150.000", "150.000"] : ["1.10000", "1.10000", "1.10000", "1.10000"]);
 const flatSeries = (pair: string, tf: TfKey, starts: number[]): Series => seriesFromMid(pair as Pair, tf, starts, starts.map(() => flatMid(pair)));
 const handTrials = new Map<string, TrialDef>();
+// every example by id (an example "same_as" another reads its input)
+const handById = new Map<string, J>();
 const trialOf = (id: string): TrialDef => {
   const t = handTrials.get(id);
   if (!t) throw new Error(`no trial ${id}`);
@@ -1282,23 +1308,203 @@ function b06Out(e: J, plant: string): Record<string, Thunk> {
 }
 
 // ---- group 2: the measures (builder C's lawsearch-trade.ts, lawsearch-stats.ts) ------------------------------------
+//
+// Every example of group 2 gives its blind table as numbers (blindFromRows) or as bars (blindTable / lateTable on a
+// series built from the example), and its signals as (pair, T, d). The adapters call the module functions only; what
+// they add is the example's presentation (labels, ISO times, the order of a listing = the example's input order).
 
 const SEASON_JA = ["両方冬", "両方夏", "NYだけ夏", "ロンドンだけ夏"];
 // a blind table from the example's blind rows, and the table rows of its signals (absent ones counted)
 const tableOf = (inp: J, late = false) => {
   const t = blindFromRows(TF_OF[inp.tf], "first", late, (inp.blind as J[]).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.m, plBuy: b.pl_buy, plSell: b.pl_sell })));
+  const { rows, absent } = rowsIn(t, (inp.signals ?? []) as J[]);
+  return { t, rows, absent };
+};
+// the rows of an example's signals in a table (ascending = 21.5's row order), and the signals without one
+const rowsIn = (t: BlindTable, sigs: J[]) => {
   const found: number[] = [];
   const absent: J[] = [];
-  for (const x of (inp.signals ?? []) as J[]) {
+  for (const x of sigs) {
     const r = t.index.get(rowKey(piOf(x.pair), ms(x.T), x.d));
     if (r === undefined) absent.push(x);
     else found.push(r);
   }
-  return { t, rows: Int32Array.from(found.sort((a, b) => a - b)), absent };
+  return { rows: Int32Array.from(found.sort((a, b) => a - b)), absent };
 };
 const stratumKey = (id: number) => ({ pair: PAIRS[Math.floor(id / 192)], d: Math.floor(id / 96) % 2 === 0 ? 1 : -1, hour: Math.floor(id / 4) % 24, season: SEASON_JA[id % 4] });
 const strataRows = (t: BlindTable, rows: Int32Array, plant: string) =>
   strataOf(t, rows, plant).strata.filter((x) => x.n > 0).map((x) => ({ stratum: stratumKey(x.id), n_s: x.n, m_s: x.m, B_s: x.B, signal_mean_h_half: x.sigMean }));
+// a cluster's S_g map as the examples write it ({"2817": …})
+const sumsObj = (m: Map<number, number>) => Object.fromEntries([...m.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => [String(k), v]));
+const seOfKind = (v: ValueEst, kind: SeCand["kind"]) => v.cands.find((c) => c.kind === kind)?.se ?? null;
+// spec 8–11's "> 0" (the zero rule of 8.5 first)
+const gt0 = (x: number | null) => x !== null && !isZero(x) && x > 0;
+// a candidate list and the choices (8.5) as the examples write them: se, t exact; p by p; t(0.975), the half width
+// and the ends by q (lawsearch-dump.md 9)
+const candRows = (v: { cands: SeCand[] }) =>
+  v.cands.map((c) => ({ label: KIND_JA[c.kind], se: c.se, C: c.C, df: c.df, K: c.K, t: c.t, p: tol(c.p, "p"), t975: tol(c.q975, "q"), half_width: tol(c.halfWidth, "q") }));
+const choiceOf = (v: Pick<ValueEst, "hasT" | "useLB" | "useP" | "t" | "p" | "lb" | "ub"> & { cands: SeCand[] }) => ({
+  candidates: candRows(v),
+  interval_from: v.useLB ? KIND_JA[v.useLB] : null,
+  p_from: v.useP ? KIND_JA[v.useP] : null,
+  p: tol(v.p, "p"),
+  t: v.t,
+  lb: tol(v.lb, "q"),
+  ub: tol(v.ub, "q"),
+  lower: tol(v.lb, "q"),
+  upper: tol(v.ub, "q"),
+  has_t: v.hasT,
+  no_t_candidates: v.cands.filter((c) => c.t === null).map((c) => KIND_JA[c.kind]),
+});
+// rule 3 of spec 10 by the select module itself (rules 1, 2 passed; rule 4 onwards cannot be reached first)
+const rule3Ok = (v: ValueEst) =>
+  failRuleOf({ id: "x", tf: "m15", order: 1, f: null, isS: false, directionalF: false, passFloor: true, same: false, checksOk: true, hasT: v.hasT, delta: v.value, lb: v.lb, pl: 1, plEx1w: 1, dF: null, suspicious: false, suspiciousChecksPassed: null, n: v.N, group: "x" }, "a") !== 3;
+// the counted signals of one half as a trial's Classified rows (every row counted, in the half), for trialRows
+const countedSigs = (tf: TfKey, half: "first" | "second", sigs: ReadonlyArray<{ pi: number; T: number; d: number; X: number }>) => {
+  const code = half === "first" ? 1 : 2;
+  const COUNTED = REASONS.indexOf("counted");
+  return {
+    trial: { id: "hand", order: 0, tf, kind: "EF" as TrialKind, e: null, f: null, s: null, b: null, name: "hand" },
+    tf,
+    pairs: PAIRS.map((_, pi) => {
+      const mine = sigs.filter((s) => s.pi === pi);
+      const n = mine.length;
+      return {
+        trial: "hand", tf, pi, n,
+        i: new Int32Array(n).fill(-1), d: Int8Array.from(mine.map((s) => s.d)), status: new Uint8Array(n), warmOk: new Uint8Array(n).fill(1),
+        T: Float64Array.from(mine.map((s) => s.T)), X: Float64Array.from(mine.map((s) => s.X)),
+        reason: new Uint8Array(n).fill(COUNTED), half: new Uint8Array(n).fill(code),
+      };
+    }),
+  };
+};
+const sigsOf = (xs: J[], tf: TfKey, nBars = N_BARS) => xs.map((x) => ({ pi: piOf(x.pair), T: ms(x.T), d: x.d as number, X: ms(x.T) + nBars * STEP[tf] }));
+const emptySeries = (pi: number, tf: TfKey) => seriesOf(PAIRS[pi], tf, emptyBars(0));
+const fiveOf = (tf: TfKey, given: Record<number, Series>) => PAIRS.map((_, pi) => given[pi] ?? emptySeries(pi, tf));
+const sigItem = (x: { pi: number; T: number; d: number }) => ({ pair: PAIRS[x.pi], T: isoOf(x.T), d: x.d });
+// the example's listing order: the position of (pair, T, d) in its input signals
+const orderBy = (sigs: J[]) => {
+  const pos = new Map<number, number>();
+  sigs.forEach((x, q) => pos.set(rowKey(piOf(x.pair), ms(x.T), x.d), q));
+  return (t: BlindTable, r: number) => pos.get(rowKey(t.pi[r], t.T[r], t.d[r] as 1 | -1)) ?? 1e9 + r;
+};
+// the week shifts of spec 8.5 as the examples list them (k = 1 … W_h − 1): the module's ShiftRun of each value (N_k,
+// dropped, the value; null when skipped), and shiftMap's moves for the lists (in the example's order). droppedList:
+// the example writes "dropped" as the list of dropped signals (else as the count, with "dropped_list").
+const shiftsOut = (t: BlindTable, rows: Int32Array, plant: string, runs: Record<string, ShiftRun | null>, pos: (t: BlindTable, r: number) => number, droppedList: boolean) => {
+  const first = Object.values(runs).find((x) => x !== null) ?? null;
+  const nk = Math.max(0, t.weeks.length - 1);
+  const out: J[] = [];
+  for (let k = 1; k <= nk; k++) {
+    const m = shiftMap(t, rows, k, plant);
+    const moved: Array<{ p: number; v: J }> = [];
+    const dropped: Array<{ p: number; v: J }> = [];
+    for (let q = 0; q < m.from.length; q++) {
+      const r = m.from[q];
+      const T2 = Number.isNaN(m.T2[q]) ? null : isoOf(m.T2[q]);
+      const base = { pair: PAIRS[t.pi[r]], T: isoOf(t.T[r]), d: t.d[r], T_shifted: T2, shifted_T: T2 };
+      const r2 = m.to[q];
+      if (r2 < 0) dropped.push({ p: pos(t, r), v: base });
+      else moved.push({ p: pos(t, r), v: { ...base, h: t.h[r2], late_hour: t.hour[r2], season_from: SEASON_JA[t.season[r]], season_to: SEASON_JA[t.season[r2]] } });
+    }
+    const byPos = (a: { p: number }, b: { p: number }) => a.p - b.p;
+    const row: J = { k, N_k: first ? first.n[k - 1] : null, dropped: first ? first.dropped[k - 1] : null };
+    if (droppedList) row.dropped = dropped.sort(byPos).map((x) => x.v);
+    else row.dropped_list = dropped.sort(byPos).map((x) => x.v);
+    row.moved = moved.sort(byPos).map((x) => x.v);
+    for (const [name, run] of Object.entries(runs)) row[name] = run === null || Number.isNaN(run.v[k - 1]) ? null : run.v[k - 1];
+    out.push(row);
+  }
+  return out;
+};
+const droppedIsList = (shifts: J): boolean => Array.isArray(shifts) && shifts.some((s: J) => Array.isArray(s.dropped));
+const kUnused = (run: ShiftRun | null) => (run ? Array.from(run.k).filter((_, q) => Number.isNaN(run.v[q])) : []);
+// a trade of spec 7 / 8.8 as the examples write it (s: the series the trade's j and x index)
+const tradeRow = (s: Series, tr: { j: number; x: number; subst: boolean | number; m: number; h: number; pl: number } | null, d: number) =>
+  tr === null ? "excluded" : {
+    entry_bar_start: isoOf(s.s[tr.j]), exit_bar_start: isoOf(s.s[tr.x]), exit_is_substitute: tr.subst === true || tr.subst === 1,
+    Po: s.Po[tr.j], Pc: s.Pc[tr.x], m: tr.m, h: tr.h, entry_price_pts: d === 1 ? s.Ao[tr.j] : s.Bo[tr.j], exit_price_pts: d === 1 ? s.Bc[tr.x] : s.Ac[tr.x], pl: tr.pl,
+  };
+const lateRowTrade = (late: BlindTable, pi: number, T: number, d: 1 | -1) => {
+  const r = late.index.get(rowKey(pi, T, d));
+  return r === undefined ? null : { j: late.j[r], x: late.x[r], subst: late.subst[r], m: late.m[r], h: late.h[r], pl: late.pl[r] };
+};
+const dKey = (T: number, d: number) => `${isoOf(T)} ${d === 1 ? "+1" : "-1"}`;
+const LATE_WHY_JA: Readonly<Record<number, string>> = { 1: "遅れた入りの足が無い", 2: "④（X＋15分）", 3: "期間の終わり" };
+// the bars of a base table that its late table (from rows) leaves out, with the clock's reason (trialRows' reading
+// for a late table without reasons: ④ at X + 15 min, else no late entry)
+const lateOutBars = (base: BlindTable, late: BlindTable, nBars: number) => {
+  const out: Array<{ T: number; why: 1 | 2 }> = [];
+  for (let r = 0; r < base.n; r += 2) {
+    if (late.index.has(rowKey(base.pi[r], base.T[r], 1))) continue;
+    const X = base.T[r] + nBars * STEP[base.tf];
+    out.push({ T: base.T[r], why: r4(base.T[r], X + LATE_MS) ? 2 : 1 });
+  }
+  return out;
+};
+// the influence rows of spec 8.5 in row order (a signal row before its blind row); blindAll: every blind row, else
+// the blind rows of strata with signals
+const influenceRows = (t: BlindTable, rows: Int32Array, plant: string, blindAll: boolean) => {
+  const fd = influenceOf(t, rows, "delta", plant);
+  const fp = influenceOf(t, rows, "pl", plant);
+  const st = new Map(strataOf(t, rows, plant).strata.map((x) => [x.id, x]));
+  const out: J[] = [];
+  for (let r = 0; r < t.n; r++) {
+    const head = { pair: PAIRS[t.pi[r]], T: isoOf(t.T[r]), d: t.d[r], week: t.week[r] };
+    const s = st.get(t.stratum[r]);
+    if (fd.isSig[r] === 1) out.push({ kind: "signal", ...head, infl_delta: fd.sig[r], infl_pl: fp.sig[r], d_i: t.h[r] / 2 - (s ? s.B : NaN) });
+    if (blindAll || (s && s.n > 0)) out.push({ kind: "blind", ...head, infl_delta: (fd.blind as Float64Array)[r], infl_pl: 0 });
+  }
+  return out;
+};
+// a table of bars from the example's rows {pair, T, flags/late {m, pl_buy, pl_sell}}
+const lateRowsOf = (bars: J[]) => bars.filter((b) => b.ordinary_trade && b.late).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.late.m, plBuy: b.late.pl_buy, plSell: b.late.pl_sell }));
+const baseRowsOf = (bars: J[]) => bars.filter((b) => b.ordinary_trade).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.late?.m ?? 0, plBuy: b.late?.pl_buy ?? 0, plSell: b.late?.pl_sell ?? 0 }));
+// the 1st and 2nd parts of A.2.29 and the like: Δ (with a and PL) and its SE pieces on one table
+const deltaPart = (t: BlindTable, rows: Int32Array, w0: number, plant: string, exShifts: J) => {
+  const o = { w0, shift: true, plant };
+  const d = estDelta(t, rows, o);
+  const pl = estPl(t, rows, o);
+  return {
+    d, pl,
+    out: {
+      N: d.N, delta: d.value, a: aOf(t, rows), pl_mean_pips: pl.value, strata: strataRows(t, rows, plant),
+      week_S_g_delta: sumsObj(d.sums.week), week_S_g_pl: sumsObj(pl.sums.week), C_week: d.C_week, se_week_delta: seOfKind(d, "week"), se_week_pl: seOfKind(pl, "week"),
+      C_4week: d.C_4w, use_4week: d.four, weeks_with_blind: Array.from(t.weeks), W_h: t.weeks.length,
+      K: d.shift?.used ?? null, sd_shift_delta: d.shift?.sd ?? null, sd_shift_pl: pl.shift?.sd ?? null, k_unused_N0: kUnused(d.shift),
+      delta_has_t: d.hasT, p_delta: tol(d.p, "p"), lb: tol(d.lb, "q"), ub: tol(d.ub, "q"), pl_has_t: pl.hasT, p_pl: tol(pl.p, "p"),
+      selectable_rule3: rule3Ok(d), delta_choice: choiceOf(d), pl_choice: choiceOf(pl),
+      shifts: shiftsOut(t, rows, plant, { delta_k: d.shift, pl_k_pips: pl.shift }, () => 0, droppedIsList(exShifts)),
+    } as J,
+  };
+};
+// Δ_late and its SE pieces on a late table (A.2.26, A.2.32 part 2)
+const latePart = (late: BlindTable, lateRows: Int32Array, w0: number, plant: string, exShifts: J, pos: (t: BlindTable, r: number) => number) => {
+  const d = estDelta(late, lateRows, { w0, shift: true, plant });
+  const pl = plOf(late, lateRows);
+  return {
+    d,
+    out: {
+      late_blind_bars: late.n / 2, N: d.N, delta_late: d.value, pl_late_pips: pl, strata: strataRows(late, lateRows, plant),
+      week_S_g_delta_late: sumsObj(d.sums.week), C_week: d.C_week, se_week: seOfKind(d, "week"), C_4week: d.C_4w, use_4week: d.four,
+      weeks_with_blind: Array.from(late.weeks), weeks_with_late_blind: Array.from(late.weeks), W_h: late.weeks.length,
+      shifts: shiftsOut(late, lateRows, plant, { delta_k: d.shift }, pos, droppedIsList(exShifts)),
+      k_unused_N0: kUnused(d.shift), K: d.shift?.used ?? null, sd_shift: d.shift?.sd ?? null, choice: choiceOf(d),
+      C4_lower_gt_0: gt0(d.lb), pl_late_gt_0: gt0(pl),
+    } as J,
+  };
+};
+// the 12-significant-digit strings of A.2.12 and A.2.31: Python's "%.12g" of the double (compared as numbers: the
+// text keeps or drops trailing zeros)
+const sig12 = (x: number) => new Sig12(x);
+const qOf = (s: string) => (s === "1-0.025/6" ? 1 - 0.025 / 6 : Number(s));
+// the series of an example's bars {s, bid[4], ask[4]}
+const seriesOfBars = (pair: string, tf: TfKey, bars: J[]) => seriesOf(pair as Pair, tf, barsOfRows(bars));
+const flatBars = (from: string, to: string, step: number) => {
+  const out: J[] = [];
+  for (let t = ms(from); t <= ms(to); t += step) out.push({ s: isoOf(t), bid: ["150.000", "150.010", "149.990", "150.000"], ask: ["150.002", "150.012", "149.992", "150.002"] });
+  return out;
+};
 
 const G2: Record<string, Adapter> = {
   "A.2.1": (e, plant) => {
@@ -1319,40 +1525,45 @@ const G2: Record<string, Adapter> = {
       pl_by_direction_pips: () => ({ buy: x.plByDir[0], sell: x.plByDir[1] }),
     };
   },
-  "A.2.4": (e, plant) => {
-    const { t, rows } = tableOf(e.input);
-    const o = { w0: e.input.w0 as number, shift: true, plant };
-    const d = estDelta(t, rows, o);
-    const pl = estPl(t, rows, o);
-    const sums = (m: Map<number, number>) => Object.fromEntries([...m.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => [String(k), v]));
-    const se = (v: ValueEst, kind: string) => v.cands.find((c) => c.kind === kind)?.se ?? null;
-    const choice = (v: ValueEst) => tol({
-      candidates: v.cands.filter((c) => c.kind !== "4w" || v.four).map((c) => ({ label: KIND_JA[c.kind], se: c.se, df: c.df, t: c.t, p: tol(c.p, "p"), t975: c.q975, half_width: c.halfWidth })),
-      interval_from: v.useLB ? KIND_JA[v.useLB] : null, p_from: v.useP ? KIND_JA[v.useP] : null, p: tol(v.p, "p"), t: v.t, lb: v.lb, ub: v.ub,
-    }, "q");
+  "A.2.2": (e, plant) => {
+    const inp = e.input;
+    const { t } = tableOf(inp);
+    const late = blindFromRows("m15", "first", true, []);
+    // USD/JPY's 15-minute bars 2024-01-09 10:00–11:15 (the stop case's 10:00 signal has an entry bar; nothing starts
+    // in [11:30, 13:30), so the 11:30 signal and the 11:30 blind bar have no trade)
+    const uj = seriesOfBars("USD/JPY", "m15", flatBars("2024-01-09T10:00:00Z", "2024-01-09T11:15:00Z", STEP.m15));
+    const series = fiveOf("m15", { 0: uj });
+    const sigs = sigsOf(inp.signals, "m15");
+    const tr = trialRows(t, late, countedSigs("m15", "first", sigs), "first", series, plant);
+    const ex = sigsOf([inp.stop_case.extra_signal], "m15");
+    const tr2 = trialRows(t, late, countedSigs("m15", "first", [...sigs, ...ex]), "first", series, plant);
     return {
-      delta: () => d.value,
-      pl_mean_pips: () => pl.value,
-      N: () => d.N,
-      influence: () => new Skip("the per-row influence functions are inside lawsearch-stats.ts (not exported); their cluster sums are compared below"),
-      week_S_g_delta: () => sums(d.sums.week),
-      week_S_g_pl: () => sums(pl.sums.week),
-      C_week: () => d.C_week,
-      se_week_delta: () => se(d, "week"),
-      se_week_pl: () => se(pl, "week"),
-      C_4week: () => d.C_4w,
-      use_4week: () => d.four,
-      weeks_with_blind: () => Array.from(t.weeks),
-      W_h: () => t.weeks.length,
-      shifts: () => {
-        const sd = d.shift!;
-        const sp = pl.shift!;
-        return new PartialList(Array.from(sd.k, (k, q) => ({ k, N_k: sd.n[q], dropped: sd.dropped[q], delta_k: Number.isNaN(sd.v[q]) ? null : sd.v[q], pl_k_pips: Number.isNaN(sp.v[q]) ? null : sp.v[q] })), ["k", "N_k", "dropped", "delta_k", "pl_k_pips"]);
+      no_trade_signals: () => tr.noTrade,
+      no_trade_signals_list: () => trialRowsExtra(tr)!.noTradeList.map(sigItem),
+      // the given bars that passed ①–⑥: no trade either way (spec 7) and so no row of the table (8.1)
+      blind_no_trade_bars: () => (inp.blind_no_trade_bars as J[]).filter((b) => {
+        const pi = piOf(b.pair);
+        const T = ms(b.T);
+        const X = T + N_BARS * STEP.m15;
+        return tradeOf(series[pi], T, X, 1, plant) === null && tradeOf(series[pi], T, X, -1, plant) === null && !t.index.has(rowKey(pi, T, 1));
+      }).length,
+      signals_dropped_no_blind: () => tr.noBlind,
+      strata: () => strataRows(t, tr.rows, plant),
+      N: () => tr.rows.length,
+      delta: () => deltaOf(t, tr.rows, plant),
+      a: () => aOf(t, tr.rows),
+      pl_mean_pips: () => plOf(t, tr.rows),
+      W_count: () => plExtras(t, tr.rows).wCount,
+      W_rate: () => plExtras(t, tr.rows).wRate,
+      stop_case: () => {
+        let stops = false;
+        try {
+          measureTrial(t, late, tr2, { w0: W0.first, plant, dF: null });
+        } catch (err) {
+          stops = String((err as Error).message).startsWith("STOP:");
+        }
+        return { stops, signals_no_blind: tr2.noBlind };
       },
-      sd_shift_delta: () => d.shift?.sd ?? null,
-      sd_shift_pl: () => pl.shift?.sd ?? null,
-      delta_choice: () => choice(d),
-      pl_choice: () => choice(pl),
     };
   },
   "A.2.3": (e) => {
@@ -1371,7 +1582,388 @@ const G2: Record<string, Adapter> = {
       n_after: () => Array.from(rows).filter((r) => t.week[r] !== x.ex1wWeek).length,
     };
   },
+  "A.2.4": (e, plant) => {
+    const { t, rows } = tableOf(e.input);
+    const o = { w0: e.input.w0 as number, shift: true, plant };
+    const d = estDelta(t, rows, o);
+    const pl = estPl(t, rows, o);
+    return {
+      delta: () => d.value,
+      pl_mean_pips: () => pl.value,
+      N: () => d.N,
+      influence: () => influenceRows(t, rows, plant, true),
+      week_S_g_delta: () => sumsObj(d.sums.week),
+      week_S_g_pl: () => sumsObj(pl.sums.week),
+      C_week: () => d.C_week,
+      se_week_delta: () => seOfKind(d, "week"),
+      se_week_pl: () => seOfKind(pl, "week"),
+      C_4week: () => d.C_4w,
+      use_4week: () => d.four,
+      weeks_with_blind: () => Array.from(t.weeks),
+      W_h: () => t.weeks.length,
+      shifts: () => shiftsOut(t, rows, plant, { delta_k: d.shift, pl_k_pips: pl.shift }, orderBy(e.input.signals), droppedIsList(e.expect.shifts)),
+      sd_shift_delta: () => d.shift?.sd ?? null,
+      sd_shift_pl: () => pl.shift?.sd ?? null,
+      delta_choice: () => choiceOf(d),
+      pl_choice: () => choiceOf(pl),
+    };
+  },
+  "A.2.5": (e, plant) => {
+    const { t, rows } = tableOf(e.input);
+    const o = { w0: e.input.w0 as number, shift: true, plant };
+    const d = estDelta(t, rows, o);
+    const pl = estPl(t, rows, o);
+    const pos = orderBy(e.input.signals);
+    return {
+      strata: () => strataRows(t, rows, plant),
+      N: () => d.N,
+      delta: () => d.value,
+      pl_mean_pips: () => pl.value,
+      C_week: () => d.C_week,
+      se_week_delta: () => seOfKind(d, "week"),
+      se_week_pl: () => seOfKind(pl, "week"),
+      blocks_4week: () => sumsObj(d.sums.four),
+      C_4week: () => d.C_4w,
+      use_4week: () => d.four,
+      se_4week_delta: () => seOfKind(d, "4w"),
+      se_4week_pl: () => seOfKind(pl, "4w"),
+      weeks_with_blind: () => Array.from(t.weeks),
+      W_h: () => t.weeks.length,
+      shifts: () => shiftsOut(t, rows, plant, { delta_k: d.shift, pl_k_pips: pl.shift }, pos, droppedIsList(e.expect.shifts)),
+      // the signals whose shifted row (k = 1) is in another season group than their own (8.5: the found row's stratum)
+      restratified_at_k1: () => (shiftsOut(t, rows, plant, { delta_k: d.shift }, pos, false)[0]?.moved ?? [])
+        .filter((m: J) => m.season_from !== m.season_to)
+        .map((m: J) => ({ T: m.T, shifted_T: m.shifted_T, d: m.d, season_from: m.season_from, season_to: m.season_to })),
+      sd_shift_delta: () => d.shift?.sd ?? null,
+      sd_shift_pl: () => pl.shift?.sd ?? null,
+      delta_choice: () => choiceOf(d),
+      pl_choice: () => choiceOf(pl),
+    };
+  },
+  "A.2.6": (e, plant) => {
+    const { t, rows } = tableOf(e.input);
+    const d = estDelta(t, rows, { w0: W0.first, shift: true, plant });
+    return {
+      N: () => d.N,
+      delta: () => d.value,
+      strata: () => strataRows(t, rows, plant),
+      week_S_g_delta: () => sumsObj(d.sums.week),
+      C_week: () => d.C_week,
+      se_week_delta: () => seOfKind(d, "week"),
+      df_week: () => d.cands.find((c) => c.kind === "week")?.df ?? null,
+    };
+  },
+  "A.2.7": (e) => ({
+    cases: () => (e.input.cases as J[]).map((c) => {
+      const KIND: Record<string, SeCand["kind"]> = { "週": "week", "4週": "4w", "週ずらし": "shift" };
+      // the shift candidate is given with its se (K ≥ 2 is implied: it has a t)
+      const cands: SeCand[] = (c.candidates as J[]).map((w) => ({ kind: KIND[w.label], se: w.se, C: w.df + 1, df: w.df, K: KIND[w.label] === "shift" ? 2 : null, t: null, p: 1, q975: null, halfWidth: null }));
+      const ch = choose(c.estimate, 100, cands);
+      return { case: c.case, ...choiceOf({ ...ch, cands }) };
+    }),
+  }),
+  "A.2.8": (e, plant) => g2Small(e, plant),
+  "A.2.9": (e, plant) => g2Small(e, plant),
+  "A.2.10": (e, plant) => {
+    const { t, rows } = tableOf(e.input);
+    const d = estDelta(t, rows, { w0: W0.first, shift: true, plant });
+    return {
+      strata: () => strataRows(t, rows, plant),
+      N: () => d.N,
+      delta_double: () => d.value,
+      delta_treated_as_zero: () => isZero(d.value as number),
+      delta_gt_0: () => gt0(d.value),
+      eligible_rule3: () => rule3Ok(d),
+    };
+  },
+  "A.2.11": (e, plant) => {
+    const { t, rows } = tableOf(e.input);
+    const d = estDelta(t, rows, { w0: W0.first, shift: true, plant });
+    return {
+      strata: () => strataRows(t, rows, plant),
+      N: () => d.N,
+      delta: () => d.value,
+      week_S_g_delta: () => sumsObj(d.sums.week),
+      C_week: () => d.C_week,
+      se_week_double: () => seOfKind(d, "week"),
+      se_week_treated_as_zero: () => isZero(seOfKind(d, "week") as number),
+      C_4week: () => d.C_4w,
+      use_4week: () => d.four,
+      shifts: () => shiftsOut(t, rows, plant, { delta_k: d.shift }, orderBy(e.input.signals), droppedIsList(e.expect.shifts)),
+      sd_shift_delta: () => d.shift?.sd ?? null,
+      delta_choice: () => choiceOf(d),
+      selectable_rule3: () => rule3Ok(d),
+      // the rows of week 2819 in row order (a signal row, then the blind rows of strata with signals)
+      week_2819_rows_delta: () => influenceRows(t, rows, plant, false).filter((x) => x.week === 2819),
+    };
+  },
+  "A.2.12": (e) => ({
+    quantiles: () => (e.expect.quantiles as J[]).map((w) => {
+      const v = tq(qOf(w.q), w.df);
+      return { q: w.q, df: w.df, value_12sig: sig12(v), double: tol(v, "q") };
+    }),
+    cdf: () => (e.expect.cdf as J[]).map((w) => {
+      const T = tCdf(w.x, w.df);
+      const p = pOneSided(w.x, w.df);
+      return { x: w.x, df: w.df, T_12sig: sig12(T), T_double: tol(T, "q"), p_double: tol(p, "p"), p_12sig: sig12(p) };
+    }),
+  }),
+  "A.2.13": (e, plant) => dfAdapter(e, plant),
+  "A.2.25": (e, plant) => dfAdapter(e, plant),
+  "A.2.14": (e, plant) => {
+    const inp = e.input;
+    const s = seriesOfBars("USD/JPY", "m15", inp.bars);
+    const tfs = tfSetOf("m15", fiveOf("m15", { 0: s }));
+    const blindT = new Set((inp.blind_bars_T as string[]).map(ms));
+    const passing = tfs.pairs.map((p) => Uint8Array.from(Array.from(p.T, (T) => (p.pi === 0 && blindT.has(T) ? 1 : 0))));
+    const base = blindTable(tfs, "first", passing, plant);
+    const late = lateTable(base, tfs, SPLIT, plant);
+    const sigs = sigsOf(inp.signals, "m15");
+    const tr = trialRows(base, late, countedSigs("m15", "first", sigs), "first", tfs.pairs, plant);
+    const lateOut = trialRowsExtra(tr)!.lateOut;
+    return {
+      late_trades_signals: () => Object.fromEntries(sigs.map((x) => [dKey(x.T, x.d), tradeRow(s, lateRowTrade(late, x.pi, x.T, x.d as 1 | -1), x.d)])),
+      late_trades_blind: () => Object.fromEntries([...blindT].sort((a, b) => a - b).flatMap((T) => [1, -1].map((d) => [dKey(T, d), tradeRow(s, lateRowTrade(late, 0, T, d as 1 | -1), d)]))),
+      excluded_from_delta_late: () => lateOut.map((x) => ({ ...sigItem(x), X_plus_15: isoOf(x.T + N_BARS * STEP.m15 + LATE_MS), friday_21: x.why === 2 ? isoOf(firstFriday2100(x.T)) : null })),
+      n_excluded: () => tr.lateExcluded.noEntry + tr.lateExcluded.r4 + tr.lateExcluded.end,
+      strata: () => strataRows(late, tr.lateRows, plant),
+      N: () => tr.lateRows.length,
+      delta_late: () => deltaOf(late, tr.lateRows, plant),
+      pl_late_mean_pips: () => plOf(late, tr.lateRows),
+      normal_trades: () => Object.fromEntries(sigs.map((x) => [dKey(x.T, x.d), tradeRow(s, tradeOf(s, x.T, x.X, x.d as 1 | -1, plant), x.d)])),
+      // the late table counts rows (2 per bar: both directions are left out together); the example counts bars
+      late_excluded_by_4: () => ({ signals: tr.lateExcluded.r4, blind_bars: late.lateExcluded.r4 / 2 }),
+      late_excluded_no_late_entry: () => ({ signals: tr.lateExcluded.noEntry, blind_bars: late.lateExcluded.noEntry / 2 }),
+    };
+  },
+  "A.2.15": (e, plant) => {
+    const inp = e.input;
+    const m15 = seriesOfBars(inp.pair, "m15", inp.bars_15min);
+    const h1 = seriesOfBars(inp.pair, "h1", inp.bars_1hour);
+    const T = ms(inp.signal.T);
+    const d = inp.signal.d as 1 | -1;
+    // the example's N is 2 (its params), not the trial's 8
+    const X = T + (e.params.N as number) * STEP.h1;
+    return {
+      X: () => isoOf(X),
+      X_plus_15: () => isoOf(X + LATE_MS),
+      late_stratum_hour: () => hourOf(T + LATE_MS),
+      late_trade: () => tradeRow(m15, lateTradeOf(m15, T, X, d), d),
+      normal_trade_1hour: () => tradeRow(h1, tradeOf(h1, T, X, d, plant), d),
+    };
+  },
+  "A.2.24": (e, plant) => {
+    // flat bars of USD/JPY on 2024-12-24: 15-minute 11:00–21:00 (starts), 1-hour 11:00–20:00
+    const m15 = tfSetOf("m15", fiveOf("m15", { 0: seriesOfBars("USD/JPY", "m15", flatBars("2024-12-24T11:00:00Z", "2024-12-24T21:00:00Z", STEP.m15)) }));
+    const h1 = tfSetOf("h1", fiveOf("h1", { 0: seriesOfBars("USD/JPY", "h1", flatBars("2024-12-24T11:00:00Z", "2024-12-24T20:00:00Z", STEP.h1)) }));
+    return {
+      trials: () => (e.input.trials as J[]).map((t0) => {
+        const tf = TF_OF[t0.tf];
+        const set = tf === "m15" ? m15 : h1;
+        const sigs = sigsOf(t0.signals, tf);
+        // the bars pass ①–③, ⑤, ⑥ (the example); ④ is the module's on [T, X)
+        const pass = new Set(sigs.filter((x) => !r4(x.T, x.X)).map((x) => x.T));
+        const passing = set.pairs.map((p) => Uint8Array.from(Array.from(p.T, (T) => (p.pi === 0 && pass.has(T) ? 1 : 0))));
+        const base = blindTable(set, "first", passing, plant);
+        const late = lateTable(base, m15, SPLIT, plant);
+        const counted = sigs.filter((x) => pass.has(x.T));
+        const tr = trialRows(base, late, countedSigs(tf, "first", counted), "first", set.pairs, plant);
+        return {
+          tf: t0.tf,
+          signals: sigs.map((x) => ({
+            ...sigItem(x), X: isoOf(x.X), X_plus_15: isoOf(x.X + LATE_MS),
+            counted: base.index.has(rowKey(x.pi, x.T, x.d as 1 | -1)), reason_4: r4(x.T, x.X) ? "④" : null,
+            late: late.index.has(rowKey(x.pi, x.T, x.d as 1 | -1)) ? "in" : "excluded",
+          })),
+          n_excluded_from_delta_late: tr.lateExcluded.noEntry + tr.lateExcluded.r4 + tr.lateExcluded.end,
+        };
+      }),
+    };
+  },
+  "A.2.26": (e, plant) => {
+    const inp = e.input;
+    const nBars = e.params.N as number;
+    const bb = inp.blind_bars as J[];
+    // the example gives flags, not bars: the normal table holds the bars with an ordinary trade, the late table those
+    // with a late trade too (both with the late m and PL; the normal values are not used by Δ_late)
+    const base = blindFromRows("m15", "first", false, baseRowsOf(bb));
+    const late = blindFromRows("m15", "first", true, lateRowsOf(bb));
+    const sigs = sigsOf(inp.signals, "m15", nBars);
+    const tr = trialRows(base, late, countedSigs("m15", "first", sigs), "first", fiveOf("m15", {}), plant);
+    const lo = trialRowsExtra(tr)!.lateOut;
+    const lp = latePart(late, tr.lateRows, inp.w0, plant, e.expect.shifts, orderBy(inp.signals));
+    const outBars = lateOutBars(base, late, nBars);
+    return {
+      late_excluded_no_late_entry: () => ({
+        signals: tr.lateExcluded.noEntry,
+        signals_list: lo.filter((x) => x.why === 1).map(sigItem),
+        blind_bars: outBars.filter((x) => x.why === 1).length,
+        blind_bars_list: outBars.filter((x) => x.why === 1).map((x) => isoOf(x.T)),
+      }),
+      not_in_8_1_table: () => bb.filter((b) => !base.index.has(rowKey(piOf(b.pair), ms(b.T), 1))).map((b) => isoOf(ms(b.T))),
+      ...Object.fromEntries(Object.keys(lp.out).map((k) => [k, () => lp.out[k]])),
+    };
+  },
+  "A.2.28": (e) => {
+    const inp = e.input;
+    const withTrade = (inp.signals as J[]).filter((s) => s.trade);
+    // one buy row per signal with a trade (m = h, the buy PL given); the signal without a trade has no row
+    const t = blindFromRows("m15", "first", false, withTrade.map((s) => ({ pi: piOf(s.pair), T: ms(s.T), m: s.h, plBuy: s.pl, plSell: 0 })));
+    const { rows, absent } = rowsIn(t, inp.signals);
+    const nov = nonOverlap(t, rows, inp.N);
+    const kept = new Set(Array.from(nov.rows));
+    return {
+      kept: () => Array.from(nov.rows, (r) => isoOf(t.T[r])),
+      removed: () => Array.from(rows).filter((r) => !kept.has(r)).map((r) => isoOf(t.T[r])),
+      no_trade_neither: () => absent.map((x) => isoOf(ms(x.T))),
+      pl_mean_pips_counted_with_trade: () => plOf(t, rows),
+      pl_mean_pips_non_overlapping: () => nov.pl,
+    };
+  },
+  "A.2.29": (e, plant) => {
+    const inp = e.input;
+    const part = (k: "part1" | "part2") => {
+      const t = blindFromRows(TF_OF[inp.tf], "first", false, (inp[`${k}_blind`] as J[]).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.m, plBuy: b.pl_buy, plSell: b.pl_sell })));
+      const { rows } = rowsIn(t, inp[`${k}_signals`]);
+      return deltaPart(t, rows, inp.w0, plant, e.expect[k].shifts).out;
+    };
+    return { part1: () => part("part1"), part2: () => part("part2") };
+  },
+  "A.2.30": (e, plant) => {
+    const src = handById.get(e.input.same_as)!.input;
+    const { t, rows } = tableOf(src);
+    const a = estA(t, rows, { w0: src.w0, shift: true, plant });
+    const fa = influenceOf(t, rows, "a", plant);
+    const pos = orderBy(src.signals);
+    return {
+      a: () => a.value,
+      a_prime: () => (a.value === null ? null : a.value / 100),
+      N: () => a.N,
+      influence_a: () => Array.from(rows).sort((x, y) => pos(t, x) - pos(t, y)).map((r) => ({ T: isoOf(t.T[r]), d: t.d[r], week: t.week[r], block: Math.floor((t.week[r] - src.w0) / 4), infl_a: fa.sig[r] })),
+      week_S_g_a: () => sumsObj(a.sums.week),
+      C_week: () => a.C_week,
+      se_week_a: () => seOfKind(a, "week"),
+      four_week_S_g_a: () => sumsObj(a.sums.four),
+      C_4week: () => a.C_4w,
+      se_4week_a: () => seOfKind(a, "4w"),
+      shifts: () => shiftsOut(t, rows, plant, { a_k: a.shift }, pos, false),
+      K: () => a.shift?.used ?? null,
+      sd_shift_a: () => a.shift?.sd ?? null,
+      a_choice: () => choiceOf(a),
+    };
+  },
+  "A.2.31": (e) => {
+    const rows = (e.input.trials as J[]).map((r) => ({ name: r.name as string, sd: Number(r.sd_delta_100runs), meanUsed: Number(r.mean_se_used), meanWider: Number(r.mean_se_wider_week_4week) }));
+    const part = (rs: typeof rows, M: number) => {
+      const g = nGate(rs, M);
+      const z = zq(1 - 0.01 / M);
+      return {
+        M, r_used: g.rUsed, r_cl: g.rCl, r_used_sorted: g.rUsed.slice().sort((a, b) => a - b), r_cl_sorted: g.rCl.slice().sort((a, b) => a - b),
+        r_used_median: g.rUsedMedian, r_cl_median: g.rClMedian, z_q: `1-0.01/${M}`, z_12sig: sig12(z), z_double: tol(z, "q"), L_12sig: sig12(g.L), L_double: tol(g.L, "q"),
+        gate: { r_used_median_in_range: g.usedInRange, r_cl_median_le_115: g.clLe115, all_le_L: g.allLeL, pass: g.pass },
+      };
+    };
+    return {
+      even: () => part(rows, e.params.M as number),
+      // the example's odd case: M = 5 without h1.S01 (input.odd_case)
+      odd: () => part(rows.filter((r) => r.name !== "h1.S01"), 5),
+      L_M1364_double: () => tol(nGateL(1364), "q"),
+    };
+  },
+  "A.2.32": (e, plant) => {
+    const inp = e.input;
+    // part 1: the normal table; the signal without a trade (no bar: an empty series) is counted as no trade
+    const t1 = blindFromRows("m15", "first", false, (inp.part1_blind as J[]).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.m, plBuy: b.pl_buy, plSell: b.pl_sell })));
+    const tr1 = trialRows(t1, blindFromRows("m15", "first", true, []), countedSigs("m15", "first", sigsOf(inp.part1_signals, "m15")), "first", fiveOf("m15", {}), plant);
+    const p1 = deltaPart(t1, tr1.rows, inp.w0, plant, e.expect.part1.shifts);
+    p1.out.shifts = shiftsOut(t1, tr1.rows, plant, { delta_k: p1.d.shift, pl_k_pips: p1.pl.shift }, orderBy(inp.part1_signals), droppedIsList(e.expect.part1.shifts));
+    // part 2: the late table from the flags of the ordinary bars
+    const ob = inp.part2_ordinary_bars as J[];
+    const base2 = blindFromRows("m15", "first", false, baseRowsOf(ob));
+    const late2 = blindFromRows("m15", "first", true, lateRowsOf(ob));
+    const tr2 = trialRows(base2, late2, countedSigs("m15", "first", sigsOf(inp.part2_signals, "m15")), "first", fiveOf("m15", {}), plant);
+    const lo = trialRowsExtra(tr2)!.lateOut;
+    const outBars = lateOutBars(base2, late2, N_BARS);
+    const p2 = latePart(late2, tr2.lateRows, inp.w0, plant, e.expect.part2.shifts, orderBy(inp.part2_signals));
+    return {
+      part1: () => ({
+        no_trade_signals: tr1.noTrade,
+        no_trade_signals_list: trialRowsExtra(tr1)!.noTradeList.map(sigItem),
+        shifted_signals: new Prose("which signals are shifted (prose)"),
+        ...p1.out,
+      }),
+      part2: () => ({
+        late_excluded: {
+          signals: tr2.lateExcluded.noEntry + tr2.lateExcluded.r4 + tr2.lateExcluded.end,
+          signals_list: lo.map((x) => ({ ...sigItem(x), reason: LATE_WHY_JA[x.why] })),
+          blind_bars: outBars.length,
+          blind_bars_list: outBars.map((x) => isoOf(x.T)),
+        },
+        shifted_signals: new Prose("which signals are shifted (prose)"),
+        ...p2.out,
+      }),
+    };
+  },
 };
+
+// A.2.8 and A.2.9: one small table (no t: one week, or no signal)
+function g2Small(e: J, plant: string): Record<string, Thunk> {
+  const { t, rows } = tableOf(e.input);
+  const o = { w0: W0.first, shift: true, plant };
+  const d = estDelta(t, rows, o);
+  const a = estA(t, rows, o);
+  const pl = estPl(t, rows, o);
+  return {
+    N: () => d.N,
+    delta: () => d.value,
+    a: () => a.value,
+    pl_mean_pips: () => pl.value,
+    C_week: () => d.C_week,
+    C_4week: () => d.C_4w,
+    W_h: () => t.weeks.length,
+    shifts: () => shiftsOut(t, rows, plant, { delta_k: d.shift }, orderBy(e.input.signals), false),
+    se_week: () => seOfKind(d, "week"),
+    sd_shift: () => d.shift?.sd ?? null,
+    t: () => d.t,
+    p: () => tol(d.p, "p"),
+    lb: () => tol(d.lb, "q"),
+    ub: () => tol(d.ub, "q"),
+    p_pl: () => tol(pl.p, "p"),
+    selectable_rule3: () => rule3Ok(d),
+  };
+}
+
+// A.2.13 and A.2.25: D_F of spec 8.6 (week and 4 weeks, the wider one)
+function dfAdapter(e: J, plant: string): Record<string, Thunk> {
+  const inp = e.input;
+  const t = blindFromRows(TF_OF[inp.tf], "first", false, (inp.blind as J[]).map((b) => ({ pi: piOf(b.pair), T: ms(b.T), m: b.m, plBuy: b.pl_buy, plSell: b.pl_sell })));
+  const rA = rowsIn(t, inp.trial_EF_signals).rows;
+  const rB = rowsIn(t, inp.S_F_signals).rows;
+  // S01 (A.2.25): the same bars as S_F01r with the direction reversed (the example's note)
+  const r01 = rowsIn(t, (inp.S_F_signals as J[]).map((x) => ({ ...x, d: -x.d }))).rows;
+  const D = estDiff(t, rA, rB, { w0: inp.w0, shift: false, plant });
+  const part = (kind: "week" | "4w", sums: Map<number, number>, C: number) => {
+    const c = D.cands.find((x) => x.kind === kind);
+    return { C, S_g: sumsObj(sums), se: c?.se ?? null, df: c?.df ?? null, t975: tol(c?.q975 ?? null, "q"), half_width: tol(c?.halfWidth ?? null, "q") };
+  };
+  return {
+    delta_EF: () => deltaOf(t, rA, plant),
+    delta_SF: () => deltaOf(t, rB, plant),
+    N_EF: () => rA.length,
+    N_SF: () => rB.length,
+    strata_EF: () => strataRows(t, rA, plant),
+    strata_SF: () => strataRows(t, rB, plant),
+    delta_S01_for_reference: () => deltaOf(t, r01, plant),
+    delta_SF_equals_minus_delta_S01_exactly: () => deltaOf(t, rB, plant) === -(deltaOf(t, r01, plant) as number),
+    D_F: () => D.value,
+    week: () => part("week", D.sums.week, D.C_week),
+    four_week: () => part("4w", D.sums.four, D.C_4w),
+    used: () => (D.useLB ? KIND_JA[D.useLB] : null),
+    lower: () => tol(D.lb, "q"),
+    upper: () => tol(D.ub, "q"),
+    lower_gt_0: () => gt0(D.lb),
+  };
+}
 
 // the adapters of the other builders' modules (groups 1–4)
 const G_OTHERS: Record<string, Adapter> = { ...G1, ...G2, ...G3, ...G4 };
@@ -1394,7 +1986,8 @@ async function runOne(e: HandExample, plant: string): Promise<HandResult> {
       setupErr = isNotBuilt(err) ? `skip: ${(err as Error).message}` : `threw: ${(err as Error).message}`;
     }
   }
-  const asked = new Set<string>([...required, ...Object.keys(thunks)]);
+  // an adapter may serve several examples of one shape: a key the example does not have is not asked
+  const asked = new Set<string>([...required, ...Object.keys(thunks).filter((k) => at(e.expect, k) !== undefined)]);
   for (const key of asked) {
     if (ALT_KEY.test(key)) continue;
     const want = at(e.expect, key);
@@ -1437,6 +2030,7 @@ export async function runHand(o: { plant: string; ids?: string[] }): Promise<Han
   const doc = JSON.parse(await Deno.readTextFile(new URL("./lawsearch-hand.json", import.meta.url)));
   if (handTrials.size === 0) for (const t of parseCandidates(JSON.parse(await Deno.readTextFile(new URL("./ledger/lawsearch-candidates.json", import.meta.url))))) handTrials.set(t.id, t);
   const all = doc.examples as HandExample[];
+  for (const e of all) handById.set(e.id, e);
   const pick = o.ids && o.ids.length ? all.filter((e) => o.ids!.includes(e.id)) : all;
   const out: HandResult[] = [];
   for (const e of pick) out.push(await runOne(e, o.plant));
