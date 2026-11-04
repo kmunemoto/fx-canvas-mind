@@ -89,6 +89,15 @@ export interface ChartOverlays {
   // each laid on the newest close, H bars past it (a grey centre, a green top
   // and a red bottom); it reads up to 1,500 bars; off until switched on
   analog: boolean;
+  // #393: the owner's ③ — horizontal bands where the swing highs and lows
+  // stopped again and again (src/lib/srZones.ts); on unless switched off
+  // (「全てのチャートに③を表示されて」)
+  srZones: boolean;
+  // #394: the owner's ① ② ④ — the falling (rising) line from the window's top
+  // (bottom), the steeper line of the last leg, their breaks, and the end of the
+  // move with the line the other way once a swing holds it
+  // (src/lib/trendGuide.ts); on unless switched off
+  trendGuide: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -118,6 +127,8 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   amdPo3: false,
   emaReturn: false,
   analog: false,
+  srZones: true,
+  trendGuide: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

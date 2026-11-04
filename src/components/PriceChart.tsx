@@ -49,6 +49,8 @@ import { ULTRA_COLORS, pctOf, ultra as ultraOf, ultraParamsFor } from "@/lib/ult
 import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
 import { ANALOG, analogForecast } from "@/lib/analogForecast";
+import { SR_ZONES, srZones as srZonesOf } from "@/lib/srZones";
+import { TREND_GUIDE, guideAt, trendGuide as trendGuideOf, type GuideLine } from "@/lib/trendGuide";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -225,12 +227,14 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones", "trendGuide"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
 // #291: and the owner's video's way, on the moving averages' own chart only
-const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx"]);
+// #393 and #394: ③ and ① ② ④ on every chart, the moving averages' own too
+// (locked with the other indicators on a plan without them)
+const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx", "srZones", "trendGuide"]);
 // #291: how many bars to the right of its bar a mark's boxes reach (the video's
 // TradingView position tool was drawn some twenty bars wide)
 const SWEEP_BOX_BARS = 20;
@@ -299,6 +303,11 @@ const STRIP_GAP = 4;
 const ZLT_COLORS = { up: "#2DD204", down: "#D2042D", long: "#FFEB3B", short: "#E040FB" };
 // #392: the similar-past forecast's centre, grey as in the video
 const ANALOG_MID = "#9ca3af";
+// #394: the owner's ① ② ④ (falling lines red, rising lines green)
+const GUIDE_DOWN = "#B91C1C";
+const GUIDE_UP = "#047857";
+// #393: the horizontal zones' blue
+const SR_BLUE = "#2563EB";
 
 const COLORS = {
   up: "hsl(var(--success))",
@@ -1038,6 +1047,28 @@ const PriceChart = ({
   // #116: the bars on screen
   const n = candles.length;
   const { from, to } = visibleRange(n, interactive ? view : null);
+  // #393: the owner's ③ — the bands where the swings stopped again and again —
+  // and #394: ① ② ④, both from the closed candles on screen (redrawn as the
+  // chart is moved, as a person draws on what they see)
+  const srBands = useMemo(
+    () =>
+      ov.srZones && n > 0
+        ? srZonesOf(candles, from, Math.min(to - 1, n - 1 - tail)).map((z) => ({
+            ...z,
+            highs: z.touches.filter((tc) => tc.kind === "high").length,
+            // the year always (a daily or weekly chart's touches span years), the time only when the bar has one
+            dates: z.touches.map((tc) => {
+              const d = candles[tc.i].datetime;
+              return formatJst(parseUtcCandleTime(d), t.intlLocale, { withTime: d.includes(":"), withYear: true });
+            }),
+          }))
+        : null,
+    [ov.srZones, candles, n, from, to, tail, t.intlLocale],
+  );
+  const guide = useMemo(
+    () => (ov.trendGuide && n > 0 ? trendGuideOf(candles, from, Math.min(to - 1, n - 1 - tail)) : null),
+    [ov.trendGuide, candles, n, from, to, tail],
+  );
   // #160: room for bars past the newest one, dragged into view
   const ahead = interactive ? aheadOf(n, view) : 0;
 
@@ -1572,6 +1603,8 @@ const PriceChart = ({
     qtBlsh: t.chart.qtBlshNote,
     // #150
     autoTrend: t.chart.autoTrendNote,
+    srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.gap, SR_ZONES.maxWidth, SR_ZONES.minTouches, SR_ZONES.maxZones),
+    trendGuide: t.chart.trendGuideNote(TREND_GUIDE.pivot, TREND_GUIDE.minBars),
     maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
@@ -1658,6 +1691,10 @@ const PriceChart = ({
       toggle: flip("maCross"),
     },
     { key: "autoTrend", group: "trend" as const, name: t.chart.overlayNames.autoTrend, on: ov.autoTrend, toggle: flip("autoTrend") },
+    // #393: the owner's ③
+    { key: "srZones", group: "trend" as const, name: t.chart.overlayNames.srZones, on: ov.srZones, toggle: flip("srZones") },
+    // #394: the owner's ① ② ④
+    { key: "trendGuide", group: "trend" as const, name: t.chart.overlayNames.trendGuide, on: ov.trendGuide, toggle: flip("trendGuide") },
     { key: "ichimoku", group: "trend" as const, name: t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2), on: ov.ichimoku, toggle: flip("ichimoku") },
     { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
@@ -2952,6 +2989,18 @@ const PriceChart = ({
           {noteOf.analog}
         </p>
       )}
+      {/* #394 */}
+      {ov.trendGuide && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-trendguide-legend">
+          {noteOf.trendGuide}
+        </p>
+      )}
+      {/* #393 */}
+      {ov.srZones && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-srzones-legend">
+          {noteOf.srZones}
+        </p>
+      )}
       {/* #150 */}
       {ov.autoTrend && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-autotrend-legend">
@@ -3720,6 +3769,31 @@ const PriceChart = ({
         {/* candles — #116: those on screen (#124: in Zone Shift's trend
             colour while it is on, as the original paints them; #137: UT
             Bot's green or red first while it is on, as its barcolor) */}
+        {/* #393: the owner's ③ under the candles — each band from its first
+            touch to the right edge (its label over the candles, below) */}
+        {srBands && srBands.length > 0 && (
+          <g data-testid="chart-srzones" clipPath={`url(#${clipId})`}>
+            {srBands.map((z, k) => {
+              const first = z.touches[0].i;
+              if (first >= to) return null;
+              const left = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2);
+              const right = PAD_LEFT + barsW;
+              const yHi = y(z.hi);
+              const yLo = y(z.lo);
+              // a band thinner than 2fs grows around its middle, so it stays on its price
+              const h = Math.max(2 * fs, yLo - yHi);
+              const top = (yHi + yLo) / 2 - h / 2;
+              return (
+                <g key={`sr-${k}`} data-testid="chart-srzone">
+                  <title>
+                    {t.chart.srZoneTitle(z.lo.toFixed(decimals), z.hi.toFixed(decimals), z.highs, z.touches.length - z.highs, z.dates)}
+                  </title>
+                  <rect x={left} y={top} width={Math.max(0, right - left)} height={h} fill={SR_BLUE} fillOpacity="0.14" stroke={SR_BLUE} strokeOpacity="0.55" strokeWidth={1 * fs} strokeDasharray="4 3" />
+                </g>
+              );
+            })}
+          </g>
+        )}
         {/* #150: Ichimoku under the candles — the cloud between the leading
             spans (green while span 1 is on top, red otherwise), then its lines */}
         {ichi && (() => {
@@ -4328,6 +4402,275 @@ const PriceChart = ({
           );
         })()}
 
+        {/* #394: the owner's ① ② ④ and #393's band labels, over the candles. ①
+            solid and ② dashed from their first point to the bars' right edge (not
+            over the price tags' column), a ring on each point they run through and
+            on the close that broke them ("①を上抜け"), and ④ at the end of the move
+            with the line the other way once a higher low (lower high) holds it.
+            Every label sits inside the bars' part of the plot (a number inward
+            from its line's first point) and covers no other label, box or price
+            tag on the chart and no ring: each goes to the free place nearest its
+            own (a row or a few away from its point, the other side of it, or a
+            little along the row), ④'s price and its note as one block. With no
+            free place near its point, it may cover the other overlays' labels and
+            boxes (never the guide's own, a ring or a price tag); with none even
+            so, it is left out, its mark still drawn */}
+        {(guide || (srBands && srBands.length > 0)) && (() => {
+          const fsz = (narrow ? 7.5 : 8.5) * fs;
+          const halo = { stroke: "hsl(var(--background))", strokeWidth: 2.5 * fs, strokeLinejoin: "round" as const, paintOrder: "stroke" as const };
+          // soft: another overlay's label or box, covered only when nothing nearer is free
+          type Box = { x0: number; x1: number; y0: number; y1: number; soft?: boolean };
+          // the room taken: the other overlays' labels and boxes, the price tags,
+          // then the guide's rings and each label as it is placed (a text from its
+          // top to just under its last baseline)
+          const taken: Box[] = [];
+          const gap = 5 * fs;
+          const xMin = PAD_LEFT + 2 * fs;
+          const xMax = PAD_LEFT + barsW - 2 * fs;
+          const yMin = PAD_TOP + 2 * fs;
+          const yMax = H - PAD_BOTTOM - 2 * fs;
+          // a circled number about 1.5em (Inter's, at a small size), a full-width glyph
+          // (CJK, full-width forms) 1em, a space 0.32em, the rest 0.66em: never less
+          // than drawn (measured in Chromium with Inter, IPA Gothic and DejaVu Sans)
+          const textW = (text: string, size: number) =>
+            [...text].reduce((s, ch) => {
+              const c = ch.codePointAt(0) ?? 0;
+              return s + (c >= 0x2460 && c <= 0x24ff ? 1.5 : (c >= 0x3000 && c <= 0x9fff) || (c >= 0xff00 && c <= 0xffef) ? 1 : c === 0x20 ? 0.32 : 0.66);
+            }, 0) * size;
+          // the other overlays drawn on the plot (their own layouts, as they are drawn)
+          for (const l of qtLabels) {
+            const sp = qtPlaced.get(l.key);
+            if (!sp) continue;
+            taken.push({ x0: l.x - l.w / 2, x1: l.x + l.w / 2, y0: sp.top - 3, y1: sp.top + l.h + 3, soft: true });
+            // and its pointer to the candle
+            const [a, b] = sp.under ? [l.lowY + 2, sp.top] : [sp.top + l.h, l.highY - 2];
+            if (b > a) taken.push({ x0: l.x - 3, x1: l.x + 3, y0: a, y1: b, soft: true });
+          }
+          for (const box of [ulBox, qtBox])
+            for (const g of box?.tags ?? []) taken.push({ x0: box!.x1 - ulTagW(g.label), x1: box!.x1, y0: g.cy - tagH / 2, y1: g.cy + tagH / 2 });
+          if (ul) {
+            const hf = (narrow ? 6.5 : 7.5) * fs;
+            for (const tr of ul.trades) {
+              tr.tpAt.forEach((at, k) => {
+                if (at === null || !onScreen(at)) return;
+                const w = `★TP${k + 1}`.length * hf * 0.62 + 5;
+                const hh = hf + 4;
+                const cy = Math.min(Math.max(y(tr.tps[k]), plotTop + hh / 2), plotBottom - hh / 2);
+                taken.push({ x0: x(at) - w / 2, x1: x(at) + w / 2, y0: cy - hh / 2, y1: cy + hh / 2, soft: true });
+              });
+              if (tr.result === "SL" && tr.slAt !== null && onScreen(tr.slAt)) {
+                const r = 3 * fs;
+                const cy = Math.min(Math.max(y(tr.sl), plotTop + r), plotBottom - r);
+                taken.push({ x0: x(tr.slAt) - r, x1: x(tr.slAt) + r, y0: cy - r, y1: cy + r, soft: true });
+              }
+            }
+          }
+          shown.forEach((f, n) => {
+            const o = flagLayout[n];
+            taken.push({ x0: o.left, x1: o.left + o.w, y0: o.top, y1: o.top + labelH, soft: true });
+            const b = boxAt.get(n);
+            if (b) taken.push({ x0: b.left, x1: b.left + boxW, y0: b.top, y1: b.top + boxH, soft: true });
+          });
+          if (autoLines)
+            for (const k of ["up", "down"] as const) {
+              const l = autoLines[k];
+              if (!l || l.brokenAt === null || !onScreen(l.brokenAt)) continue;
+              const tf = (narrow ? 7 : 8) * fs;
+              const w = textW(t.chart.trendBreak[k], tf);
+              const yb = y(lineAt(l, l.brokenAt)) + (k === "up" ? tf + 4 : -4);
+              taken.push({ x0: x(l.brokenAt) - w / 2, x1: x(l.brokenAt) + w / 2, y0: yb - tf * 0.8, y1: yb + tf * 0.25, soft: true });
+            }
+          if (zs)
+            for (const r of zs.retests) {
+              const i = r.i - zs.off;
+              if (!onScreen(i)) continue;
+              const sz = (narrow ? 3.5 : 4) * fs;
+              const cy = r.up ? y(candles[i].low) + sz + 3 : y(candles[i].high) - sz - 3;
+              taken.push({ x0: x(i) - sz, x1: x(i) + sz, y0: cy - sz, y1: cy + sz, soft: true });
+            }
+          if (amd)
+            for (const lb of amd.labels) {
+              const px = x(lb.x - amd.off);
+              const py = y(lb.y);
+              const w = [...lb.text].length * labelSize * 0.62 + 8;
+              const h = labelSize + 6;
+              const rx = lb.style === "label_left" ? px + 4 : px - w / 2;
+              const ry = lb.style === "label_down" ? py - 4 - h : lb.style === "label_up" ? py + 4 : py - h / 2;
+              taken.push({ x0: rx, x1: rx + w, y0: ry, y1: ry + h, soft: true });
+            }
+          // place a label of one line or more (each a row under the one before),
+          // its first baseline wanted at ly (at flip on the other side of its point)
+          // and its start (or end) at lx; `away` the way (+1 down, −1 up) from the
+          // point. Tried: its own row and up to three rows farther, then the other
+          // side and up to two rows farther, each at its own x or just past what is
+          // in the way, along the row by up to `reach`; the nearest free place is
+          // taken (a row costs as much as about 16 px along one); failing that, the
+          // nearest place clear of all but the other overlays' labels and boxes.
+          // Null when none is
+          const place = (texts: string[], lx: number, ly: number, flip: number, anchor: "start" | "end", away: 1 | -1, size = fsz) => {
+            const w = Math.max(...texts.map((s) => textW(s, size)));
+            if (w > xMax - xMin) return null;
+            const row = size + 2 * fs;
+            const down = (texts.length - 1) * row;
+            const boxOf = (x0: number, yb: number): Box => ({ x0, x1: x0 + w, y0: yb - size * 0.8, y1: yb + down + size * 0.25 });
+            const want = anchor === "end" ? lx - w : lx;
+            const here = Math.max(xMin, Math.min(xMax - w, want));
+            const reach = Math.max(30 * fs, Math.min(w, 60 * fs));
+            const rows: Array<[number, number]> = [];
+            for (let k = 0; k <= 3; k++) rows.push([ly + away * k * row, k * row * 1.5]);
+            for (let k = 0; k <= 2; k++) rows.push([flip - away * k * row, (k + 1.5) * row * 1.5]);
+            let best: { x0: number; yb: number; cost: number } | null = null;
+            for (const hardOnly of [false, true]) {
+              for (const [yb, rowCost] of rows) {
+                if (yb - size * 0.8 < yMin || yb + down + size * 0.25 > yMax) continue;
+                // what is in this row (the rest cannot be in the way anywhere along it)
+                const band = boxOf(here, yb);
+                const near = taken.filter((p) => (!hardOnly || !p.soft) && p.y0 < band.y1 + fs && p.y1 + fs > band.y0);
+                const xs = [here];
+                for (const p of near) xs.push(p.x1 + gap + 0.01, p.x0 - gap - w - 0.01);
+                for (const x0 of xs) {
+                  if (x0 < xMin || x0 + w > xMax || (x0 !== here && Math.abs(x0 - here) > reach)) continue;
+                  const cost = rowCost + Math.abs(x0 - here);
+                  if (best && cost >= best.cost) continue;
+                  if (!near.some((p) => x0 < p.x1 + gap && x0 + w + gap > p.x0)) best = { x0, yb, cost };
+                }
+              }
+              if (best) break;
+            }
+            if (!best) return null;
+            taken.push(boxOf(best.x0, best.yb));
+            // drawn from the side it was asked for: the estimate is never narrower than the glyphs drawn
+            return { x: anchor === "end" ? best.x0 + w : best.x0, y: best.yb, anchor, row };
+          };
+          const edge = from + (barsW - slot / 2) / slot;
+          const g = guide;
+          const down = g ? g.dir === "down" : true;
+          const lineColor = down ? GUIDE_DOWN : GUIDE_UP;
+          const otherColor = down ? GUIDE_UP : GUIDE_DOWN;
+          const ink = "hsl(var(--foreground))";
+          const ring = (i: number, price: number, color: string, key: string) => (
+            <circle key={key} cx={x(i)} cy={y(price)} r={4 * fs} fill="none" stroke={color} strokeWidth={1.6 * fs} />
+          );
+          // fromHigh: the line starts at a high (its number goes under it) or at a low (over it)
+          const lines: Array<{ l: GuideLine; num: string; color: string; dashed: boolean; fromHigh: boolean; counter: boolean; id: string }> = [];
+          if (g?.main) lines.push({ l: g.main, num: "①", color: lineColor, dashed: false, fromHigh: down, counter: false, id: "main" });
+          if (g?.steep) lines.push({ l: g.steep, num: "②", color: lineColor, dashed: true, fromHigh: down, counter: false, id: "steep" });
+          if (g?.counter) lines.push({ l: g.counter, num: "④", color: otherColor, dashed: false, fromHigh: !down, counter: true, id: "counter" });
+          // the rings first, so no label lands on one
+          const ringAt = (i: number, price: number, r: number) => taken.push({ x0: x(i) - r, x1: x(i) + r, y0: y(price) - r, y1: y(price) + r });
+          for (const ln of lines) {
+            ringAt(ln.l.a, ln.l.pa, 4 * fs);
+            ringAt(ln.l.b, ln.l.pb, 4 * fs);
+            if (ln.l.brokenAt !== null) ringAt(ln.l.brokenAt, guideAt(ln.l, ln.l.brokenAt), 6 * fs);
+          }
+          if (g) ringAt(g.extreme.i, g.extreme.price, 4 * fs);
+          // a line's number by its first point, inward (under a high, over a low)
+          const numAt = lines.map((ln) => {
+            const py = y(ln.l.pa);
+            const [under, over] = [py + fsz + 6 * fs, py - 6 * fs];
+            return ln.fromHigh
+              ? place([ln.num], x(ln.l.a) + 6 * fs, under, over, "start", 1)
+              : place([ln.num], x(ln.l.a) + 6 * fs, over, under, "start", -1);
+          });
+          // a line from a high breaks upward: its text under the ring; from a low, over it
+          const brText = lines.map((ln) => t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter));
+          const brAt = lines.map((ln, k) => {
+            if (ln.l.brokenAt === null) return null;
+            const by = y(guideAt(ln.l, ln.l.brokenAt));
+            const [under, over] = [by + fsz + 10 * fs, by - 10 * fs];
+            return ln.fromHigh
+              ? place([brText[k]], x(ln.l.brokenAt) - 8 * fs, under, over, "end", 1)
+              : place([brText[k]], x(ln.l.brokenAt) - 8 * fs, over, under, "end", -1);
+          });
+          // ④'s price, and under it while the line from ④ waits a note: one block,
+          // over the low of a down move (under the top of an up move), on the
+          // ring's side; without room for both, the price alone
+          const exText = g ? t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals)) : "";
+          const waitText = g && g.counter === null ? t.chart.trendGuideWaiting(down) : null;
+          const exRight = g ? x(g.extreme.i) > PAD_LEFT + barsW / 2 : false;
+          const exBlock = (() => {
+            if (!g) return null;
+            const lx = x(g.extreme.i) + (exRight ? -8 : 8) * fs;
+            const py = y(g.extreme.price);
+            const anchor = exRight ? "end" : "start";
+            for (const texts of waitText ? [[exText, waitText], [exText]] : [[exText]]) {
+              const more = (texts.length - 1) * (fsz + 2 * fs);
+              const [over, under] = [py - 8 * fs - more, py + fsz + 8 * fs];
+              const at = down ? place(texts, lx, over, under, anchor, -1) : place(texts, lx, under, over, anchor, 1);
+              if (at) return { ...at, texts };
+            }
+            return null;
+          })();
+          const bandAt = (srBands ?? []).map((z) => {
+            const first = z.touches[0].i;
+            if (first >= to) return null;
+            const lo = z.lo.toFixed(decimals);
+            const hi = z.hi.toFixed(decimals);
+            const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
+            const size = fsz * 0.94;
+            const [over, under] = [Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, Math.max(y(z.lo), y(z.hi) + 2 * fs) + size + 3 * fs];
+            const at = place([text], Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, over, under, "start", -1, size);
+            return at ? { text, ...at } : null;
+          });
+          return (
+            <>
+              {bandAt.some((b) => b) && (
+                <g data-testid="chart-srzone-labels" clipPath={`url(#${clipId})`}>
+                  {bandAt.map((b, k) =>
+                    b ? (
+                      <text key={`srl-${k}`} x={b.x} y={b.y} textAnchor={b.anchor} fontSize={fsz * 0.94} fontWeight="700" fill={SR_BLUE} {...halo} data-testid="chart-srzone-label">
+                        {b.text}
+                      </text>
+                    ) : null,
+                  )}
+                </g>
+              )}
+              {g && (
+                <g data-testid="chart-trendguide" clipPath={`url(#${clipId})`}>
+                  {lines.map((ln, k) => (
+                    <g key={ln.id} data-testid={`chart-trendguide-${ln.id}`}>
+                      <title>{t.chart.overlayNames.trendGuide}</title>
+                      <line
+                        x1={x(ln.l.a)} y1={y(ln.l.pa)} x2={x(edge)} y2={y(guideAt(ln.l, edge))}
+                        stroke={ln.color} strokeWidth={1.6 * fs} strokeDasharray={ln.dashed ? "6 4" : undefined} opacity="0.9"
+                      />
+                      {ring(ln.l.a, ln.l.pa, ln.color, "a")}
+                      {ring(ln.l.b, ln.l.pb, ln.color, "b")}
+                      {numAt[k] && (
+                        <text x={numAt[k]!.x} y={numAt[k]!.y} textAnchor={numAt[k]!.anchor} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
+                          {ln.num}
+                        </text>
+                      )}
+                      {ln.l.brokenAt !== null && (
+                        <g data-testid={`chart-trendguide-${ln.id}-break`}>
+                          <title>{brText[k]}</title>
+                          <circle cx={x(ln.l.brokenAt)} cy={y(guideAt(ln.l, ln.l.brokenAt))} r={6 * fs} fill="none" stroke={ink} strokeWidth={1.6 * fs} />
+                          {brAt[k] && (
+                            <text x={brAt[k]!.x} y={brAt[k]!.y} textAnchor={brAt[k]!.anchor} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
+                              {brText[k]}
+                            </text>
+                          )}
+                        </g>
+                      )}
+                    </g>
+                  ))}
+                  <g data-testid="chart-trendguide-extreme">
+                    <title>{waitText ? `${exText}${waitText}` : exText}</title>
+                    {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
+                    {exBlock?.texts.map((s, k) => (
+                      <text
+                        key={k} x={exBlock.x} y={exBlock.y + k * exBlock.row} textAnchor={exBlock.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}
+                        data-testid={k === 1 ? "chart-trendguide-waiting" : undefined}
+                      >
+                        {s}
+                      </text>
+                    ))}
+                  </g>
+                </g>
+              )}
+            </>
+          );
+        })()}
         {/* #150: the trend lines — through the latest two rising swing lows
             (green) and falling swing highs (red), to the close that broke
             them ("割れ" / "抜け") or on to the newest candle */}

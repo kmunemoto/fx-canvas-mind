@@ -60,7 +60,8 @@ const before = (n: number): NumericCandle[] => [...walk(n, 31).map((c, k) => ({ 
 const LISTED = /^chart-overlay-(?!list$|fold$|legend$)[a-zA-Z0-9]+$/;
 // what the moving averages' chart lists: the three lines (#291: and the
 // owner's video's way, among the signals, listed first)
-const MA_LISTED = ["chart-overlay-sweepx", "chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"];
+// #393 and #394: the horizontal zones ③ and the trend lines ① ② ④ are on every chart, this one too
+const MA_LISTED = ["chart-overlay-sweepx", "chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3", "chart-overlay-srZones", "chart-overlay-trendGuide"];
 
 // every indicator, strip and drawing saved on
 const ALL_ON = {
@@ -176,7 +177,7 @@ describe("#201 the chart with the moving averages alone", () => {
     expect(screen.getByTestId("chart-sheet-locked-note").textContent).toContain("売買サインと RSI・パラボリックSAR は無料で表示できます");
     lockedFull.unmount();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked />);
-    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toBe("🔒 の移動平均線と流動性狩り＋EMAクロスの印は Light プラン（月額2,980円）で使えます。");
+    expect(screen.getByTestId("chart-sheet-locked-note").textContent).toBe("🔒 の移動平均線・流動性狩り＋EMAクロスの印・水平の帯③・トレンドライン①②④は Light プラン（月額2,980円）で使えます。");
   });
 
   it("with the three lines off, says nothing is being read for them", () => {
@@ -237,7 +238,7 @@ describe("#201 the chart with the moving averages alone", () => {
     }
   });
 
-  it("locked: the three listed with 🔒 and none drawn, nothing else listed", () => {
+  it("locked: the three (and ③, ① ② ④) listed with 🔒 and none drawn, nothing else listed", () => {
     const onLocked = vi.fn();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked onLockedIndicator={onLocked} />);
     expect(screen.queryByTestId("chart-ema")).toBeNull();
@@ -280,6 +281,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     expect(within(card).getByRole("heading").textContent).toBe("移動平均線チャート");
     await waitFor(() => expect(within(card).getByTestId("ma-chart-note")).toBeTruthy());
     expect(screen.getByTestId("ma-chart-note").textContent).toContain("上のリアルタイムチャートと共通");
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("水平の帯③・トレンドライン①②④の表示のオンオフは、上のリアルタイムチャートと共通です");
     for (const id of ["live-views", "live-signals", "live-latest", "live-note", "live-dow", "live-recommended-fold", "chart-draw-open", "chart-signal-legend", "chart-position-legend", "chart-sar"]) {
       expect(screen.queryByTestId(id)).toBeNull();
     }
@@ -620,6 +622,11 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     render(chart("ma", { indicatorsAllowed: false, loadHistory, onLockedIndicator: onLocked }));
     await waitFor(() => expect(screen.getByTestId("ma-chart-note")).toBeTruthy());
     expect(screen.getByTestId("ma-chart-note").textContent).toContain("Light 以上");
+    // #393・#394: ③ and ① ② ④ are locked too, and the note says so
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("移動平均線・印・水平の帯③・トレンドライン①②④は、インジケーターを使えるプラン（Light 以上）で表示されます。");
+    expect(screen.getByTestId("ma-chart-note").textContent).not.toContain("全てのチャート");
+    expect(screen.queryByTestId("chart-srzones")).toBeNull();
+    expect(screen.queryByTestId("chart-trendguide")).toBeNull();
     expect(screen.getByTestId("chart-candles")).toBeTruthy();
     expect(screen.queryByTestId("chart-ema")).toBeNull();
     fireEvent.click(screen.getByTestId("chart-overlay-fold"));
@@ -674,7 +681,7 @@ describe("#201 the moving averages' chart beside the live chart", () => {
   });
 
   it("says the same in English", async () => {
-    rtlRender(
+    const locked = rtlRender(
       <LocaleProvider initial="en">
         {chart("ma", { indicatorsAllowed: false })}
       </LocaleProvider>,
@@ -682,5 +689,36 @@ describe("#201 the moving averages' chart beside the live chart", () => {
     expect(within(screen.getByTestId("ma-chart")).getByRole("heading").textContent).toBe("Moving averages chart");
     await waitFor(() => expect(screen.getByTestId("ma-chart-note")).toBeTruthy());
     expect(screen.getByTestId("ma-chart-note").textContent).toContain("Light and up");
+    // #393・#394: ③ and ① ② ④ are locked too, and the notes say so
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("The moving averages, the marks, ③ and ① ② ④ are drawn with a plan that has the indicators (Light and up).");
+    expect(screen.getByTestId("ma-chart-note").textContent).not.toContain("every chart");
+    locked.unmount();
+    rtlRender(
+      <LocaleProvider initial="en">
+        {chart("ma")}
+      </LocaleProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("ma-chart-note")).toBeTruthy());
+    expect(screen.getByTestId("ma-chart-note").textContent).toContain("the switches of the moving averages, the horizontal zones ③ and the trend lines ① ② ④, are the live chart's above");
+  });
+
+  it("the ③ and ① ② ④ switches are the live chart's: switched off on this chart, they are off on the live chart too", async () => {
+    const full = render(chart("full"));
+    await waitFor(() => expect(screen.getByTestId("chart-trendguide")).toBeTruthy());
+    expect(screen.getByTestId("chart-srzones")).toBeTruthy();
+    full.unmount();
+    const ma = render(chart("ma"));
+    await waitFor(() => expect(screen.getByTestId("chart-trendguide")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("chart-toggle-srZones"));
+    fireEvent.click(screen.getByTestId("chart-toggle-trendGuide"));
+    expect(screen.queryByTestId("chart-srzones")).toBeNull();
+    expect(screen.queryByTestId("chart-trendguide")).toBeNull();
+    ma.unmount();
+    render(chart("full"));
+    await waitFor(() => expect(screen.getByTestId("chart-candles")).toBeTruthy());
+    expect(getChartPrefs().overlays.srZones).toBe(false);
+    expect(getChartPrefs().overlays.trendGuide).toBe(false);
+    expect(screen.queryByTestId("chart-srzones")).toBeNull();
+    expect(screen.queryByTestId("chart-trendguide")).toBeNull();
   });
 });
