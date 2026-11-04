@@ -13,11 +13,13 @@
 //     shallowest fall that every swing high from there to the lowest low stays
 //     under — it touches the swing that sticks up most (a swing high: no higher
 //     high `pivot` bars either side, as the trend lines read them; a bar that is
-//     not a swing may poke through by up to about `pivot` × the slope);
+//     not a confirmed swing is not held under it and can stand above the line,
+//     most often within `pivot` bars of the low or of the newest bar);
 //   * ② the same from the highest swing high after ①'s touch (the last leg),
 //     when it falls more steeply than ①;
-//   * a break: the first close above the line after the lowest low (a close above
-//     it before the low was not a break: the price went on to the low);
+//   * a break: the first close above the line from the lowest low's bar on (the
+//     bar that makes the low may close above it; a close above it before the low
+//     was not a break: the price went on to the low);
 //   * ④ the lowest low (the end of the move, the later of equal ones), and the
 //     rising line from it through the first confirmed higher swing low after it
 //     (「上昇の線は、次の押し安値ができてから引く」), with its break: the first
@@ -36,7 +38,8 @@ export interface GuideLine {
   pa: number;
   b: number;
   pb: number;
-  // the first close through it after b (above a falling line, below a rising one)
+  // the first close through it (above a falling line, below a rising one): for
+  // ① ② from the extreme's bar on, for ④'s line after b
   brokenAt: number | null;
 }
 
@@ -87,7 +90,7 @@ const readDown = (hi: number[], lo: number[], cl: number[], from: number, last: 
     const f = fallingFrom(hi, top, kL, last, pivot);
     if (!f) return null;
     const l: GuideLine = { a: top, pa: hi[top], b: f.b, pb: hi[f.b], brokenAt: null };
-    for (let t = Math.max(f.b, kL) + 1; t <= last; t++) {
+    for (let t = Math.max(f.b + 1, kL); t <= last; t++) {
       if (cl[t] > guideAt(l, t)) {
         l.brokenAt = t;
         break;

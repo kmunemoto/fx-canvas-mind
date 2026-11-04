@@ -233,6 +233,7 @@ const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci",
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
 // #291: and the owner's video's way, on the moving averages' own chart only
 // #393 and #394: ③ and ① ② ④ on every chart, the moving averages' own too
+// (locked with the other indicators on a plan without them)
 const MA_CHART_KEYS = new Set<string>([...MA_KEYS, "sweepx", "srZones", "trendGuide"]);
 // #291: how many bars to the right of its bar a mark's boxes reach (the video's
 // TradingView position tool was drawn some twenty bars wide)
@@ -4406,21 +4407,73 @@ const PriceChart = ({
             over the price tags' column), a ring on each point they run through and
             on the close that broke them ("①を上抜け"), and ④ at the end of the move
             with the line the other way once a higher low (lower high) holds it.
-            Every label sits inside the plot (a number inward from its line's first
-            point) and the labels are placed so none overlaps another: the guide's
-            first, then the bands' ("③ the range (count)"), each moved right past
-            one already placed */}
+            Every label sits inside the bars' part of the plot (not over the
+            price tags' column; a number inward from its line's first point) and
+            none overlaps another label or a ring: the guide's first, then the
+            bands' ("③ the range (count)"); one that would is moved a row away
+            from its point, else along its row to the nearest free place, and is
+            drawn from the side it was moved away from, so a wider glyph than
+            estimated runs away from what it avoids */}
         {(guide || (srBands && srBands.length > 0)) && (() => {
           const fsz = (narrow ? 7.5 : 8.5) * fs;
           const halo = { stroke: "hsl(var(--background))", strokeWidth: 2.5 * fs, strokeLinejoin: "round" as const, paintOrder: "stroke" as const };
-          const placed: Array<{ x0: number; x1: number; y: number }> = [];
-          // put a label at (lx, ly) with the given anchor, moved right while it would overlap one placed
-          const place = (text: string, lx: number, ly: number, anchor: "start" | "end") => {
-            const w = text.length * fsz * 0.62;
-            let x0 = anchor === "end" ? lx - w : lx;
-            for (const p of placed) if (Math.abs(p.y - ly) < fsz + 2 * fs && x0 < p.x1 + 6 * fs && x0 + w > p.x0) x0 = p.x1 + 6 * fs;
-            placed.push({ x0, x1: x0 + w, y: ly });
-            return { x: x0, y: ly };
+          // the room taken: labels (from their top to just under the baseline) and rings
+          const taken: Array<{ x0: number; x1: number; y0: number; y1: number }> = [];
+          const gap = 6 * fs;
+          const hits = (x0: number, x1: number, y0: number, y1: number) =>
+            taken.find((p) => x0 < p.x1 + gap && x1 + gap > p.x0 && y0 < p.y1 + fs && y1 + fs > p.y0);
+          const xMin = PAD_LEFT + 2 * fs;
+          const xMax = PAD_LEFT + barsW - 2 * fs;
+          const yMin = PAD_TOP + 2 * fs;
+          const yMax = H - PAD_BOTTOM - 2 * fs;
+          // a circled number about 1.4em (Inter's), a full-width glyph (CJK, full-width forms) about 1em, the rest a little over 0.6em
+          const textW = (text: string, size: number) =>
+            [...text].reduce((s, ch) => {
+              const c = ch.codePointAt(0) ?? 0;
+              return s + (c >= 0x2460 && c <= 0x24ff ? 1.4 : (c >= 0x3000 && c <= 0x9fff) || (c >= 0xff00 && c <= 0xffef) ? 1 : 0.64);
+            }, 0) * size;
+          // put a label of the given size with its start (or end) at lx and its
+          // baseline at ly; `away` the way (+1 down, −1 up) from the point it marks
+          const place = (text: string, lx: number, ly: number, anchor: "start" | "end", away: 1 | -1, size = fsz) => {
+            const w = textW(text, size);
+            const box = (x0: number, yb: number) => ({ x0, x1: x0 + w, y0: yb - size * 0.8, y1: yb + size * 0.25 });
+            const fits = (x0: number, yb: number) => x0 >= xMin && x0 + w <= xMax && yb - size * 0.8 >= yMin && yb + size * 0.25 <= yMax;
+            const want = anchor === "end" ? lx - w : lx;
+            const clampX = (x0: number) => Math.max(xMin, Math.min(xMax - w, x0));
+            const clampY = (yb: number) => Math.max(yMin + size * 0.8, Math.min(yMax - size * 0.25, yb));
+            const row = size + 2 * fs;
+            const free = (x0: number, yb: number) => {
+              const b = box(x0, yb);
+              return fits(x0, yb) && !hits(b.x0, b.x1, b.y0, b.y1);
+            };
+            // along a row: to the right past whatever it meets, or to the left
+            const slide = (yb: number, dir: 1 | -1): number | null => {
+              let x0 = clampX(want);
+              for (let n = 0; n < taken.length + 1; n++) {
+                const b = box(x0, yb);
+                const p = hits(b.x0, b.x1, b.y0, b.y1);
+                if (!p) return fits(x0, yb) ? x0 : null;
+                x0 = dir > 0 ? p.x1 + gap + 0.01 : p.x0 - gap - w - 0.01;
+                if (!fits(x0, yb)) return null;
+              }
+              return null;
+            };
+            let at: { x0: number; yb: number; anchor: "start" | "end" } | null = null;
+            const x00 = clampX(want);
+            const a0: "start" | "end" = x00 > want + 0.01 ? "start" : x00 < want - 0.01 ? "end" : anchor;
+            for (const yb of [ly, ly + away * row].map(clampY)) if (!at && free(x00, yb)) at = { x0: x00, yb, anchor: a0 };
+            for (const yb of [ly, ly + away * row, ly + 2 * away * row].map(clampY)) {
+              if (at) break;
+              const r = slide(yb, 1);
+              const l = slide(yb, -1);
+              // the nearer of the two
+              if (r !== null && (l === null || r - want <= want - l)) at = { x0: r, yb, anchor: "start" };
+              else if (l !== null) at = { x0: l, yb, anchor: "end" };
+            }
+            // no free place: where it wanted to be, inside the plot
+            if (!at) at = { x0: x00, yb: clampY(ly), anchor: a0 };
+            taken.push(box(at.x0, at.yb));
+            return { x: at.anchor === "end" ? at.x0 + w : at.x0, y: at.yb, anchor: at.anchor };
           };
           const edge = from + (barsW - slot / 2) / slot;
           const g = guide;
@@ -4436,23 +4489,48 @@ const PriceChart = ({
           if (g?.main) lines.push({ l: g.main, num: "①", color: lineColor, dashed: false, fromHigh: down, counter: false, id: "main" });
           if (g?.steep) lines.push({ l: g.steep, num: "②", color: lineColor, dashed: true, fromHigh: down, counter: false, id: "steep" });
           if (g?.counter) lines.push({ l: g.counter, num: "④", color: otherColor, dashed: false, fromHigh: !down, counter: true, id: "counter" });
-          const numAt = lines.map((ln) => place(ln.num, x(ln.l.a) + 6 * fs, y(ln.l.pa) + (ln.fromHigh ? fsz + 6 * fs : -6 * fs), "start"));
+          // the rings first, so no label lands on one
+          const ringAt = (i: number, price: number, r: number) => taken.push({ x0: x(i) - r, x1: x(i) + r, y0: y(price) - r, y1: y(price) + r });
+          for (const ln of lines) {
+            ringAt(ln.l.a, ln.l.pa, 4 * fs);
+            ringAt(ln.l.b, ln.l.pb, 4 * fs);
+            if (ln.l.brokenAt !== null) ringAt(ln.l.brokenAt, guideAt(ln.l, ln.l.brokenAt), 6 * fs);
+          }
+          if (g) ringAt(g.extreme.i, g.extreme.price, 4 * fs);
+          const numAt = lines.map((ln) => place(ln.num, x(ln.l.a) + 6 * fs, y(ln.l.pa) + (ln.fromHigh ? fsz + 6 * fs : -6 * fs), "start", ln.fromHigh ? 1 : -1));
           // a line from a high breaks upward: its text under the ring; from a low, over it
           const brAt = lines.map((ln) => {
             if (ln.l.brokenAt === null) return null;
             const by = y(guideAt(ln.l, ln.l.brokenAt));
-            return place(t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter), x(ln.l.brokenAt) - 8 * fs, by + (ln.fromHigh ? fsz + 10 * fs : -10 * fs), "end");
+            return place(t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter), x(ln.l.brokenAt) - 8 * fs, by + (ln.fromHigh ? fsz + 10 * fs : -10 * fs), "end", ln.fromHigh ? 1 : -1);
           });
-          const exText = g ? t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals), g.counter === null) : "";
+          // ④'s price, and while the line from ④ waits a note on the line under it
+          // (over the low of a down move, under the top of an up move: the line
+          // nearer the ring is placed first, the other a row away from it)
+          const exText = g ? t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals)) : "";
+          const waitText = g && g.counter === null ? t.chart.trendGuideWaiting(down) : null;
           const exRight = g ? x(g.extreme.i) > PAD_LEFT + barsW / 2 : false;
-          const exAt = g ? place(exText, x(g.extreme.i) + (exRight ? -8 : 8) * fs, y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs), exRight ? "end" : "start") : null;
+          let exAt: ReturnType<typeof place> | null = null;
+          let waitAt: ReturnType<typeof place> | null = null;
+          if (g) {
+            const lx = x(g.extreme.i) + (exRight ? -8 : 8) * fs;
+            const ly = y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs);
+            const row = fsz + 2 * fs;
+            if (waitText && down) {
+              waitAt = place(waitText, lx, ly, exRight ? "end" : "start", -1);
+              exAt = place(exText, waitAt.x, waitAt.y - row, waitAt.anchor, -1);
+            } else {
+              exAt = place(exText, lx, ly, exRight ? "end" : "start", down ? -1 : 1);
+              if (waitText) waitAt = place(waitText, exAt.x, exAt.y + row, exAt.anchor, 1);
+            }
+          }
           const bandAt = (srBands ?? []).map((z) => {
             const first = z.touches[0].i;
             if (first >= to) return null;
             const lo = z.lo.toFixed(decimals);
             const hi = z.hi.toFixed(decimals);
             const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
-            return { text, ...place(text, Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, "start") };
+            return { text, ...place(text, Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, "start", -1, fsz * 0.94) };
           });
           return (
             <>
@@ -4460,7 +4538,7 @@ const PriceChart = ({
                 <g data-testid="chart-srzone-labels" clipPath={`url(#${clipId})`}>
                   {bandAt.map((b, k) =>
                     b ? (
-                      <text key={`srl-${k}`} x={b.x} y={b.y} fontSize={fsz * 0.94} fontWeight="700" fill={SR_BLUE} {...halo} data-testid="chart-srzone-label">
+                      <text key={`srl-${k}`} x={b.x} y={b.y} textAnchor={b.anchor} fontSize={fsz * 0.94} fontWeight="700" fill={SR_BLUE} {...halo} data-testid="chart-srzone-label">
                         {b.text}
                       </text>
                     ) : null,
@@ -4478,13 +4556,13 @@ const PriceChart = ({
                       />
                       {ring(ln.l.a, ln.l.pa, ln.color, "a")}
                       {ring(ln.l.b, ln.l.pb, ln.color, "b")}
-                      <text x={numAt[k].x} y={numAt[k].y} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
+                      <text x={numAt[k].x} y={numAt[k].y} textAnchor={numAt[k].anchor} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
                         {ln.num}
                       </text>
                       {ln.l.brokenAt !== null && brAt[k] && (
                         <g data-testid={`chart-trendguide-${ln.id}-break`}>
                           <circle cx={x(ln.l.brokenAt)} cy={y(guideAt(ln.l, ln.l.brokenAt))} r={6 * fs} fill="none" stroke={ink} strokeWidth={1.6 * fs} />
-                          <text x={brAt[k]!.x} y={brAt[k]!.y} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
+                          <text x={brAt[k]!.x} y={brAt[k]!.y} textAnchor={brAt[k]!.anchor} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
                             {t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter)}
                           </text>
                         </g>
@@ -4493,9 +4571,14 @@ const PriceChart = ({
                   ))}
                   <g data-testid="chart-trendguide-extreme">
                     {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
-                    <text x={exAt!.x} y={exAt!.y} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}>
+                    <text x={exAt!.x} y={exAt!.y} textAnchor={exAt!.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}>
                       {exText}
                     </text>
+                    {waitText && waitAt && (
+                      <text x={waitAt.x} y={waitAt.y} textAnchor={waitAt.anchor} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo} data-testid="chart-trendguide-waiting">
+                        {waitText}
+                      </text>
+                    )}
                   </g>
                 </g>
               )}

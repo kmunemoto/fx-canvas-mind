@@ -91,6 +91,22 @@ describe("#394 the owner's ① ② ④ drawn by themselves", () => {
     expect(g.main!.brokenAt).toBe(64);
   });
 
+  it("counts a break on the bar that makes the low (a reversal bar closing above ① and ②)", () => {
+    // bar 60 makes the lowest low and closes above ① and ②, then bar 61 closes back under them
+    const b = zig(DOWN);
+    const g0 = trendGuide(b, 0, b.length - 1)!;
+    const top = Math.max(guideAt(g0.main!, 60), guideAt(g0.steep!, 60)) + 0.0001;
+    b[60] = { open: b[60].low, high: top + 0.0002, low: b[60].low, close: top };
+    const g = trendGuide(b, 0, b.length - 1)!;
+    expect(g.extreme.i).toBe(60);
+    expect(g.main!.brokenAt).toBe(60);
+    expect(g.steep!.brokenAt).toBe(60);
+    // with only bars 0..60 closed, the newest bar is the low and the break
+    const g1 = trendGuide(b, 0, 60)!;
+    expect(g1.extreme.i).toBe(60);
+    expect(g1.main!.brokenAt).toBe(60);
+  });
+
   it("keeps ④'s line through the first higher low, so a later higher low does not move it or its break", () => {
     // the first higher low at bar 70 (0.9946), a close under the line, then another higher low at bar 80
     const b = zig([...DOWN, 0.995, 1.004, 0.99, 1.0]);

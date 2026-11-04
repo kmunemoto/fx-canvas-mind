@@ -233,7 +233,7 @@ export const en: Dict = {
     lockedHint: "Available with the Light plan",
     lockedNote: "The indicators marked 🔒 come with the Light plan (¥2,980 a month). The signals, RSI and the Parabolic SAR are free.",
     // #201: on the moving averages' own chart (no signals, RSI or SAR on it)
-    maLockedNote: "The moving averages and the liquidity sweep + EMA cross marks marked 🔒 come with the Light plan (¥2,980 a month).",
+    maLockedNote: "The moving averages, the liquidity sweep + EMA cross marks, the horizontal zones ③ and the trend lines ① ② ④ marked 🔒 come with the Light plan (¥2,980 a month).",
     // #135: Bollinger %b and RCI, TradingView's built-ins
     pctB: {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
@@ -383,12 +383,13 @@ export const en: Dict = {
       "① ② ④ (automatic): drawn from the closed bars on screen. A down move when the highest high comes before the lowest low, an up move otherwise (the later of two equal ones). " +
       `In a down move, ① runs from the highest high with the shallowest fall that keeps every swing high (higher than ${pivot} bars either side) down to the low under it — the line touching the swing that sticks up most. ` +
       "② is drawn the same way from the highest swing after ①'s touch, when it falls more steeply (the last leg). " +
-      "After the lowest low, the first bar whose close crosses a line is marked \"① broken up\" / \"② broken up\". ④ is the lowest low (the end of the move); once the first higher swing low after it is confirmed, the rising line through ④ and that low is drawn, and a close below it is marked \"④'s line broken down\". An up move is the same with highs and lows swapped. " +
-      `③ is the blue band of \"Horizontal zones ③\". Not drawn with fewer than ${minBars} bars on screen; redrawn from the bars on screen when the chart is moved or moves on with a new closed bar, so ① changes when its start leaves the screen. ` +
+      "From the lowest low's bar on (that bar too), the first bar whose close crosses a line is marked \"① broken up\" / \"② broken up\". ④ is the lowest low (the end of the move); once the first higher swing low after it is confirmed, the rising line through ④ and that low is drawn, and a close below it is marked \"④'s line broken down\". An up move is the same with highs and lows swapped. " +
+      `③ is the blue band of "Horizontal zones ③". Not drawn with fewer than ${minBars} bars on screen; redrawn from the bars on screen when the chart is moved or moves on with a new closed bar, so ① changes when its start leaves the screen. ` +
       "Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
     trendGuideBreak: (n: string, up: boolean, counter = false) => `${n}${counter ? "'s line" : ""} broken ${up ? "up" : "down"}`,
-    trendGuideExtreme: (low: boolean, price: string, waiting: boolean) =>
-      `④ ${low ? "low" : "high"} ${price}${waiting ? (low ? " (the rising line is drawn once the next higher low forms)" : " (the falling line is drawn once the next lower high forms)") : ""}`,
+    trendGuideExtreme: (low: boolean, price: string) => `④ ${low ? "low" : "high"} ${price}`,
+    // the line from ④ not drawn yet (the second line of ④'s label)
+    trendGuideWaiting: (low: boolean) => (low ? "(rising line once the next higher low forms)" : "(falling line once the next lower high forms)"),
     srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
       `Horizontal zone ${lo}–${hi}: ${highs} highs, ${lows} lows (${dates.join(", ")})`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
@@ -729,10 +730,10 @@ export const en: Dict = {
     // #201: the moving averages' own chart, under the live chart
     maTitle: "Moving averages chart",
     maNote: (allowed: boolean) =>
-      "The candles, the moving averages, the marks of the video's way (liquidity sweep + EMA cross), and the horizontal zones ③ and trend lines ① ② ④ (#393, #394: on every chart) only (no other signal marks, strips or indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
+      "The candles, the moving averages, the marks of the video's way (liquidity sweep + EMA cross), and the horizontal zones ③ and trend lines ① ② ④ (#393, #394) only (no other signal marks, strips or indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
       (allowed
-        ? "The three lines' lengths, kinds and switches are the live chart's above: a change on either is made on both. "
-        : "The moving averages and the marks are drawn with a plan that has the indicators (Light and up). ") +
+        ? "The three lines' lengths and kinds, and the switches of the moving averages, the horizontal zones ③ and the trend lines ① ② ④, are the live chart's above: a change on either is made on both. "
+        : "The moving averages, the marks, ③ and ① ② ④ are drawn with a plan that has the indicators (Light and up). ") +
       "The prices come as on the chart above (GMO Coin's public rates for its pairs; for the other pairs and gold, Twelve Data's bars and Swissquote's prices; gold's 1-minute bars are made of Swissquote's prices recorded every 3 seconds or so). The moving averages are shown only. On gold's 1-minute chart the liquidity sweep + EMA cross marks are judged as the email alerts are (Settings → Email alerts).",
     title: "Live chart",
     connecting: "Connecting…",
