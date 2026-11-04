@@ -50,6 +50,7 @@ import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
 import { ANALOG, analogForecast } from "@/lib/analogForecast";
 import { SR_ZONES, srZones as srZonesOf } from "@/lib/srZones";
+import { TREND_GUIDE, guideAt, trendGuide as trendGuideOf, type GuideLine } from "@/lib/trendGuide";
 import {
   ADX_COLORS,
   ADX_DEFAULTS,
@@ -226,7 +227,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones", "trendGuide"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -300,6 +301,9 @@ const STRIP_GAP = 4;
 const ZLT_COLORS = { up: "#2DD204", down: "#D2042D", long: "#FFEB3B", short: "#E040FB" };
 // #392: the similar-past forecast's centre, grey as in the video
 const ANALOG_MID = "#9ca3af";
+// #394: the owner's ① ② ④ (falling lines red, rising lines green)
+const GUIDE_DOWN = "#B91C1C";
+const GUIDE_UP = "#047857";
 // #393: the horizontal zones' blue
 const SR_BLUE = "#2563EB";
 
@@ -938,17 +942,6 @@ const PriceChart = ({
       l ? { ...l, a: l.a - histOff, b: l.b - histOff, brokenAt: l.brokenAt === null ? null : l.brokenAt - histOff } : null;
     return { up: onChart(r.up), down: onChart(r.down) };
   }, [ov.autoTrend, histAll, histOff, tail]);
-  // #393: the owner's ③ — the bands where the swings stopped again and again,
-  // on closed bars of the same history and the candles; touches on the
-  // chart's candles (a touch before the first is off to the left)
-  const srBands = useMemo(() => {
-    if (!ov.srZones || !histAll) return null;
-    return srZonesOf(histAll, histAll.length - 1 - tail).map((z) => ({
-      ...z,
-      touches: z.touches.map((tc) => ({ ...tc, i: tc.i - histOff })),
-      dates: z.touches.map((tc) => (histAll[tc.i] as { datetime?: string }).datetime ?? null).filter((d): d is string => d !== null),
-    }));
-  }, [ov.srZones, histAll, histOff, tail]);
   // #151: the video's ULTRA over the same history and the candles, from a
   // fixed time as Q-Trend (#148), so the chart opened again draws the same
   // signals and counts them alike; indices on the chart's candles (a signal
@@ -1052,6 +1045,20 @@ const PriceChart = ({
   // #116: the bars on screen
   const n = candles.length;
   const { from, to } = visibleRange(n, interactive ? view : null);
+  // #393: the owner's ③ — the bands where the swings stopped again and again —
+  // and #394: ① ② ④, both from the closed candles on screen (redrawn as the
+  // chart is moved, as a person draws on what they see)
+  const srBands = useMemo(
+    () =>
+      ov.srZones && n > 0
+        ? srZonesOf(candles, from, Math.min(to - 1, n - 1 - tail)).map((z) => ({ ...z, dates: z.touches.map((tc) => candles[tc.i].datetime) }))
+        : null,
+    [ov.srZones, candles, n, from, to, tail],
+  );
+  const guide = useMemo(
+    () => (ov.trendGuide && n > 0 ? trendGuideOf(candles, from, Math.min(to - 1, n - 1 - tail)) : null),
+    [ov.trendGuide, candles, n, from, to, tail],
+  );
   // #160: room for bars past the newest one, dragged into view
   const ahead = interactive ? aheadOf(n, view) : 0;
 
@@ -1586,7 +1593,8 @@ const PriceChart = ({
     qtBlsh: t.chart.qtBlshNote,
     // #150
     autoTrend: t.chart.autoTrendNote,
-    srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.lookback, SR_ZONES.width, SR_ZONES.minTouches, SR_ZONES.maxZones),
+    srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.gap, SR_ZONES.maxWidth, SR_ZONES.minTouches, SR_ZONES.maxZones),
+    trendGuide: t.chart.trendGuideNote(TREND_GUIDE.pivot, TREND_GUIDE.minBars),
     maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
@@ -1675,6 +1683,8 @@ const PriceChart = ({
     { key: "autoTrend", group: "trend" as const, name: t.chart.overlayNames.autoTrend, on: ov.autoTrend, toggle: flip("autoTrend") },
     // #393: the owner's ③
     { key: "srZones", group: "trend" as const, name: t.chart.overlayNames.srZones, on: ov.srZones, toggle: flip("srZones") },
+    // #394: the owner's ① ② ④
+    { key: "trendGuide", group: "trend" as const, name: t.chart.overlayNames.trendGuide, on: ov.trendGuide, toggle: flip("trendGuide") },
     { key: "ichimoku", group: "trend" as const, name: t.chart.overlayNames.ichimoku(ICHIMOKU_DEFAULTS.conversion, ICHIMOKU_DEFAULTS.base, ICHIMOKU_DEFAULTS.span2), on: ov.ichimoku, toggle: flip("ichimoku") },
     { key: "qTrend", group: "trend" as const, name: t.chart.overlayNames.qTrend(QT_DEFAULTS.period, QT_DEFAULTS.atrPeriod, QT_DEFAULTS.mult), on: ov.qTrend, toggle: flip("qTrend") },
     { key: "kalman", group: "trend" as const, name: t.chart.overlayNames.kalman(KST_DEFAULTS.atrLength, KST_DEFAULTS.factor), on: ov.kalman, toggle: flip("kalman") },
@@ -2969,6 +2979,12 @@ const PriceChart = ({
           {noteOf.analog}
         </p>
       )}
+      {/* #394 */}
+      {ov.trendGuide && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-trendguide-legend">
+          {noteOf.trendGuide}
+        </p>
+      )}
       {/* #393 */}
       {ov.srZones && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-srzones-legend">
@@ -3768,7 +3784,7 @@ const PriceChart = ({
                     )}
                   </title>
                   <rect x={left} y={top} width={Math.max(0, right - left)} height={h} fill={SR_BLUE} fillOpacity="0.14" stroke={SR_BLUE} strokeOpacity="0.55" strokeWidth={1 * fs} strokeDasharray="4 3" />
-                  <text x={left + 3 * fs} y={top - 3 * fs} fontSize={fsz} fontWeight="700" fill={SR_BLUE} data-testid="chart-srzone-label">
+                  <text x={left + 3 * fs} y={top - 3 * fs} fontSize={fsz} fontWeight="700" fill={SR_BLUE} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid="chart-srzone-label">
                     {t.chart.srZoneLabel(z.lo.toFixed(decimals), z.hi.toFixed(decimals), z.touches.length)}
                   </text>
                 </g>
@@ -4384,6 +4400,64 @@ const PriceChart = ({
           );
         })()}
 
+        {/* #394: the owner's ① ② ④ — ① solid and ② dashed from their first
+            point to the plot's right edge, a ring on each point they run
+            through and on the close that broke them ("①を上抜け"), and ④ at the
+            end of the move with the line the other way once a swing holds it */}
+        {guide && (() => {
+          const g = guide;
+          const down = g.dir === "down";
+          const lineColor = down ? GUIDE_DOWN : GUIDE_UP;
+          const otherColor = down ? GUIDE_UP : GUIDE_DOWN;
+          const fsz = (narrow ? 7.5 : 8.5) * fs;
+          // the bar index at the plot's right edge
+          const edge = from + (plotW - slot / 2) / slot;
+          const ring = (i: number, price: number, color: string, key: string) => (
+            <circle key={key} cx={x(i)} cy={y(price)} r={4 * fs} fill="none" stroke={color} strokeWidth={1.6 * fs} />
+          );
+          const drawLine = (l: GuideLine, num: string, color: string, dashed: boolean, breaksUp: boolean, id: string) => (
+            <g key={id} data-testid={`chart-trendguide-${id}`}>
+              <title>{t.chart.overlayNames.trendGuide}</title>
+              <line
+                x1={x(l.a)} y1={y(l.pa)} x2={x(edge)} y2={y(guideAt(l, edge))}
+                stroke={color} strokeWidth={1.6 * fs} strokeDasharray={dashed ? "6 4" : undefined} opacity="0.9"
+              />
+              {ring(l.a, l.pa, color, "a")}
+              {ring(l.b, l.pb, color, "b")}
+              <text x={x(l.a) + 6 * fs} y={y(l.pa) + (breaksUp ? -6 * fs : fsz + 6 * fs)} fontSize={fsz} fontWeight="800" fill={color} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid={`chart-trendguide-${id}-num`}>
+                {num}
+              </text>
+              {l.brokenAt !== null && (
+                <g data-testid={`chart-trendguide-${id}-break`}>
+                  <circle cx={x(l.brokenAt)} cy={y(guideAt(l, l.brokenAt))} r={6 * fs} fill="none" stroke="#111827" strokeWidth={1.6 * fs} />
+                  <text x={x(l.brokenAt) - 8 * fs} y={y(guideAt(l, l.brokenAt)) + (breaksUp ? fsz + 10 * fs : -10 * fs)} fontSize={fsz} fontWeight="700" textAnchor="end" fill="#111827" stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke">
+                    {t.chart.trendGuideBreak(num, breaksUp)}
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+          return (
+            <g data-testid="chart-trendguide" clipPath={`url(#${clipId})`}>
+              {g.main && drawLine(g.main, "①", lineColor, false, down, "main")}
+              {g.steep && drawLine(g.steep, "②", lineColor, true, down, "steep")}
+              {g.counter && drawLine(g.counter, "④", otherColor, false, !down, "counter")}
+              <g data-testid="chart-trendguide-extreme">
+                {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
+                {/* inside the plot: over a low and under a high (the extreme is at the
+                    plot's edge), toward the plot's middle */}
+                <text
+                  x={x(g.extreme.i) + (x(g.extreme.i) > PAD_LEFT + plotW / 2 ? -8 : 8) * fs}
+                  y={y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs)}
+                  fontSize={fsz} fontWeight="700" textAnchor={x(g.extreme.i) > PAD_LEFT + plotW / 2 ? "end" : "start"} fill={otherColor}
+                  stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke"
+                >
+                  {t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals), g.counter === null)}
+                </text>
+              </g>
+            </g>
+          );
+        })()}
         {/* #150: the trend lines — through the latest two rising swing lows
             (green) and falling swing highs (red), to the close that broke
             them ("割れ" / "抜け") or on to the newest candle */}

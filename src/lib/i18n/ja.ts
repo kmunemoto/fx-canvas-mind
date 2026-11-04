@@ -329,6 +329,7 @@ export const ja = {
       // #392
       analog: "似た相場の予測（20本先）",
       srZones: "水平の帯（何度も止まった所）",
+      trendGuide: "トレンドライン①②と④（自動）",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -413,12 +414,23 @@ export const ja = {
     ichimokuSide: { above: "雲の上（上昇優勢）", inside: "雲の中", below: "雲の下（下落優勢）" } as Record<string, string>,
     trendBreak: { up: "割れ", down: "抜け" },
     // #393: the owner's ③
-    srZonesNote: (pivot: number, lookback: number, width: number, minTouches: number, maxZones: number) =>
-      `水平の帯（青）: 値段が何度も止まった所。ダウ理論と同じ山・谷（左右${pivot}本より高い・安い足、${pivot}本あとに分かる）を、直近${lookback}本の確定足から集め、` +
-      `幅 ATR(14)×${width} の中に山か谷が${minTouches}つ以上ある所を帯にします（山と谷を一緒に数えます。下で支えた所が、後で上の壁になることがあるため）。` +
-      `数が多い所から、重ならないように${maxZones}つまで。帯は最初に止まった足から右へ延ばし、「値段の幅（回数）」を書きます。` +
+    srZonesNote: (pivot: number, gap: number, maxWidth: number, minTouches: number, maxZones: number) =>
+      `水平の帯（青）＝③: 値段が何度も止まった所。画面に出ている確定足から、ダウ理論と同じ山・谷（左右${pivot}本より高い・安い足、${pivot}本あとに分かる）を集めます。` +
+      `値段の順に並べ、隣との差が ATR(14)×${gap} 以内なら同じ組にし（幅が ATR(14)×${maxWidth} を超える組は、一番大きいすき間で分けます）、山か谷が${minTouches}つ以上ある組を帯にします（山と谷を一緒に数えます。下で支えた所が、後で上の壁になることがあるため）。` +
+      `数が多い順に${maxZones}つまで。帯は最初に止まった足から右へ延ばし、「値段の幅（回数）」を書きます。画面を動かすと、そこに出ている足で引き直します。` +
       "確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
     srZoneLabel: (lo: string, hi: string, touches: number) => `${lo}〜${hi}（${touches}回）`,
+    // #394: the owner's ① ② ④
+    trendGuideNote: (pivot: number, minBars: number) =>
+      "①②④（自動）: 画面に出ている確定足から引きます。一番高い高値が一番安い安値より先なら下げ、後なら上げと見ます。" +
+      `下げの時、① は一番高い高値から、安値まで続く山（左右${pivot}本より高い足）のどれもがその下に収まる、一番ゆるい下げの線（一番突き出た山に接する線）。` +
+      "② は、① が接した山より後の一番高い山から同じように引いた線で、① より急な時だけ（最後の下げの線）。" +
+      "終値が線を上に抜けた足に「①を上抜け」「②を上抜け」。④ は一番安い安値（下げの終わり）で、そのあと安値を切り上げた谷が確定したら、④ から上昇の線を引きます。上げの時は、高値と安値を入れ替えた同じ作りです。" +
+      `③ は「水平の帯（何度も止まった所）」の青い帯です。足が${minBars}本より少ない画面では描きません。画面を動かすと、そこに出ている足で引き直します。` +
+      "確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
+    trendGuideBreak: (n: string, up: boolean) => `${n}を${up ? "上" : "下"}抜け`,
+    trendGuideExtreme: (low: boolean, price: string, waiting: boolean) =>
+      `④ ${low ? "安値" : "高値"} ${price}${waiting ? (low ? "（上昇の線は次の押し安値から）" : "（下降の線は次の戻り高値から）") : ""}`,
     srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
       `水平の帯 ${lo}〜${hi}: 山 ${highs}回・谷 ${lows}回（${dates.join("、")}）`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows

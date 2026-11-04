@@ -287,6 +287,7 @@ export const en: Dict = {
       // #392
       analog: "Similar-past forecast (20 bars ahead)",
       srZones: "Horizontal zones (where price stopped again and again)",
+      trendGuide: "Trend lines ① ② and ④ (automatic)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -371,12 +372,23 @@ export const en: Dict = {
     ichimokuSide: { above: "over the cloud (leaning up)", inside: "in the cloud", below: "under the cloud (leaning down)" } as Record<string, string>,
     trendBreak: { up: "break", down: "break" },
     // #393: the owner's ③
-    srZonesNote: (pivot: number, lookback: number, width: number, minTouches: number, maxZones: number) =>
-      `Horizontal zones (blue): where the price stopped again and again. Dow theory's swing highs and lows (higher or lower than ${pivot} bars either side, known ${pivot} bars later) of the latest ${lookback} closed bars; ` +
-      `a zone is a band ATR(14) × ${width} wide holding at least ${minTouches} of them (highs and lows counted together: a level that held the lows may hold the highs later). ` +
-      `The busiest first, up to ${maxZones}, none overlapping, each drawn from its first touch to the right with its price range and count. ` +
+    srZonesNote: (pivot: number, gap: number, maxWidth: number, minTouches: number, maxZones: number) =>
+      `Horizontal zones (blue) = ③: where the price stopped again and again. From the closed bars on screen, Dow theory's swing highs and lows (higher or lower than ${pivot} bars either side, known ${pivot} bars later), ` +
+      `in price order, joined while the next is within ATR(14) × ${gap} (a group wider than ATR(14) × ${maxWidth} is cut at its widest gap); a group of at least ${minTouches} is a zone (highs and lows counted together: a level that held the lows may hold the highs later). ` +
+      `The busiest first, up to ${maxZones}, each drawn from its first touch to the right with its price range and count; redrawn from the bars on screen as the chart is moved. ` +
       "Closed bars only. Not tested on past data. Shown only; not used for signals or emails.",
     srZoneLabel: (lo: string, hi: string, touches: number) => `${lo}–${hi} (${touches}×)`,
+    // #394: the owner's ① ② ④
+    trendGuideNote: (pivot: number, minBars: number) =>
+      "① ② ④ (automatic): drawn from the closed bars on screen. A down move when the highest high comes before the lowest low, an up move otherwise. " +
+      `In a down move, ① runs from the highest high with the shallowest fall that keeps every swing high (higher than ${pivot} bars either side) down to the low under it — the line touching the swing that sticks up most. ` +
+      "② is drawn the same way from the highest swing after ①'s touch, when it falls more steeply (the last leg). " +
+      "The bar whose close crosses a line is marked \"① broken\" / \"② broken\". ④ is the lowest low (the end of the move); once a higher swing low after it is confirmed, the rising line from ④ is drawn. An up move is the same with highs and lows swapped. " +
+      `③ is the blue band of \"Horizontal zones\". Not drawn with fewer than ${minBars} bars on screen; redrawn from the bars on screen as the chart is moved. ` +
+      "Closed bars only. Not tested on past data. Shown only; not used for signals or emails.",
+    trendGuideBreak: (n: string, up: boolean) => `${n} broken ${up ? "up" : "down"}`,
+    trendGuideExtreme: (low: boolean, price: string, waiting: boolean) =>
+      `④ ${low ? "low" : "high"} ${price}${waiting ? (low ? " (the rising line waits for the next higher low)" : " (the falling line waits for the next lower high)") : ""}`,
     srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
       `Horizontal zone ${lo}–${hi}: ${highs} highs, ${lows} lows (${dates.join(", ")})`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows

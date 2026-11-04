@@ -93,6 +93,11 @@ export interface ChartOverlays {
   // stopped again and again (src/lib/srZones.ts); on unless switched off
   // (「全てのチャートに③を表示されて」)
   srZones: boolean;
+  // #394: the owner's ① ② ④ — the falling (rising) line from the window's top
+  // (bottom), the steeper line of the last leg, their breaks, and the end of the
+  // move with the line the other way once a swing holds it
+  // (src/lib/trendGuide.ts); on unless switched off
+  trendGuide: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -123,6 +128,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   emaReturn: false,
   analog: false,
   srZones: true,
+  trendGuide: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {
