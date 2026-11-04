@@ -16,11 +16,19 @@
 import { DAY, MINUTE } from "./lib.ts";
 import { type LoadStats, type M1, PAIRS, type Source, keysOf, loadM1, newLoadStats, synthesize, writeGmoFiles } from "./ownerhold-data.ts";
 import {
-  CSV_HEADER, type CsvRow, MAX_AVOID, MIN_BARS, S1_END, S1_KEY_MAX, S1_KEY_MIN, S1_START, SEASONS, SLOTS, type Season,
+  CSV_HEADER, type CsvRow, H1_END, H1_KEY_MAX, H1_KEY_MIN, H1_START, MAX_AVOID, MIN_BARS, SEASONS, SLOTS, type Season,
+  S1_END as S1_END_8103, S1_KEY_MAX as S1_KEY_MAX_8103, S1_KEY_MIN as S1_KEY_MIN_8103, S1_START as S1_START_8103,
   avoided, cellOf, csvLine, hhmm, quantileSorted, seasonOf, sha256Hex, slotOf, threshold2, tickScale, twiceMedian,
 } from "./spreadhours-lib.ts";
 
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
+// PERIOD=s1 (default): §8.103 2's period; PERIOD=h1: the lawsearch study's first half only (research/lawsearch-spec.md 6 ⑥)
+const PERIOD = env("PERIOD", "s1");
+if (PERIOD !== "s1" && PERIOD !== "h1") throw new Error(`PERIOD ${PERIOD}`);
+const S1_START = PERIOD === "h1" ? H1_START : S1_START_8103;
+const S1_END = PERIOD === "h1" ? H1_END : S1_END_8103;
+const S1_KEY_MIN = PERIOD === "h1" ? H1_KEY_MIN : S1_KEY_MIN_8103;
+const S1_KEY_MAX = PERIOD === "h1" ? H1_KEY_MAX : S1_KEY_MAX_8103;
 const MODE = env("MODE", "synthetic");
 const OUT = env("OUT", "research/out/spreadhours");
 const CACHE = env("CACHE_DIR", "research/.cache");

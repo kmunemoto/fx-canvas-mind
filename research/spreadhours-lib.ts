@@ -20,6 +20,12 @@ export const S1_END = Date.parse("2026-10-03T00:00:00Z");
 // the day files stage 1 may open: the period a day wider each way, in JST dates (2)
 export const S1_KEY_MIN = "20231231";
 export const S1_KEY_MAX = "20261003";
+// the lawsearch study's table (research/lawsearch-spec.md 6 ⑥): the same rule on its first half only, the bars
+// opened from 2024-01-01 00:00 UTC, before 2025-05-16 21:00 UTC (PERIOD=h1; research/ledger/spread-hours-h1.csv)
+export const H1_START = S1_START;
+export const H1_END = Date.parse("2025-05-16T21:00:00Z");
+export const H1_KEY_MIN = "20231231";
+export const H1_KEY_MAX = "20250517";
 // 3: at least this many bars; 1.0 pips in 0.1 pips, twice (the comparison's units); the stop at 8 hours
 export const MIN_BARS = 1000;
 export const FLOOR2 = 20;
