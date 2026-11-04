@@ -374,21 +374,21 @@ export const en: Dict = {
     // #393: the owner's ③
     srZonesNote: (pivot: number, gap: number, maxWidth: number, minTouches: number, maxZones: number) =>
       `Horizontal zones (blue) = ③: where the price stopped again and again. From the closed bars on screen, Dow theory's swing highs and lows (higher or lower than ${pivot} bars either side, known ${pivot} bars later), ` +
-      `in price order, joined while the next is within ATR(14) × ${gap} (a group wider than ATR(14) × ${maxWidth} is cut at its widest gap); a group of at least ${minTouches} is a zone (highs and lows counted together: a level that held the lows may hold the highs later). ` +
-      `The busiest first, up to ${maxZones}, each drawn from its first touch to the right with its price range and count; redrawn from the bars on screen as the chart is moved. ` +
+      `in price order, joined while the next is within ${gap} × the mean true range of the bars on screen (a group wider than ${maxWidth} × that is cut at its widest gap); a group of at least ${minTouches} is a zone (highs and lows counted together: a level that held the lows may hold the highs later). ` +
+      `The busiest first, up to ${maxZones}, each drawn from its first touch to the right with "③ its price range (count)"; redrawn from the bars on screen when the chart is moved or moves on with a new closed bar. ` +
       "Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
-    srZoneLabel: (lo: string, hi: string, touches: number) => `${lo === hi ? lo : `${lo}–${hi}`} (${touches}×)`,
+    srZoneLabel: (lo: string, hi: string, touches: number) => `③ ${lo === hi ? lo : `${lo}–${hi}`} (${touches}×)`,
     // #394: the owner's ① ② ④
     trendGuideNote: (pivot: number, minBars: number) =>
-      "① ② ④ (automatic): drawn from the closed bars on screen. A down move when the highest high comes before the lowest low, an up move otherwise. " +
+      "① ② ④ (automatic): drawn from the closed bars on screen. A down move when the highest high comes before the lowest low, an up move otherwise (the later of two equal ones). " +
       `In a down move, ① runs from the highest high with the shallowest fall that keeps every swing high (higher than ${pivot} bars either side) down to the low under it — the line touching the swing that sticks up most. ` +
       "② is drawn the same way from the highest swing after ①'s touch, when it falls more steeply (the last leg). " +
-      "The bar whose close crosses a line is marked \"① broken\" / \"② broken\". ④ is the lowest low (the end of the move); once a higher swing low after it is confirmed, the rising line from ④ is drawn. An up move is the same with highs and lows swapped. " +
-      `③ is the blue band of \"Horizontal zones\". Not drawn with fewer than ${minBars} bars on screen; redrawn from the bars on screen as the chart is moved. ` +
+      "After the lowest low, the first bar whose close crosses a line is marked \"① broken up\" / \"② broken up\". ④ is the lowest low (the end of the move); once the first higher swing low after it is confirmed, the rising line through ④ and that low is drawn, and a close below it is marked \"④'s line broken down\". An up move is the same with highs and lows swapped. " +
+      `③ is the blue band of \"Horizontal zones ③\". Not drawn with fewer than ${minBars} bars on screen; redrawn from the bars on screen when the chart is moved or moves on with a new closed bar, so ① changes when its start leaves the screen. ` +
       "Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
-    trendGuideBreak: (n: string, up: boolean) => `${n} broken ${up ? "up" : "down"}`,
+    trendGuideBreak: (n: string, up: boolean, counter = false) => `${n}${counter ? "'s line" : ""} broken ${up ? "up" : "down"}`,
     trendGuideExtreme: (low: boolean, price: string, waiting: boolean) =>
-      `④ ${low ? "low" : "high"} ${price}${waiting ? (low ? " (the rising line waits for the next higher low)" : " (the falling line waits for the next lower high)") : ""}`,
+      `④ ${low ? "low" : "high"} ${price}${waiting ? (low ? " (the rising line is drawn once the next higher low forms)" : " (the falling line is drawn once the next lower high forms)") : ""}`,
     srZoneTitle: (lo: string, hi: string, highs: number, lows: number, dates: ReadonlyArray<string>) =>
       `Horizontal zone ${lo}–${hi}: ${highs} highs, ${lows} lows (${dates.join(", ")})`,
     // #151: the owner's video's ULTRA EN, rebuilt from what the video shows
@@ -729,7 +729,7 @@ export const en: Dict = {
     // #201: the moving averages' own chart, under the live chart
     maTitle: "Moving averages chart",
     maNote: (allowed: boolean) =>
-      "The candles, the moving averages and the marks of the video's way (liquidity sweep + EMA cross) only (no other signal marks, strips or indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
+      "The candles, the moving averages, the marks of the video's way (liquidity sweep + EMA cross), and the horizontal zones ③ and trend lines ① ② ④ (#393, #394: on every chart) only (no other signal marks, strips or indicators). Its pair and timeframe are chosen here, apart from the chart above. " +
       (allowed
         ? "The three lines' lengths, kinds and switches are the live chart's above: a change on either is made on both. "
         : "The moving averages and the marks are drawn with a plan that has the indicators (Light and up). ") +

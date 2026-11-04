@@ -3776,7 +3776,7 @@ const PriceChart = ({
               const first = z.touches[0].i;
               if (first >= to) return null;
               const left = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2);
-              const right = PAD_LEFT + plotW;
+              const right = PAD_LEFT + barsW;
               const yHi = y(z.hi);
               const yLo = y(z.lo);
               // a band thinner than 2fs grows around its middle, so it stays on its price
@@ -4401,90 +4401,105 @@ const PriceChart = ({
           );
         })()}
 
-        {/* #393: the bands' labels over the candles — over each band's left end,
-            "the range (count)"; a label that would overlap one already placed
-            moves right past it */}
-        {srBands && srBands.length > 0 && (() => {
-          const fsz = (narrow ? 7 : 8) * fs;
+        {/* #394: the owner's ① ② ④ and #393's band labels, over the candles. ①
+            solid and ② dashed from their first point to the bars' right edge (not
+            over the price tags' column), a ring on each point they run through and
+            on the close that broke them ("①を上抜け"), and ④ at the end of the move
+            with the line the other way once a higher low (lower high) holds it.
+            Every label sits inside the plot (a number inward from its line's first
+            point) and the labels are placed so none overlaps another: the guide's
+            first, then the bands' ("③ the range (count)"), each moved right past
+            one already placed */}
+        {(guide || (srBands && srBands.length > 0)) && (() => {
+          const fsz = (narrow ? 7.5 : 8.5) * fs;
+          const halo = { stroke: "hsl(var(--background))", strokeWidth: 2.5 * fs, strokeLinejoin: "round" as const, paintOrder: "stroke" as const };
           const placed: Array<{ x0: number; x1: number; y: number }> = [];
-          return (
-            <g data-testid="chart-srzone-labels" clipPath={`url(#${clipId})`}>
-              {srBands.map((z, k) => {
-                const first = z.touches[0].i;
-                if (first >= to) return null;
-                const lo = z.lo.toFixed(decimals);
-                const hi = z.hi.toFixed(decimals);
-                const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
-                const w = text.length * fsz * 0.62;
-                let lx = Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs;
-                const ly = Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs;
-                for (const p of placed) if (Math.abs(p.y - ly) < fsz + 2 * fs && lx < p.x1 + 6 * fs && lx + w > p.x0) lx = p.x1 + 6 * fs;
-                placed.push({ x0: lx, x1: lx + w, y: ly });
-                return (
-                  <text key={`srl-${k}`} x={lx} y={ly} fontSize={fsz} fontWeight="700" fill={SR_BLUE} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid="chart-srzone-label">
-                    {text}
-                  </text>
-                );
-              })}
-            </g>
-          );
-        })()}
-        {/* #394: the owner's ① ② ④ — ① solid and ② dashed from their first
-            point to the plot's right edge, a ring on each point they run
-            through and on the close that broke them ("①を上抜け"), and ④ at the
-            end of the move with the line the other way once a swing holds it */}
-        {guide && (() => {
+          // put a label at (lx, ly) with the given anchor, moved right while it would overlap one placed
+          const place = (text: string, lx: number, ly: number, anchor: "start" | "end") => {
+            const w = text.length * fsz * 0.62;
+            let x0 = anchor === "end" ? lx - w : lx;
+            for (const p of placed) if (Math.abs(p.y - ly) < fsz + 2 * fs && x0 < p.x1 + 6 * fs && x0 + w > p.x0) x0 = p.x1 + 6 * fs;
+            placed.push({ x0, x1: x0 + w, y: ly });
+            return { x: x0, y: ly };
+          };
+          const edge = from + (barsW - slot / 2) / slot;
           const g = guide;
-          const down = g.dir === "down";
+          const down = g ? g.dir === "down" : true;
           const lineColor = down ? GUIDE_DOWN : GUIDE_UP;
           const otherColor = down ? GUIDE_UP : GUIDE_DOWN;
-          const fsz = (narrow ? 7.5 : 8.5) * fs;
-          // the bar index at the plot's right edge
-          const edge = from + (plotW - slot / 2) / slot;
+          const ink = "hsl(var(--foreground))";
           const ring = (i: number, price: number, color: string, key: string) => (
             <circle key={key} cx={x(i)} cy={y(price)} r={4 * fs} fill="none" stroke={color} strokeWidth={1.6 * fs} />
           );
-          const drawLine = (l: GuideLine, num: string, color: string, dashed: boolean, breaksUp: boolean, id: string) => (
-            <g key={id} data-testid={`chart-trendguide-${id}`}>
-              <title>{t.chart.overlayNames.trendGuide}</title>
-              <line
-                x1={x(l.a)} y1={y(l.pa)} x2={x(edge)} y2={y(guideAt(l, edge))}
-                stroke={color} strokeWidth={1.6 * fs} strokeDasharray={dashed ? "6 4" : undefined} opacity="0.9"
-              />
-              {ring(l.a, l.pa, color, "a")}
-              {ring(l.b, l.pb, color, "b")}
-              <text x={x(l.a) + 6 * fs} y={y(l.pa) + (breaksUp ? -6 * fs : fsz + 6 * fs)} fontSize={fsz} fontWeight="800" fill={color} stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke" data-testid={`chart-trendguide-${id}-num`}>
-                {num}
-              </text>
-              {l.brokenAt !== null && (
-                <g data-testid={`chart-trendguide-${id}-break`}>
-                  <circle cx={x(l.brokenAt)} cy={y(guideAt(l, l.brokenAt))} r={6 * fs} fill="none" stroke="#111827" strokeWidth={1.6 * fs} />
-                  <text x={x(l.brokenAt) - 8 * fs} y={y(guideAt(l, l.brokenAt)) + (breaksUp ? fsz + 10 * fs : -10 * fs)} fontSize={fsz} fontWeight="700" textAnchor="end" fill="#111827" stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke">
-                    {t.chart.trendGuideBreak(num, breaksUp)}
-                  </text>
+          // fromHigh: the line starts at a high (its number goes under it) or at a low (over it)
+          const lines: Array<{ l: GuideLine; num: string; color: string; dashed: boolean; fromHigh: boolean; counter: boolean; id: string }> = [];
+          if (g?.main) lines.push({ l: g.main, num: "①", color: lineColor, dashed: false, fromHigh: down, counter: false, id: "main" });
+          if (g?.steep) lines.push({ l: g.steep, num: "②", color: lineColor, dashed: true, fromHigh: down, counter: false, id: "steep" });
+          if (g?.counter) lines.push({ l: g.counter, num: "④", color: otherColor, dashed: false, fromHigh: !down, counter: true, id: "counter" });
+          const numAt = lines.map((ln) => place(ln.num, x(ln.l.a) + 6 * fs, y(ln.l.pa) + (ln.fromHigh ? fsz + 6 * fs : -6 * fs), "start"));
+          // a line from a high breaks upward: its text under the ring; from a low, over it
+          const brAt = lines.map((ln) => {
+            if (ln.l.brokenAt === null) return null;
+            const by = y(guideAt(ln.l, ln.l.brokenAt));
+            return place(t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter), x(ln.l.brokenAt) - 8 * fs, by + (ln.fromHigh ? fsz + 10 * fs : -10 * fs), "end");
+          });
+          const exText = g ? t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals), g.counter === null) : "";
+          const exRight = g ? x(g.extreme.i) > PAD_LEFT + barsW / 2 : false;
+          const exAt = g ? place(exText, x(g.extreme.i) + (exRight ? -8 : 8) * fs, y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs), exRight ? "end" : "start") : null;
+          const bandAt = (srBands ?? []).map((z) => {
+            const first = z.touches[0].i;
+            if (first >= to) return null;
+            const lo = z.lo.toFixed(decimals);
+            const hi = z.hi.toFixed(decimals);
+            const text = t.chart.srZoneLabel(lo, hi, z.touches.length);
+            return { text, ...place(text, Math.max(PAD_LEFT, x(Math.max(first, from)) - slot / 2) + 3 * fs, Math.min(y(z.hi), y(z.lo) - 2 * fs) - 3 * fs, "start") };
+          });
+          return (
+            <>
+              {bandAt.some((b) => b) && (
+                <g data-testid="chart-srzone-labels" clipPath={`url(#${clipId})`}>
+                  {bandAt.map((b, k) =>
+                    b ? (
+                      <text key={`srl-${k}`} x={b.x} y={b.y} fontSize={fsz * 0.94} fontWeight="700" fill={SR_BLUE} {...halo} data-testid="chart-srzone-label">
+                        {b.text}
+                      </text>
+                    ) : null,
+                  )}
                 </g>
               )}
-            </g>
-          );
-          return (
-            <g data-testid="chart-trendguide" clipPath={`url(#${clipId})`}>
-              {g.main && drawLine(g.main, "①", lineColor, false, down, "main")}
-              {g.steep && drawLine(g.steep, "②", lineColor, true, down, "steep")}
-              {g.counter && drawLine(g.counter, "④", otherColor, false, !down, "counter")}
-              <g data-testid="chart-trendguide-extreme">
-                {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
-                {/* inside the plot: over a low and under a high (the extreme is at the
-                    plot's edge), toward the plot's middle */}
-                <text
-                  x={x(g.extreme.i) + (x(g.extreme.i) > PAD_LEFT + plotW / 2 ? -8 : 8) * fs}
-                  y={y(g.extreme.price) + (down ? -8 * fs : fsz + 8 * fs)}
-                  fontSize={fsz} fontWeight="700" textAnchor={x(g.extreme.i) > PAD_LEFT + plotW / 2 ? "end" : "start"} fill={otherColor}
-                  stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke"
-                >
-                  {t.chart.trendGuideExtreme(down, g.extreme.price.toFixed(decimals), g.counter === null)}
-                </text>
-              </g>
-            </g>
+              {g && (
+                <g data-testid="chart-trendguide" clipPath={`url(#${clipId})`}>
+                  {lines.map((ln, k) => (
+                    <g key={ln.id} data-testid={`chart-trendguide-${ln.id}`}>
+                      <title>{t.chart.overlayNames.trendGuide}</title>
+                      <line
+                        x1={x(ln.l.a)} y1={y(ln.l.pa)} x2={x(edge)} y2={y(guideAt(ln.l, edge))}
+                        stroke={ln.color} strokeWidth={1.6 * fs} strokeDasharray={ln.dashed ? "6 4" : undefined} opacity="0.9"
+                      />
+                      {ring(ln.l.a, ln.l.pa, ln.color, "a")}
+                      {ring(ln.l.b, ln.l.pb, ln.color, "b")}
+                      <text x={numAt[k].x} y={numAt[k].y} fontSize={fsz} fontWeight="800" fill={ln.color} {...halo} data-testid={`chart-trendguide-${ln.id}-num`}>
+                        {ln.num}
+                      </text>
+                      {ln.l.brokenAt !== null && brAt[k] && (
+                        <g data-testid={`chart-trendguide-${ln.id}-break`}>
+                          <circle cx={x(ln.l.brokenAt)} cy={y(guideAt(ln.l, ln.l.brokenAt))} r={6 * fs} fill="none" stroke={ink} strokeWidth={1.6 * fs} />
+                          <text x={brAt[k]!.x} y={brAt[k]!.y} fontSize={fsz} fontWeight="700" fill={ink} {...halo}>
+                            {t.chart.trendGuideBreak(ln.num, ln.fromHigh, ln.counter)}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  ))}
+                  <g data-testid="chart-trendguide-extreme">
+                    {ring(g.extreme.i, g.extreme.price, otherColor, "x")}
+                    <text x={exAt!.x} y={exAt!.y} fontSize={fsz} fontWeight="700" fill={otherColor} {...halo}>
+                      {exText}
+                    </text>
+                  </g>
+                </g>
+              )}
+            </>
           );
         })()}
         {/* #150: the trend lines — through the latest two rising swing lows

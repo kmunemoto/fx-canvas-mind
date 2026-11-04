@@ -10,8 +10,10 @@
 //     known `pivot` bars later; ties go to the earlier bar), both kinds
 //     together — a level that held the lows may hold the highs later;
 //   * their prices in order, joined while the gap to the next one is at most
-//     `gap` × ATR(14) of the newest closed bar; a group wider than `maxWidth` ×
-//     ATR is cut at its widest gap (again until none is wider);
+//     `gap` × R, R the mean true range of the bars on screen (not the newest
+//     bar's ATR, which moves with every close and made a band come and go hour
+//     by hour); a group wider than `maxWidth` × R is cut at its widest gap (again
+//     until none is wider);
 //   * a group of at least `minTouches` swings is a band, from its lowest to its
 //     highest swing; the bands with the most swings first (ties: the newer last
 //     swing), up to `maxZones`;
@@ -23,12 +25,10 @@
 // Shown on the chart only: no signal, alert or record is judged on it, and
 // none of it has been measured on past data.
 
-import { pineAtr } from "../../supabase/functions/_shared/pine";
-
 type Bar = { high: number; low: number; close: number };
 
-export const SR_ZONES = { pivot: 4, atr: 14, gap: 0.25, maxWidth: 0.6, minTouches: 3, maxZones: 4 } as const;
-export type SrZonesOptions = { pivot: number; atr: number; gap: number; maxWidth: number; minTouches: number; maxZones: number };
+export const SR_ZONES = { pivot: 4, gap: 0.25, maxWidth: 0.6, minTouches: 3, maxZones: 4 } as const;
+export type SrZonesOptions = { pivot: number; gap: number; maxWidth: number; minTouches: number; maxZones: number };
 
 export interface SrTouch {
   // the swing's bar and its price (the high of a swing high, the low of a swing low)
@@ -70,11 +70,25 @@ const cut = (g: SrTouch[], maxW: number): SrTouch[][] => {
   return [...cut(g.slice(0, at), maxW), ...cut(g.slice(at), maxW)];
 };
 
-// The bands of bars[from..lastClosed], highest price first; [] when the bars are too few for the ATR
+// The mean true range of bars[s..e] (each bar's high − low, or the gap to the close
+// before it when wider); null without a bar
+export const meanTrueRange = (bars: ReadonlyArray<Bar>, s: number, e: number): number | null => {
+  let sum = 0;
+  let n = 0;
+  for (let k = Math.max(0, s); k <= e && k < bars.length; k++) {
+    const b = bars[k];
+    const pc = k > 0 ? bars[k - 1].close : b.close;
+    sum += Math.max(b.high - b.low, Math.abs(b.high - pc), Math.abs(b.low - pc));
+    n++;
+  }
+  return n > 0 ? sum / n : null;
+};
+
+// The bands of bars[from..lastClosed], highest price first; [] without a range to scale by
 export const srZones = (bars: ReadonlyArray<Bar>, from: number, lastClosed: number, o: SrZonesOptions = SR_ZONES): SrZone[] => {
   if (lastClosed < 0 || lastClosed >= bars.length) return [];
-  const atr = pineAtr(bars.slice(0, lastClosed + 1), o.atr)[lastClosed];
-  if (atr === null || atr === undefined || !Number.isFinite(atr) || atr <= 0) return [];
+  const atr = meanTrueRange(bars, from, lastClosed);
+  if (atr === null || !Number.isFinite(atr) || atr <= 0) return [];
   const sw = srSwings(bars, lastClosed, Math.max(0, from), o.pivot).sort((a, b) => a.price - b.price || a.i - b.i);
   const groups: SrTouch[][] = [];
   for (const t of sw) {

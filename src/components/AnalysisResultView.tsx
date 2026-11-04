@@ -279,8 +279,15 @@ const AnalysisResultView = ({
             heading={activeChart && !entryChart ? `${t.chart.title} · ${tfLabel(activeChart.tf)}` : undefined}
             seriesKey={activeChart?.tf ?? "entry"}
             // the analysis sends the forming bar too ("so the current price is on
-            // screen"), so it is left out of every indicator's judging (#149)
-            formingLast
+            // screen"): its RSI is null on a rung's chart (types.ts TfChart.rsi),
+            // and techData.barClosed is false on the entry candles. Then it is left
+            // out of every indicator's judging (#149); an older record without the
+            // RSI is read as forming, as analyze has always sent it.
+            formingLast={
+              activeChart
+                ? !activeChart.rsi || activeChart.rsi.length !== candles.length || activeChart.rsi[activeChart.rsi.length - 1] === null
+                : techData?.barClosed !== true
+            }
           />
         </div>
       )}

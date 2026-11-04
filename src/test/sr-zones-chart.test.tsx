@@ -49,7 +49,7 @@ describe("#393 the horizontal zones on the chart", () => {
 
   it("draws the band of the four lows with its range and count, from the first touch to the right edge", () => {
     render(<PriceChart candles={candlesOf(FOUR_LOWS)} pair="EUR/USD" />);
-    expect(screen.getByTestId("chart-srzone-label").textContent).toBe("0.99950〜0.99980（4回）");
+    expect(screen.getByTestId("chart-srzone-label").textContent).toBe("③ 0.99950〜0.99980（4回）");
     const title = screen.getByTestId("chart-srzone").querySelector("title")?.textContent ?? "";
     expect(title).toContain("水平の帯 0.99950〜0.99980: 山 0回・谷 4回");
     const rect = screen.getByTestId("chart-srzone").querySelector("rect")!;
@@ -99,6 +99,6 @@ describe("#393 the horizontal zones on the chart", () => {
     resetChartPrefsCache();
     render(<PriceChart candles={candlesOf(FOUR_LOWS)} pair="EUR/USD" />, "en");
     expect(screen.getByTestId("chart-overlay-name-srZones").textContent).toBe("Horizontal zones ③ (where price stopped again and again)");
-    expect(screen.getByTestId("chart-srzone-label").textContent).toBe("0.99950–0.99980 (4×)");
+    expect(screen.getByTestId("chart-srzone-label").textContent).toBe("③ 0.99950–0.99980 (4×)");
   });
 });

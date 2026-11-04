@@ -50,7 +50,7 @@ describe("#394 the owner's ① ② ④ on the chart", () => {
     expect(screen.getByTestId("chart-trendguide-main-break").textContent).toBe("①を上抜け");
     expect(screen.getByTestId("chart-trendguide-steep-break").textContent).toBe("②を上抜け");
     expect(screen.queryByTestId("chart-trendguide-counter")).toBeNull();
-    expect(screen.getByTestId("chart-trendguide-extreme").textContent).toBe("④ 安値 0.98460（上昇の線は次の押し安値から）");
+    expect(screen.getByTestId("chart-trendguide-extreme").textContent).toBe("④ 安値 0.98460（上昇の線は次の押し安値ができてから）");
     // ① reaches the plot's right edge
     const line = screen.getByTestId("chart-trendguide-main").querySelector("line")!;
     const svg = screen.getByTestId("chart-price");
@@ -59,16 +59,47 @@ describe("#394 the owner's ① ② ④ on the chart", () => {
     expect(screen.getByTestId("chart-trendguide-legend").textContent).toContain("過去の検証はまだしていません");
   });
 
-  it("draws ④'s rising line once a higher low is confirmed", () => {
+  it("draws ④'s rising line once a higher low is confirmed, and its break as 「④の線を下抜け」", () => {
     render(<PriceChart candles={candlesOf([...DOWN, 0.995, 1.004])} pair="EUR/USD" />);
     expect(screen.getByTestId("chart-trendguide-counter-num").textContent).toBe("④");
     expect(screen.getByTestId("chart-trendguide-extreme").textContent).toBe("④ 安値 0.98460");
   });
 
+  it("marks a close under ④'s line as 「④の線を下抜け」", () => {
+    render(<PriceChart candles={candlesOf([...DOWN, 0.995, 1.004, 0.99, 1.0])} pair="EUR/USD" />);
+    expect(screen.getByTestId("chart-trendguide-counter-break").textContent).toBe("④の線を下抜け");
+  });
+
+  it("keeps every label inside the plot, none overlapping another", () => {
+    const { container } = render(<PriceChart candles={candlesOf(DOWN)} pair="EUR/USD" />);
+    const svg = screen.getByTestId("chart-price");
+    const [, , width, height] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+    const texts = [...container.querySelectorAll('[data-testid="chart-trendguide"] text, [data-testid="chart-srzone-labels"] text')];
+    expect(texts.length).toBeGreaterThanOrEqual(5);
+    const boxes = texts.map((t) => {
+      const x = Number(t.getAttribute("x"));
+      const y = Number(t.getAttribute("y"));
+      const fs = Number(t.getAttribute("font-size"));
+      return { x0: x, x1: x + (t.textContent ?? "").length * fs * 0.62, y, fs };
+    });
+    for (const b of boxes) {
+      expect(b.y).toBeGreaterThan(b.fs * 0.8);
+      expect(b.y).toBeLessThan(height);
+      expect(b.x0).toBeGreaterThanOrEqual(0);
+      expect(b.x0).toBeLessThan(width);
+    }
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i], boxes[j]];
+        const overlap = Math.abs(a.y - b.y) < Math.min(a.fs, b.fs) && a.x0 < b.x1 && b.x0 < a.x1;
+        expect(overlap).toBe(false);
+      }
+  });
+
   it("mirrors an up move", () => {
     render(<PriceChart candles={candlesOf(DOWN.map((v) => 2 - v))} pair="EUR/USD" />);
     expect(screen.getByTestId("chart-trendguide-main-break").textContent).toBe("①を下抜け");
-    expect(screen.getByTestId("chart-trendguide-extreme").textContent).toBe("④ 高値 1.01540（下降の線は次の戻り高値から）");
+    expect(screen.getByTestId("chart-trendguide-extreme").textContent).toBe("④ 高値 1.01540（下降の線は次の戻り高値ができてから）");
   });
 
   it("speaks English", () => {

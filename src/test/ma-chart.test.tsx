@@ -60,7 +60,8 @@ const before = (n: number): NumericCandle[] => [...walk(n, 31).map((c, k) => ({ 
 const LISTED = /^chart-overlay-(?!list$|fold$|legend$)[a-zA-Z0-9]+$/;
 // what the moving averages' chart lists: the three lines (#291: and the
 // owner's video's way, among the signals, listed first)
-const MA_LISTED = ["chart-overlay-sweepx", "chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3"];
+// #393 and #394: the horizontal zones ③ and the trend lines ① ② ④ are on every chart, this one too
+const MA_LISTED = ["chart-overlay-sweepx", "chart-overlay-ema50", "chart-overlay-ema200", "chart-overlay-ma3", "chart-overlay-srZones", "chart-overlay-trendGuide"];
 
 // every indicator, strip and drawing saved on
 const ALL_ON = {
@@ -237,7 +238,7 @@ describe("#201 the chart with the moving averages alone", () => {
     }
   });
 
-  it("locked: the three listed with 🔒 and none drawn, nothing else listed", () => {
+  it("locked: the three (and ③, ① ② ④) listed with 🔒 and none drawn, nothing else listed", () => {
     const onLocked = vi.fn();
     render(<PriceChart candles={walk(300)} pair="USD/JPY" maOnly indicatorsLocked onLockedIndicator={onLocked} />);
     expect(screen.queryByTestId("chart-ema")).toBeNull();

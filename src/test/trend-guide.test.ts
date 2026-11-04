@@ -72,6 +72,35 @@ describe("#394 the owner's ① ② ④ drawn by themselves", () => {
     expect(g.extreme.price).toBeCloseTo(1.0154, 10);
   });
 
+  it("starts from the later of two equal tops, so no swing high is above ①", () => {
+    // highs of 1.0204 at bars 5 and 15 (a double top)
+    const b = zig([1.0, 1.02, 1.01, 1.02, 1.006, 1.012, 1.002, 1.009, 0.997, 1.005, 0.994, 1.0005, 0.985, 1.008]);
+    const g = trendGuide(b, 0, b.length - 1)!;
+    expect(g.main!.a).toBe(15);
+    for (const k of [5, 25, 35, 45, 55]) expect(b[k].high).toBeLessThanOrEqual(guideAt(g.main!, k) + 1e-12);
+  });
+
+  it("looks for the break only after the lowest low (a close above the line before it is not a break)", () => {
+    // bar 37 closes just above ① (its high stays under bar 35's), then the price falls on to the low at bar 60
+    const b = zig(DOWN);
+    const g0 = trendGuide(b, 0, b.length - 1)!;
+    const v = guideAt(g0.main!, 37);
+    b[37] = { open: v, high: Math.min(b[35].high - 1e-6, v + 0.0004), low: v - 0.0008, close: v + 0.00005 };
+    const g = trendGuide(b, 0, b.length - 1)!;
+    expect(g.extreme.i).toBe(60);
+    expect(g.main!.brokenAt).toBe(64);
+  });
+
+  it("keeps ④'s line through the first higher low, so a later higher low does not move it or its break", () => {
+    // the first higher low at bar 70 (0.9946), a close under the line, then another higher low at bar 80
+    const b = zig([...DOWN, 0.995, 1.004, 0.99, 1.0]);
+    const g = trendGuide(b, 0, b.length - 1)!;
+    expect([g.counter!.a, g.counter!.b]).toEqual([60, 70]);
+    expect(g.counter!.brokenAt).not.toBeNull();
+    expect(g.counter!.brokenAt!).toBeGreaterThan(70);
+    expect(g.counter!.brokenAt!).toBeLessThanOrEqual(80);
+  });
+
   it("reads the closed bars of the window only", () => {
     const b = zig(DOWN);
     // a window from bar 20: its highest high is bar 25's (1.0124)

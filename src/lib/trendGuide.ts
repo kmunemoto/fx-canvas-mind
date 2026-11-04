@@ -9,16 +9,19 @@
 // at, as a person draws on it):
 //   * the move: down when the window's highest high comes before its lowest low,
 //     up otherwise (everything below is mirrored for an up move);
-//   * ① from the highest high, the line with the shallowest fall that every high
-//     from there to the lowest low stays under — it touches the high that sticks
-//     up most (only swing highs are taken as touches: a high with no higher high
-//     `pivot` bars either side, as the trend lines read them);
+//   * ① from the highest high (the later of equal ones), the line with the
+//     shallowest fall that every swing high from there to the lowest low stays
+//     under — it touches the swing that sticks up most (a swing high: no higher
+//     high `pivot` bars either side, as the trend lines read them; a bar that is
+//     not a swing may poke through by up to about `pivot` × the slope);
 //   * ② the same from the highest swing high after ①'s touch (the last leg),
 //     when it falls more steeply than ①;
-//   * a break: the first close above the line after its touch;
-//   * ④ the lowest low (the end of the move), and the rising line from it through
-//     the confirmed swing low after it that keeps every low after it above the
-//     line, once there is one.
+//   * a break: the first close above the line after the lowest low (a close above
+//     it before the low was not a break: the price went on to the low);
+//   * ④ the lowest low (the end of the move, the later of equal ones), and the
+//     rising line from it through the first confirmed higher swing low after it
+//     (「上昇の線は、次の押し安値ができてから引く」), with its break: the first
+//     close below it after that swing.
 // Shown on the chart only: no signal, alert or record is judged on it, and none
 // of it has been measured on past data.
 
@@ -77,14 +80,14 @@ const readDown = (hi: number[], lo: number[], cl: number[], from: number, last: 
   let k0 = from;
   let kL = from;
   for (let k = from; k <= last; k++) {
-    if (hi[k] > hi[k0]) k0 = k;
-    if (lo[k] < lo[kL]) kL = k;
+    if (hi[k] >= hi[k0]) k0 = k;
+    if (lo[k] <= lo[kL]) kL = k;
   }
   const lineOf = (top: number): GuideLine | null => {
     const f = fallingFrom(hi, top, kL, last, pivot);
     if (!f) return null;
     const l: GuideLine = { a: top, pa: hi[top], b: f.b, pb: hi[f.b], brokenAt: null };
-    for (let t = f.b + 1; t <= last; t++) {
+    for (let t = Math.max(f.b, kL) + 1; t <= last; t++) {
       if (cl[t] > guideAt(l, t)) {
         l.brokenAt = t;
         break;
@@ -97,20 +100,21 @@ const readDown = (hi: number[], lo: number[], cl: number[], from: number, last: 
   if (main) {
     // the highest swing high of the last leg: after ①'s touch, with room for a touch before the low
     let k1 = -1;
-    for (let k = main.b + 1; k <= kL - pivot; k++) if (isSwing(hi, k, pivot, last) && (k1 < 0 || hi[k] > hi[k1])) k1 = k;
+    for (let k = main.b + 1; k <= kL - pivot; k++) if (isSwing(hi, k, pivot, last) && (k1 < 0 || hi[k] >= hi[k1])) k1 = k;
     if (k1 >= 0) {
       const l = lineOf(k1);
       if (l && (l.pb - l.pa) / (l.b - l.a) < (main.pb - main.pa) / (main.b - main.a)) steep = l;
     }
   }
-  // the counter line: from the low through the confirmed swing low after it with the
-  // shallowest rise (every low after the low stays on or above it up to that swing)
+  // the counter line: from the low through the first confirmed higher swing low after
+  // it (a later one does not move it, so its break stays where it was)
   let counter: GuideLine | null = null;
   const neg = lo.map((v) => -v);
-  const c = fallingFrom(neg, kL, last, last, pivot);
-  if (c) {
-    counter = { a: kL, pa: lo[kL], b: c.b, pb: lo[c.b], brokenAt: null };
-    for (let t = c.b + 1; t <= last; t++) {
+  let c = -1;
+  for (let k = kL + 1; k <= last && c < 0; k++) if (isSwing(neg, k, pivot, last) && lo[k] > lo[kL]) c = k;
+  if (c >= 0) {
+    counter = { a: kL, pa: lo[kL], b: c, pb: lo[c], brokenAt: null };
+    for (let t = c + 1; t <= last; t++) {
       if (cl[t] < guideAt(counter, t)) {
         counter.brokenAt = t;
         break;
@@ -131,8 +135,8 @@ export const trendGuide = (bars: ReadonlyArray<Bar>, from: number, lastClosed: n
   let kH = start;
   let kL = start;
   for (let k = start; k <= last; k++) {
-    if (hi[k] > hi[kH]) kH = k;
-    if (lo[k] < lo[kL]) kL = k;
+    if (hi[k] >= hi[kH]) kH = k;
+    if (lo[k] <= lo[kL]) kL = k;
   }
   if (kH <= kL) {
     const r = readDown(hi, lo, cl, start, last, o.pivot);
