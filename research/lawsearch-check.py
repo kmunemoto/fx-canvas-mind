@@ -5106,15 +5106,12 @@ class Comparator:
         return out
 
     def decision_checks(self):
-        """lawsearch-dump.md 9.3: decisions on quantiles and p that may differ within 1e-9 -> ALLOWED or STOP."""
-        def num(m, k, key):
-            r = m.get(k)
-            if r is None or r.get("value", "") == "":
-                return None
-            try:
-                return float(r["value"])
-            except ValueError:
-                return None
+        """lawsearch-dump.md 9.3: decisions on quantiles and p that may differ within 1e-9 -> ALLOWED or STOP.
+
+        A difference is excused only when the decision it shows rests on two compared values that are within 1e-9
+        in either implementation: the decision's own values, not any near value elsewhere in the file. A difference
+        in any other key (or in a decision whose values are not near) stays a difference.
+        """
         diffs = getattr(self, "_diffs_of", {})
         for name in ("stage1.csv", "stage1_summary.csv", "stage2.csv"):
             if name not in diffs:
@@ -5123,12 +5120,9 @@ class Comparator:
             for d in diffs[name]:
                 key = d[0].split("|")
                 k = key[-1]
-                near = self._near(name, key)
+                near = self._near(name, key) if d[1] == "value" else None
                 if near:
-                    if (name == "stage1.csv" and k in ("chosen", "rank", "skipped_reason", "skipped_by")) or \
-                       (name == "stage1_summary.csv" and k.startswith("chosen")) or \
-                       (name == "stage2.csv" and k in ("holm_pass", "holm_delta_pass", "holm_rank", "holm_delta_rank",
-                                                       "verdict", "label", "failed")):
+                    if k in self._STOP_KEYS.get(name, ()) or (name == "stage1_summary.csv" and k.startswith("chosen.")):
                         self.stops.append(f"STOP 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({near})")
                     else:
                         self.allowed.append(f"ALLOWED 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({near})")
@@ -5137,37 +5131,120 @@ class Comparator:
                     keep.append(d)
             diffs[name] = keep
 
-    def _near(self, name, key):
-        """Is there a compared pair of values within 1e-9 that this decision rests on?"""
-        def vals(tab, kname):
-            out = []
-            for k, r in tab.items():
-                if k[-1] == kname and r.get("value", "") != "":
+    # dump.md 9.3 / spec 8.5: a split of these stops (stage 1's chosen trials, a stage 2 Holm pass, a verdict);
+    # a split of any other decision listed in _near is allowed, and the TS's decision is taken.
+    _STOP_KEYS = {"stage1.csv": ("chosen",), "stage1_summary.csv": ("K_total",),
+                  "stage2.csv": ("holm_pass", "holm_delta_pass", "C1", "verdict")}
+
+    def _vals(self, fname, kname):
+        """[(side, trial, value)] of key kname in fname (long files), both implementations."""
+        out = []
+        for side, tab in (("ts", self.ts_tab.get(fname, {})), ("py", self.py_tab.get(fname, {}))):
+            for kk, r in tab.items():
+                if kk[-1] == kname and r.get("value", "") != "":
                     try:
-                        out.append((k[0], float(r["value"])))
+                        out.append((side, kk[0], float(r["value"])))
                     except ValueError:
                         pass
-            return out
-        for tab in (self.ts_tab.get("stage1.csv", {}), self.py_tab.get("stage1.csv", {})):
-            lbs = vals(tab, "lb")
-            if name in ("stage1.csv", "stage1_summary.csv"):
-                for i in range(len(lbs)):
-                    if abs(lbs[i][1]) < 1e-9:
-                        return f"lb of {lbs[i][0]} within 1e-9 of 0"
-                    for j in range(i + 1, len(lbs)):
-                        if abs(lbs[i][1] - lbs[j][1]) < 1e-9:
-                            return f"lb of {lbs[i][0]} and {lbs[j][0]} within 1e-9"
-        for tab in (self.ts_tab.get("stage2.csv", {}), self.py_tab.get("stage2.csv", {})):
-            if name == "stage2.csv":
-                ps = vals(tab, "p_iut") + vals(tab, "p_delta")
-                K = len({k[0] for k in tab})
-                for (tid, p) in ps:
-                    for k in range(1, K + 1):
-                        if abs(p - 0.025 / (K - k + 1)) < 1e-9:
-                            return f"p of {tid} within 1e-9 of a Holm threshold"
-                for (tid, v) in vals(tab, "late_lb") + vals(tab, "dF_lo") + vals(tab, "delta_ub"):
-                    if abs(v) < 1e-9:
-                        return f"an interval end of {tid} within 1e-9 of 0"
+        return out
+
+    def _one(self, fname, kname):
+        """The value of a key of a key,value file (stage1_summary.csv) on each side: {side: float}."""
+        out = {}
+        for side, tab in (("ts", self.ts_tab.get(fname, {})), ("py", self.py_tab.get(fname, {}))):
+            r = tab.get((kname,))
+            if r is not None and r.get("value", "") != "":
+                try:
+                    out[side] = float(r["value"])
+                except ValueError:
+                    pass
+        return out
+
+    @staticmethod
+    def _pair_near(vals, label):
+        """Two values within 1e-9 of each other in either implementation (the order of two lb or two p).
+
+        Two values that are exactly equal in both implementations are a tie, not a near pair: the order then
+        follows the next keys (counted, table order), which must agree exactly.
+        """
+        by = {}
+        for (s, t, x) in vals:
+            by.setdefault(t, {})[s] = x
+        ids = list(by)
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = by[ids[i]], by[ids[j]]
+                sides = [sd for sd in ("ts", "py") if sd in a and sd in b]
+                if all(a[sd] == b[sd] for sd in sides) and len(sides) == 2:
+                    continue
+                for sd in sides:
+                    if abs(a[sd] - b[sd]) < 1e-9:
+                        return f"{label} of {ids[i]} and {ids[j]} within 1e-9 ({sd})"
+        return None
+
+    @staticmethod
+    def _zero_near(vals, label, tid=None):
+        for (side, t, x) in vals:
+            if (tid is None or t == tid) and abs(x) < 1e-9:
+                return f"{label} of {t} within 1e-9 of 0 ({side})"
+        return None
+
+    @staticmethod
+    def _thr_near(vals, thresholds, label):
+        for (side, t, x) in vals:
+            for thr in thresholds:
+                if abs(x - thr) < 1e-9:
+                    return f"{label} of {t} within 1e-9 of the threshold {thr!r} ({side})"
+        return None
+
+    def _holm_near(self, pkey):
+        """p (pkey: p_iut or p_delta) vs a Holm threshold 0.025/(K-k+1), or the order of two p (stage2.csv)."""
+        ps = self._vals("stage2.csv", pkey)
+        K = len({kk[0] for kk in list(self.ts_tab.get("stage2.csv", {})) + list(self.py_tab.get("stage2.csv", {}))})
+        thr = [0.025 / (K - k + 1) for k in range(1, K + 1)]
+        return self._thr_near(ps, thr, pkey) or self._pair_near(ps, pkey)
+
+    def _near(self, name, key):
+        """The pair of compared values within 1e-9 that this decision rests on, or None (dump.md 9.3)."""
+        k = key[-1]
+        tid = key[0] if len(key) > 1 else None
+        if name == "stage1.csv":
+            if k in ("rank", "chosen", "skipped_reason", "skipped_by"):
+                # the order of two lb of one timeframe (spec 10 並べ方)
+                tf = tid.split(".")[0]
+                lbs = [v for v in self._vals("stage1.csv", "lb") if v[1].split(".")[0] == tf]
+                return self._pair_near(lbs, "lb")
+            return None
+        if name == "stage1_summary.csv":
+            lbs = self._vals("stage1.csv", "lb")
+            if k.startswith("chosen.") or k == "K_total":
+                for tf in (TFS if k == "K_total" else [k.split(".", 1)[1]]):
+                    r = self._pair_near([v for v in lbs if v[1].split(".")[0] == tf], "lb")
+                    if r:
+                        return r
+                return None
+            if k in ("lb_pos", "lb_pos_groups", "lb_and_pl_pos"):
+                return self._zero_near(lbs, "lb")
+            if k == "bh_pass":
+                m = self._one("stage1_summary.csv", "bh_m")
+                thr = sorted({j * 0.10 / int(mv) for mv in m.values() if mv >= 1 for j in range(1, int(mv) + 1)})
+                return self._thr_near(self._vals("stage1.csv", "p_iut"), thr, "p_iut")
+            return None
+        if name == "stage2.csv":
+            if k in ("holm_rank", "holm_pass", "C1"):
+                return self._holm_near("p_iut")
+            if k in ("holm_delta_rank", "holm_delta_pass"):
+                return self._holm_near("p_delta")
+            if k == "C4":
+                return self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
+            if k == "no_uplift":
+                return self._zero_near(self._vals("stage2.csv", "dF_lo"), "dF_lo", tid)
+            if k in ("verdict", "label", "failed"):
+                # verdict 1 and 3 rest on C1 (Holm) and C4 (late_lb), 2 on delta_ub vs 0, 4 on the delta-only Holm
+                return (self._holm_near("p_iut") or self._holm_near("p_delta")
+                        or self._zero_near(self._vals("stage2.csv", "delta_ub"), "delta_ub", tid)
+                        or self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid))
+            return None
         return None
 
     def report(self):

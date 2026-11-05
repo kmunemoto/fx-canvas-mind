@@ -470,3 +470,20 @@ for the lead, not here.
 - In a run of group O, `ind/`'s `DON20_s` is the planted target the trial used (from C[i+1] vs C[i]), while
   `DON20_HH` and `DON20_LL` stay the real donchian. The last bar, which has no next bar, keeps the previous target.
   Reason: ind/ shows the values the trial used; both builders (TS B, PY2) chose the same for the last bar.
+
+### 11.12 Which outputs show 9.3's decisions (the comparator; Python integrator, round 1)
+
+- A difference is excused by 9.3 only in an output that shows one of its decisions, and only when that decision's own
+  two values are within 1e−9 in either implementation. Two values exactly equal in both implementations are a tie
+  (the next keys decide it, and must agree), not a near pair. Reason: 9.3 names decisions, not outputs, and a near
+  value elsewhere must not excuse an unrelated difference.
+  - `stage1.csv` `rank`, `chosen`, `skipped_reason`, `skipped_by`: the order of two `lb` of the trial's tf.
+  - `stage1_summary.csv` `chosen.<tf>`: the same in that tf; `K_total`: in either tf; `lb_pos`, `lb_pos_groups`,
+    `lb_and_pl_pos`: an `lb` vs 0; `bh_pass`: a `p_iut` vs a BH threshold k × 0.10 ÷ `bh_m`.
+  - `stage2.csv` `holm_rank`, `holm_pass`, `C1`: a `p_iut` vs a Holm threshold 0.025 ÷ (K − k + 1), or the order of
+    two `p_iut`; `holm_delta_rank`, `holm_delta_pass`: the same with `p_delta`; `C4`: the trial's `late_lb` vs 0;
+    `no_uplift`: its `dF_lo` vs 0; `verdict`, `label`, `failed`: any of these Holm tests, or the trial's `delta_ub` or
+    `late_lb` vs 0.
+- `STOP 8.5` for `chosen`, `chosen.<tf>`, `K_total`, `holm_pass`, `holm_delta_pass`, `C1` and `verdict`; `ALLOWED 8.5`
+  for the others. Reason: 9.3's stop list (the chosen trials, a Holm pass, a verdict); K_total and C1 are the count
+  of the chosen trials and the Holm pass under other names.
