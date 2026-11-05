@@ -152,6 +152,63 @@ describe("#391 when a share's hourly bar closes (signal-alerts/stocks.ts)", () =
   });
 });
 
+describe("docs §8.140: a bar forming while the session trades is not closed", () => {
+  const t = (iso: string) => Date.parse(iso) / 1000;
+  // Apple's hourly answer as Yahoo gave it on 2026-11-05 (.github/workflows/yahoo-probe.yml): yesterday's last two
+  // bars, today's 14:30 UTC (9:30 New York) bar, the 15:30 bar forming, and one point at the last price, volume 0
+  const apple = (last: string, lastVolume = 0, rows = 5) => ({
+    chart: {
+      result: [{
+        meta: { symbol: "AAPL", gmtoffset: -18000, regularMarketPrice: 346.48, regularMarketTime: t(last), currentTradingPeriod: { regular: { start: t("2026-11-05T14:30:00Z"), end: t("2026-11-05T21:00:00Z") } } },
+        timestamp: [t("2026-11-04T19:30:00Z"), t("2026-11-04T20:30:00Z"), t("2026-11-05T14:30:00Z"), t("2026-11-05T15:30:00Z"), t(last)].slice(0, rows),
+        indicators: {
+          quote: [{
+            open: [353.1112060546875, 352.1700134277344, 353.8999938964844, 349.82000732421875, 346.4800109863281].slice(0, rows),
+            high: [353.2200012207031, 352.8299865722656, 355.3800048828125, 350.3299865722656, 346.4800109863281].slice(0, rows),
+            low: [351.510009765625, 348.5199890136719, 348.05999755859375, 345.5, 346.4800109863281].slice(0, rows),
+            close: [352.1700134277344, 349.6199951171875, 349.80499267578125, 346.04998779296875, 346.4800109863281].slice(0, rows),
+            volume: [5090501, 11375216, 35192996, 79333617, lastVolume].slice(0, rows),
+          }],
+        },
+      }],
+    },
+  });
+
+  it("at 16:20 UTC judges the 14:30 bar, not the 15:30 one still forming (on 2026-11-05 it judged the forming bar from 15:32 on)", () => {
+    const now = at("2026-11-05T16:20:41Z");
+    const got = stockBarsOf("AAPL", apple("2026-11-05T16:20:39Z"), now)!;
+    expect(got.bars.map((b) => [b.datetime, b.closed])).toEqual([
+      ["2026-11-04 19:30:00", true],
+      ["2026-11-04 20:30:00", true],
+      ["2026-11-05 14:30:00", true],
+      ["2026-11-05 15:30:00", false],
+    ]);
+    const step = stockSweepOf("AAPL", got.bars, at("2026-11-05T15:30:00Z"), undefined, now);
+    expect(step.newest!.datetime).toBe("2026-11-05 14:30:00");
+    expect(step.done).toBe(true);
+    // a later point that traded (not joined to the bar) does not close the bar either: its end has not come
+    const traded = stockBarsOf("AAPL", apple("2026-11-05T16:20:39Z", 5), now)!;
+    expect(traded.bars).toHaveLength(5);
+    expect(traded.bars[3].closed).toBe(false);
+    expect(traded.bars[4].closed).toBe(false);
+  });
+
+  it("at 16:30 UTC, once Yahoo has priced past it, judges the 15:30 bar (it was not marked judged while it formed)", () => {
+    const now = at("2026-11-05T16:30:05Z");
+    const got = stockBarsOf("AAPL", apple("2026-11-05T16:30:03Z"), now)!;
+    // the point at 16:30:03 opens the next bar
+    expect(got.bars.map((b) => [b.datetime, b.closed]).slice(-2)).toEqual([["2026-11-05 15:30:00", true], ["2026-11-05 16:30:03", false]]);
+    const before = stockSweepOf("AAPL", stockBarsOf("AAPL", apple("2026-11-05T16:20:39Z"), at("2026-11-05T16:20:41Z"))!.bars, at("2026-11-05T15:30:00Z"), undefined, at("2026-11-05T16:20:41Z"));
+    const step = stockSweepOf("AAPL", got.bars, at("2026-11-05T16:30:00Z"), before.newest!.open_ms, now);
+    expect(step).toMatchObject({ judge: true, done: true, noSession: false });
+    expect(step.newest!.datetime).toBe("2026-11-05 15:30:00");
+    // before Yahoo has priced past 16:30 (its last trade 16:29:58, no later point): not in yet, not done
+    const early = stockBarsOf("AAPL", apple("2026-11-05T16:29:58Z", 0, 4), at("2026-11-05T16:30:01Z"))!;
+    expect(early.bars[3].closed).toBe(false);
+    expect(stockSweepOf("AAPL", early.bars, at("2026-11-05T16:30:00Z"), before.newest!.open_ms, at("2026-11-05T16:30:01Z")).done).toBe(false);
+  });
+});
+
 describe("#391 the MACD email on a share", () => {
   // an hourly walk on New York's sessions (13:30-19:30 UTC bars, weekdays), the first bar where the rule fires
   const session = (n: number, seed: number): StockBar[] => {
@@ -236,7 +293,7 @@ describe("#391 the MACD email on a share", () => {
 
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v37-2026-11-05T17:00:00Z";');
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');

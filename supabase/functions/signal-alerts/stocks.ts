@@ -135,10 +135,15 @@ export const stockBarsOf = (sym: string, body: unknown, nowMs: number): { bars: 
   const session = sStart !== null && sEnd !== null && sEnd > sStart ? { start: sStart * 1000, end: sEnd * 1000 } : null;
   const d = stockDecimals(sym);
   const r = (v: number) => Number(v.toFixed(d));
+  const opens = got.bars.map((c) => barOpenMs(c.datetime));
   const bars: StockBar[] = got.bars.map((c, k) => {
-    const open = barOpenMs(c.datetime);
+    const open = opens[k];
     const end = stockBarEnd(sym, open, session && open >= session.start && open < session.end ? session.end : null);
-    const closed = k < got.bars.length - 1 || (marketMs !== null && marketMs >= end);
+    // docs §8.140: closed once its end has passed and Yahoo has priced at or past it, or a bar that opens at or after
+    // its end is there. A later point inside the bar is not one: while a session trades, Yahoo's answer goes on past
+    // the forming bar (2026-11-05: the bar opened 15:30 UTC was judged as closed from 15:32 on)
+    const next = k < opens.length - 1 ? opens[k + 1] : null;
+    const closed = end <= nowMs && ((marketMs !== null && marketMs >= end) || (next !== null && next >= end));
     return { datetime: c.datetime, open: r(c.open), high: r(c.high), low: r(c.low), close: r(c.close), open_ms: open, end, closed };
   });
   return { bars, marketMs };

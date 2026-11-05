@@ -292,7 +292,7 @@ describe("#291 the function judges it in the gold-ticks run only", () => {
     expect(fn).toContain("sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },");
     // (v24 brought the rule; #324's v25, #339's v26, #345's v27, #353's v28, #362's v30, #384's v31, #385's v32, #386's v33,
     // #387's v34 and #391's v35 kept it as it was)
-    expect(fn).toContain("signal-alerts-v36");
+    expect(fn).toContain("signal-alerts-v37");
   });
   it("the job calls the run every minute through the http extension, not pg_net (which sends nothing while a request it sent is open)", () => {
     const sql = readFileSync("supabase/migrations/20261011120100_gold_ticks_every_minute.sql", "utf8");
