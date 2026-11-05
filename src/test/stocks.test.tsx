@@ -118,6 +118,21 @@ describe("#389 a share, named as Yahoo names it (live-chart/stocks.ts)", () => {
     expect(parseYahooChart("AAPL", live("2026-11-05T16:20:39Z", 5), "1h", now)!.bars).toHaveLength(5);
     // and a five-minute bar is not joined to a point an hour on
     expect(parseYahooChart("AAPL", live("2026-11-05T16:20:39Z", 0), "5min", now)!.bars).toHaveLength(5);
+    // on five-minute bars, the price now inside the forming five minutes is joined to it
+    const five = {
+      chart: {
+        result: [{
+          meta: { symbol: "AAPL", regularMarketTime: t("2026-11-05T16:22:10Z"), gmtoffset: -18000, currentTradingPeriod: session(t("2026-11-05T14:30:00Z"), t("2026-11-05T21:00:00Z")) },
+          timestamp: [t("2026-11-05T16:15:00Z"), t("2026-11-05T16:20:00Z"), t("2026-11-05T16:22:10Z")],
+          indicators: { quote: [{ open: [346, 346.2, 346.5], high: [346.3, 346.4, 346.5], low: [345.9, 346.1, 346.5], close: [346.2, 346.3, 346.5], volume: [10, 12, 0] }] },
+        }],
+        error: null,
+      },
+    };
+    expect(parseYahooChart("AAPL", five, "5min", now)!.bars.slice(-1)).toEqual([{ datetime: "2026-11-05 16:20:00", open: 346.2, high: 346.5, low: 346.1, close: 346.5 }]);
+    // only the last point is joined: one of volume 0 inside a bar earlier in the answer stays as it was
+    const middle = { chart: { result: [{ ...five.chart.result[0], timestamp: [t("2026-11-05T16:15:00Z"), t("2026-11-05T16:17:30Z"), t("2026-11-05T16:20:00Z")], indicators: { quote: [{ open: [346, 346.2, 346.5], high: [346.3, 346.4, 346.5], low: [345.9, 346.1, 346.5], close: [346.2, 346.3, 346.5], volume: [10, 0, 12] }] } }], error: null } };
+    expect(parseYahooChart("AAPL", middle, "5min", now)!.bars).toHaveLength(3);
     // Toyota's at 16:20:42 UTC the same day: its 15:30 JST point after the 15:00 bar while Yahoo names 11-06's session
     const toyota = {
       chart: {

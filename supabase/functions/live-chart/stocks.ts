@@ -133,6 +133,8 @@ const INTRADAY_MS: Record<string, number> = {
 // hourly bars: the 15:30 bar, then a point at 16:20:39, open = high = low =
 // close, volume 0); and after Tokyo's close its 15:30 point stays while
 // Yahoo already names the next day's session. Neither is a bar of its own.
+// (On 30-minute and shorter bars a closing point exactly one bar after the
+// row before it is not inside that bar, and stays a bar of its own, as before.)
 export const parseYahooChart = (symbol: string, body: unknown, interval: string, nowMs: number): StockChart | null => {
   const result = rec(rec(body)?.chart)?.result;
   const r = Array.isArray(result) ? rec(result[0]) : null;

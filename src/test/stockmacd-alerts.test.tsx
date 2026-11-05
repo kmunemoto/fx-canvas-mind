@@ -206,6 +206,10 @@ describe("docs §8.140: a bar forming while the session trades is not closed", (
     const early = stockBarsOf("AAPL", apple("2026-11-05T16:29:58Z", 0, 4), at("2026-11-05T16:30:01Z"))!;
     expect(early.bars[3].closed).toBe(false);
     expect(stockSweepOf("AAPL", early.bars, at("2026-11-05T16:30:00Z"), before.newest!.open_ms, at("2026-11-05T16:30:01Z")).done).toBe(false);
+    // a later point inside the bar that traded (not joined) does not close it once its end has come either: only a bar
+    // that opens at or after its end does
+    const inside = stockBarsOf("AAPL", apple("2026-11-05T16:29:58Z", 5), at("2026-11-05T16:30:05Z"))!;
+    expect(inside.bars.map((b) => [b.datetime, b.closed]).slice(-2)).toEqual([["2026-11-05 15:30:00", false], ["2026-11-05 16:29:58", false]]);
   });
 });
 
