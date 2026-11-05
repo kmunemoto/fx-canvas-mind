@@ -753,8 +753,8 @@ import type { CheckResult, Classified, Ind, Probe, TfKey, TfSet, TrialDef, Trial
 export function checkRulesFiles(root?: string): Promise<CheckResult>;       // lawsearch-const checkFiles + checkConstants; the ledger's 1,364 rows
 export function dataCheck(u: Universe): CheckResult;                         // dataProblems
 export interface CutTarget { tf: TfKey; pi: number; k: number; kinds: string[] }
-export function cutTargets(u: Universe, trials: TrialDef[], sigs: TrialSignals[]): CutTarget[];   // deduplicated per (tf, pi, k)
-export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string }): CheckResult;
+export function cutTargets(u: Universe, trials: TrialDef[], sigs: TrialSignals[], o: { htf: "even" | "all"; fromStart?: number; stats?: Record<string, number> }): CutTarget[];   // deduplicated per (tf, pi, k); spec 23.2: htf "even" = 300 boundary targets per tf and pair (stage 0), "all" (the chosen trials); fromStart: the second half's targets only
+export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string }): CheckResult;   // name "cut" (stage 0), "cut.chosen.first", "cut.chosen.second"
 export function poisonCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, o: { n: number; seed: number; answerKnowing: boolean; plant: string; only?: string[] }): CheckResult;
 export function presenceCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, o: { seed: number; answerKnowing: boolean; plant: string; only?: string[] }): CheckResult;
 export function h1OnlyCheck(u1: Universe): CheckResult;                       // every bar of stage 1 has T ≤ SPLIT
@@ -897,13 +897,19 @@ The pipeline (syn and walkfiles; one process):
      `retraceCheck` on 6 trades. (v) is "not-run", so a hit row is not selectable (11 O-5).
    - `followBarChecks`, `failRuleOf`, `chooseStage1` and `stage1Explain`.
    - Write `ts/choice.json` (the chosen ids per timeframe) and print its sha256.
-4. **Stage 2**: U2 = `loadUniverse(src, S0, END, syn2)`. Blind second-half and late tables. `measureTrial` for the
+   - Spec 23.2 (2026-11-05): the chosen trials are cut on U1 with every higher-timeframe boundary target (the other
+     kinds as stage 0's), check `cut.chosen.first` (stage `stage1end` in `checks.csv`). A failure prints a STOP line
+     with the trials and their failing bars, withholds stage 1's numbers and does not open stage 2.
+4. **Stage 2**: U2 = `loadUniverse(src, S0, END, syn2)`. Blind second-half and late tables. Spec 23.2: the chosen
+   trials cut on the second half's targets with every boundary target (`cut.chosen.second`; a failure withholds stage
+   2's numbers). `measureTrial` for the
    chosen trials only: asking for any other trial throws `REFUSED: stage 2 of a trial not chosen` (plant
    `secondHalfAll` asks for all; exit 2). Then κ (`withKappa`), `holm` (iut and delta), `conditionsOf`, `verdictOf`
    and `stage2Rows`.
 5. **The end**: `checks.csv`, `suspect.csv` and `print.txt` (PRINT_KEYS only: counts, times per stage
    `time.<stage>.ms`, check results; no stage's numbers when one of its checks failed). Exit 0, or 3 when any check
-   failed. The run goes on through every stage after a failure, so set O can show its suspicion lines.
+   failed. The run goes on through every stage after a failure, so set O can show its suspicion lines (but not into
+   stage 2 after `cut.chosen.first` failed: spec 23.2).
 
 Deno permissions: `--allow-read=. --allow-write=research/out --allow-env` (and the scratch folder when a builder
 runs locally). No `--allow-net`. The constant `TRIAL_PASSED_SHA256: string | null = null` lives in `lawsearch.ts`,
@@ -940,7 +946,9 @@ jobs:
      with `MODE=walkfiles` on the run's own gmo folder (read only) and `OUT=<RUN>/plant-<name>`, with the expected
      exit and failed check.
   4. O's runs expect exit 3, the cut and poison checks failed, and the E26 rows' suspicion hit.
-  5. The flip job compares the flipped and unflipped dumps (10).
+  5. The flip job (from 2026-11-05, spec 23.1): `research/lawsearch-flip.ts <FLIP=0 run> <FLIP=1 run>` judges 14.2's
+     conditions on the exact mirror of the FLIP=0 run (built from its files, nothing written) and prints the FLIP=1
+     run's dump differences as INFO lines; then `--run` on the FLIP=1 run (the TS–Python comparison).
 - No job reads real data and none has `--allow-net`. No real-data job is written yet.
 
 ---

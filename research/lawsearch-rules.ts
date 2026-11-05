@@ -113,6 +113,10 @@ export const CUT_EVEN = 300;
 export const CUT_GAP_BARS = 10;
 export const CUT_DAY_BARS = 2;
 export const CUT_HTF_BARS = 2;
+// spec 23.2 (2026-11-05): stage 0 keeps this many of the higher-timeframe boundary targets per timeframe and pair,
+// evenly picked in time order (the j-th is floor(j (n − 1) ÷ 299); all when n ≤ 300); stage 1's chosen trials are
+// cut on every one of the first half at the end of stage 1, and stage 2 on every one of the second half
+export const CUT_HTF_STAGE0 = 300;
 export const POISON_N = 100;
 export const POISON_1000 = 1000;
 export const POISON_PIPS = 777.7;

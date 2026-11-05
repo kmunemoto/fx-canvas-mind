@@ -297,7 +297,8 @@ export function stage3Estimate(n2: number): number {
 // ---- stage 0 ---------------------------------------------------------------------------------------------------
 
 // Every trial's row of spec 9 (input order is kept; the callers pass table order). g and gDf: spec 9's g and its df
-// per trial id (from the N runs, step 4); a trial without g has the six MDE fields null (lawsearch-dump.md 7).
+// per trial id (from the N runs, step 4); a trial without g has the five fields g, df, passMin, mde and mark null,
+// and stage3Estimate (n2 × 52 ÷ 76) is always written (spec 23.3; lawsearch-dump.md 7).
 export function stage0(
   sigs: TrialSignals[],
   tf: Record<TfKey, TfSet>,
@@ -361,7 +362,8 @@ export function stage0(
       passMin: m ? m.passMin : null,
       mde: m ? m.mde : null,
       mark: m ? m.mark : null,
-      stage3Estimate: m ? stage3Estimate(b.second.counted) : null,
+      // spec 9 段3の数の見込み, written with or without g (spec 23.3)
+      stage3Estimate: stage3Estimate(b.second.counted),
     };
   });
 }

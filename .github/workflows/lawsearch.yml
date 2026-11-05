@@ -10,8 +10,10 @@
 #           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3) and
 #           secondHalfAll (exit 2), CMP-C 7101 the plant reasonUsesFuture (exit 3, cut or presence failed); O expects
 #           exit 3 with the cut and the poison failed on the E26 trials
-#   flip    FLIP 1001–1005 and their flips, then research/lawsearch-flip.ts compares each pair (design 10; the h
-#           differences of 11 O-2 are counted, not failed); the dumps are kept as an artifact
+#   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
+#           judges spec 14.2's conditions on the exact mirror of each FLIP=0 run (spec 23.1, design 10: its bars
+#           mirrored with no rounding of spec 2, everything above them rebuilt) and prints the FLIP=1 run's
+#           differences as information; the FLIP=1 run is compared TS–Python (--run); the dumps are kept as an artifact
 #   smoke   SMOKE 7001–7004 (D, H, E15, EF): only when the repository variable LS_SMOKE_STRENGTH holds the provisional
 #           amount (the lead's choice; not a formal run, never compared)
 #
@@ -90,7 +92,7 @@ jobs:
           midHalfEven A.1.7
           pointsTrunc A.1.8
           smaNewestFirst A.3.2,A.3.31
-          noRisingEdge A.4.1,A.4.32,A.4.33,A.4.34
+          noRisingEdge A.4.1,A.4.33,A.4.34
           noHolm A.2.22
           iutOneLeg A.2.22
           c4PointOnly A.2.23
@@ -202,6 +204,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -q numpy
       - name: TS (MODE=syn), the walk and its flip
         run: |
           set +e
@@ -210,11 +216,13 @@ jobs:
             echo "flip $flip: exit $code"
             [ "$code" = 0 ] || exit 1
           done
-      - name: The flip comparison (blind bars' h and PL, the signals of E04, E26 and S01; design 10, 11 O-2)
-        # pipefail: the comparison's exit (3 on a failure), not tee's, decides the step
+      - name: The flip's conditions on the exact mirror (blind bars' h and PL, the signals of E04, E26 and S01; spec 23.1, design 10), the FLIP=1 run's differences printed (INFO)
+        # pipefail: the judgement's exit (3 on a failure), not tee's, decides the step
         run: |
           set -o pipefail
-          deno run --no-config --allow-read=. research/lawsearch-flip.ts research/out/lawsearch/flip-${{ matrix.seed }}-0 research/out/lawsearch/flip-${{ matrix.seed }}-1 | tee research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
+          deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. research/lawsearch-flip.ts research/out/lawsearch/flip-${{ matrix.seed }}-0 research/out/lawsearch/flip-${{ matrix.seed }}-1 | tee research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
+      - name: Python (recompute and compare) on the FLIP=1 run (spec 23.1)
+        run: $PY research/lawsearch-check.py --run research/out/lawsearch/flip-${{ matrix.seed }}-1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -222,6 +230,8 @@ jobs:
           path: |
             research/out/lawsearch/flip-${{ matrix.seed }}-*/manifest.json
             research/out/lawsearch/flip-${{ matrix.seed }}-*/ts/
+            research/out/lawsearch/flip-${{ matrix.seed }}-*/py/
+            research/out/lawsearch/flip-${{ matrix.seed }}-*/cmp/
             research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
           if-no-files-found: ignore
 

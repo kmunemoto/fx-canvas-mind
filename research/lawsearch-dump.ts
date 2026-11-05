@@ -257,6 +257,10 @@ export async function dumpStage0(dir: string, rows: Stage0Row[]): Promise<void> 
       const h = r[half];
       put(`${half}.counted`, fmtInt(h.counted));
       put(`${half}.weeks`, fmtInt(h.weeks));
+      h.byPairDir.forEach((x, k) => (totals[half].pd[k] += x));
+      h.byReason.forEach((x, k) => (totals[half].reason[k] += x));
+      // spec 9 後半 (23.3): the second half's per-trial breakdown is not written before stage 2; the totals below are
+      if (half === "second") continue;
       PAIRS.forEach((p, pi) => {
         put(`${half}.pd.${SYM(p)}.buy`, fmtInt(h.byPairDir[pi * 2]));
         put(`${half}.pd.${SYM(p)}.sell`, fmtInt(h.byPairDir[pi * 2 + 1]));
@@ -265,8 +269,6 @@ export async function dumpStage0(dir: string, rows: Stage0Row[]): Promise<void> 
       put(`${half}.no_trade`, fmtInt(h.noTrade));
       put(`${half}.no_blind`, fmtInt(h.noBlind));
       put(`${half}.per_week`, fmtReal(h.perWeek));
-      h.byPairDir.forEach((x, k) => (totals[half].pd[k] += x));
-      h.byReason.forEach((x, k) => (totals[half].reason[k] += x));
     }
     put("all.emitted", fmtInt(r.emitted));
     put("all.r1", fmtInt(r.r1All));
@@ -554,27 +556,31 @@ export async function dumpSuspect(dir: string, rows: SuspectRow[]): Promise<void
   ]));
 }
 
-// checks.csv (TS only): trial,name,passed,detail. A probe named by a trial id ("m15.…", "h1.…") is that trial's row;
-// the other probes of a check make its one "*" row (the whole run's; absent when every probe is a trial's). Commas and
-// line ends in the detail become ";" and " ". The Python reads it for rule 2 (checks_ok = every "*" row and every
-// row of that trial passed).
+// checks.csv (TS only): trial,name,passed,detail,stage. A probe named by a trial id ("m15.…", "h1.…") is that trial's
+// row; the other probes of a check make its one "*" row (the whole run's; absent when every probe is a trial's).
+// Commas and line ends in the detail become ";" and " ". stage (lawsearch-dump.md 8, TS only): gate, stage0, stage1,
+// stage1end (spec 23.2's cut of the chosen trials, after the choice), stage2 or end. The Python reads it for rule 2:
+// checks_ok = every "*" row and every row of that trial passed, among the rows of stages gate, stage0 and stage1
+// (the checks made before the choice). stages: one per CheckResult (the stage column is left out without it).
 export const isTrialProbe = (name: string): boolean => /^(m15|h1)\./.test(name);
-export function checksRows(rs: CheckResult[]): string[][] {
+export function checksRows(rs: CheckResult[], stages?: readonly string[]): string[][] {
   const clean = (s: string) => s.replace(/,/g, ";").replace(/[\r\n]+/g, " ");
+  if (stages && stages.length !== rs.length) throw new Error(`checksRows: ${rs.length} checks, ${stages.length} stages`);
   const out: string[][] = [];
-  for (const r of rs) {
+  rs.forEach((r, q) => {
+    const tail = stages ? [stages[q]] : [];
     const own = r.probes.filter((p) => !isTrialProbe(p.name));
     if (own.length > 0 || r.probes.length === 0) {
       const passed = r.probes.length === 0 ? r.passed : own.every((p) => p.mismatched === 0);
-      out.push(["*", clean(r.name), fmtBool(passed), clean(r.detail)]);
+      out.push(["*", clean(r.name), fmtBool(passed), clean(r.detail), ...tail]);
     }
     for (const p of r.probes) {
       if (!isTrialProbe(p.name)) continue;
-      out.push([p.name, clean(r.name), fmtBool(p.mismatched === 0), clean(`${p.mismatched} of ${p.compared} differ${p.examples.length ? ": " + p.examples.join(" | ") : ""}`)]);
+      out.push([p.name, clean(r.name), fmtBool(p.mismatched === 0), clean(`${p.mismatched} of ${p.compared} differ${p.examples.length ? ": " + p.examples.join(" | ") : ""}`), ...tail]);
     }
-  }
+  });
   return out;
 }
-export async function dumpChecks(dir: string, rs: CheckResult[]): Promise<void> {
-  await writeCsv(`${dir}/checks.csv`, ["trial", "name", "passed", "detail"], checksRows(rs));
+export async function dumpChecks(dir: string, rs: CheckResult[], stages: readonly string[]): Promise<void> {
+  await writeCsv(`${dir}/checks.csv`, ["trial", "name", "passed", "detail", "stage"], checksRows(rs, stages));
 }

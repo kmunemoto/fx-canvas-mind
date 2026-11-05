@@ -1,21 +1,49 @@
-// 法則探し (docs §8.136, research/lawsearch-spec.md 14.2 裏返し; research/lawsearch-design.md 10 FLIP): the comparison of
-// a synthetic run with its flipped twin, from the TS dumps of both (lawsearch-dump.md). Read only.
+// 法則探し (docs §8.136, research/lawsearch-spec.md 14.2 裏返し, 23.1; research/lawsearch-design.md 10 FLIP, 11 O-2):
+// the flip's conditions, judged on the exact mirror of a synthetic run, and, for information, the FLIP=1 run's dumps
+// against the original's. Read only.
 //
-//   deno run --allow-read=. research/lawsearch-flip.ts <run> <flipped run>
+//   deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. \
+//     research/lawsearch-flip.ts <run> [<flipped run>] [--ts <the run's dumps>] [--flipped-ts <the flipped run's dumps>]
 //
-// It checks, for every blind/<tf>_<half>.csv that both runs wrote:
-//   * the same bars (pair, i, T) in both tables;
-//   * PL exact: the flipped run's buy PL = the original's sell PL, and the flipped sell PL = the original's buy PL
-//     (mirroring maps Bid' = 2S − Ask and Ask' = 2S − Bid exactly, so the raw points mirror exactly);
-//   * h: the flipped buy h = the original's sell h. The mid is rounded from (Bid + Ask) ÷ 2, which is a half tick on
-//     an odd spread; mirrored, each of the two mids of m can round the other way, so m′ = m_sell + e with |e| ≤ 2
-//     points (design 11 O-2). An h difference at |m_sell| ≤ 2 is counted as O-2 (the owner reads 14.2's
-//     "ぴったり同じ"); |m′ − m_sell| > 2 or an h difference at |m_sell| > 2 is a failure.
-// and, for every signals/<trial>.csv of E04, E26 and S01: the rows (pair, i, d, reason) of the flipped run against the
-// original's with d reversed; the difference (rows in one and not the other, both ways) ÷ the original's rows must be
-// ≤ 0.1%. B06 is not symmetric (log returns of mirrored prices): its difference is printed, not judged.
+// (--ts and --flipped-ts default to <run>/ts and <flipped run>/ts; a walkfiles run writes its dumps elsewhere.)
 //
-// Exit: 0 every judged comparison passed (O-2 differences are counted, not failures); 3 a failure; 1 a crash.
+// JUDGED (spec 23.1, the owner's answer 6): the original run's gmo files read under spec 2 (the pipeline's two loads:
+// [S0, SPLIT) for the first half's blind tables, [S0, END) for the signals and the second half's), then every bar of
+// the trials' timeframes mirrored exactly about the pair's S (lawsearch-bars.ts mirrorSeries: Bid' = 2S − Ask, Ask' =
+// 2S − Bid, mid' = 2S − mid, high' from low and low' from high, in points, with no rounding of spec 2), and everything
+// above it rebuilt from the mirror: the higher bars (mirroredHigher), the indicators, every trial's signals (spec 5,
+// 6), the blind tables of both halves and timeframes (8.1), the late tables and the trades of the counted signals (7,
+// 8.8). S is the pair's first 5-minute mid open of the original run: the generator's start in points (14.1 始値,
+// GEN_START), read back from the files as the first bar's Bid open + floor(spread ÷ 2) (the generator's Bid is the mid
+// − floor(spread ÷ 2), and the first 15-minute bar opens with the first 5-minute bar); a run whose files do not give
+// it is not judged (exit 1). The conditions of 14.2:
+//   * every blind bar of both halves and timeframes: the mirror's buy h = the original's sell h, and PL the same (the
+//     mirror's buy PL = the original's sell PL, the mirror's sell PL = the original's buy PL; points, |difference| ≤
+//     1e−9); the two tables must hold the same bars;
+//   * the symmetric items (every trial that is not a B: E04, E26, S01 and their F): the signals (pair, bar,
+//     direction, reason, half, warm) match 1-to-1 with the direction reversed; the difference (rows in one only, both
+//     ways, ÷ the original's rows) must be ≤ 0.1% per trial;
+//   * B06 is not symmetric (log returns of mirrored prices): its name, reason and difference are printed, not judged.
+// Also judged, so that the judgement is of the original run: the original's signals and blind tables built here equal
+// the run's dumps (signals/<trial>.csv; blind/<tf>_<half>.csv when the run wrote it), and the mirror's higher bars
+// equal the mirror of the original's. The trades of the counted signals are printed (information).
+//
+// INFORMATION only (spec 23.1: the FLIP=1 run, its files read under spec 2, is for the TS–Python comparison): with
+// <flipped run>, its dumps against the original's, as the trial compared them (the blind bars' h and PL with 11 O-2's
+// count; the signals' differences of E04, E26, S01 and B06). These lines start with "INFO" and never fail the run.
+//
+// Exit: 0 every judged condition passed; 3 a judged failure; 1 a crash; 2 usage.
+
+import { END, PAIRS, POINTS_PER_PRICE, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
+import { REASONS, TRIAL_STEP3 } from "./lawsearch-rules.ts";
+import { loadUniverse, mirrorSeries, mirrorUniverse } from "./lawsearch-bars.ts";
+import { GEN_START, GEN_VERSION } from "./lawsearch-gen.ts";
+import { parseCandidates, trialBuilt } from "./lawsearch-items.ts";
+import { avoidOf, blindBarsOf, trialSignals } from "./lawsearch-events.ts";
+import { ctxOfUniverse } from "./lawsearch-checks.ts";
+import { indsOf } from "./lawsearch-stage0.ts";
+import { blindTable, lateTable, rowKey, trialRows } from "./lawsearch-trade.ts";
+import type { BlindTable, Dir, Pair, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 type Row = Record<string, string>;
 
@@ -47,6 +75,7 @@ export interface FlipBlind {
   examples: string[];
 }
 
+// INFO: the FLIP=1 run's blind dump against the original's (the trial's comparison; 11 O-2's h differences counted)
 export function compareBlind(file: string, a: Row[], b: Row[]): FlipBlind {
   const key = (r: Row) => `${r.pair}|${r.i}|${r.T}|${r.d}`;
   const A = new Map(a.map((r) => [key(r), r]));
@@ -100,6 +129,7 @@ export interface FlipSignals {
   examples: string[];
 }
 
+// INFO: the FLIP=1 run's signals dump against the original's (the trial's comparison)
 export function compareSignals(trial: string, a: Row[], b: Row[]): FlipSignals {
   const ka = new Set(a.map((r) => `${r.pair}|${r.i}|${r.d}|${r.reason}`));
   // the flipped run's rows with the direction reversed
@@ -121,64 +151,342 @@ export function compareSignals(trial: string, a: Row[], b: Row[]): FlipSignals {
   return { trial, rows: a.length, rowsFlipped: b.length, onlyOriginal: onlyA, onlyFlipped: onlyB, share: a.length > 0 ? (onlyA + onlyB) / a.length : onlyB > 0 ? 1 : 0, judged, examples };
 }
 
-export async function flipCompare(run: string, flipped: string): Promise<{ lines: string[]; passed: boolean }> {
+// ---- INFO: the FLIP=1 run's dumps (the trial's comparison, now information only) -------------------------------------
+
+export async function flipInfo(run: string, flipped: string, tsA: string, tsB: string): Promise<string[]> {
   const lines: string[] = [];
-  let passed = true;
-  for (const [dir, want] of [[run, false], [flipped, true]] as const) {
-    const m = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
-    if (m.spec.flip !== want) throw new Error(`${dir}: manifest flip ${m.spec.flip}, expected ${want}`);
-  }
-  const ma = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`)).spec;
   const mb = JSON.parse(await Deno.readTextFile(`${flipped}/manifest.json`)).spec;
+  const ma = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`)).spec;
+  if (mb.flip !== true) throw new Error(`${flipped}: manifest flip ${mb.flip}, expected true`);
   if (ma.group !== mb.group || ma.seed !== mb.seed) throw new Error(`the runs are ${ma.group} ${ma.seed} and ${mb.group} ${mb.seed}`);
-  lines.push(`FLIP ${ma.group} ${ma.seed}: ${run} vs ${flipped}`);
+  lines.push(`INFO FLIP=1 ${mb.group} ${mb.seed}: ${tsA} vs ${tsB} (the flipped files read under spec 2; not judged, spec 23.1)`);
   for (const tf of ["m15", "h1"]) {
     for (const half of ["first", "second"]) {
       const f = `blind/${tf}_${half}.csv`;
-      const a = await readCsv(`${run}/ts/${f}`);
-      const b = await readCsv(`${flipped}/ts/${f}`);
+      const a = await readCsv(`${tsA}/${f}`);
+      const b = await readCsv(`${tsB}/${f}`);
       if (!a || !b) {
-        lines.push(`BLIND ${f}: not in both runs (original ${a ? "yes" : "no"}, flipped ${b ? "yes" : "no"}; the second half is written only when stage 2 runs)`);
+        lines.push(`INFO BLIND ${f}: not in both runs (original ${a ? "yes" : "no"}, flipped ${b ? "yes" : "no"}; the second half is written only when stage 2 runs)`);
         continue;
       }
       const c = compareBlind(f, a, b);
-      const ok = c.barsOnlyOne === 0 && c.plDiff === 0 && c.mOutOfRange === 0 && Object.entries(c.hDiffByAbsM).every(([m]) => Number(m) <= 2);
-      if (!ok) passed = false;
-      lines.push(`BLIND ${f}: bars ${c.bars}, in one run only ${c.barsOnlyOne}, pl differences ${c.plDiff}, |m′ − m| > 2: ${c.mOutOfRange}, h differences ${c.hDiff} (by |m| of the original sell: ${JSON.stringify(c.hDiffByAbsM)}; O-2 when |m| ≤ 2) ${ok ? "PASS" : "FAIL"}`);
-      for (const x of c.examples) lines.push(`  ${x}`);
+      lines.push(`INFO BLIND ${f}: bars ${c.bars}, in one run only ${c.barsOnlyOne}, pl differences ${c.plDiff}, |m′ − m| > 2: ${c.mOutOfRange}, h differences ${c.hDiff} (by |m| of the original sell: ${JSON.stringify(c.hDiffByAbsM)}; 11 O-2)`);
+      for (const x of c.examples) lines.push(`INFO   ${x}`);
     }
   }
   const names = new Set<string>();
-  for await (const e of Deno.readDir(`${run}/ts/signals`)) names.add(e.name);
+  for await (const e of Deno.readDir(`${tsA}/signals`)) names.add(e.name);
   for (const name of [...names].sort()) {
     const trial = name.replace(/\.csv$/, "");
     if (!/\.(E04|E26|S01|B06)/.test(trial)) continue;
-    const a = await readCsv(`${run}/ts/signals/${name}`);
-    const b = await readCsv(`${flipped}/ts/signals/${name}`);
+    const a = await readCsv(`${tsA}/signals/${name}`);
+    const b = await readCsv(`${tsB}/signals/${name}`);
     if (!a || !b) {
-      lines.push(`SIGNALS ${trial}: missing in the flipped run`);
-      passed = false;
+      lines.push(`INFO SIGNALS ${trial}: missing in the flipped run`);
       continue;
     }
     const c = compareSignals(trial, a, b);
-    const ok = !c.judged || c.share <= 0.001;
-    if (!ok) passed = false;
-    lines.push(`SIGNALS ${trial}: original ${c.rows}, flipped ${c.rowsFlipped}, only original ${c.onlyOriginal}, only flipped ${c.onlyFlipped}, difference ${(100 * c.share).toFixed(4)}% ${c.judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : "(B06: not symmetric, printed only)"}`);
-    for (const x of c.examples.slice(0, 4)) lines.push(`  ${x}`);
+    lines.push(`INFO SIGNALS ${trial}: original ${c.rows}, flipped ${c.rowsFlipped}, only original ${c.onlyOriginal}, only flipped ${c.onlyFlipped}, difference ${(100 * c.share).toFixed(4)}%${c.judged ? "" : " (B06: not symmetric)"}`);
+    for (const x of c.examples.slice(0, 4)) lines.push(`INFO   ${x}`);
+  }
+  return lines;
+}
+
+// ---- JUDGED: the exact mirror (spec 23.1) --------------------------------------------------------------------------
+
+const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
+const pct = (x: number) => `${(100 * x).toFixed(4)}%`;
+const iso = (t: number) => new Date(t).toISOString().replace(".000Z", "Z");
+const setOf = (u: Universe, tf: TfKey): TfSet => (tf === "m15" ? u.m15 : u.h1);
+
+// S per pair (points): the generator's start, checked against the original's first bar (its Bid open + floor(spread
+// ÷ 2)) on both timeframes; the first bar must open at the walk's first minute (the manifest's fromMs)
+export function startsOf(u: Universe, fromMs: number): { S: number[]; lines: string[] } {
+  const S: number[] = [];
+  const lines: string[] = [];
+  PAIRS.forEach((pair, pi) => {
+    const want = Math.round(GEN_START[pair as Pair] * POINTS_PER_PRICE(pair));
+    for (const tf of ["m15", "h1"] as const) {
+      const s = setOf(u, tf).pairs[pi];
+      if (s.n === 0 || s.s[0] !== fromMs) throw new Error(`${pair} ${tf}: the first bar is not at the walk's first minute (${s.n ? iso(s.s[0]) : "no bar"}); S cannot be read from the files`);
+      const got = s.Bo[0] + Math.floor((s.Ao[0] - s.Bo[0]) / 2);
+      if (got !== want) throw new Error(`${pair} ${tf}: the first bar's Bid open + floor(spread ÷ 2) is ${got} points, the generator's start ${want}`);
+    }
+    S.push(want);
+    lines.push(`${pair} S ${want} (spec 2's rounded first mid open ${setOf(u, "m15").pairs[pi].Po[0]})`);
+  });
+  return { S, lines };
+}
+
+// the mirror's higher bars against the mirror of the original's (mirroredHigher's promise)
+const higherCheck = (o: Universe, m: Universe, S: readonly number[]): string[] => {
+  const bad: string[] = [];
+  const keys = ["s", "Bo", "Bh", "Bl", "Bc", "Ao", "Ah", "Al", "Ac", "Po", "Ph", "Pl", "Pc", "O", "H", "L", "C"] as const;
+  for (const tf of ["m15", "h1"] as const) {
+    setOf(o, tf).pairs.forEach((p, pi) => {
+      const want = mirrorSeries(setOf(o, tf).htf[pi], S[pi]);
+      const got = setOf(m, tf).htf[pi];
+      if (want.n !== got.n) {
+        bad.push(`${p.pair} ${tf}'s higher bars: ${got.n} rebuilt, ${want.n} mirrored`);
+        return;
+      }
+      for (const k of keys) for (let i = 0; i < want.n; i++) if (want[k][i] !== got[k][i]) {
+        bad.push(`${p.pair} ${tf}'s higher bar ${i} ${k}: rebuilt ${got[k][i]}, mirrored ${want[k][i]}`);
+        return;
+      }
+    });
+  }
+  return bad;
+};
+
+interface Built {
+  u: Universe;
+  sig: Map<string, TrialSignals>;
+  table: Record<string, BlindTable>;
+  late: Record<string, BlindTable>;
+}
+
+// the pipeline's pieces on one universe, as stage 1 (half first, the [S0, SPLIT) load) or stage 2 (half second, the
+// [S0, END) load, whose signals are stage 0's) makes them: every trial's signals, the half's blind and late tables
+function build(u: Universe, trials: TrialDef[], avoid: ReadonlySet<string>, answerKnowing: boolean, half: "first" | "second"): Built {
+  const ctx = ctxOfUniverse(u, avoid, "");
+  const inds = { m15: indsOf(u.m15, ""), h1: indsOf(u.h1, "") };
+  const sig = new Map<string, TrialSignals>();
+  for (const t of trials) sig.set(t.id, trialSignals(t, setOf(u, t.tf), inds[t.tf], ctx[t.tf], { plant: "", answerKnowing }));
+  const table: Record<string, BlindTable> = {};
+  const late: Record<string, BlindTable> = {};
+  for (const tf of ["m15", "h1"] as const) {
+    const t = blindTable(setOf(u, tf), half, blindBarsOf(ctx[tf], setOf(u, tf), half), "");
+    table[tf] = t;
+    late[tf] = lateTable(t, u.m15, half === "first" ? SPLIT : END, "");
+  }
+  return { u, sig, table, late };
+}
+
+// the rows of one trial's signals as keys (pair, bar, direction (reversed for the mirror), reason, half, warm)
+const sigKeys = (sig: TrialSignals, reverse: boolean): string[] => {
+  const out: string[] = [];
+  for (const c of sig.pairs) for (let r = 0; r < c.n; r++) out.push(`${PAIRS[c.pi]}|${c.i[r]}|${reverse ? -c.d[r] : c.d[r]}|${REASONS[c.reason[r]]}|${c.half[r]}|${c.warmOk[r]}`);
+  return out;
+};
+const setDiff = (a: readonly string[], b: readonly string[]): { onlyA: number; onlyB: number; examples: string[] } => {
+  const A = new Set(a);
+  const B = new Set(b);
+  const examples: string[] = [];
+  let onlyA = 0;
+  let onlyB = 0;
+  for (const k of A) if (!B.has(k)) {
+    onlyA++;
+    if (examples.length < 4) examples.push(`original ${k}, no mirrored twin`);
+  }
+  for (const k of B) if (!A.has(k)) {
+    onlyB++;
+    if (examples.length < 8) examples.push(`mirror (direction reversed) ${k}, no original twin`);
+  }
+  return { onlyA, onlyB, examples };
+};
+
+// one blind table of the mirror against the original's: the same bars; mirror buy h = original sell h; PL buy ↔ sell
+export function mirrorBlind(o: BlindTable, m: BlindTable): { bars: number; onlyOne: number; hDiff: number; mDiff: number; plDiff: number; plMax: number; examples: string[] } {
+  const out = { bars: 0, onlyOne: 0, hDiff: 0, mDiff: 0, plDiff: 0, plMax: 0, examples: [] as string[] };
+  const at = (t: BlindTable, pi: number, T: number, d: Dir) => t.index.get(rowKey(pi, T, d));
+  // every bar of either table (a bar has a buy row and a sell row, or none)
+  const seen = new Set<number>();
+  for (const t of [o, m]) {
+    for (let r = 0; r < t.n; r++) {
+      const pi = t.pi[r];
+      const T = t.T[r];
+      const key = rowKey(pi, T, 1);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const oBuy = at(o, pi, T, 1);
+      const oSell = at(o, pi, T, -1);
+      const mBuy = at(m, pi, T, 1);
+      const mSell = at(m, pi, T, -1);
+      if (oBuy === undefined || oSell === undefined || mBuy === undefined || mSell === undefined || o.i[oBuy] !== m.i[mBuy]) {
+        out.onlyOne++;
+        if (out.examples.length < 8) out.examples.push(`${PAIRS[pi]} ${iso(T)}: in one table only`);
+        continue;
+      }
+      out.bars++;
+      if (m.h[mBuy] !== o.h[oSell]) {
+        out.hDiff++;
+        if (out.examples.length < 8) out.examples.push(`${PAIRS[pi]} ${iso(T)}: mirror buy h ${m.h[mBuy]}, original sell h ${o.h[oSell]}`);
+      }
+      if (m.m[mBuy] !== o.m[oSell] || m.m[mSell] !== o.m[oBuy]) out.mDiff++;
+      for (const [mr, or] of [[mBuy, oSell], [mSell, oBuy]] as const) {
+        const d = Math.abs(m.pl[mr] - o.pl[or]);
+        if (d > out.plMax) out.plMax = d;
+        if (d > 1e-9) {
+          out.plDiff++;
+          if (out.examples.length < 8) out.examples.push(`${PAIRS[pi]} ${iso(T)} mirror d=${m.d[mr]} pl ${m.pl[mr]}, original d=${o.d[or]} pl ${o.pl[or]}`);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// the original's blind table against the run's dump (pair, i, T, d, j, x, subst, m, h, pl)
+const tableVsDump = (t: BlindTable, rows: Row[]): string | null => {
+  if (rows.length !== t.n) return `${t.n} rows built, ${rows.length} in the dump`;
+  for (let r = 0; r < t.n; r++) {
+    const x = rows[r];
+    const want = [PAIRS[t.pi[r]], t.i[r], t.T[r], t.d[r], t.j[r], t.x[r], t.subst[r], t.m[r], t.h[r], t.pl[r]].map(String);
+    const got = [x.pair, x.i, x.T, x.d, x.j, x.x, x.subst, x.m, x.h, x.pl];
+    if (want.some((v, k) => v !== got[k])) return `row ${r}: built ${want.join(",")}, dump ${got.join(",")}`;
+  }
+  return null;
+};
+const sigVsDump = (sig: TrialSignals, rows: Row[]): string | null => {
+  const built = sigKeys(sig, false).sort();
+  const dump = rows.map((x) => `${x.pair}|${x.i}|${x.d}|${x.reason}|${x.half === "first" ? 1 : x.half === "second" ? 2 : 0}|${x.warm === "1" ? 1 : 0}`).sort();
+  if (built.length !== dump.length) return `${built.length} rows built, ${dump.length} in the dump`;
+  for (let k = 0; k < built.length; k++) if (built[k] !== dump[k]) return `built ${built[k]}, dump ${dump[k]}`;
+  return null;
+};
+
+export async function flipJudge(run: string, tsDir: string): Promise<{ lines: string[]; passed: boolean }> {
+  const lines: string[] = [];
+  let passed = true;
+  const fail = (line: string) => {
+    passed = false;
+    lines.push(line);
+  };
+  const man = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`));
+  if (man.version !== GEN_VERSION) throw new Error(`${run}/manifest.json: version ${man.version}, not ${GEN_VERSION}`);
+  if (man.spec.flip !== false) throw new Error(`${run}: manifest flip ${man.spec.flip}; the exact mirror is made from the original (FLIP=0) run`);
+  const answerKnowing = man.spec.group === "O";
+  // the avoid table, as the pipeline reads it
+  const avoidBytes = await Deno.readFile("research/ledger/spread-hours-h1.csv");
+  const avoidSha = hex(await crypto.subtle.digest("SHA-256", avoidBytes));
+  if (avoidSha !== SPREAD_H1_SHA256) throw new Error(`research/ledger/spread-hours-h1.csv: sha256 ${avoidSha}, not ${SPREAD_H1_SHA256}`);
+  const avoid = avoidOf(new TextDecoder().decode(avoidBytes));
+  // the trials: the run's config.json, else the trial's twelve
+  let ids: string[] = [...TRIAL_STEP3];
+  try {
+    ids = JSON.parse(await Deno.readTextFile(`${tsDir}/config.json`)).trials;
+  } catch {
+    lines.push(`(no ${tsDir}/config.json: the trial's twelve)`);
+  }
+  const all = parseCandidates(JSON.parse(await Deno.readTextFile("research/ledger/lawsearch-candidates.json")));
+  const trials = ids.map((id) => {
+    const t = all.find((x) => x.id === id);
+    if (!t || !trialBuilt(t)) throw new Error(`trial ${id} is not built`);
+    return t;
+  }).sort((a, b) => a.order - b.order);
+  lines.push(`FLIP ${man.spec.group} ${man.spec.seed}: the exact mirror of ${run} (spec 23.1), trials ${trials.map((t) => t.id).join("|")}`);
+  const src = { dir: `${run}/gmo`, fetch: false };
+  const u2 = await loadUniverse(src, S0, END, { purpose: "syn2", band: "syn", plant: "" });
+  const u1 = await loadUniverse(src, S0, SPLIT, { purpose: "syn1", band: "syn", plant: "" });
+  const { S, lines: sLines } = startsOf(u2, man.spec.fromMs);
+  lines.push(`S (the first 5-minute mid open, points): ${sLines.join("; ")}`);
+  const m2 = mirrorUniverse(u2, S);
+  const m1 = mirrorUniverse(u1, S);
+  for (const [o, m] of [[u1, m1], [u2, m2]] as const) {
+    const bad = higherCheck(o, m, S);
+    if (bad.length) fail(`HIGHER ${o.purpose}: the rebuilt higher bars are not the mirror of the original's: ${bad.slice(0, 4).join("; ")} FAIL`);
+    else lines.push(`HIGHER ${o.purpose}: the mirror's higher bars, rebuilt from the mirrored bars, equal the mirror of the original's PASS`);
+  }
+  const o2 = build(u2, trials, avoid, answerKnowing, "second");
+  const n2 = build(m2, trials, avoid, answerKnowing, "second");
+  const o1 = build(u1, trials, avoid, answerKnowing, "first");
+  const n1 = build(m1, trials, avoid, answerKnowing, "first");
+  // the original built here is the run's (its dumps)
+  const before = passed;
+  for (const t of trials) {
+    const rows = await readCsv(`${tsDir}/signals/${t.id}.csv`);
+    if (!rows) {
+      lines.push(`ORIGINAL ${t.id}: no ${tsDir}/signals/${t.id}.csv to compare with`);
+      continue;
+    }
+    const d = sigVsDump(o2.sig.get(t.id)!, rows);
+    if (d) fail(`ORIGINAL ${t.id}: the signals built here differ from the run's dump: ${d} FAIL`);
+  }
+  for (const [half, ob] of [["first", o1], ["second", o2]] as const) {
+    for (const tf of ["m15", "h1"] as const) {
+      const rows = await readCsv(`${tsDir}/blind/${tf}_${half}.csv`);
+      if (!rows) {
+        lines.push(`ORIGINAL blind/${tf}_${half}.csv: not in the run's dumps (the second half is written only when stage 2 runs); built here only`);
+        continue;
+      }
+      const d = tableVsDump(ob.table[tf], rows);
+      if (d) fail(`ORIGINAL blind/${tf}_${half}.csv: the table built here differs from the run's dump: ${d} FAIL`);
+    }
+  }
+  lines.push(`ORIGINAL: the signals and blind tables built here ${passed === before ? "equal" : "do not all equal"} the run's dumps (where written) ${passed === before ? "PASS" : "FAIL"}`);
+  // condition 1 and 2 of 14.2: every blind bar of both halves and timeframes
+  for (const [half, ob, mb] of [["first", o1, n1], ["second", o2, n2]] as const) {
+    for (const tf of ["m15", "h1"] as const) {
+      const c = mirrorBlind(ob.table[tf], mb.table[tf]);
+      const ok = c.onlyOne === 0 && c.hDiff === 0 && c.plDiff === 0;
+      const line = `BLIND ${tf} ${half}: bars ${c.bars}, in one table only ${c.onlyOne}, h differences (mirror buy vs original sell) ${c.hDiff}, PL differences (buy ↔ sell) ${c.plDiff} (max |difference| ${c.plMax} points), m differences ${c.mDiff} ${ok ? "PASS" : "FAIL"}`;
+      if (ok) lines.push(line);
+      else fail(line);
+      for (const x of c.examples) lines.push(`  ${x}`);
+    }
+  }
+  // condition 3: the symmetric items' signals 1-to-1 reversed (≤ 0.1% per trial); B06 printed
+  for (const t of trials) {
+    const a = sigKeys(o2.sig.get(t.id)!, false);
+    const b = sigKeys(n2.sig.get(t.id)!, true);
+    const d = setDiff(a, b);
+    const share = a.length > 0 ? (d.onlyA + d.onlyB) / a.length : d.onlyB > 0 ? 1 : 0;
+    const judged = t.kind !== "B";
+    const ok = !judged || share <= 0.001;
+    const line = `SIGNALS ${t.id}: original ${a.length}, mirror ${b.length}, only original ${d.onlyA}, only mirror ${d.onlyB}, difference ${pct(share)} ${judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : "(not symmetric: log returns of mirrored prices; printed, not judged)"}`;
+    if (ok) lines.push(line);
+    else fail(line);
+    for (const x of d.examples.slice(0, 4)) lines.push(`  ${t.id}: ${x}`);
+  }
+  // information: the trades of the counted signals (the mirror's reversed-direction row against the original's)
+  for (const t of trials) {
+    for (const [half, ob, mb] of [["first", o1, n1], ["second", o2, n2]] as const) {
+      const tf = t.tf;
+      const tro = trialRows(ob.table[tf], ob.late[tf], ob.sig.get(t.id)!, half, setOf(ob.u, tf).pairs, "");
+      const trm = trialRows(mb.table[tf], mb.late[tf], mb.sig.get(t.id)!, half, setOf(mb.u, tf).pairs, "");
+      const mt = mb.table[tf];
+      const mRows = new Set(trm.rows);
+      let matched = 0;
+      let differ = 0;
+      let missing = 0;
+      for (const r of tro.rows) {
+        const ot = ob.table[tf];
+        const mr = mt.index.get(rowKey(ot.pi[r], ot.T[r], (-ot.d[r]) as Dir));
+        if (mr === undefined || !mRows.has(mr)) {
+          missing++;
+          continue;
+        }
+        if (mt.m[mr] === ot.m[r] && mt.h[mr] === ot.h[r] && mt.pl[mr] === ot.pl[r]) matched++;
+        else differ++;
+      }
+      lines.push(`TRADES ${t.id} ${half}: original Δ rows ${tro.rows.length}, mirror Δ rows ${trm.rows.length}; the mirror's reversed-direction trade equal ${matched}, different ${differ}, not a mirror Δ row ${missing} (information)`);
+    }
   }
   lines.push(passed ? "RESULT pass" : "RESULT fail");
   return { lines, passed };
 }
 
 if (import.meta.main) {
-  const [run, flipped] = Deno.args;
-  if (!run || !flipped) {
-    console.log("usage: lawsearch-flip.ts <run> <flipped run>");
+  const args = [...Deno.args];
+  const opt = (name: string): string | undefined => {
+    const k = args.indexOf(name);
+    if (k < 0) return undefined;
+    const v = args[k + 1];
+    args.splice(k, 2);
+    return v;
+  };
+  const tsA = opt("--ts");
+  const tsB = opt("--flipped-ts");
+  const [run, flipped] = args;
+  if (!run || args.length > 2) {
+    console.log("usage: lawsearch-flip.ts <run> [<flipped run>] [--ts <the run's dumps>] [--flipped-ts <the flipped run's dumps>]");
     Deno.exit(2);
   }
   try {
-    const { lines, passed } = await flipCompare(run, flipped);
+    const { lines, passed } = await flipJudge(run, tsA ?? `${run}/ts`);
     for (const l of lines) console.log(l);
+    if (flipped) for (const l of await flipInfo(run, flipped, tsA ?? `${run}/ts`, tsB ?? `${flipped}/ts`)) console.log(l);
     Deno.exit(passed ? 0 : 3);
   } catch (e) {
     console.error(e);

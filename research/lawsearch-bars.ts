@@ -68,7 +68,9 @@ export function rightFormOf(name: string, v: unknown): boolean {
 //   * openTime of the right form is a string of ASCII digits only; a price of the right form is a string of ASCII
 //     digits with at most one "." and at least one digit; its Number() must be finite, else the row is unparseable;
 //   * a value of the wrong form is read as parseKlines would: finite → a stop (the run stops); otherwise the row is
-//     unparseable. Each value is checked on its own, so one row can give a stop and be unparseable.
+//     unparseable. Each value is checked on its own, so one row can give several stops.
+//   * spec 23.5 (2026-11-05): a row with a stop value is a 数にできない行 too, whatever its other values (before, a row
+//     whose only wrong value was a stop value was counted as kept; the run stops either way).
 export function scanBody(body: unknown, where: string): ScanOut {
   const data = (body as { data?: unknown }).data;
   if (!Array.isArray(data)) throw new Error(`scanBody ${where}: data is not an array (the body was not sound)`);
@@ -87,7 +89,8 @@ export function scanBody(body: unknown, where: string): ScanOut {
         continue;
       }
       if (Number.isFinite(klineNum(v))) out.stops.push(`${where} #${k} ${name} ${JSON.stringify(v)}`);
-      else bad = true;
+      // a stop value or a value that is not a finite number: the row is a 数にできない行 (spec 2, 23.5)
+      bad = true;
     }
     if (bad) out.unparseable++;
     else out.kept++;
@@ -619,4 +622,78 @@ export function deleteBars(s: Series, drop: (k: number) => boolean): Series {
     out[k] = a;
   }
   return out;
+}
+
+// ---- spec 23.1: the exact mirror of a run (14.2 裏返しの通る条件; research/lawsearch-flip.ts) ---------------------
+
+// A copy of s mirrored about S (points), with no spec 2 rounding: Bid' = 2S − Ask, Ask' = 2S − Bid and mid' = 2S − mid
+// (high' from low, low' from high), all in points; the mid's points are the original's mirrored, never made again
+// from the mirrored sides. The doubles are the points ÷ the pair's multiplier (the double nearest the mirrored
+// decimal, as the original's doubles are nearest their decimals). Times, days and file keys are the original's.
+export function mirrorSeries(s: Series, S: number): Series {
+  if (!Number.isInteger(S)) throw new Error(`mirrorSeries: S ${S} is not a whole number of points`);
+  const mult = POINTS_PER_PRICE(s.pair);
+  const n = s.n;
+  const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n } as Series;
+  out.s = s.s.slice();
+  out.T = s.T.slice();
+  out.day = s.day.slice();
+  out.fileKey = s.fileKey.slice();
+  const mir = (src: Int32Array) => Int32Array.from(src, (p) => 2 * S - p);
+  // [the mirrored points, its double, the original points it comes from]
+  const pairs = [
+    ["Bo", "bo", "Ao"], ["Bh", "bh", "Al"], ["Bl", "bl", "Ah"], ["Bc", "bc", "Ac"],
+    ["Ao", "ao", "Bo"], ["Ah", "ah", "Bl"], ["Al", "al", "Bh"], ["Ac", "ac", "Bc"],
+    ["Po", "O", "Po"], ["Ph", "H", "Pl"], ["Pl", "L", "Ph"], ["Pc", "C", "Pc"],
+  ] as const;
+  for (const [P, v, from] of pairs) {
+    out[P] = mir(s[from]);
+    out[v] = Float64Array.from(out[P], (p) => p / mult);
+  }
+  return out;
+}
+
+// The higher bars of a mirrored base series rebuilt from it: the mirrored sides coarsened on GMO's grid (coarsen: the
+// max and min of the mirrored sides are the mirrors of the original's min and max), and each higher bar's mid the
+// mirror of spec 2's mid of the sides it mirrors (2S − midOf(2S − Ask', 2S − Bid')), so no rounding of spec 2 acts on
+// a mirrored value. The result equals mirrorSeries(coarsenSeries(the original base), S) (lawsearch-flip.ts checks it).
+export function mirroredHigher(base: Series, key: SeriesKey, S: number, plant = ""): Series {
+  const tf = key === "h1" ? "1h" : key === "h4" ? "4h" : null;
+  if (!tf || !(STEP_OF_KEY[key] > base.step)) throw new Error(`mirroredHigher: ${base.key} → ${key}`);
+  const mult = POINTS_PER_PRICE(base.pair);
+  const b = coarsen(barsOfSeries(base, false), tf);
+  // the sides each mirrored higher bar mirrors (Bid = 2S − Ask', Ask = 2S − Bid')
+  const un = emptyBars(b.n);
+  const back = (v: number) => (2 * S - Math.round(v * mult)) / mult;
+  for (let i = 0; i < b.n; i++) {
+    un.t[i] = b.t[i];
+    un.bo[i] = back(b.ao[i]);
+    un.bh[i] = back(b.al[i]);
+    un.bl[i] = back(b.ah[i]);
+    un.bc[i] = back(b.ac[i]);
+    un.ao[i] = back(b.bo[i]);
+    un.ah[i] = back(b.bl[i]);
+    un.al[i] = back(b.bh[i]);
+    un.ac[i] = back(b.bc[i]);
+    un.key[i] = -1;
+  }
+  const out = mirrorSeries(seriesOf(base.pair, key, un, plant), S);
+  out.fileKey.fill(-1);
+  return out;
+}
+
+// One timeframe of a universe mirrored: the five pairs by mirrorSeries (S per pair, PAIRS order), the higher bars
+// rebuilt from the mirrored pairs (mirroredHigher), g as the original's (it reads times only)
+export function mirrorTfSet(set: TfSet, S: readonly number[], plant = ""): TfSet {
+  const pairs = set.pairs.map((p, pi) => mirrorSeries(p, S[pi]));
+  const htfKey: SeriesKey = set.tf === "m15" ? "h1" : "h4";
+  const htf = pairs.map((p, pi) => mirroredHigher(p, htfKey, S[pi], plant));
+  const g = pairs.map((p, pi) => htfIndex(p, htf[pi], plant));
+  return { tf: set.tf, step: set.step, htfStep: set.htfStep, pairs, htf, g };
+}
+
+// A universe mirrored (spec 23.1): both timeframes by mirrorTfSet; the load reports are the original's, and no data
+// problem is recomputed (the mirror is not a load)
+export function mirrorUniverse(u: Universe, S: readonly number[], plant = ""): Universe {
+  return { purpose: u.purpose, fromMs: u.fromMs, toMs: u.toMs, m15: mirrorTfSet(u.m15, S, plant), h1: mirrorTfSet(u.h1, S, plant), load: u.load, problems: [] };
 }

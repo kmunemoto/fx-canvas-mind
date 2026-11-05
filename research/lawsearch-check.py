@@ -4126,6 +4126,17 @@ def v_keys(prefix, vb):
     return out
 
 
+def sus_checks_passed_of(tsr):
+    """spec 13 調べ (i)-(v) of a hit row, read from the TS's suspect.csv row: "1", "0", or "" when the row did not hit.
+
+    The Python reads the TS's checks and does not recompute them (dump 8), but it also requires (v), the other agent's
+    hand check: on synthetic runs it is not run (`hand` = not-run), so a hit row is never selectable (spec 23.5)."""
+    raw = tsr.get("checks_passed", "")
+    if raw not in ("0", "1"):
+        return ""
+    return "1" if raw == "1" and tsr.get("hand", "") == "1" else "0"
+
+
 def suspicion(counted, delta, a, pl, M, delta_late, W, is_blind=False):
     looked = counted >= 100
     hd = looked and not is_blind and isnum(delta) and abs(delta) >= 8
@@ -4199,13 +4210,40 @@ class Run:
         with open(p, "r", encoding="utf-8", newline="") as f:
             return list(csv.DictReader(f))
 
+    # dump.md 8 (TS only, checks.csv): the stage that made a check. Rule 2 is decided at the choice, so it reads only
+    # the checks made before it; spec 23.2's cut of the chosen trials (stage1end) and stage 2's come after.
+    CHECK_STAGES = ("gate", "stage0", "stage1", "stage1end", "stage2", "end")
+    RULE2_STAGES = ("gate", "stage0", "stage1")
+
+    def _check_rows(self, stages):
+        out = []
+        for r in self.checks:
+            st = r.get("stage")
+            if st is None:       # a checks.csv without the stage column (before round C2): every row counts
+                out.append(r)
+                continue
+            if st not in self.CHECK_STAGES:
+                raise Stop(f"ts/checks.csv: unknown stage {st!r} ({r.get('trial')} {r.get('name')})")
+            if st in stages:
+                out.append(r)
+        return out
+
     def checks_ok(self, tid):
+        """spec 10 rule 2: every `*` row and every row of the trial passed, among the rows of gate, stage0, stage1."""
         if self.checks is None:
             return False
-        for r in self.checks:
+        for r in self._check_rows(self.RULE2_STAGES):
             if r["trial"] in ("*", tid) and r["passed"] != "1":
                 return False
         return True
+
+    def stage1end_failed(self):
+        """spec 23.2: the cut of the chosen trials at the end of stage 1 (checks.csv stage `stage1end`). Any failed
+        row keeps the second half closed. -> the failed rows as text (empty when none, or with no stage column)."""
+        if self.checks is None or not self.checks or "stage" not in self.checks[0]:
+            return []
+        return [f"{r['trial']} {r['name']}: {r.get('detail', '')}" for r in self._check_rows(("stage1end",))
+                if r["passed"] != "1"]
 
     def _read_ts_suspect(self):
         p = os.path.join(self.ts, "suspect.csv")
@@ -4380,16 +4418,23 @@ class Run:
         self.groups = groups
         for t in self.trials:
             I = info[t["id"]]
-            for half in ("first", "second"):
-                for k, v in I["half"][half]:
-                    s0.row([t["id"], f"{half}.{k}", v])
+            for k, v in I["half"]["first"]:
+                s0.row([t["id"], f"first.{k}", v])
+            # spec 9 後半 / 23.3: per trial, the second half has only its counted signals and weeks (the breakdown by
+            # pair, direction and reason goes to stage0_totals.csv only)
+            n2, w2 = I["second"]
+            s0.row([t["id"], "second.counted", str(n2)])
+            s0.row([t["id"], "second.weeks", str(w2)])
             for k, v in I["all"]:
                 s0.row([t["id"], k, v])
             s0.row([t["id"], "floor", f_bool(I["floor"])])
             s0.row([t["id"], "same_as", f_text(same[t["id"]])])
             s0.row([t["id"], "group", f_text(groups[t["id"]])])
-            for k in ("g", "df", "pass_min", "mde", "mark", "stage3_estimate"):
+            # spec 9 見分けられる大きさ: no g in the trial (config "g": {}), so g .. mark are empty
+            for k in ("g", "df", "pass_min", "mde", "mark"):
                 s0.row([t["id"], k, ""])
+            # spec 9 段3の数の見込み / 23.3: n2 x 52 / 76, written with or without g (dump 7: left to right)
+            s0.row([t["id"], "stage3_estimate", f_real((n2 * 52) / 76)])
             for half in ("first", "second"):
                 for k, v in I["tot"][half].items():
                     tot[half][k] = tot[half].get(k, 0) + v
@@ -4434,6 +4479,10 @@ class Run:
                 pb = load.per_bar[(tf, r[3])]
                 if not (pb["half"][r[4]] == half and pb["hit"][r[4]] is None):
                     nb += 1
+            if nb:
+                # spec 6 外す理由の後で数えるもの: 0 by construction; otherwise a program error that stops. The second
+                # half's count is no longer written (23.3), so the check is made here for both halves.
+                raise Stop(f"stage 0 {t['id']} {half}: {nb} counted signals with a trade but no blind bar")
             kv.append(("no_trade", str(nt)))
             kv.append(("no_blind", str(nb)))
             kv.append(("per_week", f_real(len(cnt) / HALF_WEEKS[half])))
@@ -4685,7 +4734,7 @@ class Run:
             su = suspicion(len(th.counted), c["delta"], c["a"], c["pl"], c["M"], r["lm"]["core"]["delta"], c["W"])
             self.write_suspect("stage1", "first", tid, su)
             tsr = self.ts_suspect.get(("stage1", "first", tid), {})
-            scp = tsr.get("checks_passed", "")
+            scp = sus_checks_passed_of(tsr)
             dch = r["values"]["delta"]["choice"]
             dF = r["values"]["dF"]["value"] if "dF" in r["values"] else None
             info = {"pass_floor": True, "same": False, "checks_ok": self.checks_ok(tid), "has_t": dch["has_t"],
@@ -4747,6 +4796,13 @@ class Run:
         if self.K_total == 0:
             log("stage 2: no chosen trial, the second half is not opened")
             return
+        bad = self.stage1end_failed()
+        if bad:
+            # spec 23.2: a chosen trial failed the cut on every boundary target of the first half -> stage 2 is
+            # not opened; the trials and bars are in the TS's checks.csv
+            log("stage 2: not opened, the cut of the chosen trials failed (spec 23.2): " + "; ".join(bad[:10]))
+            self.stage2_closed = bad
+            return
         log("stage 2: load [S0, END)")
         load = StageLoad(self.gmo, "syn2", S0, END, self.avoid, "", self.mode)
         self.write_load(load, "syn2", self.load_csv, self.askbid_csv)
@@ -4807,7 +4863,7 @@ class Run:
             tsr = self.ts_suspect.get(("stage2", "second", tid), {})
             C = conditions({"dirs": dirs, "pairs": pairs, "late_lb": lch["lb"], "pl_late": r["lm"]["core"]["pl"],
                             "delta_late": r["lm"]["core"]["delta"], "suspicious": r["su"]["hit"],
-                            "sus_checks_passed": tsr.get("checks_passed") == "1", "c6": (ex["c6.a"], ex["c6.b"]),
+                            "sus_checks_passed": sus_checks_passed_of(tsr) == "1", "c6": (ex["c6.a"], ex["c6.b"]),
                             "pl_ex1w": r["pl_ex1w"][0], "pl": r["ms"]["core"]["pl"]}, "a")
             C1 = H[tid][1]
             v, label, failed = verdict_of(C1, C, dch["ub"], HD[tid][1])
@@ -4872,6 +4928,7 @@ class Run:
 
 TS_ONLY = {"checks.csv", "choice.json", "print.txt", "config.json"}
 SUSPECT_TS_COLS = {"cut", "poison1000", "presence", "retrace", "hand", "checks_passed"}
+VALUE_NAMES = ("delta", "a", "pl", "delta_late", "dF")   # measures.csv V (dump 8)
 DEC_COLS = set(_SIDE_KEYS)
 
 
@@ -4970,11 +5027,17 @@ class Comparator:
         self.run = run_dir
         self.ts = os.path.join(run_dir, "ts")
         self.py = os.path.join(run_dir, "py")
-        self.lines = []
         self.allowed = list(allowed_lines or [])
         self.stops = []
-        self.ndiff = 0
+        self.order = []       # the files in report order
+        self.rows_of = {}     # file -> (ts rows, py rows) as written in the FILE line
+        self._diffs_of = {}   # file -> [(key, column, ts, py, class)], after the allowances of 9.2 and 9.3
         self.border = set()   # (tf, pair, i) z-border bars and their next bars
+        self.ts_tab = {}
+        self.py_tab = {}
+        # dump.md 9.3 (spec 23.5): (stage, half, trial, V, "lb" | "p") -> the TS's candidate, adopted where the
+        # choice of 8.5 split on two candidates within 1e-9
+        self.adopted = {}
 
     def compare(self):
         tsf = [f for f in list_files(self.ts) if f not in TS_ONLY]
@@ -5006,19 +5069,17 @@ class Comparator:
                             i = int(f[0])
                             self.border.add((tf, pair, i))
                             self.border.add((tf, pair, i + 1))
-        self.ts_tab = {}
-        self.py_tab = {}
         for n in names:
             if n not in tsf or n not in pyf:
-                self.lines.append(f"FILE {n} rows ts={'-' if n not in tsf else '?'} py={'-' if n not in pyf else '?'} "
-                                  f"diff=1")
-                self.lines.append(f"DIFF {n} * * ts={'present' if n in tsf else 'missing'} "
-                                  f"py={'present' if n in pyf else 'missing'} class=file")
-                self.ndiff += 1
+                self.order.append(n)
+                self.rows_of[n] = ("-" if n not in tsf else "?", "-" if n not in pyf else "?")
+                self._diffs_of[n] = [("*", "*", "present" if n in tsf else "missing",
+                                      "present" if n in pyf else "missing", "file")]
                 continue
             if not n.endswith(".csv"):
                 continue
             self.compare_file(n)
+        self.candidate_checks()
         self.decision_checks()
         return self.report()
 
@@ -5032,7 +5093,7 @@ class Comparator:
             diffs.append(("*", "header", "|".join(th), "|".join(ph), "exact"))
         tmap = self._rows_by_key(th, tr, keys)
         pmap = self._rows_by_key(ph, pr, keys)
-        if name in ("stage1.csv", "stage1_summary.csv", "stage2.csv"):
+        if name in ("measures.csv", "stage1.csv", "stage1_summary.csv", "stage2.csv"):
             self.ts_tab[name] = {k: dict(zip(th, v[1])) for k, v in tmap.items()}
             self.py_tab[name] = {k: dict(zip(ph, v[1])) for k, v in pmap.items()}
         for k in tmap:
@@ -5068,11 +5129,8 @@ class Comparator:
                 diffs.append(("|".join(k), c, va, vb, cls))
         if base == "signals":
             diffs += self._signal_sha(tr, pr)
-        self.lines.append(f"FILE {name} rows ts={len(tr)} py={len(pr)} diff={len(diffs)}")
-        for d in diffs[:20]:
-            self.lines.append(f"DIFF {name} {d[0]} {d[1]} ts={d[2]} py={d[3]} class={d[4]}")
-        self.ndiff += len(diffs)
-        self._diffs_of = getattr(self, "_diffs_of", {})
+        self.order.append(name)
+        self.rows_of[name] = (len(tr), len(pr))
         self._diffs_of[name] = diffs
 
     def _rows_by_key(self, header, lines, keys):
@@ -5113,7 +5171,7 @@ class Comparator:
         in either implementation: the decision's own values, not any near value elsewhere in the file. A difference
         in any other key (or in a decision whose values are not near) stays a difference.
         """
-        diffs = getattr(self, "_diffs_of", {})
+        diffs = self._diffs_of
         for name in ("stage1.csv", "stage1_summary.csv", "stage2.csv"):
             if name not in diffs:
                 continue
@@ -5127,10 +5185,170 @@ class Comparator:
                         self.stops.append(f"STOP 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({near})")
                     else:
                         self.allowed.append(f"ALLOWED 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({near})")
-                    self.ndiff -= 1
                 else:
                     keep.append(d)
             diffs[name] = keep
+
+    # ------------------------------------------------------------------ 9.3: the choice of the candidate (spec 23.5)
+    def candidate_checks(self):
+        """lawsearch-dump.md 9.3 (spec 23.5, 2026-11-05): the choice of the candidate in spec 8.5.
+
+        V.use_lb (the widest t(0.975) x SE) and V.use_p (the largest p) may differ when the two candidates' values
+        (V.<c>.half_width, V.<c>.p) are within 1e-9 of each other in either implementation. Two values exactly equal
+        in both implementations are a tie (week, then 4w, then shift decide it), not a near pair (dump 11.12).
+        Such a split is listed as ALLOWED and the TS's candidate is adopted: the values that follow from the choice
+        are then compared under the TS's candidate, from the Python's own per-candidate values in py/measures.csv
+        (dump 11.13): measures.csv V.t, V.p, V.lb, V.ub; stage1.csv lb, p_iut; stage2.csv p_delta, p_pl, p_iut,
+        t_delta, t_pl, delta_ub, late_lb, dF_lo, dF_hi and mde. The py/ files keep the Python's own choice.
+        """
+        tm = self.ts_tab.get("measures.csv")
+        pm = self.py_tab.get("measures.csv")
+        if not tm or not pm:
+            return
+        md = self._diffs_of.get("measures.csv", [])
+        keep = []
+        for d in md:
+            key = d[0].split("|")
+            parts = key[-1].split(".") if len(key) == 4 else []
+            if (d[1] != "value" or len(parts) != 2 or parts[0] not in VALUE_NAMES
+                    or parts[1] not in ("use_lb", "use_p") or d[2] == "" or d[3] == ""):
+                keep.append(d)
+                continue
+            stage, half, tid = key[0], key[1], key[2]
+            V = parts[0]
+            which = "lb" if parts[1] == "use_lb" else "p"
+            near = self._cand_near(stage, half, tid, V, d[2], d[3], "half_width" if which == "lb" else "p")
+            if near is None:
+                keep.append(d)
+                continue
+            self.allowed.append(f"ALLOWED 8.5 measures.csv {d[0]} ts={d[2]} py={d[3]} ({near}; the TS's "
+                                f"candidate is adopted)")
+            self.adopted[(stage, half, tid, V, which)] = d[2]
+        self._diffs_of["measures.csv"] = keep
+        if not self.adopted:
+            return
+        # the values that follow from the choice, compared under the TS's candidate
+        deps = []
+        for (stage, half, tid, V, which) in list(self.adopted):
+            for what in (("lb", "ub") if which == "lb" else ("t", "p")):
+                deps.append(("measures.csv", (stage, half, tid, f"{V}.{what}"), (stage, half, tid, V, what)))
+        for (stage, half, tid, V, which) in list(self.adopted):
+            if stage == "stage1" and half == "first":
+                if V == "delta" and which == "lb":
+                    deps.append(("stage1.csv", (tid, "lb"), (stage, half, tid, "delta", "lb")))
+                if V in ("delta", "pl") and which == "p":
+                    deps.append(("stage1.csv", (tid, "p_iut"), (stage, half, tid, "iut", "p")))
+            if stage == "stage2" and half == "second":
+                if which == "p" and V in ("delta", "pl"):
+                    nm = "delta" if V == "delta" else "pl"
+                    deps.append(("stage2.csv", (tid, f"p_{nm}"), (stage, half, tid, V, "p")))
+                    deps.append(("stage2.csv", (tid, f"t_{nm}"), (stage, half, tid, V, "t")))
+                    deps.append(("stage2.csv", (tid, "p_iut"), (stage, half, tid, "iut", "p")))
+                    if V == "delta":
+                        deps.append(("stage2.csv", (tid, "mde"), (stage, half, tid, "delta", "mde")))
+                if which == "lb":
+                    for vv, what, k in (("delta", "ub", "delta_ub"), ("delta_late", "lb", "late_lb"),
+                                        ("dF", "lb", "dF_lo"), ("dF", "ub", "dF_hi")):
+                        if V == vv:
+                            deps.append(("stage2.csv", (tid, k), (stage, half, tid, vv, what)))
+        seen = set()
+        for fname, key, src in deps:
+            if (fname, key) in seen:
+                continue
+            seen.add((fname, key))
+            self._recompare(fname, key, src)
+
+    def _cand_value(self, tab, stage, half, tid, V, c, col):
+        r = tab.get((stage, half, tid, f"{V}.{c}.{col}"))
+        if r is None or r.get("value", "") == "":
+            return None
+        try:
+            return float(r["value"])
+        except ValueError:
+            return None
+
+    def _cand_near(self, stage, half, tid, V, a, b, col):
+        """The two candidates a (the TS's) and b (the Python's) of V, compared by col, within 1e-9 in either
+        implementation, but not exactly tied in both. -> the reason, or None."""
+        vals = {}
+        for side, tab in (("ts", self.ts_tab["measures.csv"]), ("py", self.py_tab["measures.csv"])):
+            x = self._cand_value(tab, stage, half, tid, V, a, col)
+            y = self._cand_value(tab, stage, half, tid, V, b, col)
+            if x is not None and y is not None:
+                vals[side] = (x, y)
+        if len(vals) == 2 and all(x == y for (x, y) in vals.values()):
+            return None
+        for side, (x, y) in vals.items():
+            if abs(x - y) < 1e-9:
+                return f"{V}.{a}.{col} and {V}.{b}.{col} within 1e-9 ({side})"
+        return None
+
+    def _py_under_ts(self, stage, half, tid, V, what):
+        """The Python's value of V.what (t, p, lb, ub; V "iut" for max(p_delta, p_pl); what "mde") under the TS's
+        candidate, from py/measures.csv, as the Python's own code would make it (choose(), stage 2's mde)."""
+        pm = self.py_tab["measures.csv"]
+
+        def own(v, w):
+            r = pm.get((stage, half, tid, f"{v}.{w}"))
+            if r is None or r.get("value", "") == "":
+                return None
+            try:
+                return float(r["value"])
+            except ValueError:
+                return None
+
+        def under(v, w):
+            which = "lb" if w in ("lb", "ub") else "p"
+            c = self.adopted.get((stage, half, tid, v, which))
+            if c is None:
+                return own(v, w), None
+            if w in ("t", "p"):
+                return self._cand_value(pm, stage, half, tid, v, c, w), c
+            value = own(v, "value")
+            hw = self._cand_value(pm, stage, half, tid, v, c, "half_width")
+            if value is None or hw is None:
+                return None, c
+            return (value - hw if w == "lb" else value + hw), c
+
+        if V == "iut":
+            pd, cd = under("delta", "p")
+            pp, cp = under("pl", "p")
+            if pd is None or pp is None:
+                return None, f"delta {cd}, pl {cp}"
+            return max(pd, pp), f"delta {cd or 'own'}, pl {cp or 'own'}"
+        if what == "mde":
+            c = self.adopted.get((stage, half, tid, "delta", "p"))
+            K = self._one("stage1_summary.csv", "K_total").get("py")
+            se = self._cand_value(pm, stage, half, tid, "delta", c, "se")
+            df = self._cand_value(pm, stage, half, tid, "delta", c, "df")
+            if K is None or K < 1 or se is None or df is None:
+                return None, c
+            q = 1 - 0.025 / int(K)
+            return (t_quantile(q, int(df)) + t_quantile(0.80, int(df))) * se, c
+        return under(V, what)
+
+    def _recompare(self, fname, key, src):
+        """Compare one value that follows from an adopted candidate under the TS's candidate (replacing its
+        ordinary comparison)."""
+        tr = self.ts_tab.get(fname, {}).get(key)
+        pr = self.py_tab.get(fname, {}).get(key)
+        if tr is None or pr is None:
+            return   # a missing row stays the difference compare_file found
+        jk = "|".join(key)
+        ds = self._diffs_of.get(fname, [])
+        had = [d for d in ds if d[0] == jk and d[1] == "value"]
+        x, c = self._py_under_ts(*src)
+        if x is None:
+            return   # not computable: the ordinary comparison stands
+        cls = value_class(fname, tr, "value")
+        tv, pv = tr.get("value", ""), pr.get("value", "")
+        self._diffs_of[fname] = [d for d in ds if not (d[0] == jk and d[1] == "value")]
+        if values_equal(tv, repr(x), cls):
+            if had:
+                self.allowed.append(f"ALLOWED 8.5 {fname} {jk} ts={tv} py={pv} (compared under the TS's candidate "
+                                    f"{c}: py={x!r})")
+        else:
+            self._diffs_of[fname].append((jk, "value", tv, f"{pv}(under the TS's candidate {c}: {x!r})", cls))
 
     # dump.md 9.3 / spec 8.5: a split of these stops (stage 1's chosen trials, a stage 2 Holm pass, a verdict);
     # a split of any other decision listed in _near is allowed, and the TS's decision is taken.
@@ -5203,7 +5421,28 @@ class Comparator:
         ps = self._vals("stage2.csv", pkey)
         K = len({kk[0] for kk in list(self.ts_tab.get("stage2.csv", {})) + list(self.py_tab.get("stage2.csv", {}))})
         thr = [0.025 / (K - k + 1) for k in range(1, K + 1)]
-        return self._thr_near(ps, thr, pkey) or self._pair_near(ps, pkey)
+        return self._thr_near(ps, thr, pkey) or self._pair_near(ps, pkey) or self._tie_by_split_t(ps, pkey)
+
+    def _tie_by_split_t(self, ps, pkey):
+        """Two p < 1 exactly tied in both implementations are ordered by min(t_delta, t_pl) (t_delta for the
+        delta-only Holm; spec 11). When one of those t follows a candidate split adopted by 9.3 (spec 23.5), the
+        order may differ too (dump 11.13)."""
+        by = {}
+        for (s, t, x) in ps:
+            by.setdefault(t, {})[s] = x
+        vs = ("delta",) if pkey == "p_delta" else ("delta", "pl")
+        ids = [t for t in by if len(by[t]) == 2]
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = by[ids[i]], by[ids[j]]
+                if not (a["ts"] == b["ts"] and a["py"] == b["py"] and a["ts"] < 1.0 and a["py"] < 1.0):
+                    continue
+                for tid in (ids[i], ids[j]):
+                    for v in vs:
+                        if ("stage2", "second", tid, v, "p") in self.adopted:
+                            return (f"{pkey} of {ids[i]} and {ids[j]} tied; the t of {tid} follows the TS's "
+                                    f"candidate of {v}, adopted")
+        return None
 
     def _near(self, name, key):
         """The pair of compared values within 1e-9 that this decision rests on, or None (dump.md 9.3)."""
@@ -5249,16 +5488,26 @@ class Comparator:
         return None
 
     def report(self):
-        out = list(self.lines)
+        """dump.md 10. The FILE lines count the differences left after the allowances of 9.2 and 9.3."""
+        out = []
+        ndiff = 0
+        for n in self.order:
+            ds = self._diffs_of.get(n, [])
+            a, b = self.rows_of[n]
+            out.append(f"FILE {n} rows ts={a} py={b} diff={len(ds)}")
+            for d in ds[:20]:
+                out.append(f"DIFF {n} {d[0]} {d[1]} ts={d[2]} py={d[3]} class={d[4]}")
+            ndiff += len(ds)
+        self.ndiff = ndiff
         out += self.allowed
         out += self.stops
-        out.append("RESULT agree" if self.ndiff == 0 and not self.stops else f"RESULT differ {self.ndiff}")
+        out.append("RESULT agree" if ndiff == 0 and not self.stops else f"RESULT differ {ndiff}")
         os.makedirs(os.path.join(self.run, "cmp"), exist_ok=True)
         with open(os.path.join(self.run, "cmp", "report.txt"), "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(out) + "\n")
         if self.stops:
             return 6
-        return 0 if self.ndiff == 0 else 5
+        return 0 if ndiff == 0 else 5
 
 
 # ----------------------------------------------------------------------------------------------------------------

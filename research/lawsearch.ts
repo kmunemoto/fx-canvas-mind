@@ -18,8 +18,10 @@
 // The one-process pipeline (design 7.7): config.json; stage 0 (load [S0, END), runStage0); stage 1 (load [S0, SPLIT),
 // h1Only, signals again, stage 1 = stage 0 on the first half, the first-half blind and late tables, trial rows,
 // measures of the floor-passing trials that are not same trials, the blind rows, suspicion and 13's checks, the
-// follow-bar checks, rules 1–6 and the choice; choice.json); stage 2 (load [S0, END), the second-half tables, the
-// chosen trials only, κ, Holm, C1–C7, verdicts); then checks.csv, suspect.csv and print.txt.
+// follow-bar checks, rules 1–6 and the choice; choice.json; then spec 23.2's cut of the chosen trials on every
+// higher-timeframe boundary target of the first half, whose failure stops before stage 2); stage 2 (load [S0, END),
+// the second-half tables, the chosen trials only, their cut on every boundary target of the second half (spec 23.2),
+// κ, Holm, C1–C7, verdicts); then checks.csv, suspect.csv and print.txt.
 
 import { END, N_BARS, PAIRS, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
 import { DIRECTIONAL_F, PLANTS, POISON_1000, QUESTIONS, S_OF_F, SEEDS, TRIAL_STEP3, W0 } from "./lawsearch-rules.ts";
@@ -31,7 +33,7 @@ import { blindTable, followBarChecks, lateTable, lateWhyOf, trialRows } from "./
 import { measureBlindRows, measureTrial, withKappa } from "./lawsearch-stats.ts";
 import { chooseStage1, skipText, stage1Explain, stage2Rows, suspectOf } from "./lawsearch-select.ts";
 import type { Stage2In } from "./lawsearch-select.ts";
-import { checkRulesFiles, ctxOfUniverse, cutCheck, cutTargets, dataCheck, h1OnlyCheck, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
+import { checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, h1OnlyCheck, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
 import { indsOf, runStage0 } from "./lawsearch-stage0.ts";
 import type { Stage0Out } from "./lawsearch-stage0.ts";
 import { checksRows, dumpBlind, dumpChecks, dumpConfig, dumpLoad, dumpMeasures, dumpStage1, dumpStage2, dumpSuspect, dumpTrades } from "./lawsearch-dump.ts";
@@ -56,14 +58,19 @@ const sha256 = async (bytes: Uint8Array) => hex(await crypto.subtle.digest("SHA-
 
 // ---- the stage checks, kept with their stage ------------------------------------------------------------------
 
-type StageTag = "gate" | "stage0" | "stage1" | "stage2" | "end";
+// stage1end: spec 23.2's cut of the chosen trials at the end of stage 1, after the choice (rule 2 of spec 10 does not
+// read it: it is made after the choice; its failure withholds stage 1's numbers and stage 2 is not opened)
+type StageTag = "gate" | "stage0" | "stage1" | "stage1end" | "stage2" | "end";
 interface Tagged {
   stage: StageTag;
   r: CheckResult;
 }
 const failedOf = (cs: Tagged[]) => cs.filter((c) => !c.r.passed);
+// the stage whose numbers a failed check withholds (spec 15: その段の数字を出さない)
+const withheldStage = (t: StageTag): StageTag => (t === "stage1end" ? "stage1" : t);
 
-// rule 2 of spec 10: every "*" row and every row of the trial passed (checks.csv, as the Python reads it)
+// rule 2 of spec 10: every "*" row and every row of the trial passed (checks.csv, as the Python reads it; called at the
+// choice, when the checks are those of stages gate, stage0 and stage1)
 const checksOkOf = (cs: Tagged[]) => {
   const rows = checksRows(cs.map((c) => c.r));
   const allOk = rows.filter((r) => r[0] === "*").every((r) => r[2] === "1");
@@ -136,6 +143,22 @@ const sTrialOf = (all: TrialDef[], tf: TfKey, f: string): TrialDef | null => {
   return s ? all.find((t) => t.tf === tf && t.kind === "S" && t.s === s) ?? null : null;
 };
 
+// Spec 23.2: the chosen trials cut on every higher-timeframe boundary target of one half, the other kinds as stage 0's
+// (lawsearch-checks.ts cutTargets): "first" on stage 1's universe ([S0, SPLIT)), at the end of stage 1; "second" on
+// stage 2's, its second-half targets only (fromStart = SPLIT). The check is "cut.chosen.<half>"; each failing trial's
+// row lists up to 100 failing bars. times gets cut.chosen.<half>.<tf>.
+function chosenCut(c: RunCtx, u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, answerKnowing: boolean, half: "first" | "second", times: Record<string, number>): CheckResult {
+  const name = `cut.chosen.${half}`;
+  if (trials.length === 0) return { name, passed: true, detail: "no trial was chosen: nothing to cut (spec 23.2)", probes: [] };
+  const stats: Record<string, number> = {};
+  const targets = cutTargets(u, trials, sigs, { htf: "all", fromStart: half === "second" ? SPLIT : undefined, stats });
+  const note = `${cutStatsText(stats)}; the chosen trials on every higher-timeframe boundary target of the ${half} half, spec 23.2`;
+  return cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note });
+}
+
+// the failing trials of a check and their failing bars, for a STOP line
+const failingText = (r: CheckResult): string => r.probes.filter((p) => p.mismatched > 0).map((p) => `${p.name}: ${p.mismatched} of ${p.compared} (${p.examples.join(" | ")})`).join("; ");
+
 async function pipeline(c: RunCtx): Promise<number> {
   const tagged: Tagged[] = [];
   const t0 = Date.now();
@@ -175,12 +198,12 @@ async function pipeline(c: RunCtx): Promise<number> {
       put(`check.${key}.passed`, t.r.passed ? 1 : 0);
       put(`check.${key}.detail`, t.r.detail.slice(0, 400));
     }
-    for (const st of ["stage0", "stage1", "stage2"] as const) if (tagged.some((t) => t.stage === st && !t.r.passed)) put(`withheld.${st}`, 1);
+    for (const st of ["stage0", "stage1", "stage2"] as const) if (tagged.some((t) => withheldStage(t.stage) === st && !t.r.passed)) put(`withheld.${st}`, 1);
     if (code === 0 && failedOf(tagged).length > 0) code = 3;
     put("exit", code);
     const pc = printCheck(print.map(([k]) => k));
     tagged.push({ stage: "end", r: pc });
-    await dumpChecks(dir, tagged.map((t) => t.r));
+    await dumpChecks(dir, tagged.map((t) => t.r), tagged.map((t) => t.stage));
     if (pc.passed) await Deno.writeTextFile(`${dir}/print.txt`, print.map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
     else code = 3;
     console.log(`exit ${pc.passed ? code : 3}: ${failedOf(tagged).map((t) => t.r.name).join(", ") || "every check passed"}`);
@@ -188,7 +211,7 @@ async function pipeline(c: RunCtx): Promise<number> {
   };
   if (stopped) return await finish();
   const avoid = avoidOf(new TextDecoder().decode(avoidBytes));
-  const withheld = (st: StageTag) => tagged.some((t) => t.stage === st && !t.r.passed);
+  const withheld = (st: StageTag) => tagged.some((t) => withheldStage(t.stage) === st && !t.r.passed);
 
   const say = (what: string) => console.error(`[lawsearch ${new Date().toISOString()}] ${what}`);
   // ---- stage 0
@@ -310,7 +333,19 @@ async function pipeline(c: RunCtx): Promise<number> {
     const choice = JSON.stringify({ m15: chosen.m15, h1: chosen.h1 });
     await Deno.writeTextFile(`${dir}/choice.json`, choice + "\n");
     console.log(`choice.json sha256 ${await sha256(enc.encode(choice + "\n"))}`);
+    // spec 23.2: after the choice, before stage 2 opens, the chosen trials on every boundary target of the first half
+    say("stage 1: the cut of the chosen trials (spec 23.2)");
+    const cutTimes: Record<string, number> = {};
+    const chosenTs = c.trials.filter((t) => chosen.m15.includes(t.id) || chosen.h1.includes(t.id));
+    const cut1 = chosenCut(c, u1, chosenTs, chosenTs.map(sig1), avoid, answerKnowing, "first", cutTimes);
+    tagged.push({ stage: "stage1end", r: cut1 });
+    for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
     put("time.stage1.ms", Date.now() - ts);
+    if (!cut1.passed) {
+      console.log(`STOP: spec 23.2's cut of the chosen trials failed at the end of stage 1; stage 2 is not opened: ${failingText(cut1)}`);
+      put("note.stage2", "not opened: the cut of the chosen trials on the first half failed (spec 23.2)");
+      return await finish();
+    }
     if (!withheld("stage1")) {
       put("chosen.m15", chosen.m15.join("|"));
       put("chosen.h1", chosen.h1.join("|"));
@@ -353,6 +388,13 @@ async function pipeline(c: RunCtx): Promise<number> {
       if (!s) sigOf2.set(t.id, (s = trialSignals(t, setOf(u2, t.tf), inds2[t.tf], ctx2[t.tf], { plant: c.plant, answerKnowing })));
       return s;
     };
+    // spec 23.2: the chosen trials on every boundary target of the second half (a failure withholds stage 2's numbers)
+    const cutTimes: Record<string, number> = {};
+    const chosenTs = c.trials.filter((t) => isChosen(t.id));
+    const cut2 = chosenCut(c, u2, chosenTs, chosenTs.map(sig2), avoid, answerKnowing, "second", cutTimes);
+    tagged.push({ stage: "stage2", r: cut2 });
+    for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
+    if (!cut2.passed) console.log(`STOP: spec 23.2's cut of the chosen trials failed on the second half; stage 2's numbers are withheld: ${failingText(cut2)}`);
     const trOf = new Map<string, TrialRows>();
     const rowsOf = (t: TrialDef) => {
       let r = trOf.get(t.id);

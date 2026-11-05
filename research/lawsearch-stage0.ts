@@ -8,9 +8,9 @@ import { indOf } from "./lawsearch-ind.ts";
 import { answerKnowingE26, filterOf, itemOf, sFilterOf } from "./lawsearch-items.ts";
 import { blindBarsOf, trialSignals } from "./lawsearch-events.ts";
 import { stage0 } from "./lawsearch-select0.ts";
-import { addsUpCheck, ctxOfUniverse, cutCheck, cutTargets, dataCheck, donchianCheck, poisonCheck, presenceCheck } from "./lawsearch-checks.ts";
+import { addsUpCheck, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, donchianCheck, poisonCheck, presenceCheck } from "./lawsearch-checks.ts";
 import { dumpBars, dumpHoles, dumpInd, dumpLoad, dumpSignals, dumpStage0 } from "./lawsearch-dump.ts";
-import { POISON_N, SEEDS } from "./lawsearch-rules.ts";
+import { CUT_HTF_STAGE0, POISON_N, SEEDS } from "./lawsearch-rules.ts";
 import type { CheckResult, ExclCtx, Ind, RunConfig, Stage0Row, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 // the dump columns of the built items and filters of the run's trials on one timeframe, per pair
@@ -55,8 +55,8 @@ export interface Stage0Out {
 }
 
 // Stage 0 on a universe loaded over [S0, END): indicators, signals (spec 5, 6), the blind bars of both halves, spec
-// 9's rows, and the stage-0-safe checks of 15 (data, adds up, donchian, cut, poison, presence). The stage-0 dumps
-// are written when dumpDir is given.
+// 9's rows, and the stage-0-safe checks of 15 (data, adds up, donchian, cut, poison, presence; the cut with spec
+// 23.2's 300 higher-timeframe boundary targets per tf and pair). The stage-0 dumps are written when dumpDir is given.
 export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number }): Promise<Stage0Out> {
   const t0 = Date.now();
   const times: Record<string, number> = {};
@@ -75,7 +75,10 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
   checks.push(dataCheck(u));
   checks.push(addsUpCheck(rows.map((r) => ({ trial: r.trial, addsUp: r.addsUp }))));
   checks.push(donchianCheck(u, inds));
-  checks.push(cutCheck(u, trials, sigs, cutTargets(u, trials, sigs), avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times }));
+  // spec 15 切り取り with spec 23.2's stage-0 rule: 300 of the higher-timeframe boundary targets per tf and pair
+  const cutStats: Record<string, number> = {};
+  const targets = cutTargets(u, trials, sigs, { htf: "even", stats: cutStats });
+  checks.push(cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2` }));
   checks.push(poisonCheck(u, trials, sigs, avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, ctx }));
   checks.push(presenceCheck(u, trials, sigs, avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant }));
   times["checks"] = Date.now() - tc;

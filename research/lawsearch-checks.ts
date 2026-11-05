@@ -16,9 +16,17 @@
 //     when an item reads them); the decision at T reads no other series. The holes are the uncut run's: poison
 //     changes prices, never which bars exist, and holesOf reads only the starts.
 //   * the 300 evenly spaced bars: k = floor(j × (n − 1) ÷ 299), j = 0 … 299.
+//   * spec 23.2 (2026-11-05): stage 0 keeps CUT_HTF_STAGE0 = 300 of the higher-timeframe boundary targets per
+//     timeframe and pair, the j-th of their time-ordered list being floor(j × (n − 1) ÷ 299) (all when n ≤ 300); the
+//     other kinds are unchanged. The chosen trials are cut on every boundary target: at the end of stage 1 on stage
+//     1's universe ([S0, SPLIT), check "cut.chosen.first"), and in stage 2 on the second half ("cut.chosen.second").
+//     The second half's targets (fromStart = SPLIT): a bar target (signal, even) whose bar starts at or after SPLIT;
+//     a boundary target (gap, day, htf) whose boundary bar (the first bar after it) starts at or after SPLIT. So the
+//     boundary at SPLIT, whose bars before it are the first half's last ones, is stage 2's: stage 1's universe has no
+//     bar after it, so it cannot see that boundary. Every boundary is then checked once on the chosen trials.
 
 import { checkConstants, checkFiles, HIGHER, MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, SPLIT, STEP } from "./lawsearch-const.ts";
-import { CUT_DAY_BARS, CUT_EVEN, CUT_GAP_BARS, CUT_HTF_BARS, CUT_SAMPLE, HOLE_MIN_SLOTS, POISON_N, POISON_PIPS, R3_BACK, REASONS, SEEDS, STATUS } from "./lawsearch-rules.ts";
+import { CUT_DAY_BARS, CUT_EVEN, CUT_GAP_BARS, CUT_HTF_BARS, CUT_HTF_STAGE0, CUT_SAMPLE, HOLE_MIN_SLOTS, POISON_N, POISON_PIPS, R3_BACK, REASONS, SEEDS, STATUS } from "./lawsearch-rules.ts";
 import { coarsenSeries, deleteBars, entryExitIndex, htfIndex, poisonSeries, prefixSeries, stratumOf, windowSeries } from "./lawsearch-bars.ts";
 import { indOf } from "./lawsearch-ind.ts";
 import { parseCandidates } from "./lawsearch-items.ts";
@@ -35,9 +43,9 @@ const MAX_EXAMPLES = 5;
 // ---- helpers ----------------------------------------------------------------------------------------------------
 
 const probeOf = (name: string): Probe => ({ name, compared: 0, mismatched: 0, examples: [] });
-const miss = (p: Probe, what: string) => {
+const miss = (p: Probe, what: string, cap = MAX_EXAMPLES) => {
   p.mismatched++;
-  if (p.examples.length < MAX_EXAMPLES) p.examples.push(what);
+  if (p.examples.length < cap) p.examples.push(what);
 };
 const resultOf = (name: string, probes: Probe[], extra = ""): CheckResult => {
   const bad = probes.filter((p) => p.mismatched > 0);
@@ -144,11 +152,25 @@ export interface CutTarget {
   kinds: string[];
 }
 
+export interface CutTargetOpts {
+  // spec 23.2: "even" keeps CUT_HTF_STAGE0 of the higher-timeframe boundary targets per (tf, pair), evenly picked in
+  // time order (stage 0); "all" keeps every one (the chosen trials at the end of stage 1 and in stage 2)
+  htf: "even" | "all";
+  // the second half only (stage 2, fromStart = SPLIT): bar targets whose bar starts at or after fromStart, boundary
+  // targets whose boundary bar starts at or after fromStart (the header above)
+  fromStart?: number;
+  // filled with the number of targets of each kind (a target with two kinds counts in both) and, for htf, how many
+  // there were before the even pick ("htf.all")
+  stats?: Record<string, number>;
+}
+
 // Per trial: every signal (every row of Classified, any reason; over 3,000 → sampleOf(…, 3000, 318)); per trial and
 // pair: 300 evenly spaced bars, the 10 bars before every gap (open to open over one step), the 2 bars before each day
-// boundary (dayOf changes) and the 2 before each higher-timeframe boundary. Deduplicated per (tf, pi, k), sorted.
-export function cutTargets(u: Universe, trials: TrialDef[], sigs: TrialSignals[]): CutTarget[] {
+// boundary (dayOf changes) and the 2 before each higher-timeframe boundary (o.htf: 300 of them evenly picked, or all;
+// spec 23.2). Deduplicated per (tf, pi, k), sorted.
+export function cutTargets(u: Universe, trials: TrialDef[], sigs: TrialSignals[], o: CutTargetOpts): CutTarget[] {
   const map = new Map<string, CutTarget>();
+  const stats = o.stats ?? {};
   const add = (tf: TfKey, pi: number, k: number, kind: string) => {
     if (k < 0) return;
     const key = `${tf}:${pi}:${k}`;
@@ -157,36 +179,57 @@ export function cutTargets(u: Universe, trials: TrialDef[], sigs: TrialSignals[]
       if (!t.kinds.includes(kind)) t.kinds.push(kind);
     } else map.set(key, { tf, pi, k, kinds: [kind] });
   };
+  const from = o.fromStart;
+  const setOf = (tf: TfKey) => (tf === "m15" ? u.m15 : u.h1);
   for (const sig of sigs) {
+    const series = setOf(sig.tf).pairs;
     const rows: Array<[number, number]> = [];
-    for (const c of sig.pairs) for (let r = 0; r < c.n; r++) rows.push([c.pi, c.i[r]]);
+    for (const c of sig.pairs) for (let r = 0; r < c.n; r++) if (from === undefined || series[c.pi].s[c.i[r]] >= from) rows.push([c.pi, c.i[r]]);
     const pick = rows.length > CUT_SAMPLE ? sampleOf(rows, CUT_SAMPLE, SEEDS.cut) : rows;
     for (const [pi, k] of pick) add(sig.tf, pi, k, "signal");
   }
   const tfs = new Set(trials.map((t) => t.tf));
   for (const tf of tfs) {
-    const set = tf === "m15" ? u.m15 : u.h1;
+    const set = setOf(tf);
     const step = STEP[tf];
     const hstep = HIGHER[tf];
     set.pairs.forEach((s, pi) => {
-      if (s.n === 0) return;
-      for (let j = 0; j < CUT_EVEN; j++) add(tf, pi, Math.floor((j * (s.n - 1)) / (CUT_EVEN - 1)), "even");
-      for (let k = 1; k < s.n; k++) {
+      const k0 = from === undefined ? 0 : lowerBound(s.s, s.n, from);
+      const m = s.n - k0;
+      if (m <= 0) return;
+      for (let j = 0; j < CUT_EVEN; j++) add(tf, pi, k0 + Math.floor((j * (m - 1)) / (CUT_EVEN - 1)), "even");
+      const htf = new Set<number>();
+      for (let k = Math.max(1, k0); k < s.n; k++) {
         if (s.s[k] - s.s[k - 1] > step) for (let b = 1; b <= CUT_GAP_BARS; b++) add(tf, pi, k - b, "gap");
         if (s.day[k] !== s.day[k - 1]) for (let b = 1; b <= CUT_DAY_BARS; b++) add(tf, pi, k - b, "day");
-        if (Math.floor(s.s[k] / hstep) !== Math.floor(s.s[k - 1] / hstep)) for (let b = 1; b <= CUT_HTF_BARS; b++) add(tf, pi, k - b, "htf");
+        if (Math.floor(s.s[k] / hstep) !== Math.floor(s.s[k - 1] / hstep)) for (let b = 1; b <= CUT_HTF_BARS; b++) if (k - b >= 0) htf.add(k - b);
       }
+      const list = Float64Array.from(htf).sort();
+      const n = list.length;
+      stats["htf.all"] = (stats["htf.all"] ?? 0) + n;
+      if (o.htf === "all" || n <= CUT_HTF_STAGE0) for (let q = 0; q < n; q++) add(tf, pi, list[q], "htf");
+      else for (let j = 0; j < CUT_HTF_STAGE0; j++) add(tf, pi, list[Math.floor((j * (n - 1)) / (CUT_HTF_STAGE0 - 1))], "htf");
     });
   }
-  return [...map.values()].sort((a, b) => (a.tf === b.tf ? 0 : a.tf === "m15" ? -1 : 1) || a.pi - b.pi || a.k - b.k);
+  const out = [...map.values()].sort((a, b) => (a.tf === b.tf ? 0 : a.tf === "m15" ? -1 : 1) || a.pi - b.pi || a.k - b.k);
+  for (const t of out) for (const kind of t.kinds) stats[kind] = (stats[kind] ?? 0) + 1;
+  return out;
 }
+
+// the detail's summary of cutTargets' stats: "signal 1,234, even 3,000, …, htf 3,000 of 168,123"
+export const cutStatsText = (stats: Record<string, number>): string =>
+  ["signal", "even", "gap", "day", "htf"].map((k) => `${k} ${stats[k] ?? 0}${k === "htf" ? ` of ${stats["htf.all"] ?? 0}` : ""}`).join(", ");
 
 // At each target k: the five pairs cut at T_k (bars with T ≤ T_k), the pair's indicators and every trial of the
 // timeframe recomputed on the cut (a finite item on its own window), spec 6 with the cut's holes; the decision at k
 // (presence, direction, status, warm-up), its reason and its stratum must equal the uncut run's. And the entry bar of
 // every counted signal is the uncut series' first start ≥ T and < X. o.maxTargets (development only, never a formal
-// run): at most this many targets per (tf, pair), evenly picked; the detail says so.
-export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number> }): CheckResult {
+// run): at most this many targets per (tf, pair), evenly picked; the detail says so. o.name: the check's name
+// (default "cut": stage 0; "cut.chosen.first" and "cut.chosen.second" for spec 23.2's cuts of the chosen trials);
+// o.timeKey: the prefix of the times written to o.times (default "cut": cut.m15, cut.h1); o.maxExamples: how many
+// failing bars each trial's probe lists (default 5); o.note: appended to the detail (the targets by kind).
+export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string }): CheckResult {
+  const cap = o.maxExamples ?? MAX_EXAMPLES;
   const probes = new Map<string, Probe>();
   for (const t of trials) probes.set(t.id, probeOf(t.id));
   const sigOf = new Map(sigs.map((s) => [s.trial.id, s]));
@@ -233,7 +276,7 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
             got = decisionOf(trial, indCut, ctx, cut, k, o);
           }
           probe.compared++;
-          if (got !== want) miss(probe, `${PAIRS[pi]} ${iso(Tk)} k=${k} [${tg.kinds.join("+")}] cut ${got} uncut ${want}`);
+          if (got !== want) miss(probe, `${PAIRS[pi]} ${iso(Tk)} k=${k} [${tg.kinds.join("+")}] cut ${got} uncut ${want}`, cap);
         }
       }
     }
@@ -256,13 +299,14 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
           }
           const e = entryExitIndex(s, T, X);
           probe.compared++;
-          if ((e === null ? -1 : e.j) !== j) miss(probe, `${PAIRS[c.pi]} ${iso(T)} entry ${e?.j} first start ${j}`);
+          if ((e === null ? -1 : e.j) !== j) miss(probe, `${PAIRS[c.pi]} ${iso(T)} entry ${e?.j} first start ${j}`, cap);
         }
       }
     }
-    if (o.times) o.times[`cut.${tf}`] = Date.now() - t0;
+    if (o.times) o.times[`${o.timeKey ?? "cut"}.${tf}`] = Date.now() - t0;
   }
-  return resultOf("cut", [...probes.values()], capped.length ? `DEVELOPMENT CAP: ${capped.join("; ")}` : `${targets.length} targets`);
+  const extra = (capped.length ? `DEVELOPMENT CAP: ${capped.join("; ")}` : `${targets.length} targets`) + (o.note ? ` (${o.note})` : "");
+  return resultOf(o.name ?? "cut", [...probes.values()], extra);
 }
 
 // the signals and the bars without a signal of each trial that poison and presence look at (sampleOf, seed)
@@ -514,7 +558,7 @@ export const PRINT_KEYS: readonly RegExp[] = [
   /^trials$/,
   /^kappa\.(delta|pl|from)$/,
   /^g\.from$/,
-  /^time\.(gen|stage0|stage1|stage2|cut\.m15|cut\.h1|checks|total)\.ms$/,
+  /^time\.(gen|stage0|stage1|stage2|cut\.m15|cut\.h1|cut\.chosen\.(first|second)\.(m15|h1)|checks|total)\.ms$/,
   /^check\.[A-Za-z0-9_.]+\.(passed|detail)$/,
   /^count\.(stage0|stage1|stage2)\.[A-Za-z0-9_.]+$/,
   /^floor\.(m15|h1)$/,

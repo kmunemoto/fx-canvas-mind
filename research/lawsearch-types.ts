@@ -547,7 +547,8 @@ export interface Stage0Half {
   // counted by pair × direction: index pi × 2 + (d === 1 ? 0 : 1)
   byPairDir: number[];
   // by REASONS index (first half: ① only the T < SPLIT part; ②–⑥ the half's signals); the second half's
-  // per-trial breakdown is kept for the totals only (spec 9: not printed per trial before stage 2)
+  // per-trial breakdown (byPairDir, byReason, noBlind, noTrade, perWeek) is kept for the totals and adds up only:
+  // stage0.csv writes counted and weeks alone for the second half (spec 9 後半, 23.3)
   byReason: number[];
   noBlind: number;
   noTrade: number;
@@ -581,7 +582,8 @@ export interface Stage0Row {
   passMin: number | null;
   mde: number | null;
   mark: boolean | null;
-  stage3Estimate: number | null;
+  // spec 9 段3の数の見込み n2 × 52 ÷ 76, with or without g (spec 23.3)
+  stage3Estimate: number;
 }
 
 // ---- stage 1 and 2 (builder D: research/lawsearch-select.ts) -----------------------------------------------

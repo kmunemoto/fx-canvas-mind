@@ -316,8 +316,17 @@ Key: tf, half. All int. late_end must be 0.
 
 ### TS only (not compared)
 
-- `checks.csv`: `trial,name,passed,detail`. `trial` is `*` for a check of the whole run. The Python reads it for rule
-  2 (checks_ok = every `*` row and every row of that trial passed).
+- `checks.csv`: `trial,name,passed,detail,stage`. `trial` is `*` for a check of the whole run. `stage` is the stage
+  that made the check: `gate`, `stage0`, `stage1`, `stage1end`, `stage2` or `end` (the print check). The Python reads
+  it for rule 2: checks_ok = every `*` row and every row of that trial passed, among the rows whose `stage` is `gate`,
+  `stage0` or `stage1`. Reason (2026-11-05, TS builder, round C2): rule 2 is decided at the choice, and spec 23.2's
+  cut of the chosen trials (`stage1end`) and stage 2's checks come after it; before, the file had no stage column and
+  every row was read, which agreed only while every check after the choice passed.
+- The cut checks of spec 15 / 23.2 are named so that `checks.csv` shows which is which: `cut` (stage 0, every trial,
+  300 of the higher-timeframe boundary targets per timeframe and pair), `cut.chosen.first` (`stage1end`: the chosen
+  trials on stage 1's universe with every boundary target), `cut.chosen.second` (`stage2`: the chosen trials on the
+  second half's targets with every boundary target), and `suspect13.cut.stage1` / `suspect13.cut.stage2` (13 (i)).
+  With no trial chosen, `cut.chosen.first` is one passing `*` row ("no trial was chosen").
 - `choice.json`: `{"m15":[…],"h1":[…]}`.
 - `print.txt`.
 
@@ -449,11 +458,14 @@ for the lead, not here.
 
 - `group` is empty for a trial that fails the floor; `groups.<tf>` counts the distinct non-empty groups. Reason:
   A.2.18 leaves the trials under the floor ungrouped (not_grouped).
-- `first.reason.r1` and `first.reason.r1w` count the ① rows with T < SPLIT, `second.reason.r1` and
-  `second.reason.r1w` those with T ≥ SPLIT; `r1b` is first only. f_none and both go by the half column. Reason: 7
-  above, written for both halves.
+- `first.reason.r1` and `first.reason.r1w` count the ① rows with T < SPLIT; `r1b` is first only. f_none and both go
+  by the half column. The ① rows with T ≥ SPLIT go into `stage0_totals.csv`'s `second` `reason.r1` and `reason.r1w`
+  (`second.reason.*` per trial is no longer written: spec 23.3). Reason: 7 above.
 - `g`, `df`, `pass_min`, `mde` and `mark` are empty when the trial has no g (7 above, kept). `stage3_estimate` is
   written whether or not there is a g (spec 23.3, 2026-11-05; before, it was empty with them).
+- `stage3_estimate` is (second.counted × 52) ÷ 76, in that order: the product is an exact integer, so the value is
+  one correctly rounded division in both languages. Reason: it is compared exact (7 above), and 52 ÷ 76 first would
+  round twice (Python builder, round C2).
 
 ### 11.8 stage2.csv
 
@@ -463,6 +475,10 @@ for the lead, not here.
 
 - `hit_*` are 0 when `looked` is 0 (fewer than 100 counted signals). The blind rows' `hit_delta` and `hit_late`
   come out 0 by construction (their Δ and Δ_late are 0).
+- `stage1.csv` `sus_checks_passed` (rule 6) and stage 2's C5 take a hit row's checks as passed only when
+  `checks_passed` is 1 and `hand` is 1; empty when the row did not hit. Reason: (v) is one of 13's checks, and on a
+  synthetic run it is not run (`hand` = not-run), so a hit row is never selectable there (spec 23.5; Python builder,
+  round C2).
 
 ### 11.10 holes/summary.csv
 
@@ -492,3 +508,22 @@ for the lead, not here.
 - `STOP 8.5` for `chosen`, `chosen.<tf>`, `K_total`, `holm_pass`, `holm_delta_pass`, `C1` and `verdict`; `ALLOWED 8.5`
   for the others. Reason: 9.3's stop list (the chosen trials, a Holm pass, a verdict); K_total and C1 are the count
   of the chosen trials and the Holm pass under other names.
+
+### 11.13 The choice of the candidate (9.3, spec 23.5; Python builder, round C2)
+
+- A split of `measures.csv` `V.use_lb` or `V.use_p` is excused (`ALLOWED 8.5 measures.csv <stage>|<half>|<trial>|
+  V.use_lb …`) when the two candidates' `V.<c>.half_width` (use_lb) or `V.<c>.p` (use_p) are within 1e−9 of each
+  other in either implementation, and not exactly equal in both. Reason: 11.12's near pair; an exact tie is decided by
+  8.5's order (week, then 4w, then shift) and must agree.
+- The values that follow from the choice are then compared under the TS's candidate, from the Python's own
+  per-candidate values in `py/measures.csv` (py/ keeps the Python's own choice): `V.t` and `V.p` (as `V.<c>.t`,
+  `V.<c>.p`), `V.lb` and `V.ub` (as `V.value` ∓ `V.<c>.half_width`); `stage1.csv` `lb`, `p_iut`; `stage2.csv`
+  `p_delta`, `p_pl`, `p_iut`, `t_delta`, `t_pl`, `delta_ub`, `late_lb`, `dF_lo`, `dF_hi`, and `mde` (from `delta.<c>.df`,
+  `delta.<c>.se` and `K_total`). Reason: 9.3 names V.t, V.lb, V.ub, t_delta, t_pl and mde; the others are the same
+  values (V.p, or V.lb and V.ub of delta, delta_late and dF) under other names.
+- Two p < 1 exactly tied in both implementations go to min(t_Δ, t_PL) (t_Δ for the Δ-only Holm; spec 11). When one
+  of those t follows an adopted split, a split of the Holm order is one of 9.3's decisions too (11.12's Holm keys,
+  with their STOP list). Reason: the t that breaks the tie is then the TS's candidate's in one implementation and the
+  Python's in the other.
+- The `FILE` lines of the report count the differences left after 9.2's and 9.3's allowances. Reason: `RESULT`
+  counts them so, and the `ALLOWED` lines list the rest.
