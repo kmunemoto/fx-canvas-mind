@@ -272,6 +272,9 @@ export interface ItemDef {
   id: string;
   kind: ItemKind;
   warmup: number;
+  // the warm-up under the given params (the hand examples' shrunk windows), without building; warmupFor() = warmup.
+  // trialWarmup needs it, so every item written later provides it too.
+  warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): ItemBuild;
 }
 
@@ -289,6 +292,8 @@ export interface FilterDef {
   id: string;
   directional: boolean;
   warmup: number;
+  // as ItemDef.warmupFor
+  warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): FilterBuild;
 }
 

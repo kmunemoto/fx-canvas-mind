@@ -78,15 +78,6 @@ export function parseCandidates(json: unknown): TrialDef[] {
 
 // ---- the definitions -----------------------------------------------------------------------------------------
 
-// The registry's own view: a definition also says its warm-up under the hand examples' params, so that
-// trialWarmup needs no bars.
-interface ItemDefX extends ItemDef {
-  warmupFor(params?: ItemParams): number;
-}
-interface FilterDefX extends FilterDef {
-  warmupFor(params?: ItemParams): number;
-}
-
 const triOf = (n: number, f: (i: number) => number): Tri => {
   const out = new Int8Array(n);
   for (let i = 0; i < n; i++) out[i] = f(i);
@@ -94,7 +85,7 @@ const triOf = (n: number, f: (i: number) => number): Tri => {
 };
 
 // E01–E06 rsi_back_p_L (spec 4.1): buy X↑(RSI_p, L), sell X↓(RSI_p, 100 − L); a cross item (spec 5); warm-up p + 1
-const rsiBack = (id: string, p0: number, L: number): ItemDefX => {
+const rsiBack = (id: string, p0: number, L: number): ItemDef => {
   const pOf = (params?: ItemParams) => params?.rsi ?? p0;
   const warmupFor = (params?: ItemParams) => params?.warmup ?? pOf(params) + 1;
   return {
@@ -118,7 +109,7 @@ const rsiBack = (id: string, p0: number, L: number): ItemDefX => {
 };
 
 // E26–E27 donchian-A_n (spec 4.1, §8.113 C1): 常に持つ型; buy target s = +1, sell s = −1, never 無し; warm-up n
-const donchianA = (id: string, n0: number): ItemDefX => {
+const donchianA = (id: string, n0: number): ItemDef => {
   const nOf = (params?: ItemParams) => params?.donchian ?? n0;
   const warmupFor = (params?: ItemParams) => params?.warmup ?? nOf(params);
   return {
@@ -144,7 +135,7 @@ const donchianA = (id: string, n0: number): ItemDefX => {
 // 5 ③ (§8.113 置6) drops the signals whose T has a UTC time of day in [19:35, 24:00) after the rising edge;
 // warm-up 288 (the σ window)
 const KEEP_FROM = 19 * 60 * MINUTE + 35 * MINUTE;
-const bigmoveItem = (id: string): ItemDefX => {
+const bigmoveItem = (id: string): ItemDef => {
   const paramsOf = (step: number, params?: ItemParams) => ({ ...bigmoveDefault(step), ...(params?.bigmove ?? {}) });
   const warmupFor = (params?: ItemParams) => params?.warmup ?? params?.bigmove?.sigmaWindow ?? bigmoveDefault(0).sigmaWindow;
   return {
@@ -176,7 +167,7 @@ const bigmoveItem = (id: string): ItemDefX => {
 };
 
 // F00 (spec 4.2): always true; no warm-up
-const f00: FilterDefX = {
+const f00: FilterDef = {
   id: "F00",
   directional: false,
   warmup: 0,
@@ -189,7 +180,7 @@ const f00: FilterDefX = {
 
 // F01 (spec 4.2): d × (C − EMA200) > 0, on doubles with no tolerance (an equal value is false for both
 // directions); −1 where EMA200 is 無し; warm-up 200 (spec 5)
-const f01: FilterDefX = (() => {
+const f01: FilterDef = (() => {
   const eOf = (params?: ItemParams) => params?.ema ?? 200;
   const warmupFor = (params?: ItemParams) => params?.fWarmup ?? eOf(params);
   return {
@@ -214,43 +205,43 @@ const f01: FilterDefX = (() => {
   };
 })();
 
-const ITEMS_X: ReadonlyMap<string, ItemDefX> = new Map<string, ItemDefX>([
+const ITEM_MAP: ReadonlyMap<string, ItemDef> = new Map<string, ItemDef>([
   ["E04", rsiBack("E04", 14, 30)],
   ["E26", donchianA("E26", 20)],
   ["B06", bigmoveItem("B06")],
 ]);
-const FILTERS_X: ReadonlyMap<string, FilterDefX> = new Map<string, FilterDefX>([
+const FILTER_MAP: ReadonlyMap<string, FilterDef> = new Map<string, FilterDef>([
   ["F00", f00],
   ["F01", f01],
 ]);
 
 // the items written now (spec 19 step 3): E04, E26, B06
-export const ITEMS: ReadonlyMap<string, ItemDef> = ITEMS_X;
+export const ITEMS: ReadonlyMap<string, ItemDef> = ITEM_MAP;
 // the filters written now: F00, F01
-export const FILTERS: ReadonlyMap<string, FilterDef> = FILTERS_X;
+export const FILTERS: ReadonlyMap<string, FilterDef> = FILTER_MAP;
 
 export function itemOf(id: string): ItemDef {
-  return ITEMS_X.get(id) ?? notBuilt(id);
+  return ITEM_MAP.get(id) ?? notBuilt(id);
 }
 export function filterOf(id: string): FilterDef {
-  return FILTERS_X.get(id) ?? notBuilt(id);
+  return FILTER_MAP.get(id) ?? notBuilt(id);
 }
 // an S row's filter (spec 4.3: S01 = F01, S02 = F02, S03 = F05, S04 = F07); notBuilt when the F is not written
 export function sFilterOf(sId: string): FilterDef {
   const f = S_OF_F[sId];
   if (f === undefined) return notBuilt(sId);
-  return FILTERS_X.get(f) ?? notBuilt(`${sId} (${f})`);
+  return FILTER_MAP.get(f) ?? notBuilt(`${sId} (${f})`);
 }
 
 // every part of the trial has a definition (R trials: step 4)
 export function trialBuilt(t: TrialDef): boolean {
   switch (t.kind) {
     case "EF":
-      return t.e !== null && t.f !== null && ITEMS_X.has(t.e) && FILTERS_X.has(t.f);
+      return t.e !== null && t.f !== null && ITEM_MAP.has(t.e) && FILTER_MAP.has(t.f);
     case "S":
-      return t.s !== null && S_OF_F[t.s] !== undefined && FILTERS_X.has(S_OF_F[t.s]);
+      return t.s !== null && S_OF_F[t.s] !== undefined && FILTER_MAP.has(S_OF_F[t.s]);
     case "B":
-      return t.b !== null && ITEMS_X.has(t.b);
+      return t.b !== null && ITEM_MAP.has(t.b);
     default:
       return false;
   }
@@ -261,16 +252,16 @@ export function trialBuilt(t: TrialDef): boolean {
 export function trialWarmup(t: TrialDef, params?: ItemParams): number {
   switch (t.kind) {
     case "EF": {
-      const e = (ITEMS_X.get(t.e ?? "") ?? notBuilt(t.e ?? t.id)).warmupFor(params);
-      const f = (FILTERS_X.get(t.f ?? "") ?? notBuilt(t.f ?? t.id)).warmupFor(params);
+      const e = (ITEM_MAP.get(t.e ?? "") ?? notBuilt(t.e ?? t.id)).warmupFor(params);
+      const f = (FILTER_MAP.get(t.f ?? "") ?? notBuilt(t.f ?? t.id)).warmupFor(params);
       return Math.max(e, f);
     }
     case "S": {
-      const f = sFilterOf(t.s ?? "") as FilterDefX;
+      const f = sFilterOf(t.s ?? "");
       return f.warmupFor(params);
     }
     case "B":
-      return (ITEMS_X.get(t.b ?? "") ?? notBuilt(t.b ?? t.id)).warmupFor(params);
+      return (ITEM_MAP.get(t.b ?? "") ?? notBuilt(t.b ?? t.id)).warmupFor(params);
     default:
       return notBuilt(t.id);
   }
@@ -281,12 +272,13 @@ export function trialWarmup(t: TrialDef, params?: ItemParams): number {
 // no next bar, keeps the previous one). It reads the next bar on purpose: spec 15's cut and poison must catch it.
 // Used only when the run's manifest says group O.
 export function answerKnowingE26(): ItemDef {
-  const real = ITEMS_X.get("E26")!;
+  const real = ITEM_MAP.get("E26")!;
   const kind: ItemKind = "hold";
   return {
     id: "E26",
     kind,
     warmup: real.warmup,
+    warmupFor: real.warmupFor,
     build(ind: Ind, params?: ItemParams): ItemBuild {
       const base = real.build(ind, params);
       const C = ind.series.C;

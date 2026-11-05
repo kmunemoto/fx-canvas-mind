@@ -51,11 +51,17 @@ const NAMES = ["openTime", "open", "high", "low", "close"] as const;
 const DIGITS_ONLY = /^[0-9]+$/;
 const DECIMAL_FORM = /^[0-9]*\.?[0-9]*$/;
 const HAS_DIGIT = /[0-9]/;
-// parseKlines' num(): a JSON number as it is, a string by Number(), anything else NaN; NaN when not finite
-const klineNum = (v: unknown): number => {
+// parseKlines' num(): a JSON number as it is, a string by Number(), anything else NaN; NaN when not finite.
+// Exported for the hand example A.1.36 (its js_number and parseKlines_keeps columns).
+export const klineNum = (v: unknown): number => {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : NaN;
 };
+// spec 2's right form of one value (A.1.36's decimal_form): openTime a string of ASCII digits only; a price a string
+// of ASCII digits with at most one "." and at least one digit
+export function rightFormOf(name: string, v: unknown): boolean {
+  return typeof v === "string" && (name === "openTime" ? DIGITS_ONLY.test(v) : DECIMAL_FORM.test(v) && HAS_DIGIT.test(v));
+}
 
 // One side of one day file, already JSON.parse'd and sound() (ownerhold-data), every element of data (spec 2):
 //   * an element that is not an object (null, a string, a number, an array) is unparseable;
@@ -76,8 +82,7 @@ export function scanBody(body: unknown, where: string): ScanOut {
     let bad = false;
     for (const name of NAMES) {
       const v = (row as Record<string, unknown>)[name];
-      const rightForm = typeof v === "string" && (name === "openTime" ? DIGITS_ONLY.test(v) : DECIMAL_FORM.test(v) && HAS_DIGIT.test(v));
-      if (rightForm) {
+      if (rightFormOf(name, v)) {
         if (!Number.isFinite(Number(v))) bad = true;
         continue;
       }

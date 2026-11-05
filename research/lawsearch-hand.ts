@@ -16,7 +16,7 @@
 import { filterOf, isNotBuilt, itemOf, parseCandidates, sFilterOf, trialWarmup } from "./lawsearch-items.ts";
 import { C6_PARTS, DIRECTIONAL_F, LATE_MS, QUESTIONS, REASONS, S_OF_F, STATUS, W0 } from "./lawsearch-rules.ts";
 import { MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, SPLIT, STEP, wk } from "./lawsearch-const.ts";
-import { coarsenSeries, dayOf, hourOf, htfIndex, isGmoHoliday, loadPairTf, londonSummer, midOf, nySummer, pointsOf, rawPointsOf, reportOfStop, scanBody, seasonGroupOf, seriesFromMid, seriesOf, tfSetOf } from "./lawsearch-bars.ts";
+import { coarsenSeries, dayOf, hourOf, htfIndex, isGmoHoliday, klineNum, loadPairTf, londonSummer, midOf, nySummer, pointsOf, rawPointsOf, reportOfStop, rightFormOf, scanBody, seasonGroupOf, seriesFromMid, seriesOf, tfSetOf } from "./lawsearch-bars.ts";
 import { bigmoveDefault, donchianOf, indOf, smaOldest, toF64, xDn, xUp } from "./lawsearch-ind.ts";
 import { applyBoth, candidatesOf, exclCtxOf, halfOf, holesOf, r2, r3, r4, r5, r6, reasonOf } from "./lawsearch-events.ts";
 import { blindFromRows, blindTable, lateTable, lateTradeOf, rowKey, tradeOf, trialRows, trialRowsExtra } from "./lawsearch-trade.ts";
@@ -1018,9 +1018,25 @@ async function loadCounts(e: J, plant: string): Promise<Record<string, Thunk>> {
       let result: string;
       if (o.err) result = o.err.message.startsWith("STOP:") && (reportOfStop(o.err)?.valueStops.length ?? 0) > 0 ? "止まる" : `error ${o.err.message}`;
       else result = o.ok!.report.valueStops.length ? "止まる(no throw)" : `落として数える（数にできない行 ${o.ok!.report.unparseableRows - report.unparseableRows + 1}）`;
-      out.push({ ...v, result });
+      // the value's own columns, by the module's readers on the changed element: decimal_form (spec 2's right form)
+      // and js_number (parseKlines' num, NaN as null) are null for an element that is not an object;
+      // parseKlines_keeps is whether parseKlines keeps the row on this value alone: false for an element that is not
+      // an object or a value it cannot read; null for a value it reads when another value of the row already makes it
+      // drop the row (the openTime rows keep high "-")
+      const el = data[6];
+      const isObj = typeof el === "object" && el !== null && !Array.isArray(el);
+      const own = v.name === "high" || v.name === "openTime" ? v.name : null;
+      const num = isObj && own ? klineNum((el as J)[own]) : NaN;
+      const othersKept = isObj && ["openTime", "open", "high", "low", "close"].filter((n) => n !== own).every((n) => Number.isFinite(klineNum((el as J)[n])));
+      out.push({
+        ...v,
+        decimal_form: isObj && own ? rightFormOf(own, (el as J)[own]) : null,
+        js_number: Number.isNaN(num) ? null : num,
+        parseKlines_keeps: !isObj || !Number.isFinite(num) ? false : othersKept ? true : null,
+        result,
+      });
     }
-    return new PartialList(out, ["name", "result"]);
+    return new PartialList(out, ["name", "decimal_form", "js_number", "parseKlines_keeps", "result"]);
   };
   return {
     files_read: () => report.keys.map((k) => `${k.slice(0, 4)}-${k.slice(4, 6)}-${k.slice(6, 8)}`),

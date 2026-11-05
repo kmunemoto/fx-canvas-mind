@@ -383,6 +383,12 @@ Each line settles a point the sections above left open (how a count is counted, 
 Both implementations follow it. None of them is a rule of the spec; the points the spec itself leaves open are listed
 for the lead, not here.
 
+### 11.0 The files compared
+
+- `ts/config.json` is not compared, and `py/` holds no copy of it: it is the TS's input to the Python (2), as
+  `manifest.json` is the generator's. Reason: 2 says the Python reads it and changes no setting, so it is not one of
+  the Python's outputs, and 10 would otherwise report it as a file in one folder only.
+
 ### 11.1 load.csv
 
 - `files_read` = 2 × `keys`: every side file the loader opens, whether it then reads or not; `read_failures` counts

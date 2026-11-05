@@ -208,7 +208,10 @@ jobs:
             [ "$code" = 0 ] || exit 1
           done
       - name: The flip comparison (blind bars' h and PL, the signals of E04, E26 and S01; design 10, 11 O-2)
-        run: deno run --no-config --allow-read=. research/lawsearch-flip.ts research/out/lawsearch/flip-${{ matrix.seed }}-0 research/out/lawsearch/flip-${{ matrix.seed }}-1 | tee research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
+        # pipefail: the comparison's exit (3 on a failure), not tee's, decides the step
+        run: |
+          set -o pipefail
+          deno run --no-config --allow-read=. research/lawsearch-flip.ts research/out/lawsearch/flip-${{ matrix.seed }}-0 research/out/lawsearch/flip-${{ matrix.seed }}-1 | tee research/out/lawsearch/flip-${{ matrix.seed }}-compare.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
