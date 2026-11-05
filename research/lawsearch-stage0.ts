@@ -11,7 +11,8 @@ import { stage0 } from "./lawsearch-select0.ts";
 import { addsUpCheck, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, donchianCheck, poisonCheck, presenceCheck } from "./lawsearch-checks.ts";
 import { dumpBars, dumpHoles, dumpInd, dumpLoad, dumpSignals, dumpStage0 } from "./lawsearch-dump.ts";
 import { CUT_HTF_STAGE0, POISON_N, SEEDS } from "./lawsearch-rules.ts";
-import type { CheckResult, ExclCtx, Ind, RunConfig, Stage0Row, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
+import { stop } from "./lawsearch-bars.ts";
+import type { CheckResult, CutFailRow, ExclCtx, Ind, RunConfig, Stage0Row, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 // the dump columns of the built items and filters of the run's trials on one timeframe, per pair
 const buildsOf = (trials: TrialDef[], inds: Ind[], answerKnowing: boolean): Array<{ pi: number; columns: Record<string, Float64Array | Int8Array | Uint8Array> }> => {
@@ -57,7 +58,8 @@ export interface Stage0Out {
 // Stage 0 on a universe loaded over [S0, END): indicators, signals (spec 5, 6), the blind bars of both halves, spec
 // 9's rows, and the stage-0-safe checks of 15 (data, adds up, donchian, cut, poison, presence; the cut with spec
 // 23.2's 300 higher-timeframe boundary targets per tf and pair). The stage-0 dumps are written when dumpDir is given.
-export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number }): Promise<Stage0Out> {
+// o.cutFails: the failing bars of the cut check (stage "stage0") are pushed here for cut_fail.csv (C3, D6).
+export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[] }): Promise<Stage0Out> {
   const t0 = Date.now();
   const times: Record<string, number> = {};
   const ctx = ctxOfUniverse(u, avoid, o.plant);
@@ -68,8 +70,13 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
     h1: { first: blindBarsOf(ctx.h1, u.h1, "first"), second: blindBarsOf(ctx.h1, u.h1, "second") },
   };
   const gDf: Record<string, number> = {};
-  const rows = stage0(sigs, { m15: u.m15, h1: u.h1 }, passing, cfg.g, gDf);
+  const rows = stage0(sigs, { m15: u.m15, h1: u.h1 }, passing, cfg.g, gDf, o.plant);
   times["stage0"] = Date.now() - t0;
+  // spec 6 (C3, the lead's D4): a counted signal with a trade whose stratum has no blind bar is a program error, for
+  // every trial (chosen later or not) in either half; the run stops here, before stage 0's checks. The message names
+  // each trial and half and gives no count (spec 9 後半: the second half's per-trial numbers are not shown).
+  const noBlind = rows.flatMap((r) => (["first", "second"] as const).filter((h) => r[h].noBlind > 0).map((h) => `${r.trial} ${h} half`));
+  if (noBlind.length > 0) stop(`spec 6: counted signals whose trade has no blind bar in its stratum (must be 0; a program error): ${noBlind.join(", ")}`);
   const checks: CheckResult[] = [];
   const tc = Date.now();
   checks.push(dataCheck(u));
@@ -78,7 +85,7 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
   // spec 15 切り取り with spec 23.2's stage-0 rule: 300 of the higher-timeframe boundary targets per tf and pair
   const cutStats: Record<string, number> = {};
   const targets = cutTargets(u, trials, sigs, { htf: "even", stats: cutStats });
-  checks.push(cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2` }));
+  checks.push(cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2`, fails: o.cutFails ? { stage: "stage0", rows: o.cutFails } : undefined }));
   checks.push(poisonCheck(u, trials, sigs, avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, ctx }));
   checks.push(presenceCheck(u, trials, sigs, avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant }));
   times["checks"] = Date.now() - tc;

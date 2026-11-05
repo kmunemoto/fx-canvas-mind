@@ -7,9 +7,13 @@
 #           lawsearch-design.md 8 must fail one of its named examples (TS and the Python's twins); every real mode
 #           exits 2
 #   syn     the runs of lawsearch-design.md 10, one job each: TS MODE=syn, then the Python's own recompute and the
-#           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3) and
-#           secondHalfAll (exit 2), CMP-C 7101 the plant reasonUsesFuture (exit 3, cut or presence failed); O expects
-#           exit 3 with the cut and the poison failed on the E26 trials
+#           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3),
+#           secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop, spec 6) and blindRowHit (exit 3:
+#           spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture (exit 3, cut or presence failed)
+#           and chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened); O expects exit 3 with the
+#           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
+#           stage 2 keeps it closed). No step sets CUT_MAX (the development cap; the Python's --run refuses a
+#           capped run)
 #   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
 #           judges spec 14.2's conditions on the exact mirror of each FLIP=0 run (spec 23.1, design 10: its bars
 #           mirrored with no rounding of spec 2, everything above them rebuilt) and prints the FLIP=1 run's
@@ -120,9 +124,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2" }
+          - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2 dropSecondStrata:3 blindRowHit:3" }
           - { name: cmp-n-1002, gen: N, seed: 1002, want: 0, plants: "" }
-          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3" }
+          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3" }
           - { name: o-6001, gen: O, seed: 6001, want: 3, plants: "" }
           - { name: o-6002, gen: O, seed: 6002, want: 3, plants: "" }
           - { name: o-6003, gen: O, seed: 6003, want: 3, plants: "" }
@@ -148,11 +152,17 @@ jobs:
           $DENO_RUN research/lawsearch.ts; code=$?
           echo "exit $code (want ${{ matrix.want }})"
           [ "$code" = "${{ matrix.want }}" ] || exit 1
-      - name: The O runs' failed checks (cut and poison on every E26 trial; their stage-1 suspicion hits; nothing else)
+      - name: The O runs' failed checks (cut and poison on every E26 trial; their stage-1 suspicion hits; nothing else; stage 2 not opened)
         if: matrix.gen == 'O'
         run: |
-          f=research/out/lawsearch/${{ matrix.name }}/ts/checks.csv
-          s=research/out/lawsearch/${{ matrix.name }}/ts/suspect.csv
+          d=research/out/lawsearch/${{ matrix.name }}/ts
+          f=$d/checks.csv
+          s=$d/suspect.csv
+          # design 7.7 (C3, D8): a failed check before stage 2 keeps stage 2 closed: no stage-2 check row, no stage2.csv,
+          # and print.txt says so
+          if grep -q ",stage2$" $f; then echo "a stage-2 check ran"; exit 1; fi
+          [ ! -e $d/stage2.csv ] || { echo "stage2.csv was written"; exit 1; }
+          grep -q "^note.stage2=not opened" $d/print.txt || { echo "print.txt does not say that stage 2 was not opened"; exit 1; }
           for t in m15.E26.F00 m15.E26.F01 h1.E26.F00 h1.E26.F01; do
             grep -q "^$t,cut,0," $f || { echo "cut did not fail on $t"; exit 1; }
             grep -q "^$t,poison,0," $f || { echo "poison did not fail on $t"; exit 1; }
@@ -174,8 +184,35 @@ jobs:
             tail -3 /tmp/plant.txt
             echo "$p: exit $code (want $want)"
             [ "$code" = "$want" ] || bad=1
+            d=research/out/lawsearch/${{ matrix.name }}/plant-$p
             if [ "$p" = reasonUsesFuture ]; then
-              grep -E ",(cut|presence),0," research/out/lawsearch/${{ matrix.name }}/plant-$p/checks.csv || { echo "neither cut nor presence failed"; bad=1; }
+              grep -E ",(cut|presence),0," $d/checks.csv || { echo "neither cut nor presence failed"; bad=1; }
+            fi
+            # design 8 (C3): the stops; none of them opens stage 2 (no syn2 load, no stage2.csv)
+            case "$p" in dropSecondStrata|blindRowHit|chosenCutFirstDiff)
+              if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi
+              grep -q "^note.stage2=not opened" $d/print.txt || { echo "$p: print.txt does not say that stage 2 was not opened"; bad=1; }
+              [ -e $d/cut_fail.csv ] || { echo "$p: no cut_fail.csv"; bad=1; } ;;
+            esac
+            if [ "$p" = dropSecondStrata ]; then
+              # spec 6 (D4): stage 0 stops on m15.E04.F00's second-half noBlind, before any stage-1 file
+              grep -E "^\*,stop\.stage0,0,.*m15\.E04\.F00 second half" $d/checks.csv || { echo "stage 0 did not stop on m15.E04.F00's second half"; bad=1; }
+              [ ! -e $d/stage1.csv ] && [ ! -e $d/blind ] || { echo "a stage-1 file was written"; bad=1; }
+            fi
+            if [ "$p" = blindRowHit ]; then
+              # spec 13 (D10): the blind row hits, stage 1's numbers are withheld, stage 2 is not opened
+              grep -q "^\*,suspect\.blind\.stage1,0," $d/checks.csv || { echo "suspect.blind.stage1 did not fail"; bad=1; }
+              # suspect.csv: stage,half,id,looked,hit_delta,hit_a,hit_pl,hit_late,hit_W,hit,… (lawsearch-dump.md 8)
+              grep -q "^stage1,first,blind\.m15\.USD_JPY\.buy,[01],[01],1,[01],[01],[01],1," $d/suspect.csv || { echo "the blind row's suspect.csv row does not hit"; bad=1; }
+              grep -q "^withheld.stage1=1$" $d/print.txt || { echo "stage 1's numbers are not withheld"; bad=1; }
+              if grep -q -E "^(chosen\.|K_total=)" $d/print.txt; then echo "print.txt shows stage 1's choice"; bad=1; fi
+              grep -q "^note.stop13=" $d/print.txt || { echo "print.txt does not say STOP (spec 13)"; bad=1; }
+            fi
+            if [ "$p" = chosenCutFirstDiff ]; then
+              # spec 23.2 / design 7.7 (D8): cut.chosen.first fails on a chosen trial; stage 1's numbers are withheld
+              grep -q -E "^(m15|h1)\.[^,]*,cut\.chosen\.first,0,.*,stage1end$" $d/checks.csv || { echo "cut.chosen.first did not fail on a chosen trial"; bad=1; }
+              grep -q "^cut\.chosen\.first,stage1end," $d/cut_fail.csv || { echo "cut_fail.csv has no cut.chosen.first row"; bad=1; }
+              grep -q "^withheld.stage1=1$" $d/print.txt || { echo "stage 1's numbers are not withheld"; bad=1; }
             fi
           done
           exit $bad

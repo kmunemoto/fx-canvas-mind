@@ -166,4 +166,10 @@ export const PLANTS: readonly string[] = [
   "secondHalfAll",
   "shiftNoWrap",
   "daySatSplit",
+  // C3 (2026-11-05), run plants of design 8 on CMP-N 1001 / CMP-C 7101: a trial's second-half blind strata dropped
+  // (stage 0's noBlind stop, D4); a blind row reported as hit at stage 1 (spec 13's stop, D10); a failing bar planted in
+  // cut.chosen.first on the first chosen trial (the stop before stage 2, D8)
+  "dropSecondStrata",
+  "blindRowHit",
+  "chosenCutFirstDiff",
 ];

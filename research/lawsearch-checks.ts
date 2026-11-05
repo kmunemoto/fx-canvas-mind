@@ -35,7 +35,7 @@ import { donchianState } from "./bigflow-lib.ts";
 import { mulberry32, shuffle } from "./trend-stats.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey } from "../supabase/functions/track-outcomes/quotes.ts";
 import { DAY, WEEK } from "./lib.ts";
-import type { CheckResult, Classified, ExclCtx, Ind, Probe, Series, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
+import type { CheckResult, Classified, CutFailRow, ExclCtx, Ind, Probe, Series, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 const RI = Object.fromEntries(REASONS.map((r, k) => [r, k])) as Record<string, number>;
 const MAX_EXAMPLES = 5;
@@ -227,9 +227,21 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // run): at most this many targets per (tf, pair), evenly picked; the detail says so. o.name: the check's name
 // (default "cut": stage 0; "cut.chosen.first" and "cut.chosen.second" for spec 23.2's cuts of the chosen trials);
 // o.timeKey: the prefix of the times written to o.times (default "cut": cut.m15, cut.h1); o.maxExamples: how many
-// failing bars each trial's probe lists (default 5); o.note: appended to the detail (the targets by kind).
-export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string }): CheckResult {
+// failing bars each trial's probe lists (default 5); o.note: appended to the detail (the targets by kind). o.fails
+// (C3, the lead's D6; lawsearch-dump.md 8 cut_fail.csv): every failing bar is pushed to o.fails.rows with the check's
+// name and o.fails.stage, whatever the caps above (spec 23.2 その試しの名前と外れた足を出す).
+// Plant chosenCutFirstDiff (design 8, C3): in the check "cut.chosen.first" only, the cut decision of the first target
+// of the first trial given (the first chosen trial in table order) gets a planted mark, so that this check fails on a
+// chosen trial and the stop before stage 2 (design 7.7) runs end to end; nothing else changes.
+export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string; fails?: { stage: string; rows: CutFailRow[] } }): CheckResult {
   const cap = o.maxExamples ?? MAX_EXAMPLES;
+  const name = o.name ?? "cut";
+  // cut_fail.csv's text of a decision: rows joined by ";", empty for no candidate (lawsearch-dump.md 8)
+  const failText = (d: string) => (d === "none" ? "" : d.split("|").join(";"));
+  const fail = (trial: TrialDef, pi: number, k: number, start: number, kinds: string, cut: string, uncut: string) => {
+    if (o.fails) o.fails.rows.push({ check: name, stage: o.fails.stage, trial: trial.id, order: trial.order, pi, k, s: start, kinds, cut, uncut });
+  };
+  let planted = o.plant === "chosenCutFirstDiff" && name === "cut.chosen.first" && trials.length > 0 ? trials[0].id : null;
   const probes = new Map<string, Probe>();
   for (const t of trials) probes.set(t.id, probeOf(t.id));
   const sigOf = new Map(sigs.map((s) => [s.trial.id, s]));
@@ -275,8 +287,15 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
             indCut ??= indFor(cut, tf, higher, o.plant);
             got = decisionOf(trial, indCut, ctx, cut, k, o);
           }
+          if (planted === trial.id) {
+            got += "|planted";
+            planted = null;
+          }
           probe.compared++;
-          if (got !== want) miss(probe, `${PAIRS[pi]} ${iso(Tk)} k=${k} [${tg.kinds.join("+")}] cut ${got} uncut ${want}`, cap);
+          if (got !== want) {
+            miss(probe, `${PAIRS[pi]} ${iso(Tk)} k=${k} [${tg.kinds.join("+")}] cut ${got} uncut ${want}`, cap);
+            fail(trial, pi, k, s.s[k], tg.kinds.join("|"), failText(got), failText(want));
+          }
         }
       }
     }
@@ -299,14 +318,17 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
           }
           const e = entryExitIndex(s, T, X);
           probe.compared++;
-          if ((e === null ? -1 : e.j) !== j) miss(probe, `${PAIRS[c.pi]} ${iso(T)} entry ${e?.j} first start ${j}`, cap);
+          if ((e === null ? -1 : e.j) !== j) {
+            miss(probe, `${PAIRS[c.pi]} ${iso(T)} entry ${e?.j} first start ${j}`, cap);
+            fail(trial, c.pi, c.i[r], s.s[c.i[r]], "entry", e === null ? "" : String(e.j), j < 0 ? "" : String(j));
+          }
         }
       }
     }
     if (o.times) o.times[`${o.timeKey ?? "cut"}.${tf}`] = Date.now() - t0;
   }
   const extra = (capped.length ? `DEVELOPMENT CAP: ${capped.join("; ")}` : `${targets.length} targets`) + (o.note ? ` (${o.note})` : "");
-  return resultOf(o.name ?? "cut", [...probes.values()], extra);
+  return resultOf(name, [...probes.values()], extra);
 }
 
 // the signals and the bars without a signal of each trial that poison and presence look at (sampleOf, seed)

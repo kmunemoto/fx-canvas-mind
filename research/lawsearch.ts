@@ -8,20 +8,24 @@
 //   stage0, stage1, calib, stage2, stage3, h1spread, print
 //               refused (exit 2, before any read) while the small trial has not passed (TRIAL_PASSED_SHA256 null)
 // Other variables: TRIALS (comma-separated ids; default the trial's twelve), LS_PLANT, KAPPA_DELTA, KAPPA_PL (default
-// 1: not calibrated, step 7), G_FILE (JSON {trial: g}), HAND_IDS, CUT_MAX (development only: caps the cut's targets
-// per pair; never in CI or a formal run).
+// 1: not calibrated, step 7), G_FILE (JSON {trial: g}), HAND_IDS, CUT_MAX (development only: caps the targets per
+// pair of all three cut checks; a positive integer, anything else refused with exit 2; written to config.json as
+// cut_max; the Python's --run refuses a capped run; never in CI or a formal run).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
-// raised (the run goes on through the stages it can and writes its dumps first); 4 a required hand example failed;
-// 1 any other error. No mode reads research/.cache and none fetches (no --allow-net).
+// raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed
+// check: design 7.7's stop before stage 2); 4 a required hand example failed; 1 any other error. No mode reads
+// research/.cache and none fetches (no --allow-net).
 //
-// The one-process pipeline (design 7.7): config.json; stage 0 (load [S0, END), runStage0); stage 1 (load [S0, SPLIT),
-// h1Only, signals again, stage 1 = stage 0 on the first half, the first-half blind and late tables, trial rows,
-// measures of the floor-passing trials that are not same trials, the blind rows, suspicion and 13's checks, the
-// follow-bar checks, rules 1–6 and the choice; choice.json; then spec 23.2's cut of the chosen trials on every
-// higher-timeframe boundary target of the first half, whose failure stops before stage 2); stage 2 (load [S0, END),
-// the second-half tables, the chosen trials only, their cut on every boundary target of the second half (spec 23.2),
-// κ, Holm, C1–C7, verdicts); then checks.csv, suspect.csv and print.txt.
+// The one-process pipeline (design 7.7): config.json; stage 0 (load [S0, END), runStage0, which stops on any trial's
+// noBlind above 0 in either half, spec 6); stage 1 (load [S0, SPLIT), h1Only, signals again, stage 1 = stage 0 on the
+// first half, the first-half blind and late tables, trial rows, measures of the floor-passing trials that are not same
+// trials, the blind rows, suspicion and 13's checks (a blind row's hit is spec 13's stop), the follow-bar checks,
+// rules 1–6 and the choice; choice.json; then spec 23.2's cut of the chosen trials on every higher-timeframe boundary
+// target of the first half); the stop before stage 2 (any failed check of the gate, stage 0, stage 1 or stage 1's end:
+// stage 2 is not opened, C3 D8); stage 2 (load [S0, END), the second-half tables, the chosen trials only, their cut on
+// every boundary target of the second half (spec 23.2; its failure withholds stage 2's numbers), κ, Holm, C1–C7,
+// verdicts); then checks.csv, cut_fail.csv (every failing bar of the three cut checks), suspect.csv and print.txt.
 
 import { END, N_BARS, PAIRS, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
 import { DIRECTIONAL_F, PLANTS, POISON_1000, QUESTIONS, S_OF_F, SEEDS, TRIAL_STEP3, W0 } from "./lawsearch-rules.ts";
@@ -36,9 +40,9 @@ import type { Stage2In } from "./lawsearch-select.ts";
 import { checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, h1OnlyCheck, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
 import { indsOf, runStage0 } from "./lawsearch-stage0.ts";
 import type { Stage0Out } from "./lawsearch-stage0.ts";
-import { checksRows, dumpBlind, dumpChecks, dumpConfig, dumpLoad, dumpMeasures, dumpStage1, dumpStage2, dumpSuspect, dumpTrades } from "./lawsearch-dump.ts";
+import { checksRows, dumpBlind, dumpChecks, dumpConfig, dumpCutFail, dumpLoad, dumpMeasures, dumpStage1, dumpStage2, dumpSuspect, dumpTrades } from "./lawsearch-dump.ts";
 import { handLines, runHand } from "./lawsearch-hand.ts";
-import type { BlindTable, CheckResult, GenManifest, RunConfig, Stage0Row, Stage1Cand, SuspectRow, TfKey, TrialDef, TrialMeasures, TrialRows, TrialSignals, Universe } from "./lawsearch-types.ts";
+import type { BlindTable, CheckResult, CutFailRow, GenManifest, RunConfig, Stage0Row, Stage1Cand, SuspectRow, TfKey, TrialDef, TrialMeasures, TrialRows, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 // the lead sets this after the small trial has passed (spec 19 step 3); every real-data mode refuses until then
 export const TRIAL_PASSED_SHA256: string | null = null;
@@ -68,6 +72,8 @@ interface Tagged {
 const failedOf = (cs: Tagged[]) => cs.filter((c) => !c.r.passed);
 // the stage whose numbers a failed check withholds (spec 15: その段の数字を出さない)
 const withheldStage = (t: StageTag): StageTag => (t === "stage1end" ? "stage1" : t);
+// the stages whose failed check keeps stage 2 closed (design 7.7, the lead's D8; lawsearch-dump.md 11.14 (a))
+const BEFORE_STAGE2: readonly StageTag[] = ["gate", "stage0", "stage1", "stage1end"];
 
 // rule 2 of spec 10: every "*" row and every row of the trial passed (checks.csv, as the Python reads it; called at the
 // choice, when the checks are those of stages gate, stage0 and stage1)
@@ -92,6 +98,15 @@ const numEnv = (k: string, def: number): number => {
   return x;
 };
 
+// CUT_MAX: null when unset or empty; a positive integer (decimal digits, no sign, no leading zero, a safe integer);
+// anything else is refused (exit 2)
+export const cutMaxOf = (v: string | undefined): number | null => {
+  if (v === undefined) return null;
+  const x = Number(v);
+  if (!/^[1-9][0-9]*$/.test(v) || !Number.isSafeInteger(x)) return refuse(`CUT_MAX ${JSON.stringify(v)} is not a positive integer (the development cap on the cut's targets per pair; unset for no cap)`);
+  return x;
+};
+
 // ---- the pipeline -----------------------------------------------------------------------------------------------
 
 interface RunCtx {
@@ -105,6 +120,8 @@ interface RunCtx {
   cfg: RunConfig;
   cutMax?: number;
   times: Record<string, number>;
+  // every failing bar of the checks cut, cut.chosen.first and cut.chosen.second (ts/cut_fail.csv; C3, D6)
+  cutFails: CutFailRow[];
 }
 
 const setOf = (u: Universe, tf: TfKey) => (tf === "m15" ? u.m15 : u.h1);
@@ -153,8 +170,14 @@ function chosenCut(c: RunCtx, u: Universe, trials: TrialDef[], sigs: TrialSignal
   const stats: Record<string, number> = {};
   const targets = cutTargets(u, trials, sigs, { htf: "all", fromStart: half === "second" ? SPLIT : undefined, stats });
   const note = `${cutStatsText(stats)}; the chosen trials on every higher-timeframe boundary target of the ${half} half, spec 23.2`;
-  return cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note });
+  return cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note, fails: { stage: half === "first" ? "stage1end" : "stage2", rows: c.cutFails } });
 }
+
+// the plant blindRowHit (design 8, C3): stage 1's blind row that is reported as hit (its measures unchanged)
+const BLIND_ROW_HIT = "blind.m15.USD_JPY.buy";
+// spec 13's stop on a blind row (C3, the lead's D10): the note and the console's STOP line
+const stop13Text = (stage: "stage1" | "stage2", ids: readonly string[]) =>
+  `${stage}: the blind (物差し) rows ${ids.join(" ")} hit spec 13's lines; stop and look (spec 13: 物差しが当たったら、すべて止めて調べる); ${stage === "stage1" ? "stage 1's numbers are withheld and stage 2 is not opened" : "stage 2's numbers are withheld"}`;
 
 // the failing trials of a check and their failing bars, for a STOP line
 const failingText = (r: CheckResult): string => r.probes.filter((p) => p.mismatched > 0).map((p) => `${p.name}: ${p.mismatched} of ${p.compared} (${p.examples.join(" | ")})`).join("; ");
@@ -181,6 +204,8 @@ async function pipeline(c: RunCtx): Promise<number> {
   put("kappa.pl", c.cfg.kappaPl);
   put("kappa.from", c.cfg.kappaFrom);
   put("g.from", c.cfg.gFrom);
+  // a capped run says so in print.txt, whatever the checks' details (lawsearch-dump.md 2: cut_max)
+  if (c.cfg.cut_max !== null) put("note.cut_max", `DEVELOPMENT CAP: CUT_MAX ${c.cfg.cut_max} targets per pair on every cut check (cut, cut.chosen.first, cut.chosen.second); not a formal run`);
   if (c.times.gen !== undefined) put("time.gen.ms", c.times.gen);
 
   // gate 4: the avoid table actually read (plant avoidFull: the table with the second half) against its sha256
@@ -204,6 +229,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     const pc = printCheck(print.map(([k]) => k));
     tagged.push({ stage: "end", r: pc });
     await dumpChecks(dir, tagged.map((t) => t.r), tagged.map((t) => t.stage));
+    await dumpCutFail(dir, c.cutFails);
     if (pc.passed) await Deno.writeTextFile(`${dir}/print.txt`, print.map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
     else code = 3;
     console.log(`exit ${pc.passed ? code : 3}: ${failedOf(tagged).map((t) => t.r.name).join(", ") || "every check passed"}`);
@@ -220,7 +246,7 @@ async function pipeline(c: RunCtx): Promise<number> {
   try {
     const ts = Date.now();
     const u0 = await loadUniverse(src, S0, END, { purpose: "syn0", band: "syn", plant: c.plant });
-    s0 = await runStage0(u0, c.trials, c.cfg, avoid, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax });
+    s0 = await runStage0(u0, c.trials, c.cfg, avoid, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax, cutFails: c.cutFails });
     for (const r of s0.checks) tagged.push({ stage: "stage0", r });
     for (const [k, v] of Object.entries(s0.times)) if (k !== "stage0") put(`time.${k}.ms`, v);
     put("time.stage0.ms", Date.now() - ts);
@@ -238,6 +264,7 @@ async function pipeline(c: RunCtx): Promise<number> {
   } catch (e) {
     if (!isStop(e)) throw e;
     tagged.push({ stage: "stage0", r: { name: "stop.stage0", passed: false, detail: (e as Error).message, probes: [] } });
+    put("note.stage2", "not opened: a STOP in stage 0 (stop.stage0) ended the run");
     return await finish();
   }
   const row0 = new Map<string, Stage0Row>(s0.rows.map((r) => [r.trial, r]));
@@ -296,8 +323,11 @@ async function pipeline(c: RunCtx): Promise<number> {
     await dumpMeasures(dir, "stage1", [...ms, ...blind]);
     // spec 13
     const sus: SuspectRow[] = [];
+    const blindHits: string[] = [];
     for (const m of [...ms, ...blind]) {
-      const s = suspectOf(m);
+      let s = suspectOf(m);
+      // plant blindRowHit (design 8): this blind row is reported as hit at stage 1, its measures unchanged
+      if (c.plant === "blindRowHit" && m.trial === BLIND_ROW_HIT) s = { ...s, hitA: true, hit: true };
       let checks: SuspectRow["checks"] = { cut: null, poison1000: null, presence: null, retrace: null, hand: "not-run" };
       let checksPassed: boolean | null = null;
       if (s.hit && !blindId(m.trial)) {
@@ -306,10 +336,19 @@ async function pipeline(c: RunCtx): Promise<number> {
         checks = { cut: r.cut, poison1000: r.poison1000, presence: r.presence, retrace: r.retrace, hand: r.hand };
         checksPassed = r.passed;
       }
-      if (s.hit && blindId(m.trial)) tagged.push({ stage: "stage1", r: { name: "suspect.blind.stage1", passed: false, detail: `the blind row ${m.trial} hits spec 13's lines (spec 13: stop and look)`, probes: [] } });
+      if (s.hit && blindId(m.trial)) {
+        blindHits.push(m.trial);
+        tagged.push({ stage: "stage1", r: { name: "suspect.blind.stage1", passed: false, detail: `the blind row ${m.trial} hits spec 13's lines (spec 13: stop and look)`, probes: [] } });
+      }
       sus.push({ ...s, checks, checksPassed });
     }
     await dumpSuspect(dir, sus);
+    // spec 13 (C3, the lead's D10): a blind row's hit stops the run at the end of stage 1 (the stop before stage 2
+    // below; its failed check withholds stage 1's numbers); stage 1 still runs to its end and writes its dumps
+    if (blindHits.length > 0) {
+      console.log(`STOP: ${stop13Text("stage1", blindHits)}`);
+      put("note.stop13", stop13Text("stage1", blindHits));
+    }
     // spec 10
     const ok = checksOkOf(tagged);
     const susOf = new Map(sus.map((s) => [s.id, s]));
@@ -341,19 +380,25 @@ async function pipeline(c: RunCtx): Promise<number> {
     tagged.push({ stage: "stage1end", r: cut1 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
     put("time.stage1.ms", Date.now() - ts);
-    if (!cut1.passed) {
-      console.log(`STOP: spec 23.2's cut of the chosen trials failed at the end of stage 1; stage 2 is not opened: ${failingText(cut1)}`);
-      put("note.stage2", "not opened: the cut of the chosen trials on the first half failed (spec 23.2)");
-      return await finish();
-    }
+    if (!cut1.passed) console.log(`STOP: spec 23.2's cut of the chosen trials failed at the end of stage 1; stage 2 is not opened: ${failingText(cut1)}`);
     if (!withheld("stage1")) {
       put("chosen.m15", chosen.m15.join("|"));
       put("chosen.h1", chosen.h1.join("|"));
       put("K_total", K);
     }
+    // the stop before stage 2 (design 7.7, the lead's D8; lawsearch-dump.md 11.14 (a)): any failed check of the gate,
+    // stage 0, stage 1 or stage 1's end keeps stage 2 closed (spec 11 opens the second half once, and a run with a
+    // known failure must not use it). No check row of its own: note.stage2 names the failed checks.
+    const early = [...new Set(failedOf(tagged).filter((t) => BEFORE_STAGE2.includes(t.stage)).map((t) => t.r.name))];
+    if (early.length > 0) {
+      console.log(`STOP: failed checks before stage 2 (${early.join(", ")}); stage 2 is not opened (spec 11)`);
+      put("note.stage2", `not opened: failed checks before stage 2: ${early.join(" ")} (spec 11; design 7.7)`);
+      return await finish();
+    }
   } catch (e) {
     if (!isStop(e)) throw e;
     tagged.push({ stage: "stage1", r: { name: "stop.stage1", passed: false, detail: (e as Error).message, probes: [] } });
+    put("note.stage2", "not opened: a STOP in stage 1 (stop.stage1) ended the run");
     return await finish();
   }
 
@@ -394,6 +439,8 @@ async function pipeline(c: RunCtx): Promise<number> {
     const cut2 = chosenCut(c, u2, chosenTs, chosenTs.map(sig2), avoid, answerKnowing, "second", cutTimes);
     tagged.push({ stage: "stage2", r: cut2 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
+    // spec 23.2 (C3, the lead's D9): a failed cut.chosen.second withholds every stage-2 number in print.txt (its failed
+    // check, through withheld()); every stage-2 dump is still written, and the Python compares them as usual
     if (!cut2.passed) console.log(`STOP: spec 23.2's cut of the chosen trials failed on the second half; stage 2's numbers are withheld: ${failingText(cut2)}`);
     const trOf = new Map<string, TrialRows>();
     const rowsOf = (t: TrialDef) => {
@@ -421,6 +468,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     const msK = ms.map((m) => ({ ...m, delta: withKappa(m.delta, c.cfg.kappaDelta), pl: withKappa(m.pl, c.cfg.kappaPl) }));
     await dumpMeasures(dir, "stage2", [...msK, ...blind]);
     const sus: SuspectRow[] = [];
+    const blindHits2: string[] = [];
     for (const m of [...ms, ...blind]) {
       const s = suspectOf(m);
       let checks: SuspectRow["checks"] = { cut: null, poison1000: null, presence: null, retrace: null, hand: "not-run" };
@@ -431,10 +479,19 @@ async function pipeline(c: RunCtx): Promise<number> {
         checks = { cut: r.cut, poison1000: r.poison1000, presence: r.presence, retrace: r.retrace, hand: r.hand };
         checksPassed = r.passed;
       }
-      if (s.hit && blindId(m.trial)) tagged.push({ stage: "stage2", r: { name: "suspect.blind.stage2", passed: false, detail: `the blind row ${m.trial} hits spec 13's lines (spec 13: stop and look)`, probes: [] } });
+      if (s.hit && blindId(m.trial)) {
+        blindHits2.push(m.trial);
+        tagged.push({ stage: "stage2", r: { name: "suspect.blind.stage2", passed: false, detail: `the blind row ${m.trial} hits spec 13's lines (spec 13: stop and look)`, probes: [] } });
+      }
       sus.push({ ...s, checks, checksPassed });
     }
     await dumpSuspect(dir, sus);
+    // spec 13 (C3, D10): a blind row's hit at stage 2 stops the run at the end of stage 2 (the last stage of the
+    // trial): its dumps are all written, and its failed check withholds stage 2's numbers
+    if (blindHits2.length > 0) {
+      console.log(`STOP: ${stop13Text("stage2", blindHits2)}`);
+      put("note.stop13", stop13Text("stage2", blindHits2));
+    }
     const susOf = new Map(sus.map((s) => [s.id, s]));
     const cands: Stage2In[] = msK.map((m) => {
       const t = c.trials.find((x) => x.id === m.trial)!;
@@ -483,6 +540,9 @@ async function main(): Promise<number> {
   if (!["hand", "syn", "walkfiles"].includes(mode)) refuse(`MODE ${JSON.stringify(mode)} is not one of hand, syn, walkfiles, ${REAL_MODES.join(", ")}`);
   const plant = env("LS_PLANT") ?? "";
   if (plant && !PLANTS.includes(plant)) refuse(`LS_PLANT ${plant} is not a planted error of spec 16`);
+  // CUT_MAX (design 7.7, the lead's D5): unset or empty, no cap; otherwise a positive integer in decimal digits, or the
+  // run is refused before any file is read (before C3, 0, -3 or abc switched the cut off or were ignored)
+  const cutMax = cutMaxOf(env("CUT_MAX"));
   // gate 1: the rules files
   const rules = await checkRulesFiles();
   if (!rules.passed) refuse(`the rules files: ${rules.detail}`);
@@ -550,9 +610,9 @@ async function main(): Promise<number> {
     gFrom,
     plant,
     spreadH1Sha256: SPREAD_H1_SHA256,
+    cut_max: cutMax,
   };
-  const cutMaxS = env("CUT_MAX");
-  return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMaxS ? Number(cutMaxS) : undefined, times });
+  return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, times, cutFails: [] });
 }
 
 if (import.meta.main) {

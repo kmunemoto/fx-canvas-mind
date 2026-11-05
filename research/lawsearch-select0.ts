@@ -296,24 +296,37 @@ export function stage3Estimate(n2: number): number {
 
 // ---- stage 0 ---------------------------------------------------------------------------------------------------
 
+// the trial the plant dropSecondStrata hits (design 8: one that CMP-N 1001 does not choose)
+const DROP_SECOND_STRATA_TRIAL = "m15.E04.F00";
+// a stratum's pair index (stratumOf: ((pi × 2 + d) × 24 + hour) × 4 + season)
+const stratumPair = (stratum: number): number => Math.floor(stratum / (2 * 24 * 4));
+
 // Every trial's row of spec 9 (input order is kept; the callers pass table order). g and gDf: spec 9's g and its df
 // per trial id (from the N runs, step 4); a trial without g has the five fields g, df, passMin, mde and mark null,
 // and stage3Estimate (n2 × 52 ÷ 76) is always written (spec 23.3; lawsearch-dump.md 7).
+// plant (C3, design 8 dropSecondStrata): for m15.E04.F00 only, the second half's blind strata lose every stratum of
+// USD/JPY, so that trial's second-half noBlind is above 0 (runStage0 must stop on it: spec 6, the lead's D4).
 export function stage0(
   sigs: TrialSignals[],
   tf: Record<TfKey, TfSet>,
   passing: Record<TfKey, { first: Uint8Array[]; second: Uint8Array[] }>,
   g: Record<string, number>,
   gDf: Record<string, number>,
+  plant = "",
 ): Stage0Row[] {
   const strata: Record<TfKey, { first: Set<number>; second: Set<number> }> = {
     m15: { first: blindStrataOf(tf.m15, passing.m15.first), second: blindStrataOf(tf.m15, passing.m15.second) },
     h1: { first: blindStrataOf(tf.h1, passing.h1.first), second: blindStrataOf(tf.h1, passing.h1.second) },
   };
+  const secondOf = (sig: TrialSignals): Set<number> => {
+    const all = strata[sig.tf].second;
+    if (plant !== "dropSecondStrata" || sig.trial.id !== DROP_SECOND_STRATA_TRIAL) return all;
+    return new Set([...all].filter((x) => stratumPair(x) !== 0));
+  };
   const base = sigs.map((sig) => {
     const t = tf[sig.tf];
     const first = stage0Half(sig, "first", t, strata[sig.tf].first);
-    const second = stage0Half(sig, "second", t, strata[sig.tf].second);
+    const second = stage0Half(sig, "second", t, secondOf(sig));
     let emitted = 0;
     let r1All = 0;
     let r1b = 0;

@@ -784,4 +784,28 @@ export interface RunConfig {
   gFrom: string;
   plant: string;
   spreadH1Sha256: string;
+  // the development cap CUT_MAX on the cut's targets per pair (a positive integer), or null when it is not set
+  // (lawsearch-dump.md 2, C3; the Python's --run refuses a run whose cut_max is not null)
+  cut_max: number | null;
+}
+
+// ---- ts/cut_fail.csv (lawsearch-dump.md 8, TS only; C3): one failing bar of a cut check --------------------
+
+export interface CutFailRow {
+  // the check (cut, cut.chosen.first, cut.chosen.second) and its checks.csv stage (stage0, stage1end, stage2)
+  check: string;
+  stage: string;
+  trial: string;
+  // the trial's table order (the file's order) and the pair's index
+  order: number;
+  pi: number;
+  // the bar's index in the load the cut ran on, and its start (ms)
+  k: number;
+  s: number;
+  // the target's kinds joined by "|", or "entry" for the entry-bar sub-check
+  kinds: string;
+  // the decision at k in the cut and the uncut run (rows joined by ";", empty for no candidate); for "entry", the
+  // entry bar's index the trade code picked and the uncut series' first start (empty for none)
+  cut: string;
+  uncut: string;
 }

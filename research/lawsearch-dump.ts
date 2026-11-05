@@ -16,6 +16,7 @@ import { REASONS } from "./lawsearch-rules.ts";
 import type {
   BlindTable,
   CheckResult,
+  CutFailRow,
   ExclCtx,
   RunConfig,
   SkipReason,
@@ -270,10 +271,9 @@ export async function dumpStage0(dir: string, rows: Stage0Row[]): Promise<void> 
       put(`${half}.no_blind`, fmtInt(h.noBlind));
       put(`${half}.per_week`, fmtReal(h.perWeek));
     }
-    put("all.emitted", fmtInt(r.emitted));
-    put("all.r1", fmtInt(r.r1All));
-    put("all.r1w", fmtInt(r.r1w));
-    put("all.r1b", fmtInt(r.r1b));
+    // C3 (the lead's D1): the whole-range counts all.emitted, all.r1, all.r1w and all.r1b are not written per trial
+    // (with the first-half keys they gave the trial's second-half ① count and r2–r6 total: spec 9 後半, 23.3); only
+    // adds_up is, and the four counts go into stage0_totals.csv as per-timeframe sums
     put("all.adds_up", fmtBool(r.addsUp));
     put("floor", fmtBool(r.floor));
     put("same_as", r.sameAs ?? "");
@@ -296,6 +296,11 @@ export async function dumpStage0(dir: string, rows: Stage0Row[]): Promise<void> 
   }
   for (const tf of ["m15", "h1"] as const) tot.push(["", `groups.${tf}`, fmtInt(new Set(rows.filter((r) => r.tf === tf && r.group !== "").map((r) => r.group)).size)]);
   for (const tf of ["m15", "h1"] as const) tot.push(["", `floor.${tf}`, fmtInt(rows.filter((r) => r.tf === tf && r.floor).length)]);
+  // C3 (D1): each trial's whole-range counts summed over the timeframe's trials (table order, int addition)
+  const sumOf = (tf: TfKey, f: (r: Stage0Row) => number) => rows.filter((r) => r.tf === tf).reduce((a, r) => a + f(r), 0);
+  for (const [key, f] of [["all.emitted", (r: Stage0Row) => r.emitted], ["all.r1", (r: Stage0Row) => r.r1All], ["all.r1w", (r: Stage0Row) => r.r1w], ["all.r1b", (r: Stage0Row) => r.r1b]] as const) {
+    for (const tf of ["m15", "h1"] as const) tot.push(["", `${key}.${tf}`, fmtInt(sumOf(tf, f))]);
+  }
   await writeCsv(`${dir}/stage0_totals.csv`, ["half", "key", "value"], tot);
 }
 
@@ -583,4 +588,19 @@ export function checksRows(rs: CheckResult[], stages?: readonly string[]): strin
 }
 export async function dumpChecks(dir: string, rs: CheckResult[], stages: readonly string[]): Promise<void> {
   await writeCsv(`${dir}/checks.csv`, ["trial", "name", "passed", "detail", "stage"], checksRows(rs, stages));
+}
+
+// cut_fail.csv (TS only, C3; lawsearch-dump.md 8, the lead's D6): every failing bar of the checks cut, cut.chosen.first
+// and cut.chosen.second; always written, with its header. Order: check, trial (table order), pair (table order), k,
+// kinds.
+const CUT_CHECK_ORDER: Readonly<Record<string, number>> = { cut: 0, "cut.chosen.first": 1, "cut.chosen.second": 2 };
+export async function dumpCutFail(dir: string, rows: ReadonlyArray<CutFailRow>): Promise<void> {
+  const rank = (c: string) => {
+    const x = CUT_CHECK_ORDER[c];
+    if (x === undefined) throw new Error(`dumpCutFail: ${c} is not a cut check of cut_fail.csv`);
+    return x;
+  };
+  for (const r of rows) rank(r.check);
+  const sorted = [...rows].sort((a, b) => rank(a.check) - rank(b.check) || a.order - b.order || a.pi - b.pi || a.k - b.k || (a.kinds < b.kinds ? -1 : a.kinds > b.kinds ? 1 : 0));
+  await writeCsv(`${dir}/cut_fail.csv`, ["check", "stage", "trial", "pair", "k", "s", "kinds", "cut", "uncut"], sorted.map((r) => [r.check, r.stage, r.trial, PAIRS[r.pi], fmtInt(r.k), fmtInt(r.s), r.kinds, r.cut, r.uncut]));
 }

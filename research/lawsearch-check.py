@@ -18,7 +18,8 @@ Usage:
   python3 -I research/lawsearch-check.py --run RUN
   python3 -I research/lawsearch-check.py --compare RUN
 Exit codes: 0 ok, 2 refused, 3 spec 2/15 check or STOP, 4 hand example failed, 5 TS-Python difference,
-6 a stop of spec 8.5.
+6 a stop of spec 8.5. A compared run with a spec 13 blind-row stop exits 3 unless the comparison gives 6 or 5
+(lawsearch-dump.md 10, C3). --run refuses (2) a run whose ts/config.json cut_max is not null or missing (C3).
 """
 
 import bisect
@@ -4157,9 +4158,11 @@ class Run:
         self.gmo = os.path.join(run_dir, "gmo")
         self.files = {}
         self.allowed = []
+        self.blind_hits = {}     # stage -> the blind row ids whose spec 13 suspicion hit (C3, D10)
+        self.stage2_closed = []  # why stage 2 was not opened (C3, D8 / D10)
 
     # -------------------------------------------------------------------------------------------- setup
-    def setup(self, refuse_plant=True):
+    def setup(self, refuse_plant=True, refuse_cut_max=False):
         mpath = os.path.join(self.run, "manifest.json")
         if not os.path.exists(mpath):
             raise Refused(f"{mpath}: no manifest.json")
@@ -4178,6 +4181,16 @@ class Run:
         if self.config.get("plant"):
             if refuse_plant:
                 raise Refused(f"config.json has a plant ({self.config['plant']}): nothing is compared")
+        if refuse_cut_max:
+            # dump.md 2 / py-design 2 (C3, the lead's D5): cut_max is the TS's development cap on its cut checks. A
+            # capped run's checks pass under their normal names, so --run never compares one; a config.json without
+            # the key (written before C3) cannot say whether it was capped.
+            if "cut_max" not in self.config:
+                raise Refused("config.json has no cut_max key: a run written before C3 cannot say whether its cut "
+                              "checks were capped, so it is not compared")
+            if self.config["cut_max"] is not None:
+                raise Refused(f"config.json cut_max {json.dumps(self.config['cut_max'])}: a capped development run "
+                              f"is not compared")
         want = self.config.get("spreadH1Sha256")
         got = sha256_file(ROOT / "research/ledger/spread-hours-h1.csv")
         if want is not None and want != got:
@@ -4250,6 +4263,42 @@ class Run:
             return []
         return [f"{r['trial']} {r['name']}: {r.get('detail', '')}" for r in self._check_rows(("stage1end",))
                 if r["passed"] != "1"]
+
+    # dump.md 11.14 (a) / py-design 5.6 (C3, the lead's D8): a failed check of these stages keeps stage 2 closed
+    # (spec 11 opens the second half once, and a run with a known failure must not use it).
+    PRE_STAGE2_STAGES = ("gate", "stage0", "stage1", "stage1end")
+
+    def pre_stage2_failed(self):
+        """The failed rows of ts/checks.csv among the stages gate, stage0, stage1 and stage1end, as text (empty
+        when none). A checks.csv without the stage column (before round C2) gives none, as stage1end_failed."""
+        if self.checks is None or not self.checks or "stage" not in self.checks[0]:
+            return []
+        return [f"{r['stage']} {r['trial']} {r['name']}" for r in self._check_rows(self.PRE_STAGE2_STAGES)
+                if r["passed"] != "1"]
+
+    def cut_chosen_second_failed(self):
+        """dump.md 11.14 (b) (C3, the lead's D9): the failed `cut.chosen.second` rows (stage stage2) of
+        ts/checks.csv, as text. The cut is the TS's; the Python only reports it in its log."""
+        if self.checks is None or not self.checks or "stage" not in self.checks[0]:
+            return []
+        return [f"{r['trial']} {r['name']}: {r.get('detail', '')}" for r in self._check_rows(("stage2",))
+                if r["name"] == "cut.chosen.second" and r["passed"] != "1"]
+
+    def stage2_closed_why(self):
+        """dump.md 11.14 / py-design 5.6 (C3): the reasons stage 2 is not opened, as text; empty when it is opened.
+        Opened only when K_total > 0, no blind row of the Python's own stage 1 hit (spec 13, the lead's D10), and no
+        row of ts/checks.csv of the stages gate, stage0, stage1 or stage1end failed (the lead's D8)."""
+        why = []
+        if self.K_total == 0:
+            why.append("no chosen trial (K_total 0)")
+        hits = self.blind_hits.get("stage1", [])
+        if hits:
+            why.append("spec 13: a blind row hit at stage 1 (" + ", ".join(hits) + ")")
+        bad = self.pre_stage2_failed()
+        if bad:
+            more = f" and {len(bad) - 20} more" if len(bad) > 20 else ""
+            why.append("a TS check failed before stage 2 (" + "; ".join(bad[:20]) + more + ")")
+        return why
 
     def _read_ts_suspect(self):
         p = os.path.join(self.ts, "suspect.csv")
@@ -4431,8 +4480,8 @@ class Run:
             n2, w2 = I["second"]
             s0.row([t["id"], "second.counted", str(n2)])
             s0.row([t["id"], "second.weeks", str(w2)])
-            for k, v in I["all"]:
-                s0.row([t["id"], k, v])
+            # dump.md 7 (C3, D1): of the whole-range counts, only the trial's adds-up 1/0 is written per trial
+            s0.row([t["id"], "all.adds_up", f_bool(I["adds_up"])])
             s0.row([t["id"], "floor", f_bool(I["floor"])])
             s0.row([t["id"], "same_as", f_text(same[t["id"]])])
             s0.row([t["id"], "group", f_text(groups[t["id"]])])
@@ -4453,6 +4502,15 @@ class Run:
             st.row(["", f"groups.{tf}", str(len(gs))])
         for tf in TFS:
             st.row(["", f"floor.{tf}", str(sum(1 for t in self.trials if t["tf"] == tf and info[t["id"]]["floor"]))])
+        # dump.md 7 (C3, the lead's D1): the whole-range counts, summed over each timeframe's trials (table order,
+        # int addition), after floor.h1: all.emitted.m15, all.emitted.h1, all.r1.m15, ... all.r1b.h1
+        for k in ("all.emitted", "all.r1", "all.r1w", "all.r1b"):
+            for tf in TFS:
+                n = 0
+                for t in self.trials:
+                    if t["tf"] == tf:
+                        n += info[t["id"]]["all_counts"][k]
+                st.row(["", f"{k}.{tf}", str(n)])
         self.load0 = load
 
     def stage0_counts(self, load, t, rows):
@@ -4488,7 +4546,11 @@ class Run:
             if nb:
                 # spec 6 外す理由の後で数えるもの: 0 by construction; otherwise a program error that stops. The second
                 # half's count is no longer written (23.3), so the check is made here for both halves.
-                raise Stop(f"stage 0 {t['id']} {half}: {nb} counted signals with a trade but no blind bar")
+                # (C3) the message names the trial and the half; the second half's count is not shown (spec 9 後半,
+                # 23.3: a trial's second-half numbers wait for stage 2), as the TS's stop (the lead's D4)
+                n_txt = f"{nb} " if half == "first" else ""
+                raise Stop(f"stage 0 {t['id']} {half}: {n_txt}counted signals with a trade but no blind bar "
+                           f"(spec 6: a program error)")
             kv.append(("no_trade", str(nt)))
             kv.append(("no_blind", str(nb)))
             kv.append(("per_week", f_real(len(cnt) / HALF_WEEKS[half])))
@@ -4499,8 +4561,11 @@ class Run:
         n1w = sum(1 for r in rows if r[7] == "r1w")
         n1b = sum(1 for r in rows if r[7] == "r1b")
         rest = sum(1 for r in rows if r[7] in ("r2", "r3", "r4", "r5", "r6", "counted") and r[8] in ("first", "second"))
-        out["all"] = [("all.emitted", str(len(em))), ("all.r1", str(n1)), ("all.r1w", str(n1w)),
-                      ("all.r1b", str(n1b)), ("all.adds_up", f_bool(len(em) == n1 + n1w + n1b + rest))]
+        # dump.md 7 / 11.7 (C3, the lead's D1): the four whole-range counts span both halves, so with the first-half
+        # keys they would give the trial's second-half numbers (spec 9 後半, 23.3). They are kept here for the
+        # trial's own adds-up rule and summed per timeframe into stage0_totals.csv; per trial only the 1/0 is written.
+        out["all_counts"] = {"all.emitted": len(em), "all.r1": n1, "all.r1w": n1w, "all.r1b": n1b}
+        out["adds_up"] = len(em) == n1 + n1w + n1b + rest
         out["floor"] = floor_pass(out["first"][0], out["first"][1], out["second"][0], out["second"][1])
         fc = [r for r in rows if r[7] == "counted" and r[8] == "first"]
         out["keys"] = {(r[3], r[0], r[5]) for r in fc}
@@ -4671,6 +4736,13 @@ class Run:
                         self.measures.row([stage, half, rid, k, v])
                     su = suspicion(len(sig), None, c["a"], c["pl"], c["M"], None, c["W"], is_blind=True)
                     self.write_suspect(stage, half, rid, su)
+                    self.note_blind(stage, rid, su)
+
+    def note_blind(self, stage, rid, su):
+        """spec 13 物差しが当たったら、すべて止めて調べる (C3, the lead's D10): a blind row whose suspicion hits stops the
+        run at the end of this stage (dump.md 11.14 (c)). The stage's files are still written in full."""
+        if su["hit"]:
+            self.blind_hits.setdefault(stage, []).append(rid)
 
     def write_suspect(self, stage, half, rid, su):
         tsr = self.ts_suspect.get((stage, half, rid), {})
@@ -4798,17 +4870,15 @@ class Run:
 
     # -------------------------------------------------------------------------------------------- stage 2
     def stage2(self):
+        """Stage 2. compute() opens it only when stage2_closed_why() is empty (C3: K_total > 0, no own stage-1
+        blind hit, no failed TS check before stage 2; spec 23.2's failed cut of the chosen trials is one of them)."""
         log = self.log
-        if self.K_total == 0:
-            log("stage 2: no chosen trial, the second half is not opened")
-            return
-        bad = self.stage1end_failed()
-        if bad:
-            # spec 23.2: a chosen trial failed the cut on every boundary target of the first half -> stage 2 is
-            # not opened; the trials and bars are in the TS's checks.csv
-            log("stage 2: not opened, the cut of the chosen trials failed (spec 23.2): " + "; ".join(bad[:10]))
-            self.stage2_closed = bad
-            return
+        cut2 = self.cut_chosen_second_failed()
+        if cut2:
+            # dump.md 11.14 (b) (the lead's D9): the TS withholds stage 2's numbers in print.txt; its dumps are
+            # written, and the Python computes, writes and compares stage 2's files as usual
+            log("stage 2: the TS's cut.chosen.second failed (the TS withholds stage 2's numbers in print.txt; "
+                "stage 2's files are written and compared as usual): " + "; ".join(cut2[:10]))
         log("stage 2: load [S0, END)")
         load = StageLoad(self.gmo, "syn2", S0, END, self.avoid, "", self.mode)
         self.write_load(load, "syn2", self.load_csv, self.askbid_csv)
@@ -4919,10 +4989,22 @@ class Run:
         self.suspect = self.out("suspect.csv", ["stage", "half", "id", "looked", "hit_delta", "hit_a", "hit_pl",
                                                 "hit_late", "hit_W", "hit", "cut", "poison1000", "presence", "retrace",
                                                 "hand", "checks_passed"])
+        self.blind_hits = {}
+        self.stage2_closed = []
         try:
             self.stage0()
             self.stage1()
-            self.stage2()
+            why = self.stage2_closed_why()
+            if why:
+                # dump.md 11.14 (a), (c): no stage-2 file or row is written; the comparison is still made
+                self.log("stage 2: not opened: " + " | ".join(why))
+                self.stage2_closed = why
+            else:
+                self.stage2()
+            for st in ("stage1", "stage2"):
+                for rid in self.blind_hits.get(st, []):
+                    self.log(f"STOP 13 {st} {rid}: a blind row hit spec 13's lines (the run stops at the end of "
+                             f"{st})")
         finally:
             for c in self.files.values():
                 c.write()
@@ -4932,7 +5014,8 @@ class Run:
 # 17. The comparator (lawsearch-dump.md 9, 10)
 # ----------------------------------------------------------------------------------------------------------------
 
-TS_ONLY = {"checks.csv", "choice.json", "print.txt", "config.json"}
+# dump.md 10 (C3): cut_fail.csv is TS only too (the Python does not run the cut, lawsearch-dump.md 8)
+TS_ONLY = {"checks.csv", "choice.json", "print.txt", "config.json", "cut_fail.csv"}
 SUSPECT_TS_COLS = {"cut", "poison1000", "presence", "retrace", "hand", "checks_passed"}
 VALUE_NAMES = ("delta", "a", "pl", "delta_late", "dF")   # measures.csv V (dump 8)
 DEC_COLS = set(_SIDE_KEYS)
@@ -5422,33 +5505,92 @@ class Comparator:
                     return f"{label} of {t} within 1e-9 of the threshold {thr!r} ({side})"
         return None
 
-    def _holm_near(self, pkey):
-        """p (pkey: p_iut or p_delta) vs a Holm threshold 0.025/(K-k+1), or the order of two p (stage2.csv)."""
-        ps = self._vals("stage2.csv", pkey)
-        K = len({kk[0] for kk in list(self.ts_tab.get("stage2.csv", {})) + list(self.py_tab.get("stage2.csv", {}))})
-        thr = [0.025 / (K - k + 1) for k in range(1, K + 1)]
-        return self._thr_near(ps, thr, pkey) or self._pair_near(ps, pkey) or self._tie_by_split_t(ps, pkey)
+    # ---------------------------------------------------------------- stage2.csv: X's own Holm decisions (C3, D2)
+    def _s2_value(self, side, tid, key):
+        """The float of stage2.csv (tid, key) on one side, or None."""
+        tab = self.ts_tab.get("stage2.csv", {}) if side == "ts" else self.py_tab.get("stage2.csv", {})
+        r = tab.get((tid, key))
+        if r is None or r.get("value", "") == "":
+            return None
+        try:
+            return float(r["value"])
+        except ValueError:
+            return None
 
-    def _tie_by_split_t(self, ps, pkey):
-        """Two p < 1 exactly tied in both implementations are ordered by min(t_delta, t_pl) (t_delta for the
-        delta-only Holm; spec 11). When one of those t follows a candidate split adopted by 9.3 (spec 23.5), the
-        order may differ too (dump 11.13)."""
+    def _s2_K(self):
+        """K of the Holm thresholds: the chosen trials, as the trials of stage2.csv on either side."""
+        return len({kk[0] for kk in list(self.ts_tab.get("stage2.csv", {})) + list(self.py_tab.get("stage2.csv", {}))})
+
+    def _holm_pair(self, pkey, tid):
+        """dump.md 11.12 / 11.13 (C3, the lead's D2): trial tid is one of the two trials of a near pair of pkey
+        (p_iut or p_delta: within 1e-9 of each other in either implementation, and not exactly equal in both), or
+        of an exact tie of pkey (equal in both, p < 1) broken by a t that follows an adopted 8.5 split. Only pairs
+        that include tid count: a near or tied pair of two other trials never excuses a key of tid."""
         by = {}
-        for (s, t, x) in ps:
-            by.setdefault(t, {})[s] = x
-        vs = ("delta",) if pkey == "p_delta" else ("delta", "pl")
-        ids = [t for t in by if len(by[t]) == 2]
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                a, b = by[ids[i]], by[ids[j]]
-                if not (a["ts"] == b["ts"] and a["py"] == b["py"] and a["ts"] < 1.0 and a["py"] < 1.0):
-                    continue
-                for tid in (ids[i], ids[j]):
-                    for v in vs:
-                        if ("stage2", "second", tid, v, "p") in self.adopted:
-                            return (f"{pkey} of {ids[i]} and {ids[j]} tied; the t of {tid} follows the TS's "
-                                    f"candidate of {v}, adopted")
+        for (s_, t, x) in self._vals("stage2.csv", pkey):
+            by.setdefault(t, {})[s_] = x
+        a = by.get(tid)
+        if not a:
+            return None
+        for other, b in by.items():
+            if other == tid:
+                continue
+            sides = [sd for sd in ("ts", "py") if sd in a and sd in b]
+            if len(sides) == 2 and all(a[sd] == b[sd] for sd in sides):
+                r = self._tie_split_t(pkey, tid, other, a)
+                if r:
+                    return r
+                continue
+            for sd in sides:
+                if abs(a[sd] - b[sd]) < 1e-9:
+                    return f"{pkey} of {tid} and {other} within 1e-9 ({sd})"
         return None
+
+    def _tie_split_t(self, pkey, tid, other, a):
+        """dump.md 11.13 (C3, the lead's D2): two p < 1 exactly tied in both implementations are ordered by
+        min(t_delta, t_pl) (t_delta for the delta-only Holm; spec 11). The tie may be broken differently only when
+        one of the two trials has an adopted split on a t the order uses: an adopted delta.use_p or pl.use_p split
+        whose t (t_delta or t_pl) is min(t_delta, t_pl) of that trial in either implementation; for the delta-only
+        Holm, an adopted delta.use_p split. A use_lb split changes no t; two p = 1 are never ordered by t."""
+        if not (a["ts"] < 1.0 and a["py"] < 1.0):
+            return None
+        vs = ("delta",) if pkey == "p_delta" else ("delta", "pl")
+        for z in (tid, other):
+            for v in vs:
+                if ("stage2", "second", z, v, "p") not in self.adopted:
+                    continue
+                if pkey == "p_delta":
+                    return (f"{pkey} of {tid} and {other} tied; the t_delta of {z} follows the TS's candidate of "
+                            f"delta, adopted")
+                for side in ("ts", "py"):
+                    td = self._s2_value(side, z, "t_delta")
+                    tp = self._s2_value(side, z, "t_pl")
+                    if td is None or tp is None:
+                        continue
+                    tv = td if v == "delta" else tp
+                    if tv == min(td, tp):
+                        return (f"{pkey} of {tid} and {other} tied; the t of {z} follows the TS's candidate of {v}, "
+                                f"adopted, and t_{v} is min(t_delta, t_pl) of {z} ({side})")
+        return None
+
+    def _holm_own_thr(self, pkey, rkey, tid):
+        """dump.md 11.12 (C3, D2): tid's own pkey vs its own Holm threshold 0.025 / (K - k + 1), k = tid's rkey,
+        within 1e-9 in either implementation (each side's p against that side's rank)."""
+        K = self._s2_K()
+        for side in ("ts", "py"):
+            p = self._s2_value(side, tid, pkey)
+            k = self._s2_value(side, tid, rkey)
+            if p is None or k is None or not (1 <= k <= K) or k != int(k):
+                continue
+            thr = 0.025 / (K - int(k) + 1)
+            if abs(p - thr) < 1e-9:
+                return f"{pkey} of {tid} within 1e-9 of its Holm threshold {thr!r} (rank {int(k)}, {side})"
+        return None
+
+    def _holm_x(self, pkey, rkey, tid):
+        """The excuse of tid's Holm pass (holm_pass and C1 with p_iut, holm_delta_pass with p_delta): the pair rule
+        on tid's own pairs, or tid's own p vs its own threshold."""
+        return self._holm_pair(pkey, tid) or self._holm_own_thr(pkey, rkey, tid)
 
     def _near(self, name, key):
         """The pair of compared values within 1e-9 that this decision rests on, or None (dump.md 9.3)."""
@@ -5477,19 +5619,29 @@ class Comparator:
                 return self._thr_near(self._vals("stage1.csv", "p_iut"), thr, "p_iut")
             return None
         if name == "stage2.csv":
-            if k in ("holm_rank", "holm_pass", "C1"):
-                return self._holm_near("p_iut")
-            if k in ("holm_delta_rank", "holm_delta_pass"):
-                return self._holm_near("p_delta")
+            # dump.md 11.12 (C3, the lead's D2): each key of a trial X is excused only by X's own decisions
+            if k == "holm_rank":
+                return self._holm_pair("p_iut", tid)
+            if k in ("holm_pass", "C1"):
+                return self._holm_x("p_iut", "holm_rank", tid)
+            if k == "holm_delta_rank":
+                return self._holm_pair("p_delta", tid)
+            if k == "holm_delta_pass":
+                return self._holm_x("p_delta", "holm_delta_rank", tid)
             if k == "C4":
                 return self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
             if k == "no_uplift":
                 return self._zero_near(self._vals("stage2.csv", "dF_lo"), "dF_lo", tid)
             if k in ("verdict", "label", "failed"):
-                # verdict 1 and 3 rest on C1 (Holm) and C4 (late_lb), 2 on delta_ub vs 0, 4 on the delta-only Holm
-                return (self._holm_near("p_iut") or self._holm_near("p_delta")
-                        or self._zero_near(self._vals("stage2.csv", "delta_ub"), "delta_ub", tid)
-                        or self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid))
+                # never through a Holm p of the order (C2-C7 do not use p): only through X's own C1 (excused as
+                # above), its own late_lb (C4) or delta_ub (verdict 2) vs 0; for label and verdict also X's own
+                # holm_delta_pass (verdict 4 against 5; failed is empty for both, dump 11.8)
+                r = (self._holm_x("p_iut", "holm_rank", tid)
+                     or self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
+                     or self._zero_near(self._vals("stage2.csv", "delta_ub"), "delta_ub", tid))
+                if r is None and k != "failed":
+                    r = self._holm_x("p_delta", "holm_delta_rank", tid)
+                return r
             return None
         return None
 
@@ -5507,13 +5659,33 @@ class Comparator:
         self.ndiff = ndiff
         out += self.allowed
         out += self.stops
+        # dump.md 10 / 11.14 (c) (C3, the lead's D10): the Python's own blind rows that hit stop the run at the end
+        # of their stage. Not a 9.3 stop: the lines go before RESULT, which stays the comparison's.
+        self.stop13 = self.blind_stops()
+        out += self.stop13
         out.append("RESULT agree" if ndiff == 0 and not self.stops else f"RESULT differ {ndiff}")
         os.makedirs(os.path.join(self.run, "cmp"), exist_ok=True)
         with open(os.path.join(self.run, "cmp", "report.txt"), "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(out) + "\n")
+        # dump.md 10 (C3): the first of 6, 5, 3, 0 wins
         if self.stops:
             return 6
-        return 0 if ndiff == 0 else 5
+        if ndiff:
+            return 5
+        return 3 if self.stop13 else 0
+
+    def blind_stops(self):
+        """`STOP 13 <stage> <id>: …` for each blind row (blind.<tf>.<SYM>.<buy|sell>) of py/suspect.csv whose `hit`
+        is 1, in file order (dump.md 11.14 (c)). The Python decides the hit itself: only its own rows are read."""
+        p = os.path.join(self.py, "suspect.csv")
+        out = []
+        if not os.path.exists(p):
+            return out
+        with open(p, "r", encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("id", "").startswith("blind.") and r.get("hit") == "1":
+                    out.append(f"STOP 13 {r.get('stage', '')} {r['id']}: a blind row hit spec 13's lines")
+        return out
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -5565,6 +5737,23 @@ def cmd_hand(plant=""):
     return 4 if nfail else 0
 
 
+def run_and_compare(r):
+    """--run after setup(): compute the Python's files, then compare (dump.md 10). A Stop inside a stage propagates
+    (exit 3, no comparison). The exit is the comparison's: 6, 5, then 3 for a spec 13 blind-row stop (11.14 (c)),
+    then 0."""
+    r.compute()
+    if not os.path.isdir(r.ts) or not [f for f in list_files(r.ts) if f not in TS_ONLY]:
+        print("no TS files to compare yet")
+        return 5
+    code = Comparator(r.run, r.allowed).compare()
+    rep = open(os.path.join(r.run, "cmp", "report.txt"), encoding="utf-8").read().splitlines()
+    for ln in rep:
+        if ln.startswith("STOP 13 "):
+            print(ln)
+    print(rep[-1])
+    return code
+
+
 def main(argv):
     args = argv[1:]
     plant = ""
@@ -5581,19 +5770,18 @@ def main(argv):
             return 2
         if len(args) == 2 and args[0] == "--run":
             r = Run(args[1])
-            r.setup()
-            r.compute()
-            if not os.path.isdir(r.ts) or not [f for f in list_files(r.ts) if f not in TS_ONLY]:
-                print("no TS files to compare yet")
-                return 5
-            code = Comparator(args[1], r.allowed).compare()
-            print(open(os.path.join(args[1], "cmp", "report.txt"), encoding="utf-8").read().splitlines()[-1])
-            return code
+            # dump.md 2 (C3, the lead's D5): --run refuses a run whose config.json cut_max is not null (or missing)
+            r.setup(refuse_cut_max=True)
+            return run_and_compare(r)
         if len(args) == 2 and args[0] == "--compare":
             r = Run(args[1])
             r.setup()
             code = Comparator(args[1], []).compare()
-            print(open(os.path.join(args[1], "cmp", "report.txt"), encoding="utf-8").read().splitlines()[-1])
+            rep = open(os.path.join(args[1], "cmp", "report.txt"), encoding="utf-8").read().splitlines()
+            for ln in rep:
+                if ln.startswith("STOP 13 "):
+                    print(ln)
+            print(rep[-1])
             return code
         print(__doc__)
         return 2

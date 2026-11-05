@@ -27,17 +27,23 @@
 // Also judged, so that the judgement is of the original run: the original's signals and blind tables built here equal
 // the run's dumps (signals/<trial>.csv; blind/<tf>_<half>.csv when the run wrote it), and the mirror's higher bars
 // equal the mirror of the original's. The trades of the counted signals are printed (information).
+// Tied to the run (C3, 2026-11-05; the lead's D3; design 7.9): before a bar is read, <run>/gmo's tree sha256 and file
+// count are checked against <run>/manifest.json as lawsearch.ts's gate 3 does (a mismatch prints STOP and exits 3); the
+// trials come from <ts>/config.json (missing or unreadable: FAIL, no fallback to the trial's twelve); a missing
+// <ts>/signals/<trial>.csv or <ts>/blind/<tf>_first.csv is a FAIL, and so is a missing <ts>/blind/<tf>_second.csv when
+// the run opened stage 2 (its <ts>/load.csv has a syn2 row; a missing load.csv is a FAIL too: stage 0 always writes
+// it).
 //
 // INFORMATION only (spec 23.1: the FLIP=1 run, its files read under spec 2, is for the TS–Python comparison): with
 // <flipped run>, its dumps against the original's, as the trial compared them (the blind bars' h and PL with 11 O-2's
 // count; the signals' differences of E04, E26, S01 and B06). These lines start with "INFO" and never fail the run.
 //
-// Exit: 0 every judged condition passed; 3 a judged failure; 1 a crash; 2 usage.
+// Exit: 0 every judged condition passed; 3 a judged failure or a STOP; 1 a crash; 2 usage.
 
 import { END, PAIRS, POINTS_PER_PRICE, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
-import { REASONS, TRIAL_STEP3 } from "./lawsearch-rules.ts";
+import { REASONS } from "./lawsearch-rules.ts";
 import { loadUniverse, mirrorSeries, mirrorUniverse } from "./lawsearch-bars.ts";
-import { GEN_START, GEN_VERSION } from "./lawsearch-gen.ts";
+import { GEN_START, GEN_VERSION, treeSha256 } from "./lawsearch-gen.ts";
 import { parseCandidates, trialBuilt } from "./lawsearch-items.ts";
 import { avoidOf, blindBarsOf, trialSignals } from "./lawsearch-events.ts";
 import { ctxOfUniverse } from "./lawsearch-checks.ts";
@@ -55,6 +61,7 @@ const readCsv = async (path: string): Promise<Row[] | null> => {
     return null;
   }
   const lines = text.split("\n").filter((l) => l.length > 0);
+  if (lines.length === 0) return [];
   const head = lines[0].split(",");
   return lines.slice(1).map((l) => {
     const f = l.split(",");
@@ -346,28 +353,39 @@ const sigVsDump = (sig: TrialSignals, rows: Row[]): string | null => {
   return null;
 };
 
+// a STOP of the judgement (the run's gmo is not its manifest's): printed, exit 3
+class FlipStop extends Error {}
+
 export async function flipJudge(run: string, tsDir: string): Promise<{ lines: string[]; passed: boolean }> {
   const lines: string[] = [];
   let passed = true;
+  let fails = 0;
   const fail = (line: string) => {
     passed = false;
+    fails++;
     lines.push(line);
   };
   const man = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`));
   if (man.version !== GEN_VERSION) throw new Error(`${run}/manifest.json: version ${man.version}, not ${GEN_VERSION}`);
   if (man.spec.flip !== false) throw new Error(`${run}: manifest flip ${man.spec.flip}; the exact mirror is made from the original (FLIP=0) run`);
+  // the run's files are its manifest's (lawsearch.ts's gate 3), before any bar is read
+  const tree = await treeSha256(`${run}/gmo`);
+  if (tree.sha256 !== man.treeSha256 || tree.files !== man.files) throw new FlipStop(`STOP: ${run}/gmo: tree sha256 ${tree.sha256} (${tree.files} files), the manifest's ${man.treeSha256} (${man.files})`);
+  lines.push(`TREE ${run}/gmo: sha256 ${tree.sha256} (${tree.files} files), the manifest's PASS`);
   const answerKnowing = man.spec.group === "O";
   // the avoid table, as the pipeline reads it
   const avoidBytes = await Deno.readFile("research/ledger/spread-hours-h1.csv");
   const avoidSha = hex(await crypto.subtle.digest("SHA-256", avoidBytes));
   if (avoidSha !== SPREAD_H1_SHA256) throw new Error(`research/ledger/spread-hours-h1.csv: sha256 ${avoidSha}, not ${SPREAD_H1_SHA256}`);
   const avoid = avoidOf(new TextDecoder().decode(avoidBytes));
-  // the trials: the run's config.json, else the trial's twelve
-  let ids: string[] = [...TRIAL_STEP3];
+  // the trials: the run's config.json (no fallback: without it the judgement is not of the run's trials)
+  let ids: string[] = [];
   try {
-    ids = JSON.parse(await Deno.readTextFile(`${tsDir}/config.json`)).trials;
-  } catch {
-    lines.push(`(no ${tsDir}/config.json: the trial's twelve)`);
+    const cfg = JSON.parse(await Deno.readTextFile(`${tsDir}/config.json`));
+    if (!Array.isArray(cfg.trials) || cfg.trials.length === 0 || !cfg.trials.every((x: unknown) => typeof x === "string")) throw new Error("its trials are not a list of trial ids");
+    ids = cfg.trials;
+  } catch (e) {
+    fail(`CONFIG ${tsDir}/config.json: ${(e as Error).message}; the run's trials are not known, so its signals are not judged FAIL`);
   }
   const all = parseCandidates(JSON.parse(await Deno.readTextFile("research/ledger/lawsearch-candidates.json")));
   const trials = ids.map((id) => {
@@ -393,28 +411,34 @@ export async function flipJudge(run: string, tsDir: string): Promise<{ lines: st
   const o1 = build(u1, trials, avoid, answerKnowing, "first");
   const n1 = build(m1, trials, avoid, answerKnowing, "first");
   // the original built here is the run's (its dumps)
-  const before = passed;
+  const before = fails;
   for (const t of trials) {
     const rows = await readCsv(`${tsDir}/signals/${t.id}.csv`);
     if (!rows) {
-      lines.push(`ORIGINAL ${t.id}: no ${tsDir}/signals/${t.id}.csv to compare with`);
+      fail(`ORIGINAL ${t.id}: no ${tsDir}/signals/${t.id}.csv (stage 0 writes it for every trial) FAIL`);
       continue;
     }
     const d = sigVsDump(o2.sig.get(t.id)!, rows);
     if (d) fail(`ORIGINAL ${t.id}: the signals built here differ from the run's dump: ${d} FAIL`);
   }
+  // did the run open stage 2? its load.csv has a syn2 row (stage 2 writes it right after loading)
+  const load = await readCsv(`${tsDir}/load.csv`);
+  if (!load) fail(`ORIGINAL ${tsDir}/load.csv: missing (stage 0 always writes it) FAIL`);
+  const stage2 = load !== null && load.some((r) => r.stage === "syn2");
   for (const [half, ob] of [["first", o1], ["second", o2]] as const) {
     for (const tf of ["m15", "h1"] as const) {
       const rows = await readCsv(`${tsDir}/blind/${tf}_${half}.csv`);
       if (!rows) {
-        lines.push(`ORIGINAL blind/${tf}_${half}.csv: not in the run's dumps (the second half is written only when stage 2 runs); built here only`);
+        if (half === "first" || stage2 || !load) fail(`ORIGINAL blind/${tf}_${half}.csv: not in the run's dumps (${half === "first" ? "stage 1 writes it" : load ? "the run opened stage 2: its load.csv has a syn2 row" : "no load.csv to tell whether the run opened stage 2"}) FAIL`);
+        else lines.push(`ORIGINAL blind/${tf}_${half}.csv: not in the run's dumps (the run did not open stage 2: no syn2 row in load.csv); built here only`);
         continue;
       }
       const d = tableVsDump(ob.table[tf], rows);
       if (d) fail(`ORIGINAL blind/${tf}_${half}.csv: the table built here differs from the run's dump: ${d} FAIL`);
     }
   }
-  lines.push(`ORIGINAL: the signals and blind tables built here ${passed === before ? "equal" : "do not all equal"} the run's dumps (where written) ${passed === before ? "PASS" : "FAIL"}`);
+  const origOk = fails === before && ids.length > 0;
+  lines.push(`ORIGINAL: the signals and blind tables built here ${origOk ? "equal the run's dumps (every one the run wrote) PASS" : "are not all shown equal to the run's dumps (a dump differs, is missing, or the trials are not known) FAIL"}`);
   // condition 1 and 2 of 14.2: every blind bar of both halves and timeframes
   for (const [half, ob, mb] of [["first", o1, n1], ["second", o2, n2]] as const) {
     for (const tf of ["m15", "h1"] as const) {
@@ -489,6 +513,10 @@ if (import.meta.main) {
     if (flipped) for (const l of await flipInfo(run, flipped, tsA ?? `${run}/ts`, tsB ?? `${flipped}/ts`)) console.log(l);
     Deno.exit(passed ? 0 : 3);
   } catch (e) {
+    if (e instanceof FlipStop) {
+      console.log(e.message);
+      Deno.exit(3);
+    }
     console.error(e);
     Deno.exit(1);
   }
