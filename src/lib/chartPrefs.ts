@@ -199,6 +199,11 @@ export interface ChartPrefs {
   // switched on
   pctB: boolean;
   rci: boolean;
+  // #396: CCI, Williams %R and the moving-average deviation rate strips,
+  // off until switched on
+  cci: boolean;
+  willR: boolean;
+  maDev: boolean;
   // #145: zacmcc's Buy Low Sell High Composite under the price
   blsh: boolean;
   // #150: TradingView's MACD and ADX (DMI) strips, off until switched on
@@ -230,6 +235,9 @@ export const CHART_PREFS_DEFAULTS: ChartPrefs = {
   maLines: [...MA_DEFAULTS],
   pctB: false,
   rci: false,
+  cci: false,
+  willR: false,
+  maDev: false,
   blsh: true,
   macd: false,
   adx: false,
@@ -258,6 +266,9 @@ export const chartPrefsFrom = (stored: unknown): ChartPrefs => {
     maLines: normalizeMaLines(v.maLines),
     pctB: typeof v.pctB === "boolean" ? v.pctB : CHART_PREFS_DEFAULTS.pctB,
     rci: typeof v.rci === "boolean" ? v.rci : CHART_PREFS_DEFAULTS.rci,
+    cci: typeof v.cci === "boolean" ? v.cci : CHART_PREFS_DEFAULTS.cci,
+    willR: typeof v.willR === "boolean" ? v.willR : CHART_PREFS_DEFAULTS.willR,
+    maDev: typeof v.maDev === "boolean" ? v.maDev : CHART_PREFS_DEFAULTS.maDev,
     blsh: typeof v.blsh === "boolean" ? v.blsh : CHART_PREFS_DEFAULTS.blsh,
     macd: typeof v.macd === "boolean" ? v.macd : CHART_PREFS_DEFAULTS.macd,
     adx: typeof v.adx === "boolean" ? v.adx : CHART_PREFS_DEFAULTS.adx,

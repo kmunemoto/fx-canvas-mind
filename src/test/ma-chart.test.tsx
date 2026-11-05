@@ -69,6 +69,10 @@ const ALL_ON = {
   stoch: true,
   pctB: true,
   rci: true,
+  // #396
+  cci: true,
+  willR: true,
+  maDev: true,
   blsh: true,
   macd: true,
   adx: true,
@@ -90,6 +94,13 @@ const OTHERS = [
   "chart-stoch-reading",
   "chart-pctb-legend",
   "chart-rci-legend",
+  // #396
+  "chart-cci",
+  "chart-willr",
+  "chart-madev",
+  "chart-cci-legend",
+  "chart-willr-legend",
+  "chart-madev-legend",
   "chart-blsh-legend",
   "chart-macd-legend",
   "chart-adx-legend",
@@ -125,6 +136,9 @@ describe("#201 the chart with the moving averages alone", () => {
     // the saved choices are as they were, for the full chart
     const kept = chartPrefsFrom(JSON.parse(localStorage.getItem(CHART_PREFS_KEY)!));
     expect(kept.stoch && kept.macd && kept.overlays.qTrend && kept.overlays.ultra && kept.overlays.zoneShift).toBe(true);
+    // #396: the three new strips were drawn on the full chart, and are kept on for it
+    for (const id of ["chart-cci", "chart-willr", "chart-madev"]) expect(drawnOnFull).toContain(id);
+    expect(kept.cci && kept.willR && kept.maDev).toBe(true);
   });
 
   it("a line switched off here is off on every chart; the others saved on stay on", () => {
