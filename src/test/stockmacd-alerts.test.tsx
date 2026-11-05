@@ -236,10 +236,10 @@ describe("#391 the MACD email on a share", () => {
 
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v35-2026-10-31T16:00:00Z";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";');
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
     // the other rules' run does not take them
-    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm)&select=user_id,pair,interval,lang,rule")');
+    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('if (body.mode === "stocks") {');
     expect(fn).toContain("stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },");
     expect(renderTestMail([{ pair: "AAPL", interval: "1h", rule: "stockmacd" }], "ja").text).toContain("AAPL 1時間足（株の MACD）");

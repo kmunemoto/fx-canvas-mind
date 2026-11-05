@@ -330,6 +330,8 @@ export const ja = {
       analog: "似た相場の予測（20本先）",
       srZones: "水平の帯③（何度も止まった所）",
       trendGuide: "トレンドライン①②と④（自動）",
+      // #395
+      spike: "急騰・急落（1時間足）",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -421,6 +423,14 @@ export const ja = {
       "確定足だけで判定。過去の検証はまだしていません。表示のみで、サインの判定・メールには使っていません。",
     srZoneLabel: (lo: string, hi: string, touches: number) => `③ ${lo === hi ? lo : `${lo}〜${hi}`}（${touches}回）`,
     // #394: the owner's ① ② ④
+    // #395: a sharp rise or fall of the 1-hour bar
+    spikeLabel: (up: boolean, x: string, forming: boolean) => `${up ? "急騰" : "急落"} ${x}倍${forming ? "（途中）" : ""}`,
+    spikeTitle: (up: boolean, open: string, extreme: string, move: string, r: string, x: string, forming: boolean) =>
+      `${up ? "急騰" : "急落"}${forming ? "（作られている途中の足。確定までに戻ることがあります）" : ""}: 始値 ${open} → ${up ? "高値" : "安値"} ${extreme}（${up ? "+" : "−"}${move}）。ふだんの1時間の値幅 ${r}（前の確定足120本の高値−安値の平均）の${x}倍`,
+    spikeNote: (k: number, bars: number, hourly: boolean) =>
+      (hourly ? "" : "1時間足のチャートで出します（この時間足には出しません）。") +
+      `急騰・急落（1時間足）: 1時間足の高値が始値から、ふだんの1時間の値幅（その足の前の確定足${bars}本の「高値 − 安値」の平均）の${k}倍以上上がった足に「急騰」、安値が${k}倍以上下がった足に「急落」。作られている途中の足も、その時までの高値・安値で見ます（「途中」と付けます。確定までに戻ることがあります）。` +
+      "前の足が足りない所には付けません。設定 → メール通知の「急騰・急落」で、5ペアと金の1時間足を、届いたその分にメールで受け取れます。売買の合図ではありません。このあと値段がどう動いたかは測っていません。",
     trendGuideNote: (pivot: number, minBars: number) =>
       "①②④（自動）: 画面に出ている確定足から引きます。一番高い高値が一番安い安値より後なら上げ、そうでなければ下げと見ます（1本の足が両方なら下げ。同じ値段が2つあれば後の方）。" +
       `下げの時、① は一番高い高値から、安値まで続く山（左右${pivot}本より高い足。${pivot}本あとに確定）のどれもがその下に収まる、一番ゆるい下げの線（一番突き出た山に接する線）。山でない足は線の上に出ることがあります。高値から安値までに確定した山が1つも無い時（まっすぐな下げなど）は、①②を引きません。` +

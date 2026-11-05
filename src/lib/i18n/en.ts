@@ -288,6 +288,8 @@ export const en: Dict = {
       analog: "Similar-past forecast (20 bars ahead)",
       srZones: "Horizontal zones ③ (where price stopped again and again)",
       trendGuide: "Trend lines ① ② and ④ (automatic)",
+      // #395
+      spike: "Sharp rise / fall (1 hour)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -379,6 +381,14 @@ export const en: Dict = {
       "Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
     srZoneLabel: (lo: string, hi: string, touches: number) => `③ ${lo === hi ? lo : `${lo}–${hi}`} (${touches}×)`,
     // #394: the owner's ① ② ④
+    // #395: a sharp rise or fall of the 1-hour bar
+    spikeLabel: (up: boolean, x: string, forming: boolean) => `${up ? "Rise" : "Fall"} ${x}×${forming ? " (forming)" : ""}`,
+    spikeTitle: (up: boolean, open: string, extreme: string, move: string, r: string, x: string, forming: boolean) =>
+      `Sharp ${up ? "rise" : "fall"}${forming ? " (the bar is still forming; the price may come back before the close)" : ""}: open ${open} → ${up ? "high" : "low"} ${extreme} (${up ? "+" : "−"}${move}), ${x} times the usual hourly range ${r} (the mean high − low of the 120 closed bars before it)`,
+    spikeNote: (k: number, bars: number, hourly: boolean) =>
+      (hourly ? "" : "Drawn on the 1-hour chart (not on this timeframe). ") +
+      `Sharp rise / fall (1 hour): a 1-hour bar whose high went ${k} times the usual hourly range (the mean high − low of the ${bars} closed bars before it) or more above its open is marked "Rise", one whose low went as far below it "Fall". The forming bar is read the same way by its high and low so far ("forming"; the price may come back before the close). ` +
+      "Not marked where there are too few bars before. Settings → Email alerts → \"Sharp rise / fall\" mails the five pairs' and gold's 1-hour bars in the minute it is seen. Not a signal to buy or sell. What the price did after them has not been measured.",
     trendGuideNote: (pivot: number, minBars: number) =>
       "① ② ④ (automatic): drawn from the closed bars on screen. An up move when the highest high comes after the lowest low, a down move otherwise (one bar holding both is read as down; the later of two equal ones). " +
       `In a down move, ① runs from the highest high with the shallowest fall that keeps every swing high (higher than ${pivot} bars either side, confirmed ${pivot} bars later) down to the low under it — the line touching the swing that sticks up most. Bars that are not swings can stand above it. With no confirmed swing high between the top and the low (a straight fall), ① and ② are not drawn. ` +
