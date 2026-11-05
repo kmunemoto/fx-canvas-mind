@@ -38,6 +38,8 @@ import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts"
 import { AMD_PO3, amdPo3, amdPo3Trades, pineFmt } from "../_shared/amd-po3.ts";
 // #387: the owner's video's EMA 20 / 200 way (docs §8.130), the code the chart draws it with
 import { EMA_RETURN, emaReturnOnWindow } from "../_shared/ema-return.ts";
+// #395: a sharp rise or fall of the 1-hour bar (docs §8.138)
+import { SPIKE, spikeOf, spikeRange } from "../_shared/spike.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
@@ -53,15 +55,17 @@ import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.t
 // §8.130)
 // #391: and "stockmacd", the MACD email's rule on the 22 shares' hourly bars
 // (stocks.ts; docs §8.134), judged by the "stocks" run on Yahoo's bars
-export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd"] as const;
+// #395: and "spike", a sharp rise or fall of the 1-hour bar, seen as the bar
+// forms (_shared/spike.ts; docs §8.138)
+export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd", "spike"] as const;
 export type IndicatorRule = (typeof INDICATOR_RULES)[number];
 export const isIndicatorRule = (v: unknown): v is IndicatorRule =>
-  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm" || v === "stockmacd";
+  v === "qtrend" || v === "ultra" || v === "macdx" || v === "sweepx" || v === "amdpo3" || v === "emarm" || v === "stockmacd" || v === "spike";
 // #275: the rules judged on the chart's own bars the way Q-Trend and ULTRA are
 // (the measured figures below are kept for these; #324: the MACD rule, now the
 // 1-hour one, is not measured; #291: nor is the video's way)
 // (#385: nor is AMD Po3; #387: the EMA 20 / 200 way has its own figures, below)
-export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3" | "emarm" | "stockmacd">;
+export type ChartRule = Exclude<IndicatorRule, "macdx" | "sweepx" | "amdpo3" | "emarm" | "stockmacd" | "spike">;
 // The rule ids kept with each alert (signal_alerts.rule): the settings the
 // signal was judged at. #166 left ULTRA's as it was (the video's, sl10): the
 // signals do not depend on the stop, the id is part of the key that keeps a
@@ -142,6 +146,9 @@ export const AMDPO3_RULE_ID = `amdpo3_${AMD_PO3.version}_defaults_v1`;
 // return move
 export const EMARM_RULE_ID =
   `emarm_ema${EMA_RETURN.fast}_${EMA_RETURN.slow}_w${EMA_RETURN.window}_from${EMA_RETURN.warm}_piv${EMA_RETURN.piv}_skip${EMA_RETURN.skip}_v1`;
+// #395: a sharp rise (fall): the 1-hour bar's high (low) SPIKE.k times the mean
+// range of the SPIKE.bars closed bars before it away from its open
+export const SPIKE_RULE_ID = `spike_1h_x${SPIKE.k}_r${SPIKE.bars}_v1`;
 // The id each rule's emails are recorded under now (#324: 'macdx' under the
 // 1-hour rule's)
 export const indicatorRuleId = (rule: IndicatorRule): string =>
@@ -157,6 +164,8 @@ export const indicatorRuleId = (rule: IndicatorRule): string =>
     ? EMARM_RULE_ID
     : rule === "stockmacd"
     ? STOCKMACD_RULE_ID
+    : rule === "spike"
+    ? SPIKE_RULE_ID
     : ULTRA_RULE_ID;
 
 // Every pair the live chart has, on these timeframes; those read from
@@ -237,11 +246,22 @@ export const EMARM_INTERVALS = ["15min"] as const;
 export const isEmarmChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && EMARM_PAIRS.includes(pair) &&
   (EMARM_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
+// #395: a sharp rise or fall is mailed on the 1-hour chart of the five pairs
+// and gold (the owner: 「5ペア＋金」, 2026-11-05); the chart draws it on every
+// pair's 1-hour chart
+export const SPIKE_PAIRS: readonly string[] = MACDH_PAIRS;
+export const SPIKE_INTERVALS = ["1h"] as const;
+export const isSpikeChart = (pair: unknown, interval: unknown): boolean =>
+  typeof pair === "string" && typeof interval === "string" && SPIKE_PAIRS.includes(pair) &&
+  (SPIKE_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
 // Whether a chart can be followed under a rule (#324: 'macdx' on the 1-hour
-// rule's charts; #385: 'amdpo3' on Q-Trend's and ULTRA's; #387: 'emarm' on its own)
+// rule's charts; #385: 'amdpo3' on Q-Trend's and ULTRA's; #387: 'emarm' on its own;
+// #395: 'spike' on its own)
 export const isIndicatorChartFor = (rule: unknown, pair: unknown, interval: unknown): boolean =>
   rule === "macdx"
     ? isMacdhChart(pair, interval)
+    : rule === "spike"
+    ? isSpikeChart(pair, interval)
     : rule === "sweepx"
     ? isSweepxChart(pair, interval)
     : rule === "emarm"
@@ -295,6 +315,24 @@ export interface IndicatorSignal {
   amd?: AmdFacts | null;
   // #387: the EMA 20 / 200 way's (absent on the other rules')
   emarm?: EmarmFacts | null;
+  // #395: a sharp rise's or fall's (absent on the other rules')
+  spike?: SpikeFacts | null;
+}
+
+// #395: what was seen: the bar's open, how far it went (its high on a rise,
+// its low on a fall, at the time seen), the move from the open, the usual
+// range R (the mean high − low of the 120 closed bars before it) and the move
+// as a multiple of R; whether the bar was still forming, and when it closes.
+// A spike's closedAt is when it was seen (the sweep's clock), not the close,
+// so the time to send is counted from there (docs §8.138)
+export interface SpikeFacts {
+  open: number;
+  extreme: number;
+  move: number;
+  r: number;
+  x: number;
+  forming: boolean;
+  closesAt: string;
 }
 
 // #387: what made the EMA 20 / 200 way enter: the cross, the touch of the
@@ -755,6 +793,90 @@ export const emarmSignals = (
   return out;
 };
 
+// #395 (docs §8.138): the sharp rises and falls among `candidates` — the
+// 1-hour bar forming now (its high and low so far), and the newest closed one
+// while it closed at most SPIKE_LATE_MS ago (a move it made in its last minute
+// is seen after its close) — each read against the SPIKE.bars bars of
+// `history` (closed, oldest first, rounded as the chart draws them) that
+// opened before it. Each side once: a bar can be both. Its "entry" is the
+// price seen (the bar's close so far), with no stop or target; its closedAt
+// is when it was seen. Not on a chart the rule is not offered on, nor with
+// fewer than SPIKE.bars bars before the bar.
+export const SPIKE_LATE_MS = 10 * 60_000;
+export const spikeSignals = (
+  pair: string,
+  interval: string,
+  history: ReadonlyArray<Candle>,
+  candidates: ReadonlyArray<{ bar: Candle; forming: boolean }>,
+  nowMs: number,
+): IndicatorSignal[] => {
+  const step = LIVE_STEP_MS[interval];
+  if (step === undefined || !isSpikeChart(pair, interval)) return [];
+  const out: IndicatorSignal[] = [];
+  for (const { bar, forming } of candidates) {
+    const open = barOpenMs(bar.datetime);
+    if (!Number.isFinite(open)) continue;
+    const end = open + step;
+    if (forming ? !(open <= nowMs && nowMs < end) : !(end <= nowMs && nowMs - end <= SPIKE_LATE_MS)) continue;
+    const before = history.filter((c) => barOpenMs(c.datetime) < open);
+    if (before.length < SPIKE.bars) continue;
+    const r = spikeRange(before.slice(-SPIKE.bars).map((c) => ({ h: c.high, l: c.low })));
+    if (r === null) continue;
+    const s = spikeOf({ o: bar.open, h: bar.high, l: bar.low }, r);
+    const sides = [
+      { hit: s.isUp, side: "BUY" as const, extreme: bar.high, move: s.up, x: s.upX },
+      { hit: s.isDown, side: "SELL" as const, extreme: bar.low, move: s.down, x: s.downX },
+    ];
+    for (const f of sides) {
+      if (!f.hit) continue;
+      out.push({
+        rule: "spike",
+        pair,
+        interval,
+        side: f.side,
+        strong: false,
+        barTime: new Date(open).toISOString(),
+        closedAt: new Date(nowMs).toISOString(),
+        close: bar.close,
+        line: null,
+        eps: null,
+        rsi: null,
+        rsiPrev: null,
+        sl: null,
+        tps: null,
+        spike: { open: bar.open, extreme: f.extreme, move: f.move, r, x: f.x, forming, closesAt: new Date(end).toISOString() },
+      });
+    }
+  }
+  return out;
+};
+
+// #395: gold's 1-hour bar starting at `hourMs` from its recorded minutes
+// (public.gold_tick_bars: Swissquote's prices, oldest first): the open the
+// hour's first minute's, the high and low the minutes' extremes, the close
+// the last minute's, rounded as the chart draws gold (2 decimals); null with
+// no minute in the hour, or when its first minute began more than
+// SPIKE_GOLD_OPEN_MS after the hour (its open is not known)
+export const SPIKE_GOLD_OPEN_MS = 2 * 60_000;
+export const goldHourBar = (
+  minutes: ReadonlyArray<{ minute: string; open: number; high: number; low: number; close: number }>,
+  hourMs: number,
+): Candle | null => {
+  const inHour = minutes.filter((m) => {
+    const t = Date.parse(m.minute);
+    return t >= hourMs && t < hourMs + 60 * 60_000 && [m.open, m.high, m.low, m.close].every((v) => Number.isFinite(v));
+  });
+  if (inHour.length === 0 || Date.parse(inHour[0].minute) - hourMs > SPIKE_GOLD_OPEN_MS) return null;
+  const r2 = (v: number) => Number(v.toFixed(2));
+  return {
+    datetime: new Date(hourMs).toISOString().slice(0, 19).replace("T", " "),
+    open: r2(inHour[0].open),
+    high: r2(Math.max(...inHour.map((m) => m.high))),
+    low: r2(Math.min(...inHour.map((m) => m.low))),
+    close: r2(inHour[inHour.length - 1].close),
+  };
+};
+
 // ---- when each chart is read ---------------------------------------------------------
 //
 // The sweep runs every minute. #171: a GMO chart is read in the minute its
@@ -1060,7 +1182,7 @@ export const breakEvenPct = (gold: boolean): number => {
 };
 // #168: gold's, measured on Dukascopy's gold (GOLD_MEASURED)
 const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
-  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "emarm" || s.rule === "stockmacd" ? undefined : GOLD_MEASURED[s.rule][s.interval];
+  const g = s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "emarm" || s.rule === "stockmacd" || s.rule === "spike" ? undefined : GOLD_MEASURED[s.rule][s.interval];
   const even = breakEvenPct(true);
   if (lang === "en") {
     if (!g) return "This timeframe has not been measured.";
@@ -1124,7 +1246,7 @@ const emarmMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
 };
 const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
   if (s.rule === "emarm") return emarmMeasuredLine(s, lang);
-  if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "stockmacd") return notMeasuredLine(lang);
+  if (s.rule === "macdx" || s.rule === "sweepx" || s.rule === "amdpo3" || s.rule === "stockmacd" || s.rule === "spike") return notMeasuredLine(lang);
   if (isGold(s.pair)) return goldMeasuredLine(s, lang);
   const m = INDICATOR_MEASURED[s.rule][s.interval];
   const unmeasured = !isGmoChartPair(s.pair);
@@ -1157,9 +1279,62 @@ const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
   return (v: number) => (Number.isFinite(v) ? v.toFixed(md).replace(/^-/, "−") : "—");
 };
 
+// #395 (docs §8.138): how often the rule went off on the five pairs' 1-hour
+// bars in the database (GMO's mid, the bars opened 2026-07-19 23:00 to
+// 2026-11-04 20:00 UTC, some 15.4 weeks, read as the bar formed: its high or
+// low SPIKE.k times R from its open): 35 rises and 116 falls. What the price
+// did after them has not been measured, nor gold
+export const SPIKE_MEASURED = { weeks: 15.4, up: 35, down: 116, from: "2026-07-19", to: "2026-11-04" } as const;
+
+const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
+  const f = s.spike;
+  const d = decimalsOf(s.pair);
+  const px = (v: number | null | undefined) => (v === null || v === undefined || !Number.isFinite(v) ? "—" : v.toFixed(d));
+  const gold = isGold(s.pair);
+  const unit = ultraUnit(s.pair);
+  // a distance in pips, or dollars on gold
+  const amt = (v: number) => (gold ? (lang === "en" ? `$${v.toFixed(2)}` : `${v.toFixed(2)}ドル`) : `${(v / unit).toFixed(1)}${lang === "en" ? " pips" : "pips"}`);
+  const up = s.side === "BUY";
+  const open = Date.parse(s.barTime);
+  const closes = f ? Date.parse(f.closesAt) : open + 60 * 60_000;
+  const seen = Date.parse(s.closedAt);
+  const x = f ? f.x.toFixed(1) : "—";
+  const m = SPIKE_MEASURED;
+  if (lang === "en") {
+    const what = up ? "sharp rise" : "sharp fall";
+    return assemble(`[Sextant] ${s.pair} 1-hour ${what} (${x}× its usual range from the open)`, [
+      `${s.pair}'s 1-hour bar has ${up ? "risen" : "fallen"} sharply: its ${up ? "high" : "low"} went ${x} times the usual hourly range ${up ? "above" : "below"} its open${f?.forming ? " (seen while the bar was forming)" : ""}.`,
+      [
+        `Bar: opened ${clock(open, 0)} UTC (${clock(open, 9)} JST), ${f?.forming ? "closes" : "closed"} ${clock(closes, 0).slice(11)} UTC`,
+        `Open ${px(f?.open)}, ${up ? "high" : "low"} ${px(f?.extreme)} (${up ? "+" : "−"}${f ? amt(f.move) : "—"} from the open)`,
+        `Price when seen: ${px(s.close)} (${clock(seen, 0)} UTC, ${clock(seen, 9).slice(11)} JST)`,
+        `The usual hourly range: ${f ? amt(f.r) : "—"} (the mean high − low of the ${SPIKE.bars} closed bars before this one); ${SPIKE.k} times it is ${f ? amt(SPIKE.k * f.r) : "—"}`,
+      ].join("\n"),
+      `${f?.forming ? "This was seen as the bar formed: the price may come back before the close. " : ""}This is not a signal to buy or sell. On the five pairs' 1-hour bars in the database (${m.from} to ${m.to}, some ${m.weeks} weeks) it went off ${m.up} times for a rise and ${m.down} for a fall; what the price did after them has not been measured${gold ? ", nor has gold" : ""}.`,
+      `${gold ? "The usual range is from Twelve Data's 1-hour bars and this hour's prices from Swissquote's, recorded every minute (the app's gold chart uses the same)." : "The prices are the mid of GMO Coin's public bid and ask, as the app's chart draws them."} The chart shows the same mark ("Sharp rise / fall (1 hour)"). Check the latest state in the app:\n${APP_URL}`,
+      "To stop these emails, open Settings → Email alerts in the app and untick \"Sharp rise / fall\".\nThis is reference information, not investment advice. Every trading decision is your own.",
+    ]);
+  }
+  const what = up ? "急騰" : "急落";
+  return assemble(`【Sextant】${pairJa(s.pair)} 1時間足 ${what}（始値からふだんの値幅の${x}倍）`, [
+    `${pairJa(s.pair)}の1時間足が、急に${up ? "上がりました" : "下がりました"}。この足の${up ? "高値" : "安値"}が、始値から、ふだんの1時間の値幅の${x}倍の所まで${up ? "上がりました" : "下がりました"}${f?.forming ? "（足の途中で見た値です）" : ""}。`,
+    [
+      `足: ${clock(open, 9)}（日本時間）に始まった1時間足（${clock(closes, 9).slice(11)} に確定${f?.forming ? "" : "した足"}）`,
+      `始値 ${px(f?.open)}、${up ? "高値" : "安値"} ${px(f?.extreme)}（始値から ${up ? "+" : "−"}${f ? amt(f.move) : "—"}）`,
+      `見た時の値段: ${px(s.close)}（日本時間 ${clock(seen, 9).slice(11)} に見ました）`,
+      `ふだんの1時間の値幅: ${f ? amt(f.r) : "—"}（この足の前の確定足${SPIKE.bars}本の「高値 − 安値」の平均）。その${SPIKE.k}倍は ${f ? amt(SPIKE.k * f.r) : "—"}`,
+    ].join("\n"),
+    `${f?.forming ? "足の途中で見た値なので、確定までに値段が戻ることがあります。" : ""}売買の合図ではありません。データベースの5ペアの1時間足（${m.from.replace(/-/g, "/")}〜${m.to.replace(/-/g, "/")}、約${m.weeks}週）では、急騰${m.up}回・急落${m.down}回でした。急騰・急落のあと値段がどう動いたか（続くか戻るか）は測っていません${gold ? "（金の回数も数えていません）" : ""}。`,
+    `${gold ? "ふだんの値幅は Twelve Data の1時間足、この時間の値段は Swissquote の値段を毎分記録したものです（アプリの金のチャートと同じ）。" : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足です。"}チャートの「急騰・急落（1時間足）」にも同じ印が出ます。アプリで最新の状態を確認してください。\n${APP_URL}`,
+    "この通知を止めるには、アプリの「設定」→「メール通知」の「急騰・急落」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
+  ]);
+};
+
 export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   // #391: a share's MACD email has its own text (stocks.ts)
   if (s.rule === "stockmacd") return renderStockMail(s, lang);
+  // #395: a sharp rise's or fall's
+  if (s.rule === "spike") return renderSpikeMail(s, lang);
   const d = decimalsOf(s.pair);
   const px = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(d));
   const gold = isGold(s.pair);

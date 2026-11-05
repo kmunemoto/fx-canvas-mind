@@ -203,7 +203,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                 // or not yet deployed) has nothing to tick: say so rather than draw an empty table
                 // (#387: and the EMA 20 / 200 way has its own, the six's 15 minutes)
                 // (#391: and the MACD email on shares has its own, the 22 shares' 1 hour)
-                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : settings.indicator;
+                // (#395: and a sharp rise or fall has its own, the six's 1 hour)
+                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : rule === "spike" ? settings.indicator.spike : settings.indicator;
                 if (!ind || ind.pairs.length === 0) {
                   return <p className="text-xs text-warning" data-testid={`signal-alerts-${rule}-unavailable`}>{a.macdxUnavailable}</p>;
                 }
@@ -326,7 +327,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : rule === "stockmacd" ? a.stockmacdNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : rule === "stockmacd" ? a.stockmacdNotes : rule === "spike" ? a.spikeNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button

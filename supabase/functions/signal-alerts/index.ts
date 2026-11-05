@@ -100,6 +100,11 @@ import {
   emarmSignals,
   EMARM_INTERVALS,
   EMARM_PAIRS,
+  SPIKE_INTERVALS,
+  SPIKE_LATE_MS,
+  SPIKE_PAIRS,
+  goldHourBar,
+  spikeSignals,
   SWEEPX_INTERVALS,
   SWEEPX_PAIRS,
   isSweepxChart,
@@ -129,10 +134,12 @@ import {
   parseSwissquote,
   parseTickMinutes,
   parseTwelveData,
+  splitBars,
   tickMinuteCandles,
   twelveDataUrl,
   type Tick,
 } from "../live-chart/logic.ts";
+import { SPIKE, spikeOf, spikeRange } from "../_shared/spike.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
 import { STOCKMACD_INTERVALS, STOCKMACD_PAIRS, isStockmacdChart, stockBarsOf, stockCloseDue, stockSweepOf } from "./stocks.ts";
 import { YAHOO_HEADERS, yahooChartUrl } from "../live-chart/stocks.ts";
@@ -262,7 +269,17 @@ import type { Candle } from "../analyze/indicators.ts";
 // the shares subscribed with rule = 'stockmacd' under STOCKMACD_RULE_ID, with
 // no stop or target (the owner: 「出す、利確幅はいらない、自分で決める」).
 // The other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v35-2026-10-31T16:00:00Z";
+// v36 (#395, docs §8.138): a sharp rise or fall of the 1-hour bar ('spike'):
+// the owner's 「チャートが1時間足で急激に上がったり、下がったりしたらメール
+// ください」 with 「3倍以上」, 「足の途中ですぐ」 and 「5ペア＋金」. Every minute
+// the "indicators" run reads each followed chart's forming 1-hour bar (and
+// the newest closed one, while it closed at most SPIKE_LATE_MS ago) and mails
+// it once a side when its high (low) has gone SPIKE.k times the mean range of
+// the 120 closed bars before it from its open (_shared/spike.ts; indicators.ts
+// spikeSignals), recorded under SPIKE_RULE_ID. Gold's hour is made of the
+// minutes recorded from Swissquote (goldHourBar), its range from Twelve
+// Data's bars. The other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -339,6 +356,10 @@ const klinePreloaded = new Set<string>();
 // each chart's newest closed bar judged (its open, ms), so one close is
 // judged once an instance
 const judgedBar = new Map<string, number>();
+// #395: each sharp rise or fall mailed by this instance (pair|bar open|side),
+// so a bar seen again the next minutes is not claimed again
+const spikeMailed = new Set<string>();
+const SPIKE_MAILED_MAX = 2000;
 // when each Twelve Data chart was last read here (besides the stored row's
 // time, which twelveReadDue goes by: this holds when storing it failed)
 const twelveReadAt = new Map<string, number>();
@@ -567,8 +588,9 @@ Deno.serve(async (req: Request) => {
       // (#291: not the video's way, 'sweepx': gold's 1-minute chart is judged by
       // the "gold-ticks" run on the minutes it records, and read here it would
       // be a Twelve Data chart read every minute)
-      // (#385: and AMD Po3's, 'amdpo3'; #387: and the EMA 20 / 200 way's, 'emarm')
-      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm)&select=user_id,pair,interval,lang,rule"))
+      // (#385: and AMD Po3's, 'amdpo3'; #387: and the EMA 20 / 200 way's, 'emarm';
+      // #395: and a sharp rise's or fall's, 'spike', read every minute below)
+      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule"))
         .filter((r) => typeof r.user_id === "string" && isIndicatorRule(r.rule) && r.rule !== "sweepx" && isIndicatorChartFor(r.rule, r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: r.rule as IndicatorRule }));
       summary.subscriptions = subs.length;
@@ -808,6 +830,8 @@ Deno.serve(async (req: Request) => {
       // open), once the first of them read tells (hourCloseOf); null when
       // none closed this hour
       const yearNewest = new Map<string, number | null>();
+      // #395: the 1-hour reads of this run, for the sharp rise and fall below
+      const hourQuotes = new Map<string, QuoteCandle[]>();
       for (const c of gmoCharts) {
         const key = `${c.pair}|${c.interval}`;
         const step = LIVE_STEP_MS[c.interval];
@@ -841,6 +865,7 @@ Deno.serve(async (req: Request) => {
           reads.push({ pair: c.pair, interval: c.interval, error: maintenance ? "maintenance" : "unavailable" });
           continue;
         }
+        if (c.interval === "1h") hourQuotes.set(c.pair, quotes);
         const closed = historyRead(c.pair, c.interval, quotes, nowMs).candles;
         const newest = closed.length > 0 ? barOpenMs(closed[closed.length - 1].datetime) : Number.NaN;
         // a read cut short is not the chart's history (a year-keyed read
@@ -871,6 +896,88 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         reads.push(await judge(c.pair, c.interval, closed, newest));
+      }
+
+      // #395 (docs §8.138): a sharp rise or fall of the 1-hour bar, seen as it
+      // forms. Every minute, each followed chart's forming bar and its newest
+      // closed one (while it closed at most SPIKE_LATE_MS ago), read against
+      // the SPIKE.bars closed bars before them (indicators.ts spikeSignals);
+      // mailed once a bar and side (the claim's unique key; spikeMailed keeps
+      // this instance from claiming it again). The five pairs' bars are GMO's
+      // 1-hour read (this run's, when the 1-hour chart was read above); gold's
+      // range is Twelve Data's bars the live chart keeps, its hour the minutes
+      // recorded from Swissquote. Its failure must never cost the others theirs
+      const spikePairs = [...new Set(subs.filter((x) => x.rule === "spike").map((x) => x.pair))];
+      const HOUR = 60 * MIN;
+      const spikeRead = async (pair: string): Promise<JsonRecord> => {
+        let history: Candle[];
+        const candidates: Array<{ bar: Candle; forming: boolean }> = [];
+        if (pair === GOLD) {
+          const rows = await readRows(`live_chart_fallback?pair=eq.${encodeURIComponent(pair)}&interval=eq.1h&select=bars,fetched_at`);
+          if (rows.length === 0 || !Array.isArray(rows[0].bars) || typeof rows[0].fetched_at !== "string") {
+            return { pair, interval: "1h", spike: true, error: "no_bars" };
+          }
+          history = historyOfBars(pair, "1h", rows[0].bars as Candle[], nowMs, rows[0].fetched_at as string).candles;
+          const hourMs = Math.floor(nowMs / HOUR) * HOUR;
+          const minutes = (await readRows(
+            `gold_tick_bars?minute=gte.${encodeURIComponent(new Date(hourMs - HOUR).toISOString())}&select=minute,open,high,low,close&order=minute.asc`,
+          ))
+            .filter((m) => typeof m.minute === "string")
+            .map((m) => ({ minute: m.minute as string, open: Number(m.open), high: Number(m.high), low: Number(m.low), close: Number(m.close) }));
+          const prev = nowMs - hourMs <= SPIKE_LATE_MS ? goldHourBar(minutes, hourMs - HOUR) : null;
+          const cur = goldHourBar(minutes, hourMs);
+          if (prev) candidates.push({ bar: prev, forming: false });
+          if (cur) candidates.push({ bar: cur, forming: true });
+        } else {
+          if (!isGmoChartPair(pair)) return { pair, interval: "1h", spike: true, error: "not_offered" };
+          let quotes = hourQuotes.get(pair) ?? null;
+          if (!quotes) {
+            if (Date.now() > deadline || maintenance) return { pair, interval: "1h", spike: true, skipped: maintenance ? "maintenance" : "deadline" };
+            await preload(pair, "1h");
+            quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), SPIKE.bars + 3);
+          }
+          if (!quotes || quotes.length === 0) return { pair, interval: "1h", spike: true, error: maintenance ? "maintenance" : "unavailable" };
+          const read = historyRead(pair, "1h", quotes, nowMs);
+          history = read.candles;
+          const last = history[history.length - 1];
+          if (last) candidates.push({ bar: last, forming: false });
+          const f = splitBars(quotes, "1h", nowMs).forming;
+          const rd = (v: number) => Number(v.toFixed(read.decimals));
+          if (f) candidates.push({ bar: { datetime: f.datetime, open: rd(f.open), high: rd(f.high), low: rd(f.low), close: rd(f.close) }, forming: true });
+        }
+        const sigs = spikeSignals(pair, "1h", history, candidates, nowMs);
+        // the forming bar's reading, kept in the run's record (net._http_response)
+        const fb = candidates.find((c) => c.forming)?.bar;
+        const fOpen = fb ? barOpenMs(fb.datetime) : Number.NaN;
+        const before = history.filter((c) => barOpenMs(c.datetime) < fOpen).slice(-SPIKE.bars);
+        const r = fb && before.length === SPIKE.bars ? spikeRange(before.map((c) => ({ h: c.high, l: c.low }))) : null;
+        const sr = fb && r !== null ? spikeOf({ o: fb.open, h: fb.high, l: fb.low }, r) : null;
+        const fresh = sigs.filter((x) => !spikeMailed.has(`${x.pair}|${x.barTime}|${x.side}`));
+        if (fresh.length > 0) {
+          if (spikeMailed.size >= SPIKE_MAILED_MAX) spikeMailed.clear();
+          for (const x of fresh) spikeMailed.add(`${x.pair}|${x.barTime}|${x.side}`);
+          fired.push(...fresh);
+          await mailSignals(fresh);
+        }
+        return {
+          pair,
+          interval: "1h",
+          spike: true,
+          bars: history.length,
+          forming: fb ? fb.datetime : null,
+          r: r === null ? null : Number(r.toPrecision(6)),
+          up_x: sr ? Number(sr.upX.toFixed(2)) : null,
+          down_x: sr ? Number(sr.downX.toFixed(2)) : null,
+          signals: fresh.map((x) => `spike:${x.side}${x.spike?.forming ? "" : "@close"}`),
+        };
+      };
+      for (const pair of spikePairs) {
+        try {
+          reads.push(await spikeRead(pair));
+        } catch (err) {
+          console.error("spike failed:", pair, err);
+          reads.push({ pair, interval: "1h", spike: true, error: "failed" });
+        }
       }
 
       summary.reads = reads;
@@ -1416,6 +1523,8 @@ Deno.serve(async (req: Request) => {
           emarm: { pairs: EMARM_PAIRS, intervals: EMARM_INTERVALS },
           // #391: the MACD email on shares: the 22 shares' 1-hour chart
           stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },
+          // #395: a sharp rise or fall: the six's 1-hour chart
+          spike: { pairs: SPIKE_PAIRS, intervals: SPIKE_INTERVALS },
         },
         subscriptions: subs.map((s) => ({
           pair: s.pair,
