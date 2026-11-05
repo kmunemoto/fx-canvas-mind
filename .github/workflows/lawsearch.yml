@@ -146,13 +146,16 @@ jobs:
           $DENO_RUN research/lawsearch.ts; code=$?
           echo "exit $code (want ${{ matrix.want }})"
           [ "$code" = "${{ matrix.want }}" ] || exit 1
-      - name: The O runs' failed checks (cut and poison on every E26 trial; nothing else)
+      - name: The O runs' failed checks (cut and poison on every E26 trial; their stage-1 suspicion hits; nothing else)
         if: matrix.gen == 'O'
         run: |
           f=research/out/lawsearch/${{ matrix.name }}/ts/checks.csv
+          s=research/out/lawsearch/${{ matrix.name }}/ts/suspect.csv
           for t in m15.E26.F00 m15.E26.F01 h1.E26.F00 h1.E26.F01; do
             grep -q "^$t,cut,0," $f || { echo "cut did not fail on $t"; exit 1; }
             grep -q "^$t,poison,0," $f || { echo "poison did not fail on $t"; exit 1; }
+            # suspect.csv: stage,half,id,looked,hit_delta,hit_a,hit_pl,hit_late,hit_W,hit,… (lawsearch-dump.md 8)
+            grep -q "^stage1,first,$t,1,[01],[01],[01],[01],[01],1," $s || { echo "no stage-1 suspicion hit on $t"; exit 1; }
           done
           if grep -v -E "^(m15|h1)\.E26\.F0[01],(cut|poison|presence|suspect13[^,]*)," $f | grep -q ",0,"; then echo "another check failed"; grep ",0," $f; exit 1; fi
       - name: Python (recompute and compare)

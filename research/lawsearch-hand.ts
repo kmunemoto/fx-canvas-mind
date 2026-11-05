@@ -1064,7 +1064,7 @@ async function loadCounts(e: J, plant: string): Promise<Record<string, Thunk>> {
           k++;
           const row: J = { row: `b${k}`, file: f.key };
           if (scanBody({ status: 0, data: [el] }, "t").unparseable) {
-            out.push({ ...row, s: el && typeof el === "object" && /^[0-9]+$/.test(String(el.openTime)) ? isoOf(Number(el.openTime)) : undefined, parsed: false });
+            out.push({ ...row, s: el && typeof el === "object" && /^[0-9]+$/.test(String(el.openTime)) ? isoOf(Number(el.openTime)) : undefined, parsed: false, unparseable: true });
             continue;
           }
           const t = Number(el.openTime);
@@ -1077,7 +1077,7 @@ async function loadCounts(e: J, plant: string): Promise<Record<string, Thunk>> {
         }
       }
       if (num !== report.droppedAskLtBid || same !== report.sameStartBidRows) return { sums: `the table's sums ${num}, ${same}; the module's ${report.droppedAskLtBid}, ${report.sameStartBidRows}` };
-      return new PartialList(out, ["row", "file", "s", "parsed", "year", "range", "ask_close", "bid_close", "den", "num", "same_start"]);
+      return new PartialList(out, ["row", "file", "s", "parsed", "unparseable", "year", "range", "ask_close", "bid_close", "den", "num", "same_start"]);
     },
     value_variants: variants,
   };
