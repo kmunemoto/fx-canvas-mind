@@ -362,6 +362,11 @@ const klinePreloaded = new Map<string, number>();
 // each chart's newest closed bar judged (its open, ms), so one close is
 // judged once an instance
 const judgedBar = new Map<string, number>();
+// #395: each 1-hour bar's R this instance worked out (pair|bar open), so a
+// worker whose store into public.spike_ranges failed does not read the big
+// rows again the next minute
+const spikeRangeMemo = new Map<string, JsonRecord>();
+const SPIKE_RANGE_MEMO_MAX = 500;
 // when each Twelve Data chart was last read here (besides the stored row's
 // time, which twelveReadDue goes by: this holds when storing it failed)
 const twelveReadAt = new Map<string, number>();
@@ -934,12 +939,22 @@ Deno.serve(async (req: Request) => {
       const spikeRead = async (pair: string): Promise<JsonRecord> => {
         const gold = pair === GOLD;
         if (!gold && !isGmoChartPair(pair)) return { pair, interval: "1h", spike: true, error: "not_offered" };
-        // each bar's R, as kept
+        // each bar's R, as kept. The table not read (not there, an error): no
+        // R is worked out, the big rows it is made of being what it saves
         const kept = new Map<number, JsonRecord>();
-        const rows = await readRows(`spike_ranges?pair=eq.${enc(pair)}&bar_time=in.(${spikeOpens.map((t) => enc(isoOf(t))).join(",")})&select=bar_time,r,status,behind,source_read_at`);
-        for (const row of rows) {
+        const rangesRes = await rest(`spike_ranges?pair=eq.${enc(pair)}&bar_time=in.(${spikeOpens.map((t) => enc(isoOf(t))).join(",")})&select=bar_time,r,status,behind,source_read_at`);
+        const rows = rangesRes.ok ? await rangesRes.json().catch(() => null) : null;
+        if (!Array.isArray(rows)) {
+          console.error("spike ranges read failed:", pair, rangesRes.status);
+          return { pair, interval: "1h", spike: true, error: "ranges_unread", status: rangesRes.status };
+        }
+        for (const row of rows.filter(isRecord)) {
           const t = Date.parse(String(row.bar_time));
           if (Number.isFinite(t)) kept.set(t, row);
+        }
+        for (const t of spikeOpens) {
+          const memo = spikeRangeMemo.get(`${pair}|${t}`);
+          if (memo && !kept.has(t)) kept.set(t, memo);
         }
         // gold's R is made from the bars the live chart keeps: this run's read
         // of them (the Twelve Data loop above), else the stored read's time
@@ -952,7 +967,12 @@ Deno.serve(async (req: Request) => {
         const pairRead = gold ? null : hourQuotes.get(pair) ?? null;
         const again = (t: number): boolean => {
           const row = kept.get(t);
-          if (!row) return true;
+          // gold's new bar in the hour's first two minutes, from a read made
+          // before it opened: not yet — the Twelve Data loop reads the bars
+          // again from a minute past the hour, and R is worked out from that
+          // read without another (a read a bar behind is worked out from
+          // after that, should it not come)
+          if (!row) return !(gold && t === hourMs && nowMs - hourMs < 2 * MIN && !(goldReadAt >= hourMs));
           if (row.status === "ok" && Number(row.behind) === 0) return false;
           if (gold) {
             const at = typeof row.source_read_at === "string" ? Date.parse(row.source_read_at) : Number.NaN;
@@ -961,6 +981,7 @@ Deno.serve(async (req: Request) => {
           return pairRead !== null;
         };
         const need = spikeOpens.filter(again);
+        let storeFailed = false;
         if (need.length > 0) {
           let history: Candle[] | null = null;
           if (gold) {
@@ -997,12 +1018,17 @@ Deno.serve(async (req: Request) => {
                 computed_at: new Date().toISOString(),
               };
               kept.set(t, row);
+              if (spikeRangeMemo.size >= SPIKE_RANGE_MEMO_MAX) spikeRangeMemo.clear();
+              spikeRangeMemo.set(`${pair}|${t}`, row);
               const res = await rest("spike_ranges?on_conflict=pair,bar_time", {
                 method: "POST",
                 headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
                 body: JSON.stringify(row),
               });
-              if (!res.ok) console.error("spike range store failed:", res.status, await res.text().catch(() => ""));
+              if (!res.ok) {
+                storeFailed = true;
+                console.error("spike range store failed:", res.status, await res.text().catch(() => ""));
+              }
             }
             // the rows over three days old
             const old = await rest(`spike_ranges?pair=eq.${enc(pair)}&bar_time=lt.${enc(isoOf(hourMs - 72 * HOUR))}`, {
@@ -1054,9 +1080,15 @@ Deno.serve(async (req: Request) => {
           )).map((r) => String(r.user_id)));
           const left = subs.filter((s) => s.rule === "spike" && s.pair === x.pair && s.interval === x.interval && !done.has(s.user_id));
           if (left.length === 0) continue;
-          fired.push(x);
-          mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}`);
-          await mailerFor(left, counts)([x]);
+          // counted on their own, so the run's record says a signal only
+          // when a row was made for it (a follower whose plan has no alerts
+          // is looked up again the next minute, and is not one)
+          const these: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
+          await mailerFor(left, these)([x]);
+          for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
+          const made = these.sent + these.failed + these.not_configured;
+          if (made > 0) fired.push(x);
+          mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}${made > 0 ? "" : ":unsent"}`);
         }
         // the forming bar's reading, kept in the run's record (net._http_response)
         const fb = candidates.find((c) => c.forming)?.bar ?? null;
@@ -1069,6 +1101,7 @@ Deno.serve(async (req: Request) => {
           forming: fb ? fb.datetime : null,
           range: kept.get(hourMs)?.status ?? null,
           worked_out: need.length,
+          ...(storeFailed ? { stored: false } : {}),
           r: fr ? Number(fr.r.toPrecision(6)) : null,
           up_x: sr ? Number(sr.upX.toFixed(2)) : null,
           down_x: sr ? Number(sr.downX.toFixed(2)) : null,

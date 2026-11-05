@@ -195,7 +195,7 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(ja.text).toContain("売買の合図ではありません。");
     expect(ja.text).toContain("急騰36回・急落116回");
     expect(ja.text).toContain("測っていません");
-    expect(ja.text).toContain("チャートの「急騰・急落（1時間足）」も同じ決まりで印を付けますが");
+    expect(ja.text).toContain("チャートの「急騰・急落（1時間足）」も同じ決まりで印を付けますが、チャートの足は作り方が少し違うため、境目の足では");
     expect(ja.text).not.toContain("同じ印が出ます");
     expect(ja.text).toContain("「急騰・急落」でチェックを外してください");
     const en = renderIndicatorMail(s, "en");
@@ -222,18 +222,23 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(gja.text).toContain("安値 99.50（始値から −0.50ドル）");
     expect(gja.text).toContain("Swissquote");
     expect(gja.text).not.toContain("アプリの金のチャートと同じ");
-    expect(gja.text).toContain("（金は値段の出所も違う）");
+    expect(gja.text).toContain("金のチャートの作られている途中の足は、その画面が最初に受け取った値段から始まるため、確定するまでは、動きの大きさに関わらず印が出ないことや、倍数が小さく出ることがあります");
+    expect(gja.text).not.toContain("境目の足では");
+    expect(renderIndicatorMail(g, "en").text).toContain("the gold chart's forming bar starts from the first price your screen received");
     expect(gja.text).toContain("保存した足が1本遅れていたため、その1本前までの120本");
     expect(gja.text).toContain("金は Twelve Data の1時間足〈2026/09/14〜2026/11/05、約7.4週〉で、急騰2回・急落6回");
     expect(renderIndicatorMail(g, "en").text).toContain("the stored bars were 1 behind, so the 120 up to 1 bar earlier");
   });
 
-  it("the sweep's code (read as text here; run in a Deno harness for docs §8.138): the rule's subscriptions every minute, each hour's R kept in its table, a follower already mailed left out before any lookup, its failure apart; the database accepts the rule", () => {
+  it("the sweep's code (read as text here; it was run with every outside call faked, docs §8.138): the rule's subscriptions every minute, each hour's R kept in its table and not worked out when the table cannot be read, a follower already mailed left out before any lookup, its failure apart; the database accepts the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain("const sigs = spikeSignals(pair, \"1h\", candidates, usable, nowMs);");
     expect(fn).toContain("spike_ranges?pair=eq.${enc(pair)}&bar_time=in.(");
     expect(fn).toContain('rest("spike_ranges?on_conflict=pair,bar_time"');
+    expect(fn).toContain('return { pair, interval: "1h", spike: true, error: "ranges_unread", status: rangesRes.status };');
+    expect(fn).toContain("if (!row) return !(gold && t === hourMs && nowMs - hourMs < 2 * MIN && !(goldReadAt >= hourMs));");
+    expect(fn).toContain("spikeRangeMemo.set(`${pair}|${t}`, row);");
     expect(fn).toContain("signal_alerts?kind=eq.signal&pair=eq.${enc(x.pair)}&interval=eq.${enc(x.interval)}&bar_time=eq.${enc(x.barTime)}&side=eq.${x.side}&rule=eq.${enc(SPIKE_RULE_ID)}&select=user_id");
     expect(fn).not.toContain("spikeMailed");
     expect(fn).toMatch(/try \{\s+reads\.push\(await spikeRead\(pair\)\);\s+\} catch \(err\) \{\s+console\.error\("spike failed:", pair, err\);/);

@@ -57,6 +57,8 @@ describe("#395 the sharp rise and fall on the chart", () => {
   it("marks a fall under the bar, and the forming bar as 「途中」", () => {
     render(<PriceChart candles={candlesOf(200, 60, 199, 190)} pair="USD/JPY" formingLast />);
     expect(screen.getByTestId("chart-spike-down").querySelector("text")!.textContent).toBe("急落 4.0倍");
+    // the fall's title: its low and how far below the open
+    expect(screen.getByTestId("chart-spike-down").querySelector("title")!.textContent).toBe("急落: 始値 150.000 → 安値 149.500（−50.0pips）。ふだんの1時間の値幅 12.5pips（前の確定足120本の高値−安値の平均）の4.0倍");
     // the fall widened the usual range of the bars after it: (119 × 0.125 + 0.5625) / 120, 0.5 of it 3.9 times
     expect(screen.getByTestId("chart-spike-up").querySelector("text")!.textContent).toBe("急騰 3.9倍（途中）");
     // the rise's triangle over the bar's high and its words over the triangle; the fall's
@@ -82,7 +84,7 @@ describe("#395 the sharp rise and fall on the chart", () => {
     expect(Math.min(...triY(down))).toBeGreaterThanOrEqual(Math.max(...ys(downWick)));
   });
 
-  it("reads the bars before the chart's (the history handed to it) for the 120 before a bar", () => {
+  it("without the bars before the chart's, does not mark a bar with fewer than 120 before it on screen", () => {
     // the rise at bar 30 of 130 on screen: only 30 bars before it on the chart
     const all = candlesOf(280, 60, 180);
     const past = all.slice(0, 150);
@@ -96,6 +98,23 @@ describe("#395 the sharp rise and fall on the chart", () => {
     render(<PriceChart candles={all.slice(150)} pair="USD/JPY" zoneShiftHistory={{ bars: all.slice(0, 150), status: "ready" }} />);
     expect(screen.getAllByTestId("chart-spike-up")).toHaveLength(1);
     expect(screen.getByTestId("chart-spike-label").textContent).toBe("急騰 4.0倍");
+  });
+
+  it("does not call the last bar 「途中」 on a chart whose last bar has closed", () => {
+    render(<PriceChart candles={candlesOf(200, 60, 199)} pair="USD/JPY" />);
+    expect(screen.getByTestId("chart-spike-up").querySelector("text")!.textContent).toBe("急騰 4.0倍");
+  });
+
+  it("says in its note when the bars before the chart's are being read, or could not be", () => {
+    const all = candlesOf(280, 60, 180);
+    const { unmount } = render(<PriceChart candles={all.slice(150)} pair="USD/JPY" zoneShiftHistory={{ bars: null, status: "loading" }} />);
+    expect(screen.getByTestId("chart-spike-legend").textContent).toContain("前の足を読み込み中です（確定足の印はまだ出ていません）");
+    unmount();
+    const r2 = render(<PriceChart candles={all.slice(150)} pair="USD/JPY" zoneShiftHistory={{ bars: null, status: "error" }} />);
+    expect(screen.getByTestId("chart-spike-legend").textContent).toContain("前の足を読めませんでした");
+    r2.unmount();
+    render(<PriceChart candles={all.slice(150)} pair="USD/JPY" zoneShiftHistory={{ bars: all.slice(0, 150), status: "ready" }} />);
+    expect(screen.getByTestId("chart-spike-legend").textContent).not.toMatch(/読み込み中|読めませんでした/);
   });
 
   it("draws nothing on another timeframe, and says it is the 1-hour chart's", () => {

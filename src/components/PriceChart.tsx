@@ -1241,7 +1241,17 @@ const PriceChart = ({
     const erInView = er !== null && er.marks.some((m) => m.at >= from && m.at < to);
     // #395: and the sharp rises' and falls' words, above the high (below the low)
     const spikeInView = spikes !== null && spikes.some((m) => m.i >= from && m.i < to);
-    const pad = (max - min) * (marks.length > 0 || sweepInView || erInView || spikeInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    let pad = (max - min) * (marks.length > 0 || sweepInView || erInView || spikeInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // #395: and at least what they take in pixels — the triangle 3 and 5 font
+    // units off the bar, a gap of 2, the words, and 2 more below a fall's —
+    // which a short plot (full screen with its strips) has less of
+    if (spikeInView) {
+      const sfs = full ? 1.25 : 1;
+      const need = 12 * sfs + (narrow ? 7 : 8) * sfs + 2;
+      const plotHh = H - PAD_TOP - PAD_BOTTOM;
+      const range = max - min;
+      if (range > 0 && plotHh > 3 * need) pad = Math.max(pad, (need * range) / (plotHh - 2 * need));
+    }
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1264,7 +1274,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af, spikes]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af, spikes, full, narrow]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1620,7 +1630,13 @@ const PriceChart = ({
     autoTrend: t.chart.autoTrendNote,
     srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.gap, SR_ZONES.maxWidth, SR_ZONES.minTouches, SR_ZONES.maxZones),
     trendGuide: t.chart.trendGuideNote(TREND_GUIDE.pivot, TREND_GUIDE.minBars),
-    spike: t.chart.spikeNote(SPIKE.k, SPIKE.bars, hourly),
+    // (#395: and whether the bars before the chart's, which its 120 need, are there)
+    spike: t.chart.spikeNote(
+      SPIKE.k,
+      SPIKE.bars,
+      hourly,
+      zoneShiftHistory === undefined && deepHistory === undefined ? null : maPast !== null && maPast.length > 0 ? "ready" : zoneShiftHistory?.status ?? deepHistory?.status ?? null,
+    ),
     maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
