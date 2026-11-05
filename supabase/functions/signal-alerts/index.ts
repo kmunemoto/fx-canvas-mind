@@ -965,14 +965,29 @@ Deno.serve(async (req: Request) => {
           goldReadAt = at.length > 0 && typeof at[0].fetched_at === "string" ? Date.parse(at[0].fetched_at) : Number.NaN;
         }
         const pairRead = gold ? null : hourQuotes.get(pair) ?? null;
+        // gold's new bar, while the stored read was made before it opened (the
+        // Twelve Data loop reads the bars again from a minute past the hour):
+        // its R a bar behind is the 120 bars before the bar before it, which
+        // is that bar's R, kept — so it is taken from there, not worked out
+        // from the whole stored row. Worked out again once a read of this
+        // hour is there (behind 1)
+        if (gold && !kept.has(hourMs) && !(goldReadAt >= hourMs)) {
+          const prev = kept.get(hourMs - HOUR);
+          if (prev && prev.status === "ok" && Number(prev.behind) === 0 && Number(prev.r) > 0) {
+            kept.set(hourMs, {
+              bar_time: isoOf(hourMs),
+              r: Number(prev.r),
+              status: "ok",
+              behind: isPossiblyClosedFor(pair, hourMs - HOUR) ? 0 : 1,
+              source_read_at: prev.source_read_at ?? null,
+              from_bar_before: true,
+            });
+          }
+        }
         const again = (t: number): boolean => {
           const row = kept.get(t);
-          // gold's new bar in the hour's first two minutes, from a read made
-          // before it opened: not yet — the Twelve Data loop reads the bars
-          // again from a minute past the hour, and R is worked out from that
-          // read without another (a read a bar behind is worked out from
-          // after that, should it not come)
-          if (!row) return !(gold && t === hourMs && nowMs - hourMs < 2 * MIN && !(goldReadAt >= hourMs));
+          if (row?.from_bar_before === true) return false;
+          if (!row) return true;
           if (row.status === "ok" && Number(row.behind) === 0) return false;
           if (gold) {
             const at = typeof row.source_read_at === "string" ? Date.parse(row.source_read_at) : Number.NaN;
@@ -1082,13 +1097,18 @@ Deno.serve(async (req: Request) => {
           if (left.length === 0) continue;
           // counted on their own, so the run's record says a signal only
           // when a row was made for it (a follower whose plan has no alerts
-          // is looked up again the next minute, and is not one)
+          // is looked up again the next minute, and is not one), and why
+          // not; kept even when a lookup throws partway (the per-pair catch)
           const these: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
-          await mailerFor(left, these)([x]);
-          for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
-          const made = these.sent + these.failed + these.not_configured;
-          if (made > 0) fired.push(x);
-          mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}${made > 0 ? "" : ":unsent"}`);
+          try {
+            await mailerFor(left, these)([x]);
+          } finally {
+            for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
+            const made = these.sent + these.failed + these.not_configured;
+            if (made > 0) fired.push(x);
+            const why = ["not_allowed", "duplicate"].filter((k) => these[k] > 0).join(",");
+            mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}${made > 0 ? "" : `:unsent${why ? `(${why})` : ""}`}`);
+          }
         }
         // the forming bar's reading, kept in the run's record (net._http_response)
         const fb = candidates.find((c) => c.forming)?.bar ?? null;
@@ -1121,7 +1141,8 @@ Deno.serve(async (req: Request) => {
       summary.files = files;
       summary.twelve_reads = TWELVE_READS_PER_RUN - twelveLeft;
       summary.signals = fired.length;
-      if (fired.length === 0) return summary;
+      // (#395: and a sharp rise or fall that made no row says why)
+      if (fired.length === 0 && Object.values(counts).every((v) => v === 0)) return summary;
       return { ...summary, ...counts };
     };
 
