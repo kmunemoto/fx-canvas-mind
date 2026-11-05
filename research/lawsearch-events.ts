@@ -1,0 +1,403 @@
+// 法則探し (docs §8.136, research/lawsearch-spec.md): spec 5 (the signals of a trial: ① condition, ② rising edge,
+// ③ the item's keep rules, ④ F, ⑤ both directions) and spec 6 (the exclusions ①–⑥ and ①b, the holes of ③, the
+// blind bars of 8.1) (builder B, research/lawsearch-design.md 5.3).
+//
+// Every exclusion is decided by the clock and the bars closed by T only (spec 6, 15). The one planted error that
+// reads later bars is reasonUsesFuture (r3), and it exists to be caught by spec 15's cut and presence checks.
+
+import { isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
+import { avoidKey, parseSpreadHours, seasonOf, slotOf } from "./spreadhours-lib.ts";
+import { DAY, HOUR, MINUTE, WEEK } from "./lib.ts";
+import { END, N_BARS, PAIRS, SPLIT, START, STEP, WK, wk } from "./lawsearch-const.ts";
+import { HOLE_MIN_SLOTS, OPEN_MIN_PAIRS, R2_MINUTES, R3_BACK, REASONS, STATUS } from "./lawsearch-rules.ts";
+import { isGmoHoliday } from "./lawsearch-bars.ts";
+import { answerKnowingE26, filterOf, itemOf, notBuilt, sFilterOf } from "./lawsearch-items.ts";
+import type {
+  Candidates,
+  Classified,
+  ExclCtx,
+  FilterBuild,
+  HalfName,
+  HalfOf,
+  Holes,
+  Ind,
+  ItemBuild,
+  ItemDef,
+  ItemKind,
+  ItemParams,
+  Pair,
+  ReasonCode,
+  Series,
+  TfKey,
+  TfSet,
+  Tri,
+  TrialDef,
+  TrialSignals,
+} from "./lawsearch-types.ts";
+
+const ST_EMIT = STATUS.indexOf("emit");
+const ST_F_NONE = STATUS.indexOf("f_none");
+const ST_BOTH = STATUS.indexOf("both");
+const REASON_INDEX: Readonly<Record<ReasonCode, number>> = Object.fromEntries(REASONS.map((r, k) => [r, k])) as Record<ReasonCode, number>;
+
+// ---- spec 5 ----------------------------------------------------------------------------------------------------
+
+export interface CandOpts {
+  // the hand examples' shrunk windows (a run never passes any)
+  params?: ItemParams;
+  // noRisingEdge (spec 16: 立ち上がりを見ない)
+  plant?: string;
+  // set O (spec 14.2): E26 from answerKnowingE26
+  answerKnowing?: boolean;
+}
+
+const itemFor = (id: string, o?: CandOpts): ItemDef => (o?.answerKnowing && id === "E26" ? answerKnowingE26() : itemOf(id));
+
+// spec 5 ⑤ on the rows of one trial and one pair, in bar order (buy before sell): when both directions are still
+// emitted at one bar, both become "both" (counted as signals: two per bar). Returns how many rows it marked.
+// candidatesOf calls it; it is exported for the hand example of ⑤ alone (A.3.29).
+export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Uint8Array): number {
+  let marked = 0;
+  for (let k = 0; k + 1 < i.length; k++) {
+    if (i[k] !== i[k + 1] || status[k] !== ST_EMIT || status[k + 1] !== ST_EMIT || d[k] === d[k + 1]) continue;
+    status[k] = ST_BOTH;
+    status[k + 1] = ST_BOTH;
+    marked += 2;
+  }
+  return marked;
+}
+
+// Spec 5's order on one trial and one pair's Ind:
+//   ① the condition per direction (the item's build; an S row reads its F's f);
+//   ② the raw signal: cross: the formula is true at i; condition and hold: true at i, false (not 無し) at i − 1, and
+//      i is not the first bar after S0 whose condition is not 無し; state: F(d) true at i (no rising edge, no 無し
+//      rules). Plant noRisingEdge: condition and hold emit every true bar;
+//   ③ the item's keep rule drops the raw signal (uncounted); the condition array is not changed, so the next bar
+//      still compares with ①'s value (§8.113 5, A.4.34);
+//   ④ the F of an (E, F) trial: 無し → f_none (counted apart, not emitted), false → dropped (uncounted), true → kept;
+//   ⑤ both directions still kept at one bar → both (applyBoth).
+// warmOk: the bar index is at or past the trial's warm-ups (E's and F's; the S's F; the B's), and the F's own warmOk.
+export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
+  const params = o?.params;
+  const plant = o?.plant ?? "";
+  const n = ind.series.n;
+  let kind: ItemKind;
+  let cond: [Tri, Tri];
+  let keep: [Uint8Array, Uint8Array] | null = null;
+  // ④'s F (E × F trials only)
+  let fb: FilterBuild | null = null;
+  // the warm-up: the index k, and the F's own per-bar warmOk (F02), if any
+  let warm: number;
+  let fWarmOk: Uint8Array | null = null;
+  switch (trial.kind) {
+    case "EF": {
+      if (trial.e === null || trial.f === null) return notBuilt(trial.id);
+      const b: ItemBuild = itemFor(trial.e, o).build(ind, params);
+      fb = filterOf(trial.f).build(ind, params);
+      kind = b.kind;
+      cond = b.cond;
+      keep = b.keep;
+      warm = Math.max(b.warmup, fb.warmup);
+      fWarmOk = fb.warmOk;
+      break;
+    }
+    case "S": {
+      // the S row's condition is its F's f, and its warm-up the F's (spec 4.3, 21.5)
+      if (trial.s === null) return notBuilt(trial.id);
+      const sf = sFilterOf(trial.s).build(ind, params);
+      kind = "state";
+      cond = sf.f;
+      warm = sf.warmup;
+      fWarmOk = sf.warmOk;
+      break;
+    }
+    case "B": {
+      if (trial.b === null) return notBuilt(trial.id);
+      const b = itemFor(trial.b, o).build(ind, params);
+      kind = b.kind;
+      cond = b.cond;
+      keep = b.keep;
+      warm = b.warmup;
+      break;
+    }
+    default:
+      return notBuilt(trial.id);
+  }
+  if (kind === "state" && trial.kind !== "S") throw new Error(`candidatesOf: ${trial.id}: an item of kind state`);
+  const edge = (kind === "condition" || kind === "hold") && plant !== "noRisingEdge";
+  // the first bar whose condition is not 無し, per direction
+  const first = [cond[0].findIndex((v) => v !== -1), cond[1].findIndex((v) => v !== -1)];
+  const rowsI: number[] = [];
+  const rowsD: number[] = [];
+  const rowsS: number[] = [];
+  const NONE = -1;
+  const st = [NONE, NONE];
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 2; k++) {
+      st[k] = NONE;
+      const c = cond[k];
+      // ②
+      let raw: boolean;
+      if (kind === "cross" || kind === "state") raw = c[i] === 1;
+      else if (!edge) raw = c[i] === 1;
+      else raw = c[i] === 1 && i >= 1 && c[i - 1] === 0 && i !== first[k];
+      if (!raw) continue;
+      // ③
+      if (keep !== null && keep[k][i] === 0) continue;
+      // ④
+      if (fb !== null) {
+        const fv = fb.f[k][i];
+        if (fv === -1) {
+          st[k] = ST_F_NONE;
+          continue;
+        }
+        if (fv === 0) continue;
+      }
+      st[k] = ST_EMIT;
+    }
+    for (let k = 0; k < 2; k++) {
+      if (st[k] === NONE) continue;
+      rowsI.push(i);
+      rowsD.push(k === 0 ? 1 : -1);
+      rowsS.push(st[k]);
+    }
+  }
+  const len = rowsI.length;
+  const out: Candidates = {
+    trial: trial.id,
+    tf: trial.tf,
+    pi: ind.series.pi,
+    n: len,
+    i: Int32Array.from(rowsI),
+    d: Int8Array.from(rowsD),
+    status: Uint8Array.from(rowsS),
+    warmOk: new Uint8Array(len),
+  };
+  // ⑤
+  applyBoth(out.i, out.d, out.status);
+  for (let r = 0; r < len; r++) {
+    const i = out.i[r];
+    out.warmOk[r] = i >= warm && (fWarmOk === null || fWarmOk[i] === 1) ? 1 : 0;
+  }
+  return out;
+}
+
+// ---- spec 1 and 6 ① ①b ------------------------------------------------------------------------------------------
+
+// Where (T, X) falls (spec 1): first: START ≤ T, wk(T) ≤ 2888, X ≤ SPLIT; second: T ≥ SPLIT, X ≤ END; r1b (①b):
+// START ≤ T < SPLIT otherwise; r1 (①) otherwise. With stage 3 (spec 12) the halves are not read: stage3 when T ≥
+// from and X ≤ end, r1 otherwise (①b does not exist in stage 3). Plant splitShift: SPLIT one week later (and its
+// week 2889 the first half's last).
+export function halfOf(T: number, X: number, stage3: ExclCtx["stage3"], plant = ""): HalfOf {
+  if (stage3) return T >= stage3.from && X <= stage3.end ? "stage3" : "r1";
+  const split = plant === "splitShift" ? SPLIT + WEEK : SPLIT;
+  const lastWeek = plant === "splitShift" ? WK.FIRST_HALF_LAST + 1 : WK.FIRST_HALF_LAST;
+  if (T >= START && wk(T) <= lastWeek && X <= split) return "first";
+  if (T >= split && X <= END) return "second";
+  if (T >= START && T < split) return "r1b";
+  return "r1";
+}
+
+// ---- spec 6 ② ④ ⑤ ⑥ (the clock only) ------------------------------------------------------------------------------
+
+// ②: T, T + 1 min and T + 3 min are all isPossiblyClosed (Friday 21:00 UTC on, Saturday, Sunday before 22:00)
+export function r2(T: number): boolean {
+  return R2_MINUTES.every((m) => isPossiblyClosed(T + m * MINUTE));
+}
+
+// spec 2 GMO の休み: [the day before 21:00, the day 21:00) UTC for 12/25 and 1/1 (no Saturday rule)
+const holidayWindowsOf = (year: number): Array<readonly [number, number]> => [
+  [Date.UTC(year, 11, 24, 21), Date.UTC(year, 11, 25, 21)],
+  [Date.UTC(year - 1, 11, 31, 21), Date.UTC(year, 0, 1, 21)],
+];
+
+// the first Friday 21:00 UTC at or after t
+const fridayCloseFrom = (t: number): number => {
+  const day0 = Math.floor(t / DAY) * DAY;
+  const dow = new Date(day0).getUTCDay();
+  let f = day0 + ((5 - dow + 7) % 7) * DAY + 21 * HOUR;
+  if (f < t) f += WEEK;
+  return f;
+};
+
+// ④: [T, X) holds Friday 21:00 UTC (X > the first Friday 21:00 at or after T; X equal to it is kept), or holds a
+// GMO holiday time (T < the holiday's end and X > its start)
+export function r4(T: number, X: number): boolean {
+  if (X > fridayCloseFrom(T)) return true;
+  const y0 = new Date(T).getUTCFullYear();
+  const y1 = new Date(X).getUTCFullYear();
+  for (let y = y0; y <= y1 + 1; y++) {
+    for (const [a, b] of holidayWindowsOf(y)) if (T < b && X > a) return true;
+  }
+  return false;
+}
+
+// ⑤: T in (Sunday 21:00, Monday 00:00] UTC, or in (a holiday's day 21:00, the next 00:00] (12/25 and 1/1)
+export function r5(T: number): boolean {
+  const d = new Date(T);
+  const tod = T - Math.floor(T / DAY) * DAY;
+  const dow = d.getUTCDay();
+  if (dow === 0 && tod > 21 * HOUR) return true;
+  if (dow === 1 && tod === 0) return true;
+  const y = d.getUTCFullYear();
+  for (const [mo, da] of [[11, 25], [0, 1]] as const) {
+    for (const yy of [y, y - 1]) {
+      const end = Date.UTC(yy, mo, da, 21);
+      if (T > end && T <= end + 3 * HOUR) return true;
+    }
+  }
+  return false;
+}
+
+// ⑥: the entry slot (pair, seasonOf(T), slotOf(T)) or the exit slot (pair, seasonOf(X − 1 min), slotOf(X − 1 min))
+// is avoided (spreadhours-lib's season and slot)
+export function r6(avoid: ReadonlySet<string>, pair: Pair, T: number, X: number): boolean {
+  if (avoid.has(avoidKey(pair, seasonOf(T), slotOf(T)))) return true;
+  const e = X - MINUTE;
+  return avoid.has(avoidKey(pair, seasonOf(e), slotOf(e)));
+}
+
+// ---- spec 6 ③ --------------------------------------------------------------------------------------------------
+
+// The slots of [fromMs, toMs) on the clock grid (fromMs rounded down to the step). A slot a is open when a, a +
+// 1 min and a + 3 min are not all ②'s time, a is not a GMO holiday time, and at least 3 of the 5 pairs have a bar
+// starting at a. A hole is a run of adjacent open slots where the pair has no bar, at least 2 slots on m15 and 1 on
+// h1; a slot that is not open breaks the run. starts: per pair (PAIRS order), ascending bar starts.
+export function holesOf(tf: TfKey, starts: ReadonlyArray<ArrayLike<number>>, fromMs: number, toMs: number): Holes {
+  const step = STEP[tf];
+  const a0 = Math.floor(fromMs / step) * step;
+  const nSlots = Math.max(0, Math.ceil((toMs - a0) / step));
+  if (starts.length !== PAIRS.length) throw new Error(`holesOf: ${starts.length} pairs, not ${PAIRS.length}`);
+  const present = starts.map((ss) => {
+    const p = new Uint8Array(nSlots);
+    for (let k = 0; k < ss.length; k++) {
+      const off = ss[k] - a0;
+      if (off < 0 || off >= nSlots * step) continue;
+      if (off % step !== 0) throw new Error(`holesOf: a ${tf} bar off the grid at ${new Date(ss[k]).toISOString()}`);
+      p[off / step] = 1;
+    }
+    return p;
+  });
+  const open = new Uint8Array(nSlots);
+  for (let k = 0; k < nSlots; k++) {
+    const a = a0 + k * step;
+    if (r2(a) || isGmoHoliday(a)) continue;
+    let have = 0;
+    for (const p of present) have += p[k];
+    if (have >= OPEN_MIN_PAIRS) open[k] = 1;
+  }
+  const min = HOLE_MIN_SLOTS[tf];
+  const hole = present.map((p) => {
+    const h = new Uint8Array(nSlots);
+    let k = 0;
+    while (k < nSlots) {
+      if (open[k] !== 1 || p[k] === 1) {
+        k++;
+        continue;
+      }
+      let e = k;
+      while (e < nSlots && open[e] === 1 && p[e] === 0) e++;
+      if (e - k >= min) h.fill(1, k, e);
+      k = e;
+    }
+    return h;
+  });
+  return { tf, step, fromMs: a0, nSlots, open, present, hole };
+}
+
+// ③: some hole slot [a, a + step) of the pair overlaps [sFrom, T) with a positive length (a < T and a + step >
+// sFrom; touching an end does not count). sFrom = s_{i−9}. Plant reasonUsesFuture: the window runs to X = T + N ×
+// step instead of T (it reads the bars after T).
+export function r3(h: Holes, pi: number, sFrom: number, T: number, plant = ""): boolean {
+  const to = plant === "reasonUsesFuture" ? T + N_BARS * h.step : T;
+  const hole = h.hole[pi];
+  const kLo = Math.max(0, Math.floor((sFrom - h.fromMs) / h.step));
+  const kHi = Math.min(h.nSlots - 1, Math.ceil((to - h.fromMs) / h.step) - 1);
+  for (let k = kLo; k <= kHi; k++) {
+    if (hole[k] !== 1) continue;
+    const a = h.fromMs + k * h.step;
+    if (a < to && a + h.step > sFrom) return true;
+  }
+  return false;
+}
+
+// ---- spec 6: the reasons in their order ---------------------------------------------------------------------------
+
+// What the exclusions read besides the bar: the holes of [fromMs, toMs) of the timeframe's five pairs, the avoided
+// slots of ⑥ (empty when question 3 is (b)), stage 3's period (null before stage 3), and the plant
+export function exclCtxOf(tf: TfSet, avoid: ReadonlySet<string>, fromMs: number, toMs: number, stage3?: ExclCtx["stage3"], plant = ""): ExclCtx {
+  return { tf: tf.tf, step: tf.step, holes: holesOf(tf.tf, tf.pairs.map((p) => p.s), fromMs, toMs), avoid, stage3: stage3 ?? null, plant };
+}
+
+// Spec 6, the first reason that applies, for an emitted candidate or a blind bar (X = T + N × step):
+//   ① ①b by halfOf (①b first: a ①b signal counts as ①b even when its warm-up is short); then r1w (①: in a half but
+//   before the trial's warm-up); then ② ③ (sFrom = s_{max(0, i − 9)}) ④ ⑤ ⑥; otherwise counted.
+export function reasonOf(ctx: ExclCtx, s: Series, i: number, warmOk: boolean): ReasonCode {
+  const T = s.T[i];
+  const X = T + N_BARS * ctx.step;
+  const h = halfOf(T, X, ctx.stage3, ctx.plant);
+  if (h === "r1b" || h === "r1") return h;
+  if (!warmOk) return "r1w";
+  if (r2(T)) return "r2";
+  if (r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, ctx.plant)) return "r3";
+  if (r4(T, X)) return "r4";
+  if (r5(T)) return "r5";
+  if (r6(ctx.avoid, s.pair, T, X)) return "r6";
+  return "counted";
+}
+
+const HALF_CODE: Readonly<Record<HalfOf, number>> = { first: 1, second: 2, stage3: 3, r1: 0, r1b: 0 };
+
+// Spec 6 on one pair's candidates: T, X and the half for every row (f_none and both included: the half is the
+// half whose T and X rule holds, whatever the reason, as spec 9 counts f_none and both by it); the reason of an
+// emitted row is reasonOf's, and f_none and both rows keep theirs.
+export function classify(ctx: ExclCtx, s: Series, c: Candidates): Classified {
+  if (c.tf !== ctx.tf) throw new Error(`classify: ${c.trial} is ${c.tf}, the context ${ctx.tf}`);
+  if (c.pi !== s.pi) throw new Error(`classify: ${c.trial} pair ${c.pi}, the series ${s.pi}`);
+  const T = new Float64Array(c.n);
+  const X = new Float64Array(c.n);
+  const reason = new Uint8Array(c.n);
+  const half = new Uint8Array(c.n);
+  for (let r = 0; r < c.n; r++) {
+    const i = c.i[r];
+    T[r] = s.T[i];
+    X[r] = T[r] + N_BARS * ctx.step;
+    half[r] = HALF_CODE[halfOf(T[r], X[r], ctx.stage3, ctx.plant)];
+    if (c.status[r] === ST_F_NONE) reason[r] = REASON_INDEX.f_none;
+    else if (c.status[r] === ST_BOTH) reason[r] = REASON_INDEX.both;
+    else reason[r] = REASON_INDEX[reasonOf(ctx, s, i, c.warmOk[r] === 1)];
+  }
+  return { ...c, T, X, reason, half };
+}
+
+// A trial on the five pairs of its timeframe: candidatesOf, then classify (inds: per pair, PAIRS order)
+export function trialSignals(trial: TrialDef, tf: TfSet, inds: Ind[], ctx: ExclCtx, o?: CandOpts): TrialSignals {
+  if (trial.tf !== tf.tf || ctx.tf !== tf.tf) throw new Error(`trialSignals: ${trial.id} on ${tf.tf} (context ${ctx.tf})`);
+  if (inds.length !== tf.pairs.length) throw new Error(`trialSignals: ${inds.length} Ind, ${tf.pairs.length} pairs`);
+  const pairs = tf.pairs.map((s, pi) => {
+    if (inds[pi].series !== s) throw new Error(`trialSignals: the Ind of pair ${pi} is not its series'`);
+    return classify(ctx, s, candidatesOf(trial, inds[pi], o));
+  });
+  return { trial, tf: trial.tf, pairs };
+}
+
+// Spec 8.1's bars: per pair, 1 when the bar's T and X are in the half and ②–⑥ pass (warm-up met: the blind table
+// has no item)
+export function blindBarsOf(ctx: ExclCtx, tf: TfSet, half: HalfName): Uint8Array[] {
+  if (ctx.tf !== tf.tf) throw new Error(`blindBarsOf: the context is ${ctx.tf}, the bars ${tf.tf}`);
+  return tf.pairs.map((s) => {
+    const out = new Uint8Array(s.n);
+    for (let i = 0; i < s.n; i++) {
+      const T = s.T[i];
+      if (halfOf(T, T + N_BARS * ctx.step, ctx.stage3, ctx.plant) !== half) continue;
+      if (reasonOf(ctx, s, i, true) === "counted") out[i] = 1;
+    }
+    return out;
+  });
+}
+
+// ⑥'s table (research/ledger/spread-hours-h1.csv; the caller has checked its sha256): the avoided slots of the five
+// pairs (parseSpreadHours stops on a missing, doubled or foreign row)
+export function avoidOf(text: string): ReadonlySet<string> {
+  return parseSpreadHours(text, PAIRS);
+}
