@@ -77,7 +77,10 @@ jobs:
           fi
           for slug in ${FUNCTIONS}; do
             echo "::group::deploy ${slug}"
-            supabase functions deploy "${slug}" --project-ref "${PROJECT_REF}"
+            # --yes: the CLI asks before deploying to production and cannot ask
+            # here (no terminal); from 2026-11-05 it stops with nothing changed
+            # unless told (#262's deploy, run 41983135943)
+            supabase functions deploy "${slug}" --project-ref "${PROJECT_REF}" --yes
             echo "::endgroup::"
           done
 
