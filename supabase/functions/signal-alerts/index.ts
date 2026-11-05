@@ -103,7 +103,9 @@ import {
   SPIKE_INTERVALS,
   SPIKE_LATE_MS,
   SPIKE_PAIRS,
+  SPIKE_RULE_ID,
   goldHourBar,
+  spikeRangeFor,
   spikeSignals,
   SWEEPX_INTERVALS,
   SWEEPX_PAIRS,
@@ -139,7 +141,7 @@ import {
   twelveDataUrl,
   type Tick,
 } from "../live-chart/logic.ts";
-import { SPIKE, spikeOf, spikeRange } from "../_shared/spike.ts";
+import { SPIKE, spikeOf } from "../_shared/spike.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
 import { STOCKMACD_INTERVALS, STOCKMACD_PAIRS, isStockmacdChart, stockBarsOf, stockCloseDue, stockSweepOf } from "./stocks.ts";
 import { YAHOO_HEADERS, yahooChartUrl } from "../live-chart/stocks.ts";
@@ -278,7 +280,9 @@ import type { Candle } from "../analyze/indicators.ts";
 // the 120 closed bars before it from its open (_shared/spike.ts; indicators.ts
 // spikeSignals), recorded under SPIKE_RULE_ID. Gold's hour is made of the
 // minutes recorded from Swissquote (goldHourBar), its range from Twelve
-// Data's bars. The other rules are as they were.
+// Data's bars. An hour's range is worked out once and kept in
+// public.spike_ranges (the bars are too much to read every minute: the
+// database's egress). The other rules are as they were.
 const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";
 
 const MIN = 60_000;
@@ -352,14 +356,12 @@ interface IndicatorSub {
 // chart's are read from it once an instance
 const klineMemory = new Map<string, unknown>();
 const KLINE_MEMORY_MAX = 6000;
-const klinePreloaded = new Set<string>();
+// (#395: and how many days of them, a chart's read being 600 bars and the
+// sharp rise's range 123)
+const klinePreloaded = new Map<string, number>();
 // each chart's newest closed bar judged (its open, ms), so one close is
 // judged once an instance
 const judgedBar = new Map<string, number>();
-// #395: each sharp rise or fall mailed by this instance (pair|bar open|side),
-// so a bar seen again the next minutes is not claimed again
-const spikeMailed = new Set<string>();
-const SPIKE_MAILED_MAX = 2000;
 // when each Twelve Data chart was last read here (besides the stored row's
 // time, which twelveReadDue goes by: this holds when storing it failed)
 const twelveReadAt = new Map<string, number>();
@@ -667,15 +669,17 @@ Deno.serve(async (req: Request) => {
         }
         return body;
       };
-      // a chart's kept files, from the table, once an instance
-      const preload = async (pair: string, interval: string) => {
+      // a chart's kept files, from the table, once an instance (#395: as
+      // many days as `bars` bars need; more again, if a later read needs more)
+      const preload = async (pair: string, interval: string, bars: number = HISTORY_BARS + 1) => {
         const symbol = GMO_SYMBOLS[pair];
         const spec = GMO_INTERVALS[interval];
         if (!symbol || !spec) return;
         const key = `${symbol}|${spec.name}`;
-        if (klinePreloaded.has(key)) return;
+        const days = spec.key === "day" ? klinePreloadDays(interval, bars) : Number.POSITIVE_INFINITY;
+        if ((klinePreloaded.get(key) ?? 0) >= days) return;
         const since = spec.key === "day"
-          ? jstDayKey(nowMs - klinePreloadDays(interval, HISTORY_BARS + 1) * 24 * 60 * MIN)
+          ? jstDayKey(nowMs - days * 24 * 60 * MIN)
           : String(Number(jstYearKey(nowMs)) - 1);
         const rows = await readRows(
           `gmo_kline_files?symbol=eq.${encodeURIComponent(symbol)}&interval=eq.${encodeURIComponent(spec.name)}&date_key=gte.${since}&select=price_type,date_key,body`,
@@ -686,7 +690,7 @@ Deno.serve(async (req: Request) => {
           klineMemory.set(klineFileKey({ symbol, priceType: r.price_type, interval: spec.name, date: r.date_key }), r.body);
           files.table++;
         }
-        klinePreloaded.add(key);
+        klinePreloaded.set(key, Math.max(klinePreloaded.get(key) ?? 0, days));
       };
       // Each fresh signal to each follower of its chart, once (the claim's
       // unique key)
@@ -737,6 +741,9 @@ Deno.serve(async (req: Request) => {
       // Twelve Data's first: a few reads at most, which GMO's many would
       // otherwise leave no time for
       let twelveLeft = TWELVE_READS_PER_RUN;
+      // #395: the stored bars this run read (or read again), for the sharp
+      // rise's range below
+      const twelveStored = new Map<string, { bars: Candle[]; fetchedAt: string }>();
       const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
       for (const c of twelveCharts) {
         const key = `${c.pair}|${c.interval}`;
@@ -757,8 +764,10 @@ Deno.serve(async (req: Request) => {
         let stored = rows.length > 0 && Array.isArray(rows[0].bars) && typeof rows[0].fetched_at === "string"
           ? { bars: rows[0].bars as Candle[], fetchedAt: rows[0].fetched_at as string }
           : null;
-        if (stored) learn(stored.bars);
-        else if (!twelvePhaseOf.has(key)) twelvePhaseOf.set(key, 0);
+        if (stored) {
+          learn(stored.bars);
+          twelveStored.set(key, stored);
+        } else if (!twelvePhaseOf.has(key)) twelvePhaseOf.set(key, 0);
         close = closeNow();
         // its bars close at another hour
         if (close === null) continue;
@@ -806,6 +815,7 @@ Deno.serve(async (req: Request) => {
             });
             if (!up.ok) console.error("fallback store failed:", up.status, await up.text().catch(() => ""));
             stored = { bars, fetchedAt };
+            twelveStored.set(key, stored);
             learn(bars);
           } catch (err) {
             console.error("twelve data read failed:", err);
@@ -900,75 +910,169 @@ Deno.serve(async (req: Request) => {
 
       // #395 (docs §8.138): a sharp rise or fall of the 1-hour bar, seen as it
       // forms. Every minute, each followed chart's forming bar and its newest
-      // closed one (while it closed at most SPIKE_LATE_MS ago), read against
-      // the SPIKE.bars closed bars before them (indicators.ts spikeSignals);
-      // mailed once a bar and side (the claim's unique key; spikeMailed keeps
-      // this instance from claiming it again). The five pairs' bars are GMO's
-      // 1-hour read (this run's, when the 1-hour chart was read above); gold's
-      // range is Twelve Data's bars the live chart keeps, its hour the minutes
-      // recorded from Swissquote. Its failure must never cost the others theirs
+      // closed one (while it closed at most SPIKE_LATE_MS ago), each against
+      // its range R (indicators.ts spikeSignals). An hour's R is worked out
+      // once (spikeRangeFor) and kept in public.spike_ranges: the bars it is
+      // made of are some 120 KB a read (gold's stored Twelve Data bars) or
+      // 150 KB (a pair's GMO files), too much to read every minute against
+      // the database's egress. Worked out again when it was made from a read
+      // a bar behind, or could not be: gold's once a newer stored read is
+      // there, a pair's when this run read its 1-hour chart. The five pairs'
+      // bars are GMO's 1-hour read (this run's, when the chart was read
+      // above, else the newest file alone); gold's hour the minutes recorded
+      // from Swissquote. Each bar and side is mailed to each follower once:
+      // those whose row is already in the table are left out before any
+      // lookup (and the claim's unique key keeps two runs from both mailing),
+      // so a follower a run failed on is mailed by a later run. Its failure
+      // must never cost the others theirs
       const spikePairs = [...new Set(subs.filter((x) => x.rule === "spike").map((x) => x.pair))];
       const HOUR = 60 * MIN;
+      const hourMs = Math.floor(nowMs / HOUR) * HOUR;
+      const spikeOpens = nowMs - hourMs <= SPIKE_LATE_MS ? [hourMs - HOUR, hourMs] : [hourMs];
+      const isoOf = (ms: number) => new Date(ms).toISOString();
+      const enc = encodeURIComponent;
       const spikeRead = async (pair: string): Promise<JsonRecord> => {
-        let history: Candle[];
-        const candidates: Array<{ bar: Candle; forming: boolean }> = [];
-        if (pair === GOLD) {
-          const rows = await readRows(`live_chart_fallback?pair=eq.${encodeURIComponent(pair)}&interval=eq.1h&select=bars,fetched_at`);
-          if (rows.length === 0 || !Array.isArray(rows[0].bars) || typeof rows[0].fetched_at !== "string") {
-            return { pair, interval: "1h", spike: true, error: "no_bars" };
+        const gold = pair === GOLD;
+        if (!gold && !isGmoChartPair(pair)) return { pair, interval: "1h", spike: true, error: "not_offered" };
+        // each bar's R, as kept
+        const kept = new Map<number, JsonRecord>();
+        const rows = await readRows(`spike_ranges?pair=eq.${enc(pair)}&bar_time=in.(${spikeOpens.map((t) => enc(isoOf(t))).join(",")})&select=bar_time,r,status,behind,source_read_at`);
+        for (const row of rows) {
+          const t = Date.parse(String(row.bar_time));
+          if (Number.isFinite(t)) kept.set(t, row);
+        }
+        // gold's R is made from the bars the live chart keeps: this run's read
+        // of them (the Twelve Data loop above), else the stored read's time
+        let goldStored = gold ? twelveStored.get(`${pair}|1h`) ?? null : null;
+        let goldReadAt = goldStored ? Date.parse(goldStored.fetchedAt) : Number.NaN;
+        if (gold && !goldStored) {
+          const at = await readRows(`live_chart_fallback?pair=eq.${enc(pair)}&interval=eq.1h&select=fetched_at`);
+          goldReadAt = at.length > 0 && typeof at[0].fetched_at === "string" ? Date.parse(at[0].fetched_at) : Number.NaN;
+        }
+        const pairRead = gold ? null : hourQuotes.get(pair) ?? null;
+        const again = (t: number): boolean => {
+          const row = kept.get(t);
+          if (!row) return true;
+          if (row.status === "ok" && Number(row.behind) === 0) return false;
+          if (gold) {
+            const at = typeof row.source_read_at === "string" ? Date.parse(row.source_read_at) : Number.NaN;
+            return Number.isFinite(goldReadAt) && !(at >= goldReadAt);
           }
-          history = historyOfBars(pair, "1h", rows[0].bars as Candle[], nowMs, rows[0].fetched_at as string).candles;
-          const hourMs = Math.floor(nowMs / HOUR) * HOUR;
+          return pairRead !== null;
+        };
+        const need = spikeOpens.filter(again);
+        if (need.length > 0) {
+          let history: Candle[] | null = null;
+          if (gold) {
+            if (!goldStored) {
+              const st = await readRows(`live_chart_fallback?pair=eq.${enc(pair)}&interval=eq.1h&select=bars,fetched_at`);
+              if (st.length > 0 && Array.isArray(st[0].bars) && typeof st[0].fetched_at === "string") {
+                goldStored = { bars: st[0].bars as Candle[], fetchedAt: st[0].fetched_at as string };
+              }
+            }
+            if (goldStored) {
+              history = historyOfBars(pair, "1h", goldStored.bars, nowMs, goldStored.fetchedAt).candles;
+              goldReadAt = Date.parse(goldStored.fetchedAt);
+            }
+          } else {
+            let quotes = pairRead;
+            if (!quotes && Date.now() <= deadline && !maintenance) {
+              // the table's files for the bars R needs, not the chart's 600
+              await preload(pair, "1h", SPIKE.bars + 3);
+              quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), SPIKE.bars + 3);
+            }
+            if (quotes && quotes.length > 0) history = historyRead(pair, "1h", quotes, nowMs).candles;
+          }
+          if (history) {
+            for (const t of need) {
+              const g = spikeRangeFor(pair, history, t);
+              const row: JsonRecord = {
+                pair,
+                bar_time: isoOf(t),
+                r: g.r,
+                status: g.status,
+                behind: g.behind,
+                last_bar: g.lastBar === null ? null : isoOf(g.lastBar),
+                source_read_at: gold && Number.isFinite(goldReadAt) ? isoOf(goldReadAt) : null,
+                computed_at: new Date().toISOString(),
+              };
+              kept.set(t, row);
+              const res = await rest("spike_ranges?on_conflict=pair,bar_time", {
+                method: "POST",
+                headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+                body: JSON.stringify(row),
+              });
+              if (!res.ok) console.error("spike range store failed:", res.status, await res.text().catch(() => ""));
+            }
+            // the rows over three days old
+            const old = await rest(`spike_ranges?pair=eq.${enc(pair)}&bar_time=lt.${enc(isoOf(hourMs - 72 * HOUR))}`, {
+              method: "DELETE",
+              headers: { Prefer: "return=minimal" },
+            });
+            if (!old.ok) console.error("spike range clean failed:", old.status, await old.text().catch(() => ""));
+          }
+        }
+        // the bars looked at
+        const candidates: Array<{ bar: Candle; forming: boolean }> = [];
+        if (gold) {
           const minutes = (await readRows(
-            `gold_tick_bars?minute=gte.${encodeURIComponent(new Date(hourMs - HOUR).toISOString())}&select=minute,open,high,low,close&order=minute.asc`,
+            `gold_tick_bars?minute=gte.${enc(isoOf(spikeOpens[0]))}&select=minute,open,high,low,close&order=minute.asc`,
           ))
             .filter((m) => typeof m.minute === "string")
             .map((m) => ({ minute: m.minute as string, open: Number(m.open), high: Number(m.high), low: Number(m.low), close: Number(m.close) }));
-          const prev = nowMs - hourMs <= SPIKE_LATE_MS ? goldHourBar(minutes, hourMs - HOUR) : null;
-          const cur = goldHourBar(minutes, hourMs);
-          if (prev) candidates.push({ bar: prev, forming: false });
-          if (cur) candidates.push({ bar: cur, forming: true });
+          for (const t of spikeOpens) {
+            const bar = goldHourBar(minutes, t);
+            if (bar) candidates.push({ bar, forming: t === hourMs });
+          }
         } else {
-          if (!isGmoChartPair(pair)) return { pair, interval: "1h", spike: true, error: "not_offered" };
-          let quotes = hourQuotes.get(pair) ?? null;
+          let quotes = pairRead;
           if (!quotes) {
             if (Date.now() > deadline || maintenance) return { pair, interval: "1h", spike: true, skipped: maintenance ? "maintenance" : "deadline" };
-            await preload(pair, "1h");
-            quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), SPIKE.bars + 3);
+            // the newest file (and the one before, while the bar that closed
+            // at its start is looked at): GMO's, not the table's
+            quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), spikeOpens.length);
           }
           if (!quotes || quotes.length === 0) return { pair, interval: "1h", spike: true, error: maintenance ? "maintenance" : "unavailable" };
           const read = historyRead(pair, "1h", quotes, nowMs);
-          history = read.candles;
-          const last = history[history.length - 1];
-          if (last) candidates.push({ bar: last, forming: false });
+          for (const c of read.candles) if (spikeOpens.includes(barOpenMs(c.datetime))) candidates.push({ bar: c, forming: false });
           const f = splitBars(quotes, "1h", nowMs).forming;
           const rd = (v: number) => Number(v.toFixed(read.decimals));
-          if (f) candidates.push({ bar: { datetime: f.datetime, open: rd(f.open), high: rd(f.high), low: rd(f.low), close: rd(f.close) }, forming: true });
+          if (f && barOpenMs(f.datetime) === hourMs) {
+            candidates.push({ bar: { datetime: f.datetime, open: rd(f.open), high: rd(f.high), low: rd(f.low), close: rd(f.close) }, forming: true });
+          }
         }
-        const sigs = spikeSignals(pair, "1h", history, candidates, nowMs);
+        const usable = new Map<number, { r: number; behind: number }>();
+        for (const [t, row] of kept) {
+          const r = Number(row.r);
+          if (row.status === "ok" && row.r !== null && Number.isFinite(r) && r > 0) usable.set(t, { r, behind: Number(row.behind) || 0 });
+        }
+        const sigs = spikeSignals(pair, "1h", candidates, usable, nowMs);
+        const mailed: string[] = [];
+        for (const x of sigs) {
+          const done = new Set((await readRows(
+            `signal_alerts?kind=eq.signal&pair=eq.${enc(x.pair)}&interval=eq.${enc(x.interval)}&bar_time=eq.${enc(x.barTime)}&side=eq.${x.side}&rule=eq.${enc(SPIKE_RULE_ID)}&select=user_id`,
+          )).map((r) => String(r.user_id)));
+          const left = subs.filter((s) => s.rule === "spike" && s.pair === x.pair && s.interval === x.interval && !done.has(s.user_id));
+          if (left.length === 0) continue;
+          fired.push(x);
+          mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}`);
+          await mailerFor(left, counts)([x]);
+        }
         // the forming bar's reading, kept in the run's record (net._http_response)
-        const fb = candidates.find((c) => c.forming)?.bar;
-        const fOpen = fb ? barOpenMs(fb.datetime) : Number.NaN;
-        const before = history.filter((c) => barOpenMs(c.datetime) < fOpen).slice(-SPIKE.bars);
-        const r = fb && before.length === SPIKE.bars ? spikeRange(before.map((c) => ({ h: c.high, l: c.low }))) : null;
-        const sr = fb && r !== null ? spikeOf({ o: fb.open, h: fb.high, l: fb.low }, r) : null;
-        const fresh = sigs.filter((x) => !spikeMailed.has(`${x.pair}|${x.barTime}|${x.side}`));
-        if (fresh.length > 0) {
-          if (spikeMailed.size >= SPIKE_MAILED_MAX) spikeMailed.clear();
-          for (const x of fresh) spikeMailed.add(`${x.pair}|${x.barTime}|${x.side}`);
-          fired.push(...fresh);
-          await mailSignals(fresh);
-        }
+        const fb = candidates.find((c) => c.forming)?.bar ?? null;
+        const fr = usable.get(hourMs) ?? null;
+        const sr = fb && fr ? spikeOf({ o: fb.open, h: fb.high, l: fb.low }, fr.r) : null;
         return {
           pair,
           interval: "1h",
           spike: true,
-          bars: history.length,
           forming: fb ? fb.datetime : null,
-          r: r === null ? null : Number(r.toPrecision(6)),
+          range: kept.get(hourMs)?.status ?? null,
+          worked_out: need.length,
+          r: fr ? Number(fr.r.toPrecision(6)) : null,
           up_x: sr ? Number(sr.upX.toFixed(2)) : null,
           down_x: sr ? Number(sr.downX.toFixed(2)) : null,
-          signals: fresh.map((x) => `spike:${x.side}${x.spike?.forming ? "" : "@close"}`),
+          signals: mailed,
         };
       };
       for (const pair of spikePairs) {

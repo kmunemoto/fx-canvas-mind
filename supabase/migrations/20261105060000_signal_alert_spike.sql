@@ -19,3 +19,33 @@
 alter table public.signal_alert_subscriptions drop constraint if exists signal_alert_subscriptions_rule_check;
 alter table public.signal_alert_subscriptions add constraint signal_alert_subscriptions_rule_check
   check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx', 'amdpo3', 'emarm', 'stockmacd', 'spike']));
+
+-- Each 1-hour bar's usual range R (the mean high − low of the 120 closed
+-- bars before it), worked out once for the hour and kept here, so the
+-- minute-by-minute check reads a row of a few bytes instead of the bars:
+-- gold's stored Twelve Data bars are some 120 KB a read, a pair's GMO files
+-- some 150 KB, and the project's database egress is limited. status 'ok'
+-- with r; 'short' (fewer than 120 bars before it), 'stale' (the bars before
+-- it end more than one open hour early) or 'zero' (R not above zero), r
+-- null. behind: the open hours between the newest bar used and the bar
+-- (gold's stored read can be one bar behind). source_read_at: for gold,
+-- the stored read (live_chart_fallback.fetched_at) it was worked out from,
+-- so a newer read works it out again. Rows over three days old are dropped
+-- by the function. Written and read by signal-alerts only (service role).
+create table if not exists public.spike_ranges (
+  pair text not null,
+  -- the open (UTC) of the bar the range is for
+  bar_time timestamptz not null,
+  r double precision,
+  status text not null check (status in ('ok', 'short', 'stale', 'zero')),
+  behind integer not null default 0,
+  -- the open of the newest bar used
+  last_bar timestamptz,
+  source_read_at timestamptz,
+  computed_at timestamptz not null default now(),
+  primary key (pair, bar_time)
+);
+
+alter table public.spike_ranges enable row level security;
+revoke all on public.spike_ranges from anon, authenticated;
+grant all on public.spike_ranges to service_role;

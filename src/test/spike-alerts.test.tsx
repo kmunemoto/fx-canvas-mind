@@ -28,6 +28,7 @@ import {
   isIndicatorChartFor,
   isIndicatorRule,
   renderIndicatorMail,
+  spikeRangeFor,
   spikeSignals,
 } from "../../supabase/functions/signal-alerts/indicators";
 import { renderTestMail } from "../../supabase/functions/signal-alerts/logic";
@@ -36,11 +37,20 @@ const render = (ui: ReactElement, locale: "ja" | "en" = "ja"): RenderResult => r
 
 const H = 3_600_000;
 const SIX = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD", "XAU/USD"];
-const T0 = Date.UTC(2026, 10, 2, 0);
+// Wednesday 2026-10-28 00:00 UTC: T0 + 130 hours is Monday 2026-11-02 10:00 UTC (19:00 JST)
+const T0 = Date.UTC(2026, 9, 28, 0);
 const dt = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
-// `n` closed 1-hour bars from T0, each 0.125 high to low around 100 (R = 0.125, exact in binary)
-const flat = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({ datetime: dt(T0 + i * H), open: 100, high: 100.0625, low: 99.9375, close: 100 }));
+// `n` closed 1-hour bars from `from`, each 0.125 high to low around 100 (R = 0.125, exact
+// in binary; made through the weekend too, which spikeRangeFor's count of open hours
+// without a bar does not mind)
+const flat = (n: number, from = T0) =>
+  Array.from({ length: n }, (_, i) => ({ datetime: dt(from + i * H), open: 100, high: 100.0625, low: 99.9375, close: 100 }));
+// each bar's R as the sweep keeps it (spikeRangeFor), for spikeSignals
+const rangesOf = (pair: string, history: ReturnType<typeof flat>, ...opens: number[]) =>
+  new Map(opens.flatMap((t) => {
+    const g = spikeRangeFor(pair, history, t);
+    return g.status === "ok" && g.r !== null ? [[t, { r: g.r, behind: g.behind }] as const] : [];
+  }));
 
 describe("#395 the rule (_shared/spike.ts)", () => {
   it("R is the mean high − low of exactly the 120 bars before; none without them or when not above zero", () => {
@@ -85,45 +95,78 @@ describe("#395 the email (signal-alerts v36)", () => {
     }
   });
 
-  it("mails the forming bar in the minute it gets there, against the 120 closed bars before it", () => {
-    const history = flat(150);
-    const open = T0 + 150 * H;
+  it("works R out of the newest 120 bars before the bar (not the bar itself, nor older ones)", () => {
+    // 30 older bars twice as wide, then 120 of 0.125; the bar itself (in the history) wider still
+    const wide = flat(30).map((c) => ({ ...c, high: 100.125, low: 99.875 }));
+    const history = [...wide, ...flat(120, T0 + 30 * H), { datetime: dt(T0 + 150 * H), open: 100, high: 101, low: 99, close: 100 }];
+    expect(spikeRangeFor("USD/JPY", history, T0 + 150 * H)).toEqual({ status: "ok", r: 0.125, behind: 0, lastBar: T0 + 149 * H });
+    // the bar after it: its 120 hold the wide bar
+    expect(spikeRangeFor("USD/JPY", history, T0 + 151 * H).r).toBeCloseTo((119 * 0.125 + 2) / 120, 12);
+    // fewer than 120 before it
+    expect(spikeRangeFor("USD/JPY", flat(119), T0 + 119 * H)).toMatchObject({ status: "short", r: null });
+    // not above zero
+    expect(spikeRangeFor("USD/JPY", flat(130).map((c) => ({ ...c, high: 100, low: 100 })), T0 + 130 * H)).toMatchObject({ status: "zero", r: null });
+  });
+
+  it("allows the bars to end one open hour early, not two; the weekend and gold's daily hour are not counted", () => {
+    const history = flat(130); // to Monday 2026-11-02 09:00 UTC
+    expect(spikeRangeFor("USD/JPY", history, T0 + 131 * H)).toMatchObject({ status: "ok", behind: 1, r: 0.125 });
+    expect(spikeRangeFor("USD/JPY", history, T0 + 132 * H)).toMatchObject({ status: "stale", behind: 2, r: null });
+    // bars to Friday 2026-11-06 20:00 UTC, the bar Sunday 22:00 UTC: the weekend between
+    const fri20 = Date.UTC(2026, 10, 6, 20);
+    const toFri = flat(125, fri20 - 124 * H);
+    expect(spikeRangeFor("USD/JPY", toFri, fri20 + (2 * 24 + 2) * H)).toMatchObject({ status: "ok", behind: 0 });
+    expect(spikeRangeFor("USD/JPY", toFri, fri20 + (2 * 24 + 4) * H)).toMatchObject({ status: "stale", behind: 2 });
+    // gold, bars to Tuesday 2026-11-03 21:00 UTC and the bar at 23:00: 22:00 is its daily
+    // hour (17:00 New York, winter time)
+    const tue21 = Date.UTC(2026, 10, 3, 21);
+    const toTue = flat(125, tue21 - 124 * H);
+    expect(spikeRangeFor("XAU/USD", toTue, tue21 + 2 * H)).toMatchObject({ status: "ok", behind: 0 });
+    expect(spikeRangeFor("USD/JPY", toTue, tue21 + 2 * H)).toMatchObject({ status: "ok", behind: 1 });
+  });
+
+  it("mails the forming bar in the minute it gets there, against its R", () => {
+    const history = flat(130);
+    const open = T0 + 130 * H;
     const now = open + 23 * 60_000;
     const forming = { datetime: dt(open), open: 100, high: 100.4, low: 99.95, close: 100.3 };
-    const sigs = spikeSignals("USD/JPY", "1h", history, [{ bar: forming, forming: true }], now);
+    const ranges = rangesOf("USD/JPY", history, open);
+    const sigs = spikeSignals("USD/JPY", "1h", [{ bar: forming, forming: true }], ranges, now);
     expect(sigs).toHaveLength(1);
     const s = sigs[0];
     expect(s).toMatchObject({ rule: "spike", pair: "USD/JPY", interval: "1h", side: "BUY", barTime: new Date(open).toISOString(), closedAt: new Date(now).toISOString(), close: 100.3, sl: null, tps: null });
-    expect(s.spike).toMatchObject({ open: 100, extreme: 100.4, r: 0.125, forming: true, closesAt: new Date(open + H).toISOString() });
+    expect(s.spike).toMatchObject({ open: 100, extreme: 100.4, r: 0.125, forming: true, closesAt: new Date(open + H).toISOString(), behind: 0 });
     expect(s.spike!.x).toBeCloseTo(3.2, 10);
     // short of 3 R: nothing
-    expect(spikeSignals("USD/JPY", "1h", history, [{ bar: { ...forming, high: 100.37 }, forming: true }], now)).toEqual([]);
+    expect(spikeSignals("USD/JPY", "1h", [{ bar: { ...forming, high: 100.37 }, forming: true }], ranges, now)).toEqual([]);
     // a fall and a rise on one bar: both
-    expect(spikeSignals("USD/JPY", "1h", history, [{ bar: { ...forming, low: 99.6 }, forming: true }], now).map((x) => x.side)).toEqual(["BUY", "SELL"]);
+    expect(spikeSignals("USD/JPY", "1h", [{ bar: { ...forming, low: 99.6 }, forming: true }], ranges, now).map((x) => x.side)).toEqual(["BUY", "SELL"]);
     // a bar that is not the one forming now is not read as forming
-    expect(spikeSignals("USD/JPY", "1h", history, [{ bar: forming, forming: true }], open + H + 1)).toEqual([]);
+    expect(spikeSignals("USD/JPY", "1h", [{ bar: forming, forming: true }], ranges, open + H + 1)).toEqual([]);
+    // no R for the bar (none kept, or not "ok"): nothing
+    expect(spikeSignals("USD/JPY", "1h", [{ bar: forming, forming: true }], new Map(), now)).toEqual([]);
+    expect(spikeSignals("USD/JPY", "1h", [{ bar: forming, forming: true }], new Map([[open, { r: 0, behind: 0 }]]), now)).toEqual([]);
   });
 
   it("mails the newest closed bar while it closed at most 10 minutes ago (a move in its last minute), not later", () => {
-    const bars = flat(151);
-    bars[150] = { ...bars[150], low: 99.5 };
-    const close = T0 + 151 * H;
-    const got = spikeSignals("EUR/JPY", "1h", bars, [{ bar: bars[150], forming: false }], close + 4 * 60_000);
+    const bars = flat(131);
+    bars[130] = { ...bars[130], low: 99.5 };
+    const close = T0 + 131 * H;
+    const ranges = rangesOf("EUR/JPY", bars, T0 + 130 * H);
+    const got = spikeSignals("EUR/JPY", "1h", [{ bar: bars[130], forming: false }], ranges, close + 4 * 60_000);
     expect(got.map((x) => [x.side, x.spike?.forming])).toEqual([["SELL", false]]);
     expect(SPIKE_LATE_MS).toBe(10 * 60_000);
-    expect(spikeSignals("EUR/JPY", "1h", bars, [{ bar: bars[150], forming: false }], close + 11 * 60_000)).toEqual([]);
+    expect(spikeSignals("EUR/JPY", "1h", [{ bar: bars[130], forming: false }], ranges, close + 11 * 60_000)).toEqual([]);
   });
 
-  it("needs 120 closed bars before the bar, and a chart the rule is offered on", () => {
-    const history = flat(119);
-    const open = T0 + 119 * H;
-    const bar = { datetime: dt(open), open: 100, high: 101, low: 100, close: 101 };
-    expect(spikeSignals("USD/JPY", "1h", history, [{ bar, forming: true }], open + 60_000)).toEqual([]);
-    const h2 = flat(150);
-    const b2 = { ...bar, datetime: dt(T0 + 150 * H) };
-    expect(spikeSignals("USD/JPY", "15min", h2, [{ bar: b2, forming: true }], T0 + 150 * H + 60_000)).toEqual([]);
-    expect(spikeSignals("GBP/JPY", "1h", h2, [{ bar: b2, forming: true }], T0 + 150 * H + 60_000)).toEqual([]);
-    expect(spikeSignals("XAU/USD", "1h", h2, [{ bar: b2, forming: true }], T0 + 150 * H + 60_000)).toHaveLength(1);
+  it("is judged only on a chart the rule is offered on", () => {
+    const h2 = flat(130);
+    const open = T0 + 130 * H;
+    const b2 = { datetime: dt(open), open: 100, high: 101, low: 100, close: 101 };
+    const ranges = rangesOf("USD/JPY", h2, open);
+    expect(spikeSignals("USD/JPY", "15min", [{ bar: b2, forming: true }], ranges, open + 60_000)).toEqual([]);
+    expect(spikeSignals("GBP/JPY", "1h", [{ bar: b2, forming: true }], ranges, open + 60_000)).toEqual([]);
+    expect(spikeSignals("XAU/USD", "1h", [{ bar: b2, forming: true }], ranges, open + 60_000)).toHaveLength(1);
   });
 
   it("makes gold's hour of its recorded minutes, and not when its first minute began more than 2 minutes after the hour", () => {
@@ -138,43 +181,69 @@ describe("#395 the email (signal-alerts v36)", () => {
   });
 
   it("writes the email in Japanese and English: the move, the open, how far, the usual range, that it is not a signal, what was counted", () => {
-    const history = flat(150);
-    const open = T0 + 150 * H;
-    const s = spikeSignals("USD/JPY", "1h", history, [{ bar: { datetime: dt(open), open: 100, high: 100.4, low: 99.95, close: 100.3 }, forming: true }], open + 23 * 60_000)[0];
+    const history = flat(130);
+    const open = T0 + 130 * H;
+    const ranges = rangesOf("USD/JPY", history, open);
+    const s = spikeSignals("USD/JPY", "1h", [{ bar: { datetime: dt(open), open: 100, high: 100.4, low: 99.95, close: 100.3 }, forming: true }], ranges, open + 23 * 60_000)[0];
     const ja = renderIndicatorMail(s, "ja");
     expect(ja.subject).toBe("【Sextant】ドル/円 1時間足 急騰（始値からふだんの値幅の3.2倍）");
+    expect(ja.text).toContain("に始まった1時間足（20:00 に確定します）");
     expect(ja.text).toContain("始値 100.000、高値 100.400（始値から +40.0pips）");
+    expect(ja.text).toContain("見た時の値段: 100.300（日本時間 19:23 に見ました）");
     expect(ja.text).toContain("ふだんの1時間の値幅: 12.5pips（この足の前の確定足120本の「高値 − 安値」の平均）。その3倍は 37.5pips");
     expect(ja.text).toContain("足の途中で見た値なので、確定までに値段が戻ることがあります。");
     expect(ja.text).toContain("売買の合図ではありません。");
-    expect(ja.text).toContain("急騰35回・急落116回");
+    expect(ja.text).toContain("急騰36回・急落116回");
     expect(ja.text).toContain("測っていません");
+    expect(ja.text).toContain("チャートの「急騰・急落（1時間足）」も同じ決まりで印を付けますが");
+    expect(ja.text).not.toContain("同じ印が出ます");
     expect(ja.text).toContain("「急騰・急落」でチェックを外してください");
     const en = renderIndicatorMail(s, "en");
     expect(en.subject).toBe("[Sextant] USD/JPY 1-hour sharp rise (3.2× its usual range from the open)");
     expect(en.text).toContain("Open 100.000, high 100.400 (+40.0 pips from the open)");
     expect(en.text).toContain("This is not a signal to buy or sell.");
-    // gold: dollars, and what is gold's own
-    const g = spikeSignals("XAU/USD", "1h", history, [{ bar: { datetime: dt(open), open: 100, high: 100, low: 99.5, close: 99.6 }, forming: true }], open + 60_000)[0];
+    expect(en.text).toContain("36 times for a rise and 116 for a fall");
+    expect(en.text).not.toContain("The chart shows the same mark");
+    // a closed bar: its close, seen after it
+    const bars = flat(131);
+    bars[130] = { ...bars[130], high: 100.5, close: 100.45 };
+    const c = spikeSignals("USD/JPY", "1h", [{ bar: bars[130], forming: false }], ranges, open + H + 2 * 60_000)[0];
+    const cja = renderIndicatorMail(c, "ja");
+    expect(cja.text).toContain("（20:00 に確定した足）");
+    expect(cja.text).toContain("終値: 100.450（確定のあと、日本時間 20:02 に見ました）");
+    expect(renderIndicatorMail(c, "en").text).toContain("Close: 100.450 (seen after the close,");
+    // gold: dollars, what is gold's own, and R from stored bars one behind
+    const gOpen = open + H;
+    const gRanges = rangesOf("XAU/USD", history, gOpen);
+    expect(gRanges.get(gOpen)?.behind).toBe(1);
+    const g = spikeSignals("XAU/USD", "1h", [{ bar: { datetime: dt(gOpen), open: 100, high: 100, low: 99.5, close: 99.6 }, forming: true }], gRanges, gOpen + 60_000)[0];
     const gja = renderIndicatorMail(g, "ja");
     expect(gja.subject).toContain("急落");
     expect(gja.text).toContain("安値 99.50（始値から −0.50ドル）");
     expect(gja.text).toContain("Swissquote");
+    expect(gja.text).not.toContain("アプリの金のチャートと同じ");
+    expect(gja.text).toContain("（金は値段の出所も違う）");
+    expect(gja.text).toContain("保存した足が1本遅れていたため、その1本前までの120本");
     expect(gja.text).toContain("金は Twelve Data の1時間足〈2026/09/14〜2026/11/05、約7.4週〉で、急騰2回・急落6回");
+    expect(renderIndicatorMail(g, "en").text).toContain("the stored bars were 1 behind, so the 120 up to 1 bar earlier");
   });
 
-  it("the sweep reads the rule's subscriptions every minute and mails it once a bar and side, its failure apart; the database accepts the rule", () => {
+  it("the sweep's code (read as text here; run in a Deno harness for docs §8.138): the rule's subscriptions every minute, each hour's R kept in its table, a follower already mailed left out before any lookup, its failure apart; the database accepts the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
-    expect(fn).toContain('const sigs = spikeSignals(pair, "1h", history, candidates, nowMs);');
+    expect(fn).toContain("const sigs = spikeSignals(pair, \"1h\", candidates, usable, nowMs);");
+    expect(fn).toContain("spike_ranges?pair=eq.${enc(pair)}&bar_time=in.(");
+    expect(fn).toContain('rest("spike_ranges?on_conflict=pair,bar_time"');
+    expect(fn).toContain("signal_alerts?kind=eq.signal&pair=eq.${enc(x.pair)}&interval=eq.${enc(x.interval)}&bar_time=eq.${enc(x.barTime)}&side=eq.${x.side}&rule=eq.${enc(SPIKE_RULE_ID)}&select=user_id");
+    expect(fn).not.toContain("spikeMailed");
     expect(fn).toMatch(/try \{\s+reads\.push\(await spikeRead\(pair\)\);\s+\} catch \(err\) \{\s+console\.error\("spike failed:", pair, err\);/);
     expect(fn).toContain("spike: { pairs: SPIKE_PAIRS, intervals: SPIKE_INTERVALS },");
     expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";');
-    // the claim's unique key keeps a bar and side to one email
-    expect(fn).toContain('rest("signal_alerts?on_conflict=user_id,kind,pair,interval,bar_time,side,rule"');
     expect(renderTestMail([{ pair: "USD/JPY", interval: "1h", rule: "spike" }], "ja").text).toContain("登録中のチャート: ドル/円 1時間足（急騰・急落）");
     const mig = readFileSync("supabase/migrations/20261105060000_signal_alert_spike.sql", "utf8");
     expect(mig).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx', 'amdpo3', 'emarm', 'stockmacd', 'spike']));");
+    expect(mig).toContain("create table if not exists public.spike_ranges (");
+    expect(mig).toContain("revoke all on public.spike_ranges from anon, authenticated;");
   });
 });
 
@@ -212,7 +281,8 @@ describe("#395 the email in the settings", () => {
     expect(screen.getByTestId("signal-alert-spike-USD/JPY-1h")).toBeTruthy();
     expect(screen.queryByTestId("signal-alert-spike-USD/JPY-15min")).toBeNull();
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
-    expect(notes).toContain("急騰35回・急落116回");
+    expect(notes).toContain("急騰36回・急落116回");
+    expect(notes).toContain("金の毎日の最初の1時間（日本時間の朝8時台、夏は7時台）も判定しません");
     expect(notes).toContain("測っていません");
     fireEvent.click(screen.getByTestId("signal-alert-spike-XAU/USD-1h"));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "XAU/USD", interval: "1h", on: true, rule: "spike", lang: "ja" }));
@@ -220,6 +290,21 @@ describe("#395 the email in the settings", () => {
     // the MACD email's tick is another rule's
     fireEvent.click(screen.getByTestId("signal-alerts-rule-macdx"));
     expect(screen.queryByTestId("signal-alert-macdx-XAU/USD-1h")).toBeNull();
+  });
+
+  it("lists a sharp rise or fall it sent as 急騰 or 急落, not as a side to trade", async () => {
+    const row = (side: string, pair: string) => ({
+      id: `${pair}-${side}`, kind: "signal", pair, interval: "1h", bar_time: "2026-11-05T05:00:00Z", closed_at: "2026-11-05T05:50:00Z",
+      side, entry: 1, stop: null, target: null, rsi: null, rsi_prev: null, sar: null, rule: SPIKE_RULE_ID, strong: null,
+      status: "sent", skip_reason: null, error: null, created_at: "2026-11-05T05:50:01Z", sent_at: "2026-11-05T05:50:02Z", event: null,
+    });
+    const call = vi.fn(async () => normalizeAlertSettings(payload({ alerts: [row("BUY", "USD/JPY"), row("SELL", "XAU/USD")] }))!);
+    render(<SignalAlertSettings call={call} />);
+    await screen.findByText("USD/JPY 1時間 急騰");
+    const up = screen.getByText("USD/JPY 1時間 急騰");
+    expect(up.className).toContain("text-foreground");
+    expect(up.className).not.toContain("text-success");
+    expect(screen.getByText("XAU/USD 1時間 急落").className).not.toContain("text-destructive");
   });
 
   it("from a server that does not send the rule's charts: says it is not available yet", async () => {

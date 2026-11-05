@@ -1239,7 +1239,9 @@ const PriceChart = ({
     // candles it points at (#291: the video's way's labels too, in view).
     const sweepInView = sweepMarks !== null && sweepMarks.some((m) => m.at >= from && m.at < to);
     const erInView = er !== null && er.marks.some((m) => m.at >= from && m.at < to);
-    const pad = (max - min) * (marks.length > 0 || sweepInView || erInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // #395: and the sharp rises' and falls' words, above the high (below the low)
+    const spikeInView = spikes !== null && spikes.some((m) => m.i >= from && m.i < to);
+    const pad = (max - min) * (marks.length > 0 || sweepInView || erInView || spikeInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1262,7 +1264,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af, spikes]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -2349,8 +2351,9 @@ const PriceChart = ({
           up,
           c.open.toFixed(decimals),
           (up ? c.high : c.low).toFixed(decimals),
-          (up ? m.up : m.down).toFixed(decimals),
-          m.r.toFixed(decimals),
+          // as the email says them: pips, dollars on gold
+          formatDistance(pair, up ? m.up : m.down, { digits: 1 }),
+          formatDistance(pair, m.r, { digits: 1 }),
           (up ? m.upX : m.downX).toFixed(1),
           forming,
         ),

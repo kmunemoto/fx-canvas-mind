@@ -40,6 +40,7 @@ import { AMD_PO3, amdPo3, amdPo3Trades, pineFmt } from "../_shared/amd-po3.ts";
 import { EMA_RETURN, emaReturnOnWindow } from "../_shared/ema-return.ts";
 // #395: a sharp rise or fall of the 1-hour bar (docs §8.138)
 import { SPIKE, spikeOf, spikeRange } from "../_shared/spike.ts";
+import { isPossiblyClosedFor } from "../_shared/market-hours.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
@@ -333,6 +334,9 @@ export interface SpikeFacts {
   x: number;
   forming: boolean;
   closesAt: string;
+  // the open hours between the newest bar R was made from and the bar (0;
+  // 1 when gold's stored read was a bar behind: spikeRangeFor)
+  behind: number;
 }
 
 // #387: what made the EMA 20 / 200 way enter: the cross, the touch of the
@@ -793,21 +797,47 @@ export const emarmSignals = (
   return out;
 };
 
-// #395 (docs §8.138): the sharp rises and falls among `candidates` — the
-// 1-hour bar forming now (its high and low so far), and the newest closed one
-// while it closed at most SPIKE_LATE_MS ago (a move it made in its last minute
-// is seen after its close) — each read against the SPIKE.bars bars of
-// `history` (closed, oldest first, rounded as the chart draws them) that
-// opened before it. Each side once: a bar can be both. Its "entry" is the
-// price seen (the bar's close so far), with no stop or target; its closedAt
-// is when it was seen. Not on a chart the rule is not offered on, nor with
-// fewer than SPIKE.bars bars before the bar.
+// #395 (docs §8.138): the usual range R of the 1-hour bar opening at
+// `openMs`: the mean high − low of the SPIKE.bars bars of `history` (closed,
+// oldest first, rounded as the chart draws them) that opened before it,
+// counted by the bar, gaps and all (_shared/spike.ts spikeRange). Not worked
+// out ("short") with fewer bars than that before it, nor ("stale") when the
+// newest of them leaves more than SPIKE_BEHIND_MAX hours the market was open
+// (isPossiblyClosedFor: the weekend, gold's daily hour) without a bar before
+// the bar (a stored read that was not made again); one is allowed, gold's
+// stored read being made a minute after the hour. "zero": R not above zero.
+export const SPIKE_BEHIND_MAX = 1;
+export interface SpikeRangeRead {
+  status: "ok" | "short" | "stale" | "zero";
+  r: number | null;
+  behind: number;
+  lastBar: number | null;
+}
+export const spikeRangeFor = (pair: string, history: ReadonlyArray<Candle>, openMs: number): SpikeRangeRead => {
+  const before = history.filter((c) => barOpenMs(c.datetime) < openMs);
+  const lastBar = before.length > 0 ? barOpenMs(before[before.length - 1].datetime) : null;
+  if (lastBar === null || !Number.isFinite(lastBar) || before.length < SPIKE.bars) return { status: "short", r: null, behind: 0, lastBar };
+  let behind = 0;
+  for (let t = lastBar + HOUR_MS; t < openMs; t += HOUR_MS) if (!isPossiblyClosedFor(pair, t)) behind++;
+  if (behind > SPIKE_BEHIND_MAX) return { status: "stale", r: null, behind, lastBar };
+  const r = spikeRange(before.slice(-SPIKE.bars).map((c) => ({ h: c.high, l: c.low })));
+  return r === null ? { status: "zero", r: null, behind, lastBar } : { status: "ok", r, behind, lastBar };
+};
+
+// #395: the sharp rises and falls among `candidates` — the 1-hour bar
+// forming now (its high and low so far), and the newest closed one while it
+// closed at most SPIKE_LATE_MS ago (a move it made in its last minute is seen
+// after its close) — each read against its R in `ranges` (by its open:
+// spikeRangeFor's, kept for the hour; none, none judged). Each side once: a
+// bar can be both. Its "entry" is the price seen (the bar's close so far),
+// with no stop or target; its closedAt is when it was seen. Not on a chart
+// the rule is not offered on.
 export const SPIKE_LATE_MS = 10 * 60_000;
 export const spikeSignals = (
   pair: string,
   interval: string,
-  history: ReadonlyArray<Candle>,
   candidates: ReadonlyArray<{ bar: Candle; forming: boolean }>,
+  ranges: ReadonlyMap<number, { r: number; behind: number }>,
   nowMs: number,
 ): IndicatorSignal[] => {
   const step = LIVE_STEP_MS[interval];
@@ -818,10 +848,9 @@ export const spikeSignals = (
     if (!Number.isFinite(open)) continue;
     const end = open + step;
     if (forming ? !(open <= nowMs && nowMs < end) : !(end <= nowMs && nowMs - end <= SPIKE_LATE_MS)) continue;
-    const before = history.filter((c) => barOpenMs(c.datetime) < open);
-    if (before.length < SPIKE.bars) continue;
-    const r = spikeRange(before.slice(-SPIKE.bars).map((c) => ({ h: c.high, l: c.low })));
-    if (r === null) continue;
+    const range = ranges.get(open);
+    if (!range || !Number.isFinite(range.r) || !(range.r > 0)) continue;
+    const r = range.r;
     const s = spikeOf({ o: bar.open, h: bar.high, l: bar.low }, r);
     const sides = [
       { hit: s.isUp, side: "BUY" as const, extreme: bar.high, move: s.up, x: s.upX },
@@ -844,7 +873,7 @@ export const spikeSignals = (
         rsiPrev: null,
         sl: null,
         tps: null,
-        spike: { open: bar.open, extreme: f.extreme, move: f.move, r, x: f.x, forming, closesAt: new Date(end).toISOString() },
+        spike: { open: bar.open, extreme: f.extreme, move: f.move, r, x: f.x, forming, closesAt: new Date(end).toISOString(), behind: range.behind },
       });
     }
   }
@@ -1280,14 +1309,15 @@ const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
 };
 
 // #395 (docs §8.138): how often the rule went off on the five pairs' 1-hour
-// bars in the database (GMO's mid, the bars opened 2026-07-19 23:00 to
-// 2026-11-04 20:00 UTC, some 15.4 weeks, read as the bar formed: its high or
-// low SPIKE.k times R from its open): 35 rises and 116 falls; gold on the
+// bars in the database (GMO's mid rounded as the chart draws it, the bars
+// opened 2026-07-19 23:00 to 2026-11-04 20:00 UTC, some 15.4 weeks, read as
+// the bar formed: its high or low SPIKE.k times R from its open): 36 rises
+// and 116 falls; gold on the
 // Twelve Data 1-hour bars the live chart keeps (the bars opened 2026-09-14
 // 13:00 to 2026-11-05 01:00 UTC, some 7.4 weeks): 2 and 6. What the price did
 // after them has not been measured
 export const SPIKE_MEASURED = {
-  weeks: 15.4, up: 35, down: 116, from: "2026-07-19", to: "2026-11-04",
+  weeks: 15.4, up: 36, down: 116, from: "2026-07-19", to: "2026-11-04",
   goldWeeks: 7.4, goldUp: 2, goldDown: 6, goldFrom: "2026-09-14", goldTo: "2026-11-05",
 } as const;
 
@@ -1312,11 +1342,13 @@ const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
       [
         `Bar: opened ${clock(open, 0)} UTC (${clock(open, 9)} JST), ${f?.forming ? "closes" : "closed"} ${clock(closes, 0).slice(11)} UTC`,
         `Open ${px(f?.open)}, ${up ? "high" : "low"} ${px(f?.extreme)} (${up ? "+" : "−"}${f ? amt(f.move) : "—"} from the open)`,
-        `Price when seen: ${px(s.close)} (${clock(seen, 0)} UTC, ${clock(seen, 9).slice(11)} JST)`,
-        `The usual hourly range: ${f ? amt(f.r) : "—"} (the mean high − low of the ${SPIKE.bars} closed bars before this one); ${SPIKE.k} times it is ${f ? amt(SPIKE.k * f.r) : "—"}`,
+        f?.forming
+          ? `Price when seen: ${px(s.close)} (${clock(seen, 0)} UTC, ${clock(seen, 9).slice(11)} JST)`
+          : `Close: ${px(s.close)} (seen after the close, ${clock(seen, 0)} UTC, ${clock(seen, 9).slice(11)} JST)`,
+        `The usual hourly range: ${f ? amt(f.r) : "—"} (the mean high − low of the ${SPIKE.bars} closed bars before this one${f && f.behind > 0 ? `; the stored bars were ${f.behind} behind, so the ${SPIKE.bars} up to ${f.behind} bar${f.behind > 1 ? "s" : ""} earlier` : ""}); ${SPIKE.k} times it is ${f ? amt(SPIKE.k * f.r) : "—"}`,
       ].join("\n"),
       `${f?.forming ? "This was seen as the bar formed: the price may come back before the close. " : ""}This is not a signal to buy or sell. On the five pairs' 1-hour bars in the database (${m.from} to ${m.to}, some ${m.weeks} weeks) it went off ${m.up} times for a rise and ${m.down} for a fall${gold ? `; on gold's Twelve Data 1-hour bars (${m.goldFrom} to ${m.goldTo}, some ${m.goldWeeks} weeks) ${m.goldUp} and ${m.goldDown}` : ""}. What the price did after them has not been measured.`,
-      `${gold ? "The usual range is from Twelve Data's 1-hour bars and this hour's prices from Swissquote's, recorded every minute (the app's gold chart uses the same)." : "The prices are the mid of GMO Coin's public bid and ask, as the app's chart draws them."} The chart shows the same mark ("Sharp rise / fall (1 hour)"). Check the latest state in the app:\n${APP_URL}`,
+      `${gold ? "The usual range is from Twelve Data's 1-hour bars and this hour's prices from Swissquote's, recorded every minute." : "The prices are the mid of GMO Coin's public bid and ask, as the app's chart draws them."} The chart's "Sharp rise / fall (1 hour)" marks the bars by the same rule; its bars are made a little differently${gold ? " (and on gold from another source)" : ""}, so near the line a bar may have no mark there or a slightly different multiple. Check the latest state in the app:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick \"Sharp rise / fall\".\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
   }
@@ -1324,13 +1356,15 @@ const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
   return assemble(`【Sextant】${pairJa(s.pair)} 1時間足 ${what}（始値からふだんの値幅の${x}倍）`, [
     `${pairJa(s.pair)}の1時間足が、急に${up ? "上がりました" : "下がりました"}。この足の${up ? "高値" : "安値"}が、始値から、ふだんの1時間の値幅の${x}倍の所まで${up ? "上がりました" : "下がりました"}${f?.forming ? "（足の途中で見た値です）" : ""}。`,
     [
-      `足: ${clock(open, 9)}（日本時間）に始まった1時間足（${clock(closes, 9).slice(11)} に確定${f?.forming ? "" : "した足"}）`,
+      `足: ${clock(open, 9)}（日本時間）に始まった1時間足（${clock(closes, 9).slice(11)} に確定${f?.forming ? "します" : "した足"}）`,
       `始値 ${px(f?.open)}、${up ? "高値" : "安値"} ${px(f?.extreme)}（始値から ${up ? "+" : "−"}${f ? amt(f.move) : "—"}）`,
-      `見た時の値段: ${px(s.close)}（日本時間 ${clock(seen, 9).slice(11)} に見ました）`,
-      `ふだんの1時間の値幅: ${f ? amt(f.r) : "—"}（この足の前の確定足${SPIKE.bars}本の「高値 − 安値」の平均）。その${SPIKE.k}倍は ${f ? amt(SPIKE.k * f.r) : "—"}`,
+      f?.forming
+        ? `見た時の値段: ${px(s.close)}（日本時間 ${clock(seen, 9).slice(11)} に見ました）`
+        : `終値: ${px(s.close)}（確定のあと、日本時間 ${clock(seen, 9).slice(11)} に見ました）`,
+      `ふだんの1時間の値幅: ${f ? amt(f.r) : "—"}（この足の前の確定足${SPIKE.bars}本の「高値 − 安値」の平均${f && f.behind > 0 ? `。保存した足が${f.behind}本遅れていたため、その${f.behind}本前までの${SPIKE.bars}本` : ""}）。その${SPIKE.k}倍は ${f ? amt(SPIKE.k * f.r) : "—"}`,
     ].join("\n"),
     `${f?.forming ? "足の途中で見た値なので、確定までに値段が戻ることがあります。" : ""}売買の合図ではありません。データベースの5ペアの1時間足（${m.from.replace(/-/g, "/")}〜${m.to.replace(/-/g, "/")}、約${m.weeks}週）では、急騰${m.up}回・急落${m.down}回でした${gold ? `（金は Twelve Data の1時間足〈${m.goldFrom.replace(/-/g, "/")}〜${m.goldTo.replace(/-/g, "/")}、約${m.goldWeeks}週〉で、急騰${m.goldUp}回・急落${m.goldDown}回）` : ""}。急騰・急落のあと値段がどう動いたか（続くか戻るか）は測っていません。`,
-    `${gold ? "ふだんの値幅は Twelve Data の1時間足、この時間の値段は Swissquote の値段を毎分記録したものです（アプリの金のチャートと同じ）。" : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足です。"}チャートの「急騰・急落（1時間足）」にも同じ印が出ます。アプリで最新の状態を確認してください。\n${APP_URL}`,
+    `${gold ? "ふだんの値幅は Twelve Data の1時間足、この時間の値段は Swissquote の値段を毎分記録したものです。" : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ丸め方です。"}チャートの「急騰・急落（1時間足）」も同じ決まりで印を付けますが、チャートの足は作り方が少し違う${gold ? "（金は値段の出所も違う）" : ""}ため、境目の足では印が出ないことや、倍数が少し違うことがあります。アプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「急騰・急落」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);
 };

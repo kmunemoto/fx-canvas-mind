@@ -2000,7 +2000,7 @@ export const en: Dict = {
       // #387
       emarm: "An Instagram video's way (GBP/JPY scalping on the 15-minute chart), made into a rule by this app (EMA cross + return move): after EMA 20 crosses above EMA 200, a candle comes back to the 200 EMA, a close breaks the horizontal and diagonal lines drawn from the swing high after it, the price returns to the horizontal from the 3rd bar after the break, and the bar that closes above that bar's body is a BUY (a SELL is the mirror). On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only. The same marks as \"EMA cross + return move\" on the chart; the email carries a stop (the lowest low or highest high from the bar that broke the diagonal), target 1 (the latest high or low) and target 2 (wave 1's height). Measured on the five pairs' 15-minute bars over the last 52 weeks: 22 entries, 11 won and 11 lost with the stop and target 1 (50.0%), +0.7 pips a trade (spread not paid). Gold is not measured.",
       // #395
-      spike: "Sent when the 1-hour bar of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD or gold (XAU/USD) moves sharply: a sharp rise when its high has gone 3 times the usual hourly range (the mean high − low of the 120 closed bars before it) above its open, a sharp fall when its low has gone as far below. Sent in the minute it is seen, while the bar is still forming (one email a bar and direction). Not a signal to buy or sell. The same marks as \"Sharp rise / fall (1 hour)\" on the chart.",
+      spike: "Sent when the 1-hour bar of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD or gold (XAU/USD) moves sharply: a sharp rise when its high has gone 3 times the usual hourly range (the mean high − low of the 120 closed bars before it) above its open, a sharp fall when its low has gone as far below. Sent in the minute it is seen, while the bar is still forming (one email a bar and direction). Not a signal to buy or sell. \"Sharp rise / fall (1 hour)\" on the chart marks bars by the same rule (its bars are made a little differently, so near the line the two may differ).",
       // #391
       stockmacd: "The MACD peak/valley email (the same rule as on the currency pairs) on US and Japanese stocks' 1-hour charts: a SELL when the MACD(12, 26, 9) blue line reaches 95% or more of the way to the top of the newest 120 bars' pane, a BUY when it reaches 95% or more of the way to its bottom. The email gives no stop or target.",
       sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
@@ -2056,11 +2056,11 @@ export const en: Dict = {
     ],
     // #395: a sharp rise or fall's notes (docs §8.138)
     spikeNotes: [
-      "Read on the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold only (the owner's choice). The five pairs are the mid of GMO Coin's bid and ask, the same bars as the chart. Gold's usual range is from Twelve Data's 1-hour bars and the hour's prices from Swissquote's, recorded every minute (the chart's closed gold bars are Twelve Data's, so a mark there may now and then differ from the email).",
+      "Read on the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold only (the owner's choice). The five pairs are the mid of GMO Coin's bid and ask, rounded as the chart is. Gold's usual range is from Twelve Data's 1-hour bars and the hour's prices from Swissquote's, recorded every minute (the chart's gold bars are Twelve Data's, so a mark there may differ from the email).",
       "Read every minute: the forming 1-hour bar is read each minute, and once its high (low) has gone 3 times the usual range from its open, the email goes in that minute. A move reached just before the close is mailed within 10 minutes of the close. How many seconds the emails actually take has not been checked.",
       "It is seen while the bar forms, so the price may come back before the close; a bar that got there once is a sharp rise (fall) even so.",
-      "How often (the five pairs' 1-hour bars in the database, 2026-07-19 to 2026-11-04, some 15.4 weeks): 35 rises and 116 falls, about 10 a week in all; gold (Twelve Data's 1-hour bars, 2026-09-14 to 2026-11-05, some 7.4 weeks) 2 and 6. What the price did after them (went on or came back, any win rate) has not been measured.",
-      "An alert is not an order. Nothing is judged while the market is closed (weekends and the like).",
+      "How often (the five pairs' 1-hour bars in the database, 2026-07-19 to 2026-11-04, some 15.4 weeks): 36 rises and 116 falls, about 10 a week in all; gold (Twelve Data's 1-hour bars, 2026-09-14 to 2026-11-05, some 7.4 weeks) 2 and 6. What the price did after them (went on or came back, any win rate) has not been measured.",
+      "An alert is not an order. Nothing is judged while the market is closed (weekends and the like), nor gold's first hour each day (08:00 JST, 07:00 in summer): the minute prices are recorded from some 5 minutes after it reopens, so that hour's open is not known.",
     ],
     // #391: the MACD email on shares' notes (docs §8.134)
     stockmacdNotes: [
@@ -2105,6 +2105,9 @@ export const en: Dict = {
     } as Record<string, string>,
     skipReasons: { costly_hours: "Not emailed (costly hours)" } as Record<string, string>,
     sides: { BUY: "Buy", SELL: "Sell" } as Record<string, string>,
+    // #395: a sharp rise's or fall's row (not a side to trade)
+    spikeUp: "Sharp rise",
+    spikeDown: "Sharp fall",
     plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
     // #108: the live record of what each signal did afterwards
     record: {

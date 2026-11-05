@@ -110,6 +110,9 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const rowLabel = (r: AlertRow) => {
     if (r.kind === "test") return a.testRow;
     const tf = r.interval ? a.intervals[r.interval] ?? r.interval : "";
+    // #395: a sharp rise or fall is kept as BUY or SELL only for the table's
+    // check; it is said as what it is, not as a side to trade
+    if (r.rule === "spike") return `${r.pair ?? ""} ${tf} ${r.side === "BUY" ? a.spikeUp : r.side === "SELL" ? a.spikeDown : ""}`.trim();
     return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (r.strong ? a.strongTag : "") + (a.ruleTag[r.rule] ?? "");
   };
   const statusLabel = (r: AlertRow) =>
@@ -382,7 +385,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                   <div key={r.id} className="text-[11px] py-0.5" data-testid="signal-alert-row">
                     <div className="flex items-center gap-2 whitespace-nowrap">
                       <span className="font-mono text-muted-foreground">{jst(r.closedAt ?? r.createdAt)}</span>
-                      <span className={r.side === "BUY" ? "text-success" : r.side === "SELL" ? "text-destructive" : "text-foreground"}>
+                      <span className={r.rule === "spike" ? "text-foreground" : r.side === "BUY" ? "text-success" : r.side === "SELL" ? "text-destructive" : "text-foreground"}>
                         {rowLabel(r)}
                       </span>
                     </div>
