@@ -965,7 +965,7 @@ required now.
 | `midHalfEven` | A: midOf | ties to even | hand A.1.7 |
 | `pointsTrunc` | A: pointsOf | Math.trunc | hand A.1.8 |
 | `smaNewestFirst` | B: smaOldest | pine.ts sma | hand A.3.2, A.3.31 (SMA20); the Python's last digit once an item uses SMA (step 4) |
-| `noRisingEdge` | B: candidatesOf | condition and hold emit every true bar | hand A.4.1, A.4.32, A.4.33, A.4.34 |
+| `noRisingEdge` | B: candidatesOf | condition and hold emit every true bar | hand A.4.1, A.4.33, A.4.34 (A.4.32 has no condition true on two bars in a row, so it cannot catch it: found in the trial, 2026-11-05) |
 | `noHolm` | D: holm | each p ≤ 0.025 | hand A.2.22 |
 | `iutOneLeg` | D: holm | p = p_Δ | hand A.2.22 |
 | `c4PointOnly` | D: conditionsOf | C4 = Δ_late's point > 0 | hand A.2.23 (V2's C4); Q (step 4) |
@@ -1050,7 +1050,7 @@ hit, and the other checks must pass.
 |---|---|---|
 | CMP-N 1001, CMP-N 1002 | N, 1001 and 1002, no flip | Every file of `lawsearch-dump.md` agrees between TS and Python under spec 17.2. Every check of 15 passes: data, adds up, cut, poison, presence, h1Only, stage 1's first half = stage 0's, follow-bar checks, donchian = donchianState. noBlind = 0; Δ_late's `end` exclusions = 0. Stages 0, 1 and 2 run to the end: floor, same trial, groups, choice and verdicts are printed. They are not judged against N's criteria, which need 100 runs and 1,364 trials (step 4). |
 | CMP-C 7101 | C (N with holes; 4.2), 7101 | The same agreement, now with ③ holes, substitute exits, an empty day file and r ruled unusable by gaps. Blind bars are excluded by ③ after each removed m15 run of ≥ 2 slots and each removed h1 bar, and some blind rows have `subst = 1` (every bar is a blind bar, so these follow from the removed bars; a trial's own signals may or may not fall there). Plant `reasonUsesFuture` fails the cut or the presence (ii) here. |
-| FLIP 1001–1005 | N, 1001–1005, flipped and not | For every blind bar of both halves and timeframes, the flipped run's buy h = the original's sell h and PL is the same (points; exact). E04, E26 and S01: the signals match 1-to-1 with reversed directions, with differences ≤ 0.1% per trial. B06 is not symmetric (log returns of mirrored prices), so its name and reason are printed with its difference. See 11 O-2 before reading a failure of the h equality. |
+| FLIP 1001–1005 | N, 1001–1005, flipped and not | For every blind bar of both halves and timeframes, the flipped run's buy h = the original's sell h and PL is the same (points; exact). E04, E26 and S01: the signals match 1-to-1 with reversed directions, with differences ≤ 0.1% per trial. B06 is not symmetric (log returns of mirrored prices), so its name and reason are printed with its difference. See 11 O-2 before reading a failure of the h equality. From 2026-11-05 (spec 22.6, 23.1) these conditions are judged on the exact mirror: the original run's 5-minute mid, Bid and Ask mirrored about the pair's first 5-minute mid open S (mid' = 2S − mid, Bid' = 2S − Ask, Ask' = 2S − Bid, high' from low), with no rounding of spec 2, and everything above it rebuilt from that. The FLIP=1 run (flipped files read under spec 2) still runs, and is compared TS–Python only. |
 | O 6001–6004 | O, 6001–6004 | `m15.E26.*` and `h1.E26.*`: the cut and the poison fail (exit 3), and suspicion hits on their stage-1 rows. The other checks of the other trials pass. |
 | PLANT-* | walkfiles on CMP-N 1001's and CMP-C 7101's files (OUT `<RUN>/plant-<name>`), and the hand examples | Each plant of 8 is caught by its named check. |
 | SMOKE 7001–7004 | D, H, E15, EF, with `STRENGTH` provisional | Only that each effect moves its target the intended way, in the dumps: D the blind buy a > 0; H EUR/USD's blind buy a by New York hour (negative in 03–09, positive in 11–15); E15 m15.E04.F00's first-half Δ > 0; EF h1.S01's first-half Δ > 0. These are not formal runs, not the calibration of 14.3, and not written as strengths. No TS–Python comparison is required on them. |
@@ -1071,11 +1071,18 @@ hit, and the other checks must pass.
   - 7.3 keeps the literal set and only allows B06's 291-bar window (§8.113's finite length).
   - If the measured time does not fit a job, the choice of a cap (as §8.113's chartbest capped its boundary kinds
     with seed 320) belongs to the owner, before step 4.
+  - Decided 2026-11-05 (spec 22.7, 23.2), after the trial measured 9,217 s a run (m15's cut 8,006 s, 85% of its
+    targets from the higher-timeframe boundaries): in stage 0 the higher-timeframe boundary targets are 300 evenly
+    picked per timeframe and pair (j-th = floor(j(n−1)/299) of them in time order; all when n ≤ 300). Stage 1's chosen
+    trials are cut on every boundary target of the first half at the end of stage 1, before the second half opens (a
+    failure stops before stage 2), and stage 2 cuts them on every boundary target of the second half.
 - **O-2 the flip's exact h**: spec 14.1's spread makes half-tick mids (an odd number of ticks). Mirroring changes the
   binary value that `toFixed` rounds, so a mirrored mid can round the other way by 1 point. Where |m| ≤ 1 point, the
   flipped buy h can then differ from the original sell h, even with a correct program. The trial counts those bars.
   If any exist, the owner decides how 14.2's "ぴったり同じ" is read (for example only on bars whose four mids are not
   half-ticks). The generator is not changed to avoid it.
+  - Decided 2026-11-05 (spec 22.6, 23.1): judged on the exact mirror of the original run (see 10's FLIP row). The
+    trial measured E04 and E26 signal differences of 0.84–3.94% on FLIP 1001's files, and 0 on the exact mirror.
 - **O-3 E1h, Q, R**: their trials (E37, E22, the R trials) are not built. Their sets run in step 4.
 - **O-4 κ and g**: stage 2 runs with κ = 1 and stage 0 without g. Both are written as "not run yet" in `config.json`
   and `print.txt`.

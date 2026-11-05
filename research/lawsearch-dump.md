@@ -178,13 +178,14 @@ Per trial, in table order, these keys in this order:
 | first.reason.<code> | int | for each code of 6's `reason` column (counted, f_none, both, r1, r1w, r1b, r2, r3, r4, r5, r6): r1 and r1w only for T < SPLIT; r2–r6 for the half's signals; f_none and both by the half column |
 | first.no_trade, first.no_blind | int | counted signals without an entry bar; counted signals with a trade whose stratum has no blind bar (0) |
 | first.per_week | real (exact) | first.counted ÷ 72 |
-| second.… | | the same keys for the second half (÷ 76) |
+| second.counted, second.weeks | int | the second half's counted signals and weeks with one, only (spec 9 後半: 試しごとの内訳は段2まで出さない; spec 23.3, 2026-11-05: the trial's format wrote second.pd, second.reason, second.no_trade, second.no_blind and second.per_week too, and no longer does) |
 | all.emitted, all.r1, all.r1w, all.r1b | int | the whole read range: every emitted candidate; ① (with T ≥ SPLIT); its warm-up part; ①b |
 | all.adds_up | bool | all.emitted = all.r1 + all.r1w + all.r1b + Σ_halves (r2 … r6, counted) |
 | floor | bool | ≥ 300 counted and ≥ 30 weeks in both halves |
 | same_as | text | the earliest trial with the same first-half counted set (spec 4.6), or empty |
 | group | text | the overlap group's first trial in table order (spec 9) |
-| g, df, pass_min, mde, mark, stage3_estimate | real, int, real (q), real (q), bool, real | spec 9 見分けられる大きさ (empty when no g: the trial) |
+| g, df, pass_min, mde, mark | real, int, real (q), real (q), bool | spec 9 見分けられる大きさ (empty when no g: the trial) |
+| stage3_estimate | real (exact) | second.counted × 52 ÷ 76, written with or without g (spec 23.3) |
 
 ### `stage0_totals.csv` — `half,key,value` (key: half, key)
 
@@ -351,7 +352,10 @@ Key: tf, half. All int. late_end must be 0.
 
 - A decision that compares two values may differ when the two values compared are within 1e−9 of each other in
   either implementation. These decisions are: p vs a Holm or BH threshold, lb vs 0, ub vs 0, late_lb vs 0, dF_lo vs
-  0, and the order of two lb or two p.
+  0, and the order of two lb or two p. Also (spec 23.5, 2026-11-05) the choice of the candidate in spec 8.5: V.use_lb
+  (the widest t(0.975) × SE) and V.use_p (the largest p) when the two candidates' values are within 1e−9; the
+  Python then adopts the TS's candidate, and the values that follow from it (V.t, V.lb, V.ub, stage 2's t_delta,
+  t_pl and mde) are compared under the TS's candidate.
 - The comparator lists each as `ALLOWED 8.5 <file> <trial> <key>`, and the Python adopts the TS's decision.
 - When the decision is one of stage 1's chosen trials (`stage1.csv` chosen, `stage1_summary.csv` chosen.*), a stage
   2 Holm pass (holm_pass, holm_delta_pass) or a verdict, the comparator writes `STOP 8.5 …` with both values and
@@ -448,7 +452,8 @@ for the lead, not here.
 - `first.reason.r1` and `first.reason.r1w` count the ① rows with T < SPLIT, `second.reason.r1` and
   `second.reason.r1w` those with T ≥ SPLIT; `r1b` is first only. f_none and both go by the half column. Reason: 7
   above, written for both halves.
-- `g`, `df`, `pass_min`, `mde`, `mark` and `stage3_estimate` are all empty when the trial has no g (7 above, kept).
+- `g`, `df`, `pass_min`, `mde` and `mark` are empty when the trial has no g (7 above, kept). `stage3_estimate` is
+  written whether or not there is a g (spec 23.3, 2026-11-05; before, it was empty with them).
 
 ### 11.8 stage2.csv
 
