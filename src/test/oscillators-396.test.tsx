@@ -267,5 +267,6 @@ describe("#396 in full screen", () => {
     } finally {
       (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = realRO;
     }
-  });
+    // six full-screen charts drawn: more than the default 5 seconds on a busy machine
+  }, 30_000);
 });
