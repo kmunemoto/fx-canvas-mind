@@ -38,5 +38,5 @@ jobs:
               print("  ", f(ts[k]), "o", q["open"][k], "h", q["high"][k], "l", q["low"][k], "c", q["close"][k], "v", q["volume"][k])
           PY
             done
-            [ "$round" = 1 ] && sleep 70
+            if [ "$round" = 1 ]; then sleep 70; fi
           done
