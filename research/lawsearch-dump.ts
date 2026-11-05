@@ -592,7 +592,8 @@ export async function dumpChecks(dir: string, rs: CheckResult[], stages: readonl
 
 // cut_fail.csv (TS only, C3; lawsearch-dump.md 8, the lead's D6): every failing bar of the checks cut, cut.chosen.first
 // and cut.chosen.second; always written, with its header. Order: check, trial (table order), pair (table order), k,
-// kinds.
+// kinds. Columns check,stage,trial,pair,k,s,T,kinds,cut,uncut: T (C4a, the lead's E7) is bar k's close, the time the
+// checks.csv detail and the STOP line print. Sealed until stage 2 (lawsearch-dump.md 12; the lead's E5).
 const CUT_CHECK_ORDER: Readonly<Record<string, number>> = { cut: 0, "cut.chosen.first": 1, "cut.chosen.second": 2 };
 export async function dumpCutFail(dir: string, rows: ReadonlyArray<CutFailRow>): Promise<void> {
   const rank = (c: string) => {
@@ -602,5 +603,5 @@ export async function dumpCutFail(dir: string, rows: ReadonlyArray<CutFailRow>):
   };
   for (const r of rows) rank(r.check);
   const sorted = [...rows].sort((a, b) => rank(a.check) - rank(b.check) || a.order - b.order || a.pi - b.pi || a.k - b.k || (a.kinds < b.kinds ? -1 : a.kinds > b.kinds ? 1 : 0));
-  await writeCsv(`${dir}/cut_fail.csv`, ["check", "stage", "trial", "pair", "k", "s", "kinds", "cut", "uncut"], sorted.map((r) => [r.check, r.stage, r.trial, PAIRS[r.pi], fmtInt(r.k), fmtInt(r.s), r.kinds, r.cut, r.uncut]));
+  await writeCsv(`${dir}/cut_fail.csv`, ["check", "stage", "trial", "pair", "k", "s", "T", "kinds", "cut", "uncut"], sorted.map((r) => [r.check, r.stage, r.trial, PAIRS[r.pi], fmtInt(r.k), fmtInt(r.s), fmtInt(r.T), r.kinds, r.cut, r.uncut]));
 }

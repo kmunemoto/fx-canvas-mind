@@ -229,17 +229,20 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // o.timeKey: the prefix of the times written to o.times (default "cut": cut.m15, cut.h1); o.maxExamples: how many
 // failing bars each trial's probe lists (default 5); o.note: appended to the detail (the targets by kind). o.fails
 // (C3, the lead's D6; lawsearch-dump.md 8 cut_fail.csv): every failing bar is pushed to o.fails.rows with the check's
-// name and o.fails.stage, whatever the caps above (spec 23.2 その試しの名前と外れた足を出す).
+// name and o.fails.stage, whatever the caps above (spec 23.2 その試しの名前と外れた足を出す), with the bar's start s and
+// close T (C4a, the lead's E7: T is the time the detail prints, so the two can be matched).
 // Plant chosenCutFirstDiff (design 8, C3): in the check "cut.chosen.first" only, the cut decision of the first target
 // of the first trial given (the first chosen trial in table order) gets a planted mark, so that this check fails on a
 // chosen trial and the stop before stage 2 (design 7.7) runs end to end; nothing else changes.
 export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string; fails?: { stage: string; rows: CutFailRow[] } }): CheckResult {
   const cap = o.maxExamples ?? MAX_EXAMPLES;
   const name = o.name ?? "cut";
-  // cut_fail.csv's text of a decision: rows joined by ";", empty for no candidate (lawsearch-dump.md 8)
+  // cut_fail.csv's text of a decision: each candidate "d:status:warm:reason:stratum", the candidates joined by ";",
+  // empty for no candidate (lawsearch-dump.md 8)
   const failText = (d: string) => (d === "none" ? "" : d.split("|").join(";"));
-  const fail = (trial: TrialDef, pi: number, k: number, start: number, kinds: string, cut: string, uncut: string) => {
-    if (o.fails) o.fails.rows.push({ check: name, stage: o.fails.stage, trial: trial.id, order: trial.order, pi, k, s: start, kinds, cut, uncut });
+  // bar k of series s: its start s.s[k] and close s.T[k] (for "entry", k is the signal bar)
+  const fail = (trial: TrialDef, pi: number, s: Series, k: number, kinds: string, cut: string, uncut: string) => {
+    if (o.fails) o.fails.rows.push({ check: name, stage: o.fails.stage, trial: trial.id, order: trial.order, pi, k, s: s.s[k], T: s.T[k], kinds, cut, uncut });
   };
   let planted = o.plant === "chosenCutFirstDiff" && name === "cut.chosen.first" && trials.length > 0 ? trials[0].id : null;
   const probes = new Map<string, Probe>();
@@ -294,7 +297,7 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
           probe.compared++;
           if (got !== want) {
             miss(probe, `${PAIRS[pi]} ${iso(Tk)} k=${k} [${tg.kinds.join("+")}] cut ${got} uncut ${want}`, cap);
-            fail(trial, pi, k, s.s[k], tg.kinds.join("|"), failText(got), failText(want));
+            fail(trial, pi, s, k, tg.kinds.join("|"), failText(got), failText(want));
           }
         }
       }
@@ -320,7 +323,7 @@ export function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], 
           probe.compared++;
           if ((e === null ? -1 : e.j) !== j) {
             miss(probe, `${PAIRS[c.pi]} ${iso(T)} entry ${e?.j} first start ${j}`, cap);
-            fail(trial, c.pi, c.i[r], s.s[c.i[r]], "entry", e === null ? "" : String(e.j), j < 0 ? "" : String(j));
+            fail(trial, c.pi, s, c.i[r], "entry", e === null ? "" : String(e.j), j < 0 ? "" : String(j));
           }
         }
       }

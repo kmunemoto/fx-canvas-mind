@@ -21,6 +21,8 @@ the "meaning" columns are the spec's.
 <RUN>/cmp/report.txt       the comparator's report (10)
 ```
 
+- (C4a, 2026-11-05) `signals/`, `ind/`, `bars/`, `htf/` and `ts/cut_fail.csv` are sealed until stage 2 (12).
+
 - A day file is one JSON object `{"status":0,"data":[{"openTime":"<ms>","open":"<dec>","high":"<dec>","low":"<dec>",
   "close":"<dec>"},…]}`. A day without bars has `"data":[]`. The prices have 3 decimals on the yen pairs and 5 on the
   dollar pairs.
@@ -50,10 +52,18 @@ the "meaning" columns are the spec's.
 - `cut_max` (C3, 2026-11-05): the TS's development cap `CUT_MAX` on the cut's targets per pair, as a JSON number (a
   positive integer), or `null` when it is not set. The TS refuses any other `CUT_MAX` (exit 2, before it reads a
   file). The Python's `--run` refuses (exit 2, with a message naming `cut_max`) a run whose `config.json` has a
-  `cut_max` that is not `null`, or has no `cut_max` key (a run written before C3 cannot say whether it was capped).
-  A capped run still prints `DEVELOPMENT CAP` in print.txt. Reason: the cap also capped `cut.chosen.first` and
-  `cut.chosen.second`, and a capped run wrote passing rows under the same names with no trace in the files that rule 2
-  and CI read (C2 review finding 5; the lead's D5).
+  `cut_max` that is not `null`, or has no `cut_max` key (a run written before C3 cannot say whether it was capped;
+  the missing-key refusal confirmed by the lead 2026-11-05, C4a). A capped run still prints `DEVELOPMENT CAP` in
+  print.txt. Reason: the cap also capped `cut.chosen.first` and `cut.chosen.second`, and a capped run wrote passing
+  rows under the same names with no trace in the files that rule 2 and CI read (C2 review finding 5; the lead's D5).
+  - (C4a, 2026-11-05; the lead's E8, C3 review finding 5) The cap caps every cut check, not only the three that
+    `cut_fail.csv` covers (8): `cut`, `cut.chosen.first`, `cut.chosen.second`, and the 13 (i) cut of hit trials,
+    `suspect13.cut.stage1` and `suspect13.cut.stage2`. print.txt's `note.cut_max` names all five. Before, the note
+    named only the first three, while the 13 (i) cut ran on the capped targets too.
+  - (C4a, 2026-11-05; the lead's E9) `checks.csv` carries no cap marker: a capped run's cut rows read like an
+    uncapped run's (`0 of N differ`, with a smaller N). The trace is `config.json`'s `cut_max` and print.txt's
+    `note.cut_max`; the Python's `--run` refuses a capped run, so a capped `checks.csv` is never read for rule 2 or for
+    opening stage 2.
 - `mode` is `syn` (the TS generated the run) or `walkfiles` (the TS read an existing run's `gmo/`, read only). Both
   are synthetic runs with a generator `manifest.json`, so the Python reads them alike, with spec 15's synthetic price
   band (0.25–2.5 × the walk's start); any other mode stops the Python (exit 3). Reason: the run's data, not the way the
@@ -61,6 +71,9 @@ the "meaning" columns are the spec's.
   real-data band (Python comparer, round C2).
 - With `plant` non-empty, the run is a planted-error run. The Python compares nothing on it: it is run only for the
   checks of `lawsearch-design.md` 8.
+  - (C4a, 2026-11-05; the lead's E9) The plant `secondHalfAll` stays as it is: the TS refuses at stage 2 (exit 2)
+    and writes no `checks.csv` and no `print.txt`; the files written before the refusal stay in its folder, and only
+    the exit is checked.
 
 ## 3. Formats (every CSV)
 
@@ -109,6 +122,8 @@ Ask close (the last Ask row of that start) is below the Bid close. Order: stage,
 is not written.
 
 ## 5. Bars, higher bars, holes, indicators (stage 0's load)
+
+(C4a, 2026-11-05) `bars/`, `htf/` and `ind/` are sealed until stage 2 (12).
 
 ### `bars/<tf>_<SYM>.csv` — every bar of stage 0's load
 
@@ -176,6 +191,7 @@ reason of spec 6.
 - Order: T, then pair, then buy before sell.
 - f_none and both rows are written whatever their T. Rows that F = false drops are not written. Rows that a keep rule
   (spec 5 ③) drops are not written.
+- (C4a, 2026-11-05) Sealed until stage 2 (12): the file holds every trial's second-half candidates with their reasons.
 
 ## 7. Stage 0 (spec 9)
 
@@ -200,8 +216,10 @@ Per trial, in table order, these keys in this order:
 
 - (C3, 2026-11-05) Per trial, stage0.csv holds only: the `first.*` keys, `second.counted`, `second.weeks`,
   `all.adds_up`, and the keys made from those numbers that spec 9 asks for per trial (`floor`, `same_as`, `group`,
-  `g` … `mark`, `stage3_estimate`). The whole-range counts `all.emitted`, `all.r1`, `all.r1w` and `all.r1b` are no
-  longer written per trial: they are per-timeframe sums in `stage0_totals.csv` (below). No other per-trial key may
+  `g` … `mark`, `stage3_estimate`; that `floor`, `same_as`, `group`, `g`, `df`, `pass_min`, `mde` and `mark` stay per
+  trial was confirmed by the lead 2026-11-05, C4a). The whole-range counts `all.emitted`, `all.r1`, `all.r1w` and
+  `all.r1b` are no longer written per trial: they are per-timeframe sums in `stage0_totals.csv` (below). No other
+  per-trial key may
   span both halves. Reason: with the first-half keys, a trial's `all.r1` gave its second-half ① count and its
   `all.emitted` its second-half r2–r6 total, which spec 9 後半 (試しごとの内訳は、段2まで出さない) and 23.3 forbid;
   sums over a timeframe's trials are allowed, like the second half's per-reason sums (C2 review finding 1; the lead's
@@ -215,6 +233,12 @@ Per trial, in table order, these keys in this order:
   `all.r1.h1`, `all.r1w.m15`, `all.r1w.h1`, `all.r1b.m15`, `all.r1b.h1` (int). Each is the sum, over that
   timeframe's trials (table order, int addition), of the trial's whole-range count: every emitted candidate; ① (T ≥
   SPLIT included); ①'s warm-up part; ①b. These are the old per-trial `all.*` numbers (stage0.csv above), summed.
+- (C4a, 2026-11-05; the lead's E4) These per-timeframe sums stay. In a run whose `TRIALS` has only one trial in a
+  timeframe, each `all.*.<tf>` sum of that timeframe is that trial's own whole-range count; with one trial in the
+  whole run, so is every sum of this file, the second half's `pd.*` and `reason.*` included. Such a run is for
+  development only, never a run of the trial or a formal run (they run every trial of their table). The same holds
+  for the stage-0 cut's target counts by kind in `checks.csv` and print.txt (TS only): with one trial, `signal N` is
+  that trial's whole-range candidate count, up to the 3,000 sample (TS builder, C3).
 
 ## 8. Stages 1 and 2 (spec 7, 8, 10, 11, 13)
 
@@ -355,22 +379,35 @@ Key: tf, half. All int. late_end must be 0.
 - `cut_fail.csv` (C3, 2026-11-05): every failing bar of the checks `cut`, `cut.chosen.first` and `cut.chosen.second`,
   one row per check, trial and failing target bar (and one per failing entry-bar check). Always written, with its
   header and no row when nothing failed.
-  - Columns: `check,stage,trial,pair,k,s,kinds,cut,uncut`.
+  - Columns: `check,stage,trial,pair,k,s,T,kinds,cut,uncut` (`T` added C4a, 2026-11-05).
     - `check` is the check's name and `stage` its `checks.csv` stage (`stage0`, `stage1end`, `stage2`).
     - `trial` is the trial id and `pair` is `USD/JPY` etc.
     - `k` is the bar's index in the load the cut ran on (stage 0's or stage 2's [S0, END), stage 1's [S0, SPLIT);
       spec 2 番号, so the same bar has the same k in each), and `s` its start (time).
+    - `T` (C4a, 2026-11-05; the lead's E7, the C3 TS runner's question): bar k's close time (time, s + step). It is
+      the time that the `checks.csv` detail and the STOP line print (as ISO text), so a row of this file can be
+      matched with them; before, only `s` was written, one bar length earlier than the printed time.
     - `kinds` is the target's kinds joined by `|` (`signal`, `even`, `gap`, `day`, `htf`), or `entry` for the check
-      that a counted signal's entry bar is the uncut series' (spec 15; then k is the signal bar).
-    - `cut` and `uncut` are the decision at k (presence, direction, status, warm, reason, stratum; for `entry`, the
-      entry bar's index) in the cut and the uncut run, as the TS's own text: no comma, parts separated by `;`, empty
-      for "no candidate".
+      that a counted signal's entry bar is the uncut series' (spec 15; then k, s and T are the signal bar's).
+    - `cut` and `uncut` (reworded C4a, 2026-11-05; the lead's E7, C3 review finding 4) are the decision at k in the
+      cut and the uncut run, as the TS's own text, with no comma:
+      - each candidate at k is `d:status:warm:reason:stratum` (d `1` / `-1`; status `emit`, `f_none` or `both`; warm
+        `1` / `0`; reason a code of 6's `reason` column; stratum as the TS writes it);
+      - the candidates at k are joined by `;`;
+      - the field is empty when there is no candidate. The plant `chosenCutFirstDiff` adds `;planted` to its one
+        `cut` field (with no candidate, that field reads `none;planted`).
+      - For kinds `entry`, `cut` is the entry bar's index that the trade code gives and `uncut` the index of the
+        uncut series' first bar with start ≥ T and < X; either is empty when there is none.
+      - Before, this bullet said the parts of a decision were separated by `;`; in the files they are separated by
+        `:`, and `;` only joins two or more candidates.
   - Order: check (cut, cut.chosen.first, cut.chosen.second), then trial (table order), then pair (table order), then
     k ascending, then kinds.
   - The STOP line, the `checks.csv` detail and print.txt's `check.<name>.detail` keep their caps (100 bars per trial,
     400 characters in print.txt). The checks `suspect13.cut.stage1` and `suspect13.cut.stage2` are not in this file.
   - Reason: spec 23.2 その試しの名前と外れた足を出す; before, a failing bar past the 100th per trial was written nowhere
     (C2 review finding 8; the lead's D6). TS only: the Python does not run the cut.
+  - (C4a, 2026-11-05) It stays TS only and is not compared (10). It is sealed until stage 2 (12): a failing
+    stage-0 cut lists second-half bars of any trial, with their reasons.
 - `choice.json`: `{"m15":[…],"h1":[…]}`.
 - `print.txt`.
 
@@ -415,10 +452,21 @@ Key: tf, half. All int. late_end must be 0.
   tied pair never excuses a key of any other trial. Reason: before, any near or tied pair of p excused `holm_rank`,
   `label` and `failed` of every trial, so a real difference in a third trial came out as `RESULT agree` (C2 review
   finding 2; the lead's D2).
+- (C4a, 2026-11-05; the lead's E1 and E2) Two more narrowings, both in 11.12:
+  - `stage2.csv` `failed`, `label` and `verdict` of a trial X rest on X's own decisions, not on the near values. A
+    difference in them is excused only when one of those decisions of X actually differs between `ts/` and `py/`
+    and that difference is itself excused by X's own values (X's C1, C4, verdict-2 test and, for `label` and
+    `verdict`, X's `holm_delta_pass`). Never through another trial's p: a near or tied pair of p does not excuse
+    them, even for the two trials of the pair. Reason: in C3 they were still excused through X's near pair of p, and
+    without checking that any decision of X differed, so a difference from C2, C3, C6 or C7 came out as `ALLOWED`
+    and `RESULT agree`, and a plain verdict difference as a `STOP 8.5` (C3 review finding 1).
+  - `stage1.csv` `rank` is excused only for the two trials of the near pair of `lb`, as `holm_rank` is (docs
+    question Q6 of C3).
 - "Within 1e−9" is absolute here, for p too (settled by the lead 2026-11-05, as 11.12 reads it).
 - When the decision is one of stage 1's chosen trials (`stage1.csv` chosen, `stage1_summary.csv` chosen.*), a stage
   2 Holm pass (holm_pass, holm_delta_pass) or a verdict, the comparator writes `STOP 8.5 …` with both values and
-  exits 6. The lead must tell the owner (spec 8.5). It does not go on.
+  exits 6. The lead must tell the owner (spec 8.5). It does not go on. (C4a) A verdict difference that 11.12 does
+  not excuse is a `DIFF` (exit 5), not a `STOP 8.5`.
 
 ### 9.4 Signals, as spec 17.2 asks
 
@@ -431,7 +479,10 @@ Key: tf, half. All int. late_end must be 0.
 - `<RUN>/cmp/report.txt`:
   - one line per file: `FILE <name> rows ts=<n> py=<n> diff=<n>`;
   - then up to 20 differences per file: `DIFF <file> <key> <column> ts=<v> py=<v> class=<c>`;
-  - then the `ALLOWED …` and `STOP …` lines;
+  - then the `ALLOWED …` and `STOP …` lines (the `STOP 13 …` lines after the `ALLOWED` and `STOP 8.5` lines);
+  - (C4a, 2026-11-05; the lead's E6) then, when a failed TS check kept stage 2 closed (11.14 (a)), one line
+    `stage 2 not opened: <reason>` (its form is in 11.14 (a)). It is not a difference and not a stop: it changes
+    neither `RESULT` nor the exit;
   - last, `RESULT agree` or `RESULT differ <n>`.
 - Exit codes: 0 agree; 5 any difference that 9.2 and 9.3 do not allow; 6 a 9.3 stop; 3 the tree hash or the config
   failed.
@@ -440,7 +491,8 @@ Key: tf, half. All int. late_end must be 0.
     or 6. When several apply, the first of 6, 5, 3, 0 wins: a 9.3 stop does not go on (9.3, as the comparator already
     does), and a difference (5) comes before a blind-row stop (3) because the hit itself may be the difference. The
     Python's own STOP inside a stage (a spec 2 / 15 data stop, a must-be-0 count such as no_blind) still exits 3
-    with no comparison, as before.
+    with no comparison, as before. (This order, and the `STOP 13` report line below, were confirmed by the lead
+    2026-11-05, C4a.)
   - A line `STOP 13 <stage> <id>: …` (11.14 (c)) is not a 9.3 stop: it is written before `RESULT`, and `RESULT`
     stays the comparison's (`agree` or `differ <n>`).
 - Files compared: everything under `ts/` except `checks.csv`, `choice.json`, `print.txt` and the TS-only columns of
@@ -561,7 +613,15 @@ for the lead, not here.
   two values are within 1e−9 in either implementation. Two values exactly equal in both implementations are a tie
   (the next keys decide it, and must agree), not a near pair. Reason: 9.3 names decisions, not outputs, and a near
   value elsewhere must not excuse an unrelated difference.
-  - `stage1.csv` `rank`, `chosen`, `skipped_reason`, `skipped_by`: the order of two `lb` of the trial's tf.
+  - `stage1.csv` `rank` (C4a, 2026-11-05: narrowed; the lead's E2, the C3 docs writer's question Q6): only for the
+    two trials of a near pair of `lb` of the trial's tf (within 1e−9 of each other in either implementation, and not
+    exactly equal in both), the same narrowing as `stage2.csv` `holm_rank` below. A swap of two near `lb` changes
+    only those two trials' ranks, so another trial's `rank` difference is a `DIFF`. (Stage 1 has no tie route: two
+    `lb` exactly equal in both are ordered by counted, then table order.) Before, a near pair excused the `rank` of
+    every trial of the tf.
+  - `stage1.csv` `chosen`, `skipped_reason`, `skipped_by`: the order of two `lb` of the trial's tf (any near pair of
+    that tf; unchanged in C4a, the lead's E2: the skip rules can carry one swap to later trials of the tf, and a split
+    of `chosen` is a `STOP 8.5`).
   - `stage1_summary.csv` `chosen.<tf>`: the same in that tf; `K_total`: in either tf; `lb_pos`, `lb_pos_groups`,
     `lb_and_pl_pos`: an `lb` vs 0; `bh_pass`: a `p_iut` vs a BH threshold k × 0.10 ÷ `bh_m`.
   - `stage2.csv` (C3, 2026-11-05: narrowed; before, these keys of every trial were excused by any near or tied pair of
@@ -574,15 +634,66 @@ for the lead, not here.
     - `holm_delta_rank`, `holm_delta_pass`: the same with `p_delta`; for a tie, only through an adopted
       `delta.use_p` split (the Δ-only Holm's order uses t_Δ).
     - `C4`: X's own `late_lb` vs 0. `no_uplift`: X's own `dF_lo` vs 0.
-    - `failed` and `label` are never excused through a Holm p of the order (C2–C7 do not depend on p). They are
-      excused only through X's own `C1` (excused as above), X's own `late_lb` (C4) or X's own `delta_ub` (verdict 2)
-      within 1e−9 of 0. For `label` only, also X's own `holm_delta_pass` (excused as above), which decides verdict 4
-      against verdict 5 (`向きだけ` / `言えない`; `failed` is empty for both: 11.8). [This last sentence is the docs
-      writer's reading of D2 for the Δ-only Holm, C3; the lead to confirm.]
-    - `verdict`: through the same decisions of X as `label` (it is on the STOP list below).
+    - `failed`, `label` and `verdict` of X (C4a, 2026-11-05: rewritten; the lead's E1, C3 review finding 1). They
+      rest on X's own decisions, not on a p of the order (C2–C7 do not use p). A difference in them is excused only
+      when at least one of the decisions below actually differs for X between `ts/` and `py/`, and that difference
+      is itself excused by X's own values (within 1e−9, absolute, in either implementation):
+      - X's `C1` (X's `C1` differs between the two files), excused when X's own `p_iut` is within 1e−9 of its own
+        Holm threshold 0.025 ÷ (K − k + 1), with K = `K_total` and k = X's `holm_rank`, taken per implementation
+        (that implementation's `p_iut` against the threshold of its own rank and `K_total`);
+      - X's `C4` (X's `C4` differs), excused when X's own `late_lb` is within 1e−9 of 0;
+      - X's verdict-2 test, `delta_ub` < 0 (it differs when one file's `delta_ub` of X is below 0 and the other's is
+        not; an empty `delta_ub` is not below 0), excused when X's own `delta_ub` is within 1e−9 of 0;
+      - for `label` and `verdict` only, X's `holm_delta_pass` (X's `holm_delta_pass` differs), excused when X's own
+        `p_delta` is within 1e−9 of its own Δ-only Holm threshold 0.025 ÷ (K − k + 1), with k = X's
+        `holm_delta_rank`, per implementation. It decides verdict 4 against verdict 5 (`向きだけ` / `言えない`;
+        `failed` is empty for both: 11.8). (Confirmed by the lead 2026-11-05, C4a; it was the docs writer's reading
+        of D2 in C3.)
+      - No route through another trial's p: a near or tied pair of `p_iut` or `p_delta` (the pair and tie rules of
+        the keys above and of 11.13) never excuses X's `failed`, `label` or `verdict`, even when X is one of the two
+        trials. When X's `C1` or `holm_delta_pass` splits only through such a pair (X's own p is not within 1e−9 of
+        its own threshold), that key is excused as above (a `STOP 8.5`), and X's `failed`, `label` and `verdict`
+        differences stay `DIFF` lines under the stop.
+      - `failed`: the two lists (their conditions, split at `・`) may differ only in the conditions so excused. Of
+        those, only `C4` can be in a list (`C1` never is, and the verdict-2 test is not a condition). So:
+        - both verdicts are 3: the lists may differ only in `C4`, and only when X's `C4` difference is excused;
+        - neither verdict is 3: both lists are empty (11.8), and any difference is a `DIFF`;
+        - one verdict is 3 and the other is not [the docs writer's reading of E1, C4a; the lead to confirm]: the
+          other side's list must be empty (11.8), and the difference is excused exactly when X's `verdict` difference
+          is excused (below). The empty list then follows from the verdict, not from a condition (as when X's `C1`
+          splits and the verdicts are 3 and 5). Read literally, "only in the conditions so excused" would make it a
+          `DIFF` line under the verdict's `STOP 8.5`; the exit is 6 either way.
+      - `label`: `ALLOWED 8.5` when excused as above; otherwise a `DIFF`.
+      - `verdict`: excused through the same decisions of X as `label`. An excused verdict difference is a `STOP 8.5`
+        (it is on the STOP list below); one that is not excused is a `DIFF` (exit 5), not a stop.
+      - The `ALLOWED` or `STOP` line names the decision of X that differs and the value that excuses it.
+      - Before (C3), these keys were also excused through X's near or tied pair of `p_iut`, and without checking
+        that any decision of X differed. A difference that came from C2, C3, C6 or C7 then came out as `ALLOWED` and
+        `RESULT agree` (any two strong trials with p_iut below 1e−9 are a near pair under the absolute test), and a
+        plain verdict difference as a `STOP 8.5`.
+    - Tests (C4a; the lead's E1, E2). These must now give `DIFF` and exit 5:
+      - the refuter's cases f1, l1, v1, v1b, v2, t1 and d1 in
+        `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/t_refute1.py`
+        (its controls keep their results: c0 exit 0; g1, a real C1 split on X's own p near its own threshold, exit
+        6), and the real `--compare` on
+        `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/run`
+        (`RESULT differ`, exit 5);
+      - the reviewer's R-a … R-f in
+        `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/review/d2/t_d2_review.py`;
+      - for E2, a new case: three trials of one tf, two of them a near pair of `lb`, and the third's `rank` differs.
+      - The earlier tests (t_decisions, t_candidates, t_checks, t_refute_c3 and t_c3_run in
+        `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/py/`,
+        and the C2 review and refute scripts of 11.13) keep their expected results, or are updated with a one-line
+        reason each. Reading `t_decisions.py` (not run), the docs writer found four that change, all to `DIFF`, exit 5:
+        "verdict split, its late_lb near 0 -> STOP" (C2's; X's `C4` is the same on both sides, so nothing the verdict
+        rests on differs); "C3 label of E04 split, E04's own p_delta near its delta-only threshold -> ALLOWED" (X's
+        `holm_delta_pass` is the same on both sides); "C3 label of E04 split, its own delta_ub near 0 -> ALLOWED"
+        (`delta_ub` is below 0 on both sides, so the verdict-2 test does not differ); "C3 failed of E04 split, E04 in
+        a near pair of p_iut (its own C1 excused) -> ALLOWED" (C3 review finding 1: only `failed` differs, and the
+        pair route is gone).
     - Holm stops at the first trial that fails, so a split of one trial's `holm_pass` changes the pass of every trial
       after it. That split is always a `STOP 8.5` (exit 6, 10), and the later trials are not excused one by one: their
-      differences stay `DIFF` lines under the stop.
+      differences stay `DIFF` lines under the stop. (Confirmed by the lead 2026-11-05, C4a.)
 - `STOP 8.5` for `chosen`, `chosen.<tf>`, `K_total`, `holm_pass`, `holm_delta_pass`, `C1` and `verdict`; `ALLOWED 8.5`
   for the others. Reason: 9.3's stop list (the chosen trials, a Holm pass, a verdict); K_total and C1 are the count
   of the chosen trials and the Holm pass under other names.
@@ -608,14 +719,17 @@ for the lead, not here.
     `delta.use_p` or `pl.use_p` split of one of the two trials whose t (t_Δ or t_PL) is min(t_Δ, t_PL) of that trial
     in either implementation; for the Δ-only Holm, an adopted `delta.use_p` split only. A `use_lb` split never
     touches the order (it changes no t). Two p = 1 are ordered by counted and table order, never by t, so they are
-    never excused. No other trial's key, and no `failed` or `label`, is excused through the tie (11.12).
+    never excused. No other trial's key, and no `failed` or `label`, is excused through the tie (11.12). (C4a,
+    2026-11-05; the lead's E1) Nor is `verdict`, and this holds for the two tied trials too: their `failed`,
+    `label` and `verdict` are excused only through their own decisions (11.12), never through the tie.
   - Tests that must now report `DIFF` (exit 5), not `ALLOWED`: the reviewer's R1, R2 and R3
     (`/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/review/t_review.py`)
     and the refuter's r1, r2, r2b, k1b and r3
     (`/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/refute-2/t_refute.py`):
     a third trial's `failed`, `label` or `holm_rank` differs while two other trials are near or tied. Their controls
     keep their results (k0 exit 0; k1, k2, k3 `DIFF`). A tie case whose adopted split is on a t that is not
-    min(t_Δ, t_PL) of its trial in either implementation must give `DIFF` too.
+    min(t_Δ, t_PL) of its trial in either implementation must give `DIFF` too. (C4a) Under the lead's E1 these are
+    expected to keep their results (the docs writer read them; not run); the C4a tests are in 11.12.
 - The `FILE` lines of the report count the differences left after 9.2's and 9.3's allowances. Reason: `RESULT`
   counts them so, and the `ALLOWED` lines list the rest.
 
@@ -636,11 +750,29 @@ the same set of files, so the comparator compares them as usual.
     in `measures.csv`, `strata.csv`, `shift.csv`, `clusters.csv` and `suspect.csv`, no `stage2.csv`.
   - Python: it reads the same rows of `ts/checks.csv` and does not open stage 2 either. It compares the files as
     usual; its exit is the comparison's (a check is the TS's, as for every other TS check).
+  - (C4a, 2026-11-05; the lead's E6, the C3 Python comparer's question) The comparator also writes the reason into
+    `cmp/report.txt`, not only into its log: one line `stage 2 not opened: <reason>`, after the `ALLOWED`, `STOP 8.5`
+    and `STOP 13` lines and just before `RESULT`. `RESULT` and the exit are unchanged. Before, a reader of report.txt
+    alone could not tell that stage 2 was closed, or why the run had fewer files (O 6001–6004: 72 files instead of
+    78–80, `RESULT agree`).
+    - The line is written whenever `ts/checks.csv` has a row of stage `gate`, `stage0`, `stage1` or `stage1end`
+      whose `passed` is not 1 (the condition above), by `--run` and by `--compare` alike (both read `ts/checks.csv`).
+    - `<reason>` [form chosen by the docs writer, C4a]: `failed TS checks before stage 2: ` followed by each such
+      row as `<name> <trial> <stage>`, in the file's row order, joined by `; `. Example: `stage 2 not opened: failed
+      TS checks before stage 2: cut m15.E26.F00 stage0; poison m15.E26.F00 stage0; …`.
+    - [Docs writer's reading of E6, C4a; the lead to confirm] A run whose stage 2 stays closed with no such failed
+      row gets no line: `K_total` 0 with every check passed (spec 10: 選べる試しが1つも無ければ、後半は開けずに終わる).
+      A stage-1 blind-row hit has its `STOP 13` line, and the TS's failed `suspect.blind.stage1` row (stage
+      `stage1`) gives this line too.
   - A STOP raised inside a stage (a spec 2 / 15 data stop, a must-be-0 count) ends the run at that stage, as before;
     the Python, meeting the same condition, stops there too (exit 3, no comparison).
   - Reason: spec 11 opens the second half once, and a run with a known failure must not use it. Before, only a
     failed `cut.chosen.first` closed stage 2 (spec 23.2), and O 6001 opened it after its E26 failures (the TS
     builder's question in C2).
+  - (Confirmed by the lead 2026-11-05, C4a.) This is stricter than spec 10 rule 2 (確かめ（15）がすべて通る, a rule of
+    each trial) and spec 15 (1つでも外れたら、その段の数字を出さない) on purpose: since spec 11 opens the second half
+    once, on real data one failed check keeps stage 2 closed for every trial until the error is fixed and the run is
+    made again.
 - **(b) `cut.chosen.second` failed** (the lead's D9). Stage 2 has run, so its dumps are written as usual.
   - TS: print.txt withholds stage 2's numbers (every `verdict.*`, every `count.stage2.*` and any other stage-2
     number; `withheld.stage2` is 1), and the run exits 3.
@@ -658,6 +790,54 @@ the same set of files, so the comparator compares them as usual.
     rows that hit). Exit 3.
   - Python: it decides the hit itself (its own `suspect.csv` row), finishes that stage's files, does not open the
     next stage, and compares. report.txt gets one line `STOP 13 <stage> <id>: a blind row hit spec 13's lines` per
-    hit row, before `RESULT`. Exit 3 when the comparison has no reason for 5 or 6 (10).
+    hit row, before `RESULT`. Exit 3 when the comparison has no reason for 5 or 6 (10). (This line and the exit
+    order were confirmed by the lead 2026-11-05, C4a.)
   - Reason: spec 13 物差しが当たったら、すべて止めて調べる. Before, the TS recorded a failed check and went on, and
     the Python wrote the row and went on.
+
+## 12. Sealed until stage 2 (C4a, 2026-11-05; the lead's E5)
+
+Some files are written before stage 2 and hold second-half material of each trial. They are kept, because the
+TS–Python comparison needs them: spec 17.2 照らすもの compares the bars, the indicators, the signal sequence of each
+trial and pair, and the counts by reason, and its 合わない項目 settles a mismatch 段0の前に. The lead decided how they
+are treated. There is no code change: the files, their columns and their formats stay as 5, 6 and 8 say.
+
+### The sealed files
+
+| file | written | what of the second half it holds |
+|---|---|---|
+| `signals/<trial>.csv` (6; ts/ and py/) | stage 0 | every candidate of every trial over [S0, END), with its half and reason: counting its rows gives each trial's second-half pair × direction and reason breakdown (C3 review finding 2) |
+| `ind/<tf>_<SYM>.csv` (5; ts/ and py/) | stage 0 | the indicator values at every signal bar of the second half |
+| `bars/<tf>_<SYM>.csv` (5; ts/ and py/) | stage 0 | the second half's prices; with `signals/`, enough to compute any trial's second-half trades (spec 10: 選ばなかった試しの後半は、プログラムが計算を断る) |
+| `htf/<tf>_<SYM>.csv` (5; ts/ and py/) | stage 0 | the second half's higher bars |
+| `ts/cut_fail.csv` (8; TS only) | the run's end | a failing stage-0 cut's second-half bars of any trial, with their reasons |
+
+### The rule
+
+- They are sealed comparison dumps: written for the TS–Python comparison only. Before stage 2 they are never shown,
+  read by a person, or summarised.
+- Before stage 2, a person sees only print.txt's allowed numbers (its `PRINT_KEYS`, spec 15 出してよい項目) and the
+  comparison's `RESULT` and its `DIFF` / `STOP` lines (10).
+- A `DIFF` line means a program error: that run is fixed and run again.
+- Programs read them as before: the comparator (9, 10), and on synthetic runs `lawsearch-flip.ts`, which reads
+  `signals/` (and `blind/`) of the run it judges.
+- Reason: spec 9 後半 (試しごとの内訳は、段2まで出さない) and spec 10 (選ばなかった試しの後半は、プログラムが計算を
+  断る). Since C3, stage0.csv itself holds only the allowed per-trial numbers (7), but these files still held each
+  trial's second-half material (the C3 docs writer's question Q3; C3 review finding 2).
+
+### Points the rule leaves open [docs writer, C4a; for the lead]
+
+- report.txt's `FILE` lines give each sealed file's row count, per trial for `signals/<trial>.csv`, over both halves.
+  That count less the trial's first-half reason counts in stage0.csv is its number of candidates outside the first
+  half (mostly the second half's), of which spec 9 allows only the counted number per trial. The rule's list of what
+  a person sees names `RESULT`, `DIFF` and `STOP` lines only; read literally, `FILE` lines (and `ALLOWED` lines,
+  which can name a second-half bar of a B06 trial, 9.2) are not shown before stage 2 either. The lead to confirm.
+- A failing cut check also prints second-half bars of a trial with their decisions in places outside this list: the
+  `checks.csv` detail (up to 100 bars per trial), the console STOP line, and print.txt's `check.<name>.detail` (400
+  characters). 9.4 prints the first differing line of `signals/` when the sha256 differ. They are failure reports
+  like `DIFF` lines; whether `checks.csv` is sealed is not said.
+- Under a `STOP 8.5`, 11.12 leaves `DIFF` lines that follow from the stopped split (Holm's later trials), which are
+  not program errors.
+- On the trial's synthetic runs nothing in these files is real, and builders and reviewers read them to find program
+  errors (as the C3 review did). Read as binding from the first real-data stage 0 on (spec 9 is 段0（実データ）).
+- `holes/` (5) also covers the second half, per pair and not per trial; it follows from `bars/`.

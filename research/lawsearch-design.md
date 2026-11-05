@@ -805,8 +805,23 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
     s, kinds (`entry` for the entry-bar sub-check), and the cut and uncut decisions. `cutCheck` keeps every failing
     bar for this file; the STOP line, the `checks.csv` detail (`maxExamples`, 100 per trial) and print.txt's
     400-character detail keep their caps. Reason: spec 23.2 その試しの名前と外れた足を出す.
+    - (C4a, 2026-11-05; the lead's E7, the C3 TS runner's question and C3 review finding 4) The file gets a column
+      `T` right after `s`: the bar's close time in ms (`s + step`), which is the time the `checks.csv` detail and the
+      STOP line print (`iso(T)`), so the two can be matched. The columns are now `check,stage,trial,pair,k,s,T,kinds,
+      cut,uncut`. For `entry` rows, k, s and T are the signal bar's. `lawsearch-dump.md` 8 now words the decision
+      fields as the code writes them: each candidate at k is `d:status:warm:reason:stratum`, the candidates are
+      joined by `;`, the field is empty when there is no candidate, and the plant `chosenCutFirstDiff` adds
+      `;planted` (`none;planted` with no candidate). It stays TS only and is not compared.
+    - (C4a, 2026-11-05; the lead's E5) `cut_fail.csv` is sealed until stage 2 (`lawsearch-dump.md` 12): a failing
+      stage-0 cut lists second-half bars of any trial. No code change.
   - (C3) A development cap (`CUT_MAX`, 7.7) caps the targets of all three checks; the run then writes `cut_max` into
     `config.json` and still prints `DEVELOPMENT CAP` in the checks' detail.
+    - (C4a, 2026-11-05; the lead's E8, C3 review finding 5) It caps every cut check, not only those three: `cut`,
+      `cut.chosen.first`, `cut.chosen.second`, and the 13 (i) cut of hit trials, `suspect13.cut.stage1` and
+      `suspect13.cut.stage2` (`suspicionChecks` passes `maxTargets` to `cutCheck` too). print.txt's `note.cut_max`,
+      `lawsearch-dump.md` 2 and this bullet name all five. Before, the note named only the first three. (E9)
+      `checks.csv` gets no cap marker: `config.json`'s `cut_max` and print.txt suffice, and the Python's `--run`
+      refuses a capped run.
 - **Poison**: 100 signals and 100 bars without a signal of each trial (`sampleOf`, seed 319; 13 (ii): 1,000, seed
   419, on the hit trials). Every series of the five pairs (m15 and h1) is given `poisonSeries` after T, and the
   higher timeframes are rebuilt. Everything is recomputed. The decision and the reason at T must be equal.
@@ -838,7 +853,9 @@ second half (spec 9 後半). The stop is the same kind as the other program-erro
 catch records the failed row `stop.stage0` in `checks.csv`, the run writes `checks.csv`, `cut_fail.csv` and print.txt,
 does not open stage 1 or 2, and exits 3. The Python already stops on the same count (`lawsearch-py-design.md` 5.6).
 Reason: since spec 23.3 the TS neither wrote nor checked the second half's per-trial noBlind, so a TS-only defect in
-a trial that is not chosen passed with exit 0 (C2 review finding 4; plant `dropSecondStrata`, 8).
+a trial that is not chosen passed with exit 0 (C2 review finding 4; plant `dropSecondStrata`, 8). (The stop's place,
+right after the counts and before stage 0's checks, and its message, which names the trial and half and gives no
+second-half count, were the C3 docs writer's readings; confirmed by the lead 2026-11-05, C4a.)
 
 ### 7.5 `research/lawsearch-dump.ts`
 
@@ -870,6 +887,14 @@ export function dumpCutFail(dir: string, rows: ReadonlyArray<CutFailRow>): Promi
 - (C3) `dumpStage0` writes stage0.csv without the per-trial `all.emitted`, `all.r1`, `all.r1w` and `all.r1b`, and
   writes their per-timeframe sums into `stage0_totals.csv` (`lawsearch-dump.md` 7). `dumpConfig` writes `cut_max`
   (`lawsearch-dump.md` 2).
+- (C4a, 2026-11-05; the lead's E4) The per-timeframe sums stay. A run with one trial in a timeframe (a `TRIALS` of
+  one) makes them that trial's own numbers, so such a run is for development only (`lawsearch-dump.md` 7).
+- (C4a, 2026-11-05; the lead's E7) `dumpCutFail` writes the new column `T` (the bar's close, `s + step` of the
+  check's timeframe) right after `s` (`lawsearch-dump.md` 8); whether `CutFailRow` carries it or `dumpCutFail`
+  computes it is the TS builder's choice.
+- (C4a, 2026-11-05; the lead's E5) What `dumpSignals`, `dumpInd`, `dumpBars` (bars/ and htf/) and `dumpCutFail` write
+  is sealed until stage 2 (`lawsearch-dump.md` 12): comparison dumps only, never shown, read by a person or
+  summarised before stage 2. No code change.
 
 `lawsearch-dump.ts` imports types from `lawsearch-types.ts` only, never from a study module, so that `deno info` of
 the stage-0 program lists no trade, stats or select module even through a type import. The file names, columns, order
@@ -925,7 +950,10 @@ The other environment variables:
   `config.json` gets `cut_max`: the number, or `null` (`lawsearch-dump.md` 2). A capped run still prints `DEVELOPMENT
   CAP`, and the Python's `--run` refuses it. The yml never sets `CUT_MAX`. (TS builder, C3: besides the checks'
   details, a capped run's print.txt has the key `note.cut_max` starting `DEVELOPMENT CAP`, since print.txt cuts a
-  detail at 400 characters and a failing check's detail may not reach its cap text.)
+  detail at 400 characters and a failing check's detail may not reach its cap text.) (C4a, 2026-11-05; the lead's
+  E8) `note.cut_max` names every check the cap reaches: `cut`, `cut.chosen.first`, `cut.chosen.second`,
+  `suspect13.cut.stage1` and `suspect13.cut.stage2` (7.3); so does the header comment of `lawsearch.ts`, which in C3
+  says "all three cut checks". (E9) `checks.csv` gets no cap marker.
 
 The gates run in order, before any bar is read:
 
@@ -940,7 +968,8 @@ The pipeline (syn and walkfiles; one process):
 
 1. `config.json`.
 2. **Stage 0**: U0 = `loadUniverse(src, S0, END, syn0)`, then `runStage0`. Dumps: load, bars, htf, holes, ind,
-   signals, stage0.
+   signals, stage0. (C4a, 2026-11-05; the lead's E5) bars, htf, ind and signals hold second-half material of every
+   trial: they are sealed until stage 2 (`lawsearch-dump.md` 12), as is `cut_fail.csv`.
 3. **Stage 1**: U1 = `loadUniverse(src, S0, SPLIT, syn1)`, `h1OnlyCheck`, signals again, then `sameFirstHalfCheck`.
    - Blind first-half tables and late tables (m15, h1), `trialRows`, `measureTrial` (floor-passing, not-same trials;
      D_F of (E, F01) against S01 of the same timeframe), and `measureBlindRows`.
@@ -956,7 +985,8 @@ The pipeline (syn and walkfiles; one process):
    - (C3, 2026-11-05; the lead's D10) A blind row of stage 1 whose suspicion hits (spec 13: 物差しが当たったら、すべて
      止めて調べる) records the failed check `suspect.blind.stage1` (one row per hit row, naming it), as before, and
      now stops the run at the end of stage 1 through the next bullet. print.txt withholds stage 1's numbers and says
-     STOP (a `note.*` key naming the stage and the blind rows; the console prints a `STOP:` line too).
+     STOP (a `note.*` key naming the stage and the blind rows; the console prints a `STOP:` line too). (TS builder,
+     C3: the key is `note.stop13`.)
    - (C3, 2026-11-05; the lead's D8) **The stop before stage 2**: after stage 1's end (`cut.chosen.first`
      included), the run does not open stage 2 when any check of stage `gate`, `stage0`, `stage1` or `stage1end` has
      failed. It prints a `STOP:` line naming the failed checks, puts `note.stage2` ("not opened: …" with the failed
@@ -967,6 +997,13 @@ The pipeline (syn and walkfiles; one process):
      E26 failures. (TS builder, C3: a STOP raised inside stage 0 or stage 1, recorded as `stop.stage0` or
      `stop.stage1`, also puts `note.stage2` "not opened: a STOP in stage …", so every run that ends before stage 2
      says so in print.txt; CI's plant and O steps read that key.)
+     - (Confirmed by the lead 2026-11-05, C4a; it was the C3 docs writer's question.) This is stricter than spec 10
+       rule 2 (確かめ（15）がすべて通る, a rule of each trial) and spec 15 (1つでも外れたら、その段の数字を出さない) on
+       purpose: spec 11 opens the second half once, so on real data one failed check keeps stage 2 closed for every
+       trial until the error is fixed and the run is made again. Unchanged: the stop adds no check row of its own,
+       and `cut.chosen.first` still runs at stage 1's end after a stage-0 failure. The Python's report gets a line
+       `stage 2 not opened: …` for the same condition (the lead's E6, `lawsearch-dump.md` 11.14 (a)); the TS's
+       output does not change.
 4. **Stage 2**: U2 = `loadUniverse(src, S0, END, syn2)`. Blind second-half and late tables. Spec 23.2: the chosen
    trials cut on the second half's targets with every boundary target (`cut.chosen.second`; a failure withholds stage
    2's numbers). `measureTrial` for the
@@ -1060,7 +1097,9 @@ deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --al
   - For each trial, a missing `<ts>/signals/<trial>.csv` is a FAIL. A missing `<ts>/blind/<tf>_first.csv` (m15 and
     h1) is a FAIL. When the run opened stage 2 (its `<ts>/load.csv` has a `syn2` row), a missing
     `<ts>/blind/<tf>_second.csv` is a FAIL; a missing `load.csv` is a FAIL too (stage 0 always writes it). Before,
-    each of these was reported as "no … to compare with" and the ORIGINAL line still passed.
+    each of these was reported as "no … to compare with" and the ORIGINAL line still passed. ("Reached stage 2" read
+    as a `syn2` row in `load.csv`, and the missing `load.csv` as a FAIL: the C3 docs writer's readings, confirmed by
+    the lead 2026-11-05, C4a.)
   - The refuter's setups in
     `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/refute-3`
     must now fail: (A) C 7101 with an empty `--ts` (FAIL: no config.json, no signals, no blind; exit 3) and (B)
@@ -1109,6 +1148,9 @@ required now.
 | `dropSecondStrata` (C3, 2026-11-05; the lead's D4) | D: select0 (`stage0`'s new `plant` argument) | for m15.E04.F00 only (a trial CMP-N 1001 does not choose), the second half's blind strata lose every stratum of USD/JPY, so its second-half noBlind is above 0 (C2's refute 4 made the same edit on C 7101: noBlind 810, and the run then exited 0) | stage 0's noBlind stop (7.4) on `CMP-N 1001`: exit 3, `stop.stage0` failed naming m15.E04.F00's second half, no stage-1 or stage-2 file |
 | `blindRowHit` (C3, 2026-11-05; the lead's D10) | D: lawsearch.ts (on `suspectOf`'s row, stage 1) | at stage 1, the blind row `blind.m15.USD_JPY.buy` is reported as hit (`hit_a` and `hit` 1; its measures unchanged) | the spec 13 stop, end to end on `CMP-N 1001`: exit 3; `suspect.blind.stage1` failed; that suspect.csv row has hit 1; print.txt withholds stage 1's numbers and says STOP; stage 2 not opened (no `syn2` row in load.csv, no stage2.csv) |
 | `chosenCutFirstDiff` (C3, 2026-11-05; the TS builder, asked by the lead: C2 never ran the stop before stage 2 on a full run) | D: cutCheck (check `cut.chosen.first` only) | the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes (the choice is made before this check) | the stop before stage 2 (7.7), end to end on `CMP-C 7101` (it chooses h1.E04.F00): exit 3; `cut.chosen.first` failed on that trial (stage `stage1end`); its bar is in cut_fail.csv; print.txt withholds stage 1's numbers and its `note.stage2` says "not opened"; no `syn2` row in load.csv, no stage2.csv |
+
+The names of the three C3 run plants, `dropSecondStrata`, `blindRowHit` and `chosenCutFirstDiff`, were confirmed by
+the lead 2026-11-05 (C4a).
 
 The Python twins (`--plant`, `lawsearch-py-design.md` 6) are: midHalfEven, midDecimalStr (Python only:
 `Decimal(str(v))`), pointsTrunc, daySatSplit, splitShift, entryAtSignalClose, entryEarly, exitLate,
@@ -1240,3 +1282,17 @@ hit, and the other checks must pass.
   - `choice.json` written before `cut.chosen.first`: 7.7 (stays; C2 refuted the finding).
   - κ's run counts (spec 21.5, 23.5: "t の無い run" and "値の無い run"): settled when stage 3 is built. `kappaOf`'s
     counts stay as A.2.21 needs them.
+- **O-11 decided or confirmed by the lead 2026-11-05** (C4a, from C3's review and the C3 builders' and docs writer's
+  questions; the TS's part):
+  - Confirmed readings, kept as written: D3's "reached stage 2" and missing `load.csv` (7.9); D4's stop place and
+    message (7.4); D8 stricter than spec 10 rule 2 and 15 on purpose (7.7); the plant names `dropSecondStrata`,
+    `blindRowHit` and `chosenCutFirstDiff` (8). D9 unchanged.
+  - E4: the per-timeframe sums of `stage0_totals.csv` stay; a run with one trial in a timeframe is for development
+    only (7.5, `lawsearch-dump.md` 7).
+  - E5: `signals/`, `ind/`, `bars/`, `htf/` and `cut_fail.csv` are sealed comparison dumps until stage 2
+    (`lawsearch-dump.md` 12). No code change.
+  - E7: `cut_fail.csv` gets the column `T` after `s` (7.3, 7.5).
+  - E8, E9: `CUT_MAX` reaches `suspect13.cut.*` too and every text names it (7.3, 7.7); `checks.csv` gets no cap
+    marker; `secondHalfAll`'s refusal (exit 2, no `checks.csv` or print.txt) stays as is.
+  - E1, E2, E6 are the Python comparator's (`lawsearch-dump.md` 9.3, 11.12, 11.14 (a)); the TS's files do not
+    change for them.

@@ -9,8 +9,10 @@
 //               refused (exit 2, before any read) while the small trial has not passed (TRIAL_PASSED_SHA256 null)
 // Other variables: TRIALS (comma-separated ids; default the trial's twelve), LS_PLANT, KAPPA_DELTA, KAPPA_PL (default
 // 1: not calibrated, step 7), G_FILE (JSON {trial: g}), HAND_IDS, CUT_MAX (development only: caps the targets per
-// pair of all three cut checks; a positive integer, anything else refused with exit 2; written to config.json as
-// cut_max; the Python's --run refuses a capped run; never in CI or a formal run).
+// pair of every cut check: cut, cut.chosen.first, cut.chosen.second and 13 (i)'s suspect13.cut.stage1 and
+// suspect13.cut.stage2 (C4a, the lead's E8); a positive integer, anything else refused with exit 2; written to
+// config.json as cut_max and named in print.txt's note.cut_max; checks.csv has no cap marker (E9); the Python's --run
+// refuses a capped run; never in CI or a formal run).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
 // raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed
@@ -25,7 +27,8 @@
 // target of the first half); the stop before stage 2 (any failed check of the gate, stage 0, stage 1 or stage 1's end:
 // stage 2 is not opened, C3 D8); stage 2 (load [S0, END), the second-half tables, the chosen trials only, their cut on
 // every boundary target of the second half (spec 23.2; its failure withholds stage 2's numbers), κ, Holm, C1–C7,
-// verdicts); then checks.csv, cut_fail.csv (every failing bar of the three cut checks), suspect.csv and print.txt.
+// verdicts); then checks.csv, cut_fail.csv (every failing bar of the cut checks cut, cut.chosen.first and
+// cut.chosen.second, with each bar's start s and close T; not suspect13.cut.*), suspect.csv and print.txt.
 
 import { END, N_BARS, PAIRS, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
 import { DIRECTIONAL_F, PLANTS, POISON_1000, QUESTIONS, S_OF_F, SEEDS, TRIAL_STEP3, W0 } from "./lawsearch-rules.ts";
@@ -144,6 +147,8 @@ async function suspicionChecks(c: RunCtx, u: Universe, trial: TrialDef, sig: Tri
     return out.sort((a, b) => a.pi - b.pi || a.k - b.k);
   })();
   const o = { answerKnowing, plant: c.plant };
+  // 13 (i): CUT_MAX caps this cut too (print.txt's note.cut_max names it; C4a, the lead's E8); its failing bars are not
+  // in cut_fail.csv (lawsearch-dump.md 8)
   const cut = cutCheck(u, [trial], [sig], targets, avoid, { ...o, maxTargets: c.cutMax });
   const poison = poisonCheck(u, [trial], [sig], avoid, { ...o, n: POISON_1000, seed: SEEDS.poison1000 });
   const presence = presenceCheck(u, [trial], [sig], avoid, { ...o, seed: SEEDS.poison1000, n: POISON_1000 });
@@ -204,8 +209,9 @@ async function pipeline(c: RunCtx): Promise<number> {
   put("kappa.pl", c.cfg.kappaPl);
   put("kappa.from", c.cfg.kappaFrom);
   put("g.from", c.cfg.gFrom);
-  // a capped run says so in print.txt, whatever the checks' details (lawsearch-dump.md 2: cut_max)
-  if (c.cfg.cut_max !== null) put("note.cut_max", `DEVELOPMENT CAP: CUT_MAX ${c.cfg.cut_max} targets per pair on every cut check (cut, cut.chosen.first, cut.chosen.second); not a formal run`);
+  // a capped run says so in print.txt, whatever the checks' details (lawsearch-dump.md 2: cut_max); the note names
+  // every check the cap reaches, 13 (i)'s cut of hit trials included (suspicionChecks; C4a, the lead's E8)
+  if (c.cfg.cut_max !== null) put("note.cut_max", `DEVELOPMENT CAP: CUT_MAX ${c.cfg.cut_max} targets per pair on every cut check (cut, cut.chosen.first, cut.chosen.second, suspect13.cut.stage1, suspect13.cut.stage2); not a formal run`);
   if (c.times.gen !== undefined) put("time.gen.ms", c.times.gen);
 
   // gate 4: the avoid table actually read (plant avoidFull: the table with the second half) against its sha256

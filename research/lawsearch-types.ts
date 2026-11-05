@@ -799,13 +799,17 @@ export interface CutFailRow {
   // the trial's table order (the file's order) and the pair's index
   order: number;
   pi: number;
-  // the bar's index in the load the cut ran on, and its start (ms)
+  // the bar's index in the load the cut ran on, and its start (ms); for "entry", the signal bar's
   k: number;
   s: number;
+  // bar k's close (ms, s + step: the series' T[k]), the time the checks.csv detail and the STOP line print (C4a, the
+  // lead's E7)
+  T: number;
   // the target's kinds joined by "|", or "entry" for the entry-bar sub-check
   kinds: string;
-  // the decision at k in the cut and the uncut run (rows joined by ";", empty for no candidate); for "entry", the
-  // entry bar's index the trade code picked and the uncut series' first start (empty for none)
+  // the decision at k in the cut and the uncut run: each candidate "d:status:warm:reason:stratum", the candidates
+  // joined by ";", empty for no candidate; for "entry", the entry bar's index the trade code picked and the uncut
+  // series' first start (empty for none)
   cut: string;
   uncut: string;
 }

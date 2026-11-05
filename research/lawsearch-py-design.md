@@ -30,6 +30,12 @@ PY1 imports PY2. Neither builder reads any TS.
   - (C3, 2026-11-05) Also from `ts/checks.csv`: whether stage 2 is opened (a failed row of stage `gate`, `stage0`,
     `stage1` or `stage1end` keeps it closed) and whether `cut.chosen.second` failed (5.6). From `ts/config.json`:
     `cut_max` (2).
+  - (C4a, 2026-11-05) The same failed rows of `ts/checks.csv` also give the report line `stage 2 not opened: …`
+    (5.7; the lead's E6).
+- **Sealed files** (C4a, 2026-11-05; the lead's E5): `signals/`, `ind/`, `bars/` and `htf/` (yours in `py/` and the
+  TS's in `ts/`) and the TS's `cut_fail.csv` hold second-half material of every trial. They are written for the
+  TS–Python comparison only and are never shown, read by a person or summarised before stage 2
+  (lawsearch-dump.md 12). Your code writes and compares them as before; nothing changes in it.
 
 ## 1. Files, running, and how PY1 loads PY2
 
@@ -63,7 +69,9 @@ PY1 imports PY2. Neither builder reads any TS.
       `null`, or has no `cut_max` key. Refuse before computing anything, with a message that names `cut_max` and its
       value (for example `REFUSED config.json cut_max 20: a capped development run is not compared`). Reason:
       `cut_max` is the TS's development cap on its cut checks; a capped run's checks pass under their normal names,
-      so it must never be compared as a run of the trial (lawsearch-dump.md 2).
+      so it must never be compared as a run of the trial (lawsearch-dump.md 2). (The refusal of a missing key was
+      the C3 docs writer's reading; confirmed by the lead 2026-11-05, C4a. The cap reaches every cut check of the
+      TS, the 13 (i) cut included, and `checks.csv` carries no cap marker: lawsearch-dump.md 2.)
   - 3: a spec 2 or 15 check failed, or a STOP;
     - (C3, 2026-11-05; the lead's D10) also a spec 13 stop on a blind row (5.6): the run stops at the end of that
       stage, the comparison is still made, and the exit is 3 when the comparison gives no 5 or 6.
@@ -71,7 +79,9 @@ PY1 imports PY2. Neither builder reads any TS.
   - 5: a TS–Python difference not allowed;
   - 6: a stop of spec 8.5 (lawsearch-dump.md 9.3).
   - (C3) When several apply to one `--run`, the first of 6, 5, 3, 0 wins (lawsearch-dump.md 10). A Stop raised inside a
-    stage (data stops, a must-be-0 count) still ends the run with exit 3 and no comparison, as before.
+    stage (data stops, a must-be-0 count) still ends the run with exit 3 and no comparison, as before. (This order
+    and the `STOP 13` report line of 5.6 were confirmed by the lead 2026-11-05, C4a.)
+  - (C4a) The report line `stage 2 not opened: …` (5.7) changes no exit.
 - Before reading any data file, PY1 checks the sha256 of the five rules files against these values, and stops (exit 3)
   on any difference:
 
@@ -447,7 +457,8 @@ below goes over that order.
   - MDE: empty without g.
   - (C3, 2026-11-05; the lead's D1) What stage0.csv may hold per trial: the `first.*` keys, `second.counted`,
     `second.weeks`, `all.adds_up` (1/0), and `floor`, `same_as`, `group`, `g` … `mark`, `stage3_estimate`. Nothing
-    else of the second half, and no other number that spans both halves.
+    else of the second half, and no other number that spans both halves. (That `floor`, `same_as`, `group`, `g`,
+    `df`, `pass_min`, `mde` and `mark` stay per trial was confirmed by the lead 2026-11-05, C4a.)
     - Keep computing, for every trial, its four whole-range counts: every emitted candidate, ① (T ≥ SPLIT
       included), ①'s warm-up part (r1w) and ①b. Use them for the trial's own adds-up rule (`all.adds_up`).
     - Do not write them per trial. Write their sums per timeframe into `stage0_totals.csv`, half empty, after
@@ -455,6 +466,9 @@ below goes over that order.
       `all.r1b.m15`, `all.r1b.h1` (int; the sum over that timeframe's trials, in table order).
     - Reason: with the first-half keys, a trial's whole-range `all.r1` gave its second-half ① count and `all.emitted`
       its second-half r2–r6 total; spec 9 後半 says 試しごとの内訳は、段2まで出さない (lawsearch-dump.md 7).
+    - (C4a, 2026-11-05; the lead's E4) These sums stay. In a run with only one trial in a timeframe they are that
+      trial's own numbers, so such a run is for development only (lawsearch-dump.md 7). Write them the same way in
+      every run.
   - no_blind (spec 6: 0件でなければ、プログラムの誤りとして止まる): a trial's no_blind of either half above 0 stops the
     run in stage 0 (Stop, exit 3), for every trial. The second half's count is not written (23.3), so the check is
     made here. (Kept from round C2; the TS does the same from C3, the lead's D4.)
@@ -495,7 +509,9 @@ below goes over that order.
       the comparison's (`agree` or `differ <n>`);
     - exit 3, unless the comparison gives 6 or 5 (2).
     - The TS stops at the same place (its checks.csv then has a failed `suspect.blind.stage1` row), so both folders
-      hold the same files. Reason: lawsearch-dump.md 11.14 (c).
+      hold the same files. Reason: lawsearch-dump.md 11.14 (c). (The report line and the exit order were confirmed
+      by the lead 2026-11-05, C4a.) The TS's failed `suspect.blind.stage1` row is of stage `stage1`, so the report
+      also gets the line `stage 2 not opened: …` of 5.7, after the `STOP 13` lines.
     - Unit test (C3, required): on small made-up inputs where one blind row's stage-1 suspicion hits (for example
       |a| ≥ 10 with ≥ 100 counted signals), check that stage 2 is not opened (no stage-2 file or row in py/), that
       report.txt has the `STOP 13 stage1 …` line before `RESULT agree`, and that the exit is 3; with one more
@@ -508,6 +524,12 @@ below goes over that order.
     11 opens the second half once, and a run with a known failure must not use it; the TS then does not open stage 2
     either (lawsearch-dump.md 11.14 (a)). This widens round C2's rule, which closed stage 2 only on a failed
     `stage1end` row. Rule 2 (checks_ok) still reads only `gate`, `stage0` and `stage1`.
+    - (Confirmed by the lead 2026-11-05, C4a.) This is stricter than spec 10 rule 2 (a rule of each trial) and spec
+      15 (その段の数字を出さない) on purpose: spec 11 opens the second half once, so on real data one failed check keeps
+      stage 2 closed for every trial until the error is fixed and the run is made again. Your exit stays the
+      comparison's.
+    - (C4a, 2026-11-05; the lead's E6) Besides your log, write the reason into `cmp/report.txt` as one line
+      `stage 2 not opened: …` (5.7).
   - (C3, 2026-11-05; the lead's D9) **`cut.chosen.second` failed** (a `ts/checks.csv` row with that name, stage
     `stage2`, `passed` 0): compute and write every stage-2 file as usual, compare as usual, and say in your log that
     the TS withheld stage 2's numbers. Nothing changes in your files or your exit. Reason: the cut is the TS's, and
@@ -549,11 +571,10 @@ lawsearch-dump.md 9 and 10 fix the comparison. PY1 writes `RUN/cmp/report.txt` a
     in either implementation). Never through a pair of two other trials.
   - `holm_pass`, `C1`: the same, or X's own p vs its own Holm threshold within 1e−9.
   - `holm_delta_rank`, `holm_delta_pass`: the same with p_Δ; a tie only through an adopted `delta.use_p` split.
-  - `failed`, `label`: never through a Holm p of the order (C2–C7 do not use p). Only through X's own `C1` (excused
-    as above), X's own `late_lb` (C4) or `delta_ub` (verdict 2) within 1e−9 of 0; for `label` also X's own
-    `holm_delta_pass` (verdict 4 against 5). `verdict`: the same decisions as `label`.
+  - `failed`, `label`, `verdict`: replaced in C4a by the next bullet (C3's wording let them through X's near pair
+    of p).
   - Holm stops at the first failure, so a `holm_pass` split also changes the trials after it; that split is a `STOP
-    8.5` (exit 6), and the later trials' differences stay `DIFF` lines.
+    8.5` (exit 6), and the later trials' differences stay `DIFF` lines. (Confirmed by the lead 2026-11-05, C4a.)
   - Tests that must now report `DIFF` and exit 5 (they gave `ALLOWED` and exit 0 in round C2): the reviewer's R1,
     R2 and R3 in
     `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/review/t_review.py`,
@@ -566,6 +587,89 @@ lawsearch-dump.md 9 and 10 fix the comparison. PY1 writes `RUN/cmp/report.txt` a
     tied, order by t that follows an adopted split -> ALLOWED" stays only if the adopted split's t is min(t_Δ, t_PL)
     of its trial in either implementation (otherwise change its data so it is, and add the case where it is not,
     which must give `DIFF`).
+- (C4a, 2026-11-05; the lead's E1, C3 review finding 1) **`stage2.csv` `failed`, `label` and `verdict` of a trial
+  X.** They rest on X's own decisions, not on a p of the order (C2–C7 do not use p). Excuse a difference in one of
+  them only when at least one of the four decisions below actually differs for X between `ts/stage2.csv` and
+  `py/stage2.csv`, and that difference is excused by X's own values. "Within 1e−9" is absolute; test each
+  implementation's own values, and either one suffices.
+  - **C1**: it differs when X's `C1` differs between the two files. It is excused when X's own `p_iut` is within
+    1e−9 of 0.025 / (K − k + 1), with K that implementation's `K_total` (`stage1_summary.csv`) and k that
+    implementation's `holm_rank` of X.
+  - **C4**: it differs when X's `C4` differs. It is excused when X's own `late_lb` is within 1e−9 of 0.
+  - **The verdict-2 test** (`delta_ub` < 0): it differs when X's `delta_ub` is below 0 in one file and not in the
+    other (an empty `delta_ub` is not below 0). It is excused when X's own `delta_ub` is within 1e−9 of 0.
+  - **holm_delta_pass**, for `label` and `verdict` only: it differs when X's `holm_delta_pass` differs. It is excused
+    when X's own `p_delta` is within 1e−9 of 0.025 / (K − k + 1), with k that implementation's `holm_delta_rank` of
+    X. It decides verdict 4 against 5 (`向きだけ` / `言えない`); `failed` is empty for both (lawsearch-dump.md 11.8).
+    (Confirmed by the lead 2026-11-05, C4a.)
+  - **No route through another trial's p.** For these three keys, drop the pair route and the tie route of the
+    keys above: a near or tied pair of `p_iut` or `p_delta` never excuses X's `failed`, `label` or `verdict`, even
+    when X is one of the two trials. (Those routes still excuse the pair's `holm_rank`, `holm_pass`, `C1`,
+    `holm_delta_rank` and `holm_delta_pass`.) So when X's `C1` splits only through such a pair, the `C1` line is a
+    `STOP 8.5`, and X's `failed`, `label` and `verdict` differences are `DIFF` lines under it.
+  - **`failed`**: split each list at `・` into a set of conditions. The lists may differ only in the conditions so
+    excused; of those, only `C4` can be in a list.
+    - Both verdicts are 3: excused only when the two sets differ in `C4` alone and X's C4 decision differs and is
+      excused.
+    - Neither verdict is 3: both lists are empty (11.8 of lawsearch-dump.md); any difference is a `DIFF`.
+    - Exactly one verdict is 3 [the docs writer's reading of E1, C4a; the lead to confirm]: excused only when the
+      other side's list is empty and X's `verdict` difference is excused (below). Example: X's `C1` really splits
+      on its own p (C1 1 against 0), the verdicts are 3 and 5, and the lists are `C3` and empty.
+  - **`label`**: `ALLOWED 8.5` when at least one of the four decisions differs for X and is excused; otherwise a
+    `DIFF`.
+  - **`verdict`**: the same test as `label`. When it passes, a `STOP 8.5` (exit 6); when it does not, a `DIFF`
+    (exit 5), never a stop.
+  - In the `ALLOWED` or `STOP` line, name the decision of X that differs and the value that excuses it, for example
+    `(C1 of m15.E04.F00 differs: its p_iut within 1e-9 of its Holm threshold 0.008333333333333333 (rank 1, ts))`.
+  - Why: in C3 these keys were still excused through X's near pair of `p_iut` (`_holm_pair` inside `_holm_x`), and
+    without checking that any decision of X differed. Because 1e−9 is absolute, any two strong trials with p_iut
+    below 1e−9 are a near pair, so a `failed` of `C3` against `C3・C6` came out as `ALLOWED` and `RESULT agree`, and
+    a plain verdict difference as a `STOP 8.5`.
+- (C4a, 2026-11-05; the lead's E2, the C3 docs writer's question Q6) **`stage1.csv` `rank` of a trial X**: excused
+  only when X is one of the two trials of a near pair of `lb` of X's timeframe (|lb_X − lb_Y| ≤ 1e−9 in `ts/` or in
+  `py/`, and not exactly equal in both). Never for another trial of that timeframe (before, a near pair excused the
+  rank of every trial of the timeframe). Stage 1 has no tie route: two `lb` exactly equal in both are ordered by
+  counted, then table order, and must agree. `chosen`, `skipped_reason` and `skipped_by` stay as before: excused by
+  any near pair of `lb` in the trial's timeframe (`chosen` is a `STOP 8.5`).
+- (C4a) **Tests.** Add these to your test files:
+  - must give `DIFF` and exit 5: the refuter's f1, l1, v1, v1b, v2, t1 and d1 in
+    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/t_refute1.py`
+    (its controls keep their results: c0 exit 0; g1, a real C1 split on X's own p, exit 6); the real `--compare`
+    on `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/run`
+    (`RESULT differ`, exit 5); the reviewer's R-a … R-f in
+    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/review/d2/t_d2_review.py`.
+    All are Python harnesses on small stage1/stage2 files; no TS.
+  - E2: three trials of one timeframe, two a near pair of `lb`; the third's `rank` differs → `DIFF`, exit 5; the
+    pair's own swap stays `ALLOWED`.
+  - The earlier tests (t_decisions, t_candidates, t_checks, t_refute_c3 and t_c3_run in
+    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/py/`,
+    and the C2 review and refute scripts named above) keep their expected results, or are updated with a one-line
+    reason each. Reading `t_decisions.py` (not run), the docs writer found four whose expectation changes, each to
+    `DIFF`, exit 5:
+    - "verdict split, its late_lb near 0 -> STOP" (C2's): X's `C4` is the same on both sides, so nothing the verdict
+      rests on differs;
+    - "C3 label of E04 split, E04's own p_delta near its delta-only threshold -> ALLOWED": X's `holm_delta_pass` is
+      the same on both sides;
+    - "C3 label of E04 split, its own delta_ub near 0 -> ALLOWED": `delta_ub` is below 0 on both sides, so the
+      verdict-2 test does not differ;
+    - "C3 failed of E04 split, E04 in a near pair of p_iut (its own C1 excused) -> ALLOWED": only `failed` differs,
+      and the pair route is gone (C3 review finding 1).
+- (C4a, 2026-11-05; the lead's E6) **The line `stage 2 not opened`.** When `ts/checks.csv` (columns
+  `trial,name,passed,detail,stage`) has a row of stage `gate`, `stage0`, `stage1` or `stage1end` whose `passed` is
+  not 1 (the condition of 5.6 that keeps stage 2 closed), write one line into `cmp/report.txt`, after the
+  `ALLOWED`, `STOP 8.5` and `STOP 13` lines and just before `RESULT`:
+  `stage 2 not opened: failed TS checks before stage 2: <name> <trial> <stage>; <name> <trial> <stage>; …`
+  - Every such row, in the file's row order, joined by `; ` (the form is the docs writer's, C4a).
+  - `--run` and `--compare` both write it (both read `ts/checks.csv`). Keep your log line too.
+  - It is not a difference and not a stop: `RESULT` and the exit stay the comparison's.
+  - No line when stage 2 stays closed with no such row (`K_total` 0 with every check passed) [the docs writer's
+    reading, C4a; the lead to confirm]. A stage-1 blind-row hit gets it, because the TS's failed
+    `suspect.blind.stage1` row is of stage `stage1`.
+  - Unit test: identical ts/ and py/ with one failed `stage0` row in `ts/checks.csv` → the line is the one just
+    before `RESULT agree`, exit 0; every row passing → no line; only a failed `stage2` or `end` row → no line; with
+    a `STOP 13` line too, the order is `STOP 13`, then this line, then `RESULT`.
+  - Why: on O 6001–6004, report.txt ended `RESULT agree` with 72 files instead of 78–80, and only the log said that
+    stage 2 was not opened (the C3 Python comparer's question).
 - (C3) `STOP 13 <stage> <id>: …` lines (5.6, lawsearch-dump.md 11.14 (c)) are not 9.3 stops: they go before `RESULT`
   and do not change it.
 - (C3) `ts/cut_fail.csv` is a new TS-only file (lawsearch-dump.md 8): it is not compared, and py/ has no copy of it,
@@ -674,3 +778,20 @@ These answer the Python builders' questions of round C2. None changes a number o
 - **What a stop leaves in the files** (stage 2 not opened after a failed TS check; `cut.chosen.second` failed; a
   blind row hit): 5.6 and lawsearch-dump.md 11.14.
 - **`cut_max`**: 2 and lawsearch-dump.md 2.
+
+### 9.1 Decided or confirmed by the lead (C4a, 2026-11-05)
+
+From C3's review (findings 1, 4, 5) and the C3 builders' and docs writer's questions. The Python's part:
+
+- **E1** (a code change): `failed`, `label` and `verdict` are excused only through X's own decisions that actually
+  differ (5.7). The tests named in 5.7 must give `DIFF`.
+- **E2** (a code change): `stage1.csv` `rank` only for the two trials of the near `lb` pair (5.7).
+- **E6** (a code change): the report line `stage 2 not opened: …` (5.7).
+- **Confirmed readings, kept as written**: the per-trial `floor` … `mark` of stage0.csv (5.6); `label` and
+  `verdict` through X's own `holm_delta_pass` (5.7); a near split of one trial's `holm_pass` is a `STOP 8.5` and the
+  later trials show as `DIFF` under it (5.7); the refusal of a missing `cut_max` key (2); the stricter stop before
+  stage 2 (5.6); the `STOP 13` line and the exit order 6, 5, 3, 0 (2, 5.6). D9 unchanged (5.6).
+- **E4**: the per-timeframe `all.*.<tf>` sums stay; a run with one trial in a timeframe is for development only
+  (5.6).
+- **E5**: the sealed files (0; lawsearch-dump.md 12). No code change.
+- **E9**: `checks.csv` carries no cap marker; you refuse capped runs (2). No code change.

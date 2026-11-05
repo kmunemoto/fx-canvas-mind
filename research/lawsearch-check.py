@@ -20,6 +20,8 @@ Usage:
 Exit codes: 0 ok, 2 refused, 3 spec 2/15 check or STOP, 4 hand example failed, 5 TS-Python difference,
 6 a stop of spec 8.5. A compared run with a spec 13 blind-row stop exits 3 unless the comparison gives 6 or 5
 (lawsearch-dump.md 10, C3). --run refuses (2) a run whose ts/config.json cut_max is not null or missing (C3).
+When a failed TS check before stage 2 kept stage 2 closed, report.txt has a `stage 2 not opened: …` line just
+before RESULT; it changes neither RESULT nor the exit (C4a, E6).
 """
 
 import bisect
@@ -5440,7 +5442,9 @@ class Comparator:
             self._diffs_of[fname].append((jk, "value", tv, f"{pv}(under the TS's candidate {c}: {x!r})", cls))
 
     # dump.md 9.3 / spec 8.5: a split of these stops (stage 1's chosen trials, a stage 2 Holm pass, a verdict);
-    # a split of any other decision listed in _near is allowed, and the TS's decision is taken.
+    # a split of any other decision listed in _near is allowed, and the TS's decision is taken. A difference that
+    # _near does not excuse stays a DIFF, a verdict's too (C4a, the lead's E1: a verdict difference that none of
+    # X's own split decisions excuses is a DIFF, exit 5, not a STOP).
     _STOP_KEYS = {"stage1.csv": ("chosen",), "stage1_summary.csv": ("K_total",),
                   "stage2.csv": ("holm_pass", "holm_delta_pass", "C1", "verdict")}
 
@@ -5491,6 +5495,26 @@ class Comparator:
         return None
 
     @staticmethod
+    def _pair_near_with(vals, tid, label):
+        """As _pair_near, but only the pairs that include trial tid (dump.md 11.12, C4a, the lead's E2)."""
+        by = {}
+        for (s, t, x) in vals:
+            by.setdefault(t, {})[s] = x
+        a = by.get(tid)
+        if not a:
+            return None
+        for other, b in by.items():
+            if other == tid:
+                continue
+            sides = [sd for sd in ("ts", "py") if sd in a and sd in b]
+            if len(sides) == 2 and all(a[sd] == b[sd] for sd in sides):
+                continue
+            for sd in sides:
+                if abs(a[sd] - b[sd]) < 1e-9:
+                    return f"{label} of {tid} and {other} within 1e-9 ({sd})"
+        return None
+
+    @staticmethod
     def _zero_near(vals, label, tid=None):
         for (side, t, x) in vals:
             if (tid is None or t == tid) and abs(x) < 1e-9:
@@ -5516,10 +5540,6 @@ class Comparator:
             return float(r["value"])
         except ValueError:
             return None
-
-    def _s2_K(self):
-        """K of the Holm thresholds: the chosen trials, as the trials of stage2.csv on either side."""
-        return len({kk[0] for kk in list(self.ts_tab.get("stage2.csv", {})) + list(self.py_tab.get("stage2.csv", {}))})
 
     def _holm_pair(self, pkey, tid):
         """dump.md 11.12 / 11.13 (C3, the lead's D2): trial tid is one of the two trials of a near pair of pkey
@@ -5573,24 +5593,130 @@ class Comparator:
                                 f"adopted, and t_{v} is min(t_delta, t_pl) of {z} ({side})")
         return None
 
-    def _holm_own_thr(self, pkey, rkey, tid):
-        """dump.md 11.12 (C3, D2): tid's own pkey vs its own Holm threshold 0.025 / (K - k + 1), k = tid's rkey,
-        within 1e-9 in either implementation (each side's p against that side's rank)."""
-        K = self._s2_K()
+    def _side_K(self, side):
+        """K of one implementation's Holm thresholds: its own stage1_summary.csv K_total (dump.md 11.12, C4a: 'taken
+        per implementation'); without that row, the number of trials in its own stage2.csv."""
+        tab = self.ts_tab if side == "ts" else self.py_tab
+        r = tab.get("stage1_summary.csv", {}).get(("K_total",))
+        if r is not None and r.get("value", "") != "":
+            try:
+                return int(float(r["value"]))
+            except ValueError:
+                pass
+        return len({kk[0] for kk in tab.get("stage2.csv", {})})
+
+    def _own_thr_hit(self, pkey, rkey, tid):
+        """tid's own pkey vs its own Holm threshold 0.025 / (K - k + 1), with k = tid's rkey and K that side's
+        K_total, within 1e-9 in either implementation (each side's p against that side's rank and K).
+        -> (side, threshold, k) of the first side that is near, or None."""
         for side in ("ts", "py"):
+            K = self._side_K(side)
             p = self._s2_value(side, tid, pkey)
             k = self._s2_value(side, tid, rkey)
             if p is None or k is None or not (1 <= k <= K) or k != int(k):
                 continue
             thr = 0.025 / (K - int(k) + 1)
             if abs(p - thr) < 1e-9:
-                return f"{pkey} of {tid} within 1e-9 of its Holm threshold {thr!r} (rank {int(k)}, {side})"
+                return side, thr, int(k)
         return None
+
+    def _holm_own_thr(self, pkey, rkey, tid):
+        """dump.md 11.12 (C3, D2): tid's own pkey vs its own Holm threshold within 1e-9 (_own_thr_hit), as text."""
+        h = self._own_thr_hit(pkey, rkey, tid)
+        if h is None:
+            return None
+        side, thr, k = h
+        return f"{pkey} of {tid} within 1e-9 of its Holm threshold {thr!r} (rank {k}, {side})"
 
     def _holm_x(self, pkey, rkey, tid):
         """The excuse of tid's Holm pass (holm_pass and C1 with p_iut, holm_delta_pass with p_delta): the pair rule
         on tid's own pairs, or tid's own p vs its own threshold."""
         return self._holm_pair(pkey, tid) or self._holm_own_thr(pkey, rkey, tid)
+
+    # ------------------------------------------------- stage2.csv failed / label / verdict of X (C4a, the lead's E1)
+    def _s2_text(self, side, tid, key):
+        """The text of stage2.csv (tid, key) on one side, or None when the row is missing."""
+        tab = self.ts_tab.get("stage2.csv", {}) if side == "ts" else self.py_tab.get("stage2.csv", {})
+        r = tab.get((tid, key))
+        return None if r is None else r.get("value", "")
+
+    def _s2_differs(self, tid, key):
+        return self._s2_text("ts", tid, key) != self._s2_text("py", tid, key)
+
+    def _own_zero_side(self, tid, key):
+        """The first side ("ts", "py") whose stage2.csv (tid, key) is within 1e-9 of 0, or None."""
+        for side in ("ts", "py"):
+            x = self._s2_value(side, tid, key)
+            if x is not None and abs(x) < 1e-9:
+                return side
+        return None
+
+    def _below0(self, side, tid):
+        """The verdict-2 test of spec 11 on one side: X's delta_ub < 0. An empty or missing delta_ub is not below 0."""
+        x = self._s2_value(side, tid, "delta_ub")
+        return x is not None and x < 0
+
+    def _x_own_split(self, tid, with_delta_pass):
+        """dump.md 11.12 / py-design 5.7 (C4a, the lead's E1): the decisions of X that its failed, label and verdict
+        rest on and that 9.3 can split, each only when it actually differs between ts/ and py/ AND that difference is
+        excused by X's own values (absolute 1e-9, either implementation's own values):
+          C1 (differs as text; X's own p_iut vs its own Holm threshold, per implementation),
+          C4 (differs as text; X's own late_lb vs 0),
+          the verdict-2 test delta_ub < 0 (one side below 0, the other not; X's own delta_ub vs 0),
+          holm_delta_pass, for label and verdict only (differs as text; X's own p_delta vs its own delta-only Holm
+          threshold, per implementation).
+        No pair or tie route through another trial's p. -> [(decision, reason)] in that order."""
+        out = []
+        if self._s2_differs(tid, "C1"):
+            h = self._own_thr_hit("p_iut", "holm_rank", tid)
+            if h:
+                out.append(("C1", f"C1 of {tid} differs: its p_iut within 1e-9 of its Holm threshold {h[1]!r} "
+                                  f"(rank {h[2]}, {h[0]})"))
+        if self._s2_differs(tid, "C4"):
+            side = self._own_zero_side(tid, "late_lb")
+            if side:
+                out.append(("C4", f"C4 of {tid} differs: its late_lb within 1e-9 of 0 ({side})"))
+        if self._below0("ts", tid) != self._below0("py", tid):
+            side = self._own_zero_side(tid, "delta_ub")
+            if side:
+                out.append(("verdict2", f"the verdict-2 test (delta_ub < 0) of {tid} differs: its delta_ub within "
+                                        f"1e-9 of 0 ({side})"))
+        if with_delta_pass and self._s2_differs(tid, "holm_delta_pass"):
+            h = self._own_thr_hit("p_delta", "holm_delta_rank", tid)
+            if h:
+                out.append(("holm_delta_pass", f"holm_delta_pass of {tid} differs: its p_delta within 1e-9 of its "
+                                               f"delta-only Holm threshold {h[1]!r} (rank {h[2]}, {h[0]})"))
+        return out
+
+    def _x_label_verdict(self, tid):
+        """E1: X's label or verdict difference is excused when at least one of X's own decisions (C1, C4, the
+        verdict-2 test, holm_delta_pass) differs and is excused by X's own values. -> the reason, or None."""
+        sp = self._x_own_split(tid, True)
+        return "; ".join(r for _, r in sp) if sp else None
+
+    def _x_failed(self, tid):
+        """E1: X's failed lists (split at '・') may differ only in the conditions so excused; of those only C4 can
+        be in a list (C1 never is; the verdict-2 test is not a condition; dump.md 11.8: empty unless verdict 3).
+          - both verdicts 3: the lists, with C4 taken out, must be equal, and X's C4 differs and is excused;
+          - neither verdict 3: never excused (both lists must be empty);
+          - exactly one verdict 3 (the docs writer's reading of E1, C4a, py-design 5.7): the other side's list is
+            empty, and X's verdict difference is excused (_x_label_verdict).
+        -> the reason, or None."""
+        def conds(s):
+            return [c for c in (s or "").split("・") if c != ""]
+        lt, lp = self._s2_text("ts", tid, "failed"), self._s2_text("py", tid, "failed")
+        vt, vp = self._s2_text("ts", tid, "verdict"), self._s2_text("py", tid, "verdict")
+        if vt == "3" and vp == "3":
+            if [c for c in conds(lt) if c != "C4"] != [c for c in conds(lp) if c != "C4"]:
+                return None
+            c4 = [r for d, r in self._x_own_split(tid, False) if d == "C4"]
+            return c4[0] if c4 else None
+        if (vt == "3") != (vp == "3"):
+            if conds(lp if vt == "3" else lt):
+                return None
+            r = self._x_label_verdict(tid)
+            return f"the list follows the verdict of {tid} (ts={vt} py={vp}): {r}" if r else None
+        return None
 
     def _near(self, name, key):
         """The pair of compared values within 1e-9 that this decision rests on, or None (dump.md 9.3)."""
@@ -5601,6 +5727,12 @@ class Comparator:
                 # the order of two lb of one timeframe (spec 10 並べ方)
                 tf = tid.split(".")[0]
                 lbs = [v for v in self._vals("stage1.csv", "lb") if v[1].split(".")[0] == tf]
+                if k == "rank":
+                    # dump.md 11.12 (C4a, the lead's E2): a swap of two near lb changes only those two trials'
+                    # ranks, so only a near pair that includes X excuses X's rank (as stage2.csv holm_rank)
+                    return self._pair_near_with(lbs, tid, "lb")
+                # chosen, skipped_reason, skipped_by: any near pair of the tf (the skip rules can carry one swap to
+                # later trials of the tf; unchanged in C4a)
                 return self._pair_near(lbs, "lb")
             return None
         if name == "stage1_summary.csv":
@@ -5632,16 +5764,13 @@ class Comparator:
                 return self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
             if k == "no_uplift":
                 return self._zero_near(self._vals("stage2.csv", "dF_lo"), "dF_lo", tid)
-            if k in ("verdict", "label", "failed"):
-                # never through a Holm p of the order (C2-C7 do not use p): only through X's own C1 (excused as
-                # above), its own late_lb (C4) or delta_ub (verdict 2) vs 0; for label and verdict also X's own
-                # holm_delta_pass (verdict 4 against 5; failed is empty for both, dump 11.8)
-                r = (self._holm_x("p_iut", "holm_rank", tid)
-                     or self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
-                     or self._zero_near(self._vals("stage2.csv", "delta_ub"), "delta_ub", tid))
-                if r is None and k != "failed":
-                    r = self._holm_x("p_delta", "holm_delta_rank", tid)
-                return r
+            if k in ("verdict", "label"):
+                # dump.md 11.12 (C4a, the lead's E1): only when one of X's own decisions (C1, C4, the verdict-2
+                # test, holm_delta_pass) actually differs and is excused by X's own values; never through a near or
+                # tied pair of p (C2-C7 do not use p). An excused verdict is a STOP 8.5; otherwise a DIFF.
+                return self._x_label_verdict(tid)
+            if k == "failed":
+                return self._x_failed(tid)
             return None
         return None
 
@@ -5663,6 +5792,10 @@ class Comparator:
         # of their stage. Not a 9.3 stop: the lines go before RESULT, which stays the comparison's.
         self.stop13 = self.blind_stops()
         out += self.stop13
+        # dump.md 10 / 11.14 (a) (C4a, the lead's E6): when a failed TS check kept stage 2 closed, one line just
+        # before RESULT. Not a difference and not a stop: RESULT and the exit stay the comparison's.
+        self.not_opened = self.stage2_not_opened()
+        out += self.not_opened
         out.append("RESULT agree" if ndiff == 0 and not self.stops else f"RESULT differ {ndiff}")
         os.makedirs(os.path.join(self.run, "cmp"), exist_ok=True)
         with open(os.path.join(self.run, "cmp", "report.txt"), "w", encoding="utf-8", newline="\n") as f:
@@ -5686,6 +5819,24 @@ class Comparator:
                 if r.get("id", "").startswith("blind.") and r.get("hit") == "1":
                     out.append(f"STOP 13 {r.get('stage', '')} {r['id']}: a blind row hit spec 13's lines")
         return out
+
+    def stage2_not_opened(self):
+        """dump.md 10 / 11.14 (a), py-design 5.7 (C4a, the lead's E6): `stage 2 not opened: failed TS checks before
+        stage 2: <name> <trial> <stage>; …` when ts/checks.csv has a row of stage gate, stage0, stage1 or stage1end
+        whose passed is not 1 (the rows that keep stage 2 closed, Run.pre_stage2_failed), every such row in the file's
+        row order. No line without such a row (K_total 0 with every check passed: the docs writer's reading, C4a), and
+        none for a checks.csv without the stage column (before round C2), as Run.pre_stage2_failed. Read by --run and
+        --compare alike. -> [the line] or []."""
+        p = os.path.join(self.ts, "checks.csv")
+        if not os.path.exists(p):
+            return []
+        with open(p, "r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        bad = [f"{r.get('name', '')} {r.get('trial', '')} {r['stage']}" for r in rows
+               if r.get("stage") in Run.PRE_STAGE2_STAGES and r.get("passed") != "1"]
+        if not bad:
+            return []
+        return ["stage 2 not opened: failed TS checks before stage 2: " + "; ".join(bad)]
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -5746,12 +5897,17 @@ def run_and_compare(r):
         print("no TS files to compare yet")
         return 5
     code = Comparator(r.run, r.allowed).compare()
-    rep = open(os.path.join(r.run, "cmp", "report.txt"), encoding="utf-8").read().splitlines()
+    print_report_tail(r.run)
+    return code
+
+
+def print_report_tail(run_dir):
+    """Print report.txt's STOP 13 lines, its `stage 2 not opened` line (C4a, E6) and its RESULT line."""
+    rep = open(os.path.join(run_dir, "cmp", "report.txt"), encoding="utf-8").read().splitlines()
     for ln in rep:
-        if ln.startswith("STOP 13 "):
+        if ln.startswith(("STOP 13 ", "stage 2 not opened: ")):
             print(ln)
     print(rep[-1])
-    return code
 
 
 def main(argv):
@@ -5777,11 +5933,7 @@ def main(argv):
             r = Run(args[1])
             r.setup()
             code = Comparator(args[1], []).compare()
-            rep = open(os.path.join(args[1], "cmp", "report.txt"), encoding="utf-8").read().splitlines()
-            for ln in rep:
-                if ln.startswith("STOP 13 "):
-                    print(ln)
-            print(rep[-1])
+            print_report_tail(args[1])
             return code
         print(__doc__)
         return 2
