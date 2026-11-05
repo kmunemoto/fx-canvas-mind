@@ -11,7 +11,7 @@
 //
 // How far the price has gone from its recent average, scaled by its usual
 // distance from it: past +100 or −100 is read as overbought or oversold, but
-// in a strong trend it stays there. Shown on the chart only, no signal is
+// in a strong trend it can stay there. Shown on the chart only, no signal is
 // judged on it.
 
 export interface CciParams {

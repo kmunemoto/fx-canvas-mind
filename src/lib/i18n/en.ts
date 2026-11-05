@@ -242,15 +242,15 @@ export const en: Dict = {
     // #396: CCI, Williams %R and the moving-average deviation rate
     cci: {
       name: (length: number) => `CCI ${length}`,
-      note: "CCI (Commodity Channel Index; TradingView's built-in, with its calculation and defaults): how far the typical price (the mean of high, low and close) is from its 20-bar average, divided by 0.015 times its usual distance from it (the mean absolute deviation). Above +100 is commonly read as overbought and below −100 as oversold, but in a strong trend it stays out there. Shown only: no signal is judged on it. Not tested on past data.",
+      note: "CCI (Commodity Channel Index; TradingView's built-in, with its calculation and defaults): how far the typical price (the mean of high, low and close) is from its 20-bar average, divided by 0.015 times its usual distance from it (the mean absolute deviation). Above +100 is commonly read as overbought and below −100 as oversold, but in a strong trend it can stay out there. Shown only: no signal is judged on it. Not tested on past data.",
     },
     willR: {
       name: (length: number) => `Williams %R ${length}`,
-      note: "Williams %R (TradingView's built-in \"Williams Percent Range\", with its calculation and defaults): where the close sits in the last 14 bars' high–low range, from −100 to 0. 0 = the 14 bars' highest high, −100 = their lowest low. Above −20 is commonly read as overbought and below −80 as oversold, but in a strong trend it stays out there (the stochastic's %K on a −100 to 0 scale). Shown only: no signal is judged on it. Not tested on past data.",
+      note: "Williams %R (TradingView's built-in \"Williams Percent Range\", with its calculation and defaults): where the close sits in the last 14 bars' high–low range, from −100 to 0. 0 = the 14 bars' highest high, −100 = their lowest low. Above −20 is commonly read as overbought and below −80 as oversold, but in a strong trend it can stay out there (the stochastic's %K on a −100 to 0 scale). Shown only: no signal is judged on it. Not tested on past data.",
     },
     maDev: {
       name: (length: number) => `MA deviation SMA ${length}`,
-      note: "Moving-average deviation rate: how far the close is from its 25-bar simple moving average, in percent ((close − average) ÷ average × 100). 25 bars is the number Japanese charts most often use (TradingView has no built-in of it). How far is too far changes with the pair and the timeframe (not yet measured in this app), so no fixed lines are drawn, only the line at 0. Shown only: no signal is judged on it. Not tested on past data.",
+      note: "Moving-average deviation rate: how far the close is from its 25-bar simple moving average, in percent ((close − average) ÷ average × 100). 25 bars is a number Japanese charts often use. How far is too far changes with the pair and the timeframe (not yet measured in this app), so no fixed lines are drawn, only the line at 0. Shown only: no signal is judged on it. Not tested on past data.",
     },
     rci: {
       name: (length: number) => `RCI ${length}`,

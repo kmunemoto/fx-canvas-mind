@@ -10,7 +10,7 @@
 //
 // Where the close sits in its recent range, like the stochastic's %K turned
 // to run from −100 to 0: above −20 is read as overbought and under −80 as
-// oversold, but in a strong trend it stays there. Shown on the chart only,
+// oversold, but in a strong trend it can stay there. Shown on the chart only,
 // no signal is judged on it.
 
 export interface WillRParams {
@@ -33,7 +33,8 @@ export const williamsR = (
       hi = Math.max(hi, candles[j].high);
       lo = Math.min(lo, candles[j].low);
     }
-    if (!(hi - lo > 0) || !Number.isFinite(c.close)) return null;
+    // a window with a price that is not a finite number has no value either
+    if (!Number.isFinite(hi) || !Number.isFinite(lo) || !(hi - lo > 0) || !Number.isFinite(c.close)) return null;
     return (100 * (c.close - hi)) / (hi - lo);
   });
 };

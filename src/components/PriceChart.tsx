@@ -3186,8 +3186,10 @@ const PriceChart = ({
     // decimals of the reading, and how a level is written
     digits?: number;
     levelText?: (v: number) => string;
-    // #396: written after the reading's value (the deviation rate's "%")
+    // #396: written after the reading's value (the deviation rate's "%"),
+    // and the decimals of the value's tag on the axis (2 unless given)
     unit?: string;
+    tagDigits?: number;
   }) => {
     const top = 8;
     const bottom = RH - 6;
@@ -3367,7 +3369,7 @@ const PriceChart = ({
             <g key={`tag-${ln.name || "line"}`} data-testid={`${o.testid}-tag${ln.name ? `-${ln.name.replace("%", "")}` : ""}`}>
               <rect x={W - PAD_RIGHT + 1} y={cy - tagH / 2} width={axisW - 2} height={tagH} rx="2" fill={fill} />
               <text x={AXIS_X} y={cy + labelSize * 0.36} fontSize={labelSize} fontWeight="700" fill={typeof ln.tagText === "function" ? ln.tagText(fill) : ln.tagText ?? "#fff"} fontFamily="monospace">
-                {v.toFixed(2)}
+                {v.toFixed(o.tagDigits ?? 2)}
               </text>
             </g>
           ));
@@ -5611,6 +5613,7 @@ const PriceChart = ({
           digits: 3,
           levelText: (v) => `${v.toFixed(2)}%`,
           unit: "%",
+          tagDigits: 3,
         });
       })()}
       {/* #145: BLSH as the video shows it — the composite as an area (green
