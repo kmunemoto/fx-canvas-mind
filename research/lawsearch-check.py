@@ -4197,7 +4197,13 @@ class Run:
         self.kappa = {"delta": max(1.0, float(self.config.get("kappaDelta", 1))),
                       "pl": max(1.0, float(self.config.get("kappaPl", 1)))}
         self.avoid = load_avoid_table(ROOT / "research/ledger/spread-hours-h1.csv")
-        self.mode = self.config.get("mode", "syn")
+        # dump.md 2 (round C2): `mode` is "syn" (the TS generated the run) or "walkfiles" (the TS read an existing
+        # run's gmo folder). Both read a synthetic run with a generator manifest, so the data checks of spec 15 use
+        # the synthetic price band (0.25-2.5 x the walk's start) for both; any other mode is not a synthetic run.
+        mode = self.config.get("mode", "syn")
+        if mode not in ("syn", "walkfiles"):
+            raise Stop(f"config.json mode {mode!r}: the Python compares synthetic runs only (syn or walkfiles)")
+        self.mode = "syn"
         self.checks = self._read_checks()
         self.ts_suspect = self._read_ts_suspect()
         self.adopt_map = {}

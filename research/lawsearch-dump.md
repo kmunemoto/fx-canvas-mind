@@ -47,6 +47,11 @@ the "meaning" columns are the spec's.
 ```
 
 - `trials` lists the run's trials in table order.
+- `mode` is `syn` (the TS generated the run) or `walkfiles` (the TS read an existing run's `gmo/`, read only). Both
+  are synthetic runs with a generator `manifest.json`, so the Python reads them alike, with spec 15's synthetic price
+  band (0.25–2.5 × the walk's start); any other mode stops the Python (exit 3). Reason: the run's data, not the way the
+  TS reached them, decides the band; before, the Python took every mode but `syn` as real data and stopped on the
+  real-data band (Python comparer, round C2).
 - With `plant` non-empty, the run is a planted-error run. The Python compares nothing on it: it is run only for the
   checks of `lawsearch-design.md` 8.
 
