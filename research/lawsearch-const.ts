@@ -11,7 +11,7 @@
 
 import { HOUR, MINUTE, WEEK, WEEK_OFFSET } from "./lib.ts";
 
-export const SPEC_SHA256 = "9c9b5dc08c7fc224c4cf41cea49cef509e0409116a0263cea373451db3f00ff9";
+export const SPEC_SHA256 = "df93c55b64d50235a603aede78f96da89f75d15dfe9aef6d8cd33157c6f1e221";
 export const HAND_JSON_SHA256 = "41d4788084630bb4dbc7f6c0a3a46cce40dd604a76b29358f84bf461f53a1d9a";
 export const HAND_MD_SHA256 = "f51112b57eb3d62df4afadcf3e838bbf51cb54b62942ca095c881d701840bae7";
 export const CANDIDATES_SHA256 = "92adb97481cf5a7cc7b17a4a31d06da638c2d30246951a6c51b564e7018fdeab";
