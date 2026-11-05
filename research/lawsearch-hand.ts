@@ -1114,6 +1114,13 @@ const G3: Record<string, Adapter> = {
     return Object.fromEntries([5, 20, 50].map((p) => [`EMA${p}`, () => ind.ema(p)]));
   },
   "A.3.19": (e, plant) => {
+    // the table column is text ("15（p＋1）", "200", "—"): its leading integer ("—" is 0) must be the module's warm-up;
+    // the item and filter names are labels (copied)
+    const tableText = (text: string, w: number) => {
+      const m = /^([0-9]+)/.exec(text);
+      const n = m ? Number(m[1]) : text === "—" ? 0 : NaN;
+      return n === w ? text : `the module's warm-up ${w}`;
+    };
     const s = midSeries(e.input, plant);
     const ind = indOf(s, null, plant);
     const rowsE = e.expect.E as J[];
@@ -1123,7 +1130,7 @@ const G3: Record<string, Adapter> = {
       out[`E[${k}]`] = String(row.item).includes("E04") ? () => {
         const b = itemOf("E04").build(ind);
         const firstSig = Math.min(...b.cond.map((c) => c.findIndex((v) => v !== -1)));
-        return { item: row.item, table: row.table, first_value_index: firstVal(ind.rsi(14).rsi), first_signal_index: firstSig, keep_from_index: trialWarmup(trialOf("m15.E04.F00")) };
+        return { item: row.item, table: tableText(row.table, itemOf("E04").warmup), first_value_index: firstVal(ind.rsi(14).rsi), first_signal_index: firstSig, keep_from_index: trialWarmup(trialOf("m15.E04.F00")) };
       } : () => new Skip(`not built: ${row.item}`);
     });
     rowsF.forEach((row, k) => {
@@ -1131,7 +1138,7 @@ const G3: Record<string, Adapter> = {
       out[`F[${k}]`] = id === "F00" || id.startsWith("F01") ? () => {
         const f = filterOf(id.startsWith("F01") ? "F01" : "F00");
         const fb = f.build(ind);
-        return { ...row, first_value_index: fb.f[0].findIndex((v) => v !== -1), keep_from_index: f.warmup };
+        return { ...row, table: tableText(row.table, f.warmup), first_value_index: fb.f[0].findIndex((v) => v !== -1), keep_from_index: f.warmup };
       } : () => new Skip(`not built: ${id}`);
     });
     return out;

@@ -431,6 +431,9 @@ for the lead, not here.
   candidate that is not used has no rows in measures.csv either.
 - trades/ holds a file for each trial with measures: at stage 1 the floor-passing trials that are not same trials,
   at stage 2 the chosen trials. A trial whose rows serve only another trial's D_F gets no file of its own there.
+- The `value` order inside one trial: clusters.csv `delta, a, pl, delta_late, dF` (measures.csv's order of V);
+  shift.csv `delta, pl, a, delta_late` (the order 8 lists them in). Reason: 8's "that order" read as the order each
+  section lists its values in.
 
 ### 11.7 stage0.csv and stage0_totals.csv
 
@@ -449,3 +452,15 @@ for the lead, not here.
 
 - `hit_*` are 0 when `looked` is 0 (fewer than 100 counted signals). The blind rows' `hit_delta` and `hit_late`
   come out 0 by construction (their Δ and Δ_late are 0).
+
+### 11.10 holes/summary.csv
+
+- `present_slots` counts the slots of the grid ([S0 rounded down to the step, END), as `n_slots`) at which the pair has
+  a bar starting; `hole_slots` the slots that are part of one of its holes. Reason: the columns' names, on the same
+  grid as `n_slots` and `open_slots`.
+
+### 11.11 Set O (TS only; not compared)
+
+- In a run of group O, `ind/`'s `DON20_s` is the planted target the trial used (from C[i+1] vs C[i]), while
+  `DON20_HH` and `DON20_LL` stay the real donchian. The last bar, which has no next bar, keeps the previous target.
+  Reason: ind/ shows the values the trial used; both builders (TS B, PY2) chose the same for the last bar.
