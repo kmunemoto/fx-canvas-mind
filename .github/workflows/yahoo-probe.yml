@@ -1,0 +1,42 @@
+# #391 follow-up (docs §8.140): what Yahoo's hourly answer ends with while a session is trading. The stock MACD
+# email judged the forming bar as closed on 2026-11-05 (15:32 UTC on): read the raw answer twice, a minute apart, and
+# print the last rows and the meta, nothing else. Read only; runs once per push of this file.
+name: yahoo-probe
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/yahoo-probe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read Yahoo's hourly answer for a US and a Tokyo share, twice
+        run: |
+          for round in 1 2; do
+            for sym in AAPL TSLA 7203.T; do
+              curl -sS -m 20 -A "Mozilla/5.0" "https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=60m&range=1y&includePrePost=false" -o "y-${sym}.json" || echo "read failed ${sym}"
+              python3 - "$sym" <<'PY'
+          import json, sys, datetime
+          sym = sys.argv[1]
+          f = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if t else None
+          try:
+              d = json.load(open(f"y-{sym}.json"))
+              r = d["chart"]["result"][0]
+          except Exception as e:
+              print(sym, "unreadable", e); sys.exit(0)
+          m = r["meta"]; ts = r.get("timestamp", []); q = r["indicators"]["quote"][0]
+          reg = (m.get("currentTradingPeriod") or {}).get("regular") or {}
+          print(f"== {sym} now {f(datetime.datetime.now(datetime.timezone.utc).timestamp())} UTC; regularMarketTime {f(m.get('regularMarketTime'))}; "
+                f"regular session {f(reg.get('start'))} .. {f(reg.get('end'))}; gmtoffset {m.get('gmtoffset')}; rows {len(ts)}")
+          for k in range(max(0, len(ts) - 5), len(ts)):
+              print("  ", f(ts[k]), "o", q["open"][k], "h", q["high"][k], "l", q["low"][k], "c", q["close"][k], "v", q["volume"][k])
+          PY
+            done
+            [ "$round" = 1 ] && sleep 70
+          done
