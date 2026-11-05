@@ -288,6 +288,8 @@ export const en: Dict = {
       analog: "Similar-past forecast (20 bars ahead)",
       srZones: "Horizontal zones ③ (where price stopped again and again)",
       trendGuide: "Trend lines ① ② and ④ (automatic)",
+      // #395
+      spike: "Sharp rise / fall (1 hour)",
     },
     // #131: the Pro-style score
     gainzProTitle: (side: "BUY" | "SELL", score: number, rank: number) =>
@@ -379,6 +381,16 @@ export const en: Dict = {
       "Judged on closed bars. Not measured on past data. Shown only: no signal or email uses it.",
     srZoneLabel: (lo: string, hi: string, touches: number) => `③ ${lo === hi ? lo : `${lo}–${hi}`} (${touches}×)`,
     // #394: the owner's ① ② ④
+    // #395: a sharp rise or fall of the 1-hour bar
+    spikeLabel: (up: boolean, x: string, forming: boolean) => `${up ? "Rise" : "Fall"} ${x}×${forming ? " (forming)" : ""}`,
+    spikeTitle: (up: boolean, open: string, extreme: string, move: string, r: string, x: string, forming: boolean) =>
+      `Sharp ${up ? "rise" : "fall"}${forming ? " (the bar is still forming; the price may come back before the close)" : ""}: open ${open} → ${up ? "high" : "low"} ${extreme} (${up ? "+" : "−"}${move}), ${x} times the usual hourly range ${r} (the mean high − low of the 120 closed bars before it)`,
+    spikeNote: (k: number, bars: number, hourly: boolean, history: "loading" | "ready" | "error" | null = null) =>
+      (hourly ? "" : "Drawn on the 1-hour chart (not on this timeframe). ") +
+      (hourly && history === "loading" ? "Reading the bars before the chart's (no closed bar is marked yet). " : "") +
+      (hourly && history === "error" ? "The bars before the chart's could not be read (read on the chart's own bars, so no closed bar is marked). " : "") +
+      `Sharp rise / fall (1 hour): a 1-hour bar whose high went ${k} times the usual hourly range (the mean high − low of the ${bars} closed bars before it) or more above its open is marked "Rise", one whose low went as far below it "Fall". The forming bar is read the same way by its high and low so far ("forming"; the price may come back before the close). ` +
+      "Not marked where there are too few bars before. Settings → Email alerts → \"Sharp rise / fall\" mails the five pairs' and gold's 1-hour bars in the minute it is seen. Not a signal to buy or sell. What the price did after them has not been measured.",
     trendGuideNote: (pivot: number, minBars: number) =>
       "① ② ④ (automatic): drawn from the closed bars on screen. An up move when the highest high comes after the lowest low, a down move otherwise (one bar holding both is read as down; the later of two equal ones). " +
       `In a down move, ① runs from the highest high with the shallowest fall that keeps every swing high (higher than ${pivot} bars either side, confirmed ${pivot} bars later) down to the low under it — the line touching the swing that sticks up most. Bars that are not swings can stand above it. With no confirmed swing high between the top and the low (a straight fall), ① and ② are not drawn. ` +
@@ -1968,7 +1980,7 @@ export const en: Dict = {
     saveFailed: "Could not save",
     pairHeader: "Pair",
     intervals: { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1D" } as Record<string, string>,
-    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "Stock MACD" } as Record<string, string>,
+    ruleTabs: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "Stock MACD", spike: "Sharp rise / fall" } as Record<string, string>,
     ruleTabsLabel: "Which signal to email",
     gainzIntro:
       "GA style is the GainzAlgo V2 Alpha-style signal (engulfing, large body, RSI 40, against 5 bars ago; stop 1 ATR, target 2× the stop). It is a reproduction of the GainzAlgo Suite settings, its numbers then set in #132 to the ones that won most often on past charts (a 70% body, RSI 40, 5 bars ago); its logic is not published, so the signals may differ.",
@@ -1977,7 +1989,7 @@ export const en: Dict = {
       "On 15-minute charts it fires about once every two or three days per pair (with #132's settings, about a sixth as often as before).",
       "On 15-minute and 1-hour charts, signals from bars closing 17:00–23:59 UTC are not emailed (they stay in the log).",
     ],
-    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)", emarm: " (EMA cross + return move)", stockmacd: " (Stock MACD)" } as Record<string, string>,
+    ruleTag: { rsi_sar: "", gainz: " (GA)", qtrend: " (Q-Trend)", ultra: " (ULTRA)", macdx: " (MACD peak/valley)", sweepx: " (Liquidity sweep + EMA cross)", amdpo3: " (AMD Po3)", emarm: " (EMA cross + return move)", stockmacd: " (Stock MACD)", spike: " (Sharp rise / fall)" } as Record<string, string>,
     // #155
     strongTag: " STRONG",
     indicatorIntro: {
@@ -1989,6 +2001,8 @@ export const en: Dict = {
       amdpo3: "The D ▲ (BUY) and D ▼ (SELL) of AMD Po3 with Live Edge Stats (a port of the code WillyAlgoTrader published on TradingView, at its default settings): sent at the bar where the price broke above or below a range that had narrowed and closed back inside it within 6 bars (the manipulation confirmed), when the original's reference trade opens at that bar's close (the original's DIST alert). The same D the chart's \"AMD Po3\" draws; the email carries the original's stop (0.4 × ATR 14 beyond the sweep's tip), target (the 1.5 extension of the sweep) and R:R. This rule's win rate and its profit or loss a trade have not been measured.",
       // #387
       emarm: "An Instagram video's way (GBP/JPY scalping on the 15-minute chart), made into a rule by this app (EMA cross + return move): after EMA 20 crosses above EMA 200, a candle comes back to the 200 EMA, a close breaks the horizontal and diagonal lines drawn from the swing high after it, the price returns to the horizontal from the 3rd bar after the break, and the bar that closes above that bar's body is a BUY (a SELL is the mirror). On the 15-minute chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only. The same marks as \"EMA cross + return move\" on the chart; the email carries a stop (the lowest low or highest high from the bar that broke the diagonal), target 1 (the latest high or low) and target 2 (wave 1's height). Measured on the five pairs' 15-minute bars over the last 52 weeks: 22 entries, 11 won and 11 lost with the stop and target 1 (50.0%), +0.7 pips a trade (spread not paid). Gold is not measured.",
+      // #395
+      spike: "Sent when the 1-hour bar of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD or gold (XAU/USD) moves sharply: a sharp rise when its high has gone 3 times the usual hourly range (the mean high − low of the 120 closed bars before it) above its open, a sharp fall when its low has gone as far below. Sent in the minute it is seen, while the bar is still forming (one email a bar and direction). Not a signal to buy or sell. \"Sharp rise / fall (1 hour)\" on the chart marks bars by the same rule (its bars are made a little differently, so near the line the two may differ; gold's forming bar starts from the first price the screen received, so until it closes its mark may differ from the email).",
       // #391
       stockmacd: "The MACD peak/valley email (the same rule as on the currency pairs) on US and Japanese stocks' 1-hour charts: a SELL when the MACD(12, 26, 9) blue line reaches 95% or more of the way to the top of the newest 120 bars' pane, a BUY when it reaches 95% or more of the way to its bottom. The email gives no stop or target.",
       sweepx: "A gold trader's Instagram video's way, made into a rule by this app (a liquidity sweep, then the EMA cross): a BUY when EMA 20 crosses above EMA 80 after the last wave's low was taken once, a SELL when it crosses below after the last high was taken. On gold's 1-minute chart only. The same marks the moving averages chart draws; the email carries a stop ($0.10 beyond the last 5 bars' low or high) and targets 1 and 2 ($1.50 and $2.00). This rule's win rate and its profit or loss a trade have not been measured.",
@@ -2042,6 +2056,14 @@ export const en: Dict = {
       "The video draws its lines by hand, so the swings (3 bars on each side), the 2 bars not counted, where the stop goes and how target 2 is taken are this app's. An alert is not an order. Whether a signal won or lost is not recorded.",
       "Nothing is judged while the market is closed (weekends and the like).",
     ],
+    // #395: a sharp rise or fall's notes (docs §8.138)
+    spikeNotes: [
+      "Read on the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold only (the owner's choice). The five pairs are the mid of GMO Coin's bid and ask, rounded as the chart is. Gold's usual range is from Twelve Data's 1-hour bars and the hour's prices from Swissquote's, recorded every minute (the chart's forming gold bar starts from the first price that screen received, so until it closes its mark may differ from the email however large the move — none, another multiple, or one the email does not have; its closed bars are Twelve Data's, so near the line they too may differ).",
+      "Read every minute: the forming 1-hour bar is read each minute, and once its high (low) has gone 3 times the usual range from its open, the email goes in that minute. A move reached just before the close is mailed within 10 minutes of the close. How many seconds the emails actually take has not been checked.",
+      "It is seen while the bar forms, so the price may come back before the close; a bar that got there once is a sharp rise (fall) even so.",
+      "How often (the five pairs' 1-hour bars in the database, 2026-07-19 to 2026-11-04, some 15.4 weeks): 36 rises and 116 falls, about 10 a week in all; gold (Twelve Data's 1-hour bars, 2026-09-14 to 2026-11-05, some 7.4 weeks) 2 and 6. What the price did after them (went on or came back, any win rate) has not been measured.",
+      "An alert is not an order. Nothing is judged while the market is closed (weekends and the like), nor gold's first hour each day (08:00 JST, 07:00 in summer): the minute prices are recorded from some 5 minutes after it reopens, so that hour's open is not known.",
+    ],
     // #391: the MACD email on shares' notes (docs §8.134)
     stockmacdNotes: [
       "Judged on the 1-hour chart of 8 US stocks (NVIDIA, Intel, Apple, Microsoft, Alphabet, Amazon, Meta, Tesla) and 14 Japanese ones (Toyota, Sony, SoftBank Group, MUFG, Keyence, Fast Retailing, Tokyo Electron, Nintendo, NTT, Hitachi, Honda, Lasertec, Shin-Etsu, Mitsubishi Corporation) only: the ones measured. Other stocks the chart can find cannot be chosen yet.",
@@ -2085,6 +2107,9 @@ export const en: Dict = {
     } as Record<string, string>,
     skipReasons: { costly_hours: "Not emailed (costly hours)" } as Record<string, string>,
     sides: { BUY: "Buy", SELL: "Sell" } as Record<string, string>,
+    // #395: a sharp rise's or fall's row (not a side to trade)
+    spikeUp: "Sharp rise",
+    spikeDown: "Sharp fall",
     plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
     // #108: the live record of what each signal did afterwards
     record: {

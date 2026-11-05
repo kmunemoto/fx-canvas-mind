@@ -98,6 +98,10 @@ export interface ChartOverlays {
   // move with the line the other way once a swing holds it
   // (src/lib/trendGuide.ts); on unless switched off
   trendGuide: boolean;
+  // #395: a sharp rise or fall of the 1-hour bar — its high (low) gone 3 times
+  // the usual hourly range from its open (src/lib/spike.ts, the email's code),
+  // on the 1-hour chart only; on unless switched off (「チャートにも出す」)
+  spike: boolean;
 }
 
 export const OVERLAY_DEFAULTS: ChartOverlays = {
@@ -129,6 +133,7 @@ export const OVERLAY_DEFAULTS: ChartOverlays = {
   analog: false,
   srZones: true,
   trendGuide: true,
+  spike: true,
 };
 
 const overlaysOf = (v: unknown): ChartOverlays => {

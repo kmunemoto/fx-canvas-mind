@@ -50,6 +50,7 @@ import { SWEEPX_MIN_WINDOW, sweepCrossMarks, sweepPip } from "@/lib/sweepCross";
 import { EMA_RETURN_MIN_WINDOW, emaReturnMarks, emaReturnNow, type ErBar } from "@/lib/emaReturn";
 import { ANALOG, analogForecast } from "@/lib/analogForecast";
 import { SR_ZONES, srZones as srZonesOf } from "@/lib/srZones";
+import { SPIKE, SPIKE_HOUR_MS, spikeChartMarks } from "@/lib/spike";
 import { TREND_GUIDE, guideAt, trendGuide as trendGuideOf, type GuideLine } from "@/lib/trendGuide";
 import {
   ADX_COLORS,
@@ -227,7 +228,7 @@ interface Props {
 }
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
-const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones", "trendGuide"] as const;
+const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones", "trendGuide", "spike"] as const;
 const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
@@ -306,6 +307,9 @@ const ANALOG_MID = "#9ca3af";
 // #394: the owner's ① ② ④ (falling lines red, rising lines green)
 const GUIDE_DOWN = "#B91C1C";
 const GUIDE_UP = "#047857";
+// #395: the sharp rise's green and the fall's red
+const SPIKE_UP = "#15803D";
+const SPIKE_DOWN = "#DC2626";
 // #393: the horizontal zones' blue
 const SR_BLUE = "#2563EB";
 
@@ -1069,6 +1073,15 @@ const PriceChart = ({
     () => (ov.trendGuide && n > 0 ? trendGuideOf(candles, from, Math.min(to - 1, n - 1 - tail)) : null),
     [ov.trendGuide, candles, n, from, to, tail],
   );
+  // #395: a sharp rise or fall of the 1-hour bar (docs §8.138; src/lib/spike.ts,
+  // the code the email decides with), on the 1-hour chart only: each candle
+  // (the forming one too, by its high and low so far) against the SPIKE.bars
+  // bars before it, from the history before the candles where they are too few
+  const hourly = useMemo(() => n > 1 && medianGapMs(candles.slice(-60).map((c) => c.datetime)) === SPIKE_HOUR_MS, [candles, n]);
+  const spikes = useMemo(
+    () => (ov.spike && hourly ? spikeChartMarks(maPast ?? [], candles) : null),
+    [ov.spike, hourly, maPast, candles],
+  );
   // #160: room for bars past the newest one, dragged into view
   const ahead = interactive ? aheadOf(n, view) : 0;
 
@@ -1226,7 +1239,19 @@ const PriceChart = ({
     // candles it points at (#291: the video's way's labels too, in view).
     const sweepInView = sweepMarks !== null && sweepMarks.some((m) => m.at >= from && m.at < to);
     const erInView = er !== null && er.marks.some((m) => m.at >= from && m.at < to);
-    const pad = (max - min) * (marks.length > 0 || sweepInView || erInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // #395: and the sharp rises' and falls' words, above the high (below the low)
+    const spikeInView = spikes !== null && spikes.some((m) => m.i >= from && m.i < to);
+    let pad = (max - min) * (marks.length > 0 || sweepInView || erInView || spikeInView ? 0.16 : 0.06) || Math.abs(max) * 0.001 || 1;
+    // #395: and at least what they take in pixels — the triangle 3 and 5 font
+    // units off the bar, a gap of 2, the words, and 2 more below a fall's —
+    // which a short plot (full screen with its strips) has less of
+    if (spikeInView) {
+      const sfs = full ? 1.25 : 1;
+      const need = 12 * sfs + (narrow ? 7 : 8) * sfs + 2;
+      const plotHh = H - PAD_TOP - PAD_BOTTOM;
+      const range = max - min;
+      if (range > 0 && plotHh > 3 * need) pad = Math.max(pad, (need * range) / (plotHh - 2 * need));
+    }
     min -= pad;
     max += pad;
     // #144: as dragged on the price scale
@@ -1249,7 +1274,7 @@ const PriceChart = ({
     const x = (i: number) => PAD_LEFT + slot * (i - from) + slot / 2;
 
     return { min, max, y, x, slot, bodyW, plotW, barsW };
-  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af]);
+  }, [candles, levels, W, H, PAD_RIGHT, sar, marks.length, from, to, ahead, interactive, view, showSarDots, showSarCloud, emas, zlt, priceZoom, ulGap, sweepMarks, er, amdGap, rightAhead, af, spikes, full, narrow]);
 
   // #160: the drawings where they land now — the pair's, with the one being
   // moved as it is (none while hidden) — and the one being put down
@@ -1605,6 +1630,13 @@ const PriceChart = ({
     autoTrend: t.chart.autoTrendNote,
     srZones: t.chart.srZonesNote(SR_ZONES.pivot, SR_ZONES.gap, SR_ZONES.maxWidth, SR_ZONES.minTouches, SR_ZONES.maxZones),
     trendGuide: t.chart.trendGuideNote(TREND_GUIDE.pivot, TREND_GUIDE.minBars),
+    // (#395: and whether the bars before the chart's, which its 120 need, are there)
+    spike: t.chart.spikeNote(
+      SPIKE.k,
+      SPIKE.bars,
+      hourly,
+      zoneShiftHistory === undefined && deepHistory === undefined ? null : maPast !== null && maPast.length > 0 ? "ready" : zoneShiftHistory?.status ?? deepHistory?.status ?? null,
+    ),
     maCross: t.chart.maCrossNote(crossNames[0], crossNames[1], !pair2, !!pair2?.samePeriod),
     ichimoku: t.chart.ichimokuNote,
     macd: t.chart.macd.note,
@@ -1661,6 +1693,8 @@ const PriceChart = ({
     ...(amdListed ? [{ key: "amdPo3", group: "signals" as const, name: t.chart.overlayNames.amdPo3, on: ov.amdPo3, toggle: flip("amdPo3") }] : []),
     // #387: the owner's video's EMA 20 / 200 way
     { key: "emaReturn", group: "signals" as const, name: t.chart.overlayNames.emaReturn, on: ov.emaReturn, toggle: flip("emaReturn") },
+    // #395: a sharp rise or fall of the 1-hour bar
+    { key: "spike", group: "signals" as const, name: t.chart.overlayNames.spike, on: ov.spike, toggle: flip("spike") },
     // #392: the owner's video's similar-past forecast
     { key: "analog", group: "signals" as const, name: t.chart.overlayNames.analog, on: ov.analog, toggle: flip("analog") },
     // #291: the owner's video's way (the moving averages' chart only, below)
@@ -2297,6 +2331,51 @@ const PriceChart = ({
     }));
   const qtSpots = placeEdgeLabels(qtLabels, plotTop, plotBottom);
   const qtPlaced = new Map(qtLabels.map((l) => [l.key, { ...qtSpots.get(l.key)!, w: l.w, h: l.h }]));
+  // #395: the sharp rises and falls on screen: a triangle a little past the
+  // bar's high (low), and beyond it its words ("急騰 3.4倍"; "（途中）" on the
+  // forming bar), kept inside the bars' part of the plot. The guide's and the
+  // bands' labels avoid them (below)
+  const spikeFsz = (narrow ? 7 : 8) * fs;
+  const spikeW = (text: string) =>
+    [...text].reduce((a, ch) => {
+      const c = ch.codePointAt(0) ?? 0;
+      return a + ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xff00 && c <= 0xffef) ? 1 : c === 0x20 ? 0.32 : 0.66);
+    }, 0) * spikeFsz;
+  const spikeLabels = (spikes ?? []).filter((m) => onScreen(m.i)).flatMap((m) => {
+    const c = candles[m.i];
+    const forming = formingLast && m.i === n - 1;
+    return [true, false].filter((up) => (up ? m.isUp : m.isDown)).map((up) => {
+      const cx = x(m.i);
+      const tri = 5 * fs;
+      const tip = up ? Math.max(plotTop + tri, y(c.high) - 3 * fs) : Math.min(plotBottom - tri, y(c.low) + 3 * fs);
+      const text = t.chart.spikeLabel(up, (up ? m.upX : m.downX).toFixed(1), forming);
+      const w = spikeW(text);
+      const ty = up ? Math.max(plotTop + spikeFsz, tip - tri - 2 * fs) : Math.min(plotBottom - 2 * fs, tip + tri + 2 * fs + spikeFsz * 0.8);
+      const tx = Math.max(PAD_LEFT + 2 * fs, Math.min(PAD_LEFT + barsW - w - 2 * fs, cx - w / 2));
+      return {
+        key: `${m.i}-${up ? "u" : "d"}`,
+        up,
+        cx,
+        tip,
+        tri,
+        text,
+        tx,
+        ty,
+        w,
+        color: up ? SPIKE_UP : SPIKE_DOWN,
+        title: t.chart.spikeTitle(
+          up,
+          c.open.toFixed(decimals),
+          (up ? c.high : c.low).toFixed(decimals),
+          // as the email says them: pips, dollars on gold
+          formatDistance(pair, up ? m.up : m.down, { digits: 1 }),
+          formatDistance(pair, m.r, { digits: 1 }),
+          (up ? m.upX : m.downX).toFixed(1),
+          forming,
+        ),
+      };
+    });
+  });
   // #151: ULTRA's newest signal's box: while it is open, on to the plot's
   // right edge with its prices there (pushed apart where they would
   // overlap); once ended, to the bar it ended on, without them
@@ -2987,6 +3066,12 @@ const PriceChart = ({
       {ov.analog && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-analog-legend">
           {noteOf.analog}
+        </p>
+      )}
+      {/* #395 */}
+      {ov.spike && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-spike-legend">
+          {noteOf.spike}
         </p>
       )}
       {/* #394 */}
@@ -4402,6 +4487,29 @@ const PriceChart = ({
           );
         })()}
 
+        {/* #395: the sharp rises and falls of the 1-hour bar, over the candles */}
+        {spikeLabels.length > 0 && (
+          <g data-testid="chart-spike" clipPath={`url(#${clipId})`}>
+            {spikeLabels.map((sp) => (
+              <g key={sp.key} data-testid={`chart-spike-${sp.up ? "up" : "down"}`}>
+                <title>{sp.title}</title>
+                <polygon
+                  points={sp.up
+                    ? `${sp.cx},${sp.tip - sp.tri} ${sp.cx - sp.tri * 0.8},${sp.tip} ${sp.cx + sp.tri * 0.8},${sp.tip}`
+                    : `${sp.cx},${sp.tip + sp.tri} ${sp.cx - sp.tri * 0.8},${sp.tip} ${sp.cx + sp.tri * 0.8},${sp.tip}`}
+                  fill={sp.color}
+                />
+                <text
+                  x={sp.tx} y={sp.ty} fontSize={spikeFsz} fontWeight="700" fill={sp.color}
+                  stroke="hsl(var(--background))" strokeWidth={2.5 * fs} strokeLinejoin="round" paintOrder="stroke"
+                  data-testid="chart-spike-label"
+                >
+                  {sp.text}
+                </text>
+              </g>
+            ))}
+          </g>
+        )}
         {/* #394: the owner's ① ② ④ and #393's band labels, over the candles. ①
             solid and ② dashed from their first point to the bars' right edge (not
             over the price tags' column), a ring on each point they run through and
@@ -4488,6 +4596,12 @@ const PriceChart = ({
               const cy = r.up ? y(candles[i].low) + sz + 3 : y(candles[i].high) - sz - 3;
               taken.push({ x0: x(i) - sz, x1: x(i) + sz, y0: cy - sz, y1: cy + sz, soft: true });
             }
+          // #395: the sharp rises' and falls' words and triangles
+          for (const sp of spikeLabels) {
+            taken.push({ x0: sp.tx, x1: sp.tx + sp.w, y0: sp.ty - spikeFsz * 0.8, y1: sp.ty + spikeFsz * 0.25, soft: true });
+            const [t0, t1] = sp.up ? [sp.tip - sp.tri, sp.tip] : [sp.tip, sp.tip + sp.tri];
+            taken.push({ x0: sp.cx - sp.tri, x1: sp.cx + sp.tri, y0: t0, y1: t1, soft: true });
+          }
           if (amd)
             for (const lb of amd.labels) {
               const px = x(lb.x - amd.off);

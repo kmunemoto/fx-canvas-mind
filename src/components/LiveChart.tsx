@@ -376,13 +376,16 @@ const LiveChart = ({
   // them while the indicators are locked)
   // #150: and the trend tools (their averages and ranges settle on it)
   // (#201: the moving averages' own chart, for its three lines only)
+  // #395: and the sharp rises and falls on the 1-hour chart (the 120 closed
+  // bars before each bar; the chart's own are 120 and the one forming)
   const maSwitches = { ema50: overlays.ema50, ema200: overlays.ema200, ma3: overlays.ma3 };
   const historyOn =
     indicatorsAllowed &&
     (maMode
       ? overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.sweepx
       : zoneShiftOn || overlays.gainzPro || overlays.ema50 || overlays.ema200 || overlays.ma3 || overlays.qTrend || overlays.qtBlsh || chartPrefs.blsh ||
-        overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra || overlays.emaReturn);
+        overlays.autoTrend || overlays.maCross || overlays.ichimoku || chartPrefs.macd || chartPrefs.adx || overlays.ultra || overlays.emaReturn ||
+        (overlays.spike && interval === "1h"));
   const [history, setHistory] = useState<{ key: string; readAt: string; bars: NumericCandle[] | null; status: "loading" | "ready" | "error" } | null>(null);
   const historyKey = `${pair}|${interval}`;
   // (#127: or gold's own Twelve Data bars; #154: or a pair's GMO does not serve)

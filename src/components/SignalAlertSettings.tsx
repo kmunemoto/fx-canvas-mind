@@ -110,6 +110,9 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
   const rowLabel = (r: AlertRow) => {
     if (r.kind === "test") return a.testRow;
     const tf = r.interval ? a.intervals[r.interval] ?? r.interval : "";
+    // #395: a sharp rise or fall is kept as BUY or SELL only for the table's
+    // check; it is said as what it is, not as a side to trade
+    if (r.rule === "spike") return `${r.pair ?? ""} ${tf} ${r.side === "BUY" ? a.spikeUp : r.side === "SELL" ? a.spikeDown : ""}`.trim();
     return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (r.strong ? a.strongTag : "") + (a.ruleTag[r.rule] ?? "");
   };
   const statusLabel = (r: AlertRow) =>
@@ -203,7 +206,8 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                 // or not yet deployed) has nothing to tick: say so rather than draw an empty table
                 // (#387: and the EMA 20 / 200 way has its own, the six's 15 minutes)
                 // (#391: and the MACD email on shares has its own, the 22 shares' 1 hour)
-                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : settings.indicator;
+                // (#395: and a sharp rise or fall has its own, the six's 1 hour)
+                const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : rule === "spike" ? settings.indicator.spike : settings.indicator;
                 if (!ind || ind.pairs.length === 0) {
                   return <p className="text-xs text-warning" data-testid={`signal-alerts-${rule}-unavailable`}>{a.macdxUnavailable}</p>;
                 }
@@ -326,7 +330,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
           )}
 
           <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4" data-testid="signal-alerts-notes">
-            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : rule === "stockmacd" ? a.stockmacdNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
+            {(rule === "macdx" ? a.macdxNotes : rule === "sweepx" ? a.sweepxNotes : rule === "amdpo3" ? a.amdpo3Notes : rule === "emarm" ? a.emarmNotes : rule === "stockmacd" ? a.stockmacdNotes : rule === "spike" ? a.spikeNotes : isIndicatorAlertRule(rule) ? a.indicatorNotes : rule === "gainz" ? a.gainzNotes : a.notes).map((n) => <li key={n}>{n}</li>)}
           </ul>
 
           <button
@@ -381,7 +385,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                   <div key={r.id} className="text-[11px] py-0.5" data-testid="signal-alert-row">
                     <div className="flex items-center gap-2 whitespace-nowrap">
                       <span className="font-mono text-muted-foreground">{jst(r.closedAt ?? r.createdAt)}</span>
-                      <span className={r.side === "BUY" ? "text-success" : r.side === "SELL" ? "text-destructive" : "text-foreground"}>
+                      <span className={r.rule === "spike" ? "text-foreground" : r.side === "BUY" ? "text-success" : r.side === "SELL" ? "text-destructive" : "text-foreground"}>
                         {rowLabel(r)}
                       </span>
                     </div>
