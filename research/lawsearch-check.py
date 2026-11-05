@@ -4460,7 +4460,8 @@ class Run:
             trials = [sig_trial(t) for t in self.trials if t["tf"] == tf]
             for pair in PAIRS:
                 b = load.bars[(tf, pair)]
-                cols = sig.ind_columns(trials, b)
+                # dump.md 11.11: in a group O run, DON20_s is the planted target the trial used
+                cols = sig.ind_columns(trials, b, answer_knowing=self.answer_knowing)
                 names = [c for c in order if c in cols] + [c for c in cols if c not in order]
                 want = set(range(0, b["n"], 97))
                 for t in self.trials:
