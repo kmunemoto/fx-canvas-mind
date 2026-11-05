@@ -75,6 +75,9 @@ import { STOCH_DEFAULTS, STOCH_LEVELS, STOCH_MAX, stochastic, type StochParams }
 import { RSI_SAR_LEVELS } from "@/lib/rsiSar";
 import { PCTB_DEFAULTS, PCTB_LEVELS, percentB } from "@/lib/percentB";
 import { RCI_DEFAULTS, RCI_LEVELS, rci as rciOf } from "@/lib/rci";
+import { CCI_DEFAULTS, CCI_LEVELS, cci as cciOf } from "@/lib/cci";
+import { WILLR_DEFAULTS, WILLR_LEVELS, williamsR } from "@/lib/williamsR";
+import { MADEV_DEFAULTS, maDeviation } from "@/lib/maDeviation";
 import type { DowTf } from "@/lib/liveChart";
 
 interface Level {
@@ -229,7 +232,7 @@ interface Props {
 
 // #140: what the lock covers — every indicator added to the chart (#117 on)
 const LOCKED_OVERLAYS = ["kalman", "supertrend", "utBot", "fvgProfile", "zoneShift", "dow", "gainzPro", "ema50", "ema200", "ma3", "qTrend", "qtBlsh", "autoTrend", "maCross", "ichimoku", "ultra", "zlTema", "sweepx", "amdPo3", "emaReturn", "analog", "srZones", "trendGuide", "spike"] as const;
-const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "blsh", "macd", "adx"]);
+const LOCKED_KEYS = new Set<string>([...LOCKED_OVERLAYS, "stoch", "pctB", "rci", "cci", "willR", "maDev", "blsh", "macd", "adx"]);
 // #201: the three moving averages' switches
 const MA_KEYS = new Set<string>(MA_SLOTS.map((m) => m.key));
 // #291: and the owner's video's way, on the moving averages' own chart only
@@ -343,6 +346,11 @@ const COLORS = {
   pctB: "#2962FF",
   rci: "#2962FF",
   rciMa: "#FDD835",
+  // #396: TradingView's colours for CCI (blue) and Williams %R (purple); the
+  // deviation rate orange
+  cci: "#2962FF",
+  willR: "#7E57C2",
+  maDev: "#FF6D00",
   // #145: BLSH as the video colours it — the area green and red, the line
   // yellow and blue
   blshUp: "#16A34A",
@@ -637,7 +645,7 @@ const PriceChart = ({
     if (maOnly) {
       const overlays = { ...saved.overlays };
       for (const k of Object.keys(overlays) as Array<keyof ChartOverlays>) if (!MA_CHART_KEYS.has(k)) overlays[k] = false;
-      p = { ...saved, rsi: false, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
+      p = { ...saved, rsi: false, stoch: false, pctB: false, rci: false, cci: false, willR: false, maDev: false, blsh: false, macd: false, adx: false, overlays };
     } else if (saved.overlays.sweepx) {
       // #291: the video's way is the moving averages' chart's own
       p = { ...saved, overlays: { ...saved.overlays, sweepx: false } };
@@ -645,12 +653,16 @@ const PriceChart = ({
     if (!indicatorsLocked) return p;
     const overlays = { ...p.overlays };
     for (const k of LOCKED_OVERLAYS) overlays[k] = false;
-    return { ...p, stoch: false, pctB: false, rci: false, blsh: false, macd: false, adx: false, overlays };
+    return { ...p, stoch: false, pctB: false, rci: false, cci: false, willR: false, maDev: false, blsh: false, macd: false, adx: false, overlays };
   }, [saved, indicatorsLocked, maOnly]);
   const stoch = useMemo(() => stochastic(candles, prefs.stochParams), [candles, prefs.stochParams]);
   // #135: Bollinger %b and RCI, computed only while switched on
   const pctB = useMemo(() => (prefs.pctB ? percentB(candles) : null), [prefs.pctB, candles]);
   const rciRead = useMemo(() => (prefs.rci ? rciOf(candles) : null), [prefs.rci, candles]);
+  // #396: CCI, Williams %R and the deviation rate, likewise
+  const cciRead = useMemo(() => (prefs.cci ? cciOf(candles) : null), [prefs.cci, candles]);
+  const willRRead = useMemo(() => (prefs.willR ? williamsR(candles) : null), [prefs.willR, candles]);
+  const maDevRead = useMemo(() => (prefs.maDev ? maDeviation(candles) : null), [prefs.maDev, candles]);
   // #119: what is drawn over the price, as switched in the chart's list
   const ov = prefs.overlays;
   const hasSar = !!sar && sar.length === candles.length;
@@ -1024,11 +1036,14 @@ const PriceChart = ({
   const showStoch = prefs.stoch && stoch.k.some((v) => v !== null);
   const showPctB = pctB !== null && pctB.some((v) => v !== null);
   const showRci = rciRead !== null && rciRead.rci.some((v) => v !== null);
+  const showCci = cciRead !== null && cciRead.some((v) => v !== null);
+  const showWillR = willRRead !== null && willRRead.some((v) => v !== null);
+  const showMaDev = maDevRead !== null && maDevRead.some((v) => v !== null);
   const showBlsh = prefs.blsh && blshRead !== null && blshRead.composite.some((v) => v !== null);
   // #150
   const showMacd = prefs.macd && macdRead !== null && macdRead.macd.some((v) => v !== null);
   const showAdx = prefs.adx && dmiRead !== null && dmiRead.adx.some((v) => v !== null);
-  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0) + (showBlsh ? 1 : 0) + (showMacd ? 1 : 0) + (showAdx ? 1 : 0);
+  const strips = (showRsi ? 1 : 0) + (showStoch ? 1 : 0) + (showPctB ? 1 : 0) + (showRci ? 1 : 0) + (showCci ? 1 : 0) + (showWillR ? 1 : 0) + (showMaDev ? 1 : 0) + (showBlsh ? 1 : 0) + (showMacd ? 1 : 0) + (showAdx ? 1 : 0);
   // In full screen the strips take a share of the height and the price the
   // rest (#118: the switches live in the settings sheet there); on a short
   // screen (a phone on its side) the strips give way first, so all of it fits
@@ -1623,6 +1638,9 @@ const PriceChart = ({
     stoch: t.chart.stoch.note,
     pctB: t.chart.pctB.note,
     rci: t.chart.rci.note,
+    cci: t.chart.cci.note,
+    willR: t.chart.willR.note,
+    maDev: t.chart.maDev.note,
     qTrend: t.chart.qTrendNote,
     blsh: t.chart.blsh.note,
     qtBlsh: t.chart.qtBlshNote,
@@ -1754,6 +1772,10 @@ const PriceChart = ({
     // #135: off until switched on
     { key: "pctB", group: "oscillator" as const, name: t.chart.pctB.name(PCTB_DEFAULTS.length, PCTB_DEFAULTS.mult), on: prefs.pctB, toggle: () => setChartPrefs({ pctB: !prefs.pctB }) },
     { key: "rci", group: "oscillator" as const, name: t.chart.rci.name(RCI_DEFAULTS.length), on: prefs.rci, toggle: () => setChartPrefs({ rci: !prefs.rci }) },
+    // #396: off until switched on
+    { key: "cci", group: "oscillator" as const, name: t.chart.cci.name(CCI_DEFAULTS.length), on: prefs.cci, toggle: () => setChartPrefs({ cci: !prefs.cci }) },
+    { key: "willR", group: "oscillator" as const, name: t.chart.willR.name(WILLR_DEFAULTS.length), on: prefs.willR, toggle: () => setChartPrefs({ willR: !prefs.willR }) },
+    { key: "maDev", group: "oscillator" as const, name: t.chart.maDev.name(MADEV_DEFAULTS.length), on: prefs.maDev, toggle: () => setChartPrefs({ maDev: !prefs.maDev }) },
     { key: "blsh", group: "oscillator" as const, name: t.chart.blsh.name, on: prefs.blsh, toggle: () => setChartPrefs({ blsh: !prefs.blsh }) },
     // #150: off until switched on
     { key: "macd", group: "oscillator" as const, name: t.chart.macd.name(MACD_DEFAULTS.fast, MACD_DEFAULTS.slow, MACD_DEFAULTS.signal), on: prefs.macd, toggle: () => setChartPrefs({ macd: !prefs.macd }) },
@@ -3031,6 +3053,21 @@ const PriceChart = ({
           {t.chart.rci.note}
         </p>
       )}
+      {showCci && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-cci-legend">
+          {t.chart.cci.note}
+        </p>
+      )}
+      {showWillR && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-willr-legend">
+          {t.chart.willR.note}
+        </p>
+      )}
+      {showMaDev && (
+        <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-madev-legend">
+          {t.chart.maDev.note}
+        </p>
+      )}
       {dow && ov.dow && (
         <p className="px-1 pb-1 text-[9px] text-muted-foreground" data-testid="chart-dow-legend">
           {noteOf.dow}
@@ -3149,6 +3186,8 @@ const PriceChart = ({
     // decimals of the reading, and how a level is written
     digits?: number;
     levelText?: (v: number) => string;
+    // #396: written after the reading's value (the deviation rate's "%")
+    unit?: string;
   }) => {
     const top = 8;
     const bottom = RH - 6;
@@ -3340,7 +3379,7 @@ const PriceChart = ({
             const v = i === null ? null : (ln.values[i] as number);
             return (
               <tspan key={ln.name || "line"} fill={ln.name ? (i !== null && ln.colorAt ? ln.colorAt(i) : ln.color) : COLORS.text}>
-                {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : v.toFixed(o.digits ?? 1)}`}
+                {` ${ln.name ? `${ln.name} ` : ""}${v === null ? "—" : `${v.toFixed(o.digits ?? 1)}${o.unit ?? ""}`}`}
               </tspan>
             );
           })}
@@ -5514,6 +5553,66 @@ const PriceChart = ({
         band: { from: RCI_LEVELS.lower, to: RCI_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
         range: { min: -100, max: 100 },
       })}
+      {/* #396: CCI as TradingView draws it — a blue line, dashed lines at
+          +100 and −100, a faint one at 0 and the band between them; its
+          scale follows what is on screen, always showing −100 to +100 */}
+      {showCci && cciRead && (() => {
+        const seen = cciRead.slice(from, to).filter((v): v is number => v !== null && Number.isFinite(v));
+        const min = Math.min(CCI_LEVELS.lower, ...seen) - 10;
+        const max = Math.max(CCI_LEVELS.upper, ...seen) + 10;
+        return strip({
+          testid: "chart-cci",
+          aria: t.chart.cci.name(CCI_DEFAULTS.length),
+          label: t.chart.cci.name(CCI_DEFAULTS.length),
+          lines: [{ name: "", values: cciRead, color: COLORS.cci }],
+          levels: [
+            { v: CCI_LEVELS.upper, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+            { v: CCI_LEVELS.middle, color: COLORS.text, dash: "1.5 3", opacity: 0.45 },
+            { v: CCI_LEVELS.lower, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+          ],
+          band: { from: CCI_LEVELS.lower, to: CCI_LEVELS.upper, color: COLORS.stochBand, opacity: 0.1 },
+          range: { min, max },
+          digits: 1,
+          levelText: (v) => v.toFixed(0),
+        });
+      })()}
+      {/* #396: Williams %R as TradingView draws it — a purple line from −100
+          to 0, dashed lines at −20 and −80, a faint one at −50 and the band
+          between −20 and −80 */}
+      {showWillR && willRRead && strip({
+        testid: "chart-willr",
+        aria: t.chart.willR.name(WILLR_DEFAULTS.length),
+        label: t.chart.willR.name(WILLR_DEFAULTS.length),
+        lines: [{ name: "", values: willRRead, color: COLORS.willR }],
+        levels: [
+          { v: WILLR_LEVELS.upper, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+          { v: WILLR_LEVELS.middle, color: COLORS.text, dash: "1.5 3", opacity: 0.45 },
+          { v: WILLR_LEVELS.lower, color: COLORS.text, dash: "4 3", opacity: 0.8 },
+        ],
+        band: { from: WILLR_LEVELS.lower, to: WILLR_LEVELS.upper, color: COLORS.willR, opacity: 0.1 },
+        range: { min: -100, max: 0 },
+        digits: 1,
+        levelText: (v) => v.toFixed(0),
+      })}
+      {/* #396: the deviation rate in percent — an orange line and a faint
+          line at 0 (no fixed overbought or oversold lines: how far is too
+          far differs by pair and timeframe); its scale is even about 0 and
+          follows what is on screen */}
+      {showMaDev && maDevRead && (() => {
+        const seen = maDevRead.slice(from, to).filter((v): v is number => v !== null && Number.isFinite(v));
+        const reach = Math.max(0.01, ...seen.map((v) => Math.abs(v))) * 1.1;
+        return strip({
+          testid: "chart-madev",
+          aria: t.chart.maDev.name(MADEV_DEFAULTS.length),
+          label: t.chart.maDev.name(MADEV_DEFAULTS.length),
+          lines: [{ name: "", values: maDevRead, color: COLORS.maDev }],
+          levels: [{ v: 0, color: COLORS.text, dash: "1.5 3", opacity: 0.6 }],
+          range: { min: -reach, max: reach },
+          digits: 3,
+          levelText: (v) => `${v.toFixed(2)}%`,
+          unit: "%",
+        });
+      })()}
       {/* #145: BLSH as the video shows it — the composite as an area (green
           over 0, red at or under), the MACD signal line yellow while MACD is
           at or over it and blue while under, a dotted line at 0; its scale

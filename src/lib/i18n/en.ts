@@ -239,6 +239,19 @@ export const en: Dict = {
       name: (length: number, mult: number) => `BB %b ${length} ${mult}`,
       note: "Bollinger Bands %b (TradingView's built-in, with its calculation and defaults): where the close sits in the band of the 20-bar average ± 2 standard deviations. 1 = the upper band, 0.5 = the average, 0 = the lower band; outside the band it goes above 1 or below 0. Like the stochastic, a gauge of whether the price is high or low in its recent range: above 1 is not a reversal signal (TradingView's help also says that in a strong trend the price \"walks the band\"). Shown only: no signal is judged on it.",
     },
+    // #396: CCI, Williams %R and the moving-average deviation rate
+    cci: {
+      name: (length: number) => `CCI ${length}`,
+      note: "CCI (Commodity Channel Index; TradingView's built-in, with its calculation and defaults): how far the typical price (the mean of high, low and close) is from its 20-bar average, divided by 0.015 times its usual distance from it (the mean absolute deviation). Above +100 is commonly read as overbought and below −100 as oversold, but in a strong trend it stays out there. Shown only: no signal is judged on it. Not tested on past data.",
+    },
+    willR: {
+      name: (length: number) => `Williams %R ${length}`,
+      note: "Williams %R (TradingView's built-in \"Williams Percent Range\", with its calculation and defaults): where the close sits in the last 14 bars' high–low range, from −100 to 0. 0 = the 14 bars' highest high, −100 = their lowest low. Above −20 is commonly read as overbought and below −80 as oversold, but in a strong trend it stays out there (the stochastic's %K on a −100 to 0 scale). Shown only: no signal is judged on it. Not tested on past data.",
+    },
+    maDev: {
+      name: (length: number) => `MA deviation SMA ${length}`,
+      note: "Moving-average deviation rate: how far the close is from its 25-bar simple moving average, in percent ((close − average) ÷ average × 100). 25 bars is the number Japanese charts most often use (TradingView has no built-in of it). How far is too far changes with the pair and the timeframe (not yet measured in this app), so no fixed lines are drawn, only the line at 0. Shown only: no signal is judged on it. Not tested on past data.",
+    },
     rci: {
       name: (length: number) => `RCI ${length}`,
       note: "RCI (Rank Correlation Index; TradingView's built-in, with its calculation and defaults): the correlation between the last 10 closes' ranks and their order in time, × 100. +100 = each close higher than the one before, −100 = each lower, near 0 = no consistent direction. The yellow line is its 14-bar average. A gauge of how steadily the price has moved, not where it is: past ±80 is not a reversal signal. Shown only: no signal is judged on it.",
