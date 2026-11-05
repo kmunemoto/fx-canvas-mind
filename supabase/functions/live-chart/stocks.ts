@@ -115,6 +115,11 @@ export const parseYahooQuote = (symbol: string, meta: Record<string, unknown> | 
   return { price, time: at !== null ? new Date(at * 1000).toISOString() : null, open };
 };
 
+// The length of an intraday bar, by the app's timeframe names
+const INTRADAY_MS: Record<string, number> = {
+  "1min": 60_000, "2min": 120_000, "5min": 300_000, "15min": 900_000, "30min": 1_800_000, "1h": 3_600_000,
+};
+
 // {chart: {result: [{meta, timestamp: [s], indicators: {quote: [{open,
 // high, low, close, volume}]}}]}} -> the bars, oldest first, and the price.
 // A bar with any of its four prices missing is left out (Yahoo leaves nulls
@@ -122,6 +127,14 @@ export const parseYahooQuote = (symbol: string, meta: Record<string, unknown> | 
 // one more point at the session's close (16:00 New York, 15:30 Tokyo;
 // volume 0), the closing auction's price: it is the last bar's close, not a
 // bar of its own, so it is joined to the bar before it.
+// docs §8.140: so is a last point of volume 0 that falls inside the bar
+// before it. While a session trades, Yahoo's answer goes on past the forming
+// bar with one point at its last price (2026-11-05 16:20:39 UTC on Apple's
+// hourly bars: the 15:30 bar, then a point at 16:20:39, open = high = low =
+// close, volume 0); and after Tokyo's close its 15:30 point stays while
+// Yahoo already names the next day's session. Neither is a bar of its own.
+// (On 30-minute and shorter bars a closing point exactly one bar after the
+// row before it is not inside that bar, and stays a bar of its own, as before.)
 export const parseYahooChart = (symbol: string, body: unknown, interval: string, nowMs: number): StockChart | null => {
   const result = rec(rec(body)?.chart)?.result;
   const r = Array.isArray(result) ? rec(result[0]) : null;
@@ -130,7 +143,9 @@ export const parseYahooChart = (symbol: string, body: unknown, interval: string,
   const q = rec(Array.isArray(rec(r?.indicators)?.quote) ? (rec(r?.indicators)!.quote as unknown[])[0] : null);
   if (!r || !Array.isArray(ts) || !q) return null;
   const [o, h, l, c] = [q.open, q.high, q.low, q.close].map((a) => (Array.isArray(a) ? a : []));
+  const vol = Array.isArray(q.volume) ? q.volume : [];
   const intraday = !DATED.has(interval);
+  const barMs = INTRADAY_MS[interval] ?? null;
   const session = sessionOf(meta);
   const offsetMs = (num(meta?.gmtoffset) ?? 0) * 1000;
   const bars: Candle[] = [];
@@ -140,7 +155,8 @@ export const parseYahooChart = (symbol: string, body: unknown, interval: string,
     const [open, high, low, close] = [num(o[i]), num(h[i]), num(l[i]), num(c[i])];
     if (t === null || open === null || high === null || low === null || close === null || close <= 0 || low <= 0 || high < low) continue;
     const ms = t * 1000;
-    if (intraday && session !== null && ms >= session[1] && bars.length > 0 && ms - lastMs < 86_400_000) {
+    const lastPoint = i === ts.length - 1 && num(vol[i]) === 0 && barMs !== null && ms - lastMs < barMs;
+    if (intraday && bars.length > 0 && (lastPoint || (session !== null && ms >= session[1] && ms - lastMs < 86_400_000))) {
       const prev = bars[bars.length - 1];
       bars[bars.length - 1] = { ...prev, high: Math.max(prev.high, high), low: Math.min(prev.low, low), close };
       continue;

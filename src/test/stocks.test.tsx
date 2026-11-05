@@ -85,6 +85,78 @@ describe("#389 a share, named as Yahoo names it (live-chart/stocks.ts)", () => {
     expect(toyota.bars[6]).toEqual({ datetime: "2026-10-30 06:00:00", open: 3067, high: 3079, low: 3065, close: 3070 });
   });
 
+  it("joins a last point of volume 0 inside the bar before it: the price now while a session trades, Tokyo's close at night (docs §8.140)", () => {
+    const t = (iso: string) => Date.parse(iso) / 1000;
+    // Apple's hourly answer at 16:20:41 UTC on 2026-11-05 (.github/workflows/yahoo-probe.yml): the 15:30 bar
+    // forming, then one point at the last price (open = high = low = close, volume 0)
+    const live = (last: string, lastVolume: number) => ({
+      chart: {
+        result: [{
+          meta: { symbol: "AAPL", regularMarketPrice: 346.48, regularMarketTime: t(last), gmtoffset: -18000, currentTradingPeriod: session(t("2026-11-05T14:30:00Z"), t("2026-11-05T21:00:00Z")) },
+          timestamp: [t("2026-11-04T19:30:00Z"), t("2026-11-04T20:30:00Z"), t("2026-11-05T14:30:00Z"), t("2026-11-05T15:30:00Z"), t(last)],
+          indicators: {
+            quote: [{
+              open: [353.1112060546875, 352.1700134277344, 353.8999938964844, 349.82000732421875, 346.4800109863281],
+              high: [353.2200012207031, 352.8299865722656, 355.3800048828125, 350.3299865722656, 346.4800109863281],
+              low: [351.510009765625, 348.5199890136719, 348.05999755859375, 345.5, 346.4800109863281],
+              close: [352.1700134277344, 349.6199951171875, 349.80499267578125, 346.04998779296875, 346.4800109863281],
+              volume: [5090501, 11375216, 35192996, 79333617, lastVolume],
+            }],
+          },
+        }],
+        error: null,
+      },
+    });
+    const now = Date.parse("2026-11-05T16:20:41Z");
+    const a = parseYahooChart("AAPL", live("2026-11-05T16:20:39Z", 0), "1h", now)!;
+    expect(a.bars.map((b) => b.datetime)).toEqual(["2026-11-04 19:30:00", "2026-11-04 20:30:00", "2026-11-05 14:30:00", "2026-11-05 15:30:00"]);
+    // the forming bar takes the last price as its close; its open, high and low stay
+    expect(a.bars[3]).toEqual({ datetime: "2026-11-05 15:30:00", open: 349.82000732421875, high: 350.3299865722656, low: 345.5, close: 346.4800109863281 });
+    // a point on the next bar's start is that bar's first price, a bar of its own
+    expect(parseYahooChart("AAPL", live("2026-11-05T16:30:00Z", 0), "1h", now)!.bars.map((b) => b.datetime).slice(-2)).toEqual(["2026-11-05 15:30:00", "2026-11-05 16:30:00"]);
+    // a last point that traded is left as it is
+    expect(parseYahooChart("AAPL", live("2026-11-05T16:20:39Z", 5), "1h", now)!.bars).toHaveLength(5);
+    // and a five-minute bar is not joined to a point an hour on
+    expect(parseYahooChart("AAPL", live("2026-11-05T16:20:39Z", 0), "5min", now)!.bars).toHaveLength(5);
+    // on five-minute bars, the price now inside the forming five minutes is joined to it
+    const five = {
+      chart: {
+        result: [{
+          meta: { symbol: "AAPL", regularMarketTime: t("2026-11-05T16:22:10Z"), gmtoffset: -18000, currentTradingPeriod: session(t("2026-11-05T14:30:00Z"), t("2026-11-05T21:00:00Z")) },
+          timestamp: [t("2026-11-05T16:15:00Z"), t("2026-11-05T16:20:00Z"), t("2026-11-05T16:22:10Z")],
+          indicators: { quote: [{ open: [346, 346.2, 346.5], high: [346.3, 346.4, 346.5], low: [345.9, 346.1, 346.5], close: [346.2, 346.3, 346.5], volume: [10, 12, 0] }] },
+        }],
+        error: null,
+      },
+    };
+    expect(parseYahooChart("AAPL", five, "5min", now)!.bars.slice(-1)).toEqual([{ datetime: "2026-11-05 16:20:00", open: 346.2, high: 346.5, low: 346.1, close: 346.5 }]);
+    // only the last point is joined: one of volume 0 inside a bar earlier in the answer stays as it was
+    const middle = { chart: { result: [{ ...five.chart.result[0], timestamp: [t("2026-11-05T16:15:00Z"), t("2026-11-05T16:17:30Z"), t("2026-11-05T16:20:00Z")], indicators: { quote: [{ open: [346, 346.2, 346.5], high: [346.3, 346.4, 346.5], low: [345.9, 346.1, 346.5], close: [346.2, 346.3, 346.5], volume: [10, 0, 12] }] } }], error: null } };
+    expect(parseYahooChart("AAPL", middle, "5min", now)!.bars).toHaveLength(3);
+    // Toyota's at 16:20:42 UTC the same day: its 15:30 JST point after the 15:00 bar while Yahoo names 11-06's session
+    const toyota = {
+      chart: {
+        result: [{
+          meta: { symbol: "7203.T", regularMarketPrice: 3533, regularMarketTime: t("2026-11-05T06:30:00Z"), gmtoffset: 32400, currentTradingPeriod: session(t("2026-11-06T00:00:00Z"), t("2026-11-06T06:30:00Z")) },
+          timestamp: ["03:00", "04:00", "05:00", "06:00", "06:30"].map((h) => t(`2026-11-05T${h}:00Z`)),
+          indicators: {
+            quote: [{
+              open: [3215, 3261, 3394, 3500, 3533],
+              high: [3261, 3407, 3533, 3519, 3533],
+              low: [3215, 3249, 3384, 3490, 3533],
+              close: [3261, 3393, 3500, 3497, 3533],
+              volume: [6129300, 16839100, 35356200, 8049100, 0],
+            }],
+          },
+        }],
+        error: null,
+      },
+    };
+    const ty = parseYahooChart("7203.T", toyota, "1h", Date.parse("2026-11-05T16:20:42Z"))!;
+    expect(ty.bars.map((b) => b.datetime)).toEqual(["03:00", "04:00", "05:00", "06:00"].map((h) => `2026-11-05 ${h}:00`));
+    expect(ty.bars[3]).toEqual({ datetime: "2026-11-05 06:00:00", open: 3500, high: 3533, low: 3490, close: 3533 });
+  });
+
   it("leaves out a bar with a price missing, and stamps a day's bars with the exchange's own date", () => {
     const gap = yahoo("AAPL", { currentTradingPeriod: session(100, 200) }, [10, 20, 30], {
       open: [1, null, 3], high: [1, 2, 3], low: [1, 2, 3], close: [1, 2, 3],

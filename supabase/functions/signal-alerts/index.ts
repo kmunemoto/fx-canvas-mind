@@ -283,7 +283,13 @@ import type { Candle } from "../analyze/indicators.ts";
 // Data's bars. An hour's range is worked out once and kept in
 // public.spike_ranges (the bars are too much to read every minute: the
 // database's egress). The other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v36-2026-11-05T06:00:00Z";
+// v37 (docs §8.140): a share's bar is closed only once its end has passed and
+// Yahoo has priced at or past it, or a bar that opens at or after its end is
+// there (stocks.ts stockBarsOf); Yahoo's point at the last price after the
+// forming bar is joined to it (live-chart/stocks.ts). On 2026-11-05 the
+// forming bar was judged as closed from 15:32 UTC on, so the bar that closed
+// after it would not have been judged. The other rules are as they were.
+const FUNCTION_VERSION = "signal-alerts-v37-2026-11-05T17:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

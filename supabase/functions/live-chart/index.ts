@@ -131,7 +131,11 @@ import {
 // now read whole past the REST API's thousand rows (withTicks).
 // v19 (#389): shares, from Yahoo (stocks.ts; docs §8.132). Every pair's
 // chart is as it was.
-const FUNCTION_VERSION = "live-chart-v19-2026-10-31T15:00:00Z";
+// v20 (docs §8.140): a share's last point of volume 0 that falls inside the
+// bar before it (the price now while a session trades; Tokyo's 15:30 point
+// at night) is joined to that bar, not drawn as a bar of its own. Every
+// other chart is as it was.
+const FUNCTION_VERSION = "live-chart-v20-2026-11-05T17:00:00Z";
 // v3: Twelve Data fetches this instance may make in a minute for the
 // fallback, so a person flipping through every pair and timeframe cannot
 // spend the analysis's shared eight-a-minute key. #146: five — gold's
