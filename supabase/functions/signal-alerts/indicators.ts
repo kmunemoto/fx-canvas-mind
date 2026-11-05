@@ -1282,9 +1282,14 @@ const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
 // #395 (docs §8.138): how often the rule went off on the five pairs' 1-hour
 // bars in the database (GMO's mid, the bars opened 2026-07-19 23:00 to
 // 2026-11-04 20:00 UTC, some 15.4 weeks, read as the bar formed: its high or
-// low SPIKE.k times R from its open): 35 rises and 116 falls. What the price
-// did after them has not been measured, nor gold
-export const SPIKE_MEASURED = { weeks: 15.4, up: 35, down: 116, from: "2026-07-19", to: "2026-11-04" } as const;
+// low SPIKE.k times R from its open): 35 rises and 116 falls; gold on the
+// Twelve Data 1-hour bars the live chart keeps (the bars opened 2026-09-14
+// 13:00 to 2026-11-05 01:00 UTC, some 7.4 weeks): 2 and 6. What the price did
+// after them has not been measured
+export const SPIKE_MEASURED = {
+  weeks: 15.4, up: 35, down: 116, from: "2026-07-19", to: "2026-11-04",
+  goldWeeks: 7.4, goldUp: 2, goldDown: 6, goldFrom: "2026-09-14", goldTo: "2026-11-05",
+} as const;
 
 const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const f = s.spike;
@@ -1310,7 +1315,7 @@ const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `Price when seen: ${px(s.close)} (${clock(seen, 0)} UTC, ${clock(seen, 9).slice(11)} JST)`,
         `The usual hourly range: ${f ? amt(f.r) : "—"} (the mean high − low of the ${SPIKE.bars} closed bars before this one); ${SPIKE.k} times it is ${f ? amt(SPIKE.k * f.r) : "—"}`,
       ].join("\n"),
-      `${f?.forming ? "This was seen as the bar formed: the price may come back before the close. " : ""}This is not a signal to buy or sell. On the five pairs' 1-hour bars in the database (${m.from} to ${m.to}, some ${m.weeks} weeks) it went off ${m.up} times for a rise and ${m.down} for a fall; what the price did after them has not been measured${gold ? ", nor has gold" : ""}.`,
+      `${f?.forming ? "This was seen as the bar formed: the price may come back before the close. " : ""}This is not a signal to buy or sell. On the five pairs' 1-hour bars in the database (${m.from} to ${m.to}, some ${m.weeks} weeks) it went off ${m.up} times for a rise and ${m.down} for a fall${gold ? `; on gold's Twelve Data 1-hour bars (${m.goldFrom} to ${m.goldTo}, some ${m.goldWeeks} weeks) ${m.goldUp} and ${m.goldDown}` : ""}. What the price did after them has not been measured.`,
       `${gold ? "The usual range is from Twelve Data's 1-hour bars and this hour's prices from Swissquote's, recorded every minute (the app's gold chart uses the same)." : "The prices are the mid of GMO Coin's public bid and ask, as the app's chart draws them."} The chart shows the same mark ("Sharp rise / fall (1 hour)"). Check the latest state in the app:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick \"Sharp rise / fall\".\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
@@ -1324,7 +1329,7 @@ const renderSpikeMail = (s: IndicatorSignal, lang: Lang): Mail => {
       `見た時の値段: ${px(s.close)}（日本時間 ${clock(seen, 9).slice(11)} に見ました）`,
       `ふだんの1時間の値幅: ${f ? amt(f.r) : "—"}（この足の前の確定足${SPIKE.bars}本の「高値 − 安値」の平均）。その${SPIKE.k}倍は ${f ? amt(SPIKE.k * f.r) : "—"}`,
     ].join("\n"),
-    `${f?.forming ? "足の途中で見た値なので、確定までに値段が戻ることがあります。" : ""}売買の合図ではありません。データベースの5ペアの1時間足（${m.from.replace(/-/g, "/")}〜${m.to.replace(/-/g, "/")}、約${m.weeks}週）では、急騰${m.up}回・急落${m.down}回でした。急騰・急落のあと値段がどう動いたか（続くか戻るか）は測っていません${gold ? "（金の回数も数えていません）" : ""}。`,
+    `${f?.forming ? "足の途中で見た値なので、確定までに値段が戻ることがあります。" : ""}売買の合図ではありません。データベースの5ペアの1時間足（${m.from.replace(/-/g, "/")}〜${m.to.replace(/-/g, "/")}、約${m.weeks}週）では、急騰${m.up}回・急落${m.down}回でした${gold ? `（金は Twelve Data の1時間足〈${m.goldFrom.replace(/-/g, "/")}〜${m.goldTo.replace(/-/g, "/")}、約${m.goldWeeks}週〉で、急騰${m.goldUp}回・急落${m.goldDown}回）` : ""}。急騰・急落のあと値段がどう動いたか（続くか戻るか）は測っていません。`,
     `${gold ? "ふだんの値幅は Twelve Data の1時間足、この時間の値段は Swissquote の値段を毎分記録したものです（アプリの金のチャートと同じ）。" : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足です。"}チャートの「急騰・急落（1時間足）」にも同じ印が出ます。アプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「急騰・急落」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);

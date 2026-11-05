@@ -160,7 +160,7 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(gja.subject).toContain("急落");
     expect(gja.text).toContain("安値 99.50（始値から −0.50ドル）");
     expect(gja.text).toContain("Swissquote");
-    expect(gja.text).toContain("金の回数も数えていません");
+    expect(gja.text).toContain("金は Twelve Data の1時間足〈2026/09/14〜2026/11/05、約7.4週〉で、急騰2回・急落6回");
   });
 
   it("the sweep reads the rule's subscriptions every minute and mails it once a bar and side, its failure apart; the database accepts the rule", () => {

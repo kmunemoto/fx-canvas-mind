@@ -2059,7 +2059,7 @@ export const en: Dict = {
       "Read on the 1-hour chart of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold only (the owner's choice). The five pairs are the mid of GMO Coin's bid and ask, the same bars as the chart. Gold's usual range is from Twelve Data's 1-hour bars and the hour's prices from Swissquote's, recorded every minute (the chart's closed gold bars are Twelve Data's, so a mark there may now and then differ from the email).",
       "Read every minute: the forming 1-hour bar is read each minute, and once its high (low) has gone 3 times the usual range from its open, the email goes in that minute. A move reached just before the close is mailed within 10 minutes of the close. How many seconds the emails actually take has not been checked.",
       "It is seen while the bar forms, so the price may come back before the close; a bar that got there once is a sharp rise (fall) even so.",
-      "How often (the five pairs' 1-hour bars in the database, 2026-07-19 to 2026-11-04, some 15.4 weeks): 35 rises and 116 falls, about 10 a week in all. What the price did after them (went on or came back, any win rate) has not been measured, nor has gold been counted.",
+      "How often (the five pairs' 1-hour bars in the database, 2026-07-19 to 2026-11-04, some 15.4 weeks): 35 rises and 116 falls, about 10 a week in all; gold (Twelve Data's 1-hour bars, 2026-09-14 to 2026-11-05, some 7.4 weeks) 2 and 6. What the price did after them (went on or came back, any win rate) has not been measured.",
       "An alert is not an order. Nothing is judged while the market is closed (weekends and the like).",
     ],
     // #391: the MACD email on shares' notes (docs §8.134)
