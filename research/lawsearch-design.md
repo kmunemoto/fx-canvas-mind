@@ -831,6 +831,10 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
     pairs, is deleted (11 O-8).
 
   The higher bars are rebuilt and everything recomputed. The decision must be equal.
+- (C4b, 2026-11-05; the owner's answer 「まず速くする」) Any speed-up of `cutCheck`, `poisonCheck` or `presenceCheck`
+  (or of what they call) keeps the speed-up rules of 12: the outputs do not change, the checks keep their power, the
+  bytes do not depend on the number of workers, and what is checked and how many targets and probes there are stay
+  as above.
 - **retraceCheck**: reads `<run>/gmo/<SYM>/<interval>/<side>/<key>.json` with JSON.parse. It finds the entry and exit
   bars by openTime (keys from jstDayKey; no loadTf, no mergeSides), recomputes pl and m in points, and compares.
 - **PRINT_KEYS** lists the key patterns of `print.txt`. Any other key stops the print.
@@ -948,7 +952,9 @@ The other environment variables:
   look only. Unset or empty: no cap. Otherwise it must be a positive integer in decimal digits (`^[1-9][0-9]*$`), or
   the run refuses (exit 2, before any file is read; before, `0`, `-3` or `abc` switched the cut off or were ignored).
   `config.json` gets `cut_max`: the number, or `null` (`lawsearch-dump.md` 2). A capped run still prints `DEVELOPMENT
-  CAP`, and the Python's `--run` refuses it. The yml never sets `CUT_MAX`. (TS builder, C3: besides the checks'
+  CAP`, and the Python's `--run` refuses it (and, from C4b, its `--compare`: the lead's E14). The yml never sets a
+  valid `CUT_MAX`; (C4b, 2026-11-05; the lead's E13) its refusal step runs invalid values and expects exit 2 (7.8).
+  (TS builder, C3: besides the checks'
   details, a capped run's print.txt has the key `note.cut_max` starting `DEVELOPMENT CAP`, since print.txt cuts a
   detail at 400 characters and a failing check's detail may not reach its cap text.) (C4a, 2026-11-05; the lead's
   E8) `note.cut_max` names every check the cap reaches: `cut`, `cut.chosen.first`, `cut.chosen.second`,
@@ -1052,6 +1058,11 @@ jobs:
   5. For each hand-level plant (8): `LS_PLANT=<p> MODE=hand` must exit 4, and at least one of 8's named examples must
      fail. The same for the Python's twins (`--hand --plant <p>`).
   6. Every real mode exits 2.
+  7. (C4b, 2026-11-05; the lead's E13) Invalid `CUT_MAX` values are refused: for each value of a fixed list that
+     7.7's rule refuses (for example `0`, `-3`, `abc`, `1.5`, `07`; the list is the TS builder's), a run mode that
+     reads `CUT_MAX` (`syn` or `walkfiles`, with the rest of its settings valid) must exit 2 before any file is read.
+     It may be part of step 6. Reason: the refusal was written in C3 (before, `0`, `-3` or `abc` switched the cut off
+     or were ignored), but no step ran it, so a later change could bring the old behaviour back unseen.
 - **syn** (Python 3.11 + numpy; Deno 2.9.6): one job per run of 10.
   1. TS `MODE=syn`.
   2. `python3 -I research/lawsearch-check.py --run <run>` (its own recompute, then the comparison; exit 5 on a
@@ -1074,7 +1085,9 @@ jobs:
      run's dump differences as INFO lines; then `--run` on the FLIP=1 run (the TS–Python comparison). (C3) The tool
      is tied to the run it judges (7.9).
 - (C3, 2026-11-05; the lead's D5) No step sets `CUT_MAX` (the builder checks the yml); the Python's `--run` refuses a
-  capped run (exit 2).
+  capped run (exit 2). (C4b, 2026-11-05) Except hand step 7 (the lead's E13), which sets only invalid values and
+  expects the refusal; no run step sets it. The Python's `--compare` refuses a capped run too (the lead's E14;
+  `lawsearch-dump.md` 2).
 - No job reads real data and none has `--allow-net`. No real-data job is written yet.
 
 ### 7.9 `research/lawsearch-flip.ts` (spec 14.2, 23.1; C3, 2026-11-05)
@@ -1105,6 +1118,16 @@ deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --al
     must now fail: (A) C 7101 with an empty `--ts` (FAIL: no config.json, no signals, no blind; exit 3) and (B)
     `fake-c7101` (C 7101's manifest with N 1001's gmo; STOP on the tree sha256, exit 3). Its control (C), the fake
     gmo with C 7101's real dumps, still fails (exit 3).
+  - (C4b, 2026-11-05; the lead's E13) The same check for the flipped run: when `<flipped run>` is given, before
+    any bar of it is read, the tool checks `<flipped run>/gmo`'s tree sha256 and file count against `<flipped
+    run>/manifest.json` (`treeSha256` and `files`), as for the original, with the same STOP text
+    (`STOP: <flipped run>/gmo: tree sha256 … (n files), the manifest's … (n)`) and exit 3. The check `flip` true in
+    that manifest stays. Reason: the FLIP=1 run's dumps are only INFO lines, but the lines must still be of the run
+    named; before, the tool read the flipped manifest's `flip` and nothing else, so a FLIP=1 folder whose gmo was
+    not its manifest's passed unseen. Test (as the refuter's (B) setup of C2, for the flipped side): N 1001 as the
+    original and, as the flipped run, a folder with FLIP 1001's `manifest.json` over N 1001's gmo (read only) → STOP
+    on the flipped run's tree, exit 3; the real N 1001 / FLIP 1001 pair → both trees pass (the passing line for the
+    flipped run is the builder's form), and the rest as before.
 - Settled by the lead 2026-11-05 (D11, spec 23.1): "2 で作った5分足" is read as the trial timeframes' bars that spec 2
   builds from the run's 15-minute and 1-hour files (no 5-minute file exists), mirrored, with the higher bars rebuilt
   from the mirror. S is the generator's start `GEN_START` in points (spec 14.1's 始値, the centre FLIP=1 uses), read
@@ -1296,3 +1319,72 @@ hit, and the other checks must pass.
     marker; `secondHalfAll`'s refusal (exit 2, no `checks.csv` or print.txt) stays as is.
   - E1, E2, E6 are the Python comparator's (`lawsearch-dump.md` 9.3, 11.12, 11.14 (a)); the TS's files do not
     change for them.
+- **O-12 decided by the lead 2026-11-05** (C4b; the TS's part):
+  - E13: hand step 7 of the yml refuses invalid `CUT_MAX` values (7.8; 7.7), and `lawsearch-flip.ts` checks the
+    flipped run's tree too (7.9).
+  - The speed-up (the owner's answer 「まず速くする（おすすめ）」 to "step 4 does not fit a 6-hour job"): 12's rules.
+  - E10, E11 and E14 are the Python comparator's (`lawsearch-dump.md` 9.3, 11.12, 2), and E12 rewords the sealed-dump
+    rule (`lawsearch-dump.md` 12); the TS's files do not change for them.
+
+---
+
+## 12. Speed-up rules (C4b, 2026-11-05)
+
+The owner's answer of 2026-11-05 to "step 4 does not fit a 6-hour job" was 「まず速くする（おすすめ）」: do not change
+the spec; make the program faster, measure, and ask the owner again with the measured numbers if it still does not
+fit. The goal is one run of step 4 (1,364 trials, 682 per timeframe) inside one GitHub Actions job (6 hours;
+`ubuntu-latest`, 4 vCPUs, about 16 GB RAM) if possible, and otherwise as fast as possible, with measured numbers.
+The rules below bind every speed-up, in C4b and after it, so that later code keeps them.
+
+What costs the time (C2's measurements on N 1001 with the trial's 12 trials, in
+`/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/tsr/`:
+`profile.ts`, `profile2.ts`, `count-targets.ts` and their `*-n1001.txt`; one run took 4,298 s in C2 and about
+3,960 s in C3 and C4a):
+
+- stage 0's cut: each target rebuilds every trial's candidates over the whole cut prefix, so the cost per target
+  grows with the number of trials (m15 about 4 ms shared + 1.2 ms per distinct E + 5 ms per further (E, F) trial,
+  about 3.4 s per m15 target at 682 trials; h1 about 0.6 s);
+- poison and presence: linear in the trials (each probe recomputes one trial on a whole edited series; about 67 s per
+  m15 (E, F) trial and 15 s per h1 one);
+- the chosen trials' full cuts: about 625 s (first half) and 1,854 s (second half) per m15 (E, F) trial.
+- From these, the lead's estimate for step 4: about 50 hours on one core at the least, and up to about 15 days if
+  the signal targets of 1,364 trials cover most bars. These are estimates from the measured parts, not a measured
+  run of step 4.
+
+The rules (the lead's hard rules, C4b):
+
+1. **The outputs do not change.** Every file under `ts/` (and under a plant's `plant-<name>/`) is byte-identical to
+   the reference, except print.txt's `time.*` lines, on passing runs and on failing ones.
+   - The reference: C3's runs under
+     `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/runs/`
+     (`n1001`, `c7101`, `flip1001`, `o6001` … `o6004`, and the plants `n1001/plant-*` and `c7101/plant-*`), with
+     C4a's two changes to the TS's outputs: `ts/cut_fail.csv`'s column `T` after `s` (T = s + the bar length; 7.3)
+     and the text of print.txt's `note.cut_max` (7.7). For the plant `reasonUsesFuture`, C4a's uncapped run
+     `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c4a/runs/c7101-reasonUsesFuture`.
+   - On a failing run (O 6001; the plants `reasonUsesFuture` and `chosenCutFirstDiff`) this means the same failing
+     bars, the same `cut_fail.csv` rows and the same check details, not only the same failed check names.
+2. **The checks keep their power.** The cut check exists to catch code that reads the future.
+   - Every decision at bar k on the cut side is still computed from the cut series for k alone: every pair's bars
+     with T ≤ T_k, as `cutCheck` builds it (7.3: `cutTfSet(tf, T_k)`, `indOf` on the cut pair, `candidatesOf`, and
+     `classify` with `exclCtxOf(cut, …, toMs: T_k)`).
+   - Work may be shared only between computations that see the same cut series: for example, at one target k, the
+     cut set, its higher bars and the cut pair's indicators can be built once and read by every trial decided at k.
+   - Nothing is taken from the uncut series, or from another k's cut series, unless it is provably the same value by
+     construction; the builder then says why, in a code comment at that place and in the round's report. (B06's
+     291-bar window of 7.3 is not such a case: it reads only bars of the cut series for k.)
+   - The same for poison and presence: each probe's decision still comes from its own edited series (every pair's
+     series poisoned after T, or the bars deleted, and the higher bars rebuilt from them, as 7.3 says).
+   - A shortcut that is exact only because today's 12 trials happen to have a property is not allowed. For example:
+     that no built item reads another pair's bars or the higher timeframe, so that a target's cut could leave the
+     other pairs or the higher bars uncut. It must stay exact for every item the registry can build later.
+3. **Determinism.** The same inputs give the same bytes, whatever the number of workers or the machine. (So the
+   results of workers are put together in the row orders that `lawsearch-dump.md` already fixes, never in the order
+   in which the workers finish, and every sum keeps 2.5's order.)
+4. **No change to the spec, to what is checked, or to how many targets and probes there are** (7.3's targets of
+   each cut check, poison's 100 signals and 100 bars and 13 (ii)'s 1,000, presence's (i) and (ii)).
+
+How a speed-up is shown to keep them: the reference runs above are made again with the new code (`CUT_MAX` unset)
+and every `ts/` file is compared with the reference by its bytes (print.txt with its `time.*` lines removed); the
+`time.*` lines and the machine (CPUs, workers) are recorded; step 4's time is then estimated from the measured costs
+and written as an estimate. When it still does not fit one job, the measured numbers go to the owner and the owner
+is asked again.

@@ -72,6 +72,13 @@ PY1 imports PY2. Neither builder reads any TS.
       so it must never be compared as a run of the trial (lawsearch-dump.md 2). (The refusal of a missing key was
       the C3 docs writer's reading; confirmed by the lead 2026-11-05, C4a. The cap reaches every cut check of the
       TS, the 13 (i) cut included, and `checks.csv` carries no cap marker: lawsearch-dump.md 2.)
+    - (C4b, 2026-11-05; the lead's E14) also `--compare` on such a run: the same condition (`cut_max` not `null`,
+      or no `cut_max` key, in `RUN/ts/config.json`) and the same message as `--run`, before anything is compared
+      and before anything is written into `RUN/cmp/`. Use one function for both commands. Reason: before, only
+      `--run` refused, so `--compare` alone could compare a capped `ts/` and give `RESULT agree`, and `checks.csv`
+      carries no cap marker that would catch it later. Unit test: `--compare` on a copy of a run whose
+      `ts/config.json` has `"cut_max":20`, and on one with the key removed → exit 2, the message names `cut_max`,
+      no `cmp/report.txt` written; with `"cut_max":null` → it compares as before.
   - 3: a spec 2 or 15 check failed, or a STOP;
     - (C3, 2026-11-05; the lead's D10) also a spec 13 stop on a blind row (5.6): the run stops at the end of that
       stage, the comparison is still made, and the exit is 3 when the comparison gives no 5 or 6.
@@ -82,6 +89,8 @@ PY1 imports PY2. Neither builder reads any TS.
     stage (data stops, a must-be-0 count) still ends the run with exit 3 and no comparison, as before. (This order
     and the `STOP 13` report line of 5.6 were confirmed by the lead 2026-11-05, C4a.)
   - (C4a) The report line `stage 2 not opened: …` (5.7) changes no exit.
+  - (C4b) A stop of spec 8.5 (6) also covers a `failed` or `label` line listed under the stop of a differing input
+    (5.7, E10); a `DIFF` of class `derived` (5.7) is a difference (5) like any other.
 - Before reading any data file, PY1 checks the sha256 of the five rules files against these values, and stops (exit 3)
   on any difference:
 
@@ -571,10 +580,13 @@ lawsearch-dump.md 9 and 10 fix the comparison. PY1 writes `RUN/cmp/report.txt` a
     in either implementation). Never through a pair of two other trials.
   - `holm_pass`, `C1`: the same, or X's own p vs its own Holm threshold within 1e−9.
   - `holm_delta_rank`, `holm_delta_pass`: the same with p_Δ; a tie only through an adopted `delta.use_p` split.
-  - `failed`, `label`, `verdict`: replaced in C4a by the next bullet (C3's wording let them through X's near pair
-    of p).
+  - `failed`, `label`, `verdict`: replaced in C4a by E1, and in C4b by E10 (the next bullet; C3's wording let them
+    through X's near pair of p).
   - Holm stops at the first failure, so a `holm_pass` split also changes the trials after it; that split is a `STOP
     8.5` (exit 6), and the later trials' differences stay `DIFF` lines. (Confirmed by the lead 2026-11-05, C4a.)
+    (C4b) Under E10, a later trial's `C1` is such a `DIFF`, so its derived keys are `DIFF` lines too (step 2). These
+    lines are consequences of the stop, not program errors (the lead's E12, lawsearch-dump.md 12); a `DIFF` of class
+    `derived` (step 1) stays a program error of that side, under a stop or not [the docs writer's reading, C4b].
   - Tests that must now report `DIFF` and exit 5 (they gave `ALLOWED` and exit 0 in round C2): the reviewer's R1,
     R2 and R3 in
     `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c2/review/t_review.py`,
@@ -587,84 +599,162 @@ lawsearch-dump.md 9 and 10 fix the comparison. PY1 writes `RUN/cmp/report.txt` a
     tied, order by t that follows an adopted split -> ALLOWED" stays only if the adopted split's t is min(t_Δ, t_PL)
     of its trial in either implementation (otherwise change its data so it is, and add the case where it is not,
     which must give `DIFF`).
-- (C4a, 2026-11-05; the lead's E1, C3 review finding 1) **`stage2.csv` `failed`, `label` and `verdict` of a trial
-  X.** They rest on X's own decisions, not on a p of the order (C2–C7 do not use p). Excuse a difference in one of
-  them only when at least one of the four decisions below actually differs for X between `ts/stage2.csv` and
-  `py/stage2.csv`, and that difference is excused by X's own values. "Within 1e−9" is absolute; test each
-  implementation's own values, and either one suffices.
-  - **C1**: it differs when X's `C1` differs between the two files. It is excused when X's own `p_iut` is within
-    1e−9 of 0.025 / (K − k + 1), with K that implementation's `K_total` (`stage1_summary.csv`) and k that
-    implementation's `holm_rank` of X.
-  - **C4**: it differs when X's `C4` differs. It is excused when X's own `late_lb` is within 1e−9 of 0.
-  - **The verdict-2 test** (`delta_ub` < 0): it differs when X's `delta_ub` is below 0 in one file and not in the
-    other (an empty `delta_ub` is not below 0). It is excused when X's own `delta_ub` is within 1e−9 of 0.
-  - **holm_delta_pass**, for `label` and `verdict` only: it differs when X's `holm_delta_pass` differs. It is excused
-    when X's own `p_delta` is within 1e−9 of 0.025 / (K − k + 1), with k that implementation's `holm_delta_rank` of
-    X. It decides verdict 4 against 5 (`向きだけ` / `言えない`); `failed` is empty for both (lawsearch-dump.md 11.8).
-    (Confirmed by the lead 2026-11-05, C4a.)
-  - **No route through another trial's p.** For these three keys, drop the pair route and the tie route of the
-    keys above: a near or tied pair of `p_iut` or `p_delta` never excuses X's `failed`, `label` or `verdict`, even
-    when X is one of the two trials. (Those routes still excuse the pair's `holm_rank`, `holm_pass`, `C1`,
-    `holm_delta_rank` and `holm_delta_pass`.) So when X's `C1` splits only through such a pair, the `C1` line is a
-    `STOP 8.5`, and X's `failed`, `label` and `verdict` differences are `DIFF` lines under it.
-  - **`failed`**: split each list at `・` into a set of conditions. The lists may differ only in the conditions so
-    excused; of those, only `C4` can be in a list.
-    - Both verdicts are 3: excused only when the two sets differ in `C4` alone and X's C4 decision differs and is
-      excused.
-    - Neither verdict is 3: both lists are empty (11.8 of lawsearch-dump.md); any difference is a `DIFF`.
-    - Exactly one verdict is 3 [the docs writer's reading of E1, C4a; the lead to confirm]: excused only when the
-      other side's list is empty and X's `verdict` difference is excused (below). Example: X's `C1` really splits
-      on its own p (C1 1 against 0), the verdicts are 3 and 5, and the lists are `C3` and empty.
-  - **`label`**: `ALLOWED 8.5` when at least one of the four decisions differs for X and is excused; otherwise a
-    `DIFF`.
-  - **`verdict`**: the same test as `label`. When it passes, a `STOP 8.5` (exit 6); when it does not, a `DIFF`
-    (exit 5), never a stop.
-  - In the `ALLOWED` or `STOP` line, name the decision of X that differs and the value that excuses it, for example
-    `(C1 of m15.E04.F00 differs: its p_iut within 1e-9 of its Holm threshold 0.008333333333333333 (rank 1, ts))`.
-  - Why: in C3 these keys were still excused through X's near pair of `p_iut` (`_holm_pair` inside `_holm_x`), and
-    without checking that any decision of X differed. Because 1e−9 is absolute, any two strong trials with p_iut
-    below 1e−9 are a near pair, so a `failed` of `C3` against `C3・C6` came out as `ALLOWED` and `RESULT agree`, and
-    a plain verdict difference as a `STOP 8.5`.
+- (C4b, 2026-11-05; the lead's E10, C4a review findings 1 and 2; it replaces C4a's E1 for these three keys)
+  **`stage2.csv` `verdict`, `failed` and `label` of a trial X: derived keys, judged by consistency.** Spec 11's 判定
+  makes them from X's other stage-2 values. So do not look for a near value behind them; check that each side's keys
+  follow from that side's own inputs, then judge the inputs that differ. "Within 1e−9" stays absolute, and either
+  implementation's own value suffices.
+  - **Step 1, each side on its own.** For each trial X of `stage2.csv`, and for `ts/` and `py/` separately (whether
+    or not the two differ), read that side's row of X and recompute X's verdict, failed list and label from it with
+    your own code of 5.6 (the verdict order, the failed list of lawsearch-dump.md 11.8, the label table). In your
+    code these are `verdict_of`, `failed_list` and the label table; call the same functions you use to make your
+    own stage 2, on the values read from the file. The inputs:
+    - `C1` … `C7` as written (`1` / `0`);
+    - the verdict-2 test: `delta_ub` < 0 under spec 8.5's zero band (E11, below): true when `delta_ub` is not empty,
+      is below 0 and |`delta_ub`| ≥ 1e−12 (your `lt0`); an empty `delta_ub` is not below 0;
+    - `holm_delta_pass` as written.
+
+    (`holm_pass`, `late_lb` and the p values are not read here: the verdicts read `C1` rather than `holm_pass` and
+    `C4` rather than `late_lb`, and those keys keep their own rules.) The derivation (spec 11 判定, in its order): verdict 1 when `C1` … `C7` are all 1; else 2 when
+    the verdict-2 test is true; else 3 when `C1` is 1; else 4 when `holm_delta_pass` is 1; else 5. `failed`: for
+    verdict 3, the conditions among C2 … C7 that are 0, in that order, joined by `・`; empty for every other verdict.
+    `label`: the label of the verdict (5.6's table; verdict 3: `一部（満たさなかった条件: <failed>）`).
+    - When a side's written `verdict`, `failed` or `label` differs from what its own inputs give, that key is a
+      `DIFF`: a program error in that side's derivation. Never `ALLOWED`, never a `STOP`, whatever the other side
+      holds and whatever else differs. Judge each of the three keys on its own: a side whose `label` does not follow
+      its inputs may still have a `verdict` that does.
+    - [Docs writer's readings of E10, C4b; the lead to confirm] Make the check for every trial, also when `ts/` and
+      `py/` write the same value (both sides then have the same error; still a `DIFF`). A side whose inputs of X
+      cannot be read (a missing row, a bool that is not `0` or `1`, a `delta_ub` that is neither empty nor a number)
+      cannot be checked: its derived keys of X are `DIFF`. Write
+      `DIFF stage2.csv <X>|<key> value ts=<v> py=<v> class=derived (<side> inputs give <w>)`, naming both sides when
+      both fail. It counts as a difference in the `FILE` line and in `RESULT` (exit 5 unless a 6).
+  - **Step 2, both sides follow their own inputs.** Then a difference in a derived key can come only from inputs that
+    differ between the two sides. Judge each differing input by its own rule:
+    - `C1`: the rule of `holm_pass` and `C1` (the C3 bullet above: X in the near pair of `p_iut`, or in the exact tie
+      broken by an adopted split, or X's own `p_iut` within 1e−9 of its own Holm threshold 0.025 / (K − k + 1), with
+      K that implementation's `K_total` from its `stage1_summary.csv` and k its `holm_rank` of X): a `STOP 8.5`;
+      otherwise a `DIFF`;
+    - `holm_delta_pass`: the same with `p_delta` and `holm_delta_rank` (a tie only through an adopted `delta.use_p`
+      split): a `STOP 8.5`; otherwise a `DIFF`;
+    - `C4`: X's own `late_lb` within 1e−9 of 0 in either file: `ALLOWED 8.5`; otherwise a `DIFF`;
+    - the verdict-2 test (it differs when, under the band, one side's `delta_ub` of X is below 0 and the other's is
+      not): excused when X's own `delta_ub` is within 1e−9 of 0 in either file, otherwise not. It is not a key of the
+      file and gets no line of its own; the derived key's line names it;
+    - `C2`, `C3`, `C5`, `C6`, `C7`: nothing excuses them (exact values): each is a `DIFF`, from the plain comparison.
+
+    Then write the derived key's difference as:
+    - `ALLOWED 8.5` when every differing input is excused and none of them is a `STOP 8.5`;
+    - listed under the stop when at least one differing input is a `STOP 8.5` and every other one is excused. [Form
+      chosen by the docs writer, C4b; the lead to confirm] Write it as a line
+      `STOP 8.5 stage2.csv <X>|<key> ts=<v> py=<v> (…)` after the input's own `STOP 8.5` line. Like every `STOP`
+      line, it is not counted as a difference; the exit is 6 because of the input's stop;
+    - a `DIFF` when any differing input is a `DIFF` (exit 5, or 6 when there is also a stop). This `DIFF` follows from
+      the input's own `DIFF` line; it is not an error of the derivation.
+    - `verdict` as before: excused (every differing input excused, a stop among them or not) it is a `STOP 8.5`
+      (exit 6); not excused it is a `DIFF` (exit 5), never a stop.
+    - In the `ALLOWED` or `STOP` line, name each differing input of X and the value that excuses it, for example
+      `(C4 of m15.E26.F00 differs: its late_lb within 1e-9 of 0 (ts))` or
+      `(C1 of m15.E04.F00 differs: its p_iut within 1e-9 of its Holm threshold 0.008333333333333333 (rank 1, ts))`.
+  - **What changes against C4a's E1.**
+    - Your C4a functions `_x_own_split`, `_x_label_verdict` and `_x_failed` excused a derived key when one of X's own
+      decisions differed and was excused, without checking that the written keys followed from their inputs. Replace
+      them by steps 1 and 2.
+    - The pair and tie routes are no longer cut off for these keys: when X's `C1` (or `holm_delta_pass`) splits
+      through X's own near or tied pair of p, that input is a `STOP 8.5` as before, and X's derived keys, when both
+      sides follow their own inputs, are listed under the stop (in C4a: `DIFF` lines under it). Exit 6 either way.
+      This is safe now: a difference that comes from C2, C3, C5, C6 or C7 either differs as an input (its own `DIFF`)
+      or, when that condition is the same on both sides, a list or label that names it does not follow its own side's
+      inputs (step 1). That was C3 review finding 1, which E1 had closed by cutting the routes.
+    - C4a's special reading for "exactly one verdict is 3" is gone: the other side's empty list is checked in step 1.
+  - Why (one line of history): with E1, C4a's review found a `label` excused when only an unrelated decision of X
+    split (finding 1: C4 split, both verdicts 5, py's label `向きだけ`), a `failed` excused through `holm_delta_pass`
+    (finding 2), and the verdict-2 test made with a plain < 0 (finding 3, E11 below).
+- (C4b, 2026-11-05; the lead's E11, C4a review finding 3) **The zero band in every sign test of the comparator.**
+  Every sign or zero test that the comparator makes on a value that the spec tests with spec 8.5's zero band
+  (0 との比べは、|x| < 1e−12 を 0 とする: `delta_ub`, `late_lb`, `lb`, `dF_lo`, a point of Δ or PL, …) uses that same
+  band: your `lt0`, `gt0` and `le0`, never a plain `< 0` or `> 0`. Today the one such test in the comparator is the
+  verdict-2 test of step 1 and step 2 (C4a's `_below0` used a plain `< 0`). The nearness tests ("within 1e−9" of 0 or
+  of a threshold) are not sign tests and stay as they are. Why: with a plain `< 0`, `delta_ub` −5e−13 (0 under the
+  band, verdict 3 by your own `verdict_of`) against −3e−12 (verdict 2), a real split on X's own `delta_ub` near 0,
+  gave a `DIFF` instead of a `STOP 8.5`, and −5e−13 against +5e−13 (not below 0 on either side) a split that excused
+  a wrong label.
 - (C4a, 2026-11-05; the lead's E2, the C3 docs writer's question Q6) **`stage1.csv` `rank` of a trial X**: excused
   only when X is one of the two trials of a near pair of `lb` of X's timeframe (|lb_X − lb_Y| ≤ 1e−9 in `ts/` or in
   `py/`, and not exactly equal in both). Never for another trial of that timeframe (before, a near pair excused the
   rank of every trial of the timeframe). Stage 1 has no tie route: two `lb` exactly equal in both are ordered by
   counted, then table order, and must agree. `chosen`, `skipped_reason` and `skipped_by` stay as before: excused by
   any near pair of `lb` in the trial's timeframe (`chosen` is a `STOP 8.5`).
-- (C4a) **Tests.** Add these to your test files:
-  - must give `DIFF` and exit 5: the refuter's f1, l1, v1, v1b, v2, t1 and d1 in
-    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/t_refute1.py`
-    (its controls keep their results: c0 exit 0; g1, a real C1 split on X's own p, exit 6); the real `--compare`
-    on `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/refute-1/run`
-    (`RESULT differ`, exit 5); the reviewer's R-a … R-f in
-    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/review/d2/t_d2_review.py`.
-    All are Python harnesses on small stage1/stage2 files; no TS.
-  - E2: three trials of one timeframe, two a near pair of `lb`; the third's `rank` differs → `DIFF`, exit 5; the
-    pair's own swap stays `ALLOWED`.
-  - The earlier tests (t_decisions, t_candidates, t_checks, t_refute_c3 and t_c3_run in
-    `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c3/py/`,
-    and the C2 review and refute scripts named above) keep their expected results, or are updated with a one-line
-    reason each. Reading `t_decisions.py` (not run), the docs writer found four whose expectation changes, each to
-    `DIFF`, exit 5:
-    - "verdict split, its late_lb near 0 -> STOP" (C2's): X's `C4` is the same on both sides, so nothing the verdict
-      rests on differs;
-    - "C3 label of E04 split, E04's own p_delta near its delta-only threshold -> ALLOWED": X's `holm_delta_pass` is
-      the same on both sides;
-    - "C3 label of E04 split, its own delta_ub near 0 -> ALLOWED": `delta_ub` is below 0 on both sides, so the
-      verdict-2 test does not differ;
-    - "C3 failed of E04 split, E04 in a near pair of p_iut (its own C1 excused) -> ALLOWED": only `failed` differs,
-      and the pair route is gone (C3 review finding 1).
+- (C4b; the lead's E10, E11) **Tests.** The C4a review's harnesses and your C4a `t_c4a.py` become tests with the
+  results E10 gives; give every expectation that changes a one-line reason. All are Python harnesses on small
+  stage1/stage2 files, or `--compare` on small run folders; no TS. Paths are under
+  `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/`
+  (`trial/` below). The results the docs writer reads from E10 (not run):
+  - `trial/c4a/review/t_rev.py`:
+    - R1, R1b: `DIFF`, exit 5 (py's `label` does not follow py's verdict 5);
+    - R1c: `DIFF`, exit 5 (py's `label` names C6 while py's list is `C3`; also ts's verdict 3 does not follow ts's
+      `delta_ub` −1e−12, which the band counts as below 0: |−1e−12| is not < 1e−12);
+    - R2: `DIFF`, exit 5 (py's verdict 4 and its label do not follow py's `holm_delta_pass` 0);
+    - R3: exit 6 (py's `failed` `C2・C4` and its label do not follow py's C2 1: `DIFF`; the verdicts 1 and 3 follow
+      their own inputs and differ only through C4, excused: verdict `STOP 8.5`);
+    - R4: `DIFF`, exit 5 (each side's list does not follow its own C4);
+    - R5: exit 6 (py's verdict 4, failed and label do not follow py's C1 1: `DIFF`; `holm_delta_pass` `STOP 8.5`);
+    - R6: exit 6, was 5 (both sides follow their own inputs under the band, verdicts 3 and 2; the verdict-2 test
+      differs and X's own `delta_ub` is near 0: verdict `STOP 8.5`, label and failed `ALLOWED 8.5`);
+    - R6c: `DIFF`, exit 5, was 0 (py's label does not follow; under the band the verdict-2 test is the same on both
+      sides).
+  - `trial/c4a/refute-1/t_mine.py`: M0 exit 0; M1, M1b, M1n, M2, M2n and M3 `DIFF`, exit 5 (py's written verdict or
+    label does not follow py's own inputs). `--compare` on `trial/c4a/refute-1/run` (M3's shape) and on
+    `trial/c4a/refute-1/run2` (M2's shape): `RESULT differ`, exit 5 (C4a: 0 and 6).
+  - `trial/c4a/refute-2/mine/t_mine.py` and `t_mine2.py`:
+    - P1: exit 6 (py's verdict 4, failed and label do not follow py's C1 1: `DIFF`; `holm_delta_pass` `STOP 8.5`);
+    - P1c: `DIFF`, exit 5;
+    - P2, P2d, P2s: exit 6 (the list that names C2 or C6, or the ts list of P2s, does not follow its side's inputs:
+      `DIFF`; verdict `STOP 8.5` through C4);
+    - P2c: exit 6 (verdict `STOP 8.5`; label and failed `ALLOWED 8.5`);
+    - P3, P3b: exit 6 (C1 and `holm_pass` `STOP 8.5`; py's verdict 5 and label do not follow py's C1 0 with
+      `holm_delta_pass` 1, which give verdict 4: `DIFF`). To test the C1 route, set py's `holm_delta_pass` to 0:
+      then P3's label and failed are listed under the stop, and P3b's ts list `C3・C6` (C6 1) is a `DIFF`.
+  - `trial/c4a/refute-3/r3.py`: A_realsplit exit 6, was 5 (verdict `STOP 8.5`, label and failed `ALLOWED 8.5`);
+    B_nosplit_badlabel `DIFF`, exit 5, was 0; B2_nosplit_badverdict `DIFF`, exit 5, was 6 (py's verdict 2 does not
+    follow py's `delta_ub` +4e−13); C_control exit 6 (unchanged).
+  - Your `trial/c4a/py/t_c4a.py`: the cases whose fixture does not follow its own inputs now give `DIFF` lines of
+    class `derived`: E1-r1, E1-r6, E1-n1, E1-n7 and E1-n9 (py's verdict 5 with py's C1 0 and the base fixture's
+    `holm_delta_pass` 1, which give verdict 4) and E1-n3 (py's list names C6 while py's C6 is 1, so its label is a
+    `DIFF` too, not `ALLOWED`). Fix each such fixture so that it tests its route, and keep the inconsistent version
+    as a case that must give `DIFF`.
+    E1-n1 (X's C1 splits only through a near pair of `p_iut`), with a fixture whose sides follow their own inputs:
+    X's verdict is a `STOP 8.5` and its label and failed are listed under the stop (C4a: three `DIFF` lines); exit 6
+    either way. The E2 and E6 cases keep their results.
+  - New, required (E11): X's `delta_ub` −5e−13 against −3e−12 with verdicts 3 and 2 → verdict `STOP 8.5`, exit 6;
+    −5e−13 against +5e−13 with verdict 3 on both sides and a wrong py label → `DIFF`, exit 5; −1e−12 exactly is
+    below 0. New, required (E10): identical ts/ and py/ whose X has verdict 5 with `holm_delta_pass` 1 and `C1` 0 on
+    both sides → `DIFF` of class `derived` naming both sides, exit 5 (the docs writer's reading of step 1, above); a
+    side whose `C4` is `2` → its derived keys `DIFF` (the same reading).
+  - The earlier tests keep their results, or are updated with a one-line reason each:
+    `trial/c3/refute-1/t_refute1.py` (f1, l1, v1, v1b, v2, t1 and d1 `DIFF`, exit 5; c0 exit 0; g1 exit 6), the real
+    `--compare` on `trial/c3/refute-1/run` (`RESULT differ`, exit 5), `trial/c3/review/d2/t_d2_review.py` R-a … R-f,
+    the four `t_decisions.py` cases that C4a changed to `DIFF` (each stays a `DIFF`: nothing that X's derived keys
+    rest on differs, so one side's key does not follow its own inputs), the E2 case, t_candidates, t_checks,
+    t_refute_c3, t_c3_run, and the C2 review and refute scripts named above. A case in which X's C1 or
+    `holm_delta_pass` splits through a near or tied pair of p and both sides follow their own inputs changes as E1-n1
+    does. Any earlier case whose made-up row writes a `verdict`, `failed` or `label` that does not follow that row's
+    own inputs now also gives a `DIFF` of class `derived`: fix the row (so the case still tests what it was written
+    for) or update the expectation, with a one-line reason either way.
+  - C4a's test list (the refuter's cases of `trial/c3/refute-1`, the reviewer's R-a … R-f, the E2 case, the four
+    changed `t_decisions.py` cases) is folded into the bullet above.
 - (C4a, 2026-11-05; the lead's E6) **The line `stage 2 not opened`.** When `ts/checks.csv` (columns
   `trial,name,passed,detail,stage`) has a row of stage `gate`, `stage0`, `stage1` or `stage1end` whose `passed` is
   not 1 (the condition of 5.6 that keeps stage 2 closed), write one line into `cmp/report.txt`, after the
   `ALLOWED`, `STOP 8.5` and `STOP 13` lines and just before `RESULT`:
   `stage 2 not opened: failed TS checks before stage 2: <name> <trial> <stage>; <name> <trial> <stage>; …`
-  - Every such row, in the file's row order, joined by `; ` (the form is the docs writer's, C4a).
+  - Every such row, in the file's row order, joined by `; ` (the form is the docs writer's, C4a; confirmed by the
+    lead 2026-11-05, C4b, E12).
   - `--run` and `--compare` both write it (both read `ts/checks.csv`). Keep your log line too.
   - It is not a difference and not a stop: `RESULT` and the exit stay the comparison's.
-  - No line when stage 2 stays closed with no such row (`K_total` 0 with every check passed) [the docs writer's
-    reading, C4a; the lead to confirm]. A stage-1 blind-row hit gets it, because the TS's failed
-    `suspect.blind.stage1` row is of stage `stage1`.
+  - No line when stage 2 stays closed with no such row (`K_total` 0 with every check passed) (the docs writer's
+    reading in C4a; confirmed by the lead 2026-11-05, C4b, E12). A stage-1 blind-row hit gets it, because the TS's
+    failed `suspect.blind.stage1` row is of stage `stage1`.
   - Unit test: identical ts/ and py/ with one failed `stage0` row in `ts/checks.csv` → the line is the one just
     before `RESULT agree`, exit 0; every row passing → no line; only a failed `stage2` or `end` row → no line; with
     a `STOP 13` line too, the order is `STOP 13`, then this line, then `RESULT`.
@@ -795,3 +885,27 @@ From C3's review (findings 1, 4, 5) and the C3 builders' and docs writer's quest
   (5.6).
 - **E5**: the sealed files (0; lawsearch-dump.md 12). No code change.
 - **E9**: `checks.csv` carries no cap marker; you refuse capped runs (2). No code change.
+
+### 9.2 Decided or confirmed by the lead (C4b, 2026-11-05)
+
+From C4a's review (findings 1–3) and the C4a docs writer's questions. The Python's part:
+
+- **E10** (a code change; replaces E1 for `failed`, `label` and `verdict`): derived keys by consistency. Each side's
+  keys of X are recomputed from that side's own inputs with your own 5.6 code (a key that does not follow is a
+  `DIFF` of class `derived`); when both sides follow, the differing inputs are judged by their own rules (5.7). The
+  tests named in 5.7 change as listed there.
+- **E11** (a code change): every sign or zero test of the comparator uses spec 8.5's zero band (`lt0`, `gt0`, `le0`;
+  5.7). C4a's `_below0` used a plain `< 0`.
+- **E12** (no code change):
+  - On synthetic runs a `DIFF` is a program error to fix. On real data, a TS–Python difference found before stage
+    0's numbers are seen is handled as spec 17.2 says: the trial is dropped, its name and reason written, the owner
+    told (lawsearch-dump.md 12).
+  - Under a `STOP 8.5`, the `DIFF` lines that follow from the stopped split are consequences, not program errors
+    (5.7).
+  - report.txt's `FILE` lines (row counts, the sealed files' included) and its `ALLOWED` and `DIFF` lines may be seen
+    before stage 2: they carry counts and keys, no trade results (the lead's reading of spec 9's purpose). Nothing
+    in your report changes.
+  - Confirmed: the form of the line `stage 2 not opened: …` and that a run with `K_total` 0 and every check passed
+    gets no such line (5.7); the per-timeframe `all.*.<tf>` sums of E4 read against spec 9 (5.6).
+- **E14** (a code change): `--compare` refuses a capped `ts/` as `--run` does, with the same message (2).
+- E13 is the TS's (its CI and its flip tool); nothing changes in the Python for it.

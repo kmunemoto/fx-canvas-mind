@@ -19,9 +19,12 @@ Usage:
   python3 -I research/lawsearch-check.py --compare RUN
 Exit codes: 0 ok, 2 refused, 3 spec 2/15 check or STOP, 4 hand example failed, 5 TS-Python difference,
 6 a stop of spec 8.5. A compared run with a spec 13 blind-row stop exits 3 unless the comparison gives 6 or 5
-(lawsearch-dump.md 10, C3). --run refuses (2) a run whose ts/config.json cut_max is not null or missing (C3).
+(lawsearch-dump.md 10, C3). --run refuses (2) a run whose ts/config.json cut_max is not null or missing (C3);
+--compare refuses the same runs with the same message (C4b, E14).
 When a failed TS check before stage 2 kept stage 2 closed, report.txt has a `stage 2 not opened: …` line just
 before RESULT; it changes neither RESULT nor the exit (C4a, E6).
+stage2.csv verdict, failed and label are derived keys: each side's are checked against its own inputs, then the
+differing inputs are judged (C4b, E10; lawsearch-dump.md 11.12).
 """
 
 import bisect
@@ -2656,6 +2659,24 @@ def conditions(t, q4="a", plant=""):
     return C
 
 
+def below0_test(delta_ub):
+    """spec 11's verdict-2 test, delta_ub < 0, under spec 8.5's zero band (lt0: |x| < 1e-12 counts as 0). No
+    delta_ub (None) is not below 0. One function for stage 2 (verdict_of) and the comparator (C4b, the lead's E11)."""
+    return delta_ub is not None and lt0(delta_ub)
+
+
+def read_number(s):
+    """A number as a dump file writes it, read back (the comparator's E10 inputs): a float, or None when s is not a
+    number (also NaN, surrounding blanks and '_', which float() would accept)."""
+    if s != s.strip() or "_" in s:
+        return None
+    try:
+        x = float(s)
+    except ValueError:
+        return None
+    return None if math.isnan(x) else x
+
+
 def verdict_of(C1, C, delta_ub, delta_only_pass):
     allc = dict(C)
     allc["C1"] = C1
@@ -2663,7 +2684,7 @@ def verdict_of(C1, C, delta_ub, delta_only_pass):
     failed = [k for k in order if not allc[k]]
     if not failed:
         return 1, L_VERDICT[1], failed
-    if delta_ub is not None and lt0(delta_ub):
+    if below0_test(delta_ub):
         return 2, L_VERDICT[2], failed
     if C1:
         return 3, label_partial([k for k in failed if k != "C1"]), failed
@@ -2679,6 +2700,16 @@ def failed_list(verdict, failed):
     if verdict == 3:
         return [k for k in failed if k != "C1"]
     return None
+
+
+def verdict_texts(C1, C, delta_ub, delta_only_pass):
+    """stage2.csv's verdict, label and failed as written (lawsearch-dump.md 11.8): verdict_of, then failed_list,
+    the list joined by '・'. Used by stage 2 to write the Python's own row and by the comparator to recompute each
+    side's row from that side's own inputs (C4b, the lead's E10), so both use one derivation.
+    -> {"verdict": str, "label": str, "failed": str}"""
+    v, label, failed = verdict_of(C1, C, delta_ub, delta_only_pass)
+    fl = failed_list(v, failed)
+    return {"verdict": str(v), "label": label, "failed": "・".join(fl) if fl else ""}
 
 
 def p95_of(vals):
@@ -4151,6 +4182,19 @@ def suspicion(counted, delta, a, pl, M, delta_late, W, is_blind=False):
             "hit": hd or ha or hp or hl or hw}
 
 
+def refuse_capped(config):
+    """dump.md 2 / py-design 2 (C3, the lead's D5; C4b, the lead's E14): cut_max is the TS's development cap on its
+    cut checks. A capped run's checks pass under their normal names and checks.csv carries no cap marker, so neither
+    --run nor --compare compares one; a config.json without the key (written before C3) cannot say whether it was
+    capped. One function for both commands, so the condition and the message are the same. Raises Refused (exit 2)."""
+    if "cut_max" not in config:
+        raise Refused("config.json has no cut_max key: a run written before C3 cannot say whether its cut "
+                      "checks were capped, so it is not compared")
+    if config["cut_max"] is not None:
+        raise Refused(f"config.json cut_max {json.dumps(config['cut_max'])}: a capped development run "
+                      f"is not compared")
+
+
 class Run:
     def __init__(self, run_dir, log=print):
         self.run = run_dir
@@ -4184,15 +4228,7 @@ class Run:
             if refuse_plant:
                 raise Refused(f"config.json has a plant ({self.config['plant']}): nothing is compared")
         if refuse_cut_max:
-            # dump.md 2 / py-design 2 (C3, the lead's D5): cut_max is the TS's development cap on its cut checks. A
-            # capped run's checks pass under their normal names, so --run never compares one; a config.json without
-            # the key (written before C3) cannot say whether it was capped.
-            if "cut_max" not in self.config:
-                raise Refused("config.json has no cut_max key: a run written before C3 cannot say whether its cut "
-                              "checks were capped, so it is not compared")
-            if self.config["cut_max"] is not None:
-                raise Refused(f"config.json cut_max {json.dumps(self.config['cut_max'])}: a capped development run "
-                              f"is not compared")
+            refuse_capped(self.config)
         want = self.config.get("spreadH1Sha256")
         got = sha256_file(ROOT / "research/ledger/spread-hours-h1.csv")
         if want is not None and want != got:
@@ -4944,8 +4980,7 @@ class Run:
                             "sus_checks_passed": sus_checks_passed_of(tsr) == "1", "c6": (ex["c6.a"], ex["c6.b"]),
                             "pl_ex1w": r["pl_ex1w"][0], "pl": r["ms"]["core"]["pl"]}, "a")
             C1 = H[tid][1]
-            v, label, failed = verdict_of(C1, C, dch["ub"], HD[tid][1])
-            fl = failed_list(v, failed)
+            vt = verdict_texts(C1, C, dch["ub"], HD[tid][1])
             mde = None
             if dch["has_t"]:
                 pc = vd["cands"][dch["use_p"]]
@@ -4963,7 +4998,7 @@ class Run:
             kv.append(("C1", f_bool(C1)))
             for k in ("C2", "C3", "C4", "C5", "C6", "C7"):
                 kv.append((k, f_bool(C[k])))
-            kv += [("verdict", str(v)), ("label", label), ("failed", "・".join(fl) if fl else ""),
+            kv += [("verdict", vt["verdict"]), ("label", vt["label"]), ("failed", vt["failed"]),
                    ("mde", f_real(mde)), ("sim_lb", f_real(sim_lb)), ("delta_ub", f_real(dch["ub"])),
                    ("late_lb", f_real(lch["lb"])), ("dF_lo", f_real(dlo)), ("dF_hi", f_real(dhi)),
                    ("no_uplift", f_bool(le0(dlo)) if dfb else "")]
@@ -5171,6 +5206,7 @@ class Comparator:
                 continue
             self.compare_file(n)
         self.candidate_checks()
+        self.derived_checks()   # dump.md 11.12 (C4b, the lead's E10) step 1, before the decisions are judged
         self.decision_checks()
         return self.report()
 
@@ -5270,6 +5306,18 @@ class Comparator:
             for d in diffs[name]:
                 key = d[0].split("|")
                 k = key[-1]
+                if name == "stage2.csv" and d[1] == "value" and len(key) == 2 and k in self.DERIVED_KEYS:
+                    # dump.md 11.12 (C4b, the lead's E10): a derived key, judged by consistency
+                    how, why = self._derived_judge(key[0], k)
+                    if how == "derived":
+                        keep.append((d[0], d[1], d[2], d[3], f"derived ({why})"))
+                    elif how == "diff":
+                        keep.append(d)
+                    elif how == "stop":
+                        self.stops.append(f"STOP 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({why})")
+                    else:
+                        self.allowed.append(f"ALLOWED 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({why})")
+                    continue
                 near = self._near(name, key) if d[1] == "value" else None
                 if near:
                     if k in self._STOP_KEYS.get(name, ()) or (name == "stage1_summary.csv" and k.startswith("chosen.")):
@@ -5278,6 +5326,8 @@ class Comparator:
                         self.allowed.append(f"ALLOWED 8.5 {name} {d[0]} ts={d[2]} py={d[3]} ({near})")
                 else:
                     keep.append(d)
+            if name == "stage2.csv":
+                keep = self._with_derived_only(keep)
             diffs[name] = keep
 
     # ------------------------------------------------------------------ 9.3: the choice of the candidate (spec 23.5)
@@ -5443,8 +5493,9 @@ class Comparator:
 
     # dump.md 9.3 / spec 8.5: a split of these stops (stage 1's chosen trials, a stage 2 Holm pass, a verdict);
     # a split of any other decision listed in _near is allowed, and the TS's decision is taken. A difference that
-    # _near does not excuse stays a DIFF, a verdict's too (C4a, the lead's E1: a verdict difference that none of
-    # X's own split decisions excuses is a DIFF, exit 5, not a STOP).
+    # _near does not excuse stays a DIFF. stage2.csv verdict, failed and label are derived keys (C4b, the lead's
+    # E10): _derived_judge decides them (an excused verdict is a STOP 8.5; failed and label are STOP 8.5 lines only
+    # when they are listed under the stop of a differing input, C1 or holm_delta_pass).
     _STOP_KEYS = {"stage1.csv": ("chosen",), "stage1_summary.csv": ("K_total",),
                   "stage2.csv": ("holm_pass", "holm_delta_pass", "C1", "verdict")}
 
@@ -5633,15 +5684,27 @@ class Comparator:
         on tid's own pairs, or tid's own p vs its own threshold."""
         return self._holm_pair(pkey, tid) or self._holm_own_thr(pkey, rkey, tid)
 
-    # ------------------------------------------------- stage2.csv failed / label / verdict of X (C4a, the lead's E1)
+    # ------------------------------------- stage2.csv verdict / failed / label of X (C4b, the lead's E10 and E11)
+    # dump.md 11.12 / py-design 5.7: spec 11's 判定 makes verdict, failed and label from X's other stage-2 values, so
+    # they are derived keys, judged by consistency (E10, replacing C4a's E1 for these three keys):
+    #   step 1: each side's written verdict, failed and label of X are recomputed from that side's own written inputs
+    #           (C1 ... C7, holm_delta_pass, the verdict-2 test on delta_ub) with verdict_texts, the same derivation
+    #           the Python's stage 2 writes with. A written key that does not follow is a DIFF of class derived (a
+    #           program error of that side), for every trial, also when ts/ and py/ write the same value;
+    #   step 2: when both sides follow their own inputs, a difference can only come from inputs that differ; each
+    #           differing input is judged by its own rule (C1 and holm_delta_pass: a STOP 8.5 or a DIFF; C4 and the
+    #           verdict-2 test: excused or a DIFF; C2, C3, C5, C6, C7: a DIFF). The derived difference is then a DIFF
+    #           when an input is a DIFF; else a STOP 8.5 for verdict, and for failed and label a STOP 8.5 line ("listed
+    #           under the stop") when an input is a STOP 8.5, otherwise ALLOWED 8.5.
+    # E11: the verdict-2 test is spec 8.5's band test below0_test (|x| < 1e-12 is 0), never a plain < 0.
+    DERIVED_KEYS = ("verdict", "label", "failed")
+    _DERIVED_BOOLS = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "holm_delta_pass")
+
     def _s2_text(self, side, tid, key):
         """The text of stage2.csv (tid, key) on one side, or None when the row is missing."""
         tab = self.ts_tab.get("stage2.csv", {}) if side == "ts" else self.py_tab.get("stage2.csv", {})
         r = tab.get((tid, key))
         return None if r is None else r.get("value", "")
-
-    def _s2_differs(self, tid, key):
-        return self._s2_text("ts", tid, key) != self._s2_text("py", tid, key)
 
     def _own_zero_side(self, tid, key):
         """The first side ("ts", "py") whose stage2.csv (tid, key) is within 1e-9 of 0, or None."""
@@ -5651,72 +5714,161 @@ class Comparator:
                 return side
         return None
 
-    def _below0(self, side, tid):
-        """The verdict-2 test of spec 11 on one side: X's delta_ub < 0. An empty or missing delta_ub is not below 0."""
-        x = self._s2_value(side, tid, "delta_ub")
-        return x is not None and x < 0
+    def _side_inputs(self, side, tid):
+        """E10 step 1: the inputs of spec 11's 判定 of X as one side wrote them: C1 ... C7 and holm_delta_pass (each
+        '1' or '0'), delta_ub (empty, or a number) and the verdict-2 test on it (below0_test: spec 8.5's band, E11;
+        an empty delta_ub is not below 0). -> (inputs, None), or (None, why they cannot be read): a missing row, a
+        bool that is not 0 or 1, a delta_ub that is neither empty nor a number (the docs writer's reading, C4b)."""
+        tab = self.ts_tab.get("stage2.csv", {}) if side == "ts" else self.py_tab.get("stage2.csv", {})
+        inp = {}
+        for k in self._DERIVED_BOOLS:
+            r = tab.get((tid, k))
+            if r is None:
+                return None, f"no {k} row"
+            v = r.get("value", "")
+            if v not in ("0", "1"):
+                return None, f"{k}={v} is not 0 or 1"
+            inp[k] = v == "1"
+        r = tab.get((tid, "delta_ub"))
+        if r is None:
+            return None, "no delta_ub row"
+        v = r.get("value", "")
+        x = None
+        if v != "":
+            x = read_number(v)
+            if x is None:
+                return None, f"delta_ub={v} is neither empty nor a number"
+        inp["delta_ub"] = x
+        inp["v2"] = below0_test(x)
+        return inp, None
 
-    def _x_own_split(self, tid, with_delta_pass):
-        """dump.md 11.12 / py-design 5.7 (C4a, the lead's E1): the decisions of X that its failed, label and verdict
-        rest on and that 9.3 can split, each only when it actually differs between ts/ and py/ AND that difference is
-        excused by X's own values (absolute 1e-9, either implementation's own values):
-          C1 (differs as text; X's own p_iut vs its own Holm threshold, per implementation),
-          C4 (differs as text; X's own late_lb vs 0),
-          the verdict-2 test delta_ub < 0 (one side below 0, the other not; X's own delta_ub vs 0),
-          holm_delta_pass, for label and verdict only (differs as text; X's own p_delta vs its own delta-only Holm
-          threshold, per implementation).
-        No pair or tie route through another trial's p. -> [(decision, reason)] in that order."""
+    @staticmethod
+    def _derive(inp):
+        """X's verdict, label and failed from one side's inputs, with the Python's own derivation (verdict_texts)."""
+        return verdict_texts(inp["C1"], {f"C{i}": inp[f"C{i}"] for i in range(2, 8)}, inp["delta_ub"],
+                             inp["holm_delta_pass"])
+
+    def derived_checks(self):
+        """E10 step 1, for every trial of stage2.csv and each side on its own: a written verdict, failed or label
+        that differs from what that side's own inputs give (or whose inputs cannot be read) is recorded in
+        self.derived_bad[(trial, key)][side] with the text of the DIFF line's class. A key whose row is missing on a
+        side is not checked on that side (the missing row is compare_file's own DIFF)."""
+        self.derived_bad = {}
+        if "stage2.csv" not in self.ts_tab or "stage2.csv" not in self.py_tab:
+            return
+        for side, tab in (("ts", self.ts_tab["stage2.csv"]), ("py", self.py_tab["stage2.csv"])):
+            tids = {}
+            for kk in tab:
+                if len(kk) == 2:
+                    tids.setdefault(kk[0], None)
+            for tid in tids:
+                present = [k for k in self.DERIVED_KEYS if (tid, k) in tab]
+                if not present:
+                    continue
+                inp, why = self._side_inputs(side, tid)
+                want = self._derive(inp) if inp is not None else None
+                for k in present:
+                    got = tab[(tid, k)].get("value", "")
+                    if want is None:
+                        self.derived_bad.setdefault((tid, k), {})[side] = f"{side} inputs cannot be read: {why}"
+                    elif got != want[k]:
+                        w = want[k] if want[k] != "" else '""'
+                        self.derived_bad.setdefault((tid, k), {})[side] = f"{side} inputs give {w}"
+
+    def _holm_input(self, name, pkey, rkey, tid, thr_name):
+        """E10 step 2: X's C1 (p_iut, holm_rank) or holm_delta_pass (p_delta, holm_delta_rank) differs. Its own rule
+        (the rule of its own key's line, _holm_x): X in a near or adopted-tie pair of pkey, or X's own pkey within
+        1e-9 of its own Holm threshold per implementation. -> the reason (a STOP 8.5), or None (a DIFF)."""
+        pair = self._holm_pair(pkey, tid)
+        if pair:
+            return f"{name} of {tid} differs: {pair}"
+        h = self._own_thr_hit(pkey, rkey, tid)
+        if h:
+            return (f"{name} of {tid} differs: its {pkey} within 1e-9 of its {thr_name} {h[1]!r} (rank {h[2]}, "
+                    f"{h[0]})")
+        return None
+
+    def _differing_inputs(self, tid):
+        """E10 step 2: the inputs of X that differ between ts/ and py/, each judged by its own rule.
+        -> [(input, "stop" | "allowed" | "diff", reason or None)], in the order C1 ... C7, the verdict-2 test,
+        holm_delta_pass."""
+        t_in, _ = self._side_inputs("ts", tid)
+        p_in, _ = self._side_inputs("py", tid)
+        if t_in is None or p_in is None:
+            return []
         out = []
-        if self._s2_differs(tid, "C1"):
-            h = self._own_thr_hit("p_iut", "holm_rank", tid)
-            if h:
-                out.append(("C1", f"C1 of {tid} differs: its p_iut within 1e-9 of its Holm threshold {h[1]!r} "
-                                  f"(rank {h[2]}, {h[0]})"))
-        if self._s2_differs(tid, "C4"):
-            side = self._own_zero_side(tid, "late_lb")
-            if side:
-                out.append(("C4", f"C4 of {tid} differs: its late_lb within 1e-9 of 0 ({side})"))
-        if self._below0("ts", tid) != self._below0("py", tid):
+        for c in ("C1", "C2", "C3", "C4", "C5", "C6", "C7"):
+            if t_in[c] == p_in[c]:
+                continue
+            if c == "C1":
+                r = self._holm_input("C1", "p_iut", "holm_rank", tid, "Holm threshold")
+                out.append(("C1", "stop", r) if r else ("C1", "diff", None))
+            elif c == "C4":
+                side = self._own_zero_side(tid, "late_lb")
+                out.append(("C4", "allowed", f"C4 of {tid} differs: its late_lb within 1e-9 of 0 ({side})")
+                           if side else ("C4", "diff", None))
+            else:
+                # C2, C3, C5, C6, C7 rest on exact values (9.1): nothing excuses them
+                out.append((c, "diff", None))
+        if t_in["v2"] != p_in["v2"]:
             side = self._own_zero_side(tid, "delta_ub")
-            if side:
-                out.append(("verdict2", f"the verdict-2 test (delta_ub < 0) of {tid} differs: its delta_ub within "
-                                        f"1e-9 of 0 ({side})"))
-        if with_delta_pass and self._s2_differs(tid, "holm_delta_pass"):
-            h = self._own_thr_hit("p_delta", "holm_delta_rank", tid)
-            if h:
-                out.append(("holm_delta_pass", f"holm_delta_pass of {tid} differs: its p_delta within 1e-9 of its "
-                                               f"delta-only Holm threshold {h[1]!r} (rank {h[2]}, {h[0]})"))
+            out.append(("verdict2", "allowed", f"the verdict-2 test (delta_ub < 0) of {tid} differs: its delta_ub "
+                                               f"within 1e-9 of 0 ({side})") if side else ("verdict2", "diff", None))
+        if t_in["holm_delta_pass"] != p_in["holm_delta_pass"]:
+            r = self._holm_input("holm_delta_pass", "p_delta", "holm_delta_rank", tid, "delta-only Holm threshold")
+            out.append(("holm_delta_pass", "stop", r) if r else ("holm_delta_pass", "diff", None))
         return out
 
-    def _x_label_verdict(self, tid):
-        """E1: X's label or verdict difference is excused when at least one of X's own decisions (C1, C4, the
-        verdict-2 test, holm_delta_pass) differs and is excused by X's own values. -> the reason, or None."""
-        sp = self._x_own_split(tid, True)
-        return "; ".join(r for _, r in sp) if sp else None
+    def _derived_judge(self, tid, key):
+        """E10: how a difference in X's derived key (verdict, failed, label) is written.
+        -> ("derived", class text) a side does not follow its own inputs (step 1);
+           ("diff", None) a differing input is a DIFF (or, defensively, no input differs);
+           ("stop", reason) verdict with every differing input excused, or failed / label with a STOP 8.5 input and
+                            every other one excused (listed under the stop);
+           ("allowed", reason) failed / label with every differing input excused and none a STOP 8.5."""
+        bad = self.derived_bad.get((tid, key))
+        if bad:
+            return "derived", "; ".join(bad[s] for s in ("ts", "py") if s in bad)
+        ins = self._differing_inputs(tid)
+        if not ins or any(st == "diff" for _, st, _ in ins):
+            return "diff", None
+        why = "; ".join(r for _, _, r in ins)
+        if key == "verdict" or any(st == "stop" for _, st, _ in ins):
+            return "stop", why
+        return "allowed", why
 
-    def _x_failed(self, tid):
-        """E1: X's failed lists (split at '・') may differ only in the conditions so excused; of those only C4 can
-        be in a list (C1 never is; the verdict-2 test is not a condition; dump.md 11.8: empty unless verdict 3).
-          - both verdicts 3: the lists, with C4 taken out, must be equal, and X's C4 differs and is excused;
-          - neither verdict 3: never excused (both lists must be empty);
-          - exactly one verdict 3 (the docs writer's reading of E1, C4a, py-design 5.7): the other side's list is
-            empty, and X's verdict difference is excused (_x_label_verdict).
-        -> the reason, or None."""
-        def conds(s):
-            return [c for c in (s or "").split("・") if c != ""]
-        lt, lp = self._s2_text("ts", tid, "failed"), self._s2_text("py", tid, "failed")
-        vt, vp = self._s2_text("ts", tid, "verdict"), self._s2_text("py", tid, "verdict")
-        if vt == "3" and vp == "3":
-            if [c for c in conds(lt) if c != "C4"] != [c for c in conds(lp) if c != "C4"]:
-                return None
-            c4 = [r for d, r in self._x_own_split(tid, False) if d == "C4"]
-            return c4[0] if c4 else None
-        if (vt == "3") != (vp == "3"):
-            if conds(lp if vt == "3" else lt):
-                return None
-            r = self._x_label_verdict(tid)
-            return f"the list follows the verdict of {tid} (ts={vt} py={vp}): {r}" if r else None
-        return None
+    def _with_derived_only(self, keep):
+        """E10 step 1 (the docs writer's reading, C4b): a derived key that does not follow its side's inputs is a
+        DIFF also when ts/ and py/ write the same value (or the other side has no such row). Adds those DIFFs, that
+        the plain comparison did not give, to stage2.csv's list in the file's row order; the rest keeps its order."""
+        done = {(d[0], d[1]) for d in keep}
+        extra = []
+        pos = {}
+        for tab in (self.ts_tab.get("stage2.csv", {}), self.py_tab.get("stage2.csv", {})):
+            for kk in tab:
+                pos.setdefault(kk, len(pos))
+        for (tid, k), bad in self.derived_bad.items():
+            jk = f"{tid}|{k}"
+            if (jk, "value") in done:
+                continue
+            tv, pv = self._s2_text("ts", tid, k), self._s2_text("py", tid, k)
+            why = "; ".join(bad[s] for s in ("ts", "py") if s in bad)
+            extra.append((pos.get((tid, k), len(pos)), (jk, "value", "missing" if tv is None else tv,
+                                                         "missing" if pv is None else pv, f"derived ({why})")))
+        if not extra:
+            return keep
+        extra.sort(key=lambda e: e[0])
+        out = []
+        j = 0
+        for d in keep:
+            p = pos.get(tuple(d[0].split("|"))) if d[1] == "value" else None
+            if p is not None:
+                while j < len(extra) and extra[j][0] < p:
+                    out.append(extra[j][1])
+                    j += 1
+            out.append(d)
+        out += [e[1] for e in extra[j:]]
+        return out
 
     def _near(self, name, key):
         """The pair of compared values within 1e-9 that this decision rests on, or None (dump.md 9.3)."""
@@ -5764,13 +5916,8 @@ class Comparator:
                 return self._zero_near(self._vals("stage2.csv", "late_lb"), "late_lb", tid)
             if k == "no_uplift":
                 return self._zero_near(self._vals("stage2.csv", "dF_lo"), "dF_lo", tid)
-            if k in ("verdict", "label"):
-                # dump.md 11.12 (C4a, the lead's E1): only when one of X's own decisions (C1, C4, the verdict-2
-                # test, holm_delta_pass) actually differs and is excused by X's own values; never through a near or
-                # tied pair of p (C2-C7 do not use p). An excused verdict is a STOP 8.5; otherwise a DIFF.
-                return self._x_label_verdict(tid)
-            if k == "failed":
-                return self._x_failed(tid)
+            # verdict, label and failed are derived keys (C4b, the lead's E10): decision_checks judges them through
+            # _derived_judge, never here
             return None
         return None
 
@@ -5931,7 +6078,9 @@ def main(argv):
             return run_and_compare(r)
         if len(args) == 2 and args[0] == "--compare":
             r = Run(args[1])
-            r.setup()
+            # dump.md 2 / py-design 2 (C4b, the lead's E14): --compare refuses a capped ts/ as --run does (the same
+            # function and message), before anything is compared or written into cmp/
+            r.setup(refuse_cut_max=True)
             code = Comparator(args[1], []).compare()
             print_report_tail(args[1])
             return code

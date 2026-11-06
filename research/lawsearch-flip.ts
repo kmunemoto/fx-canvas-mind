@@ -32,7 +32,10 @@
 // trials come from <ts>/config.json (missing or unreadable: FAIL, no fallback to the trial's twelve); a missing
 // <ts>/signals/<trial>.csv or <ts>/blind/<tf>_first.csv is a FAIL, and so is a missing <ts>/blind/<tf>_second.csv when
 // the run opened stage 2 (its <ts>/load.csv has a syn2 row; a missing load.csv is a FAIL too: stage 0 always writes
-// it).
+// it). (C4b, 2026-11-05; the lead's E13; design 7.9) With <flipped run>, its manifest.json must be of this generator,
+// FLIP=1 and the original's group and seed, and its gmo's tree sha256 and file count are checked against that manifest
+// in the same way, right after the original's and before any bar is read; a mismatch prints the same STOP (naming
+// <flipped run>/gmo) and exits 3. Its dumps are only INFO lines, but they must be of the run named.
 //
 // INFORMATION only (spec 23.1: the FLIP=1 run, its files read under spec 2, is for the TS–Python comparison): with
 // <flipped run>, its dumps against the original's, as the trial compared them (the blind bars' h and PL with 11 O-2's
@@ -160,12 +163,21 @@ export function compareSignals(trial: string, a: Row[], b: Row[]): FlipSignals {
 
 // ---- INFO: the FLIP=1 run's dumps (the trial's comparison, now information only) -------------------------------------
 
+// the flipped run's manifest.json: of this generator, FLIP=1, and the original's group and seed (anything else is a
+// crash, exit 1, as for the original's manifest); used by flipJudge's tree check and by flipInfo
+async function flippedManifest(run: string, flipped: string): Promise<{ version: string; files: number; treeSha256: string; spec: { group: string; seed: number; flip: boolean } }> {
+  const mb = JSON.parse(await Deno.readTextFile(`${flipped}/manifest.json`));
+  const ma = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`)).spec;
+  if (mb.version !== GEN_VERSION) throw new Error(`${flipped}/manifest.json: version ${mb.version}, not ${GEN_VERSION}`);
+  if (mb.spec.flip !== true) throw new Error(`${flipped}: manifest flip ${mb.spec.flip}, expected true`);
+  if (ma.group !== mb.spec.group || ma.seed !== mb.spec.seed) throw new Error(`the runs are ${ma.group} ${ma.seed} and ${mb.spec.group} ${mb.spec.seed}`);
+  return mb;
+}
+
+// (the flipped run's gmo tree is checked by flipJudge(run, tsDir, flipped), before any bar is read; main calls it so)
 export async function flipInfo(run: string, flipped: string, tsA: string, tsB: string): Promise<string[]> {
   const lines: string[] = [];
-  const mb = JSON.parse(await Deno.readTextFile(`${flipped}/manifest.json`)).spec;
-  const ma = JSON.parse(await Deno.readTextFile(`${run}/manifest.json`)).spec;
-  if (mb.flip !== true) throw new Error(`${flipped}: manifest flip ${mb.flip}, expected true`);
-  if (ma.group !== mb.group || ma.seed !== mb.seed) throw new Error(`the runs are ${ma.group} ${ma.seed} and ${mb.group} ${mb.seed}`);
+  const mb = (await flippedManifest(run, flipped)).spec;
   lines.push(`INFO FLIP=1 ${mb.group} ${mb.seed}: ${tsA} vs ${tsB} (the flipped files read under spec 2; not judged, spec 23.1)`);
   for (const tf of ["m15", "h1"]) {
     for (const half of ["first", "second"]) {
@@ -353,10 +365,19 @@ const sigVsDump = (sig: TrialSignals, rows: Row[]): string | null => {
   return null;
 };
 
-// a STOP of the judgement (the run's gmo is not its manifest's): printed, exit 3
+// a STOP of the judgement (the run's or the flipped run's gmo is not its manifest's): printed, exit 3
 class FlipStop extends Error {}
 
-export async function flipJudge(run: string, tsDir: string): Promise<{ lines: string[]; passed: boolean }> {
+// a run's gmo files are its manifest's (lawsearch.ts's gate 3: the tree sha256 and the file count); a mismatch is a
+// STOP. The text after "TREE " on a match.
+async function treeOf(run: string, man: { treeSha256: string; files: number }): Promise<string> {
+  const tree = await treeSha256(`${run}/gmo`);
+  if (tree.sha256 !== man.treeSha256 || tree.files !== man.files) throw new FlipStop(`STOP: ${run}/gmo: tree sha256 ${tree.sha256} (${tree.files} files), the manifest's ${man.treeSha256} (${man.files})`);
+  return `${run}/gmo: sha256 ${tree.sha256} (${tree.files} files), the manifest's PASS`;
+}
+
+// flipped: the FLIP=1 run whose dumps flipInfo prints (its tree is checked here, before any bar is read)
+export async function flipJudge(run: string, tsDir: string, flipped?: string): Promise<{ lines: string[]; passed: boolean }> {
   const lines: string[] = [];
   let passed = true;
   let fails = 0;
@@ -369,9 +390,11 @@ export async function flipJudge(run: string, tsDir: string): Promise<{ lines: st
   if (man.version !== GEN_VERSION) throw new Error(`${run}/manifest.json: version ${man.version}, not ${GEN_VERSION}`);
   if (man.spec.flip !== false) throw new Error(`${run}: manifest flip ${man.spec.flip}; the exact mirror is made from the original (FLIP=0) run`);
   // the run's files are its manifest's (lawsearch.ts's gate 3), before any bar is read
-  const tree = await treeSha256(`${run}/gmo`);
-  if (tree.sha256 !== man.treeSha256 || tree.files !== man.files) throw new FlipStop(`STOP: ${run}/gmo: tree sha256 ${tree.sha256} (${tree.files} files), the manifest's ${man.treeSha256} (${man.files})`);
-  lines.push(`TREE ${run}/gmo: sha256 ${tree.sha256} (${tree.files} files), the manifest's PASS`);
+  lines.push(`TREE ${await treeOf(run, man)}`);
+  // (C4b, 2026-11-05; the lead's E13; design 7.9) the flipped run's files are its manifest's too, checked in the same
+  // way right after the original's: before, only its manifest's flip was read, so a FLIP=1 folder whose gmo was not
+  // its manifest's gave INFO lines unseen
+  if (flipped !== undefined) lines.push(`TREE ${await treeOf(flipped, await flippedManifest(run, flipped))} (the flipped run, whose dumps the INFO lines compare)`);
   const answerKnowing = man.spec.group === "O";
   // the avoid table, as the pipeline reads it
   const avoidBytes = await Deno.readFile("research/ledger/spread-hours-h1.csv");
@@ -508,9 +531,10 @@ if (import.meta.main) {
     Deno.exit(2);
   }
   try {
-    const { lines, passed } = await flipJudge(run, tsA ?? `${run}/ts`);
+    const { lines, passed } = await flipJudge(run, tsA ?? `${run}/ts`, flipped);
     for (const l of lines) console.log(l);
-    if (flipped) for (const l of await flipInfo(run, flipped, tsA ?? `${run}/ts`, tsB ?? `${flipped}/ts`)) console.log(l);
+    // the same condition as flipJudge's tree check of the flipped run, so that no INFO line comes from an unchecked run
+    if (flipped !== undefined) for (const l of await flipInfo(run, flipped, tsA ?? `${run}/ts`, tsB ?? `${flipped}/ts`)) console.log(l);
     Deno.exit(passed ? 0 : 3);
   } catch (e) {
     if (e instanceof FlipStop) {
