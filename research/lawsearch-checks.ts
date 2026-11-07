@@ -27,7 +27,7 @@
 
 import { checkConstants, checkFiles, HIGHER, MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, SPLIT, STEP } from "./lawsearch-const.ts";
 import { CUT_DAY_BARS, CUT_EVEN, CUT_GAP_BARS, CUT_HTF_BARS, CUT_HTF_STAGE0, CUT_SAMPLE, HOLE_MIN_SLOTS, POISON_N, POISON_PIPS, R3_BACK, REASONS, SEEDS, STATUS } from "./lawsearch-rules.ts";
-import { coarsenSeries, deleteBars, entryExitIndex, htfIndex, poisonSeries, poisonTables, prefixSeries, stratumOf, windowSeries } from "./lawsearch-bars.ts";
+import { coarsenSeries, deleteBars, entryExitIndex, htfIndex, poisonSeries, poisonTables, prefixSeries, stratumOf } from "./lawsearch-bars.ts";
 import type { PoisonTables } from "./lawsearch-bars.ts";
 import { indOf } from "./lawsearch-ind.ts";
 import { parseCandidates } from "./lawsearch-items.ts";
@@ -105,9 +105,11 @@ const decisionOf = (trial: TrialDef, ind: Ind, ctx: ExclCtx, s: Series, i: numbe
   return parts.length ? parts.join("|") : "none";
 };
 
-// an item of finite length may be recomputed on its own window (§8.113 C17: B06 reads 291 bars)
-const FINITE_BARS: Readonly<Record<string, number>> = { B06: 291 };
-const finiteOf = (t: TrialDef): number | null => (t.kind === "B" && t.b !== null && FINITE_BARS[t.b] !== undefined ? FINITE_BARS[t.b] : null);
+// C4d (C4c's review, M5/M6; the lead's F1): there is no window any more. Before C4d an item of finite length (B06,
+// §8.113 C17's 291 bars) was recomputed on windowSeries(s, k − 290, k) instead of the cut prefix; a look-ahead carried
+// by state across bars, by rows already emitted or by the series' length never showed there (a 291-bar window gives
+// B06 at most one raw signal before k). Every item, B06 included, is now decided on the cut prefix walked from bar 0
+// (spec 15 切った列; design 12 rule 2); the run plant carriedCountB06 (lawsearch-events.ts) guards it.
 // does a trial read the higher timeframe (F02, F02r, S02)? None of the trial's items does yet.
 const readsHigher = (t: TrialDef): boolean => (t.f !== null && t.f.startsWith("F02")) || t.s === "S02";
 
@@ -228,7 +230,8 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // ---- the units of the checks cut, poison and presence (C4b, the speed-up "par") -----------------------------------
 //
 // Each of the three checks is a list of units, and a unit is one decision recomputed on its own edited series:
-//   cut       one (target k, trial): the five pairs cut at T_k (cutGotAt);
+//   cut       one (target k, trial): the target's pair cut at T_k (prefixSeries; the other pairs give only their bar
+//             starts, for the holes) (cutGotAt);
 //   poison    one probe bar i of one trial: its pair poisoned after T_i (poisonGotAt);
 //   presence  one (probe bar i, variant) of one trial: bars deleted after T_i (presenceGotAt).
 // The three Got functions are the bodies of the checks' loops before C4b, moved here unchanged. Nothing is shared
@@ -239,8 +242,11 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // by target, trial by trial; probe by probe) and does there everything the loop did: compared, the examples, the
 // rows of cut_fail.csv, the planted mark. A unit may run in this thread (inPlace) or on a worker
 // (research/lawsearch-par.ts); the replay order does not depend on where or when a unit ran, so the bytes are the
-// same with any number of workers. An error is replayed at its unit too: the units before it count, then it is
-// thrown, as the loop would have thrown it there.
+// same with any number of workers, as long as a unit's decision is a function of its own series alone: every build
+// and cache keyed by the Ind, and no module-level state that survives between candidatesOf calls (lawsearch-design.md
+// 12.2 (2); C4d). Such state would differ between the main thread and each worker (each has its own module copy),
+// so it could make the bytes depend on WORKERS too. An error is replayed at its unit too: the units before it count,
+// then it is thrown, as the loop would have thrown it there.
 
 // what the units of one check read besides the universe
 export type UnitTask =
@@ -315,14 +321,16 @@ const wantOfJob = (job: UnitJob, at: number): string => {
   return lo < job.wantAt.length && job.wantAt[lo] === at ? job.wantStr[lo] : "none";
 };
 
-// Cut target k of pair pi (cutCheck's loop body before C4b): the five pairs' bars with T ≤ T_k, the holes of the
-// window ③ reads, and the first `count` trials of the task recomputed on that cut alone (one Ind of the cut shared
-// by these trials; a finite item on its own window of the cut); each(ti, got) in trial order
+// Cut target k of pair pi (cutCheck's loop body before C4b): the pair's bars with T ≤ T_k (the cut prefix, bars 0 … k),
+// the holes of the slots ③ reads at k (from every pair's bar starts in [s_{k−9} − HOLE_MIN_SLOTS × step, T_k]; the
+// header above), and the first `count` trials of the task recomputed on that cut alone, each walked from bar 0 of the
+// prefix by candidatesOf (decisionOf), with one Ind of the cut shared by these trials; each(ti, got) in trial order.
+// C4d: every item, B06 included, on the prefix (no window; the note at readsHigher above).
 export function cutGotAt(set: TfSet, c: Extract<UnitTask, { kind: "cut" }>, pi: number, k: number, count: number, each: (ti: number, got: string) => void): void {
   const tf = c.tf;
   const s = set.pairs[pi];
   const Tk = s.T[k];
-  // the cut: every pair's bars with T ≤ T_k; the holes of the window ③ reads
+  // the cut: the pair's bars with T ≤ T_k; the holes of the slots ③ reads at k
   const cut = prefixSeries(s, Tk);
   const from = s.s[Math.max(0, k - R3_BACK)] - HOLE_MIN_SLOTS[tf] * STEP[tf];
   const starts = set.pairs.map((p) => {
@@ -331,20 +339,10 @@ export function cutGotAt(set: TfSet, c: Extract<UnitTask, { kind: "cut" }>, pi: 
     return p.s.subarray(lo, Math.max(lo, hi));
   });
   const ctx: ExclCtx = { tf, step: STEP[tf], holes: holesOf(tf, starts, from, Tk), avoid: c.avoid, stage3: null, plant: c.plant };
-  let indCut: Ind | null = null;
-  for (let ti = 0; ti < count; ti++) {
-    const trial = c.trials[ti];
-    const fin = finiteOf(trial);
-    let got: string;
-    if (fin !== null && k >= fin - 1) {
-      const w = windowSeries(s, k - (fin - 1), k);
-      got = decisionOf(trial, indFor(w, tf, c.higher, c.plant), ctx, w, fin - 1, c);
-    } else {
-      indCut ??= indFor(cut, tf, c.higher, c.plant);
-      got = decisionOf(trial, indCut, ctx, cut, k, c);
-    }
-    each(ti, got);
-  }
+  if (count <= 0) return;
+  // one Ind of the cut for every trial decided at k (the builds kept on it, lawsearch-events.ts buildOf)
+  const indCut = indFor(cut, tf, c.higher, c.plant);
+  for (let ti = 0; ti < count; ti++) each(ti, decisionOf(c.trials[ti], indCut, ctx, cut, k, c));
 }
 
 // Poison's unit (poisonCheck's loop body before C4b): the decision at bar i of pair pi recomputed on that pair
@@ -462,8 +460,9 @@ const rethrow = (out: UnitOut, err: unknown) => {
   if (err !== null) throw err;
 };
 
-// At each target k: the five pairs cut at T_k (bars with T ≤ T_k), the pair's indicators and every trial of the
-// timeframe recomputed on the cut (a finite item on its own window), spec 6 with the cut's holes; the decision at k
+// At each target k: the target's pair cut at T_k (bars with T ≤ T_k), its indicators and every trial of the
+// timeframe recomputed on the cut, each walked from bar 0 (C4d: B06 too, no window), spec 6 with the cut's holes (made
+// from every pair's bar starts; cutGotAt); the decision at k
 // (presence, direction, status, warm-up), its reason and its stratum must equal the uncut run's. And the entry bar of
 // every counted signal is the uncut series' first start ≥ T and < X. o.maxTargets (development only, never a formal
 // run): at most this many targets per (tf, pair), evenly picked; the detail says so. o.name: the check's name

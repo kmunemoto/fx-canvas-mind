@@ -85,24 +85,36 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // and what ②–④ and the warm-up read: the builds, the kind, the first bar whose condition is not 無し), then
 // b3a2c43's loop (②–④ at every bar i = 0 … n − 1), then finish (the typed arrays, ⑤ and the warm-up). There is no
 // other way to get a trial's rows: the main run (trialSignals) and the checks of spec 15 (cut, poison, presence:
-// lawsearch-checks.ts decisionOf) both call this function, the checks on their own cut, window, poisoned or edited
-// series, and read the rows at the bar they compare. So a check's decision at bar k is made by the same code as the
+// lawsearch-checks.ts decisionOf) both call this function, the checks on their own cut, poisoned or edited series,
+// and read the rows at the bar they compare. So a check's decision at bar k is made by the same code as the
 // main run's decision at bar k, from the check's series alone, whatever that code reads: values after k (in a build
 // or in the loop), state carried from one bar to the next, rows already emitted, or the series' length n (the cut
-// series ends at k, so the loop ends there too). This holds by construction, for any future change of the loop's
-// body or of a build, and does not depend on the body keeping no state (C4b's candidatesAt, which ran the body at
-// one bar alone, needed that; C4b's review, finding 1). The item's and the F's builds are kept per Ind (buildOf) for
-// the trials that share the same Ind; see there.
+// series ends at k, so the loop ends there too; C4d: for every item, B06 included, since the cut no longer gives B06
+// a 291-bar window, lawsearch-checks.ts cutGotAt). This holds by construction for any change of the loop's body or
+// of a build that keeps every build and cache keyed by the Ind and adds no module-level state that survives between
+// candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is not part of "the check's series alone", so the
+// equality does not cover it (and it could also make the bytes depend on WORKERS, since the main thread and each
+// worker hold their own copy of it). Within that condition it does not depend on the body keeping no state (C4b's
+// candidatesAt, which ran the body at one bar alone, needed that; C4b's review, finding 1). The item's and the F's
+// builds are kept per Ind (buildOf) for the trials that share the same Ind; see there.
 //
 // Plants lastBarStateG3 and lastBarStateG5 (C4c, development only; lawsearch-design.md 8): a look-ahead that mixes
 // state carried across bars with the series' end: on the series' last bar, a raw signal is dropped when the last row
 // emitted before it is exactly G = 3 (or 5) bars back. The main run drops nothing but at its own last bar; a cut at
 // k drops raw signals at k, so the cut check must fail (C4b's review: b3a2c43 fails, C4b's candidatesAt did not).
+// Plant carriedCountB06 (C4d, development only; C4c's review, M5/M6, the refuter's R1): the same on B06's path: per
+// direction, the raw signals (②) of B06 are counted from bar 0; on the series' last bar a raw B06 signal is dropped
+// when that count before it is odd. A cut walked from bar 0 counts as the main run does and drops at k, so the cut
+// must fail on m15.B06 or h1.B06; B06's former 291-bar window gave at most one raw signal before k, never an odd
+// count with a raw signal at k, so it missed this plant (exit 0, every file as the clean run's).
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
   const p = prepare(trial, ind, o);
   const { n, cond, keep, fb, edge, first } = p;
   const plant = o?.plant ?? "";
   const lastGap = plant === "lastBarStateG3" ? 3 : plant === "lastBarStateG5" ? 5 : 0;
+  // plant carriedCountB06 (the header above): B06's trials only; raw0 and raw1 count the raw signals at bars 0 … i − 1
+  const carried = plant === "carriedCountB06" && trial.kind === "B" && trial.b === "B06";
+  let raw0 = 0, raw1 = 0;
   const rows: CandRows = { i: [], d: [], s: [] };
   const rowsI = rows.i;
   const rowsD = rows.d;
@@ -123,8 +135,10 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     let s0 = NONE;
     // ②
     if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
-      // plants lastBarStateG3 / lastBarStateG5 (the header above)
-      if (!(lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap)) {
+      // plants lastBarStateG3 / lastBarStateG5 and carriedCountB06 (the header above)
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1);
+      raw0++;
+      if (!dropped) {
         // ③
         if (keep0 === null || keep0[i] !== 0) {
           // ④
@@ -139,7 +153,9 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     // sell (k = 1), the same
     let s1 = NONE;
     if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
-      if (!(lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap)) {
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1);
+      raw1++;
+      if (!dropped) {
         if (keep1 === null || keep1[i] !== 0) {
           if (f1 === null) s1 = ST_EMIT;
           else {
