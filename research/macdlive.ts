@@ -530,7 +530,7 @@ const loadFiles = async (src: Source): Promise<{ data: PairData[]; st: LoadStats
     const h = await loadTf(src, pair, TF, LOAD_FROM, END, st, weekend);
     const m1 = await loadM1(src, pair, START, END, st);
     data.push({ pair, bars1h: midBars(pair, quotesOf(h.bars)), book: bookOf(m1) });
-    console.log(`${pair}: 1h ${h.bars.n} (from ${h.bars.n ? iso(h.bars.t[0]) : "-"}), 1min ${m1.n}`);
+    console.log(`${pair}: ${TF} ${h.bars.n} (from ${h.bars.n ? iso(h.bars.t[0]) : "-"}), 1min ${m1.n}`);
   }
   return { data, st };
 };
