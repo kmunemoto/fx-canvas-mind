@@ -289,7 +289,7 @@ import type { Candle } from "../analyze/indicators.ts";
 // forming bar is joined to it (live-chart/stocks.ts). On 2026-11-05 the
 // forming bar was judged as closed from 15:32 UTC on, so the bar that closed
 // after it would not have been judged. The other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v37-2026-11-05T17:00:00Z";
+const FUNCTION_VERSION = "signal-alerts-v38-2026-11-07T04:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
