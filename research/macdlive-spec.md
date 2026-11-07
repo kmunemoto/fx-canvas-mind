@@ -85,3 +85,43 @@ summary.json:
 A second implementation (research/macdlive-check.py) builds its own bars from the same files, decides both ways
 with its own code, follows each email with research/flowz-check.py's `follow`, and must find the same rows (every
 column; numbers equal as doubles) and the same numbers (equal, or within 1e-9 relative for sums and means).
+
+## One hour after each close email: the email's side or the other side (docs §8.144, 2026-11-07)
+
+The owner (2026-11-07): when a SELL (BUY) email comes, is it better one hour later to enter as the email says (against
+the overbought / oversold move) or the other way (with the move), 20,000 units a trade, as a probability. Only the
+**close** way's emails (the email as it is sent now). Nothing else above changes; this adds a file and a key.
+
+For each **close** email (pair, bar `i`, side, `τ = T(i)`), with `m` the pair's 1-minute bars (as above: `t`, bid close
+`bc`, ask close `ac`) and `dir` = +1 for BUY, −1 for SELL:
+
+- Entry quote: the 1-minute bar that opened at `τ − 1 minute` (the bar the price at `τ` is read from): `eb` = its `bc`,
+  `ea` = its `ac`. No such bar: status `noEntry` (nothing else on the row).
+- Exit quote: the first 1-minute bar whose open is at or after `τ + 59 minutes` (the bar that closes one hour after
+  `τ`, or the first after it). None among the loaded bars: status `noExit`. Else `xOpen` = its open, `xb` = its `bc`,
+  `xa` = its `ac`, `late` = (`xOpen` − (`τ + 59 minutes`)) / 1 minute (an integer; 0 when on time). Status `ok` when
+  `late` ≤ 5, `late` when `late` > 5 (a market close or a gap in between: listed, not in the main numbers).
+- The email's side (`mail`): BUY `dm = xb − ea`; SELL `dm = eb − xa`. The other side (`opp`): BUY email (so a sell)
+  `do = eb − xa`; SELL email (so a buy) `do = xb − ea`. Each a double subtraction of the two quotes as read.
+- `move` = `dir × ((xb + xa) / 2 − (eb + ea) / 2)`: the mid's move in the email's direction (> 0: the email's way).
+- Pips: `dm / u` and `do / u`, `u` = 0.01 on a yen pair, 0.0001 on the others (double literals).
+- Yen for 20,000 units: on a yen pair `d * 20000`; on the others `d * 20000 * U` (left to right), where `U` = USD/JPY's
+  `(bc + ac) / 2` of its 1-minute bar that opened at `xOpen`, or, when USD/JPY has none at that minute, of its last
+  1-minute bar that opened before `xOpen`; no such bar at all: status `noRate` (it takes precedence over `late`), the
+  yen columns empty (not in the numbers). `U` is not rounded.
+
+Output OUT/hour1.csv, header `pair,open,tau,side,st,eb,ea,xOpen,late,xb,xa,u,mailPips,oppPips,mailYen,oppYen,move`, one
+row per **close** email in rows.csv's order (by `tau`, then the pair's place). `open`, `tau`, `xOpen` ISO as above;
+numbers as JavaScript's `String(x)`; `u` empty on a yen pair; every column after `st` empty when it cannot be taken
+(`noEntry`: all; `noExit`: from `xOpen` on, but `eb`, `ea` kept; `noRate`: `u`, `mailYen`, `oppYen`).
+
+summary.json `hour1`: `{ counts, groups }`. `counts`: `ok`, `late`, `noEntry`, `noExit`, `noRate` over all close emails.
+`groups`: `all`, one key per pair, and one per UTC year of `tau` (`"2024"`, `"2025"`, `"2026"`), each over its rows with
+status `ok` (rows in hour1.csv's order): `n`, `mailWin` (`dm > 0`), `mailLoss` (`dm < 0`), `mailDraw` (`dm == 0`), `oppWin`,
+`oppLoss`, `oppDraw` (on `do`), `moveMail` (`move > 0`), `moveOpp` (`move < 0`), `moveFlat`, `mailPipsSum`,
+`mailPipsMean`, `oppPipsSum`, `oppPipsMean`, `mailYenSum`, `mailYenMean`, `mailYenMin`, `mailYenMax`, `oppYenSum`,
+`oppYenMean`, `oppYenMin`, `oppYenMax` (sums add the rows in order; mean = sum / n; null where n = 0).
+
+The second implementation builds the same rows from its own close emails and its own 1-minute bars and must find the
+same hour1.csv (every column; numbers equal as doubles) and the same `hour1` (counts equal; sums and means equal or
+within 1e-9 relative; the rest equal).

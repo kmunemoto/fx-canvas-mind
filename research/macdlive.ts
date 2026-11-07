@@ -263,7 +263,7 @@ const fullStats = (rows: readonly LRow[]): FullStats => {
   return { ...s, pipsSum, guidePipsSum };
 };
 
-const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats) => {
+const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats, h1: readonly H1Row[]) => {
   const ways: Record<string, Record<string, FullStats>> = {};
   for (const w of ["close", "live"] as Way[]) {
     const rs = rows.filter((r) => r.mail.way === w);
@@ -281,6 +281,7 @@ const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats) => {
       minutesMax: early.length ? Math.max(...early.map((r) => r.mail.minutes)) : null,
     },
     pairs: outs.map((o) => ({ pair: o.pair, bars1h: o.bars1h, judged: o.judged })),
+    hour1: h1Summary(h1),
     load: st,
   };
 };
@@ -298,6 +299,180 @@ const csvOf = (rows: LRow[]): string => {
       r.own.tp ? "1" : "0", r.own.tp ? iso(p.x) : "", r.own.tp ? String(p.exit) : "", r.own.held ? String(p.endPx) : "",
       g(r.own.pips), g(r.own.mae), g(r.own.hold),
       r.guide?.result ?? "", r.guide ? String(r.guide.pips) : "", r.guide ? (r.guide.both ? "1" : "0") : "",
+    ].join(","));
+  }
+  return out.join("\n") + "\n";
+};
+
+// ---- one hour after each close email (research/macdlive-spec.md "One hour after each close email", docs §8.144) ----
+// The owner (2026-11-07): one hour after a close email, did the email's side or the other side make money, 20,000
+// units a trade. A market entry at the email's moment (the 1-minute bar the price at τ is read from) and a market exit
+// at the first 1-minute bar opened at or after τ + 59 minutes, on the bid and the ask as read (the spread is paid).
+
+type H1Status = "ok" | "late" | "noEntry" | "noExit" | "noRate";
+interface H1Row {
+  mail: LiveMail;
+  st: H1Status;
+  eb: number | null;
+  ea: number | null;
+  xOpen: number | null;
+  late: number | null;
+  xb: number | null;
+  xa: number | null;
+  u: number | null;
+  mailPips: number | null;
+  oppPips: number | null;
+  mailYen: number | null;
+  oppYen: number | null;
+  move: number | null;
+}
+
+const H1_UNITS = 20000;
+// a row is in the main numbers when its exit bar opened at most this many minutes after τ + 59 minutes
+const H1_LATE_MAX = 5;
+
+const hour1Of = (mail: LiveMail, m: M1, uj: M1 | null): H1Row => {
+  const empty = { eb: null, ea: null, xOpen: null, late: null, xb: null, xa: null, u: null, mailPips: null, oppPips: null, mailYen: null, oppYen: null, move: null };
+  const qe = lowerBound(m.t, mail.T - MINUTE);
+  if (qe >= m.n || m.t[qe] !== mail.T - MINUTE) return { mail, st: "noEntry", ...empty };
+  const eb = m.bc[qe];
+  const ea = m.ac[qe];
+  const qx = lowerBound(m.t, mail.T + 59 * MINUTE);
+  if (qx >= m.n) return { mail, st: "noExit", ...empty, eb, ea };
+  const xOpen = m.t[qx];
+  const xb = m.bc[qx];
+  const xa = m.ac[qx];
+  const late = (xOpen - (mail.T + 59 * MINUTE)) / MINUTE;
+  const buy = mail.side === "BUY";
+  const dm = buy ? xb - ea : eb - xa;
+  const dOpp = buy ? eb - xa : xb - ea;
+  const dir = buy ? 1 : -1;
+  const move = dir * ((xb + xa) / 2 - (eb + ea) / 2);
+  const yenPair = mail.pair.includes("JPY");
+  const unit = yenPair ? 0.01 : 0.0001;
+  let u: number | null = null;
+  if (!yenPair && uj) {
+    const q = lowerBound(uj.t, xOpen);
+    const k = q < uj.n && uj.t[q] === xOpen ? q : q - 1;
+    if (k >= 0) u = (uj.bc[k] + uj.ac[k]) / 2;
+  }
+  const noRate = !yenPair && u === null;
+  const yen = (d: number): number | null => (yenPair ? d * H1_UNITS : u === null ? null : d * H1_UNITS * u);
+  return {
+    mail,
+    st: noRate ? "noRate" : late > H1_LATE_MAX ? "late" : "ok",
+    eb, ea, xOpen, late, xb, xa, u,
+    mailPips: dm / unit,
+    oppPips: dOpp / unit,
+    mailYen: yen(dm),
+    oppYen: yen(dOpp),
+    move,
+  };
+};
+
+// every close email's row, in rows.csv's order (rows are already merged in that order)
+const hour1Rows = (rows: readonly LRow[], data: readonly PairData[]): H1Row[] => {
+  const m1Of = new Map(data.map((d) => [d.pair, d.book.m]));
+  const uj = m1Of.get("USD/JPY") ?? null;
+  return rows.filter((r) => r.mail.way === "close").map((r) => hour1Of(r.mail, m1Of.get(r.mail.pair) as M1, uj));
+};
+
+interface H1Stats {
+  n: number;
+  mailWin: number;
+  mailLoss: number;
+  mailDraw: number;
+  oppWin: number;
+  oppLoss: number;
+  oppDraw: number;
+  moveMail: number;
+  moveOpp: number;
+  moveFlat: number;
+  mailPipsSum: number | null;
+  mailPipsMean: number | null;
+  oppPipsSum: number | null;
+  oppPipsMean: number | null;
+  mailYenSum: number | null;
+  mailYenMean: number | null;
+  mailYenMin: number | null;
+  mailYenMax: number | null;
+  oppYenSum: number | null;
+  oppYenMean: number | null;
+  oppYenMin: number | null;
+  oppYenMax: number | null;
+}
+
+const h1Stats = (rs: readonly H1Row[]): H1Stats => {
+  const ok = rs.filter((r) => r.st === "ok");
+  const n = ok.length;
+  const count = (f: (r: H1Row) => boolean) => ok.filter(f).length;
+  const sum = (f: (r: H1Row) => number) => {
+    let s = 0;
+    for (const r of ok) s += f(r);
+    return s;
+  };
+  // (a, b) only: reduce also passes the index and the array, which Math.min / Math.max would read
+  const ext = (f: (r: H1Row) => number, pick: (a: number, b: number) => number) => (n ? ok.map(f).reduce((a, b) => pick(a, b)) : null);
+  const mailPipsSum = sum((r) => r.mailPips as number);
+  const oppPipsSum = sum((r) => r.oppPips as number);
+  const mailYenSum = sum((r) => r.mailYen as number);
+  const oppYenSum = sum((r) => r.oppYen as number);
+  return {
+    n,
+    mailWin: count((r) => (r.mailPips as number) > 0),
+    mailLoss: count((r) => (r.mailPips as number) < 0),
+    mailDraw: count((r) => r.mailPips === 0),
+    oppWin: count((r) => (r.oppPips as number) > 0),
+    oppLoss: count((r) => (r.oppPips as number) < 0),
+    oppDraw: count((r) => r.oppPips === 0),
+    moveMail: count((r) => (r.move as number) > 0),
+    moveOpp: count((r) => (r.move as number) < 0),
+    moveFlat: count((r) => r.move === 0),
+    mailPipsSum: n ? mailPipsSum : null,
+    mailPipsMean: n ? mailPipsSum / n : null,
+    oppPipsSum: n ? oppPipsSum : null,
+    oppPipsMean: n ? oppPipsSum / n : null,
+    mailYenSum: n ? mailYenSum : null,
+    mailYenMean: n ? mailYenSum / n : null,
+    mailYenMin: ext((r) => r.mailYen as number, Math.min),
+    mailYenMax: ext((r) => r.mailYen as number, Math.max),
+    oppYenSum: n ? oppYenSum : null,
+    oppYenMean: n ? oppYenSum / n : null,
+    oppYenMin: ext((r) => r.oppYen as number, Math.min),
+    oppYenMax: ext((r) => r.oppYen as number, Math.max),
+  };
+};
+
+const h1Summary = (rs: readonly H1Row[]) => {
+  const counts: Record<H1Status, number> = { ok: 0, late: 0, noEntry: 0, noExit: 0, noRate: 0 };
+  for (const r of rs) counts[r.st]++;
+  const groups: Record<string, H1Stats> = { all: h1Stats(rs) };
+  for (const pair of PAIRS) groups[pair] = h1Stats(rs.filter((r) => r.mail.pair === pair));
+  const years = [...new Set(rs.map((r) => iso(r.mail.T).slice(0, 4)))].sort();
+  for (const y of years) groups[y] = h1Stats(rs.filter((r) => iso(r.mail.T).slice(0, 4) === y));
+  return { counts, groups };
+};
+
+// a row's two sides add up to minus the two spreads (entry and exit): a check of the arithmetic, on every row with an exit
+const h1Mismatches = (rs: readonly H1Row[]): string[] => {
+  const out: string[] = [];
+  for (const r of rs) {
+    if (r.mailPips === null || r.oppPips === null) continue;
+    const unit = r.mail.pair.includes("JPY") ? 0.01 : 0.0001;
+    const spreads = ((r.ea as number) - (r.eb as number) + ((r.xa as number) - (r.xb as number))) / unit;
+    if (Math.abs(r.mailPips + r.oppPips + spreads) > 1e-6) out.push(`${r.mail.pair} ${iso(r.mail.T)}: mail ${r.mailPips} + opp ${r.oppPips} != −spreads ${spreads}`);
+  }
+  return out;
+};
+
+const h1Csv = (rs: readonly H1Row[]): string => {
+  const head = ["pair", "open", "tau", "side", "st", "eb", "ea", "xOpen", "late", "xb", "xa", "u", "mailPips", "oppPips", "mailYen", "oppYen", "move"];
+  const out = [head.join(",")];
+  for (const r of rs) {
+    out.push([
+      r.mail.pair, iso(r.mail.open), iso(r.mail.T), r.mail.side, r.st,
+      g(r.eb), g(r.ea), r.xOpen === null ? "" : iso(r.xOpen), g(r.late), g(r.xb), g(r.xa), g(r.u),
+      g(r.mailPips), g(r.oppPips), g(r.mailYen), g(r.oppYen), g(r.move),
     ].join(","));
   }
   return out.join("\n") + "\n";
@@ -380,13 +555,23 @@ const synthPair = (seed: number, pair: string, cut?: { T: number; pips: number }
 
 const checkWalk = (seed: number) => {
   const ck: Checks = { compared: 0, mismatches: [] };
-  const outs = PAIRS.map((pair) => runPair(synthPair(seed, pair), ck));
+  const ds = PAIRS.map((pair) => synthPair(seed, pair));
+  const outs = ds.map((d) => runPair(d, ck));
   const rows = merged(outs);
   let fail = 0;
   const bad = (msg: string) => {
     fail++;
     console.log(`  CHECK FAILED: ${msg}`);
   };
+  // one hour after each close email: the arithmetic adds up, every close email has a row, some rows are in the numbers
+  const h1 = hour1Rows(rows, ds);
+  for (const x of h1Mismatches(h1).slice(0, 20)) bad(`hour1: ${x}`);
+  if (h1.length !== rows.filter((r) => r.mail.way === "close").length) bad("hour1: not one row per close email");
+  const h1s = h1Summary(h1);
+  const g1 = h1s.groups.all;
+  if (g1.n === 0) bad("hour1: no row in the numbers on the walk");
+  if (g1.mailWin + g1.mailLoss + g1.mailDraw !== g1.n || g1.oppWin + g1.oppLoss + g1.oppDraw !== g1.n || g1.moveMail + g1.moveOpp + g1.moveFlat !== g1.n) bad("hour1: the counts do not add up");
+  console.log(`walk seed ${seed}: hour1 ${JSON.stringify(h1s.counts)}`);
   for (const x of ck.mismatches.slice(0, 20)) bad(`the live decision differs from decideZoneOnWindow: ${x}`);
   // a live email at the close is the close way's, and every close email's bar has a live email (at or before it)
   for (const o of outs) {
@@ -446,8 +631,15 @@ if (import.meta.main) {
       Deno.exit(1);
     }
     const rows = merged(outs);
+    const h1 = hour1Rows(rows, data);
+    const h1bad = h1Mismatches(h1);
+    if (h1bad.length) {
+      for (const x of h1bad.slice(0, 20)) console.log(`  HOUR1 ${x}`);
+      Deno.exit(1);
+    }
     await Deno.writeTextFile(`${OUT}/rows.csv`, csvOf(rows));
-    await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify(summaryOf(rows, outs, st), null, 1));
+    await Deno.writeTextFile(`${OUT}/hour1.csv`, h1Csv(h1));
+    await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify(summaryOf(rows, outs, st, h1), null, 1));
     // the numbers are printed by the workflow only after the Python agreed (research/macdlive-check.py)
     console.log(`written: ${rows.length} rows`);
   } else if (MODE === "print") {
@@ -459,5 +651,19 @@ if (import.meta.main) {
     }
     console.log(`live: ${JSON.stringify(s.live)}`);
     console.log(`pairs: ${JSON.stringify(s.pairs)}`);
+    // one hour after each close email (docs §8.144)
+    console.log(`hour1 counts ${JSON.stringify(s.hour1.counts)}`);
+    for (const [k, v] of Object.entries(s.hour1.groups as Record<string, H1Stats>)) {
+      console.log(
+        `  hour1 ${k.padEnd(8)} n ${v.n} | mail: win ${v.mailWin} loss ${v.mailLoss} draw ${v.mailDraw} pips sum ${fmt(v.mailPipsSum, 1)} mean ${fmt(v.mailPipsMean)} yen sum ${fmt(v.mailYenSum, 0)} mean ${fmt(v.mailYenMean, 0)} min ${fmt(v.mailYenMin, 0)} max ${fmt(v.mailYenMax, 0)}` +
+          ` | opp: win ${v.oppWin} loss ${v.oppLoss} draw ${v.oppDraw} pips sum ${fmt(v.oppPipsSum, 1)} mean ${fmt(v.oppPipsMean)} yen sum ${fmt(v.oppYenSum, 0)} mean ${fmt(v.oppYenMean, 0)} min ${fmt(v.oppYenMin, 0)} max ${fmt(v.oppYenMax, 0)}` +
+          ` | mid moved mail ${v.moveMail} opp ${v.moveOpp} flat ${v.moveFlat}`,
+      );
+    }
+    // the close emails since the live rule began (to set against the emails production sent)
+    const liveFrom = env("LIVE_FROM", "2026-10-30T02:00:00Z");
+    const h1lines = (await Deno.readTextFile(`${OUT}/hour1.csv`)).trim().split("\n");
+    console.log(`hour1 rows with tau >= ${liveFrom}: ${h1lines[0]}`);
+    for (const line of h1lines.slice(1)) if (line.split(",")[2] >= liveFrom) console.log(`  ${line}`);
   }
 }
