@@ -29,8 +29,13 @@ docs §8.145（spec の「Other holding times」）: 同じ行を、持つ時間
 以後に始まる最初の足にして作り、OUT/holds.csv の行（H の小さい順、その中は hour1.csv の順）と summary.json の holds
 （H の10進の文字ごとに hour1 と同じ { counts, groups }）を比べる。
 
+docs §8.146（spec の「The 15-minute emails」）: 環境変数 TF（無いか空なら 1h: ここまでのとおり）。TF=15min では、
+1時間足の代わりに GMO の15分足の日のファイル（<DIR>/<通貨>/15min/…）を読み、T(i) = t[i] ＋ 15分、同じ決まりで close
+だけ（live のメールは作らない）、確定の 0・1・3 分後（それぞれ1秒後）の読み込みのどれかが閉まりの中でなければ送る。
+追い方・hour1・holds は 1h と同じ。summary.json の meta.tf が TF と同じことも確かめる。
+
 使い方:
-  python3 -I research/macdlive-check.py --cache DIR --out OUT
+  [TF=1h|15min] python3 -I research/macdlive-check.py --cache DIR --out OUT
     DIR: <DIR>/<USD_JPY など>/<1hour|1min>/<bid|ask>/<鍵>.json（GMO の形）
     OUT: research/macdlive.ts の出力（rows.csv・hour1.csv・holds.csv と summary.json）。期間（start・end・
          loadFrom）は summary.json の meta から読む。hour1.csv・holds.csv が無いのも食い違い。
@@ -201,10 +206,13 @@ def decide(p, x):
 
 
 # ---------------------------------------------------------------- メールを作る
-def compute(cache, start, end, load_from, log):
+def compute(cache, start, end, load_from, log, tf=TF_DEFAULT):
     """2つの送り方のメールを作り、1通ずつ追う。(rows, pair_info, ld, chk, h1, holds) を返す。rows は並べた後の行、
     h1 は close のメールの1時間後の行（docs §8.144、rows と同じ順）、holds は H ごとの同じ形の行
-    （docs §8.145、{H: h1 と同じ順の行}）。"""
+    （docs §8.145、{H: h1 と同じ順の行}）。tf（docs §8.146）: '1h' はこれまでどおり、'15min' は15分足の確定で
+    close だけ（live は作らない）。"""
+    cfg = TFS[tf]
+    step = cfg['step']                 # 足の長さ: T(i) = t[i] + step
     ld = fc.LoadStats()
     emails = []
     pair_info = []
@@ -214,7 +222,7 @@ def compute(cache, start, end, load_from, log):
         t_pair = time.time()
         sym = pair.replace('/', '_')
         dec = 5 if pair.endswith('/USD') else 3
-        h1 = fc.load_tf(cache, sym, '1hour', HOUR, fc.keys_of(load_from, end), load_from, end, ld)
+        h1 = fc.load_tf(cache, sym, cfg['interval'], step, fc.keys_of(load_from, end), load_from, end, ld)
         t = [x[0] for x in h1]
         c = [fc.round_chart((x[1][4] + x[2][4]) / 2, dec) for x in h1]
         del h1
@@ -225,11 +233,11 @@ def compute(cache, start, end, load_from, log):
         n_close = n_live = n_early = n_gone = 0
 
         def email(way, i, tau, side, E, early, gone):
-            return dict(way=way, pair=pair, pi=pi, open=t[i], T=t[i] + HOUR, tau=tau, side=side, E=E,
-                        early=early, minutes=(t[i] + HOUR - tau) // MIN, gone=gone)
+            return dict(way=way, pair=pair, pi=pi, open=t[i], T=t[i] + step, tau=tau, side=side, E=E,
+                        early=early, minutes=(t[i] + step - tau) // MIN, gone=gone)
 
         for i in range(len(t)):
-            T = t[i] + HOUR
+            T = t[i] + step
             if T < start or T >= end:
                 continue
             if i + 1 < WINDOW:
@@ -238,17 +246,20 @@ def compute(cache, start, end, load_from, log):
             judged += 1
             base = c[i - WINDOW + 1:i]                 # 足 i−599 .. i−1（確定した終値）
             d_close = fc.zone_entry(base + [c[i]])     # close の決まり（600本の窓、flowz-check の関数）
-            p = prep(base)
-            chk['closes'] += 1
-            f_close = decide(p, c[i])
-            if f_close != d_close:
-                chk['mismatch'].append(f'{pair} close of the bar opening {fc.iso(t[i])}: fast {f_close} / zone_entry {d_close}')
-            sent = d_close is not None and mailed_at_close(T)
+            if cfg['live']:                            # 速い形は live のためだけ（15分足では使わない）
+                p = prep(base)
+                chk['closes'] += 1
+                f_close = decide(p, c[i])
+                if f_close != d_close:
+                    chk['mismatch'].append(f'{pair} close of the bar opening {fc.iso(t[i])}: fast {f_close} / zone_entry {d_close}')
+            sent = d_close is not None and mailed_at_close(T, cfg['reads'])
             if d_close is not None and not sent:
                 chk['notMailed'] += 1
             if sent:
                 mine.append(email('close', i, T, d_close[0], c[i], 0, 0))
                 n_close += 1
+            if not cfg['live']:
+                continue                               # 15分足: close だけ（live のメールは作らない）
             # live: 作りかけの足を1分ごとに
             live = None
             j = bisect.bisect_left(mt, t[i])
@@ -298,7 +309,7 @@ def compute(cache, start, end, load_from, log):
         del m1
         emails.extend(mine)
         pair_info.append(dict(pair=pair, bars1h=len(t), judged=judged))
-        log(f'  {pair}: 1h bars {len(t)}, judged {judged} (short of 600: {short}), 1-min bars {n_m1}; '
+        log(f'  {pair}: {tf} bars {len(t)}, judged {judged} (short of 600: {short}), 1-min bars {n_m1}; '
             f'close emails {n_close}; live emails {n_live} (early {n_early}, gone {n_gone}, at the close '
             f'{n_live - n_early}) ({time.time() - t_pair:.1f}s)')
     order = {w: k for k, w in enumerate(WAYS)}
@@ -715,6 +726,9 @@ def main():
     ap.add_argument('--out', required=True)
     a = ap.parse_args()
     t_all = time.time()
+    tf = os.environ.get('TF') or TF_DEFAULT        # docs §8.146: 1h（無いか空）か 15min
+    if tf not in TFS:
+        die(f'TF must be one of {", ".join(TFS)}, not {tf!r}')
     try:
         with open(os.path.join(a.out, 'summary.json'), encoding='utf-8') as f:
             S = json.load(f)
@@ -722,6 +736,8 @@ def main():
         start, end, load_from = (fc.ms_of(meta[k]) for k in ('start', 'end', 'loadFrom'))
     except Exception as e:  # noqa: BLE001
         die(f'summary.json meta: {e!r}')
+    if meta.get('tf') is not None and meta.get('tf') != tf:
+        die(f'summary.json meta.tf is {meta.get("tf")!r} but TF is {tf!r}: run the check with the TF of the TypeScript run')
     try:
         with open(os.path.join(a.out, 'rows.csv'), newline='', encoding='utf-8') as f:
             rd = csv.DictReader(f)
@@ -747,14 +763,15 @@ def main():
         hd_err = repr(e)               # hour1.csv と同じ: 食い違いとして数え、ほかは比べ続ける
     if not os.path.isdir(a.cache):
         die(f'no cache folder {a.cache}')
-    print(f'macdlive-check (docs §8.131): bars closing in [{fc.iso(start)}, {fc.iso(end)}), 1h bars from '
+    print(f'macdlive-check (docs §8.131): bars closing in [{fc.iso(start)}, {fc.iso(end)}), {tf} bars from '
           f'{fc.iso(load_from)}')
+    print(f'  TF {tf} (docs §8.146): {TFS[tf]["label"]}')
     if all(fc.ms_of(REAL[k]) == fc.ms_of(meta[k]) for k in REAL):
         print('  the period is the spec\'s (START 2024-01-01, END 2026-10-29T21:00Z, bars from 2023-10-01)')
     else:
         print('  the period is NOT the spec\'s real one (a test run)')
 
-    rows, pair_info, ld, chk, h1, holds = compute(a.cache, start, end, load_from, print)
+    rows, pair_info, ld, chk, h1, holds = compute(a.cache, start, end, load_from, print, tf)
     mine = summary_of(rows, pair_info)
     for way in WAYS:
         s = mine['ways'][way]['all']
@@ -771,13 +788,19 @@ def main():
         print('  files not read: ' + '; '.join(ld.failed_ex))
     print(f'  signals at a close not mailed (closure) {chk["notMailed"]}; live minutes judged {chk["minutes"]}, without '
           f'a price {chk["noPrice"]}, with a signal in a possibly closed minute (skipped) {chk["blocked"]}')
-    print(f'  the fast live decision against zone_entry on a rebuilt 600-close window: closes of every judged bar '
-          f'{chk["closes"]}, minutes with a signal {chk["liveSignals"]}, other minutes sampled {chk["sampled"]}; '
-          f'mismatches {len(chk["mismatch"])}')
+    if TFS[tf]['live']:
+        print(f'  the fast live decision against zone_entry on a rebuilt 600-close window: closes of every judged bar '
+              f'{chk["closes"]}, minutes with a signal {chk["liveSignals"]}, other minutes sampled {chk["sampled"]}; '
+              f'mismatches {len(chk["mismatch"])}')
+    else:
+        print(f'  TF {tf}: no live emails (the fast live decision is not used; every close decided by zone_entry)')
 
     C = Cmp()
     for m in chk['mismatch']:
         C.bad('fast decision: ' + m)
+    C.fields += 1                                   # meta.tf（docs §8.146: どちらの TF でも書く）
+    if meta.get('tf') != tf:
+        C.bad(f'meta.tf: TS {meta.get("tf")!r} / Python {tf!r}')
     compare_rows(C, rows, head, ts_rows)
     skipped = compare_summary(C, mine, S)
     print(f'compared {C.fields} fields: {C.near} equal only within {REL:g} relative (largest {C.near_max:.3g}), '
