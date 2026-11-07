@@ -48,13 +48,20 @@ const END = Date.parse(env("END", "2026-10-29T21:00:00Z"));
 // the bars before START the 600-bar window reads
 const LOAD_FROM = Date.parse(env("LOAD_FROM", "2023-10-01T00:00:00Z"));
 const OUT = env("OUT", "research/out/macdlive");
+// docs §8.146: the 15-minute emails (v7, the same rule on the 15-minute chart) with TF=15min; only the close way then
+const TF = env("TF", "1h") as "1h" | "15min";
+if (TF !== "1h" && TF !== "15min") throw new Error(`TF must be 1h or 15min, not ${TF}`);
+const BAR = TF === "1h" ? HOUR : 15 * MINUTE;
+// the sweep's reads of a closed bar (signal-alerts gmoIntervalsDue): the 1-hour chart 0, 3 and 5 minutes after its
+// close (flowz-lib mailedAt), the 15-minute chart 0, 1 and 3
+const mailedTf = (T: number): boolean => (TF === "1h" ? mailedAt(T) : [0, 1, 3].some((m) => !isPossiblyClosed(T + m * MINUTE + 1000)));
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
 const decimalsOf = (pair: string) => (pair.includes("JPY") ? 3 : 5);
 
 // the chart's closed mid bars (historyRead: Number(v.toFixed(d))) of quotes read at END
 const midBars = (pair: string, qs: QuoteCandle[]): Bar[] =>
-  historyRead(pair, "1h", qs, END).candles.map((c) => ({ t: Date.parse(c.datetime.replace(" ", "T") + "Z"), close: c.close }));
+  historyRead(pair, TF, qs, END).candles.map((c) => ({ t: Date.parse(c.datetime.replace(" ", "T") + "Z"), close: c.close }));
 
 interface PairData {
   pair: string;
@@ -184,12 +191,14 @@ const emailsOf = (d: PairData, fromT: number, toT: number, ck: Checks): { close:
     gone,
   });
   for (let i = W - 1; i < bars.length; i++) {
-    const T = bars[i].t + HOUR;
+    const T = bars[i].t + BAR;
     if (T < fromT || T >= toT) continue;
     judged++;
     const cd = decideZoneOnWindow(bars, i);
-    const closeMail = cd && mailedAt(T) ? mailOf("close", i, T, bars[i].close, cd, false, false) : null;
+    const closeMail = cd && mailedTf(T) ? mailOf("close", i, T, bars[i].close, cd, false, false) : null;
     if (closeMail) close.push(closeMail);
+    // the live way is the 1-hour study's only (docs §8.131); with TF=15min no live email is computed (docs §8.146)
+    if (TF !== "1h") continue;
     const p = prepare(bars, i);
     let found: LiveMail | null = null;
     if (p) {
@@ -272,7 +281,7 @@ const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats, h1: readonly H1
   }
   const early = rows.filter((r) => r.mail.way === "live" && r.mail.early);
   return {
-    meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM) },
+    meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), tf: TF },
     ways,
     live: {
       early: early.length,
@@ -518,7 +527,7 @@ const loadFiles = async (src: Source): Promise<{ data: PairData[]; st: LoadStats
   const data: PairData[] = [];
   const weekend = weekendOutOf("inside");
   for (const pair of PAIRS) {
-    const h = await loadTf(src, pair, "1h", LOAD_FROM, END, st, weekend);
+    const h = await loadTf(src, pair, TF, LOAD_FROM, END, st, weekend);
     const m1 = await loadM1(src, pair, START, END, st);
     data.push({ pair, bars1h: midBars(pair, quotesOf(h.bars)), book: bookOf(m1) });
     console.log(`${pair}: 1h ${h.bars.n} (from ${h.bars.n ? iso(h.bars.t[0]) : "-"}), 1min ${m1.n}`);
@@ -555,8 +564,9 @@ const coarsen = (m: M1, step: number): QuoteCandle[] => {
 const writeWalkFiles = async (dir: string, seed: number) => {
   for (const pair of PAIRS) {
     const { m1, q15 } = synthesize(pair, PAIRS.indexOf(pair), { seed, trend: 0, startPips: null }, LOAD_FROM, END);
-    const barsOf = (qs: QuoteCandle[], tf: "1h" | "4h") => fromQuotes(qs, (t) => ruleKeyOf(tf, t));
-    await writeWalk(dir, pair, { "5min": emptyBars(0), "15min": emptyBars(0), "1h": barsOf(coarsen(m1, HOUR), "1h"), "4h": barsOf(coarsen(m1, 4 * HOUR), "4h") }, LOAD_FROM, END);
+    const barsOf = (qs: QuoteCandle[], tf: "15min" | "1h" | "4h") => fromQuotes(qs, (t) => ruleKeyOf(tf, t));
+    // the 15-minute files too (docs §8.146: the TF=15min study reads them)
+    await writeWalk(dir, pair, { "5min": emptyBars(0), "15min": barsOf(coarsen(m1, 15 * MINUTE), "15min"), "1h": barsOf(coarsen(m1, HOUR), "1h"), "4h": barsOf(coarsen(m1, 4 * HOUR), "4h") }, LOAD_FROM, END);
     await writeGmoFiles(dir, pair, { m1, q15 }, LOAD_FROM, END);
   }
 };
@@ -571,7 +581,7 @@ const poisoned = (m: M1, fromMs: number, pips: number): M1 => {
 const synthPair = (seed: number, pair: string, cut?: { T: number; pips: number }): PairData => {
   const { m1 } = synthesize(pair, PAIRS.indexOf(pair as typeof PAIRS[number]), { seed, trend: 0, startPips: null }, LOAD_FROM, END);
   const m = cut ? poisoned(m1, cut.T, cut.pips) : m1;
-  return { pair, bars1h: midBars(pair, coarsen(m, HOUR)), book: bookOf(m) };
+  return { pair, bars1h: midBars(pair, coarsen(m, BAR)), book: bookOf(m) };
 };
 
 // ---- the checks on the walk ----------------------------------------------------------------------------

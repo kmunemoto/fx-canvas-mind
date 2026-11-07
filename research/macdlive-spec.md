@@ -148,3 +148,26 @@ summary.json `holds`: an object keyed by `H` written as a decimal string (`"5"`,
 
 The second implementation builds the same rows for every `H` and must find the same holds.csv (every column; numbers
 equal as doubles) and the same `holds` (as for `hour1`).
+
+## The 15-minute emails (TF = 15min, docs §8.146, 2026-11-07)
+
+The owner (2026-11-07): 「15分足のメールでも同じように調べて」 — the same comparison for the 15-minute MACD email (v7:
+the same rule on the 15-minute chart, docs §8.127; mailed 2026-10-26 to 10-30). Both implementations read an environment
+variable `TF`: `1h` (the default: everything above, unchanged) or `15min`. With `TF = 15min`:
+
+- Bars: GMO's 15-minute day files instead of the 1-hour ones (research/flowz-check.py's `load_tf` with `15min`, the same
+  merge and weekend rule), each bar's close the chart's mid as above. Bar `i` opens at `t[i]` and closes at
+  `T(i) = t[i] + 15 minutes`. `pairs[].bars1h` and `judged` count these 15-minute bars (the key names stay).
+- The rule: exactly as above (600 closes, 120 bars, 95%), on the 15-minute closes.
+- Only the **close** way: no **live** email is computed (no `live` row in rows.csv; `ways.live` holds the stats of no rows,
+  each pair too; `live` is `{ early: 0, gone: 0, minutesMedian: null, minutesMax: null }`).
+  The stats of no rows: the counts (`mails`, `filled`, `unfilled`, `tp`, `held`, `guideTp`, `guideSl`, `guideHeld`,
+  `guideBoth`) 0, the sums (`pipsSum`, `heldPipsSum`, `guidePipsSum`) 0, and `win`, `pipsMean`, `pipsMedian`, `maeMedian`,
+  `maeMax`, `holdMedian`, `holdMax`, `heldPipsMin`, `guideWin`, `guidePipsMean` null.
+- Mailed when one of the reads 0, 1 and 3 minutes after the close (each a second in) is not in `is_possibly_closed`
+  (the 15-minute chart's reads, signal-alerts `gmoIntervalsDue`).
+- The email: side, `τ = T(i)`, `E` = the bar's close; followed (owner's way, guide), hour1 and holds exactly as above.
+- summary.json `meta` gains `tf` (`"1h"` or `"15min"`) in both modes.
+
+The run with `TF = 15min` writes to its own OUT folder. The second implementation, run with the same `TF`, must find the
+same files as above.
