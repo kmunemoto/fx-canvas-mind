@@ -144,8 +144,15 @@ examples fix (7.2) and `print.txt`'s notes. Labels contain no comma.
 | `lawsearch-hand.ts` | D | the hand runner | everything |
 | `lawsearch.ts` | D | the program: modes, gates, the pipeline | everything |
 | `lawsearch-flip.ts` (written in C2; listed C3) | D | spec 14.2's flip conditions on the exact mirror (23.1), 7.9 | const, rules, bars, gen, items, events, checks, stage0, trade, types |
+| `lawsearch-par.ts` (written in C4b; listed C4c, 2026-11-07) | D | the worker pool (`WorkerPool`) that runs the units of the checks cut, poison and presence on `WORKERS` workers (7.3, 7.7, 12.1) | checks and types (types only) |
+| `lawsearch-par-worker.ts` (written in C4b; listed C4c, 2026-11-07) | D | one worker: answers each job with `lawsearch-checks.ts`'s `runUnitJob`; reads no file and no environment, writes nothing | checks, types |
 | `.github/workflows/lawsearch.yml` | D | CI | — |
 | `research/money-stats.ts` (+1 export) | C | U(x, ν) of spec 8.5 | — |
+
+(C4c, 2026-11-07) `lawsearch-candat-check.ts`, C4b's CI guard for `candidatesAt`, is deleted with `candidatesAt`
+(7.8, 12 rule 2). `lawsearch.ts` imports `lawsearch-par.ts`; the worker module is not imported by any module but
+started by the pool as a Web Worker (so `deno info` of a program does not list it), and it imports only
+`lawsearch-checks.ts` (stage-0 safe) and the types.
 
 Rules on the graph:
 
@@ -373,6 +380,7 @@ export function indOf(series: Series, higher?: { series: Series; g: Int32Array }
 export function toF64(xs: ReadonlyArray<number | null>): Float64Array;   // null / non-finite → NaN
 export function smaOldest(x: Float64Array, p: number, plant?: string): Float64Array;   // plant smaNewestFirst: pine.ts sma
 export function donchianOf(s: Series, n: number): DonchianOut;           // §8.113 C1 (spec 3.3): HH/LL of i−n..i−1, s from 0
+export function donchianScan(s: Series, n: number): DonchianOut;         // C4b: b3a2c43's rescan, for n not a whole number ≥ 1
 export function bigmoveOf(s: Series, o: BigmoveParams): BigmoveOut;      // §8.113 C17 with 17.3's substitutions
 export function bigmoveDefault(step: number): BigmoveParams;            // { 288, 250, 6, 2, 12 × step }
 export function xUp(a: Float64Array, b: Float64Array | number): Tri;   // 3.1: a[i−1] ≤ b[i−1] && a[i] > b[i]; −1 when any of the 4 is NaN; −1 at i = 0
@@ -383,6 +391,10 @@ export function xDn(a: Float64Array, b: Float64Array | number): Tri;
   pineRma(dn) with up and dn as spec 3.2 gives them (the same arithmetic as inside pineRsi). The TR array is pineAtr's
   TR (TR[0] = H[0] − L[0]).
 - The bar objects for pineAtr are made once per series.
+- (C4b, 2026-11-05; written here C4c, 2026-11-07) `donchianOf` takes HH and LL from two monotone queues of bar
+  indices (O(len) in all); `donchianScan` is b3a2c43's rescan of each window, kept for n that is not a whole number
+  ≥ 1. `rsi(p)` makes up, dn, U and D only when first read (getters); a signal reads only the RSI. Why both give
+  b3a2c43's values, and what guards them: 12.1 items 4 and 5.
 - The higher Ind is `indOf(higher.series)`.
 - bigmove:
   - `r[t] = Math.log(C[t] / C[t−1])`. It is usable when t ≥ 1 and `s_t − s_{t−1} ≤ gapMs`.
@@ -430,6 +442,10 @@ The definitions now (spec 4.1–4.4, 5, 17.3):
   says group O.
 - Families: E04 is written as `rsiBack(p, L)` and E26 as `donchianA(n)`, so E01–E06 and E27 are one line each later.
   They are not registered now (`notBuilt`).
+- (C4b, 2026-11-05; written here C4c, 2026-11-07) `checkRegistry`: when the module is loaded, before any file is
+  read, the program stops if a key of `ITEM_MAP` or `FILTER_MAP` is not its definition's id. `lawsearch-events.ts`
+  keeps an Ind's builds under the definition's id (`BUILDS`, 5.3), which is exact only while each id names one
+  definition (12.1 item 3). The check covers every item and F registered later too.
 
 ### 5.3 `research/lawsearch-events.ts`
 
@@ -475,6 +491,18 @@ export function avoidOf(text: string): ReadonlySet<string>;          // parseSpr
 
 The output lists every bar with a status (emit, f_none, both), in bar order, buy before sell.
 
+(C4c, 2026-11-07; C4b's review, findings 1 and 3) How `candidatesOf` is written now:
+
+- It is one walk over every bar of the series it is given, from bar 0, in order: `prepare` (① and what ②–④ and the
+  warm-up read: the builds, the kind, the first bar whose condition is not −1), then the loop ②–④ at i = 0 … n − 1
+  (b3a2c43's loop, its body written out once per direction for speed), then `finish` (⑤ and warmOk).
+- It is the only way to get a trial's rows. The main run (`trialSignals`) and the checks of spec 15 (`decisionOf`,
+  7.3) both call it, the checks on their own cut, window, poisoned or edited series. C4b's `candidatesAt` and
+  `rowsAtBar` (the loop's body run at one bar alone) are gone. Why: 12 rule 2.
+- The builds of items and F's go through `buildOf`: kept per Ind (`BUILDS`, a WeakMap keyed by the Ind), so that
+  the trials on one Ind with the same item or F build it once (C4b; 12.1 item 3).
+- The plants `lastBarStateG3` and `lastBarStateG5` (8) are in this loop.
+
 **reasonOf** (spec 6; X = T + `N_BARS` × step), first match:
 
 1. ① and ①b: `halfOf`. It returns first or second (or stage3) when the half's rule holds. It returns `r1b` when
@@ -506,6 +534,10 @@ Plant `splitShift`: SPLIT + 1 week, and wk 2889 in place of 2888.
   at least `OPEN_MIN_PAIRS` pairs have a bar starting at a.
 - A hole is a run of adjacent open slots where the pair has no bar, at least `HOLE_MIN_SLOTS[tf]` long. A slot that
   is not open breaks the run.
+- (C4b, 2026-11-05; written here C4c, 2026-11-07) The clock part of "open" (`r2(a) || isGmoHoliday(a)`, which reads
+  the time alone) is computed once per slot and kept for the run (`CLOCK`, per step, in blocks of 4,096 slots). The
+  parts that depend on bars are computed from the starts each call is given (12.1 item 8). Each thread (the main one
+  and each worker) keeps its own table.
 
 **r3** is true when some hole slot a of the pair has `a < T && a + step > sFrom` (touching an end does not count).
 Plant `reasonUsesFuture`: the window is [sFrom, X) and the holes are those of the whole series (it reads bars after
@@ -835,6 +867,39 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
   (or of what they call) keeps the speed-up rules of 12: the outputs do not change, the checks keep their power, the
   bytes do not depend on the number of workers, and what is checked and how many targets and probes there are stay
   as above.
+- (C4c, 2026-11-07; C4b's review, findings 1 and 3) How the three checks recompute a decision, as the code now is:
+  - Each check is a list of units, one recomputed decision each:
+    - `cut`: one (target k, trial), on the five pairs cut at T_k (`cutGotAt`);
+    - poison: one probe bar i of one trial, on its pair poisoned after T_i (`poisonGotAt`);
+    - presence: one (probe bar i, variant (i) or (ii)) of one trial, on the timeframe with those bars deleted and
+      its holes made again (`presenceGotAt`).
+
+    These three functions are the checks' loop bodies of b3a2c43, moved into functions in C4b (poison's with the
+    poison tables of 12.1 item 6). Every check of 7.7's
+    pipeline that cuts, poisons or deletes uses them: `cut`, `cut.chosen.first`, `cut.chosen.second`, `poison`,
+    `presence`, and 13's `suspect13.cut.*`, `suspect13.poison1000.*` and `suspect13.presence.*`.
+  - A unit's decision is `decisionOf` on the unit's own series and its own Ind (`indFor`: the higher bars rebuilt
+    from that series when the trial reads them):
+    - spec 5's rows come from `candidatesOf` (5.3), the main run's own function, which walks every bar of that
+      series from bar 0 (a cut series ends at its target, so the walk ends there; B06 walks its 291-bar window);
+    - then each row at the compared bar gives `d:status:warm:reason:stratum`, with the reason from `reasonOf` and
+      the unit's own `ExclCtx`: the cut's holes; for poison, the uncut run's holes (poison changes prices, never
+      which bars exist); for presence, holes made again from the edited timeframe.
+  - C4b's `candidatesAt` (the per-bar body run at bar k alone after `prepare`) is gone, and with it the CI step that
+    sampled it (7.8). Reason: 12 rule 2.
+  - Units share only what sees the same series. At one cut target, the cut's holes and the cut's Ind (with the builds
+    kept on that Ind, `BUILDS`) are made once and read by every trial decided at that target. Poison's uncut holes
+    (when the caller gives none) and its poison tables are made once per check in the main thread, or once per task
+    on each worker, from that thread's copy of the uncut series (12.1).
+  - The uncut decision ("want") is made in the main thread from the run's own signals (`decisionOfClassified`). A
+    unit returns its decision only when it differs from want. The check then replays the units in its own order
+    (target by target, trial by trial; probe by probe) and does there everything its loop did: `compared`, the
+    examples, the rows of cut_fail.csv, the planted mark.
+  - A unit runs in the main thread (`inPlace`, `WORKERS=0`) or on a worker (`lawsearch-par.ts`, `WORKERS` ≥ 1; 7.7).
+    The answers are replayed in job order, so the files are the same bytes for any `WORKERS` (12 rule 3).
+  - Why each shared or kept value is exact, and which test guards it: 12.1. The two places where the equality with
+    the main run still rests on how future code is written (the reason at bar k from `reasonOf` alone; caches that
+    must stay keyed by the Ind): 12.2.
 - **retraceCheck**: reads `<run>/gmo/<SYM>/<interval>/<side>/<key>.json` with JSON.parse. It finds the entry and exit
   bars by openTime (keys from jstDayKey; no loadTf, no mergeSides), recomputes pl and m in points, and compares.
 - **PRINT_KEYS** lists the key patterns of `print.txt`. Any other key stops the print.
@@ -960,8 +1025,29 @@ The other environment variables:
   E8) `note.cut_max` names every check the cap reaches: `cut`, `cut.chosen.first`, `cut.chosen.second`,
   `suspect13.cut.stage1` and `suspect13.cut.stage2` (7.3); so does the header comment of `lawsearch.ts`, which in C3
   says "all three cut checks". (E9) `checks.csv` gets no cap marker.
+- `WORKERS` (C4b, 2026-11-05; written here C4c, 2026-11-07, C4b's review, finding 3): how many workers run the units
+  of the checks cut, poison and presence (7.3; `research/lawsearch-par.ts`).
+  - Unset or empty: 4. Otherwise a whole number from 0 to 64 in decimal digits, with no sign, no leading zero and no
+    space (`^(0|[1-9][0-9]*)$` and ≤ 64). `0` runs every unit in the main thread (`inPlace`).
+  - Anything else is refused with exit 2 and the line `REFUSED: WORKERS "<v>" is not a whole number from 0 to 64 (the
+    workers of the checks cut, poison and presence; unset for 4)`, before any file is read: it is read right after
+    `LS_PLANT` and `CUT_MAX`, before gate 1. It is read in `MODE=hand` too (and refused there), where no check uses
+    it; the real modes are refused before it is read.
+  - The output files are the same bytes for every allowed value (12 rule 3). So no file records it: `config.json` has
+    no field for it, and only print.txt's `time.*` lines change with it. The console's stderr says `[lawsearch] the
+    checks' units run on <n> workers (WORKERS)` (or "the main thread").
+  - The pool is made after gate 3, before the pipeline starts. Its workers start at the first check that uses them
+    and are closed when the run ends. At each run of the pool (a cut check: one per timeframe; poison and presence:
+    one per check) the universe being
+    checked is sent to each worker again before its first job of that run (a structured clone: about 100 MB per
+    worker in the small trial; C4c measured a peak RSS of 2.9–3.4 GB for a whole run at `WORKERS=4`).
+  - A unit's error is thrown again at that unit, in the check's order and with the same message, as the check's loop
+    threw it before C4b (the program tells a STOP or a refusal by its message, so they stay what they were). A worker
+    that dies stops the run with exit 1.
+  - The yml sets `WORKERS: "4"` for every job (7.8), and its hand step 8 runs the refusal.
 
-The gates run in order, before any bar is read:
+The gates run in order, before any bar is read (before them, the real modes are refused, then `MODE`, `LS_PLANT`,
+`CUT_MAX` and `WORKERS` are checked; each refusal is exit 2):
 
 1. `checkRulesFiles()`.
 2. Every requested trial is built (`trialBuilt`); otherwise refuse and name the first one that is not.
@@ -1046,7 +1132,7 @@ on:
   workflow_dispatch:
 permissions: { contents: read }
 jobs:
-  hand:     # deno check research/lawsearch*.ts; the stage-0 graph; TS hand; Python hand; the hand plants (TS and Python)
+  hand:     # deno check; the stage-0 graph; TS hand; Python hand; the hand plants; real modes, CUT_MAX, WORKERS refused
   syn:      # needs hand; matrix of 10's runs; TS syn → Python --run (recompute + compare); the run plants; uploads research/out/lawsearch/** as an artifact
 ```
 
@@ -1069,8 +1155,36 @@ jobs:
      reads `CUT_MAX` (`syn` or `walkfiles`, with the rest of its settings valid) must exit 2 before any file is read.
      It may be part of step 6. Reason: the refusal was written in C3 (before, `0`, `-3` or `abc` switched the cut off
      or were ignored), but no step ran it, so a later change could bring the old behaviour back unseen.
+     - (Described C4c, 2026-11-07, as the yml has it since C4b) The step's values are `0`, `00`, `07`, `-3`, `+3`,
+       `abc`, `1.5`, `1e3`, `0x10`, `" 3"`, `"3 "`, `9007199254740992` (2^53, not a safe integer) and `Infinity`, each
+       with `MODE=syn` and with `MODE=walkfiles`, the rest of the mode's settings valid. Each probe runs with no read or
+       write permission (`--allow-env --no-prompt` only), so a program that touched a file before the refusal would
+       stop on the missing permission (`NotCapable`, exit 1). Each must exit 2, print the exact refusal line, and
+       leave no output folder. The controls `1`, `9007199254740991` and empty must pass the refusal and stop on the
+       first read (exit 1, `NotCapable`), which shows that a probe does see a read.
+  8. (C4b, 2026-11-05; written here C4c, 2026-11-07, C4b's review, finding 3) Invalid `WORKERS` values are refused,
+     as in step 7: `-1`, `+1`, `abc`, `65`, `100`, `04`, `00`, `1.5`, `1e1`, `0x4`, `" 4"`, `"4 "`, `Infinity` and
+     `NaN`, each with `MODE=syn` and `MODE=walkfiles`, with no read or write permission: each must exit 2, print 7.7's
+     `REFUSED: WORKERS …` line exactly, and leave no output folder. The controls `0`, `1`, `4`, `64` and empty must
+     pass the refusal and stop on the first read (exit 1, `NotCapable`). C4c ran the step as extracted from the yml:
+     exit 0.
+- (C4b, 2026-11-05; written here C4c, 2026-11-07) The workflow sets `WORKERS: "4"` for every job (GitHub's
+  `ubuntu-latest` runner has 4 vCPUs), so every run step's checks run their units on 4 workers. No step compares two
+  `WORKERS` values: that the bytes do not depend on it (12 rule 3) is shown by local runs (12.1).
 - **syn** (Python 3.11 + numpy; Deno 2.9.6): one job per run of 10.
   1. TS `MODE=syn`.
+     - (C4b, 2026-11-05; removed C4c, 2026-11-07) C4b put a step here: "The checks' one-bar candidates equal
+       candidatesOf's rows at every bar", which ran `research/lawsearch-candat-check.ts` on the run's bars (C4b's
+       `candidatesAt` at every bar of the uncut series, in a scrambled order, for every trial and pair, with the run's
+       options and with `noRisingEdge`). C4c removed the step and deleted the file together with `candidatesAt`
+       (5.3, 7.3): no one-bar path is left to compare. The step compared on the uncut series only, one series end
+       per pair, so it caught a look-ahead at the series' end only by chance (C4b's review, finding 1; 12 rule 2).
+       No "prefix" step replaces it: the C4b reviewer's prototype (`candidatesAt` against `candidatesOf` at the last
+       bar of 2,380 cut prefixes of C 7101) and design B's prefix pass both tested `candidatesAt`, and neither was
+       taken. The run plants `lastBarStateG3` and `lastBarStateG5` (step 3) guard in its place: on C4b's one-bar path
+       they gave exit 0, not the 3 that step 3 wants, so the step fails if such a path comes back. CI loses the step
+       (about 90 s per syn job) and gains two plant runs on CMP-C 7101 (212 s and 208 s in C4c's local runs at
+       `WORKERS=4`).
   2. `python3 -I research/lawsearch-check.py --run <run>` (its own recompute, then the comparison; exit 5 on a
      mismatch).
   3. The run plants of 8 (`avoidFull` and `secondHalfAll` on CMP-N 1001, `reasonUsesFuture` on CMP-C 7101), each
@@ -1084,6 +1198,14 @@ jobs:
      says "not opened", and cut_fail.csv is written. (C4c, 2026-11-07) Also on CMP-C 7101: `lastBarStateG3` and
      `lastBarStateG5` (exit 3; stage 0's `cut` failed on a trial, with its `cut,stage0` rows in cut_fail.csv; no
      `syn2` row in load.csv and no stage2.csv).
+     - (C4c, 2026-11-07) The yml tests, for each of the two: the exit; a failed `cut` row of an m15 or h1 trial in
+       checks.csv (`^(m15|h1)\.[^,]*,cut,0,`); a `cut,stage0,` row in cut_fail.csv; no stage2.csv and no `syn2` row in
+       load.csv. As a negative control, each of the three file tests flags the clean C 7101 dump (C4c's integrator;
+       checked again by the C4c docs writer). C4c's local runs: exit 3; the cut failed on 8 of the 12 trials (m15 and
+       h1, E04 and E26, F00 and F01), with 461 (G3) and 423 (G5) cut_fail rows; print.txt's `note.stage2` says "not
+       opened". Every file (print.txt without `time.*`) is the same bytes as b3a2c43's with the same plant (the C4c
+       restore designer's comparison of all 77 files; the integrator's runs matched on the six small files). C4b's
+       code gave exit 0, every file as the clean run.
   4. O's runs expect exit 3, the cut and poison checks failed, and the E26 rows' suspicion hit. (C3, 2026-11-05; the
      lead's D8) They now end before stage 2. The O step still requires the cut and poison failures on the four E26
      trials, their stage-1 suspicion hits, and no other failed check; it also requires that stage 2 was not opened
@@ -1179,7 +1301,7 @@ required now.
 | `dropSecondStrata` (C3, 2026-11-05; the lead's D4) | D: select0 (`stage0`'s new `plant` argument) | for m15.E04.F00 only (a trial CMP-N 1001 does not choose), the second half's blind strata lose every stratum of USD/JPY, so its second-half noBlind is above 0 (C2's refute 4 made the same edit on C 7101: noBlind 810, and the run then exited 0) | stage 0's noBlind stop (7.4) on `CMP-N 1001`: exit 3, `stop.stage0` failed naming m15.E04.F00's second half, no stage-1 or stage-2 file |
 | `blindRowHit` (C3, 2026-11-05; the lead's D10) | D: lawsearch.ts (on `suspectOf`'s row, stage 1) | at stage 1, the blind row `blind.m15.USD_JPY.buy` is reported as hit (`hit_a` and `hit` 1; its measures unchanged) | the spec 13 stop, end to end on `CMP-N 1001`: exit 3; `suspect.blind.stage1` failed; that suspect.csv row has hit 1; print.txt withholds stage 1's numbers and says STOP; stage 2 not opened (no `syn2` row in load.csv, no stage2.csv) |
 | `chosenCutFirstDiff` (C3, 2026-11-05; the TS builder, asked by the lead: C2 never ran the stop before stage 2 on a full run) | D: cutCheck (check `cut.chosen.first` only) | the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes (the choice is made before this check) | the stop before stage 2 (7.7), end to end on `CMP-C 7101` (it chooses h1.E04.F00): exit 3; `cut.chosen.first` failed on that trial (stage `stage1end`); its bar is in cut_fail.csv; print.txt withholds stage 1's numbers and its `note.stage2` says "not opened"; no `syn2` row in load.csv, no stage2.csv |
-| `lastBarStateG3`, `lastBarStateG5` (C4c, 2026-11-07; C4b's review, finding 1; the names are the designer's, for the lead to confirm) | B: candidatesOf (spec 5's walk, the loop the main run executes) | on the series' last bar, a raw signal is dropped when the last row emitted before it is exactly 3 (G3) or 5 (G5) bars back: a look-ahead that mixes state carried across bars with the series' end | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on trials (cut_fail.csv names the bars), stage 2 not opened. b3a2c43 (candidatesOf on the cut) fails it; C4b's one-bar candidatesAt did not (exit 0, every file as the clean run) |
+| `lastBarStateG3`, `lastBarStateG5` (C4c, 2026-11-07; C4b's review, finding 1; the names are the designer's, for the lead to confirm) | B: candidatesOf (spec 5's walk, the loop the main run executes) | on the series' last bar, a raw signal is dropped when the last row emitted before it is exactly 3 (G3) or 5 (G5) bars back: a look-ahead that mixes state carried across bars with the series' end | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on trials (cut_fail.csv names the bars), stage 2 not opened. b3a2c43 (candidatesOf on the cut) fails it; C4b's one-bar candidatesAt did not (exit 0, every file as the clean run). C4c's runs: the cut failed on 8 of the 12 trials, with 461 (G3) and 423 (G5) cut_fail rows, the same files as b3a2c43's with the plant (7.8 syn step 3) |
 
 The names of the three C3 run plants, `dropSecondStrata`, `blindRowHit` and `chosenCutFirstDiff`, were confirmed by
 the lead 2026-11-05 (C4a).
@@ -1334,6 +1456,12 @@ hit, and the other checks must pass.
   - The speed-up (the owner's answer 「まず速くする（おすすめ）」 to "step 4 does not fit a 6-hour job"): 12's rules.
   - E10, E11 and E14 are the Python comparator's (`lawsearch-dump.md` 9.3, 11.12, 2), and E12 rewords the sealed-dump
     rule (`lawsearch-dump.md` 12); the TS's files do not change for them.
+- **O-13 for the lead** (C4c, 2026-11-07; C4b's review, findings 1–3): C4c restores b3a2c43's cut path
+  (`candidatesOf` on the check's own series; 12 rule 2), fixes the yml's Python hand-plant step (7.8 hand step 5) and
+  writes C4b's code into this file (3, 5, 7.3, 7.7, 7.8, 12.1). Open: the two points of 12.2 (the reason at bar k
+  from `reasonOf` alone; caches that must stay keyed by the Ind), the plant names `lastBarStateG3` and
+  `lastBarStateG5` (8), and the cost (12.3: one step-4 run estimated at 3.5 h at `WORKERS=4` at the stand-in target
+  count, 8.8 h if every bar were a target). No spec question.
 
 ---
 
@@ -1386,16 +1514,36 @@ The rules (the lead's hard rules, C4b):
    - A shortcut that is exact only because today's 12 trials happen to have a property is not allowed. For example:
      that no built item reads another pair's bars or the higher timeframe, so that a target's cut could leave the
      other pairs or the higher bars uncut. It must stay exact for every item the registry can build later.
-   - (C4c, 2026-11-07, after C4b's review, finding 1) Every decision on the cut, poison or presence side is made by
-     the very function the main run uses for that decision, run on the check's own series: spec 5's rows by
-     `candidatesOf` (lawsearch-events.ts), which walks every bar of the series it is given, in order, from bar 0 (a
-     cut series ends at its target k, so the walk ends there). So any code that reads beyond k, directly, through
-     state carried from one bar to the next, through rows already emitted, or through the series' length, shows up
-     as a difference. A shortcut of this (for example C4b's `candidatesAt`, which ran the per-bar body at bar k
-     alone and was exact only while that body kept no state) is allowed only when the equality holds by
-     construction for any future change of the per-bar code, not because today's code happens to be stateless. A
-     guard that only samples (finds such a change by chance) does not make a shortcut allowed; it may be added as
-     defense in depth. The run plants `lastBarStateG3` and `lastBarStateG5` (8) must keep failing the cut.
+   - (C4c, 2026-11-07; after C4b's review, finding 1) **Rule 2, restated.** Every decision on the side of the cut,
+     the poison or the presence is made by the very code the main run uses for that decision, run on the check's
+     own series alone.
+     - For spec 5's rows that code is `candidatesOf` (5.3): one walk over every bar of the series it is given, from
+       bar 0, in order. The main run calls it on the uncut series. Every check calls it, through `decisionOf` (7.3),
+       on its own cut, window, poisoned or edited series. A cut series ends at its target k, so the walk ends there.
+     - So any code that reads beyond k shows up as a difference, however it reads: directly (an index past k),
+       through state carried from one bar to the next, through rows already emitted, or through the series' length
+       n. This holds by construction, for any future change of the per-bar code, of the builds or of the items. It
+       does not depend on the per-bar code keeping no state.
+     - A shortcut (any other way to get the decision at k; for example C4b's `candidatesAt`, which ran the per-bar
+       body at bar k alone after `prepare`) is allowed only when its equality with the main run's code holds by
+       construction for any future change of that code. That today's code happens to keep no state, or happens to
+       pass a test, is not enough.
+     - **Why a sampling guard alone is not enough.** A guard that compares a shortcut with the full code finds a
+       difference only on the inputs it tries, and a look-ahead acts only where its trigger is. C4b's guard
+       (`lawsearch-candat-check.ts`, 7.8) compared `candidatesAt` with `candidatesOf` at every bar, but of the
+       uncut series only: each pair offered one series end, where the cut check asks one series end per target.
+       C4b's reviewer and refuter planted a look-ahead that drops a raw signal on the series' last bar when the last
+       row before it is exactly G bars back. With G = 3 and with G = 5 it passed the guard on all eight local runs
+       (N 1001, N 1002, C 7101, O 6001–6004, FLIP 1001); a gap-4 variant was caught on O 6001 alone, at one bar.
+       b3a2c43's cut (`candidatesOf` on every cut prefix) failed the same plants on C 7101, with 461 (G = 3) and 423
+       (G = 5) rows in cut_fail.csv, and C4b's code gave exit 0, every file as the clean run. Whether such a guard
+       catches a later change depends on how that change happens to be written, and that is what this rule forbids.
+       A sampling guard may be added as defense in depth, never in place of the construction.
+     - The run plants `lastBarStateG3` and `lastBarStateG5` (8) must keep failing the cut on CMP-C 7101 (7.8 syn
+       step 3). On C4b's one-bar path they did not (exit 0).
+     - Poison and presence: their units call the same `decisionOf` on their own edited series (7.3).
+     - How each part of today's code keeps this, and what guards it: 12.1. The two places where it still rests on
+       how future code is written: 12.2.
 3. **Determinism.** The same inputs give the same bytes, whatever the number of workers or the machine. (So the
    results of workers are put together in the row orders that `lawsearch-dump.md` already fixes, never in the order
    in which the workers finish, and every sum keeps 2.5's order.)
@@ -1407,3 +1555,152 @@ and every `ts/` file is compared with the reference by its bytes (print.txt with
 `time.*` lines and the machine (CPUs, workers) are recorded; step 4's time is then estimated from the measured costs
 and written as an estimate. When it still does not fit one job, the measured numbers go to the owner and the owner
 is asked again.
+
+(C4c, 2026-11-07) Identical bytes show rule 1, not rule 2: a check that has lost its power still passes on a clean
+run. So a speed-up of a check's path is also run with a plant that only the full path catches, on b3a2c43's code, on
+the new code and, where one exists, on the shortcut it replaces; the new code must fail it as b3a2c43 does. C4c did
+this with `lastBarStateG3` and `lastBarStateG5` (8).
+
+### 12.1 How each part of the code keeps the rules, and what guards it (C4c, 2026-11-07; C4b's review, finding 3)
+
+Each part below is in the code now (C4c's code; C4b's speed-ups "free", "share" and "par", less `candidatesAt`).
+"Exact" says why it gives b3a2c43's values by construction. "CI" names the steps of 7.8 that fail if it breaks.
+"Local" is evidence outside CI. Besides these, the identity runs of 12's method cover every part at once: C4b's on its
+code, and C4c's on N 1001, C 7101, FLIP 1001, O 6001–6004 and C3's run plants (every `ts/` file byte-identical to
+C4b's dumps, and to C3's but for C4a's two known changes; print.txt without `time.*`).
+
+1. **`candidatesOf`, one walk** (`lawsearch-events.ts`; C4c restores b3a2c43's path).
+   - What: `prepare` (① and what ②–④ read: the builds through `buildOf`, the kind, the first bar whose condition is
+     not 無し), then b3a2c43's loop over i = 0 … n − 1, then `finish` (⑤ and warmOk). C4c writes the loop's body
+     out once per direction, with the per-direction arrays taken once per call, for speed: 7.3 nanoseconds per trial
+     and bar with b3a2c43's loop as written, 2.8 written out (the C4c restore designer's measurement).
+   - Exact: the same tests in the same order at every bar, and the same rows appended in the same order (buy before
+     sell, after both directions are decided). b3a2c43's branch on the kind becomes `!edge || …`, because `prepare`
+     sets `edge` true only for condition and hold without the plant `noRisingEdge` (cross and state never test a
+     rising edge). It is the one way to get a trial's rows (12 rule 2).
+   - CI: `--run`'s comparison of `signals/` and everything built on them (every syn job but O's, and each flip job's
+     FLIP=1 run); the hand examples of spec 5 (A.4) and the hand plant `noRisingEdge` (A.4.1, A.4.33, A.4.34); the
+     run plants `lastBarStateG3`, `lastBarStateG5` and `reasonUsesFuture` on CMP-C 7101; the O step.
+   - Local: the restore designer's comparison of C4c's `candidatesOf` with b3a2c43's on N 1001, with 682 stand-in
+     trials and the built ones, both timeframes and five pairs, the whole series and 9 prefixes, and the options
+     none, `noRisingEdge` and answer-knowing: 204,600 units, 310,625,813 rows, none differs.
+2. **`candidatesAt` and `rowsAtBar`** (C4b): removed in C4c, with the CI step that sampled them (7.8). They appear in
+   comments only.
+3. **`BUILDS` and `buildOf`** (`lawsearch-events.ts`; C4b "free").
+   - What: an Ind's item and F builds are kept in a WeakMap keyed by the Ind, under `item:<id>` and `filter:<id>`
+     (`item:E26:answerKnowing` apart), so that the trials on one Ind with the same item or F build it once. A build
+     made with params (the hand examples) is not kept.
+   - Exact: an Ind is made from one series (the uncut one, one cut target's, one window, one poisoned or edited
+     copy) and never sees another. A build is a function of the Ind (its series and plant), the definition and the
+     params alone, and nothing writes into it. So a kept build is the build the next trial would make again from
+     the same series, and nothing passes between series. This needs one definition per id: `checkRegistry`
+     (`lawsearch-items.ts`) stops the program when the module is loaded, before any file is read, if a key of
+     `ITEM_MAP` or `FILTER_MAP` is not its definition's id.
+   - CI: `checkRegistry` runs in every step that runs the program. The O step: `answerKnowingE26`'s build reads
+     C[i+1], so if a cut or poisoned Ind were given a build of the uncut series, the cut and the poison would stop
+     failing on the E26 trials and the step would fail (reasoned; no such mutant was run).
+   - Not guarded: a cache keyed by anything but the Ind (12.2).
+4. **`donchianOf`'s monotone queues** (`lawsearch-ind.ts`; C4b "free").
+   - What: HH and LL come from two monotone queues of bar indices (O(len) in all). `donchianScan`, b3a2c43's rescan,
+     is kept for n that is not a whole number ≥ 1.
+   - Exact: max and min round nothing, so only which bar's value is taken could differ, and the queue's front is
+     the rescan's bar: the oldest bar with the largest H under `>` (a NaN bar never taken), and the same for L. The
+     argument is in the code. Nothing after bar i − 1 is read for bar i.
+   - CI: the check `donchian` on every run (spec 15: E26's s against bigflow-lib's `donchianState(c, 20)` on every
+     bar of both timeframes and five pairs); the hand examples A.4.1 (n 20) and A.4.2 (n 55); `--run`'s comparison
+     of `ind/` (`DON20_HH`, `DON20_LL`, `DON20_s`).
+5. **The lazy RSI parts** (`lawsearch-ind.ts`, `lawsearch-items.ts`; C4b "free").
+   - What: `rsi(p)` makes up, dn, U and D only when they are first read (getters; U and D through `rmaOf`'s memo, so
+     every read gets the same array). E04's dump columns `RSI14_U` and `RSI14_D` are getters too. A signal reads
+     only `rsi`.
+   - Exact: the same functions on the same inputs, only later. The RSI is pineRsi's as before; its input is copied
+     by a loop instead of `Array.from` (the same numbers in the same order).
+   - CI: the hand examples A.3.7, A.3.9, A.4.29 and A.4.30 (up, dn, U, D and the RSI); `--run`'s comparison of
+     `ind/` (`RSI14`, `RSI14_U`, `RSI14_D`) and of `signals/`.
+6. **The poison tables** (`lawsearch-bars.ts` `poisonSeries` and `poisonTables`, `lawsearch-checks.ts` `tablesOf`;
+   C4b "share").
+   - What: two alternately shifted copies of the whole uncut series (alt[0]: + on the even bars and − on the odd
+     ones; alt[1] the other way round), made once per check in the main thread, or once per task on each worker,
+     from that thread's own copy of the uncut series. A probe's poisoned series is s's bars before k0 (the first bar
+     with T > T_i) and alt[k0 & 1]'s bars from k0 on.
+   - Exact: the bar k ≥ k0 gets + exactly when k − k0 is even, that is when k has k0's parity; and `shifted` makes
+     each bar from that bar's own values and its sign alone. So alt[k0 & 1]'s bar k is the bar the per-probe
+     poisoning makes (the proof is at `poisonSeries`). The tables depend on the uncut series and the pips alone,
+     never on a probe, and each probe's Ind and decision are still made from its own poisoned series.
+   - CI: the O step (the poison must fail on the four E26 trials). No CI step compares a series made with the
+     tables with one made without them: `checks.csv` is TS only and not compared (`lawsearch-dump.md` 10).
+   - Local: the identity runs (`checks.csv` byte-identical to C3's, which were made without tables).
+7. **`deleteBars` by runs** (`lawsearch-bars.ts`; C4b).
+   - Exact: each run of adjacent kept bars is one typed-array copy, the same values in the same order as one bar at
+     a time; `drop` is still asked once for every bar, in order.
+   - CI: presence on every run; `reasonUsesFuture` on CMP-C 7101 needs the cut or presence to fail (in C4c's run,
+     presence failed on 12 trials and the cut on 3).
+   - Local: the identity runs.
+8. **The holes' clock cache** (`lawsearch-events.ts` `CLOCK` and `clockBlock`; C4b "share").
+   - What: whether slot a is ②'s time or a GMO holiday time (`r2(a) || isGmoHoliday(a)`) is computed once per slot,
+     in blocks of 4,096 slots per step, and kept for the rest of the run (in each thread).
+   - Exact: that value reads the clock alone (no bar, no series, no plant), so it is one value for every `holesOf`
+     call that meets slot a, whatever series the call is given. Every part that depends on bars (which pairs have a
+     bar at a, how many, the runs) is still computed from the starts each call is given.
+   - CI: `--run`'s comparison of `holes/` (every syn job but O's; the uncut run's holes go through the same
+     cache); the hand examples of ③'s holes (A.1.15–A.1.19); CMP-C 7101's holes and ③ exclusions, through
+     `signals/` and the blind tables.
+9. **The workers** (`lawsearch-par.ts`, `lawsearch-par-worker.ts`, and the units of `lawsearch-checks.ts`; C4b
+   "par").
+   - Exact: a worker runs `runUnitJob`, the function `inPlace` runs, on its own structured-clone copy of the
+     universe (value for value). A job's answer is a function of the universe, the task and the job alone: a worker
+     keeps nothing else but the task's `UnitCache`, itself a function of those. The answers reach the check in job
+     order (`done` for job q only after jobs 0 … q − 1), no unit reads another unit's work, and the main thread does
+     not change the universe while a check runs.
+   - CI: every run step runs at `WORKERS=4` and is compared with the Python (`--run`) or checked by the O and plant
+     steps; hand step 8 (the refusal). No CI step compares two `WORKERS` values.
+   - Local: C4c's C 7101 `reasonUsesFuture` at `WORKERS` 0, 1 and 4 (77 of 77 files identical, and identical to
+     C4b's); the C4c restore designer's runs at 0, 1 and 3; C4b's at 0, 1 and 2.
+
+### 12.2 Open points for the lead (C4c, 2026-11-07)
+
+These are not regressions: they are the same in b3a2c43 and in both of C4c's designs.
+
+1. **The reason at bar k.** `decisionOf` takes spec 6's reason of an emitted row at k from `reasonOf` at bar k
+   alone, as b3a2c43 did. The main run gets it from `classify`, which calls `reasonOf` row by row. That is the same
+   function at the same bar, but not the same loop: it is equal by construction only while `classify` stays a
+   per-row map of `reasonOf`. (`reasonOf`'s signature gives it nothing of other rows; `rowsAtBar` was given the rows,
+   which is how C4b's finding came about.) Running `classify` over every row of the walk in `decisionOf` was measured
+   by the C4c restore designer at 0.80–0.94 s per m15 stand-in cut target (one thread, on a busy machine), against
+   about 0.28 s for the walk and the builds: about 3 times the whole cost per target. So it was not taken. A cheaper
+   exact route (a cheaper `reasonOf`, or a memo of its clock parts) was not built.
+2. **Caches must stay keyed by the Ind.** The builds, `prepare` and any item-level cache must be functions of the
+   Ind, that is of its series. `BUILDS` is a WeakMap keyed by the Ind, which is right today. A module-level cache or
+   variable that survives from one `candidatesOf` call to the next (for example one keyed by pair, trial or bar
+   instead of by the Ind, or a per-bar state kept at module level) would carry the full series into the cut, poison
+   and presence checks unseen. Nothing stops that by construction now; the O step would catch it only where it
+   touches `answerKnowingE26`'s build. C4c's design B (a restricted form for the per-bar code, checked by a new
+   program before every run) would have stopped module state inside the per-bar code; it was not taken, because its
+   guarantee rested on that new trusted checker. A later round may add a guard.
+3. **To confirm:** the plant names `lastBarStateG3` and `lastBarStateG5` (8; the names of both C4c designers), and
+   this round's text: 3, 5.1–5.3, 7.3, 7.7, 7.8 and 8, 11 O-13, and 12 (rule 2 and 12.1–12.3).
+
+### 12.3 What the restore costs (C4c, 2026-11-07)
+
+- Measured: whole runs at `WORKERS=4`, each with no other heavy process on this machine (4 CPUs, 15 GB RAM), against
+  C4b's code (`time.total` from print.txt): 1.10–1.23 times as long. N 1001 556 s against 504 s; C 7101 291 against
+  252; FLIP 1001 572 against 504; O 6001–6004 330–414 against 269–354. Summed over the runs with a C4b counterpart,
+  3,555 s against 3,050 s (1.165 times).
+  - The extra is mostly stage 0's cut, which now walks every bar up to each target for every trial: `cut.m15`
+    1.25–1.37 times, `cut.h1` 1.18–1.35 times; the chosen cuts 1.04–1.17 times.
+  - C3's code was 7–14 times slower than either. Peak RSS was 2.9–3.4 GB.
+- Estimated: one step-4 run (682 trials per timeframe) at `WORKERS=4`, by C4b's timer method (the C4c integrator's
+  `/tmp/claude-0/-home-user-fx-canvas-mind/293f73fc-e90f-5bbc-b9e3-ce7f929d8068/scratchpad/lawsearch/trial/c4c/estimate.txt`):
+  3.51 h at the stand-ins' target count (m15 120,385 and h1 47,908 targets), up to 8.79 h if every bar were a target
+  (372,320 and 93,080).
+  - Parts: stage 0's cut 2.63–7.86 h, poison and presence 0.69 h, the chosen cuts 0.09–0.14 h, the rest 0.11 h.
+  - By the same method, C4b's code gave 2.68–6.42 h. At `WORKERS=1`, C4c's code gives 11.2–29.5 h (the restore
+    designer's measurements).
+  - These hours are arithmetic: measured costs (per target, per trial and per chosen target, each on an idle
+    machine, with C4b's harness unchanged) times measured counts. The items are stand-ins, because the 40 E items
+    are not built yet. The walk part does not depend on the items: with 682 trials that share their builds, a target
+    costs 20.4 ms on m15 and 5.6 ms on h1, against 2.6 and 1.0 ms on C4b's code, and the difference is the walks.
+    The build part was measured on stand-ins only. It is not a measured step-4 run.
+- The lead's preference: power by construction first, then speed; the restore if one step-4 run stays within about
+  6 hours at `WORKERS=4` at the stand-in target count. At 3.5 h it does. If every bar were a target, it would not fit
+  one 6-hour job.
