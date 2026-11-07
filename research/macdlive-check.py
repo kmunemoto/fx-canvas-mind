@@ -102,6 +102,11 @@ H1_EXACT = set(H1_STATUSES) | {'n', 'mailWin', 'mailLoss', 'mailDraw', 'oppWin',
 # docs §8.145: ほかの持つ時間 H（分）。出る1分足は τ ＋ (H − 1) 分以後に始まる最初の足。ほかは hour1 と同じ。
 HOLDS = (5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 10080)
 HOLD_COLS = ['hold'] + H1_COLS
+# docs §8.146: 環境変数 TF（無いか空なら 1h）。15min は15分足の日のファイル・確定の 0・1・3 分後の読み込み・close だけ。
+TF_DEFAULT = '1h'
+TFS = {'1h': dict(interval='1hour', step=HOUR, reads=READ_AFTER, live=True, label='1-hour bars, both ways'),
+       '15min': dict(interval='15min', step=15 * MIN, reads=(0, 1, 3), live=False,
+                     label='15-minute bars, the close way only, read 0, 1 and 3 minutes after the close')}
 
 
 def die(msg):
@@ -111,9 +116,10 @@ def die(msg):
     sys.exit(1)
 
 
-def mailed_at_close(T):
-    """close の送り方: 確定の 0・3・5 分後（それぞれ1秒後）の読み込みのどれかが isPossiblyClosed でない"""
-    return any(not fc.is_possibly_closed(T + m * MIN + 1000) for m in READ_AFTER)
+def mailed_at_close(T, reads=READ_AFTER):
+    """close の送り方: 確定の 0・3・5 分後（15分足は 0・1・3 分後。それぞれ1秒後）の読み込みのどれかが
+    isPossiblyClosed でない"""
+    return any(not fc.is_possibly_closed(T + m * MIN + 1000) for m in reads)
 
 
 # ---------------------------------------------------------------- live の速い決め方
