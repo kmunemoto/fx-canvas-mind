@@ -4,18 +4,20 @@
 #
 #   hand    deno check of research/lawsearch*.ts; stage 0's import graph holds no trade, stats or select module (spec 9);
 #           the hand examples in TS (MODE=hand) and in the Python (--hand); every hand-level planted error of
-#           lawsearch-design.md 8 must fail one of its named examples (TS and the Python's twins); every real mode
+#           lawsearch-design.md 8 must fail one of its named examples (TS: exit 4; the Python's twins: exit 0 with
+#           a named example failed, C4c; reasonUsesFuture has no Python twin); every real mode
 #           exits 2; so does every invalid CUT_MAX of a fixed list, before any file is read (design 7.8 hand step 7,
 #           the lead's E13: the only step that sets CUT_MAX, and only to values that are refused), and every invalid
 #           WORKERS of a fixed list (C4b)
-#   syn     the runs of lawsearch-design.md 10, one job each: TS MODE=syn; research/lawsearch-candat-check.ts on the
-#           run's bars (C4b: the checks' one-bar candidatesAt gives candidatesOf's rows at every bar); then the
-#           Python's own recompute and the comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run
-#           plants avoidFull (exit 3), secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop,
-#           spec 6) and blindRowHit (exit 3: spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture
-#           (exit 3, cut or presence failed) and chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not
-#           opened); O expects exit 3 with the cut and the poison failed on the E26 trials, and ends before stage 2
-#           (design 7.7: a failed check before stage 2 keeps it closed). No run step sets CUT_MAX (the development
+#   syn     the runs of lawsearch-design.md 10, one job each: TS MODE=syn; then the Python's own recompute and the
+#           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3),
+#           secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop, spec 6) and blindRowHit (exit 3:
+#           spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture (exit 3, cut or presence failed),
+#           chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened) and lastBarStateG3 /
+#           lastBarStateG5 (C4c: exit 3, the cut failed: a look-ahead carried by state across bars of spec 5's walk,
+#           which the cut sees because it recomputes with the main run's own candidatesOf); O expects exit 3 with the
+#           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
+#           stage 2 keeps it closed). No run step sets CUT_MAX (the development
 #           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
 #           step runs the checks' units on WORKERS=4 workers (C4b; the same bytes as with any other WORKERS)
 #   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
@@ -89,10 +91,21 @@ jobs:
             for id in ${ids//,/ }; do grep -q "^FAIL $id\b" /tmp/plant.txt && hit=1; done
             echo "TS $plant: exit $code, a named example failed: $hit"
             if [ "$code" != 4 ] || [ "$hit" != 1 ]; then bad=1; fi
+            # The Python's twin (C4c; C4b's review, finding 2: this step used to want exit 4 from the Python too).
+            # lawsearch-check.py --hand --plant exits 0 when one of the plant's own named examples failed and prints
+            # "PLANT <name>: must fail one of <ids>; failed: <ids>" ("failed: none" and exit 4 when none failed; an
+            # unknown plant exits 2). reasonUsesFuture is the TS's alone (lawsearch-py-design.md 5.2: the Python has
+            # no twin), so it is not asked of the Python.
+            if [ "$plant" = reasonUsesFuture ]; then
+              echo "Python $plant: no twin (the TS's alone), not run"
+              continue
+            fi
             $PY research/lawsearch-check.py --hand --plant "$plant" > /tmp/plant-py.txt 2>&1
             code=$?
-            echo "Python $plant: exit $code"
-            if [ "$code" != 4 ]; then bad=1; fi
+            caught=0
+            grep -q "^PLANT $plant: .*failed: [^n]" /tmp/plant-py.txt && caught=1
+            echo "Python $plant: exit $code, a named example failed: $caught"
+            if [ "$code" != 0 ] || [ "$caught" != 1 ]; then bad=1; fi
           done <<'EOF'
           htfOpen A.1.12,A.1.13
           entryAtSignalClose A.1.26
@@ -212,7 +225,7 @@ jobs:
         include:
           - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2 dropSecondStrata:3 blindRowHit:3" }
           - { name: cmp-n-1002, gen: N, seed: 1002, want: 0, plants: "" }
-          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3" }
+          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3" }
           - { name: o-6001, gen: O, seed: 6001, want: 3, plants: "" }
           - { name: o-6002, gen: O, seed: 6002, want: 3, plants: "" }
           - { name: o-6003, gen: O, seed: 6003, want: 3, plants: "" }
@@ -238,12 +251,6 @@ jobs:
           $DENO_RUN research/lawsearch.ts; code=$?
           echo "exit $code (want ${{ matrix.want }})"
           [ "$code" = "${{ matrix.want }}" ] || exit 1
-      - name: The checks' one-bar candidates equal candidatesOf's rows at every bar (C4b; spec 5, 15)
-        # C4b (the speed-up "free"): the checks cut, poison and presence recompute only the rows at the bar they compare
-        # (candidatesAt), which is exact only while spec 5's per-bar body passes no state from one bar to the next.
-        # This step asks candidatesAt at every bar of this run's series, in a scrambled order, for every trial and pair,
-        # with the run's options and with the plant noRisingEdge, and stops on any bar whose rows differ.
-        run: deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. research/lawsearch-candat-check.ts research/out/lawsearch/${{ matrix.name }}
       - name: The O runs' failed checks (cut and poison on every E26 trial; their stage-1 suspicion hits; nothing else; stage 2 not opened)
         if: matrix.gen == 'O'
         run: |
@@ -280,6 +287,13 @@ jobs:
             if [ "$p" = reasonUsesFuture ]; then
               grep -E ",(cut|presence),0," $d/checks.csv || { echo "neither cut nor presence failed"; bad=1; }
             fi
+            # C4c (design 8): a look-ahead in spec 5's walk carried by state across bars; stage 0's cut must fail on a
+            # trial (cut_fail.csv names its bars), and stage 2 is not opened
+            case "$p" in lastBarStateG3|lastBarStateG5)
+              grep -q -E "^(m15|h1)\.[^,]*,cut,0," $d/checks.csv || { echo "$p: the cut did not fail"; bad=1; }
+              grep -q "^cut,stage0," $d/cut_fail.csv 2>/dev/null || { echo "$p: cut_fail.csv has no stage-0 cut row"; bad=1; }
+              if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi ;;
+            esac
             # design 8 (C3): the stops; none of them opens stage 2 (no syn2 load, no stage2.csv)
             case "$p" in dropSecondStrata|blindRowHit|chosenCutFirstDiff)
               if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi

@@ -39,6 +39,8 @@ import type {
 const ST_EMIT = STATUS.indexOf("emit");
 const ST_F_NONE = STATUS.indexOf("f_none");
 const ST_BOTH = STATUS.indexOf("both");
+// no row at a bar in one direction (candidatesOf)
+const NONE = -1;
 const REASON_INDEX: Readonly<Record<ReasonCode, number>> = Object.fromEntries(REASONS.map((r, k) => [r, k])) as Record<ReasonCode, number>;
 
 // ---- spec 5 ----------------------------------------------------------------------------------------------------
@@ -79,30 +81,85 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 //   ⑤ both directions still kept at one bar → both (applyBoth).
 // warmOk: the bar index is at or past the trial's warm-ups (E's and F's; the S's F; the B's), and the F's own warmOk.
 //
-// C4b ("free"): the function is cut into three parts that candidatesAt (below) shares: prepare (① and what ②–④ and
-// the warm-up read: the builds, the kind, the first bar whose condition is not 無し), rowsAtBar (②–④ at one bar i:
-// the body of b3a2c43's loop, unchanged) and finish (the typed arrays, ⑤ and the warm-up). candidatesOf runs
-// rowsAtBar on every bar in order, as before. The item's and the F's builds are kept per Ind (buildOf) for the trials
-// that share the same Ind; see there.
+// C4c ("restore"): candidatesOf is again ONE walk over every bar of the series it is given, in bar order: prepare (①
+// and what ②–④ and the warm-up read: the builds, the kind, the first bar whose condition is not 無し), then
+// b3a2c43's loop (②–④ at every bar i = 0 … n − 1), then finish (the typed arrays, ⑤ and the warm-up). There is no
+// other way to get a trial's rows: the main run (trialSignals) and the checks of spec 15 (cut, poison, presence:
+// lawsearch-checks.ts decisionOf) both call this function, the checks on their own cut, window, poisoned or edited
+// series, and read the rows at the bar they compare. So a check's decision at bar k is made by the same code as the
+// main run's decision at bar k, from the check's series alone, whatever that code reads: values after k (in a build
+// or in the loop), state carried from one bar to the next, rows already emitted, or the series' length n (the cut
+// series ends at k, so the loop ends there too). This holds by construction, for any future change of the loop's
+// body or of a build, and does not depend on the body keeping no state (C4b's candidatesAt, which ran the body at
+// one bar alone, needed that; C4b's review, finding 1). The item's and the F's builds are kept per Ind (buildOf) for
+// the trials that share the same Ind; see there.
+//
+// Plants lastBarStateG3 and lastBarStateG5 (C4c, development only; lawsearch-design.md 8): a look-ahead that mixes
+// state carried across bars with the series' end: on the series' last bar, a raw signal is dropped when the last row
+// emitted before it is exactly G = 3 (or 5) bars back. The main run drops nothing but at its own last bar; a cut at
+// k drops raw signals at k, so the cut check must fail (C4b's review: b3a2c43 fails, C4b's candidatesAt did not).
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
   const p = prepare(trial, ind, o);
+  const { n, cond, keep, fb, edge, first } = p;
+  const plant = o?.plant ?? "";
+  const lastGap = plant === "lastBarStateG3" ? 3 : plant === "lastBarStateG5" ? 5 : 0;
   const rows: CandRows = { i: [], d: [], s: [] };
-  for (let i = 0; i < p.n; i++) rowsAtBar(p, i, rows);
-  return finish(trial, ind, p, rows);
-}
-
-// C4b ("free"): the rows of candidatesOf(trial, ind, o) at bar i alone: the same prepare, the same body at bar i,
-// the same finish. They are exactly those rows, by construction: the body at bar i reads only bar i's and bar i − 1's
-// values of the builds and the first bar whose condition is not 無し (both computed by prepare on the whole series,
-// as candidatesOf does), and it starts from nothing at each bar (st is reset; no other state passes from one bar to
-// the next); ⑤ marks only a pair of rows at one bar (applyBoth skips a pair whose bars differ, and a bar has at most
-// two rows, buy then sell), and the warm-up of a row reads its bar alone. The checks of spec 15 (cut, poison,
-// presence) compare only the rows at one bar (decisionOf), so they call this instead of making every bar's rows of
-// the series they recompute; the builds (①) are still made on that whole series (cut, window, poisoned or edited).
-export function candidatesAt(trial: TrialDef, ind: Ind, i: number, o?: CandOpts): Candidates {
-  const p = prepare(trial, ind, o);
-  const rows: CandRows = { i: [], d: [], s: [] };
-  if (Number.isInteger(i) && i >= 0 && i < p.n) rowsAtBar(p, i, rows);
+  const rowsI = rows.i;
+  const rowsD = rows.d;
+  const rowsS = rows.s;
+  // b3a2c43's loop over every bar i = 0 … n − 1, its body written out for the two directions (k = 0 buy, then k = 1
+  // sell) with the per-direction arrays taken once per call instead of at every bar (C4c, for speed; the same tests
+  // in the same order at every bar, and the same rows appended in the same order, buy before sell). That body was,
+  // per k: ② raw = c[i] = 1 for cross and state, and for condition and hold without the rising edge (edge is false
+  // for every kind but condition and hold, and under noRisingEdge), else c[i] = 1 && i ≥ 1 && c[i − 1] = 0 && i ≠
+  // first[k]; no raw → no row; ③ keep[k][i] = 0 → no row; ④ fb.f[k][i] = −1 → f_none, = 0 → no row; otherwise emit.
+  // The rows of bar i are appended after both directions are decided (so the plants read the rows before bar i).
+  const c0 = cond[0], c1 = cond[1];
+  const keep0 = keep === null ? null : keep[0], keep1 = keep === null ? null : keep[1];
+  const f0 = fb === null ? null : fb.f[0], f1 = fb === null ? null : fb.f[1];
+  const first0 = first[0], first1 = first[1];
+  for (let i = 0; i < n; i++) {
+    // buy (k = 0)
+    let s0 = NONE;
+    // ②
+    if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
+      // plants lastBarStateG3 / lastBarStateG5 (the header above)
+      if (!(lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap)) {
+        // ③
+        if (keep0 === null || keep0[i] !== 0) {
+          // ④
+          if (f0 === null) s0 = ST_EMIT;
+          else {
+            const fv = f0[i];
+            s0 = fv === -1 ? ST_F_NONE : fv === 0 ? NONE : ST_EMIT;
+          }
+        }
+      }
+    }
+    // sell (k = 1), the same
+    let s1 = NONE;
+    if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
+      if (!(lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap)) {
+        if (keep1 === null || keep1[i] !== 0) {
+          if (f1 === null) s1 = ST_EMIT;
+          else {
+            const fv = f1[i];
+            s1 = fv === -1 ? ST_F_NONE : fv === 0 ? NONE : ST_EMIT;
+          }
+        }
+      }
+    }
+    if (s0 !== NONE) {
+      rowsI.push(i);
+      rowsD.push(1);
+      rowsS.push(s0);
+    }
+    if (s1 !== NONE) {
+      rowsI.push(i);
+      rowsD.push(-1);
+      rowsS.push(s1);
+    }
+  }
   return finish(trial, ind, p, rows);
 }
 
@@ -155,7 +212,7 @@ const itemBuildOf = (id: string, ind: Ind, o?: CandOpts): ItemBuild => {
 };
 const filterBuildOf = (def: FilterDef, ind: Ind, o?: CandOpts): FilterBuild => buildOf(ind, `filter:${def.id}`, o?.params, () => def.build(ind, o?.params));
 
-// ① and what ②–④ read (b3a2c43's code before the loop, the builds through buildOf)
+// ① and what ②–④ read (b3a2c43's code before the loop, the builds through buildOf; C4b)
 function prepare(trial: TrialDef, ind: Ind, o?: CandOpts): Prepared {
   const plant = o?.plant ?? "";
   const n = ind.series.n;
@@ -206,43 +263,7 @@ function prepare(trial: TrialDef, ind: Ind, o?: CandOpts): Prepared {
   return { n, kind, cond, keep, fb, warm, fWarmOk, edge, first };
 }
 
-const NONE = -1;
-
-// ②–④ at bar i, its rows (buy before sell) appended to rows (b3a2c43's loop body, unchanged)
-function rowsAtBar(p: Prepared, i: number, rows: CandRows): void {
-  const { kind, cond, keep, fb, edge, first } = p;
-  const st = [NONE, NONE];
-  for (let k = 0; k < 2; k++) {
-    st[k] = NONE;
-    const c = cond[k];
-    // ②
-    let raw: boolean;
-    if (kind === "cross" || kind === "state") raw = c[i] === 1;
-    else if (!edge) raw = c[i] === 1;
-    else raw = c[i] === 1 && i >= 1 && c[i - 1] === 0 && i !== first[k];
-    if (!raw) continue;
-    // ③
-    if (keep !== null && keep[k][i] === 0) continue;
-    // ④
-    if (fb !== null) {
-      const fv = fb.f[k][i];
-      if (fv === -1) {
-        st[k] = ST_F_NONE;
-        continue;
-      }
-      if (fv === 0) continue;
-    }
-    st[k] = ST_EMIT;
-  }
-  for (let k = 0; k < 2; k++) {
-    if (st[k] === NONE) continue;
-    rows.i.push(i);
-    rows.d.push(k === 0 ? 1 : -1);
-    rows.s.push(st[k]);
-  }
-}
-
-// the Candidates of the rows: ⑤ and the warm-up (b3a2c43's code after the loop, unchanged)
+// the Candidates of the rows: ⑤ and the warm-up (b3a2c43's code after the loop, unchanged; C4b)
 function finish(trial: TrialDef, ind: Ind, p: Prepared, rows: CandRows): Candidates {
   const len = rows.i.length;
   const out: Candidates = {

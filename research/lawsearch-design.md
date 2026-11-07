@@ -1057,6 +1057,12 @@ jobs:
   4. `python3 -I research/lawsearch-check.py --hand` exits 0.
   5. For each hand-level plant (8): `LS_PLANT=<p> MODE=hand` must exit 4, and at least one of 8's named examples must
      fail. The same for the Python's twins (`--hand --plant <p>`).
+     - (C4c, 2026-11-07; C4b's review, finding 2) The Python reports a caught plant differently: `--hand --plant <p>`
+       exits 0 when at least one of the plant's named examples failed, and prints `PLANT <p>: must fail one of
+       <ids>; failed: <ids>` (`failed: none` and exit 4 when none failed; exit 2 for a plant it does not know). So
+       the yml takes a Python twin as caught when it exits 0 and that line names a failed example (`grep -q "^PLANT
+       <p>: .*failed: [^n]"`). `reasonUsesFuture` has no Python twin (`lawsearch-py-design.md` 5.2) and is not asked
+       of the Python. Before C4c the yml wanted exit 4 from the Python too, so the step could never pass.
   6. Every real mode exits 2.
   7. (C4b, 2026-11-05; the lead's E13) Invalid `CUT_MAX` values are refused: for each value of a fixed list that
      7.7's rule refuses (for example `0`, `-3`, `abc`, `1.5`, `07`; the list is the TS builder's), a run mode that
@@ -1075,7 +1081,9 @@ jobs:
      `K_total`; no `syn2` row in load.csv and no stage2.csv). On CMP-C 7101: `chosenCutFirstDiff` (exit 3;
      `cut.chosen.first` failed on a chosen trial, stage `stage1end`, with its row in cut_fail.csv; print.txt has
      `withheld.stage1=1`; no `syn2` row in load.csv and no stage2.csv). Each of the three: print.txt's `note.stage2`
-     says "not opened", and cut_fail.csv is written.
+     says "not opened", and cut_fail.csv is written. (C4c, 2026-11-07) Also on CMP-C 7101: `lastBarStateG3` and
+     `lastBarStateG5` (exit 3; stage 0's `cut` failed on a trial, with its `cut,stage0` rows in cut_fail.csv; no
+     `syn2` row in load.csv and no stage2.csv).
   4. O's runs expect exit 3, the cut and poison checks failed, and the E26 rows' suspicion hit. (C3, 2026-11-05; the
      lead's D8) They now end before stage 2. The O step still requires the cut and poison failures on the four E26
      trials, their stage-1 suspicion hits, and no other failed check; it also requires that stage 2 was not opened
@@ -1171,6 +1179,7 @@ required now.
 | `dropSecondStrata` (C3, 2026-11-05; the lead's D4) | D: select0 (`stage0`'s new `plant` argument) | for m15.E04.F00 only (a trial CMP-N 1001 does not choose), the second half's blind strata lose every stratum of USD/JPY, so its second-half noBlind is above 0 (C2's refute 4 made the same edit on C 7101: noBlind 810, and the run then exited 0) | stage 0's noBlind stop (7.4) on `CMP-N 1001`: exit 3, `stop.stage0` failed naming m15.E04.F00's second half, no stage-1 or stage-2 file |
 | `blindRowHit` (C3, 2026-11-05; the lead's D10) | D: lawsearch.ts (on `suspectOf`'s row, stage 1) | at stage 1, the blind row `blind.m15.USD_JPY.buy` is reported as hit (`hit_a` and `hit` 1; its measures unchanged) | the spec 13 stop, end to end on `CMP-N 1001`: exit 3; `suspect.blind.stage1` failed; that suspect.csv row has hit 1; print.txt withholds stage 1's numbers and says STOP; stage 2 not opened (no `syn2` row in load.csv, no stage2.csv) |
 | `chosenCutFirstDiff` (C3, 2026-11-05; the TS builder, asked by the lead: C2 never ran the stop before stage 2 on a full run) | D: cutCheck (check `cut.chosen.first` only) | the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes (the choice is made before this check) | the stop before stage 2 (7.7), end to end on `CMP-C 7101` (it chooses h1.E04.F00): exit 3; `cut.chosen.first` failed on that trial (stage `stage1end`); its bar is in cut_fail.csv; print.txt withholds stage 1's numbers and its `note.stage2` says "not opened"; no `syn2` row in load.csv, no stage2.csv |
+| `lastBarStateG3`, `lastBarStateG5` (C4c, 2026-11-07; C4b's review, finding 1; the names are the designer's, for the lead to confirm) | B: candidatesOf (spec 5's walk, the loop the main run executes) | on the series' last bar, a raw signal is dropped when the last row emitted before it is exactly 3 (G3) or 5 (G5) bars back: a look-ahead that mixes state carried across bars with the series' end | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on trials (cut_fail.csv names the bars), stage 2 not opened. b3a2c43 (candidatesOf on the cut) fails it; C4b's one-bar candidatesAt did not (exit 0, every file as the clean run) |
 
 The names of the three C3 run plants, `dropSecondStrata`, `blindRowHit` and `chosenCutFirstDiff`, were confirmed by
 the lead 2026-11-05 (C4a).
@@ -1250,7 +1259,7 @@ hit, and the other checks must pass.
 | CMP-C 7101 | C (N with holes; 4.2), 7101 | The same agreement, now with ③ holes, substitute exits, an empty day file and r ruled unusable by gaps. Blind bars are excluded by ③ after each removed m15 run of ≥ 2 slots and each removed h1 bar, and some blind rows have `subst = 1` (every bar is a blind bar, so these follow from the removed bars; a trial's own signals may or may not fall there). Plant `reasonUsesFuture` fails the cut or the presence (ii) here. |
 | FLIP 1001–1005 | N, 1001–1005, flipped and not | For every blind bar of both halves and timeframes, the flipped run's buy h = the original's sell h and PL is the same (points; exact). E04, E26 and S01: the signals match 1-to-1 with reversed directions, with differences ≤ 0.1% per trial. B06 is not symmetric (log returns of mirrored prices), so its name and reason are printed with its difference. See 11 O-2 before reading a failure of the h equality. From 2026-11-05 (spec 22.6, 23.1) these conditions are judged on the exact mirror: the original run's 5-minute mid, Bid and Ask mirrored about the pair's first 5-minute mid open S (mid' = 2S − mid, Bid' = 2S − Ask, Ask' = 2S − Bid, high' from low), with no rounding of spec 2, and everything above it rebuilt from that. The FLIP=1 run (flipped files read under spec 2) still runs, and is compared TS–Python only. |
 | O 6001–6004 | O, 6001–6004 | `m15.E26.*` and `h1.E26.*`: the cut and the poison fail (exit 3), and suspicion hits on their stage-1 rows. The other checks of the other trials pass. (C3, 2026-11-05) The run ends before stage 2 (7.7's stop before stage 2). |
-| PLANT-* | walkfiles on CMP-N 1001's and CMP-C 7101's files (OUT `<RUN>/plant-<name>`), and the hand examples | Each plant of 8 is caught by its named check (C3: `dropSecondStrata` and `blindRowHit` on CMP-N 1001, `chosenCutFirstDiff` on CMP-C 7101). |
+| PLANT-* | walkfiles on CMP-N 1001's and CMP-C 7101's files (OUT `<RUN>/plant-<name>`), and the hand examples | Each plant of 8 is caught by its named check (C3: `dropSecondStrata` and `blindRowHit` on CMP-N 1001, `chosenCutFirstDiff` on CMP-C 7101; C4c: `lastBarStateG3` and `lastBarStateG5` on CMP-C 7101, by stage 0's `cut`). |
 | SMOKE 7001–7004 | D, H, E15, EF, with `STRENGTH` provisional | Only that each effect moves its target the intended way, in the dumps: D the blind buy a > 0; H EUR/USD's blind buy a by New York hour (negative in 03–09, positive in 11–15); E15 m15.E04.F00's first-half Δ > 0; EF h1.S01's first-half Δ > 0. These are not formal runs, not the calibration of 14.3, and not written as strengths. No TS–Python comparison is required on them. |
 
 - Not run in the trial: the formal effect sets (D, H, E15, E1h, EF, Q) need their strengths from seeds 901–920
@@ -1377,6 +1386,16 @@ The rules (the lead's hard rules, C4b):
    - A shortcut that is exact only because today's 12 trials happen to have a property is not allowed. For example:
      that no built item reads another pair's bars or the higher timeframe, so that a target's cut could leave the
      other pairs or the higher bars uncut. It must stay exact for every item the registry can build later.
+   - (C4c, 2026-11-07, after C4b's review, finding 1) Every decision on the cut, poison or presence side is made by
+     the very function the main run uses for that decision, run on the check's own series: spec 5's rows by
+     `candidatesOf` (lawsearch-events.ts), which walks every bar of the series it is given, in order, from bar 0 (a
+     cut series ends at its target k, so the walk ends there). So any code that reads beyond k, directly, through
+     state carried from one bar to the next, through rows already emitted, or through the series' length, shows up
+     as a difference. A shortcut of this (for example C4b's `candidatesAt`, which ran the per-bar body at bar k
+     alone and was exact only while that body kept no state) is allowed only when the equality holds by
+     construction for any future change of the per-bar code, not because today's code happens to be stateless. A
+     guard that only samples (finds such a change by chance) does not make a shortcut allowed; it may be added as
+     defense in depth. The run plants `lastBarStateG3` and `lastBarStateG5` (8) must keep failing the cut.
 3. **Determinism.** The same inputs give the same bytes, whatever the number of workers or the machine. (So the
    results of workers are put together in the row orders that `lawsearch-dump.md` already fixes, never in the order
    in which the workers finish, and every sum keeps 2.5's order.)

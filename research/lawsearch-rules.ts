@@ -172,4 +172,9 @@ export const PLANTS: readonly string[] = [
   "dropSecondStrata",
   "blindRowHit",
   "chosenCutFirstDiff",
+  // C4c (2026-11-07), run plants on CMP-C 7101 (C4b's review, finding 1): a look-ahead in spec 5's per-bar loop that
+  // carries state across bars and reads the series' end (on the last bar, a raw signal is dropped when the last row
+  // emitted before it is exactly 3, or 5, bars back); the cut check must fail (lawsearch-events.ts candidatesOf)
+  "lastBarStateG3",
+  "lastBarStateG5",
 ];

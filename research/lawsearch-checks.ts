@@ -31,7 +31,7 @@ import { coarsenSeries, deleteBars, entryExitIndex, htfIndex, poisonSeries, pois
 import type { PoisonTables } from "./lawsearch-bars.ts";
 import { indOf } from "./lawsearch-ind.ts";
 import { parseCandidates } from "./lawsearch-items.ts";
-import { candidatesAt, exclCtxOf, holesOf, reasonOf } from "./lawsearch-events.ts";
+import { candidatesOf, exclCtxOf, holesOf, reasonOf } from "./lawsearch-events.ts";
 import { donchianState } from "./bigflow-lib.ts";
 import { mulberry32, shuffle } from "./trend-stats.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey } from "../supabase/functions/track-outcomes/quotes.ts";
@@ -89,10 +89,12 @@ const decisionOfClassified = (c: Classified, s: Series, i: number): string => {
 };
 
 // the decision at bar i (of series s, whose Ind is ind) recomputed: candidatesOf, then spec 6 on the rows at i.
-// C4b ("free"): candidatesAt gives candidatesOf's rows at bar i alone (the same rows by construction; see there), the
-// builds still made on the whole series s; trials on the same Ind share their builds (lawsearch-events.ts buildOf).
+// C4c ("restore"): candidatesOf itself, the main run's own function, on the check's whole series s (a cut series ends
+// at its target, so its walk ends there), as in b3a2c43; C4b's one-bar candidatesAt is gone (C4b's review, finding 1:
+// it ran the per-bar body at bar i alone, so a look-ahead carried by state across bars was not seen). Trials on the
+// same Ind share their builds (lawsearch-events.ts buildOf), each build made from the Ind's own series.
 const decisionOf = (trial: TrialDef, ind: Ind, ctx: ExclCtx, s: Series, i: number, o: { answerKnowing: boolean; plant: string }): string => {
-  const c = candidatesAt(trial, ind, i, { plant: o.plant, answerKnowing: o.answerKnowing });
+  const c = candidatesOf(trial, ind, { plant: o.plant, answerKnowing: o.answerKnowing });
   const [lo, hi] = rowsAt(c.i, i);
   const parts: string[] = [];
   for (let r = lo; r < hi; r++) {
