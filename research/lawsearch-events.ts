@@ -205,9 +205,11 @@ interface CandRows {
 // build is a function of the Ind (its series and plant), the definition and params alone: kept only without params
 // (a run never passes any; the hand examples' shrunk windows are built afresh each time), and keyed by the
 // definition's id, with answerKnowingE26 apart (another item under E26's id). An Ind is made from one series (the
-// uncut one, one cut target's, one window, one poisoned or edited copy) and never sees another, so a kept build is
+// uncut one, one cut target's prefix, one poisoned or edited copy) and never sees another, so a kept build is
 // the build the next trial would make again from that same series: nothing passes between series. Nothing reads a
-// build to change it (candidatesOf and the dump only read).
+// build to change it (candidatesOf and the dump only read). This holds only because the cache is keyed by the Ind: a
+// cache keyed by anything else (pair, trial, bar) or other module-level state would carry one series' values into
+// another's, unseen by the checks and possibly different per WORKERS (lawsearch-design.md 12.2 (2)).
 const BUILDS = new WeakMap<Ind, Map<string, ItemBuild | FilterBuild>>();
 const buildOf = <B extends ItemBuild | FilterBuild>(ind: Ind, key: string, params: ItemParams | undefined, make: () => B): B => {
   if (params !== undefined) return make();

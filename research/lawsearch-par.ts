@@ -8,13 +8,21 @@
 // C4b) and answers which units differ from want. So:
 //   * the bytes do not depend on the workers: the answers are put back in job order before the check reads them
 //     (done is called for job q only after jobs 0 … q − 1), and a job's answer is a function of the universe, the
-//     task and the job alone (the workers hold no other state: one universe, one task and poison's per-task copy of
-//     the uncut holes, a function of those two);
+//     task and the job alone (this module's workers hold no other state: one universe, one task and poison's
+//     per-task copy of the uncut holes and poison tables, functions of those two; the modules they load keep only
+//     the builds keyed by the Ind and the holes' clock cache, a function of the clock alone: design 12.1 items 3, 8);
 //   * the checks keep their power: a worker computes exactly what the loop computed, on its own copy of the same
 //     universe (structured clone copies every typed array value for value), and no unit reads another unit's work.
 //     The universe is sent again at every run (every check and timeframe), so a worker's copy is the universe as
 //     the main thread holds it when the check starts; nothing in the main thread changes it while the check runs
 //     (the check's own code only reads it, and the pipeline awaits the check).
+// Both hold only while the code a unit runs (candidatesOf, the builds, the Ind) keeps every build and cache keyed by
+// the Ind and adds no module-level state that survives between candidatesOf calls (lawsearch-design.md 12.2 (2);
+// C4d, the lead's F2). Such state lives once in the main thread and once in each worker (each loads its own copy of
+// the modules) and sees a different sequence of series in each, so a unit's answer would no longer be a function of
+// its job alone: the bytes could then depend on WORKERS, and a check could read the uncut series' values unseen.
+// Nothing here stops that by construction; the yml's cmp-c-7101 job compares one failing run (the plant
+// lastBarStateG3) at WORKERS=0 and 4 byte for byte, as defense in depth only.
 // Memory: each worker holds one copy of the universe being checked (both timeframes, about 100 MB for [S0, END) of
 // the small trial) and the temporaries of its current unit.
 

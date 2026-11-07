@@ -5,7 +5,8 @@
 #   hand    deno check of research/lawsearch*.ts; stage 0's import graph holds no trade, stats or select module (spec 9);
 #           the hand examples in TS (MODE=hand) and in the Python (--hand); every hand-level planted error of
 #           lawsearch-design.md 8 must fail one of its named examples (TS: exit 4; the Python's twins: exit 0 with
-#           a named example failed, C4c; reasonUsesFuture has no Python twin); every real mode
+#           one of this step's named examples among the failed ids it prints, C4c and C4d; reasonUsesFuture has no
+#           Python twin); every real mode
 #           exits 2; so does every invalid CUT_MAX of a fixed list, before any file is read (design 7.8 hand step 7,
 #           the lead's E13: the only step that sets CUT_MAX, and only to values that are refused), and every invalid
 #           WORKERS of a fixed list (C4b)
@@ -13,13 +14,19 @@
 #           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3),
 #           secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop, spec 6) and blindRowHit (exit 3:
 #           spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture (exit 3, cut or presence failed),
-#           chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened) and lastBarStateG3 /
+#           chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened), lastBarStateG3 /
 #           lastBarStateG5 (C4c: exit 3, the cut failed: a look-ahead carried by state across bars of spec 5's walk,
-#           which the cut sees because it recomputes with the main run's own candidatesOf); O expects exit 3 with the
+#           which the cut sees because it recomputes with the main run's own candidatesOf) and carriedCountB06 (C4d:
+#           exit 3, the cut failed on a B06 trial: the same kind of look-ahead on B06's path, which the cut sees now
+#           that B06 is cut on its prefix from bar 0, not on a 291-bar window); CMP-C 7101 then runs lastBarStateG3
+#           again at WORKERS=0 and wants every file the same bytes as at WORKERS=4 (C4d; defense in depth for design
+#           12.2 (2), not a guard by construction); O expects exit 3 with the
 #           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
 #           stage 2 keeps it closed). No run step sets CUT_MAX (the development
 #           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
-#           step runs the checks' units on WORKERS=4 workers (C4b; the same bytes as with any other WORKERS)
+#           step but the WORKERS=0 one above runs the checks' units on WORKERS=4 workers (C4b; the same bytes as
+#           with any other WORKERS while every build and cache is keyed by the Ind and no module-level state
+#           survives between candidatesOf calls: design 12.2 (2))
 #   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
 #           checks both runs' gmo trees against their manifests first (a mismatch is a STOP, exit 3; the flipped run's
 #           from C4b, the lead's E13), judges spec 14.2's conditions on the exact mirror of each FLIP=0 run (spec 23.1,
@@ -48,7 +55,10 @@ permissions:
 env:
   # C4b (the speed-up): the units of the checks cut, poison and presence run on this many workers (research/
   # lawsearch-par.ts; GitHub's ubuntu-latest runner has 4 vCPUs). The output files are the same bytes for any value
-  # 0 … 64 (0: every unit in the main thread); any other value is refused with exit 2 before any file is read.
+  # 0 … 64 (0: every unit in the main thread) while every build and cache is keyed by the Ind and no module-level
+  # state survives between candidatesOf calls (research/lawsearch-design.md 12.2 (2); C4d: such state could make the
+  # bytes depend on this value; the syn job cmp-c-7101 compares WORKERS=0 with 4 on one run, as defense in depth);
+  # any other value is refused with exit 2 before any file is read.
   WORKERS: "4"
   # no --allow-net anywhere; --sloppy-imports for research/bigflow-lib.ts's app imports (donchianState, spec 15)
   DENO_RUN: deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-write=research/out --allow-env
@@ -102,9 +112,15 @@ jobs:
             fi
             $PY research/lawsearch-check.py --hand --plant "$plant" > /tmp/plant-py.txt 2>&1
             code=$?
+            # C4d (the lead's F3 on C4c's review): the ids after "failed: " are parsed, and one of them must be one of THIS
+            # step's ids for the plant (the list below), as the TS side requires; the Python's own named list is not
+            # trusted for this (for noRisingEdge it also names A.4.32, which design 8 says cannot catch noRisingEdge)
+            failed=$(sed -n "s/^PLANT $plant: .*; failed: //p" /tmp/plant-py.txt | tr -d ' \r')
             caught=0
-            grep -q "^PLANT $plant: .*failed: [^n]" /tmp/plant-py.txt && caught=1
-            echo "Python $plant: exit $code, a named example failed: $caught"
+            for f in ${failed//,/ }; do
+              for id in ${ids//,/ }; do [ "$f" = "$id" ] && caught=1; done
+            done
+            echo "Python $plant: exit $code, failed: ${failed:-(no PLANT line)}; one of $ids among them: $caught"
             if [ "$code" != 0 ] || [ "$caught" != 1 ]; then bad=1; fi
           done <<'EOF'
           htfOpen A.1.12,A.1.13
@@ -225,7 +241,7 @@ jobs:
         include:
           - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2 dropSecondStrata:3 blindRowHit:3" }
           - { name: cmp-n-1002, gen: N, seed: 1002, want: 0, plants: "" }
-          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3" }
+          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3 carriedCountB06:3" }
           - { name: o-6001, gen: O, seed: 6001, want: 3, plants: "" }
           - { name: o-6002, gen: O, seed: 6002, want: 3, plants: "" }
           - { name: o-6003, gen: O, seed: 6003, want: 3, plants: "" }
@@ -294,6 +310,14 @@ jobs:
               grep -q "^cut,stage0," $d/cut_fail.csv 2>/dev/null || { echo "$p: cut_fail.csv has no stage-0 cut row"; bad=1; }
               if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi ;;
             esac
+            # C4d (design 8): the same kind of look-ahead on B06's path (a per-direction count of B06's raw signals
+            # carried from bar 0, read on the series' last bar); B06 is cut on its prefix from bar 0 (no window), so
+            # stage 0's cut must fail on m15.B06 or h1.B06 (cut_fail.csv names its bars), and stage 2 is not opened
+            if [ "$p" = carriedCountB06 ]; then
+              grep -q -E "^(m15|h1)\.B06,cut,0," $d/checks.csv || { echo "$p: the cut did not fail on a B06 trial"; bad=1; }
+              grep -q -E "^cut,stage0,(m15|h1)\.B06," $d/cut_fail.csv 2>/dev/null || { echo "$p: cut_fail.csv has no stage-0 cut row of a B06 trial"; bad=1; }
+              if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi
+            fi
             # design 8 (C3): the stops; none of them opens stage 2 (no syn2 load, no stage2.csv)
             case "$p" in dropSecondStrata|blindRowHit|chosenCutFirstDiff)
               if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi
@@ -321,6 +345,41 @@ jobs:
               grep -q "^withheld.stage1=1$" $d/print.txt || { echo "stage 1's numbers are not withheld"; bad=1; }
             fi
           done
+          exit $bad
+      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4d; the failing run lastBarStateG3; defense in depth, not a guard by construction)
+        if: matrix.name == 'cmp-c-7101'
+        env:
+          WORKERS: "0"
+        run: |
+          set +e
+          # C4d (the lead's F2 on C4c's review): design 12 rule 3 wants the same bytes for any WORKERS. That holds by
+          # construction only while every build and cache is keyed by the Ind and no module-level state survives
+          # between candidatesOf calls (design 12.2 (2)): such state differs between the main thread and each worker,
+          # so it can make the bytes depend on WORKERS. This step does NOT guard that by construction; it is defense
+          # in depth: the plant lastBarStateG3 (a failing run, exit 3), whose WORKERS=4 dump the step above made in
+          # this job, is run again in the main thread (WORKERS=0), and every file must be the same bytes (print.txt
+          # without its time.* lines). It sees such state only where it changes this one run's bytes.
+          r=research/out/lawsearch/${{ matrix.name }}
+          a=$r/plant-lastBarStateG3
+          b=$r/plant-lastBarStateG3-w0
+          [ -d $a ] || { echo "no WORKERS=4 dump of lastBarStateG3 ($a)"; exit 1; }
+          MODE=walkfiles RUN=$r OUT=$b LS_PLANT=lastBarStateG3 $DENO_RUN research/lawsearch.ts > /tmp/w0.txt 2>&1; code=$?
+          tail -3 /tmp/w0.txt
+          echo "lastBarStateG3 at WORKERS=$WORKERS: exit $code (want 3)"
+          bad=0
+          [ "$code" = 3 ] || bad=1
+          if ! diff <(cd $a && find . -type f | sort) <(cd $b && find . -type f | sort); then echo "the file lists differ"; bad=1; fi
+          n=0
+          for f in $(cd $a && find . -type f | sort); do
+            [ -f $b/$f ] || continue
+            n=$((n + 1))
+            if [ "$f" = ./print.txt ]; then
+              cmp -s <(grep -v '^time\.' $a/$f) <(grep -v '^time\.' $b/$f) || { echo "differs: $f (time.* lines aside)"; bad=1; }
+            else
+              cmp -s $a/$f $b/$f || { echo "differs: $f"; bad=1; }
+            fi
+          done
+          echo "WORKERS=0 against WORKERS=4: $n files compared, bad=$bad"
           exit $bad
       - uses: actions/upload-artifact@v4
         if: always()

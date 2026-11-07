@@ -2,7 +2,10 @@
 // one task at a time (both sent again at each run of the pool) and answers each job with lawsearch-checks.ts'
 // runUnitJob, the very function the checks call when they run their units in place. It reads no file and no
 // environment and writes nothing; it keeps no state but the universe, the task and the task's UnitCache (poison's
-// uncut holes, a function of the universe and the task).
+// uncut holes and tables, functions of the universe and the task). The modules it loads are its own copies, so any
+// module-level state in them that survives between candidatesOf calls would differ from the main thread's; the
+// answers are the same bytes for any WORKERS only while there is none but the builds keyed by the Ind and the
+// holes' clock cache (lawsearch-par.ts's header; lawsearch-design.md 12.1, 12.2 (2); C4d).
 
 import { runUnitJob } from "./lawsearch-checks.ts";
 import type { UnitCache, UnitJob, UnitTask } from "./lawsearch-checks.ts";

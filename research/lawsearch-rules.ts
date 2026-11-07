@@ -177,4 +177,9 @@ export const PLANTS: readonly string[] = [
   // emitted before it is exactly 3, or 5, bars back); the cut check must fail (lawsearch-events.ts candidatesOf)
   "lastBarStateG3",
   "lastBarStateG5",
+  // C4d (2026-11-07), a run plant on CMP-C 7101 (C4c's review, M5/M6, the refuter's R1): the same kind of look-ahead
+  // on B06's path: per direction, B06's raw signals counted from bar 0; on the series' last bar a raw B06 signal is
+  // dropped when that count is odd; the cut check must fail on m15.B06 or h1.B06 (B06 is now cut on its prefix from
+  // bar 0, no longer on a 291-bar window; lawsearch-events.ts candidatesOf, lawsearch-checks.ts cutGotAt)
+  "carriedCountB06",
 ];

@@ -179,6 +179,23 @@ export function bigmoveDefault(step: number): BigmoveParams {
 // sigmaMinUsable are usable: mean = oldest-first sum ÷ count, σ = √(Σ (r − mean)·(r − mean), oldest first, ÷
 // (count − 1)), kept only when σ > 0. z[i] = ln(C[i] ÷ C[i−m]) ÷ (σ[i] × √m) when r[i−m+1..i] are all usable.
 // ln is Math.log, which is not correctly rounded: r, σ and z are compared to relative 1e−9 (spec 17.2).
+//
+// C4d (the lead's F1: B06 is now cut on its prefix from bar 0, so this function runs on every cut prefix): the same
+// values, bit for bit, as b3a2c43's (and C4c's) bigmoveOf, faster. That code looped over r[i−W..i−1] twice per bar,
+// skipping the unusable r, and its time was the two chains of W dependent additions per bar. Here:
+//   * ru holds the usable r in bar order and at[t] how many usable r come before bar t, so the usable r of
+//     r[i−W..i−1] are ru[at[i−W]] … ru[at[i] − 1], in the same oldest-first order, and count = at[i] − at[i−W];
+//   * one(i) is that code's body for bar i on ru: the same count, the same additions in the same order from 0 (the
+//     skipped r added nothing before, and are not in ru now), the same mean, sum of squares, division and √;
+//   * four bars i … i + 3 whose windows have the same count (≥ sigmaMinUsable) are summed side by side: each of the
+//     four sums (and sums of squares) is still its own chain, started from 0 and added to in its own oldest-first
+//     order, exactly as one(i + j) would add them; only the chains are interleaved, so the CPU can overlap them.
+//     Any other group of four goes through one() bar by bar. Floating-point addition is not associative, so no sum
+//     is ever reordered, split or shared between windows (no running sum); only independent chains are overlapped.
+// The function is the same one for the main run, the dumps, the hand examples and every check (lawsearch-items.ts B06
+// through Ind.bigmove); C4d's equality test compared it with C4c's on every series and many prefixes of the
+// synthetic runs (c4d/tools/bmeq.ts in the C4d scratch folder).
+const BM_LANES = 4;
 export function bigmoveOf(s: Series, o: BigmoveParams): BigmoveOut {
   const n = s.n;
   const r = new Float64Array(n).fill(NaN);
@@ -189,27 +206,73 @@ export function bigmoveOf(s: Series, o: BigmoveParams): BigmoveOut {
   }
   const sigma = new Float64Array(n).fill(NaN);
   const W = o.sigmaWindow;
-  for (let i = W; i < n; i++) {
-    let count = 0;
+  const minUsable = o.sigmaMinUsable;
+  // the usable r in bar order, and how many come before each bar
+  const at = new Int32Array(n + 1);
+  const ru = new Float64Array(n);
+  let nu = 0;
+  for (let t = 0; t < n; t++) {
+    at[t] = nu;
+    if (usable[t] === 1) ru[nu++] = r[t];
+  }
+  at[n] = nu;
+  // σ[i] alone (the loop body before C4d, on ru)
+  const one = (i: number) => {
+    const a = at[i - W];
+    const count = at[i] - a;
+    if (count < minUsable) return;
     let sum = 0;
-    for (let t = i - W; t < i; t++) {
-      if (usable[t] === 1) {
-        count++;
-        sum += r[t];
-      }
-    }
-    if (count < o.sigmaMinUsable) continue;
+    for (let u = 0; u < count; u++) sum += ru[a + u];
     const mean = sum / count;
     let ss = 0;
-    for (let t = i - W; t < i; t++) {
-      if (usable[t] === 1) {
-        const dv = r[t] - mean;
-        ss += dv * dv;
-      }
+    for (let u = 0; u < count; u++) {
+      const dv = ru[a + u] - mean;
+      ss += dv * dv;
     }
     const sd = Math.sqrt(ss / (count - 1));
     if (sd > 0) sigma[i] = sd;
+  };
+  let i = W;
+  for (; i + BM_LANES <= n; i += BM_LANES) {
+    const a0 = at[i - W], a1 = at[i + 1 - W], a2 = at[i + 2 - W], a3 = at[i + 3 - W];
+    const count = at[i] - a0;
+    if (count < minUsable || at[i + 1] - a1 !== count || at[i + 2] - a2 !== count || at[i + 3] - a3 !== count) {
+      one(i);
+      one(i + 1);
+      one(i + 2);
+      one(i + 3);
+      continue;
+    }
+    // four windows of one count side by side (the header above): four chains, each in one(i + j)'s order
+    let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+    for (let u = 0; u < count; u++) {
+      s0 += ru[a0 + u];
+      s1 += ru[a1 + u];
+      s2 += ru[a2 + u];
+      s3 += ru[a3 + u];
+    }
+    const m0 = s0 / count, m1 = s1 / count, m2 = s2 / count, m3 = s3 / count;
+    let q0 = 0, q1 = 0, q2 = 0, q3 = 0;
+    for (let u = 0; u < count; u++) {
+      const d0 = ru[a0 + u] - m0;
+      const d1 = ru[a1 + u] - m1;
+      const d2 = ru[a2 + u] - m2;
+      const d3 = ru[a3 + u] - m3;
+      q0 += d0 * d0;
+      q1 += d1 * d1;
+      q2 += d2 * d2;
+      q3 += d3 * d3;
+    }
+    const sd0 = Math.sqrt(q0 / (count - 1));
+    const sd1 = Math.sqrt(q1 / (count - 1));
+    const sd2 = Math.sqrt(q2 / (count - 1));
+    const sd3 = Math.sqrt(q3 / (count - 1));
+    if (sd0 > 0) sigma[i] = sd0;
+    if (sd1 > 0) sigma[i + 1] = sd1;
+    if (sd2 > 0) sigma[i + 2] = sd2;
+    if (sd3 > 0) sigma[i + 3] = sd3;
   }
+  for (; i < n; i++) one(i);
   const z = new Float64Array(n).fill(NaN);
   const m = o.moveBars;
   const rootM = Math.sqrt(m);

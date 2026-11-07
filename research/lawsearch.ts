@@ -14,7 +14,9 @@
 // config.json as cut_max and named in print.txt's note.cut_max; checks.csv has no cap marker (E9); the Python's --run
 // refuses a capped run; never in CI or a formal run), WORKERS (C4b: the workers that run the units of the checks cut,
 // poison and presence, research/lawsearch-par.ts; a whole number 0 … 64, default 4; 0 runs every unit in this thread;
-// anything else refused with exit 2; the output files are the same bytes whatever its value, so no file names it).
+// anything else refused with exit 2; the output files are the same bytes whatever its value, so no file names it,
+// as long as every build and cache stays keyed by the Ind and no module-level state survives between candidatesOf
+// calls: research/lawsearch-design.md 12.2 (2), C4d; the yml compares WORKERS=0 with 4 on one run as defense in depth).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
 // raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed
@@ -236,7 +238,7 @@ async function pipeline(c: RunCtx): Promise<number> {
   const avoidSha = await sha256(avoidBytes);
   const avoidOk = avoidSha === SPREAD_H1_SHA256;
   tagged.push({ stage: "gate", r: { name: "avoid", passed: avoidOk, detail: `${avoidPath}: sha256 ${avoidSha}${avoidOk ? "" : `, not ${SPREAD_H1_SHA256}`}`, probes: [] } });
-  let stopped = !avoidOk;
+  const stopped = !avoidOk;
   let code = 0;
   const finish = async (): Promise<number> => {
     put("time.total.ms", Date.now() - t0);
