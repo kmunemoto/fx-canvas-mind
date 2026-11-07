@@ -312,7 +312,9 @@ describe("#389 the live chart with shares", () => {
     expect(row[0]).toBe("live-pair-7203.T");
     expect(row[1]).toBe("live-pair-USD/JPY");
     await waitFor(() => expect(screen.getByTestId("live-note").textContent).toContain("Yahoo Finance"));
-    expect(screen.getByTestId("live-note").textContent).toContain("株のメール通知は、まだありません");
+    expect(screen.getByTestId("live-note").textContent).toContain("日本株の値段は、実際より約15分遅れています（2026-11-06 に測りました）。");
+    expect(screen.getByTestId("live-note").textContent).toContain("「株の MACD」で選べます");
+    expect(screen.getByTestId("live-note").textContent).not.toContain("株のメール通知は、まだありません");
   });
 
   it("finds a share by Yahoo's search once the typing stops, and a Japanese name in the list without asking Yahoo", async () => {

@@ -287,17 +287,21 @@ describe("#391 the MACD email on a share", () => {
     expect(en.text).toContain(`Close $${last.close.toFixed(2)}`);
     expect(en.text).toContain("No stop or target is given.");
     expect(en.text).not.toContain("TP1");
-    // a Tokyo share: yen, its market, the lag not checked
+    // a Tokyo share: yen, its market, Yahoo's 15-minute lag (docs §8.141, measured 2026-11-06)
     const toyota = renderStockMail({ ...sig, pair: "7203.T", close: 3070 }, "ja");
     expect(toyota.subject).toContain("トヨタ自動車（7203.T）");
     expect(toyota.text).toContain("終値 3070.0円");
-    expect(toyota.text).toContain("東証の値段が Yahoo で何分遅れているかは、まだ確かめていません。");
-    expect(renderStockMail({ ...sig, pair: "7203.T", close: 3070 }, "en").text).toContain("Close 3070.0 yen");
+    expect(toyota.text).toContain("東証の値段は Yahoo では約15分遅れて届くため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。");
+    expect(toyota.text).not.toContain("まだ確かめていません");
+    const toyotaEn = renderStockMail({ ...sig, pair: "7203.T", close: 3070 }, "en").text;
+    expect(toyotaEn).toContain("Close 3070.0 yen");
+    expect(toyotaEn).toContain("Yahoo's Tokyo prices come about 15 minutes late, so this email is sent about 15 minutes after the bar closed (measured on 2026-11-06).");
+    expect(en.text).not.toContain("15 minutes late");
   });
 
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v37-2026-11-05T17:00:00Z";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v38-2026-11-07T04:00:00Z";');
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');

@@ -232,7 +232,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...(f ? [`  MACD = ${mx(f.m)}; ${buy ? "bottom" : "top"} of the pane = ${mx(buy ? f.bottom : f.top)}; ${ZONE_PCT}% of it = ${mx(f.mark)}`] : []),
       ].join("\n"),
       `This is the rule of the app's 1-hour MACD email on currency pairs (docs §8.119, §8.122, §8.129), on the share's 1-hour bars: a SELL when the MACD line first reaches ${ZONE_PCT}% or more of the way to the top of the newest ${ZONE_BARS} bars' pane, a BUY when it first reaches ${ZONE_PCT}% or more of the way to its bottom; one email per peak or valley. No stop or target is given. Measured on 22 shares' past hourly bars (docs §8.133), holding with no stop left some trades open far below their entry, even with a take-profit of 0.1%.`,
-      `The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart; a session's last bar is judged on its closing price. ${jp ? "How far Yahoo's Tokyo prices lag has not been checked. " : ""}Check the latest state in the app before you place an order:\n${APP_URL}`,
+      `The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart; a session's last bar is judged on its closing price. ${jp ? "Yahoo's Tokyo prices come about 15 minutes late, so this email is sent about 15 minutes after the bar closed (measured on 2026-11-06). " : ""}Check the latest state in the app before you place an order:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick the share under Stock MACD.\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
   }
@@ -247,7 +247,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ...(f ? [`  MACD = ${mx(f.m)}、枠の${end}の端 = ${mx(buy ? f.bottom : f.top)}（その${ZONE_PCT}% = ${mx(f.mark)}）`] : []),
     ].join("\n"),
     `FX の1時間足 MACD のメールと同じ決まり（docs §8.119・§8.122・§8.129）を、株の1時間足に当てたものです。青い線が新しい${ZONE_BARS}本の枠の上の端の${ZONE_PCT}%以上に届いた足で売り、下の端の${ZONE_PCT}%以上に届いた足で買いを送り、一つの山・谷では1通だけです。損切り・利確の目安は付けていません。22銘柄の過去の1時間足で測ると（docs §8.133）、損切りなしで持った場合、利確を 0.1% にしても、大きな含み損のまま戻らずに残る取引がありました。`,
-    `足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。取引時間の最後の足は、引けの値段で判定します。${jp ? "東証の値段が Yahoo で何分遅れているかは、まだ確かめていません。" : ""}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+    `足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。取引時間の最後の足は、引けの値段で判定します。${jp ? "東証の値段は Yahoo では約15分遅れて届くため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。" : ""}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「株の MACD」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);
 };

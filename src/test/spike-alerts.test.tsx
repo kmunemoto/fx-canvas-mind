@@ -245,7 +245,7 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(fn).not.toContain("spikeMailed");
     expect(fn).toMatch(/try \{\s+reads\.push\(await spikeRead\(pair\)\);\s+\} catch \(err\) \{\s+console\.error\("spike failed:", pair, err\);/);
     expect(fn).toContain("spike: { pairs: SPIKE_PAIRS, intervals: SPIKE_INTERVALS },");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v37-2026-11-05T17:00:00Z";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v38-2026-11-07T04:00:00Z";');
     expect(renderTestMail([{ pair: "USD/JPY", interval: "1h", rule: "spike" }], "ja").text).toContain("登録中のチャート: ドル/円 1時間足（急騰・急落）");
     const mig = readFileSync("supabase/migrations/20261105060000_signal_alert_spike.sql", "utf8");
     expect(mig).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx', 'amdpo3', 'emarm', 'stockmacd', 'spike']));");
