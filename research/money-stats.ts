@@ -59,6 +59,8 @@ const tCdf = (t: number, df: number): number => {
   const p = 0.5 * ibeta(df / 2, 0.5, df / (df + t * t));
   return t >= 0 ? 1 - p : p;
 };
+// spec 8.5 (法則探し): the upper tail U(x, ν) = ½ × I_{ν÷(ν+x×x)}(ν÷2, ½) for x ≥ 0, by the same ibeta as tCdf
+export const tUpperTail = (x: number, df: number): number => 0.5 * ibeta(df / 2, 0.5, df / (df + x * x));
 const tqCache = new Map<string, number>();
 // the p quantile (p over 0.5) of Student's t with df degrees of freedom
 export const tQuantile = (p: number, df: number): number => {
