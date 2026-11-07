@@ -25,12 +25,15 @@ docs §8.144（spec の「One hour after each close email」）: close のメー
 終値で入り、τ ＋ 59分以後に始まる最初の1分足の Bid・Ask の終値で出たときの、メールの向き（mail）と反対の向き（opp）の
 差・pips・2万通貨の円（ドルの通貨は USD/JPY の中値 U を掛ける）と中値の動き（move）を作り、OUT/hour1.csv の行
 （全部の列）と summary.json の hour1（counts と groups: all・通貨ごと・τ の UTC の年ごと）を比べる。
+docs §8.145（spec の「Other holding times」）: 同じ行を、持つ時間 H（HOLDS の各分）ごとに、出る1分足を τ ＋ (H − 1) 分
+以後に始まる最初の足にして作り、OUT/holds.csv の行（H の小さい順、その中は hour1.csv の順）と summary.json の holds
+（H の10進の文字ごとに hour1 と同じ { counts, groups }）を比べる。
 
 使い方:
   python3 -I research/macdlive-check.py --cache DIR --out OUT
     DIR: <DIR>/<USD_JPY など>/<1hour|1min>/<bid|ask>/<鍵>.json（GMO の形）
-    OUT: research/macdlive.ts の出力（rows.csv・hour1.csv と summary.json）。期間（start・end・loadFrom）は
-         summary.json の meta から読む。hour1.csv が無いのも食い違い。
+    OUT: research/macdlive.ts の出力（rows.csv・hour1.csv・holds.csv と summary.json）。期間（start・end・
+         loadFrom）は summary.json の meta から読む。hour1.csv・holds.csv が無いのも食い違い。
 終了コード: 0 = 行と数がすべて一致（最後の行 MACDLIVE-CHECK PASSED）、1 = 食い違いあり、または入力の誤り
 （最後の行 MACDLIVE-CHECK FAILED: n differences）。
 """
@@ -96,6 +99,9 @@ H1_GROUP_KEYS = ['n', 'mailWin', 'mailLoss', 'mailDraw', 'oppWin', 'oppLoss', 'o
 # 同じ数でなければならないもの（数え方と、最小・最大）。和・平均は相対 1e-9 まで。
 H1_EXACT = set(H1_STATUSES) | {'n', 'mailWin', 'mailLoss', 'mailDraw', 'oppWin', 'oppLoss', 'oppDraw', 'moveMail',
                                'moveOpp', 'moveFlat', 'mailYenMin', 'mailYenMax', 'oppYenMin', 'oppYenMax'}
+# docs §8.145: ほかの持つ時間 H（分）。出る1分足は τ ＋ (H − 1) 分以後に始まる最初の足。ほかは hour1 と同じ。
+HOLDS = (5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 10080)
+HOLD_COLS = ['hold'] + H1_COLS
 
 
 def die(msg):
@@ -190,8 +196,9 @@ def decide(p, x):
 
 # ---------------------------------------------------------------- メールを作る
 def compute(cache, start, end, load_from, log):
-    """2つの送り方のメールを作り、1通ずつ追う。(rows, pair_info, ld, chk, h1) を返す。rows は並べた後の行、
-    h1 は close のメールの1時間後の行（docs §8.144、rows と同じ順）。"""
+    """2つの送り方のメールを作り、1通ずつ追う。(rows, pair_info, ld, chk, h1, holds) を返す。rows は並べた後の行、
+    h1 は close のメールの1時間後の行（docs §8.144、rows と同じ順）、holds は H ごとの同じ形の行
+    （docs §8.145、{H: h1 と同じ順の行}）。"""
     ld = fc.LoadStats()
     emails = []
     pair_info = []
@@ -274,6 +281,11 @@ def compute(cache, start, end, load_from, log):
             e['path'] = fc.follow(m1, e['tau'] + P_AFTER, 1 if e['side'] == 'BUY' else -1, e['E'], end)
             if e['way'] == 'close':
                 e['h1'] = hour1_quotes(e, mt, mbc, mac)
+                e['holds'] = []
+                for H in HOLDS:
+                    r = hour1_quotes(e, mt, mbc, mac, (H - 1) * MIN)
+                    r['hold'] = H
+                    e['holds'].append(r)
         if pair == H1_USDJPY:
             usd = (array('d', mt), array('d', mbc), array('d', mac))
         n_m1 = m1.n
@@ -286,11 +298,15 @@ def compute(cache, start, end, load_from, log):
     order = {w: k for k, w in enumerate(WAYS)}
     emails.sort(key=lambda e: (e['tau'], e['pi'], order[e['way']]))
     h1 = []
+    holds = {H: [] for H in HOLDS}
     for e in emails:
         if e['way'] == 'close':
             hour1_rate(e['h1'], usd)
             h1.append(e['h1'])
-    return [row_of(e) for e in emails], pair_info, ld, chk, h1
+            for r in e['holds']:
+                hour1_rate(r, usd)
+                holds[r['hold']].append(r)
+    return [row_of(e) for e in emails], pair_info, ld, chk, h1, holds
 
 
 def row_of(e):
@@ -339,11 +355,11 @@ def summary_of(rows, pair_info):
 
 
 # ---------------------------------------------------------------- close のメールの1時間後（docs §8.144）
-def hour1_quotes(e, mt, mbc, mac):
+def hour1_quotes(e, mt, mbc, mac, after=H1_AFTER):
     """close のメール1通の hour1.csv の行（ドルの通貨の U と円は、あとで hour1_rate が入れる）。
     入り: τ − 1分に始まる1分足の Bid・Ask の終値（eb・ea）。無ければ noEntry（ほかは空）。
-    出: τ ＋ 59分以後に始まる最初の1分足（xOpen・xb・xa）。無ければ noExit（eb・ea だけ残す）。
-    late = (xOpen − (τ ＋ 59分)) / 1分。5 以下は ok、超えれば late。
+    出: τ ＋ 59分（after。§8.145 の H では (H − 1) 分）以後に始まる最初の1分足（xOpen・xb・xa）。無ければ noExit
+    （eb・ea だけ残す）。late = (xOpen − (τ ＋ after)) / 1分。5 以下は ok、超えれば late。
     mail: BUY は xb − ea、SELL は eb − xa。opp: BUY（売り）は eb − xa、SELL（買い）は xb − ea。
     move = 向き × ((xb + xa) / 2 − (eb + ea) / 2)。pips = 差 / 0.01（円）か / 0.0001。円の通貨の円 = 差 * 20000。
     None は空の欄。_ で始まる鍵は数を作るためだけ（行の欄ではない）。"""
@@ -361,7 +377,7 @@ def hour1_quotes(e, mt, mbc, mac):
         return r
     eb, ea = mbc[j], mac[j]
     r['eb'], r['ea'] = eb, ea
-    due = tau + H1_AFTER
+    due = tau + after
     k = bisect.bisect_left(mt, due)
     if k >= n:
         r['st'] = 'noExit'
@@ -577,31 +593,38 @@ def compare_summary(C, mine, S):
 
 def compare_hour1_rows(H, mine, head, theirs):
     """hour1.csv の行を (pair, open) で合わせ、数・並び・全部の欄を比べる。比べた行の数を返す。"""
-    if head != H1_COLS:
-        H.bad(f'hour1.csv header: TS {",".join(head)} / expected {",".join(H1_COLS)}')
+    return compare_quote_rows(H, mine, head, theirs, H1_COLS, ('pair', 'open'), 'hour1')
+
+
+def compare_quote_rows(C, mine, head, theirs, cols, key_cols, name):
+    """<name>.csv（hour1・holds）の行を key_cols で合わせ、数・並び・全部の欄（cols）を比べる。比べた行の数を返す。
+    鍵は欄の文字（自分の行は str にして）で合わせる。"""
+    fname = name + '.csv'
+    if head != cols:
+        C.bad(f'{fname} header: TS {",".join(head)} / expected {",".join(cols)}')
     if len(theirs) != len(mine):
-        H.bad(f'hour1 rows: TS {len(theirs)}, Python {len(mine)}')
+        C.bad(f'{name} rows: TS {len(theirs)}, Python {len(mine)}')
 
     def key(r):
-        return (r.get('pair'), r.get('open'))
+        return tuple(None if r.get(c) is None else str(r.get(c)) for c in key_cols)
     tk = {}
     for r in theirs:
         if key(r) in tk:
-            H.bad(f'hour1.csv: the bar {key(r)} has two rows')
+            C.bad(f'{fname}: the bar {key(r)} has two rows')
         tk[key(r)] = r
     mk = {key(r): r for r in mine}
     for k in mk:
         if k not in tk:
-            H.bad(f'hour1 row {k}: in Python ({mk[k]["tau"]} {mk[k]["side"]} {mk[k]["st"]}), missing in hour1.csv')
+            C.bad(f'{name} row {k}: in Python ({mk[k]["tau"]} {mk[k]["side"]} {mk[k]["st"]}), missing in {fname}')
     for k in tk:
         if k not in mk:
-            H.bad(f'hour1 row {k}: in hour1.csv ({tk[k].get("tau")} {tk[k].get("side")} {tk[k].get("st")}), '
+            C.bad(f'{name} row {k}: in {fname} ({tk[k].get("tau")} {tk[k].get("side")} {tk[k].get("st")}), '
                   f'missing in Python')
     a = [key(r) for r in mine if key(r) in tk]
     b = [key(r) for r in theirs if key(r) in mk]
     if a != b:
         at = next((q for q in range(min(len(a), len(b))) if a[q] != b[q]), min(len(a), len(b)))
-        H.bad(f'hour1 row order: from the shared row {at} on, Python {a[at] if at < len(a) else None} / '
+        C.bad(f'{name} row order: from the shared row {at} on, Python {a[at] if at < len(a) else None} / '
               f'TS {b[at] if at < len(b) else None}')
     n = 0
     for r in mine:
@@ -609,12 +632,13 @@ def compare_hour1_rows(H, mine, head, theirs):
         if t is None:
             continue
         n += 1
-        where = f'hour1 row {r["pair"]} open={r["open"]} ({r["side"]} {r["st"]})'
-        for col in H1_COLS:
+        hold = f'hold={r["hold"]} ' if 'hold' in key_cols else ''
+        where = f'{name} row {hold}{r["pair"]} open={r["open"]} ({r["side"]} {r["st"]})'
+        for col in cols:
             v = r[col]
             s = t.get(col)
             s = '' if s is None else s
-            H.fields += 1
+            C.fields += 1
             if col in H1_STR_COLS:
                 ok = s == ('' if v is None else str(v))
             elif v is None:
@@ -625,33 +649,56 @@ def compare_hour1_rows(H, mine, head, theirs):
                 except ValueError:
                     ok = False
             if not ok:
-                H.bad(f'{where} {col}: TS {s!r} / Python {v!r}')
+                C.bad(f'{where} {col}: TS {s!r} / Python {v!r}')
     return n
 
 
 def compare_hour1_summary(H, mine, S):
     """summary.json の hour1: counts と groups（鍵の組も同じでなければならない）。比べなかった鍵を返す。"""
-    th = S.get('hour1')
+    return compare_quote_summary(H, mine, S.get('hour1'), 'hour1')
+
+
+def compare_quote_summary(C, mine, th, where):
+    """{ counts, groups } の1つ（hour1、holds の H ごと）。比べなかった鍵を返す。"""
     if not isinstance(th, dict):
-        H.bad('hour1: missing in summary.json')
+        C.bad(f'{where}: missing in summary.json')
         return []
-    skipped = compare_obj(H, 'hour1.counts', mine['counts'], th.get('counts'), H1_STATUSES, H1_EXACT)
+    skipped = compare_obj(C, f'{where}.counts', mine['counts'], th.get('counts'), H1_STATUSES, H1_EXACT)
     tg = th.get('groups')
     if not isinstance(tg, dict):
-        H.bad('hour1.groups: missing in summary.json')
+        C.bad(f'{where}.groups: missing in summary.json')
         return skipped
     names = {p.replace('/', '_'): p for p in PAIRS}      # 'USD_JPY' の形の鍵も通貨として読む
     tgn = {names.get(k, k): v for k, v in tg.items()}
     mg = mine['groups']
     for k in mg:
         if k not in tgn:
-            H.bad(f'hour1.groups.{k}: missing in summary.json')
+            C.bad(f'{where}.groups.{k}: missing in summary.json')
             continue
-        skipped += compare_obj(H, f'hour1.groups.{k}', mg[k], tgn[k], H1_GROUP_KEYS, H1_EXACT)
+        skipped += compare_obj(C, f'{where}.groups.{k}', mg[k], tgn[k], H1_GROUP_KEYS, H1_EXACT)
     for k in tgn:
         if k not in mg:
-            H.bad(f'hour1.groups.{k}: in summary.json, not a group here (Python groups: {", ".join(mg)})')
-    skipped += [f'hour1.{k}' for k in th if k not in ('counts', 'groups')]
+            C.bad(f'{where}.groups.{k}: in summary.json, not a group here (Python groups: {", ".join(mg)})')
+    skipped += [f'{where}.{k}' for k in th if k not in ('counts', 'groups')]
+    return skipped
+
+
+def compare_holds_summary(C, mine, S):
+    """summary.json の holds: H（10進の文字）ごとの { counts, groups }。H の組は HOLDS と同じでなければならない。"""
+    th = S.get('holds')
+    if not isinstance(th, dict):
+        C.bad('holds: missing in summary.json')
+        return []
+    skipped = []
+    for H in HOLDS:
+        if str(H) not in th:
+            C.bad(f'holds.{H}: missing in summary.json')
+            continue
+        skipped += compare_quote_summary(C, mine[H], th[str(H)], f'holds.{H}')
+    names = {str(H) for H in HOLDS}
+    for k in th:
+        if k not in names:
+            C.bad(f'holds.{k}: in summary.json, not a holding time here ({", ".join(sorted(names, key=int))})')
     return skipped
 
 
@@ -684,6 +731,14 @@ def main():
             ts_h1 = list(rd)
     except Exception as e:  # noqa: BLE001
         h1_err = repr(e)               # 無い・読めない: 食い違いとして数え、ほかは比べ続ける
+    hd_head, ts_hd, hd_err = [], None, None
+    try:
+        with open(os.path.join(a.out, 'holds.csv'), newline='', encoding='utf-8') as f:
+            rd = csv.DictReader(f)
+            hd_head = list(rd.fieldnames or [])
+            ts_hd = list(rd)
+    except Exception as e:  # noqa: BLE001
+        hd_err = repr(e)               # hour1.csv と同じ: 食い違いとして数え、ほかは比べ続ける
     if not os.path.isdir(a.cache):
         die(f'no cache folder {a.cache}')
     print(f'macdlive-check (docs §8.131): bars closing in [{fc.iso(start)}, {fc.iso(end)}), 1h bars from '
@@ -693,7 +748,7 @@ def main():
     else:
         print('  the period is NOT the spec\'s real one (a test run)')
 
-    rows, pair_info, ld, chk, h1 = compute(a.cache, start, end, load_from, print)
+    rows, pair_info, ld, chk, h1, holds = compute(a.cache, start, end, load_from, print)
     mine = summary_of(rows, pair_info)
     for way in WAYS:
         s = mine['ways'][way]['all']
@@ -746,12 +801,38 @@ def main():
     if h1_skipped:
         print('in summary.json hour1, not compared: ' + ', '.join(h1_skipped[:20]) +
               (' ...' if len(h1_skipped) > 20 else ''))
+
+    # docs §8.145: ほかの持つ時間 H
+    hd_sum = {h: hour1_summary_of(holds[h]) for h in HOLDS}
+    hd_rows = [r for h in HOLDS for r in holds[h]]
+
+    def one(h):
+        c, g = hd_sum[h]['counts'], hd_sum[h]['groups']['all']
+        return (f'{h}: ' + '/'.join(str(c[k]) for k in H1_STATUSES) +
+                f', mail {g["mailWin"]}/{g["mailLoss"]}/{g["mailDraw"]}, opp {g["oppWin"]}/{g["oppLoss"]}/{g["oppDraw"]}')
+    print(f'  holds (docs §8.145, close emails after H minutes): rows {len(hd_rows)} ({len(HOLDS)} H x {len(h1)} '
+          f'emails); per H: ok/late/noEntry/noExit/noRate, then win/loss/draw over ok -- ' +
+          '; '.join(one(h) for h in HOLDS))
+    K = Cmp(H1_DIFF_LINES)
+    if ts_hd is None:
+        K.bad(f'holds.csv: not read ({hd_err})')
+        hd_n = 0
+    else:
+        hd_n = compare_quote_rows(K, hd_rows, hd_head, ts_hd, HOLD_COLS, ('hold', 'pair', 'open'), 'holds')
+    hd_skipped = compare_holds_summary(K, hd_sum, S)
+    print(f'holds: compared {hd_n} rows of holds.csv (TS {"-" if ts_hd is None else len(ts_hd)}, Python {len(hd_rows)}) '
+          f'and summary.json holds: {K.fields} fields, {K.near} equal only within {REL:g} relative (largest '
+          f'{K.near_max:.3g}), {K.n} different')
+    if hd_skipped:
+        print('in summary.json holds, not compared: ' + ', '.join(hd_skipped[:20]) +
+              (' ...' if len(hd_skipped) > 20 else ''))
     print(f'({time.time() - t_all:.1f}s)')
-    if C.n or H.n:
-        print(f'MACDLIVE-CHECK FAILED: {C.n + H.n} differences')
+    if C.n or H.n or K.n:
+        print(f'MACDLIVE-CHECK FAILED: {C.n + H.n + K.n} differences')
         sys.exit(1)
     print(f'rows {len(rows)} and every number the same')
     print(f'hour1 rows {len(h1)} and every number the same')
+    print(f'holds rows {len(hd_rows)} ({len(HOLDS)} holding times) and every number the same')
     print('MACDLIVE-CHECK PASSED')
     sys.exit(0)
 
