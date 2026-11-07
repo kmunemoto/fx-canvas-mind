@@ -263,7 +263,7 @@ const fullStats = (rows: readonly LRow[]): FullStats => {
   return { ...s, pipsSum, guidePipsSum };
 };
 
-const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats, h1: readonly H1Row[]) => {
+const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats, h1: readonly H1Row[], hs: Map<number, H1Row[]>) => {
   const ways: Record<string, Record<string, FullStats>> = {};
   for (const w of ["close", "live"] as Way[]) {
     const rs = rows.filter((r) => r.mail.way === w);
@@ -282,6 +282,7 @@ const summaryOf = (rows: LRow[], outs: PairOut[], st: LoadStats, h1: readonly H1
     },
     pairs: outs.map((o) => ({ pair: o.pair, bars1h: o.bars1h, judged: o.judged })),
     hour1: h1Summary(h1),
+    holds: holdsSummary(hs),
     load: st,
   };
 };
@@ -331,18 +332,21 @@ const H1_UNITS = 20000;
 // a row is in the main numbers when its exit bar opened at most this many minutes after τ + 59 minutes
 const H1_LATE_MAX = 5;
 
-const hour1Of = (mail: LiveMail, m: M1, uj: M1 | null): H1Row => {
+// the row of a holding time of H minutes (spec "Other holding times", docs §8.145; H = 60 is "One hour after each
+// close email", docs §8.144): the exit bar is the first 1-minute bar opened at or after τ + (H − 1) minutes
+const holdOf = (mail: LiveMail, m: M1, uj: M1 | null, H: number): H1Row => {
   const empty = { eb: null, ea: null, xOpen: null, late: null, xb: null, xa: null, u: null, mailPips: null, oppPips: null, mailYen: null, oppYen: null, move: null };
   const qe = lowerBound(m.t, mail.T - MINUTE);
   if (qe >= m.n || m.t[qe] !== mail.T - MINUTE) return { mail, st: "noEntry", ...empty };
   const eb = m.bc[qe];
   const ea = m.ac[qe];
-  const qx = lowerBound(m.t, mail.T + 59 * MINUTE);
+  const due = mail.T + (H - 1) * MINUTE;
+  const qx = lowerBound(m.t, due);
   if (qx >= m.n) return { mail, st: "noExit", ...empty, eb, ea };
   const xOpen = m.t[qx];
   const xb = m.bc[qx];
   const xa = m.ac[qx];
-  const late = (xOpen - (mail.T + 59 * MINUTE)) / MINUTE;
+  const late = (xOpen - due) / MINUTE;
   const buy = mail.side === "BUY";
   const dm = buy ? xb - ea : eb - xa;
   const dOpp = buy ? eb - xa : xb - ea;
@@ -370,11 +374,30 @@ const hour1Of = (mail: LiveMail, m: M1, uj: M1 | null): H1Row => {
   };
 };
 
-// every close email's row, in rows.csv's order (rows are already merged in that order)
+const hour1Of = (mail: LiveMail, m: M1, uj: M1 | null): H1Row => holdOf(mail, m, uj, 60);
+
+// every close email's row of a holding time, in rows.csv's order (rows are already merged in that order)
+const holdRows = (rows: readonly LRow[], data: readonly PairData[], H: number): H1Row[] => {
+  const m1Of = new Map(data.map((d) => [d.pair, d.book.m]));
+  const uj = m1Of.get("USD/JPY") ?? null;
+  return rows.filter((r) => r.mail.way === "close").map((r) => holdOf(r.mail, m1Of.get(r.mail.pair) as M1, uj, H));
+};
 const hour1Rows = (rows: readonly LRow[], data: readonly PairData[]): H1Row[] => {
   const m1Of = new Map(data.map((d) => [d.pair, d.book.m]));
   const uj = m1Of.get("USD/JPY") ?? null;
   return rows.filter((r) => r.mail.way === "close").map((r) => hour1Of(r.mail, m1Of.get(r.mail.pair) as M1, uj));
+};
+
+// the holding times of docs §8.145, minutes
+const HOLDS = [5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 10080] as const;
+const holdsAll = (rows: readonly LRow[], data: readonly PairData[]): Map<number, H1Row[]> => new Map(HOLDS.map((H) => [H, holdRows(rows, data, H)]));
+const holdsSummary = (hs: Map<number, H1Row[]>) => Object.fromEntries([...hs].map(([H, rs]) => [String(H), h1Summary(rs)]));
+// a row's cells as written (for the check that H = 60 is hour1)
+const h1Cells = (r: H1Row) => [r.mail.pair, r.mail.T, r.st, r.eb, r.ea, r.xOpen, r.late, r.xb, r.xa, r.u, r.mailPips, r.oppPips, r.mailYen, r.oppYen, r.move].map(String).join(",");
+const holdsCsv = (hs: Map<number, H1Row[]>): string => {
+  const out = ["hold," + h1Csv([]).trim()];
+  for (const [H, rs] of hs) for (const line of h1Csv(rs).trim().split("\n").slice(1)) out.push(`${H},${line}`);
+  return out.join("\n") + "\n";
 };
 
 interface H1Stats {
@@ -572,6 +595,15 @@ const checkWalk = (seed: number) => {
   if (g1.n === 0) bad("hour1: no row in the numbers on the walk");
   if (g1.mailWin + g1.mailLoss + g1.mailDraw !== g1.n || g1.oppWin + g1.oppLoss + g1.oppDraw !== g1.n || g1.moveMail + g1.moveOpp + g1.moveFlat !== g1.n) bad("hour1: the counts do not add up");
   console.log(`walk seed ${seed}: hour1 ${JSON.stringify(h1s.counts)}`);
+  // the holding times: H = 60 is hour1, the arithmetic adds up for every H, each H has a row per close email
+  const hs = holdsAll(rows, ds);
+  const h60 = hs.get(60) as H1Row[];
+  if (h60.map(h1Cells).join("|") !== h1.map(h1Cells).join("|")) bad("holds: H = 60 is not hour1");
+  for (const [H, rs] of hs) {
+    for (const x of h1Mismatches(rs).slice(0, 5)) bad(`holds ${H}: ${x}`);
+    if (rs.length !== h1.length) bad(`holds ${H}: not one row per close email`);
+  }
+  console.log(`walk seed ${seed}: holds ${[...hs].map(([H, rs]) => `${H}:${JSON.stringify(h1Summary(rs).counts)}`).join(" ")}`);
   for (const x of ck.mismatches.slice(0, 20)) bad(`the live decision differs from decideZoneOnWindow: ${x}`);
   // a live email at the close is the close way's, and every close email's bar has a live email (at or before it)
   for (const o of outs) {
@@ -632,14 +664,17 @@ if (import.meta.main) {
     }
     const rows = merged(outs);
     const h1 = hour1Rows(rows, data);
-    const h1bad = h1Mismatches(h1);
+    const hs = holdsAll(rows, data);
+    const h1bad = [...h1Mismatches(h1), ...[...hs].flatMap(([H, rs]) => h1Mismatches(rs).map((x) => `hold ${H}: ${x}`))];
+    if ((hs.get(60) as H1Row[]).map(h1Cells).join("|") !== h1.map(h1Cells).join("|")) h1bad.push("holds: H = 60 is not hour1");
     if (h1bad.length) {
       for (const x of h1bad.slice(0, 20)) console.log(`  HOUR1 ${x}`);
       Deno.exit(1);
     }
     await Deno.writeTextFile(`${OUT}/rows.csv`, csvOf(rows));
     await Deno.writeTextFile(`${OUT}/hour1.csv`, h1Csv(h1));
-    await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify(summaryOf(rows, outs, st, h1), null, 1));
+    await Deno.writeTextFile(`${OUT}/holds.csv`, holdsCsv(hs));
+    await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify(summaryOf(rows, outs, st, h1, hs), null, 1));
     // the numbers are printed by the workflow only after the Python agreed (research/macdlive-check.py)
     console.log(`written: ${rows.length} rows`);
   } else if (MODE === "print") {
@@ -659,6 +694,17 @@ if (import.meta.main) {
           ` | opp: win ${v.oppWin} loss ${v.oppLoss} draw ${v.oppDraw} pips sum ${fmt(v.oppPipsSum, 1)} mean ${fmt(v.oppPipsMean)} yen sum ${fmt(v.oppYenSum, 0)} mean ${fmt(v.oppYenMean, 0)} min ${fmt(v.oppYenMin, 0)} max ${fmt(v.oppYenMax, 0)}` +
           ` | mid moved mail ${v.moveMail} opp ${v.moveOpp} flat ${v.moveFlat}`,
       );
+    }
+    // the holding times (docs §8.145): one line per H and group
+    for (const [H, hv] of Object.entries(s.holds as Record<string, { counts: Record<string, number>; groups: Record<string, H1Stats> }>)) {
+      console.log(`holds ${H} min counts ${JSON.stringify(hv.counts)}`);
+      for (const [k, v] of Object.entries(hv.groups)) {
+        console.log(
+          `  hold ${H.padStart(5)} ${k.padEnd(8)} n ${v.n} | mail: win ${v.mailWin} loss ${v.mailLoss} draw ${v.mailDraw} pips mean ${fmt(v.mailPipsMean)} yen sum ${fmt(v.mailYenSum, 0)} mean ${fmt(v.mailYenMean, 0)} min ${fmt(v.mailYenMin, 0)} max ${fmt(v.mailYenMax, 0)}` +
+            ` | opp: win ${v.oppWin} loss ${v.oppLoss} draw ${v.oppDraw} pips mean ${fmt(v.oppPipsMean)} yen sum ${fmt(v.oppYenSum, 0)} mean ${fmt(v.oppYenMean, 0)} min ${fmt(v.oppYenMin, 0)} max ${fmt(v.oppYenMax, 0)}` +
+            ` | moved mail ${v.moveMail} opp ${v.moveOpp} flat ${v.moveFlat}`,
+        );
+      }
     }
     // the close emails since the live rule began (to set against the emails production sent)
     const liveFrom = env("LIVE_FROM", "2026-10-30T02:00:00Z");

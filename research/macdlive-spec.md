@@ -125,3 +125,26 @@ status `ok` (rows in hour1.csv's order): `n`, `mailWin` (`dm > 0`), `mailLoss` (
 The second implementation builds the same rows from its own close emails and its own 1-minute bars and must find the
 same hour1.csv (every column; numbers equal as doubles) and the same `hour1` (counts equal; sums and means equal or
 within 1e-9 relative; the rest equal).
+
+## Other holding times (docs §8.145, 2026-11-07)
+
+The owner (2026-11-07), after §8.144: 「他のいろんな待ち時間で調べてみて」 (the same comparison with other waits). Exactly
+"One hour after each close email" above, with the hour replaced by each holding time `H` (minutes) in
+HOLDS = 5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 10080:
+
+- Entry quote: as there (the 1-minute bar that opened at `τ − 1 minute`; none: `noEntry`).
+- Exit quote: the first 1-minute bar whose open is at or after `τ + (H − 1) minutes`; none among the loaded bars:
+  `noExit`. `late` = (`xOpen` − (`τ + (H − 1) minutes`)) / 1 minute; status `ok` when `late` ≤ 5, `late` when `late` > 5
+  (a weekend or a gap in between: listed, not in the main numbers); `noRate` as there (precedence over `late`).
+- `dm`, `do`, `move`, pips, yen and `U`: as there.
+
+Output OUT/holds.csv, header `hold,pair,open,tau,side,st,eb,ea,xOpen,late,xb,xa,u,mailPips,oppPips,mailYen,oppYen,move`
+(`hold` = `H`), the rows of each `H` in hour1.csv's order, the `H`s ascending. The cells as in hour1.csv. With `H` = 60 the
+rows (from `pair` on) are hour1.csv's rows.
+
+summary.json `holds`: an object keyed by `H` written as a decimal string (`"5"`, `"15"`, …, `"10080"`), each
+`{ counts, groups }` exactly as `hour1`'s (the counts over all close emails; the groups `all`, each pair, each UTC year of
+`tau` over all close emails, each over its rows with status `ok`).
+
+The second implementation builds the same rows for every `H` and must find the same holds.csv (every column; numbers
+equal as doubles) and the same `holds` (as for `hour1`).
