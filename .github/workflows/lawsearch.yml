@@ -6,15 +6,18 @@
 #           the hand examples in TS (MODE=hand) and in the Python (--hand); every hand-level planted error of
 #           lawsearch-design.md 8 must fail one of its named examples (TS and the Python's twins); every real mode
 #           exits 2; so does every invalid CUT_MAX of a fixed list, before any file is read (design 7.8 hand step 7,
-#           the lead's E13: the only step that sets CUT_MAX, and only to values that are refused)
-#   syn     the runs of lawsearch-design.md 10, one job each: TS MODE=syn, then the Python's own recompute and the
-#           comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run plants avoidFull (exit 3),
-#           secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop, spec 6) and blindRowHit (exit 3:
-#           spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture (exit 3, cut or presence failed)
-#           and chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened); O expects exit 3 with the
-#           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
-#           stage 2 keeps it closed). No run step sets CUT_MAX (the development cap; the Python's --run refuses a
-#           capped run, and from C4b its --compare too: the lead's E14)
+#           the lead's E13: the only step that sets CUT_MAX, and only to values that are refused), and every invalid
+#           WORKERS of a fixed list (C4b)
+#   syn     the runs of lawsearch-design.md 10, one job each: TS MODE=syn; research/lawsearch-candat-check.ts on the
+#           run's bars (C4b: the checks' one-bar candidatesAt gives candidatesOf's rows at every bar); then the
+#           Python's own recompute and the comparison (--run; exit 5 on a difference); CMP-N 1001 also carries the run
+#           plants avoidFull (exit 3), secondHalfAll (exit 2), dropSecondStrata (exit 3: stage 0's noBlind stop,
+#           spec 6) and blindRowHit (exit 3: spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture
+#           (exit 3, cut or presence failed) and chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not
+#           opened); O expects exit 3 with the cut and the poison failed on the E26 trials, and ends before stage 2
+#           (design 7.7: a failed check before stage 2 keeps it closed). No run step sets CUT_MAX (the development
+#           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
+#           step runs the checks' units on WORKERS=4 workers (C4b; the same bytes as with any other WORKERS)
 #   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
 #           checks both runs' gmo trees against their manifests first (a mismatch is a STOP, exit 3; the flipped run's
 #           from C4b, the lead's E13), judges spec 14.2's conditions on the exact mirror of each FLIP=0 run (spec 23.1,
@@ -41,6 +44,10 @@ permissions:
   contents: read
 
 env:
+  # C4b (the speed-up): the units of the checks cut, poison and presence run on this many workers (research/
+  # lawsearch-par.ts; GitHub's ubuntu-latest runner has 4 vCPUs). The output files are the same bytes for any value
+  # 0 … 64 (0: every unit in the main thread); any other value is refused with exit 2 before any file is read.
+  WORKERS: "4"
   # no --allow-net anywhere; --sloppy-imports for research/bigflow-lib.ts's app imports (donchianState, spec 15)
   DENO_RUN: deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-write=research/out --allow-env
   PY: python3 -I
@@ -158,6 +165,42 @@ jobs:
             done
           done
           exit $bad
+      - name: Invalid WORKERS values are refused (exit 2, before any file is read; C4b, as CUT_MAX above)
+        # C4b (the speed-up): WORKERS is the number of workers for the units of the checks cut, poison and presence, a
+        # whole number 0 … 64 in decimal digits with no sign and no leading zero (unset or empty: 4). Each probe runs as
+        # the CUT_MAX probes do, with no read or write permission, so exit 2 with the WORKERS line shows that no file
+        # was read; the controls (0, 1, 4, 64, and empty for the default) must pass the refusal and stop on the first
+        # read.
+        run: |
+          set +e
+          bad=0
+          probe() {  # <mode> <WORKERS>: the output in /tmp/workers.txt, the exit in $code
+            if [ "$1" = syn ]; then
+              MODE=syn GEN=N SEED=1001 FLIP=0 OUT=research/out/lawsearch/workers-probe WORKERS="$2" deno run --sloppy-imports --no-config --no-prompt --allow-env research/lawsearch.ts > /tmp/workers.txt 2>&1
+            else
+              MODE=walkfiles RUN=research/out/lawsearch/cmp-n-1001 WORKERS="$2" deno run --sloppy-imports --no-config --no-prompt --allow-env research/lawsearch.ts > /tmp/workers.txt 2>&1
+            fi
+            code=$?
+          }
+          for v in -1 +1 abc 65 100 04 00 1.5 1e1 0x4 " 4" "4 " Infinity NaN; do
+            for m in syn walkfiles; do
+              probe $m "$v"
+              refused=0
+              grep -qxF "REFUSED: WORKERS \"$v\" is not a whole number from 0 to 64 (the workers of the checks cut, poison and presence; unset for 4)" /tmp/workers.txt && refused=1
+              echo "WORKERS=\"$v\" MODE=$m: exit $code, the WORKERS refusal printed: $refused"
+              if [ "$code" != 2 ] || [ "$refused" != 1 ]; then cat /tmp/workers.txt; bad=1; fi
+              [ ! -e research/out/lawsearch/workers-probe ] || { echo "an output folder was written"; bad=1; }
+            done
+          done
+          # the controls: not refused; they stop on the first read (the rules files) for want of the permission
+          for v in 0 1 4 64 ""; do
+            for m in syn walkfiles; do
+              probe $m "$v"
+              echo "control WORKERS=\"$v\" MODE=$m: exit $code (want 1, NotCapable on a read)"
+              if [ "$code" != 1 ] || ! grep -q "NotCapable: Requires read access" /tmp/workers.txt || grep -q "REFUSED: WORKERS" /tmp/workers.txt; then cat /tmp/workers.txt; bad=1; fi
+            done
+          done
+          exit $bad
 
   syn:
     needs: hand
@@ -195,6 +238,12 @@ jobs:
           $DENO_RUN research/lawsearch.ts; code=$?
           echo "exit $code (want ${{ matrix.want }})"
           [ "$code" = "${{ matrix.want }}" ] || exit 1
+      - name: The checks' one-bar candidates equal candidatesOf's rows at every bar (C4b; spec 5, 15)
+        # C4b (the speed-up "free"): the checks cut, poison and presence recompute only the rows at the bar they compare
+        # (candidatesAt), which is exact only while spec 5's per-bar body passes no state from one bar to the next.
+        # This step asks candidatesAt at every bar of this run's series, in a scrambled order, for every trial and pair,
+        # with the run's options and with the plant noRisingEdge, and stops on any bar whose rows differ.
+        run: deno run --sloppy-imports --no-config --v8-flags=--max-old-space-size=12288 --allow-read=. research/lawsearch-candat-check.ts research/out/lawsearch/${{ matrix.name }}
       - name: The O runs' failed checks (cut and poison on every E26 trial; their stage-1 suspicion hits; nothing else; stage 2 not opened)
         if: matrix.gen == 'O'
         run: |

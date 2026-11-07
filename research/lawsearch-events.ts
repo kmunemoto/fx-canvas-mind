@@ -17,6 +17,7 @@ import type {
   Classified,
   ExclCtx,
   FilterBuild,
+  FilterDef,
   HalfName,
   HalfOf,
   Holes,
@@ -77,23 +78,98 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 //   ④ the F of an (E, F) trial: 無し → f_none (counted apart, not emitted), false → dropped (uncounted), true → kept;
 //   ⑤ both directions still kept at one bar → both (applyBoth).
 // warmOk: the bar index is at or past the trial's warm-ups (E's and F's; the S's F; the B's), and the F's own warmOk.
+//
+// C4b ("free"): the function is cut into three parts that candidatesAt (below) shares: prepare (① and what ②–④ and
+// the warm-up read: the builds, the kind, the first bar whose condition is not 無し), rowsAtBar (②–④ at one bar i:
+// the body of b3a2c43's loop, unchanged) and finish (the typed arrays, ⑤ and the warm-up). candidatesOf runs
+// rowsAtBar on every bar in order, as before. The item's and the F's builds are kept per Ind (buildOf) for the trials
+// that share the same Ind; see there.
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
-  const params = o?.params;
+  const p = prepare(trial, ind, o);
+  const rows: CandRows = { i: [], d: [], s: [] };
+  for (let i = 0; i < p.n; i++) rowsAtBar(p, i, rows);
+  return finish(trial, ind, p, rows);
+}
+
+// C4b ("free"): the rows of candidatesOf(trial, ind, o) at bar i alone: the same prepare, the same body at bar i,
+// the same finish. They are exactly those rows, by construction: the body at bar i reads only bar i's and bar i − 1's
+// values of the builds and the first bar whose condition is not 無し (both computed by prepare on the whole series,
+// as candidatesOf does), and it starts from nothing at each bar (st is reset; no other state passes from one bar to
+// the next); ⑤ marks only a pair of rows at one bar (applyBoth skips a pair whose bars differ, and a bar has at most
+// two rows, buy then sell), and the warm-up of a row reads its bar alone. The checks of spec 15 (cut, poison,
+// presence) compare only the rows at one bar (decisionOf), so they call this instead of making every bar's rows of
+// the series they recompute; the builds (①) are still made on that whole series (cut, window, poisoned or edited).
+export function candidatesAt(trial: TrialDef, ind: Ind, i: number, o?: CandOpts): Candidates {
+  const p = prepare(trial, ind, o);
+  const rows: CandRows = { i: [], d: [], s: [] };
+  if (Number.isInteger(i) && i >= 0 && i < p.n) rowsAtBar(p, i, rows);
+  return finish(trial, ind, p, rows);
+}
+
+// what ②–④ and the warm-up read (prepare's result)
+interface Prepared {
+  n: number;
+  kind: ItemKind;
+  cond: [Tri, Tri];
+  keep: [Uint8Array, Uint8Array] | null;
+  // ④'s F (E × F trials only)
+  fb: FilterBuild | null;
+  // the warm-up: the index, and the F's own per-bar warmOk (F02), if any
+  warm: number;
+  fWarmOk: Uint8Array | null;
+  edge: boolean;
+  // the first bar whose condition is not 無し, per direction
+  first: [number, number];
+}
+interface CandRows {
+  i: number[];
+  d: number[];
+  s: number[];
+}
+
+// C4b ("free"): one Ind's builds of items and F's, kept while the Ind lives (a WeakMap keyed by the Ind), so that
+// the trials on one Ind with the same item (or the same F; an S row's F is the F's own FilterDef) build it once. A
+// build is a function of the Ind (its series and plant), the definition and params alone: kept only without params
+// (a run never passes any; the hand examples' shrunk windows are built afresh each time), and keyed by the
+// definition's id, with answerKnowingE26 apart (another item under E26's id). An Ind is made from one series (the
+// uncut one, one cut target's, one window, one poisoned or edited copy) and never sees another, so a kept build is
+// the build the next trial would make again from that same series: nothing passes between series. Nothing reads a
+// build to change it (candidatesOf and the dump only read).
+const BUILDS = new WeakMap<Ind, Map<string, ItemBuild | FilterBuild>>();
+const buildOf = <B extends ItemBuild | FilterBuild>(ind: Ind, key: string, params: ItemParams | undefined, make: () => B): B => {
+  if (params !== undefined) return make();
+  let m = BUILDS.get(ind);
+  if (!m) {
+    m = new Map();
+    BUILDS.set(ind, m);
+  }
+  const hit = m.get(key);
+  if (hit) return hit as B;
+  const v = make();
+  m.set(key, v);
+  return v;
+};
+const itemBuildOf = (id: string, ind: Ind, o?: CandOpts): ItemBuild => {
+  const ak = !!(o?.answerKnowing && id === "E26");
+  return buildOf(ind, `item:${id}${ak ? ":answerKnowing" : ""}`, o?.params, () => itemFor(id, o).build(ind, o?.params));
+};
+const filterBuildOf = (def: FilterDef, ind: Ind, o?: CandOpts): FilterBuild => buildOf(ind, `filter:${def.id}`, o?.params, () => def.build(ind, o?.params));
+
+// ① and what ②–④ read (b3a2c43's code before the loop, the builds through buildOf)
+function prepare(trial: TrialDef, ind: Ind, o?: CandOpts): Prepared {
   const plant = o?.plant ?? "";
   const n = ind.series.n;
   let kind: ItemKind;
   let cond: [Tri, Tri];
   let keep: [Uint8Array, Uint8Array] | null = null;
-  // ④'s F (E × F trials only)
   let fb: FilterBuild | null = null;
-  // the warm-up: the index k, and the F's own per-bar warmOk (F02), if any
   let warm: number;
   let fWarmOk: Uint8Array | null = null;
   switch (trial.kind) {
     case "EF": {
       if (trial.e === null || trial.f === null) return notBuilt(trial.id);
-      const b: ItemBuild = itemFor(trial.e, o).build(ind, params);
-      fb = filterOf(trial.f).build(ind, params);
+      const b: ItemBuild = itemBuildOf(trial.e, ind, o);
+      fb = filterBuildOf(filterOf(trial.f), ind, o);
       kind = b.kind;
       cond = b.cond;
       keep = b.keep;
@@ -104,7 +180,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     case "S": {
       // the S row's condition is its F's f, and its warm-up the F's (spec 4.3, 21.5)
       if (trial.s === null) return notBuilt(trial.id);
-      const sf = sFilterOf(trial.s).build(ind, params);
+      const sf = filterBuildOf(sFilterOf(trial.s), ind, o);
       kind = "state";
       cond = sf.f;
       warm = sf.warmup;
@@ -113,7 +189,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     }
     case "B": {
       if (trial.b === null) return notBuilt(trial.id);
-      const b = itemFor(trial.b, o).build(ind, params);
+      const b = itemBuildOf(trial.b, ind, o);
       kind = b.kind;
       cond = b.cond;
       keep = b.keep;
@@ -126,55 +202,62 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
   if (kind === "state" && trial.kind !== "S") throw new Error(`candidatesOf: ${trial.id}: an item of kind state`);
   const edge = (kind === "condition" || kind === "hold") && plant !== "noRisingEdge";
   // the first bar whose condition is not 無し, per direction
-  const first = [cond[0].findIndex((v) => v !== -1), cond[1].findIndex((v) => v !== -1)];
-  const rowsI: number[] = [];
-  const rowsD: number[] = [];
-  const rowsS: number[] = [];
-  const NONE = -1;
+  const first: [number, number] = [cond[0].findIndex((v) => v !== -1), cond[1].findIndex((v) => v !== -1)];
+  return { n, kind, cond, keep, fb, warm, fWarmOk, edge, first };
+}
+
+const NONE = -1;
+
+// ②–④ at bar i, its rows (buy before sell) appended to rows (b3a2c43's loop body, unchanged)
+function rowsAtBar(p: Prepared, i: number, rows: CandRows): void {
+  const { kind, cond, keep, fb, edge, first } = p;
   const st = [NONE, NONE];
-  for (let i = 0; i < n; i++) {
-    for (let k = 0; k < 2; k++) {
-      st[k] = NONE;
-      const c = cond[k];
-      // ②
-      let raw: boolean;
-      if (kind === "cross" || kind === "state") raw = c[i] === 1;
-      else if (!edge) raw = c[i] === 1;
-      else raw = c[i] === 1 && i >= 1 && c[i - 1] === 0 && i !== first[k];
-      if (!raw) continue;
-      // ③
-      if (keep !== null && keep[k][i] === 0) continue;
-      // ④
-      if (fb !== null) {
-        const fv = fb.f[k][i];
-        if (fv === -1) {
-          st[k] = ST_F_NONE;
-          continue;
-        }
-        if (fv === 0) continue;
+  for (let k = 0; k < 2; k++) {
+    st[k] = NONE;
+    const c = cond[k];
+    // ②
+    let raw: boolean;
+    if (kind === "cross" || kind === "state") raw = c[i] === 1;
+    else if (!edge) raw = c[i] === 1;
+    else raw = c[i] === 1 && i >= 1 && c[i - 1] === 0 && i !== first[k];
+    if (!raw) continue;
+    // ③
+    if (keep !== null && keep[k][i] === 0) continue;
+    // ④
+    if (fb !== null) {
+      const fv = fb.f[k][i];
+      if (fv === -1) {
+        st[k] = ST_F_NONE;
+        continue;
       }
-      st[k] = ST_EMIT;
+      if (fv === 0) continue;
     }
-    for (let k = 0; k < 2; k++) {
-      if (st[k] === NONE) continue;
-      rowsI.push(i);
-      rowsD.push(k === 0 ? 1 : -1);
-      rowsS.push(st[k]);
-    }
+    st[k] = ST_EMIT;
   }
-  const len = rowsI.length;
+  for (let k = 0; k < 2; k++) {
+    if (st[k] === NONE) continue;
+    rows.i.push(i);
+    rows.d.push(k === 0 ? 1 : -1);
+    rows.s.push(st[k]);
+  }
+}
+
+// the Candidates of the rows: ⑤ and the warm-up (b3a2c43's code after the loop, unchanged)
+function finish(trial: TrialDef, ind: Ind, p: Prepared, rows: CandRows): Candidates {
+  const len = rows.i.length;
   const out: Candidates = {
     trial: trial.id,
     tf: trial.tf,
     pi: ind.series.pi,
     n: len,
-    i: Int32Array.from(rowsI),
-    d: Int8Array.from(rowsD),
-    status: Uint8Array.from(rowsS),
+    i: Int32Array.from(rows.i),
+    d: Int8Array.from(rows.d),
+    status: Uint8Array.from(rows.s),
     warmOk: new Uint8Array(len),
   };
   // ⑤
   applyBoth(out.i, out.d, out.status);
+  const { warm, fWarmOk } = p;
   for (let r = 0; r < len; r++) {
     const i = out.i[r];
     out.warmOk[r] = i >= warm && (fWarmOk === null || fWarmOk[i] === 1) ? 1 : 0;
@@ -259,6 +342,31 @@ export function r6(avoid: ReadonlySet<string>, pair: Pair, T: number, X: number)
 
 // ---- spec 6 ③ --------------------------------------------------------------------------------------------------
 
+// C4b ("share"): whether slot a is ②'s time or a GMO holiday time (r2(a) || isGmoHoliday(a)) reads the clock alone (no
+// bar, no series, no plant), so it is one value for every holesOf call that meets slot a, whatever series it is given
+// (the uncut run's, a cut target's, a presence probe's): it is computed once per slot, the first time a call meets its
+// block of CLOCK_BLOCK slots, and kept (per step; slot number = a ÷ step). Every bar-dependent part of the holes
+// (present, the count of pairs, the runs) is still computed from the starts the call is given.
+const CLOCK_BLOCK = 4096;
+const CLOCK = new Map<number, Map<number, Uint8Array>>();
+const clockBlock = (step: number, b: number): Uint8Array => {
+  let m = CLOCK.get(step);
+  if (!m) {
+    m = new Map();
+    CLOCK.set(step, m);
+  }
+  let block = m.get(b);
+  if (!block) {
+    block = new Uint8Array(CLOCK_BLOCK);
+    for (let q = 0; q < CLOCK_BLOCK; q++) {
+      const a = (b * CLOCK_BLOCK + q) * step;
+      block[q] = r2(a) || isGmoHoliday(a) ? 1 : 0;
+    }
+    m.set(b, block);
+  }
+  return block;
+};
+
 // The slots of [fromMs, toMs) on the clock grid (fromMs rounded down to the step). A slot a is open when a, a +
 // 1 min and a + 3 min are not all ②'s time, a is not a GMO holiday time, and at least 3 of the 5 pairs have a bar
 // starting at a. A hole is a run of adjacent open slots where the pair has no bar, at least 2 slots on m15 and 1 on
@@ -279,9 +387,20 @@ export function holesOf(tf: TfKey, starts: ReadonlyArray<ArrayLike<number>>, fro
     return p;
   });
   const open = new Uint8Array(nSlots);
+  // the clock part of "open" (r2(a) || isGmoHoliday(a)) from the shared blocks (clockBlock): slot a = a0 + k × step is
+  // slot number a0 ÷ step + k (a0 is a multiple of step, and every value here is an integer below 2^53, so both
+  // ways give the same a)
+  const slot0 = a0 / step;
+  let blockNo = NaN;
+  let block: Uint8Array = new Uint8Array(0);
   for (let k = 0; k < nSlots; k++) {
-    const a = a0 + k * step;
-    if (r2(a) || isGmoHoliday(a)) continue;
+    const slot = slot0 + k;
+    const b = Math.floor(slot / CLOCK_BLOCK);
+    if (b !== blockNo) {
+      blockNo = b;
+      block = clockBlock(step, b);
+    }
+    if (block[slot - b * CLOCK_BLOCK] === 1) continue;
     let have = 0;
     for (const p of present) have += p[k];
     if (have >= OPEN_MIN_PAIRS) open[k] = 1;

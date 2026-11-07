@@ -12,7 +12,9 @@
 // pair of every cut check: cut, cut.chosen.first, cut.chosen.second and 13 (i)'s suspect13.cut.stage1 and
 // suspect13.cut.stage2 (C4a, the lead's E8); a positive integer, anything else refused with exit 2; written to
 // config.json as cut_max and named in print.txt's note.cut_max; checks.csv has no cap marker (E9); the Python's --run
-// refuses a capped run; never in CI or a formal run).
+// refuses a capped run; never in CI or a formal run), WORKERS (C4b: the workers that run the units of the checks cut,
+// poison and presence, research/lawsearch-par.ts; a whole number 0 … 64, default 4; 0 runs every unit in this thread;
+// anything else refused with exit 2; the output files are the same bytes whatever its value, so no file names it).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
 // raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed
@@ -40,7 +42,9 @@ import { blindTable, followBarChecks, lateTable, lateWhyOf, trialRows } from "./
 import { measureBlindRows, measureTrial, withKappa } from "./lawsearch-stats.ts";
 import { chooseStage1, skipText, stage1Explain, stage2Rows, suspectOf } from "./lawsearch-select.ts";
 import type { Stage2In } from "./lawsearch-select.ts";
-import { checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, h1OnlyCheck, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
+import { checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, h1OnlyCheck, inPlace, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
+import type { UnitRunner } from "./lawsearch-checks.ts";
+import { WorkerPool } from "./lawsearch-par.ts";
 import { indsOf, runStage0 } from "./lawsearch-stage0.ts";
 import type { Stage0Out } from "./lawsearch-stage0.ts";
 import { checksRows, dumpBlind, dumpChecks, dumpConfig, dumpCutFail, dumpLoad, dumpMeasures, dumpStage1, dumpStage2, dumpSuspect, dumpTrades } from "./lawsearch-dump.ts";
@@ -110,6 +114,16 @@ export const cutMaxOf = (v: string | undefined): number | null => {
   return x;
 };
 
+// WORKERS (C4b): 4 when unset or empty; a whole number 0 … 64 in decimal digits (no sign, no leading zero); anything
+// else is refused (exit 2) before any file is read
+export const WORKERS_DEFAULT = 4;
+export const workersOf = (v: string | undefined): number => {
+  if (v === undefined) return WORKERS_DEFAULT;
+  const x = Number(v);
+  if (!/^(0|[1-9][0-9]*)$/.test(v) || !(x <= 64)) return refuse(`WORKERS ${JSON.stringify(v)} is not a whole number from 0 to 64 (the workers of the checks cut, poison and presence; unset for ${WORKERS_DEFAULT})`);
+  return x;
+};
+
 // ---- the pipeline -----------------------------------------------------------------------------------------------
 
 interface RunCtx {
@@ -122,6 +136,8 @@ interface RunCtx {
   manifest: GenManifest;
   cfg: RunConfig;
   cutMax?: number;
+  // where the units of cut, poison and presence run (C4b; lawsearch-checks.ts, lawsearch-par.ts)
+  runner: UnitRunner;
   times: Record<string, number>;
   // every failing bar of the checks cut, cut.chosen.first and cut.chosen.second (ts/cut_fail.csv; C3, D6)
   cutFails: CutFailRow[];
@@ -149,9 +165,9 @@ async function suspicionChecks(c: RunCtx, u: Universe, trial: TrialDef, sig: Tri
   const o = { answerKnowing, plant: c.plant };
   // 13 (i): CUT_MAX caps this cut too (print.txt's note.cut_max names it; C4a, the lead's E8); its failing bars are not
   // in cut_fail.csv (lawsearch-dump.md 8)
-  const cut = cutCheck(u, [trial], [sig], targets, avoid, { ...o, maxTargets: c.cutMax });
-  const poison = poisonCheck(u, [trial], [sig], avoid, { ...o, n: POISON_1000, seed: SEEDS.poison1000 });
-  const presence = presenceCheck(u, [trial], [sig], avoid, { ...o, seed: SEEDS.poison1000, n: POISON_1000 });
+  const cut = await cutCheck(u, [trial], [sig], targets, avoid, { ...o, maxTargets: c.cutMax, runner: c.runner });
+  const poison = await poisonCheck(u, [trial], [sig], avoid, { ...o, n: POISON_1000, seed: SEEDS.poison1000, runner: c.runner });
+  const presence = await presenceCheck(u, [trial], [sig], avoid, { ...o, seed: SEEDS.poison1000, n: POISON_1000, runner: c.runner });
   const picks = sampleOf(Array.from(tr.rows), 6, SEEDS.poison1000);
   const retrace = await retraceCheck(c.run, picks.map((r) => ({ pair: PAIRS[table.pi[r]], tf: trial.tf, T: table.T[r], d: table.d[r] as 1 | -1, pl: table.pl[r], m: table.m[r] })));
   for (const [name, r] of [["suspect13.cut", cut], ["suspect13.poison1000", poison], ["suspect13.presence", presence], ["suspect13.retrace", retrace]] as const) {
@@ -169,13 +185,13 @@ const sTrialOf = (all: TrialDef[], tf: TfKey, f: string): TrialDef | null => {
 // (lawsearch-checks.ts cutTargets): "first" on stage 1's universe ([S0, SPLIT)), at the end of stage 1; "second" on
 // stage 2's, its second-half targets only (fromStart = SPLIT). The check is "cut.chosen.<half>"; each failing trial's
 // row lists up to 100 failing bars. times gets cut.chosen.<half>.<tf>.
-function chosenCut(c: RunCtx, u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, answerKnowing: boolean, half: "first" | "second", times: Record<string, number>): CheckResult {
+async function chosenCut(c: RunCtx, u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, answerKnowing: boolean, half: "first" | "second", times: Record<string, number>): Promise<CheckResult> {
   const name = `cut.chosen.${half}`;
   if (trials.length === 0) return { name, passed: true, detail: "no trial was chosen: nothing to cut (spec 23.2)", probes: [] };
   const stats: Record<string, number> = {};
   const targets = cutTargets(u, trials, sigs, { htf: "all", fromStart: half === "second" ? SPLIT : undefined, stats });
   const note = `${cutStatsText(stats)}; the chosen trials on every higher-timeframe boundary target of the ${half} half, spec 23.2`;
-  return cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note, fails: { stage: half === "first" ? "stage1end" : "stage2", rows: c.cutFails } });
+  return await cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note, fails: { stage: half === "first" ? "stage1end" : "stage2", rows: c.cutFails }, runner: c.runner });
 }
 
 // the plant blindRowHit (design 8, C3): stage 1's blind row that is reported as hit (its measures unchanged)
@@ -252,7 +268,7 @@ async function pipeline(c: RunCtx): Promise<number> {
   try {
     const ts = Date.now();
     const u0 = await loadUniverse(src, S0, END, { purpose: "syn0", band: "syn", plant: c.plant });
-    s0 = await runStage0(u0, c.trials, c.cfg, avoid, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax, cutFails: c.cutFails });
+    s0 = await runStage0(u0, c.trials, c.cfg, avoid, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax, cutFails: c.cutFails, runner: c.runner });
     for (const r of s0.checks) tagged.push({ stage: "stage0", r });
     for (const [k, v] of Object.entries(s0.times)) if (k !== "stage0") put(`time.${k}.ms`, v);
     put("time.stage0.ms", Date.now() - ts);
@@ -382,7 +398,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     say("stage 1: the cut of the chosen trials (spec 23.2)");
     const cutTimes: Record<string, number> = {};
     const chosenTs = c.trials.filter((t) => chosen.m15.includes(t.id) || chosen.h1.includes(t.id));
-    const cut1 = chosenCut(c, u1, chosenTs, chosenTs.map(sig1), avoid, answerKnowing, "first", cutTimes);
+    const cut1 = await chosenCut(c, u1, chosenTs, chosenTs.map(sig1), avoid, answerKnowing, "first", cutTimes);
     tagged.push({ stage: "stage1end", r: cut1 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
     put("time.stage1.ms", Date.now() - ts);
@@ -442,7 +458,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     // spec 23.2: the chosen trials on every boundary target of the second half (a failure withholds stage 2's numbers)
     const cutTimes: Record<string, number> = {};
     const chosenTs = c.trials.filter((t) => isChosen(t.id));
-    const cut2 = chosenCut(c, u2, chosenTs, chosenTs.map(sig2), avoid, answerKnowing, "second", cutTimes);
+    const cut2 = await chosenCut(c, u2, chosenTs, chosenTs.map(sig2), avoid, answerKnowing, "second", cutTimes);
     tagged.push({ stage: "stage2", r: cut2 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
     // spec 23.2 (C3, the lead's D9): a failed cut.chosen.second withholds every stage-2 number in print.txt (its failed
@@ -549,6 +565,8 @@ async function main(): Promise<number> {
   // CUT_MAX (design 7.7, the lead's D5): unset or empty, no cap; otherwise a positive integer in decimal digits, or the
   // run is refused before any file is read (before C3, 0, -3 or abc switched the cut off or were ignored)
   const cutMax = cutMaxOf(env("CUT_MAX"));
+  // WORKERS (C4b): refused before any file is read, as CUT_MAX
+  const workers = workersOf(env("WORKERS"));
   // gate 1: the rules files
   const rules = await checkRulesFiles();
   if (!rules.passed) refuse(`the rules files: ${rules.detail}`);
@@ -618,7 +636,14 @@ async function main(): Promise<number> {
     spreadH1Sha256: SPREAD_H1_SHA256,
     cut_max: cutMax,
   };
-  return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, times, cutFails: [] });
+  // the workers start at the first check that uses them and end with the run
+  const pool = workers > 0 ? new WorkerPool(workers) : null;
+  console.error(`[lawsearch] the checks' units run on ${workers > 0 ? `${workers} workers` : "the main thread"} (WORKERS)`);
+  try {
+    return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, runner: pool ?? inPlace, times, cutFails: [] });
+  } finally {
+    pool?.close();
+  }
 }
 
 if (import.meta.main) {

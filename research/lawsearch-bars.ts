@@ -563,8 +563,9 @@ export function cutTfSet(tf: TfSet, Tcut: number, plant = ""): TfSet {
 }
 
 // a copy of s with the raw sides of the listed bars moved by sign × pts points (sign by the bar's place in the list:
-// +, −, +, …), and the mid and points made again
-const shifted = (s: Series, idx: ArrayLike<number>, pips: number): Series => {
+// +, −, +, …; with q0 = 1: −, +, −, …), and the mid and points made again. Each listed bar's new values are made from
+// that bar's own values and its sign alone (no other bar is read).
+const shifted = (s: Series, idx: ArrayLike<number>, pips: number, q0 = 0): Series => {
   const pts = Math.round(pips * 10);
   if (!(Math.abs(pips * 10 - pts) < 1e-9)) throw new Error(`poison: ${pips} pips is not a whole number of points`);
   const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n: s.n } as Series;
@@ -575,7 +576,7 @@ const shifted = (s: Series, idx: ArrayLike<number>, pips: number): Series => {
   for (let q = 0; q < idx.length; q++) {
     const i = idx[q];
     if (!(Number.isInteger(i) && i >= 0 && i < s.n)) throw new Error(`poison: bar ${i} of ${s.n}`);
-    const d = (q % 2 === 0 ? 1 : -1) * pts;
+    const d = ((q + q0) % 2 === 0 ? 1 : -1) * pts;
     for (const [v, P] of raw) {
       out[P][i] = s[P][i] + d;
       out[v][i] = out[P][i] / mult;
@@ -594,11 +595,58 @@ const shifted = (s: Series, idx: ArrayLike<number>, pips: number): Series => {
 
 // spec 15 毒: every bar with T > afterT gets +pips, −pips, … alternately (bar by bar, + first) on all 8 raw sides;
 // the mid and points are made again. The raw values stay on the tick grid (the shift is a whole number of points).
-export function poisonSeries(s: Series, afterT: number, pips: number): Series {
+// C4b ("share"): with a PoisonTables (poisonTables, made by the caller and kept for its probes), the poisoned series is
+// put together from two shifted copies of the whole of s made once: alt[0] = every bar of s shifted with + on the even
+// bars and − on the odd ones, alt[1] the other way round. The bar k ≥ k0 gets + exactly when k − k0 is even, that is
+// when k has k0's parity, so it is alt[k0 & 1]'s bar k; and shifted makes each bar from that bar and its sign alone, so
+// alt[k0 & 1]'s bar k is the bar shifted(s, [k0 … n − 1], pips) makes. The bars before k0 are s's. The result is the
+// same series, value for value, as without tables; only the per-probe work drops from n bars of rounding to two copies.
+export function poisonSeries(s: Series, afterT: number, pips: number, tables?: PoisonTables): Series {
   const k0 = upperBound(s.T, s.n, afterT);
+  if (tables) {
+    const alt = tables.of(s, pips)[k0 & 1];
+    const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n: s.n } as Series;
+    for (const k of FLOAT_KEYS) {
+      const a = s[k].slice();
+      a.set(alt[k].subarray(k0), k0);
+      out[k] = a;
+    }
+    for (const k of INT_KEYS) {
+      const a = s[k].slice();
+      a.set(alt[k].subarray(k0), k0);
+      out[k] = a;
+    }
+    return out;
+  }
   const idx = new Int32Array(s.n - k0);
   for (let k = k0; k < s.n; k++) idx[k - k0] = k;
   return shifted(s, idx, pips);
+}
+
+// the two alternating shifted copies of each series poisonSeries is given (made on first use, kept while the
+// PoisonTables object lives; a check makes one for its own probes and drops it when it returns)
+export interface PoisonTables {
+  of(s: Series, pips: number): readonly [Series, Series];
+}
+export function poisonTables(): PoisonTables {
+  const kept = new Map<Series, Map<number, readonly [Series, Series]>>();
+  return {
+    of(s: Series, pips: number) {
+      let m = kept.get(s);
+      if (!m) {
+        m = new Map();
+        kept.set(s, m);
+      }
+      let t = m.get(pips);
+      if (!t) {
+        const all = new Int32Array(s.n);
+        for (let k = 0; k < s.n; k++) all[k] = k;
+        t = [shifted(s, all, pips, 0), shifted(s, all, pips, 1)] as const;
+        m.set(pips, t);
+      }
+      return t;
+    },
+  };
 }
 
 // spec 15 追う足: the listed bars only, + for the first listed, − for the second, …
@@ -606,19 +654,42 @@ export function poisonBars(s: Series, idx: Int32Array, pips: number): Series {
   return shifted(s, idx, pips);
 }
 
-// spec 15 有無の毒: the bars with drop(k) false kept (new arrays), numbered again from 0
+// spec 15 有無の毒: the bars with drop(k) false kept (new arrays), numbered again from 0. drop is asked once for every
+// k, in order; the kept bars are copied run by run (C4b: each run of adjacent kept bars [a, b) is one typed-array copy
+// of s's bars a … b − 1 to the next free place, the same values in the same order as one bar at a time)
 export function deleteBars(s: Series, drop: (k: number) => boolean): Series {
-  const keep: number[] = [];
-  for (let k = 0; k < s.n; k++) if (!drop(k)) keep.push(k);
-  const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n: keep.length } as Series;
+  const runs: number[] = [];
+  let m = 0;
+  let from = -1;
+  for (let k = 0; k < s.n; k++) {
+    const d = drop(k);
+    if (!d && from < 0) from = k;
+    else if (d && from >= 0) {
+      runs.push(from, k);
+      m += k - from;
+      from = -1;
+    }
+  }
+  if (from >= 0) {
+    runs.push(from, s.n);
+    m += s.n - from;
+  }
+  const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n: m } as Series;
+  const copy = (src: Float64Array | Int32Array, a: Float64Array | Int32Array) => {
+    let j = 0;
+    for (let r = 0; r < runs.length; r += 2) {
+      a.set(src.subarray(runs[r], runs[r + 1]), j);
+      j += runs[r + 1] - runs[r];
+    }
+  };
   for (const k of FLOAT_KEYS) {
-    const a = new Float64Array(keep.length);
-    keep.forEach((i, j) => (a[j] = s[k][i]));
+    const a = new Float64Array(m);
+    copy(s[k], a);
     out[k] = a;
   }
   for (const k of INT_KEYS) {
-    const a = new Int32Array(keep.length);
-    keep.forEach((i, j) => (a[j] = s[k][i]));
+    const a = new Int32Array(m);
+    copy(s[k], a);
     out[k] = a;
   }
   return out;

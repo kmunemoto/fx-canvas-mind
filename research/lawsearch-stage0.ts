@@ -12,6 +12,7 @@ import { addsUpCheck, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataChe
 import { dumpBars, dumpHoles, dumpInd, dumpLoad, dumpSignals, dumpStage0 } from "./lawsearch-dump.ts";
 import { CUT_HTF_STAGE0, POISON_N, SEEDS } from "./lawsearch-rules.ts";
 import { stop } from "./lawsearch-bars.ts";
+import type { UnitRunner } from "./lawsearch-checks.ts";
 import type { CheckResult, CutFailRow, ExclCtx, Ind, RunConfig, Stage0Row, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 // the dump columns of the built items and filters of the run's trials on one timeframe, per pair
@@ -59,7 +60,8 @@ export interface Stage0Out {
 // 9's rows, and the stage-0-safe checks of 15 (data, adds up, donchian, cut, poison, presence; the cut with spec
 // 23.2's 300 higher-timeframe boundary targets per tf and pair). The stage-0 dumps are written when dumpDir is given.
 // o.cutFails: the failing bars of the cut check (stage "stage0") are pushed here for cut_fail.csv (C3, D6).
-export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[] }): Promise<Stage0Out> {
+// o.runner (C4b): where the units of cut, poison and presence run (lawsearch-checks.ts; in place when not given).
+export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[]; runner?: UnitRunner }): Promise<Stage0Out> {
   const t0 = Date.now();
   const times: Record<string, number> = {};
   const ctx = ctxOfUniverse(u, avoid, o.plant);
@@ -85,9 +87,9 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
   // spec 15 切り取り with spec 23.2's stage-0 rule: 300 of the higher-timeframe boundary targets per tf and pair
   const cutStats: Record<string, number> = {};
   const targets = cutTargets(u, trials, sigs, { htf: "even", stats: cutStats });
-  checks.push(cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2`, fails: o.cutFails ? { stage: "stage0", rows: o.cutFails } : undefined }));
-  checks.push(poisonCheck(u, trials, sigs, avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, ctx }));
-  checks.push(presenceCheck(u, trials, sigs, avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant }));
+  checks.push(await cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2`, fails: o.cutFails ? { stage: "stage0", rows: o.cutFails } : undefined, runner: o.runner }));
+  checks.push(await poisonCheck(u, trials, sigs, avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, ctx, runner: o.runner }));
+  checks.push(await presenceCheck(u, trials, sigs, avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, runner: o.runner }));
   times["checks"] = Date.now() - tc;
   if (o.dumpDir) {
     const dir = o.dumpDir;

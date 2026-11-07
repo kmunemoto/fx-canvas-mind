@@ -102,7 +102,19 @@ const rsiBack = (id: string, p0: number, L: number): ItemDef => {
         cond: [buy, sell],
         keep: null,
         warmup: warmupFor(params),
-        columns: { [`RSI${p0}`]: r.rsi, [`RSI${p0}_U`]: r.U, [`RSI${p0}_D`]: r.D, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
+        // C4b ("free"): U and D are getters, so that they are made only when the dump reads them (lawsearch-ind.ts
+        // rsi); the same names in the same order, the same arrays
+        columns: {
+          [`RSI${p0}`]: r.rsi,
+          get [`RSI${p0}_U`]() {
+            return r.U;
+          },
+          get [`RSI${p0}_D`]() {
+            return r.D;
+          },
+          [`${id}_buy`]: buy,
+          [`${id}_sell`]: sell,
+        },
       };
     },
   };
@@ -214,6 +226,20 @@ const FILTER_MAP: ReadonlyMap<string, FilterDef> = new Map<string, FilterDef>([
   ["F00", f00],
   ["F01", f01],
 ]);
+
+// C4b (hardening of the speed-up): lawsearch-events.ts keeps an Ind's item and F builds under the definition's id
+// (BUILDS: "item:<id>", "filter:<def.id>"; answerKnowingE26 apart, under "item:E26:answerKnowing"). That is exact only
+// while each id names one definition: every key of ITEM_MAP and FILTER_MAP must equal its definition's id (the keys of
+// a Map are distinct, so the ids of one map are then distinct too, and no definition sits under two keys). A registry
+// that broke this could let two different items or F's share one build, so it stops the program as soon as this
+// module is loaded, before any file is read.
+const checkRegistry = (what: string, map: ReadonlyMap<string, { id: string }>): void => {
+  for (const [key, def] of map) {
+    if (def.id !== key) throw new Error(`lawsearch-items: ${what} key ${key} holds the definition ${def.id}`);
+  }
+};
+checkRegistry("ITEM_MAP", ITEM_MAP);
+checkRegistry("FILTER_MAP", FILTER_MAP);
 
 // the items written now (spec 19 step 3): E04, E26, B06
 export const ITEMS: ReadonlyMap<string, ItemDef> = ITEM_MAP;

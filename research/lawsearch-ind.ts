@@ -86,7 +86,65 @@ export function xDn(a: Float64Array, b: Float64Array | number): Tri {
 // HH_n(i) = max H[i−n..i−1], LL_n(i) = min L[i−n..i−1] (bar i not included; 無し for i < n). The target s starts at
 // 0 at bar 0 and is never 無し; for i ≥ n: C[i] > HH and s ≠ +1 → +1, C[i] < LL and s ≠ −1 → −1, otherwise
 // unchanged (C = HH or C = LL is no break). The same values as bigflow-lib donchianState(c, n) (spec 15).
+//
+// C4b ("free"): HH and LL come from two monotone queues of bar indices instead of rescanning the n bars of every
+// window (O(len) in all instead of O(n × len)); donchianScan below is the rescan, kept for n that is not a whole
+// number ≥ 1. The values are the same, double for double, by construction: max and min round nothing, so only which
+// bar's value is taken could differ, and it is the same bar. The rescan takes, in each window, the oldest bar whose H
+// is the largest under ">" (it starts at −Infinity and replaces only on a strictly larger value; NaN is never larger,
+// so a NaN bar is never taken, and a window with no other value gives −Infinity, as does a window of −Infinity alone).
+// The queue qh holds the bars of the window that no later bar of the window beats: a bar j is dropped from its back
+// when a newer bar has a strictly larger H (j can then never be that window's or a later window's maximum, since the
+// newer bar stays in every later window as long as j does), equal values are kept (the older first), NaN bars are
+// never put in, and bars older than i − n leave from its front. So the front is the oldest bar with the largest H of
+// [i − n, i − 1] (−Infinity when the queue is empty), which is the rescan's bar. LL the same with "<". Nothing after
+// bar i − 1 is read for bar i, as before.
 export function donchianOf(s: Series, n: number): DonchianOut {
+  if (!(Number.isInteger(n) && n >= 1)) return donchianScan(s, n);
+  const len = s.n;
+  const H = s.H;
+  const L = s.L;
+  const HH = new Float64Array(len).fill(NaN);
+  const LL = new Float64Array(len).fill(NaN);
+  const out = new Int8Array(len);
+  const qh = new Int32Array(len);
+  const ql = new Int32Array(len);
+  let h0 = 0, h1 = 0, l0 = 0, l1 = 0;
+  // bar j enters both queues (NaN values stay out)
+  const enter = (j: number) => {
+    const h = H[j];
+    if (!Number.isNaN(h)) {
+      while (h1 > h0 && H[qh[h1 - 1]] < h) h1--;
+      qh[h1++] = j;
+    }
+    const l = L[j];
+    if (!Number.isNaN(l)) {
+      while (l1 > l0 && L[ql[l1 - 1]] > l) l1--;
+      ql[l1++] = j;
+    }
+  };
+  for (let j = 0; j < n - 1 && j < len; j++) enter(j);
+  let target = 0;
+  for (let i = n; i < len; i++) {
+    // the window [i − n, i − 1]: bar i − 1 enters, bars before i − n leave
+    enter(i - 1);
+    while (h0 < h1 && qh[h0] < i - n) h0++;
+    while (l0 < l1 && ql[l0] < i - n) l0++;
+    const hh = h0 < h1 ? H[qh[h0]] : -Infinity;
+    const ll = l0 < l1 ? L[ql[l0]] : Infinity;
+    HH[i] = hh;
+    LL[i] = ll;
+    const c = s.C[i];
+    if (c > hh && target !== 1) target = 1;
+    else if (c < ll && target !== -1) target = -1;
+    out[i] = target;
+  }
+  return { HH, LL, s: out };
+}
+
+// donchianOf by rescanning each window (b3a2c43's loop, unchanged): for n that is not a whole number ≥ 1, and for
+// the hand check of the queues (design-free/tsr)
+export function donchianScan(s: Series, n: number): DonchianOut {
   const len = s.n;
   const HH = new Float64Array(len).fill(NaN);
   const LL = new Float64Array(len).fill(NaN);
@@ -229,16 +287,43 @@ export function indOf(series: Series, higher?: { series: Series; g: Int32Array }
       }),
     atr: (p: number) => memo(`atr:${p}`, () => toF64(pineAtr(barsForAtr(), p))),
     // up[0], dn[0] 無し; up = max(C[i] − C[i−1], 0), dn = max(C[i−1] − C[i], 0); U = pineRma(up), D = pineRma(dn);
-    // the RSI itself is pineRsi's (the same arithmetic, spec 3.2)
+    // the RSI itself is pineRsi's (the same arithmetic, spec 3.2).
+    // C4b ("free"): up, dn, U and D are made when first read (getters; U and D through rmaOf's memo, so every read
+    // gets the same array), not with the RSI: a signal reads only rsi, the dump and the hand examples read them all.
+    // pineRsi gets C as a plain array copied by a loop (Array.from(C) gave the same numbers in the same order, more
+    // slowly). Each value is the one b3a2c43 computed: the same functions on the same inputs.
     rsi: (p: number) =>
       memo(`rsi:${p}`, (): RsiOut => {
-        const up = new Float64Array(series.n).fill(NaN);
-        const dn = new Float64Array(series.n).fill(NaN);
-        for (let i = 1; i < series.n; i++) {
-          up[i] = Math.max(C[i] - C[i - 1], 0);
-          dn[i] = Math.max(C[i - 1] - C[i], 0);
-        }
-        return { up, dn, U: rmaOf(up, p), D: rmaOf(dn, p), rsi: toF64(pineRsi(Array.from(C), p)) };
+        let upDn: [Float64Array, Float64Array] | null = null;
+        const upDnOf = (): [Float64Array, Float64Array] => {
+          if (upDn) return upDn;
+          const up = new Float64Array(series.n).fill(NaN);
+          const dn = new Float64Array(series.n).fill(NaN);
+          for (let i = 1; i < series.n; i++) {
+            up[i] = Math.max(C[i] - C[i - 1], 0);
+            dn[i] = Math.max(C[i - 1] - C[i], 0);
+          }
+          upDn = [up, dn];
+          return upDn;
+        };
+        const closes: number[] = [];
+        for (let i = 0; i < C.length; i++) closes.push(C[i]);
+        const rsi = toF64(pineRsi(closes, p));
+        return {
+          get up() {
+            return upDnOf()[0];
+          },
+          get dn() {
+            return upDnOf()[1];
+          },
+          get U() {
+            return rmaOf(upDnOf()[0], p);
+          },
+          get D() {
+            return rmaOf(upDnOf()[1], p);
+          },
+          rsi,
+        };
       }),
     donchian: (n: number) => memo(`donchian:${n}`, () => donchianOf(series, n)),
     bigmove: (o: BigmoveParams) =>
