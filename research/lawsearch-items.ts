@@ -48,6 +48,11 @@ const KEYS_OF: Readonly<Record<string, readonly string[]>> = {
 
 // research/ledger/lawsearch-candidates.json (already JSON.parse'd): 1,364 rows, order 1..1364, in the spec's table
 // order; "15min" → "m15", "1hour" → "h1". Any other shape throws.
+// C4f (the lead's H2, defense in depth): every TrialDef is frozen where it is made. A TrialDef holds strings, numbers
+// and nulls only, so Object.freeze freezes all of it: no field can be changed and no property added (in these strict
+// modules either throws a TypeError, e.g. "Cannot add property __peek, object is not extensible"), so no code can
+// keep state on a trial definition (C4e's review: trialStashE04). The guard by construction is H1 (lawsearch.ts: the
+// checks get trialCopyOf copies, never these objects); the freeze only makes such a write fail at once.
 export function parseCandidates(json: unknown): TrialDef[] {
   const bad = (what: string): never => {
     throw new Error(`lawsearch-candidates.json: ${what}`);
@@ -71,10 +76,15 @@ export function parseCandidates(json: unknown): TrialDef[] {
     if (r.id !== w.id || r.tf !== w.tf || r.kind !== w.kind) return bad(`${at}: ${String(r.id)} ${String(r.tf)} ${String(r.kind)}, not ${w.id} ${w.tf} ${w.kind}`);
     if ((r.e ?? null) !== w.e || (r.f ?? null) !== w.f || (r.s ?? null) !== w.s || (r.b ?? null) !== w.b) return bad(`${at}: the parts of ${w.id}`);
     if (typeof r.name !== "string" || r.name === "") return bad(`${at}: name`);
-    out.push({ id: w.id, order: k + 1, tf: TF_OF[w.tf], kind: w.kind, e: w.e, f: w.f, s: w.s, b: w.b, name: r.name });
+    out.push(Object.freeze({ id: w.id, order: k + 1, tf: TF_OF[w.tf], kind: w.kind, e: w.e, f: w.f, s: w.s, b: w.b, name: r.name }));
   }
   return out;
 }
+
+// C4f (the lead's H1): a trial definition of the checks' own: a new object with the same fields (structured clone),
+// frozen as parseCandidates' are. lawsearch.ts makes the checks' trials with it before any main-run code is handed
+// the parsed ones, so no check reads an object the main run holds.
+export const trialCopyOf = (t: TrialDef): TrialDef => Object.freeze(structuredClone(t));
 
 // ---- the definitions -----------------------------------------------------------------------------------------
 

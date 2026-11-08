@@ -15,7 +15,11 @@
 //     universe (structured clone copies every typed array value for value), and no unit reads another unit's work.
 //     The universe is sent again at every run (every check and timeframe), so a worker's copy is the universe as
 //     the main thread holds it when the check starts; nothing in the main thread changes it while the check runs
-//     (the check's own code only reads it, and the pipeline awaits the check).
+//     (the check's own code only reads it, and the pipeline awaits the check). C4f (the lead's H1): that universe is
+//     the stage's snapshot taken right after loading, which no main-run code is ever handed, and the task's trials and
+//     avoid table are the checks' own (lawsearch.ts); before C4f the universe sent was the one the main run had been
+//     handed (and the task held the main run's trials and avoid table), so whatever the main run's code had written
+//     into them reached every worker. A worker seals the task it receives (lawsearch-checks.ts sealTask, H2).
 // Both hold only while the code a unit runs (candidatesOf, the builds, the Ind) keeps every build and cache keyed by
 // the Ind and adds no module-level state that survives between candidatesOf calls (lawsearch-design.md 12.2 (2);
 // C4d, the lead's F2). Such state lives once in the main thread and once in each worker (each loads its own copy of
@@ -24,7 +28,9 @@
 // Nothing here stops that by construction; the yml's w0-n-1001 (the N 1001 run again, in a job of its own), cmp-c-7101
 // and o-6003 jobs compare their own run at WORKERS=0 and 4 byte for byte (C4e, the lead's G2: between them stage 0's
 // cut, poison and presence, cut.chosen.first and cut.chosen.second on both timeframes and stage 1's suspect13 checks;
-// the yml's step names what is not compared), as defense in depth only. A read through a series' memory block, by
+// the yml's step names what is not compared; C4f: cmp-c-7101 also compares its lastBarStateG3 plant run), as defense
+// in depth only. It cannot see state that gives the same bytes at both settings (state carried in the universe or the
+// task was such state until C4f; H1 now keeps those apart by construction). A read through a series' memory block, by
 // contrast, is closed by construction since C4e: every series a unit hands to decisionOf has arrays that hold its own
 // bars only (lawsearch-bars.ts copyOf; lawsearch-checks.ts, the units' note).
 // Memory: each worker holds one copy of the universe being checked (both timeframes, about 100 MB for [S0, END) of

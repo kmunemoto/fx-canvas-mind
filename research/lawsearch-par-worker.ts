@@ -2,13 +2,16 @@
 // one task at a time (both sent again at each run of the pool) and answers each job with lawsearch-checks.ts'
 // runUnitJob, the very function the checks call when they run their units in place. It reads no file and no
 // environment and writes nothing; it keeps no state but the universe, the task and the task's UnitCache (poison's
-// uncut holes and tables, functions of the universe and the task). The modules it loads are its own copies, so any
+// uncut holes and tables, functions of the universe and the task). C4f: the universe is a clone of the stage's
+// snapshot and the task's trials and avoid table are the checks' own (lawsearch.ts, H1); the task is sealed here
+// again (frozen task and trials, a read-only avoid table: lawsearch-checks.ts sealTask, H2), since a structured clone
+// is neither frozen nor read-only. The modules it loads are its own copies, so any
 // module-level state in them that survives between candidatesOf calls would differ from the main thread's; the
 // answers are the same bytes for any WORKERS only while there is none but the builds keyed by the Ind and the
 // holes' clock cache (lawsearch-par.ts's header; lawsearch-design.md 12.1, 12.2 (2); C4d). The yml compares three
 // runs at WORKERS=0 and 4 as defense in depth (C4e).
 
-import { runUnitJob } from "./lawsearch-checks.ts";
+import { runUnitJob, sealTask } from "./lawsearch-checks.ts";
 import type { UnitCache, UnitJob, UnitTask } from "./lawsearch-checks.ts";
 import type { Universe } from "./lawsearch-types.ts";
 
@@ -32,7 +35,8 @@ scope.onmessage = (e: MessageEvent) => {
     tid = 0;
     cache = {};
   } else if (m.t === "task") {
-    task = m.task;
+    // C4f (the lead's H2): the clone made read-only again (frozen task and trials, read-only avoid table)
+    task = sealTask(m.task);
     tid = m.tid;
     cache = {};
   } else if (m.t === "job") {

@@ -17,11 +17,20 @@
 // anything else refused with exit 2; the output files are the same bytes whatever its value, so no file names it,
 // as long as every build and cache stays keyed by the Ind and no module-level state survives between candidatesOf
 // calls: research/lawsearch-design.md 12.2 (2), C4d; the yml compares WORKERS=0 with 4 on three runs, CMP-N 1001,
-// CMP-C 7101 and O 6003, as defense in depth, C4e).
+// CMP-C 7101 and O 6003, and on CMP-C 7101's lastBarStateG3 plant run (C4f), as defense in depth, C4e).
+//
+// C4f (the lead's H1–H3 on C4e's review): the checks never read an object the main run is handed. Each universe is
+// kept apart right after its load (Guard below: a snapshot for the checks, a digest of both); the checks get trial
+// definitions of their own (made in main) and an avoid table of their own (parsed again from the same bytes); poison
+// makes its own holes. The trial definitions, the avoid tables and every ExclCtx are frozen or read-only as well
+// (H2), and a universe that changes after its load stops the run (H3, exit 6).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
 // raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed
-// check: design 7.7's stop before stage 2); 4 a required hand example failed; 1 any other error. No mode reads
+// check: design 7.7's stop before stage 2); 4 a required hand example failed; 6 (C4f, the lead's H3) a universe
+// changed after it was loaded (the guard below: the run stops at once and removes its dump folder, so no file of it is
+// left; the Python's 5 is a TS–Python difference); 1 any other error (a SHARED line from the guard's identity check,
+// a write into a frozen trial definition or ExclCtx, or into the read-only avoid table, among them). No mode reads
 // research/.cache and none fetches (no --allow-net).
 //
 // The one-process pipeline (design 7.7): config.json; stage 0 (load [S0, END), runStage0, which stops on any trial's
@@ -39,14 +48,14 @@ import { END, N_BARS, PAIRS, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-con
 import { DIRECTIONAL_F, PLANTS, POISON_1000, QUESTIONS, S_OF_F, SEEDS, TRIAL_STEP3, W0 } from "./lawsearch-rules.ts";
 import { loadUniverse } from "./lawsearch-bars.ts";
 import { GEN_VERSION, genSpecOf, treeSha256, writeRun } from "./lawsearch-gen.ts";
-import { parseCandidates, trialBuilt } from "./lawsearch-items.ts";
+import { parseCandidates, trialBuilt, trialCopyOf } from "./lawsearch-items.ts";
 import { avoidOf, blindBarsOf, trialSignals } from "./lawsearch-events.ts";
 import { blindTable, followBarChecks, lateTable, lateWhyOf, trialRows } from "./lawsearch-trade.ts";
 import { measureBlindRows, measureTrial, withKappa } from "./lawsearch-stats.ts";
 import { chooseStage1, skipText, stage1Explain, stage2Rows, suspectOf } from "./lawsearch-select.ts";
 import type { Stage2In } from "./lawsearch-select.ts";
-import { checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, h1OnlyCheck, inPlace, poisonCheck, presenceCheck, printCheck, retraceCheck, sameFirstHalfCheck, sampleOf } from "./lawsearch-checks.ts";
-import type { UnitRunner } from "./lawsearch-checks.ts";
+import { assertApart, checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, digestDiff, h1OnlyCheck, inPlace, poisonCheck, presenceCheck, printCheck, reachOf, retraceCheck, sameFirstHalfCheck, sampleOf, snapshotOf, universeDigest } from "./lawsearch-checks.ts";
+import type { CheckInputs, UnitRunner, UnitTask } from "./lawsearch-checks.ts";
 import { WorkerPool } from "./lawsearch-par.ts";
 import { indsOf, runStage0 } from "./lawsearch-stage0.ts";
 import type { Stage0Out } from "./lawsearch-stage0.ts";
@@ -65,6 +74,97 @@ export const refuse = (what: string): never => {
 };
 const isRefused = (e: unknown) => e instanceof Refused || (e instanceof Error && e.message.startsWith("REFUSED: "));
 const isStop = (e: unknown) => e instanceof Error && e.message.startsWith("STOP: ");
+const isChanged = (e: unknown) => e instanceof Error && e.message.startsWith("CHANGED: ");
+
+// ---- C4f: the checks' inputs apart from the main run's (the lead's H1 and H3; lawsearch-checks.ts' C4f section) ----
+//
+// keep(u) is called right after each loadUniverse (stage 0's u0, stage 1's u1, stage 2's u2), before the universe is
+// handed to any main-run code. It takes the universe's digest (H3: a SHA-256 of every typed array and every other
+// value) and a snapshot (a structured clone); the main run goes on with u, and every check of the stage reads the
+// snapshot alone, with the checks' own trial definitions and avoid table (H1). afterMain(check, main) is called once
+// the main run's part of the stage has made its objects, before the stage's checks: both universes must still have
+// their load digest, and no object reachable from the stage's CheckInputs may be reachable from the main run's
+// objects (its universe, its trial definitions, its avoid table, its ExclCtx). runner() wraps the units' runner: before
+// each check run (one pool run: one cut timeframe, one poison or presence check) the run's universe must be a kept
+// snapshot that still has its load digest, and no object of the universe or of the task may be the main run's. end
+// (check) at the stage's end compares both universes once more and forgets them. A changed digest throws "CHANGED: …"
+// (main() removes the dump folder and exits 6); a shared object throws "SHARED: …" (exit 1). On a clean run nothing is
+// written by any of this (no file, no print.txt key, no checks.csv row), so the outputs are the same bytes; its costs
+// go to stderr only. The digests are compared again only at those points: a write that is undone before the next of
+// them is not seen (H1 is the guard by construction; this is defense in depth).
+interface Kept {
+  name: string;
+  main: Universe;
+  digest: Map<string, string>;
+  mainReach: Set<object> | null;
+}
+class Guard {
+  private kept = new Map<Universe, Kept>();
+  private ms = { snapshot: 0, digest: 0, digests: 0, apart: 0, aparts: 0 };
+  async keep(u: Universe, name: string): Promise<Universe> {
+    const t0 = Date.now();
+    const digest = await universeDigest(u);
+    const t1 = Date.now();
+    const check = snapshotOf(u);
+    const t2 = Date.now();
+    this.ms.digest += t1 - t0;
+    this.ms.digests++;
+    this.ms.snapshot += t2 - t1;
+    console.error(`[lawsearch guard] ${name}: digest ${t1 - t0} ms (${digest.size} values), snapshot ${t2 - t1} ms`);
+    this.kept.set(check, { name, main: u, digest, mainReach: null });
+    return check;
+  }
+  private of(check: Universe, where: string): Kept {
+    const k = this.kept.get(check);
+    if (!k) throw new Error(`SHARED: ${where}: a check was given a universe that is not a kept snapshot (lawsearch.ts Guard; C4f H1)`);
+    return k;
+  }
+  private async same(k: Kept, u: Universe, which: string, where: string): Promise<void> {
+    const t0 = Date.now();
+    const d = digestDiff(k.digest, await universeDigest(u));
+    this.ms.digest += Date.now() - t0;
+    this.ms.digests++;
+    if (d.n > 0) throw new Error(`CHANGED: ${where}: ${d.n} values of ${k.name}'s ${which} universe differ from their digest at the load (${d.paths.join(", ")}${d.n > d.paths.length ? ", …" : ""}); the run stops (exit 6, C4f H3)`);
+  }
+  private apart(k: Kept, check: readonly unknown[], where: string): void {
+    const t0 = Date.now();
+    assertApart(k.mainReach!, check, where);
+    this.ms.apart += Date.now() - t0;
+    this.ms.aparts++;
+  }
+  async afterMain(check: Universe, main: readonly unknown[], chk: CheckInputs, where: string): Promise<void> {
+    const k = this.of(check, where);
+    await this.same(k, k.main, "main run's", where);
+    await this.same(k, check, "snapshot", where);
+    const t0 = Date.now();
+    k.mainReach = reachOf([k.main, ...main]);
+    this.ms.apart += Date.now() - t0;
+    if (chk.u !== check) throw new Error(`SHARED: ${where}: the checks' inputs are not of this stage's snapshot (lawsearch.ts Guard; C4f H1)`);
+    this.apart(k, [chk.u, chk.trials, chk.avoid], where);
+  }
+  async before(u: Universe, task: UnitTask): Promise<void> {
+    const where = `before a ${task.kind} check run`;
+    const k = this.of(u, where);
+    if (k.mainReach === null) throw new Error(`SHARED: ${where}: a check run before the main run's part of ${k.name} was done (lawsearch.ts Guard; C4f H1)`);
+    await this.same(k, u, "snapshot", `${k.name}, ${where}`);
+    this.apart(k, [u, task], `${k.name}, ${where}`);
+  }
+  async end(check: Universe, where: string): Promise<void> {
+    const k = this.of(check, where);
+    await this.same(k, k.main, "main run's", where);
+    await this.same(k, check, "snapshot", where);
+    this.kept.delete(check);
+  }
+  runner(inner: UnitRunner): UnitRunner {
+    return { run: async (u, task, next, done) => {
+      await this.before(u, task);
+      return await inner.run(u, task, next, done);
+    } };
+  }
+  report(): string {
+    return `snapshots ${this.ms.snapshot} ms; digests ${this.ms.digest} ms (${this.ms.digests}); identity checks ${this.ms.apart} ms (${this.ms.aparts})`;
+  }
+}
 
 const enc = new TextEncoder();
 const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -139,8 +239,13 @@ interface RunCtx {
   manifest: GenManifest;
   cfg: RunConfig;
   cutMax?: number;
-  // where the units of cut, poison and presence run (C4b; lawsearch-checks.ts, lawsearch-par.ts)
+  // where the units of cut, poison and presence run (C4b; lawsearch-checks.ts, lawsearch-par.ts), behind the guard's
+  // check before each run (C4f)
   runner: UnitRunner;
+  // C4f (the lead's H1): the checks' own trial definitions (copies of trials, the same order), made before the
+  // pipeline starts, and the guard of the stages' universes (H1's identity check and H3's digests)
+  chkTrials: TrialDef[];
+  guard: Guard;
   times: Record<string, number>;
   // every failing bar of the checks cut, cut.chosen.first and cut.chosen.second (ts/cut_fail.csv; C3, D6)
   cutFails: CutFailRow[];
@@ -148,10 +253,18 @@ interface RunCtx {
 
 const setOf = (u: Universe, tf: TfKey) => (tf === "m15" ? u.m15 : u.h1);
 const blindId = (id: string) => id.startsWith("blind.");
+// the checks' own definition of a trial of the main run (C4f, H1)
+const chkTrialOf = (c: RunCtx, t: TrialDef): TrialDef => {
+  const k = c.chkTrials.find((x) => x.id === t.id);
+  if (!k) throw new Error(`the checks have no trial ${t.id}`);
+  return k;
+};
 
 // Stage 1 / 2's 13 checks (i)–(iv) of a hit trial on the stage's universe; (v) is another agent's hand trace (not run
-// on synthetic runs, so a hit row is not selectable: 11 O-5)
-async function suspicionChecks(c: RunCtx, u: Universe, trial: TrialDef, sig: TrialSignals, table: BlindTable, tr: TrialRows, avoid: ReadonlySet<string>, answerKnowing: boolean, tagged: Tagged[], stage: StageTag): Promise<SuspectRow["checks"] & { passed: boolean }> {
+// on synthetic runs, so a hit row is not selectable: 11 O-5). C4f (H1): (i)–(iii) read chk (the stage's snapshot, the
+// checks' trial definition and avoid table) and the main run's signals sig; (iv) reads the raw files and the main
+// run's table.
+async function suspicionChecks(c: RunCtx, chk: CheckInputs, trial: TrialDef, sig: TrialSignals, table: BlindTable, tr: TrialRows, answerKnowing: boolean, tagged: Tagged[], stage: StageTag): Promise<SuspectRow["checks"] & { passed: boolean }> {
   const targets = (() => {
     const out: Array<{ tf: TfKey; pi: number; k: number; kinds: string[] }> = [];
     const seen = new Set<string>();
@@ -166,11 +279,12 @@ async function suspicionChecks(c: RunCtx, u: Universe, trial: TrialDef, sig: Tri
     return out.sort((a, b) => a.pi - b.pi || a.k - b.k);
   })();
   const o = { answerKnowing, plant: c.plant };
+  const ct = chkTrialOf(c, trial);
   // 13 (i): CUT_MAX caps this cut too (print.txt's note.cut_max names it; C4a, the lead's E8); its failing bars are not
   // in cut_fail.csv (lawsearch-dump.md 8)
-  const cut = await cutCheck(u, [trial], [sig], targets, avoid, { ...o, maxTargets: c.cutMax, runner: c.runner });
-  const poison = await poisonCheck(u, [trial], [sig], avoid, { ...o, n: POISON_1000, seed: SEEDS.poison1000, runner: c.runner });
-  const presence = await presenceCheck(u, [trial], [sig], avoid, { ...o, seed: SEEDS.poison1000, n: POISON_1000, runner: c.runner });
+  const cut = await cutCheck(chk.u, [ct], [sig], targets, chk.avoid, { ...o, maxTargets: c.cutMax, runner: c.runner });
+  const poison = await poisonCheck(chk.u, [ct], [sig], chk.avoid, { ...o, n: POISON_1000, seed: SEEDS.poison1000, runner: c.runner });
+  const presence = await presenceCheck(chk.u, [ct], [sig], chk.avoid, { ...o, seed: SEEDS.poison1000, n: POISON_1000, runner: c.runner });
   const picks = sampleOf(Array.from(tr.rows), 6, SEEDS.poison1000);
   const retrace = await retraceCheck(c.run, picks.map((r) => ({ pair: PAIRS[table.pi[r]], tf: trial.tf, T: table.T[r], d: table.d[r] as 1 | -1, pl: table.pl[r], m: table.m[r] })));
   for (const [name, r] of [["suspect13.cut", cut], ["suspect13.poison1000", poison], ["suspect13.presence", presence], ["suspect13.retrace", retrace]] as const) {
@@ -187,14 +301,17 @@ const sTrialOf = (all: TrialDef[], tf: TfKey, f: string): TrialDef | null => {
 // Spec 23.2: the chosen trials cut on every higher-timeframe boundary target of one half, the other kinds as stage 0's
 // (lawsearch-checks.ts cutTargets): "first" on stage 1's universe ([S0, SPLIT)), at the end of stage 1; "second" on
 // stage 2's, its second-half targets only (fromStart = SPLIT). The check is "cut.chosen.<half>"; each failing trial's
-// row lists up to 100 failing bars. times gets cut.chosen.<half>.<tf>.
-async function chosenCut(c: RunCtx, u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, answerKnowing: boolean, half: "first" | "second", times: Record<string, number>): Promise<CheckResult> {
+// row lists up to 100 failing bars. times gets cut.chosen.<half>.<tf>. C4f (H1): trials are the main run's chosen
+// trials; the cut reads chk (the stage's snapshot, the checks' definitions of those trials, their avoid table) and the
+// main run's signals sigs.
+async function chosenCut(c: RunCtx, chk: CheckInputs, trials: TrialDef[], sigs: TrialSignals[], answerKnowing: boolean, half: "first" | "second", times: Record<string, number>): Promise<CheckResult> {
   const name = `cut.chosen.${half}`;
   if (trials.length === 0) return { name, passed: true, detail: "no trial was chosen: nothing to cut (spec 23.2)", probes: [] };
+  const ct = trials.map((t) => chkTrialOf(c, t));
   const stats: Record<string, number> = {};
-  const targets = cutTargets(u, trials, sigs, { htf: "all", fromStart: half === "second" ? SPLIT : undefined, stats });
+  const targets = cutTargets(chk.u, ct, sigs, { htf: "all", fromStart: half === "second" ? SPLIT : undefined, stats });
   const note = `${cutStatsText(stats)}; the chosen trials on every higher-timeframe boundary target of the ${half} half, spec 23.2`;
-  return await cutCheck(u, trials, sigs, targets, avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note, fails: { stage: half === "first" ? "stage1end" : "stage2", rows: c.cutFails }, runner: c.runner });
+  return await cutCheck(chk.u, ct, sigs, targets, chk.avoid, { answerKnowing, plant: c.plant, maxTargets: c.cutMax, times, name, timeKey: name, maxExamples: 100, note, fails: { stage: half === "first" ? "stage1end" : "stage2", rows: c.cutFails }, runner: c.runner });
 }
 
 // the plant blindRowHit (design 8, C3): stage 1's blind row that is reported as hit (its measures unchanged)
@@ -261,7 +378,10 @@ async function pipeline(c: RunCtx): Promise<number> {
     return pc.passed ? code : 3;
   };
   if (stopped) return await finish();
-  const avoid = avoidOf(new TextDecoder().decode(avoidBytes));
+  // C4f (H1, H2): the table parsed twice from the same bytes, read-only both times: the main run's and the checks'
+  const avoidText = new TextDecoder().decode(avoidBytes);
+  const avoid = avoidOf(avoidText);
+  const avoidChk = avoidOf(avoidText);
   const withheld = (st: StageTag) => tagged.some((t) => withheldStage(t.stage) === st && !t.r.passed);
 
   const say = (what: string) => console.error(`[lawsearch ${new Date().toISOString()}] ${what}`);
@@ -271,7 +391,11 @@ async function pipeline(c: RunCtx): Promise<number> {
   try {
     const ts = Date.now();
     const u0 = await loadUniverse(src, S0, END, { purpose: "syn0", band: "syn", plant: c.plant });
-    s0 = await runStage0(u0, c.trials, c.cfg, avoid, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax, cutFails: c.cutFails, runner: c.runner });
+    // C4f (H1, H3): the snapshot the checks read, taken before u0 is handed to any main-run code
+    const k0 = await c.guard.keep(u0, "stage 0 (syn0)");
+    const chk0: CheckInputs = { u: k0, trials: c.chkTrials, avoid: avoidChk };
+    s0 = await runStage0(u0, c.trials, c.cfg, avoid, chk0, { answerKnowing, plant: c.plant, dumpDir: dir, cutMaxTargets: c.cutMax, cutFails: c.cutFails, runner: c.runner, afterMain: (main) => c.guard.afterMain(k0, [...main, c.all], chk0, "stage 0, after the main run's part") });
+    await c.guard.end(k0, "stage 0's end");
     for (const r of s0.checks) tagged.push({ stage: "stage0", r });
     for (const [k, v] of Object.entries(s0.times)) if (k !== "stage0") put(`time.${k}.ms`, v);
     put("time.stage0.ms", Date.now() - ts);
@@ -301,9 +425,12 @@ async function pipeline(c: RunCtx): Promise<number> {
   try {
     const ts = Date.now();
     const u1 = await loadUniverse(src, S0, SPLIT, { purpose: "syn1", band: "syn", plant: c.plant });
+    // C4f (H1, H3): stage 1's snapshot, taken before u1 is handed to any main-run code; stage 1's checks read it
+    const k1 = await c.guard.keep(u1, "stage 1 (syn1)");
+    const chk1: CheckInputs = { u: k1, trials: c.chkTrials, avoid: avoidChk };
     await dumpLoad(dir, u1, "syn1");
-    tagged.push({ stage: "stage1", r: dataCheck(u1) });
-    tagged.push({ stage: "stage1", r: h1OnlyCheck(u1) });
+    tagged.push({ stage: "stage1", r: dataCheck(k1) });
+    tagged.push({ stage: "stage1", r: h1OnlyCheck(k1) });
     const ctx1 = ctxOfUniverse(u1, avoid, c.plant);
     const inds1 = { m15: indsOf(u1.m15, c.plant), h1: indsOf(u1.h1, c.plant) };
     const sigOf1 = new Map<string, TrialSignals>();
@@ -313,6 +440,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       return s;
     };
     const sigs1 = c.trials.map(sig1);
+    await c.guard.afterMain(k1, [u1, c.trials, c.all, avoid, ctx1], chk1, "stage 1, after the main run's signals");
     tagged.push({ stage: "stage1", r: sameFirstHalfCheck(s0.sigs, sigs1) });
     const tables: Record<TfKey, { t: BlindTable; late: BlindTable }> = {} as Record<TfKey, { t: BlindTable; late: BlindTable }>;
     for (const tf of ["m15", "h1"] as const) {
@@ -321,7 +449,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       tables[tf] = { t, late };
       await dumpBlind(dir, t);
       await dumpBlind(dir, late);
-      tagged.push({ stage: "stage1", r: followBarChecks(setOf(u1, tf), t) });
+      tagged.push({ stage: "stage1", r: followBarChecks(setOf(k1, tf), t) });
     }
     const trOf = new Map<string, TrialRows>();
     const rowsOf = (t: TrialDef) => {
@@ -357,7 +485,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       let checksPassed: boolean | null = null;
       if (s.hit && !blindId(m.trial)) {
         const t = c.trials.find((x) => x.id === m.trial)!;
-        const r = await suspicionChecks(c, u1, t, sig1(t), tables[t.tf].t, rowsOf(t), avoid, answerKnowing, tagged, "stage1");
+        const r = await suspicionChecks(c, chk1, t, sig1(t), tables[t.tf].t, rowsOf(t), answerKnowing, tagged, "stage1");
         checks = { cut: r.cut, poison1000: r.poison1000, presence: r.presence, retrace: r.retrace, hand: r.hand };
         checksPassed = r.passed;
       }
@@ -401,9 +529,10 @@ async function pipeline(c: RunCtx): Promise<number> {
     say("stage 1: the cut of the chosen trials (spec 23.2)");
     const cutTimes: Record<string, number> = {};
     const chosenTs = c.trials.filter((t) => chosen.m15.includes(t.id) || chosen.h1.includes(t.id));
-    const cut1 = await chosenCut(c, u1, chosenTs, chosenTs.map(sig1), avoid, answerKnowing, "first", cutTimes);
+    const cut1 = await chosenCut(c, chk1, chosenTs, chosenTs.map(sig1), answerKnowing, "first", cutTimes);
     tagged.push({ stage: "stage1end", r: cut1 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
+    await c.guard.end(k1, "stage 1's end");
     put("time.stage1.ms", Date.now() - ts);
     if (!cut1.passed) console.log(`STOP: spec 23.2's cut of the chosen trials failed at the end of stage 1; stage 2 is not opened: ${failingText(cut1)}`);
     if (!withheld("stage1")) {
@@ -438,10 +567,14 @@ async function pipeline(c: RunCtx): Promise<number> {
   try {
     const ts = Date.now();
     const u2 = await loadUniverse(src, S0, END, { purpose: "syn2", band: "syn", plant: c.plant });
+    // C4f (H1, H3): stage 2's snapshot, taken before u2 is handed to any main-run code; stage 2's checks read it
+    const k2 = await c.guard.keep(u2, "stage 2 (syn2)");
+    const chk2: CheckInputs = { u: k2, trials: c.chkTrials, avoid: avoidChk };
     await dumpLoad(dir, u2, "syn2");
-    tagged.push({ stage: "stage2", r: dataCheck(u2) });
+    tagged.push({ stage: "stage2", r: dataCheck(k2) });
     const ctx2 = ctxOfUniverse(u2, avoid, c.plant);
     const inds2 = { m15: indsOf(u2.m15, c.plant), h1: indsOf(u2.h1, c.plant) };
+    await c.guard.afterMain(k2, [u2, c.trials, c.all, avoid, ctx2], chk2, "stage 2, after the main run's indicators");
     const isChosen = (id: string) => chosen.m15.includes(id) || chosen.h1.includes(id);
     const tables: Record<TfKey, { t: BlindTable; late: BlindTable }> = {} as Record<TfKey, { t: BlindTable; late: BlindTable }>;
     for (const tf of ["m15", "h1"] as const) {
@@ -450,7 +583,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       tables[tf] = { t, late };
       await dumpBlind(dir, t);
       await dumpBlind(dir, late);
-      tagged.push({ stage: "stage2", r: followBarChecks(setOf(u2, tf), t) });
+      tagged.push({ stage: "stage2", r: followBarChecks(setOf(k2, tf), t) });
     }
     const sigOf2 = new Map<string, TrialSignals>();
     const sig2 = (t: TrialDef) => {
@@ -461,7 +594,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     // spec 23.2: the chosen trials on every boundary target of the second half (a failure withholds stage 2's numbers)
     const cutTimes: Record<string, number> = {};
     const chosenTs = c.trials.filter((t) => isChosen(t.id));
-    const cut2 = await chosenCut(c, u2, chosenTs, chosenTs.map(sig2), avoid, answerKnowing, "second", cutTimes);
+    const cut2 = await chosenCut(c, chk2, chosenTs, chosenTs.map(sig2), answerKnowing, "second", cutTimes);
     tagged.push({ stage: "stage2", r: cut2 });
     for (const [k, v] of Object.entries(cutTimes)) put(`time.${k}.ms`, v);
     // spec 23.2 (C3, the lead's D9): a failed cut.chosen.second withholds every stage-2 number in print.txt (its failed
@@ -500,7 +633,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       let checksPassed: boolean | null = null;
       if (s.hit && !blindId(m.trial)) {
         const t = c.trials.find((x) => x.id === m.trial)!;
-        const r = await suspicionChecks(c, u2, t, sig2(t), tables[t.tf].t, rowsOf(t), avoid, answerKnowing, tagged, "stage2");
+        const r = await suspicionChecks(c, chk2, t, sig2(t), tables[t.tf].t, rowsOf(t), answerKnowing, tagged, "stage2");
         checks = { cut: r.cut, poison1000: r.poison1000, presence: r.presence, retrace: r.retrace, hand: r.hand };
         checksPassed = r.passed;
       }
@@ -530,6 +663,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     }).sort((a, b) => a.order - b.order);
     const rows = stage2Rows(cands, K, QUESTIONS.q2, QUESTIONS.q4, c.plant);
     await dumpStage2(dir, cands, rows, { delta: c.cfg.kappaDelta, pl: c.cfg.kappaPl });
+    await c.guard.end(k2, "stage 2's end");
     put("time.stage2.ms", Date.now() - ts);
     if (!withheld("stage2")) for (const r of rows) put(`verdict.${r.id}`, `${r.verdict} ${r.label}`);
   } catch (e) {
@@ -592,6 +726,9 @@ async function main(): Promise<number> {
     trials.push(t!);
   }
   trials.sort((a, b) => a.order - b.order);
+  // C4f (the lead's H1): the checks' own trial definitions, made here, before any main-run code is handed the parsed
+  // ones (frozen copies, the same order)
+  const chkTrials = trials.map(trialCopyOf);
   // gate 3: the run folder
   const times: Record<string, number> = {};
   let run: string;
@@ -642,9 +779,20 @@ async function main(): Promise<number> {
   // the workers start at the first check that uses them and end with the run
   const pool = workers > 0 ? new WorkerPool(workers) : null;
   console.error(`[lawsearch] the checks' units run on ${workers > 0 ? `${workers} workers` : "the main thread"} (WORKERS)`);
+  // C4f (H1, H3): every check run goes through the guard (lawsearch.ts Guard)
+  const guard = new Guard();
   try {
-    return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, runner: pool ?? inPlace, times, cutFails: [] });
+    return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, runner: guard.runner(pool ?? inPlace), chkTrials, guard, times, cutFails: [] });
+  } catch (e) {
+    // H3: a universe changed after its load: the run's dump folder (made by this run, which removed any older one at
+    // its start) is removed, so no file of a run whose inputs changed under it is left; exit 6
+    if (!isChanged(e)) throw e;
+    console.log((e as Error).message);
+    await Deno.remove(out, { recursive: true }).catch(() => {});
+    console.log(`exit 6: a universe changed after it was loaded; ${out} was removed`);
+    return 6;
   } finally {
+    console.error(`[lawsearch guard] ${guard.report()}`);
     pool?.close();
   }
 }

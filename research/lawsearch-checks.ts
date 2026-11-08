@@ -26,8 +26,13 @@
 //     timeframe's loaded files and no 1-minute bar (the program reads no 1-minute file) is read, and no higher bar is
 //     read that is not rebuilt from the poisoned series (the main run's higher bars are coarsened from the pair's own
 //     series too, tfSetOf). So poisoning those too, as the spec's words say, could not change the decision. The holes
-//     are the uncut run's: poison changes prices, never which bars exist or when they start. (Design 12.2 (2)'s
-//     condition applies: no module-level state that survives between candidatesOf calls.)
+//     are the uncut run's: poison changes prices, never which bars exist or when they start. Premises (C4e's review):
+//     the poisoned series, its holes, the trial definition and the avoid table hold nothing the main run left there.
+//     Since C4f they hold by construction (the lead's H1): the poisoned series is made from the stage's snapshot taken
+//     right after loading, the holes are made by the unit from that snapshot (poisonCheck takes no ExclCtx; until C4f
+//     stage 0 passed the main run's), and the trial definition and avoid table are the checks' own (lawsearch.ts); H2
+//     freezes them as well. The one premise left is design 12.2 (2)'s: no module-level state that survives between
+//     candidatesOf calls (at WORKERS=0 the checks run in the main thread's module instances).
 //   * the 300 evenly spaced bars: k = floor(j × (n − 1) ÷ 299), j = 0 … 299.
 //   * spec 23.2 (2026-11-05): stage 0 keeps CUT_HTF_STAGE0 = 300 of the higher-timeframe boundary targets per
 //     timeframe and pair, the j-th of their time-ordered list being floor(j × (n − 1) ÷ 299) (all when n ≤ 300); the
@@ -44,7 +49,7 @@ import { coarsenSeries, deleteBars, entryExitIndex, htfIndex, poisonSeries, pois
 import type { PoisonTables } from "./lawsearch-bars.ts";
 import { indOf } from "./lawsearch-ind.ts";
 import { parseCandidates } from "./lawsearch-items.ts";
-import { candidatesOf, exclCtxOf, holesOf, reasonOf } from "./lawsearch-events.ts";
+import { candidatesOf, exclCtxFrom, exclCtxOf, holesOf, readOnlySet, reasonOf } from "./lawsearch-events.ts";
 import { donchianState } from "./bigflow-lib.ts";
 import { mulberry32, shuffle } from "./trend-stats.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey } from "../supabase/functions/track-outcomes/quotes.ts";
@@ -253,6 +258,13 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // too (deleteBars), and the higher bars and g, when read, are rebuilt into fresh arrays (coarsenSeries, htfIndex).
 // The bar starts given to holesOf at a cut target are copies of their range too. So code that reads a series
 // through its memory block (a typed array or DataView over it) reads nothing the series does not hold.
+// C4f (the lead's H1 on C4e's review): and everything a unit reads is made from the checks' own inputs, never from
+// an object the main run was handed: the universe a check is given is the stage's snapshot taken right after loading
+// (lawsearch.ts; the workers get a structured clone of it), the task's trials and avoid table are the checks' own,
+// and poison's holes are made from that universe (no ExclCtx is passed in). Until C4f the series were copied from the
+// arrays the main run had been handed, and the trials, the avoid table and (in poison) the ExclCtx were the main
+// run's objects, so a value the main run's code left there (e.g. the next close's sign in a series' fileKey: plant
+// seriesStashE04) sat in every cut, poisoned and edited series and every check decided as the main run did.
 // The three Got functions are the bodies of the checks' loops before C4b, moved here unchanged. Nothing is shared
 // between units except what those loops already shared: at one cut target, the holes of the cut and the cut's Ind
 // are made once and read by every trial at that target (the same cut series for all of them). The uncut decision
@@ -264,14 +276,26 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 // same with any number of workers, as long as a unit's decision is a function of its own series alone: every build
 // and cache keyed by the Ind, and no module-level state that survives between candidatesOf calls (lawsearch-design.md
 // 12.2 (2); C4d). Such state would differ between the main thread and each worker (each has its own module copy),
-// so it could make the bytes depend on WORKERS too. An error is replayed at its unit too: the units before it count,
-// then it is thrown, as the loop would have thrown it there.
+// so it could make the bytes depend on WORKERS too; and at WORKERS=0 the units run in the main thread's module
+// instances, so module-level state is the one channel from the main run to a check that H1 does not close. An error
+// is replayed at its unit too: the units before it count, then it is thrown, as the loop would have thrown it there.
 
 // what the units of one check read besides the universe
 export type UnitTask =
-  | { kind: "cut"; tf: TfKey; trials: TrialDef[]; higher: boolean; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string }
-  | { kind: "poison"; trials: TrialDef[]; ctx: Partial<Record<TfKey, ExclCtx>> | null; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string }
-  | { kind: "presence"; trials: TrialDef[]; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string };
+  | { kind: "cut"; tf: TfKey; trials: readonly TrialDef[]; higher: boolean; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string }
+  | { kind: "poison"; trials: readonly TrialDef[]; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string }
+  | { kind: "presence"; trials: readonly TrialDef[]; avoid: ReadonlySet<string>; answerKnowing: boolean; plant: string };
+
+// C4f (the lead's H2, defense in depth): a check run's task made read-only: a frozen copy of the task with a frozen
+// copy of its list of trials, each trial frozen, and its avoid table read-only (lawsearch-events.ts readOnlySet). The
+// check functions seal the task they hand the runner, and a worker seals the structured clone it receives (a clone is
+// neither frozen nor read-only: lawsearch-par-worker.ts). No unit writes its task; this only makes such a write throw.
+// The guard by construction is H1: a task's trials and avoid table are the checks' own (lawsearch.ts), never the main
+// run's, and so is the universe the runner is given with it.
+export function sealTask<T extends UnitTask>(task: T): T {
+  for (const t of task.trials) Object.freeze(t);
+  return Object.freeze({ ...task, trials: Object.freeze([...task.trials]), avoid: readOnlySet(task.avoid as Set<string>, "the avoid table") }) as T;
+}
 
 // One job: a run of consecutive units. cut: the targets ks of pair pi, unit j × (trials) + ti for target j and trial
 // ti; poison: the probe bars (pis[q], is[q]) of trial ti, unit q; presence: the same probe bars, unit 2q (variant
@@ -297,8 +321,10 @@ export interface UnitOut {
   err: string | null;
 }
 
-// poison's uncut holes per timeframe when the check was given none (exclCtxOf of the uncut timeframe, made once per
-// timeframe and task: a function of the universe, avoid and plant only, which do not change within a task)
+// poison's uncut holes per timeframe (exclCtxOf of the uncut timeframe of the thread's own copy of the universe, made
+// once per timeframe and task: a function of the universe, avoid and plant only, which do not change within a task).
+// C4f (the lead's H1): poisonCheck takes no ExclCtx any more (stage 0 used to pass the main run's), so poison's holes
+// are always made here, from the universe and the avoid table the check was given.
 export type UnitCache = Partial<Record<TfKey, ExclCtx>>;
 
 // Runs the jobs of one task on universe u: next() gives the jobs in order (null: no more); done(out) is called with
@@ -358,7 +384,7 @@ export function cutGotAt(set: TfSet, c: Extract<UnitTask, { kind: "cut" }>, pi: 
     const hi = lowerBound(p.T, p.n, Tk + 1);
     return p.s.slice(lo, Math.max(lo, hi));
   });
-  const ctx: ExclCtx = { tf, step: STEP[tf], holes: holesOf(tf, starts, from, Tk), avoid: c.avoid, stage3: null, plant: c.plant };
+  const ctx = exclCtxFrom(tf, STEP[tf], holesOf(tf, starts, from, Tk), c.avoid, null, c.plant);
   if (count <= 0) return;
   // one Ind of the cut for every trial decided at k (the builds kept on it, lawsearch-events.ts buildOf)
   const indCut = indFor(cut, tf, c.higher, c.plant);
@@ -435,7 +461,7 @@ export function runUnitJob(u: Universe, task: UnitTask, job: UnitJob, cache: Uni
     } else if (task.kind === "poison") {
       const trial = task.trials[job.ti];
       const set = trial.tf === "m15" ? u.m15 : u.h1;
-      const ctx = task.ctx?.[trial.tf] ?? (cache[trial.tf] ??= exclCtxOf(set, task.avoid, u.fromMs, u.toMs, null, task.plant));
+      const ctx = cache[trial.tf] ??= exclCtxOf(set, task.avoid, u.fromMs, u.toMs, null, task.plant);
       for (let q = 0; q < job.limit; q++) put(q, poisonGotAt(set, trial, ctx, job.pis[q], job.is[q], task, tablesOf(cache)));
     } else {
       const trial = task.trials[job.ti];
@@ -495,6 +521,9 @@ const rethrow = (out: UnitOut, err: unknown) => {
 // Plant chosenCutFirstDiff (design 8, C3): in the check "cut.chosen.first" only, the cut decision of the first target
 // of the first trial given (the first chosen trial in table order) gets a planted mark, so that this check fails on a
 // chosen trial and the stop before stage 2 (design 7.7) runs end to end; nothing else changes.
+// Plant chosenCutSecondDiff (C4f, the lead's H8): the same in the check "cut.chosen.second", so that a run that opens
+// stage 2 (N 1001 chooses m15.E04.F01, m15.B06 and h1.B06) meets spec 23.2's failed cut of the second half end to end
+// (the lead's D9: stage 2's numbers withheld, its dumps still written, exit 3).
 // o.runner (C4b): where the units run (inPlace when not given; the result is the same bytes either way, see above).
 export async function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], targets: CutTarget[], avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; maxTargets?: number; times?: Record<string, number>; name?: string; timeKey?: string; maxExamples?: number; note?: string; fails?: { stage: string; rows: CutFailRow[] }; runner?: UnitRunner }): Promise<CheckResult> {
   const cap = o.maxExamples ?? MAX_EXAMPLES;
@@ -506,7 +535,8 @@ export async function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSigna
   const fail = (trial: TrialDef, pi: number, s: Series, k: number, kinds: string, cut: string, uncut: string) => {
     if (o.fails) o.fails.rows.push({ check: name, stage: o.fails.stage, trial: trial.id, order: trial.order, pi, k, s: s.s[k], T: s.T[k], kinds, cut, uncut });
   };
-  let planted = o.plant === "chosenCutFirstDiff" && name === "cut.chosen.first" && trials.length > 0 ? trials[0].id : null;
+  const plantHere = (o.plant === "chosenCutFirstDiff" && name === "cut.chosen.first") || (o.plant === "chosenCutSecondDiff" && name === "cut.chosen.second");
+  let planted = plantHere && trials.length > 0 ? trials[0].id : null;
   const probes = new Map<string, Probe>();
   for (const t of trials) probes.set(t.id, probeOf(t.id));
   const sigOf = new Map(sigs.map((s) => [s.trial.id, s]));
@@ -605,7 +635,7 @@ export async function cutCheck(u: Universe, trials: TrialDef[], sigs: TrialSigna
       }
       rethrow(out, err);
     };
-    await runner.run(u, { kind: "cut", tf, trials: tfTrials, higher, avoid, answerKnowing: o.answerKnowing, plant: o.plant }, next, done);
+    await runner.run(u, sealTask({ kind: "cut", tf, trials: tfTrials, higher, avoid, answerKnowing: o.answerKnowing, plant: o.plant }), next, done);
     // spec 7 / 15: the entry bar of every counted signal is the uncut series' first start ≥ T and < X
     for (const trial of tfTrials) {
       const probe = probes.get(trial.id)!;
@@ -727,8 +757,9 @@ function* probeRecs(u: Universe, trials: TrialDef[], sigs: TrialSignals[], what:
 // pairs"; the code has poisoned the trial's pair alone since b3a2c43, and the header's poison bullet shows that the
 // decision at T reads no other series the spec's 毒 would change); everything the decision at T reads is
 // recomputed; decision and reason at T must be equal. 100 signals and 100 bars without a signal per trial. o.runner
-// (C4b): where the units run.
-export async function poisonCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, o: { n: number; seed: number; answerKnowing: boolean; plant: string; only?: string[]; ctx?: Record<TfKey, ExclCtx>; runner?: UnitRunner }): Promise<CheckResult> {
+// (C4b): where the units run. C4f (H1): no ExclCtx is passed in; the units make the uncut holes from their own copy of
+// the universe the check was given (runUnitJob).
+export async function poisonCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, o: { n: number; seed: number; answerKnowing: boolean; plant: string; only?: string[]; runner?: UnitRunner }): Promise<CheckResult> {
   const probes: Probe[] = [];
   const queue: ProbeRec[] = [];
   const next = recordsOf(probeRecs(u, trials, sigs, "poisonCheck", o.n, o.seed, o.only, POISON_PER_JOB, 1, probes, true), queue, (e) => ({ job: inertJob(), probe: probeOf(""), kinds: [], times: [], err: e }));
@@ -742,7 +773,7 @@ export async function poisonCheck(u: Universe, trials: TrialDef[], sigs: TrialSi
     }
     rethrow(out, err);
   };
-  await (o.runner ?? inPlace).run(u, { kind: "poison", trials, ctx: o.ctx ?? null, avoid, answerKnowing: o.answerKnowing, plant: o.plant }, next, done);
+  await (o.runner ?? inPlace).run(u, sealTask({ kind: "poison", trials, avoid, answerKnowing: o.answerKnowing, plant: o.plant }), next, done);
   return resultOf(o.n === POISON_N ? "poison" : `poison${o.n}`, probes, `n ${o.n}, seed ${o.seed}`);
 }
 
@@ -775,7 +806,7 @@ export async function presenceCheck(u: Universe, trials: TrialDef[], sigs: Trial
     }
     rethrow(out, err);
   };
-  await (o.runner ?? inPlace).run(u, { kind: "presence", trials, avoid, answerKnowing: o.answerKnowing, plant: o.plant }, next, done);
+  await (o.runner ?? inPlace).run(u, sealTask({ kind: "presence", trials, avoid, answerKnowing: o.answerKnowing, plant: o.plant }), next, done);
   return resultOf("presence", probes, `seed ${o.seed}`);
 }
 
@@ -963,6 +994,111 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[] {
   const a = xs.slice();
   shuffle(a, mulberry32(seed));
   return a.slice(0, n);
+}
+
+// ---- C4f: the checks' inputs apart from the main run's (the lead's H1, H3) ---------------------------------------
+//
+// H1 (by construction): every input of every check is the checks' own. lawsearch.ts takes a snapshot of each universe
+// right after loadUniverse (stage 0's u0, stage 1's u1, stage 2's u2), before any main-run code is handed the
+// universe, and the checks read only the snapshot; the checks' trial definitions are copies made before the pipeline
+// starts (lawsearch-items.ts trialCopyOf) and their avoid table a second parse of the same bytes (avoidOf). So no
+// main-run code ever holds an object a check reads, and nothing the main run writes can reach a check: the workers
+// get a structured clone of the snapshot and of the checks' task. Two run-time proofs come with it: assertApart (no
+// object a check run reads, down to the memory blocks of its typed arrays, is reachable from the main run's universe,
+// trials, avoid table or ExclCtx), and the universe digest (H3: a SHA-256 of every typed array and every other value
+// of a universe, taken at the load and compared again later; lawsearch.ts stops the run with exit 6 on a change).
+// What stays shared is module-level state (design 12.2 (2)): at WORKERS=0 the checks run in the main thread's module
+// instances, so state kept in a module (not in an object handed to the code) still passes between them.
+
+// what the checks of one stage read besides the main run's results (its signals, rows and tables, which are what a
+// check compares): the stage's universe snapshot, the checks' trial definitions and their avoid table
+export interface CheckInputs {
+  u: Universe;
+  trials: readonly TrialDef[];
+  avoid: ReadonlySet<string>;
+}
+
+// the snapshot of a universe: a structured clone, so every typed array has a memory block of its own and nothing of it
+// is an object of u
+export const snapshotOf = (u: Universe): Universe => structuredClone(u);
+
+// a typed array (or a DataView)?
+const isView = (x: unknown): x is ArrayBufferView => ArrayBuffer.isView(x);
+
+// every object reachable from roots through own enumerable properties, array entries, Set and Map entries, and the
+// memory block of each typed array (not walked further; no element is read through it)
+export function reachOf(roots: readonly unknown[]): Set<object> {
+  const seen = new Set<object>();
+  const stack: unknown[] = [...roots];
+  while (stack.length > 0) {
+    const x = stack.pop();
+    if (x === null || (typeof x !== "object" && typeof x !== "function")) continue;
+    const o = x as object;
+    if (seen.has(o)) continue;
+    seen.add(o);
+    // a typed array: itself and its memory block, by identity only (the block is never read)
+    if (isView(o)) {
+      seen.add(o.buffer);
+      continue;
+    }
+    if (typeof o === "function") continue;
+    if (o instanceof Set) for (const v of o) stack.push(v);
+    else if (o instanceof Map) for (const [k, v] of o) stack.push(k, v);
+    for (const k of Object.keys(o)) stack.push((o as Record<string, unknown>)[k]);
+  }
+  return seen;
+}
+
+// H1's run-time proof: no object reachable from check (a check run's universe and task, or a stage's CheckInputs) is
+// one of main (reachOf of the main run's objects); otherwise a program error (exit 1) that names how many and where
+export function assertApart(main: ReadonlySet<object>, check: readonly unknown[], where: string): void {
+  let shared = 0;
+  const kinds = new Set<string>();
+  for (const o of reachOf(check)) {
+    if (!main.has(o)) continue;
+    shared++;
+    kinds.add(isView(o) ? o.constructor.name : o instanceof Set ? "Set" : Array.isArray(o) ? "Array" : typeof o === "function" ? "function" : o.constructor?.name ?? "object");
+  }
+  if (shared > 0) throw new Error(`SHARED: ${where}: ${shared} objects a check reads are the main run's (${[...kinds].join(", ")}; lawsearch-checks.ts assertApart, C4f H1)`);
+}
+
+// H3: the digest of a universe, path by path: every typed array's SHA-256 and every other leaf value (numbers,
+// strings, booleans, null), in a fixed order (own enumerable properties as they are)
+export async function universeDigest(u: Universe): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  const walk = async (x: unknown, path: string): Promise<void> => {
+    if (x === null || typeof x !== "object") {
+      out.set(path, `${typeof x}:${String(x)}`);
+      return;
+    }
+    if (isView(x)) {
+      out.set(path, `${x.constructor.name}[${(x as unknown as ArrayLike<number>).length}]:${hexOf(new Uint8Array(await crypto.subtle.digest("SHA-256", x as BufferSource)))}`);
+      return;
+    }
+    const keys = Object.keys(x);
+    out.set(path, `${Array.isArray(x) ? "array" : "object"}:${keys.length}`);
+    for (const k of keys) await walk((x as Record<string, unknown>)[k], `${path}.${k}`);
+  };
+  await walk(u, u.purpose);
+  return out;
+}
+
+// the paths whose digest differs from want's (and paths present in only one), at most `max` of them, and their count
+export function digestDiff(want: ReadonlyMap<string, string>, got: ReadonlyMap<string, string>, max = 6): { n: number; paths: string[] } {
+  const paths: string[] = [];
+  let n = 0;
+  for (const [k, v] of want) {
+    if (got.get(k) === v) continue;
+    n++;
+    if (paths.length < max) paths.push(k);
+  }
+  for (const k of got.keys()) {
+    if (want.has(k)) continue;
+    n++;
+    if (paths.length < max) paths.push(k);
+  }
+  return { n, paths };
 }
 
 // the timeframe's ExclCtx of a whole universe (the uncut run's)

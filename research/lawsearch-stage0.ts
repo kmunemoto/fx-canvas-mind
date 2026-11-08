@@ -12,7 +12,7 @@ import { addsUpCheck, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataChe
 import { dumpBars, dumpHoles, dumpInd, dumpLoad, dumpSignals, dumpStage0 } from "./lawsearch-dump.ts";
 import { CUT_HTF_STAGE0, POISON_N, SEEDS } from "./lawsearch-rules.ts";
 import { stop } from "./lawsearch-bars.ts";
-import type { UnitRunner } from "./lawsearch-checks.ts";
+import type { CheckInputs, UnitRunner } from "./lawsearch-checks.ts";
 import type { CheckResult, CutFailRow, ExclCtx, Ind, RunConfig, Stage0Row, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 // the dump columns of the built items and filters of the run's trials on one timeframe, per pair
@@ -61,7 +61,14 @@ export interface Stage0Out {
 // 23.2's 300 higher-timeframe boundary targets per tf and pair). The stage-0 dumps are written when dumpDir is given.
 // o.cutFails: the failing bars of the cut check (stage "stage0") are pushed here for cut_fail.csv (C3, D6).
 // o.runner (C4b): where the units of cut, poison and presence run (lawsearch-checks.ts; in place when not given).
-export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[]; runner?: UnitRunner }): Promise<Stage0Out> {
+// C4f (the lead's H1): u, trials and avoid are the main run's; chk is what the checks read instead: the snapshot of
+// the universe taken right after loading, before u was handed to any main-run code, and the checks' own trial
+// definitions (in the same order as trials) and avoid table (lawsearch.ts). The main run's part (indicators, signals,
+// blind bars, rows) reads only u, trials and avoid; every check reads only chk and the main run's results (its
+// signals and rows, which are what a check compares). o.afterMain (lawsearch.ts' guard) is awaited with the main run's
+// objects once the main run's part is done, before the noBlind stop and before any check or dump: it compares both
+// universes with their digest at the load (H3) and proves that no object of chk is reachable from them (H1).
+export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, chk: CheckInputs, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[]; runner?: UnitRunner; afterMain?: (main: unknown[]) => Promise<void> }): Promise<Stage0Out> {
   const t0 = Date.now();
   const times: Record<string, number> = {};
   const ctx = ctxOfUniverse(u, avoid, o.plant);
@@ -74,6 +81,7 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
   const gDf: Record<string, number> = {};
   const rows = stage0(sigs, { m15: u.m15, h1: u.h1 }, passing, cfg.g, gDf, o.plant);
   times["stage0"] = Date.now() - t0;
+  if (o.afterMain) await o.afterMain([u, trials, avoid, ctx]);
   // spec 6 (C3, the lead's D4): a counted signal with a trade whose stratum has no blind bar is a program error, for
   // every trial (chosen later or not) in either half; the run stops here, before stage 0's checks. The message names
   // each trial and half and gives no count (spec 9 後半: the second half's per-trial numbers are not shown).
@@ -81,15 +89,18 @@ export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig,
   if (noBlind.length > 0) stop(`spec 6: counted signals whose trade has no blind bar in its stratum (must be 0; a program error): ${noBlind.join(", ")}`);
   const checks: CheckResult[] = [];
   const tc = Date.now();
-  checks.push(dataCheck(u));
+  // the checks (C4f, H1): chk's universe, trials and avoid table; the main run's signals, rows and Inds are what they
+  // compare (donchian compares the main run's Ind with donchianState on chk's bars); poison makes its own holes
+  const ct = [...chk.trials];
+  checks.push(dataCheck(chk.u));
   checks.push(addsUpCheck(rows.map((r) => ({ trial: r.trial, addsUp: r.addsUp }))));
-  checks.push(donchianCheck(u, inds));
+  checks.push(donchianCheck(chk.u, inds));
   // spec 15 切り取り with spec 23.2's stage-0 rule: 300 of the higher-timeframe boundary targets per tf and pair
   const cutStats: Record<string, number> = {};
-  const targets = cutTargets(u, trials, sigs, { htf: "even", stats: cutStats });
-  checks.push(await cutCheck(u, trials, sigs, targets, avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2`, fails: o.cutFails ? { stage: "stage0", rows: o.cutFails } : undefined, runner: o.runner }));
-  checks.push(await poisonCheck(u, trials, sigs, avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, ctx, runner: o.runner }));
-  checks.push(await presenceCheck(u, trials, sigs, avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, runner: o.runner }));
+  const targets = cutTargets(chk.u, ct, sigs, { htf: "even", stats: cutStats });
+  checks.push(await cutCheck(chk.u, ct, sigs, targets, chk.avoid, { answerKnowing: o.answerKnowing, plant: o.plant, maxTargets: o.cutMaxTargets, times, note: `${cutStatsText(cutStats)}; htf: ${CUT_HTF_STAGE0} evenly picked per timeframe and pair, spec 23.2`, fails: o.cutFails ? { stage: "stage0", rows: o.cutFails } : undefined, runner: o.runner }));
+  checks.push(await poisonCheck(chk.u, ct, sigs, chk.avoid, { n: POISON_N, seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, runner: o.runner }));
+  checks.push(await presenceCheck(chk.u, ct, sigs, chk.avoid, { seed: SEEDS.poison, answerKnowing: o.answerKnowing, plant: o.plant, runner: o.runner }));
   times["checks"] = Date.now() - tc;
   if (o.dumpDir) {
     const dir = o.dumpDir;

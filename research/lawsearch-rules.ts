@@ -189,4 +189,14 @@ export const PLANTS: readonly string[] = [
   // now that every check series holds its own bars only (lawsearch-bars.ts copyOf; lawsearch-events.ts candidatesOf)
   "carriedCountS01",
   "bufferReadE04",
+  // C4f (2026-11-08), run plants (the lead's H4 on C4e's review: look-aheads kept where the checks used to read the main
+  // run's objects; lawsearch-events.ts candidatesOf and reasonOf): seriesStashE04 (the next close's sign written into
+  // the series' own fileKey: the universe detector stops the run, exit 6), trialStashE04 (the next closes kept on the
+  // TrialDef object: the frozen TrialDef throws, exit 1) and avoidStashR3 (③ on the window after T, kept in the avoid
+  // table: the read-only table throws, exit 1), each on CMP-C 7101; and (the lead's H8) chosenCutSecondDiff, a failing
+  // bar planted in cut.chosen.second on the first chosen trial, on CMP-N 1001 (stage 2's numbers withheld, exit 3)
+  "seriesStashE04",
+  "trialStashE04",
+  "avoidStashR3",
+  "chosenCutSecondDiff",
 ];

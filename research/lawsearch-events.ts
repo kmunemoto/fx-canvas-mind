@@ -93,13 +93,19 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // a 291-bar window, lawsearch-checks.ts cutGotAt), and however that code reads the series: through its elements or
 // through its memory block (C4e: every series a check hands to decisionOf has arrays that hold its own bars only,
 // lawsearch-bars.ts copyOf; before C4e a cut prefix was a view whose backing store held the uncut bars after k, and a
-// read through it was not seen: plant bufferReadE04 below). This holds by construction for any change of the loop's
-// body or of a build that keeps every build and cache keyed by the Ind and adds no module-level state that survives
-// between candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is not part of "the check's series alone", so the
-// equality does not cover it (and it could also make the bytes depend on WORKERS, since the main thread and each
-// worker hold their own copy of it). Within that condition it does not depend on the body keeping no state (C4b's
-// candidatesAt, which ran the body at one bar alone, needed that; C4b's review, finding 1). The item's and the F's
-// builds are kept per Ind (buildOf) for the trials that share the same Ind; see there.
+// read through it was not seen: plant bufferReadE04 below), and whatever that code writes into the objects it is
+// handed (C4f, the lead's H1: the check's series is made from a snapshot of the universe taken right after loading,
+// before any main-run code was handed the universe, and the check's trial definition, avoid table and holes are its
+// own, so nothing the main run's call of this code left in its own series, trial or ExclCtx reaches the check: plants
+// seriesStashE04, trialStashE04 and avoidStashR3; until C4f such a stash sat in every check's input). This holds by
+// construction for any change of the loop's body or of a build that keeps every build and cache keyed by the Ind and
+// adds no module-level state that survives between candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is
+// not part of "the check's series alone", so the equality does not cover it (and it could also make the bytes depend
+// on WORKERS, since the main thread and each worker hold their own copy of it; at WORKERS=0 the checks run in the
+// main thread's own module instances, so it is the one channel from the main run to a check left open). Within that
+// condition it does not depend on the body keeping no state (C4b's candidatesAt, which ran the body at one bar alone,
+// needed that; C4b's review, finding 1). The item's and the F's builds are kept per Ind (buildOf) for the trials that
+// share the same Ind; see there.
 //
 // Plants lastBarStateG3 and lastBarStateG5 (C4c, development only; lawsearch-design.md 8): a look-ahead that mixes
 // state carried across bars with the series' end: on the series' last bar, a raw signal is dropped when the last row
@@ -121,6 +127,20 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // run did (the cut passed; only poison and presence, which make fresh arrays, failed). Since C4e every series a
 // check hands to decisionOf holds its own bars only (lawsearch-bars.ts copyOf), so at k there is no next close in
 // the store and the cut must fail on an E04 trial.
+// Plants seriesStashE04 and trialStashE04 (C4f, development only; the lead's H4 on C4e's review: the reviewer's
+// seriesStashE04 and trialStashE04, the refuters' seriesWriteE04 and trialahead): bufferReadE04's drop rule on E04's
+// trials, the next close kept where code handed the main run's objects could leave it for the checks.
+// seriesStashE04 writes the sign of C[q + 1] − C[q] into the series' own fileKey at every bar q but the last (−10
+// down, −11 up, −12 equal; only where no sign is there yet: nothing reads fileKey after the load) and reads it back at
+// bar i. trialStashE04 keeps, per pair, a copy of the longest close array the trial has been given on the trial
+// object (an added property) and reads the next close from there. Until C4f the checks copied their series from the
+// arrays the main run had been handed, and got the main run's TrialDef objects (or structured clones of them with
+// every added property), so both stashes reached every cut, poison and presence decision, which then decided as the
+// main run did: every check passed while the main run looked ahead. Since C4f (H1, lawsearch.ts) the checks read a
+// snapshot of each universe taken right after loading and trial definitions of their own, so neither stash reaches
+// them; on top of that the universe detector (H3) stops the run (exit 6) when seriesStashE04 has written into the main
+// run's universe, and the frozen TrialDef (H2, lawsearch-items.ts parseCandidates) makes trialStashE04's first write
+// throw (exit 1). The plant avoidStashR3 (reasonOf below) is the same on the reason path.
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
   const p = prepare(trial, ind, o);
   const { n, cond, keep, fb, edge, first } = p;
@@ -131,6 +151,11 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
   const carried = (plant === "carriedCountB06" && trial.kind === "B" && trial.b === "B06") || (plant === "carriedCountS01" && trial.kind === "S" && trial.s === "S01");
   // plant bufferReadE04 (the header above): E04's trials only; peek[i + 1] is the next close read through the store
   const peek = plant === "bufferReadE04" && trial.kind === "EF" && trial.e === "E04" ? storeOf(ind.series.C) : null;
+  // plants seriesStashE04 and trialStashE04 (the header above): E04's trials only; stashKey[i] the sign of the next
+  // close written into the series' fileKey, stashC[i + 1] the next close from the copy kept on the trial object
+  const e04 = trial.kind === "EF" && trial.e === "E04";
+  const stashKey = plant === "seriesStashE04" && e04 ? seriesStashOf(ind.series) : null;
+  const stashC = plant === "trialStashE04" && e04 ? trialStashOf(trial, ind.series) : null;
   let raw0 = 0, raw1 = 0;
   const rows: CandRows = { i: [], d: [], s: [] };
   const rowsI = rows.i;
@@ -152,8 +177,9 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     let s0 = NONE;
     // ②
     if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
-      // plants lastBarStateG3 / lastBarStateG5, carriedCountB06 / carriedCountS01 and bufferReadE04 (the header above)
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]);
+      // plants lastBarStateG3 / lastBarStateG5, carriedCountB06 / carriedCountS01, bufferReadE04, seriesStashE04 and
+      // trialStashE04 (the header above)
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]) || (stashKey !== null && stashKey[i] === -10) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] < stashC[i]);
       raw0++;
       if (!dropped) {
         // ③
@@ -170,7 +196,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     // sell (k = 1), the same
     let s1 = NONE;
     if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]) || (stashKey !== null && stashKey[i] === -11) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] > stashC[i]);
       raw1++;
       if (!dropped) {
         if (keep1 === null || keep1[i] !== 0) {
@@ -200,6 +226,23 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
 // the store. On a series whose arrays hold its own bars only (every series since C4e: the main run's, as loaded, and
 // every check's, lawsearch-bars.ts copyOf) that is C itself; on a view of a longer array it runs past the series' end.
 const storeOf = (C: Float64Array): Float64Array => new Float64Array(C.buffer, C.byteOffset, (C.buffer.byteLength - C.byteOffset) / 8);
+
+// plant seriesStashE04 (candidatesOf's header): the sign of C[q + 1] − C[q] written into s's own fileKey at every bar
+// q < n − 1 that has no sign yet (−10 down, −11 up, −12 equal); the array itself is returned and read at bar i
+const seriesStashOf = (s: Series): Int32Array => {
+  const fk = s.fileKey;
+  for (let q = 0; q + 1 < s.n; q++) if (fk[q] > -10) fk[q] = s.C[q + 1] < s.C[q] ? -10 : s.C[q + 1] > s.C[q] ? -11 : -12;
+  return fk;
+};
+
+// plant trialStashE04 (candidatesOf's header): per pair, a copy of the longest close array the trial has been given,
+// kept on the trial object itself (an added property; a frozen TrialDef makes this write throw)
+const trialStashOf = (trial: TrialDef, s: Series): Float64Array => {
+  const all = ((trial as unknown as { __peek?: Record<number, Float64Array> }).__peek ??= {});
+  const old = all[s.pi];
+  if (old === undefined || old.length < s.n) all[s.pi] = s.C.slice();
+  return all[s.pi];
+};
 
 // what ②–④ and the warm-up read (prepare's result)
 interface Prepared {
@@ -432,6 +475,8 @@ const clockBlock = (step: number, b: number): Uint8Array => {
 // 1 min and a + 3 min are not all ②'s time, a is not a GMO holiday time, and at least 3 of the 5 pairs have a bar
 // starting at a. A hole is a run of adjacent open slots where the pair has no bar, at least 2 slots on m15 and 1 on
 // h1; a slot that is not open breaks the run. starts: per pair (PAIRS order), ascending bar starts.
+// C4f (the lead's H2, defense in depth): the Holes object and its two per-pair lists are frozen (no field replaced,
+// no property added, no list entry replaced); its typed arrays cannot be frozen and stay writable.
 export function holesOf(tf: TfKey, starts: ReadonlyArray<ArrayLike<number>>, fromMs: number, toMs: number): Holes {
   const step = STEP[tf];
   const a0 = Math.floor(fromMs / step) * step;
@@ -482,7 +527,9 @@ export function holesOf(tf: TfKey, starts: ReadonlyArray<ArrayLike<number>>, fro
     }
     return h;
   });
-  return { tf, step, fromMs: a0, nSlots, open, present, hole };
+  Object.freeze(present);
+  Object.freeze(hole);
+  return Object.freeze({ tf, step, fromMs: a0, nSlots, open, present, hole });
 }
 
 // ③: some hole slot [a, a + step) of the pair overlaps [sFrom, T) with a positive length (a < T and a + step >
@@ -505,9 +552,18 @@ export function r3(h: Holes, pi: number, sFrom: number, T: number, plant = ""): 
 
 // What the exclusions read besides the bar: the holes of [fromMs, toMs) of the timeframe's five pairs, the avoided
 // slots of ⑥ (empty when question 3 is (b)), stage 3's period (null before stage 3), and the plant
+// C4f (the lead's H2, defense in depth): the ExclCtx is frozen (exclCtxFrom), so no code can replace its holes or its
+// avoid table or keep state on it in an added property (the reviewer's avoidStashR3 kept it in the avoid table, which
+// avoidOf now makes read-only). Its holes' typed arrays stay writable (a typed array cannot be frozen). The guard by
+// construction is H1: the checks never read the main run's ExclCtx (lawsearch.ts; poison's units make their own from
+// their own copy of the universe, lawsearch-checks.ts runUnitJob).
 export function exclCtxOf(tf: TfSet, avoid: ReadonlySet<string>, fromMs: number, toMs: number, stage3?: ExclCtx["stage3"], plant = ""): ExclCtx {
-  return { tf: tf.tf, step: tf.step, holes: holesOf(tf.tf, tf.pairs.map((p) => p.s), fromMs, toMs), avoid, stage3: stage3 ?? null, plant };
+  return exclCtxFrom(tf.tf, tf.step, holesOf(tf.tf, tf.pairs.map((p) => p.s), fromMs, toMs), avoid, stage3 ?? null, plant);
 }
+
+// an ExclCtx of these parts, frozen (and its stage 3 period, when given, a frozen copy); holesOf freezes the Holes
+export const exclCtxFrom = (tf: TfKey, step: number, holes: Holes, avoid: ReadonlySet<string>, stage3: ExclCtx["stage3"], plant: string): ExclCtx =>
+  Object.freeze({ tf, step, holes, avoid, stage3: stage3 === null ? null : Object.freeze({ from: stage3.from, end: stage3.end }), plant });
 
 // Spec 6, the first reason that applies, for an emitted candidate or a blind bar (X = T + N × step):
 //   ① ①b by halfOf (①b first: a ①b signal counts as ①b even when its warm-up is short); then r1w (①: in a half but
@@ -519,12 +575,29 @@ export function reasonOf(ctx: ExclCtx, s: Series, i: number, warmOk: boolean): R
   if (h === "r1b" || h === "r1") return h;
   if (!warmOk) return "r1w";
   if (r2(T)) return "r2";
-  if (r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, ctx.plant)) return "r3";
+  if (ctx.plant === "avoidStashR3" ? avoidStashR3(ctx, s, i, T) : r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, ctx.plant)) return "r3";
   if (r4(T, X)) return "r4";
   if (r5(T)) return "r5";
   if (r6(ctx.avoid, s.pair, T, X)) return "r6";
   return "counted";
 }
+
+// Plant avoidStashR3 (C4f, development only; the lead's H4 on C4e's review: the reviewer's avoidStashR3, the refuter's
+// rs-wt): ③ on reasonUsesFuture's window (it reads the holes after T), its answer kept in the ExclCtx's avoid table as
+// an entry "plant:r3:<pair>:<tf>:<T>:<0|1>" and read from there first. Until C4f the main run's avoid table was the
+// very Set every check unit read (or a structured clone of it, with these entries, in each worker), so a cut or
+// presence decision at T found the main run's answer there and decided as the main run did: the cut and presence,
+// which catch reasonUsesFuture, passed. Since C4f the checks have an avoid table of their own (H1, lawsearch.ts), and
+// avoidOf's table is read-only (H2): this plant's first write throws (exit 1).
+const avoidStashR3 = (ctx: ExclCtx, s: Series, i: number, T: number): boolean => {
+  const av = ctx.avoid as Set<string>;
+  const key = `plant:r3:${s.pair}:${ctx.tf}:${T}`;
+  if (av.has(key + ":1")) return true;
+  if (av.has(key + ":0")) return false;
+  const hit = r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, "reasonUsesFuture");
+  av.add(key + (hit ? ":1" : ":0"));
+  return hit;
+};
 
 const HALF_CODE: Readonly<Record<HalfOf, number>> = { first: 1, second: 2, stage3: 3, r1: 0, r1b: 0 };
 
@@ -577,7 +650,23 @@ export function blindBarsOf(ctx: ExclCtx, tf: TfSet, half: HalfName): Uint8Array
 }
 
 // ⑥'s table (research/ledger/spread-hours-h1.csv; the caller has checked its sha256): the avoided slots of the five
-// pairs (parseSpreadHours stops on a missing, doubled or foreign row)
+// pairs (parseSpreadHours stops on a missing, doubled or foreign row). C4f (the lead's H2): read-only (readOnlySet).
+// lawsearch.ts parses the table twice, once for the main run and once for the checks (H1), so the two never share it.
 export function avoidOf(text: string): ReadonlySet<string> {
-  return parseSpreadHours(text, PAIRS);
+  return readOnlySet(parseSpreadHours(text, PAIRS), "the avoid table");
+}
+
+// C4f (the lead's H2, defense in depth): s made read-only in place and returned: its own add, delete and clear throw
+// ("<what> is read-only: add refused …"), and the Set object is frozen, so they cannot be replaced and no property can
+// be added. It does NOT stop Set.prototype.add.call(s, x) (or delete, clear), which writes into any Set; the guard by
+// construction is H1 (the checks' avoid table is another Set). A structured clone of it (a worker's task) is a plain
+// Set with the same entries; the worker seals its copy again (lawsearch-checks.ts sealTask). A Set already frozen is
+// returned as it is.
+export function readOnlySet<T>(s: Set<T>, what: string): ReadonlySet<T> {
+  if (Object.isFrozen(s)) return s;
+  const refused = (op: string) => () => {
+    throw new Error(`${what} is read-only: ${op} refused (lawsearch-events.ts readOnlySet; C4f)`);
+  };
+  Object.defineProperties(s, { add: { value: refused("add") }, delete: { value: refused("delete") }, clear: { value: refused("clear") } });
+  return Object.freeze(s);
 }
