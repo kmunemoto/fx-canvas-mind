@@ -22,9 +22,11 @@
 #           that B06 is cut on its prefix from bar 0, not on a 291-bar window), carriedCountS01 (C4e: exit 3, the cut
 #           failed on an S01 trial: the same look-ahead on the S path) and bufferReadE04 (C4e: exit 3, the cut failed
 #           on an E04 trial: the next close read through the close array's memory block, which the cut sees now that
-#           every check series is a copy holding its own bars only); CMP-N 1001, CMP-C 7101 and O 6003 then run
-#           their own run again at WORKERS=0 and want every file the same bytes as at WORKERS=4 (C4e; defense in
-#           depth for design 12.2 (2), not a guard by construction); O expects exit 3 with the cut and the poison
+#           every check series is a copy holding its own bars only); CMP-C 7101 and O 6003 then run their own run
+#           again at WORKERS=0 and want every file the same bytes as at WORKERS=4, and the job w0-n-1001 makes the
+#           N 1001 run again and does the same with it (C4e; defense in depth for design 12.2 (2), not a guard by
+#           construction; N 1001 has a job of its own because its WORKERS=0 run alone took about 6,700 s locally,
+#           which would make cmp-n-1001's job about 3 hours); O expects exit 3 with the cut and the poison
 #           failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before stage 2 keeps it
 #           closed). No run step sets CUT_MAX (the development
 #           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
@@ -61,8 +63,8 @@ env:
   # lawsearch-par.ts; GitHub's ubuntu-latest runner has 4 vCPUs). The output files are the same bytes for any value
   # 0 … 64 (0: every unit in the main thread) while every build and cache is keyed by the Ind and no module-level
   # state survives between candidatesOf calls (research/lawsearch-design.md 12.2 (2); C4d: such state could make the
-  # bytes depend on this value; the syn jobs cmp-n-1001, cmp-c-7101 and o-6003 compare WORKERS=0 with 4 on their own
-  # run, as defense in depth, C4e);
+  # bytes depend on this value; the syn jobs w0-n-1001 (the N 1001 run again), cmp-c-7101 and o-6003 compare
+  # WORKERS=0 with 4 on their own run, as defense in depth, C4e);
   # any other value is refused with exit 2 before any file is read.
   WORKERS: "4"
   # no --allow-net anywhere; --sloppy-imports for research/bigflow-lib.ts's app imports (donchianState, spec 15)
@@ -284,6 +286,10 @@ jobs:
         include:
           - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2 dropSecondStrata:3 blindRowHit:3" }
           - { name: cmp-n-1002, gen: N, seed: 1002, want: 0, plants: "" }
+          # C4e: the N 1001 run again, for the WORKERS=0 step only (its WORKERS=0 run took about 6,700 s locally; in
+          # cmp-n-1001's job, after its plants, that job would take about 3 hours). The Python compares this run in
+          # cmp-n-1001's job, so it is not run here.
+          - { name: w0-n-1001, gen: N, seed: 1001, want: 0, plants: "" }
           - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3 carriedCountB06:3 carriedCountS01:3 bufferReadE04:3" }
           - { name: o-6001, gen: O, seed: 6001, want: 3, plants: "" }
           - { name: o-6002, gen: O, seed: 6002, want: 3, plants: "" }
@@ -329,7 +335,7 @@ jobs:
           done
           if grep -v -E "^(m15|h1)\.E26\.F0[01],(cut|poison|presence|suspect13[^,]*)," $f | grep -q ",0,"; then echo "another check failed"; grep ",0," $f; exit 1; fi
       - name: Python (recompute and compare)
-        if: matrix.gen != 'O'
+        if: matrix.gen != 'O' && matrix.name != 'w0-n-1001'
         run: $PY research/lawsearch-check.py --run research/out/lawsearch/${{ matrix.name }}
       - name: The run plants (walkfiles on this run's files)
         if: matrix.plants != ''
@@ -399,8 +405,8 @@ jobs:
             fi
           done
           exit $bad
-      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4e; this job's own run, CMP-N 1001, CMP-C 7101 and O 6003; defense in depth, not a guard by construction)
-        if: matrix.name == 'cmp-n-1001' || matrix.name == 'cmp-c-7101' || matrix.name == 'o-6003'
+      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4e; this job's own run, N 1001 in w0-n-1001, CMP-C 7101 and O 6003; defense in depth, not a guard by construction)
+        if: matrix.name == 'w0-n-1001' || matrix.name == 'cmp-c-7101' || matrix.name == 'o-6003'
         env:
           WORKERS: "0"
         run: |
@@ -410,19 +416,20 @@ jobs:
           # such state differs between the main thread and each worker, so it can make the bytes depend on WORKERS. This
           # step does NOT guard that by construction; it is defense in depth: this job's own run (the step "TS
           # (MODE=syn)" above made its WORKERS=4 dump, ts/) is run again in the main thread (WORKERS=0, MODE=walkfiles on
-          # the same files), and every file must be the same bytes. The only differences allowed are the ones MODE
-          # makes: print.txt's mode= line and its time.* lines, and config.json's "mode". C4e (the lead's G2 on C4d's
-          # review; until C4e this step ran the plant lastBarStateG3, which chooses no trial): the three runs together
-          # go through every kind of pool run a synthetic run of the small trial reaches. CMP-N 1001: stage 0's cut (m15
-          # and h1, six trials each), poison and presence (twelve trials), cut.chosen.first and cut.chosen.second on m15
-          # (two chosen trials, E04.F01 and B06, in one pool run) and on h1 (one, B06); stage 2 opens. CMP-C 7101: stage
-          # 0's the same on other data, cut.chosen.first and cut.chosen.second on h1 (one EF trial, E04.F00). O 6003:
-          # stage 0's with failures (cut_fail.csv rows), cut.chosen.first on m15 and h1 (one trial each) and stage 1's
-          # suspect13 cut, poison1000 and presence of its four hit trials (one trial per pool run). Not compared: stage
-          # 2's suspect13 checks (no synthetic run reaches them: O runs never open stage 2, and N, C and FLIP have no
-          # suspicion hit), the FLIP runs and the plants' runs (no pool-run kind the three above lack), and the pool
-          # runs of trials no synthetic run builds (the higher-timeframe F02 / S02 path). It sees such state only where
-          # it changes these runs' bytes.
+          # the same files), and every file must be the same bytes. The only differences allowed are the ones MODE makes:
+          # print.txt's mode= line and its time.* lines, and config.json's "mode". C4e (the lead's G2 on C4d's review;
+          # until C4e this step ran the plant lastBarStateG3, which chooses no trial): the three runs together go through
+          # every kind of pool run a synthetic run of the small trial reaches. N 1001 (the job w0-n-1001, the same run as
+          # cmp-n-1001's, in a job of its own because its WORKERS=0 run alone took about 6,700 s locally): stage 0's cut
+          # (m15 and h1, six trials each), poison and presence (twelve trials), cut.chosen.first and cut.chosen.second on
+          # m15 (two chosen trials, E04.F01 and B06, in one pool run) and on h1 (one, B06); stage 2 opens. CMP-C 7101:
+          # stage 0's the same on other data, cut.chosen.first and cut.chosen.second on h1 (one EF trial, E04.F00).
+          # O 6003: stage 0's with failures (cut_fail.csv rows), cut.chosen.first on m15 and h1 (one trial each) and
+          # stage 1's suspect13 cut, poison1000 and presence of its four hit trials (one trial per pool run). Not
+          # compared: stage 2's suspect13 checks (no synthetic run reaches them: O runs never open stage 2, and N, C and
+          # FLIP have no suspicion hit), the FLIP runs and the plants' runs (no pool-run kind the three above lack), and
+          # the pool runs of trials no synthetic run builds (the higher-timeframe F02 / S02 path). It sees such state
+          # only where it changes these runs' bytes.
           r=research/out/lawsearch/${{ matrix.name }}
           a=$r/ts
           b=$r/ts-w0
