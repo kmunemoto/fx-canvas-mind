@@ -16,8 +16,8 @@
 // poison and presence, research/lawsearch-par.ts; a whole number 0 … 64, default 4; 0 runs every unit in this thread;
 // anything else refused with exit 2; the output files are the same bytes whatever its value, so no file names it,
 // as long as every build and cache stays keyed by the Ind and no module-level state survives between candidatesOf
-// calls: research/lawsearch-design.md 12.2 (2), C4d; the yml compares WORKERS=0 with 4 on two runs, CMP-C 7101 and
-// O 6003, as defense in depth, C4e).
+// calls: research/lawsearch-design.md 12.2 (2), C4d; the yml compares WORKERS=0 with 4 on three runs, CMP-N 1001,
+// CMP-C 7101 and O 6003, as defense in depth, C4e).
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
 // raised (the run goes on through stages 0 and 1 and writes its dumps first, but never opens stage 2 after a failed

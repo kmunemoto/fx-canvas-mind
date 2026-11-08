@@ -22,11 +22,11 @@
 #           that B06 is cut on its prefix from bar 0, not on a 291-bar window), carriedCountS01 (C4e: exit 3, the cut
 #           failed on an S01 trial: the same look-ahead on the S path) and bufferReadE04 (C4e: exit 3, the cut failed
 #           on an E04 trial: the next close read through the close array's memory block, which the cut sees now that
-#           every check series is a copy holding its own bars only); CMP-C 7101 and O 6003 then run their own run
-#           again at WORKERS=0 and want every file the same bytes as at WORKERS=4 (C4e; defense in depth for design
-#           12.2 (2), not a guard by construction); O expects exit 3 with the
-#           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
-#           stage 2 keeps it closed). No run step sets CUT_MAX (the development
+#           every check series is a copy holding its own bars only); CMP-N 1001, CMP-C 7101 and O 6003 then run
+#           their own run again at WORKERS=0 and want every file the same bytes as at WORKERS=4 (C4e; defense in
+#           depth for design 12.2 (2), not a guard by construction); O expects exit 3 with the cut and the poison
+#           failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before stage 2 keeps it
+#           closed). No run step sets CUT_MAX (the development
 #           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
 #           step but the WORKERS=0 ones above runs the checks' units on WORKERS=4 workers (C4b; the same bytes as
 #           with any other WORKERS while every build and cache is keyed by the Ind and no module-level state
@@ -61,8 +61,8 @@ env:
   # lawsearch-par.ts; GitHub's ubuntu-latest runner has 4 vCPUs). The output files are the same bytes for any value
   # 0 … 64 (0: every unit in the main thread) while every build and cache is keyed by the Ind and no module-level
   # state survives between candidatesOf calls (research/lawsearch-design.md 12.2 (2); C4d: such state could make the
-  # bytes depend on this value; the syn jobs cmp-c-7101 and o-6003 compare WORKERS=0 with 4 on their own run, as
-  # defense in depth, C4e);
+  # bytes depend on this value; the syn jobs cmp-n-1001, cmp-c-7101 and o-6003 compare WORKERS=0 with 4 on their own
+  # run, as defense in depth, C4e);
   # any other value is refused with exit 2 before any file is read.
   WORKERS: "4"
   # no --allow-net anywhere; --sloppy-imports for research/bigflow-lib.ts's app imports (donchianState, spec 15)
@@ -399,8 +399,8 @@ jobs:
             fi
           done
           exit $bad
-      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4e; this job's own run, CMP-C 7101 and O 6003; defense in depth, not a guard by construction)
-        if: matrix.name == 'cmp-c-7101' || matrix.name == 'o-6003'
+      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4e; this job's own run, CMP-N 1001, CMP-C 7101 and O 6003; defense in depth, not a guard by construction)
+        if: matrix.name == 'cmp-n-1001' || matrix.name == 'cmp-c-7101' || matrix.name == 'o-6003'
         env:
           WORKERS: "0"
         run: |
@@ -412,15 +412,17 @@ jobs:
           # (MODE=syn)" above made its WORKERS=4 dump, ts/) is run again in the main thread (WORKERS=0, MODE=walkfiles on
           # the same files), and every file must be the same bytes. The only differences allowed are the ones MODE
           # makes: print.txt's mode= line and its time.* lines, and config.json's "mode". C4e (the lead's G2 on C4d's
-          # review; until C4e this step ran the plant lastBarStateG3, which chooses no trial): the two runs together go
-          # through every pool run a synthetic run of the small trial reaches but one: CMP-C 7101 through stage 0's cut
-          # (m15 and h1, six trials each), poison and presence (twelve trials), cut.chosen.first and cut.chosen.second
-          # (h1, one chosen trial; stage 2 opens); O 6003 through stage 0's cut, poison and presence (with failures:
-          # cut_fail.csv rows), cut.chosen.first (m15 and h1, one chosen trial each) and stage 1's suspect13 cut,
-          # poison1000 and presence of its four hit trials (one trial per pool run). Not compared: cut.chosen.second on
-          # m15 (only N 1001 and FLIP 1001 choose an m15 trial and open stage 2) and stage 2's suspect13 checks (no
-          # synthetic run reaches them: O runs never open stage 2, and N, C and FLIP have no suspicion hit). It sees
-          # such state only where it changes these runs' bytes.
+          # review; until C4e this step ran the plant lastBarStateG3, which chooses no trial): the three runs together
+          # go through every kind of pool run a synthetic run of the small trial reaches. CMP-N 1001: stage 0's cut (m15
+          # and h1, six trials each), poison and presence (twelve trials), cut.chosen.first and cut.chosen.second on m15
+          # (two chosen trials, E04.F01 and B06, in one pool run) and on h1 (one, B06); stage 2 opens. CMP-C 7101: stage
+          # 0's the same on other data, cut.chosen.first and cut.chosen.second on h1 (one EF trial, E04.F00). O 6003:
+          # stage 0's with failures (cut_fail.csv rows), cut.chosen.first on m15 and h1 (one trial each) and stage 1's
+          # suspect13 cut, poison1000 and presence of its four hit trials (one trial per pool run). Not compared: stage
+          # 2's suspect13 checks (no synthetic run reaches them: O runs never open stage 2, and N, C and FLIP have no
+          # suspicion hit), the FLIP runs and the plants' runs (no pool-run kind the three above lack), and the pool
+          # runs of trials no synthetic run builds (the higher-timeframe F02 / S02 path). It sees such state only where
+          # it changes these runs' bytes.
           r=research/out/lawsearch/${{ matrix.name }}
           a=$r/ts
           b=$r/ts-w0

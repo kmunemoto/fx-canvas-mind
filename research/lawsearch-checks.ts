@@ -20,13 +20,14 @@
 //     trial reads them (readsHigher), are rebuilt from the poisoned series by coarsenSeries and htfIndex, and the item
 //     and F builds read that Ind alone (lawsearch-items.ts: ind.series, ind.rsi, ind.ema, ind.donchian, ind.bigmove;
 //     lawsearch-ind.ts indOf reads only its series and the higher series it is given); (2) reasonOf with the holes
-//     context, which reads the series' starts and closes (s.s, s.T: times), its pair, the holes (made by holesOf from
-//     the five pairs' bar starts only), the avoided slots (a ledger file) and the clock; (3) stratumOf (the pair, the
-//     direction and T). No other pair's prices, no bar of the other timeframe's loaded files and no 1-minute bar
-//     (the program reads no 1-minute file) is read, and no higher bar is read that is not rebuilt from the poisoned
-//     series. So poisoning those too, as the spec's words say, could not change the decision. The holes are the uncut
-//     run's: poison changes prices, never which bars exist or when they start. (Design 12.2 (2)'s condition applies:
-//     no module-level state that survives between candidatesOf calls.)
+//     context, which reads the series' bar start and close times (s.s, s.T; no price), its pair, the holes (made by
+//     holesOf from the five pairs' bar starts only), the avoided slots (a ledger file) and the clock (② ④ ⑤ ⑥ read
+//     times alone); (3) stratumOf (the pair, the direction and T). No other pair's prices, no bar of the other
+//     timeframe's loaded files and no 1-minute bar (the program reads no 1-minute file) is read, and no higher bar is
+//     read that is not rebuilt from the poisoned series (the main run's higher bars are coarsened from the pair's own
+//     series too, tfSetOf). So poisoning those too, as the spec's words say, could not change the decision. The holes
+//     are the uncut run's: poison changes prices, never which bars exist or when they start. (Design 12.2 (2)'s
+//     condition applies: no module-level state that survives between candidatesOf calls.)
 //   * the 300 evenly spaced bars: k = floor(j × (n − 1) ÷ 299), j = 0 … 299.
 //   * spec 23.2 (2026-11-05): stage 0 keeps CUT_HTF_STAGE0 = 300 of the higher-timeframe boundary targets per
 //     timeframe and pair, the j-th of their time-ordered list being floor(j × (n − 1) ÷ 299) (all when n ≤ 300); the

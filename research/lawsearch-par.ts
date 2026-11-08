@@ -21,11 +21,12 @@
 // C4d, the lead's F2). Such state lives once in the main thread and once in each worker (each loads its own copy of
 // the modules) and sees a different sequence of series in each, so a unit's answer would no longer be a function of
 // its job alone: the bytes could then depend on WORKERS, and a check could read the uncut series' values unseen.
-// Nothing here stops that by construction; the yml's cmp-c-7101 and o-6003 jobs compare their own run at WORKERS=0
-// and 4 byte for byte (C4e, the lead's G2: between them stage 0's cut, poison and presence, cut.chosen.first on both
-// timeframes, cut.chosen.second on h1 and stage 1's suspect13 checks), as defense in depth only. A read through a
-// series' memory block, by contrast, is closed by construction since C4e: every series a unit hands to decisionOf
-// has arrays that hold its own bars only (lawsearch-bars.ts copyOf; lawsearch-checks.ts, the units' note).
+// Nothing here stops that by construction; the yml's cmp-n-1001, cmp-c-7101 and o-6003 jobs compare their own run at
+// WORKERS=0 and 4 byte for byte (C4e, the lead's G2: between them stage 0's cut, poison and presence, cut.chosen.first
+// and cut.chosen.second on both timeframes and stage 1's suspect13 checks; the yml's step names what is not
+// compared), as defense in depth only. A read through a series' memory block, by contrast, is closed by construction
+// since C4e: every series a unit hands to decisionOf has arrays that hold its own bars only (lawsearch-bars.ts copyOf;
+// lawsearch-checks.ts, the units' note).
 // Memory: each worker holds one copy of the universe being checked (both timeframes, about 100 MB for [S0, END) of
 // the small trial) and the temporaries of its current unit.
 
