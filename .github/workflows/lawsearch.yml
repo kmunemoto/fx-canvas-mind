@@ -6,7 +6,8 @@
 #           the hand examples in TS (MODE=hand) and in the Python (--hand); every hand-level planted error of
 #           lawsearch-design.md 8 must fail one of its named examples (TS: exit 4; the Python's twins: exit 0 with
 #           one of this step's named examples among the failed ids it prints, C4c and C4d; reasonUsesFuture has no
-#           Python twin); every real mode
+#           Python twin); no line of research/lawsearch*.ts reads a typed array's memory block (.buffer, byteOffset,
+#           ArrayBuffer, DataView, .subarray) outside a justified allow-list (C4e; defense in depth); every real mode
 #           exits 2; so does every invalid CUT_MAX of a fixed list, before any file is read (design 7.8 hand step 7,
 #           the lead's E13: the only step that sets CUT_MAX, and only to values that are refused), and every invalid
 #           WORKERS of a fixed list (C4b)
@@ -16,15 +17,18 @@
 #           spec 13's stop on a blind row), CMP-C 7101 the plants reasonUsesFuture (exit 3, cut or presence failed),
 #           chosenCutFirstDiff (exit 3: cut.chosen.first failed, stage 2 not opened), lastBarStateG3 /
 #           lastBarStateG5 (C4c: exit 3, the cut failed: a look-ahead carried by state across bars of spec 5's walk,
-#           which the cut sees because it recomputes with the main run's own candidatesOf) and carriedCountB06 (C4d:
+#           which the cut sees because it recomputes with the main run's own candidatesOf), carriedCountB06 (C4d:
 #           exit 3, the cut failed on a B06 trial: the same kind of look-ahead on B06's path, which the cut sees now
-#           that B06 is cut on its prefix from bar 0, not on a 291-bar window); CMP-C 7101 then runs lastBarStateG3
-#           again at WORKERS=0 and wants every file the same bytes as at WORKERS=4 (C4d; defense in depth for design
+#           that B06 is cut on its prefix from bar 0, not on a 291-bar window), carriedCountS01 (C4e: exit 3, the cut
+#           failed on an S01 trial: the same look-ahead on the S path) and bufferReadE04 (C4e: exit 3, the cut failed
+#           on an E04 trial: the next close read through the close array's memory block, which the cut sees now that
+#           every check series is a copy holding its own bars only); CMP-C 7101 and O 6003 then run their own run
+#           again at WORKERS=0 and want every file the same bytes as at WORKERS=4 (C4e; defense in depth for design
 #           12.2 (2), not a guard by construction); O expects exit 3 with the
 #           cut and the poison failed on the E26 trials, and ends before stage 2 (design 7.7: a failed check before
 #           stage 2 keeps it closed). No run step sets CUT_MAX (the development
 #           cap; the Python's --run refuses a capped run, and from C4b its --compare too: the lead's E14). Every run
-#           step but the WORKERS=0 one above runs the checks' units on WORKERS=4 workers (C4b; the same bytes as
+#           step but the WORKERS=0 ones above runs the checks' units on WORKERS=4 workers (C4b; the same bytes as
 #           with any other WORKERS while every build and cache is keyed by the Ind and no module-level state
 #           survives between candidatesOf calls: design 12.2 (2))
 #   flip    FLIP 1001–1005 and their flips (FLIP=1: the flipped files read under spec 2). research/lawsearch-flip.ts
@@ -57,7 +61,8 @@ env:
   # lawsearch-par.ts; GitHub's ubuntu-latest runner has 4 vCPUs). The output files are the same bytes for any value
   # 0 … 64 (0: every unit in the main thread) while every build and cache is keyed by the Ind and no module-level
   # state survives between candidatesOf calls (research/lawsearch-design.md 12.2 (2); C4d: such state could make the
-  # bytes depend on this value; the syn job cmp-c-7101 compares WORKERS=0 with 4 on one run, as defense in depth);
+  # bytes depend on this value; the syn jobs cmp-c-7101 and o-6003 compare WORKERS=0 with 4 on their own run, as
+  # defense in depth, C4e);
   # any other value is refused with exit 2 before any file is read.
   WORKERS: "4"
   # no --allow-net anywhere; --sloppy-imports for research/bigflow-lib.ts's app imports (donchianState, spec 15)
@@ -146,6 +151,44 @@ jobs:
           daySatSplit A.1.9
           EOF
           exit $bad
+      - name: No read through a typed array's memory block outside the allow-list (C4e; defense in depth, not a guard by construction)
+        # C4e (the lead's G1 on C4d's review, P5 and the refuter's q1): every series a check hands to decisionOf has
+        # typed arrays that hold its own bars only (the cut prefix is a copy, lawsearch-bars.ts copyOf; poison, presence
+        # and the rebuilt higher bars make fresh arrays), so a read through a series' memory block sees nothing the series
+        # does not hold. That is the guard by construction; this step is defense in depth only. It fails when a line of
+        # research/lawsearch*.ts that is not a comment-only line names .buffer, byteOffset, ArrayBuffer, DataView or
+        # .subarray( and is not in the allow-list below (the file and the line's text without its leading blanks).
+        # Why each listed line is allowed:
+        #   lawsearch-bars.ts poisonSeries (twice) and deleteBars: the view is only the source of a copy into a fresh array
+        #   lawsearch-const.ts, lawsearch-flip.ts, lawsearch-gen.ts, lawsearch.ts hex: it formats a SHA-256 digest
+        #   lawsearch-dump.ts: it writes a dump file's bytes
+        #   lawsearch-events.ts storeOf: the run plant bufferReadE04 itself (a planted look-ahead; only under LS_PLANT)
+        #   lawsearch-hand.ts toPlain and the JSON replacer: the hand examples' output (typed arrays to plain arrays)
+        # Limits: only these files (not the modules they import), line by line, by these names; a read written across
+        # lines, through another name or in a listed line's exact text elsewhere in the same file is not seen.
+        run: |
+          set +e
+          grep -nE '\.buffer\b|byteOffset|ArrayBuffer|DataView|\.subarray\(' research/lawsearch*.ts | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*//' | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1: /' > /tmp/blocks.txt
+          cat > /tmp/blocks-allow.txt <<'EOF'
+          research/lawsearch-bars.ts: a.set(alt[k].subarray(k0), k0);
+          research/lawsearch-bars.ts: a.set(src.subarray(runs[r], runs[r + 1]), j);
+          research/lawsearch-const.ts: const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
+          research/lawsearch-dump.ts: while (off < bytes.length) off += await f.write(bytes.subarray(off));
+          research/lawsearch-events.ts: const storeOf = (C: Float64Array): Float64Array => new Float64Array(C.buffer, C.byteOffset, (C.buffer.byteLength - C.byteOffset) / 8);
+          research/lawsearch-flip.ts: const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
+          research/lawsearch-gen.ts: const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
+          research/lawsearch-hand.ts: if (ArrayBuffer.isView(x) && !(x instanceof DataView)) return Array.from(x as unknown as ArrayLike<number>);
+          research/lawsearch-hand.ts: const s = JSON.stringify(toPlain(x instanceof Tol ? x.v : x), (_k, v) => (ArrayBuffer.isView(v) ? Array.from(v as unknown as ArrayLike<number>) : typeof v === "number" && !Number.isFinite(v) ? String(v) : v));
+          research/lawsearch.ts: const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("");
+          EOF
+          echo "$(wc -l < /tmp/blocks.txt) lines name a memory block or a view:"
+          cat /tmp/blocks.txt
+          # an allow-list line no longer found is printed (information: the list can be shortened)
+          grep -v -x -F -f /tmp/blocks.txt /tmp/blocks-allow.txt | sed 's/^/not found (allow-list line unused): /'
+          if grep -v -x -F -f /tmp/blocks-allow.txt /tmp/blocks.txt > /tmp/blocks-bad.txt; then
+            echo "these lines are not in the allow-list:"; cat /tmp/blocks-bad.txt; exit 1
+          fi
+          echo "every such line is in the allow-list"
       - name: Every real mode is refused (exit 2, before any read)
         run: |
           set +e
@@ -241,7 +284,7 @@ jobs:
         include:
           - { name: cmp-n-1001, gen: N, seed: 1001, want: 0, plants: "avoidFull:3 secondHalfAll:2 dropSecondStrata:3 blindRowHit:3" }
           - { name: cmp-n-1002, gen: N, seed: 1002, want: 0, plants: "" }
-          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3 carriedCountB06:3" }
+          - { name: cmp-c-7101, gen: C, seed: 7101, want: 0, plants: "reasonUsesFuture:3 chosenCutFirstDiff:3 lastBarStateG3:3 lastBarStateG5:3 carriedCountB06:3 carriedCountS01:3 bufferReadE04:3" }
           - { name: o-6001, gen: O, seed: 6001, want: 3, plants: "" }
           - { name: o-6002, gen: O, seed: 6002, want: 3, plants: "" }
           - { name: o-6003, gen: O, seed: 6003, want: 3, plants: "" }
@@ -318,6 +361,16 @@ jobs:
               grep -q -E "^cut,stage0,(m15|h1)\.B06," $d/cut_fail.csv 2>/dev/null || { echo "$p: cut_fail.csv has no stage-0 cut row of a B06 trial"; bad=1; }
               if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi
             fi
+            # C4e (design 8): carriedCountS01 is carriedCountB06's look-ahead on S01's trials (the lead's G4: a run plant
+            # on the S path); bufferReadE04 drops E04's raw signals by the next close read through the close array's
+            # memory block (the lead's G1: every check series holds its own bars only, so the cut sees that read).
+            # Stage 0's cut must fail on a trial of the plant's path (cut_fail.csv names its bars); stage 2 is not opened
+            case "$p" in carriedCountS01|bufferReadE04)
+              if [ "$p" = carriedCountS01 ]; then re='S01'; else re='E04\.F0[01]'; fi
+              grep -q -E "^(m15|h1)\.$re,cut,0," $d/checks.csv || { echo "$p: the cut did not fail on a trial of its path"; bad=1; }
+              grep -q -E "^cut,stage0,(m15|h1)\.$re," $d/cut_fail.csv 2>/dev/null || { echo "$p: cut_fail.csv has no stage-0 cut row of a trial of its path"; bad=1; }
+              if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi ;;
+            esac
             # design 8 (C3): the stops; none of them opens stage 2 (no syn2 load, no stage2.csv)
             case "$p" in dropSecondStrata|blindRowHit|chosenCutFirstDiff)
               if [ -e $d/stage2.csv ] || grep -q "^syn2," $d/load.csv 2>/dev/null; then echo "$p: stage 2 was opened"; bad=1; fi
@@ -346,38 +399,47 @@ jobs:
             fi
           done
           exit $bad
-      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4d; the failing run lastBarStateG3; defense in depth, not a guard by construction)
-        if: matrix.name == 'cmp-c-7101'
+      - name: The same bytes at WORKERS=0 as at WORKERS=4 (C4e; this job's own run, CMP-C 7101 and O 6003; defense in depth, not a guard by construction)
+        if: matrix.name == 'cmp-c-7101' || matrix.name == 'o-6003'
         env:
           WORKERS: "0"
         run: |
           set +e
-          # C4d (the lead's F2 on C4c's review): design 12 rule 3 wants the same bytes for any WORKERS. That holds by
-          # construction only while every build and cache is keyed by the Ind and no module-level state survives
-          # between candidatesOf calls (design 12.2 (2)): such state differs between the main thread and each worker,
-          # so it can make the bytes depend on WORKERS. This step does NOT guard that by construction; it is defense
-          # in depth: the plant lastBarStateG3 (a failing run, exit 3), whose WORKERS=4 dump the step above made in
-          # this job, is run again in the main thread (WORKERS=0), and every file must be the same bytes (print.txt
-          # without its time.* lines). It sees such state only where it changes this one run's bytes.
+          # Design 12 rule 3 wants the same bytes for any WORKERS. That holds by construction only while every build and
+          # cache is keyed by the Ind and no module-level state survives between candidatesOf calls (design 12.2 (2)):
+          # such state differs between the main thread and each worker, so it can make the bytes depend on WORKERS. This
+          # step does NOT guard that by construction; it is defense in depth: this job's own run (the step "TS
+          # (MODE=syn)" above made its WORKERS=4 dump, ts/) is run again in the main thread (WORKERS=0, MODE=walkfiles on
+          # the same files), and every file must be the same bytes. The only differences allowed are the ones MODE
+          # makes: print.txt's mode= line and its time.* lines, and config.json's "mode". C4e (the lead's G2 on C4d's
+          # review; until C4e this step ran the plant lastBarStateG3, which chooses no trial): the two runs together go
+          # through every pool run a synthetic run of the small trial reaches but one: CMP-C 7101 through stage 0's cut
+          # (m15 and h1, six trials each), poison and presence (twelve trials), cut.chosen.first and cut.chosen.second
+          # (h1, one chosen trial; stage 2 opens); O 6003 through stage 0's cut, poison and presence (with failures:
+          # cut_fail.csv rows), cut.chosen.first (m15 and h1, one chosen trial each) and stage 1's suspect13 cut,
+          # poison1000 and presence of its four hit trials (one trial per pool run). Not compared: cut.chosen.second on
+          # m15 (only N 1001 and FLIP 1001 choose an m15 trial and open stage 2) and stage 2's suspect13 checks (no
+          # synthetic run reaches them: O runs never open stage 2, and N, C and FLIP have no suspicion hit). It sees
+          # such state only where it changes these runs' bytes.
           r=research/out/lawsearch/${{ matrix.name }}
-          a=$r/plant-lastBarStateG3
-          b=$r/plant-lastBarStateG3-w0
-          [ -d $a ] || { echo "no WORKERS=4 dump of lastBarStateG3 ($a)"; exit 1; }
-          MODE=walkfiles RUN=$r OUT=$b LS_PLANT=lastBarStateG3 $DENO_RUN research/lawsearch.ts > /tmp/w0.txt 2>&1; code=$?
+          a=$r/ts
+          b=$r/ts-w0
+          [ -d $a ] || { echo "no WORKERS=4 dump of this run ($a)"; exit 1; }
+          MODE=walkfiles RUN=$r OUT=$b $DENO_RUN research/lawsearch.ts > /tmp/w0.txt 2>&1; code=$?
           tail -3 /tmp/w0.txt
-          echo "lastBarStateG3 at WORKERS=$WORKERS: exit $code (want 3)"
+          echo "${{ matrix.name }} at WORKERS=$WORKERS: exit $code (want ${{ matrix.want }})"
           bad=0
-          [ "$code" = 3 ] || bad=1
+          [ "$code" = "${{ matrix.want }}" ] || bad=1
           if ! diff <(cd $a && find . -type f | sort) <(cd $b && find . -type f | sort); then echo "the file lists differ"; bad=1; fi
           n=0
           for f in $(cd $a && find . -type f | sort); do
             [ -f $b/$f ] || continue
             n=$((n + 1))
-            if [ "$f" = ./print.txt ]; then
-              cmp -s <(grep -v '^time\.' $a/$f) <(grep -v '^time\.' $b/$f) || { echo "differs: $f (time.* lines aside)"; bad=1; }
-            else
-              cmp -s $a/$f $b/$f || { echo "differs: $f"; bad=1; }
-            fi
+            case "$f" in
+              ./print.txt) cmp -s <(grep -v '^time\.' $a/$f | sed 's/^mode=syn$/mode=walkfiles/') <(grep -v '^time\.' $b/$f) || { echo "differs: $f (its mode= and time.* lines aside)"; bad=1; } ;;
+              ./config.json) cmp -s <(sed '1s/^{"mode":"syn",/{"mode":"walkfiles",/' $a/$f) $b/$f || { echo "differs: $f (its mode aside)"; bad=1; } ;;
+              *) cmp -s $a/$f $b/$f || { echo "differs: $f"; bad=1; } ;;
+            esac
           done
           echo "WORKERS=0 against WORKERS=4: $n files compared, bad=$bad"
           exit $bad

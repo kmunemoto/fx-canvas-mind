@@ -182,4 +182,11 @@ export const PLANTS: readonly string[] = [
   // dropped when that count is odd; the cut check must fail on m15.B06 or h1.B06 (B06 is now cut on its prefix from
   // bar 0, no longer on a 291-bar window; lawsearch-events.ts candidatesOf, lawsearch-checks.ts cutGotAt)
   "carriedCountB06",
+  // C4e (2026-11-08), run plants on CMP-C 7101: carriedCountS01 (the lead's G4 on C4d's review) is carriedCountB06's
+  // look-ahead on S01's trials, so that a run plant reaches the S path; the cut check must fail on m15.S01 or h1.S01.
+  // bufferReadE04 (the lead's G1; the reviewer's P5, the refuter's q1): on E04's trials a raw signal is dropped by the
+  // next close read through the close array's memory block, not by index; the cut check must fail on an E04 trial
+  // now that every check series holds its own bars only (lawsearch-bars.ts copyOf; lawsearch-events.ts candidatesOf)
+  "carriedCountS01",
+  "bufferReadE04",
 ];

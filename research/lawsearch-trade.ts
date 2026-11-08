@@ -416,7 +416,7 @@ export function trialRows(table: BlindTable, late: BlindTable, sig: TrialSignals
 // ---- spec 15 追う足 ------------------------------------------------------------------------------------------------
 
 // a copy of the window s whose bar `at` has +pts on the raw open of both sides (the mid's open and its points made
-// again from them); the other arrays stay the window's views
+// again from them); the other arrays stay the window's (a copy holding the window's bars only since C4e: windowSeries)
 const poisonOpen = (s: Series, at: number, pts: number): Series => {
   const mult = POINTS_PER_PRICE(s.pair);
   const out: Series = { ...s, bo: s.bo.slice(), ao: s.ao.slice(), Bo: s.Bo.slice(), Ao: s.Ao.slice(), O: s.O.slice(), Po: s.Po.slice() };
@@ -434,9 +434,9 @@ const poisonOpen = (s: Series, at: number, pts: number): Series => {
 //       (lawsearch-bars.ts poisonBars); m, h and PL recomputed at j and x must all be equal;
 //   (ii) the raw open of bar j (both sides) gets +POISON_PIPS; PL must change.
 // tf is the table's timeframe (the 15-minute set for a late table). Only the bars [k0, x] are copied for each check
-// (windowSeries views, then poisonBars), so the cost is the window's, not the series'. (ii) poisons the open only:
-// with a substitute exit at the entry bar (x = j, hand A.1.29), poisoning the whole bar would move Ao[j] and Bc[x]
-// together and leave PL unchanged.
+// (windowSeries, a copy of those bars since C4e, then poisonBars), so the cost is the window's, not the series'. (ii)
+// poisons the open only: with a substitute exit at the entry bar (x = j, hand A.1.29), poisoning the whole bar would
+// move Ao[j] and Bc[x] together and leave PL unchanged.
 export function followBarChecks(tf: TfSet, table: BlindTable): CheckResult {
   if ((table.late ? "m15" : table.tf) !== tf.tf) throw new Error(`followBarChecks: the table is ${table.tf}${table.late ? " late" : ""}, the set ${tf.tf}`);
   const pts = Math.round(POISON_PIPS * 10);

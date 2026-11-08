@@ -537,29 +537,31 @@ export function dataProblems(u: Universe): string[] {
 const FLOAT_KEYS = ["s", "T", "bo", "bh", "bl", "bc", "ao", "ah", "al", "ac", "O", "H", "L", "C"] as const;
 const INT_KEYS = ["Po", "Ph", "Pl", "Pc", "Bo", "Bh", "Bl", "Bc", "Ao", "Ah", "Al", "Ac", "day", "fileKey"] as const;
 
-// bars [from, to) of s as subarray views
-const viewOf = (s: Series, from: number, to: number): Series => {
+// Bars [from, to) of s as a COPY that holds those bars only (C4e, the lead's G1 on C4d's review, P5 and the refuter's
+// q1): each of the 28 typed arrays is sliced, so it has a memory block of its own with exactly to − from elements,
+// the same values bit for bit (a typed array's slice copies the bytes). Before C4e these were subarray views of s:
+// a view's backing store still held every bar of s, so code that read a series through its backing store (a typed
+// array or DataView made over it, at an offset past the view's end) saw bars after `to` that the series did not
+// hold; a cut prefix then showed the uncut future to such code, and the cut check could not see that read. A copy
+// has nothing past its last bar, so whatever way code reads it, it reads bars from..to − 1 alone.
+const copyOf = (s: Series, from: number, to: number): Series => {
   const out = { pair: s.pair, pi: s.pi, key: s.key, step: s.step, n: to - from } as Series;
-  for (const k of FLOAT_KEYS) out[k] = s[k].subarray(from, to);
-  for (const k of INT_KEYS) out[k] = s[k].subarray(from, to);
+  for (const k of FLOAT_KEYS) out[k] = s[k].slice(from, to);
+  for (const k of INT_KEYS) out[k] = s[k].slice(from, to);
   return out;
 };
 
-// spec 15 切り取り: the bars with T ≤ Tcut (a bar starting at Tcut is not in it), as views
+// spec 15 切り取り: the bars with T ≤ Tcut (a bar starting at Tcut is not in it), as a copy holding those bars only
+// (copyOf; C4e)
 export function prefixSeries(s: Series, Tcut: number): Series {
-  return viewOf(s, 0, upperBound(s.T, s.n, Tcut));
+  return copyOf(s, 0, upperBound(s.T, s.n, Tcut));
 }
 
-// bars from..to (both included) as views, for an item of finite length recomputed on a window
+// bars from..to (both included) as a copy holding those bars only (copyOf; C4e), for the follow-bar checks' windows
+// (lawsearch-trade.ts followBarChecks, its only caller since C4d)
 export function windowSeries(s: Series, from: number, to: number): Series {
   if (!(Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to < s.n && from <= to + 1)) throw new Error(`windowSeries: ${from}..${to} of ${s.n}`);
-  return viewOf(s, from, to + 1);
-}
-
-// spec 15 切り取り: every pair cut at Tcut, and the higher bars and g rebuilt from the cut bars (a higher bar still
-// forming at Tcut is then as it was at Tcut)
-export function cutTfSet(tf: TfSet, Tcut: number, plant = ""): TfSet {
-  return tfSetOf(tf.tf, tf.pairs.map((p) => prefixSeries(p, Tcut)), plant);
+  return copyOf(s, from, to + 1);
 }
 
 // a copy of s with the raw sides of the listed bars moved by sign × pts points (sign by the bar's place in the list:

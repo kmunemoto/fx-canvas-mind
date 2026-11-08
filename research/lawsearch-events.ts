@@ -90,9 +90,12 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // main run's decision at bar k, from the check's series alone, whatever that code reads: values after k (in a build
 // or in the loop), state carried from one bar to the next, rows already emitted, or the series' length n (the cut
 // series ends at k, so the loop ends there too; C4d: for every item, B06 included, since the cut no longer gives B06
-// a 291-bar window, lawsearch-checks.ts cutGotAt). This holds by construction for any change of the loop's body or
-// of a build that keeps every build and cache keyed by the Ind and adds no module-level state that survives between
-// candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is not part of "the check's series alone", so the
+// a 291-bar window, lawsearch-checks.ts cutGotAt), and however that code reads the series: through its elements or
+// through its memory block (C4e: every series a check hands to decisionOf has arrays that hold its own bars only,
+// lawsearch-bars.ts copyOf; before C4e a cut prefix was a view whose backing store held the uncut bars after k, and a
+// read through it was not seen: plant bufferReadE04 below). This holds by construction for any change of the loop's
+// body or of a build that keeps every build and cache keyed by the Ind and adds no module-level state that survives
+// between candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is not part of "the check's series alone", so the
 // equality does not cover it (and it could also make the bytes depend on WORKERS, since the main thread and each
 // worker hold their own copy of it). Within that condition it does not depend on the body keeping no state (C4b's
 // candidatesAt, which ran the body at one bar alone, needed that; C4b's review, finding 1). The item's and the F's
@@ -107,13 +110,27 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // when that count before it is odd. A cut walked from bar 0 counts as the main run does and drops at k, so the cut
 // must fail on m15.B06 or h1.B06; B06's former 291-bar window gave at most one raw signal before k, never an odd
 // count with a raw signal at k, so it missed this plant (exit 0, every file as the clean run's).
+// Plant carriedCountS01 (C4e, development only; the lead's G4 on C4d's review: no run plant reached the S trials): the
+// same as carriedCountB06 on S01's trials (a state item: its raw signal is F01's f = 1, spec 4.3), so that a run
+// plant reaches the S path too; the cut must fail on m15.S01 or h1.S01.
+// Plant bufferReadE04 (C4e, development only; the lead's G1 on C4d's review, the reviewer's P5 and the refuter's q1):
+// on E04's trials, a raw buy signal is dropped when the next close is below this bar's close, a raw sell signal when
+// it is above, the next close being read through C's memory block (storeOf below: a Float64Array over C's backing
+// store from C's first element to the store's end), never as C[i + 1]. Until C4e the cut prefix was a view of the
+// uncut arrays, so this read saw the uncut next close at the prefix's last bar k and the cut decided as the main
+// run did (the cut passed; only poison and presence, which make fresh arrays, failed). Since C4e every series a
+// check hands to decisionOf holds its own bars only (lawsearch-bars.ts copyOf), so at k there is no next close in
+// the store and the cut must fail on an E04 trial.
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
   const p = prepare(trial, ind, o);
   const { n, cond, keep, fb, edge, first } = p;
   const plant = o?.plant ?? "";
   const lastGap = plant === "lastBarStateG3" ? 3 : plant === "lastBarStateG5" ? 5 : 0;
-  // plant carriedCountB06 (the header above): B06's trials only; raw0 and raw1 count the raw signals at bars 0 … i − 1
-  const carried = plant === "carriedCountB06" && trial.kind === "B" && trial.b === "B06";
+  // plants carriedCountB06 and carriedCountS01 (the header above): B06's or S01's trials only; raw0 and raw1 count the
+  // raw signals at bars 0 … i − 1
+  const carried = (plant === "carriedCountB06" && trial.kind === "B" && trial.b === "B06") || (plant === "carriedCountS01" && trial.kind === "S" && trial.s === "S01");
+  // plant bufferReadE04 (the header above): E04's trials only; peek[i + 1] is the next close read through the store
+  const peek = plant === "bufferReadE04" && trial.kind === "EF" && trial.e === "E04" ? storeOf(ind.series.C) : null;
   let raw0 = 0, raw1 = 0;
   const rows: CandRows = { i: [], d: [], s: [] };
   const rowsI = rows.i;
@@ -135,8 +152,8 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     let s0 = NONE;
     // ②
     if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
-      // plants lastBarStateG3 / lastBarStateG5 and carriedCountB06 (the header above)
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1);
+      // plants lastBarStateG3 / lastBarStateG5, carriedCountB06 / carriedCountS01 and bufferReadE04 (the header above)
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]);
       raw0++;
       if (!dropped) {
         // ③
@@ -153,7 +170,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     // sell (k = 1), the same
     let s1 = NONE;
     if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]);
       raw1++;
       if (!dropped) {
         if (keep1 === null || keep1[i] !== 0) {
@@ -178,6 +195,11 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
   }
   return finish(trial, ind, p, rows);
 }
+
+// plant bufferReadE04 (candidatesOf's header): the doubles of C's backing store from C's first element to the end of
+// the store. On a series whose arrays hold its own bars only (every series since C4e: the main run's, as loaded, and
+// every check's, lawsearch-bars.ts copyOf) that is C itself; on a view of a longer array it runs past the series' end.
+const storeOf = (C: Float64Array): Float64Array => new Float64Array(C.buffer, C.byteOffset, (C.buffer.byteLength - C.byteOffset) / 8);
 
 // what ②–④ and the warm-up read (prepare's result)
 interface Prepared {

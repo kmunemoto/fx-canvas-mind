@@ -12,9 +12,21 @@
 //     at least HOLE_MIN_SLOTS long within this range whenever it is in the whole cut series, so the decision is the
 //     same; the cost per target drops from all slots to about a dozen. A planted ③ that reads past T still sees
 //     nothing after T_k (the cut bars end there), which is what the check needs.
-//   * poison: the poisoned bars are the trial's timeframe's five pairs (its higher bars are rebuilt from them only
-//     when an item reads them); the decision at T reads no other series. The holes are the uncut run's: poison
-//     changes prices, never which bars exist, and holesOf reads only the starts.
+//   * poison (C4e, the lead's G5 on C4d's docs question: this bullet said "the trial's timeframe's five pairs" until
+//     C4e; the code has poisoned only the trial's pair since b3a2c43): spec 15's 毒 adds ±777.7 pips to every bar
+//     with close after T (15-minute, 1-hour and 1-minute bars). poisonGotAt poisons the trial's pair in the trial's
+//     timeframe alone, and that is the whole of what the spec's 毒 would change among the things the decision at T
+//     reads. decisionOf reads (1) the Ind made from that one poisoned series by indFor, whose higher bars, when a
+//     trial reads them (readsHigher), are rebuilt from the poisoned series by coarsenSeries and htfIndex, and the item
+//     and F builds read that Ind alone (lawsearch-items.ts: ind.series, ind.rsi, ind.ema, ind.donchian, ind.bigmove;
+//     lawsearch-ind.ts indOf reads only its series and the higher series it is given); (2) reasonOf with the holes
+//     context, which reads the series' starts and closes (s.s, s.T: times), its pair, the holes (made by holesOf from
+//     the five pairs' bar starts only), the avoided slots (a ledger file) and the clock; (3) stratumOf (the pair, the
+//     direction and T). No other pair's prices, no bar of the other timeframe's loaded files and no 1-minute bar
+//     (the program reads no 1-minute file) is read, and no higher bar is read that is not rebuilt from the poisoned
+//     series. So poisoning those too, as the spec's words say, could not change the decision. The holes are the uncut
+//     run's: poison changes prices, never which bars exist or when they start. (Design 12.2 (2)'s condition applies:
+//     no module-level state that survives between candidatesOf calls.)
 //   * the 300 evenly spaced bars: k = floor(j × (n − 1) ÷ 299), j = 0 … 299.
 //   * spec 23.2 (2026-11-05): stage 0 keeps CUT_HTF_STAGE0 = 300 of the higher-timeframe boundary targets per
 //     timeframe and pair, the j-th of their time-ordered list being floor(j × (n − 1) ÷ 299) (all when n ≤ 300); the
@@ -234,6 +246,12 @@ export const cutStatsText = (stats: Record<string, number>): string =>
 //             starts, for the holes) (cutGotAt);
 //   poison    one probe bar i of one trial: its pair poisoned after T_i (poisonGotAt);
 //   presence  one (probe bar i, variant) of one trial: bars deleted after T_i (presenceGotAt).
+// C4e (the lead's G1 on C4d's review): every series a unit hands to decisionOf has typed arrays of its own that hold
+// its own bars only: the cut prefix is a copy (prefixSeries, lawsearch-bars.ts copyOf; before C4e a view of the uncut
+// arrays), the poisoned series is made of fresh arrays (poisonSeries: slice, then set), the edited series of presence
+// too (deleteBars), and the higher bars and g, when read, are rebuilt into fresh arrays (coarsenSeries, htfIndex).
+// The bar starts given to holesOf at a cut target are copies of their range too. So code that reads a series
+// through its memory block (a typed array or DataView over it) reads nothing the series does not hold.
 // The three Got functions are the bodies of the checks' loops before C4b, moved here unchanged. Nothing is shared
 // between units except what those loops already shared: at one cut target, the holes of the cut and the cut's Ind
 // are made once and read by every trial at that target (the same cut series for all of them). The uncut decision
@@ -325,18 +343,19 @@ const wantOfJob = (job: UnitJob, at: number): string => {
 // the holes of the slots ③ reads at k (from every pair's bar starts in [s_{k−9} − HOLE_MIN_SLOTS × step, T_k]; the
 // header above), and the first `count` trials of the task recomputed on that cut alone, each walked from bar 0 of the
 // prefix by candidatesOf (decisionOf), with one Ind of the cut shared by these trials; each(ti, got) in trial order.
-// C4d: every item, B06 included, on the prefix (no window; the note at readsHigher above).
+// C4d: every item, B06 included, on the prefix (no window; the note at readsHigher above). C4e: the prefix is a copy
+// holding bars 0 … k only, and each pair's starts for the holes a copy of their range (the units' note above).
 export function cutGotAt(set: TfSet, c: Extract<UnitTask, { kind: "cut" }>, pi: number, k: number, count: number, each: (ti: number, got: string) => void): void {
   const tf = c.tf;
   const s = set.pairs[pi];
   const Tk = s.T[k];
-  // the cut: the pair's bars with T ≤ T_k; the holes of the slots ③ reads at k
+  // the cut: the pair's bars with T ≤ T_k (a copy); the holes of the slots ③ reads at k
   const cut = prefixSeries(s, Tk);
   const from = s.s[Math.max(0, k - R3_BACK)] - HOLE_MIN_SLOTS[tf] * STEP[tf];
   const starts = set.pairs.map((p) => {
     const lo = lowerBound(p.s, p.n, from);
     const hi = lowerBound(p.T, p.n, Tk + 1);
-    return p.s.subarray(lo, Math.max(lo, hi));
+    return p.s.slice(lo, Math.max(lo, hi));
   });
   const ctx: ExclCtx = { tf, step: STEP[tf], holes: holesOf(tf, starts, from, Tk), avoid: c.avoid, stage3: null, plant: c.plant };
   if (count <= 0) return;
@@ -702,9 +721,12 @@ function* probeRecs(u: Universe, trials: TrialDef[], sigs: TrialSignals[], what:
   }
 }
 
-// spec 15 毒 (and 13 (ii): n 1,000, seed 419, only the hit trials): the trial's timeframe's five pairs get ±777.7 pips
-// alternately on every bar with T > T_signal; everything the decision at T reads is recomputed; decision and reason
-// at T must be equal. 100 signals and 100 bars without a signal per trial. o.runner (C4b): where the units run.
+// spec 15 毒 (and 13 (ii): n 1,000, seed 419, only the hit trials): the trial's pair in the trial's timeframe gets
+// ±777.7 pips alternately on every bar with T > T_signal (C4e: until C4e this said "the trial's timeframe's five
+// pairs"; the code has poisoned the trial's pair alone since b3a2c43, and the header's poison bullet shows that the
+// decision at T reads no other series the spec's 毒 would change); everything the decision at T reads is
+// recomputed; decision and reason at T must be equal. 100 signals and 100 bars without a signal per trial. o.runner
+// (C4b): where the units run.
 export async function poisonCheck(u: Universe, trials: TrialDef[], sigs: TrialSignals[], avoid: ReadonlySet<string>, o: { n: number; seed: number; answerKnowing: boolean; plant: string; only?: string[]; ctx?: Record<TfKey, ExclCtx>; runner?: UnitRunner }): Promise<CheckResult> {
   const probes: Probe[] = [];
   const queue: ProbeRec[] = [];

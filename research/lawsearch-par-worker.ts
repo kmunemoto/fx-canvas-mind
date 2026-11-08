@@ -5,7 +5,8 @@
 // uncut holes and tables, functions of the universe and the task). The modules it loads are its own copies, so any
 // module-level state in them that survives between candidatesOf calls would differ from the main thread's; the
 // answers are the same bytes for any WORKERS only while there is none but the builds keyed by the Ind and the
-// holes' clock cache (lawsearch-par.ts's header; lawsearch-design.md 12.1, 12.2 (2); C4d).
+// holes' clock cache (lawsearch-par.ts's header; lawsearch-design.md 12.1, 12.2 (2); C4d). The yml compares two runs
+// at WORKERS=0 and 4 as defense in depth (C4e).
 
 import { runUnitJob } from "./lawsearch-checks.ts";
 import type { UnitCache, UnitJob, UnitTask } from "./lawsearch-checks.ts";
