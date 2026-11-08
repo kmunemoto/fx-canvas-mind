@@ -222,9 +222,9 @@ export function loadUniverse(src: Source, fromMs: number, toMs: number, o: LoadO
 export function dataProblems(u: Universe): string[];          // spec 15 データ: the strings of every failed data check
 
 // ---- series edits for the checks of spec 15 (new arrays; the input is never changed)
-export function prefixSeries(s: Series, Tcut: number): Series;                          // bars with T ≤ Tcut (subarray views)
-export function windowSeries(s: Series, from: number, to: number): Series;              // bars [from, to] (views; the follow-bar checks; C4d: no longer the cut's)
-export function cutTfSet(tf: TfSet, Tcut: number, plant?: string): TfSet;               // every pair cut; htf and g rebuilt from the cut bars (no check calls it: below)
+export function prefixSeries(s: Series, Tcut: number): Series;                          // bars with T ≤ Tcut (C4e: a copy holding those bars only; until C4e subarray views)
+export function windowSeries(s: Series, from: number, to: number): Series;              // bars [from, to] (C4e: a copy; the follow-bar checks only; C4d: no longer the cut's)
+// (C4e, 2026-11-08) cutTfSet removed: no module called it (below)
 export function poisonSeries(s: Series, afterT: number, pips: number): Series;          // every bar with T > afterT: + pips, − pips, … alternately (bar by bar) on all 8 raw sides; mid, points re-derived
 export function poisonBars(s: Series, idx: Int32Array, pips: number): Series;            // the listed bars only (the follow-bar checks)
 export function deleteBars(s: Series, drop: (k: number) => boolean): Series;           // the bars with drop(k) false kept, renumbered
@@ -267,12 +267,27 @@ Behaviour that is not obvious from the signatures:
   - a higher-timeframe series with two bars of one start.
 
   Band: `PRICE_BAND[pair]` when `band === "real"`, and `SYN_BAND × GEN_START[pair]` when `band === "syn"`.
-- **cutTfSet**: `prefixSeries` on each of the five pairs, then `tfSetOf` (the higher bars rebuilt from the cut bars,
-  so a forming higher bar exists exactly as it would have at Tcut).
+- **cutTfSet** (removed in C4e, 2026-11-08; the lead's G6): it was `prefixSeries` on each of the five pairs, then
+  `tfSetOf` (the higher bars rebuilt from the cut bars, so a forming higher bar exists exactly as it would have at
+  Tcut).
   - (C4d, 2026-11-07; C4c's review, finding 4) No module calls it: b3a2c43's cut did not either. The cut check makes
     its own cut (7.3: `prefixSeries` of the target's pair; the other pairs give only their bar starts, for the
     holes). `windowSeries` is now called only by the follow-bar checks (`lawsearch-trade.ts` `followBarChecks`): C4d
     removed the cut's window for B06 (7.3).
+  - (C4e, 2026-11-08) Removed from `lawsearch-bars.ts`: it was exported and unused, and no `.ts` or `.py` file
+    imported it (the C4e integrator's search; only this file named it). No output depends on it.
+- **prefixSeries and windowSeries** (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's
+  q1; the lead's G1): both return a COPY that holds the asked bars only (`copyOf`). Each of the Series' 28 typed
+  arrays (the 14 `Float64Array`s s, T, the eight raw sides and O, H, L, C; the 14 `Int32Array`s of points, `day` and
+  `fileKey`) is sliced, so it gets a memory block (`ArrayBuffer`) of its own with exactly to − from elements, holding
+  the same values bit for bit (a typed array's `slice` copies the bytes).
+  - Until C4e they returned subarray views (`viewOf`) of the uncut arrays. A view's memory block still held every bar
+    of the uncut series, so code that read a series through its memory block (a typed array or `DataView` made over
+    `C.buffer` at an offset past the view's end) saw bars that the series did not hold. A cut prefix then showed the
+    uncut future to such code, and the cut check could not see that read (7.3; 8's `bufferReadE04`). It was not a
+    regression: b3a2c43 used the same views.
+  - A copy has nothing past its last bar, so whatever way code reads it, it reads the asked bars alone.
+  - The cost is the copy of bars 0 … k at each cut target: 12.5.
 
 ### 4.2 `research/lawsearch-gen.ts`
 
@@ -525,11 +540,25 @@ The output lists every bar with a status (emit, f_none, both), in bar order, buy
 - The plants `lastBarStateG3` and `lastBarStateG5` (8) are in this loop. (C4d, 2026-11-07) So is the plant
   `carriedCountB06` (8). It affects B06's trials only. `raw0` and `raw1` count B06's raw signals (②) per direction
   from bar 0. On the series' last bar, a raw B06 signal is dropped when that direction's count before it is odd.
+  - (C4e, 2026-11-08) Two more plants are in this loop (8):
+    - `carriedCountS01` (the lead's G4): the same as `carriedCountB06`, on S01's trials only (kind S, `s` = S01).
+    - `bufferReadE04` (the lead's G1): on E04's trials only, a raw buy signal (②) is dropped when the next close is
+      below this bar's close, and a raw sell signal when it is above. The next close is read through C's memory
+      block, never as `C[i + 1]`: `storeOf(C)` is a `Float64Array` over `C.buffer` from `C.byteOffset` to the end of
+      the block, and the plant reads its element i + 1 when it exists. On a series whose arrays hold its own bars only,
+      that is C itself, so on its last bar there is no next close and nothing is dropped. On a view of a longer array
+      it runs past the series' end.
 - (C4d, 2026-11-07; C4c's review, finding 2) A check's decision at bar k is made by the same code as the main
   run's, from the check's series alone. This holds by construction for any change of the loop's body or of a build
   that keeps every build and cache keyed by the Ind and adds no module-level state that survives between
   `candidatesOf` calls (12.2 (2)). Such state is not part of "the check's series alone". It could also make the bytes
   depend on `WORKERS`, because the main thread and each worker hold their own copy of it (12 rule 3).
+  - (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1) Until C4e
+    this held only for code that reads a series through its elements. A cut prefix was a view, so code that read it
+    through its memory block saw the uncut bars after k, while keeping every build keyed by the Ind and adding no
+    module-level state. Now every series a check hands to `decisionOf` has arrays that hold its own bars only (4.1
+    `copyOf`; 7.3), so the equality holds however the code reads the series: through its elements or through its
+    memory block. The condition on module-level state stays (12.2 (2)).
 
 **reasonOf** (spec 6; X = T + `N_BARS` × step), first match:
 
@@ -861,7 +890,11 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
       did. The code:
       - The cut is `prefixSeries(s, T_k)` of the target's pair alone: its bars with T ≤ T_k, that is bars 0 … k.
         The other four pairs give only their bar starts, for the holes (those with start ≥ the holes' first slot
-        and T ≤ T_k). `cutTfSet` is not called (4.1).
+        and T ≤ T_k). `cutTfSet` is not called (4.1; removed in C4e).
+        - (C4e, 2026-11-08; the lead's G1) The cut is a copy that holds bars 0 … k only: each of its 28 typed arrays
+          has a memory block of its own (4.1 `copyOf`), with the same values bit for bit. Until C4e it was a set of
+          subarray views of the uncut arrays, whose memory block still held every bar after k. The bar starts given
+          to `holesOf` are copies of their range too (`p.s.slice(…)`, until C4e `p.s.subarray(…)`).
       - The Ind is `indFor(cut)`: `indOf` of the cut, with higher bars rebuilt from the cut (`coarsenSeries`,
         `htfIndex`) only when a trial of the timeframe reads them (`readsHigher`: F02, F02r or S02; no trial of the
         small trial does). One Ind of the cut is shared by every trial decided at k.
@@ -923,6 +956,37 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
     only bar starts, which poison does not change. So poisoning them could not change the decision, as long as
     12.2 (2)'s condition holds. This reading of spec 15's 毒 (確定が T より後のすべての足) is for the lead to
     confirm (11 O-14). The `lawsearch-checks.ts` header still says "the trial's timeframe's five pairs".
+    - (C4e, 2026-11-08) Fixed: the `lawsearch-checks.ts` header's poison bullet and the comment above
+      `poisonCheck` now say "the trial's pair in the trial's timeframe" and give the argument below.
+  - (C4e, 2026-11-08; the C4d docs writer's question; the lead's G5) **The poison's scope, shown from the code.**
+    Spec 15's 毒 adds ±777.7 pips to every bar whose close is after T (15-minute, 1-hour and 1-minute bars).
+    `poisonGotAt` poisons the trial's pair in the trial's timeframe alone (`poisonSeries` after T) and keeps the
+    uncut run's holes. The lead accepts this reading only if it is exact: the decision at T must read nothing else
+    that the spec's 毒 would change. What `poisonGotAt`'s `decisionOf(trial, indFor(ps, …), ctx, ps, i, …)` reads:
+    1. `candidatesOf(trial, ind)`. Its builds go through `buildOf`, kept on the Ind, and read the Ind alone
+       (`lawsearch-items.ts`: `ind.series`, `ind.rsi`, `ind.ema`, `ind.donchian`, `ind.bigmove`). The Ind is
+       `indFor(ps)`: `indOf` of the one poisoned series. When a trial reads the higher timeframe (`readsHigher`: F02,
+       F02r, S02), its higher bars are rebuilt from that poisoned series by `coarsenSeries` and `htfIndex`; the main
+       run's higher bars are coarsened from the pair's own series too (`tfSetOf`). `indOf` reads only the series and
+       the higher series it is given, and its caches live in the Ind.
+    2. `reasonOf(ctx, ps, i, warmOk)`. It reads the bar's close time T = `ps.T[i]`, the start
+       `ps.s[max(0, i − 9)]`, the pair (`ps.pi`, `ps.pair`), and the `ExclCtx`: the step, stage 3's dates (none
+       here), the plant, the holes and the avoided slots. The holes are the uncut run's (`exclCtxOf` or
+       `ctxOfUniverse` of the uncut timeframe), made by `holesOf` from the five pairs' bar starts alone. The avoided
+       slots come from a ledger file. ① ①b by `halfOf`, ② `r2`, ④ `r4` and ⑤ `r5` read times only; ⑥ `r6` reads the
+       avoided slots by pair and time; ③ `r3` reads the holes. No price is read.
+    3. `stratumOf(ps.pi, d, ps.T[i])`: the pair, the direction and T.
+
+    So the decision at T reads no other pair's prices, no bar of the other timeframe's loaded series, and no 1-minute
+    bar (the series keys are m15, h1 and h4 only, `lawsearch-types.ts` `SeriesKey`; the program reads no 1-minute
+    file). It reads no higher bar that is not rebuilt from the poisoned series. Poison changes prices, never which
+    bars exist or when they start, so the uncut holes are the poisoned timeframe's holes. Poisoning the other pairs,
+    the other timeframe and the 1-minute bars as the spec's words say could therefore not change the decision. This
+    holds under 12.2 (2)'s condition (no module-level state that survives between `candidatesOf` calls), as every
+    claim about the checks' series does. No code change; the outputs are unchanged. The same argument is in the
+    `lawsearch-checks.ts` header (the poison bullet). The C4e integrator found nothing else reachable; the C4e docs
+    writer read the same functions (`decisionOf`, `indFor`, `poisonGotAt`, `reasonOf`, `exclCtxOf`, `ctxOfUniverse`,
+    `indOf`, the item builds) and found nothing else either.
 - **Presence** (the same 100 signals):
   - (i) the first two bars with T > T_signal of the signal's pair, in the trial's timeframe, are deleted;
   - (ii) every bar with T > T_signal and start < the next Sunday 22:00 UTC, in the trial's timeframe of all five
@@ -954,6 +1018,29 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
     - then each row at the compared bar gives `d:status:warm:reason:stratum`, with the reason from `reasonOf` and
       the unit's own `ExclCtx`: the cut's holes; for poison, the uncut run's holes (poison changes prices, never
       which bars exist); for presence, holes made again from the edited timeframe.
+    - (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1) **Every
+      series a unit hands to `decisionOf` has typed arrays of its own that hold its own bars only**, so code that
+      reads a series through its memory block (a typed array or `DataView` over `C.buffer`) reads nothing the series
+      does not hold.
+      Where each one comes from (the C4e integrator's audit, checked again in the code by the C4e docs writer):
+      - cut (stage 0's `cut`, `cut.chosen.first`, `cut.chosen.second`, `suspect13.cut.*`; all through `cutGotAt`):
+        the prefix is `prefixSeries`, now a copy (4.1 `copyOf`); each pair's bar starts for the holes are copies of
+        their range (`slice`);
+      - poison (`poison`, `suspect13.poison1000.*`): `poisonSeries` makes fresh arrays (with the poison tables,
+        `slice` of the whole series, then `set` from the table from bar k0 on; without them, `shifted`, which slices);
+      - presence (`presence`, `suspect13.presence.*`): `deleteBars` makes fresh arrays of the kept length. In variant
+        (i) the other four pairs are the universe's own series, unedited and whole (they give only bar starts, for the
+        holes); in variant (ii) all five are `deleteBars` copies;
+      - the higher bars and g, when a trial reads them: `coarsenSeries` (through `seriesOf`) and `htfIndex` allocate
+        new arrays;
+      - the universe itself: `seriesOf` allocates every array (`new Float64Array(n)`, `new Int32Array(n)`), and a
+        worker gets the universe by structured clone, which copies each array with its own memory block. The stage
+        universes are loaded separately, so they share no memory block either.
+
+      Until C4e the cut prefix (and before C4d B06's window) was a set of subarray views of the uncut arrays, so this
+      did not hold for the cut. The only `.subarray(` calls left in `research/lawsearch*.ts` are the sources of a copy
+      (`poisonSeries` twice, `deleteBars`) and the dump writer; the hand job's grep step keeps it so as defense in depth
+      (7.8 hand step 9).
   - C4b's `candidatesAt` (the per-bar body run at bar k alone after `prepare`) is gone, and with it the CI step that
     sampled it (7.8). Reason: 12 rule 2.
   - Units share only what sees the same series. At one cut target, the cut's holes and the cut's Ind (with the builds
@@ -972,6 +1059,11 @@ export function sampleOf<T>(xs: readonly T[], n: number, seed: number): T[];  //
       copy sees a different sequence of series. So it could make the bytes depend on `WORKERS`, as well as carry
       the uncut series' values into a check. Nothing stops it by construction. The yml's `cmp-c-7101` job compares
       one failing run at `WORKERS=0` and 4 byte for byte, as defense in depth only (7.8 syn step 3).
+      - (C4e, 2026-11-08; the lead's G2) The comparison now covers three clean runs, N 1001 (in a job of its own,
+        `w0-n-1001`), C 7101 and O 6003, which between them reach every kind of pool run a synthetic run of the small
+        trial reaches but stage 2's `suspect13` checks (7.8 syn step 3 lists what is and is not compared). Still
+        defense in depth only. A read through a series' memory block, by contrast, is closed by construction since
+        C4e (the bullet on the units' series above).
   - Why each shared or kept value is exact, and which test guards it: 12.1. The two places where the equality with
     the main run still rests on how future code is written (the reason at bar k from `reasonOf` alone; caches that
     must stay keyed by the Ind): 12.2.
@@ -1115,6 +1207,9 @@ The other environment variables:
       and no module-level state survives between `candidatesOf` calls (12.2 (2)). Such state would differ between
       the main thread and each worker, so it could make the bytes depend on `WORKERS`. The `lawsearch.ts` header
       says so too. The yml compares `WORKERS=0` with 4 on one run, as defense in depth (7.8 syn step 3).
+      - (C4e, 2026-11-08; the lead's G2) On three runs now: CMP-N 1001, CMP-C 7101 and O 6003, each the job's own
+        clean run (7.8 syn step 3). The `lawsearch.ts`, `lawsearch-par.ts` and `lawsearch-par-worker.ts` headers say
+        so.
   - The pool is made after gate 3, before the pipeline starts. Its workers start at the first check that uses them
     and are closed when the run ends. At each run of the pool (a cut check: one per timeframe; poison and presence:
     one per check) the universe being
@@ -1125,6 +1220,8 @@ The other environment variables:
     that dies stops the run with exit 1.
   - The yml sets `WORKERS: "4"` for every job (7.8), and its hand step 8 runs the refusal. (C4d, 2026-11-07) One
     step sets `WORKERS: "0"`: the `cmp-c-7101` step that compares the bytes at `WORKERS=0` and 4 (7.8 syn step 3).
+    (C4e, 2026-11-08) That step now runs in three jobs, `w0-n-1001`, `cmp-c-7101` and `o-6003`, and it is still the
+    only step that runs the pipeline at `WORKERS=0` (hand step 8's control `0` stops on its first read).
 
 The gates run in order, before any bar is read (before them, the real modes are refused, then `MODE`, `LS_PLANT`,
 `CUT_MAX` and `WORKERS` are checked; each refusal is exit 2):
@@ -1212,8 +1309,8 @@ on:
   workflow_dispatch:
 permissions: { contents: read }
 jobs:
-  hand:     # deno check; the stage-0 graph; TS hand; Python hand; the hand plants; real modes, CUT_MAX, WORKERS refused
-  syn:      # needs hand; matrix of 10's runs; TS syn → Python --run (recompute + compare); the run plants; uploads research/out/lawsearch/** as an artifact
+  hand:     # deno check; the stage-0 graph; TS hand; Python hand; the hand plants; no read through a memory block (C4e); real modes, CUT_MAX, WORKERS refused
+  syn:      # needs hand; matrix of 10's runs (+ w0-n-1001, C4e); TS syn → Python --run (recompute + compare); the run plants; WORKERS=0 vs 4 (three jobs); uploads research/out/lawsearch/** as an artifact
 ```
 
 - **hand**:
@@ -1259,13 +1356,45 @@ jobs:
      `REFUSED: WORKERS …` line exactly, and leave no output folder. The controls `0`, `1`, `4`, `64` and empty must
      pass the refusal and stop on the first read (exit 1, `NotCapable`). C4c ran the step as extracted from the yml:
      exit 0.
+  9. (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1) **No read
+     through a typed array's memory block outside an allow-list.** In the yml this step runs right after step 5's
+     hand-plant step and before step 6. Its name says what it is: defense in depth, not a guard by construction. The
+     guard by construction is that every series a check hands to `decisionOf` holds its own bars only (4.1 `copyOf`;
+     7.3, the units' series).
+     - What it does: `grep -nE '\.buffer\b|byteOffset|ArrayBuffer|DataView|\.subarray\('` over
+       `research/lawsearch*.ts`; lines whose text is a comment alone (`//` after blanks) are dropped; each other line
+       becomes `<file>: <its text without leading blanks>`. The step fails (exit 1) when such a line is not, as a
+       whole line, in its allow-list, and prints those lines. It also prints, for information only, any allow-list line
+       it no longer finds.
+     - The allow-list (10 lines) and why each is allowed (the step's comment says the same):
+       - `lawsearch-bars.ts` `poisonSeries` (`a.set(alt[k].subarray(k0), k0)`, the same text on two lines) and
+         `deleteBars` (`a.set(src.subarray(…), j)`): the view is only the source of a copy into a fresh array;
+       - the `hex` helpers of `lawsearch-const.ts`, `lawsearch-flip.ts`, `lawsearch-gen.ts` and `lawsearch.ts`: they
+         format a SHA-256 digest (an `ArrayBuffer`);
+       - `lawsearch-dump.ts`: it writes a dump file's bytes (`bytes.subarray(off)`);
+       - `lawsearch-events.ts` `storeOf`: the run plant `bufferReadE04` itself (8), active only under `LS_PLANT`;
+       - `lawsearch-hand.ts` `toPlain` and its JSON replacer (`ArrayBuffer.isView`): the hand examples' output, typed
+         arrays turned into plain arrays.
+     - Its limits (the step's comment says them too): it reads only these files, not the modules they import
+       (trend-data, the app functions, …); it works line by line and by these names, so a read written across lines,
+       through another name, or with a listed line's exact text elsewhere in the same file is not seen.
+     - The C4e integrator's runs (the step as extracted from the yml; `c4e/logs/bufgrep-*.txt` in the C4e scratch
+       folder): on the repo (code v2 and v3) exit 0, 11 lines, all allowed. With `new DataView(s.C.buffer,
+       s.C.byteOffset)` planted in `lawsearch-items.ts`: exit 1, that line named. With `copyOf` turned back into
+       `subarray` on the Float64 arrays: exit 1, that line named. Under 1 s.
 - (C4b, 2026-11-05; written here C4c, 2026-11-07) The workflow sets `WORKERS: "4"` for every job (GitHub's
   `ubuntu-latest` runner has 4 vCPUs), so every run step's checks run their units on 4 workers. No step compares two
   `WORKERS` values: that the bytes do not depend on it (12 rule 3) is shown by local runs (12.1).
   - (C4d, 2026-11-07; the lead's F2) Superseded in part: one step of the `cmp-c-7101` job now runs at `WORKERS=0`
     and compares its bytes with the same plant's `WORKERS=4` dump (syn step 3). It is defense in depth, not a guard
     by construction (12.2 (2)). Every other run step still runs at `WORKERS=4`.
+  - (C4e, 2026-11-08; the lead's G2) That step now runs in the jobs `w0-n-1001`, `cmp-c-7101` and `o-6003`, each on
+    the job's own clean run, not on a plant (syn step 3). Every other run step still runs at `WORKERS=4`.
 - **syn** (Python 3.11 + numpy; Deno 2.9.6): one job per run of 10.
+  - (C4e, 2026-11-08; the lead's G2) Plus one job, `w0-n-1001`: it makes CMP-N 1001 again (`MODE=syn` with the same
+    seed) and runs only the TS run and the `WORKERS=0` step of syn step 3: no Python step (the Python compares N 1001
+    in `cmp-n-1001`'s job) and no plants. It is a job of its own because N 1001's `WORKERS=0` run alone took 6,665 s
+    locally; inside `cmp-n-1001`, after its plants, that job would have taken about 3.1 h locally (12.5).
   1. TS `MODE=syn`.
      - (C4b, 2026-11-05; removed C4c, 2026-11-07) C4b put a step here: "The checks' one-bar candidates equal
        candidatesOf's rows at every bar", which ran `research/lawsearch-candat-check.ts` on the run's bars (C4b's
@@ -1322,7 +1451,9 @@ jobs:
        same bytes at WORKERS=0 as at WORKERS=4" runs `lastBarStateG3` again with `MODE=walkfiles` and
        `WORKERS: "0"` (every unit in the main thread), into `<RUN>/plant-lastBarStateG3-w0`. It wants exit 3, the
        same list of files as the plant step's `WORKERS=4` dump `<RUN>/plant-lastBarStateG3` made in the same job,
-       and every file the same bytes (print.txt without its `time.*` lines).
+       and every file the same bytes (print.txt without its `time.*` lines). (Superseded in C4e, 2026-11-08: the
+       step now compares each job's own clean run, in three jobs; the C4e bullet below. This bullet is kept as the
+       record of C4d's step and runs.)
        - Why: 12 rule 3 wants the same bytes for any `WORKERS`. That holds by construction only while every build
          and cache is keyed by the Ind and no module-level state survives between `candidatesOf` calls (12.2 (2)).
          Such state differs between the main thread and each worker, so it can make the bytes depend on `WORKERS`.
@@ -1333,8 +1464,109 @@ jobs:
          1,051 s). On C4c refuter 2's module-memo mutant M (a module-level memo of `candidatesOf` keyed by the
          series' buffer, added to C4d's code), the `WORKERS=4` run exits 3 with every trial's cut failed (memo
          noise), and the `WORKERS=0` run exits 0 ("every check passed": the memo hides the plant). The step then
-         exits 1: 6 files exist only in the `WORKERS=4` dump and 14 differ.
-       - It adds about 1,050 s of one-thread run to the `cmp-c-7101` job (12.4).
+         exits 1: 6 files exist only in the `WORKERS=0` dump and 14 differ. (Corrected C4e, 2026-11-08; C4d's
+         review, the ci-docs nit, reproduced by the ci-docs refuter 1; the lead's G3. Until C4e this said "only in
+         the `WORKERS=4` dump". The `WORKERS=0` run passed every check, so it opened stage 2 and wrote the stage-2
+         files: stage2.csv, blind/m15_second.csv, blind/h1_second.csv, late/m15_second.csv, late/h1_second.csv and
+         trades/h1.E04.F00_second.csv. The `WORKERS=4` run failed and never wrote them. The step's `diff` prints
+         them as `>` lines, the side of b, the `WORKERS=0` dump. The C4e integrator's runs of M show the same six
+         files on the same side.)
+       - It adds about 1,050 s of one-thread run to the `cmp-c-7101` job (12.4). (Superseded in C4e: the next
+         bullets.)
+     - (C4e, 2026-11-08; the lead's G4: no run plant reached the S01 trials) Also on CMP-C 7101: `carriedCountS01`
+       (8; exit 3). Besides the exit, the yml tests that checks.csv has a failed `cut` row of an S01 trial
+       (`^(m15|h1)\.S01,cut,0,`), that cut_fail.csv has a stage-0 cut row of an S01 trial
+       (`^cut,stage0,(m15|h1)\.S01,`), and that stage 2 was not opened (no stage2.csv, no `syn2` row in load.csv).
+       - C4e's run: exit 3. Only the cut failed, on m15.S01 (15,404 of 311,962) and h1.S01 (12,110 of 86,600), with
+         27,514 stage-0 rows in cut_fail.csv. `cut.chosen.first` ran on the chosen trial h1.E04.F00 and passed
+         (29,948 compared), and print.txt's `note.stage2` says "not opened".
+       - The same plant on 7e4dfcc (C4d's code) and on b3a2c43 (the plant put into its own `candidatesOf` loop, one
+         thread): exit 3, the same counts, and every one of the 77 files identical to C4e's. S01 was cut on its
+         prefix from bar 0 in every version (it never had a window), so all three catch it; what was missing was a
+         run plant on the S path (12's C4d paragraph: a plant must reach each path).
+       - Against the clean C 7101 run, 16 of the 77 files both have differ, among them signals/h1.S01.csv and
+         ind/h1_EUR_JPY.csv: the plant also drops an S01 signal on EUR/JPY h1's last bar in the main run, and the
+         ind/ rows include every bar of signals/ (`lawsearch-dump.md` 5). Both changes are expected.
+     - (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1) Also on
+       CMP-C 7101: `bufferReadE04` (8; exit 3). Besides the exit, the yml tests that checks.csv has a failed `cut`
+       row of an E04.F00 or E04.F01 trial (`^(m15|h1)\.E04\.F0[01],cut,0,`), that cut_fail.csv has a stage-0 cut
+       row of such a trial, and that stage 2 was not opened.
+       - C4e's run (copies): exit 3. The cut failed on m15.E04.F00 (277 of 34,556), m15.E04.F01 (17 of 30,798),
+         h1.E04.F00 (295 of 24,274) and h1.E04.F01 (27 of 23,489), with 616 stage-0 rows in cut_fail.csv. Poison and
+         presence failed on the four E04 trials too, and so did `suspect13.poison1000` and `suspect13.presence` of
+         the two stage-1 hit trials (m15.E04.F00, h1.E04.F00). No trial was chosen, and stage 2 was not opened. The
+         yml's tests pass.
+       - The same plant on 7e4dfcc (the cut prefix a view): exit 3, but the **cut passed** (694,767 compared, none
+         differs) and cut_fail.csv has its header only. Only poison, presence and the two `suspect13` checks failed:
+         they make fresh arrays, so they were the backstop. The yml's tests for this plant fail there, as wanted: the
+         plant was missed by the cut. Against 7e4dfcc with the plant, C4e's run has the same 76 files, and only
+         checks.csv (the four E04 cut rows), cut_fail.csv (616 rows) and print.txt (`note.stage2` now names `cut`;
+         `check.cut.passed` and `check.cut.detail`) differ.
+       - Not run on b3a2c43. Its cut prefix is a view too, so it would be expected to miss the plant as 7e4dfcc
+         does; that is not measured.
+       - The plant also changes the main run: on the uncut series, `storeOf(C)` is C itself, so the main run drops
+         E04's raw signals by the true next close (a look-ahead), except on the series' last bar. So signals/ and
+         ind/ of the E04 trials, and what is built on them, differ from the clean run.
+     - (C4e, 2026-11-08; C4d's review, the ci-docs finding, reproduced by the ci-docs refuter 2; the lead's G2) **The
+       step "The same bytes at WORKERS=0 as at WORKERS=4" now compares each job's own clean run**, in three jobs:
+       `w0-n-1001`, `cmp-c-7101` and `o-6003`. Until C4e it ran `lastBarStateG3`, which chooses no trial
+       (`cut.chosen.first` has nothing to cut) and never opens stage 2: only stage 0's pool runs were compared, and
+       the pool runs of `cut.chosen.first`, `cut.chosen.second` and `suspect13` never happened in it. C4d's ci-docs
+       refuter 2 showed a mutant (module-level state read only by one-trial cut jobs) that was silent in that step
+       and gave different bytes on `carriedCountB06`.
+       - What it does: it runs the job's run again with `MODE=walkfiles`, `RUN` = the run, `OUT=<RUN>/ts-w0`,
+         `WORKERS: "0"` and no plant, and compares it with the job's `ts/`, which the step "TS (MODE=syn)" made at
+         `WORKERS=4`. It wants the job's exit (`matrix.want`: 0, 0 and 3), the same list of files, and every file the
+         same bytes. The only differences allowed are those MODE itself makes: print.txt's `mode=` line (`syn` in
+         ts/, `walkfiles` in ts-w0) and its `time.*` lines, and config.json's `"mode"`. The run folder is the same
+         string in both (the syn step's `OUT` is the step's `RUN`), so the `run` fields are equal.
+       - Which pool runs it compares (each a separate run of the worker pool; from the three runs' choice.json and
+         checks.csv):
+
+         | pool run | N 1001 (`w0-n-1001`) | C 7101 (`cmp-c-7101`) | O 6003 (`o-6003`) |
+         |---|---|---|---|
+         | stage 0's `cut`, m15 and h1 (6 trials each) | yes | yes | yes, with failures and cut_fail.csv rows |
+         | stage 0's `poison` and `presence` (12 trials) | yes | yes | yes, failing on the E26 trials |
+         | `cut.chosen.first`, m15 | 2 trials in one pool run (E04.F01, B06) | none chosen | 1 trial (E04.F01) |
+         | `cut.chosen.first`, h1 | 1 trial (B06) | 1 trial (E04.F00) | 1 trial (E04.F00) |
+         | `cut.chosen.second`, m15 | 2 trials (E04.F01, B06) | none chosen | stage 2 not opened |
+         | `cut.chosen.second`, h1 | 1 trial (B06) | 1 trial (E04.F00) | stage 2 not opened |
+         | stage 1's `suspect13` cut, poison1000 and presence | no hit | no hit | the 4 E26 hit trials, one trial per pool run |
+
+       - **Not compared**: stage 2's `suspect13` checks (no synthetic run reaches them: O runs never open stage 2,
+         and N, C and FLIP have no suspicion hit); the FLIP runs and the plants' runs (they reach no kind of pool run
+         that the three runs lack: FLIP 1001 chooses N 1001's two m15 trials); and the pool runs of trials no
+         synthetic run builds (the higher-timeframe path F02, F02r and S02, and every item not built). The step
+         still sees module-level state only where it changes these three runs' bytes. The step's comment in the yml
+         lists the same.
+       - **Defense in depth, not a guard by construction**, as before (the step's name and comment say so).
+       - Results (the C4e integrator; the step extracted verbatim from the yml, `c4e/ymlstep/w0step.sh`, run on the
+         C4e `WORKERS=4` identity dumps, which are `MODE=walkfiles` dumps): N 1001 exit 0, 85 files equal, its
+         `WORKERS=0` run 6,665 s (`time.total`); C 7101 exit 0, 83 files, 1,384 s; O 6003 exit 0 (its `WORKERS=0` run
+         exits 3, as wanted), 77 files, 2,226 s. The normalisation for CI's `MODE=syn` dump was tested on a stand-in:
+         C 7101's dump with config.json's mode and print.txt's `mode=` edited as `MODE=syn` writes them (and a
+         `time.gen.ms` line), through a fake deno: exit 0; with one byte of checks.csv changed: exit 1. The step has
+         not run on a real `MODE=syn` dump, nor in GitHub Actions.
+       - Its power on mutants (each first run at `WORKERS=4` on C 7101, then the step on that dump):
+         - mutR (C4d's ci-docs refuter 2's mutant, `c4d/refute-ci-docs-2`, ported to C4e's code): module-level
+           state read only by one-trial cut jobs; each module copy (the main thread, each worker) marks the first
+           unit of the first one-trial cut job it sees. `WORKERS=4`: exit 3, `cut.chosen.first` on h1.E04.F00 with
+           4 of 29,948 differing (one per worker). The step exits 1: the `WORKERS=0` run exits 3 with 1 row where 0
+           is wanted, and checks.csv, cut_fail.csv and print.txt differ.
+         - M (C4c refuter 2's memo of `candidatesOf`, keyed by `C.buffer`, `C.byteOffset`, the trial and the options)
+           on 7e4dfcc: `WORKERS=4` exit 3, the cut failed on all 12 trials. The step exits 1: the `WORKERS=0` run
+           exits 0 (in the main thread the main run fills the memo on the uncut memory block first, so every cut
+           prefix, a view at offset 0 of that block, gets the main run's rows and the cut is hidden); 6 files exist
+           only in the `WORKERS=0` dump and 14 differ.
+         - M on C4e's code: inert. `WORKERS=4` exit 0, all 83 files equal to the clean run's, and the step exits 0.
+           Every cut prefix now has its own memory block, so the memo never matches across series. (Inert here is
+           not power: there is nothing to find.)
+         - M2 (new in C4e, to show the step's power on a memo on C4e's code): the same memo keyed by the series' pair
+           and timeframe, the trial and the options, which the copies do not defuse. `WORKERS=4`: exit 3, all 36 cut,
+           poison and presence rows of stage 0 fail (each worker's memo holds stale rows). The step exits 1: the
+           `WORKERS=0` run exits 0 (the main thread's memo holds the main run's rows and hides every check); 6 files
+           exist only in the `WORKERS=0` dump and 14 differ.
+       - Its cost, and the CI time of each job: 12.5.
   4. O's runs expect exit 3, the cut and poison checks failed, and the E26 rows' suspicion hit. (C3, 2026-11-05; the
      lead's D8) They now end before stage 2. The O step still requires the cut and poison failures on the four E26
      trials, their stage-1 suspicion hits, and no other failed check; it also requires that stage 2 was not opened
@@ -1432,10 +1664,14 @@ required now.
 | `chosenCutFirstDiff` (C3, 2026-11-05; the TS builder, asked by the lead: C2 never ran the stop before stage 2 on a full run) | D: cutCheck (check `cut.chosen.first` only) | the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes (the choice is made before this check) | the stop before stage 2 (7.7), end to end on `CMP-C 7101` (it chooses h1.E04.F00): exit 3; `cut.chosen.first` failed on that trial (stage `stage1end`); its bar is in cut_fail.csv; print.txt withholds stage 1's numbers and its `note.stage2` says "not opened"; no `syn2` row in load.csv, no stage2.csv |
 | `lastBarStateG3`, `lastBarStateG5` (C4c, 2026-11-07; C4b's review, finding 1; the names are the designer's, confirmed by the lead in C4d) | B: candidatesOf (spec 5's walk, the loop the main run executes) | on the series' last bar, a raw signal is dropped when the last row emitted before it is exactly 3 (G3) or 5 (G5) bars back: a look-ahead that mixes state carried across bars with the series' end | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on trials (cut_fail.csv names the bars), stage 2 not opened. b3a2c43 (candidatesOf on the cut) fails it; C4b's one-bar candidatesAt did not (exit 0, every file as the clean run). C4c's runs: the cut failed on 8 of the 12 trials, with 461 (G3) and 423 (G5) cut_fail rows, the same files as b3a2c43's with the plant (7.8 syn step 3). (C4d, 2026-11-07) With B06 cut on its prefix, on 10 of the 12: m15.B06 and h1.B06 fail too (708 and 569 rows; 7.8 syn step 3) |
 | `carriedCountB06` (C4d, 2026-11-07; C4c's review, finding 1; the shape of C4c refuter 1's R1; the name is the lead's example, taken by the C4d integrator) | B: candidatesOf (spec 5's walk), B06's trials only | per direction, B06's raw signals (②) are counted from bar 0; on the series' last bar, a raw B06 signal is dropped when that direction's count before it is odd: a look-ahead carried by state across bars, on B06's path | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on m15.B06 or h1.B06 (cut_fail.csv names the bars), stage 2 not opened (7.8 syn step 3). C4d's run: m15.B06 1,700 of 38,439 and h1.B06 970 of 25,630, no other trial. b3a2c43 and 876b9e4 (B06 cut on its 291-bar window) miss it: exit 0, every file as the clean run's but `config.json` and print.txt's `plant=` line. Not in `PLANTS` but run as mutants in C4d, on full C 7101 runs at `WORKERS=4`: the series-length shape (C4c refuter 1's R2: drop when n is even) failed the cut on m15.B06 1,738 and h1.B06 1,007; the emitted-rows shape (R3: drop when the rows emitted before it are odd) on m15.B06 1,700 and h1.B06 985. With the window, C4c's reviewer and refuter 1 saw R1, R2 and the reviewer's M5 and M6 pass (exit 0, every file as the clean run's) and R3 pass an h1 probe (0 of 1,972 targets) |
+| `carriedCountS01` (C4e, 2026-11-08; the lead's G4: no run plant reached the S01 trials; the name is the lead's example, taken by the C4e integrator) | B: candidatesOf (spec 5's walk), S01's trials only | the same as `carriedCountB06` on S01's trials (kind S, `s` = S01): per direction, S01's raw signals (②) are counted from bar 0; on the series' last bar, a raw S01 signal is dropped when that direction's count before it is odd: a look-ahead carried by state across bars, on the S path | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on m15.S01 or h1.S01 (cut_fail.csv names the bars), stage 2 not opened (7.8 syn step 3). C4e's run: m15.S01 15,404 of 311,962 and h1.S01 12,110 of 86,600, and no other check failed. 7e4dfcc and b3a2c43 with the plant give the same counts and files: S01 never had a window, so every version catches it; what was missing was a run plant that reaches the S path (12's C4d paragraph) |
+| `bufferReadE04` (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1; the name is the lead's example, taken by the C4e integrator) | B: candidatesOf (spec 5's walk), E04's trials only; `storeOf` (`lawsearch-events.ts`) | a raw E04 signal (②) is dropped when the next close is against it (buy: below this bar's close; sell: above), the next close being read through C's memory block (`storeOf(C)`: a `Float64Array` over `C.buffer` from `C.byteOffset` to the block's end), never as `C[i + 1]`: a look-ahead through the memory block, which a series that is a view of a longer array lets through | stage 0's cut on `CMP-C 7101`: exit 3, the cut failed on an E04.F00 or E04.F01 trial (cut_fail.csv names the bars), stage 2 not opened (7.8 syn step 3). C4e's run (every check series a copy): m15.E04.F00 277 of 34,556, m15.E04.F01 17 of 30,798, h1.E04.F00 295 of 24,274 and h1.E04.F01 27 of 23,489; poison and presence fail on them too. 7e4dfcc (the cut prefix a view): exit 3, but the **cut passed** (694,767 compared, none differs); only poison and presence, which make fresh arrays, caught it, and the yml's tests for this plant fail there. Not run on b3a2c43 (its prefix is a view too) |
 
 The names of the three C3 run plants, `dropSecondStrata`, `blindRowHit` and `chosenCutFirstDiff`, were confirmed by
 the lead 2026-11-05 (C4a). (C4d, 2026-11-07) The lead confirmed `lastBarStateG3` and `lastBarStateG5` in C4d's
 task. `carriedCountB06` is the name the lead's task gave as an example; it is for the lead to confirm (11 O-14).
+(C4e, 2026-11-08) `carriedCountS01` and `bufferReadE04` are the names the lead's C4e task gave as examples, taken by
+the C4e integrator; they and `carriedCountB06` are for the lead to confirm (11 O-15).
 None of these run plants is in the list of Python twins below: the Python compares nothing on a plant run
 (`lawsearch-dump.md` 2).
 
@@ -1448,6 +1684,47 @@ hand run.
 Set O (14.2: E26's direction from the next bar, `answerKnowingE26`) is not a 16 plant, but it belongs to the same
 idea. On seeds 6001–6004, the cut and the poison must fail on every E26 trial, the E26 rows' suspicion lines must
 hit, and the other checks must pass.
+
+(C4e, 2026-11-08; the lead's G4) **Which trial kinds a run plant reaches.** 12's C4d paragraph says a plant must
+reach each path under test. The full step-4 set (the ledger `research/ledger/lawsearch-candidates.json`; the C4e
+integrator's count, `c4e/logs/g4-inventory.txt` in the C4e scratch folder, counted again from the ledger by the C4e
+docs writer) has 682 trials per timeframe, 1,364 in all:
+
+- EF: 660, that is 44 E items (E01–E44) × 15 F's (F00, F01, F01r, F02, F02r, F03, F03r, F04, F04r, F05, F05r, F06,
+  F06b, F07, F07r);
+- S: 4 (S01 on F01, S02 on F02, S03 on F05, S04 on F07);
+- B: 18 (B01–B18);
+- among them the higher-timeframe path (`readsHigher` in `lawsearch-checks.ts`: F02, F02r and S02): 89 per
+  timeframe (44 × 2 + 1), 178 in all.
+
+The small trial builds 6 trials per timeframe: E04.F00, E04.F01, E26.F00, E26.F01, S01 and B06. The run plants (on
+CMP-C 7101) and set O reach them as follows: the trials whose rows fail in each plant's checks.csv (C4e's runs; the
+C4d plants' files are byte-identical to C4d's kept files).
+
+| kind | trials (m15 and h1) | what fails on them |
+|---|---|---|
+| E, cross (E04), with F00 and F01 | E04.F00, E04.F01 | `lastBarStateG3`, `lastBarStateG5` (cut); `bufferReadE04` (cut, poison, presence; new in C4e); `chosenCutFirstDiff` (h1.E04.F00, `cut.chosen.first`); `reasonUsesFuture` (presence) |
+| E, hold (E26), with F00 and F01 | E26.F00, E26.F01 | `lastBarStateG3`, `lastBarStateG5` (cut); `reasonUsesFuture` (h1.E26.F00's cut; presence); set O (cut, poison, the stage-1 `suspect13` checks) |
+| S, state (S01: F01's f) | S01 | `carriedCountS01` (cut; new in C4e, inside `candidatesOf`'s loop); `reasonUsesFuture` (cut and presence, through the reason path, not the loop) |
+| B, condition (B06) | B06 | `carriedCountB06` (cut); `lastBarStateG3`, `lastBarStateG5` (cut); `reasonUsesFuture` (presence) |
+
+The F kinds reached are F00 (no filter) and F01 (EMA200) only.
+
+**Must get a run plant before step 4, when such a trial exists.** No synthetic trial of the small trial uses these
+kinds, so no run plant reaches them. No fake trial was made for them.
+
+- The higher-timeframe path F02, F02r and S02. `readsHigher` is false for every trial of the small trial, so the
+  higher bars rebuilt inside a check (`coarsenSeries`, `htfIndex` in `indFor`) are never exercised by a run. The hand
+  plant `htfOpen` reaches `htfIndex` in hand examples only (the table above: "cut once F02 is built (step 4)").
+- The other 42 E items.
+- The F's F01r, F02–F07, F02r–F07r and F06b.
+- S02, S03 and S04.
+- B01–B05 and B07–B18, among them the 10 other finite items of 12.4.
+
+(An observation of the C4e docs writer, outside G4: no run plant makes `cut.chosen.second` or stage 2's
+`suspect13` checks fail. `cut.chosen.second` decides through the same `cutGotAt` as stage 0's cut, which the plants
+above reach; what no run exercises is the handling of its failure in stage 2, 7.7's D9: stage 2's numbers withheld.
+For the lead: 11 O-15.)
 
 ---
 
@@ -1514,7 +1791,7 @@ hit, and the other checks must pass.
 | CMP-C 7101 | C (N with holes; 4.2), 7101 | The same agreement, now with ③ holes, substitute exits, an empty day file and r ruled unusable by gaps. Blind bars are excluded by ③ after each removed m15 run of ≥ 2 slots and each removed h1 bar, and some blind rows have `subst = 1` (every bar is a blind bar, so these follow from the removed bars; a trial's own signals may or may not fall there). Plant `reasonUsesFuture` fails the cut or the presence (ii) here. |
 | FLIP 1001–1005 | N, 1001–1005, flipped and not | For every blind bar of both halves and timeframes, the flipped run's buy h = the original's sell h and PL is the same (points; exact). E04, E26 and S01: the signals match 1-to-1 with reversed directions, with differences ≤ 0.1% per trial. B06 is not symmetric (log returns of mirrored prices), so its name and reason are printed with its difference. See 11 O-2 before reading a failure of the h equality. From 2026-11-05 (spec 22.6, 23.1) these conditions are judged on the exact mirror: the original run's 5-minute mid, Bid and Ask mirrored about the pair's first 5-minute mid open S (mid' = 2S − mid, Bid' = 2S − Ask, Ask' = 2S − Bid, high' from low), with no rounding of spec 2, and everything above it rebuilt from that. The FLIP=1 run (flipped files read under spec 2) still runs, and is compared TS–Python only. |
 | O 6001–6004 | O, 6001–6004 | `m15.E26.*` and `h1.E26.*`: the cut and the poison fail (exit 3), and suspicion hits on their stage-1 rows. The other checks of the other trials pass. (C3, 2026-11-05) The run ends before stage 2 (7.7's stop before stage 2). |
-| PLANT-* | walkfiles on CMP-N 1001's and CMP-C 7101's files (OUT `<RUN>/plant-<name>`), and the hand examples | Each plant of 8 is caught by its named check (C3: `dropSecondStrata` and `blindRowHit` on CMP-N 1001, `chosenCutFirstDiff` on CMP-C 7101; C4c: `lastBarStateG3` and `lastBarStateG5` on CMP-C 7101, by stage 0's `cut`; C4d, 2026-11-07: `carriedCountB06` on CMP-C 7101, by stage 0's `cut` on m15.B06 or h1.B06, and `lastBarStateG3` again at `WORKERS=0`, the same bytes as at `WORKERS=4`). |
+| PLANT-* | walkfiles on CMP-N 1001's and CMP-C 7101's files (OUT `<RUN>/plant-<name>`), and the hand examples | Each plant of 8 is caught by its named check (C3: `dropSecondStrata` and `blindRowHit` on CMP-N 1001, `chosenCutFirstDiff` on CMP-C 7101; C4c: `lastBarStateG3` and `lastBarStateG5` on CMP-C 7101, by stage 0's `cut`; C4d, 2026-11-07: `carriedCountB06` on CMP-C 7101, by stage 0's `cut` on m15.B06 or h1.B06, and `lastBarStateG3` again at `WORKERS=0`, the same bytes as at `WORKERS=4`; C4e, 2026-11-08: `carriedCountS01` and `bufferReadE04` on CMP-C 7101, by stage 0's `cut` on an S01 or an E04 trial; the `WORKERS=0` comparison no longer runs a plant but the clean runs CMP-N 1001, CMP-C 7101 and O 6003, 7.8 syn step 3). |
 | SMOKE 7001–7004 | D, H, E15, EF, with `STRENGTH` provisional | Only that each effect moves its target the intended way, in the dumps: D the blind buy a > 0; H EUR/USD's blind buy a by New York hour (negative in 03–09, positive in 11–15); E15 m15.E04.F00's first-half Δ > 0; EF h1.S01's first-half Δ > 0. These are not formal runs, not the calibration of 14.3, and not written as strengths. No TS–Python comparison is required on them. |
 
 - Not run in the trial: the formal effect sets (D, H, E15, E1h, EF, Q) need their strengths from seeds 901–920
@@ -1621,6 +1898,51 @@ hit, and the other checks must pass.
     compared with nothing by the Python (`lawsearch-dump.md` 2), and the new CI step compares the TS's files with
     each other only.
   - No spec question.
+  - (C4e, 2026-11-08) Decided by the lead in C4e's task: the poison reading is accepted only if it is exact (G5);
+    the C4e integrator and docs writer showed from the code that it is (7.3's Poison bullet), with no code change.
+    The stale comments were fixed and `cutTfSet` was removed (G6; 4.1). The plant name `carriedCountB06` and the cost
+    move to O-15.
+- **O-15 for the lead** (C4e, 2026-11-08; C4d's review: the power reviewer's P5 and the ci-docs reviewer's two
+  points, each reproduced by a separate refuter, none refuted; and points the C4d reviewers and docs writer left
+  open):
+  - Done as the lead decided:
+    - G1: every series a check hands to `decisionOf` is a copy that holds its own bars only (4.1 `copyOf`; 5.3; 7.3,
+      the Cut bullet and the units' series). The run plant `bufferReadE04` (8; 7.8 syn step 3): the cut passes it on
+      7e4dfcc (only poison and presence fail) and fails it on C4e's code. The hand job's grep step for reads through a
+      memory block, with its allow-list, as defense in depth only (7.8 hand step 9).
+    - G2: the `WORKERS=0` against 4 step compares the clean runs CMP-N 1001 (a job of its own, `w0-n-1001`), CMP-C
+      7101 and O 6003, which reach every kind of pool run the synthetic runs reach but stage 2's `suspect13` checks
+      (7.8 syn step 3 lists what is and is not compared). It fails on C4d's ci-docs refuter 2's mutant, on the memo
+      mutant M on 7e4dfcc and on M2 on C4e's code, and passes on C4e's code.
+    - G3: 7.8 syn step 3's "only in the `WORKERS=4` dump" corrected to `WORKERS=0`.
+    - G4: the run plant `carriedCountS01` (8; 7.8 syn step 3), caught on b3a2c43, 7e4dfcc and C4e's code; the list
+      of trial kinds a run plant reaches, and of those that must get one before step 4 (8, after the table).
+    - G5: the poison's scope shown from the code (7.3's Poison bullet); no code change.
+    - G6: the stale code comments fixed; `cutTfSet` removed (4.1).
+    - Rule 1 holds: every identity run and every C4d plant gives C4d's bytes (12.1's C4e paragraph).
+  - To confirm:
+    - the plant names `carriedCountB06` (from C4d), `carriedCountS01` and `bufferReadE04` (the lead's tasks gave them
+      as examples; 8);
+    - the cost: one step-4 run at `WORKERS=4` is estimated at 3.95 h at the stand-in target count (10.14 h at every
+      bar), and at 5.76 h (16.13 h) if all 11 finite B items cost what B06 costs: inside 6 h, with 0.24 h to spare,
+      measured on a slower day than C4d's (12.5);
+    - the CI time: the longest syn job is now `w0-n-1001`, about 2.4 h locally; GitHub's runner time is not
+      measured (12.5);
+    - this round's text: 4.1, 5.3, 7.3, 7.7, 7.8, 8, 10, 11 (O-14, O-15) and 12 (rules 2 and 3, the paragraphs after
+      the method, 12.1, 12.2, 12.4 and the new 12.5).
+  - Open points the C4e docs writer found (not asked in C4e's task):
+    - No run plant makes `cut.chosen.second` or stage 2's `suspect13` checks fail (8, after the table). The decision
+      code of `cut.chosen.second` is `cutGotAt`, which the stage-0 plants reach, but no run exercises the stage-2
+      handling of its failure (7.7's D9: stage 2's numbers withheld, exit 3). A plant like `chosenCutFirstDiff` on
+      `cut.chosen.second` would; whether to add one is the lead's choice.
+    - The `WORKERS=0` step's allowance for `MODE` (`mode=` in print.txt, `"mode"` in config.json) was tested on a
+      walkfiles dump edited to look like a `MODE=syn` dump, not on a real `MODE=syn` dump, and the workflow has never
+      run on GitHub. The first GitHub run of the three jobs is its first real test (7.8 syn step 3).
+  - `lawsearch-dump.md` needs no change: no output file and no compared field changes its meaning. The `WORKERS=0`
+    step writes `<RUN>/ts-w0` after the Python step of its job (or in a job without one) and compares TS files with
+    TS files only; the Python never reads it. The new plants are plant runs, which the Python does not compare
+    (`lawsearch-dump.md` 2).
+  - No spec question.
 
 ---
 
@@ -1670,6 +1992,10 @@ The rules (the lead's hard rules, C4b):
        prefix only when a trial reads them). Each trial's decision is `decisionOf`: `candidatesOf` walked from bar 0
        to k, then `reasonOf` at bar k for each emitted row at k. `classify` is not called. Why `reasonOf` at bar k
        alone gives the main run's reason, and what that rests on: 12.2 (1).
+     - (C4e, 2026-11-08; the lead's G1, as the lead's hard rule 2 now says it) "The cut series for k alone" means a
+       series that **holds only its own bars**: the prefix is a copy of bars 0 … k, each typed array with a memory
+       block of its own (4.1 `copyOf`). Until C4e it was a set of views whose memory block held the uncut bars after k
+       (7.3; 8's `bufferReadE04`). The same holds for every check series: 7.3, the units' series.
    - Work may be shared only between computations that see the same cut series: for example, at one target k, the
      cut set, its higher bars and the cut pair's indicators can be built once and read by every trial decided at k.
    - Nothing is taken from the uncut series, or from another k's cut series, unless it is provably the same value by
@@ -1682,6 +2008,9 @@ The rules (the lead's hard rules, C4b):
      series poisoned after T, or the bars deleted, and the higher bars rebuilt from them, as 7.3 says).
      - (C4d, 2026-11-07) As the code is, poison edits only the trial's pair (7.3's Poison bullet; the reading is for
        the lead to confirm, 11 O-14). Presence deletes as 7.3 says.
+     - (C4e, 2026-11-08; the lead's G5) The lead accepts that reading only if it is exact. 7.3's Poison bullet now
+       shows from the code that the decision at T reads nothing else that the spec's 毒 would change, so poisoning
+       the other pairs, the other timeframe and the 1-minute bars could not change it. No code change.
    - A shortcut that is exact only because today's 12 trials happen to have a property is not allowed. For example:
      that no built item reads another pair's bars or the higher timeframe, so that a target's cut could leave the
      other pairs or the higher bars uncut. It must stay exact for every item the registry can build later.
@@ -1698,6 +2027,14 @@ The rules (the lead's hard rules, C4b):
        n. This holds by construction for any change of the per-bar code, of the builds or of the items that keeps
        every build and cache keyed by the Ind and adds no module-level state that survives between `candidatesOf`
        calls (12.2 (2)). Within that condition it does not depend on the per-bar code keeping no state.
+       - (C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's q1; the lead's G1) Also
+         through the series' memory block (a typed array or `DataView` over `C.buffer`), since C4e: every check
+         series holds its own bars only (4.1 `copyOf`). Until C4e the cut prefix was a view, so such a read saw the
+         uncut bars after k inside C4d's condition, and the cut passed it: the reviewer's P5 (B06's keep read through
+         a `Float64Array` over the buffer; on h1, 0 of 1,972 bars differing on the view against 967 on a copy) and
+         the refuter's q1 (E04 read through a `DataView`). Poison and presence, which make fresh arrays, were the
+         backstop. The run plant `bufferReadE04` (8) now guards it: the cut passes it on 7e4dfcc and fails it on C4e's
+         code.
        - (C4d, 2026-11-07; C4c's review, finding 2; the lead's F2) Until C4d this bullet said "for any future change
          of the per-bar code, of the builds or of the items", with no condition. Module-level state is not part of
          "the check's own series alone", so the construction does not cover it. C4c refuter 2's mutant B changed only
@@ -1721,7 +2058,9 @@ The rules (the lead's hard rules, C4b):
        A sampling guard may be added as defense in depth, never in place of the construction.
      - The run plants `lastBarStateG3` and `lastBarStateG5` (8) must keep failing the cut on CMP-C 7101 (7.8 syn
        step 3). On C4b's one-bar path they did not (exit 0). (C4d, 2026-11-07) So must `carriedCountB06` (8), on
-       m15.B06 or h1.B06: with B06's window (b3a2c43 and 876b9e4) it gave exit 0.
+       m15.B06 or h1.B06: with B06's window (b3a2c43 and 876b9e4) it gave exit 0. (C4e, 2026-11-08) So must
+       `carriedCountS01`, on m15.S01 or h1.S01, and `bufferReadE04`, on an E04 trial: with the cut prefix a view
+       (7e4dfcc) the cut passed `bufferReadE04`.
      - Poison and presence: their units call the same `decisionOf` on their own edited series (7.3).
      - How each part of today's code keeps this, and what guards it: 12.1. The two places where it still rests on
        how future code is written: 12.2.
@@ -1731,6 +2070,9 @@ The rules (the lead's hard rules, C4b):
    - (C4d, 2026-11-07; C4c's review, finding 2) Today's code meets this by construction only while every build and
      cache is keyed by the Ind and no module-level state survives between `candidatesOf` calls (12.1 item 9, 12.2
      (2)). The yml's step that compares `WORKERS=0` with 4 on one run (7.8 syn step 3) is defense in depth for it.
+     - (C4e, 2026-11-08; the lead's G2) On three clean runs now (CMP-N 1001, CMP-C 7101, O 6003), which between them
+       reach every kind of pool run the synthetic runs reach but stage 2's `suspect13` checks (7.8 syn step 3). Still
+       defense in depth, not a guard by construction.
 4. **No change to the spec, to what is checked, or to how many targets and probes there are** (7.3's targets of
    each cut check, poison's 100 signals and 100 bars and 13 (ii)'s 1,000, presence's (i) and (ii)).
 
@@ -1752,6 +2094,13 @@ share hid them, and the comparison could not show it, because both missed them t
 (exit 3, caught); without the window, G3 and G5 fail on B06 too (7.8 syn step 3). So a plant must reach each path
 under test, here each item's own cut, and the code must catch it whatever b3a2c43 does.
 
+(C4e, 2026-11-08) The same held for the memory block: b3a2c43, C4c and C4d all cut on views, so a read through the
+memory block passed the cut on every one of them alike (the power reviewer's P5 on b3a2c43 too). C4e ran
+`bufferReadE04` on 7e4dfcc (the cut passed; only poison and presence failed) and on the new code (the cut failed on
+the four E04 trials); it was not run on b3a2c43. And no run plant reached the S path through `candidatesOf`'s loop
+until `carriedCountS01` (the lead's G4), which b3a2c43, 7e4dfcc and the new code all catch. Which trial kinds a run
+plant reaches now, and which must get one before step 4: 8, after the table.
+
 ### 12.1 How each part of the code keeps the rules, and what guards it (C4c, 2026-11-07; C4b's review, finding 3)
 
 Each part below is in the code now (C4c's code; C4b's speed-ups "free", "share" and "par", less `candidatesAt`).
@@ -1772,6 +2121,28 @@ heavy process on the machine:
   (7.8 syn step 3).
 - `MODE=hand`: 103 pass, 0 fail and 41 skip; the 21 TS hand plants exit 4 with b3a2c43's outputs.
 
+(C4e, 2026-11-08) The code now is C4d's with these changes: every check series is a copy that holds its own bars
+only (`copyOf` in place of `viewOf`, and `cutGotAt`'s bar starts for the holes sliced; item 11), the run plants
+`carriedCountS01` and `bufferReadE04` (8), `cutTfSet` removed (4.1), and comments. The C4e integrator's runs, each
+at `WORKERS=4` with no other heavy process (but a brief one during N 1001), logs and kept files in the C4e scratch
+folder (`c4e/`):
+- N 1001 (85 files), C 7101 (83, run twice), FLIP 1001 (84) and O 6001–6004 (77 each): every `ts/` file is
+  byte-identical to C4d's (print.txt without `time.*`). FLIP 1001's flip judgement gives C4d's result (RESULT pass),
+  and the O step passes on each O run.
+- C4d's nine run plants, `reasonUsesFuture`, `chosenCutFirstDiff`, `lastBarStateG3`, `lastBarStateG5` and
+  `carriedCountB06` (C 7101) and `avoidFull`, `secondHalfAll`, `dropSecondStrata` and `blindRowHit` (N 1001): every
+  file's sha256 equals C4d's kept files (print.txt without `time.*`). No existing plant newly fails: on these runs
+  the copies change no decision.
+- The new plants: 7.8 syn step 3 and 8.
+- The `WORKERS=0` step (as extracted from the yml) on N 1001, C 7101 and O 6003: exit 0, every file equal (7.8 syn
+  step 3).
+- `MODE=hand`: 103 pass, 0 fail and 41 skip; the 21 TS hand plants exit 4 with b3a2c43's outputs; the yml's
+  hand-plant step exits 0 (21 TS plants and 20 Python twins caught). The gates, and the yml's `CUT_MAX` and
+  `WORKERS` refusal steps, pass. `deno check`, `deno lint` on the 8 changed files and the stage-0 import graph pass.
+- The code went through three versions that differ in comments only (`c4e/logs/v1-v2-comment-only.txt`,
+  `v2-v3-comment-only.txt`): the runs before 06:51 UTC used v1, the later ones v2, and v3 changed one comment in
+  `lawsearch-par.ts`. `MODE=hand` and the hand-plant step gave the same lines on all three.
+
 1. **`candidatesOf`, one walk** (`lawsearch-events.ts`; C4c restores b3a2c43's path).
    - What: `prepare` (① and what ②–④ read: the builds through `buildOf`, the kind, the first bar whose condition is
      not 無し), then b3a2c43's loop over i = 0 … n − 1, then `finish` (⑤ and warmOk). C4c writes the loop's body
@@ -1784,10 +2155,14 @@ heavy process on the machine:
      - (C4d, 2026-11-07; C4c's review, finding 2) The power by construction of 12 rule 2 holds for any change that
        keeps every build and cache keyed by the Ind and adds no module-level state that survives between
        `candidatesOf` calls (12.2 (2)). (C4d) It now holds for B06 too: its cut walks the prefix from bar 0 (7.3).
+       (C4e, 2026-11-08) And however the series is read, through its elements or through its memory block: every
+       check series holds its own bars only (item 11).
    - CI: `--run`'s comparison of `signals/` and everything built on them (every syn job but O's, and each flip job's
      FLIP=1 run); the hand examples of spec 5 (A.4) and the hand plant `noRisingEdge` (A.4.1, A.4.33, A.4.34); the
      run plants `lastBarStateG3`, `lastBarStateG5` and `reasonUsesFuture` on CMP-C 7101; the O step. (C4d,
-     2026-11-07) Also the run plant `carriedCountB06` on CMP-C 7101, the one plant that reaches B06's path.
+     2026-11-07) Also the run plant `carriedCountB06` on CMP-C 7101, the one plant that reaches B06's path. (C4e,
+     2026-11-08) Also `carriedCountS01` (the S path inside the loop) and `bufferReadE04` (a read through the memory
+     block, E04's path) on CMP-C 7101 (8).
    - Local: the restore designer's comparison of C4c's `candidatesOf` with b3a2c43's on N 1001, with 682 stand-in
      trials and the built ones, both timeframes and five pairs, the whole series and 9 prefixes, and the options
      none, `noRisingEdge` and answer-knowing: 204,600 units, 310,625,813 rows, none differs.
@@ -1808,12 +2183,18 @@ heavy process on the machine:
        or any other module-level state would carry one series' values into another's. The checks would not see it,
        and the bytes could then depend on `WORKERS` (12.2 (2)). The `BUILDS` comment in `lawsearch-events.ts` says
        so too.
+       - (C4e, 2026-11-08) A cut prefix no longer shares the uncut series' memory block: it is a copy (item 11).
+         So a cache keyed by a series' memory block no longer carries the uncut series into a cut, but a cache keyed
+         by pair, trial or bar still would (12.2 (2): mutant M2).
    - CI: `checkRegistry` runs in every step that runs the program. The O step: `answerKnowingE26`'s build reads
      C[i+1], so if a cut or poisoned Ind were given a build of the uncut series, the cut and the poison would stop
      failing on the E26 trials and the step would fail (reasoned; no such mutant was run).
    - Not guarded: a cache keyed by anything but the Ind (12.2). (C4d, 2026-11-07) Only defense in depth: the O step
      above and the yml's `WORKERS=0` against 4 step (7.8 syn step 3). With C4c refuter 2's module memo (keyed by
      the series' buffer) added to C4d's code, that step fails (7.8 syn step 3); it is not a guard by construction.
+     (C4e, 2026-11-08) On C4e's code that memo is inert (the copies give every prefix its own memory block: exit 0,
+     every file as the clean run's). The memo M2, keyed by the series' pair and timeframe, the trial and the
+     options, makes the step fail on C4e's code (7.8 syn step 3).
 4. **`donchianOf`'s monotone queues** (`lawsearch-ind.ts`; C4b "free").
    - What: HH and LL come from two monotone queues of bar indices (O(len) in all). `donchianScan`, b3a2c43's rescan,
      is kept for n that is not a whole number ≥ 1.
@@ -1876,11 +2257,16 @@ heavy process on the machine:
    - CI: every run step runs at `WORKERS=4` and is compared with the Python (`--run`) or checked by the O and plant
      steps; hand step 8 (the refusal). No CI step compares two `WORKERS` values. (C4d, 2026-11-07) Superseded: the
      `cmp-c-7101` job now compares `lastBarStateG3` at `WORKERS=0` with its `WORKERS=4` dump, byte for byte (7.8 syn
-     step 3). It is defense in depth for rule 3, not a guard by construction.
+     step 3). It is defense in depth for rule 3, not a guard by construction. (C4e, 2026-11-08) The step now
+     compares the clean runs N 1001 (`w0-n-1001`), C 7101 and O 6003: stage 0's pool runs, `cut.chosen.first` and
+     `cut.chosen.second` on both timeframes, and stage 1's `suspect13` checks; not stage 2's `suspect13` checks (7.8
+     syn step 3).
    - Local: C4c's C 7101 `reasonUsesFuture` at `WORKERS` 0, 1 and 4 (77 of 77 files identical, and identical to
      C4b's); the C4c restore designer's runs at 0, 1 and 3; C4b's at 0, 1 and 2. (C4d, 2026-11-07) C4d's:
      `lastBarStateG3` at `WORKERS=0` against 4 (the yml step as extracted: exit 0, 77 files equal) and
-     `reasonUsesFuture` at `WORKERS=1` against 4 (77 of 77, and equal to C4c's kept files).
+     `reasonUsesFuture` at `WORKERS=1` against 4 (77 of 77, and equal to C4c's kept files). (C4e, 2026-11-08)
+     C4e's: the new step on N 1001, C 7101 and O 6003 (exit 0; 85, 83 and 77 files equal), and on the mutants mutR,
+     M (on 7e4dfcc) and M2 (exit 1; 7.8 syn step 3).
 10. **`bigmoveOf`'s σ, rewritten exactly** (`lawsearch-ind.ts`; C4d, 2026-11-07; the lead's F1 allowance).
     - What: 5.1's last bigmove bullet. The usable r are packed into `ru` in bar order, with `at[t]` counting them
       before bar t. `one(i)` is the old body for bar i on `ru`. Four bars whose windows have one count (at least
@@ -1910,6 +2296,27 @@ heavy process on the machine:
     - CI: the hand examples of B06; `--run`'s comparison of `ind/` (`BM_r`, `BM_ok`, `BM_sigma`, `BM_z`) and of
       `signals/` on every syn job but O's (spec 17.2 compares σ and z to relative 1e−9, so `--run` alone would not
       see a last-bit change: the bit-for-bit evidence is local).
+11. **Every check series a copy** (`lawsearch-bars.ts` `copyOf`, `prefixSeries`, `windowSeries`;
+    `lawsearch-checks.ts` `cutGotAt`; C4e, 2026-11-08; C4d's review, the power reviewer's P5 and the power refuter's
+    q1; the lead's G1).
+    - What: `prefixSeries` and `windowSeries` return a copy of the asked bars, each of the 28 typed arrays sliced into
+      a memory block of its own (4.1); `cutGotAt` slices each pair's bar starts for the holes. Every other series a
+      check hands to `decisionOf` was already made of fresh arrays (7.3, the units' series).
+    - Exact: a typed array's `slice` copies the elements' bytes, so the copy holds the same values bit for bit at the
+      same indices 0 … n − 1, with the same n. A decision can differ only where code read past n − 1 through the
+      memory block. Within `research/lawsearch*.ts` the hand job's grep step finds no such read outside its
+      allow-list (the one listed, `storeOf`, is a plant); the modules they import are not covered by it. The evidence
+      that no decision changed is the identity runs: every identity run and every C4d plant gives C4d's bytes (the
+      C4e paragraph above).
+    - Power: a read through a series' memory block now sees only the series' own bars, on the cut too, so the cut sees
+      a look-ahead written that way (12 rule 2; 8's `bufferReadE04`). It does not change 12.2 (2): module-level
+      state is still covered only as defense in depth.
+    - CI: the run plant `bufferReadE04` on CMP-C 7101 (the cut must fail on an E04 trial; with the cut prefix a view,
+      on 7e4dfcc, it passes, so the plant step fails if the prefix becomes a view again); the hand job's grep step
+      (7.8 hand step 9; defense in depth: it also fails if `copyOf` goes back to `subarray`, and catches a new
+      `.buffer`, `byteOffset`, `ArrayBuffer` or `DataView` read in `research/lawsearch*.ts`); `--run` and the O step,
+      for the unchanged outputs.
+    - Local: the identity runs above; the cost of the copies (12.5).
 
 ### 12.2 Open points for the lead (C4c, 2026-11-07)
 
@@ -1948,6 +2355,13 @@ These are not regressions: they are the same in b3a2c43 and in both of C4c's des
        the G3 look-ahead always on (no plant flag), `WORKERS=0` gave exit 0 with every file as the clean run's: the
        look-ahead was invisible. `WORKERS=4` gave exit 3 with about 75,400 noise rows in cut_fail.csv. b3a2c43 with
        the same memo gave exit 0.
+       - (C4e, 2026-11-08) Since C4e a cut prefix is a copy with a memory block of its own (12.1 item 11), so it no
+         longer shares that key: M added to C4e's code is inert (`WORKERS=4` exit 0, every file as the clean run's).
+         That closes M's key, not the residual: mutant M2, the same memo keyed by the series' pair and timeframe,
+         the trial and the options, gives every series of one pair and timeframe one key, copies included. On C4e's
+         code M2 gave `WORKERS=0` exit 0 (the main thread's memo holds the main run's rows and hides every check)
+         and `WORKERS=4` exit 3 (all 36 cut, poison and presence rows of stage 0 failed: each worker's memo holds
+         stale rows).
      - Mutant B changes only the loop's body and adds module-level state (the longest n seen per trial and pair,
        read as "the last bar"). It was silent at `WORKERS=0` (exit 0, every file as the clean run's) and caught at
        `WORKERS=4` (exit 3, the plant's 461 rows).
@@ -1957,10 +2371,15 @@ These are not regressions: they are the same in b3a2c43 and in both of C4c's des
      - the yml's step that compares `lastBarStateG3` at `WORKERS=0` with its `WORKERS=4` dump byte for byte (7.8 syn
        step 3). With M added to C4d's code, that step fails (exit 1): the `WORKERS=0` run exits 0 and the
        `WORKERS=4` run exits 3.
+       - (C4e, 2026-11-08; the lead's G2) Now the step compares the clean runs CMP-N 1001, CMP-C 7101 and O 6003,
+         which run the pool for stage 0's checks, `cut.chosen.first`, `cut.chosen.second` and stage 1's `suspect13`
+         checks; stage 2's `suspect13` checks are reached by no synthetic run (7.8 syn step 3). It fails on C4d's
+         ci-docs refuter 2's mutant (state read only by one-trial cut jobs, which the `lastBarStateG3` step missed),
+         on M on 7e4dfcc and on M2 on C4e's code, and passes on C4e's code.
      - Refuter 2's caveat: in both mutants the clean CMP-C 7101 run at `WORKERS=4` already exits 3 (noise rows, or
        the plant's rows). CI caught them that way before the new step, but only as a side effect of how jobs reach
        the workers. The new step compares the two values directly. It still sees such state only where it changes
-       that one run's bytes.
+       that one run's bytes. (C4e, 2026-11-08) These three runs' bytes now.
 3. **To confirm:** the plant names `lastBarStateG3` and `lastBarStateG5` (8; the names of both C4c designers), and
    this round's text: 3, 5.1–5.3, 7.3, 7.7, 7.8 and 8, 11 O-13, and 12 (rule 2 and 12.1–12.3).
    - (C4d, 2026-11-07) The lead confirmed the two names and decided (1) and (2) above, and 4 below, in C4d's task.
@@ -2059,4 +2478,81 @@ folder (`c4d/timing.txt`, `c4d/estimate.py`, `c4d/estimate.txt`), on this machin
   `bigmoveOf` rewrite the finite case would not fit even at the stand-in count (7.16 h).
 - CI (not measured on GitHub): the `cmp-c-7101` job gains one plant run (`carriedCountB06`, 358 s locally) and the
   `WORKERS=0` step (about 1,050 s locally), and every syn job's TS run is longer as above (N 1001's TS run alone was
-  1,550 s). The syn job's timeout is 360 minutes.
+  1,550 s). The syn job's timeout is 360 minutes. (C4e, 2026-11-08: superseded by 12.5's CI times.)
+
+### 12.5 What the copies cost, step 4 and the CI time (C4e, 2026-11-08)
+
+C4e makes every check series a copy (12.1 item 11), adds two run plants to `cmp-c-7101` (8) and moves the
+`WORKERS=0` comparison to three clean runs, one of them in a new job (7.8 syn step 3). The numbers below are the C4e
+integrator's, in the C4e scratch folder (`c4e/timing.txt` from `c4e/timing.py`, `c4e/estimate.py` and
+`c4e/estimate.txt`), on this machine (4 CPUs, 15 GB RAM). The machine restarted at 06:41 and 10:40 UTC that day and
+ran slower after 06:41: 7e4dfcc itself took 497 s on clean C 7101 that day, against C4d's 433 s on C4d's day. So the
+same-day pairs below are the fair comparison, and the ratios against C4d's own runs include the slower day.
+
+- **Measured: whole runs** at `WORKERS=4`, one heavy process at a time (no other heavy process, but a brief other
+  one during N 1001 and during 7e4dfcc's `carriedCountS01` run), `time.total` from print.txt:
+  - Same day, one after the other, clean C 7101: C4e's code 542 s against 7e4dfcc's 497 s (1.09 times). By stage:
+    `cut.m15` 1.07, `cut.h1` 1.09 and stage 0 1.07 times; stage 2 1.12 times. The one-trial chosen cuts on h1 took
+    1.62 times (`cut.chosen.first.h1`, 7.6 s against 4.7 s) and 1.38 times (`cut.chosen.second.h1`, 18.8 s against
+    13.7 s): there the copy of the prefix is most of the work, because one cheap trial is cut.
+  - Against C4d's own runs (C4d's day): the 18 `WORKERS=4` runs with a C4d counterpart took 9,218 s against 7,710 s
+    (1.20 times). N 1001 1,892 s against 1,550 s (1.22); C 7101 471 s against 433 s (1.09; run before the first
+    restart); FLIP 1001 1,841 s against 1,498 s (1.23); O 6001–6004 1.19–1.24 times (O 6003 and 6004's chosen m15
+    cut 1.42–1.43 times); the C 7101 plants 1.13–1.16 times. The new plants: `carriedCountS01` 344 s and
+    `bufferReadE04` 379 s.
+  - One thread (`WORKERS=0`, the yml step's runs): C 7101 1,384 s (C4d's `lastBarStateG3` at `WORKERS=0`: 1,051 s),
+    O 6003 2,226 s, N 1001 6,665 s (stage 2 3,952 s, of which `cut.chosen.second.m15` 3,668 s).
+  - Peak RSS 2.9–3.5 GB for each run that reaches the checks.
+- **Measured: the copy per target**, by C4b's timer harness unchanged, C4e's code and 7e4dfcc alternated on the idle
+  machine the same day, on the same targets, with the same result sha256s (22 jobs, none disturbed):
+  - stage 0's cut of the 6 built trials: m15 +1.68 ms per target (9.82 against 8.13 ms) and, with 682 stand-in
+    trials sharing the target, +1.33 ms (25.13 against 23.80 ms), at mean k 37,241; h1 +0.22 ms (2.35 against 2.13)
+    and +0.49 ms (7.07 against 6.58);
+  - the 682 stand-ins' cut: m15 +2.95 ms (81.0 against 78.1 ms; 7e4dfcc's two repeats were 76.0 and 80.1 ms, so the
+    noise is about ±2 ms); h1 +1.02 ms (19.85 against 18.83 ms);
+  - the chosen m15 cut of the second half: +1.1 to +1.35 ms per target.
+  - These agree with the C4d power reviewer's measurement of the copy, about 1.16 ms per m15 target (one thread, on
+    a shared machine).
+- **Estimated: one step-4 run** (682 trials per timeframe) at `WORKERS=4`, by C4b's method as in 12.3 and 12.4: the
+  measured costs per target, per trial and per chosen target from the C4e timer runs, times measured counts; the
+  rest of the run from C4e's N 1001 run. Low is the stand-ins' target count (m15 120,385 and h1 47,908 targets);
+  high is every bar a target (372,320 and 93,080).
+
+  | code | low | high | parts (stage-0 cut; poison and presence; chosen cuts; the rest) |
+  |---|---|---|---|
+  | C4e (every check series a copy) | 3.95 h | 10.14 h | 2.97–8.89 h; 0.71 h; 0.15–0.42 h; 0.12 h |
+  | C4e, if all 11 finite B items cost what B06 costs (12.4) | 5.76 h | 16.13 h | 4.78–14.30 h; 0.71 h; 0.15–1.00 h; 0.12 h |
+  | C4d, measured on C4d's day (12.4) | 3.64 h | 9.39 h | 2.77–8.28 h; 0.67 h; 0.10–0.34 h; 0.11 h |
+  | C4d, finite, on C4d's day (12.4) | 5.44 h | 15.34 h | 4.57–13.68 h; 0.67 h; 0.10–0.88 h; 0.11 h |
+
+  - The copy itself adds about 0.11 h at the low count (2.95 ms × 120,385 + 1.02 ms × 47,908 = about 404 s) and
+    about 0.33 h at the high count. The rest of the rise from C4d's figures is the slower day: 7e4dfcc's own
+    stand-ins took 78.1 ms per m15 target that day against 75.4 ms on C4d's day, and the probes (poison and
+    presence, which the copies do not touch) were 4–15% slower.
+  - The finite rows rest on 12.4's assumption (B06's measured prefix cost for each of the other 10 finite items),
+    not on a measurement. These hours are arithmetic, not a measured step-4 run, and the items are stand-ins.
+- **Verdict** (the C4e integrator's, from the table): one step-4 run at `WORKERS=4` fits the 6-hour job at the
+  stand-in target count: 3.95 h with B06 the only finite item built, and 5.76 h if all 11 finite items cost what B06
+  costs, inside 6 h but at the limit (0.24 h to spare, on a slow day). If every bar were a target it would not fit
+  (10.1–16.1 h).
+- **CI time.** Local seconds on this 4-CPU VM that day, at `WORKERS=4` unless named. GitHub was NOT measured:
+  `lawsearch.yml` has never run on GitHub (every commit that touches it is `[skip ci]`, and the workflow is not
+  registered). The repository is public, so by GitHub's documentation `ubuntu-latest` has 4 vCPUs and 16 GB; that
+  was not checked. `MODE=syn`'s generation time is not included (not measured here). The Python `--run` times are
+  the C4d comparer's local 148–200 s.
+
+  | job | local, about | made of |
+  |---|---|---|
+  | `hand` | well under 5 min | the grep step under 1 s; the hand-plant step 13–15 s; `MODE=hand` and the 21 hand plants 6–8 s; `deno check` about 30 s |
+  | `cmp-n-1001` | 4,500 s (1.25 h) | TS 1,923 s; Python ~190 s; the plants 2 + 1,919 + 16 + 430 s (its `WORKERS=0` step is no longer here) |
+  | `w0-n-1001` (new) | 8,600 s (2.4 h) | TS 1,923 s; the `WORKERS=0` step 6,668 s. The longest job |
+  | `cmp-n-1002` | 2,100 s | not measured: about `cmp-n-1001`'s TS run and its Python |
+  | `cmp-c-7101` | 4,800 s (1.33 h) | TS 474 s; Python ~176 s; 7 plants 397 + 405 + 405 + 401 + 405 + 346 + 381 = 2,740 s; the `WORKERS=0` step 1,401 s |
+  | `o-6003` | 2,950 s (0.8 h) | TS 714 s; the O step; the `WORKERS=0` step 2,229 s |
+  | `o-6001`, `o-6002`, `o-6004` | 586–696 s each | TS and the O step |
+  | `flip` (5 jobs), `smoke` | as in C4d | each flip job runs two TS runs (FLIP 1001's took 1,846 s), the judgement (45 s) and the Python |
+
+  - GitHub estimate (arithmetic, not measured): if the runner is as fast as this VM, the longest job,
+    `w0-n-1001`, takes about 2.4 h; at 1.5 times slower about 3.6 h, at 2 times about 4.8 h. All are under the
+    360-minute timeout, but the 2-times case leaves little margin. Without the split (N 1001's `WORKERS=0` step
+    inside `cmp-n-1001`), that job would take about 3.1 h locally (4,480 + 6,668 s).
