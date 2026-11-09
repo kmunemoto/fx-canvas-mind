@@ -1,0 +1,46 @@
+// 法則探し (docs §8.136): one worker of research/lawsearch-par.ts (C4b, the speed-up "par"). It holds one universe and
+// one task at a time (both sent again at each run of the pool) and answers each job with lawsearch-checks.ts'
+// runUnitJob, the very function the checks call when they run their units in place. It reads no file and no
+// environment and writes nothing; it keeps no state but the universe, the task and the task's UnitCache (poison's
+// uncut holes and tables, functions of the universe and the task). C4f: the universe is a clone of the stage's
+// snapshot and the task's trials and avoid table are the checks' own (lawsearch.ts, H1); the task is sealed here
+// again (frozen task and trials, a read-only avoid table: lawsearch-checks.ts sealTask, H2), since a structured clone
+// is neither frozen nor read-only. The modules it loads are its own copies, so any
+// module-level state in them that survives between candidatesOf calls would differ from the main thread's; the
+// answers are the same bytes for any WORKERS only while there is none but the builds keyed by the Ind and the
+// holes' clock cache (lawsearch-par.ts's header; lawsearch-design.md 12.1, 12.2 (2); C4d). The yml compares three
+// runs at WORKERS=0 and 4 as defense in depth (C4e).
+
+import { runUnitJob, sealTask } from "./lawsearch-checks.ts";
+import type { UnitCache, UnitJob, UnitTask } from "./lawsearch-checks.ts";
+import type { Universe } from "./lawsearch-types.ts";
+
+type Msg =
+  | { t: "universe"; u: Universe }
+  | { t: "task"; tid: number; task: UnitTask }
+  | { t: "job"; tid: number; seq: number; job: UnitJob };
+
+const scope = globalThis as unknown as { onmessage: ((e: MessageEvent) => void) | null; postMessage: (m: unknown) => void };
+
+let u: Universe | null = null;
+let task: UnitTask | null = null;
+let tid = 0;
+let cache: UnitCache = {};
+
+scope.onmessage = (e: MessageEvent) => {
+  const m = e.data as Msg;
+  if (m.t === "universe") {
+    u = m.u;
+    task = null;
+    tid = 0;
+    cache = {};
+  } else if (m.t === "task") {
+    // C4f (the lead's H2): the clone made read-only again (frozen task and trials, read-only avoid table)
+    task = sealTask(m.task);
+    tid = m.tid;
+    cache = {};
+  } else if (m.t === "job") {
+    if (u === null || task === null || m.tid !== tid) throw new Error(`lawsearch-par worker: job ${m.seq} of task ${m.tid} before its universe or task`);
+    scope.postMessage({ tid, seq: m.seq, out: runUnitJob(u, task, m.job, cache) });
+  }
+};
