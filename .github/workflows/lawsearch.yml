@@ -486,9 +486,14 @@ jobs:
           # pass every earlier step but whose WORKERS=0 run differs. On the clean runs that is a change that makes a
           # check fail, or the main run differ, at WORKERS=0 only; no such mutant has been shown. A change that HIDES a
           # look-ahead at WORKERS=0 only (state in the main thread's module instances that hands the checks the main
-          # run's answer, as M did on 7e4dfcc) gives the same bytes as WORKERS=4 on a clean run, where there is
-          # nothing to hide; only the plant run shows it (the cut passes at WORKERS=0, exit 0 against 3). It cannot see
-          # state that gives the same bytes at both settings. Not compared: stage 2's suspect13 checks (no synthetic run
+          # run's answer) gives the same bytes as WORKERS=4 on a clean run, where there is nothing to hide; only the
+          # plant run shows it. C4f's test mutant w0hide did exactly that (module-level state that turns
+          # lastBarStateG3 off on every series shorter than the first one its thread saw: at WORKERS=0 the main run's
+          # full series come first, so every cut prefix gets the main run's decision; a worker first sees a check's
+          # own series): at WORKERS=4 the cut caught the plant (exit 3, the same files as the clean code's plant run),
+          # at WORKERS=0 every check passed (exit 0 against 3), and this step failed on it (its plant part; its clean
+          # part was not run on the mutant). It cannot see state that gives the same bytes at both settings, nor such
+          # state hiding a look-ahead that no plant here carries. Not compared: stage 2's suspect13 checks (no synthetic run
           # reaches them: O runs never open stage 2, and N, C and FLIP have no suspicion hit), the FLIP runs and the
           # other plants' runs, and the pool runs of trials no synthetic run builds (the higher-timeframe F02 / S02 path).
           r=research/out/lawsearch/${{ matrix.name }}
