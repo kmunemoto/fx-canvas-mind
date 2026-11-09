@@ -22,6 +22,14 @@ the "meaning" columns are the spec's.
 ```
 
 - (C4a, 2026-11-05) `signals/`, `ind/`, `bars/`, `htf/` and `ts/cut_fail.csv` are sealed until stage 2 (12).
+- (C4f, 2026-11-08; `lawsearch-design.md` 2.3, 7.7) Two TS endings leave no complete `ts/`. Neither is ever given to
+  the Python: in CI the TS step fails first, and the Python step does not run.
+  - A TS run whose stage universe changed after it was loaded exits 6 and removes its own dump folder (`ts/`, or
+    `plant-<name>/`), so no file of it is left and there is nothing to compare. This exit 6 is the TS's. The
+    comparator's own 6 (10) is a stop of spec 8.5, a different thing.
+  - A TS run that ends with exit 1 writes no `checks.csv` and no `print.txt`; the files written before the error stay
+    in its folder. Exit 1 comes from a crash, from the TS guard's `SHARED` line, or from a write into a frozen or
+    read-only object.
 
 - A day file is one JSON object `{"status":0,"data":[{"openTime":"<ms>","open":"<dec>","high":"<dec>","low":"<dec>",
   "close":"<dec>"},…]}`. A day without bars has `"data":[]`. The prices have 3 decimals on the yen pairs and 5 on the
@@ -81,6 +89,11 @@ the "meaning" columns are the spec's.
   - (C4a, 2026-11-05; the lead's E9) The plant `secondHalfAll` stays as it is: the TS refuses at stage 2 (exit 2)
     and writes no `checks.csv` and no `print.txt`; the files written before the refusal stay in its folder, and only
     the exit is checked.
+  - (C4f, 2026-11-08; `lawsearch-design.md` 8) The plants `seriesStashE04`, `trialStashE04` and `avoidStashR3` stop
+    in stage 0, before any check. `seriesStashE04` exits 6 and leaves no folder. `trialStashE04` and `avoidStashR3`
+    exit 1 and leave `config.json` alone. CI checks their exit, their console line, and that no folder (or no
+    print.txt) is left. The plant
+    `chosenCutSecondDiff` writes every file, as any run that withholds stage 2's numbers does (11.14 (b)).
 
 ## 3. Formats (every CSV)
 
