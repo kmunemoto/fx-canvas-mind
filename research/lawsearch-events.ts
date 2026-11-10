@@ -208,16 +208,19 @@ const listenNext = (S: Series, i: number): number | null => {
 };
 
 // Plant judgeCacheCarryE04 (the C4g power judge's): a memo of the next close's sign per (pair, timeframe, bar start),
-// filled by every E04 series a realm sees (the first write wins; a tail shifted by poison, a jump over 2 %, is
-// skipped), kept in a module Map and in CacheStorage, which is read back at this module's evaluation in every realm
-// where CacheStorage exists (top-level await: CacheStorage is shared by the workers of one entry module, in one
-// process and across processes, on disk); on E04's trials a raw buy is dropped when the memo says the next close is
-// lower (a sell when higher). The main run fills it from its whole series; a check realm that ran an earlier unit
-// (presence: every real bar but the deleted ones) or an earlier process's units holds it. The read at evaluation is
-// the second exception above (it reads only this plant's cache, which only a run of this plant writes). C4g: the
-// lockdown deletes CacheStorage in every realm, and the cut's workers are fresh for each cut run, so a cut unit
-// meets no memo of a later bar and the cut fails.
-const JCC = new Map<string, number>();
+// filled by every E04 series a realm sees (forward: the bars after the furthest start already filled for its pair and
+// timeframe; a tail shifted by poison, a jump over 2 %, stops the fill), kept in a module Map and in CacheStorage,
+// which is read back at this module's evaluation in every realm where CacheStorage exists (top-level await:
+// CacheStorage is shared by the workers of one entry module, in one process and across processes, on disk); on E04's
+// trials a raw buy is dropped when the memo says the next close is lower (a sell when higher). The main run fills it
+// from its whole series; a check realm that ran an earlier unit (presence: every real bar but the deleted ones) or an
+// earlier process's units holds it. The read at evaluation is the second exception above (it reads only this plant's
+// cache, which only a run of this plant writes). (C4g: numeric keys, a forward fill and a look-up at raw signals only;
+// the judge's form made a string key per bar per call, which took a whole C 7101 run over half an hour in stage 0.)
+// C4g: the lockdown deletes CacheStorage in every realm, and the cut's workers are fresh for each cut run, so a cut
+// unit meets no memo of a later bar and the cut fails.
+type JccPair = { hi: number; m: Map<number, number> };
+const JCC = new Map<string, JccPair>();
 const JCC_NAME = "lawsearch-plant-judgeCacheCarryE04";
 const JCC_URL = "https://plant.invalid/judgeCacheCarryE04";
 let jccDirty = false;
@@ -226,40 +229,48 @@ if (jccCaches !== undefined) {
   try {
     if (await jccCaches.has(JCC_NAME)) {
       const r = await (await jccCaches.open(JCC_NAME)).match(JCC_URL);
-      if (r) for (const [k, v] of JSON.parse(await r.text()) as Array<[string, number]>) JCC.set(k, v);
+      if (r) for (const [k, hi, xs] of JSON.parse(await r.text()) as Array<[string, number, Array<[number, number]>]>) JCC.set(k, { hi, m: new Map(xs) });
     }
   } catch {
     // no CacheStorage
   }
 }
+// at most one write of the cache per 2 s per realm
 const jccFlush = () => {
   if (jccDirty || jccCaches === undefined) return;
   jccDirty = true;
   setTimeout(async () => {
     jccDirty = false;
     try {
-      await (await jccCaches.open(JCC_NAME)).put(JCC_URL, new Response(JSON.stringify([...JCC])));
+      await (await jccCaches.open(JCC_NAME)).put(JCC_URL, new Response(JSON.stringify([...JCC].map(([k, v]) => [k, v.hi, [...v.m]]))));
     } catch {
       // ignore
     }
-  }, 0);
+  }, 2000);
 };
-const jccSigns = (S: Series): Int8Array => {
+const jccSigns = (S: Series): ((i: number) => number) => {
+  const key = `${S.pi}|${S.key}`;
+  let e = JCC.get(key);
+  if (e === undefined) JCC.set(key, (e = { hi: -Infinity, m: new Map() }));
+  let lo = 0;
+  let hi = S.n;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (S.s[mid] <= e.hi) lo = mid + 1;
+    else hi = mid;
+  }
   let added = false;
-  for (let q = 0; q + 1 < S.n; q++) {
+  for (let q = lo; q + 1 < S.n; q++) {
     const a = S.C[q];
     const b = S.C[q + 1];
     if (Math.abs(b - a) > 0.02 * Math.abs(a)) break;
-    const k = `${S.pi}|${S.key}|${S.s[q]}`;
-    if (!JCC.has(k)) {
-      JCC.set(k, b < a ? 1 : b > a ? 2 : 3);
-      added = true;
-    }
+    e.m.set(S.s[q], b < a ? 1 : b > a ? 2 : 3);
+    e.hi = S.s[q];
+    added = true;
   }
   if (added) jccFlush();
-  const out = new Int8Array(S.n);
-  for (let q = 0; q < S.n; q++) out[q] = JCC.get(`${S.pi}|${S.key}|${S.s[q]}`) ?? 0;
-  return out;
+  const m = e.m;
+  return (i: number) => m.get(S.s[i]) ?? 0;
 };
 
 // Plant gmoWriteR (C4f's review, the refuter's gmoWriteR; C4g without the environment): the main run's first
@@ -351,7 +362,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
       // plants lastBarStateG3 / lastBarStateG5, carriedCountB06 / carriedCountS01, bufferReadE04, seriesStashE04 and
       // trialStashE04 (the header above)
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]) || (stashKey !== null && stashKey[i] === -10) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] < stashC[i]) || (rp2 !== null && rp2(i) === 1) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : Infinity)) < lsS.C[i]) || (jcc !== null && jcc[i] === 1);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]) || (stashKey !== null && stashKey[i] === -10) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] < stashC[i]) || (rp2 !== null && rp2(i) === 1) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : Infinity)) < lsS.C[i]) || (jcc !== null && jcc(i) === 1);
       raw0++;
       if (!dropped) {
         // ③
@@ -368,7 +379,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     // sell (k = 1), the same
     let s1 = NONE;
     if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]) || (stashKey !== null && stashKey[i] === -11) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] > stashC[i]) || (rp2 !== null && rp2(i) === 2) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : -Infinity)) > lsS.C[i]) || (jcc !== null && jcc[i] === 2);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]) || (stashKey !== null && stashKey[i] === -11) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] > stashC[i]) || (rp2 !== null && rp2(i) === 2) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : -Infinity)) > lsS.C[i]) || (jcc !== null && jcc(i) === 2);
       raw1++;
       if (!dropped) {
         if (keep1 === null || keep1[i] !== 0) {
