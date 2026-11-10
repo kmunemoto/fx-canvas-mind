@@ -76,7 +76,8 @@ const readFile = async (
   let body: unknown;
   if (!fresh || !src.fetch) {
     try {
-      body = JSON.parse(await Deno.readTextFile(path));
+      // (lawsearch C4g: through src.read when the caller gives one; ownerhold-data.ts Source)
+      body = JSON.parse(await (src.read ?? Deno.readTextFile)(path));
     } catch {
       body = undefined;
     }

@@ -42,7 +42,25 @@ const lastAtOrBefore = (xs: ArrayLike<number>, n: number, v: number): number => 
 // ---- spec 7 ----------------------------------------------------------------------------------------------------
 
 // m, h and PL of the trade with entry bar j and exit bar x (points; −0 never comes out)
+// Plant lenmemoEntryEarly (C4g, the lead's G5; C4f's review, the refuter's lenmemo with entryEarly): entryEarly's entry
+// bar j − 1, and a module-level memo of valuesAt keyed by the pair, the series key, the close times of the entry and
+// exit bars and the direction, switched on by the plant's first trade in the realm; every value is stored, and read
+// back on series longer than 16 bars (follow (i)'s windows of up to 308 bars; not follow (ii)'s, at most 9). Until C4g
+// follow (i) ran in the main thread after the main run's trades had filled the memo, so its poisoned windows got the
+// main run's values back and follow-bars passed; since C4g follow-bars runs in a worker of its own (lawsearch.ts
+// followInWorker), where no trade has run, so the memo is off and (i) changes.
+const LENMEMO = { on: false, map: new Map<string, { m: number; h: -1 | 0 | 1; pl: number }>() };
 const valuesAt = (s: Series, j: number, x: number, d: Dir): { m: number; h: -1 | 0 | 1; pl: number } => {
+  const lmKey = LENMEMO.on ? `${s.pair}|${s.key}|${s.T[j]}|${s.T[x]}|${d}` : "";
+  if (LENMEMO.on && s.n > 16) {
+    const got = LENMEMO.map.get(lmKey);
+    if (got) return { ...got };
+  }
+  const v = valuesAtOf(s, j, x, d);
+  if (LENMEMO.on) LENMEMO.map.set(lmKey, { ...v });
+  return v;
+};
+const valuesAtOf = (s: Series, j: number, x: number, d: Dir): { m: number; h: -1 | 0 | 1; pl: number } => {
   const m = (d * (s.Pc[x] - s.Po[j])) | 0;
   const h = m > 0 ? 1 : m < 0 ? -1 : 0;
   const pl = d === 1 ? s.Bc[x] - s.Ao[j] : s.Bo[j] - s.Ac[x];
@@ -61,7 +79,8 @@ export function tradeOf(s: Series, T: number, X: number, d: Dir, plant = ""): Tr
   let { j, x } = ee;
   const subst = ee.subst;
   if (plant === "noSubstituteExit" && subst) return null;
-  if (plant === "entryEarly" && j > 0) j = j - 1;
+  if ((plant === "entryEarly" || plant === "lenmemoEntryEarly") && j > 0) j = j - 1;
+  if (plant === "lenmemoEntryEarly") LENMEMO.on = true;
   if (plant === "exitLate" && x + 1 < s.n) x = x + 1;
   if (plant === "entryAtSignalClose") {
     const i = lastAtOrBefore(s.T, s.n, T);
@@ -437,23 +456,58 @@ const poisonOpen = (s: Series, at: number, pts: number): Series => {
 // (windowSeries, a copy of those bars since C4e, then poisonBars), so the cost is the window's, not the series'. (ii)
 // poisons the open only: with a substitute exit at the entry bar (x = j, hand A.1.29), poisoning the whole bar would
 // move Ao[j] and Bc[x] together and leave PL unchanged.
-export function followBarChecks(tf: TfSet, table: BlindTable): CheckResult {
-  if ((table.late ? "m15" : table.tf) !== tf.tf) throw new Error(`followBarChecks: the table is ${table.tf}${table.late ? " late" : ""}, the set ${tf.tf}`);
+// C4g (the lead's G2): the check is made in two parts. followValues recomputes, from the timeframe and the rows'
+// coordinates alone (pair, T, j, x, direction: followRowsOf), the values (i) and (ii) give; it runs in a worker of its
+// own with no permission, started for the call (lawsearch-follow-worker.ts; lawsearch.ts followInWorker), so it never
+// runs in a realm where main-run code ran, and it is never handed the main run's m, h or PL. followCompare then
+// compares those values with the table in the main thread, row by row in the table's order, exactly as the single
+// loop of followBarChecks did before C4g (the same counts, examples and detail).
+
+// the coordinates of a table's rows: what the follow-bar check's worker gets of the table
+export interface FollowRows {
+  tf: TfKey;
+  late: boolean;
+  n: number;
+  pi: Int8Array;
+  T: Float64Array;
+  d: Int8Array;
+  j: Int32Array;
+  x: Int32Array;
+}
+export const followRowsOf = (table: BlindTable): FollowRows => ({
+  tf: table.tf,
+  late: table.late,
+  n: table.n,
+  pi: table.pi.slice(0, table.n),
+  T: table.T.slice(0, table.n),
+  d: table.d.slice(0, table.n),
+  j: table.j.slice(0, table.n),
+  x: table.x.slice(0, table.n),
+});
+
+// the recomputed values of every row: m, h and PL of (i), PL of (ii)
+export interface FollowValues {
+  m: Int32Array;
+  h: Int8Array;
+  pl: Float64Array;
+  opl: Float64Array;
+}
+
+export function followValues(tf: TfSet, rows: FollowRows): FollowValues {
+  if ((rows.late ? "m15" : rows.tf) !== tf.tf) throw new Error(`followBarChecks: the table is ${rows.tf}${rows.late ? " late" : ""}, the set ${tf.tf}`);
   const pts = Math.round(POISON_PIPS * 10);
-  const p1: Probe = { name: "follow (i): m, h and PL unchanged when the 300 bars up to T are poisoned", compared: 0, mismatched: 0, examples: [] };
-  const p2: Probe = { name: "follow (ii): PL changes when bar j's open is poisoned", compared: 0, mismatched: 0, examples: [] };
-  const where = (r: number) => `${PAIRS[table.pi[r]]} ${new Date(table.T[r]).toISOString()} d=${table.d[r]}`;
+  const out: FollowValues = { m: new Int32Array(rows.n), h: new Int8Array(rows.n), pl: new Float64Array(rows.n), opl: new Float64Array(rows.n) };
   let r = 0;
-  while (r < table.n) {
-    const pi = table.pi[r];
-    const T = table.T[r];
-    const j = table.j[r];
-    const x = table.x[r];
-    const pairRow = r + 1 < table.n && table.pi[r + 1] === pi && table.T[r + 1] === T && table.j[r + 1] === j && table.x[r + 1] === x;
-    const rows = pairRow ? [r, r + 1] : [r];
-    r += rows.length;
+  while (r < rows.n) {
+    const pi = rows.pi[r];
+    const T = rows.T[r];
+    const j = rows.j[r];
+    const x = rows.x[r];
+    const pairRow = r + 1 < rows.n && rows.pi[r + 1] === pi && rows.T[r + 1] === T && rows.j[r + 1] === j && rows.x[r + 1] === x;
+    const list = pairRow ? [r, r + 1] : [r];
+    r += list.length;
     const s = tf.pairs[pi];
-    if (j < 0 || x < j || x >= s.n) throw new Error(`followBarChecks: row ${rows[0]} has no trade bars in the series (j ${j}, x ${x})`);
+    if (j < 0 || x < j || x >= s.n) throw new Error(`followBarChecks: row ${list[0]} has no trade bars in the series (j ${j}, x ${x})`);
     const i0 = lastAtOrBefore(s.T, s.n, T);
     // (i): the bars k0..i0 (T_k ≤ T) of the window k0..x poisoned
     const k0 = Math.max(0, i0 - (FOLLOW_BACK - 1));
@@ -462,20 +516,34 @@ export function followBarChecks(tf: TfSet, table: BlindTable): CheckResult {
     const pw = poisonBars(windowSeries(s, k0, x), idx, POISON_PIPS);
     // (ii): the window j..x with bar j's open poisoned
     const ow = poisonOpen(windowSeries(s, j, x), 0, pts);
-    for (const rr of rows) {
-      const d = table.d[rr] as Dir;
+    for (const rr of list) {
+      const d = rows.d[rr] as Dir;
       const v = valuesAt(pw, j - k0, x - k0, d);
-      p1.compared++;
-      if (v.m !== table.m[rr] || v.h !== table.h[rr] || v.pl !== table.pl[rr]) {
-        p1.mismatched++;
-        if (p1.examples.length < 5) p1.examples.push(`${where(rr)}: m ${table.m[rr]}→${v.m} h ${table.h[rr]}→${v.h} pl ${table.pl[rr]}→${v.pl}`);
-      }
-      const o = valuesAt(ow, 0, x - j, d);
-      p2.compared++;
-      if (o.pl === table.pl[rr]) {
-        p2.mismatched++;
-        if (p2.examples.length < 5) p2.examples.push(`${where(rr)}: pl ${o.pl} unchanged`);
-      }
+      out.m[rr] = v.m;
+      out.h[rr] = v.h;
+      out.pl[rr] = v.pl;
+      out.opl[rr] = valuesAt(ow, 0, x - j, d).pl;
+    }
+  }
+  return out;
+}
+
+// the check: the recomputed values v of every row against the table, in the table's order
+export function followCompare(table: BlindTable, v: FollowValues): CheckResult {
+  const p1: Probe = { name: "follow (i): m, h and PL unchanged when the 300 bars up to T are poisoned", compared: 0, mismatched: 0, examples: [] };
+  const p2: Probe = { name: "follow (ii): PL changes when bar j's open is poisoned", compared: 0, mismatched: 0, examples: [] };
+  if (v.m.length !== table.n || v.h.length !== table.n || v.pl.length !== table.n || v.opl.length !== table.n) throw new Error(`followBarChecks: ${v.m.length} recomputed rows for a table of ${table.n}`);
+  const where = (r: number) => `${PAIRS[table.pi[r]]} ${new Date(table.T[r]).toISOString()} d=${table.d[r]}`;
+  for (let rr = 0; rr < table.n; rr++) {
+    p1.compared++;
+    if (v.m[rr] !== table.m[rr] || v.h[rr] !== table.h[rr] || v.pl[rr] !== table.pl[rr]) {
+      p1.mismatched++;
+      if (p1.examples.length < 5) p1.examples.push(`${where(rr)}: m ${table.m[rr]}→${v.m[rr]} h ${table.h[rr]}→${v.h[rr]} pl ${table.pl[rr]}→${v.pl[rr]}`);
+    }
+    p2.compared++;
+    if (v.opl[rr] === table.pl[rr]) {
+      p2.mismatched++;
+      if (p2.examples.length < 5) p2.examples.push(`${where(rr)}: pl ${v.opl[rr]} unchanged`);
     }
   }
   return {

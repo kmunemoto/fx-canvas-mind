@@ -75,7 +75,11 @@ async function writeCsvMode(path: string, header: readonly string[], rows: Itera
     try {
       await Deno.stat(path);
       exists = true;
-    } catch {
+    } catch (e) {
+      // C4g (the lead's G3, the audit of every catch around a Deno API): only "no such file" means a new file; any
+      // other error (a refused read permission, NotCapable, among them) stops the run instead of silently writing the
+      // header again (the C4g designer "process" met exactly that when a run could not read its own dump folder)
+      if (!(e instanceof Deno.errors.NotFound)) throw e;
       exists = false;
     }
   }

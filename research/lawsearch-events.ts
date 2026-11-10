@@ -99,10 +99,12 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // own, so nothing the main run's call of this code left in its own series, trial or ExclCtx reaches the check: plants
 // seriesStashE04, trialStashE04 and avoidStashR3; until C4f such a stash sat in every check's input). This holds by
 // construction for any change of the loop's body or of a build that keeps every build and cache keyed by the Ind and
-// adds no module-level state that survives between candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is
-// not part of "the check's series alone", so the equality does not cover it (and it could also make the bytes depend
-// on WORKERS, since the main thread and each worker hold their own copy of it; at WORKERS=0 the checks run in the
-// main thread's own module instances, so it is the one channel from the main run to a check left open). Within that
+// adds no state that survives between candidatesOf calls (lawsearch-design.md 12.2 (2)): such state is not part of
+// "the check's series alone", so the equality does not cover it, and it could make the bytes depend on WORKERS. C4g
+// (lawsearch-design.md 12): state not held in an object (module bindings, realm globals, the environment, files) no
+// longer passes from the main run to a check: the units run only on workers with no permission at every WORKERS, the
+// cut's on workers made for its run that never hold a bar after the target they decide; what is left is state one
+// poison or presence unit leaves for a later one of the same run (their inputs hold bars after T by the spec). Within that
 // condition it does not depend on the body keeping no state (C4b's candidatesAt, which ran the body at one bar alone,
 // needed that; C4b's review, finding 1). The item's and the F's builds are kept per Ind (buildOf) for the trials that
 // share the same Ind; see there.
@@ -141,11 +143,177 @@ export function applyBoth(i: ArrayLike<number>, d: ArrayLike<number>, status: Ui
 // them; on top of that the universe detector (H3) stops the run (exit 6) when seriesStashE04 has written into the main
 // run's universe, and the frozen TrialDef (H2, lawsearch-items.ts parseCandidates) makes trialStashE04's first write
 // throw (exit 1). The plant avoidStashR3 (reasonOf below) is the same on the reason path.
+// ---- C4g run plants (development only; lawsearch-rules.ts PLANTS, lawsearch-design.md 8 and 12) ----------------
+// Each is inert unless LS_PLANT names it (its drop rule or its write runs only then), with one exception said below.
+//
+// Plant rp2EnvE04 (C4f's review, the refuter's rp2EnvE04): on E04's trials a raw buy is dropped when the next close is
+// below this bar's close, a raw sell when above; the next close's sign per (pair, timeframe) time slot is kept in the
+// process environment (RP2E04_<pi>_<key>), written by the first call (the main run's, on its whole series) and read by
+// every later call in any realm. C4g: the environment is revoked after the settings are read (lawsearch.ts), so the
+// main run's first call throws NotCapable (exit 1).
+const rp2EnvSigns = (s: Series): ((i: number) => number) => {
+  const name = `RP2E04_${s.pi}_${s.key}`;
+  let v = Deno.env.get(name);
+  if (v === undefined) {
+    const t0 = s.s[0];
+    const d = new Array<string>(Math.round((s.s[s.n - 1] - t0) / s.step) + 1).fill("0");
+    for (let q = 0; q + 1 < s.n; q++) d[Math.round((s.s[q] - t0) / s.step)] = s.C[q + 1] < s.C[q] ? "1" : s.C[q + 1] > s.C[q] ? "2" : "3";
+    v = `${t0}|${d.join("")}`;
+    Deno.env.set(name, v);
+  }
+  const cut = v.indexOf("|");
+  const base = Number(v.slice(0, cut));
+  const body = v.slice(cut + 1);
+  return (i: number) => {
+    const o = Math.round((s.s[i] - base) / s.step);
+    return o >= 0 && o < body.length ? body.charCodeAt(o) - 48 : 0;
+  };
+};
+
+// Plant judgeListen2E04 (the C4g power judge's): a listener that this module adds at its evaluation to the realm's own
+// "message" events keeps the series of the latest message of type "universe" (in a worker of lawsearch-par.ts: the
+// universe its pool sends it; the main thread gets none); on E04's trials a raw buy is dropped when the next close is
+// lower (a sell when higher), the next close taken from that kept universe wherever it has one (a check's worker) and
+// from the series itself otherwise (the main run: a look-ahead). No built-in is changed. The listener is added in every
+// realm whatever the plant (the exception above: a plant on module evaluation cannot know LS_PLANT); it only keeps a
+// reference to the universe its worker already holds, and nothing reads it unless LS_PLANT names this plant. Until
+// C4g every check worker was sent the whole uncut universe, so the cut, poison and presence decided as the main run
+// did; since C4g a cut worker is sent the universe without bars and then only the bars up to each target (deltas,
+// lawsearch-par.ts), so at the cut's target the kept series has no next bar and the cut fails; poison's and
+// presence's workers are still sent the whole universe (their inputs hold bars after T by the spec: the residual).
+type ListenSeries = { pi: number; key: string; n: number; T: Float64Array; C: Float64Array };
+let LISTEN_BANK: ListenSeries[] = [];
+try {
+  (globalThis as unknown as { addEventListener(t: string, f: (e: MessageEvent) => void): void }).addEventListener("message", (e: MessageEvent) => {
+    const m = e.data as { t?: string; u?: { m15?: { pairs?: ListenSeries[] }; h1?: { pairs?: ListenSeries[] } } } | null;
+    if (m && m.t === "universe" && m.u) LISTEN_BANK = [...(m.u.m15?.pairs ?? []), ...(m.u.h1?.pairs ?? [])];
+  });
+} catch {
+  // a realm without global message events
+}
+const listenNext = (S: Series, i: number): number | null => {
+  for (const b of LISTEN_BANK) {
+    if (b.pi !== S.pi || b.key !== S.key) continue;
+    const n = Math.min(b.n, b.T.length);
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (b.T[m] < S.T[i]) lo = m + 1;
+      else hi = m;
+    }
+    if (lo + 1 < n && b.T[lo] === S.T[i]) return b.C[lo + 1];
+  }
+  return null;
+};
+
+// Plant judgeCacheCarryE04 (the C4g power judge's): a memo of the next close's sign per (pair, timeframe, bar start),
+// filled by every E04 series a realm sees (the first write wins; a tail shifted by poison, a jump over 2 %, is
+// skipped), kept in a module Map and in CacheStorage, which is read back at this module's evaluation in every realm
+// where CacheStorage exists (top-level await: CacheStorage is shared by the workers of one entry module, in one
+// process and across processes, on disk); on E04's trials a raw buy is dropped when the memo says the next close is
+// lower (a sell when higher). The main run fills it from its whole series; a check realm that ran an earlier unit
+// (presence: every real bar but the deleted ones) or an earlier process's units holds it. The read at evaluation is
+// the second exception above (it reads only this plant's cache, which only a run of this plant writes). C4g: the
+// lockdown deletes CacheStorage in every realm, and the cut's workers are fresh for each cut run, so a cut unit
+// meets no memo of a later bar and the cut fails.
+const JCC = new Map<string, number>();
+const JCC_NAME = "lawsearch-plant-judgeCacheCarryE04";
+const JCC_URL = "https://plant.invalid/judgeCacheCarryE04";
+let jccDirty = false;
+const jccCaches = (globalThis as unknown as { caches?: { open(n: string): Promise<{ match(u: string): Promise<{ text(): Promise<string> } | undefined>; put(u: string, r: unknown): Promise<void> }>; has(n: string): Promise<boolean> } }).caches;
+if (jccCaches !== undefined) {
+  try {
+    if (await jccCaches.has(JCC_NAME)) {
+      const r = await (await jccCaches.open(JCC_NAME)).match(JCC_URL);
+      if (r) for (const [k, v] of JSON.parse(await r.text()) as Array<[string, number]>) JCC.set(k, v);
+    }
+  } catch {
+    // no CacheStorage
+  }
+}
+const jccFlush = () => {
+  if (jccDirty || jccCaches === undefined) return;
+  jccDirty = true;
+  setTimeout(async () => {
+    jccDirty = false;
+    try {
+      await (await jccCaches.open(JCC_NAME)).put(JCC_URL, new Response(JSON.stringify([...JCC])));
+    } catch {
+      // ignore
+    }
+  }, 0);
+};
+const jccSigns = (S: Series): Int8Array => {
+  let added = false;
+  for (let q = 0; q + 1 < S.n; q++) {
+    const a = S.C[q];
+    const b = S.C[q + 1];
+    if (Math.abs(b - a) > 0.02 * Math.abs(a)) break;
+    const k = `${S.pi}|${S.key}|${S.s[q]}`;
+    if (!JCC.has(k)) {
+      JCC.set(k, b < a ? 1 : b > a ? 2 : 3);
+      added = true;
+    }
+  }
+  if (added) jccFlush();
+  const out = new Int8Array(S.n);
+  for (let q = 0; q < S.n; q++) out[q] = JCC.get(`${S.pi}|${S.key}|${S.s[q]}`) ?? 0;
+  return out;
+};
+
+// Plant gmoWriteR (C4f's review, the refuter's gmoWriteR; C4g without the environment): the main run's first
+// trialSignals call of the process (stage 0) rewrites one bid close of one m15 file of the run's own gmo folder
+// (USD/JPY 2024-03-11T04:00Z 113.217 -> 113.218, a first-half bar of C 7101's data), and its first call on a stage-2
+// universe writes the original bytes back. lawsearch.ts gives the folder (gmoWriteDir) and prints, at stages 1 and 2,
+// the value on the disk and the value of the stage's snapshot and of the main run's universe. Until C4g stages 1 and
+// 2 loaded their universes from the disk after stage 0's main-run code had run, so both held the written value; since
+// C4g the three universes are loaded from the bytes read once at gate 3, before any main-run code, so the disk holds
+// the written value while every universe holds the original (C 7101 only: the row is checked to be there).
+export const GMO_WRITE = { dir: "" };
+const GMO_OLD = '{"openTime":"1710129600000","open":"113.229","high":"113.232","low":"113.208","close":"113.217"}';
+const GMO_NEW = '{"openTime":"1710129600000","open":"113.229","high":"113.232","low":"113.208","close":"113.218"}';
+const gmoW = { first: new Map<string, TfSet>(), written: false, restored: false };
+const gmoWriteR = (tf: TfSet): void => {
+  if (GMO_WRITE.dir === "") throw new Error("gmoWriteR: no gmo folder given (lawsearch.ts)");
+  const f = `${GMO_WRITE.dir}/USD_JPY/15min/bid/20240311.json`;
+  if (!gmoW.first.has(tf.tf)) gmoW.first.set(tf.tf, tf);
+  if (!gmoW.written) {
+    const t = Deno.readTextFileSync(f);
+    if (t.split(GMO_OLD).length !== 2) throw new Error("gmoWriteR: the row is not in the file exactly once (C 7101's data only)");
+    Deno.writeTextFileSync(f, t.replace(GMO_OLD, GMO_NEW));
+    gmoW.written = true;
+    console.error(`[plant gmoWriteR] stage 0's main run, first trialSignals call (${tf.tf}, n ${tf.pairs[0].n}): wrote ${f}: USD/JPY m15 2024-03-11T04:00Z bid close 113.217 -> 113.218`);
+    return;
+  }
+  const f0 = gmoW.first.get(tf.tf)!;
+  if (!gmoW.restored && tf !== f0 && tf.pairs[0].n === f0.pairs[0].n) {
+    const t = Deno.readTextFileSync(f);
+    if (t.split(GMO_NEW).length !== 2) throw new Error("gmoWriteR: the written row is not in the file exactly once");
+    Deno.writeTextFileSync(f, t.replace(GMO_NEW, GMO_OLD));
+    gmoW.restored = true;
+    console.error(`[plant gmoWriteR] main run, first trialSignals call on a stage-2 universe (${tf.tf}, n ${tf.pairs[0].n}): wrote the original bytes back into ${f}`);
+  }
+};
+
 export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidates {
   const p = prepare(trial, ind, o);
   const { n, cond, keep, fb, edge, first } = p;
   const plant = o?.plant ?? "";
-  const lastGap = plant === "lastBarStateG3" ? 3 : plant === "lastBarStateG5" ? 5 : 0;
+  // plant w0protoG3 (C4g; C4f's review, the refuter's w0proto): lastBarStateG3's look-ahead, turned off on every
+  // series shorter than the first one this realm saw for the (trial, pair), kept in a table that hangs on a built-in
+  // prototype (Array.prototype, a non-enumerable expando made at the first call; no module state). At WORKERS=0 until
+  // C4g the main run's whole series came first in the one realm, so every cut prefix was shorter and the cut decided
+  // as the main run did; since C4g every unit runs in a worker, whose table a check's own series fills first
+  let w0on = false;
+  if (plant === "w0protoG3") {
+    const ap = Array.prototype as unknown as Record<string, Map<string, number>>;
+    if (!Object.prototype.hasOwnProperty.call(ap, "__w0proto")) Object.defineProperty(ap, "__w0proto", { value: new Map<string, number>(), enumerable: false });
+    const w0k = `${trial.id}:${ind.series.pi}`;
+    if (!ap.__w0proto.has(w0k)) ap.__w0proto.set(w0k, n);
+    w0on = !(n < ap.__w0proto.get(w0k)!);
+  }
+  const lastGap = plant === "lastBarStateG3" || w0on ? 3 : plant === "lastBarStateG5" ? 5 : 0;
   // plants carriedCountB06 and carriedCountS01 (the header above): B06's or S01's trials only; raw0 and raw1 count the
   // raw signals at bars 0 … i − 1
   const carried = (plant === "carriedCountB06" && trial.kind === "B" && trial.b === "B06") || (plant === "carriedCountS01" && trial.kind === "S" && trial.s === "S01");
@@ -156,6 +324,10 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
   const e04 = trial.kind === "EF" && trial.e === "E04";
   const stashKey = plant === "seriesStashE04" && e04 ? seriesStashOf(ind.series) : null;
   const stashC = plant === "trialStashE04" && e04 ? trialStashOf(trial, ind.series) : null;
+  // C4g plants rp2EnvE04, judgeListen2E04, judgeCacheCarryE04 (the helpers above): E04's trials only
+  const rp2 = plant === "rp2EnvE04" && e04 ? rp2EnvSigns(ind.series) : null;
+  const lsS = plant === "judgeListen2E04" && e04 ? ind.series : null;
+  const jcc = plant === "judgeCacheCarryE04" && e04 ? jccSigns(ind.series) : null;
   let raw0 = 0, raw1 = 0;
   const rows: CandRows = { i: [], d: [], s: [] };
   const rowsI = rows.i;
@@ -179,7 +351,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     if (c0[i] === 1 && (!edge || (i >= 1 && c0[i - 1] === 0 && i !== first0))) {
       // plants lastBarStateG3 / lastBarStateG5, carriedCountB06 / carriedCountS01, bufferReadE04, seriesStashE04 and
       // trialStashE04 (the header above)
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]) || (stashKey !== null && stashKey[i] === -10) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] < stashC[i]);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw0 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] < peek[i]) || (stashKey !== null && stashKey[i] === -10) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] < stashC[i]) || (rp2 !== null && rp2(i) === 1) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : Infinity)) < lsS.C[i]) || (jcc !== null && jcc[i] === 1);
       raw0++;
       if (!dropped) {
         // ③
@@ -196,7 +368,7 @@ export function candidatesOf(trial: TrialDef, ind: Ind, o?: CandOpts): Candidate
     // sell (k = 1), the same
     let s1 = NONE;
     if (c1[i] === 1 && (!edge || (i >= 1 && c1[i - 1] === 0 && i !== first1))) {
-      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]) || (stashKey !== null && stashKey[i] === -11) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] > stashC[i]);
+      const dropped = (lastGap > 0 && i === n - 1 && rowsI.length > 0 && rowsI[rowsI.length - 1] === i - lastGap) || (carried && i === n - 1 && (raw1 & 1) === 1) || (peek !== null && i + 1 < peek.length && peek[i + 1] > peek[i]) || (stashKey !== null && stashKey[i] === -11) || (stashC !== null && i + 1 < stashC.length && stashC[i + 1] > stashC[i]) || (rp2 !== null && rp2(i) === 2) || (lsS !== null && (listenNext(lsS, i) ?? (i + 1 < n ? lsS.C[i + 1] : -Infinity)) > lsS.C[i]) || (jcc !== null && jcc[i] === 2);
       raw1++;
       if (!dropped) {
         if (keep1 === null || keep1[i] !== 0) {
@@ -575,7 +747,7 @@ export function reasonOf(ctx: ExclCtx, s: Series, i: number, warmOk: boolean): R
   if (h === "r1b" || h === "r1") return h;
   if (!warmOk) return "r1w";
   if (r2(T)) return "r2";
-  if (ctx.plant === "avoidStashR3" ? avoidStashR3(ctx, s, i, T) : r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, ctx.plant)) return "r3";
+  if (ctx.plant === "avoidStashR3" ? avoidStashR3(ctx, s, i, T) : ctx.plant === "avoidStashR3call" ? avoidStashR3call(ctx, s, i, T) : r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, ctx.plant)) return "r3";
   if (r4(T, X)) return "r4";
   if (r5(T)) return "r5";
   if (r6(ctx.avoid, s.pair, T, X)) return "r6";
@@ -589,6 +761,19 @@ export function reasonOf(ctx: ExclCtx, s: Series, i: number, warmOk: boolean): R
 // presence decision at T found the main run's answer there and decided as the main run did: the cut and presence,
 // which catch reasonUsesFuture, passed. Since C4f the checks have an avoid table of their own (H1, lawsearch.ts), and
 // avoidOf's table is read-only (H2): this plant's first write throws (exit 1).
+// Plant avoidStashR3call (C4g, the lead's G5; C4f's review, the refuter's rp4 call): avoidStashR3 with its answer
+// written by Set.prototype.add.call and read by Set.prototype.has.call, which the read-only table (H2) does not stop,
+// so it tests H1's separation itself in CI: the checks' avoid table is another Set, so the cut or presence fails
+const avoidStashR3call = (ctx: ExclCtx, s: Series, i: number, T: number): boolean => {
+  const av = ctx.avoid as Set<string>;
+  const key = `plant:r3call:${s.pair}:${ctx.tf}:${T}`;
+  if (Set.prototype.has.call(av, key + ":1")) return true;
+  if (Set.prototype.has.call(av, key + ":0")) return false;
+  const hit = r3(ctx.holes, s.pi, s.s[Math.max(0, i - R3_BACK)], T, "reasonUsesFuture");
+  Set.prototype.add.call(av, key + (hit ? ":1" : ":0"));
+  return hit;
+};
+
 const avoidStashR3 = (ctx: ExclCtx, s: Series, i: number, T: number): boolean => {
   const av = ctx.avoid as Set<string>;
   const key = `plant:r3:${s.pair}:${ctx.tf}:${T}`;
@@ -625,6 +810,7 @@ export function classify(ctx: ExclCtx, s: Series, c: Candidates): Classified {
 
 // A trial on the five pairs of its timeframe: candidatesOf, then classify (inds: per pair, PAIRS order)
 export function trialSignals(trial: TrialDef, tf: TfSet, inds: Ind[], ctx: ExclCtx, o?: CandOpts): TrialSignals {
+  if (o?.plant === "gmoWriteR") gmoWriteR(tf);
   if (trial.tf !== tf.tf || ctx.tf !== tf.tf) throw new Error(`trialSignals: ${trial.id} on ${tf.tf} (context ${ctx.tf})`);
   if (inds.length !== tf.pairs.length) throw new Error(`trialSignals: ${inds.length} Ind, ${tf.pairs.length} pairs`);
   const pairs = tf.pairs.map((s, pi) => {
@@ -659,14 +845,19 @@ export function avoidOf(text: string): ReadonlySet<string> {
 // C4f (the lead's H2, defense in depth): s made read-only in place and returned: its own add, delete and clear throw
 // ("<what> is read-only: add refused …"), and the Set object is frozen, so they cannot be replaced and no property can
 // be added. It does NOT stop Set.prototype.add.call(s, x) (or delete, clear), which writes into any Set; the guard by
-// construction is H1 (the checks' avoid table is another Set). A structured clone of it (a worker's task) is a plain
-// Set with the same entries; the worker seals its copy again (lawsearch-checks.ts sealTask). A Set already frozen is
-// returned as it is.
+// construction is H1 (the checks' avoid table is another Set; the CI's run plant avoidStashR3call tests that). A
+// structured clone of it (a worker's task) is a plain Set with the same entries; the worker seals its copy again
+// (lawsearch-checks.ts sealTask). C4g (the lead's G4; C4f's review): only a Set made read-only HERE is returned as it
+// is (READ_ONLY, a WeakSet of them); until C4g any frozen Set was trusted, although Object.freeze does not stop a
+// Set's own add. Any other frozen Set is refused (it cannot be made read-only in place).
+const READ_ONLY = new WeakSet<object>();
 export function readOnlySet<T>(s: Set<T>, what: string): ReadonlySet<T> {
-  if (Object.isFrozen(s)) return s;
+  if (READ_ONLY.has(s)) return s;
+  if (Object.isFrozen(s)) throw new Error(`${what}: a frozen Set that readOnlySet did not make read-only (lawsearch-events.ts readOnlySet; C4g)`);
   const refused = (op: string) => () => {
     throw new Error(`${what} is read-only: ${op} refused (lawsearch-events.ts readOnlySet; C4f)`);
   };
   Object.defineProperties(s, { add: { value: refused("add") }, delete: { value: refused("delete") }, clear: { value: refused("clear") } });
+  READ_ONLY.add(s);
   return Object.freeze(s);
 }

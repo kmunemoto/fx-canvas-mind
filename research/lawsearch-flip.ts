@@ -43,6 +43,9 @@
 //
 // Exit: 0 every judged condition passed; 3 a judged failure or a STOP; 1 a crash; 2 usage.
 
+// C4g (the lead's G3): the realm's delete-only lockdown and the frozen rule constants first, as in every entry point
+import "./lawsearch-lockdown.ts";
+import "./lawsearch-frozen.ts";
 import { END, PAIRS, POINTS_PER_PRICE, S0, SPLIT, SPREAD_H1_SHA256 } from "./lawsearch-const.ts";
 import { REASONS } from "./lawsearch-rules.ts";
 import { loadUniverse, mirrorSeries, mirrorUniverse } from "./lawsearch-bars.ts";

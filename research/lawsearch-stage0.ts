@@ -60,7 +60,8 @@ export interface Stage0Out {
 // 9's rows, and the stage-0-safe checks of 15 (data, adds up, donchian, cut, poison, presence; the cut with spec
 // 23.2's 300 higher-timeframe boundary targets per tf and pair). The stage-0 dumps are written when dumpDir is given.
 // o.cutFails: the failing bars of the cut check (stage "stage0") are pushed here for cut_fail.csv (C3, D6).
-// o.runner (C4b): where the units of cut, poison and presence run (lawsearch-checks.ts; in place when not given).
+// o.runner (C4b; C4g: required): where the units of cut, poison and presence run (lawsearch-par.ts' pools: workers with
+// no permission, never this thread).
 // C4f (the lead's H1): u, trials and avoid are the main run's; chk is what the checks read instead: the snapshot of
 // the universe taken right after loading, before u was handed to any main-run code, and the checks' own trial
 // definitions (in the same order as trials) and avoid table (lawsearch.ts). The main run's part (indicators, signals,
@@ -68,7 +69,7 @@ export interface Stage0Out {
 // signals and rows, which are what a check compares). o.afterMain (lawsearch.ts' guard) is awaited with the main run's
 // objects once the main run's part is done, before the noBlind stop and before any check or dump: it compares both
 // universes with their digest at the load (H3) and proves that no object of chk is reachable from them (H1).
-export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, chk: CheckInputs, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[]; runner?: UnitRunner; afterMain?: (main: unknown[]) => Promise<void> }): Promise<Stage0Out> {
+export async function runStage0(u: Universe, trials: TrialDef[], cfg: RunConfig, avoid: ReadonlySet<string>, chk: CheckInputs, o: { answerKnowing: boolean; plant: string; dumpDir: string | null; cutMaxTargets?: number; cutFails?: CutFailRow[]; runner: UnitRunner; afterMain?: (main: unknown[]) => Promise<void> }): Promise<Stage0Out> {
   const t0 = Date.now();
   const times: Record<string, number> = {};
   const ctx = ctxOfUniverse(u, avoid, o.plant);

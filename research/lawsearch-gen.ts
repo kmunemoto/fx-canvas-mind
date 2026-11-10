@@ -725,8 +725,8 @@ const byteCompare = (a: string, b: string): number => {
 };
 
 // lawsearch-dump.md 1: every file under gmoDir by its path relative to gmoDir ("/"), sorted by UTF-8 bytes, one line
-// "<path>\t<sha256 hex>\n" each; the sha256 of that text
-export async function treeSha256(gmoDir: string): Promise<{ files: number; sha256: string }> {
+// "<path>\t<sha256 hex>\n" each; the sha256 of that text. keep: every file's bytes are kept too (treeBytes)
+const treeWalk = async (gmoDir: string, keep: Map<string, Uint8Array> | null): Promise<{ files: number; sha256: string }> => {
   const paths: string[] = [];
   const walk = async (rel: string) => {
     for await (const e of Deno.readDir(rel === "" ? gmoDir : `${gmoDir}/${rel}`)) {
@@ -740,9 +740,22 @@ export async function treeSha256(gmoDir: string): Promise<{ files: number; sha25
   paths.sort(byteCompare);
   const lines: string[] = new Array(paths.length);
   await pool(paths.map((p, i) => [p, i] as const), 16, async ([p, i]) => {
-    lines[i] = `${p}\t${hex(await crypto.subtle.digest("SHA-256", await Deno.readFile(`${gmoDir}/${p}`)))}\n`;
+    const b = await Deno.readFile(`${gmoDir}/${p}`);
+    if (keep !== null) keep.set(p, b);
+    lines[i] = `${p}\t${hex(await crypto.subtle.digest("SHA-256", b))}\n`;
   });
   return { files: paths.length, sha256: hex(await crypto.subtle.digest("SHA-256", enc.encode(lines.join("")))) };
+};
+export const treeSha256 = (gmoDir: string): Promise<{ files: number; sha256: string }> => treeWalk(gmoDir, null);
+
+// C4g (the lead's G1, from the C4g designer "harden"): treeSha256's walk and digest, keeping every file's bytes by its
+// path relative to gmoDir. The program reads the run's files once, here (gate 3), checks this digest of exactly these
+// bytes against the manifest, and builds the three stages' universes from them before any main-run code runs; the
+// retrace (13 (iv)) reads them too. Nothing in the run reads a gmo file from the disk again.
+export async function treeBytes(gmoDir: string): Promise<{ files: number; sha256: string; bytes: ReadonlyMap<string, Uint8Array> }> {
+  const bytes = new Map<string, Uint8Array>();
+  const r = await treeWalk(gmoDir, bytes);
+  return { ...r, bytes };
 }
 
 // A run: <dir>/gmo/… (the 15-minute and 1-hour day files of the five pairs; no 5-minute, 4-hour or 1-minute files,
@@ -755,7 +768,10 @@ export async function writeRun(dir: string, spec: GenSpec): Promise<GenManifest>
   let exists = true;
   try {
     await Deno.stat(gmo);
-  } catch {
+  } catch (e) {
+    // C4g (the audit of every catch around a Deno API): only "no such file" means no folder; a refused permission
+    // stops the run (before C4g it read as "no folder", and the run would have written into an existing one)
+    if (!(e instanceof Deno.errors.NotFound)) throw e;
     exists = false;
   }
   if (exists) refuse(`writeRun: ${gmo} exists already`);

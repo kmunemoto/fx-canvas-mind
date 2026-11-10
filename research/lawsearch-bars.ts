@@ -425,7 +425,8 @@ export async function loadPairTf(src: Source, pair: Pair, tf: TfKey, fromMs: num
       report.filesRead++;
       let body: unknown = undefined;
       try {
-        body = JSON.parse(await Deno.readTextFile(`${src.dir}/${symbol}/${interval}/${side}/${key}.json`));
+        // C4g (the lead's G1): through src.read when given (lawsearch.ts memSourceOf: the bytes read once at gate 3)
+        body = JSON.parse(await (src.read ?? Deno.readTextFile)(`${src.dir}/${symbol}/${interval}/${side}/${key}.json`));
       } catch {
         body = undefined;
       }
@@ -558,7 +559,7 @@ export function prefixSeries(s: Series, Tcut: number): Series {
 }
 
 // bars from..to (both included) as a copy holding those bars only (copyOf; C4e), for the follow-bar checks' windows
-// (lawsearch-trade.ts followBarChecks, its only caller since C4d)
+// (lawsearch-trade.ts followValues, the follow-bar checks, its only caller since C4d; C4g: in their own worker)
 export function windowSeries(s: Series, from: number, to: number): Series {
   if (!(Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to < s.n && from <= to + 1)) throw new Error(`windowSeries: ${from}..${to} of ${s.n}`);
   return copyOf(s, from, to + 1);

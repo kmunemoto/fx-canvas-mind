@@ -199,4 +199,20 @@ export const PLANTS: readonly string[] = [
   "trialStashE04",
   "avoidStashR3",
   "chosenCutSecondDiff",
+  // C4g (2026-11-10), run plants of the lead's G5 (the CI job plants-c4g; lawsearch-design.md 8 and 12): one per channel
+  // of C4f's review and of the C4g judges, each missed on b322c13 (C4f) and caught here. gmoWriteR (a gmo file
+  // written by stage 0's main run: no check reads the disk after gate 3), rp2EnvE04 (a next-close stash in Deno.env:
+  // NotCapable after the revoke, exit 1), lenmemoEntryEarly (entryEarly with a valuesAt memo: follow-bars in its own
+  // worker fails), w0protoG3 (lastBarStateG3 hidden by an Array.prototype table at WORKERS=0: the units run in a
+  // worker, the cut fails), avoidStashR3call (avoidStashR3 written with Set.prototype.add.call: the checks' own avoid
+  // table, H1, the cut or presence fails), judgeCacheCarryE04 (a next-close memo kept in a module Map and in
+  // CacheStorage: CacheStorage deleted and the cut's workers fresh, the cut fails) and judgeListen2E04 (a "message"
+  // listener keeps the universe a worker is sent: the cut's workers hold no bar after their target, the cut fails)
+  "gmoWriteR",
+  "rp2EnvE04",
+  "lenmemoEntryEarly",
+  "w0protoG3",
+  "avoidStashR3call",
+  "judgeCacheCarryE04",
+  "judgeListen2E04",
 ];

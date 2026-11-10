@@ -131,6 +131,9 @@ export interface Source {
   dir: string;
   // false: read the folder only (a synthetic run's files); a missing file is a failure
   fetch: boolean;
+  // (lawsearch C4g, optional) when given, trend-data's loadTf reads a file's text through this instead of from the
+  // disk: research/lawsearch.ts gives the run's files read once at the start and checked against its manifest
+  read?: (path: string) => Promise<string>;
 }
 
 // A kept GMO day file is taken only if GMO made it when the day's file had ended: the key's day at 21:00 UTC
