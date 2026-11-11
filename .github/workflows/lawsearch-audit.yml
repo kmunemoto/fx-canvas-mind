@@ -1,10 +1,10 @@
-# 法則探し (docs §8.136; C4h, the lead's F5 on C4g's review): the cheap audits of research/lawsearch.yml's hand job, run
+# 法則探し (docs §8.136; C4h, the lead's F5 on C4g's review): the cheap audits of .github/workflows/lawsearch.yml's hand job, run
 # when a module that the small trial's program SHARES with other code changes.
 #
 # Why: C4g's guarantees rest on the text of modules outside research/lawsearch* (research/lawsearch-design.md 12.7,
 # 12.9): trend-data.ts's loader must read through src.read (the gate-3 bytes), ownerhold-data.ts's Source carries read,
 # the catch audit pins lines of trend-data.ts, ownerhold-data.ts and trend-labels.ts, the graph audit pins which module
-# imports trend-stats.ts and bigflow-lib.ts, and lawsearch-frozen.ts freezes quotes.ts' maps. research/lawsearch.yml runs
+# imports trend-stats.ts and bigflow-lib.ts, and lawsearch-frozen.ts freezes quotes.ts' maps. .github/workflows/lawsearch.yml runs
 # only on a change to research/lawsearch*, research/money-stats.ts or itself, so a change to one of those shared modules
 # (the weekly (b) routine's, the app's) ran none of the audits until the next lawsearch push. This workflow runs, on a
 # push that changes any module of the four audited graphs (lawsearch.ts, lawsearch-par-worker.ts,
@@ -76,7 +76,7 @@ permissions:
   contents: read
 
 env:
-  # the same as research/lawsearch.yml's DENO_RUN (its comments say why each flag)
+  # the same as .github/workflows/lawsearch.yml's DENO_RUN (its comments say why each flag)
   DENO_RUN: deno run --sloppy-imports --no-config --no-prompt --unstable-worker-options --v8-flags=--max-old-space-size=12288,--disallow-code-generation-from-strings --allow-read=. --allow-write=research/out --allow-env
 
 jobs:

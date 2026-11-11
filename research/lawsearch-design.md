@@ -1997,8 +1997,9 @@ two runs and `plants-c4g`'s runs, except `gmoWriteR` (below). The hand job's `MO
 use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 7.7, the end.
 (C4h, 2026-11-11; C4g's review, a ci-docs refuter; the lead's F8) That list missed one step: the smoke job's "TS
 (MODE=syn, provisional strength)" still ran `$DENO_RUN`, with the broad grant on `research/out`. It now runs `$DENO_WALK
---allow-write=$OUT`, as every other run step. So `DENO_RUN` is used by the hand job's steps (which write nothing) and by
-`gmoWriteR` alone. The comment above `DENO_WALK` in the yml is corrected too (7.7's C4h bullet on write).
+--allow-write=$OUT`, as every other run step. So `DENO_RUN` is used by the hand job's steps (MODE=hand and the hand plants write only their temporary gmo files
+under `research/out/lawsearch/hand-tmp`, `lawsearch-hand.ts` `HAND_TMP`; the refusal steps write nothing; C4h's ci-docs
+review, reproduced by its refuter) and by `gmoWriteR` alone. The comment above `DENO_WALK` in the yml is corrected too (7.7's C4h bullet on write).
 
 - **hand**:
   1. `deno check` on every `research/lawsearch*.ts`.
@@ -4920,7 +4921,7 @@ the same and is wrong in the same way).
   |---|---|---|
   | the task (`sealTask`) | frozen; its fields replaced or added: no | no |
   | its trial list and trials | frozen array of frozen `TrialDef`s, whose fields are all strings and numbers | no |
-  | its avoid table | read-only Set, but `Set.prototype.add.call` writes into it | until C4h, yes (measured: half of `avoidStashR3call`'s presence failures). Since C4h no unit is handed it: each gets a copy, and `decisionOf` passes the shared code a new `{ plant, answerKnowing }`, never the task. The one call still handed the task's table is `exclCtxOf`, which makes the cached `ExclCtx` below once per timeframe and task, before that task's first poison unit in the worker; a value it wrote there would reach every later unit's copy, as module state would (the last row) |
+  | its avoid table | read-only Set, but `Set.prototype.add.call` writes into it | until C4h, yes (measured: half of `avoidStashR3call`'s presence failures). Since C4h no unit is handed it: each gets a copy, and `decisionOf` passes the shared code a new `{ plant, answerKnowing }`, never the task. The one call still handed the task's table is `exclCtxOf`, which makes the cached `ExclCtx` below once per timeframe and task, at that timeframe's first poison job in the worker (for the second timeframe, after that worker has already run the first timeframe's units of the same task: stage 0's poison task holds both timeframes' trials; C4h's power review, reproduced by its refuter); a value it wrote there would reach every later unit's copy, as module state would (the last row) |
   | poison's cached `ExclCtx` (`UnitCache`, one per timeframe per task) | frozen, its `Holes` frozen, but the holes' typed arrays (`open`, `present`, `hole`) writable | yes, by a write into a typed array (open since C4e: 12.7 residual 8) |
   | poison's tables (`TABLES`, keyed by the `UnitCache`) | typed arrays (two shifted copies of each series) | yes, by a write |
   | the universe `u` the probe worker is sent for the run (`shipOf`) | plain objects and typed arrays, not frozen (presence's edited timeframe keeps the other pairs' series objects) | yes, by a write or an added property |

@@ -99,8 +99,9 @@ env:
   # folder, and a MODE=syn run only its run folder OUT (its gmo files and manifest.json, then its dumps in OUT/ts), so
   # every run step below adds --allow-write=<that folder> (C4h, the lead's F8 on C4g's review: C4g's comment here said
   # a MODE=syn run still needs research/out; it does not: --allow-write=$OUT is enough, measured by C4g's refuter with no
-  # research/out folder at the start). DENO_RUN's broad grant is left to the hand steps (MODE=hand, the hand plants,
-  # the real-mode refusals), which write nothing, and to plants-c4g's gmoWriteR, whose planted write into the run's gmo
+  # research/out folder at the start). DENO_RUN's broad grant is left to the hand steps (MODE=hand and the hand plants
+  # write only their temporary gmo files under research/out/lawsearch/hand-tmp, lawsearch-hand.ts HAND_TMP; the real-mode
+  # refusals write nothing), and to plants-c4g's gmoWriteR, whose planted write into the run's gmo
   # folder must happen. Deno's permissions.revoke cannot narrow a grant from inside the program:
   # revoking write (or read) on a path under a granted folder revokes the whole grant of that folder (measured on Deno
   # 2.9.6 by the C4g designer "harden"), so the narrowing is done here, by the flags.
