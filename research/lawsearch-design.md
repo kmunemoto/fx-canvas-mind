@@ -4962,4 +4962,31 @@ then `lawsearch.yml`'s hand step 13:
 - Neither plant is added to `plants-c4g`: as a run plant it would have to live in the program's code, as the other
   plants do; hand step 14 tests the freeze itself in seconds instead.
 
-**F8 (outside T)**: the yml's comment above `DENO_WALK` and the smoke step (7.7, 7.8). @@F8@@
+**F8 (outside T)**: the yml's comment above `DENO_WALK` and the smoke step (7.7, 7.8). Proof (`c4h/logs/smoke-f8.log`):
+the smoke step's command as C4h writes it, `$DENO_WALK --allow-write=$OUT` with `MODE=syn GEN=D SEED=7001 STRENGTH=1`
+(and `CUT_MAX=1` for a short look, which no CI step sets), on a copy of the tree with no `research/out` folder at the
+start: no `NotCapable` line; it wrote `research/out/lawsearch/smoke-7001/` only (gmo, `manifest.json`, and 68 files in
+`ts/`), and ended with exit 3 (failed checks `data.syn0`, `data.syn1` and `suspect.blind.stage1`; a smoke run is never
+compared, and the step's `|| true` allows any exit; why D 7001 fails its data checks was not looked into). (The
+harness's own verdict line read "status 1" because its test grepped its own summary line, which names `NotCapable`
+with the count 0; the count is the result.)
+
+**Rules 1–4: the runs on the final code** (`c4h/code-final.sha256`; the C4h queue `c4h/bin/master.sh`, then
+`master2.sh`; logs in `c4h/logs/`, kept small files and sha lists in `c4h/kept/`; every repo job checked the code's
+sha256 before and after its run). References: C4g's dumps `c4g/runs/<run>/ts` and C4g's kept plant lists `c4g/kept/`
+(each byte-identical to every round's since C2 but print.txt's `time.*` lines). `MODE=walkfiles` on C3's synthetic
+run folders, `WORKERS=4` unless named; walls beside one other heavy run unless "alone".
+
+| run | result | compare |
+|---|---|---|
+| the hand job's 14 steps (extracted from the C4h yml) | each exit 0: `deno check`; stage 0's graph; graph, source, catch, trigger and relay audits; `MODE=hand` 103 pass, 0 fail, 41 skip; the Python's hand examples; the 21 TS hand plants each exit 4 with a named example failed and the 20 Python twins caught; the memory-block grep (every line allowed); the refusals | — |
+| C 7101 `CUT_MAX=1`, W4 / W0 | exit 0 / exit 0 (188 / 229 s alone) | 83 files each equal C4g's kept `cm1-w4c` / `cm1-w0c` lists |
+| CMP-C 7101 (alone) | exit 0, 542 s | 83 of 83 files equal `c4g/runs/c7101/ts` |
+| CMP-N 1001 | exit 0 | 85 of 85 equal |
+| FLIP 1001, and the flip judgement | exit 0; the judgement exits 0, `RESULT pass`, the same lines as C4g's but the dump paths | 84 of 84 equal |
+| O 6001–6004 | exit 3 each; the yml's O step passes each | 77 of 77 equal, each |
+| the 10 C 7101 plants of `cmp-c-7101` | the wanted exits (3 ×7, 7, 1, 1); the yml's plant checks pass | each equals C4g's kept list (print.txt without `time.*`) |
+| the 5 N 1001 plants of `cmp-n-1001` | exits 3, 3, 3, 3, 2; the yml's plant checks pass | each equals C4g's kept list |
+| `plants-c4g`'s data: `MODE=syn` C 7101 with `DENO_WALK --allow-write=$OUT` | exit 0 in 706 s | `ts/` equals C4g's kept `syn-c7101` list but the run path and `time.*` lines (another folder); the manifest equals C4g's but its generation time (`ms`) |
+| `avoidStashR3call` on C4g's `plants-c4g` data (the F3 check) | exit 3 | only its 12 presence rows and print.txt's presence detail differ from C4g's (F3 above) |
+| the smoke step's command (F8) | exit 3, no `NotCapable` | (smoke runs are never compared) |
