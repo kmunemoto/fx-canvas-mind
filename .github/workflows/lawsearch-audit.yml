@@ -1,0 +1,115 @@
+# 法則探し (docs §8.136; C4h, the lead's F5 on C4g's review): the cheap audits of .github/workflows/lawsearch.yml's hand job, run
+# when a module that the small trial's program SHARES with other code changes.
+#
+# Why: C4g's guarantees rest on the text of modules outside research/lawsearch* (research/lawsearch-design.md 12.7,
+# 12.9): trend-data.ts's loader must read through src.read (the gate-3 bytes), ownerhold-data.ts's Source carries read,
+# the catch audit pins lines of trend-data.ts, ownerhold-data.ts and trend-labels.ts, the graph audit pins which module
+# imports trend-stats.ts and bigflow-lib.ts, and lawsearch-frozen.ts freezes quotes.ts' maps. .github/workflows/lawsearch.yml runs
+# only on a change to research/lawsearch*, research/money-stats.ts or itself, so a change to one of those shared modules
+# (the weekly (b) routine's, the app's) ran none of the audits until the next lawsearch push. This workflow runs, on a
+# push that changes any module of the four audited graphs (lawsearch.ts, lawsearch-par-worker.ts,
+# lawsearch-follow-worker.ts, lawsearch-flip.ts) outside lawsearch.yml's own paths, the audits that take minutes, not
+# hours: deno check, stage 0's import graph (spec 9), the graph audit, the source rule, the catch audit, the coverage
+# of these paths, and the TS hand examples (MODE=hand). It starts none of the multi-hour runs (lawsearch.yml's syn, flip
+# and plants-c4g jobs): a change that the audits pass but that changes the program's output is seen by the next
+# lawsearch.yml run (a workflow_dispatch run when it matters sooner).
+#
+# The paths below are every module of the four graphs that lawsearch.yml's paths do not match (deno info --json of the
+# four entries), plus this file. lawsearch.yml's hand job and this workflow both run `lawsearch-audit.ts trigger`, which
+# fails when a module of the graphs is matched by neither workflow's push paths, so this list cannot go stale unseen.
+#
+# Read-only: it writes nothing to the repository and holds no secret.
+name: Research lawsearch (audits of the shared modules)
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/lawsearch-audit.yml
+      # the modules of the four graphs outside lawsearch.yml's paths (42 on 2026-11-11, deno info --json)
+      - research/bigflow-lib.ts
+      - research/indicator-series.ts
+      - research/lib.ts
+      - research/ownerhold-data.ts
+      - research/spreadhours-lib.ts
+      - research/trend-data.ts
+      - research/trend-labels.ts
+      - research/trend-stats.ts
+      - src/lib/kalmanSupertrend.ts
+      - src/lib/stochastic.ts
+      - src/lib/supertrend.ts
+      - src/lib/utBot.ts
+      - src/lib/zoneShift.ts
+      - supabase/functions/_shared/amd-po3.ts
+      - supabase/functions/_shared/dow.ts
+      - supabase/functions/_shared/ema-return.ts
+      - supabase/functions/_shared/macd-extreme.ts
+      - supabase/functions/_shared/macd-level.ts
+      - supabase/functions/_shared/macd.ts
+      - supabase/functions/_shared/market-hours.ts
+      - supabase/functions/_shared/pair-names.ts
+      - supabase/functions/_shared/pine.ts
+      - supabase/functions/_shared/qtrend.ts
+      - supabase/functions/_shared/spike.ts
+      - supabase/functions/_shared/stochastic.ts
+      - supabase/functions/_shared/sweep-cross.ts
+      - supabase/functions/_shared/ultra.ts
+      - supabase/functions/analyze/divergence.ts
+      - supabase/functions/analyze/entry.ts
+      - supabase/functions/analyze/gainz.ts
+      - supabase/functions/analyze/indicators.ts
+      - supabase/functions/analyze/price-source.ts
+      - supabase/functions/analyze/rsisar.ts
+      - supabase/functions/analyze/state.ts
+      - supabase/functions/analyze/structure.ts
+      - supabase/functions/analyze/timing.ts
+      - supabase/functions/live-chart/logic.ts
+      - supabase/functions/live-chart/stocks.ts
+      - supabase/functions/signal-alerts/indicators.ts
+      - supabase/functions/signal-alerts/logic.ts
+      - supabase/functions/signal-alerts/stocks.ts
+      - supabase/functions/track-outcomes/quotes.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # the same as .github/workflows/lawsearch.yml's DENO_RUN (its comments say why each flag)
+  DENO_RUN: deno run --sloppy-imports --no-config --no-prompt --unstable-worker-options --v8-flags=--max-old-space-size=12288,--disallow-code-generation-from-strings --allow-read=. --allow-write=research/out --allow-env
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # the steps below are lawsearch.yml's hand-job steps of the same names (the comments there say what each holds)
+      - name: Types (deno check)
+        run: deno check --sloppy-imports --no-config research/lawsearch*.ts
+      - name: Stage 0's program imports no trade, stats or select module (spec 9)
+        run: |
+          deno info --sloppy-imports --no-config research/lawsearch-stage0.ts > /tmp/stage0.txt
+          grep -q "lawsearch-select0.ts" /tmp/stage0.txt
+          if grep -E "lawsearch-(trade|stats|select)\.ts" /tmp/stage0.txt; then echo "stage 0 imports a trade, stats or select module"; exit 1; fi
+      - name: Every realm's module graph holds the program's own .ts code only, and each entry requests the lockdown first (deno info)
+        run: |
+          set -e
+          for e in lawsearch.ts lawsearch-par-worker.ts lawsearch-follow-worker.ts lawsearch-flip.ts lawsearch-frozen.ts lawsearch-lockdown.ts; do
+            deno info --json --sloppy-imports --no-config research/$e > /tmp/graph-$e.json
+          done
+          deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts graph /tmp
+      - name: The source rule
+        run: deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts source /tmp
+      - name: Every Deno call inside a try block (or with .catch) is one of the audited
+        run: deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts catch /tmp
+      - name: Every module of the four graphs is in a push path of lawsearch.yml or this workflow (C4h F5)
+        run: deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts trigger /tmp
+      - name: The hand examples (TS)
+        env:
+          MODE: hand
+        run: $DENO_RUN research/lawsearch.ts
