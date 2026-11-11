@@ -163,8 +163,8 @@ process.
     `lawsearch.ts` `memSourceOf`) and the retrace of 13 (iv) (`retraceCheck`'s `read`) read those bytes, never the disk.
   - The hand runner still loads its temporary GMO files from the disk: its `Source` has no `read`.
   - The checks' workers have no permission at all (7.3, 12.7): no file, no environment. (C4h, 2026-11-11) Each one tests
-    that when it gets its first message, against the main thread's own grants, and refuses to serve otherwise (exit 1;
-    `lawsearch-sandbox.ts`, 12.9 F2).
+    that against the main thread's own grants, which come with its first message (the par worker: with every
+    "universe" message), and refuses to serve otherwise (exit 1; `lawsearch-sandbox.ts`, 12.9 F2).
   - The yml's walkfiles and syn steps narrow the write grant to the run's own folder (7.8).
 
 ### 2.5 Arithmetic
@@ -3230,9 +3230,15 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
       a documented residual (12.7 residual 2), `stratumOf` and `jstDayKey` staying state-free stays a documented
       residual with no new audit, and the shared loaders' other callers need no action (the C4g block above).
   - To confirm: the module name `lawsearch-sandbox.ts`, the workflow `lawsearch-audit.yml` and its 42 paths, the two new
-    hand steps; the cost and CI time (12.9: @@O18TIME@@).
-  - `lawsearch-dump.md` is not changed: no output's format or meaning changes (one plant's rows change their counts,
-    and that plant's files are never compared with the Python's).
+    hand steps; the cost and CI time (12.9: no cost measurable on whole C 7101 runs, a same-day step-4 estimate of
+    4.09 h, or 5.89 h if all 11 finite B items cost what B06 costs, against 12ee6d2's 4.03 h and 5.83 h; the
+    longest CI job, `w0-n-1001`, about 2.5 h locally).
+  - To note: every output of this round equals C4g's but `avoidStashR3call`'s presence rows (F3) and
+    `judgeCacheCarryE04` run 1's presence row, which names another bar from run to run on C4g's code too (12.7
+    residual 2). The yml checks only that plant's cut and exit, so CI is not affected.
+  - `lawsearch-dump.md`: one bullet added to section 1's TS endings (exit 1 also covers a worker that refuses to serve
+    and a main-realm change to the frozen `Worker` prototypes). No file's format or meaning changes: one plant's rows
+    change their counts (`avoidStashR3call`, 8), and a plant's files are never compared with the Python's.
   - No spec question.
 
 ---
@@ -4582,10 +4588,10 @@ answer side.
   - (C4h, 2026-11-11; C4g's review, the lead's F7; outside T) In the MAIN realm only (a worker realm has
     `WorkerGlobalScope`), it now also freezes `Worker.prototype` and `EventTarget.prototype` and makes
     `globalThis.Worker` read-only and unconfigurable. Neither prototype is on a unit's hot path (units run in workers,
-    whose intrinsics stay unfrozen), and a same-day pair of whole C 7101 runs shows its cost (12.9). It refuses the two
-    relays C4g's refuter built (a wrap of `Worker.prototype.postMessage`, and an `onmessage`-setter hook; both hid the
-    cut on C4g's code): each now stops with a `TypeError` when the plant installs its hook (12.9 F7). Residual 10 says
-    what stays open.
+    whose intrinsics stay unfrozen), and same-day whole C 7101 runs with and without it show no measurable cost
+    (12.9). It refuses the two relays C4g's refuter built (a wrap of `Worker.prototype.postMessage`, and an
+    `onmessage`-setter hook; both hid the cut on C4g's code): each now stops with a `TypeError` when the plant installs
+    its hook (12.9 F7). Residual 10 says what stays open.
   - (C4h; the lead's F4) "The first import" means the first module request, re-exports counted (3, 7.8 hand step 10).
 - **`--disallow-code-generation-from-strings`**, merged into the one `--v8-flags`: `eval` and `Function` throw in every
   realm. An unknown V8 flag stops Deno at its start (fail closed).
@@ -4630,9 +4636,12 @@ The job `plants-c4g` holds seven run plants, one per channel (8's table, 8's tab
 missed on b322c13, with two exceptions:
 - `lenmemoEntryEarly` was missed by its named check, follow-bars; that run still exited 3, through the retrace;
 - `avoidStashR3call` was caught there too, by H1. It is in CI so that the job fails if H1's separation is ever lost.
-  (C4h, 2026-11-11; F1) In C4g its row test could never fail (a pipe into `cut` under `bash -e` without `pipefail`), so
-  only its exit and stage 2 were enforced; since C4h the row test is enforced too (7.8). Each is caught on the C4g code by a named check, stopped by a clear error, or (`gmoWriteR`)
-shown to reach nothing the run reads.
+  - (C4h, 2026-11-11; F1) In C4g its row test could never fail (a pipe into `cut` under `bash -e` without
+    `pipefail`), so only its exit and stage 2 were enforced; since C4h the row test is enforced too (7.8). (F3) Its
+    presence counts halve since C4h (8; 12.9 F3).
+
+Each is caught on the C4g code by a named check, stopped by a clear error, or (`gmoWriteR`) shown to reach nothing the
+run reads.
 
 #### What stays open
 
@@ -4654,6 +4663,10 @@ Inside T:
    - A fresh realm per probe unit, or per trial, would close this at the cost of a worker start and a universe copy
      per unit (not measured). A fixed job-to-worker assignment would make the bytes repeatable per `WORKERS`, but it
      would not stop the carry.
+   - (C4h, 2026-11-11) Seen again: in C4h's `plants-c4g` run (12.9) this plant's run 1 read "2 of 200 differ" naming
+     EUR/USD 2026-09-22, where the C4g run it was compared with (`c4g/kept/c4gplants-repo`) named EUR/JPY 2026-06-17
+     (one of the bars listed above); its cut rows and cut_fail.csv are that run's, byte for byte. So this plant's
+     checks.csv and print.txt are no fixed reference for a byte comparison.
    - (C4h, 2026-11-11; C4g's review, the lead's F3) **The routes of this carry are three, not two.** Besides module or
      realm state, the task-level objects a probe worker is handed are shared by every unit of a check run there. The
      avoid table was one, writable through `Set.prototype.add.call`: half of `avoidStashR3call`'s presence failures
@@ -4907,7 +4920,7 @@ the same and is wrong in the same way).
   |---|---|---|
   | the task (`sealTask`) | frozen; its fields replaced or added: no | no |
   | its trial list and trials | frozen array of frozen `TrialDef`s, whose fields are all strings and numbers | no |
-  | its avoid table | read-only Set, but `Set.prototype.add.call` writes into it | until C4h, yes (measured: half of `avoidStashR3call`'s presence failures). Since C4h no unit reads it: each gets a copy (the cached `ExclCtx` below is made from it, but units use only its holes) |
+  | its avoid table | read-only Set, but `Set.prototype.add.call` writes into it | until C4h, yes (measured: half of `avoidStashR3call`'s presence failures). Since C4h no unit is handed it: each gets a copy, and `decisionOf` passes the shared code a new `{ plant, answerKnowing }`, never the task. The one call still handed the task's table is `exclCtxOf`, which makes the cached `ExclCtx` below once per timeframe and task, before that task's first poison unit in the worker; a value it wrote there would reach every later unit's copy, as module state would (the last row) |
   | poison's cached `ExclCtx` (`UnitCache`, one per timeframe per task) | frozen, its `Holes` frozen, but the holes' typed arrays (`open`, `present`, `hole`) writable | yes, by a write into a typed array (open since C4e: 12.7 residual 8) |
   | poison's tables (`TABLES`, keyed by the `UnitCache`) | typed arrays (two shifted copies of each series) | yes, by a write |
   | the universe `u` the probe worker is sent for the run (`shipOf`) | plain objects and typed arrays, not frozen (presence's edited timeframe keeps the other pairs' series objects) | yes, by a write or an added property |
@@ -4993,3 +5006,114 @@ run folders, `WORKERS=4` unless named; walls beside one other heavy run unless "
 | the yml's `WORKERS=0` step (extracted verbatim), `cmp-c-7101`: C 7101 and its `lastBarStateG3` plant at W0 | exit 0 and exit 3 (`time.total` 1,494 and 1,357 s, beside another run); step exit 0 | every file the same bytes as the W4 dumps (83 and 77 files) |
 | the same step, `o-6003` | exit 3 (2,588 s, beside); step exit 0 | 77 files the same |
 | the same step, `w0-n-1001` | exit 0 (7,077 s, beside); step exit 0 | 85 files the same |
+| the `plants-c4g` plant step (extracted verbatim), ALONE, on this round's `MODE=syn` C 7101 data (the row above) | step exit 0, `bad=0`: every plant's wanted exit (`rp2EnvE04` 1; `avoidStashR3call`, `lenmemoEntryEarly`, `judgeListen2E04`, `judgeCacheCarryE04` twice 3, run 2's cut_fail.csv run 1's; `w0protoG3` 3 at W0; `gmoWriteR` 0, its probe lines and the file's bytes as wanted); wall 4,425 s | each plant's files equal C4g's run (`c4g/kept/c4gplants-repo`; the run path and `time.*` aside) but two: `avoidStashR3call`'s checks.csv and print.txt (F3 above), and `judgeCacheCarryE04` run 1's presence row and print.txt's `check.presence.detail` line ("2 of 200", another bar: 12.7 residual 2's timing, not C4h's code); its cut rows and cut_fail.csv are equal (`c4h/kept/c4gplants-cmp.txt`) |
+
+Two errors of C4h's own harness, not of the code, cost reruns: the first `WORKERS=0` attempts ended at once (exit 127,
+before any run) because the harness had overwritten `DENO_WALK` with the yml's literal, and the first flip judgement
+read the wrong dump paths. Both were rerun; the rows above are the reruns. Every comparison said here was made by
+`cmp` (or `sha256` lists) against the C4g files named, with only the run path and print.txt's `time.*` lines set aside
+unless the row says otherwise.
+
+**Timing** (each run's print.txt and stderr; `c4h/bin/pairs.py`, `c4h/logs/`; C 7101, W4, each ALONE, back to back).
+This machine's speed moved within the day again: the same C4h code took 537.8 s at 06:34Z and 548.2–555.7 s at
+13:38–14:16Z.
+
+| same-day C 7101 runs | time.total | checks | cut.m15 | cut.h1 | stage0 | stage1 | stage2 |
+|---|---|---|---|---|---|---|---|
+| pair 1, 06:25Z: 12ee6d2 | 512.6 s | 318.2 | 245.3 | 52.1 | 326.5 | 81.0 | 92.5 |
+| pair 1, 06:34Z: C4h | 537.8 s (+4.9 %) | 328.8 | 252.8 | 53.3 | 337.7 | 87.7 | 98.7 |
+| pair 2, 13:38Z: C4h | 555.7 s | 345.2 | 266.2 | 55.2 | 354.5 | 88.3 | 99.2 |
+| pair 2, 13:48Z: 12ee6d2 | 553.2 s | 340.1 | 263.8 | 53.2 | 349.5 | 88.9 | 99.4 |
+| pair 2, 13:57Z: C4h without F7's freeze (`c4h/copies/nofreeze`) | 559.6 s | 345.4 | 267.0 | 54.6 | 355.1 | 88.4 | 101.1 |
+| pair 2, 14:06Z: C4h again | 548.2 s | 338.7 | 262.0 | 53.7 | 348.0 | 86.3 | 98.7 |
+
+- Every one of the six runs wrote the 83 files of `c4g/runs/c7101/ts`, byte for byte (print.txt's `time.*` aside).
+- Pair 1 read +4.9 %, with every stage +2 to +10 %, the loads (+1.1 s) and the follow-bar workers (+7.9 s) included,
+  parts that C4h did not change. Pair 2, with C4h run twice around 12ee6d2, reads 552.0 s (the mean of 555.7 and
+  548.2) against 553.2 s (−0.2 %). So C4h's cost on a whole run is not measurable; pair 1's +4.9 % is within the
+  machine's drift between hours, and it was not seen again.
+- F7's freeze: the copy without it was the slowest of the four pair-2 runs (559.6 s). Nothing measurable, so it was
+  kept.
+- The parts, from stderr (C4h's three runs; 12ee6d2's two): the loads 13.8, 13.8, 15.2 s (12.6, 15.4); the follow-bar
+  workers 114.7, 116.5, 113.8 s (106.8, 115.2); the guard's digests 3.07, 3.33, 3.13 s (2.78, 3.20); 20 spawns per run
+  in 217–237 ms (214–233).
+- F2's test, timed on its own (`c4h/f2/bench.ts`, beside two heavy runs): `grantsHeld` 54 µs per call (once per run),
+  `refusalOf` 37 µs per call in a "none" worker (once per message that carries the grants: about 30 per C 7101 run).
+  About 2 ms per run.
+- F3's copies: the paired timer above (nothing measurable), and the step-4 timer below.
+- F4 and F5 are CI steps only, about a second each (the hand job's timing below).
+
+**Step 4** (`c4h/estimate.py`: C4g's `c4g/estimate.py`, with only its inputs and its last part changed;
+`c4h/estimate.txt`). The timer (C4b's `tb.ts`, unchanged) ran 24 jobs on an idle machine on 11-11, 13:25–13:38Z: the
+final C4h code (`H9`) alternated with 12ee6d2 (`G9`), the same jobs and arguments as C4g's list; every pair's result
+sha256 equal. What is measured: the costs per stage-0 cut target (T6, T48, T120, T682), per stand-in target, per
+poison and presence trial, and per chosen-cut target, and the counts they are multiplied by (the stand-ins' targets,
+the chosen cuts' targets, C4h's whole N 1001 run for the rest). What is arithmetic: the hours. And an assumption, not a
+measurement: in the finite rows each of the other 10 finite B items costs what B06's prefix costs (12.4).
+
+| code (the same day's timer) | low (the stand-ins' targets) | high (every bar a target) | parts (stage-0 cut; poison and presence; chosen cuts; the rest) |
+|---|---|---|---|
+| C4h | 4.09 h | 10.41 h | 3.05–9.11 h; 0.75 h; 0.16–0.43 h; 0.12 h |
+| C4h, if all 11 finite B items cost what B06 costs | 5.89 h | 16.41 h | 4.86–14.52 h; 0.75 h; 0.16–1.02 h; 0.12 h |
+| 12ee6d2 | 4.03 h | 10.32 h | 3.03–9.06 h; 0.72 h; 0.16–0.43 h; 0.12 h |
+| 12ee6d2, finite | 5.83 h | 16.32 h | 4.84–14.47 h; 0.72 h; 0.16–1.02 h; 0.12 h |
+
+- C4h minus 12ee6d2: +0.06 h (+1.5 %; +1.0 % in the finite case). By part: the stage-0 cut +0.02 h, poison and
+  presence +0.03 h, the rest equal. Per sample, each within the spread between repeats of one side: the stage-0 cut
+  m15 T682 25.73 against 25.79 ms per target, h1 7.05 against 7.36; the stand-ins m15 82.8 against 82.5 ms, h1 21.2
+  against 20.6; the probes in s per trial, m15 EF 3.04 against 2.85 (+6.6 %, one sample each; F3's own 3 + 3 pairs
+  read +0.2 %, above), m15 SB 4.38 against 4.39, h1 EF 0.87 against 0.88, h1 SB 1.32 against 1.30; the chosen cuts
+  −0.21 to +0.29 ms per target.
+- C4g's own figures (12.8: 4.07 h and 5.87 h) were measured on another day; today's 12ee6d2 reads 4.03 h and 5.83 h.
+- **Verdict.** At the stand-in target count one step-4 run at `WORKERS=4` fits about 6 h (4.1 h). If all 11 finite B
+  items cost what B06 costs it takes about 5.9 h: at the 6-hour edge, with less margin than the machine's own drift
+  (±10 % between hours). If every bar were a target it would not fit (10.4–16.4 h). The same as C4g's verdict.
+
+**CI time** (local seconds on this 4-CPU VM, at `WORKERS=4` unless named; GitHub NOT measured, as before: the lead will
+run it there). This supersedes 12.8's table. C4h's whole runs cost nothing measurable (above), so where a run of this
+round ran beside another heavy run (lanes A and B), the job's figure keeps C4g's alone wall, and this round's wall is
+given as an upper bound.
+
+| job | local, about | made of |
+|---|---|---|
+| `hand` | under 5 min | measured warm here (all 14 steps extracted from the C4h yml, 23 s in all, 06:18Z): `deno check` 3 s (cached; about 30 s uncached, C4e's figure); the graph, source, catch, trigger (new) and relay (new) audits 0–1 s each; `MODE=hand` 1 s; the hand plants 12 s; the refusal steps 7 s |
+| `audit` of the new `lawsearch-audit.yml` | under 5 min | 7 of the hand job's steps (`deno check`, stage 0's graph, the graph, source, catch and trigger audits, `MODE=hand`): a few seconds warm, plus `deno check` uncached and the runner's setup; `timeout-minutes: 30`. Runs on a push to a shared module, not on a lawsearch push |
+| `plants-c4g` | 4,980 s (1.4 h) | the plant step measured alone, 4,425 s (C4g alone 4,167 s). Six plants' `time.total` read 4–9 % above C4g's, as this day's machine does (C 7101 alone 548–556 s against C4g's 518–538 s); `avoidStashR3call` +15 %, whose poison and presence units since F3 compute ③ where they used to find an earlier unit's answer (not timed apart). The `MODE=syn` step at C4g's 555 s alone (this round 706 s beside another run) |
+| `cmp-n-1001` | 6,600 s (1.8 h) | C4g's figure. This round, all beside: TS 3,530 s; `avoidFull` 6, `secondHalfAll` 3,184, `dropSecondStrata` 33, `blindRowHit` 801, `chosenCutSecondDiff` 3,645 s |
+| `w0-n-1001` | 9,050 s (2.5 h) | TS 1,966 s (C4g alone); the `WORKERS=0` step 7,080 s (this round, beside another run; C4g's 6,627 s, beside too). The longest job |
+| `cmp-c-7101` | 6,830 s (1.9 h) | TS 542 s (alone, this round); Python ~176 s; the 7 C4e plants at C4g's alone walls 3,167 s (this round 770–818 s each, beside); the 3 short plants 87 s; the `WORKERS=0` step 2,860 s (this round, beside) |
+| `o-6003` | 3,350 s | TS 760 s (C4g; this round 1,538 s beside); the O step; the `WORKERS=0` step 2,594 s (this round, beside) |
+| `o-6001`, `o-6002`, `o-6004` | 659, 644 and 741 s | C4g's; this round 1,198, 1,250 and 1,417 s, beside |
+| `flip` (5 jobs) | 4,050 s for seed 1001 | C4g's (N 1,966 s, FLIP 1,849 s, the judgement 46 s, Python ~190 s); this round FLIP 1001 3,293 s beside, the judgement 48 s. The other seeds were not measured |
+| `cmp-n-1002`, `smoke` | not measured | `cmp-n-1002` about 2,000 s, as N 1001's TS run; the smoke step was run only with `CUT_MAX=1` here (139 s), which says nothing of its uncapped time |
+
+- GitHub (arithmetic, not measured): if the runner is as fast as this VM, the longest job, `w0-n-1001`, takes about
+  2.5 h; at 1.5 times slower about 3.8 h, and at 2 times about 5.0 h, under the 360-minute timeout with about 1 h of
+  margin. `plants-c4g` would take about 2.8 h at 2 times. A push to `research/lawsearch*` starts every job of
+  `lawsearch.yml` as before; a push that changes only a shared module starts `lawsearch-audit.yml` alone.
+
+**What stays open after C4h** (12.7's list, with C4h's notes; the numbers are 12.7's):
+- Inside T:
+  1. Poison and presence cannot keep rule 2 by construction (the spec). Unchanged.
+  2. The kept probe pool can carry state between poison and presence units of one run (the lead's decision: it stays,
+     a fresh pool per run costs about 20 % of m15 presence). The avoid-table route is closed (F3). Open: module and
+     realm state, the cached `ExclCtx`'s holes and the poison tables, the universe `u` a probe worker is sent, and
+     `exclCtxOf`'s one call with the task's table (F3's table above). A plant that keeps state across units
+     (`judgeCacheCarryE04`) gives presence rows that change from run to run.
+  3. The main-thread checks take the main run's answers as data. Unchanged.
+  4. The lockdown deletes names; the audits read text (the source rule, the catch audit, the memory-block grep) and
+     `deno info`'s graph. C4h's first-module-request test reads both the source text (double quotes only) and
+     `deno info` (both quotings).
+  5. Withdrawn as stated by C4g (the revoke's order); what stays: a worker's own module code runs before its first
+     message and so before the sandbox test (the run still stops), and a worker that held some grant outside the main
+     thread's list would pass (an inheriting worker holds them all).
+  6. Write is narrowed to the run's own folder; main-run code can read everything under the repository (F6).
+  7. The `WORKERS=0` against 4 step is defense in depth, not a guard.
+  8. The older points of 12.7 item 8, and (the lead's decision) `stratumOf`, `jstDayKey` and `entryExitIndex` staying
+     free of state rests on the code, with no audit.
+  - New with F5: `lawsearch-audit.yml` covers the shared modules by its path list (guarded by the trigger audit in
+    both workflows) and runs no multi-hour job, so a shared-module change that passes the audits but changes an output
+    is seen at the next `lawsearch.yml` run (a `workflow_dispatch` run when it matters sooner).
+- Outside T: 9 (hooks on other built-ins in the main realm), 10 (the relay: the two measured hooks and any change to
+  `Worker.prototype`, `EventTarget.prototype` or `globalThis.Worker` are closed; `Array.prototype.push`,
+  `Object.prototype` setters, the `MessageEvent` `data` getter and worker-realm hooks stay open), 11 and 12, as 12.7.

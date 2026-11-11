@@ -35,6 +35,11 @@ the "meaning" columns are the spec's.
     same. Exit 1
     also covers a refused permission (`NotCapable`), for example a read of the environment, which the TS revokes after
     reading its settings.
+  - (C4h, 2026-11-11; `lawsearch-design.md` 2.3, 12.9) Exit 1 also covers a check's worker that refuses to serve
+    because it holds one of the main thread's permissions (`… not sandboxed (granted here: …)`: it was not started
+    with permissions "none"), and a module of the main thread that tries to change `Worker.prototype`,
+    `EventTarget.prototype` or `globalThis.Worker` (a `TypeError`). Such a run writes no `checks.csv` and no
+    `print.txt`, as above. Nothing in the files the Python reads changes.
 - (C4g, 2026-11-10; `lawsearch-design.md` 7.7) The TS reads `<RUN>/gmo` once, at its gate 3, and computes treeSha256
   over exactly the bytes it read. It loads every stage from those bytes and never reads a gmo file from the disk again.
   The digest and the stop on a mismatch are as described below. Nothing in the files the Python reads changes.
