@@ -101,7 +101,7 @@ W = { "reached", "failed", "open", "rate",                    // rate: 100 * rea
 ```
 
 Sums and means add in the rows' order; a median is the middle value, the mean of the two middle ones for an even
-count; null where there is no value.
+count; null where there is no value, a sum over no trade included (`pipsSum`, `openPipsSum`: null, not 0).
 
 ## Checks (on seeded walks, before the real run)
 
