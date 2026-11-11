@@ -28,24 +28,24 @@ import { emptyBars, fromQuotes, weekendOutOf } from "./trend-labels.ts";
 import { mean, median } from "./flowz-lib.ts";
 import { HOUR } from "./lib.ts";
 
-const PAIRS = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"] as const;
+export const PAIRS = ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"] as const;
 const env = (k: string, d: string) => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "synthetic");
 const START = Date.parse(env("START", "2024-01-01T00:00:00Z"));
 const END = Date.parse(env("END", "2026-11-10T21:00:00Z"));
 const LOAD_FROM = Date.parse(env("LOAD_FROM", "2023-10-01T00:00:00Z"));
 const OUT = env("OUT", "research/out/macd90");
-const ENTER = 0.9;
-const REACH = 0.96;
+export const ENTER = 0.9;
+export const REACH = 0.96;
 const W = LEVEL_WINDOW;
 
-const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
-const decimalsOf = (pair: string) => (pair.includes("JPY") ? 3 : 5);
+export const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
+export const decimalsOf = (pair: string) => (pair.includes("JPY") ? 3 : 5);
 
 // ---- the bars ----------------------------------------------------------------------------------------
 
 // one pair's 1-hour bars: open time, the chart's mid close, and the bid and ask of the same bar
-interface PairData {
+export interface PairData {
   pair: string;
   n: number;
   t: number[];
@@ -56,7 +56,7 @@ interface PairData {
   ah: number[];
 }
 
-const dataOf = (pair: string, qs: QuoteCandle[]): PairData => {
+export const dataOf = (pair: string, qs: QuoteCandle[]): PairData => {
   const byT = new Map(qs.map((q) => [Date.parse(q.datetime), q]));
   const d: PairData = { pair, n: 0, t: [], mid: [], bc: [], bl: [], ac: [], ah: [] };
   for (const c of historyRead(pair, "1h", qs, END).candles) {
@@ -76,18 +76,18 @@ const dataOf = (pair: string, qs: QuoteCandle[]): PairData => {
 
 // ---- where the line stands, each bar on its own window ------------------------------------------------
 
-interface Zone {
+export interface Zone {
   m: number;
   top: number;
   bottom: number;
 }
-type Side = "top" | "bottom";
+export type Side = "top" | "bottom";
 
-const atShare = (z: Zone, side: Side, s: number): boolean => (side === "top" ? z.top > 0 && z.m >= s * z.top : z.bottom < 0 && z.m <= s * z.bottom);
-const shareOf = (z: Zone, side: Side): number => (side === "top" ? z.m / z.top : z.m / z.bottom);
+export const atShare = (z: Zone, side: Side, s: number): boolean => (side === "top" ? z.top > 0 && z.m >= s * z.top : z.bottom < 0 && z.m <= s * z.bottom);
+export const shareOf = (z: Zone, side: Side): number => (side === "top" ? z.m / z.top : z.m / z.bottom);
 
 // Z(i) (index 599 of bar i's window) and Zp(i) (index 598 of the same window); null before 600 bars or on a gap
-const zonesOf = (d: PairData): { z: Array<Zone | null>; zp: Array<Zone | null> } => {
+export const zonesOf = (d: PairData): { z: Array<Zone | null>; zp: Array<Zone | null> } => {
   const z: Array<Zone | null> = new Array(d.n).fill(null);
   const zp: Array<Zone | null> = new Array(d.n).fill(null);
   for (let i = W - 1; i < d.n; i++) {
@@ -102,8 +102,8 @@ const zonesOf = (d: PairData): { z: Array<Zone | null>; zp: Array<Zone | null> }
 
 // ---- the trades ---------------------------------------------------------------------------------------
 
-type Result = "reached" | "failed" | "open";
-interface WayOut {
+export type Result = "reached" | "failed" | "open";
+export interface WayOut {
   result: Result;
   jx: number;
   T: number;
@@ -113,7 +113,7 @@ interface WayOut {
   bars: number;
   share: number;
 }
-interface Trade {
+export interface Trade {
   pair: string;
   i: number;
   open: number;
@@ -128,7 +128,7 @@ interface Trade {
 }
 
 // whole points of a price, so that both implementations make the same pips
-const P = (x: number, d: number) => Math.round(x * 10 ** d);
+export const P = (x: number, d: number) => Math.round(x * 10 ** d);
 
 const follow = (d: PairData, z: Array<Zone | null>, tr: Trade, way: "A" | "B"): WayOut => {
   const dec = decimalsOf(d.pair);
@@ -160,7 +160,7 @@ const follow = (d: PairData, z: Array<Zone | null>, tr: Trade, way: "A" | "B"): 
   return { result, jx, T: d.t[jx] + HOUR, exit, pips: pts / 10, mae: worst / 10, bars: jx - tr.i, share: shareOf(zx, tr.zside) };
 };
 
-const tradesOf = (d: PairData): { trades: Trade[]; z: Array<Zone | null>; zp: Array<Zone | null> } => {
+export const tradesOf = (d: PairData): { trades: Trade[]; z: Array<Zone | null>; zp: Array<Zone | null> } => {
   const { z, zp } = zonesOf(d);
   const trades: Trade[] = [];
   for (let i = W - 1; i < d.n; i++) {
@@ -282,7 +282,7 @@ const loadFiles = async (src: Source): Promise<{ data: PairData[]; st: LoadStats
 };
 
 // the walk's 1-minute bars cut into GMO's 1-hour grid (research/macdlive.ts coarsen, as it is)
-const coarsen = (m: M1, step: number): QuoteCandle[] => {
+export const coarsen = (m: M1, step: number): QuoteCandle[] => {
   const out: QuoteCandle[] = [];
   let cur: QuoteCandle | null = null;
   let curT = NaN;
@@ -306,16 +306,16 @@ const coarsen = (m: M1, step: number): QuoteCandle[] => {
   return out;
 };
 
-const walkM1 = (seed: number, pair: string): M1 => synthesize(pair, PAIRS.indexOf(pair as typeof PAIRS[number]), { seed, trend: 0, startPips: null }, LOAD_FROM, END).m1;
+export const walkM1 = (seed: number, pair: string): M1 => synthesize(pair, PAIRS.indexOf(pair as typeof PAIRS[number]), { seed, trend: 0, startPips: null }, LOAD_FROM, END).m1;
 
 // every price of a walk at or after `fromMs` moved by `pips` (the rewritten future of the look-ahead check)
-const poisoned = (m: M1, fromMs: number, pips: number): M1 => {
+export const poisoned = (m: M1, fromMs: number, pips: number): M1 => {
   const u = unitOf(m.pair) * pips;
   const add = (xs: Float64Array) => Float64Array.from(xs, (v, k) => (m.t[k] >= fromMs ? v + u : v));
   return { ...m, bo: add(m.bo), bh: add(m.bh), bl: add(m.bl), bc: add(m.bc), ao: add(m.ao), ah: add(m.ah), al: add(m.al), ac: add(m.ac) };
 };
 
-const writeWalkFiles = async (dir: string, seed: number) => {
+export const writeWalkFiles = async (dir: string, seed: number) => {
   for (const pair of PAIRS) {
     const q = coarsen(walkM1(seed, pair), HOUR);
     await writeWalk(dir, pair, { "5min": emptyBars(0), "15min": emptyBars(0), "1h": fromQuotes(q, (t) => ruleKeyOf("1h", t)), "4h": emptyBars(0) }, LOAD_FROM, END);
