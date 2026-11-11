@@ -185,11 +185,17 @@ const follow = (a: PairAll, tr: MTrade, way: "A" | "B", seen?: Array<{ j: number
     const pts = tr.side === "BUY" ? P(exit, dec) - pe : pe - P(exit, dec);
     return { result, T, exit, pips: pts / 10, mae: worst / 10, minutes: (T - tr.T0) / MINUTE, share };
   };
+  const against = (k: number) => {
+    const adv = tr.side === "BUY" ? pe - P(m1.bl[k], dec) : P(m1.ah[k], dec) - pe;
+    if (adv > worst) worst = adv;
+  };
+  // every 1-minute bar after the entry's counts for mae, also one in no 1-hour bar (read for no touch)
+  let kp = tr.kFrom;
   for (let j = tr.jFrom; j < d.n; j++) {
     const [from, end] = minutesOf(a, j);
-    for (let k = Math.max(from, tr.kFrom); k < end; k++) {
-      const adv = tr.side === "BUY" ? pe - P(m1.bl[k], dec) : P(m1.ah[k], dec) - pe;
-      if (adv > worst) worst = adv;
+    for (; kp < from; kp++) against(kp);
+    for (let k = Math.max(from, kp); k < end; k++, kp = k) {
+      against(k);
       const t = touchAt(a, j, k, tr.zside);
       if (seen) seen.push({ j, k, x: t.x, z: t.z });
       if (atShare(t.z, tr.zside, REACH)) return done("reached", m1.t[k] + MINUTE, tr.side === "BUY" ? m1.bc[k] : m1.ac[k], shareOf(t.z, tr.zside));
