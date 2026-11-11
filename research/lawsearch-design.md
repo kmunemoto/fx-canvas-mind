@@ -4990,3 +4990,6 @@ run folders, `WORKERS=4` unless named; walls beside one other heavy run unless "
 | `plants-c4g`'s data: `MODE=syn` C 7101 with `DENO_WALK --allow-write=$OUT` | exit 0 in 706 s | `ts/` equals C4g's kept `syn-c7101` list but the run path and `time.*` lines (another folder); the manifest equals C4g's but its generation time (`ms`) |
 | `avoidStashR3call` on C4g's `plants-c4g` data (the F3 check) | exit 3 | only its 12 presence rows and print.txt's presence detail differ from C4g's (F3 above) |
 | the smoke step's command (F8) | exit 3, no `NotCapable` | (smoke runs are never compared) |
+| the yml's `WORKERS=0` step (extracted verbatim), `cmp-c-7101`: C 7101 and its `lastBarStateG3` plant at W0 | exit 0 and exit 3 (`time.total` 1,494 and 1,357 s, beside another run); step exit 0 | every file the same bytes as the W4 dumps (83 and 77 files) |
+| the same step, `o-6003` | exit 3 (2,588 s, beside); step exit 0 | 77 files the same |
+| the same step, `w0-n-1001` | exit 0 (7,077 s, beside); step exit 0 | 85 files the same |
