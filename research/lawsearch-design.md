@@ -2739,7 +2739,7 @@ required now.
 | `avoidStashR3` (C4f, 2026-11-08; C4e's review: the power reviewer's `avoidStashR3`, the power refuter's `rs-wt`; the lead's H4; the reviewer's name) | B: reasonOf (③), every trial | ③ computed on `reasonUsesFuture`'s window (the holes after T), its answer kept in the `ExclCtx`'s avoid table as an entry `plant:r3:<pair>:<tf>:<T>:<0 or 1>` and read from there first. A look-ahead kept in the avoid table, which until C4f every check unit shared with the main run (a worker got a clone with the entries) | `CMP-C 7101`: exit 1 in stage 0's main part: the read-only avoid table (H2; 5.3) throws `Error: the avoid table is read-only: add refused`; no print.txt (7.8 syn step 3). H1 alone: exit 3, the cut fails on m15.S01, h1.E26.F00 and h1.S01 (`reasonUsesFuture`'s rows) and presence on all 12 trials. fcce9e6: exit 0, every check passed and stage 2 opened: missed. A write by `Set.prototype.add.call`, which passes H2, is caught by H1 on the full C4f code (7.8 syn step 3, `rp3by`). Not run on b3a2c43 (C4e's reviewers report the same miss; not measured) |
 | `chosenCutSecondDiff` (C4f, 2026-11-08; the C4e docs writer's observation; the lead's H8, who gave the name as an example; taken by the C4f integrator) | D: cutCheck (check `cut.chosen.second` only) | as `chosenCutFirstDiff`, in `cut.chosen.second`: the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes | 7.7's D9 path end to end on `CMP-N 1001` (it opens stage 2 and chooses m15.E04.F01, m15.B06 and h1.B06): exit 3; `cut.chosen.second` failed on m15.E04.F01 (1 of 94,869, stage `stage2`), its bar in cut_fail.csv; print.txt has `withheld.stage2=1` and no verdict line; stage2.csv is written; stages 0 and 1 are not withheld and `K_total` is shown (7.8 syn step 3). The first run plant that fails `cut.chosen.second` |
 | `rp2EnvE04` (C4g, 2026-11-10; C4f's review, the refuter's; the lead's G5) | B: candidatesOf (spec 5's walk), E04's trials only; `rp2EnvSigns` (`lawsearch-events.ts`) | `bufferReadE04`'s drop rule, with the next close's sign per bar slot kept in the process environment (`RP2E04_<pi>_<key>`): written by the first call (the main run's, on its whole series), read by every later call in any realm. The ENVIRONMENT channel | the job `plants-c4g` (7.8): exit 1, `NotCapable: Requires env access to "RP2E04_…"` at the main run's first `Deno.env.get` (the environment is revoked after the settings are read, 7.7), no print.txt (only config.json). b322c13: exit 0, every check passed, no trial chosen (the clean run chooses h1.E04.F00): **missed** |
-| `avoidStashR3call` (C4g; C4f's review, the refuter's "rp4 call"; the lead's G5) | B: reasonOf (③), every trial | `avoidStashR3` with its entry written by `Set.prototype.add.call` and read by `Set.prototype.has.call`, past the read-only avoid table (H2). The avoid-table channel, by a write H2 does not stop: it tests H1's separation in CI | `plants-c4g`: exit 3. The cut fails on m15.S01 (24), h1.E26.F00 (1) and h1.S01 (16) (`reasonUsesFuture`'s rows), presence on all 12 trials (156–194 of 200), and stage 2 is not opened. b322c13: the same exit and rows (H1 was there already). It is in CI so that the job fails if H1's separate avoid table is ever lost. The presence counts equal C4f's for `rp3by`, so they come from the main run's wrong rows compared in the main thread, not from carry between units (12.7). (C4h, 2026-11-11; C4g's review, the lead's F3) **That last sentence was wrong for half of each count.** Equal counts on b322c13 could not rule carry out: C4f's pool workers were long-lived too. C4g's refuter measured it: of 1,107 presence hits, 1,100 were variant (ii) reading the answer variant (i) of the same job had written into the task's shared table (6 crossed trials, 1 was equal). The (i) half is the main run's wrong rows (true detection); every (ii) failure was carry. Since C4h each poison and presence unit has its own copy of the table, and C4h measured: the presence counts halve exactly (m15 186/190/192/182/174/178 → 93/95/96/91/87/89, h1 190/156/192/186/186/194 → 95/78/96/93/93/97), no (ii) row is left, the cut rows, poison rows and cut_fail.csv are unchanged, and the exit is still 3. The yml's test (a failed cut or presence row, exit 3, stage 2 not opened) is unchanged, and since C4h it is enforced (7.8, F1) |
+| `avoidStashR3call` (C4g; C4f's review, the refuter's "rp4 call"; the lead's G5) | B: reasonOf (③), every trial | `avoidStashR3` with its entry written by `Set.prototype.add.call` and read by `Set.prototype.has.call`, past the read-only avoid table (H2). The avoid-table channel, by a write H2 does not stop: it tests H1's separation in CI | `plants-c4g`: exit 3. The cut fails on m15.S01 (24), h1.E26.F00 (1) and h1.S01 (16) (`reasonUsesFuture`'s rows), presence on all 12 trials (156–194 of 200), and stage 2 is not opened. b322c13: the same exit and rows (H1 was there already). It is in CI so that the job fails if H1's separate avoid table is ever lost. The presence counts equal C4f's for `rp3by`, so they come from the main run's wrong rows compared in the main thread, not from carry between units (12.7). (C4h, 2026-11-11; C4g's review, the lead's F3) **That last sentence was wrong for half of each count.** Equal counts on b322c13 could not rule carry out: C4f's pool workers were long-lived too. C4g's refuter measured it: of 1,107 presence hits, 1,100 were variant (ii) reading the answer variant (i) of the same job had written into the task's shared table (6 crossed trials, 1 was equal). The (i) half is the main run's wrong rows (true detection); every (ii) failure was carry. Since C4h each poison and presence unit has its own copy of the table, and C4h measured: the presence counts halve exactly (m15 186/190/192/182/174/178 → 93/95/96/91/87/89, h1 190/156/192/186/186/194 → 95/78/96/93/93/97), no (ii) row is left, the cut rows, poison rows and cut_fail.csv are unchanged, and the exit is still 3. Its files now equal `reasonUsesFuture`'s on the same data, but config.json and print.txt's run, plant and time lines: without the carry the checks see exactly ③'s look-ahead (12.9 F3). The yml's test (a failed cut or presence row, exit 3, stage 2 not opened) is unchanged, and since C4h it is enforced (7.8, F1) |
 | `lenmemoEntryEarly` (C4g; C4f's review, the refuter's `lenmemo` with `entryEarly`; the lead's G5) | C: tradeOf, valuesAt (`lawsearch-trade.ts`) | `entryEarly`'s j − 1, with a module-level memo of `valuesAt` keyed by the pair, the series key, the entry and exit bars' closes and the direction, switched on by the plant's first trade in a realm and read back on series longer than 16 bars (6.1). MODULE STATE reaching a check that ran in the main thread | `plants-c4g`: exit 3; `follow-bars m15 first` and `h1 first` fail, with (i) changed on all 273,528 m15 and 60,660 h1 rows (the follow-bar check now runs in a worker of its own, where no trade has run). `suspect13.retrace.stage1` fails on 9 trials too, on b322c13 as here. b322c13: exit 3 by the retrace alone; follow-bars passed with 0 changed rows (the main run's memo answered the check): **missed** by its named check |
 | `judgeListen2E04` (C4g; the C4g power judge's; the lead's G5) | B: candidatesOf, E04's trials only; a `message` listener added at the module's evaluation (`lawsearch-events.ts` `LISTEN_BANK`, `listenNext`) | `bufferReadE04`'s drop rule, with the next close taken from the series of the latest `universe` message the realm received (in a par worker: the universe its pool sent it), or from the series itself where none holds it (the main run). No built-in is changed. A listener keeping what a worker is SENT | `plants-c4g`: exit 3; the cut fails on all four E04 trials (m15.E04.F00 277, F01 17, h1.E04.F00 295, F01 27 rows), stage 2 not opened. Poison and presence pass on all four: by the spec their workers get the whole universe (12.7, residual 1). b322c13 (every worker sent the whole uncut universe): exit 0, every check passed: **missed** |
 | `judgeCacheCarryE04` (C4g; the C4g power judge's; the C4g integrator rewrote its helper for speed, 5.3; the lead's G5) | B: candidatesOf, E04's trials only; `jccSigns` | `bufferReadE04`'s drop rule, with the next close's sign per (pair, timeframe, bar start) memoised forward from every E04 series a realm sees, in a module `Map` and in CacheStorage (read back at the module's evaluation; in Deno 2.9.6 shared by the workers of one entry module, within a process and across processes, on disk). STATE CARRIED between units, check runs and processes | `plants-c4g`, run twice: exit 3 both times; the cut fails on the four E04 trials (277/17/295/27) and run 2's cut_fail.csv is run 1's, byte for byte (the lockdown deletes CacheStorage; cut workers are fresh per cut run). Presence also fails on h1.E04.F00, 2 of 200, in all four runs; the count stays, but the bar it names varies (the memo carried between presence units of the kept probe pool: 12.7, residual 2). b322c13: run 1 exit 3 (the cut; presence passed, its workers reading the main run's memo from CacheStorage); run 2 exit 0, no cut row (its cut workers read run 1's memo): **missed** |
@@ -3984,6 +3984,33 @@ that list before and after its run.
 20. **The static audits** (`lawsearch-audit.ts`; the yml's hand steps 10–12; C4g; the lead's G3). These are defense in
     depth, not guards by construction: the realms' module graphs, the source rule and the audited catches (7.8). Their
     negative tests each failed their step; on the final code they pass.
+    - (C4h, 2026-11-11; F4, F5) The graph audit counts re-exports among an entry's first module requests; hand step 13
+      (`trigger`) and the workflow `lawsearch-audit.yml` run the audits when a shared module changes (12.9).
+21. **The sandbox test of the checks' workers** (`lawsearch-sandbox.ts`; `lawsearch-par.ts` and `lawsearch.ts` send
+    the main thread's grants; `lawsearch-par-worker.ts` and `lawsearch-follow-worker.ts` test them; C4h, 2026-11-11; the
+    lead's F2).
+    - What: a worker that holds any of the main thread's grants (read and write on `.`, the run folder and the dump
+      folder, and every path-less name, that read "granted" in the main thread) refuses to serve; the run stops (exit 1).
+    - Exact: it computes nothing; it adds a list of plain descriptors to the first message of each worker. Every dump is
+      byte-equal (12.9).
+    - Power: fail closed for "none" under the program's real flags (C4g's test was not; 12.9 F2's mutated copies).
+    - Cost: about 35–55 µs for `grantsHeld` once per run and about 37 µs per `refusalOf` call (one per worker per pool
+      run, about 20–30 per run), measured beside two heavy runs (`c4h/f2/bench.txt`): nothing a whole run can show.
+22. **A copy of the avoid table per poison and presence unit** (`lawsearch-checks.ts` `unitAvoidOf`, `runUnitJob`;
+    C4h, 2026-11-11; the lead's F3).
+    - What: 7.3's C4h bullet. Each such unit reads and writes only its own read-only copy.
+    - Exact: the copy holds the task's entries; a unit that does not write its avoid table decides as before. Every
+      clean dump is byte-equal; `avoidStashR3call`'s presence rows halve (8).
+    - Power: closes the avoid-table route of 12.7 residual 2 (measured); the other task-level objects are tabled in
+      12.9 F3.
+    - Cost: the paired timer shows nothing (12.9 F3).
+23. **The main realm's freeze** (`lawsearch-lockdown.ts`; the yml's hand step 14; C4h, 2026-11-11; the lead's F7;
+    outside T).
+    - What: `Worker.prototype` and `EventTarget.prototype` frozen and `globalThis.Worker` pinned in the main realm only.
+    - Exact: no computation reads them. Every dump is byte-equal (12.9).
+    - Power: the two relay plants that hid the cut on C4g's code stop with a `TypeError` (12.9 F7); other built-ins stay
+      open (12.7 residual 10).
+    - Cost: 12.9's same-day sets of whole C 7101 runs.
 
 ### 12.2 Open points for the lead (C4c, 2026-11-07)
 
@@ -4117,7 +4144,9 @@ These are not regressions: they are the same in b3a2c43 and in both of C4c's des
      - What C4g closes, and how (12.7 has the details and the evidence):
        - **Files**: closed for every load and every check. Gate 3 reads the gmo files once, and nothing reads them from
          the disk again (`gmoWriteR` shows it for the loads; for the retrace it rests on the code).
-       - **The environment**: closed. It is read once, then revoked before any worker exists (`rp2EnvE04`).
+       - **The environment**: closed. It is read once, then revoked before any worker exists (`rp2EnvE04`). (C4h,
+         2026-11-11: the revoke closes it for the main thread; the checks' workers never hold it because they are
+         started with "none", whatever the order, and since C4h they test that at run time, 12.9 F2.)
        - **Module bindings and realm globals of the main run**: closed for every unit and for the follow-bar checks at
          every `WORKERS`. They run in workers in which no main-run code ever ran (`lenmemoEntryEarly`, `w0protoG3`).
          The checks left in the main thread compare plain data or run check-only code (12.7's table).
@@ -4697,6 +4726,9 @@ No intrinsic is frozen in the hot realms. That would only help against 9 and 10,
 
 ### 12.8 What the realms cost, step 4 and the CI time (C4g, 2026-11-10)
 
+(C4h, 2026-11-11) C4h's numbers, and its CI table, which supersedes this one's, are in 12.9. This section stays as the
+record of C4g.
+
 The numbers below are the C4g integrator's, in the C4g scratch folder:
 - `c4g/integ/timing.txt` (from `c4g/integ/timing.py`);
 - `c4g/estimate.py`, with `c4g/integ/estimate.txt`;
@@ -4865,7 +4897,10 @@ the same and is wrong in the same way).
   its 77 files equal C4g's run (`c4g/kept/c4gplants-repo`); checks.csv's 12 presence rows and print.txt's
   `check.presence.detail` line differ; every count halves (8's table) and no (ii) row is left. The cut rows, the poison
   rows, cut_fail.csv and exit 3 are unchanged. Every file, print.txt included, equals C4g's refuter's run with a copy
-  for presence units only (`c4g/refute-power-4/kept/fresh`), so poison's copy changed nothing.
+  for presence units only (`c4g/refute-power-4/kept/fresh`), so poison's copy changed nothing. And every file but
+  config.json and print.txt's run, plant and time lines now equals `reasonUsesFuture`'s run on C 7101 (C4g's kept list,
+  the same data; this round's run of it too): the plant hides ③'s look-ahead in the avoid table, and without the carry
+  the checks see exactly that look-ahead, row for row.
 - **The task-level objects a probe worker's units share** (one check run in one worker; by the code):
 
   | object | how it is held | can it carry a value from one unit to a later one? |
